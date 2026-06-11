@@ -89,6 +89,9 @@ abstract class PackNugetTask : DefaultTask() {
 
     File(buildDir, "$id.targets").writeText(generateTargets(id, libName, header.name))
 
+    // TODO Remove when Phase 2 replaces ClangSharp with a custom Source Generator.
+    // Workaround: macOS SIP strips DYLD_* from child processes, so MSBuild's <Exec> can't
+    // pass library paths to ClangSharp. This wrapper script sets them before exec'ing the tool.
     val script = File(buildDir, "run-clangsharp.sh")
     script.writeText(
       """
