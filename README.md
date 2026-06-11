@@ -2,6 +2,10 @@
 
 A plugin that allows you to publish your Kotlin/Native libraries as NuGet packages to be consumed by .NET projects.
 
+## Background
+
+https://www.youtube.com/watch?v=DywUS-qYn6o
+
 ## Prerequisites
 
 > **Note:** These are required on the machine that builds the C# consumer project. They will be eliminated in Phase 2 when ClangSharp is replaced with a custom Source Generator — at that point only the .NET SDK will be needed.
@@ -49,38 +53,6 @@ export PATH="/opt/homebrew/opt/dotnet/bin:$HOME/.dotnet/tools:$PATH"
 
 ## Architecture
 
-```mermaid
-block-beta
-  columns 3
-
-  block:Gradle["Gradle Plugin"]:1
-    A["Compile Kotlin/Native"]
-    B["Link shared libraries"]
-    C["Emit metadata.json *"]
-    D["Package as .nupkg *"]
-  end
-
-  block:NuGet["NuGet Package"]:1
-    E["native libs (.dll/.dylib)"]
-    F["header (.h)"]
-    G["metadata.json *"]
-    H[".targets / analyzer *"]
-  end
-
-  block:Consumer["C# Consumer"]:1
-    I["Add package"]
-    J["Build"]
-    K["Run"]
-  end
-
-  Gradle --> NuGet --> Consumer
-```
-
-> `*` = not yet implemented
-
-<details>
-<summary>ASCII diagram</summary>
-
 ```
 Gradle Plugin (Kotlin side)          NuGet Package            C# Consumer
 ┌─────────────────────────┐     ┌─────────────────────┐     ┌──────────────┐
@@ -92,8 +64,6 @@ Gradle Plugin (Kotlin side)          NuGet Package            C# Consumer
 
 * = not yet implemented
 ```
-
-</details>
 
 - **Gradle plugin** compiles, links, and packages the NuGet (including `.targets` and header)
 - **NuGet package** ships native libs + header + `.targets` file that auto-runs ClangSharp at consumer build time
