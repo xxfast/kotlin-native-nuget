@@ -1,15 +1,25 @@
 plugins {
-  alias(libs.plugins.kotlinMultiplatform)
+  `java-gradle-plugin`
+  kotlin("jvm") version "2.4.0"
 }
 
-kotlin {
-  mingwX64()
+group = "io.github.xxfast"
+version = "0.1.0"
 
-  sourceSets {
-    commonMain.dependencies {
-    }
-    commonTest.dependencies {
-      implementation(libs.kotlin.test)
+repositories {
+  mavenCentral()
+}
+
+dependencies {
+  implementation(kotlin("gradle-plugin-api"))
+  implementation(kotlin("gradle-plugin"))
+}
+
+gradlePlugin {
+  plugins {
+    create("nuget") {
+      id = "io.github.xxfast.nuget"
+      implementationClass = "io.github.xxfast.nuget.NugetPlugin"
     }
   }
 }
