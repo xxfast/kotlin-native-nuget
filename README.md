@@ -51,37 +51,34 @@ export PATH="/opt/homebrew/opt/dotnet/bin:$HOME/.dotnet/tools:$PATH"
 
 ```mermaid
 flowchart LR
-  subgraph Gradle Plugin
+  subgraph Gradle["Gradle Plugin"]
+    direction LR
     A[Compile Kotlin/Native] --> B[Link shared libraries]
     B --> C[Emit metadata.json *]
     C --> D[Package as .nupkg *]
   end
 
-  subgraph NuGet Package
+  subgraph NuGet["NuGet Package"]
+    direction TB
     E[native libs .dll/.dylib]
     F[header .h]
     G[metadata.json *]
     H[.targets / analyzer *]
   end
 
-  subgraph C# Consumer
-    I[Add package]
-    J[Build]
-    K[Run]
-    I --> J --> K
+  subgraph Consumer["C# Consumer"]
+    direction LR
+    I[Add package] --> J[Build] --> K[Run]
   end
 
-  D --> E
-  D --> F
-  D --> G
-  D --> H
-  H --> J
+  Gradle -->|produces| NuGet
+  NuGet -->|consumed by| Consumer
 ```
 
 > `*` = not yet implemented
 
 <details>
-<summary>ASCII diagram (for non-GitHub readers)</summary>
+<summary>ASCII diagram</summary>
 
 ```
 Gradle Plugin (Kotlin side)          NuGet Package            C# Consumer
