@@ -1,0 +1,8 @@
+# Default ignored files
+/shelf/
+/workspace.xml
+# Machine-specific / generated
+/caches/
+/receipt.json
+/androidTestRunConfiguration.xml
+/runConfigurations.xml
