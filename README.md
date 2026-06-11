@@ -50,28 +50,30 @@ export PATH="/opt/homebrew/opt/dotnet/bin:$HOME/.dotnet/tools:$PATH"
 ## Architecture
 
 ```mermaid
-flowchart TB
-  subgraph Gradle["Gradle Plugin"]
-    direction LR
-    A[Compile Kotlin/Native] --> B[Link shared libraries]
-    B --> C[Emit metadata.json *]
-    C --> D[Package as .nupkg *]
+block-beta
+  columns 3
+
+  block:Gradle["Gradle Plugin"]:1
+    A["Compile Kotlin/Native"]
+    B["Link shared libraries"]
+    C["Emit metadata.json *"]
+    D["Package as .nupkg *"]
   end
 
-  subgraph NuGet["NuGet Package"]
-    E[native libs .dll/.dylib]
-    F[header .h]
-    G[metadata.json *]
-    H[.targets / analyzer *]
+  block:NuGet["NuGet Package"]:1
+    E["native libs (.dll/.dylib)"]
+    F["header (.h)"]
+    G["metadata.json *"]
+    H[".targets / analyzer *"]
   end
 
-  subgraph Consumer["C# Consumer"]
-    direction LR
-    I[Add package] --> J[Build] --> K[Run]
+  block:Consumer["C# Consumer"]:1
+    I["Add package"]
+    J["Build"]
+    K["Run"]
   end
 
-  Gradle -->|produces| NuGet
-  NuGet -->|consumed by| Consumer
+  Gradle --> NuGet --> Consumer
 ```
 
 > `*` = not yet implemented
