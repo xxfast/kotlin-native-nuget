@@ -49,15 +49,53 @@ export PATH="/opt/homebrew/opt/dotnet/bin:$HOME/.dotnet/tools:$PATH"
 
 ## Architecture
 
+```mermaid
+flowchart LR
+  subgraph Gradle Plugin
+    A[Compile Kotlin/Native] --> B[Link shared libraries]
+    B --> C[Emit metadata.json *]
+    C --> D[Package as .nupkg *]
+  end
+
+  subgraph NuGet Package
+    E[native libs .dll/.dylib]
+    F[header .h]
+    G[metadata.json *]
+    H[.targets / analyzer *]
+  end
+
+  subgraph C# Consumer
+    I[Add package]
+    J[Build]
+    K[Run]
+    I --> J --> K
+  end
+
+  D --> E
+  D --> F
+  D --> G
+  D --> H
+  H --> J
+```
+
+> `*` = not yet implemented
+
+<details>
+<summary>ASCII diagram (for non-GitHub readers)</summary>
+
 ```
 Gradle Plugin (Kotlin side)          NuGet Package            C# Consumer
 ┌─────────────────────────┐     ┌─────────────────────┐     ┌──────────────┐
 │ Compile Kotlin/Native   │     │ native libs (.dll)  │     │ Add package  │
 │ Link shared libraries   │────>│ header (.h)         │────>│ Build        │
-│ Emit metadata.json      │     │ metadata.json       │     │ Run          │
-│ Package as .nupkg       │     │ .targets / analyzer │     └──────────────┘
+│ Emit metadata.json *    │     │ metadata.json *     │     │ Run          │
+│ Package as .nupkg *     │     │ .targets / analyzer*│     └──────────────┘
 └─────────────────────────┘     └─────────────────────┘
+
+* = not yet implemented
 ```
+
+</details>
 
 - **Gradle plugin** compiles, links, and packages the NuGet (including `.targets` and header)
 - **NuGet package** ships native libs + header + `.targets` file that auto-runs ClangSharp at consumer build time
