@@ -7,7 +7,7 @@
 local.properties
 
 # IDE (IntelliJ/Rider) - ignore all except shared code styles
-.idea/*
+**/.idea/*
 !.idea/codeStyles
 
 # macOS
