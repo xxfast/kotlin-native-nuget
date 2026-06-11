@@ -5,6 +5,7 @@ import org.gradle.api.Project
 import org.jetbrains.kotlin.gradle.dsl.KotlinMultiplatformExtension
 import org.jetbrains.kotlin.gradle.plugin.mpp.KotlinNativeTarget
 import org.jetbrains.kotlin.gradle.plugin.mpp.SharedLibrary
+import java.io.File
 
 private val KONAN_TO_RID = mapOf(
   "mingw_x64" to "win-x64",
@@ -29,6 +30,8 @@ class NugetPlugin : Plugin<Project> {
 
         val libDirs: MutableMap<String, String> = mutableMapOf()
         val linkTasks: MutableList<Any> = mutableListOf()
+        var headerFile: File? = null
+        var baseName: String? = null
 
         for (target in nativeTargets) {
           val rid: String = KONAN_TO_RID[target.konanTarget.name] ?: continue
@@ -43,6 +46,14 @@ class NugetPlugin : Plugin<Project> {
 
           libDirs[rid] = sharedLib.outputDirectory.absolutePath
           linkTasks.add(sharedLib.linkTaskProvider)
+
+          if (headerFile == null) {
+            baseName = sharedLib.baseName
+            headerFile = sharedLib.outputDirectory
+              .listFiles()
+              ?.firstOrNull { it.extension == "h" }
+              ?: File(sharedLib.outputDirectory, "${sharedLib.baseName}_api.h")
+          }
         }
 
         if (libDirs.isEmpty()) return@afterEvaluate
@@ -55,7 +66,9 @@ class NugetPlugin : Plugin<Project> {
             task.packageVersion.convention(extension.version)
             task.authors.convention(extension.authors)
             task.packageDescription.convention(extension.description)
+            task.libraryName.convention(baseName ?: "library")
             task.nativeLibDirs.set(libDirs)
+            task.headerFile.set(headerFile)
             task.outputDir.set(project.layout.buildDirectory.dir("nuget"))
 
             for (linkTask in linkTasks) {
