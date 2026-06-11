@@ -1,21 +1,35 @@
+# Kotlin/Gradle
 *.iml
 .kotlin
 .gradle
 **/build/
-xcuserdata
 !src/**/build/
 local.properties
+
+# IDE (IntelliJ/Rider) - ignore all except shared code styles
 .idea/*
-!.idea/.gitignore
 !.idea/codeStyles
+
+# macOS
 .DS_Store
+xcuserdata
+
+# Android NDK
 captures
 .externalNativeBuild
 .cxx
+
+# Xcode
 *.xcodeproj/*
 !*.xcodeproj/project.pbxproj
 !*.xcodeproj/xcshareddata/
 !*.xcodeproj/project.xcworkspace/
 !*.xcworkspace/contents.xcworkspacedata
 **/xcshareddata/WorkspaceSettings.xcsettings
+
+# Node
 node_modules/
+
+# .NET
+**/bin/
+**/obj/
