@@ -50,7 +50,7 @@ export PATH="/opt/homebrew/opt/dotnet/bin:$HOME/.dotnet/tools:$PATH"
 ## Architecture
 
 ```mermaid
-flowchart LR
+flowchart TB
   subgraph Gradle["Gradle Plugin"]
     direction LR
     A[Compile Kotlin/Native] --> B[Link shared libraries]
@@ -59,7 +59,6 @@ flowchart LR
   end
 
   subgraph NuGet["NuGet Package"]
-    direction TB
     E[native libs .dll/.dylib]
     F[header .h]
     G[metadata.json *]
