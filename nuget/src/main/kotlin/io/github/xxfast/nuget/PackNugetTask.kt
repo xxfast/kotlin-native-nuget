@@ -138,6 +138,7 @@ abstract class PackNugetTask : DefaultTask() {
     |
     |  <Target Name="$${id}_IncludeGenerated"
     |          BeforeTargets="CoreCompile"
+    |          AfterTargets="ResolveReferences"
     |          DependsOnTargets="$${id}_GenerateBindings">
     |    <ItemGroup>
     |      <Compile Include="$($${id}_GeneratedDir)**\*.cs" />
