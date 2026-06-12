@@ -1,4 +1,3 @@
-using System.Runtime.InteropServices;
 using SampleLibrary;
 
 namespace SampleApp.Tests;
@@ -8,8 +7,7 @@ public class MappingTests
     [Fact]
     public void String_ReturnsExpectedValue()
     {
-        IntPtr ptr = SampleLibraryNative.@string();
-        string? result = Marshal.PtrToStringUTF8(ptr);
+        string result = SampleLibraryNative.@string();
         Assert.Equal("Kotlin/Native!", result);
     }
 

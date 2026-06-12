@@ -213,6 +213,19 @@ class CSharpBindingsProcessor(
         writer.write("            return ${csName}_value($paramNames);\n")
         writer.write("        }\n\n")
       }
+    } else if (kotlinReturnType == "String") {
+      val csName: String = toCSharpName(cname)
+      val entryPoint: String = if (csName != cname) ", EntryPoint = \"$cname\"" else ""
+
+      writer.write("        [DllImport(\"$libraryName\", CallingConvention = CallingConvention.Cdecl$entryPoint)]\n")
+      writer.write("        private static extern IntPtr ${csName}_native($paramStr);\n\n")
+
+      val paramNames: String = func.parameters.joinToString(", ") { param ->
+        param.name?.asString() ?: "_"
+      }
+
+      writer.write("        public static string $csName($paramStr)\n")
+      writer.write("            => Marshal.PtrToStringUTF8(${csName}_native($paramNames))!;\n\n")
     } else {
       val csName: String = toCSharpName(cname)
       val entryPoint: String = if (csName != cname) ", EntryPoint = \"$cname\"" else ""
