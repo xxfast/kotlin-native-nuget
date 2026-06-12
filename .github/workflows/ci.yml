@@ -24,6 +24,8 @@ jobs:
           distribution: temurin
           java-version: 17
 
+      - uses: gradle/actions/setup-gradle@v4
+
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 10.0.x
