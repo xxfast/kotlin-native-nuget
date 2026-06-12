@@ -71,9 +71,8 @@ class NugetPlugin : Plugin<Project> {
             task.headerFile.set(headerFile)
             task.outputDir.set(project.layout.buildDirectory.dir("nuget"))
 
-            for (linkTask in linkTasks) {
-              task.dependsOn(linkTask)
-            }
+            // Ensure the pack task runs after the native libraries are built
+            linkTasks.forEach { task.dependsOn(it) }
           }
       }
     }
