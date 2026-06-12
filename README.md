@@ -11,6 +11,24 @@ A plugin that allows you to publish your Kotlin/Native libraries as NuGet packag
 
 https://www.youtube.com/watch?v=DywUS-qYn6o
 
+## Usage
+
+Write Kotlin — get C# bindings automatically:
+
+```kotlin
+// Kotlin
+fun meow(): String = "meow!"
+fun lives(name: String): Int = 9
+fun owner(name: String): String? = if (name == "Garfield") "Jon" else null
+```
+
+```csharp
+// C# (auto-generated)
+string sound = Marshal.PtrToStringUTF8(CatLibNative.meow());
+int lives = CatLibNative.lives("Whiskers");
+string? owner = CatLibNative.owner("Garfield"); // nullable support
+```
+
 ## Prerequisites
 
 ### Kotlin side (library author)
@@ -64,14 +82,16 @@ Gradle Plugin (Kotlin side)          NuGet Package            C# Consumer
 - [x] Ship ClangSharp native libs as a package dependency (eliminate Gradle-side ProcessBuilder)
 
 ### Phase 2: KSP-driven generation
-- [x] KSP processor that discovers `@CName`-annotated declarations with full type info
+- [x] KSP processor that discovers all public declarations with full type info
+- [x] Auto-generate `@CName` wrappers (no manual annotations needed)
 - [x] Emit `Interop.cs` directly from KSP (pre-generated, no consumer-side tooling)
 - [x] Remove ClangSharp dependency and `.targets` generation step
 - [x] Map primitive types (Byte, Short, Int, Long, Float, Double + unsigned variants)
-- [ ] Map primitive types with nullability
-- [ ] Research memory management on the bridge
+- [x] Map nullable primitives (two-call pattern: `_has_value` + `_value` → `T?`)
+- [x] Map nullable strings
 
 ### Phase 3: Rich type support
+- [ ] Research memory management on the bridge
 - [ ] Map Kotlin packages to C# namespaces (user-configurable root, sub-packages mapped relative to it)
 - [ ] Map non-primitive types (strings, opaque pointers)
 - [ ] Map OOP constructs (classes, interfaces → C# classes with IDisposable)
