@@ -13,41 +13,20 @@ https://www.youtube.com/watch?v=DywUS-qYn6o
 
 ## Prerequisites
 
-> **Note:** With Phase 2 complete, the C# consumer only needs the .NET SDK. ClangSharp is no longer required — bindings are pre-generated at Kotlin compile time via KSP.
+### Kotlin side (library author)
 
-### .NET SDK
+- JDK 17+
+- Gradle (included via wrapper)
+
+### C# side (consumer)
+
+- [.NET SDK](https://dotnet.microsoft.com/download) 8.0+
 
 ```bash
 brew install dotnet
 ```
 
-### ClangSharpPInvokeGenerator
-
-```bash
-dotnet tool install --global ClangSharpPInvokeGenerator
-```
-
-### ClangSharp native libraries
-
-ClangSharp requires matching `libclang` and `libClangSharp` native libraries:
-
-```bash
-# Create a temporary project to pull the native packages
-mkdir -p /tmp/clangsharp-deps && cd /tmp/clangsharp-deps
-dotnet new console --force
-dotnet add package libclang.runtime.osx-arm64
-dotnet add package libClangSharp.runtime.osx-arm64
-```
-
-The libraries are cached in `~/.nuget/packages/` and resolved automatically by the `.targets` file shipped inside the NuGet package.
-
-### PATH setup
-
-Add to `~/.zprofile`:
-
-```bash
-export PATH="/opt/homebrew/opt/dotnet/bin:$HOME/.dotnet/tools:$PATH"
-```
+That's it. Bindings are pre-generated at Kotlin compile time via KSP — no additional tooling needed on the consumer side.
 
 ## Design Goals
 
