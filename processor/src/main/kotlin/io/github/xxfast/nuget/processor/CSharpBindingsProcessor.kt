@@ -7,12 +7,15 @@ import com.google.devtools.ksp.processing.KSPLogger
 import com.google.devtools.ksp.processing.Resolver
 import com.google.devtools.ksp.processing.SymbolProcessor
 import com.google.devtools.ksp.symbol.KSAnnotated
+import com.google.devtools.ksp.symbol.KSClassDeclaration
 import com.google.devtools.ksp.symbol.KSFunctionDeclaration
+import com.google.devtools.ksp.symbol.KSPropertyDeclaration
 import com.google.devtools.ksp.symbol.KSType
 import com.google.devtools.ksp.symbol.KSValueParameter
+import com.google.devtools.ksp.symbol.ClassKind
 import com.google.devtools.ksp.symbol.Visibility
 
-private val KOTLIN_TO_CSHARP = mapOf(
+private val KOTLIN_TO_CSHARP_RETURN = mapOf(
   "String" to "IntPtr",
   "Byte" to "sbyte",
   "UByte" to "byte",
@@ -26,6 +29,21 @@ private val KOTLIN_TO_CSHARP = mapOf(
   "Double" to "double",
   "Boolean" to "bool",
   "Unit" to "void",
+)
+
+private val KOTLIN_TO_CSHARP_PARAM = mapOf(
+  "String" to "string",
+  "Byte" to "sbyte",
+  "UByte" to "byte",
+  "Short" to "short",
+  "UShort" to "ushort",
+  "Int" to "int",
+  "UInt" to "uint",
+  "Long" to "long",
+  "ULong" to "ulong",
+  "Float" to "float",
+  "Double" to "double",
+  "Boolean" to "bool",
 )
 
 class CSharpBindingsProcessor(
@@ -43,28 +61,41 @@ class CSharpBindingsProcessor(
     if (processed) return emptyList()
     processed = true
 
-    val functions: List<KSFunctionDeclaration> = resolver.getAllFiles()
+    val allDeclarations = resolver.getAllFiles()
       .flatMap { it.declarations }
-      .filterIsInstance<KSFunctionDeclaration>()
-      .filter { it.getVisibility() == Visibility.PUBLIC }
-      .filter { it.parentDeclaration == null }
       .filter { it.packageName.asString() != "io.github.xxfast.nuget.generated" }
       .toList()
 
-    if (functions.isEmpty()) return emptyList()
+    val functions: List<KSFunctionDeclaration> = allDeclarations
+      .filterIsInstance<KSFunctionDeclaration>()
+      .filter { it.getVisibility() == Visibility.PUBLIC }
+      .filter { it.parentDeclaration == null }
+      .toList()
 
-    val sources = functions.mapNotNull { it.containingFile }.toTypedArray()
+    val classes: List<KSClassDeclaration> = allDeclarations
+      .filterIsInstance<KSClassDeclaration>()
+      .filter { it.getVisibility() == Visibility.PUBLIC }
+      .filter { it.classKind == ClassKind.CLASS }
+      .filter { it.parentDeclaration == null }
+      .toList()
+
+    if (functions.isEmpty() && classes.isEmpty()) return emptyList()
+
+    val sources = (functions.mapNotNull { it.containingFile } +
+      classes.mapNotNull { it.containingFile }).toTypedArray()
+
     val deps = Dependencies(aggregating = true, *sources)
 
-    generateCNameWrappers(functions, deps)
-    generateCSharpBindings(functions, deps)
+    generateCNameWrappers(functions, classes, deps)
+    generateCSharpBindings(functions, classes, deps)
 
-    logger.info("Generated bindings for ${functions.size} public functions")
+    logger.info("Generated bindings for ${functions.size} functions and ${classes.size} classes")
     return emptyList()
   }
 
   private fun generateCNameWrappers(
     functions: List<KSFunctionDeclaration>,
+    classes: List<KSClassDeclaration>,
     deps: Dependencies,
   ) {
     val file = codeGenerator.createNewFile(
@@ -74,9 +105,11 @@ class CSharpBindingsProcessor(
     )
 
     file.writer().use { writer ->
-      writer.write("@file:OptIn(ExperimentalNativeApi::class)\n")
+      writer.write("@file:OptIn(ExperimentalNativeApi::class, ExperimentalForeignApi::class)\n")
       writer.write("package io.github.xxfast.nuget.generated\n\n")
       writer.write("import kotlin.experimental.ExperimentalNativeApi\n")
+      writer.write("import kotlinx.cinterop.ExperimentalForeignApi\n")
+      writer.write("import kotlinx.cinterop.*\n")
 
       val imports: MutableSet<String> = mutableSetOf()
 
@@ -85,6 +118,9 @@ class CSharpBindingsProcessor(
         val funcName: String = func.simpleName.asString()
         imports.add("$packageName.$funcName")
       }
+
+
+
 
       for (import in imports) {
         writer.write("import $import\n")
@@ -132,11 +168,90 @@ class CSharpBindingsProcessor(
           writer.write("fun `export_$cname`($paramDecl): $qualifiedReturn = $funcName($paramCall)\n\n")
         }
       }
+
+      for (cls in classes) {
+        val name: String = cls.simpleName.asString()
+        val qualifiedName: String = cls.qualifiedName?.asString() ?: continue
+        val prefix: String = name.lowercase()
+
+        val constructor = cls.primaryConstructor ?: continue
+        val ctorParams: List<KSValueParameter> = constructor.parameters
+
+        val ctorParamDecl: String = ctorParams.joinToString(", ") { param ->
+          val type: String = param.type.resolve().declaration.qualifiedName?.asString()
+            ?: param.type.resolve().declaration.simpleName.asString()
+
+          "${param.name?.asString()}: $type"
+        }
+
+        val ctorParamCall: String = ctorParams.joinToString(", ") { param ->
+          param.name?.asString() ?: "_"
+        }
+
+        writer.write("@CName(\"${prefix}_create\")\n")
+        writer.write("fun `export_${prefix}_create`($ctorParamDecl): COpaquePointer =\n")
+        writer.write("    StableRef.create($qualifiedName($ctorParamCall)).asCPointer()\n\n")
+
+        writer.write("@CName(\"${prefix}_dispose\")\n")
+        writer.write("fun `export_${prefix}_dispose`(handle: COpaquePointer) {\n")
+        writer.write("    handle.asStableRef<$qualifiedName>().dispose()\n")
+        writer.write("}\n\n")
+
+        val properties: List<KSPropertyDeclaration> = cls.getAllProperties()
+          .filter { it.getVisibility() == Visibility.PUBLIC }
+          .toList()
+
+        for (prop in properties) {
+          val propName: String = prop.simpleName.asString()
+          val propType: String = prop.type.resolve()
+            .declaration.qualifiedName?.asString() ?: "Any"
+
+          writer.write("@CName(\"${prefix}_get_$propName\")\n")
+          writer.write("fun `export_${prefix}_get_$propName`(handle: COpaquePointer): $propType =\n")
+          writer.write("    handle.asStableRef<$qualifiedName>().get().$propName\n\n")
+        }
+
+        val methods: List<KSFunctionDeclaration> = cls.getAllFunctions()
+          .filter { it.getVisibility() == Visibility.PUBLIC }
+          .filter { it.simpleName.asString() !in listOf("equals", "hashCode", "toString", "<init>") }
+          .toList()
+
+        for (method in methods) {
+          val methodName: String = method.simpleName.asString()
+          val methodReturn: String = method.returnType?.resolve()
+            ?.declaration?.qualifiedName?.asString() ?: "Unit"
+
+          val methodParams: List<KSValueParameter> = method.parameters
+          val methodParamDecl: String = (listOf("handle: COpaquePointer") +
+            methodParams.map { param ->
+              val type: String = param.type.resolve().declaration.qualifiedName?.asString()
+                ?: param.type.resolve().declaration.simpleName.asString()
+
+              "${param.name?.asString()}: $type"
+            }).joinToString(", ")
+
+          val methodParamCall: String = methodParams.joinToString(", ") { param ->
+            param.name?.asString() ?: "_"
+          }
+
+          if (methodReturn == "kotlin.Unit") {
+            writer.write("@CName(\"${prefix}_$methodName\")\n")
+            writer.write("fun `export_${prefix}_$methodName`($methodParamDecl) {\n")
+            writer.write("    handle.asStableRef<$qualifiedName>().get().$methodName($methodParamCall)\n")
+            writer.write("}\n\n")
+          } else {
+            writer.write("@CName(\"${prefix}_$methodName\")\n")
+            writer.write("fun `export_${prefix}_$methodName`($methodParamDecl): $methodReturn =\n")
+            writer.write("    handle.asStableRef<$qualifiedName>().get().$methodName($methodParamCall)\n\n")
+          }
+        }
+      }
     }
   }
 
   private fun generateCSharpBindings(
     functions: List<KSFunctionDeclaration>,
+    classes: List<KSClassDeclaration>,
     deps: Dependencies,
   ) {
     val file = codeGenerator.createNewFile(
@@ -163,6 +278,113 @@ class CSharpBindingsProcessor(
 
         writer.write("    }\n}\n\n")
       }
+
+      for (cls in classes) {
+        val namespace: String = mapPackageToNamespace(cls.packageName.asString())
+        val name: String = cls.simpleName.asString()
+        val prefix: String = name.lowercase()
+
+        writer.write("namespace $namespace\n{\n")
+
+        writer.write("    public class $name : IDisposable\n    {\n")
+        writer.write("        private IntPtr _handle;\n\n")
+
+        val constructor = cls.primaryConstructor
+        if (constructor != null) {
+          val ctorParams: List<String> = constructor.parameters.map { param ->
+            val kotlinType: String = param.type.resolve().declaration.simpleName.asString()
+            val csharpType: String = mapParamType(kotlinType)
+            "$csharpType ${param.name?.asString()}"
+          }
+
+          val ctorParamStr: String = ctorParams.joinToString(", ")
+          val ctorParamNames: String = constructor.parameters.joinToString(", ") { param ->
+            param.name?.asString() ?: "_"
+          }
+
+          writer.write("        [DllImport(\"$libraryName\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"${prefix}_create\")]\n")
+          writer.write("        private static extern IntPtr Native_Create($ctorParamStr);\n\n")
+
+          writer.write("        public $name($ctorParamStr)\n")
+          writer.write("        {\n")
+          writer.write("            _handle = Native_Create($ctorParamNames);\n")
+          writer.write("        }\n\n")
+        }
+
+        val properties: List<KSPropertyDeclaration> = cls.getAllProperties()
+          .filter { it.getVisibility() == Visibility.PUBLIC }
+          .toList()
+
+        for (prop in properties) {
+          val propName: String = prop.simpleName.asString()
+          val propType: String = prop.type.resolve().declaration.simpleName.asString()
+          val csharpType: String = mapReturnType(propType)
+          val csPropName: String = propName.replaceFirstChar { it.uppercase() }
+
+          writer.write("        [DllImport(\"$libraryName\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"${prefix}_get_$propName\")]\n")
+          writer.write("        private static extern $csharpType Native_Get_$propName(IntPtr handle);\n\n")
+
+          if (propType == "String") {
+            writer.write("        public string $csPropName => Marshal.PtrToStringUTF8(Native_Get_$propName(_handle))!;\n\n")
+          } else {
+            writer.write("        public $csharpType $csPropName => Native_Get_$propName(_handle);\n\n")
+          }
+        }
+
+        val methods: List<KSFunctionDeclaration> = cls.getAllFunctions()
+          .filter { it.getVisibility() == Visibility.PUBLIC }
+          .filter { it.simpleName.asString() !in listOf("equals", "hashCode", "toString", "<init>") }
+          .toList()
+
+        for (method in methods) {
+          val methodName: String = method.simpleName.asString()
+          val methodReturn: String = method.returnType?.resolve()
+            ?.declaration?.simpleName?.asString() ?: "Unit"
+
+          val csharpReturn: String = mapReturnType(methodReturn)
+          val csMethodName: String = methodName.replaceFirstChar { it.uppercase() }
+
+          val methodParams: List<String> = method.parameters.map { param ->
+            val kotlinType: String = param.type.resolve().declaration.simpleName.asString()
+            val csharpType: String = mapParamType(kotlinType)
+            "$csharpType ${param.name?.asString()}"
+          }
+
+          val nativeParams: String = (listOf("IntPtr handle") + methodParams).joinToString(", ")
+          val paramStr: String = methodParams.joinToString(", ")
+          val paramNames: String = method.parameters.joinToString(", ") { it.name?.asString() ?: "_" }
+          val nativeCallArgs: String = (listOf("_handle") +
+            method.parameters.map { it.name?.asString() ?: "_" }).joinToString(", ")
+
+          writer.write("        [DllImport(\"$libraryName\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"${prefix}_$methodName\")]\n")
+          writer.write("        private static extern $csharpReturn Native_$csMethodName($nativeParams);\n\n")
+
+          if (methodReturn == "String") {
+            writer.write("        public string $csMethodName($paramStr)\n")
+            writer.write("            => Marshal.PtrToStringUTF8(Native_$csMethodName($nativeCallArgs))!;\n\n")
+          } else if (methodReturn == "Unit") {
+            writer.write("        public void $csMethodName($paramStr)\n")
+            writer.write("            => Native_$csMethodName($nativeCallArgs);\n\n")
+          } else {
+            writer.write("        public $csharpReturn $csMethodName($paramStr)\n")
+            writer.write("            => Native_$csMethodName($nativeCallArgs);\n\n")
+          }
+        }
+
+        writer.write("        [DllImport(\"$libraryName\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"${prefix}_dispose\")]\n")
+        writer.write("        private static extern void Native_Dispose(IntPtr handle);\n\n")
+
+        writer.write("        public void Dispose()\n")
+        writer.write("        {\n")
+        writer.write("            if (_handle != IntPtr.Zero)\n")
+        writer.write("            {\n")
+        writer.write("                Native_Dispose(_handle);\n")
+        writer.write("                _handle = IntPtr.Zero;\n")
+        writer.write("            }\n")
+        writer.write("        }\n")
+
+        writer.write("    }\n}\n\n")
+      }
     }
   }
 
@@ -173,13 +395,13 @@ class CSharpBindingsProcessor(
     val kotlinReturnType: String = returnType
       ?.declaration?.simpleName?.asString() ?: "Unit"
 
-    val csharpReturnType: String = mapType(kotlinReturnType)
+    val csharpReturnType: String = mapReturnType(kotlinReturnType)
 
     val params: List<String> = func.parameters.map { param ->
       val kotlinType: String = param.type.resolve()
         .declaration.simpleName.asString()
 
-      val csharpType: String = mapType(kotlinType)
+      val csharpType: String = mapParamType(kotlinType)
       "$csharpType ${param.name?.asString()}"
     }
 
@@ -268,8 +490,11 @@ class CSharpBindingsProcessor(
     return cname
   }
 
-  private fun mapType(kotlinType: String): String =
-    KOTLIN_TO_CSHARP[kotlinType] ?: "IntPtr"
+  private fun mapReturnType(kotlinType: String): String =
+    KOTLIN_TO_CSHARP_RETURN[kotlinType] ?: "IntPtr"
+
+  private fun mapParamType(kotlinType: String): String =
+    KOTLIN_TO_CSHARP_PARAM[kotlinType] ?: "IntPtr"
 
   private fun mapPackageToNamespace(kotlinPackage: String): String {
     if (rootPackage.isEmpty()) return rootNamespace

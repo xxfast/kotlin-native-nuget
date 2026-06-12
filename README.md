@@ -19,14 +19,14 @@ Write Kotlin — get C# bindings automatically:
 // Kotlin
 fun meow(): String = "meow!"
 fun lives(name: String): Int = 9
-fun owner(name: String): String? = if (name == "Garfield") "Jon" else null
+fun owner(name: String): String? = if (name == "Oreo") "Isuru" else null
 ```
 
 ```csharp
 // C# (auto-generated)
-string sound = Marshal.PtrToStringUTF8(CatLibNative.meow());
-int lives = CatLibNative.lives("Whiskers");
-string? owner = CatLibNative.owner("Garfield"); // nullable support
+string sound = CatLibNative.meow();
+int lives = CatLibNative.lives("Mylo");
+string? owner = CatLibNative.owner("Oreo"); // nullable support
 ```
 
 ## Prerequisites
