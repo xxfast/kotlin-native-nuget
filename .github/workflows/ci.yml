@@ -33,5 +33,13 @@ jobs:
       - name: Build NuGet package
         run: ./gradlew :sample-library:packNuget
 
+      - name: Build dotnet tests
+        run: dotnet build sample-app/SampleApp.Tests
+
+      - name: Check test output
+        if: runner.os == 'Windows'
+        run: ls sample-app/SampleApp.Tests/bin/Debug/net10.0/
+        shell: bash
+
       - name: Run dotnet tests
-        run: dotnet test sample-app/SampleApp.Tests
+        run: dotnet test sample-app/SampleApp.Tests --no-build

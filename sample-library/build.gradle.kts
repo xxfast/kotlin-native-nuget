@@ -9,6 +9,7 @@ kotlin {
     binaries {
       sharedLib {
         baseName = "sample"
+        linkerOpts("-lmsvcrt", "-static-libgcc", "-static-libstdc++")
       }
     }
   }
