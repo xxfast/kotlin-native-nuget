@@ -82,4 +82,32 @@ public class MappingTests
         double result = SampleLibraryNative.@double_();
         Assert.Equal(2.718281828459045, result, 10);
     }
+
+    [Fact]
+    public void NullableInt_WithValue_ReturnsValue()
+    {
+        int? result = SampleLibraryNative.nullableInt(true);
+        Assert.Equal(42, result);
+    }
+
+    [Fact]
+    public void NullableInt_WithoutValue_ReturnsNull()
+    {
+        int? result = SampleLibraryNative.nullableInt(false);
+        Assert.Null(result);
+    }
+
+    [Fact]
+    public void NullableString_WithValue_ReturnsValue()
+    {
+        string? result = SampleLibraryNative.nullableString(true);
+        Assert.Equal("hello", result);
+    }
+
+    [Fact]
+    public void NullableString_WithoutValue_ReturnsNull()
+    {
+        string? result = SampleLibraryNative.nullableString(false);
+        Assert.Null(result);
+    }
 }

@@ -8,6 +8,7 @@ import com.google.devtools.ksp.processing.Resolver
 import com.google.devtools.ksp.processing.SymbolProcessor
 import com.google.devtools.ksp.symbol.KSAnnotated
 import com.google.devtools.ksp.symbol.KSFunctionDeclaration
+import com.google.devtools.ksp.symbol.KSType
 import com.google.devtools.ksp.symbol.KSValueParameter
 import com.google.devtools.ksp.symbol.Visibility
 
@@ -93,6 +94,8 @@ class CSharpBindingsProcessor(
       for (func in functions) {
         val cname: String = toCName(func)
         val funcName: String = func.simpleName.asString()
+        val returnType: KSType? = func.returnType?.resolve()
+        val isNullable: Boolean = returnType?.isMarkedNullable == true
 
         val params: List<KSValueParameter> = func.parameters
         val paramDecl: String = params.joinToString(", ") { param ->
@@ -106,15 +109,26 @@ class CSharpBindingsProcessor(
           param.name?.asString() ?: "_"
         }
 
-        val returnType: String = func.returnType?.resolve()
+        val qualifiedReturn: String = returnType
           ?.declaration?.qualifiedName?.asString() ?: "Unit"
 
-        if (returnType == "kotlin.Unit") {
+        if (isNullable) {
+          writer.write("@CName(\"${cname}_has_value\")\n")
+          writer.write("fun `export_${cname}_has_value`($paramDecl): Boolean = $funcName($paramCall) != null\n\n")
+
+          if (qualifiedReturn == "kotlin.String") {
+            writer.write("@CName(\"${cname}_value\")\n")
+            writer.write("fun `export_${cname}_value`($paramDecl): String = $funcName($paramCall)!!\n\n")
+          } else {
+            writer.write("@CName(\"${cname}_value\")\n")
+            writer.write("fun `export_${cname}_value`($paramDecl): $qualifiedReturn = $funcName($paramCall)!!\n\n")
+          }
+        } else if (qualifiedReturn == "kotlin.Unit") {
           writer.write("@CName(\"$cname\")\n")
           writer.write("fun `export_$cname`($paramDecl) { $funcName($paramCall) }\n\n")
         } else {
           writer.write("@CName(\"$cname\")\n")
-          writer.write("fun `export_$cname`($paramDecl): $returnType = $funcName($paramCall)\n\n")
+          writer.write("fun `export_$cname`($paramDecl): $qualifiedReturn = $funcName($paramCall)\n\n")
         }
       }
     }
@@ -139,12 +153,12 @@ class CSharpBindingsProcessor(
 
       for (func in functions) {
         val cname: String = toCName(func)
-
-        val kotlinReturnType: String = func.returnType?.resolve()
+        val returnType: KSType? = func.returnType?.resolve()
+        val isNullable: Boolean = returnType?.isMarkedNullable == true
+        val kotlinReturnType: String = returnType
           ?.declaration?.simpleName?.asString() ?: "Unit"
 
         val csharpReturnType: String = mapType(kotlinReturnType)
-        val isStringReturn = kotlinReturnType == "String"
 
         val params: List<String> = func.parameters.map { param ->
           val kotlinType: String = param.type.resolve()
@@ -154,14 +168,43 @@ class CSharpBindingsProcessor(
           "$csharpType ${param.name?.asString()}"
         }
 
-        val csName: String = toCSharpName(cname)
-        val entryPoint: String = if (csName != cname) ", EntryPoint = \"$cname\"" else ""
+        val paramStr: String = params.joinToString(", ")
 
-        writer.write("        [DllImport(\"$libraryName\", CallingConvention = CallingConvention.Cdecl$entryPoint)]\n")
+        if (isNullable) {
+          val csName: String = toCSharpName(cname)
+          val hasValueName = "${cname}_has_value"
+          val valueName = "${cname}_value"
 
-        writer.write("        public static extern $csharpReturnType $csName(${params.joinToString(", ")});\n")
+          writer.write("        [DllImport(\"$libraryName\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"$hasValueName\")]\n")
+          writer.write("        private static extern bool ${csName}_has_value($paramStr);\n\n")
 
-        writer.write("\n")
+          writer.write("        [DllImport(\"$libraryName\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"$valueName\")]\n")
+          writer.write("        private static extern $csharpReturnType ${csName}_value($paramStr);\n\n")
+
+          val paramNames: String = func.parameters.joinToString(", ") { param ->
+            param.name?.asString() ?: "_"
+          }
+
+          if (kotlinReturnType == "String") {
+            writer.write("        public static string? $csName($paramStr)\n")
+            writer.write("        {\n")
+            writer.write("            if (!${csName}_has_value($paramNames)) return null;\n")
+            writer.write("            return Marshal.PtrToStringUTF8(${csName}_value($paramNames));\n")
+            writer.write("        }\n\n")
+          } else {
+            writer.write("        public static $csharpReturnType? $csName($paramStr)\n")
+            writer.write("        {\n")
+            writer.write("            if (!${csName}_has_value($paramNames)) return null;\n")
+            writer.write("            return ${csName}_value($paramNames);\n")
+            writer.write("        }\n\n")
+          }
+        } else {
+          val csName: String = toCSharpName(cname)
+          val entryPoint: String = if (csName != cname) ", EntryPoint = \"$cname\"" else ""
+
+          writer.write("        [DllImport(\"$libraryName\", CallingConvention = CallingConvention.Cdecl$entryPoint)]\n")
+          writer.write("        public static extern $csharpReturnType $csName($paramStr);\n\n")
+        }
       }
 
       writer.write("    }\n}\n")

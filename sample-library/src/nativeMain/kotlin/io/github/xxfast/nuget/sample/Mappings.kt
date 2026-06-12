@@ -21,3 +21,7 @@ fun ulong(): ULong = 18_446_744_073_709_551_615u
 fun float(): Float = 3.14f
 
 fun double(): Double = 2.718281828459045
+
+fun nullableInt(hasValue: Boolean): Int? = if (hasValue) 42 else null
+
+fun nullableString(hasValue: Boolean): String? = if (hasValue) "hello" else null
