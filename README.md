@@ -91,7 +91,7 @@ Gradle Plugin (Kotlin side)          NuGet Package            C# Consumer
 - [x] Map nullable strings
 
 ### Phase 3: Rich type support
-- [ ] Map Kotlin packages to C# namespaces (user-configurable root, sub-packages mapped relative to it)
+- [x] Map Kotlin packages to C# namespaces (user-configurable root, sub-packages mapped relative to it)
 - [ ] Research memory management on the bridge
 - [ ] Map non-primitive types (strings, opaque pointers)
 - [ ] Map OOP constructs (classes, interfaces → C# classes with IDisposable)
