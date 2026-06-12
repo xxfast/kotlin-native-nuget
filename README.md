@@ -92,7 +92,7 @@ Gradle Plugin (Kotlin side)          NuGet Package            C# Consumer
 
 ### Phase 3: Rich type support
 - [x] Map Kotlin packages to C# namespaces (user-configurable root, sub-packages mapped relative to it)
-- [ ] Research memory management on the bridge
+- [x] Research memory management on the bridge (see [ADR-003](docs/adr/003-memory-management-across-bridge.md))
 - [ ] Map non-primitive types (strings, opaque pointers)
 - [ ] Map OOP constructs (classes, interfaces → C# classes with IDisposable)
 - [ ] Map Collections types
