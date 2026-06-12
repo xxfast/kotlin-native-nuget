@@ -12,7 +12,7 @@ import com.google.devtools.ksp.symbol.KSValueParameter
 import com.google.devtools.ksp.symbol.Visibility
 
 private val KOTLIN_TO_CSHARP = mapOf(
-  "String" to "string",
+  "String" to "IntPtr",
   "Byte" to "sbyte",
   "UByte" to "byte",
   "Short" to "short",
@@ -132,6 +132,7 @@ class CSharpBindingsProcessor(
     )
 
     file.writer().use { writer ->
+      writer.write("using System;\n")
       writer.write("using System.Runtime.InteropServices;\n\n")
       writer.write("namespace $namespace\n{\n")
       writer.write("    public static partial class $className\n    {\n")
@@ -158,12 +159,7 @@ class CSharpBindingsProcessor(
 
         writer.write("        [DllImport(\"$libraryName\", CallingConvention = CallingConvention.Cdecl$entryPoint)]\n")
 
-        if (isStringReturn) {
-          writer.write("        [return: MarshalAs(UnmanagedType.LPUTF8Str)]\n")
-          writer.write("        public static extern string $csName(${params.joinToString(", ")});\n")
-        } else {
-          writer.write("        public static extern $csharpReturnType $csName(${params.joinToString(", ")});\n")
-        }
+        writer.write("        public static extern $csharpReturnType $csName(${params.joinToString(", ")});\n")
 
         writer.write("\n")
       }

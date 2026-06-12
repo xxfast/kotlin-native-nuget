@@ -1,4 +1,6 @@
+using System.Runtime.InteropServices;
 using SampleLibrary.Interop;
 
-string message = SampleLibraryNative.@string();
+IntPtr ptr = SampleLibraryNative.@string();
+string? message = Marshal.PtrToStringUTF8(ptr);
 Console.WriteLine(message);
