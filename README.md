@@ -1,6 +1,6 @@
 # kotlin-native-nuget
 
-[![Stability](https://kotlinlang.org/docs/components-stability.html#stability-of-subcomponents)](https://kotl.in/badges/experimental.svg)
+[![Stability](https://kotl.in/badges/experimental.svg)](https://kotlinlang.org/docs/components-stability.html#stability-of-subcomponents)
 [![CI](https://github.com/xxfast/kotlin-native-nuget/actions/workflows/ci.yml/badge.svg)](https://github.com/xxfast/kotlin-native-nuget/actions/workflows/ci.yml)
 
 A plugin that allows you to publish your Kotlin/Native libraries as NuGet packages to be consumed by .NET projects.
