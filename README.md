@@ -62,17 +62,17 @@ export PATH="/opt/homebrew/opt/dotnet/bin:$HOME/.dotnet/tools:$PATH"
 Gradle Plugin (Kotlin side)          NuGet Package            C# Consumer
 ┌─────────────────────────┐     ┌─────────────────────┐     ┌──────────────┐
 │ Compile Kotlin/Native   │     │ native libs (.dll)  │     │ Add package  │
-│ Link shared libraries   │────>│ header (.h)         │────>│ Build        │
-│ Emit metadata.json *    │     │ metadata.json *     │     │ Run          │
-│ Package as .nupkg *     │     │ .targets / analyzer*│     └──────────────┘
+│ KSP → Interop.cs *      │────>│ Interop.cs *        │────>│ Build        │
+│ Link shared libraries   │     │ header (.h)         │     │ Run          │
+│ Package as .nupkg *     │     │ .targets            │     └──────────────┘
 └─────────────────────────┘     └─────────────────────┘
 
-* = not yet implemented
+* = not yet implemented (currently uses ClangSharp at consumer build time)
 ```
 
-- **Gradle plugin** compiles, links, and packages the NuGet (including `.targets` and header)
-- **NuGet package** ships native libs + header + `.targets` file that auto-runs ClangSharp at consumer build time
-- **Consumer** just imports the package — binding generation happens automatically on `dotnet build`
+- **Gradle plugin** compiles, links, and packages the NuGet. In Phase 2, KSP will generate `Interop.cs` at compile time with full Kotlin type info.
+- **NuGet package** ships native libs + generated C# bindings. Currently uses `.targets` + ClangSharp at consumer build time; Phase 2 will ship pre-generated `.cs` instead.
+- **Consumer** just imports the package — no tooling required beyond the .NET SDK (once Phase 2 is complete).
 
 ## Roadmap
 
@@ -84,10 +84,11 @@ Gradle Plugin (Kotlin side)          NuGet Package            C# Consumer
 - [x] Move ClangSharp invocation to a `.targets` file shipped inside the NuGet package
 - [x] Ship ClangSharp native libs as a package dependency (eliminate Gradle-side ProcessBuilder)
 
-### Phase 2: Metadata-driven generation
-- [ ] Emit `metadata.json` from Gradle plugin (function signatures, types, nullability)
-- [ ] Replace ClangSharp with a custom C# Source Generator that reads metadata
-- [ ] Map primitive types
+### Phase 2: KSP-driven generation
+- [ ] KSP processor that discovers `@CName`-annotated declarations with full type info
+- [ ] Emit `Interop.cs` directly from KSP (pre-generated, no consumer-side tooling)
+- [ ] Remove ClangSharp dependency and `.targets` generation step
+- [ ] Map primitive types with nullability
 - [ ] Research memory management on the bridge
 
 ### Phase 3: Rich type support
