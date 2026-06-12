@@ -7,6 +7,8 @@ A plugin that allows you to publish your Kotlin/Native libraries as NuGet packag
 
 ## Background
 
+[![Talk](http://img.youtube.com/vi/DywUS-qYn6o/0.jpg)](http://www.youtube.com/watch?v=DywUS-qYn6o "Isuru Rajapakse - Kotlin → C#; Experimenting with Cross-Runtime Interop")
+
 https://www.youtube.com/watch?v=DywUS-qYn6o
 
 ## Prerequisites
