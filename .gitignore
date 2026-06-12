@@ -34,3 +34,4 @@ node_modules/
 **/bin/
 **/obj/
 **/Generated/
+*.DotSettings.user
