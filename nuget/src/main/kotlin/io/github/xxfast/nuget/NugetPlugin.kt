@@ -43,7 +43,10 @@ class NugetPlugin : Plugin<Project> {
             ?: continue
 
           libDirs[rid] = sharedLib.outputDirectory.absolutePath
-          linkTasks.add(sharedLib.linkTaskProvider)
+
+          if (sharedLib.linkTaskProvider.get().enabled) {
+            linkTasks.add(sharedLib.linkTaskProvider)
+          }
 
           if (baseName == null) {
             baseName = sharedLib.baseName

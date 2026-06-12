@@ -12,13 +12,7 @@ jobs:
       matrix:
         include:
           - os: macos-latest
-            rid: osx-arm64
-            clang-runtime: libclang.runtime.osx-arm64
-            clangsharp-runtime: libClangSharp.runtime.osx-arm64
           - os: windows-latest
-            rid: win-x64
-            clang-runtime: libclang.runtime.win-x64
-            clangsharp-runtime: libClangSharp.runtime.win-x64
 
     runs-on: ${{ matrix.os }}
 
@@ -33,18 +27,6 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 10.0.x
-
-      - name: Install ClangSharpPInvokeGenerator
-        run: dotnet tool install --global ClangSharpPInvokeGenerator
-
-      - name: Install ClangSharp native libraries
-        run: |
-          mkdir -p /tmp/clangsharp-deps
-          cd /tmp/clangsharp-deps
-          dotnet new console --force
-          dotnet add package ${{ matrix.clang-runtime }}
-          dotnet add package ${{ matrix.clangsharp-runtime }}
-        shell: bash
 
       - name: Build NuGet package
         run: ./gradlew :sample-library:packNuget
