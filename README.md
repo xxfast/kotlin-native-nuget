@@ -13,7 +13,7 @@ https://www.youtube.com/watch?v=DywUS-qYn6o
 
 ## Prerequisites
 
-> **Note:** These are required on the machine that builds the C# consumer project. They will be eliminated in Phase 2 when ClangSharp is replaced with a custom Source Generator — at that point only the .NET SDK will be needed.
+> **Note:** With Phase 2 complete, the C# consumer only needs the .NET SDK. ClangSharp is no longer required — bindings are pre-generated at Kotlin compile time via KSP.
 
 ### .NET SDK
 
@@ -85,9 +85,10 @@ Gradle Plugin (Kotlin side)          NuGet Package            C# Consumer
 - [x] Ship ClangSharp native libs as a package dependency (eliminate Gradle-side ProcessBuilder)
 
 ### Phase 2: KSP-driven generation
-- [ ] KSP processor that discovers `@CName`-annotated declarations with full type info
-- [ ] Emit `Interop.cs` directly from KSP (pre-generated, no consumer-side tooling)
-- [ ] Remove ClangSharp dependency and `.targets` generation step
+- [x] KSP processor that discovers `@CName`-annotated declarations with full type info
+- [x] Emit `Interop.cs` directly from KSP (pre-generated, no consumer-side tooling)
+- [x] Remove ClangSharp dependency and `.targets` generation step
+- [x] Map primitive types (Byte, Short, Int, Long, Float, Double + unsigned variants)
 - [ ] Map primitive types with nullability
 - [ ] Research memory management on the bridge
 
