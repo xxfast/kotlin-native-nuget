@@ -20,8 +20,30 @@ class NugetPlugin : Plugin<Project> {
       project.extensions.create("nuget", NugetExtension::class.java)
 
     project.pluginManager.withPlugin("org.jetbrains.kotlin.multiplatform") {
+      project.pluginManager.apply("com.google.devtools.ksp")
+
       val kotlin: KotlinMultiplatformExtension =
         project.extensions.getByType(KotlinMultiplatformExtension::class.java)
+
+      project.pluginManager.withPlugin("com.google.devtools.ksp") {
+        project.afterEvaluate {
+          val ksp = project.extensions.getByType(
+            Class.forName("com.google.devtools.ksp.gradle.KspExtension")
+          )
+
+          val baseName: String? = kotlin.targets
+            .filterIsInstance<KotlinNativeTarget>()
+            .flatMap { it.binaries.filterIsInstance<SharedLibrary>() }
+            .firstOrNull()?.baseName
+
+          val kspClass = ksp.javaClass
+          val argMethod = kspClass.getMethod("arg", String::class.java, String::class.java)
+          argMethod.invoke(ksp, "nuget.libraryName", baseName ?: "library")
+          argMethod.invoke(ksp, "nuget.namespace", extension.packageId.get())
+          argMethod.invoke(ksp, "nuget.rootPackage", extension.rootPackage.getOrElse(""))
+          argMethod.invoke(ksp, "nuget.className", "${extension.packageId.get()}Native")
+        }
+      }
 
       project.afterEvaluate {
         val nativeTargets: List<KotlinNativeTarget> =

@@ -1,5 +1,5 @@
 using System.Runtime.InteropServices;
-using SampleLibrary.Interop;
+using SampleLibrary;
 
 namespace SampleApp.Tests;
 
@@ -110,4 +110,5 @@ public class MappingTests
         string? result = SampleLibraryNative.nullableString(false);
         Assert.Null(result);
     }
+
 }

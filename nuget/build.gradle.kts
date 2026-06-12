@@ -13,6 +13,7 @@ repositories {
 dependencies {
   implementation(kotlin("gradle-plugin-api"))
   implementation(kotlin("gradle-plugin"))
+  implementation("com.google.devtools.ksp:symbol-processing-gradle-plugin:2.3.9")
 }
 
 gradlePlugin {

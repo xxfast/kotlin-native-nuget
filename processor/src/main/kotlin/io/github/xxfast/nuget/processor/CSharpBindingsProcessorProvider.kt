@@ -7,14 +7,16 @@ import com.google.devtools.ksp.processing.SymbolProcessorProvider
 class CSharpBindingsProcessorProvider : SymbolProcessorProvider {
   override fun create(environment: SymbolProcessorEnvironment): SymbolProcessor {
     val libraryName: String = environment.options["nuget.libraryName"] ?: "library"
-    val namespace: String = environment.options["nuget.namespace"] ?: "Interop"
+    val rootNamespace: String = environment.options["nuget.namespace"] ?: "Interop"
+    val rootPackage: String = environment.options["nuget.rootPackage"] ?: ""
     val className: String = environment.options["nuget.className"] ?: "NativeBindings"
 
     return CSharpBindingsProcessor(
       codeGenerator = environment.codeGenerator,
       logger = environment.logger,
       libraryName = libraryName,
-      namespace = namespace,
+      rootNamespace = rootNamespace,
+      rootPackage = rootPackage,
       className = className,
     )
   }

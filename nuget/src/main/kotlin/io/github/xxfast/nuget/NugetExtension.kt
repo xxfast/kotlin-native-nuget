@@ -7,4 +7,5 @@ abstract class NugetExtension {
   abstract val version: Property<String>
   abstract val authors: Property<String>
   abstract val description: Property<String>
+  abstract val rootPackage: Property<String>
 }
