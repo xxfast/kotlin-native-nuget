@@ -92,12 +92,13 @@ abstract class PackNugetTask : DefaultTask() {
     // pass library paths to ClangSharp. This wrapper script sets them before exec'ing the tool.
     val script = File(buildDir, "run-clangsharp.sh")
     script.writeText(
-      """
+      $$"""
         |#!/bin/sh
-        |export DYLD_LIBRARY_PATH="${'$'}1"
-        |export LD_LIBRARY_PATH="${'$'}1"
+        |export DYLD_LIBRARY_PATH="$1"
+        |export LD_LIBRARY_PATH="$1"
+        |export PATH="$HOME/.dotnet/tools:/opt/homebrew/opt/dotnet/bin:$PATH"
         |shift
-        |exec ClangSharpPInvokeGenerator "${'$'}@"
+        |exec ClangSharpPInvokeGenerator "$@"
       """.trimMargin()
     )
     script.setExecutable(true)
@@ -107,37 +108,39 @@ abstract class PackNugetTask : DefaultTask() {
     logger.lifecycle("NuGet package staged at: ${nupkgDir.absolutePath}")
   }
 
+  // Tell that to microsoft
+  @Suppress("HttpUrlsUsage")
   private fun generateTargets(
     id: String,
     libName: String,
     headerFileName: String,
-  ): String = """
+  ): String = $$"""
     |<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
     |  <PropertyGroup>
-    |    <${id}_Header>${'$'}(MSBuildThisFileDirectory)..\content\$headerFileName</${id}_Header>
-    |    <${id}_GeneratedDir>${'$'}(IntermediateOutputPath)Generated\$id\</${id}_GeneratedDir>
-    |    <${id}_ClangNativeLibs>${'$'}(NuGetPackageRoot)libclang.runtime.osx-arm64/21.1.8/runtimes/osx-arm64/native:${'$'}(NuGetPackageRoot)libclangsharp.runtime.osx-arm64/21.1.8.2/runtimes/osx-arm64/native</${id}_ClangNativeLibs>
+    |    <$${id}_Header>$(MSBuildThisFileDirectory)..\content\$$headerFileName</$${id}_Header>
+    |    <$${id}_GeneratedDir>$(IntermediateOutputPath)Generated\$$id\</$${id}_GeneratedDir>
+    |    <$${id}_ClangNativeLibs>$(NuGetPackageRoot)libclang.runtime.osx-arm64/21.1.8/runtimes/osx-arm64/native:$(NuGetPackageRoot)libclangsharp.runtime.osx-arm64/21.1.8.2/runtimes/osx-arm64/native</$${id}_ClangNativeLibs>
     |  </PropertyGroup>
     |
-    |  <Target Name="${id}_GenerateBindings"
+    |  <Target Name="$${id}_GenerateBindings"
     |          BeforeTargets="CoreCompile"
-    |          Inputs="${'$'}(${id}_Header)"
-    |          Outputs="${'$'}(${id}_GeneratedDir)Interop.cs"
-    |          Condition="!Exists('${'$'}(${id}_GeneratedDir)Interop.cs')">
-    |    <MakeDir Directories="${'$'}(${id}_GeneratedDir)" />
-    |    <Exec Command="${'$'}(MSBuildThisFileDirectory)run-clangsharp.sh &quot;${'$'}(${id}_ClangNativeLibs)&quot; --file &quot;${'$'}(${id}_Header)&quot; --traverse &quot;${'$'}(${id}_Header)&quot; --namespace $id.Interop --output &quot;${'$'}(${id}_GeneratedDir)Interop.cs&quot; --libraryPath $libName --methodClassName ${id}Native --config latest-codegen --config single-file"
-    |          Condition="'${'$'}(OS)' != 'Windows_NT'" />
-    |    <Exec Command="ClangSharpPInvokeGenerator --file &quot;${'$'}(${id}_Header)&quot; --traverse &quot;${'$'}(${id}_Header)&quot; --namespace $id.Interop --output &quot;${'$'}(${id}_GeneratedDir)Interop.cs&quot; --libraryPath $libName --methodClassName ${id}Native --config latest-codegen --config single-file"
-    |          Condition="'${'$'}(OS)' == 'Windows_NT'" />
-    |    <Copy SourceFiles="${'$'}(MSBuildThisFileDirectory)..\content\NativeTypeName.cs"
-    |          DestinationFolder="${'$'}(${id}_GeneratedDir)" />
+    |          Inputs="$($${id}_Header)"
+    |          Outputs="$($${id}_GeneratedDir)Interop.cs"
+    |          Condition="!Exists('$($${id}_GeneratedDir)Interop.cs')">
+    |    <MakeDir Directories="$($${id}_GeneratedDir)" />
+    |    <Exec Command="$(MSBuildThisFileDirectory)run-clangsharp.sh &quot;$($${id}_ClangNativeLibs)&quot; --file &quot;$($${id}_Header)&quot; --traverse &quot;$($${id}_Header)&quot; --namespace $$id.Interop --output &quot;$($${id}_GeneratedDir)Interop.cs&quot; --libraryPath $$libName --methodClassName $${id}Native --config latest-codegen --config single-file"
+    |          Condition="'$(OS)' != 'Windows_NT'" />
+    |    <Exec Command="ClangSharpPInvokeGenerator --file &quot;$($${id}_Header)&quot; --traverse &quot;$($${id}_Header)&quot; --namespace $$id.Interop --output &quot;$($${id}_GeneratedDir)Interop.cs&quot; --libraryPath $$libName --methodClassName $${id}Native --config latest-codegen --config single-file"
+    |          Condition="'$(OS)' == 'Windows_NT'" />
+    |    <Copy SourceFiles="$(MSBuildThisFileDirectory)..\content\NativeTypeName.cs"
+    |          DestinationFolder="$($${id}_GeneratedDir)" />
     |  </Target>
     |
-    |  <Target Name="${id}_IncludeGenerated"
+    |  <Target Name="$${id}_IncludeGenerated"
     |          BeforeTargets="CoreCompile"
-    |          DependsOnTargets="${id}_GenerateBindings">
+    |          DependsOnTargets="$${id}_GenerateBindings">
     |    <ItemGroup>
-    |      <Compile Include="${'$'}(${id}_GeneratedDir)**\*.cs" />
+    |      <Compile Include="$($${id}_GeneratedDir)**\*.cs" />
     |    </ItemGroup>
     |  </Target>
     |
