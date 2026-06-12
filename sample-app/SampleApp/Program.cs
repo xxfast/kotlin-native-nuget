@@ -1,9 +1,4 @@
-using System.Runtime.InteropServices;
 using SampleLibrary.Interop;
 
-unsafe
-{
-    sbyte* result = SampleLibraryNative.get_string();
-    string? message = Marshal.PtrToStringUTF8((nint)result);
-    Console.WriteLine(message);
-}
+string message = SampleLibraryNative.get_string();
+Console.WriteLine(message);

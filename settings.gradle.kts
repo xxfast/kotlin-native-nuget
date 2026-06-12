@@ -15,5 +15,6 @@ dependencyResolutionManagement {
   }
 }
 
+include(":processor")
 include(":sample-library")
 include(":sample-app")

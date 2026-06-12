@@ -1,4 +1,3 @@
-using System.Runtime.InteropServices;
 using SampleLibrary.Interop;
 
 namespace SampleApp.Tests;
@@ -6,11 +5,10 @@ namespace SampleApp.Tests;
 public class MappingTests
 {
     [Fact]
-    public unsafe void String_ReturnsExpectedValue()
+    public void String_ReturnsExpectedValue()
     {
-        sbyte* result = SampleLibraryNative.get_string();
-        string? message = Marshal.PtrToStringUTF8((nint)result);
-        Assert.Equal("Kotlin/Native!", message);
+        string result = SampleLibraryNative.get_string();
+        Assert.Equal("Kotlin/Native!", result);
     }
 
     [Fact]

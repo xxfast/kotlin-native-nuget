@@ -1,5 +1,6 @@
 plugins {
   alias(libs.plugins.kotlinMultiplatform)
+  alias(libs.plugins.ksp)
   id("io.github.xxfast.nuget")
 }
 
@@ -27,6 +28,17 @@ kotlin {
       implementation(libs.kotlin.test)
     }
   }
+}
+
+dependencies {
+  add("kspMingwX64", project(":processor"))
+  add("kspMacosArm64", project(":processor"))
+}
+
+ksp {
+  arg("nuget.libraryName", "sample")
+  arg("nuget.namespace", "SampleLibrary.Interop")
+  arg("nuget.className", "SampleLibraryNative")
 }
 
 nuget {

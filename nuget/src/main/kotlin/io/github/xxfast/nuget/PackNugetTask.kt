@@ -23,13 +23,10 @@ abstract class PackNugetTask : DefaultTask() {
   abstract val packageDescription: Property<String>
 
   @get:Input
-  abstract val libraryName: Property<String>
-
-  @get:Input
   abstract val nativeLibDirs: MapProperty<String, String>
 
   @get:Input
-  abstract val headerFilePath: Property<String>
+  abstract val generatedCsDir: Property<String>
 
   @get:OutputDirectory
   abstract val outputDir: DirectoryProperty
@@ -38,7 +35,6 @@ abstract class PackNugetTask : DefaultTask() {
   fun pack() {
     val id: String = packageId.get()
     val version: String = packageVersion.get()
-    val libName: String = libraryName.get()
     val outDir: File = outputDir.get().asFile
 
     val nupkgDir = File(outDir, "$id.$version")
@@ -58,114 +54,61 @@ abstract class PackNugetTask : DefaultTask() {
       }
     }
 
-    val contentDir = File(nupkgDir, "content")
+    val contentDir = File(nupkgDir, "contentFiles/cs/any")
     contentDir.mkdirs()
 
-    val header = File(headerFilePath.get())
-    header.copyTo(File(contentDir, header.name), overwrite = true)
+    val csDir = File(generatedCsDir.get())
+    val csFiles: List<File> = csDir.listFiles()
+      ?.filter { it.extension == "cs" }
+      ?: emptyList()
 
-    val namespace = "$id.Interop"
-    File(contentDir, "NativeTypeName.cs").writeText(
-      """
-        |using System;
-        |using System.Diagnostics;
-        |
-        |namespace $namespace
-        |{
-        |    [AttributeUsage(AttributeTargets.All, AllowMultiple = false)]
-        |    [Conditional("DEBUG")]
-        |    internal sealed class NativeTypeNameAttribute : Attribute
-        |    {
-        |        public NativeTypeNameAttribute(string name) { }
-        |    }
-        |}
-      """.trimMargin()
-    )
+    for (csFile in csFiles) {
+      csFile.copyTo(File(contentDir, csFile.name), overwrite = true)
+    }
 
     val buildDir = File(nupkgDir, "build")
     buildDir.mkdirs()
 
-    File(buildDir, "$id.targets").writeText(generateTargets(id, libName, header.name))
-
-    // TODO Remove when Phase 2 replaces ClangSharp with a custom Source Generator.
-    // Workaround: macOS SIP strips DYLD_* from child processes, so MSBuild's <Exec> can't
-    // pass library paths to ClangSharp. This wrapper script sets them before exec'ing the tool.
-    val script = File(buildDir, "run-clangsharp.sh")
-    script.writeText(
-      $$"""
-        |#!/bin/sh
-        |export DYLD_LIBRARY_PATH="$1"
-        |export LD_LIBRARY_PATH="$1"
-        |export PATH="$HOME/.dotnet/tools:/opt/homebrew/opt/dotnet/bin:$PATH"
-        |shift
-        |exec ClangSharpPInvokeGenerator "$@"
-      """.trimMargin()
-    )
-    script.setExecutable(true)
-
-    File(nupkgDir, "$id.nuspec").writeText(generateNuspec(id, version))
+    File(buildDir, "$id.targets").writeText(generateTargets(id))
+    File(nupkgDir, "$id.nuspec").writeText(generateNuspec(id, version, csFiles))
 
     logger.lifecycle("NuGet package staged at: ${nupkgDir.absolutePath}")
   }
 
-  // Tell that to microsoft
   @Suppress("HttpUrlsUsage")
-  private fun generateTargets(
-    id: String,
-    libName: String,
-    headerFileName: String,
-  ): String = $$"""
+  private fun generateTargets(id: String): String = """
     |<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
-    |  <PropertyGroup>
-    |    <$${id}_Header>$(MSBuildThisFileDirectory)..\content\$$headerFileName</$${id}_Header>
-    |    <$${id}_GeneratedDir>$(IntermediateOutputPath)Generated\$$id\</$${id}_GeneratedDir>
-    |    <$${id}_ClangNativeLibs>$(NuGetPackageRoot)libclang.runtime.osx-arm64/21.1.8/runtimes/osx-arm64/native:$(NuGetPackageRoot)libclangsharp.runtime.osx-arm64/21.1.8.2/runtimes/osx-arm64/native</$${id}_ClangNativeLibs>
-    |  </PropertyGroup>
-    |
-    |  <Target Name="$${id}_GenerateBindings"
-    |          BeforeTargets="CoreCompile"
-    |          Inputs="$($${id}_Header)"
-    |          Outputs="$($${id}_GeneratedDir)Interop.cs"
-    |          Condition="!Exists('$($${id}_GeneratedDir)Interop.cs')">
-    |    <MakeDir Directories="$($${id}_GeneratedDir)" />
-    |    <Exec Command="$(MSBuildThisFileDirectory)run-clangsharp.sh &quot;$($${id}_ClangNativeLibs)&quot; --file &quot;$($${id}_Header)&quot; --traverse &quot;$($${id}_Header)&quot; --namespace $$id.Interop --output &quot;$($${id}_GeneratedDir)Interop.cs&quot; --libraryPath $$libName --methodClassName $${id}Native --config latest-codegen --config single-file"
-    |          Condition="'$(OS)' != 'Windows_NT'" />
-    |    <Exec Command="ClangSharpPInvokeGenerator --file &quot;$($${id}_Header)&quot; --traverse &quot;$($${id}_Header)&quot; --namespace $$id.Interop --output &quot;$($${id}_GeneratedDir)Interop.cs&quot; --libraryPath $$libName --methodClassName $${id}Native --config latest-codegen --config single-file"
-    |          Condition="'$(OS)' == 'Windows_NT'" />
-    |    <Copy SourceFiles="$(MSBuildThisFileDirectory)..\content\NativeTypeName.cs"
-    |          DestinationFolder="$($${id}_GeneratedDir)" />
-    |  </Target>
-    |
-    |  <Target Name="$${id}_IncludeGenerated"
-    |          BeforeTargets="CoreCompile"
-    |          AfterTargets="ResolveReferences"
-    |          DependsOnTargets="$${id}_GenerateBindings">
-    |    <ItemGroup>
-    |      <Compile Include="$($${id}_GeneratedDir)**\*.cs" />
-    |    </ItemGroup>
-    |  </Target>
-    |
     |  <PropertyGroup>
     |    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     |  </PropertyGroup>
     |</Project>
   """.trimMargin()
 
-  private fun generateNuspec(id: String, version: String): String = """
-    |<?xml version="1.0" encoding="utf-8"?>
-    |<package xmlns="http://schemas.microsoft.com/packaging/2013/05/nuspec.xsd">
-    |  <metadata>
-    |    <id>$id</id>
-    |    <version>$version</version>
-    |    <authors>${authors.get()}</authors>
-    |    <description>${packageDescription.get()}</description>
-    |    <dependencies>
-    |      <group targetFramework="net8.0">
-    |        <dependency id="libclang.runtime.osx-arm64" version="21.1.8" />
-    |        <dependency id="libClangSharp.runtime.osx-arm64" version="21.1.8.2" />
-    |      </group>
-    |    </dependencies>
-    |  </metadata>
-    |</package>
-  """.trimMargin()
+  private fun generateNuspec(
+    id: String,
+    version: String,
+    csFiles: List<File>,
+  ): String {
+    val fileEntries: String = csFiles.joinToString("\n") { file ->
+      "      <file src=\"contentFiles/cs/any/${file.name}\" target=\"contentFiles/cs/any/${file.name}\" />"
+    }
+
+    return """
+      |<?xml version="1.0" encoding="utf-8"?>
+      |<package xmlns="http://schemas.microsoft.com/packaging/2013/05/nuspec.xsd">
+      |  <metadata>
+      |    <id>$id</id>
+      |    <version>$version</version>
+      |    <authors>${authors.get()}</authors>
+      |    <description>${packageDescription.get()}</description>
+      |    <contentFiles>
+      |      <files include="cs/any/**/*.cs" buildAction="Compile" />
+      |    </contentFiles>
+      |  </metadata>
+      |  <files>
+      |$fileEntries
+      |  </files>
+      |</package>
+    """.trimMargin()
+  }
 }

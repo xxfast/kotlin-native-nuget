@@ -18,8 +18,10 @@
     <Using Include="Xunit" />
   </ItemGroup>
 
-  <!-- Import generated bindings from the NuGet package -->
-  <Import Project="../../sample-library/build/nuget/SampleLibrary.1.0.0/build/SampleLibrary.targets" />
+  <!-- Include pre-generated C# bindings from the NuGet package -->
+  <ItemGroup>
+    <Compile Include="../../sample-library/build/nuget/SampleLibrary.1.0.0/contentFiles/cs/any/Interop.cs" Link="Generated/Interop.cs" />
+  </ItemGroup>
 
   <!-- Copy native library to output on build -->
   <ItemGroup>
