@@ -47,12 +47,14 @@ class NugetPlugin : Plugin<Project> {
           libDirs[rid] = sharedLib.outputDirectory.absolutePath
           linkTasks.add(sharedLib.linkTaskProvider)
 
-          if (headerFile == null) {
+          if (baseName == null) {
             baseName = sharedLib.baseName
-            headerFile = sharedLib.outputDirectory
-              .listFiles()
-              ?.firstOrNull { it.extension == "h" }
-              ?: File(sharedLib.outputDirectory, "${sharedLib.baseName}_api.h")
+          }
+
+          // Prefer mingw header (no 'lib' prefix) for cross-platform compatibility
+          if (headerFile == null || target.konanTarget.name == "mingw_x64") {
+            val headerName: String = "${sharedLib.baseName}_api.h"
+            headerFile = File(sharedLib.outputDirectory, headerName)
           }
         }
 
@@ -68,7 +70,7 @@ class NugetPlugin : Plugin<Project> {
             task.packageDescription.convention(extension.description)
             task.libraryName.convention(baseName ?: "library")
             task.nativeLibDirs.set(libDirs)
-            task.headerFile.set(headerFile)
+            task.headerFilePath.set(headerFile!!.absolutePath)
             task.outputDir.set(project.layout.buildDirectory.dir("nuget"))
 
             // Ensure the pack task runs after the native libraries are built

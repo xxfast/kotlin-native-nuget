@@ -2,11 +2,9 @@ package io.github.xxfast.nuget
 
 import org.gradle.api.DefaultTask
 import org.gradle.api.file.DirectoryProperty
-import org.gradle.api.file.RegularFileProperty
 import org.gradle.api.provider.MapProperty
 import org.gradle.api.provider.Property
 import org.gradle.api.tasks.Input
-import org.gradle.api.tasks.InputFile
 import org.gradle.api.tasks.OutputDirectory
 import org.gradle.api.tasks.TaskAction
 import java.io.File
@@ -30,8 +28,8 @@ abstract class PackNugetTask : DefaultTask() {
   @get:Input
   abstract val nativeLibDirs: MapProperty<String, String>
 
-  @get:InputFile
-  abstract val headerFile: RegularFileProperty
+  @get:Input
+  abstract val headerFilePath: Property<String>
 
   @get:OutputDirectory
   abstract val outputDir: DirectoryProperty
@@ -63,7 +61,7 @@ abstract class PackNugetTask : DefaultTask() {
     val contentDir = File(nupkgDir, "content")
     contentDir.mkdirs()
 
-    val header: File = headerFile.get().asFile
+    val header = File(headerFilePath.get())
     header.copyTo(File(contentDir, header.name), overwrite = true)
 
     val namespace = "$id.Interop"
