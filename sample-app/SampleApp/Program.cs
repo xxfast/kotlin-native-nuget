@@ -1,4 +1,4 @@
 using SampleLibrary.Interop;
 
-string message = SampleLibraryNative.get_string();
+string message = SampleLibraryNative.@string();
 Console.WriteLine(message);
