@@ -78,7 +78,7 @@ Gradle Plugin (Kotlin side)          NuGet Package            C# Consumer
 - [x] Link shared libraries for multiple targets (mingwX64, macosArm64)
 - [x] Package native libs into NuGet layout (`runtimes/{rid}/native/`)
 - [x] Generate P/Invoke bindings via ClangSharpPInvokeGenerator
-- [x] Move ClangSharp invocation to a `.targets` file shipped inside the NuGet package
+- [x] Move ClangSharp invocation to a `.targets` file shipped inside the NuGet package (see [ADR-001](docs/adr/001-csharp-codegen-in-consumer.md))
 - [x] Ship ClangSharp native libs as a package dependency (eliminate Gradle-side ProcessBuilder)
 
 ### Phase 2: KSP-driven generation
@@ -87,7 +87,7 @@ Gradle Plugin (Kotlin side)          NuGet Package            C# Consumer
 - [x] Emit `Interop.cs` directly from KSP (pre-generated, no consumer-side tooling)
 - [x] Remove ClangSharp dependency and `.targets` generation step
 - [x] Map primitive types (Byte, Short, Int, Long, Float, Double + unsigned variants)
-- [x] Map nullable primitives (two-call pattern: `_has_value` + `_value` → `T?`)
+- [x] Map nullable primitives (see [ADR-002](docs/adr/002-nullable-two-call-pattern.md))
 - [x] Map nullable strings
 
 ### Phase 3: Rich type support
