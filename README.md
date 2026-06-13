@@ -107,7 +107,7 @@ Gradle Plugin (Kotlin side)          NuGet Package       C# Consumer
 - [x] Map enums (see [ADR-006](docs/adr/006-enum-mapping.md))
 - [x] Map per-file top-level function class naming (see [ADR-007](docs/adr/007-top-level-function-class-naming.md))
 - [x] Map data classes (see [ADR-008](docs/adr/008-data-class-mapping.md))
-- [ ] Map interfaces
+- [x] Map interfaces (C# `interface` with `I` prefix, default methods delegate to Kotlin)
 - [ ] Map abstract classes
 - [ ] Map sealed classes
 - [ ] Map Collections types

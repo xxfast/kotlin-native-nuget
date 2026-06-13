@@ -50,6 +50,7 @@ class CirTranslator(
     functions: List<KSFunctionDeclaration>,
     classes: List<KSClassDeclaration>,
     enums: List<KSClassDeclaration> = emptyList(),
+    interfaces: List<KSClassDeclaration> = emptyList(),
   ): CirFile {
     val functionsByNamespaceAndFile: Map<Pair<String, String>, List<KSFunctionDeclaration>> = functions
       .groupBy { func ->
@@ -103,6 +104,19 @@ class CirTranslator(
         namespaces[index] = existing.copy(declarations = existing.declarations + cirEnum)
       } else {
         namespaces.add(CirNamespace(namespace, listOf(cirEnum)))
+      }
+    }
+
+    for (iface in interfaces) {
+      val namespace: String = mapPackageToNamespace(iface.packageName.asString())
+      val cirInterface: CirInterface = translateInterface(iface)
+      val existing = namespaces.find { it.name == namespace }
+
+      if (existing != null) {
+        val index: Int = namespaces.indexOf(existing)
+        namespaces[index] = existing.copy(declarations = existing.declarations + cirInterface)
+      } else {
+        namespaces.add(CirNamespace(namespace, listOf(cirInterface)))
       }
     }
 
@@ -207,6 +221,61 @@ class CirTranslator(
     return listOf(hasValueImport, valueImport, wrapper)
   }
 
+  private fun translateInterface(iface: KSClassDeclaration): CirInterface {
+    val name: String = iface.simpleName.asString()
+    val interfaceName: String = "I$name"
+
+    val properties: List<CirInterfaceProperty> = iface.getAllProperties()
+      .filter { it.getVisibility() == Visibility.PUBLIC }
+      .map { prop ->
+        val propName: String = prop.simpleName.asString()
+        val csPropName: String = propName.replaceFirstChar { it.uppercase() }
+        val isMutable: Boolean = prop.isMutable
+
+        CirInterfaceProperty(
+          name = csPropName,
+          type = mapInterfacePropertyType(prop.type.resolve()),
+          hasSetter = isMutable,
+        )
+      }
+      .toList()
+
+    val methods: List<CirInterfaceMethod> = iface.getAllFunctions()
+      .filter { it.getVisibility() == Visibility.PUBLIC }
+      .filter { it.simpleName.asString() !in listOf("equals", "hashCode", "toString", "<init>") }
+      .map { method ->
+        val methodName: String = method.simpleName.asString()
+        val csMethodName: String = methodName.replaceFirstChar { it.uppercase() }
+
+        val methodParams: List<CirParameter> = method.parameters.map { param ->
+          val kotlinType: String = param.type.resolve().declaration.simpleName.asString()
+          CirParameter(param.name?.asString() ?: "_", mapParamType(kotlinType))
+        }
+
+        val methodReturn: String = method.returnType?.resolve()
+          ?.declaration?.simpleName?.asString() ?: "Unit"
+
+        val returnType: String = if (methodReturn == "String") "string"
+        else if (methodReturn == "Unit") "void"
+        else mapReturnType(methodReturn)
+
+        CirInterfaceMethod(
+          name = csMethodName,
+          returnType = returnType,
+          parameters = methodParams,
+        )
+      }
+      .toList()
+
+    return CirInterface(interfaceName, properties, methods)
+  }
+
+  private fun mapInterfacePropertyType(type: KSType): String {
+    val typeName: String = type.declaration.simpleName.asString()
+    return if (typeName == "String") "string"
+    else mapParamType(typeName)
+  }
+
   private fun translateEnum(enum: KSClassDeclaration): CirEnum {
     val name: String = enum.simpleName.asString()
     val entries: List<CirEnumEntry> = enum.declarations
@@ -247,6 +316,13 @@ class CirTranslator(
     val name: String = cls.simpleName.asString()
     val prefix: String = name.lowercase()
     val isDataClass: Boolean = cls.modifiers.contains(Modifier.DATA)
+
+    val interfaces: List<String> = cls.superTypes
+      .map { it.resolve().declaration }
+      .filterIsInstance<KSClassDeclaration>()
+      .filter { it.classKind == com.google.devtools.ksp.symbol.ClassKind.INTERFACE }
+      .map { "I${it.simpleName.asString()}" }
+      .toList()
 
     val constructor = cls.primaryConstructor
     val cirConstructor: CirConstructor? = if (constructor != null) {
@@ -368,6 +444,7 @@ class CirTranslator(
       constructor = cirConstructor,
       properties = properties,
       methods = methods,
+      interfaces = interfaces,
       isDataClass = isDataClass,
     )
   }

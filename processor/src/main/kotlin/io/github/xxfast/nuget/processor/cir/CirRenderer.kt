@@ -20,12 +20,38 @@ class CirRenderer {
     for (declaration in namespace.declarations) {
       when (declaration) {
         is CirStaticClass -> renderStaticClass(declaration)
+        is CirInterface -> renderInterface(declaration)
         is CirClass -> renderClass(declaration)
         is CirEnum -> renderEnum(declaration)
       }
     }
 
     appendLine("}")
+    appendLine()
+  }
+
+  private fun StringBuilder.renderInterface(iface: CirInterface) {
+    appendLine("    public interface ${iface.name} : IDisposable")
+    appendLine("    {")
+
+    for (prop in iface.properties) {
+      if (prop.hasSetter) {
+        appendLine("        ${prop.type} ${prop.name} { get; set; }")
+      } else {
+        appendLine("        ${prop.type} ${prop.name} { get; }")
+      }
+    }
+
+    if (iface.properties.isNotEmpty() && iface.methods.isNotEmpty()) {
+      appendLine()
+    }
+
+    for (method in iface.methods) {
+      val paramStr: String = method.parameters.joinToString(", ") { "${it.type} ${it.name}" }
+      appendLine("        ${method.returnType} ${method.name}($paramStr);")
+    }
+
+    appendLine("    }")
     appendLine()
   }
 
@@ -84,7 +110,11 @@ class CirRenderer {
   }
 
   private fun StringBuilder.renderClass(cls: CirClass) {
-    val implements: String = if (cls.disposable) " : IDisposable" else ""
+    val implements: String = when {
+      cls.interfaces.isNotEmpty() -> " : ${cls.interfaces.joinToString(", ")}"
+      cls.disposable -> " : IDisposable"
+      else -> ""
+    }
 
     appendLine("    public class ${cls.name}$implements")
     appendLine("    {")

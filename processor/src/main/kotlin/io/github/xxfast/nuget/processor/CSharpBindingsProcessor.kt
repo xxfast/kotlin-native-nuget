@@ -69,21 +69,29 @@ class CSharpBindingsProcessor(
       .filter { it.classKind == ClassKind.ENUM_CLASS }
       .filter { it.parentDeclaration == null }
 
-    if (functions.isEmpty() && classes.isEmpty() && enums.isEmpty()) return emptyList()
+    val interfaces: List<KSClassDeclaration> = allDeclarations
+      .filterIsInstance<KSClassDeclaration>()
+      .filter { it.getVisibility() == Visibility.PUBLIC }
+      .filter { it.classKind == ClassKind.INTERFACE }
+      .filter { it.parentDeclaration == null }
+
+    if (functions.isEmpty() && classes.isEmpty() && enums.isEmpty() && interfaces.isEmpty()) return emptyList()
 
     val sources: Array<KSFile> = (functions.mapNotNull { it.containingFile } +
       classes.mapNotNull { it.containingFile } +
-      enums.mapNotNull { it.containingFile }).toTypedArray()
+      enums.mapNotNull { it.containingFile } +
+      interfaces.mapNotNull { it.containingFile }).toTypedArray()
 
     val deps = Dependencies(aggregating = true, *sources)
 
     generateCNameWrappers(functions, classes, enums, deps)
-    generateCSharpBindings(functions, classes, enums, deps)
+    generateCSharpBindings(functions, classes, enums, interfaces, deps)
 
     logger.info(
       "Generated bindings for ${functions.size} functions" +
         ", ${classes.size} classes" +
-        ", and ${enums.size} enums"
+        ", ${enums.size} enums" +
+        ", and ${interfaces.size} interfaces"
     )
 
     return emptyList()
@@ -93,9 +101,10 @@ class CSharpBindingsProcessor(
     functions: List<KSFunctionDeclaration>,
     classes: List<KSClassDeclaration>,
     enums: List<KSClassDeclaration>,
+    interfaces: List<KSClassDeclaration>,
     deps: Dependencies,
   ) {
-    val cirFile: CirFile = translator.translate(functions, classes, enums)
+    val cirFile: CirFile = translator.translate(functions, classes, enums, interfaces)
     val csharp: String = renderer.render(cirFile)
 
     val file = codeGenerator.createNewFile(

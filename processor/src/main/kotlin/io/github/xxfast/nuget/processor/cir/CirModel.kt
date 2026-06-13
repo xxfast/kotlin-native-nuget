@@ -17,6 +17,24 @@ data class CirStaticClass(
   val members: List<CirMember>,
 ) : CirDeclaration
 
+data class CirInterface(
+  val name: String,
+  val properties: List<CirInterfaceProperty>,
+  val methods: List<CirInterfaceMethod>,
+) : CirDeclaration
+
+data class CirInterfaceProperty(
+  val name: String,
+  val type: String,
+  val hasSetter: Boolean = false,
+)
+
+data class CirInterfaceMethod(
+  val name: String,
+  val returnType: String,
+  val parameters: List<CirParameter>,
+)
+
 data class CirClass(
   val name: String,
   val libraryName: String,
@@ -24,6 +42,7 @@ data class CirClass(
   val constructor: CirConstructor?,
   val properties: List<CirProperty>,
   val methods: List<CirMethod>,
+  val interfaces: List<String> = emptyList(),
   val disposable: Boolean = true,
   val hasInternalHandleConstructor: Boolean = true,
   val isDataClass: Boolean = false,
