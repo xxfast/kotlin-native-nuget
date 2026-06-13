@@ -13,7 +13,12 @@ Implements a new feature using a 3-step TDD loop with subagents.
 
 ### Step 2: Verify with the approach with humans
 
-- Share the research, ADR (if any) and proposed API with the team
+- Share 
+  - Research findings and rationales
+  - ADR (if any) 
+  - Proposed API for
+    - Sample app, library 
+    - Sample tests
 - Get feedback and iterate on the design before implementation
 - This step is crucial to ensure we're building the right thing before writing code
 
