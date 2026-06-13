@@ -98,7 +98,7 @@ Gradle Plugin (Kotlin side)          NuGet Package            C# Consumer
 - [x] Map OOP constructs (classes → C# classes with `IDisposable`, StableRef + opaque pointer)
 - [x] Refactor to CIR (C# Intermediate Representation) model (see [ADR-004](docs/adr/004-cir-intermediate-representation.md))
 - [x] Map object-typed properties/returns (see [ADR-005](docs/adr/005-object-return-semantics.md))
-- [ ] Test cyclic reference disposal (verify Kotlin GC collects after both StableRefs disposed)
+- [x] Test cyclic reference disposal (verified wrappers are independent, dispose doesn't cascade)
 - [ ] Map interfaces
 - [ ] Map Collections types
 - [ ] Map Generics
@@ -113,3 +113,9 @@ Gradle Plugin (Kotlin side)          NuGet Package            C# Consumer
 - [ ] Generate Kotlin wrappers for C# interfaces (callbacks, event handlers)
 - [ ] Support implementing C# interfaces in Kotlin and passing them back to C# consumers
 - [ ] Support implementing Kotlin interfaces in C# and passing them to Kotlin producers
+
+## Future Improvements
+
+- Verify Kotlin GC actually frees objects after all StableRefs are disposed (requires Kotlin-side weak references + GC trigger — not feasible in standard unit tests)
+- Memory leak detection tooling for bridged objects in CI
+- Object identity preservation (caching wrappers) if profiling shows allocation overhead is significant
