@@ -152,7 +152,8 @@ Gradle Plugin (Kotlin side)          NuGet Package       C# Consumer
 - [x] Map data classes (see [ADR-008](docs/adr/008-data-class-mapping.md))
 - [x] Map interfaces (C# `interface` with `I` prefix, default methods delegate to Kotlin)
 - [x] Map abstract classes (C# `abstract class`, `_handle` inherited by subclasses)
-- [ ] Map sealed classes
+- [x] Map sealed classes (see [ADR-009](docs/adr/009-sealed-class-mapping.md))
+- [ ] Map object / data object (singletons)
 - [ ] Map Collections types
 - [ ] Map Generics
 
@@ -169,6 +170,7 @@ Gradle Plugin (Kotlin side)          NuGet Package       C# Consumer
 
 ## Future Improvements
 
+- Support flat/unnested sealed class hierarchies (subclasses as top-level in same namespace)
 - KSP incremental processing if build times become a concern on large libraries
 - Map data classes to C# `record class` if a safe `with`-expression pattern can be found (see [ADR-008](docs/adr/008-data-class-mapping.md))
 - Verify Kotlin GC actually frees objects after all StableRefs are disposed (requires Kotlin-side weak references + GC trigger — not feasible in standard unit tests)

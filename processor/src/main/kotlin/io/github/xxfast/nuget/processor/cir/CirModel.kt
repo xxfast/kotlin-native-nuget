@@ -56,6 +56,20 @@ data class CirEnum(
   val properties: List<CirEnumProperty> = emptyList(),
 ) : CirDeclaration
 
+data class CirSealedClass(
+  val name: String,
+  val libraryName: String,
+  val nativePrefix: String,
+  val subclasses: List<CirSealedSubclass>,
+) : CirDeclaration
+
+data class CirSealedSubclass(
+  val name: String,
+  val nativePrefix: String,
+  val properties: List<CirProperty>,
+  val isDataClass: Boolean = false,
+)
+
 data class CirEnumEntry(
   val name: String,
   val ordinal: Int,

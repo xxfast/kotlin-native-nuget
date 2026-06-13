@@ -51,6 +51,7 @@ class CirTranslator(
     classes: List<KSClassDeclaration>,
     enums: List<KSClassDeclaration> = emptyList(),
     interfaces: List<KSClassDeclaration> = emptyList(),
+    sealedClasses: List<KSClassDeclaration> = emptyList(),
   ): CirFile {
     val functionsByNamespaceAndFile: Map<Pair<String, String>, List<KSFunctionDeclaration>> = functions
       .groupBy { func ->
@@ -68,7 +69,13 @@ class CirTranslator(
         it.simpleName.asString() == fileClassName &&
           mapPackageToNamespace(it.packageName.asString()) == namespace
       }
-      val finalClassName: String = if (conflictsWithClass) "${fileClassName}Kt" else fileClassName
+
+      val conflictsWithSealed: Boolean = sealedClasses.any {
+        it.simpleName.asString() == fileClassName &&
+          mapPackageToNamespace(it.packageName.asString()) == namespace
+      }
+
+      val finalClassName: String = if (conflictsWithClass || conflictsWithSealed) "${fileClassName}Kt" else fileClassName
 
       val members: List<CirMember> = funcs.flatMap { translateFunction(it) }
       val existing = namespaces.find { it.name == namespace }
@@ -120,6 +127,19 @@ class CirTranslator(
       }
     }
 
+    for (sealed in sealedClasses) {
+      val namespace: String = mapPackageToNamespace(sealed.packageName.asString())
+      val cirSealedClass: CirSealedClass = translateSealedClass(sealed)
+      val existing = namespaces.find { it.name == namespace }
+
+      if (existing != null) {
+        val index: Int = namespaces.indexOf(existing)
+        namespaces[index] = existing.copy(declarations = existing.declarations + cirSealedClass)
+      } else {
+        namespaces.add(CirNamespace(namespace, listOf(cirSealedClass)))
+      }
+    }
+
     return CirFile(namespaces = namespaces)
   }
 
@@ -139,6 +159,31 @@ class CirTranslator(
 
     if (isNullable) {
       return translateNullableFunction(cname, csName, kotlinReturnType, params, func)
+    }
+
+    val isSealedReturnType: Boolean = (returnType?.declaration as? KSClassDeclaration)
+      ?.modifiers?.contains(Modifier.SEALED) == true
+
+    if (isSealedReturnType) {
+      val nativeImport = CirDllImport(
+        libraryName = libraryName,
+        entryPoint = cname,
+        returnType = "IntPtr",
+        name = "${csName}_native",
+        parameters = params,
+        visibility = CirVisibility.PRIVATE,
+      )
+
+      val paramNames: String = params.joinToString(", ") { it.name }
+      val wrapper = CirMethod(
+        name = csName,
+        returnType = kotlinReturnType,
+        parameters = params,
+        body = "$kotlinReturnType.FromHandle(${csName}_native($paramNames))",
+        isStatic = true,
+      )
+
+      return listOf(nativeImport, wrapper)
     }
 
     if (kotlinReturnType == "String") {
@@ -484,6 +529,80 @@ class CirTranslator(
     )
   }
 
+
+  private fun translateSealedClass(cls: KSClassDeclaration): CirSealedClass {
+    val name: String = cls.simpleName.asString()
+    val prefix: String = name.lowercase()
+
+    val subclasses: List<CirSealedSubclass> = cls.getSealedSubclasses()
+      .map { subclass ->
+        val subName: String = subclass.simpleName.asString()
+        val subPrefix: String = "${prefix}_${subName.lowercase()}"
+        val isDataClass: Boolean = subclass.modifiers.contains(Modifier.DATA)
+
+        val properties: List<CirProperty> = subclass.getAllProperties()
+          .filter { it.getVisibility() == Visibility.PUBLIC }
+          .map { prop ->
+            val propName: String = prop.simpleName.asString()
+            val propTypeResolved: KSType = prop.type.resolve()
+            val propType: String = propTypeResolved.declaration.simpleName.asString()
+            val isNullable: Boolean = propTypeResolved.isMarkedNullable
+            val csPropName: String = propName.replaceFirstChar { it.uppercase() }
+
+            val isEnumType: Boolean = (propTypeResolved.declaration as? KSClassDeclaration)
+              ?.classKind == com.google.devtools.ksp.symbol.ClassKind.ENUM_CLASS
+
+            val isObjectType: Boolean = propType !in KOTLIN_TO_CSHARP_RETURN && !isEnumType
+
+            val nativeReturnType: String = when {
+              isEnumType -> "int"
+              isObjectType -> "IntPtr"
+              else -> mapReturnType(propType)
+            }
+
+            val type: String = when {
+              propType == "String" -> "string"
+              isEnumType -> propType
+              isObjectType && isNullable -> "$propType?"
+              isObjectType -> propType
+              else -> mapReturnType(propType)
+            }
+
+            val getter: String = when {
+              propType == "String" -> "Marshal.PtrToStringUTF8(Native_Get_$propName(_handle))!"
+              isEnumType -> "($propType)Native_Get_$propName(_handle)"
+              isObjectType && isNullable -> "Native_Get_$propName(_handle) == IntPtr.Zero ? null : new $propType(Native_Get_$propName(_handle))"
+              isObjectType -> "new $propType(Native_Get_$propName(_handle))"
+              else -> "Native_Get_$propName(_handle)"
+            }
+
+            CirProperty(
+              name = csPropName,
+              type = type,
+              nativeReturnType = nativeReturnType,
+              nativeName = propName,
+              getter = getter,
+              setter = null,
+            )
+          }
+          .toList()
+
+        CirSealedSubclass(
+          name = subName,
+          nativePrefix = subPrefix,
+          properties = properties,
+          isDataClass = isDataClass,
+        )
+      }
+      .toList()
+
+    return CirSealedClass(
+      name = name,
+      libraryName = libraryName,
+      nativePrefix = prefix,
+      subclasses = subclasses,
+    )
+  }
 
   private fun mapReturnType(kotlinType: String): String =
     KOTLIN_TO_CSHARP_RETURN[kotlinType] ?: "IntPtr"
