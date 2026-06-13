@@ -105,7 +105,7 @@ Gradle Plugin (Kotlin side)          NuGet Package            C# Consumer
 - [x] Map object-typed properties/returns (see [ADR-005](docs/adr/005-object-return-semantics.md))
 - [x] Test cyclic reference disposal (verified wrappers are independent, dispose doesn't cascade)
 - [x] Map member setters
-- [ ] Map enums
+- [x] Map enums (see [ADR-006](docs/adr/006-enum-mapping.md))
 - [ ] Map data classes
 - [ ] Map interfaces
 - [ ] Map abstract classes

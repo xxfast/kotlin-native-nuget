@@ -5,6 +5,7 @@ class Cat(
   val lives: Int = 9,
 ) {
   var brother: Cat? = null
+  var mood: Mood = Mood.SLEEPY
 
   fun meow(): String = "Meow! My name is $name"
 

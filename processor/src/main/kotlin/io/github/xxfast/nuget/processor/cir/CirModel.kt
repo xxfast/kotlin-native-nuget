@@ -28,6 +28,24 @@ data class CirClass(
   val hasInternalHandleConstructor: Boolean = true,
 ) : CirDeclaration
 
+data class CirEnum(
+  val name: String,
+  val entries: List<CirEnumEntry>,
+  val properties: List<CirEnumProperty> = emptyList(),
+) : CirDeclaration
+
+data class CirEnumEntry(
+  val name: String,
+  val ordinal: Int,
+)
+
+data class CirEnumProperty(
+  val name: String,
+  val type: String,
+  val nativeReturnType: String,
+  val nativeName: String,
+)
+
 sealed interface CirMember
 
 data class CirDllImport(

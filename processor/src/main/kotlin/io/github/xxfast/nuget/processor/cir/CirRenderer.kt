@@ -21,11 +21,55 @@ class CirRenderer {
       when (declaration) {
         is CirStaticClass -> renderStaticClass(declaration)
         is CirClass -> renderClass(declaration)
+        is CirEnum -> renderEnum(declaration)
       }
     }
 
     appendLine("}")
     appendLine()
+  }
+
+  private fun StringBuilder.renderEnum(enum: CirEnum) {
+    appendLine("    public enum ${enum.name}")
+    appendLine("    {")
+
+    for (entry in enum.entries) {
+      appendLine("        ${entry.name} = ${entry.ordinal},")
+    }
+
+    appendLine("    }")
+
+    if (enum.properties.isNotEmpty()) {
+      appendLine()
+      renderEnumExtensions(enum)
+    }
+  }
+
+  private fun StringBuilder.renderEnumExtensions(enum: CirEnum) {
+    appendLine("    public static class ${enum.name}Extensions")
+    appendLine("    {")
+
+    for (prop in enum.properties) {
+      val enumLowercase: String = enum.name.lowercase()
+      val propLowercase: String = prop.nativeName.lowercase()
+      val entryPoint: String = "${enumLowercase}_get_$propLowercase"
+
+      appendLine("        [DllImport(\"sample\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"$entryPoint\")]")
+      appendLine("        private static extern ${prop.nativeReturnType} Native_Get${prop.name}(int ordinal);")
+      appendLine()
+
+      val body: String = if (prop.type == "string") {
+        "Marshal.PtrToStringUTF8(Native_Get${prop.name}((int)${enum.name.lowercase()}))!"
+      } else {
+        "Native_Get${prop.name}((int)${enum.name.lowercase()})"
+      }
+
+      appendLine("        public static ${prop.type} ${prop.name}(this ${enum.name} ${enum.name.lowercase()})")
+      appendLine("            => $body;")
+      appendLine()
+    }
+
+    appendLine("    }")
   }
 
   private fun StringBuilder.renderStaticClass(cls: CirStaticClass) {
@@ -68,7 +112,7 @@ class CirRenderer {
       appendLine("        private static extern ${prop.nativeReturnType} Native_Get_${prop.nativeName}(IntPtr handle);")
       appendLine()
       if (prop.setter != null) {
-        val setterType: String = if (prop.nativeReturnType == "IntPtr") "IntPtr" else prop.type
+        val setterType: String = prop.nativeReturnType
         appendLine("        [DllImport(\"${cls.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"${cls.nativePrefix}_set_${prop.nativeName}\")]")
         appendLine("        private static extern void Native_Set_${prop.nativeName}(IntPtr handle, $setterType value);")
         appendLine()

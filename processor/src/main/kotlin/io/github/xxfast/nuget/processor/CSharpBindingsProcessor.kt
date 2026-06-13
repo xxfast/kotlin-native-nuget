@@ -62,19 +62,27 @@ class CSharpBindingsProcessor(
       .filter { it.classKind == ClassKind.CLASS }
       .filter { it.parentDeclaration == null }
 
-    if (functions.isEmpty() && classes.isEmpty()) return emptyList()
+    val enums: List<KSClassDeclaration> = allDeclarations
+      .filterIsInstance<KSClassDeclaration>()
+      .filter { it.getVisibility() == Visibility.PUBLIC }
+      .filter { it.classKind == ClassKind.ENUM_CLASS }
+      .filter { it.parentDeclaration == null }
+
+    if (functions.isEmpty() && classes.isEmpty() && enums.isEmpty()) return emptyList()
 
     val sources: Array<KSFile> = (functions.mapNotNull { it.containingFile } +
-      classes.mapNotNull { it.containingFile }).toTypedArray()
+      classes.mapNotNull { it.containingFile } +
+      enums.mapNotNull { it.containingFile }).toTypedArray()
 
     val deps = Dependencies(aggregating = true, *sources)
 
-    generateCNameWrappers(functions, classes, deps)
-    generateCSharpBindings(functions, classes, deps)
+    generateCNameWrappers(functions, classes, enums, deps)
+    generateCSharpBindings(functions, classes, enums, deps)
 
     logger.info(
       "Generated bindings for ${functions.size} functions" +
-        " and ${classes.size} classes"
+        ", ${classes.size} classes" +
+        ", and ${enums.size} enums"
     )
 
     return emptyList()
@@ -83,9 +91,10 @@ class CSharpBindingsProcessor(
   private fun generateCSharpBindings(
     functions: List<KSFunctionDeclaration>,
     classes: List<KSClassDeclaration>,
+    enums: List<KSClassDeclaration>,
     deps: Dependencies,
   ) {
-    val cirFile: CirFile = translator.translate(functions, classes)
+    val cirFile: CirFile = translator.translate(functions, classes, enums)
     val csharp: String = renderer.render(cirFile)
 
     val file = codeGenerator.createNewFile(
@@ -105,6 +114,7 @@ class CSharpBindingsProcessor(
   private fun generateCNameWrappers(
     functions: List<KSFunctionDeclaration>,
     classes: List<KSClassDeclaration>,
+    enums: List<KSClassDeclaration>,
     deps: Dependencies,
   ) {
     val fileSpec: FileSpec = FileSpec
@@ -131,6 +141,10 @@ class CSharpBindingsProcessor(
 
         for (cls in classes) {
           addClassExports(cls)
+        }
+
+        for (enum in enums) {
+          addEnumExports(enum)
         }
       }
       .build()
@@ -238,6 +252,9 @@ class CSharpBindingsProcessor(
       val isNullable: Boolean = propTypeResolved.isMarkedNullable
       val isMutable: Boolean = prop.isMutable
 
+      val isEnumType: Boolean = (propTypeResolved.declaration as? KSClassDeclaration)
+        ?.classKind == ClassKind.ENUM_CLASS
+
       val isPrimitiveType: Boolean = propType in setOf(
         "kotlin.String", "kotlin.Byte", "kotlin.UByte", "kotlin.Short",
         "kotlin.UShort", "kotlin.Int", "kotlin.UInt", "kotlin.Long",
@@ -245,7 +262,33 @@ class CSharpBindingsProcessor(
         "kotlin.Unit",
       )
 
-      if (isPrimitiveType) {
+      if (isEnumType) {
+        addFunction(
+          FunSpec.builder("export_${prefix}_get_$propName")
+            .addAnnotation(cNameAnnotation("${prefix}_get_$propName"))
+            .addParameter("handle", cOpaquePointer)
+            .returns(Int::class)
+            .addStatement(
+              "return handle.asStableRef<%L>().get().%L.ordinal",
+              qualifiedName, propName,
+            )
+            .build()
+        )
+
+        if (isMutable) {
+          addFunction(
+            FunSpec.builder("export_${prefix}_set_$propName")
+              .addAnnotation(cNameAnnotation("${prefix}_set_$propName"))
+              .addParameter("handle", cOpaquePointer)
+              .addParameter("value", Int::class)
+              .addStatement(
+                "handle.asStableRef<%L>().get().%L = %L.entries[value]",
+                qualifiedName, propName, propType,
+              )
+              .build()
+          )
+        }
+      } else if (isPrimitiveType) {
         addFunction(
           FunSpec.builder("export_${prefix}_get_$propName")
             .addAnnotation(cNameAnnotation("${prefix}_get_$propName"))
@@ -395,6 +438,32 @@ class CSharpBindingsProcessor(
       addParameter(param.name?.asString() ?: "_", ClassName.bestGuess(type))
     }
     return this
+  }
+
+  private fun FileSpec.Builder.addEnumExports(enum: KSClassDeclaration) {
+    val name: String = enum.simpleName.asString()
+    val qualifiedName: String = enum.qualifiedName?.asString() ?: return
+    val prefix: String = name.lowercase()
+
+    val properties: List<KSPropertyDeclaration> = enum.getAllProperties()
+      .filter { it.getVisibility() == Visibility.PUBLIC }
+      .filter { it.simpleName.asString() !in setOf("name", "ordinal", "declaringJavaClass") }
+      .toList()
+
+    for (prop in properties) {
+      val propName: String = prop.simpleName.asString()
+      val propType: String = prop.type.resolve().declaration.qualifiedName?.asString() ?: "Any"
+
+      addFunction(
+        FunSpec.builder("export_${prefix}_get_$propName")
+          .addAnnotation(cNameAnnotation("${prefix}_get_$propName"))
+          .addParameter("ordinal", Int::class)
+          .returns(ClassName.bestGuess(propType))
+          .addStatement("val ${prefix}: %L = %L.entries[ordinal]", qualifiedName, qualifiedName)
+          .addStatement("return ${prefix}.$propName")
+          .build()
+      )
+    }
   }
 
   private fun cNameAnnotation(value: String): AnnotationSpec =

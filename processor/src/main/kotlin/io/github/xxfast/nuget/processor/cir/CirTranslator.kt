@@ -48,6 +48,7 @@ class CirTranslator(
   fun translate(
     functions: List<KSFunctionDeclaration>,
     classes: List<KSClassDeclaration>,
+    enums: List<KSClassDeclaration> = emptyList(),
   ): CirFile {
     val functionsByNamespace: Map<String, List<KSFunctionDeclaration>> = functions
       .groupBy { mapPackageToNamespace(it.packageName.asString()) }
@@ -69,6 +70,19 @@ class CirTranslator(
         namespaces[index] = existing.copy(declarations = existing.declarations + cirClass)
       } else {
         namespaces.add(CirNamespace(namespace, listOf(cirClass)))
+      }
+    }
+
+    for (enum in enums) {
+      val namespace: String = mapPackageToNamespace(enum.packageName.asString())
+      val cirEnum: CirEnum = translateEnum(enum)
+      val existing = namespaces.find { it.name == namespace }
+
+      if (existing != null) {
+        val index: Int = namespaces.indexOf(existing)
+        namespaces[index] = existing.copy(declarations = existing.declarations + cirEnum)
+      } else {
+        namespaces.add(CirNamespace(namespace, listOf(cirEnum)))
       }
     }
 
@@ -173,6 +187,42 @@ class CirTranslator(
     return listOf(hasValueImport, valueImport, wrapper)
   }
 
+  private fun translateEnum(enum: KSClassDeclaration): CirEnum {
+    val name: String = enum.simpleName.asString()
+    val entries: List<CirEnumEntry> = enum.declarations
+      .filterIsInstance<KSClassDeclaration>()
+      .mapIndexed { index, entry ->
+        val entryName: String = entry.simpleName.asString()
+        val csEntryName: String = entryName.split("_")
+          .joinToString("") { it.lowercase().replaceFirstChar { c -> c.uppercase() } }
+        CirEnumEntry(csEntryName, index)
+      }
+      .toList()
+
+    val properties: List<CirEnumProperty> = enum.getAllProperties()
+      .filter { it.getVisibility() == Visibility.PUBLIC }
+      .filter { it.simpleName.asString() !in setOf("name", "ordinal", "declaringJavaClass") }
+      .map { prop ->
+        val propName: String = prop.simpleName.asString()
+        val propTypeResolved: KSType = prop.type.resolve()
+        val propType: String = propTypeResolved.declaration.simpleName.asString()
+        val csPropName: String = propName.replaceFirstChar { it.uppercase() }
+
+        val nativeReturnType: String = mapReturnType(propType)
+        val type: String = if (propType == "String") "string" else mapReturnType(propType)
+
+        CirEnumProperty(
+          name = csPropName,
+          type = type,
+          nativeReturnType = nativeReturnType,
+          nativeName = propName,
+        )
+      }
+      .toList()
+
+    return CirEnum(name, entries, properties)
+  }
+
   private fun translateClass(cls: KSClassDeclaration): CirClass {
     val name: String = cls.simpleName.asString()
     val prefix: String = name.lowercase()
@@ -194,17 +244,26 @@ class CirTranslator(
       .filter { it.getVisibility() == Visibility.PUBLIC }
       .map { prop ->
         val propName: String = prop.simpleName.asString()
-        val propType: String = prop.type.resolve().declaration.simpleName.asString()
-        val isNullable: Boolean = prop.type.resolve().isMarkedNullable
+        val propTypeResolved: KSType = prop.type.resolve()
+        val propType: String = propTypeResolved.declaration.simpleName.asString()
+        val isNullable: Boolean = propTypeResolved.isMarkedNullable
         val isMutable: Boolean = prop.isMutable
         val csPropName: String = propName.replaceFirstChar { it.uppercase() }
 
-        val isObjectType: Boolean = propType !in KOTLIN_TO_CSHARP_RETURN
+        val isEnumType: Boolean = (propTypeResolved.declaration as? KSClassDeclaration)
+          ?.classKind == com.google.devtools.ksp.symbol.ClassKind.ENUM_CLASS
 
-        val nativeReturnType: String = if (isObjectType) "IntPtr" else mapReturnType(propType)
+        val isObjectType: Boolean = propType !in KOTLIN_TO_CSHARP_RETURN && !isEnumType
+
+        val nativeReturnType: String = when {
+          isEnumType -> "int"
+          isObjectType -> "IntPtr"
+          else -> mapReturnType(propType)
+        }
 
         val type: String = when {
           propType == "String" -> "string"
+          isEnumType -> propType
           isObjectType && isNullable -> "$propType?"
           isObjectType -> propType
           else -> mapReturnType(propType)
@@ -212,6 +271,7 @@ class CirTranslator(
 
         val getter: String = when {
           propType == "String" -> "Marshal.PtrToStringUTF8(Native_Get_$propName(_handle))!"
+          isEnumType -> "($propType)Native_Get_$propName(_handle)"
           isObjectType && isNullable -> "Native_Get_$propName(_handle) == IntPtr.Zero ? null : new $propType(Native_Get_$propName(_handle))"
           isObjectType -> "new $propType(Native_Get_$propName(_handle))"
           else -> "Native_Get_$propName(_handle)"
@@ -220,6 +280,7 @@ class CirTranslator(
         val setter: String? = if (isMutable) {
           when {
             propType == "String" -> "Native_Set_$propName(_handle, value)"
+            isEnumType -> "Native_Set_$propName(_handle, (int)value)"
             isObjectType && isNullable -> "Native_Set_$propName(_handle, value?._handle ?? IntPtr.Zero)"
             isObjectType -> "Native_Set_$propName(_handle, value._handle)"
             else -> "Native_Set_$propName(_handle, value)"
