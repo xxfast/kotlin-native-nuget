@@ -358,6 +358,26 @@ Kotlin's `inline` keyword but rather refers to taking the contents of the method
 where the function was originally invoked. If that section of code could later be used as a function
 in many places then consider pulling it out again, but only when necessary.
 
+### Prefer `.forEach` over `for (in)`
+
+For simple iteration, prefer `.forEach` as it reads as a one-liner and chains cleanly.
+```kotlin
+// OK
+classes.forEach { addClassExports(it) }
+enums.forEach { addEnumExports(it) }
+
+// OK - when the body needs a named parameter
+functions.forEach { func ->
+  addImport(func.packageName.asString(), func.simpleName.asString())
+  addFunctionExports(func)
+}
+
+// Not preferred
+for (cls in classes) {
+  addClassExports(cls)
+}
+```
+
 ### Avoid indirection
 
 Do not create wrapper functions that simply delegate to another function without adding value.
