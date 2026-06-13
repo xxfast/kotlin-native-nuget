@@ -9,6 +9,13 @@ import com.squareup.kotlinpoet.FileSpec
 import com.squareup.kotlinpoet.FunSpec
 import io.github.xxfast.nuget.processor.toCName
 
+/**
+ * Generates @CName bridge exports for top-level functions.
+ * Handles nullable returns (ADR-002), String returns, and sealed class returns.
+ *
+ * @see <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/002-nullable-two-call-pattern.md">ADR-002: Nullable two-call pattern</a>
+ * @see <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/007-top-level-function-class-naming.md">ADR-007: Top-level function naming</a>
+ */
 internal fun FileSpec.Builder.addFunctionExports(func: KSFunctionDeclaration) {
   val cname: String = toCName(func.simpleName.asString())
   val funcName: String = func.simpleName.asString()

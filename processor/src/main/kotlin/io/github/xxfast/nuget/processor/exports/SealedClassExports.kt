@@ -11,6 +11,12 @@ import com.squareup.kotlinpoet.ClassName
 import com.squareup.kotlinpoet.FileSpec
 import com.squareup.kotlinpoet.FunSpec
 
+/**
+ * Generates @CName bridge exports for sealed classes: type discriminator,
+ * subclass property getters, and data class methods for data class subclasses.
+ *
+ * @see <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/009-sealed-class-mapping.md">ADR-009: Sealed class mapping</a>
+ */
 internal fun FileSpec.Builder.addSealedClassExports(sealed: KSClassDeclaration) {
   val name: String = sealed.simpleName.asString()
   val qualifiedName: String = sealed.qualifiedName?.asString() ?: return

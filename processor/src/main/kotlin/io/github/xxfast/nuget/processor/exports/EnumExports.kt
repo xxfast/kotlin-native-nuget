@@ -8,6 +8,12 @@ import com.squareup.kotlinpoet.ClassName
 import com.squareup.kotlinpoet.FileSpec
 import com.squareup.kotlinpoet.FunSpec
 
+/**
+ * Generates @CName bridge exports for enum properties.
+ * Takes ordinal as Int, converts to enum entry, and accesses the property.
+ *
+ * @see <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/006-enum-mapping.md">ADR-006: Enum mapping</a>
+ */
 internal fun FileSpec.Builder.addEnumExports(enum: KSClassDeclaration) {
   val name: String = enum.simpleName.asString()
   val qualifiedName: String = enum.qualifiedName?.asString() ?: return

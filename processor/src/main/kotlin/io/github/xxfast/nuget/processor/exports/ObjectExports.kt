@@ -9,6 +9,10 @@ import com.squareup.kotlinpoet.FileSpec
 import com.squareup.kotlinpoet.FunSpec
 import io.github.xxfast.nuget.processor.toCName
 
+/**
+ * Generates @CName bridge exports for Kotlin object singletons.
+ * No handle parameter — calls the object's methods directly.
+ */
 internal fun FileSpec.Builder.addObjectExports(obj: KSClassDeclaration) {
   val name: String = obj.simpleName.asString()
   val qualifiedName: String = obj.qualifiedName?.asString() ?: return
