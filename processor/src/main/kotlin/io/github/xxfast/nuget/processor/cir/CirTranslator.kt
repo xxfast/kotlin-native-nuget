@@ -316,13 +316,27 @@ class CirTranslator(
     val name: String = cls.simpleName.asString()
     val prefix: String = name.lowercase()
     val isDataClass: Boolean = cls.modifiers.contains(Modifier.DATA)
+    val isAbstract: Boolean = cls.modifiers.contains(Modifier.ABSTRACT)
 
-    val interfaces: List<String> = cls.superTypes
+    val superClass: String? = cls.superTypes
       .map { it.resolve().declaration }
       .filterIsInstance<KSClassDeclaration>()
-      .filter { it.classKind == com.google.devtools.ksp.symbol.ClassKind.INTERFACE }
-      .map { "I${it.simpleName.asString()}" }
-      .toList()
+      .firstOrNull { decl ->
+        decl.classKind == com.google.devtools.ksp.symbol.ClassKind.CLASS &&
+          decl.qualifiedName?.asString() != "kotlin.Any"
+      }
+      ?.simpleName?.asString()
+
+    val interfaces: List<String> = if (superClass != null) {
+      emptyList()
+    } else {
+      cls.superTypes
+        .map { it.resolve().declaration }
+        .filterIsInstance<KSClassDeclaration>()
+        .filter { it.classKind == com.google.devtools.ksp.symbol.ClassKind.INTERFACE }
+        .map { "I${it.simpleName.asString()}" }
+        .toList()
+    }
 
     val constructor = cls.primaryConstructor
     val cirConstructor: CirConstructor? = if (constructor != null) {
@@ -339,6 +353,10 @@ class CirTranslator(
 
     val properties: List<CirProperty> = cls.getAllProperties()
       .filter { it.getVisibility() == Visibility.PUBLIC }
+      .filter { prop ->
+        if (superClass == null) return@filter true
+        prop.parentDeclaration == cls
+      }
       .map { prop ->
         val propName: String = prop.simpleName.asString()
         val propTypeResolved: KSType = prop.type.resolve()
@@ -394,13 +412,21 @@ class CirTranslator(
         )
       }.toList()
 
-    val methods: List<CirMethod> = cls.getAllFunctions()
+    val allMethods: List<KSFunctionDeclaration> = cls.getAllFunctions().toList()
+
+    val methods: List<CirMethod> = allMethods
       .filter { it.getVisibility() == Visibility.PUBLIC }
-      .filter {
-        val methodName: String = it.simpleName.asString()
+      .filter { method ->
+        val methodName: String = method.simpleName.asString()
         val isDataClassMethod: Boolean = isDataClass &&
           (methodName == "copy" || methodName.startsWith("component"))
-        methodName !in listOf("equals", "hashCode", "toString", "<init>") && !isDataClassMethod
+        if (methodName in listOf("equals", "hashCode", "toString", "<init>") || isDataClassMethod) return@filter false
+
+        if (superClass != null) {
+          method.parentDeclaration == cls
+        } else {
+          true
+        }
       }
       .map { method ->
         val methodName: String = method.simpleName.asString()
@@ -413,6 +439,11 @@ class CirTranslator(
           val kotlinType: String = param.type.resolve().declaration.simpleName.asString()
           CirParameter(param.name?.asString() ?: "_", mapParamType(kotlinType))
         }
+
+        val declaredInThisClass: Boolean = method.parentDeclaration == cls
+        val hasImplementation: Boolean = declaredInThisClass || method.modifiers.contains(Modifier.OVERRIDE)
+        val isMethodAbstract: Boolean = !hasImplementation && (isAbstract || method.modifiers.contains(Modifier.ABSTRACT))
+        val isOverride: Boolean = superClass != null && method.modifiers.contains(Modifier.OVERRIDE)
 
         val nativeCallArgs: String = (listOf("_handle") +
           methodParams.map { it.name }).joinToString(", ")
@@ -434,6 +465,8 @@ class CirTranslator(
           nativeName = methodName,
           parameters = methodParams,
           body = body,
+          isAbstract = isMethodAbstract,
+          isOverride = isOverride,
         )
       }.toList()
 
@@ -445,7 +478,9 @@ class CirTranslator(
       properties = properties,
       methods = methods,
       interfaces = interfaces,
+      superClass = superClass,
       isDataClass = isDataClass,
+      isAbstract = isAbstract,
     )
   }
 

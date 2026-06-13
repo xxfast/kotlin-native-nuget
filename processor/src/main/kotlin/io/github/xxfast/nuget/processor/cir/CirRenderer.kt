@@ -110,30 +110,43 @@ class CirRenderer {
   }
 
   private fun StringBuilder.renderClass(cls: CirClass) {
+    val abstract: String = if (cls.isAbstract) "abstract " else ""
+
     val implements: String = when {
+      cls.superClass != null -> " : ${cls.superClass}"
       cls.interfaces.isNotEmpty() -> " : ${cls.interfaces.joinToString(", ")}"
       cls.disposable -> " : IDisposable"
       else -> ""
     }
 
-    appendLine("    public class ${cls.name}$implements")
+    appendLine("    public ${abstract}class ${cls.name}$implements")
     appendLine("    {")
-    appendLine("        internal IntPtr _handle;")
-    appendLine()
 
-    if (cls.constructor != null) {
+    if (cls.superClass == null) {
+      val handleVisibility: String = if (cls.isAbstract) "internal" else "private"
+      appendLine("        $handleVisibility IntPtr _handle;")
+      appendLine()
+    }
+
+    if (cls.constructor != null && !cls.isAbstract) {
       val ctorParamStr: String = cls.constructor.parameters.joinToString(", ") { "${it.type} ${it.name}" }
       appendLine("        [DllImport(\"${cls.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"${cls.nativePrefix}_create\")]")
       appendLine("        private static extern IntPtr Native_Create($ctorParamStr);")
       appendLine()
-      renderConstructor(cls.name, cls.constructor)
+      renderConstructor(cls.name, cls.constructor, cls.superClass != null)
     }
 
     if (cls.hasInternalHandleConstructor) {
-      appendLine("        internal ${cls.name}(IntPtr handle)")
-      appendLine("        {")
-      appendLine("            _handle = handle;")
-      appendLine("        }")
+      if (cls.superClass != null) {
+        appendLine("        internal ${cls.name}(IntPtr handle) : base(handle)")
+        appendLine("        {")
+        appendLine("        }")
+      } else {
+        appendLine("        internal ${cls.name}(IntPtr handle)")
+        appendLine("        {")
+        appendLine("            _handle = handle;")
+        appendLine("        }")
+      }
       appendLine()
     }
 
@@ -151,11 +164,13 @@ class CirRenderer {
     }
 
     for (method in cls.methods) {
-      val nativeParams: String = (listOf("IntPtr handle") +
-        method.parameters.map { "${it.type} ${it.name}" }).joinToString(", ")
-      appendLine("        [DllImport(\"${cls.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"${cls.nativePrefix}_${method.nativeName}\")]")
-      appendLine("        private static extern ${method.nativeReturnType} Native_${method.name}($nativeParams);")
-      appendLine()
+      if (!method.isAbstract) {
+        val nativeParams: String = (listOf("IntPtr handle") +
+          method.parameters.map { "${it.type} ${it.name}" }).joinToString(", ")
+        appendLine("        [DllImport(\"${cls.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"${cls.nativePrefix}_${method.nativeName}\")]")
+        appendLine("        private static extern ${method.nativeReturnType} Native_${method.name}($nativeParams);")
+        appendLine()
+      }
       renderMethod(method)
     }
 
@@ -164,19 +179,26 @@ class CirRenderer {
     }
 
     if (cls.disposable) {
-      renderDispose(cls.libraryName, cls.nativePrefix)
+      renderDispose(cls.libraryName, cls.nativePrefix, cls.isAbstract, cls.superClass != null)
     }
 
     appendLine("    }")
   }
 
-  private fun StringBuilder.renderConstructor(className: String, ctor: CirConstructor) {
+  private fun StringBuilder.renderConstructor(className: String, ctor: CirConstructor, hasSuperClass: Boolean = false) {
     val paramStr: String = ctor.parameters.joinToString(", ") { "${it.type} ${it.name}" }
 
-    appendLine("        public $className($paramStr)")
-    appendLine("        {")
-    appendLine("            ${ctor.body}")
-    appendLine("        }")
+    if (hasSuperClass) {
+      appendLine("        public $className($paramStr) : base(IntPtr.Zero)")
+      appendLine("        {")
+      appendLine("            ${ctor.body}")
+      appendLine("        }")
+    } else {
+      appendLine("        public $className($paramStr)")
+      appendLine("        {")
+      appendLine("            ${ctor.body}")
+      appendLine("        }")
+    }
     appendLine()
   }
 
@@ -214,13 +236,17 @@ class CirRenderer {
   private fun StringBuilder.renderMethod(method: CirMethod) {
     val visibility: String = if (method.visibility == CirVisibility.PRIVATE) "private" else "public"
     val static: String = if (method.isStatic) "static " else ""
+    val override: String = if (method.isOverride) "override " else ""
+    val abstract: String = if (method.isAbstract) "abstract " else ""
     val paramStr: String = method.parameters.joinToString(", ") { "${it.type} ${it.name}" }
 
-    if (method.returnType == "void") {
-      appendLine("        $visibility $static void ${method.name}($paramStr)")
+    if (method.isAbstract) {
+      appendLine("        $visibility ${abstract}${method.returnType} ${method.name}($paramStr);")
+    } else if (method.returnType == "void") {
+      appendLine("        $visibility $static$override void ${method.name}($paramStr)")
       appendLine("            => ${method.body};")
     } else {
-      appendLine("        $visibility $static${method.returnType} ${method.name}($paramStr)")
+      appendLine("        $visibility $static$override${method.returnType} ${method.name}($paramStr)")
       appendLine("            => ${method.body};")
     }
 
@@ -260,17 +286,24 @@ class CirRenderer {
     appendLine()
   }
 
-  private fun StringBuilder.renderDispose(libraryName: String, nativePrefix: String) {
-    appendLine("        [DllImport(\"$libraryName\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"${nativePrefix}_dispose\")]")
-    appendLine("        private static extern void Native_Dispose(IntPtr handle);")
-    appendLine()
-    appendLine("        public void Dispose()")
-    appendLine("        {")
-    appendLine("            if (_handle != IntPtr.Zero)")
-    appendLine("            {")
-    appendLine("                Native_Dispose(_handle);")
-    appendLine("                _handle = IntPtr.Zero;")
-    appendLine("            }")
-    appendLine("        }")
+  private fun StringBuilder.renderDispose(libraryName: String, nativePrefix: String, isAbstract: Boolean = false, hasSuperClass: Boolean = false) {
+    val abstract: String = if (isAbstract) "abstract " else ""
+    val override: String = if (hasSuperClass) "override " else ""
+
+    if (isAbstract) {
+      appendLine("        public ${abstract}void Dispose();")
+    } else {
+      appendLine("        [DllImport(\"$libraryName\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"${nativePrefix}_dispose\")]")
+      appendLine("        private static extern void Native_Dispose(IntPtr handle);")
+      appendLine()
+      appendLine("        public ${override}void Dispose()")
+      appendLine("        {")
+      appendLine("            if (_handle != IntPtr.Zero)")
+      appendLine("            {")
+      appendLine("                Native_Dispose(_handle);")
+      appendLine("                _handle = IntPtr.Zero;")
+      appendLine("            }")
+      appendLine("        }")
+    }
   }
 }

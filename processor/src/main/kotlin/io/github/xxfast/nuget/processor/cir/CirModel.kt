@@ -43,9 +43,11 @@ data class CirClass(
   val properties: List<CirProperty>,
   val methods: List<CirMethod>,
   val interfaces: List<String> = emptyList(),
+  val superClass: String? = null,
   val disposable: Boolean = true,
   val hasInternalHandleConstructor: Boolean = true,
   val isDataClass: Boolean = false,
+  val isAbstract: Boolean = false,
 ) : CirDeclaration
 
 data class CirEnum(
@@ -86,6 +88,8 @@ data class CirMethod(
   val body: String,
   val visibility: CirVisibility = CirVisibility.PUBLIC,
   val isStatic: Boolean = false,
+  val isAbstract: Boolean = false,
+  val isOverride: Boolean = false,
 ) : CirMember
 
 data class CirProperty(

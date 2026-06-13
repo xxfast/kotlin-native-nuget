@@ -1,9 +1,9 @@
 package io.github.xxfast.nuget.sample.cat
 
 class Cat(
-  override val name: String,
+  name: String,
   val lives: Int = 9,
-) : Pet {
+) : Animal(name) {
   var brother: Cat? = null
   var mood: Mood = Mood.SLEEPY
 

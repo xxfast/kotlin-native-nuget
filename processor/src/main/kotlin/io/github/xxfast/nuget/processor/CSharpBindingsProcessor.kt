@@ -224,24 +224,33 @@ class CSharpBindingsProcessor(
     val name: String = cls.simpleName.asString()
     val qualifiedName: String = cls.qualifiedName?.asString() ?: return
     val prefix: String = name.lowercase()
+    val isAbstract: Boolean = cls.modifiers.contains(Modifier.ABSTRACT)
 
-    val constructor: KSFunctionDeclaration = cls.primaryConstructor ?: return
+    val hasSuperClass: Boolean = cls.superTypes
+      .map { it.resolve().declaration }
+      .filterIsInstance<KSClassDeclaration>()
+      .any { it.classKind == com.google.devtools.ksp.symbol.ClassKind.CLASS &&
+        it.qualifiedName?.asString() != "kotlin.Any" }
 
-    val ctorParamCall: String = constructor.parameters.joinToString(", ") {
-      it.name?.asString() ?: "_"
+    val constructor: KSFunctionDeclaration? = cls.primaryConstructor
+
+    if (constructor != null && !isAbstract) {
+      val ctorParamCall: String = constructor.parameters.joinToString(", ") {
+        it.name?.asString() ?: "_"
+      }
+
+      addFunction(
+        FunSpec.builder("export_${prefix}_create")
+          .addAnnotation(cNameAnnotation("${prefix}_create"))
+          .addParameters(constructor)
+          .returns(cOpaquePointer)
+          .addStatement(
+            "return %T.create(%L(%L)).asCPointer()",
+            stableRef, qualifiedName, ctorParamCall,
+          )
+          .build()
+      )
     }
-
-    addFunction(
-      FunSpec.builder("export_${prefix}_create")
-        .addAnnotation(cNameAnnotation("${prefix}_create"))
-        .addParameters(constructor)
-        .returns(cOpaquePointer)
-        .addStatement(
-          "return %T.create(%L(%L)).asCPointer()",
-          stableRef, qualifiedName, ctorParamCall,
-        )
-        .build()
-    )
 
     addFunction(
       FunSpec.builder("export_${prefix}_dispose")
@@ -253,6 +262,10 @@ class CSharpBindingsProcessor(
 
     val properties: List<KSPropertyDeclaration> = cls.getAllProperties()
       .filter { it.getVisibility() == Visibility.PUBLIC }
+      .filter { prop ->
+        if (!hasSuperClass) return@filter true
+        prop.parentDeclaration == cls
+      }
       .toList()
 
     for (prop in properties) {
@@ -395,6 +408,14 @@ class CSharpBindingsProcessor(
           (name == "copy" || name.startsWith("component"))
         name !in listOf("equals", "hashCode", "toString", "<init>") && !isDataClassMethod
       }
+      .filter { method ->
+        if (hasSuperClass) {
+          method.parentDeclaration == cls && !method.modifiers.contains(Modifier.ABSTRACT)
+        } else {
+          val declaredInThisClass: Boolean = method.parentDeclaration == cls
+          declaredInThisClass && !method.modifiers.contains(Modifier.ABSTRACT)
+        }
+      }
       .toList()
 
     for (method in methods) {
@@ -476,34 +497,36 @@ class CSharpBindingsProcessor(
           .build()
       )
 
-      val copyBuilder: FunSpec.Builder = FunSpec
-        .builder("export_${prefix}_copy")
-        .addAnnotation(cNameAnnotation("${prefix}_copy"))
-        .addParameter("handle", cOpaquePointer)
-        .returns(cOpaquePointer)
+      if (constructor != null) {
+        val copyBuilder: FunSpec.Builder = FunSpec
+          .builder("export_${prefix}_copy")
+          .addAnnotation(cNameAnnotation("${prefix}_copy"))
+          .addParameter("handle", cOpaquePointer)
+          .returns(cOpaquePointer)
 
-      for (param in constructor.parameters) {
-        val type: String =
-          param.type.resolve().declaration.qualifiedName?.asString()
-            ?: param.type.resolve().declaration.simpleName.asString()
+        for (param in constructor.parameters) {
+          val type: String =
+            param.type.resolve().declaration.qualifiedName?.asString()
+              ?: param.type.resolve().declaration.simpleName.asString()
 
-        copyBuilder.addParameter(
-          param.name?.asString() ?: "_",
-          ClassName.bestGuess(type),
+          copyBuilder.addParameter(
+            param.name?.asString() ?: "_",
+            ClassName.bestGuess(type),
+          )
+        }
+
+        val copyParamCall: String = constructor.parameters.joinToString(", ") {
+          val paramName: String = it.name?.asString() ?: "_"
+          "$paramName = $paramName"
+        }
+
+        copyBuilder.addStatement(
+          "return %T.create(handle.asStableRef<%L>().get().copy(%L)).asCPointer()",
+          stableRef, qualifiedName, copyParamCall,
         )
+
+        addFunction(copyBuilder.build())
       }
-
-      val copyParamCall: String = constructor.parameters.joinToString(", ") {
-        val paramName: String = it.name?.asString() ?: "_"
-        "$paramName = $paramName"
-      }
-
-      copyBuilder.addStatement(
-        "return %T.create(handle.asStableRef<%L>().get().copy(%L)).asCPointer()",
-        stableRef, qualifiedName, copyParamCall,
-      )
-
-      addFunction(copyBuilder.build())
     }
   }
 
