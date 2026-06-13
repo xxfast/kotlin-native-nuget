@@ -26,6 +26,7 @@ data class CirClass(
   val methods: List<CirMethod>,
   val disposable: Boolean = true,
   val hasInternalHandleConstructor: Boolean = true,
+  val isDataClass: Boolean = false,
 ) : CirDeclaration
 
 data class CirEnum(

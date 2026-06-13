@@ -106,7 +106,7 @@ Gradle Plugin (Kotlin side)          NuGet Package       C# Consumer
 - [x] Map member setters
 - [x] Map enums (see [ADR-006](docs/adr/006-enum-mapping.md))
 - [x] Map per-file top-level function class naming (see [ADR-007](docs/adr/007-top-level-function-class-naming.md))
-- [ ] Map data classes
+- [x] Map data classes (see [ADR-008](docs/adr/008-data-class-mapping.md))
 - [ ] Map interfaces
 - [ ] Map abstract classes
 - [ ] Map sealed classes
@@ -126,6 +126,7 @@ Gradle Plugin (Kotlin side)          NuGet Package       C# Consumer
 
 ## Future Improvements
 
+- Map data classes to C# `record class` if a safe `with`-expression pattern can be found (see [ADR-008](docs/adr/008-data-class-mapping.md))
 - Verify Kotlin GC actually frees objects after all StableRefs are disposed (requires Kotlin-side weak references + GC trigger — not feasible in standard unit tests)
 - Memory leak detection tooling for bridged objects in CI
 - Object identity preservation (caching wrappers) if profiling shows allocation overhead is significant

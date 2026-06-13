@@ -11,14 +11,20 @@ Implements a new feature using a 3-step TDD loop with subagents.
 - Write an ADR if the decision is non-trivial
 - Define the expected C# API for the consumer
 
-### Step 2: Testing (csharp-dev agent, model: sonnet)
+### Step 2: Verify with the approach with humans
+
+- Share the research, ADR (if any) and proposed API with the team
+- Get feedback and iterate on the design before implementation
+- This step is crucial to ensure we're building the right thing before writing code
+
+### Step 3: Testing (csharp-dev agent, model: sonnet)
 
 - Write failing C# tests that define the expected API
 - Tests go in `sample-app/SampleApp.Tests/`
 - Follow existing test patterns (xunit, `using var` for IDisposable)
 - Add sample Kotlin source in `sample-library/` if needed
 
-### Step 3: Implementation (kotlin-dev agent, model: sonnet)
+### Step 4: Implementation (kotlin-dev agent, model: sonnet)
 
 - Make the failing tests pass
 - Update the KSP processor (CirModel, CirTranslator, CirRenderer, CSharpBindingsProcessor)

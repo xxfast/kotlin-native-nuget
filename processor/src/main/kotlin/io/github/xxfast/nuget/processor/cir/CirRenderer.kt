@@ -129,6 +129,10 @@ class CirRenderer {
       renderMethod(method)
     }
 
+    if (cls.isDataClass) {
+      renderDataClassMethods(cls)
+    }
+
     if (cls.disposable) {
       renderDispose(cls.libraryName, cls.nativePrefix)
     }
@@ -190,6 +194,39 @@ class CirRenderer {
       appendLine("            => ${method.body};")
     }
 
+    appendLine()
+  }
+
+  private fun StringBuilder.renderDataClassMethods(cls: CirClass) {
+    appendLine("        [DllImport(\"${cls.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"${cls.nativePrefix}_equals\")]")
+    appendLine("        private static extern bool Native_Equals(IntPtr handle, IntPtr other);")
+    appendLine()
+    appendLine("        [DllImport(\"${cls.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"${cls.nativePrefix}_hashcode\")]")
+    appendLine("        private static extern int Native_HashCode(IntPtr handle);")
+    appendLine()
+    appendLine("        [DllImport(\"${cls.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"${cls.nativePrefix}_tostring\")]")
+    appendLine("        private static extern IntPtr Native_ToString(IntPtr handle);")
+    appendLine()
+
+    if (cls.constructor != null) {
+      val copyParams: String = cls.constructor.parameters.joinToString(", ") { "${it.type} ${it.name}" }
+      val copyParamNames: String = cls.constructor.parameters.joinToString(", ") { it.name }
+      appendLine("        [DllImport(\"${cls.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"${cls.nativePrefix}_copy\")]")
+      appendLine("        private static extern IntPtr Native_Copy(IntPtr handle, $copyParams);")
+      appendLine()
+      appendLine("        public ${cls.name} Copy($copyParams) => new ${cls.name}(Native_Copy(_handle, $copyParamNames));")
+      appendLine()
+    }
+
+    appendLine("        public override bool Equals(object? obj)")
+    appendLine("        {")
+    appendLine("            if (obj is ${cls.name} other) return Native_Equals(_handle, other._handle);")
+    appendLine("            return false;")
+    appendLine("        }")
+    appendLine()
+    appendLine("        public override int GetHashCode() => Native_HashCode(_handle);")
+    appendLine()
+    appendLine("        public override string ToString() => Marshal.PtrToStringUTF8(Native_ToString(_handle))!;")
     appendLine()
   }
 

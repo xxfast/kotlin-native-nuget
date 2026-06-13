@@ -15,6 +15,7 @@ import com.google.devtools.ksp.symbol.KSPropertyDeclaration
 import com.google.devtools.ksp.symbol.KSType
 import com.google.devtools.ksp.symbol.KSValueParameter
 import com.google.devtools.ksp.symbol.ClassKind
+import com.google.devtools.ksp.symbol.Modifier
 import com.google.devtools.ksp.symbol.Visibility
 import com.squareup.kotlinpoet.AnnotationSpec
 import com.squareup.kotlinpoet.ClassName
@@ -380,8 +381,10 @@ class CSharpBindingsProcessor(
     val methods: List<KSFunctionDeclaration> = cls.getAllFunctions()
       .filter { it.getVisibility() == Visibility.PUBLIC }
       .filter {
-        it.simpleName.asString() !in
-          listOf("equals", "hashCode", "toString", "<init>")
+        val name: String = it.simpleName.asString()
+        val isDataClassMethod: Boolean = cls.modifiers.contains(Modifier.DATA) &&
+          (name == "copy" || name.startsWith("component"))
+        name !in listOf("equals", "hashCode", "toString", "<init>") && !isDataClassMethod
       }
       .toList()
 
@@ -424,6 +427,74 @@ class CSharpBindingsProcessor(
       }
 
       addFunction(builder.build())
+    }
+
+    if (cls.modifiers.contains(Modifier.DATA)) {
+      addFunction(
+        FunSpec.builder("export_${prefix}_equals")
+          .addAnnotation(cNameAnnotation("${prefix}_equals"))
+          .addParameter("handle", cOpaquePointer)
+          .addParameter("other", cOpaquePointer)
+          .returns(Boolean::class)
+          .addStatement(
+            "return handle.asStableRef<%L>().get() == other.asStableRef<%L>().get()",
+            qualifiedName, qualifiedName,
+          )
+          .build()
+      )
+
+      addFunction(
+        FunSpec.builder("export_${prefix}_hashcode")
+          .addAnnotation(cNameAnnotation("${prefix}_hashcode"))
+          .addParameter("handle", cOpaquePointer)
+          .returns(Int::class)
+          .addStatement(
+            "return handle.asStableRef<%L>().get().hashCode()",
+            qualifiedName,
+          )
+          .build()
+      )
+
+      addFunction(
+        FunSpec.builder("export_${prefix}_tostring")
+          .addAnnotation(cNameAnnotation("${prefix}_tostring"))
+          .addParameter("handle", cOpaquePointer)
+          .returns(String::class)
+          .addStatement(
+            "return handle.asStableRef<%L>().get().toString()",
+            qualifiedName,
+          )
+          .build()
+      )
+
+      val copyBuilder: FunSpec.Builder = FunSpec
+        .builder("export_${prefix}_copy")
+        .addAnnotation(cNameAnnotation("${prefix}_copy"))
+        .addParameter("handle", cOpaquePointer)
+        .returns(cOpaquePointer)
+
+      for (param in constructor.parameters) {
+        val type: String =
+          param.type.resolve().declaration.qualifiedName?.asString()
+            ?: param.type.resolve().declaration.simpleName.asString()
+
+        copyBuilder.addParameter(
+          param.name?.asString() ?: "_",
+          ClassName.bestGuess(type),
+        )
+      }
+
+      val copyParamCall: String = constructor.parameters.joinToString(", ") {
+        val paramName: String = it.name?.asString() ?: "_"
+        "$paramName = $paramName"
+      }
+
+      copyBuilder.addStatement(
+        "return %T.create(handle.asStableRef<%L>().get().copy(%L)).asCPointer()",
+        stableRef, qualifiedName, copyParamCall,
+      )
+
+      addFunction(copyBuilder.build())
     }
   }
 

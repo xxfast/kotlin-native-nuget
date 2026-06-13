@@ -4,6 +4,7 @@ import com.google.devtools.ksp.getVisibility
 import com.google.devtools.ksp.symbol.KSClassDeclaration
 import com.google.devtools.ksp.symbol.KSFunctionDeclaration
 import com.google.devtools.ksp.symbol.KSType
+import com.google.devtools.ksp.symbol.Modifier
 import com.google.devtools.ksp.symbol.Visibility
 import io.github.xxfast.nuget.processor.toCName
 import io.github.xxfast.nuget.processor.toCSharpName
@@ -245,6 +246,7 @@ class CirTranslator(
   private fun translateClass(cls: KSClassDeclaration): CirClass {
     val name: String = cls.simpleName.asString()
     val prefix: String = name.lowercase()
+    val isDataClass: Boolean = cls.modifiers.contains(Modifier.DATA)
 
     val constructor = cls.primaryConstructor
     val cirConstructor: CirConstructor? = if (constructor != null) {
@@ -318,7 +320,12 @@ class CirTranslator(
 
     val methods: List<CirMethod> = cls.getAllFunctions()
       .filter { it.getVisibility() == Visibility.PUBLIC }
-      .filter { it.simpleName.asString() !in listOf("equals", "hashCode", "toString", "<init>") }
+      .filter {
+        val methodName: String = it.simpleName.asString()
+        val isDataClassMethod: Boolean = isDataClass &&
+          (methodName == "copy" || methodName.startsWith("component"))
+        methodName !in listOf("equals", "hashCode", "toString", "<init>") && !isDataClassMethod
+      }
       .map { method ->
         val methodName: String = method.simpleName.asString()
         val methodReturn: String = method.returnType?.resolve()
@@ -361,6 +368,7 @@ class CirTranslator(
       constructor = cirConstructor,
       properties = properties,
       methods = methods,
+      isDataClass = isDataClass,
     )
   }
 
