@@ -357,3 +357,15 @@ If a function is only ever called in one place consider inlining it. This doesn'
 Kotlin's `inline` keyword but rather refers to taking the contents of the method and replacing them
 where the function was originally invoked. If that section of code could later be used as a function
 in many places then consider pulling it out again, but only when necessary.
+
+### Avoid indirection
+
+Do not create wrapper functions that simply delegate to another function without adding value.
+```kotlin
+// Not OK - pointless indirection
+private fun cNameFor(func: KSFunctionDeclaration): String =
+    toCName(func.simpleName.asString())
+
+// OK - just call it directly
+val cname: String = toCName(func.simpleName.asString())
+```

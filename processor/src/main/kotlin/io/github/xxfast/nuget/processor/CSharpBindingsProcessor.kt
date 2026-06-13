@@ -25,14 +25,6 @@ import io.github.xxfast.nuget.processor.cir.CirFile
 import io.github.xxfast.nuget.processor.cir.CirRenderer
 import io.github.xxfast.nuget.processor.cir.CirTranslator
 
-private val C_RESERVED = setOf(
-  "auto", "break", "case", "char", "const", "continue", "default", "do",
-  "double", "else", "enum", "extern", "float", "for", "goto", "if",
-  "int", "long", "register", "return", "short", "signed", "sizeof",
-  "static", "struct", "switch", "typedef", "union", "unsigned", "void",
-  "volatile", "while",
-)
-
 class CSharpBindingsProcessor(
   private val codeGenerator: CodeGenerator,
   private val logger: KSPLogger,
@@ -147,7 +139,7 @@ class CSharpBindingsProcessor(
   }
 
   private fun FileSpec.Builder.addFunctionExports(func: KSFunctionDeclaration) {
-    val cname: String = toCName(func)
+    val cname: String = toCName(func.simpleName.asString())
     val funcName: String = func.simpleName.asString()
     val returnType: KSType? = func.returnType?.resolve()
     val isNullable: Boolean = returnType?.isMarkedNullable == true
@@ -325,9 +317,4 @@ class CSharpBindingsProcessor(
       .addMember("%S", value)
       .build()
 
-  private fun toCName(func: KSFunctionDeclaration): String {
-    val name: String = func.simpleName.asString()
-    if (name in C_RESERVED) return "${name}_"
-    return name
-  }
 }
