@@ -1,4 +1,5 @@
 # kotlin-native-nuget
+<img src="docs/icon.svg" height="240" align="right"/> 
 
 [![Stability](https://kotl.in/badges/experimental.svg)](https://kotlinlang.org/docs/components-stability.html#stability-of-subcomponents)
 [![CI](https://github.com/xxfast/kotlin-native-nuget/actions/workflows/ci.yml/badge.svg)](https://github.com/xxfast/kotlin-native-nuget/actions/workflows/ci.yml)
