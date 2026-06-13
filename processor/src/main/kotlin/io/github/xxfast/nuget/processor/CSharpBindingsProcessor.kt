@@ -28,10 +28,10 @@ import io.github.xxfast.nuget.processor.cir.CirTranslator
 class CSharpBindingsProcessor(
   private val codeGenerator: CodeGenerator,
   private val logger: KSPLogger,
-  private val libraryName: String,
-  private val rootNamespace: String,
-  private val rootPackage: String,
-  private val className: String,
+  libraryName: String,
+  rootNamespace: String,
+  rootPackage: String,
+  className: String,
 ) : SymbolProcessor {
 
   private var processed = false
