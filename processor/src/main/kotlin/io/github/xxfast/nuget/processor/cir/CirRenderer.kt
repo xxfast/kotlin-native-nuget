@@ -55,6 +55,14 @@ class CirRenderer {
       renderConstructor(cls.name, cls.constructor)
     }
 
+    if (cls.hasInternalHandleConstructor) {
+      appendLine("        internal ${cls.name}(IntPtr handle)")
+      appendLine("        {")
+      appendLine("            _handle = handle;")
+      appendLine("        }")
+      appendLine()
+    }
+
     for (prop in cls.properties) {
       appendLine("        [DllImport(\"${cls.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"${cls.nativePrefix}_get_${prop.nativeName}\")]")
       appendLine("        private static extern ${prop.nativeReturnType} Native_Get_${prop.nativeName}(IntPtr handle);")

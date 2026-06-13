@@ -97,7 +97,7 @@ Gradle Plugin (Kotlin side)          NuGet Package            C# Consumer
 - [x] Map String returns as proper `string` (hidden `IntPtr` + `Marshal.PtrToStringUTF8`)
 - [x] Map OOP constructs (classes → C# classes with `IDisposable`, StableRef + opaque pointer)
 - [x] Refactor to CIR (C# Intermediate Representation) model (see [ADR-004](docs/adr/004-cir-intermediate-representation.md))
-- [ ] Map object-typed properties/returns (returning one bridged object from another)
+- [x] Map object-typed properties/returns (see [ADR-005](docs/adr/005-object-return-semantics.md))
 - [ ] Test cyclic reference disposal (verify Kotlin GC collects after both StableRefs disposed)
 - [ ] Map interfaces
 - [ ] Map Collections types

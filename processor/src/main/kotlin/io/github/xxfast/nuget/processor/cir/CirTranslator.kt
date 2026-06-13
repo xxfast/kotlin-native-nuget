@@ -195,18 +195,31 @@ class CirTranslator(
       .map { prop ->
         val propName: String = prop.simpleName.asString()
         val propType: String = prop.type.resolve().declaration.simpleName.asString()
+        val isNullable: Boolean = prop.type.resolve().isMarkedNullable
         val csPropName: String = propName.replaceFirstChar { it.uppercase() }
 
-        val getter: String = if (propType == "String") {
-          "Marshal.PtrToStringUTF8(Native_Get_$propName(_handle))!"
-        } else {
-          "Native_Get_$propName(_handle)"
+        val isObjectType: Boolean = propType !in KOTLIN_TO_CSHARP_RETURN
+
+        val nativeReturnType: String = if (isObjectType) "IntPtr" else mapReturnType(propType)
+
+        val type: String = when {
+          propType == "String" -> "string"
+          isObjectType && isNullable -> "$propType?"
+          isObjectType -> propType
+          else -> mapReturnType(propType)
+        }
+
+        val getter: String = when {
+          propType == "String" -> "Marshal.PtrToStringUTF8(Native_Get_$propName(_handle))!"
+          isObjectType && isNullable -> "Native_Get_$propName(_handle) == IntPtr.Zero ? null : new $propType(Native_Get_$propName(_handle))"
+          isObjectType -> "new $propType(Native_Get_$propName(_handle))"
+          else -> "Native_Get_$propName(_handle)"
         }
 
         CirProperty(
           name = csPropName,
-          type = if (propType == "String") "string" else mapReturnType(propType),
-          nativeReturnType = mapReturnType(propType),
+          type = type,
+          nativeReturnType = nativeReturnType,
           nativeName = propName,
           getter = getter,
         )

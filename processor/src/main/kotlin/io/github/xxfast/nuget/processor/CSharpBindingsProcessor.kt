@@ -233,20 +233,62 @@ class CSharpBindingsProcessor(
 
     for (prop in properties) {
       val propName: String = prop.simpleName.asString()
-      val propType: String =
-        prop.type.resolve().declaration.qualifiedName?.asString() ?: "Any"
+      val propTypeResolved: KSType = prop.type.resolve()
+      val propType: String = propTypeResolved.declaration.qualifiedName?.asString() ?: "Any"
+      val isNullable: Boolean = propTypeResolved.isMarkedNullable
 
-      addFunction(
-        FunSpec.builder("export_${prefix}_get_$propName")
-          .addAnnotation(cNameAnnotation("${prefix}_get_$propName"))
-          .addParameter("handle", cOpaquePointer)
-          .returns(ClassName.bestGuess(propType))
-          .addStatement(
-            "return handle.asStableRef<%L>().get().%L",
-            qualifiedName, propName,
-          )
-          .build()
+      val isPrimitiveType: Boolean = propType in setOf(
+        "kotlin.String", "kotlin.Byte", "kotlin.UByte", "kotlin.Short",
+        "kotlin.UShort", "kotlin.Int", "kotlin.UInt", "kotlin.Long",
+        "kotlin.ULong", "kotlin.Float", "kotlin.Double", "kotlin.Boolean",
+        "kotlin.Unit",
       )
+
+      if (isPrimitiveType) {
+        addFunction(
+          FunSpec.builder("export_${prefix}_get_$propName")
+            .addAnnotation(cNameAnnotation("${prefix}_get_$propName"))
+            .addParameter("handle", cOpaquePointer)
+            .returns(ClassName.bestGuess(propType))
+            .addStatement(
+              "return handle.asStableRef<%L>().get().%L",
+              qualifiedName, propName,
+            )
+            .build()
+        )
+      } else {
+        val returnType: String = if (isNullable) "$cOpaquePointer?" else cOpaquePointer.toString()
+
+        if (isNullable) {
+          addFunction(
+            FunSpec.builder("export_${prefix}_get_$propName")
+              .addAnnotation(cNameAnnotation("${prefix}_get_$propName"))
+              .addParameter("handle", cOpaquePointer)
+              .returns(cOpaquePointer.copy(nullable = true))
+              .addStatement(
+                "val obj: %L? = handle.asStableRef<%L>().get().%L",
+                propType, qualifiedName, propName,
+              )
+              .addStatement(
+                "return if (obj == null) null else %T.create(obj).asCPointer()",
+                stableRef,
+              )
+              .build()
+          )
+        } else {
+          addFunction(
+            FunSpec.builder("export_${prefix}_get_$propName")
+              .addAnnotation(cNameAnnotation("${prefix}_get_$propName"))
+              .addParameter("handle", cOpaquePointer)
+              .returns(cOpaquePointer)
+              .addStatement(
+                "return %T.create(handle.asStableRef<%L>().get().%L).asCPointer()",
+                stableRef, qualifiedName, propName,
+              )
+              .build()
+          )
+        }
+      }
     }
 
     val methods: List<KSFunctionDeclaration> = cls.getAllFunctions()

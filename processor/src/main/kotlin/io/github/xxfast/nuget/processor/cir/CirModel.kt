@@ -25,6 +25,7 @@ data class CirClass(
   val properties: List<CirProperty>,
   val methods: List<CirMethod>,
   val disposable: Boolean = true,
+  val hasInternalHandleConstructor: Boolean = true,
 ) : CirDeclaration
 
 sealed interface CirMember

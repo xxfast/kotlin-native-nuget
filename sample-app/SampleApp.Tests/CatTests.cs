@@ -59,4 +59,66 @@ public class CatTests
         // After dispose, accessing should not crash the process
         // (handle is zeroed, native call with IntPtr.Zero)
     }
+
+    [Fact]
+    public void Cat_Brother_WhenNull_ReturnsNull()
+    {
+        using var cat = new Cat("Oreo", 9);
+        Assert.Null(cat.Brother);
+    }
+
+    [Fact]
+    public void Cat_Brother_WhenSet_ReturnsWrapper()
+    {
+        IntPtr handle = SampleLibraryNative.createBrothers("Oreo", "Mylo");
+        using var oreo = new Cat(handle);
+
+        using Cat? buddy = oreo.Brother;
+        Assert.NotNull(buddy);
+        Assert.Equal("Mylo", buddy!.Name);
+    }
+
+    [Fact]
+    public void Cat_Brother_EachAccessReturnsNewWrapper()
+    {
+        IntPtr handle = SampleLibraryNative.createBrothers("Oreo", "Mylo");
+        using var oreo = new Cat(handle);
+
+        using Cat? buddy1 = oreo.Brother;
+        using Cat? buddy2 = oreo.Brother;
+
+        // Per ADR-005: identity is NOT preserved (new wrapper each access)
+        Assert.NotSame(buddy1, buddy2);
+        Assert.Equal(buddy1!.Name, buddy2!.Name);
+    }
+
+    [Fact]
+    public void Cat_Brother_DisposingBuddyDoesNotAffectOriginal()
+    {
+        IntPtr handle = SampleLibraryNative.createBrothers("Oreo", "Mylo");
+        using var oreo = new Cat(handle);
+
+        Cat? buddy = oreo.Brother;
+        buddy!.Dispose();
+
+        // Oreo is still alive — disposing the brother wrapper only releases that one StableRef
+        Assert.Equal("Oreo", oreo.Name);
+    }
+
+    [Fact]
+    public void Cat_Brother_CyclicReference_BothCanBeDisposed()
+    {
+        IntPtr handle = SampleLibraryNative.createBrothers("Oreo", "Mylo");
+        using var oreo = new Cat(handle);
+
+        using Cat? mylo = oreo.Brother;
+        Assert.NotNull(mylo);
+
+        // Mylo's brother is Oreo (cyclic reference on Kotlin side)
+        using Cat? mylosBrother = mylo!.Brother;
+        Assert.NotNull(mylosBrother);
+        Assert.Equal("Oreo", mylosBrother!.Name);
+
+        // All wrappers can be independently disposed without crashes
+    }
 }
