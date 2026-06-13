@@ -11,16 +11,46 @@ A plugin that allows you to publish your Kotlin/Native libraries as NuGet packag
 
 https://www.youtube.com/watch?v=DywUS-qYn6o
 
+## Setup
+
+```kotlin
+// build.gradle.kts
+plugins {
+  kotlin("multiplatform")
+  id("io.github.xxfast.nuget")
+}
+
+nuget {
+  packageId.set("MyCatLib")
+  version.set("1.0.0")
+  authors.set("yourname")
+  description.set("My Kotlin/Native library")
+  rootPackage.set("com.example.cats")
+}
+```
+
 ## Usage
 
 Write Kotlin — get C# bindings automatically:
 
 ```kotlin
 // Kotlin
-class Cat(val name: String, val lives: Int = 9) {
-  var brother: Cat? = null
-  fun meow(): String = "Meow! My name is $name"
+interface Pet {
+  val name: String
+  fun speak(): String
 }
+
+enum class Mood { HAPPY, SLEEPY, GRUMPY }
+
+abstract class Animal(override val name: String) : Pet
+
+class Cat(name: String, val lives: Int = 9) : Animal(name) {
+  var brother: Cat? = null
+  var mood: Mood = Mood.SLEEPY
+  override fun speak(): String = "Meow!"
+}
+
+data class Toy(val name: String, val color: String)
 
 fun owner(name: String): String? = if (name == "Oreo") "Isuru" else null
 ```
@@ -28,10 +58,23 @@ fun owner(name: String): String? = if (name == "Oreo") "Isuru" else null
 ```csharp
 // C# (auto-generated)
 using var oreo = new Cat("Oreo", 9);
-oreo.Name;                    // "Oreo"
-oreo.Meow();                  // "Meow! My name is Oreo"
-oreo.Brother;                 // null (nullable object support)
-string? owner = CatNative.owner("Oreo");  // "Isuru" (nullable string)
+using var mylo = new Cat("Mylo", 9);
+
+oreo.Name;                         // "Oreo"
+oreo.Speak();                      // "Meow!"
+oreo.Brother = mylo;               // object property setter
+oreo.Mood = Mood.Happy;            // enum support
+Mood.Happy.Description();          // enum extension methods
+
+using var toy = new Toy("Mouse", "Gray");
+toy.ToString();                    // "Toy(name=Mouse, color=Gray)"
+using var copy = toy.Copy("Ball", "Red");
+toy.Equals(copy);                  // false (data class equality)
+
+string? owner = CatKt.owner("Oreo");  // "Isuru" (nullable string)
+
+IPet pet = oreo;                   // interface polymorphism
+Animal animal = oreo;              // abstract class hierarchy
 ```
 
 ## Prerequisites
@@ -126,6 +169,7 @@ Gradle Plugin (Kotlin side)          NuGet Package       C# Consumer
 
 ## Future Improvements
 
+- KSP incremental processing if build times become a concern on large libraries
 - Map data classes to C# `record class` if a safe `with`-expression pattern can be found (see [ADR-008](docs/adr/008-data-class-mapping.md))
 - Verify Kotlin GC actually frees objects after all StableRefs are disposed (requires Kotlin-side weak references + GC trigger — not feasible in standard unit tests)
 - Memory leak detection tooling for bridged objects in CI
