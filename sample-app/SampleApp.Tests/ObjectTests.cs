@@ -2,7 +2,7 @@ using SampleLibrary.Cat;
 
 namespace SampleApp.Tests;
 
-public class CatTests
+public class ObjectTests
 {
     [Fact]
     public void Cat_Constructor_CreatesInstance()
