@@ -16,6 +16,11 @@ import com.google.devtools.ksp.symbol.KSType
 import com.google.devtools.ksp.symbol.KSValueParameter
 import com.google.devtools.ksp.symbol.ClassKind
 import com.google.devtools.ksp.symbol.Visibility
+import com.squareup.kotlinpoet.AnnotationSpec
+import com.squareup.kotlinpoet.ClassName
+import com.squareup.kotlinpoet.FileSpec
+import com.squareup.kotlinpoet.FunSpec
+import com.squareup.kotlinpoet.ksp.writeTo
 import io.github.xxfast.nuget.processor.cir.CirFile
 import io.github.xxfast.nuget.processor.cir.CirRenderer
 import io.github.xxfast.nuget.processor.cir.CirTranslator
@@ -101,119 +106,133 @@ class CSharpBindingsProcessor(
     file.writer().use { writer -> writer.write(csharp) }
   }
 
+  private val cNameAnnotation = ClassName("kotlin.native", "CName")
+  private val cOpaquePointer = ClassName("kotlinx.cinterop", "COpaquePointer")
+  private val stableRef = ClassName("kotlinx.cinterop", "StableRef")
+
   private fun generateCNameWrappers(
     functions: List<KSFunctionDeclaration>,
     classes: List<KSClassDeclaration>,
     deps: Dependencies,
   ) {
-    val file = codeGenerator.createNewFile(
-      dependencies = deps,
-      packageName = "io.github.xxfast.nuget.generated",
-      fileName = "CNameExports",
-    )
-
-    file.writer().use { writer ->
-      writer.write(
-        "@file:OptIn(ExperimentalNativeApi::class, ExperimentalForeignApi::class)\n"
+    val fileSpec: FileSpec = FileSpec
+      .builder("io.github.xxfast.nuget.generated", "CNameExports")
+      .addAnnotation(
+        AnnotationSpec.builder(ClassName("kotlin", "OptIn"))
+          .addMember(
+            "%T::class, %T::class",
+            ClassName("kotlin.experimental", "ExperimentalNativeApi"),
+            ClassName("kotlinx.cinterop", "ExperimentalForeignApi"),
+          )
+          .build()
       )
-      writer.write("package io.github.xxfast.nuget.generated\n\n")
-      writer.write("import kotlin.experimental.ExperimentalNativeApi\n")
-      writer.write("import kotlinx.cinterop.ExperimentalForeignApi\n")
-      writer.write("import kotlinx.cinterop.*\n")
+      .addImport("kotlinx.cinterop", "asStableRef")
+      .apply {
+        for (func in functions) {
+          addImport(
+            func.packageName.asString(),
+            func.simpleName.asString(),
+          )
 
-      val imports: MutableSet<String> = mutableSetOf()
+          addFunctionExports(func)
+        }
 
-      for (func in functions) {
-        imports.add("${func.packageName.asString()}.${func.simpleName.asString()}")
+        for (cls in classes) {
+          addClassExports(cls)
+        }
       }
+      .build()
 
-      for (import in imports) {
-        writer.write("import $import\n")
-      }
-
-      writer.write("\n")
-
-      for (func in functions) {
-        writeFunctionExport(writer, func)
-      }
-
-      for (cls in classes) {
-        writeClassExports(writer, cls)
-      }
-    }
+    fileSpec.writeTo(codeGenerator, Dependencies(aggregating = true))
   }
 
-  private fun writeFunctionExport(
-    writer: java.io.Writer,
-    func: KSFunctionDeclaration,
-  ) {
+  private fun FileSpec.Builder.addFunctionExports(func: KSFunctionDeclaration) {
     val cname: String = toCName(func)
     val funcName: String = func.simpleName.asString()
     val returnType: KSType? = func.returnType?.resolve()
     val isNullable: Boolean = returnType?.isMarkedNullable == true
-
-    val params: List<KSValueParameter> = func.parameters
-    val paramDecl: String = toParamDecl(params)
-    val paramCall: String = toParamCall(params)
-
     val qualifiedReturn: String = returnType
       ?.declaration?.qualifiedName?.asString() ?: "Unit"
 
+    val paramCall: String = func.parameters.joinToString(", ") {
+      it.name?.asString() ?: "_"
+    }
+
     if (isNullable) {
-      writer.write("@CName(\"${cname}_has_value\")\n")
-      writer.write(
-        "fun `export_${cname}_has_value`($paramDecl): Boolean" +
-          " = $funcName($paramCall) != null\n\n"
+      addFunction(
+        FunSpec.builder("export_${cname}_has_value")
+          .addAnnotation(cNameAnnotation(cname + "_has_value"))
+          .addParameters(func)
+          .returns(Boolean::class)
+          .addStatement("return %L(%L) != null", funcName, paramCall)
+          .build()
       )
 
       val valueReturn: String =
-        if (qualifiedReturn == "kotlin.String") "String"
+        if (qualifiedReturn == "kotlin.String") "kotlin.String"
         else qualifiedReturn
 
-      writer.write("@CName(\"${cname}_value\")\n")
-      writer.write(
-        "fun `export_${cname}_value`($paramDecl): $valueReturn" +
-          " = $funcName($paramCall)!!\n\n"
+      addFunction(
+        FunSpec.builder("export_${cname}_value")
+          .addAnnotation(cNameAnnotation(cname + "_value"))
+          .addParameters(func)
+          .returns(ClassName.bestGuess(valueReturn))
+          .addStatement("return %L(%L)!!", funcName, paramCall)
+          .build()
       )
       return
     }
 
     if (qualifiedReturn == "kotlin.Unit") {
-      writer.write("@CName(\"$cname\")\n")
-      writer.write("fun `export_$cname`($paramDecl) { $funcName($paramCall) }\n\n")
+      addFunction(
+        FunSpec.builder("export_$cname")
+          .addAnnotation(cNameAnnotation(cname))
+          .addParameters(func)
+          .addStatement("%L(%L)", funcName, paramCall)
+          .build()
+      )
       return
     }
 
-    writer.write("@CName(\"$cname\")\n")
-    writer.write(
-      "fun `export_$cname`($paramDecl): $qualifiedReturn" +
-        " = $funcName($paramCall)\n\n"
+    addFunction(
+      FunSpec.builder("export_$cname")
+        .addAnnotation(cNameAnnotation(cname))
+        .addParameters(func)
+        .returns(ClassName.bestGuess(qualifiedReturn))
+        .addStatement("return %L(%L)", funcName, paramCall)
+        .build()
     )
   }
 
-  private fun writeClassExports(
-    writer: java.io.Writer,
-    cls: KSClassDeclaration,
-  ) {
+  private fun FileSpec.Builder.addClassExports(cls: KSClassDeclaration) {
     val name: String = cls.simpleName.asString()
     val qualifiedName: String = cls.qualifiedName?.asString() ?: return
     val prefix: String = name.lowercase()
 
     val constructor: KSFunctionDeclaration = cls.primaryConstructor ?: return
-    val ctorParams: List<KSValueParameter> = constructor.parameters
-    val ctorParamDecl: String = toParamDecl(ctorParams)
-    val ctorParamCall: String = toParamCall(ctorParams)
 
-    writer.write("@CName(\"${prefix}_create\")\n")
-    writer.write(
-      "fun `export_${prefix}_create`($ctorParamDecl): COpaquePointer =\n" +
-        "    StableRef.create($qualifiedName($ctorParamCall)).asCPointer()\n\n"
+    val ctorParamCall: String = constructor.parameters.joinToString(", ") {
+      it.name?.asString() ?: "_"
+    }
+
+    addFunction(
+      FunSpec.builder("export_${prefix}_create")
+        .addAnnotation(cNameAnnotation("${prefix}_create"))
+        .addParameters(constructor)
+        .returns(cOpaquePointer)
+        .addStatement(
+          "return %T.create(%L(%L)).asCPointer()",
+          stableRef, qualifiedName, ctorParamCall,
+        )
+        .build()
     )
 
-    writer.write("@CName(\"${prefix}_dispose\")\n")
-    writer.write(
-      "fun `export_${prefix}_dispose`(handle: COpaquePointer) {\n" +
-        "    handle.asStableRef<$qualifiedName>().dispose()\n}\n\n"
+    addFunction(
+      FunSpec.builder("export_${prefix}_dispose")
+        .addAnnotation(cNameAnnotation("${prefix}_dispose"))
+        .addParameter("handle", cOpaquePointer)
+        .addStatement("handle.asStableRef<%L>().dispose()", qualifiedName)
+        .build()
     )
 
     val properties: List<KSPropertyDeclaration> = cls.getAllProperties()
@@ -225,11 +244,16 @@ class CSharpBindingsProcessor(
       val propType: String =
         prop.type.resolve().declaration.qualifiedName?.asString() ?: "Any"
 
-      writer.write("@CName(\"${prefix}_get_$propName\")\n")
-      writer.write(
-        "fun `export_${prefix}_get_$propName`" +
-          "(handle: COpaquePointer): $propType =\n" +
-          "    handle.asStableRef<$qualifiedName>().get().$propName\n\n"
+      addFunction(
+        FunSpec.builder("export_${prefix}_get_$propName")
+          .addAnnotation(cNameAnnotation("${prefix}_get_$propName"))
+          .addParameter("handle", cOpaquePointer)
+          .returns(ClassName.bestGuess(propType))
+          .addStatement(
+            "return handle.asStableRef<%L>().get().%L",
+            qualifiedName, propName,
+          )
+          .build()
       )
     }
 
@@ -246,50 +270,60 @@ class CSharpBindingsProcessor(
       val methodReturn: String = method.returnType?.resolve()
         ?.declaration?.qualifiedName?.asString() ?: "Unit"
 
-      val methodParams: List<KSValueParameter> = method.parameters
+      val methodParamCall: String = method.parameters.joinToString(", ") {
+        it.name?.asString() ?: "_"
+      }
 
-      val methodParamDecl: String = (listOf("handle: COpaquePointer") +
-        methodParams.map { param ->
-          val type: String =
-            param.type.resolve().declaration.qualifiedName?.asString()
-              ?: param.type.resolve().declaration.simpleName.asString()
+      val builder: FunSpec.Builder = FunSpec
+        .builder("export_${prefix}_$methodName")
+        .addAnnotation(cNameAnnotation("${prefix}_$methodName"))
+        .addParameter("handle", cOpaquePointer)
 
-          "${param.name?.asString()}: $type"
-        }).joinToString(", ")
+      for (param in method.parameters) {
+        val type: String =
+          param.type.resolve().declaration.qualifiedName?.asString()
+            ?: param.type.resolve().declaration.simpleName.asString()
 
-      val methodParamCall: String = methodParams.joinToString(", ") { param ->
-        param.name?.asString() ?: "_"
+        builder.addParameter(
+          param.name?.asString() ?: "_",
+          ClassName.bestGuess(type),
+        )
       }
 
       if (methodReturn == "kotlin.Unit") {
-        writer.write("@CName(\"${prefix}_$methodName\")\n")
-        writer.write(
-          "fun `export_${prefix}_$methodName`($methodParamDecl) {\n" +
-            "    handle.asStableRef<$qualifiedName>()" +
-            ".get().$methodName($methodParamCall)\n}\n\n"
+        builder.addStatement(
+          "handle.asStableRef<%L>().get().%L(%L)",
+          qualifiedName, methodName, methodParamCall,
         )
       } else {
-        writer.write("@CName(\"${prefix}_$methodName\")\n")
-        writer.write(
-          "fun `export_${prefix}_$methodName`" +
-            "($methodParamDecl): $methodReturn =\n" +
-            "    handle.asStableRef<$qualifiedName>()" +
-            ".get().$methodName($methodParamCall)\n\n"
+        builder.returns(ClassName.bestGuess(methodReturn))
+        builder.addStatement(
+          "return handle.asStableRef<%L>().get().%L(%L)",
+          qualifiedName, methodName, methodParamCall,
         )
       }
+
+      addFunction(builder.build())
     }
   }
 
-  private fun toParamDecl(params: List<KSValueParameter>): String =
-    params.joinToString(", ") { param ->
-      val type: String = param.type.resolve().declaration.qualifiedName?.asString()
-        ?: param.type.resolve().declaration.simpleName.asString()
+  private fun FunSpec.Builder.addParameters(
+    func: KSFunctionDeclaration,
+  ): FunSpec.Builder {
+    for (param in func.parameters) {
+      val type: String =
+        param.type.resolve().declaration.qualifiedName?.asString()
+          ?: param.type.resolve().declaration.simpleName.asString()
 
-      "${param.name?.asString()}: $type"
+      addParameter(param.name?.asString() ?: "_", ClassName.bestGuess(type))
     }
+    return this
+  }
 
-  private fun toParamCall(params: List<KSValueParameter>): String =
-    params.joinToString(", ") { param -> param.name?.asString() ?: "_" }
+  private fun cNameAnnotation(value: String): AnnotationSpec =
+    AnnotationSpec.builder(cNameAnnotation)
+      .addMember("%S", value)
+      .build()
 
   private fun toCName(func: KSFunctionDeclaration): String {
     val name: String = func.simpleName.asString()
