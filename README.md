@@ -154,8 +154,11 @@ Gradle Plugin (Kotlin side)          NuGet Package       C# Consumer
 - [x] Map abstract classes (C# `abstract class`, `_handle` inherited by subclasses)
 - [x] Map sealed classes (see [ADR-009](docs/adr/009-sealed-class-mapping.md))
 - [x] Map object (→ static class) / data object in sealed classes (→ sealed subclass with ToString)
-- [ ] Map Collections types
 - [ ] Map Generics
+- [ ] Map Collections types
+  - [ ] `List<T>` → `IReadOnlyList<T>` (opaque handle + count, get)
+  - [ ] `MutableList<T>` → `IList<T>` (add, removeAt, set)
+  - [ ] `Map<K,V>` → `IReadOnlyDictionary<K,V>` (count, get, containsKey, keys)
 
 ### Phase 4: Async support
 - [ ] Map Suspend functions (coroutines → Task/async)
