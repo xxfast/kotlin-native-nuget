@@ -38,4 +38,25 @@ public class CatTests
         using var cat = new Cat("Mylo", 9);
         Assert.Equal("Mylo purrs contentedly", cat.Pet());
     }
+
+    [Fact]
+    public void Cat_Dispose_CanBeCalledMultipleTimes()
+    {
+        var cat = new Cat("Oreo", 9);
+        cat.Dispose();
+        cat.Dispose();
+    }
+
+    [Fact]
+    public void Cat_UsingBlock_DisposesAutomatically()
+    {
+        Cat cat;
+        using (cat = new Cat("Mylo", 9))
+        {
+            Assert.Equal("Mylo", cat.Name);
+        }
+
+        // After dispose, accessing should not crash the process
+        // (handle is zeroed, native call with IntPtr.Zero)
+    }
 }
