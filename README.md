@@ -61,20 +61,19 @@ That's it. Bindings are pre-generated at Kotlin compile time via KSP — no addi
 ## Architecture
 
 ```
-Gradle Plugin (Kotlin side)          NuGet Package            C# Consumer
-┌─────────────────────────┐     ┌─────────────────────┐     ┌──────────────┐
-│ Compile Kotlin/Native   │     │ native libs (.dll)  │     │ Add package  │
-│ KSP → Interop.cs *      │────>│ Interop.cs *        │────>│ Build        │
-│ Link shared libraries   │     │ header (.h)         │     │ Run          │
-│ Package as .nupkg *     │     │ .targets            │     └──────────────┘
-└─────────────────────────┘     └─────────────────────┘
-
-* = not yet implemented (currently uses ClangSharp at consumer build time)
+Gradle Plugin (Kotlin side)          NuGet Package       C# Consumer
+┌─────────────────────────┐     ┌────────────────┐     ┌──────────────┐
+│ Compile Kotlin/Native   │     │ native libs    │     │ Add package  │
+│ KSP → CIR → Interop.cs  │────>│ Interop.cs     │────>│ Build        │
+│ KotlinPoet → Bridges.kt │     └────────────────┘     │ Run          │
+│ Link shared libraries   │                            └──────────────┘
+│ Package as .nupkg *     │
+└─────────────────────────┘     * = not yet implemented
 ```
 
-- **Gradle plugin** compiles, links, and packages the NuGet. In Phase 2, KSP will generate `Interop.cs` at compile time with full Kotlin type info.
-- **NuGet package** ships native libs + generated C# bindings. Currently uses `.targets` + ClangSharp at consumer build time; Phase 2 will ship pre-generated `.cs` instead.
-- **Consumer** just imports the package — no tooling required beyond the .NET SDK (once Phase 2 is complete).
+- **Gradle plugin** compiles Kotlin/Native, runs KSP to generate C# bindings (via CIR model) and Kotlin bridge wrappers (via KotlinPoet), links shared libraries, and packages everything.
+- **NuGet package** ships native libs + pre-generated `Interop.cs`. No consumer-side tooling required.
+- **Consumer** just includes the package — bindings are ready at build time.
 
 ## Roadmap
 
