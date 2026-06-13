@@ -43,6 +43,18 @@ class CirRenderer {
     appendLine("        [DllImport(\"${helper.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"nuget_unwrap_int\")]")
     appendLine("        private static extern int Native_unwrap_int(IntPtr handle);")
     appendLine()
+    appendLine("        [DllImport(\"${helper.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"nuget_unwrap_long\")]")
+    appendLine("        private static extern long Native_unwrap_long(IntPtr handle);")
+    appendLine()
+    appendLine("        [DllImport(\"${helper.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"nuget_unwrap_float\")]")
+    appendLine("        private static extern float Native_unwrap_float(IntPtr handle);")
+    appendLine()
+    appendLine("        [DllImport(\"${helper.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"nuget_unwrap_double\")]")
+    appendLine("        private static extern double Native_unwrap_double(IntPtr handle);")
+    appendLine()
+    appendLine("        [DllImport(\"${helper.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"nuget_unwrap_bool\")]")
+    appendLine("        private static extern bool Native_unwrap_bool(IntPtr handle);")
+    appendLine()
     appendLine("        [DllImport(\"${helper.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"nuget_dispose\")]")
     appendLine("        private static extern void Native_dispose(IntPtr handle);")
     appendLine()
@@ -51,6 +63,18 @@ class CirRenderer {
     appendLine()
     appendLine("        [DllImport(\"${helper.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"box_create_int\")]")
     appendLine("        private static extern IntPtr box_create_int(int value);")
+    appendLine()
+    appendLine("        [DllImport(\"${helper.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"box_create_long\")]")
+    appendLine("        private static extern IntPtr box_create_long(long value);")
+    appendLine()
+    appendLine("        [DllImport(\"${helper.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"box_create_float\")]")
+    appendLine("        private static extern IntPtr box_create_float(float value);")
+    appendLine()
+    appendLine("        [DllImport(\"${helper.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"box_create_double\")]")
+    appendLine("        private static extern IntPtr box_create_double(double value);")
+    appendLine()
+    appendLine("        [DllImport(\"${helper.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"box_create_bool\")]")
+    appendLine("        private static extern IntPtr box_create_bool(bool value);")
     appendLine()
     appendLine("        [DllImport(\"${helper.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"box_create_object\")]")
     appendLine("        private static extern IntPtr box_create_object(IntPtr value);")
@@ -71,6 +95,30 @@ class CirRenderer {
     appendLine("                Native_dispose(handle);")
     appendLine("                return (T)(object)result;")
     appendLine("            }")
+    appendLine("            if (typeof(T) == typeof(long))")
+    appendLine("            {")
+    appendLine("                long result = Native_unwrap_long(handle);")
+    appendLine("                Native_dispose(handle);")
+    appendLine("                return (T)(object)result;")
+    appendLine("            }")
+    appendLine("            if (typeof(T) == typeof(float))")
+    appendLine("            {")
+    appendLine("                float result = Native_unwrap_float(handle);")
+    appendLine("                Native_dispose(handle);")
+    appendLine("                return (T)(object)result;")
+    appendLine("            }")
+    appendLine("            if (typeof(T) == typeof(double))")
+    appendLine("            {")
+    appendLine("                double result = Native_unwrap_double(handle);")
+    appendLine("                Native_dispose(handle);")
+    appendLine("                return (T)(object)result;")
+    appendLine("            }")
+    appendLine("            if (typeof(T) == typeof(bool))")
+    appendLine("            {")
+    appendLine("                bool result = Native_unwrap_bool(handle);")
+    appendLine("                Native_dispose(handle);")
+    appendLine("                return (T)(object)result;")
+    appendLine("            }")
     appendLine("            return (T)Activator.CreateInstance(typeof(T),")
     appendLine("                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Public,")
     appendLine("                null, new object[] { handle }, null)!;")
@@ -80,6 +128,10 @@ class CirRenderer {
     appendLine("        {")
     appendLine("            if (typeof(T) == typeof(string)) return box_create_string((string)(object)value!);")
     appendLine("            if (typeof(T) == typeof(int)) return box_create_int((int)(object)value!);")
+    appendLine("            if (typeof(T) == typeof(long)) return box_create_long((long)(object)value!);")
+    appendLine("            if (typeof(T) == typeof(float)) return box_create_float((float)(object)value!);")
+    appendLine("            if (typeof(T) == typeof(double)) return box_create_double((double)(object)value!);")
+    appendLine("            if (typeof(T) == typeof(bool)) return box_create_bool((bool)(object)value!);")
     appendLine("            var field = typeof(T).GetField(\"_handle\",")
     appendLine("                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Public);")
     appendLine("            if (field != null) return box_create_object((IntPtr)field.GetValue(value)!);")
@@ -356,14 +408,33 @@ class CirRenderer {
     val abstract: String = if (method.isAbstract) "abstract " else ""
     val paramStr: String = method.parameters.joinToString(", ") { "${it.type} ${it.name}" }
 
+    val hasGenericType: Boolean = method.returnType.contains("T") ||
+      method.parameters.any { it.type.contains("T") }
+
+    val genericDecl: String = if (hasGenericType && method.isStatic) "<T>" else ""
+
     if (method.isAbstract) {
-      appendLine("        $visibility ${abstract}${method.returnType} ${method.name}($paramStr);")
-    } else if (method.returnType == "void") {
-      appendLine("        $visibility $static$override void ${method.name}($paramStr)")
-      appendLine("            => ${method.body};")
+      appendLine("        $visibility ${abstract}${method.returnType} ${method.name}$genericDecl($paramStr);")
     } else {
-      appendLine("        $visibility $static$override${method.returnType} ${method.name}($paramStr)")
-      appendLine("            => ${method.body};")
+      val isMultiLine: Boolean = method.body.contains('\n')
+
+      if (isMultiLine) {
+        if (method.returnType == "void") {
+          appendLine("        $visibility ${static}${override}void ${method.name}$genericDecl($paramStr)")
+        } else {
+          appendLine("        $visibility $static$override${method.returnType} ${method.name}$genericDecl($paramStr)")
+        }
+        appendLine("        {${method.body}")
+        appendLine("        }")
+      } else {
+        if (method.returnType == "void") {
+          appendLine("        $visibility $static$override void ${method.name}$genericDecl($paramStr)")
+          appendLine("            => ${method.body};")
+        } else {
+          appendLine("        $visibility $static$override${method.returnType} ${method.name}$genericDecl($paramStr)")
+          appendLine("            => ${method.body};")
+        }
+      }
     }
 
     appendLine()

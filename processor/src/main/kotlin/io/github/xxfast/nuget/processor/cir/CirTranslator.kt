@@ -48,6 +48,7 @@ class CirTranslator(
 ) {
   fun translate(
     functions: List<KSFunctionDeclaration>,
+    genericFunctions: List<KSFunctionDeclaration>,
     classes: List<KSClassDeclaration>,
     enums: List<KSClassDeclaration> = emptyList(),
     interfaces: List<KSClassDeclaration> = emptyList(),
@@ -57,6 +58,13 @@ class CirTranslator(
     val (genericClasses, regularClasses) = classes.partition { it.typeParameters.isNotEmpty() }
 
     val functionsByNamespaceAndFile: Map<Pair<String, String>, List<KSFunctionDeclaration>> = functions
+      .groupBy { func ->
+        val namespace: String = mapPackageToNamespace(func.packageName.asString())
+        val fileName: String = func.containingFile?.fileName?.removeSuffix(".kt") ?: className
+        namespace to fileName
+      }
+
+    val genericFunctionsByNamespaceAndFile: Map<Pair<String, String>, List<KSFunctionDeclaration>> = genericFunctions
       .groupBy { func ->
         val namespace: String = mapPackageToNamespace(func.packageName.asString())
         val fileName: String = func.containingFile?.fileName?.removeSuffix(".kt") ?: className
@@ -87,6 +95,48 @@ class CirTranslator(
       if (existing != null) {
         val index: Int = namespaces.indexOf(existing)
         namespaces[index] = existing.copy(declarations = existing.declarations + CirStaticClass(finalClassName, members))
+      } else {
+        namespaces.add(CirNamespace(namespace, listOf(CirStaticClass(finalClassName, members))))
+      }
+    }
+
+    for ((key, funcs) in genericFunctionsByNamespaceAndFile) {
+      val (namespace, fileClassName) = key
+
+      val conflictsWithClass: Boolean = classes.any {
+        it.simpleName.asString() == fileClassName &&
+          mapPackageToNamespace(it.packageName.asString()) == namespace
+      }
+
+      val conflictsWithSealed: Boolean = sealedClasses.any {
+        it.simpleName.asString() == fileClassName &&
+          mapPackageToNamespace(it.packageName.asString()) == namespace
+      }
+
+      val finalClassName: String = if (conflictsWithClass || conflictsWithSealed) "${fileClassName}Kt" else fileClassName
+
+      val members: List<CirMember> = funcs.flatMap { translateGenericFunction(it) }
+      val existing = namespaces.find { it.name == namespace }
+
+      if (existing != null) {
+        val existingClass = existing.declarations.find { decl ->
+          decl is CirStaticClass && decl.name == finalClassName
+        } as? CirStaticClass
+
+        if (existingClass != null) {
+          val index: Int = namespaces.indexOf(existing)
+          val updatedDecls = existing.declarations.map { decl ->
+            if (decl is CirStaticClass && decl.name == finalClassName) {
+              decl.copy(members = decl.members + members)
+            } else {
+              decl
+            }
+          }
+          namespaces[index] = existing.copy(declarations = updatedDecls)
+        } else {
+          val index: Int = namespaces.indexOf(existing)
+          namespaces[index] = existing.copy(declarations = existing.declarations + CirStaticClass(finalClassName, members))
+        }
       } else {
         namespaces.add(CirNamespace(namespace, listOf(CirStaticClass(finalClassName, members))))
       }
@@ -185,6 +235,151 @@ class CirTranslator(
     }
 
     return CirFile(namespaces = namespaces)
+  }
+
+  private fun translateGenericFunction(func: KSFunctionDeclaration): List<CirMember> {
+    val funcName: String = func.simpleName.asString()
+    val csName: String = toCSharpName(funcName)
+    val returnType: KSType? = func.returnType?.resolve()
+    val returnDecl: KSClassDeclaration? = returnType?.declaration as? KSClassDeclaration
+    val returnTypeName: String = returnType?.declaration?.simpleName?.asString() ?: "Unit"
+
+    val typeParamName: String = func.typeParameters.firstOrNull()?.name?.asString() ?: "T"
+
+    val paramIndex: Int = func.parameters.indexOfFirst { param ->
+      param.type.resolve().declaration.simpleName.asString() == typeParamName
+    }
+
+    if (paramIndex == -1) return emptyList()
+
+    val param = func.parameters[paramIndex]
+    val paramName: String = param.name?.asString() ?: "value"
+
+    val returnsGenericClass: Boolean = returnDecl?.typeParameters?.isNotEmpty() == true
+
+    val result = mutableListOf<CirMember>()
+
+    val primitiveTypes = listOf(
+      "string" to "string",
+      "int" to "int",
+      "long" to "long",
+      "float" to "float",
+      "double" to "double",
+      "bool" to "bool",
+    )
+
+    primitiveTypes.forEach { (suffix, csType) ->
+      val entryPoint = "${funcName}_$suffix"
+      val nativeName = "${csName}_${suffix}_native"
+
+      val nativeReturnType: String = when {
+        returnsGenericClass -> "IntPtr"
+        csType == "string" -> "IntPtr"
+        else -> csType
+      }
+
+      val nativeParamType: String = csType
+
+      result.add(
+        CirDllImport(
+          libraryName = libraryName,
+          entryPoint = entryPoint,
+          returnType = nativeReturnType,
+          name = nativeName,
+          parameters = listOf(CirParameter(paramName, nativeParamType)),
+          visibility = CirVisibility.PRIVATE,
+        )
+      )
+    }
+
+    val objectEntryPoint = "${funcName}_object"
+    val objectNativeName = "${csName}_object_native"
+
+    result.add(
+      CirDllImport(
+        libraryName = libraryName,
+        entryPoint = objectEntryPoint,
+        returnType = "IntPtr",
+        name = objectNativeName,
+        parameters = listOf(CirParameter(paramName, "IntPtr")),
+        visibility = CirVisibility.PRIVATE,
+      )
+    )
+
+    val body: String = buildString {
+      appendLine()
+      appendLine("      if (typeof(T) == typeof(string))")
+      if (returnsGenericClass) {
+        appendLine("        return new ${returnTypeName}<T>(${csName}_string_native((string)(object)$paramName!));")
+      } else {
+        appendLine("        return (T)(object)Marshal.PtrToStringUTF8(${csName}_string_native((string)(object)$paramName!))!;")
+      }
+
+      appendLine("      if (typeof(T) == typeof(int))")
+      if (returnsGenericClass) {
+        appendLine("        return new ${returnTypeName}<T>(${csName}_int_native((int)(object)$paramName!));")
+      } else {
+        appendLine("        return (T)(object)${csName}_int_native((int)(object)$paramName!);")
+      }
+
+      appendLine("      if (typeof(T) == typeof(long))")
+      if (returnsGenericClass) {
+        appendLine("        return new ${returnTypeName}<T>(${csName}_long_native((long)(object)$paramName!));")
+      } else {
+        appendLine("        return (T)(object)${csName}_long_native((long)(object)$paramName!);")
+      }
+
+      appendLine("      if (typeof(T) == typeof(float))")
+      if (returnsGenericClass) {
+        appendLine("        return new ${returnTypeName}<T>(${csName}_float_native((float)(object)$paramName!));")
+      } else {
+        appendLine("        return (T)(object)${csName}_float_native((float)(object)$paramName!);")
+      }
+
+      appendLine("      if (typeof(T) == typeof(double))")
+      if (returnsGenericClass) {
+        appendLine("        return new ${returnTypeName}<T>(${csName}_double_native((double)(object)$paramName!));")
+      } else {
+        appendLine("        return (T)(object)${csName}_double_native((double)(object)$paramName!);")
+      }
+
+      appendLine("      if (typeof(T) == typeof(bool))")
+      if (returnsGenericClass) {
+        appendLine("        return new ${returnTypeName}<T>(${csName}_bool_native((bool)(object)$paramName!));")
+      } else {
+        appendLine("        return (T)(object)${csName}_bool_native((bool)(object)$paramName!);")
+      }
+
+      if (returnsGenericClass) {
+        appendLine("      var field = typeof(T).GetField(\"_handle\",")
+        appendLine("        System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Public);")
+        appendLine("      IntPtr handle = (IntPtr)field!.GetValue($paramName)!;")
+        appendLine("      IntPtr result = ${csName}_object_native(handle);")
+        appendLine("      return new ${returnTypeName}<T>(result);")
+      } else {
+        appendLine("      var field = typeof(T).GetField(\"_handle\",")
+        appendLine("        System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Public);")
+        appendLine("      IntPtr handle = (IntPtr)field!.GetValue($paramName)!;")
+        appendLine("      IntPtr result = ${csName}_object_native(handle);")
+        appendLine("      return (T)Activator.CreateInstance(typeof(T),")
+        appendLine("        System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Public,")
+        appendLine("        null, new object[] { result }, null)!;")
+      }
+    }
+
+    val methodReturnType: String = if (returnsGenericClass) "$returnTypeName<T>" else "T"
+
+    result.add(
+      CirMethod(
+        name = csName,
+        returnType = methodReturnType,
+        parameters = listOf(CirParameter(paramName, "T")),
+        body = body.trimEnd(),
+        isStatic = true,
+      )
+    )
+
+    return result
   }
 
   private fun translateFunction(func: KSFunctionDeclaration): List<CirMember> {

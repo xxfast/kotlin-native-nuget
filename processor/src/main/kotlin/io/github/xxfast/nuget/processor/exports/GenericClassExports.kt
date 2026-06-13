@@ -35,6 +35,42 @@ internal fun FileSpec.Builder.addGenericClassExports(cls: KSClassDeclaration) {
   )
 
   addFunction(
+    FunSpec.builder("export_${prefix}_create_long")
+      .addAnnotation(cNameAnnotation("${prefix}_create_long"))
+      .addParameter("value", Long::class)
+      .returns(cOpaquePointer)
+      .addStatement("return %T.create(%L(value)).asCPointer()", stableRef, qualifiedName)
+      .build()
+  )
+
+  addFunction(
+    FunSpec.builder("export_${prefix}_create_float")
+      .addAnnotation(cNameAnnotation("${prefix}_create_float"))
+      .addParameter("value", Float::class)
+      .returns(cOpaquePointer)
+      .addStatement("return %T.create(%L(value)).asCPointer()", stableRef, qualifiedName)
+      .build()
+  )
+
+  addFunction(
+    FunSpec.builder("export_${prefix}_create_double")
+      .addAnnotation(cNameAnnotation("${prefix}_create_double"))
+      .addParameter("value", Double::class)
+      .returns(cOpaquePointer)
+      .addStatement("return %T.create(%L(value)).asCPointer()", stableRef, qualifiedName)
+      .build()
+  )
+
+  addFunction(
+    FunSpec.builder("export_${prefix}_create_bool")
+      .addAnnotation(cNameAnnotation("${prefix}_create_bool"))
+      .addParameter("value", Boolean::class)
+      .returns(cOpaquePointer)
+      .addStatement("return %T.create(%L(value)).asCPointer()", stableRef, qualifiedName)
+      .build()
+  )
+
+  addFunction(
     FunSpec.builder("export_${prefix}_create_object")
       .addAnnotation(cNameAnnotation("${prefix}_create_object"))
       .addParameter("value", cOpaquePointer)
@@ -91,6 +127,42 @@ internal fun FileSpec.Builder.addNugetHelperExports() {
       .addParameter("handle", cOpaquePointer)
       .returns(Int::class)
       .addStatement("return handle.asStableRef<Any>().get() as Int")
+      .build()
+  )
+
+  addFunction(
+    FunSpec.builder("export_nuget_unwrap_long")
+      .addAnnotation(cNameAnnotation("nuget_unwrap_long"))
+      .addParameter("handle", cOpaquePointer)
+      .returns(Long::class)
+      .addStatement("return handle.asStableRef<Any>().get() as Long")
+      .build()
+  )
+
+  addFunction(
+    FunSpec.builder("export_nuget_unwrap_float")
+      .addAnnotation(cNameAnnotation("nuget_unwrap_float"))
+      .addParameter("handle", cOpaquePointer)
+      .returns(Float::class)
+      .addStatement("return handle.asStableRef<Any>().get() as Float")
+      .build()
+  )
+
+  addFunction(
+    FunSpec.builder("export_nuget_unwrap_double")
+      .addAnnotation(cNameAnnotation("nuget_unwrap_double"))
+      .addParameter("handle", cOpaquePointer)
+      .returns(Double::class)
+      .addStatement("return handle.asStableRef<Any>().get() as Double")
+      .build()
+  )
+
+  addFunction(
+    FunSpec.builder("export_nuget_unwrap_bool")
+      .addAnnotation(cNameAnnotation("nuget_unwrap_bool"))
+      .addParameter("handle", cOpaquePointer)
+      .returns(Boolean::class)
+      .addStatement("return handle.asStableRef<Any>().get() as Boolean")
       .build()
   )
 

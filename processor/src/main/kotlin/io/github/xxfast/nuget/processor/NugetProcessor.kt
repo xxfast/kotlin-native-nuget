@@ -25,6 +25,7 @@ import io.github.xxfast.nuget.processor.exports.addClassExports
 import io.github.xxfast.nuget.processor.exports.addEnumExports
 import io.github.xxfast.nuget.processor.exports.addFunctionExports
 import io.github.xxfast.nuget.processor.exports.addGenericClassExports
+import io.github.xxfast.nuget.processor.exports.addGenericFunctionExports
 import io.github.xxfast.nuget.processor.exports.addNugetHelperExports
 import io.github.xxfast.nuget.processor.exports.addObjectExports
 import io.github.xxfast.nuget.processor.exports.addSealedClassExports
@@ -55,10 +56,13 @@ class NugetProcessor(
       .filter { it.packageName.asString() != "io.github.xxfast.nuget.generated" }
       .toList()
 
-    val functions: List<KSFunctionDeclaration> = allDeclarations
+    val allFunctions: List<KSFunctionDeclaration> = allDeclarations
       .filterIsInstance<KSFunctionDeclaration>()
       .filter { it.getVisibility() == Visibility.PUBLIC }
       .filter { it.parentDeclaration == null }
+
+    val functions: List<KSFunctionDeclaration> = allFunctions.filter { it.typeParameters.isEmpty() }
+    val genericFunctions: List<KSFunctionDeclaration> = allFunctions.filter { it.typeParameters.isNotEmpty() }
 
     val allClasses: List<KSClassDeclaration> = allDeclarations
       .filterIsInstance<KSClassDeclaration>()
@@ -95,9 +99,10 @@ class NugetProcessor(
       .filter { it.classKind == ClassKind.INTERFACE }
       .filter { it.parentDeclaration == null }
 
-    if (functions.isEmpty() && classes.isEmpty() && genericClasses.isEmpty() && enums.isEmpty() && interfaces.isEmpty() && sealedClasses.isEmpty() && objects.isEmpty()) return emptyList()
+    if (functions.isEmpty() && genericFunctions.isEmpty() && classes.isEmpty() && genericClasses.isEmpty() && enums.isEmpty() && interfaces.isEmpty() && sealedClasses.isEmpty() && objects.isEmpty()) return emptyList()
 
     val sources: Array<KSFile> = (functions.mapNotNull { it.containingFile } +
+      genericFunctions.mapNotNull { it.containingFile } +
       classes.mapNotNull { it.containingFile } +
       genericClasses.mapNotNull { it.containingFile } +
       enums.mapNotNull { it.containingFile } +
@@ -107,11 +112,12 @@ class NugetProcessor(
 
     val deps = Dependencies(aggregating = true, *sources)
 
-    generateCNameWrappers(functions, classes, genericClasses, enums, sealedClasses, objects, deps)
-    generateCSharpBindings(functions, allClasses, enums, interfaces, sealedClasses, objects, deps)
+    generateCNameWrappers(functions, genericFunctions, classes, genericClasses, enums, sealedClasses, objects, deps)
+    generateCSharpBindings(functions, genericFunctions, allClasses, enums, interfaces, sealedClasses, objects, deps)
 
     logger.info(
       "Generated bindings for ${functions.size} functions" +
+        ", ${genericFunctions.size} generic functions" +
         ", ${classes.size} classes" +
         ", ${genericClasses.size} generic classes" +
         ", ${enums.size} enums" +
@@ -125,6 +131,7 @@ class NugetProcessor(
 
   private fun generateCSharpBindings(
     functions: List<KSFunctionDeclaration>,
+    genericFunctions: List<KSFunctionDeclaration>,
     classes: List<KSClassDeclaration>,
     enums: List<KSClassDeclaration>,
     interfaces: List<KSClassDeclaration>,
@@ -132,7 +139,7 @@ class NugetProcessor(
     objects: List<KSClassDeclaration>,
     deps: Dependencies,
   ) {
-    val cirFile: CirFile = translator.translate(functions, classes, enums, interfaces, sealedClasses, objects)
+    val cirFile: CirFile = translator.translate(functions, genericFunctions, classes, enums, interfaces, sealedClasses, objects)
     val csharp: String = renderer.render(cirFile)
 
     val file = codeGenerator.createNewFile(
@@ -147,6 +154,7 @@ class NugetProcessor(
 
   private fun generateCNameWrappers(
     functions: List<KSFunctionDeclaration>,
+    genericFunctions: List<KSFunctionDeclaration>,
     classes: List<KSClassDeclaration>,
     genericClasses: List<KSClassDeclaration>,
     enums: List<KSClassDeclaration>,
@@ -170,6 +178,11 @@ class NugetProcessor(
         functions.forEach { func ->
           addImport(func.packageName.asString(), func.simpleName.asString())
           addFunctionExports(func)
+        }
+
+        genericFunctions.forEach { func ->
+          addImport(func.packageName.asString(), func.simpleName.asString())
+          addGenericFunctionExports(func)
         }
 
         classes.forEach { addClassExports(it) }
