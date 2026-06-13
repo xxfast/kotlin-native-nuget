@@ -1,4 +1,4 @@
 using SampleLibrary;
 
-string message = SampleLibraryNative.@string();
+string message = Mappings.@string();
 Console.WriteLine(message);

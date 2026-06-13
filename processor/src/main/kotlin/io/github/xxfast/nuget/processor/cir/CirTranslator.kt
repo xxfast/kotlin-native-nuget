@@ -50,14 +50,33 @@ class CirTranslator(
     classes: List<KSClassDeclaration>,
     enums: List<KSClassDeclaration> = emptyList(),
   ): CirFile {
-    val functionsByNamespace: Map<String, List<KSFunctionDeclaration>> = functions
-      .groupBy { mapPackageToNamespace(it.packageName.asString()) }
+    val functionsByNamespaceAndFile: Map<Pair<String, String>, List<KSFunctionDeclaration>> = functions
+      .groupBy { func ->
+        val namespace: String = mapPackageToNamespace(func.packageName.asString())
+        val fileName: String = func.containingFile?.fileName?.removeSuffix(".kt") ?: className
+        namespace to fileName
+      }
 
     val namespaces: MutableList<CirNamespace> = mutableListOf()
 
-    for ((namespace, funcs) in functionsByNamespace) {
+    for ((key, funcs) in functionsByNamespaceAndFile) {
+      val (namespace, fileClassName) = key
+
+      val conflictsWithClass: Boolean = classes.any {
+        it.simpleName.asString() == fileClassName &&
+          mapPackageToNamespace(it.packageName.asString()) == namespace
+      }
+      val finalClassName: String = if (conflictsWithClass) "${fileClassName}Kt" else fileClassName
+
       val members: List<CirMember> = funcs.flatMap { translateFunction(it) }
-      namespaces.add(CirNamespace(namespace, listOf(CirStaticClass(className, members))))
+      val existing = namespaces.find { it.name == namespace }
+
+      if (existing != null) {
+        val index: Int = namespaces.indexOf(existing)
+        namespaces[index] = existing.copy(declarations = existing.declarations + CirStaticClass(finalClassName, members))
+      } else {
+        namespaces.add(CirNamespace(namespace, listOf(CirStaticClass(finalClassName, members))))
+      }
     }
 
     for (cls in classes) {

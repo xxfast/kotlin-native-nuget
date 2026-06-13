@@ -105,6 +105,7 @@ Gradle Plugin (Kotlin side)          NuGet Package       C# Consumer
 - [x] Test cyclic reference disposal (verified wrappers are independent, dispose doesn't cascade)
 - [x] Map member setters
 - [x] Map enums (see [ADR-006](docs/adr/006-enum-mapping.md))
+- [x] Map per-file top-level function class naming (see [ADR-007](docs/adr/007-top-level-function-class-naming.md))
 - [ ] Map data classes
 - [ ] Map interfaces
 - [ ] Map abstract classes
