@@ -96,6 +96,8 @@ Gradle Plugin (Kotlin side)          NuGet Package            C# Consumer
 - [x] Map String parameters (C# `string` → Kotlin `String` via P/Invoke marshalling)
 - [x] Map String returns as proper `string` (hidden `IntPtr` + `Marshal.PtrToStringUTF8`)
 - [x] Map OOP constructs (classes → C# classes with `IDisposable`, StableRef + opaque pointer)
+- [ ] Map object-typed properties/returns (returning one bridged object from another)
+- [ ] Test cyclic reference disposal (verify Kotlin GC collects after both StableRefs disposed)
 - [ ] Map interfaces
 - [ ] Map Collections types
 - [ ] Map Generics
