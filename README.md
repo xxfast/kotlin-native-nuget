@@ -17,16 +17,21 @@ Write Kotlin — get C# bindings automatically:
 
 ```kotlin
 // Kotlin
-fun meow(): String = "meow!"
-fun lives(name: String): Int = 9
+class Cat(val name: String, val lives: Int = 9) {
+  var brother: Cat? = null
+  fun meow(): String = "Meow! My name is $name"
+}
+
 fun owner(name: String): String? = if (name == "Oreo") "Isuru" else null
 ```
 
 ```csharp
 // C# (auto-generated)
-string sound = CatLibNative.meow();
-int lives = CatLibNative.lives("Mylo");
-string? owner = CatLibNative.owner("Oreo"); // nullable support
+using var oreo = new Cat("Oreo", 9);
+oreo.Name;                    // "Oreo"
+oreo.Meow();                  // "Meow! My name is Oreo"
+oreo.Brother;                 // null (nullable object support)
+string? owner = CatNative.owner("Oreo");  // "Isuru" (nullable string)
 ```
 
 ## Prerequisites
