@@ -68,7 +68,15 @@ data class CirSealedSubclass(
   val nativePrefix: String,
   val properties: List<CirProperty>,
   val isDataClass: Boolean = false,
+  val isDataObject: Boolean = false,
 )
+
+data class CirObject(
+  val name: String,
+  val libraryName: String,
+  val nativePrefix: String,
+  val methods: List<CirDllImport>,
+) : CirDeclaration
 
 data class CirEnumEntry(
   val name: String,

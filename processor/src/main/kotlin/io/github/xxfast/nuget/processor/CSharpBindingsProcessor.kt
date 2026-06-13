@@ -71,6 +71,12 @@ class CSharpBindingsProcessor(
       .filter { it.parentDeclaration == null }
       .filter { it.modifiers.contains(Modifier.SEALED) }
 
+    val objects: List<KSClassDeclaration> = allDeclarations
+      .filterIsInstance<KSClassDeclaration>()
+      .filter { it.getVisibility() == Visibility.PUBLIC }
+      .filter { it.classKind == ClassKind.OBJECT }
+      .filter { it.parentDeclaration == null }
+
     val enums: List<KSClassDeclaration> = allDeclarations
       .filterIsInstance<KSClassDeclaration>()
       .filter { it.getVisibility() == Visibility.PUBLIC }
@@ -83,25 +89,27 @@ class CSharpBindingsProcessor(
       .filter { it.classKind == ClassKind.INTERFACE }
       .filter { it.parentDeclaration == null }
 
-    if (functions.isEmpty() && classes.isEmpty() && enums.isEmpty() && interfaces.isEmpty() && sealedClasses.isEmpty()) return emptyList()
+    if (functions.isEmpty() && classes.isEmpty() && enums.isEmpty() && interfaces.isEmpty() && sealedClasses.isEmpty() && objects.isEmpty()) return emptyList()
 
     val sources: Array<KSFile> = (functions.mapNotNull { it.containingFile } +
       classes.mapNotNull { it.containingFile } +
       enums.mapNotNull { it.containingFile } +
       interfaces.mapNotNull { it.containingFile } +
-      sealedClasses.mapNotNull { it.containingFile }).toTypedArray()
+      sealedClasses.mapNotNull { it.containingFile } +
+      objects.mapNotNull { it.containingFile }).toTypedArray()
 
     val deps = Dependencies(aggregating = true, *sources)
 
-    generateCNameWrappers(functions, classes, enums, sealedClasses, deps)
-    generateCSharpBindings(functions, classes, enums, interfaces, sealedClasses, deps)
+    generateCNameWrappers(functions, classes, enums, sealedClasses, objects, deps)
+    generateCSharpBindings(functions, classes, enums, interfaces, sealedClasses, objects, deps)
 
     logger.info(
       "Generated bindings for ${functions.size} functions" +
         ", ${classes.size} classes" +
         ", ${enums.size} enums" +
         ", ${interfaces.size} interfaces" +
-        ", and ${sealedClasses.size} sealed classes"
+        ", ${sealedClasses.size} sealed classes" +
+        ", and ${objects.size} objects"
     )
 
     return emptyList()
@@ -113,9 +121,10 @@ class CSharpBindingsProcessor(
     enums: List<KSClassDeclaration>,
     interfaces: List<KSClassDeclaration>,
     sealedClasses: List<KSClassDeclaration>,
+    objects: List<KSClassDeclaration>,
     deps: Dependencies,
   ) {
-    val cirFile: CirFile = translator.translate(functions, classes, enums, interfaces, sealedClasses)
+    val cirFile: CirFile = translator.translate(functions, classes, enums, interfaces, sealedClasses, objects)
     val csharp: String = renderer.render(cirFile)
 
     val file = codeGenerator.createNewFile(
@@ -137,6 +146,7 @@ class CSharpBindingsProcessor(
     classes: List<KSClassDeclaration>,
     enums: List<KSClassDeclaration>,
     sealedClasses: List<KSClassDeclaration>,
+    objects: List<KSClassDeclaration>,
     deps: Dependencies,
   ) {
     val fileSpec: FileSpec = FileSpec
@@ -171,6 +181,10 @@ class CSharpBindingsProcessor(
 
         for (sealed in sealedClasses) {
           addSealedClassExports(sealed)
+        }
+
+        for (obj in objects) {
+          addObjectExports(obj)
         }
       }
       .build()
@@ -753,6 +767,59 @@ class CSharpBindingsProcessor(
             .build()
         )
       }
+    }
+  }
+
+  private fun FileSpec.Builder.addObjectExports(obj: KSClassDeclaration) {
+    val name: String = obj.simpleName.asString()
+    val qualifiedName: String = obj.qualifiedName?.asString() ?: return
+    val prefix: String = name.lowercase()
+
+    val methods: List<KSFunctionDeclaration> = obj.getAllFunctions()
+      .filter { it.getVisibility() == Visibility.PUBLIC }
+      .filter { it.simpleName.asString() !in listOf("equals", "hashCode", "toString", "<init>") }
+      .toList()
+
+    for (method in methods) {
+      val methodName: String = method.simpleName.asString()
+      val cname: String = toCName(methodName)
+      val entryPoint: String = "${prefix}_${cname}"
+      val methodReturn: String = method.returnType?.resolve()
+        ?.declaration?.qualifiedName?.asString() ?: "Unit"
+
+      val methodParamCall: String = method.parameters.joinToString(", ") {
+        it.name?.asString() ?: "_"
+      }
+
+      val builder: FunSpec.Builder = FunSpec
+        .builder("export_$entryPoint")
+        .addAnnotation(cNameAnnotation(entryPoint))
+
+      for (param in method.parameters) {
+        val type: String =
+          param.type.resolve().declaration.qualifiedName?.asString()
+            ?: param.type.resolve().declaration.simpleName.asString()
+
+        builder.addParameter(
+          param.name?.asString() ?: "_",
+          ClassName.bestGuess(type),
+        )
+      }
+
+      if (methodReturn == "kotlin.Unit") {
+        builder.addStatement(
+          "%L.%L(%L)",
+          qualifiedName, methodName, methodParamCall,
+        )
+      } else {
+        builder.returns(ClassName.bestGuess(methodReturn))
+        builder.addStatement(
+          "return %L.%L(%L)",
+          qualifiedName, methodName, methodParamCall,
+        )
+      }
+
+      addFunction(builder.build())
     }
   }
 

@@ -153,7 +153,7 @@ Gradle Plugin (Kotlin side)          NuGet Package       C# Consumer
 - [x] Map interfaces (C# `interface` with `I` prefix, default methods delegate to Kotlin)
 - [x] Map abstract classes (C# `abstract class`, `_handle` inherited by subclasses)
 - [x] Map sealed classes (see [ADR-009](docs/adr/009-sealed-class-mapping.md))
-- [ ] Map object / data object (singletons)
+- [x] Map object (→ static class) / data object in sealed classes (→ sealed subclass with ToString)
 - [ ] Map Collections types
 - [ ] Map Generics
 

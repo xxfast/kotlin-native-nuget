@@ -24,6 +24,7 @@ class CirRenderer {
         is CirClass -> renderClass(declaration)
         is CirEnum -> renderEnum(declaration)
         is CirSealedClass -> renderSealedClass(declaration)
+        is CirObject -> renderObject(declaration)
       }
     }
 
@@ -314,7 +315,10 @@ class CirRenderer {
         appendLine()
       }
 
-      if (subclass.isDataClass) {
+      if (subclass.isDataObject) {
+        appendLine("            public override string ToString() => \"${subclass.name}\";")
+        appendLine()
+      } else if (subclass.isDataClass) {
         renderSealedSubclassDataMethods(sealed.libraryName, subclass.nativePrefix, sealed.name, subclass.name)
       }
 
@@ -394,5 +398,16 @@ class CirRenderer {
       appendLine("            }")
       appendLine("        }")
     }
+  }
+
+  private fun StringBuilder.renderObject(obj: CirObject) {
+    appendLine("    public static class ${obj.name}")
+    appendLine("    {")
+
+    for (method in obj.methods) {
+      renderDllImport(method)
+    }
+
+    appendLine("    }")
   }
 }

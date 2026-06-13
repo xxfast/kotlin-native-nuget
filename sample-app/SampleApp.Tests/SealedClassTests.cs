@@ -45,17 +45,54 @@ public class SealedClassTests
     }
 
     [Fact]
+    public void Observation_Superposition_IsSealed()
+    {
+        Assert.True(typeof(Observation.Superposition).IsSealed);
+    }
+
+    [Fact]
+    public void PeekBox_ReturnsSuperposition()
+    {
+        using Observation result = ObservationKt.peekBox();
+        Assert.IsType<Observation.Superposition>(result);
+    }
+
+    [Fact]
+    public void Observation_Superposition_ToString()
+    {
+        using Observation result = ObservationKt.peekBox();
+        Assert.Equal("Superposition", result.ToString());
+    }
+
+    [Fact]
     public void Observation_WorksWithPatternMatching()
     {
         using Observation result = ObservationKt.openBox("Oreo");
 
         string message = result switch
         {
+            Observation.Superposition => "Unknown - cat is in superposition",
             Observation.Alive a => $"Alive: {a.Cat!.Name}",
             Observation.Dead d => $"Dead: {d.Cause}",
             _ => throw new InvalidOperationException(),
         };
 
         Assert.Equal("Alive: Oreo", message);
+    }
+
+    [Fact]
+    public void Observation_Superposition_PatternMatching()
+    {
+        using Observation result = ObservationKt.peekBox();
+
+        string message = result switch
+        {
+            Observation.Superposition => "Cat is in superposition",
+            Observation.Alive a => $"Alive: {a.Cat!.Name}",
+            Observation.Dead d => $"Dead: {d.Cause}",
+            _ => throw new InvalidOperationException(),
+        };
+
+        Assert.Equal("Cat is in superposition", message);
     }
 }

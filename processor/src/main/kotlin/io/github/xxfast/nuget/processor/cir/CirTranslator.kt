@@ -52,6 +52,7 @@ class CirTranslator(
     enums: List<KSClassDeclaration> = emptyList(),
     interfaces: List<KSClassDeclaration> = emptyList(),
     sealedClasses: List<KSClassDeclaration> = emptyList(),
+    objects: List<KSClassDeclaration> = emptyList(),
   ): CirFile {
     val functionsByNamespaceAndFile: Map<Pair<String, String>, List<KSFunctionDeclaration>> = functions
       .groupBy { func ->
@@ -137,6 +138,19 @@ class CirTranslator(
         namespaces[index] = existing.copy(declarations = existing.declarations + cirSealedClass)
       } else {
         namespaces.add(CirNamespace(namespace, listOf(cirSealedClass)))
+      }
+    }
+
+    for (obj in objects) {
+      val namespace: String = mapPackageToNamespace(obj.packageName.asString())
+      val cirObject: CirObject = translateObject(obj)
+      val existing = namespaces.find { it.name == namespace }
+
+      if (existing != null) {
+        val index: Int = namespaces.indexOf(existing)
+        namespaces[index] = existing.copy(declarations = existing.declarations + cirObject)
+      } else {
+        namespaces.add(CirNamespace(namespace, listOf(cirObject)))
       }
     }
 
@@ -539,59 +553,65 @@ class CirTranslator(
         val subName: String = subclass.simpleName.asString()
         val subPrefix: String = "${prefix}_${subName.lowercase()}"
         val isDataClass: Boolean = subclass.modifiers.contains(Modifier.DATA)
+        val isDataObject: Boolean = isDataClass && subclass.classKind == com.google.devtools.ksp.symbol.ClassKind.OBJECT
 
-        val properties: List<CirProperty> = subclass.getAllProperties()
-          .filter { it.getVisibility() == Visibility.PUBLIC }
-          .map { prop ->
-            val propName: String = prop.simpleName.asString()
-            val propTypeResolved: KSType = prop.type.resolve()
-            val propType: String = propTypeResolved.declaration.simpleName.asString()
-            val isNullable: Boolean = propTypeResolved.isMarkedNullable
-            val csPropName: String = propName.replaceFirstChar { it.uppercase() }
+        val properties: List<CirProperty> = if (isDataObject) {
+          emptyList()
+        } else {
+          subclass.getAllProperties()
+            .filter { it.getVisibility() == Visibility.PUBLIC }
+            .map { prop ->
+              val propName: String = prop.simpleName.asString()
+              val propTypeResolved: KSType = prop.type.resolve()
+              val propType: String = propTypeResolved.declaration.simpleName.asString()
+              val isNullable: Boolean = propTypeResolved.isMarkedNullable
+              val csPropName: String = propName.replaceFirstChar { it.uppercase() }
 
-            val isEnumType: Boolean = (propTypeResolved.declaration as? KSClassDeclaration)
-              ?.classKind == com.google.devtools.ksp.symbol.ClassKind.ENUM_CLASS
+              val isEnumType: Boolean = (propTypeResolved.declaration as? KSClassDeclaration)
+                ?.classKind == com.google.devtools.ksp.symbol.ClassKind.ENUM_CLASS
 
-            val isObjectType: Boolean = propType !in KOTLIN_TO_CSHARP_RETURN && !isEnumType
+              val isObjectType: Boolean = propType !in KOTLIN_TO_CSHARP_RETURN && !isEnumType
 
-            val nativeReturnType: String = when {
-              isEnumType -> "int"
-              isObjectType -> "IntPtr"
-              else -> mapReturnType(propType)
+              val nativeReturnType: String = when {
+                isEnumType -> "int"
+                isObjectType -> "IntPtr"
+                else -> mapReturnType(propType)
+              }
+
+              val type: String = when {
+                propType == "String" -> "string"
+                isEnumType -> propType
+                isObjectType && isNullable -> "$propType?"
+                isObjectType -> propType
+                else -> mapReturnType(propType)
+              }
+
+              val getter: String = when {
+                propType == "String" -> "Marshal.PtrToStringUTF8(Native_Get_$propName(_handle))!"
+                isEnumType -> "($propType)Native_Get_$propName(_handle)"
+                isObjectType && isNullable -> "Native_Get_$propName(_handle) == IntPtr.Zero ? null : new $propType(Native_Get_$propName(_handle))"
+                isObjectType -> "new $propType(Native_Get_$propName(_handle))"
+                else -> "Native_Get_$propName(_handle)"
+              }
+
+              CirProperty(
+                name = csPropName,
+                type = type,
+                nativeReturnType = nativeReturnType,
+                nativeName = propName,
+                getter = getter,
+                setter = null,
+              )
             }
-
-            val type: String = when {
-              propType == "String" -> "string"
-              isEnumType -> propType
-              isObjectType && isNullable -> "$propType?"
-              isObjectType -> propType
-              else -> mapReturnType(propType)
-            }
-
-            val getter: String = when {
-              propType == "String" -> "Marshal.PtrToStringUTF8(Native_Get_$propName(_handle))!"
-              isEnumType -> "($propType)Native_Get_$propName(_handle)"
-              isObjectType && isNullable -> "Native_Get_$propName(_handle) == IntPtr.Zero ? null : new $propType(Native_Get_$propName(_handle))"
-              isObjectType -> "new $propType(Native_Get_$propName(_handle))"
-              else -> "Native_Get_$propName(_handle)"
-            }
-
-            CirProperty(
-              name = csPropName,
-              type = type,
-              nativeReturnType = nativeReturnType,
-              nativeName = propName,
-              getter = getter,
-              setter = null,
-            )
-          }
-          .toList()
+            .toList()
+        }
 
         CirSealedSubclass(
           name = subName,
           nativePrefix = subPrefix,
           properties = properties,
           isDataClass = isDataClass,
+          isDataObject = isDataObject,
         )
       }
       .toList()
@@ -601,6 +621,44 @@ class CirTranslator(
       libraryName = libraryName,
       nativePrefix = prefix,
       subclasses = subclasses,
+    )
+  }
+
+  private fun translateObject(obj: KSClassDeclaration): CirObject {
+    val name: String = obj.simpleName.asString()
+    val prefix: String = name.lowercase()
+
+    val methods: List<CirDllImport> = obj.getAllFunctions()
+      .filter { it.getVisibility() == Visibility.PUBLIC }
+      .filter { it.simpleName.asString() !in listOf("equals", "hashCode", "toString", "<init>") }
+      .map { method ->
+        val methodName: String = method.simpleName.asString()
+        val cname: String = toCName(methodName)
+        val returnType: KSType? = method.returnType?.resolve()
+        val kotlinReturnType: String = returnType?.declaration?.simpleName?.asString() ?: "Unit"
+
+        val params: List<CirParameter> = method.parameters.map { param ->
+          val kotlinType: String = param.type.resolve().declaration.simpleName.asString()
+          CirParameter(param.name?.asString() ?: "_", mapParamType(kotlinType))
+        }
+
+        val entryPoint: String = "${prefix}_${cname}"
+
+        CirDllImport(
+          libraryName = libraryName,
+          entryPoint = entryPoint,
+          returnType = mapReturnType(kotlinReturnType),
+          name = methodName,
+          parameters = params,
+        )
+      }
+      .toList()
+
+    return CirObject(
+      name = name,
+      libraryName = libraryName,
+      nativePrefix = prefix,
+      methods = methods,
     )
   }
 
