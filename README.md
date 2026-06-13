@@ -95,11 +95,15 @@ Gradle Plugin (Kotlin side)          NuGet Package            C# Consumer
 - [x] Research memory management on the bridge (see [ADR-003](docs/adr/003-memory-management-across-bridge.md))
 - [x] Map String parameters (C# `string` → Kotlin `String` via P/Invoke marshalling)
 - [x] Map String returns as proper `string` (hidden `IntPtr` + `Marshal.PtrToStringUTF8`)
-- [x] Map OOP constructs (classes → C# classes with `IDisposable`, StableRef + opaque pointer)
+- [x] Map classes → C# classes with `IDisposable`, StableRef + opaque pointer
 - [x] Refactor to CIR (C# Intermediate Representation) model (see [ADR-004](docs/adr/004-cir-intermediate-representation.md))
 - [x] Map object-typed properties/returns (see [ADR-005](docs/adr/005-object-return-semantics.md))
 - [x] Test cyclic reference disposal (verified wrappers are independent, dispose doesn't cascade)
+- [ ] Map enums
+- [ ] Map data classes
 - [ ] Map interfaces
+- [ ] Map abstract classes
+- [ ] Map sealed classes
 - [ ] Map Collections types
 - [ ] Map Generics
 
