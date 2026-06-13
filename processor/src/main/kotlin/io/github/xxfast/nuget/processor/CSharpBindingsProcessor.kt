@@ -236,6 +236,7 @@ class CSharpBindingsProcessor(
       val propTypeResolved: KSType = prop.type.resolve()
       val propType: String = propTypeResolved.declaration.qualifiedName?.asString() ?: "Any"
       val isNullable: Boolean = propTypeResolved.isMarkedNullable
+      val isMutable: Boolean = prop.isMutable
 
       val isPrimitiveType: Boolean = propType in setOf(
         "kotlin.String", "kotlin.Byte", "kotlin.UByte", "kotlin.Short",
@@ -256,6 +257,20 @@ class CSharpBindingsProcessor(
             )
             .build()
         )
+
+        if (isMutable) {
+          addFunction(
+            FunSpec.builder("export_${prefix}_set_$propName")
+              .addAnnotation(cNameAnnotation("${prefix}_set_$propName"))
+              .addParameter("handle", cOpaquePointer)
+              .addParameter("value", ClassName.bestGuess(propType))
+              .addStatement(
+                "handle.asStableRef<%L>().get().%L = value",
+                qualifiedName, propName,
+              )
+              .build()
+          )
+        }
       } else {
         val returnType: String = if (isNullable) "$cOpaquePointer?" else cOpaquePointer.toString()
 
@@ -275,6 +290,20 @@ class CSharpBindingsProcessor(
               )
               .build()
           )
+
+          if (isMutable) {
+            addFunction(
+              FunSpec.builder("export_${prefix}_set_$propName")
+                .addAnnotation(cNameAnnotation("${prefix}_set_$propName"))
+                .addParameter("handle", cOpaquePointer)
+                .addParameter("value", cOpaquePointer.copy(nullable = true))
+                .addStatement(
+                  "handle.asStableRef<%L>().get().%L = value?.asStableRef<%L>()?.get()",
+                  qualifiedName, propName, propType,
+                )
+                .build()
+            )
+          }
         } else {
           addFunction(
             FunSpec.builder("export_${prefix}_get_$propName")
@@ -287,6 +316,20 @@ class CSharpBindingsProcessor(
               )
               .build()
           )
+
+          if (isMutable) {
+            addFunction(
+              FunSpec.builder("export_${prefix}_set_$propName")
+                .addAnnotation(cNameAnnotation("${prefix}_set_$propName"))
+                .addParameter("handle", cOpaquePointer)
+                .addParameter("value", cOpaquePointer)
+                .addStatement(
+                  "handle.asStableRef<%L>().get().%L = value.asStableRef<%L>().get()",
+                  qualifiedName, propName, propType,
+                )
+                .build()
+            )
+          }
         }
       }
     }

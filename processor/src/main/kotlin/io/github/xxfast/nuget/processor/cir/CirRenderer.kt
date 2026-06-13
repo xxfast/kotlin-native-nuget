@@ -44,7 +44,7 @@ class CirRenderer {
 
     appendLine("    public class ${cls.name}$implements")
     appendLine("    {")
-    appendLine("        private IntPtr _handle;")
+    appendLine("        internal IntPtr _handle;")
     appendLine()
 
     if (cls.constructor != null) {
@@ -67,6 +67,12 @@ class CirRenderer {
       appendLine("        [DllImport(\"${cls.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"${cls.nativePrefix}_get_${prop.nativeName}\")]")
       appendLine("        private static extern ${prop.nativeReturnType} Native_Get_${prop.nativeName}(IntPtr handle);")
       appendLine()
+      if (prop.setter != null) {
+        val setterType: String = if (prop.nativeReturnType == "IntPtr") "IntPtr" else prop.type
+        appendLine("        [DllImport(\"${cls.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"${cls.nativePrefix}_set_${prop.nativeName}\")]")
+        appendLine("        private static extern void Native_Set_${prop.nativeName}(IntPtr handle, $setterType value);")
+        appendLine()
+      }
       renderProperty(prop)
     }
 
@@ -97,7 +103,15 @@ class CirRenderer {
   }
 
   private fun StringBuilder.renderProperty(prop: CirProperty) {
-    appendLine("        public ${prop.type} ${prop.name} => ${prop.getter};")
+    if (prop.setter == null) {
+      appendLine("        public ${prop.type} ${prop.name} => ${prop.getter};")
+    } else {
+      appendLine("        public ${prop.type} ${prop.name}")
+      appendLine("        {")
+      appendLine("            get => ${prop.getter};")
+      appendLine("            set => ${prop.setter};")
+      appendLine("        }")
+    }
     appendLine()
   }
 

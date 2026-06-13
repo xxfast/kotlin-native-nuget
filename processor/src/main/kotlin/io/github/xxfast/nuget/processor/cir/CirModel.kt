@@ -56,6 +56,7 @@ data class CirProperty(
   val nativeReturnType: String,
   val nativeName: String,
   val getter: String,
+  val setter: String? = null,
 ) : CirMember
 
 data class CirConstructor(

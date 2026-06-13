@@ -196,6 +196,7 @@ class CirTranslator(
         val propName: String = prop.simpleName.asString()
         val propType: String = prop.type.resolve().declaration.simpleName.asString()
         val isNullable: Boolean = prop.type.resolve().isMarkedNullable
+        val isMutable: Boolean = prop.isMutable
         val csPropName: String = propName.replaceFirstChar { it.uppercase() }
 
         val isObjectType: Boolean = propType !in KOTLIN_TO_CSHARP_RETURN
@@ -216,12 +217,22 @@ class CirTranslator(
           else -> "Native_Get_$propName(_handle)"
         }
 
+        val setter: String? = if (isMutable) {
+          when {
+            propType == "String" -> "Native_Set_$propName(_handle, value)"
+            isObjectType && isNullable -> "Native_Set_$propName(_handle, value?._handle ?? IntPtr.Zero)"
+            isObjectType -> "Native_Set_$propName(_handle, value._handle)"
+            else -> "Native_Set_$propName(_handle, value)"
+          }
+        } else null
+
         CirProperty(
           name = csPropName,
           type = type,
           nativeReturnType = nativeReturnType,
           nativeName = propName,
           getter = getter,
+          setter = setter,
         )
       }.toList()
 

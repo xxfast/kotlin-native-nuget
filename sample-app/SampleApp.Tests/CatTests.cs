@@ -70,36 +70,42 @@ public class CatTests
     [Fact]
     public void Cat_Brother_WhenSet_ReturnsWrapper()
     {
-        IntPtr handle = SampleLibraryNative.createBrothers("Oreo", "Mylo");
-        using var oreo = new Cat(handle);
+        using var oreo = new Cat("Oreo", 9);
+        using var mylo = new Cat("Mylo", 9);
 
-        using Cat? buddy = oreo.Brother;
-        Assert.NotNull(buddy);
-        Assert.Equal("Mylo", buddy!.Name);
+        oreo.Brother = mylo;
+
+        using Cat? brother = oreo.Brother;
+        Assert.NotNull(brother);
+        Assert.Equal("Mylo", brother!.Name);
     }
 
     [Fact]
     public void Cat_Brother_EachAccessReturnsNewWrapper()
     {
-        IntPtr handle = SampleLibraryNative.createBrothers("Oreo", "Mylo");
-        using var oreo = new Cat(handle);
+        using var oreo = new Cat("Oreo", 9);
+        using var mylo = new Cat("Mylo", 9);
 
-        using Cat? buddy1 = oreo.Brother;
-        using Cat? buddy2 = oreo.Brother;
+        oreo.Brother = mylo;
+
+        using Cat? brother1 = oreo.Brother;
+        using Cat? brother2 = oreo.Brother;
 
         // Per ADR-005: identity is NOT preserved (new wrapper each access)
-        Assert.NotSame(buddy1, buddy2);
-        Assert.Equal(buddy1!.Name, buddy2!.Name);
+        Assert.NotSame(brother1, brother2);
+        Assert.Equal(brother1!.Name, brother2!.Name);
     }
 
     [Fact]
-    public void Cat_Brother_DisposingBuddyDoesNotAffectOriginal()
+    public void Cat_Brother_DisposingBrotherDoesNotAffectOriginal()
     {
-        IntPtr handle = SampleLibraryNative.createBrothers("Oreo", "Mylo");
-        using var oreo = new Cat(handle);
+        using var oreo = new Cat("Oreo", 9);
+        using var mylo = new Cat("Mylo", 9);
 
-        Cat? buddy = oreo.Brother;
-        buddy!.Dispose();
+        oreo.Brother = mylo;
+
+        Cat? brother = oreo.Brother;
+        brother!.Dispose();
 
         // Oreo is still alive — disposing the brother wrapper only releases that one StableRef
         Assert.Equal("Oreo", oreo.Name);
@@ -108,17 +114,46 @@ public class CatTests
     [Fact]
     public void Cat_Brother_CyclicReference_BothCanBeDisposed()
     {
-        IntPtr handle = SampleLibraryNative.createBrothers("Oreo", "Mylo");
-        using var oreo = new Cat(handle);
+        using var oreo = new Cat("Oreo", 9);
+        using var mylo = new Cat("Mylo", 9);
 
-        using Cat? mylo = oreo.Brother;
-        Assert.NotNull(mylo);
+        oreo.Brother = mylo;
+        mylo.Brother = oreo;
 
-        // Mylo's brother is Oreo (cyclic reference on Kotlin side)
-        using Cat? mylosBrother = mylo!.Brother;
+        using Cat? oreosBrother = oreo.Brother;
+        Assert.NotNull(oreosBrother);
+        Assert.Equal("Mylo", oreosBrother!.Name);
+
+        // Mylo's brother is Oreo (cyclic reference)
+        using Cat? mylosBrother = mylo.Brother;
         Assert.NotNull(mylosBrother);
         Assert.Equal("Oreo", mylosBrother!.Name);
 
         // All wrappers can be independently disposed without crashes
+    }
+
+    [Fact]
+    public void Cat_Brother_CanBeSet()
+    {
+        using var oreo = new Cat("Oreo", 9);
+        using var mylo = new Cat("Mylo", 9);
+
+        oreo.Brother = mylo;
+
+        using Cat? brother = oreo.Brother;
+        Assert.NotNull(brother);
+        Assert.Equal("Mylo", brother!.Name);
+    }
+
+    [Fact]
+    public void Cat_Brother_CanBeSetToNull()
+    {
+        using var oreo = new Cat("Oreo", 9);
+        using var mylo = new Cat("Mylo", 9);
+
+        oreo.Brother = mylo;
+        oreo.Brother = null;
+
+        Assert.Null(oreo.Brother);
     }
 }
