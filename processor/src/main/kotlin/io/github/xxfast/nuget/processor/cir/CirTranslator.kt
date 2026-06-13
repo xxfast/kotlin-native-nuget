@@ -451,7 +451,7 @@ class CirTranslator(
           type = "T",
           nativeReturnType = "IntPtr",
           nativeName = propName,
-          getter = "NugetMarshal.FromHandle<T>(Native_Get_$propName(_handle))",
+          getter = "NugetMarshal.FromHandle<T>(${name}Native.Get_$propName(_handle))",
           setter = null,
         )
       }
@@ -463,6 +463,7 @@ class CirTranslator(
       libraryName = libraryName,
       nativePrefix = prefix,
       properties = properties,
+      hasPublicConstructor = true,
     )
   }
 

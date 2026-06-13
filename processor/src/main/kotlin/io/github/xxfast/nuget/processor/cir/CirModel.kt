@@ -85,6 +85,7 @@ data class CirGenericClass(
   val nativePrefix: String,
   val properties: List<CirProperty>,
   val disposable: Boolean = true,
+  val hasPublicConstructor: Boolean = true,
 ) : CirDeclaration
 
 data class CirMarshalHelper(

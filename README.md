@@ -158,7 +158,7 @@ Gradle Plugin (Kotlin side)          NuGet Package       C# Consumer
   - [x] Generic classes with type-erased bridge + generic C# class
   - [x] NugetMarshal helper for type dispatch
   - [x] Primitive type argument variants (Int, String, etc.)
-- [ ] Generic class constructors (pass typed arguments through the bridge)
+- [x] Generic class constructors (pass typed arguments through the bridge)
 - [ ] Map Generic functions (monomorphization per observed usage)
 - [ ] Map Collections types
   - [ ] `List<T>` → `IReadOnlyList<T>` (opaque handle + count, get)

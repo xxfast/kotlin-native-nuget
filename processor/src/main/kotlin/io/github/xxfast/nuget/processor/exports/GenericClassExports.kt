@@ -17,6 +17,36 @@ internal fun FileSpec.Builder.addGenericClassExports(cls: KSClassDeclaration) {
   val prefix: String = name.lowercase()
 
   addFunction(
+    FunSpec.builder("export_${prefix}_create_string")
+      .addAnnotation(cNameAnnotation("${prefix}_create_string"))
+      .addParameter("value", String::class)
+      .returns(cOpaquePointer)
+      .addStatement("return %T.create(%L(value)).asCPointer()", stableRef, qualifiedName)
+      .build()
+  )
+
+  addFunction(
+    FunSpec.builder("export_${prefix}_create_int")
+      .addAnnotation(cNameAnnotation("${prefix}_create_int"))
+      .addParameter("value", Int::class)
+      .returns(cOpaquePointer)
+      .addStatement("return %T.create(%L(value)).asCPointer()", stableRef, qualifiedName)
+      .build()
+  )
+
+  addFunction(
+    FunSpec.builder("export_${prefix}_create_object")
+      .addAnnotation(cNameAnnotation("${prefix}_create_object"))
+      .addParameter("value", cOpaquePointer)
+      .returns(cOpaquePointer)
+      .addStatement(
+        "return %T.create(%L(value.asStableRef<Any>().get())).asCPointer()",
+        stableRef, qualifiedName,
+      )
+      .build()
+  )
+
+  addFunction(
     FunSpec.builder("export_${prefix}_dispose")
       .addAnnotation(cNameAnnotation("${prefix}_dispose"))
       .addParameter("handle", cOpaquePointer)

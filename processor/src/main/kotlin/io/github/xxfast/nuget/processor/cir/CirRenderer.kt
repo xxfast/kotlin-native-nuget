@@ -46,6 +46,15 @@ class CirRenderer {
     appendLine("        [DllImport(\"${helper.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"nuget_dispose\")]")
     appendLine("        private static extern void Native_dispose(IntPtr handle);")
     appendLine()
+    appendLine("        [DllImport(\"${helper.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"box_create_string\")]")
+    appendLine("        private static extern IntPtr box_create_string(string value);")
+    appendLine()
+    appendLine("        [DllImport(\"${helper.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"box_create_int\")]")
+    appendLine("        private static extern IntPtr box_create_int(int value);")
+    appendLine()
+    appendLine("        [DllImport(\"${helper.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"box_create_object\")]")
+    appendLine("        private static extern IntPtr box_create_object(IntPtr value);")
+    appendLine()
     appendLine("        public static T FromHandle<T>(IntPtr handle)")
     appendLine("        {")
     appendLine("            if (handle == IntPtr.Zero) return default!;")
@@ -65,6 +74,16 @@ class CirRenderer {
     appendLine("            return (T)Activator.CreateInstance(typeof(T),")
     appendLine("                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Public,")
     appendLine("                null, new object[] { handle }, null)!;")
+    appendLine("        }")
+    appendLine()
+    appendLine("        public static IntPtr CreateBox<T>(T value)")
+    appendLine("        {")
+    appendLine("            if (typeof(T) == typeof(string)) return box_create_string((string)(object)value!);")
+    appendLine("            if (typeof(T) == typeof(int)) return box_create_int((int)(object)value!);")
+    appendLine("            var field = typeof(T).GetField(\"_handle\",")
+    appendLine("                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Public);")
+    appendLine("            if (field != null) return box_create_object((IntPtr)field.GetValue(value)!);")
+    appendLine("            throw new NotSupportedException($\"Cannot create Box<{typeof(T).Name}>\");")
     appendLine("        }")
     appendLine("    }")
     appendLine()
@@ -93,6 +112,15 @@ class CirRenderer {
     appendLine("    {")
     appendLine("        internal IntPtr _handle;")
     appendLine()
+
+    if (cls.hasPublicConstructor) {
+      appendLine("        public ${cls.name}(${cls.typeParameters[0]} value)")
+      appendLine("        {")
+      appendLine("            _handle = NugetMarshal.CreateBox<${cls.typeParameters[0]}>(value);")
+      appendLine("        }")
+      appendLine()
+    }
+
     appendLine("        internal ${cls.name}(IntPtr handle)")
     appendLine("        {")
     appendLine("            _handle = handle;")
@@ -100,7 +128,7 @@ class CirRenderer {
     appendLine()
 
     for (prop in cls.properties) {
-      appendLine("        public ${prop.type} ${prop.name} => NugetMarshal.FromHandle<${prop.type}>(${cls.name}Native.Get_${prop.nativeName}(_handle));")
+      appendLine("        public ${prop.type} ${prop.name} => ${prop.getter};")
       appendLine()
     }
 
