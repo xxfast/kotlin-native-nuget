@@ -56,6 +56,48 @@ public class GenericTests
     }
 
     [Fact]
+    public void Box_Byte_ConstructorAndGetter()
+    {
+        using var box = new Box<sbyte>(42);
+        Assert.Equal((sbyte)42, box.Value);
+    }
+
+    [Fact]
+    public void Box_UByte_ConstructorAndGetter()
+    {
+        using var box = new Box<byte>(255);
+        Assert.Equal((byte)255, box.Value);
+    }
+
+    [Fact]
+    public void Box_Short_ConstructorAndGetter()
+    {
+        using var box = new Box<short>(1024);
+        Assert.Equal((short)1024, box.Value);
+    }
+
+    [Fact]
+    public void Box_UShort_ConstructorAndGetter()
+    {
+        using var box = new Box<ushort>(65535);
+        Assert.Equal((ushort)65535, box.Value);
+    }
+
+    [Fact]
+    public void Box_UInt_ConstructorAndGetter()
+    {
+        using var box = new Box<uint>(4294967295u);
+        Assert.Equal(4294967295u, box.Value);
+    }
+
+    [Fact]
+    public void Box_ULong_ConstructorAndGetter()
+    {
+        using var box = new Box<ulong>(18446744073709551615UL);
+        Assert.Equal(18446744073709551615UL, box.Value);
+    }
+
+    [Fact]
     public void Box_IsGenericType()
     {
         using var box = new Box<string>("test");

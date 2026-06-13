@@ -30,8 +30,14 @@ internal fun FileSpec.Builder.addGenericFunctionExports(func: KSFunctionDeclarat
 
   val primitiveTypes = listOf(
     "string" to "String",
+    "byte" to "Byte",
+    "ubyte" to "UByte",
+    "short" to "Short",
+    "ushort" to "UShort",
     "int" to "Int",
+    "uint" to "UInt",
     "long" to "Long",
+    "ulong" to "ULong",
     "float" to "Float",
     "double" to "Double",
     "bool" to "Boolean",
@@ -92,8 +98,14 @@ internal fun FileSpec.Builder.addGenericFunctionExports(func: KSFunctionDeclarat
 
 private fun kotlinTypeClass(kotlinType: String): KClass<*> = when (kotlinType) {
   "String" -> String::class
+  "Byte" -> Byte::class
+  "UByte" -> UByte::class
+  "Short" -> Short::class
+  "UShort" -> UShort::class
   "Int" -> Int::class
+  "UInt" -> UInt::class
   "Long" -> Long::class
+  "ULong" -> ULong::class
   "Float" -> Float::class
   "Double" -> Double::class
   "Boolean" -> Boolean::class

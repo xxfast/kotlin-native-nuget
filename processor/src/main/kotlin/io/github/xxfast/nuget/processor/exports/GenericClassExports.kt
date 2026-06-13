@@ -26,6 +26,42 @@ internal fun FileSpec.Builder.addGenericClassExports(cls: KSClassDeclaration) {
   )
 
   addFunction(
+    FunSpec.builder("export_${prefix}_create_byte")
+      .addAnnotation(cNameAnnotation("${prefix}_create_byte"))
+      .addParameter("value", Byte::class)
+      .returns(cOpaquePointer)
+      .addStatement("return %T.create(%L(value)).asCPointer()", stableRef, qualifiedName)
+      .build()
+  )
+
+  addFunction(
+    FunSpec.builder("export_${prefix}_create_ubyte")
+      .addAnnotation(cNameAnnotation("${prefix}_create_ubyte"))
+      .addParameter("value", UByte::class)
+      .returns(cOpaquePointer)
+      .addStatement("return %T.create(%L(value)).asCPointer()", stableRef, qualifiedName)
+      .build()
+  )
+
+  addFunction(
+    FunSpec.builder("export_${prefix}_create_short")
+      .addAnnotation(cNameAnnotation("${prefix}_create_short"))
+      .addParameter("value", Short::class)
+      .returns(cOpaquePointer)
+      .addStatement("return %T.create(%L(value)).asCPointer()", stableRef, qualifiedName)
+      .build()
+  )
+
+  addFunction(
+    FunSpec.builder("export_${prefix}_create_ushort")
+      .addAnnotation(cNameAnnotation("${prefix}_create_ushort"))
+      .addParameter("value", UShort::class)
+      .returns(cOpaquePointer)
+      .addStatement("return %T.create(%L(value)).asCPointer()", stableRef, qualifiedName)
+      .build()
+  )
+
+  addFunction(
     FunSpec.builder("export_${prefix}_create_int")
       .addAnnotation(cNameAnnotation("${prefix}_create_int"))
       .addParameter("value", Int::class)
@@ -35,9 +71,27 @@ internal fun FileSpec.Builder.addGenericClassExports(cls: KSClassDeclaration) {
   )
 
   addFunction(
+    FunSpec.builder("export_${prefix}_create_uint")
+      .addAnnotation(cNameAnnotation("${prefix}_create_uint"))
+      .addParameter("value", UInt::class)
+      .returns(cOpaquePointer)
+      .addStatement("return %T.create(%L(value)).asCPointer()", stableRef, qualifiedName)
+      .build()
+  )
+
+  addFunction(
     FunSpec.builder("export_${prefix}_create_long")
       .addAnnotation(cNameAnnotation("${prefix}_create_long"))
       .addParameter("value", Long::class)
+      .returns(cOpaquePointer)
+      .addStatement("return %T.create(%L(value)).asCPointer()", stableRef, qualifiedName)
+      .build()
+  )
+
+  addFunction(
+    FunSpec.builder("export_${prefix}_create_ulong")
+      .addAnnotation(cNameAnnotation("${prefix}_create_ulong"))
+      .addParameter("value", ULong::class)
       .returns(cOpaquePointer)
       .addStatement("return %T.create(%L(value)).asCPointer()", stableRef, qualifiedName)
       .build()
@@ -122,6 +176,42 @@ internal fun FileSpec.Builder.addNugetHelperExports() {
   )
 
   addFunction(
+    FunSpec.builder("export_nuget_unwrap_byte")
+      .addAnnotation(cNameAnnotation("nuget_unwrap_byte"))
+      .addParameter("handle", cOpaquePointer)
+      .returns(Byte::class)
+      .addStatement("return handle.asStableRef<Any>().get() as Byte")
+      .build()
+  )
+
+  addFunction(
+    FunSpec.builder("export_nuget_unwrap_ubyte")
+      .addAnnotation(cNameAnnotation("nuget_unwrap_ubyte"))
+      .addParameter("handle", cOpaquePointer)
+      .returns(UByte::class)
+      .addStatement("return handle.asStableRef<Any>().get() as UByte")
+      .build()
+  )
+
+  addFunction(
+    FunSpec.builder("export_nuget_unwrap_short")
+      .addAnnotation(cNameAnnotation("nuget_unwrap_short"))
+      .addParameter("handle", cOpaquePointer)
+      .returns(Short::class)
+      .addStatement("return handle.asStableRef<Any>().get() as Short")
+      .build()
+  )
+
+  addFunction(
+    FunSpec.builder("export_nuget_unwrap_ushort")
+      .addAnnotation(cNameAnnotation("nuget_unwrap_ushort"))
+      .addParameter("handle", cOpaquePointer)
+      .returns(UShort::class)
+      .addStatement("return handle.asStableRef<Any>().get() as UShort")
+      .build()
+  )
+
+  addFunction(
     FunSpec.builder("export_nuget_unwrap_int")
       .addAnnotation(cNameAnnotation("nuget_unwrap_int"))
       .addParameter("handle", cOpaquePointer)
@@ -131,11 +221,29 @@ internal fun FileSpec.Builder.addNugetHelperExports() {
   )
 
   addFunction(
+    FunSpec.builder("export_nuget_unwrap_uint")
+      .addAnnotation(cNameAnnotation("nuget_unwrap_uint"))
+      .addParameter("handle", cOpaquePointer)
+      .returns(UInt::class)
+      .addStatement("return handle.asStableRef<Any>().get() as UInt")
+      .build()
+  )
+
+  addFunction(
     FunSpec.builder("export_nuget_unwrap_long")
       .addAnnotation(cNameAnnotation("nuget_unwrap_long"))
       .addParameter("handle", cOpaquePointer)
       .returns(Long::class)
       .addStatement("return handle.asStableRef<Any>().get() as Long")
+      .build()
+  )
+
+  addFunction(
+    FunSpec.builder("export_nuget_unwrap_ulong")
+      .addAnnotation(cNameAnnotation("nuget_unwrap_ulong"))
+      .addParameter("handle", cOpaquePointer)
+      .returns(ULong::class)
+      .addStatement("return handle.asStableRef<Any>().get() as ULong")
       .build()
   )
 
