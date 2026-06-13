@@ -24,6 +24,8 @@ import io.github.xxfast.nuget.processor.cir.CirTranslator
 import io.github.xxfast.nuget.processor.exports.addClassExports
 import io.github.xxfast.nuget.processor.exports.addEnumExports
 import io.github.xxfast.nuget.processor.exports.addFunctionExports
+import io.github.xxfast.nuget.processor.exports.addGenericClassExports
+import io.github.xxfast.nuget.processor.exports.addNugetHelperExports
 import io.github.xxfast.nuget.processor.exports.addObjectExports
 import io.github.xxfast.nuget.processor.exports.addSealedClassExports
 
@@ -58,12 +60,15 @@ class NugetProcessor(
       .filter { it.getVisibility() == Visibility.PUBLIC }
       .filter { it.parentDeclaration == null }
 
-    val classes: List<KSClassDeclaration> = allDeclarations
+    val allClasses: List<KSClassDeclaration> = allDeclarations
       .filterIsInstance<KSClassDeclaration>()
       .filter { it.getVisibility() == Visibility.PUBLIC }
       .filter { it.classKind == ClassKind.CLASS }
       .filter { it.parentDeclaration == null }
       .filter { !it.modifiers.contains(Modifier.SEALED) }
+
+    val classes: List<KSClassDeclaration> = allClasses.filter { it.typeParameters.isEmpty() }
+    val genericClasses: List<KSClassDeclaration> = allClasses.filter { it.typeParameters.isNotEmpty() }
 
     val sealedClasses: List<KSClassDeclaration> = allDeclarations
       .filterIsInstance<KSClassDeclaration>()
@@ -90,10 +95,11 @@ class NugetProcessor(
       .filter { it.classKind == ClassKind.INTERFACE }
       .filter { it.parentDeclaration == null }
 
-    if (functions.isEmpty() && classes.isEmpty() && enums.isEmpty() && interfaces.isEmpty() && sealedClasses.isEmpty() && objects.isEmpty()) return emptyList()
+    if (functions.isEmpty() && classes.isEmpty() && genericClasses.isEmpty() && enums.isEmpty() && interfaces.isEmpty() && sealedClasses.isEmpty() && objects.isEmpty()) return emptyList()
 
     val sources: Array<KSFile> = (functions.mapNotNull { it.containingFile } +
       classes.mapNotNull { it.containingFile } +
+      genericClasses.mapNotNull { it.containingFile } +
       enums.mapNotNull { it.containingFile } +
       interfaces.mapNotNull { it.containingFile } +
       sealedClasses.mapNotNull { it.containingFile } +
@@ -101,12 +107,13 @@ class NugetProcessor(
 
     val deps = Dependencies(aggregating = true, *sources)
 
-    generateCNameWrappers(functions, classes, enums, sealedClasses, objects, deps)
-    generateCSharpBindings(functions, classes, enums, interfaces, sealedClasses, objects, deps)
+    generateCNameWrappers(functions, classes, genericClasses, enums, sealedClasses, objects, deps)
+    generateCSharpBindings(functions, allClasses, enums, interfaces, sealedClasses, objects, deps)
 
     logger.info(
       "Generated bindings for ${functions.size} functions" +
         ", ${classes.size} classes" +
+        ", ${genericClasses.size} generic classes" +
         ", ${enums.size} enums" +
         ", ${interfaces.size} interfaces" +
         ", ${sealedClasses.size} sealed classes" +
@@ -141,6 +148,7 @@ class NugetProcessor(
   private fun generateCNameWrappers(
     functions: List<KSFunctionDeclaration>,
     classes: List<KSClassDeclaration>,
+    genericClasses: List<KSClassDeclaration>,
     enums: List<KSClassDeclaration>,
     sealedClasses: List<KSClassDeclaration>,
     objects: List<KSClassDeclaration>,
@@ -165,9 +173,14 @@ class NugetProcessor(
         }
 
         classes.forEach { addClassExports(it) }
+        genericClasses.forEach { addGenericClassExports(it) }
         enums.forEach { addEnumExports(it) }
         sealedClasses.forEach { addSealedClassExports(it) }
         objects.forEach { addObjectExports(it) }
+
+        if (genericClasses.isNotEmpty()) {
+          addNugetHelperExports()
+        }
       }
       .build()
 

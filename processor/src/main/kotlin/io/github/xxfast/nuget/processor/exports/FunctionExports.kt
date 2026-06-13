@@ -28,8 +28,10 @@ internal fun FileSpec.Builder.addFunctionExports(func: KSFunctionDeclaration) {
     it.name?.asString() ?: "_"
   }
 
-  val isSealedReturnType: Boolean = (returnType?.declaration as? KSClassDeclaration)
-    ?.modifiers?.contains(Modifier.SEALED) == true
+  val returnDecl: KSClassDeclaration? = returnType?.declaration as? KSClassDeclaration
+  val isSealedReturnType: Boolean = returnDecl?.modifiers?.contains(Modifier.SEALED) == true
+  val isGenericReturnType: Boolean = returnDecl?.typeParameters?.isNotEmpty() == true &&
+    returnType.arguments.isNotEmpty()
 
   if (isNullable) {
     addFunction(
@@ -56,7 +58,7 @@ internal fun FileSpec.Builder.addFunctionExports(func: KSFunctionDeclaration) {
     return
   }
 
-  if (isSealedReturnType) {
+  if (isGenericReturnType || isSealedReturnType) {
     addFunction(
       FunSpec.builder("export_$cname")
         .addAnnotation(cNameAnnotation(cname))

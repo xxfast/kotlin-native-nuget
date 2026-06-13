@@ -54,6 +54,8 @@ class CirTranslator(
     sealedClasses: List<KSClassDeclaration> = emptyList(),
     objects: List<KSClassDeclaration> = emptyList(),
   ): CirFile {
+    val (genericClasses, regularClasses) = classes.partition { it.typeParameters.isNotEmpty() }
+
     val functionsByNamespaceAndFile: Map<Pair<String, String>, List<KSFunctionDeclaration>> = functions
       .groupBy { func ->
         val namespace: String = mapPackageToNamespace(func.packageName.asString())
@@ -62,6 +64,7 @@ class CirTranslator(
       }
 
     val namespaces: MutableList<CirNamespace> = mutableListOf()
+    var needsMarshalHelper: Boolean = false
 
     for ((key, funcs) in functionsByNamespaceAndFile) {
       val (namespace, fileClassName) = key
@@ -89,7 +92,7 @@ class CirTranslator(
       }
     }
 
-    for (cls in classes) {
+    for (cls in regularClasses) {
       val namespace: String = mapPackageToNamespace(cls.packageName.asString())
       val cirClass: CirClass = translateClass(cls)
       val existing = namespaces.find { it.name == namespace }
@@ -99,6 +102,20 @@ class CirTranslator(
         namespaces[index] = existing.copy(declarations = existing.declarations + cirClass)
       } else {
         namespaces.add(CirNamespace(namespace, listOf(cirClass)))
+      }
+    }
+
+    for (cls in genericClasses) {
+      val namespace: String = mapPackageToNamespace(cls.packageName.asString())
+      val cirGenericClass: CirGenericClass = translateGenericClass(cls)
+      val existing = namespaces.find { it.name == namespace }
+      needsMarshalHelper = true
+
+      if (existing != null) {
+        val index: Int = namespaces.indexOf(existing)
+        namespaces[index] = existing.copy(declarations = existing.declarations + cirGenericClass)
+      } else {
+        namespaces.add(CirNamespace(namespace, listOf(cirGenericClass)))
       }
     }
 
@@ -154,6 +171,19 @@ class CirTranslator(
       }
     }
 
+    if (needsMarshalHelper) {
+      val firstNamespace: CirNamespace = namespaces.firstOrNull() ?: CirNamespace(rootNamespace, emptyList())
+      val idx: Int = namespaces.indexOfFirst { it.name == firstNamespace.name }
+
+      if (idx >= 0) {
+        namespaces[idx] = firstNamespace.copy(
+          declarations = listOf(CirMarshalHelper(libraryName)) + firstNamespace.declarations,
+        )
+      } else {
+        namespaces.add(0, CirNamespace(rootNamespace, listOf(CirMarshalHelper(libraryName))))
+      }
+    }
+
     return CirFile(namespaces = namespaces)
   }
 
@@ -175,8 +205,42 @@ class CirTranslator(
       return translateNullableFunction(cname, csName, kotlinReturnType, params, func)
     }
 
-    val isSealedReturnType: Boolean = (returnType?.declaration as? KSClassDeclaration)
-      ?.modifiers?.contains(Modifier.SEALED) == true
+    val returnDecl: KSClassDeclaration? = returnType?.declaration as? KSClassDeclaration
+    val isGenericReturnType: Boolean = returnDecl?.typeParameters?.isNotEmpty() == true &&
+      returnType.arguments.isNotEmpty()
+
+    if (isGenericReturnType) {
+      val typeArgs: String = returnType.arguments.joinToString(", ") { arg ->
+        val argType: String = arg.type?.resolve()?.declaration?.simpleName?.asString() ?: "object"
+        when (argType) {
+          "String" -> "string"
+          "Int" -> "int"
+          else -> argType
+        }
+      }
+
+      val nativeImport = CirDllImport(
+        libraryName = libraryName,
+        entryPoint = cname,
+        returnType = "IntPtr",
+        name = "${csName}_native",
+        parameters = params,
+        visibility = CirVisibility.PRIVATE,
+      )
+
+      val paramNames: String = params.joinToString(", ") { it.name }
+      val wrapper = CirMethod(
+        name = csName,
+        returnType = "$kotlinReturnType<$typeArgs>",
+        parameters = params,
+        body = "new $kotlinReturnType<$typeArgs>(${csName}_native($paramNames))",
+        isStatic = true,
+      )
+
+      return listOf(nativeImport, wrapper)
+    }
+
+    val isSealedReturnType: Boolean = returnDecl?.modifiers?.contains(Modifier.SEALED) == true
 
     if (isSealedReturnType) {
       val nativeImport = CirDllImport(
@@ -369,6 +433,37 @@ class CirTranslator(
       .toList()
 
     return CirEnum(name, entries, properties)
+  }
+
+  private fun translateGenericClass(cls: KSClassDeclaration): CirGenericClass {
+    val name: String = cls.simpleName.asString()
+    val prefix: String = name.lowercase()
+    val typeParams: List<String> = cls.typeParameters.map { it.name.asString() }
+
+    val properties: List<CirProperty> = cls.getAllProperties()
+      .filter { it.getVisibility() == Visibility.PUBLIC }
+      .map { prop ->
+        val propName: String = prop.simpleName.asString()
+        val csPropName: String = propName.replaceFirstChar { it.uppercase() }
+
+        CirProperty(
+          name = csPropName,
+          type = "T",
+          nativeReturnType = "IntPtr",
+          nativeName = propName,
+          getter = "NugetMarshal.FromHandle<T>(Native_Get_$propName(_handle))",
+          setter = null,
+        )
+      }
+      .toList()
+
+    return CirGenericClass(
+      name = name,
+      typeParameters = typeParams,
+      libraryName = libraryName,
+      nativePrefix = prefix,
+      properties = properties,
+    )
   }
 
   private fun translateClass(cls: KSClassDeclaration): CirClass {

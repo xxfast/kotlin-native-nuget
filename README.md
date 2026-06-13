@@ -154,7 +154,12 @@ Gradle Plugin (Kotlin side)          NuGet Package       C# Consumer
 - [x] Map abstract classes (C# `abstract class`, `_handle` inherited by subclasses)
 - [x] Map sealed classes (see [ADR-009](docs/adr/009-sealed-class-mapping.md))
 - [x] Map object (→ static class) / data object in sealed classes (→ sealed subclass with ToString)
-- [ ] Map Generics
+- [x] Map Generics (see [ADR-010](docs/adr/010-generics-mapping.md))
+  - [x] Generic classes with type-erased bridge + generic C# class
+  - [x] NugetMarshal helper for type dispatch
+  - [x] Primitive type argument variants (Int, String, etc.)
+- [ ] Generic class constructors (pass typed arguments through the bridge)
+- [ ] Map Generic functions (monomorphization per observed usage)
 - [ ] Map Collections types
   - [ ] `List<T>` → `IReadOnlyList<T>` (opaque handle + count, get)
   - [ ] `MutableList<T>` → `IList<T>` (add, removeAt, set)

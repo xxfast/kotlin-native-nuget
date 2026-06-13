@@ -78,6 +78,19 @@ data class CirObject(
   val methods: List<CirDllImport>,
 ) : CirDeclaration
 
+data class CirGenericClass(
+  val name: String,
+  val typeParameters: List<String>,
+  val libraryName: String,
+  val nativePrefix: String,
+  val properties: List<CirProperty>,
+  val disposable: Boolean = true,
+) : CirDeclaration
+
+data class CirMarshalHelper(
+  val libraryName: String,
+) : CirDeclaration
+
 data class CirEnumEntry(
   val name: String,
   val ordinal: Int,

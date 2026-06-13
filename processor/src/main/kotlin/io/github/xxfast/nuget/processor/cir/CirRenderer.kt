@@ -19,9 +19,11 @@ class CirRenderer {
 
     for (declaration in namespace.declarations) {
       when (declaration) {
+        is CirMarshalHelper -> renderMarshalHelper(declaration)
         is CirStaticClass -> renderStaticClass(declaration)
         is CirInterface -> renderInterface(declaration)
         is CirClass -> renderClass(declaration)
+        is CirGenericClass -> renderGenericClass(declaration)
         is CirEnum -> renderEnum(declaration)
         is CirSealedClass -> renderSealedClass(declaration)
         is CirObject -> renderObject(declaration)
@@ -30,6 +32,90 @@ class CirRenderer {
 
     appendLine("}")
     appendLine()
+  }
+
+  private fun StringBuilder.renderMarshalHelper(helper: CirMarshalHelper) {
+    appendLine("    internal static class NugetMarshal")
+    appendLine("    {")
+    appendLine("        [DllImport(\"${helper.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"nuget_unwrap_string\")]")
+    appendLine("        private static extern IntPtr Native_unwrap_string(IntPtr handle);")
+    appendLine()
+    appendLine("        [DllImport(\"${helper.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"nuget_unwrap_int\")]")
+    appendLine("        private static extern int Native_unwrap_int(IntPtr handle);")
+    appendLine()
+    appendLine("        [DllImport(\"${helper.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"nuget_dispose\")]")
+    appendLine("        private static extern void Native_dispose(IntPtr handle);")
+    appendLine()
+    appendLine("        public static T FromHandle<T>(IntPtr handle)")
+    appendLine("        {")
+    appendLine("            if (handle == IntPtr.Zero) return default!;")
+    appendLine("            if (typeof(T) == typeof(string))")
+    appendLine("            {")
+    appendLine("                IntPtr strPtr = Native_unwrap_string(handle);")
+    appendLine("                string result = Marshal.PtrToStringUTF8(strPtr)!;")
+    appendLine("                Native_dispose(handle);")
+    appendLine("                return (T)(object)result;")
+    appendLine("            }")
+    appendLine("            if (typeof(T) == typeof(int))")
+    appendLine("            {")
+    appendLine("                int result = Native_unwrap_int(handle);")
+    appendLine("                Native_dispose(handle);")
+    appendLine("                return (T)(object)result;")
+    appendLine("            }")
+    appendLine("            return (T)Activator.CreateInstance(typeof(T),")
+    appendLine("                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Public,")
+    appendLine("                null, new object[] { handle }, null)!;")
+    appendLine("        }")
+    appendLine("    }")
+    appendLine()
+  }
+
+  private fun StringBuilder.renderGenericClass(cls: CirGenericClass) {
+    val typeParams: String = cls.typeParameters.joinToString(", ")
+
+    appendLine("    internal static class ${cls.name}Native")
+    appendLine("    {")
+
+    for (prop in cls.properties) {
+      appendLine("        [DllImport(\"${cls.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"${cls.nativePrefix}_get_${prop.nativeName}\")]")
+      appendLine("        internal static extern ${prop.nativeReturnType} Get_${prop.nativeName}(IntPtr handle);")
+      appendLine()
+    }
+
+    if (cls.disposable) {
+      appendLine("        [DllImport(\"${cls.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"${cls.nativePrefix}_dispose\")]")
+      appendLine("        internal static extern void Dispose(IntPtr handle);")
+    }
+
+    appendLine("    }")
+    appendLine()
+    appendLine("    public class ${cls.name}<$typeParams> : IDisposable")
+    appendLine("    {")
+    appendLine("        internal IntPtr _handle;")
+    appendLine()
+    appendLine("        internal ${cls.name}(IntPtr handle)")
+    appendLine("        {")
+    appendLine("            _handle = handle;")
+    appendLine("        }")
+    appendLine()
+
+    for (prop in cls.properties) {
+      appendLine("        public ${prop.type} ${prop.name} => NugetMarshal.FromHandle<${prop.type}>(${cls.name}Native.Get_${prop.nativeName}(_handle));")
+      appendLine()
+    }
+
+    if (cls.disposable) {
+      appendLine("        public void Dispose()")
+      appendLine("        {")
+      appendLine("            if (_handle != IntPtr.Zero)")
+      appendLine("            {")
+      appendLine("                ${cls.name}Native.Dispose(_handle);")
+      appendLine("                _handle = IntPtr.Zero;")
+      appendLine("            }")
+      appendLine("        }")
+    }
+
+    appendLine("    }")
   }
 
   private fun StringBuilder.renderInterface(iface: CirInterface) {
