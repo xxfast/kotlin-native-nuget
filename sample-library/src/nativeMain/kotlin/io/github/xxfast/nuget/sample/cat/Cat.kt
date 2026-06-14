@@ -6,6 +6,8 @@ class Cat(
 ) : Animal(name) {
   var brother: Cat? = null
   var mood: Mood = Mood.SLEEPY
+  val nicknames: List<String> = listOf("${name}y", "Little $name")
+  val toys: List<Toy> = listOf(Toy("Mouse", "Gray"), Toy("Ball", "Red"))
 
   override fun speak(): String = "Meow! My name is $name"
 

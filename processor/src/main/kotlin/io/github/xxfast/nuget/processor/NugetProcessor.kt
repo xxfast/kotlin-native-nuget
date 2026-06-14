@@ -27,6 +27,7 @@ import io.github.xxfast.nuget.processor.exports.addFunctionExports
 import io.github.xxfast.nuget.processor.exports.addGenericClassExports
 import io.github.xxfast.nuget.processor.exports.addGenericFunctionExports
 import io.github.xxfast.nuget.processor.exports.addNugetHelperExports
+import io.github.xxfast.nuget.processor.exports.addNugetListHelperExports
 import io.github.xxfast.nuget.processor.exports.addObjectExports
 import io.github.xxfast.nuget.processor.exports.addSealedClassExports
 
@@ -191,8 +192,26 @@ class NugetProcessor(
         sealedClasses.forEach { addSealedClassExports(it) }
         objects.forEach { addObjectExports(it) }
 
-        if (genericClasses.isNotEmpty()) {
+        val needsListSupport: Boolean = (classes + genericClasses).any { cls ->
+          cls.getAllProperties().any { prop ->
+            prop.type.resolve().declaration.qualifiedName?.asString() == "kotlin.collections.List"
+          }
+        } || (functions + genericFunctions).any { func ->
+          func.returnType?.resolve()?.declaration?.qualifiedName?.asString() == "kotlin.collections.List"
+        } || sealedClasses.any { sealed ->
+          sealed.getSealedSubclasses().any { sub ->
+            sub.getAllProperties().any { prop ->
+              prop.type.resolve().declaration.qualifiedName?.asString() == "kotlin.collections.List"
+            }
+          }
+        }
+
+        if (genericClasses.isNotEmpty() || needsListSupport) {
           addNugetHelperExports()
+        }
+
+        if (needsListSupport) {
+          addNugetListHelperExports()
         }
       }
       .build()

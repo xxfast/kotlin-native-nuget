@@ -92,6 +92,10 @@ data class CirMarshalHelper(
   val libraryName: String,
 ) : CirDeclaration
 
+data class CirListHelper(
+  val libraryName: String,
+) : CirDeclaration
+
 data class CirEnumEntry(
   val name: String,
   val ordinal: Int,

@@ -165,6 +165,30 @@ internal fun FileSpec.Builder.addGenericClassExports(cls: KSClassDeclaration) {
   }
 }
 
+internal fun FileSpec.Builder.addNugetListHelperExports() {
+  addFunction(
+    FunSpec.builder("export_nuget_list_count")
+      .addAnnotation(cNameAnnotation("nuget_list_count"))
+      .addParameter("handle", cOpaquePointer)
+      .returns(Int::class)
+      .addStatement("return handle.asStableRef<List<*>>().get().size")
+      .build()
+  )
+
+  addFunction(
+    FunSpec.builder("export_nuget_list_get")
+      .addAnnotation(cNameAnnotation("nuget_list_get"))
+      .addParameter("handle", cOpaquePointer)
+      .addParameter("index", Int::class)
+      .returns(cOpaquePointer)
+      .addStatement(
+        "return %T.create(handle.asStableRef<List<*>>().get()[index]!!).asCPointer()",
+        stableRef,
+      )
+      .build()
+  )
+}
+
 internal fun FileSpec.Builder.addNugetHelperExports() {
   addFunction(
     FunSpec.builder("export_nuget_unwrap_string")

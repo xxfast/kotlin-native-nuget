@@ -20,6 +20,7 @@ class CirRenderer {
     for (declaration in namespace.declarations) {
       when (declaration) {
         is CirMarshalHelper -> renderMarshalHelper(declaration)
+        is CirListHelper -> renderListHelper(declaration)
         is CirStaticClass -> renderStaticClass(declaration)
         is CirInterface -> renderInterface(declaration)
         is CirClass -> renderClass(declaration)
@@ -215,6 +216,21 @@ class CirRenderer {
     appendLine("            if (field != null) return box_create_object((IntPtr)field.GetValue(value)!);")
     appendLine("            throw new NotSupportedException($\"Cannot create Box<{typeof(T).Name}>\");")
     appendLine("        }")
+    appendLine("    }")
+    appendLine()
+  }
+
+  private fun StringBuilder.renderListHelper(helper: CirListHelper) {
+    appendLine("    internal static class NugetListNative")
+    appendLine("    {")
+    appendLine("        [DllImport(\"${helper.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"nuget_list_count\")]")
+    appendLine("        internal static extern int Count(IntPtr handle);")
+    appendLine()
+    appendLine("        [DllImport(\"${helper.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"nuget_list_get\")]")
+    appendLine("        internal static extern IntPtr Get(IntPtr handle, int index);")
+    appendLine()
+    appendLine("        [DllImport(\"${helper.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"nuget_dispose\")]")
+    appendLine("        internal static extern void Dispose(IntPtr handle);")
     appendLine("    }")
     appendLine()
   }
@@ -449,7 +465,15 @@ class CirRenderer {
   }
 
   private fun StringBuilder.renderProperty(prop: CirProperty) {
-    if (prop.setter == null) {
+    val isMultiLineGetter: Boolean = prop.getter.contains('\n')
+    if (isMultiLineGetter) {
+      appendLine("        public ${prop.type} ${prop.name}")
+      appendLine("        {")
+      appendLine("            get")
+      appendLine("            {${prop.getter}")
+      appendLine("            }")
+      appendLine("        }")
+    } else if (prop.setter == null) {
       appendLine("        public ${prop.type} ${prop.name} => ${prop.getter};")
     } else {
       appendLine("        public ${prop.type} ${prop.name}")

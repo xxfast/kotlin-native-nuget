@@ -162,7 +162,7 @@ Gradle Plugin (Kotlin side)          NuGet Package       C# Consumer
 - [x] Generic class constructors (pass typed arguments through the bridge)
 - [x] Map Generic functions (typed variants + runtime dispatch)
 - [ ] Map Collections types
-  - [ ] `List<T>` → `IReadOnlyList<T>` (opaque handle + count, get)
+  - [x] `List<T>` → `IReadOnlyList<T>` (opaque handle + count, get)
   - [ ] `MutableList<T>` → `IList<T>` (add, removeAt, set)
   - [ ] `Map<K,V>` → `IReadOnlyDictionary<K,V>` (count, get, containsKey, keys)
 
