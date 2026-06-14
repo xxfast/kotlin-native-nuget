@@ -1,10 +1,13 @@
 package io.github.xxfast.nuget
 
 import org.gradle.api.DefaultTask
+import org.gradle.api.file.ConfigurableFileCollection
 import org.gradle.api.file.DirectoryProperty
 import org.gradle.api.provider.MapProperty
 import org.gradle.api.provider.Property
 import org.gradle.api.tasks.Input
+import org.gradle.api.tasks.InputDirectory
+import org.gradle.api.tasks.InputFiles
 import org.gradle.api.tasks.OutputDirectory
 import org.gradle.api.tasks.TaskAction
 import java.io.File
@@ -25,8 +28,11 @@ abstract class PackNugetTask : DefaultTask() {
   @get:Input
   abstract val nativeLibDirs: MapProperty<String, String>
 
-  @get:Input
-  abstract val generatedCsDir: Property<String>
+  @get:InputFiles
+  abstract val nativeLibFiles: ConfigurableFileCollection
+
+  @get:InputDirectory
+  abstract val generatedCsDir: DirectoryProperty
 
   @get:OutputDirectory
   abstract val outputDir: DirectoryProperty
@@ -57,7 +63,7 @@ abstract class PackNugetTask : DefaultTask() {
     val contentDir = File(nupkgDir, "contentFiles/cs/any")
     contentDir.mkdirs()
 
-    val csDir = File(generatedCsDir.get())
+    val csDir: File = generatedCsDir.get().asFile
     val csFiles: List<File> = csDir.listFiles()
       ?.filter { it.extension == "cs" }
       ?: emptyList()

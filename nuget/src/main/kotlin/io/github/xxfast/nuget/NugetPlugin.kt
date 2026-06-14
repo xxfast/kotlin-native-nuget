@@ -84,9 +84,8 @@ class NugetPlugin : Plugin<Project> {
           .first { KONAN_TO_RID.containsKey(it.konanTarget.name) }
           .name
 
-        val kspOutputDir: String = project.layout.buildDirectory
+        val kspOutputDir = project.layout.buildDirectory
           .dir("generated/ksp/$firstTarget/${firstTarget}Main/resources")
-          .get().asFile.absolutePath
 
         project.tasks.register("packNuget", PackNugetTask::class.java)
           .configure { task ->
@@ -97,6 +96,7 @@ class NugetPlugin : Plugin<Project> {
             task.authors.convention(extension.authors)
             task.packageDescription.convention(extension.description)
             task.nativeLibDirs.set(libDirs)
+            task.nativeLibFiles.from(libDirs.values.map { project.fileTree(it) })
             task.generatedCsDir.set(kspOutputDir)
             task.outputDir.set(project.layout.buildDirectory.dir("nuget"))
 
