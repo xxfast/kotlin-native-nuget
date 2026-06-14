@@ -1,6 +1,7 @@
 package io.github.xxfast.nuget.processor.cir
 
 import com.google.devtools.ksp.getVisibility
+import com.google.devtools.ksp.processing.KSPLogger
 import com.google.devtools.ksp.symbol.KSClassDeclaration
 import com.google.devtools.ksp.symbol.KSType
 import com.google.devtools.ksp.symbol.Modifier
@@ -11,6 +12,8 @@ internal fun translateClass(
   cls: KSClassDeclaration,
   libraryName: String,
   tracker: CollectionHelperTracker,
+  exportedTypes: Set<String>,
+  logger: KSPLogger,
 ): CirClass {
   val name: String = cls.simpleName.asString()
   val prefix: String = name.lowercase()
@@ -56,7 +59,7 @@ internal fun translateClass(
       if (superClass == null) return@filter true
       prop.parentDeclaration == cls
     }
-    .map { prop ->
+    .mapNotNull { prop ->
       val propName: String = prop.simpleName.asString()
       val propTypeResolved: KSType = prop.type.resolve()
       val propType: String = propTypeResolved.declaration.simpleName.asString()
@@ -104,6 +107,14 @@ internal fun translateClass(
       if (isSetType || isMutableSetType) tracker.needsSet = true
 
       val isObjectType: Boolean = propType !in KOTLIN_TO_CSHARP_RETURN && !isEnumType && !isListType && !isMutableListType && !isMapType && !isMutableMapType && !isSetType && !isMutableSetType
+
+      if (isObjectType) {
+        val qualifiedTypeName: String? = propTypeResolved.declaration.qualifiedName?.asString()
+        if (qualifiedTypeName != null && qualifiedTypeName !in exportedTypes) {
+          logger.warn("Skipping property '${cls.simpleName.asString()}.$propName': unsupported type '$qualifiedTypeName'")
+          return@mapNotNull null
+        }
+      }
 
       val nativeReturnType: String = when {
         (isListType || isMutableListType) -> "IntPtr"
@@ -321,6 +332,8 @@ internal fun translateSealedClass(
   cls: KSClassDeclaration,
   libraryName: String,
   tracker: CollectionHelperTracker,
+  exportedTypes: Set<String>,
+  logger: KSPLogger,
 ): CirSealedClass {
   val name: String = cls.simpleName.asString()
   val prefix: String = name.lowercase()
@@ -337,7 +350,7 @@ internal fun translateSealedClass(
       } else {
         subclass.getAllProperties()
           .filter { it.getVisibility() == Visibility.PUBLIC }
-          .map { prop ->
+          .mapNotNull { prop ->
             val propName: String = prop.simpleName.asString()
             val propTypeResolved: KSType = prop.type.resolve()
             val propType: String = propTypeResolved.declaration.simpleName.asString()
@@ -384,6 +397,11 @@ internal fun translateSealedClass(
             if (isSetType || isMutableSetType) tracker.needsSet = true
 
             val isObjectType: Boolean = propType !in KOTLIN_TO_CSHARP_RETURN && !isEnumType && !isListType && !isMutableListType && !isMapType && !isMutableMapType && !isSetType && !isMutableSetType
+
+            if (isObjectType && qualifiedTypeName != null && qualifiedTypeName !in exportedTypes) {
+              logger.warn("Skipping property '${cls.simpleName.asString()}.${subName}.$propName': unsupported type '$qualifiedTypeName'")
+              return@mapNotNull null
+            }
 
             val nativeReturnType: String = when {
               (isListType || isMutableListType) -> "IntPtr"

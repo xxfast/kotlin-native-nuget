@@ -20,6 +20,8 @@ class Cat(
     "evening" to "Play",
   )
 
+  val unsupported: Sequence<String> = sequenceOf("This", "is", "a", "sequence")
+
   override fun speak(): String = "Meow! My name is $name"
 
   fun meow(): String = "Meow! My name is $name"

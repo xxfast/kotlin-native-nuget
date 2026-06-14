@@ -1,5 +1,6 @@
 package io.github.xxfast.nuget.processor.cir
 
+import com.google.devtools.ksp.processing.KSPLogger
 import com.google.devtools.ksp.symbol.KSClassDeclaration
 import com.google.devtools.ksp.symbol.KSFunctionDeclaration
 
@@ -12,6 +13,7 @@ data class NugetContext(
 
 fun translate(
   context: NugetContext,
+  logger: KSPLogger,
   functions: List<KSFunctionDeclaration>,
   genericFunctions: List<KSFunctionDeclaration>,
   classes: List<KSClassDeclaration>,
@@ -21,6 +23,18 @@ fun translate(
   objects: List<KSClassDeclaration> = emptyList(),
 ): CirFile {
   val (genericClasses, regularClasses) = classes.partition { it.typeParameters.isNotEmpty() }
+
+  val exportedTypes: Set<String> = buildSet {
+    classes.forEach { add(it.qualifiedName?.asString() ?: "") }
+    enums.forEach { add(it.qualifiedName?.asString() ?: "") }
+    interfaces.forEach { add(it.qualifiedName?.asString() ?: "") }
+    sealedClasses.forEach { cls ->
+      add(cls.qualifiedName?.asString() ?: "")
+      cls.getSealedSubclasses().forEach { add(it.qualifiedName?.asString() ?: "") }
+    }
+    objects.forEach { add(it.qualifiedName?.asString() ?: "") }
+    remove("")
+  }
 
   fun namespaceOf(pkg: String): String =
     mapPackageToNamespace(pkg, context.rootPackage, context.rootNamespace)
@@ -53,7 +67,7 @@ fun translate(
   for ((key, funcs) in groupByNamespaceAndFile(functions)) {
     val (namespace, fileClassName) = key
     val finalClassName: String = resolveStaticClassName(fileClassName, namespace)
-    val members: List<CirMember> = funcs.flatMap { translateFunction(it, context.libraryName, tracker) }
+    val members: List<CirMember> = funcs.flatMap { translateFunction(it, context.libraryName, tracker, exportedTypes, logger) }
     namespaces.addDeclaration(namespace, CirStaticClass(finalClassName, members))
   }
 
@@ -65,7 +79,7 @@ fun translate(
   }
 
   for (cls in regularClasses) {
-    namespaces.addDeclaration(namespaceOf(cls.packageName.asString()), translateClass(cls, context.libraryName, tracker))
+    namespaces.addDeclaration(namespaceOf(cls.packageName.asString()), translateClass(cls, context.libraryName, tracker, exportedTypes, logger))
   }
 
   for (cls in genericClasses) {
@@ -82,7 +96,7 @@ fun translate(
   }
 
   for (sealed in sealedClasses) {
-    namespaces.addDeclaration(namespaceOf(sealed.packageName.asString()), translateSealedClass(sealed, context.libraryName, tracker))
+    namespaces.addDeclaration(namespaceOf(sealed.packageName.asString()), translateSealedClass(sealed, context.libraryName, tracker, exportedTypes, logger))
   }
 
   for (obj in objects) {

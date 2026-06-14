@@ -1,5 +1,6 @@
 package io.github.xxfast.nuget.processor.cir
 
+import com.google.devtools.ksp.processing.KSPLogger
 import com.google.devtools.ksp.symbol.KSClassDeclaration
 import com.google.devtools.ksp.symbol.KSFunctionDeclaration
 import com.google.devtools.ksp.symbol.Modifier
@@ -10,6 +11,8 @@ internal fun translateFunction(
   func: KSFunctionDeclaration,
   libraryName: String,
   tracker: CollectionHelperTracker,
+  exportedTypes: Set<String>,
+  logger: KSPLogger,
 ): List<CirMember> {
   val cname: String = toCName(func.simpleName.asString())
   val csName: String = toCSharpName(cname)
@@ -368,6 +371,15 @@ internal fun translateFunction(
     )
 
     return listOf(nativeImport, wrapper)
+  }
+
+  val qualifiedReturnType: String? = returnDecl?.qualifiedName?.asString()
+  val isUnknownObjectReturn: Boolean = kotlinReturnType !in KOTLIN_TO_CSHARP_RETURN &&
+    qualifiedReturnType != null && qualifiedReturnType !in exportedTypes
+
+  if (isUnknownObjectReturn) {
+    logger.warn("Skipping function '${func.simpleName.asString()}': unsupported return type '$qualifiedReturnType'")
+    return emptyList()
   }
 
   return listOf(

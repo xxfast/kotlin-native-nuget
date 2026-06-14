@@ -137,7 +137,18 @@ class NugetProcessor(
     objects: List<KSClassDeclaration>,
     deps: Dependencies,
   ) {
-    val cirFile: CirFile = translate(context, functions, genericFunctions, classes, enums, interfaces, sealedClasses, objects)
+    val cirFile: CirFile = translate(
+      context,
+      logger,
+      functions,
+      genericFunctions,
+      classes,
+      enums,
+      interfaces,
+      sealedClasses,
+      objects
+    )
+
     val csharp: String = renderer.render(cirFile)
 
     val file = codeGenerator.createNewFile(
