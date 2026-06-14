@@ -36,46 +36,41 @@ Write Kotlin — get C# bindings automatically:
 
 ```kotlin
 // Kotlin
-interface Pet {
-  val name: String
-  fun speak(): String
-}
-
+interface Pet { val name: String; fun speak(): String }
 enum class Mood { HAPPY, SLEEPY, GRUMPY }
-
 abstract class Animal(override val name: String) : Pet
 
 class Cat(name: String, val lives: Int = 9) : Animal(name) {
   var brother: Cat? = null
   var mood: Mood = Mood.SLEEPY
+  val toys: List<Toy> = listOf(Toy("Mouse", "Gray"))
   override fun speak(): String = "Meow!"
 }
 
 data class Toy(val name: String, val color: String)
-
+class Box<T>(val item: T)
 fun owner(name: String): String? = if (name == "Oreo") "Isuru" else null
 ```
 
 ```csharp
 // C# (auto-generated)
 using var oreo = new Cat("Oreo", 9);
-using var mylo = new Cat("Mylo", 9);
 
-oreo.Name;                         // "Oreo"
-oreo.Speak();                      // "Meow!"
-oreo.Brother = mylo;               // object property setter
-oreo.Mood = Mood.Happy;            // enum support
-Mood.Happy.Description();          // enum extension methods
+oreo.Name;                                  // "Oreo"
+oreo.Speak();                               // "Meow!"
+oreo.Brother = new Cat("Mylo", 9);          // nullable object setter
+oreo.Mood = Mood.Happy;                     // enums
 
 using var toy = new Toy("Mouse", "Gray");
-toy.ToString();                    // "Toy(name=Mouse, color=Gray)"
-using var copy = toy.Copy("Ball", "Red");
-toy.Equals(copy);                  // false (data class equality)
+toy.ToString();                             // "Toy(name=Mouse, color=Gray)"
+toy.Equals(toy.Copy("Ball", "Red"));        // data class equality + copy
 
-string? owner = CatKt.owner("Oreo");  // "Isuru" (nullable string)
+IReadOnlyList<Toy> toys = oreo.Toys;        // collections
+using var box = new Box<string>("hello");    // generics
+string? owner = CatKt.Owner("Oreo");        // nullable returns
 
-IPet pet = oreo;                   // interface polymorphism
-Animal animal = oreo;              // abstract class hierarchy
+IPet pet = oreo;                            // interface polymorphism
+Animal animal = oreo;                       // abstract class hierarchy
 ```
 
 ## Prerequisites
@@ -94,8 +89,6 @@ brew install dotnet
 ```
 
 That's it. Bindings are pre-generated at Kotlin compile time via KSP — no additional tooling needed on the consumer side.
-
-See [GOALS.md](GOALS.md) for design goals, [ROADMAP.md](ROADMAP.md) for the development roadmap.
 
 ## Architecture
 
@@ -167,4 +160,5 @@ Gradle Plugin (Kotlin side)          NuGet Package       C# Consumer
 | `Set<T>`          | `IReadOnlySet<T>`          | eager copy                   |
 | `MutableSet<T>`   | `ISet<T>`                  | eager copy                   |
 
-See [docs/adr/](docs/adr/) for architecture decision records.
+> [!TIP]
+> See [ROADMAP.md](ROADMAP.md) for the development roadmap and [docs/adr/](docs/adr/) for architecture decision records.
