@@ -21,6 +21,7 @@ class CirRenderer {
       when (declaration) {
         is CirMarshalHelper -> renderMarshalHelper(declaration)
         is CirListHelper -> renderListHelper(declaration)
+        is CirMapHelper -> renderMapHelper(declaration)
         is CirStaticClass -> renderStaticClass(declaration)
         is CirInterface -> renderInterface(declaration)
         is CirClass -> renderClass(declaration)
@@ -228,6 +229,24 @@ class CirRenderer {
     appendLine()
     appendLine("        [DllImport(\"${helper.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"nuget_list_get\")]")
     appendLine("        internal static extern IntPtr Get(IntPtr handle, int index);")
+    appendLine()
+    appendLine("        [DllImport(\"${helper.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"nuget_dispose\")]")
+    appendLine("        internal static extern void Dispose(IntPtr handle);")
+    appendLine("    }")
+    appendLine()
+  }
+
+  private fun StringBuilder.renderMapHelper(helper: CirMapHelper) {
+    appendLine("    internal static class NugetMapNative")
+    appendLine("    {")
+    appendLine("        [DllImport(\"${helper.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"nuget_map_count\")]")
+    appendLine("        internal static extern int Count(IntPtr handle);")
+    appendLine()
+    appendLine("        [DllImport(\"${helper.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"nuget_map_key_at\")]")
+    appendLine("        internal static extern IntPtr KeyAt(IntPtr handle, int index);")
+    appendLine()
+    appendLine("        [DllImport(\"${helper.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"nuget_map_value_at\")]")
+    appendLine("        internal static extern IntPtr ValueAt(IntPtr handle, int index);")
     appendLine()
     appendLine("        [DllImport(\"${helper.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"nuget_dispose\")]")
     appendLine("        internal static extern void Dispose(IntPtr handle);")

@@ -47,6 +47,7 @@ class CirTranslator(
   private val className: String,
 ) {
   private var needsListHelper: Boolean = false
+  private var needsMapHelper: Boolean = false
   fun translate(
     functions: List<KSFunctionDeclaration>,
     genericFunctions: List<KSFunctionDeclaration>,
@@ -75,6 +76,7 @@ class CirTranslator(
     val namespaces: MutableList<CirNamespace> = mutableListOf()
     var needsMarshalHelper: Boolean = false
     needsListHelper = false
+    needsMapHelper = false
 
     for ((key, funcs) in functionsByNamespaceAndFile) {
       val (namespace, fileClassName) = key
@@ -227,6 +229,10 @@ class CirTranslator(
       needsMarshalHelper = true
     }
 
+    if (needsMapHelper) {
+      needsMarshalHelper = true
+    }
+
     if (needsMarshalHelper) {
       val firstNamespace: CirNamespace = namespaces.firstOrNull() ?: CirNamespace(rootNamespace, emptyList())
       val idx: Int = namespaces.indexOfFirst { it.name == firstNamespace.name }
@@ -234,6 +240,10 @@ class CirTranslator(
       val helpers: MutableList<CirDeclaration> = mutableListOf(CirMarshalHelper(libraryName))
       if (needsListHelper) {
         helpers.add(CirListHelper(libraryName))
+      }
+
+      if (needsMapHelper) {
+        helpers.add(CirMapHelper(libraryName))
       }
 
       if (idx >= 0) {
@@ -246,7 +256,7 @@ class CirTranslator(
     }
 
     val usings: MutableList<String> = mutableListOf("System", "System.Runtime.InteropServices")
-    if (needsListHelper) {
+    if (needsListHelper || needsMapHelper) {
       usings.add("System.Collections.Generic")
     }
 
@@ -421,6 +431,7 @@ class CirTranslator(
     val qualifiedReturnName: String? = returnDecl?.qualifiedName?.asString()
     val isListReturnType: Boolean = qualifiedReturnName == "kotlin.collections.List"
     val isMutableListReturnType: Boolean = qualifiedReturnName == "kotlin.collections.MutableList"
+    val isMapReturnType: Boolean = qualifiedReturnName == "kotlin.collections.Map"
 
     if (isListReturnType) {
       needsListHelper = true
@@ -494,6 +505,52 @@ class CirTranslator(
       val wrapper = CirMethod(
         name = csName,
         returnType = "IList<$csElementType>",
+        parameters = params,
+        body = body,
+        isStatic = true,
+      )
+
+      return listOf(nativeImport, wrapper)
+    }
+
+    if (isMapReturnType) {
+      needsMapHelper = true
+      val keyType = returnType?.arguments?.getOrNull(0)?.type?.resolve()
+      val keyTypeName: String = keyType?.declaration?.simpleName?.asString() ?: "Any"
+      val csKeyType: String = KOTLIN_TO_CSHARP_PARAM[keyTypeName] ?: keyTypeName
+
+      val valueType = returnType?.arguments?.getOrNull(1)?.type?.resolve()
+      val valueTypeName: String = valueType?.declaration?.simpleName?.asString() ?: "Any"
+      val csValueType: String = KOTLIN_TO_CSHARP_PARAM[valueTypeName] ?: valueTypeName
+
+      val nativeImport = CirDllImport(
+        libraryName = libraryName,
+        entryPoint = cname,
+        returnType = "IntPtr",
+        name = "${csName}_native",
+        parameters = params,
+        visibility = CirVisibility.PRIVATE,
+      )
+
+      val paramNames: String = params.joinToString(", ") { it.name }
+      val body: String = buildString {
+        appendLine()
+        appendLine("            IntPtr mapHandle = ${csName}_native($paramNames);")
+        appendLine("            int count = NugetMapNative.Count(mapHandle);")
+        appendLine("            var result = new Dictionary<$csKeyType, $csValueType>(count);")
+        appendLine("            for (int i = 0; i < count; i++)")
+        appendLine("            {")
+        appendLine("                var key = NugetMarshal.FromHandle<$csKeyType>(NugetMapNative.KeyAt(mapHandle, i));")
+        appendLine("                var value = NugetMarshal.FromHandle<$csValueType>(NugetMapNative.ValueAt(mapHandle, i));")
+        appendLine("                result[key] = value;")
+        appendLine("            }")
+        appendLine("            NugetMapNative.Dispose(mapHandle);")
+        append("            return result;")
+      }
+
+      val wrapper = CirMethod(
+        name = csName,
+        returnType = "IReadOnlyDictionary<$csKeyType, $csValueType>",
         parameters = params,
         body = body,
         isStatic = true,
@@ -822,6 +879,7 @@ class CirTranslator(
         val qualifiedTypeName: String? = propTypeResolved.declaration.qualifiedName?.asString()
         val isListType: Boolean = qualifiedTypeName == "kotlin.collections.List"
         val isMutableListType: Boolean = qualifiedTypeName == "kotlin.collections.MutableList"
+        val isMapType: Boolean = qualifiedTypeName == "kotlin.collections.Map"
 
         val listElementType: String? = if (isListType || isMutableListType) {
           val elementType = propTypeResolved.arguments.firstOrNull()?.type?.resolve()
@@ -829,12 +887,26 @@ class CirTranslator(
           KOTLIN_TO_CSHARP_PARAM[elementTypeName] ?: elementTypeName
         } else null
 
-        if (isListType || isMutableListType) needsListHelper = true
+        val mapKeyType: String? = if (isMapType) {
+          val keyType = propTypeResolved.arguments.getOrNull(0)?.type?.resolve()
+          val keyTypeName: String = keyType?.declaration?.simpleName?.asString() ?: "Any"
+          KOTLIN_TO_CSHARP_PARAM[keyTypeName] ?: keyTypeName
+        } else null
 
-        val isObjectType: Boolean = propType !in KOTLIN_TO_CSHARP_RETURN && !isEnumType && !isListType && !isMutableListType
+        val mapValueType: String? = if (isMapType) {
+          val valueType = propTypeResolved.arguments.getOrNull(1)?.type?.resolve()
+          val valueTypeName: String = valueType?.declaration?.simpleName?.asString() ?: "Any"
+          KOTLIN_TO_CSHARP_PARAM[valueTypeName] ?: valueTypeName
+        } else null
+
+        if (isListType || isMutableListType) needsListHelper = true
+        if (isMapType) needsMapHelper = true
+
+        val isObjectType: Boolean = propType !in KOTLIN_TO_CSHARP_RETURN && !isEnumType && !isListType && !isMutableListType && !isMapType
 
         val nativeReturnType: String = when {
           (isListType || isMutableListType) -> "IntPtr"
+          isMapType -> "IntPtr"
           isEnumType -> "int"
           isObjectType -> "IntPtr"
           else -> mapReturnType(propType)
@@ -843,6 +915,7 @@ class CirTranslator(
         val type: String = when {
           isListType -> "IReadOnlyList<$listElementType>"
           isMutableListType -> "IList<$listElementType>"
+          isMapType -> "IReadOnlyDictionary<$mapKeyType, $mapValueType>"
           propType == "String" -> "string"
           isEnumType -> propType
           isObjectType && isNullable -> "$propType?"
@@ -876,6 +949,21 @@ class CirTranslator(
             appendLine("                NugetListNative.Dispose(listHandle);")
             append("                return result;")
           }
+        } else if (isMapType) {
+          buildString {
+            appendLine()
+            appendLine("                IntPtr mapHandle = Native_Get_$propName(_handle);")
+            appendLine("                int count = NugetMapNative.Count(mapHandle);")
+            appendLine("                var result = new Dictionary<$mapKeyType, $mapValueType>(count);")
+            appendLine("                for (int i = 0; i < count; i++)")
+            appendLine("                {")
+            appendLine("                    var key = NugetMarshal.FromHandle<$mapKeyType>(NugetMapNative.KeyAt(mapHandle, i));")
+            appendLine("                    var value = NugetMarshal.FromHandle<$mapValueType>(NugetMapNative.ValueAt(mapHandle, i));")
+            appendLine("                    result[key] = value;")
+            appendLine("                }")
+            appendLine("                NugetMapNative.Dispose(mapHandle);")
+            append("                return result;")
+          }
         } else when {
           propType == "String" -> "Marshal.PtrToStringUTF8(Native_Get_$propName(_handle))!"
           isEnumType -> "($propType)Native_Get_$propName(_handle)"
@@ -884,7 +972,7 @@ class CirTranslator(
           else -> "Native_Get_$propName(_handle)"
         }
 
-        val setter: String? = if (isMutable && !isListType && !isMutableListType) {
+        val setter: String? = if (isMutable && !isListType && !isMutableListType && !isMapType) {
           when {
             propType == "String" -> "Native_Set_$propName(_handle, value)"
             isEnumType -> "Native_Set_$propName(_handle, (int)value)"
@@ -1006,6 +1094,7 @@ class CirTranslator(
               val qualifiedTypeName: String? = propTypeResolved.declaration.qualifiedName?.asString()
               val isListType: Boolean = qualifiedTypeName == "kotlin.collections.List"
               val isMutableListType: Boolean = qualifiedTypeName == "kotlin.collections.MutableList"
+              val isMapType: Boolean = qualifiedTypeName == "kotlin.collections.Map"
 
               val listElementType: String? = if (isListType || isMutableListType) {
                 val elementType = propTypeResolved.arguments.firstOrNull()?.type?.resolve()
@@ -1013,12 +1102,26 @@ class CirTranslator(
                 KOTLIN_TO_CSHARP_PARAM[elementTypeName] ?: elementTypeName
               } else null
 
-              if (isListType || isMutableListType) needsListHelper = true
+              val mapKeyType: String? = if (isMapType) {
+                val keyType = propTypeResolved.arguments.getOrNull(0)?.type?.resolve()
+                val keyTypeName: String = keyType?.declaration?.simpleName?.asString() ?: "Any"
+                KOTLIN_TO_CSHARP_PARAM[keyTypeName] ?: keyTypeName
+              } else null
 
-              val isObjectType: Boolean = propType !in KOTLIN_TO_CSHARP_RETURN && !isEnumType && !isListType && !isMutableListType
+              val mapValueType: String? = if (isMapType) {
+                val valueType = propTypeResolved.arguments.getOrNull(1)?.type?.resolve()
+                val valueTypeName: String = valueType?.declaration?.simpleName?.asString() ?: "Any"
+                KOTLIN_TO_CSHARP_PARAM[valueTypeName] ?: valueTypeName
+              } else null
+
+              if (isListType || isMutableListType) needsListHelper = true
+              if (isMapType) needsMapHelper = true
+
+              val isObjectType: Boolean = propType !in KOTLIN_TO_CSHARP_RETURN && !isEnumType && !isListType && !isMutableListType && !isMapType
 
               val nativeReturnType: String = when {
                 (isListType || isMutableListType) -> "IntPtr"
+                isMapType -> "IntPtr"
                 isEnumType -> "int"
                 isObjectType -> "IntPtr"
                 else -> mapReturnType(propType)
@@ -1027,6 +1130,7 @@ class CirTranslator(
               val type: String = when {
                 isListType -> "IReadOnlyList<$listElementType>"
                 isMutableListType -> "IList<$listElementType>"
+                isMapType -> "IReadOnlyDictionary<$mapKeyType, $mapValueType>"
                 propType == "String" -> "string"
                 isEnumType -> propType
                 isObjectType && isNullable -> "$propType?"
@@ -1058,6 +1162,21 @@ class CirTranslator(
                   appendLine("                    result.Add(NugetMarshal.FromHandle<$listElementType>(NugetListNative.Get(listHandle, i)));")
                   appendLine("                }")
                   appendLine("                NugetListNative.Dispose(listHandle);")
+                  append("                return result;")
+                }
+              } else if (isMapType) {
+                buildString {
+                  appendLine()
+                  appendLine("                IntPtr mapHandle = Native_Get_$propName(_handle);")
+                  appendLine("                int count = NugetMapNative.Count(mapHandle);")
+                  appendLine("                var result = new Dictionary<$mapKeyType, $mapValueType>(count);")
+                  appendLine("                for (int i = 0; i < count; i++)")
+                  appendLine("                {")
+                  appendLine("                    var key = NugetMarshal.FromHandle<$mapKeyType>(NugetMapNative.KeyAt(mapHandle, i));")
+                  appendLine("                    var value = NugetMarshal.FromHandle<$mapValueType>(NugetMapNative.ValueAt(mapHandle, i));")
+                  appendLine("                    result[key] = value;")
+                  appendLine("                }")
+                  appendLine("                NugetMapNative.Dispose(mapHandle);")
                   append("                return result;")
                 }
               } else when {

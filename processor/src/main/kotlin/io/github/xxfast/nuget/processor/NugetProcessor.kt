@@ -29,6 +29,7 @@ import io.github.xxfast.nuget.processor.exports.addGenericClassExports
 import io.github.xxfast.nuget.processor.exports.addGenericFunctionExports
 import io.github.xxfast.nuget.processor.exports.addNugetHelperExports
 import io.github.xxfast.nuget.processor.exports.addNugetListHelperExports
+import io.github.xxfast.nuget.processor.exports.addNugetMapHelperExports
 import io.github.xxfast.nuget.processor.exports.addObjectExports
 import io.github.xxfast.nuget.processor.exports.addSealedClassExports
 
@@ -211,12 +212,34 @@ class NugetProcessor(
 
         val needsListSupport: Boolean = classesHaveLists || functionsReturnLists || sealedClassesHaveLists
 
-        if (genericClasses.isNotEmpty() || needsListSupport) {
+        val mapTypes: Set<String> = setOf("kotlin.collections.Map")
+
+        fun KSType.isMapType(): Boolean =
+          declaration.qualifiedName?.asString() in mapTypes
+
+        val classesHaveMaps: Boolean = (classes + genericClasses)
+          .any { cls -> cls.getAllProperties().any { prop -> prop.type.resolve().isMapType() } }
+
+        val functionsReturnMaps: Boolean = (functions + genericFunctions)
+          .any { func -> func.returnType?.resolve()?.isMapType() == true }
+
+        val sealedClassesHaveMaps: Boolean = sealedClasses
+          .any { sealed -> sealed.getSealedSubclasses().any { sub ->
+            sub.getAllProperties().any { prop -> prop.type.resolve().isMapType() }
+          } }
+
+        val needsMapSupport: Boolean = classesHaveMaps || functionsReturnMaps || sealedClassesHaveMaps
+
+        if (genericClasses.isNotEmpty() || needsListSupport || needsMapSupport) {
           addNugetHelperExports()
         }
 
         if (needsListSupport) {
           addNugetListHelperExports()
+        }
+
+        if (needsMapSupport) {
+          addNugetMapHelperExports()
         }
       }
       .build()

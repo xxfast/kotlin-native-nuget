@@ -9,6 +9,10 @@ class Cat(
   val nicknames: List<String> = listOf("${name}y", "Little $name")
   val toys: List<Toy> = listOf(Toy("Mouse", "Gray"), Toy("Ball", "Red"))
   val favoriteFoods: MutableList<String> = mutableListOf("Tuna", "Salmon")
+  val accessories: Map<String, Toy> = mapOf(
+    "collar" to Toy("Bell Collar", "Gold"),
+    "tag" to Toy("Name Tag", "Silver"),
+  )
 
   override fun speak(): String = "Meow! My name is $name"
 

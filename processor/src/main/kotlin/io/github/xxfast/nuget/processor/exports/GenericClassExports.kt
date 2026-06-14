@@ -189,6 +189,43 @@ internal fun FileSpec.Builder.addNugetListHelperExports() {
   )
 }
 
+internal fun FileSpec.Builder.addNugetMapHelperExports() {
+  addFunction(
+    FunSpec.builder("export_nuget_map_count")
+      .addAnnotation(cNameAnnotation("nuget_map_count"))
+      .addParameter("handle", cOpaquePointer)
+      .returns(Int::class)
+      .addStatement("return handle.asStableRef<Map<*, *>>().get().size")
+      .build()
+  )
+
+  addFunction(
+    FunSpec.builder("export_nuget_map_key_at")
+      .addAnnotation(cNameAnnotation("nuget_map_key_at"))
+      .addParameter("handle", cOpaquePointer)
+      .addParameter("index", Int::class)
+      .returns(cOpaquePointer)
+      .addStatement(
+        "return %T.create(handle.asStableRef<Map<*, *>>().get().keys.toList()[index]!!).asCPointer()",
+        stableRef,
+      )
+      .build()
+  )
+
+  addFunction(
+    FunSpec.builder("export_nuget_map_value_at")
+      .addAnnotation(cNameAnnotation("nuget_map_value_at"))
+      .addParameter("handle", cOpaquePointer)
+      .addParameter("index", Int::class)
+      .returns(cOpaquePointer)
+      .addStatement(
+        "return %T.create(handle.asStableRef<Map<*, *>>().get().values.toList()[index]!!).asCPointer()",
+        stableRef,
+      )
+      .build()
+  )
+}
+
 internal fun FileSpec.Builder.addNugetHelperExports() {
   addFunction(
     FunSpec.builder("export_nuget_unwrap_string")

@@ -164,7 +164,7 @@ Gradle Plugin (Kotlin side)          NuGet Package       C# Consumer
 - [ ] Map Collections types
   - [x] `List<T>` → `IReadOnlyList<T>` (opaque handle + count, get)
   - [x] `MutableList<T>` → `IList<T>` (add, removeAt, set)
-  - [ ] `Map<K,V>` → `IReadOnlyDictionary<K,V>` (count, get, containsKey, keys)
+  - [x] `Map<K,V>` → `IReadOnlyDictionary<K,V>` (count, get, containsKey, keys)
 
 ### Phase 4: Async support
 - [ ] Map Suspend functions (coroutines → Task/async)
