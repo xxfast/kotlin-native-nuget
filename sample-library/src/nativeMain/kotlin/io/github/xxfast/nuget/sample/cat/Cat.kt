@@ -13,6 +13,7 @@ class Cat(
     "collar" to Toy("Bell Collar", "Gold"),
     "tag" to Toy("Name Tag", "Silver"),
   )
+  val traits: Set<String> = setOf("Playful", "Curious", "Fluffy")
   val schedule: MutableMap<String, String> = mutableMapOf(
     "morning" to "Nap",
     "evening" to "Play",

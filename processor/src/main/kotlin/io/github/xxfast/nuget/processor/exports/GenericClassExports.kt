@@ -189,6 +189,30 @@ internal fun FileSpec.Builder.addNugetListHelperExports() {
   )
 }
 
+internal fun FileSpec.Builder.addNugetSetHelperExports() {
+  addFunction(
+    FunSpec.builder("export_nuget_set_count")
+      .addAnnotation(cNameAnnotation("nuget_set_count"))
+      .addParameter("handle", cOpaquePointer)
+      .returns(Int::class)
+      .addStatement("return handle.asStableRef<Set<*>>().get().size")
+      .build()
+  )
+
+  addFunction(
+    FunSpec.builder("export_nuget_set_element_at")
+      .addAnnotation(cNameAnnotation("nuget_set_element_at"))
+      .addParameter("handle", cOpaquePointer)
+      .addParameter("index", Int::class)
+      .returns(cOpaquePointer)
+      .addStatement(
+        "return %T.create(handle.asStableRef<Set<*>>().get().toList()[index]!!).asCPointer()",
+        stableRef,
+      )
+      .build()
+  )
+}
+
 internal fun FileSpec.Builder.addNugetMapHelperExports() {
   addFunction(
     FunSpec.builder("export_nuget_map_count")

@@ -166,7 +166,7 @@ Gradle Plugin (Kotlin side)          NuGet Package       C# Consumer
   - [x] `MutableList<T>` → `IList<T>` (add, removeAt, set)
   - [x] `Map<K,V>` → `IReadOnlyDictionary<K,V>` (count, get, containsKey, keys)
   - [x] `MutableMap<K,V>` → `IDictionary<K,V>` (put, remove)
-  - [ ] `Set<T>` → `IReadOnlySet<T>` (count, contains)
+  - [x] `Set<T>` → `IReadOnlySet<T>` (count, contains)
   - [ ] `MutableSet<T>` → `ISet<T>` (add, remove)
 
 ### Phase 4: Async support

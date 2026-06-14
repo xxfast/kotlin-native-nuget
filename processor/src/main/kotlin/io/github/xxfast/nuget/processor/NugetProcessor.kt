@@ -30,6 +30,7 @@ import io.github.xxfast.nuget.processor.exports.addGenericFunctionExports
 import io.github.xxfast.nuget.processor.exports.addNugetHelperExports
 import io.github.xxfast.nuget.processor.exports.addNugetListHelperExports
 import io.github.xxfast.nuget.processor.exports.addNugetMapHelperExports
+import io.github.xxfast.nuget.processor.exports.addNugetSetHelperExports
 import io.github.xxfast.nuget.processor.exports.addObjectExports
 import io.github.xxfast.nuget.processor.exports.addSealedClassExports
 
@@ -230,7 +231,25 @@ class NugetProcessor(
 
         val needsMapSupport: Boolean = classesHaveMaps || functionsReturnMaps || sealedClassesHaveMaps
 
-        if (genericClasses.isNotEmpty() || needsListSupport || needsMapSupport) {
+        val setTypes: Set<String> = setOf("kotlin.collections.Set", "kotlin.collections.MutableSet")
+
+        fun KSType.isSetType(): Boolean =
+          declaration.qualifiedName?.asString() in setTypes
+
+        val classesHaveSets: Boolean = (classes + genericClasses)
+          .any { cls -> cls.getAllProperties().any { prop -> prop.type.resolve().isSetType() } }
+
+        val functionsReturnSets: Boolean = (functions + genericFunctions)
+          .any { func -> func.returnType?.resolve()?.isSetType() == true }
+
+        val sealedClassesHaveSets: Boolean = sealedClasses
+          .any { sealed -> sealed.getSealedSubclasses().any { sub ->
+            sub.getAllProperties().any { prop -> prop.type.resolve().isSetType() }
+          } }
+
+        val needsSetSupport: Boolean = classesHaveSets || functionsReturnSets || sealedClassesHaveSets
+
+        if (genericClasses.isNotEmpty() || needsListSupport || needsMapSupport || needsSetSupport) {
           addNugetHelperExports()
         }
 
@@ -240,6 +259,10 @@ class NugetProcessor(
 
         if (needsMapSupport) {
           addNugetMapHelperExports()
+        }
+
+        if (needsSetSupport) {
+          addNugetSetHelperExports()
         }
       }
       .build()

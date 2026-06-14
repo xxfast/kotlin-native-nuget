@@ -48,6 +48,7 @@ class CirTranslator(
 ) {
   private var needsListHelper: Boolean = false
   private var needsMapHelper: Boolean = false
+  private var needsSetHelper: Boolean = false
   fun translate(
     functions: List<KSFunctionDeclaration>,
     genericFunctions: List<KSFunctionDeclaration>,
@@ -77,6 +78,7 @@ class CirTranslator(
     var needsMarshalHelper: Boolean = false
     needsListHelper = false
     needsMapHelper = false
+    needsSetHelper = false
 
     for ((key, funcs) in functionsByNamespaceAndFile) {
       val (namespace, fileClassName) = key
@@ -233,6 +235,10 @@ class CirTranslator(
       needsMarshalHelper = true
     }
 
+    if (needsSetHelper) {
+      needsMarshalHelper = true
+    }
+
     if (needsMarshalHelper) {
       val firstNamespace: CirNamespace = namespaces.firstOrNull() ?: CirNamespace(rootNamespace, emptyList())
       val idx: Int = namespaces.indexOfFirst { it.name == firstNamespace.name }
@@ -246,6 +252,10 @@ class CirTranslator(
         helpers.add(CirMapHelper(libraryName))
       }
 
+      if (needsSetHelper) {
+        helpers.add(CirSetHelper(libraryName))
+      }
+
       if (idx >= 0) {
         namespaces[idx] = firstNamespace.copy(
           declarations = helpers + firstNamespace.declarations,
@@ -256,7 +266,7 @@ class CirTranslator(
     }
 
     val usings: MutableList<String> = mutableListOf("System", "System.Runtime.InteropServices")
-    if (needsListHelper || needsMapHelper) {
+    if (needsListHelper || needsMapHelper || needsSetHelper) {
       usings.add("System.Collections.Generic")
     }
 
@@ -433,6 +443,7 @@ class CirTranslator(
     val isMutableListReturnType: Boolean = qualifiedReturnName == "kotlin.collections.MutableList"
     val isMapReturnType: Boolean = qualifiedReturnName == "kotlin.collections.Map"
     val isMutableMapReturnType: Boolean = qualifiedReturnName == "kotlin.collections.MutableMap"
+    val isSetReturnType: Boolean = qualifiedReturnName == "kotlin.collections.Set"
 
     if (isListReturnType) {
       needsListHelper = true
@@ -598,6 +609,46 @@ class CirTranslator(
       val wrapper = CirMethod(
         name = csName,
         returnType = "IDictionary<$csKeyType, $csValueType>",
+        parameters = params,
+        body = body,
+        isStatic = true,
+      )
+
+      return listOf(nativeImport, wrapper)
+    }
+
+    if (isSetReturnType) {
+      needsSetHelper = true
+      val elementType = returnType?.arguments?.firstOrNull()?.type?.resolve()
+      val elementTypeName: String = elementType?.declaration?.simpleName?.asString() ?: "Any"
+      val csElementType: String = KOTLIN_TO_CSHARP_PARAM[elementTypeName] ?: elementTypeName
+
+      val nativeImport = CirDllImport(
+        libraryName = libraryName,
+        entryPoint = cname,
+        returnType = "IntPtr",
+        name = "${csName}_native",
+        parameters = params,
+        visibility = CirVisibility.PRIVATE,
+      )
+
+      val paramNames: String = params.joinToString(", ") { it.name }
+      val body: String = buildString {
+        appendLine()
+        appendLine("            IntPtr setHandle = ${csName}_native($paramNames);")
+        appendLine("            int count = NugetSetNative.Count(setHandle);")
+        appendLine("            var result = new HashSet<$csElementType>(count);")
+        appendLine("            for (int i = 0; i < count; i++)")
+        appendLine("            {")
+        appendLine("                result.Add(NugetMarshal.FromHandle<$csElementType>(NugetSetNative.ElementAt(setHandle, i)));")
+        appendLine("            }")
+        appendLine("            NugetSetNative.Dispose(setHandle);")
+        append("            return result;")
+      }
+
+      val wrapper = CirMethod(
+        name = csName,
+        returnType = "IReadOnlySet<$csElementType>",
         parameters = params,
         body = body,
         isStatic = true,
@@ -928,6 +979,7 @@ class CirTranslator(
         val isMutableListType: Boolean = qualifiedTypeName == "kotlin.collections.MutableList"
         val isMapType: Boolean = qualifiedTypeName == "kotlin.collections.Map"
         val isMutableMapType: Boolean = qualifiedTypeName == "kotlin.collections.MutableMap"
+        val isSetType: Boolean = qualifiedTypeName == "kotlin.collections.Set"
 
         val listElementType: String? = if (isListType || isMutableListType) {
           val elementType = propTypeResolved.arguments.firstOrNull()?.type?.resolve()
@@ -947,14 +999,22 @@ class CirTranslator(
           KOTLIN_TO_CSHARP_PARAM[valueTypeName] ?: valueTypeName
         } else null
 
+        val setElementType: String? = if (isSetType) {
+          val elementType = propTypeResolved.arguments.firstOrNull()?.type?.resolve()
+          val elementTypeName: String = elementType?.declaration?.simpleName?.asString() ?: "Any"
+          KOTLIN_TO_CSHARP_PARAM[elementTypeName] ?: elementTypeName
+        } else null
+
         if (isListType || isMutableListType) needsListHelper = true
         if (isMapType || isMutableMapType) needsMapHelper = true
+        if (isSetType) needsSetHelper = true
 
-        val isObjectType: Boolean = propType !in KOTLIN_TO_CSHARP_RETURN && !isEnumType && !isListType && !isMutableListType && !isMapType && !isMutableMapType
+        val isObjectType: Boolean = propType !in KOTLIN_TO_CSHARP_RETURN && !isEnumType && !isListType && !isMutableListType && !isMapType && !isMutableMapType && !isSetType
 
         val nativeReturnType: String = when {
           (isListType || isMutableListType) -> "IntPtr"
           (isMapType || isMutableMapType) -> "IntPtr"
+          isSetType -> "IntPtr"
           isEnumType -> "int"
           isObjectType -> "IntPtr"
           else -> mapReturnType(propType)
@@ -965,6 +1025,7 @@ class CirTranslator(
           isMutableListType -> "IList<$listElementType>"
           isMapType -> "IReadOnlyDictionary<$mapKeyType, $mapValueType>"
           isMutableMapType -> "IDictionary<$mapKeyType, $mapValueType>"
+          isSetType -> "IReadOnlySet<$setElementType>"
           propType == "String" -> "string"
           isEnumType -> propType
           isObjectType && isNullable -> "$propType?"
@@ -1013,6 +1074,19 @@ class CirTranslator(
             appendLine("                NugetMapNative.Dispose(mapHandle);")
             append("                return result;")
           }
+        } else if (isSetType) {
+          buildString {
+            appendLine()
+            appendLine("                IntPtr setHandle = Native_Get_$propName(_handle);")
+            appendLine("                int count = NugetSetNative.Count(setHandle);")
+            appendLine("                var result = new HashSet<$setElementType>(count);")
+            appendLine("                for (int i = 0; i < count; i++)")
+            appendLine("                {")
+            appendLine("                    result.Add(NugetMarshal.FromHandle<$setElementType>(NugetSetNative.ElementAt(setHandle, i)));")
+            appendLine("                }")
+            appendLine("                NugetSetNative.Dispose(setHandle);")
+            append("                return result;")
+          }
         } else when {
           propType == "String" -> "Marshal.PtrToStringUTF8(Native_Get_$propName(_handle))!"
           isEnumType -> "($propType)Native_Get_$propName(_handle)"
@@ -1021,7 +1095,7 @@ class CirTranslator(
           else -> "Native_Get_$propName(_handle)"
         }
 
-        val setter: String? = if (isMutable && !isListType && !isMutableListType && !isMapType && !isMutableMapType) {
+        val setter: String? = if (isMutable && !isListType && !isMutableListType && !isMapType && !isMutableMapType && !isSetType) {
           when {
             propType == "String" -> "Native_Set_$propName(_handle, value)"
             isEnumType -> "Native_Set_$propName(_handle, (int)value)"
@@ -1145,6 +1219,7 @@ class CirTranslator(
               val isMutableListType: Boolean = qualifiedTypeName == "kotlin.collections.MutableList"
               val isMapType: Boolean = qualifiedTypeName == "kotlin.collections.Map"
               val isMutableMapType: Boolean = qualifiedTypeName == "kotlin.collections.MutableMap"
+              val isSetType: Boolean = qualifiedTypeName == "kotlin.collections.Set"
 
               val listElementType: String? = if (isListType || isMutableListType) {
                 val elementType = propTypeResolved.arguments.firstOrNull()?.type?.resolve()
@@ -1164,14 +1239,22 @@ class CirTranslator(
                 KOTLIN_TO_CSHARP_PARAM[valueTypeName] ?: valueTypeName
               } else null
 
+              val setElementType: String? = if (isSetType) {
+                val elementType = propTypeResolved.arguments.firstOrNull()?.type?.resolve()
+                val elementTypeName: String = elementType?.declaration?.simpleName?.asString() ?: "Any"
+                KOTLIN_TO_CSHARP_PARAM[elementTypeName] ?: elementTypeName
+              } else null
+
               if (isListType || isMutableListType) needsListHelper = true
               if (isMapType || isMutableMapType) needsMapHelper = true
+              if (isSetType) needsSetHelper = true
 
-              val isObjectType: Boolean = propType !in KOTLIN_TO_CSHARP_RETURN && !isEnumType && !isListType && !isMutableListType && !isMapType && !isMutableMapType
+              val isObjectType: Boolean = propType !in KOTLIN_TO_CSHARP_RETURN && !isEnumType && !isListType && !isMutableListType && !isMapType && !isMutableMapType && !isSetType
 
               val nativeReturnType: String = when {
                 (isListType || isMutableListType) -> "IntPtr"
                 (isMapType || isMutableMapType) -> "IntPtr"
+                isSetType -> "IntPtr"
                 isEnumType -> "int"
                 isObjectType -> "IntPtr"
                 else -> mapReturnType(propType)
@@ -1182,6 +1265,7 @@ class CirTranslator(
                 isMutableListType -> "IList<$listElementType>"
                 isMapType -> "IReadOnlyDictionary<$mapKeyType, $mapValueType>"
                 isMutableMapType -> "IDictionary<$mapKeyType, $mapValueType>"
+                isSetType -> "IReadOnlySet<$setElementType>"
                 propType == "String" -> "string"
                 isEnumType -> propType
                 isObjectType && isNullable -> "$propType?"
@@ -1228,6 +1312,19 @@ class CirTranslator(
                   appendLine("                    result[key] = value;")
                   appendLine("                }")
                   appendLine("                NugetMapNative.Dispose(mapHandle);")
+                  append("                return result;")
+                }
+              } else if (isSetType) {
+                buildString {
+                  appendLine()
+                  appendLine("                IntPtr setHandle = Native_Get_$propName(_handle);")
+                  appendLine("                int count = NugetSetNative.Count(setHandle);")
+                  appendLine("                var result = new HashSet<$setElementType>(count);")
+                  appendLine("                for (int i = 0; i < count; i++)")
+                  appendLine("                {")
+                  appendLine("                    result.Add(NugetMarshal.FromHandle<$setElementType>(NugetSetNative.ElementAt(setHandle, i)));")
+                  appendLine("                }")
+                  appendLine("                NugetSetNative.Dispose(setHandle);")
                   append("                return result;")
                 }
               } else when {

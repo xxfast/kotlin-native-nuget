@@ -100,6 +100,10 @@ data class CirMapHelper(
   val libraryName: String,
 ) : CirDeclaration
 
+data class CirSetHelper(
+  val libraryName: String,
+) : CirDeclaration
+
 data class CirEnumEntry(
   val name: String,
   val ordinal: Int,
