@@ -418,7 +418,9 @@ class CirTranslator(
 
     val returnDecl: KSClassDeclaration? = returnType?.declaration as? KSClassDeclaration
 
-    val isListReturnType: Boolean = returnDecl?.qualifiedName?.asString() == "kotlin.collections.List"
+    val qualifiedReturnName: String? = returnDecl?.qualifiedName?.asString()
+    val isListReturnType: Boolean = qualifiedReturnName == "kotlin.collections.List"
+    val isMutableListReturnType: Boolean = qualifiedReturnName == "kotlin.collections.MutableList"
 
     if (isListReturnType) {
       needsListHelper = true
@@ -452,6 +454,46 @@ class CirTranslator(
       val wrapper = CirMethod(
         name = csName,
         returnType = "IReadOnlyList<$csElementType>",
+        parameters = params,
+        body = body,
+        isStatic = true,
+      )
+
+      return listOf(nativeImport, wrapper)
+    }
+
+    if (isMutableListReturnType) {
+      needsListHelper = true
+      val elementType = returnType?.arguments?.firstOrNull()?.type?.resolve()
+      val elementTypeName: String = elementType?.declaration?.simpleName?.asString() ?: "Any"
+      val csElementType: String = KOTLIN_TO_CSHARP_PARAM[elementTypeName] ?: elementTypeName
+
+      val nativeImport = CirDllImport(
+        libraryName = libraryName,
+        entryPoint = cname,
+        returnType = "IntPtr",
+        name = "${csName}_native",
+        parameters = params,
+        visibility = CirVisibility.PRIVATE,
+      )
+
+      val paramNames: String = params.joinToString(", ") { it.name }
+      val body: String = buildString {
+        appendLine()
+        appendLine("            IntPtr listHandle = ${csName}_native($paramNames);")
+        appendLine("            int count = NugetListNative.Count(listHandle);")
+        appendLine("            var result = new List<$csElementType>(count);")
+        appendLine("            for (int i = 0; i < count; i++)")
+        appendLine("            {")
+        appendLine("                result.Add(NugetMarshal.FromHandle<$csElementType>(NugetListNative.Get(listHandle, i)));")
+        appendLine("            }")
+        appendLine("            NugetListNative.Dispose(listHandle);")
+        append("            return result;")
+      }
+
+      val wrapper = CirMethod(
+        name = csName,
+        returnType = "IList<$csElementType>",
         parameters = params,
         body = body,
         isStatic = true,
@@ -777,20 +819,22 @@ class CirTranslator(
         val isEnumType: Boolean = (propTypeResolved.declaration as? KSClassDeclaration)
           ?.classKind == com.google.devtools.ksp.symbol.ClassKind.ENUM_CLASS
 
-        val isListType: Boolean = propTypeResolved.declaration.qualifiedName?.asString() == "kotlin.collections.List"
+        val qualifiedTypeName: String? = propTypeResolved.declaration.qualifiedName?.asString()
+        val isListType: Boolean = qualifiedTypeName == "kotlin.collections.List"
+        val isMutableListType: Boolean = qualifiedTypeName == "kotlin.collections.MutableList"
 
-        val listElementType: String? = if (isListType) {
+        val listElementType: String? = if (isListType || isMutableListType) {
           val elementType = propTypeResolved.arguments.firstOrNull()?.type?.resolve()
           val elementTypeName: String = elementType?.declaration?.simpleName?.asString() ?: "Any"
           KOTLIN_TO_CSHARP_PARAM[elementTypeName] ?: elementTypeName
         } else null
 
-        if (isListType) needsListHelper = true
+        if (isListType || isMutableListType) needsListHelper = true
 
-        val isObjectType: Boolean = propType !in KOTLIN_TO_CSHARP_RETURN && !isEnumType && !isListType
+        val isObjectType: Boolean = propType !in KOTLIN_TO_CSHARP_RETURN && !isEnumType && !isListType && !isMutableListType
 
         val nativeReturnType: String = when {
-          isListType -> "IntPtr"
+          (isListType || isMutableListType) -> "IntPtr"
           isEnumType -> "int"
           isObjectType -> "IntPtr"
           else -> mapReturnType(propType)
@@ -798,6 +842,7 @@ class CirTranslator(
 
         val type: String = when {
           isListType -> "IReadOnlyList<$listElementType>"
+          isMutableListType -> "IList<$listElementType>"
           propType == "String" -> "string"
           isEnumType -> propType
           isObjectType && isNullable -> "$propType?"
@@ -818,6 +863,19 @@ class CirTranslator(
             appendLine("                NugetListNative.Dispose(listHandle);")
             append("                return result.AsReadOnly();")
           }
+        } else if (isMutableListType) {
+          buildString {
+            appendLine()
+            appendLine("                IntPtr listHandle = Native_Get_$propName(_handle);")
+            appendLine("                int count = NugetListNative.Count(listHandle);")
+            appendLine("                var result = new List<$listElementType>(count);")
+            appendLine("                for (int i = 0; i < count; i++)")
+            appendLine("                {")
+            appendLine("                    result.Add(NugetMarshal.FromHandle<$listElementType>(NugetListNative.Get(listHandle, i)));")
+            appendLine("                }")
+            appendLine("                NugetListNative.Dispose(listHandle);")
+            append("                return result;")
+          }
         } else when {
           propType == "String" -> "Marshal.PtrToStringUTF8(Native_Get_$propName(_handle))!"
           isEnumType -> "($propType)Native_Get_$propName(_handle)"
@@ -826,7 +884,7 @@ class CirTranslator(
           else -> "Native_Get_$propName(_handle)"
         }
 
-        val setter: String? = if (isMutable && !isListType) {
+        val setter: String? = if (isMutable && !isListType && !isMutableListType) {
           when {
             propType == "String" -> "Native_Set_$propName(_handle, value)"
             isEnumType -> "Native_Set_$propName(_handle, (int)value)"
@@ -945,20 +1003,22 @@ class CirTranslator(
               val isEnumType: Boolean = (propTypeResolved.declaration as? KSClassDeclaration)
                 ?.classKind == com.google.devtools.ksp.symbol.ClassKind.ENUM_CLASS
 
-              val isListType: Boolean = propTypeResolved.declaration.qualifiedName?.asString() == "kotlin.collections.List"
+              val qualifiedTypeName: String? = propTypeResolved.declaration.qualifiedName?.asString()
+              val isListType: Boolean = qualifiedTypeName == "kotlin.collections.List"
+              val isMutableListType: Boolean = qualifiedTypeName == "kotlin.collections.MutableList"
 
-              val listElementType: String? = if (isListType) {
+              val listElementType: String? = if (isListType || isMutableListType) {
                 val elementType = propTypeResolved.arguments.firstOrNull()?.type?.resolve()
                 val elementTypeName: String = elementType?.declaration?.simpleName?.asString() ?: "Any"
                 KOTLIN_TO_CSHARP_PARAM[elementTypeName] ?: elementTypeName
               } else null
 
-              if (isListType) needsListHelper = true
+              if (isListType || isMutableListType) needsListHelper = true
 
-              val isObjectType: Boolean = propType !in KOTLIN_TO_CSHARP_RETURN && !isEnumType && !isListType
+              val isObjectType: Boolean = propType !in KOTLIN_TO_CSHARP_RETURN && !isEnumType && !isListType && !isMutableListType
 
               val nativeReturnType: String = when {
-                isListType -> "IntPtr"
+                (isListType || isMutableListType) -> "IntPtr"
                 isEnumType -> "int"
                 isObjectType -> "IntPtr"
                 else -> mapReturnType(propType)
@@ -966,6 +1026,7 @@ class CirTranslator(
 
               val type: String = when {
                 isListType -> "IReadOnlyList<$listElementType>"
+                isMutableListType -> "IList<$listElementType>"
                 propType == "String" -> "string"
                 isEnumType -> propType
                 isObjectType && isNullable -> "$propType?"
@@ -985,6 +1046,19 @@ class CirTranslator(
                   appendLine("                }")
                   appendLine("                NugetListNative.Dispose(listHandle);")
                   append("                return result.AsReadOnly();")
+                }
+              } else if (isMutableListType) {
+                buildString {
+                  appendLine()
+                  appendLine("                IntPtr listHandle = Native_Get_$propName(_handle);")
+                  appendLine("                int count = NugetListNative.Count(listHandle);")
+                  appendLine("                var result = new List<$listElementType>(count);")
+                  appendLine("                for (int i = 0; i < count; i++)")
+                  appendLine("                {")
+                  appendLine("                    result.Add(NugetMarshal.FromHandle<$listElementType>(NugetListNative.Get(listHandle, i)));")
+                  appendLine("                }")
+                  appendLine("                NugetListNative.Dispose(listHandle);")
+                  append("                return result;")
                 }
               } else when {
                 propType == "String" -> "Marshal.PtrToStringUTF8(Native_Get_$propName(_handle))!"

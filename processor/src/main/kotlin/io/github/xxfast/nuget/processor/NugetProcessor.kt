@@ -11,6 +11,7 @@ import com.google.devtools.ksp.symbol.KSClassDeclaration
 import com.google.devtools.ksp.symbol.KSDeclaration
 import com.google.devtools.ksp.symbol.KSFile
 import com.google.devtools.ksp.symbol.KSFunctionDeclaration
+import com.google.devtools.ksp.symbol.KSType
 import com.google.devtools.ksp.symbol.ClassKind
 import com.google.devtools.ksp.symbol.Modifier
 import com.google.devtools.ksp.symbol.Visibility
@@ -192,19 +193,23 @@ class NugetProcessor(
         sealedClasses.forEach { addSealedClassExports(it) }
         objects.forEach { addObjectExports(it) }
 
-        val needsListSupport: Boolean = (classes + genericClasses).any { cls ->
-          cls.getAllProperties().any { prop ->
-            prop.type.resolve().declaration.qualifiedName?.asString() == "kotlin.collections.List"
-          }
-        } || (functions + genericFunctions).any { func ->
-          func.returnType?.resolve()?.declaration?.qualifiedName?.asString() == "kotlin.collections.List"
-        } || sealedClasses.any { sealed ->
-          sealed.getSealedSubclasses().any { sub ->
-            sub.getAllProperties().any { prop ->
-              prop.type.resolve().declaration.qualifiedName?.asString() == "kotlin.collections.List"
-            }
-          }
-        }
+        val listTypes: Set<String> = setOf("kotlin.collections.List", "kotlin.collections.MutableList")
+
+        fun KSType.isListType(): Boolean =
+          declaration.qualifiedName?.asString() in listTypes
+
+        val classesHaveLists: Boolean = (classes + genericClasses)
+          .any { cls -> cls.getAllProperties().any { prop -> prop.type.resolve().isListType() } }
+
+        val functionsReturnLists: Boolean = (functions + genericFunctions)
+          .any { func -> func.returnType?.resolve()?.isListType() == true }
+
+        val sealedClassesHaveLists: Boolean = sealedClasses
+          .any { sealed -> sealed.getSealedSubclasses().any { sub ->
+            sub.getAllProperties().any { prop -> prop.type.resolve().isListType() }
+          } }
+
+        val needsListSupport: Boolean = classesHaveLists || functionsReturnLists || sealedClassesHaveLists
 
         if (genericClasses.isNotEmpty() || needsListSupport) {
           addNugetHelperExports()
