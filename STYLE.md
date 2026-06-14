@@ -337,6 +337,27 @@ function
 TODO("Some task that needs to be done.")
 ```
 
+### Extract complex boolean expressions
+
+When a boolean expression combines multiple conditions, extract each part into a named variable.
+```kotlin
+// OK
+val classesHaveLists: Boolean = (classes + genericClasses)
+  .any { cls -> cls.getAllProperties().any { prop -> prop.type.resolve().isListType() } }
+
+val functionsReturnLists: Boolean = (functions + genericFunctions)
+  .any { func -> func.returnType?.resolve()?.isListType() == true }
+
+val needsListSupport: Boolean = classesHaveLists || functionsReturnLists
+
+// Not OK
+val needsListSupport: Boolean = (classes + genericClasses).any { cls ->
+  cls.getAllProperties().any { prop -> prop.type.resolve().isListType() }
+} || (functions + genericFunctions).any { func ->
+  func.returnType?.resolve()?.isListType() == true
+}
+```
+
 ## Function Declarations
 
 Many of the assertions below are based on
