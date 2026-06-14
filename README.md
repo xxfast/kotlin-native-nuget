@@ -95,12 +95,7 @@ brew install dotnet
 
 That's it. Bindings are pre-generated at Kotlin compile time via KSP — no additional tooling needed on the consumer side.
 
-## Design Goals
-
-1. Plug and play; just add the plugin, configure the target and publish your library as a NuGet package
-2. Native; Generated bridge should be C# idiomatic
-3. Comprehensive; Support as many Kotlin features as possible, including OOP constructs, Collections, Generics and Coroutines
-4. Bidirectional; Support generating bindings from Kotlin → C# and C# → Kotlin
+See [GOALS.md](GOALS.md) for design goals, [ROADMAP.md](ROADMAP.md) for the development roadmap.
 
 ## Architecture
 
@@ -119,72 +114,57 @@ Gradle Plugin (Kotlin side)          NuGet Package       C# Consumer
 - **NuGet package** ships native libs + pre-generated `Interop.cs`. No consumer-side tooling required.
 - **Consumer** just includes the package — bindings are ready at build time.
 
-## Roadmap
+## Supported Types
 
-### Phase 1: Basic bridging
-- [x] Gradle plugin structure with `includeBuild`
-- [x] Link shared libraries for multiple targets (mingwX64, macosArm64)
-- [x] Package native libs into NuGet layout (`runtimes/{rid}/native/`)
-- [x] Generate P/Invoke bindings via ClangSharpPInvokeGenerator
-- [x] Move ClangSharp invocation to a `.targets` file shipped inside the NuGet package (see [ADR-001](docs/adr/001-csharp-codegen-in-consumer.md))
-- [x] Ship ClangSharp native libs as a package dependency (eliminate Gradle-side ProcessBuilder)
+### Primitives
 
-### Phase 2: KSP-driven generation
-- [x] KSP processor that discovers all public declarations with full type info
-- [x] Auto-generate `@CName` wrappers (no manual annotations needed)
-- [x] Emit `Interop.cs` directly from KSP (pre-generated, no consumer-side tooling)
-- [x] Remove ClangSharp dependency and `.targets` generation step
-- [x] Map primitive types (Byte, Short, Int, Long, Float, Double + unsigned variants)
-- [x] Map nullable primitives (see [ADR-002](docs/adr/002-nullable-two-call-pattern.md))
-- [x] Map nullable strings
+| Kotlin            | C#                               |
+|-------------------|----------------------------------|
+| `Byte`            | `sbyte`                          |
+| `UByte`           | `byte`                           |
+| `Short`           | `short`                          |
+| `UShort`          | `ushort`                         |
+| `Int`             | `int`                            |
+| `UInt`            | `uint`                           |
+| `Long`            | `long`                           |
+| `ULong`           | `ulong`                          |
+| `Float`           | `float`                          |
+| `Double`          | `double`                         |
+| `Boolean`         | `bool`                           |
+| `String`          | `string`                         |
+| `String?`         | `string?`                        |
+| `T?` (primitives) | two-call pattern (`has` + `get`) |
 
-### Phase 3: Rich type support
-- [x] Map Kotlin packages to C# namespaces (user-configurable root, sub-packages mapped relative to it)
-- [x] Research memory management on the bridge (see [ADR-003](docs/adr/003-memory-management-across-bridge.md))
-- [x] Map String parameters (C# `string` → Kotlin `String` via P/Invoke marshalling)
-- [x] Map String returns as proper `string` (hidden `IntPtr` + `Marshal.PtrToStringUTF8`)
-- [x] Map classes → C# classes with `IDisposable`, StableRef + opaque pointer
-- [x] Refactor to CIR (C# Intermediate Representation) model (see [ADR-004](docs/adr/004-cir-intermediate-representation.md))
-- [x] Map object-typed properties/returns (see [ADR-005](docs/adr/005-object-return-semantics.md))
-- [x] Test cyclic reference disposal (verified wrappers are independent, dispose doesn't cascade)
-- [x] Map member setters
-- [x] Map enums (see [ADR-006](docs/adr/006-enum-mapping.md))
-- [x] Map per-file top-level function class naming (see [ADR-007](docs/adr/007-top-level-function-class-naming.md))
-- [x] Map data classes (see [ADR-008](docs/adr/008-data-class-mapping.md))
-- [x] Map interfaces (C# `interface` with `I` prefix, default methods delegate to Kotlin)
-- [x] Map abstract classes (C# `abstract class`, `_handle` inherited by subclasses)
-- [x] Map sealed classes (see [ADR-009](docs/adr/009-sealed-class-mapping.md))
-- [x] Map object (→ static class) / data object in sealed classes (→ sealed subclass with ToString)
-- [x] Map Generics (see [ADR-010](docs/adr/010-generics-mapping.md))
-  - [x] Generic classes with type-erased bridge + generic C# class
-  - [x] NugetMarshal helper for type dispatch
-  - [x] Primitive type argument variants (Int, String, etc.)
-- [x] Generic class constructors (pass typed arguments through the bridge)
-- [x] Map Generic functions (typed variants + runtime dispatch)
-- [x] Map Collections types
-  - [x] `List<T>` → `IReadOnlyList<T>` (opaque handle + count, get)
-  - [x] `MutableList<T>` → `IList<T>` (add, removeAt, set)
-  - [x] `Map<K,V>` → `IReadOnlyDictionary<K,V>` (count, get, containsKey, keys)
-  - [x] `MutableMap<K,V>` → `IDictionary<K,V>` (put, remove)
-  - [x] `Set<T>` → `IReadOnlySet<T>` (count, contains)
-  - [x] `MutableSet<T>` → `ISet<T>` (add, remove)
+### OOP Constructs
 
-### Phase 4: Async support
-- [ ] Map Suspend functions (coroutines → Task/async)
-- [ ] Map Flow APIs (cold streams → IAsyncEnumerable or RxObservables
-- [ ] Handle cancellation and exceptions across the bridge
+| Kotlin                    | C#                    | Notes                                            |
+|---------------------------|-----------------------|--------------------------------------------------|
+| `class`                   | `class : IDisposable` | StableRef + opaque pointer                       |
+| `data class`              | `class`               | `ToString`, `Equals`, `Copy`                     |
+| `interface`               | `interface`           | `I`-prefixed, default methods delegate to Kotlin |
+| `abstract class`          | `abstract class`      | `_handle` inherited by subclasses                |
+| `sealed class`            | `abstract class`      | subclasses nested                                |
+| `object` (in sealed)      | `static class`        |                                                  |
+| `data object` (in sealed) | sealed subclass       | with `ToString`                                  |
+| `enum class`              | `enum`                | with extension methods                           |
+| top-level functions       | `static class`        | one per source file                              |
 
-### Phase 5: Bidirectional support (C# → Kotlin)
-- [ ] Research calling C# from Kotlin/Native (reverse P/Invoke, function pointers)
-- [ ] Generate Kotlin wrappers for C# interfaces (callbacks, event handlers)
-- [ ] Support implementing C# interfaces in Kotlin and passing them back to C# consumers
-- [ ] Support implementing Kotlin interfaces in C# and passing them to Kotlin producers
+### Generics
 
-## Future Improvements
+| Kotlin        | C#             | Notes                                   |
+|---------------|----------------|-----------------------------------------|
+| `class<T>`    | `class<T>`     | type-erased bridge + generic C# wrapper |
+| `fun <T> f()` | typed variants | runtime dispatch via `NugetMarshal`     |
 
-- Support flat/unnested sealed class hierarchies (subclasses as top-level in same namespace)
-- KSP incremental processing if build times become a concern on large libraries
-- Map data classes to C# `record class` if a safe `with`-expression pattern can be found (see [ADR-008](docs/adr/008-data-class-mapping.md))
-- Verify Kotlin GC actually frees objects after all StableRefs are disposed (requires Kotlin-side weak references + GC trigger — not feasible in standard unit tests)
-- Memory leak detection tooling for bridged objects in CI
-- Object identity preservation (caching wrappers) if profiling shows allocation overhead is significant
+### Collections
+
+| Kotlin            | C#                         | Notes                        |
+|-------------------|----------------------------|------------------------------|
+| `List<T>`         | `IReadOnlyList<T>`         | eager copy via opaque handle |
+| `MutableList<T>`  | `IList<T>`                 | eager copy                   |
+| `Map<K,V>`        | `IReadOnlyDictionary<K,V>` | eager copy                   |
+| `MutableMap<K,V>` | `IDictionary<K,V>`         | eager copy                   |
+| `Set<T>`          | `IReadOnlySet<T>`          | eager copy                   |
+| `MutableSet<T>`   | `ISet<T>`                  | eager copy                   |
+
+See [docs/adr/](docs/adr/) for architecture decision records.

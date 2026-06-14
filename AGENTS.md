@@ -4,6 +4,10 @@ This file describes common issues and pain points that agents might encounter wh
 
 If you ever encounter an issue specific to agents in the project, please update this file to help prevent future agents from having the same issue.
 
+### Understand the Project Goals
+
+Read [GOALS.md](GOALS.md) before making design decisions.
+
 ### Follow Standard Coding Conventions
 
 - For Kotlin, follow standard coding conventions as described here https://kotlinlang.org/docs/coding-conventions.html
