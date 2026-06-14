@@ -67,3 +67,4 @@
 - Verify Kotlin GC actually frees objects after all StableRefs are disposed (requires Kotlin-side weak references + GC trigger — not feasible in standard unit tests)
 - Memory leak detection tooling for bridged objects in CI
 - Object identity preservation (caching wrappers) if profiling shows allocation overhead is significant
+- Custom type mappers for dependency types (e.g., `kotlinx.datetime.Instant` → `DateTimeOffset`)
