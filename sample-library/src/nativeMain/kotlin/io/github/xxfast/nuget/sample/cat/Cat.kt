@@ -13,6 +13,10 @@ class Cat(
     "collar" to Toy("Bell Collar", "Gold"),
     "tag" to Toy("Name Tag", "Silver"),
   )
+  val schedule: MutableMap<String, String> = mutableMapOf(
+    "morning" to "Nap",
+    "evening" to "Play",
+  )
 
   override fun speak(): String = "Meow! My name is $name"
 

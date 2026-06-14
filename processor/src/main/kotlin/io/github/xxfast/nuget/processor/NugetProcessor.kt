@@ -212,7 +212,7 @@ class NugetProcessor(
 
         val needsListSupport: Boolean = classesHaveLists || functionsReturnLists || sealedClassesHaveLists
 
-        val mapTypes: Set<String> = setOf("kotlin.collections.Map")
+        val mapTypes: Set<String> = setOf("kotlin.collections.Map", "kotlin.collections.MutableMap")
 
         fun KSType.isMapType(): Boolean =
           declaration.qualifiedName?.asString() in mapTypes
