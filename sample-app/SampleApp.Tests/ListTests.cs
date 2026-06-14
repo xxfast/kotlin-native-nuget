@@ -22,6 +22,15 @@ public class ListTests
     }
 
     [Fact]
+    public void Cat_Nicknames_ListEquality()
+    {
+        using var cat = new Cat("Oreo", 9);
+        IReadOnlyList<string> nicknames = cat.Nicknames;
+        Assert.Equal(new List<string> { "Oreoy", "Little Oreo" }, nicknames);
+        Assert.NotEqual(new List<string> { "Little Oreo", "Oreoy" }, nicknames);
+    }
+
+    [Fact]
     public void Cat_Nicknames_Enumeration()
     {
         using var cat = new Cat("Oreo", 9);
