@@ -14,6 +14,7 @@ class Cat(
     "tag" to Toy("Name Tag", "Silver"),
   )
   val traits: Set<String> = setOf("Playful", "Curious", "Fluffy")
+  val vaccinations: MutableSet<String> = mutableSetOf("Rabies", "FVRCP")
   val schedule: MutableMap<String, String> = mutableMapOf(
     "morning" to "Nap",
     "evening" to "Play",
