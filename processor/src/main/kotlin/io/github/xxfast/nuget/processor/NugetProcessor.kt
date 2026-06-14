@@ -21,7 +21,8 @@ import com.squareup.kotlinpoet.FileSpec
 import com.squareup.kotlinpoet.ksp.writeTo
 import io.github.xxfast.nuget.processor.cir.CirFile
 import io.github.xxfast.nuget.processor.cir.CirRenderer
-import io.github.xxfast.nuget.processor.cir.CirTranslator
+import io.github.xxfast.nuget.processor.cir.NugetContext
+import io.github.xxfast.nuget.processor.cir.translate
 import io.github.xxfast.nuget.processor.exports.addClassExports
 import io.github.xxfast.nuget.processor.exports.addEnumExports
 import io.github.xxfast.nuget.processor.exports.addFunctionExports
@@ -37,17 +38,10 @@ import io.github.xxfast.nuget.processor.exports.addSealedClassExports
 class NugetProcessor(
   private val codeGenerator: CodeGenerator,
   private val logger: KSPLogger,
-  libraryName: String,
-  rootNamespace: String,
-  rootPackage: String,
-  className: String,
+  private val context: NugetContext,
 ) : SymbolProcessor {
 
   private var processed = false
-
-  private val translator = CirTranslator(
-    libraryName, rootNamespace, rootPackage, className,
-  )
 
   private val renderer = CirRenderer()
 
@@ -143,7 +137,7 @@ class NugetProcessor(
     objects: List<KSClassDeclaration>,
     deps: Dependencies,
   ) {
-    val cirFile: CirFile = translator.translate(functions, genericFunctions, classes, enums, interfaces, sealedClasses, objects)
+    val cirFile: CirFile = translate(context, functions, genericFunctions, classes, enums, interfaces, sealedClasses, objects)
     val csharp: String = renderer.render(cirFile)
 
     val file = codeGenerator.createNewFile(

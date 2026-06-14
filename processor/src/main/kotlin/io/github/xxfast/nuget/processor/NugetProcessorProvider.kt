@@ -3,21 +3,21 @@ package io.github.xxfast.nuget.processor
 import com.google.devtools.ksp.processing.SymbolProcessor
 import com.google.devtools.ksp.processing.SymbolProcessorEnvironment
 import com.google.devtools.ksp.processing.SymbolProcessorProvider
+import io.github.xxfast.nuget.processor.cir.NugetContext
 
 class NugetProcessorProvider : SymbolProcessorProvider {
   override fun create(environment: SymbolProcessorEnvironment): SymbolProcessor {
-    val libraryName: String = environment.options["nuget.libraryName"] ?: "library"
-    val rootNamespace: String = environment.options["nuget.namespace"] ?: "Interop"
-    val rootPackage: String = environment.options["nuget.rootPackage"] ?: ""
-    val className: String = environment.options["nuget.className"] ?: "NativeBindings"
+    val context = NugetContext(
+      libraryName = environment.options["nuget.libraryName"] ?: "library",
+      rootNamespace = environment.options["nuget.namespace"] ?: "Interop",
+      rootPackage = environment.options["nuget.rootPackage"] ?: "",
+      className = environment.options["nuget.className"] ?: "NativeBindings",
+    )
 
     return NugetProcessor(
       codeGenerator = environment.codeGenerator,
       logger = environment.logger,
-      libraryName = libraryName,
-      rootNamespace = rootNamespace,
-      rootPackage = rootPackage,
-      className = className,
+      context = context,
     )
   }
 }
