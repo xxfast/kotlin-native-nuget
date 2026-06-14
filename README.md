@@ -125,8 +125,6 @@ Gradle Plugin (Kotlin side)          NuGet Package       C# Consumer
 | `Double`          | `double`                         |
 | `Boolean`         | `bool`                           |
 | `String`          | `string`                         |
-| `String?`         | `string?`                        |
-| `T?` (primitives) | two-call pattern (`has` + `get`) |
 
 ### OOP Constructs
 

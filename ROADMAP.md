@@ -47,10 +47,12 @@
   - [x] `MutableMap<K,V>` → `IDictionary<K,V>` (put, remove)
   - [x] `Set<T>` → `IReadOnlySet<T>` (count, contains)
   - [x] `MutableSet<T>` → `ISet<T>` (add, remove)
+- [ ] Map lambda/function types (see [ADR-012](docs/adr/012-lambda-function-type-mapping.md))
 
 ## Phase 4: Async support
 - [ ] Map Suspend functions (coroutines → Task/async)
-- [ ] Map Flow APIs (cold streams → IAsyncEnumerable or RxObservables
+- [ ] Map Suspend lambdas (`suspend () -> R` → `KotlinSuspendFunc<R>` / `Task<R>`)
+- [ ] Map Flow APIs (cold streams → IAsyncEnumerable or RxObservables)
 - [ ] Handle cancellation and exceptions across the bridge
 
 ## Phase 5: Bidirectional support (C# → Kotlin)
@@ -68,3 +70,4 @@
 - Memory leak detection tooling for bridged objects in CI
 - Object identity preservation (caching wrappers) if profiling shows allocation overhead is significant
 - Custom type mappers for dependency types (e.g., `kotlinx.datetime.Instant` → `DateTimeOffset`)
+- Map KDoc annotations to C# XML docs for better IDE support
