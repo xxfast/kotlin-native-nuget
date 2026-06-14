@@ -4,19 +4,28 @@ This file describes common issues and pain points that agents might encounter wh
 
 If you ever encounter an issue specific to agents in the project, please update this file to help prevent future agents from having the same issue.
 
-### Understand the Project Goals
+## Understand the Project Goals
 
 Read [GOALS.md](GOALS.md) before making design decisions.
 
-### Follow Standard Coding Conventions
+## Roadmap
+
+Read [ROADMAP.md](ROADMAP.md) to understand the planned features and priorities for the project. This will help you align your work with the overall direction of the project and avoid working on features that are not currently a priority.
+
+## Skills
+
+- Read [.claude/skills/feature-dev.md](.claude/skills/feature-dev.md) for the feature development workflow                             
+- Read [.claude/skills/kotlin-dev.md](.claude/skills/kotlin-dev.md) for Kotlin implementation guidance                                         
+- Read [.claude/skills/csharp-dev.md](.claude/skills/csharp-dev.md) for C# test development guidance   
+
+## Follow Standard Coding Conventions
 
 - For Kotlin, follow standard coding conventions as described here https://kotlinlang.org/docs/coding-conventions.html
-  - For Android, follow Android-specific Kotlin style as described here https://developer.android.com/kotlin/style-guide
-- For Swift, follow standard coding conventions as described here https://www.swift.org/documentation/api-design-guidelines/
+- For C#, follow the standard coding conventions as described here https://learn.microsoft.com/en-us/dotnet/csharp/fundamentals/coding-style/coding-conventions
 
 On top of that, we have some additional conventions that are specific to this repository here [STYLE.md](STYLE.md)
 
-### Follow Repository Coding Conventions
+## Follow Repository Coding Conventions
 
 - Naming is hard. Use shorten names when applicable and rely on the type to do the heavy lifting.
   - e.g:- `id: SomeId` instead of `someId: SomeId` 
@@ -27,13 +36,13 @@ On top of that, we have some additional conventions that are specific to this re
 - When handling error states from `Result`, avoid using scoping functions (such as `.onFailure`) that introduce indentation. 
   - Instead, use explicit `if (result.isFailure)` checks with proper logging and error handling.
 
-### Stay In Scope
+## Stay In Scope
 
 - Always ensure that your changes are aligned with the scope of the JIRA ticket you are working on.
 - Avoid making unrelated changes or improvements that are not directly related to the ticket, as this can make code reviews more difficult and can introduce unintended side effects.
 - Don't touch unrelated code or files that are not necessary for the implementation of the ticket - no matter how small and easy it may look
 
-### Fail Fast & Follow Defensive Programming
+## Fail Fast & Follow Defensive Programming
 
 - Use `require` / `requireNotNull` / `check` with explicit messages to fail fast when preconditions are not met.
 - Avoid silent failures or returning null without explanation.
