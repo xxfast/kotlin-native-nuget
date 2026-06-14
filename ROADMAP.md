@@ -47,7 +47,7 @@
   - [x] `MutableMap<K,V>` → `IDictionary<K,V>` (put, remove)
   - [x] `Set<T>` → `IReadOnlySet<T>` (count, contains)
   - [x] `MutableSet<T>` → `ISet<T>` (add, remove)
-- [ ] Map lambda/function types (see [ADR-012](docs/adr/012-lambda-function-type-mapping.md))
+- [ ] Map lambda/function types — Kotlin → C# only (see [ADR-012](docs/adr/012-lambda-function-type-mapping.md))
 
 ## Phase 4: Async support
 - [ ] Map Suspend functions (coroutines → Task/async)
@@ -57,6 +57,7 @@
 
 ## Phase 5: Bidirectional support (C# → Kotlin)
 - [ ] Research calling C# from Kotlin/Native (reverse P/Invoke, function pointers)
+- [ ] Map lambda/function types — C# → Kotlin (see [ADR-012](docs/adr/012-lambda-function-type-mapping.md))
 - [ ] Generate Kotlin wrappers for C# interfaces (callbacks, event handlers)
 - [ ] Support implementing C# interfaces in Kotlin and passing them back to C# consumers
 - [ ] Support implementing Kotlin interfaces in C# and passing them to Kotlin producers

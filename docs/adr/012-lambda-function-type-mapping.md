@@ -24,13 +24,36 @@ val fnPtr = staticCFunction { x: Int -> x * 2 }
 val fnPtr = staticCFunction { speak() }
 ```
 
-### How other platforms handle this
+### Prior art: how other Kotlin targets handle lambdas
 
-- **ObjC Export**: Kotlin lambdas become Objective-C blocks (`void (^)(NSString *)`). The ObjC block ABI is essentially a `(function_pointer, context_pointer)` pair — the runtime handles the pairing automatically.
-- **Swift Export**: Same as ObjC — lambdas bridge through blocks. Swift closures are also `(invoke_ptr, context_ptr)` pairs internally.
-- **JNI**: Uses `jobject` + `jmethodID` to reflect-invoke the `invoke` method on a functional interface. Equivalent to our opaque handle + separate invoke export.
+Every Kotlin target uses an **indirect invocation pattern** — no target passes lambdas as naked C function pointers. The critical difference between targets is whether they have a shared or bridged memory manager.
 
-**Every platform uses an indirect invocation pattern** — no platform passes lambdas as naked C function pointers.
+#### Kotlin/Native → ObjC/Swift (closest analogue)
+
+Kotlin lambdas map directly to **ObjC blocks** / **Swift closures**. The ObjC block ABI is a `(function_pointer, context_pointer)` pair — the runtime handles pairing automatically. Lifecycle is automatic because Kotlin's tracing GC and ObjC's ARC have a built-in integration bridge.
+
+Pain points:
+- **Primitive boxing in function types**: Inside lambda signatures, primitives are boxed to `KotlinInt`, `KotlinFloat`, etc. (NSNumber subclasses). A `(Int) -> Unit` in Kotlin becomes `(KotlinInt) -> KotlinUnit` in Swift, forcing casts.
+- **Unit return**: `Unit`-returning lambdas require `return KotlinUnit()` in Swift instead of `Void`. A major ergonomic issue.
+- **Retain cycles**: When closures capture both Kotlin and ObjC/Swift objects, retain cycles can form that neither GC nor ARC can break. Swift callers must use `[weak self]`.
+
+JetBrains is developing **Swift Export** (Alpha) which generates native Swift modules directly, bypassing the ObjC bridge — this eliminates primitive boxing and maps `Unit` to `Void`.
+
+#### Kotlin/JVM → Java
+
+Kotlin lambdas compile to `kotlin.jvm.functions.Function0<R>` through `Function22<...>` interfaces. Java callers invoke via `.invoke()` — the closest existing analogue to our `KotlinFunc<T>` approach. Lifecycle is automatic (shared JVM GC). Pain point: Java callers must `return Unit.INSTANCE` for `Unit`-returning lambdas. SAM interfaces (`fun interface`) are the recommended workaround.
+
+#### Kotlin/JS and Kotlin/Wasm → JavaScript
+
+Lambdas become **plain JS functions**. No wrappers, no lifecycle concerns — both sides are garbage-collected. The simplest mapping, but also the least constrained runtime.
+
+#### SKIE (Touchlab)
+
+A compiler plugin that generates additional Swift wrappers on top of the ObjC headers. Does not change the fundamental lambda/closure mapping — primitive boxing and `KotlinUnit` persist. Main contribution is bridging `suspend` functions to Swift `async` with real two-way cancellation, and `Flow<T>` to `AsyncSequence`. Known limitation: lambda types as generic type arguments (e.g., `A<() -> Unit>`) are not supported due to a Swift compiler limitation.
+
+#### Why C# requires wrapper types
+
+Every other target has a **shared or bridged memory manager**: JVM GC, JS GC, or the Kotlin GC↔ARC integration for Apple. C# over P/Invoke has none of that — the FFI boundary is raw `IntPtr` handles to `StableRef` pointers. There is no mechanism for C#'s GC to tell Kotlin's GC "I'm done with this object." This is why `KotlinFunc<T>` with `IDisposable` is necessary — it makes the ownership cost explicit rather than hiding it behind `Func<T>` which doesn't carry that lifecycle contract. The `KotlinAction`/`KotlinAction<T>` split for `Unit`-returning lambdas addresses the ergonomic lesson from ObjC/Swift, where forcing a dummy return value is a well-known pain point.
 
 ## Alternatives Considered
 
@@ -177,9 +200,9 @@ public Func<string, string> OnMeow
 
 ## Decision
 
-Use **option 1 (opaque handle)** for Kotlin → C# direction, and **option 2 (function pointer + context)** for C# → Kotlin direction.
+Use **option 1 (opaque handle)** for Kotlin → C# direction (Phase 3). Defer **option 2 (function pointer + context)** for C# → Kotlin direction to Phase 5 (bidirectional support).
 
-### Kotlin → C# (returning/exposing lambdas)
+### Kotlin → C# (returning/exposing lambdas) — Phase 3
 
 Kotlin lambda properties and returns are bridged using the same `StableRef` opaque handle pattern as classes. Generate per-site `invoke` and `dispose` exports on the Kotlin side. On the C# side, wrap in arity-specific types:
 
@@ -193,9 +216,9 @@ Kotlin lambda properties and returns are bridged using the same `StableRef` opaq
 
 All implement `IDisposable`. The `Kotlin` prefix distinguishes them from `System.Func`/`System.Action` and signals they hold a native resource.
 
-### C# → Kotlin (accepting lambda parameters)
+### C# → Kotlin (accepting lambda parameters) — deferred to Phase 5
 
-Kotlin functions with lambda parameters accept a `CPointer<CFunction<...>>` at the C boundary. C# marshals a `Func`/`Action` delegate to a function pointer, pins it for the call, and frees after return. For synchronous calls, the `GCHandle` is scoped to the call site. Storing function pointers across calls (async, callbacks) is deferred to Phase 5 (bidirectional support).
+Kotlin functions with lambda parameters accept a `CPointer<CFunction<...>>` at the C boundary. C# marshals a `Func`/`Action` delegate to a function pointer, pins it for the call, and frees after return. This requires fundamentally new plumbing (delegate marshalling, `GCHandle` pinning, `CPointer<CFunction<...>>` on the Kotlin side) that aligns with the bidirectional support work in Phase 5. Storing function pointers across calls (async, callbacks) adds further lifetime complexity best addressed alongside reverse P/Invoke.
 
 ### Arity limit
 

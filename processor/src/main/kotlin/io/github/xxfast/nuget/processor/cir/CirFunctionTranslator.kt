@@ -40,6 +40,38 @@ internal fun translateFunction(
   val isMutableMapReturnType: Boolean = qualifiedReturnName == "kotlin.collections.MutableMap"
   val isSetReturnType: Boolean = qualifiedReturnName == "kotlin.collections.Set"
   val isMutableSetReturnType: Boolean = qualifiedReturnName == "kotlin.collections.MutableSet"
+  val isLambdaReturnType: Boolean = qualifiedReturnName in LAMBDA_TYPES
+
+  if (isLambdaReturnType) {
+    val lambdaArity: Int = returnType!!.arguments.size - 1
+    tracker.lambdaArities.add(lambdaArity)
+
+    val lambdaTypeArgs: List<String> = returnType.arguments.map { arg ->
+      val argType: String = arg.type?.resolve()?.declaration?.simpleName?.asString() ?: "object"
+      KOTLIN_TO_CSHARP_PARAM[argType] ?: argType
+    }
+    val lambdaCsType = "KotlinFunc<${lambdaTypeArgs.joinToString(", ")}>"
+
+    val nativeImport = CirDllImport(
+      libraryName = libraryName,
+      entryPoint = cname,
+      returnType = "IntPtr",
+      name = "${csName}_native",
+      parameters = params,
+      visibility = CirVisibility.PRIVATE,
+    )
+
+    val paramNames: String = params.joinToString(", ") { it.name }
+    val wrapper = CirMethod(
+      name = csName,
+      returnType = lambdaCsType,
+      parameters = params,
+      body = "new $lambdaCsType(${csName}_native($paramNames))",
+      isStatic = true,
+    )
+
+    return listOf(nativeImport, wrapper)
+  }
 
   if (isListReturnType) {
     tracker.needsList = true

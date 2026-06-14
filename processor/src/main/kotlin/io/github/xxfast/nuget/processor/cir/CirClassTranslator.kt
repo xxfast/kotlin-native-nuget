@@ -106,17 +106,34 @@ internal fun translateClass(
       if (isMapType || isMutableMapType) tracker.needsMap = true
       if (isSetType || isMutableSetType) tracker.needsSet = true
 
-      val isReferenceType: Boolean = propType !in KOTLIN_TO_CSHARP_RETURN && !isEnumType && !isListType && !isMutableListType && !isMapType && !isMutableMapType && !isSetType && !isMutableSetType
+      val isLambdaType: Boolean = qualifiedTypeName in LAMBDA_TYPES
+      val lambdaArity: Int = if (isLambdaType) propTypeResolved.arguments.size - 1 else -1
+
+      if (isLambdaType) tracker.lambdaArities.add(lambdaArity)
+
+      val isReferenceType: Boolean = propType !in KOTLIN_TO_CSHARP_RETURN && !isEnumType && !isListType && !isMutableListType && !isMapType && !isMutableMapType && !isSetType && !isMutableSetType && !isLambdaType
 
       if (isReferenceType) {
-        val qualifiedTypeName: String? = propTypeResolved.declaration.qualifiedName?.asString()
         if (qualifiedTypeName != null && qualifiedTypeName !in exportedTypes) {
           logger.warn("Skipping property '${cls.simpleName.asString()}.$propName': unsupported type '$qualifiedTypeName'")
           return@mapNotNull null
         }
       }
 
+      val lambdaTypeArgs: List<String> = if (isLambdaType) {
+        propTypeResolved.arguments.map { arg ->
+          val argType: String = arg.type?.resolve()?.declaration?.simpleName?.asString() ?: "object"
+          KOTLIN_TO_CSHARP_PARAM[argType] ?: argType
+        }
+      } else emptyList()
+
+      val lambdaCsType: String = if (isLambdaType) {
+        val typeParams: String = lambdaTypeArgs.joinToString(", ")
+        "KotlinFunc<$typeParams>"
+      } else ""
+
       val nativeReturnType: String = when {
+        isLambdaType -> "IntPtr"
         (isListType || isMutableListType) -> "IntPtr"
         (isMapType || isMutableMapType) -> "IntPtr"
         (isSetType || isMutableSetType) -> "IntPtr"
@@ -126,6 +143,7 @@ internal fun translateClass(
       }
 
       val type: String = when {
+        isLambdaType -> lambdaCsType
         isListType -> "IReadOnlyList<$listElementType>"
         isMutableListType -> "IList<$listElementType>"
         isMapType -> "IReadOnlyDictionary<$mapKeyType, $mapValueType>"
@@ -139,7 +157,9 @@ internal fun translateClass(
         else -> mapReturnType(propType)
       }
 
-      val getter: String = if (isListType) {
+      val getter: String = if (isLambdaType) {
+        "new $lambdaCsType(Native_Get_$propName(_handle))"
+      } else if (isListType) {
         buildString {
           appendLine()
           appendLine("                IntPtr listHandle = Native_Get_$propName(_handle);")
@@ -201,7 +221,7 @@ internal fun translateClass(
         else -> "Native_Get_$propName(_handle)"
       }
 
-      val setter: String? = if (isMutable && !isListType && !isMutableListType && !isMapType && !isMutableMapType && !isSetType && !isMutableSetType) {
+      val setter: String? = if (isMutable && !isLambdaType && !isListType && !isMutableListType && !isMapType && !isMutableMapType && !isSetType && !isMutableSetType) {
         when {
           propType == "String" -> "Native_Set_$propName(_handle, value)"
           isEnumType -> "Native_Set_$propName(_handle, (int)value)"
@@ -396,14 +416,32 @@ internal fun translateSealedClass(
             if (isMapType || isMutableMapType) tracker.needsMap = true
             if (isSetType || isMutableSetType) tracker.needsSet = true
 
-            val isReferenceType: Boolean = propType !in KOTLIN_TO_CSHARP_RETURN && !isEnumType && !isListType && !isMutableListType && !isMapType && !isMutableMapType && !isSetType && !isMutableSetType
+            val isLambdaType: Boolean = qualifiedTypeName in LAMBDA_TYPES
+            val lambdaArity: Int = if (isLambdaType) propTypeResolved.arguments.size - 1 else -1
+
+            if (isLambdaType) tracker.lambdaArities.add(lambdaArity)
+
+            val isReferenceType: Boolean = propType !in KOTLIN_TO_CSHARP_RETURN && !isEnumType && !isListType && !isMutableListType && !isMapType && !isMutableMapType && !isSetType && !isMutableSetType && !isLambdaType
 
             if (isReferenceType && qualifiedTypeName != null && qualifiedTypeName !in exportedTypes) {
               logger.warn("Skipping property '${cls.simpleName.asString()}.${subName}.$propName': unsupported type '$qualifiedTypeName'")
               return@mapNotNull null
             }
 
+            val lambdaTypeArgs: List<String> = if (isLambdaType) {
+              propTypeResolved.arguments.map { arg ->
+                val argType: String = arg.type?.resolve()?.declaration?.simpleName?.asString() ?: "object"
+                KOTLIN_TO_CSHARP_PARAM[argType] ?: argType
+              }
+            } else emptyList()
+
+            val lambdaCsType: String = if (isLambdaType) {
+              val typeParams: String = lambdaTypeArgs.joinToString(", ")
+              "KotlinFunc<$typeParams>"
+            } else ""
+
             val nativeReturnType: String = when {
+              isLambdaType -> "IntPtr"
               (isListType || isMutableListType) -> "IntPtr"
               (isMapType || isMutableMapType) -> "IntPtr"
               (isSetType || isMutableSetType) -> "IntPtr"
@@ -413,6 +451,7 @@ internal fun translateSealedClass(
             }
 
             val type: String = when {
+              isLambdaType -> lambdaCsType
               isListType -> "IReadOnlyList<$listElementType>"
               isMutableListType -> "IList<$listElementType>"
               isMapType -> "IReadOnlyDictionary<$mapKeyType, $mapValueType>"
@@ -426,7 +465,9 @@ internal fun translateSealedClass(
               else -> mapReturnType(propType)
             }
 
-            val getter: String = if (isListType) {
+            val getter: String = if (isLambdaType) {
+              "new $lambdaCsType(Native_Get_$propName(_handle))"
+            } else if (isListType) {
               buildString {
                 appendLine()
                 appendLine("                IntPtr listHandle = Native_Get_$propName(_handle);")

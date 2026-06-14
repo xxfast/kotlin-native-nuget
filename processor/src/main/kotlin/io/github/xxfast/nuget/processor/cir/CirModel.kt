@@ -104,6 +104,17 @@ data class CirSetHelper(
   val libraryName: String,
 ) : CirDeclaration
 
+data class CirFuncNativeHelper(
+  val libraryName: String,
+  val arities: Set<Int>,
+) : CirDeclaration
+
+data class CirFuncHelper(
+  val libraryName: String,
+  val arities: Set<Int>,
+  val helperNamespace: String,
+) : CirDeclaration
+
 data class CirEnumEntry(
   val name: String,
   val ordinal: Int,

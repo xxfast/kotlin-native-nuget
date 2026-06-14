@@ -49,3 +49,25 @@ Console.WriteLine($"Equal? {toy.Equals(redToy)}");
 
 using var sameToy = toy.Copy("Mouse", "Gray");
 Console.WriteLine($"Same values equal? {toy.Equals(sameToy)}");
+
+// Lambdas
+Console.WriteLine("\n=== Lambdas ===");
+using var onMeow = oreo.OnMeow;
+Console.WriteLine($"OnMeow: {onMeow.Invoke()}");
+
+using var onPet = oreo.OnPet;
+Console.WriteLine($"OnPet: {onPet.Invoke("purrs")}");
+
+using var countLives = oreo.CountLives;
+Console.WriteLine($"Lives: {countLives.Invoke()}");
+
+using var isAlive = oreo.IsAlive;
+Console.WriteLine($"Is alive? {isAlive.Invoke()}");
+
+using var favoriteToy = oreo.FavoriteToy;
+using var fav = favoriteToy.Invoke();
+Console.WriteLine($"Favorite toy: {fav}");
+
+// Top-level function returning a lambda
+using var greet = Mappings.greeter("G'day");
+Console.WriteLine($"Greeter: {greet.Invoke("mate")}");

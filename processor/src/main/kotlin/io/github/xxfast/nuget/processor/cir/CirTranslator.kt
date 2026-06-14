@@ -103,7 +103,7 @@ fun translate(
     namespaces.addDeclaration(namespaceOf(obj.packageName.asString()), translateObject(obj, context.libraryName))
   }
 
-  if (tracker.needsList || tracker.needsMap || tracker.needsSet) {
+  if (tracker.needsList || tracker.needsMap || tracker.needsSet || tracker.lambdaArities.isNotEmpty()) {
     needsMarshalHelper = true
   }
 
@@ -112,6 +112,7 @@ fun translate(
     if (tracker.needsList) helpers.add(CirListHelper(context.libraryName))
     if (tracker.needsMap) helpers.add(CirMapHelper(context.libraryName))
     if (tracker.needsSet) helpers.add(CirSetHelper(context.libraryName))
+    if (tracker.lambdaArities.isNotEmpty()) helpers.add(CirFuncNativeHelper(context.libraryName, tracker.lambdaArities))
 
     val firstNamespace: CirNamespace = namespaces.firstOrNull() ?: CirNamespace(context.rootNamespace, emptyList())
     val idx: Int = namespaces.indexOfFirst { it.name == firstNamespace.name }
@@ -120,6 +121,19 @@ fun translate(
       namespaces[idx] = firstNamespace.copy(declarations = helpers + firstNamespace.declarations)
     } else {
       namespaces.add(0, CirNamespace(context.rootNamespace, helpers))
+    }
+
+    if (tracker.lambdaArities.isNotEmpty()) {
+      val helperNs: String = firstNamespace.name
+      val funcHelper = CirFuncHelper(context.libraryName, tracker.lambdaArities, helperNs)
+      val rootIdx: Int = namespaces.indexOfFirst { it.name == context.rootNamespace }
+
+      if (rootIdx >= 0) {
+        val root: CirNamespace = namespaces[rootIdx]
+        namespaces[rootIdx] = root.copy(declarations = listOf(funcHelper) + root.declarations)
+      } else {
+        namespaces.add(CirNamespace(context.rootNamespace, listOf(funcHelper)))
+      }
     }
   }
 

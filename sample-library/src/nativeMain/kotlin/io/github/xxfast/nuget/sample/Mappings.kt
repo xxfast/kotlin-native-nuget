@@ -25,3 +25,5 @@ fun double(): Double = 2.718281828459045
 fun nullableInt(hasValue: Boolean): Int? = if (hasValue) 42 else null
 
 fun nullableString(hasValue: Boolean): String? = if (hasValue) "hello" else null
+
+fun greeter(greeting: String): (String) -> String = { name -> "$greeting, $name!" }

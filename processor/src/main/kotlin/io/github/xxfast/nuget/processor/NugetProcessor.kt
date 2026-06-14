@@ -32,6 +32,11 @@ import io.github.xxfast.nuget.processor.exports.addNugetHelperExports
 import io.github.xxfast.nuget.processor.exports.addNugetListHelperExports
 import io.github.xxfast.nuget.processor.exports.addNugetMapHelperExports
 import io.github.xxfast.nuget.processor.exports.addNugetSetHelperExports
+import io.github.xxfast.nuget.processor.exports.addNugetWrapHelperExports
+import io.github.xxfast.nuget.processor.exports.addNugetFunc0HelperExports
+import io.github.xxfast.nuget.processor.exports.addNugetFunc1HelperExports
+import io.github.xxfast.nuget.processor.exports.addNugetFunc2HelperExports
+import io.github.xxfast.nuget.processor.exports.addNugetFunc3HelperExports
 import io.github.xxfast.nuget.processor.exports.addObjectExports
 import io.github.xxfast.nuget.processor.exports.addSealedClassExports
 
@@ -254,7 +259,42 @@ class NugetProcessor(
 
         val needsSetSupport: Boolean = classesHaveSets || functionsReturnSets || sealedClassesHaveSets
 
-        if (genericClasses.isNotEmpty() || needsListSupport || needsMapSupport || needsSetSupport) {
+        val lambdaTypes: Set<String> = setOf(
+          "kotlin.Function0", "kotlin.Function1", "kotlin.Function2", "kotlin.Function3",
+        )
+
+        fun KSType.isLambdaType(): Boolean =
+          declaration.qualifiedName?.asString() in lambdaTypes
+
+        fun KSType.lambdaArity(): Int =
+          arguments.size - 1
+
+        val lambdaArities: MutableSet<Int> = mutableSetOf()
+
+        (classes + genericClasses).forEach { cls ->
+          cls.getAllProperties().forEach { prop ->
+            val propType: KSType = prop.type.resolve()
+            if (propType.isLambdaType()) lambdaArities.add(propType.lambdaArity())
+          }
+        }
+
+        (functions + genericFunctions).forEach { func ->
+          val returnType: KSType? = func.returnType?.resolve()
+          if (returnType?.isLambdaType() == true) lambdaArities.add(returnType.lambdaArity())
+        }
+
+        sealedClasses.forEach { sealed ->
+          sealed.getSealedSubclasses().forEach { sub ->
+            sub.getAllProperties().forEach { prop ->
+              val propType: KSType = prop.type.resolve()
+              if (propType.isLambdaType()) lambdaArities.add(propType.lambdaArity())
+            }
+          }
+        }
+
+        val needsLambdaSupport: Boolean = lambdaArities.isNotEmpty()
+
+        if (genericClasses.isNotEmpty() || needsListSupport || needsMapSupport || needsSetSupport || needsLambdaSupport) {
           addNugetHelperExports()
         }
 
@@ -269,6 +309,12 @@ class NugetProcessor(
         if (needsSetSupport) {
           addNugetSetHelperExports()
         }
+
+        if (needsLambdaSupport && lambdaArities.any { it > 0 }) addNugetWrapHelperExports()
+        if (0 in lambdaArities) addNugetFunc0HelperExports()
+        if (1 in lambdaArities) addNugetFunc1HelperExports()
+        if (2 in lambdaArities) addNugetFunc2HelperExports()
+        if (3 in lambdaArities) addNugetFunc3HelperExports()
       }
       .build()
 

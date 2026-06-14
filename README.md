@@ -44,6 +44,7 @@ class Cat(name: String, val lives: Int = 9) : Animal(name) {
   var brother: Cat? = null
   var mood: Mood = Mood.SLEEPY
   val toys: List<Toy> = listOf(Toy("Mouse", "Gray"))
+  val onMeow: () -> String = { "Meow! My name is $name" }
   override fun speak(): String = "Meow!"
 }
 
@@ -68,6 +69,9 @@ toy.Equals(toy.Copy("Ball", "Red"));        // data class equality + copy
 IReadOnlyList<Toy> toys = oreo.Toys;        // collections
 using var box = new Box<string>("hello");    // generics
 string? owner = CatKt.Owner("Oreo");        // nullable returns
+
+using var onMeow = oreo.OnMeow;
+onMeow.Invoke();                            // lambdas
 
 IPet pet = oreo;                            // interface polymorphism
 Animal animal = oreo;                       // abstract class hierarchy

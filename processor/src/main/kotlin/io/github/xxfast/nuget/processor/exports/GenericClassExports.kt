@@ -367,3 +367,120 @@ internal fun FileSpec.Builder.addNugetHelperExports() {
       .build()
   )
 }
+
+internal fun FileSpec.Builder.addNugetWrapHelperExports() {
+  val types = listOf(
+    "string" to String::class,
+    "int" to Int::class,
+    "long" to Long::class,
+    "float" to Float::class,
+    "double" to Double::class,
+    "bool" to Boolean::class,
+  )
+
+  for ((suffix, type) in types) {
+    addFunction(
+      FunSpec.builder("export_nuget_wrap_$suffix")
+        .addAnnotation(cNameAnnotation("nuget_wrap_$suffix"))
+        .addParameter("value", type)
+        .returns(cOpaquePointer)
+        .addStatement(
+          "return %T.create(value as Any).asCPointer()",
+          stableRef,
+        )
+        .build()
+    )
+  }
+}
+
+internal fun FileSpec.Builder.addNugetFunc0HelperExports() {
+  addFunction(
+    FunSpec.builder("export_nuget_func0_invoke")
+      .addAnnotation(cNameAnnotation("nuget_func0_invoke"))
+      .addParameter("handle", cOpaquePointer)
+      .returns(cOpaquePointer)
+      .addStatement(
+        "val fn = handle.asStableRef<Function0<*>>().get()",
+      )
+      .addStatement(
+        "return %T.create(fn.invoke() as Any).asCPointer()",
+        stableRef,
+      )
+      .build()
+  )
+}
+
+internal fun FileSpec.Builder.addNugetFunc1HelperExports() {
+  addFunction(
+    FunSpec.builder("export_nuget_func1_invoke")
+      .addAnnotation(cNameAnnotation("nuget_func1_invoke"))
+      .addParameter("handle", cOpaquePointer)
+      .addParameter("arg0", cOpaquePointer)
+      .returns(cOpaquePointer)
+      .addStatement(
+        "val fn = handle.asStableRef<Function1<Any?, Any?>>().get()",
+      )
+      .addStatement(
+        "val param0 = arg0.asStableRef<Any>().get()",
+      )
+      .addStatement(
+        "return %T.create(fn.invoke(param0) as Any).asCPointer()",
+        stableRef,
+      )
+      .build()
+  )
+}
+
+internal fun FileSpec.Builder.addNugetFunc2HelperExports() {
+  addFunction(
+    FunSpec.builder("export_nuget_func2_invoke")
+      .addAnnotation(cNameAnnotation("nuget_func2_invoke"))
+      .addParameter("handle", cOpaquePointer)
+      .addParameter("arg0", cOpaquePointer)
+      .addParameter("arg1", cOpaquePointer)
+      .returns(cOpaquePointer)
+      .addStatement(
+        "val fn = handle.asStableRef<Function2<Any?, Any?, Any?>>().get()",
+      )
+      .addStatement(
+        "val param0 = arg0.asStableRef<Any>().get()",
+      )
+      .addStatement(
+        "val param1 = arg1.asStableRef<Any>().get()",
+      )
+      .addStatement(
+        "return %T.create(fn.invoke(param0, param1) as Any).asCPointer()",
+        stableRef,
+      )
+      .build()
+  )
+}
+
+internal fun FileSpec.Builder.addNugetFunc3HelperExports() {
+  addFunction(
+    FunSpec.builder("export_nuget_func3_invoke")
+      .addAnnotation(cNameAnnotation("nuget_func3_invoke"))
+      .addParameter("handle", cOpaquePointer)
+      .addParameter("arg0", cOpaquePointer)
+      .addParameter("arg1", cOpaquePointer)
+      .addParameter("arg2", cOpaquePointer)
+      .returns(cOpaquePointer)
+      .addStatement(
+        "val fn = handle.asStableRef<Function3<Any?, Any?, Any?, Any?>>().get()",
+      )
+      .addStatement(
+        "val param0 = arg0.asStableRef<Any>().get()",
+      )
+      .addStatement(
+        "val param1 = arg1.asStableRef<Any>().get()",
+      )
+      .addStatement(
+        "val param2 = arg2.asStableRef<Any>().get()",
+      )
+      .addStatement(
+        "return %T.create(fn.invoke(param0, param1, param2) as Any).asCPointer()",
+        stableRef,
+      )
+      .build()
+  )
+}

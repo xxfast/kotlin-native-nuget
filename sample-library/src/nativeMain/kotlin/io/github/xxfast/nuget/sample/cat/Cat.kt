@@ -22,6 +22,12 @@ class Cat(
 
   val unsupported: Sequence<String> = sequenceOf("This", "is", "a", "sequence")
 
+  val onMeow: () -> String = { "Meow! My name is $name" }
+  val onPet: (String) -> String = { action -> "$name $action contentedly" }
+  val countLives: () -> Int = { lives }
+  val isAlive: () -> Boolean = { lives > 0 }
+  val favoriteToy: () -> Toy = { toys.first() }
+
   override fun speak(): String = "Meow! My name is $name"
 
   fun meow(): String = "Meow! My name is $name"

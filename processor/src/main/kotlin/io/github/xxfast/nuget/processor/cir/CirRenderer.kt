@@ -23,6 +23,8 @@ class CirRenderer {
         is CirListHelper -> renderListHelper(declaration)
         is CirMapHelper -> renderMapHelper(declaration)
         is CirSetHelper -> renderSetHelper(declaration)
+        is CirFuncNativeHelper -> renderFuncNativeHelper(declaration)
+        is CirFuncHelper -> renderFuncHelper(declaration)
         is CirStaticClass -> renderStaticClass(declaration)
         is CirInterface -> renderInterface(declaration)
         is CirClass -> renderClass(declaration)
@@ -268,6 +270,126 @@ class CirRenderer {
     appendLine("        internal static extern void Dispose(IntPtr handle);")
     appendLine("    }")
     appendLine()
+  }
+
+  private fun StringBuilder.renderFuncNativeHelper(helper: CirFuncNativeHelper) {
+    val hasArgs: Boolean = helper.arities.any { it > 0 }
+
+    appendLine("    internal static class NugetFuncNative")
+    appendLine("    {")
+
+    for (arity in helper.arities.sorted()) {
+      val paramStr: String = (listOf("IntPtr handle") +
+        (0 until arity).map { "IntPtr arg$it" }).joinToString(", ")
+
+      appendLine("        [DllImport(\"${helper.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"nuget_func${arity}_invoke\")]")
+      appendLine("        internal static extern IntPtr Invoke$arity($paramStr);")
+      appendLine()
+    }
+
+    appendLine("        [DllImport(\"${helper.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"nuget_dispose\")]")
+    appendLine("        internal static extern void Dispose(IntPtr handle);")
+
+    if (hasArgs) {
+      appendLine()
+      appendLine("        [DllImport(\"${helper.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"nuget_wrap_string\")]")
+      appendLine("        private static extern IntPtr wrap_string(string value);")
+      appendLine()
+      appendLine("        [DllImport(\"${helper.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"nuget_wrap_int\")]")
+      appendLine("        private static extern IntPtr wrap_int(int value);")
+      appendLine()
+      appendLine("        [DllImport(\"${helper.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"nuget_wrap_long\")]")
+      appendLine("        private static extern IntPtr wrap_long(long value);")
+      appendLine()
+      appendLine("        [DllImport(\"${helper.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"nuget_wrap_float\")]")
+      appendLine("        private static extern IntPtr wrap_float(float value);")
+      appendLine()
+      appendLine("        [DllImport(\"${helper.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"nuget_wrap_double\")]")
+      appendLine("        private static extern IntPtr wrap_double(double value);")
+      appendLine()
+      appendLine("        [DllImport(\"${helper.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"nuget_wrap_bool\")]")
+      appendLine("        private static extern IntPtr wrap_bool(bool value);")
+      appendLine()
+      appendLine("        internal static IntPtr WrapArg<T>(T value)")
+      appendLine("        {")
+      appendLine("            if (typeof(T) == typeof(string)) return wrap_string((string)(object)value!);")
+      appendLine("            if (typeof(T) == typeof(int)) return wrap_int((int)(object)value!);")
+      appendLine("            if (typeof(T) == typeof(long)) return wrap_long((long)(object)value!);")
+      appendLine("            if (typeof(T) == typeof(float)) return wrap_float((float)(object)value!);")
+      appendLine("            if (typeof(T) == typeof(double)) return wrap_double((double)(object)value!);")
+      appendLine("            if (typeof(T) == typeof(bool)) return wrap_bool((bool)(object)value!);")
+      appendLine("            var field = typeof(T).GetField(\"_handle\",")
+      appendLine("                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Public);")
+      appendLine("            if (field != null) return (IntPtr)field.GetValue(value)!;")
+      appendLine("            throw new NotSupportedException($\"Cannot wrap {typeof(T).Name} as lambda argument\");")
+      appendLine("        }")
+    }
+
+    appendLine("    }")
+    appendLine()
+  }
+
+  private fun StringBuilder.renderFuncHelper(helper: CirFuncHelper) {
+    val ns: String = helper.helperNamespace
+    val marshalRef: String = "$ns.NugetMarshal"
+    val funcNativeRef: String = "$ns.NugetFuncNative"
+
+    for (arity in helper.arities.sorted()) {
+      if (arity == 0) {
+        appendLine("    public class KotlinFunc<TResult> : IDisposable")
+        appendLine("    {")
+        appendLine("        internal IntPtr _handle;")
+        appendLine()
+        appendLine("        internal KotlinFunc(IntPtr handle) { _handle = handle; }")
+        appendLine()
+        appendLine("        public TResult Invoke()")
+        appendLine("        {")
+        appendLine("            IntPtr result = $funcNativeRef.Invoke0(_handle);")
+        appendLine("            return $marshalRef.FromHandle<TResult>(result);")
+        appendLine("        }")
+        appendLine()
+        appendLine("        public void Dispose()")
+        appendLine("        {")
+        appendLine("            if (_handle != IntPtr.Zero)")
+        appendLine("            {")
+        appendLine("                $funcNativeRef.Dispose(_handle);")
+        appendLine("                _handle = IntPtr.Zero;")
+        appendLine("            }")
+        appendLine("        }")
+        appendLine("    }")
+        appendLine()
+      } else {
+        val typeParams: String = (1..arity).map { "T$it" }.plus("TResult").joinToString(", ")
+        val methodParams: String = (1..arity).map { "T$it arg${it - 1}" }.joinToString(", ")
+        val invokeArgs: String = (listOf("_handle") + (0 until arity).map { "boxedArg$it" }).joinToString(", ")
+
+        appendLine("    public class KotlinFunc<$typeParams> : IDisposable")
+        appendLine("    {")
+        appendLine("        internal IntPtr _handle;")
+        appendLine()
+        appendLine("        internal KotlinFunc(IntPtr handle) { _handle = handle; }")
+        appendLine()
+        appendLine("        public TResult Invoke($methodParams)")
+        appendLine("        {")
+        for (i in 0 until arity) {
+          appendLine("            IntPtr boxedArg$i = $funcNativeRef.WrapArg<T${i + 1}>(arg$i);")
+        }
+        appendLine("            IntPtr result = $funcNativeRef.Invoke$arity($invokeArgs);")
+        appendLine("            return $marshalRef.FromHandle<TResult>(result);")
+        appendLine("        }")
+        appendLine()
+        appendLine("        public void Dispose()")
+        appendLine("        {")
+        appendLine("            if (_handle != IntPtr.Zero)")
+        appendLine("            {")
+        appendLine("                $funcNativeRef.Dispose(_handle);")
+        appendLine("                _handle = IntPtr.Zero;")
+        appendLine("            }")
+        appendLine("        }")
+        appendLine("    }")
+        appendLine()
+      }
+    }
   }
 
   private fun StringBuilder.renderGenericClass(cls: CirGenericClass) {
