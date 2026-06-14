@@ -106,9 +106,9 @@ internal fun translateClass(
       if (isMapType || isMutableMapType) tracker.needsMap = true
       if (isSetType || isMutableSetType) tracker.needsSet = true
 
-      val isObjectType: Boolean = propType !in KOTLIN_TO_CSHARP_RETURN && !isEnumType && !isListType && !isMutableListType && !isMapType && !isMutableMapType && !isSetType && !isMutableSetType
+      val isReferenceType: Boolean = propType !in KOTLIN_TO_CSHARP_RETURN && !isEnumType && !isListType && !isMutableListType && !isMapType && !isMutableMapType && !isSetType && !isMutableSetType
 
-      if (isObjectType) {
+      if (isReferenceType) {
         val qualifiedTypeName: String? = propTypeResolved.declaration.qualifiedName?.asString()
         if (qualifiedTypeName != null && qualifiedTypeName !in exportedTypes) {
           logger.warn("Skipping property '${cls.simpleName.asString()}.$propName': unsupported type '$qualifiedTypeName'")
@@ -121,7 +121,7 @@ internal fun translateClass(
         (isMapType || isMutableMapType) -> "IntPtr"
         (isSetType || isMutableSetType) -> "IntPtr"
         isEnumType -> "int"
-        isObjectType -> "IntPtr"
+        isReferenceType -> "IntPtr"
         else -> mapReturnType(propType)
       }
 
@@ -134,8 +134,8 @@ internal fun translateClass(
         isMutableSetType -> "ISet<$setElementType>"
         propType == "String" -> "string"
         isEnumType -> propType
-        isObjectType && isNullable -> "$propType?"
-        isObjectType -> propType
+        isReferenceType && isNullable -> "$propType?"
+        isReferenceType -> propType
         else -> mapReturnType(propType)
       }
 
@@ -196,8 +196,8 @@ internal fun translateClass(
       } else when {
         propType == "String" -> "Marshal.PtrToStringUTF8(Native_Get_$propName(_handle))!"
         isEnumType -> "($propType)Native_Get_$propName(_handle)"
-        isObjectType && isNullable -> "Native_Get_$propName(_handle) == IntPtr.Zero ? null : new $propType(Native_Get_$propName(_handle))"
-        isObjectType -> "new $propType(Native_Get_$propName(_handle))"
+        isReferenceType && isNullable -> "Native_Get_$propName(_handle) == IntPtr.Zero ? null : new $propType(Native_Get_$propName(_handle))"
+        isReferenceType -> "new $propType(Native_Get_$propName(_handle))"
         else -> "Native_Get_$propName(_handle)"
       }
 
@@ -205,8 +205,8 @@ internal fun translateClass(
         when {
           propType == "String" -> "Native_Set_$propName(_handle, value)"
           isEnumType -> "Native_Set_$propName(_handle, (int)value)"
-          isObjectType && isNullable -> "Native_Set_$propName(_handle, value?._handle ?? IntPtr.Zero)"
-          isObjectType -> "Native_Set_$propName(_handle, value._handle)"
+          isReferenceType && isNullable -> "Native_Set_$propName(_handle, value?._handle ?? IntPtr.Zero)"
+          isReferenceType -> "Native_Set_$propName(_handle, value._handle)"
           else -> "Native_Set_$propName(_handle, value)"
         }
       } else null
@@ -396,9 +396,9 @@ internal fun translateSealedClass(
             if (isMapType || isMutableMapType) tracker.needsMap = true
             if (isSetType || isMutableSetType) tracker.needsSet = true
 
-            val isObjectType: Boolean = propType !in KOTLIN_TO_CSHARP_RETURN && !isEnumType && !isListType && !isMutableListType && !isMapType && !isMutableMapType && !isSetType && !isMutableSetType
+            val isReferenceType: Boolean = propType !in KOTLIN_TO_CSHARP_RETURN && !isEnumType && !isListType && !isMutableListType && !isMapType && !isMutableMapType && !isSetType && !isMutableSetType
 
-            if (isObjectType && qualifiedTypeName != null && qualifiedTypeName !in exportedTypes) {
+            if (isReferenceType && qualifiedTypeName != null && qualifiedTypeName !in exportedTypes) {
               logger.warn("Skipping property '${cls.simpleName.asString()}.${subName}.$propName': unsupported type '$qualifiedTypeName'")
               return@mapNotNull null
             }
@@ -408,7 +408,7 @@ internal fun translateSealedClass(
               (isMapType || isMutableMapType) -> "IntPtr"
               (isSetType || isMutableSetType) -> "IntPtr"
               isEnumType -> "int"
-              isObjectType -> "IntPtr"
+              isReferenceType -> "IntPtr"
               else -> mapReturnType(propType)
             }
 
@@ -421,8 +421,8 @@ internal fun translateSealedClass(
               isMutableSetType -> "ISet<$setElementType>"
               propType == "String" -> "string"
               isEnumType -> propType
-              isObjectType && isNullable -> "$propType?"
-              isObjectType -> propType
+              isReferenceType && isNullable -> "$propType?"
+              isReferenceType -> propType
               else -> mapReturnType(propType)
             }
 
@@ -483,8 +483,8 @@ internal fun translateSealedClass(
             } else when {
               propType == "String" -> "Marshal.PtrToStringUTF8(Native_Get_$propName(_handle))!"
               isEnumType -> "($propType)Native_Get_$propName(_handle)"
-              isObjectType && isNullable -> "Native_Get_$propName(_handle) == IntPtr.Zero ? null : new $propType(Native_Get_$propName(_handle))"
-              isObjectType -> "new $propType(Native_Get_$propName(_handle))"
+              isReferenceType && isNullable -> "Native_Get_$propName(_handle) == IntPtr.Zero ? null : new $propType(Native_Get_$propName(_handle))"
+              isReferenceType -> "new $propType(Native_Get_$propName(_handle))"
               else -> "Native_Get_$propName(_handle)"
             }
 
