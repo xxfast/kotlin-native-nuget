@@ -3,6 +3,8 @@ package io.github.xxfast.kotlin.native.nuget.processor.cir
 import com.google.devtools.ksp.processing.KSPLogger
 import com.google.devtools.ksp.symbol.KSClassDeclaration
 import com.google.devtools.ksp.symbol.KSFunctionDeclaration
+import com.google.devtools.ksp.symbol.KSPropertyDeclaration
+import com.google.devtools.ksp.symbol.KSType
 
 data class NugetContext(
   val libraryName: String,
@@ -21,6 +23,7 @@ fun translate(
   interfaces: List<KSClassDeclaration> = emptyList(),
   sealedClasses: List<KSClassDeclaration> = emptyList(),
   objects: List<KSClassDeclaration> = emptyList(),
+  properties: List<KSPropertyDeclaration> = emptyList(),
 ): CirFile {
   val (genericClasses, regularClasses) = classes.partition { it.typeParameters.isNotEmpty() }
 
@@ -45,6 +48,15 @@ fun translate(
     funcs.groupBy { func ->
       val namespace: String = namespaceOf(func.packageName.asString())
       val fileName: String = func.containingFile?.fileName?.removeSuffix(".kt") ?: context.className
+      namespace to fileName
+    }
+
+  fun groupPropertiesByNamespaceAndFile(
+    props: List<KSPropertyDeclaration>,
+  ): Map<Pair<String, String>, List<KSPropertyDeclaration>> =
+    props.groupBy { prop ->
+      val namespace: String = namespaceOf(prop.packageName.asString())
+      val fileName: String = prop.containingFile?.fileName?.removeSuffix(".kt") ?: context.className
       namespace to fileName
     }
 
@@ -75,6 +87,13 @@ fun translate(
     val (namespace, fileClassName) = key
     val finalClassName: String = resolveStaticClassName(fileClassName, namespace)
     val members: List<CirMember> = funcs.flatMap { translateGenericFunction(it, context.libraryName) }
+    namespaces.mergeStaticClass(namespace, finalClassName, members)
+  }
+
+  for ((key, props) in groupPropertiesByNamespaceAndFile(properties)) {
+    val (namespace, fileClassName) = key
+    val finalClassName: String = resolveStaticClassName(fileClassName, namespace)
+    val members: List<CirMember> = props.flatMap { translateProperty(it, context.libraryName) }
     namespaces.mergeStaticClass(namespace, finalClassName, members)
   }
 
@@ -175,4 +194,158 @@ private fun MutableList<CirNamespace>.mergeStaticClass(namespace: String, classN
   } else {
     this[index] = existing.copy(declarations = existing.declarations + CirStaticClass(className, members))
   }
+}
+
+internal fun translateProperty(
+  prop: KSPropertyDeclaration,
+  libraryName: String,
+): List<CirMember> {
+  val propName: String = prop.simpleName.asString()
+  val cname: String = io.github.xxfast.kotlin.native.nuget.processor.toCName(propName)
+  val propTypeResolved: KSType = prop.type.resolve()
+  val propType: String = propTypeResolved.declaration.simpleName.asString()
+  val isNullable: Boolean = propTypeResolved.isMarkedNullable
+  val isMutable: Boolean = prop.isMutable
+  val csPropName: String = propName.replaceFirstChar { it.uppercase() }
+
+  if (propType !in KOTLIN_TO_CSHARP_RETURN) return emptyList()
+
+  val isNullablePrimitive: Boolean = isNullable && propType != "String"
+
+  val members: MutableList<CirMember> = mutableListOf()
+
+  if (isNullablePrimitive) {
+    val csValueType: String = mapParamType(propType)
+
+    members.add(CirDllImport(
+      libraryName = libraryName,
+      entryPoint = "get_$cname",
+      returnType = "bool",
+      name = "Native_Get_$propName",
+      parameters = emptyList(),
+      visibility = CirVisibility.PRIVATE,
+    ))
+
+    members.add(CirDllImport(
+      libraryName = libraryName,
+      entryPoint = "get_${cname}_value",
+      returnType = csValueType,
+      name = "Native_Get_${propName}_value",
+      parameters = emptyList(),
+      visibility = CirVisibility.PRIVATE,
+    ))
+
+    if (isMutable) {
+      members.add(CirDllImport(
+        libraryName = libraryName,
+        entryPoint = "set_$cname",
+        returnType = "void",
+        name = "Native_Set_$propName",
+        parameters = listOf(CirParameter("value", csValueType)),
+        visibility = CirVisibility.PRIVATE,
+      ))
+
+      members.add(CirDllImport(
+        libraryName = libraryName,
+        entryPoint = "set_${cname}_null",
+        returnType = "void",
+        name = "Native_Set_${propName}_null",
+        parameters = emptyList(),
+        visibility = CirVisibility.PRIVATE,
+      ))
+    }
+
+    val getter = "!Native_Get_$propName() ? null : Native_Get_${propName}_value()"
+    val setter: String? = if (isMutable) buildString {
+      appendLine()
+      appendLine("                if (value.HasValue) Native_Set_$propName(value.Value);")
+      append("                else Native_Set_${propName}_null();")
+    } else null
+
+    members.add(CirProperty(
+      name = csPropName,
+      type = "$csValueType?",
+      nativeReturnType = csValueType,
+      nativeName = propName,
+      getter = getter,
+      setter = setter,
+      isStatic = true,
+    ))
+
+    return members
+  }
+
+  val csNativeReturnType: String = mapReturnType(propType)
+
+  members.add(CirDllImport(
+    libraryName = libraryName,
+    entryPoint = "get_$cname",
+    returnType = csNativeReturnType,
+    name = "Native_Get_$propName",
+    parameters = emptyList(),
+    visibility = CirVisibility.PRIVATE,
+  ))
+
+  val csType: String
+  val getter: String
+  val setter: String?
+
+  if (propType == "String" && isNullable) {
+    csType = "string?"
+    getter = "Marshal.PtrToStringUTF8(Native_Get_$propName())"
+    setter = if (isMutable) "Native_Set_$propName(value)" else null
+
+    if (isMutable) {
+      members.add(CirDllImport(
+        libraryName = libraryName,
+        entryPoint = "set_$cname",
+        returnType = "void",
+        name = "Native_Set_$propName",
+        parameters = listOf(CirParameter("value", "string?")),
+        visibility = CirVisibility.PRIVATE,
+      ))
+    }
+  } else if (propType == "String") {
+    csType = "string"
+    getter = "Marshal.PtrToStringUTF8(Native_Get_$propName())!"
+    setter = if (isMutable) "Native_Set_$propName(value)" else null
+
+    if (isMutable) {
+      members.add(CirDllImport(
+        libraryName = libraryName,
+        entryPoint = "set_$cname",
+        returnType = "void",
+        name = "Native_Set_$propName",
+        parameters = listOf(CirParameter("value", "string")),
+        visibility = CirVisibility.PRIVATE,
+      ))
+    }
+  } else {
+    csType = csNativeReturnType
+    getter = "Native_Get_$propName()"
+    setter = if (isMutable) "Native_Set_$propName(value)" else null
+
+    if (isMutable) {
+      members.add(CirDllImport(
+        libraryName = libraryName,
+        entryPoint = "set_$cname",
+        returnType = "void",
+        name = "Native_Set_$propName",
+        parameters = listOf(CirParameter("value", csNativeReturnType)),
+        visibility = CirVisibility.PRIVATE,
+      ))
+    }
+  }
+
+  members.add(CirProperty(
+    name = csPropName,
+    type = csType,
+    nativeReturnType = csNativeReturnType,
+    nativeName = propName,
+    getter = getter,
+    setter = setter,
+    isStatic = true,
+  ))
+
+  return members
 }

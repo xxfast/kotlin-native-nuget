@@ -630,19 +630,20 @@ class CirRenderer {
   }
 
   private fun StringBuilder.renderProperty(prop: CirProperty) {
+    val static: String = if (prop.isStatic) "static " else ""
     val isMultiLineGetter: Boolean = prop.getter.contains('\n')
     val isMultiLineSetter: Boolean = prop.setter?.contains('\n') == true
     if (isMultiLineGetter) {
-      appendLine("        public ${prop.type} ${prop.name}")
+      appendLine("        public ${static}${prop.type} ${prop.name}")
       appendLine("        {")
       appendLine("            get")
       appendLine("            {${prop.getter}")
       appendLine("            }")
       appendLine("        }")
     } else if (prop.setter == null) {
-      appendLine("        public ${prop.type} ${prop.name} => ${prop.getter};")
+      appendLine("        public ${static}${prop.type} ${prop.name} => ${prop.getter};")
     } else if (isMultiLineSetter) {
-      appendLine("        public ${prop.type} ${prop.name}")
+      appendLine("        public ${static}${prop.type} ${prop.name}")
       appendLine("        {")
       appendLine("            get => ${prop.getter};")
       appendLine("            set")
@@ -650,7 +651,7 @@ class CirRenderer {
       appendLine("            }")
       appendLine("        }")
     } else {
-      appendLine("        public ${prop.type} ${prop.name}")
+      appendLine("        public ${static}${prop.type} ${prop.name}")
       appendLine("        {")
       appendLine("            get => ${prop.getter};")
       appendLine("            set => ${prop.setter};")

@@ -160,6 +160,7 @@ data class CirProperty(
   val getter: String,
   val setter: String? = null,
   val extraNatives: List<CirExtraNative> = emptyList(),
+  val isStatic: Boolean = false,
 ) : CirMember
 
 data class CirExtraNative(

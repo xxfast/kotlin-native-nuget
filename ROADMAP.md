@@ -50,7 +50,7 @@
 - [x] Map lambda/function types — Kotlin → C# only (see [ADR-012](docs/adr/012-lambda-function-type-mapping.md))
 - [x] Map nullable primitive properties (class properties)
 - [x] Map nullable object properties (class properties)
-- [ ] Map top-level properties (get/set on per-file static classes, including nullable support)
+- [x] Map top-level properties (get/set on per-file static classes, including nullable support)
 
 ## Phase 4: Async support
 - [ ] Map Suspend functions (coroutines → Task/async)
