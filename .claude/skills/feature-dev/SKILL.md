@@ -8,8 +8,9 @@ Implements a new feature using a 3-step TDD loop with subagents.
 
 ## Workflow
 
-### Step 1: Research (no skills, plain agent)
+### Step 1: Research (research skill)
 
+- Delegate to the [research skill](../research/SKILL.md)
 - Investigate how the feature should work
 - Research how Kotlin handles the same problem for Java interop, Swift Export, and ObjC Export
 - Write an [ADR](../../../docs/adr) if the decision is non-trivial

@@ -8,7 +8,7 @@ You are implementing the Kotlin side of a Kotlin/Native → C# bridge generator.
 
 ## Project structure
 
-- `processor/` — KSP processor that generates C# bindings and Kotlin bridge wrappers
+- `nugget-processor/` — KSP processor that generates C# bindings and Kotlin bridge wrappers
   - `cir/CirModel.kt` — C# AST model (CirFile, CirNamespace, CirClass, CirEnum, etc.)
   - `cir/CirTranslator.kt` — translates KSP declarations → CIR model
   - `cir/CirRenderer.kt` — renders CIR → C# source text
@@ -20,7 +20,7 @@ You are implementing the Kotlin side of a Kotlin/Native → C# bridge generator.
 
 ## Build commands
 
-- Compile processor: `./gradlew :processor:compileKotlin`
+- Compile processor: `./gradlew :nugget-processor:compileKotlin`
 - Build sample + package: `./gradlew :sample-library:clean :sample-library:packNuget`
 - Full verify: build + `cd sample-app/SampleApp.Tests && dotnet test`
 
@@ -33,11 +33,13 @@ You are implementing the Kotlin side of a Kotlin/Native → C# bridge generator.
 - Enum properties → ordinal-based bridge functions
 - Per-file class naming (ADR-007): file name = C# static class name
 
-## Style rules (STYLE.md)
+## Style rules 
 
+- Read [STYLE.md](../../../STYLE.md) thoroughly
 - 2-space indentation
 - Explicit types on non-obvious results
 - No indirection wrappers
 - Trailing commas
 - Early returns over nested if/else
-- No wildcard imports (except kotlinx.cinterop.* in generated code)
+- No wildcard imports! (For any reason whatsoever)
+- forEach{} over for each
