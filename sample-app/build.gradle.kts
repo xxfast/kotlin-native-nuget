@@ -6,7 +6,7 @@ kotlin {
   mingwX64 {
     binaries {
       executable {
-        entryPoint = "io.github.xxfast.nuget.app.main"
+        entryPoint = "io.github.xxfast.kotlin.native.nuget.app.main"
       }
     }
   }

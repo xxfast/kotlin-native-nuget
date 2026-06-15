@@ -18,7 +18,7 @@ https://www.youtube.com/watch?v=DywUS-qYn6o
 // build.gradle.kts
 plugins {
   kotlin("multiplatform")
-  id("io.github.xxfast.nuget")
+  id("io.github.xxfast.kotlin.native.nuget")
 }
 
 nuget {

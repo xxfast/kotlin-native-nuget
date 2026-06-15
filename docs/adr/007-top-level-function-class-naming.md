@@ -51,8 +51,8 @@ All functions in a package go into one class (current behaviour).
 
 Use **file name as class name** (option 1), with `Kt` suffix when there's a naming conflict:
 
-- `Arithmetic.kt` in package `io.github.xxfast.nuget.sample.math` → `SampleLibrary.Math.Arithmetic`
-- `Mappings.kt` in package `io.github.xxfast.nuget.sample` → `SampleLibrary.Mappings`
+- `Arithmetic.kt` in package `io.github.xxfast.kotlin.native.nuget.sample.math` → `SampleLibrary.Math.Arithmetic`
+- `Mappings.kt` in package `io.github.xxfast.kotlin.native.nuget.sample` → `SampleLibrary.Mappings`
 - `Cat.kt` containing both `class Cat` and top-level functions → `SampleLibrary.Cat.CatKt` (suffix added to avoid conflict with the `Cat` class)
 
 The KSP processor already has access to `func.containingFile?.fileName` — use this to group functions by file and derive the class name by dropping the `.kt` extension. If a class with the same name exists in the same namespace, append `Kt` to the top-level function class.

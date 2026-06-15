@@ -19,8 +19,8 @@ dependencies {
 gradlePlugin {
   plugins {
     create("nuget") {
-      id = "io.github.xxfast.nuget"
-      implementationClass = "io.github.xxfast.nuget.NugetPlugin"
+      id = "io.github.xxfast.kotlin.native.nuget"
+      implementationClass = "io.github.xxfast.kotlin.native.nuget.NugetPlugin"
     }
   }
 }

@@ -1,6 +1,6 @@
 plugins {
   alias(libs.plugins.kotlinMultiplatform)
-  id("io.github.xxfast.nuget")
+  id("io.github.xxfast.kotlin.native.nuget")
 }
 
 kotlin {
@@ -31,8 +31,8 @@ kotlin {
 }
 
 dependencies {
-  add("kspMingwX64", project(":processor"))
-  add("kspMacosArm64", project(":processor"))
+  add("kspMingwX64", project(":nuget-processor"))
+  add("kspMacosArm64", project(":nuget-processor"))
 }
 
 nuget {
@@ -40,5 +40,5 @@ nuget {
   version.set("1.0.0")
   authors.set("xxfast")
   description.set("A sample Kotlin/Native library packaged as NuGet")
-  rootPackage.set("io.github.xxfast.nuget.sample")
+  rootPackage.set("io.github.xxfast.kotlin.native.nuget.sample")
 }
