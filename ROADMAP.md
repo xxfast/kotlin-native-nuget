@@ -53,7 +53,7 @@
 - [x] Map top-level properties (get/set on per-file static classes, including nullable support)
 - [x] Map const values
 - [x] Map companion objects
-- [ ] Map extension functions
+- [x] Map extension functions
 
 ## Phase 4: Async support
 - [ ] Map Suspend functions (coroutines → Task/async)

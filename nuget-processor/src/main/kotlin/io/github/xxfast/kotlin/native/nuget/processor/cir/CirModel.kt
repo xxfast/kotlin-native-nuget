@@ -150,6 +150,7 @@ data class CirMethod(
   val isStatic: Boolean = false,
   val isAbstract: Boolean = false,
   val isOverride: Boolean = false,
+  val isExtension: Boolean = false,
 ) : CirMember
 
 data class CirProperty(

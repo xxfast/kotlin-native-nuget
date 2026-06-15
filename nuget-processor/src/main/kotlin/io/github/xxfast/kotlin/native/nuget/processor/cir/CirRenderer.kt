@@ -542,8 +542,7 @@ class CirRenderer {
     appendLine("    {")
 
     if (cls.superClass == null) {
-      val handleVisibility: String = if (cls.isAbstract) "internal" else "private"
-      appendLine("        $handleVisibility IntPtr _handle;")
+      appendLine("        internal IntPtr _handle;")
       appendLine()
     }
 
@@ -693,7 +692,10 @@ class CirRenderer {
     val static: String = if (method.isStatic) "static " else ""
     val override: String = if (method.isOverride) "override " else ""
     val abstract: String = if (method.isAbstract) "abstract " else ""
-    val paramStr: String = method.parameters.joinToString(", ") { "${it.type} ${it.name}" }
+    val paramStr: String = method.parameters.mapIndexed { index, param ->
+      if (method.isExtension && index == 0) "this ${param.type} ${param.name}"
+      else "${param.type} ${param.name}"
+    }.joinToString(", ")
 
     val hasGenericType: Boolean = method.returnType.contains("T") ||
       method.parameters.any { it.type.contains("T") }

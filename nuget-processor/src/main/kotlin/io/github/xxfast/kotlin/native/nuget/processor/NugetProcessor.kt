@@ -39,6 +39,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.exports.addNugetFunc0Helpe
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addNugetFunc1HelperExports
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addNugetFunc2HelperExports
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addNugetFunc3HelperExports
+import io.github.xxfast.kotlin.native.nuget.processor.exports.addExtensionFunctionExports
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addObjectExports
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addPropertyExports
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addSealedClassExports
@@ -66,6 +67,13 @@ class NugetProcessor(
       .filterIsInstance<KSFunctionDeclaration>()
       .filter { it.getVisibility() == Visibility.PUBLIC }
       .filter { it.parentDeclaration == null }
+      .filter { it.extensionReceiver == null }
+
+    val extensionFunctions: List<KSFunctionDeclaration> = allDeclarations
+      .filterIsInstance<KSFunctionDeclaration>()
+      .filter { it.getVisibility() == Visibility.PUBLIC }
+      .filter { it.parentDeclaration == null }
+      .filter { it.extensionReceiver != null }
 
     val functions: List<KSFunctionDeclaration> = allFunctions.filter { it.typeParameters.isEmpty() }
     val genericFunctions: List<KSFunctionDeclaration> = allFunctions.filter { it.typeParameters.isNotEmpty() }
@@ -113,10 +121,11 @@ class NugetProcessor(
       .filter { it.classKind == ClassKind.INTERFACE }
       .filter { it.parentDeclaration == null }
 
-    if (functions.isEmpty() && genericFunctions.isEmpty() && classes.isEmpty() && genericClasses.isEmpty() && enums.isEmpty() && interfaces.isEmpty() && sealedClasses.isEmpty() && objects.isEmpty() && properties.isEmpty() && constProperties.isEmpty()) return emptyList()
+    if (functions.isEmpty() && genericFunctions.isEmpty() && extensionFunctions.isEmpty() && classes.isEmpty() && genericClasses.isEmpty() && enums.isEmpty() && interfaces.isEmpty() && sealedClasses.isEmpty() && objects.isEmpty() && properties.isEmpty() && constProperties.isEmpty()) return emptyList()
 
     val sources: Array<KSFile> = (functions.mapNotNull { it.containingFile } +
       genericFunctions.mapNotNull { it.containingFile } +
+      extensionFunctions.mapNotNull { it.containingFile } +
       classes.mapNotNull { it.containingFile } +
       genericClasses.mapNotNull { it.containingFile } +
       enums.mapNotNull { it.containingFile } +
@@ -128,12 +137,13 @@ class NugetProcessor(
 
     val deps = Dependencies(aggregating = true, *sources)
 
-    generateCNameWrappers(functions, genericFunctions, classes, genericClasses, enums, sealedClasses, objects, properties, deps)
-    generateCSharpBindings(functions, genericFunctions, allClasses, enums, interfaces, sealedClasses, objects, properties, constProperties, deps)
+    generateCNameWrappers(functions, genericFunctions, extensionFunctions, classes, genericClasses, enums, sealedClasses, objects, properties, deps)
+    generateCSharpBindings(functions, genericFunctions, extensionFunctions, allClasses, enums, interfaces, sealedClasses, objects, properties, constProperties, deps)
 
     logger.info(
       "Generated bindings for ${functions.size} functions" +
         ", ${genericFunctions.size} generic functions" +
+        ", ${extensionFunctions.size} extension functions" +
         ", ${classes.size} classes" +
         ", ${genericClasses.size} generic classes" +
         ", ${enums.size} enums" +
@@ -150,6 +160,7 @@ class NugetProcessor(
   private fun generateCSharpBindings(
     functions: List<KSFunctionDeclaration>,
     genericFunctions: List<KSFunctionDeclaration>,
+    extensionFunctions: List<KSFunctionDeclaration>,
     classes: List<KSClassDeclaration>,
     enums: List<KSClassDeclaration>,
     interfaces: List<KSClassDeclaration>,
@@ -171,6 +182,7 @@ class NugetProcessor(
       objects,
       properties,
       constProperties,
+      extensionFunctions,
     )
 
     val csharp: String = renderer.render(cirFile)
@@ -188,6 +200,7 @@ class NugetProcessor(
   private fun generateCNameWrappers(
     functions: List<KSFunctionDeclaration>,
     genericFunctions: List<KSFunctionDeclaration>,
+    extensionFunctions: List<KSFunctionDeclaration>,
     classes: List<KSClassDeclaration>,
     genericClasses: List<KSClassDeclaration>,
     enums: List<KSClassDeclaration>,
@@ -229,6 +242,11 @@ class NugetProcessor(
         properties.forEach { prop ->
           addImport(prop.packageName.asString(), prop.simpleName.asString())
           addPropertyExports(prop)
+        }
+
+        extensionFunctions.forEach { func ->
+          addImport(func.packageName.asString(), func.simpleName.asString())
+          addExtensionFunctionExports(func)
         }
 
         val listTypes: Set<String> = setOf("kotlin.collections.List", "kotlin.collections.MutableList")

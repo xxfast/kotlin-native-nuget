@@ -5,6 +5,8 @@ import com.google.devtools.ksp.symbol.KSClassDeclaration
 import com.google.devtools.ksp.symbol.KSFunctionDeclaration
 import com.google.devtools.ksp.symbol.KSPropertyDeclaration
 import com.google.devtools.ksp.symbol.KSType
+import io.github.xxfast.kotlin.native.nuget.processor.toCName
+import io.github.xxfast.kotlin.native.nuget.processor.toCSharpName
 
 data class NugetContext(
   val libraryName: String,
@@ -25,6 +27,7 @@ fun translate(
   objects: List<KSClassDeclaration> = emptyList(),
   properties: List<KSPropertyDeclaration> = emptyList(),
   constProperties: List<KSPropertyDeclaration> = emptyList(),
+  extensionFunctions: List<KSFunctionDeclaration> = emptyList(),
 ): CirFile {
   val (genericClasses, regularClasses) = classes.partition { it.typeParameters.isNotEmpty() }
 
@@ -130,6 +133,29 @@ fun translate(
     namespaces.addDeclaration(namespaceOf(obj.packageName.asString()), translateObject(obj, context.libraryName))
   }
 
+  val extensionsByReceiver: Map<String, List<KSFunctionDeclaration>> =
+    extensionFunctions.groupBy { func ->
+      func.extensionReceiver!!.resolve().declaration.simpleName.asString()
+    }
+
+  for ((receiverName, funcs) in extensionsByReceiver) {
+    val className = "${receiverName}Extensions"
+    val receiverQualified: String = funcs.first().extensionReceiver!!.resolve()
+      .declaration.qualifiedName?.asString() ?: ""
+
+    val namespace: String = if (receiverQualified in exportedTypes) {
+      namespaceOf(funcs.first().extensionReceiver!!.resolve().declaration.packageName.asString())
+    } else {
+      namespaceOf(funcs.first().packageName.asString())
+    }
+
+    val members: List<CirMember> = funcs.flatMap { func ->
+      translateExtensionFunction(func, receiverName, receiverQualified, context.libraryName, exportedTypes)
+    }
+
+    namespaces.addDeclaration(namespace, CirStaticClass(className, members))
+  }
+
   if (tracker.needsList || tracker.needsMap || tracker.needsSet || tracker.lambdaArities.isNotEmpty()) {
     needsMarshalHelper = true
   }
@@ -202,6 +228,83 @@ private fun MutableList<CirNamespace>.mergeStaticClass(namespace: String, classN
   } else {
     this[index] = existing.copy(declarations = existing.declarations + CirStaticClass(className, members))
   }
+}
+
+internal fun translateExtensionFunction(
+  func: KSFunctionDeclaration,
+  receiverName: String,
+  receiverQualified: String,
+  libraryName: String,
+  exportedTypes: Set<String>,
+): List<CirMember> {
+  val funcName: String = func.simpleName.asString()
+  val csName: String = toCSharpName(toCName(funcName))
+    .replaceFirstChar { it.uppercase() }
+  val receiverPrefix: String = receiverName.lowercase()
+  val cname: String = "${receiverPrefix}_${toCName(funcName)}"
+
+  val returnType = func.returnType?.resolve()
+  val kotlinReturnType: String = returnType?.declaration?.simpleName?.asString() ?: "Unit"
+
+  val isExportedReceiver: Boolean = receiverQualified in exportedTypes
+
+  val nativeReceiverType: String = if (isExportedReceiver) "IntPtr" else mapParamType(receiverName)
+  val receiverParamName: String = if (isExportedReceiver) "handle" else "receiver"
+
+  val extraParams: List<CirParameter> = func.parameters.map { param ->
+    val kotlinType: String = param.type.resolve().declaration.simpleName.asString()
+    CirParameter(param.name?.asString() ?: "_", mapParamType(kotlinType))
+  }
+
+  val allNativeParams: List<CirParameter> = listOf(
+    CirParameter(receiverParamName, nativeReceiverType),
+  ) + extraParams
+
+  val nativeReturnType: String = mapReturnType(kotlinReturnType)
+
+  val dllImport = CirDllImport(
+    libraryName = libraryName,
+    entryPoint = cname,
+    returnType = nativeReturnType,
+    name = "Native_$csName",
+    parameters = allNativeParams,
+    visibility = CirVisibility.PRIVATE,
+  )
+
+  val csReceiverType: String = if (isExportedReceiver) receiverName else mapParamType(receiverName)
+  val csReceiverParamName: String = if (isExportedReceiver) receiverName.lowercase() else "receiver"
+
+  val wrapperParams: List<CirParameter> = listOf(
+    CirParameter(csReceiverParamName, csReceiverType),
+  ) + extraParams
+
+  val nativeCallReceiver: String = if (isExportedReceiver) "${csReceiverParamName}._handle" else "receiver"
+  val nativeCallArgs: String = (listOf(nativeCallReceiver) + extraParams.map { it.name }).joinToString(", ")
+
+  val csReturnType: String
+  val body: String
+
+  if (kotlinReturnType == "String") {
+    csReturnType = "string"
+    body = "Marshal.PtrToStringUTF8(Native_$csName($nativeCallArgs))!"
+  } else if (kotlinReturnType == "Unit") {
+    csReturnType = "void"
+    body = "Native_$csName($nativeCallArgs)"
+  } else {
+    csReturnType = KOTLIN_TO_CSHARP_PARAM[kotlinReturnType] ?: kotlinReturnType
+    body = "Native_$csName($nativeCallArgs)"
+  }
+
+  val wrapper = CirMethod(
+    name = csName,
+    returnType = csReturnType,
+    parameters = wrapperParams,
+    body = body,
+    isStatic = true,
+    isExtension = true,
+  )
+
+  return listOf(dllImport, wrapper)
 }
 
 internal fun translateProperty(
