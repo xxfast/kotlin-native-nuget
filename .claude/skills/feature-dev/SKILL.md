@@ -12,7 +12,7 @@ Implements a new feature using a 3-step TDD loop with subagents.
 
 - Investigate how the feature should work
 - Research how Kotlin handles the same problem for Java interop, Swift Export, and ObjC Export
-- Write an ADR if the decision is non-trivial
+- Write an [ADR](../../../docs/adr) if the decision is non-trivial
 - Define the expected C# API for the consumer
 
 ### Step 2: Verify with the approach with humans
