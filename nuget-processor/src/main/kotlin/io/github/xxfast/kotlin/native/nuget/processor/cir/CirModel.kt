@@ -48,6 +48,7 @@ data class CirClass(
   val hasInternalHandleConstructor: Boolean = true,
   val isDataClass: Boolean = false,
   val isAbstract: Boolean = false,
+  val companionMembers: List<CirMember> = emptyList(),
 ) : CirDeclaration
 
 data class CirEnum(

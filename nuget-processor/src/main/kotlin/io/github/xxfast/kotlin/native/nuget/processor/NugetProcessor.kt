@@ -25,6 +25,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.cir.CirRenderer
 import io.github.xxfast.kotlin.native.nuget.processor.cir.NugetContext
 import io.github.xxfast.kotlin.native.nuget.processor.cir.translate
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addClassExports
+import io.github.xxfast.kotlin.native.nuget.processor.exports.addCompanionExports
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addEnumExports
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addFunctionExports
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addGenericClassExports
@@ -219,6 +220,7 @@ class NugetProcessor(
         }
 
         classes.forEach { addClassExports(it) }
+        classes.forEach { addCompanionExports(it) }
         genericClasses.forEach { addGenericClassExports(it) }
         enums.forEach { addEnumExports(it) }
         sealedClasses.forEach { addSealedClassExports(it) }

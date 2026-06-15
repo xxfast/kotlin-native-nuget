@@ -11,6 +11,7 @@ import com.google.devtools.ksp.symbol.Visibility
 import com.squareup.kotlinpoet.ClassName
 import com.squareup.kotlinpoet.FileSpec
 import com.squareup.kotlinpoet.FunSpec
+import io.github.xxfast.kotlin.native.nuget.processor.toCName
 
 /**
  * Generates @CName bridge exports for classes: constructor, properties (getters/setters),
@@ -379,6 +380,118 @@ internal fun FileSpec.Builder.addClassExports(cls: KSClassDeclaration) {
       )
 
       addFunction(copyBuilder.build())
+    }
+  }
+}
+
+internal fun FileSpec.Builder.addCompanionExports(cls: KSClassDeclaration) {
+  val name: String = cls.simpleName.asString()
+  val qualifiedName: String = cls.qualifiedName?.asString() ?: return
+  val prefix: String = name.lowercase()
+
+  val companion: KSClassDeclaration = cls.declarations
+    .filterIsInstance<KSClassDeclaration>()
+    .firstOrNull { it.isCompanionObject } ?: return
+
+  val methods: List<KSFunctionDeclaration> = companion.getAllFunctions()
+    .filter { it.getVisibility() == Visibility.PUBLIC }
+    .filter { it.simpleName.asString() !in listOf("equals", "hashCode", "toString", "<init>") }
+    .toList()
+
+  for (method in methods) {
+    val methodName: String = method.simpleName.asString()
+    val cname: String = toCName(methodName)
+    val entryPoint: String = "${prefix}_companion_${cname}"
+    val methodReturn: String = method.returnType?.resolve()
+      ?.declaration?.qualifiedName?.asString() ?: "Unit"
+
+    val methodParamCall: String = method.parameters.joinToString(", ") {
+      it.name?.asString() ?: "_"
+    }
+
+    val builder: FunSpec.Builder = FunSpec
+      .builder("export_$entryPoint")
+      .addAnnotation(cNameAnnotation(entryPoint))
+
+    for (param in method.parameters) {
+      val type: String =
+        param.type.resolve().declaration.qualifiedName?.asString()
+          ?: param.type.resolve().declaration.simpleName.asString()
+
+      builder.addParameter(
+        param.name?.asString() ?: "_",
+        ClassName.bestGuess(type),
+      )
+    }
+
+    val returnsEnclosingClass: Boolean = methodReturn == qualifiedName
+    val returnDecl: KSClassDeclaration? = method.returnType?.resolve()?.declaration as? KSClassDeclaration
+    val isObjectReturn: Boolean = returnsEnclosingClass ||
+      (returnDecl != null && methodReturn !in setOf(
+        "kotlin.String", "kotlin.Byte", "kotlin.UByte", "kotlin.Short", "kotlin.UShort",
+        "kotlin.Int", "kotlin.UInt", "kotlin.Long", "kotlin.ULong",
+        "kotlin.Float", "kotlin.Double", "kotlin.Boolean", "kotlin.Unit",
+      ))
+
+    if (isObjectReturn) {
+      builder.returns(cOpaquePointer)
+      builder.addStatement(
+        "return %T.create(%L.%L(%L)).asCPointer()",
+        stableRef, qualifiedName, methodName, methodParamCall,
+      )
+    } else if (methodReturn == "kotlin.Unit") {
+      builder.addStatement(
+        "%L.%L(%L)",
+        qualifiedName, methodName, methodParamCall,
+      )
+    } else {
+      builder.returns(ClassName.bestGuess(methodReturn))
+      builder.addStatement(
+        "return %L.%L(%L)",
+        qualifiedName, methodName, methodParamCall,
+      )
+    }
+
+    addFunction(builder.build())
+  }
+
+  val properties: List<KSPropertyDeclaration> = companion.getAllProperties()
+    .filter { it.getVisibility() == Visibility.PUBLIC }
+    .filter { !it.modifiers.contains(Modifier.CONST) }
+    .toList()
+
+  for (prop in properties) {
+    val propName: String = prop.simpleName.asString()
+    val propTypeResolved: KSType = prop.type.resolve()
+    val propType: String = propTypeResolved.declaration.qualifiedName?.asString() ?: "Any"
+    val isMutable: Boolean = prop.isMutable
+
+    val isPrimitiveType: Boolean = propType in setOf(
+      "kotlin.String", "kotlin.Byte", "kotlin.UByte", "kotlin.Short",
+      "kotlin.UShort", "kotlin.Int", "kotlin.UInt", "kotlin.Long",
+      "kotlin.ULong", "kotlin.Float", "kotlin.Double", "kotlin.Boolean",
+    )
+
+    if (!isPrimitiveType) continue
+
+    val primitiveTypeName = ClassName.bestGuess(propType)
+
+    addFunction(
+      FunSpec.builder("export_${prefix}_companion_get_$propName")
+        .addAnnotation(cNameAnnotation("${prefix}_companion_get_$propName"))
+        .returns(primitiveTypeName)
+        .addStatement("return %L.%L", qualifiedName, propName)
+        .build()
+    )
+
+    if (isMutable) {
+      addFunction(
+        FunSpec.builder("export_${prefix}_companion_set_$propName")
+          .addAnnotation(cNameAnnotation("${prefix}_companion_set_$propName"))
+          .addParameter("value", primitiveTypeName)
+          .addStatement("%L.%L = value", qualifiedName, propName)
+          .build()
+      )
     }
   }
 }

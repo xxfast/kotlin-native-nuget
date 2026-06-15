@@ -3,6 +3,8 @@ package io.github.xxfast.kotlin.native.nuget.processor.cir
 import com.google.devtools.ksp.getVisibility
 import com.google.devtools.ksp.processing.KSPLogger
 import com.google.devtools.ksp.symbol.KSClassDeclaration
+import com.google.devtools.ksp.symbol.KSFunctionDeclaration
+import com.google.devtools.ksp.symbol.KSPropertyDeclaration
 import com.google.devtools.ksp.symbol.KSType
 import com.google.devtools.ksp.symbol.Modifier
 import com.google.devtools.ksp.symbol.Visibility
@@ -343,6 +345,36 @@ internal fun translateClass(
       )
     }.toList()
 
+  val companion: KSClassDeclaration? = cls.declarations
+    .filterIsInstance<KSClassDeclaration>()
+    .firstOrNull { it.isCompanionObject }
+
+  val companionMembers: List<CirMember> = if (companion != null) {
+    val companionConsts: List<CirMember> = companion.getAllProperties()
+      .filter { it.getVisibility() == Visibility.PUBLIC }
+      .filter { it.modifiers.contains(Modifier.CONST) }
+      .mapNotNull { translateConstProperty(it) }
+      .toList()
+
+    val companionProperties: List<CirMember> = companion.getAllProperties()
+      .filter { it.getVisibility() == Visibility.PUBLIC }
+      .filter { !it.modifiers.contains(Modifier.CONST) }
+      .flatMap { prop ->
+        translateCompanionProperty(prop, libraryName, prefix)
+      }
+      .toList()
+
+    val companionFunctions: List<CirMember> = companion.getAllFunctions()
+      .filter { it.getVisibility() == Visibility.PUBLIC }
+      .filter { it.simpleName.asString() !in listOf("equals", "hashCode", "toString", "<init>") }
+      .flatMap { func ->
+        translateCompanionFunction(func, libraryName, prefix, name)
+      }
+      .toList()
+
+    companionConsts + companionProperties + companionFunctions
+  } else emptyList()
+
   return CirClass(
     name = name,
     libraryName = libraryName,
@@ -354,6 +386,7 @@ internal fun translateClass(
     superClass = superClass,
     isDataClass = isDataClass,
     isAbstract = isAbstract,
+    companionMembers = companionMembers,
   )
 }
 
@@ -641,6 +674,162 @@ internal fun translateObject(
     libraryName = libraryName,
     nativePrefix = prefix,
     methods = methods,
+  )
+}
+
+internal fun translateCompanionProperty(
+  prop: KSPropertyDeclaration,
+  libraryName: String,
+  classPrefix: String,
+): List<CirMember> {
+  val propName: String = prop.simpleName.asString()
+  val propTypeResolved: KSType = prop.type.resolve()
+  val propType: String = propTypeResolved.declaration.simpleName.asString()
+  val isMutable: Boolean = prop.isMutable
+  val csPropName: String = propName.replaceFirstChar { it.uppercase() }
+
+  if (propType !in KOTLIN_TO_CSHARP_RETURN) return emptyList()
+
+  val members: MutableList<CirMember> = mutableListOf()
+
+  val csNativeReturnType: String = mapReturnType(propType)
+
+  members.add(CirDllImport(
+    libraryName = libraryName,
+    entryPoint = "${classPrefix}_companion_get_$propName",
+    returnType = csNativeReturnType,
+    name = "Native_Companion_Get_$propName",
+    parameters = emptyList(),
+    visibility = CirVisibility.PRIVATE,
+  ))
+
+  val csType: String
+  val getter: String
+  val setter: String?
+
+  if (propType == "String") {
+    csType = "string"
+    getter = "Marshal.PtrToStringUTF8(Native_Companion_Get_$propName())!"
+    setter = if (isMutable) "Native_Companion_Set_$propName(value)" else null
+
+    if (isMutable) {
+      members.add(CirDllImport(
+        libraryName = libraryName,
+        entryPoint = "${classPrefix}_companion_set_$propName",
+        returnType = "void",
+        name = "Native_Companion_Set_$propName",
+        parameters = listOf(CirParameter("value", "string")),
+        visibility = CirVisibility.PRIVATE,
+      ))
+    }
+  } else {
+    csType = csNativeReturnType
+    getter = "Native_Companion_Get_$propName()"
+    setter = if (isMutable) "Native_Companion_Set_$propName(value)" else null
+
+    if (isMutable) {
+      members.add(CirDllImport(
+        libraryName = libraryName,
+        entryPoint = "${classPrefix}_companion_set_$propName",
+        returnType = "void",
+        name = "Native_Companion_Set_$propName",
+        parameters = listOf(CirParameter("value", csNativeReturnType)),
+        visibility = CirVisibility.PRIVATE,
+      ))
+    }
+  }
+
+  members.add(CirProperty(
+    name = csPropName,
+    type = csType,
+    nativeReturnType = csNativeReturnType,
+    nativeName = propName,
+    getter = getter,
+    setter = setter,
+    isStatic = true,
+  ))
+
+  return members
+}
+
+internal fun translateCompanionFunction(
+  func: KSFunctionDeclaration,
+  libraryName: String,
+  classPrefix: String,
+  className: String,
+): List<CirMember> {
+  val methodName: String = func.simpleName.asString()
+  val cname: String = toCName(methodName)
+  val csMethodName: String = methodName.replaceFirstChar { it.uppercase() }
+  val returnType = func.returnType?.resolve()
+  val kotlinReturnType: String = returnType?.declaration?.simpleName?.asString() ?: "Unit"
+
+  val params: List<CirParameter> = func.parameters.map { param ->
+    val kotlinType: String = param.type.resolve().declaration.simpleName.asString()
+    CirParameter(param.name?.asString() ?: "_", mapParamType(kotlinType))
+  }
+
+  val entryPoint: String = "${classPrefix}_companion_${cname}"
+
+  val returnsEnclosingClass: Boolean = kotlinReturnType == className
+  val isObjectReturn: Boolean = returnsEnclosingClass ||
+    (kotlinReturnType !in KOTLIN_TO_CSHARP_RETURN && kotlinReturnType != "Unit")
+
+  if (isObjectReturn) {
+    val nativeImport = CirDllImport(
+      libraryName = libraryName,
+      entryPoint = entryPoint,
+      returnType = "IntPtr",
+      name = "Native_Companion_$csMethodName",
+      parameters = params,
+      visibility = CirVisibility.PRIVATE,
+    )
+
+    val paramNames: String = params.joinToString(", ") { it.name }
+    val wrapper = CirMethod(
+      name = csMethodName,
+      returnType = kotlinReturnType,
+      parameters = params,
+      body = "new $kotlinReturnType(Native_Companion_$csMethodName($paramNames))",
+      isStatic = true,
+    )
+
+    return listOf(nativeImport, wrapper)
+  }
+
+  if (kotlinReturnType == "String") {
+    val nativeImport = CirDllImport(
+      libraryName = libraryName,
+      entryPoint = entryPoint,
+      returnType = "IntPtr",
+      name = "Native_Companion_$csMethodName",
+      parameters = params,
+      visibility = CirVisibility.PRIVATE,
+    )
+
+    val paramNames: String = params.joinToString(", ") { it.name }
+    val wrapper = CirMethod(
+      name = csMethodName,
+      returnType = "string",
+      parameters = params,
+      body = "Marshal.PtrToStringUTF8(Native_Companion_$csMethodName($paramNames))!",
+      isStatic = true,
+    )
+
+    return listOf(nativeImport, wrapper)
+  }
+
+  val csReturnType: String = if (kotlinReturnType == "Unit") "void" else mapReturnType(kotlinReturnType)
+
+  return listOf(
+    CirDllImport(
+      libraryName = libraryName,
+      entryPoint = entryPoint,
+      returnType = csReturnType,
+      name = "Native_Companion_$csMethodName",
+      parameters = params,
+      visibility = CirVisibility.PUBLIC,
+    )
   )
 }
 

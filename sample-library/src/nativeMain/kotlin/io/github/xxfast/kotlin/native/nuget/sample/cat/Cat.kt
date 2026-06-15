@@ -35,4 +35,10 @@ class Cat(
   fun meow(): String = "Meow! My name is $name"
 
   fun pet(): String = "$name purrs contentedly"
+
+  companion object {
+    const val SPECIES: String = "Felis catus"
+    val defaultBreed: String = "Domestic Shorthair"
+    fun fromName(name: String): Cat = Cat(name)
+  }
 }

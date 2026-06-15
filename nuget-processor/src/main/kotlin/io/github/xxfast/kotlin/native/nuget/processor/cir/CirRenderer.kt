@@ -601,6 +601,10 @@ class CirRenderer {
       renderMethod(method)
     }
 
+    for (member in cls.companionMembers) {
+      renderMember(member)
+    }
+
     if (cls.isDataClass) {
       renderDataClassMethods(cls)
     }
