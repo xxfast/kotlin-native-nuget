@@ -132,6 +132,12 @@ internal fun translateClass(
         "KotlinFunc<$typeParams>"
       } else ""
 
+      val isNullablePrimitive: Boolean = isNullable && !isReferenceType && !isEnumType &&
+        !isListType && !isMutableListType && !isMapType && !isMutableMapType &&
+        !isSetType && !isMutableSetType && !isLambdaType
+      val isNullableString: Boolean = isNullablePrimitive && propType == "String"
+      val isNullableValueType: Boolean = isNullablePrimitive && propType != "String"
+
       val nativeReturnType: String = when {
         isLambdaType -> "IntPtr"
         (isListType || isMutableListType) -> "IntPtr"
@@ -139,6 +145,8 @@ internal fun translateClass(
         (isSetType || isMutableSetType) -> "IntPtr"
         isEnumType -> "int"
         isReferenceType -> "IntPtr"
+        isNullableString -> "IntPtr"
+        isNullableValueType -> "bool"
         else -> mapReturnType(propType)
       }
 
@@ -150,11 +158,31 @@ internal fun translateClass(
         isMutableMapType -> "IDictionary<$mapKeyType, $mapValueType>"
         isSetType -> "IReadOnlySet<$setElementType>"
         isMutableSetType -> "ISet<$setElementType>"
+        isNullableString -> "string?"
+        isNullableValueType -> "${mapParamType(propType)}?"
         propType == "String" -> "string"
         isEnumType -> propType
         isReferenceType && isNullable -> "$propType?"
         isReferenceType -> propType
         else -> mapReturnType(propType)
+      }
+
+      val extraNatives: MutableList<CirExtraNative> = mutableListOf()
+
+      if (isNullableValueType) {
+        val csValueType: String = mapParamType(propType)
+        extraNatives.add(CirExtraNative(
+          entryPointSuffix = "get_${propName}_value",
+          returnType = csValueType,
+          name = "Native_Get_${propName}_value",
+        ))
+        if (isMutable) {
+          extraNatives.add(CirExtraNative(
+            entryPointSuffix = "set_${propName}_null",
+            returnType = "void",
+            name = "Native_Set_${propName}_null",
+          ))
+        }
       }
 
       val getter: String = if (isLambdaType) {
@@ -214,6 +242,8 @@ internal fun translateClass(
           append("                return result;")
         }
       } else when {
+        isNullableString -> "Marshal.PtrToStringUTF8(Native_Get_$propName(_handle))"
+        isNullableValueType -> "!Native_Get_$propName(_handle) ? null : Native_Get_${propName}_value(_handle)"
         propType == "String" -> "Marshal.PtrToStringUTF8(Native_Get_$propName(_handle))!"
         isEnumType -> "($propType)Native_Get_$propName(_handle)"
         isReferenceType && isNullable -> "Native_Get_$propName(_handle) == IntPtr.Zero ? null : new $propType(Native_Get_$propName(_handle))"
@@ -223,6 +253,12 @@ internal fun translateClass(
 
       val setter: String? = if (isMutable && !isLambdaType && !isListType && !isMutableListType && !isMapType && !isMutableMapType && !isSetType && !isMutableSetType) {
         when {
+          isNullableString -> "Native_Set_$propName(_handle, value)"
+          isNullableValueType -> buildString {
+            appendLine()
+            appendLine("                if (value.HasValue) Native_Set_$propName(_handle, value.Value);")
+            append("                else Native_Set_${propName}_null(_handle);")
+          }
           propType == "String" -> "Native_Set_$propName(_handle, value)"
           isEnumType -> "Native_Set_$propName(_handle, (int)value)"
           isReferenceType && isNullable -> "Native_Set_$propName(_handle, value?._handle ?? IntPtr.Zero)"
@@ -231,13 +267,21 @@ internal fun translateClass(
         }
       } else null
 
+      val nativeSetterType: String = when {
+        isNullableValueType -> mapReturnType(propType)
+        isNullableString -> "string"
+        else -> nativeReturnType
+      }
+
       CirProperty(
         name = csPropName,
         type = type,
         nativeReturnType = nativeReturnType,
+        nativeSetterType = nativeSetterType,
         nativeName = propName,
         getter = getter,
         setter = setter,
+        extraNatives = extraNatives,
       )
     }.toList()
 

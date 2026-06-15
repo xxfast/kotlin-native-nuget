@@ -5,6 +5,8 @@ class Cat(
   val lives: Int = 9,
 ) : Animal(name) {
   var brother: Cat? = null
+  var owner: String? = null
+  var age: Int? = null
   var mood: Mood = Mood.SLEEPY
   val nicknames: List<String> = listOf("${name}y", "Little $name")
   val toys: List<Toy> = listOf(Toy("Mouse", "Gray"), Toy("Ball", "Red"))

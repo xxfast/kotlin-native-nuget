@@ -155,10 +155,19 @@ data class CirProperty(
   val name: String,
   val type: String,
   val nativeReturnType: String,
+  val nativeSetterType: String = nativeReturnType,
   val nativeName: String,
   val getter: String,
   val setter: String? = null,
+  val extraNatives: List<CirExtraNative> = emptyList(),
 ) : CirMember
+
+data class CirExtraNative(
+  val entryPointSuffix: String,
+  val returnType: String,
+  val name: String,
+  val hasValueParam: Boolean = false,
+)
 
 data class CirConstructor(
   val parameters: List<CirParameter>,

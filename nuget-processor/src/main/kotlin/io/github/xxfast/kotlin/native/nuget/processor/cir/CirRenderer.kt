@@ -574,9 +574,17 @@ class CirRenderer {
       appendLine("        private static extern ${prop.nativeReturnType} Native_Get_${prop.nativeName}(IntPtr handle);")
       appendLine()
       if (prop.setter != null) {
-        val setterType: String = prop.nativeReturnType
+        val setterType: String = prop.nativeSetterType
         appendLine("        [DllImport(\"${cls.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"${cls.nativePrefix}_set_${prop.nativeName}\")]")
         appendLine("        private static extern void Native_Set_${prop.nativeName}(IntPtr handle, $setterType value);")
+        appendLine()
+      }
+      for (extra in prop.extraNatives) {
+        val entryPoint = "${cls.nativePrefix}_${extra.entryPointSuffix}"
+        val paramStr = if (extra.hasValueParam) "IntPtr handle, ${extra.returnType} value" else "IntPtr handle"
+        val externReturn = if (extra.hasValueParam) "void" else extra.returnType
+        appendLine("        [DllImport(\"${cls.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"$entryPoint\")]")
+        appendLine("        private static extern $externReturn ${extra.name}($paramStr);")
         appendLine()
       }
       renderProperty(prop)
@@ -623,6 +631,7 @@ class CirRenderer {
 
   private fun StringBuilder.renderProperty(prop: CirProperty) {
     val isMultiLineGetter: Boolean = prop.getter.contains('\n')
+    val isMultiLineSetter: Boolean = prop.setter?.contains('\n') == true
     if (isMultiLineGetter) {
       appendLine("        public ${prop.type} ${prop.name}")
       appendLine("        {")
@@ -632,6 +641,14 @@ class CirRenderer {
       appendLine("        }")
     } else if (prop.setter == null) {
       appendLine("        public ${prop.type} ${prop.name} => ${prop.getter};")
+    } else if (isMultiLineSetter) {
+      appendLine("        public ${prop.type} ${prop.name}")
+      appendLine("        {")
+      appendLine("            get => ${prop.getter};")
+      appendLine("            set")
+      appendLine("            {${prop.setter}")
+      appendLine("            }")
+      appendLine("        }")
     } else {
       appendLine("        public ${prop.type} ${prop.name}")
       appendLine("        {")

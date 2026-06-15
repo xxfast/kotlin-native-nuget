@@ -111,6 +111,57 @@ internal fun FileSpec.Builder.addClassExports(cls: KSClassDeclaration) {
             .build()
         )
       }
+    } else if (isPrimitiveType && isNullable && propType != "kotlin.String") {
+      val nonNullType = ClassName.bestGuess(propType)
+
+      addFunction(
+        FunSpec.builder("export_${prefix}_get_$propName")
+          .addAnnotation(cNameAnnotation("${prefix}_get_$propName"))
+          .addParameter("handle", cOpaquePointer)
+          .returns(Boolean::class)
+          .addStatement(
+            "return handle.asStableRef<%L>().get().%L != null",
+            qualifiedName, propName,
+          )
+          .build()
+      )
+
+      addFunction(
+        FunSpec.builder("export_${prefix}_get_${propName}_value")
+          .addAnnotation(cNameAnnotation("${prefix}_get_${propName}_value"))
+          .addParameter("handle", cOpaquePointer)
+          .returns(nonNullType)
+          .addStatement(
+            "return handle.asStableRef<%L>().get().%L!!",
+            qualifiedName, propName,
+          )
+          .build()
+      )
+
+      if (isMutable) {
+        addFunction(
+          FunSpec.builder("export_${prefix}_set_$propName")
+            .addAnnotation(cNameAnnotation("${prefix}_set_$propName"))
+            .addParameter("handle", cOpaquePointer)
+            .addParameter("value", nonNullType)
+            .addStatement(
+              "handle.asStableRef<%L>().get().%L = value",
+              qualifiedName, propName,
+            )
+            .build()
+        )
+
+        addFunction(
+          FunSpec.builder("export_${prefix}_set_${propName}_null")
+            .addAnnotation(cNameAnnotation("${prefix}_set_${propName}_null"))
+            .addParameter("handle", cOpaquePointer)
+            .addStatement(
+              "handle.asStableRef<%L>().get().%L = null",
+              qualifiedName, propName,
+            )
+            .build()
+        )
+      }
     } else if (isPrimitiveType) {
       val primitiveTypeName = ClassName.bestGuess(propType).copy(nullable = isNullable)
 

@@ -48,8 +48,9 @@
   - [x] `Set<T>` → `IReadOnlySet<T>` (count, contains)
   - [x] `MutableSet<T>` → `ISet<T>` (add, remove)
 - [x] Map lambda/function types — Kotlin → C# only (see [ADR-012](docs/adr/012-lambda-function-type-mapping.md))
-- [ ] Map nullable primitive properties (class and top-level)
-- [ ] Map nullable object properties (class and top-level)
+- [x] Map nullable primitive properties (class properties)
+- [x] Map nullable object properties (class properties)
+- [ ] Map top-level properties (get/set on per-file static classes, including nullable support)
 
 ## Phase 4: Async support
 - [ ] Map Suspend functions (coroutines → Task/async)
