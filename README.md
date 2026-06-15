@@ -21,6 +21,11 @@ plugins {
   id("io.github.xxfast.kotlin.native.nuget")
 }
 
+kotlin {
+  mingwX64 { binaries { sharedLib { baseName = "mycatlib" } } }
+  macosArm64 { binaries { sharedLib { baseName = "mycatlib" } } }
+}
+
 nuget {
   packageId.set("MyCatLib")
   version.set("1.0.0")
@@ -115,20 +120,7 @@ Gradle Plugin (Kotlin side)          NuGet Package       C# Consumer
 
 ### Primitives
 
-| Kotlin            | C#                               |
-|-------------------|----------------------------------|
-| `Byte`            | `sbyte`                          |
-| `UByte`           | `byte`                           |
-| `Short`           | `short`                          |
-| `UShort`          | `ushort`                         |
-| `Int`             | `int`                            |
-| `UInt`            | `uint`                           |
-| `Long`            | `long`                           |
-| `ULong`           | `ulong`                          |
-| `Float`           | `float`                          |
-| `Double`          | `double`                         |
-| `Boolean`         | `bool`                           |
-| `String`          | `string`                         |
+Primitive types follow the standard [Kotlin/Native C interop mappings](https://kotlinlang.org/docs/mapping-primitive-data-types-from-c.html#inspect-generated-kotlin-apis-for-a-c-library).
 
 ### OOP Constructs
 

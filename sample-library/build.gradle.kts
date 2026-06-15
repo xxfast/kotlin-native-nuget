@@ -8,7 +8,6 @@ kotlin {
     binaries {
       sharedLib {
         baseName = "sample"
-        linkerOpts("-lmsvcrt", "-static-libgcc", "-static-libstdc++")
       }
     }
   }
@@ -28,11 +27,6 @@ kotlin {
       implementation(libs.kotlin.test)
     }
   }
-}
-
-dependencies {
-  add("kspMingwX64", project(":nuget-processor"))
-  add("kspMacosArm64", project(":nuget-processor"))
 }
 
 nuget {

@@ -6,6 +6,8 @@ import org.jetbrains.kotlin.gradle.dsl.KotlinMultiplatformExtension
 import org.jetbrains.kotlin.gradle.plugin.mpp.KotlinNativeTarget
 import org.jetbrains.kotlin.gradle.plugin.mpp.SharedLibrary
 
+private const val PLUGIN_VERSION = "0.1.0"
+
 private val KONAN_TO_RID = mapOf(
   "mingw_x64" to "win-x64",
   "macos_arm64" to "osx-arm64",
@@ -24,6 +26,16 @@ class NugetPlugin : Plugin<Project> {
 
       val kotlin: KotlinMultiplatformExtension =
         project.extensions.getByType(KotlinMultiplatformExtension::class.java)
+
+      val processorDep: Any = project.findProject(":nuget-processor")
+        ?: "io.github.xxfast:nuget-processor:$PLUGIN_VERSION"
+
+      kotlin.targets.withType(KotlinNativeTarget::class.java).configureEach { target ->
+        if (target.konanTarget.name in KONAN_TO_RID) {
+          val configName = "ksp${target.name.replaceFirstChar { it.uppercase() }}"
+          project.dependencies.add(configName, processorDep)
+        }
+      }
 
       project.pluginManager.withPlugin("com.google.devtools.ksp") {
         project.afterEvaluate {
@@ -49,12 +61,29 @@ class NugetPlugin : Plugin<Project> {
         val nativeTargets: List<KotlinNativeTarget> =
           kotlin.targets.filterIsInstance<KotlinNativeTarget>()
 
+        val supportedTargets: List<KotlinNativeTarget> =
+          nativeTargets.filter { it.konanTarget.name in KONAN_TO_RID }
+
+        if (supportedTargets.isEmpty()) {
+          project.logger.warn(
+            "w: [nuget] No supported native targets found (expected mingw or macOS). " +
+              "Skipping NuGet plugin for project '${project.name}'."
+          )
+          return@afterEvaluate
+        }
+
         val libDirs: MutableMap<String, String> = mutableMapOf()
         val linkTasks: MutableList<Any> = mutableListOf()
         var baseName: String? = null
 
         for (target in nativeTargets) {
           val rid: String = KONAN_TO_RID[target.konanTarget.name] ?: continue
+
+          if (target.konanTarget.name.startsWith("mingw")) {
+            target.binaries.filterIsInstance<SharedLibrary>().forEach { lib ->
+              lib.linkerOpts("-lmsvcrt", "-static-libgcc", "-static-libstdc++")
+            }
+          }
 
           val sharedLib: SharedLibrary = target.binaries
             .filterIsInstance<SharedLibrary>()
