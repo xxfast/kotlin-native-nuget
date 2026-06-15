@@ -112,11 +112,13 @@ internal fun FileSpec.Builder.addClassExports(cls: KSClassDeclaration) {
         )
       }
     } else if (isPrimitiveType) {
+      val primitiveTypeName = ClassName.bestGuess(propType).copy(nullable = isNullable)
+
       addFunction(
         FunSpec.builder("export_${prefix}_get_$propName")
           .addAnnotation(cNameAnnotation("${prefix}_get_$propName"))
           .addParameter("handle", cOpaquePointer)
-          .returns(ClassName.bestGuess(propType))
+          .returns(primitiveTypeName)
           .addStatement(
             "return handle.asStableRef<%L>().get().%L",
             qualifiedName, propName,
@@ -129,7 +131,7 @@ internal fun FileSpec.Builder.addClassExports(cls: KSClassDeclaration) {
           FunSpec.builder("export_${prefix}_set_$propName")
             .addAnnotation(cNameAnnotation("${prefix}_set_$propName"))
             .addParameter("handle", cOpaquePointer)
-            .addParameter("value", ClassName.bestGuess(propType))
+            .addParameter("value", primitiveTypeName)
             .addStatement(
               "handle.asStableRef<%L>().get().%L = value",
               qualifiedName, propName,
