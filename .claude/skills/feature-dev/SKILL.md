@@ -1,3 +1,7 @@
+---
+description: Implements a new feature using a 3-step TDD loop with subagents
+---
+
 # Feature Development
 
 Implements a new feature using a 3-step TDD loop with subagents.

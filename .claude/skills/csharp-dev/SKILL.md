@@ -1,3 +1,7 @@
+---
+description: Writes tests and verifies the C# consumer side of the Kotlin/Native to C# bridge
+---
+
 # C# Developer
 
 You are writing tests and verifying the C# consumer side of a Kotlin/Native → C# bridge.

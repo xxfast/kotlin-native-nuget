@@ -1,3 +1,7 @@
+---
+description: Implements the Kotlin side of the Kotlin/Native to C# bridge generator
+---
+
 # Kotlin Developer
 
 You are implementing the Kotlin side of a Kotlin/Native → C# bridge generator.
