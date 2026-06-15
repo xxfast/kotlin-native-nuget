@@ -47,7 +47,7 @@
   - [x] `MutableMap<K,V>` → `IDictionary<K,V>` (put, remove)
   - [x] `Set<T>` → `IReadOnlySet<T>` (count, contains)
   - [x] `MutableSet<T>` → `ISet<T>` (add, remove)
-- [ ] Map lambda/function types — Kotlin → C# only (see [ADR-012](docs/adr/012-lambda-function-type-mapping.md))
+- [x] Map lambda/function types — Kotlin → C# only (see [ADR-012](docs/adr/012-lambda-function-type-mapping.md))
 
 ## Phase 4: Async support
 - [ ] Map Suspend functions (coroutines → Task/async)
