@@ -24,6 +24,7 @@ fun translate(
   sealedClasses: List<KSClassDeclaration> = emptyList(),
   objects: List<KSClassDeclaration> = emptyList(),
   properties: List<KSPropertyDeclaration> = emptyList(),
+  constProperties: List<KSPropertyDeclaration> = emptyList(),
 ): CirFile {
   val (genericClasses, regularClasses) = classes.partition { it.typeParameters.isNotEmpty() }
 
@@ -94,6 +95,13 @@ fun translate(
     val (namespace, fileClassName) = key
     val finalClassName: String = resolveStaticClassName(fileClassName, namespace)
     val members: List<CirMember> = props.flatMap { translateProperty(it, context.libraryName) }
+    namespaces.mergeStaticClass(namespace, finalClassName, members)
+  }
+
+  for ((key, props) in groupPropertiesByNamespaceAndFile(constProperties)) {
+    val (namespace, fileClassName) = key
+    val finalClassName: String = resolveStaticClassName(fileClassName, namespace)
+    val members: List<CirMember> = props.mapNotNull { translateConstProperty(it) }
     namespaces.mergeStaticClass(namespace, finalClassName, members)
   }
 
@@ -348,4 +356,42 @@ internal fun translateProperty(
   ))
 
   return members
+}
+
+internal fun translateConstProperty(
+  prop: KSPropertyDeclaration,
+): CirConst? {
+  val propName: String = prop.simpleName.asString()
+  val propTypeResolved: KSType = prop.type.resolve()
+  val propType: String = propTypeResolved.declaration.simpleName.asString()
+  val csPropName: String = propName.split("_")
+    .joinToString("") { segment ->
+      segment.lowercase().replaceFirstChar { it.uppercase() }
+    }
+  val csType: String = KOTLIN_TO_CSHARP_PARAM[propType] ?: return null
+  val value: String = extractConstValue(prop) ?: return null
+  val csValue: String = kotlinLiteralToCSharp(value, propType)
+
+  return CirConst(name = csPropName, type = csType, value = csValue)
+}
+
+private fun extractConstValue(prop: KSPropertyDeclaration): String? {
+  val filePath: String = prop.containingFile?.filePath ?: return null
+  val propName: String = prop.simpleName.asString()
+  val sourceText: String = java.io.File(filePath).readText()
+  val pattern = Regex("""const\s+val\s+${Regex.escape(propName)}\s*(?::\s*\S+)?\s*=\s*(.+)""")
+  val match: MatchResult = pattern.find(sourceText) ?: return null
+  return match.groupValues[1].trim()
+}
+
+private fun kotlinLiteralToCSharp(value: String, kotlinType: String): String {
+  val cleaned: String = value.replace("_", "")
+  return when (kotlinType) {
+    "String" -> cleaned
+    "Float" -> if (cleaned.endsWith("f", ignoreCase = true)) cleaned else "${cleaned}f"
+    "Long" -> if (cleaned.endsWith("L")) cleaned else "${cleaned}L"
+    "UInt" -> if (cleaned.endsWith("u", ignoreCase = true)) cleaned else "${cleaned}U"
+    "ULong" -> if (cleaned.endsWith("uL", ignoreCase = true) || cleaned.endsWith("UL")) cleaned else "${cleaned}UL"
+    else -> cleaned
+  }
 }

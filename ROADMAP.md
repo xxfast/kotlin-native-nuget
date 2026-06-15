@@ -51,7 +51,7 @@
 - [x] Map nullable primitive properties (class properties)
 - [x] Map nullable object properties (class properties)
 - [x] Map top-level properties (get/set on per-file static classes, including nullable support)
-- [ ] Map const values
+- [x] Map const values
 - [ ] Map companion objects
 
 ## Phase 4: Async support

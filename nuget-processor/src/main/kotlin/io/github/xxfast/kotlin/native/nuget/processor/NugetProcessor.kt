@@ -69,10 +69,13 @@ class NugetProcessor(
     val functions: List<KSFunctionDeclaration> = allFunctions.filter { it.typeParameters.isEmpty() }
     val genericFunctions: List<KSFunctionDeclaration> = allFunctions.filter { it.typeParameters.isNotEmpty() }
 
-    val properties: List<KSPropertyDeclaration> = allDeclarations
+    val allProperties: List<KSPropertyDeclaration> = allDeclarations
       .filterIsInstance<KSPropertyDeclaration>()
       .filter { it.getVisibility() == Visibility.PUBLIC }
       .filter { it.parentDeclaration == null }
+
+    val properties: List<KSPropertyDeclaration> = allProperties.filter { !it.modifiers.contains(Modifier.CONST) }
+    val constProperties: List<KSPropertyDeclaration> = allProperties.filter { it.modifiers.contains(Modifier.CONST) }
 
     val allClasses: List<KSClassDeclaration> = allDeclarations
       .filterIsInstance<KSClassDeclaration>()
@@ -109,7 +112,7 @@ class NugetProcessor(
       .filter { it.classKind == ClassKind.INTERFACE }
       .filter { it.parentDeclaration == null }
 
-    if (functions.isEmpty() && genericFunctions.isEmpty() && classes.isEmpty() && genericClasses.isEmpty() && enums.isEmpty() && interfaces.isEmpty() && sealedClasses.isEmpty() && objects.isEmpty() && properties.isEmpty()) return emptyList()
+    if (functions.isEmpty() && genericFunctions.isEmpty() && classes.isEmpty() && genericClasses.isEmpty() && enums.isEmpty() && interfaces.isEmpty() && sealedClasses.isEmpty() && objects.isEmpty() && properties.isEmpty() && constProperties.isEmpty()) return emptyList()
 
     val sources: Array<KSFile> = (functions.mapNotNull { it.containingFile } +
       genericFunctions.mapNotNull { it.containingFile } +
@@ -119,12 +122,13 @@ class NugetProcessor(
       interfaces.mapNotNull { it.containingFile } +
       sealedClasses.mapNotNull { it.containingFile } +
       objects.mapNotNull { it.containingFile } +
-      properties.mapNotNull { it.containingFile }).toTypedArray()
+      properties.mapNotNull { it.containingFile } +
+      constProperties.mapNotNull { it.containingFile }).toTypedArray()
 
     val deps = Dependencies(aggregating = true, *sources)
 
     generateCNameWrappers(functions, genericFunctions, classes, genericClasses, enums, sealedClasses, objects, properties, deps)
-    generateCSharpBindings(functions, genericFunctions, allClasses, enums, interfaces, sealedClasses, objects, properties, deps)
+    generateCSharpBindings(functions, genericFunctions, allClasses, enums, interfaces, sealedClasses, objects, properties, constProperties, deps)
 
     logger.info(
       "Generated bindings for ${functions.size} functions" +
@@ -135,7 +139,8 @@ class NugetProcessor(
         ", ${interfaces.size} interfaces" +
         ", ${sealedClasses.size} sealed classes" +
         ", ${objects.size} objects" +
-        ", and ${properties.size} properties"
+        ", ${properties.size} properties" +
+        ", and ${constProperties.size} const properties"
     )
 
     return emptyList()
@@ -150,6 +155,7 @@ class NugetProcessor(
     sealedClasses: List<KSClassDeclaration>,
     objects: List<KSClassDeclaration>,
     properties: List<KSPropertyDeclaration>,
+    constProperties: List<KSPropertyDeclaration>,
     deps: Dependencies,
   ) {
     val cirFile: CirFile = translate(
@@ -163,6 +169,7 @@ class NugetProcessor(
       sealedClasses,
       objects,
       properties,
+      constProperties,
     )
 
     val csharp: String = renderer.render(cirFile)

@@ -665,7 +665,13 @@ class CirRenderer {
       is CirDllImport -> renderDllImport(member)
       is CirMethod -> renderMethod(member)
       is CirProperty -> renderProperty(member)
+      is CirConst -> renderConst(member)
     }
+  }
+
+  private fun StringBuilder.renderConst(const: CirConst) {
+    appendLine("        public const ${const.type} ${const.name} = ${const.value};")
+    appendLine()
   }
 
   private fun StringBuilder.renderDllImport(import: CirDllImport) {

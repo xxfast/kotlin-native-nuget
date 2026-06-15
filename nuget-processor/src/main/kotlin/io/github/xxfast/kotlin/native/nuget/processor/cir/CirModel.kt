@@ -180,6 +180,12 @@ data class CirParameter(
   val type: String,
 )
 
+data class CirConst(
+  val name: String,
+  val type: String,
+  val value: String,
+) : CirMember
+
 enum class CirVisibility {
   PUBLIC, PRIVATE
 }
