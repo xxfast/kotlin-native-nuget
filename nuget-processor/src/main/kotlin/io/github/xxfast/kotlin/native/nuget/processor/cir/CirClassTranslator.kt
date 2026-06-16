@@ -923,9 +923,9 @@ internal fun translateValueClass(
   val name: String = cls.simpleName.asString()
   val prefix: String = name.lowercase()
 
-  val underlyingProp: KSPropertyDeclaration = cls.primaryConstructor!!.parameters.first().let { param ->
-    cls.getAllProperties().first { it.simpleName.asString() == param.name?.asString() }
-  }
+  val underlyingParamName: String = cls.primaryConstructor!!.parameters.first().name!!.asString()
+  val underlyingProp: KSPropertyDeclaration = cls.getAllProperties()
+    .first { it.simpleName.asString() == underlyingParamName }
 
   val underlyingType: String = underlyingProp.type.resolve().declaration.simpleName.asString()
   val underlyingName: String = underlyingProp.simpleName.asString().replaceFirstChar { it.uppercase() }

@@ -40,6 +40,12 @@ Implements a new feature using a 3-step TDD loop with subagents.
 - Update the KSP processor (CirModel, CirTranslator, CirRenderer, CSharpBindingsProcessor)
 - Verify all tests pass (existing + new)
 
+### Step 5: Style check (refactor-dev agent, model: sonnet)
+
+- Scan all files created or modified in step 4 against [STYLE.md](../../../STYLE.md)
+- If even one violation is found, delegate to the [refactor-dev skill](../refactor-dev/SKILL.md) with the list of files
+- If no violations, report success immediately without refactor step
+
 ## Rules
 
 - Always write tests FIRST (step 2 before step 3)

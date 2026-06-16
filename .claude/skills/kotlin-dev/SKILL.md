@@ -33,13 +33,3 @@ You are implementing the Kotlin side of a Kotlin/Native → C# bridge generator.
 - Enum properties → ordinal-based bridge functions
 - Per-file class naming (ADR-007): file name = C# static class name
 
-## Style rules 
-
-- Read [STYLE.md](../../../STYLE.md) thoroughly
-- 2-space indentation
-- Explicit types on non-obvious results
-- No indirection wrappers
-- Trailing commas
-- Early returns over nested if/else
-- No wildcard imports! (For any reason whatsoever)
-- forEach{} over for each

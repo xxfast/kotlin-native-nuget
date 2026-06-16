@@ -3,6 +3,7 @@ package io.github.xxfast.kotlin.native.nuget.processor.exports
 import com.google.devtools.ksp.getVisibility
 import com.google.devtools.ksp.symbol.KSClassDeclaration
 import com.google.devtools.ksp.symbol.KSFunctionDeclaration
+import com.google.devtools.ksp.symbol.KSPropertyDeclaration
 import com.google.devtools.ksp.symbol.Visibility
 import com.squareup.kotlinpoet.ClassName
 import com.squareup.kotlinpoet.FileSpec
@@ -34,7 +35,7 @@ internal fun FileSpec.Builder.addValueClassExports(cls: KSClassDeclaration) {
       .builder("export_$cname")
       .addAnnotation(cNameAnnotation(cname))
 
-    for (param in ctor.parameters) {
+    ctor.parameters.forEach { param ->
       val type: String =
         param.type.resolve().declaration.qualifiedName?.asString()
           ?: param.type.resolve().declaration.simpleName.asString()
@@ -51,12 +52,12 @@ internal fun FileSpec.Builder.addValueClassExports(cls: KSClassDeclaration) {
     addFunction(builder.build())
   }
 
-  val properties = cls.getAllProperties()
+  val properties: List<KSPropertyDeclaration> = cls.getAllProperties()
     .filter { it.getVisibility() == Visibility.PUBLIC }
     .filter { it.simpleName.asString() != underlyingPropName }
     .toList()
 
-  for (prop in properties) {
+  properties.forEach { prop ->
     val propName: String = prop.simpleName.asString()
     val propType: String = prop.type.resolve().declaration.qualifiedName?.asString() ?: "kotlin.Unit"
 
@@ -70,7 +71,7 @@ internal fun FileSpec.Builder.addValueClassExports(cls: KSClassDeclaration) {
     addFunction(builder.build())
   }
 
-  val methods = cls.getAllFunctions()
+  val methods: List<KSFunctionDeclaration> = cls.getAllFunctions()
     .filter { it.getVisibility() == Visibility.PUBLIC }
     .filter { it.simpleName.asString() !in listOf(
       "equals", "hashCode", "toString", "<init>",
@@ -79,7 +80,7 @@ internal fun FileSpec.Builder.addValueClassExports(cls: KSClassDeclaration) {
     ) }
     .toList()
 
-  for (method in methods) {
+  methods.forEach { method ->
     val methodName: String = method.simpleName.asString()
     val methodReturn: String = method.returnType?.resolve()
       ?.declaration?.qualifiedName?.asString() ?: "kotlin.Unit"

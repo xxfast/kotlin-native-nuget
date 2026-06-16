@@ -16,7 +16,8 @@ Read [ROADMAP.md](ROADMAP.md) to understand the planned features and priorities 
 
 - Read [.claude/skills/feature-dev/SKILL.md](.claude/skills/feature-dev/SKILL.md) for the feature development workflow                             
 - Read [.claude/skills/kotlin-dev/SKILL.md](.claude/skills/kotlin-dev/SKILL.md) for Kotlin implementation guidance                                         
-- Read [.claude/skills/csharp-dev/SKILL.md](.claude/skills/csharp-dev/SKILL.md) for C# test development guidance   
+- Read [.claude/skills/csharp-dev/SKILL.md](.claude/skills/csharp-dev/SKILL.md) for C# test development guidance
+- Read [.claude/skills/refactor-dev/SKILL.md](.claude/skills/refactor-dev/SKILL.md) for style cleanup and refactoring
 
 ## Follow Standard Coding Conventions
 

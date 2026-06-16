@@ -890,7 +890,7 @@ class CirRenderer {
     appendLine("    public readonly record struct ${cls.name}(${cls.underlyingType} ${cls.underlyingName})")
     appendLine("    {")
 
-    for ((index, ctor) in cls.constructors.withIndex()) {
+    cls.constructors.forEachIndexed { index, ctor ->
       val paramStr: String = ctor.parameters.joinToString(", ") { "${it.type} ${it.name}" }
       val nativeReturnType: String = if (cls.underlyingType == "string") "IntPtr" else cls.underlyingNativeType
       val nativeSuffix: String = if (index > 0) "_$index" else ""
@@ -902,7 +902,7 @@ class CirRenderer {
       appendLine()
     }
 
-    for (prop in cls.properties) {
+    cls.properties.forEach { prop ->
       appendLine("        [DllImport(\"${cls.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"${cls.nativePrefix}_get_${prop.nativeName}\")]")
       appendLine("        private static extern ${prop.nativeReturnType} Native_Get${prop.name}(${cls.underlyingNativeType} value);")
       appendLine()
@@ -910,7 +910,7 @@ class CirRenderer {
       appendLine()
     }
 
-    for (method in cls.methods) {
+    cls.methods.forEach { method ->
       val nativeReturnType: String = method.nativeReturnType
       appendLine("        [DllImport(\"${cls.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"${cls.nativePrefix}_${method.nativeName}\")]")
 
