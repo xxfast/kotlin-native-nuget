@@ -56,7 +56,12 @@
 - [x] Map extension functions
 - [x] Map extension properties (see [ADR-013](docs/adr/013-extension-property-mapping.md))
 - [x] Map inline classes (value classes) (see [ADR-014](docs/adr/014-value-class-mapping.md))
-- [ ] Map inline classes wrapping reference types (value class with object underlying type)
+- [x] Map inline classes wrapping reference types (value class with object underlying type)
+- [ ] Map generics with type constraints (e.g., `where T : SomeInterface`) 
+- [ ] Map generics with variance (`out T`, `in T`) 
+- [ ] Map inline functions (e.g., `inline fun f()`)
+- [ ] Map inline functions with reified type parameters (e.g., `inline fun <reified T> f()`)
+- [ ] Map generic type aliases (e.g., `typealias StringList = List<String>`)
 
 ## Phase 4: Async support
 - [ ] Map Suspend functions (coroutines → Task/async)
