@@ -8,3 +8,4 @@
 - [006](006-enum-mapping.md) — Ordinal-backed C# enum + extension methods for properties
 - [007](007-top-level-function-class-naming.md) — File name as class name; `Kt` suffix only on conflict
 - [013](013-extension-property-mapping.md) — `GetXxx()`/`SetXxx()` extension methods for Kotlin extension properties
+- [014](014-value-class-mapping.md) — `readonly record struct` with unwrapped bridge for Kotlin value classes

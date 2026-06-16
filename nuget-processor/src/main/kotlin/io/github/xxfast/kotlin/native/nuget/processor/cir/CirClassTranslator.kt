@@ -916,6 +916,121 @@ internal fun translateEnum(
   return CirEnum(name, entries, properties)
 }
 
+internal fun translateValueClass(
+  cls: KSClassDeclaration,
+  libraryName: String,
+): CirValueClass {
+  val name: String = cls.simpleName.asString()
+  val prefix: String = name.lowercase()
+
+  val underlyingProp: KSPropertyDeclaration = cls.primaryConstructor!!.parameters.first().let { param ->
+    cls.getAllProperties().first { it.simpleName.asString() == param.name?.asString() }
+  }
+
+  val underlyingType: String = underlyingProp.type.resolve().declaration.simpleName.asString()
+  val underlyingName: String = underlyingProp.simpleName.asString().replaceFirstChar { it.uppercase() }
+  val underlyingNativeType: String = mapParamType(underlyingType)
+
+  val secondaryConstructors: List<CirValueClassConstructor> = cls.declarations
+    .filterIsInstance<KSFunctionDeclaration>()
+    .filter { it.simpleName.asString() == "<init>" }
+    .filter { it != cls.primaryConstructor }
+    .mapIndexed { index, ctor ->
+      val params: List<CirParameter> = ctor.parameters.map { param ->
+        val kotlinType: String = param.type.resolve().declaration.simpleName.asString()
+        CirParameter(param.name?.asString() ?: "_", mapParamType(kotlinType))
+      }
+
+      val nativeName: String = if (index == 0) "${prefix}_create" else "${prefix}_create_${index}"
+
+      val body: String = if (underlyingType == "String") {
+        "Marshal.PtrToStringUTF8(Native_Create${if (index > 0) "_$index" else ""}(${params.joinToString(", ") { it.name }}))!"
+      } else {
+        "Native_Create${if (index > 0) "_$index" else ""}(${params.joinToString(", ") { it.name }})"
+      }
+
+      CirValueClassConstructor(
+        parameters = params,
+        nativeName = nativeName,
+        body = body,
+      )
+    }
+    .toList()
+
+  val properties: List<CirProperty> = cls.getAllProperties()
+    .filter { it.getVisibility() == Visibility.PUBLIC }
+    .filter { it.simpleName.asString() != underlyingProp.simpleName.asString() }
+    .map { prop ->
+      val propName: String = prop.simpleName.asString()
+      val propType: String = prop.type.resolve().declaration.simpleName.asString()
+      val csPropName: String = propName.replaceFirstChar { it.uppercase() }
+      val csReturnType: String = if (propType == "String") "string" else mapReturnType(propType)
+
+      val getter: String = if (propType == "String") {
+        "Marshal.PtrToStringUTF8(Native_Get${csPropName}(${underlyingName}))!"
+      } else {
+        "Native_Get${csPropName}(${underlyingName})"
+      }
+
+      CirProperty(
+        name = csPropName,
+        type = csReturnType,
+        nativeReturnType = mapReturnType(propType),
+        nativeName = propName,
+        getter = getter,
+      )
+    }
+    .toList()
+
+  val methods: List<CirMethod> = cls.getAllFunctions()
+    .filter { it.getVisibility() == Visibility.PUBLIC }
+    .filter { it.simpleName.asString() !in listOf(
+      "equals", "hashCode", "toString", "<init>",
+      "box-impl", "unbox-impl", "constructor-impl",
+      "hashCode-impl", "equals-impl", "equals-impl0", "toString-impl",
+    ) }
+    .map { method ->
+      val methodName: String = method.simpleName.asString()
+      val csMethodName: String = methodName.replaceFirstChar { it.uppercase() }
+      val returnType = method.returnType?.resolve()
+      val kotlinReturnType: String = returnType?.declaration?.simpleName?.asString() ?: "Unit"
+
+      val csReturnType: String = when (kotlinReturnType) {
+        "String" -> "string"
+        "Unit" -> "void"
+        else -> mapReturnType(kotlinReturnType)
+      }
+
+      val body: String = if (kotlinReturnType == "String") {
+        "Marshal.PtrToStringUTF8(Native_${csMethodName}(${underlyingName}))!"
+      } else {
+        "Native_${csMethodName}(${underlyingName})"
+      }
+
+      CirMethod(
+        name = csMethodName,
+        returnType = csReturnType,
+        nativeReturnType = mapReturnType(kotlinReturnType),
+        nativeName = methodName,
+        parameters = emptyList(),
+        body = body,
+      )
+    }
+    .toList()
+
+  return CirValueClass(
+    name = name,
+    libraryName = libraryName,
+    nativePrefix = prefix,
+    underlyingType = if (underlyingType == "String") "string" else mapParamType(underlyingType),
+    underlyingName = underlyingName,
+    underlyingNativeType = underlyingNativeType,
+    constructors = secondaryConstructors,
+    properties = properties,
+    methods = methods,
+  )
+}
+
 private fun mapInterfacePropertyType(type: KSType): String {
   val typeName: String = type.declaration.simpleName.asString()
   return if (typeName == "String") "string"

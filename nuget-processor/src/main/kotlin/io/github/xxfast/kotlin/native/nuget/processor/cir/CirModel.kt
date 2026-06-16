@@ -51,6 +51,24 @@ data class CirClass(
   val companionMembers: List<CirMember> = emptyList(),
 ) : CirDeclaration
 
+data class CirValueClass(
+  val name: String,
+  val libraryName: String,
+  val nativePrefix: String,
+  val underlyingType: String,
+  val underlyingName: String,
+  val underlyingNativeType: String,
+  val constructors: List<CirValueClassConstructor> = emptyList(),
+  val properties: List<CirProperty>,
+  val methods: List<CirMethod>,
+) : CirDeclaration
+
+data class CirValueClassConstructor(
+  val parameters: List<CirParameter>,
+  val nativeName: String,
+  val body: String,
+)
+
 data class CirEnum(
   val name: String,
   val entries: List<CirEnumEntry>,

@@ -29,6 +29,7 @@ fun translate(
   constProperties: List<KSPropertyDeclaration> = emptyList(),
   extensionFunctions: List<KSFunctionDeclaration> = emptyList(),
   extensionProperties: List<KSPropertyDeclaration> = emptyList(),
+  valueClasses: List<KSClassDeclaration> = emptyList(),
 ): CirFile {
   val (genericClasses, regularClasses) = classes.partition { it.typeParameters.isNotEmpty() }
 
@@ -116,6 +117,10 @@ fun translate(
   for (cls in genericClasses) {
     namespaces.addDeclaration(namespaceOf(cls.packageName.asString()), translateGenericClass(cls, context.libraryName))
     needsMarshalHelper = true
+  }
+
+  for (cls in valueClasses) {
+    namespaces.addDeclaration(namespaceOf(cls.packageName.asString()), translateValueClass(cls, context.libraryName))
   }
 
   for (enum in enums) {

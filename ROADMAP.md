@@ -55,6 +55,8 @@
 - [x] Map companion objects
 - [x] Map extension functions
 - [x] Map extension properties (see [ADR-013](docs/adr/013-extension-property-mapping.md))
+- [x] Map inline classes (value classes) (see [ADR-014](docs/adr/014-value-class-mapping.md))
+- [ ] Map inline classes wrapping reference types (value class with object underlying type)
 
 ## Phase 4: Async support
 - [ ] Map Suspend functions (coroutines → Task/async)

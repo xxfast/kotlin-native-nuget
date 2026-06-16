@@ -32,6 +32,7 @@ class CirRenderer {
         is CirEnum -> renderEnum(declaration)
         is CirSealedClass -> renderSealedClass(declaration)
         is CirObject -> renderObject(declaration)
+        is CirValueClass -> renderValueClass(declaration)
       }
     }
 
@@ -880,6 +881,47 @@ class CirRenderer {
 
     for (method in obj.methods) {
       renderDllImport(method)
+    }
+
+    appendLine("    }")
+  }
+
+  private fun StringBuilder.renderValueClass(cls: CirValueClass) {
+    appendLine("    public readonly record struct ${cls.name}(${cls.underlyingType} ${cls.underlyingName})")
+    appendLine("    {")
+
+    for ((index, ctor) in cls.constructors.withIndex()) {
+      val paramStr: String = ctor.parameters.joinToString(", ") { "${it.type} ${it.name}" }
+      val nativeReturnType: String = if (cls.underlyingType == "string") "IntPtr" else cls.underlyingNativeType
+      val nativeSuffix: String = if (index > 0) "_$index" else ""
+
+      appendLine("        [DllImport(\"${cls.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"${ctor.nativeName}\")]")
+      appendLine("        private static extern $nativeReturnType Native_Create$nativeSuffix($paramStr);")
+      appendLine()
+      appendLine("        public ${cls.name}($paramStr) : this(${ctor.body}) { }")
+      appendLine()
+    }
+
+    for (prop in cls.properties) {
+      appendLine("        [DllImport(\"${cls.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"${cls.nativePrefix}_get_${prop.nativeName}\")]")
+      appendLine("        private static extern ${prop.nativeReturnType} Native_Get${prop.name}(${cls.underlyingNativeType} value);")
+      appendLine()
+      appendLine("        public ${prop.type} ${prop.name} => ${prop.getter};")
+      appendLine()
+    }
+
+    for (method in cls.methods) {
+      val nativeReturnType: String = method.nativeReturnType
+      appendLine("        [DllImport(\"${cls.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"${cls.nativePrefix}_${method.nativeName}\")]")
+
+      if (nativeReturnType == "bool") {
+        appendLine("        [return: MarshalAs(UnmanagedType.I1)]")
+      }
+
+      appendLine("        private static extern $nativeReturnType Native_${method.name}(${cls.underlyingNativeType} value);")
+      appendLine()
+      appendLine("        public ${method.returnType} ${method.name}() => ${method.body};")
+      appendLine()
     }
 
     appendLine("    }")
