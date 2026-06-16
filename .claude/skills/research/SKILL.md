@@ -55,10 +55,8 @@ Report your findings as:
 
 ## Should you write an ADR?
 
-Write an ADR when there are **genuine alternatives with different tradeoffs**. Examples:
-- Memory management strategy (ADR-003) — multiple valid approaches
-- Enum mapping (ADR-006) — three distinct options with different semantics
-- Sealed class hierarchy (ADR-009) — abstract base vs interface vs union
+Write an ADR when there are **genuine alternatives with different tradeoffs**. 
+Examples: Look at [adr](../../../docs/adr) for past decisions that warranted ADRs
 
 Don't write an ADR when:
 - The feature follows an established pattern (e.g., extension functions follow the enum extension pattern)

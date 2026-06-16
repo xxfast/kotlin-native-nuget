@@ -6,9 +6,13 @@ description: Implements a new feature using a 3-step TDD loop with subagents
 
 Implements a new feature using a 3-step TDD loop with subagents.
 
+You must delegate to the appropriate subagent for each step (research, testing, implementation, refactor) 
+
+Provide them with the necessary context and instructions.
+
 ## Workflow
 
-### Step 1: Research (research skill)
+### Step 1: Research (research skill subagent, model: sonnet)
 
 - Delegate to the [research skill](../research/SKILL.md)
 - Investigate how the feature should work
@@ -27,7 +31,7 @@ Implements a new feature using a 3-step TDD loop with subagents.
 - Get feedback and iterate on the design before implementation
 - This step is crucial to ensure we're building the right thing before writing code
 
-### Step 3: Testing (csharp-dev agent, model: sonnet)
+### Step 3: Testing (csharp-dev skill subagent, model: sonnet)
 
 - Write failing C# tests that define the expected API
 - Tests go in `sample-app/SampleApp.Tests/`
@@ -40,17 +44,24 @@ Implements a new feature using a 3-step TDD loop with subagents.
 - Update the KSP processor (CirModel, CirTranslator, CirRenderer, CSharpBindingsProcessor)
 - Verify all tests pass (existing + new)
 
-### Step 5: Style check (refactor-dev agent, model: sonnet)
+### Checkpoint: Style review
 
 - Scan all files created or modified in step 4 against [STYLE.md](../../../STYLE.md)
 - If even one violation is found, delegate to the [refactor-dev skill](../refactor-dev/SKILL.md) with the list of files
 - If no violations, report success immediately without refactor step
 
+## Step 5: Refactor (Optional, if determined by previous step) (refactor-dev skill subagent, model: sonnet)
+
+- Refactor the specified files to fix style violations
+- Verify all tests still pass after refactor
+
 ## Rules
 
-- Always write tests FIRST (step 2 before step 3)
+- You must delegate to the appropriate subagent
 - Subagents use `model: sonnet` (Sonnet 4.6)
 - Research agents run in background when independent
+- After research is complete, share findings with humans for feedback before proceeding to implementation
+- Run subagent to write tests FIRST (step 3 before step 4)
 - Implementation agents include the full context: what files to change, expected output, style rules
 - After implementation, verify locally: `./gradlew :sample-library:clean :sample-library:packNuget && cd sample-app/SampleApp.Tests && dotnet test`
 - Update README.md roadmap after feature is complete
