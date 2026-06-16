@@ -9,6 +9,12 @@ import com.squareup.kotlinpoet.ClassName
 import com.squareup.kotlinpoet.FileSpec
 import com.squareup.kotlinpoet.FunSpec
 
+private val PRIMITIVE_TYPES: Set<String> = setOf(
+  "kotlin.String", "kotlin.Byte", "kotlin.UByte", "kotlin.Short", "kotlin.UShort",
+  "kotlin.Int", "kotlin.UInt", "kotlin.Long", "kotlin.ULong",
+  "kotlin.Float", "kotlin.Double", "kotlin.Boolean",
+)
+
 internal fun FileSpec.Builder.addValueClassExports(cls: KSClassDeclaration) {
   val name: String = cls.simpleName.asString()
   val qualifiedName: String = cls.qualifiedName?.asString() ?: return
@@ -16,7 +22,9 @@ internal fun FileSpec.Builder.addValueClassExports(cls: KSClassDeclaration) {
 
   val underlyingProp = cls.primaryConstructor!!.parameters.first()
   val underlyingPropName: String = underlyingProp.name?.asString() ?: return
-  val underlyingType: String = underlyingProp.type.resolve().declaration.qualifiedName?.asString() ?: return
+  val underlyingType: String =
+    underlyingProp.type.resolve().declaration.qualifiedName?.asString() ?: return
+  val isReferenceUnderlying: Boolean = underlyingType !in PRIMITIVE_TYPES
 
   val secondaryConstructors: List<KSFunctionDeclaration> = cls.declarations
     .filterIsInstance<KSFunctionDeclaration>()
@@ -59,14 +67,27 @@ internal fun FileSpec.Builder.addValueClassExports(cls: KSClassDeclaration) {
 
   properties.forEach { prop ->
     val propName: String = prop.simpleName.asString()
-    val propType: String = prop.type.resolve().declaration.qualifiedName?.asString() ?: "kotlin.Unit"
+    val propType: String =
+      prop.type.resolve().declaration.qualifiedName?.asString() ?: "kotlin.Unit"
 
     val builder: FunSpec.Builder = FunSpec
       .builder("export_${prefix}_get_$propName")
       .addAnnotation(cNameAnnotation("${prefix}_get_$propName"))
-      .addParameter("value", ClassName.bestGuess(underlyingType))
-      .returns(ClassName.bestGuess(propType))
-      .addStatement("return %L(value).%L", qualifiedName, propName)
+
+    if (isReferenceUnderlying) {
+      builder
+        .addParameter("handle", cOpaquePointer)
+        .returns(ClassName.bestGuess(propType))
+        .addStatement(
+          "return %L(handle.asStableRef<%L>().get()).%L",
+          qualifiedName, underlyingType, propName,
+        )
+    } else {
+      builder
+        .addParameter("value", ClassName.bestGuess(underlyingType))
+        .returns(ClassName.bestGuess(propType))
+        .addStatement("return %L(value).%L", qualifiedName, propName)
+    }
 
     addFunction(builder.build())
   }
@@ -88,13 +109,31 @@ internal fun FileSpec.Builder.addValueClassExports(cls: KSClassDeclaration) {
     val builder: FunSpec.Builder = FunSpec
       .builder("export_${prefix}_$methodName")
       .addAnnotation(cNameAnnotation("${prefix}_$methodName"))
-      .addParameter("value", ClassName.bestGuess(underlyingType))
 
-    if (methodReturn == "kotlin.Unit") {
-      builder.addStatement("%L(value).%L()", qualifiedName, methodName)
+    if (isReferenceUnderlying) {
+      builder.addParameter("handle", cOpaquePointer)
+
+      if (methodReturn == "kotlin.Unit") {
+        builder.addStatement(
+          "%L(handle.asStableRef<%L>().get()).%L()",
+          qualifiedName, underlyingType, methodName,
+        )
+      } else {
+        builder.returns(ClassName.bestGuess(methodReturn))
+        builder.addStatement(
+          "return %L(handle.asStableRef<%L>().get()).%L()",
+          qualifiedName, underlyingType, methodName,
+        )
+      }
     } else {
-      builder.returns(ClassName.bestGuess(methodReturn))
-      builder.addStatement("return %L(value).%L()", qualifiedName, methodName)
+      builder.addParameter("value", ClassName.bestGuess(underlyingType))
+
+      if (methodReturn == "kotlin.Unit") {
+        builder.addStatement("%L(value).%L()", qualifiedName, methodName)
+      } else {
+        builder.returns(ClassName.bestGuess(methodReturn))
+        builder.addStatement("return %L(value).%L()", qualifiedName, methodName)
+      }
     }
 
     addFunction(builder.build())

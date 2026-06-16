@@ -58,6 +58,7 @@ data class CirValueClass(
   val underlyingType: String,
   val underlyingName: String,
   val underlyingNativeType: String,
+  val underlyingIsReference: Boolean = false,
   val constructors: List<CirValueClassConstructor> = emptyList(),
   val properties: List<CirProperty>,
   val methods: List<CirMethod>,

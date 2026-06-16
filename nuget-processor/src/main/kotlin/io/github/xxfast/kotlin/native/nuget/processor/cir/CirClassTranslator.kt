@@ -930,6 +930,9 @@ internal fun translateValueClass(
   val underlyingType: String = underlyingProp.type.resolve().declaration.simpleName.asString()
   val underlyingName: String = underlyingProp.simpleName.asString().replaceFirstChar { it.uppercase() }
   val underlyingNativeType: String = mapParamType(underlyingType)
+  val isReferenceUnderlying: Boolean = underlyingType !in KOTLIN_TO_CSHARP_PARAM
+
+  val nativeArg: String = if (isReferenceUnderlying) "${underlyingName}._handle" else underlyingName
 
   val secondaryConstructors: List<CirValueClassConstructor> = cls.declarations
     .filterIsInstance<KSFunctionDeclaration>()
@@ -943,10 +946,13 @@ internal fun translateValueClass(
 
       val nativeName: String = if (index == 0) "${prefix}_create" else "${prefix}_create_${index}"
 
+      val indexSuffix: String = if (index > 0) "_$index" else ""
+      val paramNames: String = params.joinToString(", ") { it.name }
+
       val body: String = if (underlyingType == "String") {
-        "Marshal.PtrToStringUTF8(Native_Create${if (index > 0) "_$index" else ""}(${params.joinToString(", ") { it.name }}))!"
+        "Marshal.PtrToStringUTF8(Native_Create${indexSuffix}(${paramNames}))!"
       } else {
-        "Native_Create${if (index > 0) "_$index" else ""}(${params.joinToString(", ") { it.name }})"
+        "Native_Create${indexSuffix}(${paramNames})"
       }
 
       CirValueClassConstructor(
@@ -967,9 +973,9 @@ internal fun translateValueClass(
       val csReturnType: String = if (propType == "String") "string" else mapReturnType(propType)
 
       val getter: String = if (propType == "String") {
-        "Marshal.PtrToStringUTF8(Native_Get${csPropName}(${underlyingName}))!"
+        "Marshal.PtrToStringUTF8(Native_Get${csPropName}(${nativeArg}))!"
       } else {
-        "Native_Get${csPropName}(${underlyingName})"
+        "Native_Get${csPropName}(${nativeArg})"
       }
 
       CirProperty(
@@ -992,7 +998,7 @@ internal fun translateValueClass(
     .map { method ->
       val methodName: String = method.simpleName.asString()
       val csMethodName: String = methodName.replaceFirstChar { it.uppercase() }
-      val returnType = method.returnType?.resolve()
+      val returnType: KSType? = method.returnType?.resolve()
       val kotlinReturnType: String = returnType?.declaration?.simpleName?.asString() ?: "Unit"
 
       val csReturnType: String = when (kotlinReturnType) {
@@ -1002,9 +1008,9 @@ internal fun translateValueClass(
       }
 
       val body: String = if (kotlinReturnType == "String") {
-        "Marshal.PtrToStringUTF8(Native_${csMethodName}(${underlyingName}))!"
+        "Marshal.PtrToStringUTF8(Native_${csMethodName}(${nativeArg}))!"
       } else {
-        "Native_${csMethodName}(${underlyingName})"
+        "Native_${csMethodName}(${nativeArg})"
       }
 
       CirMethod(
@@ -1018,13 +1024,18 @@ internal fun translateValueClass(
     }
     .toList()
 
+  val csUnderlyingType: String = if (underlyingType == "String") "string"
+  else if (isReferenceUnderlying) underlyingType
+  else mapParamType(underlyingType)
+
   return CirValueClass(
     name = name,
     libraryName = libraryName,
     nativePrefix = prefix,
-    underlyingType = if (underlyingType == "String") "string" else mapParamType(underlyingType),
+    underlyingType = csUnderlyingType,
     underlyingName = underlyingName,
     underlyingNativeType = underlyingNativeType,
+    underlyingIsReference = isReferenceUnderlying,
     constructors = secondaryConstructors,
     properties = properties,
     methods = methods,
