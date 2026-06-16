@@ -28,6 +28,7 @@ fun translate(
   properties: List<KSPropertyDeclaration> = emptyList(),
   constProperties: List<KSPropertyDeclaration> = emptyList(),
   extensionFunctions: List<KSFunctionDeclaration> = emptyList(),
+  extensionProperties: List<KSPropertyDeclaration> = emptyList(),
 ): CirFile {
   val (genericClasses, regularClasses) = classes.partition { it.typeParameters.isNotEmpty() }
 
@@ -154,6 +155,29 @@ fun translate(
     }
 
     namespaces.addDeclaration(namespace, CirStaticClass(className, members))
+  }
+
+  val extensionPropsByReceiver: Map<String, List<KSPropertyDeclaration>> =
+    extensionProperties.groupBy { prop ->
+      prop.extensionReceiver!!.resolve().declaration.simpleName.asString()
+    }
+
+  extensionPropsByReceiver.forEach { (receiverName, props) ->
+    val className = "${receiverName}Extensions"
+    val receiverQualified: String = props.first().extensionReceiver!!.resolve()
+      .declaration.qualifiedName?.asString() ?: ""
+
+    val namespace: String = if (receiverQualified in exportedTypes) {
+      namespaceOf(props.first().extensionReceiver!!.resolve().declaration.packageName.asString())
+    } else {
+      namespaceOf(props.first().packageName.asString())
+    }
+
+    val members: List<CirMember> = props.flatMap { prop ->
+      translateExtensionProperty(prop, receiverName, receiverQualified, context.libraryName, exportedTypes)
+    }
+
+    namespaces.mergeStaticClass(namespace, className, members)
   }
 
   if (tracker.needsList || tracker.needsMap || tracker.needsSet || tracker.lambdaArities.isNotEmpty()) {
@@ -293,6 +317,73 @@ internal fun translateExtensionFunction(
   } else {
     csReturnType = KOTLIN_TO_CSHARP_PARAM[kotlinReturnType] ?: kotlinReturnType
     body = "Native_$csName($nativeCallArgs)"
+  }
+
+  val wrapper = CirMethod(
+    name = csName,
+    returnType = csReturnType,
+    parameters = wrapperParams,
+    body = body,
+    isStatic = true,
+    isExtension = true,
+  )
+
+  return listOf(dllImport, wrapper)
+}
+
+internal fun translateExtensionProperty(
+  prop: KSPropertyDeclaration,
+  receiverName: String,
+  receiverQualified: String,
+  libraryName: String,
+  exportedTypes: Set<String>,
+): List<CirMember> {
+  val propName: String = prop.simpleName.asString()
+  val csName: String = "Get${propName.replaceFirstChar { it.uppercase() }}"
+  val receiverPrefix: String = receiverName.lowercase()
+  val cname: String = "${receiverPrefix}_get_${toCName(propName)}"
+
+  val propTypeResolved: KSType = prop.type.resolve()
+  val kotlinReturnType: String = propTypeResolved.declaration.simpleName.asString()
+
+  val isExportedReceiver: Boolean = receiverQualified in exportedTypes
+
+  val nativeReceiverType: String = if (isExportedReceiver) "IntPtr" else mapParamType(receiverName)
+  val receiverParamName: String = if (isExportedReceiver) "handle" else "receiver"
+
+  val allNativeParams: List<CirParameter> = listOf(
+    CirParameter(receiverParamName, nativeReceiverType),
+  )
+
+  val nativeReturnType: String = mapReturnType(kotlinReturnType)
+
+  val dllImport = CirDllImport(
+    libraryName = libraryName,
+    entryPoint = cname,
+    returnType = nativeReturnType,
+    name = "Native_$csName",
+    parameters = allNativeParams,
+    visibility = CirVisibility.PRIVATE,
+  )
+
+  val csReceiverType: String = if (isExportedReceiver) receiverName else mapParamType(receiverName)
+  val csReceiverParamName: String = if (isExportedReceiver) receiverName.lowercase() else "receiver"
+
+  val wrapperParams: List<CirParameter> = listOf(
+    CirParameter(csReceiverParamName, csReceiverType),
+  )
+
+  val nativeCallReceiver: String = if (isExportedReceiver) "${csReceiverParamName}._handle" else "receiver"
+
+  val csReturnType: String
+  val body: String
+
+  if (kotlinReturnType == "String") {
+    csReturnType = "string"
+    body = "Marshal.PtrToStringUTF8(Native_$csName($nativeCallReceiver))!"
+  } else {
+    csReturnType = KOTLIN_TO_CSHARP_PARAM[kotlinReturnType] ?: kotlinReturnType
+    body = "Native_$csName($nativeCallReceiver)"
   }
 
   val wrapper = CirMethod(

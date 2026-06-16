@@ -54,6 +54,7 @@
 - [x] Map const values
 - [x] Map companion objects
 - [x] Map extension functions
+- [x] Map extension properties (see [ADR-013](docs/adr/013-extension-property-mapping.md))
 
 ## Phase 4: Async support
 - [ ] Map Suspend functions (coroutines → Task/async)
