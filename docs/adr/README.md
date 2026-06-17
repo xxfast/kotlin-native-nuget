@@ -7,6 +7,11 @@
 - [005](005-object-return-semantics.md) — New wrapper per access; identity not preserved (matches ObjC/Swift)
 - [006](006-enum-mapping.md) — Ordinal-backed C# enum + extension methods for properties
 - [007](007-top-level-function-class-naming.md) — File name as class name; `Kt` suffix only on conflict
+- [008](008-data-class-mapping.md) — Regular class + delegate to Kotlin; explicit `Copy()` instead of C# record
+- [009](009-sealed-class-mapping.md) — Abstract base + nested sealed subclasses with runtime discriminator
+- [010](010-generics-mapping.md) — Type-erased bridge + generic C# class
+- [011](011-collection-type-mapping.md) — Eager copy with interface return types mirroring Kotlin mutability
+- [012](012-lambda-function-type-mapping.md) — Opaque handle for Kotlin→C#; function pointer deferred to Phase 5
 - [013](013-extension-property-mapping.md) — `GetXxx()`/`SetXxx()` extension methods for Kotlin extension properties
 - [014](014-value-class-mapping.md) — `readonly record struct` with unwrapped bridge for Kotlin value classes
 - [015](015-generic-type-constraint-mapping.md) — C# `where` clauses from Kotlin upper bounds; `CirTypeParameter` model
