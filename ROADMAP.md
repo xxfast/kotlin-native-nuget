@@ -57,7 +57,7 @@
 - [x] Map extension properties (see [ADR-013](docs/adr/013-extension-property-mapping.md))
 - [x] Map inline classes (value classes) (see [ADR-014](docs/adr/014-value-class-mapping.md))
 - [x] Map inline classes wrapping reference types (value class with object underlying type)
-- [ ] Map generics with type constraints (e.g., `where T : SomeInterface`) 
+- [x] Map generics with type constraints (see [ADR-015](docs/adr/015-generic-type-constraint-mapping.md))
 - [ ] Map generics with variance (`out T`, `in T`) 
 - [ ] Map inline functions (e.g., `inline fun f()`)
 - [ ] Map inline functions with reified type parameters (e.g., `inline fun <reified T> f()`)

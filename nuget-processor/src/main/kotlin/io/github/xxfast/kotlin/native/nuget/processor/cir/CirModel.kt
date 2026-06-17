@@ -98,9 +98,14 @@ data class CirObject(
   val methods: List<CirDllImport>,
 ) : CirDeclaration
 
+data class CirTypeParameter(
+  val name: String,
+  val bounds: List<String> = emptyList(),
+)
+
 data class CirGenericClass(
   val name: String,
-  val typeParameters: List<String>,
+  val typeParameters: List<CirTypeParameter>,
   val libraryName: String,
   val nativePrefix: String,
   val properties: List<CirProperty>,
@@ -170,6 +175,7 @@ data class CirMethod(
   val isAbstract: Boolean = false,
   val isOverride: Boolean = false,
   val isExtension: Boolean = false,
+  val typeParameters: List<CirTypeParameter> = emptyList(),
 ) : CirMember
 
 data class CirProperty(

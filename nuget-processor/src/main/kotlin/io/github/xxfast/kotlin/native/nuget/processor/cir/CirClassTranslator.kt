@@ -2,6 +2,7 @@ package io.github.xxfast.kotlin.native.nuget.processor.cir
 
 import com.google.devtools.ksp.getVisibility
 import com.google.devtools.ksp.processing.KSPLogger
+import com.google.devtools.ksp.symbol.ClassKind
 import com.google.devtools.ksp.symbol.KSClassDeclaration
 import com.google.devtools.ksp.symbol.KSFunctionDeclaration
 import com.google.devtools.ksp.symbol.KSPropertyDeclaration
@@ -396,7 +397,23 @@ internal fun translateGenericClass(
 ): CirGenericClass {
   val name: String = cls.simpleName.asString()
   val prefix: String = name.lowercase()
-  val typeParams: List<String> = cls.typeParameters.map { it.name.asString() }
+  val typeParams: List<CirTypeParameter> = cls.typeParameters.map { param ->
+    val bounds: List<String> = param.bounds.toList().mapNotNull { bound ->
+      val resolved = bound.resolve()
+      val qualifiedName: String? = resolved.declaration.qualifiedName?.asString()
+      val simpleName: String = resolved.declaration.simpleName.asString()
+      val isInterface: Boolean = resolved.declaration is KSClassDeclaration &&
+        (resolved.declaration as KSClassDeclaration).classKind ==
+          ClassKind.INTERFACE
+
+      when {
+        qualifiedName == "kotlin.Any" -> null
+        isInterface -> "I$simpleName"
+        else -> simpleName
+      }
+    }
+    CirTypeParameter(param.name.asString(), bounds)
+  }
 
   val properties: List<CirProperty> = cls.getAllProperties()
     .filter { it.getVisibility() == Visibility.PUBLIC }
@@ -406,10 +423,10 @@ internal fun translateGenericClass(
 
       CirProperty(
         name = csPropName,
-        type = "T",
+        type = typeParams.first().name,
         nativeReturnType = "IntPtr",
         nativeName = propName,
-        getter = "NugetMarshal.FromHandle<T>(${name}Native.Get_$propName(_handle))",
+        getter = "NugetMarshal.FromHandle<${typeParams.first().name}>(${name}Native.Get_$propName(_handle))",
         setter = null,
       )
     }

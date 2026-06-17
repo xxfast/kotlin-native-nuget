@@ -16,113 +16,134 @@ internal fun FileSpec.Builder.addGenericClassExports(cls: KSClassDeclaration) {
   val qualifiedName: String = cls.qualifiedName?.asString() ?: return
   val prefix: String = name.lowercase()
 
-  addFunction(
-    FunSpec.builder("export_${prefix}_create_string")
-      .addAnnotation(cNameAnnotation("${prefix}_create_string"))
-      .addParameter("value", String::class)
-      .returns(cOpaquePointer)
-      .addStatement("return %T.create(%L(value)).asCPointer()", stableRef, qualifiedName)
-      .build()
-  )
+  val hasNonTrivialBound: Boolean = cls.typeParameters.firstOrNull()
+    ?.bounds?.toList()?.any { bound ->
+      val resolved = bound.resolve()
+      resolved.declaration.qualifiedName?.asString() != "kotlin.Any"
+    } ?: false
 
-  addFunction(
-    FunSpec.builder("export_${prefix}_create_byte")
-      .addAnnotation(cNameAnnotation("${prefix}_create_byte"))
-      .addParameter("value", Byte::class)
-      .returns(cOpaquePointer)
-      .addStatement("return %T.create(%L(value)).asCPointer()", stableRef, qualifiedName)
-      .build()
-  )
+  if (!hasNonTrivialBound) {
+    addFunction(
+      FunSpec.builder("export_${prefix}_create_string")
+        .addAnnotation(cNameAnnotation("${prefix}_create_string"))
+        .addParameter("value", String::class)
+        .returns(cOpaquePointer)
+        .addStatement("return %T.create(%L(value)).asCPointer()", stableRef, qualifiedName)
+        .build()
+    )
 
-  addFunction(
-    FunSpec.builder("export_${prefix}_create_ubyte")
-      .addAnnotation(cNameAnnotation("${prefix}_create_ubyte"))
-      .addParameter("value", UByte::class)
-      .returns(cOpaquePointer)
-      .addStatement("return %T.create(%L(value)).asCPointer()", stableRef, qualifiedName)
-      .build()
-  )
+    addFunction(
+      FunSpec.builder("export_${prefix}_create_byte")
+        .addAnnotation(cNameAnnotation("${prefix}_create_byte"))
+        .addParameter("value", Byte::class)
+        .returns(cOpaquePointer)
+        .addStatement("return %T.create(%L(value)).asCPointer()", stableRef, qualifiedName)
+        .build()
+    )
 
-  addFunction(
-    FunSpec.builder("export_${prefix}_create_short")
-      .addAnnotation(cNameAnnotation("${prefix}_create_short"))
-      .addParameter("value", Short::class)
-      .returns(cOpaquePointer)
-      .addStatement("return %T.create(%L(value)).asCPointer()", stableRef, qualifiedName)
-      .build()
-  )
+    addFunction(
+      FunSpec.builder("export_${prefix}_create_ubyte")
+        .addAnnotation(cNameAnnotation("${prefix}_create_ubyte"))
+        .addParameter("value", UByte::class)
+        .returns(cOpaquePointer)
+        .addStatement("return %T.create(%L(value)).asCPointer()", stableRef, qualifiedName)
+        .build()
+    )
 
-  addFunction(
-    FunSpec.builder("export_${prefix}_create_ushort")
-      .addAnnotation(cNameAnnotation("${prefix}_create_ushort"))
-      .addParameter("value", UShort::class)
-      .returns(cOpaquePointer)
-      .addStatement("return %T.create(%L(value)).asCPointer()", stableRef, qualifiedName)
-      .build()
-  )
+    addFunction(
+      FunSpec.builder("export_${prefix}_create_short")
+        .addAnnotation(cNameAnnotation("${prefix}_create_short"))
+        .addParameter("value", Short::class)
+        .returns(cOpaquePointer)
+        .addStatement("return %T.create(%L(value)).asCPointer()", stableRef, qualifiedName)
+        .build()
+    )
 
-  addFunction(
-    FunSpec.builder("export_${prefix}_create_int")
-      .addAnnotation(cNameAnnotation("${prefix}_create_int"))
-      .addParameter("value", Int::class)
-      .returns(cOpaquePointer)
-      .addStatement("return %T.create(%L(value)).asCPointer()", stableRef, qualifiedName)
-      .build()
-  )
+    addFunction(
+      FunSpec.builder("export_${prefix}_create_ushort")
+        .addAnnotation(cNameAnnotation("${prefix}_create_ushort"))
+        .addParameter("value", UShort::class)
+        .returns(cOpaquePointer)
+        .addStatement("return %T.create(%L(value)).asCPointer()", stableRef, qualifiedName)
+        .build()
+    )
 
-  addFunction(
-    FunSpec.builder("export_${prefix}_create_uint")
-      .addAnnotation(cNameAnnotation("${prefix}_create_uint"))
-      .addParameter("value", UInt::class)
-      .returns(cOpaquePointer)
-      .addStatement("return %T.create(%L(value)).asCPointer()", stableRef, qualifiedName)
-      .build()
-  )
+    addFunction(
+      FunSpec.builder("export_${prefix}_create_int")
+        .addAnnotation(cNameAnnotation("${prefix}_create_int"))
+        .addParameter("value", Int::class)
+        .returns(cOpaquePointer)
+        .addStatement("return %T.create(%L(value)).asCPointer()", stableRef, qualifiedName)
+        .build()
+    )
 
-  addFunction(
-    FunSpec.builder("export_${prefix}_create_long")
-      .addAnnotation(cNameAnnotation("${prefix}_create_long"))
-      .addParameter("value", Long::class)
-      .returns(cOpaquePointer)
-      .addStatement("return %T.create(%L(value)).asCPointer()", stableRef, qualifiedName)
-      .build()
-  )
+    addFunction(
+      FunSpec.builder("export_${prefix}_create_uint")
+        .addAnnotation(cNameAnnotation("${prefix}_create_uint"))
+        .addParameter("value", UInt::class)
+        .returns(cOpaquePointer)
+        .addStatement("return %T.create(%L(value)).asCPointer()", stableRef, qualifiedName)
+        .build()
+    )
 
-  addFunction(
-    FunSpec.builder("export_${prefix}_create_ulong")
-      .addAnnotation(cNameAnnotation("${prefix}_create_ulong"))
-      .addParameter("value", ULong::class)
-      .returns(cOpaquePointer)
-      .addStatement("return %T.create(%L(value)).asCPointer()", stableRef, qualifiedName)
-      .build()
-  )
+    addFunction(
+      FunSpec.builder("export_${prefix}_create_long")
+        .addAnnotation(cNameAnnotation("${prefix}_create_long"))
+        .addParameter("value", Long::class)
+        .returns(cOpaquePointer)
+        .addStatement("return %T.create(%L(value)).asCPointer()", stableRef, qualifiedName)
+        .build()
+    )
 
-  addFunction(
-    FunSpec.builder("export_${prefix}_create_float")
-      .addAnnotation(cNameAnnotation("${prefix}_create_float"))
-      .addParameter("value", Float::class)
-      .returns(cOpaquePointer)
-      .addStatement("return %T.create(%L(value)).asCPointer()", stableRef, qualifiedName)
-      .build()
-  )
+    addFunction(
+      FunSpec.builder("export_${prefix}_create_ulong")
+        .addAnnotation(cNameAnnotation("${prefix}_create_ulong"))
+        .addParameter("value", ULong::class)
+        .returns(cOpaquePointer)
+        .addStatement("return %T.create(%L(value)).asCPointer()", stableRef, qualifiedName)
+        .build()
+    )
 
-  addFunction(
-    FunSpec.builder("export_${prefix}_create_double")
-      .addAnnotation(cNameAnnotation("${prefix}_create_double"))
-      .addParameter("value", Double::class)
-      .returns(cOpaquePointer)
-      .addStatement("return %T.create(%L(value)).asCPointer()", stableRef, qualifiedName)
-      .build()
-  )
+    addFunction(
+      FunSpec.builder("export_${prefix}_create_float")
+        .addAnnotation(cNameAnnotation("${prefix}_create_float"))
+        .addParameter("value", Float::class)
+        .returns(cOpaquePointer)
+        .addStatement("return %T.create(%L(value)).asCPointer()", stableRef, qualifiedName)
+        .build()
+    )
 
-  addFunction(
-    FunSpec.builder("export_${prefix}_create_bool")
-      .addAnnotation(cNameAnnotation("${prefix}_create_bool"))
-      .addParameter("value", Boolean::class)
-      .returns(cOpaquePointer)
-      .addStatement("return %T.create(%L(value)).asCPointer()", stableRef, qualifiedName)
-      .build()
-  )
+    addFunction(
+      FunSpec.builder("export_${prefix}_create_double")
+        .addAnnotation(cNameAnnotation("${prefix}_create_double"))
+        .addParameter("value", Double::class)
+        .returns(cOpaquePointer)
+        .addStatement("return %T.create(%L(value)).asCPointer()", stableRef, qualifiedName)
+        .build()
+    )
+
+    addFunction(
+      FunSpec.builder("export_${prefix}_create_bool")
+        .addAnnotation(cNameAnnotation("${prefix}_create_bool"))
+        .addParameter("value", Boolean::class)
+        .returns(cOpaquePointer)
+        .addStatement("return %T.create(%L(value)).asCPointer()", stableRef, qualifiedName)
+        .build()
+    )
+  }
+
+  val boundQualified: String? = cls.typeParameters.firstOrNull()
+    ?.bounds?.toList()?.firstOrNull()?.let { bound ->
+      val resolved = bound.resolve()
+      val qn: String? = resolved.declaration.qualifiedName?.asString()
+      if (qn != null && qn != "kotlin.Any") qn else null
+    }
+
+  val castExpr: String = if (boundQualified != null) {
+    "value.asStableRef<$boundQualified>().get()"
+  } else {
+    "value.asStableRef<Any>().get()"
+  }
 
   addFunction(
     FunSpec.builder("export_${prefix}_create_object")
@@ -130,7 +151,7 @@ internal fun FileSpec.Builder.addGenericClassExports(cls: KSClassDeclaration) {
       .addParameter("value", cOpaquePointer)
       .returns(cOpaquePointer)
       .addStatement(
-        "return %T.create(%L(value.asStableRef<Any>().get())).asCPointer()",
+        "return %T.create(%L($castExpr)).asCPointer()",
         stableRef, qualifiedName,
       )
       .build()

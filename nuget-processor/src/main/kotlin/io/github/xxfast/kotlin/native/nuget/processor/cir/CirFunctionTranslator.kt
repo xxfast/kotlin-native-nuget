@@ -1,6 +1,7 @@
 package io.github.xxfast.kotlin.native.nuget.processor.cir
 
 import com.google.devtools.ksp.processing.KSPLogger
+import com.google.devtools.ksp.symbol.ClassKind
 import com.google.devtools.ksp.symbol.KSClassDeclaration
 import com.google.devtools.ksp.symbol.KSFunctionDeclaration
 import com.google.devtools.ksp.symbol.Modifier
@@ -437,6 +438,26 @@ internal fun translateGenericFunction(
 
   val typeParamName: String = func.typeParameters.firstOrNull()?.name?.asString() ?: "T"
 
+  val typeParamBounds: List<String> = func.typeParameters.firstOrNull()
+    ?.bounds?.toList()?.mapNotNull { bound ->
+      val resolved = bound.resolve()
+      val qualifiedName: String? =
+        resolved.declaration.qualifiedName?.asString()
+      val simpleName: String =
+        resolved.declaration.simpleName.asString()
+
+      val isInterface: Boolean =
+        resolved.declaration is KSClassDeclaration &&
+          (resolved.declaration as KSClassDeclaration).classKind ==
+            ClassKind.INTERFACE
+
+      when {
+        qualifiedName == "kotlin.Any" -> null
+        isInterface -> "I$simpleName"
+        else -> simpleName
+      }
+    } ?: emptyList()
+
   val paramIndex: Int = func.parameters.indexOfFirst { param ->
     param.type.resolve().declaration.simpleName.asString() == typeParamName
   }
@@ -450,6 +471,8 @@ internal fun translateGenericFunction(
 
   val result = mutableListOf<CirMember>()
 
+  val isConstrained: Boolean = typeParamBounds.isNotEmpty()
+
   val primitiveTypes = listOf(
     "string" to "string",
     "int" to "int",
@@ -459,7 +482,7 @@ internal fun translateGenericFunction(
     "bool" to "bool",
   )
 
-  primitiveTypes.forEach { (suffix, csType) ->
+  if (!isConstrained) primitiveTypes.forEach { (suffix, csType) ->
     val entryPoint = "${funcName}_$suffix"
     val nativeName = "${csName}_${suffix}_native"
 
@@ -499,46 +522,49 @@ internal fun translateGenericFunction(
 
   val body: String = buildString {
     appendLine()
-    appendLine("      if (typeof(T) == typeof(string))")
-    if (returnsGenericClass) {
-      appendLine("        return new ${returnTypeName}<T>(${csName}_string_native((string)(object)$paramName!));")
-    } else {
-      appendLine("        return (T)(object)Marshal.PtrToStringUTF8(${csName}_string_native((string)(object)$paramName!))!;")
-    }
 
-    appendLine("      if (typeof(T) == typeof(int))")
-    if (returnsGenericClass) {
-      appendLine("        return new ${returnTypeName}<T>(${csName}_int_native((int)(object)$paramName!));")
-    } else {
-      appendLine("        return (T)(object)${csName}_int_native((int)(object)$paramName!);")
-    }
+    if (!isConstrained) {
+      appendLine("      if (typeof(T) == typeof(string))")
+      if (returnsGenericClass) {
+        appendLine("        return new ${returnTypeName}<T>(${csName}_string_native((string)(object)$paramName!));")
+      } else {
+        appendLine("        return (T)(object)Marshal.PtrToStringUTF8(${csName}_string_native((string)(object)$paramName!))!;")
+      }
 
-    appendLine("      if (typeof(T) == typeof(long))")
-    if (returnsGenericClass) {
-      appendLine("        return new ${returnTypeName}<T>(${csName}_long_native((long)(object)$paramName!));")
-    } else {
-      appendLine("        return (T)(object)${csName}_long_native((long)(object)$paramName!);")
-    }
+      appendLine("      if (typeof(T) == typeof(int))")
+      if (returnsGenericClass) {
+        appendLine("        return new ${returnTypeName}<T>(${csName}_int_native((int)(object)$paramName!));")
+      } else {
+        appendLine("        return (T)(object)${csName}_int_native((int)(object)$paramName!);")
+      }
 
-    appendLine("      if (typeof(T) == typeof(float))")
-    if (returnsGenericClass) {
-      appendLine("        return new ${returnTypeName}<T>(${csName}_float_native((float)(object)$paramName!));")
-    } else {
-      appendLine("        return (T)(object)${csName}_float_native((float)(object)$paramName!);")
-    }
+      appendLine("      if (typeof(T) == typeof(long))")
+      if (returnsGenericClass) {
+        appendLine("        return new ${returnTypeName}<T>(${csName}_long_native((long)(object)$paramName!));")
+      } else {
+        appendLine("        return (T)(object)${csName}_long_native((long)(object)$paramName!);")
+      }
 
-    appendLine("      if (typeof(T) == typeof(double))")
-    if (returnsGenericClass) {
-      appendLine("        return new ${returnTypeName}<T>(${csName}_double_native((double)(object)$paramName!));")
-    } else {
-      appendLine("        return (T)(object)${csName}_double_native((double)(object)$paramName!);")
-    }
+      appendLine("      if (typeof(T) == typeof(float))")
+      if (returnsGenericClass) {
+        appendLine("        return new ${returnTypeName}<T>(${csName}_float_native((float)(object)$paramName!));")
+      } else {
+        appendLine("        return (T)(object)${csName}_float_native((float)(object)$paramName!);")
+      }
 
-    appendLine("      if (typeof(T) == typeof(bool))")
-    if (returnsGenericClass) {
-      appendLine("        return new ${returnTypeName}<T>(${csName}_bool_native((bool)(object)$paramName!));")
-    } else {
-      appendLine("        return (T)(object)${csName}_bool_native((bool)(object)$paramName!);")
+      appendLine("      if (typeof(T) == typeof(double))")
+      if (returnsGenericClass) {
+        appendLine("        return new ${returnTypeName}<T>(${csName}_double_native((double)(object)$paramName!));")
+      } else {
+        appendLine("        return (T)(object)${csName}_double_native((double)(object)$paramName!);")
+      }
+
+      appendLine("      if (typeof(T) == typeof(bool))")
+      if (returnsGenericClass) {
+        appendLine("        return new ${returnTypeName}<T>(${csName}_bool_native((bool)(object)$paramName!));")
+      } else {
+        appendLine("        return (T)(object)${csName}_bool_native((bool)(object)$paramName!);")
+      }
     }
 
     if (returnsGenericClass) {
@@ -567,6 +593,9 @@ internal fun translateGenericFunction(
       parameters = listOf(CirParameter(paramName, "T")),
       body = body.trimEnd(),
       isStatic = true,
+      typeParameters = listOf(
+        CirTypeParameter(typeParamName, typeParamBounds),
+      ),
     )
   )
 

@@ -394,10 +394,18 @@ class CirRenderer {
   }
 
   private fun StringBuilder.renderGenericClass(cls: CirGenericClass) {
-    val typeParams: String = cls.typeParameters.joinToString(", ")
+    val typeParams: String = cls.typeParameters.joinToString(", ") { it.name }
+
+    val isConstrained: Boolean = cls.typeParameters.any { it.bounds.isNotEmpty() }
 
     appendLine("    internal static class ${cls.name}Native")
     appendLine("    {")
+
+    if (isConstrained && cls.hasPublicConstructor) {
+      appendLine("        [DllImport(\"${cls.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"${cls.nativePrefix}_create_object\")]")
+      appendLine("        internal static extern IntPtr Create_object(IntPtr value);")
+      appendLine()
+    }
 
     for (prop in cls.properties) {
       appendLine("        [DllImport(\"${cls.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"${cls.nativePrefix}_get_${prop.nativeName}\")]")
@@ -412,15 +420,29 @@ class CirRenderer {
 
     appendLine("    }")
     appendLine()
-    appendLine("    public class ${cls.name}<$typeParams> : IDisposable")
+
+    val whereClause: String = cls.typeParameters
+      .filter { it.bounds.isNotEmpty() }
+      .joinToString(" ") { param ->
+        "where ${param.name} : ${param.bounds.joinToString(", ")}"
+      }
+
+    val whereStr: String = if (whereClause.isNotEmpty()) " $whereClause" else ""
+    appendLine("    public class ${cls.name}<$typeParams> : IDisposable$whereStr")
     appendLine("    {")
     appendLine("        internal IntPtr _handle;")
     appendLine()
 
     if (cls.hasPublicConstructor) {
-      appendLine("        public ${cls.name}(${cls.typeParameters[0]} value)")
+      appendLine("        public ${cls.name}(${cls.typeParameters[0].name} value)")
       appendLine("        {")
-      appendLine("            _handle = NugetMarshal.CreateBox<${cls.typeParameters[0]}>(value);")
+      if (isConstrained) {
+        appendLine("            var field = typeof(${cls.typeParameters[0].name}).GetField(\"_handle\",")
+        appendLine("                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Public);")
+        appendLine("            _handle = ${cls.name}Native.Create_object((IntPtr)field!.GetValue(value)!);")
+      } else {
+        appendLine("            _handle = NugetMarshal.CreateBox<${cls.typeParameters[0].name}>(value);")
+      }
       appendLine("        }")
       appendLine()
     }
@@ -698,30 +720,45 @@ class CirRenderer {
       else "${param.type} ${param.name}"
     }.joinToString(", ")
 
-    val hasGenericType: Boolean = method.returnType.contains("T") ||
+    val hasGenericType: Boolean = method.typeParameters.isNotEmpty() ||
+      method.returnType.contains("T") ||
       method.parameters.any { it.type.contains("T") }
 
-    val genericDecl: String = if (hasGenericType && method.isStatic) "<T>" else ""
+    val genericDecl: String = if (hasGenericType && method.isStatic) {
+      val names: String = if (method.typeParameters.isNotEmpty()) {
+        method.typeParameters.joinToString(", ") { it.name }
+      } else "T"
+      "<$names>"
+    } else ""
+
+    val whereClause: String = method.typeParameters
+      .filter { it.bounds.isNotEmpty() }
+      .joinToString(" ") { param ->
+        "where ${param.name} : ${param.bounds.joinToString(", ")}"
+      }
+
+    val whereStr: String =
+      if (whereClause.isNotEmpty()) " $whereClause" else ""
 
     if (method.isAbstract) {
-      appendLine("        $visibility ${abstract}${method.returnType} ${method.name}$genericDecl($paramStr);")
+      appendLine("        $visibility ${abstract}${method.returnType} ${method.name}$genericDecl($paramStr)$whereStr;")
     } else {
       val isMultiLine: Boolean = method.body.contains('\n')
 
       if (isMultiLine) {
         if (method.returnType == "void") {
-          appendLine("        $visibility ${static}${override}void ${method.name}$genericDecl($paramStr)")
+          appendLine("        $visibility ${static}${override}void ${method.name}$genericDecl($paramStr)$whereStr")
         } else {
-          appendLine("        $visibility $static$override${method.returnType} ${method.name}$genericDecl($paramStr)")
+          appendLine("        $visibility $static$override${method.returnType} ${method.name}$genericDecl($paramStr)$whereStr")
         }
         appendLine("        {${method.body}")
         appendLine("        }")
       } else {
         if (method.returnType == "void") {
-          appendLine("        $visibility $static$override void ${method.name}$genericDecl($paramStr)")
+          appendLine("        $visibility $static$override void ${method.name}$genericDecl($paramStr)$whereStr")
           appendLine("            => ${method.body};")
         } else {
-          appendLine("        $visibility $static$override${method.returnType} ${method.name}$genericDecl($paramStr)")
+          appendLine("        $visibility $static$override${method.returnType} ${method.name}$genericDecl($paramStr)$whereStr")
           appendLine("            => ${method.body};")
         }
       }

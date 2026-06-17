@@ -26,6 +26,12 @@ internal fun FileSpec.Builder.addGenericFunctionExports(func: KSFunctionDeclarat
 
   val paramName: String = func.parameters[paramIndex].name?.asString() ?: "value"
 
+  val hasNonTrivialBound: Boolean = func.typeParameters.firstOrNull()
+    ?.bounds?.toList()?.any { bound ->
+      val resolved = bound.resolve()
+      resolved.declaration.qualifiedName?.asString() != "kotlin.Any"
+    } ?: false
+
   val returnsGenericClass: Boolean = returnDecl != typeParamName && returnDecl != "Unit"
 
   val primitiveTypes = listOf(
@@ -43,7 +49,7 @@ internal fun FileSpec.Builder.addGenericFunctionExports(func: KSFunctionDeclarat
     "bool" to "Boolean",
   )
 
-  primitiveTypes.forEach { (suffix, kotlinType) ->
+  if (!hasNonTrivialBound) primitiveTypes.forEach { (suffix, kotlinType) ->
     val cname = "${funcName}_$suffix"
 
     if (returnsGenericClass) {
@@ -69,6 +75,15 @@ internal fun FileSpec.Builder.addGenericFunctionExports(func: KSFunctionDeclarat
 
   val cname = "${funcName}_object"
 
+  val boundQualified: String? = func.typeParameters.firstOrNull()
+    ?.bounds?.toList()?.firstOrNull()?.let { bound ->
+      val resolved = bound.resolve()
+      val qn: String? = resolved.declaration.qualifiedName?.asString()
+      if (qn != null && qn != "kotlin.Any") qn else null
+    }
+
+  val refType: String = boundQualified ?: "Any"
+
   if (returnsGenericClass) {
     addFunction(
       FunSpec.builder("export_$cname")
@@ -76,7 +91,7 @@ internal fun FileSpec.Builder.addGenericFunctionExports(func: KSFunctionDeclarat
         .addParameter(paramName, cOpaquePointer)
         .returns(cOpaquePointer)
         .addStatement(
-          "return %T.create(%L(%L.asStableRef<Any>().get())).asCPointer()",
+          "return %T.create(%L(%L.asStableRef<$refType>().get())).asCPointer()",
           stableRef, funcName, paramName,
         )
         .build()
@@ -88,7 +103,7 @@ internal fun FileSpec.Builder.addGenericFunctionExports(func: KSFunctionDeclarat
         .addParameter(paramName, cOpaquePointer)
         .returns(cOpaquePointer)
         .addStatement(
-          "return %T.create(%L(%L.asStableRef<Any>().get())).asCPointer()",
+          "return %T.create(%L(%L.asStableRef<$refType>().get())).asCPointer()",
           stableRef, funcName, paramName,
         )
         .build()
