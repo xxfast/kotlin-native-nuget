@@ -19,6 +19,7 @@ data class CirStaticClass(
 
 data class CirInterface(
   val name: String,
+  val typeParameters: List<CirTypeParameter> = emptyList(),
   val properties: List<CirInterfaceProperty>,
   val methods: List<CirInterfaceMethod>,
 ) : CirDeclaration
@@ -98,9 +99,12 @@ data class CirObject(
   val methods: List<CirDllImport>,
 ) : CirDeclaration
 
+enum class CirVariance { INVARIANT, COVARIANT, CONTRAVARIANT }
+
 data class CirTypeParameter(
   val name: String,
   val bounds: List<String> = emptyList(),
+  val variance: CirVariance = CirVariance.INVARIANT,
 )
 
 data class CirGenericClass(

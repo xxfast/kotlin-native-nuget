@@ -15,3 +15,4 @@
 - [013](013-extension-property-mapping.md) — `GetXxx()`/`SetXxx()` extension methods for Kotlin extension properties
 - [014](014-value-class-mapping.md) — `readonly record struct` with unwrapped bridge for Kotlin value classes
 - [015](015-generic-type-constraint-mapping.md) — C# `where` clauses from Kotlin upper bounds; `CirTypeParameter` model
+- [016](016-generic-variance-mapping.md) — `out`/`in` variance on C# interfaces only; dropped on classes (C# restriction)

@@ -394,6 +394,7 @@ internal fun translateClass(
 internal fun translateGenericClass(
   cls: KSClassDeclaration,
   libraryName: String,
+  logger: KSPLogger,
 ): CirGenericClass {
   val name: String = cls.simpleName.asString()
   val prefix: String = name.lowercase()
@@ -412,6 +413,15 @@ internal fun translateGenericClass(
         else -> simpleName
       }
     }
+
+    if (param.variance != com.google.devtools.ksp.symbol.Variance.INVARIANT) {
+      logger.warn(
+        "Variance '${param.variance}' on class '${cls.simpleName.asString()}' " +
+          "type parameter '${param.name.asString()}' will be dropped — " +
+          "C# does not support variance on classes"
+      )
+    }
+
     CirTypeParameter(param.name.asString(), bounds)
   }
 
@@ -853,9 +863,21 @@ internal fun translateCompanionFunction(
 internal fun translateInterface(
   iface: KSClassDeclaration,
   libraryName: String,
+  logger: KSPLogger,
 ): CirInterface {
   val name: String = iface.simpleName.asString()
   val interfaceName: String = "I$name"
+
+  val typeParams: List<CirTypeParameter> = iface.typeParameters.map { param ->
+    val variance: CirVariance = when (param.variance) {
+      com.google.devtools.ksp.symbol.Variance.COVARIANT -> CirVariance.COVARIANT
+      com.google.devtools.ksp.symbol.Variance.CONTRAVARIANT -> CirVariance.CONTRAVARIANT
+      else -> CirVariance.INVARIANT
+    }
+    CirTypeParameter(param.name.asString(), variance = variance)
+  }
+
+  val typeParamNames: Set<String> = typeParams.map { it.name }.toSet()
 
   val properties: List<CirInterfaceProperty> = iface.getAllProperties()
     .filter { it.getVisibility() == Visibility.PUBLIC }
@@ -863,7 +885,11 @@ internal fun translateInterface(
       val propName: String = prop.simpleName.asString()
       val propType: KSType = prop.type.resolve()
       val csPropName: String = propName.replaceFirstChar { it.uppercase() }
-      CirInterfaceProperty(csPropName, mapInterfacePropertyType(propType))
+      val typeName: String = propType.declaration.simpleName.asString()
+      val csType: String =
+        if (typeName in typeParamNames) typeName
+        else mapInterfacePropertyType(propType)
+      CirInterfaceProperty(csPropName, csType)
     }
     .toList()
 
@@ -876,22 +902,26 @@ internal fun translateInterface(
       val kotlinReturnType: String = returnType?.declaration?.simpleName?.asString() ?: "Unit"
       val csMethodName: String = methodName.replaceFirstChar { it.uppercase() }
 
-      val csReturnType: String = when (kotlinReturnType) {
-        "String" -> "string"
-        "Unit" -> "void"
+      val csReturnType: String = when {
+        kotlinReturnType == "String" -> "string"
+        kotlinReturnType == "Unit" -> "void"
+        kotlinReturnType in typeParamNames -> kotlinReturnType
         else -> mapReturnType(kotlinReturnType)
       }
 
       val params: List<CirParameter> = method.parameters.map { param ->
         val kotlinType: String = param.type.resolve().declaration.simpleName.asString()
-        CirParameter(param.name?.asString() ?: "_", mapParamType(kotlinType))
+        val csType: String =
+          if (kotlinType in typeParamNames) kotlinType
+          else mapParamType(kotlinType)
+        CirParameter(param.name?.asString() ?: "_", csType)
       }
 
       CirInterfaceMethod(csMethodName, csReturnType, params)
     }
     .toList()
 
-  return CirInterface(interfaceName, properties, methods)
+  return CirInterface(interfaceName, typeParams, properties, methods)
 }
 
 internal fun translateEnum(

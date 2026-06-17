@@ -115,7 +115,7 @@ fun translate(
   }
 
   for (cls in genericClasses) {
-    namespaces.addDeclaration(namespaceOf(cls.packageName.asString()), translateGenericClass(cls, context.libraryName))
+    namespaces.addDeclaration(namespaceOf(cls.packageName.asString()), translateGenericClass(cls, context.libraryName, logger))
     needsMarshalHelper = true
   }
 
@@ -128,7 +128,7 @@ fun translate(
   }
 
   for (iface in interfaces) {
-    namespaces.addDeclaration(namespaceOf(iface.packageName.asString()), translateInterface(iface, context.libraryName))
+    namespaces.addDeclaration(namespaceOf(iface.packageName.asString()), translateInterface(iface, context.libraryName, logger))
   }
 
   for (sealed in sealedClasses) {

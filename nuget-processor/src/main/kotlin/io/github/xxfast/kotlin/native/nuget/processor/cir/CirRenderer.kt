@@ -473,7 +473,19 @@ class CirRenderer {
   }
 
   private fun StringBuilder.renderInterface(iface: CirInterface) {
-    appendLine("    public interface ${iface.name} : IDisposable")
+    val typeParamStr: String = if (iface.typeParameters.isNotEmpty()) {
+      val params: String = iface.typeParameters.joinToString(", ") { param ->
+        val prefix: String = when (param.variance) {
+          CirVariance.COVARIANT -> "out "
+          CirVariance.CONTRAVARIANT -> "in "
+          CirVariance.INVARIANT -> ""
+        }
+        "$prefix${param.name}"
+      }
+      "<$params>"
+    } else ""
+
+    appendLine("    public interface ${iface.name}$typeParamStr : IDisposable")
     appendLine("    {")
 
     for (prop in iface.properties) {
