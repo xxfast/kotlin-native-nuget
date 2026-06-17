@@ -16,3 +16,4 @@
 - [014](014-value-class-mapping.md) — `readonly record struct` with unwrapped bridge for Kotlin value classes
 - [015](015-generic-type-constraint-mapping.md) — C# `where` clauses from Kotlin upper bounds; `CirTypeParameter` model
 - [016](016-generic-variance-mapping.md) — `out`/`in` variance on C# interfaces only; dropped on classes (C# restriction)
+- [017](017-inline-function-mapping.md) — Inline functions treated as regular functions; existing pipeline handles them

@@ -31,4 +31,11 @@ public class ArithmeticTests
         int? result = Arithmetic.divide(10, 0);
         Assert.Null(result);
     }
+
+    [Fact]
+    public void Square_ReturnsSquaredValue()
+    {
+        int result = Arithmetic.square(5);
+        Assert.Equal(25, result);
+    }
 }

@@ -59,7 +59,7 @@
 - [x] Map inline classes wrapping reference types (value class with object underlying type)
 - [x] Map generics with type constraints (see [ADR-015](docs/adr/015-generic-type-constraint-mapping.md))
 - [x] Map generics with variance (`out T`, `in T`) (see [ADR-016](docs/adr/016-generic-variance-mapping.md))
-- [ ] Map inline functions (e.g., `inline fun f()`)
+- [x] Map inline functions (e.g., `inline fun f()`) (see [ADR-017](docs/adr/017-inline-function-mapping.md))
 - [ ] Map inline functions with reified type parameters (e.g., `inline fun <reified T> f()`)
 - [ ] Map generic type aliases (e.g., `typealias StringList = List<String>`)
 
