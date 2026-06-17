@@ -5,17 +5,18 @@ import com.google.devtools.ksp.symbol.KSType
 import com.squareup.kotlinpoet.ClassName
 import com.squareup.kotlinpoet.FileSpec
 import com.squareup.kotlinpoet.FunSpec
+import io.github.xxfast.kotlin.native.nuget.processor.cir.expandAliases
 import io.github.xxfast.kotlin.native.nuget.processor.toCName
 
 internal fun FileSpec.Builder.addExtensionFunctionExports(func: KSFunctionDeclaration) {
   val funcName: String = func.simpleName.asString()
-  val receiverType: KSType = func.extensionReceiver!!.resolve()
+  val receiverType: KSType = func.extensionReceiver!!.resolve().expandAliases()
   val receiverSimpleName: String = receiverType.declaration.simpleName.asString()
   val receiverQualified: String = receiverType.declaration.qualifiedName?.asString() ?: return
   val receiverPrefix: String = receiverSimpleName.lowercase()
   val cname: String = "${receiverPrefix}_${toCName(funcName)}"
 
-  val returnType: KSType? = func.returnType?.resolve()
+  val returnType: KSType? = func.returnType?.resolve()?.expandAliases()
   val qualifiedReturn: String = returnType?.declaration?.qualifiedName?.asString() ?: "Unit"
 
   val isPrimitiveReceiver: Boolean = receiverQualified in setOf(
@@ -38,8 +39,9 @@ internal fun FileSpec.Builder.addExtensionFunctionExports(func: KSFunctionDeclar
   }
 
   for (param in func.parameters) {
-    val type: String = param.type.resolve().declaration.qualifiedName?.asString()
-      ?: param.type.resolve().declaration.simpleName.asString()
+    val resolved = param.type.resolve().expandAliases()
+    val type: String = resolved.declaration.qualifiedName?.asString()
+      ?: resolved.declaration.simpleName.asString()
     builder.addParameter(param.name?.asString() ?: "_", ClassName.bestGuess(type))
   }
 

@@ -61,7 +61,7 @@
 - [x] Map generics with variance (`out T`, `in T`) (see [ADR-016](docs/adr/016-generic-variance-mapping.md))
 - [x] Map inline functions (e.g., `inline fun f()`) (see [ADR-017](docs/adr/017-inline-function-mapping.md))
 - [x] Map inline functions with reified type parameters (e.g., `inline fun <reified T> f()`)
-- [ ] Map generic type aliases (e.g., `typealias StringList = List<String>`)
+- [x] Map generic type aliases (see [ADR-018](docs/adr/018-type-alias-mapping.md))
 
 ## Phase 4: Async support
 - [ ] Map Suspend functions (coroutines → Task/async)

@@ -141,16 +141,19 @@ fun translate(
 
   val extensionsByReceiver: Map<String, List<KSFunctionDeclaration>> =
     extensionFunctions.groupBy { func ->
-      func.extensionReceiver!!.resolve().declaration.simpleName.asString()
+      func.extensionReceiver!!.resolve().expandAliases().declaration.simpleName.asString()
     }
 
   for ((receiverName, funcs) in extensionsByReceiver) {
     val className = "${receiverName}Extensions"
-    val receiverQualified: String = funcs.first().extensionReceiver!!.resolve()
+    val receiverQualified: String = funcs.first().extensionReceiver!!.resolve().expandAliases()
       .declaration.qualifiedName?.asString() ?: ""
 
+    val receiverDecl = funcs.first().extensionReceiver!!
+      .resolve().expandAliases().declaration
+
     val namespace: String = if (receiverQualified in exportedTypes) {
-      namespaceOf(funcs.first().extensionReceiver!!.resolve().declaration.packageName.asString())
+      namespaceOf(receiverDecl.packageName.asString())
     } else {
       namespaceOf(funcs.first().packageName.asString())
     }
@@ -164,16 +167,21 @@ fun translate(
 
   val extensionPropsByReceiver: Map<String, List<KSPropertyDeclaration>> =
     extensionProperties.groupBy { prop ->
-      prop.extensionReceiver!!.resolve().declaration.simpleName.asString()
+      prop.extensionReceiver!!.resolve().expandAliases()
+        .declaration.simpleName.asString()
     }
 
   extensionPropsByReceiver.forEach { (receiverName, props) ->
     val className = "${receiverName}Extensions"
-    val receiverQualified: String = props.first().extensionReceiver!!.resolve()
+    val receiverQualified: String = props.first().extensionReceiver!!
+      .resolve().expandAliases()
       .declaration.qualifiedName?.asString() ?: ""
 
+    val propReceiverDecl = props.first().extensionReceiver!!
+      .resolve().expandAliases().declaration
+
     val namespace: String = if (receiverQualified in exportedTypes) {
-      namespaceOf(props.first().extensionReceiver!!.resolve().declaration.packageName.asString())
+      namespaceOf(propReceiverDecl.packageName.asString())
     } else {
       namespaceOf(props.first().packageName.asString())
     }
@@ -196,17 +204,17 @@ fun translate(
     if (tracker.needsSet) helpers.add(CirSetHelper(context.libraryName))
     if (tracker.lambdaArities.isNotEmpty()) helpers.add(CirFuncNativeHelper(context.libraryName, tracker.lambdaArities))
 
-    val firstNamespace: CirNamespace = namespaces.firstOrNull() ?: CirNamespace(context.rootNamespace, emptyList())
-    val idx: Int = namespaces.indexOfFirst { it.name == firstNamespace.name }
+    val rootIdx: Int = namespaces.indexOfFirst { it.name == context.rootNamespace }
 
-    if (idx >= 0) {
-      namespaces[idx] = firstNamespace.copy(declarations = helpers + firstNamespace.declarations)
+    if (rootIdx >= 0) {
+      val root: CirNamespace = namespaces[rootIdx]
+      namespaces[rootIdx] = root.copy(declarations = helpers + root.declarations)
     } else {
       namespaces.add(0, CirNamespace(context.rootNamespace, helpers))
     }
 
     if (tracker.lambdaArities.isNotEmpty()) {
-      val helperNs: String = firstNamespace.name
+      val helperNs: String = context.rootNamespace
       val funcHelper = CirFuncHelper(context.libraryName, tracker.lambdaArities, helperNs)
       val rootIdx: Int = namespaces.indexOfFirst { it.name == context.rootNamespace }
 
@@ -272,7 +280,7 @@ internal fun translateExtensionFunction(
   val receiverPrefix: String = receiverName.lowercase()
   val cname: String = "${receiverPrefix}_${toCName(funcName)}"
 
-  val returnType = func.returnType?.resolve()
+  val returnType = func.returnType?.resolve()?.expandAliases()
   val kotlinReturnType: String = returnType?.declaration?.simpleName?.asString() ?: "Unit"
 
   val isExportedReceiver: Boolean = receiverQualified in exportedTypes
@@ -281,7 +289,7 @@ internal fun translateExtensionFunction(
   val receiverParamName: String = if (isExportedReceiver) "handle" else "receiver"
 
   val extraParams: List<CirParameter> = func.parameters.map { param ->
-    val kotlinType: String = param.type.resolve().declaration.simpleName.asString()
+    val kotlinType: String = param.type.resolve().expandAliases().declaration.simpleName.asString()
     CirParameter(param.name?.asString() ?: "_", mapParamType(kotlinType))
   }
 
@@ -348,7 +356,7 @@ internal fun translateExtensionProperty(
   val receiverPrefix: String = receiverName.lowercase()
   val cname: String = "${receiverPrefix}_get_${toCName(propName)}"
 
-  val propTypeResolved: KSType = prop.type.resolve()
+  val propTypeResolved: KSType = prop.type.resolve().expandAliases()
   val kotlinReturnType: String = propTypeResolved.declaration.simpleName.asString()
 
   val isExportedReceiver: Boolean = receiverQualified in exportedTypes
@@ -409,7 +417,7 @@ internal fun translateProperty(
 ): List<CirMember> {
   val propName: String = prop.simpleName.asString()
   val cname: String = io.github.xxfast.kotlin.native.nuget.processor.toCName(propName)
-  val propTypeResolved: KSType = prop.type.resolve()
+  val propTypeResolved: KSType = prop.type.resolve().expandAliases()
   val propType: String = propTypeResolved.declaration.simpleName.asString()
   val isNullable: Boolean = propTypeResolved.isMarkedNullable
   val isMutable: Boolean = prop.isMutable
@@ -561,7 +569,7 @@ internal fun translateConstProperty(
   prop: KSPropertyDeclaration,
 ): CirConst? {
   val propName: String = prop.simpleName.asString()
-  val propTypeResolved: KSType = prop.type.resolve()
+  val propTypeResolved: KSType = prop.type.resolve().expandAliases()
   val propType: String = propTypeResolved.declaration.simpleName.asString()
   val csPropName: String = propName.split("_")
     .joinToString("") { segment ->

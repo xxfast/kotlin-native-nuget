@@ -23,6 +23,7 @@ import com.squareup.kotlinpoet.ksp.writeTo
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirFile
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirRenderer
 import io.github.xxfast.kotlin.native.nuget.processor.cir.NugetContext
+import io.github.xxfast.kotlin.native.nuget.processor.cir.expandAliases
 import io.github.xxfast.kotlin.native.nuget.processor.cir.translate
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addClassExports
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addCompanionExports
@@ -285,7 +286,7 @@ class NugetProcessor(
         val listTypes: Set<String> = setOf("kotlin.collections.List", "kotlin.collections.MutableList")
 
         fun KSType.isListType(): Boolean =
-          declaration.qualifiedName?.asString() in listTypes
+          expandAliases().declaration.qualifiedName?.asString() in listTypes
 
         val classesHaveLists: Boolean = (classes + genericClasses)
           .any { cls -> cls.getAllProperties().any { prop -> prop.type.resolve().isListType() } }
@@ -303,7 +304,7 @@ class NugetProcessor(
         val mapTypes: Set<String> = setOf("kotlin.collections.Map", "kotlin.collections.MutableMap")
 
         fun KSType.isMapType(): Boolean =
-          declaration.qualifiedName?.asString() in mapTypes
+          expandAliases().declaration.qualifiedName?.asString() in mapTypes
 
         val classesHaveMaps: Boolean = (classes + genericClasses)
           .any { cls -> cls.getAllProperties().any { prop -> prop.type.resolve().isMapType() } }
@@ -321,7 +322,7 @@ class NugetProcessor(
         val setTypes: Set<String> = setOf("kotlin.collections.Set", "kotlin.collections.MutableSet")
 
         fun KSType.isSetType(): Boolean =
-          declaration.qualifiedName?.asString() in setTypes
+          expandAliases().declaration.qualifiedName?.asString() in setTypes
 
         val classesHaveSets: Boolean = (classes + genericClasses)
           .any { cls -> cls.getAllProperties().any { prop -> prop.type.resolve().isSetType() } }
@@ -341,10 +342,10 @@ class NugetProcessor(
         )
 
         fun KSType.isLambdaType(): Boolean =
-          declaration.qualifiedName?.asString() in lambdaTypes
+          expandAliases().declaration.qualifiedName?.asString() in lambdaTypes
 
         fun KSType.lambdaArity(): Int =
-          arguments.size - 1
+          expandAliases().arguments.size - 1
 
         val lambdaArities: MutableSet<Int> = mutableSetOf()
 

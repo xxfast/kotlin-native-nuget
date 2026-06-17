@@ -5,6 +5,7 @@ import com.google.devtools.ksp.symbol.KSType
 import com.squareup.kotlinpoet.ClassName
 import com.squareup.kotlinpoet.FileSpec
 import com.squareup.kotlinpoet.FunSpec
+import io.github.xxfast.kotlin.native.nuget.processor.cir.expandAliases
 import io.github.xxfast.kotlin.native.nuget.processor.toCName
 
 /**
@@ -17,7 +18,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.toCName
 internal fun FileSpec.Builder.addPropertyExports(prop: KSPropertyDeclaration) {
   val propName: String = prop.simpleName.asString()
   val cname: String = toCName(propName)
-  val propTypeResolved: KSType = prop.type.resolve()
+  val propTypeResolved: KSType = prop.type.resolve().expandAliases()
   val propType: String = propTypeResolved.declaration.qualifiedName?.asString() ?: "Any"
   val isNullable: Boolean = propTypeResolved.isMarkedNullable
   val isMutable: Boolean = prop.isMutable

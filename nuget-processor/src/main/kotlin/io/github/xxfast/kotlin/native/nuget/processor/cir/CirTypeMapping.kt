@@ -1,5 +1,14 @@
 package io.github.xxfast.kotlin.native.nuget.processor.cir
 
+import com.google.devtools.ksp.symbol.KSType
+import com.google.devtools.ksp.symbol.KSTypeAlias
+
+internal fun KSType.expandAliases(): KSType {
+  val decl = declaration
+  return if (decl is KSTypeAlias) decl.type.resolve().expandAliases()
+  else this
+}
+
 internal val KOTLIN_TO_CSHARP_RETURN = mapOf(
   "String" to "IntPtr",
   "Byte" to "sbyte",

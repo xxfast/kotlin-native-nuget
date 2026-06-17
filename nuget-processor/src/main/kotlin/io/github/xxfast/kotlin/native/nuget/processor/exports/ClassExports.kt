@@ -11,6 +11,7 @@ import com.google.devtools.ksp.symbol.Visibility
 import com.squareup.kotlinpoet.ClassName
 import com.squareup.kotlinpoet.FileSpec
 import com.squareup.kotlinpoet.FunSpec
+import io.github.xxfast.kotlin.native.nuget.processor.cir.expandAliases
 import io.github.xxfast.kotlin.native.nuget.processor.toCName
 
 /**
@@ -71,7 +72,7 @@ internal fun FileSpec.Builder.addClassExports(cls: KSClassDeclaration) {
 
   for (prop in properties) {
     val propName: String = prop.simpleName.asString()
-    val propTypeResolved: KSType = prop.type.resolve()
+    val propTypeResolved: KSType = prop.type.resolve().expandAliases()
     val propType: String = propTypeResolved.declaration.qualifiedName?.asString() ?: "Any"
     val isNullable: Boolean = propTypeResolved.isMarkedNullable
     val isMutable: Boolean = prop.isMutable
@@ -274,7 +275,7 @@ internal fun FileSpec.Builder.addClassExports(cls: KSClassDeclaration) {
 
   for (method in methods) {
     val methodName: String = method.simpleName.asString()
-    val methodReturn: String = method.returnType?.resolve()
+    val methodReturn: String = method.returnType?.resolve()?.expandAliases()
       ?.declaration?.qualifiedName?.asString() ?: "Unit"
 
     val methodParamCall: String = method.parameters.joinToString(", ") {
@@ -287,9 +288,10 @@ internal fun FileSpec.Builder.addClassExports(cls: KSClassDeclaration) {
       .addParameter("handle", cOpaquePointer)
 
     for (param in method.parameters) {
+      val resolved = param.type.resolve().expandAliases()
       val type: String =
-        param.type.resolve().declaration.qualifiedName?.asString()
-          ?: param.type.resolve().declaration.simpleName.asString()
+        resolved.declaration.qualifiedName?.asString()
+          ?: resolved.declaration.simpleName.asString()
 
       builder.addParameter(
         param.name?.asString() ?: "_",
@@ -359,9 +361,10 @@ internal fun FileSpec.Builder.addClassExports(cls: KSClassDeclaration) {
         .returns(cOpaquePointer)
 
       for (param in constructor.parameters) {
+        val resolved = param.type.resolve().expandAliases()
         val type: String =
-          param.type.resolve().declaration.qualifiedName?.asString()
-            ?: param.type.resolve().declaration.simpleName.asString()
+          resolved.declaration.qualifiedName?.asString()
+            ?: resolved.declaration.simpleName.asString()
 
         copyBuilder.addParameter(
           param.name?.asString() ?: "_",
@@ -402,7 +405,7 @@ internal fun FileSpec.Builder.addCompanionExports(cls: KSClassDeclaration) {
     val methodName: String = method.simpleName.asString()
     val cname: String = toCName(methodName)
     val entryPoint: String = "${prefix}_companion_${cname}"
-    val methodReturn: String = method.returnType?.resolve()
+    val methodReturn: String = method.returnType?.resolve()?.expandAliases()
       ?.declaration?.qualifiedName?.asString() ?: "Unit"
 
     val methodParamCall: String = method.parameters.joinToString(", ") {
@@ -414,9 +417,10 @@ internal fun FileSpec.Builder.addCompanionExports(cls: KSClassDeclaration) {
       .addAnnotation(cNameAnnotation(entryPoint))
 
     for (param in method.parameters) {
+      val resolved = param.type.resolve().expandAliases()
       val type: String =
-        param.type.resolve().declaration.qualifiedName?.asString()
-          ?: param.type.resolve().declaration.simpleName.asString()
+        resolved.declaration.qualifiedName?.asString()
+          ?: resolved.declaration.simpleName.asString()
 
       builder.addParameter(
         param.name?.asString() ?: "_",
@@ -425,7 +429,8 @@ internal fun FileSpec.Builder.addCompanionExports(cls: KSClassDeclaration) {
     }
 
     val returnsEnclosingClass: Boolean = methodReturn == qualifiedName
-    val returnDecl: KSClassDeclaration? = method.returnType?.resolve()?.declaration as? KSClassDeclaration
+    val returnDecl: KSClassDeclaration? = method.returnType
+      ?.resolve()?.expandAliases()?.declaration as? KSClassDeclaration
     val isObjectReturn: Boolean = returnsEnclosingClass ||
       (returnDecl != null && methodReturn !in setOf(
         "kotlin.String", "kotlin.Byte", "kotlin.UByte", "kotlin.Short", "kotlin.UShort",
@@ -462,7 +467,7 @@ internal fun FileSpec.Builder.addCompanionExports(cls: KSClassDeclaration) {
 
   for (prop in properties) {
     val propName: String = prop.simpleName.asString()
-    val propTypeResolved: KSType = prop.type.resolve()
+    val propTypeResolved: KSType = prop.type.resolve().expandAliases()
     val propType: String = propTypeResolved.declaration.qualifiedName?.asString() ?: "Any"
     val isMutable: Boolean = prop.isMutable
 

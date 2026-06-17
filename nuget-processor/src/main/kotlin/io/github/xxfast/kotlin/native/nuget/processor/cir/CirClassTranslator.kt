@@ -46,7 +46,8 @@ internal fun translateClass(
   val constructor = cls.primaryConstructor
   val cirConstructor: CirConstructor? = if (constructor != null) {
     val ctorParams: List<CirParameter> = constructor.parameters.map { param ->
-      val kotlinType: String = param.type.resolve().declaration.simpleName.asString()
+      val resolved: KSType = param.type.resolve().expandAliases()
+      val kotlinType: String = resolved.declaration.simpleName.asString()
       CirParameter(param.name?.asString() ?: "_", mapParamType(kotlinType))
     }
 
@@ -64,7 +65,7 @@ internal fun translateClass(
     }
     .mapNotNull { prop ->
       val propName: String = prop.simpleName.asString()
-      val propTypeResolved: KSType = prop.type.resolve()
+      val propTypeResolved: KSType = prop.type.resolve().expandAliases()
       val propType: String = propTypeResolved.declaration.simpleName.asString()
       val isNullable: Boolean = propTypeResolved.isMarkedNullable
       val isMutable: Boolean = prop.isMutable
@@ -306,13 +307,14 @@ internal fun translateClass(
     }
     .map { method ->
       val methodName: String = method.simpleName.asString()
-      val methodReturn: String = method.returnType?.resolve()
+      val methodReturn: String = method.returnType?.resolve()?.expandAliases()
         ?.declaration?.simpleName?.asString() ?: "Unit"
 
       val csMethodName: String = methodName.replaceFirstChar { it.uppercase() }
 
       val methodParams: List<CirParameter> = method.parameters.map { param ->
-        val kotlinType: String = param.type.resolve().declaration.simpleName.asString()
+        val resolved: KSType = param.type.resolve().expandAliases()
+        val kotlinType: String = resolved.declaration.simpleName.asString()
         CirParameter(param.name?.asString() ?: "_", mapParamType(kotlinType))
       }
 
@@ -476,7 +478,7 @@ internal fun translateSealedClass(
           .filter { it.getVisibility() == Visibility.PUBLIC }
           .mapNotNull { prop ->
             val propName: String = prop.simpleName.asString()
-            val propTypeResolved: KSType = prop.type.resolve()
+            val propTypeResolved: KSType = prop.type.resolve().expandAliases()
             val propType: String = propTypeResolved.declaration.simpleName.asString()
             val isNullable: Boolean = propTypeResolved.isMarkedNullable
             val csPropName: String = propName.replaceFirstChar { it.uppercase() }
@@ -676,11 +678,12 @@ internal fun translateObject(
     .map { method ->
       val methodName: String = method.simpleName.asString()
       val cname: String = toCName(methodName)
-      val returnType = method.returnType?.resolve()
+      val returnType = method.returnType?.resolve()?.expandAliases()
       val kotlinReturnType: String = returnType?.declaration?.simpleName?.asString() ?: "Unit"
 
       val params: List<CirParameter> = method.parameters.map { param ->
-        val kotlinType: String = param.type.resolve().declaration.simpleName.asString()
+        val resolved: KSType = param.type.resolve().expandAliases()
+        val kotlinType: String = resolved.declaration.simpleName.asString()
         CirParameter(param.name?.asString() ?: "_", mapParamType(kotlinType))
       }
 
@@ -710,7 +713,7 @@ internal fun translateCompanionProperty(
   classPrefix: String,
 ): List<CirMember> {
   val propName: String = prop.simpleName.asString()
-  val propTypeResolved: KSType = prop.type.resolve()
+  val propTypeResolved: KSType = prop.type.resolve().expandAliases()
   val propType: String = propTypeResolved.declaration.simpleName.asString()
   val isMutable: Boolean = prop.isMutable
   val csPropName: String = propName.replaceFirstChar { it.uppercase() }
@@ -788,11 +791,11 @@ internal fun translateCompanionFunction(
   val methodName: String = func.simpleName.asString()
   val cname: String = toCName(methodName)
   val csMethodName: String = methodName.replaceFirstChar { it.uppercase() }
-  val returnType = func.returnType?.resolve()
+  val returnType = func.returnType?.resolve()?.expandAliases()
   val kotlinReturnType: String = returnType?.declaration?.simpleName?.asString() ?: "Unit"
 
   val params: List<CirParameter> = func.parameters.map { param ->
-    val kotlinType: String = param.type.resolve().declaration.simpleName.asString()
+    val kotlinType: String = param.type.resolve().expandAliases().declaration.simpleName.asString()
     CirParameter(param.name?.asString() ?: "_", mapParamType(kotlinType))
   }
 
@@ -883,7 +886,7 @@ internal fun translateInterface(
     .filter { it.getVisibility() == Visibility.PUBLIC }
     .map { prop ->
       val propName: String = prop.simpleName.asString()
-      val propType: KSType = prop.type.resolve()
+      val propType: KSType = prop.type.resolve().expandAliases()
       val csPropName: String = propName.replaceFirstChar { it.uppercase() }
       val typeName: String = propType.declaration.simpleName.asString()
       val csType: String =
@@ -898,7 +901,7 @@ internal fun translateInterface(
     .filter { it.simpleName.asString() !in listOf("equals", "hashCode", "toString", "<init>") }
     .map { method ->
       val methodName: String = method.simpleName.asString()
-      val returnType = method.returnType?.resolve()
+      val returnType = method.returnType?.resolve()?.expandAliases()
       val kotlinReturnType: String = returnType?.declaration?.simpleName?.asString() ?: "Unit"
       val csMethodName: String = methodName.replaceFirstChar { it.uppercase() }
 
@@ -910,7 +913,8 @@ internal fun translateInterface(
       }
 
       val params: List<CirParameter> = method.parameters.map { param ->
-        val kotlinType: String = param.type.resolve().declaration.simpleName.asString()
+        val resolved: KSType = param.type.resolve().expandAliases()
+        val kotlinType: String = resolved.declaration.simpleName.asString()
         val csType: String =
           if (kotlinType in typeParamNames) kotlinType
           else mapParamType(kotlinType)
@@ -944,7 +948,7 @@ internal fun translateEnum(
     .filter { it.simpleName.asString() !in setOf("name", "ordinal", "declaringJavaClass") }
     .map { prop ->
       val propName: String = prop.simpleName.asString()
-      val propTypeResolved: KSType = prop.type.resolve()
+      val propTypeResolved: KSType = prop.type.resolve().expandAliases()
       val propType: String = propTypeResolved.declaration.simpleName.asString()
       val csPropName: String = propName.replaceFirstChar { it.uppercase() }
 
@@ -974,7 +978,8 @@ internal fun translateValueClass(
   val underlyingProp: KSPropertyDeclaration = cls.getAllProperties()
     .first { it.simpleName.asString() == underlyingParamName }
 
-  val underlyingType: String = underlyingProp.type.resolve().declaration.simpleName.asString()
+  val underlyingResolved: KSType = underlyingProp.type.resolve().expandAliases()
+  val underlyingType: String = underlyingResolved.declaration.simpleName.asString()
   val underlyingName: String = underlyingProp.simpleName.asString().replaceFirstChar { it.uppercase() }
   val underlyingNativeType: String = mapParamType(underlyingType)
   val isReferenceUnderlying: Boolean = underlyingType !in KOTLIN_TO_CSHARP_PARAM
@@ -987,7 +992,8 @@ internal fun translateValueClass(
     .filter { it != cls.primaryConstructor }
     .mapIndexed { index, ctor ->
       val params: List<CirParameter> = ctor.parameters.map { param ->
-        val kotlinType: String = param.type.resolve().declaration.simpleName.asString()
+        val resolved: KSType = param.type.resolve().expandAliases()
+        val kotlinType: String = resolved.declaration.simpleName.asString()
         CirParameter(param.name?.asString() ?: "_", mapParamType(kotlinType))
       }
 
@@ -1015,7 +1021,7 @@ internal fun translateValueClass(
     .filter { it.simpleName.asString() != underlyingProp.simpleName.asString() }
     .map { prop ->
       val propName: String = prop.simpleName.asString()
-      val propType: String = prop.type.resolve().declaration.simpleName.asString()
+      val propType: String = prop.type.resolve().expandAliases().declaration.simpleName.asString()
       val csPropName: String = propName.replaceFirstChar { it.uppercase() }
       val csReturnType: String = if (propType == "String") "string" else mapReturnType(propType)
 
@@ -1045,7 +1051,7 @@ internal fun translateValueClass(
     .map { method ->
       val methodName: String = method.simpleName.asString()
       val csMethodName: String = methodName.replaceFirstChar { it.uppercase() }
-      val returnType: KSType? = method.returnType?.resolve()
+      val returnType: KSType? = method.returnType?.resolve()?.expandAliases()
       val kotlinReturnType: String = returnType?.declaration?.simpleName?.asString() ?: "Unit"
 
       val csReturnType: String = when (kotlinReturnType) {

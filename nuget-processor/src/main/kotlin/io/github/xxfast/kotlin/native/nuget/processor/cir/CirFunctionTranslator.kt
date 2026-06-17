@@ -17,12 +17,12 @@ internal fun translateFunction(
 ): List<CirMember> {
   val cname: String = toCName(func.simpleName.asString())
   val csName: String = toCSharpName(cname)
-  val returnType = func.returnType?.resolve()
+  val returnType = func.returnType?.resolve()?.expandAliases()
   val isNullable: Boolean = returnType?.isMarkedNullable == true
   val kotlinReturnType: String = returnType?.declaration?.simpleName?.asString() ?: "Unit"
 
   val params: List<CirParameter> = func.parameters.map { param ->
-    val kotlinType: String = param.type.resolve().declaration.simpleName.asString()
+    val kotlinType: String = param.type.resolve().expandAliases().declaration.simpleName.asString()
     CirParameter(param.name?.asString() ?: "_", mapParamType(kotlinType))
   }
 
@@ -432,7 +432,7 @@ internal fun translateGenericFunction(
 ): List<CirMember> {
   val funcName: String = func.simpleName.asString()
   val csName: String = toCSharpName(funcName)
-  val returnType = func.returnType?.resolve()
+  val returnType = func.returnType?.resolve()?.expandAliases()
   val returnDecl: KSClassDeclaration? = returnType?.declaration as? KSClassDeclaration
   val returnTypeName: String = returnType?.declaration?.simpleName?.asString() ?: "Unit"
 
@@ -459,7 +459,7 @@ internal fun translateGenericFunction(
     } ?: emptyList()
 
   val paramIndex: Int = func.parameters.indexOfFirst { param ->
-    param.type.resolve().declaration.simpleName.asString() == typeParamName
+    param.type.resolve().expandAliases().declaration.simpleName.asString() == typeParamName
   }
 
   if (paramIndex == -1) return emptyList()

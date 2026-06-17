@@ -7,6 +7,7 @@ import com.google.devtools.ksp.symbol.Visibility
 import com.squareup.kotlinpoet.ClassName
 import com.squareup.kotlinpoet.FileSpec
 import com.squareup.kotlinpoet.FunSpec
+import io.github.xxfast.kotlin.native.nuget.processor.cir.expandAliases
 import io.github.xxfast.kotlin.native.nuget.processor.toCName
 
 /**
@@ -27,7 +28,7 @@ internal fun FileSpec.Builder.addObjectExports(obj: KSClassDeclaration) {
     val methodName: String = method.simpleName.asString()
     val cname: String = toCName(methodName)
     val entryPoint: String = "${prefix}_${cname}"
-    val methodReturn: String = method.returnType?.resolve()
+    val methodReturn: String = method.returnType?.resolve()?.expandAliases()
       ?.declaration?.qualifiedName?.asString() ?: "Unit"
 
     val methodParamCall: String = method.parameters.joinToString(", ") {
@@ -39,9 +40,10 @@ internal fun FileSpec.Builder.addObjectExports(obj: KSClassDeclaration) {
       .addAnnotation(cNameAnnotation(entryPoint))
 
     for (param in method.parameters) {
+      val resolved = param.type.resolve().expandAliases()
       val type: String =
-        param.type.resolve().declaration.qualifiedName?.asString()
-          ?: param.type.resolve().declaration.simpleName.asString()
+        resolved.declaration.qualifiedName?.asString()
+          ?: resolved.declaration.simpleName.asString()
 
       builder.addParameter(
         param.name?.asString() ?: "_",

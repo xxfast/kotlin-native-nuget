@@ -7,6 +7,7 @@ import com.google.devtools.ksp.symbol.Modifier
 import com.squareup.kotlinpoet.ClassName
 import com.squareup.kotlinpoet.FileSpec
 import com.squareup.kotlinpoet.FunSpec
+import io.github.xxfast.kotlin.native.nuget.processor.cir.expandAliases
 import io.github.xxfast.kotlin.native.nuget.processor.toCName
 
 /**
@@ -19,7 +20,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.toCName
 internal fun FileSpec.Builder.addFunctionExports(func: KSFunctionDeclaration) {
   val cname: String = toCName(func.simpleName.asString())
   val funcName: String = func.simpleName.asString()
-  val returnType: KSType? = func.returnType?.resolve()
+  val returnType: KSType? = func.returnType?.resolve()?.expandAliases()
   val isNullable: Boolean = returnType?.isMarkedNullable == true
   val qualifiedReturn: String = returnType
     ?.declaration?.qualifiedName?.asString() ?: "Unit"

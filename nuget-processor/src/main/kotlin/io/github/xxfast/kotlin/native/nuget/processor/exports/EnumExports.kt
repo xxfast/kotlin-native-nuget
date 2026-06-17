@@ -3,10 +3,12 @@ package io.github.xxfast.kotlin.native.nuget.processor.exports
 import com.google.devtools.ksp.getVisibility
 import com.google.devtools.ksp.symbol.KSClassDeclaration
 import com.google.devtools.ksp.symbol.KSPropertyDeclaration
+import com.google.devtools.ksp.symbol.KSType
 import com.google.devtools.ksp.symbol.Visibility
 import com.squareup.kotlinpoet.ClassName
 import com.squareup.kotlinpoet.FileSpec
 import com.squareup.kotlinpoet.FunSpec
+import io.github.xxfast.kotlin.native.nuget.processor.cir.expandAliases
 
 /**
  * Generates @CName bridge exports for enum properties.
@@ -26,7 +28,9 @@ internal fun FileSpec.Builder.addEnumExports(enum: KSClassDeclaration) {
 
   for (prop in properties) {
     val propName: String = prop.simpleName.asString()
-    val propType: String = prop.type.resolve().declaration.qualifiedName?.asString() ?: "Any"
+    val propResolved: KSType = prop.type.resolve().expandAliases()
+    val propType: String = propResolved.declaration.qualifiedName
+      ?.asString() ?: "Any"
 
     addFunction(
       FunSpec.builder("export_${prefix}_get_$propName")

@@ -8,6 +8,7 @@ import com.google.devtools.ksp.symbol.Visibility
 import com.squareup.kotlinpoet.ClassName
 import com.squareup.kotlinpoet.FileSpec
 import com.squareup.kotlinpoet.FunSpec
+import io.github.xxfast.kotlin.native.nuget.processor.cir.expandAliases
 
 private val PRIMITIVE_TYPES: Set<String> = setOf(
   "kotlin.String", "kotlin.Byte", "kotlin.UByte", "kotlin.Short", "kotlin.UShort",
@@ -23,7 +24,7 @@ internal fun FileSpec.Builder.addValueClassExports(cls: KSClassDeclaration) {
   val underlyingProp = cls.primaryConstructor!!.parameters.first()
   val underlyingPropName: String = underlyingProp.name?.asString() ?: return
   val underlyingType: String =
-    underlyingProp.type.resolve().declaration.qualifiedName?.asString() ?: return
+    underlyingProp.type.resolve().expandAliases().declaration.qualifiedName?.asString() ?: return
   val isReferenceUnderlying: Boolean = underlyingType !in PRIMITIVE_TYPES
 
   val secondaryConstructors: List<KSFunctionDeclaration> = cls.declarations
@@ -44,9 +45,10 @@ internal fun FileSpec.Builder.addValueClassExports(cls: KSClassDeclaration) {
       .addAnnotation(cNameAnnotation(cname))
 
     ctor.parameters.forEach { param ->
+      val resolved = param.type.resolve().expandAliases()
       val type: String =
-        param.type.resolve().declaration.qualifiedName?.asString()
-          ?: param.type.resolve().declaration.simpleName.asString()
+        resolved.declaration.qualifiedName?.asString()
+          ?: resolved.declaration.simpleName.asString()
 
       builder.addParameter(
         param.name?.asString() ?: "_",
@@ -68,7 +70,7 @@ internal fun FileSpec.Builder.addValueClassExports(cls: KSClassDeclaration) {
   properties.forEach { prop ->
     val propName: String = prop.simpleName.asString()
     val propType: String =
-      prop.type.resolve().declaration.qualifiedName?.asString() ?: "kotlin.Unit"
+      prop.type.resolve().expandAliases().declaration.qualifiedName?.asString() ?: "kotlin.Unit"
 
     val builder: FunSpec.Builder = FunSpec
       .builder("export_${prefix}_get_$propName")
@@ -103,7 +105,7 @@ internal fun FileSpec.Builder.addValueClassExports(cls: KSClassDeclaration) {
 
   methods.forEach { method ->
     val methodName: String = method.simpleName.asString()
-    val methodReturn: String = method.returnType?.resolve()
+    val methodReturn: String = method.returnType?.resolve()?.expandAliases()
       ?.declaration?.qualifiedName?.asString() ?: "kotlin.Unit"
 
     val builder: FunSpec.Builder = FunSpec

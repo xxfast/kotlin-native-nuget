@@ -10,6 +10,7 @@ import com.google.devtools.ksp.symbol.Visibility
 import com.squareup.kotlinpoet.ClassName
 import com.squareup.kotlinpoet.FileSpec
 import com.squareup.kotlinpoet.FunSpec
+import io.github.xxfast.kotlin.native.nuget.processor.cir.expandAliases
 
 /**
  * Generates @CName bridge exports for sealed classes: type discriminator,
@@ -61,7 +62,7 @@ internal fun FileSpec.Builder.addSealedClassExports(sealed: KSClassDeclaration) 
 
     for (prop in properties) {
       val propName: String = prop.simpleName.asString()
-      val propTypeResolved: KSType = prop.type.resolve()
+      val propTypeResolved: KSType = prop.type.resolve().expandAliases()
       val propType: String = propTypeResolved.declaration.qualifiedName?.asString() ?: "Any"
       val isNullable: Boolean = propTypeResolved.isMarkedNullable
 

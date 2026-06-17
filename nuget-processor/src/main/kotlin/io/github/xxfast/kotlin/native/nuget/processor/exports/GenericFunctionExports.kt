@@ -5,6 +5,7 @@ import com.google.devtools.ksp.symbol.KSType
 import com.squareup.kotlinpoet.ClassName
 import com.squareup.kotlinpoet.FileSpec
 import com.squareup.kotlinpoet.FunSpec
+import io.github.xxfast.kotlin.native.nuget.processor.cir.expandAliases
 import kotlin.reflect.KClass
 
 /**
@@ -13,13 +14,13 @@ import kotlin.reflect.KClass
  */
 internal fun FileSpec.Builder.addGenericFunctionExports(func: KSFunctionDeclaration) {
   val funcName: String = func.simpleName.asString()
-  val returnType: KSType? = func.returnType?.resolve()
+  val returnType: KSType? = func.returnType?.resolve()?.expandAliases()
   val returnDecl: String = returnType?.declaration?.simpleName?.asString() ?: "Unit"
 
   val typeParamName: String = func.typeParameters.firstOrNull()?.name?.asString() ?: "T"
 
   val paramIndex: Int = func.parameters.indexOfFirst { param ->
-    param.type.resolve().declaration.simpleName.asString() == typeParamName
+    param.type.resolve().expandAliases().declaration.simpleName.asString() == typeParamName
   }
 
   if (paramIndex == -1) return
