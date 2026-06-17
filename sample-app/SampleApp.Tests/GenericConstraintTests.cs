@@ -57,4 +57,12 @@ public class GenericConstraintTests
         Type[] constraints = method.GetGenericArguments()[0].GetGenericParameterConstraints();
         Assert.Contains(typeof(IPet), constraints);
     }
+
+    [Fact]
+    public void GroomPet_ReturnsGroomedCat()
+    {
+        using var oreo = new Cat("Oreo", 9);
+        using Cat groomed = Helpers.groomPet<Cat>(oreo);
+        Assert.Equal("Oreo", groomed.Name);
+    }
 }
