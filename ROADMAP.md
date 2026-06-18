@@ -17,7 +17,7 @@
 - [x] Map nullable primitives (see [ADR-002](docs/adr/002-nullable-two-call-pattern.md))
 - [x] Map nullable strings
 
-## Phase 3: Rich type support
+## Phase 3: Basic type support
 - [x] Map Kotlin packages to C# namespaces (user-configurable root, sub-packages mapped relative to it)
 - [x] Research memory management on the bridge (see [ADR-003](docs/adr/003-memory-management-across-bridge.md))
 - [x] Map String parameters (C# `string` → Kotlin `String` via P/Invoke marshalling)
@@ -34,6 +34,8 @@
 - [x] Map abstract classes (C# `abstract class`, `_handle` inherited by subclasses)
 - [x] Map sealed classes (see [ADR-009](docs/adr/009-sealed-class-mapping.md))
 - [x] Map object (→ static class) / data object in sealed classes (→ sealed subclass with ToString)
+
+## Phase 4: Rich type support
 - [x] Map Generics (see [ADR-010](docs/adr/010-generics-mapping.md))
   - [x] Generic classes with type-erased bridge + generic C# class
   - [x] NugetMarshal helper for type dispatch
@@ -63,13 +65,13 @@
 - [x] Map inline functions with reified type parameters (e.g., `inline fun <reified T> f()`)
 - [x] Map generic type aliases (see [ADR-018](docs/adr/018-type-alias-mapping.md))
 
-## Phase 4: Async support
+## Phase 5: Async support
 - [ ] Map Suspend functions (coroutines → Task/async)
 - [ ] Map Suspend lambdas (`suspend () -> R` → `KotlinSuspendFunc<R>` / `Task<R>`)
 - [ ] Map Flow APIs (cold streams → IAsyncEnumerable or RxObservables)
 - [ ] Handle cancellation and exceptions across the bridge
 
-## Phase 5: Bidirectional support (C# → Kotlin)
+## Phase 6: Bidirectional support (C# → Kotlin)
 - [ ] Research calling C# from Kotlin/Native (reverse P/Invoke, function pointers)
 - [ ] Map lambda/function types — C# → Kotlin (see [ADR-012](docs/adr/012-lambda-function-type-mapping.md))
 - [ ] Generate Kotlin wrappers for C# interfaces (callbacks, event handlers)
