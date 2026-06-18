@@ -410,3 +410,16 @@ private fun cNameFor(func: KSFunctionDeclaration): String =
 // OK - just call it directly
 val cname: String = toCName(func.simpleName.asString())
 ```
+
+### Prefer `kotlin.time.Duration` over raw numeric durations
+
+When dealing with time durations, always use Kotlin's native `Duration` type instead of raw `Long` or `Int` milliseconds.
+```kotlin
+// OK
+delay(10.seconds)
+delay(500.milliseconds)
+
+// Not OK
+delay(10000)
+delay(500L)
+```
