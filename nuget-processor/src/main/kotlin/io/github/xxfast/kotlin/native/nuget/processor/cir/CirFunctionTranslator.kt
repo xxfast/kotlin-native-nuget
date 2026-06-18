@@ -426,6 +426,62 @@ internal fun translateFunction(
   )
 }
 
+internal fun translateSuspendFunction(
+  func: KSFunctionDeclaration,
+  libraryName: String,
+  tracker: CollectionHelperTracker,
+  exportedTypes: Set<String>,
+  logger: KSPLogger,
+): List<CirMember> {
+  val cname: String = toCName(func.simpleName.asString())
+  val csName: String = toCSharpName(cname).replaceFirstChar { it.uppercase() }
+  val returnType = func.returnType?.resolve()?.expandAliases()
+  val kotlinReturnType: String = returnType?.declaration?.simpleName?.asString() ?: "Unit"
+  val isUnit: Boolean = kotlinReturnType == "Unit"
+
+  val params: List<CirParameter> = func.parameters.map { param ->
+    val kotlinType: String = param.type.resolve().expandAliases().declaration.simpleName.asString()
+    CirParameter(param.name?.asString() ?: "_", mapParamType(kotlinType))
+  }
+
+  val asyncReturnType: String = if (isUnit) "" else {
+    KOTLIN_TO_CSHARP_PARAM[kotlinReturnType] ?: kotlinReturnType
+  }
+
+  tracker.needsAsync = true
+
+  val callbackType: String = "NugetAsyncCallback"
+  val nativeParams: List<CirParameter> = params +
+    listOf(
+      CirParameter("callback", callbackType),
+      CirParameter("userData", "IntPtr"),
+    )
+
+  val nativeImport = CirDllImport(
+    libraryName = libraryName,
+    entryPoint = "${cname}_async",
+    returnType = "void",
+    name = "${csName}Async_native",
+    parameters = nativeParams,
+    visibility = CirVisibility.PRIVATE,
+  )
+
+  val taskReturnType: String = if (isUnit) "Task" else "Task<$asyncReturnType>"
+
+  val asyncMethod = CirMethod(
+    name = "${csName}Async",
+    returnType = taskReturnType,
+    nativeName = "${csName}Async_native",
+    parameters = params,
+    body = "",
+    isStatic = true,
+    isAsync = true,
+    asyncReturnType = asyncReturnType,
+  )
+
+  return listOf(nativeImport, asyncMethod)
+}
+
 internal fun translateGenericFunction(
   func: KSFunctionDeclaration,
   libraryName: String,

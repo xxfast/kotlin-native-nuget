@@ -22,6 +22,7 @@ kotlin {
 
   sourceSets {
     nativeMain.dependencies {
+      implementation(libs.kotlinx.coroutines.core)
     }
     nativeTest.dependencies {
       implementation(libs.kotlin.test)

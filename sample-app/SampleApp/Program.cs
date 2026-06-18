@@ -71,3 +71,10 @@ Console.WriteLine($"Favorite toy: {fav}");
 // Top-level function returning a lambda
 using var greet = Mappings.greeter("G'day");
 Console.WriteLine($"Greeter: {greet.Invoke("mate")}");
+
+// Suspend functions
+using var service = new AsyncCatService("toys");
+Console.Write("Fetching cat asynchronously... ");
+using var cat = await service.FetchCatAsync("Oreo");
+Console.Write("Done!\n");
+Console.WriteLine($"Fetched cat: {cat.Name}");

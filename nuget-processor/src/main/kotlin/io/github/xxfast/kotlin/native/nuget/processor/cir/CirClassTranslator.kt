@@ -291,7 +291,7 @@ internal fun translateClass(
 
   val allMethods = cls.getAllFunctions().toList()
 
-  val methods: List<CirMethod> = allMethods
+  val filteredMethods: List<KSFunctionDeclaration> = allMethods
     .filter { it.getVisibility() == Visibility.PUBLIC }
     .filter { method ->
       val methodName: String = method.simpleName.asString()
@@ -305,6 +305,10 @@ internal fun translateClass(
         true
       }
     }
+
+  val (suspendMethods, regularMethods) = filteredMethods.partition { it.modifiers.contains(Modifier.SUSPEND) }
+
+  val methods: List<CirMethod> = regularMethods
     .map { method ->
       val methodName: String = method.simpleName.asString()
       val methodReturn: String = method.returnType?.resolve()?.expandAliases()
@@ -348,6 +352,56 @@ internal fun translateClass(
       )
     }.toList()
 
+  if (suspendMethods.isNotEmpty()) tracker.needsAsync = true
+
+  val asyncMembers: List<CirMember> = suspendMethods.flatMap { method ->
+    val methodName: String = method.simpleName.asString()
+    val cname: String = toCName(methodName)
+    val csMethodName: String = methodName.replaceFirstChar { it.uppercase() }
+    val methodReturn: String = method.returnType?.resolve()?.expandAliases()
+      ?.declaration?.simpleName?.asString() ?: "Unit"
+    val isUnit: Boolean = methodReturn == "Unit"
+
+    val methodParams: List<CirParameter> = method.parameters.map { param ->
+      val resolved: KSType = param.type.resolve().expandAliases()
+      val kotlinType: String = resolved.declaration.simpleName.asString()
+      CirParameter(param.name?.asString() ?: "_", mapParamType(kotlinType))
+    }
+
+    val asyncReturnType: String = if (isUnit) "" else {
+      KOTLIN_TO_CSHARP_PARAM[methodReturn] ?: methodReturn
+    }
+
+    val nativeParams: List<CirParameter> = listOf(CirParameter("handle", "IntPtr")) +
+      methodParams +
+      listOf(
+        CirParameter("callback", "NugetAsyncCallback"),
+        CirParameter("userData", "IntPtr"),
+      )
+
+    val nativeImport = CirDllImport(
+      libraryName = libraryName,
+      entryPoint = "${prefix}_${cname}_async",
+      returnType = "void",
+      name = "Native_${csMethodName}Async",
+      parameters = nativeParams,
+      visibility = CirVisibility.PRIVATE,
+    )
+
+    val taskReturnType: String = if (isUnit) "Task" else "Task<$asyncReturnType>"
+
+    val asyncMethod = CirMethod(
+      name = "${csMethodName}Async",
+      returnType = taskReturnType,
+      parameters = methodParams,
+      body = "",
+      isAsync = true,
+      asyncReturnType = asyncReturnType,
+    )
+
+    listOf(nativeImport, asyncMethod)
+  }
+
   val companion: KSClassDeclaration? = cls.declarations
     .filterIsInstance<KSClassDeclaration>()
     .firstOrNull { it.isCompanionObject }
@@ -389,7 +443,7 @@ internal fun translateClass(
     superClass = superClass,
     isDataClass = isDataClass,
     isAbstract = isAbstract,
-    companionMembers = companionMembers,
+    companionMembers = companionMembers + asyncMembers,
   )
 }
 

@@ -30,6 +30,7 @@ fun translate(
   extensionFunctions: List<KSFunctionDeclaration> = emptyList(),
   extensionProperties: List<KSPropertyDeclaration> = emptyList(),
   valueClasses: List<KSClassDeclaration> = emptyList(),
+  suspendFunctions: List<KSFunctionDeclaration> = emptyList(),
 ): CirFile {
   val (genericClasses, regularClasses) = classes.partition { it.typeParameters.isNotEmpty() }
 
@@ -93,6 +94,13 @@ fun translate(
     val (namespace, fileClassName) = key
     val finalClassName: String = resolveStaticClassName(fileClassName, namespace)
     val members: List<CirMember> = funcs.flatMap { translateGenericFunction(it, context.libraryName) }
+    namespaces.mergeStaticClass(namespace, finalClassName, members)
+  }
+
+  for ((key, funcs) in groupByNamespaceAndFile(suspendFunctions)) {
+    val (namespace, fileClassName) = key
+    val finalClassName: String = resolveStaticClassName(fileClassName, namespace)
+    val members: List<CirMember> = funcs.flatMap { translateSuspendFunction(it, context.libraryName, tracker, exportedTypes, logger) }
     namespaces.mergeStaticClass(namespace, finalClassName, members)
   }
 
@@ -193,7 +201,7 @@ fun translate(
     namespaces.mergeStaticClass(namespace, className, members)
   }
 
-  if (tracker.needsList || tracker.needsMap || tracker.needsSet || tracker.lambdaArities.isNotEmpty()) {
+  if (tracker.needsList || tracker.needsMap || tracker.needsSet || tracker.lambdaArities.isNotEmpty() || tracker.needsAsync) {
     needsMarshalHelper = true
   }
 
@@ -203,6 +211,7 @@ fun translate(
     if (tracker.needsMap) helpers.add(CirMapHelper(context.libraryName))
     if (tracker.needsSet) helpers.add(CirSetHelper(context.libraryName))
     if (tracker.lambdaArities.isNotEmpty()) helpers.add(CirFuncNativeHelper(context.libraryName, tracker.lambdaArities))
+    if (tracker.needsAsync) helpers.add(CirAsyncHelper(context.libraryName))
 
     val rootIdx: Int = namespaces.indexOfFirst { it.name == context.rootNamespace }
 
@@ -230,6 +239,10 @@ fun translate(
   val usings: MutableList<String> = mutableListOf("System", "System.Runtime.InteropServices")
   if (tracker.needsList || tracker.needsMap || tracker.needsSet) {
     usings.add("System.Collections.Generic")
+  }
+  if (tracker.needsAsync) {
+    usings.add("System.Runtime.CompilerServices")
+    usings.add("System.Threading.Tasks")
   }
 
   return CirFile(usings = usings, namespaces = namespaces)

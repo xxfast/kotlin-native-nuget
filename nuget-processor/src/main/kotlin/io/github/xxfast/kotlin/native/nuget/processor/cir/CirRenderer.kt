@@ -25,6 +25,7 @@ class CirRenderer {
         is CirSetHelper -> renderSetHelper(declaration)
         is CirFuncNativeHelper -> renderFuncNativeHelper(declaration)
         is CirFuncHelper -> renderFuncHelper(declaration)
+        is CirAsyncHelper -> renderAsyncHelper(declaration)
         is CirStaticClass -> renderStaticClass(declaration)
         is CirInterface -> renderInterface(declaration)
         is CirClass -> renderClass(declaration)
@@ -393,6 +394,17 @@ class CirRenderer {
     }
   }
 
+  private fun StringBuilder.renderAsyncHelper(helper: CirAsyncHelper) {
+    appendLine("    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]")
+    appendLine("    internal delegate void NugetAsyncCallback(IntPtr result, IntPtr error, IntPtr userData);")
+    appendLine()
+    appendLine("    public class KotlinException : Exception")
+    appendLine("    {")
+    appendLine("        public KotlinException(string message) : base(message) { }")
+    appendLine("    }")
+    appendLine()
+  }
+
   private fun StringBuilder.renderGenericClass(cls: CirGenericClass) {
     val typeParams: String = cls.typeParameters.joinToString(", ") { it.name }
 
@@ -722,7 +734,71 @@ class CirRenderer {
     appendLine()
   }
 
+  private val primitiveAsyncTypes = setOf(
+    "string", "int", "long", "float", "double", "bool",
+    "sbyte", "byte", "short", "ushort", "uint", "ulong",
+  )
+
+  private fun StringBuilder.renderAsyncMethod(method: CirMethod) {
+    val visibility: String = if (method.visibility == CirVisibility.PRIVATE) "private" else "public"
+    val static: String = if (method.isStatic) "static " else ""
+    val paramStr: String = method.parameters.joinToString(", ") { "${it.type} ${it.name}" }
+    val isUnit: Boolean = method.asyncReturnType.isEmpty()
+    val innerType: String = if (isUnit) "bool" else method.asyncReturnType
+    val tcsType: String = "TaskCompletionSource<$innerType>"
+    val nativeName: String = method.nativeName
+
+    val paramNames: String = method.parameters.joinToString(", ") { it.name }
+    val nativeCallArgs: String = if (method.isStatic) {
+      if (paramNames.isEmpty()) "callback, GCHandle.ToIntPtr(tcsHandle)"
+      else "$paramNames, callback, GCHandle.ToIntPtr(tcsHandle)"
+    } else {
+      if (paramNames.isEmpty()) "_handle, callback, GCHandle.ToIntPtr(tcsHandle)"
+      else "_handle, $paramNames, callback, GCHandle.ToIntPtr(tcsHandle)"
+    }
+
+    val resultExtraction: String = when {
+      isUnit -> "t.SetResult(true);"
+      method.asyncReturnType in primitiveAsyncTypes ->
+        "t.SetResult(NugetMarshal.FromHandle<${method.asyncReturnType}>(resultPtr));"
+      else ->
+        "t.SetResult(new ${method.asyncReturnType}(resultPtr));"
+    }
+
+    appendLine("        $visibility ${static}${method.returnType} ${method.name}($paramStr)")
+    appendLine("        {")
+    appendLine("            var tcs = new $tcsType(TaskCreationOptions.RunContinuationsAsynchronously);")
+    appendLine("            GCHandle tcsHandle = GCHandle.Alloc(tcs);")
+    appendLine("            NugetAsyncCallback callback = null!;")
+    appendLine("            GCHandle callbackHandle = default;")
+    appendLine("            callback = (resultPtr, errorPtr, userData) =>")
+    appendLine("            {")
+    appendLine("                callbackHandle.Free();")
+    appendLine("                var t = ($tcsType)GCHandle.FromIntPtr(userData).Target!;")
+    appendLine("                GCHandle.FromIntPtr(userData).Free();")
+    appendLine("                if (errorPtr != IntPtr.Zero)")
+    appendLine("                {")
+    appendLine("                    string msg = NugetMarshal.FromHandle<string>(errorPtr);")
+    appendLine("                    t.SetException(new KotlinException(msg));")
+    appendLine("                }")
+    appendLine("                else")
+    appendLine("                {")
+    appendLine("                    $resultExtraction")
+    appendLine("                }")
+    appendLine("            };")
+    appendLine("            callbackHandle = GCHandle.Alloc(callback);")
+    appendLine("            $nativeName($nativeCallArgs);")
+    appendLine("            return tcs.Task;")
+    appendLine("        }")
+    appendLine()
+  }
+
   private fun StringBuilder.renderMethod(method: CirMethod) {
+    if (method.isAsync) {
+      renderAsyncMethod(method)
+      return
+    }
+
     val visibility: String = if (method.visibility == CirVisibility.PRIVATE) "private" else "public"
     val static: String = if (method.isStatic) "static " else ""
     val override: String = if (method.isOverride) "override " else ""

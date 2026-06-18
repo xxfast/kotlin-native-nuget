@@ -45,6 +45,8 @@ import io.github.xxfast.kotlin.native.nuget.processor.exports.addExtensionProper
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addObjectExports
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addPropertyExports
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addSealedClassExports
+import io.github.xxfast.kotlin.native.nuget.processor.exports.addSuspendClassMethodExports
+import io.github.xxfast.kotlin.native.nuget.processor.exports.addSuspendFunctionExports
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addValueClassExports
 
 class NugetProcessor(
@@ -78,7 +80,11 @@ class NugetProcessor(
       .filter { it.parentDeclaration == null }
       .filter { it.extensionReceiver != null }
 
-    val functions: List<KSFunctionDeclaration> = allFunctions.filter { it.typeParameters.isEmpty() }
+    val (suspendFunctions, regularFunctions) = allFunctions
+      .filter { it.typeParameters.isEmpty() }
+      .partition { it.modifiers.contains(Modifier.SUSPEND) }
+
+    val functions: List<KSFunctionDeclaration> = regularFunctions
     val genericFunctions: List<KSFunctionDeclaration> = allFunctions.filter { it.typeParameters.isNotEmpty() }
 
     val allProperties: List<KSPropertyDeclaration> = allDeclarations
@@ -157,8 +163,8 @@ class NugetProcessor(
 
     val deps = Dependencies(aggregating = true, *sources)
 
-    generateCNameWrappers(functions, genericFunctions, extensionFunctions, extensionProperties, classes, genericClasses, enums, sealedClasses, objects, properties, valueClasses, deps)
-    generateCSharpBindings(functions, genericFunctions, extensionFunctions, extensionProperties, allClasses, enums, interfaces, sealedClasses, objects, properties, constProperties, valueClasses, deps)
+    generateCNameWrappers(functions, genericFunctions, extensionFunctions, extensionProperties, classes, genericClasses, enums, sealedClasses, objects, properties, valueClasses, suspendFunctions, deps)
+    generateCSharpBindings(functions, genericFunctions, extensionFunctions, extensionProperties, allClasses, enums, interfaces, sealedClasses, objects, properties, constProperties, valueClasses, suspendFunctions, deps)
 
     logger.info(
       "Generated bindings for ${functions.size} functions" +
@@ -192,6 +198,7 @@ class NugetProcessor(
     properties: List<KSPropertyDeclaration>,
     constProperties: List<KSPropertyDeclaration>,
     valueClasses: List<KSClassDeclaration>,
+    suspendFunctions: List<KSFunctionDeclaration>,
     deps: Dependencies,
   ) {
     val cirFile: CirFile = translate(
@@ -209,6 +216,7 @@ class NugetProcessor(
       extensionFunctions,
       extensionProperties,
       valueClasses,
+      suspendFunctions,
     )
 
     val csharp: String = renderer.render(cirFile)
@@ -235,6 +243,7 @@ class NugetProcessor(
     objects: List<KSClassDeclaration>,
     properties: List<KSPropertyDeclaration>,
     valueClasses: List<KSClassDeclaration>,
+    suspendFunctions: List<KSFunctionDeclaration>,
     deps: Dependencies,
   ) {
     val fileSpec: FileSpec = FileSpec
@@ -267,6 +276,29 @@ class NugetProcessor(
         sealedClasses.forEach { addSealedClassExports(it) }
         objects.forEach { addObjectExports(it) }
         valueClasses.forEach { addValueClassExports(it) }
+
+        if (suspendFunctions.isNotEmpty() || classes.any { cls ->
+          cls.getAllFunctions().any { it.modifiers.contains(Modifier.SUSPEND) }
+        }) {
+          addImport("kotlinx.cinterop", "reinterpret")
+          addImport("kotlinx.cinterop", "invoke")
+          addImport("kotlinx.cinterop", "CFunction")
+          addImport("kotlinx.cinterop", "COpaquePointer")
+          addImport("kotlinx.coroutines", "CoroutineScope")
+          addImport("kotlinx.coroutines", "Dispatchers")
+          addImport("kotlinx.coroutines", "launch")
+        }
+
+        suspendFunctions.forEach { func ->
+          addImport(func.packageName.asString(), func.simpleName.asString())
+          addSuspendFunctionExports(func)
+        }
+
+        classes.forEach { cls ->
+          val hasSuspendMethods: Boolean = cls.getAllFunctions()
+            .any { it.modifiers.contains(Modifier.SUSPEND) }
+          if (hasSuspendMethods) addSuspendClassMethodExports(cls)
+        }
 
         properties.forEach { prop ->
           addImport(prop.packageName.asString(), prop.simpleName.asString())

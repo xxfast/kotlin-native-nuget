@@ -263,6 +263,7 @@ internal fun FileSpec.Builder.addClassExports(cls: KSClassDeclaration) {
         (name == "copy" || name.startsWith("component"))
       name !in listOf("equals", "hashCode", "toString", "<init>") && !isDataClassMethod
     }
+    .filter { !it.modifiers.contains(Modifier.SUSPEND) }
     .filter { method ->
       if (hasSuperClass) {
         method.parentDeclaration == cls && !method.modifiers.contains(Modifier.ABSTRACT)

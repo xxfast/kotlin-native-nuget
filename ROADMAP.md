@@ -66,7 +66,7 @@
 - [x] Map generic type aliases (see [ADR-018](docs/adr/018-type-alias-mapping.md))
 
 ## Phase 5: Async support
-- [ ] Map Suspend functions (coroutines → Task/async)
+- [x] Map Suspend functions (coroutines → Task/async) (see [ADR-019](docs/adr/019-suspend-function-mapping.md))
 - [ ] Map Suspend lambdas (`suspend () -> R` → `KotlinSuspendFunc<R>` / `Task<R>`)
 - [ ] Map Flow APIs (cold streams → IAsyncEnumerable or RxObservables)
 - [ ] Handle cancellation and exceptions across the bridge

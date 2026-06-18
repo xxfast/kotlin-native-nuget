@@ -48,6 +48,7 @@ internal class CollectionHelperTracker {
   var needsList: Boolean = false
   var needsMap: Boolean = false
   var needsSet: Boolean = false
+  var needsAsync: Boolean = false
   val lambdaArities: MutableSet<Int> = mutableSetOf()
 }
 

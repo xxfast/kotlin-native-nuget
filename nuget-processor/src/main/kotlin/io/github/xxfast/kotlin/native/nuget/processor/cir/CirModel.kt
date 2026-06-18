@@ -144,6 +144,10 @@ data class CirFuncHelper(
   val helperNamespace: String,
 ) : CirDeclaration
 
+data class CirAsyncHelper(
+  val libraryName: String,
+) : CirDeclaration
+
 data class CirEnumEntry(
   val name: String,
   val ordinal: Int,
@@ -180,6 +184,8 @@ data class CirMethod(
   val isOverride: Boolean = false,
   val isExtension: Boolean = false,
   val typeParameters: List<CirTypeParameter> = emptyList(),
+  val isAsync: Boolean = false,
+  val asyncReturnType: String = "",
 ) : CirMember
 
 data class CirProperty(
