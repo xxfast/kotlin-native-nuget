@@ -44,12 +44,20 @@ internal val LAMBDA_TYPES = setOf(
   "kotlin.Function0", "kotlin.Function1", "kotlin.Function2", "kotlin.Function3",
 )
 
+internal val SUSPEND_LAMBDA_TYPES = setOf(
+  "kotlin.coroutines.SuspendFunction0",
+  "kotlin.coroutines.SuspendFunction1",
+  "kotlin.coroutines.SuspendFunction2",
+  "kotlin.coroutines.SuspendFunction3",
+)
+
 internal class CollectionHelperTracker {
   var needsList: Boolean = false
   var needsMap: Boolean = false
   var needsSet: Boolean = false
   var needsAsync: Boolean = false
   val lambdaArities: MutableSet<Int> = mutableSetOf()
+  val suspendLambdaArities: MutableSet<Int> = mutableSetOf()
 }
 
 internal fun mapReturnType(kotlinType: String): String =

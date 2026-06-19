@@ -144,6 +144,17 @@ data class CirFuncHelper(
   val helperNamespace: String,
 ) : CirDeclaration
 
+data class CirSuspendFuncNativeHelper(
+  val libraryName: String,
+  val arities: Set<Int>,
+) : CirDeclaration
+
+data class CirSuspendFuncHelper(
+  val libraryName: String,
+  val arities: Set<Int>,
+  val helperNamespace: String,
+) : CirDeclaration
+
 data class CirAsyncHelper(
   val libraryName: String,
 ) : CirDeclaration

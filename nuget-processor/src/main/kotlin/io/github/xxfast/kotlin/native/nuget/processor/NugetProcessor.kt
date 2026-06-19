@@ -40,6 +40,8 @@ import io.github.xxfast.kotlin.native.nuget.processor.exports.addNugetFunc0Helpe
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addNugetFunc1HelperExports
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addNugetFunc2HelperExports
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addNugetFunc3HelperExports
+import io.github.xxfast.kotlin.native.nuget.processor.exports.addNugetSuspendFunc0HelperExports
+import io.github.xxfast.kotlin.native.nuget.processor.exports.addNugetSuspendFunc1HelperExports
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addExtensionFunctionExports
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addExtensionPropertyExports
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addObjectExports
@@ -277,7 +279,31 @@ class NugetProcessor(
         objects.forEach { addObjectExports(it) }
         valueClasses.forEach { addValueClassExports(it) }
 
-        if (suspendFunctions.isNotEmpty() || classes.any { cls ->
+        val suspendLambdaTypes: Set<String> = setOf(
+          "kotlin.coroutines.SuspendFunction0",
+          "kotlin.coroutines.SuspendFunction1",
+          "kotlin.coroutines.SuspendFunction2",
+          "kotlin.coroutines.SuspendFunction3",
+        )
+
+        fun KSType.isSuspendLambdaType(): Boolean =
+          expandAliases().declaration.qualifiedName?.asString() in suspendLambdaTypes
+
+        fun KSType.suspendLambdaArity(): Int =
+          expandAliases().arguments.size - 1
+
+        val suspendLambdaArities: MutableSet<Int> = mutableSetOf()
+
+        (classes + genericClasses).forEach { cls ->
+          cls.getAllProperties().forEach { prop ->
+            val propType: KSType = prop.type.resolve()
+            if (propType.isSuspendLambdaType()) suspendLambdaArities.add(propType.suspendLambdaArity())
+          }
+        }
+
+        val needsSuspendLambdaSupport: Boolean = suspendLambdaArities.isNotEmpty()
+
+        if (suspendFunctions.isNotEmpty() || needsSuspendLambdaSupport || classes.any { cls ->
           cls.getAllFunctions().any { it.modifiers.contains(Modifier.SUSPEND) }
         }) {
           addImport("kotlinx.cinterop", "reinterpret")
@@ -287,6 +313,12 @@ class NugetProcessor(
           addImport("kotlinx.coroutines", "CoroutineScope")
           addImport("kotlinx.coroutines", "Dispatchers")
           addImport("kotlinx.coroutines", "launch")
+        }
+
+        if (needsSuspendLambdaSupport) {
+          addImport("kotlin.coroutines", "SuspendFunction0")
+          addImport("kotlin.coroutines", "SuspendFunction1")
+          addImport("kotlinx.cinterop", "StableRef")
         }
 
         suspendFunctions.forEach { func ->
@@ -425,6 +457,12 @@ class NugetProcessor(
         if (1 in lambdaArities) addNugetFunc1HelperExports()
         if (2 in lambdaArities) addNugetFunc2HelperExports()
         if (3 in lambdaArities) addNugetFunc3HelperExports()
+
+        if (needsSuspendLambdaSupport && suspendLambdaArities.any { it > 0 } && !needsLambdaSupport) {
+          addNugetWrapHelperExports()
+        }
+        if (0 in suspendLambdaArities) addNugetSuspendFunc0HelperExports()
+        if (1 in suspendLambdaArities) addNugetSuspendFunc1HelperExports()
       }
       .build()
 

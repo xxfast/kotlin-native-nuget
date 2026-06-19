@@ -67,7 +67,7 @@
 
 ## Phase 5: Async support
 - [x] Map Suspend functions (coroutines → Task/async) (see [ADR-019](docs/adr/019-suspend-function-mapping.md))
-- [ ] Map Suspend lambdas (`suspend () -> R` → `KotlinSuspendFunc<R>` / `Task<R>`)
+- [x] Map Suspend lambdas (`suspend () -> R` → `KotlinSuspendFunc<R>` / `Task<R>`) (see [ADR-020](docs/adr/020-suspend-lambda-mapping.md))
 - [ ] Map Flow APIs (cold streams → IAsyncEnumerable or RxObservables)
 - [ ] Handle cancellation and exceptions across the bridge
 

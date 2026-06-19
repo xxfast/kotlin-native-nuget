@@ -201,6 +201,8 @@ fun translate(
     namespaces.mergeStaticClass(namespace, className, members)
   }
 
+  if (tracker.suspendLambdaArities.isNotEmpty()) tracker.needsAsync = true
+
   if (tracker.needsList || tracker.needsMap || tracker.needsSet || tracker.lambdaArities.isNotEmpty() || tracker.needsAsync) {
     needsMarshalHelper = true
   }
@@ -211,6 +213,7 @@ fun translate(
     if (tracker.needsMap) helpers.add(CirMapHelper(context.libraryName))
     if (tracker.needsSet) helpers.add(CirSetHelper(context.libraryName))
     if (tracker.lambdaArities.isNotEmpty()) helpers.add(CirFuncNativeHelper(context.libraryName, tracker.lambdaArities))
+    if (tracker.suspendLambdaArities.isNotEmpty()) helpers.add(CirSuspendFuncNativeHelper(context.libraryName, tracker.suspendLambdaArities))
     if (tracker.needsAsync) helpers.add(CirAsyncHelper(context.libraryName))
 
     val rootIdx: Int = namespaces.indexOfFirst { it.name == context.rootNamespace }
@@ -232,6 +235,19 @@ fun translate(
         namespaces[rootIdx] = root.copy(declarations = listOf(funcHelper) + root.declarations)
       } else {
         namespaces.add(CirNamespace(context.rootNamespace, listOf(funcHelper)))
+      }
+    }
+
+    if (tracker.suspendLambdaArities.isNotEmpty()) {
+      val helperNs: String = context.rootNamespace
+      val suspendFuncHelper = CirSuspendFuncHelper(context.libraryName, tracker.suspendLambdaArities, helperNs)
+      val rootIdx: Int = namespaces.indexOfFirst { it.name == context.rootNamespace }
+
+      if (rootIdx >= 0) {
+        val root: CirNamespace = namespaces[rootIdx]
+        namespaces[rootIdx] = root.copy(declarations = listOf(suspendFuncHelper) + root.declarations)
+      } else {
+        namespaces.add(CirNamespace(context.rootNamespace, listOf(suspendFuncHelper)))
       }
     }
   }

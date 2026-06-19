@@ -115,7 +115,17 @@ internal fun translateClass(
 
       if (isLambdaType) tracker.lambdaArities.add(lambdaArity)
 
-      val isReferenceType: Boolean = propType !in KOTLIN_TO_CSHARP_RETURN && !isEnumType && !isListType && !isMutableListType && !isMapType && !isMutableMapType && !isSetType && !isMutableSetType && !isLambdaType
+      val isSuspendLambdaType: Boolean = qualifiedTypeName in SUSPEND_LAMBDA_TYPES
+      val suspendLambdaArity: Int = if (isSuspendLambdaType) propTypeResolved.arguments.size - 1 else -1
+
+      if (isSuspendLambdaType) {
+        tracker.suspendLambdaArities.add(suspendLambdaArity)
+        tracker.needsAsync = true
+      }
+
+      val isReferenceType: Boolean = propType !in KOTLIN_TO_CSHARP_RETURN && !isEnumType &&
+        !isListType && !isMutableListType && !isMapType && !isMutableMapType &&
+        !isSetType && !isMutableSetType && !isLambdaType && !isSuspendLambdaType
 
       if (isReferenceType) {
         if (qualifiedTypeName != null && qualifiedTypeName !in exportedTypes) {
@@ -136,14 +146,39 @@ internal fun translateClass(
         "KotlinFunc<$typeParams>"
       } else ""
 
+      val suspendLambdaTypeArgs: List<String> = if (isSuspendLambdaType) {
+        propTypeResolved.arguments.map { arg ->
+          val argType: String = arg.type?.resolve()?.declaration?.simpleName?.asString() ?: "object"
+          KOTLIN_TO_CSHARP_PARAM[argType] ?: argType
+        }
+      } else emptyList()
+
+      val suspendLambdaIsUnit: Boolean = isSuspendLambdaType &&
+        (suspendLambdaTypeArgs.lastOrNull() == "void" ||
+          propTypeResolved.arguments.lastOrNull()?.type?.resolve()?.declaration?.qualifiedName?.asString() == "kotlin.Unit")
+
+      val suspendLambdaCsType: String = if (isSuspendLambdaType) {
+        if (suspendLambdaIsUnit) {
+          if (suspendLambdaArity == 0) "KotlinSuspendAction"
+          else {
+            val typeParams: String = suspendLambdaTypeArgs.dropLast(1).joinToString(", ")
+            "KotlinSuspendAction<$typeParams>"
+          }
+        } else {
+          val typeParams: String = suspendLambdaTypeArgs.joinToString(", ")
+          "KotlinSuspendFunc<$typeParams>"
+        }
+      } else ""
+
       val isNullablePrimitive: Boolean = isNullable && !isReferenceType && !isEnumType &&
         !isListType && !isMutableListType && !isMapType && !isMutableMapType &&
-        !isSetType && !isMutableSetType && !isLambdaType
+        !isSetType && !isMutableSetType && !isLambdaType && !isSuspendLambdaType
       val isNullableString: Boolean = isNullablePrimitive && propType == "String"
       val isNullableValueType: Boolean = isNullablePrimitive && propType != "String"
 
       val nativeReturnType: String = when {
         isLambdaType -> "IntPtr"
+        isSuspendLambdaType -> "IntPtr"
         (isListType || isMutableListType) -> "IntPtr"
         (isMapType || isMutableMapType) -> "IntPtr"
         (isSetType || isMutableSetType) -> "IntPtr"
@@ -156,6 +191,7 @@ internal fun translateClass(
 
       val type: String = when {
         isLambdaType -> lambdaCsType
+        isSuspendLambdaType -> suspendLambdaCsType
         isListType -> "IReadOnlyList<$listElementType>"
         isMutableListType -> "IList<$listElementType>"
         isMapType -> "IReadOnlyDictionary<$mapKeyType, $mapValueType>"
@@ -191,6 +227,8 @@ internal fun translateClass(
 
       val getter: String = if (isLambdaType) {
         "new $lambdaCsType(Native_Get_$propName(_handle))"
+      } else if (isSuspendLambdaType) {
+        "new $suspendLambdaCsType(Native_Get_$propName(_handle))"
       } else if (isListType) {
         buildString {
           appendLine()
@@ -255,7 +293,7 @@ internal fun translateClass(
         else -> "Native_Get_$propName(_handle)"
       }
 
-      val setter: String? = if (isMutable && !isLambdaType && !isListType && !isMutableListType && !isMapType && !isMutableMapType && !isSetType && !isMutableSetType) {
+      val setter: String? = if (isMutable && !isLambdaType && !isSuspendLambdaType && !isListType && !isMutableListType && !isMapType && !isMutableMapType && !isSetType && !isMutableSetType) {
         when {
           isNullableString -> "Native_Set_$propName(_handle, value)"
           isNullableValueType -> buildString {

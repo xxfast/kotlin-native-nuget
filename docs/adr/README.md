@@ -19,3 +19,4 @@
 - [017](017-inline-function-mapping.md) — Inline functions treated as regular functions; existing pipeline handles them
 - [018](018-type-alias-mapping.md) — Transparent expansion to underlying type; aliases erased (matches all interop targets)
 - [019](019-suspend-function-mapping.md) — Callback-based bridge with TaskCompletionSource; suspend → Task/async; coroutine launched on Dispatchers.Default
+- [020](020-suspend-lambda-mapping.md) — `KotlinSuspendFunc<R>` / `KotlinSuspendAction` with `InvokeAsync()` for suspend lambda properties

@@ -477,6 +477,68 @@ internal fun FileSpec.Builder.addNugetFunc2HelperExports() {
   )
 }
 
+internal fun FileSpec.Builder.addNugetSuspendFunc0HelperExports() {
+  addFunction(
+    FunSpec.builder("export_nuget_suspend_func0_invoke")
+      .addAnnotation(cNameAnnotation("nuget_suspend_func0_invoke"))
+      .addParameter("handle", cOpaquePointer)
+      .addParameter("callbackPtr", cOpaquePointer)
+      .addParameter("userData", cOpaquePointer)
+      .addCode(buildString {
+        appendLine("val fn = handle.asStableRef<SuspendFunction0<*>>().get()")
+        appendLine("val callback = callbackPtr.reinterpret<CFunction<")
+        appendLine("  (COpaquePointer?, COpaquePointer?, COpaquePointer) -> Unit>>()")
+        appendLine("CoroutineScope(Dispatchers.Default).launch {")
+        appendLine("  try {")
+        appendLine("    val result = fn.invoke()")
+        appendLine("    if (result == Unit) {")
+        appendLine("      callback.invoke(null, null, userData)")
+        appendLine("    } else {")
+        appendLine("      val resultRef = StableRef.create(result as Any).asCPointer()")
+        appendLine("      callback.invoke(resultRef, null, userData)")
+        appendLine("    }")
+        appendLine("  } catch (e: Throwable) {")
+        appendLine("    val errRef = StableRef.create(e.message ?: \"Kotlin error\").asCPointer()")
+        appendLine("    callback.invoke(null, errRef, userData)")
+        appendLine("  }")
+        append("}")
+      })
+      .build()
+  )
+}
+
+internal fun FileSpec.Builder.addNugetSuspendFunc1HelperExports() {
+  addFunction(
+    FunSpec.builder("export_nuget_suspend_func1_invoke")
+      .addAnnotation(cNameAnnotation("nuget_suspend_func1_invoke"))
+      .addParameter("handle", cOpaquePointer)
+      .addParameter("arg0", cOpaquePointer)
+      .addParameter("callbackPtr", cOpaquePointer)
+      .addParameter("userData", cOpaquePointer)
+      .addCode(buildString {
+        appendLine("val fn = handle.asStableRef<SuspendFunction1<Any?, Any?>>().get()")
+        appendLine("val param0 = arg0.asStableRef<Any>().get()")
+        appendLine("val callback = callbackPtr.reinterpret<CFunction<")
+        appendLine("  (COpaquePointer?, COpaquePointer?, COpaquePointer) -> Unit>>()")
+        appendLine("CoroutineScope(Dispatchers.Default).launch {")
+        appendLine("  try {")
+        appendLine("    val result = fn.invoke(param0)")
+        appendLine("    if (result == Unit) {")
+        appendLine("      callback.invoke(null, null, userData)")
+        appendLine("    } else {")
+        appendLine("      val resultRef = StableRef.create(result as Any).asCPointer()")
+        appendLine("      callback.invoke(resultRef, null, userData)")
+        appendLine("    }")
+        appendLine("  } catch (e: Throwable) {")
+        appendLine("    val errRef = StableRef.create(e.message ?: \"Kotlin error\").asCPointer()")
+        appendLine("    callback.invoke(null, errRef, userData)")
+        appendLine("  }")
+        append("}")
+      })
+      .build()
+  )
+}
+
 internal fun FileSpec.Builder.addNugetFunc3HelperExports() {
   addFunction(
     FunSpec.builder("export_nuget_func3_invoke")
