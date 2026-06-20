@@ -43,6 +43,10 @@ These are the closest analogues to what we're building. Prefer designs that alig
 - `ROADMAP.md` — planned features and priorities
 - `GOALS.md` — design philosophy
 
+## Backup your findings with links to official documentation, source code, or examples. 
+
+Avoid relying solely on intuition or assumptions about how a feature should work. Look for authoritative sources. Report back your findings with links where you learned about the feature's behavior in Kotlin/Native and other interop targets.
+
 ## Output format
 
 Report your findings as:

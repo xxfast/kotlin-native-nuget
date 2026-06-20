@@ -215,6 +215,7 @@ fun translate(
     if (tracker.lambdaArities.isNotEmpty()) helpers.add(CirFuncNativeHelper(context.libraryName, tracker.lambdaArities))
     if (tracker.suspendLambdaArities.isNotEmpty()) helpers.add(CirSuspendFuncNativeHelper(context.libraryName, tracker.suspendLambdaArities))
     if (tracker.needsAsync) helpers.add(CirAsyncHelper(context.libraryName))
+    if (tracker.needsAsync) helpers.add(CirScopeHelper(context.libraryName))
 
     val rootIdx: Int = namespaces.indexOfFirst { it.name == context.rootNamespace }
 

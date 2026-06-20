@@ -4,6 +4,7 @@ import com.google.devtools.ksp.getVisibility
 import com.google.devtools.ksp.symbol.KSClassDeclaration
 import com.google.devtools.ksp.symbol.KSPropertyDeclaration
 import com.google.devtools.ksp.symbol.Visibility
+import com.squareup.kotlinpoet.ClassName
 import com.squareup.kotlinpoet.FileSpec
 import com.squareup.kotlinpoet.FunSpec
 
@@ -487,19 +488,19 @@ internal fun FileSpec.Builder.addNugetSuspendFunc0HelperExports() {
       .addCode(buildString {
         appendLine("val fn = handle.asStableRef<SuspendFunction0<*>>().get()")
         appendLine("val callback = callbackPtr.reinterpret<CFunction<")
-        appendLine("  (COpaquePointer?, COpaquePointer?, COpaquePointer) -> Unit>>()")
+        appendLine("  (COpaquePointer?, COpaquePointer?, Byte, COpaquePointer) -> Unit>>()")
         appendLine("CoroutineScope(Dispatchers.Default).launch {")
         appendLine("  try {")
         appendLine("    val result = fn.invoke()")
         appendLine("    if (result == Unit) {")
-        appendLine("      callback.invoke(null, null, userData)")
+        appendLine("      callback.invoke(null, null, 0.toByte(), userData)")
         appendLine("    } else {")
         appendLine("      val resultRef = StableRef.create(result as Any).asCPointer()")
-        appendLine("      callback.invoke(resultRef, null, userData)")
+        appendLine("      callback.invoke(resultRef, null, 0.toByte(), userData)")
         appendLine("    }")
         appendLine("  } catch (e: Throwable) {")
         appendLine("    val errRef = StableRef.create(e.message ?: \"Kotlin error\").asCPointer()")
-        appendLine("    callback.invoke(null, errRef, userData)")
+        appendLine("    callback.invoke(null, errRef, 0.toByte(), userData)")
         appendLine("  }")
         append("}")
       })
@@ -519,22 +520,60 @@ internal fun FileSpec.Builder.addNugetSuspendFunc1HelperExports() {
         appendLine("val fn = handle.asStableRef<SuspendFunction1<Any?, Any?>>().get()")
         appendLine("val param0 = arg0.asStableRef<Any>().get()")
         appendLine("val callback = callbackPtr.reinterpret<CFunction<")
-        appendLine("  (COpaquePointer?, COpaquePointer?, COpaquePointer) -> Unit>>()")
+        appendLine("  (COpaquePointer?, COpaquePointer?, Byte, COpaquePointer) -> Unit>>()")
         appendLine("CoroutineScope(Dispatchers.Default).launch {")
         appendLine("  try {")
         appendLine("    val result = fn.invoke(param0)")
         appendLine("    if (result == Unit) {")
-        appendLine("      callback.invoke(null, null, userData)")
+        appendLine("      callback.invoke(null, null, 0.toByte(), userData)")
         appendLine("    } else {")
         appendLine("      val resultRef = StableRef.create(result as Any).asCPointer()")
-        appendLine("      callback.invoke(resultRef, null, userData)")
+        appendLine("      callback.invoke(resultRef, null, 0.toByte(), userData)")
         appendLine("    }")
         appendLine("  } catch (e: Throwable) {")
         appendLine("    val errRef = StableRef.create(e.message ?: \"Kotlin error\").asCPointer()")
-        appendLine("    callback.invoke(null, errRef, userData)")
+        appendLine("    callback.invoke(null, errRef, 0.toByte(), userData)")
         appendLine("  }")
         append("}")
       })
+      .build()
+  )
+}
+
+internal fun FileSpec.Builder.addNugetScopeHelperExports() {
+  addFunction(
+    FunSpec.builder("export_nuget_scope_create")
+      .addAnnotation(cNameAnnotation("nuget_scope_create"))
+      .returns(cOpaquePointer)
+      .addStatement(
+        "return %T.create(%T(%T() + %T.Default)).asCPointer()",
+        stableRef,
+        ClassName("kotlinx.coroutines", "CoroutineScope"),
+        ClassName("kotlinx.coroutines", "SupervisorJob"),
+        ClassName("kotlinx.coroutines", "Dispatchers"),
+      )
+      .build()
+  )
+
+  addFunction(
+    FunSpec.builder("export_nuget_scope_cancel")
+      .addAnnotation(cNameAnnotation("nuget_scope_cancel"))
+      .addParameter("handle", cOpaquePointer)
+      .addStatement(
+        "handle.asStableRef<%T>().get().cancel()",
+        ClassName("kotlinx.coroutines", "CoroutineScope"),
+      )
+      .build()
+  )
+
+  addFunction(
+    FunSpec.builder("export_nuget_scope_dispose")
+      .addAnnotation(cNameAnnotation("nuget_scope_dispose"))
+      .addParameter("handle", cOpaquePointer)
+      .addStatement(
+        "handle.asStableRef<%T>().dispose()",
+        ClassName("kotlinx.coroutines", "CoroutineScope"),
+      )
       .build()
   )
 }

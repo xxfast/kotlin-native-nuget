@@ -410,8 +410,10 @@ internal fun translateClass(
       KOTLIN_TO_CSHARP_PARAM[methodReturn] ?: methodReturn
     }
 
-    val nativeParams: List<CirParameter> = listOf(CirParameter("handle", "IntPtr")) +
-      methodParams +
+    val nativeParams: List<CirParameter> = listOf(
+      CirParameter("handle", "IntPtr"),
+      CirParameter("scopeHandle", "IntPtr"),
+    ) + methodParams +
       listOf(
         CirParameter("callback", "NugetAsyncCallback"),
         CirParameter("userData", "IntPtr"),
@@ -482,6 +484,7 @@ internal fun translateClass(
     isDataClass = isDataClass,
     isAbstract = isAbstract,
     companionMembers = companionMembers + asyncMembers,
+    hasSuspendMethods = cls.getAllFunctions().any { it.modifiers.contains(Modifier.SUSPEND) },
   )
 }
 

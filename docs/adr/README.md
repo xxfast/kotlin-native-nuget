@@ -20,3 +20,4 @@
 - [018](018-type-alias-mapping.md) — Transparent expansion to underlying type; aliases erased (matches all interop targets)
 - [019](019-suspend-function-mapping.md) — Callback-based bridge with TaskCompletionSource; suspend → Task/async; coroutine launched on Dispatchers.Default
 - [020](020-suspend-lambda-mapping.md) — `KotlinSuspendFunc<R>` / `KotlinSuspendAction` with `InvokeAsync()` for suspend lambda properties
+- [021](021-structured-concurrency.md) — Scope-per-class with `SupervisorJob`; `Dispose()` cancels in-flight coroutines; `ObjectDisposedException` guard

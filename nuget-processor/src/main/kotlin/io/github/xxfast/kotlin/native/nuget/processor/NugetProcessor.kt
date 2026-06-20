@@ -42,6 +42,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.exports.addNugetFunc2Helpe
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addNugetFunc3HelperExports
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addNugetSuspendFunc0HelperExports
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addNugetSuspendFunc1HelperExports
+import io.github.xxfast.kotlin.native.nuget.processor.exports.addNugetScopeHelperExports
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addExtensionFunctionExports
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addExtensionPropertyExports
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addObjectExports
@@ -313,6 +314,9 @@ class NugetProcessor(
           addImport("kotlinx.coroutines", "CoroutineScope")
           addImport("kotlinx.coroutines", "Dispatchers")
           addImport("kotlinx.coroutines", "launch")
+          addImport("kotlinx.coroutines", "SupervisorJob")
+          addImport("kotlinx.coroutines", "cancel")
+          addImport("kotlinx.coroutines", "CancellationException")
         }
 
         if (needsSuspendLambdaSupport) {
@@ -463,6 +467,14 @@ class NugetProcessor(
         }
         if (0 in suspendLambdaArities) addNugetSuspendFunc0HelperExports()
         if (1 in suspendLambdaArities) addNugetSuspendFunc1HelperExports()
+
+        val classesHaveSuspendMethods: Boolean = classes.any { cls ->
+          cls.getAllFunctions().any { it.modifiers.contains(Modifier.SUSPEND) }
+        }
+        val needsScopeHelpers: Boolean = suspendFunctions.isNotEmpty() ||
+          needsSuspendLambdaSupport ||
+          classesHaveSuspendMethods
+        if (needsScopeHelpers) addNugetScopeHelperExports()
       }
       .build()
 

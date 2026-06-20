@@ -28,6 +28,7 @@ class CirRenderer {
         is CirSuspendFuncNativeHelper -> renderSuspendFuncNativeHelper(declaration)
         is CirSuspendFuncHelper -> renderSuspendFuncHelper(declaration)
         is CirAsyncHelper -> renderAsyncHelper(declaration)
+        is CirScopeHelper -> renderScopeHelper(declaration)
         is CirStaticClass -> renderStaticClass(declaration)
         is CirInterface -> renderInterface(declaration)
         is CirClass -> renderClass(declaration)
@@ -474,12 +475,16 @@ class CirRenderer {
         appendLine("            GCHandle tcsHandle = GCHandle.Alloc(tcs);")
         appendLine("            NugetAsyncCallback callback = null!;")
         appendLine("            GCHandle callbackHandle = default;")
-        appendLine("            callback = (resultPtr, errorPtr, userData) =>")
+        appendLine("            callback = (resultPtr, errorPtr, isCancelled, userData) =>")
         appendLine("            {")
         appendLine("                callbackHandle.Free();")
         appendLine("                var t = (TaskCompletionSource<TResult>)GCHandle.FromIntPtr(userData).Target!;")
         appendLine("                GCHandle.FromIntPtr(userData).Free();")
-        appendLine("                if (errorPtr != IntPtr.Zero)")
+        appendLine("                if (isCancelled != 0)")
+        appendLine("                {")
+        appendLine("                    t.TrySetCanceled();")
+        appendLine("                }")
+        appendLine("                else if (errorPtr != IntPtr.Zero)")
         appendLine("                {")
         appendLine("                    string msg = $marshalRef.FromHandle<string>(errorPtr);")
         appendLine("                    t.SetException(new KotlinException(msg));")
@@ -523,12 +528,16 @@ class CirRenderer {
         appendLine("            GCHandle tcsHandle = GCHandle.Alloc(tcs);")
         appendLine("            NugetAsyncCallback callback = null!;")
         appendLine("            GCHandle callbackHandle = default;")
-        appendLine("            callback = (resultPtr, errorPtr, userData) =>")
+        appendLine("            callback = (resultPtr, errorPtr, isCancelled, userData) =>")
         appendLine("            {")
         appendLine("                callbackHandle.Free();")
         appendLine("                var t = (TaskCompletionSource<TResult>)GCHandle.FromIntPtr(userData).Target!;")
         appendLine("                GCHandle.FromIntPtr(userData).Free();")
-        appendLine("                if (errorPtr != IntPtr.Zero)")
+        appendLine("                if (isCancelled != 0)")
+        appendLine("                {")
+        appendLine("                    t.TrySetCanceled();")
+        appendLine("                }")
+        appendLine("                else if (errorPtr != IntPtr.Zero)")
         appendLine("                {")
         appendLine("                    string msg = $marshalRef.FromHandle<string>(errorPtr);")
         appendLine("                    t.SetException(new KotlinException(msg));")
@@ -572,12 +581,16 @@ class CirRenderer {
         appendLine("            GCHandle tcsHandle = GCHandle.Alloc(tcs);")
         appendLine("            NugetAsyncCallback callback = null!;")
         appendLine("            GCHandle callbackHandle = default;")
-        appendLine("            callback = (resultPtr, errorPtr, userData) =>")
+        appendLine("            callback = (resultPtr, errorPtr, isCancelled, userData) =>")
         appendLine("            {")
         appendLine("                callbackHandle.Free();")
         appendLine("                var t = (TaskCompletionSource<bool>)GCHandle.FromIntPtr(userData).Target!;")
         appendLine("                GCHandle.FromIntPtr(userData).Free();")
-        appendLine("                if (errorPtr != IntPtr.Zero)")
+        appendLine("                if (isCancelled != 0)")
+        appendLine("                {")
+        appendLine("                    t.TrySetCanceled();")
+        appendLine("                }")
+        appendLine("                else if (errorPtr != IntPtr.Zero)")
         appendLine("                {")
         appendLine("                    string msg = $marshalRef.FromHandle<string>(errorPtr);")
         appendLine("                    t.SetException(new KotlinException(msg));")
@@ -621,12 +634,16 @@ class CirRenderer {
         appendLine("            GCHandle tcsHandle = GCHandle.Alloc(tcs);")
         appendLine("            NugetAsyncCallback callback = null!;")
         appendLine("            GCHandle callbackHandle = default;")
-        appendLine("            callback = (resultPtr, errorPtr, userData) =>")
+        appendLine("            callback = (resultPtr, errorPtr, isCancelled, userData) =>")
         appendLine("            {")
         appendLine("                callbackHandle.Free();")
         appendLine("                var t = (TaskCompletionSource<bool>)GCHandle.FromIntPtr(userData).Target!;")
         appendLine("                GCHandle.FromIntPtr(userData).Free();")
-        appendLine("                if (errorPtr != IntPtr.Zero)")
+        appendLine("                if (isCancelled != 0)")
+        appendLine("                {")
+        appendLine("                    t.TrySetCanceled();")
+        appendLine("                }")
+        appendLine("                else if (errorPtr != IntPtr.Zero)")
         appendLine("                {")
         appendLine("                    string msg = $marshalRef.FromHandle<string>(errorPtr);")
         appendLine("                    t.SetException(new KotlinException(msg));")
@@ -660,11 +677,26 @@ class CirRenderer {
 
   private fun StringBuilder.renderAsyncHelper(helper: CirAsyncHelper) {
     appendLine("    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]")
-    appendLine("    internal delegate void NugetAsyncCallback(IntPtr result, IntPtr error, IntPtr userData);")
+    appendLine("    internal delegate void NugetAsyncCallback(IntPtr result, IntPtr error, byte isCancelled, IntPtr userData);")
     appendLine()
     appendLine("    public class KotlinException : Exception")
     appendLine("    {")
     appendLine("        public KotlinException(string message) : base(message) { }")
+    appendLine("    }")
+    appendLine()
+  }
+
+  private fun StringBuilder.renderScopeHelper(helper: CirScopeHelper) {
+    appendLine("    internal static class NugetScopeNative")
+    appendLine("    {")
+    appendLine("        [DllImport(\"${helper.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"nuget_scope_create\")]")
+    appendLine("        internal static extern IntPtr Create();")
+    appendLine()
+    appendLine("        [DllImport(\"${helper.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"nuget_scope_cancel\")]")
+    appendLine("        internal static extern void Cancel(IntPtr handle);")
+    appendLine()
+    appendLine("        [DllImport(\"${helper.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"nuget_scope_dispose\")]")
+    appendLine("        internal static extern void Dispose(IntPtr handle);")
     appendLine("    }")
     appendLine()
   }
@@ -854,6 +886,9 @@ class CirRenderer {
 
     if (cls.superClass == null) {
       appendLine("        internal IntPtr _handle;")
+      if (cls.hasSuspendMethods) {
+        appendLine("        internal IntPtr _scopeHandle;")
+      }
       appendLine()
     }
 
@@ -862,7 +897,7 @@ class CirRenderer {
       appendLine("        [DllImport(\"${cls.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"${cls.nativePrefix}_create\")]")
       appendLine("        private static extern IntPtr Native_Create($ctorParamStr);")
       appendLine()
-      renderConstructor(cls.name, cls.constructor, cls.superClass != null)
+      renderConstructor(cls.name, cls.constructor, cls.superClass != null, cls.hasSuspendMethods)
     }
 
     if (cls.hasInternalHandleConstructor) {
@@ -874,6 +909,9 @@ class CirRenderer {
         appendLine("        internal ${cls.name}(IntPtr handle)")
         appendLine("        {")
         appendLine("            _handle = handle;")
+        if (cls.hasSuspendMethods) {
+          appendLine("            _scopeHandle = NugetScopeNative.Create();")
+        }
         appendLine("        }")
       }
       appendLine()
@@ -908,11 +946,11 @@ class CirRenderer {
         appendLine("        private static extern ${method.nativeReturnType} Native_${method.name}($nativeParams);")
         appendLine()
       }
-      renderMethod(method)
+      renderMethod(method, cls.name)
     }
 
     for (member in cls.companionMembers) {
-      renderMember(member)
+      renderMember(member, cls.name)
     }
 
     if (cls.isDataClass) {
@@ -920,13 +958,24 @@ class CirRenderer {
     }
 
     if (cls.disposable) {
-      renderDispose(cls.libraryName, cls.nativePrefix, cls.isAbstract, cls.superClass != null)
+      renderDispose(
+        libraryName = cls.libraryName,
+        nativePrefix = cls.nativePrefix,
+        isAbstract = cls.isAbstract,
+        hasSuperClass = cls.superClass != null,
+        hasSuspendMethods = cls.hasSuspendMethods,
+      )
     }
 
     appendLine("    }")
   }
 
-  private fun StringBuilder.renderConstructor(className: String, ctor: CirConstructor, hasSuperClass: Boolean = false) {
+  private fun StringBuilder.renderConstructor(
+    className: String,
+    ctor: CirConstructor,
+    hasSuperClass: Boolean = false,
+    hasSuspendMethods: Boolean = false,
+  ) {
     val paramStr: String = ctor.parameters.joinToString(", ") { "${it.type} ${it.name}" }
 
     if (hasSuperClass) {
@@ -938,6 +987,9 @@ class CirRenderer {
       appendLine("        public $className($paramStr)")
       appendLine("        {")
       appendLine("            ${ctor.body}")
+      if (hasSuspendMethods) {
+        appendLine("            _scopeHandle = NugetScopeNative.Create();")
+      }
       appendLine("        }")
     }
     appendLine()
@@ -974,10 +1026,10 @@ class CirRenderer {
     appendLine()
   }
 
-  private fun StringBuilder.renderMember(member: CirMember) {
+  private fun StringBuilder.renderMember(member: CirMember, className: String = "") {
     when (member) {
       is CirDllImport -> renderDllImport(member)
-      is CirMethod -> renderMethod(member)
+      is CirMethod -> renderMethod(member, className)
       is CirProperty -> renderProperty(member)
       is CirConst -> renderConst(member)
     }
@@ -1003,7 +1055,7 @@ class CirRenderer {
     "sbyte", "byte", "short", "ushort", "uint", "ulong",
   )
 
-  private fun StringBuilder.renderAsyncMethod(method: CirMethod) {
+  private fun StringBuilder.renderAsyncMethod(method: CirMethod, className: String = "") {
     val visibility: String = if (method.visibility == CirVisibility.PRIVATE) "private" else "public"
     val static: String = if (method.isStatic) "static " else ""
     val paramStr: String = method.parameters.joinToString(", ") { "${it.type} ${it.name}" }
@@ -1017,8 +1069,8 @@ class CirRenderer {
       if (paramNames.isEmpty()) "callback, GCHandle.ToIntPtr(tcsHandle)"
       else "$paramNames, callback, GCHandle.ToIntPtr(tcsHandle)"
     } else {
-      if (paramNames.isEmpty()) "_handle, callback, GCHandle.ToIntPtr(tcsHandle)"
-      else "_handle, $paramNames, callback, GCHandle.ToIntPtr(tcsHandle)"
+      if (paramNames.isEmpty()) "_handle, _scopeHandle, callback, GCHandle.ToIntPtr(tcsHandle)"
+      else "_handle, _scopeHandle, $paramNames, callback, GCHandle.ToIntPtr(tcsHandle)"
     }
 
     val resultExtraction: String = when {
@@ -1031,16 +1083,24 @@ class CirRenderer {
 
     appendLine("        $visibility ${static}${method.returnType} ${method.name}($paramStr)")
     appendLine("        {")
+    if (!method.isStatic && className.isNotEmpty()) {
+      appendLine("            if (_handle == IntPtr.Zero)")
+      appendLine("                throw new ObjectDisposedException(nameof($className));")
+    }
     appendLine("            var tcs = new $tcsType(TaskCreationOptions.RunContinuationsAsynchronously);")
     appendLine("            GCHandle tcsHandle = GCHandle.Alloc(tcs);")
     appendLine("            NugetAsyncCallback callback = null!;")
     appendLine("            GCHandle callbackHandle = default;")
-    appendLine("            callback = (resultPtr, errorPtr, userData) =>")
+    appendLine("            callback = (resultPtr, errorPtr, isCancelled, userData) =>")
     appendLine("            {")
     appendLine("                callbackHandle.Free();")
     appendLine("                var t = ($tcsType)GCHandle.FromIntPtr(userData).Target!;")
     appendLine("                GCHandle.FromIntPtr(userData).Free();")
-    appendLine("                if (errorPtr != IntPtr.Zero)")
+    appendLine("                if (isCancelled != 0)")
+    appendLine("                {")
+    appendLine("                    t.TrySetCanceled();")
+    appendLine("                }")
+    appendLine("                else if (errorPtr != IntPtr.Zero)")
     appendLine("                {")
     appendLine("                    string msg = NugetMarshal.FromHandle<string>(errorPtr);")
     appendLine("                    t.SetException(new KotlinException(msg));")
@@ -1057,9 +1117,9 @@ class CirRenderer {
     appendLine()
   }
 
-  private fun StringBuilder.renderMethod(method: CirMethod) {
+  private fun StringBuilder.renderMethod(method: CirMethod, className: String = "") {
     if (method.isAsync) {
-      renderAsyncMethod(method)
+      renderAsyncMethod(method, className)
       return
     }
 
@@ -1243,7 +1303,13 @@ class CirRenderer {
     appendLine()
   }
 
-  private fun StringBuilder.renderDispose(libraryName: String, nativePrefix: String, isAbstract: Boolean = false, hasSuperClass: Boolean = false) {
+  private fun StringBuilder.renderDispose(
+    libraryName: String,
+    nativePrefix: String,
+    isAbstract: Boolean = false,
+    hasSuperClass: Boolean = false,
+    hasSuspendMethods: Boolean = false,
+  ) {
     val abstract: String = if (isAbstract) "abstract " else ""
     val override: String = if (hasSuperClass) "override " else ""
 
@@ -1257,7 +1323,14 @@ class CirRenderer {
       appendLine("        {")
       appendLine("            if (_handle != IntPtr.Zero)")
       appendLine("            {")
+      if (hasSuspendMethods) {
+        appendLine("                NugetScopeNative.Cancel(_scopeHandle);")
+      }
       appendLine("                Native_Dispose(_handle);")
+      if (hasSuspendMethods) {
+        appendLine("                NugetScopeNative.Dispose(_scopeHandle);")
+        appendLine("                _scopeHandle = IntPtr.Zero;")
+      }
       appendLine("                _handle = IntPtr.Zero;")
       appendLine("            }")
       appendLine("        }")

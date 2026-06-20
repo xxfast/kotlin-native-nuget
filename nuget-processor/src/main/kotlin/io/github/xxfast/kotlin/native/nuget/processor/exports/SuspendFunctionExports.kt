@@ -69,6 +69,7 @@ internal fun FileSpec.Builder.addSuspendClassMethodExports(cls: KSClassDeclarati
     val builder: FunSpec.Builder = FunSpec.builder("export_${prefix}_${cname}_async")
       .addAnnotation(cNameAnnotation("${prefix}_${cname}_async"))
       .addParameter("handle", cOpaquePointer)
+      .addParameter("scopeHandle", cOpaquePointer)
 
     method.parameters.forEach { param ->
       val resolved = param.type.resolve().expandAliases()
@@ -92,20 +93,20 @@ private fun buildSuspendFunctionBody(
   isUnit: Boolean,
 ): String = buildString {
   appendLine("val fn = callbackPtr.reinterpret<CFunction<" +
-    "(COpaquePointer?, COpaquePointer?, COpaquePointer) -> Unit>>()")
+    "(COpaquePointer?, COpaquePointer?, Byte, COpaquePointer) -> Unit>>()")
   appendLine("CoroutineScope(Dispatchers.Default).launch {")
   appendLine("  try {")
   if (isUnit) {
     appendLine("    $funcName($paramCall)")
-    appendLine("    fn.invoke(null, null, userData)")
+    appendLine("    fn.invoke(null, null, 0.toByte(), userData)")
   } else {
     appendLine("    val result = $funcName($paramCall)")
     appendLine("    val resultRef = StableRef.create(result).asCPointer()")
-    appendLine("    fn.invoke(resultRef, null, userData)")
+    appendLine("    fn.invoke(resultRef, null, 0.toByte(), userData)")
   }
   appendLine("  } catch (e: Throwable) {")
   appendLine("    val errRef = StableRef.create(e.message ?: \"Kotlin error\").asCPointer()")
-  appendLine("    fn.invoke(null, errRef, userData)")
+  appendLine("    fn.invoke(null, errRef, 0.toByte(), userData)")
   appendLine("  }")
   append("}")
 }
@@ -117,21 +118,25 @@ private fun buildSuspendMethodBody(
   isUnit: Boolean,
 ): String = buildString {
   appendLine("val obj = handle.asStableRef<$qualifiedName>().get()")
+  appendLine("val scope = scopeHandle.asStableRef<CoroutineScope>().get()")
   appendLine("val fn = callbackPtr.reinterpret<CFunction<" +
-    "(COpaquePointer?, COpaquePointer?, COpaquePointer) -> Unit>>()")
-  appendLine("CoroutineScope(Dispatchers.Default).launch {")
+    "(COpaquePointer?, COpaquePointer?, Byte, COpaquePointer) -> Unit>>()")
+  appendLine("scope.launch {")
   appendLine("  try {")
   if (isUnit) {
     appendLine("    obj.$methodName($paramCall)")
-    appendLine("    fn.invoke(null, null, userData)")
+    appendLine("    fn.invoke(null, null, 0.toByte(), userData)")
   } else {
     appendLine("    val result = obj.$methodName($paramCall)")
     appendLine("    val resultRef = StableRef.create(result).asCPointer()")
-    appendLine("    fn.invoke(resultRef, null, userData)")
+    appendLine("    fn.invoke(resultRef, null, 0.toByte(), userData)")
   }
+  appendLine("  } catch (e: CancellationException) {")
+  appendLine("    fn.invoke(null, null, 1.toByte(), userData)")
+  appendLine("    throw e")
   appendLine("  } catch (e: Throwable) {")
   appendLine("    val errRef = StableRef.create(e.message ?: \"Kotlin error\").asCPointer()")
-  appendLine("    fn.invoke(null, errRef, userData)")
+  appendLine("    fn.invoke(null, errRef, 0.toByte(), userData)")
   appendLine("  }")
   append("}")
 }

@@ -50,6 +50,7 @@ data class CirClass(
   val isDataClass: Boolean = false,
   val isAbstract: Boolean = false,
   val companionMembers: List<CirMember> = emptyList(),
+  val hasSuspendMethods: Boolean = false,
 ) : CirDeclaration
 
 data class CirValueClass(
@@ -156,6 +157,10 @@ data class CirSuspendFuncHelper(
 ) : CirDeclaration
 
 data class CirAsyncHelper(
+  val libraryName: String,
+) : CirDeclaration
+
+data class CirScopeHelper(
   val libraryName: String,
 ) : CirDeclaration
 
