@@ -94,7 +94,7 @@ private fun buildSuspendFunctionBody(
 ): String = buildString {
   appendLine("val fn = callbackPtr.reinterpret<CFunction<" +
     "(COpaquePointer?, COpaquePointer?, Byte, COpaquePointer) -> Unit>>()")
-  appendLine("CoroutineScope(Dispatchers.Default).launch {")
+  appendLine("CoroutineScope(Dispatchers.Default).launch(start = CoroutineStart.ATOMIC) {")
   appendLine("  try {")
   if (isUnit) {
     appendLine("    $funcName($paramCall)")
@@ -121,7 +121,7 @@ private fun buildSuspendMethodBody(
   appendLine("val scope = scopeHandle.asStableRef<CoroutineScope>().get()")
   appendLine("val fn = callbackPtr.reinterpret<CFunction<" +
     "(COpaquePointer?, COpaquePointer?, Byte, COpaquePointer) -> Unit>>()")
-  appendLine("scope.launch {")
+  appendLine("scope.launch(start = CoroutineStart.ATOMIC) {")
   appendLine("  try {")
   if (isUnit) {
     appendLine("    obj.$methodName($paramCall)")

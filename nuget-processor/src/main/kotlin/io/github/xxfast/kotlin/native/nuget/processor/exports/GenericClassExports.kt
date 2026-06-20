@@ -489,7 +489,7 @@ internal fun FileSpec.Builder.addNugetSuspendFunc0HelperExports() {
         appendLine("val fn = handle.asStableRef<SuspendFunction0<*>>().get()")
         appendLine("val callback = callbackPtr.reinterpret<CFunction<")
         appendLine("  (COpaquePointer?, COpaquePointer?, Byte, COpaquePointer) -> Unit>>()")
-        appendLine("CoroutineScope(Dispatchers.Default).launch {")
+        appendLine("CoroutineScope(Dispatchers.Default).launch(start = CoroutineStart.ATOMIC) {")
         appendLine("  try {")
         appendLine("    val result = fn.invoke()")
         appendLine("    if (result == Unit) {")
@@ -521,7 +521,7 @@ internal fun FileSpec.Builder.addNugetSuspendFunc1HelperExports() {
         appendLine("val param0 = arg0.asStableRef<Any>().get()")
         appendLine("val callback = callbackPtr.reinterpret<CFunction<")
         appendLine("  (COpaquePointer?, COpaquePointer?, Byte, COpaquePointer) -> Unit>>()")
-        appendLine("CoroutineScope(Dispatchers.Default).launch {")
+        appendLine("CoroutineScope(Dispatchers.Default).launch(start = CoroutineStart.ATOMIC) {")
         appendLine("  try {")
         appendLine("    val result = fn.invoke(param0)")
         appendLine("    if (result == Unit) {")
@@ -558,7 +558,10 @@ internal fun FileSpec.Builder.addNugetScopeHelperExports() {
   addFunction(
     FunSpec.builder("export_nuget_scope_cancel")
       .addAnnotation(cNameAnnotation("nuget_scope_cancel"))
-      .addParameter("handle", cOpaquePointer)
+      .addParameter("handle", cOpaquePointer.copy(nullable = true))
+      .beginControlFlow("if (handle == null)")
+      .addStatement("return")
+      .endControlFlow()
       .addStatement(
         "handle.asStableRef<%T>().get().cancel()",
         ClassName("kotlinx.coroutines", "CoroutineScope"),
@@ -569,7 +572,10 @@ internal fun FileSpec.Builder.addNugetScopeHelperExports() {
   addFunction(
     FunSpec.builder("export_nuget_scope_dispose")
       .addAnnotation(cNameAnnotation("nuget_scope_dispose"))
-      .addParameter("handle", cOpaquePointer)
+      .addParameter("handle", cOpaquePointer.copy(nullable = true))
+      .beginControlFlow("if (handle == null)")
+      .addStatement("return")
+      .endControlFlow()
       .addStatement(
         "handle.asStableRef<%T>().dispose()",
         ClassName("kotlinx.coroutines", "CoroutineScope"),

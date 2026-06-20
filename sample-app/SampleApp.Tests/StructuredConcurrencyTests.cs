@@ -58,4 +58,35 @@ public class StructuredConcurrencyTests
         }
         await Assert.ThrowsAsync<TaskCanceledException>(() => task);
     }
+
+    [Fact]
+    public async Task ChildCoroutine_CancelsWithParentOnDispose()
+    {
+        Task<string> task;
+        using (var service = new CatNapService())
+        {
+            // napWithDream launches a child coroutine internally via coroutineScope { launch { ... } }
+            task = service.NapWithDreamAsync();
+            await Task.Delay(50);
+        } // Dispose() cancels the parent, which should propagate to the child coroutine
+        await Assert.ThrowsAsync<TaskCanceledException>(() => task);
+    }
+
+    [Fact]
+    public void DoubleDispose_DoesNotThrow()
+    {
+        var service = new CatNapService();
+        service.Dispose();
+        service.Dispose();
+    }
+
+    [Fact]
+    public async Task ConcurrentDispose_DoesNotThrow()
+    {
+        var service = new CatNapService();
+        var tasks = Enumerable.Range(0, 10)
+            .Select(_ => Task.Run(() => service.Dispose()))
+            .ToArray();
+        await Task.WhenAll(tasks);
+    }
 }

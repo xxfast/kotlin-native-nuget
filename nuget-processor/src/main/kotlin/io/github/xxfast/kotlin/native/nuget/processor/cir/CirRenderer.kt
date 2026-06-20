@@ -890,6 +890,23 @@ class CirRenderer {
         appendLine("        internal IntPtr _scopeHandle;")
       }
       appendLine()
+
+      if (cls.hasSuspendMethods) {
+        appendLine("        private IntPtr GetOrCreateScope()")
+        appendLine("        {")
+        appendLine("            IntPtr existing = _scopeHandle;")
+        appendLine("            if (existing != IntPtr.Zero) return existing;")
+        appendLine("            IntPtr created = NugetScopeNative.Create();")
+        appendLine("            IntPtr prior = Interlocked.CompareExchange(ref _scopeHandle, created, IntPtr.Zero);")
+        appendLine("            if (prior != IntPtr.Zero)")
+        appendLine("            {")
+        appendLine("                NugetScopeNative.Dispose(created);")
+        appendLine("                return prior;")
+        appendLine("            }")
+        appendLine("            return created;")
+        appendLine("        }")
+        appendLine()
+      }
     }
 
     if (cls.constructor != null && !cls.isAbstract) {
@@ -909,9 +926,6 @@ class CirRenderer {
         appendLine("        internal ${cls.name}(IntPtr handle)")
         appendLine("        {")
         appendLine("            _handle = handle;")
-        if (cls.hasSuspendMethods) {
-          appendLine("            _scopeHandle = NugetScopeNative.Create();")
-        }
         appendLine("        }")
       }
       appendLine()
@@ -987,9 +1001,6 @@ class CirRenderer {
       appendLine("        public $className($paramStr)")
       appendLine("        {")
       appendLine("            ${ctor.body}")
-      if (hasSuspendMethods) {
-        appendLine("            _scopeHandle = NugetScopeNative.Create();")
-      }
       appendLine("        }")
     }
     appendLine()
@@ -1069,8 +1080,8 @@ class CirRenderer {
       if (paramNames.isEmpty()) "callback, GCHandle.ToIntPtr(tcsHandle)"
       else "$paramNames, callback, GCHandle.ToIntPtr(tcsHandle)"
     } else {
-      if (paramNames.isEmpty()) "_handle, _scopeHandle, callback, GCHandle.ToIntPtr(tcsHandle)"
-      else "_handle, _scopeHandle, $paramNames, callback, GCHandle.ToIntPtr(tcsHandle)"
+      if (paramNames.isEmpty()) "_handle, GetOrCreateScope(), callback, GCHandle.ToIntPtr(tcsHandle)"
+      else "_handle, GetOrCreateScope(), $paramNames, callback, GCHandle.ToIntPtr(tcsHandle)"
     }
 
     val resultExtraction: String = when {
@@ -1321,18 +1332,17 @@ class CirRenderer {
       appendLine()
       appendLine("        public ${override}void Dispose()")
       appendLine("        {")
-      appendLine("            if (_handle != IntPtr.Zero)")
-      appendLine("            {")
+      appendLine("            IntPtr handle = Interlocked.Exchange(ref _handle, IntPtr.Zero);")
+      appendLine("            if (handle == IntPtr.Zero) return;")
       if (hasSuspendMethods) {
-        appendLine("                NugetScopeNative.Cancel(_scopeHandle);")
+        appendLine("            IntPtr scopeHandle = Interlocked.Exchange(ref _scopeHandle, IntPtr.Zero);")
+        appendLine("            if (scopeHandle != IntPtr.Zero)")
+        appendLine("            {")
+        appendLine("                NugetScopeNative.Cancel(scopeHandle);")
+        appendLine("                NugetScopeNative.Dispose(scopeHandle);")
+        appendLine("            }")
       }
-      appendLine("                Native_Dispose(_handle);")
-      if (hasSuspendMethods) {
-        appendLine("                NugetScopeNative.Dispose(_scopeHandle);")
-        appendLine("                _scopeHandle = IntPtr.Zero;")
-      }
-      appendLine("                _handle = IntPtr.Zero;")
-      appendLine("            }")
+      appendLine("            Native_Dispose(handle);")
       appendLine("        }")
     }
   }

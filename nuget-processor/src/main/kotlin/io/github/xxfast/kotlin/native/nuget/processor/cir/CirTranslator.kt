@@ -259,6 +259,7 @@ fun translate(
   }
   if (tracker.needsAsync) {
     usings.add("System.Runtime.CompilerServices")
+    usings.add("System.Threading")
     usings.add("System.Threading.Tasks")
   }
 

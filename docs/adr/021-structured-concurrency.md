@@ -391,3 +391,30 @@ Top-level suspend functions have no associated class instance and no natural lif
 - Top-level suspend function scope — no natural lifecycle owner
 - Suspend lambda structured cancellation — needs a separate mechanism
 - Sealed class / abstract class hierarchy scope management
+
+## Further Refinements
+
+### 1. Coroutine Cancellation before Dispatch (`CoroutineStart.ATOMIC`)
+Using `CoroutineStart.DEFAULT` to launch coroutines in the exported methods creates a race condition where a coroutine cancelled before it starts executing never runs its body. As a result, the `catch (e: CancellationException)` block is skipped, and the callback is never invoked, leading to a permanent `GCHandle` leak.
+* **Resolution**: Launch all exported suspend coroutines using `CoroutineStart.ATOMIC` to ensure the cancellation handler and callback always execute.
+
+### 2. Thread Safety of Dispose
+Concurrent invocation of methods and `Dispose()` on C# wrappers can cause the C# wrapper to pass disposed or zeroed handles to the native bridge.
+* **Resolution**: Introduce thread-safe state checks or locking mechanisms around handle access and disposal in the generated C# classes.
+
+### 3. Null-Pointer Protection on Export Helpers
+If constructor initialization fails or class hierarchies are disposed out of order, the `_scopeHandle` might be `IntPtr.Zero`. Passing a null pointer to `nuget_scope_cancel` or `nuget_scope_dispose` will crash the Kotlin runtime.
+* **Resolution**: Add defensive null-pointer checks in the export functions:
+  ```kotlin
+  @CName("nuget_scope_cancel")
+  fun export_nuget_scope_cancel(handle: COpaquePointer?) {
+      if (handle != null) {
+          handle.asStableRef<CoroutineScope>().get().cancel()
+      }
+  }
+  ```
+
+### 4. Lazy Scope Allocation
+Creating a scope on class instantiation adds memory and GC overhead, even if no async methods are called.
+* **Resolution**: Consider lazily allocating the `CoroutineScope` using C#'s `Interlocked.CompareExchange` upon the first invocation of an async method.
+

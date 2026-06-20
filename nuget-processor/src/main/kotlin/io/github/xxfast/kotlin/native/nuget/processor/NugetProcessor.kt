@@ -254,9 +254,10 @@ class NugetProcessor(
       .addAnnotation(
         AnnotationSpec.builder(ClassName("kotlin", "OptIn"))
           .addMember(
-            "%T::class, %T::class",
+            "%T::class, %T::class, %T::class",
             ClassName("kotlin.experimental", "ExperimentalNativeApi"),
             ClassName("kotlinx.cinterop", "ExperimentalForeignApi"),
+            ClassName("kotlinx.coroutines", "ExperimentalCoroutinesApi"),
           )
           .build()
       )
@@ -312,11 +313,13 @@ class NugetProcessor(
           addImport("kotlinx.cinterop", "CFunction")
           addImport("kotlinx.cinterop", "COpaquePointer")
           addImport("kotlinx.coroutines", "CoroutineScope")
+          addImport("kotlinx.coroutines", "CoroutineStart")
           addImport("kotlinx.coroutines", "Dispatchers")
           addImport("kotlinx.coroutines", "launch")
           addImport("kotlinx.coroutines", "SupervisorJob")
           addImport("kotlinx.coroutines", "cancel")
           addImport("kotlinx.coroutines", "CancellationException")
+          addImport("kotlinx.coroutines", "ExperimentalCoroutinesApi")
         }
 
         if (needsSuspendLambdaSupport) {
