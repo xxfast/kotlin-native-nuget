@@ -65,8 +65,8 @@
 - [x] Map inline functions with reified type parameters (e.g., `inline fun <reified T> f()`)
 - [x] Map generic type aliases (see [ADR-018](docs/adr/018-type-alias-mapping.md))
 - [x] Map exception propagation across the bridge (see [ADR-023](docs/adr/023-exception-propagation.md))
-- [ ] Propagate Kotlin stack trace as `KotlinException.KotlinStackTrace` property
 - [ ] Map synchronous exception propagation (non-suspend functions currently crash instead of throwing)
+- [ ] Propagate Kotlin stack trace as `KotlinException.KotlinStackTrace` property
 - [ ] Map exception cause chain (`e.cause` → `InnerException`)
 - [ ] Map core Kotlin exceptions to .NET analogs (e.g., `IllegalArgumentException` → `ArgumentException`) with `IKotlinException` interface
 
