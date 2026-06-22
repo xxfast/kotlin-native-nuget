@@ -64,6 +64,8 @@
 - [x] Map inline functions (e.g., `inline fun f()`) (see [ADR-017](docs/adr/017-inline-function-mapping.md))
 - [x] Map inline functions with reified type parameters (e.g., `inline fun <reified T> f()`)
 - [x] Map generic type aliases (see [ADR-018](docs/adr/018-type-alias-mapping.md))
+
+## Phase 5: Exception handling
 - [x] Map exception propagation across the bridge (see [ADR-023](docs/adr/023-exception-propagation.md))
 - [x] Map synchronous exception propagation (see [ADR-024](docs/adr/024-sync-exception-propagation.md))
 - [ ] Propagate Kotlin stack trace as `KotlinException.KotlinStackTrace` property
@@ -72,7 +74,7 @@
 - [ ] Map property getter/setter exception propagation (deferred from ADR-024)
 - [ ] Map constructor exception propagation (deferred from ADR-024)
 
-## Phase 5: Async support
+## Phase 6: Async support
 - [x] Map Suspend functions (coroutines → Task/async) (see [ADR-019](docs/adr/019-suspend-function-mapping.md))
 - [x] Map Suspend lambdas (`suspend () -> R` → `KotlinSuspendFunc<R>` / `Task<R>`) (see [ADR-020](docs/adr/020-suspend-lambda-mapping.md))
 - [x] Support structured concurrency (see [ADR-021](docs/adr/021-structured-concurrency.md))
@@ -81,7 +83,7 @@
 - [ ] Support `IAsyncDisposable` / graceful drain for in-flight async operations
 - [ ] Map Flow APIs (cold streams → IAsyncEnumerable or RxObservables)
 
-## Phase 6: Bidirectional support (C# → Kotlin)
+## Phase 7: Bidirectional support (C# → Kotlin)
 - [ ] Research calling C# from Kotlin/Native (reverse P/Invoke, function pointers)
 - [ ] Map lambda/function types — C# → Kotlin (see [ADR-012](docs/adr/012-lambda-function-type-mapping.md))
 - [ ] Generate Kotlin wrappers for C# interfaces (callbacks, event handlers)
