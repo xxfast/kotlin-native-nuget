@@ -51,17 +51,34 @@ internal fun FileSpec.Builder.addObjectExports(obj: KSClassDeclaration) {
       )
     }
 
+    builder.addParameter("errorOut", cOpaquePointer.copy(nullable = true))
+
     if (methodReturn == "kotlin.Unit") {
-      builder.addStatement(
-        "%L.%L(%L)",
-        qualifiedName, methodName, methodParamCall,
-      )
+      builder.addCode(buildString {
+        appendLine("try {")
+        appendLine("  %L.%L(%L)")
+        appendLine("} catch (e: Throwable) {")
+        appendLine("  if (errorOut != null) {")
+        appendLine("    errorOut.reinterpret<%T>().pointed.value = %T.create(")
+        appendLine("      Pair(e::class.qualifiedName ?: e::class.simpleName ?: \"UnknownException\", e.message ?: \"Kotlin error\")")
+        appendLine("    ).asCPointer()")
+        appendLine("  }")
+        append("}")
+      }, qualifiedName, methodName, methodParamCall, cOpaquePointerVar, stableRef)
     } else {
       builder.returns(ClassName.bestGuess(methodReturn))
-      builder.addStatement(
-        "return %L.%L(%L)",
-        qualifiedName, methodName, methodParamCall,
-      )
+      builder.addCode(buildString {
+        appendLine("return try {")
+        appendLine("  %L.%L(%L)")
+        appendLine("} catch (e: Throwable) {")
+        appendLine("  if (errorOut != null) {")
+        appendLine("    errorOut.reinterpret<%T>().pointed.value = %T.create(")
+        appendLine("      Pair(e::class.qualifiedName ?: e::class.simpleName ?: \"UnknownException\", e.message ?: \"Kotlin error\")")
+        appendLine("    ).asCPointer()")
+        appendLine("  }")
+        appendLine("  ${defaultValueFor(methodReturn)}")
+        append("}")
+      }, qualifiedName, methodName, methodParamCall, cOpaquePointerVar, stableRef)
     }
 
     addFunction(builder.build())

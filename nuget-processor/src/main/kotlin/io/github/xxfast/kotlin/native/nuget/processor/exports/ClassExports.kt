@@ -300,17 +300,34 @@ internal fun FileSpec.Builder.addClassExports(cls: KSClassDeclaration) {
       )
     }
 
+    builder.addParameter("errorOut", cOpaquePointer.copy(nullable = true))
+
     if (methodReturn == "kotlin.Unit") {
-      builder.addStatement(
-        "handle.asStableRef<%L>().get().%L(%L)",
-        qualifiedName, methodName, methodParamCall,
-      )
+      builder.addCode(buildString {
+        appendLine("try {")
+        appendLine("  handle.asStableRef<%L>().get().%L(%L)")
+        appendLine("} catch (e: Throwable) {")
+        appendLine("  if (errorOut != null) {")
+        appendLine("    errorOut.reinterpret<%T>().pointed.value = %T.create(")
+        appendLine("      Pair(e::class.qualifiedName ?: e::class.simpleName ?: \"UnknownException\", e.message ?: \"Kotlin error\")")
+        appendLine("    ).asCPointer()")
+        appendLine("  }")
+        append("}")
+      }, qualifiedName, methodName, methodParamCall, cOpaquePointerVar, stableRef)
     } else {
       builder.returns(ClassName.bestGuess(methodReturn))
-      builder.addStatement(
-        "return handle.asStableRef<%L>().get().%L(%L)",
-        qualifiedName, methodName, methodParamCall,
-      )
+      builder.addCode(buildString {
+        appendLine("return try {")
+        appendLine("  handle.asStableRef<%L>().get().%L(%L)")
+        appendLine("} catch (e: Throwable) {")
+        appendLine("  if (errorOut != null) {")
+        appendLine("    errorOut.reinterpret<%T>().pointed.value = %T.create(")
+        appendLine("      Pair(e::class.qualifiedName ?: e::class.simpleName ?: \"UnknownException\", e.message ?: \"Kotlin error\")")
+        appendLine("    ).asCPointer()")
+        appendLine("  }")
+        appendLine("  ${defaultValueFor(methodReturn)}")
+        append("}")
+      }, qualifiedName, methodName, methodParamCall, cOpaquePointerVar, stableRef)
     }
 
     addFunction(builder.build())
@@ -439,23 +456,48 @@ internal fun FileSpec.Builder.addCompanionExports(cls: KSClassDeclaration) {
         "kotlin.Float", "kotlin.Double", "kotlin.Boolean", "kotlin.Unit",
       ))
 
+    builder.addParameter("errorOut", cOpaquePointer.copy(nullable = true))
+
     if (isObjectReturn) {
-      builder.returns(cOpaquePointer)
-      builder.addStatement(
-        "return %T.create(%L.%L(%L)).asCPointer()",
-        stableRef, qualifiedName, methodName, methodParamCall,
-      )
+      builder.returns(cOpaquePointer.copy(nullable = true))
+      builder.addCode(buildString {
+        appendLine("return try {")
+        appendLine("  %T.create(%L.%L(%L)).asCPointer()")
+        appendLine("} catch (e: Throwable) {")
+        appendLine("  if (errorOut != null) {")
+        appendLine("    errorOut.reinterpret<%T>().pointed.value = %T.create(")
+        appendLine("      Pair(e::class.qualifiedName ?: e::class.simpleName ?: \"UnknownException\", e.message ?: \"Kotlin error\")")
+        appendLine("    ).asCPointer()")
+        appendLine("  }")
+        appendLine("  null")
+        append("}")
+      }, stableRef, qualifiedName, methodName, methodParamCall, cOpaquePointerVar, stableRef)
     } else if (methodReturn == "kotlin.Unit") {
-      builder.addStatement(
-        "%L.%L(%L)",
-        qualifiedName, methodName, methodParamCall,
-      )
+      builder.addCode(buildString {
+        appendLine("try {")
+        appendLine("  %L.%L(%L)")
+        appendLine("} catch (e: Throwable) {")
+        appendLine("  if (errorOut != null) {")
+        appendLine("    errorOut.reinterpret<%T>().pointed.value = %T.create(")
+        appendLine("      Pair(e::class.qualifiedName ?: e::class.simpleName ?: \"UnknownException\", e.message ?: \"Kotlin error\")")
+        appendLine("    ).asCPointer()")
+        appendLine("  }")
+        append("}")
+      }, qualifiedName, methodName, methodParamCall, cOpaquePointerVar, stableRef)
     } else {
       builder.returns(ClassName.bestGuess(methodReturn))
-      builder.addStatement(
-        "return %L.%L(%L)",
-        qualifiedName, methodName, methodParamCall,
-      )
+      builder.addCode(buildString {
+        appendLine("return try {")
+        appendLine("  %L.%L(%L)")
+        appendLine("} catch (e: Throwable) {")
+        appendLine("  if (errorOut != null) {")
+        appendLine("    errorOut.reinterpret<%T>().pointed.value = %T.create(")
+        appendLine("      Pair(e::class.qualifiedName ?: e::class.simpleName ?: \"UnknownException\", e.message ?: \"Kotlin error\")")
+        appendLine("    ).asCPointer()")
+        appendLine("  }")
+        appendLine("  ${defaultValueFor(methodReturn)}")
+        append("}")
+      }, qualifiedName, methodName, methodParamCall, cOpaquePointerVar, stableRef)
     }
 
     addFunction(builder.build())

@@ -51,11 +51,34 @@ internal fun FileSpec.Builder.addExtensionFunctionExports(func: KSFunctionDeclar
   val callExpr: String = if (paramCall.isEmpty()) "$receiverExpr.$funcName()"
     else "$receiverExpr.$funcName($paramCall)"
 
+  builder.addParameter("errorOut", cOpaquePointer.copy(nullable = true))
+
   if (qualifiedReturn == "kotlin.Unit") {
-    builder.addStatement(callExpr)
+    builder.addCode(buildString {
+      appendLine("try {")
+      appendLine("  $callExpr")
+      appendLine("} catch (e: Throwable) {")
+      appendLine("  if (errorOut != null) {")
+      appendLine("    errorOut.reinterpret<%T>().pointed.value = %T.create(")
+      appendLine("      Pair(e::class.qualifiedName ?: e::class.simpleName ?: \"UnknownException\", e.message ?: \"Kotlin error\")")
+      appendLine("    ).asCPointer()")
+      appendLine("  }")
+      append("}")
+    }, cOpaquePointerVar, stableRef)
   } else {
     builder.returns(ClassName.bestGuess(qualifiedReturn))
-    builder.addStatement("return $callExpr")
+    builder.addCode(buildString {
+      appendLine("return try {")
+      appendLine("  $callExpr")
+      appendLine("} catch (e: Throwable) {")
+      appendLine("  if (errorOut != null) {")
+      appendLine("    errorOut.reinterpret<%T>().pointed.value = %T.create(")
+      appendLine("      Pair(e::class.qualifiedName ?: e::class.simpleName ?: \"UnknownException\", e.message ?: \"Kotlin error\")")
+      appendLine("    ).asCPointer()")
+      appendLine("  }")
+      appendLine("  ${defaultValueFor(qualifiedReturn)}")
+      append("}")
+    }, cOpaquePointerVar, stableRef)
   }
 
   addFunction(builder.build())

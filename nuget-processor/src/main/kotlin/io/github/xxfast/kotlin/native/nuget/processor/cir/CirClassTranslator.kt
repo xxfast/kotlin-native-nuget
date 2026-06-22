@@ -387,6 +387,7 @@ internal fun translateClass(
         body = body,
         isAbstract = isMethodAbstract,
         isOverride = isOverride,
+        isSyncErrorCheckEnabled = !isMethodAbstract,
       )
     }.toList()
 

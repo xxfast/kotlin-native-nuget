@@ -8,7 +8,21 @@ import io.github.xxfast.kotlin.native.nuget.processor.cir.expandAliases
 
 internal val cNameAnnotation = ClassName("kotlin.native", "CName")
 internal val cOpaquePointer = ClassName("kotlinx.cinterop", "COpaquePointer")
+internal val cOpaquePointerVar = ClassName("kotlinx.cinterop", "COpaquePointerVar")
 internal val stableRef = ClassName("kotlinx.cinterop", "StableRef")
+
+internal fun defaultValueFor(qualifiedReturn: String): String = when (qualifiedReturn) {
+  "kotlin.Boolean" -> "false"
+  "kotlin.String" -> "\"\""
+  "kotlin.Float" -> "0.0f"
+  "kotlin.Double" -> "0.0"
+  "kotlin.UByte" -> "0.toUByte()"
+  "kotlin.UShort" -> "0.toUShort()"
+  "kotlin.UInt" -> "0u"
+  "kotlin.ULong" -> "0uL"
+  "kotlin.Unit" -> ""
+  else -> if (qualifiedReturn.startsWith("kotlin.")) "0" else "null"
+}
 
 internal fun FunSpec.Builder.addParameters(
   func: KSFunctionDeclaration,

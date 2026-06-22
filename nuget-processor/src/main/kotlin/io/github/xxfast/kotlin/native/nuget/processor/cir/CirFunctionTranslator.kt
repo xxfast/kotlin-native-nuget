@@ -346,14 +346,29 @@ internal fun translateFunction(
       name = "${csName}_native",
       parameters = params,
       visibility = CirVisibility.PRIVATE,
+      hasSyncErrorOut = true,
     )
 
     val paramNames: String = params.joinToString(", ") { it.name }
+    val nativeCallArgs: String = if (paramNames.isEmpty()) "out IntPtr error" else "$paramNames, out IntPtr error"
+    val body: String = buildString {
+      appendLine()
+      appendLine("            IntPtr nativeResult = ${csName}_native($nativeCallArgs);")
+      appendLine("            if (error != IntPtr.Zero)")
+      appendLine("            {")
+      appendLine("                string kotlinType = NugetErrorNative.Type(error);")
+      appendLine("                string msg = NugetErrorNative.Message(error);")
+      appendLine("                NugetMarshal.Dispose(error);")
+      appendLine("                throw new KotlinException(kotlinType, msg);")
+      appendLine("            }")
+      append("            return new $kotlinReturnType<$typeArgs>(nativeResult);")
+    }
+
     val wrapper = CirMethod(
       name = csName,
       returnType = "$kotlinReturnType<$typeArgs>",
       parameters = params,
-      body = "new $kotlinReturnType<$typeArgs>(${csName}_native($paramNames))",
+      body = body,
       isStatic = true,
     )
 
@@ -370,14 +385,29 @@ internal fun translateFunction(
       name = "${csName}_native",
       parameters = params,
       visibility = CirVisibility.PRIVATE,
+      hasSyncErrorOut = true,
     )
 
     val paramNames: String = params.joinToString(", ") { it.name }
+    val nativeCallArgs: String = if (paramNames.isEmpty()) "out IntPtr error" else "$paramNames, out IntPtr error"
+    val body: String = buildString {
+      appendLine()
+      appendLine("            IntPtr nativeResult = ${csName}_native($nativeCallArgs);")
+      appendLine("            if (error != IntPtr.Zero)")
+      appendLine("            {")
+      appendLine("                string kotlinType = NugetErrorNative.Type(error);")
+      appendLine("                string msg = NugetErrorNative.Message(error);")
+      appendLine("                NugetMarshal.Dispose(error);")
+      appendLine("                throw new KotlinException(kotlinType, msg);")
+      appendLine("            }")
+      append("            return $kotlinReturnType.FromHandle(nativeResult);")
+    }
+
     val wrapper = CirMethod(
       name = csName,
       returnType = kotlinReturnType,
       parameters = params,
-      body = "$kotlinReturnType.FromHandle(${csName}_native($paramNames))",
+      body = body,
       isStatic = true,
     )
 
@@ -387,20 +417,25 @@ internal fun translateFunction(
   if (kotlinReturnType == "String") {
     val nativeImport = CirDllImport(
       libraryName = libraryName,
-      entryPoint = entryPoint,
+      entryPoint = cname,
       returnType = "IntPtr",
       name = "${csName}_native",
       parameters = params,
       visibility = CirVisibility.PRIVATE,
+      hasSyncErrorOut = true,
     )
 
     val paramNames: String = params.joinToString(", ") { it.name }
+    val nativeCallArgs: String = if (paramNames.isEmpty()) "out IntPtr error" else "$paramNames, out IntPtr error"
     val wrapper = CirMethod(
       name = csName,
       returnType = "string",
+      nativeReturnType = "IntPtr",
+      nativeName = "${csName}_native",
       parameters = params,
-      body = "Marshal.PtrToStringUTF8(${csName}_native($paramNames))!",
+      body = "Marshal.PtrToStringUTF8(${csName}_native($nativeCallArgs))!",
       isStatic = true,
+      isSyncErrorCheckEnabled = true,
     )
 
     return listOf(nativeImport, wrapper)
@@ -415,15 +450,33 @@ internal fun translateFunction(
     return emptyList()
   }
 
-  return listOf(
-    CirDllImport(
-      libraryName = libraryName,
-      entryPoint = entryPoint,
-      returnType = mapReturnType(kotlinReturnType),
-      name = csName,
-      parameters = params,
-    )
+  val csReturnType: String = mapReturnType(kotlinReturnType)
+  val isVoidReturn: Boolean = kotlinReturnType == "Unit"
+
+  val nativeImport = CirDllImport(
+    libraryName = libraryName,
+    entryPoint = cname,
+    returnType = csReturnType,
+    name = "${csName}_native",
+    parameters = params,
+    visibility = CirVisibility.PRIVATE,
+    hasSyncErrorOut = true,
   )
+
+  val paramNames: String = params.joinToString(", ") { it.name }
+  val nativeCallArgs: String = if (paramNames.isEmpty()) "out IntPtr error" else "$paramNames, out IntPtr error"
+
+  val wrapper = CirMethod(
+    name = csName,
+    returnType = if (isVoidReturn) "void" else csReturnType,
+    nativeName = "${csName}_native",
+    parameters = params,
+    body = if (isVoidReturn) "${csName}_native($nativeCallArgs)" else "${csName}_native($nativeCallArgs)",
+    isStatic = true,
+    isSyncErrorCheckEnabled = true,
+  )
+
+  return listOf(nativeImport, wrapper)
 }
 
 internal fun translateSuspendFunction(

@@ -264,6 +264,11 @@ class NugetProcessor(
           .build()
       )
       .addImport("kotlinx.cinterop", "asStableRef")
+      .addImport("kotlinx.cinterop", "COpaquePointerVar")
+      .addImport("kotlinx.cinterop", "reinterpret")
+      .addImport("kotlinx.cinterop", "pointed")
+      .addImport("kotlinx.cinterop", "value")
+      .addImport("kotlinx.cinterop", "StableRef")
       .apply {
         functions.forEach { func ->
           addImport(func.packageName.asString(), func.simpleName.asString())
@@ -483,7 +488,7 @@ class NugetProcessor(
           classesHaveSuspendMethods
         if (needsScopeHelpers) addNugetScopeHelperExports()
         if (needsScopeHelpers) addNugetJobHelperExports()
-        if (needsScopeHelpers) addNugetErrorHelperExports()
+        addNugetErrorHelperExports()
       }
       .build()
 

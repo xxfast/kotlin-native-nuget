@@ -58,17 +58,42 @@ internal fun FileSpec.Builder.addGenericFunctionExports(func: KSFunctionDeclarat
         FunSpec.builder("export_$cname")
           .addAnnotation(cNameAnnotation(cname))
           .addParameter(paramName, kotlinTypeClass(kotlinType))
-          .returns(cOpaquePointer)
-          .addStatement("return %T.create(%L(%L)).asCPointer()", stableRef, funcName, paramName)
+          .addParameter("errorOut", cOpaquePointer.copy(nullable = true))
+          .returns(cOpaquePointer.copy(nullable = true))
+          .addCode(buildString {
+            appendLine("return try {")
+            appendLine("  %T.create(%L(%L)).asCPointer()")
+            appendLine("} catch (e: Throwable) {")
+            appendLine("  if (errorOut != null) {")
+            appendLine("    errorOut.reinterpret<%T>().pointed.value = %T.create(")
+            appendLine("      Pair(e::class.qualifiedName ?: e::class.simpleName ?: \"UnknownException\", e.message ?: \"Kotlin error\")")
+            appendLine("    ).asCPointer()")
+            appendLine("  }")
+            appendLine("  null")
+            append("}")
+          }, stableRef, funcName, paramName, cOpaquePointerVar, stableRef)
           .build()
       )
     } else if (returnDecl == typeParamName) {
+      val qualifiedKotlinType: String = "kotlin.$kotlinType"
       addFunction(
         FunSpec.builder("export_$cname")
           .addAnnotation(cNameAnnotation(cname))
           .addParameter(paramName, kotlinTypeClass(kotlinType))
+          .addParameter("errorOut", cOpaquePointer.copy(nullable = true))
           .returns(kotlinTypeClass(kotlinType))
-          .addStatement("return %L(%L)", funcName, paramName)
+          .addCode(buildString {
+            appendLine("return try {")
+            appendLine("  %L(%L)")
+            appendLine("} catch (e: Throwable) {")
+            appendLine("  if (errorOut != null) {")
+            appendLine("    errorOut.reinterpret<%T>().pointed.value = %T.create(")
+            appendLine("      Pair(e::class.qualifiedName ?: e::class.simpleName ?: \"UnknownException\", e.message ?: \"Kotlin error\")")
+            appendLine("    ).asCPointer()")
+            appendLine("  }")
+            appendLine("  ${defaultValueFor(qualifiedKotlinType)}")
+            append("}")
+          }, funcName, paramName, cOpaquePointerVar, stableRef)
           .build()
       )
     }
@@ -90,11 +115,20 @@ internal fun FileSpec.Builder.addGenericFunctionExports(func: KSFunctionDeclarat
       FunSpec.builder("export_$cname")
         .addAnnotation(cNameAnnotation(cname))
         .addParameter(paramName, cOpaquePointer)
-        .returns(cOpaquePointer)
-        .addStatement(
-          "return %T.create(%L(%L.asStableRef<$refType>().get())).asCPointer()",
-          stableRef, funcName, paramName,
-        )
+        .addParameter("errorOut", cOpaquePointer.copy(nullable = true))
+        .returns(cOpaquePointer.copy(nullable = true))
+        .addCode(buildString {
+          appendLine("return try {")
+          appendLine("  %T.create(%L(%L.asStableRef<$refType>().get())).asCPointer()")
+          appendLine("} catch (e: Throwable) {")
+          appendLine("  if (errorOut != null) {")
+          appendLine("    errorOut.reinterpret<%T>().pointed.value = %T.create(")
+          appendLine("      Pair(e::class.qualifiedName ?: e::class.simpleName ?: \"UnknownException\", e.message ?: \"Kotlin error\")")
+          appendLine("    ).asCPointer()")
+          appendLine("  }")
+          appendLine("  null")
+          append("}")
+        }, stableRef, funcName, paramName, cOpaquePointerVar, stableRef)
         .build()
     )
   } else if (returnDecl == typeParamName) {
@@ -102,11 +136,20 @@ internal fun FileSpec.Builder.addGenericFunctionExports(func: KSFunctionDeclarat
       FunSpec.builder("export_$cname")
         .addAnnotation(cNameAnnotation(cname))
         .addParameter(paramName, cOpaquePointer)
-        .returns(cOpaquePointer)
-        .addStatement(
-          "return %T.create(%L(%L.asStableRef<$refType>().get())).asCPointer()",
-          stableRef, funcName, paramName,
-        )
+        .addParameter("errorOut", cOpaquePointer.copy(nullable = true))
+        .returns(cOpaquePointer.copy(nullable = true))
+        .addCode(buildString {
+          appendLine("return try {")
+          appendLine("  %T.create(%L(%L.asStableRef<$refType>().get())).asCPointer()")
+          appendLine("} catch (e: Throwable) {")
+          appendLine("  if (errorOut != null) {")
+          appendLine("    errorOut.reinterpret<%T>().pointed.value = %T.create(")
+          appendLine("      Pair(e::class.qualifiedName ?: e::class.simpleName ?: \"UnknownException\", e.message ?: \"Kotlin error\")")
+          appendLine("    ).asCPointer()")
+          appendLine("  }")
+          appendLine("  null")
+          append("}")
+        }, stableRef, funcName, paramName, cOpaquePointerVar, stableRef)
         .build()
     )
   }

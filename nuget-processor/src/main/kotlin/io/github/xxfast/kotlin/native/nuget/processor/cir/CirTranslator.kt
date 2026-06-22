@@ -207,6 +207,10 @@ fun translate(
     needsMarshalHelper = true
   }
 
+  if (functions.isNotEmpty() || classes.isNotEmpty() || objects.isNotEmpty() || sealedClasses.isNotEmpty()) {
+    needsMarshalHelper = true
+  }
+
   if (needsMarshalHelper) {
     val helpers: MutableList<CirDeclaration> = mutableListOf(CirMarshalHelper(context.libraryName))
     if (tracker.needsList) helpers.add(CirListHelper(context.libraryName))
@@ -217,7 +221,7 @@ fun translate(
     if (tracker.needsAsync) helpers.add(CirAsyncHelper(context.libraryName))
     if (tracker.needsAsync) helpers.add(CirScopeHelper(context.libraryName))
     if (tracker.needsAsync) helpers.add(CirJobHelper(context.libraryName))
-    if (tracker.needsAsync) helpers.add(CirErrorHelper(context.libraryName))
+    helpers.add(CirErrorHelper(context.libraryName))
 
     val rootIdx: Int = namespaces.indexOfFirst { it.name == context.rootNamespace }
 

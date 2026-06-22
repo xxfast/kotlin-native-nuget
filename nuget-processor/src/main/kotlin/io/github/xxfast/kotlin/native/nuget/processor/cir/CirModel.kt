@@ -193,6 +193,7 @@ data class CirDllImport(
   val name: String,
   val parameters: List<CirParameter>,
   val visibility: CirVisibility = CirVisibility.PUBLIC,
+  val hasSyncErrorOut: Boolean = false,
 ) : CirMember
 
 data class CirMethod(
@@ -210,6 +211,7 @@ data class CirMethod(
   val typeParameters: List<CirTypeParameter> = emptyList(),
   val isAsync: Boolean = false,
   val asyncReturnType: String = "",
+  val isSyncErrorCheckEnabled: Boolean = false,
 ) : CirMember
 
 data class CirProperty(

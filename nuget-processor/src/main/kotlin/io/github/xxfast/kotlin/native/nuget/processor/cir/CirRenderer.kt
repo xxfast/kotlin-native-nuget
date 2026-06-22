@@ -691,16 +691,6 @@ class CirRenderer {
     appendLine("    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]")
     appendLine("    internal delegate void NugetAsyncCallback(IntPtr result, IntPtr error, byte isCancelled, IntPtr userData);")
     appendLine()
-    appendLine("    public class KotlinException : Exception")
-    appendLine("    {")
-    appendLine("        public string KotlinType { get; }")
-    appendLine()
-    appendLine("        public KotlinException(string kotlinType, string message) : base(message)")
-    appendLine("        {")
-    appendLine("            KotlinType = kotlinType;")
-    appendLine("        }")
-    appendLine("    }")
-    appendLine()
   }
 
   private fun StringBuilder.renderScopeHelper(helper: CirScopeHelper) {
@@ -740,6 +730,16 @@ class CirRenderer {
     appendLine("        [DllImport(\"${helper.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"nuget_error_message\")]")
     appendLine("        [return: MarshalAs(UnmanagedType.LPUTF8Str)]")
     appendLine("        internal static extern string Message(IntPtr handle);")
+    appendLine("    }")
+    appendLine()
+    appendLine("    public class KotlinException : Exception")
+    appendLine("    {")
+    appendLine("        public string KotlinType { get; }")
+    appendLine()
+    appendLine("        public KotlinException(string kotlinType, string message) : base(message)")
+    appendLine("        {")
+    appendLine("            KotlinType = kotlinType;")
+    appendLine("        }")
     appendLine("    }")
     appendLine()
   }
@@ -997,8 +997,10 @@ class CirRenderer {
 
     for (method in cls.methods) {
       if (!method.isAbstract) {
-        val nativeParams: String = (listOf("IntPtr handle") +
-          method.parameters.map { "${it.type} ${it.name}" }).joinToString(", ")
+        val nativeParamList: MutableList<String> = (listOf("IntPtr handle") +
+          method.parameters.map { "${it.type} ${it.name}" }).toMutableList()
+        if (method.isSyncErrorCheckEnabled) nativeParamList.add("out IntPtr error")
+        val nativeParams: String = nativeParamList.joinToString(", ")
         appendLine("        [DllImport(\"${cls.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"${cls.nativePrefix}_${method.nativeName}\")]")
         appendLine("        private static extern ${method.nativeReturnType} Native_${method.name}($nativeParams);")
         appendLine()
@@ -1097,7 +1099,9 @@ class CirRenderer {
   private fun StringBuilder.renderDllImport(import: CirDllImport) {
     val visibility: String = if (import.visibility == CirVisibility.PRIVATE) "private" else "public"
     val entryPoint: String = if (import.entryPoint != null) ", EntryPoint = \"${import.entryPoint}\"" else ""
-    val paramStr: String = import.parameters.joinToString(", ") { "${it.type} ${it.name}" }
+    val paramList: MutableList<String> = import.parameters.map { "${it.type} ${it.name}" }.toMutableList()
+    if (import.hasSyncErrorOut) paramList.add("out IntPtr error")
+    val paramStr: String = paramList.joinToString(", ")
 
     appendLine("        [DllImport(\"${import.libraryName}\", CallingConvention = CallingConvention.Cdecl$entryPoint)]")
     appendLine("        $visibility static extern ${import.returnType} ${import.name}($paramStr);")
@@ -1186,9 +1190,65 @@ class CirRenderer {
     appendLine()
   }
 
+  private fun StringBuilder.renderSyncErrorCheckMethod(method: CirMethod, className: String = "") {
+    val visibility: String = if (method.visibility == CirVisibility.PRIVATE) "private" else "public"
+    val static: String = if (method.isStatic) "static " else ""
+    val override: String = if (method.isOverride) "override " else ""
+    val paramStr: String = method.parameters.mapIndexed { index, param ->
+      if (method.isExtension && index == 0) "this ${param.type} ${param.name}"
+      else "${param.type} ${param.name}"
+    }.joinToString(", ")
+
+    val paramNames: String = method.parameters.joinToString(", ") { it.name }
+
+    // For static methods (top-level functions), nativeName is the full native function name.
+    // For instance methods (class methods), the DllImport is rendered as "Native_${method.name}".
+    val nativeFuncName: String = if (method.isStatic) method.nativeName else "Native_${method.name}"
+
+    val nativeCallArgs: String = if (paramNames.isEmpty()) {
+      if (!method.isStatic) "_handle, out IntPtr error" else "out IntPtr error"
+    } else {
+      if (!method.isStatic) "_handle, $paramNames, out IntPtr error" else "$paramNames, out IntPtr error"
+    }
+
+    val isVoid: Boolean = method.returnType == "void"
+    val isString: Boolean = method.returnType == "string"
+    val nativeReturnType: String = method.nativeReturnType
+
+    appendLine("        $visibility ${static}${override}${method.returnType} ${method.name}($paramStr)")
+    appendLine("        {")
+
+    when {
+      isVoid -> appendLine("            ${nativeFuncName}($nativeCallArgs);")
+      isString -> appendLine("            IntPtr nativeResult = ${nativeFuncName}($nativeCallArgs);")
+      else -> appendLine("            ${method.returnType} result = ${nativeFuncName}($nativeCallArgs);")
+    }
+
+    appendLine("            if (error != IntPtr.Zero)")
+    appendLine("            {")
+    appendLine("                string kotlinType = NugetErrorNative.Type(error);")
+    appendLine("                string msg = NugetErrorNative.Message(error);")
+    appendLine("                NugetMarshal.Dispose(error);")
+    appendLine("                throw new KotlinException(kotlinType, msg);")
+    appendLine("            }")
+
+    when {
+      !isVoid && isString -> appendLine("            return Marshal.PtrToStringUTF8(nativeResult)!;")
+      !isVoid -> appendLine("            return result;")
+    }
+
+    appendLine("        }")
+    appendLine()
+  }
+
   private fun StringBuilder.renderMethod(method: CirMethod, className: String = "") {
     if (method.isAsync) {
       renderAsyncMethod(method, className)
+      return
+    }
+
+    if (method.isSyncErrorCheckEnabled) {
+      renderSyncErrorCheckMethod(method, className)
       return
     }
 
