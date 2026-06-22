@@ -64,12 +64,19 @@
 - [x] Map inline functions (e.g., `inline fun f()`) (see [ADR-017](docs/adr/017-inline-function-mapping.md))
 - [x] Map inline functions with reified type parameters (e.g., `inline fun <reified T> f()`)
 - [x] Map generic type aliases (see [ADR-018](docs/adr/018-type-alias-mapping.md))
+- [x] Map exception propagation across the bridge (see [ADR-023](docs/adr/023-exception-propagation.md))
+- [ ] Propagate Kotlin stack trace as `KotlinException.KotlinStackTrace` property
+- [ ] Map synchronous exception propagation (non-suspend functions currently crash instead of throwing)
+- [ ] Map exception cause chain (`e.cause` → `InnerException`)
+- [ ] Map core Kotlin exceptions to .NET analogs (e.g., `IllegalArgumentException` → `ArgumentException`) with `IKotlinException` interface
 
 ## Phase 5: Async support
 - [x] Map Suspend functions (coroutines → Task/async) (see [ADR-019](docs/adr/019-suspend-function-mapping.md))
 - [x] Map Suspend lambdas (`suspend () -> R` → `KotlinSuspendFunc<R>` / `Task<R>`) (see [ADR-020](docs/adr/020-suspend-lambda-mapping.md))
 - [x] Support structured concurrency (see [ADR-021](docs/adr/021-structured-concurrency.md))
-- [ ] Handle cancellation and exceptions across the bridge
+- [x] Map CancellationToken to coroutine cancellation (see [ADR-022](docs/adr/022-cancellation-token-support.md))
+- [ ] Support CancellationToken for suspend lambdas (`KotlinSuspendFunc<T>.InvokeAsync(CancellationToken)`)
+- [ ] Support `IAsyncDisposable` / graceful drain for in-flight async operations
 - [ ] Map Flow APIs (cold streams → IAsyncEnumerable or RxObservables)
 
 ## Phase 6: Bidirectional support (C# → Kotlin)
@@ -89,3 +96,4 @@
 - Object identity preservation (caching wrappers) if profiling shows allocation overhead is significant
 - Custom type mappers for dependency types (e.g., `kotlinx.datetime.Instant` → `DateTimeOffset`)
 - Map KDoc annotations to C# XML docs for better IDE support
+- Expose Kotlin `Job` as a mapped C# type so cancellation can be tied to the job directly (e.g., `job.Cancel()`) instead of requiring a pre-created `CancellationTokenSource`

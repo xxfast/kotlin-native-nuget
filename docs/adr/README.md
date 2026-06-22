@@ -21,3 +21,5 @@
 - [019](019-suspend-function-mapping.md) — Callback-based bridge with TaskCompletionSource; suspend → Task/async; coroutine launched on Dispatchers.Default
 - [020](020-suspend-lambda-mapping.md) — `KotlinSuspendFunc<R>` / `KotlinSuspendAction` with `InvokeAsync()` for suspend lambda properties
 - [021](021-structured-concurrency.md) — Scope-per-class with `SupervisorJob`; `Dispose()` cancels in-flight coroutines; `ObjectDisposedException` guard
+- [022](022-cancellation-token-support.md) — `CancellationToken` parameter on async methods; Job StableRef returned from export; `nuget_job_cancel` shared export
+- [023](023-exception-propagation.md) — `KotlinException.KotlinType` property; `Pair<String,String>` error bridge; `nuget_error_type`/`nuget_error_message` exports

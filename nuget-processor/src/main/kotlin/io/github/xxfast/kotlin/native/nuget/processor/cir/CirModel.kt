@@ -164,6 +164,14 @@ data class CirScopeHelper(
   val libraryName: String,
 ) : CirDeclaration
 
+data class CirJobHelper(
+  val libraryName: String,
+) : CirDeclaration
+
+data class CirErrorHelper(
+  val libraryName: String,
+) : CirDeclaration
+
 data class CirEnumEntry(
   val name: String,
   val ordinal: Int,

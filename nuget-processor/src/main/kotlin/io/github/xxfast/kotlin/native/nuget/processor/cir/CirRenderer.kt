@@ -29,6 +29,8 @@ class CirRenderer {
         is CirSuspendFuncHelper -> renderSuspendFuncHelper(declaration)
         is CirAsyncHelper -> renderAsyncHelper(declaration)
         is CirScopeHelper -> renderScopeHelper(declaration)
+        is CirJobHelper -> renderJobHelper(declaration)
+        is CirErrorHelper -> renderErrorHelper(declaration)
         is CirStaticClass -> renderStaticClass(declaration)
         is CirInterface -> renderInterface(declaration)
         is CirClass -> renderClass(declaration)
@@ -205,6 +207,8 @@ class CirRenderer {
     appendLine("                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Public,")
     appendLine("                null, new object[] { handle }, null)!;")
     appendLine("        }")
+    appendLine()
+    appendLine("        public static void Dispose(IntPtr handle) => Native_dispose(handle);")
     appendLine()
     appendLine("        public static IntPtr CreateBox<T>(T value)")
     appendLine("        {")
@@ -486,8 +490,10 @@ class CirRenderer {
         appendLine("                }")
         appendLine("                else if (errorPtr != IntPtr.Zero)")
         appendLine("                {")
-        appendLine("                    string msg = $marshalRef.FromHandle<string>(errorPtr);")
-        appendLine("                    t.SetException(new KotlinException(msg));")
+        appendLine("                    string kotlinType = NugetErrorNative.Type(errorPtr);")
+        appendLine("                    string msg = NugetErrorNative.Message(errorPtr);")
+        appendLine("                    NugetMarshal.Dispose(errorPtr);")
+        appendLine("                    t.SetException(new KotlinException(kotlinType, msg));")
         appendLine("                }")
         appendLine("                else")
         appendLine("                {")
@@ -539,8 +545,10 @@ class CirRenderer {
         appendLine("                }")
         appendLine("                else if (errorPtr != IntPtr.Zero)")
         appendLine("                {")
-        appendLine("                    string msg = $marshalRef.FromHandle<string>(errorPtr);")
-        appendLine("                    t.SetException(new KotlinException(msg));")
+        appendLine("                    string kotlinType = NugetErrorNative.Type(errorPtr);")
+        appendLine("                    string msg = NugetErrorNative.Message(errorPtr);")
+        appendLine("                    NugetMarshal.Dispose(errorPtr);")
+        appendLine("                    t.SetException(new KotlinException(kotlinType, msg));")
         appendLine("                }")
         appendLine("                else")
         appendLine("                {")
@@ -592,8 +600,10 @@ class CirRenderer {
         appendLine("                }")
         appendLine("                else if (errorPtr != IntPtr.Zero)")
         appendLine("                {")
-        appendLine("                    string msg = $marshalRef.FromHandle<string>(errorPtr);")
-        appendLine("                    t.SetException(new KotlinException(msg));")
+        appendLine("                    string kotlinType = NugetErrorNative.Type(errorPtr);")
+        appendLine("                    string msg = NugetErrorNative.Message(errorPtr);")
+        appendLine("                    NugetMarshal.Dispose(errorPtr);")
+        appendLine("                    t.SetException(new KotlinException(kotlinType, msg));")
         appendLine("                }")
         appendLine("                else")
         appendLine("                {")
@@ -645,8 +655,10 @@ class CirRenderer {
         appendLine("                }")
         appendLine("                else if (errorPtr != IntPtr.Zero)")
         appendLine("                {")
-        appendLine("                    string msg = $marshalRef.FromHandle<string>(errorPtr);")
-        appendLine("                    t.SetException(new KotlinException(msg));")
+        appendLine("                    string kotlinType = NugetErrorNative.Type(errorPtr);")
+        appendLine("                    string msg = NugetErrorNative.Message(errorPtr);")
+        appendLine("                    NugetMarshal.Dispose(errorPtr);")
+        appendLine("                    t.SetException(new KotlinException(kotlinType, msg));")
         appendLine("                }")
         appendLine("                else")
         appendLine("                {")
@@ -681,7 +693,12 @@ class CirRenderer {
     appendLine()
     appendLine("    public class KotlinException : Exception")
     appendLine("    {")
-    appendLine("        public KotlinException(string message) : base(message) { }")
+    appendLine("        public string KotlinType { get; }")
+    appendLine()
+    appendLine("        public KotlinException(string kotlinType, string message) : base(message)")
+    appendLine("        {")
+    appendLine("            KotlinType = kotlinType;")
+    appendLine("        }")
     appendLine("    }")
     appendLine()
   }
@@ -697,6 +714,32 @@ class CirRenderer {
     appendLine()
     appendLine("        [DllImport(\"${helper.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"nuget_scope_dispose\")]")
     appendLine("        internal static extern void Dispose(IntPtr handle);")
+    appendLine("    }")
+    appendLine()
+  }
+
+  private fun StringBuilder.renderJobHelper(helper: CirJobHelper) {
+    appendLine("    internal static class NugetJobNative")
+    appendLine("    {")
+    appendLine("        [DllImport(\"${helper.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"nuget_job_cancel\")]")
+    appendLine("        internal static extern void Cancel(IntPtr handle);")
+    appendLine()
+    appendLine("        [DllImport(\"${helper.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"nuget_job_dispose\")]")
+    appendLine("        internal static extern void Dispose(IntPtr handle);")
+    appendLine("    }")
+    appendLine()
+  }
+
+  private fun StringBuilder.renderErrorHelper(helper: CirErrorHelper) {
+    appendLine("    internal static class NugetErrorNative")
+    appendLine("    {")
+    appendLine("        [DllImport(\"${helper.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"nuget_error_type\")]")
+    appendLine("        [return: MarshalAs(UnmanagedType.LPUTF8Str)]")
+    appendLine("        internal static extern string Type(IntPtr handle);")
+    appendLine()
+    appendLine("        [DllImport(\"${helper.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"nuget_error_message\")]")
+    appendLine("        [return: MarshalAs(UnmanagedType.LPUTF8Str)]")
+    appendLine("        internal static extern string Message(IntPtr handle);")
     appendLine("    }")
     appendLine()
   }
@@ -1069,13 +1112,20 @@ class CirRenderer {
   private fun StringBuilder.renderAsyncMethod(method: CirMethod, className: String = "") {
     val visibility: String = if (method.visibility == CirVisibility.PRIVATE) "private" else "public"
     val static: String = if (method.isStatic) "static " else ""
-    val paramStr: String = method.parameters.joinToString(", ") { "${it.type} ${it.name}" }
     val isUnit: Boolean = method.asyncReturnType.isEmpty()
     val innerType: String = if (isUnit) "bool" else method.asyncReturnType
     val tcsType: String = "TaskCompletionSource<$innerType>"
     val nativeName: String = method.nativeName
 
     val paramNames: String = method.parameters.joinToString(", ") { it.name }
+
+    val methodParams: String = if (method.parameters.isEmpty()) {
+      "CancellationToken cancellationToken = default"
+    } else {
+      method.parameters.joinToString(", ") { "${it.type} ${it.name}" } +
+        ", CancellationToken cancellationToken = default"
+    }
+
     val nativeCallArgs: String = if (method.isStatic) {
       if (paramNames.isEmpty()) "callback, GCHandle.ToIntPtr(tcsHandle)"
       else "$paramNames, callback, GCHandle.ToIntPtr(tcsHandle)"
@@ -1092,7 +1142,7 @@ class CirRenderer {
         "t.SetResult(new ${method.asyncReturnType}(resultPtr));"
     }
 
-    appendLine("        $visibility ${static}${method.returnType} ${method.name}($paramStr)")
+    appendLine("        $visibility ${static}${method.returnType} ${method.name}($methodParams)")
     appendLine("        {")
     if (!method.isStatic && className.isNotEmpty()) {
       appendLine("            if (_handle == IntPtr.Zero)")
@@ -1102,19 +1152,25 @@ class CirRenderer {
     appendLine("            GCHandle tcsHandle = GCHandle.Alloc(tcs);")
     appendLine("            NugetAsyncCallback callback = null!;")
     appendLine("            GCHandle callbackHandle = default;")
+    appendLine("            CancellationTokenRegistration reg = default;")
+    appendLine("            IntPtr jobHandle = IntPtr.Zero;")
     appendLine("            callback = (resultPtr, errorPtr, isCancelled, userData) =>")
     appendLine("            {")
+    appendLine("                reg.Dispose();")
+    appendLine("                NugetJobNative.Dispose(jobHandle);")
     appendLine("                callbackHandle.Free();")
     appendLine("                var t = ($tcsType)GCHandle.FromIntPtr(userData).Target!;")
     appendLine("                GCHandle.FromIntPtr(userData).Free();")
     appendLine("                if (isCancelled != 0)")
     appendLine("                {")
-    appendLine("                    t.TrySetCanceled();")
+    appendLine("                    t.TrySetCanceled(cancellationToken);")
     appendLine("                }")
     appendLine("                else if (errorPtr != IntPtr.Zero)")
     appendLine("                {")
-    appendLine("                    string msg = NugetMarshal.FromHandle<string>(errorPtr);")
-    appendLine("                    t.SetException(new KotlinException(msg));")
+    appendLine("                    string kotlinType = NugetErrorNative.Type(errorPtr);")
+    appendLine("                    string msg = NugetErrorNative.Message(errorPtr);")
+    appendLine("                    NugetMarshal.Dispose(errorPtr);")
+    appendLine("                    t.SetException(new KotlinException(kotlinType, msg));")
     appendLine("                }")
     appendLine("                else")
     appendLine("                {")
@@ -1122,7 +1178,9 @@ class CirRenderer {
     appendLine("                }")
     appendLine("            };")
     appendLine("            callbackHandle = GCHandle.Alloc(callback);")
-    appendLine("            $nativeName($nativeCallArgs);")
+    appendLine("            jobHandle = $nativeName($nativeCallArgs);")
+    appendLine("            if (cancellationToken.CanBeCanceled)")
+    appendLine("                reg = cancellationToken.Register(() => NugetJobNative.Cancel(jobHandle));")
     appendLine("            return tcs.Task;")
     appendLine("        }")
     appendLine()

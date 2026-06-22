@@ -460,7 +460,7 @@ internal fun translateSuspendFunction(
   val nativeImport = CirDllImport(
     libraryName = libraryName,
     entryPoint = "${cname}_async",
-    returnType = "void",
+    returnType = "IntPtr",
     name = "${csName}Async_native",
     parameters = nativeParams,
     visibility = CirVisibility.PRIVATE,

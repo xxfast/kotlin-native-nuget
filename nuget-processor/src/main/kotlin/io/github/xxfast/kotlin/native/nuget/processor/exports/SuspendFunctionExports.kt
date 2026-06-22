@@ -39,6 +39,7 @@ internal fun FileSpec.Builder.addSuspendFunctionExports(func: KSFunctionDeclarat
     .addParameters(func)
     .addParameter("callbackPtr", cOpaquePointer)
     .addParameter("userData", cOpaquePointer)
+    .returns(cOpaquePointer)
     .addCode(body)
 
   addFunction(builder.build())
@@ -81,6 +82,7 @@ internal fun FileSpec.Builder.addSuspendClassMethodExports(cls: KSClassDeclarati
     builder
       .addParameter("callbackPtr", cOpaquePointer)
       .addParameter("userData", cOpaquePointer)
+      .returns(cOpaquePointer)
       .addCode(body)
 
     addFunction(builder.build())
@@ -94,7 +96,7 @@ private fun buildSuspendFunctionBody(
 ): String = buildString {
   appendLine("val fn = callbackPtr.reinterpret<CFunction<" +
     "(COpaquePointer?, COpaquePointer?, Byte, COpaquePointer) -> Unit>>()")
-  appendLine("CoroutineScope(Dispatchers.Default).launch(start = CoroutineStart.ATOMIC) {")
+  appendLine("val job = CoroutineScope(Dispatchers.Default).launch(start = CoroutineStart.ATOMIC) {")
   appendLine("  try {")
   if (isUnit) {
     appendLine("    $funcName($paramCall)")
@@ -104,11 +106,15 @@ private fun buildSuspendFunctionBody(
     appendLine("    val resultRef = StableRef.create(result).asCPointer()")
     appendLine("    fn.invoke(resultRef, null, 0.toByte(), userData)")
   }
+  appendLine("  } catch (e: CancellationException) {")
+  appendLine("    fn.invoke(null, null, 1.toByte(), userData)")
+  appendLine("    throw e")
   appendLine("  } catch (e: Throwable) {")
-  appendLine("    val errRef = StableRef.create(e.message ?: \"Kotlin error\").asCPointer()")
+  appendLine("    val errRef = StableRef.create(Pair(e::class.qualifiedName ?: e::class.simpleName ?: \"UnknownException\", e.message ?: \"Kotlin error\")).asCPointer()")
   appendLine("    fn.invoke(null, errRef, 0.toByte(), userData)")
   appendLine("  }")
-  append("}")
+  appendLine("}")
+  append("return StableRef.create(job).asCPointer()")
 }
 
 private fun buildSuspendMethodBody(
@@ -121,7 +127,7 @@ private fun buildSuspendMethodBody(
   appendLine("val scope = scopeHandle.asStableRef<CoroutineScope>().get()")
   appendLine("val fn = callbackPtr.reinterpret<CFunction<" +
     "(COpaquePointer?, COpaquePointer?, Byte, COpaquePointer) -> Unit>>()")
-  appendLine("scope.launch(start = CoroutineStart.ATOMIC) {")
+  appendLine("val job = scope.launch(start = CoroutineStart.ATOMIC) {")
   appendLine("  try {")
   if (isUnit) {
     appendLine("    obj.$methodName($paramCall)")
@@ -135,8 +141,9 @@ private fun buildSuspendMethodBody(
   appendLine("    fn.invoke(null, null, 1.toByte(), userData)")
   appendLine("    throw e")
   appendLine("  } catch (e: Throwable) {")
-  appendLine("    val errRef = StableRef.create(e.message ?: \"Kotlin error\").asCPointer()")
+  appendLine("    val errRef = StableRef.create(Pair(e::class.qualifiedName ?: e::class.simpleName ?: \"UnknownException\", e.message ?: \"Kotlin error\")).asCPointer()")
   appendLine("    fn.invoke(null, errRef, 0.toByte(), userData)")
   appendLine("  }")
-  append("}")
+  appendLine("}")
+  append("return StableRef.create(job).asCPointer()")
 }

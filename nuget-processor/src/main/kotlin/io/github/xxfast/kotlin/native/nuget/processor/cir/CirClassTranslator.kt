@@ -422,7 +422,7 @@ internal fun translateClass(
     val nativeImport = CirDllImport(
       libraryName = libraryName,
       entryPoint = "${prefix}_${cname}_async",
-      returnType = "void",
+      returnType = "IntPtr",
       name = "Native_${csMethodName}Async",
       parameters = nativeParams,
       visibility = CirVisibility.PRIVATE,

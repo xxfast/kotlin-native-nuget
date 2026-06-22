@@ -43,6 +43,8 @@ import io.github.xxfast.kotlin.native.nuget.processor.exports.addNugetFunc3Helpe
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addNugetSuspendFunc0HelperExports
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addNugetSuspendFunc1HelperExports
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addNugetScopeHelperExports
+import io.github.xxfast.kotlin.native.nuget.processor.exports.addNugetJobHelperExports
+import io.github.xxfast.kotlin.native.nuget.processor.exports.addNugetErrorHelperExports
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addExtensionFunctionExports
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addExtensionPropertyExports
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addObjectExports
@@ -305,13 +307,16 @@ class NugetProcessor(
 
         val needsSuspendLambdaSupport: Boolean = suspendLambdaArities.isNotEmpty()
 
-        if (suspendFunctions.isNotEmpty() || needsSuspendLambdaSupport || classes.any { cls ->
-          cls.getAllFunctions().any { it.modifiers.contains(Modifier.SUSPEND) }
-        }) {
+        val hasSuspendFunctions: Boolean = suspendFunctions.isNotEmpty() ||
+          needsSuspendLambdaSupport ||
+          classes.any { cls -> cls.getAllFunctions().any { it.modifiers.contains(Modifier.SUSPEND) } }
+
+        if (hasSuspendFunctions) {
           addImport("kotlinx.cinterop", "reinterpret")
           addImport("kotlinx.cinterop", "invoke")
           addImport("kotlinx.cinterop", "CFunction")
           addImport("kotlinx.cinterop", "COpaquePointer")
+          addImport("kotlinx.cinterop", "StableRef")
           addImport("kotlinx.coroutines", "CoroutineScope")
           addImport("kotlinx.coroutines", "CoroutineStart")
           addImport("kotlinx.coroutines", "Dispatchers")
@@ -325,7 +330,6 @@ class NugetProcessor(
         if (needsSuspendLambdaSupport) {
           addImport("kotlin.coroutines", "SuspendFunction0")
           addImport("kotlin.coroutines", "SuspendFunction1")
-          addImport("kotlinx.cinterop", "StableRef")
         }
 
         suspendFunctions.forEach { func ->
@@ -478,6 +482,8 @@ class NugetProcessor(
           needsSuspendLambdaSupport ||
           classesHaveSuspendMethods
         if (needsScopeHelpers) addNugetScopeHelperExports()
+        if (needsScopeHelpers) addNugetJobHelperExports()
+        if (needsScopeHelpers) addNugetErrorHelperExports()
       }
       .build()
 

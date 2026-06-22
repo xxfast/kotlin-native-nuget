@@ -499,7 +499,7 @@ internal fun FileSpec.Builder.addNugetSuspendFunc0HelperExports() {
         appendLine("      callback.invoke(resultRef, null, 0.toByte(), userData)")
         appendLine("    }")
         appendLine("  } catch (e: Throwable) {")
-        appendLine("    val errRef = StableRef.create(e.message ?: \"Kotlin error\").asCPointer()")
+        appendLine("    val errRef = StableRef.create(Pair(e::class.qualifiedName ?: e::class.simpleName ?: \"UnknownException\", e.message ?: \"Kotlin error\")).asCPointer()")
         appendLine("    callback.invoke(null, errRef, 0.toByte(), userData)")
         appendLine("  }")
         append("}")
@@ -531,7 +531,7 @@ internal fun FileSpec.Builder.addNugetSuspendFunc1HelperExports() {
         appendLine("      callback.invoke(resultRef, null, 0.toByte(), userData)")
         appendLine("    }")
         appendLine("  } catch (e: Throwable) {")
-        appendLine("    val errRef = StableRef.create(e.message ?: \"Kotlin error\").asCPointer()")
+        appendLine("    val errRef = StableRef.create(Pair(e::class.qualifiedName ?: e::class.simpleName ?: \"UnknownException\", e.message ?: \"Kotlin error\")).asCPointer()")
         appendLine("    callback.invoke(null, errRef, 0.toByte(), userData)")
         appendLine("  }")
         append("}")
@@ -579,6 +579,62 @@ internal fun FileSpec.Builder.addNugetScopeHelperExports() {
       .addStatement(
         "handle.asStableRef<%T>().dispose()",
         ClassName("kotlinx.coroutines", "CoroutineScope"),
+      )
+      .build()
+  )
+}
+
+internal fun FileSpec.Builder.addNugetJobHelperExports() {
+  addFunction(
+    FunSpec.builder("export_nuget_job_cancel")
+      .addAnnotation(cNameAnnotation("nuget_job_cancel"))
+      .addParameter("handle", cOpaquePointer.copy(nullable = true))
+      .beginControlFlow("if (handle == null)")
+      .addStatement("return")
+      .endControlFlow()
+      .addStatement(
+        "handle.asStableRef<%T>().get().cancel()",
+        ClassName("kotlinx.coroutines", "Job"),
+      )
+      .build()
+  )
+
+  addFunction(
+    FunSpec.builder("export_nuget_job_dispose")
+      .addAnnotation(cNameAnnotation("nuget_job_dispose"))
+      .addParameter("handle", cOpaquePointer.copy(nullable = true))
+      .beginControlFlow("if (handle == null)")
+      .addStatement("return")
+      .endControlFlow()
+      .addStatement(
+        "handle.asStableRef<%T>().dispose()",
+        ClassName("kotlinx.coroutines", "Job"),
+      )
+      .build()
+  )
+}
+
+internal fun FileSpec.Builder.addNugetErrorHelperExports() {
+  addFunction(
+    FunSpec.builder("export_nuget_error_type")
+      .addAnnotation(cNameAnnotation("nuget_error_type"))
+      .addParameter("handle", cOpaquePointer)
+      .returns(String::class)
+      .addStatement(
+        "return handle.asStableRef<%T<String, String>>().get().first",
+        ClassName("kotlin", "Pair"),
+      )
+      .build()
+  )
+
+  addFunction(
+    FunSpec.builder("export_nuget_error_message")
+      .addAnnotation(cNameAnnotation("nuget_error_message"))
+      .addParameter("handle", cOpaquePointer)
+      .returns(String::class)
+      .addStatement(
+        "return handle.asStableRef<%T<String, String>>().get().second",
+        ClassName("kotlin", "Pair"),
       )
       .build()
   )
