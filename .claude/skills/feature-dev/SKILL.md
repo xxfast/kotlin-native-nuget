@@ -29,6 +29,7 @@ Provide them with the necessary context and instructions.
     - Sample app, library 
     - Sample tests
 - Get feedback and iterate on the design before implementation
+- Call out any deferred scope and ask if we want to schedule this on the roadmap
 - This step is crucial to ensure we're building the right thing before writing code
 
 ### Step 3: Testing (csharp-dev skill subagent, model: sonnet)
