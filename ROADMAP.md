@@ -79,7 +79,7 @@
 - [x] Map Suspend lambdas (`suspend () -> R` → `KotlinSuspendFunc<R>` / `Task<R>`) (see [ADR-020](docs/adr/020-suspend-lambda-mapping.md))
 - [x] Support structured concurrency (see [ADR-021](docs/adr/021-structured-concurrency.md))
 - [x] Map CancellationToken to coroutine cancellation (see [ADR-022](docs/adr/022-cancellation-token-support.md))
-- [ ] Support CancellationToken for suspend lambdas (`KotlinSuspendFunc<T>.InvokeAsync(CancellationToken)`)
+- [x] Support CancellationToken for suspend lambdas (`KotlinSuspendFunc<T>.InvokeAsync(CancellationToken)`)
 - [ ] Support `IAsyncDisposable` / graceful drain for in-flight async operations
 - [ ] Map Flow APIs (cold streams → IAsyncEnumerable or RxObservables)
 

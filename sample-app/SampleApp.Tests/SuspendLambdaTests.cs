@@ -40,4 +40,55 @@ public class SuspendLambdaTests
         Assert.Equal("Mylo gobbled up the food!", first);
         Assert.Equal("Mylo gobbled up the food!", second);
     }
+
+    [Fact]
+    public async Task CatFeeder_OnFeed_CancelViaToken_OreoFeedingInterrupted()
+    {
+        // Oreo was about to get fed, but someone cancelled the token mid-mealtime
+        using var feeder = new CatFeeder("Oreo");
+        using var onFeed = feeder.OnFeed;
+        var cts = new CancellationTokenSource();
+        Task<string> feedTask = onFeed.InvokeAsync(cts.Token);
+        await Task.Delay(50);
+        cts.Cancel();
+        await Assert.ThrowsAsync<TaskCanceledException>(() => feedTask);
+    }
+
+    [Fact]
+    public async Task CatFeeder_OnFeedWith_CancelViaToken_MyloLeftHungry()
+    {
+        // Mylo was promised salmon, but the token said no — tragic
+        using var feeder = new CatFeeder("Mylo");
+        using var onFeedWith = feeder.OnFeedWith;
+        var cts = new CancellationTokenSource();
+        Task<string> feedTask = onFeedWith.InvokeAsync("salmon", cts.Token);
+        await Task.Delay(50);
+        cts.Cancel();
+        await Assert.ThrowsAsync<TaskCanceledException>(() => feedTask);
+    }
+
+    [Fact]
+    public async Task CatFeeder_OnCleanup_CancelViaToken_OreoEscapesChores()
+    {
+        // Oreo was supposed to clean up, but the token let him off the hook
+        using var feeder = new CatFeeder("Oreo");
+        using var onCleanup = feeder.OnCleanup;
+        var cts = new CancellationTokenSource();
+        Task cleanupTask = onCleanup.InvokeAsync(cts.Token);
+        await Task.Delay(50);
+        cts.Cancel();
+        await Assert.ThrowsAsync<TaskCanceledException>(() => cleanupTask);
+    }
+
+    [Fact]
+    public async Task CatFeeder_OnFeed_PreCancelledToken_MyloNeverGetsFed()
+    {
+        // Token was cancelled before Mylo even smelled the food
+        using var feeder = new CatFeeder("Mylo");
+        using var onFeed = feeder.OnFeed;
+        var cts = new CancellationTokenSource();
+        cts.Cancel();
+        await Assert.ThrowsAsync<TaskCanceledException>(
+            () => onFeed.InvokeAsync(cts.Token));
+    }
 }
