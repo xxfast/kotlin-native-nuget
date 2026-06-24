@@ -8,19 +8,19 @@ You are implementing the Kotlin side of a Kotlin/Native → C# bridge generator.
 
 ## Project structure
 
-- `nugget-processor/` — KSP processor that generates C# bindings and Kotlin bridge wrappers
+- `nuget-processor/` — KSP processor that generates C# bindings and Kotlin bridge wrappers
   - `cir/CirModel.kt` — C# AST model (CirFile, CirNamespace, CirClass, CirEnum, etc.)
   - `cir/CirTranslator.kt` — translates KSP declarations → CIR model
   - `cir/CirRenderer.kt` — renders CIR → C# source text
-  - `CSharpBindingsProcessor.kt` — orchestrates KSP pipeline, generates Kotlin bridges via KotlinPoet
-  - `CSharpBindingsProcessorProvider.kt` — KSP entry point
+  - `NugetProcessor.kt` — orchestrates KSP pipeline, generates Kotlin bridges via KotlinPoet
+  - `NugetProcessorProvider.kt` — KSP entry point
   - `Reserved.kt` — shared C/C# reserved word sets and naming functions
 - `sample-library/` — example Kotlin/Native library consumed by the plugin
 - `nuget/` — Gradle plugin that packages the NuGet
 
 ## Build commands
 
-- Compile processor: `./gradlew :nugget-processor:compileKotlin`
+- Compile processor: `./gradlew :nuget-processor:compileKotlin`
 - Build sample + package: `./gradlew :sample-library:clean :sample-library:packNuget`
 - Full verify: build + `cd sample-app/SampleApp.Tests && dotnet test`
 

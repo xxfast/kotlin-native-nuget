@@ -41,7 +41,7 @@ Read [STYLE.md](../../../STYLE.md) thoroughly — it is the authoritative source
 
 ## Build commands
 
-- Compile processor: `./gradlew :nugget-processor:compileKotlin`
+- Compile processor: `./gradlew :nuget-processor:compileKotlin`
 - Full verify: `./gradlew :sample-library:clean :sample-library:packNuget && cd sample-app/SampleApp.Tests && dotnet test`
 
 Run the full verify after refactoring to confirm nothing broke.

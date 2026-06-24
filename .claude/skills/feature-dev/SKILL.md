@@ -42,7 +42,7 @@ Provide them with the necessary context and instructions.
 ### Step 4: Implementation (kotlin-dev agent, model: sonnet)
 
 - Make the failing tests pass
-- Update the KSP processor (CirModel, CirTranslator, CirRenderer, CSharpBindingsProcessor)
+- Update the KSP processor (CirModel, CirTranslator, CirRenderer, NugetProcessor)
 - Verify all tests pass (existing + new)
 
 ### Checkpoint: Style review
