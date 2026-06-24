@@ -80,7 +80,7 @@
 - [x] Support structured concurrency (see [ADR-021](docs/adr/021-structured-concurrency.md))
 - [x] Map CancellationToken to coroutine cancellation (see [ADR-022](docs/adr/022-cancellation-token-support.md))
 - [x] Support CancellationToken for suspend lambdas (`KotlinSuspendFunc<T>.InvokeAsync(CancellationToken)`)
-- [ ] Support `IAsyncDisposable` / graceful drain for in-flight async operations
+- [x] Support `IAsyncDisposable` / graceful drain for in-flight async operations (see [ADR-025](docs/adr/025-async-disposable.md))
 - [ ] Map Flow APIs (cold streams → IAsyncEnumerable or RxObservables)
 
 ## Phase 7: Bidirectional support (C# → Kotlin)
