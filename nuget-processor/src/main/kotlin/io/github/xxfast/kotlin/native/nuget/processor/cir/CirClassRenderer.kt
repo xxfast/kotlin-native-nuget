@@ -1,0 +1,510 @@
+package io.github.xxfast.kotlin.native.nuget.processor.cir
+
+internal fun StringBuilder.renderGenericClass(cls: CirGenericClass) {
+  val typeParams: String = cls.typeParameters.joinToString(", ") { it.name }
+
+  val isConstrained: Boolean = cls.typeParameters.any { it.bounds.isNotEmpty() }
+
+  appendLine("    internal static class ${cls.name}Native")
+  appendLine("    {")
+
+  if (isConstrained && cls.hasPublicConstructor) {
+    appendLine("        [DllImport(\"${cls.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"${cls.nativePrefix}_create_object\")]")
+    appendLine("        internal static extern IntPtr Create_object(IntPtr value);")
+    appendLine()
+  }
+
+  for (prop in cls.properties) {
+    appendLine("        [DllImport(\"${cls.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"${cls.nativePrefix}_get_${prop.nativeName}\")]")
+    appendLine("        internal static extern ${prop.nativeReturnType} Get_${prop.nativeName}(IntPtr handle);")
+    appendLine()
+  }
+
+  if (cls.disposable) {
+    appendLine("        [DllImport(\"${cls.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"${cls.nativePrefix}_dispose\")]")
+    appendLine("        internal static extern void Dispose(IntPtr handle);")
+  }
+
+  appendLine("    }")
+  appendLine()
+
+  val whereClause: String = cls.typeParameters
+    .filter { it.bounds.isNotEmpty() }
+    .joinToString(" ") { param ->
+      "where ${param.name} : ${param.bounds.joinToString(", ")}"
+    }
+
+  val whereStr: String = if (whereClause.isNotEmpty()) " $whereClause" else ""
+  appendLine("    public class ${cls.name}<$typeParams> : IDisposable$whereStr")
+  appendLine("    {")
+  appendLine("        internal IntPtr _handle;")
+  appendLine()
+
+  if (cls.hasPublicConstructor) {
+    appendLine("        public ${cls.name}(${cls.typeParameters[0].name} value)")
+    appendLine("        {")
+    if (isConstrained) {
+      appendLine("            var field = typeof(${cls.typeParameters[0].name}).GetField(\"_handle\",")
+      appendLine("                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Public);")
+      appendLine("            _handle = ${cls.name}Native.Create_object((IntPtr)field!.GetValue(value)!);")
+    } else {
+      appendLine("            _handle = NugetMarshal.CreateBox<${cls.typeParameters[0].name}>(value);")
+    }
+    appendLine("        }")
+    appendLine()
+  }
+
+  appendLine("        internal ${cls.name}(IntPtr handle)")
+  appendLine("        {")
+  appendLine("            _handle = handle;")
+  appendLine("        }")
+  appendLine()
+
+  for (prop in cls.properties) {
+    appendLine("        public ${prop.type} ${prop.name} => ${prop.getter};")
+    appendLine()
+  }
+
+  if (cls.disposable) {
+    appendLine("        public void Dispose()")
+    appendLine("        {")
+    appendLine("            if (_handle != IntPtr.Zero)")
+    appendLine("            {")
+    appendLine("                ${cls.name}Native.Dispose(_handle);")
+    appendLine("                _handle = IntPtr.Zero;")
+    appendLine("            }")
+    appendLine("        }")
+  }
+
+  appendLine("    }")
+}
+
+internal fun StringBuilder.renderInterface(iface: CirInterface) {
+  val typeParamStr: String = if (iface.typeParameters.isNotEmpty()) {
+    val params: String = iface.typeParameters.joinToString(", ") { param ->
+      val prefix: String = when (param.variance) {
+        CirVariance.COVARIANT -> "out "
+        CirVariance.CONTRAVARIANT -> "in "
+        CirVariance.INVARIANT -> ""
+      }
+      "$prefix${param.name}"
+    }
+    "<$params>"
+  } else ""
+
+  appendLine("    public interface ${iface.name}$typeParamStr : IDisposable")
+  appendLine("    {")
+
+  for (prop in iface.properties) {
+    if (prop.hasSetter) {
+      appendLine("        ${prop.type} ${prop.name} { get; set; }")
+    } else {
+      appendLine("        ${prop.type} ${prop.name} { get; }")
+    }
+  }
+
+  if (iface.properties.isNotEmpty() && iface.methods.isNotEmpty()) {
+    appendLine()
+  }
+
+  for (method in iface.methods) {
+    val paramStr: String = method.parameters.joinToString(", ") { "${it.type} ${it.name}" }
+    appendLine("        ${method.returnType} ${method.name}($paramStr);")
+  }
+
+  appendLine("    }")
+  appendLine()
+}
+
+internal fun StringBuilder.renderStaticClass(cls: CirStaticClass) {
+  appendLine("    public static partial class ${cls.name}")
+  appendLine("    {")
+
+  for (member in cls.members) {
+    renderMember(member)
+  }
+
+  appendLine("    }")
+}
+
+internal fun StringBuilder.renderClass(cls: CirClass) {
+  val abstract: String = if (cls.isAbstract) "abstract " else ""
+
+  val implements: String = when {
+    cls.superClass != null -> " : ${cls.superClass}"
+    cls.interfaces.isNotEmpty() -> " : ${cls.interfaces.joinToString(", ")}"
+    cls.disposable && cls.hasSuspendMethods -> " : IDisposable, IAsyncDisposable"
+    cls.disposable -> " : IDisposable"
+    else -> ""
+  }
+
+  appendLine("    public ${abstract}class ${cls.name}$implements")
+  appendLine("    {")
+
+  if (cls.superClass == null) {
+    appendLine("        internal IntPtr _handle;")
+    if (cls.hasSuspendMethods) {
+      appendLine("        internal IntPtr _scopeHandle;")
+    }
+    appendLine()
+
+    if (cls.hasSuspendMethods) {
+      appendLine("        private IntPtr GetOrCreateScope()")
+      appendLine("        {")
+      appendLine("            IntPtr existing = _scopeHandle;")
+      appendLine("            if (existing != IntPtr.Zero) return existing;")
+      appendLine("            IntPtr created = NugetScopeNative.Create();")
+      appendLine("            IntPtr prior = Interlocked.CompareExchange(ref _scopeHandle, created, IntPtr.Zero);")
+      appendLine("            if (prior != IntPtr.Zero)")
+      appendLine("            {")
+      appendLine("                NugetScopeNative.Dispose(created);")
+      appendLine("                return prior;")
+      appendLine("            }")
+      appendLine("            return created;")
+      appendLine("        }")
+      appendLine()
+    }
+  }
+
+  if (cls.constructor != null && !cls.isAbstract) {
+    val ctorParamStr: String = cls.constructor.parameters.joinToString(", ") { "${it.type} ${it.name}" }
+    appendLine("        [DllImport(\"${cls.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"${cls.nativePrefix}_create\")]")
+    appendLine("        private static extern IntPtr Native_Create($ctorParamStr);")
+    appendLine()
+    renderConstructor(cls.name, cls.constructor, cls.superClass != null, cls.hasSuspendMethods)
+  }
+
+  if (cls.hasInternalHandleConstructor) {
+    if (cls.superClass != null) {
+      appendLine("        internal ${cls.name}(IntPtr handle) : base(handle)")
+      appendLine("        {")
+      appendLine("        }")
+    } else {
+      appendLine("        internal ${cls.name}(IntPtr handle)")
+      appendLine("        {")
+      appendLine("            _handle = handle;")
+      appendLine("        }")
+    }
+    appendLine()
+  }
+
+  for (prop in cls.properties) {
+    if (prop.isFlow) {
+      val collectEntryPoint = "${cls.nativePrefix}_get_${prop.nativeName}_collect"
+      appendLine("        [DllImport(\"${cls.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"$collectEntryPoint\")]")
+      appendLine("        private static extern IntPtr Native_Get${prop.name}Collect(IntPtr handle, IntPtr scopeHandle, IntPtr onNext, IntPtr onComplete, IntPtr onError, IntPtr userData);")
+      appendLine()
+      renderProperty(prop)
+    } else {
+      appendLine("        [DllImport(\"${cls.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"${cls.nativePrefix}_get_${prop.nativeName}\")]")
+      appendLine("        private static extern ${prop.nativeReturnType} Native_Get_${prop.nativeName}(IntPtr handle);")
+      appendLine()
+      if (prop.setter != null) {
+        val setterType: String = prop.nativeSetterType
+        appendLine("        [DllImport(\"${cls.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"${cls.nativePrefix}_set_${prop.nativeName}\")]")
+        appendLine("        private static extern void Native_Set_${prop.nativeName}(IntPtr handle, $setterType value);")
+        appendLine()
+      }
+      for (extra in prop.extraNatives) {
+        val entryPoint = "${cls.nativePrefix}_${extra.entryPointSuffix}"
+        val paramStr = if (extra.hasValueParam) "IntPtr handle, ${extra.returnType} value" else "IntPtr handle"
+        val externReturn = if (extra.hasValueParam) "void" else extra.returnType
+        appendLine("        [DllImport(\"${cls.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"$entryPoint\")]")
+        appendLine("        private static extern $externReturn ${extra.name}($paramStr);")
+        appendLine()
+      }
+      renderProperty(prop)
+    }
+  }
+
+  for (method in cls.methods) {
+    if (!method.isAbstract) {
+      val nativeParamList: MutableList<String> = (listOf("IntPtr handle") +
+        method.parameters.map { "${it.type} ${it.name}" }).toMutableList()
+      if (method.isSyncErrorCheckEnabled) nativeParamList.add("out IntPtr error")
+      val nativeParams: String = nativeParamList.joinToString(", ")
+      appendLine("        [DllImport(\"${cls.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"${cls.nativePrefix}_${method.nativeName}\")]")
+      appendLine("        private static extern ${method.nativeReturnType} Native_${method.name}($nativeParams);")
+      appendLine()
+    }
+    renderMethod(method, cls.name)
+  }
+
+  for (member in cls.companionMembers) {
+    renderMember(member, cls.name)
+  }
+
+  if (cls.isDataClass) {
+    renderDataClassMethods(cls)
+  }
+
+  if (cls.disposable) {
+    renderDispose(
+      libraryName = cls.libraryName,
+      nativePrefix = cls.nativePrefix,
+      isAbstract = cls.isAbstract,
+      hasSuperClass = cls.superClass != null,
+      hasSuspendMethods = cls.hasSuspendMethods,
+    )
+  }
+
+  appendLine("    }")
+}
+
+internal fun StringBuilder.renderConstructor(
+  className: String,
+  ctor: CirConstructor,
+  hasSuperClass: Boolean = false,
+  hasSuspendMethods: Boolean = false,
+) {
+  val paramStr: String = ctor.parameters.joinToString(", ") { "${it.type} ${it.name}" }
+
+  if (hasSuperClass) {
+    appendLine("        public $className($paramStr) : base(IntPtr.Zero)")
+    appendLine("        {")
+    appendLine("            ${ctor.body}")
+    appendLine("        }")
+  } else {
+    appendLine("        public $className($paramStr)")
+    appendLine("        {")
+    appendLine("            ${ctor.body}")
+    appendLine("        }")
+  }
+  appendLine()
+}
+
+internal fun StringBuilder.renderProperty(prop: CirProperty) {
+  val static: String = if (prop.isStatic) "static " else ""
+  val isMultiLineGetter: Boolean = prop.getter.contains('\n')
+  val isMultiLineSetter: Boolean = prop.setter?.contains('\n') == true
+  if (isMultiLineGetter) {
+    appendLine("        public ${static}${prop.type} ${prop.name}")
+    appendLine("        {")
+    appendLine("            get")
+    appendLine("            {${prop.getter}")
+    appendLine("            }")
+    appendLine("        }")
+  } else if (prop.setter == null) {
+    appendLine("        public ${static}${prop.type} ${prop.name} => ${prop.getter};")
+  } else if (isMultiLineSetter) {
+    appendLine("        public ${static}${prop.type} ${prop.name}")
+    appendLine("        {")
+    appendLine("            get => ${prop.getter};")
+    appendLine("            set")
+    appendLine("            {${prop.setter}")
+    appendLine("            }")
+    appendLine("        }")
+  } else {
+    appendLine("        public ${static}${prop.type} ${prop.name}")
+    appendLine("        {")
+    appendLine("            get => ${prop.getter};")
+    appendLine("            set => ${prop.setter};")
+    appendLine("        }")
+  }
+  appendLine()
+}
+
+internal fun StringBuilder.renderMember(member: CirMember, className: String = "") {
+  when (member) {
+    is CirDllImport -> renderDllImport(member)
+    is CirMethod -> renderMethod(member, className)
+    is CirProperty -> renderProperty(member)
+    is CirConst -> renderConst(member)
+  }
+}
+
+internal fun StringBuilder.renderConst(const: CirConst) {
+  appendLine("        public const ${const.type} ${const.name} = ${const.value};")
+  appendLine()
+}
+
+internal fun StringBuilder.renderDllImport(import: CirDllImport) {
+  val visibility: String = if (import.visibility == CirVisibility.PRIVATE) "private" else "public"
+  val entryPoint: String = if (import.entryPoint != null) ", EntryPoint = \"${import.entryPoint}\"" else ""
+  val paramList: MutableList<String> = import.parameters.map { "${it.type} ${it.name}" }.toMutableList()
+  if (import.hasSyncErrorOut) paramList.add("out IntPtr error")
+  val paramStr: String = paramList.joinToString(", ")
+
+  appendLine("        [DllImport(\"${import.libraryName}\", CallingConvention = CallingConvention.Cdecl$entryPoint)]")
+  appendLine("        $visibility static extern ${import.returnType} ${import.name}($paramStr);")
+  appendLine()
+}
+
+internal fun StringBuilder.renderMethod(method: CirMethod, className: String = "") {
+  if (method.isAsync) {
+    renderAsyncMethod(method, className)
+    return
+  }
+
+  if (method.isFlow) {
+    renderFlowMethod(method, className)
+    return
+  }
+
+  if (method.isSyncErrorCheckEnabled) {
+    renderSyncErrorCheckMethod(method, className)
+    return
+  }
+
+  val visibility: String = if (method.visibility == CirVisibility.PRIVATE) "private" else "public"
+  val static: String = if (method.isStatic) "static " else ""
+  val override: String = if (method.isOverride) "override " else ""
+  val abstract: String = if (method.isAbstract) "abstract " else ""
+  val paramStr: String = method.parameters.mapIndexed { index, param ->
+    if (method.isExtension && index == 0) "this ${param.type} ${param.name}"
+    else "${param.type} ${param.name}"
+  }.joinToString(", ")
+
+  val hasGenericType: Boolean = method.typeParameters.isNotEmpty() ||
+    method.returnType.contains("T") ||
+    method.parameters.any { it.type.contains("T") }
+
+  val genericDecl: String = if (hasGenericType && method.isStatic) {
+    val names: String = if (method.typeParameters.isNotEmpty()) {
+      method.typeParameters.joinToString(", ") { it.name }
+    } else "T"
+    "<$names>"
+  } else ""
+
+  val whereClause: String = method.typeParameters
+    .filter { it.bounds.isNotEmpty() }
+    .joinToString(" ") { param ->
+      "where ${param.name} : ${param.bounds.joinToString(", ")}"
+    }
+
+  val whereStr: String =
+    if (whereClause.isNotEmpty()) " $whereClause" else ""
+
+  if (method.isAbstract) {
+    appendLine("        $visibility ${abstract}${method.returnType} ${method.name}$genericDecl($paramStr)$whereStr;")
+  } else {
+    val isMultiLine: Boolean = method.body.contains('\n')
+
+    if (isMultiLine) {
+      if (method.returnType == "void") {
+        appendLine("        $visibility ${static}${override}void ${method.name}$genericDecl($paramStr)$whereStr")
+      } else {
+        appendLine("        $visibility $static$override${method.returnType} ${method.name}$genericDecl($paramStr)$whereStr")
+      }
+      appendLine("        {${method.body}")
+      appendLine("        }")
+    } else {
+      if (method.returnType == "void") {
+        appendLine("        $visibility $static$override void ${method.name}$genericDecl($paramStr)$whereStr")
+        appendLine("            => ${method.body};")
+      } else {
+        appendLine("        $visibility $static$override${method.returnType} ${method.name}$genericDecl($paramStr)$whereStr")
+        appendLine("            => ${method.body};")
+      }
+    }
+  }
+
+  appendLine()
+}
+
+internal fun StringBuilder.renderDataClassMethods(cls: CirClass) {
+  appendLine("        [DllImport(\"${cls.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"${cls.nativePrefix}_equals\")]")
+  appendLine("        private static extern bool Native_Equals(IntPtr handle, IntPtr other);")
+  appendLine()
+  appendLine("        [DllImport(\"${cls.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"${cls.nativePrefix}_hashcode\")]")
+  appendLine("        private static extern int Native_HashCode(IntPtr handle);")
+  appendLine()
+  appendLine("        [DllImport(\"${cls.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"${cls.nativePrefix}_tostring\")]")
+  appendLine("        private static extern IntPtr Native_ToString(IntPtr handle);")
+  appendLine()
+
+  if (cls.constructor != null) {
+    val copyParams: String = cls.constructor.parameters.joinToString(", ") { "${it.type} ${it.name}" }
+    val copyParamNames: String = cls.constructor.parameters.joinToString(", ") { it.name }
+    appendLine("        [DllImport(\"${cls.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"${cls.nativePrefix}_copy\")]")
+    appendLine("        private static extern IntPtr Native_Copy(IntPtr handle, $copyParams);")
+    appendLine()
+    appendLine("        public ${cls.name} Copy($copyParams) => new ${cls.name}(Native_Copy(_handle, $copyParamNames));")
+    appendLine()
+  }
+
+  appendLine("        public override bool Equals(object? obj)")
+  appendLine("        {")
+  appendLine("            if (obj is ${cls.name} other) return Native_Equals(_handle, other._handle);")
+  appendLine("            return false;")
+  appendLine("        }")
+  appendLine()
+  appendLine("        public override int GetHashCode() => Native_HashCode(_handle);")
+  appendLine()
+  appendLine("        public override string ToString() => Marshal.PtrToStringUTF8(Native_ToString(_handle))!;")
+  appendLine()
+}
+
+internal fun StringBuilder.renderDispose(
+  libraryName: String,
+  nativePrefix: String,
+  isAbstract: Boolean = false,
+  hasSuperClass: Boolean = false,
+  hasSuspendMethods: Boolean = false,
+) {
+  val abstract: String = if (isAbstract) "abstract " else ""
+  val override: String = if (hasSuperClass) "override " else ""
+
+  if (isAbstract) {
+    appendLine("        public ${abstract}void Dispose();")
+  } else {
+    appendLine("        [DllImport(\"$libraryName\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"${nativePrefix}_dispose\")]")
+    appendLine("        private static extern void Native_Dispose(IntPtr handle);")
+    appendLine()
+    appendLine("        public ${override}void Dispose()")
+    appendLine("        {")
+    appendLine("            IntPtr handle = Interlocked.Exchange(ref _handle, IntPtr.Zero);")
+    appendLine("            if (handle == IntPtr.Zero) return;")
+    if (hasSuspendMethods) {
+      appendLine("            IntPtr scopeHandle = Interlocked.Exchange(ref _scopeHandle, IntPtr.Zero);")
+      appendLine("            if (scopeHandle != IntPtr.Zero)")
+      appendLine("            {")
+      appendLine("                NugetScopeNative.Cancel(scopeHandle);")
+      appendLine("                NugetScopeNative.Dispose(scopeHandle);")
+      appendLine("            }")
+    }
+    appendLine("            Native_Dispose(handle);")
+    appendLine("        }")
+    if (hasSuspendMethods) {
+      appendLine()
+      appendLine("        public ValueTask DisposeAsync()")
+      appendLine("        {")
+      appendLine("            IntPtr handle = Interlocked.Exchange(ref _handle, IntPtr.Zero);")
+      appendLine("            if (handle == IntPtr.Zero) return ValueTask.CompletedTask;")
+      appendLine("            IntPtr scopeHandle = Interlocked.Exchange(ref _scopeHandle, IntPtr.Zero);")
+      appendLine("            if (scopeHandle == IntPtr.Zero)")
+      appendLine("            {")
+      appendLine("                Native_Dispose(handle);")
+      appendLine("                return ValueTask.CompletedTask;")
+      appendLine("            }")
+      appendLine("            return new ValueTask(DrainAndDisposeAsync(handle, scopeHandle));")
+      appendLine("        }")
+      appendLine()
+      appendLine("        private Task DrainAndDisposeAsync(IntPtr handle, IntPtr scopeHandle)")
+      appendLine("        {")
+      appendLine("            var tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);")
+      appendLine("            GCHandle tcsHandle = GCHandle.Alloc(tcs);")
+      appendLine("            NugetAsyncCallback callback = null!;")
+      appendLine("            GCHandle callbackHandle = default;")
+      appendLine("            IntPtr drainJobHandle = IntPtr.Zero;")
+      appendLine("            callback = (resultPtr, errorPtr, isCancelled, userData) =>")
+      appendLine("            {")
+      appendLine("                NugetJobNative.Dispose(drainJobHandle);")
+      appendLine("                callbackHandle.Free();")
+      appendLine("                var t = (TaskCompletionSource<bool>)GCHandle.FromIntPtr(userData).Target!;")
+      appendLine("                GCHandle.FromIntPtr(userData).Free();")
+      appendLine("                NugetScopeNative.Dispose(scopeHandle);")
+      appendLine("                Native_Dispose(handle);")
+      appendLine("                if (isCancelled != 0)")
+      appendLine("                    t.TrySetCanceled();")
+      appendLine("                else")
+      appendLine("                    t.SetResult(true);")
+      appendLine("            };")
+      appendLine("            callbackHandle = GCHandle.Alloc(callback);")
+      appendLine("            drainJobHandle = NugetScopeNative.Drain(scopeHandle, callback, GCHandle.ToIntPtr(tcsHandle));")
+      appendLine("            return tcs.Task;")
+      appendLine("        }")
+    }
+  }
+}
+
