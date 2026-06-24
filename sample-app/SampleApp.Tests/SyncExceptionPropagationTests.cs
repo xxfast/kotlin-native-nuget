@@ -14,24 +14,34 @@ public class SyncExceptionPropagationTests
     }
 
     [Fact]
-    public void Oreo_OnDiet_ThrowsKotlinException()
+    public void Oreo_OnDiet_ThrowsArgumentException()
     {
-        Assert.Throws<KotlinException>(
+        // Under ADR-029, IllegalArgumentException maps to KotlinArgumentException : ArgumentException
+        Assert.ThrowsAny<ArgumentException>(
             () => SyncExceptions.feedCatTreat("Oreo"));
     }
 
     [Fact]
-    public void Oreo_OnDiet_ThrowsKotlinException_WithTypeName()
+    public void Oreo_OnDiet_IsExactType_KotlinArgumentException()
     {
-        var ex = Assert.Throws<KotlinException>(
+        var ex = Assert.ThrowsAny<ArgumentException>(
             () => SyncExceptions.feedCatTreat("Oreo"));
-        Assert.Equal("kotlin.IllegalArgumentException", ex.KotlinType);
+        Assert.IsType<KotlinArgumentException>(ex);
     }
 
     [Fact]
-    public void Oreo_OnDiet_ThrowsKotlinException_WithMessage()
+    public void Oreo_OnDiet_ViaIKotlinException_KotlinType_IsIllegalArgumentException()
     {
-        var ex = Assert.Throws<KotlinException>(
+        var ex = Assert.ThrowsAny<ArgumentException>(
+            () => SyncExceptions.feedCatTreat("Oreo"));
+        var ke = (IKotlinException)ex;
+        Assert.Equal("kotlin.IllegalArgumentException", ke.KotlinType);
+    }
+
+    [Fact]
+    public void Oreo_OnDiet_WithMessage()
+    {
+        var ex = Assert.ThrowsAny<ArgumentException>(
             () => SyncExceptions.feedCatTreat("Oreo"));
         Assert.Equal("Oreo is on a diet!", ex.Message);
     }
@@ -44,44 +54,48 @@ public class SyncExceptionPropagationTests
     }
 
     [Fact]
-    public void Oreo_OnDiet_ThrowsKotlinException_WithKotlinStackTrace_NonEmpty()
+    public void Oreo_OnDiet_ViaIKotlinException_KotlinStackTrace_NonEmpty()
     {
-        var ex = Assert.Throws<KotlinException>(
+        var ex = Assert.ThrowsAny<ArgumentException>(
             () => SyncExceptions.feedCatTreat("Oreo"));
-        Assert.NotNull(ex.KotlinStackTrace);
-        Assert.NotEmpty(ex.KotlinStackTrace);
+        var ke = (IKotlinException)ex;
+        Assert.NotNull(ke.KotlinStackTrace);
+        Assert.NotEmpty(ke.KotlinStackTrace);
     }
 
     [Fact]
-    public void Oreo_OnDiet_ThrowsKotlinException_WithKotlinStackTrace_ContainsExceptionType()
+    public void Oreo_OnDiet_ViaIKotlinException_KotlinStackTrace_ContainsExceptionType()
     {
-        var ex = Assert.Throws<KotlinException>(
+        var ex = Assert.ThrowsAny<ArgumentException>(
             () => SyncExceptions.feedCatTreat("Oreo"));
-        _testOutputHelper.WriteLine(ex.KotlinStackTrace);
-        Assert.Contains("IllegalArgumentException", ex.KotlinStackTrace);
+        var ke = (IKotlinException)ex;
+        _testOutputHelper.WriteLine(ke.KotlinStackTrace);
+        Assert.Contains("IllegalArgumentException", ke.KotlinStackTrace);
     }
 
     [Fact]
-    public void Oreo_OnDiet_ThrowsKotlinException_WithKotlinStackTrace_ContainsThrowingFunction()
+    public void Oreo_OnDiet_ViaIKotlinException_KotlinStackTrace_ContainsThrowingFunction()
     {
-        var ex = Assert.Throws<KotlinException>(
+        var ex = Assert.ThrowsAny<ArgumentException>(
             () => SyncExceptions.feedCatTreat("Oreo"));
-        Assert.Contains("feedCatTreat", ex.KotlinStackTrace);
+        var ke = (IKotlinException)ex;
+        Assert.Contains("feedCatTreat", ke.KotlinStackTrace);
     }
 
     [Fact]
-    public void Oreo_OnDiet_ThrowsKotlinException_ToString_ContainsKotlinStackTraceSection()
+    public void Oreo_OnDiet_ToString_ContainsKotlinStackTraceSection()
     {
-        var ex = Assert.Throws<KotlinException>(
+        var ex = Assert.ThrowsAny<ArgumentException>(
             () => SyncExceptions.feedCatTreat("Oreo"));
         Assert.Contains("Kotlin stack trace", ex.ToString());
     }
 
     [Fact]
-    public void Oreo_OnDiet_ThrowsKotlinException_ToString_ContainsKotlinStackTraceContent()
+    public void Oreo_OnDiet_ToString_ContainsKotlinStackTraceContent()
     {
-        var ex = Assert.Throws<KotlinException>(
+        var ex = Assert.ThrowsAny<ArgumentException>(
             () => SyncExceptions.feedCatTreat("Oreo"));
-        Assert.Contains(ex.KotlinStackTrace, ex.ToString());
+        var ke = (IKotlinException)ex;
+        Assert.Contains(ke.KotlinStackTrace, ex.ToString());
     }
 }

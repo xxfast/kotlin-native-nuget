@@ -6,12 +6,14 @@ namespace SampleApp.Tests;
 public class ExceptionPropagationTests
 {
     [Fact]
-    public async Task OreoOnDiet_ThrowsKotlinException_WithTypeName()
+    public async Task OreoOnDiet_ThrowsArgumentException_WithTypeName()
     {
         // Oreo can't have treats — he's on a diet!
-        var ex = await Assert.ThrowsAsync<KotlinException>(
+        // Under ADR-029, IllegalArgumentException maps to KotlinArgumentException : ArgumentException
+        var ex = await Assert.ThrowsAnyAsync<ArgumentException>(
             () => AsyncExceptions.FetchCatTreatAsync("Oreo"));
-        Assert.Equal("kotlin.IllegalArgumentException", ex.KotlinType);
+        var ke = (IKotlinException)ex;
+        Assert.Equal("kotlin.IllegalArgumentException", ke.KotlinType);
         Assert.Equal("Oreo is on a diet!", ex.Message);
     }
 
@@ -24,53 +26,67 @@ public class ExceptionPropagationTests
     }
 
     [Fact]
-    public async Task KotlinException_HasKotlinTypeProperty()
+    public async Task OreoOnDiet_IsExactType_KotlinArgumentException()
     {
-        // Verify the KotlinType property is set correctly
-        var ex = await Assert.ThrowsAsync<KotlinException>(
+        // Verify the concrete mapped subtype is KotlinArgumentException
+        var ex = await Assert.ThrowsAnyAsync<ArgumentException>(
             () => AsyncExceptions.FetchCatTreatAsync("Oreo"));
-        Assert.Contains("IllegalArgumentException", ex.KotlinType);
+        Assert.IsType<KotlinArgumentException>(ex);
     }
 
     [Fact]
-    public async Task OreoOnDiet_ThrowsKotlinException_WithKotlinStackTrace_NonEmpty()
+    public async Task OreoOnDiet_ViaIKotlinException_KotlinType_ContainsIllegalArgumentException()
+    {
+        // KotlinType string is preserved on IKotlinException
+        var ex = await Assert.ThrowsAnyAsync<ArgumentException>(
+            () => AsyncExceptions.FetchCatTreatAsync("Oreo"));
+        var ke = (IKotlinException)ex;
+        Assert.Contains("IllegalArgumentException", ke.KotlinType);
+    }
+
+    [Fact]
+    public async Task OreoOnDiet_ViaIKotlinException_KotlinStackTrace_NonEmpty()
     {
         // Oreo can't have treats — he's on a diet, and the trace proves it!
-        var ex = await Assert.ThrowsAsync<KotlinException>(
+        var ex = await Assert.ThrowsAnyAsync<ArgumentException>(
             () => AsyncExceptions.FetchCatTreatAsync("Oreo"));
-        Assert.NotNull(ex.KotlinStackTrace);
-        Assert.NotEmpty(ex.KotlinStackTrace);
+        var ke = (IKotlinException)ex;
+        Assert.NotNull(ke.KotlinStackTrace);
+        Assert.NotEmpty(ke.KotlinStackTrace);
     }
 
     [Fact]
-    public async Task OreoOnDiet_ThrowsKotlinException_WithKotlinStackTrace_ContainsExceptionType()
+    public async Task OreoOnDiet_ViaIKotlinException_KotlinStackTrace_ContainsExceptionType()
     {
-        var ex = await Assert.ThrowsAsync<KotlinException>(
+        var ex = await Assert.ThrowsAnyAsync<ArgumentException>(
             () => AsyncExceptions.FetchCatTreatAsync("Oreo"));
-        Assert.Contains("IllegalArgumentException", ex.KotlinStackTrace);
+        var ke = (IKotlinException)ex;
+        Assert.Contains("IllegalArgumentException", ke.KotlinStackTrace);
     }
 
     [Fact]
-    public async Task OreoOnDiet_ThrowsKotlinException_WithKotlinStackTrace_ContainsThrowingFunction()
+    public async Task OreoOnDiet_ViaIKotlinException_KotlinStackTrace_ContainsThrowingFunction()
     {
-        var ex = await Assert.ThrowsAsync<KotlinException>(
+        var ex = await Assert.ThrowsAnyAsync<ArgumentException>(
             () => AsyncExceptions.FetchCatTreatAsync("Oreo"));
-        Assert.Contains("fetchCatTreat", ex.KotlinStackTrace);
+        var ke = (IKotlinException)ex;
+        Assert.Contains("fetchCatTreat", ke.KotlinStackTrace);
     }
 
     [Fact]
-    public async Task OreoOnDiet_ThrowsKotlinException_ToString_ContainsKotlinStackTraceSection()
+    public async Task OreoOnDiet_ToString_ContainsKotlinStackTraceSection()
     {
-        var ex = await Assert.ThrowsAsync<KotlinException>(
+        var ex = await Assert.ThrowsAnyAsync<ArgumentException>(
             () => AsyncExceptions.FetchCatTreatAsync("Oreo"));
         Assert.Contains("Kotlin stack trace", ex.ToString());
     }
 
     [Fact]
-    public async Task OreoOnDiet_ThrowsKotlinException_ToString_ContainsKotlinStackTraceContent()
+    public async Task OreoOnDiet_ToString_ContainsKotlinStackTraceContent()
     {
-        var ex = await Assert.ThrowsAsync<KotlinException>(
+        var ex = await Assert.ThrowsAnyAsync<ArgumentException>(
             () => AsyncExceptions.FetchCatTreatAsync("Oreo"));
-        Assert.Contains(ex.KotlinStackTrace, ex.ToString());
+        var ke = (IKotlinException)ex;
+        Assert.Contains(ke.KotlinStackTrace, ex.ToString());
     }
 }
