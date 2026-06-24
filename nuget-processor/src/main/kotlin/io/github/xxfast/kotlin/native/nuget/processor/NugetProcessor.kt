@@ -43,6 +43,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.exports.addNugetFunc3Helpe
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addNugetSuspendFunc0HelperExports
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addNugetSuspendFunc1HelperExports
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addNugetScopeHelperExports
+import io.github.xxfast.kotlin.native.nuget.processor.exports.addNugetScopeDrainExport
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addNugetJobHelperExports
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addNugetErrorHelperExports
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addExtensionFunctionExports
@@ -487,6 +488,7 @@ class NugetProcessor(
           needsSuspendLambdaSupport ||
           classesHaveSuspendMethods
         if (needsScopeHelpers) addNugetScopeHelperExports()
+        if (needsScopeHelpers) addNugetScopeDrainExport()
         if (needsScopeHelpers) addNugetJobHelperExports()
         addNugetErrorHelperExports()
       }

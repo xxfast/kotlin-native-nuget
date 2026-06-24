@@ -594,6 +594,32 @@ internal fun FileSpec.Builder.addNugetScopeHelperExports() {
   )
 }
 
+internal fun FileSpec.Builder.addNugetScopeDrainExport() {
+  addFunction(
+    FunSpec.builder("export_nuget_scope_drain")
+      .addAnnotation(cNameAnnotation("nuget_scope_drain"))
+      .addParameter("scopeHandle", cOpaquePointer)
+      .addParameter("callbackPtr", cOpaquePointer)
+      .addParameter("userData", cOpaquePointer)
+      .returns(cOpaquePointer)
+      .addCode(buildString {
+        appendLine("val scope = scopeHandle.asStableRef<CoroutineScope>().get()")
+        appendLine("val callback = callbackPtr.reinterpret<CFunction<")
+        appendLine("  (COpaquePointer?, COpaquePointer?, Byte, COpaquePointer) -> Unit>>()")
+        appendLine("val drainJob = scope.launch(start = CoroutineStart.ATOMIC) {")
+        appendLine("  val self = coroutineContext[Job]")
+        appendLine("  scope.coroutineContext[Job]")
+        appendLine("    ?.children")
+        appendLine("    ?.filter { it != self }")
+        appendLine("    ?.forEach { it.join() }")
+        appendLine("  callback.invoke(null, null, 0.toByte(), userData)")
+        appendLine("}")
+        append("return StableRef.create(drainJob).asCPointer()")
+      })
+      .build()
+  )
+}
+
 internal fun FileSpec.Builder.addNugetJobHelperExports() {
   addFunction(
     FunSpec.builder("export_nuget_job_cancel")

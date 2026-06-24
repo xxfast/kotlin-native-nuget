@@ -728,6 +728,9 @@ class CirRenderer {
     appendLine()
     appendLine("        [DllImport(\"${helper.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"nuget_scope_dispose\")]")
     appendLine("        internal static extern void Dispose(IntPtr handle);")
+    appendLine()
+    appendLine("        [DllImport(\"${helper.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"nuget_scope_drain\")]")
+    appendLine("        internal static extern IntPtr Drain(IntPtr handle, NugetAsyncCallback callback, IntPtr userData);")
     appendLine("    }")
     appendLine()
   }
@@ -945,6 +948,7 @@ class CirRenderer {
     val implements: String = when {
       cls.superClass != null -> " : ${cls.superClass}"
       cls.interfaces.isNotEmpty() -> " : ${cls.interfaces.joinToString(", ")}"
+      cls.disposable && cls.hasSuspendMethods -> " : IDisposable, IAsyncDisposable"
       cls.disposable -> " : IDisposable"
       else -> ""
     }
@@ -1487,6 +1491,46 @@ class CirRenderer {
       }
       appendLine("            Native_Dispose(handle);")
       appendLine("        }")
+      if (hasSuspendMethods) {
+        appendLine()
+        appendLine("        public ValueTask DisposeAsync()")
+        appendLine("        {")
+        appendLine("            IntPtr handle = Interlocked.Exchange(ref _handle, IntPtr.Zero);")
+        appendLine("            if (handle == IntPtr.Zero) return ValueTask.CompletedTask;")
+        appendLine("            IntPtr scopeHandle = Interlocked.Exchange(ref _scopeHandle, IntPtr.Zero);")
+        appendLine("            if (scopeHandle == IntPtr.Zero)")
+        appendLine("            {")
+        appendLine("                Native_Dispose(handle);")
+        appendLine("                return ValueTask.CompletedTask;")
+        appendLine("            }")
+        appendLine("            return new ValueTask(DrainAndDisposeAsync(handle, scopeHandle));")
+        appendLine("        }")
+        appendLine()
+        appendLine("        private Task DrainAndDisposeAsync(IntPtr handle, IntPtr scopeHandle)")
+        appendLine("        {")
+        appendLine("            var tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);")
+        appendLine("            GCHandle tcsHandle = GCHandle.Alloc(tcs);")
+        appendLine("            NugetAsyncCallback callback = null!;")
+        appendLine("            GCHandle callbackHandle = default;")
+        appendLine("            IntPtr drainJobHandle = IntPtr.Zero;")
+        appendLine("            callback = (resultPtr, errorPtr, isCancelled, userData) =>")
+        appendLine("            {")
+        appendLine("                NugetJobNative.Dispose(drainJobHandle);")
+        appendLine("                callbackHandle.Free();")
+        appendLine("                var t = (TaskCompletionSource<bool>)GCHandle.FromIntPtr(userData).Target!;")
+        appendLine("                GCHandle.FromIntPtr(userData).Free();")
+        appendLine("                NugetScopeNative.Dispose(scopeHandle);")
+        appendLine("                Native_Dispose(handle);")
+        appendLine("                if (isCancelled != 0)")
+        appendLine("                    t.TrySetCanceled();")
+        appendLine("                else")
+        appendLine("                    t.SetResult(true);")
+        appendLine("            };")
+        appendLine("            callbackHandle = GCHandle.Alloc(callback);")
+        appendLine("            drainJobHandle = NugetScopeNative.Drain(scopeHandle, callback, GCHandle.ToIntPtr(tcsHandle));")
+        appendLine("            return tcs.Task;")
+        appendLine("        }")
+      }
     }
   }
 
