@@ -68,7 +68,7 @@
 ## Phase 5: Exception handling
 - [x] Map exception propagation across the bridge (see [ADR-023](docs/adr/023-exception-propagation.md))
 - [x] Map synchronous exception propagation (see [ADR-024](docs/adr/024-sync-exception-propagation.md))
-- [ ] Propagate Kotlin stack trace as `KotlinException.KotlinStackTrace` property
+- [x] Propagate Kotlin stack trace as `KotlinException.KotlinStackTrace` property (see [ADR-027](docs/adr/027-stacktrace-propagation.md))
 - [ ] Map exception cause chain (`e.cause` → `InnerException`)
 - [ ] Map core Kotlin exceptions to .NET analogs (e.g., `IllegalArgumentException` → `ArgumentException`) with `IKotlinException` interface
 - [ ] Map property getter/setter exception propagation (deferred from ADR-024)
@@ -97,6 +97,14 @@
 - [ ] Generate Kotlin wrappers for C# interfaces (callbacks, event handlers)
 - [ ] Support implementing C# interfaces in Kotlin and passing them back to C# consumers
 - [ ] Support implementing Kotlin interfaces in C# and passing them to Kotlin producers
+
+## Pre-Launch Checklist 
+- [ ] Add KDoc comments in generated C# for better IDE support (e.g., from Kotlin source KDoc or signatures)
+- [ ] Finalize README with usage instructions and API documentation
+- [ ] Add Writerside documentation
+- [ ] Add a better sample app that demonstrates more complex usage of the bridge (e.g., using generics, collections, async features)
+- [ ] Publish releases to GitHub Packages
+- [ ] Publish releases to mavenCentral
 
 ## Future Improvements
 

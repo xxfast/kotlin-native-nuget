@@ -358,8 +358,9 @@ internal fun translateFunction(
       appendLine("            {")
       appendLine("                string kotlinType = NugetErrorNative.Type(error);")
       appendLine("                string msg = NugetErrorNative.Message(error);")
+      appendLine("                string stackTrace = NugetErrorNative.StackTrace(error);")
       appendLine("                NugetMarshal.Dispose(error);")
-      appendLine("                throw new KotlinException(kotlinType, msg);")
+      appendLine("                throw new KotlinException(kotlinType, msg, stackTrace);")
       appendLine("            }")
       append("            return new $kotlinReturnType<$typeArgs>(nativeResult);")
     }
@@ -397,8 +398,9 @@ internal fun translateFunction(
       appendLine("            {")
       appendLine("                string kotlinType = NugetErrorNative.Type(error);")
       appendLine("                string msg = NugetErrorNative.Message(error);")
+      appendLine("                string stackTrace = NugetErrorNative.StackTrace(error);")
       appendLine("                NugetMarshal.Dispose(error);")
-      appendLine("                throw new KotlinException(kotlinType, msg);")
+      appendLine("                throw new KotlinException(kotlinType, msg, stackTrace);")
       appendLine("            }")
       append("            return $kotlinReturnType.FromHandle(nativeResult);")
     }

@@ -31,4 +31,46 @@ public class ExceptionPropagationTests
             () => AsyncExceptions.FetchCatTreatAsync("Oreo"));
         Assert.Contains("IllegalArgumentException", ex.KotlinType);
     }
+
+    [Fact]
+    public async Task OreoOnDiet_ThrowsKotlinException_WithKotlinStackTrace_NonEmpty()
+    {
+        // Oreo can't have treats — he's on a diet, and the trace proves it!
+        var ex = await Assert.ThrowsAsync<KotlinException>(
+            () => AsyncExceptions.FetchCatTreatAsync("Oreo"));
+        Assert.NotNull(ex.KotlinStackTrace);
+        Assert.NotEmpty(ex.KotlinStackTrace);
+    }
+
+    [Fact]
+    public async Task OreoOnDiet_ThrowsKotlinException_WithKotlinStackTrace_ContainsExceptionType()
+    {
+        var ex = await Assert.ThrowsAsync<KotlinException>(
+            () => AsyncExceptions.FetchCatTreatAsync("Oreo"));
+        Assert.Contains("IllegalArgumentException", ex.KotlinStackTrace);
+    }
+
+    [Fact]
+    public async Task OreoOnDiet_ThrowsKotlinException_WithKotlinStackTrace_ContainsThrowingFunction()
+    {
+        var ex = await Assert.ThrowsAsync<KotlinException>(
+            () => AsyncExceptions.FetchCatTreatAsync("Oreo"));
+        Assert.Contains("fetchCatTreat", ex.KotlinStackTrace);
+    }
+
+    [Fact]
+    public async Task OreoOnDiet_ThrowsKotlinException_ToString_ContainsKotlinStackTraceSection()
+    {
+        var ex = await Assert.ThrowsAsync<KotlinException>(
+            () => AsyncExceptions.FetchCatTreatAsync("Oreo"));
+        Assert.Contains("Kotlin stack trace", ex.ToString());
+    }
+
+    [Fact]
+    public async Task OreoOnDiet_ThrowsKotlinException_ToString_ContainsKotlinStackTraceContent()
+    {
+        var ex = await Assert.ThrowsAsync<KotlinException>(
+            () => AsyncExceptions.FetchCatTreatAsync("Oreo"));
+        Assert.Contains(ex.KotlinStackTrace, ex.ToString());
+    }
 }

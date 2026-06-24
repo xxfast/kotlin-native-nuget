@@ -503,7 +503,7 @@ internal fun FileSpec.Builder.addNugetSuspendFunc0HelperExports() {
         appendLine("    callback.invoke(null, null, 1.toByte(), userData)")
         appendLine("    throw e")
         appendLine("  } catch (e: Throwable) {")
-        appendLine("    val errRef = StableRef.create(Pair(e::class.qualifiedName ?: e::class.simpleName ?: \"UnknownException\", e.message ?: \"Kotlin error\")).asCPointer()")
+        appendLine("    val errRef = StableRef.create(Triple(e::class.qualifiedName ?: e::class.simpleName ?: \"UnknownException\", e.message ?: \"Kotlin error\", e.stackTraceToString())).asCPointer()")
         appendLine("    callback.invoke(null, errRef, 0.toByte(), userData)")
         appendLine("  }")
         appendLine("}")
@@ -540,7 +540,7 @@ internal fun FileSpec.Builder.addNugetSuspendFunc1HelperExports() {
         appendLine("    callback.invoke(null, null, 1.toByte(), userData)")
         appendLine("    throw e")
         appendLine("  } catch (e: Throwable) {")
-        appendLine("    val errRef = StableRef.create(Pair(e::class.qualifiedName ?: e::class.simpleName ?: \"UnknownException\", e.message ?: \"Kotlin error\")).asCPointer()")
+        appendLine("    val errRef = StableRef.create(Triple(e::class.qualifiedName ?: e::class.simpleName ?: \"UnknownException\", e.message ?: \"Kotlin error\", e.stackTraceToString())).asCPointer()")
         appendLine("    callback.invoke(null, errRef, 0.toByte(), userData)")
         appendLine("  }")
         appendLine("}")
@@ -657,8 +657,8 @@ internal fun FileSpec.Builder.addNugetErrorHelperExports() {
       .addParameter("handle", cOpaquePointer)
       .returns(String::class)
       .addStatement(
-        "return handle.asStableRef<%T<String, String>>().get().first",
-        ClassName("kotlin", "Pair"),
+        "return handle.asStableRef<%T<String, String, String>>().get().first",
+        ClassName("kotlin", "Triple"),
       )
       .build()
   )
@@ -669,8 +669,20 @@ internal fun FileSpec.Builder.addNugetErrorHelperExports() {
       .addParameter("handle", cOpaquePointer)
       .returns(String::class)
       .addStatement(
-        "return handle.asStableRef<%T<String, String>>().get().second",
-        ClassName("kotlin", "Pair"),
+        "return handle.asStableRef<%T<String, String, String>>().get().second",
+        ClassName("kotlin", "Triple"),
+      )
+      .build()
+  )
+
+  addFunction(
+    FunSpec.builder("export_nuget_error_stacktrace")
+      .addAnnotation(cNameAnnotation("nuget_error_stacktrace"))
+      .addParameter("handle", cOpaquePointer)
+      .returns(String::class)
+      .addStatement(
+        "return handle.asStableRef<%T<String, String, String>>().get().third",
+        ClassName("kotlin", "Triple"),
       )
       .build()
   )
