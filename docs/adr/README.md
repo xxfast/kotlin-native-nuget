@@ -25,3 +25,4 @@
 - [023](023-exception-propagation.md) — `KotlinException.KotlinType` property; `Pair<String,String>` error bridge; `nuget_error_type`/`nuget_error_message` exports
 - [024](024-sync-exception-propagation.md) — Error out-parameter for sync functions; wrap-all (no `@Throws` required); mirrors ObjC `NSError**` ABI
 - [025](025-async-disposable.md) — `IAsyncDisposable` + `DisposeAsync()` for graceful drain; `nuget_scope_drain` export joins all child jobs before releasing handles
+- [026](026-flow-mapping.md) — `Flow<T>` → `KotlinFlow<T>` (`IAsyncEnumerable<T>`); Channel-buffered push→pull bridge; three-callback ABI (`onNext`, `onComplete`, `onError`)

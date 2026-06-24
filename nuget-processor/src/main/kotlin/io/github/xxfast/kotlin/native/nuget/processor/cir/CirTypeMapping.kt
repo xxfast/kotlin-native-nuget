@@ -51,11 +51,16 @@ internal val SUSPEND_LAMBDA_TYPES = setOf(
   "kotlin.coroutines.SuspendFunction3",
 )
 
+internal val FLOW_TYPES = setOf(
+  "kotlinx.coroutines.flow.Flow",
+)
+
 internal class CollectionHelperTracker {
   var needsList: Boolean = false
   var needsMap: Boolean = false
   var needsSet: Boolean = false
   var needsAsync: Boolean = false
+  var needsFlow: Boolean = false
   val lambdaArities: MutableSet<Int> = mutableSetOf()
   val suspendLambdaArities: MutableSet<Int> = mutableSetOf()
 }

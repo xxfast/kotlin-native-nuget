@@ -203,6 +203,8 @@ fun translate(
 
   if (tracker.suspendLambdaArities.isNotEmpty()) tracker.needsAsync = true
 
+  if (tracker.needsFlow) tracker.needsAsync = true
+
   if (tracker.needsList || tracker.needsMap || tracker.needsSet || tracker.lambdaArities.isNotEmpty() || tracker.needsAsync) {
     needsMarshalHelper = true
   }
@@ -222,6 +224,7 @@ fun translate(
     if (tracker.needsAsync) helpers.add(CirScopeHelper(context.libraryName))
     if (tracker.needsAsync) helpers.add(CirJobHelper(context.libraryName))
     helpers.add(CirErrorHelper(context.libraryName))
+    if (tracker.needsFlow) helpers.add(CirFlowHelper(context.libraryName))
 
     val rootIdx: Int = namespaces.indexOfFirst { it.name == context.rootNamespace }
 
@@ -267,6 +270,10 @@ fun translate(
     usings.add("System.Runtime.CompilerServices")
     usings.add("System.Threading")
     usings.add("System.Threading.Tasks")
+  }
+  if (tracker.needsFlow) {
+    usings.add("System.Threading.Channels")
+    if ("System.Collections.Generic" !in usings) usings.add("System.Collections.Generic")
   }
 
   return CirFile(usings = usings, namespaces = namespaces)

@@ -31,6 +31,7 @@ class CirRenderer {
         is CirScopeHelper -> renderScopeHelper(declaration)
         is CirJobHelper -> renderJobHelper(declaration)
         is CirErrorHelper -> renderErrorHelper(declaration)
+        is CirFlowHelper -> renderFlowHelper(declaration)
         is CirStaticClass -> renderStaticClass(declaration)
         is CirInterface -> renderInterface(declaration)
         is CirClass -> renderClass(declaration)
@@ -772,6 +773,137 @@ class CirRenderer {
     appendLine()
   }
 
+  private fun StringBuilder.renderFlowHelper(helper: CirFlowHelper) {
+    appendLine("    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]")
+    appendLine("    internal delegate void NugetFlowOnNextCallback(IntPtr itemPtr, byte isCancelled, IntPtr userData);")
+    appendLine()
+    appendLine("    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]")
+    appendLine("    internal delegate void NugetFlowOnCompleteCallback(IntPtr userData);")
+    appendLine()
+    appendLine("    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]")
+    appendLine("    internal delegate void NugetFlowOnErrorCallback(IntPtr errorPtr, IntPtr userData);")
+    appendLine()
+    appendLine("    internal delegate IntPtr NugetFlowCollectDelegate(IntPtr onNext, IntPtr onComplete, IntPtr onError, IntPtr userData);")
+    appendLine()
+    appendLine("    public class KotlinFlow<T> : IAsyncEnumerable<T>")
+    appendLine("    {")
+    appendLine("        private readonly NugetFlowCollectDelegate _startCollect;")
+    appendLine()
+    appendLine("        internal KotlinFlow(NugetFlowCollectDelegate startCollect)")
+    appendLine("        {")
+    appendLine("            _startCollect = startCollect;")
+    appendLine("        }")
+    appendLine()
+    appendLine("        public IAsyncEnumerator<T> GetAsyncEnumerator(CancellationToken cancellationToken = default)")
+    appendLine("            => new KotlinFlowEnumerator<T>(_startCollect, cancellationToken);")
+    appendLine("    }")
+    appendLine()
+    appendLine("    internal class KotlinFlowEnumerator<T> : IAsyncEnumerator<T>")
+    appendLine("    {")
+    appendLine("        private readonly Channel<T> _channel;")
+    appendLine("        private readonly CancellationTokenRegistration _cancelReg;")
+    appendLine("        private IntPtr _jobHandle;")
+    appendLine("        private GCHandle _onNextHandle;")
+    appendLine("        private GCHandle _onCompleteHandle;")
+    appendLine("        private GCHandle _onErrorHandle;")
+    appendLine("        private bool _done;")
+    appendLine()
+    appendLine("        public T Current { get; private set; } = default!;")
+    appendLine()
+    appendLine("        internal KotlinFlowEnumerator(NugetFlowCollectDelegate startCollect, CancellationToken cancellationToken)")
+    appendLine("        {")
+    appendLine("            _channel = Channel.CreateUnbounded<T>(new UnboundedChannelOptions { SingleReader = true, SingleWriter = true });")
+    appendLine()
+    appendLine("            NugetFlowOnNextCallback onNext = (itemPtr, isCancelled, userData) =>")
+    appendLine("            {")
+    appendLine("                if (isCancelled != 0) { _channel.Writer.TryComplete(); return; }")
+    appendLine("                T value = NugetMarshal.FromHandle<T>(itemPtr);")
+    appendLine("                _channel.Writer.TryWrite(value);")
+    appendLine("            };")
+    appendLine()
+    appendLine("            NugetFlowOnCompleteCallback onComplete = (userData) =>")
+    appendLine("            {")
+    appendLine("                _channel.Writer.TryComplete();")
+    appendLine("            };")
+    appendLine()
+    appendLine("            NugetFlowOnErrorCallback onError = (errorPtr, userData) =>")
+    appendLine("            {")
+    appendLine("                string kotlinType = NugetErrorNative.Type(errorPtr);")
+    appendLine("                string msg = NugetErrorNative.Message(errorPtr);")
+    appendLine("                NugetMarshal.Dispose(errorPtr);")
+    appendLine("                _channel.Writer.TryComplete(new KotlinException(kotlinType, msg));")
+    appendLine("            };")
+    appendLine()
+    appendLine("            _onNextHandle = GCHandle.Alloc(onNext);")
+    appendLine("            _onCompleteHandle = GCHandle.Alloc(onComplete);")
+    appendLine("            _onErrorHandle = GCHandle.Alloc(onError);")
+    appendLine()
+    appendLine("            IntPtr onNextPtr = Marshal.GetFunctionPointerForDelegate(onNext);")
+    appendLine("            IntPtr onCompletePtr = Marshal.GetFunctionPointerForDelegate(onComplete);")
+    appendLine("            IntPtr onErrorPtr = Marshal.GetFunctionPointerForDelegate(onError);")
+    appendLine()
+    appendLine("            _jobHandle = startCollect(onNextPtr, onCompletePtr, onErrorPtr, IntPtr.Zero);")
+    appendLine()
+    appendLine("            if (cancellationToken.CanBeCanceled)")
+    appendLine("                _cancelReg = cancellationToken.Register(() => NugetJobNative.Cancel(_jobHandle));")
+    appendLine("        }")
+    appendLine()
+    appendLine("        public async ValueTask<bool> MoveNextAsync()")
+    appendLine("        {")
+    appendLine("            if (_done) return false;")
+    appendLine()
+    appendLine("            try")
+    appendLine("            {")
+    appendLine("                if (await _channel.Reader.WaitToReadAsync())")
+    appendLine("                {")
+    appendLine("                    if (_channel.Reader.TryRead(out T? item))")
+    appendLine("                    {")
+    appendLine("                        Current = item;")
+    appendLine("                        return true;")
+    appendLine("                    }")
+    appendLine("                }")
+    appendLine("            }")
+    appendLine("            catch (ChannelClosedException)")
+    appendLine("            {")
+    appendLine("                _done = true;")
+    appendLine("                if (_channel.Reader.Completion.IsFaulted)")
+    appendLine("                {")
+    appendLine("                    var ex = _channel.Reader.Completion.Exception?.InnerException;")
+    appendLine("                    if (ex != null) throw ex;")
+    appendLine("                }")
+    appendLine("                return false;")
+    appendLine("            }")
+    appendLine()
+    appendLine("            _done = true;")
+    appendLine()
+    appendLine("            if (_channel.Reader.Completion.IsFaulted)")
+    appendLine("            {")
+    appendLine("                var ex = _channel.Reader.Completion.Exception?.InnerException;")
+    appendLine("                if (ex != null) throw ex;")
+    appendLine("            }")
+    appendLine()
+    appendLine("            return false;")
+    appendLine("        }")
+    appendLine()
+    appendLine("        public ValueTask DisposeAsync()")
+    appendLine("        {")
+    appendLine("            _cancelReg.Dispose();")
+    appendLine("            if (_jobHandle != IntPtr.Zero)")
+    appendLine("            {")
+    appendLine("                NugetJobNative.Cancel(_jobHandle);")
+    appendLine("                NugetJobNative.Dispose(_jobHandle);")
+    appendLine("                _jobHandle = IntPtr.Zero;")
+    appendLine("            }")
+    appendLine("            if (_onNextHandle.IsAllocated) _onNextHandle.Free();")
+    appendLine("            if (_onCompleteHandle.IsAllocated) _onCompleteHandle.Free();")
+    appendLine("            if (_onErrorHandle.IsAllocated) _onErrorHandle.Free();")
+    appendLine("            _channel.Writer.TryComplete();")
+    appendLine("            return ValueTask.CompletedTask;")
+    appendLine("        }")
+    appendLine("    }")
+    appendLine()
+  }
+
   private fun StringBuilder.renderGenericClass(cls: CirGenericClass) {
     val typeParams: String = cls.typeParameters.joinToString(", ") { it.name }
 
@@ -1004,24 +1136,32 @@ class CirRenderer {
     }
 
     for (prop in cls.properties) {
-      appendLine("        [DllImport(\"${cls.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"${cls.nativePrefix}_get_${prop.nativeName}\")]")
-      appendLine("        private static extern ${prop.nativeReturnType} Native_Get_${prop.nativeName}(IntPtr handle);")
-      appendLine()
-      if (prop.setter != null) {
-        val setterType: String = prop.nativeSetterType
-        appendLine("        [DllImport(\"${cls.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"${cls.nativePrefix}_set_${prop.nativeName}\")]")
-        appendLine("        private static extern void Native_Set_${prop.nativeName}(IntPtr handle, $setterType value);")
+      if (prop.isFlow) {
+        val collectEntryPoint = "${cls.nativePrefix}_get_${prop.nativeName}_collect"
+        appendLine("        [DllImport(\"${cls.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"$collectEntryPoint\")]")
+        appendLine("        private static extern IntPtr Native_Get${prop.name}Collect(IntPtr handle, IntPtr scopeHandle, IntPtr onNext, IntPtr onComplete, IntPtr onError, IntPtr userData);")
         appendLine()
-      }
-      for (extra in prop.extraNatives) {
-        val entryPoint = "${cls.nativePrefix}_${extra.entryPointSuffix}"
-        val paramStr = if (extra.hasValueParam) "IntPtr handle, ${extra.returnType} value" else "IntPtr handle"
-        val externReturn = if (extra.hasValueParam) "void" else extra.returnType
-        appendLine("        [DllImport(\"${cls.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"$entryPoint\")]")
-        appendLine("        private static extern $externReturn ${extra.name}($paramStr);")
+        renderProperty(prop)
+      } else {
+        appendLine("        [DllImport(\"${cls.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"${cls.nativePrefix}_get_${prop.nativeName}\")]")
+        appendLine("        private static extern ${prop.nativeReturnType} Native_Get_${prop.nativeName}(IntPtr handle);")
         appendLine()
+        if (prop.setter != null) {
+          val setterType: String = prop.nativeSetterType
+          appendLine("        [DllImport(\"${cls.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"${cls.nativePrefix}_set_${prop.nativeName}\")]")
+          appendLine("        private static extern void Native_Set_${prop.nativeName}(IntPtr handle, $setterType value);")
+          appendLine()
+        }
+        for (extra in prop.extraNatives) {
+          val entryPoint = "${cls.nativePrefix}_${extra.entryPointSuffix}"
+          val paramStr = if (extra.hasValueParam) "IntPtr handle, ${extra.returnType} value" else "IntPtr handle"
+          val externReturn = if (extra.hasValueParam) "void" else extra.returnType
+          appendLine("        [DllImport(\"${cls.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"$entryPoint\")]")
+          appendLine("        private static extern $externReturn ${extra.name}($paramStr);")
+          appendLine()
+        }
+        renderProperty(prop)
       }
-      renderProperty(prop)
     }
 
     for (method in cls.methods) {
@@ -1270,9 +1410,28 @@ class CirRenderer {
     appendLine()
   }
 
+  private fun StringBuilder.renderFlowMethod(method: CirMethod, className: String) {
+    val paramStr: String = method.parameters.joinToString(", ") { "${it.type} ${it.name}" }
+    val nativeName: String = method.nativeName
+
+    appendLine("        public KotlinFlow<${method.flowElementType}> ${method.name}($paramStr)")
+    appendLine("        {")
+    appendLine("            if (_handle == IntPtr.Zero)")
+    appendLine("                throw new ObjectDisposedException(nameof($className));")
+    appendLine("            return new KotlinFlow<${method.flowElementType}>((onNext, onComplete, onError, userData) =>")
+    appendLine("                $nativeName(${method.body}));")
+    appendLine("        }")
+    appendLine()
+  }
+
   private fun StringBuilder.renderMethod(method: CirMethod, className: String = "") {
     if (method.isAsync) {
       renderAsyncMethod(method, className)
+      return
+    }
+
+    if (method.isFlow) {
+      renderFlowMethod(method, className)
       return
     }
 

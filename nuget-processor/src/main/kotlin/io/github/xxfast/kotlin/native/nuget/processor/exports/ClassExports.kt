@@ -80,6 +80,8 @@ internal fun FileSpec.Builder.addClassExports(cls: KSClassDeclaration) {
     val isEnumType: Boolean = (propTypeResolved.declaration as? KSClassDeclaration)
       ?.classKind == ClassKind.ENUM_CLASS
 
+    val isFlowType: Boolean = propType == "kotlinx.coroutines.flow.Flow"
+
     val isPrimitiveType: Boolean = propType in setOf(
       "kotlin.String", "kotlin.Byte", "kotlin.UByte", "kotlin.Short",
       "kotlin.UShort", "kotlin.Int", "kotlin.UInt", "kotlin.Long",
@@ -87,7 +89,25 @@ internal fun FileSpec.Builder.addClassExports(cls: KSClassDeclaration) {
       "kotlin.Unit",
     )
 
-    if (isEnumType) {
+    if (isFlowType) {
+      val flowElementType = propTypeResolved.arguments.firstOrNull()?.type?.resolve()
+      val flowElementQualified: String =
+        flowElementType?.declaration?.qualifiedName?.asString() ?: "kotlin.Any"
+
+      addFunction(
+        FunSpec.builder("export_${prefix}_get_${propName}_collect")
+          .addAnnotation(cNameAnnotation("${prefix}_get_${propName}_collect"))
+          .addParameter("handle", cOpaquePointer)
+          .addParameter("scopeHandle", cOpaquePointer)
+          .addParameter("onNextPtr", cOpaquePointer)
+          .addParameter("onCompletePtr", cOpaquePointer)
+          .addParameter("onErrorPtr", cOpaquePointer)
+          .addParameter("userData", cOpaquePointer)
+          .returns(cOpaquePointer)
+          .addCode(buildFlowCollectBody(qualifiedName, propName, flowElementQualified))
+          .build()
+      )
+    } else if (isEnumType) {
       addFunction(
         FunSpec.builder("export_${prefix}_get_$propName")
           .addAnnotation(cNameAnnotation("${prefix}_get_$propName"))
@@ -255,7 +275,7 @@ internal fun FileSpec.Builder.addClassExports(cls: KSClassDeclaration) {
     }
   }
 
-  val methods: List<KSFunctionDeclaration> = cls.getAllFunctions()
+  val allRegularMethods: List<KSFunctionDeclaration> = cls.getAllFunctions()
     .filter { it.getVisibility() == Visibility.PUBLIC }
     .filter {
       val name: String = it.simpleName.asString()
@@ -273,6 +293,18 @@ internal fun FileSpec.Builder.addClassExports(cls: KSClassDeclaration) {
       }
     }
     .toList()
+
+  val flowMethods: List<KSFunctionDeclaration> = allRegularMethods.filter { method ->
+    val returnQualified: String? = method.returnType?.resolve()
+      ?.expandAliases()?.declaration?.qualifiedName?.asString()
+    returnQualified == "kotlinx.coroutines.flow.Flow"
+  }
+
+  val methods: List<KSFunctionDeclaration> = allRegularMethods.filter { method ->
+    val returnQualified: String? = method.returnType?.resolve()
+      ?.expandAliases()?.declaration?.qualifiedName?.asString()
+    returnQualified != "kotlinx.coroutines.flow.Flow"
+  }
 
   for (method in methods) {
     val methodName: String = method.simpleName.asString()
@@ -329,6 +361,46 @@ internal fun FileSpec.Builder.addClassExports(cls: KSClassDeclaration) {
         append("}")
       }, qualifiedName, methodName, methodParamCall, cOpaquePointerVar, stableRef)
     }
+
+    addFunction(builder.build())
+  }
+
+  flowMethods.forEach { method ->
+    val methodName: String = method.simpleName.asString()
+    val cname: String = toCName(methodName)
+    val returnType = method.returnType?.resolve()?.expandAliases()
+    val flowElementType = returnType?.arguments?.firstOrNull()?.type?.resolve()
+    val flowElementQualified: String =
+      flowElementType?.declaration?.qualifiedName?.asString() ?: "kotlin.Any"
+
+    val paramCall: String = method.parameters
+      .joinToString(", ") { it.name?.asString() ?: "_" }
+
+    val builder: FunSpec.Builder = FunSpec
+      .builder("export_${prefix}_${cname}_collect")
+      .addAnnotation(cNameAnnotation("${prefix}_${cname}_collect"))
+      .addParameter("handle", cOpaquePointer)
+      .addParameter("scopeHandle", cOpaquePointer)
+
+    method.parameters.forEach { param ->
+      val resolved = param.type.resolve().expandAliases()
+      val type: String = resolved.declaration.qualifiedName?.asString()
+        ?: resolved.declaration.simpleName.asString()
+      builder.addParameter(
+        param.name?.asString() ?: "_",
+        ClassName.bestGuess(type),
+      )
+    }
+
+    builder
+      .addParameter("onNextPtr", cOpaquePointer)
+      .addParameter("onCompletePtr", cOpaquePointer)
+      .addParameter("onErrorPtr", cOpaquePointer)
+      .addParameter("userData", cOpaquePointer)
+      .returns(cOpaquePointer)
+      .addCode(buildFlowMethodCollectBody(
+        qualifiedName, methodName, paramCall, flowElementQualified,
+      ))
 
     addFunction(builder.build())
   }
@@ -542,4 +614,67 @@ internal fun FileSpec.Builder.addCompanionExports(cls: KSClassDeclaration) {
       )
     }
   }
+}
+
+private fun buildFlowCollectBody(
+  qualifiedName: String,
+  propName: String,
+  flowElementQualified: String,
+): String = buildString {
+  appendLine("val obj = handle.asStableRef<$qualifiedName>().get()")
+  appendLine("val scope = scopeHandle.asStableRef<CoroutineScope>().get()")
+  appendLine("val onNext = onNextPtr.reinterpret<CFunction<" +
+    "(COpaquePointer?, Byte, COpaquePointer) -> Unit>>()")
+  appendLine("val onComplete = onCompletePtr.reinterpret<CFunction<" +
+    "(COpaquePointer) -> Unit>>()")
+  appendLine("val onError = onErrorPtr.reinterpret<CFunction<" +
+    "(COpaquePointer?, COpaquePointer) -> Unit>>()")
+  appendLine("val job = scope.launch(start = CoroutineStart.ATOMIC) {")
+  appendLine("  try {")
+  appendLine("    obj.$propName.collect { value ->")
+  appendLine("      val itemRef = StableRef.create(value as Any).asCPointer()")
+  appendLine("      onNext.invoke(itemRef, 0.toByte(), userData)")
+  appendLine("    }")
+  appendLine("    onComplete.invoke(userData)")
+  appendLine("  } catch (e: CancellationException) {")
+  appendLine("    onNext.invoke(null, 1.toByte(), userData)")
+  appendLine("    throw e")
+  appendLine("  } catch (e: Throwable) {")
+  appendLine("    val errRef = StableRef.create(Pair(e::class.qualifiedName ?: e::class.simpleName ?: \"UnknownException\", e.message ?: \"Kotlin error\")).asCPointer()")
+  appendLine("    onError.invoke(errRef, userData)")
+  appendLine("  }")
+  appendLine("}")
+  append("return StableRef.create(job).asCPointer()")
+}
+
+private fun buildFlowMethodCollectBody(
+  qualifiedName: String,
+  methodName: String,
+  paramCall: String,
+  flowElementQualified: String,
+): String = buildString {
+  appendLine("val obj = handle.asStableRef<$qualifiedName>().get()")
+  appendLine("val scope = scopeHandle.asStableRef<CoroutineScope>().get()")
+  appendLine("val onNext = onNextPtr.reinterpret<CFunction<" +
+    "(COpaquePointer?, Byte, COpaquePointer) -> Unit>>()")
+  appendLine("val onComplete = onCompletePtr.reinterpret<CFunction<" +
+    "(COpaquePointer) -> Unit>>()")
+  appendLine("val onError = onErrorPtr.reinterpret<CFunction<" +
+    "(COpaquePointer?, COpaquePointer) -> Unit>>()")
+  appendLine("val job = scope.launch(start = CoroutineStart.ATOMIC) {")
+  appendLine("  try {")
+  appendLine("    obj.$methodName($paramCall).collect { value ->")
+  appendLine("      val itemRef = StableRef.create(value as Any).asCPointer()")
+  appendLine("      onNext.invoke(itemRef, 0.toByte(), userData)")
+  appendLine("    }")
+  appendLine("    onComplete.invoke(userData)")
+  appendLine("  } catch (e: CancellationException) {")
+  appendLine("    onNext.invoke(null, 1.toByte(), userData)")
+  appendLine("    throw e")
+  appendLine("  } catch (e: Throwable) {")
+  appendLine("    val errRef = StableRef.create(Pair(e::class.qualifiedName ?: e::class.simpleName ?: \"UnknownException\", e.message ?: \"Kotlin error\")).asCPointer()")
+  appendLine("    onError.invoke(errRef, userData)")
+  appendLine("  }")
+  appendLine("}")
+  append("return StableRef.create(job).asCPointer()")
 }

@@ -123,9 +123,22 @@ internal fun translateClass(
         tracker.needsAsync = true
       }
 
+      val isFlowType: Boolean = qualifiedTypeName in FLOW_TYPES
+      val flowElementType: String? = if (isFlowType) {
+        val elementType = propTypeResolved.arguments.firstOrNull()?.type?.resolve()
+        val elementTypeName: String = elementType?.declaration?.simpleName?.asString() ?: "Any"
+        KOTLIN_TO_CSHARP_PARAM[elementTypeName] ?: elementTypeName
+      } else null
+
+      if (isFlowType) {
+        tracker.needsFlow = true
+        tracker.needsAsync = true
+      }
+
       val isReferenceType: Boolean = propType !in KOTLIN_TO_CSHARP_RETURN && !isEnumType &&
         !isListType && !isMutableListType && !isMapType && !isMutableMapType &&
-        !isSetType && !isMutableSetType && !isLambdaType && !isSuspendLambdaType
+        !isSetType && !isMutableSetType && !isLambdaType && !isSuspendLambdaType &&
+        !isFlowType
 
       if (isReferenceType) {
         if (qualifiedTypeName != null && qualifiedTypeName !in exportedTypes) {
@@ -179,6 +192,7 @@ internal fun translateClass(
       val nativeReturnType: String = when {
         isLambdaType -> "IntPtr"
         isSuspendLambdaType -> "IntPtr"
+        isFlowType -> "IntPtr"
         (isListType || isMutableListType) -> "IntPtr"
         (isMapType || isMutableMapType) -> "IntPtr"
         (isSetType || isMutableSetType) -> "IntPtr"
@@ -192,6 +206,7 @@ internal fun translateClass(
       val type: String = when {
         isLambdaType -> lambdaCsType
         isSuspendLambdaType -> suspendLambdaCsType
+        isFlowType -> "KotlinFlow<$flowElementType>"
         isListType -> "IReadOnlyList<$listElementType>"
         isMutableListType -> "IList<$listElementType>"
         isMapType -> "IReadOnlyDictionary<$mapKeyType, $mapValueType>"
@@ -229,6 +244,16 @@ internal fun translateClass(
         "new $lambdaCsType(Native_Get_$propName(_handle))"
       } else if (isSuspendLambdaType) {
         "new $suspendLambdaCsType(Native_Get_$propName(_handle))"
+      } else if (isFlowType) {
+        val collectNativeName = "Native_Get${csPropName}Collect"
+        buildString {
+          appendLine()
+          appendLine("                if (_handle == IntPtr.Zero)")
+          appendLine("                    throw new ObjectDisposedException(nameof(${cls.simpleName.asString()}));")
+          appendLine("                return new KotlinFlow<$flowElementType>((onNext, onComplete, onError, userData) =>")
+          appendLine("                    $collectNativeName(_handle, GetOrCreateScope(), onNext, onComplete, onError, userData));")
+          append("            ")
+        }
       } else if (isListType) {
         buildString {
           appendLine()
@@ -324,6 +349,8 @@ internal fun translateClass(
         getter = getter,
         setter = setter,
         extraNatives = extraNatives,
+        isFlow = isFlowType,
+        flowElementType = flowElementType ?: "",
       )
     }.toList()
 
@@ -346,7 +373,18 @@ internal fun translateClass(
 
   val (suspendMethods, regularMethods) = filteredMethods.partition { it.modifiers.contains(Modifier.SUSPEND) }
 
-  val methods: List<CirMethod> = regularMethods
+  val (flowMethods, normalMethods) = regularMethods.partition { method ->
+    val returnQualified: String? = method.returnType?.resolve()?.expandAliases()
+      ?.declaration?.qualifiedName?.asString()
+    returnQualified in FLOW_TYPES
+  }
+
+  if (flowMethods.isNotEmpty()) {
+    tracker.needsFlow = true
+    tracker.needsAsync = true
+  }
+
+  val methods: List<CirMethod> = normalMethods
     .map { method ->
       val methodName: String = method.simpleName.asString()
       val methodReturn: String = method.returnType?.resolve()?.expandAliases()
@@ -443,6 +481,61 @@ internal fun translateClass(
     listOf(nativeImport, asyncMethod)
   }
 
+  val flowMembers: List<CirMember> = flowMethods.flatMap { method ->
+    val methodName: String = method.simpleName.asString()
+    val cname: String = toCName(methodName)
+    val csMethodName: String = methodName.replaceFirstChar { it.uppercase() }
+    val returnType = method.returnType?.resolve()?.expandAliases()
+    val flowElementKotlinType: String = returnType?.arguments
+      ?.firstOrNull()?.type?.resolve()
+      ?.declaration?.simpleName?.asString() ?: "Any"
+    val flowCsElementType: String = KOTLIN_TO_CSHARP_PARAM[flowElementKotlinType] ?: flowElementKotlinType
+
+    val methodParams: List<CirParameter> = method.parameters.map { param ->
+      val resolved: KSType = param.type.resolve().expandAliases()
+      val kotlinType: String = resolved.declaration.simpleName.asString()
+      CirParameter(param.name?.asString() ?: "_", mapParamType(kotlinType))
+    }
+
+    val nativeParams: List<CirParameter> = listOf(
+      CirParameter("handle", "IntPtr"),
+      CirParameter("scopeHandle", "IntPtr"),
+    ) + methodParams + listOf(
+      CirParameter("onNext", "IntPtr"),
+      CirParameter("onComplete", "IntPtr"),
+      CirParameter("onError", "IntPtr"),
+      CirParameter("userData", "IntPtr"),
+    )
+
+    val nativeImport = CirDllImport(
+      libraryName = libraryName,
+      entryPoint = "${prefix}_${cname}_collect",
+      returnType = "IntPtr",
+      name = "Native_${csMethodName}Collect",
+      parameters = nativeParams,
+      visibility = CirVisibility.PRIVATE,
+    )
+
+    val paramNames: String = methodParams.joinToString(", ") { it.name }
+    val nativeCallArgs: String = if (paramNames.isEmpty()) {
+      "_handle, GetOrCreateScope(), onNext, onComplete, onError, userData"
+    } else {
+      "_handle, GetOrCreateScope(), $paramNames, onNext, onComplete, onError, userData"
+    }
+
+    val flowMethod = CirMethod(
+      name = csMethodName,
+      returnType = "KotlinFlow<$flowCsElementType>",
+      nativeName = "Native_${csMethodName}Collect",
+      parameters = methodParams,
+      body = nativeCallArgs,
+      isFlow = true,
+      flowElementType = flowCsElementType,
+    )
+
+    listOf(nativeImport, flowMethod)
+  }
+
   val companion: KSClassDeclaration? = cls.declarations
     .filterIsInstance<KSClassDeclaration>()
     .firstOrNull { it.isCompanionObject }
@@ -484,8 +577,12 @@ internal fun translateClass(
     superClass = superClass,
     isDataClass = isDataClass,
     isAbstract = isAbstract,
-    companionMembers = companionMembers + asyncMembers,
-    hasSuspendMethods = cls.getAllFunctions().any { it.modifiers.contains(Modifier.SUSPEND) },
+    companionMembers = companionMembers + asyncMembers + flowMembers,
+    hasSuspendMethods = cls.getAllFunctions().any { it.modifiers.contains(Modifier.SUSPEND) } ||
+      flowMethods.isNotEmpty() ||
+      cls.getAllProperties().any { prop ->
+        prop.type.resolve().expandAliases().declaration.qualifiedName?.asString() in FLOW_TYPES
+      },
   )
 }
 

@@ -172,6 +172,10 @@ data class CirErrorHelper(
   val libraryName: String,
 ) : CirDeclaration
 
+data class CirFlowHelper(
+  val libraryName: String,
+) : CirDeclaration
+
 data class CirEnumEntry(
   val name: String,
   val ordinal: Int,
@@ -212,6 +216,8 @@ data class CirMethod(
   val isAsync: Boolean = false,
   val asyncReturnType: String = "",
   val isSyncErrorCheckEnabled: Boolean = false,
+  val isFlow: Boolean = false,
+  val flowElementType: String = "",
 ) : CirMember
 
 data class CirProperty(
@@ -224,6 +230,8 @@ data class CirProperty(
   val setter: String? = null,
   val extraNatives: List<CirExtraNative> = emptyList(),
   val isStatic: Boolean = false,
+  val isFlow: Boolean = false,
+  val flowElementType: String = "",
 ) : CirMember
 
 data class CirExtraNative(

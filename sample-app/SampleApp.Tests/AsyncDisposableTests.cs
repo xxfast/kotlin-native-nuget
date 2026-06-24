@@ -7,7 +7,7 @@ public class AsyncDisposableTests
     [Fact]
     public async Task DisposeAsync_WaitsForOreoQuickNap_ThenCompletes()
     {
-        // Oreo settles in for a quick nap — DisposeAsync should wait for her to finish
+        // Oreo settles in for a quick nap — DisposeAsync should wait for him to finish
         Task<string> oreoNap;
         var service = new CatNapService();
         oreoNap = service.QuickNapAsync();
@@ -54,7 +54,7 @@ public class AsyncDisposableTests
     [Fact]
     public async Task Dispose_StillCancels_DisposeAsync_Drains()
     {
-        // Dispose() yanks Mylo off the couch (cancels), DisposeAsync() lets Oreo finish her nap (drains)
+        // Dispose() yanks Mylo off the couch (cancels), DisposeAsync() lets Oreo finish his nap (drains)
         Task<string> myloNap;
         using (var cancelService = new CatNapService())
         {
@@ -75,7 +75,7 @@ public class AsyncDisposableTests
     [Fact]
     public async Task DoubleDisposeAsync_DoesNotThrow()
     {
-        // Calling Oreo twice when she's already been put to bed — should be fine
+        // Calling Oreo twice when he's already been put to bed — should be fine
         var service = new CatNapService();
         await service.DisposeAsync();
         await service.DisposeAsync();

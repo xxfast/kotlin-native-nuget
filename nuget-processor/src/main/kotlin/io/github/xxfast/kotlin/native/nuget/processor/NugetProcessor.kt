@@ -317,7 +317,24 @@ class NugetProcessor(
           needsSuspendLambdaSupport ||
           classes.any { cls -> cls.getAllFunctions().any { it.modifiers.contains(Modifier.SUSPEND) } }
 
-        if (hasSuspendFunctions) {
+        val classesHaveFlowPropertiesForImports: Boolean = classes.any { cls ->
+          cls.getAllProperties().any { prop ->
+            prop.type.resolve().expandAliases().declaration.qualifiedName?.asString() ==
+              "kotlinx.coroutines.flow.Flow"
+          }
+        }
+
+        val classesHaveFlowMethodsForImports: Boolean = classes.any { cls ->
+          cls.getAllFunctions().any { method ->
+            method.returnType?.resolve()?.expandAliases()?.declaration?.qualifiedName?.asString() ==
+              "kotlinx.coroutines.flow.Flow"
+          }
+        }
+
+        val needsFlowImports: Boolean = classesHaveFlowPropertiesForImports ||
+          classesHaveFlowMethodsForImports
+
+        if (hasSuspendFunctions || needsFlowImports) {
           addImport("kotlinx.cinterop", "reinterpret")
           addImport("kotlinx.cinterop", "invoke")
           addImport("kotlinx.cinterop", "CFunction")
@@ -484,9 +501,32 @@ class NugetProcessor(
         val classesHaveSuspendMethods: Boolean = classes.any { cls ->
           cls.getAllFunctions().any { it.modifiers.contains(Modifier.SUSPEND) }
         }
+
+        val flowTypes: Set<String> = setOf("kotlinx.coroutines.flow.Flow")
+
+        fun KSType.isFlowType(): Boolean =
+          expandAliases().declaration.qualifiedName?.asString() in flowTypes
+
+        val classesHaveFlowProperties: Boolean = classes.any { cls ->
+          cls.getAllProperties().any { prop -> prop.type.resolve().isFlowType() }
+        }
+
+        val classesHaveFlowMethods: Boolean = classes.any { cls ->
+          cls.getAllFunctions().any { method ->
+            method.returnType?.resolve()?.isFlowType() == true
+          }
+        }
+
+        val needsFlowSupport: Boolean = classesHaveFlowProperties || classesHaveFlowMethods
+
+        if (needsFlowSupport) {
+          addImport("kotlinx.coroutines.flow", "collect")
+        }
+
         val needsScopeHelpers: Boolean = suspendFunctions.isNotEmpty() ||
           needsSuspendLambdaSupport ||
-          classesHaveSuspendMethods
+          classesHaveSuspendMethods ||
+          needsFlowSupport
         if (needsScopeHelpers) addNugetScopeHelperExports()
         if (needsScopeHelpers) addNugetScopeDrainExport()
         if (needsScopeHelpers) addNugetJobHelperExports()
