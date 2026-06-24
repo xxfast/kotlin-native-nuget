@@ -27,3 +27,4 @@
 - [025](025-async-disposable.md) — `IAsyncDisposable` + `DisposeAsync()` for graceful drain; `nuget_scope_drain` export joins all child jobs before releasing handles
 - [026](026-flow-mapping.md) — `Flow<T>` → `KotlinFlow<T>` (`IAsyncEnumerable<T>`); Channel-buffered push→pull bridge; three-callback ABI (`onNext`, `onComplete`, `onError`)
 - [027](027-stacktrace-propagation.md) — `KotlinException.KotlinStackTrace` property; `Triple<String,String,String>` error bridge; `nuget_error_stacktrace` export; `ToString()` override appends Kotlin trace
+- [028](028-exception-cause-chain.md) — `e.cause` → `KotlinException.InnerException`; recursive `NugetError` data class error bridge (replaces `Triple`); `nuget_error_cause_*` exports; each cause a full `KotlinException`

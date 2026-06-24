@@ -69,7 +69,7 @@
 - [x] Map exception propagation across the bridge (see [ADR-023](docs/adr/023-exception-propagation.md))
 - [x] Map synchronous exception propagation (see [ADR-024](docs/adr/024-sync-exception-propagation.md))
 - [x] Propagate Kotlin stack trace as `KotlinException.KotlinStackTrace` property (see [ADR-027](docs/adr/027-stacktrace-propagation.md))
-- [ ] Map exception cause chain (`e.cause` → `InnerException`)
+- [x] Map exception cause chain (`e.cause` → `InnerException`) (see [ADR-028](docs/adr/028-exception-cause-chain.md))
 - [ ] Map core Kotlin exceptions to .NET analogs (e.g., `IllegalArgumentException` → `ArgumentException`) with `IKotlinException` interface
 - [ ] Map property getter/setter exception propagation (deferred from ADR-024)
 - [ ] Map constructor exception propagation (deferred from ADR-024)

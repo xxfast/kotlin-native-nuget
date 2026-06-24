@@ -7,6 +7,10 @@ import com.google.devtools.ksp.symbol.Visibility
 import com.squareup.kotlinpoet.ClassName
 import com.squareup.kotlinpoet.FileSpec
 import com.squareup.kotlinpoet.FunSpec
+import com.squareup.kotlinpoet.KModifier
+import com.squareup.kotlinpoet.ParameterSpec
+import com.squareup.kotlinpoet.PropertySpec
+import com.squareup.kotlinpoet.TypeSpec
 
 /**
  * Generates @CName bridge exports for generic classes using type erasure.
@@ -503,7 +507,7 @@ internal fun FileSpec.Builder.addNugetSuspendFunc0HelperExports() {
         appendLine("    callback.invoke(null, null, 1.toByte(), userData)")
         appendLine("    throw e")
         appendLine("  } catch (e: Throwable) {")
-        appendLine("    val errRef = StableRef.create(Triple(e::class.qualifiedName ?: e::class.simpleName ?: \"UnknownException\", e.message ?: \"Kotlin error\", e.stackTraceToString())).asCPointer()")
+        appendLine("    val errRef = StableRef.create(buildError(e)).asCPointer()")
         appendLine("    callback.invoke(null, errRef, 0.toByte(), userData)")
         appendLine("  }")
         appendLine("}")
@@ -540,7 +544,7 @@ internal fun FileSpec.Builder.addNugetSuspendFunc1HelperExports() {
         appendLine("    callback.invoke(null, null, 1.toByte(), userData)")
         appendLine("    throw e")
         appendLine("  } catch (e: Throwable) {")
-        appendLine("    val errRef = StableRef.create(Triple(e::class.qualifiedName ?: e::class.simpleName ?: \"UnknownException\", e.message ?: \"Kotlin error\", e.stackTraceToString())).asCPointer()")
+        appendLine("    val errRef = StableRef.create(buildError(e)).asCPointer()")
         appendLine("    callback.invoke(null, errRef, 0.toByte(), userData)")
         appendLine("  }")
         appendLine("}")
@@ -651,15 +655,71 @@ internal fun FileSpec.Builder.addNugetJobHelperExports() {
 }
 
 internal fun FileSpec.Builder.addNugetErrorHelperExports() {
+  val nugetError = ClassName("io.github.xxfast.kotlin.native.nuget.generated", "NugetError")
+
+  addType(
+    TypeSpec.classBuilder("NugetError")
+      .addModifiers(KModifier.DATA)
+      .primaryConstructor(
+        FunSpec.constructorBuilder()
+          .addParameter("type", String::class)
+          .addParameter("message", String::class)
+          .addParameter("stackTrace", String::class)
+          .addParameter(
+            ParameterSpec.builder("cause", nugetError.copy(nullable = true))
+              .defaultValue("null")
+              .build()
+          )
+          .build()
+      )
+      .addProperty(PropertySpec.builder("type", String::class).initializer("type").build())
+      .addProperty(PropertySpec.builder("message", String::class).initializer("message").build())
+      .addProperty(PropertySpec.builder("stackTrace", String::class).initializer("stackTrace").build())
+      .addProperty(
+        PropertySpec.builder("cause", nugetError.copy(nullable = true))
+          .initializer("cause")
+          .build()
+      )
+      .build()
+  )
+
+  addFunction(
+    FunSpec.builder("buildError")
+      .addModifiers(KModifier.PRIVATE)
+      .addParameter("e", Throwable::class)
+      .returns(nugetError)
+      .addCode(buildString {
+        appendLine("val seen = mutableSetOf<Throwable>()")
+        appendLine("fun build(t: Throwable): NugetError? {")
+        appendLine("  if (!seen.add(t)) return null")
+        appendLine("  return NugetError(")
+        appendLine("    type = t::class.qualifiedName ?: t::class.simpleName ?: \"UnknownException\",")
+        appendLine("    message = t.message ?: \"Kotlin error\",")
+        appendLine("    stackTrace = t.stackTraceToString(),")
+        appendLine("    cause = t.cause?.let(::build),")
+        appendLine("  )")
+        appendLine("}")
+        append("return build(e)!!")
+      })
+      .build()
+  )
+
+  addFunction(
+    FunSpec.builder("at")
+      .addModifiers(KModifier.PRIVATE, KModifier.TAILREC)
+      .receiver(nugetError)
+      .addParameter("index", Int::class)
+      .returns(nugetError)
+      .addStatement("return if (index == 0) this else cause!!.at(index - 1)")
+      .build()
+  )
+
   addFunction(
     FunSpec.builder("export_nuget_error_type")
       .addAnnotation(cNameAnnotation("nuget_error_type"))
       .addParameter("handle", cOpaquePointer)
       .returns(String::class)
-      .addStatement(
-        "return handle.asStableRef<%T<String, String, String>>().get().first",
-        ClassName("kotlin", "Triple"),
-      )
+      .addStatement("return handle.asStableRef<NugetError>().get().type")
       .build()
   )
 
@@ -668,10 +728,7 @@ internal fun FileSpec.Builder.addNugetErrorHelperExports() {
       .addAnnotation(cNameAnnotation("nuget_error_message"))
       .addParameter("handle", cOpaquePointer)
       .returns(String::class)
-      .addStatement(
-        "return handle.asStableRef<%T<String, String, String>>().get().second",
-        ClassName("kotlin", "Triple"),
-      )
+      .addStatement("return handle.asStableRef<NugetError>().get().message")
       .build()
   )
 
@@ -680,10 +737,51 @@ internal fun FileSpec.Builder.addNugetErrorHelperExports() {
       .addAnnotation(cNameAnnotation("nuget_error_stacktrace"))
       .addParameter("handle", cOpaquePointer)
       .returns(String::class)
-      .addStatement(
-        "return handle.asStableRef<%T<String, String, String>>().get().third",
-        ClassName("kotlin", "Triple"),
-      )
+      .addStatement("return handle.asStableRef<NugetError>().get().stackTrace")
+      .build()
+  )
+
+  addFunction(
+    FunSpec.builder("export_nuget_error_cause_count")
+      .addAnnotation(cNameAnnotation("nuget_error_cause_count"))
+      .addParameter("handle", cOpaquePointer)
+      .returns(Int::class)
+      .addCode(buildString {
+        appendLine("var e: NugetError? = handle.asStableRef<NugetError>().get()")
+        appendLine("var n = 0")
+        appendLine("while (e != null) { n++; e = e.cause }")
+        append("return n")
+      })
+      .build()
+  )
+
+  addFunction(
+    FunSpec.builder("export_nuget_error_cause_type")
+      .addAnnotation(cNameAnnotation("nuget_error_cause_type"))
+      .addParameter("handle", cOpaquePointer)
+      .addParameter("index", Int::class)
+      .returns(String::class)
+      .addStatement("return handle.asStableRef<NugetError>().get().at(index).type")
+      .build()
+  )
+
+  addFunction(
+    FunSpec.builder("export_nuget_error_cause_message")
+      .addAnnotation(cNameAnnotation("nuget_error_cause_message"))
+      .addParameter("handle", cOpaquePointer)
+      .addParameter("index", Int::class)
+      .returns(String::class)
+      .addStatement("return handle.asStableRef<NugetError>().get().at(index).message")
+      .build()
+  )
+
+  addFunction(
+    FunSpec.builder("export_nuget_error_cause_stacktrace")
+      .addAnnotation(cNameAnnotation("nuget_error_cause_stacktrace"))
+      .addParameter("handle", cOpaquePointer)
+      .addParameter("index", Int::class)
+      .returns(String::class)
+      .addStatement("return handle.asStableRef<NugetError>().get().at(index).stackTrace")
       .build()
   )
 }
