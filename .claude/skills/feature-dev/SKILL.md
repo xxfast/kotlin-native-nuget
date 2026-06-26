@@ -65,7 +65,7 @@ Provide them with the necessary context and instructions.
 - Run subagent to write tests FIRST (step 3 before step 4)
 - Implementation agents include the full context: what files to change, expected output, style rules
 - After implementation, verify locally: `./gradlew :sample-library:clean :sample-library:packNuget && cd sample-app/SampleApp.Tests && dotnet test`
-- Update README.md roadmap after feature is complete
+- Update the roadmap in ROADMAP.md after feature is complete
 
 ## Prompting subagents
 
