@@ -196,18 +196,21 @@ internal fun StringBuilder.renderClass(cls: CirClass) {
       appendLine()
       renderProperty(prop)
     } else {
+      val getterErrorParam: String = if (prop.hasSyncErrorOut) ", out IntPtr error" else ""
       appendLine("        [DllImport(\"${cls.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"${cls.nativePrefix}_get_${prop.nativeName}\")]")
-      appendLine("        private static extern ${prop.nativeReturnType} Native_Get_${prop.nativeName}(IntPtr handle);")
+      appendLine("        private static extern ${prop.nativeReturnType} Native_Get_${prop.nativeName}(IntPtr handle$getterErrorParam);")
       appendLine()
       if (prop.setter != null) {
         val setterType: String = prop.nativeSetterType
+        val setterErrorParam: String = if (prop.hasSyncErrorOut) ", out IntPtr error" else ""
         appendLine("        [DllImport(\"${cls.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"${cls.nativePrefix}_set_${prop.nativeName}\")]")
-        appendLine("        private static extern void Native_Set_${prop.nativeName}(IntPtr handle, $setterType value);")
+        appendLine("        private static extern void Native_Set_${prop.nativeName}(IntPtr handle, $setterType value$setterErrorParam);")
         appendLine()
       }
       for (extra in prop.extraNatives) {
         val entryPoint = "${cls.nativePrefix}_${extra.entryPointSuffix}"
-        val paramStr = if (extra.hasValueParam) "IntPtr handle, ${extra.returnType} value" else "IntPtr handle"
+        val extraErrorParam: String = if (extra.hasSyncErrorOut) ", out IntPtr error" else ""
+        val paramStr: String = if (extra.hasValueParam) "IntPtr handle, ${extra.returnType} value$extraErrorParam" else "IntPtr handle$extraErrorParam"
         val externReturn = if (extra.hasValueParam) "void" else extra.returnType
         appendLine("        [DllImport(\"${cls.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"$entryPoint\")]")
         appendLine("        private static extern $externReturn ${extra.name}($paramStr);")
@@ -277,7 +280,17 @@ internal fun StringBuilder.renderProperty(prop: CirProperty) {
   val static: String = if (prop.isStatic) "static " else ""
   val isMultiLineGetter: Boolean = prop.getter.contains('\n')
   val isMultiLineSetter: Boolean = prop.setter?.contains('\n') == true
-  if (isMultiLineGetter) {
+  if (isMultiLineGetter && prop.setter != null) {
+    appendLine("        public ${static}${prop.type} ${prop.name}")
+    appendLine("        {")
+    appendLine("            get")
+    appendLine("            {${prop.getter}")
+    appendLine("            }")
+    appendLine("            set")
+    appendLine("            {${prop.setter}")
+    appendLine("            }")
+    appendLine("        }")
+  } else if (isMultiLineGetter) {
     appendLine("        public ${static}${prop.type} ${prop.name}")
     appendLine("        {")
     appendLine("            get")

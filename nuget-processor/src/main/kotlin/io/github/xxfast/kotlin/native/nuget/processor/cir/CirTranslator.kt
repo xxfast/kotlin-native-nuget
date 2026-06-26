@@ -421,6 +421,7 @@ internal fun translateExtensionProperty(
     name = "Native_$csName",
     parameters = allNativeParams,
     visibility = CirVisibility.PRIVATE,
+    hasSyncErrorOut = true,
   )
 
   val csReceiverType: String = if (isExportedReceiver) receiverName else mapParamType(receiverName)
@@ -437,10 +438,26 @@ internal fun translateExtensionProperty(
 
   if (kotlinReturnType == "String") {
     csReturnType = "string"
-    body = "Marshal.PtrToStringUTF8(Native_$csName($nativeCallReceiver))!"
+    body = buildString {
+      appendLine()
+      appendLine("            IntPtr nativeResult = Native_$csName($nativeCallReceiver, out IntPtr error);")
+      appendLine("            if (error != IntPtr.Zero)")
+      appendLine("            {")
+      appendLine("                throw NugetErrorNative.BuildException(error);")
+      appendLine("            }")
+      append("            return Marshal.PtrToStringUTF8(nativeResult)!;")
+    }
   } else {
     csReturnType = KOTLIN_TO_CSHARP_PARAM[kotlinReturnType] ?: kotlinReturnType
-    body = "Native_$csName($nativeCallReceiver)"
+    body = buildString {
+      appendLine()
+      appendLine("            $csReturnType result = Native_$csName($nativeCallReceiver, out IntPtr error);")
+      appendLine("            if (error != IntPtr.Zero)")
+      appendLine("            {")
+      appendLine("                throw NugetErrorNative.BuildException(error);")
+      appendLine("            }")
+      append("            return result;")
+    }
   }
 
   val wrapper = CirMethod(
@@ -483,6 +500,7 @@ internal fun translateProperty(
       name = "Native_Get_$propName",
       parameters = emptyList(),
       visibility = CirVisibility.PRIVATE,
+      hasSyncErrorOut = true,
     ))
 
     members.add(CirDllImport(
@@ -492,6 +510,7 @@ internal fun translateProperty(
       name = "Native_Get_${propName}_value",
       parameters = emptyList(),
       visibility = CirVisibility.PRIVATE,
+      hasSyncErrorOut = true,
     ))
 
     if (isMutable) {
@@ -502,6 +521,7 @@ internal fun translateProperty(
         name = "Native_Set_$propName",
         parameters = listOf(CirParameter("value", csValueType)),
         visibility = CirVisibility.PRIVATE,
+        hasSyncErrorOut = true,
       ))
 
       members.add(CirDllImport(
@@ -511,14 +531,44 @@ internal fun translateProperty(
         name = "Native_Set_${propName}_null",
         parameters = emptyList(),
         visibility = CirVisibility.PRIVATE,
+        hasSyncErrorOut = true,
       ))
     }
 
-    val getter = "!Native_Get_$propName() ? null : Native_Get_${propName}_value()"
+    val getter: String = buildString {
+      appendLine()
+      appendLine("                bool hasValue = Native_Get_$propName(out IntPtr error);")
+      appendLine("                if (error != IntPtr.Zero)")
+      appendLine("                {")
+      appendLine("                    throw NugetErrorNative.BuildException(error);")
+      appendLine("                }")
+      appendLine("                if (!hasValue) return null;")
+      appendLine("                $csValueType value = Native_Get_${propName}_value(out IntPtr error2);")
+      appendLine("                if (error2 != IntPtr.Zero)")
+      appendLine("                {")
+      appendLine("                    throw NugetErrorNative.BuildException(error2);")
+      appendLine("                }")
+      append("                return value;")
+    }
+
     val setter: String? = if (isMutable) buildString {
       appendLine()
-      appendLine("                if (value.HasValue) Native_Set_$propName(value.Value);")
-      append("                else Native_Set_${propName}_null();")
+      appendLine("                if (value.HasValue)")
+      appendLine("                {")
+      appendLine("                    Native_Set_$propName(value.Value, out IntPtr error);")
+      appendLine("                    if (error != IntPtr.Zero)")
+      appendLine("                    {")
+      appendLine("                        throw NugetErrorNative.BuildException(error);")
+      appendLine("                    }")
+      appendLine("                }")
+      appendLine("                else")
+      appendLine("                {")
+      appendLine("                    Native_Set_${propName}_null(out IntPtr error);")
+      appendLine("                    if (error != IntPtr.Zero)")
+      appendLine("                    {")
+      appendLine("                        throw NugetErrorNative.BuildException(error);")
+      appendLine("                    }")
+      append("                }")
     } else null
 
     members.add(CirProperty(
@@ -529,6 +579,7 @@ internal fun translateProperty(
       getter = getter,
       setter = setter,
       isStatic = true,
+      hasSyncErrorOut = true,
     ))
 
     return members
@@ -543,6 +594,7 @@ internal fun translateProperty(
     name = "Native_Get_$propName",
     parameters = emptyList(),
     visibility = CirVisibility.PRIVATE,
+    hasSyncErrorOut = true,
   ))
 
   val csType: String
@@ -551,8 +603,23 @@ internal fun translateProperty(
 
   if (propType == "String" && isNullable) {
     csType = "string?"
-    getter = "Marshal.PtrToStringUTF8(Native_Get_$propName())"
-    setter = if (isMutable) "Native_Set_$propName(value)" else null
+    getter = buildString {
+      appendLine()
+      appendLine("                IntPtr nativeResult = Native_Get_$propName(out IntPtr error);")
+      appendLine("                if (error != IntPtr.Zero)")
+      appendLine("                {")
+      appendLine("                    throw NugetErrorNative.BuildException(error);")
+      appendLine("                }")
+      append("                return Marshal.PtrToStringUTF8(nativeResult);")
+    }
+    setter = if (isMutable) buildString {
+      appendLine()
+      appendLine("                Native_Set_$propName(value, out IntPtr error);")
+      appendLine("                if (error != IntPtr.Zero)")
+      appendLine("                {")
+      appendLine("                    throw NugetErrorNative.BuildException(error);")
+      append("                }")
+    } else null
 
     if (isMutable) {
       members.add(CirDllImport(
@@ -562,12 +629,28 @@ internal fun translateProperty(
         name = "Native_Set_$propName",
         parameters = listOf(CirParameter("value", "string?")),
         visibility = CirVisibility.PRIVATE,
+        hasSyncErrorOut = true,
       ))
     }
   } else if (propType == "String") {
     csType = "string"
-    getter = "Marshal.PtrToStringUTF8(Native_Get_$propName())!"
-    setter = if (isMutable) "Native_Set_$propName(value)" else null
+    getter = buildString {
+      appendLine()
+      appendLine("                IntPtr nativeResult = Native_Get_$propName(out IntPtr error);")
+      appendLine("                if (error != IntPtr.Zero)")
+      appendLine("                {")
+      appendLine("                    throw NugetErrorNative.BuildException(error);")
+      appendLine("                }")
+      append("                return Marshal.PtrToStringUTF8(nativeResult)!;")
+    }
+    setter = if (isMutable) buildString {
+      appendLine()
+      appendLine("                Native_Set_$propName(value, out IntPtr error);")
+      appendLine("                if (error != IntPtr.Zero)")
+      appendLine("                {")
+      appendLine("                    throw NugetErrorNative.BuildException(error);")
+      append("                }")
+    } else null
 
     if (isMutable) {
       members.add(CirDllImport(
@@ -577,12 +660,28 @@ internal fun translateProperty(
         name = "Native_Set_$propName",
         parameters = listOf(CirParameter("value", "string")),
         visibility = CirVisibility.PRIVATE,
+        hasSyncErrorOut = true,
       ))
     }
   } else {
     csType = csNativeReturnType
-    getter = "Native_Get_$propName()"
-    setter = if (isMutable) "Native_Set_$propName(value)" else null
+    getter = buildString {
+      appendLine()
+      appendLine("                $csNativeReturnType result = Native_Get_$propName(out IntPtr error);")
+      appendLine("                if (error != IntPtr.Zero)")
+      appendLine("                {")
+      appendLine("                    throw NugetErrorNative.BuildException(error);")
+      appendLine("                }")
+      append("                return result;")
+    }
+    setter = if (isMutable) buildString {
+      appendLine()
+      appendLine("                Native_Set_$propName(value, out IntPtr error);")
+      appendLine("                if (error != IntPtr.Zero)")
+      appendLine("                {")
+      appendLine("                    throw NugetErrorNative.BuildException(error);")
+      append("                }")
+    } else null
 
     if (isMutable) {
       members.add(CirDllImport(
@@ -592,6 +691,7 @@ internal fun translateProperty(
         name = "Native_Set_$propName",
         parameters = listOf(CirParameter("value", csNativeReturnType)),
         visibility = CirVisibility.PRIVATE,
+        hasSyncErrorOut = true,
       ))
     }
   }
@@ -604,6 +704,7 @@ internal fun translateProperty(
     getter = getter,
     setter = setter,
     isStatic = true,
+    hasSyncErrorOut = true,
   ))
 
   return members

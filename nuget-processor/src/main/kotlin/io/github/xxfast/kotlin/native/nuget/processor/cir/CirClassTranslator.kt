@@ -230,12 +230,14 @@ internal fun translateClass(
           entryPointSuffix = "get_${propName}_value",
           returnType = csValueType,
           name = "Native_Get_${propName}_value",
+          hasSyncErrorOut = true,
         ))
         if (isMutable) {
           extraNatives.add(CirExtraNative(
             entryPointSuffix = "set_${propName}_null",
             returnType = "void",
             name = "Native_Set_${propName}_null",
+            hasSyncErrorOut = true,
           ))
         }
       }
@@ -257,7 +259,11 @@ internal fun translateClass(
       } else if (isListType) {
         buildString {
           appendLine()
-          appendLine("                IntPtr listHandle = Native_Get_$propName(_handle);")
+          appendLine("                IntPtr listHandle = Native_Get_$propName(_handle, out IntPtr error);")
+          appendLine("                if (error != IntPtr.Zero)")
+          appendLine("                {")
+          appendLine("                    throw NugetErrorNative.BuildException(error);")
+          appendLine("                }")
           appendLine("                int count = NugetListNative.Count(listHandle);")
           appendLine("                var result = new List<$listElementType>(count);")
           appendLine("                for (int i = 0; i < count; i++)")
@@ -270,7 +276,11 @@ internal fun translateClass(
       } else if (isMutableListType) {
         buildString {
           appendLine()
-          appendLine("                IntPtr listHandle = Native_Get_$propName(_handle);")
+          appendLine("                IntPtr listHandle = Native_Get_$propName(_handle, out IntPtr error);")
+          appendLine("                if (error != IntPtr.Zero)")
+          appendLine("                {")
+          appendLine("                    throw NugetErrorNative.BuildException(error);")
+          appendLine("                }")
           appendLine("                int count = NugetListNative.Count(listHandle);")
           appendLine("                var result = new List<$listElementType>(count);")
           appendLine("                for (int i = 0; i < count; i++)")
@@ -283,7 +293,11 @@ internal fun translateClass(
       } else if (isMapType || isMutableMapType) {
         buildString {
           appendLine()
-          appendLine("                IntPtr mapHandle = Native_Get_$propName(_handle);")
+          appendLine("                IntPtr mapHandle = Native_Get_$propName(_handle, out IntPtr error);")
+          appendLine("                if (error != IntPtr.Zero)")
+          appendLine("                {")
+          appendLine("                    throw NugetErrorNative.BuildException(error);")
+          appendLine("                }")
           appendLine("                int count = NugetMapNative.Count(mapHandle);")
           appendLine("                var result = new Dictionary<$mapKeyType, $mapValueType>(count);")
           appendLine("                for (int i = 0; i < count; i++)")
@@ -298,7 +312,11 @@ internal fun translateClass(
       } else if (isSetType || isMutableSetType) {
         buildString {
           appendLine()
-          appendLine("                IntPtr setHandle = Native_Get_$propName(_handle);")
+          appendLine("                IntPtr setHandle = Native_Get_$propName(_handle, out IntPtr error);")
+          appendLine("                if (error != IntPtr.Zero)")
+          appendLine("                {")
+          appendLine("                    throw NugetErrorNative.BuildException(error);")
+          appendLine("                }")
           appendLine("                int count = NugetSetNative.Count(setHandle);")
           appendLine("                var result = new HashSet<$setElementType>(count);")
           appendLine("                for (int i = 0; i < count; i++)")
@@ -309,28 +327,148 @@ internal fun translateClass(
           append("                return result;")
         }
       } else when {
-        isNullableString -> "Marshal.PtrToStringUTF8(Native_Get_$propName(_handle))"
-        isNullableValueType -> "!Native_Get_$propName(_handle) ? null : Native_Get_${propName}_value(_handle)"
-        propType == "String" -> "Marshal.PtrToStringUTF8(Native_Get_$propName(_handle))!"
-        isEnumType -> "($propType)Native_Get_$propName(_handle)"
-        isReferenceType && isNullable -> "Native_Get_$propName(_handle) == IntPtr.Zero ? null : new $propType(Native_Get_$propName(_handle))"
-        isReferenceType -> "new $propType(Native_Get_$propName(_handle))"
-        else -> "Native_Get_$propName(_handle)"
+        isNullableString -> buildString {
+          appendLine()
+          appendLine("                IntPtr nativeResult = Native_Get_$propName(_handle, out IntPtr error);")
+          appendLine("                if (error != IntPtr.Zero)")
+          appendLine("                {")
+          appendLine("                    throw NugetErrorNative.BuildException(error);")
+          appendLine("                }")
+          append("                return Marshal.PtrToStringUTF8(nativeResult);")
+        }
+        isNullableValueType -> buildString {
+          appendLine()
+          appendLine("                bool hasValue = Native_Get_$propName(_handle, out IntPtr error);")
+          appendLine("                if (error != IntPtr.Zero)")
+          appendLine("                {")
+          appendLine("                    throw NugetErrorNative.BuildException(error);")
+          appendLine("                }")
+          appendLine("                if (!hasValue) return null;")
+          appendLine("                ${mapParamType(propType)} value = Native_Get_${propName}_value(_handle, out IntPtr error2);")
+          appendLine("                if (error2 != IntPtr.Zero)")
+          appendLine("                {")
+          appendLine("                    throw NugetErrorNative.BuildException(error2);")
+          appendLine("                }")
+          append("                return value;")
+        }
+        propType == "String" -> buildString {
+          appendLine()
+          appendLine("                IntPtr nativeResult = Native_Get_$propName(_handle, out IntPtr error);")
+          appendLine("                if (error != IntPtr.Zero)")
+          appendLine("                {")
+          appendLine("                    throw NugetErrorNative.BuildException(error);")
+          appendLine("                }")
+          append("                return Marshal.PtrToStringUTF8(nativeResult)!;")
+        }
+        isEnumType -> buildString {
+          appendLine()
+          appendLine("                int nativeResult = Native_Get_$propName(_handle, out IntPtr error);")
+          appendLine("                if (error != IntPtr.Zero)")
+          appendLine("                {")
+          appendLine("                    throw NugetErrorNative.BuildException(error);")
+          appendLine("                }")
+          append("                return ($propType)nativeResult;")
+        }
+        isReferenceType && isNullable -> buildString {
+          appendLine()
+          appendLine("                IntPtr nativeResult = Native_Get_$propName(_handle, out IntPtr error);")
+          appendLine("                if (error != IntPtr.Zero)")
+          appendLine("                {")
+          appendLine("                    throw NugetErrorNative.BuildException(error);")
+          appendLine("                }")
+          append("                return nativeResult == IntPtr.Zero ? null : new $propType(nativeResult);")
+        }
+        isReferenceType -> buildString {
+          appendLine()
+          appendLine("                IntPtr nativeResult = Native_Get_$propName(_handle, out IntPtr error);")
+          appendLine("                if (error != IntPtr.Zero)")
+          appendLine("                {")
+          appendLine("                    throw NugetErrorNative.BuildException(error);")
+          appendLine("                }")
+          append("                return new $propType(nativeResult);")
+        }
+        else -> buildString {
+          appendLine()
+          appendLine("                ${nativeReturnType} result = Native_Get_$propName(_handle, out IntPtr error);")
+          appendLine("                if (error != IntPtr.Zero)")
+          appendLine("                {")
+          appendLine("                    throw NugetErrorNative.BuildException(error);")
+          appendLine("                }")
+          append("                return result;")
+        }
       }
+
+      val hasSyncErrorOut: Boolean = !isLambdaType && !isSuspendLambdaType && !isFlowType
 
       val setter: String? = if (isMutable && !isLambdaType && !isSuspendLambdaType && !isListType && !isMutableListType && !isMapType && !isMutableMapType && !isSetType && !isMutableSetType) {
         when {
-          isNullableString -> "Native_Set_$propName(_handle, value)"
+          isNullableString -> buildString {
+            appendLine()
+            appendLine("                Native_Set_$propName(_handle, value, out IntPtr error);")
+            appendLine("                if (error != IntPtr.Zero)")
+            appendLine("                {")
+            appendLine("                    throw NugetErrorNative.BuildException(error);")
+            append("                }")
+          }
           isNullableValueType -> buildString {
             appendLine()
-            appendLine("                if (value.HasValue) Native_Set_$propName(_handle, value.Value);")
-            append("                else Native_Set_${propName}_null(_handle);")
+            appendLine("                if (value.HasValue)")
+            appendLine("                {")
+            appendLine("                    Native_Set_$propName(_handle, value.Value, out IntPtr error);")
+            appendLine("                    if (error != IntPtr.Zero)")
+            appendLine("                    {")
+            appendLine("                        throw NugetErrorNative.BuildException(error);")
+            appendLine("                    }")
+            appendLine("                }")
+            appendLine("                else")
+            appendLine("                {")
+            appendLine("                    Native_Set_${propName}_null(_handle, out IntPtr error);")
+            appendLine("                    if (error != IntPtr.Zero)")
+            appendLine("                    {")
+            appendLine("                        throw NugetErrorNative.BuildException(error);")
+            appendLine("                    }")
+            append("                }")
           }
-          propType == "String" -> "Native_Set_$propName(_handle, value)"
-          isEnumType -> "Native_Set_$propName(_handle, (int)value)"
-          isReferenceType && isNullable -> "Native_Set_$propName(_handle, value?._handle ?? IntPtr.Zero)"
-          isReferenceType -> "Native_Set_$propName(_handle, value._handle)"
-          else -> "Native_Set_$propName(_handle, value)"
+          propType == "String" -> buildString {
+            appendLine()
+            appendLine("                Native_Set_$propName(_handle, value, out IntPtr error);")
+            appendLine("                if (error != IntPtr.Zero)")
+            appendLine("                {")
+            appendLine("                    throw NugetErrorNative.BuildException(error);")
+            append("                }")
+          }
+          isEnumType -> buildString {
+            appendLine()
+            appendLine("                Native_Set_$propName(_handle, (int)value, out IntPtr error);")
+            appendLine("                if (error != IntPtr.Zero)")
+            appendLine("                {")
+            appendLine("                    throw NugetErrorNative.BuildException(error);")
+            append("                }")
+          }
+          isReferenceType && isNullable -> buildString {
+            appendLine()
+            appendLine("                Native_Set_$propName(_handle, value?._handle ?? IntPtr.Zero, out IntPtr error);")
+            appendLine("                if (error != IntPtr.Zero)")
+            appendLine("                {")
+            appendLine("                    throw NugetErrorNative.BuildException(error);")
+            append("                }")
+          }
+          isReferenceType -> buildString {
+            appendLine()
+            appendLine("                Native_Set_$propName(_handle, value._handle, out IntPtr error);")
+            appendLine("                if (error != IntPtr.Zero)")
+            appendLine("                {")
+            appendLine("                    throw NugetErrorNative.BuildException(error);")
+            append("                }")
+          }
+          else -> buildString {
+            appendLine()
+            appendLine("                Native_Set_$propName(_handle, value, out IntPtr error);")
+            appendLine("                if (error != IntPtr.Zero)")
+            appendLine("                {")
+            appendLine("                    throw NugetErrorNative.BuildException(error);")
+            append("                }")
+          }
         }
       } else null
 
@@ -351,6 +489,7 @@ internal fun translateClass(
         extraNatives = extraNatives,
         isFlow = isFlowType,
         flowElementType = flowElementType ?: "",
+        hasSyncErrorOut = hasSyncErrorOut,
       )
     }.toList()
 

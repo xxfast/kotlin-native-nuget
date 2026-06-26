@@ -232,6 +232,7 @@ data class CirProperty(
   val isStatic: Boolean = false,
   val isFlow: Boolean = false,
   val flowElementType: String = "",
+  val hasSyncErrorOut: Boolean = false,
 ) : CirMember
 
 data class CirExtraNative(
@@ -239,6 +240,7 @@ data class CirExtraNative(
   val returnType: String,
   val name: String,
   val hasValueParam: Boolean = false,
+  val hasSyncErrorOut: Boolean = false,
 )
 
 data class CirConstructor(

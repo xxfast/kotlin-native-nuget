@@ -112,11 +112,20 @@ internal fun FileSpec.Builder.addClassExports(cls: KSClassDeclaration) {
         FunSpec.builder("export_${prefix}_get_$propName")
           .addAnnotation(cNameAnnotation("${prefix}_get_$propName"))
           .addParameter("handle", cOpaquePointer)
+          .addParameter("errorOut", cOpaquePointer.copy(nullable = true))
           .returns(Int::class)
-          .addStatement(
-            "return handle.asStableRef<%L>().get().%L.ordinal",
-            qualifiedName, propName,
-          )
+          .addCode(buildString {
+            appendLine("return try {")
+            appendLine("  handle.asStableRef<%L>().get().%L.ordinal")
+            appendLine("} catch (e: Throwable) {")
+            appendLine("  if (errorOut != null) {")
+            appendLine("    errorOut.reinterpret<%T>().pointed.value = %T.create(")
+            appendLine("      buildError(e)")
+            appendLine("    ).asCPointer()")
+            appendLine("  }")
+            appendLine("  0")
+            append("}")
+          }, qualifiedName, propName, cOpaquePointerVar, stableRef)
           .build()
       )
 
@@ -126,25 +135,43 @@ internal fun FileSpec.Builder.addClassExports(cls: KSClassDeclaration) {
             .addAnnotation(cNameAnnotation("${prefix}_set_$propName"))
             .addParameter("handle", cOpaquePointer)
             .addParameter("value", Int::class)
-            .addStatement(
-              "handle.asStableRef<%L>().get().%L = %L.entries[value]",
-              qualifiedName, propName, propType,
-            )
+            .addParameter("errorOut", cOpaquePointer.copy(nullable = true))
+            .addCode(buildString {
+              appendLine("try {")
+              appendLine("  handle.asStableRef<%L>().get().%L = %L.entries[value]")
+              appendLine("} catch (e: Throwable) {")
+              appendLine("  if (errorOut != null) {")
+              appendLine("    errorOut.reinterpret<%T>().pointed.value = %T.create(")
+              appendLine("      buildError(e)")
+              appendLine("    ).asCPointer()")
+              appendLine("  }")
+              append("}")
+            }, qualifiedName, propName, propType, cOpaquePointerVar, stableRef)
             .build()
         )
       }
     } else if (isPrimitiveType && isNullable && propType != "kotlin.String") {
       val nonNullType = ClassName.bestGuess(propType)
+      val dummy: String = defaultValueFor(propType)
 
       addFunction(
         FunSpec.builder("export_${prefix}_get_$propName")
           .addAnnotation(cNameAnnotation("${prefix}_get_$propName"))
           .addParameter("handle", cOpaquePointer)
+          .addParameter("errorOut", cOpaquePointer.copy(nullable = true))
           .returns(Boolean::class)
-          .addStatement(
-            "return handle.asStableRef<%L>().get().%L != null",
-            qualifiedName, propName,
-          )
+          .addCode(buildString {
+            appendLine("return try {")
+            appendLine("  handle.asStableRef<%L>().get().%L != null")
+            appendLine("} catch (e: Throwable) {")
+            appendLine("  if (errorOut != null) {")
+            appendLine("    errorOut.reinterpret<%T>().pointed.value = %T.create(")
+            appendLine("      buildError(e)")
+            appendLine("    ).asCPointer()")
+            appendLine("  }")
+            appendLine("  false")
+            append("}")
+          }, qualifiedName, propName, cOpaquePointerVar, stableRef)
           .build()
       )
 
@@ -152,11 +179,20 @@ internal fun FileSpec.Builder.addClassExports(cls: KSClassDeclaration) {
         FunSpec.builder("export_${prefix}_get_${propName}_value")
           .addAnnotation(cNameAnnotation("${prefix}_get_${propName}_value"))
           .addParameter("handle", cOpaquePointer)
+          .addParameter("errorOut", cOpaquePointer.copy(nullable = true))
           .returns(nonNullType)
-          .addStatement(
-            "return handle.asStableRef<%L>().get().%L!!",
-            qualifiedName, propName,
-          )
+          .addCode(buildString {
+            appendLine("return try {")
+            appendLine("  handle.asStableRef<%L>().get().%L!!")
+            appendLine("} catch (e: Throwable) {")
+            appendLine("  if (errorOut != null) {")
+            appendLine("    errorOut.reinterpret<%T>().pointed.value = %T.create(")
+            appendLine("      buildError(e)")
+            appendLine("    ).asCPointer()")
+            appendLine("  }")
+            appendLine("  $dummy")
+            append("}")
+          }, qualifiedName, propName, cOpaquePointerVar, stableRef)
           .build()
       )
 
@@ -166,10 +202,18 @@ internal fun FileSpec.Builder.addClassExports(cls: KSClassDeclaration) {
             .addAnnotation(cNameAnnotation("${prefix}_set_$propName"))
             .addParameter("handle", cOpaquePointer)
             .addParameter("value", nonNullType)
-            .addStatement(
-              "handle.asStableRef<%L>().get().%L = value",
-              qualifiedName, propName,
-            )
+            .addParameter("errorOut", cOpaquePointer.copy(nullable = true))
+            .addCode(buildString {
+              appendLine("try {")
+              appendLine("  handle.asStableRef<%L>().get().%L = value")
+              appendLine("} catch (e: Throwable) {")
+              appendLine("  if (errorOut != null) {")
+              appendLine("    errorOut.reinterpret<%T>().pointed.value = %T.create(")
+              appendLine("      buildError(e)")
+              appendLine("    ).asCPointer()")
+              appendLine("  }")
+              append("}")
+            }, qualifiedName, propName, cOpaquePointerVar, stableRef)
             .build()
         )
 
@@ -177,27 +221,65 @@ internal fun FileSpec.Builder.addClassExports(cls: KSClassDeclaration) {
           FunSpec.builder("export_${prefix}_set_${propName}_null")
             .addAnnotation(cNameAnnotation("${prefix}_set_${propName}_null"))
             .addParameter("handle", cOpaquePointer)
-            .addStatement(
-              "handle.asStableRef<%L>().get().%L = null",
-              qualifiedName, propName,
-            )
+            .addParameter("errorOut", cOpaquePointer.copy(nullable = true))
+            .addCode(buildString {
+              appendLine("try {")
+              appendLine("  handle.asStableRef<%L>().get().%L = null")
+              appendLine("} catch (e: Throwable) {")
+              appendLine("  if (errorOut != null) {")
+              appendLine("    errorOut.reinterpret<%T>().pointed.value = %T.create(")
+              appendLine("      buildError(e)")
+              appendLine("    ).asCPointer()")
+              appendLine("  }")
+              append("}")
+            }, qualifiedName, propName, cOpaquePointerVar, stableRef)
             .build()
         )
       }
     } else if (isPrimitiveType) {
       val primitiveTypeName = ClassName.bestGuess(propType).copy(nullable = isNullable)
 
-      addFunction(
-        FunSpec.builder("export_${prefix}_get_$propName")
-          .addAnnotation(cNameAnnotation("${prefix}_get_$propName"))
-          .addParameter("handle", cOpaquePointer)
-          .returns(primitiveTypeName)
-          .addStatement(
-            "return handle.asStableRef<%L>().get().%L",
-            qualifiedName, propName,
-          )
-          .build()
-      )
+      if (propType == "kotlin.Unit") {
+        addFunction(
+          FunSpec.builder("export_${prefix}_get_$propName")
+            .addAnnotation(cNameAnnotation("${prefix}_get_$propName"))
+            .addParameter("handle", cOpaquePointer)
+            .addParameter("errorOut", cOpaquePointer.copy(nullable = true))
+            .addCode(buildString {
+              appendLine("try {")
+              appendLine("  handle.asStableRef<%L>().get().%L")
+              appendLine("} catch (e: Throwable) {")
+              appendLine("  if (errorOut != null) {")
+              appendLine("    errorOut.reinterpret<%T>().pointed.value = %T.create(")
+              appendLine("      buildError(e)")
+              appendLine("    ).asCPointer()")
+              appendLine("  }")
+              append("}")
+            }, qualifiedName, propName, cOpaquePointerVar, stableRef)
+            .build()
+        )
+      } else {
+        addFunction(
+          FunSpec.builder("export_${prefix}_get_$propName")
+            .addAnnotation(cNameAnnotation("${prefix}_get_$propName"))
+            .addParameter("handle", cOpaquePointer)
+            .addParameter("errorOut", cOpaquePointer.copy(nullable = true))
+            .returns(primitiveTypeName)
+            .addCode(buildString {
+              appendLine("return try {")
+              appendLine("  handle.asStableRef<%L>().get().%L")
+              appendLine("} catch (e: Throwable) {")
+              appendLine("  if (errorOut != null) {")
+              appendLine("    errorOut.reinterpret<%T>().pointed.value = %T.create(")
+              appendLine("      buildError(e)")
+              appendLine("    ).asCPointer()")
+              appendLine("  }")
+              appendLine("  ${defaultValueFor(propType)}")
+              append("}")
+            }, qualifiedName, propName, cOpaquePointerVar, stableRef)
+            .build()
+        )
+      }
 
       if (isMutable) {
         addFunction(
@@ -205,30 +287,42 @@ internal fun FileSpec.Builder.addClassExports(cls: KSClassDeclaration) {
             .addAnnotation(cNameAnnotation("${prefix}_set_$propName"))
             .addParameter("handle", cOpaquePointer)
             .addParameter("value", primitiveTypeName)
-            .addStatement(
-              "handle.asStableRef<%L>().get().%L = value",
-              qualifiedName, propName,
-            )
+            .addParameter("errorOut", cOpaquePointer.copy(nullable = true))
+            .addCode(buildString {
+              appendLine("try {")
+              appendLine("  handle.asStableRef<%L>().get().%L = value")
+              appendLine("} catch (e: Throwable) {")
+              appendLine("  if (errorOut != null) {")
+              appendLine("    errorOut.reinterpret<%T>().pointed.value = %T.create(")
+              appendLine("      buildError(e)")
+              appendLine("    ).asCPointer()")
+              appendLine("  }")
+              append("}")
+            }, qualifiedName, propName, cOpaquePointerVar, stableRef)
             .build()
         )
       }
     } else {
-      val returnType: String = if (isNullable) "$cOpaquePointer?" else cOpaquePointer.toString()
-
       if (isNullable) {
         addFunction(
           FunSpec.builder("export_${prefix}_get_$propName")
             .addAnnotation(cNameAnnotation("${prefix}_get_$propName"))
             .addParameter("handle", cOpaquePointer)
+            .addParameter("errorOut", cOpaquePointer.copy(nullable = true))
             .returns(cOpaquePointer.copy(nullable = true))
-            .addStatement(
-              "val obj: %L? = handle.asStableRef<%L>().get().%L",
-              propType, qualifiedName, propName,
-            )
-            .addStatement(
-              "return if (obj == null) null else %T.create(obj).asCPointer()",
-              stableRef,
-            )
+            .addCode(buildString {
+              appendLine("return try {")
+              appendLine("  val obj: %L? = handle.asStableRef<%L>().get().%L")
+              appendLine("  if (obj == null) null else %T.create(obj).asCPointer()")
+              appendLine("} catch (e: Throwable) {")
+              appendLine("  if (errorOut != null) {")
+              appendLine("    errorOut.reinterpret<%T>().pointed.value = %T.create(")
+              appendLine("      buildError(e)")
+              appendLine("    ).asCPointer()")
+              appendLine("  }")
+              appendLine("  null")
+              append("}")
+            }, propType, qualifiedName, propName, stableRef, cOpaquePointerVar, stableRef)
             .build()
         )
 
@@ -238,10 +332,18 @@ internal fun FileSpec.Builder.addClassExports(cls: KSClassDeclaration) {
               .addAnnotation(cNameAnnotation("${prefix}_set_$propName"))
               .addParameter("handle", cOpaquePointer)
               .addParameter("value", cOpaquePointer.copy(nullable = true))
-              .addStatement(
-                "handle.asStableRef<%L>().get().%L = value?.asStableRef<%L>()?.get()",
-                qualifiedName, propName, propType,
-              )
+              .addParameter("errorOut", cOpaquePointer.copy(nullable = true))
+              .addCode(buildString {
+                appendLine("try {")
+                appendLine("  handle.asStableRef<%L>().get().%L = value?.asStableRef<%L>()?.get()")
+                appendLine("} catch (e: Throwable) {")
+                appendLine("  if (errorOut != null) {")
+                appendLine("    errorOut.reinterpret<%T>().pointed.value = %T.create(")
+                appendLine("      buildError(e)")
+                appendLine("    ).asCPointer()")
+                appendLine("  }")
+                append("}")
+              }, qualifiedName, propName, propType, cOpaquePointerVar, stableRef)
               .build()
           )
         }
@@ -250,11 +352,20 @@ internal fun FileSpec.Builder.addClassExports(cls: KSClassDeclaration) {
           FunSpec.builder("export_${prefix}_get_$propName")
             .addAnnotation(cNameAnnotation("${prefix}_get_$propName"))
             .addParameter("handle", cOpaquePointer)
-            .returns(cOpaquePointer)
-            .addStatement(
-              "return %T.create(handle.asStableRef<%L>().get().%L).asCPointer()",
-              stableRef, qualifiedName, propName,
-            )
+            .addParameter("errorOut", cOpaquePointer.copy(nullable = true))
+            .returns(cOpaquePointer.copy(nullable = true))
+            .addCode(buildString {
+              appendLine("return try {")
+              appendLine("  %T.create(handle.asStableRef<%L>().get().%L).asCPointer()")
+              appendLine("} catch (e: Throwable) {")
+              appendLine("  if (errorOut != null) {")
+              appendLine("    errorOut.reinterpret<%T>().pointed.value = %T.create(")
+              appendLine("      buildError(e)")
+              appendLine("    ).asCPointer()")
+              appendLine("  }")
+              appendLine("  null")
+              append("}")
+            }, stableRef, qualifiedName, propName, cOpaquePointerVar, stableRef)
             .build()
         )
 
@@ -264,10 +375,18 @@ internal fun FileSpec.Builder.addClassExports(cls: KSClassDeclaration) {
               .addAnnotation(cNameAnnotation("${prefix}_set_$propName"))
               .addParameter("handle", cOpaquePointer)
               .addParameter("value", cOpaquePointer)
-              .addStatement(
-                "handle.asStableRef<%L>().get().%L = value.asStableRef<%L>().get()",
-                qualifiedName, propName, propType,
-              )
+              .addParameter("errorOut", cOpaquePointer.copy(nullable = true))
+              .addCode(buildString {
+                appendLine("try {")
+                appendLine("  handle.asStableRef<%L>().get().%L = value.asStableRef<%L>().get()")
+                appendLine("} catch (e: Throwable) {")
+                appendLine("  if (errorOut != null) {")
+                appendLine("    errorOut.reinterpret<%T>().pointed.value = %T.create(")
+                appendLine("      buildError(e)")
+                appendLine("    ).asCPointer()")
+                appendLine("  }")
+                append("}")
+              }, qualifiedName, propName, propType, cOpaquePointerVar, stableRef)
               .build()
           )
         }

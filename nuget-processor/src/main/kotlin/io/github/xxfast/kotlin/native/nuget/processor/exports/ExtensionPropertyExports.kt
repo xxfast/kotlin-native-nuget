@@ -34,11 +34,41 @@ internal fun FileSpec.Builder.addExtensionPropertyExports(prop: KSPropertyDeclar
     builder.addParameter("handle", cOpaquePointer)
   }
 
+  builder.addParameter("errorOut", cOpaquePointer.copy(nullable = true))
+
   val receiverExpr: String = if (isPrimitiveReceiver) "receiver"
   else "handle.asStableRef<$receiverQualified>().get()"
 
-  builder.returns(ClassName.bestGuess(qualifiedReturn))
-  builder.addStatement("return $receiverExpr.$propName")
+  val dummy: String = defaultValueFor(qualifiedReturn)
+  val isUnit = qualifiedReturn == "kotlin.Unit"
+
+  if (isUnit) {
+    builder.addCode(buildString {
+      appendLine("try {")
+      appendLine("  $receiverExpr.$propName")
+      appendLine("} catch (e: Throwable) {")
+      appendLine("  if (errorOut != null) {")
+      appendLine("    errorOut.reinterpret<%T>().pointed.value = %T.create(")
+      appendLine("      buildError(e)")
+      appendLine("    ).asCPointer()")
+      appendLine("  }")
+      append("}")
+    }, cOpaquePointerVar, stableRef)
+  } else {
+    builder.returns(ClassName.bestGuess(qualifiedReturn))
+    builder.addCode(buildString {
+      appendLine("return try {")
+      appendLine("  $receiverExpr.$propName")
+      appendLine("} catch (e: Throwable) {")
+      appendLine("  if (errorOut != null) {")
+      appendLine("    errorOut.reinterpret<%T>().pointed.value = %T.create(")
+      appendLine("      buildError(e)")
+      appendLine("    ).asCPointer()")
+      appendLine("  }")
+      appendLine("  $dummy")
+      append("}")
+    }, cOpaquePointerVar, stableRef)
+  }
 
   addFunction(builder.build())
 }
