@@ -47,6 +47,21 @@ var treatBudget: Int
     treatBudgetInternal = value
   }
 
+// --- Custom exception: user-defined type → falls back to base KotlinException ---
+// Disturbing a napping cat throws a custom exception, not a Kotlin stdlib one.
+internal class CatNapException(message: String) : Exception(message)
+
+class NappingCat(val name: String) {
+  var isNapping: Boolean = true
+
+  // Reading the mood while napping disturbs the cat — a custom exception.
+  val mood: String
+    get() {
+      if (isNapping) throw CatNapException("$name is napping — do not disturb")
+      return "$name is purring contentedly"
+    }
+}
+
 // --- Extension property: throwing getter ---
 // A Cat's favourite treat name can only be retrieved if the cat has at least one toy;
 // otherwise it's an illegal state (Oreo chewed through them all).

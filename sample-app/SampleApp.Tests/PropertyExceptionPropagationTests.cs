@@ -222,6 +222,46 @@ public class PropertyExceptionPropagationTests
         Assert.Equal(50, PropertyExceptions.TreatBudget);
     }
 
+    // --- Custom exception: throwing GETTER (NappingCat.Mood) ---
+
+    [Fact]
+    public void NappingCat_Mood_WhileNapping_GetterThrowsBaseKotlinException()
+    {
+        // CatNapException is user-defined — not a stdlib type — so it falls back to base KotlinException
+        using var cat = new NappingCat("Oreo");
+        var ex = Assert.ThrowsAny<KotlinException>(
+            () => cat.Mood);
+        Assert.IsType<KotlinException>(ex);
+    }
+
+    [Fact]
+    public void NappingCat_Mood_WhileNapping_KotlinType_IsCustomException()
+    {
+        using var cat = new NappingCat("Oreo");
+        var ex = Assert.ThrowsAny<KotlinException>(
+            () => cat.Mood);
+        Assert.Equal(
+            "io.github.xxfast.kotlin.native.nuget.sample.cat.CatNapException",
+            ex.KotlinType);
+    }
+
+    [Fact]
+    public void NappingCat_Mood_WhileNapping_Message()
+    {
+        using var cat = new NappingCat("Oreo");
+        var ex = Assert.ThrowsAny<KotlinException>(
+            () => cat.Mood);
+        Assert.Equal("Oreo is napping — do not disturb", ex.Message);
+    }
+
+    [Fact]
+    public void NappingCat_Mood_Awake_GetterSucceeds()
+    {
+        using var cat = new NappingCat("Mylo");
+        cat.IsNapping = false;
+        Assert.Equal("Mylo is purring contentedly", cat.Mood);
+    }
+
     // --- Extension property: throwing GETTER (CatExtensions.GetFavouriteTreatName) ---
 
     [Fact]
