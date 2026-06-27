@@ -45,11 +45,20 @@ internal fun FileSpec.Builder.addClassExports(cls: KSClassDeclaration) {
       FunSpec.builder("export_${prefix}_create")
         .addAnnotation(cNameAnnotation("${prefix}_create"))
         .addParameters(constructor)
-        .returns(cOpaquePointer)
-        .addStatement(
-          "return %T.create(%L(%L)).asCPointer()",
-          stableRef, qualifiedName, ctorParamCall,
-        )
+        .addParameter("errorOut", cOpaquePointer.copy(nullable = true))
+        .returns(cOpaquePointer.copy(nullable = true))
+        .addCode(buildString {
+          appendLine("return try {")
+          appendLine("  %T.create(%L(%L)).asCPointer()")
+          appendLine("} catch (e: Throwable) {")
+          appendLine("  if (errorOut != null) {")
+          appendLine("    errorOut.reinterpret<%T>().pointed.value = %T.create(")
+          appendLine("      buildError(e)")
+          appendLine("    ).asCPointer()")
+          appendLine("  }")
+          appendLine("  null")
+          append("}")
+        }, stableRef, qualifiedName, ctorParamCall, cOpaquePointerVar, stableRef)
         .build()
     )
   }
@@ -567,7 +576,6 @@ internal fun FileSpec.Builder.addClassExports(cls: KSClassDeclaration) {
         .builder("export_${prefix}_copy")
         .addAnnotation(cNameAnnotation("${prefix}_copy"))
         .addParameter("handle", cOpaquePointer)
-        .returns(cOpaquePointer)
 
       for (param in constructor.parameters) {
         val resolved = param.type.resolve().expandAliases()
@@ -581,15 +589,26 @@ internal fun FileSpec.Builder.addClassExports(cls: KSClassDeclaration) {
         )
       }
 
+      copyBuilder.addParameter("errorOut", cOpaquePointer.copy(nullable = true))
+
       val copyParamCall: String = constructor.parameters.joinToString(", ") {
         val paramName: String = it.name?.asString() ?: "_"
         "$paramName = $paramName"
       }
 
-      copyBuilder.addStatement(
-        "return %T.create(handle.asStableRef<%L>().get().copy(%L)).asCPointer()",
-        stableRef, qualifiedName, copyParamCall,
-      )
+      copyBuilder.returns(cOpaquePointer.copy(nullable = true))
+      copyBuilder.addCode(buildString {
+        appendLine("return try {")
+        appendLine("  %T.create(handle.asStableRef<%L>().get().copy(%L)).asCPointer()")
+        appendLine("} catch (e: Throwable) {")
+        appendLine("  if (errorOut != null) {")
+        appendLine("    errorOut.reinterpret<%T>().pointed.value = %T.create(")
+        appendLine("      buildError(e)")
+        appendLine("    ).asCPointer()")
+        appendLine("  }")
+        appendLine("  null")
+        append("}")
+      }, stableRef, qualifiedName, copyParamCall, cOpaquePointerVar, stableRef)
 
       addFunction(copyBuilder.build())
     }

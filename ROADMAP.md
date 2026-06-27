@@ -72,7 +72,10 @@
 - [x] Map exception cause chain (`e.cause` → `InnerException`) (see [ADR-028](docs/adr/028-exception-cause-chain.md))
 - [x] Map core Kotlin exceptions to .NET analogs (e.g., `IllegalArgumentException` → `ArgumentException`) with `IKotlinException` interface (see [ADR-029](docs/adr/029-exception-type-mapping.md))
 - [x] Map property getter/setter exception propagation (see [ADR-030](docs/adr/030-property-exception-propagation.md))
-- [ ] Map constructor exception propagation (deferred from ADR-024)
+- [x] Map constructor exception propagation — primary constructors + data class `copy()` (see [ADR-031](docs/adr/031-constructor-exception-propagation.md))
+  - [ ] Generic class constructor variants (`create_*` typed variants + `create_object`)
+  - [ ] Value class constructor exceptions (needs static-factory redesign — `: this(...)` syntax blocks error check)
+  - [ ] Secondary constructor exceptions (secondary constructors not yet exported)
 
 ## Phase 6: Async support
 - [x] Map Suspend functions (coroutines → Task/async) (see [ADR-019](docs/adr/019-suspend-function-mapping.md))

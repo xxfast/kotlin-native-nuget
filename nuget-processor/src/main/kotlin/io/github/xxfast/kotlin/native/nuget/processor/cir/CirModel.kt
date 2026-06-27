@@ -246,6 +246,7 @@ data class CirExtraNative(
 data class CirConstructor(
   val parameters: List<CirParameter>,
   val body: String,
+  val hasErrorCheck: Boolean = false,
 )
 
 data class CirParameter(

@@ -53,7 +53,8 @@ internal fun translateClass(
 
     CirConstructor(
       parameters = ctorParams,
-      body = "_handle = Native_Create(${ctorParams.joinToString(", ") { it.name }});",
+      body = "",
+      hasErrorCheck = true,
     )
   } else null
 

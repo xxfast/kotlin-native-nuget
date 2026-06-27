@@ -29,3 +29,5 @@
 - [027](027-stacktrace-propagation.md) — `KotlinException.KotlinStackTrace` property; `Triple<String,String,String>` error bridge; `nuget_error_stacktrace` export; `ToString()` override appends Kotlin trace
 - [028](028-exception-cause-chain.md) — `e.cause` → `KotlinException.InnerException`; recursive `NugetError` data class error bridge (replaces `Triple`); `nuget_error_cause_*` exports; each cause a full `KotlinException`
 - [029](029-exception-type-mapping.md) — `IKotlinException` interface; 8 Kotlin stdlib exceptions mapped to .NET analogs (e.g. `IllegalArgumentException` → `KotlinArgumentException : ArgumentException`); `KotlinException` fallback for unmapped types; `BuildMapped` switch in generated helper
+- [030](030-property-exception-propagation.md) — ADR-024 error-out-parameter extended to property getter/setter exports; both callable forms of nullable two-call pattern wrapped independently
+- [031](031-constructor-exception-propagation.md) — Constructor export returns `COpaquePointer?` (null on error) + `errorOut`; C# constructor checks error before assigning `_handle`; data class `copy()` receives same treatment

@@ -168,8 +168,9 @@ internal fun StringBuilder.renderClass(cls: CirClass) {
 
   if (cls.constructor != null && !cls.isAbstract) {
     val ctorParamStr: String = cls.constructor.parameters.joinToString(", ") { "${it.type} ${it.name}" }
+    val createParams: String = if (ctorParamStr.isEmpty()) "out IntPtr error" else "$ctorParamStr, out IntPtr error"
     appendLine("        [DllImport(\"${cls.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"${cls.nativePrefix}_create\")]")
-    appendLine("        private static extern IntPtr Native_Create($ctorParamStr);")
+    appendLine("        private static extern IntPtr Native_Create($createParams);")
     appendLine()
     renderConstructor(cls.name, cls.constructor, cls.superClass != null, cls.hasSuspendMethods)
   }
@@ -261,18 +262,30 @@ internal fun StringBuilder.renderConstructor(
   hasSuspendMethods: Boolean = false,
 ) {
   val paramStr: String = ctor.parameters.joinToString(", ") { "${it.type} ${it.name}" }
+  val paramNames: String = ctor.parameters.joinToString(", ") { it.name }
+  val nativeCallArgs: String = if (paramNames.isEmpty()) "out IntPtr error" else "$paramNames, out IntPtr error"
 
   if (hasSuperClass) {
     appendLine("        public $className($paramStr) : base(IntPtr.Zero)")
-    appendLine("        {")
-    appendLine("            ${ctor.body}")
-    appendLine("        }")
   } else {
     appendLine("        public $className($paramStr)")
+  }
+
+  if (ctor.hasErrorCheck) {
+    appendLine("        {")
+    appendLine("            IntPtr handle = Native_Create($nativeCallArgs);")
+    appendLine("            if (error != IntPtr.Zero)")
+    appendLine("            {")
+    appendLine("                throw NugetErrorNative.BuildException(error);")
+    appendLine("            }")
+    appendLine("            _handle = handle;")
+    appendLine("        }")
+  } else {
     appendLine("        {")
     appendLine("            ${ctor.body}")
     appendLine("        }")
   }
+
   appendLine()
 }
 
@@ -429,10 +442,19 @@ internal fun StringBuilder.renderDataClassMethods(cls: CirClass) {
   if (cls.constructor != null) {
     val copyParams: String = cls.constructor.parameters.joinToString(", ") { "${it.type} ${it.name}" }
     val copyParamNames: String = cls.constructor.parameters.joinToString(", ") { it.name }
+    val copyNativeArgs: String = if (copyParamNames.isEmpty()) "_handle, out IntPtr error" else "_handle, $copyParamNames, out IntPtr error"
     appendLine("        [DllImport(\"${cls.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"${cls.nativePrefix}_copy\")]")
-    appendLine("        private static extern IntPtr Native_Copy(IntPtr handle, $copyParams);")
+    appendLine("        private static extern IntPtr Native_Copy(IntPtr handle, $copyParams, out IntPtr error);")
     appendLine()
-    appendLine("        public ${cls.name} Copy($copyParams) => new ${cls.name}(Native_Copy(_handle, $copyParamNames));")
+    appendLine("        public ${cls.name} Copy($copyParams)")
+    appendLine("        {")
+    appendLine("            IntPtr handle = Native_Copy($copyNativeArgs);")
+    appendLine("            if (error != IntPtr.Zero)")
+    appendLine("            {")
+    appendLine("                throw NugetErrorNative.BuildException(error);")
+    appendLine("            }")
+    appendLine("            return new ${cls.name}(handle);")
+    appendLine("        }")
     appendLine()
   }
 
