@@ -33,3 +33,14 @@ data class CatProfile(val name: String, val treatBudget: Int) {
     require(treatBudget >= 0) { "Treat budget cannot be negative" }
   }
 }
+
+// --- Secondary constructor: ADR-034 ---
+// A litter order can be given directly by total weight, or as bags × weight-per-bag.
+// The secondary delegates to the primary, which re-runs the init validation.
+class CatLitter(val brand: String, val weightKg: Int) {
+  init {
+    require(weightKg > 0) { "Litter weight must be positive" }
+  }
+
+  constructor(brand: String, bags: Int, perBag: Int) : this(brand, bags * perBag)
+}

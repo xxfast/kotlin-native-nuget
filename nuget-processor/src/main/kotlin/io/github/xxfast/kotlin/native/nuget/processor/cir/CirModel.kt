@@ -41,6 +41,7 @@ data class CirClass(
   val libraryName: String,
   val nativePrefix: String,
   val constructor: CirConstructor?,
+  val secondaryConstructors: List<CirConstructor> = emptyList(),
   val properties: List<CirProperty>,
   val methods: List<CirMethod>,
   val interfaces: List<String> = emptyList(),
@@ -70,6 +71,11 @@ data class CirValueClassConstructor(
   val parameters: List<CirParameter>,
   val nativeName: String,
   val body: String,
+  val hasErrorCheck: Boolean = false,
+  // Distinguishes constructor entry points / C# native methods. Empty for the
+  // primary (catid_create / Native_Create); "_2", "_3", … for secondaries. See
+  // ADR-035 (aligns value classes with ADR-034's regular-class scheme).
+  val nativeSuffix: String = "",
 )
 
 data class CirEnum(
@@ -247,6 +253,10 @@ data class CirConstructor(
   val parameters: List<CirParameter>,
   val body: String,
   val hasErrorCheck: Boolean = false,
+  // Distinguishes secondary constructor entry points / C# native methods from the
+  // primary's. Empty for the primary (cat_create / Native_Create); "_2", "_3", …
+  // for secondaries (cat_create_2 / Native_Create_2). See ADR-034.
+  val nativeSuffix: String = "",
 )
 
 data class CirParameter(

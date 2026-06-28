@@ -28,113 +28,24 @@ internal fun FileSpec.Builder.addGenericClassExports(cls: KSClassDeclaration) {
     } ?: false
 
   if (!hasNonTrivialBound) {
-    addFunction(
-      FunSpec.builder("export_${prefix}_create_string")
-        .addAnnotation(cNameAnnotation("${prefix}_create_string"))
-        .addParameter("value", String::class)
-        .returns(cOpaquePointer)
-        .addStatement("return %T.create(%L(value)).asCPointer()", stableRef, qualifiedName)
-        .build()
+    val primitiveVariants: List<Pair<String, ParameterSpec>> = listOf(
+      "string" to ParameterSpec.builder("value", String::class).build(),
+      "byte" to ParameterSpec.builder("value", Byte::class).build(),
+      "ubyte" to ParameterSpec.builder("value", UByte::class).build(),
+      "short" to ParameterSpec.builder("value", Short::class).build(),
+      "ushort" to ParameterSpec.builder("value", UShort::class).build(),
+      "int" to ParameterSpec.builder("value", Int::class).build(),
+      "uint" to ParameterSpec.builder("value", UInt::class).build(),
+      "long" to ParameterSpec.builder("value", Long::class).build(),
+      "ulong" to ParameterSpec.builder("value", ULong::class).build(),
+      "float" to ParameterSpec.builder("value", Float::class).build(),
+      "double" to ParameterSpec.builder("value", Double::class).build(),
+      "bool" to ParameterSpec.builder("value", Boolean::class).build(),
     )
 
-    addFunction(
-      FunSpec.builder("export_${prefix}_create_byte")
-        .addAnnotation(cNameAnnotation("${prefix}_create_byte"))
-        .addParameter("value", Byte::class)
-        .returns(cOpaquePointer)
-        .addStatement("return %T.create(%L(value)).asCPointer()", stableRef, qualifiedName)
-        .build()
-    )
-
-    addFunction(
-      FunSpec.builder("export_${prefix}_create_ubyte")
-        .addAnnotation(cNameAnnotation("${prefix}_create_ubyte"))
-        .addParameter("value", UByte::class)
-        .returns(cOpaquePointer)
-        .addStatement("return %T.create(%L(value)).asCPointer()", stableRef, qualifiedName)
-        .build()
-    )
-
-    addFunction(
-      FunSpec.builder("export_${prefix}_create_short")
-        .addAnnotation(cNameAnnotation("${prefix}_create_short"))
-        .addParameter("value", Short::class)
-        .returns(cOpaquePointer)
-        .addStatement("return %T.create(%L(value)).asCPointer()", stableRef, qualifiedName)
-        .build()
-    )
-
-    addFunction(
-      FunSpec.builder("export_${prefix}_create_ushort")
-        .addAnnotation(cNameAnnotation("${prefix}_create_ushort"))
-        .addParameter("value", UShort::class)
-        .returns(cOpaquePointer)
-        .addStatement("return %T.create(%L(value)).asCPointer()", stableRef, qualifiedName)
-        .build()
-    )
-
-    addFunction(
-      FunSpec.builder("export_${prefix}_create_int")
-        .addAnnotation(cNameAnnotation("${prefix}_create_int"))
-        .addParameter("value", Int::class)
-        .returns(cOpaquePointer)
-        .addStatement("return %T.create(%L(value)).asCPointer()", stableRef, qualifiedName)
-        .build()
-    )
-
-    addFunction(
-      FunSpec.builder("export_${prefix}_create_uint")
-        .addAnnotation(cNameAnnotation("${prefix}_create_uint"))
-        .addParameter("value", UInt::class)
-        .returns(cOpaquePointer)
-        .addStatement("return %T.create(%L(value)).asCPointer()", stableRef, qualifiedName)
-        .build()
-    )
-
-    addFunction(
-      FunSpec.builder("export_${prefix}_create_long")
-        .addAnnotation(cNameAnnotation("${prefix}_create_long"))
-        .addParameter("value", Long::class)
-        .returns(cOpaquePointer)
-        .addStatement("return %T.create(%L(value)).asCPointer()", stableRef, qualifiedName)
-        .build()
-    )
-
-    addFunction(
-      FunSpec.builder("export_${prefix}_create_ulong")
-        .addAnnotation(cNameAnnotation("${prefix}_create_ulong"))
-        .addParameter("value", ULong::class)
-        .returns(cOpaquePointer)
-        .addStatement("return %T.create(%L(value)).asCPointer()", stableRef, qualifiedName)
-        .build()
-    )
-
-    addFunction(
-      FunSpec.builder("export_${prefix}_create_float")
-        .addAnnotation(cNameAnnotation("${prefix}_create_float"))
-        .addParameter("value", Float::class)
-        .returns(cOpaquePointer)
-        .addStatement("return %T.create(%L(value)).asCPointer()", stableRef, qualifiedName)
-        .build()
-    )
-
-    addFunction(
-      FunSpec.builder("export_${prefix}_create_double")
-        .addAnnotation(cNameAnnotation("${prefix}_create_double"))
-        .addParameter("value", Double::class)
-        .returns(cOpaquePointer)
-        .addStatement("return %T.create(%L(value)).asCPointer()", stableRef, qualifiedName)
-        .build()
-    )
-
-    addFunction(
-      FunSpec.builder("export_${prefix}_create_bool")
-        .addAnnotation(cNameAnnotation("${prefix}_create_bool"))
-        .addParameter("value", Boolean::class)
-        .returns(cOpaquePointer)
-        .addStatement("return %T.create(%L(value)).asCPointer()", stableRef, qualifiedName)
-        .build()
-    )
+    for ((suffix, param) in primitiveVariants) {
+      addGenericCreateExport(prefix, suffix, param, qualifiedName, "value")
+    }
   }
 
   val boundQualified: String? = cls.typeParameters.firstOrNull()
@@ -150,16 +61,12 @@ internal fun FileSpec.Builder.addGenericClassExports(cls: KSClassDeclaration) {
     "value.asStableRef<Any>().get()"
   }
 
-  addFunction(
-    FunSpec.builder("export_${prefix}_create_object")
-      .addAnnotation(cNameAnnotation("${prefix}_create_object"))
-      .addParameter("value", cOpaquePointer)
-      .returns(cOpaquePointer)
-      .addStatement(
-        "return %T.create(%L($castExpr)).asCPointer()",
-        stableRef, qualifiedName,
-      )
-      .build()
+  addGenericCreateExport(
+    prefix,
+    "object",
+    ParameterSpec.builder("value", cOpaquePointer).build(),
+    qualifiedName,
+    castExpr,
   )
 
   addFunction(
@@ -189,6 +96,40 @@ internal fun FileSpec.Builder.addGenericClassExports(cls: KSClassDeclaration) {
         .build()
     )
   }
+}
+
+/**
+ * Emits a generic-class construction export with synchronous exception propagation
+ * (ADR-032): a trailing nullable [errorOut] receives a StableRef<NugetError> when
+ * the Kotlin constructor throws, and the export returns null instead of a handle.
+ */
+private fun FileSpec.Builder.addGenericCreateExport(
+  prefix: String,
+  suffix: String,
+  valueParam: ParameterSpec,
+  qualifiedName: String,
+  argExpr: String,
+) {
+  addFunction(
+    FunSpec.builder("export_${prefix}_create_$suffix")
+      .addAnnotation(cNameAnnotation("${prefix}_create_$suffix"))
+      .addParameter(valueParam)
+      .addParameter("errorOut", cOpaquePointer.copy(nullable = true))
+      .returns(cOpaquePointer.copy(nullable = true))
+      .addCode(buildString {
+        appendLine("return try {")
+        appendLine("  %T.create(%L($argExpr)).asCPointer()")
+        appendLine("} catch (e: Throwable) {")
+        appendLine("  if (errorOut != null) {")
+        appendLine("    errorOut.reinterpret<%T>().pointed.value = %T.create(")
+        appendLine("      buildError(e)")
+        appendLine("    ).asCPointer()")
+        appendLine("  }")
+        appendLine("  null")
+        append("}")
+      }, stableRef, qualifiedName, cOpaquePointerVar, stableRef)
+      .build()
+  )
 }
 
 internal fun FileSpec.Builder.addNugetListHelperExports() {

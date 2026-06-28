@@ -1,5 +1,6 @@
 package io.github.xxfast.kotlin.native.nuget.processor.exports
 
+import com.google.devtools.ksp.getConstructors
 import com.google.devtools.ksp.getVisibility
 import com.google.devtools.ksp.symbol.ClassKind
 import com.google.devtools.ksp.symbol.KSClassDeclaration
@@ -61,6 +62,41 @@ internal fun FileSpec.Builder.addClassExports(cls: KSClassDeclaration) {
         }, stableRef, qualifiedName, ctorParamCall, cOpaquePointerVar, stableRef)
         .build()
     )
+  }
+
+  if (!isAbstract) {
+    val secondaryConstructors: List<KSFunctionDeclaration> = cls.getConstructors()
+      .filter { it != cls.primaryConstructor }
+      .filter { it.getVisibility() == Visibility.PUBLIC }
+      .toList()
+
+    secondaryConstructors.forEachIndexed { index, ctor ->
+      val cname: String = "${prefix}_create_${index + 2}"
+      val ctorParamCall: String = ctor.parameters.joinToString(", ") {
+        it.name?.asString() ?: "_"
+      }
+
+      addFunction(
+        FunSpec.builder("export_$cname")
+          .addAnnotation(cNameAnnotation(cname))
+          .addParameters(ctor)
+          .addParameter("errorOut", cOpaquePointer.copy(nullable = true))
+          .returns(cOpaquePointer.copy(nullable = true))
+          .addCode(buildString {
+            appendLine("return try {")
+            appendLine("  %T.create(%L(%L)).asCPointer()")
+            appendLine("} catch (e: Throwable) {")
+            appendLine("  if (errorOut != null) {")
+            appendLine("    errorOut.reinterpret<%T>().pointed.value = %T.create(")
+            appendLine("      buildError(e)")
+            appendLine("    ).asCPointer()")
+            appendLine("  }")
+            appendLine("  null")
+            append("}")
+          }, stableRef, qualifiedName, ctorParamCall, cOpaquePointerVar, stableRef)
+          .build()
+      )
+    }
   }
 
   addFunction(

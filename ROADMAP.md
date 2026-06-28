@@ -73,9 +73,10 @@
 - [x] Map core Kotlin exceptions to .NET analogs (e.g., `IllegalArgumentException` → `ArgumentException`) with `IKotlinException` interface (see [ADR-029](docs/adr/029-exception-type-mapping.md))
 - [x] Map property getter/setter exception propagation (see [ADR-030](docs/adr/030-property-exception-propagation.md))
 - [x] Map constructor exception propagation — primary constructors + data class `copy()` (see [ADR-031](docs/adr/031-constructor-exception-propagation.md))
-  - [ ] Generic class constructor variants (`create_*` typed variants + `create_object`)
-  - [ ] Value class constructor exceptions (needs static-factory redesign — `: this(...)` syntax blocks error check)
-  - [ ] Secondary constructor exceptions (secondary constructors not yet exported)
+  - [x] Generic class constructor variants (`create_*` typed variants + `create_object`) (see [ADR-032](docs/adr/032-generic-constructor-exception-propagation.md))
+  - [x] Value class constructor exceptions — private `CreateChecked` helper keeps `new CatId(...)`, no static-factory redesign needed (see [ADR-033](docs/adr/033-value-class-constructor-exception-propagation.md))
+  - [x] Secondary constructor exceptions — exported as `_create_N` overloads, fail-fast on C# signature collision (see [ADR-034](docs/adr/034-secondary-constructor-exceptions.md))
+  - [x] Value class **primary**-constructor `init` validation — hand-written record struct routes every constructor through Kotlin; reference-underlying deferred (see [ADR-035](docs/adr/035-value-class-primary-constructor-validation.md))
 
 ## Phase 6: Async support
 - [x] Map Suspend functions (coroutines → Task/async) (see [ADR-019](docs/adr/019-suspend-function-mapping.md))

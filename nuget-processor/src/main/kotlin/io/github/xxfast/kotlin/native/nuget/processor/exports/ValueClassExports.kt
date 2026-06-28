@@ -33,9 +33,25 @@ internal fun FileSpec.Builder.addValueClassExports(cls: KSClassDeclaration) {
     .filter { it != cls.primaryConstructor }
     .toList()
 
-  secondaryConstructors.forEachIndexed { index, ctor ->
-    val cname: String = if (index == 0) "${prefix}_create" else "${prefix}_create_${index}"
+  val constructorExports: List<Pair<KSFunctionDeclaration, String>> = if (isReferenceUnderlying) {
+    // ADR-035: primary `init` validation for reference-underlying value classes is
+    // deferred; keep the existing secondary-only export scheme (old numbering).
+    secondaryConstructors.mapIndexed { index, ctor ->
+      val cname: String = if (index == 0) "${prefix}_create" else "${prefix}_create_${index}"
+      ctor to cname
+    }
+  } else {
+    // ADR-035: export the primary so its `init` runs across the bridge; secondaries
+    // renumber to `_create_2+` (aligns with ADR-034).
+    buildList {
+      add(cls.primaryConstructor!! to "${prefix}_create")
+      secondaryConstructors.forEachIndexed { index, ctor ->
+        add(ctor to "${prefix}_create_${index + 2}")
+      }
+    }
+  }
 
+  constructorExports.forEach { (ctor, cname) ->
     val paramCall: String = ctor.parameters.joinToString(", ") {
       it.name?.asString() ?: "_"
     }
@@ -56,8 +72,22 @@ internal fun FileSpec.Builder.addValueClassExports(cls: KSClassDeclaration) {
       )
     }
 
-    builder.returns(ClassName.bestGuess(underlyingType))
-    builder.addStatement("return %L(%L).%L", qualifiedName, paramCall, underlyingPropName)
+    builder.addParameter("errorOut", cOpaquePointer.copy(nullable = true))
+
+    val dummy: String = defaultValueFor(underlyingType)
+    builder.returns(ClassName.bestGuess(underlyingType).copy(nullable = dummy == "null"))
+    builder.addCode(buildString {
+      appendLine("return try {")
+      appendLine("  %L(%L).%L")
+      appendLine("} catch (e: Throwable) {")
+      appendLine("  if (errorOut != null) {")
+      appendLine("    errorOut.reinterpret<%T>().pointed.value = %T.create(")
+      appendLine("      buildError(e)")
+      appendLine("    ).asCPointer()")
+      appendLine("  }")
+      appendLine("  $dummy")
+      append("}")
+    }, qualifiedName, paramCall, underlyingPropName, cOpaquePointerVar, stableRef)
 
     addFunction(builder.build())
   }

@@ -1,5 +1,6 @@
 package io.github.xxfast.kotlin.native.nuget.processor.cir
 
+import com.google.devtools.ksp.getConstructors
 import com.google.devtools.ksp.getVisibility
 import com.google.devtools.ksp.processing.KSPLogger
 import com.google.devtools.ksp.symbol.ClassKind
@@ -57,6 +58,40 @@ internal fun translateClass(
       hasErrorCheck = true,
     )
   } else null
+
+  // Secondary constructors (ADR-034). Entry points start at _create_2 so they
+  // never collide with the primary's _create.
+  val secondaryConstructors: List<CirConstructor> = if (isAbstract) emptyList() else cls
+    .getConstructors()
+    .filter { it != cls.primaryConstructor }
+    .filter { it.getVisibility() == Visibility.PUBLIC }
+    .toList()
+    .mapIndexed { index, ctor ->
+      val params: List<CirParameter> = ctor.parameters.map { param ->
+        val resolved: KSType = param.type.resolve().expandAliases()
+        CirParameter(param.name?.asString() ?: "_", mapParamType(resolved.declaration.simpleName.asString()))
+      }
+
+      CirConstructor(
+        parameters = params,
+        body = "",
+        hasErrorCheck = true,
+        nativeSuffix = "_${index + 2}",
+      )
+    }
+
+  // C has no overloading and C# cannot declare two constructors with identical
+  // parameter types — fail fast rather than emit uncompilable C# (ADR-034).
+  val constructorSignatures: List<List<String>> =
+    (listOfNotNull(cirConstructor) + secondaryConstructors).map { ctor ->
+      ctor.parameters.map { it.type }
+    }
+  if (constructorSignatures.size != constructorSignatures.toSet().size) {
+    logger.error(
+      "Class $name has constructors with identical C# signatures; " +
+        "rename or remove the duplicate (ADR-034).",
+    )
+  }
 
   val properties: List<CirProperty> = cls.getAllProperties()
     .filter { it.getVisibility() == Visibility.PUBLIC }
@@ -711,6 +746,7 @@ internal fun translateClass(
     libraryName = libraryName,
     nativePrefix = prefix,
     constructor = cirConstructor,
+    secondaryConstructors = secondaryConstructors,
     properties = properties,
     methods = methods,
     interfaces = interfaces,
@@ -1319,35 +1355,58 @@ internal fun translateValueClass(
 
   val nativeArg: String = if (isReferenceUnderlying) "${underlyingName}._handle" else underlyingName
 
-  val secondaryConstructors: List<CirValueClassConstructor> = cls.declarations
+  fun buildConstructor(
+    ctor: KSFunctionDeclaration,
+    suffix: String,
+    nativeName: String,
+  ): CirValueClassConstructor {
+    val params: List<CirParameter> = ctor.parameters.map { param ->
+      val resolved: KSType = param.type.resolve().expandAliases()
+      val kotlinType: String = resolved.declaration.simpleName.asString()
+      CirParameter(param.name?.asString() ?: "_", mapParamType(kotlinType))
+    }
+
+    val paramNames: String = params.joinToString(", ") { it.name }
+    val body: String = if (underlyingType == "String") {
+      "Marshal.PtrToStringUTF8(CreateChecked${suffix}(${paramNames}))!"
+    } else {
+      "CreateChecked${suffix}(${paramNames})"
+    }
+
+    return CirValueClassConstructor(
+      parameters = params,
+      nativeName = nativeName,
+      body = body,
+      hasErrorCheck = true,
+      nativeSuffix = suffix,
+    )
+  }
+
+  val secondaryCtorDecls: List<KSFunctionDeclaration> = cls.declarations
     .filterIsInstance<KSFunctionDeclaration>()
     .filter { it.simpleName.asString() == "<init>" }
     .filter { it != cls.primaryConstructor }
-    .mapIndexed { index, ctor ->
-      val params: List<CirParameter> = ctor.parameters.map { param ->
-        val resolved: KSType = param.type.resolve().expandAliases()
-        val kotlinType: String = resolved.declaration.simpleName.asString()
-        CirParameter(param.name?.asString() ?: "_", mapParamType(kotlinType))
-      }
-
-      val nativeName: String = if (index == 0) "${prefix}_create" else "${prefix}_create_${index}"
-
-      val indexSuffix: String = if (index > 0) "_$index" else ""
-      val paramNames: String = params.joinToString(", ") { it.name }
-
-      val body: String = if (underlyingType == "String") {
-        "Marshal.PtrToStringUTF8(Native_Create${indexSuffix}(${paramNames}))!"
-      } else {
-        "Native_Create${indexSuffix}(${paramNames})"
-      }
-
-      CirValueClassConstructor(
-        parameters = params,
-        nativeName = nativeName,
-        body = body,
-      )
-    }
     .toList()
+
+  val constructors: List<CirValueClassConstructor> = if (isReferenceUnderlying) {
+    // ADR-035: primary `init` validation for reference-underlying value classes is
+    // deferred; keep the existing secondary-only export scheme (old numbering).
+    secondaryCtorDecls.mapIndexed { index, ctor ->
+      val suffix: String = if (index == 0) "" else "_$index"
+      val nativeName: String = if (index == 0) "${prefix}_create" else "${prefix}_create_${index}"
+      buildConstructor(ctor, suffix, nativeName)
+    }
+  } else {
+    // ADR-035: route the primary through Kotlin so its `init` runs; secondaries
+    // renumber to `_create_2+` (aligns with ADR-034).
+    buildList {
+      add(buildConstructor(cls.primaryConstructor!!, "", "${prefix}_create"))
+      secondaryCtorDecls.forEachIndexed { index, ctor ->
+        val number: Int = index + 2
+        add(buildConstructor(ctor, "_$number", "${prefix}_create_$number"))
+      }
+    }
+  }
 
   val properties: List<CirProperty> = cls.getAllProperties()
     .filter { it.getVisibility() == Visibility.PUBLIC }
@@ -1422,7 +1481,7 @@ internal fun translateValueClass(
     underlyingName = underlyingName,
     underlyingNativeType = underlyingNativeType,
     underlyingIsReference = isReferenceUnderlying,
-    constructors = secondaryConstructors,
+    constructors = constructors,
     properties = properties,
     methods = methods,
   )

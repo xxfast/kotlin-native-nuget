@@ -10,7 +10,7 @@ internal fun StringBuilder.renderGenericClass(cls: CirGenericClass) {
 
   if (isConstrained && cls.hasPublicConstructor) {
     appendLine("        [DllImport(\"${cls.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"${cls.nativePrefix}_create_object\")]")
-    appendLine("        internal static extern IntPtr Create_object(IntPtr value);")
+    appendLine("        internal static extern IntPtr Create_object(IntPtr value, out IntPtr error);")
     appendLine()
   }
 
@@ -46,7 +46,12 @@ internal fun StringBuilder.renderGenericClass(cls: CirGenericClass) {
     if (isConstrained) {
       appendLine("            var field = typeof(${cls.typeParameters[0].name}).GetField(\"_handle\",")
       appendLine("                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Public);")
-      appendLine("            _handle = ${cls.name}Native.Create_object((IntPtr)field!.GetValue(value)!);")
+      appendLine("            IntPtr handle = ${cls.name}Native.Create_object((IntPtr)field!.GetValue(value)!, out IntPtr error);")
+      appendLine("            if (error != IntPtr.Zero)")
+      appendLine("            {")
+      appendLine("                throw NugetErrorNative.BuildException(error);")
+      appendLine("            }")
+      appendLine("            _handle = handle;")
     } else {
       appendLine("            _handle = NugetMarshal.CreateBox<${cls.typeParameters[0].name}>(value);")
     }
@@ -167,12 +172,13 @@ internal fun StringBuilder.renderClass(cls: CirClass) {
   }
 
   if (cls.constructor != null && !cls.isAbstract) {
-    val ctorParamStr: String = cls.constructor.parameters.joinToString(", ") { "${it.type} ${it.name}" }
-    val createParams: String = if (ctorParamStr.isEmpty()) "out IntPtr error" else "$ctorParamStr, out IntPtr error"
-    appendLine("        [DllImport(\"${cls.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"${cls.nativePrefix}_create\")]")
-    appendLine("        private static extern IntPtr Native_Create($createParams);")
-    appendLine()
-    renderConstructor(cls.name, cls.constructor, cls.superClass != null, cls.hasSuspendMethods)
+    renderClassConstructor(cls, cls.constructor)
+  }
+
+  if (!cls.isAbstract) {
+    for (secondary in cls.secondaryConstructors) {
+      renderClassConstructor(cls, secondary)
+    }
   }
 
   if (cls.hasInternalHandleConstructor) {
@@ -255,6 +261,17 @@ internal fun StringBuilder.renderClass(cls: CirClass) {
   appendLine("    }")
 }
 
+// Emits the [DllImport] for a constructor's native create entry point plus the
+// C# constructor itself. Used for the primary and every secondary (ADR-034).
+private fun StringBuilder.renderClassConstructor(cls: CirClass, ctor: CirConstructor) {
+  val ctorParamStr: String = ctor.parameters.joinToString(", ") { "${it.type} ${it.name}" }
+  val createParams: String = if (ctorParamStr.isEmpty()) "out IntPtr error" else "$ctorParamStr, out IntPtr error"
+  appendLine("        [DllImport(\"${cls.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"${cls.nativePrefix}_create${ctor.nativeSuffix}\")]")
+  appendLine("        private static extern IntPtr Native_Create${ctor.nativeSuffix}($createParams);")
+  appendLine()
+  renderConstructor(cls.name, ctor, cls.superClass != null, cls.hasSuspendMethods)
+}
+
 internal fun StringBuilder.renderConstructor(
   className: String,
   ctor: CirConstructor,
@@ -273,7 +290,7 @@ internal fun StringBuilder.renderConstructor(
 
   if (ctor.hasErrorCheck) {
     appendLine("        {")
-    appendLine("            IntPtr handle = Native_Create($nativeCallArgs);")
+    appendLine("            IntPtr handle = Native_Create${ctor.nativeSuffix}($nativeCallArgs);")
     appendLine("            if (error != IntPtr.Zero)")
     appendLine("            {")
     appendLine("                throw NugetErrorNative.BuildException(error);")
