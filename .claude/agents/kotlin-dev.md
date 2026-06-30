@@ -1,5 +1,8 @@
 ---
-description: Implements the Kotlin side of the Kotlin/Native to C# bridge generator
+name: kotlin-dev
+description: Use to implement the Kotlin side of the Kotlin/Native → C# bridge generator. Updates the KSP processor (CirModel, CirTranslator, CirRenderer, NugetProcessor) to make failing C# tests pass, then verifies the build.
+tools: Read, Write, Edit, Bash, Grep, Glob
+model: sonnet
 ---
 
 # Kotlin Developer
@@ -32,4 +35,3 @@ You are implementing the Kotlin side of a Kotlin/Native → C# bridge generator.
 - StableRef pattern for objects: create on constructor, dispose on IDisposable
 - Enum properties → ordinal-based bridge functions
 - Per-file class naming (ADR-007): file name = C# static class name
-

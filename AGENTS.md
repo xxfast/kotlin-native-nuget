@@ -12,12 +12,16 @@ Read [GOALS.md](GOALS.md) before making design decisions.
 
 Read [ROADMAP.md](ROADMAP.md) to understand the planned features and priorities for the project. This will help you align your work with the overall direction of the project and avoid working on features that are not currently a priority.
 
-## Skills
+## Feature workflow
 
-- Read [.claude/skills/feature-dev/SKILL.md](.claude/skills/feature-dev/SKILL.md) for the feature development workflow                             
-- Read [.claude/skills/kotlin-dev/SKILL.md](.claude/skills/kotlin-dev/SKILL.md) for Kotlin implementation guidance                                         
-- Read [.claude/skills/csharp-dev/SKILL.md](.claude/skills/csharp-dev/SKILL.md) for C# test development guidance
-- Read [.claude/skills/refactor-dev/SKILL.md](.claude/skills/refactor-dev/SKILL.md) for style cleanup and refactoring
+- Run the [feature-design skill](.claude/skills/feature-design/SKILL.md) to drive the end-to-end TDD feature workflow. It orchestrates the agents below from the main thread.
+
+## Agents
+
+- Delegate to the [research agent](.claude/agents/research.md) to research how a Kotlin feature should map to C#
+- Delegate to the [csharp-dev agent](.claude/agents/csharp-dev.md) for C# test development
+- Delegate to the [kotlin-dev agent](.claude/agents/kotlin-dev.md) for Kotlin implementation
+- Delegate to the [refactorer agent](.claude/agents/refactorer.md) for style cleanup and refactoring
 
 ## Follow Standard Coding Conventions
 

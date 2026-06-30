@@ -1,0 +1,73 @@
+---
+name: feature-design
+description: Implements a new bridge feature end to end using a 3-step TDD loop. Orchestrates the research, csharp-dev, kotlin-dev, and refactorer agents from the main thread — research first, verify the approach with humans, write failing C# tests, make them pass in Kotlin, then style-check.
+---
+
+# Feature Design
+
+Implements a new feature using a 3-step TDD loop, delegating each step to the appropriate subagent.
+
+You run in the main conversation thread, so you can spawn subagents and pause to check in with the human. Delegate to the appropriate agent for each step (research, testing, implementation, refactor) and provide them the necessary context and instructions.
+
+## Workflow
+
+### Step 1: Research (`research` agent)
+
+- Delegate to the `research` agent
+- Investigate how the feature should work
+- Research how Kotlin handles the same problem for Java interop, Swift Export, and ObjC Export
+- Write an [ADR](../../../docs/adr) if the decision is non-trivial
+- Define the expected C# API for the consumer
+
+### Step 2: Verify the approach with humans
+
+- Share
+  - Research findings and rationales
+  - ADR (if any)
+  - Proposed API for
+    - Sample app, library
+    - Sample tests
+- Get feedback and iterate on the design before implementation
+- Call out any deferred scope and ask if we want to schedule this on the roadmap
+- This step is crucial to ensure we're building the right thing before writing code
+- Once the human agrees with the approach, accept the ADR and move to the next step
+
+### Step 3: Testing (`csharp-dev` agent)
+
+- Write failing C# tests that define the expected API
+- Tests go in `sample-app/SampleApp.Tests/`
+- Follow existing test patterns (xunit, `using var` for IDisposable)
+- Add sample Kotlin source in `sample-library/` if needed
+
+### Step 4: Implementation (`kotlin-dev` agent)
+
+- Make the failing tests pass
+- Update the KSP processor (CirModel, CirTranslator, CirRenderer, NugetProcessor)
+- Verify all tests pass (existing + new)
+- The loop iterates: tests fail, fix, re-run. Continue the same `kotlin-dev` instance via SendMessage rather than spawning a fresh agent each round. Same for `csharp-dev` if the tests themselves need adjusting.
+- Ask `kotlin-dev` to report back the list of files it touched, you will hand that to the refactorer.
+
+### Step 5: Style review (`refactorer` agent)
+
+- Do not scan the changed files yourself. Hand `kotlin-dev`'s reported list of touched files to the `refactorer` agent and let it judge against [STYLE.md](../../../STYLE.md) and fix any violations in one pass.
+- The refactorer reports back the files it changed (or "no violations") plus the test result. If it reports no violations, you are done.
+
+## Rules
+
+- You must delegate to the appropriate subagent
+- Research agents run in background when independent
+- After research is complete, share findings with humans for feedback before proceeding to implementation
+- Run subagent to write tests FIRST (step 3 before step 4)
+- Pass agents file paths and intent, not file contents. They have Read and know the project layout, so let them read what they need.
+- Reuse warm agents (SendMessage) when iterating instead of spawning fresh ones
+- After implementation, verify locally: `./gradlew :sample-library:clean :sample-library:packNuget && cd sample-app/SampleApp.Tests && dotnet test`
+- Update the roadmap in ROADMAP.md after feature is complete
+
+## Prompting subagents
+
+When delegating to subagents:
+- Describe what the expected C# API looks like (from the tests)
+- List specific file paths to modify and let the agent read them, do not paste file contents
+- Ask them to run the verify commands before reporting success
+- Ask them to report the files they changed and the test result, not full diffs
+- When continuing a warm agent, send only the new instruction (e.g. the failing test output)
