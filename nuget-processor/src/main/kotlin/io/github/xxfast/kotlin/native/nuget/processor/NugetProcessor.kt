@@ -46,6 +46,8 @@ import io.github.xxfast.kotlin.native.nuget.processor.exports.addNugetScopeHelpe
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addNugetScopeDrainExport
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addNugetJobHelperExports
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addNugetErrorHelperExports
+import io.github.xxfast.kotlin.native.nuget.processor.exports.addStoredCallbackExports
+import io.github.xxfast.kotlin.native.nuget.processor.exports.findStoredCallbackPairs
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addExtensionFunctionExports
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addExtensionPropertyExports
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addObjectExports
@@ -334,20 +336,29 @@ class NugetProcessor(
         val needsFlowImports: Boolean = classesHaveFlowPropertiesForImports ||
           classesHaveFlowMethodsForImports
 
+        val lambdaTypeSet = setOf(
+          "kotlin.Function0", "kotlin.Function1", "kotlin.Function2", "kotlin.Function3",
+        )
+
         val hasLambdaParamMethods: Boolean = classes.any { cls ->
           cls.getAllFunctions().any { method ->
             method.parameters.any { param ->
-              param.type.resolve().expandAliases().declaration.qualifiedName?.asString() in setOf(
-                "kotlin.Function0",
-                "kotlin.Function1",
-                "kotlin.Function2",
-                "kotlin.Function3",
-              )
+              param.type.resolve().expandAliases().declaration.qualifiedName?.asString() in lambdaTypeSet
             }
           }
         }
 
-        if (hasLambdaParamMethods && !hasSuspendFunctions && !needsFlowImports) {
+        // Stored-callback pairs also need invoke/CFunction/COpaquePointer (the bridge lambda calls fn.invoke).
+        val hasStoredCallbackMethods: Boolean = classes.any { cls ->
+          val lambdaParamMethods = cls.getAllFunctions().filter { method ->
+            method.parameters.any { param ->
+              param.type.resolve().expandAliases().declaration.qualifiedName?.asString() in lambdaTypeSet
+            }
+          }.toList()
+          findStoredCallbackPairs(lambdaParamMethods).isNotEmpty()
+        }
+
+        if ((hasLambdaParamMethods || hasStoredCallbackMethods) && !hasSuspendFunctions && !needsFlowImports) {
           addImport("kotlinx.cinterop", "invoke")
           addImport("kotlinx.cinterop", "CFunction")
           addImport("kotlinx.cinterop", "COpaquePointer")

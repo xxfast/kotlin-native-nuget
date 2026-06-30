@@ -44,6 +44,23 @@ class Cat(
   fun greetUsing(greeting: () -> String): String = "${greeting()}, says $name"
   // (T) -> Unit (object handle into callback, Unit return)
   fun forEachToy(action: (Toy) -> Unit) = toys.forEach(action)
+  // (T1, T2) -> R  (arity 2, object/string return)
+  fun combineNicknames(combine: (String, String) -> String): String = combine(nicknames[0], nicknames[1])
+  // (T1, T2) -> Boolean predicate, List return
+  fun nicknamesMatchingName(predicate: (String, String) -> Boolean): List<String> =
+    nicknames.filter { predicate(it, name) }
+
+  // Stored-callback (observer) example: add/removeMoodListener + triggerMoodChange
+  private val moodListeners: MutableList<(Mood) -> Unit> = mutableListOf()
+
+  fun addMoodListener(listener: (Mood) -> Unit) = moodListeners.add(listener)
+
+  fun removeMoodListener(listener: (Mood) -> Unit) = moodListeners.remove(listener)
+
+  fun triggerMoodChange(mood: Mood) {
+    this.mood = mood
+    moodListeners.forEach { it(mood) }
+  }
 
   companion object {
     const val SPECIES: String = "Felis catus"

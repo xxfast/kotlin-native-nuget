@@ -10,6 +10,7 @@ import com.google.devtools.ksp.symbol.KSPropertyDeclaration
 import com.google.devtools.ksp.symbol.KSType
 import com.google.devtools.ksp.symbol.Modifier
 import com.google.devtools.ksp.symbol.Visibility
+import io.github.xxfast.kotlin.native.nuget.processor.exports.findStoredCallbackPairs
 import io.github.xxfast.kotlin.native.nuget.processor.toCName
 
 internal fun translateClass(
@@ -565,8 +566,20 @@ internal fun translateClass(
     }
   }
 
-  val callbackMembers: List<CirCallbackMethod> = lambdaParamMethods.mapNotNull { method ->
-    translateCallbackMethod(method, libraryName, prefix, exportedTypes, tracker)
+  // Detect stored-callback pairs; exclude both halves from per-call callback path.
+  val storedCallbackPairs: List<Pair<KSFunctionDeclaration, KSFunctionDeclaration>> =
+    findStoredCallbackPairs(lambdaParamMethods)
+  val storedCallbackExcluded: Set<KSFunctionDeclaration> =
+    (storedCallbackPairs.map { it.first } + storedCallbackPairs.map { it.second }).toSet()
+
+  val callbackMembers: List<CirCallbackMethod> = lambdaParamMethods
+    .filter { it !in storedCallbackExcluded }
+    .mapNotNull { method ->
+      translateCallbackMethod(method, libraryName, prefix, exportedTypes, tracker)
+    }
+
+  val storedCallbackMembers: List<CirStoredCallbackMethod> = storedCallbackPairs.mapNotNull { (addMethod, removeMethod) ->
+    translateStoredCallbackMethod(addMethod, removeMethod, libraryName, prefix, exportedTypes, tracker)
   }
 
   val methods: List<CirMethod> = normalMethods
@@ -577,10 +590,16 @@ internal fun translateClass(
 
       val csMethodName: String = methodName.replaceFirstChar { it.uppercase() }
 
+      // For enum parameters: public type is the enum name, native type is "int" (ordinal).
       val methodParams: List<CirParameter> = method.parameters.map { param ->
         val resolved: KSType = param.type.resolve().expandAliases()
         val kotlinType: String = resolved.declaration.simpleName.asString()
-        CirParameter(param.name?.asString() ?: "_", mapParamType(kotlinType))
+        val isEnum: Boolean = (resolved.declaration as? KSClassDeclaration)?.classKind == ClassKind.ENUM_CLASS
+        CirParameter(
+          name = param.name?.asString() ?: "_",
+          type = if (isEnum) kotlinType else mapParamType(kotlinType),
+          nativeType = if (isEnum) "int" else mapParamType(kotlinType),
+        )
       }
 
       val declaredInThisClass: Boolean = method.parentDeclaration == cls
@@ -588,6 +607,7 @@ internal fun translateClass(
       val isMethodAbstract: Boolean = !hasImplementation && (isAbstract || method.modifiers.contains(Modifier.ABSTRACT))
       val isOverride: Boolean = superClass != null && method.modifiers.contains(Modifier.OVERRIDE)
 
+      // nativeCallArgs is only used for non-sync-error methods; sync-error path builds its own.
       val nativeCallArgs: String = (listOf("_handle") +
         methodParams.map { it.name }).joinToString(", ")
 
@@ -760,6 +780,7 @@ internal fun translateClass(
     properties = properties,
     methods = methods,
     callbackMethods = callbackMembers,
+    storedCallbackMethods = storedCallbackMembers,
     interfaces = interfaces,
     superClass = superClass,
     isDataClass = isDataClass,
@@ -1679,5 +1700,107 @@ private fun translateCallbackMethod(
     csParamType = csParamType,
     callbackBody = callbackBody,
     wrapperBody = wrapperBody,
+  )
+}
+
+/**
+ * Translates an `add{X}` / `remove{X}` method pair into a [CirStoredCallbackMethod].
+ * The add method becomes a public `IDisposable Add{X}(Action<T> listener)` on the C# side;
+ * the remove method is consumed internally by the generated NugetSubscription dispose action.
+ *
+ * Enum lambda arg types are passed as `int` (ordinal) at the C boundary rather than StableRef handles.
+ *
+ * @see <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/037-stored-callbacks.md">ADR-037: Stored callbacks</a>
+ */
+private fun translateStoredCallbackMethod(
+  addMethod: KSFunctionDeclaration,
+  removeMethod: KSFunctionDeclaration,
+  libraryName: String,
+  classPrefix: String,
+  exportedTypes: Set<String>,
+  tracker: CollectionHelperTracker,
+): CirStoredCallbackMethod? {
+  val addMethodName: String = addMethod.simpleName.asString()
+  val removeMethodName: String = removeMethod.simpleName.asString()
+  val csMethodName: String = addMethodName.replaceFirstChar { it.uppercase() }
+  val csRemoveNativeName: String = "Native_${removeMethodName.replaceFirstChar { it.uppercase() }}"
+
+  val lambdaParam = addMethod.parameters.firstOrNull { param ->
+    param.type.resolve().expandAliases().declaration.qualifiedName?.asString() in LAMBDA_TYPES
+  } ?: return null
+
+  val lambdaType: KSType = lambdaParam.type.resolve().expandAliases()
+  val lambdaArgTypes: List<KSType> = lambdaType.arguments.dropLast(1)
+    .mapNotNull { it.type?.resolve()?.expandAliases() }
+  val lambdaArity: Int = lambdaArgTypes.size
+
+  // For enum args: ordinal Int. For reference types: IntPtr.
+  val isEnumArgs: List<Boolean> = lambdaArgTypes.map { argType ->
+    (argType.declaration as? KSClassDeclaration)?.classKind == ClassKind.ENUM_CLASS
+  }
+
+  // Delegate naming for stored callbacks: enum ordinal -> "Int" suffix, object -> "Object" suffix.
+  fun storedArgSuffix(argType: KSType, isEnum: Boolean): String = when {
+    isEnum -> "Int"
+    argType.declaration.simpleName.asString() == "Boolean" -> "Byte"
+    argType.declaration.simpleName.asString() == "String" -> "Object"
+    argType.declaration.qualifiedName?.asString() in KOTLIN_TO_CSHARP_RETURN ->
+      argType.declaration.simpleName.asString()
+    else -> "Object"
+  }
+
+  val argSuffixes: List<String> = lambdaArgTypes.mapIndexed { i, t -> storedArgSuffix(t, isEnumArgs[i]) }
+  val delegateName: String = "Nuget${argSuffixes.joinToString("")}VoidCallback"
+
+  // Delegate parameter list: enum -> int arg0Ord, object -> IntPtr arg0Ptr, arity-0 -> just userData
+  val delegateParamList: String = if (lambdaArity == 0) {
+    "(IntPtr _)"
+  } else {
+    val argParams: String = lambdaArgTypes.mapIndexed { i, argType ->
+      if (isEnumArgs[i]) "int arg${i}Ord" else "IntPtr arg${i}Ptr"
+    }.joinToString(", ")
+    "($argParams, IntPtr _)"
+  }
+
+  val delegate = CirCallbackDelegate(delegateName, delegateParamList, "void")
+  if (tracker.callbackDelegates.none { it.name == delegateName }) {
+    tracker.callbackDelegates.add(delegate)
+  }
+  tracker.needsSubscription = true
+
+  // C# param type for the public method: Action or Action<T1, T2, ...>
+  val csParamType: String = buildString {
+    val argCsTypes: List<String> = lambdaArgTypes.mapIndexed { i, t ->
+      if (isEnumArgs[i]) t.declaration.simpleName.asString()
+      else KOTLIN_TO_CSHARP_PARAM[t.declaration.simpleName.asString()] ?: t.declaration.simpleName.asString()
+    }
+    if (lambdaArity == 0) append("Action")
+    else append("Action<${argCsTypes.joinToString(", ")}>")
+  }
+
+  // nativeCallback body (inside the lambda assigned to the delegate variable)
+  val nativeCallbackBody: String = buildString {
+    lambdaArgTypes.forEachIndexed { i, argType ->
+      val simpleName: String = argType.declaration.simpleName.asString()
+      val csType: String = if (isEnumArgs[i]) simpleName
+      else KOTLIN_TO_CSHARP_PARAM[simpleName] ?: simpleName
+      if (isEnumArgs[i]) append("$csType arg$i = ($csType)arg${i}Ord; ")
+      else append("$csType arg$i = NugetMarshal.FromHandle<$csType>(arg${i}Ptr); NugetMarshal.Dispose(arg${i}Ptr); ")
+    }
+    val callArgs: String = if (lambdaArity == 0) "" else
+      lambdaArgTypes.indices.joinToString(", ") { "arg$it" }
+    append("listener($callArgs);")
+  }
+
+  return CirStoredCallbackMethod(
+    csMethodName = csMethodName,
+    csRemoveNativeName = csRemoveNativeName,
+    subscribeEntryPoint = "${classPrefix}_$addMethodName",
+    removeEntryPoint = "${classPrefix}_$removeMethodName",
+    libraryName = libraryName,
+    delegateName = delegateName,
+    delegateParamList = delegateParamList,
+    csParamType = csParamType,
+    nativeCallbackBody = nativeCallbackBody,
   )
 }

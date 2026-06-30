@@ -143,16 +143,20 @@ internal fun StringBuilder.renderSyncErrorCheckMethod(method: CirMethod, classNa
     else "${param.type} ${param.name}"
   }.joinToString(", ")
 
-  val paramNames: String = method.parameters.joinToString(", ") { it.name }
-
   // For static methods (top-level functions), nativeName is the full native function name.
   // For instance methods (class methods), the DllImport is rendered as "Native_${method.name}".
   val nativeFuncName: String = if (method.isStatic) method.nativeName else "Native_${method.name}"
 
-  val nativeCallArgs: String = if (paramNames.isEmpty()) {
-    if (!method.isStatic) "_handle, out IntPtr error" else "out IntPtr error"
-  } else {
-    if (!method.isStatic) "_handle, $paramNames, out IntPtr error" else "$paramNames, out IntPtr error"
+  // When a parameter's native type differs from its public type (e.g. enum -> int), cast it.
+  val nativeArgList: String = method.parameters.joinToString(", ") { param ->
+    if (param.nativeType != param.type) "(${param.nativeType})${param.name}" else param.name
+  }
+
+  val nativeCallArgs: String = when {
+    nativeArgList.isEmpty() && !method.isStatic -> "_handle, out IntPtr error"
+    nativeArgList.isEmpty() -> "out IntPtr error"
+    !method.isStatic -> "_handle, $nativeArgList, out IntPtr error"
+    else -> "$nativeArgList, out IntPtr error"
   }
 
   val isVoid: Boolean = method.returnType == "void"

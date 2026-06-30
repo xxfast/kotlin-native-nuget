@@ -228,6 +228,9 @@ fun translate(
     if (tracker.callbackDelegates.isNotEmpty()) {
       helpers.add(CirCallbackDelegateHelper(tracker.callbackDelegates.distinctBy { it.name }))
     }
+    if (tracker.needsSubscription) {
+      helpers.add(CirSubscriptionHelper(context.libraryName))
+    }
 
     val rootIdx: Int = namespaces.indexOfFirst { it.name == context.rootNamespace }
 
@@ -273,6 +276,9 @@ fun translate(
     usings.add("System.Runtime.CompilerServices")
     usings.add("System.Threading")
     usings.add("System.Threading.Tasks")
+  }
+  if (tracker.needsSubscription && "System.Threading" !in usings) {
+    usings.add("System.Threading")
   }
   if (tracker.needsFlow) {
     usings.add("System.Threading.Channels")

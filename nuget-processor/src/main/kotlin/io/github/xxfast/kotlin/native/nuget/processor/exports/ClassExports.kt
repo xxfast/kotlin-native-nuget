@@ -477,7 +477,19 @@ internal fun FileSpec.Builder.addClassExports(cls: KSClassDeclaration) {
     }
   }
 
+  // Detect stored-callback pairs: add*/subscribe* + matching remove*/unsubscribe*.
+  // Paired add* methods get stored-callback exports; paired remove* methods are excluded entirely.
+  val storedCallbackPairs: List<Pair<KSFunctionDeclaration, KSFunctionDeclaration>> =
+    findStoredCallbackPairs(lambdaParamMethods)
+  val storedCallbackAddMethods: Set<KSFunctionDeclaration> = storedCallbackPairs.map { it.first }.toSet()
+  val storedCallbackRemoveMethods: Set<KSFunctionDeclaration> = storedCallbackPairs.map { it.second }.toSet()
+
+  for ((addMethod, removeMethod) in storedCallbackPairs) {
+    addStoredCallbackExports(addMethod, removeMethod, qualifiedName, prefix)
+  }
+
   for (method in lambdaParamMethods) {
+    if (method in storedCallbackAddMethods || method in storedCallbackRemoveMethods) continue
     addLambdaParamMethodExport(method, qualifiedName, prefix)
   }
 
@@ -486,8 +498,17 @@ internal fun FileSpec.Builder.addClassExports(cls: KSClassDeclaration) {
     val methodReturn: String = method.returnType?.resolve()?.expandAliases()
       ?.declaration?.qualifiedName?.asString() ?: "Unit"
 
-    val methodParamCall: String = method.parameters.joinToString(", ") {
-      it.name?.asString() ?: "_"
+    // For enum parameters, the C boundary uses Int; convert with EnumClass.entries[value].
+    val methodParamCall: String = method.parameters.joinToString(", ") { param ->
+      val resolved = param.type.resolve().expandAliases()
+      val paramName: String = param.name?.asString() ?: "_"
+      val isEnum: Boolean = (resolved.declaration as? KSClassDeclaration)?.classKind == ClassKind.ENUM_CLASS
+      if (isEnum) {
+        val enumQualifiedName: String = resolved.declaration.qualifiedName?.asString() ?: paramName
+        "$enumQualifiedName.entries[$paramName]"
+      } else {
+        paramName
+      }
     }
 
     val builder: FunSpec.Builder = FunSpec
@@ -497,14 +518,15 @@ internal fun FileSpec.Builder.addClassExports(cls: KSClassDeclaration) {
 
     for (param in method.parameters) {
       val resolved = param.type.resolve().expandAliases()
-      val type: String =
-        resolved.declaration.qualifiedName?.asString()
+      val paramName: String = param.name?.asString() ?: "_"
+      val isEnum: Boolean = (resolved.declaration as? KSClassDeclaration)?.classKind == ClassKind.ENUM_CLASS
+      if (isEnum) {
+        builder.addParameter(paramName, Int::class)
+      } else {
+        val type: String = resolved.declaration.qualifiedName?.asString()
           ?: resolved.declaration.simpleName.asString()
-
-      builder.addParameter(
-        param.name?.asString() ?: "_",
-        ClassName.bestGuess(type),
-      )
+        builder.addParameter(paramName, ClassName.bestGuess(type))
+      }
     }
 
     builder.addParameter("errorOut", cOpaquePointer.copy(nullable = true))

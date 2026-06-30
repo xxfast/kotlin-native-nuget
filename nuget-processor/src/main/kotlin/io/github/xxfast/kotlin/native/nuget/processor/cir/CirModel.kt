@@ -45,6 +45,7 @@ data class CirClass(
   val properties: List<CirProperty>,
   val methods: List<CirMethod>,
   val callbackMethods: List<CirCallbackMethod> = emptyList(),
+  val storedCallbackMethods: List<CirStoredCallbackMethod> = emptyList(),
   val interfaces: List<String> = emptyList(),
   val superClass: String? = null,
   val disposable: Boolean = true,
@@ -183,6 +184,10 @@ data class CirFlowHelper(
   val libraryName: String,
 ) : CirDeclaration
 
+data class CirSubscriptionHelper(
+  val libraryName: String,
+) : CirDeclaration
+
 data class CirCallbackDelegate(
   val name: String,
   val paramList: String,
@@ -215,6 +220,20 @@ data class CirDllImport(
   val parameters: List<CirParameter>,
   val visibility: CirVisibility = CirVisibility.PUBLIC,
   val hasSyncErrorOut: Boolean = false,
+) : CirMember
+
+// A class method that is the subscribe half of a stored-callback pair (add*/subscribe*).
+// Generates an IDisposable factory method backed by two native exports.
+data class CirStoredCallbackMethod(
+  val csMethodName: String,           // "AddMoodListener"
+  val csRemoveNativeName: String,     // "Native_RemoveMoodListener"
+  val subscribeEntryPoint: String,    // "cat_addMoodListener"
+  val removeEntryPoint: String,       // "cat_removeMoodListener"
+  val libraryName: String,
+  val delegateName: String,           // "NugetIntVoidCallback"
+  val delegateParamList: String,      // "(int arg0Ord, IntPtr _)"
+  val csParamType: String,            // "Action<Mood>"
+  val nativeCallbackBody: String,     // body inside the nativeCallback lambda
 ) : CirMember
 
 // A class method that accepts a lambda parameter from C# (phase 7 reverse interop).
@@ -288,6 +307,9 @@ data class CirConstructor(
 data class CirParameter(
   val name: String,
   val type: String,
+  // Native (DllImport) type; differs from type when the public C# type needs a cast
+  // at the call site (e.g. enum method params: public type "Mood", native type "int").
+  val nativeType: String = type,
 )
 
 data class CirConst(

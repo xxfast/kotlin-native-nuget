@@ -7,3 +7,19 @@ internal fun StringBuilder.renderCallbackDelegateHelper(helper: CirCallbackDeleg
     appendLine()
   }
 }
+
+internal fun StringBuilder.renderSubscriptionHelper(@Suppress("UNUSED_PARAMETER") helper: CirSubscriptionHelper) {
+  appendLine("    internal sealed class NugetSubscription : IDisposable")
+  appendLine("    {")
+  appendLine("        private Action? _disposeAction;")
+  appendLine()
+  appendLine("        internal NugetSubscription(Action disposeAction) => _disposeAction = disposeAction;")
+  appendLine()
+  appendLine("        public void Dispose()")
+  appendLine("        {")
+  appendLine("            Action? action = Interlocked.Exchange(ref _disposeAction, null);")
+  appendLine("            action?.Invoke();")
+  appendLine("        }")
+  appendLine("    }")
+  appendLine()
+}

@@ -230,7 +230,7 @@ internal fun StringBuilder.renderClass(cls: CirClass) {
   for (method in cls.methods) {
     if (!method.isAbstract) {
       val nativeParamList: MutableList<String> = (listOf("IntPtr handle") +
-        method.parameters.map { "${it.type} ${it.name}" }).toMutableList()
+        method.parameters.map { "${it.nativeType} ${it.name}" }).toMutableList()
       if (method.isSyncErrorCheckEnabled) nativeParamList.add("out IntPtr error")
       val nativeParams: String = nativeParamList.joinToString(", ")
       appendLine("        [DllImport(\"${cls.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"${cls.nativePrefix}_${method.nativeName}\")]")
@@ -242,6 +242,10 @@ internal fun StringBuilder.renderClass(cls: CirClass) {
 
   cls.callbackMethods.forEach { cbMethod ->
     renderCallbackMethod(cbMethod)
+  }
+
+  cls.storedCallbackMethods.forEach { scMethod ->
+    renderStoredCallbackMethod(scMethod)
   }
 
   for (member in cls.companionMembers) {
@@ -358,6 +362,7 @@ internal fun StringBuilder.renderMember(member: CirMember, className: String = "
     is CirProperty -> renderProperty(member)
     is CirConst -> renderConst(member)
     is CirCallbackMethod -> renderCallbackMethod(member)
+    is CirStoredCallbackMethod -> renderStoredCallbackMethod(member)
   }
 }
 
@@ -563,6 +568,25 @@ internal fun StringBuilder.renderDispose(
       appendLine("        }")
     }
   }
+}
+
+private fun StringBuilder.renderStoredCallbackMethod(method: CirStoredCallbackMethod) {
+  appendLine("        [DllImport(\"${method.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"${method.subscribeEntryPoint}\")]")
+  appendLine("        private static extern IntPtr Native_${method.csMethodName}(IntPtr handle, IntPtr listenerPtr, IntPtr userData, out IntPtr error);")
+  appendLine()
+  appendLine("        [DllImport(\"${method.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"${method.removeEntryPoint}\")]")
+  appendLine("        private static extern void ${method.csRemoveNativeName}(IntPtr handle, IntPtr subscriptionHandle);")
+  appendLine()
+  appendLine("        public IDisposable ${method.csMethodName}(${method.csParamType} listener)")
+  appendLine("        {")
+  appendLine("            ${method.delegateName} nativeCallback = ${method.delegateParamList} => { ${method.nativeCallbackBody} };")
+  appendLine("            GCHandle cbHandle = GCHandle.Alloc(nativeCallback);")
+  appendLine("            IntPtr fnPtr = Marshal.GetFunctionPointerForDelegate(nativeCallback);")
+  appendLine("            IntPtr sub = Native_${method.csMethodName}(_handle, fnPtr, IntPtr.Zero, out IntPtr error);")
+  appendLine("            if (error != IntPtr.Zero) throw NugetErrorNative.BuildException(error);")
+  appendLine("            return new NugetSubscription(() => { ${method.csRemoveNativeName}(_handle, sub); cbHandle.Free(); });")
+  appendLine("        }")
+  appendLine()
 }
 
 private fun StringBuilder.renderCallbackMethod(method: CirCallbackMethod) {

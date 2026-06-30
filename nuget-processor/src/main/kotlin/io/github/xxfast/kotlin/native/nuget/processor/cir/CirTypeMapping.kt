@@ -61,6 +61,7 @@ internal class CollectionHelperTracker {
   var needsSet: Boolean = false
   var needsAsync: Boolean = false
   var needsFlow: Boolean = false
+  var needsSubscription: Boolean = false
   val lambdaArities: MutableSet<Int> = mutableSetOf()
   val suspendLambdaArities: MutableSet<Int> = mutableSetOf()
   val callbackDelegates: MutableList<CirCallbackDelegate> = mutableListOf()

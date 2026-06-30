@@ -49,4 +49,20 @@ public class ReverseLambdaTests
         });
         Assert.Equal(new List<string> { "Mouse", "Ball" }, toyNames);
     }
+
+    [Fact]
+    public void Cat_CombineNicknames_Arity2LambdaParameter()
+    {
+        using var cat = new Cat("Oreo", 9);
+        string result = cat.CombineNicknames((a, b) => $"{a} & {b}");
+        Assert.Equal("Oreoy & Little Oreo", result);
+    }
+
+    [Fact]
+    public void Cat_NicknamesMatchingName_Arity2Predicate()
+    {
+        using var cat = new Cat("Oreo", 9);
+        IReadOnlyList<string> matching = cat.NicknamesMatchingName((nick, name) => nick.Contains(name));
+        Assert.Equal(new List<string> { "Oreoy", "Little Oreo" }, matching);
+    }
 }
