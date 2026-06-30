@@ -116,6 +116,27 @@ Gradle Plugin (Kotlin side)          NuGet Package       C# Consumer
 - **NuGet package** ships native libs + pre-generated `Interop.cs`. No consumer-side tooling required.
 - **Consumer** just includes the package — bindings are ready at build time.
 
+### Runtime call flow
+
+Once packaged, calls cross the C ABI in **both** directions at runtime:
+
+```
+          C# Consumer                               Kotlin / Native        
+┌─────────────────────────────┐             ┌─────────────────────────────┐
+│ Func<> / Action<> argument  │             │ @CName export               │
+│ pinned via GCHandle         │ --1 call--> │ reinterpret<CFunction<>>    │
+│                             │  (P/Invoke) │ wraps the ptr as a lambda   │
+│                             │             │                             │
+│ your C# delegate is         │ <-2 invoke- │ Kotlin invokes the fn ptr   │
+│ called back (reverse)       │   (fn ptr)  │ inside filter / map / ...   │
+│                             │             │                             │
+│ 3 receives the result       │  <-result-- │ returns a StableRef handle  │
+└─────────────────────────────┘             └─────────────────────────────┘
+```
+
+- **Forward** (all prior phases) — C# calls Kotlin via P/Invoke: a `DllImport` entry point bound to a generated `@CName` export.
+- **Reverse interop** (Phase 7) — C# passes a `Func<>`/`Action<>` as a delegate, pins it with `GCHandle`, and hands it over as a function pointer (`Marshal.GetFunctionPointerForDelegate`). Kotlin `reinterpret`s it to `CPointer<CFunction<…>>` and invokes it — e.g. inside `filter`/`map` — calling back into your C# code. Arguments and results cross as `StableRef` opaque handles. See [ADR-036](docs/adr/036-reverse-interop-mechanism.md).
+
 ## Supported Types
 
 ### Primitives

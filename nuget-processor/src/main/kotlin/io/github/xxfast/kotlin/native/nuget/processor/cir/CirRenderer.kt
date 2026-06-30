@@ -32,6 +32,7 @@ class CirRenderer {
         is CirJobHelper -> renderJobHelper(declaration)
         is CirErrorHelper -> renderErrorHelper(declaration)
         is CirFlowHelper -> renderFlowHelper(declaration)
+        is CirCallbackDelegateHelper -> renderCallbackDelegateHelper(declaration)
         is CirStaticClass -> renderStaticClass(declaration)
         is CirInterface -> renderInterface(declaration)
         is CirClass -> renderClass(declaration)

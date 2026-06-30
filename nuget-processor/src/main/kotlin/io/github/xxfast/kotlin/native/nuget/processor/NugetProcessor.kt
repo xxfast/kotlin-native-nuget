@@ -334,6 +334,25 @@ class NugetProcessor(
         val needsFlowImports: Boolean = classesHaveFlowPropertiesForImports ||
           classesHaveFlowMethodsForImports
 
+        val hasLambdaParamMethods: Boolean = classes.any { cls ->
+          cls.getAllFunctions().any { method ->
+            method.parameters.any { param ->
+              param.type.resolve().expandAliases().declaration.qualifiedName?.asString() in setOf(
+                "kotlin.Function0",
+                "kotlin.Function1",
+                "kotlin.Function2",
+                "kotlin.Function3",
+              )
+            }
+          }
+        }
+
+        if (hasLambdaParamMethods && !hasSuspendFunctions && !needsFlowImports) {
+          addImport("kotlinx.cinterop", "invoke")
+          addImport("kotlinx.cinterop", "CFunction")
+          addImport("kotlinx.cinterop", "COpaquePointer")
+        }
+
         if (hasSuspendFunctions || needsFlowImports) {
           addImport("kotlinx.cinterop", "reinterpret")
           addImport("kotlinx.cinterop", "invoke")

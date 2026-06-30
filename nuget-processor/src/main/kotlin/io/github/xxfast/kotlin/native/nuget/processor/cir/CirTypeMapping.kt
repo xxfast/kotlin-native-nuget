@@ -63,6 +63,7 @@ internal class CollectionHelperTracker {
   var needsFlow: Boolean = false
   val lambdaArities: MutableSet<Int> = mutableSetOf()
   val suspendLambdaArities: MutableSet<Int> = mutableSetOf()
+  val callbackDelegates: MutableList<CirCallbackDelegate> = mutableListOf()
 }
 
 internal fun mapReturnType(kotlinType: String): String =

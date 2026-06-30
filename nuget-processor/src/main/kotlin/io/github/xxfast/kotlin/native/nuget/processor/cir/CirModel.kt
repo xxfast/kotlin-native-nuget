@@ -44,6 +44,7 @@ data class CirClass(
   val secondaryConstructors: List<CirConstructor> = emptyList(),
   val properties: List<CirProperty>,
   val methods: List<CirMethod>,
+  val callbackMethods: List<CirCallbackMethod> = emptyList(),
   val interfaces: List<String> = emptyList(),
   val superClass: String? = null,
   val disposable: Boolean = true,
@@ -182,6 +183,16 @@ data class CirFlowHelper(
   val libraryName: String,
 ) : CirDeclaration
 
+data class CirCallbackDelegate(
+  val name: String,
+  val paramList: String,
+  val returnType: String,
+)
+
+data class CirCallbackDelegateHelper(
+  val delegates: List<CirCallbackDelegate>,
+) : CirDeclaration
+
 data class CirEnumEntry(
   val name: String,
   val ordinal: Int,
@@ -204,6 +215,21 @@ data class CirDllImport(
   val parameters: List<CirParameter>,
   val visibility: CirVisibility = CirVisibility.PUBLIC,
   val hasSyncErrorOut: Boolean = false,
+) : CirMember
+
+// A class method that accepts a lambda parameter from C# (phase 7 reverse interop).
+data class CirCallbackMethod(
+  val csMethodName: String,
+  val nativeEntryPoint: String,
+  val libraryName: String,
+  val nativeImportReturnType: String,
+  val lambdaParamName: String,
+  val delegateName: String,
+  val delegateParamList: String,
+  val csReturnType: String,
+  val csParamType: String,
+  val callbackBody: String,
+  val wrapperBody: String,
 ) : CirMember
 
 data class CirMethod(

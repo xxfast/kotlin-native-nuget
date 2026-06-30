@@ -36,6 +36,15 @@ class Cat(
 
   fun pet(): String = "$name purrs contentedly"
 
+  // (T) -> R
+  fun describeWith(format: (String) -> String): String = format(name)
+  // (T) -> Boolean predicate, driven by Kotlin's own filter()
+  fun nicknamesMatching(predicate: (String) -> Boolean): List<String> = nicknames.filter(predicate)
+  // () -> R  (arity 0)
+  fun greetUsing(greeting: () -> String): String = "${greeting()}, says $name"
+  // (T) -> Unit (object handle into callback, Unit return)
+  fun forEachToy(action: (Toy) -> Unit) = toys.forEach(action)
+
   companion object {
     const val SPECIES: String = "Felis catus"
     val defaultBreed: String = "Domestic Shorthair"

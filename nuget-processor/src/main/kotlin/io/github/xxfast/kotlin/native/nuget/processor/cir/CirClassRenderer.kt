@@ -240,6 +240,10 @@ internal fun StringBuilder.renderClass(cls: CirClass) {
     renderMethod(method, cls.name)
   }
 
+  cls.callbackMethods.forEach { cbMethod ->
+    renderCallbackMethod(cbMethod)
+  }
+
   for (member in cls.companionMembers) {
     renderMember(member, cls.name)
   }
@@ -353,6 +357,7 @@ internal fun StringBuilder.renderMember(member: CirMember, className: String = "
     is CirMethod -> renderMethod(member, className)
     is CirProperty -> renderProperty(member)
     is CirConst -> renderConst(member)
+    is CirCallbackMethod -> renderCallbackMethod(member)
   }
 }
 
@@ -558,5 +563,29 @@ internal fun StringBuilder.renderDispose(
       appendLine("        }")
     }
   }
+}
+
+private fun StringBuilder.renderCallbackMethod(method: CirCallbackMethod) {
+  appendLine("        [DllImport(\"${method.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"${method.nativeEntryPoint}\")]")
+  appendLine("        private static extern ${method.nativeImportReturnType} Native_${method.csMethodName}(IntPtr handle, IntPtr ${method.lambdaParamName}Ptr, IntPtr userData, out IntPtr error);")
+  appendLine()
+  appendLine("        public ${method.csReturnType} ${method.csMethodName}(${method.csParamType} ${method.lambdaParamName})")
+  appendLine("        {")
+  appendLine("            ${method.delegateName} nativeCallback = ${method.delegateParamList} =>")
+  appendLine("            {")
+  appendLine(method.callbackBody)
+  appendLine("            };")
+  appendLine("            GCHandle cbHandle = GCHandle.Alloc(nativeCallback);")
+  appendLine("            IntPtr fnPtr = Marshal.GetFunctionPointerForDelegate(nativeCallback);")
+  appendLine("            try")
+  appendLine("            {")
+  appendLine(method.wrapperBody)
+  appendLine("            }")
+  appendLine("            finally")
+  appendLine("            {")
+  appendLine("                cbHandle.Free();")
+  appendLine("            }")
+  appendLine("        }")
+  appendLine()
 }
 

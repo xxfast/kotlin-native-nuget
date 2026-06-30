@@ -12,6 +12,7 @@ import com.google.devtools.ksp.symbol.Visibility
 import com.squareup.kotlinpoet.ClassName
 import com.squareup.kotlinpoet.FileSpec
 import com.squareup.kotlinpoet.FunSpec
+import io.github.xxfast.kotlin.native.nuget.processor.cir.LAMBDA_TYPES
 import io.github.xxfast.kotlin.native.nuget.processor.cir.expandAliases
 import io.github.xxfast.kotlin.native.nuget.processor.toCName
 
@@ -464,10 +465,20 @@ internal fun FileSpec.Builder.addClassExports(cls: KSClassDeclaration) {
     returnQualified == "kotlinx.coroutines.flow.Flow"
   }
 
-  val methods: List<KSFunctionDeclaration> = allRegularMethods.filter { method ->
+  val allNonFlowMethods: List<KSFunctionDeclaration> = allRegularMethods.filter { method ->
     val returnQualified: String? = method.returnType?.resolve()
       ?.expandAliases()?.declaration?.qualifiedName?.asString()
     returnQualified != "kotlinx.coroutines.flow.Flow"
+  }
+
+  val (lambdaParamMethods, methods) = allNonFlowMethods.partition { method ->
+    method.parameters.any { param ->
+      param.type.resolve().expandAliases().declaration.qualifiedName?.asString() in LAMBDA_TYPES
+    }
+  }
+
+  for (method in lambdaParamMethods) {
+    addLambdaParamMethodExport(method, qualifiedName, prefix)
   }
 
   for (method in methods) {

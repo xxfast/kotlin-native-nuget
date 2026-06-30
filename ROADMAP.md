@@ -96,9 +96,13 @@
 - [ ] Add `@ExperimentalNugetCoroutineApi` opt-in annotation and KSP warning for classes with suspend methods (see [ADR-021](docs/adr/021-structured-concurrency.md))
 
 ## Phase 7: Bidirectional support (C# → Kotlin)
-- [ ] Research calling C# from Kotlin/Native (reverse P/Invoke, function pointers)
-- [ ] Map lambda/function types — C# → Kotlin (see [ADR-012](docs/adr/012-lambda-function-type-mapping.md))
-- [ ] Generate Kotlin wrappers for C# interfaces (callbacks, event handlers)
+- [x] Research calling C# from Kotlin/Native (reverse P/Invoke, function pointers) (see [ADR-036](docs/adr/036-reverse-interop-mechanism.md))
+- [x] Map lambda/function types — C# → Kotlin: v1 lambda **parameters**, arity 0–1, per-call (delegate + GCHandle + `Marshal.GetFunctionPointerForDelegate`) (see [ADR-036](docs/adr/036-reverse-interop-mechanism.md), [ADR-012](docs/adr/012-lambda-function-type-mapping.md))
+  - [ ] Arity 2+ lambda parameters (`(T1, T2) -> R`)
+  - [ ] Stored callbacks (event handlers / observers) — requires a callback registry + Kotlin-side `_unregister`
+  - [ ] Exception propagation from a C# callback into Kotlin (mirror of forward-direction ADR-024/028/029)
+  - [ ] `Flow<T>` / suspend lambda (`suspend (T) -> R`) as a function parameter
+- [ ] Generate Kotlin wrappers for C# interfaces (callbacks, event handlers) — full interface/vtable bridging (deferred in ADR-036)
 - [ ] Support implementing C# interfaces in Kotlin and passing them back to C# consumers
 - [ ] Support implementing Kotlin interfaces in C# and passing them to Kotlin producers
 

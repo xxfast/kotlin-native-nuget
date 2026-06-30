@@ -225,6 +225,9 @@ fun translate(
     if (tracker.needsAsync) helpers.add(CirJobHelper(context.libraryName))
     helpers.add(CirErrorHelper(context.libraryName))
     if (tracker.needsFlow) helpers.add(CirFlowHelper(context.libraryName))
+    if (tracker.callbackDelegates.isNotEmpty()) {
+      helpers.add(CirCallbackDelegateHelper(tracker.callbackDelegates.distinctBy { it.name }))
+    }
 
     val rootIdx: Int = namespaces.indexOfFirst { it.name == context.rootNamespace }
 

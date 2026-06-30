@@ -548,7 +548,7 @@ internal fun translateClass(
 
   val (suspendMethods, regularMethods) = filteredMethods.partition { it.modifiers.contains(Modifier.SUSPEND) }
 
-  val (flowMethods, normalMethods) = regularMethods.partition { method ->
+  val (flowMethods, nonFlowMethods) = regularMethods.partition { method ->
     val returnQualified: String? = method.returnType?.resolve()?.expandAliases()
       ?.declaration?.qualifiedName?.asString()
     returnQualified in FLOW_TYPES
@@ -557,6 +557,16 @@ internal fun translateClass(
   if (flowMethods.isNotEmpty()) {
     tracker.needsFlow = true
     tracker.needsAsync = true
+  }
+
+  val (lambdaParamMethods, normalMethods) = nonFlowMethods.partition { method ->
+    method.parameters.any { param ->
+      param.type.resolve().expandAliases().declaration.qualifiedName?.asString() in LAMBDA_TYPES
+    }
+  }
+
+  val callbackMembers: List<CirCallbackMethod> = lambdaParamMethods.mapNotNull { method ->
+    translateCallbackMethod(method, libraryName, prefix, exportedTypes, tracker)
   }
 
   val methods: List<CirMethod> = normalMethods
@@ -749,6 +759,7 @@ internal fun translateClass(
     secondaryConstructors = secondaryConstructors,
     properties = properties,
     methods = methods,
+    callbackMethods = callbackMembers,
     interfaces = interfaces,
     superClass = superClass,
     isDataClass = isDataClass,
@@ -1491,4 +1502,182 @@ private fun mapInterfacePropertyType(type: KSType): String {
   val typeName: String = type.declaration.simpleName.asString()
   return if (typeName == "String") "string"
   else mapParamType(typeName)
+}
+
+private fun translateCallbackMethod(
+  method: KSFunctionDeclaration,
+  libraryName: String,
+  classPrefix: String,
+  exportedTypes: Set<String>,
+  tracker: CollectionHelperTracker,
+): CirCallbackMethod? {
+  val methodName: String = method.simpleName.asString()
+  val csMethodName: String = methodName.replaceFirstChar { it.uppercase() }
+  val nativeEntryPoint: String = "${classPrefix}_$methodName"
+
+  val lambdaParam = method.parameters.firstOrNull { param ->
+    param.type.resolve().expandAliases().declaration.qualifiedName?.asString() in LAMBDA_TYPES
+  } ?: return null
+
+  val lambdaParamName: String = lambdaParam.name?.asString() ?: "callback"
+  val lambdaType: KSType = lambdaParam.type.resolve().expandAliases()
+  val lambdaArity: Int = lambdaType.arguments.size - 1
+
+  val lambdaArgTypes: List<KSType> = lambdaType.arguments.dropLast(1)
+    .mapNotNull { it.type?.resolve()?.expandAliases() }
+  val lambdaRetType: KSType? = lambdaType.arguments.lastOrNull()?.type?.resolve()?.expandAliases()
+  val lambdaRetKotlin: String = lambdaRetType?.declaration?.simpleName?.asString() ?: "Unit"
+  val lambdaRetQualified: String =
+    lambdaRetType?.declaration?.qualifiedName?.asString() ?: "kotlin.Unit"
+
+  val outerRetType: KSType? = method.returnType?.resolve()?.expandAliases()
+  val outerRetKotlin: String = outerRetType?.declaration?.simpleName?.asString() ?: "Unit"
+  val outerRetQualified: String =
+    outerRetType?.declaration?.qualifiedName?.asString() ?: "kotlin.Unit"
+
+  val isOuterRetUnit: Boolean = outerRetQualified == "kotlin.Unit"
+  val isOuterRetString: Boolean = outerRetQualified == "kotlin.String"
+  val isOuterRetList: Boolean = outerRetQualified in setOf(
+    "kotlin.collections.List", "kotlin.collections.MutableList",
+  )
+
+  // Delegate name: Nuget{Arg1}...{Return}Callback
+  fun typeSuffix(kotlinType: String, qualified: String?): String = when {
+    kotlinType == "Boolean" -> "Byte"
+    kotlinType == "String" -> "String"
+    kotlinType == "Unit" -> "Void"
+    qualified != null && qualified in exportedTypes -> "Object"
+    kotlinType in KOTLIN_TO_CSHARP_RETURN -> kotlinType
+    else -> "Object"
+  }
+
+  val argSuffixes: List<String> = lambdaArgTypes.map { t ->
+    typeSuffix(t.declaration.simpleName.asString(), t.declaration.qualifiedName?.asString())
+  }
+  val retSuffix: String = typeSuffix(lambdaRetKotlin, lambdaRetQualified)
+  val delegateName: String = "Nuget${argSuffixes.joinToString("")}${retSuffix}Callback"
+
+  // Delegate native return type and param list
+  val delegateReturnType: String = when {
+    lambdaRetKotlin == "Unit" -> "void"
+    lambdaRetKotlin == "Boolean" -> "byte"
+    else -> "IntPtr"
+  }
+
+  val delegateParamList: String = if (lambdaArity == 0) {
+    "(IntPtr userData)"
+  } else {
+    val argParams: String = lambdaArgTypes
+      .mapIndexed { i, _ -> "IntPtr arg${i}Ptr" }
+      .joinToString(", ")
+    "($argParams, IntPtr userData)"
+  }
+
+  val delegate = CirCallbackDelegate(delegateName, delegateParamList, delegateReturnType)
+  if (tracker.callbackDelegates.none { it.name == delegateName }) {
+    tracker.callbackDelegates.add(delegate)
+  }
+
+  // C# callback body (inside the nativeCallback lambda)
+  val callbackBody: String = buildString {
+    lambdaArgTypes.forEachIndexed { i, argType ->
+      val argKotlin: String = argType.declaration.simpleName.asString()
+      val csArgType: String = when (argKotlin) {
+        "String" -> "string"
+        else -> argKotlin
+      }
+      appendLine("            $csArgType arg$i = NugetMarshal.FromHandle<$csArgType>(arg${i}Ptr);")
+    }
+    val argCallNames: String = lambdaArgTypes.indices.joinToString(", ") { "arg$it" }
+    val callExpr: String =
+      if (lambdaArity == 0) "$lambdaParamName()" else "$lambdaParamName($argCallNames)"
+    when {
+      lambdaRetKotlin == "Unit" -> append("            $callExpr;")
+      lambdaRetKotlin == "Boolean" -> append("            return $callExpr ? (byte)1 : (byte)0;")
+      lambdaRetKotlin == "String" -> append("            return NugetMarshal.WrapString($callExpr);")
+      else -> append("            return NugetMarshal.WrapString($callExpr);")
+    }
+  }
+
+  // C# public method return type
+  val csReturnType: String = when {
+    isOuterRetUnit -> "void"
+    isOuterRetString -> "string"
+    isOuterRetList -> {
+      val elemType = outerRetType?.arguments?.firstOrNull()?.type?.resolve()?.expandAliases()
+      val elemKotlin: String = elemType?.declaration?.simpleName?.asString() ?: "string"
+      val elemCs: String = KOTLIN_TO_CSHARP_PARAM[elemKotlin] ?: elemKotlin
+      "IReadOnlyList<$elemCs>"
+    }
+    else -> outerRetKotlin
+  }
+
+  // C# param type (Func<> or Action<>)
+  val csParamType: String = buildString {
+    val isVoidReturn: Boolean = lambdaRetKotlin == "Unit"
+    val argCsTypes: List<String> = lambdaArgTypes.map { t ->
+      val k: String = t.declaration.simpleName.asString()
+      KOTLIN_TO_CSHARP_PARAM[k] ?: k
+    }
+    if (isVoidReturn) {
+      if (lambdaArity == 0) append("Action")
+      else append("Action<${argCsTypes.joinToString(", ")}>")
+    } else {
+      val retCs: String = when {
+        lambdaRetKotlin == "Boolean" -> "bool"
+        lambdaRetKotlin == "String" -> "string"
+        else -> KOTLIN_TO_CSHARP_PARAM[lambdaRetKotlin] ?: lambdaRetKotlin
+      }
+      val allTypes: List<String> = argCsTypes + retCs
+      if (lambdaArity == 0) append("Func<$retCs>")
+      else append("Func<${allTypes.joinToString(", ")}>")
+    }
+  }
+
+  // C# wrapper body (inside try{})
+  val nativeCall: String = "Native_$csMethodName(_handle, fnPtr, IntPtr.Zero, out IntPtr error)"
+  val wrapperBody: String = buildString {
+    when {
+      isOuterRetUnit -> appendLine("            $nativeCall;")
+      isOuterRetString -> appendLine("            IntPtr nativeResult = $nativeCall;")
+      isOuterRetList -> appendLine("            IntPtr listHandle = $nativeCall;")
+      else -> appendLine("            IntPtr nativeHandle = $nativeCall;")
+    }
+    appendLine("            if (error != IntPtr.Zero) throw NugetErrorNative.BuildException(error);")
+    when {
+      isOuterRetString -> append("            return Marshal.PtrToStringUTF8(nativeResult)!;")
+      isOuterRetList -> {
+        val elemType = outerRetType?.arguments?.firstOrNull()?.type?.resolve()?.expandAliases()
+        val elemKotlin: String = elemType?.declaration?.simpleName?.asString() ?: "string"
+        val elemCs: String = KOTLIN_TO_CSHARP_PARAM[elemKotlin] ?: elemKotlin
+        appendLine("            int count = NugetListNative.Count(listHandle);")
+        appendLine("            var result = new List<$elemCs>(count);")
+        appendLine("            for (int i = 0; i < count; i++)")
+        appendLine("            {")
+        appendLine("                result.Add(NugetMarshal.FromHandle<$elemCs>(NugetListNative.Get(listHandle, i)));")
+        appendLine("            }")
+        appendLine("            NugetListNative.Dispose(listHandle);")
+        append("            return result.AsReadOnly();")
+      }
+      !isOuterRetUnit -> append("            return new $outerRetKotlin(nativeHandle);")
+    }
+  }
+
+  if (isOuterRetList) tracker.needsList = true
+
+  val nativeImportReturnType: String = if (isOuterRetUnit) "void" else "IntPtr"
+
+  return CirCallbackMethod(
+    csMethodName = csMethodName,
+    nativeEntryPoint = nativeEntryPoint,
+    libraryName = libraryName,
+    nativeImportReturnType = nativeImportReturnType,
+    lambdaParamName = lambdaParamName,
+    delegateName = delegateName,
+    delegateParamList = delegateParamList,
+    csReturnType = csReturnType,
+    csParamType = csParamType,
+    callbackBody = callbackBody,
+    wrapperBody = wrapperBody,
+  )
 }
