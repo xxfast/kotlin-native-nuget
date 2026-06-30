@@ -30,7 +30,7 @@ You run in the main conversation thread, so you can spawn subagents and pause to
 - Get feedback and iterate on the design before implementation
 - Call out any deferred scope and ask if we want to schedule this on the roadmap
 - This step is crucial to ensure we're building the right thing before writing code
-- Once the human agrees with the approach, accept the ADR and move to the next step
+- Once the human agrees with the approach, move to the next step (the ADR is accepted later, in Step 6, once the feature is implemented and verified)
 
 ### Step 3: Testing (`csharp-dev` agent)
 
@@ -52,6 +52,14 @@ You run in the main conversation thread, so you can spawn subagents and pause to
 - Do not scan the changed files yourself. Hand `kotlin-dev`'s reported list of touched files to the `refactorer` agent and let it judge against [STYLE.md](../../../STYLE.md) and fix any violations in one pass.
 - The refactorer reports back the files it changed (or "no violations") plus the test result. If it reports no violations, you are done.
 
+### Step 6: Finalize docs (last step)
+
+Once the feature is implemented and verified, update the docs in the same pass:
+
+- ROADMAP.md — tick the completed item (and link its ADR)
+- FEATURES.md — add or amend the mapping row for the newly supported Kotlin construct, with the ADR link
+- Mark the relevant ADR as `Accepted`
+
 ## Rules
 
 - You must delegate to the appropriate subagent
@@ -61,7 +69,10 @@ You run in the main conversation thread, so you can spawn subagents and pause to
 - Pass agents file paths and intent, not file contents. They have Read and know the project layout, so let them read what they need.
 - Reuse warm agents (SendMessage) when iterating instead of spawning fresh ones
 - After implementation, verify locally: `./gradlew :sample-library:clean :sample-library:packNuget && cd sample-app/SampleApp.Tests && dotnet test`
-- Update the roadmap in ROADMAP.md after feature is complete
+- Step 6 is the last step, run only after the feature is verified:
+  - ROADMAP.md — tick the completed item (and link its ADR)
+  - FEATURES.md — add or amend the mapping row for the newly supported Kotlin construct, with the ADR link
+  - Mark the relevant ADR as `Accepted`
 
 ## Prompting subagents
 

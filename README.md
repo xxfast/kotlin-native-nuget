@@ -137,43 +137,9 @@ Once packaged, calls cross the C ABI in **both** directions at runtime:
 - **Forward** (all prior phases) — C# calls Kotlin via P/Invoke: a `DllImport` entry point bound to a generated `@CName` export.
 - **Reverse interop** (Phase 7) — C# passes a `Func<>`/`Action<>` as a delegate, pins it with `GCHandle`, and hands it over as a function pointer (`Marshal.GetFunctionPointerForDelegate`). Kotlin `reinterpret`s it to `CPointer<CFunction<…>>` and invokes it — e.g. inside `filter`/`map` — calling back into your C# code. Arguments and results cross as `StableRef` opaque handles. See [ADR-036](docs/adr/036-reverse-interop-mechanism.md).
 
-## Supported Types
+## Supported Features
 
-### Primitives
-
-Primitive types follow the standard [Kotlin/Native C interop mappings](https://kotlinlang.org/docs/mapping-primitive-data-types-from-c.html#inspect-generated-kotlin-apis-for-a-c-library).
-
-### OOP Constructs
-
-| Kotlin                    | C#                    | Notes                                            |
-|---------------------------|-----------------------|--------------------------------------------------|
-| `class`                   | `class : IDisposable` | StableRef + opaque pointer                       |
-| `data class`              | `class`               | `ToString`, `Equals`, `Copy`                     |
-| `interface`               | `interface`           | `I`-prefixed, default methods delegate to Kotlin |
-| `abstract class`          | `abstract class`      | `_handle` inherited by subclasses                |
-| `sealed class`            | `abstract class`      | subclasses nested                                |
-| `object` (in sealed)      | `static class`        |                                                  |
-| `data object` (in sealed) | sealed subclass       | with `ToString`                                  |
-| `enum class`              | `enum`                | with extension methods                           |
-| top-level functions       | `static class`        | one per source file                              |
-
-### Generics
-
-| Kotlin        | C#             | Notes                                   |
-|---------------|----------------|-----------------------------------------|
-| `class<T>`    | `class<T>`     | type-erased bridge + generic C# wrapper |
-| `fun <T> f()` | typed variants | runtime dispatch via `NugetMarshal`     |
-
-### Collections
-
-| Kotlin            | C#                         | Notes                        |
-|-------------------|----------------------------|------------------------------|
-| `List<T>`         | `IReadOnlyList<T>`         | eager copy via opaque handle |
-| `MutableList<T>`  | `IList<T>`                 | eager copy                   |
-| `Map<K,V>`        | `IReadOnlyDictionary<K,V>` | eager copy                   |
-| `MutableMap<K,V>` | `IDictionary<K,V>`         | eager copy                   |
-| `Set<T>`          | `IReadOnlySet<T>`          | eager copy                   |
-| `MutableSet<T>`   | `ISet<T>`                  | eager copy                   |
+The bridge maps OOP constructs, generics, collections, lambdas (both directions), exceptions, and coroutines/`Flow`. See [FEATURES.md](FEATURES.md) for the full mapping catalogue.
 
 > [!TIP]
 > See [ROADMAP.md](ROADMAP.md) for the development roadmap and [docs/adr/](docs/adr/) for architecture decision records.
