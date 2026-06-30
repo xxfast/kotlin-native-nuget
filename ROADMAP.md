@@ -107,6 +107,8 @@
 - [ ] Support implementing Kotlin interfaces in C# and passing them to Kotlin producers
 
 ## Pre-Launch Checklist 
+- [ ] Pin `<LangVersion>` in the generated project so a consumer's newer SDK can't reinterpret generated code under a different language version
+- [ ] Add a CI smoke test that compiles the generated `Interop.cs` against the target `LangVersion` (catches escaping / reserved-word / invalid-construct regressions in this repo instead of at consumer build time)
 - [ ] Add KDoc comments in generated C# for better IDE support (e.g., from Kotlin source KDoc or signatures)
 - [ ] Finalize README with usage instructions and API documentation
 - [ ] Add Writerside documentation
@@ -125,3 +127,5 @@
 - Custom type mappers for dependency types (e.g., `kotlinx.datetime.Instant` → `DateTimeOffset`)
 - Map KDoc annotations to C# XML docs for better IDE support
 - Expose Kotlin `Job` as a mapped C# type so cancellation can be tied to the job directly (e.g., `job.Cancel()`) instead of requiring a pre-created `CancellationTokenSource`
+- NativeAOT compatibility for the generated bindings (see [ADR-038](docs/adr/038-aot-compilation.md)) — blocked on a reflection-free generics dispatch path; `[DllImport]` → `[LibraryImport]`; AOT publish smoke test in CI
+- Centralize version-sensitive C# tokens into a `CSharpProfile` so the output dialect (interop attribute, native-int type, generic dispatch strategy) is a generation-time choice rather than hardcoded across the renderers — the enabler for AOT and any future C# dialect (see [ADR-038](docs/adr/038-aot-compilation.md))
