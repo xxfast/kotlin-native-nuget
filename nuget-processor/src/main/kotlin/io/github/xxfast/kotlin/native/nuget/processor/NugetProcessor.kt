@@ -48,6 +48,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.exports.addNugetJobHelperE
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addNugetErrorHelperExports
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addStoredCallbackExports
 import io.github.xxfast.kotlin.native.nuget.processor.exports.findStoredCallbackPairs
+import io.github.xxfast.kotlin.native.nuget.processor.exports.findInterfaceBridgePairs
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addExtensionFunctionExports
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addExtensionPropertyExports
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addObjectExports
@@ -93,7 +94,8 @@ class NugetProcessor(
       .partition { it.modifiers.contains(Modifier.SUSPEND) }
 
     val functions: List<KSFunctionDeclaration> = regularFunctions
-    val genericFunctions: List<KSFunctionDeclaration> = allFunctions.filter { it.typeParameters.isNotEmpty() }
+    val genericFunctions: List<KSFunctionDeclaration> = allFunctions
+      .filter { it.typeParameters.isNotEmpty() }
 
     val allProperties: List<KSPropertyDeclaration> = allDeclarations
       .filterIsInstance<KSPropertyDeclaration>()
@@ -107,8 +109,10 @@ class NugetProcessor(
       .filter { it.parentDeclaration == null }
       .filter { it.extensionReceiver != null }
 
-    val properties: List<KSPropertyDeclaration> = allProperties.filter { !it.modifiers.contains(Modifier.CONST) }
-    val constProperties: List<KSPropertyDeclaration> = allProperties.filter { it.modifiers.contains(Modifier.CONST) }
+    val properties: List<KSPropertyDeclaration> = allProperties
+      .filter { !it.modifiers.contains(Modifier.CONST) }
+    val constProperties: List<KSPropertyDeclaration> = allProperties
+      .filter { it.modifiers.contains(Modifier.CONST) }
 
     val allClasses: List<KSClassDeclaration> = allDeclarations
       .filterIsInstance<KSClassDeclaration>()
@@ -126,7 +130,8 @@ class NugetProcessor(
       .filter { it.modifiers.contains(Modifier.VALUE) }
 
     val classes: List<KSClassDeclaration> = allClasses.filter { it.typeParameters.isEmpty() }
-    val genericClasses: List<KSClassDeclaration> = allClasses.filter { it.typeParameters.isNotEmpty() }
+    val genericClasses: List<KSClassDeclaration> = allClasses
+      .filter { it.typeParameters.isNotEmpty() }
 
     val sealedClasses: List<KSClassDeclaration> = allDeclarations
       .filterIsInstance<KSClassDeclaration>()
@@ -153,7 +158,12 @@ class NugetProcessor(
       .filter { it.classKind == ClassKind.INTERFACE }
       .filter { it.parentDeclaration == null }
 
-    if (functions.isEmpty() && genericFunctions.isEmpty() && extensionFunctions.isEmpty() && extensionProperties.isEmpty() && classes.isEmpty() && genericClasses.isEmpty() && enums.isEmpty() && interfaces.isEmpty() && sealedClasses.isEmpty() && objects.isEmpty() && properties.isEmpty() && constProperties.isEmpty() && valueClasses.isEmpty()) return emptyList()
+    val hasNothingToProcess: Boolean = functions.isEmpty() && genericFunctions.isEmpty() &&
+      extensionFunctions.isEmpty() && extensionProperties.isEmpty() &&
+      classes.isEmpty() && genericClasses.isEmpty() && enums.isEmpty() &&
+      interfaces.isEmpty() && sealedClasses.isEmpty() && objects.isEmpty() &&
+      properties.isEmpty() && constProperties.isEmpty() && valueClasses.isEmpty()
+    if (hasNothingToProcess) return emptyList()
 
     val sources: Array<KSFile> = (functions.mapNotNull { it.containingFile } +
       genericFunctions.mapNotNull { it.containingFile } +
@@ -171,8 +181,16 @@ class NugetProcessor(
 
     val deps = Dependencies(aggregating = true, *sources)
 
-    generateCNameWrappers(functions, genericFunctions, extensionFunctions, extensionProperties, classes, genericClasses, enums, sealedClasses, objects, properties, valueClasses, suspendFunctions, deps)
-    generateCSharpBindings(functions, genericFunctions, extensionFunctions, extensionProperties, allClasses, enums, interfaces, sealedClasses, objects, properties, constProperties, valueClasses, suspendFunctions, deps)
+    generateCNameWrappers(
+      functions, genericFunctions, extensionFunctions, extensionProperties,
+      classes, genericClasses, enums, sealedClasses, objects, properties,
+      valueClasses, suspendFunctions, deps,
+    )
+    generateCSharpBindings(
+      functions, genericFunctions, extensionFunctions, extensionProperties,
+      allClasses, enums, interfaces, sealedClasses, objects, properties,
+      constProperties, valueClasses, suspendFunctions, deps,
+    )
 
     logger.info(
       "Generated bindings for ${functions.size} functions" +
@@ -254,7 +272,7 @@ class NugetProcessor(
     suspendFunctions: List<KSFunctionDeclaration>,
     deps: Dependencies,
   ) {
-    val fileSpec: FileSpec = FileSpec
+    val builder: FileSpec.Builder = FileSpec
       .builder("io.github.xxfast.kotlin.native.nuget.generated", "CNameExports")
       .addAnnotation(
         AnnotationSpec.builder(ClassName("kotlin", "OptIn"))
@@ -272,299 +290,293 @@ class NugetProcessor(
       .addImport("kotlinx.cinterop", "pointed")
       .addImport("kotlinx.cinterop", "value")
       .addImport("kotlinx.cinterop", "StableRef")
-      .apply {
-        functions.forEach { func ->
-          addImport(func.packageName.asString(), func.simpleName.asString())
-          addFunctionExports(func)
-        }
 
-        genericFunctions.forEach { func ->
-          addImport(func.packageName.asString(), func.simpleName.asString())
-          addGenericFunctionExports(func)
-        }
+    functions.forEach { func ->
+      builder.addImport(func.packageName.asString(), func.simpleName.asString())
+      builder.addFunctionExports(func)
+    }
 
-        classes.forEach { addClassExports(it) }
-        classes.forEach { addCompanionExports(it) }
-        genericClasses.forEach { addGenericClassExports(it) }
-        enums.forEach { addEnumExports(it) }
-        sealedClasses.forEach { addSealedClassExports(it) }
-        objects.forEach { addObjectExports(it) }
-        valueClasses.forEach { addValueClassExports(it) }
+    genericFunctions.forEach { func ->
+      builder.addImport(func.packageName.asString(), func.simpleName.asString())
+      builder.addGenericFunctionExports(func)
+    }
 
-        val suspendLambdaTypes: Set<String> = setOf(
-          "kotlin.coroutines.SuspendFunction0",
-          "kotlin.coroutines.SuspendFunction1",
-          "kotlin.coroutines.SuspendFunction2",
-          "kotlin.coroutines.SuspendFunction3",
-        )
+    classes.forEach { builder.addClassExports(it) }
+    classes.forEach { builder.addCompanionExports(it) }
+    genericClasses.forEach { builder.addGenericClassExports(it) }
+    enums.forEach { builder.addEnumExports(it) }
+    sealedClasses.forEach { builder.addSealedClassExports(it) }
+    objects.forEach { builder.addObjectExports(it) }
+    valueClasses.forEach { builder.addValueClassExports(it) }
 
-        fun KSType.isSuspendLambdaType(): Boolean =
-          expandAliases().declaration.qualifiedName?.asString() in suspendLambdaTypes
+    val suspendLambdaTypes: Set<String> = setOf(
+      "kotlin.coroutines.SuspendFunction0",
+      "kotlin.coroutines.SuspendFunction1",
+      "kotlin.coroutines.SuspendFunction2",
+      "kotlin.coroutines.SuspendFunction3",
+    )
 
-        fun KSType.suspendLambdaArity(): Int =
-          expandAliases().arguments.size - 1
+    fun KSType.isSuspendLambdaType(): Boolean =
+      expandAliases().declaration.qualifiedName?.asString() in suspendLambdaTypes
 
-        val suspendLambdaArities: MutableSet<Int> = mutableSetOf()
+    fun KSType.suspendLambdaArity(): Int =
+      expandAliases().arguments.size - 1
 
-        (classes + genericClasses).forEach { cls ->
-          cls.getAllProperties().forEach { prop ->
-            val propType: KSType = prop.type.resolve()
-            if (propType.isSuspendLambdaType()) suspendLambdaArities.add(propType.suspendLambdaArity())
-          }
-        }
+    val suspendLambdaArities: MutableSet<Int> = mutableSetOf()
 
-        val needsSuspendLambdaSupport: Boolean = suspendLambdaArities.isNotEmpty()
-
-        val hasSuspendFunctions: Boolean = suspendFunctions.isNotEmpty() ||
-          needsSuspendLambdaSupport ||
-          classes.any { cls -> cls.getAllFunctions().any { it.modifiers.contains(Modifier.SUSPEND) } }
-
-        val classesHaveFlowPropertiesForImports: Boolean = classes.any { cls ->
-          cls.getAllProperties().any { prop ->
-            prop.type.resolve().expandAliases().declaration.qualifiedName?.asString() ==
-              "kotlinx.coroutines.flow.Flow"
-          }
-        }
-
-        val classesHaveFlowMethodsForImports: Boolean = classes.any { cls ->
-          cls.getAllFunctions().any { method ->
-            method.returnType?.resolve()?.expandAliases()?.declaration?.qualifiedName?.asString() ==
-              "kotlinx.coroutines.flow.Flow"
-          }
-        }
-
-        val needsFlowImports: Boolean = classesHaveFlowPropertiesForImports ||
-          classesHaveFlowMethodsForImports
-
-        val lambdaTypeSet = setOf(
-          "kotlin.Function0", "kotlin.Function1", "kotlin.Function2", "kotlin.Function3",
-        )
-
-        val hasLambdaParamMethods: Boolean = classes.any { cls ->
-          cls.getAllFunctions().any { method ->
-            method.parameters.any { param ->
-              param.type.resolve().expandAliases().declaration.qualifiedName?.asString() in lambdaTypeSet
-            }
-          }
-        }
-
-        // Stored-callback pairs also need invoke/CFunction/COpaquePointer (the bridge lambda calls fn.invoke).
-        val hasStoredCallbackMethods: Boolean = classes.any { cls ->
-          val lambdaParamMethods = cls.getAllFunctions().filter { method ->
-            method.parameters.any { param ->
-              param.type.resolve().expandAliases().declaration.qualifiedName?.asString() in lambdaTypeSet
-            }
-          }.toList()
-          findStoredCallbackPairs(lambdaParamMethods).isNotEmpty()
-        }
-
-        if ((hasLambdaParamMethods || hasStoredCallbackMethods) && !hasSuspendFunctions && !needsFlowImports) {
-          addImport("kotlinx.cinterop", "invoke")
-          addImport("kotlinx.cinterop", "CFunction")
-          addImport("kotlinx.cinterop", "COpaquePointer")
-        }
-
-        if (hasSuspendFunctions || needsFlowImports) {
-          addImport("kotlinx.cinterop", "reinterpret")
-          addImport("kotlinx.cinterop", "invoke")
-          addImport("kotlinx.cinterop", "CFunction")
-          addImport("kotlinx.cinterop", "COpaquePointer")
-          addImport("kotlinx.cinterop", "StableRef")
-          addImport("kotlinx.coroutines", "CoroutineScope")
-          addImport("kotlinx.coroutines", "CoroutineStart")
-          addImport("kotlinx.coroutines", "Dispatchers")
-          addImport("kotlinx.coroutines", "launch")
-          addImport("kotlinx.coroutines", "SupervisorJob")
-          addImport("kotlinx.coroutines", "cancel")
-          addImport("kotlinx.coroutines", "CancellationException")
-          addImport("kotlinx.coroutines", "ExperimentalCoroutinesApi")
-        }
-
-        if (needsSuspendLambdaSupport) {
-          addImport("kotlin.coroutines", "SuspendFunction0")
-          addImport("kotlin.coroutines", "SuspendFunction1")
-        }
-
-        suspendFunctions.forEach { func ->
-          addImport(func.packageName.asString(), func.simpleName.asString())
-          addSuspendFunctionExports(func)
-        }
-
-        classes.forEach { cls ->
-          val hasSuspendMethods: Boolean = cls.getAllFunctions()
-            .any { it.modifiers.contains(Modifier.SUSPEND) }
-          if (hasSuspendMethods) addSuspendClassMethodExports(cls)
-        }
-
-        properties.forEach { prop ->
-          addImport(prop.packageName.asString(), prop.simpleName.asString())
-          addPropertyExports(prop)
-        }
-
-        extensionFunctions.forEach { func ->
-          addImport(func.packageName.asString(), func.simpleName.asString())
-          addExtensionFunctionExports(func)
-        }
-
-        extensionProperties.forEach { prop ->
-          addImport(prop.packageName.asString(), prop.simpleName.asString())
-          addExtensionPropertyExports(prop)
-        }
-
-        val listTypes: Set<String> = setOf("kotlin.collections.List", "kotlin.collections.MutableList")
-
-        fun KSType.isListType(): Boolean =
-          expandAliases().declaration.qualifiedName?.asString() in listTypes
-
-        val classesHaveLists: Boolean = (classes + genericClasses)
-          .any { cls -> cls.getAllProperties().any { prop -> prop.type.resolve().isListType() } }
-
-        val functionsReturnLists: Boolean = (functions + genericFunctions)
-          .any { func -> func.returnType?.resolve()?.isListType() == true }
-
-        val sealedClassesHaveLists: Boolean = sealedClasses
-          .any { sealed -> sealed.getSealedSubclasses().any { sub ->
-            sub.getAllProperties().any { prop -> prop.type.resolve().isListType() }
-          } }
-
-        val needsListSupport: Boolean = classesHaveLists || functionsReturnLists || sealedClassesHaveLists
-
-        val mapTypes: Set<String> = setOf("kotlin.collections.Map", "kotlin.collections.MutableMap")
-
-        fun KSType.isMapType(): Boolean =
-          expandAliases().declaration.qualifiedName?.asString() in mapTypes
-
-        val classesHaveMaps: Boolean = (classes + genericClasses)
-          .any { cls -> cls.getAllProperties().any { prop -> prop.type.resolve().isMapType() } }
-
-        val functionsReturnMaps: Boolean = (functions + genericFunctions)
-          .any { func -> func.returnType?.resolve()?.isMapType() == true }
-
-        val sealedClassesHaveMaps: Boolean = sealedClasses
-          .any { sealed -> sealed.getSealedSubclasses().any { sub ->
-            sub.getAllProperties().any { prop -> prop.type.resolve().isMapType() }
-          } }
-
-        val needsMapSupport: Boolean = classesHaveMaps || functionsReturnMaps || sealedClassesHaveMaps
-
-        val setTypes: Set<String> = setOf("kotlin.collections.Set", "kotlin.collections.MutableSet")
-
-        fun KSType.isSetType(): Boolean =
-          expandAliases().declaration.qualifiedName?.asString() in setTypes
-
-        val classesHaveSets: Boolean = (classes + genericClasses)
-          .any { cls -> cls.getAllProperties().any { prop -> prop.type.resolve().isSetType() } }
-
-        val functionsReturnSets: Boolean = (functions + genericFunctions)
-          .any { func -> func.returnType?.resolve()?.isSetType() == true }
-
-        val sealedClassesHaveSets: Boolean = sealedClasses
-          .any { sealed -> sealed.getSealedSubclasses().any { sub ->
-            sub.getAllProperties().any { prop -> prop.type.resolve().isSetType() }
-          } }
-
-        val needsSetSupport: Boolean = classesHaveSets || functionsReturnSets || sealedClassesHaveSets
-
-        val lambdaTypes: Set<String> = setOf(
-          "kotlin.Function0", "kotlin.Function1", "kotlin.Function2", "kotlin.Function3",
-        )
-
-        fun KSType.isLambdaType(): Boolean =
-          expandAliases().declaration.qualifiedName?.asString() in lambdaTypes
-
-        fun KSType.lambdaArity(): Int =
-          expandAliases().arguments.size - 1
-
-        val lambdaArities: MutableSet<Int> = mutableSetOf()
-
-        (classes + genericClasses).forEach { cls ->
-          cls.getAllProperties().forEach { prop ->
-            val propType: KSType = prop.type.resolve()
-            if (propType.isLambdaType()) lambdaArities.add(propType.lambdaArity())
-          }
-        }
-
-        (functions + genericFunctions).forEach { func ->
-          val returnType: KSType? = func.returnType?.resolve()
-          if (returnType?.isLambdaType() == true) lambdaArities.add(returnType.lambdaArity())
-        }
-
-        sealedClasses.forEach { sealed ->
-          sealed.getSealedSubclasses().forEach { sub ->
-            sub.getAllProperties().forEach { prop ->
-              val propType: KSType = prop.type.resolve()
-              if (propType.isLambdaType()) lambdaArities.add(propType.lambdaArity())
-            }
-          }
-        }
-
-        val needsLambdaSupport: Boolean = lambdaArities.isNotEmpty()
-
-        if (genericClasses.isNotEmpty() || needsListSupport || needsMapSupport || needsSetSupport || needsLambdaSupport) {
-          addNugetHelperExports()
-        }
-
-        if (needsListSupport) {
-          addNugetListHelperExports()
-        }
-
-        if (needsMapSupport) {
-          addNugetMapHelperExports()
-        }
-
-        if (needsSetSupport) {
-          addNugetSetHelperExports()
-        }
-
-        if (needsLambdaSupport && lambdaArities.any { it > 0 }) addNugetWrapHelperExports()
-        if (0 in lambdaArities) addNugetFunc0HelperExports()
-        if (1 in lambdaArities) addNugetFunc1HelperExports()
-        if (2 in lambdaArities) addNugetFunc2HelperExports()
-        if (3 in lambdaArities) addNugetFunc3HelperExports()
-
-        if (needsSuspendLambdaSupport && suspendLambdaArities.any { it > 0 } && !needsLambdaSupport) {
-          addNugetWrapHelperExports()
-        }
-        if (0 in suspendLambdaArities) addNugetSuspendFunc0HelperExports()
-        if (1 in suspendLambdaArities) addNugetSuspendFunc1HelperExports()
-
-        val classesHaveSuspendMethods: Boolean = classes.any { cls ->
-          cls.getAllFunctions().any { it.modifiers.contains(Modifier.SUSPEND) }
-        }
-
-        val flowTypes: Set<String> = setOf("kotlinx.coroutines.flow.Flow")
-
-        fun KSType.isFlowType(): Boolean =
-          expandAliases().declaration.qualifiedName?.asString() in flowTypes
-
-        val classesHaveFlowProperties: Boolean = classes.any { cls ->
-          cls.getAllProperties().any { prop -> prop.type.resolve().isFlowType() }
-        }
-
-        val classesHaveFlowMethods: Boolean = classes.any { cls ->
-          cls.getAllFunctions().any { method ->
-            method.returnType?.resolve()?.isFlowType() == true
-          }
-        }
-
-        val needsFlowSupport: Boolean = classesHaveFlowProperties || classesHaveFlowMethods
-
-        if (needsFlowSupport) {
-          addImport("kotlinx.coroutines.flow", "collect")
-        }
-
-        val needsScopeHelpers: Boolean = suspendFunctions.isNotEmpty() ||
-          needsSuspendLambdaSupport ||
-          classesHaveSuspendMethods ||
-          needsFlowSupport
-        if (needsScopeHelpers) addNugetScopeHelperExports()
-        if (needsScopeHelpers) addNugetScopeDrainExport()
-        if (needsScopeHelpers) addNugetJobHelperExports()
-        addNugetErrorHelperExports()
+    (classes + genericClasses).forEach { cls ->
+      cls.getAllProperties().forEach { prop ->
+        val propType: KSType = prop.type.resolve()
+        if (propType.isSuspendLambdaType()) suspendLambdaArities.add(propType.suspendLambdaArity())
       }
-      .build()
+    }
 
-    fileSpec.writeTo(codeGenerator, Dependencies(aggregating = true))
+    val needsSuspendLambdaSupport: Boolean = suspendLambdaArities.isNotEmpty()
+
+    val hasSuspendFunctions: Boolean = suspendFunctions.isNotEmpty() ||
+      needsSuspendLambdaSupport ||
+      classes.any { cls -> cls.getAllFunctions().any { it.modifiers.contains(Modifier.SUSPEND) } }
+
+    val classesHaveFlowPropertiesForImports: Boolean = classes.any { cls ->
+      cls.getAllProperties().any { prop ->
+        prop.type.resolve().expandAliases().declaration.qualifiedName?.asString() ==
+          "kotlinx.coroutines.flow.Flow"
+      }
+    }
+
+    val classesHaveFlowMethodsForImports: Boolean = classes.any { cls ->
+      cls.getAllFunctions().any { method ->
+        method.returnType?.resolve()?.expandAliases()?.declaration?.qualifiedName?.asString() ==
+          "kotlinx.coroutines.flow.Flow"
+      }
+    }
+
+    val needsFlowImports: Boolean = classesHaveFlowPropertiesForImports ||
+      classesHaveFlowMethodsForImports
+
+    val lambdaTypeSet: Set<String> = setOf(
+      "kotlin.Function0", "kotlin.Function1", "kotlin.Function2", "kotlin.Function3",
+    )
+
+    val hasLambdaParamMethods: Boolean = classes.any { cls ->
+      cls.getAllFunctions().any { method ->
+        method.parameters.any { param ->
+          param.type.resolve().expandAliases().declaration.qualifiedName?.asString() in lambdaTypeSet
+        }
+      }
+    }
+
+    // Stored-callback pairs also need invoke/CFunction/COpaquePointer (the bridge lambda calls fn.invoke).
+    val hasStoredCallbackMethods: Boolean = classes.any { cls ->
+      val lambdaParamMethods: List<KSFunctionDeclaration> = cls.getAllFunctions()
+        .filter { method ->
+          method.parameters.any { param ->
+            param.type.resolve().expandAliases().declaration.qualifiedName?.asString() in lambdaTypeSet
+          }
+        }.toList()
+      findStoredCallbackPairs(lambdaParamMethods).isNotEmpty()
+    }
+
+    // Interface-bridge pairs also need invoke/CFunction/COpaquePointer (each method's fn.invoke).
+    val hasInterfaceBridgeMethods: Boolean = classes.any { cls ->
+      val allMethods: List<KSFunctionDeclaration> = cls.getAllFunctions().toList()
+      findInterfaceBridgePairs(allMethods).isNotEmpty()
+    }
+
+    val needsCallbackImports: Boolean =
+      hasLambdaParamMethods || hasStoredCallbackMethods || hasInterfaceBridgeMethods
+    if (needsCallbackImports && !hasSuspendFunctions && !needsFlowImports) {
+      builder.addImport("kotlinx.cinterop", "invoke")
+      builder.addImport("kotlinx.cinterop", "CFunction")
+      builder.addImport("kotlinx.cinterop", "COpaquePointer")
+    }
+
+    if (hasSuspendFunctions || needsFlowImports) {
+      builder.addImport("kotlinx.cinterop", "reinterpret")
+      builder.addImport("kotlinx.cinterop", "invoke")
+      builder.addImport("kotlinx.cinterop", "CFunction")
+      builder.addImport("kotlinx.cinterop", "COpaquePointer")
+      builder.addImport("kotlinx.cinterop", "StableRef")
+      builder.addImport("kotlinx.coroutines", "CoroutineScope")
+      builder.addImport("kotlinx.coroutines", "CoroutineStart")
+      builder.addImport("kotlinx.coroutines", "Dispatchers")
+      builder.addImport("kotlinx.coroutines", "launch")
+      builder.addImport("kotlinx.coroutines", "SupervisorJob")
+      builder.addImport("kotlinx.coroutines", "cancel")
+      builder.addImport("kotlinx.coroutines", "CancellationException")
+      builder.addImport("kotlinx.coroutines", "ExperimentalCoroutinesApi")
+    }
+
+    if (needsSuspendLambdaSupport) {
+      builder.addImport("kotlin.coroutines", "SuspendFunction0")
+      builder.addImport("kotlin.coroutines", "SuspendFunction1")
+    }
+
+    suspendFunctions.forEach { func ->
+      builder.addImport(func.packageName.asString(), func.simpleName.asString())
+      builder.addSuspendFunctionExports(func)
+    }
+
+    classes.forEach { cls ->
+      val hasSuspendMethods: Boolean = cls.getAllFunctions()
+        .any { it.modifiers.contains(Modifier.SUSPEND) }
+      if (hasSuspendMethods) builder.addSuspendClassMethodExports(cls)
+    }
+
+    properties.forEach { prop ->
+      builder.addImport(prop.packageName.asString(), prop.simpleName.asString())
+      builder.addPropertyExports(prop)
+    }
+
+    extensionFunctions.forEach { func ->
+      builder.addImport(func.packageName.asString(), func.simpleName.asString())
+      builder.addExtensionFunctionExports(func)
+    }
+
+    extensionProperties.forEach { prop ->
+      builder.addImport(prop.packageName.asString(), prop.simpleName.asString())
+      builder.addExtensionPropertyExports(prop)
+    }
+
+    val listTypes: Set<String> = setOf("kotlin.collections.List", "kotlin.collections.MutableList")
+
+    fun KSType.isListType(): Boolean =
+      expandAliases().declaration.qualifiedName?.asString() in listTypes
+
+    val classesHaveLists: Boolean = (classes + genericClasses)
+      .any { cls -> cls.getAllProperties().any { prop -> prop.type.resolve().isListType() } }
+
+    val functionsReturnLists: Boolean = (functions + genericFunctions)
+      .any { func -> func.returnType?.resolve()?.isListType() == true }
+
+    val sealedClassesHaveLists: Boolean = sealedClasses
+      .any { sealed -> sealed.getSealedSubclasses().any { sub ->
+        sub.getAllProperties().any { prop -> prop.type.resolve().isListType() }
+      } }
+
+    val needsListSupport: Boolean = classesHaveLists || functionsReturnLists || sealedClassesHaveLists
+
+    val mapTypes: Set<String> = setOf("kotlin.collections.Map", "kotlin.collections.MutableMap")
+
+    fun KSType.isMapType(): Boolean =
+      expandAliases().declaration.qualifiedName?.asString() in mapTypes
+
+    val classesHaveMaps: Boolean = (classes + genericClasses)
+      .any { cls -> cls.getAllProperties().any { prop -> prop.type.resolve().isMapType() } }
+
+    val functionsReturnMaps: Boolean = (functions + genericFunctions)
+      .any { func -> func.returnType?.resolve()?.isMapType() == true }
+
+    val sealedClassesHaveMaps: Boolean = sealedClasses
+      .any { sealed -> sealed.getSealedSubclasses().any { sub ->
+        sub.getAllProperties().any { prop -> prop.type.resolve().isMapType() }
+      } }
+
+    val needsMapSupport: Boolean = classesHaveMaps || functionsReturnMaps || sealedClassesHaveMaps
+
+    val setTypes: Set<String> = setOf("kotlin.collections.Set", "kotlin.collections.MutableSet")
+
+    fun KSType.isSetType(): Boolean =
+      expandAliases().declaration.qualifiedName?.asString() in setTypes
+
+    val classesHaveSets: Boolean = (classes + genericClasses)
+      .any { cls -> cls.getAllProperties().any { prop -> prop.type.resolve().isSetType() } }
+
+    val functionsReturnSets: Boolean = (functions + genericFunctions)
+      .any { func -> func.returnType?.resolve()?.isSetType() == true }
+
+    val sealedClassesHaveSets: Boolean = sealedClasses
+      .any { sealed -> sealed.getSealedSubclasses().any { sub ->
+        sub.getAllProperties().any { prop -> prop.type.resolve().isSetType() }
+      } }
+
+    val needsSetSupport: Boolean = classesHaveSets || functionsReturnSets || sealedClassesHaveSets
+
+    val lambdaTypes: Set<String> = setOf(
+      "kotlin.Function0", "kotlin.Function1", "kotlin.Function2", "kotlin.Function3",
+    )
+
+    fun KSType.isLambdaType(): Boolean =
+      expandAliases().declaration.qualifiedName?.asString() in lambdaTypes
+
+    fun KSType.lambdaArity(): Int =
+      expandAliases().arguments.size - 1
+
+    val lambdaArities: MutableSet<Int> = mutableSetOf()
+
+    (classes + genericClasses).forEach { cls ->
+      cls.getAllProperties().forEach { prop ->
+        val propType: KSType = prop.type.resolve()
+        if (propType.isLambdaType()) lambdaArities.add(propType.lambdaArity())
+      }
+    }
+
+    (functions + genericFunctions).forEach { func ->
+      val returnType: KSType? = func.returnType?.resolve()
+      if (returnType?.isLambdaType() == true) lambdaArities.add(returnType.lambdaArity())
+    }
+
+    sealedClasses.forEach { sealed ->
+      sealed.getSealedSubclasses().forEach { sub ->
+        sub.getAllProperties().forEach { prop ->
+          val propType: KSType = prop.type.resolve()
+          if (propType.isLambdaType()) lambdaArities.add(propType.lambdaArity())
+        }
+      }
+    }
+
+    val needsLambdaSupport: Boolean = lambdaArities.isNotEmpty()
+
+    val needsHelpers: Boolean = genericClasses.isNotEmpty() ||
+      needsListSupport || needsMapSupport || needsSetSupport || needsLambdaSupport
+    if (needsHelpers) builder.addNugetHelperExports()
+    if (needsListSupport) builder.addNugetListHelperExports()
+    if (needsMapSupport) builder.addNugetMapHelperExports()
+    if (needsSetSupport) builder.addNugetSetHelperExports()
+
+    if (needsLambdaSupport && lambdaArities.any { it > 0 }) builder.addNugetWrapHelperExports()
+    if (0 in lambdaArities) builder.addNugetFunc0HelperExports()
+    if (1 in lambdaArities) builder.addNugetFunc1HelperExports()
+    if (2 in lambdaArities) builder.addNugetFunc2HelperExports()
+    if (3 in lambdaArities) builder.addNugetFunc3HelperExports()
+
+    val needsSuspendWrap: Boolean = needsSuspendLambdaSupport &&
+      suspendLambdaArities.any { it > 0 } && !needsLambdaSupport
+    if (needsSuspendWrap) builder.addNugetWrapHelperExports()
+    if (0 in suspendLambdaArities) builder.addNugetSuspendFunc0HelperExports()
+    if (1 in suspendLambdaArities) builder.addNugetSuspendFunc1HelperExports()
+
+    val classesHaveSuspendMethods: Boolean = classes.any { cls ->
+      cls.getAllFunctions().any { it.modifiers.contains(Modifier.SUSPEND) }
+    }
+
+    val flowTypes: Set<String> = setOf("kotlinx.coroutines.flow.Flow")
+
+    fun KSType.isFlowType(): Boolean =
+      expandAliases().declaration.qualifiedName?.asString() in flowTypes
+
+    val classesHaveFlowProperties: Boolean = classes.any { cls ->
+      cls.getAllProperties().any { prop -> prop.type.resolve().isFlowType() }
+    }
+
+    val classesHaveFlowMethods: Boolean = classes.any { cls ->
+      cls.getAllFunctions().any { method ->
+        method.returnType?.resolve()?.isFlowType() == true
+      }
+    }
+
+    val needsFlowSupport: Boolean = classesHaveFlowProperties || classesHaveFlowMethods
+
+    if (needsFlowSupport) builder.addImport("kotlinx.coroutines.flow", "collect")
+
+    val needsScopeHelpers: Boolean = suspendFunctions.isNotEmpty() ||
+      needsSuspendLambdaSupport || classesHaveSuspendMethods || needsFlowSupport
+    if (needsScopeHelpers) builder.addNugetScopeHelperExports()
+    if (needsScopeHelpers) builder.addNugetScopeDrainExport()
+    if (needsScopeHelpers) builder.addNugetJobHelperExports()
+    builder.addNugetErrorHelperExports()
+
+    builder.build().writeTo(codeGenerator, Dependencies(aggregating = true))
   }
 
 }

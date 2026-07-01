@@ -102,7 +102,7 @@
   - [x] Stored callbacks (event handlers / observers) — `IDisposable` subscription + Kotlin-side `_unsubscribe` export (see [ADR-037](docs/adr/037-stored-callbacks.md))
   - [ ] Exception propagation from a C# callback into Kotlin (mirror of forward-direction ADR-024/028/029)
   - [ ] `Flow<T>` / suspend lambda (`suspend (T) -> R`) as a function parameter
-- [ ] Generate Kotlin wrappers for C# interfaces (callbacks, event handlers) — full interface/vtable bridging (deferred in ADR-036)
+- [x] Generate Kotlin wrappers for C# interfaces (callbacks, event handlers) — full interface bridging via N flat function pointers (see [ADR-039](docs/adr/039-interface-bridging.md))
 - [ ] Support implementing C# interfaces in Kotlin and passing them back to C# consumers
 - [ ] Support implementing Kotlin interfaces in C# and passing them to Kotlin producers
 

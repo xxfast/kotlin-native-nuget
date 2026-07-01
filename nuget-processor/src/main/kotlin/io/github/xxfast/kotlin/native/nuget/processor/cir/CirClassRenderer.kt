@@ -248,6 +248,10 @@ internal fun StringBuilder.renderClass(cls: CirClass) {
     renderStoredCallbackMethod(scMethod)
   }
 
+  cls.interfaceBridgeMethods.forEach { ibMethod ->
+    renderInterfaceBridgeMethod(ibMethod)
+  }
+
   for (member in cls.companionMembers) {
     renderMember(member, cls.name)
   }
@@ -363,6 +367,7 @@ internal fun StringBuilder.renderMember(member: CirMember, className: String = "
     is CirConst -> renderConst(member)
     is CirCallbackMethod -> renderCallbackMethod(member)
     is CirStoredCallbackMethod -> renderStoredCallbackMethod(member)
+    is CirInterfaceBridgeMethod -> renderInterfaceBridgeMethod(member)
   }
 }
 
@@ -585,6 +590,73 @@ private fun StringBuilder.renderStoredCallbackMethod(method: CirStoredCallbackMe
   appendLine("            IntPtr sub = Native_${method.csMethodName}(_handle, fnPtr, IntPtr.Zero, out IntPtr error);")
   appendLine("            if (error != IntPtr.Zero) throw NugetErrorNative.BuildException(error);")
   appendLine("            return new NugetSubscription(() => { ${method.csRemoveNativeName}(_handle, sub); cbHandle.Free(); });")
+  appendLine("        }")
+  appendLine()
+}
+
+private fun StringBuilder.renderInterfaceBridgeMethod(method: CirInterfaceBridgeMethod) {
+  // DllImport for subscribe: handle + per-method (fnPtr, ctx) pairs + error
+  val nativeAddParams: String = buildString {
+    append("IntPtr handle")
+    method.entries.forEach { entry ->
+      append(", IntPtr ${entry.methodKtName}Ptr, IntPtr ${entry.methodKtName}Ctx")
+    }
+    append(", out IntPtr error")
+  }
+  appendLine(
+    "        [DllImport(\"${method.libraryName}\", CallingConvention = CallingConvention.Cdecl, " +
+      "EntryPoint = \"${method.subscribeEntryPoint}\")]"
+  )
+  appendLine("        private static extern IntPtr Native_${method.csMethodName}($nativeAddParams);")
+  appendLine()
+
+  // DllImport for unsubscribe
+  appendLine(
+    "        [DllImport(\"${method.libraryName}\", CallingConvention = CallingConvention.Cdecl, " +
+      "EntryPoint = \"${method.removeEntryPoint}\")]"
+  )
+  appendLine(
+    "        private static extern void ${method.csRemoveNativeName}(IntPtr handle, IntPtr subscriptionHandle);"
+  )
+  appendLine()
+
+  // Public IDisposable method
+  appendLine("        public IDisposable ${method.csMethodName}(${method.interfaceCsName} listener)")
+  appendLine("        {")
+  appendLine(
+    "            if (_handle == IntPtr.Zero) throw new ObjectDisposedException(nameof(${method.className}));"
+  )
+
+  // Delegate assignments
+  method.entries.forEach { entry ->
+    appendLine(
+      "            ${entry.delegateName} ${entry.methodKtName}Cb = " +
+        "${entry.delegateParamList} => { ${entry.callbackBody} };"
+    )
+  }
+
+  // GCHandle allocations
+  method.entries.forEachIndexed { i, entry ->
+    appendLine("            GCHandle h$i = GCHandle.Alloc(${entry.methodKtName}Cb);")
+  }
+
+  // Native subscribe call
+  val nativeCallArgs: String = buildString {
+    append("_handle")
+    method.entries.forEach { entry ->
+      append(", Marshal.GetFunctionPointerForDelegate(${entry.methodKtName}Cb), IntPtr.Zero")
+    }
+  }
+  appendLine("            IntPtr sub = Native_${method.csMethodName}($nativeCallArgs, out IntPtr error);")
+
+  // Error check with handle freeing
+  val freeHandles: String = method.entries.indices.joinToString(" ") { "h$it.Free();" }
+  appendLine("            if (error != IntPtr.Zero) { $freeHandles throw NugetErrorNative.BuildException(error); }")
+
+  // Return NugetSubscription
+  appendLine(
+    "            return new NugetSubscription(() => { ${method.csRemoveNativeName}(_handle, sub); $freeHandles });"
+  )
   appendLine("        }")
   appendLine()
 }

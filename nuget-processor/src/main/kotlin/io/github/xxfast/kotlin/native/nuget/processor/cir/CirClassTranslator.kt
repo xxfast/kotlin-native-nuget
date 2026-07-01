@@ -9,7 +9,9 @@ import com.google.devtools.ksp.symbol.KSFunctionDeclaration
 import com.google.devtools.ksp.symbol.KSPropertyDeclaration
 import com.google.devtools.ksp.symbol.KSType
 import com.google.devtools.ksp.symbol.Modifier
+import com.google.devtools.ksp.symbol.Variance
 import com.google.devtools.ksp.symbol.Visibility
+import io.github.xxfast.kotlin.native.nuget.processor.exports.findInterfaceBridgePairs
 import io.github.xxfast.kotlin.native.nuget.processor.exports.findStoredCallbackPairs
 import io.github.xxfast.kotlin.native.nuget.processor.toCName
 
@@ -29,7 +31,7 @@ internal fun translateClass(
     .map { it.resolve().declaration }
     .filterIsInstance<KSClassDeclaration>()
     .firstOrNull { decl ->
-      decl.classKind == com.google.devtools.ksp.symbol.ClassKind.CLASS &&
+      decl.classKind == ClassKind.CLASS &&
         decl.qualifiedName?.asString() != "kotlin.Any"
     }
     ?.simpleName?.asString()
@@ -40,7 +42,7 @@ internal fun translateClass(
     cls.superTypes
       .map { it.resolve().declaration }
       .filterIsInstance<KSClassDeclaration>()
-      .filter { it.classKind == com.google.devtools.ksp.symbol.ClassKind.INTERFACE }
+      .filter { it.classKind == ClassKind.INTERFACE }
       .map { "I${it.simpleName.asString()}" }
       .toList()
   }
@@ -70,7 +72,8 @@ internal fun translateClass(
     .mapIndexed { index, ctor ->
       val params: List<CirParameter> = ctor.parameters.map { param ->
         val resolved: KSType = param.type.resolve().expandAliases()
-        CirParameter(param.name?.asString() ?: "_", mapParamType(resolved.declaration.simpleName.asString()))
+        val kotlinType: String = resolved.declaration.simpleName.asString()
+        CirParameter(param.name?.asString() ?: "_", mapParamType(kotlinType))
       }
 
       CirConstructor(
@@ -109,7 +112,7 @@ internal fun translateClass(
       val csPropName: String = propName.replaceFirstChar { it.uppercase() }
 
       val isEnumType: Boolean = (propTypeResolved.declaration as? KSClassDeclaration)
-        ?.classKind == com.google.devtools.ksp.symbol.ClassKind.ENUM_CLASS
+        ?.classKind == ClassKind.ENUM_CLASS
 
       val qualifiedTypeName: String? = propTypeResolved.declaration.qualifiedName?.asString()
       val isListType: Boolean = qualifiedTypeName == "kotlin.collections.List"
@@ -153,7 +156,8 @@ internal fun translateClass(
       if (isLambdaType) tracker.lambdaArities.add(lambdaArity)
 
       val isSuspendLambdaType: Boolean = qualifiedTypeName in SUSPEND_LAMBDA_TYPES
-      val suspendLambdaArity: Int = if (isSuspendLambdaType) propTypeResolved.arguments.size - 1 else -1
+      val suspendLambdaArity: Int =
+        if (isSuspendLambdaType) propTypeResolved.arguments.size - 1 else -1
 
       if (isSuspendLambdaType) {
         tracker.suspendLambdaArities.add(suspendLambdaArity)
@@ -437,7 +441,11 @@ internal fun translateClass(
 
       val hasSyncErrorOut: Boolean = !isLambdaType && !isSuspendLambdaType && !isFlowType
 
-      val setter: String? = if (isMutable && !isLambdaType && !isSuspendLambdaType && !isListType && !isMutableListType && !isMapType && !isMutableMapType && !isSetType && !isMutableSetType) {
+      val isSettable: Boolean = isMutable && !isLambdaType && !isSuspendLambdaType &&
+        !isListType && !isMutableListType && !isMapType && !isMutableMapType &&
+        !isSetType && !isMutableSetType
+
+      val setter: String? = if (isSettable) {
         when {
           isNullableString -> buildString {
             appendLine()
@@ -538,7 +546,9 @@ internal fun translateClass(
       val methodName: String = method.simpleName.asString()
       val isDataClassMethod: Boolean = isDataClass &&
         (methodName == "copy" || methodName.startsWith("component"))
-      if (methodName in listOf("equals", "hashCode", "toString", "<init>") || isDataClassMethod) return@filter false
+      val isSkipped: Boolean = methodName in listOf("equals", "hashCode", "toString", "<init>") ||
+        isDataClassMethod
+      if (isSkipped) return@filter false
 
       if (superClass != null) {
         method.parentDeclaration == cls
@@ -547,7 +557,8 @@ internal fun translateClass(
       }
     }
 
-  val (suspendMethods, regularMethods) = filteredMethods.partition { it.modifiers.contains(Modifier.SUSPEND) }
+  val (suspendMethods, regularMethods) = filteredMethods
+    .partition { it.modifiers.contains(Modifier.SUSPEND) }
 
   val (flowMethods, nonFlowMethods) = regularMethods.partition { method ->
     val returnQualified: String? = method.returnType?.resolve()?.expandAliases()
@@ -578,11 +589,24 @@ internal fun translateClass(
       translateCallbackMethod(method, libraryName, prefix, exportedTypes, tracker)
     }
 
-  val storedCallbackMembers: List<CirStoredCallbackMethod> = storedCallbackPairs.mapNotNull { (addMethod, removeMethod) ->
-    translateStoredCallbackMethod(addMethod, removeMethod, libraryName, prefix, exportedTypes, tracker)
-  }
+  val storedCallbackMembers: List<CirStoredCallbackMethod> = storedCallbackPairs
+    .mapNotNull { (addMethod, removeMethod) ->
+      translateStoredCallbackMethod(addMethod, removeMethod, libraryName, prefix, exportedTypes, tracker)
+    }
+
+  // Detect interface-bridge pairs; exclude both halves from regular method path.
+  val interfaceBridgePairs: List<Pair<KSFunctionDeclaration, KSFunctionDeclaration>> =
+    findInterfaceBridgePairs(normalMethods)
+  val interfaceBridgeExcluded: Set<KSFunctionDeclaration> =
+    (interfaceBridgePairs.map { it.first } + interfaceBridgePairs.map { it.second }).toSet()
+
+  val interfaceBridgeMembers: List<CirInterfaceBridgeMethod> = interfaceBridgePairs
+    .mapNotNull { (addMethod, removeMethod) ->
+      translateInterfaceBridgeMethod(addMethod, removeMethod, libraryName, prefix, name, tracker)
+    }
 
   val methods: List<CirMethod> = normalMethods
+    .filter { it !in interfaceBridgeExcluded }
     .map { method ->
       val methodName: String = method.simpleName.asString()
       val methodReturn: String = method.returnType?.resolve()?.expandAliases()
@@ -594,7 +618,8 @@ internal fun translateClass(
       val methodParams: List<CirParameter> = method.parameters.map { param ->
         val resolved: KSType = param.type.resolve().expandAliases()
         val kotlinType: String = resolved.declaration.simpleName.asString()
-        val isEnum: Boolean = (resolved.declaration as? KSClassDeclaration)?.classKind == ClassKind.ENUM_CLASS
+        val isEnum: Boolean = (resolved.declaration as? KSClassDeclaration)
+          ?.classKind == ClassKind.ENUM_CLASS
         CirParameter(
           name = param.name?.asString() ?: "_",
           type = if (isEnum) kotlinType else mapParamType(kotlinType),
@@ -603,8 +628,10 @@ internal fun translateClass(
       }
 
       val declaredInThisClass: Boolean = method.parentDeclaration == cls
-      val hasImplementation: Boolean = declaredInThisClass || method.modifiers.contains(Modifier.OVERRIDE)
-      val isMethodAbstract: Boolean = !hasImplementation && (isAbstract || method.modifiers.contains(Modifier.ABSTRACT))
+      val hasImplementation: Boolean = declaredInThisClass ||
+        method.modifiers.contains(Modifier.OVERRIDE)
+      val isMethodAbstract: Boolean = !hasImplementation &&
+        (isAbstract || method.modifiers.contains(Modifier.ABSTRACT))
       val isOverride: Boolean = superClass != null && method.modifiers.contains(Modifier.OVERRIDE)
 
       // nativeCallArgs is only used for non-sync-error methods; sync-error path builds its own.
@@ -694,7 +721,8 @@ internal fun translateClass(
     val flowElementKotlinType: String = returnType?.arguments
       ?.firstOrNull()?.type?.resolve()
       ?.declaration?.simpleName?.asString() ?: "Any"
-    val flowCsElementType: String = KOTLIN_TO_CSHARP_PARAM[flowElementKotlinType] ?: flowElementKotlinType
+    val flowCsElementType: String =
+      KOTLIN_TO_CSHARP_PARAM[flowElementKotlinType] ?: flowElementKotlinType
 
     val methodParams: List<CirParameter> = method.parameters.map { param ->
       val resolved: KSType = param.type.resolve().expandAliases()
@@ -781,6 +809,7 @@ internal fun translateClass(
     methods = methods,
     callbackMethods = callbackMembers,
     storedCallbackMethods = storedCallbackMembers,
+    interfaceBridgeMethods = interfaceBridgeMembers,
     interfaces = interfaces,
     superClass = superClass,
     isDataClass = isDataClass,
@@ -817,7 +846,7 @@ internal fun translateGenericClass(
       }
     }
 
-    if (param.variance != com.google.devtools.ksp.symbol.Variance.INVARIANT) {
+    if (param.variance != Variance.INVARIANT) {
       logger.warn(
         "Variance '${param.variance}' on class '${cls.simpleName.asString()}' " +
           "type parameter '${param.name.asString()}' will be dropped — " +
@@ -870,7 +899,7 @@ internal fun translateSealedClass(
       val subName: String = subclass.simpleName.asString()
       val subPrefix: String = "${prefix}_${subName.lowercase()}"
       val isDataClass: Boolean = subclass.modifiers.contains(Modifier.DATA)
-      val isDataObject: Boolean = isDataClass && subclass.classKind == com.google.devtools.ksp.symbol.ClassKind.OBJECT
+      val isDataObject: Boolean = isDataClass && subclass.classKind == ClassKind.OBJECT
 
       val properties: List<CirProperty> = if (isDataObject) {
         emptyList()
@@ -885,7 +914,7 @@ internal fun translateSealedClass(
             val csPropName: String = propName.replaceFirstChar { it.uppercase() }
 
             val isEnumType: Boolean = (propTypeResolved.declaration as? KSClassDeclaration)
-              ?.classKind == com.google.devtools.ksp.symbol.ClassKind.ENUM_CLASS
+              ?.classKind == ClassKind.ENUM_CLASS
 
             val qualifiedTypeName: String? = propTypeResolved.declaration.qualifiedName?.asString()
             val isListType: Boolean = qualifiedTypeName == "kotlin.collections.List"
@@ -1274,8 +1303,8 @@ internal fun translateInterface(
 
   val typeParams: List<CirTypeParameter> = iface.typeParameters.map { param ->
     val variance: CirVariance = when (param.variance) {
-      com.google.devtools.ksp.symbol.Variance.COVARIANT -> CirVariance.COVARIANT
-      com.google.devtools.ksp.symbol.Variance.CONTRAVARIANT -> CirVariance.CONTRAVARIANT
+      Variance.COVARIANT -> CirVariance.COVARIANT
+      Variance.CONTRAVARIANT -> CirVariance.CONTRAVARIANT
       else -> CirVariance.INVARIANT
     }
     CirTypeParameter(param.name.asString(), variance = variance)
@@ -1381,7 +1410,8 @@ internal fun translateValueClass(
 
   val underlyingResolved: KSType = underlyingProp.type.resolve().expandAliases()
   val underlyingType: String = underlyingResolved.declaration.simpleName.asString()
-  val underlyingName: String = underlyingProp.simpleName.asString().replaceFirstChar { it.uppercase() }
+  val underlyingName: String =
+    underlyingProp.simpleName.asString().replaceFirstChar { it.uppercase() }
   val underlyingNativeType: String = mapParamType(underlyingType)
   val isReferenceUnderlying: Boolean = underlyingType !in KOTLIN_TO_CSHARP_PARAM
 
@@ -1802,5 +1832,135 @@ private fun translateStoredCallbackMethod(
     delegateParamList = delegateParamList,
     csParamType = csParamType,
     nativeCallbackBody = nativeCallbackBody,
+  )
+}
+
+/**
+ * Translates an `add{X}` / `remove{X}` pair (where the parameter is a Kotlin interface type) into
+ * a [CirInterfaceBridgeMethod]. The add method becomes a public `IDisposable Add{X}(IFace listener)`
+ * on the C# side; the remove method is consumed internally by the generated NugetSubscription.
+ *
+ * @see <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/039-interface-bridging.md">ADR-039: Interface bridging</a>
+ */
+private fun translateInterfaceBridgeMethod(
+  addMethod: KSFunctionDeclaration,
+  removeMethod: KSFunctionDeclaration,
+  libraryName: String,
+  classPrefix: String,
+  className: String,
+  tracker: CollectionHelperTracker,
+): CirInterfaceBridgeMethod? {
+  val addMethodName: String = addMethod.simpleName.asString()
+  val removeMethodName: String = removeMethod.simpleName.asString()
+  val csMethodName: String = addMethodName.replaceFirstChar { it.uppercase() }
+  val csRemoveNativeName: String = "Native_${removeMethodName.replaceFirstChar { it.uppercase() }}"
+
+  val ifaceParam = addMethod.parameters.firstOrNull { param ->
+    (param.type.resolve().expandAliases().declaration as? KSClassDeclaration)
+      ?.classKind == ClassKind.INTERFACE
+  } ?: return null
+
+  val ifaceDecl = ifaceParam.type.resolve().expandAliases().declaration as? KSClassDeclaration ?: return null
+  val ifaceName: String = ifaceDecl.simpleName.asString()
+  val interfaceCsName: String = "I$ifaceName"
+
+  val ifaceMethods: List<KSFunctionDeclaration> = ifaceDecl.getAllFunctions()
+    .filter { it.getVisibility() == Visibility.PUBLIC }
+    .filter { it.simpleName.asString() !in listOf("equals", "hashCode", "toString", "<init>") }
+    .toList()
+
+  tracker.needsSubscription = true
+
+  val entries: List<CirInterfaceBridgeMethodEntry> = ifaceMethods.map { method ->
+    val mName: String = method.simpleName.asString()
+    val mCsName: String = mName.replaceFirstChar { it.uppercase() }
+    val params = method.parameters.toList()
+    val arity: Int = params.size
+
+    // Delegate suffix naming follows stored-callback convention
+    val argSuffixes: List<String> = params.map { param ->
+      val pType = param.type.resolve().expandAliases()
+      val pSimple: String = pType.declaration.simpleName.asString()
+      val pQualified: String = pType.declaration.qualifiedName?.asString() ?: ""
+      val isEnum: Boolean = (pType.declaration as? KSClassDeclaration)?.classKind == ClassKind.ENUM_CLASS
+      val isPrimitive: Boolean = pQualified.startsWith("kotlin.") && pSimple != "String"
+      when {
+        isEnum -> "Int"
+        pSimple == "Boolean" -> "Byte"
+        isPrimitive -> pSimple
+        else -> "Object"
+      }
+    }
+    val delegateName: String = "Nuget${argSuffixes.joinToString("")}VoidCallback"
+
+    // Delegate param list: enum -> int arg${i}Ord, reference/string -> IntPtr arg${i}Ptr, arity-0 -> IntPtr _
+    val delegateParamList: String = if (arity == 0) {
+      "(IntPtr _)"
+    } else {
+      val argParams: String = params.mapIndexed { i, param ->
+        val pType = param.type.resolve().expandAliases()
+        val pSimple: String = pType.declaration.simpleName.asString()
+        val pQualified: String = pType.declaration.qualifiedName?.asString() ?: ""
+        val isEnum: Boolean = (pType.declaration as? KSClassDeclaration)?.classKind == ClassKind.ENUM_CLASS
+        val isPrimitive: Boolean = pQualified.startsWith("kotlin.") && pSimple != "String"
+        when {
+          isEnum -> "int arg${i}Ord"
+          pSimple == "Boolean" -> "byte arg${i}"
+          isPrimitive -> "${KOTLIN_TO_CSHARP_PARAM[pSimple] ?: "int"} arg${i}"
+          else -> "IntPtr arg${i}Ptr"
+        }
+      }.joinToString(", ")
+      "($argParams, IntPtr _)"
+    }
+
+    val delegate = CirCallbackDelegate(delegateName, delegateParamList, "void")
+    if (tracker.callbackDelegates.none { it.name == delegateName }) {
+      tracker.callbackDelegates.add(delegate)
+    }
+
+    // C# callback body: unmarshal args and call listener.Method(args)
+    val callbackBody: String = buildString {
+      params.forEachIndexed { i, param ->
+        val pType = param.type.resolve().expandAliases()
+        val pSimple: String = pType.declaration.simpleName.asString()
+        val pQualified: String = pType.declaration.qualifiedName?.asString() ?: ""
+        val isEnum: Boolean = (pType.declaration as? KSClassDeclaration)?.classKind == ClassKind.ENUM_CLASS
+        val isPrimitive: Boolean = pQualified.startsWith("kotlin.") && pSimple != "String"
+        val csType: String = when {
+          isEnum -> pSimple
+          pSimple == "Boolean" -> "bool"
+          isPrimitive -> KOTLIN_TO_CSHARP_PARAM[pSimple] ?: pSimple
+          pSimple == "String" -> "string"
+          else -> pSimple
+        }
+        when {
+          isEnum -> append("$csType arg$i = ($csType)arg${i}Ord; ")
+          pSimple == "Boolean" -> append("$csType arg$i = arg${i} != 0; ")
+          isPrimitive -> { /* arg is already the right type, no unmarshal needed */ }
+          else -> append("$csType arg$i = NugetMarshal.FromHandle<$csType>(arg${i}Ptr); NugetMarshal.Dispose(arg${i}Ptr); ")
+        }
+      }
+      val callArgs: String = params.indices.joinToString(", ") { "arg$it" }
+      append("listener.$mCsName($callArgs);")
+    }
+
+    CirInterfaceBridgeMethodEntry(
+      methodCsName = mCsName,
+      methodKtName = mName,
+      delegateName = delegateName,
+      delegateParamList = delegateParamList,
+      callbackBody = callbackBody,
+    )
+  }
+
+  return CirInterfaceBridgeMethod(
+    csMethodName = csMethodName,
+    csRemoveNativeName = csRemoveNativeName,
+    subscribeEntryPoint = "${classPrefix}_$addMethodName",
+    removeEntryPoint = "${classPrefix}_$removeMethodName",
+    libraryName = libraryName,
+    interfaceCsName = interfaceCsName,
+    className = className,
+    entries = entries,
   )
 }

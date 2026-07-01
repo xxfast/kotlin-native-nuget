@@ -71,6 +71,7 @@ See [ADR-011](docs/adr/011-collection-type-mapping.md).
 | `(T) -> R` (Kotlin → C#)             | `Func<>` / `Action<>`           | invoked from C# ([ADR-012](docs/adr/012-lambda-function-type-mapping.md))                  |
 | `(T) -> R` parameter (C# → Kotlin)   | `Func<>` / `Action<>`           | reverse interop, arity 0+, per-call ([ADR-036](docs/adr/036-reverse-interop-mechanism.md)) |
 | stored callback parameter            | `IDisposable` subscription      | Kotlin-side `_unsubscribe` export ([ADR-037](docs/adr/037-stored-callbacks.md))            |
+| interface parameter (C# → Kotlin)    | C# implements `I`-prefixed type | `add`/`remove`-paired, `IDisposable`, N function pointers ([ADR-039](docs/adr/039-interface-bridging.md)) |
 | `inline fun`                         | regular method                  | ([ADR-017](docs/adr/017-inline-function-mapping.md))                                       |
 | `inline fun <reified T>`             | typed variants                  | reified type parameters                                                                    |
 | value class (`value`/`inline class`) | underlying type / record struct | ([ADR-014](docs/adr/014-value-class-mapping.md))                                           |

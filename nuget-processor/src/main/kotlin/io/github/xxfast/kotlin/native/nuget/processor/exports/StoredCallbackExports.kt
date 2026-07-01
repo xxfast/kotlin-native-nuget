@@ -10,6 +10,54 @@ import io.github.xxfast.kotlin.native.nuget.processor.cir.LAMBDA_TYPES
 import io.github.xxfast.kotlin.native.nuget.processor.cir.expandAliases
 
 /**
+ * Detects `add{X}`/`remove{X}` (or `subscribe{X}`/`unsubscribe{X}`) method pairs where the
+ * paired parameter is a Kotlin interface type (not a lambda). Returns the (add, remove) pairs.
+ *
+ * @see <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/039-interface-bridging.md">ADR-039: Interface bridging</a>
+ */
+internal fun findInterfaceBridgePairs(
+  methods: List<KSFunctionDeclaration>,
+): List<Pair<KSFunctionDeclaration, KSFunctionDeclaration>> {
+  val addPrefixes = listOf("add", "subscribe")
+  val removePrefixes = listOf("remove", "unsubscribe")
+
+  val byName: Map<String, KSFunctionDeclaration> = methods.associateBy { it.simpleName.asString() }
+
+  return methods.mapNotNull { addMethod ->
+    val addName: String = addMethod.simpleName.asString()
+    val addPrefix: String = addPrefixes.find { prefix ->
+      addName.startsWith(prefix) && addName.length > prefix.length
+    } ?: return@mapNotNull null
+
+    val suffix: String = addName.removePrefix(addPrefix)
+
+    val removeMethod: KSFunctionDeclaration = removePrefixes.mapNotNull { removePrefix ->
+      byName["$removePrefix$suffix"]
+    }.firstOrNull() ?: return@mapNotNull null
+
+    // Both must have a single parameter of a Kotlin interface type
+    val addIfaceParam = addMethod.parameters.singleOrNull { param ->
+      (param.type.resolve().expandAliases().declaration as? KSClassDeclaration)
+        ?.classKind == ClassKind.INTERFACE
+    } ?: return@mapNotNull null
+
+    val removeIfaceParam = removeMethod.parameters.singleOrNull { param ->
+      (param.type.resolve().expandAliases().declaration as? KSClassDeclaration)
+        ?.classKind == ClassKind.INTERFACE
+    } ?: return@mapNotNull null
+
+    // Both must reference the same interface type
+    val addQualified: String? = addIfaceParam.type.resolve().expandAliases()
+      .declaration.qualifiedName?.asString()
+    val removeQualified: String? = removeIfaceParam.type.resolve().expandAliases()
+      .declaration.qualifiedName?.asString()
+    if (addQualified != removeQualified) return@mapNotNull null
+
+    Pair(addMethod, removeMethod)
+  }
+}
+
+/**
  * Detects `add{X}`/`remove{X}` (or `subscribe{X}`/`unsubscribe{X}`) method pairs that both
  * accept the same single lambda parameter. Returns the (add, remove) pairs.
  *
@@ -87,14 +135,16 @@ internal fun FileSpec.Builder.addStoredCallbackExports(
   // Determine whether each arg is an enum (ordinal Int) or reference type
   data class ArgInfo(val qualifiedName: String, val isEnum: Boolean)
   val argInfos: List<ArgInfo> = lambdaArgTypes.map { argType ->
-    val isEnum: Boolean = (argType.declaration as? KSClassDeclaration)?.classKind == ClassKind.ENUM_CLASS
+    val isEnum: Boolean = (argType.declaration as? KSClassDeclaration)
+      ?.classKind == ClassKind.ENUM_CLASS
     ArgInfo(
-      qualifiedName = argType.declaration.qualifiedName?.asString() ?: argType.declaration.simpleName.asString(),
+      qualifiedName = argType.declaration.qualifiedName?.asString()
+        ?: argType.declaration.simpleName.asString(),
       isEnum = isEnum,
     )
   }
 
-  // CFunction signature: enum args -> Int, reference args -> COpaquePointer?, arity-0 -> just userData
+  // CFunction signature: enum args -> Int, reference args -> COpaquePointer?, arity-0 -> userData
   val cfuncArgTypes: String = buildString {
     argInfos.forEach { info ->
       if (info.isEnum) append("Int, ")

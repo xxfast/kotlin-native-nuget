@@ -46,6 +46,7 @@ data class CirClass(
   val methods: List<CirMethod>,
   val callbackMethods: List<CirCallbackMethod> = emptyList(),
   val storedCallbackMethods: List<CirStoredCallbackMethod> = emptyList(),
+  val interfaceBridgeMethods: List<CirInterfaceBridgeMethod> = emptyList(),
   val interfaces: List<String> = emptyList(),
   val superClass: String? = null,
   val disposable: Boolean = true,
@@ -220,6 +221,29 @@ data class CirDllImport(
   val parameters: List<CirParameter>,
   val visibility: CirVisibility = CirVisibility.PUBLIC,
   val hasSyncErrorOut: Boolean = false,
+) : CirMember
+
+// One interface method entry within a CirInterfaceBridgeMethod.
+data class CirInterfaceBridgeMethodEntry(
+  val methodCsName: String,       // "OnMeow"
+  val methodKtName: String,       // "onMeow" (used as variable prefix: onMeowCb, onMeowPtr)
+  val delegateName: String,       // "NugetObjectVoidCallback"
+  val delegateParamList: String,  // "(IntPtr arg0Ptr, IntPtr _)"
+  val callbackBody: String,       // C# inline body: "string arg0 = ...; listener.OnMeow(arg0);"
+)
+
+// A class method that is the subscribe half of an interface-bridge pair (add*/subscribe*).
+// The paired parameter is a Kotlin interface type, not a lambda.
+// Generates an IDisposable factory method backed by two native exports with N function pointers.
+data class CirInterfaceBridgeMethod(
+  val csMethodName: String,        // "AddListener"
+  val csRemoveNativeName: String,  // "Native_RemoveListener"
+  val subscribeEntryPoint: String, // "cateventsource_addListener"
+  val removeEntryPoint: String,    // "cateventsource_removeListener"
+  val libraryName: String,
+  val interfaceCsName: String,     // "ICatEventListener"
+  val className: String,           // "CatEventSource"
+  val entries: List<CirInterfaceBridgeMethodEntry>,
 ) : CirMember
 
 // A class method that is the subscribe half of a stored-callback pair (add*/subscribe*).

@@ -33,8 +33,7 @@ internal fun FileSpec.Builder.addClassExports(cls: KSClassDeclaration) {
   val hasSuperClass: Boolean = cls.superTypes
     .map { it.resolve().declaration }
     .filterIsInstance<KSClassDeclaration>()
-    .any { it.classKind == com.google.devtools.ksp.symbol.ClassKind.CLASS &&
-      it.qualifiedName?.asString() != "kotlin.Any" }
+    .any { it.classKind == ClassKind.CLASS && it.qualifiedName?.asString() != "kotlin.Any" }
 
   val constructor: KSFunctionDeclaration? = cls.primaryConstructor
 
@@ -481,19 +480,34 @@ internal fun FileSpec.Builder.addClassExports(cls: KSClassDeclaration) {
   // Paired add* methods get stored-callback exports; paired remove* methods are excluded entirely.
   val storedCallbackPairs: List<Pair<KSFunctionDeclaration, KSFunctionDeclaration>> =
     findStoredCallbackPairs(lambdaParamMethods)
-  val storedCallbackAddMethods: Set<KSFunctionDeclaration> = storedCallbackPairs.map { it.first }.toSet()
-  val storedCallbackRemoveMethods: Set<KSFunctionDeclaration> = storedCallbackPairs.map { it.second }.toSet()
+  val storedCallbackAddMethods: Set<KSFunctionDeclaration> = storedCallbackPairs
+    .map { it.first }.toSet()
+  val storedCallbackRemoveMethods: Set<KSFunctionDeclaration> = storedCallbackPairs
+    .map { it.second }.toSet()
 
-  for ((addMethod, removeMethod) in storedCallbackPairs) {
+  storedCallbackPairs.forEach { (addMethod, removeMethod) ->
     addStoredCallbackExports(addMethod, removeMethod, qualifiedName, prefix)
   }
 
-  for (method in lambdaParamMethods) {
-    if (method in storedCallbackAddMethods || method in storedCallbackRemoveMethods) continue
+  lambdaParamMethods.forEach { method ->
+    if (method in storedCallbackAddMethods || method in storedCallbackRemoveMethods) return@forEach
     addLambdaParamMethodExport(method, qualifiedName, prefix)
   }
 
-  for (method in methods) {
+  // Detect interface-bridge pairs: add*/subscribe* + matching remove*/unsubscribe* where the
+  // parameter is a Kotlin interface type (not a lambda). Both halves are excluded from the
+  // regular method loop; the add half gets interface-bridge exports.
+  val interfaceBridgePairs: List<Pair<KSFunctionDeclaration, KSFunctionDeclaration>> =
+    findInterfaceBridgePairs(methods)
+  val interfaceBridgeExcluded: Set<KSFunctionDeclaration> =
+    (interfaceBridgePairs.map { it.first } + interfaceBridgePairs.map { it.second }).toSet()
+
+  interfaceBridgePairs.forEach { (addMethod, removeMethod) ->
+    addInterfaceBridgeExports(addMethod, removeMethod, qualifiedName, prefix)
+  }
+
+  methods.forEach { method ->
+    if (method in interfaceBridgeExcluded) return@forEach
     val methodName: String = method.simpleName.asString()
     val methodReturn: String = method.returnType?.resolve()?.expandAliases()
       ?.declaration?.qualifiedName?.asString() ?: "Unit"
@@ -502,7 +516,8 @@ internal fun FileSpec.Builder.addClassExports(cls: KSClassDeclaration) {
     val methodParamCall: String = method.parameters.joinToString(", ") { param ->
       val resolved = param.type.resolve().expandAliases()
       val paramName: String = param.name?.asString() ?: "_"
-      val isEnum: Boolean = (resolved.declaration as? KSClassDeclaration)?.classKind == ClassKind.ENUM_CLASS
+      val isEnum: Boolean = (resolved.declaration as? KSClassDeclaration)
+        ?.classKind == ClassKind.ENUM_CLASS
       if (isEnum) {
         val enumQualifiedName: String = resolved.declaration.qualifiedName?.asString() ?: paramName
         "$enumQualifiedName.entries[$paramName]"
@@ -519,7 +534,8 @@ internal fun FileSpec.Builder.addClassExports(cls: KSClassDeclaration) {
     for (param in method.parameters) {
       val resolved = param.type.resolve().expandAliases()
       val paramName: String = param.name?.asString() ?: "_"
-      val isEnum: Boolean = (resolved.declaration as? KSClassDeclaration)?.classKind == ClassKind.ENUM_CLASS
+      val isEnum: Boolean = (resolved.declaration as? KSClassDeclaration)
+        ?.classKind == ClassKind.ENUM_CLASS
       if (isEnum) {
         builder.addParameter(paramName, Int::class)
       } else {
