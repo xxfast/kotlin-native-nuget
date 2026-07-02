@@ -69,6 +69,11 @@ These are the closest analogues for the reverse direction — study how each **c
 
 - `docs/adr/` — existing Architecture Decision Records for prior design choices
 - `docs/adr/README.md` — index of all ADRs with one-line summaries
+- `docs/research/` — prior research already done. **Check here before researching to avoid repeating work already covered:**
+  - `preliminary-research.md` — how Kotlin/Native interop with C# works today without any tooling; the raw boundary mechanics
+  - `cocoapods-plugin-architecture.md` — architecture study of the Kotlin CocoaPods Gradle plugin (bidirectional prior art)
+  - `spm-plugins-architecture.md` — architecture study of Swift Package Manager integrations for Kotlin Multiplatform (bidirectional prior art)
+  - `nuget-plugin-architecture-synthesis.md` — decision-oriented synthesis of the CocoaPods & SPM studies for the NuGet plugin (Phase 8)
 - `FEATURES.md` — the catalogue of mappings already shipped (forward direction)
 - `ROADMAP.md` — planned features and priorities
 - `GOALS.md` — design philosophy
