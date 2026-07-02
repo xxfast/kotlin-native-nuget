@@ -127,7 +127,13 @@ The inverse of everything above, modeled on the Kotlin CocoaPods plugin (`pod(".
   - [ ] Extension-level shared feed list (`sources { url("...") }`) — v1 supports per-dependency `source` only
   - [ ] Multiple `bind {}` blocks per dependency (distinct namespace groups with different `packageName` values)
 - [x] Resolution pipeline: synthetic `.csproj` generation + `dotnet restore` (`nugetGen`/`nugetRestore` tasks), reusing `obj/project.assets.json` as the inter-task manifest; pin `<TargetFramework>` (net8.0) so restore fails fast (NU1202) on packages above the supported floor (see [ADR-045](docs/adr/045-nuget-resolution-pipeline.md))
-- [ ] Reverse IR: extract the bound packages' API surface (`nugetExtractApi`, reads `project.assets.json`, ADR-042 extraction) and model C# classes/interfaces/methods as Kotlin declarations (mirror of CIR)
+- [x] Reverse IR: extract the bound packages' API surface (`nugetExtractApi`, reads `project.assets.json`, ADR-042 extraction) and model C# classes/interfaces/methods as Kotlin declarations (mirror of CIR) (see [ADR-046](docs/adr/046-reverse-ir-model-and-json-contract.md))
+  - [x] RIR model + `parseReverseIr()` JSON deserialization (`RirFile`/`RirAssembly`/`RirNamespace`/`RirType`/`RirTypeRef`, `kotlinx.serialization`, `"kind"` discriminator)
+  - [x] `deriveDllPaths()` — resolve absolute managed `.dll` paths from `project.assets.json` (ADR-045 contract)
+  - [x] `NugetExtractApiTask` + `NugetPlugin` wiring (registered only when a dependency has a `bind {}` block; `nugetImport` `dependsOn`)
+  - [x] `nuget-metadata-reader/` C# console app — `MetadataReader` extraction + ADR-043 subset filter + `reverse-ir.json` emission
+  - [x] Wire the task action to the metadata reader subprocess (end-to-end extraction; dotnet-gated integration test against `Newtonsoft.Json`)
+  - [ ] Per-package namespace include/exclude at the reader CLI (v1 flattens all bound packages' filters into one global `--include`/`--exclude` list)
 - [ ] Generate Kotlin-idiomatic stubs for the C# API surface (v1: static methods, primitives, strings, `void`) — model the managed API once, not per Kotlin target; only native payloads vary by the Kotlin-target ↔ RID mapping
 - [ ] Generate C#-side registration shims — thunks + startup registration handing function pointers to Kotlin; Kotlin stubs fail fast if the table is not registered
 - [ ] **Phase goal:** consume a bound NuGet package (e.g. `Newtonsoft.Json`) from Kotlin in `sample-library` and exercise it end-to-end from `sample-app` (`SampleApp.Tests` round-trip)

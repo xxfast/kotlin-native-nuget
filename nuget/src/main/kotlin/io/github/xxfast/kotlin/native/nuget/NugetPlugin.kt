@@ -194,10 +194,34 @@ class NugetPlugin : Plugin<Project> {
           task.assetsFile.set(interopDir.map { it.file("obj/project.assets.json") })
         }
 
-      project.tasks.register("nugetImport") { task ->
+      val nugetImport: TaskProvider<*> = project.tasks.register("nugetImport") { task ->
         task.group = "nuget"
         task.description = "IDE-sync umbrella task: resolve NuGet dependencies"
         task.dependsOn(nugetRestore)
+      }
+
+      val bound: List<NugetDependency> = deps.filter { it.bind != null }
+
+      if (bound.isNotEmpty()) {
+        val nugetExtractApi: TaskProvider<NugetExtractApiTask> =
+          project.tasks.register("nugetExtractApi", NugetExtractApiTask::class.java) { task ->
+            task.group = "nuget"
+            task.description =
+              "Extracts the public API surface of bound NuGet packages into reverse-ir.json"
+            task.assetsFile.set(nugetRestore.flatMap { it.assetsFile })
+            task.boundPackageIds.set(bound.map { it.id })
+            task.packageNameOverrides.set(
+              bound
+                .filter { it.bind!!.packageName != null }
+                .associate { it.id to it.bind!!.packageName!! }
+            )
+            task.namespaceIncludes.set(bound.associate { it.id to it.bind!!.include })
+            task.namespaceExcludes.set(bound.associate { it.id to it.bind!!.exclude })
+            task.namespaceAliases.set(bound.associate { it.id to it.bind!!.aliases })
+            task.reverseIrFile.set(interopDir.map { it.file("reverse-ir.json") })
+          }
+
+        nugetImport.configure { task -> task.dependsOn(nugetExtractApi) }
       }
     }
   }
