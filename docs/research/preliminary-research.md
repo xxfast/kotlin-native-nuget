@@ -1,5 +1,7 @@
 # Prior Research
 
+This is all the work that I did a while back to research how Kotlin/Native interop works with C# currently, without any new tooling to help with the bridging.
+
 ## Summary
 
 While Kotlin/Native tooling can successfully export common declarations to `.dll`, `.h`s and `.def`s, consuming these artifacts in a C# environment is cumbersome and requires additional bridging work to be done.

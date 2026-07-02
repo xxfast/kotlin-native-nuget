@@ -117,16 +117,20 @@
 
 ## Phase 8: Ecosystem — consuming NuGet packages from Kotlin
 
-The inverse of everything above, modeled on the Kotlin CocoaPods plugin (`pod("...")` → cinterop → Kotlin externals): the Gradle plugin resolves a C# NuGet dependency, extracts its public API from the .NET assembly metadata, and generates Kotlin-idiomatic bindings so Kotlin code can call the C# library — and implement interfaces it defines. Because the Kotlin/Native library always runs inside a .NET host process, Kotlin → C# calls need no CLR hosting: the generated C# side registers function-pointer thunks with Kotlin at startup. Builds on the Phase 7 reverse-interop machinery.
+The inverse of everything above, modeled on the Kotlin CocoaPods plugin (`pod("...")` → cinterop → Kotlin externals): the Gradle plugin resolves a C# NuGet dependency, extracts its public API from the .NET assembly metadata, and generates Kotlin-idiomatic bindings so Kotlin code can call the C# library — and implement interfaces it defines. Prior-art research: [CocoaPods plugin architecture](docs/research/cocoapods-plugin-architecture.md), [SPM plugin architectures](docs/research/spm-plugins-architecture.md), and the [synthesis with proposed pipeline + candidate ADRs](docs/research/nuget-plugin-architecture-synthesis.md). Because the Kotlin/Native library always runs inside a .NET host process, Kotlin → C# calls need no CLR hosting: the generated C# side registers function-pointer thunks with Kotlin at startup. Builds on the Phase 7 reverse-interop machinery.
 
-- [ ] Research/ADR: Kotlin → managed C# call mechanism — init-time function-pointer registration table (`[ModuleInitializer]` + `[UnmanagedCallersOnly]` thunks, host process is always .NET) vs CLR hosting (`hostfxr`) for standalone Kotlin hosts
-- [ ] Research/ADR: extracting the C# public API surface from .NET assembly metadata (ECMA-335) at Gradle build time — pure-JVM metadata reader vs a bundled `dotnet` dump tool (adds a .NET SDK prerequisite to the Kotlin-side build, as CocoaPods requires `pod`)
-- [ ] Gradle DSL: declare NuGet dependencies (e.g., `nuget { dependencies { ... } }`), resolve + cache packages from NuGet v3 feeds
+- [ ] Research/ADR: Kotlin → managed C# call mechanism — init-time function-pointer registration table (`[ModuleInitializer]` + `[UnmanagedCallersOnly]` thunks, host process is always .NET); record standalone Kotlin hosts (CLR hosting via `hostfxr`) as explicitly out of scope for v1 (synthesis D3)
+- [ ] Research/ADR: extracting the C# public API surface from .NET assembly metadata (ECMA-335) at Gradle build time — v1 leans on the .NET SDK (precedented by CocoaPods requiring `pod`); pure-JVM reader tracked under Future Improvements (synthesis D1)
+- [ ] Research/ADR: the bridgeable-subset boundary (synthesis D2) — define which C# constructs cannot cross the C ABI (overload sets, `ref struct`/`Span<T>`, open generics, `dynamic`, default interface methods) and fail fast with diagnostics naming each skipped member and why
+- [ ] Gradle DSL: declare NuGet dependencies (e.g., `nuget { dependencies { ... } }`) with opt-in binding selection and namespace/product aliasing — resolve, but do not bind, the transitive closure by default (synthesis D4)
+- [ ] Resolution pipeline: synthetic `.csproj` generation + `dotnet restore` (`nugetGen`/`nugetRestore` tasks), reusing `obj/project.assets.json` as the inter-task manifest; pin `<TargetFramework>` so restore fails fast on packages above the supported floor
+- [ ] Tooling UX: detect `dotnet` on PATH (or `local.properties` override) with explicit install guidance; self-heal retry on transient feed failures (mirror of CocoaPods `pod install --repo-update`)
 - [ ] Reverse IR: model C# classes/interfaces/methods as Kotlin declarations (mirror of CIR)
-- [ ] Generate Kotlin-idiomatic stubs for the C# API surface (v1: static methods, primitives, strings, `void`)
+- [ ] Generate Kotlin-idiomatic stubs for the C# API surface (v1: static methods, primitives, strings, `void`) — model the managed API once, not per Kotlin target; only native payloads vary by the Kotlin-target ↔ RID mapping
 - [ ] Generate C#-side registration shims — thunks + startup registration handing function pointers to Kotlin; Kotlin stubs fail fast if the table is not registered
+- [ ] Umbrella `nugetImport` IDE-sync task aggregating resolve + binding generation (mirror of `podImport`)
 - [ ] Map C# objects as opaque handles in Kotlin (`GCHandle`, mirror of `StableRef`) with lifetime cleanup (Kotlin `Cleaner` → C#-side free export)
-- [ ] Implement a C#-defined interface in Kotlin and pass it back to C# (composes with Phase 7 interface bridging)
+- [ ] Implement a C#-defined interface in Kotlin and pass it back to C# (composes with Phase 7 interface bridging); Kotlin subclassing C# **classes** is explicitly deferred (synthesis D5, Swift-export precedent)
 - [ ] Map C# exceptions → Kotlin exceptions (mirror of ADR-023/029)
 - [ ] Map `Task<T>` → `suspend fun` (mirror of ADR-019)
 - [ ] Map C# collections and generics subsets (mirror of ADR-010/011)
@@ -138,6 +142,7 @@ The inverse of everything above, modeled on the Kotlin CocoaPods plugin (`pod(".
 - [ ] Finalize README with usage instructions and API documentation
 - [ ] Add Writerside documentation
 - [ ] Add a better sample app that demonstrates more complex usage of the bridge (e.g., using generics, collections, async features)
+- [ ] Local-feed dev loop: let a C# consumer iterate against a locally built `.nupkg` (local NuGet feed / `ProjectReference`) before publishing — KMMBridge-style local-vs-published dual flow (synthesis D6)
 - [ ] Publish releases to GitHub Packages
 - [ ] Publish releases to mavenCentral
 
@@ -150,6 +155,8 @@ The inverse of everything above, modeled on the Kotlin CocoaPods plugin (`pod(".
 - Memory leak detection tooling for bridged objects in CI
 - Object identity preservation (caching wrappers) if profiling shows allocation overhead is significant
 - Custom type mappers for dependency types (e.g., `kotlinx.datetime.Instant` → `DateTimeOffset`)
+- Pure-JVM ECMA-335 metadata reader + NuGet v3 client, dropping the .NET SDK prerequisite from the Kotlin-side build (synthesis D1) — no plugin in this space runs prerequisite-free; a genuine ergonomic edge
+- Hand-written C# shim escape hatch for API members outside the auto-bridgeable subset (spm4Kmp's bridge-folder model, synthesis D2)
 - Map KDoc annotations to C# XML docs for better IDE support
 - Expose Kotlin `Job` as a mapped C# type so cancellation can be tied to the job directly (e.g., `job.Cancel()`) instead of requiring a pre-created `CancellationTokenSource`
 - NativeAOT compatibility for the generated bindings (see [ADR-038](docs/adr/038-aot-compilation.md)) — blocked on a reflection-free generics dispatch path; `[DllImport]` → `[LibraryImport]`; AOT publish smoke test in CI
