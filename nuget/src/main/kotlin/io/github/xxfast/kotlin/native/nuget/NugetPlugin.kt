@@ -1,7 +1,10 @@
 package io.github.xxfast.kotlin.native.nuget
 
+import java.lang.reflect.Method
 import org.gradle.api.Plugin
 import org.gradle.api.Project
+import org.gradle.api.file.Directory
+import org.gradle.api.provider.Provider
 import org.jetbrains.kotlin.gradle.dsl.KotlinMultiplatformExtension
 import org.jetbrains.kotlin.gradle.plugin.mpp.KotlinNativeTarget
 import org.jetbrains.kotlin.gradle.plugin.mpp.SharedLibrary
@@ -31,15 +34,19 @@ class NugetPlugin : Plugin<Project> {
         ?: "io.github.xxfast:nuget-processor:$PLUGIN_VERSION"
 
       kotlin.targets.withType(KotlinNativeTarget::class.java).configureEach { target ->
-        if (target.konanTarget.name in KONAN_TO_RID) {
-          val configName = "ksp${target.name.replaceFirstChar { it.uppercase() }}"
-          project.dependencies.add(configName, processorDep)
-        }
+        if (target.konanTarget.name !in KONAN_TO_RID) return@configureEach
+
+        val configName = "ksp${target.name.replaceFirstChar { it.uppercase() }}"
+        project.dependencies.add(configName, processorDep)
       }
 
       project.pluginManager.withPlugin("com.google.devtools.ksp") {
         project.afterEvaluate {
-          val ksp = project.extensions.getByType(
+          val pub: NugetPublishConfig = requireNotNull(extension.publish) {
+            "nuget { publish { ... } } block is required to run packNuget"
+          }
+
+          val ksp: Any = project.extensions.getByType(
             Class.forName("com.google.devtools.ksp.gradle.KspExtension")
           )
 
@@ -48,16 +55,21 @@ class NugetPlugin : Plugin<Project> {
             .flatMap { it.binaries.filterIsInstance<SharedLibrary>() }
             .firstOrNull()?.baseName
 
-          val kspClass = ksp.javaClass
-          val argMethod = kspClass.getMethod("arg", String::class.java, String::class.java)
+          val kspClass: Class<*> = ksp.javaClass
+          val argMethod: Method = kspClass.getMethod("arg", String::class.java, String::class.java)
+
           argMethod.invoke(ksp, "nuget.libraryName", baseName ?: "library")
-          argMethod.invoke(ksp, "nuget.namespace", extension.packageId.get())
-          argMethod.invoke(ksp, "nuget.rootPackage", extension.rootPackage.getOrElse(""))
-          argMethod.invoke(ksp, "nuget.className", "${extension.packageId.get()}Native")
+          argMethod.invoke(ksp, "nuget.namespace", pub.packageId ?: "")
+          argMethod.invoke(ksp, "nuget.rootPackage", pub.rootPackage ?: "")
+          argMethod.invoke(ksp, "nuget.className", "${pub.packageId}Native")
         }
       }
 
       project.afterEvaluate {
+        val pub: NugetPublishConfig = requireNotNull(extension.publish) {
+          "nuget { publish { ... } } block is required to run packNuget"
+        }
+
         val nativeTargets: List<KotlinNativeTarget> =
           kotlin.targets.filterIsInstance<KotlinNativeTarget>()
 
@@ -113,25 +125,23 @@ class NugetPlugin : Plugin<Project> {
           .first { KONAN_TO_RID.containsKey(it.konanTarget.name) }
           .name
 
-        val kspOutputDir = project.layout.buildDirectory
+        val kspOutputDir: Provider<Directory> = project.layout.buildDirectory
           .dir("generated/ksp/$firstTarget/${firstTarget}Main/resources")
 
         project.tasks.register("packNuget", PackNugetTask::class.java)
           .configure { task ->
             task.group = "nuget"
             task.description = "Packages the Kotlin/Native shared library as a NuGet package"
-            task.packageId.convention(extension.packageId)
-            task.packageVersion.convention(extension.version)
-            task.authors.convention(extension.authors)
-            task.packageDescription.convention(extension.description)
+            task.packageId.set(pub.packageId)
+            task.packageVersion.set(pub.version)
+            task.authors.set(pub.authors)
+            task.packageDescription.set(pub.description)
             task.nativeLibDirs.set(libDirs)
             task.nativeLibFiles.from(libDirs.values.map { project.fileTree(it) })
             task.generatedCsDir.set(kspOutputDir)
             task.outputDir.set(project.layout.buildDirectory.dir("nuget"))
 
-            for (linkTask in linkTasks) {
-              task.dependsOn(linkTask)
-            }
+            linkTasks.forEach { task.dependsOn(it) }
 
             task.dependsOn("kspKotlin${firstTarget.replaceFirstChar { it.uppercase() }}")
           }

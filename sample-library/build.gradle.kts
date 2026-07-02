@@ -31,9 +31,11 @@ kotlin {
 }
 
 nuget {
-  packageId.set("SampleLibrary")
-  version.set("1.0.0")
-  authors.set("xxfast")
-  description.set("A sample Kotlin/Native library packaged as NuGet")
-  rootPackage.set("io.github.xxfast.kotlin.native.nuget.sample")
+  publish {
+    packageId = "SampleLibrary"
+    version = "1.0.0"
+    authors = "xxfast"
+    description = "A sample Kotlin/Native library packaged as NuGet"
+    rootPackage = "io.github.xxfast.kotlin.native.nuget.sample"
+  }
 }
