@@ -88,6 +88,9 @@ Animal animal = oreo;                       // abstract class hierarchy
 
 - JDK 17+
 - Gradle (included via wrapper)
+  - [.NET SDK](https://dotnet.microsoft.com/download) 8.0+ 
+  — **only when consuming NuGet packages from Kotlin** 
+  - Not needed for the forward direction (exporting Kotlin to C#).
 
 ### C# side (consumer)
 
@@ -101,41 +104,13 @@ That's it. Bindings are pre-generated at Kotlin compile time via KSP — no addi
 
 ## Architecture
 
-```
-Gradle Plugin (Kotlin side)          NuGet Package       C# Consumer
-┌─────────────────────────┐     ┌────────────────┐     ┌──────────────┐
-│ Compile Kotlin/Native   │     │ native libs    │     │ Add package  │
-│ KSP → CIR → Interop.cs  │────>│ Interop.cs     │────>│ Build        │
-│ KotlinPoet → Bridges.kt │     └────────────────┘     │ Run          │
-│ Link shared libraries   │                            └──────────────┘
-│ Package as .nupkg *     │
-└─────────────────────────┘     * = not yet implemented
-```
+The Gradle plugin compiles Kotlin/Native, runs KSP to generate the C# bindings and Kotlin bridge
+wrappers, links the shared libraries, and packages everything into a `.nupkg`. The consumer just
+adds the package — bindings are ready at build time, no consumer-side tooling required.
 
-- **Gradle plugin** compiles Kotlin/Native, runs KSP to generate C# bindings (via CIR model) and Kotlin bridge wrappers (via KotlinPoet), links shared libraries, and packages everything.
-- **NuGet package** ships native libs + pre-generated `Interop.cs`. No consumer-side tooling required.
-- **Consumer** just includes the package — bindings are ready at build time.
-
-### Runtime call flow
-
-Once packaged, calls cross the C ABI in **both** directions at runtime:
-
-```
-          C# Consumer                               Kotlin / Native        
-┌─────────────────────────────┐             ┌─────────────────────────────┐
-│ Func<> / Action<> argument  │             │ @CName export               │
-│ pinned via GCHandle         │ --1 call--> │ reinterpret<CFunction<>>    │
-│                             │  (P/Invoke) │ wraps the ptr as a lambda   │
-│                             │             │                             │
-│ your C# delegate is         │ <-2 invoke- │ Kotlin invokes the fn ptr   │
-│ called back (reverse)       │   (fn ptr)  │ inside filter / map / ...   │
-│                             │             │                             │
-│ 3 receives the result       │  <-result-- │ returns a StableRef handle  │
-└─────────────────────────────┘             └─────────────────────────────┘
-```
-
-- **Forward** (all prior phases) — C# calls Kotlin via P/Invoke: a `DllImport` entry point bound to a generated `@CName` export.
-- **Reverse interop** (Phase 7) — C# passes a `Func<>`/`Action<>` as a delegate, pins it with `GCHandle`, and hands it over as a function pointer (`Marshal.GetFunctionPointerForDelegate`). Kotlin `reinterpret`s it to `CPointer<CFunction<…>>` and invokes it — e.g. inside `filter`/`map` — calling back into your C# code. Arguments and results cross as `StableRef` opaque handles. See [ADR-036](docs/adr/036-reverse-interop-mechanism.md).
+Bindings are generated through a mirrored intermediate representation in each direction — **CIR**
+(Kotlin → C#) and **RIR** (C# → Kotlin) — and at runtime calls cross the C ABI both ways. See
+[ARCHITECTURE.md](ARCHITECTURE.md) for the full picture.
 
 ## Supported Features
 
