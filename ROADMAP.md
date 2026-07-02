@@ -103,8 +103,33 @@
   - [ ] Exception propagation from a C# callback into Kotlin (mirror of forward-direction ADR-024/028/029)
   - [ ] `Flow<T>` / suspend lambda (`suspend (T) -> R`) as a function parameter
 - [x] Generate Kotlin wrappers for C# interfaces (callbacks, event handlers) — full interface bridging via N flat function pointers (see [ADR-039](docs/adr/039-interface-bridging.md))
-- [ ] Support implementing C# interfaces in Kotlin and passing them back to C# consumers
-- [ ] Support implementing Kotlin interfaces in C# and passing them to Kotlin producers
+- [ ] Support implementing C# interfaces in Kotlin and passing them back to C# consumers (see [ADR-040](docs/adr/040-interface-return-type-mapping.md))
+  - [ ] Generate concrete handle-backed `sealed class Foo : IFoo` per Kotlin interface (`CirInterfaceClass`)
+  - [ ] Generate Kotlin interface-dispatch exports (`InterfaceExports.kt`: per-property, per-method, `_dispose`)
+  - [ ] Map interface-typed return positions to `IFoo` (`new Foo(handle)` construction, incl. nullable `Foo?` → `IFoo?`)
+  - [ ] Sample API + tests: `Cat.friend: Pet?` / `Cat.befriend(pet: Pet)` (Kotlin-backed `IPet` via `_handle` extraction only)
+- [ ] Support implementing Kotlin interfaces in C# and passing them to Kotlin producers (general, non-subscription interface parameters — needs ADR)
+  - [ ] Interface methods with non-Unit returns — marshal the C# result back to Kotlin through the function pointer (deferred from ADR-039; `IPet.Speak(): string` needs this)
+  - [ ] Interface properties as getter function pointers (deferred from ADR-039; `IPet.Name` needs this)
+  - [ ] Runtime dispatch at interface parameter positions: Kotlin-backed wrapper (`_handle`) vs C#-implemented object (N-function-pointer bridge)
+  - [ ] Stored lifetime without an `add*/remove*` pair — GCHandle release strategy (Kotlin-side free export / callback registry, ADR-036 Alt 4)
+  - [ ] Round-trip identity: a stored C#-implemented object returned back to C# resolves to the original object instead of double-bridging
+
+## Phase 8: Ecosystem — consuming NuGet packages from Kotlin
+
+The inverse of everything above, modeled on the Kotlin CocoaPods plugin (`pod("...")` → cinterop → Kotlin externals): the Gradle plugin resolves a C# NuGet dependency, extracts its public API from the .NET assembly metadata, and generates Kotlin-idiomatic bindings so Kotlin code can call the C# library — and implement interfaces it defines. Because the Kotlin/Native library always runs inside a .NET host process, Kotlin → C# calls need no CLR hosting: the generated C# side registers function-pointer thunks with Kotlin at startup. Builds on the Phase 7 reverse-interop machinery.
+
+- [ ] Research/ADR: Kotlin → managed C# call mechanism — init-time function-pointer registration table (`[ModuleInitializer]` + `[UnmanagedCallersOnly]` thunks, host process is always .NET) vs CLR hosting (`hostfxr`) for standalone Kotlin hosts
+- [ ] Research/ADR: extracting the C# public API surface from .NET assembly metadata (ECMA-335) at Gradle build time — pure-JVM metadata reader vs a bundled `dotnet` dump tool (adds a .NET SDK prerequisite to the Kotlin-side build, as CocoaPods requires `pod`)
+- [ ] Gradle DSL: declare NuGet dependencies (e.g., `nuget { dependencies { ... } }`), resolve + cache packages from NuGet v3 feeds
+- [ ] Reverse IR: model C# classes/interfaces/methods as Kotlin declarations (mirror of CIR)
+- [ ] Generate Kotlin-idiomatic stubs for the C# API surface (v1: static methods, primitives, strings, `void`)
+- [ ] Generate C#-side registration shims — thunks + startup registration handing function pointers to Kotlin; Kotlin stubs fail fast if the table is not registered
+- [ ] Map C# objects as opaque handles in Kotlin (`GCHandle`, mirror of `StableRef`) with lifetime cleanup (Kotlin `Cleaner` → C#-side free export)
+- [ ] Implement a C#-defined interface in Kotlin and pass it back to C# (composes with Phase 7 interface bridging)
+- [ ] Map C# exceptions → Kotlin exceptions (mirror of ADR-023/029)
+- [ ] Map `Task<T>` → `suspend fun` (mirror of ADR-019)
+- [ ] Map C# collections and generics subsets (mirror of ADR-010/011)
 
 ## Pre-Launch Checklist 
 - [ ] Pin `<LangVersion>` in the generated project so a consumer's newer SDK can't reinterpret generated code under a different language version
