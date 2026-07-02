@@ -126,17 +126,19 @@ The inverse of everything above, modeled on the Kotlin CocoaPods plugin (`pod(".
   - [ ] Local path / `.nupkg` file source for a dependency (dev-loop flow, synthesis D6)
   - [ ] Extension-level shared feed list (`sources { url("...") }`) — v1 supports per-dependency `source` only
   - [ ] Multiple `bind {}` blocks per dependency (distinct namespace groups with different `packageName` values)
-- [ ] Resolution pipeline: synthetic `.csproj` generation + `dotnet restore` (`nugetGen`/`nugetRestore` tasks), reusing `obj/project.assets.json` as the inter-task manifest; pin `<TargetFramework>` so restore fails fast on packages above the supported floor
-- [ ] Tooling UX: detect `dotnet` on PATH (or `local.properties` override) with explicit install guidance; self-heal retry on transient feed failures (mirror of CocoaPods `pod install --repo-update`)
-- [ ] Reverse IR: model C# classes/interfaces/methods as Kotlin declarations (mirror of CIR)
+- [x] Resolution pipeline: synthetic `.csproj` generation + `dotnet restore` (`nugetGen`/`nugetRestore` tasks), reusing `obj/project.assets.json` as the inter-task manifest; pin `<TargetFramework>` (net8.0) so restore fails fast (NU1202) on packages above the supported floor (see [ADR-045](docs/adr/045-nuget-resolution-pipeline.md))
+- [ ] Reverse IR: extract the bound packages' API surface (`nugetExtractApi`, reads `project.assets.json`, ADR-042 extraction) and model C# classes/interfaces/methods as Kotlin declarations (mirror of CIR)
 - [ ] Generate Kotlin-idiomatic stubs for the C# API surface (v1: static methods, primitives, strings, `void`) — model the managed API once, not per Kotlin target; only native payloads vary by the Kotlin-target ↔ RID mapping
 - [ ] Generate C#-side registration shims — thunks + startup registration handing function pointers to Kotlin; Kotlin stubs fail fast if the table is not registered
-- [ ] Umbrella `nugetImport` IDE-sync task aggregating resolve + binding generation (mirror of `podImport`)
-- [ ] Map C# objects as opaque handles in Kotlin (`GCHandle`, mirror of `StableRef`) with lifetime cleanup (Kotlin `Cleaner` → C#-side free export)
-- [ ] Implement a C#-defined interface in Kotlin and pass it back to C# (composes with Phase 7 interface bridging); Kotlin subclassing C# **classes** is explicitly deferred (synthesis D5, Swift-export precedent)
-- [ ] Map C# exceptions → Kotlin exceptions (mirror of ADR-023/029)
-- [ ] Map `Task<T>` → `suspend fun` (mirror of ADR-019)
-- [ ] Map C# collections and generics subsets (mirror of ADR-010/011)
+- [ ] **Phase goal:** consume a bound NuGet package (e.g. `Newtonsoft.Json`) from Kotlin in `sample-library` and exercise it end-to-end from `sample-app` (`SampleApp.Tests` round-trip)
+  - [ ] Umbrella `nugetImport` IDE-sync task aggregating resolve + binding generation (mirror of `podImport`)
+  - [ ] Tooling UX: detect `dotnet` on PATH (or `local.properties` override) with explicit install guidance; self-heal retry on transient feed failures (mirror of CocoaPods `pod install --repo-update`)
+- [ ] Post-goal: expand the bridgeable subset beyond v1
+  - [ ] Map C# objects as opaque handles in Kotlin (`GCHandle`, mirror of `StableRef`) with lifetime cleanup (Kotlin `Cleaner` → C#-side free export)
+  - [ ] Implement a C#-defined interface in Kotlin and pass it back to C# (composes with Phase 7 interface bridging); Kotlin subclassing C# **classes** is explicitly deferred (synthesis D5, Swift-export precedent)
+  - [ ] Map C# exceptions → Kotlin exceptions (mirror of ADR-023/029)
+  - [ ] Map `Task<T>` → `suspend fun` (mirror of ADR-019)
+  - [ ] Map C# collections and generics subsets (mirror of ADR-010/011)
 
 ## Pre-Launch Checklist 
 - [ ] Pin `<LangVersion>` in the generated project so a consumer's newer SDK can't reinterpret generated code under a different language version

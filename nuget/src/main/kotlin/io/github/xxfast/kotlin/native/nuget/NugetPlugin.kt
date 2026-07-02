@@ -1,13 +1,14 @@
 package io.github.xxfast.kotlin.native.nuget
 
-import java.lang.reflect.Method
 import org.gradle.api.Plugin
 import org.gradle.api.Project
 import org.gradle.api.file.Directory
 import org.gradle.api.provider.Provider
+import org.gradle.api.tasks.TaskProvider
 import org.jetbrains.kotlin.gradle.dsl.KotlinMultiplatformExtension
 import org.jetbrains.kotlin.gradle.plugin.mpp.KotlinNativeTarget
 import org.jetbrains.kotlin.gradle.plugin.mpp.SharedLibrary
+import java.lang.reflect.Method
 
 private const val PLUGIN_VERSION = "0.1.0"
 
@@ -24,7 +25,7 @@ class NugetPlugin : Plugin<Project> {
     val extension: NugetExtension =
       project.extensions.create("nuget", NugetExtension::class.java)
 
-    project.pluginManager.withPlugin("org.jetbrains.kotlin.multiplatform") {
+    project.pluginManager.withPlugin("org.jetbrains.kotlin.multiplatform") { _ ->
       project.pluginManager.apply("com.google.devtools.ksp")
 
       val kotlin: KotlinMultiplatformExtension =
@@ -40,8 +41,8 @@ class NugetPlugin : Plugin<Project> {
         project.dependencies.add(configName, processorDep)
       }
 
-      project.pluginManager.withPlugin("com.google.devtools.ksp") {
-        project.afterEvaluate {
+      project.pluginManager.withPlugin("com.google.devtools.ksp") { _ ->
+        project.afterEvaluate { _ ->
           val pub: NugetPublishConfig = requireNotNull(extension.publish) {
             "nuget { publish { ... } } block is required to run packNuget"
           }
@@ -65,7 +66,7 @@ class NugetPlugin : Plugin<Project> {
         }
       }
 
-      project.afterEvaluate {
+      project.afterEvaluate { _ ->
         val pub: NugetPublishConfig = requireNotNull(extension.publish) {
           "nuget { publish { ... } } block is required to run packNuget"
         }
@@ -145,6 +146,58 @@ class NugetPlugin : Plugin<Project> {
 
             task.dependsOn("kspKotlin${firstTarget.replaceFirstChar { it.uppercase() }}")
           }
+      }
+    }
+
+    project.afterEvaluate { _ ->
+      val deps: List<NugetDependency> = extension.dependencies
+      if (deps.isEmpty()) return@afterEvaluate
+
+      val interopDir: Provider<Directory> = project.layout.buildDirectory.dir("nuget-interop")
+
+      val kotlin: KotlinMultiplatformExtension? =
+        project.extensions.findByType(KotlinMultiplatformExtension::class.java)
+
+      val rids: List<String> = kotlin
+        ?.targets
+        ?.filterIsInstance<KotlinNativeTarget>()
+        ?.filter { it.konanTarget.name in KONAN_TO_RID }
+        ?.mapNotNull { KONAN_TO_RID[it.konanTarget.name] }
+        ?: emptyList()
+
+      val nugetGen: TaskProvider<NugetGenTask> =
+        project.tasks.register("nugetGen", NugetGenTask::class.java) { task ->
+          task.group = "nuget"
+          task.description =
+            "Generates the synthetic interop.csproj for NuGet dependency resolution"
+          val versions: Map<String, String> = deps
+            .filter { it.version != null }
+            .associate { it.id to it.version!! }
+
+          val sources: Map<String, String> = deps
+            .filter { it.source != null }
+            .associate { it.id to it.source!! }
+
+          task.dependencyIds.set(deps.map { it.id })
+          task.dependencyVersions.set(versions)
+          task.dependencySources.set(sources)
+          task.targetFramework.set("net8.0")
+          task.runtimeIdentifiers.set(rids)
+          task.csprojFile.set(interopDir.map { it.file("interop.csproj") })
+        }
+
+      val nugetRestore: TaskProvider<NugetRestoreTask> =
+        project.tasks.register("nugetRestore", NugetRestoreTask::class.java) { task ->
+          task.group = "nuget"
+          task.description = "Runs dotnet restore to download declared NuGet packages"
+          task.csprojFile.set(nugetGen.flatMap { it.csprojFile })
+          task.assetsFile.set(interopDir.map { it.file("obj/project.assets.json") })
+        }
+
+      project.tasks.register("nugetImport") { task ->
+        task.group = "nuget"
+        task.description = "IDE-sync umbrella task: resolve NuGet dependencies"
+        task.dependsOn(nugetRestore)
       }
     }
   }
