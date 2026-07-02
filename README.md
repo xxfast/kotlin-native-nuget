@@ -27,11 +27,13 @@ kotlin {
 }
 
 nuget {
-  packageId.set("MyCatLib")
-  version.set("1.0.0")
-  authors.set("yourname")
-  description.set("My Kotlin/Native library")
-  rootPackage.set("com.example.cats")
+  publish {
+    packageId = "MyCatLib"
+    version = "1.0.0"
+    authors = "yourname"
+    description = "My Kotlin/Native library"
+    rootPackage = "com.example.cats"
+  }
 }
 ```
 
