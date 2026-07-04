@@ -133,7 +133,7 @@ The inverse of everything above, modeled on the Kotlin CocoaPods plugin (`pod(".
   - [x] `NugetExtractApiTask` + `NugetPlugin` wiring (registered only when a dependency has a `bind {}` block; `nugetImport` `dependsOn`)
   - [x] `nuget-metadata-reader/` C# console app — `MetadataReader` extraction + ADR-043 subset filter + `reverse-ir.json` emission
   - [x] Wire the task action to the metadata reader subprocess (end-to-end extraction; dotnet-gated integration test against `Newtonsoft.Json`)
-  - [ ] Per-package namespace include/exclude at the reader CLI (v1 flattens all bound packages' filters into one global `--include`/`--exclude` list)
+  - [x] Per-package namespace include/exclude at the reader CLI — filters emitted inline per `--package` triple (stateful CLI parsing), fixing the cross-package flattening bug (see [ADR-047](docs/adr/047-per-package-namespace-filters-at-reader-cli.md))
 - [ ] Generate Kotlin-idiomatic stubs for the C# API surface (v1: static methods, primitives, strings, `void`) — model the managed API once, not per Kotlin target; only native payloads vary by the Kotlin-target ↔ RID mapping
 - [ ] Generate C#-side registration shims — thunks + startup registration handing function pointers to Kotlin; Kotlin stubs fail fast if the table is not registered
 - [ ] **Phase goal:** consume a bound NuGet package (e.g. `Newtonsoft.Json`) from Kotlin in `sample-library` and exercise it end-to-end from `sample-app` (`SampleApp.Tests` round-trip)

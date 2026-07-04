@@ -26,23 +26,23 @@ internal static class Program
 
         var assemblies = new List<RirAssembly>();
 
-        foreach (var (packageId, dllPath) in parsed.Packages)
+        foreach (var pkg in parsed.Packages)
         {
-            if (!File.Exists(dllPath))
+            if (!File.Exists(pkg.DllPath))
             {
-                Console.Error.WriteLine($"error: DLL not found: {dllPath}");
+                Console.Error.WriteLine($"error: DLL not found: {pkg.DllPath}");
                 return 1;
             }
 
             try
             {
                 var assembly = AssemblyExtractor.Extract(
-                    packageId, dllPath, parsed.Includes, parsed.Excludes);
+                    pkg.PackageId, pkg.DllPath, pkg.Includes, pkg.Excludes);
                 assemblies.Add(assembly);
             }
             catch (Exception ex)
             {
-                Console.Error.WriteLine($"error: failed to read '{dllPath}': {ex.Message}");
+                Console.Error.WriteLine($"error: failed to read '{pkg.DllPath}': {ex.Message}");
                 return 1;
             }
         }
@@ -58,15 +58,28 @@ internal static class Program
 // CLI argument parsing
 // ---------------------------------------------------------------------------
 
-internal sealed class CliArgs
+internal sealed class PackageSpec
 {
-    public List<(string PackageId, string DllPath)> Packages { get; } = new();
+    public string PackageId { get; }
+    public string DllPath { get; }
     public List<string> Includes { get; } = new();
     public List<string> Excludes { get; } = new();
+
+    public PackageSpec(string packageId, string dllPath)
+    {
+        PackageId = packageId;
+        DllPath = dllPath;
+    }
+}
+
+internal sealed class CliArgs
+{
+    public List<PackageSpec> Packages { get; } = new();
 
     public static CliArgs? Parse(string[] args)
     {
         var result = new CliArgs();
+        PackageSpec? current = null;
         int i = 0;
 
         while (i < args.Length)
@@ -75,20 +88,21 @@ internal sealed class CliArgs
             {
                 case "--package":
                     if (i + 2 >= args.Length) return null;
-                    result.Packages.Add((args[i + 1], args[i + 2]));
+                    if (current is not null) result.Packages.Add(current);
+                    current = new PackageSpec(args[i + 1], args[i + 2]);
                     i += 3;
                     break;
 
                 case "--include":
                     i++;
                     while (i < args.Length && !args[i].StartsWith("--"))
-                        result.Includes.Add(args[i++]);
+                        current!.Includes.Add(args[i++]);
                     break;
 
                 case "--exclude":
                     i++;
                     while (i < args.Length && !args[i].StartsWith("--"))
-                        result.Excludes.Add(args[i++]);
+                        current!.Excludes.Add(args[i++]);
                     break;
 
                 default:
@@ -97,6 +111,7 @@ internal sealed class CliArgs
             }
         }
 
+        if (current is not null) result.Packages.Add(current);
         if (result.Packages.Count == 0) return null;
         return result;
     }

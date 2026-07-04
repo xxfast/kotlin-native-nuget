@@ -46,10 +46,12 @@ abstract class NugetExtractApiTask : DefaultTask() {
 
     dllPaths.forEach { (packageId, paths) ->
       paths.forEach { path ->
-        if (!File(path).exists()) throw GradleException(
-          "[nuget] DLL not found at '$path' (package '$packageId'). " +
-            "The global NuGet cache may have been cleared — re-run nugetRestore to re-download."
-        )
+        if (!File(path).exists()) {
+          throw GradleException(
+            "[nuget] DLL not found at '$path' (package '$packageId'). " +
+              "The global NuGet cache may have been cleared — re-run nugetRestore to re-download."
+          )
+        }
       }
     }
 
@@ -61,10 +63,11 @@ abstract class NugetExtractApiTask : DefaultTask() {
     val toolDir: File = temporaryDir.resolve("metadata-reader")
     unpackMetadataReader(toolDir, javaClass.classLoader)
 
-    val includes: List<String> = namespaceIncludes.get().values.flatten()
-    val excludes: List<String> = namespaceExcludes.get().values.flatten()
-
-    val cmd: List<String> = metadataReaderCommand(dotnet, toolDir, dllPaths, includes, excludes)
+    val cmd: List<String> = metadataReaderCommand(
+      dotnet, toolDir, dllPaths,
+      namespaceIncludes.get(),
+      namespaceExcludes.get(),
+    )
 
     val stdout = ByteArrayOutputStream()
     val stderr = ByteArrayOutputStream()
@@ -75,11 +78,13 @@ abstract class NugetExtractApiTask : DefaultTask() {
       spec.isIgnoreExitValue = true
     }
 
-    if (result.exitValue != 0) throw GradleException(
-      "[nuget] metadata reader failed (exit code ${result.exitValue}).\n" +
-        stderr.toString().trimEnd() + "\n\n" +
-        "Check that the NuGet DLLs are valid and re-run nugetRestore if paths are missing."
-    )
+    if (result.exitValue != 0) {
+      throw GradleException(
+        "[nuget] metadata reader failed (exit code ${result.exitValue}).\n" +
+          stderr.toString().trimEnd() + "\n\n" +
+          "Check that the NuGet DLLs are valid and re-run nugetRestore if paths are missing."
+      )
+    }
 
     val out: File = reverseIrFile.get().asFile
     out.parentFile.mkdirs()
@@ -115,8 +120,8 @@ internal fun metadataReaderCommand(
   dotnet: String,
   readerProjectDir: File,
   dllPaths: Map<String, List<String>>,
-  includes: List<String>,
-  excludes: List<String>,
+  includes: Map<String, List<String>>,
+  excludes: Map<String, List<String>>,
 ): List<String> = buildList {
   add(dotnet)
   add("run")
@@ -124,18 +129,20 @@ internal fun metadataReaderCommand(
   add(readerProjectDir.absolutePath)
   add("--")
   dllPaths.forEach { (id, paths) ->
+    val packageIncludes: List<String> = includes[id] ?: emptyList()
+    val packageExcludes: List<String> = excludes[id] ?: emptyList()
     paths.forEach { path ->
       add("--package")
       add(id)
       add(path)
+      if (packageIncludes.isNotEmpty()) {
+        add("--include")
+        addAll(packageIncludes)
+      }
+      if (packageExcludes.isNotEmpty()) {
+        add("--exclude")
+        addAll(packageExcludes)
+      }
     }
-  }
-  if (includes.isNotEmpty()) {
-    add("--include")
-    addAll(includes)
-  }
-  if (excludes.isNotEmpty()) {
-    add("--exclude")
-    addAll(excludes)
   }
 }

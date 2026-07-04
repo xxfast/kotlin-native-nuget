@@ -35,8 +35,8 @@ class NugetExtractApiIntegrationTest {
       dotnet = dotnet,
       readerProjectDir = readerProjectDir,
       dllPaths = dllPaths,
-      includes = emptyList(),
-      excludes = emptyList(),
+      includes = emptyMap(),
+      excludes = emptyMap(),
     )
     val process: Process = ProcessBuilder(cmd).redirectErrorStream(false).start()
     val stdout: String = process.inputStream.bufferedReader().readText()
@@ -72,7 +72,11 @@ class NugetExtractApiIntegrationTest {
     val restoreOutput: String = restoreProcess.inputStream.bufferedReader().readText()
     val restoreExit: Int = restoreProcess.waitFor()
 
-    assertEquals(0, restoreExit, "dotnet restore must succeed for Newtonsoft.Json 13.0.3\n$restoreOutput")
+    assertEquals(
+      0,
+      restoreExit,
+      "dotnet restore must succeed for Newtonsoft.Json 13.0.3\n$restoreOutput",
+    )
 
     // 2. deriveDllPaths to locate the DLL
     val assetsFile = File(restoreDir, "obj/project.assets.json")
@@ -106,7 +110,8 @@ class NugetExtractApiIntegrationTest {
       "namespace 'Newtonsoft.Json' must be present, found: $namespaces",
     )
 
-    val newtonsoftNs: RirNamespace = file.assemblies[0].namespaces.first { it.name == "Newtonsoft.Json" }
+    val newtonsoftNs: RirNamespace = file.assemblies[0].namespaces
+      .first { it.name == "Newtonsoft.Json" }
     val typeNames: List<String> = newtonsoftNs.types.map { it.name }
     assertTrue(
       typeNames.contains("JsonConvert"),
