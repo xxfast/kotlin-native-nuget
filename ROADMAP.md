@@ -134,18 +134,67 @@ The inverse of everything above, modeled on the Kotlin CocoaPods plugin (`pod(".
   - [x] `nuget-metadata-reader/` C# console app — `MetadataReader` extraction + ADR-043 subset filter + `reverse-ir.json` emission
   - [x] Wire the task action to the metadata reader subprocess (end-to-end extraction; dotnet-gated integration test against `Newtonsoft.Json`)
   - [x] Per-package namespace include/exclude at the reader CLI — filters emitted inline per `--package` triple (stateful CLI parsing), fixing the cross-package flattening bug (see [ADR-047](docs/adr/047-per-package-namespace-filters-at-reader-cli.md))
-- [x] Generate Kotlin-idiomatic stubs for the C# API surface (v1: static methods, primitives, strings, `void`) — `object`-per-type stubs, two-file split, `nativeMain` wiring; model the managed API once, not per Kotlin target; only native payloads vary by the Kotlin-target ↔ RID mapping (see [ADR-048](docs/adr/048-kotlin-stub-generation-from-reverse-ir.md))
-  - [ ] Generate stubs for static C# properties (getter/setter, v1-mappable types) — deferred from stub-gen v1 for scope only; straightforward extension of the same function-pointer pattern (see [ADR-048](docs/adr/048-kotlin-stub-generation-from-reverse-ir.md))
+- [x] Generate Kotlin-idiomatic stubs for the C# API surface (v1: static methods, primitives, strings, `void`) — `object`-per-type stubs, two-file split, `nativeMain` wiring; model the managed API once, not per Kotlin target; only native payloads vary by the Kotlin-target ↔ RID mapping (see [ADR-048](docs/adr/048-kotlin-stub-generation-from-reverse-ir.md)); static properties deferred to Phase 9
 - [ ] Generate C#-side dregistration shims — thunks + startup registration handing function pointers to Kotlin; Kotlin stubs fail fast if the table is not registered (contract fixed by [ADR-048](docs/adr/048-kotlin-stub-generation-from-reverse-ir.md): export name `nuget_{ns}_{type}_register`, one `COpaquePointer` per method in `reverse-ir.json` order, `Marshal.StringToCoTaskMemUTF8` for string returns)
 - [ ] **Phase goal:** consume a bound NuGet package (e.g. `Newtonsoft.Json`) from Kotlin in `sample-library` and exercise it end-to-end from `sample-app` (`SampleApp.Tests` round-trip)
   - [ ] Umbrella `nugetImport` IDE-sync task aggregating resolve + binding generation (mirror of `podImport`)
   - [ ] Tooling UX: detect `dotnet` on PATH (or `local.properties` override) with explicit install guidance; self-heal retry on transient feed failures (mirror of CocoaPods `pod install --repo-update`)
-- [ ] Post-goal: expand the bridgeable subset beyond v1
-  - [ ] Map C# objects as opaque handles in Kotlin (`GCHandle`, mirror of `StableRef`) with lifetime cleanup (Kotlin `Cleaner` → C#-side free export)
-  - [ ] Implement a C#-defined interface in Kotlin and pass it back to C# (composes with Phase 7 interface bridging); Kotlin subclassing C# **classes** is explicitly deferred (synthesis D5, Swift-export precedent)
-  - [ ] Map C# exceptions → Kotlin exceptions (mirror of ADR-023/029)
-  - [ ] Map `Task<T>` → `suspend fun` (mirror of ADR-019)
-  - [ ] Map C# collections and generics subsets (mirror of ADR-010/011)
+Post-goal expansion of the bridgeable subset is broken out into Phases 9–13 below, mirroring the forward-direction arc (Phase 3 → 7): basic types, rich types, exceptions, async, then bidirectional contracts.
+
+## Phase 9: Reverse basic type support — C# objects in Kotlin
+
+Mirror of Phase 3. Moves the reverse bridge beyond v1 static methods: C# objects become Kotlin classes backed by opaque handles, over the same ADR-041 registration table. All constructs here are already present in `reverse-ir.json` (ADR-046) or are small extraction additions — this phase is primarily stub-gen + shim-gen coverage, relaxing the ADR-043 v1 ceiling construct by construct.
+
+- [ ] Map C# objects as opaque handles in Kotlin (`GCHandle`, mirror of `StableRef` / ADR-003) — needs ADR: handle representation, wrapper identity semantics
+  - [ ] Lifetime cleanup: Kotlin `Cleaner` → C#-side free export (mirror of the forward `IDisposable` pattern; decide `Cleaner`-only vs also explicit `close()` in the ADR)
+- [ ] Map instance constructors (`new Foo(...)` → Kotlin constructor or factory function)
+- [ ] Map instance methods and instance properties (v1-mappable parameter/return types first)
+- [ ] Map static C# properties (getter/setter, v1-mappable types) — deferred from stub-gen v1 for scope only; straightforward extension of the same function-pointer pattern (see [ADR-048](docs/adr/048-kotlin-stub-generation-from-reverse-ir.md))
+- [ ] Map C# enums → Kotlin `enum class` (mirror of ADR-006)
+- [ ] Map nullable reference type annotations → Kotlin `T?` (`NullableAttribute` in metadata; needs ADR — what un-annotated legacy assemblies default to)
+- [ ] Map C# structs (value types) — blittable pass-by-value vs boxed handle (needs ADR, mirror of ADR-014)
+- [ ] Overload sets: revisit the ADR-043 exclusion with a deterministic disambiguation scheme — Kotlin *has* overloading, so the ceiling is only export-symbol uniqueness (mirror of ADR-034's collision rule, inverted)
+
+## Phase 10: Reverse rich type support
+
+Mirror of Phase 4: generics, collections, delegates, and the C#-specific surface sugar that has a direct Kotlin idiom.
+
+- [ ] Map closed constructed generics (`List<int>`, `Dictionary<string, T>` at concrete use sites) — the reverse of type-erased-bridge + typed variants (mirror of ADR-010; needs ADR — open generic *types* stay excluded per ADR-043)
+- [ ] Map C# collections → Kotlin collections (`IReadOnlyList<T>` → `List<T>`, `IDictionary<K,V>` → `MutableMap<K,V>`, eager copy; mirror of ADR-011)
+- [ ] Map delegate parameters (`Func<>` / `Action<>` / custom delegates) → Kotlin function types (builds directly on the ADR-036 reverse machinery, direction inverted)
+- [ ] Map default parameter values → Kotlin default arguments (constants are in metadata)
+- [ ] Map C# extension methods → Kotlin extension functions
+- [ ] Map indexers → Kotlin `operator fun get`/`set`
+- [ ] Map operator overloads → Kotlin operator functions (where a Kotlin operator exists; skip + warn otherwise per ADR-043 diagnostics)
+- [ ] Map `params` arrays → `vararg`
+- [ ] `ref` / `out` parameters — decide mapping (multi-value return data class) or document as permanently excluded (needs ADR)
+
+## Phase 11: Reverse exception handling
+
+Mirror of Phase 5. Any managed call can throw; until this phase, an escaping C# exception at an `[UnmanagedCallersOnly]` boundary is fatal — so this lands before async widens the call surface.
+
+- [ ] Catch managed exceptions in registration thunks and propagate across the ABI as Kotlin exceptions (mirror of ADR-023/024)
+- [ ] Map core .NET exceptions to Kotlin analogs (`ArgumentException` → `IllegalArgumentException` etc. — ADR-029's table, reversed)
+- [ ] Propagate the .NET stack trace on the Kotlin exception (mirror of ADR-027)
+- [ ] Map `InnerException` → Kotlin `cause` chain (mirror of ADR-028)
+- [ ] Propagate property accessor and constructor exceptions (mirror of ADR-030/031)
+
+## Phase 12: Reverse async support
+
+Mirror of Phase 6.
+
+- [ ] Map `Task` / `Task<T>` → `suspend fun` (mirror of ADR-019; completion callback over the ABI, no CLR hosting needed per ADR-041)
+- [ ] Wire coroutine cancellation → `CancellationToken` (mirror of ADR-022, direction inverted)
+- [ ] Map `IAsyncEnumerable<T>` → `Flow<T>` (mirror of ADR-026)
+- [ ] Map C# events → Kotlin (`Flow<T>` or listener + `Cleaner`-scoped subscription; no forward-direction mirror exists — needs ADR, builds on ADR-037 stored-callback machinery)
+
+## Phase 13: Reverse bidirectional — implementing C# contracts in Kotlin
+
+Mirror of Phase 7, composed with its machinery.
+
+- [ ] Implement a C#-defined interface in Kotlin and pass it back to C# (composes with ADR-039 interface bridging + ADR-040; synthesis D5)
+- [ ] Pass Kotlin lambdas where a C# API stores the delegate (lifetime beyond the call — mirror of ADR-037)
+- [ ] Kotlin subclassing C# **classes** — explicitly deferred, revisit only with a concrete use case (synthesis D5, Swift-export precedent)
 
 ## Pre-Launch Checklist 
 - [ ] Pin `<LangVersion>` in the generated project so a consumer's newer SDK can't reinterpret generated code under a different language version
