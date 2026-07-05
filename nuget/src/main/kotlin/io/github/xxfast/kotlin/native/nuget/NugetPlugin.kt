@@ -222,6 +222,44 @@ class NugetPlugin : Plugin<Project> {
           }
 
         nugetImport.configure { task -> task.dependsOn(nugetExtractApi) }
+
+        val nugetGenerateBindings: TaskProvider<NugetGenerateBindingsTask> =
+          project.tasks.register(
+            "nugetGenerateBindings",
+            NugetGenerateBindingsTask::class.java,
+          ) { task ->
+            task.group = "nuget"
+            task.description =
+              "Generates Kotlin stubs and the C# registration contract from reverse-ir.json"
+            task.reverseIrFile.set(nugetExtractApi.flatMap { it.reverseIrFile })
+            task.packageNameOverrides.set(
+              bound
+                .filter { it.bind!!.packageName != null }
+                .associate { it.id to it.bind!!.packageName!! }
+            )
+            task.namespaceAliases.set(bound.associate { it.id to it.bind!!.aliases })
+            task.kotlinOutputDir.set(interopDir.map { it.dir("kotlin") })
+          }
+
+        nugetImport.configure { task -> task.dependsOn(nugetGenerateBindings) }
+
+        if (kotlin != null) {
+          kotlin.sourceSets.findByName("nativeMain")?.kotlin?.srcDir(
+            nugetGenerateBindings.flatMap { task ->
+              task.kotlinOutputDir.map { it.dir("nativeMain") }
+            }
+          )
+
+          for (target in kotlin.targets.filterIsInstance<KotlinNativeTarget>()) {
+            val rid: String = KONAN_TO_RID[target.konanTarget.name] ?: continue
+            val subdir: String = if (rid.startsWith("win-")) "mingwMain" else "posixMain"
+            kotlin.sourceSets.findByName("${target.name}Main")?.kotlin?.srcDir(
+              nugetGenerateBindings.flatMap { task ->
+                task.kotlinOutputDir.map { it.dir(subdir) }
+              }
+            )
+          }
+        }
       }
     }
   }
