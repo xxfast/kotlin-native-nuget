@@ -213,7 +213,13 @@ internal static class AssemblyExtractor
         foreach (var handle in typeDef.GetMethods())
         {
             var method = mr.GetMethodDefinition(handle);
-            if ((method.Attributes & System.Reflection.MethodAttributes.Public) == 0) continue;
+            // MethodAttributes.Public (0x6) lives inside the 3-bit MemberAccessMask (0x7); testing
+            // `& Public` for non-zero also matches Assembly (0x3, internal) and Family (0x4,
+            // protected), since both AND to a non-zero value against 0x6. Must mask first, then
+            // compare equality against Public — otherwise internal/protected methods leak through
+            // as if they were public.
+            if ((method.Attributes & System.Reflection.MethodAttributes.MemberAccessMask)
+                != System.Reflection.MethodAttributes.Public) continue;
 
             // Skip property accessors (get_X, set_X) — handled via properties.
             if ((method.Attributes & System.Reflection.MethodAttributes.SpecialName) != 0) continue;
@@ -265,14 +271,21 @@ internal static class AssemblyExtractor
             if (accessors.Getter.IsNil) continue;
 
             var getterDef = mr.GetMethodDefinition(accessors.Getter);
-            if ((getterDef.Attributes & System.Reflection.MethodAttributes.Public) == 0) continue;
+            // See the matching mask fix above (methods loop) — Public must be tested as the
+            // exact masked value, not as a non-zero AND, or internal/protected getters leak in.
+            if ((getterDef.Attributes & System.Reflection.MethodAttributes.MemberAccessMask)
+                != System.Reflection.MethodAttributes.Public) continue;
 
             var (propTypeRef, propDiagnostic) = TryDecodePropertyType(mr, propDef, propName, typeName);
             if (propTypeRef is not null)
             {
+                // Same masked-equality fix as the getter check above: a non-zero AND against
+                // Public (0x6) also matches Assembly/Family accessors, which would otherwise be
+                // (incorrectly) treated as a public setter.
                 bool isReadOnly = accessors.Setter.IsNil
                     || (mr.GetMethodDefinition(accessors.Setter).Attributes
-                        & System.Reflection.MethodAttributes.Public) == 0;
+                        & System.Reflection.MethodAttributes.MemberAccessMask)
+                        != System.Reflection.MethodAttributes.Public;
                 bool isStatic = (getterDef.Attributes & System.Reflection.MethodAttributes.Static) != 0;
                 properties.Add(new RirProperty(propName, propTypeRef, isReadOnly, isStatic));
             }

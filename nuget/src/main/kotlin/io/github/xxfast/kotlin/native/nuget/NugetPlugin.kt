@@ -1,5 +1,6 @@
 package io.github.xxfast.kotlin.native.nuget
 
+import io.github.xxfast.kotlin.native.nuget.rir.deriveResolvedVersions
 import org.gradle.api.Plugin
 import org.gradle.api.Project
 import org.gradle.api.file.Directory
@@ -25,130 +26,19 @@ class NugetPlugin : Plugin<Project> {
     val extension: NugetExtension =
       project.extensions.create("nuget", NugetExtension::class.java)
 
-    project.pluginManager.withPlugin("org.jetbrains.kotlin.multiplatform") { _ ->
-      project.pluginManager.apply("com.google.devtools.ksp")
-
-      val kotlin: KotlinMultiplatformExtension =
-        project.extensions.getByType(KotlinMultiplatformExtension::class.java)
-
-      val processorDep: Any = project.findProject(":nuget-processor")
-        ?: "io.github.xxfast:nuget-processor:$PLUGIN_VERSION"
-
-      kotlin.targets.withType(KotlinNativeTarget::class.java).configureEach { target ->
-        if (target.konanTarget.name !in KONAN_TO_RID) return@configureEach
-
-        val configName = "ksp${target.name.replaceFirstChar { it.uppercase() }}"
-        project.dependencies.add(configName, processorDep)
-      }
-
-      project.pluginManager.withPlugin("com.google.devtools.ksp") { _ ->
-        project.afterEvaluate { _ ->
-          val pub: NugetPublishConfig = requireNotNull(extension.publish) {
-            "nuget { publish { ... } } block is required to run packNuget"
-          }
-
-          val ksp: Any = project.extensions.getByType(
-            Class.forName("com.google.devtools.ksp.gradle.KspExtension")
-          )
-
-          val baseName: String? = kotlin.targets
-            .filterIsInstance<KotlinNativeTarget>()
-            .flatMap { it.binaries.filterIsInstance<SharedLibrary>() }
-            .firstOrNull()?.baseName
-
-          val kspClass: Class<*> = ksp.javaClass
-          val argMethod: Method = kspClass.getMethod("arg", String::class.java, String::class.java)
-
-          argMethod.invoke(ksp, "nuget.libraryName", baseName ?: "library")
-          argMethod.invoke(ksp, "nuget.namespace", pub.packageId ?: "")
-          argMethod.invoke(ksp, "nuget.rootPackage", pub.rootPackage ?: "")
-          argMethod.invoke(ksp, "nuget.className", "${pub.packageId}Native")
-        }
-      }
-
-      project.afterEvaluate { _ ->
-        val pub: NugetPublishConfig = requireNotNull(extension.publish) {
-          "nuget { publish { ... } } block is required to run packNuget"
-        }
-
-        val nativeTargets: List<KotlinNativeTarget> =
-          kotlin.targets.filterIsInstance<KotlinNativeTarget>()
-
-        val supportedTargets: List<KotlinNativeTarget> =
-          nativeTargets.filter { it.konanTarget.name in KONAN_TO_RID }
-
-        if (supportedTargets.isEmpty()) {
-          project.logger.warn(
-            "w: [nuget] No supported native targets found (expected mingw or macOS). " +
-              "Skipping NuGet plugin for project '${project.name}'."
-          )
-          return@afterEvaluate
-        }
-
-        val libDirs: MutableMap<String, String> = mutableMapOf()
-        val linkTasks: MutableList<Any> = mutableListOf()
-        var baseName: String? = null
-
-        for (target in nativeTargets) {
-          val rid: String = KONAN_TO_RID[target.konanTarget.name] ?: continue
-
-          if (target.konanTarget.name.startsWith("mingw")) {
-            target.binaries.filterIsInstance<SharedLibrary>().forEach { lib ->
-              lib.linkerOpts("-lmsvcrt", "-static-libgcc", "-static-libstdc++")
-            }
-          }
-
-          val sharedLib: SharedLibrary = target.binaries
-            .filterIsInstance<SharedLibrary>()
-            .firstOrNull { it.buildType.name == "RELEASE" }
-            ?: target.binaries
-              .filterIsInstance<SharedLibrary>()
-              .firstOrNull()
-            ?: continue
-
-          libDirs[rid] = sharedLib.outputDirectory.absolutePath
-
-          if (sharedLib.linkTaskProvider.get().enabled) {
-            linkTasks.add(sharedLib.linkTaskProvider)
-          }
-
-          if (baseName == null) {
-            baseName = sharedLib.baseName
-          }
-        }
-
-        if (libDirs.isEmpty()) return@afterEvaluate
-
-        // KSP generates Interop.cs at:
-        // build/generated/ksp/<target>/<target>Main/resources/Interop.cs
-        // Pick the first available target's output
-        val firstTarget: String = nativeTargets
-          .first { KONAN_TO_RID.containsKey(it.konanTarget.name) }
-          .name
-
-        val kspOutputDir: Provider<Directory> = project.layout.buildDirectory
-          .dir("generated/ksp/$firstTarget/${firstTarget}Main/resources")
-
-        project.tasks.register("packNuget", PackNugetTask::class.java)
-          .configure { task ->
-            task.group = "nuget"
-            task.description = "Packages the Kotlin/Native shared library as a NuGet package"
-            task.packageId.set(pub.packageId)
-            task.packageVersion.set(pub.version)
-            task.authors.set(pub.authors)
-            task.packageDescription.set(pub.description)
-            task.nativeLibDirs.set(libDirs)
-            task.nativeLibFiles.from(libDirs.values.map { project.fileTree(it) })
-            task.generatedCsDir.set(kspOutputDir)
-            task.outputDir.set(project.layout.buildDirectory.dir("nuget"))
-
-            linkTasks.forEach { task.dependsOn(it) }
-
-            task.dependsOn("kspKotlin${firstTarget.replaceFirstChar { it.uppercase() }}")
-          }
-      }
-    }
-
+    // ADR-050 Alternative 6: the consume-side (`dependencies { bind {} }`) afterEvaluate block is
+    // registered FIRST — before the KMP-gated publish/packNuget block below — so that, by
+    // registration order, nugetRestore/nugetGenerateShims already exist as TaskProviders by the
+    // time packNuget is configured. This works regardless of whether the KMP plugin is applied
+    // before or after this plugin: Gradle's afterEvaluate callbacks fire in registration order,
+    // and `withPlugin` below either fires synchronously now (if KMP is already applied) or later
+    // when KMP is applied — either way, strictly after this statement has already registered its
+    // own afterEvaluate callback.
+    //
+    // This block intentionally does NOT require the KMP plugin: a project can declare
+    // `nuget { dependencies { ... } }` without Kotlin Multiplatform applied at all (task
+    // registration only; kotlinOutputDir/kotlin source-set wiring below simply no-ops in that
+    // case).
     project.afterEvaluate { _ ->
       val deps: List<NugetDependency> = extension.dependencies
       if (deps.isEmpty()) return@afterEvaluate
@@ -278,22 +168,203 @@ class NugetPlugin : Plugin<Project> {
         nugetImport.configure { task -> task.dependsOn(nugetGenerateShims) }
 
         if (kotlin != null) {
+          // Wired via a Provider computed independently from `interopDir` (NOT chained through
+          // `nugetGenerateBindings.kotlinOutputDir`, e.g.
+          // `nugetGenerateBindings.flatMap { it.kotlinOutputDir... }`) even though both resolve
+          // to the identical path. KSP's Gradle plugin (`KspAATask`)
+          // eagerly resolves the compilation's source directories — including calling
+          // `SourceDirectorySet.srcDirTrees`/`getFiles()` — while computing its OWN task's
+          // dependencies, i.e. before `nugetGenerateBindings` has run. A Provider chained through
+          // a task's own `@OutputDirectory` property trips Gradle's "querying the mapped value of
+          // task '...' before task '...' has completed is not supported" safeguard when read this
+          // way; a plain Provider with no associated producer-task metadata does not. Because this
+          // sidesteps Gradle's automatic task-dependency inference (which relies on that same
+          // producer-task metadata), the `kspKotlin{Target}` dependency is instead added
+          // explicitly below.
+          val kotlinOutputDirLiteral: Provider<Directory> = interopDir.map { it.dir("kotlin") }
+
           kotlin.sourceSets.findByName("nativeMain")?.kotlin?.srcDir(
-            nugetGenerateBindings.flatMap { task ->
-              task.kotlinOutputDir.map { it.dir("nativeMain") }
-            }
+            kotlinOutputDirLiteral.map { it.dir("nativeMain") }
           )
 
           for (target in kotlin.targets.filterIsInstance<KotlinNativeTarget>()) {
             val rid: String = KONAN_TO_RID[target.konanTarget.name] ?: continue
             val subdir: String = if (rid.startsWith("win-")) "mingwMain" else "posixMain"
             kotlin.sourceSets.findByName("${target.name}Main")?.kotlin?.srcDir(
-              nugetGenerateBindings.flatMap { task ->
-                task.kotlinOutputDir.map { it.dir(subdir) }
-              }
+              kotlinOutputDirLiteral.map { it.dir(subdir) }
             )
+
+            // The KSP Gradle plugin names its per-target task `kspKotlin{Target}` (matches the
+            // existing `packNuget` wiring's `task.dependsOn("kspKotlin$firstTarget")` below).
+            // Match by name via `tasks.matching` (not `tasks.named`, which would throw if KSP
+            // hasn't registered that task for this target) so this stays a no-op when absent.
+            val kspTaskName = "kspKotlin${target.name.replaceFirstChar { it.uppercase() }}"
+            project.tasks.matching { it.name == kspTaskName }.configureEach { task ->
+              task.dependsOn(nugetGenerateBindings)
+            }
           }
         }
+      }
+    }
+
+    project.pluginManager.withPlugin("org.jetbrains.kotlin.multiplatform") { _ ->
+      project.pluginManager.apply("com.google.devtools.ksp")
+
+      val kotlin: KotlinMultiplatformExtension =
+        project.extensions.getByType(KotlinMultiplatformExtension::class.java)
+
+      val processorDep: Any = project.findProject(":nuget-processor")
+        ?: "io.github.xxfast:nuget-processor:$PLUGIN_VERSION"
+
+      kotlin.targets.withType(KotlinNativeTarget::class.java).configureEach { target ->
+        if (target.konanTarget.name !in KONAN_TO_RID) return@configureEach
+
+        val configName = "ksp${target.name.replaceFirstChar { it.uppercase() }}"
+        project.dependencies.add(configName, processorDep)
+      }
+
+      project.pluginManager.withPlugin("com.google.devtools.ksp") { _ ->
+        project.afterEvaluate { _ ->
+          // ADR-050 Alternative 6: no longer requireNotNull — a project that declares only
+          // `dependencies { bind {} }` (no `publish {}`) must configure successfully. When
+          // publish is absent there is nothing meaningful to derive these KSP args from; fall
+          // back to empty/placeholder values (harmless: nobody consumes this forward-generation
+          // output without a `publish {}`/`packNuget` in the first place).
+          val pub: NugetPublishConfig? = extension.publish
+
+          val ksp: Any = project.extensions.getByType(
+            Class.forName("com.google.devtools.ksp.gradle.KspExtension")
+          )
+
+          val baseName: String? = kotlin.targets
+            .filterIsInstance<KotlinNativeTarget>()
+            .flatMap { it.binaries.filterIsInstance<SharedLibrary>() }
+            .firstOrNull()?.baseName
+
+          val kspClass: Class<*> = ksp.javaClass
+          val argMethod: Method = kspClass.getMethod("arg", String::class.java, String::class.java)
+
+          argMethod.invoke(ksp, "nuget.libraryName", baseName ?: "library")
+          argMethod.invoke(ksp, "nuget.namespace", pub?.packageId ?: "")
+          argMethod.invoke(ksp, "nuget.rootPackage", pub?.rootPackage ?: "")
+          argMethod.invoke(ksp, "nuget.className", "${pub?.packageId ?: "Library"}Native")
+        }
+      }
+
+      project.afterEvaluate { _ ->
+        // ADR-050 Alternative 6: early-return (not requireNotNull) — a project with no
+        // `publish {}` block simply does not get a `packNuget` task; it may still fully configure
+        // a consume-only (`dependencies { bind {} }`) setup via the block registered above.
+        val pub: NugetPublishConfig = extension.publish ?: return@afterEvaluate
+
+        val nativeTargets: List<KotlinNativeTarget> =
+          kotlin.targets.filterIsInstance<KotlinNativeTarget>()
+
+        val supportedTargets: List<KotlinNativeTarget> =
+          nativeTargets.filter { it.konanTarget.name in KONAN_TO_RID }
+
+        if (supportedTargets.isEmpty()) {
+          project.logger.warn(
+            "w: [nuget] No supported native targets found (expected mingw or macOS). " +
+              "Skipping NuGet plugin for project '${project.name}'."
+          )
+          return@afterEvaluate
+        }
+
+        val libDirs: MutableMap<String, String> = mutableMapOf()
+        val linkTasks: MutableList<Any> = mutableListOf()
+        var baseName: String? = null
+
+        for (target in nativeTargets) {
+          val rid: String = KONAN_TO_RID[target.konanTarget.name] ?: continue
+
+          if (target.konanTarget.name.startsWith("mingw")) {
+            target.binaries.filterIsInstance<SharedLibrary>().forEach { lib ->
+              // -lole32: the reverse-bound `freeManagedString` actual (ADR-048, mingwMain) calls
+              // `platform.windows.CoTaskMemFree`, which is exported from ole32.dll/ole32.lib —
+              // needed whenever a bound dependency has a string-returning bridgeable method.
+              // Harmless to link unconditionally for every mingw target.
+              lib.linkerOpts("-lmsvcrt", "-static-libgcc", "-static-libstdc++", "-lole32")
+            }
+          }
+
+          val sharedLib: SharedLibrary = target.binaries
+            .filterIsInstance<SharedLibrary>()
+            .firstOrNull { it.buildType.name == "RELEASE" }
+            ?: target.binaries
+              .filterIsInstance<SharedLibrary>()
+              .firstOrNull()
+            ?: continue
+
+          libDirs[rid] = sharedLib.outputDirectory.absolutePath
+
+          if (sharedLib.linkTaskProvider.get().enabled) {
+            linkTasks.add(sharedLib.linkTaskProvider)
+          }
+
+          if (baseName == null) {
+            baseName = sharedLib.baseName
+          }
+        }
+
+        if (libDirs.isEmpty()) return@afterEvaluate
+
+        // KSP generates Interop.cs at:
+        // build/generated/ksp/<target>/<target>Main/resources/Interop.cs
+        // Pick the first available target's output
+        val firstTarget: String = nativeTargets
+          .first { KONAN_TO_RID.containsKey(it.konanTarget.name) }
+          .name
+
+        val kspOutputDir: Provider<Directory> = project.layout.buildDirectory
+          .dir("generated/ksp/$firstTarget/${firstTarget}Main/resources")
+
+        // ADR-050 Alternative 6: when this project ALSO declares `dependencies { bind {} }`
+        // (registered by the afterEvaluate block above, which — by registration order — has
+        // already run), merge the reverse-direction shim output into contentFiles/cs/any/ and
+        // pin the bound package(s) at their exact resolved version in the .nuspec
+        // <dependencies> block. Looked up by task name (rather than a shared TaskProvider
+        // variable) because the two afterEvaluate blocks are independent closures.
+        val boundDeps: List<NugetDependency> = extension.dependencies.filter { it.bind != null }
+
+        project.tasks.register("packNuget", PackNugetTask::class.java)
+          .configure { task ->
+            task.group = "nuget"
+            task.description = "Packages the Kotlin/Native shared library as a NuGet package"
+            task.packageId.set(pub.packageId)
+            task.packageVersion.set(pub.version)
+            task.authors.set(pub.authors)
+            task.packageDescription.set(pub.description)
+            task.nativeLibDirs.set(libDirs)
+            task.nativeLibFiles.from(libDirs.values.map { project.fileTree(it) })
+            task.generatedCsDirs.from(kspOutputDir)
+            task.outputDir.set(project.layout.buildDirectory.dir("nuget"))
+
+            linkTasks.forEach { task.dependsOn(it) }
+
+            task.dependsOn("kspKotlin${firstTarget.replaceFirstChar { it.uppercase() }}")
+
+            if (boundDeps.isNotEmpty()) {
+              val nugetGenerateShims: TaskProvider<NugetGenerateShimsTask> =
+                project.tasks.named("nugetGenerateShims", NugetGenerateShimsTask::class.java)
+              val nugetRestore: TaskProvider<NugetRestoreTask> =
+                project.tasks.named("nugetRestore", NugetRestoreTask::class.java)
+
+              val boundIds: Set<String> = boundDeps.map { it.id }.toSet()
+
+              task.generatedCsDirs.from(nugetGenerateShims.flatMap { it.csharpOutputDir })
+              task.dependencyVersions.set(
+                nugetRestore.flatMap { restore ->
+                  restore.assetsFile.map { assetsFile ->
+                    deriveResolvedVersions(assetsFile.asFile.readText(), boundIds)
+                  }
+                }
+              )
+              task.dependsOn(nugetGenerateShims)
+            } else {
+              task.dependencyVersions.set(emptyMap())
+            }
+          }
       }
     }
   }

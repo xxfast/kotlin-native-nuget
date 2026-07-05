@@ -1,5 +1,6 @@
 package io.github.xxfast.kotlin.native.nuget
 
+import io.github.xxfast.kotlin.native.nuget.rir.RirClass
 import io.github.xxfast.kotlin.native.nuget.rir.RirDiagnostic
 import io.github.xxfast.kotlin.native.nuget.rir.RirDiagnosticKind
 import io.github.xxfast.kotlin.native.nuget.rir.RirFile
@@ -174,6 +175,85 @@ class NugetExtractApiIntegrationTest {
     assertNotNull(
       overloadDiagnostics.firstOrNull { it.memberName == "SerializeObject" },
       "SerializeObject must produce a SKIPPED_OVERLOAD_SET diagnostic",
+    )
+  }
+
+  @Test
+  fun `metadata reader excludes internal methods from MimeMapping dll (KnownMimeTypes LookupType)`() {
+    val dotnet: String = findDotnet() ?: return
+
+    // 1. dotnet restore MimeMapping 4.0.0 to a temp dir → real project.assets.json
+    val restoreDir: File = Files.createTempDirectory("nuget-extract-api-mimemapping-test").toFile()
+
+    val csproj: String = generateCsproj(
+      ids = listOf("MimeMapping"),
+      versions = mapOf("MimeMapping" to "4.0.0"),
+      sources = emptyMap(),
+      targetFramework = "net8.0",
+      rids = listOf("win-x64"),
+    )
+
+    val csprojFile = File(restoreDir, "interop.csproj")
+    csprojFile.writeText(csproj)
+
+    val restoreProcess: Process = ProcessBuilder(dotnet, "restore", csprojFile.absolutePath)
+      .directory(restoreDir)
+      .redirectErrorStream(true)
+      .start()
+
+    val restoreOutput: String = restoreProcess.inputStream.bufferedReader().readText()
+    val restoreExit: Int = restoreProcess.waitFor()
+
+    assertEquals(0, restoreExit, "dotnet restore must succeed for MimeMapping 4.0.0\n$restoreOutput")
+
+    // 2. deriveDllPaths to locate the DLL
+    val assetsFile = File(restoreDir, "obj/project.assets.json")
+    assertTrue(assetsFile.exists(), "project.assets.json must exist after restore")
+
+    val dllPaths: Map<String, List<String>> = deriveDllPaths(
+      assetsJson = assetsFile.readText(),
+      packageIds = setOf("MimeMapping"),
+    )
+
+    assertTrue(dllPaths.containsKey("MimeMapping"), "deriveDllPaths must find MimeMapping")
+    val dlls: List<String> = requireNotNull(dllPaths["MimeMapping"])
+    assertTrue(dlls.isNotEmpty(), "at least one DLL must be resolved for MimeMapping")
+
+    // 3. Unpack the bundled metadata reader and invoke it
+    val toolDir: File = Files.createTempDirectory("nuget-metadata-reader-mimemapping-test").toFile()
+    unpackMetadataReader(toolDir, javaClass.classLoader)
+
+    val json: String = runMetadataReader(dotnet, toolDir, dllPaths)
+
+    // 4. Parse the result
+    val file: RirFile = parseReverseIr(json)
+
+    // 5. MimeUtility.GetMimeMapping (public) must be present, and only that method.
+    assertEquals(1, file.assemblies.size)
+    val mimeMappingNs: RirNamespace = file.assemblies[0].namespaces
+      .first { it.name == "MimeMapping" }
+
+    val mimeUtility: RirClass = mimeMappingNs.types.filterIsInstance<RirClass>()
+      .first { it.name == "MimeUtility" }
+    assertEquals(
+      listOf("GetMimeMapping"),
+      mimeUtility.methods.map { it.name },
+      "MimeUtility must expose only the public GetMimeMapping method",
+    )
+
+    // 6. KnownMimeTypes.LookupType is a real but *internal* (non-public) method in the DLL. It
+    // must not leak through the metadata reader's visibility filter — the bug this test pins: a
+    // naive `(attrs & MethodAttributes.Public) != 0` check also matches Assembly/Family
+    // accessibility, since `Public` (0x6) sits inside the 3-bit MemberAccessMask (0x7) and ANDs
+    // non-zero against internal (0x3) and protected (0x4) too. If KnownMimeTypes appears at all
+    // (a consts-only class may still show up with an empty member list), it must expose zero
+    // bridgeable methods.
+    val knownMimeTypes: RirClass? = mimeMappingNs.types.filterIsInstance<RirClass>()
+      .firstOrNull { it.name == "KnownMimeTypes" }
+    assertTrue(
+      knownMimeTypes?.methods?.isEmpty() ?: true,
+      "KnownMimeTypes must not expose any bridgeable methods (LookupType is internal, not " +
+        "public) but found: ${knownMimeTypes?.methods?.map { it.name }}",
     )
   }
 }

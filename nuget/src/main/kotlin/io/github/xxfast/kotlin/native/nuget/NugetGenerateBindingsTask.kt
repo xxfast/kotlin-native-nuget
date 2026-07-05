@@ -172,6 +172,8 @@ private fun bindingsFileContent(
   }
 
   return """
+    |@file:OptIn(kotlinx.cinterop.ExperimentalForeignApi::class)
+    |
     |package $kotlinPkg
     |
     |${imports.joinToString("\n")}
@@ -182,6 +184,12 @@ private fun bindingsFileContent(
     |$fnVars
     |
     |@OptIn(ExperimentalNativeApi::class)
+    |// Must stay public (not internal): @CName is what makes Kotlin/Native emit this as a native
+    |// C export, and internal visibility suppresses that native export entirely. The
+    |// forward-direction (KSP) exporter is the one that must not re-wrap this function into
+    |// another C-ABI export — it does so by skipping every @CName-annotated top-level function
+    |// (see `hasCNameAnnotation()` in nuget-processor's NugetProcessor.kt), not by hiding this
+    |// function from Kotlin visibility.
     |@CName("$exportName")
     |fun $exportName(
     |  $regParams,
@@ -201,7 +209,12 @@ private fun stubFileContent(
   val hasStringParam: Boolean = bridgeable
     .any { m -> m.parameters.any { p -> p.type is RirStringType } }
 
-  val imports: MutableList<String> = mutableListOf()
+  // Always required: every stub method body calls `fn.invoke(...)` on a
+  // `CPointer<CFunction<...>>?` — the `invoke` operator extension is declared in kotlinx.cinterop
+  // and, being an extension function, is not resolved without an explicit import (unqualified
+  // calls otherwise resolve to an unrelated same-named `invoke`, e.g. kotlin.DeepRecursiveFunction,
+  // producing confusing "cannot infer type parameter" errors instead of a missing-import error).
+  val imports: MutableList<String> = mutableListOf("import kotlinx.cinterop.invoke")
   if (hasStringReturn) {
     imports.add("import $INTERNAL_PKG.freeManagedString")
     imports.add("import kotlinx.cinterop.ByteVar")
@@ -217,6 +230,8 @@ private fun stubFileContent(
   val methods: String = bridgeable.joinToString("\n\n  ") { buildStubMethod(cls, it, packageId) }
 
   return buildString {
+    appendLine("@file:OptIn(kotlinx.cinterop.ExperimentalForeignApi::class)")
+    appendLine()
     appendLine("package $kotlinPkg")
     appendLine()
     if (imports.isNotEmpty()) {
@@ -225,7 +240,11 @@ private fun stubFileContent(
     }
     appendLine("// Generated: Kotlin-idiomatic stubs for $packageId.${cls.name}")
     appendLine()
-    appendLine("object ${cls.name} {")
+    // internal (not public): consumable from anywhere else in this same Gradle module (e.g. the
+    // hand-authored sample-library sources that call it), but invisible to the forward-direction
+    // (KSP) exporter's public-API scan — this reverse-bound API must not be re-exported forward
+    // into the packed nupkg's own Interop.cs (see the matching note on the Bindings.kt file).
+    appendLine("internal object ${cls.name} {")
     appendLine()
     appendLine("  $methods")
     append("}")
@@ -303,6 +322,8 @@ private fun buildStubMethod(cls: RirClass, method: RirMethod, packageId: String)
 }
 
 private fun nugetInteropExpect(): String = """
+  |@file:OptIn(kotlinx.cinterop.ExperimentalForeignApi::class)
+  |
   |package $INTERNAL_PKG
   |
   |import kotlinx.cinterop.COpaquePointer
@@ -311,6 +332,8 @@ private fun nugetInteropExpect(): String = """
 """.trimMargin().trim()
 
 private fun nugetInteropMingw(): String = """
+  |@file:OptIn(kotlinx.cinterop.ExperimentalForeignApi::class)
+  |
   |package $INTERNAL_PKG
   |
   |import kotlinx.cinterop.COpaquePointer
@@ -322,6 +345,8 @@ private fun nugetInteropMingw(): String = """
 """.trimMargin().trim()
 
 private fun nugetInteropPosix(): String = """
+  |@file:OptIn(kotlinx.cinterop.ExperimentalForeignApi::class)
+  |
   |package $INTERNAL_PKG
   |
   |import kotlinx.cinterop.COpaquePointer

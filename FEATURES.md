@@ -103,7 +103,7 @@ See [ADR-011](docs/adr/011-collection-type-mapping.md).
 
 ## Consuming NuGet packages (reverse: C# → Kotlin)
 
-The inverse direction — calling a bound C# NuGet dependency from Kotlin. The Gradle plugin resolves the package, extracts its API to `reverse-ir.json`, and generates a Kotlin stub plus the C# registration shim that wires function pointers into the Kotlin/Native library at startup. See [ROADMAP.md](ROADMAP.md) Phase 8 for the not-yet-supported surface.
+The inverse direction — calling a bound C# NuGet dependency from Kotlin. The Gradle plugin resolves the package, extracts its API to `reverse-ir.json`, and generates a Kotlin stub plus the C# registration shim that wires function pointers into the Kotlin/Native library at startup. The whole pipeline is wired end-to-end: `packNuget` produces a real `.nupkg` that merges the reverse shims into `contentFiles` and pins the bound package at its exact resolved version, so a consumer needs only a single `<PackageReference>` (demonstrated by the `sample-library` → `MimeMapping` round trip exercised from `SampleApp.Tests`, [ADR-050](docs/adr/050-end-to-end-packaging-integration.md)). See [ROADMAP.md](ROADMAP.md) Phase 8 for the not-yet-supported surface.
 
 | C#                              | Kotlin                     | Notes                                                                                                                                                              |
 |---------------------------------|----------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------|

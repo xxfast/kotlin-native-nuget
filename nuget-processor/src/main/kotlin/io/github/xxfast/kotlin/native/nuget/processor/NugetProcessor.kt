@@ -58,6 +58,21 @@ import io.github.xxfast.kotlin.native.nuget.processor.exports.addSuspendClassMet
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addSuspendFunctionExports
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addValueClassExports
 
+// A `@kotlin.native.CName`-annotated function is already a C-ABI export by definition (its native
+// export name is fixed by the annotation itself). It must never be picked up by the forward
+// exporter's own top-level-function scan and re-wrapped in another `export_*` C-ABI wrapper: the
+// reverse-direction generator (`NugetGenerateBindingsTask`, ADR-048) emits exactly this shape for
+// its registration functions — `@CName("nuget_..._register") public fun nuget_..._register(...)`
+// — and those raw `COpaquePointer` parameters do not round-trip through this translator, which
+// expects ordinary Kotlin-authored public API. Excluding any `@CName` function here is the general,
+// robust fix: it protects against this exact class of bug for any future generated C export, not
+// just this one registration function.
+private fun KSAnnotated.hasCNameAnnotation(): Boolean =
+  annotations.any { annotation ->
+    val name: String? = annotation.annotationType.resolve().declaration.qualifiedName?.asString()
+    name == "kotlin.native.CName"
+  }
+
 class NugetProcessor(
   private val codeGenerator: CodeGenerator,
   private val logger: KSPLogger,
@@ -82,12 +97,14 @@ class NugetProcessor(
       .filter { it.getVisibility() == Visibility.PUBLIC }
       .filter { it.parentDeclaration == null }
       .filter { it.extensionReceiver == null }
+      .filter { !it.hasCNameAnnotation() }
 
     val extensionFunctions: List<KSFunctionDeclaration> = allDeclarations
       .filterIsInstance<KSFunctionDeclaration>()
       .filter { it.getVisibility() == Visibility.PUBLIC }
       .filter { it.parentDeclaration == null }
       .filter { it.extensionReceiver != null }
+      .filter { !it.hasCNameAnnotation() }
 
     val (suspendFunctions, regularFunctions) = allFunctions
       .filter { it.typeParameters.isEmpty() }

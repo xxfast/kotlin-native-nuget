@@ -38,4 +38,13 @@ nuget {
     description = "A sample Kotlin/Native library packaged as NuGet"
     rootPackage = "io.github.xxfast.kotlin.native.nuget.sample"
   }
+
+  dependencies {
+    dependency("MimeMapping", version = "4.0.0") {
+      bind {
+        packageName = "mimemapping"
+        include("MimeMapping")
+      }
+    }
+  }
 }
