@@ -100,3 +100,12 @@ See [ADR-011](docs/adr/011-collection-type-mapping.md).
 
 > [!NOTE]
 > Hot streams (`SharedFlow`, `StateFlow`), `Flow` parameters, and `Flow` as a generic argument are not yet supported. See [ROADMAP.md](ROADMAP.md) Phase 6.
+
+## Consuming NuGet packages (reverse: C# → Kotlin)
+
+The inverse direction — calling a bound C# NuGet dependency from Kotlin. The Gradle plugin resolves the package, extracts its API to `reverse-ir.json`, and generates a Kotlin stub plus the C# registration shim that wires function pointers into the Kotlin/Native library at startup. See [ROADMAP.md](ROADMAP.md) Phase 8 for the not-yet-supported surface.
+
+| C#                              | Kotlin                     | Notes                                                                                                                                                              |
+|---------------------------------|----------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `static class` (all static methods) | `object`                   | v1: `void`/`string`/primitive params & returns; Kotlin stubs ([ADR-048](docs/adr/048-kotlin-stub-generation-from-reverse-ir.md)) + C# `[UnmanagedCallersOnly]` shims ([ADR-049](docs/adr/049-csharp-registration-shim-generation.md)) |
+| thrown C# exception             | process fast-fail          | v1: thunk has no `try/catch`, exception escapes and terminates the host; graceful propagation deferred to Phase 11 ([ADR-049](docs/adr/049-csharp-registration-shim-generation.md)) |

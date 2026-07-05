@@ -243,6 +243,40 @@ class NugetPlugin : Plugin<Project> {
 
         nugetImport.configure { task -> task.dependsOn(nugetGenerateBindings) }
 
+        // Lazily resolved (not a plain `val`/requireNotNull computed eagerly here): deferring
+        // via project.provider {} means the fail-fast only fires when nativeLibraryName is
+        // actually queried (i.e. when nugetGenerateShims itself runs or is inspected), not for
+        // every project that declares `bind {}` — a project with no `binaries { sharedLib {} }`
+        // configured yet should still be able to configure/evaluate successfully otherwise.
+        val nativeLibraryName: Provider<String> = project.provider {
+          requireNotNull(
+            kotlin
+              ?.targets
+              ?.filterIsInstance<KotlinNativeTarget>()
+              ?.flatMap { it.binaries.filterIsInstance<SharedLibrary>() }
+              ?.firstOrNull()?.baseName
+          ) {
+            "[nuget] No Kotlin/Native shared library binary configured. " +
+              "nuget { dependencies { bind { ... } } } requires a " +
+              "`binaries { sharedLib { ... } }` target to host the registered C# thunks."
+          }
+        }
+
+        val nugetGenerateShims: TaskProvider<NugetGenerateShimsTask> =
+          project.tasks.register(
+            "nugetGenerateShims",
+            NugetGenerateShimsTask::class.java,
+          ) { task ->
+            task.group = "nuget"
+            task.description = "Generates C#-side [UnmanagedCallersOnly] thunks and startup " +
+              "registration shims from reverse-ir.json"
+            task.reverseIrFile.set(nugetExtractApi.flatMap { it.reverseIrFile })
+            task.nativeLibraryName.set(nativeLibraryName)
+            task.csharpOutputDir.set(interopDir.map { it.dir("csharp") })
+          }
+
+        nugetImport.configure { task -> task.dependsOn(nugetGenerateShims) }
+
         if (kotlin != null) {
           kotlin.sourceSets.findByName("nativeMain")?.kotlin?.srcDir(
             nugetGenerateBindings.flatMap { task ->

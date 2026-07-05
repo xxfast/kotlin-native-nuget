@@ -19,12 +19,16 @@ import kotlin.test.assertTrue
  * reader project on first run.
  */
 class NugetExtractApiIntegrationTest {
-  private fun findDotnet(): String? {
-    val process: Process = ProcessBuilder("which", "dotnet").start()
-    val line: String? = process.inputStream.bufferedReader().readLine()?.takeIf { it.isNotBlank() }
-    process.waitFor()
-    return line
-  }
+  // Probe for `dotnet` by running it directly, so the skip works on any OS (a `which`/`where`
+  // shell-out is platform-specific and throws on the wrong platform instead of skipping).
+  private fun findDotnet(): String? = runCatching {
+    ProcessBuilder("dotnet", "--version")
+      .redirectOutput(ProcessBuilder.Redirect.DISCARD)
+      .redirectError(ProcessBuilder.Redirect.DISCARD)
+      .start()
+      .waitFor()
+    "dotnet"
+  }.getOrNull()
 
   private fun runMetadataReader(
     dotnet: String,

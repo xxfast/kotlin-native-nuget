@@ -8,7 +8,9 @@ import io.github.xxfast.kotlin.native.nuget.rir.RirPrimitiveType
 import io.github.xxfast.kotlin.native.nuget.rir.RirStringType
 import io.github.xxfast.kotlin.native.nuget.rir.RirTypeRef
 import io.github.xxfast.kotlin.native.nuget.rir.RirVoidType
+import io.github.xxfast.kotlin.native.nuget.rir.bridgeableStaticMethods
 import io.github.xxfast.kotlin.native.nuget.rir.parseReverseIr
+import io.github.xxfast.kotlin.native.nuget.rir.registrationExportName
 import org.gradle.api.DefaultTask
 import org.gradle.api.file.DirectoryProperty
 import org.gradle.api.file.RegularFileProperty
@@ -44,10 +46,9 @@ fun generateKotlinStubs(
         ?: packageOverride
         ?: assembly.packageId.lowercase().replace('-', '_')
       val pkgPath: String = kotlinPkg.replace('.', '/')
-      val nsSnake: String = namespace.name.replace('.', '_').lowercase()
 
       namespace.types.filterIsInstance<RirClass>().forEach { cls ->
-        val bridgeable: List<RirMethod> = cls.methods.filter { it.isStatic && isV1Bridgeable(it) }
+        val bridgeable: List<RirMethod> = bridgeableStaticMethods(cls)
 
         if (bridgeable.isEmpty()) return@forEach
 
@@ -57,9 +58,7 @@ fun generateKotlinStubs(
         }
         if (hasString) needsInterop = true
 
-        val typeSnake: String = cls.name.toTypeSnake()
-        val exportName: String = if (nsSnake.isEmpty()) "nuget_${typeSnake}_register"
-          else "nuget_${nsSnake}_${typeSnake}_register"
+        val exportName: String = registrationExportName(namespace.name, cls.name)
 
         result.add(GeneratedFile(
           relativePath = "nativeMain/$pkgPath/${cls.name}Bindings.kt",
@@ -89,28 +88,6 @@ fun generateKotlinStubs(
   }
 
   return result
-}
-
-private fun isV1Bridgeable(method: RirMethod): Boolean {
-  if (!isV1Type(method.returnType)) return false
-  return method.parameters.all { isV1Type(it.type) }
-}
-
-private fun isV1Type(type: RirTypeRef): Boolean = when (type) {
-  is RirVoidType -> true
-  is RirStringType -> true
-  is RirPrimitiveType -> type.name in setOf(
-    "bool", "byte", "short", "int", "long", "float", "double", "char",
-  )
-}
-
-// PascalCase type name → lower_snake_case: insert '_' before each uppercase letter
-// after the first, then lowercase. e.g. JsonConvert → json_convert, MathHelper → math_helper
-private fun String.toTypeSnake(): String = buildString {
-  this@toTypeSnake.forEachIndexed { i, c ->
-    if (i > 0 && c.isUpperCase()) append('_')
-    append(c.lowercaseChar())
-  }
 }
 
 // PascalCase method name → camelCase: lowercase the first character only.

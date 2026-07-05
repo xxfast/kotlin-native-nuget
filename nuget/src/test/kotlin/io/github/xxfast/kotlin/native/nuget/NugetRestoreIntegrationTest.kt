@@ -12,12 +12,16 @@ import kotlin.test.assertTrue
  * from PATH. These tests hit the network and the global NuGet cache.
  */
 class NugetRestoreIntegrationTest {
-  private fun findDotnet(): String? {
-    val process: Process = ProcessBuilder("which", "dotnet").start()
-    val line: String? = process.inputStream.bufferedReader().readLine()?.takeIf { it.isNotBlank() }
-    process.waitFor()
-    return line
-  }
+  // Probe for `dotnet` by running it directly, so the skip works on any OS (a `which`/`where`
+  // shell-out is platform-specific and throws on the wrong platform instead of skipping).
+  private fun findDotnet(): String? = runCatching {
+    ProcessBuilder("dotnet", "--version")
+      .redirectOutput(ProcessBuilder.Redirect.DISCARD)
+      .redirectError(ProcessBuilder.Redirect.DISCARD)
+      .start()
+      .waitFor()
+    "dotnet"
+  }.getOrNull()
 
   @Test
   fun `dotnet restore produces valid project assets json for Newtonsoft Json`() {
