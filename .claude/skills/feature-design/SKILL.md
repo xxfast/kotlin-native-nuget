@@ -83,7 +83,7 @@ Write failing tests on the **consumer side** of the feature. Which side that is 
 Once the feature is implemented and verified, update the docs in the same pass:
 
 - ROADMAP.md — tick the completed item (and link its ADR)
-- FEATURES.md — add or amend the mapping row for the newly supported construct, with the ADR link (skip if the feature adds no bridge mapping, e.g. pure plugin/DSL work). The existing catalogue is forward-direction (Kotlin → C#); reverse-direction mappings (C# → Kotlin) get their **own section** — add or amend rows there for a reverse feature.
+- FEATURES.md — add or amend the mapping row for the newly supported construct in its feature category, with the ADR link in the ADRs column (skip if the feature adds no bridge mapping, e.g. pure plugin/DSL work). The catalogue is bidirectional: each row carries a **direction** glyph (`→` Kotlin → C#, `←` C# → Kotlin, `⇄` both). For a reverse feature, flip an existing row's glyph toward `⇄` (or add a `←` row) and use the Notes to capture any asymmetry — `→ …· ← …` when the directions diverge.
 - Mark the relevant ADR as `Accepted`
 
 ## Rules
@@ -97,7 +97,7 @@ Once the feature is implemented and verified, update the docs in the same pass:
 - After implementation, verify locally by running `scripts/verify.sh` (add `--plugin` for Gradle plugin changes to also run the `nuget/` plugin unit tests). The script also purges the stale `~/.nuget/packages/samplelibrary` cache — a known footgun where a re-pack silently resolves against the old package.
 - Step 6 is the last step, run only after the feature is verified:
   - ROADMAP.md — tick the completed item (and link its ADR)
-  - FEATURES.md — add or amend the mapping row for the newly supported construct, with the ADR link; reverse-direction (C# → Kotlin) features go under their own section, separate from the forward-direction catalogue
+  - FEATURES.md — add or amend the mapping row in its feature category, ADR link in the ADRs column; the catalogue is bidirectional, so set the row's direction glyph (`→`/`←`/`⇄`) and capture any per-direction asymmetry in Notes (see the fuller note under Step 6)
   - Mark the relevant ADR as `Accepted`
 
 ## Prompting subagents

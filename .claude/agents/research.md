@@ -73,7 +73,7 @@ These are the closest analogues for the reverse direction — study how each **c
   - `cocoapods-plugin-architecture.md` — architecture study of the Kotlin CocoaPods Gradle plugin (bidirectional prior art)
   - `spm-plugins-architecture.md` — architecture study of Swift Package Manager integrations for Kotlin Multiplatform (bidirectional prior art)
   - `nuget-plugin-architecture-synthesis.md` — decision-oriented synthesis of the CocoaPods & SPM studies for the NuGet plugin (Phase 8)
-- `FEATURES.md` — the catalogue of mappings already shipped (forward direction)
+- `FEATURES.md` — the catalogue of mappings already shipped (both directions; each row carries a `→`/`←`/`⇄` direction glyph)
 - `ROADMAP.md` — planned features and priorities
 - `GOALS.md` — design philosophy
 
