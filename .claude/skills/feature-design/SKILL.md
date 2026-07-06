@@ -59,7 +59,8 @@ Write failing tests on the **consumer side** of the feature. Which side that is 
     - **Fast inner loop (where the TDD happens)** — `kotlin-dev` agent
       - Write failing generator-level unit tests in `nuget/src/test/kotlin`: a `reverse-ir.json` fixture in, expected Kotlin stub text and/or C# shim text out. Precedents: `NugetGenerateBindingsTaskTest`, `NugetGenerateShimsTaskTest`.
     - **Outer loop (end-to-end round trip)** — `csharp-dev` agent
-      - Add the ADR-050 round trip: sample-library Kotlin calls the bound NuGet API, is surfaced forward to C#, and is asserted in `SampleApp.Tests` xunit tests. Add sample C# source on the .NET side if needed.
+      - Extend `sample-dependency/` (the standing C# fixture library, bound via the ADR-050 local feed) with the feature's fixture surface — a feature-scoped namespace/type kept inside the ADR-043 bridgeable subset. Do not hunt for a published package that fits the subset.
+      - Add the ADR-050 round trip: sample-library Kotlin calls the bound `SampleDependency` API, is surfaced forward to C#, and is asserted in `SampleApp.Tests` xunit tests.
 - **Gradle plugin feature (DSL, tasks, wiring)** — `kotlin-dev` agent
   - Write failing `ProjectBuilder` unit tests in `nuget/src/test/kotlin` that apply the plugin, configure the DSL as a consumer would, and assert the extension model / task wiring
   - Defer Gradle TestKit functional tests until there is task behavior that ProjectBuilder cannot reach
