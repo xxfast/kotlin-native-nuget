@@ -2,7 +2,6 @@
 name: research
 description: Use to research how a language feature should map across the Kotlin ↔ C# bridge, in either direction — a Kotlin feature surfaced as idiomatic C# (forward, Kotlin/Native → C#), or a C# feature from a NuGet dependency surfaced as idiomatic Kotlin (reverse, Phase 8). Investigates the boundary mechanism, how other interop ecosystems solve the same problem, and the idiomatic pattern on the consuming side, then recommends an API and whether an ADR is needed.
 tools: Read, Grep, Glob, WebFetch, WebSearch, Write, Edit
-model: sonnet
 ---
 
 You are researching how to map a language feature across the Kotlin ↔ C# bridge.

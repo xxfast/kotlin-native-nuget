@@ -9,6 +9,19 @@ Implements a new feature using a 3-step TDD loop, delegating each step to the ap
 
 You run in the main conversation thread, so you can spawn subagents and pause to check in with the human. Delegate to the appropriate agent for each step (research, testing, implementation, refactor) and provide them the necessary context and instructions.
 
+## Phase kickoff (batching the human gate)
+
+Many phases (Phases 9–13 especially) are largely reverse-direction work that mirrors an already-decided forward ADR. Do not run the full per-feature loop — research, human gate, implement — one interruption at a time for every item. At the **start of a phase**, classify its roadmap items and batch the human gate:
+
+- **"mirror" items** — annotated "mirror of ADR-XXX" in ROADMAP.md; the reverse mapping exactly mirrors an existing forward ADR.
+  - Skip the heavy research step and the up-front Step 2 human gate. Run a **light** research pass to confirm the mirror actually applies (per the `research` agent's own "don't write an ADR" guidance), then go straight to Step 3 tests. The human reviews the **implemented result** rather than the plan.
+  - If the mirror turns out **not** to hold cleanly, stop and escalate to the normal Step 2 check-in.
+- **"needs-ADR" items** — no clean forward mirror; a real design decision.
+  - Fan out one **background** `research` agent per item, in parallel.
+  - Collect all their draft ADRs/findings and present them to the human in a **single Step 2 review sitting**, instead of one interruption per feature.
+
+Then run the per-feature Step 3–6 loop below for each item.
+
 ## Workflow
 
 ### Step 1: Research (`research` agent)
@@ -41,9 +54,12 @@ Write failing tests on the **consumer side** of the feature. Which side that is 
   - Tests go in `sample-app/SampleApp.Tests/`
   - Follow existing test patterns (xunit, `using var` for IDisposable)
   - Add sample Kotlin source in `sample-library/` if needed
-- **Reverse / ecosystem feature (C# → Kotlin, Phase 8)** — `kotlin-dev` agent
-  - Write failing Kotlin tests that define the expected Kotlin-side API for consuming the C# surface
-  - Add sample C# source on the .NET side if needed (`csharp-dev` can help)
+- **Reverse / ecosystem feature (C# → Kotlin, Phase 8+)** — `kotlin-dev` + `csharp-dev` agents
+  - There is **no runnable Kotlin-side unit test of the reverse bridge**: the generated Kotlin stubs fail fast unless the .NET host process has registered the function-pointer table (ADR-041/048), so Kotlin/Native code cannot exercise the reverse bridge standalone. Do not write "failing Kotlin tests that define the expected Kotlin-side API" — there is nowhere for them to run. Use the two real test seams instead:
+    - **Fast inner loop (where the TDD happens)** — `kotlin-dev` agent
+      - Write failing generator-level unit tests in `nuget/src/test/kotlin`: a `reverse-ir.json` fixture in, expected Kotlin stub text and/or C# shim text out. Precedents: `NugetGenerateBindingsTaskTest`, `NugetGenerateShimsTaskTest`.
+    - **Outer loop (end-to-end round trip)** — `csharp-dev` agent
+      - Add the ADR-050 round trip: sample-library Kotlin calls the bound NuGet API, is surfaced forward to C#, and is asserted in `SampleApp.Tests` xunit tests. Add sample C# source on the .NET side if needed.
 - **Gradle plugin feature (DSL, tasks, wiring)** — `kotlin-dev` agent
   - Write failing `ProjectBuilder` unit tests in `nuget/src/test/kotlin` that apply the plugin, configure the DSL as a consumer would, and assert the extension model / task wiring
   - Defer Gradle TestKit functional tests until there is task behavior that ProjectBuilder cannot reach
@@ -66,7 +82,7 @@ Write failing tests on the **consumer side** of the feature. Which side that is 
 Once the feature is implemented and verified, update the docs in the same pass:
 
 - ROADMAP.md — tick the completed item (and link its ADR)
-- FEATURES.md — add or amend the mapping row for the newly supported construct, with the ADR link (skip if the feature adds no bridge mapping, e.g. pure plugin/DSL work)
+- FEATURES.md — add or amend the mapping row for the newly supported construct, with the ADR link (skip if the feature adds no bridge mapping, e.g. pure plugin/DSL work). The existing catalogue is forward-direction (Kotlin → C#); reverse-direction mappings (C# → Kotlin) get their **own section** — add or amend rows there for a reverse feature.
 - Mark the relevant ADR as `Accepted`
 
 ## Rules
@@ -77,10 +93,10 @@ Once the feature is implemented and verified, update the docs in the same pass:
 - Run subagent to write tests FIRST (step 3 before step 4)
 - Pass agents file paths and intent, not file contents. They have Read and know the project layout, so let them read what they need.
 - Reuse warm agents (SendMessage) when iterating instead of spawning fresh ones
-- After implementation, verify locally: `./gradlew :sample-library:clean :sample-library:packNuget && cd sample-app/SampleApp.Tests && dotnet test`. For Gradle plugin features, also run the plugin unit tests (`./gradlew` `test` in `nuget/`)
+- After implementation, verify locally by running `scripts/verify.sh` (add `--plugin` for Gradle plugin changes to also run the `nuget/` plugin unit tests). The script also purges the stale `~/.nuget/packages/samplelibrary` cache — a known footgun where a re-pack silently resolves against the old package.
 - Step 6 is the last step, run only after the feature is verified:
   - ROADMAP.md — tick the completed item (and link its ADR)
-  - FEATURES.md — add or amend the mapping row for the newly supported Kotlin construct, with the ADR link
+  - FEATURES.md — add or amend the mapping row for the newly supported construct, with the ADR link; reverse-direction (C# → Kotlin) features go under their own section, separate from the forward-direction catalogue
   - Mark the relevant ADR as `Accepted`
 
 ## Prompting subagents
