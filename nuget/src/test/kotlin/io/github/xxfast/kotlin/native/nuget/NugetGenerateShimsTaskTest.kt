@@ -5,6 +5,7 @@ import io.github.xxfast.kotlin.native.nuget.rir.RirClass
 import io.github.xxfast.kotlin.native.nuget.rir.RirFile
 import io.github.xxfast.kotlin.native.nuget.rir.RirMethod
 import io.github.xxfast.kotlin.native.nuget.rir.RirNamespace
+import io.github.xxfast.kotlin.native.nuget.rir.RirObjectHandleType
 import io.github.xxfast.kotlin.native.nuget.rir.RirParameter
 import io.github.xxfast.kotlin.native.nuget.rir.RirPrimitiveType
 import io.github.xxfast.kotlin.native.nuget.rir.RirStringType
@@ -13,6 +14,7 @@ import kotlin.test.Test
 import kotlin.test.assertContains
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 /**
@@ -506,6 +508,216 @@ class NugetGenerateShimsTaskTest {
     assertTrue(
       files.isEmpty(),
       "no file should be generated for a class with only instance methods",
+    )
+  }
+
+  // ------------------------------------------------------------------
+  // ADR-051: C# objects as opaque handles — C# shim generation
+  //
+  // Canonical fixture: Sample.Text.Template — public non-static class with two static methods:
+  //   Parse(source: string): Template  and  Render(template: Template, name: string): string
+  //
+  // NOTE: this fixture references RirObjectHandleType (not yet in RirModel.kt) and the isStatic
+  // field on RirClass (not yet added). Both produce compile errors until the model is extended.
+  // That compile error is the expected "red state" for this test section (ADR-051 Step 3).
+  // ------------------------------------------------------------------
+
+  // ADR-051 canonical fixture shared across all handle-type shim tests.
+  private val templateRir: RirFile = RirFile(
+    assemblies = listOf(
+      RirAssembly(
+        packageId = "Sample.Text",
+        assemblyName = "Sample.Text",
+        namespaces = listOf(
+          RirNamespace(
+            name = "Sample.Text",
+            types = listOf(
+              RirClass(
+                name = "Template",
+                isStatic = false,
+                methods = listOf(
+                  RirMethod(
+                    name = "Parse",
+                    isStatic = true,
+                    returnType = RirObjectHandleType(namespace = "Sample.Text", name = "Template"),
+                    parameters = listOf(
+                      RirParameter(name = "source", type = RirStringType),
+                    ),
+                  ),
+                  RirMethod(
+                    name = "Render",
+                    isStatic = true,
+                    returnType = RirStringType,
+                    parameters = listOf(
+                      RirParameter(
+                        name = "template",
+                        type = RirObjectHandleType(namespace = "Sample.Text", name = "Template"),
+                      ),
+                      RirParameter(name = "name", type = RirStringType),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    ),
+  )
+
+  private fun templateShim(): GeneratedFile {
+    val files: List<GeneratedFile> = generateCSharpShims(templateRir, "sample")
+    return files.single { it.relativePath.endsWith("TemplateRegistration.cs") }
+  }
+
+  // ------------------------------------------------------------------
+  // 11. Parse_Thunk: IntPtr return, GCHandle.Alloc, IntPtr.Zero for null
+  // ------------------------------------------------------------------
+
+  @Test
+  fun `Parse thunk signature returns IntPtr and takes IntPtr source parameter`() {
+    val shim: GeneratedFile = templateShim()
+    assertContains(shim.content, "private static IntPtr Parse_Thunk(IntPtr sourcePtr)")
+  }
+
+  @Test
+  fun `Parse thunk body allocates GCHandle for a non-null result`() {
+    val shim: GeneratedFile = templateShim()
+    assertContains(
+      shim.content,
+      "GCHandle.Alloc(result)",
+      message = "Parse_Thunk must wrap the returned Template in a GCHandle (ADR-051 §thunk table)",
+    )
+  }
+
+  @Test
+  fun `Parse thunk body converts GCHandle to IntPtr`() {
+    val shim: GeneratedFile = templateShim()
+    assertContains(shim.content, "GCHandle.ToIntPtr(GCHandle.Alloc(result))")
+  }
+
+  @Test
+  fun `Parse thunk body returns IntPtr Zero for null result`() {
+    val shim: GeneratedFile = templateShim()
+    assertContains(
+      shim.content,
+      "IntPtr.Zero",
+      message = "Parse_Thunk must return IntPtr.Zero when the C# method returns null (ADR-051 §Nullability)",
+    )
+  }
+
+  // ------------------------------------------------------------------
+  // 12. Render_Thunk: IntPtr templateHandle parameter, GCHandle.FromIntPtr cast
+  // ------------------------------------------------------------------
+
+  @Test
+  fun `Render thunk signature takes IntPtr templateHandle and IntPtr namePtr and returns IntPtr`() {
+    val shim: GeneratedFile = templateShim()
+    assertContains(
+      shim.content,
+      "private static IntPtr Render_Thunk(IntPtr templateHandle, IntPtr namePtr)",
+    )
+  }
+
+  @Test
+  fun `Render thunk body unpacks template from GCHandle`() {
+    val shim: GeneratedFile = templateShim()
+    assertContains(
+      shim.content,
+      "(Template)GCHandle.FromIntPtr(templateHandle).Target!",
+      message = "Render_Thunk must cast the handle back to Template via GCHandle.FromIntPtr (ADR-051)",
+    )
+  }
+
+  // ------------------------------------------------------------------
+  // 13. Per-type register contract unchanged: two IntPtr params (parse, render), no extra free slot
+  // ------------------------------------------------------------------
+
+  @Test
+  fun `TemplateRegistration DllImport has exactly parsePtr and renderPtr with no extra free slot`() {
+    val shim: GeneratedFile = templateShim()
+
+    val externLine: String = shim.content.lines().first { it.contains("_register(IntPtr") }
+    assertContains(externLine, "parsePtr")
+    assertContains(externLine, "renderPtr")
+    assertFalse(
+      externLine.contains("freePtr"),
+      "Per-type register must NOT have a freePtr slot (ADR-051 §3d: free is in shared runtime export)",
+    )
+  }
+
+  @Test
+  fun `TemplateRegistration ModuleInitializer passes thunks in Parse then Render order`() {
+    val shim: GeneratedFile = templateShim()
+
+    val parseIndex: Int = shim.content.indexOf("&Parse_Thunk")
+    val renderIndex: Int = shim.content.indexOf("&Render_Thunk")
+
+    assertTrue(parseIndex >= 0, "&Parse_Thunk must appear in the shim")
+    assertTrue(renderIndex >= 0, "&Render_Thunk must appear in the shim")
+    assertTrue(
+      parseIndex < renderIndex,
+      "Parse_Thunk must be registered before Render_Thunk (reverse-ir declaration order)",
+    )
+  }
+
+  // ------------------------------------------------------------------
+  // 14. NugetRuntimeRegistration.cs is emitted when handle types are present
+  // ------------------------------------------------------------------
+
+  @Test
+  fun `NugetRuntimeRegistration cs is emitted when handle types are present`() {
+    val files: List<GeneratedFile> = generateCSharpShims(templateRir, "sample")
+
+    assertNotNull(
+      files.find { it.relativePath.endsWith("NugetRuntimeRegistration.cs") },
+      "NugetRuntimeRegistration.cs must be generated when handle types appear in the IR",
+    )
+  }
+
+  @Test
+  fun `NugetRuntimeRegistration cs contains FreeGcHandle_Thunk`() {
+    val files: List<GeneratedFile> = generateCSharpShims(templateRir, "sample")
+
+    val runtimeShim: GeneratedFile = requireNotNull(
+      files.find { it.relativePath.endsWith("NugetRuntimeRegistration.cs") }
+    ) { "NugetRuntimeRegistration.cs must be generated" }
+
+    assertContains(runtimeShim.content, "FreeGcHandle_Thunk")
+  }
+
+  @Test
+  fun `NugetRuntimeRegistration cs ModuleInitializer calls nuget_runtime_register`() {
+    val files: List<GeneratedFile> = generateCSharpShims(templateRir, "sample")
+
+    val runtimeShim: GeneratedFile = requireNotNull(
+      files.find { it.relativePath.endsWith("NugetRuntimeRegistration.cs") }
+    ) { "NugetRuntimeRegistration.cs must be generated" }
+
+    assertContains(runtimeShim.content, "[ModuleInitializer]")
+    assertContains(runtimeShim.content, "nuget_runtime_register")
+  }
+
+  @Test
+  fun `NugetRuntimeRegistration cs FreeGcHandle_Thunk frees via GCHandle FromIntPtr`() {
+    val files: List<GeneratedFile> = generateCSharpShims(templateRir, "sample")
+
+    val runtimeShim: GeneratedFile = requireNotNull(
+      files.find { it.relativePath.endsWith("NugetRuntimeRegistration.cs") }
+    ) { "NugetRuntimeRegistration.cs must be generated" }
+
+    assertContains(runtimeShim.content, "GCHandle.FromIntPtr(handle).Free()")
+  }
+
+  // Guard: NugetRuntimeRegistration.cs must NOT be emitted for statics-only IR (uses the
+  // existing fixture, compiles today, must stay green before and after implementation).
+  @Test
+  fun `NugetRuntimeRegistration cs is not emitted for statics-only IR`() {
+    val files: List<GeneratedFile> = generateCSharpShims(jsonConvertRir, "sample")
+
+    assertTrue(
+      files.none { it.relativePath.endsWith("NugetRuntimeRegistration.cs") },
+      "NugetRuntimeRegistration.cs must not be emitted when no handle types are present in the IR",
     )
   }
 }

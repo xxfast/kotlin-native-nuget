@@ -36,6 +36,8 @@ sealed interface RirType {
 data class RirClass(
   override val name: String,
   val isAbstract: Boolean = false,
+  // ECMA-335: a C# static class is `abstract sealed` in metadata (ADR-051)
+  val isStatic: Boolean = false,
   val methods: List<RirMethod> = emptyList(),
   val properties: List<RirProperty> = emptyList(),
 ) : RirType
@@ -88,10 +90,16 @@ data object RirStringType : RirTypeRef
 @SerialName("primitive")
 data class RirPrimitiveType(val name: String) : RirTypeRef
 
-// Future (post-v1, unblocked by "Map C# objects as opaque handles in Kotlin"):
-// @Serializable
-// @SerialName("handle")
-// data class RirObjectHandleType(val assemblyQualifiedName: String) : RirTypeRef
+// A reference to a bound C# class that crosses the bridge as an opaque GCHandle pointer (ADR-051).
+// Split namespace/name rather than an assembly-qualified string: both generators resolve the
+// referenced type to a Kotlin package + class, and parsing an AQN back apart is more error-prone
+// than never joining it.
+@Serializable
+@SerialName("handle")
+data class RirObjectHandleType(
+  val namespace: String,
+  val name: String,
+) : RirTypeRef
 
 @Serializable
 data class RirDiagnostic(
@@ -110,5 +118,6 @@ enum class RirDiagnosticKind {
   @SerialName("skipped_open_generic") SKIPPED_OPEN_GENERIC,
   @SerialName("skipped_dynamic") SKIPPED_DYNAMIC,
   @SerialName("skipped_default_interface_method") SKIPPED_DEFAULT_INTERFACE_METHOD,
+  @SerialName("skipped_unbound_type_reference") SKIPPED_UNBOUND_TYPE_REFERENCE,
   @SerialName("info_async_not_yet_mapped") INFO_ASYNC_NOT_YET_MAPPED,
 }

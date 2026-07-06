@@ -30,6 +30,33 @@ kotlin {
   }
 }
 
+// Pack the local SampleDependency fixture into build/nuget before dotnet restore runs.
+// This ensures the .nupkg is present in the local NuGet feed (declared in nuget.config) even
+// after :clean wipes build/. The task is declared before afterEvaluate so the task provider is
+// available when nugetRestore is wired up below.
+val packSampleDependency by tasks.registering(Exec::class) {
+  group = "nuget"
+  description = "Packs SampleDependency.nupkg into build/nuget so dotnet restore can find it"
+  val csprojFile = rootProject.file("sample-dependency/SampleDependency.csproj")
+  val outDir = layout.buildDirectory.dir("nuget")
+  inputs.file(csprojFile)
+  outputs.file(outDir.map { it.file("SampleDependency.1.0.0.nupkg") })
+  commandLine(
+    "dotnet", "pack",
+    csprojFile.absolutePath,
+    "-c", "Release",
+    "-o", outDir.get().asFile.absolutePath,
+  )
+  doFirst { outDir.get().asFile.mkdirs() }
+}
+
+// Wire packSampleDependency before nugetRestore so the local feed is populated first.
+// nugetRestore is registered in afterEvaluate by the nuget plugin, so the wiring must also be
+// in afterEvaluate (registered second, runs after the plugin's afterEvaluate).
+afterEvaluate {
+  tasks.matching { it.name == "nugetRestore" }.configureEach { dependsOn(packSampleDependency) }
+}
+
 nuget {
   publish {
     packageId = "SampleLibrary"
@@ -44,6 +71,12 @@ nuget {
       bind {
         packageName = "mimemapping"
         include("MimeMapping")
+      }
+    }
+    dependency("SampleDependency", version = "1.0.0") {
+      bind {
+        include("Sample.Text")
+        alias("Sample.Text", "sample.text")
       }
     }
   }

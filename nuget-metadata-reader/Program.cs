@@ -175,6 +175,11 @@ internal static class AssemblyExtractor
             list.Add(typeDef);
         }
 
+        // Build the set of bound handle type full names before processing methods, so the
+        // SignatureDecoder can emit RirObjectHandleType for parameters and returns that
+        // reference them (ADR-051).
+        var boundHandleTypeNames = CollectBoundHandleTypeNames(mr, namespaceMap);
+
         var rirNamespaces = new List<RirNamespace>();
 
         foreach (var (ns, typeDefs) in namespaceMap.OrderBy(kv => kv.Key))
@@ -183,7 +188,7 @@ internal static class AssemblyExtractor
 
             foreach (var typeDef in typeDefs)
             {
-                var (rirType, typeDiagnostics) = ProcessType(mr, typeDef);
+                var (rirType, typeDiagnostics) = ProcessType(mr, typeDef, boundHandleTypeNames);
                 if (rirType is not null) rirTypes.Add(rirType);
                 diagnostics.AddRange(typeDiagnostics);
             }
@@ -195,13 +200,54 @@ internal static class AssemblyExtractor
         return new RirAssembly(packageId, assemblyName, rirNamespaces, diagnostics);
     }
 
+    /// <summary>
+    /// Collects the fully-qualified names of all bound, wrapper-eligible types: public,
+    /// non-interface, non-static (not abstract+sealed), non-ref-struct, non-value-type classes
+    /// whose namespace is already in the bound set. These are the types that may cross the bridge
+    /// as opaque GCHandle pointers (ADR-051 <c>RirObjectHandleType</c>).
+    /// </summary>
+    private static HashSet<string> CollectBoundHandleTypeNames(
+        MetadataReader mr,
+        Dictionary<string, List<TypeDefinition>> namespaceMap)
+    {
+        var names = new HashSet<string>(StringComparer.Ordinal);
+
+        foreach (var (ns, typeDefs) in namespaceMap)
+        {
+            foreach (var typeDef in typeDefs)
+            {
+                bool isInterface = (typeDef.Attributes & System.Reflection.TypeAttributes.ClassSemanticsMask)
+                                   == System.Reflection.TypeAttributes.Interface;
+                // A C# static class is `abstract sealed` in ECMA-335 metadata (ADR-051).
+                bool isStaticClass =
+                    (typeDef.Attributes & System.Reflection.TypeAttributes.Abstract) != 0 &&
+                    (typeDef.Attributes & System.Reflection.TypeAttributes.Sealed) != 0;
+
+                if (isInterface || isStaticClass) continue;
+                if (MetadataHelpers.IsValueType(mr, typeDef)) continue;
+                if (MetadataHelpers.IsRefStructType(mr, typeDef)) continue;
+
+                var typeName = mr.GetString(typeDef.Name);
+                var fullName = string.IsNullOrEmpty(ns) ? typeName : $"{ns}.{typeName}";
+                names.Add(fullName);
+            }
+        }
+
+        return names;
+    }
+
     private static (RirType? Type, IEnumerable<RirDiagnostic> Diagnostics) ProcessType(
-        MetadataReader mr, TypeDefinition typeDef)
+        MetadataReader mr,
+        TypeDefinition typeDef,
+        HashSet<string> boundHandleTypeNames)
     {
         var typeName = mr.GetString(typeDef.Name);
         var isInterface = (typeDef.Attributes & System.Reflection.TypeAttributes.ClassSemanticsMask)
                           == System.Reflection.TypeAttributes.Interface;
         var isAbstract = (typeDef.Attributes & System.Reflection.TypeAttributes.Abstract) != 0;
+        // A C# static class is `abstract sealed` in ECMA-335 metadata (ADR-051).
+        var isSealed = (typeDef.Attributes & System.Reflection.TypeAttributes.Sealed) != 0;
+        var isStatic = isAbstract && isSealed;
 
         var methods = new List<RirMethod>();
         var diagnostics = new List<RirDiagnostic>();
@@ -221,7 +267,8 @@ internal static class AssemblyExtractor
             if ((method.Attributes & System.Reflection.MethodAttributes.MemberAccessMask)
                 != System.Reflection.MethodAttributes.Public) continue;
 
-            // Skip property accessors (get_X, set_X) — handled via properties.
+            // Skip property accessors (get_X, set_X) and constructors (.ctor, .cctor) —
+            // constructors are SpecialName and stay excluded in v1 (ADR-051 scope).
             if ((method.Attributes & System.Reflection.MethodAttributes.SpecialName) != 0) continue;
 
             var name = mr.GetString(method.Name);
@@ -251,7 +298,8 @@ internal static class AssemblyExtractor
             }
 
             var methodDef = group[0];
-            var (rirMethod, methodDiagnostic) = TryMapMethod(mr, typeDef, methodDef, typeName, isInterface);
+            var (rirMethod, methodDiagnostic) = TryMapMethod(
+                mr, typeDef, methodDef, typeName, isInterface, boundHandleTypeNames);
             if (rirMethod is not null)
                 methods.Add(rirMethod);
             else if (methodDiagnostic is not null)
@@ -276,7 +324,8 @@ internal static class AssemblyExtractor
             if ((getterDef.Attributes & System.Reflection.MethodAttributes.MemberAccessMask)
                 != System.Reflection.MethodAttributes.Public) continue;
 
-            var (propTypeRef, propDiagnostic) = TryDecodePropertyType(mr, propDef, propName, typeName);
+            var (propTypeRef, propDiagnostic) = TryDecodePropertyType(
+                mr, propDef, propName, typeName, boundHandleTypeNames);
             if (propTypeRef is not null)
             {
                 // Same masked-equality fix as the getter check above: a non-zero AND against
@@ -286,8 +335,8 @@ internal static class AssemblyExtractor
                     || (mr.GetMethodDefinition(accessors.Setter).Attributes
                         & System.Reflection.MethodAttributes.MemberAccessMask)
                         != System.Reflection.MethodAttributes.Public;
-                bool isStatic = (getterDef.Attributes & System.Reflection.MethodAttributes.Static) != 0;
-                properties.Add(new RirProperty(propName, propTypeRef, isReadOnly, isStatic));
+                bool propIsStatic = (getterDef.Attributes & System.Reflection.MethodAttributes.Static) != 0;
+                properties.Add(new RirProperty(propName, propTypeRef, isReadOnly, propIsStatic));
             }
             else if (propDiagnostic is not null)
             {
@@ -297,7 +346,7 @@ internal static class AssemblyExtractor
 
         RirType rirType = isInterface
             ? new RirInterface(typeName, methods, properties)
-            : new RirClass(typeName, isAbstract && !isInterface, methods, properties);
+            : new RirClass(typeName, isAbstract && !isInterface, isStatic, methods, properties);
 
         return (rirType, diagnostics);
     }
@@ -307,7 +356,8 @@ internal static class AssemblyExtractor
         TypeDefinition typeDef,
         MethodDefinition methodDef,
         string typeName,
-        bool isInterface)
+        bool isInterface,
+        HashSet<string> boundHandleTypeNames)
     {
         var methodName = mr.GetString(methodDef.Name);
         bool isStatic = (methodDef.Attributes & System.Reflection.MethodAttributes.Static) != 0;
@@ -327,7 +377,7 @@ internal static class AssemblyExtractor
                 hint: "Override this method in a concrete adapter class."));
         }
 
-        var decoder = new SignatureDecoder(mr);
+        var decoder = new SignatureDecoder(mr, boundHandleTypeNames);
         MethodSignature<TypeRefOrDiag> sig;
 
         try
@@ -409,9 +459,10 @@ internal static class AssemblyExtractor
         MetadataReader mr,
         PropertyDefinition propDef,
         string propName,
-        string typeName)
+        string typeName,
+        HashSet<string> boundHandleTypeNames)
     {
-        var decoder = new SignatureDecoder(mr);
+        var decoder = new SignatureDecoder(mr, boundHandleTypeNames);
         MethodSignature<TypeRefOrDiag> sig;
 
         try
@@ -470,6 +521,7 @@ internal static class AssemblyExtractor
     {
         try
         {
+            // No bound-handle types needed here — purely for human-readable diagnostic strings.
             var decoder = new SignatureDecoder(mr);
             var sig = method.DecodeSignature(decoder, genericContext: null);
             return string.Join(", ", sig.ParameterTypes.Select(p => p.RawTypeName ?? "?"));
@@ -484,6 +536,7 @@ internal static class AssemblyExtractor
     {
         try
         {
+            // No bound-handle types needed here — purely for human-readable diagnostic strings.
             var decoder = new SignatureDecoder(mr);
             var sig = method.DecodeSignature(decoder, genericContext: null);
             var paramStr = string.Join(", ", sig.ParameterTypes.Select(p => p.RawTypeName ?? "?"));
@@ -499,6 +552,75 @@ internal static class AssemblyExtractor
     {
         if (typeName is null) return false;
         return AsyncTypeNames.Any(a => typeName == a || typeName.StartsWith(a, StringComparison.Ordinal));
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Shared metadata helpers
+// ---------------------------------------------------------------------------
+
+internal static class MetadataHelpers
+{
+    /// <summary>
+    /// Returns true if <paramref name="typeDef"/> carries <c>IsByRefLikeAttribute</c>,
+    /// which marks it as a <c>ref struct</c> that cannot cross the C ABI.
+    /// </summary>
+    internal static bool IsRefStructType(MetadataReader mr, TypeDefinition typeDef)
+    {
+        foreach (var handle in typeDef.GetCustomAttributes())
+        {
+            var attr = mr.GetCustomAttribute(handle);
+            var attrTypeName = GetCustomAttributeTypeName(mr, attr);
+            if (attrTypeName == "System.Runtime.CompilerServices.IsByRefLikeAttribute")
+                return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Returns true if <paramref name="typeDef"/> is a value type (struct or enum): its base type
+    /// is <c>System.ValueType</c> or <c>System.Enum</c>. Value types cannot be bound as opaque
+    /// GCHandle types (ADR-051).
+    /// </summary>
+    internal static bool IsValueType(MetadataReader mr, TypeDefinition typeDef)
+    {
+        if (typeDef.BaseType.IsNil) return false;
+
+        if (typeDef.BaseType.Kind == HandleKind.TypeReference)
+        {
+            var baseRef = mr.GetTypeReference((TypeReferenceHandle)typeDef.BaseType);
+            var ns = mr.GetString(baseRef.Namespace);
+            var name = mr.GetString(baseRef.Name);
+            return ns == "System" && (name == "ValueType" || name == "Enum");
+        }
+
+        return false;
+    }
+
+    internal static string? GetCustomAttributeTypeName(MetadataReader mr, CustomAttribute attr)
+    {
+        if (attr.Constructor.Kind == HandleKind.MemberReference)
+        {
+            var ctor = mr.GetMemberReference((MemberReferenceHandle)attr.Constructor);
+            if (ctor.Parent.Kind == HandleKind.TypeReference)
+            {
+                var typeRef = mr.GetTypeReference((TypeReferenceHandle)ctor.Parent);
+                var ns = mr.GetString(typeRef.Namespace);
+                var name = mr.GetString(typeRef.Name);
+                return string.IsNullOrEmpty(ns) ? name : $"{ns}.{name}";
+            }
+        }
+        else if (attr.Constructor.Kind == HandleKind.MethodDefinition)
+        {
+            var ctor = mr.GetMethodDefinition((MethodDefinitionHandle)attr.Constructor);
+            var typeDef = mr.GetTypeDefinition(ctor.GetDeclaringType());
+            var ns = mr.GetString(typeDef.Namespace);
+            var name = mr.GetString(typeDef.Name);
+            return string.IsNullOrEmpty(ns) ? name : $"{ns}.{name}";
+        }
+
+        return null;
     }
 }
 
@@ -524,13 +646,23 @@ internal sealed record PendingDiagnostic(string Kind, string Reason, string Hint
 /// </summary>
 internal sealed class SignatureDecoder : ISignatureTypeProvider<TypeRefOrDiag, object?>
 {
-    // Fully qualified names of types that carry DynamicAttribute and should be treated as dynamic.
     private const string DynamicAttributeFullName = "System.Runtime.CompilerServices.DynamicAttribute";
-    private const string IsByRefLikeAttributeName = "System.Runtime.CompilerServices.IsByRefLikeAttribute";
 
     private readonly MetadataReader _mr;
 
-    public SignatureDecoder(MetadataReader mr) => _mr = mr;
+    /// <summary>
+    /// The set of fully-qualified type names eligible to cross the bridge as opaque GCHandle
+    /// pointers (ADR-051). Built by <c>AssemblyExtractor.CollectBoundHandleTypeNames</c>.
+    /// Pass null (or omit) for display-only decoders that only produce raw type name strings.
+    /// </summary>
+    private readonly HashSet<string> _boundHandleTypeNames;
+
+    public SignatureDecoder(MetadataReader mr, HashSet<string>? boundHandleTypeNames = null)
+    {
+        _mr = mr;
+        _boundHandleTypeNames = boundHandleTypeNames
+            ?? new HashSet<string>(StringComparer.Ordinal);
+    }
 
     // Primitives
     public TypeRefOrDiag GetPrimitiveType(PrimitiveTypeCode typeCode)
@@ -568,7 +700,8 @@ internal sealed class SignatureDecoder : ISignatureTypeProvider<TypeRefOrDiag, o
         var ns = mr.GetString(typeDef.Namespace);
         var fullName = string.IsNullOrEmpty(ns) ? name : $"{ns}.{name}";
 
-        if (IsRefStructType(mr, typeDef))
+        // ref structs cannot cross the C ABI — diagnose before the handle check (ADR-043).
+        if (MetadataHelpers.IsRefStructType(mr, typeDef))
         {
             return new TypeRefOrDiag(null,
                 new PendingDiagnostic(
@@ -578,7 +711,20 @@ internal sealed class SignatureDecoder : ISignatureTypeProvider<TypeRefOrDiag, o
                 fullName);
         }
 
-        return new TypeRefOrDiag(null, null, fullName);
+        // If the type is a bound, wrapper-eligible class in this extraction run, it crosses the
+        // bridge as an opaque GCHandle pointer (ADR-051 RirObjectHandleType).
+        if (_boundHandleTypeNames.Contains(fullName))
+            return new TypeRefOrDiag(new RirObjectHandleType(ns, name), null, fullName);
+
+        // Type is in the same assembly but is NOT a bound handle type (excluded namespace,
+        // interface, static class, value type, or ref struct already handled above). Members
+        // that reference it are skipped with a diagnostic (ADR-051; ADR-043 fail-fast contract).
+        return new TypeRefOrDiag(null,
+            new PendingDiagnostic(
+                "skipped_unbound_type_reference",
+                $"type `{fullName}` is not a bridgeable bound class in this extraction run",
+                "Bind this type's namespace to make it a handle type, or expose an equivalent static API."),
+            fullName);
     }
 
     // TypeRef — type defined in another assembly.
@@ -593,7 +739,19 @@ internal sealed class SignatureDecoder : ISignatureTypeProvider<TypeRefOrDiag, o
         if (fullName == "System.String")
             return new TypeRefOrDiag(RirStringType.Instance, null, "string");
 
-        return new TypeRefOrDiag(null, null, fullName);
+        // All other external type references are outside the bound set and cannot be opaque
+        // handles. Emit a diagnostic so the member skip is visible (ADR-051; replaces the
+        // previous silent null,null for direct non-generic external type refs).
+        // Note: for generic instantiations (Task<T>, List<T>, etc.) GetTypeFromReference is
+        // called on the open generic base type, but GetGenericInstantiation deliberately drops
+        // the diagnostic and returns null,null — those methods are still silently skipped, which
+        // is the correct v1 behaviour for complex types.
+        return new TypeRefOrDiag(null,
+            new PendingDiagnostic(
+                "skipped_unbound_type_reference",
+                $"type `{fullName}` is defined outside the bound assemblies and cannot be an opaque handle in this extraction run",
+                "Include this type's assembly in the extraction run to bind it, or expose an equivalent static API."),
+            fullName);
     }
 
     // TypeSpec — instantiated or modified types (generic instantiations, arrays, etc.).
@@ -616,7 +774,8 @@ internal sealed class SignatureDecoder : ISignatureTypeProvider<TypeRefOrDiag, o
             return new TypeRefOrDiag(null, null, rawName);
 
         // All other generic instantiations are not in the v1 vocabulary.
-        // They're either open generics (handled elsewhere) or instantiated complex types.
+        // The diagnostic from GetTypeFromReference on the open base type is deliberately dropped:
+        // a skipped_unbound_type_reference on List<string> would be noise with no actionable fix.
         return new TypeRefOrDiag(null, null, rawName ?? "?");
     }
 
@@ -685,44 +844,6 @@ internal sealed class SignatureDecoder : ISignatureTypeProvider<TypeRefOrDiag, o
     // Private helpers
     // ---------------------------------------------------------------------------
 
-    private static bool IsRefStructType(MetadataReader mr, TypeDefinition typeDef)
-    {
-        foreach (var handle in typeDef.GetCustomAttributes())
-        {
-            var attr = mr.GetCustomAttribute(handle);
-            var attrTypeName = GetCustomAttributeTypeName(mr, attr);
-            if (attrTypeName == "System.Runtime.CompilerServices.IsByRefLikeAttribute")
-                return true;
-        }
-
-        return false;
-    }
-
-    private static string? GetCustomAttributeTypeName(MetadataReader mr, CustomAttribute attr)
-    {
-        if (attr.Constructor.Kind == HandleKind.MemberReference)
-        {
-            var ctor = mr.GetMemberReference((MemberReferenceHandle)attr.Constructor);
-            if (ctor.Parent.Kind == HandleKind.TypeReference)
-            {
-                var typeRef = mr.GetTypeReference((TypeReferenceHandle)ctor.Parent);
-                var ns = mr.GetString(typeRef.Namespace);
-                var name = mr.GetString(typeRef.Name);
-                return string.IsNullOrEmpty(ns) ? name : $"{ns}.{name}";
-            }
-        }
-        else if (attr.Constructor.Kind == HandleKind.MethodDefinition)
-        {
-            var ctor = mr.GetMethodDefinition((MethodDefinitionHandle)attr.Constructor);
-            var typeDef = mr.GetTypeDefinition(ctor.GetDeclaringType());
-            var ns = mr.GetString(typeDef.Namespace);
-            var name = mr.GetString(typeDef.Name);
-            return string.IsNullOrEmpty(ns) ? name : $"{ns}.{name}";
-        }
-
-        return null;
-    }
-
     private static bool IsAsyncTypeName(string? name)
     {
         if (name is null) return false;
@@ -748,16 +869,24 @@ internal abstract class RirType
 
 internal sealed class RirClass : RirType
 {
-    public RirClass(string name, bool isAbstract, IReadOnlyList<RirMethod> methods, IReadOnlyList<RirProperty> properties)
+    public RirClass(
+        string name,
+        bool isAbstract,
+        bool isStatic,
+        IReadOnlyList<RirMethod> methods,
+        IReadOnlyList<RirProperty> properties)
     {
         Name = name;
         IsAbstract = isAbstract;
+        IsStatic = isStatic;
         Methods = methods;
         Properties = properties;
     }
 
     public override string Name { get; }
     public bool IsAbstract { get; }
+    /// <summary>True when the C# class is <c>abstract sealed</c> (static) in ECMA-335 (ADR-051).</summary>
+    public bool IsStatic { get; }
     public IReadOnlyList<RirMethod> Methods { get; }
     public IReadOnlyList<RirProperty> Properties { get; }
 }
@@ -824,6 +953,7 @@ internal sealed class RirParameter
 [JsonDerivedType(typeof(RirVoidType), "void")]
 [JsonDerivedType(typeof(RirStringType), "string")]
 [JsonDerivedType(typeof(RirPrimitiveType), "primitive")]
+[JsonDerivedType(typeof(RirObjectHandleType), "handle")]
 internal abstract class RirTypeRef { }
 
 internal sealed class RirVoidType : RirTypeRef
@@ -841,6 +971,27 @@ internal sealed class RirStringType : RirTypeRef
 internal sealed class RirPrimitiveType : RirTypeRef
 {
     public RirPrimitiveType(string name) => Name = name;
+    public string Name { get; }
+}
+
+/// <summary>
+/// A reference to a bound C# class that crosses the bridge as an opaque
+/// <see cref="System.Runtime.InteropServices.GCHandle"/> pointer (ADR-051).
+/// Mirrors <c>RirObjectHandleType</c> in <c>RirModel.kt</c> field-for-field:
+/// <c>namespace</c> and <c>name</c> (camelCase via the shared JSON context policy).
+/// </summary>
+internal sealed class RirObjectHandleType : RirTypeRef
+{
+    public RirObjectHandleType(string @namespace, string name)
+    {
+        Namespace = @namespace;
+        Name = name;
+    }
+
+    /// <summary>The C# namespace of the referenced type, e.g. <c>"Sample.Text"</c>.</summary>
+    public string Namespace { get; }
+
+    /// <summary>The simple type name, e.g. <c>"Template"</c>.</summary>
     public string Name { get; }
 }
 
@@ -925,6 +1076,7 @@ internal sealed class RirDiagnostic
 [JsonSerializable(typeof(RirVoidType))]
 [JsonSerializable(typeof(RirStringType))]
 [JsonSerializable(typeof(RirPrimitiveType))]
+[JsonSerializable(typeof(RirObjectHandleType))]
 [JsonSerializable(typeof(RirDiagnostic))]
 [JsonSourceGenerationOptions(
     WriteIndented = true,

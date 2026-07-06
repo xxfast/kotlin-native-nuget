@@ -222,6 +222,120 @@ class RirParsingTest {
     assertEquals("SerializeObject", diagnostic.memberName)
   }
 
+  // ------------------------------------------------------------------
+  // ADR-051: RirObjectHandleType (kind=handle) and RirClass.isStatic
+  // ------------------------------------------------------------------
+
+  @Test
+  fun `type ref kind handle deserializes to RirObjectHandleType with namespace and name`() {
+    // Will fail to compile until RirObjectHandleType is added to RirModel.kt
+    val json = """
+      {
+        "assemblies": [
+          {
+            "packageId": "Sample.Text",
+            "assemblyName": "Sample.Text",
+            "namespaces": [
+              {
+                "name": "Sample.Text",
+                "types": [
+                  {
+                    "kind": "class",
+                    "name": "Template",
+                    "methods": [
+                      {
+                        "name": "Parse",
+                        "isStatic": true,
+                        "returnType": { "kind": "handle", "namespace": "Sample.Text", "name": "Template" },
+                        "parameters": []
+                      }
+                    ],
+                    "properties": []
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    """.trimIndent()
+
+    val file: RirFile = parseReverseIr(json)
+
+    val cls = file.assemblies[0].namespaces[0].types[0] as RirClass
+    val returnType: RirTypeRef = cls.methods[0].returnType
+    assertIs<RirObjectHandleType>(returnType)
+    assertEquals("Sample.Text", returnType.namespace)
+    assertEquals("Template", returnType.name)
+  }
+
+  @Test
+  fun `RirClass with isStatic true in json deserializes with isStatic true`() {
+    // Will fail to compile until isStatic is added to RirClass in RirModel.kt
+    val json = """
+      {
+        "assemblies": [
+          {
+            "packageId": "Sample.Text",
+            "assemblyName": "Sample.Text",
+            "namespaces": [
+              {
+                "name": "Sample.Text",
+                "types": [
+                  {
+                    "kind": "class",
+                    "name": "Template",
+                    "isStatic": true,
+                    "methods": [],
+                    "properties": []
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    """.trimIndent()
+
+    val file: RirFile = parseReverseIr(json)
+
+    val cls = file.assemblies[0].namespaces[0].types[0] as RirClass
+    assertEquals(true, cls.isStatic)
+  }
+
+  @Test
+  fun `RirClass without isStatic field in json defaults to isStatic false`() {
+    // Will fail to compile until isStatic is added to RirClass in RirModel.kt (default false)
+    val json = """
+      {
+        "assemblies": [
+          {
+            "packageId": "Sample.Text",
+            "assemblyName": "Sample.Text",
+            "namespaces": [
+              {
+                "name": "Sample.Text",
+                "types": [
+                  {
+                    "kind": "class",
+                    "name": "Template",
+                    "methods": [],
+                    "properties": []
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    """.trimIndent()
+
+    val file: RirFile = parseReverseIr(json)
+
+    val cls = file.assemblies[0].namespaces[0].types[0] as RirClass
+    assertEquals(false, cls.isStatic)
+  }
+
   @Test
   fun `parseReverseIr ignores unknown top-level fields`() {
     val json = """

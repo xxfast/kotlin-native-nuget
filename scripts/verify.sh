@@ -30,8 +30,10 @@ fi
 echo "==> Pack SampleLibrary NuGet (:sample-library:clean :sample-library:packNuget)"
 ./gradlew :sample-library:clean :sample-library:packNuget
 
-echo "==> Purge stale SampleLibrary NuGet cache"
-rm -rf ~/.nuget/packages/samplelibrary
+echo "==> Purge stale SampleLibrary + SampleDependency NuGet caches"
+# sample-dependency keeps version 1.0.0 while its fixture surface grows per feature,
+# so its cache goes stale exactly like samplelibrary's does.
+rm -rf ~/.nuget/packages/samplelibrary ~/.nuget/packages/sampledependency
 
 echo "==> C# consumer tests (dotnet test in sample-app/SampleApp.Tests)"
 cd "$ROOT/sample-app/SampleApp.Tests"

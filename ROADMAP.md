@@ -145,8 +145,8 @@ Post-goal expansion of the bridgeable subset is broken out into Phases 9–13 be
 
 Mirror of Phase 3. Moves the reverse bridge beyond v1 static methods: C# objects become Kotlin classes backed by opaque handles, over the same ADR-041 registration table. All constructs here are already present in `reverse-ir.json` (ADR-046) or are small extraction additions — this phase is primarily stub-gen + shim-gen coverage, relaxing the ADR-043 v1 ceiling construct by construct.
 
-- [ ] Map C# objects as opaque handles in Kotlin (`GCHandle`, mirror of `StableRef` / ADR-003) — needs ADR: handle representation, wrapper identity semantics
-  - [ ] Lifetime cleanup: Kotlin `Cleaner` → C#-side free export (mirror of the forward `IDisposable` pattern; decide `Cleaner`-only vs also explicit `close()` in the ADR)
+- [x] Map C# objects as opaque handles in Kotlin (`GCHandle.Normal` → `COpaquePointer`, mirror of `StableRef` / ADR-003; new wrapper per crossing, no identity caching, mirror of ADR-005) (see [ADR-051](docs/adr/051-csharp-objects-as-opaque-handles.md))
+  - [x] Lifetime cleanup: `Cleaner`-primary + explicit idempotent `close()` (`kotlin.AutoCloseable`) → shared `nuget_runtime_register` free export — deliberate inversion of the forward `IDisposable`-first choice (see [ADR-051](docs/adr/051-csharp-objects-as-opaque-handles.md))
 - [ ] Map instance constructors (`new Foo(...)` → Kotlin constructor or factory function)
 - [ ] Map instance methods and instance properties (v1-mappable parameter/return types first)
 - [ ] Map static C# properties (getter/setter, v1-mappable types) — deferred from stub-gen v1 for scope only; straightforward extension of the same function-pointer pattern (see [ADR-048](docs/adr/048-kotlin-stub-generation-from-reverse-ir.md))
@@ -218,6 +218,7 @@ Mirror of Phase 7, composed with its machinery.
 - Custom type mappers for dependency types (e.g., `kotlinx.datetime.Instant` → `DateTimeOffset`)
 - Pure-JVM ECMA-335 metadata reader + NuGet v3 client, dropping the .NET SDK prerequisite from the Kotlin-side build (synthesis D1) — no plugin in this space runs prerequisite-free; a genuine ergonomic edge
 - Hand-written C# shim escape hatch for API members outside the auto-bridgeable subset (spm4Kmp's bridge-folder model, synthesis D2)
+- Reverse-bridge integration tests against real published NuGet packages (not just the controlled `sample-dependency` fixture) — chosen precisely because they *don't* fit the bridgeable subset cleanly, to prove the ADR-043 skip diagnostics and partial-binding behaviour on messy real-world surfaces (mixed bridgeable/unbridgeable members, legacy nullability, multi-TFM)
 - Map KDoc annotations to C# XML docs for better IDE support
 - Expose Kotlin `Job` as a mapped C# type so cancellation can be tied to the job directly (e.g., `job.Cancel()`) instead of requiring a pre-created `CancellationTokenSource`
 - NativeAOT compatibility for the generated bindings (see [ADR-038](docs/adr/038-aot-compilation.md)) — blocked on a reflection-free generics dispatch path; `[DllImport]` → `[LibraryImport]`; AOT publish smoke test in CI
