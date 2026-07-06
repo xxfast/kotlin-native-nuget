@@ -8,8 +8,9 @@
     <!-- A framework-dependent build without a RID does not copy runtimes/{rid}/native/*
          assets to the output root, so the [DllImport("sample")] P/Invoke in the generated
          bindings fails with DllNotFoundException at runtime. Pinning a RuntimeIdentifier
-         makes MSBuild copy the matching native asset next to the test host. -->
-    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+         makes MSBuild copy the matching native asset next to the test host. Use the host
+         RID so the tests build and run on whatever platform they execute on. -->
+    <RuntimeIdentifier>$(NETCoreSdkRuntimeIdentifier)</RuntimeIdentifier>
     <SelfContained>false</SelfContained>
   </PropertyGroup>
 

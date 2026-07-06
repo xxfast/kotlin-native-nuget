@@ -47,6 +47,12 @@ On top of that, we have some additional conventions that are specific to this re
 - Avoid making unrelated changes or improvements that are not directly related to the ticket, as this can make code reviews more difficult and can introduce unintended side effects.
 - Don't touch unrelated code or files that are not necessary for the implementation of the ticket - no matter how small and easy it may look
 
+## Keep the C# Test Project Cross-Platform
+
+- `sample-app/SampleApp.Tests/SampleApp.Tests.csproj` pins a `<RuntimeIdentifier>` so MSBuild copies the matching `runtimes/{rid}/native/*` asset next to the test host (a RID-less framework-dependent build does not, causing `DllNotFoundException` on the `[DllImport]` P/Invoke).
+- Do **not** hardcode a specific RID (e.g. `win-x64`). Use `$(NETCoreSdkRuntimeIdentifier)` so it resolves to the host platform. CI runs on `macos-latest` (`osx-arm64`); a hardcoded `win-x64` builds fine but aborts at `dotnet test` with `Could not find 'dotnet' host for the 'X64' architecture`.
+- When verifying locally, remember NuGet caches `SampleLibrary` by version (`~/.nuget/packages/samplelibrary/1.0.0`). After re-running `:sample-library:packNuget`, clear that cache before `dotnet build`, or the stale package will surface as missing types (`Cat`, `IPet`, ...).
+
 ## Fail Fast & Follow Defensive Programming
 
 - Use `require` / `requireNotNull` / `check` with explicit messages to fail fast when preconditions are not met.
