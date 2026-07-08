@@ -12,3 +12,14 @@ fun greet(name: String): String {
   }
   return template.use { Template.render(it, name) }
 }
+
+/**
+ * Same round trip as [greet], but builds the Template using the ADR-052 mapped Kotlin
+ * secondary constructor (`Template(source)`) instead of the ADR-051 `Template.parse` factory:
+ * C# → Kotlin constructor → C# ctor thunk → opaque handle → C# Render call → string
+ * result.
+ */
+fun greetViaConstructor(name: String): String {
+  val template: Template = Template("Hello, {name}")
+  return template.use { Template.render(it, name) }
+}

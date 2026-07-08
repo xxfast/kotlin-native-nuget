@@ -40,6 +40,9 @@ data class RirClass(
   val isStatic: Boolean = false,
   val methods: List<RirMethod> = emptyList(),
   val properties: List<RirProperty> = emptyList(),
+  // ADR-052: at most one public instance `.ctor` per type in v1 (additive; old JSON parses with
+  // an empty list — a type with no public instance constructor has no RirConstructor entries).
+  val constructors: List<RirConstructor> = emptyList(),
 ) : RirType
 
 @Serializable
@@ -70,6 +73,14 @@ data class RirProperty(
 data class RirParameter(
   val name: String,
   val type: RirTypeRef,
+)
+
+// ADR-052: a C# public instance constructor. Return is implicit (the enclosing RirClass's own
+// RirObjectHandleType) — a constructor never returns null, unlike a factory RirMethod, which is
+// why this is a distinct node rather than reusing RirMethod (whose returnType is mandatory).
+@Serializable
+data class RirConstructor(
+  val parameters: List<RirParameter> = emptyList(),
 )
 
 @Serializable

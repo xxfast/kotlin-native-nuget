@@ -336,6 +336,86 @@ class RirParsingTest {
     assertEquals(false, cls.isStatic)
   }
 
+  // ------------------------------------------------------------------
+  // ADR-052: RirClass.constructors (RirConstructor)
+  // ------------------------------------------------------------------
+
+  @Test
+  fun `RirClass with a single constructor entry deserializes to one RirConstructor with parameters`() {
+    // Will fail to compile until RirConstructor / RirClass.constructors is added to RirModel.kt
+    val json = """
+      {
+        "assemblies": [
+          {
+            "packageId": "Sample.Text",
+            "assemblyName": "Sample.Text",
+            "namespaces": [
+              {
+                "name": "Sample.Text",
+                "types": [
+                  {
+                    "kind": "class",
+                    "name": "Template",
+                    "methods": [],
+                    "properties": [],
+                    "constructors": [
+                      {
+                        "parameters": [
+                          { "name": "source", "type": { "kind": "string" } }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    """.trimIndent()
+
+    val file: RirFile = parseReverseIr(json)
+
+    val cls = file.assemblies[0].namespaces[0].types[0] as RirClass
+    assertEquals(1, cls.constructors.size)
+    assertEquals(1, cls.constructors[0].parameters.size)
+    assertEquals("source", cls.constructors[0].parameters[0].name)
+    assertIs<RirStringType>(cls.constructors[0].parameters[0].type)
+  }
+
+  @Test
+  fun `RirClass without a constructors field in json defaults to an empty constructors list`() {
+    // Will fail to compile until RirClass.constructors is added to RirModel.kt (default emptyList)
+    val json = """
+      {
+        "assemblies": [
+          {
+            "packageId": "Sample.Text",
+            "assemblyName": "Sample.Text",
+            "namespaces": [
+              {
+                "name": "Sample.Text",
+                "types": [
+                  {
+                    "kind": "class",
+                    "name": "Template",
+                    "methods": [],
+                    "properties": []
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    """.trimIndent()
+
+    val file: RirFile = parseReverseIr(json)
+
+    val cls = file.assemblies[0].namespaces[0].types[0] as RirClass
+    assertEquals(0, cls.constructors.size)
+  }
+
   @Test
   fun `parseReverseIr ignores unknown top-level fields`() {
     val json = """

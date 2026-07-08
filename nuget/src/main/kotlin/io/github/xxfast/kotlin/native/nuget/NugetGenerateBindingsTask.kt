@@ -1,17 +1,19 @@
 package io.github.xxfast.kotlin.native.nuget
 
 import io.github.xxfast.kotlin.native.nuget.rir.RirClass
+import io.github.xxfast.kotlin.native.nuget.rir.RirConstructor
 import io.github.xxfast.kotlin.native.nuget.rir.RirFile
 import io.github.xxfast.kotlin.native.nuget.rir.RirMethod
 import io.github.xxfast.kotlin.native.nuget.rir.RirObjectHandleType
 import io.github.xxfast.kotlin.native.nuget.rir.RirParameter
 import io.github.xxfast.kotlin.native.nuget.rir.RirPrimitiveType
+import io.github.xxfast.kotlin.native.nuget.rir.RirRegistrable
 import io.github.xxfast.kotlin.native.nuget.rir.RirStringType
 import io.github.xxfast.kotlin.native.nuget.rir.RirTypeKey
 import io.github.xxfast.kotlin.native.nuget.rir.RirTypeRef
 import io.github.xxfast.kotlin.native.nuget.rir.RirVoidType
 import io.github.xxfast.kotlin.native.nuget.rir.boundHandleTypes
-import io.github.xxfast.kotlin.native.nuget.rir.bridgeableStaticMethods
+import io.github.xxfast.kotlin.native.nuget.rir.bridgeableRegistrables
 import io.github.xxfast.kotlin.native.nuget.rir.parseReverseIr
 import io.github.xxfast.kotlin.native.nuget.rir.registrationExportName
 import org.gradle.api.DefaultTask
@@ -56,34 +58,44 @@ fun generateKotlinStubs(
       val pkgPath: String = kotlinPkg.replace('.', '/')
 
       namespace.types.filterIsInstance<RirClass>().forEach { cls ->
-        val bridgeable: List<RirMethod> = bridgeableStaticMethods(cls, boundTypes)
+        // ADR-052 "shared bridgeable ordering": ONE ordered list — constructor (if any) first,
+        // then bridgeable static methods — is the single source of truth both this task and
+        // NugetGenerateShimsTask derive their registration-order-sensitive output from.
+        val registrables: List<RirRegistrable> = bridgeableRegistrables(cls, boundTypes)
+        val ctors: List<RirConstructor> =
+          registrables.filterIsInstance<RirRegistrable.Ctor>().map { it.ctor }
+        val bridgeable: List<RirMethod> =
+          registrables.filterIsInstance<RirRegistrable.Method>().map { it.method }
 
-        if (bridgeable.isEmpty()) return@forEach
+        if (registrables.isEmpty()) return@forEach
 
         val hasString: Boolean = bridgeable.any { method ->
           method.returnType is RirStringType ||
             method.parameters.any { p -> p.type is RirStringType }
-        }
+        } || ctors.any { ctor -> ctor.parameters.any { p -> p.type is RirStringType } }
         if (hasString) needsInterop = true
 
-        // ADR-051: NugetRuntime.kt is needed whenever any bridgeable signature contains a
-        // handle type — the wrapper class uses NugetObjectHandle and the Cleaner path needs
-        // freeGcHandleFn. Emitted once (below), regardless of how many classes trigger it.
+        // ADR-051/052: NugetRuntime.kt is needed whenever any bridgeable signature contains a
+        // handle type, or the class has a public instance constructor — a constructor's return
+        // is implicitly the class's own handle type, so it always needs NugetObjectHandle/Cleaner.
+        // Emitted once (below), regardless of how many classes trigger it.
         val hasHandle: Boolean = bridgeable.any { method ->
           method.returnType is RirObjectHandleType ||
             method.parameters.any { p -> p.type is RirObjectHandleType }
-        }
+        } || ctors.isNotEmpty()
         if (hasHandle) needsRuntime = true
 
         val exportName: String = registrationExportName(namespace.name, cls.name)
 
         result.add(GeneratedFile(
           relativePath = "nativeMain/$pkgPath/${cls.name}Bindings.kt",
-          content = bindingsFileContent(kotlinPkg, cls, bridgeable, exportName, assembly.packageId),
+          content = bindingsFileContent(
+            kotlinPkg, cls, registrables, exportName, assembly.packageId,
+          ),
         ))
         result.add(GeneratedFile(
           relativePath = "nativeMain/$pkgPath/${cls.name}.kt",
-          content = stubFileContent(kotlinPkg, cls, bridgeable, assembly.packageId),
+          content = stubFileContent(kotlinPkg, cls, bridgeable, ctors, assembly.packageId),
         ))
       }
     }
@@ -163,12 +175,16 @@ private fun cfnType(type: RirTypeRef): String = when (type) {
 private fun bindingsFileContent(
   kotlinPkg: String,
   cls: RirClass,
-  bridgeable: List<RirMethod>,
+  registrables: List<RirRegistrable>,
   exportName: String,
   packageId: String,
 ): String {
-  val hasString: Boolean = bridgeable.any { m ->
-    m.returnType is RirStringType || m.parameters.any { p -> p.type is RirStringType }
+  val hasString: Boolean = registrables.any { r ->
+    when (r) {
+      is RirRegistrable.Ctor -> r.ctor.parameters.any { it.type is RirStringType }
+      is RirRegistrable.Method -> r.method.returnType is RirStringType ||
+        r.method.parameters.any { it.type is RirStringType }
+    }
   }
 
   val imports: List<String> = buildList {
@@ -183,20 +199,42 @@ private fun bindingsFileContent(
     add("import kotlin.experimental.ExperimentalNativeApi")
   }
 
-  val fnVars: String = bridgeable.joinToString("\n\n") { method ->
-    val paramCfnTypes: String = method.parameters.joinToString(", ") { cfnType(it.type) }
-    val retCfnType: String = cfnType(method.returnType)
-    "@Suppress(\"NOTHING_TO_INLINE\")\n" +
-      "internal var ${method.name.toMethodCamelCase()}Fn: " +
-        "CPointer<CFunction<($paramCfnTypes) -> $retCfnType>>? = null"
+  // ADR-052: rendered directly off the shared bridgeableRegistrables() ordering — constructor
+  // pointer first (if any), then method pointers — so the register signature/body below can
+  // never drift out of sync with the C# ModuleInitializer's pointer-argument order
+  // (NugetGenerateShimsTask consumes the exact same ordered list).
+  val fnVars: String = registrables.joinToString("\n\n") { r ->
+    when (r) {
+      is RirRegistrable.Ctor -> {
+        val paramCfnTypes: String = r.ctor.parameters.joinToString(", ") { cfnType(it.type) }
+        "@Suppress(\"NOTHING_TO_INLINE\")\n" +
+          "internal var ctorFn: CPointer<CFunction<($paramCfnTypes) -> COpaquePointer?>>? = null"
+      }
+      is RirRegistrable.Method -> {
+        val paramCfnTypes: String = r.method.parameters.joinToString(", ") { cfnType(it.type) }
+        val retCfnType: String = cfnType(r.method.returnType)
+        "@Suppress(\"NOTHING_TO_INLINE\")\n" +
+          "internal var ${r.method.name.toMethodCamelCase()}Fn: " +
+            "CPointer<CFunction<($paramCfnTypes) -> $retCfnType>>? = null"
+      }
+    }
   }
 
-  val regParams: String = bridgeable.joinToString(",\n  ") { method ->
-    "${method.name.toMethodCamelCase()}Ptr: COpaquePointer"
+  val regParams: String = registrables.joinToString(",\n  ") { r ->
+    when (r) {
+      is RirRegistrable.Ctor -> "ctorPtr: COpaquePointer"
+      is RirRegistrable.Method -> "${r.method.name.toMethodCamelCase()}Ptr: COpaquePointer"
+    }
   }
 
-  val regBody: String = bridgeable.joinToString("\n  ") { method ->
-    "${method.name.toMethodCamelCase()}Fn = ${method.name.toMethodCamelCase()}Ptr.reinterpret()"
+  val regBody: String = registrables.joinToString("\n  ") { r ->
+    when (r) {
+      is RirRegistrable.Ctor -> "ctorFn = ctorPtr.reinterpret()"
+      is RirRegistrable.Method -> {
+        val name: String = r.method.name.toMethodCamelCase()
+        "${name}Fn = ${name}Ptr.reinterpret()"
+      }
+    }
   }
 
   return """
@@ -231,21 +269,28 @@ private fun stubFileContent(
   kotlinPkg: String,
   cls: RirClass,
   bridgeable: List<RirMethod>,
+  ctors: List<RirConstructor>,
   packageId: String,
 ): String {
   val hasStringReturn: Boolean = bridgeable.any { it.returnType is RirStringType }
   val hasStringParam: Boolean = bridgeable
-    .any { m -> m.parameters.any { p -> p.type is RirStringType } }
+    .any { m -> m.parameters.any { p -> p.type is RirStringType } } ||
+    ctors.any { ctor -> ctor.parameters.any { p -> p.type is RirStringType } }
   val hasHandle: Boolean = bridgeable.any { method ->
     method.returnType is RirObjectHandleType ||
       method.parameters.any { p -> p.type is RirObjectHandleType }
   }
 
   // ADR-051: a non-static class that appears as a handle type in its own bridgeable methods
-  // renders as a wrapper class. Classes without handle involvement keep the ADR-048 object shape.
-  val isClassWrapper: Boolean = !cls.isStatic && hasHandle
+  // renders as a wrapper class. ADR-052 extends this: a non-static class with a public instance
+  // constructor is always a wrapper too — the constructor's implicit return is the class's own
+  // handle type, even if no *method* on the class happens to reference it. Classes with neither
+  // keep the ADR-048 object shape.
+  val isClassWrapper: Boolean = !cls.isStatic && (hasHandle || ctors.isNotEmpty())
   if (isClassWrapper) {
-    return classWrapperContent(kotlinPkg, cls, bridgeable, hasStringReturn, hasStringParam, packageId)
+    return classWrapperContent(
+      kotlinPkg, cls, bridgeable, ctors, hasStringReturn, hasStringParam, packageId,
+    )
   }
 
   // Always required: every stub method body calls `fn.invoke(...)` on a
@@ -296,10 +341,15 @@ private fun stubFileContent(
 //   - createCleaner for automatic GCHandle release on GC
 //   - AutoCloseable / close() for deterministic release
 //   - companion object containing the bridged static methods
+// ADR-052 additionally renders, for a class with a public instance constructor:
+//   - a public secondary `constructor(...)` delegating through `this(construct(...))`
+//   - a file-private `construct(...)` helper (below the class) that runs the ctor thunk and
+//     requireNotNulls the returned handle (a C# constructor never returns null)
 private fun classWrapperContent(
   kotlinPkg: String,
   cls: RirClass,
   bridgeable: List<RirMethod>,
+  ctors: List<RirConstructor>,
   hasStringReturn: Boolean,
   hasStringParam: Boolean,
   packageId: String,
@@ -349,13 +399,73 @@ private fun classWrapperContent(
     appendLine("  private val cleaner = createCleaner(this.handle) { it.free() }")
     appendLine()
     appendLine("  override fun close(): Unit = handle.free()")
+    if (ctors.isNotEmpty()) {
+      appendLine()
+      ctors.forEach { ctor -> appendLine("  ${buildSecondaryConstructor(ctor)}") }
+    }
     appendLine()
     appendLine("  companion object {")
     appendLine()
     appendLine("    $methods")
     appendLine("  }")
-    append("}")
+    appendLine("}")
+    if (ctors.isNotEmpty()) {
+      appendLine()
+      ctors.forEach { ctor -> append(buildConstructHelper(cls, ctor, packageId)) }
+    }
   }
+}
+
+// ADR-052: the public secondary `constructor(...)` on the wrapper class, delegating through the
+// file-private `construct(...)` helper — the "can't run code before this(...)" restriction is
+// sidestepped by pushing the bridge call into the delegation expression itself.
+private fun buildSecondaryConstructor(ctor: RirConstructor): String {
+  val params: String = ctor.parameters.joinToString(", ") { p ->
+    "${p.name}: ${kotlinType(p.type)}"
+  }
+  val args: String = ctor.parameters.joinToString(", ") { it.name }
+  return "constructor($params) : this(construct($args))"
+}
+
+// ADR-052: file-private helper (not a class member — Kotlin's `: this(...)` delegation only
+// accepts an expression, so the bridge call lives in an ordinary top-level function). Marshals
+// parameters exactly as buildStubMethod does, then requireNotNulls the returned handle — a C#
+// constructor never returns null, unlike ADR-051's nullable Foo? factory returns.
+private fun buildConstructHelper(cls: RirClass, ctor: RirConstructor, packageId: String): String {
+  val params: String = ctor.parameters.joinToString(", ") { p ->
+    "${p.name}: ${kotlinType(p.type)}"
+  }
+  val hasStringParam: Boolean = ctor.parameters.any { it.type is RirStringType }
+
+  val invokeArgs: String = ctor.parameters.joinToString(", ") { p ->
+    val type: RirTypeRef = p.type
+    when {
+      type is RirStringType -> "${p.name}.cstr.ptr"
+      type is RirObjectHandleType -> "${p.name}.handle.require(\"${type.name}\")"
+      type is RirPrimitiveType && type.name == "char" -> "${p.name}.code.toUShort()"
+      else -> p.name
+    }
+  }
+
+  val invokeCall: String =
+    if (hasStringParam) "memScoped { fn.invoke($invokeArgs) }" else "fn.invoke($invokeArgs)"
+
+  val failMsg =
+    "\"${cls.name} bindings are not registered. \" +\n" +
+      "      \"Ensure the generated C# shims for $packageId are referenced \" +\n" +
+      "      \"in the consuming application before making Kotlin → C# bridge calls.\""
+
+  return """
+    |private fun construct($params): COpaquePointer {
+    |  val fn = requireNotNull(ctorFn) {
+    |    $failMsg
+    |  }
+    |  val ptr: COpaquePointer? = $invokeCall
+    |  return requireNotNull(ptr) {
+    |    "${cls.name} constructor returned a null handle — a C# constructor never returns null."
+    |  }
+    |}
+  """.trimMargin()
 }
 
 private fun buildStubMethod(cls: RirClass, method: RirMethod, packageId: String): String {

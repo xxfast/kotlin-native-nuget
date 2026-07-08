@@ -1,17 +1,19 @@
 package io.github.xxfast.kotlin.native.nuget
 
 import io.github.xxfast.kotlin.native.nuget.rir.RirClass
+import io.github.xxfast.kotlin.native.nuget.rir.RirConstructor
 import io.github.xxfast.kotlin.native.nuget.rir.RirFile
 import io.github.xxfast.kotlin.native.nuget.rir.RirMethod
 import io.github.xxfast.kotlin.native.nuget.rir.RirObjectHandleType
 import io.github.xxfast.kotlin.native.nuget.rir.RirParameter
 import io.github.xxfast.kotlin.native.nuget.rir.RirPrimitiveType
+import io.github.xxfast.kotlin.native.nuget.rir.RirRegistrable
 import io.github.xxfast.kotlin.native.nuget.rir.RirStringType
 import io.github.xxfast.kotlin.native.nuget.rir.RirTypeKey
 import io.github.xxfast.kotlin.native.nuget.rir.RirTypeRef
 import io.github.xxfast.kotlin.native.nuget.rir.RirVoidType
 import io.github.xxfast.kotlin.native.nuget.rir.boundHandleTypes
-import io.github.xxfast.kotlin.native.nuget.rir.bridgeableStaticMethods
+import io.github.xxfast.kotlin.native.nuget.rir.bridgeableRegistrables
 import io.github.xxfast.kotlin.native.nuget.rir.parseReverseIr
 import io.github.xxfast.kotlin.native.nuget.rir.registrationExportName
 import org.gradle.api.DefaultTask
@@ -49,14 +51,23 @@ fun generateCSharpShims(file: RirFile, nativeLibraryName: String): List<Generate
   file.assemblies.forEach { assembly ->
     assembly.namespaces.forEach { namespace ->
       namespace.types.filterIsInstance<RirClass>().forEach { cls ->
-        val bridgeable: List<RirMethod> = bridgeableStaticMethods(cls, boundTypes)
+        // ADR-052 "shared bridgeable ordering": the exact same ordered list (constructor first,
+        // then bridgeable static methods) that NugetGenerateBindingsTask derives its register
+        // signature/body from — anti-drift for the DllImport params / ModuleInitializer args
+        // below.
+        val registrables: List<RirRegistrable> = bridgeableRegistrables(cls, boundTypes)
 
-        if (bridgeable.isEmpty()) return@forEach
+        if (registrables.isEmpty()) return@forEach
 
-        // ADR-051: track whether any method has a handle type for NugetRuntimeRegistration.cs
-        val hasHandle: Boolean = bridgeable.any { method ->
-          method.returnType is RirObjectHandleType ||
-            method.parameters.any { p -> p.type is RirObjectHandleType }
+        // ADR-051/052: track whether any method has a handle type, or the class has a public
+        // instance constructor (a constructor's return is implicitly a handle — GCHandle.Alloc),
+        // for NugetRuntimeRegistration.cs.
+        val hasHandle: Boolean = registrables.any { r ->
+          when (r) {
+            is RirRegistrable.Ctor -> true
+            is RirRegistrable.Method -> r.method.returnType is RirObjectHandleType ||
+              r.method.parameters.any { p -> p.type is RirObjectHandleType }
+          }
         }
         if (hasHandle) needsRuntime = true
 
@@ -67,7 +78,7 @@ fun generateCSharpShims(file: RirFile, nativeLibraryName: String): List<Generate
           content = registrationFileContent(
             namespaceName = namespace.name,
             cls = cls,
-            bridgeable = bridgeable,
+            registrables = registrables,
             exportName = exportName,
             nativeLibraryName = nativeLibraryName,
           ),
@@ -166,22 +177,42 @@ private fun paramConversion(p: RirParameter): String = when (p.type) {
 private fun registrationFileContent(
   namespaceName: String,
   cls: RirClass,
-  bridgeable: List<RirMethod>,
+  registrables: List<RirRegistrable>,
   exportName: String,
   nativeLibraryName: String,
 ): String {
-  val dllImportParams: String = bridgeable.joinToString(", ") { m ->
-    "IntPtr ${m.name.toMethodCamelCase()}Ptr"
+  // ADR-052: rendered directly off the shared bridgeableRegistrables() ordering — ctorPtr first
+  // (if any), then method pointers — matching NugetGenerateBindingsTask's register signature.
+  val dllImportParams: String = registrables.joinToString(", ") { r ->
+    when (r) {
+      is RirRegistrable.Ctor -> "IntPtr ctorPtr"
+      is RirRegistrable.Method -> "IntPtr ${r.method.name.toMethodCamelCase()}Ptr"
+    }
   }
 
-  val moduleInitArgs: String = bridgeable.joinToString(",\n                ") { m ->
-    val paramTypes: String = m.parameters.joinToString(", ") { p -> csAbiType(p.type) }
-    val retType: String = csAbiType(m.returnType)
-    val fnTypeParams: String = if (paramTypes.isEmpty()) retType else "$paramTypes, $retType"
-    "(IntPtr)(delegate* unmanaged[Cdecl]<$fnTypeParams>)(&${m.name}_Thunk)"
+  val moduleInitArgs: String = registrables.joinToString(",\n                ") { r ->
+    when (r) {
+      is RirRegistrable.Ctor -> {
+        val paramTypes: String = r.ctor.parameters.joinToString(", ") { p -> csAbiType(p.type) }
+        // ADR-052: Ctor_Thunk always returns IntPtr (a constructor's return is the handle itself).
+        val fnTypeParams: String = if (paramTypes.isEmpty()) "IntPtr" else "$paramTypes, IntPtr"
+        "(IntPtr)(delegate* unmanaged[Cdecl]<$fnTypeParams>)(&Ctor_Thunk)"
+      }
+      is RirRegistrable.Method -> {
+        val paramTypes: String = r.method.parameters.joinToString(", ") { p -> csAbiType(p.type) }
+        val retType: String = csAbiType(r.method.returnType)
+        val fnTypeParams: String = if (paramTypes.isEmpty()) retType else "$paramTypes, $retType"
+        "(IntPtr)(delegate* unmanaged[Cdecl]<$fnTypeParams>)(&${r.method.name}_Thunk)"
+      }
+    }
   }
 
-  val thunks: String = bridgeable.joinToString("\n\n") { buildThunkMethod(cls, it) }
+  val thunks: String = registrables.joinToString("\n\n") { r ->
+    when (r) {
+      is RirRegistrable.Ctor -> buildCtorThunkMethod(cls, r.ctor)
+      is RirRegistrable.Method -> buildThunkMethod(cls, r.method)
+    }
+  }
 
   return """
     |// <auto-generated>
@@ -260,6 +291,31 @@ private fun buildThunkMethod(cls: RirClass, method: RirMethod): String {
   return """
     |        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
     |        private static $retAbiType $thunkName($paramList)
+    |        {
+    |$body
+    |        }
+  """.trimMargin()
+}
+
+// ADR-052: the constructor thunk. Mirrors ADR-051's factory thunks (e.g. Parse_Thunk) but calls
+// `new` and is unconditionally non-null — a C# constructor either succeeds or throws, it never
+// yields IntPtr.Zero (contrast ADR-051's nullable-factory `result is null ? IntPtr.Zero : …`).
+private fun buildCtorThunkMethod(cls: RirClass, ctor: RirConstructor): String {
+  val paramList: String = ctor.parameters
+    .joinToString(", ") { p -> "${csAbiType(p.type)} ${thunkParamName(p)}" }
+  val callArgs: String = ctor.parameters.joinToString(", ") { p -> paramConversion(p) }
+
+  val bodyLines: List<String> = listOf(
+    "var obj = new ${cls.name}($callArgs);",
+    "return GCHandle.ToIntPtr(GCHandle.Alloc(obj));",
+  )
+  val body: String = bodyLines.joinToString("\n") { "            $it" }
+
+  // ADR-049 "let it crash" (unchanged for constructors, ADR-052): no try/catch — a throwing C#
+  // constructor escapes this thunk and fast-fails the host process.
+  return """
+    |        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+    |        private static IntPtr Ctor_Thunk($paramList)
     |        {
     |$body
     |        }

@@ -33,6 +33,33 @@ fun boundHandleTypes(file: RirFile): Set<RirTypeKey> =
 fun bridgeableStaticMethods(cls: RirClass, boundHandleTypes: Set<RirTypeKey>): List<RirMethod> =
   cls.methods.filter { it.isStatic && isV1Bridgeable(it, boundHandleTypes) }
 
+// ADR-052: mirrors bridgeableStaticMethods, but for public instance constructors. v1 supports at
+// most one public instance constructor per type — the metadata reader emits either zero or one
+// RirConstructor per class; multiple public `.ctor`s are grouped and skipped as an overload set
+// upstream (skipped_overload_set diagnostic) and never reach either generator.
+fun bridgeableConstructors(cls: RirClass, boundHandleTypes: Set<RirTypeKey>): List<RirConstructor> =
+  cls.constructors.filter { ctor -> ctor.parameters.all { isV1Type(it.type, boundHandleTypes) } }
+
+// ADR-052: a member that receives exactly one function-pointer slot on the type's
+// nuget_{ns}_{type}_register export — either the type's public instance constructor or a
+// bridgeable static method. Sealed so both generators derive the registration-order-sensitive
+// parts of their output (fn-pointer variables, register parameters/body, C# DllImport parameters,
+// C# ModuleInitializer pointer arguments) from ONE shared, ordered list, rather than each
+// independently remembering "constructor before methods" — closing the same order-drift hole
+// ADR-049 Alternative 10 closed for methods-only registration, now extended to the constructor.
+sealed interface RirRegistrable {
+  data class Ctor(val ctor: RirConstructor) : RirRegistrable
+  data class Method(val method: RirMethod) : RirRegistrable
+}
+
+// ADR-052 "shared bridgeable ordering": the constructor pointer (if any) comes FIRST, then
+// bridgeable static methods in their existing reverse-ir.json order. Both NugetGenerateBindingsTask
+// and NugetGenerateShimsTask must consume this function directly — never re-derive the combined
+// order independently, or the two sides' registration slots can silently drift out of alignment.
+fun bridgeableRegistrables(cls: RirClass, boundHandleTypes: Set<RirTypeKey>): List<RirRegistrable> =
+  bridgeableConstructors(cls, boundHandleTypes).map { RirRegistrable.Ctor(it) } +
+    bridgeableStaticMethods(cls, boundHandleTypes).map { RirRegistrable.Method(it) }
+
 // ADR-048 v1 bridgeable subset: static methods only, void/string/primitive/handle parameter and
 // return types (overload sets, ref struct, open generics, dynamic, and DIMs are already filtered
 // out before either generator sees them, per ADR-043).

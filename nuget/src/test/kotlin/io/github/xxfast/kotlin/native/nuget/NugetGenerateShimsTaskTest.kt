@@ -2,6 +2,7 @@ package io.github.xxfast.kotlin.native.nuget
 
 import io.github.xxfast.kotlin.native.nuget.rir.RirAssembly
 import io.github.xxfast.kotlin.native.nuget.rir.RirClass
+import io.github.xxfast.kotlin.native.nuget.rir.RirConstructor
 import io.github.xxfast.kotlin.native.nuget.rir.RirFile
 import io.github.xxfast.kotlin.native.nuget.rir.RirMethod
 import io.github.xxfast.kotlin.native.nuget.rir.RirNamespace
@@ -718,6 +719,159 @@ class NugetGenerateShimsTaskTest {
     assertTrue(
       files.none { it.relativePath.endsWith("NugetRuntimeRegistration.cs") },
       "NugetRuntimeRegistration.cs must not be emitted when no handle types are present in the IR",
+    )
+  }
+
+  // ------------------------------------------------------------------
+  // ADR-052: C# instance constructors in Kotlin — `new Foo(...)` gains a `Ctor_Thunk`, registered
+  // first in Initialize(), mirroring ADR-051's Parse_Thunk but unconditionally non-null.
+  //
+  // Canonical fixture: Sample.Text.Template — public non-static class with:
+  //   - one public instance constructor: Template(string source)
+  //   - the existing ADR-051 statics: Parse(source: string): Template, Render(template, name): string
+  //
+  // NOTE: RirClass.constructors / RirConstructor do not yet drive any generation logic in
+  // NugetGenerateShimsTask.kt (ADR-052 Step 3 "red" state) — the fixture compiles (RirModel.kt was
+  // extended additively) but the assertions below fail because the generator does not yet emit
+  // Ctor_Thunk or register it first.
+  // ------------------------------------------------------------------
+
+  private val templateWithCtorRir: RirFile = RirFile(
+    assemblies = listOf(
+      RirAssembly(
+        packageId = "Sample.Text",
+        assemblyName = "Sample.Text",
+        namespaces = listOf(
+          RirNamespace(
+            name = "Sample.Text",
+            types = listOf(
+              RirClass(
+                name = "Template",
+                isStatic = false,
+                constructors = listOf(
+                  RirConstructor(
+                    parameters = listOf(
+                      RirParameter(name = "source", type = RirStringType),
+                    ),
+                  ),
+                ),
+                methods = listOf(
+                  RirMethod(
+                    name = "Parse",
+                    isStatic = true,
+                    returnType = RirObjectHandleType(namespace = "Sample.Text", name = "Template"),
+                    parameters = listOf(
+                      RirParameter(name = "source", type = RirStringType),
+                    ),
+                  ),
+                  RirMethod(
+                    name = "Render",
+                    isStatic = true,
+                    returnType = RirStringType,
+                    parameters = listOf(
+                      RirParameter(
+                        name = "template",
+                        type = RirObjectHandleType(namespace = "Sample.Text", name = "Template"),
+                      ),
+                      RirParameter(name = "name", type = RirStringType),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    ),
+  )
+
+  private fun templateWithCtorShim(): GeneratedFile {
+    val files: List<GeneratedFile> = generateCSharpShims(templateWithCtorRir, "sample")
+    return files.single { it.relativePath.endsWith("TemplateRegistration.cs") }
+  }
+
+  // ------------------------------------------------------------------
+  // 15. Ctor_Thunk: signature, `new` call, unconditionally non-null GCHandle
+  // ------------------------------------------------------------------
+
+  @Test
+  fun `Ctor_Thunk signature returns IntPtr and takes IntPtr source parameter`() {
+    val shim: GeneratedFile = templateWithCtorShim()
+    assertContains(shim.content, "private static IntPtr Ctor_Thunk(IntPtr sourcePtr)")
+  }
+
+  @Test
+  fun `Ctor_Thunk body calls new Template with the marshalled source string`() {
+    val shim: GeneratedFile = templateWithCtorShim()
+    assertContains(
+      shim.content,
+      "new Template(Marshal.PtrToStringUTF8(sourcePtr)!)",
+      message = "ADR-052: Ctor_Thunk must construct the C# object via `new Template(...)`",
+    )
+  }
+
+  @Test
+  fun `Ctor_Thunk body returns GCHandle ToIntPtr of GCHandle Alloc unconditionally, never IntPtr Zero`() {
+    val shim: GeneratedFile = templateWithCtorShim()
+    val thunkBody: String = shim.content
+      .substringAfter(
+        delimiter = "private static IntPtr Ctor_Thunk(IntPtr sourcePtr)",
+        missingDelimiterValue = "",
+      )
+      .substringBefore("[UnmanagedCallersOnly")
+
+    assertContains(
+      thunkBody,
+      "GCHandle.ToIntPtr(GCHandle.Alloc(",
+      message = "ADR-052: Ctor_Thunk must always allocate and return a GCHandle — `new` never " +
+        "returns null, unlike ADR-051's nullable factory thunks",
+    )
+    assertFalse(
+      thunkBody.contains("IntPtr.Zero"),
+      "ADR-052: Ctor_Thunk must never return IntPtr.Zero — a C# constructor never returns null",
+    )
+  }
+
+  // ------------------------------------------------------------------
+  // 16. Ctor_Thunk is registered FIRST in Initialize(), before the static-method thunks
+  // ------------------------------------------------------------------
+
+  @Test
+  fun `TemplateRegistration ModuleInitializer passes Ctor_Thunk before Parse_Thunk and Render_Thunk`() {
+    val shim: GeneratedFile = templateWithCtorShim()
+
+    val ctorIndex: Int = shim.content.indexOf("&Ctor_Thunk")
+    val parseIndex: Int = shim.content.indexOf("&Parse_Thunk")
+    val renderIndex: Int = shim.content.indexOf("&Render_Thunk")
+
+    assertTrue(
+      ctorIndex >= 0 && parseIndex >= 0 && renderIndex >= 0,
+      "all three thunks (Ctor_Thunk, Parse_Thunk, Render_Thunk) must be registered, got indices " +
+        "$ctorIndex, $parseIndex, $renderIndex",
+    )
+    assertTrue(
+      ctorIndex < parseIndex && ctorIndex < renderIndex,
+      "ADR-052 shared bridgeable ordering: Ctor_Thunk must be registered first, before the " +
+        "static-method thunks — got indices ctor=$ctorIndex, parse=$parseIndex, render=$renderIndex",
+    )
+  }
+
+  @Test
+  fun `TemplateRegistration DllImport declares ctorPtr as its first parameter`() {
+    val shim: GeneratedFile = templateWithCtorShim()
+
+    val externLine: String = shim.content.lines().first { it.contains("_register(IntPtr") }
+    val ctorIndex: Int = externLine.indexOf("ctorPtr")
+    val parseIndex: Int = externLine.indexOf("parsePtr")
+    val renderIndex: Int = externLine.indexOf("renderPtr")
+
+    assertTrue(
+      ctorIndex >= 0 && parseIndex >= 0 && renderIndex >= 0,
+      "ctorPtr, parsePtr, and renderPtr must all be declared, got: '$externLine'",
+    )
+    assertTrue(
+      ctorIndex < parseIndex && ctorIndex < renderIndex,
+      "ADR-052: ctorPtr must be the first DllImport parameter — got '$externLine'",
     )
   }
 }

@@ -255,6 +255,9 @@ internal static class AssemblyExtractor
         // --- Methods ---
         // Group by name first to detect overload sets.
         var methodGroups = new Dictionary<string, List<MethodDefinition>>(StringComparer.Ordinal);
+        // ADR-052: public instance `.ctor` candidates, collected separately from methodGroups —
+        // a constructor has no return type and maps to a distinct RirConstructor node, not RirMethod.
+        var ctorCandidates = new List<MethodDefinition>();
 
         foreach (var handle in typeDef.GetMethods())
         {
@@ -263,13 +266,22 @@ internal static class AssemblyExtractor
             // `& Public` for non-zero also matches Assembly (0x3, internal) and Family (0x4,
             // protected), since both AND to a non-zero value against 0x6. Must mask first, then
             // compare equality against Public — otherwise internal/protected methods leak through
-            // as if they were public.
+            // as if they were public. This check must run BEFORE the narrowed `.ctor` admission
+            // below so non-public constructors stay excluded (ADR-052).
             if ((method.Attributes & System.Reflection.MethodAttributes.MemberAccessMask)
                 != System.Reflection.MethodAttributes.Public) continue;
 
-            // Skip property accessors (get_X, set_X) and constructors (.ctor, .cctor) —
-            // constructors are SpecialName and stay excluded in v1 (ADR-051 scope).
-            if ((method.Attributes & System.Reflection.MethodAttributes.SpecialName) != 0) continue;
+            if ((method.Attributes & System.Reflection.MethodAttributes.SpecialName) != 0)
+            {
+                // ADR-052: narrow the SpecialName skip to admit public instance constructors as
+                // candidates. Everything else SpecialName (.cctor, get_X/set_X accessors) stays
+                // skipped, matching the ADR-051 scope this replaces.
+                var specialName = mr.GetString(method.Name);
+                bool isPublicInstanceCtor = specialName == ".ctor"
+                    && (method.Attributes & System.Reflection.MethodAttributes.Static) == 0;
+                if (isPublicInstanceCtor) ctorCandidates.Add(method);
+                continue;
+            }
 
             var name = mr.GetString(method.Name);
             if (!methodGroups.TryGetValue(name, out var group))
@@ -304,6 +316,37 @@ internal static class AssemblyExtractor
                 methods.Add(rirMethod);
             else if (methodDiagnostic is not null)
                 diagnostics.Add(methodDiagnostic);
+        }
+
+        // --- Constructors (ADR-052) ---
+        var constructors = new List<RirConstructor>();
+
+        // Only a non-static, non-abstract class can carry an emittable RirConstructor: a static
+        // class has no instance `.ctor`; an abstract class's `.ctor` is `protected`, which is
+        // already excluded by the Public check above — this guard is belt-and-braces for that
+        // invariant. Interfaces have no constructors at all.
+        bool canHaveConstructor = !isInterface && !isStatic && !isAbstract;
+
+        if (canHaveConstructor && ctorCandidates.Count == 1)
+        {
+            var (rirCtor, ctorDiagnostic) = TryMapConstructor(
+                mr, ctorCandidates[0], typeName, boundHandleTypeNames);
+            if (rirCtor is not null)
+                constructors.Add(rirCtor);
+            else if (ctorDiagnostic is not null)
+                diagnostics.Add(ctorDiagnostic);
+        }
+        else if (canHaveConstructor && ctorCandidates.Count > 1)
+        {
+            // Overload set: skip all, one diagnostic — same rule already applied to methods.
+            var sig = $".ctor({DescribeFirstParams(mr, ctorCandidates[0])}) [+{ctorCandidates.Count - 1} overloads]";
+            diagnostics.Add(new RirDiagnostic(
+                kind: "skipped_overload_set",
+                typeName: typeName,
+                memberName: ".ctor",
+                memberSignature: sig,
+                reason: $"overload set — {ctorCandidates.Count} overloads of `.ctor` cannot be uniquely exported to C",
+                hint: "Add a C# adapter shim to expose each overload under a distinct name."));
         }
 
         // --- Properties ---
@@ -346,9 +389,70 @@ internal static class AssemblyExtractor
 
         RirType rirType = isInterface
             ? new RirInterface(typeName, methods, properties)
-            : new RirClass(typeName, isAbstract && !isInterface, isStatic, methods, properties);
+            : new RirClass(typeName, isAbstract && !isInterface, isStatic, methods, properties, constructors);
 
         return (rirType, diagnostics);
+    }
+
+    /// <summary>
+    /// Maps a public instance <c>.ctor</c> candidate to a <see cref="RirConstructor"/> (ADR-052).
+    /// Only parameters are decoded — a constructor's return is implicit (the enclosing type) and
+    /// carries no diagnosable return-type shape. A non-bridgeable parameter yields the same
+    /// per-parameter diagnostic already used for methods; the constructor is not partially bound.
+    /// </summary>
+    private static (RirConstructor? Ctor, RirDiagnostic? Diagnostic) TryMapConstructor(
+        MetadataReader mr,
+        MethodDefinition methodDef,
+        string typeName,
+        HashSet<string> boundHandleTypeNames)
+    {
+        var decoder = new SignatureDecoder(mr, boundHandleTypeNames);
+        MethodSignature<TypeRefOrDiag> sig;
+
+        try
+        {
+            sig = methodDef.DecodeSignature(decoder, genericContext: null);
+        }
+        catch (BadImageFormatException)
+        {
+            return (null, null);
+        }
+
+        foreach (var t in sig.ParameterTypes)
+        {
+            if (t.Diagnostic is not null)
+            {
+                var fullSig = BuildSignatureString(mr, methodDef, ".ctor");
+                return (null, new RirDiagnostic(
+                    kind: t.Diagnostic.Kind,
+                    typeName: typeName,
+                    memberName: ".ctor",
+                    memberSignature: fullSig,
+                    reason: t.Diagnostic.Reason,
+                    hint: t.Diagnostic.Hint));
+            }
+        }
+
+        var parameters = new List<RirParameter>();
+        var paramHandles = methodDef.GetParameters().ToList();
+
+        for (int i = 0; i < sig.ParameterTypes.Length; i++)
+        {
+            var paramTypeRef = sig.ParameterTypes[i].TypeRef;
+            if (paramTypeRef is null) return (null, null); // unknown, non-diagnostic type — skip silently
+
+            string paramName = "arg" + i;
+            if (i < paramHandles.Count)
+            {
+                var paramDef = mr.GetParameter(paramHandles[i]);
+                var pn = mr.GetString(paramDef.Name);
+                if (!string.IsNullOrEmpty(pn)) paramName = pn;
+            }
+
+            parameters.Add(new RirParameter(paramName, paramTypeRef));
+        }
+
+        return (new RirConstructor(parameters), null);
     }
 
     private static (RirMethod? Method, RirDiagnostic? Diagnostic) TryMapMethod(
@@ -874,13 +978,15 @@ internal sealed class RirClass : RirType
         bool isAbstract,
         bool isStatic,
         IReadOnlyList<RirMethod> methods,
-        IReadOnlyList<RirProperty> properties)
+        IReadOnlyList<RirProperty> properties,
+        IReadOnlyList<RirConstructor>? constructors = null)
     {
         Name = name;
         IsAbstract = isAbstract;
         IsStatic = isStatic;
         Methods = methods;
         Properties = properties;
+        Constructors = constructors ?? Array.Empty<RirConstructor>();
     }
 
     public override string Name { get; }
@@ -889,6 +995,12 @@ internal sealed class RirClass : RirType
     public bool IsStatic { get; }
     public IReadOnlyList<RirMethod> Methods { get; }
     public IReadOnlyList<RirProperty> Properties { get; }
+    /// <summary>
+    /// At most one public instance <c>.ctor</c> per type in v1 (ADR-052). Empty for static
+    /// classes, interfaces, abstract classes, and classes with no public instance constructor or
+    /// with more than one (an overload set, skipped + diagnosed instead).
+    /// </summary>
+    public IReadOnlyList<RirConstructor> Constructors { get; }
 }
 
 internal sealed class RirInterface : RirType
@@ -947,6 +1059,22 @@ internal sealed class RirParameter
 
     public string Name { get; }
     public RirTypeRef Type { get; }
+}
+
+/// <summary>
+/// A C# public instance constructor (ADR-052). Return is implicit — the enclosing
+/// <see cref="RirClass"/>'s own <c>RirObjectHandleType</c> — so this is a distinct node rather
+/// than reusing <see cref="RirMethod"/>, whose <c>ReturnType</c> is mandatory. Mirrors
+/// <c>RirConstructor(parameters)</c> in <c>RirModel.kt</c> field-for-field.
+/// </summary>
+internal sealed class RirConstructor
+{
+    public RirConstructor(IReadOnlyList<RirParameter> parameters)
+    {
+        Parameters = parameters;
+    }
+
+    public IReadOnlyList<RirParameter> Parameters { get; }
 }
 
 [JsonPolymorphic(TypeDiscriminatorPropertyName = "kind")]
@@ -1072,6 +1200,7 @@ internal sealed class RirDiagnostic
 [JsonSerializable(typeof(RirMethod))]
 [JsonSerializable(typeof(RirProperty))]
 [JsonSerializable(typeof(RirParameter))]
+[JsonSerializable(typeof(RirConstructor))]
 [JsonSerializable(typeof(RirTypeRef))]
 [JsonSerializable(typeof(RirVoidType))]
 [JsonSerializable(typeof(RirStringType))]

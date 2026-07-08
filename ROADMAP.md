@@ -147,7 +147,7 @@ Mirror of Phase 3. Moves the reverse bridge beyond v1 static methods: C# objects
 
 - [x] Map C# objects as opaque handles in Kotlin (`GCHandle.Normal` → `COpaquePointer`, mirror of `StableRef` / ADR-003; new wrapper per crossing, no identity caching, mirror of ADR-005) (see [ADR-051](docs/adr/051-csharp-objects-as-opaque-handles.md))
   - [x] Lifetime cleanup: `Cleaner`-primary + explicit idempotent `close()` (`kotlin.AutoCloseable`) → shared `nuget_runtime_register` free export — deliberate inversion of the forward `IDisposable`-first choice (see [ADR-051](docs/adr/051-csharp-objects-as-opaque-handles.md))
-- [ ] Map instance constructors (`new Foo(...)` → Kotlin constructor or factory function)
+- [x] Map instance constructors (`new Foo(...)` → Kotlin secondary `constructor` delegating through a bridge helper; v1 supports a single public instance `.ctor`, multiple are an overload set deferred to line 156) (see [ADR-052](docs/adr/052-csharp-instance-constructors-in-kotlin.md))
 - [ ] Map instance methods and instance properties (v1-mappable parameter/return types first)
 - [ ] Map static C# properties (getter/setter, v1-mappable types) — deferred from stub-gen v1 for scope only; straightforward extension of the same function-pointer pattern (see [ADR-048](docs/adr/048-kotlin-stub-generation-from-reverse-ir.md))
 - [ ] Map C# enums → Kotlin `enum class` (mirror of ADR-006)

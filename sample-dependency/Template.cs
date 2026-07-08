@@ -14,8 +14,12 @@ public class Template
 {
     private readonly string _source;
 
-    // Internal constructor — callers use Parse(string).
-    private Template(string source) => _source = source;
+    /// <summary>
+    /// Creates a <see cref="Template"/> directly from a source string such as
+    /// <c>"Hello, {name}"</c>. Public since ADR-052 so the fixture exercises the mapped
+    /// Kotlin secondary constructor (<c>Template(source)</c>) in addition to <see cref="Parse"/>.
+    /// </summary>
+    public Template(string source) => _source = source;
 
     /// <summary>
     /// Creates a <see cref="Template"/> from a source string such as <c>"Hello, {name}"</c>.

@@ -2,6 +2,7 @@ package io.github.xxfast.kotlin.native.nuget
 
 import io.github.xxfast.kotlin.native.nuget.rir.RirAssembly
 import io.github.xxfast.kotlin.native.nuget.rir.RirClass
+import io.github.xxfast.kotlin.native.nuget.rir.RirConstructor
 import io.github.xxfast.kotlin.native.nuget.rir.RirFile
 import io.github.xxfast.kotlin.native.nuget.rir.RirMethod
 import io.github.xxfast.kotlin.native.nuget.rir.RirNamespace
@@ -499,6 +500,175 @@ class NugetGenerateBindingsTaskTest {
     assertFalse(
       stub.content.contains("class MathHelper") && !stub.content.contains("object MathHelper"),
       "static class (isStatic=true) must keep the ADR-048 `object` shape",
+    )
+  }
+
+  // ------------------------------------------------------------------
+  // ADR-052: C# instance constructors in Kotlin — `new Foo(...)` maps to a Kotlin secondary
+  // `constructor`, backed by a file-private `construct(...)` helper.
+  //
+  // Canonical fixture: Sample.Text.Template — public non-static class with:
+  //   - one public instance constructor: Template(string source)
+  //   - the existing ADR-051 statics: Parse(source: string): Template, Render(template, name): string
+  // so both the constructor path and the pre-existing static-handle path are exercised together,
+  // and constructor-pointer-before-method-pointer ordering (ADR-052 "shared bridgeable ordering")
+  // is observable.
+  //
+  // NOTE: this fixture references RirClass.constructors / RirConstructor, which do not yet drive
+  // any generation logic in NugetGenerateBindingsTask.kt (ADR-052 Step 3 "red" state) — the
+  // fixture itself compiles (RirModel.kt was extended additively), but the assertions below fail
+  // because the generator does not yet emit the secondary constructor, the `construct(...)`
+  // helper, the `ctorFn` pointer variable, or the leading `ctorPtr` register parameter.
+  // ------------------------------------------------------------------
+
+  private val templateWithCtorRir: RirFile = RirFile(
+    assemblies = listOf(
+      RirAssembly(
+        packageId = "Sample.Text",
+        assemblyName = "Sample.Text",
+        namespaces = listOf(
+          RirNamespace(
+            name = "Sample.Text",
+            types = listOf(
+              RirClass(
+                name = "Template",
+                isStatic = false,
+                constructors = listOf(
+                  RirConstructor(
+                    parameters = listOf(
+                      RirParameter(name = "source", type = RirStringType),
+                    ),
+                  ),
+                ),
+                methods = listOf(
+                  RirMethod(
+                    name = "Parse",
+                    isStatic = true,
+                    returnType = RirObjectHandleType(namespace = "Sample.Text", name = "Template"),
+                    parameters = listOf(
+                      RirParameter(name = "source", type = RirStringType),
+                    ),
+                  ),
+                  RirMethod(
+                    name = "Render",
+                    isStatic = true,
+                    returnType = RirStringType,
+                    parameters = listOf(
+                      RirParameter(
+                        name = "template",
+                        type = RirObjectHandleType(namespace = "Sample.Text", name = "Template"),
+                      ),
+                      RirParameter(name = "name", type = RirStringType),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    ),
+  )
+
+  // ------------------------------------------------------------------
+  // 12. {TypeName}.kt: secondary constructor delegating through the `construct(...)` helper
+  // ------------------------------------------------------------------
+
+  @Test
+  fun `Template kt declares secondary constructor delegating to construct helper`() {
+    val files: List<GeneratedFile> = generateKotlinStubs(templateWithCtorRir)
+
+    val stub: GeneratedFile = files.single { it.relativePath.endsWith("Template.kt") }
+    assertContains(
+      stub.content,
+      "constructor(source: String) : this(construct(source))",
+      message = "ADR-052: a public C# instance constructor must map to a Kotlin secondary " +
+        "constructor delegating through the file-private construct(...) helper",
+    )
+  }
+
+  @Test
+  fun `Template kt declares file-private construct helper returning COpaquePointer`() {
+    val files: List<GeneratedFile> = generateKotlinStubs(templateWithCtorRir)
+
+    val stub: GeneratedFile = files.single { it.relativePath.endsWith("Template.kt") }
+    assertContains(
+      stub.content,
+      "private fun construct(source: String): COpaquePointer",
+      message = "ADR-052: the construct(...) helper must be file-private and return the raw, " +
+        "non-null handle",
+    )
+  }
+
+  @Test
+  fun `construct helper requireNotNulls the returned handle as a non-null constructor contract`() {
+    val files: List<GeneratedFile> = generateKotlinStubs(templateWithCtorRir)
+
+    val stub: GeneratedFile = files.single { it.relativePath.endsWith("Template.kt") }
+    // The construct(...) helper body must requireNotNull the handle returned from ctorFn — a
+    // constructor never returns null (ADR-052), unlike the nullable Foo? factory return path.
+    val constructBody: String = stub.content.substringAfter(
+      delimiter = "private fun construct(source: String): COpaquePointer",
+      missingDelimiterValue = "",
+    )
+    assertContains(
+      constructBody,
+      "requireNotNull",
+      message = "ADR-052: construct(...) must requireNotNull the ctor thunk's returned handle " +
+        "(a null handle from a C# constructor is a bridge-invariant violation, not a legitimate value)",
+    )
+  }
+
+  // ------------------------------------------------------------------
+  // 13. {TypeName}Bindings.kt: ctorFn pointer var + leading ctorPtr register parameter
+  // ------------------------------------------------------------------
+
+  @Test
+  fun `TemplateBindings kt declares ctorFn function pointer variable`() {
+    val files: List<GeneratedFile> = generateKotlinStubs(templateWithCtorRir)
+
+    val bindings: GeneratedFile = files.single { it.relativePath.endsWith("TemplateBindings.kt") }
+    assertContains(
+      bindings.content,
+      "ctorFn",
+      message = "ADR-052: TemplateBindings.kt must declare a ctorFn function pointer variable",
+    )
+  }
+
+  @Test
+  fun `TemplateBindings kt register export takes ctorPtr as its first parameter`() {
+    val files: List<GeneratedFile> = generateKotlinStubs(templateWithCtorRir)
+
+    val bindings: GeneratedFile = files.single { it.relativePath.endsWith("TemplateBindings.kt") }
+    val registerSignature: String = bindings.content
+      .substringAfter("fun nuget_sample_text_template_register(")
+      .substringBefore(") {")
+
+    val ctorIndex: Int = registerSignature.indexOf("ctorPtr")
+    val parseIndex: Int = registerSignature.indexOf("parsePtr")
+    val renderIndex: Int = registerSignature.indexOf("renderPtr")
+
+    assertTrue(
+      ctorIndex >= 0 && parseIndex >= 0 && renderIndex >= 0,
+      "ctorPtr, parsePtr, and renderPtr must all be declared in the register signature, got: " +
+        "'$registerSignature'",
+    )
+    assertTrue(
+      ctorIndex < parseIndex && ctorIndex < renderIndex,
+      "ADR-052 shared bridgeable ordering: ctorPtr must come first, before the static-method " +
+        "pointers — got signature '$registerSignature'",
+    )
+  }
+
+  @Test
+  fun `TemplateBindings kt register body assigns ctorFn from ctorPtr`() {
+    val files: List<GeneratedFile> = generateKotlinStubs(templateWithCtorRir)
+
+    val bindings: GeneratedFile = files.single { it.relativePath.endsWith("TemplateBindings.kt") }
+    assertContains(
+      bindings.content,
+      "ctorFn = ctorPtr.reinterpret()",
+      message = "ADR-052: the register body must assign ctorFn from the reinterpreted ctorPtr",
     )
   }
 }
