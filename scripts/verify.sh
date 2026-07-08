@@ -27,13 +27,15 @@ if [ "$RUN_PLUGIN" = true ]; then
   ./gradlew :nuget:test
 fi
 
-echo "==> Pack SampleLibrary NuGet (:sample-library:clean :sample-library:packNuget)"
-./gradlew :sample-library:clean :sample-library:packNuget
-
 echo "==> Purge stale SampleLibrary + SampleDependency NuGet caches"
 # sample-dependency keeps version 1.0.0 while its fixture surface grows per feature,
-# so its cache goes stale exactly like samplelibrary's does.
+# so its cache goes stale exactly like samplelibrary's does. Purge BEFORE the pack: packNuget
+# runs nugetExtractApi, which resolves sample-dependency from this cache — a stale entry there
+# feeds the metadata reader an old DLL and the reverse bindings regenerate against the wrong API.
 rm -rf ~/.nuget/packages/samplelibrary ~/.nuget/packages/sampledependency
+
+echo "==> Pack SampleLibrary NuGet (:sample-library:clean :sample-library:packNuget)"
+./gradlew :sample-library:clean :sample-library:packNuget
 
 echo "==> C# consumer tests (dotnet test in sample-app/SampleApp.Tests)"
 cd "$ROOT/sample-app/SampleApp.Tests"
