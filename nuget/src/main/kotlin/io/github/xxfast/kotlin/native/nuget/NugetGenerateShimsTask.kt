@@ -7,6 +7,7 @@ import io.github.xxfast.kotlin.native.nuget.rir.RirMethod
 import io.github.xxfast.kotlin.native.nuget.rir.RirObjectHandleType
 import io.github.xxfast.kotlin.native.nuget.rir.RirParameter
 import io.github.xxfast.kotlin.native.nuget.rir.RirPrimitiveType
+import io.github.xxfast.kotlin.native.nuget.rir.RirProperty
 import io.github.xxfast.kotlin.native.nuget.rir.RirRegistrable
 import io.github.xxfast.kotlin.native.nuget.rir.RirStringType
 import io.github.xxfast.kotlin.native.nuget.rir.RirTypeKey
@@ -59,14 +60,20 @@ fun generateCSharpShims(file: RirFile, nativeLibraryName: String): List<Generate
 
         if (registrables.isEmpty()) return@forEach
 
-        // ADR-051/052: track whether any method has a handle type, or the class has a public
-        // instance constructor (a constructor's return is implicitly a handle — GCHandle.Alloc),
-        // for NugetRuntimeRegistration.cs.
+        // ADR-051/052/Phase 9 line 151: track whether any method has a handle type, the class has
+        // a public instance constructor (a constructor's return is implicitly a handle —
+        // GCHandle.Alloc), or the class has any instance method/property at all — every one of
+        // these forces the Kotlin side into the ADR-051 wrapper shape (NugetObjectHandle +
+        // Cleaner), which always calls the shared free-handle thunk this file registers,
+        // regardless of whether any individual signature happens to use a handle TYPE — for
+        // NugetRuntimeRegistration.cs.
         val hasHandle: Boolean = registrables.any { r ->
           when (r) {
             is RirRegistrable.Ctor -> true
             is RirRegistrable.Method -> r.method.returnType is RirObjectHandleType ||
-              r.method.parameters.any { p -> p.type is RirObjectHandleType }
+              r.method.parameters.any { p -> p.type is RirObjectHandleType } || !r.method.isStatic
+            is RirRegistrable.PropertyGetter -> true
+            is RirRegistrable.PropertySetter -> true
           }
         }
         if (hasHandle) needsRuntime = true
@@ -187,6 +194,8 @@ private fun registrationFileContent(
     when (r) {
       is RirRegistrable.Ctor -> "IntPtr ctorPtr"
       is RirRegistrable.Method -> "IntPtr ${r.method.name.toMethodCamelCase()}Ptr"
+      is RirRegistrable.PropertyGetter -> "IntPtr ${r.property.name.toMethodCamelCase()}GetterPtr"
+      is RirRegistrable.PropertySetter -> "IntPtr ${r.property.name.toMethodCamelCase()}SetterPtr"
     }
   }
 
@@ -201,8 +210,23 @@ private fun registrationFileContent(
       is RirRegistrable.Method -> {
         val paramTypes: String = r.method.parameters.joinToString(", ") { p -> csAbiType(p.type) }
         val retType: String = csAbiType(r.method.returnType)
-        val fnTypeParams: String = if (paramTypes.isEmpty()) retType else "$paramTypes, $retType"
+        // Phase 9 (ROADMAP line 151): an instance method thunk keeps the existing bare
+        // `{MethodName}_Thunk` name (methods are already named this way regardless of
+        // static/instance) — only its parameter list gains a leading IntPtr selfHandle, already
+        // reflected in buildThunkMethod's paramList; the delegate* type here must match.
+        val selfParamType: String? = if (!r.method.isStatic) "IntPtr" else null
+        val allParamTypes: String = listOfNotNull(selfParamType, paramTypes.ifEmpty { null })
+          .joinToString(", ")
+        val fnTypeParams: String = if (allParamTypes.isEmpty()) retType else "$allParamTypes, $retType"
         "(IntPtr)(delegate* unmanaged[Cdecl]<$fnTypeParams>)(&${r.method.name}_Thunk)"
+      }
+      is RirRegistrable.PropertyGetter -> {
+        val retType: String = csAbiType(r.property.type)
+        "(IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, $retType>)(&${r.property.name}_Get_Thunk)"
+      }
+      is RirRegistrable.PropertySetter -> {
+        val valueType: String = csAbiType(r.property.type)
+        "(IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, $valueType, void>)(&${r.property.name}_Set_Thunk)"
       }
     }
   }
@@ -211,6 +235,8 @@ private fun registrationFileContent(
     when (r) {
       is RirRegistrable.Ctor -> buildCtorThunkMethod(cls, r.ctor)
       is RirRegistrable.Method -> buildThunkMethod(cls, r.method)
+      is RirRegistrable.PropertyGetter -> buildPropertyGetterThunkMethod(cls, r.property)
+      is RirRegistrable.PropertySetter -> buildPropertySetterThunkMethod(cls, r.property)
     }
   }
 
@@ -246,13 +272,26 @@ private fun registrationFileContent(
 
 private fun buildThunkMethod(cls: RirClass, method: RirMethod): String {
   val thunkName: String = "${method.name}_Thunk"
-  val paramList: String = method.parameters
-    .joinToString(", ") { p -> "${csAbiType(p.type)} ${thunkParamName(p)}" }
+
+  // Phase 9 (ROADMAP line 151): "an instance thunk is a static thunk whose first parameter is the
+  // receiver handle" (ADR-051 Deferred section). Resolve the receiver via the exact same
+  // GCHandle.FromIntPtr(...).Target! pattern paramConversion already uses for handle-typed
+  // parameters, then call the method on the resolved receiver instance rather than statically on
+  // the type. Static methods are unaffected.
+  val selfParam: String? = if (!method.isStatic) "IntPtr selfHandle" else null
+  val paramList: String = (listOfNotNull(selfParam) +
+    method.parameters.map { p -> "${csAbiType(p.type)} ${thunkParamName(p)}" }).joinToString(", ")
   val retAbiType: String = csAbiType(method.returnType)
   val callArgs: String = method.parameters.joinToString(", ") { p -> paramConversion(p) }
-  val callExpr: String = "${cls.name}.${method.name}($callArgs)"
+  val receiverLine: String? = if (!method.isStatic) {
+    "${cls.name} receiver = (${cls.name})GCHandle.FromIntPtr(selfHandle).Target!;"
+  } else {
+    null
+  }
+  val callExpr: String =
+    if (method.isStatic) "${cls.name}.${method.name}($callArgs)" else "receiver.${method.name}($callArgs)"
 
-  val bodyLines: List<String> = when (method.returnType) {
+  val callBodyLines: List<String> = when (method.returnType) {
     is RirVoidType -> listOf("$callExpr;")
 
     is RirStringType -> listOf(
@@ -283,6 +322,7 @@ private fun buildThunkMethod(cls: RirClass, method: RirMethod): String {
     }
   }
 
+  val bodyLines: List<String> = listOfNotNull(receiverLine) + callBodyLines
   val body: String = bodyLines.joinToString("\n") { "            $it" }
 
   // ADR-049 "let it crash": deliberately no try/catch. A thrown C# exception escapes this thunk
@@ -291,6 +331,82 @@ private fun buildThunkMethod(cls: RirClass, method: RirMethod): String {
   return """
     |        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
     |        private static $retAbiType $thunkName($paramList)
+    |        {
+    |$body
+    |        }
+  """.trimMargin()
+}
+
+// Phase 9 (ROADMAP line 151): a property getter thunk — always takes IntPtr selfHandle (the
+// receiver), resolves it via GCHandle.FromIntPtr(...).Target!, and returns the marshalled value
+// (Marshal.StringToCoTaskMemUTF8 for a string-typed property, per ADR-048/049).
+private fun buildPropertyGetterThunkMethod(cls: RirClass, property: RirProperty): String {
+  val thunkName = "${property.name}_Get_Thunk"
+  val retAbiType: String = csAbiType(property.type)
+  val receiverLine = "${cls.name} receiver = (${cls.name})GCHandle.FromIntPtr(selfHandle).Target!;"
+  val getExpr = "receiver.${property.name}"
+
+  val bodyLines: List<String> = when (property.type) {
+    is RirVoidType -> error("[nuget] a property cannot have void type")
+
+    is RirStringType -> listOf(
+      "string result = $getExpr;",
+      "return Marshal.StringToCoTaskMemUTF8(result);",
+    )
+
+    // ADR-051: wrap the returned object in a Normal GCHandle, return its IntPtr. If the
+    // property returns null, return IntPtr.Zero (ADR-051 §Nullability).
+    is RirObjectHandleType -> listOf(
+      "${csNativeType(property.type)}? result = $getExpr;",
+      "return result is null ? IntPtr.Zero : GCHandle.ToIntPtr(GCHandle.Alloc(result));",
+    )
+
+    is RirPrimitiveType -> when (property.type.name) {
+      "bool" -> listOf(
+        "bool result = $getExpr;",
+        "return result ? (byte)1 : (byte)0;",
+      )
+      "char" -> listOf(
+        "char result = $getExpr;",
+        "return (ushort)result;",
+      )
+      else -> listOf(
+        "${csNativeType(property.type)} result = $getExpr;",
+        "return result;",
+      )
+    }
+  }
+
+  val body: String = (listOf(receiverLine) + bodyLines).joinToString("\n") { "            $it" }
+
+  // ADR-049 "let it crash" (unchanged, Phase 9 line 151): no try/catch.
+  return """
+    |        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+    |        private static $retAbiType $thunkName(IntPtr selfHandle)
+    |        {
+    |$body
+    |        }
+  """.trimMargin()
+}
+
+// Phase 9 (ROADMAP line 151): a property setter thunk — takes IntPtr selfHandle (the receiver)
+// plus the new value, returns void. Reuses thunkParamName/paramConversion via a synthetic
+// RirParameter("value", property.type) so the marshalling rules never drift from method
+// parameters (e.g. a string value thunk-parameter is named "valuePtr", a handle value
+// "valueHandle").
+private fun buildPropertySetterThunkMethod(cls: RirClass, property: RirProperty): String {
+  val thunkName = "${property.name}_Set_Thunk"
+  val valueParam = RirParameter(name = "value", type = property.type)
+  val valueParamName: String = thunkParamName(valueParam)
+  val valueAbiType: String = csAbiType(property.type)
+  val receiverLine = "${cls.name} receiver = (${cls.name})GCHandle.FromIntPtr(selfHandle).Target!;"
+  val assignLine = "receiver.${property.name} = ${paramConversion(valueParam)};"
+  val body: String = listOf(receiverLine, assignLine).joinToString("\n") { "            $it" }
+
+  // ADR-049 "let it crash" (unchanged, Phase 9 line 151): no try/catch.
+  return """
+    |        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+    |        private static void $thunkName(IntPtr selfHandle, $valueAbiType $valueParamName)
     |        {
     |$body
     |        }

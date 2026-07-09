@@ -65,4 +65,40 @@ public class TemplateRoundTripTests
         string result = Greetings.greetViaConstructor("Mylo");
         Assert.Equal("Hello, Mylo", result);
     }
+
+    // Phase 9 line 151 round trip: instance methods and instance properties. Oreo's template
+    // is built, tagged with his name via the settable `Name` property, cloned via the
+    // instance `Clone()` method (carrying `Name` and `Source` across the copy), and finally
+    // rendered through the instance `Apply(string)` method rather than the static `Render`.
+    //
+    //   C# SampleApp.Tests
+    //     -> (forward bridge, Interop.cs)        Greetings.greetViaInstanceMembers("Oreo")
+    //       -> Kotlin sample-library             fun greetViaInstanceMembers(name)  (Greetings.kt)
+    //         -> (reverse bridge, ADR-052 ctor)    sample.text.Template("Hello, {name}")
+    //         -> (reverse bridge, this feature)    template.name = name           (Name setter)
+    //         -> (reverse bridge, this feature)    template.clone()               (Clone -> handle)
+    //         -> (reverse bridge, this feature)    copy.name / copy.source        (property getters)
+    //         -> (reverse bridge, this feature)    copy.apply(name)               (Apply instance method)
+    //           -> real C# SampleDependency NuGet  new Template("Hello, {name}") { Name = "Oreo" }
+    //                                              .Clone(); .Apply("Oreo")
+    //           <- "Hello, Oreo"
+    //
+    // Expected red state: `Template` has no mapped `name`/`source` properties or
+    // `apply`/`clone` instance methods yet, so `sample-library` fails to compile — the
+    // instance-member generator work (Step 4) has not landed. This test stays red until then.
+    [Fact]
+    public void GreetViaInstanceMembers_Oreo_ReturnsHelloOreo()
+    {
+        // Oreo: black with white in the middle, like the biscuit.
+        string result = Greetings.greetViaInstanceMembers("Oreo");
+        Assert.Equal("Hello, Oreo", result);
+    }
+
+    [Fact]
+    public void GreetViaInstanceMembers_Mylo_ReturnsHelloMylo()
+    {
+        // Mylo: brown and creamy, like the drink Milo.
+        string result = Greetings.greetViaInstanceMembers("Mylo");
+        Assert.Equal("Hello, Mylo", result);
+    }
 }

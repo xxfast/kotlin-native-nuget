@@ -2,10 +2,12 @@
 
 What has to be true before the plugin is usable by anyone who isn't this repo.
 
-## What v0.1.0 claims
+## What v0.1.0 does
 
-- **Kotlin → C# (forward): stable.** Everything through Phase 6. OOP constructs, generics, collections, lambdas, exceptions, coroutines and `Flow`.
-- **C# → Kotlin (reverse): preview.** Resolve and bind a NuGet package, call static methods, construct objects. Labelled experimental, ceiling stated up front, no compatibility promise.
+At `0.x` the whole plugin is unstable and the README already carries the experimental badge, so there is no per-direction stability label to hand out. What a user needs is not a compatibility promise but an honest capability ceiling: which constructs cross the bridge today, and which silently don't.
+
+- **Kotlin → C# (forward).** Everything through Phase 6. OOP constructs, generics, collections, lambdas, exceptions, coroutines and `Flow`.
+- **C# → Kotlin (reverse).** Resolve and bind a NuGet package, call static methods, construct objects. The ceiling is the point: a bound type's instance members are unreachable until Phase 9 line 151 lands, so the README must state the subset rather than imply the direction works.
 - **Distribution:** plugin marker on the Gradle Plugin Portal, `nuget-processor` on mavenCentral.
 
 Anything not on this page is post-launch. See [ROADMAP.md](ROADMAP.md).
@@ -31,16 +33,18 @@ Nothing here is optional. Today the plugin only works via `includeBuild`; no con
 These two are one item, and CI currently proves nothing about them.
 
 - [ ] Pin `<LangVersion>` in the generated project so a consumer's newer SDK can't reinterpret generated code under a different language version.
+- [ ] Emit `#nullable enable` in the generated C# registration shims. They already contain nullable reference annotations (`Template? result = ...`), which raise `CS8669` in a consumer build because the file has no `#nullable` directive: *"Auto-generated code requires an explicit `#nullable` directive in source."* Confirmed live in `sample-library/build/nuget-interop/csharp/TemplateRegistration.cs`. Predates the Phase 9 instance-member work, which merely doubled the number of occurrences. Every consumer sees these warnings and they come from our generated code, not theirs.
 - [ ] CI smoke test that compiles the generated `Interop.cs` against the pinned `LangVersion` and the lowest supported TFM. Right now `SampleApp.Tests.csproj` targets `net10.0` while ADR-045 pins `net8.0` for restore and the README promises .NET 8+. Nothing in CI compiles the generated bindings as a `net8.0` consumer would. Escaping, reserved-word and invalid-construct regressions surface at consumer build time.
 
 ### Documentation
 
-- [ ] README: state the reverse-direction ceiling explicitly (see below), add a version compatibility table (Kotlin `2.4.0`, KSP `2.3.9`, .NET `8.0`+), and correct the .NET-SDK prerequisite wording.
-- [ ] Mark the reverse-direction DSL experimental. An opt-in annotation is nicer, a documented ceiling is the floor.
+- [ ] README: state the reverse-direction capability ceiling explicitly (which constructs bind, which are skipped), add a version compatibility table (Kotlin `2.4.0`, KSP `2.3.9`, .NET `8.0`+), and correct the .NET-SDK prerequisite wording.
+
+No `@ExperimentalNugetApi` opt-in annotation. It would be ceremony: the whole plugin is `0.x` and badged experimental, so an opt-in gate on one part of it signals a stability gradient that doesn't exist. Revisit at `1.0.0`, when the rest of the surface has something to be stable *relative to*.
 
 ## P1: strongly recommended
 
-- [ ] **Make the reverse preview coherent: instance methods and instance properties** ([ROADMAP.md](ROADMAP.md) Phase 9). As it stands you can construct a C# object (ADR-052) and then call nothing on it. Instance methods are unchecked. A constructor with no callable members is a hollow feature and reads as broken rather than as preview. This is the one reverse item worth pulling forward, and it's the largest single piece of work on this page. If it doesn't fit, cut object construction from the preview surface too and ship reverse as *static methods only*, which is at least internally consistent.
+- [x] **Instance methods and instance properties** ([ROADMAP.md](ROADMAP.md) Phase 9 line 151). Landed as a confirmed mirror of ADR-051, no new ADR. A bound C# object's instance methods and properties are now callable from Kotlin, so constructing one is no longer a dead end. Verified end to end through the real `.nupkg` round trip.
 - [ ] `dotnet` detection on PATH with explicit install guidance (Phase 8, currently deferred). First-run failure mode for a reverse-direction user is otherwise an opaque subprocess error.
 
 ## Cut from MVP
@@ -55,8 +59,8 @@ Deliberately not blocking launch. Each moves to [ROADMAP.md](ROADMAP.md).
 | Local-feed dev loop for C# consumers (synthesis D6) | Developer ergonomics for plugin *users*. The P0 by-coordinate smoke test covers this repo's own need to verify the published path. |
 | GitHub Packages | Superseded. It requires an auth token even for public reads, so it's a worse channel than the two we're shipping. |
 | SharedFlow / StateFlow, remaining Flow edge cases | Phase 6 tail. |
-| Phase 7 remainder (interface returns, C#-implemented Kotlin interfaces) | Forward direction is stable without them. |
-| Phases 9–13 beyond the P1 item | The reverse direction ships as preview precisely so these don't block. |
+| Phase 7 remainder (interface returns, C#-implemented Kotlin interfaces) | Forward direction is complete and useful without them. |
+| Phases 9–13 beyond the P1 item | The README states the reverse ceiling, so these are absent capabilities rather than broken promises. |
 
 ## Launch order
 
@@ -64,5 +68,5 @@ Deliberately not blocking launch. Each moves to [ROADMAP.md](ROADMAP.md).
 2. By-coordinate smoke test. Do not skip this before the first publish. It is the only thing standing between you and a broken `0.1.0` on the Plugin Portal.
 3. `LangVersion` pin + CI compile check.
 4. README.
-5. P1 if it fits, otherwise narrow the preview claim to match what works.
+5. ~~P1~~ done: instance methods and properties landed, so the README's reverse-direction section can describe a bound object you can actually call. Remaining P1 is `dotnet` detection.
 6. Tag, publish, announce.

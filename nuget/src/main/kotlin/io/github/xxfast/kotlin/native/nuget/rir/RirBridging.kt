@@ -50,15 +50,133 @@ fun bridgeableConstructors(cls: RirClass, boundHandleTypes: Set<RirTypeKey>): Li
 sealed interface RirRegistrable {
   data class Ctor(val ctor: RirConstructor) : RirRegistrable
   data class Method(val method: RirMethod) : RirRegistrable
+
+  // Phase 9 (ROADMAP line 151, instance methods/properties — confirmed "mirror" item, no new ADR:
+  // "an instance thunk is a static thunk whose first parameter is the receiver handle," ADR-051
+  // Deferred section): one slot per bridgeable instance property. A read-only property emits only
+  // a PropertyGetter. A settable property emits both PropertyGetter and PropertySetter, UNLESS the
+  // property's type is a RirObjectHandleType — rule 4 (human-approved v1 scope call): a Kotlin
+  // `var`'s getter and setter must share one type, but ADR-051 gives object returns `Foo?` and
+  // object params non-null `Foo`, so a handle-typed settable property renders as a read-only
+  // `val x: Foo?` in v1 and never gets a PropertySetter slot, even when C# exposes a public setter.
+  data class PropertyGetter(val property: RirProperty) : RirRegistrable
+  data class PropertySetter(val property: RirProperty) : RirRegistrable
 }
 
-// ADR-052 "shared bridgeable ordering": the constructor pointer (if any) comes FIRST, then
-// bridgeable static methods in their existing reverse-ir.json order. Both NugetGenerateBindingsTask
-// and NugetGenerateShimsTask must consume this function directly — never re-derive the combined
-// order independently, or the two sides' registration slots can silently drift out of alignment.
-fun bridgeableRegistrables(cls: RirClass, boundHandleTypes: Set<RirTypeKey>): List<RirRegistrable> =
-  bridgeableConstructors(cls, boundHandleTypes).map { RirRegistrable.Ctor(it) } +
-    bridgeableStaticMethods(cls, boundHandleTypes).map { RirRegistrable.Method(it) }
+// Phase 9 (ROADMAP line 151): v1-bridgeable instance methods on a bound class — mirrors
+// bridgeableStaticMethods, but for `!isStatic` methods.
+fun bridgeableInstanceMethods(cls: RirClass, boundHandleTypes: Set<RirTypeKey>): List<RirMethod> =
+  cls.methods.filter { !it.isStatic && isV1Bridgeable(it, boundHandleTypes) }
+
+// Phase 9 (ROADMAP line 151): v1-bridgeable instance properties on a bound class — static
+// properties are excluded (out of scope, ROADMAP line 152) and non-v1-typed properties are
+// excluded, mirroring isV1Bridgeable's method filter below.
+fun bridgeableProperties(cls: RirClass, boundHandleTypes: Set<RirTypeKey>): List<RirProperty> =
+  cls.properties.filter { !it.isStatic && isV1Type(it.type, boundHandleTypes) }
+
+// Phase 9 (ROADMAP line 151, rule 5 — human-approved v1 scope call): the Kotlin member names
+// already claimed by the ADR-051 wrapper class itself. An instance member whose Kotlin name
+// collides with one of these cannot be rendered as a class member — statics are unaffected
+// because they live in the companion object, a separate namespace.
+internal val WRAPPER_MEMBER_NAMES: Set<String> = setOf("handle", "close", "cleaner")
+
+// Phase 9 (ROADMAP line 151): PascalCase C# member name → camelCase Kotlin name: lowercase the
+// first character only. e.g. SerializeObject → serializeObject, Close → close. Mirrors the
+// identically-named private helper duplicated in NugetGenerateBindingsTask.kt/
+// NugetGenerateShimsTask.kt; kept here too (rather than exported from either task file) so
+// RirBridging.kt — the shared, generator-agnostic layer — never depends on either consumer.
+private fun String.toMethodCamelCase(): String = replaceFirstChar { it.lowercaseChar() }
+
+// Phase 9 (ROADMAP line 151, rule 5): ADR-043-style skip diagnostics for instance members whose
+// Kotlin name collides with an ADR-051 wrapper member (WRAPPER_MEMBER_NAMES above). Reuses the
+// existing RirDiagnostic model — the same one the metadata reader emits for skipped_overload_set
+// etc. — rather than inventing a new reporting mechanism (per ADR-043's existing "Diagnostic
+// format" contract), even though this particular diagnostic is produced Gradle-plugin-side, not by
+// the metadata reader (see RirDiagnosticKind.SKIPPED_MEMBER_NAME_COLLISION).
+//
+// Deliberately independent of boundHandleTypes/type-bridgeability: a name collision is a Kotlin
+// naming problem only, not a type problem — a member is skipped because its Kotlin name shadows
+// the wrapper's own member, regardless of whether its C# type would otherwise have been bridgeable.
+fun collisionDiagnostics(cls: RirClass): List<RirDiagnostic> {
+  val methodDiagnostics: List<RirDiagnostic> = cls.methods
+    .filter { !it.isStatic && it.name.toMethodCamelCase() in WRAPPER_MEMBER_NAMES }
+    .map { method ->
+      val signature: String = "${method.name}(${method.parameters.joinToString(", ") { it.type.describe() }})"
+      RirDiagnostic(
+        kind = RirDiagnosticKind.SKIPPED_MEMBER_NAME_COLLISION,
+        typeName = cls.name,
+        memberName = method.name,
+        memberSignature = signature,
+        reason = "member name collision — Kotlin name '${method.name.toMethodCamelCase()}' would " +
+          "shadow the generated wrapper's own '${method.name.toMethodCamelCase()}' member",
+        hint = "Rename or remove this member on the bound C# type, or expose it via a " +
+          "differently-named C# adapter method.",
+      )
+    }
+
+  val propertyDiagnostics: List<RirDiagnostic> = cls.properties
+    .filter { !it.isStatic && it.name.toMethodCamelCase() in WRAPPER_MEMBER_NAMES }
+    .map { property ->
+      RirDiagnostic(
+        kind = RirDiagnosticKind.SKIPPED_MEMBER_NAME_COLLISION,
+        typeName = cls.name,
+        memberName = property.name,
+        memberSignature = "${property.type.describe()} ${property.name}",
+        reason = "member name collision — Kotlin name '${property.name.toMethodCamelCase()}' would " +
+          "shadow the generated wrapper's own '${property.name.toMethodCamelCase()}' member",
+        hint = "Rename or remove this member on the bound C# type, or expose it via a " +
+          "differently-named C# adapter property.",
+      )
+    }
+
+  return methodDiagnostics + propertyDiagnostics
+}
+
+// Short human-readable type description for collisionDiagnostics' memberSignature/reason text
+// only (not part of any generated code path) — deliberately independent of the kotlinType()/
+// csAbiType() rendering tables owned by the two generator tasks.
+private fun RirTypeRef.describe(): String = when (this) {
+  is RirVoidType -> "void"
+  is RirStringType -> "string"
+  is RirPrimitiveType -> name
+  is RirObjectHandleType -> "$namespace.$name"
+}
+
+// ADR-052 "shared bridgeable ordering", extended by Phase 9 line 151: the constructor pointer (if
+// any) comes FIRST, then bridgeable static methods, THEN bridgeable instance methods, THEN one
+// PropertyGetter/[PropertySetter] pair per bridgeable instance property — each group in its
+// existing reverse-ir.json declaration order, groups appended (never interleaved) so already
+// generated ctor/static slot indices never churn. Both NugetGenerateBindingsTask and
+// NugetGenerateShimsTask must consume this function directly — never re-derive the combined order
+// independently, or the two sides' registration slots can silently drift out of alignment.
+//
+// Rule 5: instance methods/properties whose Kotlin name collides with an ADR-051 wrapper member
+// (see collisionDiagnostics) are excluded here — this is the single shared place both generators'
+// output is filtered, so a skipped member never gets a registration slot on either side.
+fun bridgeableRegistrables(cls: RirClass, boundHandleTypes: Set<RirTypeKey>): List<RirRegistrable> {
+  val collidingNames: Set<String> = collisionDiagnostics(cls).map { it.memberName }.toSet()
+
+  val instanceMethods: List<RirMethod> = bridgeableInstanceMethods(cls, boundHandleTypes)
+    .filterNot { it.name in collidingNames }
+
+  val properties: List<RirProperty> = bridgeableProperties(cls, boundHandleTypes)
+    .filterNot { it.name in collidingNames }
+
+  // Rule 4: a handle-typed settable property gets a PropertyGetter slot only — never a
+  // PropertySetter slot, even when the RIR says isReadOnly=false (see the PropertyGetter/
+  // PropertySetter doc comment above for the full rationale).
+  val propertyRegistrables: List<RirRegistrable> = properties.flatMap { property ->
+    val getter: RirRegistrable = RirRegistrable.PropertyGetter(property)
+    val isHandleTyped: Boolean = property.type is RirObjectHandleType
+    if (property.isReadOnly || isHandleTyped) listOf(getter)
+    else listOf(getter, RirRegistrable.PropertySetter(property))
+  }
+
+  return bridgeableConstructors(cls, boundHandleTypes).map { RirRegistrable.Ctor(it) } +
+    bridgeableStaticMethods(cls, boundHandleTypes).map { RirRegistrable.Method(it) } +
+    instanceMethods.map { RirRegistrable.Method(it) } +
+    propertyRegistrables
+}
 
 // ADR-048 v1 bridgeable subset: static methods only, void/string/primitive/handle parameter and
 // return types (overload sets, ref struct, open generics, dynamic, and DIMs are already filtered

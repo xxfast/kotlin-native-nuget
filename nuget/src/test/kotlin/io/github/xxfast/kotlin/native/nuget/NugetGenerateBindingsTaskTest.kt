@@ -9,10 +9,12 @@ import io.github.xxfast.kotlin.native.nuget.rir.RirNamespace
 import io.github.xxfast.kotlin.native.nuget.rir.RirObjectHandleType
 import io.github.xxfast.kotlin.native.nuget.rir.RirParameter
 import io.github.xxfast.kotlin.native.nuget.rir.RirPrimitiveType
+import io.github.xxfast.kotlin.native.nuget.rir.RirProperty
 import io.github.xxfast.kotlin.native.nuget.rir.RirStringType
 import io.github.xxfast.kotlin.native.nuget.rir.RirVoidType
 import kotlin.test.Test
 import kotlin.test.assertContains
+import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
@@ -670,5 +672,338 @@ class NugetGenerateBindingsTaskTest {
       "ctorFn = ctorPtr.reinterpret()",
       message = "ADR-052: the register body must assign ctorFn from the reinterpreted ctorPtr",
     )
+  }
+
+  // ------------------------------------------------------------------
+  // Phase 9 (ROADMAP line 151): C# instance methods and instance properties in Kotlin —
+  // confirmed "mirror" item, no new ADR. "An instance thunk is a static thunk whose first
+  // parameter is the receiver handle" (ADR-051 Deferred section). Reuses the ADR-051 handle +
+  // wrapper machinery unchanged.
+  //
+  // Canonical fixture: Sample.Text.Template — public non-static class with:
+  //   - a public instance constructor Template(string source)                (ADR-052, unchanged)
+  //   - static Parse(source: string): Template                               (ADR-051, unchanged)
+  //   - instance method Rename(newName: string): void
+  //   - instance method Clone(): Template                                    (handle-typed return)
+  //   - instance property Name: string { get; }                              (read-only)
+  //   - instance property Length: int { get; set; }                         (settable, primitive)
+  //   - instance property Parent: Template { get; set; }                    (settable, handle-typed
+  //     — rule 4: must render as `val parent: Template?`, no setter, even though isReadOnly=false)
+  //
+  // NOTE: RirRegistrable.PropertyGetter/PropertySetter and bridgeableProperties() exist only as
+  // stubs in RirBridging.kt at this step (Phase 9 line 151 Step 3 "red" state) — the generator
+  // does not yet render any instance method as a member function or any instance property at all,
+  // so the assertions in this section are expected to fail until the follow-up round.
+  // ------------------------------------------------------------------
+
+  private val templateInstanceRir: RirFile = RirFile(
+    assemblies = listOf(
+      RirAssembly(
+        packageId = "Sample.Text",
+        assemblyName = "Sample.Text",
+        namespaces = listOf(
+          RirNamespace(
+            name = "Sample.Text",
+            types = listOf(
+              RirClass(
+                name = "Template",
+                isStatic = false,
+                constructors = listOf(
+                  RirConstructor(
+                    parameters = listOf(RirParameter(name = "source", type = RirStringType)),
+                  ),
+                ),
+                methods = listOf(
+                  RirMethod(
+                    name = "Parse",
+                    isStatic = true,
+                    returnType = RirObjectHandleType(namespace = "Sample.Text", name = "Template"),
+                    parameters = listOf(RirParameter(name = "source", type = RirStringType)),
+                  ),
+                  RirMethod(
+                    name = "Rename",
+                    isStatic = false,
+                    returnType = RirVoidType,
+                    parameters = listOf(RirParameter(name = "newName", type = RirStringType)),
+                  ),
+                  RirMethod(
+                    name = "Clone",
+                    isStatic = false,
+                    returnType = RirObjectHandleType(namespace = "Sample.Text", name = "Template"),
+                    parameters = emptyList(),
+                  ),
+                ),
+                properties = listOf(
+                  RirProperty(name = "Name", type = RirStringType, isReadOnly = true, isStatic = false),
+                  RirProperty(
+                    name = "Length",
+                    type = RirPrimitiveType("int"),
+                    isReadOnly = false,
+                    isStatic = false,
+                  ),
+                  RirProperty(
+                    name = "Parent",
+                    type = RirObjectHandleType(namespace = "Sample.Text", name = "Template"),
+                    isReadOnly = false,
+                    isStatic = false,
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    ),
+  )
+
+  // ------------------------------------------------------------------
+  // 14. Instance method renders as a member function outside the companion object, passing
+  //     handle.require("Template") as the receiver — the static method stays in companion.
+  // ------------------------------------------------------------------
+
+  @Test
+  fun `instance method Rename renders as a member function outside the companion object`() {
+    val files: List<GeneratedFile> = generateKotlinStubs(templateInstanceRir)
+    val stub: GeneratedFile = files.single { it.relativePath.endsWith("Template.kt") }
+
+    assertContains(stub.content, "fun rename(newName: String)")
+
+    val companionStart: Int = stub.content.indexOf("companion object")
+    val renameIndex: Int = stub.content.indexOf("fun rename(")
+    assertTrue(
+      companionStart < 0 || renameIndex < companionStart,
+      "instance method rename must be a class member, declared before/outside companion object " +
+        "— got companionStart=$companionStart, renameIndex=$renameIndex",
+    )
+  }
+
+  @Test
+  fun `instance method Rename passes handle require as the first invoke argument (the receiver)`() {
+    val files: List<GeneratedFile> = generateKotlinStubs(templateInstanceRir)
+    val stub: GeneratedFile = files.single { it.relativePath.endsWith("Template.kt") }
+
+    assertContains(
+      stub.content,
+      "handle.require(\"Template\")",
+      message = "Phase 9 line 151: an instance method call must prepend the receiver via " +
+        "handle.require(...) as the first fn.invoke(...) argument (the ADR-051 insight: an " +
+        "instance thunk is a static thunk whose first parameter is the receiver handle)",
+    )
+  }
+
+  @Test
+  fun `static method Parse still renders inside companion object`() {
+    val files: List<GeneratedFile> = generateKotlinStubs(templateInstanceRir)
+    val stub: GeneratedFile = files.single { it.relativePath.endsWith("Template.kt") }
+
+    val companionBody: String = stub.content.substringAfter("companion object {")
+    assertContains(companionBody, "fun parse(source: String): Template?")
+  }
+
+  // ------------------------------------------------------------------
+  // 14b. TemplateBindings.kt: the CFunction *type* declaration for an instance-method fn-pointer
+  // variable must carry the same receiver arity as the Template.kt call site — otherwise
+  // fn.invoke(receiver, ...args) at the call site has more arguments than the CFunction type
+  // declares, and the generated Kotlin fails to compile ("Too many arguments for ... invoke").
+  // Regression test for exactly that arity-drift bug between the two ADR-048 split files.
+  // ------------------------------------------------------------------
+
+  @Test
+  fun `TemplateBindings kt fn pointer type for a zero-arg instance method has receiver-only CFunction arity`() {
+    val files: List<GeneratedFile> = generateKotlinStubs(templateInstanceRir)
+    val bindings: GeneratedFile = files.single { it.relativePath.endsWith("TemplateBindings.kt") }
+
+    assertContains(
+      bindings.content,
+      "internal var cloneFn: CPointer<CFunction<(COpaquePointer?) -> COpaquePointer?>>? = null",
+      message = "a zero-C#-parameter instance method's CFunction type must still declare one " +
+        "COpaquePointer? parameter for the receiver — Clone() call site passes " +
+        "handle.require(\"Template\") as its only fn.invoke(...) argument",
+    )
+  }
+
+  @Test
+  fun `TemplateBindings kt fn pointer type for a one-arg instance method has receiver plus param CFunction arity`() {
+    val files: List<GeneratedFile> = generateKotlinStubs(templateInstanceRir)
+    val bindings: GeneratedFile = files.single { it.relativePath.endsWith("TemplateBindings.kt") }
+
+    assertContains(
+      bindings.content,
+      "internal var renameFn: CPointer<CFunction<(COpaquePointer?, COpaquePointer?) -> Unit>>? = null",
+      message = "a one-C#-parameter instance method's CFunction type must declare two " +
+        "COpaquePointer? parameters (receiver, then newName) — Rename(newName) call site passes " +
+        "handle.require(\"Template\") followed by newName.cstr.ptr to fn.invoke(...)",
+    )
+  }
+
+  @Test
+  fun `TemplateBindings kt fn pointer type for a one-arg static method has no receiver slot`() {
+    val files: List<GeneratedFile> = generateKotlinStubs(templateInstanceRir)
+    val bindings: GeneratedFile = files.single { it.relativePath.endsWith("TemplateBindings.kt") }
+
+    assertContains(
+      bindings.content,
+      "internal var parseFn: CPointer<CFunction<(COpaquePointer?) -> COpaquePointer?>>? = null",
+      message = "a static method's CFunction type must NOT gain a receiver slot — Parse(source) " +
+        "has exactly one C# parameter and no receiver, regression guard against over-applying " +
+        "the instance-method receiver fix",
+    )
+  }
+
+  // ------------------------------------------------------------------
+  // 15. Read-only instance property -> val x: T get() = ...
+  //     Settable primitive instance property -> var x: T with get()/set(value)
+  // ------------------------------------------------------------------
+
+  @Test
+  fun `read-only instance property Name renders as val with an explicit get`() {
+    val files: List<GeneratedFile> = generateKotlinStubs(templateInstanceRir)
+    val stub: GeneratedFile = files.single { it.relativePath.endsWith("Template.kt") }
+
+    assertContains(
+      stub.content,
+      "val name: String",
+      message = "a read-only bridge-backed property cannot be a stored val — it must declare an " +
+        "explicit get()",
+    )
+    assertContains(stub.content, "get()")
+  }
+
+  @Test
+  fun `settable primitive instance property Length renders as var with get and set`() {
+    val files: List<GeneratedFile> = generateKotlinStubs(templateInstanceRir)
+    val stub: GeneratedFile = files.single { it.relativePath.endsWith("Template.kt") }
+
+    assertContains(stub.content, "var length: Int")
+    assertContains(stub.content, "set(value)")
+  }
+
+  // ------------------------------------------------------------------
+  // 16. Rule 4 (human-approved v1 scope call): a handle-typed settable property renders as
+  //     read-only `val x: Foo?`, never `var`, even though the RIR says isReadOnly=false.
+  // ------------------------------------------------------------------
+
+  @Test
+  fun `handle-typed instance property Parent renders as read-only val Template nullable even though settable in RIR`() {
+    val files: List<GeneratedFile> = generateKotlinStubs(templateInstanceRir)
+    val stub: GeneratedFile = files.single { it.relativePath.endsWith("Template.kt") }
+
+    assertContains(
+      stub.content,
+      "val parent: Template?",
+      message = "rule 4: a handle-typed settable property must render as val, not var, in v1 " +
+        "(a Kotlin var's getter/setter must share one type, but object returns are Foo? and " +
+        "object params are non-null Foo)",
+    )
+    assertFalse(
+      stub.content.contains("var parent"),
+      "handle-typed property Parent must never render as var, even though RIR isReadOnly=false",
+    )
+  }
+
+  // ------------------------------------------------------------------
+  // 17. Instance method returning a handle type returns Foo? (same nullability rule as ADR-051
+  //     static factory returns — IntPtr.Zero maps to null).
+  // ------------------------------------------------------------------
+
+  @Test
+  fun `instance method Clone returning a handle type returns nullable Template`() {
+    val files: List<GeneratedFile> = generateKotlinStubs(templateInstanceRir)
+    val stub: GeneratedFile = files.single { it.relativePath.endsWith("Template.kt") }
+
+    assertContains(stub.content, "fun clone(): Template?")
+  }
+
+  // ------------------------------------------------------------------
+  // 18. Rule 5 (human-approved v1 scope call): an instance member whose Kotlin name collides
+  //     with the ADR-051 wrapper's own members (handle, close, cleaner) is skipped — statics are
+  //     unaffected because they live in the companion object, a separate namespace.
+  // ------------------------------------------------------------------
+
+  private val collisionRir: RirFile = RirFile(
+    assemblies = listOf(
+      RirAssembly(
+        packageId = "Sample.Text",
+        assemblyName = "Sample.Text",
+        namespaces = listOf(
+          RirNamespace(
+            name = "Sample.Text",
+            types = listOf(
+              RirClass(
+                name = "Widget",
+                isStatic = false,
+                constructors = listOf(RirConstructor(parameters = emptyList())),
+                methods = listOf(
+                  // control: non-colliding, must survive the collision filter untouched.
+                  RirMethod(name = "Reset", isStatic = false, returnType = RirVoidType, parameters = emptyList()),
+                  // colliding: shadows the ADR-051 wrapper's own close().
+                  RirMethod(name = "Close", isStatic = false, returnType = RirVoidType, parameters = emptyList()),
+                  // safe: a static Close overload lives in the companion object.
+                  RirMethod(
+                    name = "Close",
+                    isStatic = true,
+                    returnType = RirVoidType,
+                    parameters = listOf(RirParameter(name = "reason", type = RirStringType)),
+                  ),
+                ),
+                properties = listOf(
+                  // control: non-colliding, must survive the collision filter untouched.
+                  RirProperty(name = "Label", type = RirStringType, isReadOnly = true, isStatic = false),
+                  // colliding: shadows the ADR-051 wrapper's own `internal val handle` field.
+                  RirProperty(name = "Handle", type = RirStringType, isReadOnly = true, isStatic = false),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    ),
+  )
+
+  @Test
+  fun `colliding instance method Close is skipped while the non-colliding instance method Reset is kept`() {
+    val files: List<GeneratedFile> = generateKotlinStubs(collisionRir)
+    val stub: GeneratedFile = files.single { it.relativePath.endsWith("Widget.kt") }
+
+    assertContains(
+      stub.content,
+      "fun reset()",
+      message = "non-colliding instance method Reset must still be generated",
+    )
+
+    val closeDeclarations: Int = Regex("fun close\\(").findAll(stub.content).count()
+    assertEquals(
+      2,
+      closeDeclarations,
+      "expected exactly 2 `fun close(` declarations — the ADR-051 override close() and the " +
+        "static Close(string) in companion object — the colliding instance Close() must be " +
+        "skipped, got $closeDeclarations",
+    )
+  }
+
+  @Test
+  fun `colliding instance property Handle is skipped while the non-colliding property Label is kept`() {
+    val files: List<GeneratedFile> = generateKotlinStubs(collisionRir)
+    val stub: GeneratedFile = files.single { it.relativePath.endsWith("Widget.kt") }
+
+    assertContains(
+      stub.content,
+      "val label: String",
+      message = "non-colliding instance property Label must still be generated",
+    )
+    assertFalse(
+      stub.content.contains("val handle: String"),
+      "the colliding instance property Handle must not shadow the wrapper's own " +
+        "internal val handle: NugetObjectHandle",
+    )
+  }
+
+  @Test
+  fun `static method named Close is not skipped and renders inside companion object`() {
+    val files: List<GeneratedFile> = generateKotlinStubs(collisionRir)
+    val stub: GeneratedFile = files.single { it.relativePath.endsWith("Widget.kt") }
+
+    val companionBody: String = stub.content.substringAfter("companion object {")
+    assertContains(companionBody, "fun close(reason: String)")
   }
 }

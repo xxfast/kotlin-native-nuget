@@ -130,5 +130,11 @@ enum class RirDiagnosticKind {
   @SerialName("skipped_dynamic") SKIPPED_DYNAMIC,
   @SerialName("skipped_default_interface_method") SKIPPED_DEFAULT_INTERFACE_METHOD,
   @SerialName("skipped_unbound_type_reference") SKIPPED_UNBOUND_TYPE_REFERENCE,
+  // Phase 9 (ROADMAP line 151, instance methods/properties — confirmed mirror of ADR-051/052, no
+  // new ADR): unlike every other SKIPPED_* kind, this one is never emitted by the metadata reader
+  // — it depends on the ADR-051 wrapper's own Kotlin member names (`handle`, `close`, `cleaner`),
+  // which only the Gradle-plugin-side generators know about. Reuses the existing RirDiagnostic
+  // model (ADR-043's mechanism) rather than inventing a separate reporting path.
+  @SerialName("skipped_member_name_collision") SKIPPED_MEMBER_NAME_COLLISION,
   @SerialName("info_async_not_yet_mapped") INFO_ASYNC_NOT_YET_MAPPED,
 }

@@ -18,8 +18,10 @@
       time, instead of hunting for a published package that fits the bridgeable subset.
       Keep each type within the subset the feature under test needs: no accidental overload
       sets, no constructs the ADR-043 filter would skip. Current surface:
-      Sample.Text.Template (ADR-051, opaque handles) — static factory Parse(string) and
-      static consumer Render(Template, string).
+      Sample.Text.Template — static factory Parse(string) and static consumer
+      Render(Template, string) (ADR-051, opaque handles); public instance constructor
+      Template(string) (ADR-052); instance members Source (get), Name (get/set),
+      Apply(string): string, and Clone(): Template (Phase 9 line 151).
     </Description>
   </PropertyGroup>
 

@@ -12,13 +12,21 @@ A plugin that allows you to publish your Kotlin/Native libraries as NuGet packag
 
 https://www.youtube.com/watch?v=DywUS-qYn6o
 
+## Stability
+
+`0.x` and experimental. Anything can change between versions.
+
+The generated bindings are the public API of **your** NuGet package. Your consumers see your version, never the plugin's. A plugin upgrade that changes how Kotlin renders into C# breaks them at your version, not ours.
+
+Pin the plugin version. Diff the generated `Interop.cs` when you bump it.
+
 ## Setup
 
 ```kotlin
 // build.gradle.kts
 plugins {
   kotlin("multiplatform")
-  id("io.github.xxfast.kotlin.native.nuget")
+  id("io.github.xxfast.kotlin.native.nuget") version "0.1.0"
 }
 
 kotlin {

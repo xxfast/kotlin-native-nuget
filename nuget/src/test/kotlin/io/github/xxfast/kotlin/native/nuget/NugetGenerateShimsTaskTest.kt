@@ -9,6 +9,7 @@ import io.github.xxfast.kotlin.native.nuget.rir.RirNamespace
 import io.github.xxfast.kotlin.native.nuget.rir.RirObjectHandleType
 import io.github.xxfast.kotlin.native.nuget.rir.RirParameter
 import io.github.xxfast.kotlin.native.nuget.rir.RirPrimitiveType
+import io.github.xxfast.kotlin.native.nuget.rir.RirProperty
 import io.github.xxfast.kotlin.native.nuget.rir.RirStringType
 import io.github.xxfast.kotlin.native.nuget.rir.RirVoidType
 import kotlin.test.Test
@@ -476,8 +477,11 @@ class NugetGenerateShimsTaskTest {
     )
   }
 
+  // Phase 9 (ROADMAP line 151) supersedes the pre-Phase-9 v1 boundary this test used to encode
+  // ("instance methods are not bridgeable at all"): a class with only instance methods now DOES
+  // emit a registration file, with an instance-method thunk (leading IntPtr selfHandle receiver).
   @Test
-  fun `class with only instance (non-static) methods emits no file`() {
+  fun `class with only instance (non-static) methods emits a file with a receiver-first thunk`() {
     val rir: RirFile = RirFile(
       assemblies = listOf(
         RirAssembly(
@@ -506,9 +510,11 @@ class NugetGenerateShimsTaskTest {
     )
 
     val files: List<GeneratedFile> = generateCSharpShims(rir, "sample")
-    assertTrue(
-      files.isEmpty(),
-      "no file should be generated for a class with only instance methods",
+    val shim: GeneratedFile = files.single { it.relativePath.endsWith("InstanceOnlyRegistration.cs") }
+    assertContains(shim.content, "private static void DoIt_Thunk(IntPtr selfHandle)")
+    assertContains(
+      shim.content,
+      "(InstanceOnly)GCHandle.FromIntPtr(selfHandle).Target!",
     )
   }
 
@@ -872,6 +878,218 @@ class NugetGenerateShimsTaskTest {
     assertTrue(
       ctorIndex < parseIndex && ctorIndex < renderIndex,
       "ADR-052: ctorPtr must be the first DllImport parameter — got '$externLine'",
+    )
+  }
+
+  // ------------------------------------------------------------------
+  // Phase 9 (ROADMAP line 151): C# instance methods and instance properties — confirmed "mirror"
+  // item, no new ADR. "An instance thunk is a static thunk whose first parameter is the receiver
+  // handle" (ADR-051 Deferred section). Reuses ADR-051's GCHandle.FromIntPtr(...).Target! pattern
+  // (already used for handle-typed *parameters*, see Render_Thunk) for the receiver too.
+  //
+  // Thunk-naming decisions made while writing these tests (not previously settled by an ADR —
+  // flagged for confirmation before the follow-up implementation round):
+  //   - an instance method thunk keeps the existing `{MethodName}_Thunk` naming (methods are
+  //     already named this way regardless of static/instance; only the parameter list changes)
+  //   - a property getter thunk is named `{PropertyName}_Get_Thunk`
+  //   - a property setter thunk is named `{PropertyName}_Set_Thunk`
+  //
+  // Canonical fixture: Sample.Text.Template — public non-static class with:
+  //   - a public instance constructor Template(string source)                (ADR-052, unchanged)
+  //   - static Parse(source: string): Template                               (ADR-051, unchanged)
+  //   - instance method Rename(newName: string): void
+  //   - instance property Name: string { get; }                              (read-only)
+  //   - instance property Length: int { get; set; }                         (settable, primitive)
+  //
+  // NOTE: RirRegistrable.PropertyGetter/PropertySetter and bridgeableProperties() exist only as
+  // stubs in RirBridging.kt at this step (Phase 9 line 151 Step 3 "red" state) — the generator
+  // does not yet emit any instance-method receiver parameter or any property thunk at all, so the
+  // assertions in this section are expected to fail until the follow-up round.
+  // ------------------------------------------------------------------
+
+  private val templateInstanceRir: RirFile = RirFile(
+    assemblies = listOf(
+      RirAssembly(
+        packageId = "Sample.Text",
+        assemblyName = "Sample.Text",
+        namespaces = listOf(
+          RirNamespace(
+            name = "Sample.Text",
+            types = listOf(
+              RirClass(
+                name = "Template",
+                isStatic = false,
+                constructors = listOf(
+                  RirConstructor(
+                    parameters = listOf(RirParameter(name = "source", type = RirStringType)),
+                  ),
+                ),
+                methods = listOf(
+                  RirMethod(
+                    name = "Parse",
+                    isStatic = true,
+                    returnType = RirObjectHandleType(namespace = "Sample.Text", name = "Template"),
+                    parameters = listOf(RirParameter(name = "source", type = RirStringType)),
+                  ),
+                  RirMethod(
+                    name = "Rename",
+                    isStatic = false,
+                    returnType = RirVoidType,
+                    parameters = listOf(RirParameter(name = "newName", type = RirStringType)),
+                  ),
+                ),
+                properties = listOf(
+                  RirProperty(name = "Name", type = RirStringType, isReadOnly = true, isStatic = false),
+                  RirProperty(
+                    name = "Length",
+                    type = RirPrimitiveType("int"),
+                    isReadOnly = false,
+                    isStatic = false,
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    ),
+  )
+
+  private fun templateInstanceShim(): GeneratedFile {
+    val files: List<GeneratedFile> = generateCSharpShims(templateInstanceRir, "sample")
+    return files.single { it.relativePath.endsWith("TemplateRegistration.cs") }
+  }
+
+  // ------------------------------------------------------------------
+  // 17. Instance-method thunk: leading IntPtr selfHandle, resolves the receiver via
+  //     GCHandle.FromIntPtr(selfHandle).Target!, calls the method on the resolved instance
+  //     (not statically on the type).
+  // ------------------------------------------------------------------
+
+  @Test
+  fun `Rename_Thunk signature gains a leading IntPtr selfHandle parameter`() {
+    val shim: GeneratedFile = templateInstanceShim()
+    assertContains(
+      shim.content,
+      "private static void Rename_Thunk(IntPtr selfHandle, IntPtr newNamePtr)",
+      message = "Phase 9 line 151: an instance method thunk gains a leading IntPtr selfHandle " +
+        "parameter (an instance thunk is a static thunk whose first parameter is the receiver " +
+        "handle, ADR-051)",
+    )
+  }
+
+  @Test
+  fun `Rename_Thunk body resolves the receiver via GCHandle FromIntPtr selfHandle Target`() {
+    val shim: GeneratedFile = templateInstanceShim()
+    assertContains(
+      shim.content,
+      "(Template)GCHandle.FromIntPtr(selfHandle).Target!",
+      message = "the receiver must be resolved via the exact same GCHandle.FromIntPtr(...).Target! " +
+        "pattern ADR-051 already uses for handle-typed parameters (see Render_Thunk)",
+    )
+  }
+
+  @Test
+  fun `Rename_Thunk body calls Rename on the resolved instance, not statically on Template`() {
+    val shim: GeneratedFile = templateInstanceShim()
+    assertFalse(
+      shim.content.contains("Template.Rename("),
+      "an instance method must be called on the resolved receiver instance, not statically " +
+        "via Template.Rename(...)",
+    )
+  }
+
+  // ------------------------------------------------------------------
+  // 18. Property getter thunk: leading IntPtr selfHandle, returns the marshalled value
+  //     (Marshal.StringToCoTaskMemUTF8 for a string-typed property, per ADR-048/049).
+  // ------------------------------------------------------------------
+
+  @Test
+  fun `Name_Get_Thunk signature takes IntPtr selfHandle and returns IntPtr`() {
+    val shim: GeneratedFile = templateInstanceShim()
+    assertContains(shim.content, "private static IntPtr Name_Get_Thunk(IntPtr selfHandle)")
+  }
+
+  @Test
+  fun `Name_Get_Thunk body resolves the receiver and returns Marshal StringToCoTaskMemUTF8 of the property value`() {
+    val shim: GeneratedFile = templateInstanceShim()
+    assertContains(shim.content, "(Template)GCHandle.FromIntPtr(selfHandle).Target!")
+    assertContains(shim.content, "Marshal.StringToCoTaskMemUTF8(")
+  }
+
+  // ------------------------------------------------------------------
+  // 19. Property setter thunk: leading IntPtr selfHandle + value param, void return.
+  // ------------------------------------------------------------------
+
+  @Test
+  fun `Length_Set_Thunk signature takes IntPtr selfHandle and int value and returns void`() {
+    val shim: GeneratedFile = templateInstanceShim()
+    assertContains(
+      shim.content,
+      "private static void Length_Set_Thunk(IntPtr selfHandle, int value)",
+    )
+  }
+
+  // ------------------------------------------------------------------
+  // 20. [ModuleInitializer] passes the pointers in the exact order from the shared
+  //     bridgeableRegistrables() contract: ctor, static methods, instance methods, then
+  //     per-property getter/[setter] pairs.
+  // ------------------------------------------------------------------
+
+  @Test
+  fun `TemplateRegistration ModuleInitializer passes Ctor, Parse, Rename, Name-getter, Length-getter, Length-setter in that order`() {
+    val shim: GeneratedFile = templateInstanceShim()
+
+    val ctorIndex: Int = shim.content.indexOf("&Ctor_Thunk")
+    val parseIndex: Int = shim.content.indexOf("&Parse_Thunk")
+    val renameIndex: Int = shim.content.indexOf("&Rename_Thunk")
+    val nameGetIndex: Int = shim.content.indexOf("&Name_Get_Thunk")
+    val lengthGetIndex: Int = shim.content.indexOf("&Length_Get_Thunk")
+    val lengthSetIndex: Int = shim.content.indexOf("&Length_Set_Thunk")
+
+    assertTrue(
+      listOf(ctorIndex, parseIndex, renameIndex, nameGetIndex, lengthGetIndex, lengthSetIndex)
+        .all { it >= 0 },
+      "all six thunks must be registered, got indices: ctor=$ctorIndex, parse=$parseIndex, " +
+        "rename=$renameIndex, nameGet=$nameGetIndex, lengthGet=$lengthGetIndex, " +
+        "lengthSet=$lengthSetIndex",
+    )
+    assertTrue(
+      ctorIndex < parseIndex &&
+        parseIndex < renameIndex &&
+        renameIndex < nameGetIndex &&
+        nameGetIndex < lengthGetIndex &&
+        lengthGetIndex < lengthSetIndex,
+      "Phase 9 line 151 shared bridgeable ordering: ctor, static methods, instance methods, " +
+        "then per-property getter/[setter] pairs, groups appended never interleaved — got " +
+        "ctor=$ctorIndex, parse=$parseIndex, rename=$renameIndex, nameGet=$nameGetIndex, " +
+        "lengthGet=$lengthGetIndex, lengthSet=$lengthSetIndex",
+    )
+  }
+
+  @Test
+  fun `TemplateRegistration DllImport declares one IntPtr parameter per registrable in the shared order`() {
+    val shim: GeneratedFile = templateInstanceShim()
+
+    val externLine: String = shim.content.lines().first { it.contains("_register(IntPtr") }
+    val ctorIndex: Int = externLine.indexOf("ctorPtr")
+    val parseIndex: Int = externLine.indexOf("parsePtr")
+    val renameIndex: Int = externLine.indexOf("renamePtr")
+    val nameGetIndex: Int = externLine.indexOf("nameGetterPtr")
+    val lengthGetIndex: Int = externLine.indexOf("lengthGetterPtr")
+    val lengthSetIndex: Int = externLine.indexOf("lengthSetterPtr")
+
+    assertTrue(
+      listOf(ctorIndex, parseIndex, renameIndex, nameGetIndex, lengthGetIndex, lengthSetIndex)
+        .all { it >= 0 },
+      "all six pointer params must be declared, got: '$externLine'",
+    )
+    assertTrue(
+      ctorIndex < parseIndex &&
+        parseIndex < renameIndex &&
+        renameIndex < nameGetIndex &&
+        nameGetIndex < lengthGetIndex &&
+        lengthGetIndex < lengthSetIndex,
     )
   }
 }
