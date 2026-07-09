@@ -18,15 +18,17 @@ Nothing here is optional. Today the plugin only works via `includeBuild`; no con
 
 ### Publishing
 
-- [ ] Add a `LICENSE` file. There isn't one. Both the Plugin Portal and mavenCentral reject a POM without a license, and until it exists nobody can legally use the plugin.
-- [ ] `com.gradle.plugin-publish` on `nuget-plugin/` → Plugin Portal, so `plugins { id("io.github.xxfast.kotlin.native.nuget") }` resolves with no `pluginManagement` block.
-- [ ] `maven-publish` + Sonatype signing on `nuget-processor` → mavenCentral. It has no `group` and no `version` today; it inherits from a root build that sets neither.
-- [ ] Single source of truth for the version. `NugetPlugin.kt:14` hardcodes `PLUGIN_VERSION = "0.1.0"` and `nuget-plugin/build.gradle.kts:8` independently sets `version = "0.1.0"`. `NugetPlugin.kt:217` resolves `io.github.xxfast:nuget-processor:$PLUGIN_VERSION` from that constant. Bump one and forget the other and every consumer gets an unresolvable processor. `nuget-plugin/` is an included build, so the two versions live in separate Gradle builds. Generate the constant, or assert equality in a test.
-- [ ] Release workflow: tag → publish both artifacts.
+- [x] Add a `LICENSE` file. Apache-2.0, matching KStore.
+- [x] `com.gradle.plugin-publish` on `nuget-plugin/` → Plugin Portal, so `plugins { id("io.github.xxfast.kotlin.native.nuget") }` resolves with no `pluginManagement` block. Configured; the first real upload happens with the release workflow below.
+- [x] `maven-publish` + Sonatype signing on `nuget-processor` → mavenCentral, via `com.vanniktech.maven.publish` (same setup as KStore). `group` and `version` now come from the root `gradle.properties`. Signing is applied only when `signingInMemoryKey` is set, so the keyless local-repo smoke test still publishes.
+- [x] Single source of truth for the version. `version` lives in the root `gradle.properties`. The root build applies it to `:nuget-processor` directly; `nuget-plugin/` is an included build and Gradle does not propagate properties across a composite boundary, so it reads that file explicitly. `PLUGIN_VERSION` is generated into `NugetVersion.kt` by `generateVersionConstant` rather than hand-written, so it cannot drift from the published version.
+- [ ] Release workflow: tag → publish both artifacts. Needs `MAVEN_CENTRAL_USERNAME`, `MAVEN_CENTRAL_PASSWORD`, `GPG_KEY_SECRET`, `GPG_KEY_PASSWORD` added to this repo's secrets (they exist on `xxfast/KStore`, but secret values cannot be read back out of GitHub, so they must be re-added from source), plus `GRADLE_PUBLISH_KEY` / `GRADLE_PUBLISH_SECRET` for the Plugin Portal.
+
+The Plugin Portal rejects `-SNAPSHOT` versions outright, since it treats every version as immutable. Both registries are append-only, so shake the release workflow out on `0.1.0-alpha01` rather than burning `0.1.0`.
 
 ### Consumer path is never exercised
 
-- [ ] Smoke test that consumes the plugin **by coordinate**, not `includeBuild`. `NugetPlugin.kt:216` prefers `findProject(":nuget-processor")` and falls back to the maven coordinate. In this repo the project always exists, so the fallback branch, the one every real consumer takes, has never run. Publish to a local maven repo and build a fixture project against it.
+- [x] Smoke test that consumes the plugin **by coordinate**, not `includeBuild`. `smoke-test/` is a separate Gradle build, so `findProject(":nuget-processor")` is null there and `NugetPlugin` takes the maven-coordinate fallback that every real consumer takes. `verifyProcessorResolvesByCoordinate` resolves the KSP processor classpath and fails if `nuget-processor` is absent. Wired into CI and `scripts/verify.sh --plugin`.
 
 ### Generated code correctness
 

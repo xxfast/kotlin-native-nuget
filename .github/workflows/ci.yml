@@ -43,3 +43,29 @@ jobs:
 
       - name: Run dotnet tests
         run: dotnet test sample-app/SampleApp.Tests --no-build
+
+  # Consumes the plugin the way a real user does: by maven coordinate, from a separate Gradle
+  # build. In this repo `NugetPlugin` always finds `:nuget-processor` as a project, so the
+  # coordinate fallback it ships to consumers is otherwise never executed.
+  smoke-test:
+    name: Consume plugin by coordinate
+    runs-on: macos-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Publish plugin and processor to a local maven repo
+        run: >
+          ./gradlew
+          :nuget-processor:publishAllPublicationsToLocalTestRepository
+          :nuget-plugin:publishAllPublicationsToLocalTestRepository
+
+      - name: Resolve the plugin and processor by coordinate
+        run: ./gradlew -p smoke-test verifyProcessorResolvesByCoordinate

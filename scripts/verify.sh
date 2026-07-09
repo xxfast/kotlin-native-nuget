@@ -25,6 +25,15 @@ fi
 if [ "$RUN_PLUGIN" = true ]; then
   echo "==> Gradle plugin tests (:nuget-plugin:test)"
   ./gradlew :nuget-plugin:test
+
+  echo "==> Publish plugin + processor to build/local-repo"
+  ./gradlew :nuget-processor:publishAllPublicationsToLocalTestRepository \
+    :nuget-plugin:publishAllPublicationsToLocalTestRepository
+
+  # Exercises the maven-coordinate fallback in NugetPlugin that this repo's own builds skip,
+  # because here `findProject(":nuget-processor")` always resolves.
+  echo "==> Consume the plugin by coordinate (smoke-test)"
+  ./gradlew -p smoke-test verifyProcessorResolvesByCoordinate
 fi
 
 echo "==> Purge stale SampleLibrary + SampleDependency NuGet caches"

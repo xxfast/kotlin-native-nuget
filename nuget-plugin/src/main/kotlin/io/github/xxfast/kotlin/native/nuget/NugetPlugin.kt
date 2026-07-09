@@ -11,8 +11,6 @@ import org.jetbrains.kotlin.gradle.plugin.mpp.KotlinNativeTarget
 import org.jetbrains.kotlin.gradle.plugin.mpp.SharedLibrary
 import java.lang.reflect.Method
 
-private const val PLUGIN_VERSION = "0.1.0"
-
 private val KONAN_TO_RID = mapOf(
   "mingw_x64" to "win-x64",
   "macos_arm64" to "osx-arm64",
