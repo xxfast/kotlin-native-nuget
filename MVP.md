@@ -19,9 +19,9 @@ Nothing here is optional. Today the plugin only works via `includeBuild`; no con
 ### Publishing
 
 - [ ] Add a `LICENSE` file. There isn't one. Both the Plugin Portal and mavenCentral reject a POM without a license, and until it exists nobody can legally use the plugin.
-- [ ] `com.gradle.plugin-publish` on `nuget/` → Plugin Portal, so `plugins { id("io.github.xxfast.kotlin.native.nuget") }` resolves with no `pluginManagement` block.
+- [ ] `com.gradle.plugin-publish` on `nuget-plugin/` → Plugin Portal, so `plugins { id("io.github.xxfast.kotlin.native.nuget") }` resolves with no `pluginManagement` block.
 - [ ] `maven-publish` + Sonatype signing on `nuget-processor` → mavenCentral. It has no `group` and no `version` today; it inherits from a root build that sets neither.
-- [ ] Single source of truth for the version. `NugetPlugin.kt:14` hardcodes `PLUGIN_VERSION = "0.1.0"` and `nuget/build.gradle.kts:8` independently sets `version = "0.1.0"`. `NugetPlugin.kt:217` resolves `io.github.xxfast:nuget-processor:$PLUGIN_VERSION` from that constant. Bump one and forget the other and every consumer gets an unresolvable processor. `nuget/` is an included build, so the two versions live in separate Gradle builds. Generate the constant, or assert equality in a test.
+- [ ] Single source of truth for the version. `NugetPlugin.kt:14` hardcodes `PLUGIN_VERSION = "0.1.0"` and `nuget-plugin/build.gradle.kts:8` independently sets `version = "0.1.0"`. `NugetPlugin.kt:217` resolves `io.github.xxfast:nuget-processor:$PLUGIN_VERSION` from that constant. Bump one and forget the other and every consumer gets an unresolvable processor. `nuget-plugin/` is an included build, so the two versions live in separate Gradle builds. Generate the constant, or assert equality in a test.
 - [ ] Release workflow: tag → publish both artifacts.
 
 ### Consumer path is never exercised

@@ -1,6 +1,6 @@
 ---
 name: kotlin-dev
-description: Use to implement the Kotlin side of the Kotlin/Native ↔ C# bridge generator, in either direction. Forward — the KSP processor (CirModel, CirTranslator, CirRenderer, NugetProcessor) that generates C# bindings. Reverse — the NuGet-consumption pipeline in the `nuget/` Gradle plugin (RIR model, extract/generate tasks) that turns a C# NuGet package into Kotlin bindings. Makes failing tests pass, then verifies the build.
+description: Use to implement the Kotlin side of the Kotlin/Native ↔ C# bridge generator, in either direction. Forward — the KSP processor (CirModel, CirTranslator, CirRenderer, NugetProcessor) that generates C# bindings. Reverse — the NuGet-consumption pipeline in the `nuget-plugin/` Gradle plugin (RIR model, extract/generate tasks) that turns a C# NuGet package into Kotlin bindings. Makes failing tests pass, then verifies the build.
 tools: Read, Write, Edit, Bash, Grep, Glob
 model: sonnet
 ---
@@ -20,7 +20,7 @@ Forward — `nuget-processor/` — KSP processor that generates C# bindings and 
 - `NugetProcessorProvider.kt` — KSP entry point
 - `Reserved.kt` — shared C/C# reserved word sets and naming functions
 
-Reverse — `nuget/` — Gradle plugin: packages the NuGet (forward) and consumes NuGet packages (reverse). Package `io.github.xxfast.kotlin.native.nuget`:
+Reverse — `nuget-plugin/` — Gradle plugin: packages the NuGet (forward) and consumes NuGet packages (reverse). Package `io.github.xxfast.kotlin.native.nuget`:
 
 - `rir/RirModel.kt`, `rir/RirParsing.kt`, `rir/RirBridging.kt` — the Reverse IR (RIR), mirror of CIR: models the C# API surface extracted from .NET assembly metadata (ADR-046). Parsing deserializes `reverse-ir.json`; bridging derives Kotlin declarations.
 - `NugetGenTask.kt` / `NugetRestoreTask.kt` — synthetic `.csproj` generation + `dotnet restore`, reusing `obj/project.assets.json` as the manifest (ADR-045)
@@ -45,7 +45,7 @@ The [refactorer agent](refactorer.md) formats your files afterward. Report the l
 ## Build commands
 
 - Compile processor: `./gradlew :nuget-processor:compileKotlin`
-- Plugin tests: `./gradlew :nuget:test`
+- Plugin tests: `./gradlew :nuget-plugin:test`
 - Build sample + package: `./gradlew :sample-library:clean :sample-library:packNuget`
 - Full verify: run `scripts/verify.sh` (add `--plugin` when Gradle plugin code changed). It packages the sample library, purges the stale `~/.nuget/packages/samplelibrary` cache, and runs the .NET tests.
 
@@ -64,4 +64,4 @@ Reverse:
 
 - Kotlin → C# managed calls use an init-time function-pointer registration table: C# `[ModuleInitializer]` registers `[UnmanagedCallersOnly]` thunks with Kotlin at startup; Kotlin stubs fail fast if the table is not registered (ADR-041/048)
 - Export naming contract: `nuget_{ns}_{type}_register`, one `COpaquePointer` per method in `reverse-ir.json` order; `Marshal.StringToCoTaskMemUTF8` for string returns (ADR-048/049)
-- Fast TDD loop for reverse features is generator-level unit tests in `nuget/src/test/kotlin`: a `reverse-ir.json` fixture in → expected Kotlin stub / C# shim text out (precedents: `NugetGenerateBindingsTaskTest`, `NugetGenerateShimsTaskTest`)
+- Fast TDD loop for reverse features is generator-level unit tests in `nuget-plugin/src/test/kotlin`: a `reverse-ir.json` fixture in → expected Kotlin stub / C# shim text out (precedents: `NugetGenerateBindingsTaskTest`, `NugetGenerateShimsTaskTest`)

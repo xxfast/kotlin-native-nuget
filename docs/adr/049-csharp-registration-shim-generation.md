@@ -640,7 +640,7 @@ throughout).
 
 ## Consequences
 
-### New `nuget/` Gradle plugin additions
+### New `nuget-plugin/` Gradle plugin additions
 
 - `NugetGenerateShimsTask.kt` — task class with `@InputFile reverseIrFile`, `@Input
   nativeLibraryName`, `@OutputDirectory csharpOutputDir`; a pure `generateCSharpShims(file: RirFile,

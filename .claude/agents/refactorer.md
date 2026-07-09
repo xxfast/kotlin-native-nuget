@@ -32,7 +32,7 @@ The tool is deferred, so it will not appear in your tool list up front. Load its
 `ToolSearch` using the query `select:mcp__idea__reformat_file`, then call it. Not seeing it listed
 does not mean it is unavailable.
 
-- `files` takes project-relative paths, e.g. `nuget/src/main/kotlin/.../RirModel.kt`
+- `files` takes project-relative paths, e.g. `nuget-plugin/src/main/kotlin/.../RirModel.kt`
 - always pass `projectPath` (the absolute repo root) to avoid an ambiguous call
 - batch the files in scope into one call
 - a successful call returns `ok`

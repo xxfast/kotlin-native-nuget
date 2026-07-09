@@ -42,7 +42,7 @@ metadata, and a *renderer* emits the other language's source.
 
 | Role | Forward — CIR | Reverse — RIR |
 |---|---|---|
-| Middle IR | `CirModel` (in `nuget-processor/`) | `RirModel` (in `nuget/`) |
+| Middle IR | `CirModel` (in `nuget-processor/`) | `RirModel` (in `nuget-plugin/`) |
 | Reader that fills it | KSP processor, over Kotlin symbols | `NugetMetadataReader` C# tool, over ECMA-335 assembly metadata ([ADR-042](docs/adr/042-assembly-metadata-extraction.md)) |
 | Handoff | in-memory, same JVM process | `reverse-ir.json` across a process boundary ([ADR-046](docs/adr/046-reverse-ir-model-and-json-contract.md)) |
 | Renderer that emits source | `CirRenderer` → `Interop.cs` / `Bridges.kt` | Kotlin-stub + C#-shim codegen * |

@@ -30,7 +30,7 @@ therefore a genuine design decision with format alternatives, not a mechanical t
 
 **Module placement is not the same decision.** The CIR must live in `nuget-processor/` because the
 KSP processor produces it while processing Kotlin symbols. The RIR has no KSP dependency; its only
-producer is a C# tool and its only consumers are Gradle tasks that both live in the `nuget/` plugin
+producer is a C# tool and its only consumers are Gradle tasks that both live in the `nuget-plugin/` plugin
 module. Placing the RIR in `nuget-processor/` would create a spurious coupling.
 
 **Type vocabulary is a structured design choice.** The CIR stores all types as raw Kotlin strings
@@ -66,7 +66,7 @@ it. The type representation must therefore be structurally extensible without br
 
 ### JSON library choice
 
-The `nuget/` Gradle plugin module currently carries no JSON dependency — its build declares only
+The `nuget-plugin/` Gradle plugin module currently carries no JSON dependency — its build declares only
 `kotlin-gradle-plugin-api`, `kotlin-gradle-plugin`, KSP Gradle plugin, and `kotlin-test`. The
 `nugetExtractApi` task action needs JSON parsing for two inputs:
 
@@ -85,16 +85,16 @@ plugin dependency rather than relying on Gradle's internal classpath.
 
 ## Alternatives Considered
 
-### 1. RIR in `nuget/` plugin module + `kotlinx.serialization` for JSON (chosen)
+### 1. RIR in `nuget-plugin/` plugin module + `kotlinx.serialization` for JSON (chosen)
 
-The RIR data classes live in the `nuget/` Gradle plugin module under the package
+The RIR data classes live in the `nuget-plugin/` Gradle plugin module under the package
 `io.github.xxfast.kotlin.native.nuget.rir`. The module adds `kotlinx-serialization-json` as an
 `implementation` dependency and the Kotlin serialization compiler plugin. A `"kind"` discriminator
 field drives the sealed-interface deserialization for both `RirType` and `RirTypeRef`.
 
 **Pros:**
 - Co-location with the RIR's sole consumers (`NugetExtractApiTask`, and later
-  `NugetGenerateBindingsTask`), both in `nuget/`.
+  `NugetGenerateBindingsTask`), both in `nuget-plugin/`.
 - No new module; no new inter-module dependency edge.
 - `@Serializable` data classes catch schema drift at compile time rather than at runtime.
 - The `"kind"` discriminator is forwards-compatible: adding `{ "kind": "handle", "assemblyQualifiedName": "..." }` for object handles in a future reverse ADR does not break existing parsers that use `@JsonClassDiscriminator`.
@@ -103,14 +103,14 @@ field drives the sealed-interface deserialization for both `RirType` and `RirTyp
 
 **Cons:**
 - Adds `kotlinx-serialization-json` (≈ 1.5 MB transitive) to the Gradle plugin's classpath.
-- Requires `kotlin("plugin.serialization")` in `nuget/build.gradle.kts`.
+- Requires `kotlin("plugin.serialization")` in `nuget-plugin/build.gradle.kts`.
 
 ### 2. RIR in a new shared module (`nuget-rir/` or `nuget-model/`) (rejected)
 
-Extract RIR data classes into a new Gradle module depended on by both `nuget/` and a future
+Extract RIR data classes into a new Gradle module depended on by both `nuget-plugin/` and a future
 `nuget-codegen/`.
 
-**Rejected.** There is no current consumer outside `nuget/`. Creating a new module for a model used
+**Rejected.** There is no current consumer outside `nuget-plugin/`. Creating a new module for a model used
 exclusively within one other module adds Gradle inter-module build overhead for no immediate benefit.
 If `nugetGenerateBindings` is extracted to a separate module later, the RIR can move then.
 
@@ -119,7 +119,7 @@ If `nugetGenerateBindings` is extracted to a separate module later, the RIR can 
 Put the RIR data classes in `nuget-processor/` so both CIR and RIR share a model module.
 
 **Rejected.** `nuget-processor/` is a KSP processor that runs during Kotlin compilation. The RIR
-has no KSP dependency. Adding it to `nuget-processor/` would: (a) make `nuget/` depend on
+has no KSP dependency. Adding it to `nuget-processor/` would: (a) make `nuget-plugin/` depend on
 `nuget-processor/` for deserialization types (the wrong dependency direction — the processor is a
 Gradle plugin dependency, not a compile dependency of the plugin module), and (b) conflate two
 unrelated abstraction levels. The CIR lives in `nuget-processor/` because it is produced by the KSP
@@ -150,17 +150,17 @@ that varies with the input), complicates deserialization (multiple reads), and a
 
 ## Decision
 
-Use **Alternative 1**: RIR data classes in the `nuget/` plugin module, `kotlinx.serialization` for
+Use **Alternative 1**: RIR data classes in the `nuget-plugin/` plugin module, `kotlinx.serialization` for
 JSON parsing, `"kind"` discriminator for the `RirType` and `RirTypeRef` sealed hierarchies.
 
 ### Module and package
 
 All RIR types live in:
 ```
-nuget/src/main/kotlin/io/github/xxfast/kotlin/native/nuget/rir/
+nuget-plugin/src/main/kotlin/io/github/xxfast/kotlin/native/nuget/rir/
 ```
 
-Additions to `nuget/build.gradle.kts`:
+Additions to `nuget-plugin/build.gradle.kts`:
 ```kotlin
 plugins {
     `java-gradle-plugin`
@@ -539,14 +539,14 @@ nugetImport                 umbrella: dependsOn(nugetRestore); +dependsOn(nugetE
 
 ## Consequences
 
-### New `nuget/` module additions
+### New `nuget-plugin/` module additions
 
-- `kotlin("plugin.serialization")` applied in `nuget/build.gradle.kts`.
+- `kotlin("plugin.serialization")` applied in `nuget-plugin/build.gradle.kts`.
 - `kotlinx-serialization-json` as an `implementation` dependency.
-- `nuget/src/main/kotlin/.../rir/RirModel.kt` — sealed-interface RIR data classes.
-- `nuget/src/main/kotlin/.../rir/RirParsing.kt` — `parseReverseIr()` and `deriveDllPaths()` pure
+- `nuget-plugin/src/main/kotlin/.../rir/RirModel.kt` — sealed-interface RIR data classes.
+- `nuget-plugin/src/main/kotlin/.../rir/RirParsing.kt` — `parseReverseIr()` and `deriveDllPaths()` pure
   functions.
-- `nuget/src/main/kotlin/.../NugetExtractApiTask.kt` — task class with annotated inputs/outputs and
+- `nuget-plugin/src/main/kotlin/.../NugetExtractApiTask.kt` — task class with annotated inputs/outputs and
   a working `@TaskAction` that derives DLL paths, invokes the metadata reader, and writes
   `reverse-ir.json`.
 
@@ -558,12 +558,12 @@ nugetImport                 umbrella: dependsOn(nugetRestore); +dependsOn(nugetE
 
 ### Forward CIR is not affected
 
-The RIR lives entirely in `nuget/` and has no dependency on `nuget-processor/`. The CIR is
+The RIR lives entirely in `nuget-plugin/` and has no dependency on `nuget-processor/`. The CIR is
 unchanged. There is no shared "model" module — each IR serves its own pipeline direction.
 
 ### Testing
 
-**Unit tests in `nuget/src/test/kotlin/` — no dotnet required:**
+**Unit tests in `nuget-plugin/src/test/kotlin/` — no dotnet required:**
 
 ```kotlin
 class RirParsingTest {

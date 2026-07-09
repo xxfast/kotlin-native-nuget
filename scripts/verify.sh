@@ -23,8 +23,8 @@ if [ "$#" -gt 1 ]; then
 fi
 
 if [ "$RUN_PLUGIN" = true ]; then
-  echo "==> Gradle plugin tests (:nuget:test)"
-  ./gradlew :nuget:test
+  echo "==> Gradle plugin tests (:nuget-plugin:test)"
+  ./gradlew :nuget-plugin:test
 fi
 
 echo "==> Purge stale SampleLibrary + SampleDependency NuGet caches"

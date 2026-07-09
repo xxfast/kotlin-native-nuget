@@ -57,18 +57,18 @@ Write failing tests on the **consumer side** of the feature. Which side that is 
 - **Reverse / ecosystem feature (C# → Kotlin, Phase 8+)** — `kotlin-dev` + `csharp-dev` agents
   - There is **no runnable Kotlin-side unit test of the reverse bridge**: the generated Kotlin stubs fail fast unless the .NET host process has registered the function-pointer table (ADR-041/048), so Kotlin/Native code cannot exercise the reverse bridge standalone. Do not write "failing Kotlin tests that define the expected Kotlin-side API" — there is nowhere for them to run. Use the two real test seams instead:
     - **Fast inner loop (where the TDD happens)** — `kotlin-dev` agent
-      - Write failing generator-level unit tests in `nuget/src/test/kotlin`: a `reverse-ir.json` fixture in, expected Kotlin stub text and/or C# shim text out. Precedents: `NugetGenerateBindingsTaskTest`, `NugetGenerateShimsTaskTest`.
+      - Write failing generator-level unit tests in `nuget-plugin/src/test/kotlin`: a `reverse-ir.json` fixture in, expected Kotlin stub text and/or C# shim text out. Precedents: `NugetGenerateBindingsTaskTest`, `NugetGenerateShimsTaskTest`.
     - **Outer loop (end-to-end round trip)** — `csharp-dev` agent
       - Extend `sample-dependency/` (the standing C# fixture library, bound via the ADR-050 local feed) with the feature's fixture surface — a feature-scoped namespace/type kept inside the ADR-043 bridgeable subset. Do not hunt for a published package that fits the subset.
       - Add the ADR-050 round trip: sample-library Kotlin calls the bound `SampleDependency` API, is surfaced forward to C#, and is asserted in `SampleApp.Tests` xunit tests.
 - **Gradle plugin feature (DSL, tasks, wiring)** — `kotlin-dev` agent
-  - Write failing `ProjectBuilder` unit tests in `nuget/src/test/kotlin` that apply the plugin, configure the DSL as a consumer would, and assert the extension model / task wiring
+  - Write failing `ProjectBuilder` unit tests in `nuget-plugin/src/test/kotlin` that apply the plugin, configure the DSL as a consumer would, and assert the extension model / task wiring
   - Defer Gradle TestKit functional tests until there is task behavior that ProjectBuilder cannot reach
 
 ### Step 4: Implementation (`kotlin-dev` agent)
 
 - Make the failing tests pass
-- Update the KSP processor (CirModel, CirTranslator, CirRenderer, NugetProcessor) or the Gradle plugin (`nuget/`), whichever the feature lives in
+- Update the KSP processor (CirModel, CirTranslator, CirRenderer, NugetProcessor) or the Gradle plugin (`nuget-plugin/`), whichever the feature lives in
 - Verify all tests pass (existing + new)
 - The loop iterates: tests fail, fix, re-run. Continue the same `kotlin-dev` instance via SendMessage rather than spawning a fresh agent each round. Same for `csharp-dev` if the tests themselves need adjusting.
 - Ask `kotlin-dev` to report back the list of files it touched, you will hand that to the refactorer.
@@ -94,7 +94,7 @@ Once the feature is implemented and verified, update the docs in the same pass:
 - Run subagent to write tests FIRST (step 3 before step 4)
 - Pass agents file paths and intent, not file contents. They have Read and know the project layout, so let them read what they need.
 - Reuse warm agents (SendMessage) when iterating instead of spawning fresh ones
-- After implementation, verify locally by running `scripts/verify.sh` (add `--plugin` for Gradle plugin changes to also run the `nuget/` plugin unit tests). The script also purges the stale `~/.nuget/packages/samplelibrary` cache — a known footgun where a re-pack silently resolves against the old package.
+- After implementation, verify locally by running `scripts/verify.sh` (add `--plugin` for Gradle plugin changes to also run the `nuget-plugin/` plugin unit tests). The script also purges the stale `~/.nuget/packages/samplelibrary` cache — a known footgun where a re-pack silently resolves against the old package.
 - Step 6 is the last step, run only after the feature is verified:
   - ROADMAP.md — tick the completed item (and link its ADR)
   - FEATURES.md — add or amend the mapping row in its feature category, ADR link in the ADRs column; the catalogue is bidirectional, so set the row's direction glyph (`→`/`←`/`⇄`) and capture any per-direction asymmetry in Notes (see the fuller note under Step 6)

@@ -635,7 +635,7 @@ These are informational only (not warnings); the user already saw per-member dia
 
 ## Consequences
 
-### New `nuget/` Gradle plugin additions
+### New `nuget-plugin/` Gradle plugin additions
 
 - `NugetGenerateBindingsTask.kt` — task class with `@InputFile reverseIrFile`, `@Input`
   overrides/aliases maps, `@OutputDirectory kotlinOutputDir`; task action renders stub files.

@@ -2,7 +2,7 @@ rootProject.name = "kotlin-native-nuget"
 enableFeaturePreview("TYPESAFE_PROJECT_ACCESSORS")
 
 pluginManagement {
-  includeBuild("nuget")
+  includeBuild("nuget-plugin")
   repositories {
     mavenCentral()
     gradlePluginPortal()
