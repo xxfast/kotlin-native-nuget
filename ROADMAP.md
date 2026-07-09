@@ -196,16 +196,16 @@ Mirror of Phase 7, composed with its machinery.
 - [ ] Pass Kotlin lambdas where a C# API stores the delegate (lifetime beyond the call — mirror of ADR-037)
 - [ ] Kotlin subclassing C# **classes** — explicitly deferred, revisit only with a concrete use case (synthesis D5, Swift-export precedent)
 
-## Pre-Launch Checklist 
-- [ ] Pin `<LangVersion>` in the generated project so a consumer's newer SDK can't reinterpret generated code under a different language version
-- [ ] Add a CI smoke test that compiles the generated `Interop.cs` against the target `LangVersion` (catches escaping / reserved-word / invalid-construct regressions in this repo instead of at consumer build time)
+## Launch
+
+The v0.1.0 launch checklist lives in [MVP.md](MVP.md): forward direction stable, reverse direction as a labelled preview, published to the Gradle Plugin Portal and mavenCentral.
+
+Items deferred out of the MVP:
+
 - [ ] Add KDoc comments in generated C# for better IDE support (e.g., from Kotlin source KDoc or signatures)
-- [ ] Finalize README with usage instructions and API documentation
 - [ ] Add Writerside documentation
 - [ ] Add a better sample app that demonstrates more complex usage of the bridge (e.g., using generics, collections, async features)
-- [ ] Local-feed dev loop: let a C# consumer iterate against a locally built `.nupkg` (local NuGet feed / `ProjectReference`) before publishing — KMMBridge-style local-vs-published dual flow (synthesis D6)
-- [ ] Publish releases to GitHub Packages
-- [ ] Publish releases to mavenCentral
+- [ ] Local-feed dev loop: let a C# consumer iterate against a locally built `.nupkg` (local NuGet feed / `ProjectReference`) before publishing (KMMBridge-style local-vs-published dual flow, synthesis D6)
 
 ## Future Improvements
 
