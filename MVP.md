@@ -45,22 +45,22 @@ No `@ExperimentalNugetApi` opt-in annotation. It would be ceremony: the whole pl
 ## P1: strongly recommended
 
 - [x] **Instance methods and instance properties** ([ROADMAP.md](ROADMAP.md) Phase 9 line 151). Landed as a confirmed mirror of ADR-051, no new ADR. A bound C# object's instance methods and properties are now callable from Kotlin, so constructing one is no longer a dead end. Verified end to end through the real `.nupkg` round trip.
-- [ ] `dotnet` detection on PATH with explicit install guidance (Phase 8, currently deferred). First-run failure mode for a reverse-direction user is otherwise an opaque subprocess error.
+- [ ] `dotnet` detection on PATH with explicit install guidance. First-run failure mode for a reverse-direction user is otherwise an opaque subprocess error.
 
 ## Cut from MVP
 
 Deliberately not blocking launch. Each moves to [ROADMAP.md](ROADMAP.md).
 
-| Item | Why it's cut |
-|---|---|
-| KDoc → C# XML doc comments | Ergonomics. Generated bindings work without it. |
-| Writerside documentation | A complete README covers v0.1.0. Writerside is worth it once the API stops moving. |
-| Richer sample app | `sample-library` already exercises generics, collections and async. The gap is documentation, not samples. |
-| Local-feed dev loop for C# consumers (synthesis D6) | Developer ergonomics for plugin *users*. The P0 by-coordinate smoke test covers this repo's own need to verify the published path. |
-| GitHub Packages | Superseded. It requires an auth token even for public reads, so it's a worse channel than the two we're shipping. |
-| SharedFlow / StateFlow, remaining Flow edge cases | Phase 6 tail. |
-| Phase 7 remainder (interface returns, C#-implemented Kotlin interfaces) | Forward direction is complete and useful without them. |
-| Phases 9–13 beyond the P1 item | The README states the reverse ceiling, so these are absent capabilities rather than broken promises. |
+| Item                                                                    | Why it's cut                                                                                                                       |
+|-------------------------------------------------------------------------|------------------------------------------------------------------------------------------------------------------------------------|
+| KDoc → C# XML doc comments                                              | Ergonomics. Generated bindings work without it.                                                                                    |
+| Writerside documentation                                                | A complete README covers v0.1.0. Writerside is worth it once the API stops moving.                                                 |
+| Richer sample app                                                       | `sample-library` already exercises generics, collections and async. The gap is documentation, not samples.                         |
+| Local-feed dev loop for C# consumers (synthesis D6)                     | Developer ergonomics for plugin *users*. The P0 by-coordinate smoke test covers this repo's own need to verify the published path. |
+| GitHub Packages                                                         | Superseded. It requires an auth token even for public reads, so it's a worse channel than the two we're shipping.                  |
+| SharedFlow / StateFlow, remaining Flow edge cases                       | Phase 6 tail.                                                                                                                      |
+| Phase 7 remainder (interface returns, C#-implemented Kotlin interfaces) | Forward direction is complete and useful without them.                                                                             |
+| Phases 9–13 beyond the P1 item                                          | The README states the reverse ceiling, so these are absent capabilities rather than broken promises.                               |
 
 ## Launch order
 
