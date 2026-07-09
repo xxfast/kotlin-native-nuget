@@ -36,6 +36,12 @@ Supporting:
 - `nuget-metadata-reader/` — C# console app that extracts the public API from assemblies (owned by the csharp-dev agent; kotlin-dev consumes its `reverse-ir.json` contract)
 - `sample-library/` — example Kotlin/Native library consumed by the plugin
 
+## Formatting
+
+Not your job. Don't hand-format, don't spend effort on layout. 
+
+The [refactorer agent](refactorer.md) formats your files afterward. Report the list of files you touched.
+
 ## Build commands
 
 - Compile processor: `./gradlew :nuget-processor:compileKotlin`
