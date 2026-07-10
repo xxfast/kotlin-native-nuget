@@ -101,6 +101,12 @@ class NugetGenerateShimsTaskTest {
   }
 
   @Test
+  fun `generated shim declares nullable enable directive`() {
+    val shim: GeneratedFile = jsonConvertShim()
+    assertContains(shim.content, "#nullable enable")
+  }
+
+  @Test
   fun `generated shim declares internal static class JsonConvertRegistration`() {
     val shim: GeneratedFile = jsonConvertShim()
     assertContains(shim.content, "internal static class JsonConvertRegistration")

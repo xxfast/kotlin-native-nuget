@@ -46,6 +46,9 @@ rm -rf ~/.nuget/packages/samplelibrary ~/.nuget/packages/sampledependency
 echo "==> Pack SampleLibrary NuGet (:sample-library:clean :sample-library:packNuget)"
 ./gradlew :sample-library:clean :sample-library:packNuget
 
+echo "==> Check generated bindings compile as a consumer (net8.0, warnings as errors)"
+dotnet build sample-app/GeneratedBindingsCheck
+
 echo "==> C# consumer tests (dotnet test in sample-app/SampleApp.Tests)"
 cd "$ROOT/sample-app/SampleApp.Tests"
 dotnet test

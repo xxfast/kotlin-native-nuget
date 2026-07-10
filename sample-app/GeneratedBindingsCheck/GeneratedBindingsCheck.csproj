@@ -1,0 +1,20 @@
+<!--
+  Compiles the generated C# bindings exactly as a consumer does, at the lowest
+  supported TFM (net8.0). Warnings are treated as errors because our generated
+  code ships as contentFiles and compiles inside the consumer's build, so any
+  warning we emit lands in their build (and fails it under TreatWarningsAsErrors).
+  This project has no sources of its own; it consumes the packed SampleLibrary
+  .nupkg so NuGet pulls the transitive deps the registration shims need.
+-->
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <LangVersion>12.0</LangVersion>
+    <Nullable>enable</Nullable>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="SampleLibrary" Version="1.0.0" />
+  </ItemGroup>
+</Project>

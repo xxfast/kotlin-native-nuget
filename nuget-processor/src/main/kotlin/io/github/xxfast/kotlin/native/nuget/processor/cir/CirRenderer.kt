@@ -2,6 +2,9 @@ package io.github.xxfast.kotlin.native.nuget.processor.cir
 
 class CirRenderer {
   fun render(file: CirFile): String = buildString {
+    appendLine("#nullable enable")
+    appendLine()
+
     for (using in file.usings) {
       appendLine("using $using;")
     }

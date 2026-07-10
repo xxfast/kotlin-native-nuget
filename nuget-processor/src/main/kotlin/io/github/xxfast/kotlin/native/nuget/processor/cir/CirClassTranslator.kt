@@ -519,7 +519,7 @@ internal fun translateClass(
 
       val nativeSetterType: String = when {
         isNullableValueType -> mapReturnType(propType)
-        isNullableString -> "string"
+        isNullableString -> "string?"
         else -> nativeReturnType
       }
 
