@@ -30,6 +30,11 @@ jobs:
         with:
           dotnet-version: 10.0.x
 
+      # Before packNuget, which pays for a Kotlin/Native link. These previously ran only in
+      # release.yml, on a tag, so a PR could break them and CI stayed green until release day.
+      - name: Plugin tests
+        run: ./gradlew :nuget-plugin:test
+
       - name: Build NuGet package
         run: ./gradlew :sample-library:packNuget
 

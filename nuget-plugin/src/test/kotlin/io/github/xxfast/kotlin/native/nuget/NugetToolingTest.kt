@@ -2,6 +2,8 @@ package io.github.xxfast.kotlin.native.nuget
 
 import java.io.File
 import org.gradle.api.GradleException
+import org.junit.jupiter.api.condition.DisabledOnOs
+import org.junit.jupiter.api.condition.OS
 import org.junit.jupiter.api.io.TempDir
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -35,7 +37,10 @@ class NugetToolingTest {
     assertNull(found)
   }
 
+  // setExecutable(false) is a no-op on a file system with no execute permission, so on Windows the
+  // file stays executable and findExecutable returns it. The skip is the platform, not a bug here.
   @Test
+  @DisabledOnOs(OS.WINDOWS)
   fun `findExecutable skips a non-executable file of the right name`(@TempDir dir: File) {
     val file = File(dir, "dotnet")
     file.writeText("not executable")
