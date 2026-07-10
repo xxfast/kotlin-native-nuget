@@ -54,6 +54,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Deliberately the lowest JVM a Gradle 9 consumer can be on. This build's own daemon runs on
+      # 21 (gradle/gradle-daemon-jvm.properties), so resolving the plugin here on 17 is what proves
+      # the published metadata doesn't demand a newer JVM than consumers have. Do not raise this.
       - uses: actions/setup-java@v4
         with:
           distribution: temurin

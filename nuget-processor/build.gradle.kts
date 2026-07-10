@@ -3,6 +3,12 @@ plugins {
   alias(libs.plugins.mavenPublish)
 }
 
+// Matches `nuget-plugin`: the plugin resolves this processor onto a consumer's KSP classpath, so
+// publishing it with a JVM 21 requirement would lock out every consumer on Java 17.
+kotlin {
+  jvmToolchain(17)
+}
+
 dependencies {
   implementation(libs.ksp.api)
   implementation(libs.kotlinpoet)

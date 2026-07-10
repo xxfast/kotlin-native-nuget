@@ -16,6 +16,14 @@ rootDir.parentFile.resolve("gradle.properties").inputStream().use(rootProperties
 group = requireNotNull(rootProperties.getProperty("group")) { "`group` missing from the root gradle.properties" }
 version = requireNotNull(rootProperties.getProperty("version")) { "`version` missing from the root gradle.properties" }
 
+// Java 17 is Gradle 9's own floor, so it is the lowest a consumer can be on. This build's daemon
+// runs on 21 (gradle/gradle-daemon-jvm.properties); without pinning the toolchain, the published
+// Gradle module metadata records `org.gradle.jvm.version: 21` and every consumer on 17 fails to
+// resolve the plugin at all.
+kotlin {
+  jvmToolchain(17)
+}
+
 repositories {
   mavenCentral()
 }
