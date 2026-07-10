@@ -1,6 +1,8 @@
 # kotlin-native-nuget
 <img src="docs/icon.svg" height="240" align="right"/> 
 
+[![Gradle Plugin Portal](https://img.shields.io/gradle-plugin-portal/v/io.github.xxfast.kotlin.native.nuget)](https://plugins.gradle.org/plugin/io.github.xxfast.kotlin.native.nuget)
+[![Maven Central](https://img.shields.io/maven-central/v/io.github.xxfast/nuget-plugin?label=maven%20central)](https://central.sonatype.com/artifact/io.github.xxfast/nuget-plugin)
 [![Stability](https://kotl.in/badges/experimental.svg)](https://kotlinlang.org/docs/components-stability.html#stability-of-subcomponents)
 [![CI](https://github.com/xxfast/kotlin-native-nuget/actions/workflows/ci.yml/badge.svg)](https://github.com/xxfast/kotlin-native-nuget/actions/workflows/ci.yml)
 
@@ -26,7 +28,7 @@ Pin the plugin version. Diff the generated `Interop.cs` when you bump it.
 // build.gradle.kts
 plugins {
   kotlin("multiplatform")
-  id("io.github.xxfast.kotlin.native.nuget") version "0.1.0"
+  id("io.github.xxfast.kotlin.native.nuget") version "0.1.0-alpha01"
 }
 
 kotlin {
