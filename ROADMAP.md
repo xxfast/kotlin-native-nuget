@@ -209,6 +209,7 @@ Items deferred out of the MVP:
 - [ ] Add Writerside documentation
 - [ ] Add a better sample app that demonstrates more complex usage of the bridge (e.g., using generics, collections, async features)
 - [ ] Local-feed dev loop: let a C# consumer iterate against a locally built `.nupkg` (local NuGet feed / `ProjectReference`) before publishing (KMMBridge-style local-vs-published dual flow, synthesis D6)
+- [ ] Publish to GitHub Packages as a secondary registry, mirroring KStore. Mechanically straightforward: a Gradle plugin is just the plugin jar plus its marker, and `maven-publish` targets `maven.pkg.github.com` like any other Maven repo. The catch is that [GitHub Packages requires an access token even to read public packages](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-apache-maven-registry), and plugin resolution happens in `pluginManagement` before anything else. So a consumer would need credentials in `settings.gradle.kts` just to see the plugin, which is precisely the friction the Plugin Portal exists to remove. Worth it only as a mirror alongside the primary registries, never as the sole channel
 
 ## Future Improvements
 
