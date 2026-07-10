@@ -49,7 +49,7 @@ No `@ExperimentalNugetApi` opt-in annotation. It would be ceremony: the whole pl
 ## P1: strongly recommended
 
 - [x] **Instance methods and instance properties** ([ROADMAP.md](ROADMAP.md) Phase 9 line 151). Landed as a confirmed mirror of ADR-051, no new ADR. A bound C# object's instance methods and properties are now callable from Kotlin, so constructing one is no longer a dead end. Verified end to end through the real `.nupkg` round trip.
-- [ ] `dotnet` detection on PATH with explicit install guidance. First-run failure mode for a reverse-direction user is otherwise an opaque subprocess error.
+- [x] `dotnet` detection on PATH with explicit install guidance. Both `nugetRestore` and `nugetExtractApi` already detected it, via a `findExecutable` copy-pasted byte-for-byte into each task action, with two different messages, one of which promised the user a `local.properties` override that was never built. Now one tested helper in `NugetTooling.kt`: `findExecutable` plus `requireDotnet`, which throws `GradleException` (matching the sibling "DLL not found" error) rather than `requireNotNull`, since a missing SDK is a user environment problem and not a programmer precondition. No SDK version check: a user on .NET 6 gets `NETSDK1045` from `dotnet restore`, which already names both the problem and the fix.
 
 ## Cut from MVP
 

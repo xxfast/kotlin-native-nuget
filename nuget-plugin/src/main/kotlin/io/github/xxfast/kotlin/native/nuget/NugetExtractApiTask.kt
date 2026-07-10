@@ -30,15 +30,6 @@ abstract class NugetExtractApiTask : DefaultTask() {
 
   @TaskAction
   fun extract() {
-    fun findExecutable(name: String): String? {
-      val paths: String = System.getenv("PATH") ?: return null
-      val extensions: List<String> = listOf("", ".exe", ".cmd", ".bat")
-      return paths.split(File.pathSeparator)
-        .flatMap { dir -> extensions.map { ext -> File(dir, "$name$ext") } }
-        .firstOrNull { it.canExecute() }
-        ?.absolutePath
-    }
-
     val assetsJson: String = assetsFile.get().asFile.readText()
     val ids: Set<String> = boundPackageIds.get().toSet()
 
@@ -49,16 +40,13 @@ abstract class NugetExtractApiTask : DefaultTask() {
         if (!File(path).exists()) {
           throw GradleException(
             "[nuget] DLL not found at '$path' (package '$packageId'). " +
-              "The global NuGet cache may have been cleared — re-run nugetRestore to re-download."
+              "The global NuGet cache may have been cleared. Re-run nugetRestore to re-download."
           )
         }
       }
     }
 
-    val dotnet: String = requireNotNull(findExecutable("dotnet")) {
-      "[nuget] dotnet is required to extract the NuGet API surface but was not found on PATH. " +
-        "Install the .NET SDK 8 or later from https://dot.net/download"
-    }
+    val dotnet: String = requireDotnet("extract the NuGet API surface")
 
     val toolDir: File = temporaryDir.resolve("metadata-reader")
     unpackMetadataReader(toolDir, javaClass.classLoader)
@@ -102,7 +90,7 @@ internal fun unpackMetadataReader(targetDir: File, classLoader: ClassLoader) {
   listOf("NugetMetadataReader.csproj", "Program.cs").forEach { name ->
     val resource = "nuget-metadata-reader/$name"
     val stream: InputStream = classLoader.getResourceAsStream(resource)
-      ?: error("[nuget] missing bundled resource: $resource — plugin JAR may be corrupt")
+      ?: error("[nuget] missing bundled resource: $resource (plugin JAR may be corrupt)")
     stream.use { input ->
       File(targetDir, name).outputStream().use { output -> input.copyTo(output) }
     }

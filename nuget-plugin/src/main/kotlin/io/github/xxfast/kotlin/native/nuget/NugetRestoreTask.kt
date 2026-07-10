@@ -10,7 +10,6 @@ import org.gradle.process.ExecOperations
 import org.gradle.process.ExecResult
 import org.gradle.work.DisableCachingByDefault
 import java.io.ByteArrayOutputStream
-import java.io.File
 import javax.inject.Inject
 
 @DisableCachingByDefault(
@@ -25,21 +24,7 @@ abstract class NugetRestoreTask : DefaultTask() {
 
   @TaskAction
   fun restore() {
-    fun findExecutable(name: String): String? {
-      val paths: String = System.getenv("PATH") ?: return null
-      val extensions: List<String> = listOf("", ".exe", ".cmd", ".bat")
-      return paths.split(File.pathSeparator)
-        .flatMap { dir -> extensions.map { ext -> File(dir, "$name$ext") } }
-        .firstOrNull { it.canExecute() }
-        ?.absolutePath
-    }
-
-    val dotnet: String = requireNotNull(findExecutable("dotnet")) {
-      "[nuget] dotnet is required to restore NuGet packages but was not found on PATH. " +
-        "Install the .NET SDK 8 or later from https://dot.net/download, then re-run Gradle sync. " +
-        "(Full tooling detection with local.properties override is coming in " +
-        "the next pipeline item.)"
-    }
+    val dotnet: String = requireDotnet("restore NuGet packages")
 
     val stderr = ByteArrayOutputStream()
     val result: ExecResult = execOps.exec { spec ->
