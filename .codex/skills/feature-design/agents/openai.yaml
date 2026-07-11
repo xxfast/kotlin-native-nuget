@@ -1,0 +1,4 @@
+interface:
+  display_name: "Feature Design"
+  short_description: "Drive bridge features through TDD"
+  default_prompt: "Use $feature-design to plan and implement this bridge feature."
