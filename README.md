@@ -50,7 +50,7 @@ nuget {
 
 ## Usage
 
-Write Kotlin — get C# bindings automatically:
+## Kotlin → C#
 
 ```kotlin
 // Kotlin
@@ -95,15 +95,51 @@ IPet pet = oreo;                            // interface polymorphism
 Animal animal = oreo;                       // abstract class hierarchy
 ```
 
+## C# -> Kotlin
+
+```c#
+public class Template
+{
+    public Template(string template) { ... }  // constructor
+    public string Name { get; set; }          // instance property
+    public string Apply(string name) { ... }  // instance method
+    public static Template Parse(string template) { ... } // static method
+    public void Use(Action<Template> action) { ... }      // IDisposable pattern
+    public static string Render(Template template, string name) { ... } // static method
+}   
+```
+
+```kotlin
+// build.gradle.kts
+nuget {
+  dependencies {
+    dependency("SampleDependency", version = "1.0.0") {
+      bind {
+        include("Sample.Text")               // C# namespaces to bind
+        alias("Sample.Text", "sample.text")  // C# namespace to Kotlin package
+      }
+    }
+  }
+}
+```
+
+```kotlin
+// Kotlin (auto-generated)
+val template = Template("Hello, {name}")       // constructor
+template.name = "Oreo"                         // instance property
+template.apply("Oreo")                         // instance method
+Template.parse("Hello, {name}")                // static -> companion object
+template.use { Template.render(it, "Oreo") }   // handles are AutoCloseable
+```
+
 ## Prerequisites
 
 ### Kotlin side (library author)
 
 - JDK 17+
 - Gradle (included via wrapper)
-  - [.NET SDK](https://dotnet.microsoft.com/download) 8.0+ 
-  — **only when consuming NuGet packages from Kotlin** 
-  - Not needed for the forward direction (exporting Kotlin to C#).
+- [.NET SDK](https://dotnet.microsoft.com/download) 8.0+, **only if you bind a NuGet package into
+  Kotlin**. Publishing Kotlin to NuGet needs no .NET SDK: `packNuget` writes the `.nupkg` itself.
 
 ### C# side (consumer)
 
@@ -113,7 +149,16 @@ Animal animal = oreo;                       // abstract class hierarchy
 brew install dotnet
 ```
 
-That's it. Bindings are pre-generated at Kotlin compile time via KSP — no additional tooling needed on the consumer side.
+That's it. Bindings are pre-generated at Kotlin compile time via KSP, so the consumer needs no
+additional tooling.
+
+## Compatibility
+
+| kotlin-native-nuget | Kotlin  | KSP     | Gradle | JDK | .NET   |
+|---------------------|---------|---------|--------|-----|--------|
+| `0.1.0`             | `2.4.0` | `2.3.9` | `9.1`  | 17+ | `8.0`+ |
+
+KSP is pinned to its Kotlin version, so bumping Kotlin without bumping the plugin is not supported.
 
 ## Architecture
 

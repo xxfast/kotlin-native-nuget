@@ -7,7 +7,7 @@ What has to be true before the plugin is usable by anyone who isn't this repo.
 At `0.x` the whole plugin is unstable and the README already carries the experimental badge, so there is no per-direction stability label to hand out. What a user needs is not a compatibility promise but an honest capability ceiling: which constructs cross the bridge today, and which silently don't.
 
 - **Kotlin → C# (forward).** Everything through Phase 6. OOP constructs, generics, collections, lambdas, exceptions, coroutines and `Flow`.
-- **C# → Kotlin (reverse).** Resolve and bind a NuGet package, call static methods, construct objects. The ceiling is the point: a bound type's instance members are unreachable until Phase 9 line 151 lands, so the README must state the subset rather than imply the direction works.
+- **C# → Kotlin (reverse).** Resolve and bind a NuGet package, call static methods, construct objects, and (since the P1 item below landed) call instance methods and properties on them. The ceiling is still the point, and it is now the README's binds/skipped table: no interfaces, enums, structs, generics, overload sets, nullables, collections or exception propagation.
 - **Distribution:** plugin marker on the Gradle Plugin Portal, `nuget-processor` on mavenCentral.
 
 Anything not on this page is post-launch. See [ROADMAP.md](ROADMAP.md).
@@ -42,7 +42,7 @@ The gate paid for itself on the first run: it caught `CS8604` in `Cat.Owner`'s s
 
 ### Documentation
 
-- [ ] README: state the reverse-direction capability ceiling explicitly (which constructs bind, which are skipped), add a version compatibility table (Kotlin `2.4.0`, KSP `2.3.9`, .NET `8.0`+), and correct the .NET-SDK prerequisite wording.
+- [x] README: state the reverse-direction capability ceiling explicitly (which constructs bind, which are skipped), add a version compatibility table (Kotlin `2.4.0`, KSP `2.3.9`, .NET `8.0`+), and correct the .NET-SDK prerequisite wording. A new **Consuming NuGet packages from Kotlin** section shows the `bind {}` DSL, the generated Kotlin shape, and what binds vs what is skipped. Kept short on purpose; real docs come later. The .NET-SDK bullet was wrong twice over: nested under Gradle, and implying the forward direction *might* need it. It doesn't. `packNuget` writes the `.nupkg` with `java.util.zip`; only `nugetRestore` and `nugetExtractApi` shell out to `dotnet`.
 
 No `@ExperimentalNugetApi` opt-in annotation. It would be ceremony: the whole plugin is `0.x` and badged experimental, so an opt-in gate on one part of it signals a stability gradient that doesn't exist. Revisit at `1.0.0`, when the rest of the surface has something to be stable *relative to*.
 
