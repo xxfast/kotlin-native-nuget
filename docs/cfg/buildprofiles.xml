@@ -3,6 +3,17 @@
     <variables>
         <web-root>https://xxfast.github.io/kotlin-native-nuget</web-root>
     </variables>
-    <build-profile instance="knn"/>
-
+    <build-profile instance="knn">
+        <variables>
+            <noindex-content>false</noindex-content>
+            <custom-favicons>icon.svg</custom-favicons>
+            <header-logo>icon.svg</header-logo>
+            <color-preset>soft</color-preset>
+            <primary-color>deep ocean</primary-color>
+        </variables>
+        <footer>
+            <copyright>2026 Isuru Rajapakse</copyright>
+        </footer>
+        <sitemap/>
+    </build-profile>
 </buildprofiles>
