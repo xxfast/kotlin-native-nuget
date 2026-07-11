@@ -161,7 +161,11 @@ public void Cat_Traits_SetEquality()
 
 - `Sequence<T>` is not bridgeable. `Cat.unsupported: Sequence<String>` in the sample library is deliberately left out of the generated `Interop.cs` (no eager-copy story for a lazy sequence).
 
-## See also
-
-- [Generics](generics.md)
-- [ADR-011: Collection type mapping](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/011-collection-type-mapping.md)
+<seealso>
+    <category ref="related">
+        <a href="generics.md">Generics</a>
+    </category>
+    <category ref="external">
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/011-collection-type-mapping.md">ADR-011: Collection type mapping</a>
+    </category>
+</seealso>

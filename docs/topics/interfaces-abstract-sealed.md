@@ -193,8 +193,12 @@ public void Observation_WorksWithPatternMatching()
 }
 ```
 
-## See also
-
-- [Classes and objects](classes-and-objects.md)
-- [Data classes](data-classes.md)
-- [ADR-009: Sealed class mapping](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/009-sealed-class-mapping.md)
+<seealso>
+    <category ref="related">
+        <a href="classes-and-objects.md">Classes and objects</a>
+        <a href="data-classes.md">Data classes</a>
+    </category>
+    <category ref="external">
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/009-sealed-class-mapping.md">ADR-009: Sealed class mapping</a>
+    </category>
+</seealso>

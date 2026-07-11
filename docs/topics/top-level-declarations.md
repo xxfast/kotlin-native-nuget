@@ -103,8 +103,12 @@ public void GreetingIsHelloWorld()
 
 Top-level functions follow the same grouping. `sample-library/src/nativeMain/kotlin/.../math/Arithmetic.kt` (`add`, `multiply`, `divide`, `square`) becomes `SampleLibrary.Math.Arithmetic`; see [Generics](generics.md) for the `inline fun square` case.
 
-## See also
-
-- [Objects and companions](objects-and-companions.md)
-- [Extensions](extensions.md)
-- [ADR-007: Top-level function class naming](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/007-top-level-function-class-naming.md)
+<seealso>
+    <category ref="related">
+        <a href="objects-and-companions.md">Objects and companions</a>
+        <a href="extensions.md">Extensions</a>
+    </category>
+    <category ref="external">
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/007-top-level-function-class-naming.md">ADR-007: Top-level function class naming</a>
+    </category>
+</seealso>

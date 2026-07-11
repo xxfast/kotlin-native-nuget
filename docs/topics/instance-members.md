@@ -182,10 +182,14 @@ handle-typed property, regardless of what the RIR says about its C# mutability.
 - Overload sets on instance methods are skipped exactly like static ones: the whole set, not a
   best-effort subset.
 
-## See also
-
-- [Objects and handles](objects-and-handles.md)
-- [Static classes and methods](static-classes-and-methods.md)
-- [The bridgeable subset](bridgeable-subset.md)
-- [ADR-051: C# objects as opaque handles](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/051-csharp-objects-as-opaque-handles.md)
-- [ADR-052: C# instance constructors in Kotlin](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/052-csharp-instance-constructors-in-kotlin.md)
+<seealso>
+    <category ref="related">
+        <a href="objects-and-handles.md">Objects and handles</a>
+        <a href="static-classes-and-methods.md">Static classes and methods</a>
+        <a href="bridgeable-subset.md">The bridgeable subset</a>
+    </category>
+    <category ref="external">
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/051-csharp-objects-as-opaque-handles.md">ADR-051: C# objects as opaque handles</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/052-csharp-instance-constructors-in-kotlin.md">ADR-052: C# instance constructors in Kotlin</a>
+    </category>
+</seealso>

@@ -112,7 +112,11 @@ public void String_GetWordCount_ReturnsTwoForTwoWords()
 }
 ```
 
-## See also
-
-- [Top-level declarations](top-level-declarations.md)
-- [ADR-013: Extension property mapping](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/013-extension-property-mapping.md)
+<seealso>
+    <category ref="related">
+        <a href="top-level-declarations.md">Top-level declarations</a>
+    </category>
+    <category ref="external">
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/013-extension-property-mapping.md">ADR-013: Extension property mapping</a>
+    </category>
+</seealso>

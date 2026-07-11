@@ -78,10 +78,14 @@ Kotlin sub-packages map relative to `rootPackage`, and the C# namespace root is 
 
 Every generated declaration lands under its mapped namespace inside the single `Interop.cs` file.
 
-## See also
-
-- [Classes and objects](classes-and-objects.md)
-- [ADR-001: C# codegen in the consumer](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/001-csharp-codegen-in-consumer.md)
-- [ADR-003: Memory management across the bridge](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/003-memory-management-across-bridge.md)
-- [ADR-004: CIR intermediate representation](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/004-cir-intermediate-representation.md)
-- [ADR-005: Object return semantics](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/005-object-return-semantics.md)
+<seealso>
+    <category ref="related">
+        <a href="classes-and-objects.md">Classes and objects</a>
+    </category>
+    <category ref="external">
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/001-csharp-codegen-in-consumer.md">ADR-001: C# codegen in the consumer</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/003-memory-management-across-bridge.md">ADR-003: Memory management across the bridge</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/004-cir-intermediate-representation.md">ADR-004: CIR intermediate representation</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/005-object-return-semantics.md">ADR-005: Object return semantics</a>
+    </category>
+</seealso>

@@ -168,12 +168,16 @@ the only way to find out why today is to open `build/nuget-interop/reverse-ir.js
 warning for every diagnostic kind, is an open item in
 [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md) Phase 8.
 
-## See also
-
-- [Consuming C# in Kotlin](reverse-overview.md)
-- [Static classes and methods](static-classes-and-methods.md)
-- [Objects and handles](objects-and-handles.md)
-- [Instance members](instance-members.md)
-- [ADR-043: Bridgeable subset boundary](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/043-bridgeable-subset-boundary.md)
-- [ADR-046: Reverse IR model and JSON contract](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/046-reverse-ir-model-and-json-contract.md)
-- [ADR-049: C# registration shim generation](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/049-csharp-registration-shim-generation.md)
+<seealso>
+    <category ref="related">
+        <a href="reverse-overview.md">Consuming C# in Kotlin</a>
+        <a href="static-classes-and-methods.md">Static classes and methods</a>
+        <a href="objects-and-handles.md">Objects and handles</a>
+        <a href="instance-members.md">Instance members</a>
+    </category>
+    <category ref="external">
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/043-bridgeable-subset-boundary.md">ADR-043: Bridgeable subset boundary</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/046-reverse-ir-model-and-json-contract.md">ADR-046: Reverse IR model and JSON contract</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/049-csharp-registration-shim-generation.md">ADR-049: C# registration shim generation</a>
+    </category>
+</seealso>

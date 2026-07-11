@@ -313,13 +313,17 @@ Hot streams and several `Flow` positions are not yet supported (ROADMAP Phase 6)
 - `suspend fun` returning `Flow<T>` (the outer suspend is untreated separately from a non-suspend `Flow`-returning function)
 - Flow backpressure (bounded `Channel<T>` with explicit resume signaling)
 
-## See also
-
-- [Lambdas and callbacks](lambdas-and-callbacks.md)
-- [Exceptions](exceptions.md)
-- [ADR-019: Suspend function mapping](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/019-suspend-function-mapping.md)
-- [ADR-020: Suspend lambda mapping](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/020-suspend-lambda-mapping.md)
-- [ADR-021: Structured concurrency](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/021-structured-concurrency.md)
-- [ADR-022: CancellationToken support](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/022-cancellation-token-support.md)
-- [ADR-025: AsyncDisposable](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/025-async-disposable.md)
-- [ADR-026: Flow mapping](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/026-flow-mapping.md)
+<seealso>
+    <category ref="related">
+        <a href="lambdas-and-callbacks.md">Lambdas and callbacks</a>
+        <a href="exceptions.md">Exceptions</a>
+    </category>
+    <category ref="external">
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/019-suspend-function-mapping.md">ADR-019: Suspend function mapping</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/020-suspend-lambda-mapping.md">ADR-020: Suspend lambda mapping</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/021-structured-concurrency.md">ADR-021: Structured concurrency</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/022-cancellation-token-support.md">ADR-022: CancellationToken support</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/025-async-disposable.md">ADR-025: AsyncDisposable</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/026-flow-mapping.md">ADR-026: Flow mapping</a>
+    </category>
+</seealso>

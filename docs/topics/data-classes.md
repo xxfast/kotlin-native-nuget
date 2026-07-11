@@ -123,8 +123,12 @@ Data classes inside a sealed hierarchy (`Observation.Alive`, `Observation.Dead`)
 
 - Data classes map to a plain C# `class`, not `record class`. A safe `with`-expression pattern for a handle-backed type hasn't been found yet (tracked under Future Improvements in [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md)).
 
-## See also
-
-- [Classes and objects](classes-and-objects.md)
-- [Value classes](value-classes.md)
-- [ADR-008: Data class mapping](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/008-data-class-mapping.md)
+<seealso>
+    <category ref="related">
+        <a href="classes-and-objects.md">Classes and objects</a>
+        <a href="value-classes.md">Value classes</a>
+    </category>
+    <category ref="external">
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/008-data-class-mapping.md">ADR-008: Data class mapping</a>
+    </category>
+</seealso>

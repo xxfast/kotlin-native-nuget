@@ -150,7 +150,11 @@ Nullable primitive and object *properties* on classes follow the same pattern; s
 
 - Nullable primitive/string mapping is forward-only (`→`); the reverse direction (C# → Kotlin) does not yet support it.
 
-## See also
-
-- [ADR-002: Nullable two-call pattern](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/002-nullable-two-call-pattern.md)
-- [Classes and objects](classes-and-objects.md)
+<seealso>
+    <category ref="related">
+        <a href="classes-and-objects.md">Classes and objects</a>
+    </category>
+    <category ref="external">
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/002-nullable-two-call-pattern.md">ADR-002: Nullable two-call pattern</a>
+    </category>
+</seealso>

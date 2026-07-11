@@ -118,9 +118,13 @@ generators.
 See [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md) Phase 8 for the
 current state of these.
 
-## See also
-
-- [Consuming C# in Kotlin](reverse-overview.md)
-- [The bridgeable subset](bridgeable-subset.md)
-- [ADR-044: NuGet dependency DSL](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/044-nuget-dependency-dsl.md)
-- [ADR-045: NuGet resolution pipeline](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/045-nuget-resolution-pipeline.md)
+<seealso>
+    <category ref="related">
+        <a href="reverse-overview.md">Consuming C# in Kotlin</a>
+        <a href="bridgeable-subset.md">The bridgeable subset</a>
+    </category>
+    <category ref="external">
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/044-nuget-dependency-dsl.md">ADR-044: NuGet dependency DSL</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/045-nuget-resolution-pipeline.md">ADR-045: NuGet resolution pipeline</a>
+    </category>
+</seealso>

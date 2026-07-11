@@ -85,7 +85,11 @@ public void Mood_Description_ReturnsCorrectString()
 }
 ```
 
-## See also
-
-- [Classes and objects](classes-and-objects.md)
-- [ADR-006: Enum mapping](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/006-enum-mapping.md)
+<seealso>
+    <category ref="related">
+        <a href="classes-and-objects.md">Classes and objects</a>
+    </category>
+    <category ref="external">
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/006-enum-mapping.md">ADR-006: Enum mapping</a>
+    </category>
+</seealso>

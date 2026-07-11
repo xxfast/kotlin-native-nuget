@@ -264,15 +264,19 @@ public async Task OreoOnDiet_ThrowsArgumentException_WithTypeName()
 }
 ```
 
-## See also
-
-- [Value classes](value-classes.md)
-- [Data classes](data-classes.md)
-- [Coroutines and Flow](coroutines-and-flow.md)
-- [ADR-023: Exception propagation](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/023-exception-propagation.md)
-- [ADR-027: Stack trace propagation](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/027-stacktrace-propagation.md)
-- [ADR-028: Exception cause chain](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/028-exception-cause-chain.md)
-- [ADR-029: Exception type mapping](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/029-exception-type-mapping.md)
-- [ADR-030: Property exception propagation](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/030-property-exception-propagation.md)
-- [ADR-031: Constructor exception propagation](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/031-constructor-exception-propagation.md)
-- [ADR-034: Secondary constructor exceptions](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/034-secondary-constructor-exceptions.md)
+<seealso>
+    <category ref="related">
+        <a href="value-classes.md">Value classes</a>
+        <a href="data-classes.md">Data classes</a>
+        <a href="coroutines-and-flow.md">Coroutines and Flow</a>
+    </category>
+    <category ref="external">
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/023-exception-propagation.md">ADR-023: Exception propagation</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/027-stacktrace-propagation.md">ADR-027: Stack trace propagation</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/028-exception-cause-chain.md">ADR-028: Exception cause chain</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/029-exception-type-mapping.md">ADR-029: Exception type mapping</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/030-property-exception-propagation.md">ADR-030: Property exception propagation</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/031-constructor-exception-propagation.md">ADR-031: Constructor exception propagation</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/034-secondary-constructor-exceptions.md">ADR-034: Secondary constructor exceptions</a>
+    </category>
+</seealso>

@@ -260,12 +260,16 @@ public void DefaultScores_ReturnsReadOnlyDictionaryOfStringInt()
 }
 ```
 
-## See also
-
-- [Collections](collections.md)
-- [Value classes](value-classes.md)
-- [ADR-010: Generics mapping](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/010-generics-mapping.md)
-- [ADR-015: Generic type constraint mapping](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/015-generic-type-constraint-mapping.md)
-- [ADR-016: Generic variance mapping](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/016-generic-variance-mapping.md)
-- [ADR-017: Inline function mapping](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/017-inline-function-mapping.md)
-- [ADR-018: Type alias mapping](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/018-type-alias-mapping.md)
+<seealso>
+    <category ref="related">
+        <a href="collections.md">Collections</a>
+        <a href="value-classes.md">Value classes</a>
+    </category>
+    <category ref="external">
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/010-generics-mapping.md">ADR-010: Generics mapping</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/015-generic-type-constraint-mapping.md">ADR-015: Generic type constraint mapping</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/016-generic-variance-mapping.md">ADR-016: Generic variance mapping</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/017-inline-function-mapping.md">ADR-017: Inline function mapping</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/018-type-alias-mapping.md">ADR-018: Type alias mapping</a>
+    </category>
+</seealso>

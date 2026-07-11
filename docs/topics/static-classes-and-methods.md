@@ -187,12 +187,16 @@ method that survives the filter unforced.
 - Overload sets are skipped entirely, not partially. See
   [The bridgeable subset](bridgeable-subset.md).
 
-## See also
-
-- [Consuming C# in Kotlin](reverse-overview.md)
-- [Declaring dependencies](declaring-dependencies.md)
-- [Objects and handles](objects-and-handles.md)
-- [The bridgeable subset](bridgeable-subset.md)
-- [ADR-048: Kotlin stub generation from reverse IR](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/048-kotlin-stub-generation-from-reverse-ir.md)
-- [ADR-049: C# registration shim generation](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/049-csharp-registration-shim-generation.md)
-- [ADR-050: End-to-end packaging integration](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/050-end-to-end-packaging-integration.md)
+<seealso>
+    <category ref="related">
+        <a href="reverse-overview.md">Consuming C# in Kotlin</a>
+        <a href="declaring-dependencies.md">Declaring dependencies</a>
+        <a href="objects-and-handles.md">Objects and handles</a>
+        <a href="bridgeable-subset.md">The bridgeable subset</a>
+    </category>
+    <category ref="external">
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/048-kotlin-stub-generation-from-reverse-ir.md">ADR-048: Kotlin stub generation from reverse IR</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/049-csharp-registration-shim-generation.md">ADR-049: C# registration shim generation</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/050-end-to-end-packaging-integration.md">ADR-050: End-to-end packaging integration</a>
+    </category>
+</seealso>

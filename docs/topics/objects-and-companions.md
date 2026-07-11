@@ -109,7 +109,9 @@ public void CompanionFactoryMethod()
 }
 ```
 
-## See also
-
-- [Interfaces, abstract and sealed classes](interfaces-abstract-sealed.md)
-- [Top-level declarations](top-level-declarations.md)
+<seealso>
+    <category ref="related">
+        <a href="interfaces-abstract-sealed.md">Interfaces, abstract and sealed classes</a>
+        <a href="top-level-declarations.md">Top-level declarations</a>
+    </category>
+</seealso>

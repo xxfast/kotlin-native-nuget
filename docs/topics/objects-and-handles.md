@@ -179,11 +179,15 @@ walks through why this inversion is correct for each direction rather than a sty
 - A throwing C# constructor or factory still fast-fails the host process; see
   [The bridgeable subset](bridgeable-subset.md) for the exception policy.
 
-## See also
-
-- [Consuming C# in Kotlin](reverse-overview.md)
-- [Instance members](instance-members.md)
-- [The bridgeable subset](bridgeable-subset.md)
-- [ADR-005: Object return semantics](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/005-object-return-semantics.md)
-- [ADR-051: C# objects as opaque handles](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/051-csharp-objects-as-opaque-handles.md)
-- [ADR-052: C# instance constructors in Kotlin](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/052-csharp-instance-constructors-in-kotlin.md)
+<seealso>
+    <category ref="related">
+        <a href="reverse-overview.md">Consuming C# in Kotlin</a>
+        <a href="instance-members.md">Instance members</a>
+        <a href="bridgeable-subset.md">The bridgeable subset</a>
+    </category>
+    <category ref="external">
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/005-object-return-semantics.md">ADR-005: Object return semantics</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/051-csharp-objects-as-opaque-handles.md">ADR-051: C# objects as opaque handles</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/052-csharp-instance-constructors-in-kotlin.md">ADR-052: C# instance constructors in Kotlin</a>
+    </category>
+</seealso>

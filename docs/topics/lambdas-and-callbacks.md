@@ -258,12 +258,16 @@ Be precise about what's supported here: interface *parameters* are only the `add
 - Exception propagation from inside a C# callback back into Kotlin is not implemented (the forward-direction `ADR-024`/`ADR-028`/`ADR-029` machinery has no mirror here yet).
 - `Flow<T>` or a suspend lambda (`suspend (T) -> R`) as a function parameter is not implemented.
 
-## See also
-
-- [Coroutines and Flow](coroutines-and-flow.md)
-- [Interfaces, abstract and sealed classes](interfaces-abstract-sealed.md)
-- [ADR-012: Lambda/function type mapping](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/012-lambda-function-type-mapping.md)
-- [ADR-036: Reverse interop mechanism](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/036-reverse-interop-mechanism.md)
-- [ADR-037: Stored callbacks](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/037-stored-callbacks.md)
-- [ADR-039: Interface bridging](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/039-interface-bridging.md)
-- [ADR-040: Interface return type mapping (not yet built)](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/040-interface-return-type-mapping.md)
+<seealso>
+    <category ref="related">
+        <a href="coroutines-and-flow.md">Coroutines and Flow</a>
+        <a href="interfaces-abstract-sealed.md">Interfaces, abstract and sealed classes</a>
+    </category>
+    <category ref="external">
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/012-lambda-function-type-mapping.md">ADR-012: Lambda/function type mapping</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/036-reverse-interop-mechanism.md">ADR-036: Reverse interop mechanism</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/037-stored-callbacks.md">ADR-037: Stored callbacks</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/039-interface-bridging.md">ADR-039: Interface bridging</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/040-interface-return-type-mapping.md">ADR-040: Interface return type mapping (not yet built)</a>
+    </category>
+</seealso>

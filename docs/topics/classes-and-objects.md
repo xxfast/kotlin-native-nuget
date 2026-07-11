@@ -156,9 +156,13 @@ public void Cat_Age_SetToNull()
 
 Disposal does not cascade. A parent wrapper's `Dispose()` only releases *its own* `StableRef`; any wrapper obtained from a property or method call on that parent holds an independent `StableRef` and must be disposed separately (or leaks). This is deliberate: since every access allocates a new wrapper, there's no tree of ownership for a parent to walk. See [ADR-005](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/005-object-return-semantics.md) for the alternative designs considered (cached wrapper with cascading dispose was rejected).
 
-## See also
-
-- [Publishing Kotlin to C#](forward-overview.md)
-- [Interfaces, abstract and sealed classes](interfaces-abstract-sealed.md)
-- [ADR-003: Memory management across the bridge](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/003-memory-management-across-bridge.md)
-- [ADR-005: Object return semantics](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/005-object-return-semantics.md)
+<seealso>
+    <category ref="related">
+        <a href="forward-overview.md">Publishing Kotlin to C#</a>
+        <a href="interfaces-abstract-sealed.md">Interfaces, abstract and sealed classes</a>
+    </category>
+    <category ref="external">
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/003-memory-management-across-bridge.md">ADR-003: Memory management across the bridge</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/005-object-return-semantics.md">ADR-005: Object return semantics</a>
+    </category>
+</seealso>

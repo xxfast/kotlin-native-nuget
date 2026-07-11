@@ -146,17 +146,21 @@ direction only: a Kotlin library author who never declares a `bind {}` block nee
 the usual Kotlin/Native toolchain. If `dotnet` isn't found on `PATH`, the plugin fails fast with an
 install pointer rather than a cryptic subprocess error.
 
-## See also
-
-- [Declaring dependencies](declaring-dependencies.md)
-- [Static classes and methods](static-classes-and-methods.md)
-- [Objects and handles](objects-and-handles.md)
-- [Instance members](instance-members.md)
-- [The bridgeable subset](bridgeable-subset.md)
-- [ADR-041: Kotlin → managed C# call mechanism](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/041-kotlin-to-csharp-call-mechanism.md)
-- [ADR-042: Assembly metadata extraction](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/042-assembly-metadata-extraction.md)
-- [ADR-045: NuGet resolution pipeline](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/045-nuget-resolution-pipeline.md)
-- [ADR-046: Reverse IR model and JSON contract](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/046-reverse-ir-model-and-json-contract.md)
-- [ADR-048: Kotlin stub generation from reverse IR](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/048-kotlin-stub-generation-from-reverse-ir.md)
-- [ADR-049: C# registration shim generation](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/049-csharp-registration-shim-generation.md)
-- [ADR-050: End-to-end packaging integration](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/050-end-to-end-packaging-integration.md)
+<seealso>
+    <category ref="related">
+        <a href="declaring-dependencies.md">Declaring dependencies</a>
+        <a href="static-classes-and-methods.md">Static classes and methods</a>
+        <a href="objects-and-handles.md">Objects and handles</a>
+        <a href="instance-members.md">Instance members</a>
+        <a href="bridgeable-subset.md">The bridgeable subset</a>
+    </category>
+    <category ref="external">
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/041-kotlin-to-csharp-call-mechanism.md">ADR-041: Kotlin → managed C# call mechanism</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/042-assembly-metadata-extraction.md">ADR-042: Assembly metadata extraction</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/045-nuget-resolution-pipeline.md">ADR-045: NuGet resolution pipeline</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/046-reverse-ir-model-and-json-contract.md">ADR-046: Reverse IR model and JSON contract</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/048-kotlin-stub-generation-from-reverse-ir.md">ADR-048: Kotlin stub generation from reverse IR</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/049-csharp-registration-shim-generation.md">ADR-049: C# registration shim generation</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/050-end-to-end-packaging-integration.md">ADR-050: End-to-end packaging integration</a>
+    </category>
+</seealso>

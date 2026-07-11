@@ -148,10 +148,14 @@ public void CatId_PrimaryConstructor_TooLong_ThrowsArgumentException()
 }
 ```
 
-## See also
-
-- [Data classes](data-classes.md)
-- [Exceptions](exceptions.md)
-- [ADR-014: Value class mapping](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/014-value-class-mapping.md)
-- [ADR-033: Value class constructor exception propagation](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/033-value-class-constructor-exception-propagation.md)
-- [ADR-035: Value class primary constructor validation](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/035-value-class-primary-constructor-validation.md)
+<seealso>
+    <category ref="related">
+        <a href="data-classes.md">Data classes</a>
+        <a href="exceptions.md">Exceptions</a>
+    </category>
+    <category ref="external">
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/014-value-class-mapping.md">ADR-014: Value class mapping</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/033-value-class-constructor-exception-propagation.md">ADR-033: Value class constructor exception propagation</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/035-value-class-primary-constructor-validation.md">ADR-035: Value class primary constructor validation</a>
+    </category>
+</seealso>
