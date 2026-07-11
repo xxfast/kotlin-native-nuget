@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE instance-profile
+        SYSTEM "https://resources.jetbrains.com/writerside/1.0/product-profile.dtd">
+
+<instance-profile id="knn"
+                 name="kotlin-native-nuget"
+                 start-page="overview.md">
+
+    <toc-element topic="overview.md"/>
+    <toc-element toc-title="Setup">
+        <toc-element topic="prerequisites.md"/>
+        <toc-element topic="getting-started.md"/>
+        <toc-element topic="gradle-tasks.md"/>
+        <toc-element topic="nuget-dsl.md"/>
+    </toc-element>
+    <toc-element topic="forward-overview.md">
+        <toc-element topic="primitives-and-strings.md"/>
+        <toc-element topic="classes-and-objects.md"/>
+        <toc-element topic="interfaces-abstract-sealed.md"/>
+        <toc-element topic="data-classes.md"/>
+        <toc-element topic="enums.md"/>
+        <toc-element topic="objects-and-companions.md"/>
+        <toc-element topic="top-level-declarations.md"/>
+        <toc-element topic="extensions.md"/>
+        <toc-element topic="generics.md"/>
+        <toc-element topic="value-classes.md"/>
+        <toc-element topic="collections.md"/>
+        <toc-element topic="lambdas-and-callbacks.md"/>
+        <toc-element topic="exceptions.md"/>
+        <toc-element topic="coroutines-and-flow.md"/>
+    </toc-element>
+    <toc-element topic="reverse-overview.md">
+        <toc-element topic="declaring-dependencies.md"/>
+        <toc-element topic="static-classes-and-methods.md"/>
+        <toc-element topic="objects-and-handles.md"/>
+        <toc-element topic="instance-members.md"/>
+        <toc-element topic="bridgeable-subset.md"/>
+    </toc-element>
+
+</instance-profile>

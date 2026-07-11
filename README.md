@@ -132,47 +132,15 @@ Template.parse("Hello, {name}")                // static -> companion object
 template.use { Template.render(it, "Oreo") }   // handles are AutoCloseable
 ```
 
-## Prerequisites
+## Documentation
 
-### Kotlin side (library author)
+Full docs: **[xxfast.github.io/kotlin-native-nuget](https://xxfast.github.io/kotlin-native-nuget/)**
 
-- JDK 17+
-- Gradle (included via wrapper)
-- [.NET SDK](https://dotnet.microsoft.com/download) 8.0+, **only if you bind a NuGet package into
-  Kotlin**. Publishing Kotlin to NuGet needs no .NET SDK: `packNuget` writes the `.nupkg` itself.
-
-### C# side (consumer)
-
-- [.NET SDK](https://dotnet.microsoft.com/download) 8.0+
-
-```bash
-brew install dotnet
-```
-
-That's it. Bindings are pre-generated at Kotlin compile time via KSP, so the consumer needs no
-additional tooling.
-
-## Compatibility
-
-| kotlin-native-nuget | Kotlin  | KSP     | Gradle | JDK | .NET   |
-|---------------------|---------|---------|--------|-----|--------|
-| `0.1.0`             | `2.4.0` | `2.3.9` | `9.1`  | 17+ | `8.0`+ |
-
-KSP is pinned to its Kotlin version, so bumping Kotlin without bumping the plugin is not supported.
-
-## Architecture
-
-The Gradle plugin compiles Kotlin/Native, runs KSP to generate the C# bindings and Kotlin bridge
-wrappers, links the shared libraries, and packages everything into a `.nupkg`. The consumer just
-adds the package — bindings are ready at build time, no consumer-side tooling required.
-
-Bindings are generated through a mirrored intermediate representation in each direction — **CIR**
-(Kotlin → C#) and **RIR** (C# → Kotlin) — and at runtime calls cross the C ABI both ways. See
-[ARCHITECTURE.md](ARCHITECTURE.md) for the full picture.
-
-## Supported Features
-
-The bridge maps OOP constructs, generics, collections, lambdas (both directions), exceptions, and coroutines/`Flow`. See [FEATURES.md](FEATURES.md) for the full mapping catalogue.
+- [Prerequisites](https://xxfast.github.io/kotlin-native-nuget/prerequisites.html) and the version compatibility table
+- [Getting started](https://xxfast.github.io/kotlin-native-nuget/getting-started.html)
+- [Publishing Kotlin to C#](https://xxfast.github.io/kotlin-native-nuget/forward-overview.html): every construct that crosses, page by page
+- [Consuming C# in Kotlin](https://xxfast.github.io/kotlin-native-nuget/reverse-overview.html): the `bind {}` DSL and what binds today
+- [Gradle tasks](https://xxfast.github.io/kotlin-native-nuget/gradle-tasks.html) and the [`nuget {}` DSL reference](https://xxfast.github.io/kotlin-native-nuget/nuget-dsl.html)
 
 > [!TIP]
-> See [ROADMAP.md](ROADMAP.md) for the development roadmap and [docs/adr/](docs/adr/) for architecture decision records.
+> See [ARCHITECTURE.md](ARCHITECTURE.md) for how the bridge is built, [ROADMAP.md](ROADMAP.md) for what's next, and [docs/adr/](docs/adr/) for the architecture decision records.
