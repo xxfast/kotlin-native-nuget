@@ -1,13 +1,15 @@
 # Static classes and methods
 
 A C# `static class` becomes a Kotlin `object` with the same name; its static methods become
-functions on that object. This is the original v1 surface of the reverse bridge and the simplest
-mapping in it.
+functions and its properties become Kotlin properties on that object. On a non-static C# class,
+static members instead land in the generated Kotlin `companion object`.
 
 | C# | Kotlin |
 |---|---|
 | `public static class MimeUtility` | `internal object MimeUtility` |
 | `public static string GetMimeMapping(string file)` | `fun getMimeMapping(file: String): String` |
+| `public static string DefaultName { get; set; }` | `var defaultName: String` |
+| `public static int RenderCount { get; }` | `val renderCount: Int` |
 
 The generated `object` is `internal`, not `public`: it's visible anywhere else in the same Gradle
 module (including hand-written sources like `sample-library`'s own Kotlin files) but invisible to
@@ -91,6 +93,76 @@ That's the full trip: C# test code calls the forward-bridged `MimeSample.mimeTyp
 Kotlin code, which calls the reverse-bridged `MimeUtility.getMimeMapping`, which is itself a thunk
 call back into the *real* `MimeMapping` NuGet package.
 
+## Static properties
+
+The bound `Sample.Text.Template` fixture has both property forms:
+
+```C#
+// sample-dependency/Template.cs (real source)
+public static string DefaultName { get; set; } = "Oreo";
+
+public static int RenderCount { get; private set; }
+```
+
+Because `Template` is not a C# static class, its static properties are generated in its companion
+object:
+
+```kotlin
+// build/nuget-interop/kotlin/nativeMain/sample/text/Template.kt (real generated output)
+companion object {
+  var defaultName: String
+    get() { /* calls defaultNameGetterFn */ }
+    set(value) { /* calls defaultNameSetterFn */ }
+
+  val renderCount: Int
+    get() { /* calls renderCountGetterFn */ }
+}
+```
+
+Each accessor is a call through its registered function pointer. The generated C# thunks access
+the underlying static property directly:
+
+```C#
+// build/nuget-interop/csharp/TemplateRegistration.cs (real generated output)
+private static IntPtr DefaultName_Get_Thunk()
+{
+    string result = Template.DefaultName;
+    return Marshal.StringToCoTaskMemUTF8(result);
+}
+
+private static void DefaultName_Set_Thunk(IntPtr valuePtr)
+{
+    Template.DefaultName = Marshal.PtrToStringUTF8(valuePtr)!;
+}
+```
+
+Hand-written Kotlin uses the companion members through `Template` itself:
+
+```kotlin
+// sample-library/src/nativeMain/kotlin/.../sample/Greetings.kt (real source)
+fun setDefaultTemplateCatName(name: String): String {
+  Template.defaultName = name
+  return Template.defaultName
+}
+
+fun templateRenderCount(): Int = Template.renderCount
+```
+
+The consumer-side round trip calls these Kotlin functions through the forward bridge:
+
+```C#
+// sample-app/SampleApp.Tests/TemplateRoundTripTests.cs (real source)
+[Fact]
+public void StaticProperties_MyloNameAndRenderCount_RoundTripThroughKotlin()
+{
+    string name = Greetings.setDefaultTemplateCatName("Mylo");
+    int renderCount = Greetings.templateRenderCount();
+
+    Assert.Equal("Mylo", name);
+    Assert.True(renderCount >= 0);
+}
+```
+
 ## Naming and registration
 
 The registration export name is derived from the C# namespace and type name:
@@ -109,10 +181,9 @@ method that survives the filter unforced.
 
 ## Limitations
 
-- **Static properties are not yet supported.** A C# static property (getter or setter) is not
-  bound in v1, only static and instance *methods* and instance *properties* are. This is tracked as
-  an open item in
-  [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md) Phase 9.
+- Static properties support the current bridgeable primitive and `string` vocabulary. A handle-typed
+  property with a setter remains read-only as `val Foo?` until reverse nullability support lets a
+  Kotlin `var` accept the same nullable type for both accessors.
 - Overload sets are skipped entirely, not partially. See
   [The bridgeable subset](bridgeable-subset.md).
 

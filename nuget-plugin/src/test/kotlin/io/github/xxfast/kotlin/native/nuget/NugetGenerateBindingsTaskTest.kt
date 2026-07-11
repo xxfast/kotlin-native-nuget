@@ -311,6 +311,20 @@ class NugetGenerateBindingsTaskTest {
                     ),
                   ),
                 ),
+                properties = listOf(
+                  RirProperty(
+                    name = "DefaultValue",
+                    type = RirPrimitiveType("int"),
+                    isReadOnly = false,
+                    isStatic = true,
+                  ),
+                  RirProperty(
+                    name = "Version",
+                    type = RirStringType,
+                    isReadOnly = true,
+                    isStatic = true,
+                  ),
+                ),
               ),
             ),
           ),
@@ -503,6 +517,17 @@ class NugetGenerateBindingsTaskTest {
       stub.content.contains("class MathHelper") && !stub.content.contains("object MathHelper"),
       "static class (isStatic=true) must keep the ADR-048 `object` shape",
     )
+  }
+
+  @Test
+  fun `static class properties render as bridge-backed val and var on its object`() {
+    val files: List<GeneratedFile> = generateKotlinStubs(staticClassRir)
+    val stub: GeneratedFile = files.single { it.relativePath.endsWith("MathHelper.kt") }
+
+    assertContains(stub.content, "var defaultValue: Int")
+    assertContains(stub.content, "val version: String")
+    assertContains(stub.content, "get()")
+    assertContains(stub.content, "set(value)")
   }
 
   // ------------------------------------------------------------------
@@ -747,6 +772,18 @@ class NugetGenerateBindingsTaskTest {
                     isReadOnly = false,
                     isStatic = false,
                   ),
+                  RirProperty(
+                    name = "DefaultName",
+                    type = RirStringType,
+                    isReadOnly = false,
+                    isStatic = true,
+                  ),
+                  RirProperty(
+                    name = "RenderCount",
+                    type = RirPrimitiveType("int"),
+                    isReadOnly = true,
+                    isStatic = true,
+                  ),
                 ),
               ),
             ),
@@ -898,6 +935,42 @@ class NugetGenerateBindingsTaskTest {
     assertFalse(
       stub.content.contains("var parent"),
       "handle-typed property Parent must never render as var, even though RIR isReadOnly=false",
+    )
+  }
+
+  // ------------------------------------------------------------------
+  // 16b. Static C# properties share the property ABI without a receiver. They live in the
+  // companion object for ordinary C# classes, while static C# classes use their existing object
+  // shape (covered above). Their registration slots append after all instance property slots.
+  // ------------------------------------------------------------------
+
+  @Test
+  fun `static properties DefaultName and RenderCount render inside Template companion object`() {
+    val files: List<GeneratedFile> = generateKotlinStubs(templateInstanceRir)
+    val stub: GeneratedFile = files.single { it.relativePath.endsWith("Template.kt") }
+    val companionBody: String = stub.content.substringAfter("companion object {")
+
+    assertContains(companionBody, "var defaultName: String")
+    assertContains(companionBody, "val renderCount: Int")
+    assertContains(companionBody, "set(value)")
+  }
+
+  @Test
+  fun `static property function pointers have no receiver parameter`() {
+    val files: List<GeneratedFile> = generateKotlinStubs(templateInstanceRir)
+    val bindings: GeneratedFile = files.single { it.relativePath.endsWith("TemplateBindings.kt") }
+
+    assertContains(
+      bindings.content,
+      "internal var defaultNameGetterFn: CPointer<CFunction<() -> COpaquePointer?>>? = null",
+    )
+    assertContains(
+      bindings.content,
+      "internal var defaultNameSetterFn: CPointer<CFunction<(COpaquePointer?) -> Unit>>? = null",
+    )
+    assertContains(
+      bindings.content,
+      "internal var renderCountGetterFn: CPointer<CFunction<() -> Int>>? = null",
     )
   }
 

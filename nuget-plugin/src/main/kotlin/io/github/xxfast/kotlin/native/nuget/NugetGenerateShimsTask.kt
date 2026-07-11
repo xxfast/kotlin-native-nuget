@@ -72,8 +72,8 @@ fun generateCSharpShims(file: RirFile, nativeLibraryName: String): List<Generate
             is RirRegistrable.Ctor -> true
             is RirRegistrable.Method -> r.method.returnType is RirObjectHandleType ||
               r.method.parameters.any { p -> p.type is RirObjectHandleType } || !r.method.isStatic
-            is RirRegistrable.PropertyGetter -> true
-            is RirRegistrable.PropertySetter -> true
+            is RirRegistrable.PropertyGetter -> !r.property.isStatic
+            is RirRegistrable.PropertySetter -> !r.property.isStatic
           }
         }
         if (hasHandle) needsRuntime = true
@@ -222,11 +222,13 @@ private fun registrationFileContent(
       }
       is RirRegistrable.PropertyGetter -> {
         val retType: String = csAbiType(r.property.type)
-        "(IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, $retType>)(&${r.property.name}_Get_Thunk)"
+        val receiverType: String = if (r.property.isStatic) "" else "IntPtr, "
+        "(IntPtr)(delegate* unmanaged[Cdecl]<$receiverType$retType>)(&${r.property.name}_Get_Thunk)"
       }
       is RirRegistrable.PropertySetter -> {
         val valueType: String = csAbiType(r.property.type)
-        "(IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, $valueType, void>)(&${r.property.name}_Set_Thunk)"
+        val receiverType: String = if (r.property.isStatic) "" else "IntPtr, "
+        "(IntPtr)(delegate* unmanaged[Cdecl]<$receiverType$valueType, void>)(&${r.property.name}_Set_Thunk)"
       }
     }
   }
@@ -345,8 +347,10 @@ private fun buildThunkMethod(cls: RirClass, method: RirMethod): String {
 private fun buildPropertyGetterThunkMethod(cls: RirClass, property: RirProperty): String {
   val thunkName = "${property.name}_Get_Thunk"
   val retAbiType: String = csAbiType(property.type)
-  val receiverLine = "${cls.name} receiver = (${cls.name})GCHandle.FromIntPtr(selfHandle).Target!;"
-  val getExpr = "receiver.${property.name}"
+  val receiverLine: String? = if (property.isStatic) null
+    else "${cls.name} receiver = (${cls.name})GCHandle.FromIntPtr(selfHandle).Target!;"
+  val getExpr: String = if (property.isStatic) "${cls.name}.${property.name}"
+    else "receiver.${property.name}"
 
   val bodyLines: List<String> = when (property.type) {
     is RirVoidType -> error("[nuget] a property cannot have void type")
@@ -379,12 +383,13 @@ private fun buildPropertyGetterThunkMethod(cls: RirClass, property: RirProperty)
     }
   }
 
-  val body: String = (listOf(receiverLine) + bodyLines).joinToString("\n") { "            $it" }
+  val body: String = (listOfNotNull(receiverLine) + bodyLines).joinToString("\n") { "            $it" }
+  val params: String = if (property.isStatic) "" else "IntPtr selfHandle"
 
   // ADR-049 "let it crash" (unchanged, Phase 9 line 151): no try/catch.
   return """
     |        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
-    |        private static $retAbiType $thunkName(IntPtr selfHandle)
+    |        private static $retAbiType $thunkName($params)
     |        {
     |$body
     |        }
@@ -401,14 +406,18 @@ private fun buildPropertySetterThunkMethod(cls: RirClass, property: RirProperty)
   val valueParam = RirParameter(name = "value", type = property.type)
   val valueParamName: String = thunkParamName(valueParam)
   val valueAbiType: String = csAbiType(property.type)
-  val receiverLine = "${cls.name} receiver = (${cls.name})GCHandle.FromIntPtr(selfHandle).Target!;"
-  val assignLine = "receiver.${property.name} = ${paramConversion(valueParam)};"
-  val body: String = listOf(receiverLine, assignLine).joinToString("\n") { "            $it" }
+  val receiverLine: String? = if (property.isStatic) null
+    else "${cls.name} receiver = (${cls.name})GCHandle.FromIntPtr(selfHandle).Target!;"
+  val assignTarget: String = if (property.isStatic) "${cls.name}.${property.name}"
+    else "receiver.${property.name}"
+  val assignLine = "$assignTarget = ${paramConversion(valueParam)};"
+  val body: String = (listOfNotNull(receiverLine) + assignLine).joinToString("\n") { "            $it" }
+  val receiverParam: String = if (property.isStatic) "" else "IntPtr selfHandle, "
 
   // ADR-049 "let it crash" (unchanged, Phase 9 line 151): no try/catch.
   return """
     |        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
-    |        private static void $thunkName(IntPtr selfHandle, $valueAbiType $valueParamName)
+    |        private static void $thunkName($receiverParam$valueAbiType $valueParamName)
     |        {
     |$body
     |        }

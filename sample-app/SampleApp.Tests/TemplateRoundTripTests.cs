@@ -101,4 +101,17 @@ public class TemplateRoundTripTests
         string result = Greetings.greetViaInstanceMembers("Mylo");
         Assert.Equal("Hello, Mylo", result);
     }
+
+    // Phase 9 static-property round trip: the public static C# properties are mapped onto
+    // Template's Kotlin companion object. Kotlin writes and reads DefaultName (String var),
+    // then reads RenderCount (Int val) after C# has entered Kotlin and Kotlin has called C#.
+    [Fact]
+    public void StaticProperties_MyloNameAndRenderCount_RoundTripThroughKotlin()
+    {
+        string name = Greetings.setDefaultTemplateCatName("Mylo");
+        int renderCount = Greetings.templateRenderCount();
+
+        Assert.Equal("Mylo", name);
+        Assert.True(renderCount >= 0);
+    }
 }

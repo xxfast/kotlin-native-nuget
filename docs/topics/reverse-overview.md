@@ -68,7 +68,8 @@ and [ADR-048](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/0
   `Newtonsoft.Json.JsonConvert` → `nuget_newtonsoft_json_json_convert_register`).
 - The export takes one function-pointer parameter per bridgeable member, in a single shared
   order: constructor first (if any), then static methods, then instance methods, then one
-  getter/setter slot per instance property, all drawn from a shared helper
+  getter/setter slot per instance property, then one getter/setter slot per static property, all
+  drawn from a shared helper
   (`bridgeableRegistrables` in `RirBridging.kt`) so the two generators can never drift out of
   parameter-order sync.
 - On the Kotlin side these arrive as `CPointer<CFunction<...>>?` variables. Every generated stub

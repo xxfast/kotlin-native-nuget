@@ -68,11 +68,13 @@ sealed interface RirRegistrable {
 fun bridgeableInstanceMethods(cls: RirClass, boundHandleTypes: Set<RirTypeKey>): List<RirMethod> =
   cls.methods.filter { !it.isStatic && isV1Bridgeable(it, boundHandleTypes) }
 
-// Phase 9 (ROADMAP line 151): v1-bridgeable instance properties on a bound class — static
-// properties are excluded (out of scope, ROADMAP line 152) and non-v1-typed properties are
-// excluded, mirroring isV1Bridgeable's method filter below.
+// Phase 9: v1-bridgeable properties on a bound class. Static properties support strings and the
+// current primitive subset; handle-typed static properties remain deferred with handle setters.
 fun bridgeableProperties(cls: RirClass, boundHandleTypes: Set<RirTypeKey>): List<RirProperty> =
-  cls.properties.filter { !it.isStatic && isV1Type(it.type, boundHandleTypes) }
+  cls.properties.filter { property ->
+    isV1Type(property.type, boundHandleTypes) &&
+      (!property.isStatic || property.type !is RirObjectHandleType)
+  }
 
 // Phase 9 (ROADMAP line 151, rule 5 — human-approved v1 scope call): the Kotlin member names
 // already claimed by the ADR-051 wrapper class itself. An instance member whose Kotlin name
@@ -144,9 +146,10 @@ private fun RirTypeRef.describe(): String = when (this) {
 
 // ADR-052 "shared bridgeable ordering", extended by Phase 9 line 151: the constructor pointer (if
 // any) comes FIRST, then bridgeable static methods, THEN bridgeable instance methods, THEN one
-// PropertyGetter/[PropertySetter] pair per bridgeable instance property — each group in its
-// existing reverse-ir.json declaration order, groups appended (never interleaved) so already
-// generated ctor/static slot indices never churn. Both NugetGenerateBindingsTask and
+// PropertyGetter/[PropertySetter] pair per bridgeable instance property, followed by the same
+// pairs for static properties — each group in its existing reverse-ir.json declaration order,
+// groups appended (never interleaved) so already generated ctor/static slot indices never churn.
+// Both NugetGenerateBindingsTask and
 // NugetGenerateShimsTask must consume this function directly — never re-derive the combined order
 // independently, or the two sides' registration slots can silently drift out of alignment.
 //
@@ -160,12 +163,16 @@ fun bridgeableRegistrables(cls: RirClass, boundHandleTypes: Set<RirTypeKey>): Li
     .filterNot { it.name in collidingNames }
 
   val properties: List<RirProperty> = bridgeableProperties(cls, boundHandleTypes)
+  val instanceProperties: List<RirProperty> = properties
+    .filterNot { it.isStatic }
     .filterNot { it.name in collidingNames }
+  val staticProperties: List<RirProperty> = properties
+    .filter { it.isStatic }
 
   // Rule 4: a handle-typed settable property gets a PropertyGetter slot only — never a
   // PropertySetter slot, even when the RIR says isReadOnly=false (see the PropertyGetter/
   // PropertySetter doc comment above for the full rationale).
-  val propertyRegistrables: List<RirRegistrable> = properties.flatMap { property ->
+  fun propertyRegistrables(properties: List<RirProperty>): List<RirRegistrable> = properties.flatMap { property ->
     val getter: RirRegistrable = RirRegistrable.PropertyGetter(property)
     val isHandleTyped: Boolean = property.type is RirObjectHandleType
     if (property.isReadOnly || isHandleTyped) listOf(getter)
@@ -175,7 +182,8 @@ fun bridgeableRegistrables(cls: RirClass, boundHandleTypes: Set<RirTypeKey>): Li
   return bridgeableConstructors(cls, boundHandleTypes).map { RirRegistrable.Ctor(it) } +
     bridgeableStaticMethods(cls, boundHandleTypes).map { RirRegistrable.Method(it) } +
     instanceMethods.map { RirRegistrable.Method(it) } +
-    propertyRegistrables
+    propertyRegistrables(instanceProperties) +
+    propertyRegistrables(staticProperties)
 }
 
 // ADR-048 v1 bridgeable subset: static methods only, void/string/primitive/handle parameter and

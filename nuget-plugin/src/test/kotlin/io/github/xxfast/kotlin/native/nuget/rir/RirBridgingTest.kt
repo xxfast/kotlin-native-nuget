@@ -13,7 +13,7 @@ import kotlin.test.assertTrue
  * Deferred section). This test class extends the existing ADR-052 [bridgeableRegistrables]
  * ordering contract with instance methods and instance properties.
  *
- * [bridgeableProperties] excludes static/non-v1-typed properties (ROADMAP line 152), rule 4
+ * [bridgeableProperties] accepts static and instance v1-typed properties, rule 4
  * (handle-typed settable properties get a getter slot only), and rule 5 (member-name collisions
  * with the ADR-051 wrapper's own `handle`/`close`/`cleaner` members are skipped + diagnosed via
  * [collisionDiagnostics], reusing the existing [RirDiagnostic] model).
@@ -21,9 +21,9 @@ import kotlin.test.assertTrue
 class RirBridgingTest {
 
   // ------------------------------------------------------------------
-  // 1. Total registration ordering: Ctor, static methods, instance methods, then
-  //    PropertyGetter/[PropertySetter] pairs per bridgeable instance property — groups appended,
-  //    never interleaved (the load-bearing contract both generators derive their output from).
+  // 1. Total registration ordering: Ctor, static methods, instance methods, instance-property
+  //    getter/setter pairs, then static-property getter/setter pairs — groups appended, never
+  //    interleaved (the load-bearing contract both generators derive their output from).
   // ------------------------------------------------------------------
 
   private val orderingCls: RirClass = RirClass(
@@ -41,13 +41,15 @@ class RirBridgingTest {
     properties = listOf(
       RirProperty(name = "Name", type = RirStringType, isReadOnly = true, isStatic = false),
       RirProperty(name = "Count", type = RirPrimitiveType("int"), isReadOnly = false, isStatic = false),
+      RirProperty(name = "DefaultName", type = RirStringType, isReadOnly = false, isStatic = true),
+      RirProperty(name = "RenderCount", type = RirPrimitiveType("int"), isReadOnly = true, isStatic = true),
     ),
   )
 
   private val orderingBoundTypes: Set<RirTypeKey> = setOf(RirTypeKey("Sample.Text", "Template"))
 
   @Test
-  fun `bridgeableRegistrables places ctor, static methods, instance methods, then property getter-setter pairs, in that order`() {
+  fun `bridgeableRegistrables appends static property getter-setter pairs after instance property pairs`() {
     val expected: List<RirRegistrable> = listOf(
       RirRegistrable.Ctor(orderingCls.constructors[0]),
       RirRegistrable.Method(orderingCls.methods[0]), // StaticA
@@ -57,6 +59,9 @@ class RirBridgingTest {
       RirRegistrable.PropertyGetter(orderingCls.properties[0]), // Name (read-only) getter
       RirRegistrable.PropertyGetter(orderingCls.properties[1]), // Count (settable) getter
       RirRegistrable.PropertySetter(orderingCls.properties[1]), // Count (settable) setter
+      RirRegistrable.PropertyGetter(orderingCls.properties[2]), // DefaultName (settable) getter
+      RirRegistrable.PropertySetter(orderingCls.properties[2]), // DefaultName (settable) setter
+      RirRegistrable.PropertyGetter(orderingCls.properties[3]), // RenderCount (read-only) getter
     )
 
     val actual: List<RirRegistrable> = bridgeableRegistrables(orderingCls, orderingBoundTypes)
@@ -64,13 +69,13 @@ class RirBridgingTest {
     assertEquals(
       expected,
       actual,
-      "Phase 9 line 151 total ordering: ctor, statics, instance methods, then per-property " +
-        "getter/[setter] pairs, groups appended (never interleaved) — got $actual",
+      "Phase 9 static properties: ctor, static methods, instance methods, instance-property " +
+        "getter/[setter] pairs, then static-property getter/[setter] pairs — got $actual",
     )
   }
 
   // ------------------------------------------------------------------
-  // 2. bridgeableProperties: static properties excluded (out of scope, ROADMAP line 152)
+  // 2. bridgeableProperties: static and instance properties are both bridgeable
   // ------------------------------------------------------------------
 
   private val staticVsInstancePropCls: RirClass = RirClass(
@@ -83,13 +88,14 @@ class RirBridgingTest {
   )
 
   @Test
-  fun `bridgeableProperties excludes static properties`() {
+  fun `bridgeableProperties includes static and instance properties in declaration order`() {
     val result: List<RirProperty> = bridgeableProperties(staticVsInstancePropCls, emptySet())
 
     assertEquals(
-      listOf(staticVsInstancePropCls.properties[1]),
+      staticVsInstancePropCls.properties,
       result,
-      "static properties are out of scope (ROADMAP line 152) — only InstanceProp must survive",
+      "static properties now share the same v1 type filter as instance properties and must " +
+        "retain reverse-ir declaration order",
     )
   }
 

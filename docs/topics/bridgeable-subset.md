@@ -38,11 +38,8 @@ as `RirInterface` but no stub is generated from them today.
 
 - **Static methods** and **instance methods** both bind, subject to the same parameter/return type
   and overload-set rules.
-- **Instance properties** bind: read-only → `val`, settable → `var` (see
-  [Instance members](instance-members.md)).
-- **Static properties do not bind at all in v1** - this is a scope decision in the generators, not
-  something the metadata reader filters or diagnoses; a static property is simply never selected by
-  `bridgeableStaticMethods`/`bridgeableRegistrables`, and no diagnostic is emitted for it.
+- **Instance properties** and **static properties** bind: read-only → `val`, settable → `var` (see
+  [Instance members](instance-members.md) and [Static classes and methods](static-classes-and-methods.md)).
 - **`async`/`Task`-returning methods do not bind.** The reader recognizes `Task`, `Task<T>`,
   `ValueTask`, `ValueTask<T>`, and `IAsyncEnumerable<T>` by name and emits an *informational*
   diagnostic (`info_async_not_yet_mapped`), not a skip-with-reason like the others; the method is

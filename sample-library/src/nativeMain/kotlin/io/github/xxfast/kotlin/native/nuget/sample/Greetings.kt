@@ -43,3 +43,15 @@ fun greetViaInstanceMembers(name: String): String {
 
   return template.use { copy.use { c -> c.apply(name) } }
 }
+
+/**
+ * Exercises Phase 9 static C# properties through [Template]'s Kotlin companion object:
+ * a write/read of `DefaultName` and a read of the primitive `RenderCount`.
+ */
+fun setDefaultTemplateCatName(name: String): String {
+  Template.defaultName = name
+  return Template.defaultName
+}
+
+/** Returns the read-only static render counter exposed by [Template]. */
+fun templateRenderCount(): Int = Template.renderCount

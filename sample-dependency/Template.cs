@@ -20,6 +20,18 @@ public class Template
     private readonly string _source;
 
     /// <summary>
+    /// The cat name used by callers that want a shared template default. Settable static
+    /// property → Kotlin <c>var defaultName: String</c> in <c>Template</c>'s companion object.
+    /// </summary>
+    public static string DefaultName { get; set; } = "Oreo";
+
+    /// <summary>
+    /// The number of calls to <see cref="Render"/>. Read-only static property → Kotlin
+    /// <c>val renderCount: Int</c> in <c>Template</c>'s companion object.
+    /// </summary>
+    public static int RenderCount { get; private set; }
+
+    /// <summary>
     /// Creates a <see cref="Template"/> directly from a source string such as
     /// <c>"Hello, {name}"</c>. Public since ADR-052 so the fixture exercises the mapped
     /// Kotlin secondary constructor (<c>Template(source)</c>) in addition to <see cref="Parse"/>.
@@ -62,6 +74,9 @@ public class Template
     /// Substitutes the <c>{name}</c> placeholder in <paramref name="template"/> with
     /// <paramref name="name"/> and returns the rendered string.
     /// </summary>
-    public static string Render(Template template, string name) =>
-        template._source.Replace("{name}", name);
+    public static string Render(Template template, string name)
+    {
+        RenderCount++;
+        return template._source.Replace("{name}", name);
+    }
 }

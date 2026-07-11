@@ -74,6 +74,8 @@ fun generateKotlinStubs(
           .map { it.method }.filter { !it.isStatic }
         val propertyGetters: List<RirProperty> =
           registrables.filterIsInstance<RirRegistrable.PropertyGetter>().map { it.property }
+        val instancePropertyGetters: List<RirProperty> = propertyGetters.filterNot { it.isStatic }
+        val staticPropertyGetters: List<RirProperty> = propertyGetters.filter { it.isStatic }
         val propertySetterNames: Set<String> =
           registrables.filterIsInstance<RirRegistrable.PropertySetter>().map { it.property.name }.toSet()
 
@@ -96,8 +98,8 @@ fun generateKotlinStubs(
         val hasHandle: Boolean = allMethods.any { method ->
           method.returnType is RirObjectHandleType ||
             method.parameters.any { p -> p.type is RirObjectHandleType }
-        } || ctors.isNotEmpty() || instanceMethods.isNotEmpty() || propertyGetters.isNotEmpty() ||
-          propertyGetters.any { it.type is RirObjectHandleType }
+        } || ctors.isNotEmpty() || instanceMethods.isNotEmpty() || instancePropertyGetters.isNotEmpty() ||
+          instancePropertyGetters.any { it.type is RirObjectHandleType }
         if (hasHandle) needsRuntime = true
 
         val exportName: String = registrationExportName(namespace.name, cls.name)
@@ -112,7 +114,7 @@ fun generateKotlinStubs(
           relativePath = "nativeMain/$pkgPath/${cls.name}.kt",
           content = stubFileContent(
             kotlinPkg, cls, staticMethods, instanceMethods, ctors,
-            propertyGetters, propertySetterNames, assembly.packageId,
+            instancePropertyGetters, staticPropertyGetters, propertySetterNames, assembly.packageId,
           ),
         ))
       }
@@ -253,15 +255,17 @@ private fun bindingsFileContent(
       // property's value; a setter thunk takes the receiver plus the new value and returns Unit.
       is RirRegistrable.PropertyGetter -> {
         val retCfnType: String = cfnType(r.property.type)
+        val receiverCfnType: String = if (r.property.isStatic) "" else "COpaquePointer?"
         "@Suppress(\"NOTHING_TO_INLINE\")\n" +
           "internal var ${r.property.name.toMethodCamelCase()}GetterFn: " +
-            "CPointer<CFunction<(COpaquePointer?) -> $retCfnType>>? = null"
+            "CPointer<CFunction<($receiverCfnType) -> $retCfnType>>? = null"
       }
       is RirRegistrable.PropertySetter -> {
         val valueCfnType: String = cfnType(r.property.type)
+        val receiverCfnType: String = if (r.property.isStatic) "" else "COpaquePointer?, "
         "@Suppress(\"NOTHING_TO_INLINE\")\n" +
           "internal var ${r.property.name.toMethodCamelCase()}SetterFn: " +
-            "CPointer<CFunction<(COpaquePointer?, $valueCfnType) -> Unit>>? = null"
+            "CPointer<CFunction<($receiverCfnType$valueCfnType) -> Unit>>? = null"
       }
     }
   }
@@ -327,7 +331,8 @@ private fun stubFileContent(
   staticMethods: List<RirMethod>,
   instanceMethods: List<RirMethod>,
   ctors: List<RirConstructor>,
-  propertyGetters: List<RirProperty>,
+  instancePropertyGetters: List<RirProperty>,
+  staticPropertyGetters: List<RirProperty>,
   propertySetterNames: Set<String>,
   packageId: String,
 ): String {
@@ -344,18 +349,20 @@ private fun stubFileContent(
   // — both require the receiver `handle` field regardless of whether a handle TYPE appears
   // anywhere. Classes with none of these keep the ADR-048 `object` shape.
   val isClassWrapper: Boolean = !cls.isStatic &&
-    (hasHandle || ctors.isNotEmpty() || instanceMethods.isNotEmpty() || propertyGetters.isNotEmpty())
+    (hasHandle || ctors.isNotEmpty() || instanceMethods.isNotEmpty() || instancePropertyGetters.isNotEmpty())
   if (isClassWrapper) {
     return classWrapperContent(
       kotlinPkg, cls, staticMethods, instanceMethods, ctors,
-      propertyGetters, propertySetterNames, packageId,
+      instancePropertyGetters, staticPropertyGetters, propertySetterNames, packageId,
     )
   }
 
   // object shape (ADR-048, statics only — a non-wrapper class never has ctors/instance
   // methods/properties, per isClassWrapper above).
-  val hasStringReturn: Boolean = staticMethods.any { it.returnType is RirStringType }
-  val hasStringParam: Boolean = staticMethods.any { m -> m.parameters.any { p -> p.type is RirStringType } }
+  val hasStringReturn: Boolean = staticMethods.any { it.returnType is RirStringType } ||
+    staticPropertyGetters.any { it.type is RirStringType }
+  val hasStringParam: Boolean = staticMethods.any { m -> m.parameters.any { p -> p.type is RirStringType } } ||
+    staticPropertyGetters.any { it.type is RirStringType && it.name in propertySetterNames }
 
   // Always required: every stub method body calls `fn.invoke(...)` on a
   // `CPointer<CFunction<...>>?` — the `invoke` operator extension is declared in kotlinx.cinterop
@@ -376,6 +383,9 @@ private fun stubFileContent(
   }
 
   val methods: String = staticMethods.joinToString("\n\n") { buildStubMethod(cls, it, packageId) }
+  val properties: String = staticPropertyGetters.joinToString("\n\n") { property ->
+    buildStubProperty(cls, property, hasSetter = property.name in propertySetterNames, packageId)
+  }
 
   return buildString {
     appendLine("@file:OptIn(kotlinx.cinterop.ExperimentalForeignApi::class)")
@@ -395,6 +405,8 @@ private fun stubFileContent(
     appendLine("internal object ${cls.name} {")
     appendLine()
     appendLine(methods.indented("  "))
+    if (methods.isNotEmpty() && properties.isNotEmpty()) appendLine()
+    if (properties.isNotEmpty()) appendLine(properties.indented("  "))
     append("}")
   }
 }
@@ -419,16 +431,19 @@ private fun classWrapperContent(
   staticMethods: List<RirMethod>,
   instanceMethods: List<RirMethod>,
   ctors: List<RirConstructor>,
-  propertyGetters: List<RirProperty>,
+  instancePropertyGetters: List<RirProperty>,
+  staticPropertyGetters: List<RirProperty>,
   propertySetterNames: Set<String>,
   packageId: String,
 ): String {
   val allMethods: List<RirMethod> = staticMethods + instanceMethods
   val hasStringReturn: Boolean = allMethods.any { it.returnType is RirStringType } ||
-    propertyGetters.any { it.type is RirStringType }
+    instancePropertyGetters.any { it.type is RirStringType } ||
+    staticPropertyGetters.any { it.type is RirStringType }
   val hasStringParam: Boolean = allMethods.any { m -> m.parameters.any { p -> p.type is RirStringType } } ||
     ctors.any { ctor -> ctor.parameters.any { p -> p.type is RirStringType } } ||
-    propertyGetters.any { it.type is RirStringType && it.name in propertySetterNames }
+    instancePropertyGetters.any { it.type is RirStringType && it.name in propertySetterNames } ||
+    staticPropertyGetters.any { it.type is RirStringType && it.name in propertySetterNames }
 
   val imports: MutableList<String> = mutableListOf(
     "import $INTERNAL_PKG.NugetObjectHandle",
@@ -451,11 +466,14 @@ private fun classWrapperContent(
 
   val instanceMethodsText: String =
     instanceMethods.joinToString("\n\n") { buildStubMethod(cls, it, packageId) }
-  val propertiesText: String = propertyGetters.joinToString("\n\n") { property ->
+  val propertiesText: String = instancePropertyGetters.joinToString("\n\n") { property ->
     buildStubProperty(cls, property, hasSetter = property.name in propertySetterNames, packageId)
   }
   val staticMethodsText: String =
     staticMethods.joinToString("\n\n") { buildStubMethod(cls, it, packageId) }
+  val staticPropertiesText: String = staticPropertyGetters.joinToString("\n\n") { property ->
+    buildStubProperty(cls, property, hasSetter = property.name in propertySetterNames, packageId)
+  }
 
   return buildString {
     appendLine("@file:OptIn(kotlinx.cinterop.ExperimentalForeignApi::class)")
@@ -497,6 +515,8 @@ private fun classWrapperContent(
     appendLine("  companion object {")
     appendLine()
     if (staticMethodsText.isNotEmpty()) appendLine(staticMethodsText.indented("    "))
+    if (staticMethodsText.isNotEmpty() && staticPropertiesText.isNotEmpty()) appendLine()
+    if (staticPropertiesText.isNotEmpty()) appendLine(staticPropertiesText.indented("    "))
     appendLine("  }")
     appendLine("}")
     if (ctors.isNotEmpty()) {
@@ -683,13 +703,14 @@ private fun buildStubProperty(
 ): String {
   val name: String = property.name.toMethodCamelCase()
   val getterFnVar = "${name}GetterFn"
-  val receiverArg = "handle.require(\"${cls.name}\")"
+  val receiverArg: String? = if (property.isStatic) null else "handle.require(\"${cls.name}\")"
   val failMsg: String = bindingsNotRegisteredMessage(cls.name, packageId)
 
   val isHandleTyped: Boolean = property.type is RirObjectHandleType
   val declType: String = if (isHandleTyped) "${kotlinType(property.type)}?" else kotlinType(property.type)
   val emitSetter: Boolean = hasSetter && !isHandleTyped
   val keyword: String = if (emitSetter) "var" else "val"
+  val getterInvoke: String = if (receiverArg == null) "fn.invoke()" else "fn.invoke($receiverArg)"
 
   // Each block below is self-contained (`get()`/`set(value)` at column 0, its body at column 2)
   // so it can be shifted under the property declaration with a single String.prependIndent() call,
@@ -702,7 +723,7 @@ private fun buildStubProperty(
       |  val fn = requireNotNull($getterFnVar) {
       |    $failMsg
       |  }
-      |  val resultPtr = fn.invoke($receiverArg)
+      |  val resultPtr = $getterInvoke
       |    ?: error("${cls.name}.${property.name} returned null — expected a non-null string pointer")
       |  val result = resultPtr.reinterpret<ByteVar>().toKString()
       |  freeManagedString(resultPtr)
@@ -716,7 +737,7 @@ private fun buildStubProperty(
       |  val fn = requireNotNull($getterFnVar) {
       |    $failMsg
       |  }
-      |  val ptr: COpaquePointer? = fn.invoke($receiverArg)
+      |  val ptr: COpaquePointer? = $getterInvoke
       |  return ptr?.let { ${type.name}(it) }
       |}
     """.trimMargin()
@@ -724,7 +745,7 @@ private fun buildStubProperty(
     is RirPrimitiveType -> {
       val isChar: Boolean = type.name == "char"
       val returnExpr: String =
-        if (isChar) "fn.invoke($receiverArg).toInt().toChar()" else "fn.invoke($receiverArg)"
+        if (isChar) "$getterInvoke.toInt().toChar()" else getterInvoke
       """
         |get() {
         |  val fn = requireNotNull($getterFnVar) {
@@ -741,9 +762,10 @@ private fun buildStubProperty(
     val valueArg: String = argConversion(property.type, "value")
     val hasStringValue: Boolean = property.type is RirStringType
     val invokeCall: String = if (hasStringValue) {
-      "memScoped { fn.invoke($receiverArg, $valueArg) }"
+      if (receiverArg == null) "memScoped { fn.invoke($valueArg) }"
+      else "memScoped { fn.invoke($receiverArg, $valueArg) }"
     } else {
-      "fn.invoke($receiverArg, $valueArg)"
+      if (receiverArg == null) "fn.invoke($valueArg)" else "fn.invoke($receiverArg, $valueArg)"
     }
     """
       |set(value) {

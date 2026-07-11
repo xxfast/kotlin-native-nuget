@@ -952,6 +952,18 @@ class NugetGenerateShimsTaskTest {
                     isReadOnly = false,
                     isStatic = false,
                   ),
+                  RirProperty(
+                    name = "DefaultName",
+                    type = RirStringType,
+                    isReadOnly = false,
+                    isStatic = true,
+                  ),
+                  RirProperty(
+                    name = "RenderCount",
+                    type = RirPrimitiveType("int"),
+                    isReadOnly = true,
+                    isStatic = true,
+                  ),
                 ),
               ),
             ),
@@ -1037,13 +1049,29 @@ class NugetGenerateShimsTaskTest {
   }
 
   // ------------------------------------------------------------------
+  // 19b. Static property thunks do not receive a selfHandle. They access the C# property through
+  // the type, and their slots append after every instance-property accessor slot.
+  // ------------------------------------------------------------------
+
+  @Test
+  fun `static property getter and setter thunks have no selfHandle and access Template statically`() {
+    val shim: GeneratedFile = templateInstanceShim()
+
+    assertContains(shim.content, "private static IntPtr DefaultName_Get_Thunk()")
+    assertContains(shim.content, "private static void DefaultName_Set_Thunk(IntPtr valuePtr)")
+    assertContains(shim.content, "Template.DefaultName")
+    assertContains(shim.content, "private static int RenderCount_Get_Thunk()")
+    assertContains(shim.content, "Template.RenderCount")
+  }
+
+  // ------------------------------------------------------------------
   // 20. [ModuleInitializer] passes the pointers in the exact order from the shared
   //     bridgeableRegistrables() contract: ctor, static methods, instance methods, then
   //     per-property getter/[setter] pairs.
   // ------------------------------------------------------------------
 
   @Test
-  fun `TemplateRegistration ModuleInitializer passes Ctor, Parse, Rename, Name-getter, Length-getter, Length-setter in that order`() {
+  fun `TemplateRegistration ModuleInitializer appends static property accessors after instance property accessors`() {
     val shim: GeneratedFile = templateInstanceShim()
 
     val ctorIndex: Int = shim.content.indexOf("&Ctor_Thunk")
@@ -1052,24 +1080,35 @@ class NugetGenerateShimsTaskTest {
     val nameGetIndex: Int = shim.content.indexOf("&Name_Get_Thunk")
     val lengthGetIndex: Int = shim.content.indexOf("&Length_Get_Thunk")
     val lengthSetIndex: Int = shim.content.indexOf("&Length_Set_Thunk")
+    val defaultNameGetIndex: Int = shim.content.indexOf("&DefaultName_Get_Thunk")
+    val defaultNameSetIndex: Int = shim.content.indexOf("&DefaultName_Set_Thunk")
+    val renderCountGetIndex: Int = shim.content.indexOf("&RenderCount_Get_Thunk")
 
     assertTrue(
-      listOf(ctorIndex, parseIndex, renameIndex, nameGetIndex, lengthGetIndex, lengthSetIndex)
+      listOf(
+        ctorIndex, parseIndex, renameIndex, nameGetIndex, lengthGetIndex, lengthSetIndex,
+        defaultNameGetIndex, defaultNameSetIndex, renderCountGetIndex,
+      )
         .all { it >= 0 },
-      "all six thunks must be registered, got indices: ctor=$ctorIndex, parse=$parseIndex, " +
+      "all static and instance property thunks must be registered, got indices: ctor=$ctorIndex, parse=$parseIndex, " +
         "rename=$renameIndex, nameGet=$nameGetIndex, lengthGet=$lengthGetIndex, " +
-        "lengthSet=$lengthSetIndex",
+        "lengthSet=$lengthSetIndex, defaultNameGet=$defaultNameGetIndex, " +
+        "defaultNameSet=$defaultNameSetIndex, renderCountGet=$renderCountGetIndex",
     )
     assertTrue(
       ctorIndex < parseIndex &&
         parseIndex < renameIndex &&
         renameIndex < nameGetIndex &&
         nameGetIndex < lengthGetIndex &&
-        lengthGetIndex < lengthSetIndex,
-      "Phase 9 line 151 shared bridgeable ordering: ctor, static methods, instance methods, " +
-        "then per-property getter/[setter] pairs, groups appended never interleaved — got " +
+        lengthGetIndex < lengthSetIndex &&
+        lengthSetIndex < defaultNameGetIndex &&
+        defaultNameGetIndex < defaultNameSetIndex &&
+        defaultNameSetIndex < renderCountGetIndex,
+      "Phase 9 static-property ordering: ctor, static methods, instance methods, instance " +
+        "property accessors, then static property accessors — got " +
         "ctor=$ctorIndex, parse=$parseIndex, rename=$renameIndex, nameGet=$nameGetIndex, " +
-        "lengthGet=$lengthGetIndex, lengthSet=$lengthSetIndex",
+        "lengthGet=$lengthGetIndex, lengthSet=$lengthSetIndex, defaultNameGet=$defaultNameGetIndex, " +
+        "defaultNameSet=$defaultNameSetIndex, renderCountGet=$renderCountGetIndex",
     )
   }
 
@@ -1084,9 +1123,15 @@ class NugetGenerateShimsTaskTest {
     val nameGetIndex: Int = externLine.indexOf("nameGetterPtr")
     val lengthGetIndex: Int = externLine.indexOf("lengthGetterPtr")
     val lengthSetIndex: Int = externLine.indexOf("lengthSetterPtr")
+    val defaultNameGetIndex: Int = externLine.indexOf("defaultNameGetterPtr")
+    val defaultNameSetIndex: Int = externLine.indexOf("defaultNameSetterPtr")
+    val renderCountGetIndex: Int = externLine.indexOf("renderCountGetterPtr")
 
     assertTrue(
-      listOf(ctorIndex, parseIndex, renameIndex, nameGetIndex, lengthGetIndex, lengthSetIndex)
+      listOf(
+        ctorIndex, parseIndex, renameIndex, nameGetIndex, lengthGetIndex, lengthSetIndex,
+        defaultNameGetIndex, defaultNameSetIndex, renderCountGetIndex,
+      )
         .all { it >= 0 },
       "all six pointer params must be declared, got: '$externLine'",
     )
@@ -1095,7 +1140,10 @@ class NugetGenerateShimsTaskTest {
         parseIndex < renameIndex &&
         renameIndex < nameGetIndex &&
         nameGetIndex < lengthGetIndex &&
-        lengthGetIndex < lengthSetIndex,
+        lengthGetIndex < lengthSetIndex &&
+        lengthSetIndex < defaultNameGetIndex &&
+        defaultNameGetIndex < defaultNameSetIndex &&
+        defaultNameSetIndex < renderCountGetIndex,
     )
   }
 }

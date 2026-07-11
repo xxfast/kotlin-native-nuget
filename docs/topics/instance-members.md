@@ -10,12 +10,16 @@ already states: an instance thunk is a static thunk whose first parameter is the
 
 `sample-dependency`'s `Sample.Text.Template` is the canonical fixture for this feature: a
 constructor, two static methods, a read-only property, a settable property, an instance method with
-a string in and out, and an instance method that returns a fresh handle of the same type.
+a string in and out, an instance method that returns a fresh handle of the same type, plus read-only
+and settable static properties.
 
 ```C#
 // sample-dependency/Template.cs (real source)
 public class Template
 {
+    public static string DefaultName { get; set; } = "Oreo";
+    public static int RenderCount { get; private set; }
+
     public Template(string source) => _source = source;
 
     public string Source => _source;                    // read-only instance property
@@ -131,13 +135,15 @@ two sides can never drift out of alignment:
 2. static methods
 3. instance methods
 4. one getter, then one setter (if settable), per bridgeable instance property
+5. one getter, then one setter (if settable), per bridgeable static property
 
 ```C#
 // build/nuget-interop/csharp/TemplateRegistration.cs (real generated output, full parameter list)
 private static extern void nuget_sample_text_template_register(
     IntPtr ctorPtr, IntPtr parsePtr, IntPtr renderPtr,
     IntPtr applyPtr, IntPtr clonePtr,
-    IntPtr sourceGetterPtr, IntPtr nameGetterPtr, IntPtr nameSetterPtr);
+    IntPtr sourceGetterPtr, IntPtr nameGetterPtr, IntPtr nameSetterPtr,
+    IntPtr defaultNameGetterPtr, IntPtr defaultNameSetterPtr, IntPtr renderCountGetterPtr);
 ```
 
 ## Name collisions with the wrapper itself
@@ -167,8 +173,6 @@ handle-typed property, regardless of what the RIR says about its C# mutability.
 
 ## Limitations
 
-- Static C# properties are not bound at all yet (see
-  [Static classes and methods](static-classes-and-methods.md)).
 - A handle-typed settable property is always exposed as read-only (`val Foo?`), never `var`, until
   nullable-reference-type metadata lets object parameters accept `null`.
 - Member-name-collision is currently the *only* diagnostic kind surfaced as a build warning; every
