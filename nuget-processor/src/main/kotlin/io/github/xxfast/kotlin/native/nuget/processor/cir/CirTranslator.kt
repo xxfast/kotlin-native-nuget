@@ -86,7 +86,17 @@ fun translate(
   for ((key, funcs) in groupByNamespaceAndFile(functions)) {
     val (namespace, fileClassName) = key
     val finalClassName: String = resolveStaticClassName(fileClassName, namespace)
-    val members: List<CirMember> = funcs.flatMap { translateFunction(it, context.libraryName, tracker, exportedTypes, logger) }
+    val members: List<CirMember> = funcs.flatMap { function ->
+      translateFunction(
+        function,
+        context.libraryName,
+        context.rootPackage,
+        context.rootNamespace,
+        tracker,
+        exportedTypes,
+        logger,
+      )
+    }
     namespaces.addDeclaration(namespace, CirStaticClass(finalClassName, members))
   }
 
@@ -100,7 +110,9 @@ fun translate(
   for ((key, funcs) in groupByNamespaceAndFile(suspendFunctions)) {
     val (namespace, fileClassName) = key
     val finalClassName: String = resolveStaticClassName(fileClassName, namespace)
-    val members: List<CirMember> = funcs.flatMap { translateSuspendFunction(it, context.libraryName, tracker, exportedTypes, logger) }
+    val members: List<CirMember> = funcs.flatMap { function ->
+      translateSuspendFunction(function, context.libraryName, tracker, exportedTypes, logger)
+    }
     namespaces.mergeStaticClass(namespace, finalClassName, members)
   }
 
@@ -119,11 +131,17 @@ fun translate(
   }
 
   for (cls in regularClasses) {
-    namespaces.addDeclaration(namespaceOf(cls.packageName.asString()), translateClass(cls, context.libraryName, tracker, exportedTypes, logger))
+    namespaces.addDeclaration(
+      namespaceOf(cls.packageName.asString()),
+      translateClass(cls, context.libraryName, tracker, exportedTypes, logger)
+    )
   }
 
   for (cls in genericClasses) {
-    namespaces.addDeclaration(namespaceOf(cls.packageName.asString()), translateGenericClass(cls, context.libraryName, logger))
+    namespaces.addDeclaration(
+      namespaceOf(cls.packageName.asString()),
+      translateGenericClass(cls, context.libraryName, logger)
+    )
     needsMarshalHelper = true
   }
 
@@ -136,11 +154,17 @@ fun translate(
   }
 
   for (iface in interfaces) {
-    namespaces.addDeclaration(namespaceOf(iface.packageName.asString()), translateInterface(iface, context.libraryName, logger))
+    namespaces.addDeclaration(
+      namespaceOf(iface.packageName.asString()),
+      translateInterface(iface, context.libraryName, logger)
+    )
   }
 
   for (sealed in sealedClasses) {
-    namespaces.addDeclaration(namespaceOf(sealed.packageName.asString()), translateSealedClass(sealed, context.libraryName, tracker, exportedTypes, logger))
+    namespaces.addDeclaration(
+      namespaceOf(sealed.packageName.asString()),
+      translateSealedClass(sealed, context.libraryName, tracker, exportedTypes, logger)
+    )
   }
 
   for (obj in objects) {
@@ -219,7 +243,12 @@ fun translate(
     if (tracker.needsMap) helpers.add(CirMapHelper(context.libraryName))
     if (tracker.needsSet) helpers.add(CirSetHelper(context.libraryName))
     if (tracker.lambdaArities.isNotEmpty()) helpers.add(CirFuncNativeHelper(context.libraryName, tracker.lambdaArities))
-    if (tracker.suspendLambdaArities.isNotEmpty()) helpers.add(CirSuspendFuncNativeHelper(context.libraryName, tracker.suspendLambdaArities))
+    if (tracker.suspendLambdaArities.isNotEmpty()) helpers.add(
+      CirSuspendFuncNativeHelper(
+        context.libraryName,
+        tracker.suspendLambdaArities
+      )
+    )
     if (tracker.needsAsync) helpers.add(CirAsyncHelper(context.libraryName))
     if (tracker.needsAsync) helpers.add(CirScopeHelper(context.libraryName))
     if (tracker.needsAsync) helpers.add(CirJobHelper(context.libraryName))
@@ -502,46 +531,54 @@ internal fun translateProperty(
   if (isNullablePrimitive) {
     val csValueType: String = mapParamType(propType)
 
-    members.add(CirDllImport(
-      libraryName = libraryName,
-      entryPoint = "get_$cname",
-      returnType = "bool",
-      name = "Native_Get_$propName",
-      parameters = emptyList(),
-      visibility = CirVisibility.PRIVATE,
-      hasSyncErrorOut = true,
-    ))
-
-    members.add(CirDllImport(
-      libraryName = libraryName,
-      entryPoint = "get_${cname}_value",
-      returnType = csValueType,
-      name = "Native_Get_${propName}_value",
-      parameters = emptyList(),
-      visibility = CirVisibility.PRIVATE,
-      hasSyncErrorOut = true,
-    ))
-
-    if (isMutable) {
-      members.add(CirDllImport(
+    members.add(
+      CirDllImport(
         libraryName = libraryName,
-        entryPoint = "set_$cname",
-        returnType = "void",
-        name = "Native_Set_$propName",
-        parameters = listOf(CirParameter("value", csValueType)),
-        visibility = CirVisibility.PRIVATE,
-        hasSyncErrorOut = true,
-      ))
-
-      members.add(CirDllImport(
-        libraryName = libraryName,
-        entryPoint = "set_${cname}_null",
-        returnType = "void",
-        name = "Native_Set_${propName}_null",
+        entryPoint = "get_$cname",
+        returnType = "bool",
+        name = "Native_Get_$propName",
         parameters = emptyList(),
         visibility = CirVisibility.PRIVATE,
         hasSyncErrorOut = true,
-      ))
+      )
+    )
+
+    members.add(
+      CirDllImport(
+        libraryName = libraryName,
+        entryPoint = "get_${cname}_value",
+        returnType = csValueType,
+        name = "Native_Get_${propName}_value",
+        parameters = emptyList(),
+        visibility = CirVisibility.PRIVATE,
+        hasSyncErrorOut = true,
+      )
+    )
+
+    if (isMutable) {
+      members.add(
+        CirDllImport(
+          libraryName = libraryName,
+          entryPoint = "set_$cname",
+          returnType = "void",
+          name = "Native_Set_$propName",
+          parameters = listOf(CirParameter("value", csValueType)),
+          visibility = CirVisibility.PRIVATE,
+          hasSyncErrorOut = true,
+        )
+      )
+
+      members.add(
+        CirDllImport(
+          libraryName = libraryName,
+          entryPoint = "set_${cname}_null",
+          returnType = "void",
+          name = "Native_Set_${propName}_null",
+          parameters = emptyList(),
+          visibility = CirVisibility.PRIVATE,
+          hasSyncErrorOut = true,
+        )
+      )
     }
 
     val getter: String = buildString {
@@ -580,31 +617,35 @@ internal fun translateProperty(
       append("                }")
     } else null
 
-    members.add(CirProperty(
-      name = csPropName,
-      type = "$csValueType?",
-      nativeReturnType = csValueType,
-      nativeName = propName,
-      getter = getter,
-      setter = setter,
-      isStatic = true,
-      hasSyncErrorOut = true,
-    ))
+    members.add(
+      CirProperty(
+        name = csPropName,
+        type = "$csValueType?",
+        nativeReturnType = csValueType,
+        nativeName = propName,
+        getter = getter,
+        setter = setter,
+        isStatic = true,
+        hasSyncErrorOut = true,
+      )
+    )
 
     return members
   }
 
   val csNativeReturnType: String = mapReturnType(propType)
 
-  members.add(CirDllImport(
-    libraryName = libraryName,
-    entryPoint = "get_$cname",
-    returnType = csNativeReturnType,
-    name = "Native_Get_$propName",
-    parameters = emptyList(),
-    visibility = CirVisibility.PRIVATE,
-    hasSyncErrorOut = true,
-  ))
+  members.add(
+    CirDllImport(
+      libraryName = libraryName,
+      entryPoint = "get_$cname",
+      returnType = csNativeReturnType,
+      name = "Native_Get_$propName",
+      parameters = emptyList(),
+      visibility = CirVisibility.PRIVATE,
+      hasSyncErrorOut = true,
+    )
+  )
 
   val csType: String
   val getter: String
@@ -631,15 +672,17 @@ internal fun translateProperty(
     } else null
 
     if (isMutable) {
-      members.add(CirDllImport(
-        libraryName = libraryName,
-        entryPoint = "set_$cname",
-        returnType = "void",
-        name = "Native_Set_$propName",
-        parameters = listOf(CirParameter("value", "string?")),
-        visibility = CirVisibility.PRIVATE,
-        hasSyncErrorOut = true,
-      ))
+      members.add(
+        CirDllImport(
+          libraryName = libraryName,
+          entryPoint = "set_$cname",
+          returnType = "void",
+          name = "Native_Set_$propName",
+          parameters = listOf(CirParameter("value", "string?")),
+          visibility = CirVisibility.PRIVATE,
+          hasSyncErrorOut = true,
+        )
+      )
     }
   } else if (propType == "String") {
     csType = "string"
@@ -662,15 +705,17 @@ internal fun translateProperty(
     } else null
 
     if (isMutable) {
-      members.add(CirDllImport(
-        libraryName = libraryName,
-        entryPoint = "set_$cname",
-        returnType = "void",
-        name = "Native_Set_$propName",
-        parameters = listOf(CirParameter("value", "string")),
-        visibility = CirVisibility.PRIVATE,
-        hasSyncErrorOut = true,
-      ))
+      members.add(
+        CirDllImport(
+          libraryName = libraryName,
+          entryPoint = "set_$cname",
+          returnType = "void",
+          name = "Native_Set_$propName",
+          parameters = listOf(CirParameter("value", "string")),
+          visibility = CirVisibility.PRIVATE,
+          hasSyncErrorOut = true,
+        )
+      )
     }
   } else {
     csType = csNativeReturnType
@@ -693,28 +738,32 @@ internal fun translateProperty(
     } else null
 
     if (isMutable) {
-      members.add(CirDllImport(
-        libraryName = libraryName,
-        entryPoint = "set_$cname",
-        returnType = "void",
-        name = "Native_Set_$propName",
-        parameters = listOf(CirParameter("value", csNativeReturnType)),
-        visibility = CirVisibility.PRIVATE,
-        hasSyncErrorOut = true,
-      ))
+      members.add(
+        CirDllImport(
+          libraryName = libraryName,
+          entryPoint = "set_$cname",
+          returnType = "void",
+          name = "Native_Set_$propName",
+          parameters = listOf(CirParameter("value", csNativeReturnType)),
+          visibility = CirVisibility.PRIVATE,
+          hasSyncErrorOut = true,
+        )
+      )
     }
   }
 
-  members.add(CirProperty(
-    name = csPropName,
-    type = csType,
-    nativeReturnType = csNativeReturnType,
-    nativeName = propName,
-    getter = getter,
-    setter = setter,
-    isStatic = true,
-    hasSyncErrorOut = true,
-  ))
+  members.add(
+    CirProperty(
+      name = csPropName,
+      type = csType,
+      nativeReturnType = csNativeReturnType,
+      nativeName = propName,
+      getter = getter,
+      setter = setter,
+      isStatic = true,
+      hasSyncErrorOut = true,
+    )
+  )
 
   return members
 }

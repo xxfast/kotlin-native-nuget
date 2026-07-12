@@ -169,7 +169,7 @@ internal fun StringBuilder.renderSyncErrorCheckMethod(method: CirMethod, classNa
   when {
     isVoid -> appendLine("            ${nativeFuncName}($nativeCallArgs);")
     isString -> appendLine("            IntPtr nativeResult = ${nativeFuncName}($nativeCallArgs);")
-    else -> appendLine("            ${method.returnType} result = ${nativeFuncName}($nativeCallArgs);")
+    else -> appendLine("            $nativeReturnType result = ${nativeFuncName}($nativeCallArgs);")
   }
 
   appendLine("            if (error != IntPtr.Zero)")
@@ -179,10 +179,12 @@ internal fun StringBuilder.renderSyncErrorCheckMethod(method: CirMethod, classNa
 
   when {
     !isVoid && isString -> appendLine("            return Marshal.PtrToStringUTF8(nativeResult)!;")
+    !isVoid && nativeReturnType != method.returnType ->
+      appendLine("            return (${method.returnType})result;")
+
     !isVoid -> appendLine("            return result;")
   }
 
   appendLine("        }")
   appendLine()
 }
-

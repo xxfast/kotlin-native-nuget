@@ -2,6 +2,7 @@ package io.github.xxfast.kotlin.native.nuget
 
 import io.github.xxfast.kotlin.native.nuget.rir.RirClass
 import io.github.xxfast.kotlin.native.nuget.rir.RirConstructor
+import io.github.xxfast.kotlin.native.nuget.rir.RirEnumType
 import io.github.xxfast.kotlin.native.nuget.rir.RirFile
 import io.github.xxfast.kotlin.native.nuget.rir.RirMethod
 import io.github.xxfast.kotlin.native.nuget.rir.RirObjectHandleType
@@ -71,7 +72,8 @@ fun generateCSharpShims(file: RirFile, nativeLibraryName: String): List<Generate
           when (r) {
             is RirRegistrable.Ctor -> true
             is RirRegistrable.Method -> r.method.returnType is RirObjectHandleType ||
-              r.method.parameters.any { p -> p.type is RirObjectHandleType } || !r.method.isStatic
+                r.method.parameters.any { p -> p.type is RirObjectHandleType } || !r.method.isStatic
+
             is RirRegistrable.PropertyGetter -> !r.property.isStatic
             is RirRegistrable.PropertySetter -> !r.property.isStatic
           }
@@ -80,25 +82,29 @@ fun generateCSharpShims(file: RirFile, nativeLibraryName: String): List<Generate
 
         val exportName: String = registrationExportName(namespace.name, cls.name)
 
-        result.add(GeneratedFile(
-          relativePath = "${cls.name}Registration.cs",
-          content = registrationFileContent(
-            namespaceName = namespace.name,
-            cls = cls,
-            registrables = registrables,
-            exportName = exportName,
-            nativeLibraryName = nativeLibraryName,
-          ),
-        ))
+        result.add(
+          GeneratedFile(
+            relativePath = "${cls.name}Registration.cs",
+            content = registrationFileContent(
+              namespaceName = namespace.name,
+              cls = cls,
+              registrables = registrables,
+              exportName = exportName,
+              nativeLibraryName = nativeLibraryName,
+            ),
+          )
+        )
       }
     }
   }
 
   if (needsRuntime) {
-    result.add(GeneratedFile(
-      relativePath = "NugetRuntimeRegistration.cs",
-      content = nugetRuntimeRegistrationContent(nativeLibraryName),
-    ))
+    result.add(
+      GeneratedFile(
+        relativePath = "NugetRuntimeRegistration.cs",
+        content = nugetRuntimeRegistrationContent(nativeLibraryName),
+      )
+    )
   }
 
   return result
@@ -114,6 +120,7 @@ private fun csAbiType(type: RirTypeRef): String = when (type) {
   is RirVoidType -> "void"
   is RirStringType -> "IntPtr"
   is RirObjectHandleType -> "IntPtr"
+  is RirEnumType -> "int"
   is RirPrimitiveType -> when (type.name) {
     "bool" -> "byte"
     "byte" -> "byte"
@@ -125,7 +132,7 @@ private fun csAbiType(type: RirTypeRef): String = when (type) {
     "char" -> "ushort"
     else -> error(
       "[nuget] Unknown primitive type name '${type.name}' — " +
-        "update the v1 inverse type-mapping table in NugetGenerateShimsTask.kt"
+          "update the v1 inverse type-mapping table in NugetGenerateShimsTask.kt"
     )
   }
 }
@@ -137,6 +144,7 @@ private fun csNativeType(type: RirTypeRef): String = when (type) {
   is RirStringType -> "string"
   // ADR-051: the natural C# type for a handle is the simple type name (e.g. Template).
   is RirObjectHandleType -> type.name
+  is RirEnumType -> type.name
   is RirPrimitiveType -> when (type.name) {
     "bool" -> "bool"
     "byte" -> "byte"
@@ -148,7 +156,7 @@ private fun csNativeType(type: RirTypeRef): String = when (type) {
     "char" -> "char"
     else -> error(
       "[nuget] Unknown primitive type name '${type.name}' — " +
-        "update the v1 inverse type-mapping table in NugetGenerateShimsTask.kt"
+          "update the v1 inverse type-mapping table in NugetGenerateShimsTask.kt"
     )
   }
 }
@@ -173,6 +181,7 @@ private fun paramConversion(p: RirParameter): String = when (p.type) {
   is RirStringType -> "Marshal.PtrToStringUTF8(${thunkParamName(p)})!"
   // ADR-051: unpack the handle back to the managed type via GCHandle.FromIntPtr.
   is RirObjectHandleType -> "(${p.type.name})GCHandle.FromIntPtr(${thunkParamName(p)}).Target!"
+  is RirEnumType -> "(${p.type.name})${thunkParamName(p)}"
   is RirVoidType -> thunkParamName(p)
   is RirPrimitiveType -> when (p.type.name) {
     "bool" -> "${thunkParamName(p)} != 0"
@@ -181,6 +190,21 @@ private fun paramConversion(p: RirParameter): String = when (p.type) {
   }
 }
 
+// Every enum type referenced by a class's registrable members, deduplicated. Unlike the Kotlin
+// side, no lookup table is needed to resolve one: RirEnumType.namespace already IS the C#
+// namespace the enum is declared in.
+private fun referencedEnumTypes(registrables: List<RirRegistrable>): List<RirEnumType> =
+  registrables.flatMap { r ->
+    when (r) {
+      is RirRegistrable.Ctor -> r.ctor.parameters.mapNotNull { it.type as? RirEnumType }
+      is RirRegistrable.Method -> listOfNotNull(r.method.returnType as? RirEnumType) +
+          r.method.parameters.mapNotNull { it.type as? RirEnumType }
+
+      is RirRegistrable.PropertyGetter -> listOfNotNull(r.property.type as? RirEnumType)
+      is RirRegistrable.PropertySetter -> listOfNotNull(r.property.type as? RirEnumType)
+    }
+  }.distinct()
+
 private fun registrationFileContent(
   namespaceName: String,
   cls: RirClass,
@@ -188,6 +212,20 @@ private fun registrationFileContent(
   exportName: String,
   nativeLibraryName: String,
 ): String {
+  // A shim renders inside `namespace $namespaceName`, so an enum declared in any other namespace
+  // (a C# enum in `Sample.Enums` referenced by a class in `Sample.Text`, say) is out of scope for
+  // the `(Mood)mood` casts in the thunk bodies below unless its namespace is imported here.
+  val enumNamespaces: List<String> = referencedEnumTypes(registrables)
+    .map { it.namespace }
+    .distinct()
+    .filter { it != namespaceName }
+    .sorted()
+
+  val usings: String = (
+      listOf("System", "System.Runtime.CompilerServices", "System.Runtime.InteropServices") +
+          enumNamespaces
+      ).joinToString("\n") { "    using $it;" }
+
   // ADR-052: rendered directly off the shared bridgeableRegistrables() ordering — ctorPtr first
   // (if any), then method pointers — matching NugetGenerateBindingsTask's register signature.
   val dllImportParams: String = registrables.joinToString(", ") { r ->
@@ -207,6 +245,7 @@ private fun registrationFileContent(
         val fnTypeParams: String = if (paramTypes.isEmpty()) "IntPtr" else "$paramTypes, IntPtr"
         "(IntPtr)(delegate* unmanaged[Cdecl]<$fnTypeParams>)(&Ctor_Thunk)"
       }
+
       is RirRegistrable.Method -> {
         val paramTypes: String = r.method.parameters.joinToString(", ") { p -> csAbiType(p.type) }
         val retType: String = csAbiType(r.method.returnType)
@@ -220,11 +259,13 @@ private fun registrationFileContent(
         val fnTypeParams: String = if (allParamTypes.isEmpty()) retType else "$allParamTypes, $retType"
         "(IntPtr)(delegate* unmanaged[Cdecl]<$fnTypeParams>)(&${r.method.name}_Thunk)"
       }
+
       is RirRegistrable.PropertyGetter -> {
         val retType: String = csAbiType(r.property.type)
         val receiverType: String = if (r.property.isStatic) "" else "IntPtr, "
         "(IntPtr)(delegate* unmanaged[Cdecl]<$receiverType$retType>)(&${r.property.name}_Get_Thunk)"
       }
+
       is RirRegistrable.PropertySetter -> {
         val valueType: String = csAbiType(r.property.type)
         val receiverType: String = if (r.property.isStatic) "" else "IntPtr, "
@@ -251,9 +292,7 @@ private fun registrationFileContent(
     |
     |namespace $namespaceName
     |{
-    |    using System;
-    |    using System.Runtime.CompilerServices;
-    |    using System.Runtime.InteropServices;
+    |$usings
     |
     |    internal static class ${cls.name}Registration
     |    {
@@ -284,7 +323,7 @@ private fun buildThunkMethod(cls: RirClass, method: RirMethod): String {
   // the type. Static methods are unaffected.
   val selfParam: String? = if (!method.isStatic) "IntPtr selfHandle" else null
   val paramList: String = (listOfNotNull(selfParam) +
-    method.parameters.map { p -> "${csAbiType(p.type)} ${thunkParamName(p)}" }).joinToString(", ")
+      method.parameters.map { p -> "${csAbiType(p.type)} ${thunkParamName(p)}" }).joinToString(", ")
   val retAbiType: String = csAbiType(method.returnType)
   val callArgs: String = method.parameters.joinToString(", ") { p -> paramConversion(p) }
   val receiverLine: String? = if (!method.isStatic) {
@@ -310,15 +349,22 @@ private fun buildThunkMethod(cls: RirClass, method: RirMethod): String {
       "return result is null ? IntPtr.Zero : GCHandle.ToIntPtr(GCHandle.Alloc(result));",
     )
 
+    is RirEnumType -> listOf(
+      "${csNativeType(method.returnType)} result = $callExpr;",
+      "return (int)result;",
+    )
+
     is RirPrimitiveType -> when (method.returnType.name) {
       "bool" -> listOf(
         "bool result = $callExpr;",
         "return result ? (byte)1 : (byte)0;",
       )
+
       "char" -> listOf(
         "char result = $callExpr;",
         "return (ushort)result;",
       )
+
       else -> listOf(
         "${csNativeType(method.returnType)} result = $callExpr;",
         "return result;",
@@ -348,9 +394,9 @@ private fun buildPropertyGetterThunkMethod(cls: RirClass, property: RirProperty)
   val thunkName = "${property.name}_Get_Thunk"
   val retAbiType: String = csAbiType(property.type)
   val receiverLine: String? = if (property.isStatic) null
-    else "${cls.name} receiver = (${cls.name})GCHandle.FromIntPtr(selfHandle).Target!;"
+  else "${cls.name} receiver = (${cls.name})GCHandle.FromIntPtr(selfHandle).Target!;"
   val getExpr: String = if (property.isStatic) "${cls.name}.${property.name}"
-    else "receiver.${property.name}"
+  else "receiver.${property.name}"
 
   val bodyLines: List<String> = when (property.type) {
     is RirVoidType -> error("[nuget] a property cannot have void type")
@@ -367,15 +413,22 @@ private fun buildPropertyGetterThunkMethod(cls: RirClass, property: RirProperty)
       "return result is null ? IntPtr.Zero : GCHandle.ToIntPtr(GCHandle.Alloc(result));",
     )
 
+    is RirEnumType -> listOf(
+      "${csNativeType(property.type)} result = $getExpr;",
+      "return (int)result;",
+    )
+
     is RirPrimitiveType -> when (property.type.name) {
       "bool" -> listOf(
         "bool result = $getExpr;",
         "return result ? (byte)1 : (byte)0;",
       )
+
       "char" -> listOf(
         "char result = $getExpr;",
         "return (ushort)result;",
       )
+
       else -> listOf(
         "${csNativeType(property.type)} result = $getExpr;",
         "return result;",
@@ -407,9 +460,9 @@ private fun buildPropertySetterThunkMethod(cls: RirClass, property: RirProperty)
   val valueParamName: String = thunkParamName(valueParam)
   val valueAbiType: String = csAbiType(property.type)
   val receiverLine: String? = if (property.isStatic) null
-    else "${cls.name} receiver = (${cls.name})GCHandle.FromIntPtr(selfHandle).Target!;"
+  else "${cls.name} receiver = (${cls.name})GCHandle.FromIntPtr(selfHandle).Target!;"
   val assignTarget: String = if (property.isStatic) "${cls.name}.${property.name}"
-    else "receiver.${property.name}"
+  else "receiver.${property.name}"
   val assignLine = "$assignTarget = ${paramConversion(valueParam)};"
   val body: String = (listOfNotNull(receiverLine) + assignLine).joinToString("\n") { "            $it" }
   val receiverParam: String = if (property.isStatic) "" else "IntPtr selfHandle, "
@@ -484,9 +537,14 @@ private fun nugetRuntimeRegistrationContent(nativeLibraryName: String): String =
 """.trimMargin().trim()
 
 abstract class NugetGenerateShimsTask : DefaultTask() {
-  @get:InputFile abstract val reverseIrFile: RegularFileProperty
-  @get:Input abstract val nativeLibraryName: Property<String>
-  @get:OutputDirectory abstract val csharpOutputDir: DirectoryProperty
+  @get:InputFile
+  abstract val reverseIrFile: RegularFileProperty
+
+  @get:Input
+  abstract val nativeLibraryName: Property<String>
+
+  @get:OutputDirectory
+  abstract val csharpOutputDir: DirectoryProperty
 
   @TaskAction
   fun generate() {

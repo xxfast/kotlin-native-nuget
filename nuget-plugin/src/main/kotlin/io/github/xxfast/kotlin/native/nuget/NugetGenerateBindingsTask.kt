@@ -2,6 +2,8 @@ package io.github.xxfast.kotlin.native.nuget
 
 import io.github.xxfast.kotlin.native.nuget.rir.RirClass
 import io.github.xxfast.kotlin.native.nuget.rir.RirConstructor
+import io.github.xxfast.kotlin.native.nuget.rir.RirEnum
+import io.github.xxfast.kotlin.native.nuget.rir.RirEnumType
 import io.github.xxfast.kotlin.native.nuget.rir.RirFile
 import io.github.xxfast.kotlin.native.nuget.rir.RirMethod
 import io.github.xxfast.kotlin.native.nuget.rir.RirObjectHandleType
@@ -36,6 +38,39 @@ data class GeneratedFile(
   val content: String,
 )
 
+// The Kotlin package a RIR namespace maps to. Single source of truth for the resolution order
+// (namespace alias, then per-package override, then the sanitised packageId) so the enum-package
+// pre-pass below and the per-namespace loop in generateKotlinStubs can never disagree about where
+// a generated type lives. A disagreement would emit an import pointing at a package that has no
+// such class.
+private fun kotlinPackage(
+  packageId: String,
+  namespaceName: String,
+  packageNameOverrides: Map<String, String>,
+  namespaceAliases: Map<String, Map<String, String>>,
+): String = namespaceAliases[packageId]?.get(namespaceName)
+  ?: packageNameOverrides[packageId]
+  ?: packageId.lowercase().replace('-', '_')
+
+// Every enum declared anywhere in the RirFile, mapped to the Kotlin package its generated
+// `enum class` is emitted into. Derived once up front for the whole file (the same anti-drift
+// pattern as boundHandleTypes) because an enum is routinely referenced from a namespace other than
+// the one that declares it: the referencing class's stub needs `import <pkg>.<EnumName>`, which is
+// only knowable after the whole file has been seen.
+private fun enumPackages(
+  file: RirFile,
+  packageNameOverrides: Map<String, String>,
+  namespaceAliases: Map<String, Map<String, String>>,
+): Map<RirTypeKey, String> = file.assemblies.flatMap { assembly ->
+  assembly.namespaces.flatMap { namespace ->
+    namespace.types.filterIsInstance<RirEnum>().map { enum ->
+      RirTypeKey(namespace.name, enum.name) to kotlinPackage(
+        assembly.packageId, namespace.name, packageNameOverrides, namespaceAliases,
+      )
+    }
+  }
+}.toMap()
+
 fun generateKotlinStubs(
   file: RirFile,
   packageNameOverrides: Map<String, String> = emptyMap(),
@@ -44,20 +79,29 @@ fun generateKotlinStubs(
   val result: MutableList<GeneratedFile> = mutableListOf()
   var needsInterop = false
   var needsRuntime = false
+  var needsEnums = false
 
   // ADR-051: derive once for the whole file — both generators must use the same helper
   // (anti-drift contract, ADR-049 Alternative 10 extended by ADR-051).
   val boundTypes: Set<RirTypeKey> = boundHandleTypes(file)
+  val enumPkgs: Map<RirTypeKey, String> =
+    enumPackages(file, packageNameOverrides, namespaceAliases)
 
   file.assemblies.forEach { assembly ->
-    val aliases: Map<String, String> = namespaceAliases[assembly.packageId] ?: emptyMap()
-    val packageOverride: String? = packageNameOverrides[assembly.packageId]
-
     assembly.namespaces.forEach { namespace ->
-      val kotlinPkg: String = aliases[namespace.name]
-        ?: packageOverride
-        ?: assembly.packageId.lowercase().replace('-', '_')
+      val kotlinPkg: String = kotlinPackage(
+        assembly.packageId, namespace.name, packageNameOverrides, namespaceAliases,
+      )
       val pkgPath: String = kotlinPkg.replace('.', '/')
+
+      namespace.types.filterIsInstance<RirEnum>().forEach { enum ->
+        result.add(
+          GeneratedFile(
+            relativePath = "nativeMain/$pkgPath/${enum.name}.kt",
+            content = enumFileContent(kotlinPkg, enum, assembly.packageId),
+          )
+        )
+      }
 
       namespace.types.filterIsInstance<RirClass>().forEach { cls ->
         // ADR-052/Phase 9 line 151 "shared bridgeable ordering": ONE ordered list — constructor
@@ -84,9 +128,9 @@ fun generateKotlinStubs(
         val allMethods: List<RirMethod> = staticMethods + instanceMethods
         val hasString: Boolean = allMethods.any { method ->
           method.returnType is RirStringType ||
-            method.parameters.any { p -> p.type is RirStringType }
+              method.parameters.any { p -> p.type is RirStringType }
         } || ctors.any { ctor -> ctor.parameters.any { p -> p.type is RirStringType } } ||
-          propertyGetters.any { it.type is RirStringType }
+            propertyGetters.any { it.type is RirStringType }
         if (hasString) needsInterop = true
 
         // ADR-051/052/Phase 9 line 151: NugetRuntime.kt is needed whenever any bridgeable
@@ -97,62 +141,154 @@ fun generateKotlinStubs(
         // regardless of how many classes trigger it.
         val hasHandle: Boolean = allMethods.any { method ->
           method.returnType is RirObjectHandleType ||
-            method.parameters.any { p -> p.type is RirObjectHandleType }
+              method.parameters.any { p -> p.type is RirObjectHandleType }
         } || ctors.isNotEmpty() || instanceMethods.isNotEmpty() || instancePropertyGetters.isNotEmpty() ||
-          instancePropertyGetters.any { it.type is RirObjectHandleType }
+            instancePropertyGetters.any { it.type is RirObjectHandleType }
         if (hasHandle) needsRuntime = true
+
+        // NugetEnums.kt is needed whenever a bridgeable member RECEIVES an enum from C# (a method
+        // return or a property value): that is the only direction where the ordinal can be out of
+        // range, since a C# enum is not a closed set ((CatMood)99 is a legal C# value). Enum
+        // arguments travel the other way as Kotlin's own `.ordinal` and are always in range.
+        val hasEnumReturn: Boolean = allMethods.any { it.returnType is RirEnumType } ||
+            propertyGetters.any { it.type is RirEnumType }
+        if (hasEnumReturn) needsEnums = true
 
         val exportName: String = registrationExportName(namespace.name, cls.name)
 
-        result.add(GeneratedFile(
-          relativePath = "nativeMain/$pkgPath/${cls.name}Bindings.kt",
-          content = bindingsFileContent(
-            kotlinPkg, cls, registrables, exportName, assembly.packageId,
-          ),
-        ))
-        result.add(GeneratedFile(
-          relativePath = "nativeMain/$pkgPath/${cls.name}.kt",
-          content = stubFileContent(
-            kotlinPkg, cls, staticMethods, instanceMethods, ctors,
-            instancePropertyGetters, staticPropertyGetters, propertySetterNames, assembly.packageId,
-          ),
-        ))
+        result.add(
+          GeneratedFile(
+            relativePath = "nativeMain/$pkgPath/${cls.name}Bindings.kt",
+            content = bindingsFileContent(
+              kotlinPkg, cls, registrables, exportName, assembly.packageId,
+            ),
+          )
+        )
+        result.add(
+          GeneratedFile(
+            relativePath = "nativeMain/$pkgPath/${cls.name}.kt",
+            content = stubFileContent(
+              kotlinPkg, cls, staticMethods, instanceMethods, ctors,
+              instancePropertyGetters, staticPropertyGetters, propertySetterNames, assembly.packageId,
+              enumPkgs,
+            ),
+          )
+        )
       }
     }
   }
 
   if (needsInterop) {
-    result.add(GeneratedFile(
-      relativePath = "nativeMain/$INTERNAL_DIR/NugetInterop.kt",
-      content = nugetInteropExpect(),
-    ))
-    result.add(GeneratedFile(
-      relativePath = "mingwMain/$INTERNAL_DIR/NugetInterop.kt",
-      content = nugetInteropMingw(),
-    ))
-    result.add(GeneratedFile(
-      relativePath = "posixMain/$INTERNAL_DIR/NugetInterop.kt",
-      content = nugetInteropPosix(),
-    ))
+    result.add(
+      GeneratedFile(
+        relativePath = "nativeMain/$INTERNAL_DIR/NugetInterop.kt",
+        content = nugetInteropExpect(),
+      )
+    )
+    result.add(
+      GeneratedFile(
+        relativePath = "mingwMain/$INTERNAL_DIR/NugetInterop.kt",
+        content = nugetInteropMingw(),
+      )
+    )
+    result.add(
+      GeneratedFile(
+        relativePath = "posixMain/$INTERNAL_DIR/NugetInterop.kt",
+        content = nugetInteropPosix(),
+      )
+    )
   }
 
   if (needsRuntime) {
-    result.add(GeneratedFile(
-      relativePath = "nativeMain/$INTERNAL_DIR/NugetRuntime.kt",
-      content = nugetRuntimeContent(),
-    ))
+    result.add(
+      GeneratedFile(
+        relativePath = "nativeMain/$INTERNAL_DIR/NugetRuntime.kt",
+        content = nugetRuntimeContent(),
+      )
+    )
+  }
+
+  if (needsEnums) {
+    result.add(
+      GeneratedFile(
+        relativePath = "nativeMain/$INTERNAL_DIR/NugetEnums.kt",
+        content = nugetEnumsContent(),
+      )
+    )
   }
 
   return result
 }
 
+// Every enum type referenced by a class's bridgeable members, in declaration order, deduplicated.
+// The referencing class's stub must import each one that lives in a different Kotlin package than
+// the stub itself, so this covers every position an enum can appear in: method returns, method
+// parameters, constructor parameters and property types.
+private fun referencedEnumTypes(
+  methods: List<RirMethod>,
+  ctors: List<RirConstructor>,
+  properties: List<RirProperty>,
+): List<RirEnumType> {
+  val fromMethods: List<RirEnumType> = methods.flatMap { method ->
+    listOfNotNull(method.returnType as? RirEnumType) +
+        method.parameters.mapNotNull { it.type as? RirEnumType }
+  }
+  val fromCtors: List<RirEnumType> =
+    ctors.flatMap { ctor -> ctor.parameters.mapNotNull { it.type as? RirEnumType } }
+  val fromProperties: List<RirEnumType> = properties.mapNotNull { it.type as? RirEnumType }
+
+  return (fromMethods + fromCtors + fromProperties).distinct()
+}
+
+// The `import <pkg>.<EnumName>` lines a stub file needs for the enums it references. An enum
+// declared in the same Kotlin package as the referencing stub needs no import; one declared in
+// another package (a C# enum in `Sample.Enums` consumed by a class in `Sample.Text`, say) does, or
+// the generated stub does not compile.
+private fun enumImports(
+  enumTypes: List<RirEnumType>,
+  enumPkgs: Map<RirTypeKey, String>,
+  kotlinPkg: String,
+): List<String> = enumTypes
+  .map { type ->
+    val pkg: String = requireNotNull(enumPkgs[RirTypeKey(type.namespace, type.name)]) {
+      "[nuget] Enum ${type.namespace}.${type.name} is referenced by a bound member but is not " +
+          "declared anywhere in the reverse IR. The metadata reader must emit every referenced " +
+          "enum as a declaration, or the generated stub cannot import it."
+    }
+    pkg to type.name
+  }
+  .filter { (pkg, _) -> pkg != kotlinPkg }
+  .map { (pkg, name) -> "import $pkg.$name" }
+  .distinct()
+  .sorted()
+
 // PascalCase method name → camelCase: lowercase the first character only.
 // e.g. SerializeObject → serializeObject
 private fun String.toMethodCamelCase(): String = replaceFirstChar { it.lowercaseChar() }
 
+private fun String.toEnumScreamingSnake(): String = buildString {
+  this@toEnumScreamingSnake.forEachIndexed { index, char ->
+    if (index > 0 && char.isUpperCase()) append('_')
+    append(char.uppercaseChar())
+  }
+}
+
+private fun enumFileContent(kotlinPkg: String, enum: RirEnum, packageId: String): String {
+  val entries: String = enum.entries.joinToString(",\n") { it.name.toEnumScreamingSnake() }
+  return """
+    |package $kotlinPkg
+    |
+    |// Generated: ordinal-backed Kotlin enum for $packageId.${enum.name}
+    |enum class ${enum.name} {
+    |${entries.indented("  ")}
+    |}
+  """.trimMargin().trim()
+}
+
 private fun kotlinType(type: RirTypeRef): String = when (type) {
   is RirVoidType -> "Unit"
   is RirStringType -> "String"
+  is RirEnumType -> type.name
   // ADR-051: the Kotlin type name for a handle is simply the C# simple type name (e.g. Template).
   is RirObjectHandleType -> type.name
   is RirPrimitiveType -> when (type.name) {
@@ -166,7 +302,7 @@ private fun kotlinType(type: RirTypeRef): String = when (type) {
     "char" -> "Char"
     else -> error(
       "[nuget] Unknown primitive type name '${type.name}' — " +
-        "update the v1 type-mapping table in NugetGenerateBindingsTask.kt"
+          "update the v1 type-mapping table in NugetGenerateBindingsTask.kt"
     )
   }
 }
@@ -174,6 +310,7 @@ private fun kotlinType(type: RirTypeRef): String = when (type) {
 private fun cfnType(type: RirTypeRef): String = when (type) {
   is RirVoidType -> "Unit"
   is RirStringType -> "COpaquePointer?"
+  is RirEnumType -> "Int"
   // ADR-051: handles cross the ABI as IntPtr ↔ COpaquePointer? (same slot as strings).
   is RirObjectHandleType -> "COpaquePointer?"
   is RirPrimitiveType -> when (type.name) {
@@ -187,7 +324,7 @@ private fun cfnType(type: RirTypeRef): String = when (type) {
     "char" -> "UShort"
     else -> error(
       "[nuget] Unknown primitive type name '${type.name}' — " +
-        "update the v1 type-mapping table in NugetGenerateBindingsTask.kt"
+          "update the v1 type-mapping table in NugetGenerateBindingsTask.kt"
     )
   }
 }
@@ -215,7 +352,8 @@ private fun bindingsFileContent(
     when (r) {
       is RirRegistrable.Ctor -> r.ctor.parameters.any { it.type is RirStringType }
       is RirRegistrable.Method -> r.method.returnType is RirStringType ||
-        r.method.parameters.any { it.type is RirStringType }
+          r.method.parameters.any { it.type is RirStringType }
+
       is RirRegistrable.PropertyGetter -> r.property.type is RirStringType
       is RirRegistrable.PropertySetter -> r.property.type is RirStringType
     }
@@ -242,13 +380,14 @@ private fun bindingsFileContent(
       is RirRegistrable.Ctor -> {
         val paramCfnTypes: String = r.ctor.parameters.joinToString(", ") { cfnType(it.type) }
         "@Suppress(\"NOTHING_TO_INLINE\")\n" +
-          "internal var ctorFn: CPointer<CFunction<($paramCfnTypes) -> COpaquePointer?>>? = null"
+            "internal var ctorFn: CPointer<CFunction<($paramCfnTypes) -> COpaquePointer?>>? = null"
       }
+
       is RirRegistrable.Method -> {
         val paramCfnTypes: String = methodParamCfnTypes(r.method).joinToString(", ")
         val retCfnType: String = cfnType(r.method.returnType)
         "@Suppress(\"NOTHING_TO_INLINE\")\n" +
-          "internal var ${r.method.name.toMethodCamelCase()}Fn: " +
+            "internal var ${r.method.name.toMethodCamelCase()}Fn: " +
             "CPointer<CFunction<($paramCfnTypes) -> $retCfnType>>? = null"
       }
       // Phase 9 (ROADMAP line 151): a getter thunk takes the receiver only and returns the
@@ -257,14 +396,15 @@ private fun bindingsFileContent(
         val retCfnType: String = cfnType(r.property.type)
         val receiverCfnType: String = if (r.property.isStatic) "" else "COpaquePointer?"
         "@Suppress(\"NOTHING_TO_INLINE\")\n" +
-          "internal var ${r.property.name.toMethodCamelCase()}GetterFn: " +
+            "internal var ${r.property.name.toMethodCamelCase()}GetterFn: " +
             "CPointer<CFunction<($receiverCfnType) -> $retCfnType>>? = null"
       }
+
       is RirRegistrable.PropertySetter -> {
         val valueCfnType: String = cfnType(r.property.type)
         val receiverCfnType: String = if (r.property.isStatic) "" else "COpaquePointer?, "
         "@Suppress(\"NOTHING_TO_INLINE\")\n" +
-          "internal var ${r.property.name.toMethodCamelCase()}SetterFn: " +
+            "internal var ${r.property.name.toMethodCamelCase()}SetterFn: " +
             "CPointer<CFunction<($receiverCfnType$valueCfnType) -> Unit>>? = null"
       }
     }
@@ -286,10 +426,12 @@ private fun bindingsFileContent(
         val name: String = r.method.name.toMethodCamelCase()
         "${name}Fn = ${name}Ptr.reinterpret()"
       }
+
       is RirRegistrable.PropertyGetter -> {
         val name: String = r.property.name.toMethodCamelCase()
         "${name}GetterFn = ${name}GetterPtr.reinterpret()"
       }
+
       is RirRegistrable.PropertySetter -> {
         val name: String = r.property.name.toMethodCamelCase()
         "${name}SetterFn = ${name}SetterPtr.reinterpret()"
@@ -335,10 +477,11 @@ private fun stubFileContent(
   staticPropertyGetters: List<RirProperty>,
   propertySetterNames: Set<String>,
   packageId: String,
+  enumPkgs: Map<RirTypeKey, String>,
 ): String {
   val hasHandle: Boolean = staticMethods.any { method ->
     method.returnType is RirObjectHandleType ||
-      method.parameters.any { p -> p.type is RirObjectHandleType }
+        method.parameters.any { p -> p.type is RirObjectHandleType }
   }
 
   // ADR-051: a non-static class that appears as a handle type in its own bridgeable methods
@@ -349,20 +492,20 @@ private fun stubFileContent(
   // — both require the receiver `handle` field regardless of whether a handle TYPE appears
   // anywhere. Classes with none of these keep the ADR-048 `object` shape.
   val isClassWrapper: Boolean = !cls.isStatic &&
-    (hasHandle || ctors.isNotEmpty() || instanceMethods.isNotEmpty() || instancePropertyGetters.isNotEmpty())
+      (hasHandle || ctors.isNotEmpty() || instanceMethods.isNotEmpty() || instancePropertyGetters.isNotEmpty())
   if (isClassWrapper) {
     return classWrapperContent(
       kotlinPkg, cls, staticMethods, instanceMethods, ctors,
-      instancePropertyGetters, staticPropertyGetters, propertySetterNames, packageId,
+      instancePropertyGetters, staticPropertyGetters, propertySetterNames, packageId, enumPkgs,
     )
   }
 
   // object shape (ADR-048, statics only — a non-wrapper class never has ctors/instance
   // methods/properties, per isClassWrapper above).
   val hasStringReturn: Boolean = staticMethods.any { it.returnType is RirStringType } ||
-    staticPropertyGetters.any { it.type is RirStringType }
+      staticPropertyGetters.any { it.type is RirStringType }
   val hasStringParam: Boolean = staticMethods.any { m -> m.parameters.any { p -> p.type is RirStringType } } ||
-    staticPropertyGetters.any { it.type is RirStringType && it.name in propertySetterNames }
+      staticPropertyGetters.any { it.type is RirStringType && it.name in propertySetterNames }
 
   // Always required: every stub method body calls `fn.invoke(...)` on a
   // `CPointer<CFunction<...>>?` — the `invoke` operator extension is declared in kotlinx.cinterop
@@ -381,6 +524,14 @@ private fun stubFileContent(
     imports.add("import kotlinx.cinterop.memScoped")
     imports.add("import kotlinx.cinterop.ptr")
   }
+  val hasEnumReturn: Boolean = staticMethods.any { it.returnType is RirEnumType } ||
+      staticPropertyGetters.any { it.type is RirEnumType }
+  if (hasEnumReturn) imports.add("import $INTERNAL_PKG.nugetEnumEntry")
+  imports.addAll(
+    enumImports(
+      referencedEnumTypes(staticMethods, ctors, staticPropertyGetters), enumPkgs, kotlinPkg,
+    )
+  )
 
   val methods: String = staticMethods.joinToString("\n\n") { buildStubMethod(cls, it, packageId) }
   val properties: String = staticPropertyGetters.joinToString("\n\n") { property ->
@@ -435,15 +586,16 @@ private fun classWrapperContent(
   staticPropertyGetters: List<RirProperty>,
   propertySetterNames: Set<String>,
   packageId: String,
+  enumPkgs: Map<RirTypeKey, String>,
 ): String {
   val allMethods: List<RirMethod> = staticMethods + instanceMethods
   val hasStringReturn: Boolean = allMethods.any { it.returnType is RirStringType } ||
-    instancePropertyGetters.any { it.type is RirStringType } ||
-    staticPropertyGetters.any { it.type is RirStringType }
+      instancePropertyGetters.any { it.type is RirStringType } ||
+      staticPropertyGetters.any { it.type is RirStringType }
   val hasStringParam: Boolean = allMethods.any { m -> m.parameters.any { p -> p.type is RirStringType } } ||
-    ctors.any { ctor -> ctor.parameters.any { p -> p.type is RirStringType } } ||
-    instancePropertyGetters.any { it.type is RirStringType && it.name in propertySetterNames } ||
-    staticPropertyGetters.any { it.type is RirStringType && it.name in propertySetterNames }
+      ctors.any { ctor -> ctor.parameters.any { p -> p.type is RirStringType } } ||
+      instancePropertyGetters.any { it.type is RirStringType && it.name in propertySetterNames } ||
+      staticPropertyGetters.any { it.type is RirStringType && it.name in propertySetterNames }
 
   val imports: MutableList<String> = mutableListOf(
     "import $INTERNAL_PKG.NugetObjectHandle",
@@ -463,6 +615,15 @@ private fun classWrapperContent(
     imports.add("import kotlinx.cinterop.memScoped")
     imports.add("import kotlinx.cinterop.ptr")
   }
+  val allPropertyGetters: List<RirProperty> = instancePropertyGetters + staticPropertyGetters
+  val hasEnumReturn: Boolean = allMethods.any { it.returnType is RirEnumType } ||
+      allPropertyGetters.any { it.type is RirEnumType }
+  if (hasEnumReturn) imports.add("import $INTERNAL_PKG.nugetEnumEntry")
+  imports.addAll(
+    enumImports(
+      referencedEnumTypes(allMethods, ctors, allPropertyGetters), enumPkgs, kotlinPkg,
+    )
+  )
 
   val instanceMethodsText: String =
     instanceMethods.joinToString("\n\n") { buildStubMethod(cls, it, packageId) }
@@ -535,6 +696,7 @@ private fun argConversion(type: RirTypeRef, name: String): String = when {
   // ADR-051: unwrap the opaque pointer via handle.require() which also guards against
   // use-after-close (throws IllegalStateException if the handle was already freed).
   type is RirObjectHandleType -> "$name.handle.require(\"${type.name}\")"
+  type is RirEnumType -> "$name.ordinal"
   type is RirPrimitiveType && type.name == "char" -> "$name.code.toUShort()"
   else -> name
 }
@@ -556,8 +718,8 @@ private fun String.indented(indent: String): String =
 // lines drifting out of alignment with their opening line.
 private fun bindingsNotRegisteredMessage(typeName: String, packageId: String): String =
   "\"$typeName bindings are not registered. \" +\n" +
-    "      \"Ensure the generated C# shims for $packageId are referenced \" +\n" +
-    "      \"in the consuming application before making Kotlin → C# bridge calls.\""
+      "      \"Ensure the generated C# shims for $packageId are referenced \" +\n" +
+      "      \"in the consuming application before making Kotlin → C# bridge calls.\""
 
 // ADR-052: the public secondary `constructor(...)` on the wrapper class, delegating through the
 // file-private `construct(...)` helper — the "can't run code before this(...)" restriction is
@@ -630,7 +792,7 @@ private fun buildStubMethod(cls: RirClass, method: RirMethod, packageId: String)
     if (hasStringParam) "memScoped { fn.invoke($invokeArgs) }" else "fn.invoke($invokeArgs)"
 
   val nullMsg: String = "${cls.name}.${method.name} returned null" +
-    " — expected a non-null string pointer"
+      ", expected a non-null string pointer"
 
   // Each branch below renders a self-contained block (`fun` at column 0, its body at column 2)
   // so the caller can shift the whole block to its actual embedding depth with a single
@@ -667,6 +829,17 @@ private fun buildStubMethod(cls: RirClass, method: RirMethod, packageId: String)
       |  }
       |  val ptr: COpaquePointer? = $invokeCall
       |  return ptr?.let { ${retType.name}(it) }
+      |}
+    """.trimMargin()
+
+    // The ordinal comes back from C#, where an enum is not a closed set, so it is bounds-checked
+    // through the shared nugetEnumEntry helper rather than indexed straight into `entries`.
+    is RirEnumType -> """
+      |fun $name($params)$retSuffix {
+      |  val fn = requireNotNull($fnVar) {
+      |    $failMsg
+      |  }
+      |  return nugetEnumEntry(${retType.name}.entries, $invokeCall, "${retType.name}")
       |}
     """.trimMargin()
 
@@ -739,6 +912,16 @@ private fun buildStubProperty(
       |  }
       |  val ptr: COpaquePointer? = $getterInvoke
       |  return ptr?.let { ${type.name}(it) }
+      |}
+    """.trimMargin()
+
+    // Bounds-checked through the shared nugetEnumEntry helper: see buildStubMethod's enum branch.
+    is RirEnumType -> """
+      |get() {
+      |  val fn = requireNotNull($getterFnVar) {
+      |    $failMsg
+      |  }
+      |  return nugetEnumEntry(${type.name}.entries, $getterInvoke, "${type.name}")
       |}
     """.trimMargin()
 
@@ -874,11 +1057,39 @@ private fun nugetRuntimeContent(): String = """
   |}
 """.trimMargin().trim()
 
+// NugetEnums.kt: emitted once into the internal package whenever any bridgeable member hands an
+// enum back from C#. Holds the single shared bounds-checked ordinal lookup every generated stub
+// calls, rather than each stub inlining its own copy of the same check.
+private fun nugetEnumsContent(): String = """
+  |package $INTERNAL_PKG
+  |
+  |// Generated: fail-fast ordinal lookup, shared by every enum-returning bridge call.
+  |//
+  |// A C# enum is not a closed set: `(CatMood)99` is a legal C# value and any bound API can return
+  |// one. Indexing `entries` with such an ordinal directly would throw a bare
+  |// IndexOutOfBoundsException naming neither the enum nor the offending value, so every generated
+  |// stub routes the ordinal it receives through this check first.
+  |internal fun <T : Enum<T>> nugetEnumEntry(entries: List<T>, ordinal: Int, name: String): T {
+  |  check(ordinal in entries.indices) {
+  |    "${'$'}name has no entry for ordinal ${'$'}ordinal returned from C#. " +
+  |      "Expected 0..${'$'}{entries.size - 1}; the C# enum value has no Kotlin counterpart."
+  |  }
+  |  return entries[ordinal]
+  |}
+""".trimMargin().trim()
+
 abstract class NugetGenerateBindingsTask : DefaultTask() {
-  @get:InputFile abstract val reverseIrFile: RegularFileProperty
-  @get:Input abstract val packageNameOverrides: MapProperty<String, String>
-  @get:Input abstract val namespaceAliases: MapProperty<String, Map<String, String>>
-  @get:OutputDirectory abstract val kotlinOutputDir: DirectoryProperty
+  @get:InputFile
+  abstract val reverseIrFile: RegularFileProperty
+
+  @get:Input
+  abstract val packageNameOverrides: MapProperty<String, String>
+
+  @get:Input
+  abstract val namespaceAliases: MapProperty<String, Map<String, String>>
+
+  @get:OutputDirectory
+  abstract val kotlinOutputDir: DirectoryProperty
 
   @TaskAction
   fun generate() {
@@ -897,8 +1108,8 @@ abstract class NugetGenerateBindingsTask : DefaultTask() {
           collisionDiagnostics(cls).forEach { diagnostic ->
             logger.warn(
               "w: [nuget:${assembly.packageId}] Skipping ${diagnostic.typeName}." +
-                "${diagnostic.memberName}(${diagnostic.memberSignature}): ${diagnostic.reason}. " +
-                diagnostic.hint
+                  "${diagnostic.memberName}(${diagnostic.memberSignature}): ${diagnostic.reason}. " +
+                  diagnostic.hint
             )
           }
         }

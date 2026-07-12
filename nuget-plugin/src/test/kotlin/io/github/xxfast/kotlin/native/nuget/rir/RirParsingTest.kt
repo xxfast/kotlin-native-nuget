@@ -337,6 +337,68 @@ class RirParsingTest {
   }
 
   // ------------------------------------------------------------------
+  // Phase 9: enum IR. The metadata reader has already rejected flags, aliases, non-int backing
+  // types, and non-contiguous values before emitting this simple ordinal-backed representation.
+  // ------------------------------------------------------------------
+
+  @Test
+  fun `reverse-ir json with enum and enum type reference deserializes their ordinal contract`() {
+    val json = """
+      {
+        "assemblies": [
+          {
+            "packageId": "Sample.Enums",
+            "assemblyName": "Sample.Enums",
+            "namespaces": [
+              {
+                "name": "Sample.Enums",
+                "types": [
+                  {
+                    "kind": "enum",
+                    "name": "Mood",
+                    "entries": [
+                      { "name": "Happy", "ordinal": 0 },
+                      { "name": "Sleepy", "ordinal": 1 },
+                      { "name": "Grumpy", "ordinal": 2 }
+                    ]
+                  },
+                  {
+                    "kind": "class",
+                    "name": "MoodService",
+                    "methods": [
+                      {
+                        "name": "Next",
+                        "isStatic": true,
+                        "returnType": { "kind": "enum", "namespace": "Sample.Enums", "name": "Mood" },
+                        "parameters": [
+                          { "name": "mood", "type": { "kind": "enum", "namespace": "Sample.Enums", "name": "Mood" } }
+                        ]
+                      }
+                    ],
+                    "properties": []
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    """.trimIndent()
+
+    val file: RirFile = parseReverseIr(json)
+    val types: List<RirType> = file.assemblies[0].namespaces[0].types
+    val enum: RirEnum = types[0] as RirEnum
+    val service: RirClass = types[1] as RirClass
+    val returnType: RirTypeRef = service.methods[0].returnType
+    val parameterType: RirTypeRef = service.methods[0].parameters[0].type
+
+    assertEquals(listOf("Happy", "Sleepy", "Grumpy"), enum.entries.map { it.name })
+    assertEquals(listOf(0, 1, 2), enum.entries.map { it.ordinal })
+    assertIs<RirEnumType>(returnType)
+    assertIs<RirEnumType>(parameterType)
+  }
+
+  // ------------------------------------------------------------------
   // ADR-052: RirClass.constructors (RirConstructor)
   // ------------------------------------------------------------------
 

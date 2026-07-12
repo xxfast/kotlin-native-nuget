@@ -3,6 +3,9 @@ package io.github.xxfast.kotlin.native.nuget
 import io.github.xxfast.kotlin.native.nuget.rir.RirAssembly
 import io.github.xxfast.kotlin.native.nuget.rir.RirClass
 import io.github.xxfast.kotlin.native.nuget.rir.RirConstructor
+import io.github.xxfast.kotlin.native.nuget.rir.RirEnum
+import io.github.xxfast.kotlin.native.nuget.rir.RirEnumEntry
+import io.github.xxfast.kotlin.native.nuget.rir.RirEnumType
 import io.github.xxfast.kotlin.native.nuget.rir.RirFile
 import io.github.xxfast.kotlin.native.nuget.rir.RirMethod
 import io.github.xxfast.kotlin.native.nuget.rir.RirNamespace
@@ -1078,5 +1081,248 @@ class NugetGenerateBindingsTaskTest {
 
     val companionBody: String = stub.content.substringAfter("companion object {")
     assertContains(companionBody, "fun close(reason: String)")
+  }
+
+  // ------------------------------------------------------------------
+  // Phase 9: C# enums → standalone Kotlin enum classes (ordinal ABI).
+  //
+  // The metadata reader admits only default-int, unique contiguous enums, so the RIR records
+  // the already-validated ordinal for each entry. Enums themselves need no registration table:
+  // only the consuming C# class contributes method/property thunk slots.
+  // ------------------------------------------------------------------
+
+  private val moodRir: RirFile = RirFile(
+    assemblies = listOf(
+      RirAssembly(
+        packageId = "Sample.Enums",
+        assemblyName = "Sample.Enums",
+        namespaces = listOf(
+          RirNamespace(
+            name = "Sample.Enums",
+            types = listOf(
+              RirEnum(
+                name = "Mood",
+                entries = listOf(
+                  RirEnumEntry(name = "Happy", ordinal = 0),
+                  RirEnumEntry(name = "Sleepy", ordinal = 1),
+                  RirEnumEntry(name = "Grumpy", ordinal = 2),
+                ),
+              ),
+              RirClass(
+                name = "MoodService",
+                isStatic = true,
+                methods = listOf(
+                  RirMethod(
+                    name = "Next",
+                    isStatic = true,
+                    returnType = RirEnumType(namespace = "Sample.Enums", name = "Mood"),
+                    parameters = listOf(
+                      RirParameter(
+                        name = "mood",
+                        type = RirEnumType(namespace = "Sample.Enums", name = "Mood"),
+                      ),
+                    ),
+                  ),
+                ),
+                properties = listOf(
+                  RirProperty(
+                    name = "DefaultMood",
+                    type = RirEnumType(namespace = "Sample.Enums", name = "Mood"),
+                    isReadOnly = false,
+                    isStatic = true,
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    ),
+  )
+
+  @Test
+  fun `C sharp enum renders as a standalone Kotlin enum class with screaming snake entries`() {
+    val files: List<GeneratedFile> = generateKotlinStubs(moodRir)
+    val enum: GeneratedFile = files.single { it.relativePath.endsWith("Mood.kt") }
+
+    assertContains(enum.content, "enum class Mood")
+    assertContains(enum.content, "HAPPY")
+    assertContains(enum.content, "SLEEPY")
+    assertContains(enum.content, "GRUMPY")
+    assertTrue(
+      files.none { it.relativePath.endsWith("MoodBindings.kt") },
+      "an enum has no registration table or bindings file; it crosses the ABI as an ordinal Int",
+    )
+  }
+
+  @Test
+  fun `enum method signatures use Mood and marshal values through ordinal`() {
+    val files: List<GeneratedFile> = generateKotlinStubs(moodRir)
+    val stub: GeneratedFile = files.single { it.relativePath.endsWith("MoodService.kt") }
+    val bindings: GeneratedFile = files.single { it.relativePath.endsWith("MoodServiceBindings.kt") }
+
+    assertContains(stub.content, "fun next(mood: Mood): Mood")
+    assertContains(stub.content, "fn.invoke(mood.ordinal)")
+    assertContains(stub.content, "nugetEnumEntry(Mood.entries, ")
+    assertContains(
+      bindings.content,
+      "internal var nextFn: CPointer<CFunction<(Int) -> Int>>? = null",
+    )
+  }
+
+  @Test
+  fun `enum property maps to Mood var and converts its getter and setter through ordinal`() {
+    val files: List<GeneratedFile> = generateKotlinStubs(moodRir)
+    val stub: GeneratedFile = files.single { it.relativePath.endsWith("MoodService.kt") }
+    val bindings: GeneratedFile = files.single { it.relativePath.endsWith("MoodServiceBindings.kt") }
+
+    assertContains(stub.content, "var defaultMood: Mood")
+    assertContains(stub.content, "nugetEnumEntry(Mood.entries, ")
+    assertContains(stub.content, "fn.invoke(value.ordinal)")
+    assertContains(
+      bindings.content,
+      "internal var defaultMoodGetterFn: CPointer<CFunction<() -> Int>>? = null",
+    )
+    assertContains(
+      bindings.content,
+      "internal var defaultMoodSetterFn: CPointer<CFunction<(Int) -> Unit>>? = null",
+    )
+  }
+
+  // ------------------------------------------------------------------
+  // 15. Enum ordinals coming back from C# are bounds-checked (a C# enum is not a closed set:
+  // `(Mood)99` is a legal C# value, so `Mood.entries[99]` must not be indexed blind)
+  // ------------------------------------------------------------------
+
+  @Test
+  fun `enum returning method bounds checks the ordinal through the shared helper`() {
+    val files: List<GeneratedFile> = generateKotlinStubs(moodRir)
+    val stub: GeneratedFile = files.single { it.relativePath.endsWith("MoodService.kt") }
+
+    assertContains(
+      stub.content,
+      "return nugetEnumEntry(Mood.entries, fn.invoke(mood.ordinal), \"Mood\")",
+    )
+    assertContains(
+      stub.content,
+      "import io.github.xxfast.kotlin.native.nuget.internal.nugetEnumEntry",
+    )
+  }
+
+  @Test
+  fun `NugetEnums kt is emitted in the internal package and fails fast on an unknown ordinal`() {
+    val files: List<GeneratedFile> = generateKotlinStubs(moodRir)
+
+    val enums: GeneratedFile = requireNotNull(
+      files.find { it.relativePath.endsWith("NugetEnums.kt") && it.relativePath.startsWith("nativeMain/") }
+    ) { "NugetEnums.kt must be generated under nativeMain/ when an enum crosses back from C#" }
+
+    assertContains(enums.content, "package io.github.xxfast.kotlin.native.nuget.internal")
+    assertContains(enums.content, "internal fun <T : Enum<T>> nugetEnumEntry(")
+    assertContains(enums.content, "check(ordinal in entries.indices)")
+    assertContains(enums.content, "has no entry for ordinal")
+  }
+
+  @Test
+  fun `NugetEnums kt is not emitted when no enum is returned from C#`() {
+    val files: List<GeneratedFile> = generateKotlinStubs(jsonConvertRir)
+
+    assertTrue(
+      files.none { it.relativePath.endsWith("NugetEnums.kt") },
+      "NugetEnums.kt must not be emitted when no enum type is present in the IR",
+    )
+  }
+
+  // ------------------------------------------------------------------
+  // 16. Cross-namespace enum references: Mood is declared in Sample.Enums but consumed by
+  // Sample.Text.MoodService. When the two namespaces are aliased to different Kotlin packages the
+  // stub must import the enum, or the generated code does not compile.
+  // ------------------------------------------------------------------
+
+  private val crossNamespaceMoodRir: RirFile = RirFile(
+    assemblies = listOf(
+      RirAssembly(
+        packageId = "Sample",
+        assemblyName = "Sample",
+        namespaces = listOf(
+          RirNamespace(
+            name = "Sample.Enums",
+            types = listOf(
+              RirEnum(
+                name = "Mood",
+                entries = listOf(
+                  RirEnumEntry(name = "Happy", ordinal = 0),
+                  RirEnumEntry(name = "Grumpy", ordinal = 1),
+                ),
+              ),
+            ),
+          ),
+          RirNamespace(
+            name = "Sample.Text",
+            types = listOf(
+              RirClass(
+                name = "MoodService",
+                isStatic = true,
+                methods = listOf(
+                  RirMethod(
+                    name = "Next",
+                    isStatic = true,
+                    returnType = RirEnumType(namespace = "Sample.Enums", name = "Mood"),
+                    parameters = listOf(
+                      RirParameter(
+                        name = "mood",
+                        type = RirEnumType(namespace = "Sample.Enums", name = "Mood"),
+                      ),
+                    ),
+                  ),
+                ),
+                properties = listOf(
+                  RirProperty(
+                    name = "DefaultMood",
+                    type = RirEnumType(namespace = "Sample.Enums", name = "Mood"),
+                    isStatic = true,
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    ),
+  )
+
+  private val moodNamespaceAliases: Map<String, Map<String, String>> = mapOf(
+    "Sample" to mapOf(
+      "Sample.Enums" to "sample.enums",
+      "Sample.Text" to "sample.text",
+    ),
+  )
+
+  @Test
+  fun `stub imports an enum declared in a different kotlin package`() {
+    val files: List<GeneratedFile> = generateKotlinStubs(
+      file = crossNamespaceMoodRir,
+      namespaceAliases = moodNamespaceAliases,
+    )
+
+    val enum: GeneratedFile = files.single { it.relativePath.endsWith("/Mood.kt") }
+    val stub: GeneratedFile = files.single { it.relativePath.endsWith("MoodService.kt") }
+
+    assertContains(enum.content, "package sample.enums")
+    assertContains(stub.content, "package sample.text")
+    assertContains(stub.content, "import sample.enums.Mood")
+  }
+
+  @Test
+  fun `stub does not import an enum generated into its own kotlin package`() {
+    val files: List<GeneratedFile> = generateKotlinStubs(crossNamespaceMoodRir)
+
+    val stub: GeneratedFile = files.single { it.relativePath.endsWith("MoodService.kt") }
+
+    assertContains(stub.content, "package sample")
+    assertFalse(
+      stub.content.contains("import sample.Mood"),
+      "Mood lands in the same Kotlin package as MoodService without aliases, so it needs no import",
+    )
   }
 }

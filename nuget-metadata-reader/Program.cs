@@ -179,6 +179,7 @@ internal static class AssemblyExtractor
         // SignatureDecoder can emit RirObjectHandleType for parameters and returns that
         // reference them (ADR-051).
         var boundHandleTypeNames = CollectBoundHandleTypeNames(mr, namespaceMap);
+        var enumTypes = CollectEnumTypes(mr, namespaceMap);
 
         var rirNamespaces = new List<RirNamespace>();
 
@@ -188,7 +189,7 @@ internal static class AssemblyExtractor
 
             foreach (var typeDef in typeDefs)
             {
-                var (rirType, typeDiagnostics) = ProcessType(mr, typeDef, boundHandleTypeNames);
+                var (rirType, typeDiagnostics) = ProcessType(mr, typeDef, boundHandleTypeNames, enumTypes);
                 if (rirType is not null) rirTypes.Add(rirType);
                 diagnostics.AddRange(typeDiagnostics);
             }
@@ -236,12 +237,122 @@ internal static class AssemblyExtractor
         return names;
     }
 
+    // Reverse enum v1 is intentionally narrow: only public, top-level default-int enums with
+    // unique contiguous values 0..N-1. Everything else remains outside the bridgeable subset and
+    // is reported as an ADR-043-style diagnostic rather than being silently treated as a class.
+    private static Dictionary<string, EnumExtraction> CollectEnumTypes(
+        MetadataReader mr,
+        Dictionary<string, List<TypeDefinition>> namespaceMap)
+    {
+        var result = new Dictionary<string, EnumExtraction>(StringComparer.Ordinal);
+
+        foreach (var (ns, typeDefs) in namespaceMap)
+        {
+            foreach (var typeDef in typeDefs)
+            {
+                if (!MetadataHelpers.IsEnum(mr, typeDef)) continue;
+
+                var name = mr.GetString(typeDef.Name);
+                var fullName = string.IsNullOrEmpty(ns) ? name : $"{ns}.{name}";
+                result[fullName] = ExtractEnum(mr, typeDef, name);
+            }
+        }
+
+        return result;
+    }
+
+    private static EnumExtraction ExtractEnum(MetadataReader mr, TypeDefinition typeDef, string name)
+    {
+        bool isFlags = typeDef.GetCustomAttributes().Any(handle =>
+            MetadataHelpers.GetCustomAttributeTypeName(mr, mr.GetCustomAttribute(handle))
+                == "System.FlagsAttribute");
+        if (isFlags)
+            return EnumExtraction.Unsupported("[Flags] enums are not supported by the ordinal enum bridge");
+
+        FieldDefinition? underlyingField = null;
+        var entries = new List<RirEnumEntry>();
+
+        foreach (var handle in typeDef.GetFields())
+        {
+            var field = mr.GetFieldDefinition(handle);
+            var fieldName = mr.GetString(field.Name);
+            if (fieldName == "value__")
+            {
+                underlyingField = field;
+                continue;
+            }
+
+            if ((field.Attributes & System.Reflection.FieldAttributes.Literal) == 0)
+                return EnumExtraction.Unsupported($"enum member `{fieldName}` is not a literal");
+            if (field.GetDefaultValue().IsNil)
+                return EnumExtraction.Unsupported($"enum member `{fieldName}` has no constant value");
+
+            var constant = mr.GetConstant(field.GetDefaultValue());
+            if (constant.TypeCode != ConstantTypeCode.Int32)
+                return EnumExtraction.Unsupported("enum underlying type must be the default `int`");
+
+            var ordinal = mr.GetBlobReader(constant.Value).ReadInt32();
+            entries.Add(new RirEnumEntry(fieldName, ordinal));
+        }
+
+        if (underlyingField is null)
+            return EnumExtraction.Unsupported("enum has no underlying value__ field");
+
+        try
+        {
+            var underlying = underlyingField.Value.DecodeSignature(new SignatureDecoder(mr), genericContext: null);
+            if (underlying.TypeRef is not RirPrimitiveType { Name: "int" })
+                return EnumExtraction.Unsupported("enum underlying type must be the default `int`");
+        }
+        catch (BadImageFormatException)
+        {
+            return EnumExtraction.Unsupported("enum underlying type could not be decoded");
+        }
+
+        // Validate the SET of values, not their positions: metadata yields fields in declaration
+        // order, so `enum Priority { High = 2, Low = 0, Medium = 1 }` is a perfectly supported
+        // enum whose fields simply arrive out of order. N distinct values, each within [0, N-1],
+        // is exactly "unique and contiguous from 0 through N-1"; negatives, gaps and duplicates
+        // all still fail this test.
+        var ordinals = new HashSet<int>();
+        foreach (var entry in entries)
+        {
+            var isInRange = entry.Ordinal >= 0 && entry.Ordinal < entries.Count;
+            if (!isInRange || !ordinals.Add(entry.Ordinal))
+            {
+                return EnumExtraction.Unsupported(
+                    "enum values must be unique and contiguous from 0 through N-1");
+            }
+        }
+
+        // The Kotlin generator emits entries in list order and marshals by Kotlin `.ordinal`, so
+        // the list must be in ordinal order or the two sides of the ABI address different entries.
+        entries.Sort((left, right) => left.Ordinal.CompareTo(right.Ordinal));
+
+        return EnumExtraction.Supported(new RirEnum(name, entries));
+    }
+
     private static (RirType? Type, IEnumerable<RirDiagnostic> Diagnostics) ProcessType(
         MetadataReader mr,
         TypeDefinition typeDef,
-        HashSet<string> boundHandleTypeNames)
+        HashSet<string> boundHandleTypeNames,
+        IReadOnlyDictionary<string, EnumExtraction> enumTypes)
     {
         var typeName = mr.GetString(typeDef.Name);
+        var ns = mr.GetString(typeDef.Namespace);
+        var fullName = string.IsNullOrEmpty(ns) ? typeName : $"{ns}.{typeName}";
+        if (enumTypes.TryGetValue(fullName, out var enumType))
+        {
+            if (enumType.Enum is not null) return (enumType.Enum, Array.Empty<RirDiagnostic>());
+
+            return (null, new[] { new RirDiagnostic(
+                kind: "skipped_unsupported_enum",
+                typeName: typeName,
+                memberName: typeName,
+                memberSignature: fullName,
+                reason: enumType.Reason!,
+                hint: "Use a non-[Flags] default-int enum with unique contiguous values from 0 through N-1.") });
+        }
         var isInterface = (typeDef.Attributes & System.Reflection.TypeAttributes.ClassSemanticsMask)
                           == System.Reflection.TypeAttributes.Interface;
         var isAbstract = (typeDef.Attributes & System.Reflection.TypeAttributes.Abstract) != 0;
@@ -311,7 +422,7 @@ internal static class AssemblyExtractor
 
             var methodDef = group[0];
             var (rirMethod, methodDiagnostic) = TryMapMethod(
-                mr, typeDef, methodDef, typeName, isInterface, boundHandleTypeNames);
+                mr, typeDef, methodDef, typeName, isInterface, boundHandleTypeNames, enumTypes);
             if (rirMethod is not null)
                 methods.Add(rirMethod);
             else if (methodDiagnostic is not null)
@@ -330,7 +441,7 @@ internal static class AssemblyExtractor
         if (canHaveConstructor && ctorCandidates.Count == 1)
         {
             var (rirCtor, ctorDiagnostic) = TryMapConstructor(
-                mr, ctorCandidates[0], typeName, boundHandleTypeNames);
+                mr, ctorCandidates[0], typeName, boundHandleTypeNames, enumTypes);
             if (rirCtor is not null)
                 constructors.Add(rirCtor);
             else if (ctorDiagnostic is not null)
@@ -368,7 +479,7 @@ internal static class AssemblyExtractor
                 != System.Reflection.MethodAttributes.Public) continue;
 
             var (propTypeRef, propDiagnostic) = TryDecodePropertyType(
-                mr, propDef, propName, typeName, boundHandleTypeNames);
+                mr, propDef, propName, typeName, boundHandleTypeNames, enumTypes);
             if (propTypeRef is not null)
             {
                 // Same masked-equality fix as the getter check above: a non-zero AND against
@@ -404,9 +515,10 @@ internal static class AssemblyExtractor
         MetadataReader mr,
         MethodDefinition methodDef,
         string typeName,
-        HashSet<string> boundHandleTypeNames)
+        HashSet<string> boundHandleTypeNames,
+        IReadOnlyDictionary<string, EnumExtraction> enumTypes)
     {
-        var decoder = new SignatureDecoder(mr, boundHandleTypeNames);
+        var decoder = new SignatureDecoder(mr, boundHandleTypeNames, enumTypes);
         MethodSignature<TypeRefOrDiag> sig;
 
         try
@@ -461,7 +573,8 @@ internal static class AssemblyExtractor
         MethodDefinition methodDef,
         string typeName,
         bool isInterface,
-        HashSet<string> boundHandleTypeNames)
+        HashSet<string> boundHandleTypeNames,
+        IReadOnlyDictionary<string, EnumExtraction> enumTypes)
     {
         var methodName = mr.GetString(methodDef.Name);
         bool isStatic = (methodDef.Attributes & System.Reflection.MethodAttributes.Static) != 0;
@@ -481,7 +594,7 @@ internal static class AssemblyExtractor
                 hint: "Override this method in a concrete adapter class."));
         }
 
-        var decoder = new SignatureDecoder(mr, boundHandleTypeNames);
+        var decoder = new SignatureDecoder(mr, boundHandleTypeNames, enumTypes);
         MethodSignature<TypeRefOrDiag> sig;
 
         try
@@ -564,9 +677,10 @@ internal static class AssemblyExtractor
         PropertyDefinition propDef,
         string propName,
         string typeName,
-        HashSet<string> boundHandleTypeNames)
+        HashSet<string> boundHandleTypeNames,
+        IReadOnlyDictionary<string, EnumExtraction> enumTypes)
     {
-        var decoder = new SignatureDecoder(mr, boundHandleTypeNames);
+        var decoder = new SignatureDecoder(mr, boundHandleTypeNames, enumTypes);
         MethodSignature<TypeRefOrDiag> sig;
 
         try
@@ -665,6 +779,14 @@ internal static class AssemblyExtractor
 
 internal static class MetadataHelpers
 {
+    internal static bool IsEnum(MetadataReader mr, TypeDefinition typeDef)
+    {
+        if (typeDef.BaseType.Kind != HandleKind.TypeReference) return false;
+
+        var baseRef = mr.GetTypeReference((TypeReferenceHandle)typeDef.BaseType);
+        return mr.GetString(baseRef.Namespace) == "System" && mr.GetString(baseRef.Name) == "Enum";
+    }
+
     /// <summary>
     /// Returns true if <paramref name="typeDef"/> carries <c>IsByRefLikeAttribute</c>,
     /// which marks it as a <c>ref struct</c> that cannot cross the C ABI.
@@ -743,6 +865,12 @@ internal sealed record TypeRefOrDiag(
 
 internal sealed record PendingDiagnostic(string Kind, string Reason, string Hint);
 
+internal sealed record EnumExtraction(RirEnum? Enum, string? Reason)
+{
+    internal static EnumExtraction Supported(RirEnum value) => new(value, null);
+    internal static EnumExtraction Unsupported(string reason) => new(null, reason);
+}
+
 /// <summary>
 /// Implements <see cref="ISignatureTypeProvider{TType,TGenericContext}"/> using
 /// <see cref="System.Reflection.Metadata"/> primitives. Maps the v1 type vocabulary to
@@ -760,12 +888,17 @@ internal sealed class SignatureDecoder : ISignatureTypeProvider<TypeRefOrDiag, o
     /// Pass null (or omit) for display-only decoders that only produce raw type name strings.
     /// </summary>
     private readonly HashSet<string> _boundHandleTypeNames;
+    private readonly IReadOnlyDictionary<string, EnumExtraction> _enumTypes;
 
-    public SignatureDecoder(MetadataReader mr, HashSet<string>? boundHandleTypeNames = null)
+    public SignatureDecoder(
+        MetadataReader mr,
+        HashSet<string>? boundHandleTypeNames = null,
+        IReadOnlyDictionary<string, EnumExtraction>? enumTypes = null)
     {
         _mr = mr;
         _boundHandleTypeNames = boundHandleTypeNames
             ?? new HashSet<string>(StringComparer.Ordinal);
+        _enumTypes = enumTypes ?? new Dictionary<string, EnumExtraction>(StringComparer.Ordinal);
     }
 
     // Primitives
@@ -812,6 +945,29 @@ internal sealed class SignatureDecoder : ISignatureTypeProvider<TypeRefOrDiag, o
                     "skipped_ref_struct",
                     $"ref struct parameter — `{fullName}` is stack-only (IsByRefLike) and cannot cross the C ABI",
                     "Expose this method in a C# adapter shim with a different parameter type."),
+                fullName);
+        }
+
+        if (_enumTypes.TryGetValue(fullName, out var enumType))
+        {
+            if (enumType.Enum is not null)
+                return new TypeRefOrDiag(new RirEnumType(ns, name), null, fullName);
+
+            return new TypeRefOrDiag(null,
+                new PendingDiagnostic(
+                    "skipped_unsupported_enum",
+                    $"enum `{fullName}` is not bridgeable: {enumType.Reason}",
+                    "Use a non-[Flags] default-int enum with unique contiguous values from 0 through N-1."),
+                fullName);
+        }
+
+        if (MetadataHelpers.IsEnum(mr, typeDef))
+        {
+            return new TypeRefOrDiag(null,
+                new PendingDiagnostic(
+                    "skipped_unsupported_enum",
+                    $"enum `{fullName}` is not part of the bound extraction set",
+                    "Bind the enum namespace and use a supported ordinal enum shape."),
                 fullName);
         }
 
@@ -966,6 +1122,7 @@ internal sealed class SignatureDecoder : ISignatureTypeProvider<TypeRefOrDiag, o
 [JsonPolymorphic(TypeDiscriminatorPropertyName = "kind")]
 [JsonDerivedType(typeof(RirClass), "class")]
 [JsonDerivedType(typeof(RirInterface), "interface")]
+[JsonDerivedType(typeof(RirEnum), "enum")]
 internal abstract class RirType
 {
     public abstract string Name { get; }
@@ -1015,6 +1172,30 @@ internal sealed class RirInterface : RirType
     public override string Name { get; }
     public IReadOnlyList<RirMethod> Methods { get; }
     public IReadOnlyList<RirProperty> Properties { get; }
+}
+
+internal sealed class RirEnum : RirType
+{
+    public RirEnum(string name, IReadOnlyList<RirEnumEntry> entries)
+    {
+        Name = name;
+        Entries = entries;
+    }
+
+    public override string Name { get; }
+    public IReadOnlyList<RirEnumEntry> Entries { get; }
+}
+
+internal sealed class RirEnumEntry
+{
+    public RirEnumEntry(string name, int ordinal)
+    {
+        Name = name;
+        Ordinal = ordinal;
+    }
+
+    public string Name { get; }
+    public int Ordinal { get; }
 }
 
 internal sealed class RirMethod
@@ -1082,6 +1263,7 @@ internal sealed class RirConstructor
 [JsonDerivedType(typeof(RirStringType), "string")]
 [JsonDerivedType(typeof(RirPrimitiveType), "primitive")]
 [JsonDerivedType(typeof(RirObjectHandleType), "handle")]
+[JsonDerivedType(typeof(RirEnumType), "enum")]
 internal abstract class RirTypeRef { }
 
 internal sealed class RirVoidType : RirTypeRef
@@ -1120,6 +1302,18 @@ internal sealed class RirObjectHandleType : RirTypeRef
     public string Namespace { get; }
 
     /// <summary>The simple type name, e.g. <c>"Template"</c>.</summary>
+    public string Name { get; }
+}
+
+internal sealed class RirEnumType : RirTypeRef
+{
+    public RirEnumType(string @namespace, string name)
+    {
+        Namespace = @namespace;
+        Name = name;
+    }
+
+    public string Namespace { get; }
     public string Name { get; }
 }
 
@@ -1197,6 +1391,8 @@ internal sealed class RirDiagnostic
 [JsonSerializable(typeof(RirType))]
 [JsonSerializable(typeof(RirClass))]
 [JsonSerializable(typeof(RirInterface))]
+[JsonSerializable(typeof(RirEnum))]
+[JsonSerializable(typeof(RirEnumEntry))]
 [JsonSerializable(typeof(RirMethod))]
 [JsonSerializable(typeof(RirProperty))]
 [JsonSerializable(typeof(RirParameter))]
@@ -1206,6 +1402,7 @@ internal sealed class RirDiagnostic
 [JsonSerializable(typeof(RirStringType))]
 [JsonSerializable(typeof(RirPrimitiveType))]
 [JsonSerializable(typeof(RirObjectHandleType))]
+[JsonSerializable(typeof(RirEnumType))]
 [JsonSerializable(typeof(RirDiagnostic))]
 [JsonSourceGenerationOptions(
     WriteIndented = true,

@@ -57,6 +57,11 @@ top-level types, filters members through the bridgeable-subset rules (see
 Reverse Intermediate Representation (RIR). Every member the filter rejects is recorded as a
 diagnostic in the same file rather than silently dropped.
 
+Supported public top-level C# enums are also extracted as standalone Kotlin `enum class` values.
+The v1 enum subset is deliberately ordinal-backed: default-`int`, non-`[Flags]` enums whose values
+are unique and contiguous from `0` through `N-1`. See [The bridgeable subset](bridgeable-subset.md)
+for the supported positions and exclusions.
+
 ### `nugetGenerateBindings` and `nugetGenerateShims`: two generators, one contract
 
 Both tasks read the identical `reverse-ir.json` and must agree on one shared contract, fixed by

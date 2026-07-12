@@ -3,6 +3,9 @@ package io.github.xxfast.kotlin.native.nuget
 import io.github.xxfast.kotlin.native.nuget.rir.RirAssembly
 import io.github.xxfast.kotlin.native.nuget.rir.RirClass
 import io.github.xxfast.kotlin.native.nuget.rir.RirConstructor
+import io.github.xxfast.kotlin.native.nuget.rir.RirEnum
+import io.github.xxfast.kotlin.native.nuget.rir.RirEnumEntry
+import io.github.xxfast.kotlin.native.nuget.rir.RirEnumType
 import io.github.xxfast.kotlin.native.nuget.rir.RirFile
 import io.github.xxfast.kotlin.native.nuget.rir.RirMethod
 import io.github.xxfast.kotlin.native.nuget.rir.RirNamespace
@@ -1145,5 +1148,171 @@ class NugetGenerateShimsTaskTest {
         defaultNameGetIndex < defaultNameSetIndex &&
         defaultNameSetIndex < renderCountGetIndex,
     )
+  }
+
+  // ------------------------------------------------------------------
+  // Phase 9: enum ABI conversion. C# enum values cross the unmanaged boundary as `int`, while
+  // the thunk casts at the managed call boundary in both directions.
+  // ------------------------------------------------------------------
+
+  private val moodRir: RirFile = RirFile(
+    assemblies = listOf(
+      RirAssembly(
+        packageId = "Sample.Enums",
+        assemblyName = "Sample.Enums",
+        namespaces = listOf(
+          RirNamespace(
+            name = "Sample.Enums",
+            types = listOf(
+              RirEnum(
+                name = "Mood",
+                entries = listOf(
+                  RirEnumEntry(name = "Happy", ordinal = 0),
+                  RirEnumEntry(name = "Sleepy", ordinal = 1),
+                  RirEnumEntry(name = "Grumpy", ordinal = 2),
+                ),
+              ),
+              RirClass(
+                name = "MoodService",
+                isStatic = true,
+                methods = listOf(
+                  RirMethod(
+                    name = "Next",
+                    isStatic = true,
+                    returnType = RirEnumType(namespace = "Sample.Enums", name = "Mood"),
+                    parameters = listOf(
+                      RirParameter(
+                        name = "mood",
+                        type = RirEnumType(namespace = "Sample.Enums", name = "Mood"),
+                      ),
+                    ),
+                  ),
+                ),
+                properties = listOf(
+                  RirProperty(
+                    name = "DefaultMood",
+                    type = RirEnumType(namespace = "Sample.Enums", name = "Mood"),
+                    isReadOnly = false,
+                    isStatic = true,
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    ),
+  )
+
+  @Test
+  fun `enum method thunk receives and returns int while casting for MoodService Next`() {
+    val shim: GeneratedFile = generateCSharpShims(moodRir, "sample")
+      .single { it.relativePath.endsWith("MoodServiceRegistration.cs") }
+
+    assertContains(shim.content, "private static int Next_Thunk(int mood)")
+    assertContains(shim.content, "Mood result = MoodService.Next((Mood)mood);")
+    assertContains(shim.content, "return (int)result;")
+  }
+
+  @Test
+  fun `enum property thunks use int ABI and cast getter and setter values`() {
+    val shim: GeneratedFile = generateCSharpShims(moodRir, "sample")
+      .single { it.relativePath.endsWith("MoodServiceRegistration.cs") }
+
+    assertContains(shim.content, "private static int DefaultMood_Get_Thunk()")
+    assertContains(shim.content, "Mood result = MoodService.DefaultMood;")
+    assertContains(shim.content, "return (int)result;")
+    assertContains(shim.content, "private static void DefaultMood_Set_Thunk(int value)")
+    assertContains(shim.content, "MoodService.DefaultMood = (Mood)value;")
+  }
+
+  @Test
+  fun `enum in the shims own namespace needs no extra using`() {
+    val shim: GeneratedFile = generateCSharpShims(moodRir, "sample")
+      .single { it.relativePath.endsWith("MoodServiceRegistration.cs") }
+
+    assertContains(shim.content, "namespace Sample.Enums")
+    assertFalse(
+      shim.content.contains("using Sample.Enums;"),
+      "the shim already renders inside namespace Sample.Enums; importing it would be redundant",
+    )
+  }
+
+  // ------------------------------------------------------------------
+  // Cross-namespace enum: Mood is declared in Sample.Enums but consumed by Sample.Text.MoodService,
+  // so the shim (which renders inside `namespace Sample.Text`) must import Sample.Enums or the
+  // `(Mood)mood` casts in its thunk bodies do not compile.
+  // ------------------------------------------------------------------
+
+  private val crossNamespaceMoodRir: RirFile = RirFile(
+    assemblies = listOf(
+      RirAssembly(
+        packageId = "Sample",
+        assemblyName = "Sample",
+        namespaces = listOf(
+          RirNamespace(
+            name = "Sample.Enums",
+            types = listOf(
+              RirEnum(
+                name = "Mood",
+                entries = listOf(
+                  RirEnumEntry(name = "Happy", ordinal = 0),
+                  RirEnumEntry(name = "Grumpy", ordinal = 1),
+                ),
+              ),
+            ),
+          ),
+          RirNamespace(
+            name = "Sample.Text",
+            types = listOf(
+              RirClass(
+                name = "MoodService",
+                isStatic = true,
+                methods = listOf(
+                  RirMethod(
+                    name = "Next",
+                    isStatic = true,
+                    returnType = RirEnumType(namespace = "Sample.Enums", name = "Mood"),
+                    parameters = listOf(
+                      RirParameter(
+                        name = "mood",
+                        type = RirEnumType(namespace = "Sample.Enums", name = "Mood"),
+                      ),
+                    ),
+                  ),
+                ),
+                properties = listOf(
+                  RirProperty(
+                    name = "DefaultMood",
+                    type = RirEnumType(namespace = "Sample.Enums", name = "Mood"),
+                    isStatic = true,
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    ),
+  )
+
+  @Test
+  fun `shim imports the namespace of an enum declared outside its own namespace`() {
+    val shim: GeneratedFile = generateCSharpShims(crossNamespaceMoodRir, "sample")
+      .single { it.relativePath.endsWith("MoodServiceRegistration.cs") }
+
+    assertContains(shim.content, "namespace Sample.Text")
+    assertContains(shim.content, "    using Sample.Enums;")
+    assertContains(shim.content, "Mood result = MoodService.Next((Mood)mood);")
+  }
+
+  @Test
+  fun `shim keeps the standard system usings alongside an imported enum namespace`() {
+    val shim: GeneratedFile = generateCSharpShims(crossNamespaceMoodRir, "sample")
+      .single { it.relativePath.endsWith("MoodServiceRegistration.cs") }
+
+    assertContains(shim.content, "    using System;")
+    assertContains(shim.content, "    using System.Runtime.CompilerServices;")
+    assertContains(shim.content, "    using System.Runtime.InteropServices;")
   }
 }

@@ -53,6 +53,21 @@ data class RirInterface(
   val properties: List<RirProperty> = emptyList(),
 ) : RirType
 
+// Phase 9: a C# enum admitted by the metadata reader's deliberately narrow reverse mapping.
+// Every entry has a validated contiguous Int ordinal, so enum values can cross the C ABI as Int.
+@Serializable
+@SerialName("enum")
+data class RirEnum(
+  override val name: String,
+  val entries: List<RirEnumEntry>,
+) : RirType
+
+@Serializable
+data class RirEnumEntry(
+  val name: String,
+  val ordinal: Int,
+)
+
 @Serializable
 data class RirMethod(
   val name: String,
@@ -112,6 +127,15 @@ data class RirObjectHandleType(
   val name: String,
 ) : RirTypeRef
 
+// A reference to a supported C# enum. Like handles, namespace/name keep the JSON contract easy
+// to consume; unlike handles, this always crosses the ABI as an ordinal Int.
+@Serializable
+@SerialName("enum")
+data class RirEnumType(
+  val namespace: String,
+  val name: String,
+) : RirTypeRef
+
 @Serializable
 data class RirDiagnostic(
   val kind: RirDiagnosticKind,
@@ -124,17 +148,35 @@ data class RirDiagnostic(
 
 @Serializable
 enum class RirDiagnosticKind {
-  @SerialName("skipped_overload_set") SKIPPED_OVERLOAD_SET,
-  @SerialName("skipped_ref_struct") SKIPPED_REF_STRUCT,
-  @SerialName("skipped_open_generic") SKIPPED_OPEN_GENERIC,
-  @SerialName("skipped_dynamic") SKIPPED_DYNAMIC,
-  @SerialName("skipped_default_interface_method") SKIPPED_DEFAULT_INTERFACE_METHOD,
-  @SerialName("skipped_unbound_type_reference") SKIPPED_UNBOUND_TYPE_REFERENCE,
+  @SerialName("skipped_overload_set")
+  SKIPPED_OVERLOAD_SET,
+
+  @SerialName("skipped_ref_struct")
+  SKIPPED_REF_STRUCT,
+
+  @SerialName("skipped_open_generic")
+  SKIPPED_OPEN_GENERIC,
+
+  @SerialName("skipped_dynamic")
+  SKIPPED_DYNAMIC,
+
+  @SerialName("skipped_default_interface_method")
+  SKIPPED_DEFAULT_INTERFACE_METHOD,
+
+  @SerialName("skipped_unbound_type_reference")
+  SKIPPED_UNBOUND_TYPE_REFERENCE,
+
   // Phase 9 (ROADMAP line 151, instance methods/properties — confirmed mirror of ADR-051/052, no
   // new ADR): unlike every other SKIPPED_* kind, this one is never emitted by the metadata reader
   // — it depends on the ADR-051 wrapper's own Kotlin member names (`handle`, `close`, `cleaner`),
   // which only the Gradle-plugin-side generators know about. Reuses the existing RirDiagnostic
   // model (ADR-043's mechanism) rather than inventing a separate reporting path.
-  @SerialName("skipped_member_name_collision") SKIPPED_MEMBER_NAME_COLLISION,
-  @SerialName("info_async_not_yet_mapped") INFO_ASYNC_NOT_YET_MAPPED,
+  @SerialName("skipped_member_name_collision")
+  SKIPPED_MEMBER_NAME_COLLISION,
+
+  @SerialName("skipped_unsupported_enum")
+  SKIPPED_UNSUPPORTED_ENUM,
+
+  @SerialName("info_async_not_yet_mapped")
+  INFO_ASYNC_NOT_YET_MAPPED,
 }

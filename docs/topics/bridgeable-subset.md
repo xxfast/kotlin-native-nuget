@@ -12,15 +12,71 @@ ways, this page follows the code.
 | Public top-level class | Yes, if it has at least one bridgeable member |
 | Public top-level static class | Yes, as a Kotlin `object` (see [Static classes and methods](static-classes-and-methods.md)) |
 | Interface | No members are bound to Kotlin; a default (non-abstract, non-static) interface method is explicitly skipped and diagnosed |
-| Enum | No. A public enum falls through the same code path as a class, but an enum has no methods, properties, or constructors in metadata, so it always yields zero bridgeable members and no stub is generated |
+| Enum | Yes, as a standalone Kotlin `enum class`, when it is public, top-level, default-`int` backed, non-`[Flags]`, and has unique contiguous values from `0` through `N-1` |
 | Struct / value type | No, as a **handle** type. `CollectBoundHandleTypeNames` explicitly excludes any type whose base type is `System.ValueType` or `System.Enum`, so a struct can never be used as an object-handle parameter or return elsewhere |
 | `ref struct` (`Span<T>`, `ReadOnlySpan<T>`, custom) | No. Detected via the `IsByRefLikeAttribute` custom attribute; any member referencing one is skipped and diagnosed (`skipped_ref_struct`) |
 | Nested type (public or not) | No. The reader filters on `TypeAttributes.VisibilityMask == Public`, which excludes `NestedPublic` as well as every non-public visibility. Only top-level public types are candidates at all |
 | Generic type | Not explicitly filtered at the type level. A generic class is still enumerated as a candidate type, but virtually every member whose signature actually uses the open type parameter is skipped per-member (`skipped_open_generic`) when the parameter or return type is decoded, so a generic type in practice binds nothing unless it happens to expose non-generic members |
 | Record | Not recognized as a distinct construct at all: a C# `record class` compiles to an ordinary class in IL with no marker, and its fate is decided entirely by the same rules as any other class (its synthesized copy-constructor typically turns its constructors into a multi-member overload set, which is skipped wholesale) |
 
-Only classes (static or not) actually produce Kotlin output; interfaces are extracted into the RIR
-as `RirInterface` but no stub is generated from them today.
+Classes (static or not) and supported enums produce Kotlin output. Interfaces are extracted into the
+RIR as `RirInterface` but no stub is generated from them today.
+
+## Enums
+
+A supported C# enum becomes a standalone Kotlin `enum class`. Its member names are converted to
+Kotlin `SCREAMING_SNAKE_CASE`. Enum values cross the C ABI as their ordinal `Int`, so enum arguments,
+returns, constructors, and properties use the generated Kotlin enum type without allocating an
+object handle or registration table for the enum itself.
+
+```csharp
+// sample-dependency/CatMood.cs
+public enum CatMood
+{
+    Playful,
+    Sleepy,
+    Hungry,
+}
+```
+
+```kotlin
+// build/nuget-interop/kotlin/nativeMain/sample/enums/CatMood.kt
+enum class CatMood {
+  PLAYFUL,
+  SLEEPY,
+  HUNGRY
+}
+```
+
+An enum can appear in the supported members of a bound class. This Kotlin sample uses an enum
+constructor argument, an instance property, a static property, and an enum return value:
+
+```kotlin
+// sample-library/src/nativeMain/kotlin/io/github/xxfast/kotlin/native/nuget/sample/enums/CatMoodSample.kt
+fun catMoodRoundTrip(): CatMood {
+  CatMoodService.defaultMood = CatMood.SLEEPY
+
+  val service = CatMoodService(CatMood.PLAYFUL)
+  service.currentMood = CatMood.HUNGRY
+
+  check(service.readDefault() == CatMood.SLEEPY) {
+    "CatMoodService.defaultMood did not round trip through its instance method"
+  }
+
+  return service.advance(service.currentMood)
+}
+```
+
+### Enum limitations
+
+- `[Flags]` enums do not bind.
+- The underlying type must be the default C# `int`.
+- Values must be unique and contiguous from `0` through `N-1`. Explicit, sparse, negative, and
+  aliased values do not bind.
+- Nullable enums, nested enums, and enums in collections or generic type arguments are not yet
+  supported.
+
+Unsupported enums are excluded with a `skipped_unsupported_enum` diagnostic in `reverse-ir.json`.
 
 ## Constructors
 
@@ -75,6 +131,7 @@ overload set.
 | `void` | return position only |
 | `string` | UTF-8 marshalled `IntPtr` |
 | `bool`, `byte`, `short`, `int`, `long`, `float`, `double`, `char` | primitives, direct or narrowed for ABI blittability |
+| A supported enum | ordinal `Int`, converted to and from a Kotlin `enum class` |
 | A bound, non-static, non-value-type, non-`ref struct` class from the current extraction | an opaque `GCHandle`-backed pointer (a "handle" type) |
 
 Everything else, nullable primitives and strings, arrays, collections, delegates, `dynamic`, `object`,

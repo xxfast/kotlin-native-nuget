@@ -77,6 +77,8 @@ nuget {
       bind {
         include("Sample.Text")
         alias("Sample.Text", "sample.text")
+        include("Sample.Enums")
+        alias("Sample.Enums", "sample.enums")
       }
     }
   }

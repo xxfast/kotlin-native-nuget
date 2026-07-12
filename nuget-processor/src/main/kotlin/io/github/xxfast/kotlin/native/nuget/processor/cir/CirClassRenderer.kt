@@ -379,7 +379,11 @@ internal fun StringBuilder.renderConst(const: CirConst) {
 internal fun StringBuilder.renderDllImport(import: CirDllImport) {
   val visibility: String = if (import.visibility == CirVisibility.PRIVATE) "private" else "public"
   val entryPoint: String = if (import.entryPoint != null) ", EntryPoint = \"${import.entryPoint}\"" else ""
-  val paramList: MutableList<String> = import.parameters.map { "${it.type} ${it.name}" }.toMutableList()
+  // The DllImport signature always speaks the native type, which differs from the public C#
+  // type when a cast is needed at the call site (e.g. enum params: public "CatMood", native
+  // "int"). CirParameter.nativeType defaults to type, so this is a no-op for every other param.
+  val paramList: MutableList<String> =
+    import.parameters.map { "${it.nativeType} ${it.name}" }.toMutableList()
   if (import.hasSyncErrorOut) paramList.add("out IntPtr error")
   val paramStr: String = paramList.joinToString(", ")
 

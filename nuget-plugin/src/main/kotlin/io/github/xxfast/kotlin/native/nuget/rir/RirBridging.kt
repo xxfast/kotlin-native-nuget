@@ -73,7 +73,7 @@ fun bridgeableInstanceMethods(cls: RirClass, boundHandleTypes: Set<RirTypeKey>):
 fun bridgeableProperties(cls: RirClass, boundHandleTypes: Set<RirTypeKey>): List<RirProperty> =
   cls.properties.filter { property ->
     isV1Type(property.type, boundHandleTypes) &&
-      (!property.isStatic || property.type !is RirObjectHandleType)
+        (!property.isStatic || property.type !is RirObjectHandleType)
   }
 
 // Phase 9 (ROADMAP line 151, rule 5 — human-approved v1 scope call): the Kotlin member names
@@ -110,9 +110,9 @@ fun collisionDiagnostics(cls: RirClass): List<RirDiagnostic> {
         memberName = method.name,
         memberSignature = signature,
         reason = "member name collision — Kotlin name '${method.name.toMethodCamelCase()}' would " +
-          "shadow the generated wrapper's own '${method.name.toMethodCamelCase()}' member",
+            "shadow the generated wrapper's own '${method.name.toMethodCamelCase()}' member",
         hint = "Rename or remove this member on the bound C# type, or expose it via a " +
-          "differently-named C# adapter method.",
+            "differently-named C# adapter method.",
       )
     }
 
@@ -125,9 +125,9 @@ fun collisionDiagnostics(cls: RirClass): List<RirDiagnostic> {
         memberName = property.name,
         memberSignature = "${property.type.describe()} ${property.name}",
         reason = "member name collision — Kotlin name '${property.name.toMethodCamelCase()}' would " +
-          "shadow the generated wrapper's own '${property.name.toMethodCamelCase()}' member",
+            "shadow the generated wrapper's own '${property.name.toMethodCamelCase()}' member",
         hint = "Rename or remove this member on the bound C# type, or expose it via a " +
-          "differently-named C# adapter property.",
+            "differently-named C# adapter property.",
       )
     }
 
@@ -142,6 +142,7 @@ private fun RirTypeRef.describe(): String = when (this) {
   is RirStringType -> "string"
   is RirPrimitiveType -> name
   is RirObjectHandleType -> "$namespace.$name"
+  is RirEnumType -> "$namespace.$name"
 }
 
 // ADR-052 "shared bridgeable ordering", extended by Phase 9 line 151: the constructor pointer (if
@@ -180,10 +181,10 @@ fun bridgeableRegistrables(cls: RirClass, boundHandleTypes: Set<RirTypeKey>): Li
   }
 
   return bridgeableConstructors(cls, boundHandleTypes).map { RirRegistrable.Ctor(it) } +
-    bridgeableStaticMethods(cls, boundHandleTypes).map { RirRegistrable.Method(it) } +
-    instanceMethods.map { RirRegistrable.Method(it) } +
-    propertyRegistrables(instanceProperties) +
-    propertyRegistrables(staticProperties)
+      bridgeableStaticMethods(cls, boundHandleTypes).map { RirRegistrable.Method(it) } +
+      instanceMethods.map { RirRegistrable.Method(it) } +
+      propertyRegistrables(instanceProperties) +
+      propertyRegistrables(staticProperties)
 }
 
 // ADR-048 v1 bridgeable subset: static methods only, void/string/primitive/handle parameter and
@@ -204,6 +205,8 @@ private fun isV1Type(type: RirTypeRef, boundHandleTypes: Set<RirTypeKey>): Boole
   // class. Types outside the bound set stay unmapped and produce a skipped_unbound_type_reference
   // diagnostic from the reader — never reach here as bridgeable candidates.
   is RirObjectHandleType -> RirTypeKey(type.namespace, type.name) in boundHandleTypes
+  // The metadata reader only emits RirEnumType for a validated default-int, contiguous enum.
+  is RirEnumType -> true
 }
 
 // Shared registration export-name derivation (ADR-048's naming contract, which ADR-049's C# side
@@ -213,7 +216,7 @@ fun registrationExportName(namespaceName: String, typeName: String): String {
   val nsSnake: String = namespaceName.replace('.', '_').lowercase()
   val typeSnake: String = typeName.toTypeSnake()
   return if (nsSnake.isEmpty()) "nuget_${typeSnake}_register"
-    else "nuget_${nsSnake}_${typeSnake}_register"
+  else "nuget_${nsSnake}_${typeSnake}_register"
 }
 
 // PascalCase type name → lower_snake_case: insert '_' before each uppercase letter after the

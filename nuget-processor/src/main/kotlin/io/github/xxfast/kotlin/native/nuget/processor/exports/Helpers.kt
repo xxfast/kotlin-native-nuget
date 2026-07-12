@@ -1,6 +1,9 @@
 package io.github.xxfast.kotlin.native.nuget.processor.exports
 
+import com.google.devtools.ksp.symbol.ClassKind
+import com.google.devtools.ksp.symbol.KSClassDeclaration
 import com.google.devtools.ksp.symbol.KSFunctionDeclaration
+import com.google.devtools.ksp.symbol.KSType
 import com.squareup.kotlinpoet.AnnotationSpec
 import com.squareup.kotlinpoet.ClassName
 import com.squareup.kotlinpoet.FunSpec
@@ -34,6 +37,33 @@ internal fun FunSpec.Builder.addParameters(
         ?: resolved.declaration.simpleName.asString()
 
     addParameter(param.name?.asString() ?: "_", ClassName.bestGuess(type))
+  }
+  return this
+}
+
+/**
+ * Same as [addParameters], except an enum param is declared as the ordinal [Int] it crosses the
+ * C ABI as (ADR-006). Only for exports whose C# half maps enum params to `int`: top-level
+ * functions today. [addParameters] stays as-is for the callers that do not.
+ */
+internal fun FunSpec.Builder.addEnumAwareParameters(
+  func: KSFunctionDeclaration,
+): FunSpec.Builder {
+  for (param in func.parameters) {
+    val resolved: KSType = param.type.resolve().expandAliases()
+    val name: String = param.name?.asString() ?: "_"
+    val isEnum: Boolean = (resolved.declaration as? KSClassDeclaration)
+      ?.classKind == ClassKind.ENUM_CLASS
+
+    if (isEnum) {
+      addParameter(name, Int::class)
+      continue
+    }
+
+    val type: String = resolved.declaration.qualifiedName?.asString()
+      ?: resolved.declaration.simpleName.asString()
+
+    addParameter(name, ClassName.bestGuess(type))
   }
   return this
 }

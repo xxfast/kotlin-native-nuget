@@ -4,6 +4,7 @@ import com.google.devtools.ksp.processing.KSPLogger
 import com.google.devtools.ksp.symbol.ClassKind
 import com.google.devtools.ksp.symbol.KSClassDeclaration
 import com.google.devtools.ksp.symbol.KSFunctionDeclaration
+import com.google.devtools.ksp.symbol.KSType
 import com.google.devtools.ksp.symbol.Modifier
 import io.github.xxfast.kotlin.native.nuget.processor.toCName
 import io.github.xxfast.kotlin.native.nuget.processor.toCSharpName
@@ -11,6 +12,8 @@ import io.github.xxfast.kotlin.native.nuget.processor.toCSharpName
 internal fun translateFunction(
   func: KSFunctionDeclaration,
   libraryName: String,
+  rootPackage: String,
+  rootNamespace: String,
   tracker: CollectionHelperTracker,
   exportedTypes: Set<String>,
   logger: KSPLogger,
@@ -21,14 +24,44 @@ internal fun translateFunction(
   val isNullable: Boolean = returnType?.isMarkedNullable == true
   val kotlinReturnType: String = returnType?.declaration?.simpleName?.asString() ?: "Unit"
 
+  // Enums cross the C ABI as their ordinal Int (ADR-006), so the public C# param keeps the enum
+  // type while the DllImport takes an int. renderSyncErrorCheckMethod casts at the call site.
   val params: List<CirParameter> = func.parameters.map { param ->
-    val kotlinType: String = param.type.resolve().expandAliases().declaration.simpleName.asString()
-    CirParameter(param.name?.asString() ?: "_", mapParamType(kotlinType))
+    val resolved: KSType = param.type.resolve().expandAliases()
+    val kotlinType: String = resolved.declaration.simpleName.asString()
+    val name: String = param.name?.asString() ?: "_"
+    val enumDecl: KSClassDeclaration? = (resolved.declaration as? KSClassDeclaration)
+      ?.takeIf { it.classKind == ClassKind.ENUM_CLASS }
+
+    if (enumDecl == null) return@map CirParameter(name, mapParamType(kotlinType))
+
+    val enumNamespace: String = mapPackageToNamespace(
+      enumDecl.packageName.asString(), rootPackage, rootNamespace,
+    )
+
+    CirParameter(name, type = "global::$enumNamespace.$kotlinType", nativeType = "int")
+  }
+
+  val hasEnumParams: Boolean = params.any { it.nativeType != it.type }
+
+  // Only the return shapes that render through renderSyncErrorCheckMethod (enum, String,
+  // primitive, Unit) cast an enum param down to its ordinal at the native call site. The others
+  // hand-build their native call and would silently emit a bridge that does not compile.
+  fun enumParamsUnsupported(returnShape: String): List<CirMember> {
+    logger.error(
+      "Enum parameters are not supported on a top-level function with a $returnShape return " +
+        "type ('${func.simpleName.asString()}'). They are supported on top-level functions " +
+        "returning an enum, a String, a primitive, or Unit.",
+      func,
+    )
+    return emptyList()
   }
 
   val entryPoint: String? = if (csName != cname) cname else null
 
   if (isNullable) {
+    if (hasEnumParams) return enumParamsUnsupported("nullable")
+
     return translateNullableFunction(cname, csName, kotlinReturnType, params, func, libraryName)
   }
 
@@ -44,6 +77,8 @@ internal fun translateFunction(
   val isLambdaReturnType: Boolean = qualifiedReturnName in LAMBDA_TYPES
 
   if (isLambdaReturnType) {
+    if (hasEnumParams) return enumParamsUnsupported("lambda")
+
     val lambdaArity: Int = returnType!!.arguments.size - 1
     tracker.lambdaArities.add(lambdaArity)
 
@@ -75,6 +110,8 @@ internal fun translateFunction(
   }
 
   if (isListReturnType) {
+    if (hasEnumParams) return enumParamsUnsupported("List")
+
     tracker.needsList = true
     val elementType = returnType?.arguments?.firstOrNull()?.type?.resolve()
     val elementTypeName: String = elementType?.declaration?.simpleName?.asString() ?: "Any"
@@ -115,6 +152,8 @@ internal fun translateFunction(
   }
 
   if (isMutableListReturnType) {
+    if (hasEnumParams) return enumParamsUnsupported("MutableList")
+
     tracker.needsList = true
     val elementType = returnType?.arguments?.firstOrNull()?.type?.resolve()
     val elementTypeName: String = elementType?.declaration?.simpleName?.asString() ?: "Any"
@@ -155,6 +194,8 @@ internal fun translateFunction(
   }
 
   if (isMapReturnType) {
+    if (hasEnumParams) return enumParamsUnsupported("Map")
+
     tracker.needsMap = true
     val keyType = returnType?.arguments?.getOrNull(0)?.type?.resolve()
     val keyTypeName: String = keyType?.declaration?.simpleName?.asString() ?: "Any"
@@ -201,6 +242,8 @@ internal fun translateFunction(
   }
 
   if (isMutableMapReturnType) {
+    if (hasEnumParams) return enumParamsUnsupported("MutableMap")
+
     tracker.needsMap = true
     val keyType = returnType?.arguments?.getOrNull(0)?.type?.resolve()
     val keyTypeName: String = keyType?.declaration?.simpleName?.asString() ?: "Any"
@@ -247,6 +290,8 @@ internal fun translateFunction(
   }
 
   if (isSetReturnType) {
+    if (hasEnumParams) return enumParamsUnsupported("Set")
+
     tracker.needsSet = true
     val elementType = returnType?.arguments?.firstOrNull()?.type?.resolve()
     val elementTypeName: String = elementType?.declaration?.simpleName?.asString() ?: "Any"
@@ -287,6 +332,8 @@ internal fun translateFunction(
   }
 
   if (isMutableSetReturnType) {
+    if (hasEnumParams) return enumParamsUnsupported("MutableSet")
+
     tracker.needsSet = true
     val elementType = returnType?.arguments?.firstOrNull()?.type?.resolve()
     val elementTypeName: String = elementType?.declaration?.simpleName?.asString() ?: "Any"
@@ -327,9 +374,11 @@ internal fun translateFunction(
   }
 
   val isGenericReturnType: Boolean = returnDecl?.typeParameters?.isNotEmpty() == true &&
-    returnType.arguments.isNotEmpty()
+      returnType.arguments.isNotEmpty()
 
   if (isGenericReturnType) {
+    if (hasEnumParams) return enumParamsUnsupported("generic")
+
     val typeArgs: String = returnType.arguments.joinToString(", ") { arg ->
       val argType: String = arg.type?.resolve()?.declaration?.simpleName?.asString() ?: "object"
       when (argType) {
@@ -350,7 +399,8 @@ internal fun translateFunction(
     )
 
     val paramNames: String = params.joinToString(", ") { it.name }
-    val nativeCallArgs: String = if (paramNames.isEmpty()) "out IntPtr error" else "$paramNames, out IntPtr error"
+    val nativeCallArgs: String =
+      if (paramNames.isEmpty()) "out IntPtr error" else "$paramNames, out IntPtr error"
     val body: String = buildString {
       appendLine()
       appendLine("            IntPtr nativeResult = ${csName}_native($nativeCallArgs);")
@@ -373,8 +423,11 @@ internal fun translateFunction(
   }
 
   val isSealedReturnType: Boolean = returnDecl?.modifiers?.contains(Modifier.SEALED) == true
+  val isEnumReturnType: Boolean = returnDecl?.classKind == ClassKind.ENUM_CLASS
 
   if (isSealedReturnType) {
+    if (hasEnumParams) return enumParamsUnsupported("sealed")
+
     val nativeImport = CirDllImport(
       libraryName = libraryName,
       entryPoint = cname,
@@ -386,7 +439,8 @@ internal fun translateFunction(
     )
 
     val paramNames: String = params.joinToString(", ") { it.name }
-    val nativeCallArgs: String = if (paramNames.isEmpty()) "out IntPtr error" else "$paramNames, out IntPtr error"
+    val nativeCallArgs: String =
+      if (paramNames.isEmpty()) "out IntPtr error" else "$paramNames, out IntPtr error"
     val body: String = buildString {
       appendLine()
       appendLine("            IntPtr nativeResult = ${csName}_native($nativeCallArgs);")
@@ -403,6 +457,37 @@ internal fun translateFunction(
       parameters = params,
       body = body,
       isStatic = true,
+    )
+
+    return listOf(nativeImport, wrapper)
+  }
+
+  if (isEnumReturnType) {
+    val enumNamespace: String = mapPackageToNamespace(
+      returnDecl.packageName.asString(), rootPackage, rootNamespace,
+    )
+    val enumType: String = "global::$enumNamespace.$kotlinReturnType"
+    val nativeImport = CirDllImport(
+      libraryName = libraryName,
+      entryPoint = cname,
+      returnType = "int",
+      name = "${csName}_native",
+      parameters = params,
+      visibility = CirVisibility.PRIVATE,
+      hasSyncErrorOut = true,
+    )
+
+    // renderSyncErrorCheckMethod builds the native call and the cast back to the enum itself,
+    // so it never reads body.
+    val wrapper = CirMethod(
+      name = csName,
+      returnType = enumType,
+      nativeReturnType = "int",
+      nativeName = "${csName}_native",
+      parameters = params,
+      body = "",
+      isStatic = true,
+      isSyncErrorCheckEnabled = true,
     )
 
     return listOf(nativeImport, wrapper)
@@ -437,7 +522,7 @@ internal fun translateFunction(
 
   val qualifiedReturnType: String? = returnDecl?.qualifiedName?.asString()
   val isUnknownObjectReturn: Boolean = kotlinReturnType !in KOTLIN_TO_CSHARP_RETURN &&
-    qualifiedReturnType != null && qualifiedReturnType !in exportedTypes
+      qualifiedReturnType != null && qualifiedReturnType !in exportedTypes
 
   if (isUnknownObjectReturn) {
     logger.warn("Skipping function '${func.simpleName.asString()}': unsupported return type '$qualifiedReturnType'")
@@ -499,10 +584,10 @@ internal fun translateSuspendFunction(
 
   val callbackType: String = "NugetAsyncCallback"
   val nativeParams: List<CirParameter> = params +
-    listOf(
-      CirParameter("callback", callbackType),
-      CirParameter("userData", "IntPtr"),
-    )
+      listOf(
+        CirParameter("callback", callbackType),
+        CirParameter("userData", "IntPtr"),
+      )
 
   val nativeImport = CirDllImport(
     libraryName = libraryName,
@@ -551,7 +636,7 @@ internal fun translateGenericFunction(
 
       val isInterface: Boolean =
         resolved.declaration is KSClassDeclaration &&
-          (resolved.declaration as KSClassDeclaration).classKind ==
+            (resolved.declaration as KSClassDeclaration).classKind ==
             ClassKind.INTERFACE
 
       when {
