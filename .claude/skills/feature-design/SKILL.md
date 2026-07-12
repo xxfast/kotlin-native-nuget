@@ -1,11 +1,11 @@
 ---
 name: feature-design
-description: Implements a new bridge feature end to end using a 3-step TDD loop. Orchestrates the research, csharp-dev, kotlin-dev, refactorer and documenter agents from the main thread. Research first, verify the approach with humans, write failing tests on the consumer side of the feature, make them pass, then style-check and document in parallel.
+description: Implements a new bridge feature end to end using a TDD loop. Orchestrates the research, csharp-dev, kotlin-dev, refactorer and documenter agents from the main thread. Research first, verify the approach with humans, prove the path is passable with a walking skeleton, write failing tests on the consumer side of the feature, make them pass, then style-check and document in parallel.
 ---
 
 # Feature Design
 
-Implements a new feature using a 3-step TDD loop, delegating each step to the appropriate subagent.
+Implements a new feature using a TDD loop, delegating each step to the appropriate subagent.
 
 You run in the main conversation thread, so you can spawn subagents and pause to check in with the human. Delegate to the appropriate agent for each step (research, testing, implementation, refactor, docs) and provide them the necessary context and instructions.
 
@@ -20,7 +20,7 @@ Many phases (Phases 9–13 especially) are largely reverse-direction work that m
   - Fan out one **background** `research` agent per item, in parallel.
   - Collect all their draft ADRs/findings and present them to the human in a **single Step 2 review sitting**, instead of one interruption per feature.
 
-Then run the per-feature Step 3–5 loop below for each item.
+Then run the per-feature Step 3–6 loop below for each item.
 
 ## Workflow
 
@@ -43,9 +43,18 @@ Then run the per-feature Step 3–5 loop below for each item.
 - Get feedback and iterate on the design before implementation
 - Call out any deferred scope and ask if we want to schedule this on the roadmap
 - This step is crucial to ensure we're building the right thing before writing code
-- Once the human agrees with the approach, move to the next step (the ADR is accepted later, in Step 5, once the feature is implemented and verified)
+- Once the human agrees with the approach, move to the next step (the ADR is accepted later, in Step 6, once the feature is implemented and verified)
 
-### Step 3: Testing
+### Step 3: Walking skeleton (end-to-end spike)
+
+Drive the **thinnest possible slice** of the feature (one member, one type, one assertion) all the way through `scripts/verify.sh` before anyone writes the full fixture or the full test suite.
+
+- **Non-negotiable for reverse / ecosystem features (Phase 8+)**, where the round trip spans four artifacts: metadata reader → Kotlin stub gen → C# shim gen → NuGet packaging. Optional for a forward feature that only touches the KSP processor.
+- Its first job is to prove the path is **passable**. Verify is where reality intrudes; a latent bug in that path should surface in the first 20 minutes against a two-line fixture, not after a 14-test fixture and both generator sides are already written.
+- Its second job is to **validate the ADR's inferred mechanism claims**. The `research` agent cannot execute anything, so every claim about what a real assembly or toolchain does at runtime is labelled inferred (see [research](../../agents/research.md)). Check each one against the real artefact here, before an implementing agent follows it literally.
+- Delegate to `kotlin-dev` + `csharp-dev` and keep them warm, they carry into Step 4. If the skeleton does not go green, fix or split (see Rules) before writing any more tests.
+
+### Step 4: Testing
 
 Write failing tests on the **consumer side** of the feature. Which side that is depends on the feature:
 
@@ -65,7 +74,7 @@ Write failing tests on the **consumer side** of the feature. Which side that is 
   - Write failing `ProjectBuilder` unit tests in `nuget-plugin/src/test/kotlin` that apply the plugin, configure the DSL as a consumer would, and assert the extension model / task wiring
   - Defer Gradle TestKit functional tests until there is task behavior that ProjectBuilder cannot reach
 
-### Step 4: Implementation (`kotlin-dev` agent)
+### Step 5: Implementation (`kotlin-dev` agent)
 
 - Make the failing tests pass
 - Update the KSP processor (CirModel, CirTranslator, CirRenderer, NugetProcessor) or the Gradle plugin (`nuget-plugin/`), whichever the feature lives in
@@ -73,7 +82,7 @@ Write failing tests on the **consumer side** of the feature. Which side that is 
 - The loop iterates: tests fail, fix, re-run. Continue the same `kotlin-dev` instance via SendMessage rather than spawning a fresh agent each round. Same for `csharp-dev` if the tests themselves need adjusting.
 - Ask `kotlin-dev` to report back the list of files it touched, you will hand that to the refactorer.
 
-### Step 5: Style review and docs (last step, run in parallel)
+### Step 6: Style review and docs (last step, run in parallel)
 
 Once the feature is implemented and verified, spawn both agents **in the same message**. They cannot
 collide: the `refactorer` only touches Kotlin, the `documenter` only touches Markdown.
@@ -94,11 +103,15 @@ this step only after the feature is verified and the build artefacts are current
 - You must delegate to the appropriate subagent
 - Research agents run in background when independent
 - After research is complete, share findings with humans for feedback before proceeding to implementation
-- Run subagent to write tests FIRST (step 3 before step 4)
+- Walking skeleton before fixtures (step 3 before step 4), and tests before implementation (step 4 before step 5)
 - Pass agents file paths and intent, not file contents. They have Read and know the project layout, so let them read what they need.
 - Reuse warm agents (SendMessage) when iterating instead of spawning fresh ones
 - After implementation, verify locally by running `scripts/verify.sh` (add `--plugin` for Gradle plugin changes to also run the `nuget-plugin/` plugin unit tests). The script also purges the stale `~/.nuget/packages/samplelibrary` cache, a known footgun where a re-pack silently resolves against the old package.
-- Step 5 is the last step, run only after the feature is verified. Spawn `refactorer` and `documenter` in parallel, in one message: the first owns the Kotlin, the second owns every doc surface (Writerside pages in `docs/topics/`, ROADMAP.md, FEATURES.md, ADR status).
+- **No manual path around `verify.sh`.** Never hand-edit generated output, hand-patch a generated shim, or copy files into `~/.nuget/packages/` to iterate faster. It manufactures bugs that look real, and you then pay to debug something that does not exist.
+- **Instrument before hypothesizing.** When the round trip fails, get evidence about what actually executes (is registration even firing? what does the generated artefact really contain?) before forming a theory. Never spend a long agent round bisecting a hypothesis that a cheap probe could have falsified in minutes.
+- **Split pre-existing bugs out.** A bug the fixture uncovers but the feature did not cause gets reported and split into its own commit/ticket immediately, it does not silently expand the feature's scope. A fixture that is the first to exercise some combination (first two bound classes in one namespace, first nullable-returning export that throws) *should* be expected to flush out latent bugs. That means the existing fixtures were unrealistic, it is not a distraction.
+- **No orphaned builds.** Agents must not leave a Gradle build running in the background: it holds the project lock and silently starves every agent behind it. When an agent goes quiet, check `ps` and `./gradlew --status` for an orphaned build before assuming the agent is stuck or thinking.
+- Step 6 is the last step, run only after the feature is verified. Spawn `refactorer` and `documenter` in parallel, in one message: the first owns the Kotlin, the second owns every doc surface (Writerside pages in `docs/topics/`, ROADMAP.md, FEATURES.md, ADR status).
 - Never write the docs yourself. The `documenter` grounds every snippet in the real generated output; writing them from the main thread means writing them from memory.
 
 ## Prompting subagents
