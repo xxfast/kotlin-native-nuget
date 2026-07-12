@@ -68,11 +68,35 @@ On top of that, we have some additional conventions that are specific to this re
 - Staleness has two layers here, and purging one is not enough. `~/.nuget/packages/{samplelibrary,sampledependency}` is the first. The consumers' own `obj/project.assets.json` is the second: `dotnet build` reports "All projects are up-to-date for restore" and skips re-resolving the `<Compile>` item set entirely, because NuGet's restore-skip check hashes the project and lock file and cannot see that a version-pinned (`1.0.0`) package's *contents* changed underneath it. `scripts/verify.sh` now clears both. Nothing else does.
 - Before you conclude "the generator emits the wrong thing" or "the compiler is omitting my code", rebuild clean and re-check. If a finding cannot survive `scripts/verify.sh` from a purged state, it is not a finding.
 
+### Symptom to cause: is it a bug, or is it stale state?
+
+Each of these cost hours before it was understood. Check the right-hand column **before** you start debugging the left.
+
+| What you see                                                                                                 | Almost always means                                                                                                                                                  |
+|--------------------------------------------------------------------------------------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `<Module>..cctor` has fewer `call`s than there are registration shims, or a `[ModuleInitializer]` never runs | Stale `obj/project.assets.json` in the consumer. MSBuild resolved the `<Compile>` set from an older restore and never compiled the new shim in. **Not** a Roslyn bug |
+| Reverse registration "never fires" for a whole namespace                                                     | Same as above                                                                                                                                                        |
+| Types missing from the package (`Cat`, `IPet`, ...)                                                          | Stale `~/.nuget/packages/samplelibrary`                                                                                                                              |
+| Reverse bindings generated against an API that no longer exists                                              | Stale `~/.nuget/packages/sampledependency`, read by `nugetExtractApi` **during** `packNuget`, so purge it *before* packing                                           |
+| Registration contract mismatch (`slotCount` / `contractHash`) at startup                                     | A C# shim and the native library came from different builds. Purge and rebuild; this check exists to tell you exactly that (ADR-054)                                 |
+
 ## Instrument Before Hypothesizing
 
 - When something fails at the bridge, get evidence about what actually executes before forming a theory. A plausible story about freshly-changed code is not evidence, and chasing one cost a 45-minute agent round that ended with every file byte-identical to where it started.
 - Ask the cheap decisive question first. "Did registration fire at all?" is one command. "Is my new storage class subtly wrong?" is a bisect. Do not spend the bisect until the cheap question is answered.
-- The reverse bridge is currently unobservable (no way to see which registrations landed), which is exactly why guessing is tempting. That is tracked in [ROADMAP.md](ROADMAP.md) under Tooling & Test Integrity. Until it lands, instrument by hand rather than by intuition.
+
+### The first move, before any theory
+
+The reverse bridge is observable as of [ADR-054](docs/adr/054-reverse-bridge-registration-observability.md). Use it:
+
+- **Read the failure message.** The "not registered" error is computed, not constant: it says *N of M registrations fired* and names the missing types. Zero of M is a completely different bug from M-1 of M, and the message tells you which you have.
+- **Run with `NUGET_INTEROP_TRACE=1`** (`NUGET_INTEROP_TRACEFILE=<path>` to redirect; stderr by default, because xunit v2 does not capture `Console.Out`). Both sides interleave, so "the C# shim never ran" and "the shim ran and the native side rejected it" are visibly different.
+- Only once those two say nothing useful should you reach for a bisect.
+
+### Techniques worth reusing
+
+- **Proving an ABI mismatch between a C# `DllImport` and a Kotlin `@CName` export**: write a scratch console app that P/Invokes the real built `.dylib` with the *wrong* signature on purpose, and observe how it fails. This is how ADR-054's "an old shim calling a new export fails cleanly rather than corrupting memory" claim was confirmed, instead of argued.
+- **Finding out which `[ModuleInitializer]`s Roslyn actually wired up**: decode `<Module>..cctor`'s IL. There is no `ildasm` on macOS, so use a short `System.Reflection.Metadata` program to count the `call` instructions. This is what proved the "registration never fires" symptom was a compile-time omission (and therefore stale state), not a runtime abort.
 
 ## Label Design-Doc Claims: Verified or Inferred
 
