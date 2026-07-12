@@ -83,7 +83,9 @@ and [ADR-048](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/0
   crash.
 - On the C# side, a `[ModuleInitializer]` method runs automatically when the assembly loads and
   calls the Kotlin registration export, passing the address of one `[UnmanagedCallersOnly]` thunk
-  per member:
+  per member. Two leading scalars, `slotCount` and `contractHash`, precede the thunk pointers: a
+  registration-time contract self-check, described in [Registration diagnostics](registration-diagnostics.md)
+  ([ADR-054](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/054-reverse-bridge-registration-observability.md)):
 
 ```C#
 // build/nuget-interop/csharp/MimeUtilityRegistration.cs (real generated output)
@@ -91,13 +93,32 @@ internal static class MimeUtilityRegistration
 {
     [DllImport("sample", CallingConvention = CallingConvention.Cdecl,
         EntryPoint = "nuget_mimemapping_mime_utility_register")]
-    private static extern void nuget_mimemapping_mime_utility_register(IntPtr getMimeMappingPtr);
+    private static extern void nuget_mimemapping_mime_utility_register(int slotCount, long contractHash, IntPtr getMimeMappingPtr);
 
     [ModuleInitializer]
     internal static unsafe void Initialize()
     {
-        nuget_mimemapping_mime_utility_register(
-            (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, IntPtr>)(&GetMimeMapping_Thunk));
+        NugetTrace.Write(
+            "register enter MimeMapping.MimeUtility -> nuget_mimemapping_mime_utility_register(1 slot) dll=sample");
+        try
+        {
+            nuget_mimemapping_mime_utility_register(
+                1,
+                -8070388729487098041L,
+                (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, IntPtr>)(&GetMimeMapping_Thunk));
+        }
+        catch (DllNotFoundException e)
+        {
+            NugetTrace.WriteAlways($"FATAL: native library 'sample' not found: {e.Message}");
+            throw;
+        }
+        catch (EntryPointNotFoundException e)
+        {
+            NugetTrace.WriteAlways($"FATAL: export 'nuget_mimemapping_mime_utility_register' missing from " +
+                $"'sample'. The native library predates this shim (stale build state). {e.Message}");
+            throw;
+        }
+        NugetTrace.Write("register ok    MimeMapping.MimeUtility");
     }
 
     [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
@@ -115,9 +136,20 @@ internal var getMimeMappingFn: CPointer<CFunction<(COpaquePointer?) -> COpaquePo
 
 @CName("nuget_mimemapping_mime_utility_register")
 fun nuget_mimemapping_mime_utility_register(
-  getMimeMappingPtr: COpaquePointer,
+  slotCount: Int,
+  contractHash: Long,
+  getMimeMappingPtr: COpaquePointer?,
 ) {
-  getMimeMappingFn = getMimeMappingPtr.reinterpret()
+  NugetRegistry.checkContract(
+    qualifiedType = "MimeMapping.MimeUtility",
+    packageId = "MimeMapping",
+    slotCount = slotCount,
+    contractHash = contractHash,
+    expectedSlots = 1,
+    expectedHash = -8070388729487098041L,
+  )
+  MimeUtilityBindings.getMimeMappingFn = requireNotNull(getMimeMappingPtr) { "nuget_mimemapping_mime_utility_register passed a null getMimeMapping thunk pointer." }.reinterpret()
+  NugetRegistry.record("MimeMapping.MimeUtility", 1)
 }
 ```
 
@@ -126,6 +158,10 @@ your Kotlin code can run. Because `[ModuleInitializer]` only fires once the cont
 actually loaded, the shim ships as *source* merged into the consumer's own compile, not a separately
 compiled DLL. A separately compiled shim assembly might never get loaded at all, since nothing in a
 typical consumer's code path references it directly.
+
+`checkContract` and the `requireNotNull` guard it protects are always on: no environment variable
+enables them. See [Registration diagnostics](registration-diagnostics.md) for what a mismatch
+means and how to read it, and for the opt-in trace that logs each registration as it lands.
 
 ### `packNuget`: one `PackageReference` for the consumer
 
@@ -156,6 +192,7 @@ install pointer rather than a cryptic subprocess error.
         <a href="declaring-dependencies.md">Declaring dependencies</a>
         <a href="static-classes-and-methods.md">Static classes and methods</a>
         <a href="objects-and-handles.md">Objects and handles</a>
+        <a href="registration-diagnostics.md">Registration diagnostics</a>
         <a href="instance-members.md">Instance members</a>
         <a href="bridgeable-subset.md">The bridgeable subset</a>
     </category>
@@ -167,5 +204,6 @@ install pointer rather than a cryptic subprocess error.
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/048-kotlin-stub-generation-from-reverse-ir.md">ADR-048: Kotlin stub generation from reverse IR</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/049-csharp-registration-shim-generation.md">ADR-049: C# registration shim generation</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/050-end-to-end-packaging-integration.md">ADR-050: End-to-end packaging integration</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/054-reverse-bridge-registration-observability.md">ADR-054: Reverse-bridge registration observability</a>
     </category>
 </seealso>

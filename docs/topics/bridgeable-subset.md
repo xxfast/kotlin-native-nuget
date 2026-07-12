@@ -250,6 +250,7 @@ queryable diagnostics report (only a Gradle log line exists today), tracked in
         <a href="static-classes-and-methods.md">Static classes and methods</a>
         <a href="objects-and-handles.md">Objects and handles</a>
         <a href="instance-members.md">Instance members</a>
+        <a href="registration-diagnostics.md">Registration diagnostics</a>
     </category>
     <category ref="external">
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/043-bridgeable-subset-boundary.md">ADR-043: Bridgeable subset boundary</a>

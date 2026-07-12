@@ -1,5 +1,6 @@
 package io.github.xxfast.kotlin.native.nuget
 
+import io.github.xxfast.kotlin.native.nuget.rir.NUGET_RUNTIME_CONTRACT_HASH
 import io.github.xxfast.kotlin.native.nuget.rir.RirClass
 import io.github.xxfast.kotlin.native.nuget.rir.RirConstructor
 import io.github.xxfast.kotlin.native.nuget.rir.RirDiagnostic
@@ -8,7 +9,6 @@ import io.github.xxfast.kotlin.native.nuget.rir.RirEnumType
 import io.github.xxfast.kotlin.native.nuget.rir.RirFile
 import io.github.xxfast.kotlin.native.nuget.rir.RirMethod
 import io.github.xxfast.kotlin.native.nuget.rir.RirObjectHandleType
-import io.github.xxfast.kotlin.native.nuget.rir.RirParameter
 import io.github.xxfast.kotlin.native.nuget.rir.RirPrimitiveType
 import io.github.xxfast.kotlin.native.nuget.rir.RirProperty
 import io.github.xxfast.kotlin.native.nuget.rir.RirRegistrable
@@ -19,6 +19,7 @@ import io.github.xxfast.kotlin.native.nuget.rir.RirVoidType
 import io.github.xxfast.kotlin.native.nuget.rir.boundHandleTypes
 import io.github.xxfast.kotlin.native.nuget.rir.bridgeableRegistrables
 import io.github.xxfast.kotlin.native.nuget.rir.collisionDiagnostics
+import io.github.xxfast.kotlin.native.nuget.rir.contractHash
 import io.github.xxfast.kotlin.native.nuget.rir.isNullable
 import io.github.xxfast.kotlin.native.nuget.rir.parseReverseIr
 import io.github.xxfast.kotlin.native.nuget.rir.registrationExportName
@@ -82,6 +83,12 @@ fun generateKotlinStubs(
   var needsInterop = false
   var needsRuntime = false
   var needsEnums = false
+
+  // ADR-054: every "{Namespace}.{Type}" this build emits a register export for, in the order
+  // encountered — baked into the generated NugetRegistry.kt's `expected` list so the "N of M
+  // registrations fired" message can name exactly what did/did not land. "<runtime>" (if needed)
+  // is prepended after the loop, once whether-any-class-needs-it is known.
+  val expectedRegistrations: MutableList<String> = mutableListOf()
 
   // ADR-051: derive once for the whole file — both generators must use the same helper
   // (anti-drift contract, ADR-049 Alternative 10 extended by ADR-051).
@@ -157,12 +164,13 @@ fun generateKotlinStubs(
         if (hasEnumReturn) needsEnums = true
 
         val exportName: String = registrationExportName(namespace.name, cls.name)
+        expectedRegistrations.add("${namespace.name}.${cls.name}")
 
         result.add(
           GeneratedFile(
             relativePath = "nativeMain/$pkgPath/${cls.name}Bindings.kt",
             content = bindingsFileContent(
-              kotlinPkg, cls, registrables, exportName, assembly.packageId,
+              kotlinPkg, cls, registrables, exportName, assembly.packageId, namespace.name,
             ),
           )
         )
@@ -172,7 +180,7 @@ fun generateKotlinStubs(
             content = stubFileContent(
               kotlinPkg, cls, staticMethods, instanceMethods, ctors,
               instancePropertyGetters, staticPropertyGetters, propertySetterNames, assembly.packageId,
-              enumPkgs,
+              namespace.name, enumPkgs,
             ),
           )
         )
@@ -206,6 +214,31 @@ fun generateKotlinStubs(
       GeneratedFile(
         relativePath = "nativeMain/$INTERNAL_DIR/NugetRuntime.kt",
         content = nugetRuntimeContent(),
+      )
+    )
+  }
+
+  // ADR-054: NugetRegistry.kt is needed whenever any register export (a bound type's, or
+  // nuget_runtime_register's) is emitted — i.e. exactly whenever there is something to expect a
+  // registration from. "<runtime>" (if needed) is listed first, matching the ADR's illustrative
+  // NugetRegistry.kt example.
+  val expected: List<String> =
+    (if (needsRuntime) listOf("<runtime>") else emptyList()) + expectedRegistrations
+  if (expected.isNotEmpty()) {
+    result.add(
+      GeneratedFile(
+        relativePath = "nativeMain/$INTERNAL_DIR/NugetRegistry.kt",
+        content = nugetRegistryContent(expected),
+      )
+    )
+    // ADR-054: NugetTrace.kt is needed exactly whenever NugetRegistry.kt is — the registry's
+    // record(...) is the only Kotlin-side call site for nugetTrace(...). Shared code (no
+    // expect/actual split): the walking skeleton verified platform.posix.stderr/fopen/fputs/
+    // fclose/getenv all bind and link on mingwX64 (this project's only non-POSIX target).
+    result.add(
+      GeneratedFile(
+        relativePath = "nativeMain/$INTERNAL_DIR/NugetTrace.kt",
+        content = nugetTraceContent(),
       )
     )
   }
@@ -369,8 +402,10 @@ private fun bindingsFileContent(
   registrables: List<RirRegistrable>,
   exportName: String,
   packageId: String,
+  namespaceName: String,
 ): String {
   val objectName: String = bindingsObjectName(cls.name)
+  val qualifiedType: String = "$namespaceName.${cls.name}"
   val hasString: Boolean = registrables.any { r ->
     when (r) {
       is RirRegistrable.Ctor -> r.ctor.parameters.any { it.type is RirStringType }
@@ -387,6 +422,7 @@ private fun bindingsFileContent(
       add("import $INTERNAL_PKG.freeManagedString")
       add("import kotlinx.cinterop.ByteVar")
     }
+    add("import $INTERNAL_PKG.NugetRegistry")
     add("import kotlinx.cinterop.CFunction")
     add("import kotlinx.cinterop.COpaquePointer")
     add("import kotlinx.cinterop.CPointer")
@@ -433,34 +469,51 @@ private fun bindingsFileContent(
     }
   }
 
+  // ADR-054: pointer parameters are nullable (a stale caller passing fewer args than declared
+  // leaves the tail argument registers unpopulated — see checkContract below, which reads only
+  // slotCount/contractHash and returns before either storing or dereferencing any pointer here).
   val regParams: String = registrables.joinToString(",\n  ") { r ->
     when (r) {
-      is RirRegistrable.Ctor -> "ctorPtr: COpaquePointer"
-      is RirRegistrable.Method -> "${r.method.name.toMethodCamelCase()}Ptr: COpaquePointer"
-      is RirRegistrable.PropertyGetter -> "${r.property.name.toMethodCamelCase()}GetterPtr: COpaquePointer"
-      is RirRegistrable.PropertySetter -> "${r.property.name.toMethodCamelCase()}SetterPtr: COpaquePointer"
+      is RirRegistrable.Ctor -> "ctorPtr: COpaquePointer?"
+      is RirRegistrable.Method -> "${r.method.name.toMethodCamelCase()}Ptr: COpaquePointer?"
+      is RirRegistrable.PropertyGetter ->
+        "${r.property.name.toMethodCamelCase()}GetterPtr: COpaquePointer?"
+
+      is RirRegistrable.PropertySetter ->
+        "${r.property.name.toMethodCamelCase()}SetterPtr: COpaquePointer?"
     }
   }
 
+  // Each pointer is requireNotNull'd only AFTER checkContract has already agreed the counts/hash
+  // match — a null here past that point is a generator bug, not a legitimate mismatch, hence the
+  // fail-fast rather than a silent skip.
   val regBody: String = registrables.joinToString("\n  ") { r ->
     when (r) {
-      is RirRegistrable.Ctor -> "$objectName.ctorFn = ctorPtr.reinterpret()"
+      is RirRegistrable.Ctor -> "$objectName.ctorFn = requireNotNull(ctorPtr) " +
+          "{ \"$exportName passed a null ctor thunk pointer.\" }.reinterpret()"
+
       is RirRegistrable.Method -> {
         val name: String = r.method.name.toMethodCamelCase()
-        "$objectName.${name}Fn = ${name}Ptr.reinterpret()"
+        "$objectName.${name}Fn = requireNotNull(${name}Ptr) " +
+            "{ \"$exportName passed a null $name thunk pointer.\" }.reinterpret()"
       }
 
       is RirRegistrable.PropertyGetter -> {
         val name: String = r.property.name.toMethodCamelCase()
-        "$objectName.${name}GetterFn = ${name}GetterPtr.reinterpret()"
+        "$objectName.${name}GetterFn = requireNotNull(${name}GetterPtr) " +
+            "{ \"$exportName passed a null $name getter thunk pointer.\" }.reinterpret()"
       }
 
       is RirRegistrable.PropertySetter -> {
         val name: String = r.property.name.toMethodCamelCase()
-        "$objectName.${name}SetterFn = ${name}SetterPtr.reinterpret()"
+        "$objectName.${name}SetterFn = requireNotNull(${name}SetterPtr) " +
+            "{ \"$exportName passed a null $name setter thunk pointer.\" }.reinterpret()"
       }
     }
   }
+
+  val expectedSlots: Int = registrables.size
+  val expectedHash: Long = contractHash(cls, registrables)
 
   return """
     |@file:OptIn(kotlinx.cinterop.ExperimentalForeignApi::class)
@@ -487,9 +540,24 @@ private fun bindingsFileContent(
     |// function from Kotlin visibility.
     |@CName("$exportName")
     |fun $exportName(
+    |  slotCount: Int,
+    |  contractHash: Long,
     |  $regParams,
     |) {
+    |  // ADR-054: refuses to store any pointer if the caller's counts disagree with this build's —
+    |  // a stale C# shim (fewer args than declared here) is read-only-safe up to this point: only
+    |  // slotCount/contractHash (the two leading scalars) are read before this call decides whether
+    |  // to proceed.
+    |  NugetRegistry.checkContract(
+    |    qualifiedType = "$qualifiedType",
+    |    packageId = "$packageId",
+    |    slotCount = slotCount,
+    |    contractHash = contractHash,
+    |    expectedSlots = $expectedSlots,
+    |    expectedHash = ${expectedHash}L,
+    |  )
     |  $regBody
+    |  NugetRegistry.record("$qualifiedType", $expectedSlots)
     |}
   """.trimMargin().trim()
 }
@@ -504,6 +572,7 @@ private fun stubFileContent(
   staticPropertyGetters: List<RirProperty>,
   propertySetterNames: Set<String>,
   packageId: String,
+  namespaceName: String,
   enumPkgs: Map<RirTypeKey, String>,
 ): String {
   val hasHandle: Boolean = staticMethods.any { method ->
@@ -523,7 +592,8 @@ private fun stubFileContent(
   if (isClassWrapper) {
     return classWrapperContent(
       kotlinPkg, cls, staticMethods, instanceMethods, ctors,
-      instancePropertyGetters, staticPropertyGetters, propertySetterNames, packageId, enumPkgs,
+      instancePropertyGetters, staticPropertyGetters, propertySetterNames, packageId,
+      namespaceName, enumPkgs,
     )
   }
 
@@ -560,9 +630,18 @@ private fun stubFileContent(
     )
   )
 
-  val methods: String = staticMethods.joinToString("\n\n") { buildStubMethod(cls, it, packageId) }
+  // ADR-054: NugetRegistry.notRegistered(...) is called at runtime (not baked as a constant
+  // string) so the "N of M registrations fired" message reflects what actually landed by the time
+  // a bridge call fails, rather than the fixed generation-time text this replaces.
+  imports.add("import $INTERNAL_PKG.NugetRegistry")
+
+  val methods: String = staticMethods.joinToString("\n\n") {
+    buildStubMethod(cls, it, packageId, namespaceName)
+  }
   val properties: String = staticPropertyGetters.joinToString("\n\n") { property ->
-    buildStubProperty(cls, property, hasSetter = property.name in propertySetterNames, packageId)
+    buildStubProperty(
+      cls, property, hasSetter = property.name in propertySetterNames, packageId, namespaceName,
+    )
   }
 
   return buildString {
@@ -613,6 +692,7 @@ private fun classWrapperContent(
   staticPropertyGetters: List<RirProperty>,
   propertySetterNames: Set<String>,
   packageId: String,
+  namespaceName: String,
   enumPkgs: Map<RirTypeKey, String>,
 ): String {
   val allMethods: List<RirMethod> = staticMethods + instanceMethods
@@ -626,6 +706,7 @@ private fun classWrapperContent(
 
   val imports: MutableList<String> = mutableListOf(
     "import $INTERNAL_PKG.NugetObjectHandle",
+    "import $INTERNAL_PKG.NugetRegistry",
     "import kotlin.experimental.ExperimentalNativeApi",
     "import kotlin.native.ref.createCleaner",
     "import kotlinx.cinterop.COpaquePointer",
@@ -653,14 +734,18 @@ private fun classWrapperContent(
   )
 
   val instanceMethodsText: String =
-    instanceMethods.joinToString("\n\n") { buildStubMethod(cls, it, packageId) }
+    instanceMethods.joinToString("\n\n") { buildStubMethod(cls, it, packageId, namespaceName) }
   val propertiesText: String = instancePropertyGetters.joinToString("\n\n") { property ->
-    buildStubProperty(cls, property, hasSetter = property.name in propertySetterNames, packageId)
+    buildStubProperty(
+      cls, property, hasSetter = property.name in propertySetterNames, packageId, namespaceName,
+    )
   }
   val staticMethodsText: String =
-    staticMethods.joinToString("\n\n") { buildStubMethod(cls, it, packageId) }
+    staticMethods.joinToString("\n\n") { buildStubMethod(cls, it, packageId, namespaceName) }
   val staticPropertiesText: String = staticPropertyGetters.joinToString("\n\n") { property ->
-    buildStubProperty(cls, property, hasSetter = property.name in propertySetterNames, packageId)
+    buildStubProperty(
+      cls, property, hasSetter = property.name in propertySetterNames, packageId, namespaceName,
+    )
   }
 
   return buildString {
@@ -709,7 +794,9 @@ private fun classWrapperContent(
     appendLine("}")
     if (ctors.isNotEmpty()) {
       appendLine()
-      ctors.forEach { ctor -> append(buildConstructHelper(cls, ctor, packageId)) }
+      ctors.forEach { ctor ->
+        append(buildConstructHelper(cls, ctor, packageId, namespaceName))
+      }
     }
   }
 }
@@ -744,17 +831,20 @@ private fun argConversion(type: RirTypeRef, name: String): String = when {
 private fun String.indented(indent: String): String =
   lineSequence().joinToString("\n") { line -> if (line.isBlank()) line else indent + line }
 
-// Shared "bindings not registered" guard message, embedded as the multi-line String literal body
-// of `requireNotNull($fnVar) { ... }` — used by buildStubMethod, buildConstructHelper, and
-// buildStubProperty so the wording never drifts between the three call sites. Baked as a
-// self-contained block (continuation lines indented 2 spaces past the opening line, matching how
-// each call site embeds it 4 spaces into its own self-contained fun/property block) so the whole
-// surrounding block can be shifted as a unit via String.prependIndent() without the continuation
-// lines drifting out of alignment with their opening line.
-private fun bindingsNotRegisteredMessage(typeName: String, packageId: String): String =
-  "\"$typeName bindings are not registered. \" +\n" +
-      "      \"Ensure the generated C# shims for $packageId are referenced \" +\n" +
-      "      \"in the consuming application before making Kotlin → C# bridge calls.\""
+// Shared "bindings not registered" guard message — used by buildStubMethod, buildConstructHelper,
+// and buildStubProperty so the wording never drifts between the three call sites.
+//
+// ADR-054: this used to be a constant string baked at GENERATION time. It is now a call to
+// NugetRegistry.notRegistered(...), evaluated at RUNTIME, on the failure path only — so the
+// message can say how many of this build's registrations actually fired ("0 of 7", "6 of 7, only
+// Sample.Text.Template is missing") instead of a fixed sentence that cannot distinguish "nothing
+// registered" from "everything but this one type registered".
+private fun bindingsNotRegisteredMessage(
+  typeName: String,
+  packageId: String,
+  namespaceName: String,
+): String =
+  "NugetRegistry.notRegistered(\"$namespaceName.$typeName\", \"$packageId\")"
 
 // ADR-052: the public secondary `constructor(...)` on the wrapper class, delegating through the
 // file-private `construct(...)` helper — the "can't run code before this(...)" restriction is
@@ -771,7 +861,12 @@ private fun buildSecondaryConstructor(ctor: RirConstructor): String {
 // accepts an expression, so the bridge call lives in an ordinary top-level function). Marshals
 // parameters exactly as buildStubMethod does, then requireNotNulls the returned handle — a C#
 // constructor never returns null, unlike ADR-051's nullable Foo? factory returns.
-private fun buildConstructHelper(cls: RirClass, ctor: RirConstructor, packageId: String): String {
+private fun buildConstructHelper(
+  cls: RirClass,
+  ctor: RirConstructor,
+  packageId: String,
+  namespaceName: String,
+): String {
   val params: String = ctor.parameters.joinToString(", ") { p ->
     "${p.name}: ${declKotlinType(p.type)}"
   }
@@ -782,7 +877,7 @@ private fun buildConstructHelper(cls: RirClass, ctor: RirConstructor, packageId:
   val invokeCall: String =
     if (hasStringParam) "memScoped { fn.invoke($invokeArgs) }" else "fn.invoke($invokeArgs)"
 
-  val failMsg: String = bindingsNotRegisteredMessage(cls.name, packageId)
+  val failMsg: String = bindingsNotRegisteredMessage(cls.name, packageId, namespaceName)
   val bindingsObj: String = bindingsObjectName(cls.name)
 
   return """
@@ -798,7 +893,12 @@ private fun buildConstructHelper(cls: RirClass, ctor: RirConstructor, packageId:
   """.trimMargin()
 }
 
-private fun buildStubMethod(cls: RirClass, method: RirMethod, packageId: String): String {
+private fun buildStubMethod(
+  cls: RirClass,
+  method: RirMethod,
+  packageId: String,
+  namespaceName: String,
+): String {
   val name: String = method.name.toMethodCamelCase()
   val fnVar: String = "${bindingsObjectName(cls.name)}.${name}Fn"
   val hasStringParam: Boolean = method.parameters.any { it.type is RirStringType }
@@ -822,7 +922,7 @@ private fun buildStubMethod(cls: RirClass, method: RirMethod, packageId: String)
   val paramArgs: List<String> = method.parameters.map { p -> argConversion(p.type, p.name) }
   val invokeArgs: String = (listOfNotNull(receiverArg) + paramArgs).joinToString(", ")
 
-  val failMsg: String = bindingsNotRegisteredMessage(cls.name, packageId)
+  val failMsg: String = bindingsNotRegisteredMessage(cls.name, packageId, namespaceName)
 
   val invokeCall: String =
     if (hasStringParam) "memScoped { fn.invoke($invokeArgs) }" else "fn.invoke($invokeArgs)"
@@ -937,12 +1037,13 @@ private fun buildStubProperty(
   property: RirProperty,
   hasSetter: Boolean,
   packageId: String,
+  namespaceName: String,
 ): String {
   val name: String = property.name.toMethodCamelCase()
   val bindingsObj: String = bindingsObjectName(cls.name)
   val getterFnVar = "$bindingsObj.${name}GetterFn"
   val receiverArg: String? = if (property.isStatic) null else "handle.require(\"${cls.name}\")"
-  val failMsg: String = bindingsNotRegisteredMessage(cls.name, packageId)
+  val failMsg: String = bindingsNotRegisteredMessage(cls.name, packageId, namespaceName)
 
   val declType: String = declKotlinType(property.type)
   val keyword: String = if (hasSetter) "var" else "val"
@@ -1119,10 +1220,25 @@ private fun nugetRuntimeContent(): String = """
   |
   |internal var freeGcHandleFn: CPointer<CFunction<(COpaquePointer) -> Unit>>? = null
   |
+  |// ADR-054: slotCount/contractHash are the same two leading scalars every register export gains
+  |// (slotCount is always 1 here — the runtime shim registers exactly one thunk). The pointer
+  |// parameter is nullable so a stale caller passing zero args (pre-ADR-054) is read-only-safe up
+  |// to the checkContract call, which never touches freeGcHandlePtr before deciding to proceed.
   |@OptIn(ExperimentalNativeApi::class)
   |@CName("nuget_runtime_register")
-  |fun nuget_runtime_register(freeGcHandlePtr: COpaquePointer) {
-  |  freeGcHandleFn = freeGcHandlePtr.reinterpret()
+  |fun nuget_runtime_register(slotCount: Int, contractHash: Long, freeGcHandlePtr: COpaquePointer?) {
+  |  NugetRegistry.checkContract(
+  |    qualifiedType = "<runtime>",
+  |    packageId = "",
+  |    slotCount = slotCount,
+  |    contractHash = contractHash,
+  |    expectedSlots = 1,
+  |    expectedHash = ${NUGET_RUNTIME_CONTRACT_HASH}L,
+  |  )
+  |  freeGcHandleFn = requireNotNull(freeGcHandlePtr) {
+  |    "nuget_runtime_register passed a null freeGcHandle thunk pointer."
+  |  }.reinterpret()
+  |  NugetRegistry.record("<runtime>", 1)
   |}
   |
   |// Holder passed as the Cleaner resource. Deliberately a separate object from the wrapper so the
@@ -1133,8 +1249,7 @@ private fun nugetRuntimeContent(): String = """
   |  fun free() {
   |    if (freed.compareAndSet(0, 1)) {
   |      val fn = requireNotNull(freeGcHandleFn) {
-  |        "NuGet interop runtime is not registered. Ensure the generated C# shims are " +
-  |          "loaded in the host process before Kotlin ${'→'} C# bridge objects are released."
+  |        NugetRegistry.notRegistered("<runtime>", "")
   |      }
   |      fn.invoke(raw)
   |    }
@@ -1143,6 +1258,139 @@ private fun nugetRuntimeContent(): String = """
   |  fun require(typeName: String): COpaquePointer {
   |    check(freed.value == 0) { "${'$'}typeName is closed — the underlying C# object handle was already released." }
   |    return raw
+  |  }
+  |}
+""".trimMargin().trim()
+
+// ADR-054: NugetRegistry.kt — the always-on registration registry + contract self-check, emitted
+// once whenever anything in this build registers (any bound class, or the shared runtime).
+//   - `expected`: baked at generation time — every "{Namespace}.{Type}" (plus "<runtime>") this
+//     build emits a register export for.
+//   - `landed`: populated at process startup, one CAS per register export that actually fires.
+//   - `notRegistered(...)`: computes the "N of M registrations fired" failure message, called
+//     lazily by every generated stub's requireNotNull guard — only on the failure path.
+//   - `checkContract(...)`: the registration-time self-check every register export calls before
+//     storing any pointer (see bindingsFileContent/nugetRuntimeContent above).
+private fun nugetRegistryContent(expected: List<String>): String {
+  val expectedList: String = expected.joinToString(",\n    ") { "\"$it\"" }
+  return """
+    |package $INTERNAL_PKG
+    |
+    |import kotlin.concurrent.AtomicReference
+    |
+    |// Generated: ADR-054 always-on registration registry + contract self-check.
+    |internal object NugetRegistry {
+    |  private val expected: List<String> = listOf(
+    |    $expectedList,
+    |  )
+    |
+    |  private val landed = AtomicReference<List<String>>(emptyList())
+    |
+    |  // ADR-054: the ONLY Kotlin-side nugetTrace(...) call site. Registration-granularity only
+    |  // (once per bound type at process start) — never on the hot bridge-call path, which this
+    |  // function is nowhere near.
+    |  fun record(qualifiedType: String, slots: Int) {
+    |    while (true) {
+    |      val current: List<String> = landed.value
+    |      if (landed.compareAndSet(current, current + qualifiedType)) break
+    |    }
+    |    nugetTrace {
+    |      val slotWord: String = if (slots == 1) "slot" else "slots"
+    |      "registered ${'$'}qualifiedType (${'$'}slots ${'$'}slotWord) [${'$'}{landed.value.size}/${'$'}{expected.size}]"
+    |    }
+    |  }
+    |
+    |  // Computes, on the failure path only, one of two messages: "nothing has registered at all"
+    |  // (a whole-assembly problem — the shim source likely never compiled in) versus "everything
+    |  // but this one type registered" (scoped to this type alone). Those are different bugs with
+    |  // different fixes, and telling them apart is the entire point of this function.
+    |  fun notRegistered(qualifiedType: String, packageId: String): String {
+    |    val landedNow: List<String> = landed.value
+    |    val missing: List<String> = expected.filterNot { it in landedNow }
+    |    val suffix: String = if (packageId.isEmpty()) "" else " (${'$'}packageId)"
+    |    return if (landedNow.isEmpty()) {
+    |      "[nuget] ${'$'}qualifiedType bindings are not registered${'$'}suffix. " +
+    |        "0 of ${'$'}{expected.size} expected registrations have fired. NOTHING has registered. " +
+    |        "Missing: ${'$'}{missing.joinToString(", ")}."
+    |    } else {
+    |      "[nuget] ${'$'}qualifiedType bindings are not registered${'$'}suffix. " +
+    |        "${'$'}{landedNow.size} of ${'$'}{expected.size} expected registrations have fired: " +
+    |        "${'$'}{landedNow.joinToString(", ")}. Missing: ${'$'}{missing.joinToString(", ")}."
+    |    }
+    |  }
+    |
+    |  // ADR-054: refuses to store any pointer if slotCount/contractHash disagree with this build's
+    |  // own compile-time values — a mismatch means the compiled C# shim and this native library
+    |  // came from different generations (one of them is stale), which would otherwise corrupt the
+    |  // function-pointer table silently. Throws IllegalStateException, naming both counts, rather
+    |  // than storing anything.
+    |  fun checkContract(
+    |    qualifiedType: String,
+    |    packageId: String,
+    |    slotCount: Int,
+    |    contractHash: Long,
+    |    expectedSlots: Int,
+    |    expectedHash: Long,
+    |  ) {
+    |    check(slotCount == expectedSlots && contractHash == expectedHash) {
+    |      "[nuget] FATAL: registration contract mismatch for ${'$'}qualifiedType (${'$'}packageId). " +
+    |        "The C# shim passed ${'$'}slotCount slots (contract ${'$'}contractHash); " +
+    |        "this native library expects ${'$'}expectedSlots slots (contract ${'$'}expectedHash). " +
+    |        "The compiled C# shim and the native library were generated from different builds. " +
+    |        "One of them is stale. No pointers were stored (a mismatched table would corrupt memory)."
+    |    }
+    |  }
+    |}
+  """.trimMargin().trim()
+}
+
+// ADR-054: NugetTrace.kt — the opt-in registration trace sink, Kotlin side. Shared code (no
+// expect/actual split): the walking skeleton step verified platform.posix.stderr/fopen/fputs/
+// fclose/getenv all bind AND link on mingwX64 (cross-compiled from macOS), so the mingw-macro
+// binding risk this ADR flagged as a possibility does not apply — an expect/actual split would
+// buy nothing here.
+//
+// Registration-granularity only: the only call site is NugetRegistry.record(...), once per bound
+// type at process start. Nothing on the hot bridge-call path calls this — there is no branch to
+// skip when the trace is off, per ADR-054's "cost when off: exactly zero" on the call path.
+private fun nugetTraceContent(): String = """
+  |@file:OptIn(kotlinx.cinterop.ExperimentalForeignApi::class)
+  |
+  |package $INTERNAL_PKG
+  |
+  |import kotlinx.cinterop.toKString
+  |import platform.posix.fclose
+  |import platform.posix.fopen
+  |import platform.posix.fputs
+  |import platform.posix.getenv
+  |import platform.posix.stderr
+  |
+  |// Generated: ADR-054 opt-in registration trace. NUGET_INTEROP_TRACE=1 (also "true"/"all")
+  |// enables it; NUGET_INTEROP_TRACEFILE=<path> redirects from stderr to a file (opened in append
+  |// mode, flushed — via fclose — on every line, so a crashed process still leaves the lines it
+  |// wrote). Both env vars are read once per process (lazy top-level vals), not once per call.
+  |private val nugetTraceEnabled: Boolean by lazy {
+  |  when (getenv("NUGET_INTEROP_TRACE")?.toKString()) {
+  |    "1", "true", "all" -> true
+  |    else -> false
+  |  }
+  |}
+  |
+  |private val nugetTraceFilePath: String? by lazy { getenv("NUGET_INTEROP_TRACEFILE")?.toKString() }
+  |
+  |// The lambda parameter means the message string is never built when the trace is off — the
+  |// ONLY branch this adds anywhere is the `if (!nugetTraceEnabled) return` below, and it is never
+  |// reached from a bridge call, only from registration.
+  |internal fun nugetTrace(message: () -> String) {
+  |  if (!nugetTraceEnabled) return
+  |  val line = "[nuget] ${'$'}{message()}\n"
+  |  val path = nugetTraceFilePath
+  |  if (path == null) {
+  |    fputs(line, stderr)
+  |  } else {
+  |    val file = fopen(path, "a") ?: return
+  |    fputs(line, file)
+  |    fclose(file)
   |  }
   |}
 """.trimMargin().trim()

@@ -279,4 +279,77 @@ class RirBridgingTest {
           "— got $diagnostics",
     )
   }
+
+  // ------------------------------------------------------------------
+  // ADR-054: contractHash() — a pure, deterministic function of the ordered registrable list,
+  // shared by both generators. Not itself a fixed value (only "same input -> same output" and
+  // "different input -> [overwhelmingly likely] different output" matter here).
+  // ------------------------------------------------------------------
+
+  private val templateCls: RirClass = RirClass(
+    name = "Template",
+    isStatic = false,
+    constructors = listOf(
+      RirConstructor(parameters = listOf(RirParameter(name = "source", type = RirStringType()))),
+    ),
+    methods = listOf(
+      RirMethod(
+        name = "Parse",
+        isStatic = true,
+        returnType = RirObjectHandleType(namespace = "Sample.Text", name = "Template"),
+        parameters = listOf(RirParameter(name = "source", type = RirStringType())),
+      ),
+    ),
+  )
+
+  @Test
+  fun `contractHash is a pure function of cls and registrables — same input, same output`() {
+    val registrables: List<RirRegistrable> = bridgeableRegistrables(templateCls, emptySet())
+    val boundTypes: Set<RirTypeKey> = setOf(RirTypeKey("Sample.Text", "Template"))
+    val registrablesBound: List<RirRegistrable> = bridgeableRegistrables(templateCls, boundTypes)
+
+    assertEquals(
+      contractHash(templateCls, registrablesBound),
+      contractHash(templateCls, registrablesBound),
+      "contractHash must be deterministic for the exact same (cls, registrables) input",
+    )
+    // Sanity: with an empty boundTypes set, Parse's handle return is not v1-bridgeable, so this
+    // registrables list differs (ctor-only) from registrablesBound (ctor + Parse) — asserted only
+    // to document that the two fixtures below really do differ, not a contractHash property.
+    assertTrue(registrables.size < registrablesBound.size)
+  }
+
+  @Test
+  fun `contractHash changes when a parameter's nullability changes`() {
+    val boundTypes: Set<RirTypeKey> = setOf(RirTypeKey("Sample.Text", "Template"))
+    val registrables: List<RirRegistrable> = bridgeableRegistrables(templateCls, boundTypes)
+
+    val nullableCls: RirClass = templateCls.copy(
+      constructors = listOf(
+        RirConstructor(
+          parameters = listOf(RirParameter(name = "source", type = RirStringType(nullable = true))),
+        ),
+      ),
+    )
+    val nullableRegistrables: List<RirRegistrable> = bridgeableRegistrables(nullableCls, boundTypes)
+
+    assertTrue(
+      contractHash(templateCls, registrables) != contractHash(nullableCls, nullableRegistrables),
+      "ADR-054: a same-arity nullability-only change must change the hash — a plain slotCount " +
+          "comparison cannot see this class of drift, which is the whole point of the hash",
+    )
+  }
+
+  @Test
+  fun `contractHash changes when a registrable is added`() {
+    val boundTypes: Set<RirTypeKey> = setOf(RirTypeKey("Sample.Text", "Template"))
+    val ctorOnly: RirClass = templateCls.copy(methods = emptyList())
+    val ctorOnlyRegistrables: List<RirRegistrable> = bridgeableRegistrables(ctorOnly, boundTypes)
+    val fullRegistrables: List<RirRegistrable> = bridgeableRegistrables(templateCls, boundTypes)
+
+    assertTrue(
+      contractHash(ctorOnly, ctorOnlyRegistrables) != contractHash(templateCls, fullRegistrables),
+      "contractHash must change when the registrable list's arity changes",
+    )
+  }
 }

@@ -78,18 +78,21 @@ class NugetGenerateShimsTaskTest {
   // ------------------------------------------------------------------
 
   @Test
-  fun `emits exactly one file for JsonConvert named JsonConvertRegistration cs`() {
+  fun `emits JsonConvertRegistration cs and NugetTrace cs for JsonConvert`() {
     val files: List<GeneratedFile> = generateCSharpShims(jsonConvertRir, "sample")
 
+    // ADR-054: NugetTrace.cs is now emitted alongside every {Type}Registration.cs (its
+    // [ModuleInitializer] references NugetTrace.Write/WriteAlways) — JsonConvert has no handle
+    // types, so NugetRuntimeRegistration.cs still stays absent, but NugetTrace.cs does not.
     assertEquals(
-      1,
+      2,
       files.size,
-      "expected exactly one generated file, got: ${files.map { it.relativePath }}",
+      "expected exactly two generated files (Registration + NugetTrace), got: " +
+          files.map { it.relativePath },
     )
     assertTrue(
-      files.single().relativePath.endsWith("JsonConvertRegistration.cs"),
-      "generated file must be named JsonConvertRegistration.cs " +
-          "but was '${files.single().relativePath}'",
+      files.any { it.relativePath.endsWith("JsonConvertRegistration.cs") },
+      "generated files must include JsonConvertRegistration.cs, got: ${files.map { it.relativePath }}",
     )
   }
 
@@ -208,18 +211,45 @@ class NugetGenerateShimsTaskTest {
   }
 
   @Test
-  fun `generated thunk body does not contain try or catch`() {
+  fun `generated thunk bodies do not contain try or catch`() {
     // Word-boundary matching, not plain `.contains`: the file legitimately contains "EntryPoint"
     // (required by the [DllImport] attribute), which itself contains the substring "try" — a
     // naive `.contains("try")` would always false-positive on any valid generated shim.
+    //
+    // ADR-054: the [ModuleInitializer] now legitimately wraps its registration P/Invoke in a
+    // try/catch (DllNotFoundException/EntryPointNotFoundException -> log -> rethrow) — that is
+    // NOT a "let it crash" violation (ADR-049 forbids catching in *thunk bodies*, where a
+    // swallowed exception would become a silently-wrong return value; this catch is outside any
+    // thunk and always rethrows). So this assertion is scoped to the thunk methods only, which
+    // textually start at the first [UnmanagedCallersOnly], after the ModuleInitializer.
     val shim: GeneratedFile = jsonConvertShim()
+    val thunksOnly: String = shim.content.substringAfter("[UnmanagedCallersOnly")
     assertFalse(
-      Regex("\\btry\\b").containsMatchIn(shim.content),
-      "thunk body must not contain the try keyword (ADR-049 let it crash)",
+      Regex("\\btry\\b").containsMatchIn(thunksOnly),
+      "thunk bodies must not contain the try keyword (ADR-049 let it crash)",
     )
     assertFalse(
-      Regex("\\bcatch\\b").containsMatchIn(shim.content),
-      "thunk body must not contain the catch keyword (ADR-049 let it crash)",
+      Regex("\\bcatch\\b").containsMatchIn(thunksOnly),
+      "thunk bodies must not contain the catch keyword (ADR-049 let it crash)",
+    )
+  }
+
+  @Test
+  fun `ModuleInitializer wraps the registration P Invoke in try catch and rethrows (ADR-054)`() {
+    val shim: GeneratedFile = jsonConvertShim()
+    val moduleInit: String = shim.content
+      .substringAfter("internal static unsafe void Initialize()")
+      .substringBefore("[UnmanagedCallersOnly")
+
+    assertContains(moduleInit, "catch (DllNotFoundException e)")
+    assertContains(moduleInit, "catch (EntryPointNotFoundException e)")
+    assertContains(moduleInit, "NugetTrace.WriteAlways(")
+    // Both catch blocks must rethrow -- "let it crash" is preserved end to end, this catch only
+    // adds context on the way out.
+    assertEquals(
+      2,
+      Regex("\\bthrow;").findAll(moduleInit).count(),
+      "both catch blocks must rethrow, got:\n$moduleInit",
     )
   }
 
@@ -446,7 +476,7 @@ class NugetGenerateShimsTaskTest {
     val files: List<GeneratedFile> = generateCSharpShims(multiOpsRir, "sample")
     val shim: GeneratedFile = files.single { it.relativePath.endsWith("MultiOpsRegistration.cs") }
 
-    val externLine: String = shim.content.lines().first { it.contains("_register(IntPtr") }
+    val externLine: String = shim.content.lines().first { it.contains("_register(int slotCount") }
     val zuluIndex: Int = externLine.indexOf("zuluPtr")
     val alphaIndex: Int = externLine.indexOf("alphaPtr")
     val mikeIndex: Int = externLine.indexOf("mikePtr")
@@ -653,7 +683,7 @@ class NugetGenerateShimsTaskTest {
   fun `TemplateRegistration DllImport has exactly parsePtr and renderPtr with no extra free slot`() {
     val shim: GeneratedFile = templateShim()
 
-    val externLine: String = shim.content.lines().first { it.contains("_register(IntPtr") }
+    val externLine: String = shim.content.lines().first { it.contains("_register(int slotCount") }
     assertContains(externLine, "parsePtr")
     assertContains(externLine, "renderPtr")
     assertFalse(
@@ -875,7 +905,7 @@ class NugetGenerateShimsTaskTest {
   fun `TemplateRegistration DllImport declares ctorPtr as its first parameter`() {
     val shim: GeneratedFile = templateWithCtorShim()
 
-    val externLine: String = shim.content.lines().first { it.contains("_register(IntPtr") }
+    val externLine: String = shim.content.lines().first { it.contains("_register(int slotCount") }
     val ctorIndex: Int = externLine.indexOf("ctorPtr")
     val parseIndex: Int = externLine.indexOf("parsePtr")
     val renderIndex: Int = externLine.indexOf("renderPtr")
@@ -1119,7 +1149,7 @@ class NugetGenerateShimsTaskTest {
   fun `TemplateRegistration DllImport declares one IntPtr parameter per registrable in the shared order`() {
     val shim: GeneratedFile = templateInstanceShim()
 
-    val externLine: String = shim.content.lines().first { it.contains("_register(IntPtr") }
+    val externLine: String = shim.content.lines().first { it.contains("_register(int slotCount") }
     val ctorIndex: Int = externLine.indexOf("ctorPtr")
     val parseIndex: Int = externLine.indexOf("parsePtr")
     val renameIndex: Int = externLine.indexOf("renamePtr")
@@ -1458,6 +1488,148 @@ class NugetGenerateShimsTaskTest {
       "return result is null ? IntPtr.Zero : GCHandle.ToIntPtr(GCHandle.Alloc(result));",
       message = "ADR-053: the null check on a handle return must stay, even on a non-null-annotated " +
           "return — all nullability lives on the Kotlin side",
+    )
+  }
+
+  // ------------------------------------------------------------------
+  // ADR-054 walking skeleton: registration observability ABI amendment (Sample.Text.Template).
+  // ------------------------------------------------------------------
+
+  @Test
+  fun `TemplateRegistration DllImport gains leading int slotCount and long contractHash parameters`() {
+    val shim: GeneratedFile = templateWithCtorShim()
+
+    val externLine: String = shim.content.lines().first { it.contains("_register(int slotCount") }
+    assertContains(externLine, "int slotCount")
+    assertContains(externLine, "long contractHash")
+    assertTrue(
+      externLine.indexOf("slotCount") < externLine.indexOf("ctorPtr"),
+      "ADR-054: slotCount/contractHash must precede the pointer parameters, got: '$externLine'",
+    )
+  }
+
+  @Test
+  fun `TemplateRegistration ModuleInitializer passes slotCount 3 and a contractHash literal before the thunk pointers`() {
+    val shim: GeneratedFile = templateWithCtorShim()
+
+    assertContains(
+      shim.content,
+      "nuget_sample_text_template_register(\n                    3,",
+      message = "ADR-054: the ModuleInitializer call must pass slotCount (3: ctor + Parse + " +
+          "Render) then contractHash before the thunk pointer arguments, got:\n${shim.content}",
+    )
+    assertTrue(
+      Regex("nuget_sample_text_template_register\\(\\s*3,\\s*-?\\d+L,").containsMatchIn(shim.content),
+      "ModuleInitializer must pass a Long contractHash literal as the second argument",
+    )
+  }
+
+  @Test
+  fun `TemplateRegistration contractHash literal matches the Kotlin generator's for the same input`() {
+    val shim: GeneratedFile = templateWithCtorShim()
+    val kotlinFiles: List<GeneratedFile> = generateKotlinStubs(templateWithCtorRir)
+    val bindings: GeneratedFile =
+      kotlinFiles.single { it.relativePath.endsWith("TemplateBindings.kt") }
+
+    val kotlinHash: String =
+      Regex("expectedHash = (-?\\d+)L").find(bindings.content)!!.groupValues[1]
+    val csharpHash: String =
+      Regex("nuget_sample_text_template_register\\(\\s*3,\\s*(-?\\d+)L,").find(shim.content)!!.groupValues[1]
+
+    assertEquals(
+      kotlinHash,
+      csharpHash,
+      "ADR-054 anti-drift: both generators call the same shared contractHash() function over " +
+          "the same reverse-ir.json input, so the baked literal must match exactly",
+    )
+  }
+
+  @Test
+  fun `NugetRuntimeRegistration cs gains leading slotCount 1 and a contractHash literal`() {
+    val files: List<GeneratedFile> = generateCSharpShims(templateWithCtorRir, "sample")
+    val runtimeShim: GeneratedFile = requireNotNull(
+      files.find { it.relativePath.endsWith("NugetRuntimeRegistration.cs") }
+    ) { "NugetRuntimeRegistration.cs must be generated" }
+
+    assertContains(runtimeShim.content, "int slotCount, long contractHash, IntPtr freeGcHandlePtr")
+    assertTrue(
+      Regex("nuget_runtime_register\\(\\s*1,\\s*-?\\d+L,").containsMatchIn(runtimeShim.content),
+      "ADR-054: nuget_runtime_register must be called with slotCount=1 and a Long contractHash " +
+          "literal, got:\n${runtimeShim.content}",
+    )
+  }
+
+  // ------------------------------------------------------------------
+  // ADR-054 finish: opt-in NUGET_INTEROP_TRACE / NUGET_INTEROP_TRACEFILE trace, C# side.
+  // ------------------------------------------------------------------
+
+  @Test
+  fun `NugetTrace cs is emitted whenever anything else is, and gates on NUGET_INTEROP_TRACE`() {
+    val files: List<GeneratedFile> = generateCSharpShims(templateWithCtorRir, "sample")
+
+    val trace: GeneratedFile? = files.find { it.relativePath.endsWith("NugetTrace.cs") }
+    assertNotNull(trace, "NugetTrace.cs must be generated whenever anything else is")
+    assertContains(trace.content, "NUGET_INTEROP_TRACE")
+    assertContains(trace.content, "NUGET_INTEROP_TRACEFILE")
+    assertContains(trace.content, "namespace IoGithubXxfast.KotlinNativeNuget")
+    assertContains(trace.content, "internal static class NugetTrace")
+  }
+
+  @Test
+  fun `NugetTrace cs default sink is stderr, not Console Out (xunit v2 does not capture it)`() {
+    val files: List<GeneratedFile> = generateCSharpShims(templateWithCtorRir, "sample")
+    val trace: GeneratedFile = files.single { it.relativePath.endsWith("NugetTrace.cs") }
+
+    assertContains(trace.content, "Console.Error.WriteLine(line)")
+    assertFalse(
+      trace.content.contains("Console.Out") || trace.content.contains("Console.Write(line)") ||
+          Regex("\\bConsole\\.WriteLine\\b").containsMatchIn(trace.content),
+      "the default sink must be stderr, never Console.Out/Console.WriteLine — xunit 2.9.3 " +
+          "(this repo's harness) removed Console capture entirely, got:\n${trace.content}",
+    )
+    assertContains(trace.content, "File.AppendAllText(s_file, line + Environment.NewLine)")
+  }
+
+  @Test
+  fun `TemplateRegistration ModuleInitializer emits register enter and ok trace lines`() {
+    val shim: GeneratedFile = templateWithCtorShim()
+
+    assertContains(
+      shim.content,
+      "NugetTrace.Write(\n                \"register enter Sample.Text.Template -> " +
+          "nuget_sample_text_template_register(3 slots) dll=sample\");",
+    )
+    assertContains(shim.content, "NugetTrace.Write(\"register ok    Sample.Text.Template\");")
+    assertContains(
+      shim.content,
+      "using IoGithubXxfast.KotlinNativeNuget;",
+      message = "TemplateRegistration.cs must import the namespace NugetTrace lives in",
+    )
+  }
+
+  @Test
+  fun `NugetRuntimeRegistration cs emits register enter (singular slot) and ok trace lines`() {
+    val files: List<GeneratedFile> = generateCSharpShims(templateWithCtorRir, "sample")
+    val runtimeShim: GeneratedFile =
+      files.single { it.relativePath.endsWith("NugetRuntimeRegistration.cs") }
+
+    assertContains(
+      runtimeShim.content,
+      "register enter <runtime> -> nuget_runtime_register(1 slot) dll=sample",
+      message = "singular \"1 slot\", not \"1 slots\"",
+    )
+    assertContains(runtimeShim.content, "NugetTrace.Write(\"register ok    <runtime>\");")
+  }
+
+  @Test
+  fun `bridge-call thunk bodies never reference NugetTrace — registration-granularity only, per ADR-054`() {
+    val shim: GeneratedFile = templateWithCtorShim()
+    val thunksOnly: String = shim.content.substringAfter("[UnmanagedCallersOnly")
+
+    assertFalse(
+      thunksOnly.contains("NugetTrace"),
+      "ADR-054 rejects per-call tracing: NugetTrace must be referenced only from " +
+          "[ModuleInitializer], never from a thunk body, got:\n$thunksOnly",
     )
   }
 }

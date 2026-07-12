@@ -2,7 +2,12 @@
 
 ## Status
 
-Accepted
+Accepted. **Amended by [ADR-054](054-reverse-bridge-registration-observability.md)**: the generated
+`[DllImport]` and `[ModuleInitializer]` gain two leading scalar arguments (`slotCount`,
+`contractHash`) ahead of the thunk pointers, the `[ModuleInitializer]` gains a specific
+`DllNotFoundException`/`EntryPointNotFoundException` catch that logs context and rethrows, and an
+opt-in `NUGET_INTEROP_TRACE` registration trace is emitted. The thunk signatures, the inverse
+type-mapping table, and the "let it crash" rule for **thunk bodies** are all unchanged.
 
 ## Context
 
@@ -398,6 +403,10 @@ error-out ABI that lets Kotlin `catch` a C# exception — is Phase 11** (mirror 
 already tracked in ROADMAP.
 
 ### `[ModuleInitializer]` and registration call shape
+
+> **Amended by [ADR-054](054-reverse-bridge-registration-observability.md)**: `slotCount` and
+> `contractHash` are passed first, the call is wrapped in a specific-exception catch that logs and
+> rethrows, and trace lines bracket it. The pointer argument order below is unchanged.
 
 ```csharp
 [ModuleInitializer]

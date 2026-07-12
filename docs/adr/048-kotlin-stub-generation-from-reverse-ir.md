@@ -2,7 +2,13 @@
 
 ## Status
 
-Accepted
+Accepted. **Amended by [ADR-054](054-reverse-bridge-registration-observability.md)**: the registration
+export signature gains two leading scalar parameters (`slotCount: Int`, `contractHash: Long`) before
+the `COpaquePointer` slots, and the pointer parameters become nullable (`COpaquePointer?`), so that a
+stale C# shim registering against a freshly built native library is caught at registration instead of
+corrupting the pointer table. The export **name**, the pointer **order**, and string ownership are
+unchanged. Read the "Parameter order in the registration export" and "Contract with the C# shim step"
+sections below together with ADR-054's "Amendment to the ADR-048 registration contract".
 
 ## Context
 
@@ -364,6 +370,10 @@ If the namespace is empty (global namespace), omit the namespace segment:
 
 ### Parameter order in the registration export
 
+> **Amended by [ADR-054](054-reverse-bridge-registration-observability.md).** Two leading scalar
+> parameters (`slotCount: Int`, `contractHash: Long`) now precede the pointer slots, and the pointer
+> parameters are nullable. The order and count of the *pointer* slots described below is unchanged.
+
 The registration export receives one `COpaquePointer` per bridgeable method, in the exact order
 the methods appear in `reverse-ir.json` for that type. Both the Kotlin stub generator and the C#
 shim generator read the same `reverse-ir.json`; they must use the same method order to keep the
@@ -391,6 +401,10 @@ unsigned 16-bit value. The stub performs the `UShort.toInt().toChar()` conversio
 minor corner case; `char`-typed method parameters and returns are uncommon in C# APIs.
 
 ### Contract with the C# shim step (next ROADMAP item, line 138)
+
+> **Amended by [ADR-054](054-reverse-bridge-registration-observability.md)**: the `[ModuleInitializer]`
+> passes `slotCount` and `contractHash` ahead of the thunk pointers, and the Kotlin side refuses to
+> store any pointer if either disagrees with its own compile-time value.
 
 The C# shim generator reads the same `reverse-ir.json` and generates, for each `RirClass`:
 

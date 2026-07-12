@@ -713,9 +713,11 @@ class NugetGenerateBindingsTaskTest {
     val bindings: GeneratedFile = files.single { it.relativePath.endsWith("TemplateBindings.kt") }
     assertContains(
       bindings.content,
-      "ctorFn = ctorPtr.reinterpret()",
-      message = "ADR-052: the register body must assign ctorFn from the reinterpreted ctorPtr",
+      "ctorFn = requireNotNull(ctorPtr)",
+      message = "ADR-052/ADR-054: the register body must assign ctorFn from the requireNotNull'd, " +
+          "reinterpreted ctorPtr (ADR-054 amendment: the pointer parameter is now nullable)",
     )
+    assertContains(bindings.content, ".reinterpret()")
   }
 
   // ------------------------------------------------------------------
@@ -1807,6 +1809,174 @@ class NugetGenerateBindingsTaskTest {
     assertTrue(
       warnings.any { it.contains("Skipping Widget.Close") },
       "the existing rule-5 collision warning must still fire — got $warnings",
+    )
+  }
+
+  // ------------------------------------------------------------------
+  // ADR-054 walking skeleton: registration observability ABI amendment (Sample.Text.Template).
+  // ------------------------------------------------------------------
+
+  @Test
+  fun `TemplateBindings kt register export gains leading slotCount and contractHash scalars`() {
+    val files: List<GeneratedFile> = generateKotlinStubs(templateWithCtorRir)
+
+    val bindings: GeneratedFile = files.single { it.relativePath.endsWith("TemplateBindings.kt") }
+    val registerSignature: String = bindings.content
+      .substringAfter("fun nuget_sample_text_template_register(")
+      .substringBefore(") {")
+
+    assertContains(registerSignature, "slotCount: Int")
+    assertContains(registerSignature, "contractHash: Long")
+    assertTrue(
+      registerSignature.indexOf("slotCount") < registerSignature.indexOf("ctorPtr"),
+      "ADR-054: slotCount/contractHash must precede the pointer parameters, got: '$registerSignature'",
+    )
+  }
+
+  @Test
+  fun `TemplateBindings kt register export pointer parameters are nullable`() {
+    val files: List<GeneratedFile> = generateKotlinStubs(templateWithCtorRir)
+
+    val bindings: GeneratedFile = files.single { it.relativePath.endsWith("TemplateBindings.kt") }
+    assertContains(bindings.content, "ctorPtr: COpaquePointer?")
+    assertContains(bindings.content, "parsePtr: COpaquePointer?")
+    assertContains(bindings.content, "renderPtr: COpaquePointer?")
+  }
+
+  @Test
+  fun `TemplateBindings kt register body calls NugetRegistry checkContract before storing pointers`() {
+    val files: List<GeneratedFile> = generateKotlinStubs(templateWithCtorRir)
+
+    val bindings: GeneratedFile = files.single { it.relativePath.endsWith("TemplateBindings.kt") }
+    val checkIndex: Int = bindings.content.indexOf("NugetRegistry.checkContract(")
+    val storeIndex: Int = bindings.content.indexOf("ctorFn = requireNotNull(ctorPtr)")
+    assertTrue(checkIndex >= 0, "register body must call NugetRegistry.checkContract(...)")
+    assertTrue(
+      checkIndex < storeIndex,
+      "ADR-054: checkContract must run before any pointer is stored — checked at $checkIndex, " +
+          "stored at $storeIndex",
+    )
+    assertContains(bindings.content, "qualifiedType = \"Sample.Text.Template\"")
+    assertContains(bindings.content, "expectedSlots = 3")
+  }
+
+  @Test
+  fun `TemplateBindings kt register body records with NugetRegistry after storing pointers`() {
+    val files: List<GeneratedFile> = generateKotlinStubs(templateWithCtorRir)
+
+    val bindings: GeneratedFile = files.single { it.relativePath.endsWith("TemplateBindings.kt") }
+    assertContains(bindings.content, "NugetRegistry.record(\"Sample.Text.Template\", 3)")
+  }
+
+  @Test
+  fun `Template kt failure guard calls NugetRegistry notRegistered instead of a constant string`() {
+    val files: List<GeneratedFile> = generateKotlinStubs(templateWithCtorRir)
+
+    val stub: GeneratedFile = files.single { it.relativePath.endsWith("Template.kt") }
+    assertContains(
+      stub.content,
+      "NugetRegistry.notRegistered(\"Sample.Text.Template\", \"Sample.Text\")",
+      message = "ADR-054: the requireNotNull guard message must be computed at runtime via " +
+          "NugetRegistry.notRegistered(...), not a fixed generation-time string",
+    )
+    assertFalse(
+      stub.content.contains("bindings are not registered"),
+      "the old constant-message text must no longer be baked into the generated stub",
+    )
+  }
+
+  @Test
+  fun `NugetRegistry kt is emitted whenever any class binds and bakes the expected registration list`() {
+    val files: List<GeneratedFile> = generateKotlinStubs(templateWithCtorRir)
+
+    val registry: GeneratedFile? = files.find {
+      it.relativePath.endsWith("NugetRegistry.kt") && it.relativePath.startsWith("nativeMain/")
+    }
+    assertNotNull(registry, "NugetRegistry.kt must be generated whenever any class binds")
+    assertContains(registry.content, "internal object NugetRegistry")
+    assertContains(registry.content, "\"Sample.Text.Template\"")
+    assertContains(registry.content, "fun checkContract(")
+    assertContains(registry.content, "fun notRegistered(")
+    assertContains(registry.content, "fun record(")
+  }
+
+  @Test
+  fun `contractHash is stable for the same input and changes when a parameter's nullability changes`() {
+    val filesA: List<GeneratedFile> = generateKotlinStubs(templateWithCtorRir)
+    val filesB: List<GeneratedFile> = generateKotlinStubs(templateWithCtorRir)
+
+    fun expectedHashLiteral(files: List<GeneratedFile>): String {
+      val bindings: GeneratedFile = files.single { it.relativePath.endsWith("TemplateBindings.kt") }
+      return Regex("expectedHash = (-?\\d+)L").find(bindings.content)!!.groupValues[1]
+    }
+
+    assertEquals(
+      expectedHashLiteral(filesA),
+      expectedHashLiteral(filesB),
+      "contractHash must be a pure, deterministic function of the ordered registrable list",
+    )
+  }
+
+  // ------------------------------------------------------------------
+  // ADR-054 finish: opt-in NUGET_INTEROP_TRACE / NUGET_INTEROP_TRACEFILE trace, Kotlin side.
+  // ------------------------------------------------------------------
+
+  @Test
+  fun `NugetTrace kt is emitted whenever NugetRegistry kt is, and gates on NUGET_INTEROP_TRACE`() {
+    val files: List<GeneratedFile> = generateKotlinStubs(templateWithCtorRir)
+
+    val trace: GeneratedFile? = files.find {
+      it.relativePath.endsWith("NugetTrace.kt") && it.relativePath.startsWith("nativeMain/")
+    }
+    assertNotNull(trace, "NugetTrace.kt must be generated whenever any class binds")
+    assertContains(trace.content, "NUGET_INTEROP_TRACE")
+    assertContains(trace.content, "NUGET_INTEROP_TRACEFILE")
+    assertContains(
+      trace.content,
+      "by lazy",
+      message = "the env vars must be read once per process (lazy), not once per call",
+    )
+    assertContains(trace.content, "internal fun nugetTrace(message: () -> String)")
+  }
+
+  @Test
+  fun `NugetTrace kt redirects to a file via fopen append and fputs, falling back to stderr`() {
+    val files: List<GeneratedFile> = generateKotlinStubs(templateWithCtorRir)
+
+    val trace: GeneratedFile = files.single { it.relativePath.endsWith("NugetTrace.kt") }
+    assertContains(trace.content, "fopen(path, \"a\")")
+    assertContains(trace.content, "fputs(line, file)")
+    assertContains(trace.content, "fputs(line, stderr)")
+    assertContains(trace.content, "fclose(file)")
+  }
+
+  @Test
+  fun `NugetRegistry record calls nugetTrace with the registered-slots-of-total format`() {
+    val files: List<GeneratedFile> = generateKotlinStubs(templateWithCtorRir)
+
+    val registry: GeneratedFile = files.single { it.relativePath.endsWith("NugetRegistry.kt") }
+    val recordBody: String = registry.content
+      .substringAfter("fun record(qualifiedType: String, slots: Int) {")
+      .substringBefore("\n  }")
+
+    assertContains(recordBody, "nugetTrace {")
+    assertContains(recordBody, "registered")
+    assertContains(recordBody, "[${'$'}{landed.value.size}/${'$'}{expected.size}]")
+  }
+
+  @Test
+  fun `NugetRegistry checkContract and notRegistered never call nugetTrace — the fatal messages are ungated`() {
+    val files: List<GeneratedFile> = generateKotlinStubs(templateWithCtorRir)
+
+    val registry: GeneratedFile = files.single { it.relativePath.endsWith("NugetRegistry.kt") }
+    val checkContractBody: String = registry.content
+      .substringAfter("fun checkContract(")
+      .substringAfter("expectedHash: Long,\n  ) {")
+
+    assertFalse(
+      checkContractBody.contains("nugetTrace"),
+      "ADR-054: the FATAL contract-mismatch message must bypass the trace gate entirely — " +
+          "it is not opt-in, got:\n$checkContractBody",
     )
   }
 }

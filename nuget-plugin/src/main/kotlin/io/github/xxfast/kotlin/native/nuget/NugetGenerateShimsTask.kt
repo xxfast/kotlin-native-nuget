@@ -1,5 +1,6 @@
 package io.github.xxfast.kotlin.native.nuget
 
+import io.github.xxfast.kotlin.native.nuget.rir.NUGET_RUNTIME_CONTRACT_HASH
 import io.github.xxfast.kotlin.native.nuget.rir.RirClass
 import io.github.xxfast.kotlin.native.nuget.rir.RirConstructor
 import io.github.xxfast.kotlin.native.nuget.rir.RirEnumType
@@ -16,6 +17,7 @@ import io.github.xxfast.kotlin.native.nuget.rir.RirTypeRef
 import io.github.xxfast.kotlin.native.nuget.rir.RirVoidType
 import io.github.xxfast.kotlin.native.nuget.rir.boundHandleTypes
 import io.github.xxfast.kotlin.native.nuget.rir.bridgeableRegistrables
+import io.github.xxfast.kotlin.native.nuget.rir.contractHash
 import io.github.xxfast.kotlin.native.nuget.rir.isNullable
 import io.github.xxfast.kotlin.native.nuget.rir.parseReverseIr
 import io.github.xxfast.kotlin.native.nuget.rir.registrationExportName
@@ -104,6 +106,18 @@ fun generateCSharpShims(file: RirFile, nativeLibraryName: String): List<Generate
       GeneratedFile(
         relativePath = "NugetRuntimeRegistration.cs",
         content = nugetRuntimeRegistrationContent(nativeLibraryName),
+      )
+    )
+  }
+
+  // ADR-054: NugetTrace.cs is needed exactly whenever anything else here is — every
+  // [ModuleInitializer] this file emits (per-type and the shared runtime one) calls
+  // NugetTrace.Write/WriteAlways around its registration P/Invoke.
+  if (result.isNotEmpty()) {
+    result.add(
+      GeneratedFile(
+        relativePath = "NugetTrace.cs",
+        content = nugetTraceCsContent(),
       )
     )
   }
@@ -250,14 +264,29 @@ private fun registrationFileContent(
     .filter { it != namespaceName }
     .sorted()
 
+  // ADR-054: IoGithubXxfast.KotlinNativeNuget carries NugetTrace, referenced by the
+  // [ModuleInitializer] below in every generated {Type}Registration.cs.
   val usings: String = (
-      listOf("System", "System.Runtime.CompilerServices", "System.Runtime.InteropServices") +
-          enumNamespaces
+      listOf(
+        "System", "System.Runtime.CompilerServices", "System.Runtime.InteropServices",
+        "IoGithubXxfast.KotlinNativeNuget",
+      ) + enumNamespaces
       ).joinToString("\n") { "    using $it;" }
+
+  // ADR-054: the register export's contract — both baked identically from the same shared
+  // contractHash() function NugetGenerateBindingsTask calls, so within one build the two
+  // generated sides can never disagree on either value.
+  val slotCount: Int = registrables.size
+  val hash: Long = contractHash(cls, registrables)
+  val qualifiedType: String = "$namespaceName.${cls.name}"
+  val slotWord: String = if (slotCount == 1) "slot" else "slots"
 
   // ADR-052: rendered directly off the shared bridgeableRegistrables() ordering — ctorPtr first
   // (if any), then method pointers — matching NugetGenerateBindingsTask's register signature.
-  val dllImportParams: String = registrables.joinToString(", ") { r ->
+  // ADR-054: slotCount/contractHash precede the pointer parameters (both int/long — see the
+  // amended ADR-048 contract). registrables is never empty here (the caller returns early when
+  // it is), so prepending the two leading params as a plain string is safe — no dangling comma.
+  val registrableParams: String = registrables.joinToString(", ") { r ->
     when (r) {
       is RirRegistrable.Ctor -> "IntPtr ctorPtr"
       is RirRegistrable.Method -> "IntPtr ${r.method.name.toMethodCamelCase()}Ptr"
@@ -265,8 +294,9 @@ private fun registrationFileContent(
       is RirRegistrable.PropertySetter -> "IntPtr ${r.property.name.toMethodCamelCase()}SetterPtr"
     }
   }
+  val dllImportParams: String = "int slotCount, long contractHash, $registrableParams"
 
-  val moduleInitArgs: String = registrables.joinToString(",\n                ") { r ->
+  val moduleInitArgs: String = (listOf("$slotCount", "${hash}L") + registrables.map { r ->
     when (r) {
       is RirRegistrable.Ctor -> {
         val paramTypes: String = r.ctor.parameters.joinToString(", ") { p -> csAbiType(p.type) }
@@ -301,7 +331,7 @@ private fun registrationFileContent(
         "(IntPtr)(delegate* unmanaged[Cdecl]<$receiverType$valueType, void>)(&${r.property.name}_Set_Thunk)"
       }
     }
-  }
+  }).joinToString(",\n                    ")
 
   val thunks: String = registrables.joinToString("\n\n") { r ->
     when (r) {
@@ -332,8 +362,25 @@ private fun registrationFileContent(
     |        [ModuleInitializer]
     |        internal static unsafe void Initialize()
     |        {
-    |            $exportName(
-    |                $moduleInitArgs);
+    |            NugetTrace.Write(
+    |                "register enter $qualifiedType -> $exportName($slotCount $slotWord) dll=$nativeLibraryName");
+    |            try
+    |            {
+    |                $exportName(
+    |                    $moduleInitArgs);
+    |            }
+    |            catch (DllNotFoundException e)
+    |            {
+    |                NugetTrace.WriteAlways(${'$'}"FATAL: native library '$nativeLibraryName' not found: {e.Message}");
+    |                throw;
+    |            }
+    |            catch (EntryPointNotFoundException e)
+    |            {
+    |                NugetTrace.WriteAlways(${'$'}"FATAL: export '$exportName' missing from " +
+    |                    ${'$'}"'$nativeLibraryName'. The native library predates this shim (stale build state). {e.Message}");
+    |                throw;
+    |            }
+    |            NugetTrace.Write("register ok    $qualifiedType");
     |        }
     |
     |$thunks
@@ -569,16 +616,86 @@ private fun nugetRuntimeRegistrationContent(nativeLibraryName: String): String =
   |    {
   |        [DllImport("$nativeLibraryName", CallingConvention = CallingConvention.Cdecl,
   |            EntryPoint = "nuget_runtime_register")]
-  |        private static extern void nuget_runtime_register(IntPtr freeGcHandlePtr);
+  |        private static extern void nuget_runtime_register(int slotCount, long contractHash, IntPtr freeGcHandlePtr);
   |
   |        [ModuleInitializer]
-  |        internal static unsafe void Initialize() =>
-  |            nuget_runtime_register((IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, void>)(&FreeGcHandle_Thunk));
+  |        internal static unsafe void Initialize()
+  |        {
+  |            NugetTrace.Write(
+  |                "register enter <runtime> -> nuget_runtime_register(1 slot) dll=$nativeLibraryName");
+  |            try
+  |            {
+  |                nuget_runtime_register(
+  |                    1,
+  |                    ${NUGET_RUNTIME_CONTRACT_HASH}L,
+  |                    (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, void>)(&FreeGcHandle_Thunk));
+  |            }
+  |            catch (DllNotFoundException e)
+  |            {
+  |                NugetTrace.WriteAlways(${'$'}"FATAL: native library '$nativeLibraryName' not found: {e.Message}");
+  |                throw;
+  |            }
+  |            catch (EntryPointNotFoundException e)
+  |            {
+  |                NugetTrace.WriteAlways(${'$'}"FATAL: export 'nuget_runtime_register' missing from " +
+  |                    ${'$'}"'$nativeLibraryName'. The native library predates this shim (stale build state). {e.Message}");
+  |                throw;
+  |            }
+  |            NugetTrace.Write("register ok    <runtime>");
+  |        }
   |
   |        // Called from Kotlin's Cleaner thread or close(); GCHandle.Free is thread-safe and the
   |        // CLR attaches unknown native threads automatically on entry.
   |        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
   |        private static void FreeGcHandle_Thunk(IntPtr handle) => GCHandle.FromIntPtr(handle).Free();
+  |    }
+  |}
+""".trimMargin().trim()
+
+// ADR-054: NugetTrace.cs — the opt-in registration trace sink, C# side. Emitted once per
+// generateCSharpShims run, whenever anything else is (every generated [ModuleInitializer]
+// references it). xunit 2.9.3 (this repo's harness) removed Console capture entirely, so the
+// default sink is stderr, not Console.Out — a Console.WriteLine here would be invisible at
+// exactly the moment it matters (mid-test-run registration failure).
+private fun nugetTraceCsContent(): String = """
+  |// <auto-generated>
+  |// Generated by nugetGenerateShims (ADR-054). Do not edit by hand.
+  |// Opt-in registration trace: NUGET_INTEROP_TRACE=1 (also "true"/"all") enables it;
+  |// NUGET_INTEROP_TRACEFILE=<path> redirects from stderr to a file (appended).
+  |// </auto-generated>
+  |#nullable enable
+  |
+  |namespace IoGithubXxfast.KotlinNativeNuget
+  |{
+  |    using System;
+  |    using System.IO;
+  |
+  |    internal static class NugetTrace
+  |    {
+  |        private static readonly bool s_enabled = IsEnabled();
+  |        private static readonly string? s_file =
+  |            Environment.GetEnvironmentVariable("NUGET_INTEROP_TRACEFILE");
+  |
+  |        private static bool IsEnabled() =>
+  |            Environment.GetEnvironmentVariable("NUGET_INTEROP_TRACE") is "1" or "true" or "all";
+  |
+  |        // The only two call sites are [ModuleInitializer]s, once per registration at process
+  |        // start — never on the hot bridge-call path (there is no such path on the C# side; the
+  |        // thunks ARE the hot path and none of them call this).
+  |        internal static void Write(string message)
+  |        {
+  |            if (!s_enabled) return;
+  |            WriteAlways(message);
+  |        }
+  |
+  |        // Bypasses the env-var gate: a fatal condition (native library not found, export
+  |        // missing) is not opt-in.
+  |        internal static void WriteAlways(string message)
+  |        {
+  |            string line = ${'$'}"[nuget:shim] {message}";
+  |            if (s_file is null) Console.Error.WriteLine(line);
+  |            else File.AppendAllText(s_file, line + Environment.NewLine);
+  |        }
   |    }
   |}
 """.trimMargin().trim()

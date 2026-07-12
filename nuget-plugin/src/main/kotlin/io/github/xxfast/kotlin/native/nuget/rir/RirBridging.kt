@@ -224,6 +224,58 @@ private fun isV1Type(type: RirTypeRef, boundHandleTypes: Set<RirTypeKey>): Boole
   is RirEnumType -> true
 }
 
+// ADR-054: a pure, deterministic 64-bit hash (FNV-1a) over the ordered registrable signature list
+// of one RirClass — the "contractHash" leading parameter both generators bake into a type's
+// nuget_{ns}_{type}_register export/[ModuleInitializer] call. Both generators read the same
+// reverse-ir.json and call this exact function, so within one build the two sides can never
+// disagree; across two different builds (a stale C# shim vs. a rebuilt native library) the hash
+// differs whenever the ordered (memberKind, memberName, returnType, paramTypes, nullability) list
+// differs, which is precisely the drift ADR-054 exists to detect at runtime.
+fun contractHash(cls: RirClass, registrables: List<RirRegistrable>): Long {
+  val signature: String = cls.name + "|" +
+      registrables.joinToString("|") { it.contractSignature() }
+  return fnv1a64(signature)
+}
+
+// One "column" of contractHash's input: member kind, name, parameter types (with nullability
+// suffix), and — for a method or constructor — return type. A same-arity change to any of these
+// (e.g. a parameter's nullability flips) changes the resulting hash, which is the whole point:
+// same-arity drift is exactly what a plain slotCount comparison cannot see.
+private fun RirRegistrable.contractSignature(): String = when (this) {
+  is RirRegistrable.Ctor -> "ctor(" +
+      ctor.parameters.joinToString(",") { it.type.signaturePart() } + ")"
+
+  is RirRegistrable.Method -> "method:${method.name}(" +
+      method.parameters.joinToString(",") { it.type.signaturePart() } +
+      "):" + method.returnType.signaturePart()
+
+  is RirRegistrable.PropertyGetter -> "get:${property.name}:${property.type.signaturePart()}"
+  is RirRegistrable.PropertySetter -> "set:${property.name}:${property.type.signaturePart()}"
+}
+
+// describe() plus the ADR-053 nullability flag — two type refs that only differ by nullability
+// must not hash identically, or a nullability-only drift between two generations would be invisible
+// to the contract check.
+private fun RirTypeRef.signaturePart(): String = describe() + if (isNullable) "?" else ""
+
+// FNV-1a 64-bit over the UTF-8 bytes of [s]. Deterministic across JVM versions/platforms (unlike
+// relying on String.hashCode() consistency), which both Gradle tasks need since they run this
+// function independently in the same build.
+private fun fnv1a64(s: String): Long {
+  var hash = -3750763034362895579L // FNV-1a 64-bit offset basis (14695981039346656037 as Long)
+  s.toByteArray(Charsets.UTF_8).forEach { byte ->
+    hash = hash xor (byte.toLong() and 0xffL)
+    hash *= 1099511628211L // FNV-1a 64-bit prime
+  }
+  return hash
+}
+
+// ADR-054: nuget_runtime_register has no RirClass/registrable list to hash (the shared GCHandle-
+// free thunk is a fixed, single-slot contract, not derived from reverse-ir.json), so both
+// generators bake this same literal constant rather than each independently re-deriving a "fake"
+// one-element registrable list. Computed via the same fnv1a64 so it is not a magic number.
+val NUGET_RUNTIME_CONTRACT_HASH: Long = fnv1a64("runtime:freeGcHandle(handle:COpaquePointer):Unit")
+
 // Shared registration export-name derivation (ADR-048's naming contract, which ADR-049's C# side
 // must match exactly): "nuget_{ns_snake}_{type_snake}_register". Sharing this function (rather than
 // letting each generator re-derive it) closes the same drift risk as bridgeableStaticMethods above.

@@ -35,6 +35,7 @@
         <toc-element topic="objects-and-handles.md"/>
         <toc-element topic="instance-members.md"/>
         <toc-element topic="bridgeable-subset.md"/>
+        <toc-element topic="registration-diagnostics.md"/>
     </toc-element>
 
 </instance-profile>
