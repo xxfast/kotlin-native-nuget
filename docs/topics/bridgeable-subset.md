@@ -29,7 +29,7 @@ Kotlin `SCREAMING_SNAKE_CASE`. Enum values cross the C ABI as their ordinal `Int
 returns, constructors, and properties use the generated Kotlin enum type without allocating an
 object handle or registration table for the enum itself.
 
-```csharp
+```c#
 // sample-dependency/CatMood.cs
 public enum CatMood
 {
