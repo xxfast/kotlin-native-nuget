@@ -195,6 +195,8 @@ nuget {
         alias("Sample.Enums", "sample.enums")
         include("Sample.Nullability")
         alias("Sample.Nullability", "sample.nullability")
+        include("Sample.Household")
+        alias("Sample.Household", "sample.household")
       }
     }
   }

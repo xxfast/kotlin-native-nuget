@@ -25,6 +25,12 @@
       Sample.Nullability.Nickname / NicknameBook / LegacyNicknameBook — nullable reference
       type annotations across return/parameter/property positions, plus a `#nullable disable`
       oblivious island (ADR-053, Phase 9 line 156/157).
+      Sample.Household.Toy / Cat / Household / StrayCat — the adversarial reverse fixture
+      (ROADMAP "Tooling &amp; Test Integrity"): 3+ bound classes in one namespace, a
+      cross-referencing settable handle-typed property (Cat.FavoriteToy : Toy), two types
+      sharing a method name (Cat.Describe / Toy.Describe), a many-parameter method with a
+      nullable annotated return (Household.FindToy), and a `#nullable disable` oblivious
+      island whose method deliberately returns a genuine null (StrayCat.Announce).
     </Description>
   </PropertyGroup>
 

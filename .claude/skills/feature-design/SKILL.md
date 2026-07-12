@@ -51,7 +51,8 @@ Drive the **thinnest possible slice** of the feature (one member, one type, one 
 
 - **Non-negotiable for reverse / ecosystem features (Phase 8+)**, where the round trip spans four artifacts: metadata reader → Kotlin stub gen → C# shim gen → NuGet packaging. Optional for a forward feature that only touches the KSP processor.
 - Its first job is to prove the path is **passable**. Verify is where reality intrudes; a latent bug in that path should surface in the first 20 minutes against a two-line fixture, not after a 14-test fixture and both generator sides are already written.
-- Its second job is to **validate the ADR's inferred mechanism claims**. The `research` agent cannot execute anything, so every claim about what a real assembly or toolchain does at runtime is labelled inferred (see [research](../../agents/research.md)). Check each one against the real artefact here, before an implementing agent follows it literally.
+- Its second job is to **falsify every mechanism claim the ADR still labels `inferred`**. `research` can now run a throwaway spike to verify a claim itself (see [research](../../agents/research.md)), so anything reaching you still marked inferred is a claim nobody has yet checked against a real artefact. Check each one here, against the real thing, before an implementing agent follows it literally. ADR-053 shipped one wrong inferred claim and it cost hours of debugging correct code.
+- If a claim does not survive contact with the artefact, **the ADR is wrong**. Say so and fix the ADR. Do not bend the code to match the doc.
 - Delegate to `kotlin-dev` + `csharp-dev` and keep them warm, they carry into Step 4. If the skeleton does not go green, fix or split (see Rules) before writing any more tests.
 
 ### Step 4: Testing

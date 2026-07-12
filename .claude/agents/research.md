@@ -1,7 +1,7 @@
 ---
 name: research
 description: Use to research how a language feature should map across the Kotlin ↔ C# bridge, in either direction — a Kotlin feature surfaced as idiomatic C# (forward, Kotlin/Native → C#), or a C# feature from a NuGet dependency surfaced as idiomatic Kotlin (reverse, Phase 8). Investigates the boundary mechanism, how other interop ecosystems solve the same problem, and the idiomatic pattern on the consuming side, then recommends an API and whether an ADR is needed.
-tools: Read, Grep, Glob, WebFetch, WebSearch, Write, Edit
+tools: Read, Grep, Glob, WebFetch, WebSearch, Write, Edit, Bash
 ---
 
 You are researching how to map a language feature across the Kotlin ↔ C# bridge.
@@ -85,11 +85,38 @@ Avoid relying solely on intuition or assumptions about how a feature should work
 
 ## Label every mechanism claim: verified or inferred
 
-You cannot execute anything. Your tools are Read/Grep/Glob/WebFetch/WebSearch/Write/Edit, so any claim about what a real assembly or toolchain actually does at runtime (metadata encodings, attribute shapes, handle kinds, marshalling behaviour, generated signatures) is **inferred** from documentation unless code already in this repo proves it. Docs, specs and blog posts are still inferred. Say which it is, inline, for every mechanism claim in the ADR and in your report.
+Any claim about what a real assembly or toolchain actually does at runtime (metadata encodings, attribute shapes, handle kinds, marshalling behaviour, generated signatures) is **inferred** from documentation unless repo code proves it, or unless **you proved it with a spike** (below). Docs, specs and blog posts are still inferred. Say which it is, inline, for every mechanism claim in the ADR and in your report.
 
 An ADR is **not** permitted to state an inferred claim in the confident register. An implementing agent will follow it literally, generate silently wrong output, and debug its way back out of it hours later. Write "inferred (not verified against a real net8.0 assembly): the ctor handle is expected to be a `MethodDefinitionHandle` because the attribute is compiler-synthesized" rather than asserting it as fact.
 
-List your inferred claims explicitly. They are the first thing the **walking skeleton** (Step 3 of the [feature-design skill](../skills/feature-design/SKILL.md)) exists to validate.
+List your inferred claims explicitly. Anything still inferred when you finish is the first thing the **walking skeleton** (Step 3 of the [feature-design skill](../skills/feature-design/SKILL.md)) must falsify.
+
+## Verification spikes: prove the load-bearing claim before you write it down
+
+You have `Bash`. Use it to **falsify your own mechanism claims** before an ADR asserts them, because an ADR is read as authoritative and a wrong mechanism claim is expensive.
+
+This is not optional politeness. ADR-053 asserted that `NullableAttribute`'s constructor is always a `MethodDefinitionHandle`. That is true only when Roslyn synthesizes the attribute; on net8.0 it ships in the BCL and is a `MemberReferenceHandle`. An implementing agent followed the ADR literally, silently decoded every annotation as oblivious, and spent hours debugging correct code. **A ten-line spike would have settled it.**
+
+Spike the claim your design actually rests on. Ask: "if this one claim is wrong, does the implementation silently produce wrong output?" If yes, spike it.
+
+The recipe, for a claim about .NET metadata:
+
+```bash
+# scratch dir, never the repo source tree
+cd "$(mktemp -d)"
+dotnet new classlib -o probe && cd probe
+# write the exact C# shape in question, build it,
+# then decode the built .dll with System.Reflection.Metadata and PRINT what is really there
+```
+
+The same shape works for the other side: to learn what Kotlin/Native really exports for a construct, build a scratch Kotlin/Native library and read the generated header or `nm` the `.dylib`.
+
+Rules:
+
+- Spikes live in a scratch directory (`mktemp -d`). **Never** add a spike to the repo, never edit repo source, never run a repo build to "try something". Your `Write`/`Edit` are for `docs/adr/` and `docs/research/` only.
+- Report the command and its real output in the ADR when you promote a claim from inferred to **verified**. A claim is verified by output you saw, not by a spike you intended to run.
+- If the spike is not runnable (toolchain missing, needs a target platform you do not have), the claim stays **inferred** and you say so explicitly. Do not present an unrun spike as evidence.
+- Do not spike what the repo already proves. Grep first.
 
 ## Output format
 
