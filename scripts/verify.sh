@@ -37,21 +37,14 @@ if [ "$RUN_PLUGIN" = true ]; then
 fi
 
 echo "==> Purge stale SampleLibrary + SampleDependency NuGet caches"
-# sample-dependency keeps version 1.0.0 while its fixture surface grows per feature,
-# so its cache goes stale exactly like samplelibrary's does. Purge BEFORE the pack: packNuget
-# runs nugetExtractApi, which resolves sample-dependency from this cache — a stale entry there
-# feeds the metadata reader an old DLL and the reverse bindings regenerate against the wrong API.
+# Fixture packages now receive a unique version on every pack, so NuGet resolves each build under
+# a new cache key. Keep this purge as a clean-room verification precaution; it is no longer the
+# mechanism that prevents fixture packages from going stale.
 rm -rf ~/.nuget/packages/samplelibrary ~/.nuget/packages/sampledependency
 
-# A second, distinct staleness layer sits on top of the one above: SampleLibrary/SampleDependency
-# are pinned at version 1.0.0 forever, so a consuming project's own obj/project.assets.json can
-# stay "up to date" (by project-file/lock-file hash) across a session even after the line above
-# repopulates the global package cache with fresh contentFiles — `dotnet test`/`dotnet build` then
-# skip restore entirely ("All projects are up-to-date for restore") and keep building against the
-# STALE file list baked into the old assets file, silently dropping newly generated .cs files (e.g.
-# a new type's {Type}Registration.cs never makes it into the <Compile> item set, so its
-# [ModuleInitializer] is never called — this looks exactly like a registration bug from the C#
-# test side, but isn't one). Force both consumer projects to re-resolve from what was just purged.
+# Consumer projects resolve the new exact fixture version on the next restore, so their existing
+# assets files cannot silently retain an older package's contentFiles. Keep the clean output here
+# to make the full verification run self-contained.
 rm -rf sample-app/GeneratedBindingsCheck/obj sample-app/GeneratedBindingsCheck/bin
 rm -rf sample-app/SampleApp.Tests/obj sample-app/SampleApp.Tests/bin
 
