@@ -206,3 +206,13 @@ Affected files:
 - Stack trace propagation — deferred by ADR-023.
 - Exception cause chain (`InnerException`) — deferred by ADR-023.
 - `@Throws`-based opt-in — not needed given wrap-all approach, but could be added as an optimization later to skip try/catch on functions the author guarantees won't throw.
+
+## Post-implementation note: nullable-returning exports were never actually covered
+
+This ADR's "v1" scope lists "all sync top-level functions (including nullable variants)". In practice,
+[ADR-002](002-nullable-two-call-pattern.md)'s `_has_value`/`_value` two-call `[DllImport]`s were
+generated without the `errorOut`/`out IntPtr error` parameter described here, even though the Kotlin
+export side declared and wrote through one on both calls. A thrown exception inside a nullable-typed
+export corrupted memory (`SIGBUS`) instead of propagating as a `KotlinException`, for as long as this
+ADR has existed. Fixed; see [ADR-002](002-nullable-two-call-pattern.md) and
+`NullableFunctionExceptionPropagationTests.cs` for the regression coverage.

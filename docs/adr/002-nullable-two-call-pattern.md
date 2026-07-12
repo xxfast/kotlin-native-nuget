@@ -49,3 +49,13 @@ public static int? nullableInt(bool hasValue)
 If profiling shows the two-call overhead is a bottleneck:
 - Switch to a single-call C struct return (`{ bool has_value; T value; }`) using `@CStruct` interop
 - Or cache the result on the Kotlin side between the `has_value` and `value` calls
+
+## Post-implementation note: the ADR-024 error out-parameter was missing on both calls
+
+`CirFunctionTranslator.translateNullableFunction` generated the `_has_value`/`_value` `[DllImport]`
+pair without the `errorOut`/`out IntPtr error` parameter that ADR-024 requires on every synchronous
+export, even though the Kotlin export side always declared and wrote through it. A nullable-returning
+function that threw corrupted memory (`SIGBUS`) instead of surfacing a `KotlinException`, so ADR-024's
+synchronous exception propagation never actually worked for this pattern. Fixed; see
+[ADR-024](024-sync-exception-propagation.md) and `NullableFunctionExceptionPropagationTests.cs` for
+the regression coverage.

@@ -26,4 +26,19 @@ fun nullableInt(hasValue: Boolean): Int? = if (hasValue) 42 else null
 
 fun nullableString(hasValue: Boolean): String? = if (hasValue) "hello" else null
 
+// Regression coverage for the nullable-returning ADR-002 two-call pattern combined with ADR-024
+// synchronous exception propagation: a negative input throws, zero returns null, and a positive
+// input returns a value. See ADR-002 and ADR-024.
+fun nullableIntOrThrow(input: Int): Int? = when {
+  input < 0 -> throw IllegalArgumentException("input must not be negative")
+  input == 0 -> null
+  else -> input
+}
+
+fun nullableStringOrThrow(input: Int): String? = when {
+  input < 0 -> throw IllegalArgumentException("input must not be negative")
+  input == 0 -> null
+  else -> "value-$input"
+}
+
 fun greeter(greeting: String): (String) -> String = { name -> "$greeting, $name!" }

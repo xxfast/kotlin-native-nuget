@@ -50,8 +50,8 @@ internal fun translateFunction(
   fun enumParamsUnsupported(returnShape: String): List<CirMember> {
     logger.error(
       "Enum parameters are not supported on a top-level function with a $returnShape return " +
-        "type ('${func.simpleName.asString()}'). They are supported on top-level functions " +
-        "returning an enum, a String, a primitive, or Unit.",
+          "type ('${func.simpleName.asString()}'). They are supported on top-level functions " +
+          "returning an enum, a String, a primitive, or Unit.",
       func,
     )
     return emptyList()
@@ -62,7 +62,7 @@ internal fun translateFunction(
   if (isNullable) {
     if (hasEnumParams) return enumParamsUnsupported("nullable")
 
-    return translateNullableFunction(cname, csName, kotlinReturnType, params, func, libraryName)
+    return translateNullableFunction(cname, csName, kotlinReturnType, params, libraryName)
   }
 
   val returnDecl: KSClassDeclaration? = returnType?.declaration as? KSClassDeclaration
@@ -790,17 +790,19 @@ internal fun translateGenericFunction(
   return result
 }
 
-private fun translateNullableFunction(
+internal fun translateNullableFunction(
   cname: String,
   csName: String,
   kotlinReturnType: String,
   params: List<CirParameter>,
-  func: KSFunctionDeclaration,
   libraryName: String,
 ): List<CirMember> {
   val csharpReturnType: String = mapReturnType(kotlinReturnType)
   val paramNames: String = params.joinToString(", ") { it.name }
 
+  // Both crossings throw synchronously (ADR-024), so both DllImports need an error out-param;
+  // see the isNullableValueType property getter in CirClassTranslator.kt for the same
+  // has_value/value two-call shape this mirrors.
   val hasValueImport = CirDllImport(
     libraryName = libraryName,
     entryPoint = "${cname}_has_value",
@@ -808,6 +810,7 @@ private fun translateNullableFunction(
     name = "${csName}_has_value",
     parameters = params,
     visibility = CirVisibility.PRIVATE,
+    hasSyncErrorOut = true,
   )
 
   val valueImport = CirDllImport(
@@ -817,12 +820,47 @@ private fun translateNullableFunction(
     name = "${csName}_value",
     parameters = params,
     visibility = CirVisibility.PRIVATE,
+    hasSyncErrorOut = true,
   )
 
-  val body: String = if (kotlinReturnType == "String") {
-    "!${csName}_has_value($paramNames) ? null : Marshal.PtrToStringUTF8(${csName}_value($paramNames))"
+  // Local names are prefixed to avoid colliding with a Kotlin parameter of the same name
+  // (e.g. `fun nullableInt(hasValue: Boolean)` would otherwise shadow a plain `hasValue` local).
+  // The has_value/value error outs get their own descriptive suffix (rather than a bare `error`/
+  // `error2`) since both are read in the same method body and must stay distinguishable.
+  val hasValueCallArgs: String = if (paramNames.isEmpty()) {
+    "out IntPtr __nuget_hasValueError"
   } else {
-    "!${csName}_has_value($paramNames) ? null : ${csName}_value($paramNames)"
+    "$paramNames, out IntPtr __nuget_hasValueError"
+  }
+  val valueCallArgs: String = if (paramNames.isEmpty()) {
+    "out IntPtr __nuget_valueError"
+  } else {
+    "$paramNames, out IntPtr __nuget_valueError"
+  }
+
+  val body: String = buildString {
+    appendLine()
+    appendLine("            bool __nuget_hasValue = ${csName}_has_value($hasValueCallArgs);")
+    appendLine("            if (__nuget_hasValueError != IntPtr.Zero)")
+    appendLine("            {")
+    appendLine("                throw NugetErrorNative.BuildException(__nuget_hasValueError);")
+    appendLine("            }")
+    appendLine("            if (!__nuget_hasValue) return null;")
+    if (kotlinReturnType == "String") {
+      appendLine("            IntPtr __nuget_nativeResult = ${csName}_value($valueCallArgs);")
+      appendLine("            if (__nuget_valueError != IntPtr.Zero)")
+      appendLine("            {")
+      appendLine("                throw NugetErrorNative.BuildException(__nuget_valueError);")
+      appendLine("            }")
+      append("            return Marshal.PtrToStringUTF8(__nuget_nativeResult);")
+    } else {
+      appendLine("            $csharpReturnType __nuget_value = ${csName}_value($valueCallArgs);")
+      appendLine("            if (__nuget_valueError != IntPtr.Zero)")
+      appendLine("            {")
+      appendLine("                throw NugetErrorNative.BuildException(__nuget_valueError);")
+      appendLine("            }")
+      append("            return __nuget_value;")
+    }
   }
 
   val returnTypeStr: String = if (kotlinReturnType == "String") "string?" else "$csharpReturnType?"

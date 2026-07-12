@@ -107,9 +107,11 @@ sealed interface RirTypeRef
 @SerialName("void")
 data object RirVoidType : RirTypeRef
 
+// ADR-053: `nullable` reflects the decoded NullableAttribute payload for this type reference
+// (`string?` -> true; oblivious/un-annotated `string` -> false, see RirTypeRef.isNullable).
 @Serializable
 @SerialName("string")
-data object RirStringType : RirTypeRef
+data class RirStringType(val nullable: Boolean = false) : RirTypeRef
 
 // name is one of: "bool", "byte", "short", "int", "long", "float", "double", "char"
 @Serializable
@@ -120,11 +122,14 @@ data class RirPrimitiveType(val name: String) : RirTypeRef
 // Split namespace/name rather than an assembly-qualified string: both generators resolve the
 // referenced type to a Kotlin package + class, and parsing an AQN back apart is more error-prone
 // than never joining it.
+// ADR-053: `nullable` reflects the decoded NullableAttribute payload for this type reference
+// (`Foo?` -> true; oblivious/un-annotated `Foo` -> false, see RirTypeRef.isNullable).
 @Serializable
 @SerialName("handle")
 data class RirObjectHandleType(
   val namespace: String,
   val name: String,
+  val nullable: Boolean = false,
 ) : RirTypeRef
 
 // A reference to a supported C# enum. Like handles, namespace/name keep the JSON contract easy
@@ -179,4 +184,12 @@ enum class RirDiagnosticKind {
 
   @SerialName("info_async_not_yet_mapped")
   INFO_ASYNC_NOT_YET_MAPPED,
+
+  // ADR-053: an oblivious (un-annotated) reference type binds non-null in Kotlin — this is an
+  // informational signal, not a skip, since the member is still bridged. One assembly-level
+  // instance (memberName empty) when the whole assembly carries no NullableAttribute/
+  // NullableContextAttribute anywhere; one per-member instance (memberName populated) for a
+  // `#nullable disable` island inside an otherwise-annotated assembly.
+  @SerialName("info_oblivious_nullability")
+  INFO_OBLIVIOUS_NULLABILITY,
 }

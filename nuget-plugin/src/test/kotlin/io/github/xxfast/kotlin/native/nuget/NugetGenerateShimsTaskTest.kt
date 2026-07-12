@@ -54,7 +54,7 @@ class NugetGenerateShimsTaskTest {
                   RirMethod(
                     name = "SerializeObject",
                     isStatic = true,
-                    returnType = RirStringType,
+                    returnType = RirStringType(),
                     parameters = listOf(
                       RirParameter(name = "value", type = RirPrimitiveType("int")),
                     ),
@@ -89,7 +89,7 @@ class NugetGenerateShimsTaskTest {
     assertTrue(
       files.single().relativePath.endsWith("JsonConvertRegistration.cs"),
       "generated file must be named JsonConvertRegistration.cs " +
-        "but was '${files.single().relativePath}'",
+          "but was '${files.single().relativePath}'",
     )
   }
 
@@ -148,7 +148,7 @@ class NugetGenerateShimsTaskTest {
       shim.content,
       "EntryPoint = \"$exportName\"",
       message = "C# [DllImport] EntryPoint must match the Kotlin @CName export exactly, " +
-        "to avoid ADR-049 Alternative 10's parameter-order/export-name drift",
+          "to avoid ADR-049 Alternative 10's parameter-order/export-name drift",
     )
   }
 
@@ -437,7 +437,7 @@ class NugetGenerateShimsTaskTest {
     assertTrue(
       alphaIndex in zuluIndex + 1 until mikeIndex,
       "thunk pointers must be registered in declaration order Zulu, Alpha, Mike — got indices " +
-        "$zuluIndex, $alphaIndex, $mikeIndex",
+          "$zuluIndex, $alphaIndex, $mikeIndex",
     )
   }
 
@@ -557,19 +557,19 @@ class NugetGenerateShimsTaskTest {
                     isStatic = true,
                     returnType = RirObjectHandleType(namespace = "Sample.Text", name = "Template"),
                     parameters = listOf(
-                      RirParameter(name = "source", type = RirStringType),
+                      RirParameter(name = "source", type = RirStringType()),
                     ),
                   ),
                   RirMethod(
                     name = "Render",
                     isStatic = true,
-                    returnType = RirStringType,
+                    returnType = RirStringType(),
                     parameters = listOf(
                       RirParameter(
                         name = "template",
                         type = RirObjectHandleType(namespace = "Sample.Text", name = "Template"),
                       ),
-                      RirParameter(name = "name", type = RirStringType),
+                      RirParameter(name = "name", type = RirStringType()),
                     ),
                   ),
                 ),
@@ -766,7 +766,7 @@ class NugetGenerateShimsTaskTest {
                 constructors = listOf(
                   RirConstructor(
                     parameters = listOf(
-                      RirParameter(name = "source", type = RirStringType),
+                      RirParameter(name = "source", type = RirStringType()),
                     ),
                   ),
                 ),
@@ -776,19 +776,19 @@ class NugetGenerateShimsTaskTest {
                     isStatic = true,
                     returnType = RirObjectHandleType(namespace = "Sample.Text", name = "Template"),
                     parameters = listOf(
-                      RirParameter(name = "source", type = RirStringType),
+                      RirParameter(name = "source", type = RirStringType()),
                     ),
                   ),
                   RirMethod(
                     name = "Render",
                     isStatic = true,
-                    returnType = RirStringType,
+                    returnType = RirStringType(),
                     parameters = listOf(
                       RirParameter(
                         name = "template",
                         type = RirObjectHandleType(namespace = "Sample.Text", name = "Template"),
                       ),
-                      RirParameter(name = "name", type = RirStringType),
+                      RirParameter(name = "name", type = RirStringType()),
                     ),
                   ),
                 ),
@@ -839,7 +839,7 @@ class NugetGenerateShimsTaskTest {
       thunkBody,
       "GCHandle.ToIntPtr(GCHandle.Alloc(",
       message = "ADR-052: Ctor_Thunk must always allocate and return a GCHandle — `new` never " +
-        "returns null, unlike ADR-051's nullable factory thunks",
+          "returns null, unlike ADR-051's nullable factory thunks",
     )
     assertFalse(
       thunkBody.contains("IntPtr.Zero"),
@@ -862,12 +862,12 @@ class NugetGenerateShimsTaskTest {
     assertTrue(
       ctorIndex >= 0 && parseIndex >= 0 && renderIndex >= 0,
       "all three thunks (Ctor_Thunk, Parse_Thunk, Render_Thunk) must be registered, got indices " +
-        "$ctorIndex, $parseIndex, $renderIndex",
+          "$ctorIndex, $parseIndex, $renderIndex",
     )
     assertTrue(
       ctorIndex < parseIndex && ctorIndex < renderIndex,
       "ADR-052 shared bridgeable ordering: Ctor_Thunk must be registered first, before the " +
-        "static-method thunks — got indices ctor=$ctorIndex, parse=$parseIndex, render=$renderIndex",
+          "static-method thunks — got indices ctor=$ctorIndex, parse=$parseIndex, render=$renderIndex",
     )
   }
 
@@ -930,7 +930,7 @@ class NugetGenerateShimsTaskTest {
                 isStatic = false,
                 constructors = listOf(
                   RirConstructor(
-                    parameters = listOf(RirParameter(name = "source", type = RirStringType)),
+                    parameters = listOf(RirParameter(name = "source", type = RirStringType())),
                   ),
                 ),
                 methods = listOf(
@@ -938,17 +938,17 @@ class NugetGenerateShimsTaskTest {
                     name = "Parse",
                     isStatic = true,
                     returnType = RirObjectHandleType(namespace = "Sample.Text", name = "Template"),
-                    parameters = listOf(RirParameter(name = "source", type = RirStringType)),
+                    parameters = listOf(RirParameter(name = "source", type = RirStringType())),
                   ),
                   RirMethod(
                     name = "Rename",
                     isStatic = false,
                     returnType = RirVoidType,
-                    parameters = listOf(RirParameter(name = "newName", type = RirStringType)),
+                    parameters = listOf(RirParameter(name = "newName", type = RirStringType())),
                   ),
                 ),
                 properties = listOf(
-                  RirProperty(name = "Name", type = RirStringType, isReadOnly = true, isStatic = false),
+                  RirProperty(name = "Name", type = RirStringType(), isReadOnly = true, isStatic = false),
                   RirProperty(
                     name = "Length",
                     type = RirPrimitiveType("int"),
@@ -957,7 +957,7 @@ class NugetGenerateShimsTaskTest {
                   ),
                   RirProperty(
                     name = "DefaultName",
-                    type = RirStringType,
+                    type = RirStringType(),
                     isReadOnly = false,
                     isStatic = true,
                   ),
@@ -994,8 +994,8 @@ class NugetGenerateShimsTaskTest {
       shim.content,
       "private static void Rename_Thunk(IntPtr selfHandle, IntPtr newNamePtr)",
       message = "Phase 9 line 151: an instance method thunk gains a leading IntPtr selfHandle " +
-        "parameter (an instance thunk is a static thunk whose first parameter is the receiver " +
-        "handle, ADR-051)",
+          "parameter (an instance thunk is a static thunk whose first parameter is the receiver " +
+          "handle, ADR-051)",
     )
   }
 
@@ -1006,7 +1006,7 @@ class NugetGenerateShimsTaskTest {
       shim.content,
       "(Template)GCHandle.FromIntPtr(selfHandle).Target!",
       message = "the receiver must be resolved via the exact same GCHandle.FromIntPtr(...).Target! " +
-        "pattern ADR-051 already uses for handle-typed parameters (see Render_Thunk)",
+          "pattern ADR-051 already uses for handle-typed parameters (see Render_Thunk)",
     )
   }
 
@@ -1016,7 +1016,7 @@ class NugetGenerateShimsTaskTest {
     assertFalse(
       shim.content.contains("Template.Rename("),
       "an instance method must be called on the resolved receiver instance, not statically " +
-        "via Template.Rename(...)",
+          "via Template.Rename(...)",
     )
   }
 
@@ -1094,24 +1094,24 @@ class NugetGenerateShimsTaskTest {
       )
         .all { it >= 0 },
       "all static and instance property thunks must be registered, got indices: ctor=$ctorIndex, parse=$parseIndex, " +
-        "rename=$renameIndex, nameGet=$nameGetIndex, lengthGet=$lengthGetIndex, " +
-        "lengthSet=$lengthSetIndex, defaultNameGet=$defaultNameGetIndex, " +
-        "defaultNameSet=$defaultNameSetIndex, renderCountGet=$renderCountGetIndex",
+          "rename=$renameIndex, nameGet=$nameGetIndex, lengthGet=$lengthGetIndex, " +
+          "lengthSet=$lengthSetIndex, defaultNameGet=$defaultNameGetIndex, " +
+          "defaultNameSet=$defaultNameSetIndex, renderCountGet=$renderCountGetIndex",
     )
     assertTrue(
       ctorIndex < parseIndex &&
-        parseIndex < renameIndex &&
-        renameIndex < nameGetIndex &&
-        nameGetIndex < lengthGetIndex &&
-        lengthGetIndex < lengthSetIndex &&
-        lengthSetIndex < defaultNameGetIndex &&
-        defaultNameGetIndex < defaultNameSetIndex &&
-        defaultNameSetIndex < renderCountGetIndex,
+          parseIndex < renameIndex &&
+          renameIndex < nameGetIndex &&
+          nameGetIndex < lengthGetIndex &&
+          lengthGetIndex < lengthSetIndex &&
+          lengthSetIndex < defaultNameGetIndex &&
+          defaultNameGetIndex < defaultNameSetIndex &&
+          defaultNameSetIndex < renderCountGetIndex,
       "Phase 9 static-property ordering: ctor, static methods, instance methods, instance " +
-        "property accessors, then static property accessors — got " +
-        "ctor=$ctorIndex, parse=$parseIndex, rename=$renameIndex, nameGet=$nameGetIndex, " +
-        "lengthGet=$lengthGetIndex, lengthSet=$lengthSetIndex, defaultNameGet=$defaultNameGetIndex, " +
-        "defaultNameSet=$defaultNameSetIndex, renderCountGet=$renderCountGetIndex",
+          "property accessors, then static property accessors — got " +
+          "ctor=$ctorIndex, parse=$parseIndex, rename=$renameIndex, nameGet=$nameGetIndex, " +
+          "lengthGet=$lengthGetIndex, lengthSet=$lengthSetIndex, defaultNameGet=$defaultNameGetIndex, " +
+          "defaultNameSet=$defaultNameSetIndex, renderCountGet=$renderCountGetIndex",
     )
   }
 
@@ -1140,13 +1140,13 @@ class NugetGenerateShimsTaskTest {
     )
     assertTrue(
       ctorIndex < parseIndex &&
-        parseIndex < renameIndex &&
-        renameIndex < nameGetIndex &&
-        nameGetIndex < lengthGetIndex &&
-        lengthGetIndex < lengthSetIndex &&
-        lengthSetIndex < defaultNameGetIndex &&
-        defaultNameGetIndex < defaultNameSetIndex &&
-        defaultNameSetIndex < renderCountGetIndex,
+          parseIndex < renameIndex &&
+          renameIndex < nameGetIndex &&
+          nameGetIndex < lengthGetIndex &&
+          lengthGetIndex < lengthSetIndex &&
+          lengthSetIndex < defaultNameGetIndex &&
+          defaultNameGetIndex < defaultNameSetIndex &&
+          defaultNameSetIndex < renderCountGetIndex,
     )
   }
 
@@ -1314,5 +1314,150 @@ class NugetGenerateShimsTaskTest {
     assertContains(shim.content, "    using System;")
     assertContains(shim.content, "    using System.Runtime.CompilerServices;")
     assertContains(shim.content, "    using System.Runtime.InteropServices;")
+  }
+
+  // ------------------------------------------------------------------
+  // ADR-053: C# nullable reference types → the shim's local declarations / null guards. The ABI
+  // itself is unchanged (IntPtr.Zero is already the null sentinel both ways); only local variable
+  // nullability annotations and one guard for nullable handle parameters change.
+  //
+  // Canonical fixture: Sample.Nullability.NicknameBook, mirroring the ADR's own fixture surface
+  // (trimmed to the members this generator's tests need).
+  //
+  // NOTE: several assertions below are expected to fail against today's generator (the `string
+  // result` local is always declared non-nullable regardless of RIR nullable, the null-forgiving
+  // `!` is always applied to every Marshal.PtrToStringUTF8(...) call, and a nullable handle
+  // parameter is unpacked inline with no IntPtr.Zero guard). That is the expected Step 3 "red"
+  // state; fixing it is Step 4.
+  // ------------------------------------------------------------------
+
+  private val nicknameRir: RirFile = RirFile(
+    assemblies = listOf(
+      RirAssembly(
+        packageId = "Sample.Nullability",
+        assemblyName = "Sample.Nullability",
+        namespaces = listOf(
+          RirNamespace(
+            name = "Sample.Nullability",
+            types = listOf(
+              RirClass(
+                name = "Nickname",
+                isStatic = false,
+                constructors = listOf(
+                  RirConstructor(parameters = listOf(RirParameter(name = "value", type = RirStringType()))),
+                ),
+              ),
+              RirClass(
+                name = "NicknameBook",
+                isStatic = false,
+                methods = listOf(
+                  RirMethod(
+                    name = "Find",
+                    isStatic = false,
+                    returnType = RirStringType(nullable = true),
+                    parameters = listOf(RirParameter(name = "name", type = RirStringType())),
+                  ),
+                  RirMethod(
+                    name = "Greet",
+                    isStatic = false,
+                    returnType = RirStringType(),
+                    parameters = listOf(
+                      RirParameter(name = "name", type = RirStringType(nullable = true)),
+                    ),
+                  ),
+                  RirMethod(
+                    name = "Describe",
+                    isStatic = false,
+                    returnType = RirStringType(),
+                    parameters = listOf(
+                      RirParameter(
+                        name = "nickname",
+                        type = RirObjectHandleType(
+                          namespace = "Sample.Nullability",
+                          name = "Nickname",
+                          nullable = true,
+                        ),
+                      ),
+                    ),
+                  ),
+                  RirMethod(
+                    name = "DefaultNickname",
+                    isStatic = false,
+                    returnType = RirObjectHandleType(
+                      namespace = "Sample.Nullability",
+                      name = "Nickname",
+                      nullable = false,
+                    ),
+                    parameters = emptyList(),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    ),
+  )
+
+  private fun nicknameBookShim(): GeneratedFile {
+    val files: List<GeneratedFile> = generateCSharpShims(nicknameRir, "sample")
+    return files.single { it.relativePath.endsWith("NicknameBookRegistration.cs") }
+  }
+
+  @Test
+  fun `Find_Thunk declares a nullable string local for its nullable string return`() {
+    val shim: GeneratedFile = nicknameBookShim()
+
+    assertContains(
+      shim.content,
+      "string? result = receiver.Find(Marshal.PtrToStringUTF8(namePtr)!);",
+      message = "ADR-053: a Nullable(2) string return must declare its local as string?, or the " +
+          "shim's #nullable enable warns CS8600",
+    )
+  }
+
+  @Test
+  fun `Greet_Thunk drops the null-forgiving operator on its nullable string parameter`() {
+    val shim: GeneratedFile = nicknameBookShim()
+
+    assertContains(
+      shim.content,
+      "string result = receiver.Greet(Marshal.PtrToStringUTF8(namePtr));",
+      message = "ADR-053: a Nullable(2) string parameter must drop the '!' — the parameter may " +
+          "legitimately be null",
+    )
+    assertFalse(
+      shim.content.contains("receiver.Greet(Marshal.PtrToStringUTF8(namePtr)!)"),
+      "the null-forgiving '!' must not be applied to a nullable string parameter",
+    )
+  }
+
+  @Test
+  fun `Describe_Thunk guards a nullable handle parameter with an IntPtr Zero check before GCHandle FromIntPtr`() {
+    val shim: GeneratedFile = nicknameBookShim()
+
+    assertContains(
+      shim.content,
+      "nicknameHandle == IntPtr.Zero",
+      message = "ADR-053: a Nullable(2) handle parameter must be guarded — " +
+          "GCHandle.FromIntPtr(IntPtr.Zero) throws (ADR-051 reserved the sentinel for exactly this)",
+    )
+    assertContains(shim.content, "? null")
+    assertContains(shim.content, "(Nickname)GCHandle.FromIntPtr(nicknameHandle).Target!")
+  }
+
+  // Guard: a non-null-annotated handle return keeps the exact same null check as a nullable one —
+  // this assertion is expected to stay green before and after Step 4 (GCHandle.Alloc(null) is legal
+  // and would otherwise leak a non-zero handle whose Target is null).
+  @Test
+  fun `DefaultNickname_Thunk keeps the null check even though its return is annotated non-null`() {
+    val shim: GeneratedFile = nicknameBookShim()
+
+    assertContains(
+      shim.content,
+      "return result is null ? IntPtr.Zero : GCHandle.ToIntPtr(GCHandle.Alloc(result));",
+      message = "ADR-053: the null check on a handle return must stay, even on a non-null-annotated " +
+          "return — all nullability lives on the Kotlin side",
+    )
   }
 }

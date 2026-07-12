@@ -111,28 +111,70 @@ fun greetViaConstructor(name: String): String {
 Because a constructor's return is unconditionally the class's own type (never `null`), it is a
 distinct RIR node (`RirConstructor`) rather than a `RirMethod` with a mandatory return type.
 
-## Object parameters and returns: `null` maps to a null pointer
+## Object parameters and returns: nullability follows `NullableAttribute`
 
-- **Object returns are nullable** (`Foo?`). `IntPtr.Zero` from C# is a legitimate `null` (the usual
-  shape of a `Try`-style factory), and it maps to Kotlin `null` with no wrapper allocated.
-- **Object parameters are non-null** (`Foo`). Passing Kotlin `null` for an object parameter isn't
-  supported yet; every object parameter must be a live wrapper.
+An object return, parameter, or property's nullability is read straight from the bound C# assembly's
+`NullableAttribute`/`NullableContextAttribute` metadata ([ADR-053](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/053-nullable-reference-types-in-kotlin.md)),
+not hardcoded per position:
+
+- **`Foo?`** (annotated nullable): `IntPtr.Zero` from C# maps to Kotlin `null`, no wrapper allocated.
+- **`Foo`** (annotated non-null, or un-annotated/oblivious): the generated stub `requireNotNull`s the
+  pointer and throws `IllegalStateException` naming the member if a null slips through anyway. An
+  oblivious (pre-C#-8, or `#nullable disable`) assembly binds this way too, with one
+  `info_oblivious_nullability` build warning (see [The bridgeable subset](bridgeable-subset.md)).
+
+`sample-dependency`'s `Sample.Nullability.NicknameBook` exercises every combination:
 
 ```kotlin
-// companion object { ... } inside Template.kt (real generated output)
-fun parse(source: String): Template? {
-  val fn = requireNotNull(parseFn) { /* ... */ }
-  val ptr: COpaquePointer? = memScoped { fn.invoke(source.cstr.ptr) }
-  return ptr?.let { Template(it) }
+// build/nuget-interop/kotlin/nativeMain/sample/nullability/NicknameBook.kt (real generated output)
+
+// nullable handle return
+fun lookup(name: String): Nickname? {
+  val fn = requireNotNull(NicknameBookBindings.lookupFn) { /* ... */ }
+  val ptr: COpaquePointer? = memScoped { fn.invoke(handle.require("NicknameBook"), name.cstr.ptr) }
+  return ptr?.let { Nickname(it) }
 }
 
-fun render(template: Template, name: String): String {
-  val fn = requireNotNull(renderFn) { /* ... */ }
-  val resultPtr = memScoped { fn.invoke(template.handle.require("Template"), name.cstr.ptr) }
-    ?: error("Template.Render returned null - expected a non-null string pointer")
+// non-null handle return: requireNotNull, not a `?`
+fun defaultNickname(): Nickname {
+  val fn = requireNotNull(NicknameBookBindings.defaultNicknameFn) { /* ... */ }
+  val ptr: COpaquePointer? = fn.invoke(handle.require("NicknameBook"))
+  return Nickname(requireNotNull(ptr) {
+    "NicknameBook.DefaultNickname returned null, but the C# API annotates it non-null."
+  })
+}
+
+// nullable handle parameter: the handle unwraps to a null COpaquePointer when the wrapper is null
+fun describe(nickname: Nickname?): String {
+  val fn = requireNotNull(NicknameBookBindings.describeFn) { /* ... */ }
+  val resultPtr = fn.invoke(handle.require("NicknameBook"), nickname?.handle?.require("Nickname"))
+    ?: error("NicknameBook.Describe returned null, expected a non-null string pointer")
   // ...
 }
 ```
+
+The C# side behind `describe` guards the null sentinel explicitly, because `GCHandle.FromIntPtr` on a
+zero pointer throws:
+
+```C#
+// build/nuget-interop/csharp/NicknameBookRegistration.cs (real generated output)
+private static IntPtr Describe_Thunk(IntPtr selfHandle, IntPtr nicknameHandle)
+{
+    NicknameBook receiver = (NicknameBook)GCHandle.FromIntPtr(selfHandle).Target!;
+    Nickname? nickname = nicknameHandle == IntPtr.Zero
+        ? null
+        : (Nickname)GCHandle.FromIntPtr(nicknameHandle).Target!;
+    string result = receiver.Describe(nickname);
+    return Marshal.StringToCoTaskMemUTF8(result);
+}
+```
+
+Before ADR-053, this was a blanket policy instead: every object return was unconditionally `Foo?` and
+every object parameter unconditionally non-null `Foo`, regardless of what the C# API actually
+annotated. `Template.parse(...)` and `template.clone()` are annotated non-null in the fixture, so they
+dropped their `?` (`fun clone(): Template`, not `Template?`; see [Instance members](instance-members.md)
+for the real generated output). Any hand-written call site still wrapping such a call in
+`requireNotNull(...)` is now redundant, though harmless, since the return is already non-null.
 
 `template.handle.require("Template")` is how a wrapper's raw pointer gets unwrapped for a call: it
 also guards against use-after-close, throwing `IllegalStateException` if the handle was already
@@ -172,7 +214,10 @@ walks through why this inversion is correct for each direction rather than a sty
   Tracked as a possible future optimization only if profiling shows it's needed.
 - `equals`/`hashCode`/`toString` are never delegated to the C# object's own `Equals`/`GetHashCode`/
   `ToString`.
-- Object parameters cannot be `null` yet; that's blocked on mapping `NullableAttribute` metadata.
+- `Nullable<T>` value types (`int?`, `CatMood?`) are a separate, deferred feature: they carry no
+  `NullableAttribute` and need their own wire-format decision (see
+  [ADR-053](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/053-nullable-reference-types-in-kotlin.md)
+  Decision 3).
 - Multiple public constructors on one type are an overload set and are skipped + diagnosed, not
   disambiguated (tracked in
   [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md) Phase 9).
@@ -189,5 +234,6 @@ walks through why this inversion is correct for each direction rather than a sty
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/005-object-return-semantics.md">ADR-005: Object return semantics</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/051-csharp-objects-as-opaque-handles.md">ADR-051: C# objects as opaque handles</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/052-csharp-instance-constructors-in-kotlin.md">ADR-052: C# instance constructors in Kotlin</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/053-nullable-reference-types-in-kotlin.md">ADR-053: Nullable reference types in Kotlin</a>
     </category>
 </seealso>

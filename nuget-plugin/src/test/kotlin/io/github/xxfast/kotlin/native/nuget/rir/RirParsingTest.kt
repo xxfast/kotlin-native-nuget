@@ -570,4 +570,252 @@ class RirParsingTest {
     val cls = file.assemblies[0].namespaces[0].types[0] as RirClass
     assertEquals(false, cls.properties[0].isReadOnly)
   }
+
+  // ------------------------------------------------------------------
+  // ADR-053: `nullable` on RirStringType / RirObjectHandleType (NullableAttribute decoding).
+  // ------------------------------------------------------------------
+
+  @Test
+  fun `type ref kind string with no nullable key parses as non-nullable (backward compat)`() {
+    val json = """
+      {
+        "assemblies": [
+          {
+            "packageId": "Acme.Lib",
+            "assemblyName": "Acme.Lib",
+            "namespaces": [
+              {
+                "name": "Acme.Lib",
+                "types": [
+                  {
+                    "kind": "class",
+                    "name": "Foo",
+                    "methods": [
+                      {
+                        "name": "GetName",
+                        "returnType": { "kind": "string" },
+                        "parameters": []
+                      }
+                    ],
+                    "properties": []
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    """.trimIndent()
+
+    val file: RirFile = parseReverseIr(json)
+
+    val cls = file.assemblies[0].namespaces[0].types[0] as RirClass
+    val returnType: RirTypeRef = cls.methods[0].returnType
+    assertIs<RirStringType>(returnType)
+    assertEquals(
+      false,
+      returnType.nullable,
+      "an old reverse-ir.json with no 'nullable' key must still parse — additive default false",
+    )
+  }
+
+  @Test
+  fun `type ref kind string with nullable true parses to RirStringType with nullable true`() {
+    val json = """
+      {
+        "assemblies": [
+          {
+            "packageId": "Sample.Nullability",
+            "assemblyName": "Sample.Nullability",
+            "namespaces": [
+              {
+                "name": "Sample.Nullability",
+                "types": [
+                  {
+                    "kind": "class",
+                    "name": "NicknameBook",
+                    "methods": [
+                      {
+                        "name": "Find",
+                        "isStatic": false,
+                        "returnType": { "kind": "string", "nullable": true },
+                        "parameters": []
+                      }
+                    ],
+                    "properties": []
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    """.trimIndent()
+
+    val file: RirFile = parseReverseIr(json)
+
+    val cls = file.assemblies[0].namespaces[0].types[0] as RirClass
+    val returnType: RirTypeRef = cls.methods[0].returnType
+    assertIs<RirStringType>(returnType)
+    assertEquals(true, returnType.nullable)
+  }
+
+  @Test
+  fun `type ref kind handle with nullable true parses to RirObjectHandleType with nullable true`() {
+    val json = """
+      {
+        "assemblies": [
+          {
+            "packageId": "Sample.Nullability",
+            "assemblyName": "Sample.Nullability",
+            "namespaces": [
+              {
+                "name": "Sample.Nullability",
+                "types": [
+                  {
+                    "kind": "class",
+                    "name": "NicknameBook",
+                    "methods": [
+                      {
+                        "name": "Lookup",
+                        "isStatic": false,
+                        "returnType": {
+                          "kind": "handle",
+                          "namespace": "Sample.Nullability",
+                          "name": "Nickname",
+                          "nullable": true
+                        },
+                        "parameters": []
+                      }
+                    ],
+                    "properties": []
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    """.trimIndent()
+
+    val file: RirFile = parseReverseIr(json)
+
+    val cls = file.assemblies[0].namespaces[0].types[0] as RirClass
+    val returnType: RirTypeRef = cls.methods[0].returnType
+    assertIs<RirObjectHandleType>(returnType)
+    assertEquals("Sample.Nullability", returnType.namespace)
+    assertEquals("Nickname", returnType.name)
+    assertEquals(true, returnType.nullable)
+  }
+
+  @Test
+  fun `type ref kind handle with no nullable key parses as non-nullable (backward compat)`() {
+    val json = """
+      {
+        "assemblies": [
+          {
+            "packageId": "Sample.Text",
+            "assemblyName": "Sample.Text",
+            "namespaces": [
+              {
+                "name": "Sample.Text",
+                "types": [
+                  {
+                    "kind": "class",
+                    "name": "Template",
+                    "methods": [
+                      {
+                        "name": "Parse",
+                        "isStatic": true,
+                        "returnType": { "kind": "handle", "namespace": "Sample.Text", "name": "Template" },
+                        "parameters": []
+                      }
+                    ],
+                    "properties": []
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    """.trimIndent()
+
+    val file: RirFile = parseReverseIr(json)
+
+    val cls = file.assemblies[0].namespaces[0].types[0] as RirClass
+    val returnType: RirTypeRef = cls.methods[0].returnType
+    assertIs<RirObjectHandleType>(returnType)
+    assertEquals(false, returnType.nullable)
+  }
+
+  // ------------------------------------------------------------------
+  // ADR-053: RirDiagnosticKind.INFO_OBLIVIOUS_NULLABILITY — assembly-level (memberName empty) and
+  // member-level (memberName populated, a `#nullable disable` island) forms both round-trip
+  // through the existing RirDiagnostic model (ADR-043), reusing the same JSON shape every other
+  // diagnostic kind already uses.
+  // ------------------------------------------------------------------
+
+  @Test
+  fun `assembly-level diagnostic with kind info_oblivious_nullability deserializes correctly`() {
+    val json = """
+      {
+        "assemblies": [
+          {
+            "packageId": "MimeMapping",
+            "assemblyName": "MimeMapping",
+            "namespaces": [],
+            "diagnostics": [
+              {
+                "kind": "info_oblivious_nullability",
+                "typeName": "",
+                "memberName": "",
+                "memberSignature": "",
+                "reason": "no NullableAttribute/NullableContextAttribute anywhere in the assembly",
+                "hint": "Every reference type in this package binds non-null; a null from C# fails fast."
+              }
+            ]
+          }
+        ]
+      }
+    """.trimIndent()
+
+    val file: RirFile = parseReverseIr(json)
+
+    val diagnostic: RirDiagnostic = file.assemblies[0].diagnostics[0]
+    assertEquals(RirDiagnosticKind.INFO_OBLIVIOUS_NULLABILITY, diagnostic.kind)
+    assertEquals("", diagnostic.memberName)
+  }
+
+  @Test
+  fun `member-level diagnostic with kind info_oblivious_nullability names the oblivious member`() {
+    val json = """
+      {
+        "assemblies": [
+          {
+            "packageId": "Sample.Nullability",
+            "assemblyName": "Sample.Nullability",
+            "namespaces": [],
+            "diagnostics": [
+              {
+                "kind": "info_oblivious_nullability",
+                "typeName": "LegacyNicknameBook",
+                "memberName": "Find",
+                "memberSignature": "Find(string): string",
+                "reason": "member compiled inside a #nullable disable region",
+                "hint": "Find binds non-null; a null from C# fails fast."
+              }
+            ]
+          }
+        ]
+      }
+    """.trimIndent()
+
+    val file: RirFile = parseReverseIr(json)
+
+    val diagnostic: RirDiagnostic = file.assemblies[0].diagnostics[0]
+    assertEquals(RirDiagnosticKind.INFO_OBLIVIOUS_NULLABILITY, diagnostic.kind)
+    assertEquals("LegacyNicknameBook", diagnostic.typeName)
+    assertEquals("Find", diagnostic.memberName)
+  }
 }

@@ -144,8 +144,13 @@ internal static class AssemblyExtractor
         var mr = peReader.GetMetadataReader();
         var assemblyName = GetAssemblyName(mr);
 
+        // ADR-053: computed once, globally, before any per-type processing. This is the signal
+        // for "whole assembly is nullable-oblivious" vs. "an oblivious island inside an otherwise
+        // annotated assembly" — see the post-processing step below.
+        var assemblyHasAnyNullableAnnotation = NullabilityHelpers.AssemblyHasAnyNullableAnnotation(mr);
+
         // Group type definitions by namespace, applying include/exclude filters.
-        var namespaceMap = new Dictionary<string, List<TypeDefinition>>(StringComparer.Ordinal);
+        var namespaceMap = new Dictionary<string, List<TypeDefinitionHandle>>(StringComparer.Ordinal);
         var diagnostics = new List<RirDiagnostic>();
 
         foreach (var handle in mr.TypeDefinitions)
@@ -168,11 +173,11 @@ internal static class AssemblyExtractor
 
             if (!namespaceMap.TryGetValue(ns, out var list))
             {
-                list = new List<TypeDefinition>();
+                list = new List<TypeDefinitionHandle>();
                 namespaceMap[ns] = list;
             }
 
-            list.Add(typeDef);
+            list.Add(handle);
         }
 
         // Build the set of bound handle type full names before processing methods, so the
@@ -183,19 +188,40 @@ internal static class AssemblyExtractor
 
         var rirNamespaces = new List<RirNamespace>();
 
-        foreach (var (ns, typeDefs) in namespaceMap.OrderBy(kv => kv.Key))
+        foreach (var (ns, typeHandles) in namespaceMap.OrderBy(kv => kv.Key))
         {
             var rirTypes = new List<RirType>();
 
-            foreach (var typeDef in typeDefs)
+            foreach (var typeHandle in typeHandles)
             {
-                var (rirType, typeDiagnostics) = ProcessType(mr, typeDef, boundHandleTypeNames, enumTypes);
+                var typeDef = mr.GetTypeDefinition(typeHandle);
+                var (rirType, typeDiagnostics) = ProcessType(mr, typeHandle, typeDef, boundHandleTypeNames, enumTypes);
                 if (rirType is not null) rirTypes.Add(rirType);
                 diagnostics.AddRange(typeDiagnostics);
             }
 
             if (rirTypes.Count > 0)
                 rirNamespaces.Add(new RirNamespace(ns, rirTypes));
+        }
+
+        // ADR-053: collapse per-member oblivious diagnostics into a single assembly-level one when
+        // the WHOLE assembly is oblivious — a per-member warning for every single bound member of a
+        // legacy package would print hundreds of lines and train users to ignore the log. An
+        // oblivious *island* inside an otherwise-annotated assembly keeps its per-member diagnostics
+        // as collected above (they are rare, precise, and actionable).
+        if (!assemblyHasAnyNullableAnnotation)
+        {
+            diagnostics.RemoveAll(d => d.Kind == "info_oblivious_nullability");
+            diagnostics.Add(new RirDiagnostic(
+                kind: "info_oblivious_nullability",
+                typeName: "",
+                memberName: "",
+                memberSignature: assemblyName,
+                reason: $"assembly `{assemblyName}` carries no NullableAttribute/NullableContextAttribute " +
+                    "anywhere — this is a legacy (pre-nullable-reference-types) package. Every reference " +
+                    "type binds non-null.",
+                hint: "A null arriving from this package where the binding assumes non-null throws " +
+                    "IllegalStateException at the bridge, naming the member."));
         }
 
         return new RirAssembly(packageId, assemblyName, rirNamespaces, diagnostics);
@@ -209,14 +235,15 @@ internal static class AssemblyExtractor
     /// </summary>
     private static HashSet<string> CollectBoundHandleTypeNames(
         MetadataReader mr,
-        Dictionary<string, List<TypeDefinition>> namespaceMap)
+        Dictionary<string, List<TypeDefinitionHandle>> namespaceMap)
     {
         var names = new HashSet<string>(StringComparer.Ordinal);
 
-        foreach (var (ns, typeDefs) in namespaceMap)
+        foreach (var (ns, typeHandles) in namespaceMap)
         {
-            foreach (var typeDef in typeDefs)
+            foreach (var typeHandle in typeHandles)
             {
+                var typeDef = mr.GetTypeDefinition(typeHandle);
                 bool isInterface = (typeDef.Attributes & System.Reflection.TypeAttributes.ClassSemanticsMask)
                                    == System.Reflection.TypeAttributes.Interface;
                 // A C# static class is `abstract sealed` in ECMA-335 metadata (ADR-051).
@@ -242,14 +269,15 @@ internal static class AssemblyExtractor
     // is reported as an ADR-043-style diagnostic rather than being silently treated as a class.
     private static Dictionary<string, EnumExtraction> CollectEnumTypes(
         MetadataReader mr,
-        Dictionary<string, List<TypeDefinition>> namespaceMap)
+        Dictionary<string, List<TypeDefinitionHandle>> namespaceMap)
     {
         var result = new Dictionary<string, EnumExtraction>(StringComparer.Ordinal);
 
-        foreach (var (ns, typeDefs) in namespaceMap)
+        foreach (var (ns, typeHandles) in namespaceMap)
         {
-            foreach (var typeDef in typeDefs)
+            foreach (var typeHandle in typeHandles)
             {
+                var typeDef = mr.GetTypeDefinition(typeHandle);
                 if (!MetadataHelpers.IsEnum(mr, typeDef)) continue;
 
                 var name = mr.GetString(typeDef.Name);
@@ -334,6 +362,7 @@ internal static class AssemblyExtractor
 
     private static (RirType? Type, IEnumerable<RirDiagnostic> Diagnostics) ProcessType(
         MetadataReader mr,
+        TypeDefinitionHandle typeHandle,
         TypeDefinition typeDef,
         HashSet<string> boundHandleTypeNames,
         IReadOnlyDictionary<string, EnumExtraction> enumTypes)
@@ -365,10 +394,10 @@ internal static class AssemblyExtractor
 
         // --- Methods ---
         // Group by name first to detect overload sets.
-        var methodGroups = new Dictionary<string, List<MethodDefinition>>(StringComparer.Ordinal);
+        var methodGroups = new Dictionary<string, List<MethodDefinitionHandle>>(StringComparer.Ordinal);
         // ADR-052: public instance `.ctor` candidates, collected separately from methodGroups —
         // a constructor has no return type and maps to a distinct RirConstructor node, not RirMethod.
-        var ctorCandidates = new List<MethodDefinition>();
+        var ctorCandidates = new List<MethodDefinitionHandle>();
 
         foreach (var handle in typeDef.GetMethods())
         {
@@ -390,18 +419,18 @@ internal static class AssemblyExtractor
                 var specialName = mr.GetString(method.Name);
                 bool isPublicInstanceCtor = specialName == ".ctor"
                     && (method.Attributes & System.Reflection.MethodAttributes.Static) == 0;
-                if (isPublicInstanceCtor) ctorCandidates.Add(method);
+                if (isPublicInstanceCtor) ctorCandidates.Add(handle);
                 continue;
             }
 
             var name = mr.GetString(method.Name);
             if (!methodGroups.TryGetValue(name, out var group))
             {
-                group = new List<MethodDefinition>();
+                group = new List<MethodDefinitionHandle>();
                 methodGroups[name] = group;
             }
 
-            group.Add(method);
+            group.Add(handle);
         }
 
         foreach (var (methodName, group) in methodGroups)
@@ -409,7 +438,7 @@ internal static class AssemblyExtractor
             if (group.Count > 1)
             {
                 // Overload set: skip all, one diagnostic.
-                var sig = $"{methodName}({DescribeFirstParams(mr, group[0])}) [+{group.Count - 1} overloads]";
+                var sig = $"{methodName}({DescribeFirstParams(mr, mr.GetMethodDefinition(group[0]))}) [+{group.Count - 1} overloads]";
                 diagnostics.Add(new RirDiagnostic(
                     kind: "skipped_overload_set",
                     typeName: typeName,
@@ -420,11 +449,15 @@ internal static class AssemblyExtractor
                 continue;
             }
 
-            var methodDef = group[0];
-            var (rirMethod, methodDiagnostic) = TryMapMethod(
-                mr, typeDef, methodDef, typeName, isInterface, boundHandleTypeNames, enumTypes);
+            var methodHandle = group[0];
+            var methodDef = mr.GetMethodDefinition(methodHandle);
+            var (rirMethod, methodDiagnostic, obliviousDiagnostic) = TryMapMethod(
+                mr, typeHandle, methodHandle, methodDef, typeName, isInterface, boundHandleTypeNames, enumTypes);
             if (rirMethod is not null)
+            {
                 methods.Add(rirMethod);
+                if (obliviousDiagnostic is not null) diagnostics.Add(obliviousDiagnostic);
+            }
             else if (methodDiagnostic is not null)
                 diagnostics.Add(methodDiagnostic);
         }
@@ -440,17 +473,20 @@ internal static class AssemblyExtractor
 
         if (canHaveConstructor && ctorCandidates.Count == 1)
         {
-            var (rirCtor, ctorDiagnostic) = TryMapConstructor(
-                mr, ctorCandidates[0], typeName, boundHandleTypeNames, enumTypes);
+            var (rirCtor, ctorDiagnostic, ctorObliviousDiagnostic) = TryMapConstructor(
+                mr, typeHandle, ctorCandidates[0], typeName, boundHandleTypeNames, enumTypes);
             if (rirCtor is not null)
+            {
                 constructors.Add(rirCtor);
+                if (ctorObliviousDiagnostic is not null) diagnostics.Add(ctorObliviousDiagnostic);
+            }
             else if (ctorDiagnostic is not null)
                 diagnostics.Add(ctorDiagnostic);
         }
         else if (canHaveConstructor && ctorCandidates.Count > 1)
         {
             // Overload set: skip all, one diagnostic — same rule already applied to methods.
-            var sig = $".ctor({DescribeFirstParams(mr, ctorCandidates[0])}) [+{ctorCandidates.Count - 1} overloads]";
+            var sig = $".ctor({DescribeFirstParams(mr, mr.GetMethodDefinition(ctorCandidates[0]))}) [+{ctorCandidates.Count - 1} overloads]";
             diagnostics.Add(new RirDiagnostic(
                 kind: "skipped_overload_set",
                 typeName: typeName,
@@ -490,7 +526,33 @@ internal static class AssemblyExtractor
                         & System.Reflection.MethodAttributes.MemberAccessMask)
                         != System.Reflection.MethodAttributes.Public;
                 bool propIsStatic = (getterDef.Attributes & System.Reflection.MethodAttributes.Static) != 0;
-                properties.Add(new RirProperty(propName, propTypeRef, isReadOnly, propIsStatic));
+
+                // ADR-053: a property carries exactly one NullableAttribute (on the Property row
+                // itself), falling back to its declaring TypeDef's NullableContextAttribute — "a
+                // Property cannot carry a context" (no method tier), hence `methodHandle: default`.
+                var finalPropTypeRef = propTypeRef;
+                if (NullabilityHelpers.IsNullableCapable(propTypeRef))
+                {
+                    bool nullable = NullabilityHelpers.Resolve(
+                        mr, handle, methodHandle: default, typeHandle, out bool wasOblivious);
+                    finalPropTypeRef = NullabilityHelpers.ApplyNullable(propTypeRef, nullable);
+
+                    if (wasOblivious)
+                    {
+                        diagnostics.Add(new RirDiagnostic(
+                            kind: "info_oblivious_nullability",
+                            typeName: typeName,
+                            memberName: propName,
+                            memberSignature: propName,
+                            reason: "no NullableAttribute/NullableContextAttribute resolves this " +
+                                "property's nullability anywhere in the member -> type fallback chain " +
+                                "— the binding assumes non-null.",
+                            hint: "Compile the declaring type inside a `#nullable enable` region to " +
+                                "make its null-safety explicit."));
+                    }
+                }
+
+                properties.Add(new RirProperty(propName, finalPropTypeRef, isReadOnly, propIsStatic));
             }
             else if (propDiagnostic is not null)
             {
@@ -506,18 +568,39 @@ internal static class AssemblyExtractor
     }
 
     /// <summary>
+    /// Builds a <c>SequenceNumber</c> -&gt; <see cref="ParameterHandle"/> map for a method's
+    /// <c>Param</c> rows (ADR-053 prerequisite fix). <see cref="MethodDefinition.GetParameters"/>
+    /// returns *all* <c>Param</c> rows, including the return-value pseudo-parameter
+    /// (<c>SequenceNumber == 0</c>) whenever the return carries any metadata (e.g. a
+    /// <c>[return: Nullable(2)]</c>) — positional indexing into that list silently shifts every
+    /// real parameter by one the moment such a row exists. Keying on <c>SequenceNumber</c>
+    /// (1-based for real parameters, 0 for the return) is immune to that row's presence.
+    /// </summary>
+    private static Dictionary<int, ParameterHandle> MapParameterHandlesBySequenceNumber(
+        MetadataReader mr, MethodDefinition methodDef)
+    {
+        var bySeq = new Dictionary<int, ParameterHandle>();
+        foreach (var ph in methodDef.GetParameters())
+            bySeq[mr.GetParameter(ph).SequenceNumber] = ph;
+        return bySeq;
+    }
+
+    /// <summary>
     /// Maps a public instance <c>.ctor</c> candidate to a <see cref="RirConstructor"/> (ADR-052).
     /// Only parameters are decoded — a constructor's return is implicit (the enclosing type) and
-    /// carries no diagnosable return-type shape. A non-bridgeable parameter yields the same
-    /// per-parameter diagnostic already used for methods; the constructor is not partially bound.
+    /// carries no diagnosable return-type shape, nor any nullability of its own (ADR-053). A
+    /// non-bridgeable parameter yields the same per-parameter diagnostic already used for
+    /// methods; the constructor is not partially bound.
     /// </summary>
-    private static (RirConstructor? Ctor, RirDiagnostic? Diagnostic) TryMapConstructor(
+    private static (RirConstructor? Ctor, RirDiagnostic? Diagnostic, RirDiagnostic? ObliviousDiagnostic) TryMapConstructor(
         MetadataReader mr,
-        MethodDefinition methodDef,
+        TypeDefinitionHandle typeHandle,
+        MethodDefinitionHandle methodHandle,
         string typeName,
         HashSet<string> boundHandleTypeNames,
         IReadOnlyDictionary<string, EnumExtraction> enumTypes)
     {
+        var methodDef = mr.GetMethodDefinition(methodHandle);
         var decoder = new SignatureDecoder(mr, boundHandleTypeNames, enumTypes);
         MethodSignature<TypeRefOrDiag> sig;
 
@@ -527,7 +610,7 @@ internal static class AssemblyExtractor
         }
         catch (BadImageFormatException)
         {
-            return (null, null);
+            return (null, null, null);
         }
 
         foreach (var t in sig.ParameterTypes)
@@ -541,35 +624,59 @@ internal static class AssemblyExtractor
                     memberName: ".ctor",
                     memberSignature: fullSig,
                     reason: t.Diagnostic.Reason,
-                    hint: t.Diagnostic.Hint));
+                    hint: t.Diagnostic.Hint), null);
             }
         }
 
         var parameters = new List<RirParameter>();
-        var paramHandles = methodDef.GetParameters().ToList();
+        var paramHandlesBySeq = MapParameterHandlesBySequenceNumber(mr, methodDef);
+        bool anyOblivious = false;
 
         for (int i = 0; i < sig.ParameterTypes.Length; i++)
         {
             var paramTypeRef = sig.ParameterTypes[i].TypeRef;
-            if (paramTypeRef is null) return (null, null); // unknown, non-diagnostic type — skip silently
+            if (paramTypeRef is null) return (null, null, null); // unknown, non-diagnostic type — skip silently
 
+            int seq = i + 1;
             string paramName = "arg" + i;
-            if (i < paramHandles.Count)
+            ParameterHandle paramHandle = default;
+            if (paramHandlesBySeq.TryGetValue(seq, out var ph))
             {
-                var paramDef = mr.GetParameter(paramHandles[i]);
-                var pn = mr.GetString(paramDef.Name);
+                paramHandle = ph;
+                var pn = mr.GetString(mr.GetParameter(ph).Name);
                 if (!string.IsNullOrEmpty(pn)) paramName = pn;
+            }
+
+            if (NullabilityHelpers.IsNullableCapable(paramTypeRef))
+            {
+                bool nullable = NullabilityHelpers.Resolve(mr, paramHandle, methodHandle, typeHandle, out bool oblivious);
+                paramTypeRef = NullabilityHelpers.ApplyNullable(paramTypeRef, nullable);
+                anyOblivious |= oblivious;
             }
 
             parameters.Add(new RirParameter(paramName, paramTypeRef));
         }
 
-        return (new RirConstructor(parameters), null);
+        RirDiagnostic? obliviousDiagnostic = anyOblivious
+            ? new RirDiagnostic(
+                kind: "info_oblivious_nullability",
+                typeName: typeName,
+                memberName: ".ctor",
+                memberSignature: BuildSignatureString(mr, methodDef, ".ctor"),
+                reason: "no NullableAttribute/NullableContextAttribute resolves one or more of this " +
+                    "constructor's reference-typed parameters anywhere in the member -> type fallback " +
+                    "chain — the binding assumes non-null.",
+                hint: "Compile the declaring type inside a `#nullable enable` region to make its " +
+                    "null-safety explicit.")
+            : null;
+
+        return (new RirConstructor(parameters), null, obliviousDiagnostic);
     }
 
-    private static (RirMethod? Method, RirDiagnostic? Diagnostic) TryMapMethod(
+    private static (RirMethod? Method, RirDiagnostic? Diagnostic, RirDiagnostic? ObliviousDiagnostic) TryMapMethod(
         MetadataReader mr,
-        TypeDefinition typeDef,
+        TypeDefinitionHandle typeHandle,
+        MethodDefinitionHandle methodHandle,
         MethodDefinition methodDef,
         string typeName,
         bool isInterface,
@@ -591,7 +698,7 @@ internal static class AssemblyExtractor
                 memberName: methodName,
                 memberSignature: methodName,
                 reason: "default interface method — DIMs have no single concrete export site",
-                hint: "Override this method in a concrete adapter class."));
+                hint: "Override this method in a concrete adapter class."), null);
         }
 
         var decoder = new SignatureDecoder(mr, boundHandleTypeNames, enumTypes);
@@ -603,7 +710,7 @@ internal static class AssemblyExtractor
         }
         catch (BadImageFormatException)
         {
-            return (null, null);
+            return (null, null, null);
         }
 
         // Check parameters and return type for exclusion rules.
@@ -620,7 +727,7 @@ internal static class AssemblyExtractor
                     memberName: methodName,
                     memberSignature: fullSig,
                     reason: t.Diagnostic.Reason,
-                    hint: t.Diagnostic.Hint));
+                    hint: t.Diagnostic.Hint), null);
             }
         }
 
@@ -642,34 +749,70 @@ internal static class AssemblyExtractor
                     memberName: methodName,
                     memberSignature: fullSig,
                     reason: $"async return type `{rawReturnName}` is not yet mapped in v1",
-                    hint: "This type will be mapped in a future reverse ADR."));
+                    hint: "This type will be mapped in a future reverse ADR."), null);
             }
 
             // Unknown non-async type — skip silently (out of v1 scope, no diagnostic defined).
-            return (null, null);
+            return (null, null, null);
+        }
+
+        var paramHandlesBySeq = MapParameterHandlesBySequenceNumber(mr, methodDef);
+        bool anyOblivious = false;
+
+        // ADR-053: the return's nullability lands on the Sequence == 0 Param row (the "return
+        // pseudo-parameter"), which only exists when the return's byte differs from whatever its
+        // MethodDef/TypeDef NullableContext would otherwise supply. Absent that row, `default`
+        // (nil) correctly falls through to the method/type context tiers.
+        if (NullabilityHelpers.IsNullableCapable(returnTypeRef))
+        {
+            ParameterHandle returnParamHandle = paramHandlesBySeq.TryGetValue(0, out var rph) ? rph : default;
+            bool nullable = NullabilityHelpers.Resolve(mr, returnParamHandle, methodHandle, typeHandle, out bool oblivious);
+            returnTypeRef = NullabilityHelpers.ApplyNullable(returnTypeRef, nullable);
+            anyOblivious |= oblivious;
         }
 
         // Map parameters.
         var parameters = new List<RirParameter>();
-        var paramHandles = methodDef.GetParameters().ToList();
 
         for (int i = 0; i < sig.ParameterTypes.Length; i++)
         {
             var paramTypeRef = sig.ParameterTypes[i].TypeRef;
-            if (paramTypeRef is null) return (null, null); // should have been caught above
+            if (paramTypeRef is null) return (null, null, null); // should have been caught above
 
+            int seq = i + 1;
             string paramName = "arg" + i;
-            if (i < paramHandles.Count)
+            ParameterHandle paramHandle = default;
+            if (paramHandlesBySeq.TryGetValue(seq, out var ph))
             {
-                var paramDef = mr.GetParameter(paramHandles[i]);
-                var pn = mr.GetString(paramDef.Name);
+                paramHandle = ph;
+                var pn = mr.GetString(mr.GetParameter(ph).Name);
                 if (!string.IsNullOrEmpty(pn)) paramName = pn;
+            }
+
+            if (NullabilityHelpers.IsNullableCapable(paramTypeRef))
+            {
+                bool nullable = NullabilityHelpers.Resolve(mr, paramHandle, methodHandle, typeHandle, out bool oblivious);
+                paramTypeRef = NullabilityHelpers.ApplyNullable(paramTypeRef, nullable);
+                anyOblivious |= oblivious;
             }
 
             parameters.Add(new RirParameter(paramName, paramTypeRef));
         }
 
-        return (new RirMethod(methodName, returnTypeRef, parameters, isStatic), null);
+        RirDiagnostic? obliviousDiagnostic = anyOblivious
+            ? new RirDiagnostic(
+                kind: "info_oblivious_nullability",
+                typeName: typeName,
+                memberName: methodName,
+                memberSignature: BuildSignatureString(mr, methodDef, methodName),
+                reason: "no NullableAttribute/NullableContextAttribute resolves this member's return " +
+                    "and/or one or more of its reference-typed parameters anywhere in the member -> " +
+                    "method -> type fallback chain — the binding assumes non-null.",
+                hint: "Compile the declaring type inside a `#nullable enable` region to make its " +
+                    "null-safety explicit.")
+            : null;
+
+        return (new RirMethod(methodName, returnTypeRef, parameters, isStatic), null, obliviousDiagnostic);
     }
 
     private static (RirTypeRef? TypeRef, RirDiagnostic? Diagnostic) TryDecodePropertyType(
@@ -851,6 +994,170 @@ internal static class MetadataHelpers
 }
 
 // ---------------------------------------------------------------------------
+// ADR-053: NullableAttribute / NullableContextAttribute decoding
+// ---------------------------------------------------------------------------
+
+/// <summary>
+/// Decodes <c>System.Runtime.CompilerServices.NullableAttribute</c> and
+/// <c>NullableContextAttribute</c> (ADR-053) and resolves the member -> method -> type -> oblivious
+/// fallback chain the ADR specifies. The ADR's premise that both attributes are always
+/// compiler-synthesized *into the assembly being compiled* (constructor = <see cref="MethodDefinitionHandle"/>)
+/// only holds for target frameworks that don't already ship the types in the BCL (pre-.NET 5-ish,
+/// or netstandard2.0). On a modern TFM (this fixture targets net8.0) the BCL already defines both
+/// attributes, so Roslyn instead emits a <see cref="MemberReferenceHandle"/> to the existing type —
+/// confirmed empirically against the <c>SampleDependency</c> fixture DLL. Both shapes are handled:
+/// <see cref="MetadataHelpers.GetCustomAttributeTypeName"/> already resolves the type name for
+/// either kind, and the ctor-signature decode below (<see cref="CustomAttributeCtorTakesByteArray"/>)
+/// branches on <see cref="EntityHandle.Kind"/> to decode either shape's constructor signature.
+/// </summary>
+internal static class NullabilityHelpers
+{
+    private const string NullableAttributeFullName = "System.Runtime.CompilerServices.NullableAttribute";
+    private const string NullableContextAttributeFullName = "System.Runtime.CompilerServices.NullableContextAttribute";
+
+    /// <summary>
+    /// True if <paramref name="mr"/> carries a <c>NullableAttribute</c> or
+    /// <c>NullableContextAttribute</c> anywhere at all (any table, any row) — the signal for
+    /// "whole assembly is nullable-oblivious" (a legacy, pre-C#-8, or
+    /// <c>&lt;Nullable&gt;disable&lt;/Nullable&gt;</c> assembly). A single oblivious *island*
+    /// inside an otherwise-annotated assembly (e.g. a `#nullable disable` region) does not trip
+    /// this: that island's own `TypeDef`/`MethodDef` rows carry no nullable attributes, but
+    /// plenty of other rows in the same module do.
+    /// </summary>
+    public static bool AssemblyHasAnyNullableAnnotation(MetadataReader mr)
+    {
+        foreach (var handle in mr.CustomAttributes)
+        {
+            var attr = mr.GetCustomAttribute(handle);
+            var name = MetadataHelpers.GetCustomAttributeTypeName(mr, attr);
+            if (name == NullableAttributeFullName || name == NullableContextAttributeFullName)
+                return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Resolves whether a single reference-typed slot (a parameter, the return-value
+    /// pseudo-parameter, or a property) is nullable, per the ADR-053 fallback chain:
+    /// <c>memberHandle</c>'s own <c>NullableAttribute</c> -&gt; <c>methodHandle</c>'s
+    /// <c>NullableContextAttribute</c> -&gt; <c>typeHandle</c>'s <c>NullableContextAttribute</c>
+    /// -&gt; oblivious (byte 0). Pass <c>default</c> for <paramref name="memberHandle"/> when the
+    /// slot has no metadata row of its own (e.g. a return value whose method has no
+    /// `Sequence == 0` `Param` row), and for <paramref name="methodHandle"/> when the chain has no
+    /// method tier (a property "cannot carry a context", ADR-053).
+    /// </summary>
+    public static bool Resolve(
+        MetadataReader mr,
+        EntityHandle memberHandle,
+        EntityHandle methodHandle,
+        EntityHandle typeHandle,
+        out bool wasOblivious)
+    {
+        byte? resolved = memberHandle.IsNil ? null : GetNullableAttributeByte(mr, memberHandle);
+        if (resolved is null && !methodHandle.IsNil) resolved = GetNullableContextByte(mr, methodHandle);
+        if (resolved is null) resolved = GetNullableContextByte(mr, typeHandle);
+
+        byte b = resolved ?? 0;
+        wasOblivious = b == 0;
+        return b == 2;
+    }
+
+    private static byte? GetNullableAttributeByte(MetadataReader mr, EntityHandle handle)
+    {
+        var attr = FindCustomAttribute(mr, handle, NullableAttributeFullName);
+        return attr is CustomAttribute found ? DecodeNullableAttributeByte(mr, found) : null;
+    }
+
+    private static byte? GetNullableContextByte(MetadataReader mr, EntityHandle handle)
+    {
+        var attr = FindCustomAttribute(mr, handle, NullableContextAttributeFullName);
+        if (attr is not CustomAttribute found) return null;
+
+        // NullableContextAttribute always takes a single `byte` (never the byte[] form).
+        var reader = mr.GetBlobReader(found.Value);
+        if (reader.ReadUInt16() != 1) return null; // malformed prolog — be defensive, not crashy
+        return reader.ReadByte();
+    }
+
+    private static CustomAttribute? FindCustomAttribute(MetadataReader mr, EntityHandle handle, string fullName)
+    {
+        foreach (var caHandle in mr.GetCustomAttributes(handle))
+        {
+            var attr = mr.GetCustomAttribute(caHandle);
+            if (MetadataHelpers.GetCustomAttributeTypeName(mr, attr) == fullName)
+                return attr;
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Decodes a <c>NullableAttribute</c>'s payload: either a single <c>byte</c> or a
+    /// <c>byte[]</c> ("used when all values in the byte[] are the same" per the Roslyn spec) — the
+    /// v1 bridgeable subset only ever produces depth-1 type trees, so the array form (when it
+    /// appears at all) is always uniform and index 0 is always representative.
+    /// </summary>
+    private static byte? DecodeNullableAttributeByte(MetadataReader mr, CustomAttribute attr)
+    {
+        var isByteArray = CustomAttributeCtorTakesByteArray(mr, attr.Constructor);
+        var reader = mr.GetBlobReader(attr.Value);
+        if (reader.ReadUInt16() != 1) return null; // malformed prolog
+
+        if (!isByteArray) return reader.ReadByte();
+
+        // SZArray fixed-arg encoding: a 4-byte element count (0xFFFFFFFF for a null array),
+        // then that many elements. Take index 0; a null or empty array carries no usable value.
+        int count = reader.ReadInt32();
+        return count > 0 ? reader.ReadByte() : null;
+    }
+
+    /// <summary>
+    /// Decodes the constructor's own signature to tell the single-<c>byte</c> overload apart from
+    /// the <c>byte[]</c> overload. The constructor handle is a <see cref="MethodDefinitionHandle"/>
+    /// when the attribute type is compiler-synthesized into the compiled assembly (legacy TFMs),
+    /// or a <see cref="MemberReferenceHandle"/> when it resolves to the BCL-provided type (modern
+    /// TFMs, e.g. net8.0) — both are decoded via <see cref="SignatureDecoder"/>, which already maps
+    /// <c>byte</c> to <c>RirPrimitiveType("byte")</c> and an SZArray of it to raw name "byte[]".
+    /// </summary>
+    private static bool CustomAttributeCtorTakesByteArray(MetadataReader mr, EntityHandle ctorHandle)
+    {
+        try
+        {
+            var decoder = new SignatureDecoder(mr);
+            ImmutableArray<TypeRefOrDiag> parameterTypes = ctorHandle.Kind switch
+            {
+                HandleKind.MethodDefinition => mr.GetMethodDefinition((MethodDefinitionHandle)ctorHandle)
+                    .DecodeSignature(decoder, genericContext: null).ParameterTypes,
+                HandleKind.MemberReference => mr.GetMemberReference((MemberReferenceHandle)ctorHandle)
+                    .DecodeMethodSignature(decoder, genericContext: null).ParameterTypes,
+                _ => ImmutableArray<TypeRefOrDiag>.Empty,
+            };
+
+            return parameterTypes.Length == 1 && parameterTypes[0].RawTypeName == "byte[]";
+        }
+        catch (BadImageFormatException)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>True for the two reference-typed <see cref="RirTypeRef"/> shapes that carry a
+    /// <c>nullable</c> flag (ADR-053 2a): <see cref="RirStringType"/> and
+    /// <see cref="RirObjectHandleType"/>. Value types (<see cref="RirPrimitiveType"/>,
+    /// <see cref="RirEnumType"/>) and <see cref="RirVoidType"/> are unaffected — a nullable value
+    /// type is <c>System.Nullable&lt;T&gt;</c>, a distinct closed generic struct, deferred.</summary>
+    public static bool IsNullableCapable(RirTypeRef typeRef) => typeRef is RirStringType or RirObjectHandleType;
+
+    public static RirTypeRef ApplyNullable(RirTypeRef typeRef, bool nullable) => typeRef switch
+    {
+        RirStringType => new RirStringType(nullable),
+        RirObjectHandleType h => new RirObjectHandleType(h.Namespace, h.Name, nullable),
+        _ => typeRef,
+    };
+}
+
+// ---------------------------------------------------------------------------
 // Signature decoder
 // ---------------------------------------------------------------------------
 
@@ -915,7 +1222,7 @@ internal sealed class SignatureDecoder : ISignatureTypeProvider<TypeRefOrDiag, o
             PrimitiveTypeCode.Single  => (new RirPrimitiveType("float"), "float"),
             PrimitiveTypeCode.Double  => (new RirPrimitiveType("double"), "double"),
             PrimitiveTypeCode.Char    => (new RirPrimitiveType("char"), "char"),
-            PrimitiveTypeCode.String  => (RirStringType.Instance, "string"),
+            PrimitiveTypeCode.String  => (new RirStringType(), "string"),
             PrimitiveTypeCode.Object  => (null!, "object"),
             _                         => (null!, typeCode.ToString()),
         };
@@ -997,7 +1304,7 @@ internal sealed class SignatureDecoder : ISignatureTypeProvider<TypeRefOrDiag, o
 
         // System.String is the only external reference type in the v1 vocabulary.
         if (fullName == "System.String")
-            return new TypeRefOrDiag(RirStringType.Instance, null, "string");
+            return new TypeRefOrDiag(new RirStringType(), null, "string");
 
         // All other external type references are outside the bound set and cannot be opaque
         // handles. Emit a diagnostic so the member skip is visible (ADR-051; replaces the
@@ -1272,10 +1579,17 @@ internal sealed class RirVoidType : RirTypeRef
     private RirVoidType() { }
 }
 
+/// <summary>
+/// Mirrors <c>RirStringType</c> in <c>RirModel.kt</c> field-for-field (ADR-053): <c>nullable</c>
+/// reflects the C# <c>NullableAttribute</c>/<c>NullableContextAttribute</c> fallback chain
+/// resolved for the specific slot (parameter, return, or property) this instance was built for.
+/// The no-longer-a-singleton shape is deliberate: two <c>string</c> slots in the same signature
+/// can have different nullability (e.g. <c>string Greet(string? name)</c>).
+/// </summary>
 internal sealed class RirStringType : RirTypeRef
 {
-    public static readonly RirStringType Instance = new();
-    private RirStringType() { }
+    public RirStringType(bool nullable = false) => Nullable = nullable;
+    public bool Nullable { get; }
 }
 
 internal sealed class RirPrimitiveType : RirTypeRef
@@ -1292,10 +1606,11 @@ internal sealed class RirPrimitiveType : RirTypeRef
 /// </summary>
 internal sealed class RirObjectHandleType : RirTypeRef
 {
-    public RirObjectHandleType(string @namespace, string name)
+    public RirObjectHandleType(string @namespace, string name, bool nullable = false)
     {
         Namespace = @namespace;
         Name = name;
+        Nullable = nullable;
     }
 
     /// <summary>The C# namespace of the referenced type, e.g. <c>"Sample.Text"</c>.</summary>
@@ -1303,6 +1618,11 @@ internal sealed class RirObjectHandleType : RirTypeRef
 
     /// <summary>The simple type name, e.g. <c>"Template"</c>.</summary>
     public string Name { get; }
+
+    /// <summary>ADR-053: resolved from the member's own <c>NullableAttribute</c>, falling back to
+    /// the enclosing method's/type's <c>NullableContextAttribute</c>, defaulting to <c>false</c>
+    /// (non-null) when neither is present anywhere in the chain (oblivious).</summary>
+    public bool Nullable { get; }
 }
 
 internal sealed class RirEnumType : RirTypeRef

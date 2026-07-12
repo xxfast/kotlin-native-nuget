@@ -52,10 +52,12 @@ internal class Template internal constructor(handle: COpaquePointer) : AutoClose
     return result
   }
 
-  fun clone(): Template? {
+  fun clone(): Template {
     val fn = requireNotNull(cloneFn) { /* ... */ }
     val ptr: COpaquePointer? = fn.invoke(handle.require("Template"))
-    return ptr?.let { Template(it) }
+    return Template(requireNotNull(ptr) {
+      "Template.Clone returned null, but the C# API annotates it non-null."
+    })
   }
 
   val source: String
@@ -161,24 +163,54 @@ w: [nuget:SomeLib] Skipping SomeType.Close(): member name collision - Kotlin nam
 Statics are unaffected by this rule; they land in the wrapper's `companion object`, a separate name
 scope from the wrapper's own instance members.
 
-## Handle-typed properties are always read-only in v1
+## Settable handle-typed properties
 
-A C# property whose type is itself a bound class (for example a hypothetical `Template Parent { get;
-set; }`) always renders as a read-only `val Foo?`, even if the C# property has a public setter. This
-is a Kotlin type-system constraint, not an oversight: a `var`'s getter and setter must share one
-type, but object *returns* are nullable (`Foo?`) and object *parameters* are non-null (`Foo`) per
-[Objects and handles](objects-and-handles.md), so there's no single type a handle-typed `var` could
-declare. The registration filter (`bridgeableRegistrables`) never emits a setter slot for a
-handle-typed property, regardless of what the RIR says about its C# mutability.
+A C# property whose type is itself a bound class (for example `Nickname Favourite { get; set; }`)
+renders as a Kotlin `var`, just like a primitive or string property. A property carries exactly one
+`NullableAttribute` in C# metadata, so its getter and setter always agree on the same type
+([ADR-053](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/053-nullable-reference-types-in-kotlin.md)):
+
+```kotlin
+// build/nuget-interop/kotlin/nativeMain/sample/nullability/NicknameBook.kt (real generated output)
+var favourite: Nickname?
+  get() {
+    val fn = requireNotNull(NicknameBookBindings.favouriteGetterFn) { /* ... */ }
+    val ptr: COpaquePointer? = fn.invoke(handle.require("NicknameBook"))
+    return ptr?.let { Nickname(it) }
+  }
+  set(value) {
+    val fn = requireNotNull(NicknameBookBindings.favouriteSetterFn) { /* ... */ }
+    fn.invoke(handle.require("NicknameBook"), value?.handle?.require("Nickname"))
+  }
+
+var primary: Nickname
+  get() {
+    val fn = requireNotNull(NicknameBookBindings.primaryGetterFn) { /* ... */ }
+    val ptr: COpaquePointer? = fn.invoke(handle.require("NicknameBook"))
+    return Nickname(requireNotNull(ptr) {
+      "NicknameBook.Primary returned null, but the C# API annotates it non-null."
+    })
+  }
+  set(value) {
+    val fn = requireNotNull(NicknameBookBindings.primarySetterFn) { /* ... */ }
+    fn.invoke(handle.require("NicknameBook"), value.handle.require("Nickname"))
+  }
+```
+
+Before ADR-053 this was a hard Kotlin type-system constraint: a `var`'s getter and setter must share
+one type, but a blanket policy made object *returns* nullable (`Foo?`) and object *parameters*
+non-null (`Foo`), so there was no single type a handle-typed `var` could declare, and the registration
+filter (`bridgeableRegistrables`) never emitted a setter slot for one, however mutable the C# property
+actually was. Now that nullability is read from the property's own `NullableAttribute` instead of a
+fixed per-position policy, getter and setter always agree, and a settable property (of any bridgeable
+type) always gets both a `PropertyGetter` and `PropertySetter` registration slot.
 
 ## Limitations
 
-- A handle-typed settable property is always exposed as read-only (`val Foo?`), never `var`, until
-  nullable-reference-type metadata lets object parameters accept `null`.
-- Member-name-collision is currently the *only* diagnostic kind surfaced as a build warning; every
-  other skip reason (overload sets, unbound type references, and so on) is recorded only in
-  `reverse-ir.json`'s `diagnostics` array and never printed during the build. See
-  [The bridgeable subset](bridgeable-subset.md).
+- `Nullable<T>` value-typed instance properties/parameters (`int?`, `CatMood?`) are deferred; they
+  carry no `NullableAttribute` and need their own wire format (see
+  [ADR-053](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/053-nullable-reference-types-in-kotlin.md)
+  Decision 3).
 - Overload sets on instance methods are skipped exactly like static ones: the whole set, not a
   best-effort subset.
 
@@ -191,5 +223,6 @@ handle-typed property, regardless of what the RIR says about its C# mutability.
     <category ref="external">
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/051-csharp-objects-as-opaque-handles.md">ADR-051: C# objects as opaque handles</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/052-csharp-instance-constructors-in-kotlin.md">ADR-052: C# instance constructors in Kotlin</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/053-nullable-reference-types-in-kotlin.md">ADR-053: Nullable reference types in Kotlin</a>
     </category>
 </seealso>

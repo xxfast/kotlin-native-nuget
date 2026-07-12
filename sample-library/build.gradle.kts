@@ -79,6 +79,8 @@ nuget {
         alias("Sample.Text", "sample.text")
         include("Sample.Enums")
         alias("Sample.Enums", "sample.enums")
+        include("Sample.Nullability")
+        alias("Sample.Nullability", "sample.nullability")
       }
     }
   }

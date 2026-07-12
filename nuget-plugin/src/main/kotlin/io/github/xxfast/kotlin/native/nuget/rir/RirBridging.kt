@@ -54,11 +54,15 @@ sealed interface RirRegistrable {
   // Phase 9 (ROADMAP line 151, instance methods/properties — confirmed "mirror" item, no new ADR:
   // "an instance thunk is a static thunk whose first parameter is the receiver handle," ADR-051
   // Deferred section): one slot per bridgeable instance property. A read-only property emits only
-  // a PropertyGetter. A settable property emits both PropertyGetter and PropertySetter, UNLESS the
-  // property's type is a RirObjectHandleType — rule 4 (human-approved v1 scope call): a Kotlin
-  // `var`'s getter and setter must share one type, but ADR-051 gives object returns `Foo?` and
-  // object params non-null `Foo`, so a handle-typed settable property renders as a read-only
-  // `val x: Foo?` in v1 and never gets a PropertySetter slot, even when C# exposes a public setter.
+  // a PropertyGetter. A settable property emits both PropertyGetter and PropertySetter.
+  //
+  // ADR-053 (ROADMAP line 157 unblock): this used to carve out an exception for a handle-typed
+  // settable property ("rule 4") — a Kotlin `var`'s getter and setter must share one type, but
+  // ADR-051 gave object returns an unconditional `Foo?` and object params an unconditional non-null
+  // `Foo`, so no single type existed for such a `var`. Now that a `RirObjectHandleType` carries its
+  // own `nullable` flag (a C# property has exactly one `NullableAttribute`), getter and setter
+  // agree on one type — `Foo?` or `Foo` — and the exception is gone: a settable handle-typed
+  // property always gets a PropertySetter slot, the same as any other settable property.
   data class PropertyGetter(val property: RirProperty) : RirRegistrable
   data class PropertySetter(val property: RirProperty) : RirRegistrable
 }
@@ -134,6 +138,18 @@ fun collisionDiagnostics(cls: RirClass): List<RirDiagnostic> {
   return methodDiagnostics + propertyDiagnostics
 }
 
+// ADR-053: whether a type reference is nullable, per the decoded NullableAttribute payload.
+// RirVoidType/RirPrimitiveType/RirEnumType carry no such flag — a nullable value type is a
+// distinct closed generic struct (System.Nullable<T>), not an annotation on the value type
+// itself, and is out of scope for v1 (deferred to the Phase 9 structs item). Both generators read
+// this through a single shared accessor rather than re-deriving the same `when` at each call site.
+val RirTypeRef.isNullable: Boolean
+  get() = when (this) {
+    is RirStringType -> nullable
+    is RirObjectHandleType -> nullable
+    else -> false
+  }
+
 // Short human-readable type description for collisionDiagnostics' memberSignature/reason text
 // only (not part of any generated code path) — deliberately independent of the kotlinType()/
 // csAbiType() rendering tables owned by the two generator tasks.
@@ -170,13 +186,12 @@ fun bridgeableRegistrables(cls: RirClass, boundHandleTypes: Set<RirTypeKey>): Li
   val staticProperties: List<RirProperty> = properties
     .filter { it.isStatic }
 
-  // Rule 4: a handle-typed settable property gets a PropertyGetter slot only — never a
-  // PropertySetter slot, even when the RIR says isReadOnly=false (see the PropertyGetter/
-  // PropertySetter doc comment above for the full rationale).
+  // ADR-053: "rule 4" (a handle-typed settable property never getting a PropertySetter slot) is
+  // deleted — see the PropertyGetter/PropertySetter doc comment above. A settable property (of
+  // any type) always gets both a PropertyGetter and a PropertySetter slot.
   fun propertyRegistrables(properties: List<RirProperty>): List<RirRegistrable> = properties.flatMap { property ->
     val getter: RirRegistrable = RirRegistrable.PropertyGetter(property)
-    val isHandleTyped: Boolean = property.type is RirObjectHandleType
-    if (property.isReadOnly || isHandleTyped) listOf(getter)
+    if (property.isReadOnly) listOf(getter)
     else listOf(getter, RirRegistrable.PropertySetter(property))
   }
 

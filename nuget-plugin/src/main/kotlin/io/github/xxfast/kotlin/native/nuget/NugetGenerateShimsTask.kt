@@ -16,6 +16,7 @@ import io.github.xxfast.kotlin.native.nuget.rir.RirTypeRef
 import io.github.xxfast.kotlin.native.nuget.rir.RirVoidType
 import io.github.xxfast.kotlin.native.nuget.rir.boundHandleTypes
 import io.github.xxfast.kotlin.native.nuget.rir.bridgeableRegistrables
+import io.github.xxfast.kotlin.native.nuget.rir.isNullable
 import io.github.xxfast.kotlin.native.nuget.rir.parseReverseIr
 import io.github.xxfast.kotlin.native.nuget.rir.registrationExportName
 import org.gradle.api.DefaultTask
@@ -177,8 +178,12 @@ private fun thunkParamName(p: RirParameter): String = when (p.type) {
 }
 
 // Converts a thunk-level (ABI) parameter into the expression passed to the real C# method call.
+// ADR-053: a nullable-annotated string parameter drops the null-forgiving `!` — the parameter may
+// legitimately be null, and Marshal.PtrToStringUTF8 already returns `string?`.
 private fun paramConversion(p: RirParameter): String = when (p.type) {
-  is RirStringType -> "Marshal.PtrToStringUTF8(${thunkParamName(p)})!"
+  is RirStringType ->
+    if (p.type.nullable) "Marshal.PtrToStringUTF8(${thunkParamName(p)})"
+    else "Marshal.PtrToStringUTF8(${thunkParamName(p)})!"
   // ADR-051: unpack the handle back to the managed type via GCHandle.FromIntPtr.
   is RirObjectHandleType -> "(${p.type.name})GCHandle.FromIntPtr(${thunkParamName(p)}).Target!"
   is RirEnumType -> "(${p.type.name})${thunkParamName(p)}"
@@ -188,6 +193,30 @@ private fun paramConversion(p: RirParameter): String = when (p.type) {
     "char" -> "(char)${thunkParamName(p)}"
     else -> thunkParamName(p)
   }
+}
+
+// ADR-053: a nullable-annotated handle parameter cannot be unpacked inline via the plain
+// GCHandle.FromIntPtr(...).Target! expression paramConversion above uses — IntPtr.Zero (the null
+// sentinel every handle-typed slot already uses, ADR-051) throws there. It is guarded instead with
+// an IntPtr.Zero check bound to its own local variable, which the call expression then simply
+// references by name; every other parameter shape keeps the existing inline paramConversion(p)
+// expression untouched — this only special-cases the one shape that needs a statement of its own.
+private data class ParamBinding(val declarationLines: List<String>, val expression: String)
+
+private fun paramBinding(p: RirParameter): ParamBinding {
+  val type: RirTypeRef = p.type
+  if (type is RirObjectHandleType && type.nullable) {
+    val handleName: String = thunkParamName(p)
+    return ParamBinding(
+      declarationLines = listOf(
+        "${type.name}? ${p.name} = $handleName == IntPtr.Zero",
+        "    ? null",
+        "    : (${type.name})GCHandle.FromIntPtr($handleName).Target!;",
+      ),
+      expression = p.name,
+    )
+  }
+  return ParamBinding(declarationLines = emptyList(), expression = paramConversion(p))
 }
 
 // Every enum type referenced by a class's registrable members, deduplicated. Unlike the Kotlin
@@ -325,7 +354,12 @@ private fun buildThunkMethod(cls: RirClass, method: RirMethod): String {
   val paramList: String = (listOfNotNull(selfParam) +
       method.parameters.map { p -> "${csAbiType(p.type)} ${thunkParamName(p)}" }).joinToString(", ")
   val retAbiType: String = csAbiType(method.returnType)
-  val callArgs: String = method.parameters.joinToString(", ") { p -> paramConversion(p) }
+  // ADR-053: a nullable-annotated handle parameter needs its own guarded local declaration (see
+  // paramBinding) instead of being converted inline — gathered here so those declarations can be
+  // emitted as statements ahead of the call, while every other parameter still converts inline.
+  val paramBindings: List<ParamBinding> = method.parameters.map { paramBinding(it) }
+  val paramDeclarationLines: List<String> = paramBindings.flatMap { it.declarationLines }
+  val callArgs: String = paramBindings.joinToString(", ") { it.expression }
   val receiverLine: String? = if (!method.isStatic) {
     "${cls.name} receiver = (${cls.name})GCHandle.FromIntPtr(selfHandle).Target!;"
   } else {
@@ -337,13 +371,20 @@ private fun buildThunkMethod(cls: RirClass, method: RirMethod): String {
   val callBodyLines: List<String> = when (method.returnType) {
     is RirVoidType -> listOf("$callExpr;")
 
+    // ADR-053: a nullable-annotated string return declares its local as `string?` — the shim's
+    // `#nullable enable` would otherwise warn CS8600 on assigning a possibly-null string to a
+    // non-null local. A non-null-annotated return (including an oblivious one) is unaffected.
     is RirStringType -> listOf(
-      "string result = $callExpr;",
+      "${if (method.returnType.isNullable) "string?" else "string"} result = $callExpr;",
       "return Marshal.StringToCoTaskMemUTF8(result);",
     )
 
-    // ADR-051: wrap the returned object in a Normal GCHandle, return its IntPtr. If the
-    // method returns null, return IntPtr.Zero (ADR-051 §Nullability).
+    // ADR-051/ADR-053: wrap the returned object in a Normal GCHandle, return its IntPtr. If the
+    // method returns null, return IntPtr.Zero. This body is deliberately IDENTICAL for both a
+    // nullable- and a non-null-annotated handle return: GCHandle.Alloc(null) is legal and would
+    // otherwise leak a non-zero handle whose Target is null, so the null check stays even when the
+    // C# API claims the return is never null — a lying API becomes a clear Kotlin-side
+    // IllegalStateException instead of a crash deep in some later thunk.
     is RirObjectHandleType -> listOf(
       "${csNativeType(method.returnType)}? result = $callExpr;",
       "return result is null ? IntPtr.Zero : GCHandle.ToIntPtr(GCHandle.Alloc(result));",
@@ -372,7 +413,7 @@ private fun buildThunkMethod(cls: RirClass, method: RirMethod): String {
     }
   }
 
-  val bodyLines: List<String> = listOfNotNull(receiverLine) + callBodyLines
+  val bodyLines: List<String> = listOfNotNull(receiverLine) + paramDeclarationLines + callBodyLines
   val body: String = bodyLines.joinToString("\n") { "            $it" }
 
   // ADR-049 "let it crash": deliberately no try/catch. A thrown C# exception escapes this thunk
@@ -401,13 +442,15 @@ private fun buildPropertyGetterThunkMethod(cls: RirClass, property: RirProperty)
   val bodyLines: List<String> = when (property.type) {
     is RirVoidType -> error("[nuget] a property cannot have void type")
 
+    // ADR-053: same nullable-local treatment as buildThunkMethod's return handling above.
     is RirStringType -> listOf(
-      "string result = $getExpr;",
+      "${if (property.type.isNullable) "string?" else "string"} result = $getExpr;",
       "return Marshal.StringToCoTaskMemUTF8(result);",
     )
 
-    // ADR-051: wrap the returned object in a Normal GCHandle, return its IntPtr. If the
-    // property returns null, return IntPtr.Zero (ADR-051 §Nullability).
+    // ADR-051/ADR-053: wrap the returned object in a Normal GCHandle, return its IntPtr. If the
+    // property returns null, return IntPtr.Zero — identical for both a nullable- and a non-null-
+    // annotated property, same rationale as buildThunkMethod's handle-return branch above.
     is RirObjectHandleType -> listOf(
       "${csNativeType(property.type)}? result = $getExpr;",
       "return result is null ? IntPtr.Zero : GCHandle.ToIntPtr(GCHandle.Alloc(result));",
@@ -463,8 +506,10 @@ private fun buildPropertySetterThunkMethod(cls: RirClass, property: RirProperty)
   else "${cls.name} receiver = (${cls.name})GCHandle.FromIntPtr(selfHandle).Target!;"
   val assignTarget: String = if (property.isStatic) "${cls.name}.${property.name}"
   else "receiver.${property.name}"
-  val assignLine = "$assignTarget = ${paramConversion(valueParam)};"
-  val body: String = (listOfNotNull(receiverLine) + assignLine).joinToString("\n") { "            $it" }
+  val valueBinding: ParamBinding = paramBinding(valueParam)
+  val assignLine = "$assignTarget = ${valueBinding.expression};"
+  val body: String = (listOfNotNull(receiverLine) + valueBinding.declarationLines + assignLine)
+    .joinToString("\n") { "            $it" }
   val receiverParam: String = if (property.isStatic) "" else "IntPtr selfHandle, "
 
   // ADR-049 "let it crash" (unchanged, Phase 9 line 151): no try/catch.
@@ -483,9 +528,11 @@ private fun buildPropertySetterThunkMethod(cls: RirClass, property: RirProperty)
 private fun buildCtorThunkMethod(cls: RirClass, ctor: RirConstructor): String {
   val paramList: String = ctor.parameters
     .joinToString(", ") { p -> "${csAbiType(p.type)} ${thunkParamName(p)}" }
-  val callArgs: String = ctor.parameters.joinToString(", ") { p -> paramConversion(p) }
+  val paramBindings: List<ParamBinding> = ctor.parameters.map { paramBinding(it) }
+  val paramDeclarationLines: List<String> = paramBindings.flatMap { it.declarationLines }
+  val callArgs: String = paramBindings.joinToString(", ") { it.expression }
 
-  val bodyLines: List<String> = listOf(
+  val bodyLines: List<String> = paramDeclarationLines + listOf(
     "var obj = new ${cls.name}($callArgs);",
     "return GCHandle.ToIntPtr(GCHandle.Alloc(obj));",
   )

@@ -13,10 +13,12 @@ import kotlin.test.assertTrue
  * Deferred section). This test class extends the existing ADR-052 [bridgeableRegistrables]
  * ordering contract with instance methods and instance properties.
  *
- * [bridgeableProperties] accepts static and instance v1-typed properties, rule 4
- * (handle-typed settable properties get a getter slot only), and rule 5 (member-name collisions
- * with the ADR-051 wrapper's own `handle`/`close`/`cleaner` members are skipped + diagnosed via
- * [collisionDiagnostics], reusing the existing [RirDiagnostic] model).
+ * [bridgeableProperties] accepts static and instance v1-typed properties. ADR-053 deletes "rule 4"
+ * (handle-typed settable properties used to get a getter slot only): a settable handle-typed
+ * property now always gets both a getter and a setter slot, the same as any other settable
+ * property. Rule 5 (member-name collisions with the ADR-051 wrapper's own `handle`/`close`/
+ * `cleaner` members are skipped + diagnosed via [collisionDiagnostics], reusing the existing
+ * [RirDiagnostic] model) is unaffected.
  */
 class RirBridgingTest {
 
@@ -30,7 +32,7 @@ class RirBridgingTest {
     name = "Template",
     isStatic = false,
     constructors = listOf(
-      RirConstructor(parameters = listOf(RirParameter(name = "source", type = RirStringType))),
+      RirConstructor(parameters = listOf(RirParameter(name = "source", type = RirStringType()))),
     ),
     methods = listOf(
       RirMethod(name = "StaticA", isStatic = true, returnType = RirVoidType, parameters = emptyList()),
@@ -39,9 +41,9 @@ class RirBridgingTest {
       RirMethod(name = "InstanceB", isStatic = false, returnType = RirVoidType, parameters = emptyList()),
     ),
     properties = listOf(
-      RirProperty(name = "Name", type = RirStringType, isReadOnly = true, isStatic = false),
+      RirProperty(name = "Name", type = RirStringType(), isReadOnly = true, isStatic = false),
       RirProperty(name = "Count", type = RirPrimitiveType("int"), isReadOnly = false, isStatic = false),
-      RirProperty(name = "DefaultName", type = RirStringType, isReadOnly = false, isStatic = true),
+      RirProperty(name = "DefaultName", type = RirStringType(), isReadOnly = false, isStatic = true),
       RirProperty(name = "RenderCount", type = RirPrimitiveType("int"), isReadOnly = true, isStatic = true),
     ),
   )
@@ -70,7 +72,7 @@ class RirBridgingTest {
       expected,
       actual,
       "Phase 9 static properties: ctor, static methods, instance methods, instance-property " +
-        "getter/[setter] pairs, then static-property getter/[setter] pairs — got $actual",
+          "getter/[setter] pairs, then static-property getter/[setter] pairs — got $actual",
     )
   }
 
@@ -82,8 +84,8 @@ class RirBridgingTest {
     name = "Foo",
     isStatic = false,
     properties = listOf(
-      RirProperty(name = "StaticProp", type = RirStringType, isReadOnly = true, isStatic = true),
-      RirProperty(name = "InstanceProp", type = RirStringType, isReadOnly = true, isStatic = false),
+      RirProperty(name = "StaticProp", type = RirStringType(), isReadOnly = true, isStatic = true),
+      RirProperty(name = "InstanceProp", type = RirStringType(), isReadOnly = true, isStatic = false),
     ),
   )
 
@@ -95,7 +97,7 @@ class RirBridgingTest {
       staticVsInstancePropCls.properties,
       result,
       "static properties now share the same v1 type filter as instance properties and must " +
-        "retain reverse-ir declaration order",
+          "retain reverse-ir declaration order",
     )
   }
 
@@ -107,7 +109,7 @@ class RirBridgingTest {
     name = "Foo",
     isStatic = false,
     properties = listOf(
-      RirProperty(name = "Bound", type = RirStringType, isReadOnly = true, isStatic = false),
+      RirProperty(name = "Bound", type = RirStringType(), isReadOnly = true, isStatic = false),
       RirProperty(
         name = "Unbound",
         type = RirObjectHandleType(namespace = "Acme.Other", name = "NotBound"),
@@ -130,8 +132,11 @@ class RirBridgingTest {
   }
 
   // ------------------------------------------------------------------
-  // 4. Rule 4 (human-approved v1 scope call): a handle-typed settable property emits a
-  //    PropertyGetter slot but NEVER a PropertySetter slot, even though isReadOnly=false.
+  // 4. ADR-053 (ROADMAP line 157 unblock): "rule 4" — a handle-typed settable property used to emit
+  // a PropertyGetter slot only, NEVER a PropertySetter slot, even when isReadOnly=false. That rule is
+  // now deleted: a settable handle-typed property ALWAYS gets a PropertySetter slot, whatever its
+  // (non-)nullable annotation, because a C# property carries exactly one NullableAttribute and a
+  // Kotlin `var`'s getter/setter can now share that single type (`Foo?` or `Foo`).
   // ------------------------------------------------------------------
 
   private val handleSettablePropCls: RirClass = RirClass(
@@ -150,18 +155,56 @@ class RirBridgingTest {
   private val handleSettableBoundTypes: Set<RirTypeKey> = setOf(RirTypeKey("Sample.Text", "Template"))
 
   @Test
-  fun `handle-typed settable property emits a getter slot but no setter slot`() {
+  fun `handle-typed settable property emits both a getter slot and a setter slot`() {
     val registrables: List<RirRegistrable> =
       bridgeableRegistrables(handleSettablePropCls, handleSettableBoundTypes)
 
     assertTrue(
       registrables.any { it is RirRegistrable.PropertyGetter && it.property.name == "Parent" },
-      "expected a PropertyGetter for the handle-typed Parent property even though isReadOnly=false " +
-        "— got $registrables",
+      "expected a PropertyGetter for the handle-typed Parent property — got $registrables",
     )
-    assertFalse(
+    assertTrue(
       registrables.any { it is RirRegistrable.PropertySetter && it.property.name == "Parent" },
-      "rule 4: a handle-typed settable property must NOT get a PropertySetter slot — got $registrables",
+      "ADR-053: rule 4 is deleted — a handle-typed settable property must get a PropertySetter " +
+          "slot too — got $registrables",
+    )
+  }
+
+  private val nullableHandleSettablePropCls: RirClass = RirClass(
+    name = "NicknameBook",
+    isStatic = false,
+    properties = listOf(
+      RirProperty(
+        name = "Favourite",
+        type = RirObjectHandleType(namespace = "Sample.Nullability", name = "Nickname", nullable = true),
+        isReadOnly = false,
+        isStatic = false,
+      ),
+      RirProperty(
+        name = "Primary",
+        type = RirObjectHandleType(namespace = "Sample.Nullability", name = "Nickname", nullable = false),
+        isReadOnly = false,
+        isStatic = false,
+      ),
+    ),
+  )
+
+  private val nicknameBoundTypes: Set<RirTypeKey> = setOf(RirTypeKey("Sample.Nullability", "Nickname"))
+
+  @Test
+  fun `ADR-053 a settable handle-typed property always gets a PropertySetter slot, nullable or not`() {
+    val registrables: List<RirRegistrable> =
+      bridgeableRegistrables(nullableHandleSettablePropCls, nicknameBoundTypes)
+
+    assertTrue(
+      registrables.any { it is RirRegistrable.PropertySetter && it.property.name == "Favourite" },
+      "ADR-053: a nullable-handle-typed settable property must get a PropertySetter slot now that " +
+          "rule 4 is deleted — got $registrables",
+    )
+    assertTrue(
+      registrables.any { it is RirRegistrable.PropertySetter && it.property.name == "Primary" },
+      "ADR-053: a non-null-handle-typed settable property must get a PropertySetter slot now that " +
+          "rule 4 is deleted — got $registrables",
     )
   }
 
@@ -185,12 +228,12 @@ class RirBridgingTest {
         name = "Close",
         isStatic = true,
         returnType = RirVoidType,
-        parameters = listOf(RirParameter(name = "reason", type = RirStringType)),
+        parameters = listOf(RirParameter(name = "reason", type = RirStringType())),
       ),
     ),
     properties = listOf(
       // colliding: instance property Handle shadows the ADR-051 wrapper's own `handle` field.
-      RirProperty(name = "Handle", type = RirStringType, isReadOnly = true, isStatic = false),
+      RirProperty(name = "Handle", type = RirStringType(), isReadOnly = true, isStatic = false),
     ),
   )
 
@@ -213,7 +256,7 @@ class RirBridgingTest {
     assertTrue(
       registrables.any { it is RirRegistrable.Method && it.method.name == "Close" && it.method.isStatic },
       "the static Close(string) overload lives in the companion object and must NOT be skipped " +
-        "— got $registrables",
+          "— got $registrables",
     )
   }
 
@@ -233,7 +276,7 @@ class RirBridgingTest {
     assertTrue(
       diagnostics.all { it.kind == RirDiagnosticKind.SKIPPED_MEMBER_NAME_COLLISION },
       "every collision diagnostic must use RirDiagnosticKind.SKIPPED_MEMBER_NAME_COLLISION " +
-        "— got $diagnostics",
+          "— got $diagnostics",
     )
   }
 }

@@ -3,6 +3,8 @@ package io.github.xxfast.kotlin.native.nuget
 import io.github.xxfast.kotlin.native.nuget.rir.RirAssembly
 import io.github.xxfast.kotlin.native.nuget.rir.RirClass
 import io.github.xxfast.kotlin.native.nuget.rir.RirConstructor
+import io.github.xxfast.kotlin.native.nuget.rir.RirDiagnostic
+import io.github.xxfast.kotlin.native.nuget.rir.RirDiagnosticKind
 import io.github.xxfast.kotlin.native.nuget.rir.RirEnum
 import io.github.xxfast.kotlin.native.nuget.rir.RirEnumEntry
 import io.github.xxfast.kotlin.native.nuget.rir.RirEnumType
@@ -51,7 +53,7 @@ class NugetGenerateBindingsTaskTest {
                   RirMethod(
                     name = "SerializeObject",
                     isStatic = true,
-                    returnType = RirStringType,
+                    returnType = RirStringType(),
                     parameters = listOf(
                       RirParameter(name = "value", type = RirPrimitiveType("int")),
                     ),
@@ -266,19 +268,19 @@ class NugetGenerateBindingsTaskTest {
                     isStatic = true,
                     returnType = RirObjectHandleType(namespace = "Sample.Text", name = "Template"),
                     parameters = listOf(
-                      RirParameter(name = "source", type = RirStringType),
+                      RirParameter(name = "source", type = RirStringType()),
                     ),
                   ),
                   RirMethod(
                     name = "Render",
                     isStatic = true,
-                    returnType = RirStringType,
+                    returnType = RirStringType(),
                     parameters = listOf(
                       RirParameter(
                         name = "template",
                         type = RirObjectHandleType(namespace = "Sample.Text", name = "Template"),
                       ),
-                      RirParameter(name = "name", type = RirStringType),
+                      RirParameter(name = "name", type = RirStringType()),
                     ),
                   ),
                 ),
@@ -323,7 +325,7 @@ class NugetGenerateBindingsTaskTest {
                   ),
                   RirProperty(
                     name = "Version",
-                    type = RirStringType,
+                    type = RirStringType(),
                     isReadOnly = true,
                     isStatic = true,
                   ),
@@ -394,18 +396,32 @@ class NugetGenerateBindingsTaskTest {
   }
 
   // ------------------------------------------------------------------
-  // 8. parse returns nullable Template (IntPtr.Zero → null)
+  // 8. ADR-053: this fixture's Parse return is non-null-annotated (RirObjectHandleType.nullable
+  // defaults to false), so parse renders as a non-null Template with a requireNotNull guard —
+  // ADR-051's unconditional "handle returns are always Foo?" is gone. This is the ADR's own
+  // documented breaking change (Template.parse(...) drops its Foo?; a caller that wrote
+  // requireNotNull(Template.parse(...)) must drop the requireNotNull).
   // ------------------------------------------------------------------
 
   @Test
-  fun `parse function returns nullable Template`() {
+  fun `parse function returns non-null Template and requireNotNulls the handle`() {
     val files: List<GeneratedFile> = generateKotlinStubs(templateRir)
 
     val stub: GeneratedFile = files.single { it.relativePath.endsWith("Template.kt") }
     assertContains(
       stub.content,
-      "fun parse(source: String): Template?",
-      message = "parse must return Template? — IntPtr.Zero maps to null (ADR-051 §Nullability)",
+      "fun parse(source: String): Template",
+      message = "ADR-053: parse is non-null-annotated in this fixture, so it must render as a " +
+          "bare Template, not Template?",
+    )
+    assertFalse(
+      stub.content.contains("fun parse(source: String): Template?"),
+      "parse must not carry a trailing '?' now that its non-null annotation is honoured",
+    )
+    assertContains(
+      stub.content,
+      "requireNotNull",
+      message = "a null arriving where the metadata says non-null must fail fast, naming the member",
     )
   }
 
@@ -566,7 +582,7 @@ class NugetGenerateBindingsTaskTest {
                 constructors = listOf(
                   RirConstructor(
                     parameters = listOf(
-                      RirParameter(name = "source", type = RirStringType),
+                      RirParameter(name = "source", type = RirStringType()),
                     ),
                   ),
                 ),
@@ -576,19 +592,19 @@ class NugetGenerateBindingsTaskTest {
                     isStatic = true,
                     returnType = RirObjectHandleType(namespace = "Sample.Text", name = "Template"),
                     parameters = listOf(
-                      RirParameter(name = "source", type = RirStringType),
+                      RirParameter(name = "source", type = RirStringType()),
                     ),
                   ),
                   RirMethod(
                     name = "Render",
                     isStatic = true,
-                    returnType = RirStringType,
+                    returnType = RirStringType(),
                     parameters = listOf(
                       RirParameter(
                         name = "template",
                         type = RirObjectHandleType(namespace = "Sample.Text", name = "Template"),
                       ),
-                      RirParameter(name = "name", type = RirStringType),
+                      RirParameter(name = "name", type = RirStringType()),
                     ),
                   ),
                 ),
@@ -613,7 +629,7 @@ class NugetGenerateBindingsTaskTest {
       stub.content,
       "constructor(source: String) : this(construct(source))",
       message = "ADR-052: a public C# instance constructor must map to a Kotlin secondary " +
-        "constructor delegating through the file-private construct(...) helper",
+          "constructor delegating through the file-private construct(...) helper",
     )
   }
 
@@ -626,7 +642,7 @@ class NugetGenerateBindingsTaskTest {
       stub.content,
       "private fun construct(source: String): COpaquePointer",
       message = "ADR-052: the construct(...) helper must be file-private and return the raw, " +
-        "non-null handle",
+          "non-null handle",
     )
   }
 
@@ -645,7 +661,7 @@ class NugetGenerateBindingsTaskTest {
       constructBody,
       "requireNotNull",
       message = "ADR-052: construct(...) must requireNotNull the ctor thunk's returned handle " +
-        "(a null handle from a C# constructor is a bridge-invariant violation, not a legitimate value)",
+          "(a null handle from a C# constructor is a bridge-invariant violation, not a legitimate value)",
     )
   }
 
@@ -681,12 +697,12 @@ class NugetGenerateBindingsTaskTest {
     assertTrue(
       ctorIndex >= 0 && parseIndex >= 0 && renderIndex >= 0,
       "ctorPtr, parsePtr, and renderPtr must all be declared in the register signature, got: " +
-        "'$registerSignature'",
+          "'$registerSignature'",
     )
     assertTrue(
       ctorIndex < parseIndex && ctorIndex < renderIndex,
       "ADR-052 shared bridgeable ordering: ctorPtr must come first, before the static-method " +
-        "pointers — got signature '$registerSignature'",
+          "pointers — got signature '$registerSignature'",
     )
   }
 
@@ -715,8 +731,9 @@ class NugetGenerateBindingsTaskTest {
   //   - instance method Clone(): Template                                    (handle-typed return)
   //   - instance property Name: string { get; }                              (read-only)
   //   - instance property Length: int { get; set; }                         (settable, primitive)
-  //   - instance property Parent: Template { get; set; }                    (settable, handle-typed
-  //     — rule 4: must render as `val parent: Template?`, no setter, even though isReadOnly=false)
+  //   - instance property Parent: Template { get; set; }                    (settable, handle-typed,
+  //     non-null-annotated — ADR-053: renders as `var parent: Template`, WITH a setter, now that
+  //     rule 4 is deleted)
   //
   // NOTE: RirRegistrable.PropertyGetter/PropertySetter and bridgeableProperties() exist only as
   // stubs in RirBridging.kt at this step (Phase 9 line 151 Step 3 "red" state) — the generator
@@ -738,7 +755,7 @@ class NugetGenerateBindingsTaskTest {
                 isStatic = false,
                 constructors = listOf(
                   RirConstructor(
-                    parameters = listOf(RirParameter(name = "source", type = RirStringType)),
+                    parameters = listOf(RirParameter(name = "source", type = RirStringType())),
                   ),
                 ),
                 methods = listOf(
@@ -746,13 +763,13 @@ class NugetGenerateBindingsTaskTest {
                     name = "Parse",
                     isStatic = true,
                     returnType = RirObjectHandleType(namespace = "Sample.Text", name = "Template"),
-                    parameters = listOf(RirParameter(name = "source", type = RirStringType)),
+                    parameters = listOf(RirParameter(name = "source", type = RirStringType())),
                   ),
                   RirMethod(
                     name = "Rename",
                     isStatic = false,
                     returnType = RirVoidType,
-                    parameters = listOf(RirParameter(name = "newName", type = RirStringType)),
+                    parameters = listOf(RirParameter(name = "newName", type = RirStringType())),
                   ),
                   RirMethod(
                     name = "Clone",
@@ -762,7 +779,7 @@ class NugetGenerateBindingsTaskTest {
                   ),
                 ),
                 properties = listOf(
-                  RirProperty(name = "Name", type = RirStringType, isReadOnly = true, isStatic = false),
+                  RirProperty(name = "Name", type = RirStringType(), isReadOnly = true, isStatic = false),
                   RirProperty(
                     name = "Length",
                     type = RirPrimitiveType("int"),
@@ -777,7 +794,7 @@ class NugetGenerateBindingsTaskTest {
                   ),
                   RirProperty(
                     name = "DefaultName",
-                    type = RirStringType,
+                    type = RirStringType(),
                     isReadOnly = false,
                     isStatic = true,
                   ),
@@ -813,7 +830,7 @@ class NugetGenerateBindingsTaskTest {
     assertTrue(
       companionStart < 0 || renameIndex < companionStart,
       "instance method rename must be a class member, declared before/outside companion object " +
-        "— got companionStart=$companionStart, renameIndex=$renameIndex",
+          "— got companionStart=$companionStart, renameIndex=$renameIndex",
     )
   }
 
@@ -826,8 +843,8 @@ class NugetGenerateBindingsTaskTest {
       stub.content,
       "handle.require(\"Template\")",
       message = "Phase 9 line 151: an instance method call must prepend the receiver via " +
-        "handle.require(...) as the first fn.invoke(...) argument (the ADR-051 insight: an " +
-        "instance thunk is a static thunk whose first parameter is the receiver handle)",
+          "handle.require(...) as the first fn.invoke(...) argument (the ADR-051 insight: an " +
+          "instance thunk is a static thunk whose first parameter is the receiver handle)",
     )
   }
 
@@ -837,7 +854,8 @@ class NugetGenerateBindingsTaskTest {
     val stub: GeneratedFile = files.single { it.relativePath.endsWith("Template.kt") }
 
     val companionBody: String = stub.content.substringAfter("companion object {")
-    assertContains(companionBody, "fun parse(source: String): Template?")
+    // ADR-053: non-null-annotated in this fixture (RirObjectHandleType.nullable defaults to false).
+    assertContains(companionBody, "fun parse(source: String): Template")
   }
 
   // ------------------------------------------------------------------
@@ -857,8 +875,8 @@ class NugetGenerateBindingsTaskTest {
       bindings.content,
       "internal var cloneFn: CPointer<CFunction<(COpaquePointer?) -> COpaquePointer?>>? = null",
       message = "a zero-C#-parameter instance method's CFunction type must still declare one " +
-        "COpaquePointer? parameter for the receiver — Clone() call site passes " +
-        "handle.require(\"Template\") as its only fn.invoke(...) argument",
+          "COpaquePointer? parameter for the receiver — Clone() call site passes " +
+          "handle.require(\"Template\") as its only fn.invoke(...) argument",
     )
   }
 
@@ -871,8 +889,8 @@ class NugetGenerateBindingsTaskTest {
       bindings.content,
       "internal var renameFn: CPointer<CFunction<(COpaquePointer?, COpaquePointer?) -> Unit>>? = null",
       message = "a one-C#-parameter instance method's CFunction type must declare two " +
-        "COpaquePointer? parameters (receiver, then newName) — Rename(newName) call site passes " +
-        "handle.require(\"Template\") followed by newName.cstr.ptr to fn.invoke(...)",
+          "COpaquePointer? parameters (receiver, then newName) — Rename(newName) call site passes " +
+          "handle.require(\"Template\") followed by newName.cstr.ptr to fn.invoke(...)",
     )
   }
 
@@ -885,8 +903,8 @@ class NugetGenerateBindingsTaskTest {
       bindings.content,
       "internal var parseFn: CPointer<CFunction<(COpaquePointer?) -> COpaquePointer?>>? = null",
       message = "a static method's CFunction type must NOT gain a receiver slot — Parse(source) " +
-        "has exactly one C# parameter and no receiver, regression guard against over-applying " +
-        "the instance-method receiver fix",
+          "has exactly one C# parameter and no receiver, regression guard against over-applying " +
+          "the instance-method receiver fix",
     )
   }
 
@@ -904,7 +922,7 @@ class NugetGenerateBindingsTaskTest {
       stub.content,
       "val name: String",
       message = "a read-only bridge-backed property cannot be a stored val — it must declare an " +
-        "explicit get()",
+          "explicit get()",
     )
     assertContains(stub.content, "get()")
   }
@@ -919,25 +937,30 @@ class NugetGenerateBindingsTaskTest {
   }
 
   // ------------------------------------------------------------------
-  // 16. Rule 4 (human-approved v1 scope call): a handle-typed settable property renders as
-  //     read-only `val x: Foo?`, never `var`, even though the RIR says isReadOnly=false.
+  // 16. ADR-053 (ROADMAP line 157 unblock): "rule 4" is deleted — a settable handle-typed property
+  //     now renders as `var`, the same as any other settable property. Parent is non-null-annotated
+  //     in this fixture (RirObjectHandleType's `nullable` defaults to false), so it carries no
+  //     trailing `?`, and the getter/setter share that one type.
   // ------------------------------------------------------------------
 
   @Test
-  fun `handle-typed instance property Parent renders as read-only val Template nullable even though settable in RIR`() {
+  fun `handle-typed instance property Parent renders as var Template with no trailing question mark`() {
     val files: List<GeneratedFile> = generateKotlinStubs(templateInstanceRir)
     val stub: GeneratedFile = files.single { it.relativePath.endsWith("Template.kt") }
 
     assertContains(
       stub.content,
-      "val parent: Template?",
-      message = "rule 4: a handle-typed settable property must render as val, not var, in v1 " +
-        "(a Kotlin var's getter/setter must share one type, but object returns are Foo? and " +
-        "object params are non-null Foo)",
+      "var parent: Template",
+      message = "ADR-053: rule 4 is deleted — a settable handle-typed property renders as var, " +
+          "the same as any other settable property, and Parent is non-null-annotated here",
     )
     assertFalse(
-      stub.content.contains("var parent"),
-      "handle-typed property Parent must never render as var, even though RIR isReadOnly=false",
+      stub.content.contains("var parent: Template?"),
+      "Parent is non-null-annotated (nullable defaults to false), so it must not carry a trailing '?'",
+    )
+    assertFalse(
+      stub.content.contains("val parent"),
+      "Parent must not render as val now that rule 4 is deleted",
     )
   }
 
@@ -978,16 +1001,22 @@ class NugetGenerateBindingsTaskTest {
   }
 
   // ------------------------------------------------------------------
-  // 17. Instance method returning a handle type returns Foo? (same nullability rule as ADR-051
-  //     static factory returns — IntPtr.Zero maps to null).
+  // 17. ADR-053: an instance method returning a handle type follows the same metadata-driven
+  //     nullability rule as a static factory return. Clone is non-null-annotated in this fixture
+  //     (RirObjectHandleType.nullable defaults to false), so it renders as non-null Template with a
+  //     requireNotNull guard — not the ADR-051 unconditional Foo?.
   // ------------------------------------------------------------------
 
   @Test
-  fun `instance method Clone returning a handle type returns nullable Template`() {
+  fun `instance method Clone returning a handle type returns non-null Template`() {
     val files: List<GeneratedFile> = generateKotlinStubs(templateInstanceRir)
     val stub: GeneratedFile = files.single { it.relativePath.endsWith("Template.kt") }
 
-    assertContains(stub.content, "fun clone(): Template?")
+    assertContains(stub.content, "fun clone(): Template")
+    assertFalse(
+      stub.content.contains("fun clone(): Template?"),
+      "clone must not carry a trailing '?' now that its non-null annotation is honoured",
+    )
   }
 
   // ------------------------------------------------------------------
@@ -1019,14 +1048,14 @@ class NugetGenerateBindingsTaskTest {
                     name = "Close",
                     isStatic = true,
                     returnType = RirVoidType,
-                    parameters = listOf(RirParameter(name = "reason", type = RirStringType)),
+                    parameters = listOf(RirParameter(name = "reason", type = RirStringType())),
                   ),
                 ),
                 properties = listOf(
                   // control: non-colliding, must survive the collision filter untouched.
-                  RirProperty(name = "Label", type = RirStringType, isReadOnly = true, isStatic = false),
+                  RirProperty(name = "Label", type = RirStringType(), isReadOnly = true, isStatic = false),
                   // colliding: shadows the ADR-051 wrapper's own `internal val handle` field.
-                  RirProperty(name = "Handle", type = RirStringType, isReadOnly = true, isStatic = false),
+                  RirProperty(name = "Handle", type = RirStringType(), isReadOnly = true, isStatic = false),
                 ),
               ),
             ),
@@ -1052,8 +1081,8 @@ class NugetGenerateBindingsTaskTest {
       2,
       closeDeclarations,
       "expected exactly 2 `fun close(` declarations — the ADR-051 override close() and the " +
-        "static Close(string) in companion object — the colliding instance Close() must be " +
-        "skipped, got $closeDeclarations",
+          "static Close(string) in companion object — the colliding instance Close() must be " +
+          "skipped, got $closeDeclarations",
     )
   }
 
@@ -1070,7 +1099,7 @@ class NugetGenerateBindingsTaskTest {
     assertFalse(
       stub.content.contains("val handle: String"),
       "the colliding instance property Handle must not shadow the wrapper's own " +
-        "internal val handle: NugetObjectHandle",
+          "internal val handle: NugetObjectHandle",
     )
   }
 
@@ -1323,6 +1352,461 @@ class NugetGenerateBindingsTaskTest {
     assertFalse(
       stub.content.contains("import sample.Mood"),
       "Mood lands in the same Kotlin package as MoodService without aliases, so it needs no import",
+    )
+  }
+
+  // ------------------------------------------------------------------
+  // ADR-053: C# nullable reference types → Kotlin `T?`. `nullable: Boolean` on RirStringType /
+  // RirObjectHandleType now drives the `?` in generated Kotlin, replacing ADR-051's hardcoded
+  // "handle returns are always Foo?, handle parameters are always non-null Foo" policy.
+  //
+  // Canonical fixture: Sample.Nullability.NicknameBook, mirroring the ADR's own fixture surface.
+  // NOTE: several assertions below are expected to fail against today's generator (handle returns
+  // are unconditionally nullable, handle parameters are unconditionally non-null, string returns
+  // always error() on a null pointer, and a settable handle-typed property always collapses to a
+  // read-only val — RirBridging.kt's "rule 4"). That is the expected Step 3 "red" state; fixing it
+  // is Step 4.
+  // ------------------------------------------------------------------
+
+  private val nicknameRir: RirFile = RirFile(
+    assemblies = listOf(
+      RirAssembly(
+        packageId = "Sample.Nullability",
+        assemblyName = "Sample.Nullability",
+        namespaces = listOf(
+          RirNamespace(
+            name = "Sample.Nullability",
+            types = listOf(
+              RirClass(
+                name = "Nickname",
+                isStatic = false,
+                constructors = listOf(
+                  RirConstructor(parameters = listOf(RirParameter(name = "value", type = RirStringType()))),
+                ),
+                properties = listOf(
+                  RirProperty(name = "Value", type = RirStringType(), isReadOnly = true, isStatic = false),
+                ),
+              ),
+              RirClass(
+                name = "NicknameBook",
+                isStatic = false,
+                properties = listOf(
+                  RirProperty(
+                    name = "Favourite",
+                    type = RirObjectHandleType(
+                      namespace = "Sample.Nullability",
+                      name = "Nickname",
+                      nullable = true,
+                    ),
+                    isReadOnly = false,
+                    isStatic = false,
+                  ),
+                  RirProperty(
+                    name = "Primary",
+                    type = RirObjectHandleType(
+                      namespace = "Sample.Nullability",
+                      name = "Nickname",
+                      nullable = false,
+                    ),
+                    isReadOnly = false,
+                    isStatic = false,
+                  ),
+                ),
+                methods = listOf(
+                  RirMethod(
+                    name = "Find",
+                    isStatic = false,
+                    returnType = RirStringType(nullable = true),
+                    parameters = listOf(RirParameter(name = "name", type = RirStringType())),
+                  ),
+                  RirMethod(
+                    name = "Greet",
+                    isStatic = false,
+                    returnType = RirStringType(),
+                    parameters = listOf(
+                      RirParameter(name = "name", type = RirStringType(nullable = true)),
+                    ),
+                  ),
+                  RirMethod(
+                    name = "Lookup",
+                    isStatic = false,
+                    returnType = RirObjectHandleType(
+                      namespace = "Sample.Nullability",
+                      name = "Nickname",
+                      nullable = true,
+                    ),
+                    parameters = listOf(RirParameter(name = "name", type = RirStringType())),
+                  ),
+                  RirMethod(
+                    name = "DefaultNickname",
+                    isStatic = false,
+                    returnType = RirObjectHandleType(
+                      namespace = "Sample.Nullability",
+                      name = "Nickname",
+                      nullable = false,
+                    ),
+                    parameters = emptyList(),
+                  ),
+                  RirMethod(
+                    name = "Describe",
+                    isStatic = false,
+                    returnType = RirStringType(),
+                    parameters = listOf(
+                      RirParameter(
+                        name = "nickname",
+                        type = RirObjectHandleType(
+                          namespace = "Sample.Nullability",
+                          name = "Nickname",
+                          nullable = true,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    ),
+  )
+
+  private fun nicknameBookStub(): GeneratedFile {
+    val files: List<GeneratedFile> = generateKotlinStubs(nicknameRir)
+    return files.single { it.relativePath.endsWith("NicknameBook.kt") }
+  }
+
+  @Test
+  fun `nullable string return renders String question mark with no error fallback`() {
+    val stub: GeneratedFile = nicknameBookStub()
+
+    assertContains(
+      stub.content,
+      "fun find(name: String): String?",
+      message = "ADR-053: a string annotated Nullable(2) must render as String?",
+    )
+    assertFalse(
+      stub.content.contains("NicknameBook.Find returned null, expected a non-null string pointer"),
+      "a nullable string return must not error() on a null pointer — it must return null instead",
+    )
+  }
+
+  @Test
+  fun `nullable string parameter renders String question mark and passes null as a null pointer`() {
+    val stub: GeneratedFile = nicknameBookStub()
+
+    assertContains(
+      stub.content,
+      "fun greet(name: String?): String",
+      message = "ADR-053: a string parameter annotated Nullable(2) must render as String?",
+    )
+    assertContains(
+      stub.content,
+      "if (name == null) null else name.cstr.ptr",
+      message = "ADR-053: a nullable string parameter's null must cross as a null pointer, not NPE " +
+          "on name.cstr.ptr",
+    )
+  }
+
+  @Test
+  fun `non-null-annotated handle return renders without a trailing question mark and requireNotNulls the handle`() {
+    val stub: GeneratedFile = nicknameBookStub()
+
+    assertContains(
+      stub.content,
+      "fun defaultNickname(): Nickname",
+      message = "ADR-053: a Nullable(1) (non-null-annotated) handle return must drop ADR-051's " +
+          "unconditional trailing '?'",
+    )
+    assertFalse(
+      stub.content.contains("fun defaultNickname(): Nickname?"),
+      "a non-null-annotated handle return must not carry a trailing '?'",
+    )
+    assertContains(
+      stub.content,
+      "requireNotNull",
+      message = "a null arriving where the metadata says non-null must fail fast via requireNotNull, " +
+          "naming the member",
+    )
+    assertContains(
+      stub.content,
+      "NicknameBook.DefaultNickname returned null",
+      message = "the requireNotNull guard message must name the offending member",
+    )
+  }
+
+  @Test
+  fun `nullable-annotated handle return keeps the existing nullable Foo shape`() {
+    val stub: GeneratedFile = nicknameBookStub()
+
+    assertContains(
+      stub.content,
+      "fun lookup(name: String): Nickname?",
+      message = "ADR-053: a Nullable(2) handle return keeps the pre-existing Foo? shape, now driven " +
+          "by metadata instead of being unconditional",
+    )
+  }
+
+  @Test
+  fun `nullable-annotated handle parameter renders Foo question mark and crosses null as a null pointer`() {
+    val stub: GeneratedFile = nicknameBookStub()
+
+    assertContains(
+      stub.content,
+      "fun describe(nickname: Nickname?): String",
+      message = "ADR-053: a Nullable(2) handle parameter must render as Foo?, dropping ADR-051's " +
+          "unconditional non-null Foo",
+    )
+    assertContains(
+      stub.content,
+      "nickname?.handle?.require(\"Nickname\")",
+      message = "a null Nickname? argument must cross as a null pointer via a safe-call chain, not " +
+          "an NPE on nickname.handle",
+    )
+  }
+
+  @Test
+  fun `settable nullable handle property renders as var Foo question mark, not val`() {
+    val stub: GeneratedFile = nicknameBookStub()
+
+    assertContains(
+      stub.content,
+      "var favourite: Nickname?",
+      message = "ADR-053 (ROADMAP line 157): RirBridging's rule 4 is deleted — a settable " +
+          "nullable-handle property must render as var, not val",
+    )
+    assertFalse(
+      stub.content.contains("val favourite: Nickname?"),
+      "favourite must not render as a read-only val now that rule 4 is deleted",
+    )
+  }
+
+  @Test
+  fun `settable non-null-annotated handle property renders as var Foo with no trailing question mark`() {
+    val stub: GeneratedFile = nicknameBookStub()
+
+    assertContains(
+      stub.content,
+      "var primary: Nickname",
+      message = "ADR-053 (ROADMAP line 157): a settable non-null-annotated handle property must " +
+          "render as var Foo — getter and setter now share the property's single annotation",
+    )
+    assertFalse(
+      stub.content.contains("var primary: Nickname?"),
+      "primary is annotated non-null, so it must not carry a trailing '?'",
+    )
+    assertFalse(
+      stub.content.contains("val primary: Nickname"),
+      "primary must not render as a read-only val now that rule 4 is deleted",
+    )
+  }
+
+  // Guard: a non-null-annotated string return is unchanged from today's ADR-048 behaviour — this
+  // assertion is expected to stay green before and after Step 4. Deliberately does not assert on
+  // Greet's parameter nullability (covered by the nullable-string-parameter test above), only on
+  // its non-null return.
+  @Test
+  fun `non-null-annotated string return keeps the existing error fallback (no regression)`() {
+    val stub: GeneratedFile = nicknameBookStub()
+
+    assertContains(stub.content, "): String")
+    assertContains(
+      stub.content,
+      "?: error(\"NicknameBook.Greet returned null, expected a non-null string pointer\")",
+      message = "a non-null-annotated string return must keep the ADR-048 error() fallback — no " +
+          "regression from ADR-053",
+    )
+  }
+
+  // ------------------------------------------------------------------
+  // Corequisite fix (surfaced by an ADR-053 fixture, unrelated to nullability): two bound classes
+  // sharing a namespace, each with a method of the same name (Find), used to collide on an
+  // unqualified top-level `internal var findFn` — top-level declarations are package-scoped, not
+  // file-scoped. Each type's fn-pointer vars now live inside their own `internal object
+  // {Type}Bindings`, making the collision structurally impossible.
+  // ------------------------------------------------------------------
+
+  private val sharedNamespaceRir: RirFile = RirFile(
+    assemblies = listOf(
+      RirAssembly(
+        packageId = "Sample.Nullability",
+        assemblyName = "Sample.Nullability",
+        namespaces = listOf(
+          RirNamespace(
+            name = "Sample.Nullability",
+            types = listOf(
+              RirClass(
+                name = "NicknameBook",
+                isStatic = true,
+                methods = listOf(
+                  RirMethod(
+                    name = "Find",
+                    isStatic = true,
+                    returnType = RirStringType(nullable = true),
+                    parameters = listOf(RirParameter(name = "name", type = RirStringType())),
+                  ),
+                ),
+              ),
+              RirClass(
+                name = "LegacyNicknameBook",
+                isStatic = true,
+                methods = listOf(
+                  RirMethod(
+                    name = "Find",
+                    isStatic = true,
+                    returnType = RirStringType(),
+                    parameters = listOf(RirParameter(name = "name", type = RirStringType())),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    ),
+  )
+
+  @Test
+  fun `two bound classes sharing a namespace and a method name each wrap their fn-pointer vars in their own Bindings object`() {
+    val files: List<GeneratedFile> = generateKotlinStubs(sharedNamespaceRir)
+
+    val nicknameBookBindings: GeneratedFile =
+      files.single { it.relativePath.endsWith("/NicknameBookBindings.kt") }
+    val legacyBindings: GeneratedFile =
+      files.single { it.relativePath.endsWith("/LegacyNicknameBookBindings.kt") }
+
+    assertContains(nicknameBookBindings.content, "internal object NicknameBookBindings {")
+    assertContains(legacyBindings.content, "internal object LegacyNicknameBookBindings {")
+
+    // Regression guard: an unqualified, un-indented `internal var findFn` at column 0 would be the
+    // exact top-level (package-scoped) declaration that collides once both files are compiled
+    // together in the same Kotlin package — it must only ever appear indented inside its object.
+    assertFalse(
+      Regex("(?m)^internal var findFn").containsMatchIn(nicknameBookBindings.content),
+      "findFn must not be declared as an unqualified top-level property — got:\n${nicknameBookBindings.content}",
+    )
+    assertFalse(
+      Regex("(?m)^internal var findFn").containsMatchIn(legacyBindings.content),
+      "findFn must not be declared as an unqualified top-level property — got:\n${legacyBindings.content}",
+    )
+  }
+
+  @Test
+  fun `stub references the fn-pointer var qualified through its own Bindings object`() {
+    val files: List<GeneratedFile> = generateKotlinStubs(sharedNamespaceRir)
+
+    val nicknameBookStub: GeneratedFile = files.single { it.relativePath.endsWith("/NicknameBook.kt") }
+    val legacyStub: GeneratedFile = files.single { it.relativePath.endsWith("/LegacyNicknameBook.kt") }
+
+    assertContains(nicknameBookStub.content, "requireNotNull(NicknameBookBindings.findFn)")
+    assertContains(legacyStub.content, "requireNotNull(LegacyNicknameBookBindings.findFn)")
+  }
+
+  // ------------------------------------------------------------------
+  // ROADMAP line 142 ("surface RirDiagnostics to the build") + rule 5: diagnosticWarnings(rir)
+  // generalizes the collision-only warn loop to also walk every RirAssembly.diagnostics entry the
+  // metadata reader itself emitted (e.g. ADR-053's info_oblivious_nullability), through the same
+  // formatting path as the existing rule-5 SKIPPED_MEMBER_NAME_COLLISION warning.
+  // ------------------------------------------------------------------
+
+  @Test
+  fun `diagnosticWarnings surfaces an assembly-level reader diagnostic as a Note`() {
+    val rir = RirFile(
+      assemblies = listOf(
+        RirAssembly(
+          packageId = "MimeMapping",
+          assemblyName = "MimeMapping",
+          namespaces = emptyList(),
+          diagnostics = listOf(
+            RirDiagnostic(
+              kind = RirDiagnosticKind.INFO_OBLIVIOUS_NULLABILITY,
+              typeName = "",
+              memberName = "",
+              memberSignature = "",
+              reason = "no NullableAttribute/NullableContextAttribute anywhere in the assembly",
+              hint = "Every reference type in this package binds non-null.",
+            ),
+          ),
+        ),
+      ),
+    )
+
+    val warnings: List<String> = diagnosticWarnings(rir)
+
+    assertEquals(1, warnings.size)
+    assertContains(warnings[0], "[nuget:MimeMapping]")
+    assertContains(warnings[0], "Note")
+    assertFalse(warnings[0].contains("Skipping"), "an info diagnostic is not a skip")
+    assertContains(
+      warnings[0],
+      "no NullableAttribute/NullableContextAttribute anywhere in the assembly",
+    )
+  }
+
+  @Test
+  fun `diagnosticWarnings surfaces a member-level reader diagnostic naming the type and member`() {
+    val rir = RirFile(
+      assemblies = listOf(
+        RirAssembly(
+          packageId = "Sample.Nullability",
+          assemblyName = "Sample.Nullability",
+          namespaces = emptyList(),
+          diagnostics = listOf(
+            RirDiagnostic(
+              kind = RirDiagnosticKind.INFO_OBLIVIOUS_NULLABILITY,
+              typeName = "LegacyNicknameBook",
+              memberName = "Find",
+              memberSignature = "Find(string): string",
+              reason = "member compiled inside a #nullable disable region",
+              hint = "Find binds non-null.",
+            ),
+          ),
+        ),
+      ),
+    )
+
+    val warnings: List<String> = diagnosticWarnings(rir)
+
+    assertEquals(1, warnings.size)
+    assertContains(warnings[0], "LegacyNicknameBook.Find(Find(string): string)")
+  }
+
+  @Test
+  fun `diagnosticWarnings still surfaces a rule-5 member-name collision alongside reader diagnostics`() {
+    val cls = RirClass(
+      name = "Widget",
+      isStatic = false,
+      methods = listOf(
+        RirMethod(name = "Close", isStatic = false, returnType = RirVoidType, parameters = emptyList()),
+      ),
+    )
+    val rir = RirFile(
+      assemblies = listOf(
+        RirAssembly(
+          packageId = "Sample.Text",
+          assemblyName = "Sample.Text",
+          namespaces = listOf(RirNamespace(name = "Sample.Text", types = listOf(cls))),
+          diagnostics = listOf(
+            RirDiagnostic(
+              kind = RirDiagnosticKind.INFO_OBLIVIOUS_NULLABILITY,
+              typeName = "",
+              memberName = "",
+              memberSignature = "",
+              reason = "whole-assembly oblivious",
+              hint = "hint",
+            ),
+          ),
+        ),
+      ),
+    )
+
+    val warnings: List<String> = diagnosticWarnings(rir)
+
+    assertEquals(2, warnings.size)
+    assertTrue(warnings.any { it.contains("whole-assembly oblivious") })
+    assertTrue(
+      warnings.any { it.contains("Skipping Widget.Close") },
+      "the existing rule-5 collision warning must still fire — got $warnings",
     )
   }
 }

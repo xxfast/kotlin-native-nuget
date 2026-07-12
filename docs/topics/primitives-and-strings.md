@@ -9,7 +9,8 @@ Primitive types follow the standard [Kotlin/Native C interop mappings](https://k
 | `Float` / `Double` | `float` / `double` | |
 | `Boolean` | `bool` | |
 | `String` | `string` | UTF-8 marshalling |
-| `T?` (nullable primitive / string) | `T?` | two-call pattern, see [ADR-002](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/002-nullable-two-call-pattern.md) |
+| `T?` (nullable primitive) | `T?` | two-call pattern, forward only, see [ADR-002](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/002-nullable-two-call-pattern.md) |
+| `String?` | `string?` | forward: two-call pattern (this page); reverse: `NullableAttribute`-driven, see [Objects and handles](objects-and-handles.md) and [ADR-053](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/053-nullable-reference-types-in-kotlin.md) |
 
 ## Kotlin
 
@@ -79,27 +80,62 @@ public static partial class Mappings
 }
 ```
 
-The nullable two-call pattern: a `has_value` probe, then a `value` fetch only if present.
+The nullable two-call pattern: a `has_value` probe, then a `value` fetch only if present. Both calls
+carry the same `out IntPtr error` out-parameter as every other sync export ([ADR-024](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/024-sync-exception-propagation.md)),
+and the wrapper checks it after *each* crossing, since either call can independently throw:
 
 ```C#
 [DllImport("sample", CallingConvention = CallingConvention.Cdecl, EntryPoint = "nullableInt_has_value")]
-private static extern bool nullableInt_has_value(bool hasValue);
+private static extern bool nullableInt_has_value(bool hasValue, out IntPtr error);
 
 [DllImport("sample", CallingConvention = CallingConvention.Cdecl, EntryPoint = "nullableInt_value")]
-private static extern int nullableInt_value(bool hasValue);
+private static extern int nullableInt_value(bool hasValue, out IntPtr error);
 
 public static int? nullableInt(bool hasValue)
-    => !nullableInt_has_value(hasValue) ? null : nullableInt_value(hasValue);
+{
+    bool __nuget_hasValue = nullableInt_has_value(hasValue, out IntPtr __nuget_error);
+    if (__nuget_error != IntPtr.Zero)
+    {
+        throw NugetErrorNative.BuildException(__nuget_error);
+    }
+    if (!__nuget_hasValue) return null;
+    int __nuget_value = nullableInt_value(hasValue, out IntPtr __nuget_error2);
+    if (__nuget_error2 != IntPtr.Zero)
+    {
+        throw NugetErrorNative.BuildException(__nuget_error2);
+    }
+    return __nuget_value;
+}
 
 [DllImport("sample", CallingConvention = CallingConvention.Cdecl, EntryPoint = "nullableString_has_value")]
-private static extern bool nullableString_has_value(bool hasValue);
+private static extern bool nullableString_has_value(bool hasValue, out IntPtr error);
 
 [DllImport("sample", CallingConvention = CallingConvention.Cdecl, EntryPoint = "nullableString_value")]
-private static extern IntPtr nullableString_value(bool hasValue);
+private static extern IntPtr nullableString_value(bool hasValue, out IntPtr error);
 
 public static string? nullableString(bool hasValue)
-    => !nullableString_has_value(hasValue) ? null : Marshal.PtrToStringUTF8(nullableString_value(hasValue));
+{
+    bool __nuget_hasValue = nullableString_has_value(hasValue, out IntPtr __nuget_error);
+    if (__nuget_error != IntPtr.Zero)
+    {
+        throw NugetErrorNative.BuildException(__nuget_error);
+    }
+    if (!__nuget_hasValue) return null;
+    IntPtr __nuget_nativeResult = nullableString_value(hasValue, out IntPtr __nuget_error2);
+    if (__nuget_error2 != IntPtr.Zero)
+    {
+        throw NugetErrorNative.BuildException(__nuget_error2);
+    }
+    return Marshal.PtrToStringUTF8(__nuget_nativeResult);
+}
 ```
+
+Both `error` out-parameters were missing until a recent fix: the two-call pattern's generated
+`[DllImport]`s never declared them, even though the native export side always writes through one, so
+a nullable-returning function that threw corrupted memory (`SIGBUS`) instead of throwing
+`KotlinException`. ADR-024's synchronous exception propagation never actually worked for
+nullable-returning exports until this was corrected; see `NullableFunctionExceptionPropagationTests.cs`
+for the regression coverage.
 
 Kotlin identifiers that collide with C# keywords (`string`, `byte`, `short`, `int`, `long`) are escaped with `@` on the C# side; `short`/`int`/`long`/`double` also get a trailing underscore on the native entry point to dodge C reserved words.
 
@@ -148,13 +184,27 @@ Nullable primitive and object *properties* on classes follow the same pattern; s
 
 ## Limitations
 
-- Nullable primitive/string mapping is forward-only (`→`); the reverse direction (C# → Kotlin) does not yet support it.
+- Nullable *primitive* mapping (`Int?`, and friends) is forward-only (`→`): the reverse direction has
+  no `Nullable<T>` wire format yet (deferred by [ADR-053](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/053-nullable-reference-types-in-kotlin.md)
+  Decision 3, not a two-call-pattern gap).
+- Nullable *string* mapping is now `⇄`: forward uses this page's two-call pattern, reverse reads the
+  bound assembly's `NullableAttribute` instead (see [Objects and handles](objects-and-handles.md)).
+  The two mechanisms are unrelated; a reverse-bound `string?` never goes through a `has_value`/`value`
+  pair.
+- Forward-direction nullable *parameters* (`fun f(name: String?)`) currently generate a non-nullable
+  C# parameter (`string name`, not `string?`), silently dropping the annotation from the generated
+  signature. It still works at runtime, but a consumer passing `null` in a warnings-as-errors project
+  hits `CS8625`. Tracked in [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md)
+  Phase 2.
 
 <seealso>
     <category ref="related">
         <a href="classes-and-objects.md">Classes and objects</a>
+        <a href="objects-and-handles.md">Objects and handles</a>
     </category>
     <category ref="external">
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/002-nullable-two-call-pattern.md">ADR-002: Nullable two-call pattern</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/024-sync-exception-propagation.md">ADR-024: Synchronous exception propagation</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/053-nullable-reference-types-in-kotlin.md">ADR-053: Nullable reference types in Kotlin</a>
     </category>
 </seealso>

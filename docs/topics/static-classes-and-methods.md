@@ -181,9 +181,10 @@ method that survives the filter unforced.
 
 ## Limitations
 
-- Static properties support the current bridgeable primitive and `string` vocabulary. A handle-typed
-  property with a setter remains read-only as `val Foo?` until reverse nullability support lets a
-  Kotlin `var` accept the same nullable type for both accessors.
+- Static properties support the current bridgeable primitive, `string`, and handle vocabulary. A
+  handle-typed static property with a setter now renders as a Kotlin `var` too, its type driven by the
+  property's own `NullableAttribute` (see [Instance members](instance-members.md) and
+  [ADR-053](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/053-nullable-reference-types-in-kotlin.md)).
 - Overload sets are skipped entirely, not partially. See
   [The bridgeable subset](bridgeable-subset.md).
 
@@ -198,5 +199,6 @@ method that survives the filter unforced.
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/048-kotlin-stub-generation-from-reverse-ir.md">ADR-048: Kotlin stub generation from reverse IR</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/049-csharp-registration-shim-generation.md">ADR-049: C# registration shim generation</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/050-end-to-end-packaging-integration.md">ADR-050: End-to-end packaging integration</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/053-nullable-reference-types-in-kotlin.md">ADR-053: Nullable reference types in Kotlin</a>
     </category>
 </seealso>

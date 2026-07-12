@@ -22,6 +22,9 @@
       Render(Template, string) (ADR-051, opaque handles); public instance constructor
       Template(string) (ADR-052); instance members Source (get), Name (get/set),
       Apply(string): string, and Clone(): Template (Phase 9 line 151).
+      Sample.Nullability.Nickname / NicknameBook / LegacyNicknameBook — nullable reference
+      type annotations across return/parameter/property positions, plus a `#nullable disable`
+      oblivious island (ADR-053, Phase 9 line 156/157).
     </Description>
   </PropertyGroup>
 

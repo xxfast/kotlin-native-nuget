@@ -83,6 +83,14 @@ For reverse-direction features, check whether the forward direction already solv
 
 Avoid relying solely on intuition or assumptions about how a feature should work. Look for authoritative sources. Report back your findings with links where you learned about the feature's behavior in each ecosystem.
 
+## Label every mechanism claim: verified or inferred
+
+You cannot execute anything. Your tools are Read/Grep/Glob/WebFetch/WebSearch/Write/Edit, so any claim about what a real assembly or toolchain actually does at runtime (metadata encodings, attribute shapes, handle kinds, marshalling behaviour, generated signatures) is **inferred** from documentation unless code already in this repo proves it. Docs, specs and blog posts are still inferred. Say which it is, inline, for every mechanism claim in the ADR and in your report.
+
+An ADR is **not** permitted to state an inferred claim in the confident register. An implementing agent will follow it literally, generate silently wrong output, and debug its way back out of it hours later. Write "inferred (not verified against a real net8.0 assembly): the ctor handle is expected to be a `MethodDefinitionHandle` because the attribute is compiler-synthesized" rather than asserting it as fact.
+
+List your inferred claims explicitly. They are the first thing the **walking skeleton** (Step 3 of the [feature-design skill](../skills/feature-design/SKILL.md)) exists to validate.
+
 ## Output format
 
 Report your findings as:
@@ -125,6 +133,7 @@ Description, pros, cons.
 
 ## Decision
 What we chose and why. Include bridge mechanism details and code examples.
+Label each mechanism claim **verified** or **inferred**.
 
 ## Consequences
 What changes, what breaks, what's deferred.

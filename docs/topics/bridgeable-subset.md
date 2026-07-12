@@ -134,10 +134,17 @@ overload set.
 | A supported enum | ordinal `Int`, converted to and from a Kotlin `enum class` |
 | A bound, non-static, non-value-type, non-`ref struct` class from the current extraction | an opaque `GCHandle`-backed pointer (a "handle" type) |
 
-Everything else, nullable primitives and strings, arrays, collections, delegates, `dynamic`, `object`,
-open generics, does not bridge. `System.String` is the only external (out-of-assembly) reference type
-recognized; every other external type reference is unbound and diagnosed
-(`skipped_unbound_type_reference`).
+`string` and a bound handle type both carry real nullability now: a `NullableAttribute`/
+`NullableContextAttribute`-derived `nullable` flag on the `RirTypeRef` decides `String` vs. `String?`
+and `Foo` vs. `Foo?` for every return, parameter, and property position (see
+[Objects and handles](objects-and-handles.md) and [Instance members](instance-members.md); ADR-053).
+`Nullable<T>` value types (`int?`, `CatMood?`) are the one nullable shape that still does not bridge:
+they carry no `NullableAttribute` at all (a nullable value type is `System.Nullable<T>`, a distinct
+closed generic struct) and need their own wire-format decision.
+
+Everything else, arrays, collections, delegates, `dynamic`, `object`, open generics, does not bridge.
+`System.String` is the only external (out-of-assembly) reference type recognized; every other
+external type reference is unbound and diagnosed (`skipped_unbound_type_reference`).
 
 ### Why a type reference might be "unbound" rather than a hard type mismatch
 
@@ -170,7 +177,7 @@ private static IntPtr SerializeObject_Thunk(int value)
 Graceful propagation into a catchable Kotlin exception is tracked as
 [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md) Phase 11.
 
-## Diagnostics: recorded in the RIR, mostly not surfaced to the build
+## Diagnostics: recorded in the RIR, surfaced to the build as warnings
 
 Every skip the metadata reader makes is recorded in `reverse-ir.json`, under each assembly's
 `diagnostics` array, as a `RirDiagnostic`:
@@ -195,8 +202,16 @@ enum class RirDiagnosticKind {
   SKIPPED_UNBOUND_TYPE_REFERENCE,
   SKIPPED_MEMBER_NAME_COLLISION,   // Gradle-plugin-side only, see below
   INFO_ASYNC_NOT_YET_MAPPED,
+  INFO_OBLIVIOUS_NULLABILITY,      // ADR-053: an un-annotated (oblivious) reference type bound non-null
 }
 ```
+
+`INFO_OBLIVIOUS_NULLABILITY` is emitted once per assembly when the *whole* assembly carries no
+`NullableAttribute`/`NullableContextAttribute` anywhere (a legacy, pre-C#-8, or
+`<Nullable>disable</Nullable>` package), and once per member for an oblivious island (a
+`#nullable disable` region) inside an otherwise-annotated assembly. Either way the member still binds,
+non-null, per [ADR-053](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/053-nullable-reference-types-in-kotlin.md);
+the diagnostic just records that the binding is an assumption, not a read fact.
 
 A representative entry, taken from a real diagnostic the reader emits for an overload set:
 
@@ -211,18 +226,22 @@ A representative entry, taken from a real diagnostic the reader emits for an ove
 }
 ```
 
-**Only one of these kinds is currently surfaced as a Gradle build warning:**
-`SKIPPED_MEMBER_NAME_COLLISION`, the instance-member-name-vs-wrapper collision described in
-[Instance members](instance-members.md). It's produced on the Gradle-plugin side (not by the
-metadata reader) because it depends on the Kotlin wrapper's own member names, which only the plugin
-knows about, and `NugetGenerateBindingsTask` logs it via `logger.warn(...)` during generation.
+**Every diagnostic kind is now surfaced as a Gradle build warning.** `NugetGenerateBindingsTask` calls
+a single `diagnosticWarnings(rir)` function that combines every reader-emitted diagnostic (from each
+assembly's `diagnostics` array: overload sets, `ref struct` parameters, open generics, `dynamic`,
+default interface methods, unbound type references, async-not-yet-mapped, and ADR-053's
+oblivious-nullability notes) with the Gradle-plugin-derived `SKIPPED_MEMBER_NAME_COLLISION`
+diagnostics (the instance-member-name-vs-wrapper collision described in
+[Instance members](instance-members.md), which depends on the Kotlin wrapper's own member names and
+so can only be computed plugin-side) through one shared formatter, and logs each one with
+`logger.warn(...)`. A `SKIPPED_*` kind is logged as "Skipping ..." (the member is absent from the
+generated output); an `INFO_*` kind is logged as "Note ..." (the member still binds, under an assumed
+policy).
 
-Every other diagnostic kind, overload sets, `ref struct` parameters, open generics, `dynamic`,
-default interface methods, unbound type references, is written into `reverse-ir.json` and never
-printed anywhere during a normal build. If a method you expected to see in Kotlin is simply missing,
-the only way to find out why today is to open `build/nuget-interop/reverse-ir.json` and read its
-`diagnostics` array by hand. Closing that gap, generalizing the member-name-collision warning into a
-warning for every diagnostic kind, is an open item in
+If a method you expected to see in Kotlin is missing, the build log now names it and says why; the
+underlying `reverse-ir.json` `diagnostics` array is still there for programmatic inspection, but
+reading it by hand is no longer the only way to find out. What is not yet built: a structured,
+queryable diagnostics report (only a Gradle log line exists today), tracked in
 [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md) Phase 8.
 
 <seealso>
@@ -236,5 +255,6 @@ warning for every diagnostic kind, is an open item in
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/043-bridgeable-subset-boundary.md">ADR-043: Bridgeable subset boundary</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/046-reverse-ir-model-and-json-contract.md">ADR-046: Reverse IR model and JSON contract</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/049-csharp-registration-shim-generation.md">ADR-049: C# registration shim generation</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/053-nullable-reference-types-in-kotlin.md">ADR-053: Nullable reference types in Kotlin</a>
     </category>
 </seealso>

@@ -2,6 +2,7 @@ package io.github.xxfast.kotlin.native.nuget
 
 import io.github.xxfast.kotlin.native.nuget.rir.RirClass
 import io.github.xxfast.kotlin.native.nuget.rir.RirConstructor
+import io.github.xxfast.kotlin.native.nuget.rir.RirDiagnostic
 import io.github.xxfast.kotlin.native.nuget.rir.RirEnum
 import io.github.xxfast.kotlin.native.nuget.rir.RirEnumType
 import io.github.xxfast.kotlin.native.nuget.rir.RirFile
@@ -18,6 +19,7 @@ import io.github.xxfast.kotlin.native.nuget.rir.RirVoidType
 import io.github.xxfast.kotlin.native.nuget.rir.boundHandleTypes
 import io.github.xxfast.kotlin.native.nuget.rir.bridgeableRegistrables
 import io.github.xxfast.kotlin.native.nuget.rir.collisionDiagnostics
+import io.github.xxfast.kotlin.native.nuget.rir.isNullable
 import io.github.xxfast.kotlin.native.nuget.rir.parseReverseIr
 import io.github.xxfast.kotlin.native.nuget.rir.registrationExportName
 import org.gradle.api.DefaultTask
@@ -307,6 +309,15 @@ private fun kotlinType(type: RirTypeRef): String = when (type) {
   }
 }
 
+// ADR-053: the *declared* Kotlin type for a parameter, return, or property — kotlinType's bare
+// name plus a trailing `?` when the RIR says this type reference is nullable (a decoded
+// NullableAttribute(2), or an oblivious/un-annotated reference, which binds non-null per ADR-053
+// Decision 1a). Kept distinct from kotlinType itself, which several call sites (e.g. wrapping a
+// handle return in `${retType.name}(it)`, or `nugetEnumEntry(${retType.name}.entries, ...)`) use to
+// get the bare simple name regardless of nullability.
+private fun declKotlinType(type: RirTypeRef): String =
+  kotlinType(type) + if (type.isNullable) "?" else ""
+
 private fun cfnType(type: RirTypeRef): String = when (type) {
   is RirVoidType -> "Unit"
   is RirStringType -> "COpaquePointer?"
@@ -341,6 +352,17 @@ private fun methodParamCfnTypes(method: RirMethod): List<String> {
   return listOfNotNull(receiverCfnType) + method.parameters.map { cfnType(it.type) }
 }
 
+// Corequisite fix (surfaced by an ADR-053 fixture, unrelated to nullability): the fn-pointer vars
+// below used to be unqualified top-level properties in each {Type}Bindings.kt. Top-level
+// declarations are package-scoped, not file-scoped, so two bound classes sharing a namespace (or
+// two types sharing a method name, e.g. Find on both NicknameBook and LegacyNicknameBook) collide
+// at compile time. Every prior reverse fixture had exactly one bound class per namespace, which is
+// why nothing caught this — a real NuGet namespace holds many types. Wrapping each type's vars in
+// its own `internal object {Type}Bindings` makes the collision structurally impossible (two types
+// cannot share a name within one namespace) with no ABI change: the nuget_{ns}_{type}_register
+// export name and its one-COpaquePointer-per-method parameter order are untouched.
+private fun bindingsObjectName(typeName: String): String = "${typeName}Bindings"
+
 private fun bindingsFileContent(
   kotlinPkg: String,
   cls: RirClass,
@@ -348,6 +370,7 @@ private fun bindingsFileContent(
   exportName: String,
   packageId: String,
 ): String {
+  val objectName: String = bindingsObjectName(cls.name)
   val hasString: Boolean = registrables.any { r ->
     when (r) {
       is RirRegistrable.Ctor -> r.ctor.parameters.any { it.type is RirStringType }
@@ -421,20 +444,20 @@ private fun bindingsFileContent(
 
   val regBody: String = registrables.joinToString("\n  ") { r ->
     when (r) {
-      is RirRegistrable.Ctor -> "ctorFn = ctorPtr.reinterpret()"
+      is RirRegistrable.Ctor -> "$objectName.ctorFn = ctorPtr.reinterpret()"
       is RirRegistrable.Method -> {
         val name: String = r.method.name.toMethodCamelCase()
-        "${name}Fn = ${name}Ptr.reinterpret()"
+        "$objectName.${name}Fn = ${name}Ptr.reinterpret()"
       }
 
       is RirRegistrable.PropertyGetter -> {
         val name: String = r.property.name.toMethodCamelCase()
-        "${name}GetterFn = ${name}GetterPtr.reinterpret()"
+        "$objectName.${name}GetterFn = ${name}GetterPtr.reinterpret()"
       }
 
       is RirRegistrable.PropertySetter -> {
         val name: String = r.property.name.toMethodCamelCase()
-        "${name}SetterFn = ${name}SetterPtr.reinterpret()"
+        "$objectName.${name}SetterFn = ${name}SetterPtr.reinterpret()"
       }
     }
   }
@@ -447,9 +470,13 @@ private fun bindingsFileContent(
     |${imports.joinToString("\n")}
     |
     |// Generated: registration machinery for $packageId.${cls.name}
-    |// Do not call these functions from Kotlin code directly.
-    |
-    |$fnVars
+    |// Do not call these functions from Kotlin code directly. Vars live inside $objectName (not as
+    |// unqualified top-level properties) because top-level declarations are package-scoped: two
+    |// bound classes sharing a namespace, or two types sharing a method name, would otherwise emit
+    |// the same top-level var twice and fail to compile.
+    |internal object $objectName {
+    |${fnVars.indented("  ")}
+    |}
     |
     |@OptIn(ExperimentalNativeApi::class)
     |// Must stay public (not internal): @CName is what makes Kotlin/Native emit this as a native
@@ -691,10 +718,18 @@ private fun classWrapperContent(
 // `value`) into the expression passed to `fn.invoke(...)` — shared by buildStubMethod,
 // buildConstructHelper, and buildStubProperty's setter so the marshalling rules never drift
 // between the three call sites.
+//
+// ADR-053: a nullable string/handle value must not eagerly dereference `.cstr`/`.handle` — doing
+// so would NPE before the null ever gets a chance to cross as a null pointer. `name.cstr.ptr`
+// requires a non-null receiver, so a nullable string is guarded with an explicit if/else; a
+// nullable handle uses a safe-call chain instead (both still evaluate inside the same
+// memScoped/fn.invoke(...) call site as the non-null case — no separate branch needed there).
 private fun argConversion(type: RirTypeRef, name: String): String = when {
+  type is RirStringType && type.nullable -> "if ($name == null) null else $name.cstr.ptr"
   type is RirStringType -> "$name.cstr.ptr"
   // ADR-051: unwrap the opaque pointer via handle.require() which also guards against
   // use-after-close (throws IllegalStateException if the handle was already freed).
+  type is RirObjectHandleType && type.nullable -> "$name?.handle?.require(\"${type.name}\")"
   type is RirObjectHandleType -> "$name.handle.require(\"${type.name}\")"
   type is RirEnumType -> "$name.ordinal"
   type is RirPrimitiveType && type.name == "char" -> "$name.code.toUShort()"
@@ -726,7 +761,7 @@ private fun bindingsNotRegisteredMessage(typeName: String, packageId: String): S
 // sidestepped by pushing the bridge call into the delegation expression itself.
 private fun buildSecondaryConstructor(ctor: RirConstructor): String {
   val params: String = ctor.parameters.joinToString(", ") { p ->
-    "${p.name}: ${kotlinType(p.type)}"
+    "${p.name}: ${declKotlinType(p.type)}"
   }
   val args: String = ctor.parameters.joinToString(", ") { it.name }
   return "constructor($params) : this(construct($args))"
@@ -738,7 +773,7 @@ private fun buildSecondaryConstructor(ctor: RirConstructor): String {
 // constructor never returns null, unlike ADR-051's nullable Foo? factory returns.
 private fun buildConstructHelper(cls: RirClass, ctor: RirConstructor, packageId: String): String {
   val params: String = ctor.parameters.joinToString(", ") { p ->
-    "${p.name}: ${kotlinType(p.type)}"
+    "${p.name}: ${declKotlinType(p.type)}"
   }
   val hasStringParam: Boolean = ctor.parameters.any { it.type is RirStringType }
 
@@ -748,10 +783,11 @@ private fun buildConstructHelper(cls: RirClass, ctor: RirConstructor, packageId:
     if (hasStringParam) "memScoped { fn.invoke($invokeArgs) }" else "fn.invoke($invokeArgs)"
 
   val failMsg: String = bindingsNotRegisteredMessage(cls.name, packageId)
+  val bindingsObj: String = bindingsObjectName(cls.name)
 
   return """
     |private fun construct($params): COpaquePointer {
-    |  val fn = requireNotNull(ctorFn) {
+    |  val fn = requireNotNull($bindingsObj.ctorFn) {
     |    $failMsg
     |  }
     |  val ptr: COpaquePointer? = $invokeCall
@@ -764,19 +800,19 @@ private fun buildConstructHelper(cls: RirClass, ctor: RirConstructor, packageId:
 
 private fun buildStubMethod(cls: RirClass, method: RirMethod, packageId: String): String {
   val name: String = method.name.toMethodCamelCase()
-  val fnVar: String = "${name}Fn"
+  val fnVar: String = "${bindingsObjectName(cls.name)}.${name}Fn"
   val hasStringParam: Boolean = method.parameters.any { it.type is RirStringType }
 
   val params: String = method.parameters.joinToString(", ") { p ->
-    "${p.name}: ${kotlinType(p.type)}"
+    "${p.name}: ${declKotlinType(p.type)}"
   }
 
-  val retSuffix: String = when {
-    method.returnType is RirVoidType -> ""
-    // ADR-051: handle returns are nullable — IntPtr.Zero maps to null (Try/factory patterns).
-    method.returnType is RirObjectHandleType -> ": ${kotlinType(method.returnType)}?"
-    else -> ": ${kotlinType(method.returnType)}"
-  }
+  // ADR-053: the return's nullability is driven by the RIR's decoded metadata for both strings
+  // and handles (a nullable annotation renders `T?`; a non-null annotation — including an
+  // oblivious, un-annotated type, which binds non-null — renders bare `T`). This replaces
+  // ADR-051's hardcoded "handle returns are always Foo?" policy.
+  val retSuffix: String =
+    if (method.returnType is RirVoidType) "" else ": ${declKotlinType(method.returnType)}"
 
   // Phase 9 (ROADMAP line 151): an instance thunk is a static thunk whose first parameter is the
   // receiver handle (ADR-051 insight) — prepend it via the same handle.require(...) pattern used
@@ -793,6 +829,8 @@ private fun buildStubMethod(cls: RirClass, method: RirMethod, packageId: String)
 
   val nullMsg: String = "${cls.name}.${method.name} returned null" +
       ", expected a non-null string pointer"
+  val nonNullHandleMsg: String = "${cls.name}.${method.name} returned null, but the C# API " +
+      "annotates it non-null."
 
   // Each branch below renders a self-contained block (`fun` at column 0, its body at column 2)
   // so the caller can shift the whole block to its actual embedding depth with a single
@@ -807,7 +845,21 @@ private fun buildStubMethod(cls: RirClass, method: RirMethod, packageId: String)
       |}
     """.trimMargin()
 
-    is RirStringType -> """
+    // ADR-053: a nullable string return crosses a null pointer through to Kotlin `null` — no more
+    // `?: error(...)`. A non-null-annotated return (including an oblivious one) keeps the existing
+    // ADR-048 fail-fast error() fallback.
+    is RirStringType -> if (retType.nullable) """
+      |fun $name($params)$retSuffix {
+      |  val fn = requireNotNull($fnVar) {
+      |    $failMsg
+      |  }
+      |  val resultPtr = $invokeCall
+      |    ?: return null
+      |  val result = resultPtr.reinterpret<ByteVar>().toKString()
+      |  freeManagedString(resultPtr)
+      |  return result
+      |}
+    """.trimMargin() else """
       |fun $name($params)$retSuffix {
       |  val fn = requireNotNull($fnVar) {
       |    $failMsg
@@ -820,15 +872,27 @@ private fun buildStubMethod(cls: RirClass, method: RirMethod, packageId: String)
       |}
     """.trimMargin()
 
-    // ADR-051: a handle return wraps the raw COpaquePointer in a new Kotlin wrapper instance.
-    // IntPtr.Zero from C# maps to null ptr → Kotlin null (no wrapper allocated).
-    is RirObjectHandleType -> """
+    // ADR-053: a nullable-annotated handle return keeps ADR-051's existing IntPtr.Zero-maps-to-
+    // null shape. A non-null-annotated return instead requireNotNulls the raw pointer, naming the
+    // member in the failure message — a null arriving where the metadata says non-null is a
+    // bridge-invariant violation, not a legitimate value (ADR-053 Decision 1a's fail-fast guard).
+    is RirObjectHandleType -> if (retType.nullable) """
       |fun $name($params)$retSuffix {
       |  val fn = requireNotNull($fnVar) {
       |    $failMsg
       |  }
       |  val ptr: COpaquePointer? = $invokeCall
       |  return ptr?.let { ${retType.name}(it) }
+      |}
+    """.trimMargin() else """
+      |fun $name($params)$retSuffix {
+      |  val fn = requireNotNull($fnVar) {
+      |    $failMsg
+      |  }
+      |  val ptr: COpaquePointer? = $invokeCall
+      |  return ${retType.name}(requireNotNull(ptr) {
+      |    "$nonNullHandleMsg"
+      |  })
       |}
     """.trimMargin()
 
@@ -859,15 +923,15 @@ private fun buildStubMethod(cls: RirClass, method: RirMethod, packageId: String)
 }
 
 // Phase 9 (ROADMAP line 151): a bridgeable instance property renders as:
-//   - read-only (isReadOnly=true, or rule 4's handle-typed exception) -> `val x: T get() = ...`
-//     (bridge-backed, so an explicit get() is mandatory — it cannot be a stored val)
-//   - settable, non-handle-typed -> `var x: T` with both get() and set(value)
-// Rule 4 (human-approved v1 scope call): a handle-typed property ALWAYS renders as a read-only
-// `val x: Foo?`, even when [hasSetter] is true (RIR isReadOnly=false) — a Kotlin var's getter and
-// setter must share one type, but object returns are Foo? and object params are non-null Foo, so
-// there is no single type a handle-typed var could use. bridgeableRegistrables() already omits the
-// PropertySetter slot for this case; this function independently honours the same rule when
-// deciding val/var so the two stay in lock-step even if called with a stale hasSetter value.
+//   - read-only (isReadOnly=true) -> `val x: T get() = ...` (bridge-backed, so an explicit get()
+//     is mandatory — it cannot be a stored val)
+//   - settable -> `var x: T` with both get() and set(value)
+// ADR-053 (ROADMAP line 157 unblock): "rule 4" — a handle-typed property used to ALWAYS render as
+// a read-only `val x: Foo?`, even when [hasSetter] was true, because object returns were
+// unconditionally Foo? and object params unconditionally non-null Foo, leaving no single type a
+// handle-typed var could use. Now that a property's single RIR-decoded nullable flag drives both
+// the getter and the setter, they always agree on one type, so [hasSetter] alone decides val/var
+// — the same rule every other property type already followed.
 private fun buildStubProperty(
   cls: RirClass,
   property: RirProperty,
@@ -875,15 +939,16 @@ private fun buildStubProperty(
   packageId: String,
 ): String {
   val name: String = property.name.toMethodCamelCase()
-  val getterFnVar = "${name}GetterFn"
+  val bindingsObj: String = bindingsObjectName(cls.name)
+  val getterFnVar = "$bindingsObj.${name}GetterFn"
   val receiverArg: String? = if (property.isStatic) null else "handle.require(\"${cls.name}\")"
   val failMsg: String = bindingsNotRegisteredMessage(cls.name, packageId)
 
-  val isHandleTyped: Boolean = property.type is RirObjectHandleType
-  val declType: String = if (isHandleTyped) "${kotlinType(property.type)}?" else kotlinType(property.type)
-  val emitSetter: Boolean = hasSetter && !isHandleTyped
-  val keyword: String = if (emitSetter) "var" else "val"
+  val declType: String = declKotlinType(property.type)
+  val keyword: String = if (hasSetter) "var" else "val"
   val getterInvoke: String = if (receiverArg == null) "fn.invoke()" else "fn.invoke($receiverArg)"
+  val nonNullHandleMsg: String = "${cls.name}.${property.name} returned null, but the C# API " +
+      "annotates it non-null."
 
   // Each block below is self-contained (`get()`/`set(value)` at column 0, its body at column 2)
   // so it can be shifted under the property declaration with a single String.prependIndent() call,
@@ -891,7 +956,20 @@ private fun buildStubProperty(
   val getterBlock: String = when (val type = property.type) {
     is RirVoidType -> error("[nuget] a property cannot have void type")
 
-    is RirStringType -> """
+    // ADR-053: a nullable-annotated string property keeps ADR-048's null-pointer-maps-to-null-
+    // string shape (no fallback needed — the caller's declared type is already String?). A
+    // non-null-annotated property keeps the existing fail-fast error() fallback.
+    is RirStringType -> if (type.nullable) """
+      |get() {
+      |  val fn = requireNotNull($getterFnVar) {
+      |    $failMsg
+      |  }
+      |  val resultPtr = $getterInvoke ?: return null
+      |  val result = resultPtr.reinterpret<ByteVar>().toKString()
+      |  freeManagedString(resultPtr)
+      |  return result
+      |}
+    """.trimMargin() else """
       |get() {
       |  val fn = requireNotNull($getterFnVar) {
       |    $failMsg
@@ -904,14 +982,26 @@ private fun buildStubProperty(
       |}
     """.trimMargin()
 
-    // ADR-051: a handle return wraps the raw COpaquePointer in a new Kotlin wrapper instance.
-    is RirObjectHandleType -> """
+    // ADR-053: a nullable-annotated handle property keeps ADR-051's existing IntPtr.Zero-maps-to-
+    // null shape. A non-null-annotated property instead requireNotNulls the raw pointer, naming the
+    // member in the failure message (mirrors buildStubMethod's non-null handle return).
+    is RirObjectHandleType -> if (type.nullable) """
       |get() {
       |  val fn = requireNotNull($getterFnVar) {
       |    $failMsg
       |  }
       |  val ptr: COpaquePointer? = $getterInvoke
       |  return ptr?.let { ${type.name}(it) }
+      |}
+    """.trimMargin() else """
+      |get() {
+      |  val fn = requireNotNull($getterFnVar) {
+      |    $failMsg
+      |  }
+      |  val ptr: COpaquePointer? = $getterInvoke
+      |  return ${type.name}(requireNotNull(ptr) {
+      |    "$nonNullHandleMsg"
+      |  })
       |}
     """.trimMargin()
 
@@ -940,8 +1030,8 @@ private fun buildStubProperty(
     }
   }
 
-  val setterBlock: String? = if (emitSetter) {
-    val setterFnVar = "${name}SetterFn"
+  val setterBlock: String? = if (hasSetter) {
+    val setterFnVar = "$bindingsObj.${name}SetterFn"
     val valueArg: String = argConversion(property.type, "value")
     val hasStringValue: Boolean = property.type is RirStringType
     val invokeCall: String = if (hasStringValue) {
@@ -1078,6 +1168,46 @@ private fun nugetEnumsContent(): String = """
   |}
 """.trimMargin().trim()
 
+// ROADMAP line 142 ("surface RirDiagnostics to the build") + rule 5's existing
+// member-name-collision warning generalized into ONE pure, testable function: every diagnostic
+// that will ever reach a consumer's build log — whether it was emitted directly by the metadata
+// reader into RirAssembly.diagnostics (skipped_overload_set, skipped_ref_struct, ..., and
+// ADR-053's info_oblivious_nullability), or derived Gradle-plugin-side by
+// collisionDiagnostics(cls) (rule 5's SKIPPED_MEMBER_NAME_COLLISION) — is formatted through the
+// same code path. Kept pure (no logger access) so it is unit-testable like every other generator
+// function in this file; the task below is the only place that actually calls logger.warn.
+internal fun diagnosticWarnings(rir: RirFile): List<String> {
+  val fromReader: List<Pair<String, RirDiagnostic>> = rir.assemblies.flatMap { assembly ->
+    assembly.diagnostics.map { assembly.packageId to it }
+  }
+  val fromCollisions: List<Pair<String, RirDiagnostic>> = rir.assemblies.flatMap { assembly ->
+    assembly.namespaces.flatMap { namespace ->
+      namespace.types.filterIsInstance<RirClass>().flatMap { cls ->
+        collisionDiagnostics(cls).map { assembly.packageId to it }
+      }
+    }
+  }
+  return (fromReader + fromCollisions)
+    .map { (packageId, diagnostic) -> formatDiagnostic(packageId, diagnostic) }
+}
+
+// A SKIPPED_* diagnostic means the member is absent from the generated output ("Skipping ...");
+// an INFO_* diagnostic (e.g. info_oblivious_nullability) is not a skip — the member still binds,
+// just under an assumed policy — so it reads as a "Note" instead. typeName/memberName may both be
+// empty (a whole-assembly diagnostic, e.g. ADR-053's one-per-assembly oblivious signal), typeName
+// alone may be populated with memberName empty, or both may be populated (member-scoped, or rule
+// 5's per-member collision) — each renders progressively more of the location.
+private fun formatDiagnostic(packageId: String, diagnostic: RirDiagnostic): String {
+  val isSkip: Boolean = diagnostic.kind.name.startsWith("SKIPPED")
+  val verb: String = if (isSkip) "Skipping" else "Note"
+  val location: String = when {
+    diagnostic.typeName.isEmpty() && diagnostic.memberName.isEmpty() -> ""
+    diagnostic.memberName.isEmpty() -> " ${diagnostic.typeName}"
+    else -> " ${diagnostic.typeName}.${diagnostic.memberName}(${diagnostic.memberSignature})"
+  }
+  return "w: [nuget:$packageId] $verb$location: ${diagnostic.reason}. ${diagnostic.hint}"
+}
+
 abstract class NugetGenerateBindingsTask : DefaultTask() {
   @get:InputFile
   abstract val reverseIrFile: RegularFileProperty
@@ -1095,26 +1225,15 @@ abstract class NugetGenerateBindingsTask : DefaultTask() {
   fun generate() {
     val rir: RirFile = parseReverseIr(reverseIrFile.get().asFile.readText())
 
-    // Phase 9 (ROADMAP line 151, rule 5): surface each member-name-collision skip as a Gradle
-    // warning, ADR-043 diagnostic-format style — "a diagnostic nobody sees is just a silent
-    // skip." Detected here (not in generateKotlinStubs, which stays pure) because this task's
-    // logger is the narrowest place to make the warning visible to a user running the build; the
-    // actual skip (excluding the member from generated output) already happens inside the shared
-    // bridgeableRegistrables() so both this task and NugetGenerateShimsTask agree on what was
-    // dropped.
-    rir.assemblies.forEach { assembly ->
-      assembly.namespaces.forEach { namespace ->
-        namespace.types.filterIsInstance<RirClass>().forEach { cls ->
-          collisionDiagnostics(cls).forEach { diagnostic ->
-            logger.warn(
-              "w: [nuget:${assembly.packageId}] Skipping ${diagnostic.typeName}." +
-                  "${diagnostic.memberName}(${diagnostic.memberSignature}): ${diagnostic.reason}. " +
-                  diagnostic.hint
-            )
-          }
-        }
-      }
-    }
+    // ROADMAP line 142 / Phase 9 (rule 5) / ADR-053: surface every diagnostic — reader-emitted
+    // (RirAssembly.diagnostics) and Gradle-plugin-derived (rule 5's collisionDiagnostics) alike —
+    // as a Gradle warning, ADR-043 diagnostic-format style: "a diagnostic nobody sees is just a
+    // silent skip." Detected here (not in generateKotlinStubs, which stays pure) because this
+    // task's logger is the narrowest place to make it visible to a user running the build; the
+    // actual skip (excluding a rule-5 collision from generated output) already happens inside the
+    // shared bridgeableRegistrables() so both this task and NugetGenerateShimsTask agree on what
+    // was dropped.
+    diagnosticWarnings(rir).forEach { logger.warn(it) }
 
     val files: List<GeneratedFile> = generateKotlinStubs(
       file = rir,

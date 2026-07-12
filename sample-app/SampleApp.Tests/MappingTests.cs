@@ -109,4 +109,32 @@ public class MappingTests
         Assert.Null(result);
     }
 
+    [Fact]
+    public void NullableIntOrThrow_PositiveInput_ReturnsValue()
+    {
+        int? result = Mappings.nullableIntOrThrow(5);
+        Assert.Equal(5, result);
+    }
+
+    [Fact]
+    public void NullableIntOrThrow_ZeroInput_ReturnsNull()
+    {
+        int? result = Mappings.nullableIntOrThrow(0);
+        Assert.Null(result);
+    }
+
+    [Fact]
+    public void NullableStringOrThrow_PositiveInput_ReturnsValue()
+    {
+        string? result = Mappings.nullableStringOrThrow(5);
+        Assert.Equal("value-5", result);
+    }
+
+    [Fact]
+    public void NullableStringOrThrow_ZeroInput_ReturnsNull()
+    {
+        string? result = Mappings.nullableStringOrThrow(0);
+        Assert.Null(result);
+    }
+
 }
