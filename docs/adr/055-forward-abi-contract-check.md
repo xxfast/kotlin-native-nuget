@@ -105,13 +105,29 @@ Both sides must register a contract under the actual exported C symbol (includin
 `generateCSharpBindings()` have contributed their entries, the processor compares them and reports
 a KSP error for:
 
-- an export that has only a C# P/Invoke or only a Kotlin `@CName` declaration;
+- a C# P/Invoke with no matching Kotlin `@CName` export;
 - a duplicate symbol with non-identical contracts; or
 - a differing result, parameter count, parameter direction, parameter wire type, or parameter
   position.
 
 The error should include the export symbol and compact expected/actual signatures. It must stop
 generation rather than warn: emitting an unverifiable ABI is unsafe.
+
+### A Kotlin export with no C# P/Invoke is not an error
+
+The check is deliberately one-directional. **Verified (repository source and generated output):**
+the Kotlin side legitimately exports symbols the C# side never imports, because
+[ADR-043](043-bridgeable-subset.md) skips members outside the bridgeable subset. The current
+fixtures produce 17 of them (`identity_ubyte`, `wrapInBox_ushort`, `cat_get_unsupported`,
+`animal_dispose` and similar). Treating a Kotlin-only export as an error would therefore fail every
+build.
+
+`NugetProcessor` consequently filters the Kotlin exports down to the symbols the C# side imports
+before comparing, so an accidentally dropped C# P/Invoke is indistinguishable from a deliberate
+ADR-043 skip and passes silently. This is a known gap, not an oversight: closing it means feeding
+ADR-043's skip diagnostics in as an allow-list, so that any Kotlin export outside that list becomes
+an error. Until then the check guards signature drift on symbols both sides agree to bridge, which
+is the failure mode that produced the `SIGBUS`.
 
 ### Source seams
 
