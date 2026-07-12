@@ -32,7 +32,7 @@ internal fun translateClass(
     .filterIsInstance<KSClassDeclaration>()
     .firstOrNull { decl ->
       decl.classKind == ClassKind.CLASS &&
-        decl.qualifiedName?.asString() != "kotlin.Any"
+          decl.qualifiedName?.asString() != "kotlin.Any"
     }
     ?.simpleName?.asString()
 
@@ -93,7 +93,7 @@ internal fun translateClass(
   if (constructorSignatures.size != constructorSignatures.toSet().size) {
     logger.error(
       "Class $name has constructors with identical C# signatures; " +
-        "rename or remove the duplicate (ADR-034).",
+          "rename or remove the duplicate (ADR-034).",
     )
   }
 
@@ -177,9 +177,9 @@ internal fun translateClass(
       }
 
       val isReferenceType: Boolean = propType !in KOTLIN_TO_CSHARP_RETURN && !isEnumType &&
-        !isListType && !isMutableListType && !isMapType && !isMutableMapType &&
-        !isSetType && !isMutableSetType && !isLambdaType && !isSuspendLambdaType &&
-        !isFlowType
+          !isListType && !isMutableListType && !isMapType && !isMutableMapType &&
+          !isSetType && !isMutableSetType && !isLambdaType && !isSuspendLambdaType &&
+          !isFlowType
 
       if (isReferenceType) {
         if (qualifiedTypeName != null && qualifiedTypeName !in exportedTypes) {
@@ -208,8 +208,8 @@ internal fun translateClass(
       } else emptyList()
 
       val suspendLambdaIsUnit: Boolean = isSuspendLambdaType &&
-        (suspendLambdaTypeArgs.lastOrNull() == "void" ||
-          propTypeResolved.arguments.lastOrNull()?.type?.resolve()?.declaration?.qualifiedName?.asString() == "kotlin.Unit")
+          (suspendLambdaTypeArgs.lastOrNull() == "void" ||
+              propTypeResolved.arguments.lastOrNull()?.type?.resolve()?.declaration?.qualifiedName?.asString() == "kotlin.Unit")
 
       val suspendLambdaCsType: String = if (isSuspendLambdaType) {
         if (suspendLambdaIsUnit) {
@@ -225,8 +225,8 @@ internal fun translateClass(
       } else ""
 
       val isNullablePrimitive: Boolean = isNullable && !isReferenceType && !isEnumType &&
-        !isListType && !isMutableListType && !isMapType && !isMutableMapType &&
-        !isSetType && !isMutableSetType && !isLambdaType && !isSuspendLambdaType
+          !isListType && !isMutableListType && !isMapType && !isMutableMapType &&
+          !isSetType && !isMutableSetType && !isLambdaType && !isSuspendLambdaType
       val isNullableString: Boolean = isNullablePrimitive && propType == "String"
       val isNullableValueType: Boolean = isNullablePrimitive && propType != "String"
 
@@ -267,19 +267,23 @@ internal fun translateClass(
 
       if (isNullableValueType) {
         val csValueType: String = mapParamType(propType)
-        extraNatives.add(CirExtraNative(
-          entryPointSuffix = "get_${propName}_value",
-          returnType = csValueType,
-          name = "Native_Get_${propName}_value",
-          hasSyncErrorOut = true,
-        ))
-        if (isMutable) {
-          extraNatives.add(CirExtraNative(
-            entryPointSuffix = "set_${propName}_null",
-            returnType = "void",
-            name = "Native_Set_${propName}_null",
+        extraNatives.add(
+          CirExtraNative(
+            entryPointSuffix = "get_${propName}_value",
+            returnType = csValueType,
+            name = "Native_Get_${propName}_value",
             hasSyncErrorOut = true,
-          ))
+          )
+        )
+        if (isMutable) {
+          extraNatives.add(
+            CirExtraNative(
+              entryPointSuffix = "set_${propName}_null",
+              returnType = "void",
+              name = "Native_Set_${propName}_null",
+              hasSyncErrorOut = true,
+            )
+          )
         }
       }
 
@@ -377,6 +381,7 @@ internal fun translateClass(
           appendLine("                }")
           append("                return Marshal.PtrToStringUTF8(nativeResult);")
         }
+
         isNullableValueType -> buildString {
           appendLine()
           appendLine("                bool hasValue = Native_Get_$propName(_handle, out IntPtr error);")
@@ -392,6 +397,7 @@ internal fun translateClass(
           appendLine("                }")
           append("                return value;")
         }
+
         propType == "String" -> buildString {
           appendLine()
           appendLine("                IntPtr nativeResult = Native_Get_$propName(_handle, out IntPtr error);")
@@ -401,6 +407,7 @@ internal fun translateClass(
           appendLine("                }")
           append("                return Marshal.PtrToStringUTF8(nativeResult)!;")
         }
+
         isEnumType -> buildString {
           appendLine()
           appendLine("                int nativeResult = Native_Get_$propName(_handle, out IntPtr error);")
@@ -410,6 +417,7 @@ internal fun translateClass(
           appendLine("                }")
           append("                return ($propType)nativeResult;")
         }
+
         isReferenceType && isNullable -> buildString {
           appendLine()
           appendLine("                IntPtr nativeResult = Native_Get_$propName(_handle, out IntPtr error);")
@@ -419,6 +427,7 @@ internal fun translateClass(
           appendLine("                }")
           append("                return nativeResult == IntPtr.Zero ? null : new $propType(nativeResult);")
         }
+
         isReferenceType -> buildString {
           appendLine()
           appendLine("                IntPtr nativeResult = Native_Get_$propName(_handle, out IntPtr error);")
@@ -428,6 +437,7 @@ internal fun translateClass(
           appendLine("                }")
           append("                return new $propType(nativeResult);")
         }
+
         else -> buildString {
           appendLine()
           appendLine("                ${nativeReturnType} result = Native_Get_$propName(_handle, out IntPtr error);")
@@ -442,8 +452,8 @@ internal fun translateClass(
       val hasSyncErrorOut: Boolean = !isLambdaType && !isSuspendLambdaType && !isFlowType
 
       val isSettable: Boolean = isMutable && !isLambdaType && !isSuspendLambdaType &&
-        !isListType && !isMutableListType && !isMapType && !isMutableMapType &&
-        !isSetType && !isMutableSetType
+          !isListType && !isMutableListType && !isMapType && !isMutableMapType &&
+          !isSetType && !isMutableSetType
 
       val setter: String? = if (isSettable) {
         when {
@@ -455,6 +465,7 @@ internal fun translateClass(
             appendLine("                    throw NugetErrorNative.BuildException(error);")
             append("                }")
           }
+
           isNullableValueType -> buildString {
             appendLine()
             appendLine("                if (value.HasValue)")
@@ -474,6 +485,7 @@ internal fun translateClass(
             appendLine("                    }")
             append("                }")
           }
+
           propType == "String" -> buildString {
             appendLine()
             appendLine("                Native_Set_$propName(_handle, value, out IntPtr error);")
@@ -482,6 +494,7 @@ internal fun translateClass(
             appendLine("                    throw NugetErrorNative.BuildException(error);")
             append("                }")
           }
+
           isEnumType -> buildString {
             appendLine()
             appendLine("                Native_Set_$propName(_handle, (int)value, out IntPtr error);")
@@ -490,6 +503,7 @@ internal fun translateClass(
             appendLine("                    throw NugetErrorNative.BuildException(error);")
             append("                }")
           }
+
           isReferenceType && isNullable -> buildString {
             appendLine()
             appendLine("                Native_Set_$propName(_handle, value?._handle ?? IntPtr.Zero, out IntPtr error);")
@@ -498,6 +512,7 @@ internal fun translateClass(
             appendLine("                    throw NugetErrorNative.BuildException(error);")
             append("                }")
           }
+
           isReferenceType -> buildString {
             appendLine()
             appendLine("                Native_Set_$propName(_handle, value._handle, out IntPtr error);")
@@ -506,6 +521,7 @@ internal fun translateClass(
             appendLine("                    throw NugetErrorNative.BuildException(error);")
             append("                }")
           }
+
           else -> buildString {
             appendLine()
             appendLine("                Native_Set_$propName(_handle, value, out IntPtr error);")
@@ -545,9 +561,9 @@ internal fun translateClass(
     .filter { method ->
       val methodName: String = method.simpleName.asString()
       val isDataClassMethod: Boolean = isDataClass &&
-        (methodName == "copy" || methodName.startsWith("component"))
+          (methodName == "copy" || methodName.startsWith("component"))
       val isSkipped: Boolean = methodName in listOf("equals", "hashCode", "toString", "<init>") ||
-        isDataClassMethod
+          isDataClassMethod
       if (isSkipped) return@filter false
 
       if (superClass != null) {
@@ -629,14 +645,14 @@ internal fun translateClass(
 
       val declaredInThisClass: Boolean = method.parentDeclaration == cls
       val hasImplementation: Boolean = declaredInThisClass ||
-        method.modifiers.contains(Modifier.OVERRIDE)
+          method.modifiers.contains(Modifier.OVERRIDE)
       val isMethodAbstract: Boolean = !hasImplementation &&
-        (isAbstract || method.modifiers.contains(Modifier.ABSTRACT))
+          (isAbstract || method.modifiers.contains(Modifier.ABSTRACT))
       val isOverride: Boolean = superClass != null && method.modifiers.contains(Modifier.OVERRIDE)
 
       // nativeCallArgs is only used for non-sync-error methods; sync-error path builds its own.
       val nativeCallArgs: String = (listOf("_handle") +
-        methodParams.map { it.name }).joinToString(", ")
+          methodParams.map { it.name }).joinToString(", ")
 
       val body: String = if (methodReturn == "String") {
         "Marshal.PtrToStringUTF8(Native_$csMethodName($nativeCallArgs))!"
@@ -685,10 +701,10 @@ internal fun translateClass(
       CirParameter("handle", "IntPtr"),
       CirParameter("scopeHandle", "IntPtr"),
     ) + methodParams +
-      listOf(
-        CirParameter("callback", "NugetAsyncCallback"),
-        CirParameter("userData", "IntPtr"),
-      )
+        listOf(
+          CirParameter("callback", "NugetAsyncCallback"),
+          CirParameter("userData", "IntPtr"),
+        )
 
     val nativeImport = CirDllImport(
       libraryName = libraryName,
@@ -816,10 +832,10 @@ internal fun translateClass(
     isAbstract = isAbstract,
     companionMembers = companionMembers + asyncMembers + flowMembers,
     hasSuspendMethods = cls.getAllFunctions().any { it.modifiers.contains(Modifier.SUSPEND) } ||
-      flowMethods.isNotEmpty() ||
-      cls.getAllProperties().any { prop ->
-        prop.type.resolve().expandAliases().declaration.qualifiedName?.asString() in FLOW_TYPES
-      },
+        flowMethods.isNotEmpty() ||
+        cls.getAllProperties().any { prop ->
+          prop.type.resolve().expandAliases().declaration.qualifiedName?.asString() in FLOW_TYPES
+        },
   )
 }
 
@@ -836,7 +852,7 @@ internal fun translateGenericClass(
       val qualifiedName: String? = resolved.declaration.qualifiedName?.asString()
       val simpleName: String = resolved.declaration.simpleName.asString()
       val isInterface: Boolean = resolved.declaration is KSClassDeclaration &&
-        (resolved.declaration as KSClassDeclaration).classKind ==
+          (resolved.declaration as KSClassDeclaration).classKind ==
           ClassKind.INTERFACE
 
       when {
@@ -849,8 +865,8 @@ internal fun translateGenericClass(
     if (param.variance != Variance.INVARIANT) {
       logger.warn(
         "Variance '${param.variance}' on class '${cls.simpleName.asString()}' " +
-          "type parameter '${param.name.asString()}' will be dropped — " +
-          "C# does not support variance on classes"
+            "type parameter '${param.name.asString()}' will be dropped — " +
+            "C# does not support variance on classes"
       )
     }
 
@@ -957,7 +973,8 @@ internal fun translateSealedClass(
 
             if (isLambdaType) tracker.lambdaArities.add(lambdaArity)
 
-            val isReferenceType: Boolean = propType !in KOTLIN_TO_CSHARP_RETURN && !isEnumType && !isListType && !isMutableListType && !isMapType && !isMutableMapType && !isSetType && !isMutableSetType && !isLambdaType
+            val isReferenceType: Boolean =
+              propType !in KOTLIN_TO_CSHARP_RETURN && !isEnumType && !isListType && !isMutableListType && !isMapType && !isMutableMapType && !isSetType && !isMutableSetType && !isLambdaType
 
             if (isReferenceType && qualifiedTypeName != null && qualifiedTypeName !in exportedTypes) {
               logger.warn("Skipping property '${cls.simpleName.asString()}.${subName}.$propName': unsupported type '$qualifiedTypeName'")
@@ -1125,6 +1142,8 @@ internal fun translateObject(
         returnType = mapReturnType(kotlinReturnType),
         name = methodName,
         parameters = params,
+        visibility = CirVisibility.PRIVATE,
+        hasSyncErrorOut = true,
       )
     }
     .toList()
@@ -1154,14 +1173,16 @@ internal fun translateCompanionProperty(
 
   val csNativeReturnType: String = mapReturnType(propType)
 
-  members.add(CirDllImport(
-    libraryName = libraryName,
-    entryPoint = "${classPrefix}_companion_get_$propName",
-    returnType = csNativeReturnType,
-    name = "Native_Companion_Get_$propName",
-    parameters = emptyList(),
-    visibility = CirVisibility.PRIVATE,
-  ))
+  members.add(
+    CirDllImport(
+      libraryName = libraryName,
+      entryPoint = "${classPrefix}_companion_get_$propName",
+      returnType = csNativeReturnType,
+      name = "Native_Companion_Get_$propName",
+      parameters = emptyList(),
+      visibility = CirVisibility.PRIVATE,
+    )
+  )
 
   val csType: String
   val getter: String
@@ -1173,14 +1194,16 @@ internal fun translateCompanionProperty(
     setter = if (isMutable) "Native_Companion_Set_$propName(value)" else null
 
     if (isMutable) {
-      members.add(CirDllImport(
-        libraryName = libraryName,
-        entryPoint = "${classPrefix}_companion_set_$propName",
-        returnType = "void",
-        name = "Native_Companion_Set_$propName",
-        parameters = listOf(CirParameter("value", "string")),
-        visibility = CirVisibility.PRIVATE,
-      ))
+      members.add(
+        CirDllImport(
+          libraryName = libraryName,
+          entryPoint = "${classPrefix}_companion_set_$propName",
+          returnType = "void",
+          name = "Native_Companion_Set_$propName",
+          parameters = listOf(CirParameter("value", "string")),
+          visibility = CirVisibility.PRIVATE,
+        )
+      )
     }
   } else {
     csType = csNativeReturnType
@@ -1188,26 +1211,30 @@ internal fun translateCompanionProperty(
     setter = if (isMutable) "Native_Companion_Set_$propName(value)" else null
 
     if (isMutable) {
-      members.add(CirDllImport(
-        libraryName = libraryName,
-        entryPoint = "${classPrefix}_companion_set_$propName",
-        returnType = "void",
-        name = "Native_Companion_Set_$propName",
-        parameters = listOf(CirParameter("value", csNativeReturnType)),
-        visibility = CirVisibility.PRIVATE,
-      ))
+      members.add(
+        CirDllImport(
+          libraryName = libraryName,
+          entryPoint = "${classPrefix}_companion_set_$propName",
+          returnType = "void",
+          name = "Native_Companion_Set_$propName",
+          parameters = listOf(CirParameter("value", csNativeReturnType)),
+          visibility = CirVisibility.PRIVATE,
+        )
+      )
     }
   }
 
-  members.add(CirProperty(
-    name = csPropName,
-    type = csType,
-    nativeReturnType = csNativeReturnType,
-    nativeName = propName,
-    getter = getter,
-    setter = setter,
-    isStatic = true,
-  ))
+  members.add(
+    CirProperty(
+      name = csPropName,
+      type = csType,
+      nativeReturnType = csNativeReturnType,
+      nativeName = propName,
+      getter = getter,
+      setter = setter,
+      isStatic = true,
+    )
+  )
 
   return members
 }
@@ -1233,7 +1260,7 @@ internal fun translateCompanionFunction(
 
   val returnsEnclosingClass: Boolean = kotlinReturnType == className
   val isObjectReturn: Boolean = returnsEnclosingClass ||
-    (kotlinReturnType !in KOTLIN_TO_CSHARP_RETURN && kotlinReturnType != "Unit")
+      (kotlinReturnType !in KOTLIN_TO_CSHARP_RETURN && kotlinReturnType != "Unit")
 
   if (isObjectReturn) {
     val nativeImport = CirDllImport(
@@ -1497,11 +1524,13 @@ internal fun translateValueClass(
 
   val methods: List<CirMethod> = cls.getAllFunctions()
     .filter { it.getVisibility() == Visibility.PUBLIC }
-    .filter { it.simpleName.asString() !in listOf(
-      "equals", "hashCode", "toString", "<init>",
-      "box-impl", "unbox-impl", "constructor-impl",
-      "hashCode-impl", "equals-impl", "equals-impl0", "toString-impl",
-    ) }
+    .filter {
+      it.simpleName.asString() !in listOf(
+        "equals", "hashCode", "toString", "<init>",
+        "box-impl", "unbox-impl", "constructor-impl",
+        "hashCode-impl", "equals-impl", "equals-impl0", "toString-impl",
+      )
+    }
     .map { method ->
       val methodName: String = method.simpleName.asString()
       val csMethodName: String = methodName.replaceFirstChar { it.uppercase() }
@@ -1660,6 +1689,7 @@ private fun translateCallbackMethod(
       val elemCs: String = KOTLIN_TO_CSHARP_PARAM[elemKotlin] ?: elemKotlin
       "IReadOnlyList<$elemCs>"
     }
+
     else -> outerRetKotlin
   }
 
@@ -1710,6 +1740,7 @@ private fun translateCallbackMethod(
         appendLine("            NugetListNative.Dispose(listHandle);")
         append("            return result.AsReadOnly();")
       }
+
       !isOuterRetUnit -> append("            return new $outerRetKotlin(nativeHandle);")
     }
   }
@@ -1776,6 +1807,7 @@ private fun translateStoredCallbackMethod(
     argType.declaration.simpleName.asString() == "String" -> "Object"
     argType.declaration.qualifiedName?.asString() in KOTLIN_TO_CSHARP_RETURN ->
       argType.declaration.simpleName.asString()
+
     else -> "Object"
   }
 
@@ -1936,7 +1968,9 @@ private fun translateInterfaceBridgeMethod(
         when {
           isEnum -> append("$csType arg$i = ($csType)arg${i}Ord; ")
           pSimple == "Boolean" -> append("$csType arg$i = arg${i} != 0; ")
-          isPrimitive -> { /* arg is already the right type, no unmarshal needed */ }
+          isPrimitive -> { /* arg is already the right type, no unmarshal needed */
+          }
+
           else -> append("$csType arg$i = NugetMarshal.FromHandle<$csType>(arg${i}Ptr); NugetMarshal.Dispose(arg${i}Ptr); ")
         }
       }

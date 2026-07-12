@@ -176,53 +176,60 @@ class NugetProcessor(
       .filter { it.parentDeclaration == null }
 
     val hasNothingToProcess: Boolean = functions.isEmpty() && genericFunctions.isEmpty() &&
-      extensionFunctions.isEmpty() && extensionProperties.isEmpty() &&
-      classes.isEmpty() && genericClasses.isEmpty() && enums.isEmpty() &&
-      interfaces.isEmpty() && sealedClasses.isEmpty() && objects.isEmpty() &&
-      properties.isEmpty() && constProperties.isEmpty() && valueClasses.isEmpty()
+        extensionFunctions.isEmpty() && extensionProperties.isEmpty() &&
+        classes.isEmpty() && genericClasses.isEmpty() && enums.isEmpty() &&
+        interfaces.isEmpty() && sealedClasses.isEmpty() && objects.isEmpty() &&
+        properties.isEmpty() && constProperties.isEmpty() && valueClasses.isEmpty()
     if (hasNothingToProcess) return emptyList()
 
     val sources: Array<KSFile> = (functions.mapNotNull { it.containingFile } +
-      genericFunctions.mapNotNull { it.containingFile } +
-      extensionFunctions.mapNotNull { it.containingFile } +
-      extensionProperties.mapNotNull { it.containingFile } +
-      classes.mapNotNull { it.containingFile } +
-      genericClasses.mapNotNull { it.containingFile } +
-      enums.mapNotNull { it.containingFile } +
-      interfaces.mapNotNull { it.containingFile } +
-      sealedClasses.mapNotNull { it.containingFile } +
-      objects.mapNotNull { it.containingFile } +
-      properties.mapNotNull { it.containingFile } +
-      constProperties.mapNotNull { it.containingFile } +
-      valueClasses.mapNotNull { it.containingFile }).toTypedArray()
+        genericFunctions.mapNotNull { it.containingFile } +
+        extensionFunctions.mapNotNull { it.containingFile } +
+        extensionProperties.mapNotNull { it.containingFile } +
+        classes.mapNotNull { it.containingFile } +
+        genericClasses.mapNotNull { it.containingFile } +
+        enums.mapNotNull { it.containingFile } +
+        interfaces.mapNotNull { it.containingFile } +
+        sealedClasses.mapNotNull { it.containingFile } +
+        objects.mapNotNull { it.containingFile } +
+        properties.mapNotNull { it.containingFile } +
+        constProperties.mapNotNull { it.containingFile } +
+        valueClasses.mapNotNull { it.containingFile }).toTypedArray()
 
     val deps = Dependencies(aggregating = true, *sources)
 
-    generateCNameWrappers(
+    val cNameExports: FileSpec = generateCNameWrappers(
       functions, genericFunctions, extensionFunctions, extensionProperties,
       classes, genericClasses, enums, sealedClasses, objects, properties,
       valueClasses, suspendFunctions, deps,
     )
-    generateCSharpBindings(
+    val cirFile: CirFile = generateCSharpBindings(
       functions, genericFunctions, extensionFunctions, extensionProperties,
       allClasses, enums, interfaces, sealedClasses, objects, properties,
       constProperties, valueClasses, suspendFunctions, deps,
     )
 
+    val csharpContracts: List<ForwardAbiSignature> = ForwardAbiContract.csharp(cirFile)
+    ForwardAbiContract.assertMatches(
+      csharp = csharpContracts,
+      kotlin = ForwardAbiContract.kotlin(cNameExports, csharpContracts.map { it.exportName }.toSet()),
+    )
+    cNameExports.writeTo(codeGenerator, Dependencies(aggregating = true))
+
     logger.info(
       "Generated bindings for ${functions.size} functions" +
-        ", ${genericFunctions.size} generic functions" +
-        ", ${extensionFunctions.size} extension functions" +
-        ", ${extensionProperties.size} extension properties" +
-        ", ${classes.size} classes" +
-        ", ${genericClasses.size} generic classes" +
-        ", ${enums.size} enums" +
-        ", ${interfaces.size} interfaces" +
-        ", ${sealedClasses.size} sealed classes" +
-        ", ${objects.size} objects" +
-        ", ${properties.size} properties" +
-        ", ${constProperties.size} const properties" +
-        ", and ${valueClasses.size} value classes"
+          ", ${genericFunctions.size} generic functions" +
+          ", ${extensionFunctions.size} extension functions" +
+          ", ${extensionProperties.size} extension properties" +
+          ", ${classes.size} classes" +
+          ", ${genericClasses.size} generic classes" +
+          ", ${enums.size} enums" +
+          ", ${interfaces.size} interfaces" +
+          ", ${sealedClasses.size} sealed classes" +
+          ", ${objects.size} objects" +
+          ", ${properties.size} properties" +
+          ", ${constProperties.size} const properties" +
+          ", and ${valueClasses.size} value classes"
     )
 
     return emptyList()
@@ -243,7 +250,7 @@ class NugetProcessor(
     valueClasses: List<KSClassDeclaration>,
     suspendFunctions: List<KSFunctionDeclaration>,
     deps: Dependencies,
-  ) {
+  ): CirFile {
     val cirFile: CirFile = translate(
       context,
       logger,
@@ -272,6 +279,7 @@ class NugetProcessor(
     )
 
     file.writer().use { writer -> writer.write(csharp) }
+    return cirFile
   }
 
   private fun generateCNameWrappers(
@@ -288,7 +296,7 @@ class NugetProcessor(
     valueClasses: List<KSClassDeclaration>,
     suspendFunctions: List<KSFunctionDeclaration>,
     deps: Dependencies,
-  ) {
+  ): FileSpec {
     val builder: FileSpec.Builder = FileSpec
       .builder("io.github.xxfast.kotlin.native.nuget.generated", "CNameExports")
       .addAnnotation(
@@ -351,25 +359,25 @@ class NugetProcessor(
     val needsSuspendLambdaSupport: Boolean = suspendLambdaArities.isNotEmpty()
 
     val hasSuspendFunctions: Boolean = suspendFunctions.isNotEmpty() ||
-      needsSuspendLambdaSupport ||
-      classes.any { cls -> cls.getAllFunctions().any { it.modifiers.contains(Modifier.SUSPEND) } }
+        needsSuspendLambdaSupport ||
+        classes.any { cls -> cls.getAllFunctions().any { it.modifiers.contains(Modifier.SUSPEND) } }
 
     val classesHaveFlowPropertiesForImports: Boolean = classes.any { cls ->
       cls.getAllProperties().any { prop ->
         prop.type.resolve().expandAliases().declaration.qualifiedName?.asString() ==
-          "kotlinx.coroutines.flow.Flow"
+            "kotlinx.coroutines.flow.Flow"
       }
     }
 
     val classesHaveFlowMethodsForImports: Boolean = classes.any { cls ->
       cls.getAllFunctions().any { method ->
         method.returnType?.resolve()?.expandAliases()?.declaration?.qualifiedName?.asString() ==
-          "kotlinx.coroutines.flow.Flow"
+            "kotlinx.coroutines.flow.Flow"
       }
     }
 
     val needsFlowImports: Boolean = classesHaveFlowPropertiesForImports ||
-      classesHaveFlowMethodsForImports
+        classesHaveFlowMethodsForImports
 
     val lambdaTypeSet: Set<String> = setOf(
       "kotlin.Function0", "kotlin.Function1", "kotlin.Function2", "kotlin.Function3",
@@ -467,9 +475,11 @@ class NugetProcessor(
       .any { func -> func.returnType?.resolve()?.isListType() == true }
 
     val sealedClassesHaveLists: Boolean = sealedClasses
-      .any { sealed -> sealed.getSealedSubclasses().any { sub ->
-        sub.getAllProperties().any { prop -> prop.type.resolve().isListType() }
-      } }
+      .any { sealed ->
+        sealed.getSealedSubclasses().any { sub ->
+          sub.getAllProperties().any { prop -> prop.type.resolve().isListType() }
+        }
+      }
 
     val needsListSupport: Boolean = classesHaveLists || functionsReturnLists || sealedClassesHaveLists
 
@@ -485,9 +495,11 @@ class NugetProcessor(
       .any { func -> func.returnType?.resolve()?.isMapType() == true }
 
     val sealedClassesHaveMaps: Boolean = sealedClasses
-      .any { sealed -> sealed.getSealedSubclasses().any { sub ->
-        sub.getAllProperties().any { prop -> prop.type.resolve().isMapType() }
-      } }
+      .any { sealed ->
+        sealed.getSealedSubclasses().any { sub ->
+          sub.getAllProperties().any { prop -> prop.type.resolve().isMapType() }
+        }
+      }
 
     val needsMapSupport: Boolean = classesHaveMaps || functionsReturnMaps || sealedClassesHaveMaps
 
@@ -503,9 +515,11 @@ class NugetProcessor(
       .any { func -> func.returnType?.resolve()?.isSetType() == true }
 
     val sealedClassesHaveSets: Boolean = sealedClasses
-      .any { sealed -> sealed.getSealedSubclasses().any { sub ->
-        sub.getAllProperties().any { prop -> prop.type.resolve().isSetType() }
-      } }
+      .any { sealed ->
+        sealed.getSealedSubclasses().any { sub ->
+          sub.getAllProperties().any { prop -> prop.type.resolve().isSetType() }
+        }
+      }
 
     val needsSetSupport: Boolean = classesHaveSets || functionsReturnSets || sealedClassesHaveSets
 
@@ -545,7 +559,7 @@ class NugetProcessor(
     val needsLambdaSupport: Boolean = lambdaArities.isNotEmpty()
 
     val needsHelpers: Boolean = genericClasses.isNotEmpty() ||
-      needsListSupport || needsMapSupport || needsSetSupport || needsLambdaSupport
+        needsListSupport || needsMapSupport || needsSetSupport || needsLambdaSupport
     if (needsHelpers) builder.addNugetHelperExports()
     if (needsListSupport) builder.addNugetListHelperExports()
     if (needsMapSupport) builder.addNugetMapHelperExports()
@@ -558,7 +572,7 @@ class NugetProcessor(
     if (3 in lambdaArities) builder.addNugetFunc3HelperExports()
 
     val needsSuspendWrap: Boolean = needsSuspendLambdaSupport &&
-      suspendLambdaArities.any { it > 0 } && !needsLambdaSupport
+        suspendLambdaArities.any { it > 0 } && !needsLambdaSupport
     if (needsSuspendWrap) builder.addNugetWrapHelperExports()
     if (0 in suspendLambdaArities) builder.addNugetSuspendFunc0HelperExports()
     if (1 in suspendLambdaArities) builder.addNugetSuspendFunc1HelperExports()
@@ -587,13 +601,13 @@ class NugetProcessor(
     if (needsFlowSupport) builder.addImport("kotlinx.coroutines.flow", "collect")
 
     val needsScopeHelpers: Boolean = suspendFunctions.isNotEmpty() ||
-      needsSuspendLambdaSupport || classesHaveSuspendMethods || needsFlowSupport
+        needsSuspendLambdaSupport || classesHaveSuspendMethods || needsFlowSupport
     if (needsScopeHelpers) builder.addNugetScopeHelperExports()
     if (needsScopeHelpers) builder.addNugetScopeDrainExport()
     if (needsScopeHelpers) builder.addNugetJobHelperExports()
     builder.addNugetErrorHelperExports()
 
-    builder.build().writeTo(codeGenerator, Dependencies(aggregating = true))
+    return builder.build()
   }
 
 }

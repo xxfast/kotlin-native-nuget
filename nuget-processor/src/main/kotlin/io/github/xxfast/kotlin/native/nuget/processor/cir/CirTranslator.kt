@@ -8,6 +8,12 @@ import com.google.devtools.ksp.symbol.KSType
 import io.github.xxfast.kotlin.native.nuget.processor.toCName
 import io.github.xxfast.kotlin.native.nuget.processor.toCSharpName
 
+private fun syncErrorArguments(parameters: String): String = if (parameters.isEmpty()) {
+  "out IntPtr error"
+} else {
+  "$parameters, out IntPtr error"
+}
+
 data class NugetContext(
   val libraryName: String,
   val rootNamespace: String,
@@ -388,13 +394,14 @@ internal fun translateExtensionFunction(
     name = "Native_$csName",
     parameters = allNativeParams,
     visibility = CirVisibility.PRIVATE,
+    hasSyncErrorOut = true,
   )
 
   val csReceiverType: String = if (isExportedReceiver) receiverName else mapParamType(receiverName)
   val csReceiverParamName: String = if (isExportedReceiver) receiverName.lowercase() else "receiver"
 
   val wrapperParams: List<CirParameter> = listOf(
-    CirParameter(csReceiverParamName, csReceiverType),
+    CirParameter(csReceiverParamName, csReceiverType, nativeReceiverType),
   ) + extraParams
 
   val nativeCallReceiver: String = if (isExportedReceiver) "${csReceiverParamName}._handle" else "receiver"
@@ -405,18 +412,20 @@ internal fun translateExtensionFunction(
 
   if (kotlinReturnType == "String") {
     csReturnType = "string"
-    body = "Marshal.PtrToStringUTF8(Native_$csName($nativeCallArgs))!"
+    body = checkedExtensionBody("IntPtr", "Marshal.PtrToStringUTF8(result)!", csName, nativeCallArgs)
   } else if (kotlinReturnType == "Unit") {
     csReturnType = "void"
-    body = "Native_$csName($nativeCallArgs)"
+    body = checkedExtensionBody(null, "", csName, nativeCallArgs)
   } else {
     csReturnType = KOTLIN_TO_CSHARP_PARAM[kotlinReturnType] ?: kotlinReturnType
-    body = "Native_$csName($nativeCallArgs)"
+    body = checkedExtensionBody(csReturnType, "result", csName, nativeCallArgs)
   }
 
   val wrapper = CirMethod(
     name = csName,
     returnType = csReturnType,
+    nativeReturnType = nativeReturnType,
+    nativeName = "Native_$csName",
     parameters = wrapperParams,
     body = body,
     isStatic = true,
@@ -424,6 +433,23 @@ internal fun translateExtensionFunction(
   )
 
   return listOf(dllImport, wrapper)
+}
+
+private fun checkedExtensionBody(
+  resultType: String?,
+  returnValue: String,
+  csName: String,
+  arguments: String,
+): String = buildString {
+  appendLine()
+  val call: String = "Native_$csName(${syncErrorArguments(arguments)})"
+  if (resultType == null) appendLine("            $call;")
+  else appendLine("            $resultType result = $call;")
+  appendLine("            if (error != IntPtr.Zero)")
+  appendLine("            {")
+  appendLine("                throw NugetErrorNative.BuildException(error);")
+  appendLine("            }")
+  if (resultType != null) append("            return $returnValue;")
 }
 
 internal fun translateExtensionProperty(

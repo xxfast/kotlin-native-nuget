@@ -9,6 +9,12 @@ import com.google.devtools.ksp.symbol.Modifier
 import io.github.xxfast.kotlin.native.nuget.processor.toCName
 import io.github.xxfast.kotlin.native.nuget.processor.toCSharpName
 
+private fun syncErrorArguments(parameters: String): String = if (parameters.isEmpty()) {
+  "out IntPtr error"
+} else {
+  "$parameters, out IntPtr error"
+}
+
 internal fun translateFunction(
   func: KSFunctionDeclaration,
   libraryName: String,
@@ -95,6 +101,7 @@ internal fun translateFunction(
       name = "${csName}_native",
       parameters = params,
       visibility = CirVisibility.PRIVATE,
+      hasSyncErrorOut = true,
     )
 
     val paramNames: String = params.joinToString(", ") { it.name }
@@ -102,7 +109,8 @@ internal fun translateFunction(
       name = csName,
       returnType = lambdaCsType,
       parameters = params,
-      body = "new $lambdaCsType(${csName}_native($paramNames))",
+      body = "new $lambdaCsType(NugetErrorNative.Check(${csName}_native(" +
+          "${syncErrorArguments(paramNames)}), error))",
       isStatic = true,
     )
 
@@ -113,7 +121,7 @@ internal fun translateFunction(
     if (hasEnumParams) return enumParamsUnsupported("List")
 
     tracker.needsList = true
-    val elementType = returnType?.arguments?.firstOrNull()?.type?.resolve()
+    val elementType = returnType.arguments.firstOrNull()?.type?.resolve()
     val elementTypeName: String = elementType?.declaration?.simpleName?.asString() ?: "Any"
     val csElementType: String = KOTLIN_TO_CSHARP_PARAM[elementTypeName] ?: elementTypeName
 
@@ -124,12 +132,19 @@ internal fun translateFunction(
       name = "${csName}_native",
       parameters = params,
       visibility = CirVisibility.PRIVATE,
+      hasSyncErrorOut = true,
     )
 
     val paramNames: String = params.joinToString(", ") { it.name }
     val body: String = buildString {
       appendLine()
-      appendLine("            IntPtr listHandle = ${csName}_native($paramNames);")
+      appendLine(
+        "            IntPtr listHandle = NugetErrorNative.Check(${csName}_native(${
+          syncErrorArguments(
+            paramNames
+          )
+        }), error);"
+      )
       appendLine("            int count = NugetListNative.Count(listHandle);")
       appendLine("            var result = new List<$csElementType>(count);")
       appendLine("            for (int i = 0; i < count; i++)")
@@ -155,7 +170,7 @@ internal fun translateFunction(
     if (hasEnumParams) return enumParamsUnsupported("MutableList")
 
     tracker.needsList = true
-    val elementType = returnType?.arguments?.firstOrNull()?.type?.resolve()
+    val elementType = returnType.arguments.firstOrNull()?.type?.resolve()
     val elementTypeName: String = elementType?.declaration?.simpleName?.asString() ?: "Any"
     val csElementType: String = KOTLIN_TO_CSHARP_PARAM[elementTypeName] ?: elementTypeName
 
@@ -166,12 +181,19 @@ internal fun translateFunction(
       name = "${csName}_native",
       parameters = params,
       visibility = CirVisibility.PRIVATE,
+      hasSyncErrorOut = true,
     )
 
     val paramNames: String = params.joinToString(", ") { it.name }
     val body: String = buildString {
       appendLine()
-      appendLine("            IntPtr listHandle = ${csName}_native($paramNames);")
+      appendLine(
+        "            IntPtr listHandle = NugetErrorNative.Check(${csName}_native(${
+          syncErrorArguments(
+            paramNames
+          )
+        }), error);"
+      )
       appendLine("            int count = NugetListNative.Count(listHandle);")
       appendLine("            var result = new List<$csElementType>(count);")
       appendLine("            for (int i = 0; i < count; i++)")
@@ -197,11 +219,11 @@ internal fun translateFunction(
     if (hasEnumParams) return enumParamsUnsupported("Map")
 
     tracker.needsMap = true
-    val keyType = returnType?.arguments?.getOrNull(0)?.type?.resolve()
+    val keyType = returnType.arguments.getOrNull(0)?.type?.resolve()
     val keyTypeName: String = keyType?.declaration?.simpleName?.asString() ?: "Any"
     val csKeyType: String = KOTLIN_TO_CSHARP_PARAM[keyTypeName] ?: keyTypeName
 
-    val valueType = returnType?.arguments?.getOrNull(1)?.type?.resolve()
+    val valueType = returnType.arguments.getOrNull(1)?.type?.resolve()
     val valueTypeName: String = valueType?.declaration?.simpleName?.asString() ?: "Any"
     val csValueType: String = KOTLIN_TO_CSHARP_PARAM[valueTypeName] ?: valueTypeName
 
@@ -212,12 +234,13 @@ internal fun translateFunction(
       name = "${csName}_native",
       parameters = params,
       visibility = CirVisibility.PRIVATE,
+      hasSyncErrorOut = true,
     )
 
     val paramNames: String = params.joinToString(", ") { it.name }
     val body: String = buildString {
       appendLine()
-      appendLine("            IntPtr mapHandle = ${csName}_native($paramNames);")
+      appendLine("            IntPtr mapHandle = NugetErrorNative.Check(${csName}_native(${syncErrorArguments(paramNames)}), error);")
       appendLine("            int count = NugetMapNative.Count(mapHandle);")
       appendLine("            var result = new Dictionary<$csKeyType, $csValueType>(count);")
       appendLine("            for (int i = 0; i < count; i++)")
@@ -245,11 +268,11 @@ internal fun translateFunction(
     if (hasEnumParams) return enumParamsUnsupported("MutableMap")
 
     tracker.needsMap = true
-    val keyType = returnType?.arguments?.getOrNull(0)?.type?.resolve()
+    val keyType = returnType.arguments.getOrNull(0)?.type?.resolve()
     val keyTypeName: String = keyType?.declaration?.simpleName?.asString() ?: "Any"
     val csKeyType: String = KOTLIN_TO_CSHARP_PARAM[keyTypeName] ?: keyTypeName
 
-    val valueType = returnType?.arguments?.getOrNull(1)?.type?.resolve()
+    val valueType = returnType.arguments.getOrNull(1)?.type?.resolve()
     val valueTypeName: String = valueType?.declaration?.simpleName?.asString() ?: "Any"
     val csValueType: String = KOTLIN_TO_CSHARP_PARAM[valueTypeName] ?: valueTypeName
 
@@ -260,12 +283,13 @@ internal fun translateFunction(
       name = "${csName}_native",
       parameters = params,
       visibility = CirVisibility.PRIVATE,
+      hasSyncErrorOut = true,
     )
 
     val paramNames: String = params.joinToString(", ") { it.name }
     val body: String = buildString {
       appendLine()
-      appendLine("            IntPtr mapHandle = ${csName}_native($paramNames);")
+      appendLine("            IntPtr mapHandle = NugetErrorNative.Check(${csName}_native(${syncErrorArguments(paramNames)}), error);")
       appendLine("            int count = NugetMapNative.Count(mapHandle);")
       appendLine("            var result = new Dictionary<$csKeyType, $csValueType>(count);")
       appendLine("            for (int i = 0; i < count; i++)")
@@ -293,7 +317,7 @@ internal fun translateFunction(
     if (hasEnumParams) return enumParamsUnsupported("Set")
 
     tracker.needsSet = true
-    val elementType = returnType?.arguments?.firstOrNull()?.type?.resolve()
+    val elementType = returnType.arguments.firstOrNull()?.type?.resolve()
     val elementTypeName: String = elementType?.declaration?.simpleName?.asString() ?: "Any"
     val csElementType: String = KOTLIN_TO_CSHARP_PARAM[elementTypeName] ?: elementTypeName
 
@@ -304,12 +328,13 @@ internal fun translateFunction(
       name = "${csName}_native",
       parameters = params,
       visibility = CirVisibility.PRIVATE,
+      hasSyncErrorOut = true,
     )
 
     val paramNames: String = params.joinToString(", ") { it.name }
     val body: String = buildString {
       appendLine()
-      appendLine("            IntPtr setHandle = ${csName}_native($paramNames);")
+      appendLine("            IntPtr setHandle = NugetErrorNative.Check(${csName}_native(${syncErrorArguments(paramNames)}), error);")
       appendLine("            int count = NugetSetNative.Count(setHandle);")
       appendLine("            var result = new HashSet<$csElementType>(count);")
       appendLine("            for (int i = 0; i < count; i++)")
@@ -335,7 +360,7 @@ internal fun translateFunction(
     if (hasEnumParams) return enumParamsUnsupported("MutableSet")
 
     tracker.needsSet = true
-    val elementType = returnType?.arguments?.firstOrNull()?.type?.resolve()
+    val elementType = returnType.arguments.firstOrNull()?.type?.resolve()
     val elementTypeName: String = elementType?.declaration?.simpleName?.asString() ?: "Any"
     val csElementType: String = KOTLIN_TO_CSHARP_PARAM[elementTypeName] ?: elementTypeName
 
@@ -351,7 +376,7 @@ internal fun translateFunction(
     val paramNames: String = params.joinToString(", ") { it.name }
     val body: String = buildString {
       appendLine()
-      appendLine("            IntPtr setHandle = ${csName}_native($paramNames);")
+      appendLine("            IntPtr setHandle = NugetErrorNative.Check(${csName}_native(${syncErrorArguments(paramNames)}), error);")
       appendLine("            int count = NugetSetNative.Count(setHandle);")
       appendLine("            var result = new HashSet<$csElementType>(count);")
       appendLine("            for (int i = 0; i < count; i++)")
@@ -690,6 +715,7 @@ internal fun translateGenericFunction(
         name = nativeName,
         parameters = listOf(CirParameter(paramName, nativeParamType)),
         visibility = CirVisibility.PRIVATE,
+        hasSyncErrorOut = true,
       )
     )
   }
@@ -705,53 +731,55 @@ internal fun translateGenericFunction(
       name = objectNativeName,
       parameters = listOf(CirParameter(paramName, "IntPtr")),
       visibility = CirVisibility.PRIVATE,
+      hasSyncErrorOut = true,
     )
   )
 
   val body: String = buildString {
     appendLine()
+    appendLine("      IntPtr error;")
 
     if (!isConstrained) {
       appendLine("      if (typeof(T) == typeof(string))")
       if (returnsGenericClass) {
-        appendLine("        return new ${returnTypeName}<T>(${csName}_string_native((string)(object)$paramName!));")
+        appendLine("        return new ${returnTypeName}<T>(NugetErrorNative.Check(${csName}_string_native((string)(object)$paramName!, out error), error));")
       } else {
-        appendLine("        return (T)(object)Marshal.PtrToStringUTF8(${csName}_string_native((string)(object)$paramName!))!;")
+        appendLine("        return (T)(object)Marshal.PtrToStringUTF8(NugetErrorNative.Check(${csName}_string_native((string)(object)$paramName!, out error), error))!;")
       }
 
       appendLine("      if (typeof(T) == typeof(int))")
       if (returnsGenericClass) {
-        appendLine("        return new ${returnTypeName}<T>(${csName}_int_native((int)(object)$paramName!));")
+        appendLine("        return new ${returnTypeName}<T>(NugetErrorNative.Check(${csName}_int_native((int)(object)$paramName!, out error), error));")
       } else {
-        appendLine("        return (T)(object)${csName}_int_native((int)(object)$paramName!);")
+        appendLine("        return (T)(object)NugetErrorNative.Check(${csName}_int_native((int)(object)$paramName!, out error), error);")
       }
 
       appendLine("      if (typeof(T) == typeof(long))")
       if (returnsGenericClass) {
-        appendLine("        return new ${returnTypeName}<T>(${csName}_long_native((long)(object)$paramName!));")
+        appendLine("        return new ${returnTypeName}<T>(NugetErrorNative.Check(${csName}_long_native((long)(object)$paramName!, out error), error));")
       } else {
-        appendLine("        return (T)(object)${csName}_long_native((long)(object)$paramName!);")
+        appendLine("        return (T)(object)NugetErrorNative.Check(${csName}_long_native((long)(object)$paramName!, out error), error);")
       }
 
       appendLine("      if (typeof(T) == typeof(float))")
       if (returnsGenericClass) {
-        appendLine("        return new ${returnTypeName}<T>(${csName}_float_native((float)(object)$paramName!));")
+        appendLine("        return new ${returnTypeName}<T>(NugetErrorNative.Check(${csName}_float_native((float)(object)$paramName!, out error), error));")
       } else {
-        appendLine("        return (T)(object)${csName}_float_native((float)(object)$paramName!);")
+        appendLine("        return (T)(object)NugetErrorNative.Check(${csName}_float_native((float)(object)$paramName!, out error), error);")
       }
 
       appendLine("      if (typeof(T) == typeof(double))")
       if (returnsGenericClass) {
-        appendLine("        return new ${returnTypeName}<T>(${csName}_double_native((double)(object)$paramName!));")
+        appendLine("        return new ${returnTypeName}<T>(NugetErrorNative.Check(${csName}_double_native((double)(object)$paramName!, out error), error));")
       } else {
-        appendLine("        return (T)(object)${csName}_double_native((double)(object)$paramName!);")
+        appendLine("        return (T)(object)NugetErrorNative.Check(${csName}_double_native((double)(object)$paramName!, out error), error);")
       }
 
       appendLine("      if (typeof(T) == typeof(bool))")
       if (returnsGenericClass) {
-        appendLine("        return new ${returnTypeName}<T>(${csName}_bool_native((bool)(object)$paramName!));")
+        appendLine("        return new ${returnTypeName}<T>(NugetErrorNative.Check(${csName}_bool_native((bool)(object)$paramName!, out error), error));")
       } else {
-        appendLine("        return (T)(object)${csName}_bool_native((bool)(object)$paramName!);")
+        appendLine("        return (T)(object)NugetErrorNative.Check(${csName}_bool_native((bool)(object)$paramName!, out error), error);")
       }
     }
 
@@ -759,13 +787,13 @@ internal fun translateGenericFunction(
       appendLine("      var field = typeof(T).GetField(\"_handle\",")
       appendLine("        System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Public);")
       appendLine("      IntPtr handle = (IntPtr)field!.GetValue($paramName)!;")
-      appendLine("      IntPtr result = ${csName}_object_native(handle);")
+      appendLine("      IntPtr result = NugetErrorNative.Check(${csName}_object_native(handle, out error), error);")
       appendLine("      return new ${returnTypeName}<T>(result);")
     } else {
       appendLine("      var field = typeof(T).GetField(\"_handle\",")
       appendLine("        System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Public);")
       appendLine("      IntPtr handle = (IntPtr)field!.GetValue($paramName)!;")
-      appendLine("      IntPtr result = ${csName}_object_native(handle);")
+      appendLine("      IntPtr result = NugetErrorNative.Check(${csName}_object_native(handle, out error), error);")
       appendLine("      return (T)Activator.CreateInstance(typeof(T),")
       appendLine("        System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Public,")
       appendLine("        null, new object[] { result }, null)!;")

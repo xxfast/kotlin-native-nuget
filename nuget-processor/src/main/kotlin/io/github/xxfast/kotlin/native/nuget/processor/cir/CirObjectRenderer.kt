@@ -4,11 +4,37 @@ internal fun StringBuilder.renderObject(obj: CirObject) {
   appendLine("    public static class ${obj.name}")
   appendLine("    {")
 
-  for (method in obj.methods) {
+  obj.methods.forEach { method ->
     renderDllImport(method)
+    renderObjectMethod(method)
   }
 
   appendLine("    }")
+}
+
+private fun StringBuilder.renderObjectMethod(method: CirDllImport) {
+  val parameters: String = method.parameters.joinToString(", ") { parameter ->
+    "${parameter.type} ${parameter.name}"
+  }
+  val arguments: String = method.parameters.joinToString(", ") { it.name }
+  val call: String = if (arguments.isEmpty()) "${method.name}(out IntPtr error)" else {
+    "${method.name}($arguments, out IntPtr error)"
+  }
+
+  appendLine("        public static ${method.returnType} ${method.name}($parameters)")
+  appendLine("        {")
+  if (method.returnType == "void") {
+    appendLine("            $call;")
+  } else {
+    appendLine("            ${method.returnType} result = $call;")
+  }
+  appendLine("            if (error != IntPtr.Zero)")
+  appendLine("            {")
+  appendLine("                throw NugetErrorNative.BuildException(error);")
+  appendLine("            }")
+  if (method.returnType != "void") appendLine("            return result;")
+  appendLine("        }")
+  appendLine()
 }
 
 internal fun StringBuilder.renderValueClass(cls: CirValueClass) {
@@ -120,4 +146,3 @@ private fun StringBuilder.renderValueClassMembers(cls: CirValueClass) {
     appendLine()
   }
 }
-
