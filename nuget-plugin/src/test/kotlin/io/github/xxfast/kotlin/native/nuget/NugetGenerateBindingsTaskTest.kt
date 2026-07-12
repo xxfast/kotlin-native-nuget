@@ -1901,6 +1901,36 @@ class NugetGenerateBindingsTaskTest {
   }
 
   @Test
+  fun `NugetRegistry notRegistered scopes remediation to the registration state`() {
+    val files: List<GeneratedFile> = generateKotlinStubs(templateWithCtorRir)
+
+    val registry: GeneratedFile = files.single { it.relativePath.endsWith("NugetRegistry.kt") }
+    val zeroRegistrations: String = registry.content
+      .substringAfter("return if (landedNow.isEmpty()) {")
+      .substringBefore("    } else {")
+    val partialRegistrations: String = registry.content
+      .substringAfter("    } else {")
+      .substringBefore("\n    }\n  }\n\n  // ADR-054: refuses")
+
+    assertContains(zeroRegistrations, "In order of likelihood")
+    assertContains(zeroRegistrations, "1.")
+    assertContains(zeroRegistrations, "obj/project.assets.json")
+    assertContains(zeroRegistrations, "purge the NuGet cache")
+    assertContains(zeroRegistrations, "2.")
+    assertContains(zeroRegistrations, "package")
+    assertContains(zeroRegistrations, "does not reference")
+    assertContains(zeroRegistrations, "3.")
+    assertContains(zeroRegistrations, "assembly containing them")
+    assertContains(zeroRegistrations, "loaded")
+    assertContains(zeroRegistrations, "contentFiles/cs/any/*Registration.cs")
+    assertContains(zeroRegistrations, "NUGET_INTEROP_TRACE=1")
+
+    assertContains(partialRegistrations, "Missing:")
+    assertContains(partialRegistrations, "Registration.cs")
+    assertContains(partialRegistrations, "NUGET_INTEROP_TRACE=1")
+  }
+
+  @Test
   fun `contractHash is stable for the same input and changes when a parameter's nullability changes`() {
     val filesA: List<GeneratedFile> = generateKotlinStubs(templateWithCtorRir)
     val filesB: List<GeneratedFile> = generateKotlinStubs(templateWithCtorRir)

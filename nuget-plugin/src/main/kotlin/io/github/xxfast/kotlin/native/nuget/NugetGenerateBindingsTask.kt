@@ -1311,11 +1311,24 @@ private fun nugetRegistryContent(expected: List<String>): String {
     |    return if (landedNow.isEmpty()) {
     |      "[nuget] ${'$'}qualifiedType bindings are not registered${'$'}suffix. " +
     |        "0 of ${'$'}{expected.size} expected registrations have fired. NOTHING has registered. " +
-    |        "Missing: ${'$'}{missing.joinToString(", ")}."
+    |        "Missing: ${'$'}{missing.joinToString(", ")}.\n\n" +
+    |        "No [ModuleInitializer] in any *Registration.cs ran, so those files are not compiled into " +
+    |        "any assembly the host has loaded. This is almost never a codegen bug. In order of likelihood:\n" +
+    |        "  1. Stale build state: the consuming project's obj/project.assets.json was not re-resolved, " +
+    |        "so NuGet never handed contentFiles/cs/any/*Registration.cs to the compiler. Delete obj/ and " +
+    |        "bin/, purge the NuGet cache at ~/.nuget/packages/${'$'}packageId, restore, rebuild.\n" +
+    |        "  2. The consuming project does not reference the packed package at all.\n" +
+    |        "  3. The shim files compiled, but the assembly containing them was never loaded.\n" +
+    |        "Verify with: NUGET_INTEROP_TRACE=1 (each [ModuleInitializer] logs as it fires)."
     |    } else {
     |      "[nuget] ${'$'}qualifiedType bindings are not registered${'$'}suffix. " +
     |        "${'$'}{landedNow.size} of ${'$'}{expected.size} expected registrations have fired: " +
-    |        "${'$'}{landedNow.joinToString(", ")}. Missing: ${'$'}{missing.joinToString(", ")}."
+    |        "${'$'}{landedNow.joinToString(", ")}. Missing: ${'$'}{missing.joinToString(", ")}.\n\n" +
+    |        "Other shims DID register, so the shim source IS compiled in and the native library IS loaded. " +
+    |        "Scope this to ${'$'}qualifiedType alone: its " +
+    |        "${'$'}{qualifiedType.substringAfterLast('.')}Registration.cs is absent from the compiled output, " +
+    |        "or its [ModuleInitializer] threw before reaching the register call.\n" +
+    |        "Verify with: NUGET_INTEROP_TRACE=1."
     |    }
     |  }
     |

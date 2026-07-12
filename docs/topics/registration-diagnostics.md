@@ -34,14 +34,22 @@ before it stores a single function pointer:
 2. **A computed "N of M registrations fired" message**, replacing what used to be a constant string.
    Every generated stub's `requireNotNull` guard, and `NugetObjectHandle.free()`'s runtime guard,
    route through a generated `NugetRegistry` that knows, from generation time, the full expected set
-   of registrations for the build. On the failure path it reports one of two things, depending on
-   whether *anything* has registered yet:
+   of registrations for the build. On the failure path it distinguishes zero registrations from a
+   partial result and gives the matching remediation:
 
    ```
    [nuget] Sample.Text.Template bindings are not registered (SampleDependency). 0 of 7 expected
    registrations have fired. NOTHING has registered. Missing: <runtime>, MimeMapping.MimeUtility,
    Sample.Enums.CatMoodService, Sample.Nullability.Nickname, Sample.Nullability.NicknameBook,
    Sample.Nullability.LegacyNicknameBook, Sample.Text.Template.
+
+   No [ModuleInitializer] in any *Registration.cs ran, so those files are not compiled into any
+   assembly the host has loaded. This is almost never a codegen bug. In order of likelihood:
+     1. Stale build state: delete the consuming project's obj/ and bin/, purge
+        ~/.nuget/packages/SampleDependency, then restore and rebuild.
+     2. The consuming project does not reference the packed package at all.
+     3. The shim files compiled, but the assembly containing them was never loaded.
+   Verify with: NUGET_INTEROP_TRACE=1 (each [ModuleInitializer] logs as it fires).
    ```
 
    ```
@@ -49,13 +57,18 @@ before it stores a single function pointer:
    registrations have fired: <runtime>, MimeMapping.MimeUtility, Sample.Enums.CatMoodService,
    Sample.Nullability.Nickname, Sample.Nullability.NicknameBook, Sample.Nullability.LegacyNicknameBook.
    Missing: Sample.Text.Template.
+
+   Other shims DID register, so the shim source IS compiled in and the native library IS loaded.
+   Scope this to Sample.Text.Template alone: its TemplateRegistration.cs is absent from the compiled
+   output, or its [ModuleInitializer] threw before reaching the register call.
+   Verify with: NUGET_INTEROP_TRACE=1.
    ```
 
-   "Nothing fired" and "everything but one type fired" are different bugs with different fixes. The
-   first usually means the shim source was never compiled into any assembly the host loaded (a stale
-   `obj/project.assets.json`, or the package isn't referenced at all). The second scopes the problem
-   to one type: its `{Type}Registration.cs` is missing from the compiled output, or its
-   `[ModuleInitializer]` threw before reaching the register call.
+   With zero registrations, the first remedy specifically addresses a stale
+   `obj/project.assets.json`: NuGet did not re-resolve the package, so it did not give
+   `contentFiles/cs/any/*Registration.cs` to the compiler. A partial result proves that the shim
+   source was compiled and the native library loaded, so investigate only the missing type's
+   `{Type}Registration.cs` and initializer.
 
 Both checks cost nothing on the bridge-call path: no trace code is emitted into any stub, thunk,
 getter, or setter. The cost is one CAS and two scalar compares per bound type, once, at process start.
