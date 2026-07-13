@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$(git rev-parse --show-toplevel)/.codex/hooks/benchmark.sh\" capture",
+            "timeout": 30,
+            "statusMessage": "Recording what the agent cost"
+          }
+        ]
+      }
+    ]
+  }
+}
