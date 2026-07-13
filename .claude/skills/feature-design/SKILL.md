@@ -1,6 +1,6 @@
 ---
 name: feature-design
-description: Implements a new bridge feature end to end using a TDD loop. Orchestrates the research, csharp-dev, kotlin-dev, refactorer and documenter agents from the main thread. Research first, verify the approach with humans, prove the path is passable with a walking skeleton, write failing tests on the consumer side of the feature, make them pass, then style-check and document in parallel.
+description: Implements a new bridge feature end to end using a TDD loop. Orchestrates the research, csharp-dev, kotlin-dev, refactorer and documenter agents from the main thread. Research first, verify the approach with humans, write failing tests on the consumer side of the feature, make them pass, then document and style-check.
 ---
 
 # Feature Design
@@ -20,7 +20,7 @@ Many phases (Phases 9–13 especially) are largely reverse-direction work that m
   - Fan out one **background** `research` agent per item, in parallel.
   - Collect all their draft ADRs/findings and present them to the human in a **single Step 2 review sitting**, instead of one interruption per feature.
 
-Then run the per-feature Step 3–6 loop below for each item.
+Then run the per-feature Step 3–5 loop below for each item.
 
 ## Workflow
 
@@ -43,19 +43,9 @@ Then run the per-feature Step 3–6 loop below for each item.
 - Get feedback and iterate on the design before implementation
 - Call out any deferred scope and ask if we want to schedule this on the roadmap
 - This step is crucial to ensure we're building the right thing before writing code
-- Once the human agrees with the approach, move to the next step (the ADR is accepted later, in Step 6, once the feature is implemented and verified)
+- Once the human agrees with the approach, move to the next step (the ADR is accepted later, in Step 5, once the feature is implemented and verified)
 
-### Step 3: Walking skeleton (end-to-end spike)
-
-Drive the **thinnest possible slice** of the feature (one member, one type, one assertion) all the way through `scripts/verify.sh` before anyone writes the full fixture or the full test suite.
-
-- **Non-negotiable for reverse / ecosystem features (Phase 8+)**, where the round trip spans four artifacts: metadata reader → Kotlin stub gen → C# shim gen → NuGet packaging. Optional for a forward feature that only touches the KSP processor.
-- Its first job is to prove the path is **passable**. Verify is where reality intrudes; a latent bug in that path should surface in the first 20 minutes against a two-line fixture, not after a 14-test fixture and both generator sides are already written.
-- Its second job is to **falsify every mechanism claim the ADR still labels `inferred`**. `research` can now run a throwaway spike to verify a claim itself (see [research](../../agents/research.md)), so anything reaching you still marked inferred is a claim nobody has yet checked against a real artefact. Check each one here, against the real thing, before an implementing agent follows it literally. ADR-053 shipped one wrong inferred claim and it cost hours of debugging correct code.
-- If a claim does not survive contact with the artefact, **the ADR is wrong**. Say so and fix the ADR. Do not bend the code to match the doc.
-- Delegate to `kotlin-dev` + `csharp-dev` and keep them warm, they carry into Step 4. If the skeleton does not go green, fix or split (see Rules) before writing any more tests.
-
-### Step 4: Testing
+### Step 3: Testing
 
 Write failing tests on the **consumer side** of the feature. Which side that is depends on the feature:
 
@@ -75,7 +65,7 @@ Write failing tests on the **consumer side** of the feature. Which side that is 
   - Write failing `ProjectBuilder` unit tests in `nuget-plugin/src/test/kotlin` that apply the plugin, configure the DSL as a consumer would, and assert the extension model / task wiring
   - Defer Gradle TestKit functional tests until there is task behavior that ProjectBuilder cannot reach
 
-### Step 5: Implementation (`kotlin-dev` agent)
+### Step 4: Implementation (`kotlin-dev` agent)
 
 - Make the failing tests pass
 - Update the KSP processor (CirModel, CirTranslator, CirRenderer, NugetProcessor) or the Gradle plugin (`nuget-plugin/`), whichever the feature lives in
@@ -83,17 +73,30 @@ Write failing tests on the **consumer side** of the feature. Which side that is 
 - The loop iterates: tests fail, fix, re-run. Continue the same `kotlin-dev` instance via SendMessage rather than spawning a fresh agent each round. Same for `csharp-dev` if the tests themselves need adjusting.
 - Ask `kotlin-dev` to report back the list of files it touched, you will hand that to the refactorer.
 
-### Step 6: Style review and docs (last step, run in parallel)
+### Step 5: Docs and style review (last step, run serially)
 
-Once the feature is implemented and verified, spawn both agents **in the same message**. They cannot
-collide: the `refactorer` only touches Kotlin, the `documenter` only touches Markdown.
+Once the feature is implemented and verified, run the `documenter` **first**, then the `refactorer`. Do
+**not** run them in parallel.
 
-- **`refactorer` agent**: do not scan the changed files yourself. Hand it `kotlin-dev`'s reported list of touched files and let it judge against [STYLE.md](../../../STYLE.md) and fix any violations in one pass. It reports back the files it changed (or "no violations") plus the test result.
-- **`documenter` agent**: hand it the feature, the ADR (if any), the ROADMAP item it completes, and the sample/test files that exercise it. It owns every doc surface:
+They look disjoint (the `refactorer` only touches Kotlin, the `documenter` only touches Markdown), but
+file ownership is not the axis that matters. The `refactorer`'s verify begins with
+`./gradlew :sample-library:clean`, which **deletes `sample-library/build/`**, and that directory is the
+`documenter`'s entire evidence base: every snippet it writes is lifted from the generated `Interop.cs`
+and the reverse output under `build/nuget-interop/`. Run them together and the `documenter` greps a
+directory that is being deleted and rebuilt underneath it. It does not crash, it silently drops the
+snippet it could not back with real code, and then it reaches for `./gradlew :sample-library:packNuget`
+to regenerate what the `refactorer` just removed, which queues on the Gradle project lock.
+
+Running the `documenter` first avoids all of it: `build/` is already current from `kotlin-dev`'s passing
+verify, so the `documenter` is pure read-only and never touches Gradle. The `refactorer` then cleans and
+rebuilds with nobody reading behind it.
+
+- **`documenter` agent** (first): hand it the feature, the ADR (if any), the ROADMAP item it completes, the sample/test files that exercise it, and **every bug the feature discovered but did not fix**. That last one is yours to pass on: the split-out bugs exist only in the implementing agents' reports, which the `documenter` cannot see, so if you do not forward them they are lost. Give it the symptom, the root cause and `file:line` if an agent established one, and whether it was actually verified. It owns every doc surface:
   - the Writerside pages in `docs/topics/`: the mapping table, the snippets, and (most easily missed) deleting the now-false line from the page's **Limitations** section
   - ROADMAP.md: tick the completed item, link its ADR
   - FEATURES.md: add or amend the mapping row in its feature category, ADR link in the ADRs column (skip if the feature adds no bridge mapping, e.g. pure plugin/DSL work). The catalogue is bidirectional: each row carries a **direction** glyph (`→` Kotlin → C#, `←` C# → Kotlin, `⇄` both). For a reverse feature, flip an existing row's glyph toward `⇄` (or add a `←` row) and use the Notes to capture any asymmetry (`→ … · ← …`) when the directions diverge
   - mark the relevant ADR as `Accepted`
+- **`refactorer` agent** (second, only once the `documenter` has reported back): do not scan the changed files yourself. Hand it `kotlin-dev`'s reported list of touched files and let it judge against [STYLE.md](../../../STYLE.md) and fix any violations in one pass. It reports back the files it changed (or "no violations") plus the test result.
 
 The `documenter` writes every snippet from code that compiles (`sample-library/`, the generated
 `Interop.cs`, the generated reverse output under `build/nuget-interop/`, `SampleApp.Tests/`), so run
@@ -104,16 +107,33 @@ this step only after the feature is verified and the build artefacts are current
 - You must delegate to the appropriate subagent
 - Research agents run in background when independent
 - After research is complete, share findings with humans for feedback before proceeding to implementation
-- Walking skeleton before fixtures (step 3 before step 4), and tests before implementation (step 4 before step 5)
+- Tests before implementation (step 3 before step 4)
+- **The fixture must cross every mechanism, not the fewest types.** Build it once, complete, before implementation starts. A fixture trimmed to the "simplest" type routinely picks the one type that needs no work at the seam the feature is actually about (an `int` struct component needs no marshalling conversion, so a generator that open-codes conversion passes anyway). That is worse than no fixture: it goes green, it is wrong, and the implementation gets shaped around the triviality. Pick the fixture that forces every seam to exist: one type that needs conversion, one that does not.
 - Pass agents file paths and intent, not file contents. They have Read and know the project layout, so let them read what they need.
 - Reuse warm agents (SendMessage) when iterating instead of spawning fresh ones
 - After implementation, verify locally by running `scripts/verify.sh` (add `--plugin` for Gradle plugin changes to also run the `nuget-plugin/` plugin unit tests). Fixture packages mint a fresh `1.0.0-fixture.<epoch-ms>` version on every pack, so a re-pack can no longer silently resolve against the old package. The script still wipes consumer `obj`/`bin` to keep the run self-contained.
 - **No manual path around `verify.sh`.** Never hand-edit generated output, hand-patch a generated shim, or copy files into `~/.nuget/packages/` to iterate faster. It manufactures bugs that look real, and you then pay to debug something that does not exist.
 - **Instrument before hypothesizing.** When the round trip fails, get evidence about what actually executes (is registration even firing? what does the generated artefact really contain?) before forming a theory. Never spend a long agent round bisecting a hypothesis that a cheap probe could have falsified in minutes.
-- **Split pre-existing bugs out.** A bug the fixture uncovers but the feature did not cause gets reported and split into its own commit/ticket immediately, it does not silently expand the feature's scope. A fixture that is the first to exercise some combination (first two bound classes in one namespace, first nullable-returning export that throws) *should* be expected to flush out latent bugs. That means the existing fixtures were unrealistic, it is not a distraction.
+- **Split pre-existing bugs out.** A bug the fixture uncovers but the feature did not cause gets reported and split into its own commit/ticket immediately, it does not silently expand the feature's scope. A fixture that is the first to exercise some combination (first two bound classes in one namespace, first nullable-returning export that throws) *should* be expected to flush out latent bugs. That means the existing fixtures were unrealistic, it is not a distraction. **Track every one you split out and hand the list to the `documenter` in Step 5**, which records them in ROADMAP.md. Splitting a bug out and then forgetting it is worse than never finding it: the next feature pays to rediscover it.
 - **No orphaned builds.** Agents must not leave a Gradle build running in the background: it holds the project lock and silently starves every agent behind it. When an agent goes quiet, check `ps` and `./gradlew --status` for an orphaned build before assuming the agent is stuck or thinking.
-- Step 6 is the last step, run only after the feature is verified. Spawn `refactorer` and `documenter` in parallel, in one message: the first owns the Kotlin, the second owns every doc surface (Writerside pages in `docs/topics/`, ROADMAP.md, FEATURES.md, ADR status).
+- Step 5 is the last step, run only after the feature is verified. Run `documenter` first, then `refactorer`, **serially**. The `refactorer`'s verify starts with `:sample-library:clean`, which deletes the `build/` output the `documenter` reads its snippets from; in parallel they race and the docs quietly lose snippets.
+- **Two agents that both drive Gradle cannot run in parallel in this repo.** One takes the project lock and the other queues silently. Parallel fan-out is safe only for agents that touch neither Gradle nor `build/` (e.g. several `research` agents at phase kickoff).
 - Never write the docs yourself. The `documenter` grounds every snippet in the real generated output; writing them from the main thread means writing them from memory.
+- **Log what the run cost.** When the feature is done, append a row per agent to [docs/workflow-log.csv](../../../docs/workflow-log.csv). See **Logging the run** below.
+
+## Logging the run
+
+Append **one row per agent** to [docs/workflow-log.csv](../../../docs/workflow-log.csv), including
+agents that never ran. **You write it** — the per-agent figures are in the `Agent`/`SendMessage`
+results, which no subagent can see.
+
+Columns: `feature,agent,tool_uses,tokens,wall_min,date,phase,direction,skill_sha,notes`
+
+- **The first row of each set is yours** (`agent` = `feature-design`): the run's **total**, summing every subagent you spawned. It is the headline number a retro reads. If any agent's figures are missing, say in `notes` that the total is a floor, rather than silently under-reporting it.
+- `skill_sha`: the `SKILL.md` that actually ran (`git log -1 --format=%h -- .claude/skills/feature-design/SKILL.md`). Without it the numbers are not comparable across features and the log is useless.
+- **A resumed agent reports cumulative tokens and tool uses.** Take each agent's *last* figure; summing its runs double-counts. `wall_min` does sum.
+- A lost or missing figure is an **empty cell**, never an estimate. A fabricated baseline poisons every comparison made against it.
+- `notes`: attach to the agent it concerns. Say what was **not** the skill (an outage, a usage limit, a hard feature), or a later retro will misread the row.
 
 ## Prompting subagents
 

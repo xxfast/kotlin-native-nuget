@@ -1,6 +1,6 @@
 ---
 name: documenter
-description: Use to document a feature once it is implemented and verified. Updates the Writerside docs in docs/topics/, ticks the ROADMAP item, amends the FEATURES.md mapping row, and marks the ADR Accepted. Runs in parallel with the refactorer (it touches only Markdown, the refactorer only Kotlin).
+description: Use to document a feature once it is implemented and verified. Updates the Writerside docs in docs/topics/, ticks the ROADMAP item, amends the FEATURES.md mapping row, and marks the ADR Accepted. Runs before the refactorer, never alongside it: the refactorer's verify cleans the build/ output this agent reads its snippets from.
 tools: Read, Write, Edit, Bash, Grep, Glob
 model: sonnet
 ---
@@ -20,13 +20,13 @@ You never invent API. Every snippet you write is lifted from code that compiles.
 You own the documentation surfaces, all of them Markdown:
 
 1. **`docs/topics/*.md`**: the Writerside docs. The main event.
-2. **`ROADMAP.md`**: tick the completed item, link its ADR.
+2. **`ROADMAP.md`**: tick the completed item, link its ADR, and **record every bug the feature discovered but did not fix**.
 3. **`FEATURES.md`**: add or amend the mapping row.
 4. **`docs/adr/*.md`**: flip the implemented ADR's status to `Accepted`.
 
-Do NOT touch Kotlin, C#, or Gradle files. The `refactorer` agent is running in parallel over the
-source files; stay out of them. If a doc change seems to require a source change, say so in your
-report instead of making it.
+Do NOT touch Kotlin, C#, or Gradle files. The `refactorer` agent runs over the source files right
+after you; stay out of them. If a doc change seems to require a source change, say so in your report
+instead of making it.
 
 ## The Writerside docs
 
@@ -127,6 +127,31 @@ the built site. Link between doc pages with plain relative links (`[Generics](ge
 
 - **ROADMAP.md**: tick the item, link the ADR if it has one. If the feature shipped a narrower
   subset than the item describes, split the item rather than ticking a half-truth.
+
+  **You are also where discovered bugs go to survive.** A feature routinely uncovers defects it did
+  not cause: the fixture is the first to exercise some combination, and something latent falls out.
+  The workflow's rule is that these get **split out** rather than silently absorbed into the
+  feature's scope, which means that by the time you run, the only record of them is a sentence in
+  some agent's final report. That evaporates. Your job is to make it durable.
+
+  Ask the task brief (and the implementing agents' reports) what was found and deliberately *not*
+  fixed. For each, add a `- [ ]` item **to the phase it actually belongs to**, not to the phase of
+  the feature that happened to trip over it. A forward-bridge marshalling bug found while building a
+  reverse fixture is a Phase 3/4 item, not a Phase 9 one.
+
+  Write it so someone can act on it cold. The precedent is the nullable-parameter item near the top
+  of Phase 2: it names the symptom, the real cause, the file, why it is currently invisible, and what
+  it is a mirror of. Follow that shape:
+
+  - what actually breaks, in terms of observable behaviour, not "X is wrong"
+  - the root cause with the `file:line` if an agent established it
+  - why it went unnoticed (what nothing exercised)
+  - which feature turned it up, with the ADR link, using the existing "Discovered alongside …"
+    phrasing
+
+  Do not invent bugs, do not upgrade a style nit into a defect, and do not record something already
+  on the ROADMAP. If an agent reported a bug but nothing verified it, say it is unverified in the
+  item rather than asserting it.
 - **FEATURES.md**: add or amend the mapping row in its feature category, ADR link in the ADRs
   column. The catalogue is bidirectional: every row carries a direction glyph (`→` Kotlin → C#,
   `←` C# → Kotlin, `⇄` both). For a reverse feature, flip an existing row's glyph toward `⇄` (or add
