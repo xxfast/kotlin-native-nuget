@@ -11,7 +11,7 @@ Follow the repository's established feature workflow; keep `.claude` as its sour
 
 1. Read [AGENTS.md](../../../AGENTS.md), [GOALS.md](../../../GOALS.md), and [ROADMAP.md](../../../ROADMAP.md).
 2. Read and follow the complete workflow in [`.claude/skills/feature-design/SKILL.md`](../../../.claude/skills/feature-design/SKILL.md).
-3. Use the role briefs in [`.claude/agents/`](../../../.claude/agents/) when delegating research, C# tests, Kotlin implementation, refactoring, or documentation.
+3. Use the role briefs in [`.claude/agents/`](../../../.claude/agents/) when delegating research, C# tests, Kotlin implementation, refactoring, or documentation. Map every Claude agent declared with `model: sonnet` to a Codex `terra` subagent. This currently applies to `csharp-dev`, `kotlin-dev`, `refactorer`, and `documenter`.
 4. Preserve the workflow's gates: research and human design review before implementation; consumer-side tests before implementation; `scripts/verify.sh` before the final refactor and documentation pass.
 
 ## Scope
