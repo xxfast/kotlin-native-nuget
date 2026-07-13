@@ -89,7 +89,9 @@ Any claim about what a real assembly or toolchain actually does at runtime (meta
 
 An ADR is **not** permitted to state an inferred claim in the confident register. An implementing agent will follow it literally, generate silently wrong output, and debug its way back out of it hours later. Write "inferred (not verified against a real net8.0 assembly): the ctor handle is expected to be a `MethodDefinitionHandle` because the attribute is compiler-synthesized" rather than asserting it as fact.
 
-List your inferred claims explicitly. Anything still inferred when you finish is the first thing the **walking skeleton** (Step 3 of the [feature-design skill](../skills/feature-design/SKILL.md)) must falsify.
+List your inferred claims explicitly.
+
+**You are the last line of defence.** No later step re-checks your claims: the next agent to read the ADR is an implementing agent, and it will follow the ADR literally. So a load-bearing claim does not get to stay inferred because it was inconvenient to check. Spike it (below). If you genuinely cannot, say so in the confident-red register, in the ADR and in your report: name the claim, say nobody has verified it, and say what breaks if it is wrong.
 
 ## Verification spikes: prove the load-bearing claim before you write it down
 

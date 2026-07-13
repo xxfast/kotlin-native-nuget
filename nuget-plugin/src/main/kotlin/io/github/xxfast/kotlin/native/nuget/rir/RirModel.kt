@@ -68,6 +68,28 @@ data class RirEnumEntry(
   val ordinal: Int,
 )
 
+// ADR-056: a C# struct that satisfies the Decision 3a "Shape A" rules — exactly one public
+// instance constructor, whose parameters (case-insensitively matched to public readable
+// properties of the same type) fully cover the struct's stored state. Struct members (methods,
+// computed properties) are deliberately not enumerated in v1: `components` is the complete wire
+// contract. Mirrors `RirStruct` in nuget-metadata-reader/Program.cs field-for-field.
+@Serializable
+@SerialName("struct")
+data class RirStruct(
+  override val name: String,
+  val components: List<RirStructComponent> = emptyList(),
+) : RirType
+
+// One component of a bridgeable struct (ADR-056). [name] is the constructor parameter name
+// (drives the Kotlin property name); [readName] is the public property used to read the value
+// back, which may differ in case from [name] (verified: ctor `x` vs. property `X`).
+@Serializable
+data class RirStructComponent(
+  val name: String,
+  val readName: String,
+  val type: RirTypeRef,
+)
+
 @Serializable
 data class RirMethod(
   val name: String,
@@ -141,6 +163,18 @@ data class RirEnumType(
   val name: String,
 ) : RirTypeRef
 
+// A reference to a bridgeable struct (ADR-056). Unlike RirObjectHandleType, this never crosses
+// the bridge as a pointer — both generators expand it into its RirStruct.components at the ABI
+// level (arguments in, out-pointers out; see RirBridging.kt's abiArgs/abiOutArgs/abiReturnType).
+// Carries no `nullable` flag by design: a nullable value type is System.Nullable<T>, a distinct
+// closed generic struct, not an annotation on this type ref.
+@Serializable
+@SerialName("struct")
+data class RirStructType(
+  val namespace: String,
+  val name: String,
+) : RirTypeRef
+
 @Serializable
 data class RirDiagnostic(
   val kind: RirDiagnosticKind,
@@ -181,6 +215,12 @@ enum class RirDiagnosticKind {
 
   @SerialName("skipped_unsupported_enum")
   SKIPPED_UNSUPPORTED_ENUM,
+
+  // ADR-056: a value-type candidate that failed the Decision 3a "Shape A" bridgeability rules
+  // (no/multiple public instance constructors, an unmatched or non-v1 component type, or stored
+  // fields not fully covered by the constructor). Never emitted as a class fallback.
+  @SerialName("skipped_unsupported_struct")
+  SKIPPED_UNSUPPORTED_STRUCT,
 
   @SerialName("info_async_not_yet_mapped")
   INFO_ASYNC_NOT_YET_MAPPED,

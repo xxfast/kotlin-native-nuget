@@ -13,7 +13,7 @@ ways, this page follows the code.
 | Public top-level static class | Yes, as a Kotlin `object` (see [Static classes and methods](static-classes-and-methods.md)) |
 | Interface | No members are bound to Kotlin; a default (non-abstract, non-static) interface method is explicitly skipped and diagnosed |
 | Enum | Yes, as a standalone Kotlin `enum class`, when it is public, top-level, default-`int` backed, non-`[Flags]`, and has unique contiguous values from `0` through `N-1` |
-| Struct / value type | No, as a **handle** type. `CollectBoundHandleTypeNames` explicitly excludes any type whose base type is `System.ValueType` or `System.Enum`, so a struct can never be used as an object-handle parameter or return elsewhere |
+| Struct / value type | Yes, but never as a **handle**. A struct is its own RIR node (never emitted as a class), and `CollectBoundHandleTypeNames` explicitly excludes any type whose base type is `System.ValueType` or `System.Enum`, so it can never become an object-handle parameter or return. A bridgeable ("Shape A") struct decomposes into an immutable Kotlin `data class` instead; see [C# structs](structs.md) |
 | `ref struct` (`Span<T>`, `ReadOnlySpan<T>`, custom) | No. Detected via the `IsByRefLikeAttribute` custom attribute; any member referencing one is skipped and diagnosed (`skipped_ref_struct`) |
 | Nested type (public or not) | No. The reader filters on `TypeAttributes.VisibilityMask == Public`, which excludes `NestedPublic` as well as every non-public visibility. Only top-level public types are candidates at all |
 | Generic type | Not explicitly filtered at the type level. A generic class is still enumerated as a candidate type, but virtually every member whose signature actually uses the open type parameter is skipped per-member (`skipped_open_generic`) when the parameter or return type is decoded, so a generic type in practice binds nothing unless it happens to expose non-generic members |
@@ -133,6 +133,7 @@ overload set.
 | `bool`, `byte`, `short`, `int`, `long`, `float`, `double`, `char` | primitives, direct or narrowed for ABI blittability |
 | A supported enum | ordinal `Int`, converted to and from a Kotlin `enum class` |
 | A bound, non-static, non-value-type, non-`ref struct` class from the current extraction | an opaque `GCHandle`-backed pointer (a "handle" type) |
+| A bridgeable ("Shape A") struct | decomposed onto the wire, one ABI argument per component (parameter) or one out-pointer per component (return); surfaces as an immutable Kotlin `data class`, no handle. See [C# structs](structs.md) |
 
 `string` and a bound handle type both carry real nullability now: a `NullableAttribute`/
 `NullableContextAttribute`-derived `nullable` flag on the `RirTypeRef` decides `String` vs. `String?`
@@ -140,7 +141,10 @@ and `Foo` vs. `Foo?` for every return, parameter, and property position (see
 [Objects and handles](objects-and-handles.md) and [Instance members](instance-members.md); ADR-053).
 `Nullable<T>` value types (`int?`, `CatMood?`) are the one nullable shape that still does not bridge:
 they carry no `NullableAttribute` at all (a nullable value type is `System.Nullable<T>`, a distinct
-closed generic struct) and need their own wire-format decision.
+closed generic struct). The wire format for it is no longer an open question: [ADR-056](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/056-csharp-structs-in-kotlin.md)'s
+struct out-pointer convention is exactly the format `Nullable<T>` needs, so this is unblocked and
+needs no further ADR, only the reader work to stop dropping `System.Nullable<T>` at
+`GetGenericInstantiation` (tracked in [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md) Phase 9).
 
 Everything else, arrays, collections, delegates, `dynamic`, `object`, open generics, does not bridge.
 `System.String` is the only external (out-of-assembly) reference type recognized; every other
@@ -250,6 +254,7 @@ queryable diagnostics report (only a Gradle log line exists today), tracked in
         <a href="static-classes-and-methods.md">Static classes and methods</a>
         <a href="objects-and-handles.md">Objects and handles</a>
         <a href="instance-members.md">Instance members</a>
+        <a href="structs.md">C# structs</a>
         <a href="registration-diagnostics.md">Registration diagnostics</a>
     </category>
     <category ref="external">
@@ -257,5 +262,6 @@ queryable diagnostics report (only a Gradle log line exists today), tracked in
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/046-reverse-ir-model-and-json-contract.md">ADR-046: Reverse IR model and JSON contract</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/049-csharp-registration-shim-generation.md">ADR-049: C# registration shim generation</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/053-nullable-reference-types-in-kotlin.md">ADR-053: Nullable reference types in Kotlin</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/056-csharp-structs-in-kotlin.md">ADR-056: C# structs (value types) in Kotlin</a>
     </category>
 </seealso>

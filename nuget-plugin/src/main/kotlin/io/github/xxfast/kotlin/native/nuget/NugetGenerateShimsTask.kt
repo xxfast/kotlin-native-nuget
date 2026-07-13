@@ -1,5 +1,6 @@
 package io.github.xxfast.kotlin.native.nuget
 
+import io.github.xxfast.kotlin.native.nuget.rir.AbiArg
 import io.github.xxfast.kotlin.native.nuget.rir.NUGET_RUNTIME_CONTRACT_HASH
 import io.github.xxfast.kotlin.native.nuget.rir.RirClass
 import io.github.xxfast.kotlin.native.nuget.rir.RirConstructor
@@ -12,10 +13,16 @@ import io.github.xxfast.kotlin.native.nuget.rir.RirPrimitiveType
 import io.github.xxfast.kotlin.native.nuget.rir.RirProperty
 import io.github.xxfast.kotlin.native.nuget.rir.RirRegistrable
 import io.github.xxfast.kotlin.native.nuget.rir.RirStringType
+import io.github.xxfast.kotlin.native.nuget.rir.RirStruct
+import io.github.xxfast.kotlin.native.nuget.rir.RirStructType
 import io.github.xxfast.kotlin.native.nuget.rir.RirTypeKey
 import io.github.xxfast.kotlin.native.nuget.rir.RirTypeRef
 import io.github.xxfast.kotlin.native.nuget.rir.RirVoidType
+import io.github.xxfast.kotlin.native.nuget.rir.abiArgs
+import io.github.xxfast.kotlin.native.nuget.rir.abiOutArgs
+import io.github.xxfast.kotlin.native.nuget.rir.abiReturnType
 import io.github.xxfast.kotlin.native.nuget.rir.boundHandleTypes
+import io.github.xxfast.kotlin.native.nuget.rir.boundStructTypes
 import io.github.xxfast.kotlin.native.nuget.rir.bridgeableRegistrables
 import io.github.xxfast.kotlin.native.nuget.rir.contractHash
 import io.github.xxfast.kotlin.native.nuget.rir.isNullable
@@ -52,6 +59,9 @@ fun generateCSharpShims(file: RirFile, nativeLibraryName: String): List<Generate
 
   // ADR-051: derive once for the whole file — same helper as generateKotlinStubs (anti-drift).
   val boundTypes: Set<RirTypeKey> = boundHandleTypes(file)
+  // ADR-056: same anti-drift pattern — both this task and NugetGenerateBindingsTask resolve a
+  // RirStructType reference's component list through this map.
+  val structs: Map<RirTypeKey, RirStruct> = boundStructTypes(file)
 
   file.assemblies.forEach { assembly ->
     assembly.namespaces.forEach { namespace ->
@@ -94,6 +104,7 @@ fun generateCSharpShims(file: RirFile, nativeLibraryName: String): List<Generate
               registrables = registrables,
               exportName = exportName,
               nativeLibraryName = nativeLibraryName,
+              structs = structs,
             ),
           )
         )
@@ -136,6 +147,13 @@ private fun csAbiType(type: RirTypeRef): String = when (type) {
   is RirStringType -> "IntPtr"
   is RirObjectHandleType -> "IntPtr"
   is RirEnumType -> "int"
+  // ADR-056: a struct never reaches csAbiType directly — every call site expands it via
+  // abiArgs/abiOutArgs (whose AbiArg.type is always scalar) before asking for an ABI type.
+  is RirStructType -> error(
+    "[nuget] struct ${type.namespace}.${type.name} must be expanded via abiArgs/abiOutArgs " +
+        "before reaching csAbiType."
+  )
+
   is RirPrimitiveType -> when (type.name) {
     "bool" -> "byte"
     "byte" -> "byte"
@@ -160,6 +178,10 @@ private fun csNativeType(type: RirTypeRef): String = when (type) {
   // ADR-051: the natural C# type for a handle is the simple type name (e.g. Template).
   is RirObjectHandleType -> type.name
   is RirEnumType -> type.name
+  // ADR-056: the natural C# type for a struct is its own simple type name (e.g. Point) — used for
+  // the `Point result = ...;` local the struct-return thunk branch declares before writing each
+  // component through its out-pointer.
+  is RirStructType -> type.name
   is RirPrimitiveType -> when (type.name) {
     "bool" -> "bool"
     "byte" -> "byte"
@@ -176,6 +198,32 @@ private fun csNativeType(type: RirTypeRef): String = when (type) {
   }
 }
 
+// ADR-056/049: the C# ABI-crossing conversion for a value of type [type] on the RETURN side —
+// shared by a top-level method/property return (wrapped in "return ...;") and a struct
+// component's out-pointer write-back (wrapped in "*outX = ...;"). A conversion added here
+// automatically applies to BOTH call sites, closing the drift the struct-return write-back would
+// otherwise re-derive independently — mirrors paramConversion's role for the PARAMETER side.
+// RirObjectHandleType is deliberately excluded: its return has its own
+// null-check-then-GCHandle.Alloc shape that does not fit a single-expression conversion, and it is
+// not in the v1 struct component vocabulary anyway (ADR-056), so callBodyLines' RirObjectHandleType
+// branch stays hand-written.
+private fun csReturnConversion(type: RirTypeRef, valueExpr: String): String = when (type) {
+  is RirVoidType -> error("[nuget] void has no return conversion")
+  is RirStringType -> "Marshal.StringToCoTaskMemUTF8($valueExpr)"
+  is RirObjectHandleType -> error(
+    "[nuget] handle returns have their own null-check shape — see callBodyLines, not " +
+        "csReturnConversion"
+  )
+
+  is RirEnumType -> "(int)$valueExpr"
+  is RirStructType -> error("[nuget] nested struct components are not supported in v1 (ADR-056)")
+  is RirPrimitiveType -> when (type.name) {
+    "bool" -> "$valueExpr ? (byte)1 : (byte)0"
+    "char" -> "(ushort)$valueExpr"
+    else -> valueExpr
+  }
+}
+
 // PascalCase method name → camelCase: lowercase the first character only.
 // e.g. SerializeObject → serializeObject
 private fun String.toMethodCamelCase(): String = replaceFirstChar { it.lowercaseChar() }
@@ -188,6 +236,14 @@ private fun String.toMethodCamelCase(): String = replaceFirstChar { it.lowercase
 private fun thunkParamName(p: RirParameter): String = when (p.type) {
   is RirStringType -> "${p.name}Ptr"
   is RirObjectHandleType -> "${p.name}Handle"
+  // ADR-056: a struct-typed parameter never reaches thunkParamName — its thunk-level parameter
+  // NAMES are the shared abiArgs() expansion's own AbiArg.name (e.g. "p_X", "p_Y"), built directly
+  // in buildThunkMethod's inParamDecls, not derived from a single RirParameter.
+  is RirStructType -> error(
+    "[nuget] struct ${p.type.namespace}.${p.type.name} must be expanded via abiArgs before " +
+        "reaching thunkParamName."
+  )
+
   else -> p.name
 }
 
@@ -202,6 +258,13 @@ private fun paramConversion(p: RirParameter): String = when (p.type) {
   is RirObjectHandleType -> "(${p.type.name})GCHandle.FromIntPtr(${thunkParamName(p)}).Target!"
   is RirEnumType -> "(${p.type.name})${thunkParamName(p)}"
   is RirVoidType -> thunkParamName(p)
+  // ADR-056: a struct-typed parameter is reconstructed via `new T(...)` in paramBinding, which
+  // intercepts it before paramConversion is ever called — see paramBinding below.
+  is RirStructType -> error(
+    "[nuget] a struct-typed parameter must be reconstructed via `new T(...)` (see paramBinding) " +
+        "before reaching paramConversion — got ${p.type.namespace}.${p.type.name}"
+  )
+
   is RirPrimitiveType -> when (p.type.name) {
     "bool" -> "${thunkParamName(p)} != 0"
     "char" -> "(char)${thunkParamName(p)}"
@@ -215,10 +278,32 @@ private fun paramConversion(p: RirParameter): String = when (p.type) {
 // an IntPtr.Zero check bound to its own local variable, which the call expression then simply
 // references by name; every other parameter shape keeps the existing inline paramConversion(p)
 // expression untouched — this only special-cases the one shape that needs a statement of its own.
+//
+// ADR-056: a struct-typed parameter is reconstructed via `new T(componentArgs)`, where
+// componentArgs are the SAME shared abiArgs() expansion's names (e.g. "p_X", "p_Y") — calling
+// abiArgs on a singleton list containing just this parameter yields exactly its component group,
+// byte-identical to slicing the full per-method abiArgs() call at this parameter's boundary.
 private data class ParamBinding(val declarationLines: List<String>, val expression: String)
 
-private fun paramBinding(p: RirParameter): ParamBinding {
+private fun paramBinding(p: RirParameter, structs: Map<RirTypeKey, RirStruct>): ParamBinding {
   val type: RirTypeRef = p.type
+  if (type is RirStructType) {
+    val struct = requireNotNull(structs[RirTypeKey(type.namespace, type.name)]) {
+      "[nuget] struct ${type.namespace}.${type.name} is referenced as a parameter type but not " +
+          "declared in reverse-ir.json"
+    }
+    // Each component is converted through the SAME paramConversion(...) a top-level parameter of
+    // that component's type would use (byte->bool, ushort->char, IntPtr->string, etc.) — wrapping
+    // the AbiArg back into a synthetic RirParameter reuses that logic instead of re-deriving it,
+    // and guarantees the declared name matches inParamDecls above (both call thunkParamName on
+    // the same (arg.name, arg.type) pair).
+    val componentArgs: String = abiArgs(listOf(p), structs)
+      .joinToString(", ") { arg -> paramConversion(RirParameter(arg.name, arg.type)) }
+    return ParamBinding(
+      declarationLines = emptyList(),
+      expression = "new ${struct.name}($componentArgs)",
+    )
+  }
   if (type is RirObjectHandleType && type.nullable) {
     val handleName: String = thunkParamName(p)
     return ParamBinding(
@@ -233,18 +318,44 @@ private fun paramBinding(p: RirParameter): ParamBinding {
   return ParamBinding(declarationLines = emptyList(), expression = paramConversion(p))
 }
 
-// Every enum type referenced by a class's registrable members, deduplicated. Unlike the Kotlin
-// side, no lookup table is needed to resolve one: RirEnumType.namespace already IS the C#
-// namespace the enum is declared in.
-private fun referencedEnumTypes(registrables: List<RirRegistrable>): List<RirEnumType> =
+// ADR-056: every enum a struct's OWN components reference, given a type reference that may be the
+// struct itself — mirrors the Kotlin side's structEnumComponents. A struct can only be one level
+// deep in v1 (nested struct components are unsupported), so no recursion is needed.
+private fun structEnumComponents(
+  type: RirTypeRef,
+  structs: Map<RirTypeKey, RirStruct>,
+): List<RirEnumType> {
+  val struct: RirStruct? =
+    (type as? RirStructType)?.let { structs[RirTypeKey(it.namespace, it.name)] }
+  return struct?.components.orEmpty().mapNotNull { it.type as? RirEnumType }
+}
+
+// Every enum type referenced by a class's registrable members, deduplicated — including one
+// referenced only as a STRUCT COMPONENT (a shim renders inside `namespace $namespaceName`, so an
+// enum declared elsewhere needs a `using`, whether it appears directly or via a struct's own
+// component list). Unlike the Kotlin side, no lookup table is needed to resolve one:
+// RirEnumType.namespace already IS the C# namespace the enum is declared in.
+private fun referencedEnumTypes(
+  registrables: List<RirRegistrable>,
+  structs: Map<RirTypeKey, RirStruct>,
+): List<RirEnumType> =
   registrables.flatMap { r ->
     when (r) {
-      is RirRegistrable.Ctor -> r.ctor.parameters.mapNotNull { it.type as? RirEnumType }
-      is RirRegistrable.Method -> listOfNotNull(r.method.returnType as? RirEnumType) +
-          r.method.parameters.mapNotNull { it.type as? RirEnumType }
+      is RirRegistrable.Ctor -> r.ctor.parameters.flatMap {
+        listOfNotNull(it.type as? RirEnumType) + structEnumComponents(it.type, structs)
+      }
 
-      is RirRegistrable.PropertyGetter -> listOfNotNull(r.property.type as? RirEnumType)
-      is RirRegistrable.PropertySetter -> listOfNotNull(r.property.type as? RirEnumType)
+      is RirRegistrable.Method -> listOfNotNull(r.method.returnType as? RirEnumType) +
+          structEnumComponents(r.method.returnType, structs) +
+          r.method.parameters.flatMap {
+            listOfNotNull(it.type as? RirEnumType) + structEnumComponents(it.type, structs)
+          }
+
+      is RirRegistrable.PropertyGetter -> listOfNotNull(r.property.type as? RirEnumType) +
+          structEnumComponents(r.property.type, structs)
+
+      is RirRegistrable.PropertySetter -> listOfNotNull(r.property.type as? RirEnumType) +
+          structEnumComponents(r.property.type, structs)
     }
   }.distinct()
 
@@ -254,11 +365,12 @@ private fun registrationFileContent(
   registrables: List<RirRegistrable>,
   exportName: String,
   nativeLibraryName: String,
+  structs: Map<RirTypeKey, RirStruct>,
 ): String {
   // A shim renders inside `namespace $namespaceName`, so an enum declared in any other namespace
   // (a C# enum in `Sample.Enums` referenced by a class in `Sample.Text`, say) is out of scope for
   // the `(Mood)mood` casts in the thunk bodies below unless its namespace is imported here.
-  val enumNamespaces: List<String> = referencedEnumTypes(registrables)
+  val enumNamespaces: List<String> = referencedEnumTypes(registrables, structs)
     .map { it.namespace }
     .distinct()
     .filter { it != namespaceName }
@@ -277,7 +389,7 @@ private fun registrationFileContent(
   // contractHash() function NugetGenerateBindingsTask calls, so within one build the two
   // generated sides can never disagree on either value.
   val slotCount: Int = registrables.size
-  val hash: Long = contractHash(cls, registrables)
+  val hash: Long = contractHash(cls, registrables, structs)
   val qualifiedType: String = "$namespaceName.${cls.name}"
   val slotWord: String = if (slotCount == 1) "slot" else "slots"
 
@@ -306,8 +418,16 @@ private fun registrationFileContent(
       }
 
       is RirRegistrable.Method -> {
-        val paramTypes: String = r.method.parameters.joinToString(", ") { p -> csAbiType(p.type) }
-        val retType: String = csAbiType(r.method.returnType)
+        // ADR-056: expanded through the shared abiArgs/abiOutArgs/abiReturnType functions — a
+        // struct-typed parameter contributes one delegate* type per component, and a struct-typed
+        // return appends one out-pointer type (T*) per component, with the delegate*'s own return
+        // becoming void. A no-op (identical to the pre-ADR-056 direct mapping) for any method with
+        // no struct in its signature.
+        val inTypes: List<String> = abiArgs(r.method.parameters, structs).map { csAbiType(it.type) }
+        val outTypes: List<String> = abiOutArgs(r.method.returnType, structs)
+          .map { "${csAbiType(it.type)}*" }
+        val paramTypes: String = (inTypes + outTypes).joinToString(", ")
+        val retType: String = csAbiType(abiReturnType(r.method.returnType, structs))
         // Phase 9 (ROADMAP line 151): an instance method thunk keeps the existing bare
         // `{MethodName}_Thunk` name (methods are already named this way regardless of
         // static/instance) — only its parameter list gains a leading IntPtr selfHandle, already
@@ -315,30 +435,45 @@ private fun registrationFileContent(
         val selfParamType: String? = if (!r.method.isStatic) "IntPtr" else null
         val allParamTypes: String = listOfNotNull(selfParamType, paramTypes.ifEmpty { null })
           .joinToString(", ")
-        val fnTypeParams: String = if (allParamTypes.isEmpty()) retType else "$allParamTypes, $retType"
+        val fnTypeParams: String =
+          if (allParamTypes.isEmpty()) retType else "$allParamTypes, $retType"
         "(IntPtr)(delegate* unmanaged[Cdecl]<$fnTypeParams>)(&${r.method.name}_Thunk)"
       }
 
+      // ADR-056: expanded through the shared abiOutArgs/abiReturnType functions — a struct-typed
+      // property's getter appends one out-pointer type per component with its own return
+      // becoming void, matching buildPropertyGetterThunkMethod's paramList exactly. A no-op for
+      // a property whose type is not a struct.
       is RirRegistrable.PropertyGetter -> {
-        val retType: String = csAbiType(r.property.type)
-        val receiverType: String = if (r.property.isStatic) "" else "IntPtr, "
-        "(IntPtr)(delegate* unmanaged[Cdecl]<$receiverType$retType>)(&${r.property.name}_Get_Thunk)"
+        val outTypes: List<String> =
+          abiOutArgs(r.property.type, structs).map { "${csAbiType(it.type)}*" }
+        val retType: String = csAbiType(abiReturnType(r.property.type, structs))
+        val receiverType: String? = if (r.property.isStatic) null else "IntPtr"
+        val allParamTypes: String = (listOfNotNull(receiverType) + outTypes).joinToString(", ")
+        val fnTypeParams: String =
+          if (allParamTypes.isEmpty()) retType else "$allParamTypes, $retType"
+        "(IntPtr)(delegate* unmanaged[Cdecl]<$fnTypeParams>)(&${r.property.name}_Get_Thunk)"
       }
 
+      // ADR-056: expanded through the shared abiArgs function — a struct-typed property's setter
+      // expands into one in-arg type per component, matching buildPropertySetterThunkMethod's
+      // paramList exactly. A no-op for a property whose type is not a struct.
       is RirRegistrable.PropertySetter -> {
-        val valueType: String = csAbiType(r.property.type)
-        val receiverType: String = if (r.property.isStatic) "" else "IntPtr, "
-        "(IntPtr)(delegate* unmanaged[Cdecl]<$receiverType$valueType, void>)(&${r.property.name}_Set_Thunk)"
+        val valueParam = RirParameter(name = "value", type = r.property.type)
+        val inTypes: List<String> = abiArgs(listOf(valueParam), structs).map { csAbiType(it.type) }
+        val receiverType: String? = if (r.property.isStatic) null else "IntPtr"
+        val allParamTypes: String = (listOfNotNull(receiverType) + inTypes).joinToString(", ")
+        "(IntPtr)(delegate* unmanaged[Cdecl]<$allParamTypes, void>)(&${r.property.name}_Set_Thunk)"
       }
     }
   }).joinToString(",\n                    ")
 
   val thunks: String = registrables.joinToString("\n\n") { r ->
     when (r) {
-      is RirRegistrable.Ctor -> buildCtorThunkMethod(cls, r.ctor)
-      is RirRegistrable.Method -> buildThunkMethod(cls, r.method)
-      is RirRegistrable.PropertyGetter -> buildPropertyGetterThunkMethod(cls, r.property)
-      is RirRegistrable.PropertySetter -> buildPropertySetterThunkMethod(cls, r.property)
+      is RirRegistrable.Ctor -> buildCtorThunkMethod(cls, r.ctor, structs)
+      is RirRegistrable.Method -> buildThunkMethod(cls, r.method, structs)
+      is RirRegistrable.PropertyGetter -> buildPropertyGetterThunkMethod(cls, r.property, structs)
+      is RirRegistrable.PropertySetter -> buildPropertySetterThunkMethod(cls, r.property, structs)
     }
   }
 
@@ -389,7 +524,11 @@ private fun registrationFileContent(
   """.trimMargin()
 }
 
-private fun buildThunkMethod(cls: RirClass, method: RirMethod): String {
+private fun buildThunkMethod(
+  cls: RirClass,
+  method: RirMethod,
+  structs: Map<RirTypeKey, RirStruct>,
+): String {
   val thunkName: String = "${method.name}_Thunk"
 
   // Phase 9 (ROADMAP line 151): "an instance thunk is a static thunk whose first parameter is the
@@ -398,13 +537,38 @@ private fun buildThunkMethod(cls: RirClass, method: RirMethod): String {
   // parameters, then call the method on the resolved receiver instance rather than statically on
   // the type. Static methods are unaffected.
   val selfParam: String? = if (!method.isStatic) "IntPtr selfHandle" else null
-  val paramList: String = (listOfNotNull(selfParam) +
-      method.parameters.map { p -> "${csAbiType(p.type)} ${thunkParamName(p)}" }).joinToString(", ")
-  val retAbiType: String = csAbiType(method.returnType)
+
+  // ADR-056, the anti-drift requirement: the SAME shared abiArgs/abiOutArgs/abiReturnType
+  // expansion the Kotlin side's methodParamCfnTypes consumes — a struct-typed parameter expands
+  // into one thunk parameter per component (e.g. "int p_X, int p_Y"), and a struct-typed return
+  // appends one out-pointer parameter per component (e.g. "int* outX, int* outY") with the
+  // thunk's own return becoming void. A no-op for a method with no struct in its signature.
+  val inArgs: List<AbiArg> = abiArgs(method.parameters, structs)
+  val outArgs: List<AbiArg> = abiOutArgs(method.returnType, structs)
+  val abiRetType: RirTypeRef = abiReturnType(method.returnType, structs)
+
+  // ADR-051's existing Ptr/Handle thunkParamName suffix convention still applies per ABI in-arg
+  // — reused via a synthetic RirParameter(arg.name, arg.type) so a struct's decomposed "p_Tag"
+  // string component gets exactly the same "p_TagPtr" declared name paramBinding's struct branch
+  // below asks for (both wrap the SAME AbiArg through the SAME thunkParamName/paramConversion
+  // functions, so the two can never drift). An out-pointer argument keeps its bare AbiArg.name —
+  // its own `T*` declared type already marks it as the raw ABI slot, so no suffix is needed.
+  val inParamDecls: List<String> = inArgs.map { arg ->
+    "${csAbiType(arg.type)} ${thunkParamName(RirParameter(arg.name, arg.type))}"
+  }
+  val outParamDecls: List<String> = outArgs.map { arg -> "${csAbiType(arg.type)}* ${arg.name}" }
+  val paramList: String =
+    (listOfNotNull(selfParam) + inParamDecls + outParamDecls).joinToString(", ")
+  val retAbiType: String = csAbiType(abiRetType)
+  // Only the out-pointer writes (and the reconstruction of a struct PARAMETER, which never uses a
+  // pointer — see paramBinding) require `unsafe`; a struct return is the only source of pointer
+  // types in this thunk's signature.
+  val needsUnsafe: Boolean = outArgs.isNotEmpty()
+
   // ADR-053: a nullable-annotated handle parameter needs its own guarded local declaration (see
   // paramBinding) instead of being converted inline — gathered here so those declarations can be
   // emitted as statements ahead of the call, while every other parameter still converts inline.
-  val paramBindings: List<ParamBinding> = method.parameters.map { paramBinding(it) }
+  val paramBindings: List<ParamBinding> = method.parameters.map { paramBinding(it, structs) }
   val paramDeclarationLines: List<String> = paramBindings.flatMap { it.declarationLines }
   val callArgs: String = paramBindings.joinToString(", ") { it.expression }
   val receiverLine: String? = if (!method.isStatic) {
@@ -413,17 +577,18 @@ private fun buildThunkMethod(cls: RirClass, method: RirMethod): String {
     null
   }
   val callExpr: String =
-    if (method.isStatic) "${cls.name}.${method.name}($callArgs)" else "receiver.${method.name}($callArgs)"
+    if (method.isStatic) "${cls.name}.${method.name}($callArgs)"
+    else "receiver.${method.name}($callArgs)"
 
-  val callBodyLines: List<String> = when (method.returnType) {
+  val callBodyLines: List<String> = when (val retType = method.returnType) {
     is RirVoidType -> listOf("$callExpr;")
 
     // ADR-053: a nullable-annotated string return declares its local as `string?` — the shim's
     // `#nullable enable` would otherwise warn CS8600 on assigning a possibly-null string to a
     // non-null local. A non-null-annotated return (including an oblivious one) is unaffected.
     is RirStringType -> listOf(
-      "${if (method.returnType.isNullable) "string?" else "string"} result = $callExpr;",
-      "return Marshal.StringToCoTaskMemUTF8(result);",
+      "${if (retType.isNullable) "string?" else "string"} result = $callExpr;",
+      "return ${csReturnConversion(retType, "result")};",
     )
 
     // ADR-051/ADR-053: wrap the returned object in a Normal GCHandle, return its IntPtr. If the
@@ -433,28 +598,46 @@ private fun buildThunkMethod(cls: RirClass, method: RirMethod): String {
     // C# API claims the return is never null — a lying API becomes a clear Kotlin-side
     // IllegalStateException instead of a crash deep in some later thunk.
     is RirObjectHandleType -> listOf(
-      "${csNativeType(method.returnType)}? result = $callExpr;",
+      "${csNativeType(retType)}? result = $callExpr;",
       "return result is null ? IntPtr.Zero : GCHandle.ToIntPtr(GCHandle.Alloc(result));",
     )
 
     is RirEnumType -> listOf(
-      "${csNativeType(method.returnType)} result = $callExpr;",
-      "return (int)result;",
+      "${csNativeType(retType)} result = $callExpr;",
+      "return ${csReturnConversion(retType, "result")};",
     )
 
-    is RirPrimitiveType -> when (method.returnType.name) {
+    // ADR-056: a struct-typed return crosses as void plus one out-pointer write per component,
+    // each routed through the SAME csReturnConversion(...) a top-level return of that component's
+    // type would use (Marshal.StringToCoTaskMemUTF8 for string, the byte/ushort narrowing for
+    // bool/char, the enum cast) — a raw `result.X` assignment is only correct for the
+    // pass-through primitives (int/long/float/double). struct.components and outArgs share the
+    // same order (abiOutArgs is built directly off struct.components), so zipping them pairs each
+    // component with its own out-pointer.
+    is RirStructType -> {
+      val struct = requireNotNull(structs[RirTypeKey(retType.namespace, retType.name)]) {
+        "[nuget] struct ${retType.namespace}.${retType.name} is referenced as a return type but " +
+            "not declared in reverse-ir.json"
+      }
+      listOf("${csNativeType(retType)} result = $callExpr;") +
+          struct.components.zip(outArgs).map { (c, arg) ->
+            "*${arg.name} = ${csReturnConversion(c.type, "result.${c.readName}")};"
+          }
+    }
+
+    is RirPrimitiveType -> when (retType.name) {
       "bool" -> listOf(
         "bool result = $callExpr;",
-        "return result ? (byte)1 : (byte)0;",
+        "return ${csReturnConversion(retType, "result")};",
       )
 
       "char" -> listOf(
         "char result = $callExpr;",
-        "return (ushort)result;",
+        "return ${csReturnConversion(retType, "result")};",
       )
 
       else -> listOf(
-        "${csNativeType(method.returnType)} result = $callExpr;",
+        "${csNativeType(retType)} result = $callExpr;",
         "return result;",
       )
     }
@@ -462,13 +645,14 @@ private fun buildThunkMethod(cls: RirClass, method: RirMethod): String {
 
   val bodyLines: List<String> = listOfNotNull(receiverLine) + paramDeclarationLines + callBodyLines
   val body: String = bodyLines.joinToString("\n") { "            $it" }
+  val unsafeKeyword: String = if (needsUnsafe) "unsafe " else ""
 
   // ADR-049 "let it crash": deliberately no try/catch. A thrown C# exception escapes this thunk
   // and fast-fails the host process (loud failure is preferred over a silently-wrong sentinel;
   // graceful propagation is deferred to Phase 11). Do not add exception handling here.
   return """
     |        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
-    |        private static $retAbiType $thunkName($paramList)
+    |        private static ${unsafeKeyword}$retAbiType $thunkName($paramList)
     |        {
     |$body
     |        }
@@ -478,61 +662,89 @@ private fun buildThunkMethod(cls: RirClass, method: RirMethod): String {
 // Phase 9 (ROADMAP line 151): a property getter thunk — always takes IntPtr selfHandle (the
 // receiver), resolves it via GCHandle.FromIntPtr(...).Target!, and returns the marshalled value
 // (Marshal.StringToCoTaskMemUTF8 for a string-typed property, per ADR-048/049).
-private fun buildPropertyGetterThunkMethod(cls: RirClass, property: RirProperty): String {
+private fun buildPropertyGetterThunkMethod(
+  cls: RirClass,
+  property: RirProperty,
+  structs: Map<RirTypeKey, RirStruct>,
+): String {
   val thunkName = "${property.name}_Get_Thunk"
-  val retAbiType: String = csAbiType(property.type)
   val receiverLine: String? = if (property.isStatic) null
   else "${cls.name} receiver = (${cls.name})GCHandle.FromIntPtr(selfHandle).Target!;"
   val getExpr: String = if (property.isStatic) "${cls.name}.${property.name}"
   else "receiver.${property.name}"
 
-  val bodyLines: List<String> = when (property.type) {
+  // ADR-056: expanded through the shared abiOutArgs/abiReturnType functions — a struct-typed
+  // property's getter appends one out-pointer parameter per component (the getter's own return
+  // becomes void) — a no-op for a property whose type is not a struct.
+  val outArgs: List<AbiArg> = abiOutArgs(property.type, structs)
+  val abiRetType: RirTypeRef = abiReturnType(property.type, structs)
+  val retAbiType: String = csAbiType(abiRetType)
+  val needsUnsafe: Boolean = outArgs.isNotEmpty()
+
+  val bodyLines: List<String> = when (val type = property.type) {
     is RirVoidType -> error("[nuget] a property cannot have void type")
+
+    // ADR-056: "property getter -> as a return (out-pointers)" — same shape as buildThunkMethod's
+    // struct-return branch, routed through the same csReturnConversion per component.
+    is RirStructType -> {
+      val struct = requireNotNull(structs[RirTypeKey(type.namespace, type.name)]) {
+        "[nuget] struct ${type.namespace}.${type.name} is referenced as a property type but not " +
+            "declared in reverse-ir.json"
+      }
+      listOf("${csNativeType(type)} result = $getExpr;") +
+          struct.components.zip(outArgs).map { (c, arg) ->
+            "*${arg.name} = ${csReturnConversion(c.type, "result.${c.readName}")};"
+          }
+    }
 
     // ADR-053: same nullable-local treatment as buildThunkMethod's return handling above.
     is RirStringType -> listOf(
-      "${if (property.type.isNullable) "string?" else "string"} result = $getExpr;",
-      "return Marshal.StringToCoTaskMemUTF8(result);",
+      "${if (type.isNullable) "string?" else "string"} result = $getExpr;",
+      "return ${csReturnConversion(type, "result")};",
     )
 
     // ADR-051/ADR-053: wrap the returned object in a Normal GCHandle, return its IntPtr. If the
     // property returns null, return IntPtr.Zero — identical for both a nullable- and a non-null-
     // annotated property, same rationale as buildThunkMethod's handle-return branch above.
     is RirObjectHandleType -> listOf(
-      "${csNativeType(property.type)}? result = $getExpr;",
+      "${csNativeType(type)}? result = $getExpr;",
       "return result is null ? IntPtr.Zero : GCHandle.ToIntPtr(GCHandle.Alloc(result));",
     )
 
     is RirEnumType -> listOf(
-      "${csNativeType(property.type)} result = $getExpr;",
-      "return (int)result;",
+      "${csNativeType(type)} result = $getExpr;",
+      "return ${csReturnConversion(type, "result")};",
     )
 
-    is RirPrimitiveType -> when (property.type.name) {
+    is RirPrimitiveType -> when (type.name) {
       "bool" -> listOf(
         "bool result = $getExpr;",
-        "return result ? (byte)1 : (byte)0;",
+        "return ${csReturnConversion(type, "result")};",
       )
 
       "char" -> listOf(
         "char result = $getExpr;",
-        "return (ushort)result;",
+        "return ${csReturnConversion(type, "result")};",
       )
 
       else -> listOf(
-        "${csNativeType(property.type)} result = $getExpr;",
+        "${csNativeType(type)} result = $getExpr;",
         "return result;",
       )
     }
   }
 
-  val body: String = (listOfNotNull(receiverLine) + bodyLines).joinToString("\n") { "            $it" }
-  val params: String = if (property.isStatic) "" else "IntPtr selfHandle"
+  val body: String =
+    (listOfNotNull(receiverLine) + bodyLines).joinToString("\n") { "            $it" }
+  val outParamDecls: List<String> = outArgs.map { arg -> "${csAbiType(arg.type)}* ${arg.name}" }
+  val receiverParam: String? = if (property.isStatic) null else "IntPtr selfHandle"
+  val params: String = (listOfNotNull(receiverParam) + outParamDecls).joinToString(", ")
+  val unsafeKeyword: String = if (needsUnsafe) "unsafe " else ""
 
   // ADR-049 "let it crash" (unchanged, Phase 9 line 151): no try/catch.
   return """
     |        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
-    |        private static $retAbiType $thunkName($params)
+    |        private static ${unsafeKeyword}$retAbiType $thunkName($params)
     |        {
     |$body
     |        }
@@ -544,25 +756,37 @@ private fun buildPropertyGetterThunkMethod(cls: RirClass, property: RirProperty)
 // RirParameter("value", property.type) so the marshalling rules never drift from method
 // parameters (e.g. a string value thunk-parameter is named "valuePtr", a handle value
 // "valueHandle").
-private fun buildPropertySetterThunkMethod(cls: RirClass, property: RirProperty): String {
+private fun buildPropertySetterThunkMethod(
+  cls: RirClass,
+  property: RirProperty,
+  structs: Map<RirTypeKey, RirStruct>,
+): String {
   val thunkName = "${property.name}_Set_Thunk"
   val valueParam = RirParameter(name = "value", type = property.type)
-  val valueParamName: String = thunkParamName(valueParam)
-  val valueAbiType: String = csAbiType(property.type)
   val receiverLine: String? = if (property.isStatic) null
   else "${cls.name} receiver = (${cls.name})GCHandle.FromIntPtr(selfHandle).Target!;"
   val assignTarget: String = if (property.isStatic) "${cls.name}.${property.name}"
   else "receiver.${property.name}"
-  val valueBinding: ParamBinding = paramBinding(valueParam)
+  val valueBinding: ParamBinding = paramBinding(valueParam, structs)
   val assignLine = "$assignTarget = ${valueBinding.expression};"
   val body: String = (listOfNotNull(receiverLine) + valueBinding.declarationLines + assignLine)
     .joinToString("\n") { "            $it" }
-  val receiverParam: String = if (property.isStatic) "" else "IntPtr selfHandle, "
+
+  // ADR-056: expanded through the shared abiArgs() function — a struct-typed property value
+  // expands into one thunk parameter per component (matching exactly what paramBinding's own
+  // struct branch above already assumes when it reconstructs `new T(...)` from these same
+  // AbiArg names) — a no-op for a property whose type is not a struct.
+  val inArgs: List<AbiArg> = abiArgs(listOf(valueParam), structs)
+  val inParamDecls: List<String> = inArgs.map { arg ->
+    "${csAbiType(arg.type)} ${thunkParamName(RirParameter(arg.name, arg.type))}"
+  }
+  val receiverParamDecl: String? = if (property.isStatic) null else "IntPtr selfHandle"
+  val paramList: String = (listOfNotNull(receiverParamDecl) + inParamDecls).joinToString(", ")
 
   // ADR-049 "let it crash" (unchanged, Phase 9 line 151): no try/catch.
   return """
     |        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
-    |        private static void $thunkName($receiverParam$valueAbiType $valueParamName)
+    |        private static void $thunkName($paramList)
     |        {
     |$body
     |        }
@@ -572,10 +796,14 @@ private fun buildPropertySetterThunkMethod(cls: RirClass, property: RirProperty)
 // ADR-052: the constructor thunk. Mirrors ADR-051's factory thunks (e.g. Parse_Thunk) but calls
 // `new` and is unconditionally non-null — a C# constructor either succeeds or throws, it never
 // yields IntPtr.Zero (contrast ADR-051's nullable-factory `result is null ? IntPtr.Zero : …`).
-private fun buildCtorThunkMethod(cls: RirClass, ctor: RirConstructor): String {
+private fun buildCtorThunkMethod(
+  cls: RirClass,
+  ctor: RirConstructor,
+  structs: Map<RirTypeKey, RirStruct>,
+): String {
   val paramList: String = ctor.parameters
     .joinToString(", ") { p -> "${csAbiType(p.type)} ${thunkParamName(p)}" }
-  val paramBindings: List<ParamBinding> = ctor.parameters.map { paramBinding(it) }
+  val paramBindings: List<ParamBinding> = ctor.parameters.map { paramBinding(it, structs) }
   val paramDeclarationLines: List<String> = paramBindings.flatMap { it.declarationLines }
   val callArgs: String = paramBindings.joinToString(", ") { it.expression }
 

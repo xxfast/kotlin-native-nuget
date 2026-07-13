@@ -62,6 +62,10 @@ The v1 enum subset is deliberately ordinal-backed: default-`int`, non-`[Flags]` 
 are unique and contiguous from `0` through `N-1`. See [The bridgeable subset](bridgeable-subset.md)
 for the supported positions and exclusions.
 
+A bridgeable struct is extracted too, but it never becomes a handle: its components (drawn from its
+single public constructor) decompose onto the wire, and it surfaces as an immutable Kotlin
+`data class` with no registration export of its own. See [C# structs](structs.md).
+
 ### `nugetGenerateBindings` and `nugetGenerateShims`: two generators, one contract
 
 Both tasks read the identical `reverse-ir.json` and must agree on one shared contract, fixed by
@@ -194,6 +198,7 @@ install pointer rather than a cryptic subprocess error.
         <a href="objects-and-handles.md">Objects and handles</a>
         <a href="registration-diagnostics.md">Registration diagnostics</a>
         <a href="instance-members.md">Instance members</a>
+        <a href="structs.md">C# structs</a>
         <a href="bridgeable-subset.md">The bridgeable subset</a>
     </category>
     <category ref="external">
@@ -205,5 +210,6 @@ install pointer rather than a cryptic subprocess error.
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/049-csharp-registration-shim-generation.md">ADR-049: C# registration shim generation</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/050-end-to-end-packaging-integration.md">ADR-050: End-to-end packaging integration</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/054-reverse-bridge-registration-observability.md">ADR-054: Reverse-bridge registration observability</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/056-csharp-structs-in-kotlin.md">ADR-056: C# structs (value types) in Kotlin</a>
     </category>
 </seealso>

@@ -215,9 +215,11 @@ walks through why this inversion is correct for each direction rather than a sty
 - `equals`/`hashCode`/`toString` are never delegated to the C# object's own `Equals`/`GetHashCode`/
   `ToString`.
 - `Nullable<T>` value types (`int?`, `CatMood?`) are a separate, deferred feature: they carry no
-  `NullableAttribute` and need their own wire-format decision (see
+  `NullableAttribute` (see
   [ADR-053](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/053-nullable-reference-types-in-kotlin.md)
-  Decision 3).
+  Decision 3). The wire-format decision that feature was waiting on is now settled: it reuses the
+  out-pointer convention from [ADR-056](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/056-csharp-structs-in-kotlin.md)
+  (see [C# structs](structs.md)) and needs no new ADR, only the reader/generator work.
 - Multiple public constructors on one type are an overload set and are skipped + diagnosed, not
   disambiguated (tracked in
   [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md) Phase 9).
@@ -228,6 +230,7 @@ walks through why this inversion is correct for each direction rather than a sty
     <category ref="related">
         <a href="reverse-overview.md">Consuming C# in Kotlin</a>
         <a href="instance-members.md">Instance members</a>
+        <a href="structs.md">C# structs</a>
         <a href="bridgeable-subset.md">The bridgeable subset</a>
     </category>
     <category ref="external">
@@ -235,5 +238,6 @@ walks through why this inversion is correct for each direction rather than a sty
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/051-csharp-objects-as-opaque-handles.md">ADR-051: C# objects as opaque handles</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/052-csharp-instance-constructors-in-kotlin.md">ADR-052: C# instance constructors in Kotlin</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/053-nullable-reference-types-in-kotlin.md">ADR-053: Nullable reference types in Kotlin</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/056-csharp-structs-in-kotlin.md">ADR-056: C# structs (value types) in Kotlin</a>
     </category>
 </seealso>

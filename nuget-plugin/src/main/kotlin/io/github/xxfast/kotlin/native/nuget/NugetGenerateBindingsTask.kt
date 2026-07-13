@@ -1,5 +1,6 @@
 package io.github.xxfast.kotlin.native.nuget
 
+import io.github.xxfast.kotlin.native.nuget.rir.AbiArg
 import io.github.xxfast.kotlin.native.nuget.rir.NUGET_RUNTIME_CONTRACT_HASH
 import io.github.xxfast.kotlin.native.nuget.rir.RirClass
 import io.github.xxfast.kotlin.native.nuget.rir.RirConstructor
@@ -9,14 +10,21 @@ import io.github.xxfast.kotlin.native.nuget.rir.RirEnumType
 import io.github.xxfast.kotlin.native.nuget.rir.RirFile
 import io.github.xxfast.kotlin.native.nuget.rir.RirMethod
 import io.github.xxfast.kotlin.native.nuget.rir.RirObjectHandleType
+import io.github.xxfast.kotlin.native.nuget.rir.RirParameter
 import io.github.xxfast.kotlin.native.nuget.rir.RirPrimitiveType
 import io.github.xxfast.kotlin.native.nuget.rir.RirProperty
 import io.github.xxfast.kotlin.native.nuget.rir.RirRegistrable
 import io.github.xxfast.kotlin.native.nuget.rir.RirStringType
+import io.github.xxfast.kotlin.native.nuget.rir.RirStruct
+import io.github.xxfast.kotlin.native.nuget.rir.RirStructType
 import io.github.xxfast.kotlin.native.nuget.rir.RirTypeKey
 import io.github.xxfast.kotlin.native.nuget.rir.RirTypeRef
 import io.github.xxfast.kotlin.native.nuget.rir.RirVoidType
+import io.github.xxfast.kotlin.native.nuget.rir.abiArgs
+import io.github.xxfast.kotlin.native.nuget.rir.abiOutArgs
+import io.github.xxfast.kotlin.native.nuget.rir.abiReturnType
 import io.github.xxfast.kotlin.native.nuget.rir.boundHandleTypes
+import io.github.xxfast.kotlin.native.nuget.rir.boundStructTypes
 import io.github.xxfast.kotlin.native.nuget.rir.bridgeableRegistrables
 import io.github.xxfast.kotlin.native.nuget.rir.collisionDiagnostics
 import io.github.xxfast.kotlin.native.nuget.rir.contractHash
@@ -74,6 +82,41 @@ private fun enumPackages(
   }
 }.toMap()
 
+// ADR-056: does this type reference — either directly, or (if it is a struct) through one of
+// its OWN components — satisfy [predicate]? Every "does this file need X" detector below
+// (needsInterop, needsEnums, hasStringReturn, hasStringParam, hasEnumReturn, ...) used to test
+// only the top-level RirTypeRef, which made a struct's component types invisible to them: a method
+// returning only a struct with a string component, and no directly-string-typed member anywhere
+// else in the file, would silently skip emitting NugetInterop.kt (freeManagedString) and fail to
+// compile. A struct can only be one level deep in v1 (nested struct components are unsupported,
+// ADR-056 Scope), so this never needs to recurse more than once.
+private fun typeContains(
+  type: RirTypeRef,
+  structs: Map<RirTypeKey, RirStruct>,
+  predicate: (RirTypeRef) -> Boolean,
+): Boolean {
+  if (predicate(type)) return true
+  val struct: RirStruct? =
+    (type as? RirStructType)?.let { structs[RirTypeKey(it.namespace, it.name)] }
+  return struct?.components.orEmpty().any { predicate(it.type) }
+}
+
+private fun isStringRef(type: RirTypeRef): Boolean = type is RirStringType
+private fun isEnumRef(type: RirTypeRef): Boolean = type is RirEnumType
+
+// ADR-056: every enum a struct's OWN components reference — used to widen the
+// `import <pkg>.<Enum>` resolution (enumImports/referencedEnumTypes) beyond top-level
+// method/ctor/property types, since a struct-typed member's enum components are otherwise
+// invisible to that resolution.
+private fun structEnumComponents(
+  type: RirTypeRef,
+  structs: Map<RirTypeKey, RirStruct>,
+): List<RirEnumType> {
+  val struct: RirStruct? =
+    (type as? RirStructType)?.let { structs[RirTypeKey(it.namespace, it.name)] }
+  return struct?.components.orEmpty().mapNotNull { it.type as? RirEnumType }
+}
+
 fun generateKotlinStubs(
   file: RirFile,
   packageNameOverrides: Map<String, String> = emptyMap(),
@@ -95,6 +138,9 @@ fun generateKotlinStubs(
   val boundTypes: Set<RirTypeKey> = boundHandleTypes(file)
   val enumPkgs: Map<RirTypeKey, String> =
     enumPackages(file, packageNameOverrides, namespaceAliases)
+  // ADR-056: derived once for the whole file, same anti-drift pattern — both this task and
+  // NugetGenerateShimsTask resolve a RirStructType reference's component list through this map.
+  val structs: Map<RirTypeKey, RirStruct> = boundStructTypes(file)
 
   file.assemblies.forEach { assembly ->
     assembly.namespaces.forEach { namespace ->
@@ -112,6 +158,18 @@ fun generateKotlinStubs(
         )
       }
 
+      // ADR-056: a struct emits ONLY a `{StructName}.kt` immutable data class — no Bindings file,
+      // no registration export (a v1 struct has no bridged members, so it claims zero
+      // registration slots; see expectedRegistrations below, which this loop never touches).
+      namespace.types.filterIsInstance<RirStruct>().forEach { struct ->
+        result.add(
+          GeneratedFile(
+            relativePath = "nativeMain/$pkgPath/${struct.name}.kt",
+            content = structFileContent(kotlinPkg, struct, assembly.packageId, enumPkgs),
+          )
+        )
+      }
+
       namespace.types.filterIsInstance<RirClass>().forEach { cls ->
         // ADR-052/Phase 9 line 151 "shared bridgeable ordering": ONE ordered list — constructor
         // (if any) first, then bridgeable static methods, then bridgeable instance methods, then
@@ -121,25 +179,34 @@ fun generateKotlinStubs(
         val registrables: List<RirRegistrable> = bridgeableRegistrables(cls, boundTypes)
         val ctors: List<RirConstructor> =
           registrables.filterIsInstance<RirRegistrable.Ctor>().map { it.ctor }
-        val staticMethods: List<RirMethod> = registrables.filterIsInstance<RirRegistrable.Method>()
+        val staticMethods: List<RirMethod> = registrables
+          .filterIsInstance<RirRegistrable.Method>()
           .map { it.method }.filter { it.isStatic }
-        val instanceMethods: List<RirMethod> = registrables.filterIsInstance<RirRegistrable.Method>()
+        val instanceMethods: List<RirMethod> = registrables
+          .filterIsInstance<RirRegistrable.Method>()
           .map { it.method }.filter { !it.isStatic }
         val propertyGetters: List<RirProperty> =
           registrables.filterIsInstance<RirRegistrable.PropertyGetter>().map { it.property }
         val instancePropertyGetters: List<RirProperty> = propertyGetters.filterNot { it.isStatic }
         val staticPropertyGetters: List<RirProperty> = propertyGetters.filter { it.isStatic }
-        val propertySetterNames: Set<String> =
-          registrables.filterIsInstance<RirRegistrable.PropertySetter>().map { it.property.name }.toSet()
+        val propertySetterNames: Set<String> = registrables
+          .filterIsInstance<RirRegistrable.PropertySetter>()
+          .map { it.property.name }
+          .toSet()
 
         if (registrables.isEmpty()) return@forEach
 
         val allMethods: List<RirMethod> = staticMethods + instanceMethods
-        val hasString: Boolean = allMethods.any { method ->
-          method.returnType is RirStringType ||
-              method.parameters.any { p -> p.type is RirStringType }
-        } || ctors.any { ctor -> ctor.parameters.any { p -> p.type is RirStringType } } ||
-            propertyGetters.any { it.type is RirStringType }
+        val methodsHaveString: Boolean = allMethods.any { method ->
+          typeContains(method.returnType, structs, ::isStringRef) ||
+              method.parameters.any { p -> typeContains(p.type, structs, ::isStringRef) }
+        }
+        val ctorsHaveString: Boolean = ctors.any { ctor ->
+          ctor.parameters.any { p -> typeContains(p.type, structs, ::isStringRef) }
+        }
+        val propertiesHaveString: Boolean =
+          propertyGetters.any { typeContains(it.type, structs, ::isStringRef) }
+        val hasString: Boolean = methodsHaveString || ctorsHaveString || propertiesHaveString
         if (hasString) needsInterop = true
 
         // ADR-051/052/Phase 9 line 151: NugetRuntime.kt is needed whenever any bridgeable
@@ -148,19 +215,27 @@ fun generateKotlinStubs(
         // instance method/property at all (both require the receiver `handle` field regardless of
         // whether a handle TYPE appears in any individual signature). Emitted once (below),
         // regardless of how many classes trigger it.
-        val hasHandle: Boolean = allMethods.any { method ->
+        val methodsHaveHandle: Boolean = allMethods.any { method ->
           method.returnType is RirObjectHandleType ||
               method.parameters.any { p -> p.type is RirObjectHandleType }
-        } || ctors.isNotEmpty() || instanceMethods.isNotEmpty() || instancePropertyGetters.isNotEmpty() ||
-            instancePropertyGetters.any { it.type is RirObjectHandleType }
+        }
+        val hasInstanceMember: Boolean =
+          ctors.isNotEmpty() || instanceMethods.isNotEmpty() || instancePropertyGetters.isNotEmpty()
+        val instancePropertiesHaveHandle: Boolean =
+          instancePropertyGetters.any { it.type is RirObjectHandleType }
+        val hasHandle: Boolean =
+          methodsHaveHandle || hasInstanceMember || instancePropertiesHaveHandle
         if (hasHandle) needsRuntime = true
 
         // NugetEnums.kt is needed whenever a bridgeable member RECEIVES an enum from C# (a method
         // return or a property value): that is the only direction where the ordinal can be out of
         // range, since a C# enum is not a closed set ((CatMood)99 is a legal C# value). Enum
         // arguments travel the other way as Kotlin's own `.ordinal` and are always in range.
-        val hasEnumReturn: Boolean = allMethods.any { it.returnType is RirEnumType } ||
-            propertyGetters.any { it.type is RirEnumType }
+        val methodsHaveEnumReturn: Boolean =
+          allMethods.any { typeContains(it.returnType, structs, ::isEnumRef) }
+        val propertiesHaveEnumReturn: Boolean =
+          propertyGetters.any { typeContains(it.type, structs, ::isEnumRef) }
+        val hasEnumReturn: Boolean = methodsHaveEnumReturn || propertiesHaveEnumReturn
         if (hasEnumReturn) needsEnums = true
 
         val exportName: String = registrationExportName(namespace.name, cls.name)
@@ -170,7 +245,7 @@ fun generateKotlinStubs(
           GeneratedFile(
             relativePath = "nativeMain/$pkgPath/${cls.name}Bindings.kt",
             content = bindingsFileContent(
-              kotlinPkg, cls, registrables, exportName, assembly.packageId, namespace.name,
+              kotlinPkg, cls, registrables, exportName, assembly.packageId, namespace.name, structs,
             ),
           )
         )
@@ -179,8 +254,8 @@ fun generateKotlinStubs(
             relativePath = "nativeMain/$pkgPath/${cls.name}.kt",
             content = stubFileContent(
               kotlinPkg, cls, staticMethods, instanceMethods, ctors,
-              instancePropertyGetters, staticPropertyGetters, propertySetterNames, assembly.packageId,
-              namespace.name, enumPkgs,
+              instancePropertyGetters, staticPropertyGetters, propertySetterNames,
+              assembly.packageId, namespace.name, enumPkgs, structs,
             ),
           )
         )
@@ -320,12 +395,56 @@ private fun enumFileContent(kotlinPkg: String, enum: RirEnum, packageId: String)
   """.trimMargin().trim()
 }
 
+// ADR-056: renders a struct's own components as a `data class Point(val x: Int, val y: Int)` —
+// immutable, no handle, no close(), no Cleaner. A v1 struct claims zero registration slots (see
+// generateKotlinStubs, which never adds a struct to expectedRegistrations).
+// A struct's components can reference an enum declared in a different Kotlin package than the
+// struct itself (this repo's own bind{} config aliases Sample.Structs and Sample.Enums to
+// different packages, so this is the normal case, not an edge one) — mirrors the import handling
+// bindingsFileContent/stubFileContent already do for method/property enum references.
+private fun structFileContent(
+  kotlinPkg: String,
+  struct: RirStruct,
+  packageId: String,
+  enumPkgs: Map<RirTypeKey, String>,
+): String {
+  val params: String = struct.components.joinToString(",\n  ") { c ->
+    "val ${c.name.toMethodCamelCase()}: ${kotlinType(c.type)}"
+  }
+  val enumTypes: List<RirEnumType> =
+    struct.components.mapNotNull { it.type as? RirEnumType }.distinct()
+  val imports: List<String> = enumImports(enumTypes, enumPkgs, kotlinPkg)
+  val importsBlock: String = if (imports.isEmpty()) "" else imports.joinToString("\n") + "\n\n"
+  return """
+    |package $kotlinPkg
+    |
+    |$importsBlock/**
+    | * Kotlin value type for the C# struct `$packageId.${struct.name}`.
+    | *
+    | * Copied by value across the bridge: equality is structural, and there is nothing to close.
+    | * Mutating this value never affects the C# side (a copy crossed the boundary); use [copy].
+    | */
+    |// internal (not public): consumable from anywhere else in this same Gradle module, but
+    |// invisible to the forward-direction (KSP) exporter's public-API scan — this reverse-bound
+    |// type must not be re-exported forward into the packed nupkg's own Interop.cs (mirrors the
+    |// same note on the Bindings.kt/wrapper-class files; unlike a reverse-generated enum class,
+    |// no ADR authorises a forward mapping for a decomposed struct).
+    |internal data class ${struct.name}(
+    |  $params,
+    |)
+  """.trimMargin().trim()
+}
+
 private fun kotlinType(type: RirTypeRef): String = when (type) {
   is RirVoidType -> "Unit"
   is RirStringType -> "String"
   is RirEnumType -> type.name
   // ADR-051: the Kotlin type name for a handle is simply the C# simple type name (e.g. Template).
   is RirObjectHandleType -> type.name
+  // ADR-056: the Kotlin-facing type for a struct is its own generated data class's simple name —
+  // the ABI-level expansion (abiArgs/abiOutArgs) is an implementation detail of the call site, not
+  // of the declared Kotlin signature.
+  is RirStructType -> type.name
   is RirPrimitiveType -> when (type.name) {
     "bool" -> "Boolean"
     "byte" -> "UByte"
@@ -357,6 +476,15 @@ private fun cfnType(type: RirTypeRef): String = when (type) {
   is RirEnumType -> "Int"
   // ADR-051: handles cross the ABI as IntPtr ↔ COpaquePointer? (same slot as strings).
   is RirObjectHandleType -> "COpaquePointer?"
+  // ADR-056: a struct never reaches cfnType directly — abiArgs/abiOutArgs expand it into scalar
+  // components before any call site asks for a CFunction type. Struct-typed constructor
+  // parameters and properties are not yet supported (v1 scope: static/instance methods only).
+  is RirStructType -> error(
+    "[nuget] struct ${type.namespace}.${type.name} must be expanded via abiArgs/abiOutArgs " +
+        "before reaching cfnType — struct-typed constructor parameters and properties are not " +
+        "yet supported."
+  )
+
   is RirPrimitiveType -> when (type.name) {
     "bool" -> "Boolean"
     "byte" -> "UByte"
@@ -373,6 +501,104 @@ private fun cfnType(type: RirTypeRef): String = when (type) {
   }
 }
 
+// ADR-056: the kotlinx.cinterop CVariable subtype an out-pointer component allocates via
+// `alloc<...>()`, per the wire table (component type -> Kotlin CFunction out-ptr).
+private fun cVarType(type: RirTypeRef): String = when (type) {
+  is RirPrimitiveType -> when (type.name) {
+    "bool" -> "UByteVar"
+    "byte" -> "UByteVar"
+    "short" -> "ShortVar"
+    "int" -> "IntVar"
+    "long" -> "LongVar"
+    "float" -> "FloatVar"
+    "double" -> "DoubleVar"
+    "char" -> "UShortVar"
+    else -> error(
+      "[nuget] Unknown primitive type name '${type.name}' — " +
+          "update the v1 struct out-pointer mapping table in NugetGenerateBindingsTask.kt"
+    )
+  }
+
+  is RirStringType -> "COpaquePointerVar"
+  is RirEnumType -> "IntVar"
+  is RirObjectHandleType -> "COpaquePointerVar"
+  is RirVoidType -> error("[nuget] void cannot be a struct out-pointer component")
+  is RirStructType -> error("[nuget] nested struct components are not supported in v1 (ADR-056)")
+}
+
+private fun cfnOutPointerType(type: RirTypeRef): String = "CPointer<${cVarType(type)}>"
+
+// ADR-056: zero or more statements that must run BEFORE [expression] is evaluated (only a string
+// component needs any — reinterpret+toKString+free is not a single expression), and the final
+// Kotlin expression yielding the component's Kotlin-level value.
+private data class ComponentRead(val statements: List<String>, val expression: String)
+
+// ADR-056: converts a struct out-pointer allocation's raw `.value` read into the Kotlin-level
+// component value — the RETURN-side mirror of argConversion (which converts a Kotlin value INTO
+// its wire representation). Routes each component type through the EXACT SAME conversion the
+// equivalent top-level return already uses (reinterpret+toKString+free for a non-null string,
+// nugetEnumEntry for an enum, toInt().toChar() for char, a UByte->Boolean comparison for bool,
+// untouched for int/long/float/double) — a component must never bypass the conversion its own
+// type already requires on the return side, mirroring argConversion's role on the parameter side.
+// Shared by buildStubMethod's struct-return branch and buildStubProperty's struct-getter branch.
+private fun componentRead(type: RirTypeRef, arg: AbiArg): ComponentRead {
+  val raw = "${arg.name}.value"
+  return when (type) {
+    is RirPrimitiveType -> when (type.name) {
+      // UByteVar.value is UByte (0 or 1) — see cVarType: there is no BooleanVar in
+      // kotlinx.cinterop, so the out-pointer slot is UByte and must be narrowed back to Boolean
+      // here, exactly mirroring the C# thunk's `result ? (byte)1 : (byte)0` write.
+      "bool" -> ComponentRead(emptyList(), "$raw.toInt() != 0")
+      // Mirrors the existing top-level primitive-return branch's `$invokeCall.toInt().toChar()`.
+      "char" -> ComponentRead(emptyList(), "$raw.toInt().toChar()")
+      else -> ComponentRead(emptyList(), raw)
+    }
+    // Mirrors the existing top-level enum-return branch's bounds-checked nugetEnumEntry lookup —
+    // a C# enum is not a closed set, so the ordinal is validated here exactly as it would be for
+    // a directly-returned enum.
+    is RirEnumType -> ComponentRead(
+      emptyList(),
+      "nugetEnumEntry(${type.name}.entries, $raw, \"${type.name}\")",
+    )
+    // Mirrors the existing top-level string-return branches (nullable: null-propagating; non-null:
+    // fail-fast requireNotNull) — reinterpret+toKString+freeManagedString either way.
+    is RirStringType -> {
+      val resultVar = "${arg.name}Result"
+      if (type.nullable) {
+        ComponentRead(
+          statements = listOf(
+            "val $resultVar: String? = $raw?.let { p ->",
+            "  val s = p.reinterpret<ByteVar>().toKString()",
+            "  freeManagedString(p)",
+            "  s",
+            "}",
+          ),
+          expression = resultVar,
+        )
+      } else {
+        val ptrVar = "${arg.name}Ptr"
+        ComponentRead(
+          statements = listOf(
+            "val $ptrVar = requireNotNull($raw) { " +
+                "\"a struct string component returned null unexpectedly\" }",
+            "val $resultVar = $ptrVar.reinterpret<ByteVar>().toKString()",
+            "freeManagedString($ptrVar)",
+          ),
+          expression = resultVar,
+        )
+      }
+    }
+
+    is RirObjectHandleType -> error(
+      "[nuget] handle-typed struct components are not supported (ADR-056 v1 component vocabulary" +
+          " is primitives, string, and bound enums only)"
+    )
+
+    is RirVoidType -> error("[nuget] void cannot be a struct component")
+    is RirStructType -> error("[nuget] nested struct components are not supported in v1 (ADR-056)")
+  }
+}
+
 // Phase 9 (ROADMAP line 151): the ordered list of CFunction parameter cfn-types for a method's
 // function-pointer TYPE declaration — instance methods gain a leading `COpaquePointer?` receiver
 // slot, exactly mirroring the receiver argument buildStubMethod prepends at the call site
@@ -380,9 +606,20 @@ private fun cfnType(type: RirTypeRef): String = when (type) {
 // thunk signature gains. Single shared source for this list (rather than re-deriving it at each
 // call site) so the *Bindings.kt CFunction type and the Template.kt call site can never drift out
 // of arity — the same anti-drift reasoning as bridgeableRegistrables' shared ordering.
-private fun methodParamCfnTypes(method: RirMethod): List<String> {
+//
+// ADR-056: parameters and return are expanded through the shared abiArgs/abiOutArgs functions —
+// a struct-typed parameter contributes one cfn-type per component, and a struct-typed return
+// appends one out-pointer cfn-type per component after the real parameters. Both are no-ops for a
+// method with no struct in its signature.
+private fun methodParamCfnTypes(
+  method: RirMethod,
+  structs: Map<RirTypeKey, RirStruct>,
+): List<String> {
   val receiverCfnType: String? = if (!method.isStatic) "COpaquePointer?" else null
-  return listOfNotNull(receiverCfnType) + method.parameters.map { cfnType(it.type) }
+  val inCfnTypes: List<String> = abiArgs(method.parameters, structs).map { cfnType(it.type) }
+  val outCfnTypes: List<String> =
+    abiOutArgs(method.returnType, structs).map { cfnOutPointerType(it.type) }
+  return listOfNotNull(receiverCfnType) + inCfnTypes + outCfnTypes
 }
 
 // Corequisite fix (surfaced by an ADR-053 fixture, unrelated to nullability): the fn-pointer vars
@@ -403,6 +640,7 @@ private fun bindingsFileContent(
   exportName: String,
   packageId: String,
   namespaceName: String,
+  structs: Map<RirTypeKey, RirStruct>,
 ): String {
   val objectName: String = bindingsObjectName(cls.name)
   val qualifiedType: String = "$namespaceName.${cls.name}"
@@ -417,6 +655,18 @@ private fun bindingsFileContent(
     }
   }
 
+  // ADR-056: every distinct kotlinx.cinterop CVariable subtype a struct-typed return's
+  // out-pointer allocations need across this type's registrables (e.g. "IntVar" for Point's two
+  // int components) — empty (and therefore no extra imports) when no registrable returns a
+  // struct.
+  val structOutVarTypes: List<String> = registrables.flatMap { r ->
+    when (r) {
+      is RirRegistrable.Method -> abiOutArgs(r.method.returnType, structs)
+      is RirRegistrable.PropertyGetter -> abiOutArgs(r.property.type, structs)
+      is RirRegistrable.Ctor, is RirRegistrable.PropertySetter -> emptyList()
+    }
+  }.map { cVarType(it.type) }.distinct().sorted()
+
   val imports: List<String> = buildList {
     if (hasString) {
       add("import $INTERNAL_PKG.freeManagedString")
@@ -428,6 +678,7 @@ private fun bindingsFileContent(
     add("import kotlinx.cinterop.CPointer")
     add("import kotlinx.cinterop.reinterpret")
     add("import kotlin.experimental.ExperimentalNativeApi")
+    structOutVarTypes.forEach { add("import kotlinx.cinterop.$it") }
   }
 
   // ADR-052: rendered directly off the shared bridgeableRegistrables() ordering — constructor
@@ -443,28 +694,38 @@ private fun bindingsFileContent(
       }
 
       is RirRegistrable.Method -> {
-        val paramCfnTypes: String = methodParamCfnTypes(r.method).joinToString(", ")
-        val retCfnType: String = cfnType(r.method.returnType)
+        val paramCfnTypes: String = methodParamCfnTypes(r.method, structs).joinToString(", ")
+        val retCfnType: String = cfnType(abiReturnType(r.method.returnType, structs))
         "@Suppress(\"NOTHING_TO_INLINE\")\n" +
             "internal var ${r.method.name.toMethodCamelCase()}Fn: " +
             "CPointer<CFunction<($paramCfnTypes) -> $retCfnType>>? = null"
       }
       // Phase 9 (ROADMAP line 151): a getter thunk takes the receiver only and returns the
       // property's value; a setter thunk takes the receiver plus the new value and returns Unit.
+      // ADR-056: both are expanded through the shared abiArgs/abiOutArgs/abiReturnType functions
+      // — a struct-typed property contributes one out-pointer cfn-type per component to the
+      // getter (return becomes Unit), or one in cfn-type per component to the setter — a no-op
+      // for a property with no struct in its type.
       is RirRegistrable.PropertyGetter -> {
-        val retCfnType: String = cfnType(r.property.type)
-        val receiverCfnType: String = if (r.property.isStatic) "" else "COpaquePointer?"
+        val receiverCfnType: String? = if (r.property.isStatic) null else "COpaquePointer?"
+        val outCfnTypes: List<String> =
+          abiOutArgs(r.property.type, structs).map { cfnOutPointerType(it.type) }
+        val retCfnType: String = cfnType(abiReturnType(r.property.type, structs))
+        val paramCfnTypes: String =
+          (listOfNotNull(receiverCfnType) + outCfnTypes).joinToString(", ")
         "@Suppress(\"NOTHING_TO_INLINE\")\n" +
             "internal var ${r.property.name.toMethodCamelCase()}GetterFn: " +
-            "CPointer<CFunction<($receiverCfnType) -> $retCfnType>>? = null"
+            "CPointer<CFunction<($paramCfnTypes) -> $retCfnType>>? = null"
       }
 
       is RirRegistrable.PropertySetter -> {
-        val valueCfnType: String = cfnType(r.property.type)
-        val receiverCfnType: String = if (r.property.isStatic) "" else "COpaquePointer?, "
+        val receiverCfnType: String? = if (r.property.isStatic) null else "COpaquePointer?"
+        val valueParam = RirParameter(name = "value", type = r.property.type)
+        val inCfnTypes: List<String> = abiArgs(listOf(valueParam), structs).map { cfnType(it.type) }
+        val paramCfnTypes: String = (listOfNotNull(receiverCfnType) + inCfnTypes).joinToString(", ")
         "@Suppress(\"NOTHING_TO_INLINE\")\n" +
             "internal var ${r.property.name.toMethodCamelCase()}SetterFn: " +
-            "CPointer<CFunction<($receiverCfnType$valueCfnType) -> Unit>>? = null"
+            "CPointer<CFunction<($paramCfnTypes) -> Unit>>? = null"
       }
     }
   }
@@ -513,7 +774,7 @@ private fun bindingsFileContent(
   }
 
   val expectedSlots: Int = registrables.size
-  val expectedHash: Long = contractHash(cls, registrables)
+  val expectedHash: Long = contractHash(cls, registrables, structs)
 
   return """
     |@file:OptIn(kotlinx.cinterop.ExperimentalForeignApi::class)
@@ -574,6 +835,7 @@ private fun stubFileContent(
   packageId: String,
   namespaceName: String,
   enumPkgs: Map<RirTypeKey, String>,
+  structs: Map<RirTypeKey, RirStruct>,
 ): String {
   val hasHandle: Boolean = staticMethods.any { method ->
     method.returnType is RirObjectHandleType ||
@@ -587,22 +849,27 @@ private fun stubFileContent(
   // extends this further: any instance method or instance property also forces the wrapper shape
   // — both require the receiver `handle` field regardless of whether a handle TYPE appears
   // anywhere. Classes with none of these keep the ADR-048 `object` shape.
-  val isClassWrapper: Boolean = !cls.isStatic &&
-      (hasHandle || ctors.isNotEmpty() || instanceMethods.isNotEmpty() || instancePropertyGetters.isNotEmpty())
+  val hasInstanceMember: Boolean =
+    ctors.isNotEmpty() || instanceMethods.isNotEmpty() || instancePropertyGetters.isNotEmpty()
+  val isClassWrapper: Boolean = !cls.isStatic && (hasHandle || hasInstanceMember)
   if (isClassWrapper) {
     return classWrapperContent(
       kotlinPkg, cls, staticMethods, instanceMethods, ctors,
       instancePropertyGetters, staticPropertyGetters, propertySetterNames, packageId,
-      namespaceName, enumPkgs,
+      namespaceName, enumPkgs, structs,
     )
   }
 
   // object shape (ADR-048, statics only — a non-wrapper class never has ctors/instance
   // methods/properties, per isClassWrapper above).
-  val hasStringReturn: Boolean = staticMethods.any { it.returnType is RirStringType } ||
-      staticPropertyGetters.any { it.type is RirStringType }
-  val hasStringParam: Boolean = staticMethods.any { m -> m.parameters.any { p -> p.type is RirStringType } } ||
-      staticPropertyGetters.any { it.type is RirStringType && it.name in propertySetterNames }
+  val hasStringReturn: Boolean =
+    staticMethods.any { typeContains(it.returnType, structs, ::isStringRef) } ||
+        staticPropertyGetters.any { typeContains(it.type, structs, ::isStringRef) }
+  val hasStringParam: Boolean = staticMethods.any { m ->
+    m.parameters.any { p -> typeContains(p.type, structs, ::isStringRef) }
+  } || staticPropertyGetters.any {
+    typeContains(it.type, structs, ::isStringRef) && it.name in propertySetterNames
+  }
 
   // Always required: every stub method body calls `fn.invoke(...)` on a
   // `CPointer<CFunction<...>>?` — the `invoke` operator extension is declared in kotlinx.cinterop
@@ -621,14 +888,51 @@ private fun stubFileContent(
     imports.add("import kotlinx.cinterop.memScoped")
     imports.add("import kotlinx.cinterop.ptr")
   }
-  val hasEnumReturn: Boolean = staticMethods.any { it.returnType is RirEnumType } ||
-      staticPropertyGetters.any { it.type is RirEnumType }
+  // ADR-056: a struct-typed return needs memScoped (alloc<T>() requires a MemScope receiver),
+  // one alloc<...>()/.ptr/.value per component, and an import for each distinct CVariable subtype
+  // those allocations use — a no-op (empty structOutVarTypes) when no static method/property
+  // returns a struct. `value` on a CPrimitiveVar (e.g. IntVar) is an EXTENSION property, not a
+  // member — verified against a real Kotlin/Native compile: `outX.value` is "Unresolved
+  // reference" without `import kotlinx.cinterop.value`, even though `outX.ptr` (also an
+  // extension) resolves fine off the `IntVar` import alone, because IDE/compiler member-lookup
+  // for an unimported extension fails silently rather than suggesting the import.
+  val hasStructReturn: Boolean =
+    staticMethods.any { abiOutArgs(it.returnType, structs).isNotEmpty() } ||
+        staticPropertyGetters.any { abiOutArgs(it.type, structs).isNotEmpty() }
+  if (hasStructReturn) {
+    if ("import kotlinx.cinterop.memScoped" !in imports) {
+      imports.add("import kotlinx.cinterop.memScoped")
+    }
+    imports.add("import kotlinx.cinterop.alloc")
+    imports.add("import kotlinx.cinterop.value")
+    if ("import kotlinx.cinterop.ptr" !in imports) imports.add("import kotlinx.cinterop.ptr")
+    val structOutVarTypes: List<String> = (
+        staticMethods.flatMap { abiOutArgs(it.returnType, structs) } +
+            staticPropertyGetters.flatMap { abiOutArgs(it.type, structs) }
+        ).map { cVarType(it.type) }.distinct().sorted()
+    structOutVarTypes.forEach { imports.add("import kotlinx.cinterop.$it") }
+  }
+  val hasEnumReturn: Boolean =
+    staticMethods.any { typeContains(it.returnType, structs, ::isEnumRef) } ||
+        staticPropertyGetters.any { typeContains(it.type, structs, ::isEnumRef) }
   if (hasEnumReturn) imports.add("import $INTERNAL_PKG.nugetEnumEntry")
   imports.addAll(
     enumImports(
       referencedEnumTypes(staticMethods, ctors, staticPropertyGetters), enumPkgs, kotlinPkg,
     )
   )
+  // ADR-056: a struct-typed method/property in this stub may reference an enum declared in a
+  // different Kotlin package than the stub itself — the struct's own component list is invisible
+  // to referencedEnumTypes (which only looks at method/ctor/property TOP-LEVEL types), so gather
+  // those separately.
+  val structEnumTypes: List<RirEnumType> = (
+      staticMethods.flatMap { method ->
+        structEnumComponents(method.returnType, structs) +
+            method.parameters.flatMap { p -> structEnumComponents(p.type, structs) }
+      } +
+          staticPropertyGetters.flatMap { structEnumComponents(it.type, structs) }
+      ).distinct()
+  imports.addAll(enumImports(structEnumTypes, enumPkgs, kotlinPkg))
 
   // ADR-054: NugetRegistry.notRegistered(...) is called at runtime (not baked as a constant
   // string) so the "N of M registrations fired" message reflects what actually landed by the time
@@ -636,11 +940,12 @@ private fun stubFileContent(
   imports.add("import $INTERNAL_PKG.NugetRegistry")
 
   val methods: String = staticMethods.joinToString("\n\n") {
-    buildStubMethod(cls, it, packageId, namespaceName)
+    buildStubMethod(cls, it, packageId, namespaceName, structs)
   }
   val properties: String = staticPropertyGetters.joinToString("\n\n") { property ->
     buildStubProperty(
       cls, property, hasSetter = property.name in propertySetterNames, packageId, namespaceName,
+      structs,
     )
   }
 
@@ -694,15 +999,31 @@ private fun classWrapperContent(
   packageId: String,
   namespaceName: String,
   enumPkgs: Map<RirTypeKey, String>,
+  structs: Map<RirTypeKey, RirStruct>,
 ): String {
   val allMethods: List<RirMethod> = staticMethods + instanceMethods
-  val hasStringReturn: Boolean = allMethods.any { it.returnType is RirStringType } ||
-      instancePropertyGetters.any { it.type is RirStringType } ||
-      staticPropertyGetters.any { it.type is RirStringType }
-  val hasStringParam: Boolean = allMethods.any { m -> m.parameters.any { p -> p.type is RirStringType } } ||
-      ctors.any { ctor -> ctor.parameters.any { p -> p.type is RirStringType } } ||
-      instancePropertyGetters.any { it.type is RirStringType && it.name in propertySetterNames } ||
-      staticPropertyGetters.any { it.type is RirStringType && it.name in propertySetterNames }
+  val methodsHaveString: Boolean =
+    allMethods.any { typeContains(it.returnType, structs, ::isStringRef) }
+  val instancePropertiesHaveString: Boolean =
+    instancePropertyGetters.any { typeContains(it.type, structs, ::isStringRef) }
+  val staticPropertiesHaveString: Boolean =
+    staticPropertyGetters.any { typeContains(it.type, structs, ::isStringRef) }
+  val hasStringReturn: Boolean =
+    methodsHaveString || instancePropertiesHaveString || staticPropertiesHaveString
+
+  val methodsHaveStringParam: Boolean =
+    allMethods.any { m -> m.parameters.any { p -> typeContains(p.type, structs, ::isStringRef) } }
+  val ctorsHaveStringParam: Boolean = ctors.any { ctor ->
+    ctor.parameters.any { p -> typeContains(p.type, structs, ::isStringRef) }
+  }
+  val instanceSettablePropertiesHaveString: Boolean = instancePropertyGetters.any {
+    typeContains(it.type, structs, ::isStringRef) && it.name in propertySetterNames
+  }
+  val staticSettablePropertiesHaveString: Boolean = staticPropertyGetters.any {
+    typeContains(it.type, structs, ::isStringRef) && it.name in propertySetterNames
+  }
+  val hasStringParam: Boolean = methodsHaveStringParam || ctorsHaveStringParam ||
+      instanceSettablePropertiesHaveString || staticSettablePropertiesHaveString
 
   val imports: MutableList<String> = mutableListOf(
     "import $INTERNAL_PKG.NugetObjectHandle",
@@ -724,27 +1045,63 @@ private fun classWrapperContent(
     imports.add("import kotlinx.cinterop.ptr")
   }
   val allPropertyGetters: List<RirProperty> = instancePropertyGetters + staticPropertyGetters
-  val hasEnumReturn: Boolean = allMethods.any { it.returnType is RirEnumType } ||
-      allPropertyGetters.any { it.type is RirEnumType }
+  // ADR-056: same struct-return import logic as the object-shape path (stubFileContent) — see the
+  // comment there.
+  val methodsHaveStructReturn: Boolean =
+    allMethods.any { abiOutArgs(it.returnType, structs).isNotEmpty() }
+  val propertiesHaveStructReturn: Boolean =
+    allPropertyGetters.any { abiOutArgs(it.type, structs).isNotEmpty() }
+  val hasStructReturn: Boolean = methodsHaveStructReturn || propertiesHaveStructReturn
+  if (hasStructReturn) {
+    if ("import kotlinx.cinterop.memScoped" !in imports) {
+      imports.add("import kotlinx.cinterop.memScoped")
+    }
+    imports.add("import kotlinx.cinterop.alloc")
+    imports.add("import kotlinx.cinterop.value")
+    if ("import kotlinx.cinterop.ptr" !in imports) imports.add("import kotlinx.cinterop.ptr")
+    val structOutVarTypes: List<String> = (
+        allMethods.flatMap { abiOutArgs(it.returnType, structs) } +
+            allPropertyGetters.flatMap { abiOutArgs(it.type, structs) }
+        ).map { cVarType(it.type) }.distinct().sorted()
+    structOutVarTypes.forEach { imports.add("import kotlinx.cinterop.$it") }
+  }
+  val methodsHaveEnumReturn: Boolean =
+    allMethods.any { typeContains(it.returnType, structs, ::isEnumRef) }
+  val propertiesHaveEnumReturn: Boolean =
+    allPropertyGetters.any { typeContains(it.type, structs, ::isEnumRef) }
+  val hasEnumReturn: Boolean = methodsHaveEnumReturn || propertiesHaveEnumReturn
   if (hasEnumReturn) imports.add("import $INTERNAL_PKG.nugetEnumEntry")
+  val structEnumTypes: List<RirEnumType> = (
+      allMethods.flatMap { method ->
+        structEnumComponents(method.returnType, structs) +
+            method.parameters.flatMap { p -> structEnumComponents(p.type, structs) }
+      } +
+          ctors.flatMap { it.parameters.flatMap { p -> structEnumComponents(p.type, structs) } } +
+          allPropertyGetters.flatMap { structEnumComponents(it.type, structs) }
+      ).distinct()
   imports.addAll(
     enumImports(
-      referencedEnumTypes(allMethods, ctors, allPropertyGetters), enumPkgs, kotlinPkg,
+      referencedEnumTypes(allMethods, ctors, allPropertyGetters) + structEnumTypes,
+      enumPkgs, kotlinPkg,
     )
   )
 
-  val instanceMethodsText: String =
-    instanceMethods.joinToString("\n\n") { buildStubMethod(cls, it, packageId, namespaceName) }
+  val instanceMethodsText: String = instanceMethods.joinToString("\n\n") {
+    buildStubMethod(cls, it, packageId, namespaceName, structs)
+  }
   val propertiesText: String = instancePropertyGetters.joinToString("\n\n") { property ->
     buildStubProperty(
       cls, property, hasSetter = property.name in propertySetterNames, packageId, namespaceName,
+      structs,
     )
   }
-  val staticMethodsText: String =
-    staticMethods.joinToString("\n\n") { buildStubMethod(cls, it, packageId, namespaceName) }
+  val staticMethodsText: String = staticMethods.joinToString("\n\n") {
+    buildStubMethod(cls, it, packageId, namespaceName, structs)
+  }
   val staticPropertiesText: String = staticPropertyGetters.joinToString("\n\n") { property ->
     buildStubProperty(
       cls, property, hasSetter = property.name in propertySetterNames, packageId, namespaceName,
+      structs,
     )
   }
 
@@ -760,12 +1117,22 @@ private fun classWrapperContent(
     appendLine("/**")
     appendLine(" * Kotlin wrapper for the C# type `$packageId.${cls.name}`.")
     appendLine(" *")
-    appendLine(" * Equality is wrapper identity: two wrappers around the same C# object are not equal.")
-    appendLine(" * The underlying C# object is released automatically when this wrapper is garbage-collected;")
-    appendLine(" * call [close] (or use `use { }`) for deterministic release. [close] is optional and idempotent.")
+    appendLine(
+      " * Equality is wrapper identity: two wrappers around the same C# object are not equal.",
+    )
+    appendLine(
+      " * The underlying C# object is released automatically when this wrapper is " +
+          "garbage-collected;",
+    )
+    appendLine(
+      " * call [close] (or use `use { }`) for deterministic release. [close] is optional and " +
+          "idempotent.",
+    )
     appendLine(" */")
     appendLine("@OptIn(ExperimentalNativeApi::class)")
-    appendLine("internal class ${cls.name} internal constructor(handle: COpaquePointer) : AutoCloseable {")
+    appendLine(
+      "internal class ${cls.name} internal constructor(handle: COpaquePointer) : AutoCloseable {",
+    )
     appendLine("  internal val handle: NugetObjectHandle = NugetObjectHandle(handle)")
     appendLine()
     appendLine("  @Suppress(\"unused\")")
@@ -820,6 +1187,14 @@ private fun argConversion(type: RirTypeRef, name: String): String = when {
   type is RirObjectHandleType -> "$name.handle.require(\"${type.name}\")"
   type is RirEnumType -> "$name.ordinal"
   type is RirPrimitiveType && type.name == "char" -> "$name.code.toUShort()"
+  // ADR-056: a struct-typed argument must be decomposed into its components (one invoke()
+  // argument per component, e.g. "p.x", "p.y") before reaching argConversion — buildStubMethod's
+  // paramArgs does that decomposition itself rather than calling argConversion for a struct.
+  type is RirStructType -> error(
+    "[nuget] a struct-typed argument must be decomposed into its components before " +
+        "argConversion — got ${type.namespace}.${type.name}"
+  )
+
   else -> name
 }
 
@@ -898,10 +1273,19 @@ private fun buildStubMethod(
   method: RirMethod,
   packageId: String,
   namespaceName: String,
+  structs: Map<RirTypeKey, RirStruct>,
 ): String {
   val name: String = method.name.toMethodCamelCase()
   val fnVar: String = "${bindingsObjectName(cls.name)}.${name}Fn"
-  val hasStringParam: Boolean = method.parameters.any { it.type is RirStringType }
+  // ADR-056: a struct component can itself be a string (not exercised by the v1 fixture, but
+  // checked here for correctness) — memScoped is needed whenever ANY component crossing as a
+  // string argument requires it, not just a direct top-level string parameter.
+  val hasStringParam: Boolean = method.parameters.any { p ->
+    val struct: RirStruct? =
+      (p.type as? RirStructType)?.let { ref -> structs[RirTypeKey(ref.namespace, ref.name)] }
+    if (struct != null) struct.components.any { it.type is RirStringType }
+    else p.type is RirStringType
+  }
 
   val params: String = method.parameters.joinToString(", ") { p ->
     "${p.name}: ${declKotlinType(p.type)}"
@@ -919,7 +1303,22 @@ private fun buildStubMethod(
   // for handle-typed parameters, referencing the wrapper's own `handle` field (not a Kotlin
   // parameter). Static methods are unaffected — no receiver is prepended.
   val receiverArg: String? = if (!method.isStatic) "handle.require(\"${cls.name}\")" else null
-  val paramArgs: List<String> = method.parameters.map { p -> argConversion(p.type, p.name) }
+  // ADR-056: a struct-typed parameter decomposes into one invoke() argument per component — its
+  // Kotlin property, in the struct's declared component order (mirrors the shared abiArgs()
+  // expansion in terms of Kotlin call-site expressions rather than ABI names). Each component
+  // expression is routed through the SAME argConversion(...) a top-level parameter of that
+  // component's type would use (`.cstr.ptr` for string, `.ordinal` for enum, `.code.toUShort()`
+  // for char, untouched for int/bool/etc.) — a component must never bypass the conversion its own
+  // type already requires, or it silently mismatches the CFunction type methodParamCfnTypes
+  // declares for that slot (e.g. a raw Char passed where UShort is expected).
+  val paramArgs: List<String> = method.parameters.flatMap { p ->
+    val struct: RirStruct? =
+      (p.type as? RirStructType)?.let { ref -> structs[RirTypeKey(ref.namespace, ref.name)] }
+    if (struct == null) listOf(argConversion(p.type, p.name))
+    else struct.components.map { c ->
+      argConversion(c.type, "${p.name}.${c.name.toMethodCamelCase()}")
+    }
+  }
   val invokeArgs: String = (listOfNotNull(receiverArg) + paramArgs).joinToString(", ")
 
   val failMsg: String = bindingsNotRegisteredMessage(cls.name, packageId, namespaceName)
@@ -1007,6 +1406,39 @@ private fun buildStubMethod(
       |}
     """.trimMargin()
 
+    // ADR-056: a struct-typed return crosses as `void` plus one out-pointer argument per
+    // component (abiOutArgs) — the thunk return itself carries nothing. memScoped both hosts the
+    // alloc<...>() out-slots and (if hasStringParam) the string-argument .cstr.ptr conversions, so
+    // the WHOLE function body is `= memScoped { ... }` rather than wrapping only the invoke call
+    // the way the other branches do.
+    is RirStructType -> {
+      val struct = requireNotNull(structs[RirTypeKey(retType.namespace, retType.name)]) {
+        "[nuget] struct ${retType.namespace}.${retType.name} is referenced as a return type " +
+            "but not declared in reverse-ir.json"
+      }
+      val outArgs: List<AbiArg> = abiOutArgs(retType, structs)
+      val outPtrArgs: List<String> = outArgs.map { "${it.name}.ptr" }
+      val fullInvokeArgs: String =
+        (listOfNotNull(receiverArg) + paramArgs + outPtrArgs).joinToString(", ")
+      // ADR-056: each component is read back through componentRead — the SAME per-type
+      // conversion a top-level return of that type already uses — instead of the raw `.value`,
+      // which is only correct for the pass-through primitives (int/long/float/double).
+      val reads: List<ComponentRead> = struct.components.zip(outArgs)
+        .map { (c, arg) -> componentRead(c.type, arg) }
+      val constructArgs: String = reads.joinToString(", ") { it.expression }
+      buildString {
+        appendLine("fun $name($params)$retSuffix = memScoped {")
+        appendLine("  val fn = requireNotNull($fnVar) {")
+        appendLine("    $failMsg")
+        appendLine("  }")
+        outArgs.forEach { arg -> appendLine("  val ${arg.name} = alloc<${cVarType(arg.type)}>()") }
+        appendLine("  fn.invoke($fullInvokeArgs)")
+        reads.forEach { read -> read.statements.forEach { appendLine("  $it") } }
+        appendLine("  ${retType.name}($constructArgs)")
+        append("}")
+      }
+    }
+
     is RirPrimitiveType -> {
       val isChar: Boolean = retType.name == "char"
       val returnExpr: String = if (isChar) "$invokeCall.toInt().toChar()" else invokeCall
@@ -1038,6 +1470,7 @@ private fun buildStubProperty(
   hasSetter: Boolean,
   packageId: String,
   namespaceName: String,
+  structs: Map<RirTypeKey, RirStruct>,
 ): String {
   val name: String = property.name.toMethodCamelCase()
   val bindingsObj: String = bindingsObjectName(cls.name)
@@ -1056,6 +1489,37 @@ private fun buildStubProperty(
   // the same composition buildStubMethod above uses for its own fun blocks.
   val getterBlock: String = when (val type = property.type) {
     is RirVoidType -> error("[nuget] a property cannot have void type")
+
+    // ADR-056: "property getter -> as a return (out-pointers)" (Decision, wire-format table) —
+    // the same shape as buildStubMethod's struct-return branch, with the getter's own
+    // (receiver-only, no other params) invoke() call instead of a method's.
+    is RirStructType -> {
+      val struct = requireNotNull(structs[RirTypeKey(type.namespace, type.name)]) {
+        "[nuget] struct ${type.namespace}.${type.name} is referenced as a property type but " +
+            "not declared in reverse-ir.json"
+      }
+      val outArgs: List<AbiArg> = abiOutArgs(type, structs)
+      val invokeArgs: String =
+        (listOfNotNull(receiverArg) + outArgs.map { "${it.name}.ptr" }).joinToString(", ")
+      val reads: List<ComponentRead> = struct.components.zip(outArgs)
+        .map { (c, arg) -> componentRead(c.type, arg) }
+      val constructArgs: String = reads.joinToString(", ") { it.expression }
+      buildString {
+        appendLine("get() {")
+        appendLine("  val fn = requireNotNull($getterFnVar) {")
+        appendLine("    $failMsg")
+        appendLine("  }")
+        appendLine("  return memScoped {")
+        outArgs.forEach { arg ->
+          appendLine("    val ${arg.name} = alloc<${cVarType(arg.type)}>()")
+        }
+        appendLine("    fn.invoke($invokeArgs)")
+        reads.forEach { read -> read.statements.forEach { appendLine("    $it") } }
+        appendLine("    ${type.name}($constructArgs)")
+        appendLine("  }")
+        append("}")
+      }
+    }
 
     // ADR-053: a nullable-annotated string property keeps ADR-048's null-pointer-maps-to-null-
     // string shape (no fallback needed — the caller's declared type is already String?). A
@@ -1133,13 +1597,30 @@ private fun buildStubProperty(
 
   val setterBlock: String? = if (hasSetter) {
     val setterFnVar = "$bindingsObj.${name}SetterFn"
-    val valueArg: String = argConversion(property.type, "value")
-    val hasStringValue: Boolean = property.type is RirStringType
-    val invokeCall: String = if (hasStringValue) {
-      if (receiverArg == null) "memScoped { fn.invoke($valueArg) }"
-      else "memScoped { fn.invoke($receiverArg, $valueArg) }"
+    // ADR-056: "property setter -> as a parameter (decomposed arguments)" (Decision, wire-format
+    // table) — the same component decomposition buildStubMethod's paramArgs uses for a
+    // struct-typed method parameter, applied to the setter's implicit `value`.
+    val propType: RirTypeRef = property.type
+    val invokeCall: String = if (propType is RirStructType) {
+      val struct = requireNotNull(structs[RirTypeKey(propType.namespace, propType.name)]) {
+        "[nuget] struct ${propType.namespace}.${propType.name} is referenced as a property type " +
+            "but not declared in reverse-ir.json"
+      }
+      val componentArgs: List<String> = struct.components.map { c ->
+        argConversion(c.type, "value.${c.name.toMethodCamelCase()}")
+      }
+      val invokeArgs: String = (listOfNotNull(receiverArg) + componentArgs).joinToString(", ")
+      val hasStringComponent: Boolean = struct.components.any { it.type is RirStringType }
+      if (hasStringComponent) "memScoped { fn.invoke($invokeArgs) }" else "fn.invoke($invokeArgs)"
     } else {
-      if (receiverArg == null) "fn.invoke($valueArg)" else "fn.invoke($receiverArg, $valueArg)"
+      val valueArg: String = argConversion(propType, "value")
+      val hasStringValue: Boolean = propType is RirStringType
+      if (hasStringValue) {
+        if (receiverArg == null) "memScoped { fn.invoke($valueArg) }"
+        else "memScoped { fn.invoke($receiverArg, $valueArg) }"
+      } else {
+        if (receiverArg == null) "fn.invoke($valueArg)" else "fn.invoke($receiverArg, $valueArg)"
+      }
     }
     """
       |set(value) {

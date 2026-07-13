@@ -20,6 +20,66 @@ fun boundHandleTypes(file: RirFile): Set<RirTypeKey> =
     }
   }.toSet()
 
+// ADR-056: every RirStruct declared anywhere in the RirFile, keyed the same way as
+// boundHandleTypes. A RirStructType reference is only ever emitted by the metadata reader for a
+// struct that already passed the reader's own Decision 3a validation — exactly mirroring how
+// RirEnumType is only ever emitted for a validated enum (see isV1Type below) — so both generators
+// need this map to resolve a struct reference's component list at codegen time (abiArgs/
+// abiOutArgs/contractHash), not to decide bridgeability.
+fun boundStructTypes(file: RirFile): Map<RirTypeKey, RirStruct> =
+  file.assemblies.flatMap { assembly ->
+    assembly.namespaces.flatMap { namespace ->
+      namespace.types
+        .filterIsInstance<RirStruct>()
+        .map { struct -> RirTypeKey(namespace.name, struct.name) to struct }
+    }
+  }.toMap()
+
+// ADR-056: one ABI-level argument. `type` is always a scalar — never a RirStructType, because
+// abiArgs/abiOutArgs have already expanded any struct into its components. `isOutPointer` marks a
+// struct-return out-parameter (see abiOutArgs); an ordinary in-argument is isOutPointer = false.
+data class AbiArg(val name: String, val type: RirTypeRef, val isOutPointer: Boolean)
+
+private fun resolveStruct(type: RirTypeRef, structs: Map<RirTypeKey, RirStruct>): RirStruct? =
+  (type as? RirStructType)?.let { ref ->
+    requireNotNull(structs[RirTypeKey(ref.namespace, ref.name)]) {
+      "[nuget] struct ${ref.namespace}.${ref.name} is referenced but not declared in " +
+          "reverse-ir.json"
+    }
+  }
+
+// ADR-056, the anti-drift requirement: expands a parameter list into ABI-level arguments. A
+// struct-typed parameter expands into one argument per component (ABI name "{param}_{Component}",
+// Component being the struct's readName); every other parameter passes through unchanged. BOTH
+// generators (NugetGenerateBindingsTask's Kotlin CFunction types and NugetGenerateShimsTask's C#
+// thunk signatures) MUST call this shared function — not re-derive the expansion — or the
+// registration slots still line up while the arguments inside a slot silently misalign, which is
+// memory corruption with no error.
+fun abiArgs(parameters: List<RirParameter>, structs: Map<RirTypeKey, RirStruct>): List<AbiArg> =
+  parameters.flatMap { p ->
+    val struct: RirStruct? = resolveStruct(p.type, structs)
+    if (struct == null) listOf(AbiArg(p.name, p.type, isOutPointer = false))
+    else struct.components.map { c ->
+      AbiArg("${p.name}_${c.readName}", c.type, isOutPointer = false)
+    }
+  }
+
+// ADR-056: a struct-typed return expands into one out-pointer ABI argument per component (ABI
+// name "out{Component}"), appended after the real parameters. A non-struct return yields no
+// out-arguments at all — see abiReturnType, which turns the thunk's own return into void whenever
+// this list is non-empty.
+fun abiOutArgs(returnType: RirTypeRef, structs: Map<RirTypeKey, RirStruct>): List<AbiArg> {
+  val struct: RirStruct? = resolveStruct(returnType, structs)
+  return struct?.components.orEmpty().map { c ->
+    AbiArg("out${c.readName}", c.type, isOutPointer = true)
+  }
+}
+
+// ADR-056: the ABI-level return type — RirVoidType when the real return is a struct (its
+// components cross via abiOutArgs instead), the real return type unchanged otherwise.
+fun abiReturnType(returnType: RirTypeRef, structs: Map<RirTypeKey, RirStruct>): RirTypeRef =
+  if (resolveStruct(returnType, structs) != null) RirVoidType else returnType
+
 // ADR-049 Alternative 10: a single, shared source of truth for "which static methods on a bound
 // RirClass are v1-bridgeable, in what order" — used by BOTH generateKotlinStubs (ADR-048) and
 // generateCSharpShims (ADR-049). If this filter/order ever drifted between the two generators, the
@@ -107,14 +167,16 @@ fun collisionDiagnostics(cls: RirClass): List<RirDiagnostic> {
   val methodDiagnostics: List<RirDiagnostic> = cls.methods
     .filter { !it.isStatic && it.name.toMethodCamelCase() in WRAPPER_MEMBER_NAMES }
     .map { method ->
-      val signature: String = "${method.name}(${method.parameters.joinToString(", ") { it.type.describe() }})"
+      val paramTypes: String = method.parameters.joinToString(", ") { it.type.describe() }
+      val signature: String = "${method.name}($paramTypes)"
       RirDiagnostic(
         kind = RirDiagnosticKind.SKIPPED_MEMBER_NAME_COLLISION,
         typeName = cls.name,
         memberName = method.name,
         memberSignature = signature,
-        reason = "member name collision — Kotlin name '${method.name.toMethodCamelCase()}' would " +
-            "shadow the generated wrapper's own '${method.name.toMethodCamelCase()}' member",
+        reason = "member name collision — Kotlin name " +
+            "'${method.name.toMethodCamelCase()}' would shadow the generated wrapper's own " +
+            "'${method.name.toMethodCamelCase()}' member",
         hint = "Rename or remove this member on the bound C# type, or expose it via a " +
             "differently-named C# adapter method.",
       )
@@ -128,8 +190,9 @@ fun collisionDiagnostics(cls: RirClass): List<RirDiagnostic> {
         typeName = cls.name,
         memberName = property.name,
         memberSignature = "${property.type.describe()} ${property.name}",
-        reason = "member name collision — Kotlin name '${property.name.toMethodCamelCase()}' would " +
-            "shadow the generated wrapper's own '${property.name.toMethodCamelCase()}' member",
+        reason = "member name collision — Kotlin name " +
+            "'${property.name.toMethodCamelCase()}' would shadow the generated wrapper's own " +
+            "'${property.name.toMethodCamelCase()}' member",
         hint = "Rename or remove this member on the bound C# type, or expose it via a " +
             "differently-named C# adapter property.",
       )
@@ -159,6 +222,7 @@ private fun RirTypeRef.describe(): String = when (this) {
   is RirPrimitiveType -> name
   is RirObjectHandleType -> "$namespace.$name"
   is RirEnumType -> "$namespace.$name"
+  is RirStructType -> "$namespace.$name"
 }
 
 // ADR-052 "shared bridgeable ordering", extended by Phase 9 line 151: the constructor pointer (if
@@ -189,11 +253,12 @@ fun bridgeableRegistrables(cls: RirClass, boundHandleTypes: Set<RirTypeKey>): Li
   // ADR-053: "rule 4" (a handle-typed settable property never getting a PropertySetter slot) is
   // deleted — see the PropertyGetter/PropertySetter doc comment above. A settable property (of
   // any type) always gets both a PropertyGetter and a PropertySetter slot.
-  fun propertyRegistrables(properties: List<RirProperty>): List<RirRegistrable> = properties.flatMap { property ->
-    val getter: RirRegistrable = RirRegistrable.PropertyGetter(property)
-    if (property.isReadOnly) listOf(getter)
-    else listOf(getter, RirRegistrable.PropertySetter(property))
-  }
+  fun propertyRegistrables(properties: List<RirProperty>): List<RirRegistrable> =
+    properties.flatMap { property ->
+      val getter: RirRegistrable = RirRegistrable.PropertyGetter(property)
+      if (property.isReadOnly) listOf(getter)
+      else listOf(getter, RirRegistrable.PropertySetter(property))
+    }
 
   return bridgeableConstructors(cls, boundHandleTypes).map { RirRegistrable.Ctor(it) } +
       bridgeableStaticMethods(cls, boundHandleTypes).map { RirRegistrable.Method(it) } +
@@ -222,6 +287,10 @@ private fun isV1Type(type: RirTypeRef, boundHandleTypes: Set<RirTypeKey>): Boole
   is RirObjectHandleType -> RirTypeKey(type.namespace, type.name) in boundHandleTypes
   // The metadata reader only emits RirEnumType for a validated default-int, contiguous enum.
   is RirEnumType -> true
+  // ADR-056: like RirEnumType above, the metadata reader only emits RirStructType for a struct
+  // that already passed its own Decision 3a validation (component types included) — the struct's
+  // own component types are checked there, not here.
+  is RirStructType -> true
 }
 
 // ADR-054: a pure, deterministic 64-bit hash (FNV-1a) over the ordered registrable signature list
@@ -231,9 +300,15 @@ private fun isV1Type(type: RirTypeRef, boundHandleTypes: Set<RirTypeKey>): Boole
 // disagree; across two different builds (a stale C# shim vs. a rebuilt native library) the hash
 // differs whenever the ordered (memberKind, memberName, returnType, paramTypes, nullability) list
 // differs, which is precisely the drift ADR-054 exists to detect at runtime.
-fun contractHash(cls: RirClass, registrables: List<RirRegistrable>): Long {
+// ADR-056: `structs` lets signaturePart expand a RirStructType's components — load-bearing (see
+// below), not just plumbing.
+fun contractHash(
+  cls: RirClass,
+  registrables: List<RirRegistrable>,
+  structs: Map<RirTypeKey, RirStruct>,
+): Long {
   val signature: String = cls.name + "|" +
-      registrables.joinToString("|") { it.contractSignature() }
+      registrables.joinToString("|") { it.contractSignature(structs) }
   return fnv1a64(signature)
 }
 
@@ -241,22 +316,43 @@ fun contractHash(cls: RirClass, registrables: List<RirRegistrable>): Long {
 // suffix), and — for a method or constructor — return type. A same-arity change to any of these
 // (e.g. a parameter's nullability flips) changes the resulting hash, which is the whole point:
 // same-arity drift is exactly what a plain slotCount comparison cannot see.
-private fun RirRegistrable.contractSignature(): String = when (this) {
-  is RirRegistrable.Ctor -> "ctor(" +
-      ctor.parameters.joinToString(",") { it.type.signaturePart() } + ")"
+private fun RirRegistrable.contractSignature(structs: Map<RirTypeKey, RirStruct>): String =
+  when (this) {
+    is RirRegistrable.Ctor -> "ctor(" +
+        ctor.parameters.joinToString(",") { it.type.signaturePart(structs) } + ")"
 
-  is RirRegistrable.Method -> "method:${method.name}(" +
-      method.parameters.joinToString(",") { it.type.signaturePart() } +
-      "):" + method.returnType.signaturePart()
+    is RirRegistrable.Method -> "method:${method.name}(" +
+        method.parameters.joinToString(",") { it.type.signaturePart(structs) } +
+        "):" + method.returnType.signaturePart(structs)
 
-  is RirRegistrable.PropertyGetter -> "get:${property.name}:${property.type.signaturePart()}"
-  is RirRegistrable.PropertySetter -> "set:${property.name}:${property.type.signaturePart()}"
-}
+    is RirRegistrable.PropertyGetter ->
+      "get:${property.name}:${property.type.signaturePart(structs)}"
+
+    is RirRegistrable.PropertySetter ->
+      "set:${property.name}:${property.type.signaturePart(structs)}"
+  }
 
 // describe() plus the ADR-053 nullability flag — two type refs that only differ by nullability
 // must not hash identically, or a nullability-only drift between two generations would be invisible
 // to the contract check.
-private fun RirTypeRef.signaturePart(): String = describe() + if (isNullable) "?" else ""
+//
+// ADR-056, load-bearing: a RirStructType expands to "namespace.name{comp1,comp2,...}" instead of
+// describe()'s bare "namespace.name". If the C# struct gains a field, every thunk taking it
+// changes ARITY while the method signatures look unchanged — slotCount cannot see this drift
+// either (the number of methods is unchanged) — so the hash must be sensitive to the struct's own
+// component list, recursively (a component that is itself a struct would expand again).
+private fun RirTypeRef.signaturePart(structs: Map<RirTypeKey, RirStruct>): String = when (this) {
+  is RirStructType -> {
+    val struct = requireNotNull(structs[RirTypeKey(namespace, name)]) {
+      "[nuget] contractHash: struct $namespace.$name referenced but not declared in reverse-ir.json"
+    }
+    val componentParts: String =
+      struct.components.joinToString(",") { it.type.signaturePart(structs) }
+    "$namespace.$name{$componentParts}"
+  }
+
+  else -> describe() + if (isNullable) "?" else ""
+}
 
 // FNV-1a 64-bit over the UTF-8 bytes of [s]. Deterministic across JVM versions/platforms (unlike
 // relying on String.hashCode() consistency), which both Gradle tasks need since they run this

@@ -35,16 +35,30 @@ class RirBridgingTest {
       RirConstructor(parameters = listOf(RirParameter(name = "source", type = RirStringType()))),
     ),
     methods = listOf(
-      RirMethod(name = "StaticA", isStatic = true, returnType = RirVoidType, parameters = emptyList()),
-      RirMethod(name = "StaticB", isStatic = true, returnType = RirVoidType, parameters = emptyList()),
-      RirMethod(name = "InstanceA", isStatic = false, returnType = RirVoidType, parameters = emptyList()),
-      RirMethod(name = "InstanceB", isStatic = false, returnType = RirVoidType, parameters = emptyList()),
+      RirMethod(
+        name = "StaticA", isStatic = true, returnType = RirVoidType, parameters = emptyList(),
+      ),
+      RirMethod(
+        name = "StaticB", isStatic = true, returnType = RirVoidType, parameters = emptyList(),
+      ),
+      RirMethod(
+        name = "InstanceA", isStatic = false, returnType = RirVoidType, parameters = emptyList(),
+      ),
+      RirMethod(
+        name = "InstanceB", isStatic = false, returnType = RirVoidType, parameters = emptyList(),
+      ),
     ),
     properties = listOf(
       RirProperty(name = "Name", type = RirStringType(), isReadOnly = true, isStatic = false),
-      RirProperty(name = "Count", type = RirPrimitiveType("int"), isReadOnly = false, isStatic = false),
-      RirProperty(name = "DefaultName", type = RirStringType(), isReadOnly = false, isStatic = true),
-      RirProperty(name = "RenderCount", type = RirPrimitiveType("int"), isReadOnly = true, isStatic = true),
+      RirProperty(
+        name = "Count", type = RirPrimitiveType("int"), isReadOnly = false, isStatic = false,
+      ),
+      RirProperty(
+        name = "DefaultName", type = RirStringType(), isReadOnly = false, isStatic = true,
+      ),
+      RirProperty(
+        name = "RenderCount", type = RirPrimitiveType("int"), isReadOnly = true, isStatic = true,
+      ),
     ),
   )
 
@@ -85,7 +99,9 @@ class RirBridgingTest {
     isStatic = false,
     properties = listOf(
       RirProperty(name = "StaticProp", type = RirStringType(), isReadOnly = true, isStatic = true),
-      RirProperty(name = "InstanceProp", type = RirStringType(), isReadOnly = true, isStatic = false),
+      RirProperty(
+        name = "InstanceProp", type = RirStringType(), isReadOnly = true, isStatic = false,
+      ),
     ),
   )
 
@@ -132,11 +148,12 @@ class RirBridgingTest {
   }
 
   // ------------------------------------------------------------------
-  // 4. ADR-053 (ROADMAP line 157 unblock): "rule 4" — a handle-typed settable property used to emit
-  // a PropertyGetter slot only, NEVER a PropertySetter slot, even when isReadOnly=false. That rule is
-  // now deleted: a settable handle-typed property ALWAYS gets a PropertySetter slot, whatever its
-  // (non-)nullable annotation, because a C# property carries exactly one NullableAttribute and a
-  // Kotlin `var`'s getter/setter can now share that single type (`Foo?` or `Foo`).
+  // 4. ADR-053 (ROADMAP line 157 unblock): "rule 4" — a handle-typed settable property used to
+  // emit a PropertyGetter slot only, NEVER a PropertySetter slot, even when isReadOnly=false. That
+  // rule is now deleted: a settable handle-typed property ALWAYS gets a PropertySetter slot,
+  // whatever its (non-)nullable annotation, because a C# property carries exactly one
+  // NullableAttribute and a Kotlin `var`'s getter/setter can now share that single type (`Foo?`
+  // or `Foo`).
   // ------------------------------------------------------------------
 
   private val handleSettablePropCls: RirClass = RirClass(
@@ -152,7 +169,8 @@ class RirBridgingTest {
     ),
   )
 
-  private val handleSettableBoundTypes: Set<RirTypeKey> = setOf(RirTypeKey("Sample.Text", "Template"))
+  private val handleSettableBoundTypes: Set<RirTypeKey> =
+    setOf(RirTypeKey("Sample.Text", "Template"))
 
   @Test
   fun `handle-typed settable property emits both a getter slot and a setter slot`() {
@@ -176,20 +194,25 @@ class RirBridgingTest {
     properties = listOf(
       RirProperty(
         name = "Favourite",
-        type = RirObjectHandleType(namespace = "Sample.Nullability", name = "Nickname", nullable = true),
+        type = RirObjectHandleType(
+          namespace = "Sample.Nullability", name = "Nickname", nullable = true,
+        ),
         isReadOnly = false,
         isStatic = false,
       ),
       RirProperty(
         name = "Primary",
-        type = RirObjectHandleType(namespace = "Sample.Nullability", name = "Nickname", nullable = false),
+        type = RirObjectHandleType(
+          namespace = "Sample.Nullability", name = "Nickname", nullable = false,
+        ),
         isReadOnly = false,
         isStatic = false,
       ),
     ),
   )
 
-  private val nicknameBoundTypes: Set<RirTypeKey> = setOf(RirTypeKey("Sample.Nullability", "Nickname"))
+  private val nicknameBoundTypes: Set<RirTypeKey> =
+    setOf(RirTypeKey("Sample.Nullability", "Nickname"))
 
   @Test
   fun `ADR-053 a settable handle-typed property always gets a PropertySetter slot, nullable or not`() {
@@ -198,13 +221,13 @@ class RirBridgingTest {
 
     assertTrue(
       registrables.any { it is RirRegistrable.PropertySetter && it.property.name == "Favourite" },
-      "ADR-053: a nullable-handle-typed settable property must get a PropertySetter slot now that " +
-          "rule 4 is deleted — got $registrables",
+      "ADR-053: a nullable-handle-typed settable property must get a PropertySetter slot " +
+          "now that rule 4 is deleted — got $registrables",
     )
     assertTrue(
       registrables.any { it is RirRegistrable.PropertySetter && it.property.name == "Primary" },
-      "ADR-053: a non-null-handle-typed settable property must get a PropertySetter slot now that " +
-          "rule 4 is deleted — got $registrables",
+      "ADR-053: a non-null-handle-typed settable property must get a PropertySetter slot " +
+          "now that rule 4 is deleted — got $registrables",
     )
   }
 
@@ -220,9 +243,13 @@ class RirBridgingTest {
     constructors = listOf(RirConstructor(parameters = emptyList())),
     methods = listOf(
       // control: non-colliding instance method, must survive the collision filter untouched.
-      RirMethod(name = "Reset", isStatic = false, returnType = RirVoidType, parameters = emptyList()),
+      RirMethod(
+        name = "Reset", isStatic = false, returnType = RirVoidType, parameters = emptyList(),
+      ),
       // colliding: instance Close() shadows the ADR-051 wrapper's own close().
-      RirMethod(name = "Close", isStatic = false, returnType = RirVoidType, parameters = emptyList()),
+      RirMethod(
+        name = "Close", isStatic = false, returnType = RirVoidType, parameters = emptyList(),
+      ),
       // safe: a *static* Close overload lives in the companion object, a separate namespace.
       RirMethod(
         name = "Close",
@@ -246,7 +273,9 @@ class RirBridgingTest {
       "non-colliding instance method Reset must still be registered — got $registrables",
     )
     assertFalse(
-      registrables.any { it is RirRegistrable.Method && it.method.name == "Close" && !it.method.isStatic },
+      registrables.any {
+        it is RirRegistrable.Method && it.method.name == "Close" && !it.method.isStatic
+      },
       "the colliding instance Close() must be skipped — got $registrables",
     )
     assertFalse(
@@ -254,7 +283,9 @@ class RirBridgingTest {
       "the colliding instance property Handle must be skipped — got $registrables",
     )
     assertTrue(
-      registrables.any { it is RirRegistrable.Method && it.method.name == "Close" && it.method.isStatic },
+      registrables.any {
+        it is RirRegistrable.Method && it.method.name == "Close" && it.method.isStatic
+      },
       "the static Close(string) overload lives in the companion object and must NOT be skipped " +
           "— got $registrables",
     )
@@ -267,7 +298,8 @@ class RirBridgingTest {
 
     assertTrue(
       "Handle" in names,
-      "expected a skip diagnostic naming the colliding instance property Handle — got $diagnostics",
+      "expected a skip diagnostic naming the colliding instance property Handle — " +
+          "got $diagnostics",
     )
     assertTrue(
       "Close" in names,
@@ -309,8 +341,8 @@ class RirBridgingTest {
     val registrablesBound: List<RirRegistrable> = bridgeableRegistrables(templateCls, boundTypes)
 
     assertEquals(
-      contractHash(templateCls, registrablesBound),
-      contractHash(templateCls, registrablesBound),
+      contractHash(templateCls, registrablesBound, emptyMap()),
+      contractHash(templateCls, registrablesBound, emptyMap()),
       "contractHash must be deterministic for the exact same (cls, registrables) input",
     )
     // Sanity: with an empty boundTypes set, Parse's handle return is not v1-bridgeable, so this
@@ -334,7 +366,11 @@ class RirBridgingTest {
     val nullableRegistrables: List<RirRegistrable> = bridgeableRegistrables(nullableCls, boundTypes)
 
     assertTrue(
-      contractHash(templateCls, registrables) != contractHash(nullableCls, nullableRegistrables),
+      contractHash(templateCls, registrables, emptyMap()) != contractHash(
+        nullableCls,
+        nullableRegistrables,
+        emptyMap()
+      ),
       "ADR-054: a same-arity nullability-only change must change the hash — a plain slotCount " +
           "comparison cannot see this class of drift, which is the whole point of the hash",
     )
@@ -348,8 +384,115 @@ class RirBridgingTest {
     val fullRegistrables: List<RirRegistrable> = bridgeableRegistrables(templateCls, boundTypes)
 
     assertTrue(
-      contractHash(ctorOnly, ctorOnlyRegistrables) != contractHash(templateCls, fullRegistrables),
+      contractHash(ctorOnly, ctorOnlyRegistrables, emptyMap()) != contractHash(
+        templateCls,
+        fullRegistrables,
+        emptyMap()
+      ),
       "contractHash must change when the registrable list's arity changes",
+    )
+  }
+
+  // ------------------------------------------------------------------
+  // 5. ADR-056: abiArgs/abiOutArgs/abiReturnType — the shared struct-expansion functions both
+  //    generators MUST derive their ABI argument lists from.
+  // ------------------------------------------------------------------
+
+  private val pointStruct = RirStruct(
+    name = "Point",
+    components = listOf(
+      RirStructComponent(name = "x", readName = "X", type = RirPrimitiveType("int")),
+      RirStructComponent(name = "y", readName = "Y", type = RirPrimitiveType("int")),
+    ),
+  )
+  private val pointType = RirStructType(namespace = "Sample.Structs", name = "Point")
+  private val structs: Map<RirTypeKey, RirStruct> =
+    mapOf(RirTypeKey("Sample.Structs", "Point") to pointStruct)
+
+  @Test
+  fun `abiArgs expands a struct-typed parameter into one component argument per field, ABI-named param_Component`() {
+    val params = listOf(
+      RirParameter(name = "p", type = pointType),
+      RirParameter(name = "dx", type = RirPrimitiveType("int")),
+    )
+
+    val args: List<AbiArg> = abiArgs(params, structs)
+
+    assertEquals(
+      listOf(
+        AbiArg("p_X", RirPrimitiveType("int"), isOutPointer = false),
+        AbiArg("p_Y", RirPrimitiveType("int"), isOutPointer = false),
+        AbiArg("dx", RirPrimitiveType("int"), isOutPointer = false),
+      ),
+      args,
+    )
+  }
+
+  @Test
+  fun `abiArgs passes a non-struct parameter through unchanged`() {
+    val params = listOf(RirParameter(name = "name", type = RirStringType()))
+    assertEquals(
+      listOf(AbiArg("name", RirStringType(), isOutPointer = false)),
+      abiArgs(params, structs),
+    )
+  }
+
+  @Test
+  fun `abiOutArgs is empty for a non-struct return`() {
+    assertEquals(emptyList(), abiOutArgs(RirPrimitiveType("int"), structs))
+    assertEquals(emptyList(), abiOutArgs(RirVoidType, structs))
+  }
+
+  @Test
+  fun `abiOutArgs expands a struct-typed return into one out-pointer argument per field, ABI-named outComponent`() {
+    val outArgs: List<AbiArg> = abiOutArgs(pointType, structs)
+
+    assertEquals(
+      listOf(
+        AbiArg("outX", RirPrimitiveType("int"), isOutPointer = true),
+        AbiArg("outY", RirPrimitiveType("int"), isOutPointer = true),
+      ),
+      outArgs,
+    )
+  }
+
+  @Test
+  fun `abiReturnType maps a struct return to void and leaves every other return unchanged`() {
+    assertEquals(RirVoidType, abiReturnType(pointType, structs))
+    assertEquals(RirPrimitiveType("int"), abiReturnType(RirPrimitiveType("int"), structs))
+    assertEquals(RirVoidType, abiReturnType(RirVoidType, structs))
+  }
+
+  @Test
+  fun `contractHash expands a struct parameter's components, so adding a field to the struct changes the hash`() {
+    val translate = RirMethod(
+      name = "Translate",
+      isStatic = true,
+      returnType = pointType,
+      parameters = listOf(RirParameter(name = "p", type = pointType)),
+    )
+    val cls = RirClass(name = "Geometry", isStatic = true, methods = listOf(translate))
+    val registrables: List<RirRegistrable> = listOf(RirRegistrable.Method(translate))
+
+    val hashBefore: Long = contractHash(cls, registrables, structs)
+
+    // Simulates the C# struct gaining a third field: the METHOD signature is textually
+    // unchanged (still "Translate(Point): Point"), but the thunk's real ABI arity would grow by
+    // one — exactly the same-arity drift ADR-054 exists to catch, and slotCount cannot see it
+    // (the method count is unchanged either).
+    val widerStruct = pointStruct.copy(
+      components = pointStruct.components + RirStructComponent(
+        name = "z", readName = "Z", type = RirPrimitiveType("int"),
+      ),
+    )
+    val widerStructs: Map<RirTypeKey, RirStruct> =
+      mapOf(RirTypeKey("Sample.Structs", "Point") to widerStruct)
+    val hashAfter: Long = contractHash(cls, registrables, widerStructs)
+
+    assertTrue(
+      hashBefore != hashAfter,
+      "contractHash must change when a struct referenced by a method signature gains a " +
+          "component, even though the method's own signature text is unchanged",
     )
   }
 }

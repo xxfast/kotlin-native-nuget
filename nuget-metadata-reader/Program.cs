@@ -185,6 +185,10 @@ internal static class AssemblyExtractor
         // reference them (ADR-051).
         var boundHandleTypeNames = CollectBoundHandleTypeNames(mr, namespaceMap);
         var enumTypes = CollectEnumTypes(mr, namespaceMap);
+        // ADR-056: value types that are not enums are struct candidates. This must be collected
+        // BEFORE ProcessType runs so ProcessType can redirect every non-enum value type away from
+        // the class fall-through (Constraint 3's bug: today every struct is emitted as a class).
+        var structTypes = CollectStructTypes(mr, namespaceMap, enumTypes);
 
         var rirNamespaces = new List<RirNamespace>();
 
@@ -195,7 +199,8 @@ internal static class AssemblyExtractor
             foreach (var typeHandle in typeHandles)
             {
                 var typeDef = mr.GetTypeDefinition(typeHandle);
-                var (rirType, typeDiagnostics) = ProcessType(mr, typeHandle, typeDef, boundHandleTypeNames, enumTypes);
+                var (rirType, typeDiagnostics) = ProcessType(
+                    mr, typeHandle, typeDef, boundHandleTypeNames, enumTypes, structTypes);
                 if (rirType is not null) rirTypes.Add(rirType);
                 diagnostics.AddRange(typeDiagnostics);
             }
@@ -360,12 +365,198 @@ internal static class AssemblyExtractor
         return EnumExtraction.Supported(new RirEnum(name, entries));
     }
 
+    // ADR-056 Decision 3a: every public, top-level, non-enum value type is a struct candidate.
+    // This collects ALL of them — including the ones that fail the bridgeable-shape rules — so
+    // ProcessType can redirect every one of them away from the class fall-through (the verified
+    // Constraint 3 bug: today every struct shape is emitted as `RirClass`). Ref structs and
+    // generic structs are collected here too (and marked Unsupported) for the same reason, even
+    // though a *reference* to one from another member's signature is separately diagnosed earlier
+    // by SignatureDecoder (`skipped_ref_struct`, `skipped_open_generic`).
+    private static Dictionary<string, StructExtraction> CollectStructTypes(
+        MetadataReader mr,
+        Dictionary<string, List<TypeDefinitionHandle>> namespaceMap,
+        IReadOnlyDictionary<string, EnumExtraction> enumTypes)
+    {
+        var result = new Dictionary<string, StructExtraction>(StringComparer.Ordinal);
+
+        foreach (var (ns, typeHandles) in namespaceMap)
+        {
+            foreach (var typeHandle in typeHandles)
+            {
+                var typeDef = mr.GetTypeDefinition(typeHandle);
+                if (!MetadataHelpers.IsValueType(mr, typeDef)) continue;
+                if (MetadataHelpers.IsEnum(mr, typeDef)) continue;
+
+                var name = mr.GetString(typeDef.Name);
+                var fullName = string.IsNullOrEmpty(ns) ? name : $"{ns}.{name}";
+                result[fullName] = ExtractStruct(mr, typeDef, name, enumTypes);
+            }
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// Applies the ADR-056 Decision 3a "Shape A" rules: exactly one public instance constructor
+    /// (with at least one parameter) whose parameters each match, case-insensitively, a public
+    /// readable instance property of the same (primitive/string/bound-enum) type, and whose
+    /// parameter count equals the struct's non-static instance field count (rule 5 — the proxy for
+    /// "the constructor covers all stored state").
+    /// </summary>
+    private static StructExtraction ExtractStruct(
+        MetadataReader mr,
+        TypeDefinition typeDef,
+        string name,
+        IReadOnlyDictionary<string, EnumExtraction> enumTypes)
+    {
+        if (typeDef.GetGenericParameters().Count > 0)
+            return StructExtraction.Unsupported(
+                "generic struct — open/closed generic structs are not bridgeable in v1");
+
+        if (MetadataHelpers.IsRefStructType(mr, typeDef))
+            return StructExtraction.Unsupported(
+                "ref struct — stack-only (IsByRefLike) and cannot cross the C ABI (ADR-043)");
+
+        var ctorCandidates = new List<MethodDefinitionHandle>();
+        foreach (var handle in typeDef.GetMethods())
+        {
+            var method = mr.GetMethodDefinition(handle);
+            if ((method.Attributes & System.Reflection.MethodAttributes.MemberAccessMask)
+                != System.Reflection.MethodAttributes.Public) continue;
+            if ((method.Attributes & System.Reflection.MethodAttributes.Static) != 0) continue;
+            if (mr.GetString(method.Name) != ".ctor") continue;
+            ctorCandidates.Add(handle);
+        }
+
+        if (ctorCandidates.Count == 0)
+            return StructExtraction.Unsupported(
+                "no public instance constructor (Shape B — public fields / settable auto-properties " +
+                "— is deferred)");
+        if (ctorCandidates.Count > 1)
+            return StructExtraction.Unsupported(
+                $"{ctorCandidates.Count} public constructors — overload set, the same ADR-043 " +
+                "ceiling that excludes multi-constructor classes");
+
+        var ctorDef = mr.GetMethodDefinition(ctorCandidates[0]);
+
+        // Component-type decoding deliberately passes an EMPTY bound-handle set and no struct map:
+        // a class-typed component is never in the v1 vocabulary (no bound-handle set to resolve
+        // against), and a nested-struct component is always rejected (Scope: "nested struct
+        // components deferred") regardless of whether the referenced struct would otherwise be
+        // bridgeable — passing no struct map means GetTypeFromDefinition can never resolve one to
+        // RirStructType here.
+        var componentDecoder = new SignatureDecoder(mr, boundHandleTypeNames: null, enumTypes);
+
+        MethodSignature<TypeRefOrDiag> ctorSig;
+        try
+        {
+            ctorSig = ctorDef.DecodeSignature(componentDecoder, genericContext: null);
+        }
+        catch (BadImageFormatException)
+        {
+            return StructExtraction.Unsupported("constructor signature could not be decoded");
+        }
+
+        if (ctorSig.ParameterTypes.Length == 0)
+            return StructExtraction.Unsupported(
+                "public constructor has no parameters — zero components");
+
+        int instanceFieldCount = typeDef.GetFields().Count(fieldHandle =>
+            (mr.GetFieldDefinition(fieldHandle).Attributes & System.Reflection.FieldAttributes.Static) == 0);
+
+        if (instanceFieldCount != ctorSig.ParameterTypes.Length)
+            return StructExtraction.Unsupported(
+                $"struct has {instanceFieldCount} stored instance field(s) but its constructor " +
+                $"takes {ctorSig.ParameterTypes.Length} parameter(s) — state would be silently dropped");
+
+        // Public, readable, non-static instance properties, keyed case-insensitively (Constraint 4:
+        // ctor parameter `x` vs. property `X`).
+        var properties = new Dictionary<string, (TypeRefOrDiag Decoded, string ReadName)>(
+            StringComparer.OrdinalIgnoreCase);
+
+        foreach (var propHandle in typeDef.GetProperties())
+        {
+            var propDef = mr.GetPropertyDefinition(propHandle);
+            var accessors = propDef.GetAccessors();
+            if (accessors.Getter.IsNil) continue;
+
+            var getterDef = mr.GetMethodDefinition(accessors.Getter);
+            if ((getterDef.Attributes & System.Reflection.MethodAttributes.MemberAccessMask)
+                != System.Reflection.MethodAttributes.Public) continue;
+            if ((getterDef.Attributes & System.Reflection.MethodAttributes.Static) != 0) continue;
+
+            TypeRefOrDiag propType;
+            try
+            {
+                propType = propDef.DecodeSignature(componentDecoder, genericContext: null).ReturnType;
+            }
+            catch (BadImageFormatException)
+            {
+                continue;
+            }
+
+            var propName = mr.GetString(propDef.Name);
+            properties[propName] = (propType, propName);
+        }
+
+        var paramHandlesBySeq = MapParameterHandlesBySequenceNumber(mr, ctorDef);
+        var components = new List<RirStructComponent>();
+
+        for (int i = 0; i < ctorSig.ParameterTypes.Length; i++)
+        {
+            int seq = i + 1;
+            string paramName = "arg" + i;
+            if (paramHandlesBySeq.TryGetValue(seq, out var ph))
+            {
+                var pn = mr.GetString(mr.GetParameter(ph).Name);
+                if (!string.IsNullOrEmpty(pn)) paramName = pn;
+            }
+
+            if (!properties.TryGetValue(paramName, out var match))
+                return StructExtraction.Unsupported(
+                    $"constructor parameter `{paramName}` has no matching public readable property");
+
+            var (propDecoded, readName) = match;
+            if (propDecoded.TypeRef is null)
+            {
+                var reason = propDecoded.Diagnostic?.Reason
+                    ?? $"component type `{propDecoded.RawTypeName}` is not bridgeable";
+                return StructExtraction.Unsupported($"property `{readName}`: {reason}");
+            }
+
+            var ctorParamDecoded = ctorSig.ParameterTypes[i];
+            if (ctorParamDecoded.TypeRef is null)
+            {
+                var reason = ctorParamDecoded.Diagnostic?.Reason
+                    ?? $"component type `{ctorParamDecoded.RawTypeName}` is not bridgeable";
+                return StructExtraction.Unsupported($"constructor parameter `{paramName}`: {reason}");
+            }
+
+            if (!TypeRefsStructurallyEqual(ctorParamDecoded.TypeRef, propDecoded.TypeRef))
+                return StructExtraction.Unsupported(
+                    $"constructor parameter `{paramName}` and property `{readName}` have different types");
+
+            components.Add(new RirStructComponent(paramName, readName, ctorParamDecoded.TypeRef));
+        }
+
+        return StructExtraction.Supported(new RirStruct(name, components));
+    }
+
+    private static bool TypeRefsStructurallyEqual(RirTypeRef a, RirTypeRef b) => (a, b) switch
+    {
+        (RirPrimitiveType pa, RirPrimitiveType pb) => pa.Name == pb.Name,
+        (RirStringType, RirStringType) => true,
+        (RirEnumType ea, RirEnumType eb) => ea.Namespace == eb.Namespace && ea.Name == eb.Name,
+        _ => false,
+    };
+
     private static (RirType? Type, IEnumerable<RirDiagnostic> Diagnostics) ProcessType(
         MetadataReader mr,
         TypeDefinitionHandle typeHandle,
         TypeDefinition typeDef,
         HashSet<string> boundHandleTypeNames,
-        IReadOnlyDictionary<string, EnumExtraction> enumTypes)
+        IReadOnlyDictionary<string, EnumExtraction> enumTypes,
+        IReadOnlyDictionary<string, StructExtraction> structTypes)
     {
         var typeName = mr.GetString(typeDef.Name);
         var ns = mr.GetString(typeDef.Namespace);
@@ -382,6 +573,25 @@ internal static class AssemblyExtractor
                 reason: enumType.Reason!,
                 hint: "Use a non-[Flags] default-int enum with unique contiguous values from 0 through N-1.") });
         }
+
+        // ADR-056: a value type that is not an enum is a struct candidate and must not fall
+        // through to class processing below (Constraint 3's verified bug). Struct members are not
+        // enumerated in v1 — a supported struct emits ONLY its RirStruct node.
+        if (structTypes.TryGetValue(fullName, out var structType))
+        {
+            if (structType.Struct is not null) return (structType.Struct, Array.Empty<RirDiagnostic>());
+
+            return (null, new[] { new RirDiagnostic(
+                kind: "skipped_unsupported_struct",
+                typeName: typeName,
+                memberName: typeName,
+                memberSignature: fullName,
+                reason: structType.Reason!,
+                hint: "See ADR-056 Decision 3a: a bridgeable struct has exactly one public " +
+                    "constructor covering all stored state, with primitive/string/bound-enum " +
+                    "components matching the constructor parameters case-insensitively.") });
+        }
+
         var isInterface = (typeDef.Attributes & System.Reflection.TypeAttributes.ClassSemanticsMask)
                           == System.Reflection.TypeAttributes.Interface;
         var isAbstract = (typeDef.Attributes & System.Reflection.TypeAttributes.Abstract) != 0;
@@ -452,7 +662,7 @@ internal static class AssemblyExtractor
             var methodHandle = group[0];
             var methodDef = mr.GetMethodDefinition(methodHandle);
             var (rirMethod, methodDiagnostic, obliviousDiagnostic) = TryMapMethod(
-                mr, typeHandle, methodHandle, methodDef, typeName, isInterface, boundHandleTypeNames, enumTypes);
+                mr, typeHandle, methodHandle, methodDef, typeName, isInterface, boundHandleTypeNames, enumTypes, structTypes);
             if (rirMethod is not null)
             {
                 methods.Add(rirMethod);
@@ -474,7 +684,7 @@ internal static class AssemblyExtractor
         if (canHaveConstructor && ctorCandidates.Count == 1)
         {
             var (rirCtor, ctorDiagnostic, ctorObliviousDiagnostic) = TryMapConstructor(
-                mr, typeHandle, ctorCandidates[0], typeName, boundHandleTypeNames, enumTypes);
+                mr, typeHandle, ctorCandidates[0], typeName, boundHandleTypeNames, enumTypes, structTypes);
             if (rirCtor is not null)
             {
                 constructors.Add(rirCtor);
@@ -515,7 +725,7 @@ internal static class AssemblyExtractor
                 != System.Reflection.MethodAttributes.Public) continue;
 
             var (propTypeRef, propDiagnostic) = TryDecodePropertyType(
-                mr, propDef, propName, typeName, boundHandleTypeNames, enumTypes);
+                mr, propDef, propName, typeName, boundHandleTypeNames, enumTypes, structTypes);
             if (propTypeRef is not null)
             {
                 // Same masked-equality fix as the getter check above: a non-zero AND against
@@ -598,10 +808,11 @@ internal static class AssemblyExtractor
         MethodDefinitionHandle methodHandle,
         string typeName,
         HashSet<string> boundHandleTypeNames,
-        IReadOnlyDictionary<string, EnumExtraction> enumTypes)
+        IReadOnlyDictionary<string, EnumExtraction> enumTypes,
+        IReadOnlyDictionary<string, StructExtraction> structTypes)
     {
         var methodDef = mr.GetMethodDefinition(methodHandle);
-        var decoder = new SignatureDecoder(mr, boundHandleTypeNames, enumTypes);
+        var decoder = new SignatureDecoder(mr, boundHandleTypeNames, enumTypes, structTypes);
         MethodSignature<TypeRefOrDiag> sig;
 
         try
@@ -681,7 +892,8 @@ internal static class AssemblyExtractor
         string typeName,
         bool isInterface,
         HashSet<string> boundHandleTypeNames,
-        IReadOnlyDictionary<string, EnumExtraction> enumTypes)
+        IReadOnlyDictionary<string, EnumExtraction> enumTypes,
+        IReadOnlyDictionary<string, StructExtraction> structTypes)
     {
         var methodName = mr.GetString(methodDef.Name);
         bool isStatic = (methodDef.Attributes & System.Reflection.MethodAttributes.Static) != 0;
@@ -701,7 +913,7 @@ internal static class AssemblyExtractor
                 hint: "Override this method in a concrete adapter class."), null);
         }
 
-        var decoder = new SignatureDecoder(mr, boundHandleTypeNames, enumTypes);
+        var decoder = new SignatureDecoder(mr, boundHandleTypeNames, enumTypes, structTypes);
         MethodSignature<TypeRefOrDiag> sig;
 
         try
@@ -821,9 +1033,10 @@ internal static class AssemblyExtractor
         string propName,
         string typeName,
         HashSet<string> boundHandleTypeNames,
-        IReadOnlyDictionary<string, EnumExtraction> enumTypes)
+        IReadOnlyDictionary<string, EnumExtraction> enumTypes,
+        IReadOnlyDictionary<string, StructExtraction> structTypes)
     {
-        var decoder = new SignatureDecoder(mr, boundHandleTypeNames, enumTypes);
+        var decoder = new SignatureDecoder(mr, boundHandleTypeNames, enumTypes, structTypes);
         MethodSignature<TypeRefOrDiag> sig;
 
         try
@@ -1178,6 +1391,14 @@ internal sealed record EnumExtraction(RirEnum? Enum, string? Reason)
     internal static EnumExtraction Unsupported(string reason) => new(null, reason);
 }
 
+/// <summary>ADR-056: the outcome of applying the Decision 3a "Shape A" rules to one value type
+/// (struct) candidate. Mirrors <see cref="EnumExtraction"/>.</summary>
+internal sealed record StructExtraction(RirStruct? Struct, string? Reason)
+{
+    internal static StructExtraction Supported(RirStruct value) => new(value, null);
+    internal static StructExtraction Unsupported(string reason) => new(null, reason);
+}
+
 /// <summary>
 /// Implements <see cref="ISignatureTypeProvider{TType,TGenericContext}"/> using
 /// <see cref="System.Reflection.Metadata"/> primitives. Maps the v1 type vocabulary to
@@ -1196,16 +1417,25 @@ internal sealed class SignatureDecoder : ISignatureTypeProvider<TypeRefOrDiag, o
     /// </summary>
     private readonly HashSet<string> _boundHandleTypeNames;
     private readonly IReadOnlyDictionary<string, EnumExtraction> _enumTypes;
+    /// <summary>
+    /// ADR-056: struct candidates by fully-qualified name. Pass null (or omit) when decoding
+    /// struct COMPONENT types themselves (<c>AssemblyExtractor.ExtractStruct</c>) — an empty map
+    /// there makes a nested-struct component always fall through to "not bridgeable", which is the
+    /// intended v1 behaviour ("nested struct components deferred").
+    /// </summary>
+    private readonly IReadOnlyDictionary<string, StructExtraction> _structTypes;
 
     public SignatureDecoder(
         MetadataReader mr,
         HashSet<string>? boundHandleTypeNames = null,
-        IReadOnlyDictionary<string, EnumExtraction>? enumTypes = null)
+        IReadOnlyDictionary<string, EnumExtraction>? enumTypes = null,
+        IReadOnlyDictionary<string, StructExtraction>? structTypes = null)
     {
         _mr = mr;
         _boundHandleTypeNames = boundHandleTypeNames
             ?? new HashSet<string>(StringComparer.Ordinal);
         _enumTypes = enumTypes ?? new Dictionary<string, EnumExtraction>(StringComparer.Ordinal);
+        _structTypes = structTypes ?? new Dictionary<string, StructExtraction>(StringComparer.Ordinal);
     }
 
     // Primitives
@@ -1275,6 +1505,22 @@ internal sealed class SignatureDecoder : ISignatureTypeProvider<TypeRefOrDiag, o
                     "skipped_unsupported_enum",
                     $"enum `{fullName}` is not part of the bound extraction set",
                     "Bind the enum namespace and use a supported ordinal enum shape."),
+                fullName);
+        }
+
+        // ADR-056: a struct candidate crosses the bridge as a decomposed RirStructType (never an
+        // opaque handle — checked before _boundHandleTypeNames below), or is diagnosed as
+        // unsupported, mirroring exactly what the enum branch above already does.
+        if (_structTypes.TryGetValue(fullName, out var structType))
+        {
+            if (structType.Struct is not null)
+                return new TypeRefOrDiag(new RirStructType(ns, name), null, fullName);
+
+            return new TypeRefOrDiag(null,
+                new PendingDiagnostic(
+                    "skipped_unsupported_struct",
+                    $"struct `{fullName}` is not bridgeable: {structType.Reason}",
+                    "See ADR-056 Decision 3a for the bridgeable struct shape."),
                 fullName);
         }
 
@@ -1430,6 +1676,7 @@ internal sealed class SignatureDecoder : ISignatureTypeProvider<TypeRefOrDiag, o
 [JsonDerivedType(typeof(RirClass), "class")]
 [JsonDerivedType(typeof(RirInterface), "interface")]
 [JsonDerivedType(typeof(RirEnum), "enum")]
+[JsonDerivedType(typeof(RirStruct), "struct")]
 internal abstract class RirType
 {
     public abstract string Name { get; }
@@ -1505,6 +1752,45 @@ internal sealed class RirEnumEntry
     public int Ordinal { get; }
 }
 
+/// <summary>
+/// ADR-056: a C# struct that satisfies the Decision 3a "Shape A" rules. Mirrors
+/// <c>RirStruct</c> in <c>RirModel.kt</c> field-for-field. Struct members (methods, computed
+/// properties) are deliberately not enumerated in v1 — <see cref="Components"/> is the complete
+/// wire contract, derived from the struct's single public instance constructor.
+/// </summary>
+internal sealed class RirStruct : RirType
+{
+    public RirStruct(string name, IReadOnlyList<RirStructComponent> components)
+    {
+        Name = name;
+        Components = components;
+    }
+
+    public override string Name { get; }
+    public IReadOnlyList<RirStructComponent> Components { get; }
+}
+
+/// <summary>
+/// One component of a bridgeable struct (ADR-056). <see cref="Name"/> is the constructor
+/// parameter name (drives the Kotlin property name); <see cref="ReadName"/> is the public
+/// property used to read the value back, which may differ in case from <see cref="Name"/>
+/// (verified: ctor `x` vs. property `X`). Mirrors <c>RirStructComponent</c> in
+/// <c>RirModel.kt</c> field-for-field.
+/// </summary>
+internal sealed class RirStructComponent
+{
+    public RirStructComponent(string name, string readName, RirTypeRef type)
+    {
+        Name = name;
+        ReadName = readName;
+        Type = type;
+    }
+
+    public string Name { get; }
+    public string ReadName { get; }
+    public RirTypeRef Type { get; }
+}
+
 internal sealed class RirMethod
 {
     public RirMethod(string name, RirTypeRef returnType, IReadOnlyList<RirParameter> parameters, bool isStatic)
@@ -1571,6 +1857,7 @@ internal sealed class RirConstructor
 [JsonDerivedType(typeof(RirPrimitiveType), "primitive")]
 [JsonDerivedType(typeof(RirObjectHandleType), "handle")]
 [JsonDerivedType(typeof(RirEnumType), "enum")]
+[JsonDerivedType(typeof(RirStructType), "struct")]
 internal abstract class RirTypeRef { }
 
 internal sealed class RirVoidType : RirTypeRef
@@ -1628,6 +1915,26 @@ internal sealed class RirObjectHandleType : RirTypeRef
 internal sealed class RirEnumType : RirTypeRef
 {
     public RirEnumType(string @namespace, string name)
+    {
+        Namespace = @namespace;
+        Name = name;
+    }
+
+    public string Namespace { get; }
+    public string Name { get; }
+}
+
+/// <summary>
+/// A reference to a bridgeable struct (ADR-056). Unlike <see cref="RirObjectHandleType"/>, this
+/// never crosses the bridge as a pointer — the two generators expand it into its
+/// <see cref="RirStruct.Components"/> at the ABI level (arguments in, out-pointers out). Carries
+/// no <c>nullable</c> flag by design (ADR-056): a nullable value type is
+/// <c>System.Nullable&lt;T&gt;</c>, a distinct closed generic struct, not an annotation on this
+/// type ref. Mirrors <c>RirStructType</c> in <c>RirModel.kt</c> field-for-field.
+/// </summary>
+internal sealed class RirStructType : RirTypeRef
+{
+    public RirStructType(string @namespace, string name)
     {
         Namespace = @namespace;
         Name = name;
@@ -1713,6 +2020,8 @@ internal sealed class RirDiagnostic
 [JsonSerializable(typeof(RirInterface))]
 [JsonSerializable(typeof(RirEnum))]
 [JsonSerializable(typeof(RirEnumEntry))]
+[JsonSerializable(typeof(RirStruct))]
+[JsonSerializable(typeof(RirStructComponent))]
 [JsonSerializable(typeof(RirMethod))]
 [JsonSerializable(typeof(RirProperty))]
 [JsonSerializable(typeof(RirParameter))]
@@ -1723,6 +2032,7 @@ internal sealed class RirDiagnostic
 [JsonSerializable(typeof(RirPrimitiveType))]
 [JsonSerializable(typeof(RirObjectHandleType))]
 [JsonSerializable(typeof(RirEnumType))]
+[JsonSerializable(typeof(RirStructType))]
 [JsonSerializable(typeof(RirDiagnostic))]
 [JsonSourceGenerationOptions(
     WriteIndented = true,

@@ -208,9 +208,12 @@ type) always gets both a `PropertyGetter` and `PropertySetter` registration slot
 ## Limitations
 
 - `Nullable<T>` value-typed instance properties/parameters (`int?`, `CatMood?`) are deferred; they
-  carry no `NullableAttribute` and need their own wire format (see
+  carry no `NullableAttribute` (see
   [ADR-053](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/053-nullable-reference-types-in-kotlin.md)
-  Decision 3).
+  Decision 3). The wire format is settled ([ADR-056](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/056-csharp-structs-in-kotlin.md)'s
+  out-pointer convention), so this needs no new ADR.
+- Struct-typed instance properties and methods are supported (getter as out-pointers, setter as
+  decomposed arguments); see [C# structs](structs.md).
 - Overload sets on instance methods are skipped exactly like static ones: the whole set, not a
   best-effort subset.
 
@@ -218,11 +221,13 @@ type) always gets both a `PropertyGetter` and `PropertySetter` registration slot
     <category ref="related">
         <a href="objects-and-handles.md">Objects and handles</a>
         <a href="static-classes-and-methods.md">Static classes and methods</a>
+        <a href="structs.md">C# structs</a>
         <a href="bridgeable-subset.md">The bridgeable subset</a>
     </category>
     <category ref="external">
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/051-csharp-objects-as-opaque-handles.md">ADR-051: C# objects as opaque handles</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/052-csharp-instance-constructors-in-kotlin.md">ADR-052: C# instance constructors in Kotlin</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/053-nullable-reference-types-in-kotlin.md">ADR-053: Nullable reference types in Kotlin</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/056-csharp-structs-in-kotlin.md">ADR-056: C# structs (value types) in Kotlin</a>
     </category>
 </seealso>

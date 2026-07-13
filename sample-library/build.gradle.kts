@@ -197,6 +197,8 @@ nuget {
         alias("Sample.Nullability", "sample.nullability")
         include("Sample.Household")
         alias("Sample.Household", "sample.household")
+        include("Sample.Structs")
+        alias("Sample.Structs", "sample.structs")
       }
     }
   }
