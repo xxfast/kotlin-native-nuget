@@ -1,5 +1,7 @@
 package io.github.xxfast.kotlin.native.nuget.rir
 
+import java.security.MessageDigest
+
 // Identifies a bound C# class by its C# namespace and simple name. Used as a set key to
 // determine whether a RirObjectHandleType reference is bridgeable (i.e. the type it refers to is
 // a non-static class present in the extraction set). Kept as a plain data class rather than
@@ -100,6 +102,18 @@ fun bridgeableStaticMethods(cls: RirClass, boundHandleTypes: Set<RirTypeKey>): L
 fun bridgeableConstructors(cls: RirClass, boundHandleTypes: Set<RirTypeKey>): List<RirConstructor> =
   cls.constructors.filter { ctor -> ctor.parameters.all { isV1Type(it.type, boundHandleTypes) } }
 
+fun bridgeableStructConstructors(
+  struct: RirStruct,
+  boundHandleTypes: Set<RirTypeKey>,
+): List<RirConstructor> {
+  val constructors: List<RirConstructor> = struct.constructors
+    .filterNot { it.isState }
+    .filter { ctor -> ctor.parameters.all { isV1Type(it.type, boundHandleTypes) } }
+    .sortedBy { it.identity() }
+  bridgeIds(constructors.map { it.identity() })
+  return constructors
+}
+
 // ADR-052: a member that receives exactly one function-pointer slot on the type's
 // nuget_{ns}_{type}_register export — either the type's public instance constructor or a
 // bridgeable static method. Sealed so both generators derive the registration-order-sensitive
@@ -126,6 +140,57 @@ sealed interface RirRegistrable {
   data class PropertyGetter(val property: RirProperty) : RirRegistrable
   data class PropertySetter(val property: RirProperty) : RirRegistrable
 }
+
+fun RirMethod.identity(): String = if (managedSignature.isNotEmpty()) managedSignature else {
+  val receiver: String = if (isStatic) "static" else "instance"
+  "method|$receiver||$name|(${parameters.joinToString(",") { it.type.describe() }})|" +
+      returnType.describe()
+}
+
+fun RirConstructor.identity(): String = if (managedSignature.isNotEmpty()) managedSignature else
+  "ctor|instance||.ctor|(${parameters.joinToString(",") { it.type.describe() }})|void"
+
+fun RirMethod.bridgeId(): String = bridgeId(identity())
+
+fun RirConstructor.bridgeId(): String = bridgeId(identity())
+
+fun RirMethod.bridgeSuffix(): String =
+  if (managedSignature.isEmpty()) "" else "__${bridgeId()}"
+
+fun RirConstructor.bridgeSuffix(): String =
+  if (managedSignature.isEmpty()) "" else "__${bridgeId()}"
+
+fun bridgeId(signature: String): String = MessageDigest.getInstance("SHA-256")
+  .digest(signature.toByteArray(Charsets.UTF_8))
+  .take(16)
+  .joinToString("") { byte -> "%02x".format(byte) }
+
+fun bridgeIds(
+  signatures: List<String>,
+  digest: (String) -> String = ::bridgeId,
+): Map<String, String> {
+  val ids: Map<String, String> = signatures.associateWith(digest)
+  ids.entries.groupBy { it.value }.values.forEach { matches ->
+    val distinct: List<String> = matches.map { it.key }.distinct()
+    require(distinct.size == 1) {
+      "[nuget] bridge digest collision `${matches.first().value}` between " +
+          distinct.joinToString(" and ") { "`$it`" }
+    }
+  }
+  return ids
+}
+
+fun RirRegistrable.identity(): String = when (this) {
+  is RirRegistrable.Ctor -> ctor.identity()
+  is RirRegistrable.Method -> method.identity()
+  is RirRegistrable.PropertyGetter ->
+    "property|instance|get|${property.name}|${property.type.describe()}"
+
+  is RirRegistrable.PropertySetter ->
+    "property|instance|set|${property.name}|${property.type.describe()}"
+}
+
+fun RirRegistrable.bridgeId(): String = bridgeId(identity())
 
 // Phase 9 (ROADMAP line 151): v1-bridgeable instance methods on a bound class — mirrors
 // bridgeableStaticMethods, but for `!isStatic` methods.
@@ -260,11 +325,34 @@ fun bridgeableRegistrables(cls: RirClass, boundHandleTypes: Set<RirTypeKey>): Li
       else listOf(getter, RirRegistrable.PropertySetter(property))
     }
 
-  return bridgeableConstructors(cls, boundHandleTypes).map { RirRegistrable.Ctor(it) } +
-      bridgeableStaticMethods(cls, boundHandleTypes).map { RirRegistrable.Method(it) } +
-      instanceMethods.map { RirRegistrable.Method(it) } +
-      propertyRegistrables(instanceProperties) +
-      propertyRegistrables(staticProperties)
+  val hasManagedIdentity: Boolean = (cls.constructors.map { it.managedSignature } +
+      cls.methods.map { it.managedSignature }).any { it.isNotEmpty() }
+
+  fun <T> canonical(values: List<T>, identity: (T) -> String): List<T> =
+    if (hasManagedIdentity) values.sortedBy(identity) else values
+
+  val constructors: List<RirRegistrable> = canonical(
+    bridgeableConstructors(cls, boundHandleTypes), RirConstructor::identity,
+  )
+    .map { RirRegistrable.Ctor(it) }
+  val staticMethods: List<RirRegistrable> = canonical(
+    bridgeableStaticMethods(cls, boundHandleTypes), RirMethod::identity,
+  )
+    .map { RirRegistrable.Method(it) }
+  val sortedInstanceMethods: List<RirRegistrable> = canonical(
+    instanceMethods, RirMethod::identity,
+  )
+    .map { RirRegistrable.Method(it) }
+  val sortedInstanceProperties: List<RirRegistrable> = propertyRegistrables(
+    if (hasManagedIdentity) instanceProperties.sortedBy { it.name } else instanceProperties,
+  )
+  val sortedStaticProperties: List<RirRegistrable> = propertyRegistrables(
+    if (hasManagedIdentity) staticProperties.sortedBy { it.name } else staticProperties,
+  )
+  val result: List<RirRegistrable> = constructors + staticMethods + sortedInstanceMethods +
+      sortedInstanceProperties + sortedStaticProperties
+  bridgeIds(result.map { it.identity() })
+  return result
 }
 
 // ADR-048 v1 bridgeable subset: static methods only, void/string/primitive/handle parameter and
@@ -312,16 +400,33 @@ fun contractHash(
   return fnv1a64(signature)
 }
 
+fun structConstructorContractHash(
+  namespace: String,
+  struct: RirStruct,
+  constructors: List<RirConstructor>,
+  structs: Map<RirTypeKey, RirStruct>,
+): Long {
+  val components: String = struct.components.joinToString(",") {
+    "${it.name}:${it.type.signaturePart(structs)}"
+  }
+  val signature: String = "$namespace.${struct.name}|{$components}|" +
+      constructors.joinToString("|") { ctor ->
+        ctor.identity() + ":ctor(" +
+            ctor.parameters.joinToString(",") { it.type.signaturePart(structs) } + ")"
+      }
+  return fnv1a64(signature)
+}
+
 // One "column" of contractHash's input: member kind, name, parameter types (with nullability
 // suffix), and — for a method or constructor — return type. A same-arity change to any of these
 // (e.g. a parameter's nullability flips) changes the resulting hash, which is the whole point:
 // same-arity drift is exactly what a plain slotCount comparison cannot see.
 private fun RirRegistrable.contractSignature(structs: Map<RirTypeKey, RirStruct>): String =
   when (this) {
-    is RirRegistrable.Ctor -> "ctor(" +
+    is RirRegistrable.Ctor -> ctor.identity() + ":ctor(" +
         ctor.parameters.joinToString(",") { it.type.signaturePart(structs) } + ")"
 
-    is RirRegistrable.Method -> "method:${method.name}(" +
+    is RirRegistrable.Method -> method.identity() + ":method:${method.name}(" +
         method.parameters.joinToString(",") { it.type.signaturePart(structs) } +
         "):" + method.returnType.signaturePart(structs)
 

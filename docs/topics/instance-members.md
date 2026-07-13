@@ -127,24 +127,57 @@ fun greetViaInstanceMembers(name: String): String {
 Neither is a stored field; both `get()` and `set()` (when present) call through a registered function
 pointer on every access, just like a method.
 
+## Instance method overloads
+
+Same-name C# instance methods become ordinary Kotlin overloads. From the generated
+`sample.overloads.OverloadLab` wrapper:
+
+```kotlin
+fun apply(value: Int): String {
+  val fn = requireNotNull(OverloadLabBindings.apply__0053cbaf86159b038b186eb3f58e5325Fn) {
+    NugetRegistry.notRegistered("Sample.Overloads.OverloadLab", "SampleDependency")
+  }
+  val resultPtr = fn.invoke(handle.require("OverloadLab"), value)
+    ?: error("OverloadLab.Apply returned null, expected a non-null string pointer")
+  val result = resultPtr.reinterpret<ByteVar>().toKString()
+  freeManagedString(resultPtr)
+  return result
+}
+
+fun apply(value: String): String {
+  val fn = requireNotNull(OverloadLabBindings.apply__2698962af99422165da00ce0a194caceFn) {
+    NugetRegistry.notRegistered("Sample.Overloads.OverloadLab", "SampleDependency")
+  }
+  val resultPtr = memScoped { fn.invoke(handle.require("OverloadLab"), value.cstr.ptr) }
+    ?: error("OverloadLab.Apply returned null, expected a non-null string pointer")
+  val result = resultPtr.reinterpret<ByteVar>().toKString()
+  freeManagedString(resultPtr)
+  return result
+}
+```
+
 ## Registration slot order
 
 The registration export's parameters follow one fixed order, derived from a single shared function
 (`bridgeableRegistrables` in `RirBridging.kt`) that both the Kotlin and C# generators consume, so the
 two sides can never drift out of alignment:
 
-1. constructor (if any)
-2. static methods
-3. instance methods
-4. one getter, then one setter (if settable), per bridgeable instance property
-5. one getter, then one setter (if settable), per bridgeable static property
+1. constructors, sorted by canonical managed signature
+2. static methods, sorted by canonical managed signature
+3. instance methods, sorted by canonical managed signature
+4. instance properties, sorted by canonical property identity, getter before setter
+5. static properties, sorted by canonical property identity, getter before setter
 
 ```C#
 // build/nuget-interop/csharp/TemplateRegistration.cs (real generated output, full parameter list)
 private static extern void nuget_sample_text_template_register(
-    IntPtr ctorPtr, IntPtr parsePtr, IntPtr renderPtr,
-    IntPtr applyPtr, IntPtr clonePtr,
-    IntPtr sourceGetterPtr, IntPtr nameGetterPtr, IntPtr nameSetterPtr,
+    int slotCount, long contractHash,
+    IntPtr ctor__88b141e80a5108003d6f860a1ce95a8bPtr,
+    IntPtr parse__ffb4590e9c348d4335b0daf3bf67290dPtr,
+    IntPtr render__09735fbd1f678e3c5379e20685e83436Ptr,
+    IntPtr apply__24f0465fa09a4b89c4df743720ee967ePtr,
+    IntPtr clone__ff6587faf14671db32af677f29126dcePtr,
+    IntPtr nameGetterPtr, IntPtr nameSetterPtr, IntPtr sourceGetterPtr,
     IntPtr defaultNameGetterPtr, IntPtr defaultNameSetterPtr, IntPtr renderCountGetterPtr);
 ```
 
@@ -214,8 +247,8 @@ type) always gets both a `PropertyGetter` and `PropertySetter` registration slot
   out-pointer convention), so this needs no new ADR.
 - Struct-typed instance properties and methods are supported (getter as out-pointers, setter as
   decomposed arguments); see [C# structs](structs.md).
-- Overload sets on instance methods are skipped exactly like static ones: the whole set, not a
-  best-effort subset.
+- Unsupported instance-method overloads are diagnosed independently. Other bridgeable siblings
+  remain available.
 
 <seealso>
     <category ref="related">
@@ -229,5 +262,6 @@ type) always gets both a `PropertyGetter` and `PropertySetter` registration slot
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/052-csharp-instance-constructors-in-kotlin.md">ADR-052: C# instance constructors in Kotlin</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/053-nullable-reference-types-in-kotlin.md">ADR-053: Nullable reference types in Kotlin</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/056-csharp-structs-in-kotlin.md">ADR-056: C# structs (value types) in Kotlin</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/057-csharp-overload-sets-in-kotlin.md">ADR-057: C# overload sets in Kotlin</a>
     </category>
 </seealso>

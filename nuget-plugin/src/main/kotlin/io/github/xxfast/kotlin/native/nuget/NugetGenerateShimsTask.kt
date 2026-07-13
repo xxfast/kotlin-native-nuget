@@ -24,10 +24,14 @@ import io.github.xxfast.kotlin.native.nuget.rir.abiReturnType
 import io.github.xxfast.kotlin.native.nuget.rir.boundHandleTypes
 import io.github.xxfast.kotlin.native.nuget.rir.boundStructTypes
 import io.github.xxfast.kotlin.native.nuget.rir.bridgeableRegistrables
+import io.github.xxfast.kotlin.native.nuget.rir.bridgeId
+import io.github.xxfast.kotlin.native.nuget.rir.bridgeableStructConstructors
+import io.github.xxfast.kotlin.native.nuget.rir.bridgeSuffix
 import io.github.xxfast.kotlin.native.nuget.rir.contractHash
 import io.github.xxfast.kotlin.native.nuget.rir.isNullable
 import io.github.xxfast.kotlin.native.nuget.rir.parseReverseIr
 import io.github.xxfast.kotlin.native.nuget.rir.registrationExportName
+import io.github.xxfast.kotlin.native.nuget.rir.structConstructorContractHash
 import org.gradle.api.DefaultTask
 import org.gradle.api.file.DirectoryProperty
 import org.gradle.api.file.RegularFileProperty
@@ -65,6 +69,20 @@ fun generateCSharpShims(file: RirFile, nativeLibraryName: String): List<Generate
 
   file.assemblies.forEach { assembly ->
     assembly.namespaces.forEach { namespace ->
+      namespace.types.filterIsInstance<RirStruct>().forEach { struct ->
+        val constructors: List<RirConstructor> = bridgeableStructConstructors(struct, boundTypes)
+        if (constructors.isNotEmpty()) {
+          result.add(
+            GeneratedFile(
+              relativePath = "${struct.name}Registration.cs",
+              content = structRegistrationFileContent(
+                namespace.name, struct, constructors,
+                registrationExportName(namespace.name, struct.name), nativeLibraryName, structs,
+              ),
+            )
+          )
+        }
+      }
       namespace.types.filterIsInstance<RirClass>().forEach { cls ->
         // ADR-052 "shared bridgeable ordering": the exact same ordered list (constructor first,
         // then bridgeable static methods) that NugetGenerateBindingsTask derives its register
@@ -400,8 +418,10 @@ private fun registrationFileContent(
   // it is), so prepending the two leading params as a plain string is safe — no dangling comma.
   val registrableParams: String = registrables.joinToString(", ") { r ->
     when (r) {
-      is RirRegistrable.Ctor -> "IntPtr ctorPtr"
-      is RirRegistrable.Method -> "IntPtr ${r.method.name.toMethodCamelCase()}Ptr"
+      is RirRegistrable.Ctor -> "IntPtr ctor${r.ctor.bridgeSuffix()}Ptr"
+      is RirRegistrable.Method ->
+        "IntPtr ${r.method.name.toMethodCamelCase()}${r.method.bridgeSuffix()}Ptr"
+
       is RirRegistrable.PropertyGetter -> "IntPtr ${r.property.name.toMethodCamelCase()}GetterPtr"
       is RirRegistrable.PropertySetter -> "IntPtr ${r.property.name.toMethodCamelCase()}SetterPtr"
     }
@@ -411,10 +431,12 @@ private fun registrationFileContent(
   val moduleInitArgs: String = (listOf("$slotCount", "${hash}L") + registrables.map { r ->
     when (r) {
       is RirRegistrable.Ctor -> {
-        val paramTypes: String = r.ctor.parameters.joinToString(", ") { p -> csAbiType(p.type) }
+        val paramTypes: String = abiArgs(r.ctor.parameters, structs)
+          .joinToString(", ") { p -> csAbiType(p.type) }
         // ADR-052: Ctor_Thunk always returns IntPtr (a constructor's return is the handle itself).
         val fnTypeParams: String = if (paramTypes.isEmpty()) "IntPtr" else "$paramTypes, IntPtr"
-        "(IntPtr)(delegate* unmanaged[Cdecl]<$fnTypeParams>)(&Ctor_Thunk)"
+        "(IntPtr)(delegate* unmanaged[Cdecl]<$fnTypeParams>)" +
+            "(&Ctor${r.ctor.bridgeSuffix()}_Thunk)"
       }
 
       is RirRegistrable.Method -> {
@@ -437,7 +459,8 @@ private fun registrationFileContent(
           .joinToString(", ")
         val fnTypeParams: String =
           if (allParamTypes.isEmpty()) retType else "$allParamTypes, $retType"
-        "(IntPtr)(delegate* unmanaged[Cdecl]<$fnTypeParams>)(&${r.method.name}_Thunk)"
+        "(IntPtr)(delegate* unmanaged[Cdecl]<$fnTypeParams>)" +
+            "(&${r.method.name}${r.method.bridgeSuffix()}_Thunk)"
       }
 
       // ADR-056: expanded through the shared abiOutArgs/abiReturnType functions — a struct-typed
@@ -529,7 +552,7 @@ private fun buildThunkMethod(
   method: RirMethod,
   structs: Map<RirTypeKey, RirStruct>,
 ): String {
-  val thunkName: String = "${method.name}_Thunk"
+  val thunkName: String = "${method.name}${method.bridgeSuffix()}_Thunk"
 
   // Phase 9 (ROADMAP line 151): "an instance thunk is a static thunk whose first parameter is the
   // receiver handle" (ADR-051 Deferred section). Resolve the receiver via the exact same
@@ -801,8 +824,11 @@ private fun buildCtorThunkMethod(
   ctor: RirConstructor,
   structs: Map<RirTypeKey, RirStruct>,
 ): String {
-  val paramList: String = ctor.parameters
-    .joinToString(", ") { p -> "${csAbiType(p.type)} ${thunkParamName(p)}" }
+  val paramList: String = abiArgs(ctor.parameters, structs)
+    .joinToString(", ") { arg ->
+      val p: RirParameter = RirParameter(arg.name, arg.type)
+      "${csAbiType(arg.type)} ${thunkParamName(p)}"
+    }
   val paramBindings: List<ParamBinding> = ctor.parameters.map { paramBinding(it, structs) }
   val paramDeclarationLines: List<String> = paramBindings.flatMap { it.declarationLines }
   val callArgs: String = paramBindings.joinToString(", ") { it.expression }
@@ -817,7 +843,93 @@ private fun buildCtorThunkMethod(
   // constructor escapes this thunk and fast-fails the host process.
   return """
     |        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
-    |        private static IntPtr Ctor_Thunk($paramList)
+    |        private static IntPtr Ctor${ctor.bridgeSuffix()}_Thunk($paramList)
+    |        {
+    |$body
+    |        }
+  """.trimMargin()
+}
+
+private fun structRegistrationFileContent(
+  namespaceName: String,
+  struct: RirStruct,
+  constructors: List<RirConstructor>,
+  exportName: String,
+  nativeLibraryName: String,
+  structs: Map<RirTypeKey, RirStruct>,
+): String {
+  val registerParams: String = constructors.joinToString(", ") { ctor ->
+    "IntPtr ctor__${ctor.bridgeId()}Ptr"
+  }
+  val hash: Long = structConstructorContractHash(namespaceName, struct, constructors, structs)
+  val pointers: String = constructors.joinToString(",\n                    ") { ctor ->
+    val inTypes: List<String> = abiArgs(ctor.parameters, structs).map { csAbiType(it.type) }
+    val outTypes: List<String> = struct.components.map { "${csAbiType(it.type)}*" }
+    val types: String = (inTypes + outTypes + "void").joinToString(", ")
+    "(IntPtr)(delegate* unmanaged[Cdecl]<$types>)" +
+        "(&Ctor__${ctor.bridgeId()}_Thunk)"
+  }
+  val thunks: String = constructors.joinToString("\n\n") { ctor ->
+    buildStructCtorThunkMethod(struct, ctor, structs)
+  }
+  return """
+    |// <auto-generated>
+    |#nullable enable
+    |
+    |namespace $namespaceName
+    |{
+    |    using System;
+    |    using System.Runtime.CompilerServices;
+    |    using System.Runtime.InteropServices;
+    |
+    |    internal static class ${struct.name}Registration
+    |    {
+    |        [DllImport("$nativeLibraryName", CallingConvention = CallingConvention.Cdecl,
+    |            EntryPoint = "$exportName")]
+    |        private static extern void $exportName(
+    |            int slotCount, long contractHash, $registerParams);
+    |
+    |        [ModuleInitializer]
+    |        internal static unsafe void Initialize()
+    |        {
+    |            $exportName(
+    |                ${constructors.size},
+    |                ${hash}L,
+    |                $pointers);
+    |        }
+    |
+    |$thunks
+    |    }
+    |}
+  """.trimMargin()
+}
+
+private fun buildStructCtorThunkMethod(
+  struct: RirStruct,
+  ctor: RirConstructor,
+  structs: Map<RirTypeKey, RirStruct>,
+): String {
+  val inArgs: List<AbiArg> = abiArgs(ctor.parameters, structs)
+  val inParams: List<String> = inArgs.map { arg ->
+    val p: RirParameter = RirParameter(arg.name, arg.type)
+    "${csAbiType(arg.type)} ${thunkParamName(p)}"
+  }
+  val outParams: List<String> = struct.components.map { component ->
+    "${csAbiType(component.type)}* out${component.readName}"
+  }
+  val bindings: List<ParamBinding> = ctor.parameters.map { paramBinding(it, structs) }
+  val declarations: List<String> = bindings.flatMap { it.declarationLines }
+  val args: String = bindings.joinToString(", ") { it.expression }
+  val writes: List<String> = struct.components.map { component ->
+    "*out${component.readName} = " +
+        csReturnConversion(component.type, "result.${component.readName}") + ";"
+  }
+  val body: String = (declarations + "var result = new ${struct.name}($args);" + writes)
+    .joinToString("\n") { "            $it" }
+  return """
+    |        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+    |        private static unsafe void Ctor__${ctor.bridgeId()}_Thunk(
+    |            ${(inParams + outParams).joinToString(", ")})
     |        {
     |$body
     |        }

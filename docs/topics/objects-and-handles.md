@@ -2,7 +2,8 @@
 
 A bound C# class (not `static`) becomes a Kotlin class that wraps an opaque handle to the real C#
 object. Every crossing of the bridge allocates a fresh handle and a fresh Kotlin wrapper; there is no
-identity caching, and a single public instance constructor maps to a Kotlin secondary constructor.
+identity caching, and every bridgeable public instance constructor maps to a Kotlin secondary
+constructor.
 These decisions are [ADR-051](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/051-csharp-objects-as-opaque-handles.md)
 and [ADR-052](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/052-csharp-instance-constructors-in-kotlin.md).
 
@@ -55,7 +56,7 @@ internal class Template internal constructor(handle: COpaquePointer) : AutoClose
 
   override fun close(): Unit = handle.free()
 
-  constructor(source: String) : this(construct(source))
+  constructor(source: String) : this(construct__88b141e80a5108003d6f860a1ce95a8b(source))
 
   // ...instance methods, properties, companion object...
 }
@@ -79,7 +80,7 @@ today, not a leak.
 
 ## Constructors
 
-Exactly one public instance constructor per bound class maps to a Kotlin secondary constructor.
+Every bridgeable public instance constructor per bound class maps to a Kotlin secondary constructor.
 Kotlin's `constructor(...) : this(...)` delegation can only be an expression, not a statement block,
 so the generated constructor delegates through a file-private helper that runs the bridge call and
 `requireNotNull`s the returned handle (a C# constructor never legitimately returns null, unlike a
@@ -87,12 +88,14 @@ factory method):
 
 ```kotlin
 // build/nuget-interop/kotlin/nativeMain/sample/text/Template.kt (real generated output)
-constructor(source: String) : this(construct(source))
+constructor(source: String) : this(construct__88b141e80a5108003d6f860a1ce95a8b(source))
 
 // ...
 
-private fun construct(source: String): COpaquePointer {
-  val fn = requireNotNull(ctorFn) { /* ... */ }
+private fun construct__88b141e80a5108003d6f860a1ce95a8b(source: String): COpaquePointer {
+  val fn = requireNotNull(TemplateBindings.ctor__88b141e80a5108003d6f860a1ce95a8bFn) {
+    NugetRegistry.notRegistered("Sample.Text.Template", "SampleDependency")
+  }
   val ptr: COpaquePointer? = memScoped { fn.invoke(source.cstr.ptr) }
   return requireNotNull(ptr) {
     "Template constructor returned a null handle - a C# constructor never returns null."
@@ -110,6 +113,16 @@ fun greetViaConstructor(name: String): String {
 
 Because a constructor's return is unconditionally the class's own type (never `null`), it is a
 distinct RIR node (`RirConstructor`) rather than a `RirMethod` with a mandatory return type.
+
+Multiple constructors keep their parameter types. The generated `OverloadLab` wrapper contains:
+
+```kotlin
+constructor(enabled: Boolean) : this(construct__4eccf9687afe53cefec057237c4bd4bb(enabled))
+constructor(seed: Int) : this(construct__eb16f28e71633c9bd26ef1cd88fd5654(seed))
+```
+
+The hexadecimal suffixes are internal bridge identities derived from canonical managed
+signatures. They do not appear in the public constructor calls.
 
 ## Object parameters and returns: nullability follows `NullableAttribute`
 
@@ -220,9 +233,6 @@ walks through why this inversion is correct for each direction rather than a sty
   Decision 3). The wire-format decision that feature was waiting on is now settled: it reuses the
   out-pointer convention from [ADR-056](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/056-csharp-structs-in-kotlin.md)
   (see [C# structs](structs.md)) and needs no new ADR, only the reader/generator work.
-- Multiple public constructors on one type are an overload set and are skipped + diagnosed, not
-  disambiguated (tracked in
-  [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md) Phase 9).
 - A throwing C# constructor or factory still fast-fails the host process; see
   [The bridgeable subset](bridgeable-subset.md) for the exception policy.
 
@@ -239,5 +249,6 @@ walks through why this inversion is correct for each direction rather than a sty
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/052-csharp-instance-constructors-in-kotlin.md">ADR-052: C# instance constructors in Kotlin</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/053-nullable-reference-types-in-kotlin.md">ADR-053: Nullable reference types in Kotlin</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/056-csharp-structs-in-kotlin.md">ADR-056: C# structs (value types) in Kotlin</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/057-csharp-overload-sets-in-kotlin.md">ADR-057: C# overload sets in Kotlin</a>
     </category>
 </seealso>

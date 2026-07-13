@@ -17,7 +17,7 @@ ways, this page follows the code.
 | `ref struct` (`Span<T>`, `ReadOnlySpan<T>`, custom) | No. Detected via the `IsByRefLikeAttribute` custom attribute; any member referencing one is skipped and diagnosed (`skipped_ref_struct`) |
 | Nested type (public or not) | No. The reader filters on `TypeAttributes.VisibilityMask == Public`, which excludes `NestedPublic` as well as every non-public visibility. Only top-level public types are candidates at all |
 | Generic type | Not explicitly filtered at the type level. A generic class is still enumerated as a candidate type, but virtually every member whose signature actually uses the open type parameter is skipped per-member (`skipped_open_generic`) when the parameter or return type is decoded, so a generic type in practice binds nothing unless it happens to expose non-generic members |
-| Record | Not recognized as a distinct construct at all: a C# `record class` compiles to an ordinary class in IL with no marker, and its fate is decided entirely by the same rules as any other class (its synthesized copy-constructor typically turns its constructors into a multi-member overload set, which is skipped wholesale) |
+| Record | Not recognized as a distinct construct at all: a C# `record class` compiles to an ordinary class in IL with no marker, and each constructor/member is evaluated by the same rules as any other class |
 
 Classes (static or not) and supported enums produce Kotlin output. Interfaces are extracted into the
 RIR as `RirInterface` but no stub is generated from them today.
@@ -80,10 +80,11 @@ Unsupported enums are excluded with a `skipped_unsupported_enum` diagnostic in `
 
 ## Constructors
 
-- Exactly **one** public instance constructor per class binds, mapping to a Kotlin secondary
+- Every independently bridgeable public instance constructor on a class binds as a Kotlin secondary
   constructor (see [Objects and handles](objects-and-handles.md)).
-- Two or more public instance constructors on the same type are grouped and skipped wholesale as an
-  overload set, with a `skipped_overload_set` diagnostic naming `.ctor`.
+- A Shape A struct has exactly one state-covering constructor that defines its data-class
+  components. Other bridgeable public constructors bind as secondary constructors backed by
+  registration slots (see [C# structs](structs.md)).
 - A non-public constructor is excluded before the constructor-admission check even runs: the reader
   tests `MethodAttributes.MemberAccessMask == Public` first, so `private`/`internal`/`protected`
   constructors are silently invisible, never diagnosed.
@@ -92,8 +93,8 @@ Unsupported enums are excluded with a `skipped_unsupported_enum` diagnostic in `
 
 ## Methods and properties
 
-- **Static methods** and **instance methods** both bind, subject to the same parameter/return type
-  and overload-set rules.
+- **Static methods** and **instance methods** both bind. Each overload is checked independently
+  against the parameter/return type rules.
 - **Instance properties** and **static properties** bind: read-only → `val`, settable → `var` (see
   [Instance members](instance-members.md) and [Static classes and methods](static-classes-and-methods.md)).
 - **`async`/`Task`-returning methods do not bind.** The reader recognizes `Task`, `Task<T>`,
@@ -110,19 +111,19 @@ because both share bits with `0x6`. An earlier version of the reader used the no
 leaked internal members through as if they were public; it's called out here because it's exactly
 the kind of subtle metadata-reading detail that's easy to reintroduce.
 
-## Overload sets: skipped wholesale, not partially
+## Overload sets
 
-Methods (and constructors) are grouped by name before anything else happens. Any group with more
-than one member is dropped in its entirety, with one diagnostic naming the group:
+Bridgeable C# method and constructor overloads keep their name and parameter types as ordinary
+Kotlin overloads. An unsupported member is diagnosed independently and does not hide supported
+siblings. Generated thunk and function-pointer names use a stable identifier derived from the full
+managed signature, so they remain unique without changing the public Kotlin API.
 
-```
-"reason": "overload set - 4 overloads of `SerializeObject` cannot be uniquely exported to C",
-"hint": "Add a C# adapter shim to expose each overload under a distinct name."
-```
-
-There is no partial binding of "the overload with the simplest signature." This is why
-`Newtonsoft.Json` cannot be bound at all under v1: every static method on `JsonConvert` is an
-overload set.
+If two different managed signatures map to the same Kotlin scope, name, and ordered parameter
+types, `nugetGenerateBindings` fails with `error_kotlin_signature_collision` and names both managed
+signatures. This is a defensive invariant, not a reason to collapse useful type distinctions.
+Phase 10 mappings must retain their respective interfaces, for example
+`IReadOnlyList<T>` as `List<T>` and `IEnumerable<T>` as `Iterable<T>`, so overloads using them remain
+distinct.
 
 ## The bridgeable type vocabulary
 
@@ -181,7 +182,7 @@ private static IntPtr SerializeObject_Thunk(int value)
 Graceful propagation into a catchable Kotlin exception is tracked as
 [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md) Phase 11.
 
-## Diagnostics: recorded in the RIR, surfaced to the build as warnings
+## Diagnostics: recorded in the RIR and surfaced to the build
 
 Every skip the metadata reader makes is recorded in `reverse-ir.json`, under each assembly's
 `diagnostics` array, as a `RirDiagnostic`:
@@ -205,6 +206,9 @@ enum class RirDiagnosticKind {
   SKIPPED_DEFAULT_INTERFACE_METHOD,
   SKIPPED_UNBOUND_TYPE_REFERENCE,
   SKIPPED_MEMBER_NAME_COLLISION,   // Gradle-plugin-side only, see below
+  SKIPPED_UNSUPPORTED_ENUM,
+  SKIPPED_UNSUPPORTED_STRUCT,
+  ERROR_KOTLIN_SIGNATURE_COLLISION,
   INFO_ASYNC_NOT_YET_MAPPED,
   INFO_OBLIVIOUS_NULLABILITY,      // ADR-053: an un-annotated (oblivious) reference type bound non-null
 }
@@ -217,28 +221,20 @@ enum class RirDiagnosticKind {
 non-null, per [ADR-053](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/053-nullable-reference-types-in-kotlin.md);
 the diagnostic just records that the binding is an assumption, not a read fact.
 
-A representative entry, taken from a real diagnostic the reader emits for an overload set:
+`skipped_overload_set` remains readable for older `reverse-ir.json` files, but the metadata reader
+does not emit it for otherwise supported overloads. `error_kotlin_signature_collision` is fatal;
+`skipped_*` diagnostics remain warnings and `info_*` diagnostics remain informational warnings.
 
-```json
-{
-  "kind": "skipped_overload_set",
-  "typeName": "JsonConvert",
-  "memberName": "SerializeObject",
-  "memberSignature": "SerializeObject(object) [+3 overloads]",
-  "reason": "overload set - 4 overloads of `SerializeObject` cannot be uniquely exported to C",
-  "hint": "Add a C# adapter shim to expose each overload under a distinct name."
-}
-```
-
-**Every diagnostic kind is now surfaced as a Gradle build warning.** `NugetGenerateBindingsTask` calls
-a single `diagnosticWarnings(rir)` function that combines every reader-emitted diagnostic (from each
-assembly's `diagnostics` array: overload sets, `ref struct` parameters, open generics, `dynamic`,
+`NugetGenerateBindingsTask` calls a single diagnostic path that first rejects every `ERROR_*` entry,
+then formats the remaining diagnostics as Gradle build warnings. It combines every reader-emitted diagnostic (from each
+assembly's `diagnostics` array: `ref struct` parameters, open generics, `dynamic`,
 default interface methods, unbound type references, async-not-yet-mapped, and ADR-053's
 oblivious-nullability notes) with the Gradle-plugin-derived `SKIPPED_MEMBER_NAME_COLLISION`
 diagnostics (the instance-member-name-vs-wrapper collision described in
 [Instance members](instance-members.md), which depends on the Kotlin wrapper's own member names and
 so can only be computed plugin-side) through one shared formatter, and logs each one with
-`logger.warn(...)`. A `SKIPPED_*` kind is logged as "Skipping ..." (the member is absent from the
+`logger.warn(...)`. An `ERROR_*` kind fails generation before sources are written. A `SKIPPED_*`
+kind is logged as "Skipping ..." (the member is absent from the
 generated output); an `INFO_*` kind is logged as "Note ..." (the member still binds, under an assumed
 policy).
 

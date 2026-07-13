@@ -63,8 +63,9 @@ are unique and contiguous from `0` through `N-1`. See [The bridgeable subset](br
 for the supported positions and exclusions.
 
 A bridgeable struct is extracted too, but it never becomes a handle: its components (drawn from its
-single public constructor) decompose onto the wire, and it surfaces as an immutable Kotlin
-`data class` with no registration export of its own. See [C# structs](structs.md).
+unique state-covering constructor) decompose onto the wire, and it surfaces as an immutable Kotlin
+`data class`. Alternate public constructors receive bridge-backed registration slots; the state
+constructor remains slot-free. See [C# structs](structs.md).
 
 ### `nugetGenerateBindings` and `nugetGenerateShims`: two generators, one contract
 
@@ -76,11 +77,14 @@ and [ADR-048](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/0
   `nuget_{namespace_snake}_{type_snake}_register` (for example
   `Newtonsoft.Json.JsonConvert` → `nuget_newtonsoft_json_json_convert_register`).
 - The export takes one function-pointer parameter per bridgeable member, in a single shared
-  order: constructor first (if any), then static methods, then instance methods, then one
-  getter/setter slot per instance property, then one getter/setter slot per static property, all
-  drawn from a shared helper
+  order: constructors, static methods, instance methods, instance properties, then static
+  properties. Each category is sorted by canonical managed identity and each property getter stays
+  immediately before its setter. All slots are drawn from a shared helper
   (`bridgeableRegistrables` in `RirBridging.kt`) so the two generators can never drift out of
   parameter-order sync.
+- Overloaded methods and constructors retain their ordinary Kotlin names. Their generated thunk,
+  helper, and pointer identifiers carry a checked 128-bit SHA-256-derived ID of the canonical
+  managed signature, keeping internal identities unique and stable across declaration reorderings.
 - On the Kotlin side these arrive as `CPointer<CFunction<...>>?` variables. Every generated stub
   does `requireNotNull(fn) { "... bindings are not registered ..." }` before calling through the
   pointer, so a missing registration fails fast with a clear message instead of a null-pointer
@@ -97,7 +101,7 @@ internal static class MimeUtilityRegistration
 {
     [DllImport("sample", CallingConvention = CallingConvention.Cdecl,
         EntryPoint = "nuget_mimemapping_mime_utility_register")]
-    private static extern void nuget_mimemapping_mime_utility_register(int slotCount, long contractHash, IntPtr getMimeMappingPtr);
+    private static extern void nuget_mimemapping_mime_utility_register(int slotCount, long contractHash, IntPtr getMimeMapping__cb4c202351abfeec4d85fccb5ca462a0Ptr);
 
     [ModuleInitializer]
     internal static unsafe void Initialize()
@@ -108,8 +112,8 @@ internal static class MimeUtilityRegistration
         {
             nuget_mimemapping_mime_utility_register(
                 1,
-                -8070388729487098041L,
-                (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, IntPtr>)(&GetMimeMapping_Thunk));
+                8143158361847426877L,
+                (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, IntPtr>)(&GetMimeMapping__cb4c202351abfeec4d85fccb5ca462a0_Thunk));
         }
         catch (DllNotFoundException e)
         {
@@ -126,7 +130,7 @@ internal static class MimeUtilityRegistration
     }
 
     [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
-    private static IntPtr GetMimeMapping_Thunk(IntPtr filePtr)
+    private static IntPtr GetMimeMapping__cb4c202351abfeec4d85fccb5ca462a0_Thunk(IntPtr filePtr)
     {
         string result = MimeUtility.GetMimeMapping(Marshal.PtrToStringUTF8(filePtr)!);
         return Marshal.StringToCoTaskMemUTF8(result);
@@ -136,13 +140,16 @@ internal static class MimeUtilityRegistration
 
 ```kotlin
 // build/nuget-interop/kotlin/nativeMain/mimemapping/MimeUtilityBindings.kt (real generated output)
-internal var getMimeMappingFn: CPointer<CFunction<(COpaquePointer?) -> COpaquePointer?>>? = null
+internal object MimeUtilityBindings {
+  @Suppress("NOTHING_TO_INLINE")
+  internal var getMimeMapping__cb4c202351abfeec4d85fccb5ca462a0Fn: CPointer<CFunction<(COpaquePointer?) -> COpaquePointer?>>? = null
+}
 
 @CName("nuget_mimemapping_mime_utility_register")
 fun nuget_mimemapping_mime_utility_register(
   slotCount: Int,
   contractHash: Long,
-  getMimeMappingPtr: COpaquePointer?,
+  getMimeMapping__cb4c202351abfeec4d85fccb5ca462a0Ptr: COpaquePointer?,
 ) {
   NugetRegistry.checkContract(
     qualifiedType = "MimeMapping.MimeUtility",
@@ -150,9 +157,9 @@ fun nuget_mimemapping_mime_utility_register(
     slotCount = slotCount,
     contractHash = contractHash,
     expectedSlots = 1,
-    expectedHash = -8070388729487098041L,
+    expectedHash = 8143158361847426877L,
   )
-  MimeUtilityBindings.getMimeMappingFn = requireNotNull(getMimeMappingPtr) { "nuget_mimemapping_mime_utility_register passed a null getMimeMapping thunk pointer." }.reinterpret()
+  MimeUtilityBindings.getMimeMapping__cb4c202351abfeec4d85fccb5ca462a0Fn = requireNotNull(getMimeMapping__cb4c202351abfeec4d85fccb5ca462a0Ptr) { "nuget_mimemapping_mime_utility_register passed a null getMimeMapping thunk pointer." }.reinterpret()
   NugetRegistry.record("MimeMapping.MimeUtility", 1)
 }
 ```
@@ -211,5 +218,6 @@ install pointer rather than a cryptic subprocess error.
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/050-end-to-end-packaging-integration.md">ADR-050: End-to-end packaging integration</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/054-reverse-bridge-registration-observability.md">ADR-054: Reverse-bridge registration observability</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/056-csharp-structs-in-kotlin.md">ADR-056: C# structs (value types) in Kotlin</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/057-csharp-overload-sets-in-kotlin.md">ADR-057: C# overload sets in Kotlin</a>
     </category>
 </seealso>

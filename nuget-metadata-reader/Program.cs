@@ -188,7 +188,8 @@ internal static class AssemblyExtractor
         // ADR-056: value types that are not enums are struct candidates. This must be collected
         // BEFORE ProcessType runs so ProcessType can redirect every non-enum value type away from
         // the class fall-through (Constraint 3's bug: today every struct is emitted as a class).
-        var structTypes = CollectStructTypes(mr, namespaceMap, enumTypes);
+        var structTypes = CollectStructTypes(
+            mr, namespaceMap, boundHandleTypeNames, enumTypes);
 
         var rirNamespaces = new List<RirNamespace>();
 
@@ -375,6 +376,7 @@ internal static class AssemblyExtractor
     private static Dictionary<string, StructExtraction> CollectStructTypes(
         MetadataReader mr,
         Dictionary<string, List<TypeDefinitionHandle>> namespaceMap,
+        HashSet<string> boundHandleTypeNames,
         IReadOnlyDictionary<string, EnumExtraction> enumTypes)
     {
         var result = new Dictionary<string, StructExtraction>(StringComparer.Ordinal);
@@ -389,22 +391,53 @@ internal static class AssemblyExtractor
 
                 var name = mr.GetString(typeDef.Name);
                 var fullName = string.IsNullOrEmpty(ns) ? name : $"{ns}.{name}";
-                result[fullName] = ExtractStruct(mr, typeDef, name, enumTypes);
+                result[fullName] = ExtractStruct(mr, typeHandle, typeDef, name, enumTypes);
             }
+        }
+
+        // Alternate constructors can reference another supported struct, so map them only after
+        // the first pass has established every struct's component model.
+        foreach (var (fullName, extraction) in result.ToList())
+        {
+            if (extraction.Struct is null) continue;
+
+            var typeDef = mr.GetTypeDefinition(extraction.TypeHandle);
+            var name = mr.GetString(typeDef.Name);
+            var constructors = new List<RirConstructor>();
+            var diagnostics = new List<RirDiagnostic>();
+            foreach (var handle in extraction.ConstructorHandles)
+            {
+                var (ctor, diagnostic, obliviousDiagnostic) = TryMapConstructor(
+                    mr, extraction.TypeHandle, handle, name, boundHandleTypeNames, enumTypes,
+                    result, isState: handle == extraction.StateConstructor);
+                if (ctor is not null)
+                {
+                    constructors.Add(ctor);
+                    if (obliviousDiagnostic is not null) diagnostics.Add(obliviousDiagnostic);
+                }
+                else if (diagnostic is not null)
+                    diagnostics.Add(diagnostic);
+            }
+
+            ValidateManagedSignatures(name, constructors.Select(c => c.ManagedSignature));
+            result[fullName] = extraction with
+            {
+                Struct = new RirStruct(name, extraction.Struct.Components, constructors),
+                Diagnostics = diagnostics,
+            };
         }
 
         return result;
     }
 
     /// <summary>
-    /// Applies the ADR-056 Decision 3a "Shape A" rules: exactly one public instance constructor
-    /// (with at least one parameter) whose parameters each match, case-insensitively, a public
-    /// readable instance property of the same (primitive/string/bound-enum) type, and whose
-    /// parameter count equals the struct's non-static instance field count (rule 5 — the proxy for
-    /// "the constructor covers all stored state").
+    /// Applies ADR-057's amended Shape A rules: exactly one public instance constructor must cover
+    /// stored state under ADR-056's component matching rules. Every other independently bridgeable
+    /// constructor is retained as an alternate constructor.
     /// </summary>
     private static StructExtraction ExtractStruct(
         MetadataReader mr,
+        TypeDefinitionHandle typeHandle,
         TypeDefinition typeDef,
         string name,
         IReadOnlyDictionary<string, EnumExtraction> enumTypes)
@@ -432,12 +465,40 @@ internal static class AssemblyExtractor
             return StructExtraction.Unsupported(
                 "no public instance constructor (Shape B — public fields / settable auto-properties " +
                 "— is deferred)");
-        if (ctorCandidates.Count > 1)
-            return StructExtraction.Unsupported(
-                $"{ctorCandidates.Count} public constructors — overload set, the same ADR-043 " +
-                "ceiling that excludes multi-constructor classes");
+        var candidates = ctorCandidates.Select(handle =>
+        {
+            var (components, reason) = TryExtractStructComponents(
+                mr, typeDef, handle, enumTypes);
+            return (Handle: handle, Components: components, Reason: reason);
+        }).ToList();
+        var stateCandidates = candidates.Where(candidate => candidate.Components is not null).ToList();
 
-        var ctorDef = mr.GetMethodDefinition(ctorCandidates[0]);
+        if (stateCandidates.Count == 0)
+        {
+            var reason = ctorCandidates.Count == 1
+                ? candidates[0].Reason!
+                : $"{ctorCandidates.Count} public constructors, but none uniquely covers all stored state";
+            return StructExtraction.Unsupported(reason);
+        }
+
+        if (stateCandidates.Count > 1)
+            return StructExtraction.Unsupported(
+                $"{stateCandidates.Count} public constructors cover all stored state — the state " +
+                "constructor is ambiguous");
+
+        var state = stateCandidates[0];
+        return StructExtraction.Supported(
+            new RirStruct(name, state.Components!), typeHandle, state.Handle, ctorCandidates);
+    }
+
+    private static (IReadOnlyList<RirStructComponent>? Components, string? Reason)
+        TryExtractStructComponents(
+            MetadataReader mr,
+            TypeDefinition typeDef,
+            MethodDefinitionHandle ctorHandle,
+            IReadOnlyDictionary<string, EnumExtraction> enumTypes)
+    {
+        var ctorDef = mr.GetMethodDefinition(ctorHandle);
 
         // Component-type decoding deliberately passes an EMPTY bound-handle set and no struct map:
         // a class-typed component is never in the v1 vocabulary (no bound-handle set to resolve
@@ -454,18 +515,17 @@ internal static class AssemblyExtractor
         }
         catch (BadImageFormatException)
         {
-            return StructExtraction.Unsupported("constructor signature could not be decoded");
+            return (null, "constructor signature could not be decoded");
         }
 
         if (ctorSig.ParameterTypes.Length == 0)
-            return StructExtraction.Unsupported(
-                "public constructor has no parameters — zero components");
+            return (null, "public constructor has no parameters — zero components");
 
         int instanceFieldCount = typeDef.GetFields().Count(fieldHandle =>
             (mr.GetFieldDefinition(fieldHandle).Attributes & System.Reflection.FieldAttributes.Static) == 0);
 
         if (instanceFieldCount != ctorSig.ParameterTypes.Length)
-            return StructExtraction.Unsupported(
+            return (null,
                 $"struct has {instanceFieldCount} stored instance field(s) but its constructor " +
                 $"takes {ctorSig.ParameterTypes.Length} parameter(s) — state would be silently dropped");
 
@@ -513,7 +573,7 @@ internal static class AssemblyExtractor
             }
 
             if (!properties.TryGetValue(paramName, out var match))
-                return StructExtraction.Unsupported(
+                return (null,
                     $"constructor parameter `{paramName}` has no matching public readable property");
 
             var (propDecoded, readName) = match;
@@ -521,7 +581,7 @@ internal static class AssemblyExtractor
             {
                 var reason = propDecoded.Diagnostic?.Reason
                     ?? $"component type `{propDecoded.RawTypeName}` is not bridgeable";
-                return StructExtraction.Unsupported($"property `{readName}`: {reason}");
+                return (null, $"property `{readName}`: {reason}");
             }
 
             var ctorParamDecoded = ctorSig.ParameterTypes[i];
@@ -529,17 +589,17 @@ internal static class AssemblyExtractor
             {
                 var reason = ctorParamDecoded.Diagnostic?.Reason
                     ?? $"component type `{ctorParamDecoded.RawTypeName}` is not bridgeable";
-                return StructExtraction.Unsupported($"constructor parameter `{paramName}`: {reason}");
+                return (null, $"constructor parameter `{paramName}`: {reason}");
             }
 
             if (!TypeRefsStructurallyEqual(ctorParamDecoded.TypeRef, propDecoded.TypeRef))
-                return StructExtraction.Unsupported(
+                return (null,
                     $"constructor parameter `{paramName}` and property `{readName}` have different types");
 
             components.Add(new RirStructComponent(paramName, readName, ctorParamDecoded.TypeRef));
         }
 
-        return StructExtraction.Supported(new RirStruct(name, components));
+        return (components, null);
     }
 
     private static bool TypeRefsStructurallyEqual(RirTypeRef a, RirTypeRef b) => (a, b) switch
@@ -579,7 +639,7 @@ internal static class AssemblyExtractor
         // enumerated in v1 — a supported struct emits ONLY its RirStruct node.
         if (structTypes.TryGetValue(fullName, out var structType))
         {
-            if (structType.Struct is not null) return (structType.Struct, Array.Empty<RirDiagnostic>());
+            if (structType.Struct is not null) return (structType.Struct, structType.Diagnostics);
 
             return (null, new[] { new RirDiagnostic(
                 kind: "skipped_unsupported_struct",
@@ -603,7 +663,8 @@ internal static class AssemblyExtractor
         var diagnostics = new List<RirDiagnostic>();
 
         // --- Methods ---
-        // Group by name first to detect overload sets.
+        // Retain groups only to keep the public managed declaration order. Every member is mapped
+        // independently: an unsupported sibling must not poison the supported overloads.
         var methodGroups = new Dictionary<string, List<MethodDefinitionHandle>>(StringComparer.Ordinal);
         // ADR-052: public instance `.ctor` candidates, collected separately from methodGroups —
         // a constructor has no return type and maps to a distinct RirConstructor node, not RirMethod.
@@ -643,33 +704,22 @@ internal static class AssemblyExtractor
             group.Add(handle);
         }
 
-        foreach (var (methodName, group) in methodGroups)
+        foreach (var group in methodGroups.Values)
         {
-            if (group.Count > 1)
+            foreach (var methodHandle in group)
             {
-                // Overload set: skip all, one diagnostic.
-                var sig = $"{methodName}({DescribeFirstParams(mr, mr.GetMethodDefinition(group[0]))}) [+{group.Count - 1} overloads]";
-                diagnostics.Add(new RirDiagnostic(
-                    kind: "skipped_overload_set",
-                    typeName: typeName,
-                    memberName: methodName,
-                    memberSignature: sig,
-                    reason: $"overload set — {group.Count} overloads of `{methodName}` cannot be uniquely exported to C",
-                    hint: "Add a C# adapter shim to expose each overload under a distinct name."));
-                continue;
+                var methodDef = mr.GetMethodDefinition(methodHandle);
+                var (rirMethod, methodDiagnostic, obliviousDiagnostic) = TryMapMethod(
+                    mr, typeHandle, methodHandle, methodDef, typeName, isInterface,
+                    boundHandleTypeNames, enumTypes, structTypes);
+                if (rirMethod is not null)
+                {
+                    methods.Add(rirMethod);
+                    if (obliviousDiagnostic is not null) diagnostics.Add(obliviousDiagnostic);
+                }
+                else if (methodDiagnostic is not null)
+                    diagnostics.Add(methodDiagnostic);
             }
-
-            var methodHandle = group[0];
-            var methodDef = mr.GetMethodDefinition(methodHandle);
-            var (rirMethod, methodDiagnostic, obliviousDiagnostic) = TryMapMethod(
-                mr, typeHandle, methodHandle, methodDef, typeName, isInterface, boundHandleTypeNames, enumTypes, structTypes);
-            if (rirMethod is not null)
-            {
-                methods.Add(rirMethod);
-                if (obliviousDiagnostic is not null) diagnostics.Add(obliviousDiagnostic);
-            }
-            else if (methodDiagnostic is not null)
-                diagnostics.Add(methodDiagnostic);
         }
 
         // --- Constructors (ADR-052) ---
@@ -681,30 +731,26 @@ internal static class AssemblyExtractor
         // invariant. Interfaces have no constructors at all.
         bool canHaveConstructor = !isInterface && !isStatic && !isAbstract;
 
-        if (canHaveConstructor && ctorCandidates.Count == 1)
+        if (canHaveConstructor)
         {
-            var (rirCtor, ctorDiagnostic, ctorObliviousDiagnostic) = TryMapConstructor(
-                mr, typeHandle, ctorCandidates[0], typeName, boundHandleTypeNames, enumTypes, structTypes);
-            if (rirCtor is not null)
+            foreach (var ctorHandle in ctorCandidates)
             {
-                constructors.Add(rirCtor);
-                if (ctorObliviousDiagnostic is not null) diagnostics.Add(ctorObliviousDiagnostic);
+                var (rirCtor, ctorDiagnostic, ctorObliviousDiagnostic) = TryMapConstructor(
+                    mr, typeHandle, ctorHandle, typeName, boundHandleTypeNames, enumTypes,
+                    structTypes, isState: false);
+                if (rirCtor is not null)
+                {
+                    constructors.Add(rirCtor);
+                    if (ctorObliviousDiagnostic is not null)
+                        diagnostics.Add(ctorObliviousDiagnostic);
+                }
+                else if (ctorDiagnostic is not null)
+                    diagnostics.Add(ctorDiagnostic);
             }
-            else if (ctorDiagnostic is not null)
-                diagnostics.Add(ctorDiagnostic);
         }
-        else if (canHaveConstructor && ctorCandidates.Count > 1)
-        {
-            // Overload set: skip all, one diagnostic — same rule already applied to methods.
-            var sig = $".ctor({DescribeFirstParams(mr, mr.GetMethodDefinition(ctorCandidates[0]))}) [+{ctorCandidates.Count - 1} overloads]";
-            diagnostics.Add(new RirDiagnostic(
-                kind: "skipped_overload_set",
-                typeName: typeName,
-                memberName: ".ctor",
-                memberSignature: sig,
-                reason: $"overload set — {ctorCandidates.Count} overloads of `.ctor` cannot be uniquely exported to C",
-                hint: "Add a C# adapter shim to expose each overload under a distinct name."));
-        }
+
+        ValidateManagedSignatures(typeName, methods.Select(m => m.ManagedSignature)
+            .Concat(constructors.Select(c => c.ManagedSignature)));
 
         // --- Properties ---
         var properties = new List<RirProperty>();
@@ -809,7 +855,8 @@ internal static class AssemblyExtractor
         string typeName,
         HashSet<string> boundHandleTypeNames,
         IReadOnlyDictionary<string, EnumExtraction> enumTypes,
-        IReadOnlyDictionary<string, StructExtraction> structTypes)
+        IReadOnlyDictionary<string, StructExtraction> structTypes,
+        bool isState)
     {
         var methodDef = mr.GetMethodDefinition(methodHandle);
         var decoder = new SignatureDecoder(mr, boundHandleTypeNames, enumTypes, structTypes);
@@ -881,7 +928,8 @@ internal static class AssemblyExtractor
                     "null-safety explicit.")
             : null;
 
-        return (new RirConstructor(parameters), null, obliviousDiagnostic);
+        var managedSignature = BuildManagedSignature(mr, typeHandle, methodHandle);
+        return (new RirConstructor(managedSignature, parameters, isState), null, obliviousDiagnostic);
     }
 
     private static (RirMethod? Method, RirDiagnostic? Diagnostic, RirDiagnostic? ObliviousDiagnostic) TryMapMethod(
@@ -1024,7 +1072,9 @@ internal static class AssemblyExtractor
                     "null-safety explicit.")
             : null;
 
-        return (new RirMethod(methodName, returnTypeRef, parameters, isStatic), null, obliviousDiagnostic);
+        var managedSignature = BuildManagedSignature(mr, typeHandle, methodHandle);
+        return (new RirMethod(methodName, returnTypeRef, parameters, isStatic, managedSignature),
+            null, obliviousDiagnostic);
     }
 
     private static (RirTypeRef? TypeRef, RirDiagnostic? Diagnostic) TryDecodePropertyType(
@@ -1119,6 +1169,43 @@ internal static class AssemblyExtractor
         catch
         {
             return name;
+        }
+    }
+
+    private static string BuildManagedSignature(
+        MetadataReader mr,
+        TypeDefinitionHandle typeHandle,
+        MethodDefinitionHandle methodHandle)
+    {
+        var typeDef = mr.GetTypeDefinition(typeHandle);
+        var methodDef = mr.GetMethodDefinition(methodHandle);
+        var decoder = new CanonicalSignatureDecoder();
+        var signature = methodDef.DecodeSignature(decoder, genericContext: null);
+        var typeNamespace = mr.GetString(typeDef.Namespace);
+        var typeName = mr.GetString(typeDef.Name);
+        var declaringType = string.IsNullOrEmpty(typeNamespace)
+            ? typeName
+            : $"{typeNamespace}.{typeName}";
+        var methodName = mr.GetString(methodDef.Name);
+        var isConstructor = methodName == ".ctor";
+        var receiver = (methodDef.Attributes & System.Reflection.MethodAttributes.Static) != 0
+            ? "static"
+            : "instance";
+        var kind = isConstructor ? "ctor" : "method";
+        var parameterTypes = string.Join(",", signature.ParameterTypes);
+        var returnType = isConstructor ? "System.Void" : signature.ReturnType;
+        return $"{kind}|{receiver}|{declaringType}|{methodName}|({parameterTypes})|{returnType}";
+    }
+
+    private static void ValidateManagedSignatures(string typeName, IEnumerable<string> signatures)
+    {
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var signature in signatures)
+        {
+            if (!seen.Add(signature))
+                throw new InvalidDataException(
+                    $"type `{typeName}` contains duplicate canonical managed signature " +
+                    $"`{signature}`");
         }
     }
 
@@ -1393,10 +1480,110 @@ internal sealed record EnumExtraction(RirEnum? Enum, string? Reason)
 
 /// <summary>ADR-056: the outcome of applying the Decision 3a "Shape A" rules to one value type
 /// (struct) candidate. Mirrors <see cref="EnumExtraction"/>.</summary>
-internal sealed record StructExtraction(RirStruct? Struct, string? Reason)
+internal sealed record StructExtraction(
+    RirStruct? Struct,
+    string? Reason,
+    TypeDefinitionHandle TypeHandle,
+    MethodDefinitionHandle StateConstructor,
+    IReadOnlyList<MethodDefinitionHandle> ConstructorHandles,
+    IReadOnlyList<RirDiagnostic> Diagnostics)
 {
-    internal static StructExtraction Supported(RirStruct value) => new(value, null);
-    internal static StructExtraction Unsupported(string reason) => new(null, reason);
+    internal static StructExtraction Supported(
+        RirStruct value,
+        TypeDefinitionHandle typeHandle,
+        MethodDefinitionHandle stateConstructor,
+        IReadOnlyList<MethodDefinitionHandle> constructorHandles) =>
+        new(value, null, typeHandle, stateConstructor, constructorHandles,
+            Array.Empty<RirDiagnostic>());
+
+    internal static StructExtraction Unsupported(string reason) =>
+        new(null, reason, default, default, Array.Empty<MethodDefinitionHandle>(),
+            Array.Empty<RirDiagnostic>());
+}
+
+/// <summary>
+/// Decodes an ECMA-335 signature into invariant, fully-qualified managed type identities for
+/// ADR-057. Unlike <see cref="SignatureDecoder"/>, this provider performs no bridge mapping:
+/// nullability and parameter names are intentionally absent from CLR overload identity.
+/// </summary>
+internal sealed class CanonicalSignatureDecoder : ISignatureTypeProvider<string, object?>
+{
+    public string GetPrimitiveType(PrimitiveTypeCode typeCode) => typeCode switch
+    {
+        PrimitiveTypeCode.Void => "System.Void",
+        PrimitiveTypeCode.Boolean => "System.Boolean",
+        PrimitiveTypeCode.Char => "System.Char",
+        PrimitiveTypeCode.SByte => "System.SByte",
+        PrimitiveTypeCode.Byte => "System.Byte",
+        PrimitiveTypeCode.Int16 => "System.Int16",
+        PrimitiveTypeCode.UInt16 => "System.UInt16",
+        PrimitiveTypeCode.Int32 => "System.Int32",
+        PrimitiveTypeCode.UInt32 => "System.UInt32",
+        PrimitiveTypeCode.Int64 => "System.Int64",
+        PrimitiveTypeCode.UInt64 => "System.UInt64",
+        PrimitiveTypeCode.Single => "System.Single",
+        PrimitiveTypeCode.Double => "System.Double",
+        PrimitiveTypeCode.String => "System.String",
+        PrimitiveTypeCode.IntPtr => "System.IntPtr",
+        PrimitiveTypeCode.UIntPtr => "System.UIntPtr",
+        PrimitiveTypeCode.Object => "System.Object",
+        PrimitiveTypeCode.TypedReference => "System.TypedReference",
+        _ => typeCode.ToString(),
+    };
+
+    public string GetTypeFromDefinition(
+        MetadataReader reader, TypeDefinitionHandle handle, byte rawTypeKind)
+    {
+        var type = reader.GetTypeDefinition(handle);
+        return FullName(reader.GetString(type.Namespace), reader.GetString(type.Name));
+    }
+
+    public string GetTypeFromReference(
+        MetadataReader reader, TypeReferenceHandle handle, byte rawTypeKind)
+    {
+        var type = reader.GetTypeReference(handle);
+        var name = reader.GetString(type.Name);
+        if (type.ResolutionScope.Kind == HandleKind.TypeReference)
+            return $"{GetTypeFromReference(reader, (TypeReferenceHandle)type.ResolutionScope, rawTypeKind)}+{name}";
+
+        return FullName(reader.GetString(type.Namespace), name);
+    }
+
+    public string GetTypeFromSpecification(
+        MetadataReader reader,
+        object? genericContext,
+        TypeSpecificationHandle handle,
+        byte rawTypeKind) =>
+        reader.GetTypeSpecification(handle).DecodeSignature(this, genericContext);
+
+    public string GetGenericInstantiation(string genericType, ImmutableArray<string> typeArguments) =>
+        $"{genericType}<{string.Join(",", typeArguments)}>";
+
+    public string GetGenericTypeParameter(object? genericContext, int index) => $"!{index}";
+
+    public string GetGenericMethodParameter(object? genericContext, int index) => $"!!{index}";
+
+    public string GetModifiedType(string modifier, string unmodifiedType, bool isRequired) =>
+        $"{(isRequired ? "modreq" : "modopt")}({modifier}){unmodifiedType}";
+
+    public string GetPointerType(string elementType) => $"{elementType}*";
+
+    public string GetByReferenceType(string elementType) => $"{elementType}&";
+
+    public string GetArrayType(string elementType, ArrayShape shape) =>
+        shape.Rank == 1
+            ? $"{elementType}[*]"
+            : $"{elementType}[{new string(',', shape.Rank - 1)}]";
+
+    public string GetSZArrayType(string elementType) => $"{elementType}[]";
+
+    public string GetFunctionPointerType(MethodSignature<string> signature) =>
+        $"methodptr|({string.Join(",", signature.ParameterTypes)})|{signature.ReturnType}";
+
+    public string GetPinnedType(string elementType) => elementType;
+
+    private static string FullName(string typeNamespace, string name) =>
+        string.IsNullOrEmpty(typeNamespace) ? name : $"{typeNamespace}.{name}";
 }
 
 /// <summary>
@@ -1707,9 +1894,8 @@ internal sealed class RirClass : RirType
     public IReadOnlyList<RirMethod> Methods { get; }
     public IReadOnlyList<RirProperty> Properties { get; }
     /// <summary>
-    /// At most one public instance <c>.ctor</c> per type in v1 (ADR-052). Empty for static
-    /// classes, interfaces, abstract classes, and classes with no public instance constructor or
-    /// with more than one (an overload set, skipped + diagnosed instead).
+    /// Every independently bridgeable public instance <c>.ctor</c> (ADR-057). Empty for static
+    /// classes, interfaces, abstract classes, and classes with no public instance constructor.
     /// </summary>
     public IReadOnlyList<RirConstructor> Constructors { get; }
 }
@@ -1756,18 +1942,24 @@ internal sealed class RirEnumEntry
 /// ADR-056: a C# struct that satisfies the Decision 3a "Shape A" rules. Mirrors
 /// <c>RirStruct</c> in <c>RirModel.kt</c> field-for-field. Struct members (methods, computed
 /// properties) are deliberately not enumerated in v1 — <see cref="Components"/> is the complete
-/// wire contract, derived from the struct's single public instance constructor.
+/// wire contract, derived from the struct's unique state-covering public instance constructor.
+/// <see cref="Constructors"/> retains that state constructor and all bridgeable alternates.
 /// </summary>
 internal sealed class RirStruct : RirType
 {
-    public RirStruct(string name, IReadOnlyList<RirStructComponent> components)
+    public RirStruct(
+        string name,
+        IReadOnlyList<RirStructComponent> components,
+        IReadOnlyList<RirConstructor>? constructors = null)
     {
         Name = name;
         Components = components;
+        Constructors = constructors ?? Array.Empty<RirConstructor>();
     }
 
     public override string Name { get; }
     public IReadOnlyList<RirStructComponent> Components { get; }
+    public IReadOnlyList<RirConstructor> Constructors { get; }
 }
 
 /// <summary>
@@ -1793,18 +1985,25 @@ internal sealed class RirStructComponent
 
 internal sealed class RirMethod
 {
-    public RirMethod(string name, RirTypeRef returnType, IReadOnlyList<RirParameter> parameters, bool isStatic)
+    public RirMethod(
+        string name,
+        RirTypeRef returnType,
+        IReadOnlyList<RirParameter> parameters,
+        bool isStatic,
+        string managedSignature)
     {
         Name = name;
         ReturnType = returnType;
         Parameters = parameters;
         IsStatic = isStatic;
+        ManagedSignature = managedSignature;
     }
 
     public string Name { get; }
     public RirTypeRef ReturnType { get; }
     public IReadOnlyList<RirParameter> Parameters { get; }
     public bool IsStatic { get; }
+    public string ManagedSignature { get; }
 }
 
 internal sealed class RirProperty
@@ -1843,12 +2042,19 @@ internal sealed class RirParameter
 /// </summary>
 internal sealed class RirConstructor
 {
-    public RirConstructor(IReadOnlyList<RirParameter> parameters)
+    public RirConstructor(
+        string managedSignature,
+        IReadOnlyList<RirParameter> parameters,
+        bool isState)
     {
+        ManagedSignature = managedSignature;
         Parameters = parameters;
+        IsState = isState;
     }
 
+    public string ManagedSignature { get; }
     public IReadOnlyList<RirParameter> Parameters { get; }
+    public bool IsState { get; }
 }
 
 [JsonPolymorphic(TypeDiscriminatorPropertyName = "kind")]

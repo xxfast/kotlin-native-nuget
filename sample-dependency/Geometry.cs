@@ -1,6 +1,21 @@
 namespace Sample.Structs;
 
 /// <summary>
+/// Shape A struct used as the struct-typed argument to Point's alternate constructor.
+/// </summary>
+public readonly struct Size
+{
+    public Size(int width, int height)
+    {
+        Width = width;
+        Height = height;
+    }
+
+    public int Width { get; }
+    public int Height { get; }
+}
+
+/// <summary>
 /// ADR-056 walking skeleton, thinnest slice: Shape A, all-primitive components. Ctor parameter
 /// names are deliberately lower camelCase (<c>x</c>, <c>y</c>) while the properties they back are
 /// PascalCase (<c>X</c>, <c>Y</c>) — this is the case-insensitive component-match rule (Decision
@@ -13,6 +28,12 @@ public readonly struct Point
         X = x;
         Y = y;
     }
+
+    public Point(int value) : this(value, value) { }
+
+    public Point(bool unit) : this(unit ? 1 : 0, unit ? 1 : 0) { }
+
+    public Point(Size size) : this(size.Width, size.Height) { }
 
     public int X { get; }
     public int Y { get; }

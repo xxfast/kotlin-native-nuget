@@ -78,6 +78,7 @@ data class RirEnumEntry(
 data class RirStruct(
   override val name: String,
   val components: List<RirStructComponent> = emptyList(),
+  val constructors: List<RirConstructor> = emptyList(),
 ) : RirType
 
 // One component of a bridgeable struct (ADR-056). [name] is the constructor parameter name
@@ -96,6 +97,7 @@ data class RirMethod(
   val returnType: RirTypeRef,
   val parameters: List<RirParameter> = emptyList(),
   val isStatic: Boolean = false,
+  val managedSignature: String = "",
 )
 
 @Serializable
@@ -118,6 +120,8 @@ data class RirParameter(
 @Serializable
 data class RirConstructor(
   val parameters: List<RirParameter> = emptyList(),
+  val managedSignature: String = "",
+  val isState: Boolean = false,
 )
 
 @Serializable
@@ -221,6 +225,9 @@ enum class RirDiagnosticKind {
   // fields not fully covered by the constructor). Never emitted as a class fallback.
   @SerialName("skipped_unsupported_struct")
   SKIPPED_UNSUPPORTED_STRUCT,
+
+  @SerialName("error_kotlin_signature_collision")
+  ERROR_KOTLIN_SIGNATURE_COLLISION,
 
   @SerialName("info_async_not_yet_mapped")
   INFO_ASYNC_NOT_YET_MAPPED,

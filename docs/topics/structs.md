@@ -3,8 +3,9 @@
 A bridgeable C# `struct` becomes an immutable Kotlin `data class`. No struct ever crosses the C ABI
 itself: a struct-typed parameter expands into one ABI argument per component, and a struct-typed
 return expands into `void` plus one out-pointer per component. There is no handle, no `close()`, no
-`Cleaner`, equality is structural, and a struct claims **zero registration slots**: it has no bridged
-members of its own, so it gets no `nuget_{ns}_{type}_register` export.
+`Cleaner`, and equality is structural. Its unique state constructor claims zero registration slots;
+each alternate public constructor claims one slot and reconstructs the returned components through
+out-pointers.
 
 | C# | Kotlin |
 |---|---|
@@ -13,6 +14,7 @@ members of its own, so it gets no `nuget_{ns}_{type}_register` export.
 | struct-typed return | thunk return becomes `void`; one out-pointer argument per component |
 | struct-typed property getter | as a return: out-pointers |
 | struct-typed property setter | as a parameter: decomposed arguments |
+| alternate public constructor | Kotlin secondary constructor; one registration slot and one out-pointer per state component |
 
 ## The `Point` fixture
 
@@ -29,6 +31,12 @@ public readonly struct Point
         X = x;
         Y = y;
     }
+
+    public Point(int value) : this(value, value) { }
+
+    public Point(bool unit) : this(unit ? 1 : 0, unit ? 1 : 0) { }
+
+    public Point(Size size) : this(size.Width, size.Height) { }
 
     public int X { get; }
     public int Y { get; }
@@ -55,7 +63,12 @@ output):
 internal data class Point(
   val x: Int,
   val y: Int,
-)
+) {
+  private constructor(components: PointConstructorComponents) : this(components.x, components.y)
+  constructor(size: Size) : this(construct__4df77a50827105506f4258372b08561b(size))
+  constructor(unit: Boolean) : this(construct__e802c1ad168a16a38ec169d93b7f55fc(unit))
+  constructor(value: Int) : this(construct__e71e420dcea5e3c083737f3c34b97ec7(value))
+}
 ```
 
 The type is generated `internal`, not `public`: it must stay invisible to the forward-direction (KSP)
@@ -258,16 +271,17 @@ public void CatteryCurrentProfile_GetSetRoundTrip()
 A struct is bridgeable (Shape A) only if **all** of:
 
 1. It is public, top-level, non-generic, non-`ref struct`, and not an enum.
-2. It has exactly one public instance constructor, with at least one parameter.
-3. Every constructor parameter matches, case-insensitively by name, a public readable instance
+2. Exactly one public instance constructor, the state constructor, has at least one parameter and
+   covers all stored state. Other public constructors may bind as alternate constructors.
+3. Every state-constructor parameter matches, case-insensitively by name, a public readable instance
    property of the same type (`x` matches `X`).
 4. Every component type is in the v1 vocabulary: primitives (including `bool` and `char`), `string`,
    and bound enums.
-5. Its constructor covers all of its stored state: the number of non-static instance fields equals
-   the number of constructor parameters.
+5. Its state constructor covers all stored state: the number of non-static instance fields equals
+   the number of state-constructor parameters.
 
-Components, and their order, are the constructor's parameter list, not metadata field order. Rule 5
-exists because without it a struct with more stored fields than constructor parameters would silently
+Components, and their order, are the state constructor's parameter list, not metadata field order.
+Rule 5 exists because without it a struct with more stored fields than constructor parameters would silently
 drop a field's value on every crossing; `sample-dependency/UnsupportedStructs.cs` has both adversarial
 cases:
 
@@ -292,7 +306,7 @@ Kotlin type and no handle wrapper:
   "typeName": "Overstuffed",
   "memberName": "Overstuffed",
   "memberSignature": "Sample.Structs.Overstuffed",
-  "reason": "struct has 2 stored instance field(s) but its constructor takes 1 parameter(s) - state would be silently dropped",
+  "reason": "struct has 2 stored instance field(s) but its constructor takes 1 parameter(s) — state would be silently dropped",
   "hint": "See ADR-056 Decision 3a: a bridgeable struct has exactly one public constructor covering all stored state, with primitive/string/bound-enum components matching the constructor parameters case-insensitively."
 }
 ```
@@ -301,10 +315,8 @@ Kotlin type and no handle wrapper:
 
 - **Shape B structs** (no public constructor; public fields or settable auto-properties) are not
   bound. Metadata extraction for public fields does not exist yet.
-- **Struct methods and computed properties** are not bound; only construction and component readback
-  cross the bridge. A struct itself never gets a registration export.
-- **Structs with multiple public constructors** (including `System.Drawing.Point`) are skipped as an
-  overload set, the same ADR-043 ceiling every other overloaded member hits.
+- **Struct methods and computed properties** are not bound. A struct gets a registration export only
+  when it has at least one bridgeable alternate constructor.
 - **Nested struct components** (a struct field inside a struct) are not flattened.
 - **Class-typed (handle) components** inside a struct are not supported: a `GCHandle` does not compose
   with an immutable value copy.
@@ -323,6 +335,7 @@ and Phase 10.
     </category>
     <category ref="external">
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/056-csharp-structs-in-kotlin.md">ADR-056: C# structs (value types) in Kotlin</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/057-csharp-overload-sets-in-kotlin.md">ADR-057: C# overload sets in Kotlin</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/014-value-class-mapping.md">ADR-014: Value class mapping</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/054-reverse-bridge-registration-observability.md">ADR-054: Reverse-bridge registration observability</a>
     </category>

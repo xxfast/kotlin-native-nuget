@@ -7,7 +7,7 @@ static members instead land in the generated Kotlin `companion object`.
 | C# | Kotlin |
 |---|---|
 | `public static class MimeUtility` | `internal object MimeUtility` |
-| `public static string GetMimeMapping(string file)` | `fun getMimeMapping(file: String): String` |
+| `public static string Describe(int value)` / `Describe(bool value)` | `fun describe(value: Int): String` / `describe(value: Boolean)` |
 | `public static string DefaultName { get; set; }` | `var defaultName: String` |
 | `public static int RenderCount { get; }` | `val renderCount: Int` |
 
@@ -33,8 +33,7 @@ nuget {
 }
 ```
 
-The bound C# API is a single-overload static method (see
-[The bridgeable subset](bridgeable-subset.md) for why that matters):
+The bound C# API is a static method:
 
 ```C#
 namespace MimeMapping {
@@ -52,13 +51,11 @@ output):
 internal object MimeUtility {
 
   fun getMimeMapping(file: String): String {
-    val fn = requireNotNull(getMimeMappingFn) {
-      "MimeUtility bindings are not registered. " +
-        "Ensure the generated C# shims for MimeMapping are referenced " +
-        "in the consuming application before making Kotlin → C# bridge calls."
+    val fn = requireNotNull(MimeUtilityBindings.getMimeMapping__cb4c202351abfeec4d85fccb5ca462a0Fn) {
+      NugetRegistry.notRegistered("MimeMapping.MimeUtility", "MimeMapping")
     }
     val resultPtr = memScoped { fn.invoke(file.cstr.ptr) }
-      ?: error("MimeUtility.GetMimeMapping returned null - expected a non-null string pointer")
+      ?: error("MimeUtility.GetMimeMapping returned null, expected a non-null string pointer")
     val result = resultPtr.reinterpret<ByteVar>().toKString()
     freeManagedString(resultPtr)
     return result
@@ -170,14 +167,42 @@ The registration export name is derived from the C# namespace and type name:
 `[UnmanagedCallersOnly]` thunk is registered per bridgeable static method; see
 [Consuming C# in Kotlin](reverse-overview.md) for the full registration handshake.
 
-## Why `Newtonsoft.Json` doesn't work here
+## Static method overloads
 
-The ROADMAP originally named `Newtonsoft.Json` as the worked example for this feature. It's
-structurally impossible under the bridgeable subset: every static method on `JsonConvert`
-(`SerializeObject`, `DeserializeObject`, `ToString`, ...) is an overload set, and overload sets are
-skipped wholesale (see [The bridgeable subset](bridgeable-subset.md)). `MimeMapping` was chosen
-instead specifically because `GetMimeMapping(string): string` is a real, published, single-overload
-method that survives the filter unforced.
+The `Sample.Overloads.OverloadLab` fixture has two `Describe` methods:
+
+```C#
+public static string Describe(int value) => $"static:int:{value}";
+
+public static string Describe(bool value) => value ? "static:bool:on" : "static:bool:off";
+```
+
+Generated Kotlin keeps the shared name and lets normal overload resolution select by parameter
+type:
+
+```kotlin
+fun describe(value: Boolean): String {
+  val fn = requireNotNull(OverloadLabBindings.describe__09da8e80bd8920c59e5252f3d665716aFn) {
+    NugetRegistry.notRegistered("Sample.Overloads.OverloadLab", "SampleDependency")
+  }
+  val resultPtr = fn.invoke(value)
+    ?: error("OverloadLab.Describe returned null, expected a non-null string pointer")
+  val result = resultPtr.reinterpret<ByteVar>().toKString()
+  freeManagedString(resultPtr)
+  return result
+}
+
+fun describe(value: Int): String {
+  val fn = requireNotNull(OverloadLabBindings.describe__a8ac9b64f5e802cd2f6fdcaa8b7dc202Fn) {
+    NugetRegistry.notRegistered("Sample.Overloads.OverloadLab", "SampleDependency")
+  }
+  val resultPtr = fn.invoke(value)
+    ?: error("OverloadLab.Describe returned null, expected a non-null string pointer")
+  val result = resultPtr.reinterpret<ByteVar>().toKString()
+  freeManagedString(resultPtr)
+  return result
+}
+```
 
 ## Limitations
 
@@ -185,8 +210,8 @@ method that survives the filter unforced.
   handle-typed static property with a setter now renders as a Kotlin `var` too, its type driven by the
   property's own `NullableAttribute` (see [Instance members](instance-members.md) and
   [ADR-053](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/053-nullable-reference-types-in-kotlin.md)).
-- Overload sets are skipped entirely, not partially. See
-  [The bridgeable subset](bridgeable-subset.md).
+- Unsupported overloads are diagnosed independently. A true mapped Kotlin-signature collision is
+  a generation error; see [The bridgeable subset](bridgeable-subset.md).
 
 <seealso>
     <category ref="related">
@@ -200,5 +225,6 @@ method that survives the filter unforced.
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/049-csharp-registration-shim-generation.md">ADR-049: C# registration shim generation</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/050-end-to-end-packaging-integration.md">ADR-050: End-to-end packaging integration</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/053-nullable-reference-types-in-kotlin.md">ADR-053: Nullable reference types in Kotlin</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/057-csharp-overload-sets-in-kotlin.md">ADR-057: C# overload sets in Kotlin</a>
     </category>
 </seealso>
