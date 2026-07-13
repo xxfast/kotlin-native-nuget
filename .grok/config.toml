@@ -1,0 +1,24 @@
+# Project-scoped Grok config for kotlin-native-nuget.
+#
+# Same idea as .codex/: harness-local overrides only. Workflow source of truth stays
+# under .claude/ (skills + agent briefs). This file can contribute [mcp_servers],
+# [plugins], and [permission]. Most other settings load only from ~/.grok/config.toml.
+#
+# Layout:
+#   agents/*.md                     thin wrappers → .claude/agents/* (same names; model: inherit)
+#   skills/feature-design/SKILL.md  thin wrapper → .claude/skills/feature-design
+#   hooks/                          Grok-only guards + benchmark capture
+#   benchmark.csv                   feature-design run costs (Grok only)
+
+# IntelliJ IDEA MCP (same endpoint as .codex/config.toml). Requires IDEA running with
+# the MCP plugin listening on this port. Repo-local MCP needs folder trust (--trust / /hooks-trust).
+[mcp_servers.idea]
+url = "http://127.0.0.1:64342/stream"
+enabled = true
+
+[permission]
+# Belt-and-braces with PreToolUse hook (which also blocks ~/.nuget/packages/).
+deny = [
+  "Edit(**/build/**)",
+]
+
