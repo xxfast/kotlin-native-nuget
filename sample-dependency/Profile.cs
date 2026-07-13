@@ -23,6 +23,30 @@ public readonly struct Profile
     public bool Active { get; }
     public char Grade { get; }
     public CatMood Mood { get; }
+
+    /// <summary>
+    /// Get-only computed property that is NOT a component. Forces string conversion on a
+    /// non-component read (Tag + Mood stringification).
+    /// </summary>
+    public string Label => $"{Tag}:{Mood}";
+
+    /// <summary>
+    /// Get-only computed bool: non-component, non-void, conversion seam for bool returns from a
+    /// reconstructed receiver.
+    /// </summary>
+    public bool IsPlayful => Mood == CatMood.Playful;
+
+    /// <summary>
+    /// Instance method returning a struct: reconstruct-on-call with the full string/bool/char/enum
+    /// component vocabulary on both the receiver and the out-pointer return.
+    /// </summary>
+    public Profile WithMood(CatMood mood) => new Profile(Tag, Active, Grade, mood);
+
+    /// <summary>
+    /// Static factory on the struct → Kotlin <c>companion object</c>. Builds a resting (inactive,
+    /// sleepy) profile; forces string + enum conversion without a free-function host type.
+    /// </summary>
+    public static Profile Resting(string tag) => new Profile(tag, false, 'Z', CatMood.Sleepy);
 }
 
 /// <summary>

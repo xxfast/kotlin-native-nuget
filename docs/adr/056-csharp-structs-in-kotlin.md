@@ -37,7 +37,7 @@ The mirror **holds for the principle** and **breaks on the arity**:
 | Equality | value (record) | value (data class) |
 | **Component count** | **exactly 1** (a value class wraps one property) | **N** |
 | Return position | return the single value directly | **cannot return N values** → out-pointers |
-| Methods on the type | reconstruct the value class per call | same idea, **deferred** (see Scope) |
+| Methods on the type | reconstruct the value class per call | same idea, **shipped** (see Scope follow-up: members) |
 
 So: the *unwrap-don't-box* principle transfers exactly, and it is the reason this ADR rejects the
 boxed handle. The *arity* generalises from 1 to N, and that is what forces the one genuinely new
@@ -878,26 +878,59 @@ Note `Roster` is an ADR-051 handle-backed class (it is a C# *class*), so it keep
 
 **Deferred:**
 
-- **Shape B** — structs with no public constructor (public fields / settable auto-properties). Needs
+- **Shape B**: structs with no public constructor (public fields / settable auto-properties). Needs
   field extraction, which does not exist. First candidate for follow-up.
-- **Struct methods and computed properties** — the direct mirror of ADR-014's "reconstruct the value
-  class on each invocation": the thunk takes the components as leading arguments and rebuilds the
-  struct. Requires the struct to get its own registration export. The path is open; the machinery is
-  not built.
-- **Structs with multiple public constructors** (including `System.Drawing.Point`) — blocked on the
-  ROADMAP line 161 overload-disambiguation item, which lifts this for structs and classes together.
-- **Nested struct components** (a struct field inside a struct) — recursive flattening; deferred for
+- ~~**Struct methods and computed properties**~~: **shipped** (no new ADR). See
+  [Follow-up design: members](#follow-up-design-members) below.
+- **Structs with multiple public constructors** (including `System.Drawing.Point`): **shipped** as
+  part of [ADR-057](057-csharp-overload-sets-in-kotlin.md) for Shape A alternate constructors; kept
+  here only as historical Scope text.
+- **Nested struct components** (a struct field inside a struct): recursive flattening; deferred for
   scope, not for a technical obstacle.
-- **Class-typed (handle) components** — deliberately deferred on *semantics*, not cost: a `GCHandle`
+- **Class-typed (handle) components**: deliberately deferred on *semantics*, not cost: a `GCHandle`
   inside a value type does not compose. `copy()`ing the Kotlin `data class` would duplicate a
   `Cleaner`-managed handle, so a value copy would carry shared, independently-freed ownership. Needs
   its own decision.
-- **`Nullable<T>` (`int?`, `Point?`)** — unblocked by this ADR's out-pointer format (prescribed
+- **`Nullable<T>` (`int?`, `Point?`)**: unblocked by this ADR's out-pointer format (prescribed
   above), separate ROADMAP slice, **no new ADR needed**.
-- **Generic structs** (`KeyValuePair<K,V>`) — open generics stay excluded (ADR-043); closed
+- **Generic structs** (`KeyValuePair<K,V>`): open generics stay excluded (ADR-043); closed
   constructed generics are Phase 10.
-- **Structs as collection elements** — Phase 10.
-- **`ref struct` / `Span<T>`** — permanently excluded (ADR-043), unchanged.
-- **Explicit `[StructLayout]` / `[FieldOffset]`** — irrelevant by construction: the wire format never
+- **Structs as collection elements**: Phase 10.
+- **`ref struct` / `Span<T>`**: permanently excluded (ADR-043), unchanged.
+- **Explicit `[StructLayout]` / `[FieldOffset]`**: irrelevant by construction: the wire format never
   uses layout. Recorded so that no future reader mistakes metadata's `SequentialLayout` for a
   guarantee about runtime layout.
+
+### Follow-up design: members
+
+**Status: shipped** (Phase 9 ROADMAP item under ADR-056 Scope; no new ADR number).
+
+Implements the deferred "reconstruct on each invocation" path this ADR already prescribed for
+struct methods. Mechanism is the same component decomposition as Decision 1a/4a, plus the
+registration export path ADR-057 already opened for alternate struct constructors.
+
+**Bind filter (reader enumerates on Shape A structs):**
+
+- public instance methods with a non-void return
+- get-only instance properties whose name is **not** a component `readName` (computed properties)
+- public static methods → Kotlin `companion object`
+
+**Skip (still not bridged):**
+
+- `Equals` / `GetHashCode` / `ToString` / `Deconstruct`
+- operators
+- setters
+- void-returning instance methods
+- component auto-properties (`X`, `Y`, ... stay primary constructor `val`s, not bridge getters)
+
+**Wire:** N component args first (C# thunk does `new T(...)` then invokes the member); ordinary
+parameters after; struct returns still use the existing out-pointer convention.
+
+**Registration:** extend the struct's own `nuget_{ns}_{type}_register` export (same path as
+alternate constructors). Slot order on the struct type:
+**alternate constructors → static methods → instance methods → computed getters**. Members alone
+force `Bindings` / `Registration` generation even when the struct has no alternate constructors.
+
+**Kotlin surface:** members on the generated `data class`; statics on `companion object`. Fixture:
+`sample-dependency/Geometry.cs` (`Point.Magnitude` / `Offset` / `Format` / `Origin`) and
+`Profile.cs` (`Label` / `IsPlayful` / `WithMood` / `Resting`).

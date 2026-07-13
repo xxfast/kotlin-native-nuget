@@ -114,6 +114,65 @@ fun bridgeableStructConstructors(
   return constructors
 }
 
+// ADR-056 deferred: Object / record boilerplate and operators never cross the reverse bridge for
+// a value type. Filters apply on both the reader (prefer not to emit) and here (defence in depth
+// for hand-built RIR fixtures).
+private val SKIPPED_STRUCT_METHOD_NAMES: Set<String> = setOf(
+  "Equals", "GetHashCode", "ToString", "Deconstruct",
+)
+
+private fun isSkippedStructMethod(method: RirMethod): Boolean =
+  method.name in SKIPPED_STRUCT_METHOD_NAMES || method.name.startsWith("op_")
+
+// ADR-056 deferred (struct methods + computed properties): shared ordered registration list for
+// a struct: alternate ctors → static methods → instance methods → get-only computed property
+// getters. Both generators MUST consume this function so slot indices never drift. State ctor is
+// never a slot. Void-returning instance methods, setters, component auto-properties, and the
+// Object/op_* skip list are excluded.
+fun bridgeableStructRegistrables(
+  struct: RirStruct,
+  boundHandleTypes: Set<RirTypeKey>,
+): List<RirRegistrable> {
+  val constructors: List<RirRegistrable> =
+    bridgeableStructConstructors(struct, boundHandleTypes).map { RirRegistrable.Ctor(it) }
+
+  val staticMethods: List<RirRegistrable> = struct.methods
+    .filter { it.isStatic }
+    .filter { isV1Bridgeable(it, boundHandleTypes) }
+    .filterNot { isSkippedStructMethod(it) }
+    .sortedBy { it.identity() }
+    .map { RirRegistrable.Method(it) }
+
+  val instanceMethods: List<RirRegistrable> = struct.methods
+    .filter { !it.isStatic }
+    .filter { isV1Bridgeable(it, boundHandleTypes) }
+    .filterNot { isSkippedStructMethod(it) }
+    // Void instance methods are out of scope for reconstruct-on-call v1 (ADR-056 deferred).
+    .filter { it.returnType !is RirVoidType }
+    .sortedBy { it.identity() }
+    .map { RirRegistrable.Method(it) }
+
+  val componentReadNames: Set<String> =
+    struct.components.map { it.readName.lowercase() }.toSet()
+  val computedGetters: List<RirRegistrable> = struct.properties
+    .filter { it.isReadOnly && !it.isStatic }
+    .filter { it.name.lowercase() !in componentReadNames }
+    .filter { isV1Type(it.type, boundHandleTypes) }
+    .sortedBy { it.name }
+    .map { RirRegistrable.PropertyGetter(it) }
+
+  val result: List<RirRegistrable> =
+    constructors + staticMethods + instanceMethods + computedGetters
+  bridgeIds(result.map { it.identity() })
+  return result
+}
+
+// ABI in-args for a struct instance member's reconstructed receiver: one scalar per component,
+// named by the component's readName (PascalCase property), so C# thunk params stay distinct from
+// ordinary method params (e.g. Mood vs mood) and from out-pointers (outX).
+fun structReceiverAbiArgs(struct: RirStruct): List<AbiArg> =
+  struct.components.map { c -> AbiArg(c.readName, c.type, isOutPointer = false) }
+
 // ADR-052: a member that receives exactly one function-pointer slot on the type's
 // nuget_{ns}_{type}_register export — either the type's public instance constructor or a
 // bridgeable static method. Sealed so both generators derive the registration-order-sensitive
@@ -405,15 +464,27 @@ fun structConstructorContractHash(
   struct: RirStruct,
   constructors: List<RirConstructor>,
   structs: Map<RirTypeKey, RirStruct>,
+): Long = structContractHash(
+  namespace,
+  struct,
+  constructors.map { RirRegistrable.Ctor(it) },
+  structs,
+)
+
+// ADR-056 deferred: contract hash over the full shared struct registration list (alternate
+// ctors + methods + computed getters). Same component prefix as the ctor-only form so a
+// members-free struct keeps a stable hash with the previous shape.
+fun structContractHash(
+  namespace: String,
+  struct: RirStruct,
+  registrables: List<RirRegistrable>,
+  structs: Map<RirTypeKey, RirStruct>,
 ): Long {
   val components: String = struct.components.joinToString(",") {
     "${it.name}:${it.type.signaturePart(structs)}"
   }
   val signature: String = "$namespace.${struct.name}|{$components}|" +
-      constructors.joinToString("|") { ctor ->
-        ctor.identity() + ":ctor(" +
-            ctor.parameters.joinToString(",") { it.type.signaturePart(structs) } + ")"
-      }
+      registrables.joinToString("|") { it.contractSignature(structs) }
   return fnv1a64(signature)
 }
 

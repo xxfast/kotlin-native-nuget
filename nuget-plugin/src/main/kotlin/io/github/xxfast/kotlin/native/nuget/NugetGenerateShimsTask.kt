@@ -25,13 +25,14 @@ import io.github.xxfast.kotlin.native.nuget.rir.boundHandleTypes
 import io.github.xxfast.kotlin.native.nuget.rir.boundStructTypes
 import io.github.xxfast.kotlin.native.nuget.rir.bridgeableRegistrables
 import io.github.xxfast.kotlin.native.nuget.rir.bridgeId
-import io.github.xxfast.kotlin.native.nuget.rir.bridgeableStructConstructors
+import io.github.xxfast.kotlin.native.nuget.rir.bridgeableStructRegistrables
 import io.github.xxfast.kotlin.native.nuget.rir.bridgeSuffix
 import io.github.xxfast.kotlin.native.nuget.rir.contractHash
 import io.github.xxfast.kotlin.native.nuget.rir.isNullable
 import io.github.xxfast.kotlin.native.nuget.rir.parseReverseIr
 import io.github.xxfast.kotlin.native.nuget.rir.registrationExportName
-import io.github.xxfast.kotlin.native.nuget.rir.structConstructorContractHash
+import io.github.xxfast.kotlin.native.nuget.rir.structContractHash
+import io.github.xxfast.kotlin.native.nuget.rir.structReceiverAbiArgs
 import org.gradle.api.DefaultTask
 import org.gradle.api.file.DirectoryProperty
 import org.gradle.api.file.RegularFileProperty
@@ -70,13 +71,14 @@ fun generateCSharpShims(file: RirFile, nativeLibraryName: String): List<Generate
   file.assemblies.forEach { assembly ->
     assembly.namespaces.forEach { namespace ->
       namespace.types.filterIsInstance<RirStruct>().forEach { struct ->
-        val constructors: List<RirConstructor> = bridgeableStructConstructors(struct, boundTypes)
-        if (constructors.isNotEmpty()) {
+        val registrables: List<RirRegistrable> =
+          bridgeableStructRegistrables(struct, boundTypes)
+        if (registrables.isNotEmpty()) {
           result.add(
             GeneratedFile(
               relativePath = "${struct.name}Registration.cs",
               content = structRegistrationFileContent(
-                namespace.name, struct, constructors,
+                namespace.name, struct, registrables,
                 registrationExportName(namespace.name, struct.name), nativeLibraryName, structs,
               ),
             )
@@ -853,24 +855,98 @@ private fun buildCtorThunkMethod(
 private fun structRegistrationFileContent(
   namespaceName: String,
   struct: RirStruct,
-  constructors: List<RirConstructor>,
+  registrables: List<RirRegistrable>,
   exportName: String,
   nativeLibraryName: String,
   structs: Map<RirTypeKey, RirStruct>,
 ): String {
-  val registerParams: String = constructors.joinToString(", ") { ctor ->
-    "IntPtr ctor__${ctor.bridgeId()}Ptr"
+  val enumNamespaces: List<String> = referencedEnumTypes(registrables, structs)
+    .map { it.namespace }
+    .distinct()
+    .filter { it != namespaceName }
+    .sorted()
+  // Also import enums used as the struct's own components (receiver reconstruction).
+  val componentEnumNamespaces: List<String> = struct.components
+    .mapNotNull { it.type as? RirEnumType }
+    .map { it.namespace }
+    .distinct()
+    .filter { it != namespaceName }
+  val allEnumNamespaces: List<String> =
+    (enumNamespaces + componentEnumNamespaces).distinct().sorted()
+  val usings: String = (
+      listOf("System", "System.Runtime.CompilerServices", "System.Runtime.InteropServices") +
+          allEnumNamespaces
+      ).joinToString("\n") { "    using $it;" }
+
+  val registerParams: String = registrables.joinToString(", ") { r ->
+    when (r) {
+      is RirRegistrable.Ctor -> "IntPtr ctor__${r.ctor.bridgeId()}Ptr"
+      is RirRegistrable.Method ->
+        "IntPtr ${r.method.name.toMethodCamelCase()}${r.method.bridgeSuffix()}Ptr"
+
+      is RirRegistrable.PropertyGetter ->
+        "IntPtr ${r.property.name.toMethodCamelCase()}GetterPtr"
+
+      is RirRegistrable.PropertySetter -> error(
+        "[nuget] struct property setters are out of scope (ADR-056 deferred)",
+      )
+    }
   }
-  val hash: Long = structConstructorContractHash(namespaceName, struct, constructors, structs)
-  val pointers: String = constructors.joinToString(",\n                    ") { ctor ->
-    val inTypes: List<String> = abiArgs(ctor.parameters, structs).map { csAbiType(it.type) }
-    val outTypes: List<String> = struct.components.map { "${csAbiType(it.type)}*" }
-    val types: String = (inTypes + outTypes + "void").joinToString(", ")
-    "(IntPtr)(delegate* unmanaged[Cdecl]<$types>)" +
-        "(&Ctor__${ctor.bridgeId()}_Thunk)"
+  val hash: Long = structContractHash(namespaceName, struct, registrables, structs)
+  val pointers: String = registrables.joinToString(",\n                    ") { r ->
+    when (r) {
+      is RirRegistrable.Ctor -> {
+        val inTypes: List<String> = abiArgs(r.ctor.parameters, structs).map { csAbiType(it.type) }
+        val outTypes: List<String> = struct.components.map { "${csAbiType(it.type)}*" }
+        val types: String = (inTypes + outTypes + "void").joinToString(", ")
+        "(IntPtr)(delegate* unmanaged[Cdecl]<$types>)" +
+            "(&Ctor__${r.ctor.bridgeId()}_Thunk)"
+      }
+
+      is RirRegistrable.Method -> {
+        val receiverTypes: List<String> =
+          if (!r.method.isStatic) structReceiverAbiArgs(struct).map { csAbiType(it.type) }
+          else emptyList()
+        val inTypes: List<String> =
+          abiArgs(r.method.parameters, structs).map { csAbiType(it.type) }
+        val outTypes: List<String> =
+          abiOutArgs(r.method.returnType, structs).map { "${csAbiType(it.type)}*" }
+        val retType: String = csAbiType(abiReturnType(r.method.returnType, structs))
+        val allParams: String = (receiverTypes + inTypes + outTypes).joinToString(", ")
+        val fnTypeParams: String =
+          if (allParams.isEmpty()) retType else "$allParams, $retType"
+        "(IntPtr)(delegate* unmanaged[Cdecl]<$fnTypeParams>)" +
+            "(&${r.method.name}${r.method.bridgeSuffix()}_Thunk)"
+      }
+
+      is RirRegistrable.PropertyGetter -> {
+        val receiverTypes: List<String> =
+          structReceiverAbiArgs(struct).map { csAbiType(it.type) }
+        val outTypes: List<String> =
+          abiOutArgs(r.property.type, structs).map { "${csAbiType(it.type)}*" }
+        val retType: String = csAbiType(abiReturnType(r.property.type, structs))
+        val allParams: String = (receiverTypes + outTypes).joinToString(", ")
+        val fnTypeParams: String =
+          if (allParams.isEmpty()) retType else "$allParams, $retType"
+        "(IntPtr)(delegate* unmanaged[Cdecl]<$fnTypeParams>)(&${r.property.name}_Get_Thunk)"
+      }
+
+      is RirRegistrable.PropertySetter -> error(
+        "[nuget] struct property setters are out of scope (ADR-056 deferred)",
+      )
+    }
   }
-  val thunks: String = constructors.joinToString("\n\n") { ctor ->
-    buildStructCtorThunkMethod(struct, ctor, structs)
+  val thunks: String = registrables.joinToString("\n\n") { r ->
+    when (r) {
+      is RirRegistrable.Ctor -> buildStructCtorThunkMethod(struct, r.ctor, structs)
+      is RirRegistrable.Method -> buildStructMethodThunk(struct, r.method, structs)
+      is RirRegistrable.PropertyGetter ->
+        buildStructPropertyGetterThunk(struct, r.property, structs)
+
+      is RirRegistrable.PropertySetter -> error(
+        "[nuget] struct property setters are out of scope (ADR-056 deferred)",
+      )
+    }
   }
   return """
     |// <auto-generated>
@@ -878,9 +954,7 @@ private fun structRegistrationFileContent(
     |
     |namespace $namespaceName
     |{
-    |    using System;
-    |    using System.Runtime.CompilerServices;
-    |    using System.Runtime.InteropServices;
+    |$usings
     |
     |    internal static class ${struct.name}Registration
     |    {
@@ -893,7 +967,7 @@ private fun structRegistrationFileContent(
     |        internal static unsafe void Initialize()
     |        {
     |            $exportName(
-    |                ${constructors.size},
+    |                ${registrables.size},
     |                ${hash}L,
     |                $pointers);
     |        }
@@ -901,6 +975,179 @@ private fun structRegistrationFileContent(
     |$thunks
     |    }
     |}
+  """.trimMargin()
+}
+
+private fun structReceiverReconstruction(struct: RirStruct): String {
+  val args: String = struct.components.joinToString(", ") { c ->
+    paramConversion(RirParameter(c.readName, c.type))
+  }
+  return "new ${struct.name}($args)"
+}
+
+private fun buildStructMethodThunk(
+  struct: RirStruct,
+  method: RirMethod,
+  structs: Map<RirTypeKey, RirStruct>,
+): String {
+  val thunkName: String = "${method.name}${method.bridgeSuffix()}_Thunk"
+  val receiverParams: List<String> = if (!method.isStatic) {
+    structReceiverAbiArgs(struct).map { arg ->
+      "${csAbiType(arg.type)} ${thunkParamName(RirParameter(arg.name, arg.type))}"
+    }
+  } else {
+    emptyList()
+  }
+  val inArgs: List<AbiArg> = abiArgs(method.parameters, structs)
+  val outArgs: List<AbiArg> = abiOutArgs(method.returnType, structs)
+  val abiRetType: RirTypeRef = abiReturnType(method.returnType, structs)
+  val inParamDecls: List<String> = inArgs.map { arg ->
+    "${csAbiType(arg.type)} ${thunkParamName(RirParameter(arg.name, arg.type))}"
+  }
+  val outParamDecls: List<String> = outArgs.map { arg -> "${csAbiType(arg.type)}* ${arg.name}" }
+  val paramList: String =
+    (receiverParams + inParamDecls + outParamDecls).joinToString(", ")
+  val retAbiType: String = csAbiType(abiRetType)
+  val needsUnsafe: Boolean = outArgs.isNotEmpty()
+
+  val paramBindings: List<ParamBinding> = method.parameters.map { paramBinding(it, structs) }
+  val paramDeclarationLines: List<String> = paramBindings.flatMap { it.declarationLines }
+  val callArgs: String = paramBindings.joinToString(", ") { it.expression }
+  val callExpr: String = if (method.isStatic) {
+    "${struct.name}.${method.name}($callArgs)"
+  } else {
+    "${structReceiverReconstruction(struct)}.${method.name}($callArgs)"
+  }
+
+  val callBodyLines: List<String> = when (val retType: RirTypeRef = method.returnType) {
+    is RirVoidType -> listOf("$callExpr;")
+    is RirStringType -> listOf(
+      "string result = $callExpr;",
+      "return ${csReturnConversion(retType, "result")};",
+    )
+
+    is RirEnumType -> listOf(
+      "${csNativeType(retType)} result = $callExpr;",
+      "return ${csReturnConversion(retType, "result")};",
+    )
+
+    is RirStructType -> {
+      val retStruct: RirStruct =
+        requireNotNull(structs[RirTypeKey(retType.namespace, retType.name)]) {
+          "[nuget] struct ${retType.namespace}.${retType.name} is referenced as a return " +
+              "type but not declared in reverse-ir.json"
+        }
+      listOf("${csNativeType(retType)} result = $callExpr;") +
+          retStruct.components.zip(outArgs).map { (c, arg) ->
+            "*${arg.name} = ${csReturnConversion(c.type, "result.${c.readName}")};"
+          }
+    }
+
+    is RirPrimitiveType -> when (retType.name) {
+      "bool" -> listOf(
+        "bool result = $callExpr;",
+        "return ${csReturnConversion(retType, "result")};",
+      )
+
+      "char" -> listOf(
+        "char result = $callExpr;",
+        "return ${csReturnConversion(retType, "result")};",
+      )
+
+      else -> listOf(
+        "${csNativeType(retType)} result = $callExpr;",
+        "return result;",
+      )
+    }
+
+    is RirObjectHandleType -> error(
+      "[nuget] handle returns on struct methods are out of scope (ADR-056 deferred)",
+    )
+  }
+
+  val bodyLines: List<String> = paramDeclarationLines + callBodyLines
+  val body: String = bodyLines.joinToString("\n") { "            $it" }
+  val unsafeKeyword: String = if (needsUnsafe) "unsafe " else ""
+  return """
+    |        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+    |        private static ${unsafeKeyword}$retAbiType $thunkName($paramList)
+    |        {
+    |$body
+    |        }
+  """.trimMargin()
+}
+
+private fun buildStructPropertyGetterThunk(
+  struct: RirStruct,
+  property: RirProperty,
+  structs: Map<RirTypeKey, RirStruct>,
+): String {
+  val thunkName: String = "${property.name}_Get_Thunk"
+  val receiverParams: List<String> = structReceiverAbiArgs(struct).map { arg ->
+    "${csAbiType(arg.type)} ${thunkParamName(RirParameter(arg.name, arg.type))}"
+  }
+  val outArgs: List<AbiArg> = abiOutArgs(property.type, structs)
+  val abiRetType: RirTypeRef = abiReturnType(property.type, structs)
+  val outParamDecls: List<String> = outArgs.map { arg -> "${csAbiType(arg.type)}* ${arg.name}" }
+  val paramList: String = (receiverParams + outParamDecls).joinToString(", ")
+  val retAbiType: String = csAbiType(abiRetType)
+  val needsUnsafe: Boolean = outArgs.isNotEmpty()
+  val getExpr: String = "${structReceiverReconstruction(struct)}.${property.name}"
+
+  val bodyLines: List<String> = when (val type: RirTypeRef = property.type) {
+    is RirVoidType -> error("[nuget] a property cannot have void type")
+    is RirStringType -> listOf(
+      "string result = $getExpr;",
+      "return ${csReturnConversion(type, "result")};",
+    )
+
+    is RirEnumType -> listOf(
+      "${csNativeType(type)} result = $getExpr;",
+      "return ${csReturnConversion(type, "result")};",
+    )
+
+    is RirStructType -> {
+      val retStruct: RirStruct =
+        requireNotNull(structs[RirTypeKey(type.namespace, type.name)]) {
+          "[nuget] struct ${type.namespace}.${type.name} is referenced as a property type " +
+              "but not declared in reverse-ir.json"
+        }
+      listOf("${csNativeType(type)} result = $getExpr;") +
+          retStruct.components.zip(outArgs).map { (c, arg) ->
+            "*${arg.name} = ${csReturnConversion(c.type, "result.${c.readName}")};"
+          }
+    }
+
+    is RirPrimitiveType -> when (type.name) {
+      "bool" -> listOf(
+        "bool result = $getExpr;",
+        "return ${csReturnConversion(type, "result")};",
+      )
+
+      "char" -> listOf(
+        "char result = $getExpr;",
+        "return ${csReturnConversion(type, "result")};",
+      )
+
+      else -> listOf(
+        "${csNativeType(type)} result = $getExpr;",
+        "return result;",
+      )
+    }
+
+    is RirObjectHandleType -> error(
+      "[nuget] handle-typed computed properties on structs are out of scope (ADR-056 deferred)",
+    )
+  }
+
+  val body: String = bodyLines.joinToString("\n") { "            $it" }
+  val unsafeKeyword: String = if (needsUnsafe) "unsafe " else ""
+  return """
+    |        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+    |        private static ${unsafeKeyword}$retAbiType $thunkName($paramList)
+    |        {
+    |$body
+    |        }
   """.trimMargin()
 }
 

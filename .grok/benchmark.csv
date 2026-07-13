@@ -1,1 +1,7 @@
 feature,agent,model,tool_uses,tokens,wall_min,date,phase,direction,skill_sha,notes
+Struct methods and computed properties (ADR-056 Scope),feature-design,grok-4.5,359,19219940,21,2026-07-14,9,reverse,06b7fea,TOTAL: 5 subagents + the orchestrator. tokens and tool_uses include the orchestrator; wall_min is summed active subagent time only. Mirror path. Staging retro-filled from session signals after SubagentStop miss; kotlin resume double-count corrected.
+Struct methods and computed properties (ADR-056 Scope),research,grok-4.5,49,919299,2,2026-07-14,9,reverse,06b7fea,"Light pass: mirrors ADR-014, no new ADR."
+Struct methods and computed properties (ADR-056 Scope),csharp-dev,grok-4.5,46,553249,2,2026-07-14,9,reverse,06b7fea,Fixture + E2E only (Point/Profile members).
+Struct methods and computed properties (ADR-056 Scope),kotlin-dev,grok-4.5,111,3857545,9,2026-07-14,9,reverse,06b7fea,Reader + RIR + both generators; TDD then resume/impl. Retro-capture: tokens/tools from resume session (includes Step 3 turn); wall = tests+impl sessionDurationSeconds (hook never fired).
+Struct methods and computed properties (ADR-056 Scope),documenter,grok-4.5,51,1234397,3,2026-07-14,9,reverse,06b7fea,Amended ADR-056 Scope; no new ADR.
+Struct methods and computed properties (ADR-056 Scope),refactorer,grok-4.5,57,2350714,5,2026-07-14,9,reverse,06b7fea,Style on 5 Kotlin files after documenter.

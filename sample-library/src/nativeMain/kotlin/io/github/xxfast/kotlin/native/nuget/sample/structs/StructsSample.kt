@@ -14,6 +14,10 @@ import sample.structs.Profile
 // two struct params in one signature, an INSTANCE method on a bound class taking/returning a
 // struct, and a SETTABLE struct-typed property.
 //
+// Plus ADR-056 deferred "struct methods and computed properties" (ADR-014 reconstruct-on-call):
+// Point.{magnitude,offset,format,origin} and Profile.{label,isPlayful,withMood,resting} live on the
+// data class / companion, not free-function hosts.
+//
 //   C# SampleApp.Tests
 //     -> (forward bridge, Interop.cs)  StructsSample.* functions in this file
 //       -> Kotlin sample-library       StructsSample.kt (this file)
@@ -150,3 +154,39 @@ fun catteryCurrentProfileRoundTrip(
     cattery.close()
   }
 }
+
+// --- ADR-056 deferred: struct methods + computed properties (ADR-014 reconstruct-on-call) ---
+// Members live on the generated data class (and companion), not free functions. Wire form: N
+// component args first (C# thunk rebuilds `new Point(x,y)`), then ordinary args; struct returns
+// stay void + out-pointers. Sample-library will not compile against these until kotlin-dev lands
+// the reader/generator work. That is the intended TDD failure mode.
+
+// Computed property on Point that is NOT a component (components are x/y).
+fun pointMagnitude(x: Int, y: Int): Int = Point(x, y).magnitude
+
+// Instance method returning a struct (out-pointers), then Format for a forward-friendly string.
+fun offsetPoint(x: Int, y: Int, dx: Int, dy: Int): String = Point(x, y).offset(dx, dy).format()
+
+// Static method on Point → companion object, then instance Format.
+fun pointOriginFormat(): String = Point.origin().format()
+
+// Computed string property on Profile (string conversion, non-component).
+fun profileLabel(tag: String, active: Boolean, gradeCode: Int, mood: CatMood): String =
+  Profile(tag, active, gradeCode.toChar(), mood).label
+
+// Instance method returning Profile (full component vocabulary on reconstruct + out-pointers),
+// then Label so the forward surface stays plain types. Appends isPlayful to force the bool
+// computed-property seam on the reconstructed result.
+fun profileWithMood(
+  tag: String,
+  active: Boolean,
+  gradeCode: Int,
+  mood: CatMood,
+  newMood: CatMood,
+): String {
+  val updated: Profile = Profile(tag, active, gradeCode.toChar(), mood).withMood(newMood)
+  return "${updated.label}|${updated.isPlayful}"
+}
+
+// Static factory on Profile → companion object, then Label.
+fun profileRestingLabel(tag: String): String = Profile.resting(tag).label

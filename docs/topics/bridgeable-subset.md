@@ -93,10 +93,15 @@ Unsupported enums are excluded with a `skipped_unsupported_enum` diagnostic in `
 
 ## Methods and properties
 
-- **Static methods** and **instance methods** both bind. Each overload is checked independently
-  against the parameter/return type rules.
+- **Static methods** and **instance methods** both bind on classes. Each overload is checked
+  independently against the parameter/return type rules.
 - **Instance properties** and **static properties** bind: read-only → `val`, settable → `var` (see
   [Instance members](instance-members.md) and [Static classes and methods](static-classes-and-methods.md)).
+- **Struct members** also bind: public non-void instance methods, get-only computed properties that
+  are not component `readName`s, and static methods (Kotlin `companion object`). Skipped on structs:
+  `Equals`/`GetHashCode`/`ToString`/`Deconstruct`, operators, setters, void instance methods, and
+  component auto-properties. Wire form reconstructs the receiver from leading component args (see
+  [C# structs](structs.md)).
 - **`async`/`Task`-returning methods do not bind.** The reader recognizes `Task`, `Task<T>`,
   `ValueTask`, `ValueTask<T>`, and `IAsyncEnumerable<T>` by name and emits an *informational*
   diagnostic (`info_async_not_yet_mapped`), not a skip-with-reason like the others; the method is
@@ -134,7 +139,7 @@ distinct.
 | `bool`, `byte`, `short`, `int`, `long`, `float`, `double`, `char` | primitives, direct or narrowed for ABI blittability |
 | A supported enum | ordinal `Int`, converted to and from a Kotlin `enum class` |
 | A bound, non-static, non-value-type, non-`ref struct` class from the current extraction | an opaque `GCHandle`-backed pointer (a "handle" type) |
-| A bridgeable ("Shape A") struct | decomposed onto the wire, one ABI argument per component (parameter) or one out-pointer per component (return); surfaces as an immutable Kotlin `data class`, no handle. See [C# structs](structs.md) |
+| A bridgeable ("Shape A") struct | decomposed onto the wire, one ABI argument per component (parameter) or one out-pointer per component (return); surfaces as an immutable Kotlin `data class`, no handle. Methods and get-only computed properties on the struct bind via reconstruct-on-call (leading component args). See [C# structs](structs.md) |
 
 `string` and a bound handle type both carry real nullability now: a `NullableAttribute`/
 `NullableContextAttribute`-derived `nullable` flag on the `RirTypeRef` decides `String` vs. `String?`

@@ -5,7 +5,11 @@ itself: a struct-typed parameter expands into one ABI argument per component, an
 return expands into `void` plus one out-pointer per component. There is no handle, no `close()`, no
 `Cleaner`, and equality is structural. Its unique state constructor claims zero registration slots;
 each alternate public constructor claims one slot and reconstructs the returned components through
-out-pointers.
+out-pointers. Methods and get-only computed properties on the struct itself also bind: each call
+reconstructs the value from its components on the wire (the reverse of
+[ADR-014](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/014-value-class-mapping.md)'s
+"reconstruct on each invocation"), and members alone force a `Bindings` / registration export even
+when the struct has no alternate constructors.
 
 | C# | Kotlin |
 |---|---|
@@ -15,6 +19,9 @@ out-pointers.
 | struct-typed property getter | as a return: out-pointers |
 | struct-typed property setter | as a parameter: decomposed arguments |
 | alternate public constructor | Kotlin secondary constructor; one registration slot and one out-pointer per state component |
+| public instance method (non-void) | member function on the `data class`; receiver components lead the wire args |
+| get-only computed property (not a component) | `val` with bridge-backed getter on the `data class` |
+| public static method on the struct | function in the Kotlin `companion object` |
 
 ## The `Point` fixture
 
@@ -40,6 +47,14 @@ public readonly struct Point
 
     public int X { get; }
     public int Y { get; }
+
+    public int Magnitude => Math.Abs(X) + Math.Abs(Y);
+
+    public Point Offset(int dx, int dy) => new Point(X + dx, Y + dy);
+
+    public string Format() => $"({X},{Y})";
+
+    public static Point Origin() => new Point(0, 0);
 }
 
 public static class Geometry
@@ -51,15 +66,10 @@ public static class Geometry
 ```
 
 Generated Kotlin surface (`build/nuget-interop/kotlin/nativeMain/sample/structs/Point.kt`, real
-output):
+output). Components stay primary constructor `val`s; methods and computed properties sit on the same
+`data class`, and statics land in a `companion object`:
 
 ```kotlin
-/**
- * Kotlin value type for the C# struct `SampleDependency.Point`.
- *
- * Copied by value across the bridge: equality is structural, and there is nothing to close.
- * Mutating this value never affects the C# side (a copy crossed the boundary); use [copy].
- */
 internal data class Point(
   val x: Int,
   val y: Int,
@@ -68,6 +78,44 @@ internal data class Point(
   constructor(size: Size) : this(construct__4df77a50827105506f4258372b08561b(size))
   constructor(unit: Boolean) : this(construct__e802c1ad168a16a38ec169d93b7f55fc(unit))
   constructor(value: Int) : this(construct__e71e420dcea5e3c083737f3c34b97ec7(value))
+  fun format(): String {
+    val fn = requireNotNull(PointBindings.format__0fb3c58859d9da606915abab731b3187Fn) {
+      NugetRegistry.notRegistered("Sample.Structs.Point", "SampleDependency")
+    }
+    val resultPtr = fn.invoke(x, y)
+      ?: error("Point.Format returned null, expected a non-null string pointer")
+    val result = resultPtr.reinterpret<ByteVar>().toKString()
+    freeManagedString(resultPtr)
+    return result
+  }
+
+  fun offset(dx: Int, dy: Int): Point = memScoped {
+    val fn = requireNotNull(PointBindings.offset__8a9f2cbc4c6860d43d71b26e499229c9Fn) {
+      NugetRegistry.notRegistered("Sample.Structs.Point", "SampleDependency")
+    }
+    val outX = alloc<IntVar>()
+    val outY = alloc<IntVar>()
+    fn.invoke(x, y, dx, dy, outX.ptr, outY.ptr)
+    Point(outX.value, outY.value)
+  }
+  val magnitude: Int
+    get() {
+      val fn = requireNotNull(PointBindings.magnitudeGetterFn) {
+        NugetRegistry.notRegistered("Sample.Structs.Point", "SampleDependency")
+      }
+      return fn.invoke(x, y)
+    }
+  companion object {
+    fun origin(): Point = memScoped {
+      val fn = requireNotNull(PointBindings.origin__8692fa20d808eeacc66f94518d080914Fn) {
+        NugetRegistry.notRegistered("Sample.Structs.Point", "SampleDependency")
+      }
+      val outX = alloc<IntVar>()
+      val outY = alloc<IntVar>()
+      fn.invoke(outX.ptr, outY.ptr)
+      Point(outX.value, outY.value)
+    }
+  }
 }
 ```
 
@@ -75,8 +123,8 @@ The type is generated `internal`, not `public`: it must stay invisible to the fo
 exporter's own public-API scan, so a reverse-bound struct never gets re-exported forward into the
 package's own `Interop.cs`.
 
-`Translate` shows the full shape: a struct parameter decomposed into leading arguments, and a struct
-return assembled from out-pointers:
+`Translate` shows the full shape for a *host* type taking a struct: a struct parameter decomposed
+into leading arguments, and a struct return assembled from out-pointers:
 
 ```kotlin
 // build/nuget-interop/kotlin/nativeMain/sample/structs/GeometryBindings.kt (real generated output)
@@ -119,6 +167,14 @@ public readonly struct Profile
     public bool Active { get; }
     public char Grade { get; }
     public CatMood Mood { get; }
+
+    public string Label => $"{Tag}:{Mood}";
+
+    public bool IsPlayful => Mood == CatMood.Playful;
+
+    public Profile WithMood(CatMood mood) => new Profile(Tag, Active, Grade, mood);
+
+    public static Profile Resting(string tag) => new Profile(tag, false, 'Z', CatMood.Sleepy);
 }
 ```
 
@@ -131,6 +187,10 @@ internal data class Profile(
   val mood: CatMood,
 )
 ```
+
+Members on `Profile` (same file) follow the same reconstruct-on-call shape as `Point`, with the full
+string / bool / char / enum conversion vocabulary on every receiver component. See
+[Struct methods and computed properties](#struct-methods-and-computed-properties).
 
 Per-component ABI types reuse the existing wire tables (no new scalar is introduced by structs):
 
@@ -211,6 +271,118 @@ private static void CurrentProfile_Set_Thunk(IntPtr selfHandle, IntPtr value_Tag
 `Cattery` itself is a real C# class (an ADR-051 handle wrapper), so it keeps `close()`. `Point`,
 `Metrics`, and `Profile` are values and have none of that.
 
+## Struct methods and computed properties
+
+Members declared *on* the struct itself bind too. This is the reverse mirror of
+[ADR-014](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/014-value-class-mapping.md):
+the C# thunk rebuilds `new Point(X, Y)` (or the equivalent for other component vocabularies) from
+leading wire args, then invokes the real member. There is no handle and no `selfHandle`.
+
+What binds:
+
+| C# on the struct | Kotlin | Wire |
+|---|---|---|
+| public instance method with a non-void return | member function | N component args, then ordinary args; struct returns use out-pointers |
+| get-only non-component computed property | `val` with bridge-backed getter | N component args only |
+| public static method | `companion object` function | ordinary args only (no receiver components) |
+
+What is skipped (so the `data class` keeps Kotlin's own equality / stringification, and components
+stay primary constructor vals rather than bridge getters):
+
+- `Equals` / `GetHashCode` / `ToString` / `Deconstruct`
+- operators
+- setters
+- void-returning instance methods
+- component auto-properties (`X`, `Y`, `Tag`, …)
+
+Registration slots on a struct follow the ADR-057 category order for that type:
+**alternate constructors → static methods → instance methods → computed getters**. Members alone force
+`PointBindings.kt` / `PointRegistration.cs` even when the struct has no alternate constructors
+(`Profile` is that case: four member slots, zero alternate ctors).
+
+Generated C# thunks for `Point` (`build/nuget-interop/csharp/PointRegistration.cs`, real output):
+
+```C#
+[UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+private static IntPtr Format__0fb3c58859d9da606915abab731b3187_Thunk(int X, int Y)
+{
+    string result = new Point(X, Y).Format();
+    return Marshal.StringToCoTaskMemUTF8(result);
+}
+
+[UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+private static unsafe void Offset__8a9f2cbc4c6860d43d71b26e499229c9_Thunk(int X, int Y, int dx, int dy, int* outX, int* outY)
+{
+    Point result = new Point(X, Y).Offset(dx, dy);
+    *outX = result.X;
+    *outY = result.Y;
+}
+
+[UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+private static int Magnitude_Get_Thunk(int X, int Y)
+{
+    int result = new Point(X, Y).Magnitude;
+    return result;
+}
+
+[UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+private static unsafe void Origin__8692fa20d808eeacc66f94518d080914_Thunk(int* outX, int* outY)
+{
+    Point result = Point.Origin();
+    *outX = result.X;
+    *outY = result.Y;
+}
+```
+
+`Profile` shows the same reconstruct path with the non-primitive component vocabulary. Real thunks
+from `build/nuget-interop/csharp/ProfileRegistration.cs`:
+
+```C#
+[UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+private static unsafe void WithMood__af153c00af41f44bcc8d2d1964698940_Thunk(IntPtr TagPtr, byte Active, ushort Grade, int Mood, int mood, IntPtr* outTag, byte* outActive, ushort* outGrade, int* outMood)
+{
+    Profile result = new Profile(Marshal.PtrToStringUTF8(TagPtr)!, Active != 0, (char)Grade, (CatMood)Mood).WithMood((CatMood)mood);
+    *outTag = Marshal.StringToCoTaskMemUTF8(result.Tag);
+    *outActive = result.Active ? (byte)1 : (byte)0;
+    *outGrade = (ushort)result.Grade;
+    *outMood = (int)result.Mood;
+}
+
+[UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+private static IntPtr Label_Get_Thunk(IntPtr TagPtr, byte Active, ushort Grade, int Mood)
+{
+    string result = new Profile(Marshal.PtrToStringUTF8(TagPtr)!, Active != 0, (char)Grade, (CatMood)Mood).Label;
+    return Marshal.StringToCoTaskMemUTF8(result);
+}
+```
+
+Hand-written Kotlin in `sample-library` calls the members like any other Kotlin API:
+
+```kotlin
+// sample-library/.../sample/structs/StructsSample.kt (real source)
+fun pointMagnitude(x: Int, y: Int): Int = Point(x, y).magnitude
+
+fun offsetPoint(x: Int, y: Int, dx: Int, dy: Int): String = Point(x, y).offset(dx, dy).format()
+
+fun pointOriginFormat(): String = Point.origin().format()
+
+fun profileLabel(tag: String, active: Boolean, gradeCode: Int, mood: CatMood): String =
+  Profile(tag, active, gradeCode.toChar(), mood).label
+
+fun profileWithMood(
+  tag: String,
+  active: Boolean,
+  gradeCode: Int,
+  mood: CatMood,
+  newMood: CatMood,
+): String {
+  val updated: Profile = Profile(tag, active, gradeCode.toChar(), mood).withMood(newMood)
+  return "${updated.label}|${updated.isPlayful}"
+}
+
+fun profileRestingLabel(tag: String): String = Profile.resting(tag).label
+```
+
 ## Value semantics
 
 The generated `data class` gives value equality for free, and it holds across independent bridge
@@ -264,6 +436,45 @@ public void CatteryCurrentProfile_GetSetRoundTrip()
     string result = StructsSample.catteryCurrentProfileRoundTrip("Household", "Mylo", true, 66, CatMood.Hungry);
     Assert.Equal("unset,false,63,SLEEPY|Mylo,true,66,HUNGRY", result);
 }
+
+[Theory]
+[InlineData(3, -4, 7)]
+[InlineData(0, 0, 0)]
+[InlineData(-2, -3, 5)]
+public void PointMagnitude_ComputedProperty(int x, int y, int expected)
+{
+    int result = StructsSample.pointMagnitude(x, y);
+    Assert.Equal(expected, result);
+}
+
+[Fact]
+public void PointOffset_InstanceMethodStructReturn_ThenFormat()
+{
+    string result = StructsSample.offsetPoint(1, 2, 10, 20);
+    Assert.Equal("(11,22)", result);
+}
+
+[Fact]
+public void PointOrigin_StaticFactory_ThenFormat()
+{
+    string result = StructsSample.pointOriginFormat();
+    Assert.Equal("(0,0)", result);
+}
+
+[Fact]
+public void ProfileWithMood_InstanceMethodStructReturn_ThenLabelAndIsPlayful()
+{
+    string result = StructsSample.profileWithMood(
+        "Mylo", false, 66, CatMood.Hungry, CatMood.Playful);
+    Assert.Equal("Mylo:Playful|true", result);
+}
+
+[Fact]
+public void ProfileResting_StaticFactory_ThenLabel()
+{
+    string result = StructsSample.profileRestingLabel("Oreo");
+    Assert.Equal("Oreo:Sleepy", result);
+}
 ```
 
 ## Which structs bind
@@ -315,8 +526,9 @@ Kotlin type and no handle wrapper:
 
 - **Shape B structs** (no public constructor; public fields or settable auto-properties) are not
   bound. Metadata extraction for public fields does not exist yet.
-- **Struct methods and computed properties** are not bound. A struct gets a registration export only
-  when it has at least one bridgeable alternate constructor.
+- **Void instance methods**, **setters**, **operators**, and the synthesized
+  `Equals`/`GetHashCode`/`ToString`/`Deconstruct` surface on a struct are not bound (see
+  [Struct methods and computed properties](#struct-methods-and-computed-properties)).
 - **Nested struct components** (a struct field inside a struct) are not flattened.
 - **Class-typed (handle) components** inside a struct are not supported: a `GCHandle` does not compose
   with an immutable value copy.

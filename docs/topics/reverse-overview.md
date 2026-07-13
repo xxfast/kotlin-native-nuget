@@ -64,8 +64,10 @@ for the supported positions and exclusions.
 
 A bridgeable struct is extracted too, but it never becomes a handle: its components (drawn from its
 unique state-covering constructor) decompose onto the wire, and it surfaces as an immutable Kotlin
-`data class`. Alternate public constructors receive bridge-backed registration slots; the state
-constructor remains slot-free. See [C# structs](structs.md).
+`data class`. Alternate public constructors, struct methods, get-only computed properties, and static
+methods on the struct receive bridge-backed registration slots (slot order: alternate ctors → static
+methods → instance methods → computed getters); the state constructor remains slot-free. Members alone
+force a registration export even without alternate constructors. See [C# structs](structs.md).
 
 ### `nugetGenerateBindings` and `nugetGenerateShims`: two generators, one contract
 

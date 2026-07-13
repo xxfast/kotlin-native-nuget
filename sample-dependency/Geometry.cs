@@ -37,6 +37,31 @@ public readonly struct Point
 
     public int X { get; }
     public int Y { get; }
+
+    /// <summary>
+    /// Get-only computed property that is NOT a component (components are <see cref="X"/> /
+    /// <see cref="Y"/>). Manhattan distance from the origin, named <c>Magnitude</c> so it is not
+    /// confused with the static <see cref="Geometry.Manhattan"/> two-point form.
+    /// </summary>
+    public int Magnitude => Math.Abs(X) + Math.Abs(Y);
+
+    /// <summary>
+    /// Instance method returning a struct: reconstruct-on-call (ADR-014 mirror / ADR-056 deferred
+    /// scope). Receiver components lead the wire args; return goes through out-pointers.
+    /// </summary>
+    public Point Offset(int dx, int dy) => new Point(X + dx, Y + dy);
+
+    /// <summary>
+    /// Instance method with a non-struct return: components as receiver only, string conversion
+    /// on the way back. Deliberately denser than <see cref="Geometry.Describe"/> (no spaces).
+    /// </summary>
+    public string Format() => $"({X},{Y})";
+
+    /// <summary>
+    /// Static method on the struct itself → Kotlin <c>companion object</c> (not a free function
+    /// on <see cref="Geometry"/>).
+    /// </summary>
+    public static Point Origin() => new Point(0, 0);
 }
 
 /// <summary>

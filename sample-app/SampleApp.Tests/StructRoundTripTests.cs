@@ -24,6 +24,9 @@ namespace SampleApp.Tests;
 // pointer marshal for what is actually Kotlin's 2-byte Char at the C ABI. That is a real bug,
 // reported (not fixed) here — it is not part of ADR-056, and the REVERSE struct's own Char
 // component (Profile.Grade) is unaffected: Cattery2/Cattery below prove it round-trips correctly.
+//
+// The trailing tests cover ADR-056 deferred scope (struct methods + computed properties): members
+// on Point/Profile themselves, not Geometry/Cattery2. They fail until kotlin-dev lands binding.
 public class StructRoundTripTests
 {
     [Fact]
@@ -137,5 +140,86 @@ public class StructRoundTripTests
     {
         string result = StructsSample.catteryCurrentProfileRoundTrip("Household", "Mylo", true, 66, CatMood.Hungry);
         Assert.Equal("unset,false,63,SLEEPY|Mylo,true,66,HUNGRY", result);
+    }
+
+    // --- ADR-056 deferred: struct methods + computed properties (reconstruct-on-call) ---
+    // These exercise members on the struct data class itself (not Geometry/Cattery2 free-function
+    // hosts): get-only computed props, instance methods, and static → companion factories.
+
+    // Point.Magnitude: computed property, not a component; int return from reconstructed receiver.
+    [Theory]
+    [InlineData(3, -4, 7)]
+    [InlineData(0, 0, 0)]
+    [InlineData(-2, -3, 5)]
+    public void PointMagnitude_ComputedProperty(int x, int y, int expected)
+    {
+        int result = StructsSample.pointMagnitude(x, y);
+        Assert.Equal(expected, result);
+    }
+
+    // Point.Offset → Point (struct return / out-pointers), then Format (string conversion).
+    [Fact]
+    public void PointOffset_InstanceMethodStructReturn_ThenFormat()
+    {
+        // Oreo naps at (1,2); a zoomie shifts him by (10,20).
+        string result = StructsSample.offsetPoint(1, 2, 10, 20);
+        Assert.Equal("(11,22)", result);
+    }
+
+    [Fact]
+    public void PointOffset_NegativeDelta_ThenFormat()
+    {
+        string result = StructsSample.offsetPoint(5, 5, -3, -1);
+        Assert.Equal("(2,4)", result);
+    }
+
+    // Point.Origin() static → companion, then Format.
+    [Fact]
+    public void PointOrigin_StaticFactory_ThenFormat()
+    {
+        string result = StructsSample.pointOriginFormat();
+        Assert.Equal("(0,0)", result);
+    }
+
+    // Profile.Label: computed string property with string/enum conversion (not a component).
+    [Fact]
+    public void ProfileLabel_ComputedStringProperty()
+    {
+        string result = StructsSample.profileLabel("Oreo", true, 'A', CatMood.Playful);
+        Assert.Equal("Oreo:Playful", result);
+    }
+
+    [Fact]
+    public void ProfileLabel_SleepyMylo()
+    {
+        string result = StructsSample.profileLabel("Mylo", false, 'B', CatMood.Sleepy);
+        Assert.Equal("Mylo:Sleepy", result);
+    }
+
+    // Profile.WithMood → Profile (full component vocabulary reconstruct + out-pointers), then
+    // Label|IsPlayful so both the string and bool computed properties ride the result.
+    [Fact]
+    public void ProfileWithMood_InstanceMethodStructReturn_ThenLabelAndIsPlayful()
+    {
+        // Mylo starts Hungry; a treat flips him to Playful.
+        string result = StructsSample.profileWithMood(
+            "Mylo", false, 66, CatMood.Hungry, CatMood.Playful);
+        Assert.Equal("Mylo:Playful|true", result);
+    }
+
+    [Fact]
+    public void ProfileWithMood_ToSleepy_IsNotPlayful()
+    {
+        string result = StructsSample.profileWithMood(
+            "Oreo", true, 65, CatMood.Playful, CatMood.Sleepy);
+        Assert.Equal("Oreo:Sleepy|false", result);
+    }
+
+    // Profile.Resting(tag) static → companion factory, then Label.
+    [Fact]
+    public void ProfileResting_StaticFactory_ThenLabel()
+    {
+        string result = StructsSample.profileRestingLabel("Oreo");
+        Assert.Equal("Oreo:Sleepy", result);
     }
 }

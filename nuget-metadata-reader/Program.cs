@@ -419,10 +419,122 @@ internal static class AssemblyExtractor
                     diagnostics.Add(diagnostic);
             }
 
-            ValidateManagedSignatures(name, constructors.Select(c => c.ManagedSignature));
+            // ADR-056 deferred: methods + computed properties on the struct itself.
+            var methods = new List<RirMethod>();
+            var methodGroups = new Dictionary<string, List<MethodDefinitionHandle>>(StringComparer.Ordinal);
+            foreach (var handle in typeDef.GetMethods())
+            {
+                var method = mr.GetMethodDefinition(handle);
+                if ((method.Attributes & System.Reflection.MethodAttributes.MemberAccessMask)
+                    != System.Reflection.MethodAttributes.Public) continue;
+                // SpecialName: .ctor/.cctor, get_/set_ accessors, op_* operators — all skipped.
+                if ((method.Attributes & System.Reflection.MethodAttributes.SpecialName) != 0) continue;
+
+                var methodName = mr.GetString(method.Name);
+                // Object / record boilerplate never crosses for a value type.
+                if (methodName is "Equals" or "GetHashCode" or "ToString" or "Deconstruct") continue;
+
+                if (!methodGroups.TryGetValue(methodName, out var group))
+                {
+                    group = new List<MethodDefinitionHandle>();
+                    methodGroups[methodName] = group;
+                }
+                group.Add(handle);
+            }
+
+            foreach (var group in methodGroups.Values)
+            {
+                foreach (var methodHandle in group)
+                {
+                    var methodDef = mr.GetMethodDefinition(methodHandle);
+                    var (rirMethod, methodDiagnostic, obliviousDiagnostic) = TryMapMethod(
+                        mr, extraction.TypeHandle, methodHandle, methodDef, name, isInterface: false,
+                        boundHandleTypeNames, enumTypes, result);
+                    if (rirMethod is not null)
+                    {
+                        // Void-returning instance methods are out of reconstruct-on-call scope.
+                        bool isVoidInstance = !rirMethod.IsStatic
+                            && rirMethod.ReturnType is RirVoidType;
+                        if (!isVoidInstance)
+                        {
+                            methods.Add(rirMethod);
+                            if (obliviousDiagnostic is not null) diagnostics.Add(obliviousDiagnostic);
+                        }
+                    }
+                    else if (methodDiagnostic is not null)
+                        diagnostics.Add(methodDiagnostic);
+                }
+            }
+
+            var componentReadNames = new HashSet<string>(
+                extraction.Struct.Components.Select(c => c.ReadName),
+                StringComparer.OrdinalIgnoreCase);
+            var properties = new List<RirProperty>();
+            foreach (var handle in typeDef.GetProperties())
+            {
+                var propDef = mr.GetPropertyDefinition(handle);
+                var propName = mr.GetString(propDef.Name);
+                // Component auto-properties are already primary-ctor vals on the Kotlin data class.
+                if (componentReadNames.Contains(propName)) continue;
+
+                var accessors = propDef.GetAccessors();
+                if (accessors.Getter.IsNil) continue;
+
+                var getterDef = mr.GetMethodDefinition(accessors.Getter);
+                if ((getterDef.Attributes & System.Reflection.MethodAttributes.MemberAccessMask)
+                    != System.Reflection.MethodAttributes.Public) continue;
+
+                // Setters are out of scope for struct computed properties.
+                bool isReadOnly = accessors.Setter.IsNil
+                    || (mr.GetMethodDefinition(accessors.Setter).Attributes
+                        & System.Reflection.MethodAttributes.MemberAccessMask)
+                        != System.Reflection.MethodAttributes.Public;
+                if (!isReadOnly) continue;
+
+                bool propIsStatic =
+                    (getterDef.Attributes & System.Reflection.MethodAttributes.Static) != 0;
+                // Static computed properties on structs are not in the current fixture/bind set.
+                if (propIsStatic) continue;
+
+                var (propTypeRef, propDiagnostic) = TryDecodePropertyType(
+                    mr, propDef, propName, name, boundHandleTypeNames, enumTypes, result);
+                if (propTypeRef is not null)
+                {
+                    var finalPropTypeRef = propTypeRef;
+                    if (NullabilityHelpers.IsNullableCapable(propTypeRef))
+                    {
+                        bool nullable = NullabilityHelpers.Resolve(
+                            mr, handle, methodHandle: default, extraction.TypeHandle,
+                            out bool wasOblivious);
+                        finalPropTypeRef = NullabilityHelpers.ApplyNullable(propTypeRef, nullable);
+                        if (wasOblivious)
+                        {
+                            diagnostics.Add(new RirDiagnostic(
+                                kind: "info_oblivious_nullability",
+                                typeName: name,
+                                memberName: propName,
+                                memberSignature: propName,
+                                reason: "no NullableAttribute/NullableContextAttribute resolves this " +
+                                    "property's nullability anywhere in the member -> type fallback chain " +
+                                    "— the binding assumes non-null.",
+                                hint: "Compile the declaring type inside a `#nullable enable` region to " +
+                                    "make its null-safety explicit."));
+                        }
+                    }
+                    properties.Add(new RirProperty(propName, finalPropTypeRef, isReadOnly: true, propIsStatic));
+                }
+                else if (propDiagnostic is not null)
+                    diagnostics.Add(propDiagnostic);
+            }
+
+            ValidateManagedSignatures(
+                name,
+                methods.Select(m => m.ManagedSignature)
+                    .Concat(constructors.Select(c => c.ManagedSignature)));
             result[fullName] = extraction with
             {
-                Struct = new RirStruct(name, extraction.Struct.Components, constructors),
+                Struct = new RirStruct(
+                    name, extraction.Struct.Components, constructors, methods, properties),
                 Diagnostics = diagnostics,
             };
         }
@@ -635,8 +747,9 @@ internal static class AssemblyExtractor
         }
 
         // ADR-056: a value type that is not an enum is a struct candidate and must not fall
-        // through to class processing below (Constraint 3's verified bug). Struct members are not
-        // enumerated in v1 — a supported struct emits ONLY its RirStruct node.
+        // through to class processing below (Constraint 3's verified bug). The RirStruct already
+        // carries components, constructors, and (ADR-056 deferred) methods/properties from the
+        // struct post-process pass.
         if (structTypes.TryGetValue(fullName, out var structType))
         {
             if (structType.Struct is not null) return (structType.Struct, structType.Diagnostics);
@@ -1940,26 +2053,33 @@ internal sealed class RirEnumEntry
 
 /// <summary>
 /// ADR-056: a C# struct that satisfies the Decision 3a "Shape A" rules. Mirrors
-/// <c>RirStruct</c> in <c>RirModel.kt</c> field-for-field. Struct members (methods, computed
-/// properties) are deliberately not enumerated in v1 — <see cref="Components"/> is the complete
-/// wire contract, derived from the struct's unique state-covering public instance constructor.
+/// <c>RirStruct</c> in <c>RirModel.kt</c> field-for-field. <see cref="Components"/> is the wire
+/// contract for value decomposition (from the unique state-covering constructor).
 /// <see cref="Constructors"/> retains that state constructor and all bridgeable alternates.
+/// <see cref="Methods"/> / <see cref="Properties"/> carry ADR-056 deferred scope (struct methods
+/// + computed properties, ADR-014 reconstruct-on-call).
 /// </summary>
 internal sealed class RirStruct : RirType
 {
     public RirStruct(
         string name,
         IReadOnlyList<RirStructComponent> components,
-        IReadOnlyList<RirConstructor>? constructors = null)
+        IReadOnlyList<RirConstructor>? constructors = null,
+        IReadOnlyList<RirMethod>? methods = null,
+        IReadOnlyList<RirProperty>? properties = null)
     {
         Name = name;
         Components = components;
         Constructors = constructors ?? Array.Empty<RirConstructor>();
+        Methods = methods ?? Array.Empty<RirMethod>();
+        Properties = properties ?? Array.Empty<RirProperty>();
     }
 
     public override string Name { get; }
     public IReadOnlyList<RirStructComponent> Components { get; }
     public IReadOnlyList<RirConstructor> Constructors { get; }
+    public IReadOnlyList<RirMethod> Methods { get; }
+    public IReadOnlyList<RirProperty> Properties { get; }
 }
 
 /// <summary>

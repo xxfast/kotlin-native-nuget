@@ -68,17 +68,21 @@ data class RirEnumEntry(
   val ordinal: Int,
 )
 
-// ADR-056: a C# struct that satisfies the Decision 3a "Shape A" rules — exactly one public
+// ADR-056: a C# struct that satisfies the Decision 3a "Shape A" rules: exactly one public
 // instance constructor, whose parameters (case-insensitively matched to public readable
-// properties of the same type) fully cover the struct's stored state. Struct members (methods,
-// computed properties) are deliberately not enumerated in v1: `components` is the complete wire
-// contract. Mirrors `RirStruct` in nuget-metadata-reader/Program.cs field-for-field.
+// properties of the same type) fully cover the struct's stored state. Components remain the wire
+// contract for value decomposition; [methods]/[properties] carry ADR-056 deferred scope (struct
+// methods + computed properties, ADR-014 reconstruct-on-call mirror). Defaults empty so existing
+// reverse-ir.json without those arrays still parse. Mirrors `RirStruct` in
+// nuget-metadata-reader/Program.cs field-for-field once the reader enumerates members.
 @Serializable
 @SerialName("struct")
 data class RirStruct(
   override val name: String,
   val components: List<RirStructComponent> = emptyList(),
   val constructors: List<RirConstructor> = emptyList(),
+  val methods: List<RirMethod> = emptyList(),
+  val properties: List<RirProperty> = emptyList(),
 ) : RirType
 
 // One component of a bridgeable struct (ADR-056). [name] is the constructor parameter name
