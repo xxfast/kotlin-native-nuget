@@ -119,21 +119,37 @@ this step only after the feature is verified and the build artefacts are current
 - Step 5 is the last step, run only after the feature is verified. Run `documenter` first, then `refactorer`, **serially**. The `refactorer`'s verify starts with `:sample-library:clean`, which deletes the `build/` output the `documenter` reads its snippets from; in parallel they race and the docs quietly lose snippets.
 - **Two agents that both drive Gradle cannot run in parallel in this repo.** One takes the project lock and the other queues silently. Parallel fan-out is safe only for agents that touch neither Gradle nor `build/` (e.g. several `research` agents at phase kickoff).
 - Never write the docs yourself. The `documenter` grounds every snippet in the real generated output; writing them from the main thread means writing them from memory.
-- **Log what the run cost.** When the feature is done, append a row per agent to [docs/workflow-log.csv](../../../docs/workflow-log.csv). See **Logging the run** below.
+- **Log what the run cost.** When the feature is done, call `.claude/hooks/benchmark.sh finalize`. See **Logging the run** below.
 
 ## Logging the run
 
-Append **one row per agent** to [docs/workflow-log.csv](../../../docs/workflow-log.csv), including
-agents that never ran. **You write it** — the per-agent figures are in the `Agent`/`SendMessage`
-results, which no subagent can see.
+**You do not write the numbers.** `.claude/hooks/benchmark.sh capture` runs as a `SubagentStop` hook and
+reads each agent's real figures (model, tokens, tool uses, active wall time) straight out of its
+transcript. Nothing depends on an agent reporting its cost back to you, and nothing can be lost to a
+compaction. Those were the two reasons the earlier rows in
+[.claude/benchmark.csv](../../benchmark.csv) have blank cells.
 
-Columns: `feature,agent,tool_uses,tokens,wall_min,date,phase,direction,skill_sha,notes`
+When the feature is done, make one call:
 
-- **The first row of each set is yours** (`agent` = `feature-design`): the run's **total**, summing every subagent you spawned. It is the headline number a retro reads. If any agent's figures are missing, say in `notes` that the total is a floor, rather than silently under-reporting it.
-- `skill_sha`: the `SKILL.md` that actually ran (`git log -1 --format=%h -- .claude/skills/feature-design/SKILL.md`). Without it the numbers are not comparable across features and the log is useless.
-- **A resumed agent reports cumulative tokens and tool uses.** Take each agent's *last* figure; summing its runs double-counts. `wall_min` does sum.
-- A lost or missing figure is an **empty cell**, never an estimate. A fabricated baseline poisons every comparison made against it.
-- `notes`: attach to the agent it concerns. Say what was **not** the skill (an outage, a usage limit, a hard feature), or a later retro will misread the row.
+```bash
+.claude/hooks/benchmark.sh finalize \
+  --feature "ADR-058 C# generics in Kotlin" --phase 9 --direction reverse \
+  --note research="Light pass: mirrors ADR-056, no new ADR." \
+  --note kotlin-dev="~20m of the wall time was a platform outage, not the skill."
+```
+
+It appends one row per agent, including agents that never ran, stamps `skill_sha` and `date`, and
+adds the `feature-design` TOTAL row, which for the first time includes your own cost as orchestrator.
+
+The one thing it cannot know is `notes`, so that is the only thing you supply:
+
+- `notes`: attach to the agent it concerns. Say what was **not** the skill (an outage, a usage limit,
+  a hard feature), or a later retro will misread the row. `--note feature-design=…` annotates the total.
+- **Never hand-edit a figure into the CSV.** An estimate is worse than an empty cell: a fabricated
+  baseline poisons every comparison made against it. The transcript is the evidence. If a number
+  looks wrong, fix the script, do not overwrite the number.
+- If `finalize` says nothing was staged, the hook never fired, which means the work did not go through
+  a subagent. That is a finding about the run, not a reason to type numbers in by hand.
 
 ## Prompting subagents
 

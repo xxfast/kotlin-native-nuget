@@ -36,5 +36,9 @@ node_modules/
 **/Generated/
 *.DotSettings.user
 
+# Claude
+.claude/benchmark-staging.jsonl
+
 # Codex
 /.codex/config.toml
+
