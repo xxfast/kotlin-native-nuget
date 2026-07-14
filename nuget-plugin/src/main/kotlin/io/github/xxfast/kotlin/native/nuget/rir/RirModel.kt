@@ -250,6 +250,16 @@ enum class RirDiagnosticKind {
   @SerialName("skipped_unsupported_struct")
   SKIPPED_UNSUPPORTED_STRUCT,
 
+  // ADR-059 Decision 5a: a bridged member whose flattened ABI argument count (receiver +
+  // parameters + out-pointers, after recursively flattening every nested struct component) would
+  // exceed the verified 22-argument Kotlin/Native `CFunction.invoke` ceiling. Emitted
+  // Gradle-plugin-side (like SKIPPED_MEMBER_NAME_COLLISION above) from the SHARED
+  // bridgeableRegistrables/bridgeableStructRegistrables filter, never by either generator alone —
+  // only the shared filter knows the flattened ABI projection, and if only one generator dropped
+  // the member the two sides' registration slots would silently misalign.
+  @SerialName("skipped_abi_arity_limit")
+  SKIPPED_ABI_ARITY_LIMIT,
+
   @SerialName("error_kotlin_signature_collision")
   ERROR_KOTLIN_SIGNATURE_COLLISION,
 

@@ -379,8 +379,7 @@ internal static class AssemblyExtractor
         HashSet<string> boundHandleTypeNames,
         IReadOnlyDictionary<string, EnumExtraction> enumTypes)
     {
-        var result = new Dictionary<string, StructExtraction>(StringComparer.Ordinal);
-
+        var candidates = new List<(string FullName, TypeDefinitionHandle Handle, TypeDefinition TypeDef, string Name)>();
         foreach (var (ns, typeHandles) in namespaceMap)
         {
             foreach (var typeHandle in typeHandles)
@@ -391,9 +390,50 @@ internal static class AssemblyExtractor
 
                 var name = mr.GetString(typeDef.Name);
                 var fullName = string.IsNullOrEmpty(ns) ? name : $"{ns}.{name}";
-                result[fullName] = ExtractStruct(mr, typeHandle, typeDef, name, enumTypes);
+                candidates.Add((fullName, typeHandle, typeDef, name));
             }
         }
+
+        // ADR-059 Decision 6a: a struct's bridgeability can depend on a component that is itself a
+        // struct, so classification is a mutual, not a one-shot, computation. The reader never loads
+        // a type (it reads ECMA-335 metadata directly), so it does NOT inherit C#'s CS0523 cycle
+        // protection the way `csc` does — a recursive "resolve this struct, which resolves its
+        // component, which resolves..." classifier could loop or stack-overflow on a hostile,
+        // non-Roslyn-produced input. Iterate to a FIXED POINT instead (rejected: 6b, memoized
+        // recursion with an in-progress set — more code, and its failure mode is a stack overflow
+        // instead of a wrong answer).
+        //
+        // Every candidate starts as an Unsupported placeholder so `SignatureDecoder` always finds a
+        // `_structTypes` entry for a struct-typed component reference, even before that candidate has
+        // been classified — the fallback taken when no entry exists at all is "not a bridgeable bound
+        // class", which is the exact misleading message this feature fixes (Constraint 1). Each pass
+        // re-attempts EVERY candidate against the previous pass's map. Termination is keyed ONLY on
+        // whether the SUPPORTED count grew, not on whether an unsupported candidate's reason text
+        // changed: a genuinely cyclic input (which real C# cannot produce, but which this reader must
+        // not crash or loop forever on) would otherwise have its wrapped reason string grow one nested
+        // "is not bridgeable: ..." layer deeper every pass, forever. Keying on supported-count growth
+        // instead means such a candidate simply never joins the supported set, and the loop still
+        // terminates in at most `candidates.Count + 1` passes — bounded by construction, not by
+        // trusting the input to be acyclic (Constraint 2's fourth point).
+        var current = new Dictionary<string, StructExtraction>(StringComparer.Ordinal);
+        foreach (var candidate in candidates)
+            current[candidate.FullName] = StructExtraction.Unsupported(
+                "struct classification has not run yet");
+
+        int previousSupportedCount = -1;
+        while (true)
+        {
+            var next = new Dictionary<string, StructExtraction>(StringComparer.Ordinal);
+            foreach (var (fullName, handle, typeDef, name) in candidates)
+                next[fullName] = ExtractStruct(mr, handle, typeDef, name, enumTypes, current);
+
+            int supportedCount = next.Count(kv => kv.Value.Struct is not null);
+            current = next;
+            if (supportedCount == previousSupportedCount) break;
+            previousSupportedCount = supportedCount;
+        }
+
+        var result = current;
 
         // Alternate constructors can reference another supported struct, so map them only after
         // the first pass has established every struct's component model.
@@ -576,7 +616,8 @@ internal static class AssemblyExtractor
         TypeDefinitionHandle typeHandle,
         TypeDefinition typeDef,
         string name,
-        IReadOnlyDictionary<string, EnumExtraction> enumTypes)
+        IReadOnlyDictionary<string, EnumExtraction> enumTypes,
+        IReadOnlyDictionary<string, StructExtraction> structTypesSoFar)
     {
         if (typeDef.GetGenericParameters().Count > 0)
             return StructExtraction.Unsupported(
@@ -597,6 +638,11 @@ internal static class AssemblyExtractor
             ctorCandidates.Add(handle);
         }
 
+        // ADR-059 Decision 6c: if Shape A is attempted and fails, and Shape B (below) ALSO fails,
+        // the final reason must carry BOTH attempts — discarding the Shape A reason is what made
+        // `Card`'s regression (Constraint 1) report a misleading Shape B rule for a Shape A failure.
+        string? shapeAReason = null;
+
         // ---- Shape A: try first (ADR-056 Decision 3a, amended by ADR-058 Decision 1a to also
         // match a public instance FIELD, not just a property). ----
         if (ctorCandidates.Count > 0)
@@ -604,7 +650,7 @@ internal static class AssemblyExtractor
             var candidates = ctorCandidates.Select(handle =>
             {
                 var (components, reason) = TryExtractStructComponents(
-                    mr, typeDef, handle, enumTypes);
+                    mr, typeDef, handle, enumTypes, structTypesSoFar);
                 return (Handle: handle, Components: components, Reason: reason);
             }).ToList();
             var stateCandidates = candidates.Where(candidate => candidate.Components is not null).ToList();
@@ -627,11 +673,16 @@ internal static class AssemblyExtractor
                     "constructor is ambiguous");
             }
 
-            // stateCandidates.Count == 0: no constructor covers state. Falls through to Shape B.
+            // stateCandidates.Count == 0: no constructor covers state. Falls through to Shape B,
+            // but keep a representative Shape A reason in case Shape B fails too.
+            shapeAReason = candidates.Count == 1
+                ? candidates[0].Reason
+                : string.Join(" / ", candidates.Select((c, i) => $"constructor {i + 1}: {c.Reason}"));
         }
 
         // ---- Shape B (ADR-058): no public instance constructor satisfies Shape A. ----
-        var (shapeBComponents, shapeBReason) = TryExtractShapeBComponents(mr, typeDef, enumTypes);
+        var (shapeBComponents, shapeBReason) = TryExtractShapeBComponents(
+            mr, typeDef, enumTypes, structTypesSoFar);
         if (shapeBComponents is not null)
         {
             return StructExtraction.Supported(
@@ -640,7 +691,10 @@ internal static class AssemblyExtractor
         }
 
         // ---- Neither shape applies. ----
-        return StructExtraction.Unsupported(shapeBReason!);
+        var reason = shapeAReason is null
+            ? shapeBReason!
+            : $"Shape A: {shapeAReason}; Shape B: {shapeBReason}";
+        return StructExtraction.Unsupported(reason);
     }
 
     /// <summary>
@@ -661,11 +715,15 @@ internal static class AssemblyExtractor
         TryExtractShapeBComponents(
             MetadataReader mr,
             TypeDefinition typeDef,
-            IReadOnlyDictionary<string, EnumExtraction> enumTypes)
+            IReadOnlyDictionary<string, EnumExtraction> enumTypes,
+            IReadOnlyDictionary<string, StructExtraction> structTypesSoFar)
     {
-        // Same component-type decoder Shape A uses: empty bound-handle set, no struct map — a
-        // class-typed or nested-struct component is rejected identically for both shapes.
-        var componentDecoder = new SignatureDecoder(mr, boundHandleTypeNames: null, enumTypes);
+        // Same component-type decoder Shape A uses: empty bound-handle set (a class-typed component
+        // is never in the v1 vocabulary — ADR-056 Scope, unchanged), but WITH the struct map so far
+        // (ADR-059 Decision 6a/4a): a struct-typed field/property component resolves to
+        // `RirStructType` once the struct it references has itself been classified as supported by
+        // the fixed point in `CollectStructTypes`.
+        var componentDecoder = new SignatureDecoder(mr, boundHandleTypeNames: null, enumTypes, structTypesSoFar);
 
         // Pass 1: which property names are backed by a REAL auto-property backing field (used only
         // to phrase a better diagnostic below — never to decide pass/fail, per Constraint 1.6:
@@ -755,9 +813,13 @@ internal static class AssemblyExtractor
 
                 if (fieldType.TypeRef is null)
                 {
+                    // ADR-059 Decision 6c: name the component PATH (`field \`Collar\`: ...`), not
+                    // just the leaf reason — the verified `Nest` regression (Constraint 1) is a
+                    // struct-typed field reported as "not a bridgeable bound class" with no mention
+                    // of which field, which nobody can act on.
                     var reason = fieldType.Diagnostic?.Reason
                         ?? $"component type `{fieldType.RawTypeName}` is not bridgeable";
-                    return (null, reason);
+                    return (null, $"field `{fieldName}`: {reason}");
                 }
 
                 components.Add(new RirStructComponent(ToLowerCamel(fieldName), fieldName, fieldType.TypeRef));
@@ -781,9 +843,10 @@ internal static class AssemblyExtractor
 
                 if (prop.Type.TypeRef is null)
                 {
+                    // ADR-059 Decision 6c: name the component PATH, same as the field branch above.
                     var reason = prop.Type.Diagnostic?.Reason
                         ?? $"component type `{prop.Type.RawTypeName}` is not bridgeable";
-                    return (null, reason);
+                    return (null, $"property `{propName}`: {reason}");
                 }
 
                 components.Add(new RirStructComponent(ToLowerCamel(propName), propName, prop.Type.TypeRef));
@@ -853,17 +916,20 @@ internal static class AssemblyExtractor
             MetadataReader mr,
             TypeDefinition typeDef,
             MethodDefinitionHandle ctorHandle,
-            IReadOnlyDictionary<string, EnumExtraction> enumTypes)
+            IReadOnlyDictionary<string, EnumExtraction> enumTypes,
+            IReadOnlyDictionary<string, StructExtraction> structTypesSoFar)
     {
         var ctorDef = mr.GetMethodDefinition(ctorHandle);
 
-        // Component-type decoding deliberately passes an EMPTY bound-handle set and no struct map:
-        // a class-typed component is never in the v1 vocabulary (no bound-handle set to resolve
-        // against), and a nested-struct component is always rejected (Scope: "nested struct
-        // components deferred") regardless of whether the referenced struct would otherwise be
-        // bridgeable — passing no struct map means GetTypeFromDefinition can never resolve one to
-        // RirStructType here.
-        var componentDecoder = new SignatureDecoder(mr, boundHandleTypeNames: null, enumTypes);
+        // Component-type decoding deliberately passes an EMPTY bound-handle set: a class-typed
+        // component is never in the v1 vocabulary (ADR-056 Scope, still deferred — a handle
+        // component would be a leaf on the wire, but its close()/Cleaner semantics are still wrong
+        // for a value type; unchanged by ADR-059). A struct-typed component, however, now resolves
+        // via `structTypesSoFar`: ADR-059 Decision 4a/6a — the fixed point in `CollectStructTypes`
+        // grows this map pass by pass, so a struct-typed constructor parameter or property resolves
+        // to `RirStructType` once the struct it references has itself been classified as supported,
+        // and reports a path-naming diagnostic (Decision 6c) otherwise.
+        var componentDecoder = new SignatureDecoder(mr, boundHandleTypeNames: null, enumTypes, structTypesSoFar);
 
         MethodSignature<TypeRefOrDiag> ctorSig;
         try
@@ -993,6 +1059,12 @@ internal static class AssemblyExtractor
         (RirPrimitiveType pa, RirPrimitiveType pb) => pa.Name == pb.Name,
         (RirStringType, RirStringType) => true,
         (RirEnumType ea, RirEnumType eb) => ea.Namespace == eb.Namespace && ea.Name == eb.Name,
+        // ADR-059: a struct-typed constructor parameter/property pair (e.g. Litter's `mother`
+        // parameter vs. its `Mother` property, both `Sample.Structs.Profile`) must match here too,
+        // or every nesting struct's Shape A ctor-vs-property check fails closed before nesting is
+        // even attempted — a pre-existing gap this feature's fixture is the first to reach, since no
+        // struct-typed component existed before ADR-059.
+        (RirStructType sa, RirStructType sb) => sa.Namespace == sb.Namespace && sa.Name == sb.Name,
         _ => false,
     };
 
@@ -2011,10 +2083,15 @@ internal sealed class SignatureDecoder : ISignatureTypeProvider<TypeRefOrDiag, o
     private readonly HashSet<string> _boundHandleTypeNames;
     private readonly IReadOnlyDictionary<string, EnumExtraction> _enumTypes;
     /// <summary>
-    /// ADR-056: struct candidates by fully-qualified name. Pass null (or omit) when decoding
-    /// struct COMPONENT types themselves (<c>AssemblyExtractor.ExtractStruct</c>) — an empty map
-    /// there makes a nested-struct component always fall through to "not bridgeable", which is the
-    /// intended v1 behaviour ("nested struct components deferred").
+    /// ADR-056/059: struct candidates by fully-qualified name. When decoding struct COMPONENT types
+    /// themselves (<c>ExtractStruct</c>/<c>TryExtractStructComponents</c>/
+    /// <c>TryExtractShapeBComponents</c>), this is the fixed point's currently-known map (Decision
+    /// 6a) — grown pass by pass by <c>CollectStructTypes</c> — so a struct-typed component resolves
+    /// to <see cref="RirStructType"/> once the struct it references has itself been classified as
+    /// supported, and reports a path-naming <c>skipped_unsupported_struct</c> diagnostic otherwise
+    /// (Decision 6c). It is never null here: every struct candidate has a placeholder entry from the
+    /// first pass onward, which is what stops an unresolved reference from ever falling through to
+    /// the unrelated "not a bridgeable bound class" message.
     /// </summary>
     private readonly IReadOnlyDictionary<string, StructExtraction> _structTypes;
 

@@ -25,6 +25,7 @@ import io.github.xxfast.kotlin.native.nuget.rir.RirVoidType
 import io.github.xxfast.kotlin.native.nuget.rir.abiArgs
 import io.github.xxfast.kotlin.native.nuget.rir.abiOutArgs
 import io.github.xxfast.kotlin.native.nuget.rir.abiReturnType
+import io.github.xxfast.kotlin.native.nuget.rir.arityLimitDiagnostics
 import io.github.xxfast.kotlin.native.nuget.rir.boundHandleTypes
 import io.github.xxfast.kotlin.native.nuget.rir.boundStructTypes
 import io.github.xxfast.kotlin.native.nuget.rir.bridgeableRegistrables
@@ -36,6 +37,7 @@ import io.github.xxfast.kotlin.native.nuget.rir.contractHash
 import io.github.xxfast.kotlin.native.nuget.rir.isNullable
 import io.github.xxfast.kotlin.native.nuget.rir.parseReverseIr
 import io.github.xxfast.kotlin.native.nuget.rir.registrationExportName
+import io.github.xxfast.kotlin.native.nuget.rir.structArityLimitDiagnostics
 import io.github.xxfast.kotlin.native.nuget.rir.structContractHash
 import io.github.xxfast.kotlin.native.nuget.rir.structReceiverAbiArgs
 import org.gradle.api.DefaultTask
@@ -89,14 +91,35 @@ private fun enumPackages(
   }
 }.toMap()
 
-// ADR-056: does this type reference — either directly, or (if it is a struct) through one of
-// its OWN components — satisfy [predicate]? Every "does this file need X" detector below
-// (needsInterop, needsEnums, hasStringReturn, hasStringParam, hasEnumReturn, ...) used to test
-// only the top-level RirTypeRef, which made a struct's component types invisible to them: a method
-// returning only a struct with a string component, and no directly-string-typed member anywhere
-// else in the file, would silently skip emitting NugetInterop.kt (freeManagedString) and fail to
-// compile. A struct can only be one level deep in v1 (nested struct components are unsupported,
-// ADR-056 Scope), so this never needs to recurse more than once.
+// ADR-059: the struct equivalent of enumPackages above — every struct declared anywhere in the
+// RirFile, mapped to the Kotlin package its generated `data class` is emitted into. A struct's OWN
+// component can itself be a struct declared in a different Kotlin package (e.g. Nursery in
+// sample.nested nesting Litter from sample.structs), and that reference needs a real
+// `import <pkg>.<StructName>` line — see structFileContent's structImports call — exactly as an
+// enum component reference already does via enumPackages/enumImports.
+private fun structPackages(
+  file: RirFile,
+  packageNameOverrides: Map<String, String>,
+  namespaceAliases: Map<String, Map<String, String>>,
+): Map<RirTypeKey, String> = file.assemblies.flatMap { assembly ->
+  assembly.namespaces.flatMap { namespace ->
+    namespace.types.filterIsInstance<RirStruct>().map { struct ->
+      RirTypeKey(namespace.name, struct.name) to kotlinPackage(
+        assembly.packageId, namespace.name, packageNameOverrides, namespaceAliases,
+      )
+    }
+  }
+}.toMap()
+
+// ADR-056/059: does this type reference — either directly, or (if it is a struct) through one of
+// its OWN components, AT ANY NESTING DEPTH — satisfy [predicate]? Every "does this file need X"
+// detector below (needsInterop, needsEnums, hasStringReturn, hasStringParam, hasEnumReturn, ...)
+// used to test only the top-level RirTypeRef, which made a struct's component types invisible to
+// them: a method returning only a struct with a string component, and no directly-string-typed
+// member anywhere else in the file, would silently skip emitting NugetInterop.kt
+// (freeManagedString) and fail to compile. ADR-059 lifts the former one-level restriction — a
+// struct-typed component may itself be a struct — by recursing through typeContains itself instead
+// of testing only the immediate component list.
 private fun typeContains(
   type: RirTypeRef,
   structs: Map<RirTypeKey, RirStruct>,
@@ -105,23 +128,27 @@ private fun typeContains(
   if (predicate(type)) return true
   val struct: RirStruct? =
     (type as? RirStructType)?.let { structs[RirTypeKey(it.namespace, it.name)] }
-  return struct?.components.orEmpty().any { predicate(it.type) }
+  return struct?.components.orEmpty().any { typeContains(it.type, structs, predicate) }
 }
 
 private fun isStringRef(type: RirTypeRef): Boolean = type is RirStringType
 private fun isEnumRef(type: RirTypeRef): Boolean = type is RirEnumType
 
-// ADR-056: every enum a struct's OWN components reference — used to widen the
-// `import <pkg>.<Enum>` resolution (enumImports/referencedEnumTypes) beyond top-level
+// ADR-056/059: every enum a struct's OWN components reference, AT ANY NESTING DEPTH — used to
+// widen the `import <pkg>.<Enum>` resolution (enumImports/referencedEnumTypes) beyond top-level
 // method/ctor/property types, since a struct-typed member's enum components are otherwise
-// invisible to that resolution.
+// invisible to that resolution. Recurses into a struct-typed component's own components so an enum
+// reached only through a nested struct (e.g. Litter -> Mother: Profile -> Mood: CatMood) is found
+// too.
 private fun structEnumComponents(
   type: RirTypeRef,
   structs: Map<RirTypeKey, RirStruct>,
 ): List<RirEnumType> {
   val struct: RirStruct? =
     (type as? RirStructType)?.let { structs[RirTypeKey(it.namespace, it.name)] }
-  return struct?.components.orEmpty().mapNotNull { it.type as? RirEnumType }
+  return struct?.components.orEmpty().flatMap { c ->
+    listOfNotNull(c.type as? RirEnumType) + structEnumComponents(c.type, structs)
+  }
 }
 
 fun generateKotlinStubs(
@@ -147,6 +174,10 @@ fun generateKotlinStubs(
   val boundTypes: Set<RirTypeKey> = boundHandleTypes(file)
   val enumPkgs: Map<RirTypeKey, String> =
     enumPackages(file, packageNameOverrides, namespaceAliases)
+  // ADR-059: derived once for the whole file, same anti-drift pattern as enumPkgs — a struct's own
+  // struct-typed component can be declared in a different Kotlin package (see structImports).
+  val structPkgs: Map<RirTypeKey, String> =
+    structPackages(file, packageNameOverrides, namespaceAliases)
   // ADR-056: derived once for the whole file, same anti-drift pattern — both this task and
   // NugetGenerateShimsTask resolve a RirStructType reference's component list through this map.
   val structs: Map<RirTypeKey, RirStruct> = boundStructTypes(file)
@@ -174,7 +205,7 @@ fun generateKotlinStubs(
       // when alternate ctors or bridgeable methods/computed props claim slots.
       namespace.types.filterIsInstance<RirStruct>().forEach { struct ->
         val registrables: List<RirRegistrable> =
-          bridgeableStructRegistrables(struct, boundTypes)
+          bridgeableStructRegistrables(struct, boundTypes, structs)
         val constructors: List<RirConstructor> =
           registrables.filterIsInstance<RirRegistrable.Ctor>().map { it.ctor }
         val staticMethods: List<RirMethod> = registrables
@@ -192,7 +223,7 @@ fun generateKotlinStubs(
           GeneratedFile(
             relativePath = "nativeMain/$pkgPath/${struct.name}.kt",
             content = structFileContent(
-              kotlinPkg, struct, assembly.packageId, enumPkgs, constructors,
+              kotlinPkg, struct, assembly.packageId, enumPkgs, structPkgs, constructors,
               instanceMethods, staticMethods, computedGetters, namespace.name,
               structs, qualifiedTypeNames,
             ),
@@ -219,7 +250,7 @@ fun generateKotlinStubs(
         // per-property getter/[setter] pairs — is the single source of truth both this task and
         // NugetGenerateShimsTask derive their registration-order-sensitive output from. Member-name
         // collisions with the ADR-051 wrapper (handle/close/cleaner) are already excluded here.
-        val registrables: List<RirRegistrable> = bridgeableRegistrables(cls, boundTypes)
+        val registrables: List<RirRegistrable> = bridgeableRegistrables(cls, boundTypes, structs)
         val ctors: List<RirConstructor> =
           registrables.filterIsInstance<RirRegistrable.Ctor>().map { it.ctor }
         val staticMethods: List<RirMethod> = registrables
@@ -298,7 +329,7 @@ fun generateKotlinStubs(
             content = stubFileContent(
               kotlinPkg, cls, staticMethods, instanceMethods, ctors,
               instancePropertyGetters, staticPropertyGetters, propertySetterNames,
-              assembly.packageId, namespace.name, enumPkgs, structs,
+              assembly.packageId, namespace.name, enumPkgs, structPkgs, structs,
               qualifiedTypeNames,
             ),
           )
@@ -416,6 +447,49 @@ private fun enumImports(
   .distinct()
   .sorted()
 
+// ADR-059: the struct equivalent of enumImports above — the `import <pkg>.<StructName>` lines a
+// struct's own generated data class file needs for the DIRECT struct-typed components it declares
+// (a struct-typed component's own inner components live inside the referenced struct's own
+// generated file and never need importing here — only ONE level of import resolution is needed at
+// this call site, unlike the ABI expansion, because a Kotlin `data class` property type reference
+// only ever names its immediate component type).
+private fun structImports(
+  structTypes: List<RirStructType>,
+  structPkgs: Map<RirTypeKey, String>,
+  kotlinPkg: String,
+): List<String> = structTypes
+  .map { type ->
+    val pkg: String = requireNotNull(structPkgs[RirTypeKey(type.namespace, type.name)]) {
+      "[nuget] Struct ${type.namespace}.${type.name} is referenced by a bound member but is not " +
+          "declared anywhere in the reverse IR. The metadata reader must emit every referenced " +
+          "struct as a declaration, or the generated stub cannot import it."
+    }
+    pkg to type.name
+  }
+  .filter { (pkg, _) -> pkg != kotlinPkg }
+  .map { (pkg, name) -> "import $pkg.$name" }
+  .distinct()
+  .sorted()
+
+// ADR-059: every struct TYPE in [type]'s own component tree, including [type] itself if it is a
+// struct — the outer struct AND every struct-typed component, at any nesting depth. Needed
+// wherever a struct value is REASSEMBLED (structComponentReads/structComponentExprs): a struct
+// return renders a bare `TypeName(...)` constructor call for EVERY struct in this tree (Litter's
+// own call plus a nested Profile(...) plus a nested Extent(...), for instance), not just the
+// outermost one, so each one needs its own import when it lives in a different Kotlin package than
+// the file doing the reassembling — this is the site `structFileContent` already covers for a
+// struct's OWN component declarations (via structImports above), but a bound CLASS's stub file
+// (stubFileContent/classWrapperContent) reassembles struct RETURNS the exact same way and needs
+// the identical import coverage.
+private fun structTypesInTree(
+  type: RirTypeRef,
+  structs: Map<RirTypeKey, RirStruct>,
+): List<RirStructType> {
+  val ref: RirStructType = type as? RirStructType ?: return emptyList()
+  val struct: RirStruct = structs[RirTypeKey(ref.namespace, ref.name)] ?: return listOf(ref)
+  return listOf(ref) + struct.components.flatMap { c -> structTypesInTree(c.type, structs) }
+}
+
 // PascalCase method name → camelCase: lowercase the first character only.
 // e.g. SerializeObject → serializeObject
 private fun String.toMethodCamelCase(): String = replaceFirstChar { it.lowercaseChar() }
@@ -451,6 +525,7 @@ private fun structFileContent(
   struct: RirStruct,
   packageId: String,
   enumPkgs: Map<RirTypeKey, String>,
+  structPkgs: Map<RirTypeKey, String>,
   constructors: List<RirConstructor>,
   instanceMethods: List<RirMethod>,
   staticMethods: List<RirMethod>,
@@ -459,8 +534,14 @@ private fun structFileContent(
   structs: Map<RirTypeKey, RirStruct>,
   qualifiedTypeNames: Map<RirTypeKey, String>,
 ): String {
+  // ADR-059: declKotlinType(c.type, qualifiedTypeNames) — not the bare kotlinType(c.type) this
+  // used to call — so a struct-typed component whose simple name collides with another declared
+  // type elsewhere in the file renders fully qualified, exactly like every OTHER reference site
+  // (buildStubMethod's params, structConstructorHelpers' carrierParams, ...). The import for the
+  // ordinary (non-colliding) cross-package case is handled separately below via structImports —
+  // declKotlinType alone does not add an import line.
   val params: String = struct.components.joinToString(",\n  ") { c ->
-    "val ${c.name.toMethodCamelCase()}: ${kotlinType(c.type)}"
+    "val ${c.name.toMethodCamelCase()}: ${declKotlinType(c.type, qualifiedTypeNames)}"
   }
   val allMethods: List<RirMethod> = instanceMethods + staticMethods
   val hasMembers: Boolean =
@@ -469,8 +550,13 @@ private fun structFileContent(
         staticMethods.isNotEmpty() ||
         computedGetters.isNotEmpty()
 
+  // ADR-059: struct.components' own enum references are gathered via structEnumComponents
+  // (recursive at any nesting depth), not a bare mapNotNull — an enum reached only through a
+  // nested struct component (e.g. Litter -> Mother: Profile -> Mood: CatMood) is otherwise
+  // invisible here.
   val memberEnumTypes: List<RirEnumType> = (
       struct.components.mapNotNull { it.type as? RirEnumType } +
+          struct.components.flatMap { structEnumComponents(it.type, structs) } +
           allMethods.flatMap { method ->
             listOfNotNull(method.returnType as? RirEnumType) +
                 method.parameters.mapNotNull { it.type as? RirEnumType }
@@ -478,15 +564,30 @@ private fun structFileContent(
           computedGetters.mapNotNull { it.type as? RirEnumType }
       ).distinct()
 
+  // ADR-059: a struct's OWN direct component can be a struct declared in a different Kotlin
+  // package than this struct (e.g. Nursery in sample.nested nesting Litter from sample.structs) —
+  // give it a real `import`, exactly as memberEnumTypes/enumImports already does for an enum
+  // component. Only the DIRECT component types are needed here (see structImports).
+  val directStructComponentTypes: List<RirStructType> =
+    struct.components.mapNotNull { it.type as? RirStructType }.distinct()
+
   val imports: MutableList<String> =
-    enumImports(memberEnumTypes, enumPkgs, kotlinPkg).toMutableList()
+    (
+        enumImports(memberEnumTypes, enumPkgs, kotlinPkg) +
+            structImports(directStructComponentTypes, structPkgs, kotlinPkg)
+        ).toMutableList()
   if (hasMembers) {
     imports.add("import $INTERNAL_PKG.NugetRegistry")
     imports.add("import kotlinx.cinterop.invoke")
   }
 
-  val receiverHasString: Boolean = struct.components.any { it.type is RirStringType }
-  val receiverHasEnum: Boolean = struct.components.any { it.type is RirEnumType }
+  // ADR-059: recurses through a struct-typed component's OWN components (typeContains), so a
+  // string/enum reachable only through a nested struct (e.g. Litter's Mother: Profile carries a
+  // string Tag) is not invisible to the import/memScoped decisions below.
+  val receiverHasString: Boolean =
+    struct.components.any { typeContains(it.type, structs, ::isStringRef) }
+  val receiverHasEnum: Boolean =
+    struct.components.any { typeContains(it.type, structs, ::isEnumRef) }
   val methodsReturnStruct: Boolean = allMethods.any { it.returnType is RirStructType }
   val gettersReturnStruct: Boolean = computedGetters.any { it.type is RirStructType }
   val methodsReturnString: Boolean = allMethods.any { it.returnType is RirStringType }
@@ -539,7 +640,10 @@ private fun structFileContent(
 
   val outVarTypes: Set<String> = buildSet {
     if (constructors.isNotEmpty() || methodsReturnStruct || gettersReturnStruct) {
-      struct.components.forEach { add(cVarType(it.type)) }
+      // ADR-059: this struct's OWN out-pointer leaves, recursively flattened (a RirStructType
+      // wrapping this exact namespace/name always resolves back to [struct] in the structs map).
+      abiOutArgs(RirStructType(namespaceName, struct.name), structs)
+        .forEach { add(cVarType(it.type)) }
     }
     allMethods.forEach { method ->
       if (method.returnType is RirStructType) {
@@ -665,25 +769,21 @@ private fun structConstructorHelpers(
       "${p.name}: ${declKotlinType(p.type, qualifiedTypeNames)}"
     }
     val inArgs: List<String> = ctor.parameters.flatMap { p ->
-      val nested: RirStruct? =
-        (p.type as? RirStructType)?.let { structs[RirTypeKey(it.namespace, it.name)] }
-      if (nested == null) listOf(argConversion(p.type, p.name))
-      else nested.components.map { component ->
-        argConversion(component.type, "${p.name}.${component.name}")
-      }
+      structArgConversions(p.type, p.name, structs)
     }
-    val outArgs: List<AbiArg> = struct.components.map { component ->
-      AbiArg("out${component.readName}", component.type, isOutPointer = true)
-    }
+    // ADR-059: this struct's OWN out-pointer leaves — the same shared flattening abiOutArgs uses
+    // for a top-level struct return, applied here to the struct being constructed itself (a
+    // RirStructType wrapping this exact namespace/name always resolves back to [struct] in the
+    // structs map, so abiOutArgs' recursion behaves identically).
+    val outArgs: List<AbiArg> = abiOutArgs(RirStructType(namespaceName, struct.name), structs)
     val allocations: String = outArgs.joinToString("\n") { arg ->
       "  val ${arg.name} = alloc<${cVarType(arg.type)}>()"
     }
     val invokeArgs: String = (inArgs + outArgs.map { "${it.name}.ptr" }).joinToString(", ")
-    val reads: List<ComponentRead> = struct.components.zip(outArgs).map { (component, arg) ->
-      componentRead(component.type, arg)
-    }
-    val statements: String = reads.flatMap { it.statements }.joinToString("\n") { "  $it" }
-    val values: String = reads.joinToString(", ") { it.expression }
+    val (readStatements: List<String>, readExprs: List<String>) =
+      structComponentExprs(struct, outArgs.iterator(), structs)
+    val statements: String = readStatements.joinToString("\n") { "  $it" }
+    val values: String = readExprs.joinToString(", ")
     """
       |private fun construct__${ctor.bridgeId()}($params): ${struct.name}ConstructorComponents =
       |    memScoped {
@@ -706,7 +806,7 @@ private fun structMethodParamCfnTypes(
   structs: Map<RirTypeKey, RirStruct>,
 ): List<String> {
   val receiverTypes: List<String> =
-    if (!method.isStatic) structReceiverAbiArgs(struct).map { cfnType(it.type) }
+    if (!method.isStatic) structReceiverAbiArgs(struct, structs).map { cfnType(it.type) }
     else emptyList()
   val inTypes: List<String> = abiArgs(method.parameters, structs).map { cfnType(it.type) }
   val outTypes: List<String> =
@@ -727,7 +827,10 @@ private fun structBindingsFileContent(
     when (r) {
       is RirRegistrable.Ctor -> {
         val inTypes: List<String> = abiArgs(r.ctor.parameters, structs).map { cfnType(it.type) }
-        val outTypes: List<String> = struct.components.map { cfnOutPointerType(it.type) }
+        // ADR-059: this struct's OWN out-pointer leaves, recursively flattened — a RirStructType
+        // wrapping this exact namespace/name always resolves back to [struct] in the structs map.
+        val outTypes: List<String> = abiOutArgs(RirStructType(namespaceName, struct.name), structs)
+          .map { cfnOutPointerType(it.type) }
         "internal var ctor__${r.ctor.bridgeId()}Fn: CPointer<CFunction<(" +
             (inTypes + outTypes).joinToString(", ") + ") -> Unit>>? = null"
       }
@@ -742,7 +845,7 @@ private fun structBindingsFileContent(
 
       is RirRegistrable.PropertyGetter -> {
         val receiverTypes: List<String> =
-          structReceiverAbiArgs(struct).map { cfnType(it.type) }
+          structReceiverAbiArgs(struct, structs).map { cfnType(it.type) }
         val outTypes: List<String> =
           abiOutArgs(r.property.type, structs).map { cfnOutPointerType(it.type) }
         val retCfnType: String = cfnType(abiReturnType(r.property.type, structs))
@@ -793,7 +896,9 @@ private fun structBindingsFileContent(
   }
   val hash: Long = structContractHash(namespaceName, struct, registrables, structs)
   val outVarTypes: List<String> = buildList {
-    addAll(struct.components.map { cVarType(it.type) })
+    // ADR-059: this struct's OWN out-pointer leaves, recursively flattened (see the Ctor branch
+    // above for why RirStructType(namespaceName, struct.name) always resolves back to [struct]).
+    addAll(abiOutArgs(RirStructType(namespaceName, struct.name), structs).map { cVarType(it.type) })
     registrables.forEach { r ->
       when (r) {
         is RirRegistrable.Method ->
@@ -862,20 +967,17 @@ private fun buildStructStubMethod(
     if (method.returnType is RirVoidType) ""
     else ": ${declKotlinType(method.returnType, qualifiedTypeNames)}"
   val receiverArgs: List<String> = if (!method.isStatic) {
-    struct.components.map { c -> argConversion(c.type, c.name.toMethodCamelCase()) }
+    struct.components.flatMap { c ->
+      structArgConversions(c.type, c.name.toMethodCamelCase(), structs)
+    }
   } else {
     emptyList()
   }
   val paramArgs: List<String> = method.parameters.flatMap { p ->
-    val nested: RirStruct? =
-      (p.type as? RirStructType)?.let { ref -> structs[RirTypeKey(ref.namespace, ref.name)] }
-    if (nested == null) listOf(argConversion(p.type, p.name))
-    else nested.components.map { c ->
-      argConversion(c.type, "${p.name}.${c.name.toMethodCamelCase()}")
-    }
+    structArgConversions(p.type, p.name, structs)
   }
   val receiverHasString: Boolean =
-    !method.isStatic && struct.components.any { it.type is RirStringType }
+    !method.isStatic && struct.components.any { typeContains(it.type, structs, ::isStringRef) }
   val paramsHaveString: Boolean =
     method.parameters.any { p -> typeContains(p.type, structs, ::isStringRef) }
   val hasStringArg: Boolean = receiverHasString || paramsHaveString
@@ -941,9 +1043,7 @@ private fun buildStructStubMethod(
       val outArgs: List<AbiArg> = abiOutArgs(retType, structs)
       val fullInvokeArgs: String =
         (invokeArgsBase + outArgs.map { "${it.name}.ptr" }).joinToString(", ")
-      val reads: List<ComponentRead> = retStruct.components.zip(outArgs)
-        .map { (c, arg) -> componentRead(c.type, arg) }
-      val constructArgs: String = reads.joinToString(", ") { it.expression }
+      val read: ComponentRead = structComponentReads(retStruct, outArgs.iterator(), structs)
       buildString {
         appendLine("fun $name($params)$retSuffix = memScoped {")
         appendLine("  val fn = requireNotNull($fnVar) {")
@@ -953,8 +1053,8 @@ private fun buildStructStubMethod(
           appendLine("  val ${arg.name} = alloc<${cVarType(arg.type)}>()")
         }
         appendLine("  fn.invoke($fullInvokeArgs)")
-        reads.forEach { read -> read.statements.forEach { appendLine("  $it") } }
-        appendLine("  ${retType.name}($constructArgs)")
+        read.statements.forEach { appendLine("  $it") }
+        appendLine("  ${read.expression}")
         append("}")
       }
     }
@@ -994,9 +1094,11 @@ private fun buildStructStubProperty(
   val failMsg: String =
     "NugetRegistry.notRegistered(\"$namespaceName.${struct.name}\", \"$packageId\")"
   val declType: String = declKotlinType(property.type, qualifiedTypeNames)
-  val receiverArgs: List<String> =
-    struct.components.map { c -> argConversion(c.type, c.name.toMethodCamelCase()) }
-  val hasStringReceiver: Boolean = struct.components.any { it.type is RirStringType }
+  val receiverArgs: List<String> = struct.components.flatMap { c ->
+    structArgConversions(c.type, c.name.toMethodCamelCase(), structs)
+  }
+  val hasStringReceiver: Boolean =
+    struct.components.any { typeContains(it.type, structs, ::isStringRef) }
 
   val getterBlock: String = when (val type: RirTypeRef = property.type) {
     is RirVoidType -> error("[nuget] a property cannot have void type")
@@ -1045,9 +1147,7 @@ private fun buildStructStubProperty(
       val outArgs: List<AbiArg> = abiOutArgs(type, structs)
       val invokeArgs: String =
         (receiverArgs + outArgs.map { "${it.name}.ptr" }).joinToString(", ")
-      val reads: List<ComponentRead> = retStruct.components.zip(outArgs)
-        .map { (c, arg) -> componentRead(c.type, arg) }
-      val constructArgs: String = reads.joinToString(", ") { it.expression }
+      val read: ComponentRead = structComponentReads(retStruct, outArgs.iterator(), structs)
       buildString {
         appendLine("get() {")
         appendLine("  val fn = requireNotNull($getterFnVar) {")
@@ -1058,8 +1158,8 @@ private fun buildStructStubProperty(
           appendLine("    val ${arg.name} = alloc<${cVarType(arg.type)}>()")
         }
         appendLine("    fn.invoke($invokeArgs)")
-        reads.forEach { read -> read.statements.forEach { appendLine("    $it") } }
-        appendLine("    ${type.name}($constructArgs)")
+        read.statements.forEach { appendLine("    $it") }
+        appendLine("    ${read.expression}")
         appendLine("  }")
         append("}")
       }
@@ -1279,13 +1379,80 @@ private fun componentRead(type: RirTypeRef, arg: AbiArg): ComponentRead {
     }
 
     is RirObjectHandleType -> error(
-      "[nuget] handle-typed struct components are not supported (ADR-056 v1 component vocabulary" +
-          " is primitives, string, and bound enums only)"
+      "[nuget] handle-typed struct components are not supported (ADR-056/059 v1 component " +
+          "vocabulary is primitives, string, bound enums, and bound structs only)"
     )
 
     is RirVoidType -> error("[nuget] void cannot be a struct component")
-    is RirStructType -> error("[nuget] nested struct components are not supported in v1 (ADR-056)")
+    // ADR-059: componentRead is only ever called on a LEAF type — structComponentReads below
+    // recurses through a struct-typed component itself, before any of ITS OWN components reach
+    // this function. Reaching this branch means a RirStructType slipped past that recursion
+    // (a caller building a ComponentRead directly off struct.components instead of through
+    // structComponentReads), which is exactly the bug this guard exists to catch.
+    is RirStructType -> error(
+      "[nuget] struct ${type.namespace}.${type.name} must be expanded via structComponentReads " +
+          "before reaching componentRead — componentRead only accepts leaf (scalar) types."
+    )
   }
+}
+
+// ADR-059 Decision 1a/3a's "componentRead becomes recursive" and returns `(statements,
+// expression)` as it already did: reassembles a WHOLE struct value from its flattened out-pointer
+// leaves ([outArgs], an iterator so nested recursive calls consume from the SAME shared position —
+// outArgs was built by the SAME depth-first pre-order walk in abiOutArgs/structReceiverAbiArgs, so
+// walking [struct]'s own component tree here in that same order pairs each leaf with its own
+// out-pointer correctly). A struct-typed component's own [ComponentRead] is itself the result of a
+// nested structComponentReads call — its statements are hoisted (concatenated in DFS order, so a
+// string leaf's toKString()/freeManagedString locals are always in scope before the final nested
+// constructor expression is evaluated) and its expression becomes one of the outer struct's own
+// constructor arguments. The Kotlin reassembly is shape-agnostic (ADR-059): the generated data
+// class's primary constructor is always positional, regardless of which C# shape (Shape A
+// constructor or Shape B object initializer) reconstructed the value on the C# side.
+// Unwrapped form: [struct]'s own top-level component statements/expressions, WITHOUT the
+// `${struct.name}(...)` wrapper structComponentReads (below) adds. Used directly by
+// structConstructorHelpers, whose final expression wraps in
+// `${struct.name}ConstructorComponents(...)` — a different Kotlin type from [struct] itself — so
+// it needs the bare per-component expressions, not a `${struct.name}(...)` call it would then have
+// to unwrap again.
+private fun structComponentExprs(
+  struct: RirStruct,
+  outArgs: Iterator<AbiArg>,
+  structs: Map<RirTypeKey, RirStruct>,
+): Pair<List<String>, List<String>> {
+  val statements: MutableList<String> = mutableListOf()
+  val expressions: MutableList<String> = mutableListOf()
+  struct.components.forEach { c ->
+    val nested: RirStruct? =
+      (c.type as? RirStructType)?.let { structs[RirTypeKey(it.namespace, it.name)] }
+    val read: ComponentRead =
+      if (nested == null) componentRead(c.type, outArgs.next())
+      else structComponentReads(nested, outArgs, structs)
+    statements += read.statements
+    expressions += read.expression
+  }
+  return statements to expressions
+}
+
+// ADR-059 Decision 1a/3a's "componentRead becomes recursive" and returns `(statements,
+// expression)` as it already did: reassembles a WHOLE struct value from its flattened out-pointer
+// leaves ([outArgs], an iterator so nested recursive calls consume from the SAME shared position —
+// outArgs was built by the SAME depth-first pre-order walk in abiOutArgs/structReceiverAbiArgs, so
+// walking [struct]'s own component tree here in that same order pairs each leaf with its own
+// out-pointer correctly). A struct-typed component's own [ComponentRead] is itself the result of a
+// nested structComponentReads call — its statements are hoisted (concatenated in DFS order, so a
+// string leaf's toKString()/freeManagedString locals are always in scope before the final nested
+// constructor expression is evaluated) and its expression becomes one of the outer struct's own
+// constructor arguments. The Kotlin reassembly is shape-agnostic (ADR-059): the generated data
+// class's primary constructor is always positional, regardless of which C# shape (Shape A
+// constructor or Shape B object initializer) reconstructed the value on the C# side.
+private fun structComponentReads(
+  struct: RirStruct,
+  outArgs: Iterator<AbiArg>,
+  structs: Map<RirTypeKey, RirStruct>,
+): ComponentRead {
+  val (statements: List<String>, expressions: List<String>) =
+    structComponentExprs(struct, outArgs, structs)
+  return ComponentRead(statements, "${struct.name}(${expressions.joinToString(", ")})")
 }
 
 // Phase 9 (ROADMAP line 151): the ordered list of CFunction parameter cfn-types for a method's
@@ -1530,6 +1697,7 @@ private fun stubFileContent(
   packageId: String,
   namespaceName: String,
   enumPkgs: Map<RirTypeKey, String>,
+  structPkgs: Map<RirTypeKey, String>,
   structs: Map<RirTypeKey, RirStruct>,
   qualifiedTypeNames: Map<RirTypeKey, String>,
 ): String {
@@ -1552,7 +1720,7 @@ private fun stubFileContent(
     return classWrapperContent(
       kotlinPkg, cls, staticMethods, instanceMethods, ctors,
       instancePropertyGetters, staticPropertyGetters, propertySetterNames, packageId,
-      namespaceName, enumPkgs, structs,
+      namespaceName, enumPkgs, structPkgs, structs,
       qualifiedTypeNames,
     )
   }
@@ -1631,6 +1799,17 @@ private fun stubFileContent(
       ).distinct()
   imports.addAll(enumImports(structEnumTypes, enumPkgs, kotlinPkg))
 
+  // ADR-059: a static method/property whose RETURN is (or nests) a struct reassembles it with a
+  // bare `TypeName(...)` constructor call per struct in the tree (structComponentReads) — each one
+  // needs an import when it lives in a different Kotlin package than this stub. A struct-typed
+  // PARAMETER needs none here: the CALLER constructs it, this file only decomposes it via property
+  // access, which needs no type import.
+  val structReturnTypes: List<RirStructType> = (
+      staticMethods.flatMap { structTypesInTree(it.returnType, structs) } +
+          staticPropertyGetters.flatMap { structTypesInTree(it.type, structs) }
+      ).distinct()
+  imports.addAll(structImports(structReturnTypes, structPkgs, kotlinPkg))
+
   // ADR-054: NugetRegistry.notRegistered(...) is called at runtime (not baked as a constant
   // string) so the "N of M registrations fired" message reflects what actually landed by the time
   // a bridge call fails, rather than the fixed generation-time text this replaces.
@@ -1697,6 +1876,7 @@ private fun classWrapperContent(
   packageId: String,
   namespaceName: String,
   enumPkgs: Map<RirTypeKey, String>,
+  structPkgs: Map<RirTypeKey, String>,
   structs: Map<RirTypeKey, RirStruct>,
   qualifiedTypeNames: Map<RirTypeKey, String>,
 ): String {
@@ -1784,6 +1964,17 @@ private fun classWrapperContent(
       enumPkgs, kotlinPkg,
     )
   )
+
+  // ADR-059: same struct-return reassembly import coverage as the object-shape path
+  // (stubFileContent) — see the comment there. Ctors are excluded here for the same reason a
+  // struct-typed PARAMETER never needs one: a constructor never returns a struct value (its
+  // implicit return is the class's own handle), so nothing here calls structComponentReads on a
+  // ctor's parameters.
+  val structReturnTypes: List<RirStructType> = (
+      allMethods.flatMap { structTypesInTree(it.returnType, structs) } +
+          allPropertyGetters.flatMap { structTypesInTree(it.type, structs) }
+      ).distinct()
+  imports.addAll(structImports(structReturnTypes, structPkgs, kotlinPkg))
 
   val instanceMethodsText: String = instanceMethods.joinToString("\n\n") {
     buildStubMethod(cls, it, packageId, namespaceName, structs, qualifiedTypeNames)
@@ -1894,15 +2085,38 @@ private fun argConversion(type: RirTypeRef, name: String): String = when {
   type is RirObjectHandleType -> "$name.handle.require(\"${type.name}\")"
   type is RirEnumType -> "$name.ordinal"
   type is RirPrimitiveType && type.name == "char" -> "$name.code.toUShort()"
-  // ADR-056: a struct-typed argument must be decomposed into its components (one invoke()
-  // argument per component, e.g. "p.x", "p.y") before reaching argConversion — buildStubMethod's
-  // paramArgs does that decomposition itself rather than calling argConversion for a struct.
+  // ADR-059: a struct-typed argument must be decomposed into its LEAVES via structArgConversions
+  // (below) before reaching argConversion — argConversion only accepts leaf (scalar) types.
+  // Reaching this branch means a RirStructType slipped past that recursion.
   type is RirStructType -> error(
-    "[nuget] a struct-typed argument must be decomposed into its components before " +
-        "argConversion — got ${type.namespace}.${type.name}"
+    "[nuget] struct ${type.namespace}.${type.name} must be expanded via structArgConversions " +
+        "before reaching argConversion — argConversion only accepts leaf (scalar) types."
   )
 
   else -> name
+}
+
+// ADR-059 Decision 1a: the ONE shared recursive path-expression builder that replaces the four
+// one-level copies this file used to carry (structConstructorHelpers' inArgs,
+// buildStructStubMethod's receiverArgs/paramArgs, buildConstructHelper's invokeArgs,
+// buildStubMethod's paramArgs) — all four were "if this parameter's type resolves to a struct, map
+// its components through argConversion, else call argConversion directly", one level deep, and
+// would each need the identical fix independently. [rootExpr] is the Kotlin expression for the
+// WHOLE value at this position (a parameter name, an implicit receiver component's bare name, or a
+// property setter's `value`); for a struct-typed [type], each of its OWN components recurses with
+// `$rootExpr.$componentName` appended, so a leaf reached through a path (e.g. `l.mother.tag`) gets
+// exactly the same argConversion(...) a top-level parameter of that leaf's type would use.
+private fun structArgConversions(
+  type: RirTypeRef,
+  rootExpr: String,
+  structs: Map<RirTypeKey, RirStruct>,
+): List<String> {
+  val struct: RirStruct? =
+    (type as? RirStructType)?.let { structs[RirTypeKey(it.namespace, it.name)] }
+  return if (struct == null) listOf(argConversion(type, rootExpr))
+  else struct.components.flatMap { c ->
+    structArgConversions(c.type, "$rootExpr.${c.name.toMethodCamelCase()}", structs)
+  }
 }
 
 // Like String.prependIndent, but leaves blank lines completely empty instead of padding them out
@@ -1960,12 +2174,7 @@ private fun buildConstructHelper(
   val hasStringParam: Boolean = ctor.parameters.any { it.type is RirStringType }
 
   val invokeArgs: String = ctor.parameters.flatMap { p ->
-    val struct: RirStruct? =
-      (p.type as? RirStructType)?.let { ref -> structs[RirTypeKey(ref.namespace, ref.name)] }
-    if (struct == null) listOf(argConversion(p.type, p.name))
-    else struct.components.map { component ->
-      argConversion(component.type, "${p.name}.${component.name}")
-    }
+    structArgConversions(p.type, p.name, structs)
   }.joinToString(", ")
 
   val invokeCall: String =
@@ -1998,15 +2207,11 @@ private fun buildStubMethod(
   val name: String = method.name.toMethodCamelCase()
   val fnVar: String =
     "${bindingsObjectName(cls.name)}.$name${method.bridgeSuffix()}Fn"
-  // ADR-056: a struct component can itself be a string (not exercised by the v1 fixture, but
-  // checked here for correctness) — memScoped is needed whenever ANY component crossing as a
-  // string argument requires it, not just a direct top-level string parameter.
-  val hasStringParam: Boolean = method.parameters.any { p ->
-    val struct: RirStruct? =
-      (p.type as? RirStructType)?.let { ref -> structs[RirTypeKey(ref.namespace, ref.name)] }
-    if (struct != null) struct.components.any { it.type is RirStringType }
-    else p.type is RirStringType
-  }
+  // ADR-056/059: a struct component can itself be (or contain, at any nesting depth) a string —
+  // memScoped is needed whenever ANY leaf crossing as a string argument requires it, not just a
+  // direct top-level string parameter.
+  val hasStringParam: Boolean =
+    method.parameters.any { p -> typeContains(p.type, structs, ::isStringRef) }
 
   val params: String = method.parameters.joinToString(", ") { p ->
     "${p.name}: ${declKotlinType(p.type, qualifiedTypeNames)}"
@@ -2034,12 +2239,7 @@ private fun buildStubMethod(
   // type already requires, or it silently mismatches the CFunction type methodParamCfnTypes
   // declares for that slot (e.g. a raw Char passed where UShort is expected).
   val paramArgs: List<String> = method.parameters.flatMap { p ->
-    val struct: RirStruct? =
-      (p.type as? RirStructType)?.let { ref -> structs[RirTypeKey(ref.namespace, ref.name)] }
-    if (struct == null) listOf(argConversion(p.type, p.name))
-    else struct.components.map { c ->
-      argConversion(c.type, "${p.name}.${c.name.toMethodCamelCase()}")
-    }
+    structArgConversions(p.type, p.name, structs)
   }
   val invokeArgs: String = (listOfNotNull(receiverArg) + paramArgs).joinToString(", ")
 
@@ -2142,12 +2342,11 @@ private fun buildStubMethod(
       val outPtrArgs: List<String> = outArgs.map { "${it.name}.ptr" }
       val fullInvokeArgs: String =
         (listOfNotNull(receiverArg) + paramArgs + outPtrArgs).joinToString(", ")
-      // ADR-056: each component is read back through componentRead — the SAME per-type
-      // conversion a top-level return of that type already uses — instead of the raw `.value`,
-      // which is only correct for the pass-through primitives (int/long/float/double).
-      val reads: List<ComponentRead> = struct.components.zip(outArgs)
-        .map { (c, arg) -> componentRead(c.type, arg) }
-      val constructArgs: String = reads.joinToString(", ") { it.expression }
+      // ADR-059: each LEAF is read back through structComponentReads' recursive use of
+      // componentRead — the SAME per-type conversion a top-level return of that leaf's type
+      // already uses — instead of the raw `.value`, which is only correct for the pass-through
+      // primitives (int/long/float/double).
+      val read: ComponentRead = structComponentReads(struct, outArgs.iterator(), structs)
       buildString {
         appendLine("fun $name($params)$retSuffix = memScoped {")
         appendLine("  val fn = requireNotNull($fnVar) {")
@@ -2155,8 +2354,8 @@ private fun buildStubMethod(
         appendLine("  }")
         outArgs.forEach { arg -> appendLine("  val ${arg.name} = alloc<${cVarType(arg.type)}>()") }
         appendLine("  fn.invoke($fullInvokeArgs)")
-        reads.forEach { read -> read.statements.forEach { appendLine("  $it") } }
-        appendLine("  ${retType.name}($constructArgs)")
+        read.statements.forEach { appendLine("  $it") }
+        appendLine("  ${read.expression}")
         append("}")
       }
     }
@@ -2224,9 +2423,7 @@ private fun buildStubProperty(
       val outArgs: List<AbiArg> = abiOutArgs(type, structs)
       val invokeArgs: String =
         (listOfNotNull(receiverArg) + outArgs.map { "${it.name}.ptr" }).joinToString(", ")
-      val reads: List<ComponentRead> = struct.components.zip(outArgs)
-        .map { (c, arg) -> componentRead(c.type, arg) }
-      val constructArgs: String = reads.joinToString(", ") { it.expression }
+      val read: ComponentRead = structComponentReads(struct, outArgs.iterator(), structs)
       buildString {
         appendLine("get() {")
         appendLine("  val fn = requireNotNull($getterFnVar) {")
@@ -2237,8 +2434,8 @@ private fun buildStubProperty(
           appendLine("    val ${arg.name} = alloc<${cVarType(arg.type)}>()")
         }
         appendLine("    fn.invoke($invokeArgs)")
-        reads.forEach { read -> read.statements.forEach { appendLine("    $it") } }
-        appendLine("    ${type.name}($constructArgs)")
+        read.statements.forEach { appendLine("    $it") }
+        appendLine("    ${read.expression}")
         appendLine("  }")
         append("}")
       }
@@ -2329,11 +2526,12 @@ private fun buildStubProperty(
         "[nuget] struct ${propType.namespace}.${propType.name} is referenced as a property type " +
             "but not declared in reverse-ir.json"
       }
-      val componentArgs: List<String> = struct.components.map { c ->
-        argConversion(c.type, "value.${c.name.toMethodCamelCase()}")
+      val componentArgs: List<String> = struct.components.flatMap { c ->
+        structArgConversions(c.type, "value.${c.name.toMethodCamelCase()}", structs)
       }
       val invokeArgs: String = (listOfNotNull(receiverArg) + componentArgs).joinToString(", ")
-      val hasStringComponent: Boolean = struct.components.any { it.type is RirStringType }
+      val hasStringComponent: Boolean =
+        struct.components.any { typeContains(it.type, structs, ::isStringRef) }
       if (hasStringComponent) "memScoped { fn.invoke($invokeArgs) }" else "fn.invoke($invokeArgs)"
     } else {
       val valueArg: String = argConversion(propType, "value")
@@ -2643,6 +2841,8 @@ private fun nugetEnumsContent(): String = """
 // function in this file; the task below is the only place that actually calls logger.warn.
 internal fun diagnosticWarnings(rir: RirFile): List<String> {
   validateDiagnostics(rir)
+  val boundTypes: Set<RirTypeKey> = boundHandleTypes(rir)
+  val structs: Map<RirTypeKey, RirStruct> = boundStructTypes(rir)
   val fromReader: List<Pair<String, RirDiagnostic>> = rir.assemblies.flatMap { assembly ->
     assembly.diagnostics.map { assembly.packageId to it }
   }
@@ -2653,7 +2853,20 @@ internal fun diagnosticWarnings(rir: RirFile): List<String> {
       }
     }
   }
-  return (fromReader + fromCollisions)
+  // ADR-059 Decision 5a: the same shared arityLimitDiagnostics/structArityLimitDiagnostics
+  // bridgeableRegistrables/bridgeableStructRegistrables already filter by, surfaced here too
+  // (mirroring fromCollisions above) so a skipped_abi_arity_limit member is reported, not silently
+  // dropped.
+  val fromArityLimits: List<Pair<String, RirDiagnostic>> = rir.assemblies.flatMap { assembly ->
+    assembly.namespaces.flatMap { namespace ->
+      namespace.types.filterIsInstance<RirClass>().flatMap { cls ->
+        arityLimitDiagnostics(cls, boundTypes, structs).map { assembly.packageId to it }
+      } + namespace.types.filterIsInstance<RirStruct>().flatMap { struct ->
+        structArityLimitDiagnostics(struct, boundTypes, structs).map { assembly.packageId to it }
+      }
+    }
+  }
+  return (fromReader + fromCollisions + fromArityLimits)
     .map { (packageId, diagnostic) -> formatDiagnostic(packageId, diagnostic) }
 }
 
@@ -2672,11 +2885,12 @@ private fun validateDiagnostics(rir: RirFile) {
 }
 
 private fun validateKotlinSignatures(rir: RirFile) {
+  val structs: Map<RirTypeKey, RirStruct> = boundStructTypes(rir)
   rir.assemblies.forEach { assembly ->
     assembly.namespaces.forEach { namespace ->
       namespace.types.filterIsInstance<RirClass>().forEach { cls ->
         val methods: List<RirMethod> = cls.methods.filter { method ->
-          bridgeableRegistrables(cls, boundHandleTypes(rir)).any { registrable ->
+          bridgeableRegistrables(cls, boundHandleTypes(rir), structs).any { registrable ->
             registrable is RirRegistrable.Method && registrable.method === method
           }
         }

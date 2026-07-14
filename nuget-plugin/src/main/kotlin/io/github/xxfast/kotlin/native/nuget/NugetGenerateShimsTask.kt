@@ -73,7 +73,7 @@ fun generateCSharpShims(file: RirFile, nativeLibraryName: String): List<Generate
     assembly.namespaces.forEach { namespace ->
       namespace.types.filterIsInstance<RirStruct>().forEach { struct ->
         val registrables: List<RirRegistrable> =
-          bridgeableStructRegistrables(struct, boundTypes)
+          bridgeableStructRegistrables(struct, boundTypes, structs)
         if (registrables.isNotEmpty()) {
           result.add(
             GeneratedFile(
@@ -91,7 +91,7 @@ fun generateCSharpShims(file: RirFile, nativeLibraryName: String): List<Generate
         // then bridgeable static methods) that NugetGenerateBindingsTask derives its register
         // signature/body from — anti-drift for the DllImport params / ModuleInitializer args
         // below.
-        val registrables: List<RirRegistrable> = bridgeableRegistrables(cls, boundTypes)
+        val registrables: List<RirRegistrable> = bridgeableRegistrables(cls, boundTypes, structs)
 
         if (registrables.isEmpty()) return@forEach
 
@@ -237,7 +237,14 @@ private fun csReturnConversion(type: RirTypeRef, valueExpr: String): String = wh
   )
 
   is RirEnumType -> "(int)$valueExpr"
-  is RirStructType -> error("[nuget] nested struct components are not supported in v1 (ADR-056)")
+  // ADR-059: csReturnConversion is only ever called on a LEAF (scalar) type — structOutWrites
+  // recurses through a struct-typed component itself, before any of ITS OWN components reach this
+  // function. Reaching this branch means a RirStructType slipped past that recursion.
+  is RirStructType -> error(
+    "[nuget] struct ${type.namespace}.${type.name} must be expanded via structOutWrites before " +
+        "reaching csReturnConversion — csReturnConversion only accepts leaf (scalar) types."
+  )
+
   is RirPrimitiveType -> when (type.name) {
     "bool" -> "$valueExpr ? (byte)1 : (byte)0"
     "char" -> "(ushort)$valueExpr"
@@ -326,6 +333,60 @@ private fun structConstruction(struct: RirStruct, componentExprs: List<String>):
       }
   }
 
+// ADR-059 Decision 3a: the recursive reconstruction builder both paramBinding (a struct-typed
+// parameter) and structReceiverReconstruction (a struct member's receiver) route through.
+// [structConstruction] itself is UNCHANGED — the only new thing is that a component expression
+// passed to it may now be another structConstructionExpr(...) call instead of a leaf conversion.
+// The OUTER struct's own shape decides how a component expression is PLACED (a positional
+// constructor argument, or an `Origin = <expr>` object-initializer assignment); the INNER
+// struct's own shape decides how that expression is BUILT — they do not interact, which is why
+// all four Shape A/B nesting combinations fall out of this one function with no combo-specific
+// code. [pathPrefix] is the ABI-name path segments already traversed (e.g. `["l"]` for a
+// parameter named `l`, or `[]` for an unprefixed struct receiver) — appending each component's
+// own readName and `_`-joining at a LEAF reproduces exactly the ABI name
+// abiArgs/structReceiverAbiArgs gave that leaf's thunk parameter, so paramConversion resolves the
+// same declared name thunkParamName already used for it.
+private fun structConstructionExpr(
+  struct: RirStruct,
+  structs: Map<RirTypeKey, RirStruct>,
+  pathPrefix: List<String>,
+): String {
+  val componentExprs: List<String> = struct.components.map { c ->
+    val path: List<String> = pathPrefix + c.readName
+    val nested: RirStruct? =
+      (c.type as? RirStructType)?.let { structs[RirTypeKey(it.namespace, it.name)] }
+    if (nested == null) paramConversion(RirParameter(path.joinToString("_"), c.type))
+    else structConstructionExpr(nested, structs, path)
+  }
+  return structConstruction(struct, componentExprs)
+}
+
+// ADR-059 Decision 1a: recursive DFS pre-order out-pointer write-back — the C# mirror of the
+// Kotlin side's structComponentReads. Writes every LEAF of [struct]'s own component tree through
+// its own out-pointer ([outArgs], consumed in the SAME depth-first pre-order abiOutArgs/
+// structReceiverAbiArgs/abiArgs built them in — a struct-typed component is never itself a leaf,
+// so the shared iterator only ever advances at a scalar), read back through the readName PATH from
+// [resultExpr] (e.g. "result.Mother.Tag" at depth 2, "result.X" at depth 1, unchanged), each
+// converted through the SAME csReturnConversion(...) a top-level return of that leaf's type would
+// use.
+private fun structOutWrites(
+  struct: RirStruct,
+  outArgs: Iterator<AbiArg>,
+  resultExpr: String,
+  structs: Map<RirTypeKey, RirStruct>,
+): List<String> =
+  struct.components.flatMap { c ->
+    val nested: RirStruct? =
+      (c.type as? RirStructType)?.let { structs[RirTypeKey(it.namespace, it.name)] }
+    val componentPath = "$resultExpr.${c.readName}"
+    if (nested == null) {
+      val arg: AbiArg = outArgs.next()
+      listOf("*${arg.name} = ${csReturnConversion(c.type, componentPath)};")
+    } else {
+      structOutWrites(nested, outArgs, componentPath, structs)
+    }
+  }
+
 private fun paramBinding(p: RirParameter, structs: Map<RirTypeKey, RirStruct>): ParamBinding {
   val type: RirTypeRef = p.type
   if (type is RirStructType) {
@@ -333,16 +394,15 @@ private fun paramBinding(p: RirParameter, structs: Map<RirTypeKey, RirStruct>): 
       "[nuget] struct ${type.namespace}.${type.name} is referenced as a parameter type but not " +
           "declared in reverse-ir.json"
     }
-    // Each component is converted through the SAME paramConversion(...) a top-level parameter of
-    // that component's type would use (byte->bool, ushort->char, IntPtr->string, etc.) — wrapping
-    // the AbiArg back into a synthetic RirParameter reuses that logic instead of re-deriving it,
-    // and guarantees the declared name matches inParamDecls above (both call thunkParamName on
-    // the same (arg.name, arg.type) pair).
-    val componentArgs: List<String> = abiArgs(listOf(p), structs)
-      .map { arg -> paramConversion(RirParameter(arg.name, arg.type)) }
+    // ADR-059: recursive reconstruction — each LEAF is converted through the SAME
+    // paramConversion(...) a top-level parameter of that leaf's type would use (byte->bool,
+    // ushort->char, IntPtr->string, etc.), reached through the same ABI name path
+    // abiArgs(listOf(p), structs) would have given it (both derive the path the same way: the
+    // parameter's own name, then each level's readName, `_`-joined), so the declared name always
+    // matches inParamDecls' thunkParamName(RirParameter(arg.name, arg.type)).
     return ParamBinding(
       declarationLines = emptyList(),
-      expression = structConstruction(struct, componentArgs),
+      expression = structConstructionExpr(struct, structs, listOf(p.name)),
     )
   }
   if (type is RirObjectHandleType && type.nullable) {
@@ -359,23 +419,64 @@ private fun paramBinding(p: RirParameter, structs: Map<RirTypeKey, RirStruct>): 
   return ParamBinding(declarationLines = emptyList(), expression = paramConversion(p))
 }
 
-// ADR-056: every enum a struct's OWN components reference, given a type reference that may be the
-// struct itself — mirrors the Kotlin side's structEnumComponents. A struct can only be one level
-// deep in v1 (nested struct components are unsupported), so no recursion is needed.
+// ADR-056/059: every enum a struct's OWN components reference, AT ANY NESTING DEPTH, given a type
+// reference that may be the struct itself — mirrors the Kotlin side's structEnumComponents.
+// Recurses into a struct-typed component's own components so an enum reached only through a
+// nested struct (e.g. Litter -> Mother: Profile -> Mood: CatMood) is found too.
 private fun structEnumComponents(
   type: RirTypeRef,
   structs: Map<RirTypeKey, RirStruct>,
 ): List<RirEnumType> {
   val struct: RirStruct? =
     (type as? RirStructType)?.let { structs[RirTypeKey(it.namespace, it.name)] }
-  return struct?.components.orEmpty().mapNotNull { it.type as? RirEnumType }
+  return struct?.components.orEmpty().flatMap { c ->
+    listOfNotNull(c.type as? RirEnumType) + structEnumComponents(c.type, structs)
+  }
 }
 
+// ADR-059: every C# namespace a struct-typed reference touches, AT ANY NESTING DEPTH — the struct
+// equivalent of structEnumComponents/referencedEnumTypes above. A thunk that reconstructs a nested
+// struct with `new Litter(...)` needs a `using` for Litter's own namespace when it differs from
+// the namespace the thunk itself renders inside (`namespace $namespaceName` in
+// registrationFileContent/structRegistrationFileContent), exactly as an enum reference already
+// gets one — `referencedEnumTypes` used to collect ONLY RirEnumType, with no struct equivalent at
+// all, which is the bug this function fixes.
+private fun structTypeNamespaces(
+  type: RirTypeRef,
+  structs: Map<RirTypeKey, RirStruct>,
+): Set<String> =
+  when (type) {
+    is RirStructType -> {
+      val struct: RirStruct? = structs[RirTypeKey(type.namespace, type.name)]
+      setOf(type.namespace) + struct?.components.orEmpty()
+        .flatMap { c -> structTypeNamespaces(c.type, structs) }.toSet()
+    }
+
+    else -> emptySet()
+  }
+
+// The struct-reference mirror of referencedEnumTypes below — every namespace a class's (or a
+// struct's own) registrable members reference a STRUCT through, deduplicated.
+private fun referencedStructNamespaces(
+  registrables: List<RirRegistrable>,
+  structs: Map<RirTypeKey, RirStruct>,
+): Set<String> =
+  registrables.flatMap { r ->
+    when (r) {
+      is RirRegistrable.Ctor -> r.ctor.parameters.flatMap { structTypeNamespaces(it.type, structs) }
+      is RirRegistrable.Method -> structTypeNamespaces(r.method.returnType, structs) +
+          r.method.parameters.flatMap { structTypeNamespaces(it.type, structs) }
+
+      is RirRegistrable.PropertyGetter -> structTypeNamespaces(r.property.type, structs)
+      is RirRegistrable.PropertySetter -> structTypeNamespaces(r.property.type, structs)
+    }
+  }.toSet()
+
 // Every enum type referenced by a class's registrable members, deduplicated — including one
-// referenced only as a STRUCT COMPONENT (a shim renders inside `namespace $namespaceName`, so an
-// enum declared elsewhere needs a `using`, whether it appears directly or via a struct's own
-// component list). Unlike the Kotlin side, no lookup table is needed to resolve one:
-// RirEnumType.namespace already IS the C# namespace the enum is declared in.
+// referenced only as a STRUCT COMPONENT AT ANY NESTING DEPTH (a shim renders inside
+// `namespace $namespaceName`, so an enum declared elsewhere needs a `using`, whether it appears
+// directly or via a struct's own component list). Unlike the Kotlin side, no lookup table is
+// needed to resolve one: RirEnumType.namespace already IS the C# namespace the enum is declared in.
 private fun referencedEnumTypes(
   registrables: List<RirRegistrable>,
   structs: Map<RirTypeKey, RirStruct>,
@@ -415,7 +516,15 @@ private fun registrationFileContent(
     .map { it.namespace }
     .distinct()
     .filter { it != namespaceName }
-    .sorted()
+
+  // ADR-059: a struct declared in a DIFFERENT C# namespace than this class also needs a `using` —
+  // its unqualified `new Litter(...)` reconstruction (paramBinding/structConstructionExpr) does
+  // not resolve otherwise. referencedEnumTypes above only ever collected enum namespaces; this is
+  // the struct equivalent (a pre-existing gap this ADR makes routine — see structTypeNamespaces).
+  val structNamespaces: List<String> = referencedStructNamespaces(registrables, structs)
+    .filter { it != namespaceName }
+
+  val allNamespaces: List<String> = (enumNamespaces + structNamespaces).distinct().sorted()
 
   // ADR-054: IoGithubXxfast.KotlinNativeNuget carries NugetTrace, referenced by the
   // [ModuleInitializer] below in every generated {Type}Registration.cs.
@@ -423,7 +532,7 @@ private fun registrationFileContent(
       listOf(
         "System", "System.Runtime.CompilerServices", "System.Runtime.InteropServices",
         "IoGithubXxfast.KotlinNativeNuget",
-      ) + enumNamespaces
+      ) + allNamespaces
       ).joinToString("\n") { "    using $it;" }
 
   // ADR-054: the register export's contract — both baked identically from the same shared
@@ -653,22 +762,19 @@ private fun buildThunkMethod(
       "return ${csReturnConversion(retType, "result")};",
     )
 
-    // ADR-056: a struct-typed return crosses as void plus one out-pointer write per component,
-    // each routed through the SAME csReturnConversion(...) a top-level return of that component's
-    // type would use (Marshal.StringToCoTaskMemUTF8 for string, the byte/ushort narrowing for
-    // bool/char, the enum cast) — a raw `result.X` assignment is only correct for the
-    // pass-through primitives (int/long/float/double). struct.components and outArgs share the
-    // same order (abiOutArgs is built directly off struct.components), so zipping them pairs each
-    // component with its own out-pointer.
+    // ADR-059: a struct-typed return crosses as void plus one out-pointer write per LEAF (DFS
+    // pre-order, recursing through any struct-typed component), each routed through the SAME
+    // csReturnConversion(...) a top-level return of that leaf's type would use
+    // (Marshal.StringToCoTaskMemUTF8 for string, the byte/ushort narrowing for bool/char, the enum
+    // cast) — a raw `result.X` assignment is only correct for the pass-through primitives
+    // (int/long/float/double).
     is RirStructType -> {
       val struct = requireNotNull(structs[RirTypeKey(retType.namespace, retType.name)]) {
         "[nuget] struct ${retType.namespace}.${retType.name} is referenced as a return type but " +
             "not declared in reverse-ir.json"
       }
       listOf("${csNativeType(retType)} result = $callExpr;") +
-          struct.components.zip(outArgs).map { (c, arg) ->
-            "*${arg.name} = ${csReturnConversion(c.type, "result.${c.readName}")};"
-          }
+          structOutWrites(struct, outArgs.iterator(), "result", structs)
     }
 
     is RirPrimitiveType -> when (retType.name) {
@@ -738,9 +844,7 @@ private fun buildPropertyGetterThunkMethod(
             "declared in reverse-ir.json"
       }
       listOf("${csNativeType(type)} result = $getExpr;") +
-          struct.components.zip(outArgs).map { (c, arg) ->
-            "*${arg.name} = ${csReturnConversion(c.type, "result.${c.readName}")};"
-          }
+          structOutWrites(struct, outArgs.iterator(), "result", structs)
     }
 
     // ADR-053: same nullable-local treatment as buildThunkMethod's return handling above.
@@ -885,15 +989,24 @@ private fun structRegistrationFileContent(
     .map { it.namespace }
     .distinct()
     .filter { it != namespaceName }
-    .sorted()
-  // Also import enums used as the struct's own components (receiver reconstruction).
+  // Also import enums used as the struct's OWN components (receiver reconstruction), at any
+  // nesting depth — structEnumComponents recurses through a struct-typed component's own
+  // components (e.g. Litter's Basket: Extent has no enum, but Mother: Profile has Mood: CatMood).
   val componentEnumNamespaces: List<String> = struct.components
-    .mapNotNull { it.type as? RirEnumType }
+    .flatMap { c -> listOfNotNull(c.type as? RirEnumType) + structEnumComponents(c.type, structs) }
     .map { it.namespace }
     .distinct()
     .filter { it != namespaceName }
+  // ADR-059: the struct equivalent of componentEnumNamespaces above — a struct-typed component (or
+  // a registrable method/property referencing another struct) declared in a DIFFERENT C#
+  // namespace than this one needs a `using` too, for the same reason registrationFileContent's
+  // structNamespaces does.
+  val structNamespaces: List<String> = (
+      referencedStructNamespaces(registrables, structs) +
+          struct.components.flatMap { c -> structTypeNamespaces(c.type, structs) }
+      ).filter { it != namespaceName }
   val allEnumNamespaces: List<String> =
-    (enumNamespaces + componentEnumNamespaces).distinct().sorted()
+    (enumNamespaces + componentEnumNamespaces + structNamespaces).distinct().sorted()
   val usings: String = (
       listOf("System", "System.Runtime.CompilerServices", "System.Runtime.InteropServices") +
           allEnumNamespaces
@@ -918,7 +1031,10 @@ private fun structRegistrationFileContent(
     when (r) {
       is RirRegistrable.Ctor -> {
         val inTypes: List<String> = abiArgs(r.ctor.parameters, structs).map { csAbiType(it.type) }
-        val outTypes: List<String> = struct.components.map { "${csAbiType(it.type)}*" }
+        // ADR-059: this struct's OWN out-pointer leaves, recursively flattened — a RirStructType
+        // wrapping this exact namespace/name always resolves back to [struct] in the structs map.
+        val outTypes: List<String> = abiOutArgs(RirStructType(namespaceName, struct.name), structs)
+          .map { "${csAbiType(it.type)}*" }
         val types: String = (inTypes + outTypes + "void").joinToString(", ")
         "(IntPtr)(delegate* unmanaged[Cdecl]<$types>)" +
             "(&Ctor__${r.ctor.bridgeId()}_Thunk)"
@@ -926,7 +1042,7 @@ private fun structRegistrationFileContent(
 
       is RirRegistrable.Method -> {
         val receiverTypes: List<String> =
-          if (!r.method.isStatic) structReceiverAbiArgs(struct).map { csAbiType(it.type) }
+          if (!r.method.isStatic) structReceiverAbiArgs(struct, structs).map { csAbiType(it.type) }
           else emptyList()
         val inTypes: List<String> =
           abiArgs(r.method.parameters, structs).map { csAbiType(it.type) }
@@ -942,7 +1058,7 @@ private fun structRegistrationFileContent(
 
       is RirRegistrable.PropertyGetter -> {
         val receiverTypes: List<String> =
-          structReceiverAbiArgs(struct).map { csAbiType(it.type) }
+          structReceiverAbiArgs(struct, structs).map { csAbiType(it.type) }
         val outTypes: List<String> =
           abiOutArgs(r.property.type, structs).map { "${csAbiType(it.type)}*" }
         val retType: String = csAbiType(abiReturnType(r.property.type, structs))
@@ -959,7 +1075,7 @@ private fun structRegistrationFileContent(
   }
   val thunks: String = registrables.joinToString("\n\n") { r ->
     when (r) {
-      is RirRegistrable.Ctor -> buildStructCtorThunkMethod(struct, r.ctor, structs)
+      is RirRegistrable.Ctor -> buildStructCtorThunkMethod(struct, r.ctor, structs, namespaceName)
       is RirRegistrable.Method -> buildStructMethodThunk(struct, r.method, structs)
       is RirRegistrable.PropertyGetter ->
         buildStructPropertyGetterThunk(struct, r.property, structs)
@@ -1002,12 +1118,13 @@ private fun structRegistrationFileContent(
 // ADR-058: routes through the SAME structConstruction(...) helper as paramBinding, so a struct
 // member's receiver reconstructs with the same syntax (constructor call or object initializer) a
 // struct-typed parameter of that struct would use.
-private fun structReceiverReconstruction(struct: RirStruct): String {
-  val args: List<String> = struct.components.map { c ->
-    paramConversion(RirParameter(c.readName, c.type))
-  }
-  return structConstruction(struct, args)
-}
+// ADR-059: recursive — the receiver's own components are reached through structConstructionExpr
+// with an EMPTY path prefix (an unprefixed struct receiver's ABI names are the bare `_`-joined
+// readName path, matching structReceiverAbiArgs).
+private fun structReceiverReconstruction(
+  struct: RirStruct,
+  structs: Map<RirTypeKey, RirStruct>,
+): String = structConstructionExpr(struct, structs, pathPrefix = emptyList())
 
 private fun buildStructMethodThunk(
   struct: RirStruct,
@@ -1016,7 +1133,7 @@ private fun buildStructMethodThunk(
 ): String {
   val thunkName: String = "${method.name}${method.bridgeSuffix()}_Thunk"
   val receiverParams: List<String> = if (!method.isStatic) {
-    structReceiverAbiArgs(struct).map { arg ->
+    structReceiverAbiArgs(struct, structs).map { arg ->
       "${csAbiType(arg.type)} ${thunkParamName(RirParameter(arg.name, arg.type))}"
     }
   } else {
@@ -1040,7 +1157,7 @@ private fun buildStructMethodThunk(
   val callExpr: String = if (method.isStatic) {
     "${struct.name}.${method.name}($callArgs)"
   } else {
-    "${structReceiverReconstruction(struct)}.${method.name}($callArgs)"
+    "${structReceiverReconstruction(struct, structs)}.${method.name}($callArgs)"
   }
 
   val callBodyLines: List<String> = when (val retType: RirTypeRef = method.returnType) {
@@ -1062,9 +1179,7 @@ private fun buildStructMethodThunk(
               "type but not declared in reverse-ir.json"
         }
       listOf("${csNativeType(retType)} result = $callExpr;") +
-          retStruct.components.zip(outArgs).map { (c, arg) ->
-            "*${arg.name} = ${csReturnConversion(c.type, "result.${c.readName}")};"
-          }
+          structOutWrites(retStruct, outArgs.iterator(), "result", structs)
     }
 
     is RirPrimitiveType -> when (retType.name) {
@@ -1107,7 +1222,7 @@ private fun buildStructPropertyGetterThunk(
   structs: Map<RirTypeKey, RirStruct>,
 ): String {
   val thunkName: String = "${property.name}_Get_Thunk"
-  val receiverParams: List<String> = structReceiverAbiArgs(struct).map { arg ->
+  val receiverParams: List<String> = structReceiverAbiArgs(struct, structs).map { arg ->
     "${csAbiType(arg.type)} ${thunkParamName(RirParameter(arg.name, arg.type))}"
   }
   val outArgs: List<AbiArg> = abiOutArgs(property.type, structs)
@@ -1116,7 +1231,7 @@ private fun buildStructPropertyGetterThunk(
   val paramList: String = (receiverParams + outParamDecls).joinToString(", ")
   val retAbiType: String = csAbiType(abiRetType)
   val needsUnsafe: Boolean = outArgs.isNotEmpty()
-  val getExpr: String = "${structReceiverReconstruction(struct)}.${property.name}"
+  val getExpr: String = "${structReceiverReconstruction(struct, structs)}.${property.name}"
 
   val bodyLines: List<String> = when (val type: RirTypeRef = property.type) {
     is RirVoidType -> error("[nuget] a property cannot have void type")
@@ -1137,9 +1252,7 @@ private fun buildStructPropertyGetterThunk(
               "but not declared in reverse-ir.json"
         }
       listOf("${csNativeType(type)} result = $getExpr;") +
-          retStruct.components.zip(outArgs).map { (c, arg) ->
-            "*${arg.name} = ${csReturnConversion(c.type, "result.${c.readName}")};"
-          }
+          structOutWrites(retStruct, outArgs.iterator(), "result", structs)
     }
 
     is RirPrimitiveType -> when (type.name) {
@@ -1179,22 +1292,21 @@ private fun buildStructCtorThunkMethod(
   struct: RirStruct,
   ctor: RirConstructor,
   structs: Map<RirTypeKey, RirStruct>,
+  namespaceName: String,
 ): String {
   val inArgs: List<AbiArg> = abiArgs(ctor.parameters, structs)
   val inParams: List<String> = inArgs.map { arg ->
     val p: RirParameter = RirParameter(arg.name, arg.type)
     "${csAbiType(arg.type)} ${thunkParamName(p)}"
   }
-  val outParams: List<String> = struct.components.map { component ->
-    "${csAbiType(component.type)}* out${component.readName}"
-  }
+  // ADR-059: this struct's OWN out-pointer leaves, recursively flattened — a RirStructType
+  // wrapping this exact namespace/name always resolves back to [struct] in the structs map.
+  val outArgs: List<AbiArg> = abiOutArgs(RirStructType(namespaceName, struct.name), structs)
+  val outParams: List<String> = outArgs.map { arg -> "${csAbiType(arg.type)}* ${arg.name}" }
   val bindings: List<ParamBinding> = ctor.parameters.map { paramBinding(it, structs) }
   val declarations: List<String> = bindings.flatMap { it.declarationLines }
   val args: String = bindings.joinToString(", ") { it.expression }
-  val writes: List<String> = struct.components.map { component ->
-    "*out${component.readName} = " +
-        csReturnConversion(component.type, "result.${component.readName}") + ";"
-  }
+  val writes: List<String> = structOutWrites(struct, outArgs.iterator(), "result", structs)
   val body: String = (declarations + "var result = new ${struct.name}($args);" + writes)
     .joinToString("\n") { "            $it" }
   return """

@@ -201,6 +201,8 @@ nuget {
         alias("Sample.Overloads", "sample.overloads")
         include("Sample.Structs")
         alias("Sample.Structs", "sample.structs")
+        include("Sample.Nested")
+        alias("Sample.Nested", "sample.nested")
       }
     }
   }

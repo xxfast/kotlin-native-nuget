@@ -3,7 +3,9 @@
 A bridgeable C# `struct` becomes an immutable Kotlin `data class`. No struct ever crosses the C ABI
 itself: a struct-typed parameter expands into one ABI argument per component, and a struct-typed
 return expands into `void` plus one out-pointer per component. There is no handle, no `close()`, no
-`Cleaner`, and equality is structural.
+`Cleaner`, and equality is structural. This holds recursively: a component may itself be a struct,
+at any depth, flattened onto the wire the same way (see [Nested struct
+components](#nested-struct-components)).
 
 There are two ways a struct qualifies, tried in order:
 
@@ -28,8 +30,8 @@ when the struct has no alternate constructors.
 | C# | Kotlin |
 |---|---|
 | a bridgeable struct (see [Which structs bind](#which-structs-bind) below) | immutable `data class`, one `val` per component |
-| struct-typed parameter | one ABI argument per component |
-| struct-typed return | thunk return becomes `void`; one out-pointer argument per component |
+| struct-typed parameter | one ABI argument per **leaf** component; a component that is itself a struct flattens in place, recursively (see [Nested struct components](#nested-struct-components)) |
+| struct-typed return | thunk return becomes `void`; one out-pointer argument per leaf component |
 | struct-typed property getter | as a return: out-pointers |
 | struct-typed property setter | as a parameter: decomposed arguments |
 | alternate public constructor (Shape A only) | Kotlin secondary constructor; one registration slot and one out-pointer per state component |
@@ -602,6 +604,217 @@ fun profileWithMood(
 fun profileRestingLabel(tag: String): String = Profile.resting(tag).label
 ```
 
+## Nested struct components
+
+A struct-typed component may itself be a struct, at any depth. The wire flattens the whole
+component tree recursively, depth-first, pre-order: every ABI argument is a leaf (a primitive,
+`string`, or bound enum), and a leaf's ABI name is the path to it, joined with `_`. The Kotlin
+surface stays nested: the generated `data class` for the outer struct declares one `val` per
+component, and a struct-typed component's own type is its own generated `data class`, never the
+flattened leaves. C# reconstruction is recursive too, and composes with no rules of its own: each
+struct rebuilds itself with its own shape (Shape A: a constructor call, Shape B: an object
+initializer), nested inside whichever shape the containing struct uses. A-in-A, B-in-A, A-in-B, and
+B-in-B all fall out of the same recursive call.
+
+`sample-dependency/Litter.cs` nests a Shape A struct (`Profile`, the full string/bool/char/enum
+vocabulary) and a Shape B struct (`Extent`, plain ints) inside one Shape A outer struct:
+
+```C#
+// sample-dependency/Litter.cs (real source)
+public readonly struct Litter
+{
+    public Litter(Profile mother, Extent basket, int count, CatMood mood)
+    {
+        Mother = mother; Basket = basket; Count = count; Mood = mood;
+    }
+
+    public Profile Mother { get; }   // nested Shape A, converted components
+    public Extent Basket { get; }    // nested Shape B, direct components
+    public int Count { get; }
+    public CatMood Mood { get; }
+
+    public string Summary => $"{Mother.Tag}x{Count}@{Basket.Width}x{Basket.Height}/{Mood}";
+
+    public Litter Grow(int by) =>
+        new Litter(Mother, new Extent { Width = Basket.Width + by, Height = Basket.Height + by },
+                   Count + by, Mood);
+}
+```
+
+The generated Kotlin surface keeps the nesting (`build/nuget-interop/kotlin/nativeMain/sample/structs/Litter.kt`,
+real output). `mother` is a `Profile`, not eight separate fields:
+
+```kotlin
+internal data class Litter(
+  val mother: Profile,
+  val basket: Extent,
+  val count: Int,
+  val mood: CatMood,
+)
+```
+
+The wire is flat. `grow`'s `CFunction` type (`build/nuget-interop/kotlin/nativeMain/sample/structs/LittersBindings.kt`,
+real output) takes the 8 leaves of `Litter` (`Mother.{Tag,Active,Grade,Mood}`, `Basket.{Width,Height}`,
+`Count`, `Mood`), then `by`, then 8 out-pointers:
+
+```kotlin
+internal var grow__9f37803769e29e1e2ab56290d2857a11Fn: CPointer<CFunction<(COpaquePointer?, Boolean, UShort, Int, Int, Int, Int, Int, Int, CPointer<COpaquePointerVar>, CPointer<UByteVar>, CPointer<UShortVar>, CPointer<IntVar>, CPointer<IntVar>, CPointer<IntVar>, CPointer<IntVar>, CPointer<IntVar>) -> Unit>>? = null
+```
+
+The stub flattens a path expression per leaf on the way out (`l.mother.tag.cstr.ptr`, never a raw
+`l.mother`) and reassembles a nested constructor expression on the way in
+(`build/nuget-interop/kotlin/nativeMain/sample/structs/Litters.kt`, real output, trimmed):
+
+```kotlin
+fun grow(l: Litter, by: Int): Litter = memScoped {
+  val fn = requireNotNull(LittersBindings.grow__9f37803769e29e1e2ab56290d2857a11Fn) { /* ... */ }
+  val outMother_Tag = alloc<COpaquePointerVar>()
+  // ... one alloc per leaf ...
+  fn.invoke(l.mother.tag.cstr.ptr, l.mother.active, l.mother.grade.code.toUShort(), l.mother.mood.ordinal, l.basket.width, l.basket.height, l.count, l.mood.ordinal, by, outMother_Tag.ptr, /* ... */)
+  // ...
+  Litter(Profile(outMother_TagResult, outMother_Active.value.toInt() != 0, /* ... */), Extent(outBasket_Width.value, outBasket_Height.value), outCount.value, nugetEnumEntry(CatMood.entries, outMood.value, "CatMood"))
+}
+```
+
+C# reconstructs the same tree, one call per struct, recursively
+(`build/nuget-interop/csharp/LittersRegistration.cs`, real output):
+
+```C#
+private static unsafe void Grow__9f37803769e29e1e2ab56290d2857a11_Thunk(IntPtr l_Mother_TagPtr, byte l_Mother_Active, ushort l_Mother_Grade, int l_Mother_Mood, int l_Basket_Width, int l_Basket_Height, int l_Count, int l_Mood, int by, IntPtr* outMother_Tag, byte* outMother_Active, ushort* outMother_Grade, int* outMother_Mood, int* outBasket_Width, int* outBasket_Height, int* outCount, int* outMood)
+{
+    Litter result = Litters.Grow(new Litter(new Profile(Marshal.PtrToStringUTF8(l_Mother_TagPtr)!, l_Mother_Active != 0, (char)l_Mother_Grade, (CatMood)l_Mother_Mood), new Extent { Width = l_Basket_Width, Height = l_Basket_Height }, l_Count, (CatMood)l_Mood), by);
+    *outMother_Tag = Marshal.StringToCoTaskMemUTF8(result.Mother.Tag);
+    *outMother_Active = result.Mother.Active ? (byte)1 : (byte)0;
+    *outMother_Grade = (ushort)result.Mother.Grade;
+    *outMother_Mood = (int)result.Mother.Mood;
+    *outBasket_Width = result.Basket.Width;
+    *outBasket_Height = result.Basket.Height;
+    *outCount = result.Count;
+    *outMood = (int)result.Mood;
+}
+```
+
+`new Litter(new Profile(...), new Extent { ... }, ...)` is one expression: the outer's Shape A
+constructor call, taking a nested Shape A constructor call and a nested Shape B object initializer
+as two of its arguments. Read-back uses path expressions (`result.Mother.Tag`, not `result.Tag`).
+
+### Depth, and across a package boundary
+
+Nesting itself has no depth limit (the real limit is arity, below). `sample-dependency/Nursery.cs`
+nests `Litter` inside `Nursery` (depth 2: `Nursery -> Litter -> Profile -> string`), declared in a
+**different C# namespace** than `Litter`'s own, so the generated Kotlin has to import across a
+package boundary and the generated C# has to `using` a namespace it would not otherwise reference:
+
+```C#
+// sample-dependency/Nursery.cs (real source)
+namespace Sample.Nested;
+
+public readonly struct Nursery
+{
+    public Nursery(Litter litter, int room) { Litter = litter; Room = room; }
+    public Litter Litter { get; }
+    public int Room { get; }
+}
+```
+
+The generated `Nursery.kt` (package `sample.nested`) imports the nested struct's own package
+(`build/nuget-interop/kotlin/nativeMain/sample/nested/Nursery.kt`, real output):
+
+```kotlin
+package sample.nested
+
+import sample.enums.CatMood
+import sample.structs.Litter
+
+internal data class Nursery(
+  val litter: Litter,
+  val room: Int,
+)
+```
+
+and the generated shim adds `using Sample.Structs;` alongside its own namespace, then flattens the
+whole depth-2 path (`n_Litter_Mother_Tag`, `n_Litter_Basket_Width`, ...)
+(`build/nuget-interop/csharp/NurseriesRegistration.cs`, real output, trimmed):
+
+```C#
+namespace Sample.Nested
+{
+    using Sample.Enums;
+    using Sample.Structs;
+
+    private static unsafe void Rehome__7030230e3e73ec968cf53164b5fcc5be_Thunk(IntPtr n_Litter_Mother_TagPtr, byte n_Litter_Mother_Active, ushort n_Litter_Mother_Grade, int n_Litter_Mother_Mood, int n_Litter_Basket_Width, int n_Litter_Basket_Height, int n_Litter_Count, int n_Litter_Mood, int n_Room, IntPtr* outLitter_Mother_Tag, byte* outLitter_Mother_Active, ushort* outLitter_Mother_Grade, int* outLitter_Mother_Mood, int* outLitter_Basket_Width, int* outLitter_Basket_Height, int* outLitter_Count, int* outLitter_Mood, int* outRoom)
+    {
+        Nursery result = Nurseries.Rehome(new Nursery(new Litter(new Profile(Marshal.PtrToStringUTF8(n_Litter_Mother_TagPtr)!, n_Litter_Mother_Active != 0, (char)n_Litter_Mother_Grade, (CatMood)n_Litter_Mother_Mood), new Extent { Width = n_Litter_Basket_Width, Height = n_Litter_Basket_Height }, n_Litter_Count, (CatMood)n_Litter_Mood), n_Room));
+        // ...
+    }
+}
+```
+
+### The 22-argument ceiling
+
+Flattening multiplies ABI arity, and `kotlinx.cinterop`'s `CPointer<CFunction<...>>.invoke` tops out
+at 22 arguments (a Kotlin/Native implementation limit, not a C ABI one). A member whose flattened
+arity (receiver, if any, plus parameters plus out-pointers, all counted at the leaf) exceeds 22 is
+**skipped**, not generated, with a `skipped_abi_arity_limit` diagnostic naming the member and the
+count; the rest of the type still binds.
+
+`sample-dependency/Litter.cs`'s `Litters.Merge(Litter, Litter)` pins this deliberately: two `Litter`
+parameters (8 leaves each) plus a `Litter` return (8 out-pointers) is 24 arguments, four over the
+ceiling. Real build-log warning:
+
+```
+w: [nuget:SampleDependency] Skipping Sample.Structs.Litters.Merge(...): flattened ABI arity (24)
+exceeds the 22-argument CFunction.invoke ceiling verified for Kotlin/Native (ADR-059 Constraint 3).
+Shrink one of the nested structs in this member's signature (fewer components, or less nesting), or
+split it into multiple members with fewer struct parameters.
+```
+
+`Merge` does not appear in the generated `Litters.kt` or `LittersBindings.kt`; `Compare`, `Describe`,
+and `Grow` (17 arguments) do.
+
+### A skipped nested component names the path
+
+If a nested component itself fails to bind, the whole outer struct is skipped, and its
+`skipped_unsupported_struct` diagnostic names the component **path** and the inner reason, not one
+of the outer struct's own shape rules:
+
+```C#
+// sample-dependency/UnsupportedStructs.cs (real source)
+public readonly struct Kennel
+{
+    public Kennel(Manual manual, int n) { Manual = manual; N = n; }
+    public Manual Manual { get; }
+    public int N { get; }
+}
+```
+
+Real diagnostic from `sample-library/build/nuget-interop/reverse-ir.json` (trimmed): when a struct
+fails **both** shapes, the reason carries both attempts, not just the last one:
+
+```json
+{
+  "kind": "skipped_unsupported_struct",
+  "typeName": "Kennel",
+  "reason": "Shape A: property `Manual`: struct `Sample.Structs.Manual` is not bridgeable: property `A` is settable but is not an auto-property (no compiler-generated backing field), so the struct's stored state cannot be proven covered; Shape B: auto-property `Manual` has no public setter and there is no constructor to set it"
+}
+```
+
+### Equality composes
+
+Deep structural equality falls out of nesting `data class`es inside each other with no extra work,
+and `copy()` composes the same way a C# `with` expression would:
+
+```kotlin
+// sample-library/.../sample/structs/NestedSample.kt (real source)
+fun nestedValueEquality(): Boolean {
+  val a = Litter(Profile("o", true, 'A', CatMood.CALM), Extent(1, 2), 3, CatMood.CALM)
+  return a == a.copy() &&
+      a.mother == a.copy().mother &&
+      a != a.copy(count = 4) &&
+      a != a.copy(mother = a.mother.copy(tag = "p"))
+}
+```
+
 ## Value semantics
 
 The generated `data class` gives value equality for free, and it holds across independent bridge
@@ -710,7 +923,8 @@ non-`ref struct`, and not an enum. It is then classified in this order:
    include fields, so an ordinary `struct { public int A; public int B; public S(int a, int b) {...} }`
    binds as Shape A instead of colliding with a generated `data class` primary constructor.)
 3. Every component type is in the v1 vocabulary: primitives (including `bool` and `char`), `string`,
-   and bound enums.
+   bound enums, or another bridgeable struct (flattened recursively; see [Nested struct
+   components](#nested-struct-components)).
 4. Its state constructor covers all stored state: the number of non-static instance fields equals
    the number of state-constructor parameters.
 
@@ -796,13 +1010,18 @@ generates no Kotlin type. Real diagnostics, trimmed, from
   alone cannot prove that a hand-written setter writes the field it appears to.
 - **Shape A constructor-parameter nullability** is not decoded (a pre-existing gap; Shape B's own
   components *are* nullability-decoded, since a Shape B struct's `default(T)` reachability makes a
-  reference-typed component's nullness observable).
+  reference-typed component's nullness observable). Nesting widens this: a Shape A outer with a
+  Shape B inner mixes nullability-decoded components (the inner's) with undecoded ones (the outer's)
+  in one flat argument list.
 - **Void instance methods**, **setters**, **operators**, and the synthesized
   `Equals`/`GetHashCode`/`ToString`/`Deconstruct` surface on a struct are not bound (see
   [Struct methods and computed properties](#struct-methods-and-computed-properties)).
-- **Nested struct components** (a struct field inside a struct) are not flattened.
+- **Raising the 22-argument ceiling** (see [The 22-argument ceiling](#the-22-argument-ceiling)) is
+  not built: a member over the ceiling is skipped, not packed into a scratch buffer.
+- **`Nullable<T>` components**, including a nullable nested struct, are not supported.
 - **Class-typed (handle) components** inside a struct are not supported: a `GCHandle` does not compose
-  with an immutable value copy.
+  with an immutable value copy. Unaffected by nesting: a handle component would be a leaf on the
+  wire, not something the recursion descends through.
 - **Generic structs** and **structs as collection elements** are not supported.
 
 Tracked in [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md) Phase 9
@@ -820,6 +1039,7 @@ and Phase 10.
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/056-csharp-structs-in-kotlin.md">ADR-056: C# structs (value types) in Kotlin</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/057-csharp-overload-sets-in-kotlin.md">ADR-057: C# overload sets in Kotlin</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/058-csharp-shape-b-structs-in-kotlin.md">ADR-058: C# Shape B structs in Kotlin</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/059-nested-struct-components-in-kotlin.md">ADR-059: Nested struct components in Kotlin</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/014-value-class-mapping.md">ADR-014: Value class mapping</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/054-reverse-bridge-registration-observability.md">ADR-054: Reverse-bridge registration observability</a>
     </category>

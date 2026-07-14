@@ -50,31 +50,78 @@ private fun resolveStruct(type: RirTypeRef, structs: Map<RirTypeKey, RirStruct>)
     }
   }
 
-// ADR-056, the anti-drift requirement: expands a parameter list into ABI-level arguments. A
-// struct-typed parameter expands into one argument per component (ABI name "{param}_{Component}",
-// Component being the struct's readName); every other parameter passes through unchanged. BOTH
-// generators (NugetGenerateBindingsTask's Kotlin CFunction types and NugetGenerateShimsTask's C#
-// thunk signatures) MUST call this shared function — not re-derive the expansion — or the
-// registration slots still line up while the arguments inside a slot silently misalign, which is
-// memory corruption with no error.
-fun abiArgs(parameters: List<RirParameter>, structs: Map<RirTypeKey, RirStruct>): List<AbiArg> =
-  parameters.flatMap { p ->
-    val struct: RirStruct? = resolveStruct(p.type, structs)
-    if (struct == null) listOf(AbiArg(p.name, p.type, isOutPointer = false))
-    else struct.components.map { c ->
-      AbiArg("${p.name}_${c.readName}", c.type, isOutPointer = false)
+// ADR-059 Decision 1a: the recursive depth-first, pre-order leaf walk every ABI-expansion function
+// below is built from. For a non-struct [type], the single leaf is [type] itself, at the EMPTY
+// path (the caller supplies whatever prefix/join convention it needs — this function only ever
+// returns path SEGMENTS, never a joined ABI name). For a struct-typed [type], each component is
+// visited left to right and, when a component is ITSELF a struct, its own leaves are spliced in at
+// that point (the component's own readName prepended to every one of its leaves' paths) before
+// moving on to the next sibling component — exactly ADR-059's own "walk the member's parameters
+// left to right..." rule. Depth is not a special case: a non-struct component IS a struct with one
+// implicit leaf at the empty sub-path, so a struct with only scalar components (depth 1, the
+// ADR-056 case) produces exactly the same leaves ADR-056 already produced, just wrapped in a list
+// of size-1 paths instead of bare names — see abiArgs'/abiOutArgs' depth-1 regression tests.
+private fun flattenLeaves(
+  type: RirTypeRef,
+  structs: Map<RirTypeKey, RirStruct>,
+): List<Pair<List<String>, RirTypeRef>> {
+  val struct: RirStruct? = resolveStruct(type, structs)
+  return if (struct == null) listOf(emptyList<String>() to type)
+  else struct.components.flatMap { c ->
+    flattenLeaves(c.type, structs).map { (subPath, leafType) ->
+      (listOf(c.readName) + subPath) to leafType
     }
   }
+}
 
-// ADR-056: a struct-typed return expands into one out-pointer ABI argument per component (ABI
-// name "out{Component}"), appended after the real parameters. A non-struct return yields no
-// out-arguments at all — see abiReturnType, which turns the thunk's own return into void whenever
-// this list is non-empty.
-fun abiOutArgs(returnType: RirTypeRef, structs: Map<RirTypeKey, RirStruct>): List<AbiArg> {
-  val struct: RirStruct? = resolveStruct(returnType, structs)
-  return struct?.components.orEmpty().map { c ->
-    AbiArg("out${c.readName}", c.type, isOutPointer = true)
+// ADR-059 "ABI-name collisions must fail generation": `_` is a legal C# identifier character, so
+// the `_`-joined path join is not injective — two distinct components can flatten to the same ABI
+// name (e.g. a `Tag` struct component and a sibling `Tag_Text` scalar component both produce
+// `p_Tag_Text`). Both generators would then each emit a duplicate parameter name (a C# compile
+// error at best, a silently swapped argument at worst), so every one of abiArgs/abiOutArgs/
+// structReceiverAbiArgs asserts distinctness before returning, naming every colliding ABI name and
+// how many components produced it.
+private fun requireDistinctAbiNames(args: List<AbiArg>): List<AbiArg> {
+  val collisions: Map<String, List<AbiArg>> = args.groupBy { it.name }.filterValues { it.size > 1 }
+  check(collisions.isEmpty()) {
+    "[nuget] ABI name collision: the '_'-joined component path is not injective for " +
+        collisions.entries.joinToString("; ") { (name, dupes) ->
+          "'$name' (${dupes.size} components)"
+        } +
+        " — rename the colliding component(s)."
   }
+  return args
+}
+
+// ADR-059 Decision 1a, the anti-drift requirement (extends ADR-056): expands a parameter list into
+// ABI-level LEAF arguments, recursively. A struct-typed parameter expands into one argument per
+// LEAF of its component tree, depth-first pre-order (ABI name is the parameter's own name, then
+// each level's readName, all `_`-joined — "p_Mother_Tag" at depth 2, "p_X" at depth 1, unchanged);
+// every other parameter passes through unchanged. BOTH generators (NugetGenerateBindingsTask's
+// Kotlin CFunction types and NugetGenerateShimsTask's C# thunk signatures) MUST call this shared
+// function — not re-derive the expansion — or the registration slots still line up while the
+// arguments inside a slot silently misalign, which is memory corruption with no error.
+fun abiArgs(parameters: List<RirParameter>, structs: Map<RirTypeKey, RirStruct>): List<AbiArg> =
+  requireDistinctAbiNames(
+    parameters.flatMap { p ->
+      flattenLeaves(p.type, structs).map { (path, leafType) ->
+        AbiArg((listOf(p.name) + path).joinToString("_"), leafType, isOutPointer = false)
+      }
+    },
+  )
+
+// ADR-059 Decision 1a: a struct-typed return expands into one out-pointer ABI argument per LEAF of
+// its component tree, depth-first pre-order (ABI name "out" + the `_`-joined readName path —
+// "outMother_Tag" at depth 2, "outX" at depth 1, unchanged), appended after the real parameters. A
+// non-struct return yields no out-arguments at all — see abiReturnType, which turns the thunk's
+// own return into void whenever this list is non-empty.
+fun abiOutArgs(returnType: RirTypeRef, structs: Map<RirTypeKey, RirStruct>): List<AbiArg> {
+  if (resolveStruct(returnType, structs) == null) return emptyList()
+  return requireDistinctAbiNames(
+    flattenLeaves(returnType, structs).map { (path, leafType) ->
+      AbiArg("out" + path.joinToString("_"), leafType, isOutPointer = true)
+    },
+  )
 }
 
 // ADR-056: the ABI-level return type — RirVoidType when the real return is a struct (its
@@ -124,12 +171,14 @@ private val SKIPPED_STRUCT_METHOD_NAMES: Set<String> = setOf(
 private fun isSkippedStructMethod(method: RirMethod): Boolean =
   method.name in SKIPPED_STRUCT_METHOD_NAMES || method.name.startsWith("op_")
 
-// ADR-056 deferred (struct methods + computed properties): shared ordered registration list for
-// a struct: alternate ctors → static methods → instance methods → get-only computed property
-// getters. Both generators MUST consume this function so slot indices never drift. State ctor is
-// never a slot. Void-returning instance methods, setters, component auto-properties, and the
-// Object/op_* skip list are excluded.
-fun bridgeableStructRegistrables(
+// ADR-056 deferred (struct methods + computed properties): the CANDIDATE ordered registration
+// list for a struct — alternate ctors → static methods → instance methods → get-only computed
+// property getters — BEFORE the ADR-059 Decision 5a arity-ceiling filter. Kept private and split
+// out of bridgeableStructRegistrables so structArityLimitDiagnostics can compute a diagnostic for
+// exactly the same candidate set bridgeableStructRegistrables filters, without either function
+// re-deriving the other's list (the anti-drift rule this file exists to enforce, applied to
+// itself).
+private fun bridgeableStructRegistrablesCandidates(
   struct: RirStruct,
   boundHandleTypes: Set<RirTypeKey>,
 ): List<RirRegistrable> {
@@ -161,17 +210,66 @@ fun bridgeableStructRegistrables(
     .sortedBy { it.name }
     .map { RirRegistrable.PropertyGetter(it) }
 
-  val result: List<RirRegistrable> =
-    constructors + staticMethods + instanceMethods + computedGetters
+  return constructors + staticMethods + instanceMethods + computedGetters
+}
+
+// ADR-059 Decision 5a: named diagnostics for every candidate struct registrable whose flattened
+// ABI arity (its own flattened receiver leaves + flattened parameters + flattened out-pointers)
+// exceeds the 22-argument ceiling. `structs` defaults to empty for pre-ADR-059 callers that never
+// pass a struct-typed component (a struct's own arity is then just its declared component count,
+// unchanged from ADR-056/058).
+fun structArityLimitDiagnostics(
+  struct: RirStruct,
+  boundHandleTypes: Set<RirTypeKey>,
+  structs: Map<RirTypeKey, RirStruct> = emptyMap(),
+): List<RirDiagnostic> {
+  val ownArity: Int = structReceiverAbiArgs(struct, structs).size
+  return bridgeableStructRegistrablesCandidates(struct, boundHandleTypes).mapNotNull { r ->
+    val arity: Int = r.abiArity(structs, receiverArity = ownArity, ctorOutArity = ownArity)
+    if (arity <= ABI_ARITY_CEILING) null else arityLimitDiagnostic(struct.name, r, arity)
+  }
+}
+
+// ADR-056 deferred (struct methods + computed properties): shared ordered registration list for
+// a struct: alternate ctors → static methods → instance methods → get-only computed property
+// getters. Both generators MUST consume this function so slot indices never drift. State ctor is
+// never a slot. Void-returning instance methods, setters, component auto-properties, and the
+// Object/op_* skip list are excluded.
+//
+// ADR-059 Decision 5a: a candidate whose flattened ABI arity exceeds the 22-argument ceiling is
+// skipped here — the SHARED filter, not either generator — and diagnosed via
+// structArityLimitDiagnostics (called with the same arguments so the two can never disagree).
+fun bridgeableStructRegistrables(
+  struct: RirStruct,
+  boundHandleTypes: Set<RirTypeKey>,
+  structs: Map<RirTypeKey, RirStruct> = emptyMap(),
+): List<RirRegistrable> {
+  val candidates: List<RirRegistrable> =
+    bridgeableStructRegistrablesCandidates(struct, boundHandleTypes)
+  val overLimit: Set<String> = structArityLimitDiagnostics(struct, boundHandleTypes, structs)
+    .map { it.memberSignature }
+    .toSet()
+  val result: List<RirRegistrable> = candidates.filterNot { it.identity() in overLimit }
   bridgeIds(result.map { it.identity() })
   return result
 }
 
-// ABI in-args for a struct instance member's reconstructed receiver: one scalar per component,
-// named by the component's readName (PascalCase property), so C# thunk params stay distinct from
-// ordinary method params (e.g. Mood vs mood) and from out-pointers (outX).
-fun structReceiverAbiArgs(struct: RirStruct): List<AbiArg> =
-  struct.components.map { c -> AbiArg(c.readName, c.type, isOutPointer = false) }
+// ABI in-args for a struct instance member's reconstructed receiver: one LEAF per component,
+// depth-first pre-order, named by the `_`-joined readName path (PascalCase, e.g. "Mother_Tag" at
+// depth 2, bare "X" at depth 1, unchanged) — so C# thunk params stay distinct from ordinary method
+// params (e.g. Mood vs mood) and from out-pointers (outX). `structs` defaults to empty for
+// pre-ADR-059 callers whose struct never has a struct-typed component (see flattenLeaves: a
+// non-struct component is its own single leaf regardless of the structs map's contents).
+fun structReceiverAbiArgs(
+  struct: RirStruct,
+  structs: Map<RirTypeKey, RirStruct> = emptyMap(),
+): List<AbiArg> = requireDistinctAbiNames(
+  struct.components.flatMap { c ->
+    flattenLeaves(c.type, structs).map { (subPath, leafType) ->
+      AbiArg((listOf(c.readName) + subPath).joinToString("_"), leafType, isOutPointer = false)
+    }
+  },
+)
 
 // ADR-052: a member that receives exactly one function-pointer slot on the type's
 // nuget_{ns}_{type}_register export — either the type's public instance constructor or a
@@ -349,19 +447,76 @@ private fun RirTypeRef.describe(): String = when (this) {
   is RirStructType -> "$namespace.$name"
 }
 
-// ADR-052 "shared bridgeable ordering", extended by Phase 9 line 151: the constructor pointer (if
-// any) comes FIRST, then bridgeable static methods, THEN bridgeable instance methods, THEN one
-// PropertyGetter/[PropertySetter] pair per bridgeable instance property, followed by the same
+// ADR-059 Decision 5a: the verified Kotlin/Native `CFunction.invoke` argument ceiling
+// (Constraint 3: a 23rd-argument CALL fails to resolve, "none of the following candidates is
+// applicable", though the CFunction TYPE itself is still declarable). Named rather than inlined so
+// a future Kotlin/Native release that moves the ceiling only needs one edit.
+private const val ABI_ARITY_CEILING: Int = 22
+
+// ADR-059 Decision 5a: the total flattened ABI argument count one registrable's thunk would need —
+// [receiverArity] (0 for a static member; 1 for a class instance member's single GCHandle; a
+// struct instance member's own flattened receiver-leaf count otherwise) + flattened in-parameters
+// + flattened out-pointers (struct returns only). [ctorOutArity] is used ONLY by the Ctor branch:
+// 0 for a class constructor (its return is a plain IntPtr handle, never decomposed), or a struct's
+// own flattened leaf count for a struct's alternate constructor (Decision 4a/ADR-057 Decision 6 —
+// its return IS the struct, out-pointers and all). This is exactly what CFunction.invoke's real
+// arity would be, which is what the >22 ceiling is checked against.
+private fun RirRegistrable.abiArity(
+  structs: Map<RirTypeKey, RirStruct>,
+  receiverArity: Int,
+  ctorOutArity: Int,
+): Int = when (this) {
+  is RirRegistrable.Ctor -> abiArgs(ctor.parameters, structs).size + ctorOutArity
+  is RirRegistrable.Method -> (if (!method.isStatic) receiverArity else 0) +
+      abiArgs(method.parameters, structs).size + abiOutArgs(method.returnType, structs).size
+
+  is RirRegistrable.PropertyGetter -> (if (!property.isStatic) receiverArity else 0) +
+      abiOutArgs(property.type, structs).size
+
+  is RirRegistrable.PropertySetter -> (if (!property.isStatic) receiverArity else 0) +
+      abiArgs(listOf(RirParameter("value", property.type)), structs).size
+}
+
+// ADR-059 Decision 5a: one skipped_abi_arity_limit diagnostic for [r], naming the member and the
+// arity that overshot the ceiling. [memberSignature] is set to [r]'s own identity() so both
+// bridgeableRegistrables and bridgeableStructRegistrables can match a diagnostic back to the
+// candidate it was computed for without re-deriving arity a second time.
+private fun arityLimitDiagnostic(typeName: String, r: RirRegistrable, arity: Int): RirDiagnostic {
+  val memberName: String = when (r) {
+    is RirRegistrable.Ctor -> "constructor"
+    is RirRegistrable.Method -> r.method.name
+    is RirRegistrable.PropertyGetter -> r.property.name
+    is RirRegistrable.PropertySetter -> r.property.name
+  }
+  return RirDiagnostic(
+    kind = RirDiagnosticKind.SKIPPED_ABI_ARITY_LIMIT,
+    typeName = typeName,
+    memberName = memberName,
+    memberSignature = r.identity(),
+    reason = "flattened ABI arity ($arity) exceeds the $ABI_ARITY_CEILING-argument " +
+        "CFunction.invoke ceiling verified for Kotlin/Native (ADR-059 Constraint 3)",
+    hint = "Shrink one of the nested structs in this member's signature (fewer components, or " +
+        "less nesting), or split it into multiple members with fewer struct parameters.",
+  )
+}
+
+// ADR-052 "shared bridgeable ordering", extended by Phase 9 line 151: the CANDIDATE constructor
+// pointer (if any) FIRST, then bridgeable static methods, THEN bridgeable instance methods, THEN
+// one PropertyGetter/[PropertySetter] pair per bridgeable instance property, followed by the same
 // pairs for static properties — each group in its existing reverse-ir.json declaration order,
 // groups appended (never interleaved) so already generated ctor/static slot indices never churn.
-// Both NugetGenerateBindingsTask and
-// NugetGenerateShimsTask must consume this function directly — never re-derive the combined order
-// independently, or the two sides' registration slots can silently drift out of alignment.
+// BEFORE the ADR-059 Decision 5a arity-ceiling filter — kept private and split out of
+// bridgeableRegistrables so arityLimitDiagnostics can compute a diagnostic for exactly the same
+// candidate set bridgeableRegistrables filters, without either function re-deriving the other's
+// list (the anti-drift rule this file exists to enforce, applied to itself).
 //
 // Rule 5: instance methods/properties whose Kotlin name collides with an ADR-051 wrapper member
 // (see collisionDiagnostics) are excluded here — this is the single shared place both generators'
 // output is filtered, so a skipped member never gets a registration slot on either side.
-fun bridgeableRegistrables(cls: RirClass, boundHandleTypes: Set<RirTypeKey>): List<RirRegistrable> {
+private fun bridgeableRegistrablesCandidates(
+  cls: RirClass,
+  boundHandleTypes: Set<RirTypeKey>,
+): List<RirRegistrable> {
   val collidingNames: Set<String> = collisionDiagnostics(cls).map { it.memberName }.toSet()
 
   val instanceMethods: List<RirMethod> = bridgeableInstanceMethods(cls, boundHandleTypes)
@@ -408,8 +563,45 @@ fun bridgeableRegistrables(cls: RirClass, boundHandleTypes: Set<RirTypeKey>): Li
   val sortedStaticProperties: List<RirRegistrable> = propertyRegistrables(
     if (hasManagedIdentity) staticProperties.sortedBy { it.name } else staticProperties,
   )
-  val result: List<RirRegistrable> = constructors + staticMethods + sortedInstanceMethods +
+  return constructors + staticMethods + sortedInstanceMethods +
       sortedInstanceProperties + sortedStaticProperties
+}
+
+// ADR-059 Decision 5a: named diagnostics for every candidate class registrable whose flattened
+// ABI arity (a 1-slot GCHandle receiver for an instance member + flattened parameters + flattened
+// out-pointers) exceeds the 22-argument ceiling. `structs` defaults to empty for pre-ADR-059
+// callers that never pass a struct-typed parameter/return.
+fun arityLimitDiagnostics(
+  cls: RirClass,
+  boundHandleTypes: Set<RirTypeKey>,
+  structs: Map<RirTypeKey, RirStruct> = emptyMap(),
+): List<RirDiagnostic> =
+  bridgeableRegistrablesCandidates(cls, boundHandleTypes).mapNotNull { r ->
+    val arity: Int = r.abiArity(structs, receiverArity = 1, ctorOutArity = 0)
+    if (arity <= ABI_ARITY_CEILING) null else arityLimitDiagnostic(cls.name, r, arity)
+  }
+
+// ADR-052 "shared bridgeable ordering", extended by Phase 9 line 151 and ADR-059 Decision 5a: the
+// constructor pointer (if any) first, then bridgeable static methods, then bridgeable instance
+// methods, then one PropertyGetter/[PropertySetter] pair per bridgeable instance property,
+// followed by the same pairs for static properties. Both NugetGenerateBindingsTask and
+// NugetGenerateShimsTask must consume this function directly — never re-derive the combined order
+// independently, or the two sides' registration slots can silently drift out of alignment.
+//
+// ADR-059 Decision 5a: a candidate whose flattened ABI arity exceeds the 22-argument ceiling is
+// skipped here — the SHARED filter, not either generator — and diagnosed via
+// arityLimitDiagnostics (called with the same arguments so the two can never disagree). If only
+// one generator dropped an over-arity member, the two sides' registration slots would silently
+// misalign — memory corruption with no error.
+fun bridgeableRegistrables(
+  cls: RirClass,
+  boundHandleTypes: Set<RirTypeKey>,
+  structs: Map<RirTypeKey, RirStruct> = emptyMap(),
+): List<RirRegistrable> {
+  val candidates: List<RirRegistrable> = bridgeableRegistrablesCandidates(cls, boundHandleTypes)
+  val overLimit: Set<String> =
+    arityLimitDiagnostics(cls, boundHandleTypes, structs).map { it.memberSignature }.toSet()
+  val result: List<RirRegistrable> = candidates.filterNot { it.identity() in overLimit }
   bridgeIds(result.map { it.identity() })
   return result
 }

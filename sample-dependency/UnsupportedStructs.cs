@@ -71,3 +71,17 @@ public struct Manual
 public struct Nothing
 {
 }
+
+/// <summary>
+/// ADVERSARIAL (ADR-059 Decision 6c): an outer struct whose nested component is itself
+/// unsupported (<see cref="Manual"/> is the existing manual-settable-property negative). The
+/// WHOLE outer struct must be skipped, and the diagnostic must name the offending component PATH
+/// and the inner reason, not one of Kennel's own shape rules. It must generate no Kotlin type and
+/// no handle wrapper.
+/// </summary>
+public readonly struct Kennel
+{
+    public Kennel(Manual manual, int n) { Manual = manual; N = n; }
+    public Manual Manual { get; }
+    public int N { get; }
+}
