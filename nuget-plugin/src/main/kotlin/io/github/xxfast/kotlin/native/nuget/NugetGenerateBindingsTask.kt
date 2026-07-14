@@ -17,6 +17,7 @@ import io.github.xxfast.kotlin.native.nuget.rir.RirProperty
 import io.github.xxfast.kotlin.native.nuget.rir.RirRegistrable
 import io.github.xxfast.kotlin.native.nuget.rir.RirStringType
 import io.github.xxfast.kotlin.native.nuget.rir.RirStruct
+import io.github.xxfast.kotlin.native.nuget.rir.RirStructShape
 import io.github.xxfast.kotlin.native.nuget.rir.RirStructType
 import io.github.xxfast.kotlin.native.nuget.rir.RirTypeKey
 import io.github.xxfast.kotlin.native.nuget.rir.RirTypeRef
@@ -600,6 +601,31 @@ private fun structFileContent(
       structConstructorHelpers(
         struct, constructors, packageId, namespaceName, structs, qualifiedTypeNames,
       )
+  // ADR-058 Decision 3's mitigation: for a Shape B struct, component order is C# FieldDef
+  // (declaration) order, which — unlike a Shape A struct's constructor-parameter order — is NOT
+  // C# public API. A package author can reorder public fields/auto-properties without it being a
+  // source-breaking C# change, and every Kotlin consumer constructing this data class
+  // POSITIONALLY silently starts meaning something else whenever the two reordered components
+  // share a type. Decision 5's contractHash fix protects the WIRE (a stale shim is caught); this
+  // KDoc is the only defence for the Kotlin consumer's SOURCE — named arguments cost nothing and
+  // sidestep the hazard entirely. Shape A's order is already public API (reordering a
+  // constructor's parameters is already a breaking C# change), so its KDoc carries no such
+  // warning.
+  val kdocBody: String = if (struct.shape == RirStructShape.CONSTRUCTOR) {
+    """
+    | * Copied by value across the bridge: equality is structural, and there is nothing to close.
+    | * Mutating this value never affects the C# side (a copy crossed the boundary); use [copy].
+    """.trimMargin()
+  } else {
+    """
+    | * Copied by value across the bridge: equality is structural, and there is nothing to close.
+    | * The C# struct's fields/properties are settable, but a Kotlin-side change can never be
+    | * observable in C# (a copy crossed the boundary), so every component is a `val`. Use [copy]
+    | * and pass the result back.
+    | *
+    | * Component order follows the C# declaration order. Prefer named arguments.
+    """.trimMargin()
+  }
   return """
     |@file:OptIn(kotlinx.cinterop.ExperimentalForeignApi::class)
     |
@@ -608,8 +634,7 @@ private fun structFileContent(
     |$importsBlock/**
     | * Kotlin value type for the C# struct `$packageId.${struct.name}`.
     | *
-    | * Copied by value across the bridge: equality is structural, and there is nothing to close.
-    | * Mutating this value never affects the C# side (a copy crossed the boundary); use [copy].
+    |$kdocBody
     | */
     |// internal (not public): consumable from anywhere else in this same Gradle module, but
     |// invisible to the forward-direction (KSP) exporter's public-API scan — this reverse-bound

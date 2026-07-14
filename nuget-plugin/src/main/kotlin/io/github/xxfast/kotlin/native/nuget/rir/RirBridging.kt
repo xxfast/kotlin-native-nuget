@@ -517,13 +517,21 @@ private fun RirRegistrable.contractSignature(structs: Map<RirTypeKey, RirStruct>
 // changes ARITY while the method signatures look unchanged — slotCount cannot see this drift
 // either (the number of methods is unchanged) — so the hash must be sensitive to the struct's own
 // component list, recursively (a component that is itself a struct would expand again).
+//
+// ADR-058 Decision 5: each component expands as "name:type", matching structContractHash's own
+// expansion of a struct's OWN components — not type only. A struct reference used to hash only
+// component TYPES, so reordering two same-typed components (e.g. Width/Height, both `int`) was
+// invisible here even though it changes every affected thunk's true ABI slot assignment. Shape B
+// makes such a reorder source-compatible in C# (an ordinary field reorder), where for Shape A it
+// was already a breaking constructor-parameter reorder — promoting a latent hole into a plausible
+// one. See RirBridgingTest's Decision 5 regression test.
 private fun RirTypeRef.signaturePart(structs: Map<RirTypeKey, RirStruct>): String = when (this) {
   is RirStructType -> {
     val struct = requireNotNull(structs[RirTypeKey(namespace, name)]) {
       "[nuget] contractHash: struct $namespace.$name referenced but not declared in reverse-ir.json"
     }
     val componentParts: String =
-      struct.components.joinToString(",") { it.type.signaturePart(structs) }
+      struct.components.joinToString(",") { "${it.name}:${it.type.signaturePart(structs)}" }
     "$namespace.$name{$componentParts}"
   }
 

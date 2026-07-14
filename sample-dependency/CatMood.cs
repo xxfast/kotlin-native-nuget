@@ -9,6 +9,7 @@ public enum CatMood
     Playful,
     Sleepy,
     Hungry,
+    Calm,
 }
 
 /// <summary>

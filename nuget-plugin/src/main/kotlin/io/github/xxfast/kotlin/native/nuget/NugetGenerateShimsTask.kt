@@ -14,6 +14,7 @@ import io.github.xxfast.kotlin.native.nuget.rir.RirProperty
 import io.github.xxfast.kotlin.native.nuget.rir.RirRegistrable
 import io.github.xxfast.kotlin.native.nuget.rir.RirStringType
 import io.github.xxfast.kotlin.native.nuget.rir.RirStruct
+import io.github.xxfast.kotlin.native.nuget.rir.RirStructShape
 import io.github.xxfast.kotlin.native.nuget.rir.RirStructType
 import io.github.xxfast.kotlin.native.nuget.rir.RirTypeKey
 import io.github.xxfast.kotlin.native.nuget.rir.RirTypeRef
@@ -299,11 +300,31 @@ private fun paramConversion(p: RirParameter): String = when (p.type) {
 // references by name; every other parameter shape keeps the existing inline paramConversion(p)
 // expression untouched — this only special-cases the one shape that needs a statement of its own.
 //
-// ADR-056: a struct-typed parameter is reconstructed via `new T(componentArgs)`, where
-// componentArgs are the SAME shared abiArgs() expansion's names (e.g. "p_X", "p_Y") — calling
-// abiArgs on a singleton list containing just this parameter yields exactly its component group,
-// byte-identical to slicing the full per-method abiArgs() call at this parameter's boundary.
+// ADR-056: a struct-typed parameter is reconstructed via structConstruction(...), where the
+// component expressions are the SAME shared abiArgs() expansion's names (e.g. "p_X", "p_Y") —
+// calling abiArgs on a singleton list containing just this parameter yields exactly its component
+// group, byte-identical to slicing the full per-method abiArgs() call at this parameter's
+// boundary.
 private data class ParamBinding(val declarationLines: List<String>, val expression: String)
+
+// ADR-058, Decision 5's "Bridge mechanism": the ONE shared reconstruction helper both
+// paramBinding (a struct-typed parameter) and structReceiverReconstruction (a struct member's
+// receiver) MUST route through, or the two sites could silently drift on which syntax a struct's
+// shape uses. Shape A (RirStructShape.CONSTRUCTOR) reconstructs with `new T(c1, c2)`; Shape B
+// (RirStructShape.INITIALIZER — no public constructor, public fields / settable auto-properties)
+// reconstructs with an object initializer, `new T { A = c1, B = c2 }`, keyed by each component's
+// readName. [componentExprs] must already be in struct.components order — both call sites derive
+// it that way (abiArgs()/structReceiverAbiArgs() both walk struct.components in declaration
+// order), so zipping them back onto struct.components here is safe.
+private fun structConstruction(struct: RirStruct, componentExprs: List<String>): String =
+  if (struct.shape == RirStructShape.CONSTRUCTOR) {
+    "new ${struct.name}(${componentExprs.joinToString(", ")})"
+  } else {
+    struct.components.zip(componentExprs)
+      .joinToString(", ", prefix = "new ${struct.name} { ", postfix = " }") { (c, e) ->
+        "${c.readName} = $e"
+      }
+  }
 
 private fun paramBinding(p: RirParameter, structs: Map<RirTypeKey, RirStruct>): ParamBinding {
   val type: RirTypeRef = p.type
@@ -317,11 +338,11 @@ private fun paramBinding(p: RirParameter, structs: Map<RirTypeKey, RirStruct>): 
     // the AbiArg back into a synthetic RirParameter reuses that logic instead of re-deriving it,
     // and guarantees the declared name matches inParamDecls above (both call thunkParamName on
     // the same (arg.name, arg.type) pair).
-    val componentArgs: String = abiArgs(listOf(p), structs)
-      .joinToString(", ") { arg -> paramConversion(RirParameter(arg.name, arg.type)) }
+    val componentArgs: List<String> = abiArgs(listOf(p), structs)
+      .map { arg -> paramConversion(RirParameter(arg.name, arg.type)) }
     return ParamBinding(
       declarationLines = emptyList(),
-      expression = "new ${struct.name}($componentArgs)",
+      expression = structConstruction(struct, componentArgs),
     )
   }
   if (type is RirObjectHandleType && type.nullable) {
@@ -978,11 +999,14 @@ private fun structRegistrationFileContent(
   """.trimMargin()
 }
 
+// ADR-058: routes through the SAME structConstruction(...) helper as paramBinding, so a struct
+// member's receiver reconstructs with the same syntax (constructor call or object initializer) a
+// struct-typed parameter of that struct would use.
 private fun structReceiverReconstruction(struct: RirStruct): String {
-  val args: String = struct.components.joinToString(", ") { c ->
+  val args: List<String> = struct.components.map { c ->
     paramConversion(RirParameter(c.readName, c.type))
   }
-  return "new ${struct.name}($args)"
+  return structConstruction(struct, args)
 }
 
 private fun buildStructMethodThunk(

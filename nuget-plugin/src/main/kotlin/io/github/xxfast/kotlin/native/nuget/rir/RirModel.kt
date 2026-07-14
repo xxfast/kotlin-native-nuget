@@ -68,6 +68,21 @@ data class RirEnumEntry(
   val ordinal: Int,
 )
 
+// ADR-058: how a bridgeable struct's components are reconstructed on the C# side. Shape A (the
+// struct has a public instance constructor whose parameters cover its stored state) reconstructs
+// with `new T(a, b)`; Shape B (no such constructor — public fields or settable auto-properties)
+// reconstructs with an object initializer, `new T { A = a, B = b }`. Defaults to CONSTRUCTOR so
+// existing reverse-ir.json without this field (every struct predating ADR-058) still parses as
+// Shape A. Mirrors `RirStructShape` in nuget-metadata-reader/Program.cs.
+@Serializable
+enum class RirStructShape {
+  @SerialName("constructor")
+  CONSTRUCTOR,
+
+  @SerialName("initializer")
+  INITIALIZER,
+}
+
 // ADR-056: a C# struct that satisfies the Decision 3a "Shape A" rules: exactly one public
 // instance constructor, whose parameters (case-insensitively matched to public readable
 // properties of the same type) fully cover the struct's stored state. Components remain the wire
@@ -75,11 +90,16 @@ data class RirEnumEntry(
 // methods + computed properties, ADR-014 reconstruct-on-call mirror). Defaults empty so existing
 // reverse-ir.json without those arrays still parse. Mirrors `RirStruct` in
 // nuget-metadata-reader/Program.cs field-for-field once the reader enumerates members.
+// ADR-058: [shape] additionally admits "Shape B" structs — no public constructor; components are
+// public settable fields / settable auto-properties instead, in C# declaration (FieldDef) order.
+// [constructors] is always empty for RirStructShape.INITIALIZER (Decision 4a: alternate
+// constructors on a Shape B struct are deferred, diagnosed rather than bridged).
 @Serializable
 @SerialName("struct")
 data class RirStruct(
   override val name: String,
   val components: List<RirStructComponent> = emptyList(),
+  val shape: RirStructShape = RirStructShape.CONSTRUCTOR,
   val constructors: List<RirConstructor> = emptyList(),
   val methods: List<RirMethod> = emptyList(),
   val properties: List<RirProperty> = emptyList(),

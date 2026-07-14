@@ -405,18 +405,42 @@ internal static class AssemblyExtractor
             var name = mr.GetString(typeDef.Name);
             var constructors = new List<RirConstructor>();
             var diagnostics = new List<RirDiagnostic>();
-            foreach (var handle in extraction.ConstructorHandles)
+
+            if (extraction.Struct.Shape == RirStructShape.Initializer)
             {
-                var (ctor, diagnostic, obliviousDiagnostic) = TryMapConstructor(
-                    mr, extraction.TypeHandle, handle, name, boundHandleTypeNames, enumTypes,
-                    result, isState: handle == extraction.StateConstructor);
-                if (ctor is not null)
+                // ADR-058 Decision 4a: a Shape B struct has no state constructor by definition, so
+                // EVERY public constructor candidate would otherwise become an ADR-057 "alternate"
+                // constructor whose Kotlin signature can collide with the generated data class's
+                // own primary constructor. Bind none; diagnose each instead.
+                foreach (var handle in extraction.ConstructorHandles)
                 {
-                    constructors.Add(ctor);
-                    if (obliviousDiagnostic is not null) diagnostics.Add(obliviousDiagnostic);
+                    diagnostics.Add(new RirDiagnostic(
+                        kind: "skipped_unsupported_struct",
+                        typeName: name,
+                        memberName: ".ctor",
+                        memberSignature: BuildSignatureString(mr, mr.GetMethodDefinition(handle), ".ctor"),
+                        reason: "constructor on a struct with no state constructor; alternate " +
+                            "constructors on Shape B structs are deferred",
+                        hint: "Shape B structs are reconstructed with an object initializer; expose " +
+                            "validation or derivation logic as a separate static factory method " +
+                            "instead."));
                 }
-                else if (diagnostic is not null)
-                    diagnostics.Add(diagnostic);
+            }
+            else
+            {
+                foreach (var handle in extraction.ConstructorHandles)
+                {
+                    var (ctor, diagnostic, obliviousDiagnostic) = TryMapConstructor(
+                        mr, extraction.TypeHandle, handle, name, boundHandleTypeNames, enumTypes,
+                        result, isState: handle == extraction.StateConstructor);
+                    if (ctor is not null)
+                    {
+                        constructors.Add(ctor);
+                        if (obliviousDiagnostic is not null) diagnostics.Add(obliviousDiagnostic);
+                    }
+                    else if (diagnostic is not null)
+                        diagnostics.Add(diagnostic);
+                }
             }
 
             // ADR-056 deferred: methods + computed properties on the struct itself.
@@ -534,7 +558,7 @@ internal static class AssemblyExtractor
             result[fullName] = extraction with
             {
                 Struct = new RirStruct(
-                    name, extraction.Struct.Components, constructors, methods, properties),
+                    name, extraction.Struct.Components, extraction.Struct.Shape, constructors, methods, properties),
                 Diagnostics = diagnostics,
             };
         }
@@ -573,35 +597,256 @@ internal static class AssemblyExtractor
             ctorCandidates.Add(handle);
         }
 
-        if (ctorCandidates.Count == 0)
-            return StructExtraction.Unsupported(
-                "no public instance constructor (Shape B — public fields / settable auto-properties " +
-                "— is deferred)");
-        var candidates = ctorCandidates.Select(handle =>
+        // ---- Shape A: try first (ADR-056 Decision 3a, amended by ADR-058 Decision 1a to also
+        // match a public instance FIELD, not just a property). ----
+        if (ctorCandidates.Count > 0)
         {
-            var (components, reason) = TryExtractStructComponents(
-                mr, typeDef, handle, enumTypes);
-            return (Handle: handle, Components: components, Reason: reason);
-        }).ToList();
-        var stateCandidates = candidates.Where(candidate => candidate.Components is not null).ToList();
+            var candidates = ctorCandidates.Select(handle =>
+            {
+                var (components, reason) = TryExtractStructComponents(
+                    mr, typeDef, handle, enumTypes);
+                return (Handle: handle, Components: components, Reason: reason);
+            }).ToList();
+            var stateCandidates = candidates.Where(candidate => candidate.Components is not null).ToList();
 
-        if (stateCandidates.Count == 0)
-        {
-            var reason = ctorCandidates.Count == 1
-                ? candidates[0].Reason!
-                : $"{ctorCandidates.Count} public constructors, but none uniquely covers all stored state";
-            return StructExtraction.Unsupported(reason);
+            if (stateCandidates.Count == 1)
+            {
+                var state = stateCandidates[0];
+                return StructExtraction.Supported(
+                    new RirStruct(name, state.Components!, RirStructShape.Constructor),
+                    typeHandle, state.Handle, ctorCandidates);
+            }
+
+            if (stateCandidates.Count > 1)
+            {
+                // Ambiguous: MORE than one ctor covers state. ADR-058 rule 2 ("no ctor satisfies
+                // the Shape A rules") does not hold here — some ctor DOES satisfy them, just not
+                // uniquely — so this does not fall through to Shape B.
+                return StructExtraction.Unsupported(
+                    $"{stateCandidates.Count} public constructors cover all stored state — the state " +
+                    "constructor is ambiguous");
+            }
+
+            // stateCandidates.Count == 0: no constructor covers state. Falls through to Shape B.
         }
 
-        if (stateCandidates.Count > 1)
-            return StructExtraction.Unsupported(
-                $"{stateCandidates.Count} public constructors cover all stored state — the state " +
-                "constructor is ambiguous");
+        // ---- Shape B (ADR-058): no public instance constructor satisfies Shape A. ----
+        var (shapeBComponents, shapeBReason) = TryExtractShapeBComponents(mr, typeDef, enumTypes);
+        if (shapeBComponents is not null)
+        {
+            return StructExtraction.Supported(
+                new RirStruct(name, shapeBComponents, RirStructShape.Initializer),
+                typeHandle, stateConstructor: default, ctorCandidates);
+        }
 
-        var state = stateCandidates[0];
-        return StructExtraction.Supported(
-            new RirStruct(name, state.Components!), typeHandle, state.Handle, ctorCandidates);
+        // ---- Neither shape applies. ----
+        return StructExtraction.Unsupported(shapeBReason!);
     }
+
+    /// <summary>
+    /// ADR-058 Decision 2a/3a: a struct with no state constructor is Shape B iff every non-static
+    /// field is COVERED — either a settable public field, or a <c>[CompilerGenerated]</c>
+    /// <c>&lt;X&gt;k__BackingField</c> whose property <c>X</c> is public, non-static, and has a
+    /// public getter AND a public setter (<c>set</c> OR <c>init</c> — both are simply "settable"
+    /// here, because reconstruction is an object initializer, which is exactly the context an
+    /// <c>init</c> accessor is callable in, including across assembly boundaries — Constraint 2).
+    /// Structural, not count-based (Decision 2a rejects "N components == N fields": it is right by
+    /// coincidence and is fooled by a manual property whose setter silently discards the value).
+    /// Component order is <c>GetFields()</c> order — verified to equal C# declaration order and to
+    /// interleave real fields with backing fields correctly (Constraint 1.2) — so a public field's
+    /// own row and an auto-property's backing-field row are visited in exactly the order this loop
+    /// needs, with no separate ordering step.
+    /// </summary>
+    private static (IReadOnlyList<RirStructComponent>? Components, string? Reason)
+        TryExtractShapeBComponents(
+            MetadataReader mr,
+            TypeDefinition typeDef,
+            IReadOnlyDictionary<string, EnumExtraction> enumTypes)
+    {
+        // Same component-type decoder Shape A uses: empty bound-handle set, no struct map — a
+        // class-typed or nested-struct component is rejected identically for both shapes.
+        var componentDecoder = new SignatureDecoder(mr, boundHandleTypeNames: null, enumTypes);
+
+        // Pass 1: which property names are backed by a REAL auto-property backing field (used only
+        // to phrase a better diagnostic below — never to decide pass/fail, per Constraint 1.6:
+        // metadata cannot prove that a hand-written private field is what a manual property's
+        // setter writes).
+        var autoBackedProperties = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var fieldHandle in typeDef.GetFields())
+        {
+            var field = mr.GetFieldDefinition(fieldHandle);
+            if ((field.Attributes & System.Reflection.FieldAttributes.Static) != 0) continue;
+
+            var fieldName = mr.GetString(field.Name);
+            if (MetadataHelpers.IsCompilerGenerated(mr, field)
+                && TryGetBackingFieldPropertyName(fieldName, out var backedName))
+                autoBackedProperties.Add(backedName);
+        }
+
+        // Pass 2: every public, non-static, readable property, with whether it has a public setter
+        // too, and its decoded type — used to resolve a backing field to its property (rule 3's
+        // second bullet) and to tell "auto-property with no public setter" apart from "manual
+        // settable property" for diagnostics.
+        var settableProperties = new Dictionary<string, (bool PublicSetter, TypeRefOrDiag Type)>(
+            StringComparer.Ordinal);
+        foreach (var propHandle in typeDef.GetProperties())
+        {
+            var propDef = mr.GetPropertyDefinition(propHandle);
+            var accessors = propDef.GetAccessors();
+            if (accessors.Getter.IsNil) continue;
+
+            var getterDef = mr.GetMethodDefinition(accessors.Getter);
+            if ((getterDef.Attributes & System.Reflection.MethodAttributes.MemberAccessMask)
+                != System.Reflection.MethodAttributes.Public) continue;
+            if ((getterDef.Attributes & System.Reflection.MethodAttributes.Static) != 0) continue;
+
+            bool publicSetter = !accessors.Setter.IsNil
+                && (mr.GetMethodDefinition(accessors.Setter).Attributes
+                    & System.Reflection.MethodAttributes.MemberAccessMask)
+                    == System.Reflection.MethodAttributes.Public;
+
+            TypeRefOrDiag propType;
+            try
+            {
+                propType = propDef.DecodeSignature(componentDecoder, genericContext: null).ReturnType;
+            }
+            catch (BadImageFormatException)
+            {
+                continue;
+            }
+
+            settableProperties[mr.GetString(propDef.Name)] = (publicSetter, propType);
+        }
+
+        // A settable property with NO auto-property backing field anywhere in the type is a manual
+        // (hand-written) property — this is what makes `Manual` (settable, but a real field the
+        // reader cannot attribute to it) unbindable, and is the negative a count-based coverage
+        // check gets wrong.
+        var manualSettableProperties = settableProperties
+            .Where(kv => kv.Value.PublicSetter && !autoBackedProperties.Contains(kv.Key))
+            .Select(kv => kv.Key)
+            .ToList();
+
+        // Pass 3: the real coverage check, one component per covered field, in FieldDef order.
+        var components = new List<RirStructComponent>();
+
+        foreach (var fieldHandle in typeDef.GetFields())
+        {
+            var field = mr.GetFieldDefinition(fieldHandle);
+            if ((field.Attributes & System.Reflection.FieldAttributes.Static) != 0)
+                continue; // excludes both `const` and `static readonly` (Constraint 1.3).
+
+            var fieldName = mr.GetString(field.Name);
+            bool isPublic = (field.Attributes & System.Reflection.FieldAttributes.FieldAccessMask)
+                == System.Reflection.FieldAttributes.Public;
+            bool isInitOnly = (field.Attributes & System.Reflection.FieldAttributes.InitOnly) != 0;
+
+            if (isPublic && !isInitOnly)
+            {
+                TypeRefOrDiag fieldType;
+                try
+                {
+                    fieldType = field.DecodeSignature(componentDecoder, genericContext: null);
+                }
+                catch (BadImageFormatException)
+                {
+                    return (null, $"public field `{fieldName}`'s type could not be decoded");
+                }
+
+                if (fieldType.TypeRef is null)
+                {
+                    var reason = fieldType.Diagnostic?.Reason
+                        ?? $"component type `{fieldType.RawTypeName}` is not bridgeable";
+                    return (null, reason);
+                }
+
+                components.Add(new RirStructComponent(ToLowerCamel(fieldName), fieldName, fieldType.TypeRef));
+                continue;
+            }
+
+            if (isPublic) // isInitOnly: a public `readonly` field.
+                return (null,
+                    $"public field `{fieldName}` is readonly and cannot be set by an object initializer");
+
+            // A private field. Covered only if it is a [CompilerGenerated] <X>k__BackingField whose
+            // property X is public, non-static, and settable (`set` or `init`).
+            if (MetadataHelpers.IsCompilerGenerated(mr, field)
+                && TryGetBackingFieldPropertyName(fieldName, out var propName)
+                && settableProperties.TryGetValue(propName, out var prop))
+            {
+                if (!prop.PublicSetter)
+                    return (null,
+                        $"auto-property `{propName}` has no public setter and there is no constructor " +
+                        "to set it");
+
+                if (prop.Type.TypeRef is null)
+                {
+                    var reason = prop.Type.Diagnostic?.Reason
+                        ?? $"component type `{prop.Type.RawTypeName}` is not bridgeable";
+                    return (null, reason);
+                }
+
+                components.Add(new RirStructComponent(ToLowerCamel(propName), propName, prop.Type.TypeRef));
+                continue;
+            }
+
+            // Uncovered stored state. Prefer naming a manual settable property when the struct has
+            // one in scope — almost certainly what a reader hit — over the generic field-centric
+            // message (Constraint 1.6: metadata cannot prove the field IS that property's store, so
+            // this is a diagnostic-quality choice only; the struct is skipped either way).
+            if (manualSettableProperties.Count > 0)
+            {
+                return (null,
+                    $"property `{manualSettableProperties[0]}` is settable but is not an auto-property " +
+                    "(no compiler-generated backing field), so the struct's stored state cannot be " +
+                    "proven covered");
+            }
+
+            return (null,
+                $"field `{fieldName}` is private and no public component covers it: state would be " +
+                "silently dropped");
+        }
+
+        if (components.Count == 0)
+            return (null, "struct has no settable public state: zero components");
+
+        return (components, null);
+    }
+
+    /// <summary>
+    /// Roslyn's long-standing (but ECMA-335-unguaranteed — ADR-058 "Inferred") backing-field naming
+    /// convention: an auto-property named <c>X</c> gets a private field named
+    /// <c>&lt;X&gt;k__BackingField</c>. Combined with <see cref="MetadataHelpers.IsCompilerGenerated"/>,
+    /// this is how a field is attributed to the property it backs. If this convention ever changes,
+    /// the design fails CLOSED: an unattributable private field is uncovered stored state, so the
+    /// struct is skipped with a diagnostic rather than silently bound with a dropped component.
+    /// </summary>
+    private static bool TryGetBackingFieldPropertyName(string fieldName, out string propertyName)
+    {
+        if (fieldName.Length > 1
+            && fieldName[0] == '<'
+            && fieldName.EndsWith("k__BackingField", StringComparison.Ordinal))
+        {
+            int close = fieldName.IndexOf('>');
+            if (close > 1)
+            {
+                propertyName = fieldName.Substring(1, close - 1);
+                return true;
+            }
+        }
+
+        propertyName = "";
+        return false;
+    }
+
+    /// <summary>
+    /// ADR-058: <c>RirStructComponent.Name</c> is the lower-camel form of the C# member used to
+    /// read it back (<c>Girth</c> -&gt; <c>girth</c>, <c>IsLoud</c> -&gt; <c>isLoud</c>) — the
+    /// READER does this so the two generator sites that render <c>c.name</c> (one already
+    /// camel-cases it, one does not) agree, rather than each generator having to know this rule.
+    /// </summary>
+    private static string ToLowerCamel(string name) =>
+        name.Length == 0 ? name : char.ToLowerInvariant(name[0]) + name.Substring(1);
 
     private static (IReadOnlyList<RirStructComponent>? Components, string? Reason)
         TryExtractStructComponents(
@@ -641,9 +886,13 @@ internal static class AssemblyExtractor
                 $"struct has {instanceFieldCount} stored instance field(s) but its constructor " +
                 $"takes {ctorSig.ParameterTypes.Length} parameter(s) — state would be silently dropped");
 
-        // Public, readable, non-static instance properties, keyed case-insensitively (Constraint 4:
-        // ctor parameter `x` vs. property `X`).
-        var properties = new Dictionary<string, (TypeRefOrDiag Decoded, string ReadName)>(
+        // Public, readable, non-static instance properties OR public instance fields, keyed
+        // case-insensitively (Constraint 4: ctor parameter `x` vs. property `X`; ADR-058 Decision
+        // 1a widens rule 3 to also match a public instance FIELD, so an ordinary
+        // `struct S { public int A; public S(int a) { A = a; } }` binds as Shape A instead of
+        // falling through to Shape B and colliding with the generated primary constructor as an
+        // ADR-057 alternate).
+        var candidatesByName = new Dictionary<string, (TypeRefOrDiag Decoded, string ReadName)>(
             StringComparer.OrdinalIgnoreCase);
 
         foreach (var propHandle in typeDef.GetProperties())
@@ -668,7 +917,31 @@ internal static class AssemblyExtractor
             }
 
             var propName = mr.GetString(propDef.Name);
-            properties[propName] = (propType, propName);
+            candidatesByName[propName] = (propType, propName);
+        }
+
+        foreach (var fieldHandle in typeDef.GetFields())
+        {
+            var field = mr.GetFieldDefinition(fieldHandle);
+            if ((field.Attributes & System.Reflection.FieldAttributes.Static) != 0) continue;
+            if ((field.Attributes & System.Reflection.FieldAttributes.FieldAccessMask)
+                != System.Reflection.FieldAttributes.Public) continue;
+
+            TypeRefOrDiag fieldType;
+            try
+            {
+                fieldType = field.DecodeSignature(componentDecoder, genericContext: null);
+            }
+            catch (BadImageFormatException)
+            {
+                continue;
+            }
+
+            var fieldName = mr.GetString(field.Name);
+            // A property with the same name (case-insensitive) wins if both exist; C# never
+            // actually allows a field and a property with identical names in the same type anyway.
+            if (!candidatesByName.ContainsKey(fieldName))
+                candidatesByName[fieldName] = (fieldType, fieldName);
         }
 
         var paramHandlesBySeq = MapParameterHandlesBySequenceNumber(mr, ctorDef);
@@ -684,9 +957,10 @@ internal static class AssemblyExtractor
                 if (!string.IsNullOrEmpty(pn)) paramName = pn;
             }
 
-            if (!properties.TryGetValue(paramName, out var match))
+            if (!candidatesByName.TryGetValue(paramName, out var match))
                 return (null,
-                    $"constructor parameter `{paramName}` has no matching public readable property");
+                    $"constructor parameter `{paramName}` has no matching public readable property " +
+                    "or public instance field");
 
             var (propDecoded, readName) = match;
             if (propDecoded.TypeRef is null)
@@ -1380,6 +1654,25 @@ internal static class MetadataHelpers
         return false;
     }
 
+    /// <summary>
+    /// ADR-058 Constraint 1: true iff <paramref name="field"/> carries
+    /// <c>[System.Runtime.CompilerServices.CompilerGenerated]</c> — the marker Roslyn puts on an
+    /// auto-property's backing field (and nothing else a v1 reader ever sees on a field). Combined
+    /// with the <c>&lt;X&gt;k__BackingField</c> name pattern, this is how a Shape B struct
+    /// attributes a private field to the public auto-property it backs.
+    /// </summary>
+    internal static bool IsCompilerGenerated(MetadataReader mr, FieldDefinition field)
+    {
+        foreach (var handle in field.GetCustomAttributes())
+        {
+            var attr = mr.GetCustomAttribute(handle);
+            if (GetCustomAttributeTypeName(mr, attr) == "System.Runtime.CompilerServices.CompilerGeneratedAttribute")
+                return true;
+        }
+
+        return false;
+    }
+
     internal static string? GetCustomAttributeTypeName(MetadataReader mr, CustomAttribute attr)
     {
         if (attr.Constructor.Kind == HandleKind.MemberReference)
@@ -2052,24 +2345,77 @@ internal sealed class RirEnumEntry
 }
 
 /// <summary>
-/// ADR-056: a C# struct that satisfies the Decision 3a "Shape A" rules. Mirrors
-/// <c>RirStruct</c> in <c>RirModel.kt</c> field-for-field. <see cref="Components"/> is the wire
-/// contract for value decomposition (from the unique state-covering constructor).
-/// <see cref="Constructors"/> retains that state constructor and all bridgeable alternates.
-/// <see cref="Methods"/> / <see cref="Properties"/> carry ADR-056 deferred scope (struct methods
-/// + computed properties, ADR-014 reconstruct-on-call).
+/// ADR-058: how a Shape B struct's Kotlin surface is reconstructed from wire components on the C#
+/// side. Mirrors <c>RirStructShape</c> in <c>RirModel.kt</c> exactly, including its two
+/// <c>"kind"</c>-style JSON string values (<see cref="RirStructShapeJsonConverter"/>). Defaults to
+/// <see cref="Constructor"/> on both sides so old <c>reverse-ir.json</c> without a <c>shape</c>
+/// field still parses as a Shape A struct.
+/// </summary>
+[JsonConverter(typeof(RirStructShapeJsonConverter))]
+internal enum RirStructShape
+{
+    /// <summary>Components are the state constructor's parameters; C# reconstructs with <c>new T(a, b)</c>.</summary>
+    Constructor,
+    /// <summary>Components are the settable public state; C# reconstructs with <c>new T { A = a, B = b }</c>.</summary>
+    Initializer,
+}
+
+/// <summary>
+/// Hand-written rather than <c>JsonStringEnumConverter</c>: the ADR-058 JSON contract (mirroring
+/// <c>RirModel.kt</c>'s <c>@SerialName</c>) is the exact lower-case strings <c>"constructor"</c> /
+/// <c>"initializer"</c>, and this is compatible with the source-generated
+/// <see cref="RirJsonContext"/> without needing a naming-policy-aware generic converter.
+/// </summary>
+internal sealed class RirStructShapeJsonConverter : JsonConverter<RirStructShape>
+{
+    public override RirStructShape Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+    {
+        var value = reader.GetString();
+        return value switch
+        {
+            "constructor" => RirStructShape.Constructor,
+            "initializer" => RirStructShape.Initializer,
+            _ => throw new JsonException($"unknown RirStructShape '{value}'"),
+        };
+    }
+
+    public override void Write(Utf8JsonWriter writer, RirStructShape value, JsonSerializerOptions options)
+    {
+        writer.WriteStringValue(value switch
+        {
+            RirStructShape.Constructor => "constructor",
+            RirStructShape.Initializer => "initializer",
+            _ => throw new ArgumentOutOfRangeException(nameof(value), value, "unknown RirStructShape"),
+        });
+    }
+}
+
+/// <summary>
+/// ADR-056/058: a C# struct that is bridgeable, either because it satisfies the Decision 3a
+/// "Shape A" rules (a state constructor) or the ADR-058 "Shape B" rules (settable public fields /
+/// auto-properties, no state constructor). Mirrors <c>RirStruct</c> in <c>RirModel.kt</c>
+/// field-for-field. <see cref="Components"/> is the wire contract for value decomposition — from
+/// the state constructor's parameters (<see cref="RirStructShape.Constructor"/>) or from the
+/// struct's settable state in FieldDef order (<see cref="RirStructShape.Initializer"/>).
+/// <see cref="Constructors"/> is always empty for <see cref="RirStructShape.Initializer"/> (ADR-058
+/// Decision 4a — a Shape B struct has no state constructor by definition, so every public
+/// constructor candidate is diagnosed, not bridged). <see cref="Methods"/> / <see cref="Properties"/>
+/// carry the ADR-056 struct-members follow-up (ADR-014 reconstruct-on-call), which composes
+/// identically for both shapes.
 /// </summary>
 internal sealed class RirStruct : RirType
 {
     public RirStruct(
         string name,
         IReadOnlyList<RirStructComponent> components,
+        RirStructShape shape = RirStructShape.Constructor,
         IReadOnlyList<RirConstructor>? constructors = null,
         IReadOnlyList<RirMethod>? methods = null,
         IReadOnlyList<RirProperty>? properties = null)
     {
         Name = name;
         Components = components;
+        Shape = shape;
         Constructors = constructors ?? Array.Empty<RirConstructor>();
         Methods = methods ?? Array.Empty<RirMethod>();
         Properties = properties ?? Array.Empty<RirProperty>();
@@ -2077,6 +2423,7 @@ internal sealed class RirStruct : RirType
 
     public override string Name { get; }
     public IReadOnlyList<RirStructComponent> Components { get; }
+    public RirStructShape Shape { get; }
     public IReadOnlyList<RirConstructor> Constructors { get; }
     public IReadOnlyList<RirMethod> Methods { get; }
     public IReadOnlyList<RirProperty> Properties { get; }
@@ -2347,6 +2694,7 @@ internal sealed class RirDiagnostic
 [JsonSerializable(typeof(RirEnum))]
 [JsonSerializable(typeof(RirEnumEntry))]
 [JsonSerializable(typeof(RirStruct))]
+[JsonSerializable(typeof(RirStructShape))]
 [JsonSerializable(typeof(RirStructComponent))]
 [JsonSerializable(typeof(RirMethod))]
 [JsonSerializable(typeof(RirProperty))]

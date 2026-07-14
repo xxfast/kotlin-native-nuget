@@ -3,10 +3,24 @@
 A bridgeable C# `struct` becomes an immutable Kotlin `data class`. No struct ever crosses the C ABI
 itself: a struct-typed parameter expands into one ABI argument per component, and a struct-typed
 return expands into `void` plus one out-pointer per component. There is no handle, no `close()`, no
-`Cleaner`, and equality is structural. Its unique state constructor claims zero registration slots;
-each alternate public constructor claims one slot and reconstructs the returned components through
-out-pointers. Methods and get-only computed properties on the struct itself also bind: each call
-reconstructs the value from its components on the wire (the reverse of
+`Cleaner`, and equality is structural.
+
+There are two ways a struct qualifies, tried in order:
+
+- **Shape A**: exactly one public instance constructor covers all stored state. Components are its
+  parameters, in constructor-parameter order. C# reconstructs with `new T(a, b)`.
+- **Shape B**: no such constructor, but every field is either a public settable field or a settable
+  auto-property (`set` or `init`). Components are the fields/properties, in C# declaration order. C#
+  reconstructs with an object initializer, `new T { A = a, B = b }`.
+
+A struct that is neither is skipped (see [Which structs bind](#which-structs-bind)). Both shapes share
+everything else: the same wire format, the same immutable `data class` surface, the same registration
+machinery. Its unique state constructor (Shape A) or its object-initializer reconstruction (Shape B)
+both claim zero registration slots; each alternate public constructor on a Shape A struct claims one
+slot and reconstructs the returned components through out-pointers (Shape B structs bind no alternate
+constructors, see [Which structs bind](#which-structs-bind)). Methods and get-only computed properties
+on the struct itself also bind, for either shape: each call reconstructs the value from its components
+on the wire (the reverse of
 [ADR-014](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/014-value-class-mapping.md)'s
 "reconstruct on each invocation"), and members alone force a `Bindings` / registration export even
 when the struct has no alternate constructors.
@@ -18,7 +32,7 @@ when the struct has no alternate constructors.
 | struct-typed return | thunk return becomes `void`; one out-pointer argument per component |
 | struct-typed property getter | as a return: out-pointers |
 | struct-typed property setter | as a parameter: decomposed arguments |
-| alternate public constructor | Kotlin secondary constructor; one registration slot and one out-pointer per state component |
+| alternate public constructor (Shape A only) | Kotlin secondary constructor; one registration slot and one out-pointer per state component |
 | public instance method (non-void) | member function on the `data class`; receiver components lead the wire args |
 | get-only computed property (not a component) | `val` with bridge-backed getter on the `data class` |
 | public static method on the struct | function in the Kotlin `companion object` |
@@ -205,6 +219,211 @@ Per-component ABI types reuse the existing wire tables (no new scalar is introdu
 
 `sample-dependency/Metrics.cs` covers the "pass-through" numeric components (`long`/`float`/`double`),
 each crossing as its own scalar with no ABI-side conversion, unlike `bool`/`char`/`string`/enum.
+
+## Shape B: structs with no public constructor
+
+A struct with no state-covering constructor, but whose stored state is entirely public settable
+fields and/or settable auto-properties (`set` or `init`), still binds. Components are recovered from
+the FieldDef table in C# declaration order, a public field is its own row and an auto-property is its
+backing field's row, so a field and a property interleave correctly. The Kotlin surface is identical
+to Shape A: an immutable `data class`. Only the C# reconstruction expression changes, from
+`new T(a, b)` to an object initializer, `new T { A = a, B = b }`; `init`-only setters bind with no
+special handling, since an object initializer is exactly the context in which `init` is callable.
+
+`sample-dependency/Collar.cs` has both sub-shapes: `Extent` is pure public fields, `Collar` mixes a
+public field with `set` and `init` auto-properties across the full component vocabulary:
+
+```C#
+// sample-dependency/Collar.cs (real source)
+public struct Extent
+{
+    public int Width;
+    public int Height;
+
+    public int Area => Width * Height;
+    public Extent Grow(int by) => new Extent { Width = Width + by, Height = Height + by };
+    public static Extent Unit() => new Extent { Width = 1, Height = 1 };
+}
+
+public struct Collar
+{
+    public int Girth;                            // public field           -> int, direct
+    public string Colour { get; set; }           // settable auto-prop     -> IntPtr / UTF-8
+    public bool Belled { get; init; }             // INIT-only auto-prop    -> byte
+    public char Initial { get; init; }            // INIT-only auto-prop    -> ushort
+    public CatMood Mood { get; set; }             // settable auto-prop     -> int ordinal
+
+    public string Label => $"{Colour}:{Girth}{(Belled ? "*" : "")}";
+    public bool IsLoud => Belled && Mood == CatMood.Playful;
+
+    public Collar Resize(int by) =>
+        new Collar { Girth = Girth + by, Colour = Colour, Belled = Belled, Initial = Initial, Mood = Mood };
+
+    public static Collar Plain(string colour) =>
+        new Collar { Girth = 1, Colour = colour, Belled = false, Initial = 'P', Mood = CatMood.Calm };
+}
+```
+
+Generated Kotlin: components stay primary constructor `val`s, in declaration order. The class shape is
+otherwise unchanged from Shape A, but the KDoc is not: a `data class` generated for an `INITIALIZER`
+struct carries an extra paragraph warning about the declaration-order hazard (see [Component order is
+a hazard Shape A does not have](#component-order-is-a-hazard-shape-a-does-not-have) below); a Shape A
+`data class` like `Point` does not, since its order is already C# API
+(`build/nuget-interop/kotlin/nativeMain/sample/structs/Extent.kt` and `Collar.kt`, real output):
+
+```kotlin
+internal data class Extent(
+  val width: Int,
+  val height: Int,
+) {
+  fun grow(by: Int): Extent = memScoped {
+    val fn = requireNotNull(ExtentBindings.grow__9121219becc53aca492b7a3eeec39b31Fn) {
+      NugetRegistry.notRegistered("Sample.Structs.Extent", "SampleDependency")
+    }
+    val outWidth = alloc<IntVar>()
+    val outHeight = alloc<IntVar>()
+    fn.invoke(width, height, by, outWidth.ptr, outHeight.ptr)
+    Extent(outWidth.value, outHeight.value)
+  }
+  // ...
+}
+
+/**
+ * Kotlin value type for the C# struct `SampleDependency.Collar`.
+ *
+ * Copied by value across the bridge: equality is structural, and there is nothing to close.
+ * The C# struct's fields/properties are settable, but a Kotlin-side change can never be
+ * observable in C# (a copy crossed the boundary), so every component is a `val`. Use [copy]
+ * and pass the result back.
+ *
+ * Component order follows the C# declaration order. Prefer named arguments.
+ */
+internal data class Collar(
+  val girth: Int,
+  val colour: String,
+  val belled: Boolean,
+  val initial: Char,
+  val mood: CatMood,
+)
+```
+
+The reconstruction delta is on the C# side, in the reconstruction expression
+(`build/nuget-interop/csharp/ExtentRegistration.cs` and `CollarRegistration.cs`, real output):
+
+```C#
+[UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+private static unsafe void Grow__9121219becc53aca492b7a3eeec39b31_Thunk(int Width, int Height, int by, int* outWidth, int* outHeight)
+{
+    Extent result = new Extent { Width = Width, Height = Height }.Grow(by);
+    *outWidth = result.Width;
+    *outHeight = result.Height;
+}
+
+[UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+private static unsafe void Resize__50abd5f4f4e3ddfc0ecdc552fbbca9ab_Thunk(int Girth, IntPtr ColourPtr, byte Belled, ushort Initial, int Mood, int by, int* outGirth, IntPtr* outColour, byte* outBelled, ushort* outInitial, int* outMood)
+{
+    Collar result = new Collar { Girth = Girth, Colour = Marshal.PtrToStringUTF8(ColourPtr)!, Belled = Belled != 0, Initial = (char)Initial, Mood = (CatMood)Mood }.Resize(by);
+    *outGirth = result.Girth;
+    *outColour = Marshal.StringToCoTaskMemUTF8(result.Colour);
+    *outBelled = result.Belled ? (byte)1 : (byte)0;
+    *outInitial = (ushort)result.Initial;
+    *outMood = (int)result.Mood;
+}
+```
+
+`sample-dependency/Collars.cs`'s `Pair(Collar a, Extent b)` takes two Shape B structs of different
+sub-shapes in one signature, decomposing both onto the wire and reconstructing each with its own
+object initializer (`build/nuget-interop/csharp/CollarsRegistration.cs`, real output):
+
+```C#
+[UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+private static IntPtr Pair__19127a5e1495d2eeb2514ce30eb72bd2_Thunk(int a_Girth, IntPtr a_ColourPtr, byte a_Belled, ushort a_Initial, int a_Mood, int b_Width, int b_Height)
+{
+    string result = Collars.Pair(new Collar { Girth = a_Girth, Colour = Marshal.PtrToStringUTF8(a_ColourPtr)!, Belled = a_Belled != 0, Initial = (char)a_Initial, Mood = (CatMood)a_Mood }, new Extent { Width = b_Width, Height = b_Height });
+    return Marshal.StringToCoTaskMemUTF8(result);
+}
+```
+
+Hand-written Kotlin in `sample-library` looks exactly like the Shape A samples; nothing about calling
+a Shape B struct differs from Kotlin's point of view:
+
+```kotlin
+// sample-library/.../sample/structs/CollarSample.kt (real source)
+fun describeCollar(
+  girth: Int,
+  colour: String,
+  belled: Boolean,
+  initialCode: Int,
+  mood: CatMood,
+): String = Collars.describe(Collar(girth, colour, belled, initialCode.toChar(), mood))
+
+fun collarMembers(girth: Int, colour: String, mood: CatMood): String {
+  val c = Collar(girth, colour, true, 'B', mood)
+  return "${c.label}|${c.isLoud}|${c.resize(1).girth}|${Collar.plain(colour).label}"
+}
+
+// The documented defence against the declaration-order hazard: named arguments.
+fun collarNamedArgs(): String {
+  val c: Collar =
+    Collar(girth = 1, colour = "black", belled = true, initial = 'O', mood = CatMood.CALM)
+  return "${c.girth},${c.colour},${c.belled},${c.initial},${c.mood}"
+}
+```
+
+```C#
+// sample-app/SampleApp.Tests/CollarRoundTripTests.cs (real source)
+[Fact]
+public void DescribeCollar_RendersEveryComponent()
+{
+    string result = CollarSample.describeCollar(5, "Oreo", true, 'O', CatMood.Playful);
+    Assert.Equal("Oreo 5 O Playful True", result);
+}
+
+[Fact]
+public void PairCollar_TwoDifferentShapeBStructsInOneSignature()
+{
+    string result = CollarSample.pairCollar(2, "Oreo", 3, 4);
+    Assert.Equal("Oreo:2*/3x4", result);
+}
+
+[Fact]
+public void CollarNamedArgs_ComponentNamesMatchDeclarationOrder()
+{
+    string result = CollarSample.collarNamedArgs();
+    Assert.Equal("1,black,true,O,CALM", result);
+}
+```
+
+`initialCode: Int` (rather than a Kotlin `Char`) is the same forward-direction workaround
+`StructsSample.kt`'s `gradeCode` uses: a raw Kotlin `Char` parameter cannot cross the *forward*
+boundary yet (a pre-existing, unrelated gap, tracked in [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md)
+Phase 3). It affects only how this fixture calls into `sample-library`, not the reverse struct
+binding itself, whose own `char` components round-trip correctly.
+
+### Component order is a hazard Shape A does not have
+
+For a Shape A struct, component order is the constructor's parameter order, which is already C# API:
+reordering it breaks every positional C# caller too. For a Shape B struct, component order is the
+*field declaration* order, which C# callers never see (they always use named object-initializer
+syntax). Reordering two same-typed fields in the C# source is source-compatible for C# callers and
+silently reorders the generated Kotlin `data class` primary constructor.
+
+Two independent defences exist, at two different layers:
+
+- **Documentation, at the Kotlin source layer.** Every `data class` generated for a Shape B
+  (`RirStructShape.INITIALIZER`) struct carries the extra KDoc paragraph quoted above, verbatim:
+  "Component order follows the C# declaration order. Prefer named arguments." A Shape A `data class`
+  like `Point` does not carry it, since its order already tracks C# API. A generator test pins the
+  exact wording. Named arguments are the correct defence (`collarNamedArgs` above), not a workaround.
+- **The contract hash, at the wire layer.** The ADR-054 contract hash now includes component
+  **names**, not just types, so a reorder changes `contractHash` and a stale shim paired with a fresh
+  library is caught rather than silently corrupting memory (see [Registration
+  diagnostics](registration-diagnostics.md)).
+
+Neither defence stops a Kotlin consumer who ignores the KDoc and calls `Extent(3, 4)` positionally
+from getting a value with the components swapped after a reorder and successful rebuild: the contract
+hash only catches a stale-shim mismatch, and the KDoc is only read, not enforced. The named-arguments
+recommendation is real advice, not a guarantee.
 
 ## Struct-typed properties and instance methods
 
@@ -479,53 +698,105 @@ public void ProfileResting_StaticFactory_ThenLabel()
 
 ## Which structs bind
 
-A struct is bridgeable (Shape A) only if **all** of:
+A struct is a classification candidate at all only if it is public, top-level, non-generic,
+non-`ref struct`, and not an enum. It is then classified in this order:
 
-1. It is public, top-level, non-generic, non-`ref struct`, and not an enum.
-2. Exactly one public instance constructor, the state constructor, has at least one parameter and
+**Shape A** iff:
+
+1. Exactly one public instance constructor, the state constructor, has at least one parameter and
    covers all stored state. Other public constructors may bind as alternate constructors.
-3. Every state-constructor parameter matches, case-insensitively by name, a public readable instance
-   property of the same type (`x` matches `X`).
-4. Every component type is in the v1 vocabulary: primitives (including `bool` and `char`), `string`,
+2. Every state-constructor parameter matches, case-insensitively by name, a public readable instance
+   **property or public instance field** of the same type (`x` matches `X`). (Widened by ADR-058 to
+   include fields, so an ordinary `struct { public int A; public int B; public S(int a, int b) {...} }`
+   binds as Shape A instead of colliding with a generated `data class` primary constructor.)
+3. Every component type is in the v1 vocabulary: primitives (including `bool` and `char`), `string`,
    and bound enums.
-5. Its state constructor covers all stored state: the number of non-static instance fields equals
+4. Its state constructor covers all stored state: the number of non-static instance fields equals
    the number of state-constructor parameters.
 
 Components, and their order, are the state constructor's parameter list, not metadata field order.
-Rule 5 exists because without it a struct with more stored fields than constructor parameters would silently
-drop a field's value on every crossing; `sample-dependency/UnsupportedStructs.cs` has both adversarial
-cases:
+Rule 4 exists because without it a struct with more stored fields than constructor parameters would
+silently drop a field's value on every crossing.
+
+**Shape B** iff no constructor satisfies Shape A, and every non-static field is covered: it is either
+a public settable field, or the `[CompilerGenerated]` backing field of a public, non-static
+auto-property with a public getter and a public setter (`set` or `init`). A field that fails
+coverage (private, `readonly`, or a manually-written property whose setter cannot be proven to write
+it) skips the whole struct rather than silently dropping that field. Components, and their order, are
+the FieldDef declaration order (see [Shape B](#shape-b-structs-with-no-public-constructor) above). A
+Shape B struct binds no constructors at all, alternate or otherwise: every public constructor on it is
+skipped with its own diagnostic, since a Shape B struct's primary constructor already reaches every
+component and an "alternate" would collide with it.
+
+Otherwise the struct is **skipped**, with a `skipped_unsupported_struct` diagnostic naming the failed
+rule. `sample-dependency/UnsupportedStructs.cs` has one adversarial case per rule:
 
 ```C#
 // sample-dependency/UnsupportedStructs.cs (real source)
-public struct Unsupported { public int A; public int B; }          // no public instance constructor
-
-public readonly struct Overstuffed
+public readonly struct Overstuffed                 // fails Shape A rule 4, then Shape B (uncovered _hidden)
 {
-    private readonly int _hidden;                                   // ctor covers only 1 of 2 fields
+    private readonly int _hidden;
     public Overstuffed(int visible) { Visible = visible; _hidden = visible; }
     public int Visible { get; }
 }
+
+public struct PartlyHidden                          // Shape B: settable Visible, but _hidden is uncovered
+{
+    private int _hidden;
+    public int Visible { get; set; }
+}
+
+public struct Frozen                                 // Shape B: a public readonly field is not settable
+{
+    public readonly int A;
+    public int B;
+}
+
+public struct Manual                                  // Shape B: settable A, but not an auto-property
+{
+    private int _a;
+    public int A { get => _a; set => _a = value; }
+}
+
+public struct Nothing { }                              // Shape B: zero stored state, zero components
 ```
 
-Both are skipped with a `skipped_unsupported_struct` diagnostic in `reverse-ir.json` and generate no
-Kotlin type and no handle wrapper:
+Every one of these is skipped with a `skipped_unsupported_struct` diagnostic in `reverse-ir.json` and
+generates no Kotlin type. Real diagnostics, trimmed, from
+`sample-library/build/nuget-interop/reverse-ir.json`:
 
 ```json
 {
   "kind": "skipped_unsupported_struct",
   "typeName": "Overstuffed",
-  "memberName": "Overstuffed",
-  "memberSignature": "Sample.Structs.Overstuffed",
-  "reason": "struct has 2 stored instance field(s) but its constructor takes 1 parameter(s) — state would be silently dropped",
-  "hint": "See ADR-056 Decision 3a: a bridgeable struct has exactly one public constructor covering all stored state, with primitive/string/bound-enum components matching the constructor parameters case-insensitively."
+  "reason": "field `_hidden` is private and no public component covers it: state would be silently dropped"
+}
+{
+  "kind": "skipped_unsupported_struct",
+  "typeName": "Frozen",
+  "reason": "public field `A` is readonly and cannot be set by an object initializer"
+}
+{
+  "kind": "skipped_unsupported_struct",
+  "typeName": "Manual",
+  "reason": "property `A` is settable but is not an auto-property (no compiler-generated backing field), so the struct's stored state cannot be proven covered"
+}
+{
+  "kind": "skipped_unsupported_struct",
+  "typeName": "Nothing",
+  "reason": "struct has no settable public state: zero components"
 }
 ```
 
 ## Limitations
 
-- **Shape B structs** (no public constructor; public fields or settable auto-properties) are not
-  bound. Metadata extraction for public fields does not exist yet.
+- **Alternate constructors on a Shape B struct** are diagnosed, not bound: since a Shape B struct's
+  primary reconstruction already reaches every component, an "alternate" would collide with it.
+- **Manual (non-auto) settable properties as components** (`Manual` above) are not bound: metadata
+  alone cannot prove that a hand-written setter writes the field it appears to.
+- **Shape A constructor-parameter nullability** is not decoded (a pre-existing gap; Shape B's own
+  components *are* nullability-decoded, since a Shape B struct's `default(T)` reachability makes a
+  reference-typed component's nullness observable).
 - **Void instance methods**, **setters**, **operators**, and the synthesized
   `Equals`/`GetHashCode`/`ToString`/`Deconstruct` surface on a struct are not bound (see
   [Struct methods and computed properties](#struct-methods-and-computed-properties)).
@@ -548,6 +819,7 @@ and Phase 10.
     <category ref="external">
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/056-csharp-structs-in-kotlin.md">ADR-056: C# structs (value types) in Kotlin</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/057-csharp-overload-sets-in-kotlin.md">ADR-057: C# overload sets in Kotlin</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/058-csharp-shape-b-structs-in-kotlin.md">ADR-058: C# Shape B structs in Kotlin</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/014-value-class-mapping.md">ADR-014: Value class mapping</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/054-reverse-bridge-registration-observability.md">ADR-054: Reverse-bridge registration observability</a>
     </category>

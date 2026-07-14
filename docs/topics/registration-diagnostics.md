@@ -14,7 +14,10 @@ before it stores a single function pointer:
 1. **A contract self-check.** The C# `[ModuleInitializer]` passes two leading scalars ahead of the
    thunk pointers, `slotCount: Int` and `contractHash: Long`, computed by the same shared plugin
    function on both generated sides. Kotlin compares them against its own compile-time values. If
-   they disagree, it stores nothing and throws, naming both sides:
+   they disagree, it stores nothing and throws, naming both sides. For a struct-typed reference, the
+   hash covers each component's **name** as well as its type (ADR-058 Decision 5), so reordering two
+   same-typed fields of a Shape B struct, which is source-compatible for C# callers, still changes the
+   contract hash and is caught here rather than silently mismatching ABI slots:
 
    ```
    [nuget] FATAL: registration contract mismatch for {Type} ({Package}). The C# shim passed {N}
@@ -143,5 +146,6 @@ feature exists to catch is a registration bug, not a call bug.
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/048-kotlin-stub-generation-from-reverse-ir.md">ADR-048: Kotlin stub generation from reverse IR</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/049-csharp-registration-shim-generation.md">ADR-049: C# registration shim generation</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/054-reverse-bridge-registration-observability.md">ADR-054: Reverse-bridge registration observability</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/058-csharp-shape-b-structs-in-kotlin.md">ADR-058: C# Shape B structs in Kotlin</a>
     </category>
 </seealso>

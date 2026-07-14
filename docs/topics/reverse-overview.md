@@ -62,12 +62,16 @@ The v1 enum subset is deliberately ordinal-backed: default-`int`, non-`[Flags]` 
 are unique and contiguous from `0` through `N-1`. See [The bridgeable subset](bridgeable-subset.md)
 for the supported positions and exclusions.
 
-A bridgeable struct is extracted too, but it never becomes a handle: its components (drawn from its
-unique state-covering constructor) decompose onto the wire, and it surfaces as an immutable Kotlin
-`data class`. Alternate public constructors, struct methods, get-only computed properties, and static
-methods on the struct receive bridge-backed registration slots (slot order: alternate ctors → static
-methods → instance methods → computed getters); the state constructor remains slot-free. Members alone
-force a registration export even without alternate constructors. See [C# structs](structs.md).
+A bridgeable struct is extracted too, but it never becomes a handle: its components decompose onto the
+wire, and it surfaces as an immutable Kotlin `data class`. A struct with a state-covering constructor
+("Shape A") draws its components from that constructor's parameters; a struct with no such
+constructor but only public settable fields/auto-properties ("Shape B") draws them from its C#
+declaration order instead, and C# reconstructs it with an object initializer rather than a
+constructor call. Alternate public constructors (Shape A only), struct methods, get-only computed
+properties, and static methods on the struct receive bridge-backed registration slots (slot order:
+alternate ctors → static methods → instance methods → computed getters); the state constructor (or, for
+Shape B, the object-initializer reconstruction) remains slot-free. Members alone force a registration
+export even without alternate constructors. See [C# structs](structs.md).
 
 ### `nugetGenerateBindings` and `nugetGenerateShims`: two generators, one contract
 
@@ -221,5 +225,6 @@ install pointer rather than a cryptic subprocess error.
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/054-reverse-bridge-registration-observability.md">ADR-054: Reverse-bridge registration observability</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/056-csharp-structs-in-kotlin.md">ADR-056: C# structs (value types) in Kotlin</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/057-csharp-overload-sets-in-kotlin.md">ADR-057: C# overload sets in Kotlin</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/058-csharp-shape-b-structs-in-kotlin.md">ADR-058: C# Shape B structs in Kotlin</a>
     </category>
 </seealso>

@@ -495,4 +495,60 @@ class RirBridgingTest {
           "component, even though the method's own signature text is unchanged",
     )
   }
+
+  // ADR-058 Decision 5: `structContractHash` (the struct's OWN register export) already expands
+  // its components as "name:type", but `signaturePart()` — used when some OTHER method merely
+  // REFERENCES the struct — expands components as types only. A reorder of two same-typed
+  // components is therefore invisible to contractHash today for every method that mentions the
+  // struct, even though the struct's OWN slot ordering already depends on it. This is exactly the
+  // "stale shim writes each component into the other's ABI slot" corruption class ADR-054 exists
+  // to catch, and Shape B makes a same-typed-component reorder source-compatible in C# (a field
+  // reorder), where for Shape A it was already a breaking constructor-parameter reorder.
+  @Test
+  fun `signaturePart must expand a struct reference by component NAMES, not just types, so swapping two same-typed components changes the contractHash of a method that merely mentions the struct`() {
+    // Sample.Structs.Extent { public int Width; public int Height; } — both components are `int`,
+    // so a name-only swap leaves every type-only signature identical.
+    val extentWidthHeight = RirStruct(
+      name = "Extent",
+      components = listOf(
+        RirStructComponent(name = "width", readName = "Width", type = RirPrimitiveType("int")),
+        RirStructComponent(name = "height", readName = "Height", type = RirPrimitiveType("int")),
+      ),
+    )
+    val extentHeightWidth = extentWidthHeight.copy(
+      components = listOf(
+        RirStructComponent(name = "height", readName = "Height", type = RirPrimitiveType("int")),
+        RirStructComponent(name = "width", readName = "Width", type = RirPrimitiveType("int")),
+      ),
+    )
+    val extentType = RirStructType(namespace = "Sample.Structs", name = "Extent")
+
+    // `Extents.Grow` only MENTIONS Extent as a parameter/return type — it does not own Extent's
+    // register export, so this goes through signaturePart(), not structContractHash().
+    val grow = RirMethod(
+      name = "Grow",
+      isStatic = true,
+      returnType = extentType,
+      parameters = listOf(RirParameter(name = "e", type = extentType)),
+    )
+    val cls = RirClass(name = "Extents", isStatic = true, methods = listOf(grow))
+    val registrables: List<RirRegistrable> = listOf(RirRegistrable.Method(grow))
+
+    val structsBefore: Map<RirTypeKey, RirStruct> =
+      mapOf(RirTypeKey("Sample.Structs", "Extent") to extentWidthHeight)
+    val structsAfter: Map<RirTypeKey, RirStruct> =
+      mapOf(RirTypeKey("Sample.Structs", "Extent") to extentHeightWidth)
+
+    val hashBefore: Long = contractHash(cls, registrables, structsBefore)
+    val hashAfter: Long = contractHash(cls, registrables, structsAfter)
+
+    assertTrue(
+      hashBefore != hashAfter,
+      "signaturePart() must expand a referenced struct's component NAMES (not just types), so " +
+          "reordering Extent's Width/Height fields changes the contractHash of every method that " +
+          "mentions Extent — this currently passes silently (ADR-058 Decision 5) because " +
+          "signaturePart() only expands component TYPES for a struct REFERENCE, unlike " +
+          "structContractHash which already hashes the struct's OWN components as name:type",
+    )
+  }
 }
