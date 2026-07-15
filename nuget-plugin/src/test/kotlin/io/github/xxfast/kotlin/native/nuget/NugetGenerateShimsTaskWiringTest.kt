@@ -124,7 +124,7 @@ class NugetGenerateShimsTaskWiringTest {
     val task: NugetGenerateShimsTask =
       project.tasks.getByName("nugetGenerateShims") as NugetGenerateShimsTask
 
-    assertEquals("sample", task.nativeLibraryName.get())
+    assertEquals("test", task.nativeLibraryName.get())
   }
 
   @Test
