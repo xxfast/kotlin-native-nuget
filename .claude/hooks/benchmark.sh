@@ -13,14 +13,25 @@
 #              only it knows (feature, phase, direction, and the notes), stamps skill_sha and date,
 #              totals the run, appends to the CSV, and clears staging.
 #
+# Each subagent writes its own transcript at <projects>/<session>/subagents/agent-<agent_id>.jsonl.
+# That file, not the SubagentStop event's transcript_path, is what capture measures. The event's
+# transcript_path is the MAIN session file, which in current Claude Code holds only the orchestrator's
+# turns (no isSidechain lines) -- measuring it billed every agent the orchestrator's running totals,
+# which is why an earlier run logged opus for every agent and token counts that only ever grew.
+#
 # Definitions, so rows stay comparable:
-#   tokens     input + output + cache_creation + cache_read, summed over unique requests.
-#              Assistant lines repeat one usage block across their thinking/text/tool_use parts, so
-#              this dedupes by requestId. A naive sum triple-counts.
+#   tokens     input + output + cache_creation, summed over unique requests. cache_read is left out
+#              on purpose: it re-reads context already counted when it was created, so including it
+#              would count the same prefix once per turn and make the total scale with turn count
+#              instead of work. Assistant lines repeat one usage block across their thinking/text/
+#              tool_use parts, so this dedupes by requestId. A naive sum triple-counts.
 #   tool_uses  every tool_use content block in the transcript.
-#   wall_min   active time only. A resumed agent (SendMessage) is captured again with a cumulative
-#              transcript, so tokens and tool_uses are taken from its LAST capture, while wall_min
-#              sums each round's span and excludes the idle gap between rounds.
+#   wall_min   ACTIVE time, not span. The sum of gaps between consecutive events, with each gap
+#              capped at idle_cap and the gap before a resume dropped entirely. This excludes the
+#              three ways an agent sits idle without working: waiting on a permission prompt, waiting
+#              to be resumed between rounds, and an overnight pause. A resumed agent's own file is
+#              cumulative, so its last capture already holds every round; tokens, tool_uses and
+#              active are all taken from that last capture.
 #   model      the exact model from the transcript (claude-sonnet-5 -> sonnet-5), never an alias.
 #              An alias silently changes meaning as versions roll, which is what skill_sha exists to
 #              prevent. A token count means nothing without it.
@@ -40,6 +51,12 @@ skill="${root}/.claude/skills/feature-design/SKILL.md"
 # rather than logged as if it were part of a feature.
 roster=(research csharp-dev kotlin-dev documenter refactorer)
 
+# A gap between two consecutive transcript events longer than this is treated as idle, not work, and
+# clamped to this many seconds. It has to sit above the longest legitimate single tool call in this
+# repo (a full scripts/verify.sh or a kotlinc-native compile, a few minutes) and below the shortest
+# thing we want to exclude (a permission wait or a resume gap, many minutes to hours).
+idle_cap=600
+
 command -v jq >/dev/null || { echo "benchmark.sh needs jq" >&2; exit 1; }
 
 in_roster() {
@@ -48,19 +65,22 @@ in_roster() {
   return 1
 }
 
-# Reduce one transcript to {model, tokens, tool_uses, first, last}. `since` (epoch seconds, 0 for
-# none) restricts `first` to the round that started after the previous capture, so a resumed agent's
-# idle gap is not billed as wall time. `sidechain_only` picks the subagent turns out of a transcript
-# that also holds main-thread ones.
+# Reduce one transcript to {model, tokens, tool_uses, active}. `sidechain` picks the subagent turns
+# (true) or the orchestrator turns (false). `agentid` isolates a single agent when the file holds more
+# than one; "" keeps them all. `active` is the sum of inter-event gaps, each capped at `cap`, with the
+# gap preceding a resume (a user message that is not a tool_result) dropped, so idle time never counts.
 metrics() {
-  local transcript="$1" since="${2:-0}" sidechain_only="${3:-false}"
-  jq -s --argjson since "$since" --argjson sidechain "$sidechain_only" '
+  local transcript="$1" sidechain="${2:-true}" agentid="${3:-}" cap="${4:-600}"
+  jq -s --argjson sidechain "$sidechain" --arg agentid "$agentid" --argjson cap "$cap" '
     def epoch: .timestamp | sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601;
 
     [ .[] | select(.timestamp != null)
-          | select(if $sidechain then .isSidechain == true else (.isSidechain // false) | not end) ]
+          | select(if $sidechain then .isSidechain == true else (.isSidechain // false) | not end)
+          | select($agentid == "" or .agentId == $agentid) ]
       as $lines
-    | [ $lines[] | select(.type == "assistant") ] as $asst
+    # A synthetic line is harness-injected, not the model working; keep it out of model and counts.
+    | [ $lines[] | select(.type == "assistant")
+                 | select((.message.model // "") != "<synthetic>") ] as $asst
     | [ $asst[] | select(.requestId != null) ] as $req
 
     # One usage block is repeated across a message'"'"'s content parts. Take it once per request.
@@ -68,15 +88,29 @@ metrics() {
              | map( map(select(.message.usage != null)) | first )
              | map(select(. != null)) ) as $uniq
 
+    # Events in time order, each tagged as a resume boundary (a user turn carrying no tool_result).
+    | ( [ $lines[]
+          | { t: epoch,
+              boundary: ( .type == "user" and
+                ( [ (.message.content // empty)
+                    | if type == "array" then .[] else . end | objects
+                    | select(.type == "tool_result") ] | length ) == 0 ) } ]
+        | sort_by(.t) ) as $ev
+
     | {
         model: ( [ $asst[] | .message.model // empty ] | last // "" ),
         tokens: ( [ $uniq[] | .message.usage
                     | (.input_tokens // 0) + (.output_tokens // 0)
-                    + (.cache_creation_input_tokens // 0) + (.cache_read_input_tokens // 0)
+                    + (.cache_creation_input_tokens // 0)
                   ] | add // 0 ),
         tool_uses: ( [ $asst[] | .message.content[]? | select(.type == "tool_use") ] | length ),
-        first: ( [ $lines[] | epoch | select(. > $since) ] | min // 0 ),
-        last:  ( [ $lines[] | epoch ] | max // 0 )
+        active: ( reduce range(1; ($ev | length)) as $i
+                    (0;
+                     . + ( ($ev[$i].t - $ev[$i-1].t) as $g
+                           | if $ev[$i].boundary then 0
+                             elif $g <= 0 then 0
+                             elif $g > $cap then $cap
+                             else $g end ) ) )
       }
   ' "$transcript"
 }
@@ -87,7 +121,7 @@ short_model() {
 }
 
 cmd_capture() {
-  local event transcript session agent agent_id project_dir prev_end m
+  local event transcript session agent agent_id project_dir sub m
 
   event="$(cat)"
   agent="$(printf '%s' "$event" | jq -r '.agent_type // ""')"
@@ -100,26 +134,22 @@ cmd_capture() {
   agent_id="$(printf '%s' "$event" | jq -r '.agent_id // ""')"
   project_dir="$(dirname "$transcript")"
 
-  # A resumed agent is captured again over a cumulative transcript. Bill only the new round's wall.
-  prev_end=0
-  if [ -f "$staging" ] && [ -n "$agent_id" ]; then
-    prev_end="$(jq -s --arg id "$agent_id" \
-      '[ .[] | select(.agent_id == $id) | .last ] | max // 0' "$staging")"
+  # Measure the subagent's own transcript, not the event's transcript_path (the main session file).
+  # It is cumulative across resumes, so this capture reads every round the agent has run so far, and
+  # finalize keeps the last capture per agent. Fall back to the main file for a Claude Code version
+  # that writes subagent turns into it; the agentId filter isolates this agent either way.
+  sub="${project_dir}/${session}/subagents/agent-${agent_id}.jsonl"
+  if [ -n "$agent_id" ] && [ -f "$sub" ]; then
+    m="$(metrics "$sub" true "$agent_id" "$idle_cap")"
+  else
+    m="$(metrics "$transcript" true "$agent_id" "$idle_cap")"
   fi
-
-  # A subagent transcript may be its own file (all sidechain) or share the session file. Prefer the
-  # sidechain turns when there are any, so the orchestrator's own turns are never billed to an agent.
-  local has_sidechain
-  has_sidechain="$(jq -s 'any(.[]; .isSidechain == true)' "$transcript")"
-  m="$(metrics "$transcript" "$prev_end" "$has_sidechain")"
 
   jq -nc \
     --arg session "$session" --arg agent "$agent" --arg agent_id "$agent_id" \
     --arg project_dir "$project_dir" --argjson m "$m" \
     '{session: $session, agent: $agent, agent_id: $agent_id, project_dir: $project_dir,
-      model: $m.model, tokens: $m.tokens, tool_uses: $m.tool_uses,
-      wall_sec: (if $m.first > 0 and $m.last > $m.first then $m.last - $m.first else 0 end),
-      last: $m.last}' >> "$staging"
+      model: $m.model, tokens: $m.tokens, tool_uses: $m.tool_uses, active_sec: $m.active}' >> "$staging"
 }
 
 cmd_finalize() {
@@ -150,9 +180,9 @@ cmd_finalize() {
   # to it" -- but it is sitting in the main transcript, which is the session file.
   main_transcript="${project_dir}/${session}.jsonl"
   if [ -f "$main_transcript" ]; then
-    orch="$(metrics "$main_transcript" 0 false)"
+    orch="$(metrics "$main_transcript" false "" "$idle_cap")"
   else
-    orch='{"model":"","tokens":0,"tool_uses":0,"first":0,"last":0}'
+    orch='{"model":"","tokens":0,"tool_uses":0,"active":0}'
   fi
 
   skill_sha="$(git -C "$root" log -1 --format=%h -- "$skill" 2>/dev/null || echo "")"
@@ -171,17 +201,18 @@ cmd_finalize() {
 
     [ .[] | select(.session == $session) ] as $staged
 
-    # Per agent role. A resumed agent is cumulative, so tokens and tool_uses come from its last
-    # capture; wall sums every round. Two agents of the same role in one run sum across both.
+    # Per agent role. Each agent has one cumulative file, so every figure comes from its last
+    # capture. Two distinct agents of the same role in one run sum across both.
     | ( $roster
         | map(. as $role
               | ($staged | map(select(.agent == $role))) as $rows
+              | ($rows | group_by(.agent_id)) as $byagent
               | { agent: $role,
                   ran: ($rows | length > 0),
                   model: ($rows | last | .model? // "" | if . == "" then "" else shorten end),
-                  tokens: ( $rows | group_by(.agent_id) | map(last | .tokens) | add // 0 ),
-                  tool_uses: ( $rows | group_by(.agent_id) | map(last | .tool_uses) | add // 0 ),
-                  wall_min: ( ($rows | map(.wall_sec) | add // 0) / 60 | round ) } )
+                  tokens: ( $byagent | map(last | .tokens) | add // 0 ),
+                  tool_uses: ( $byagent | map(last | .tool_uses) | add // 0 ),
+                  wall_min: ( ($byagent | map(last | .active_sec) | add // 0) / 60 | round ) } )
       ) as $agents
 
     | ( $agents | map(select(.ran)) ) as $ran
