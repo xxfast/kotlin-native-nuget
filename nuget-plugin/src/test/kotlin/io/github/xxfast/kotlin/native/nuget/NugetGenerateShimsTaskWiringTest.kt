@@ -29,8 +29,8 @@ class NugetGenerateShimsTaskWiringTest {
     return project
   }
 
-  // A project with a Kotlin/Native shared-lib binary configured, mirroring sample-library's
-  // `binaries { sharedLib { baseName = "sample" } }` — required so `nugetGenerateShims`'s
+  // A project with a Kotlin/Native shared-lib binary configured, mirroring test-library's
+  // `binaries { sharedLib { baseName = "test" } }` — required so `nugetGenerateShims`'s
   // fail-fast `nativeLibraryName` derivation (ADR-049 Alternative 12) has something to resolve.
   //
   // Applying the real "org.jetbrains.kotlin.multiplatform" plugin also activates NugetPlugin's
@@ -111,7 +111,7 @@ class NugetGenerateShimsTaskWiringTest {
 
   @Test
   fun `nugetGenerateShims nativeLibraryName resolves from the configured sharedLib baseName`() {
-    val project: Project = buildProjectWithSharedLib(baseName = "sample")
+    val project: Project = buildProjectWithSharedLib(baseName = "test")
 
     project.extensions.getByType(NugetExtension::class.java).dependencies {
       dependency("Newtonsoft.Json", version = "13.0.3") {

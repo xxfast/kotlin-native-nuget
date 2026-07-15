@@ -1,0 +1,3 @@
+<Project>
+  <Import Project="$(MSBuildThisFileDirectory)build/FixtureVersions.props" Condition="Exists('$(MSBuildThisFileDirectory)build/FixtureVersions.props')" />
+</Project>

@@ -83,6 +83,7 @@ data class CirValueClassConstructor(
 
 data class CirEnum(
   val name: String,
+  val libraryName: String,
   val entries: List<CirEnumEntry>,
   val properties: List<CirEnumProperty> = emptyList(),
 ) : CirDeclaration

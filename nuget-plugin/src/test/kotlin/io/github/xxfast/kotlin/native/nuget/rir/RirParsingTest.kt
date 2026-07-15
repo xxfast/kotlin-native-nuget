@@ -233,11 +233,11 @@ class RirParsingTest {
       {
         "assemblies": [
           {
-            "packageId": "Sample.Text",
-            "assemblyName": "Sample.Text",
+            "packageId": "Test.Text",
+            "assemblyName": "Test.Text",
             "namespaces": [
               {
-                "name": "Sample.Text",
+                "name": "Test.Text",
                 "types": [
                   {
                     "kind": "class",
@@ -246,7 +246,7 @@ class RirParsingTest {
                       {
                         "name": "Parse",
                         "isStatic": true,
-                        "returnType": { "kind": "handle", "namespace": "Sample.Text", "name": "Template" },
+                        "returnType": { "kind": "handle", "namespace": "Test.Text", "name": "Template" },
                         "parameters": []
                       }
                     ],
@@ -265,7 +265,7 @@ class RirParsingTest {
     val cls = file.assemblies[0].namespaces[0].types[0] as RirClass
     val returnType: RirTypeRef = cls.methods[0].returnType
     assertIs<RirObjectHandleType>(returnType)
-    assertEquals("Sample.Text", returnType.namespace)
+    assertEquals("Test.Text", returnType.namespace)
     assertEquals("Template", returnType.name)
   }
 
@@ -276,11 +276,11 @@ class RirParsingTest {
       {
         "assemblies": [
           {
-            "packageId": "Sample.Text",
-            "assemblyName": "Sample.Text",
+            "packageId": "Test.Text",
+            "assemblyName": "Test.Text",
             "namespaces": [
               {
-                "name": "Sample.Text",
+                "name": "Test.Text",
                 "types": [
                   {
                     "kind": "class",
@@ -310,11 +310,11 @@ class RirParsingTest {
       {
         "assemblies": [
           {
-            "packageId": "Sample.Text",
-            "assemblyName": "Sample.Text",
+            "packageId": "Test.Text",
+            "assemblyName": "Test.Text",
             "namespaces": [
               {
-                "name": "Sample.Text",
+                "name": "Test.Text",
                 "types": [
                   {
                     "kind": "class",
@@ -347,11 +347,11 @@ class RirParsingTest {
       {
         "assemblies": [
           {
-            "packageId": "Sample.Enums",
-            "assemblyName": "Sample.Enums",
+            "packageId": "Test.Enums",
+            "assemblyName": "Test.Enums",
             "namespaces": [
               {
-                "name": "Sample.Enums",
+                "name": "Test.Enums",
                 "types": [
                   {
                     "kind": "enum",
@@ -369,9 +369,9 @@ class RirParsingTest {
                       {
                         "name": "Next",
                         "isStatic": true,
-                        "returnType": { "kind": "enum", "namespace": "Sample.Enums", "name": "Mood" },
+                        "returnType": { "kind": "enum", "namespace": "Test.Enums", "name": "Mood" },
                         "parameters": [
-                          { "name": "mood", "type": { "kind": "enum", "namespace": "Sample.Enums", "name": "Mood" } }
+                          { "name": "mood", "type": { "kind": "enum", "namespace": "Test.Enums", "name": "Mood" } }
                         ]
                       }
                     ],
@@ -409,11 +409,11 @@ class RirParsingTest {
       {
         "assemblies": [
           {
-            "packageId": "Sample.Text",
-            "assemblyName": "Sample.Text",
+            "packageId": "Test.Text",
+            "assemblyName": "Test.Text",
             "namespaces": [
               {
-                "name": "Sample.Text",
+                "name": "Test.Text",
                 "types": [
                   {
                     "kind": "class",
@@ -452,11 +452,11 @@ class RirParsingTest {
       {
         "assemblies": [
           {
-            "packageId": "Sample.Text",
-            "assemblyName": "Sample.Text",
+            "packageId": "Test.Text",
+            "assemblyName": "Test.Text",
             "namespaces": [
               {
-                "name": "Sample.Text",
+                "name": "Test.Text",
                 "types": [
                   {
                     "kind": "class",
@@ -625,11 +625,11 @@ class RirParsingTest {
       {
         "assemblies": [
           {
-            "packageId": "Sample.Nullability",
-            "assemblyName": "Sample.Nullability",
+            "packageId": "Test.Nullability",
+            "assemblyName": "Test.Nullability",
             "namespaces": [
               {
-                "name": "Sample.Nullability",
+                "name": "Test.Nullability",
                 "types": [
                   {
                     "kind": "class",
@@ -666,11 +666,11 @@ class RirParsingTest {
       {
         "assemblies": [
           {
-            "packageId": "Sample.Nullability",
-            "assemblyName": "Sample.Nullability",
+            "packageId": "Test.Nullability",
+            "assemblyName": "Test.Nullability",
             "namespaces": [
               {
-                "name": "Sample.Nullability",
+                "name": "Test.Nullability",
                 "types": [
                   {
                     "kind": "class",
@@ -681,7 +681,7 @@ class RirParsingTest {
                         "isStatic": false,
                         "returnType": {
                           "kind": "handle",
-                          "namespace": "Sample.Nullability",
+                          "namespace": "Test.Nullability",
                           "name": "Nickname",
                           "nullable": true
                         },
@@ -703,7 +703,7 @@ class RirParsingTest {
     val cls = file.assemblies[0].namespaces[0].types[0] as RirClass
     val returnType: RirTypeRef = cls.methods[0].returnType
     assertIs<RirObjectHandleType>(returnType)
-    assertEquals("Sample.Nullability", returnType.namespace)
+    assertEquals("Test.Nullability", returnType.namespace)
     assertEquals("Nickname", returnType.name)
     assertEquals(true, returnType.nullable)
   }
@@ -714,11 +714,11 @@ class RirParsingTest {
       {
         "assemblies": [
           {
-            "packageId": "Sample.Text",
-            "assemblyName": "Sample.Text",
+            "packageId": "Test.Text",
+            "assemblyName": "Test.Text",
             "namespaces": [
               {
-                "name": "Sample.Text",
+                "name": "Test.Text",
                 "types": [
                   {
                     "kind": "class",
@@ -727,7 +727,7 @@ class RirParsingTest {
                       {
                         "name": "Parse",
                         "isStatic": true,
-                        "returnType": { "kind": "handle", "namespace": "Sample.Text", "name": "Template" },
+                        "returnType": { "kind": "handle", "namespace": "Test.Text", "name": "Template" },
                         "parameters": []
                       }
                     ],
@@ -793,8 +793,8 @@ class RirParsingTest {
       {
         "assemblies": [
           {
-            "packageId": "Sample.Nullability",
-            "assemblyName": "Sample.Nullability",
+            "packageId": "Test.Nullability",
+            "assemblyName": "Test.Nullability",
             "namespaces": [],
             "diagnostics": [
               {

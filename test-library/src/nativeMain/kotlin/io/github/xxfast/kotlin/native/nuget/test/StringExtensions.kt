@@ -1,0 +1,6 @@
+package io.github.xxfast.kotlin.native.nuget.test
+
+fun String.meowify(): String = "$this meow!"
+fun String.isPurring(): Boolean = lowercase().contains("purr")
+
+val String.wordCount: Int get() = trim().split("\\s+".toRegex()).size

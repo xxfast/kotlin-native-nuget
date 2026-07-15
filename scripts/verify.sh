@@ -36,7 +36,7 @@ if [ "$RUN_PLUGIN" = true ]; then
   ./gradlew -p smoke-test verifyProcessorResolvesByCoordinate
 fi
 
-echo "==> Purge stale SampleLibrary + SampleDependency NuGet caches"
+echo "==> Purge stale TestLibrary + TestDependency NuGet caches"
 # Fixture packages now receive a unique version on every pack, so NuGet resolves each build under
 # a new cache key. Keep this purge as a clean-room verification precaution; it is no longer the
 # mechanism that prevents fixture packages from going stale.
@@ -45,17 +45,17 @@ rm -rf ~/.nuget/packages/samplelibrary ~/.nuget/packages/sampledependency
 # Consumer projects resolve the new exact fixture version on the next restore, so their existing
 # assets files cannot silently retain an older package's contentFiles. Keep the clean output here
 # to make the full verification run self-contained.
-rm -rf sample-app/GeneratedBindingsCheck/obj sample-app/GeneratedBindingsCheck/bin
-rm -rf sample-app/SampleApp.Tests/obj sample-app/SampleApp.Tests/bin
+rm -rf GeneratedBindingsCheck/obj GeneratedBindingsCheck/bin
+rm -rf IntegrationTests/obj IntegrationTests/bin
 
-echo "==> Pack SampleLibrary NuGet (:sample-library:clean :sample-library:packNuget)"
-./gradlew :sample-library:clean :sample-library:packNuget
+echo "==> Pack TestLibrary NuGet (:test-library:clean :test-library:packNuget)"
+./gradlew :test-library:clean :test-library:packNuget
 
 echo "==> Check generated bindings compile as a consumer (net8.0, warnings as errors)"
-dotnet build sample-app/GeneratedBindingsCheck
+dotnet build GeneratedBindingsCheck
 
-echo "==> C# consumer tests (dotnet test in sample-app/SampleApp.Tests)"
-cd "$ROOT/sample-app/SampleApp.Tests"
+echo "==> C# consumer tests (dotnet test in IntegrationTests)"
+cd "$ROOT/IntegrationTests"
 dotnet test
 
 echo "==> Verify complete"

@@ -12,7 +12,7 @@ A Kotlin `class` becomes a C# `class` backed by an opaque `StableRef` handle, im
 
 ## Kotlin
 
-From `sample-library/src/nativeMain/kotlin/.../cat/Cat.kt`:
+From `test-library/src/nativeMain/kotlin/.../cat/Cat.kt`:
 
 ```kotlin
 class Cat(
@@ -89,7 +89,7 @@ Every access to `Brother` calls `Native_Get_brother` again and wraps the resulti
 
 ## Using it from C#
 
-From `sample-app/SampleApp.Tests/ObjectTests.cs`:
+From `IntegrationTests/ObjectTests.cs`:
 
 ```C#
 [Fact]
@@ -138,7 +138,7 @@ public void Cat_Brother_CyclicReference_BothCanBeDisposed()
 }
 ```
 
-From `sample-app/SampleApp.Tests/NullablePropertyTests.cs`, a nullable primitive property:
+From `IntegrationTests/NullablePropertyTests.cs`, a nullable primitive property:
 
 ```C#
 [Fact]

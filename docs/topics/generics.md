@@ -15,7 +15,7 @@ Generic classes and functions cross the bridge through a type-erased native laye
 
 ## Kotlin
 
-An unconstrained generic class, from `sample-library/src/nativeMain/kotlin/.../cat/Box.kt`:
+An unconstrained generic class, from `test-library/src/nativeMain/kotlin/.../cat/Box.kt`:
 
 ```kotlin
 class Box<T>(val value: T) {
@@ -25,7 +25,7 @@ class Box<T>(val value: T) {
 }
 ```
 
-A constrained generic class, from `sample-library/src/nativeMain/kotlin/.../cat/PetBox.kt`:
+A constrained generic class, from `test-library/src/nativeMain/kotlin/.../cat/PetBox.kt`:
 
 ```kotlin
 class PetBox<T : Pet>(val value: T) {
@@ -35,7 +35,7 @@ class PetBox<T : Pet>(val value: T) {
 }
 ```
 
-Generic functions, from `sample-library/src/nativeMain/kotlin/.../cat/Helpers.kt`:
+Generic functions, from `test-library/src/nativeMain/kotlin/.../cat/Helpers.kt`:
 
 ```kotlin
 fun <T> identity(value: T): T = value
@@ -47,7 +47,7 @@ fun <T : Pet> adoptPet(pet: T): T = pet
 inline fun <reified T : Pet> groomPet(pet: T): T = pet
 ```
 
-Variance, from `sample-library/src/nativeMain/kotlin/.../cat/Variance.kt`:
+Variance, from `test-library/src/nativeMain/kotlin/.../cat/Variance.kt`:
 
 ```kotlin
 interface Readable<out T> {
@@ -59,13 +59,13 @@ interface Writable<in T> {
 }
 ```
 
-`inline fun` (non-reified), from `sample-library/src/nativeMain/kotlin/.../math/Arithmetic.kt`:
+`inline fun` (non-reified), from `test-library/src/nativeMain/kotlin/.../math/Arithmetic.kt`:
 
 ```kotlin
 inline fun square(x: Int): Int = x * x
 ```
 
-Generic type aliases, from `sample-library/src/nativeMain/kotlin/.../TypeAliases.kt`:
+Generic type aliases, from `test-library/src/nativeMain/kotlin/.../TypeAliases.kt`:
 
 ```kotlin
 typealias Score = Int
@@ -171,7 +171,7 @@ Generic type aliases erase to their underlying type; `Score` (an alias for `Int`
 
 ## Using it from C#
 
-Unconstrained generics, from `sample-app/SampleApp.Tests/GenericTests.cs`:
+Unconstrained generics, from `IntegrationTests/GenericTests.cs`:
 
 ```C#
 [Fact]
@@ -184,7 +184,7 @@ public void Box_Cat_ConstructorAndGetter()
 }
 ```
 
-Constrained generics, from `sample-app/SampleApp.Tests/GenericConstraintTests.cs`:
+Constrained generics, from `IntegrationTests/GenericConstraintTests.cs`:
 
 ```C#
 [Fact]
@@ -203,7 +203,7 @@ public void AdoptPet_Oreo_ReturnsSameCat()
 }
 ```
 
-Generic functions, from `sample-app/SampleApp.Tests/GenericFunctionTests.cs`:
+Generic functions, from `IntegrationTests/GenericFunctionTests.cs`:
 
 ```C#
 [Fact]
@@ -214,7 +214,7 @@ public void WrapInBox_Int()
 }
 ```
 
-Variance, from `sample-app/SampleApp.Tests/VarianceTests.cs`:
+Variance, from `IntegrationTests/VarianceTests.cs`:
 
 ```C#
 [Fact]
@@ -231,7 +231,7 @@ public void IWritable_Contravariance_AllowsWideningAssignment()
 }
 ```
 
-`inline fun square`, from `sample-app/SampleApp.Tests/ArithmeticTests.cs`:
+`inline fun square`, from `IntegrationTests/ArithmeticTests.cs`:
 
 ```C#
 [Fact]
@@ -242,7 +242,7 @@ public void Square_ReturnsSquaredValue()
 }
 ```
 
-Type aliases, from `sample-app/SampleApp.Tests/TypeAliasTests.cs`:
+Type aliases, from `IntegrationTests/TypeAliasTests.cs`:
 
 ```C#
 [Fact]

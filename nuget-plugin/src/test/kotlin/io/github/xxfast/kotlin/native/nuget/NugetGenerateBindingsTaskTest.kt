@@ -241,7 +241,7 @@ class NugetGenerateBindingsTaskTest {
   // ------------------------------------------------------------------
   // ADR-051: C# objects as opaque handles — Kotlin class wrapper generation
   //
-  // Canonical fixture: Sample.Text.Template — public non-static class with two static methods:
+  // Canonical fixture: Test.Text.Template — public non-static class with two static methods:
   //   Parse(source: string): Template  and  Render(template: Template, name: string): string
   //
   // NOTE: this fixture references RirObjectHandleType (not yet in RirModel.kt) and the isStatic
@@ -253,11 +253,11 @@ class NugetGenerateBindingsTaskTest {
   private val templateRir: RirFile = RirFile(
     assemblies = listOf(
       RirAssembly(
-        packageId = "Sample.Text",
-        assemblyName = "Sample.Text",
+        packageId = "Test.Text",
+        assemblyName = "Test.Text",
         namespaces = listOf(
           RirNamespace(
-            name = "Sample.Text",
+            name = "Test.Text",
             types = listOf(
               RirClass(
                 name = "Template",
@@ -266,7 +266,7 @@ class NugetGenerateBindingsTaskTest {
                   RirMethod(
                     name = "Parse",
                     isStatic = true,
-                    returnType = RirObjectHandleType(namespace = "Sample.Text", name = "Template"),
+                    returnType = RirObjectHandleType(namespace = "Test.Text", name = "Template"),
                     parameters = listOf(
                       RirParameter(name = "source", type = RirStringType()),
                     ),
@@ -278,7 +278,7 @@ class NugetGenerateBindingsTaskTest {
                     parameters = listOf(
                       RirParameter(
                         name = "template",
-                        type = RirObjectHandleType(namespace = "Sample.Text", name = "Template"),
+                        type = RirObjectHandleType(namespace = "Test.Text", name = "Template"),
                       ),
                       RirParameter(name = "name", type = RirStringType()),
                     ),
@@ -553,7 +553,7 @@ class NugetGenerateBindingsTaskTest {
   // ADR-052: C# instance constructors in Kotlin — `new Foo(...)` maps to a Kotlin secondary
   // `constructor`, backed by a file-private `construct(...)` helper.
   //
-  // Canonical fixture: Sample.Text.Template — public non-static class with:
+  // Canonical fixture: Test.Text.Template — public non-static class with:
   //   - one public instance constructor: Template(string source)
   //   - the existing ADR-051 statics: Parse(source: string): Template, Render(template, name): string
   // so both the constructor path and the pre-existing static-handle path are exercised together,
@@ -570,11 +570,11 @@ class NugetGenerateBindingsTaskTest {
   private val templateWithCtorRir: RirFile = RirFile(
     assemblies = listOf(
       RirAssembly(
-        packageId = "Sample.Text",
-        assemblyName = "Sample.Text",
+        packageId = "Test.Text",
+        assemblyName = "Test.Text",
         namespaces = listOf(
           RirNamespace(
-            name = "Sample.Text",
+            name = "Test.Text",
             types = listOf(
               RirClass(
                 name = "Template",
@@ -590,7 +590,7 @@ class NugetGenerateBindingsTaskTest {
                   RirMethod(
                     name = "Parse",
                     isStatic = true,
-                    returnType = RirObjectHandleType(namespace = "Sample.Text", name = "Template"),
+                    returnType = RirObjectHandleType(namespace = "Test.Text", name = "Template"),
                     parameters = listOf(
                       RirParameter(name = "source", type = RirStringType()),
                     ),
@@ -602,7 +602,7 @@ class NugetGenerateBindingsTaskTest {
                     parameters = listOf(
                       RirParameter(
                         name = "template",
-                        type = RirObjectHandleType(namespace = "Sample.Text", name = "Template"),
+                        type = RirObjectHandleType(namespace = "Test.Text", name = "Template"),
                       ),
                       RirParameter(name = "name", type = RirStringType()),
                     ),
@@ -687,7 +687,7 @@ class NugetGenerateBindingsTaskTest {
 
     val bindings: GeneratedFile = files.single { it.relativePath.endsWith("TemplateBindings.kt") }
     val registerSignature: String = bindings.content
-      .substringAfter("fun nuget_sample_text_template_register(")
+      .substringAfter("fun nuget_test_text_template_register(")
       .substringBefore(") {")
 
     val ctorIndex: Int = registerSignature.indexOf("ctorPtr")
@@ -726,7 +726,7 @@ class NugetGenerateBindingsTaskTest {
   // parameter is the receiver handle" (ADR-051 Deferred section). Reuses the ADR-051 handle +
   // wrapper machinery unchanged.
   //
-  // Canonical fixture: Sample.Text.Template — public non-static class with:
+  // Canonical fixture: Test.Text.Template — public non-static class with:
   //   - a public instance constructor Template(string source)                (ADR-052, unchanged)
   //   - static Parse(source: string): Template                               (ADR-051, unchanged)
   //   - instance method Rename(newName: string): void
@@ -746,11 +746,11 @@ class NugetGenerateBindingsTaskTest {
   private val templateInstanceRir: RirFile = RirFile(
     assemblies = listOf(
       RirAssembly(
-        packageId = "Sample.Text",
-        assemblyName = "Sample.Text",
+        packageId = "Test.Text",
+        assemblyName = "Test.Text",
         namespaces = listOf(
           RirNamespace(
-            name = "Sample.Text",
+            name = "Test.Text",
             types = listOf(
               RirClass(
                 name = "Template",
@@ -764,7 +764,7 @@ class NugetGenerateBindingsTaskTest {
                   RirMethod(
                     name = "Parse",
                     isStatic = true,
-                    returnType = RirObjectHandleType(namespace = "Sample.Text", name = "Template"),
+                    returnType = RirObjectHandleType(namespace = "Test.Text", name = "Template"),
                     parameters = listOf(RirParameter(name = "source", type = RirStringType())),
                   ),
                   RirMethod(
@@ -776,7 +776,7 @@ class NugetGenerateBindingsTaskTest {
                   RirMethod(
                     name = "Clone",
                     isStatic = false,
-                    returnType = RirObjectHandleType(namespace = "Sample.Text", name = "Template"),
+                    returnType = RirObjectHandleType(namespace = "Test.Text", name = "Template"),
                     parameters = emptyList(),
                   ),
                 ),
@@ -790,7 +790,7 @@ class NugetGenerateBindingsTaskTest {
                   ),
                   RirProperty(
                     name = "Parent",
-                    type = RirObjectHandleType(namespace = "Sample.Text", name = "Template"),
+                    type = RirObjectHandleType(namespace = "Test.Text", name = "Template"),
                     isReadOnly = false,
                     isStatic = false,
                   ),
@@ -1030,11 +1030,11 @@ class NugetGenerateBindingsTaskTest {
   private val collisionRir: RirFile = RirFile(
     assemblies = listOf(
       RirAssembly(
-        packageId = "Sample.Text",
-        assemblyName = "Sample.Text",
+        packageId = "Test.Text",
+        assemblyName = "Test.Text",
         namespaces = listOf(
           RirNamespace(
-            name = "Sample.Text",
+            name = "Test.Text",
             types = listOf(
               RirClass(
                 name = "Widget",
@@ -1125,11 +1125,11 @@ class NugetGenerateBindingsTaskTest {
   private val moodRir: RirFile = RirFile(
     assemblies = listOf(
       RirAssembly(
-        packageId = "Sample.Enums",
-        assemblyName = "Sample.Enums",
+        packageId = "Test.Enums",
+        assemblyName = "Test.Enums",
         namespaces = listOf(
           RirNamespace(
-            name = "Sample.Enums",
+            name = "Test.Enums",
             types = listOf(
               RirEnum(
                 name = "Mood",
@@ -1146,11 +1146,11 @@ class NugetGenerateBindingsTaskTest {
                   RirMethod(
                     name = "Next",
                     isStatic = true,
-                    returnType = RirEnumType(namespace = "Sample.Enums", name = "Mood"),
+                    returnType = RirEnumType(namespace = "Test.Enums", name = "Mood"),
                     parameters = listOf(
                       RirParameter(
                         name = "mood",
-                        type = RirEnumType(namespace = "Sample.Enums", name = "Mood"),
+                        type = RirEnumType(namespace = "Test.Enums", name = "Mood"),
                       ),
                     ),
                   ),
@@ -1158,7 +1158,7 @@ class NugetGenerateBindingsTaskTest {
                 properties = listOf(
                   RirProperty(
                     name = "DefaultMood",
-                    type = RirEnumType(namespace = "Sample.Enums", name = "Mood"),
+                    type = RirEnumType(namespace = "Test.Enums", name = "Mood"),
                     isReadOnly = false,
                     isStatic = true,
                   ),
@@ -1265,8 +1265,8 @@ class NugetGenerateBindingsTaskTest {
   }
 
   // ------------------------------------------------------------------
-  // 16. Cross-namespace enum references: Mood is declared in Sample.Enums but consumed by
-  // Sample.Text.MoodService. When the two namespaces are aliased to different Kotlin packages the
+  // 16. Cross-namespace enum references: Mood is declared in Test.Enums but consumed by
+  // Test.Text.MoodService. When the two namespaces are aliased to different Kotlin packages the
   // stub must import the enum, or the generated code does not compile.
   // ------------------------------------------------------------------
 
@@ -1277,7 +1277,7 @@ class NugetGenerateBindingsTaskTest {
         assemblyName = "Sample",
         namespaces = listOf(
           RirNamespace(
-            name = "Sample.Enums",
+            name = "Test.Enums",
             types = listOf(
               RirEnum(
                 name = "Mood",
@@ -1289,7 +1289,7 @@ class NugetGenerateBindingsTaskTest {
             ),
           ),
           RirNamespace(
-            name = "Sample.Text",
+            name = "Test.Text",
             types = listOf(
               RirClass(
                 name = "MoodService",
@@ -1298,11 +1298,11 @@ class NugetGenerateBindingsTaskTest {
                   RirMethod(
                     name = "Next",
                     isStatic = true,
-                    returnType = RirEnumType(namespace = "Sample.Enums", name = "Mood"),
+                    returnType = RirEnumType(namespace = "Test.Enums", name = "Mood"),
                     parameters = listOf(
                       RirParameter(
                         name = "mood",
-                        type = RirEnumType(namespace = "Sample.Enums", name = "Mood"),
+                        type = RirEnumType(namespace = "Test.Enums", name = "Mood"),
                       ),
                     ),
                   ),
@@ -1310,7 +1310,7 @@ class NugetGenerateBindingsTaskTest {
                 properties = listOf(
                   RirProperty(
                     name = "DefaultMood",
-                    type = RirEnumType(namespace = "Sample.Enums", name = "Mood"),
+                    type = RirEnumType(namespace = "Test.Enums", name = "Mood"),
                     isStatic = true,
                   ),
                 ),
@@ -1324,8 +1324,8 @@ class NugetGenerateBindingsTaskTest {
 
   private val moodNamespaceAliases: Map<String, Map<String, String>> = mapOf(
     "Sample" to mapOf(
-      "Sample.Enums" to "sample.enums",
-      "Sample.Text" to "sample.text",
+      "Test.Enums" to "test.enums",
+      "Test.Text" to "test.text",
     ),
   )
 
@@ -1339,9 +1339,9 @@ class NugetGenerateBindingsTaskTest {
     val enum: GeneratedFile = files.single { it.relativePath.endsWith("/Mood.kt") }
     val stub: GeneratedFile = files.single { it.relativePath.endsWith("MoodService.kt") }
 
-    assertContains(enum.content, "package sample.enums")
-    assertContains(stub.content, "package sample.text")
-    assertContains(stub.content, "import sample.enums.Mood")
+    assertContains(enum.content, "package test.enums")
+    assertContains(stub.content, "package test.text")
+    assertContains(stub.content, "import test.enums.Mood")
   }
 
   @Test
@@ -1362,7 +1362,7 @@ class NugetGenerateBindingsTaskTest {
   // RirObjectHandleType now drives the `?` in generated Kotlin, replacing ADR-051's hardcoded
   // "handle returns are always Foo?, handle parameters are always non-null Foo" policy.
   //
-  // Canonical fixture: Sample.Nullability.NicknameBook, mirroring the ADR's own fixture surface.
+  // Canonical fixture: Test.Nullability.NicknameBook, mirroring the ADR's own fixture surface.
   // NOTE: several assertions below are expected to fail against today's generator (handle returns
   // are unconditionally nullable, handle parameters are unconditionally non-null, string returns
   // always error() on a null pointer, and a settable handle-typed property always collapses to a
@@ -1373,11 +1373,11 @@ class NugetGenerateBindingsTaskTest {
   private val nicknameRir: RirFile = RirFile(
     assemblies = listOf(
       RirAssembly(
-        packageId = "Sample.Nullability",
-        assemblyName = "Sample.Nullability",
+        packageId = "Test.Nullability",
+        assemblyName = "Test.Nullability",
         namespaces = listOf(
           RirNamespace(
-            name = "Sample.Nullability",
+            name = "Test.Nullability",
             types = listOf(
               RirClass(
                 name = "Nickname",
@@ -1396,7 +1396,7 @@ class NugetGenerateBindingsTaskTest {
                   RirProperty(
                     name = "Favourite",
                     type = RirObjectHandleType(
-                      namespace = "Sample.Nullability",
+                      namespace = "Test.Nullability",
                       name = "Nickname",
                       nullable = true,
                     ),
@@ -1406,7 +1406,7 @@ class NugetGenerateBindingsTaskTest {
                   RirProperty(
                     name = "Primary",
                     type = RirObjectHandleType(
-                      namespace = "Sample.Nullability",
+                      namespace = "Test.Nullability",
                       name = "Nickname",
                       nullable = false,
                     ),
@@ -1433,7 +1433,7 @@ class NugetGenerateBindingsTaskTest {
                     name = "Lookup",
                     isStatic = false,
                     returnType = RirObjectHandleType(
-                      namespace = "Sample.Nullability",
+                      namespace = "Test.Nullability",
                       name = "Nickname",
                       nullable = true,
                     ),
@@ -1443,7 +1443,7 @@ class NugetGenerateBindingsTaskTest {
                     name = "DefaultNickname",
                     isStatic = false,
                     returnType = RirObjectHandleType(
-                      namespace = "Sample.Nullability",
+                      namespace = "Test.Nullability",
                       name = "Nickname",
                       nullable = false,
                     ),
@@ -1457,7 +1457,7 @@ class NugetGenerateBindingsTaskTest {
                       RirParameter(
                         name = "nickname",
                         type = RirObjectHandleType(
-                          namespace = "Sample.Nullability",
+                          namespace = "Test.Nullability",
                           name = "Nickname",
                           nullable = true,
                         ),
@@ -1631,11 +1631,11 @@ class NugetGenerateBindingsTaskTest {
   private val sharedNamespaceRir: RirFile = RirFile(
     assemblies = listOf(
       RirAssembly(
-        packageId = "Sample.Nullability",
-        assemblyName = "Sample.Nullability",
+        packageId = "Test.Nullability",
+        assemblyName = "Test.Nullability",
         namespaces = listOf(
           RirNamespace(
-            name = "Sample.Nullability",
+            name = "Test.Nullability",
             types = listOf(
               RirClass(
                 name = "NicknameBook",
@@ -1750,8 +1750,8 @@ class NugetGenerateBindingsTaskTest {
     val rir = RirFile(
       assemblies = listOf(
         RirAssembly(
-          packageId = "Sample.Nullability",
-          assemblyName = "Sample.Nullability",
+          packageId = "Test.Nullability",
+          assemblyName = "Test.Nullability",
           namespaces = emptyList(),
           diagnostics = listOf(
             RirDiagnostic(
@@ -1785,9 +1785,9 @@ class NugetGenerateBindingsTaskTest {
     val rir = RirFile(
       assemblies = listOf(
         RirAssembly(
-          packageId = "Sample.Text",
-          assemblyName = "Sample.Text",
-          namespaces = listOf(RirNamespace(name = "Sample.Text", types = listOf(cls))),
+          packageId = "Test.Text",
+          assemblyName = "Test.Text",
+          namespaces = listOf(RirNamespace(name = "Test.Text", types = listOf(cls))),
           diagnostics = listOf(
             RirDiagnostic(
               kind = RirDiagnosticKind.INFO_OBLIVIOUS_NULLABILITY,
@@ -1813,7 +1813,7 @@ class NugetGenerateBindingsTaskTest {
   }
 
   // ------------------------------------------------------------------
-  // ADR-054 walking skeleton: registration observability ABI amendment (Sample.Text.Template).
+  // ADR-054 walking skeleton: registration observability ABI amendment (Test.Text.Template).
   // ------------------------------------------------------------------
 
   @Test
@@ -1822,7 +1822,7 @@ class NugetGenerateBindingsTaskTest {
 
     val bindings: GeneratedFile = files.single { it.relativePath.endsWith("TemplateBindings.kt") }
     val registerSignature: String = bindings.content
-      .substringAfter("fun nuget_sample_text_template_register(")
+      .substringAfter("fun nuget_test_text_template_register(")
       .substringBefore(") {")
 
     assertContains(registerSignature, "slotCount: Int")
@@ -1856,7 +1856,7 @@ class NugetGenerateBindingsTaskTest {
       "ADR-054: checkContract must run before any pointer is stored — checked at $checkIndex, " +
           "stored at $storeIndex",
     )
-    assertContains(bindings.content, "qualifiedType = \"Sample.Text.Template\"")
+    assertContains(bindings.content, "qualifiedType = \"Test.Text.Template\"")
     assertContains(bindings.content, "expectedSlots = 3")
   }
 
@@ -1865,7 +1865,7 @@ class NugetGenerateBindingsTaskTest {
     val files: List<GeneratedFile> = generateKotlinStubs(templateWithCtorRir)
 
     val bindings: GeneratedFile = files.single { it.relativePath.endsWith("TemplateBindings.kt") }
-    assertContains(bindings.content, "NugetRegistry.record(\"Sample.Text.Template\", 3)")
+    assertContains(bindings.content, "NugetRegistry.record(\"Test.Text.Template\", 3)")
   }
 
   @Test
@@ -1875,7 +1875,7 @@ class NugetGenerateBindingsTaskTest {
     val stub: GeneratedFile = files.single { it.relativePath.endsWith("Template.kt") }
     assertContains(
       stub.content,
-      "NugetRegistry.notRegistered(\"Sample.Text.Template\", \"Sample.Text\")",
+      "NugetRegistry.notRegistered(\"Test.Text.Template\", \"Test.Text\")",
       message = "ADR-054: the requireNotNull guard message must be computed at runtime via " +
           "NugetRegistry.notRegistered(...), not a fixed generation-time string",
     )
@@ -1894,7 +1894,7 @@ class NugetGenerateBindingsTaskTest {
     }
     assertNotNull(registry, "NugetRegistry.kt must be generated whenever any class binds")
     assertContains(registry.content, "internal object NugetRegistry")
-    assertContains(registry.content, "\"Sample.Text.Template\"")
+    assertContains(registry.content, "\"Test.Text.Template\"")
     assertContains(registry.content, "fun checkContract(")
     assertContains(registry.content, "fun notRegistered(")
     assertContains(registry.content, "fun record(")

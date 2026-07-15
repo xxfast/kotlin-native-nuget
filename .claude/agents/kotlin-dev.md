@@ -24,7 +24,7 @@ Reverse — `nuget-plugin/` — Gradle plugin: packages the NuGet (forward) and 
 
 - `rir/RirModel.kt`, `rir/RirParsing.kt`, `rir/RirBridging.kt` — the Reverse IR (RIR), mirror of CIR: models the C# API surface extracted from .NET assembly metadata (ADR-046). Parsing deserializes `reverse-ir.json`; bridging derives Kotlin declarations.
 - `NugetGenTask.kt` / `NugetRestoreTask.kt` — synthetic `.csproj` generation + `dotnet restore`, reusing `obj/project.assets.json` as the manifest (ADR-045)
-- `NugetExtractApiTask.kt` — runs the `nuget-metadata-reader` subprocess, emits `reverse-ir.json`
+- `NugetExtractApiTask.kt` — runs the `NugetMetadataReader` subprocess, emits `reverse-ir.json`
 - `NugetGenerateBindingsTask.kt` — Kotlin stub generation from RIR (ADR-048)
 - `NugetGenerateShimsTask.kt` — C#-side registration shim generation (ADR-049)
 - `NugetPlugin.kt` — wiring; registers the `nugetImport` umbrella task (`dependsOn` the extract/generate tasks, active only when a dependency has a `bind {}` block)
@@ -33,8 +33,8 @@ Reverse — `nuget-plugin/` — Gradle plugin: packages the NuGet (forward) and 
 
 Supporting:
 
-- `nuget-metadata-reader/` — C# console app that extracts the public API from assemblies (owned by the csharp-dev agent; kotlin-dev consumes its `reverse-ir.json` contract)
-- `sample-library/` — example Kotlin/Native library consumed by the plugin
+- `NugetMetadataReader/` — C# console app that extracts the public API from assemblies (owned by the csharp-dev agent; kotlin-dev consumes its `reverse-ir.json` contract)
+- `test-library/` — example Kotlin/Native library consumed by the plugin
 
 ## Formatting
 
@@ -46,7 +46,7 @@ The [refactorer agent](refactorer.md) formats your files afterward. Report the l
 
 - Compile processor: `./gradlew :nuget-processor:compileKotlin`
 - Plugin tests: `./gradlew :nuget-plugin:test`
-- Build sample + package: `./gradlew :sample-library:clean :sample-library:packNuget`
+- Build sample + package: `./gradlew :test-library:clean :test-library:packNuget`
 - Full verify: run `scripts/verify.sh` (add `--plugin` when Gradle plugin code changed). It packages the sample library, wipes consumer `obj`/`bin`, and runs the .NET tests. Fixture packages now mint a fresh `1.0.0-fixture.<epoch-ms>` version on every pack, so a re-pack can no longer resolve the previous package's contents. Never hand-edit generated output or the NuGet cache to iterate faster.
 
 ## Key patterns

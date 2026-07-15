@@ -113,10 +113,10 @@ public class Template
 // build.gradle.kts
 nuget {
   dependencies {
-    dependency("SampleDependency", version = "1.0.0") {
+    dependency("TestDependency", version = "1.0.0") {
       bind {
-        include("Sample.Text")               // C# namespaces to bind
-        alias("Sample.Text", "sample.text")  // C# namespace to Kotlin package
+        include("Test.Text")               // C# namespaces to bind
+        alias("Test.Text", "sample.text")  // C# namespace to Kotlin package
       }
     }
   }

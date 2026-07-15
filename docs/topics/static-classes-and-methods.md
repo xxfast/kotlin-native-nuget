@@ -12,13 +12,13 @@ static members instead land in the generated Kotlin `companion object`.
 | `public static int RenderCount { get; }` | `val renderCount: Int` |
 
 The generated `object` is `internal`, not `public`: it's visible anywhere else in the same Gradle
-module (including hand-written sources like `sample-library`'s own Kotlin files) but invisible to
+module (including hand-written sources like `test-library`'s own Kotlin files) but invisible to
 the forward-direction KSP exporter's public-API scan, so a reverse-bound type never accidentally gets
 re-exported into the packed nupkg's own `Interop.cs`.
 
 ## The `MimeMapping` round trip
 
-`sample-library/build.gradle.kts` binds the `MimeMapping` package:
+`test-library/build.gradle.kts` binds the `MimeMapping` package:
 
 ```kotlin
 nuget {
@@ -44,7 +44,7 @@ namespace MimeMapping {
 ```
 
 `nugetGenerateBindings` renders this straight into an `object`
-(`sample-library/build/nuget-interop/kotlin/nativeMain/mimemapping/MimeUtility.kt`, real generated
+(`test-library/build/nuget-interop/kotlin/nativeMain/mimemapping/MimeUtility.kt`, real generated
 output):
 
 ```kotlin
@@ -63,11 +63,11 @@ internal object MimeUtility {
 }
 ```
 
-`sample-library` calls it from ordinary Kotlin
-(`sample-library/src/nativeMain/kotlin/io/github/xxfast/kotlin/native/nuget/sample/mime/MimeSample.kt`):
+`test-library` calls it from ordinary Kotlin
+(`test-library/src/nativeMain/kotlin/io/github/xxfast/kotlin/native/nuget/sample/mime/MimeSample.kt`):
 
 ```kotlin
-package io.github.xxfast.kotlin.native.nuget.sample.mime
+package io.github.xxfast.kotlin.native.nuget.test.mime
 
 import mimemapping.MimeUtility
 
@@ -75,7 +75,7 @@ fun mimeTypeFor(fileName: String): String = MimeUtility.getMimeMapping(fileName)
 ```
 
 And the C# test exercises the whole path end to end
-(`sample-app/SampleApp.Tests/MimeRoundTripTests.cs`):
+(`IntegrationTests/MimeRoundTripTests.cs`):
 
 ```C#
 [Fact]
@@ -92,10 +92,10 @@ call back into the *real* `MimeMapping` NuGet package.
 
 ## Static properties
 
-The bound `Sample.Text.Template` fixture has both property forms:
+The bound `Test.Text.Template` fixture has both property forms:
 
 ```C#
-// sample-dependency/Template.cs (real source)
+// TestDependency/Template.cs (real source)
 public static string DefaultName { get; set; } = "Oreo";
 
 public static int RenderCount { get; private set; }
@@ -136,7 +136,7 @@ private static void DefaultName_Set_Thunk(IntPtr valuePtr)
 Hand-written Kotlin uses the companion members through `Template` itself:
 
 ```kotlin
-// sample-library/src/nativeMain/kotlin/.../sample/Greetings.kt (real source)
+// test-library/src/nativeMain/kotlin/.../sample/Greetings.kt (real source)
 fun setDefaultTemplateCatName(name: String): String {
   Template.defaultName = name
   return Template.defaultName
@@ -148,7 +148,7 @@ fun templateRenderCount(): Int = Template.renderCount
 The consumer-side round trip calls these Kotlin functions through the forward bridge:
 
 ```C#
-// sample-app/SampleApp.Tests/TemplateRoundTripTests.cs (real source)
+// IntegrationTests/TemplateRoundTripTests.cs (real source)
 [Fact]
 public void StaticProperties_MyloNameAndRenderCount_RoundTripThroughKotlin()
 {
@@ -169,7 +169,7 @@ The registration export name is derived from the C# namespace and type name:
 
 ## Static method overloads
 
-The `Sample.Overloads.OverloadLab` fixture has two `Describe` methods:
+The `Test.Overloads.OverloadLab` fixture has two `Describe` methods:
 
 ```C#
 public static string Describe(int value) => $"static:int:{value}";
@@ -183,7 +183,7 @@ type:
 ```kotlin
 fun describe(value: Boolean): String {
   val fn = requireNotNull(OverloadLabBindings.describe__09da8e80bd8920c59e5252f3d665716aFn) {
-    NugetRegistry.notRegistered("Sample.Overloads.OverloadLab", "SampleDependency")
+    NugetRegistry.notRegistered("Test.Overloads.OverloadLab", "TestDependency")
   }
   val resultPtr = fn.invoke(value)
     ?: error("OverloadLab.Describe returned null, expected a non-null string pointer")
@@ -194,7 +194,7 @@ fun describe(value: Boolean): String {
 
 fun describe(value: Int): String {
   val fn = requireNotNull(OverloadLabBindings.describe__a8ac9b64f5e802cd2f6fdcaa8b7dc202Fn) {
-    NugetRegistry.notRegistered("Sample.Overloads.OverloadLab", "SampleDependency")
+    NugetRegistry.notRegistered("Test.Overloads.OverloadLab", "TestDependency")
   }
   val resultPtr = fn.invoke(value)
     ?: error("OverloadLab.Describe returned null, expected a non-null string pointer")

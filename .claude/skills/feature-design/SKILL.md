@@ -51,16 +51,16 @@ Write failing tests on the **consumer side** of the feature. Which side that is 
 
 - **Forward bridge feature (Kotlin → C#)**: `csharp-dev` agent
   - Write failing C# tests that define the expected API
-  - Tests go in `sample-app/SampleApp.Tests/`
+  - Tests go in `IntegrationTests/`
   - Follow existing test patterns (xunit, `using var` for IDisposable)
-  - Add sample Kotlin source in `sample-library/` if needed
+  - Add sample Kotlin source in `test-library/` if needed
 - **Reverse / ecosystem feature (C# → Kotlin, Phase 8+)**: `kotlin-dev` + `csharp-dev` agents
   - There is **no runnable Kotlin-side unit test of the reverse bridge**: the generated Kotlin stubs fail fast unless the .NET host process has registered the function-pointer table (ADR-041/048), so Kotlin/Native code cannot exercise the reverse bridge standalone. Do not write "failing Kotlin tests that define the expected Kotlin-side API", there is nowhere for them to run. Use the two real test seams instead:
     - **Fast inner loop (where the TDD happens)**: `kotlin-dev` agent
       - Write failing generator-level unit tests in `nuget-plugin/src/test/kotlin`: a `reverse-ir.json` fixture in, expected Kotlin stub text and/or C# shim text out. Precedents: `NugetGenerateBindingsTaskTest`, `NugetGenerateShimsTaskTest`.
     - **Outer loop (end-to-end round trip)**: `csharp-dev` agent
-      - Extend `sample-dependency/` (the standing C# fixture library, bound via the ADR-050 local feed) with the feature's fixture surface, a feature-scoped namespace/type kept inside the ADR-043 bridgeable subset. Do not hunt for a published package that fits the subset.
-      - Add the ADR-050 round trip: sample-library Kotlin calls the bound `SampleDependency` API, is surfaced forward to C#, and is asserted in `SampleApp.Tests` xunit tests.
+      - Extend `TestDependency/` (the standing C# fixture library, bound via the ADR-050 local feed) with the feature's fixture surface, a feature-scoped namespace/type kept inside the ADR-043 bridgeable subset. Do not hunt for a published package that fits the subset.
+      - Add the ADR-050 round trip: test-library Kotlin calls the bound `TestDependency` API, is surfaced forward to C#, and is asserted in `IntegrationTests` xunit tests.
 - **Gradle plugin feature (DSL, tasks, wiring)**: `kotlin-dev` agent
   - Write failing `ProjectBuilder` unit tests in `nuget-plugin/src/test/kotlin` that apply the plugin, configure the DSL as a consumer would, and assert the extension model / task wiring
   - Defer Gradle TestKit functional tests until there is task behavior that ProjectBuilder cannot reach
@@ -80,11 +80,11 @@ Once the feature is implemented and verified, run the `documenter` **first**, th
 
 They look disjoint (the `refactorer` only touches Kotlin, the `documenter` only touches Markdown), but
 file ownership is not the axis that matters. The `refactorer`'s verify begins with
-`./gradlew :sample-library:clean`, which **deletes `sample-library/build/`**, and that directory is the
+`./gradlew :test-library:clean`, which **deletes `test-library/build/`**, and that directory is the
 `documenter`'s entire evidence base: every snippet it writes is lifted from the generated `Interop.cs`
 and the reverse output under `build/nuget-interop/`. Run them together and the `documenter` greps a
 directory that is being deleted and rebuilt underneath it. It does not crash, it silently drops the
-snippet it could not back with real code, and then it reaches for `./gradlew :sample-library:packNuget`
+snippet it could not back with real code, and then it reaches for `./gradlew :test-library:packNuget`
 to regenerate what the `refactorer` just removed, which queues on the Gradle project lock.
 
 Running the `documenter` first avoids all of it: `build/` is already current from `kotlin-dev`'s passing
@@ -98,8 +98,8 @@ rebuilds with nobody reading behind it.
   - mark the relevant ADR as `Accepted`
 - **`refactorer` agent** (second, only once the `documenter` has reported back): do not scan the changed files yourself. Hand it `kotlin-dev`'s reported list of touched files and let it judge against [STYLE.md](../../../STYLE.md) and fix any violations in one pass. It reports back the files it changed (or "no violations") plus the test result.
 
-The `documenter` writes every snippet from code that compiles (`sample-library/`, the generated
-`Interop.cs`, the generated reverse output under `build/nuget-interop/`, `SampleApp.Tests/`), so run
+The `documenter` writes every snippet from code that compiles (`test-library/`, the generated
+`Interop.cs`, the generated reverse output under `build/nuget-interop/`, `IntegrationTests/`), so run
 this step only after the feature is verified and the build artefacts are current.
 
 ## Rules
@@ -116,7 +116,7 @@ this step only after the feature is verified and the build artefacts are current
 - **Instrument before hypothesizing.** When the round trip fails, get evidence about what actually executes (is registration even firing? what does the generated artefact really contain?) before forming a theory. Never spend a long agent round bisecting a hypothesis that a cheap probe could have falsified in minutes.
 - **Split pre-existing bugs out.** A bug the fixture uncovers but the feature did not cause gets reported and split into its own commit/ticket immediately, it does not silently expand the feature's scope. A fixture that is the first to exercise some combination (first two bound classes in one namespace, first nullable-returning export that throws) *should* be expected to flush out latent bugs. That means the existing fixtures were unrealistic, it is not a distraction. **Track every one you split out and hand the list to the `documenter` in Step 5**, which records them in ROADMAP.md. Splitting a bug out and then forgetting it is worse than never finding it: the next feature pays to rediscover it.
 - **No orphaned builds.** Agents must not leave a Gradle build running in the background: it holds the project lock and silently starves every agent behind it. When an agent goes quiet, check `ps` and `./gradlew --status` for an orphaned build before assuming the agent is stuck or thinking.
-- Step 5 is the last step, run only after the feature is verified. Run `documenter` first, then `refactorer`, **serially**. The `refactorer`'s verify starts with `:sample-library:clean`, which deletes the `build/` output the `documenter` reads its snippets from; in parallel they race and the docs quietly lose snippets.
+- Step 5 is the last step, run only after the feature is verified. Run `documenter` first, then `refactorer`, **serially**. The `refactorer`'s verify starts with `:test-library:clean`, which deletes the `build/` output the `documenter` reads its snippets from; in parallel they race and the docs quietly lose snippets.
 - **Two agents that both drive Gradle cannot run in parallel in this repo.** One takes the project lock and the other queues silently. Parallel fan-out is safe only for agents that touch neither Gradle nor `build/` (e.g. several `research` agents at phase kickoff).
 - Never write the docs yourself. The `documenter` grounds every snippet in the real generated output; writing them from the main thread means writing them from memory.
 - **Log what the run cost.** When the feature is done, call `.claude/hooks/benchmark.sh finalize`. See **Logging the run** below.

@@ -25,7 +25,7 @@ internal fun StringBuilder.renderEnumExtensions(enum: CirEnum) {
     val propLowercase: String = prop.nativeName.lowercase()
     val entryPoint: String = "${enumLowercase}_get_$propLowercase"
 
-    appendLine("        [DllImport(\"sample\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"$entryPoint\")]")
+    appendLine("        [DllImport(\"${enum.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"$entryPoint\")]")
     appendLine("        private static extern ${prop.nativeReturnType} Native_Get${prop.name}(int ordinal);")
     appendLine()
 

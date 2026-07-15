@@ -53,7 +53,7 @@ class NugetBindConfig {
 
 ## Real examples
 
-Both of these are taken verbatim from `sample-library/build.gradle.kts`.
+Both of these are taken verbatim from `test-library/build.gradle.kts`.
 
 A static-methods-only package, bound under an explicit `packageName`:
 
@@ -80,17 +80,17 @@ A package bound with a per-namespace `alias()` instead of a package-wide name:
 ```kotlin
 nuget {
   dependencies {
-    dependency("SampleDependency", version = "1.0.0") {
+    dependency("TestDependency", version = "1.0.0") {
       bind {
-        include("Sample.Text")
-        alias("Sample.Text", "sample.text")
+        include("Test.Text")
+        alias("Test.Text", "sample.text")
       }
     }
   }
 }
 ```
 
-Here no `packageName` is set at all; `alias()` maps the single included namespace `Sample.Text`
+Here no `packageName` is set at all; `alias()` maps the single included namespace `Test.Text`
 directly onto the Kotlin package `sample.text`, which is where the `Template` wrapper used throughout
 [Objects and handles](objects-and-handles.md) and [Instance members](instance-members.md) is
 generated.
@@ -104,7 +104,7 @@ generated.
 - `alias()` overrides `packageName` for one namespace; namespaces without a matching `alias()` fall
   back to `packageName`, or to the derived default if `packageName` is also unset.
 
-These filters are forwarded to the `nuget-metadata-reader` subprocess as `--include`/`--exclude` CLI
+These filters are forwarded to the `NugetMetadataReader` subprocess as `--include`/`--exclude` CLI
 arguments, so a namespace you never included never even reaches `reverse-ir.json`, let alone the
 generators.
 

@@ -2,8 +2,8 @@
 name: csharp-dev
 description: >
   C# side of the bridge in both directions. Forward: failing xunit tests in
-  sample-app/SampleApp.Tests that define the expected C# API. Reverse: nuget-metadata-reader,
-  C#/NuGet fixtures, and SampleApp.Tests round trips.
+  IntegrationTests that define the expected C# API. Reverse: NugetMetadataReader,
+  C#/NuGet fixtures, and IntegrationTests round trips.
 model: inherit
 agents_md: true
 ---

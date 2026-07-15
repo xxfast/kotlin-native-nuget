@@ -1,5 +1,7 @@
 # Architecture Decision Records
 
+> **Note on outdated references.** ADRs are point-in-time records and are kept as written. File paths and identifiers in the ADRs below may predate the July 2026 rename that reserved "sample" for the demo submodule: `sample-library` → `test-library`, `sample-app/*` (tests flattened to root) → `IntegrationTests` / `GeneratedBindingsCheck`, `sample-dependency` → `TestDependency`, `nuget-metadata-reader` → `NugetMetadataReader`, NuGet ids `SampleLibrary` → `TestLibrary` and `SampleDependency` → `TestDependency`, Kotlin package `...nuget.sample` → `...nuget.test`, native `baseName` `sample` → `test`, and C# namespaces `Sample.*` → `Test.*` (reverse fixtures) and `SampleApp.Tests` → `IntegrationTests`.
+
 - [001](001-csharp-codegen-in-consumer.md) — Moved ClangSharp from Gradle to .targets in NuGet (later replaced by KSP)
 - [002](002-nullable-two-call-pattern.md) — `_has_value` + `_value` functions → C# `T?`
 - [003](003-memory-management-across-bridge.md) — StableRef pins Kotlin objects; C# disposes; each GC manages its own side

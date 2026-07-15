@@ -10,7 +10,7 @@ Kotlin top-level functions, properties, and `const val`s don't belong to any cla
 
 ## Kotlin
 
-Top-level properties, from `sample-library/src/nativeMain/kotlin/.../Properties.kt`:
+Top-level properties, from `test-library/src/nativeMain/kotlin/.../Properties.kt`:
 
 ```kotlin
 val catBreed: String = "Scottish Fold"
@@ -19,7 +19,7 @@ var catNickname: String? = null
 var catWeight: Double? = null
 ```
 
-`const val`s, from `sample-library/src/nativeMain/kotlin/.../Constants.kt`:
+`const val`s, from `test-library/src/nativeMain/kotlin/.../Constants.kt`:
 
 ```kotlin
 const val MAX_LIVES: Int = 9
@@ -60,7 +60,7 @@ Note the C# property names are `PascalCase` (`CatBreed`) even though the Kotlin 
 
 ## Using it from C#
 
-Top-level properties, from `sample-app/SampleApp.Tests/TopLevelPropertyTests.cs`:
+Top-level properties, from `IntegrationTests/TopLevelPropertyTests.cs`:
 
 ```C#
 [Fact]
@@ -85,7 +85,7 @@ public void SetNullableStringToNull()
 }
 ```
 
-`const val`s, from `sample-app/SampleApp.Tests/ConstValueTests.cs`:
+`const val`s, from `IntegrationTests/ConstValueTests.cs`:
 
 ```C#
 [Fact]
@@ -101,7 +101,7 @@ public void GreetingIsHelloWorld()
 }
 ```
 
-Top-level functions follow the same grouping. `sample-library/src/nativeMain/kotlin/.../math/Arithmetic.kt` (`add`, `multiply`, `divide`, `square`) becomes `SampleLibrary.Math.Arithmetic`; see [Generics](generics.md) for the `inline fun square` case.
+Top-level functions follow the same grouping. `test-library/src/nativeMain/kotlin/.../math/Arithmetic.kt` (`add`, `multiply`, `divide`, `square`) becomes `TestLibrary.Math.Arithmetic`; see [Generics](generics.md) for the `inline fun square` case.
 
 <seealso>
     <category ref="related">

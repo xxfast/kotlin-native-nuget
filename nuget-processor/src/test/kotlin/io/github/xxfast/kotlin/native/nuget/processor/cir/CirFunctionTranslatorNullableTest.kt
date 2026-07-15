@@ -21,7 +21,7 @@ class CirFunctionTranslatorNullableTest {
     CirFile(
       namespaces = listOf(
         CirNamespace(
-          name = "SampleLibrary",
+          name = "TestLibrary",
           declarations = listOf(CirStaticClass(name = "Mappings", members = members)),
         ),
       ),
@@ -35,7 +35,7 @@ class CirFunctionTranslatorNullableTest {
       csName = "NullableInt",
       kotlinReturnType = "Int",
       params = listOf(CirParameter("hasValue", "bool")),
-      libraryName = "SampleLibrary",
+      libraryName = "TestLibrary",
     )
 
     val hasValueImport: CirDllImport = members.filterIsInstance<CirDllImport>()
@@ -57,7 +57,7 @@ class CirFunctionTranslatorNullableTest {
       csName = "NullableInt",
       kotlinReturnType = "Int",
       params = listOf(CirParameter("hasValue", "bool")),
-      libraryName = "SampleLibrary",
+      libraryName = "TestLibrary",
     )
 
     val rendered: String = render(members)
@@ -79,7 +79,7 @@ class CirFunctionTranslatorNullableTest {
       csName = "NullableInt",
       kotlinReturnType = "Int",
       params = listOf(CirParameter("hasValue", "bool")),
-      libraryName = "SampleLibrary",
+      libraryName = "TestLibrary",
     )
 
     val wrapper: CirMethod = members.filterIsInstance<CirMethod>().single()
@@ -102,7 +102,7 @@ class CirFunctionTranslatorNullableTest {
       csName = "NullableString",
       kotlinReturnType = "String",
       params = listOf(CirParameter("hasValue", "bool")),
-      libraryName = "SampleLibrary",
+      libraryName = "TestLibrary",
     )
 
     val hasValueImport: CirDllImport = members.filterIsInstance<CirDllImport>()
@@ -127,7 +127,7 @@ class CirFunctionTranslatorNullableTest {
       csName = "NullableString",
       kotlinReturnType = "String",
       params = listOf(CirParameter("hasValue", "bool")),
-      libraryName = "SampleLibrary",
+      libraryName = "TestLibrary",
     )
 
     val wrapper: CirMethod = members.filterIsInstance<CirMethod>().single()
@@ -149,7 +149,7 @@ class CirFunctionTranslatorNullableTest {
       csName = "MaybeAnswer",
       kotlinReturnType = "Int",
       params = emptyList(),
-      libraryName = "SampleLibrary",
+      libraryName = "TestLibrary",
     )
 
     val rendered: String = render(members)

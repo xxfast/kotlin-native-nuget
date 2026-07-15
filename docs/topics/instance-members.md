@@ -8,13 +8,13 @@ already states: an instance thunk is a static thunk whose first parameter is the
 
 ## The `Template` fixture
 
-`sample-dependency`'s `Sample.Text.Template` is the canonical fixture for this feature: a
+`TestDependency`'s `Test.Text.Template` is the canonical fixture for this feature: a
 constructor, two static methods, a read-only property, a settable property, an instance method with
 a string in and out, an instance method that returns a fresh handle of the same type, plus read-only
 and settable static properties.
 
 ```C#
-// sample-dependency/Template.cs (real source)
+// TestDependency/Template.cs (real source)
 public class Template
 {
     public static string DefaultName { get; set; } = "Oreo";
@@ -99,10 +99,10 @@ private static IntPtr Apply_Thunk(IntPtr selfHandle, IntPtr namePtr)
 }
 ```
 
-`sample-library` puts all of this together:
+`test-library` puts all of this together:
 
 ```kotlin
-// sample-library/src/nativeMain/kotlin/.../sample/Greetings.kt (real source)
+// test-library/src/nativeMain/kotlin/.../sample/Greetings.kt (real source)
 fun greetViaInstanceMembers(name: String): String {
   val template: Template = Template("Hello, {name}")
   template.name = name
@@ -135,7 +135,7 @@ Same-name C# instance methods become ordinary Kotlin overloads. From the generat
 ```kotlin
 fun apply(value: Int): String {
   val fn = requireNotNull(OverloadLabBindings.apply__0053cbaf86159b038b186eb3f58e5325Fn) {
-    NugetRegistry.notRegistered("Sample.Overloads.OverloadLab", "SampleDependency")
+    NugetRegistry.notRegistered("Test.Overloads.OverloadLab", "TestDependency")
   }
   val resultPtr = fn.invoke(handle.require("OverloadLab"), value)
     ?: error("OverloadLab.Apply returned null, expected a non-null string pointer")
@@ -146,7 +146,7 @@ fun apply(value: Int): String {
 
 fun apply(value: String): String {
   val fn = requireNotNull(OverloadLabBindings.apply__2698962af99422165da00ce0a194caceFn) {
-    NugetRegistry.notRegistered("Sample.Overloads.OverloadLab", "SampleDependency")
+    NugetRegistry.notRegistered("Test.Overloads.OverloadLab", "TestDependency")
   }
   val resultPtr = memScoped { fn.invoke(handle.require("OverloadLab"), value.cstr.ptr) }
     ?: error("OverloadLab.Apply returned null, expected a non-null string pointer")

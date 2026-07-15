@@ -1,9 +1,8 @@
 # Getting started
 
 This walks through publishing a Kotlin/Native library as a NuGet package and consuming it from a
-C# project, end to end. It mirrors `sample-library/build.gradle.kts` and
-`sample-app/SampleApp/Program.cs` in this repo, read those alongside this page for a working
-reference.
+C# project, end to end. It mirrors `test-library/build.gradle.kts` and the `IntegrationTests`
+project in this repo, read those alongside this page for a working reference.
 
 ## 1. Apply the plugin
 

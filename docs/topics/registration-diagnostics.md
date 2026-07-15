@@ -41,28 +41,28 @@ before it stores a single function pointer:
    partial result and gives the matching remediation:
 
    ```
-   [nuget] Sample.Text.Template bindings are not registered (SampleDependency). 0 of 7 expected
+   [nuget] Test.Text.Template bindings are not registered (TestDependency). 0 of 7 expected
    registrations have fired. NOTHING has registered. Missing: <runtime>, MimeMapping.MimeUtility,
-   Sample.Enums.CatMoodService, Sample.Nullability.Nickname, Sample.Nullability.NicknameBook,
-   Sample.Nullability.LegacyNicknameBook, Sample.Text.Template.
+   Test.Enums.CatMoodService, Test.Nullability.Nickname, Test.Nullability.NicknameBook,
+   Test.Nullability.LegacyNicknameBook, Test.Text.Template.
 
    No [ModuleInitializer] in any *Registration.cs ran, so those files are not compiled into any
    assembly the host has loaded. This is almost never a codegen bug. In order of likelihood:
      1. Stale build state: delete the consuming project's obj/ and bin/, purge
-        ~/.nuget/packages/SampleDependency, then restore and rebuild.
+        ~/.nuget/packages/TestDependency, then restore and rebuild.
      2. The consuming project does not reference the packed package at all.
      3. The shim files compiled, but the assembly containing them was never loaded.
    Verify with: NUGET_INTEROP_TRACE=1 (each [ModuleInitializer] logs as it fires).
    ```
 
    ```
-   [nuget] Sample.Text.Template bindings are not registered (SampleDependency). 6 of 7 expected
-   registrations have fired: <runtime>, MimeMapping.MimeUtility, Sample.Enums.CatMoodService,
-   Sample.Nullability.Nickname, Sample.Nullability.NicknameBook, Sample.Nullability.LegacyNicknameBook.
-   Missing: Sample.Text.Template.
+   [nuget] Test.Text.Template bindings are not registered (TestDependency). 6 of 7 expected
+   registrations have fired: <runtime>, MimeMapping.MimeUtility, Test.Enums.CatMoodService,
+   Test.Nullability.Nickname, Test.Nullability.NicknameBook, Test.Nullability.LegacyNicknameBook.
+   Missing: Test.Text.Template.
 
    Other shims DID register, so the shim source IS compiled in and the native library IS loaded.
-   Scope this to Sample.Text.Template alone: its TemplateRegistration.cs is absent from the compiled
+   Scope this to Test.Text.Template alone: its TemplateRegistration.cs is absent from the compiled
    output, or its [ModuleInitializer] threw before reaching the register call.
    Verify with: NUGET_INTEROP_TRACE=1.
    ```
@@ -93,27 +93,27 @@ A real run (`NUGET_INTEROP_TRACE=1 NUGET_INTEROP_TRACEFILE=trace.log dotnet test
 bridge interleaved in one stream:
 
 ```
-[nuget:shim] register enter Sample.Enums.CatMoodService -> nuget_sample_enums_cat_mood_service_register(7 slots) dll=sample
-[nuget] registered Sample.Enums.CatMoodService (7 slots) [1/7]
-[nuget:shim] register ok    Sample.Enums.CatMoodService
-[nuget:shim] register enter Sample.Nullability.LegacyNicknameBook -> nuget_sample_nullability_legacy_nickname_book_register(2 slots) dll=sample
-[nuget] registered Sample.Nullability.LegacyNicknameBook (2 slots) [2/7]
-[nuget:shim] register ok    Sample.Nullability.LegacyNicknameBook
+[nuget:shim] register enter Test.Enums.CatMoodService -> nuget_sample_enums_cat_mood_service_register(7 slots) dll=sample
+[nuget] registered Test.Enums.CatMoodService (7 slots) [1/7]
+[nuget:shim] register ok    Test.Enums.CatMoodService
+[nuget:shim] register enter Test.Nullability.LegacyNicknameBook -> nuget_sample_nullability_legacy_nickname_book_register(2 slots) dll=sample
+[nuget] registered Test.Nullability.LegacyNicknameBook (2 slots) [2/7]
+[nuget:shim] register ok    Test.Nullability.LegacyNicknameBook
 [nuget:shim] register enter MimeMapping.MimeUtility -> nuget_mimemapping_mime_utility_register(1 slot) dll=sample
 [nuget] registered MimeMapping.MimeUtility (1 slot) [3/7]
 [nuget:shim] register ok    MimeMapping.MimeUtility
-[nuget:shim] register enter Sample.Nullability.NicknameBook -> nuget_sample_nullability_nickname_book_register(12 slots) dll=sample
-[nuget] registered Sample.Nullability.NicknameBook (12 slots) [4/7]
-[nuget:shim] register ok    Sample.Nullability.NicknameBook
-[nuget:shim] register enter Sample.Nullability.Nickname -> nuget_sample_nullability_nickname_register(2 slots) dll=sample
-[nuget] registered Sample.Nullability.Nickname (2 slots) [5/7]
-[nuget:shim] register ok    Sample.Nullability.Nickname
+[nuget:shim] register enter Test.Nullability.NicknameBook -> nuget_sample_nullability_nickname_book_register(12 slots) dll=sample
+[nuget] registered Test.Nullability.NicknameBook (12 slots) [4/7]
+[nuget:shim] register ok    Test.Nullability.NicknameBook
+[nuget:shim] register enter Test.Nullability.Nickname -> nuget_sample_nullability_nickname_register(2 slots) dll=sample
+[nuget] registered Test.Nullability.Nickname (2 slots) [5/7]
+[nuget:shim] register ok    Test.Nullability.Nickname
 [nuget:shim] register enter <runtime> -> nuget_runtime_register(1 slot) dll=sample
 [nuget] registered <runtime> (1 slot) [6/7]
 [nuget:shim] register ok    <runtime>
-[nuget:shim] register enter Sample.Text.Template -> nuget_sample_text_template_register(11 slots) dll=sample
-[nuget] registered Sample.Text.Template (11 slots) [7/7]
-[nuget:shim] register ok    Sample.Text.Template
+[nuget:shim] register enter Test.Text.Template -> nuget_sample_text_template_register(11 slots) dll=sample
+[nuget] registered Test.Text.Template (11 slots) [7/7]
+[nuget:shim] register ok    Test.Text.Template
 ```
 
 `[nuget:shim]` lines come from the C# side, before and after the register P/Invoke; `[nuget]` lines

@@ -8,7 +8,7 @@ A Kotlin `data class` becomes a regular C# `class` with `ToString`, `Equals`, `G
 
 ## Kotlin
 
-From `sample-library/src/nativeMain/kotlin/.../cat/Toy.kt`:
+From `test-library/src/nativeMain/kotlin/.../cat/Toy.kt`:
 
 ```kotlin
 data class Toy(
@@ -75,7 +75,7 @@ public class Toy : IDisposable
 
 ## Using it from C#
 
-From `sample-app/SampleApp.Tests/DataClassTests.cs`:
+From `IntegrationTests/DataClassTests.cs`:
 
 ```C#
 [Fact]

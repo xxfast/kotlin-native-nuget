@@ -510,7 +510,7 @@ private fun registrationFileContent(
   structs: Map<RirTypeKey, RirStruct>,
 ): String {
   // A shim renders inside `namespace $namespaceName`, so an enum declared in any other namespace
-  // (a C# enum in `Sample.Enums` referenced by a class in `Sample.Text`, say) is out of scope for
+  // (a C# enum in `Test.Enums` referenced by a class in `Test.Text`, say) is out of scope for
   // the `(Mood)mood` casts in the thunk bodies below unless its namespace is imported here.
   val enumNamespaces: List<String> = referencedEnumTypes(registrables, structs)
     .map { it.namespace }

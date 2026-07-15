@@ -140,7 +140,7 @@ class NugetExtractApiIntegrationTest {
     assertTrue(dlls.isNotEmpty(), "at least one DLL must be resolved for Newtonsoft.Json")
 
     // 3. Unpack the bundled metadata reader and invoke it
-    val toolDir: File = Files.createTempDirectory("nuget-metadata-reader-test").toFile()
+    val toolDir: File = Files.createTempDirectory("NugetMetadataReader-test").toFile()
     unpackMetadataReader(toolDir, javaClass.classLoader)
 
     val json: String = runMetadataReader(dotnet, toolDir, dllPaths)
@@ -205,7 +205,7 @@ class NugetExtractApiIntegrationTest {
       packageIds = setOf("Newtonsoft.Json"),
     )
 
-    val toolDir: File = Files.createTempDirectory("nuget-metadata-reader-overloads").toFile()
+    val toolDir: File = Files.createTempDirectory("NugetMetadataReader-overloads").toFile()
     unpackMetadataReader(toolDir, javaClass.classLoader)
 
     val json: String = runMetadataReader(dotnet, toolDir, dllPaths)
@@ -276,7 +276,7 @@ class NugetExtractApiIntegrationTest {
       val name = "OverloadReaderFixture$index"
       val dll: File = compileFixture(dotnet, source, name)
       val toolDir: File = Files
-        .createTempDirectory("nuget-metadata-reader-overload-fixture")
+        .createTempDirectory("NugetMetadataReader-overload-fixture")
         .toFile()
       unpackMetadataReader(toolDir, javaClass.classLoader)
       Json.parseToJsonElement(
@@ -395,7 +395,7 @@ class NugetExtractApiIntegrationTest {
     assertTrue(dlls.isNotEmpty(), "at least one DLL must be resolved for MimeMapping")
 
     // 3. Unpack the bundled metadata reader and invoke it
-    val toolDir: File = Files.createTempDirectory("nuget-metadata-reader-mimemapping-test").toFile()
+    val toolDir: File = Files.createTempDirectory("NugetMetadataReader-mimemapping-test").toFile()
     unpackMetadataReader(toolDir, javaClass.classLoader)
 
     val json: String = runMetadataReader(dotnet, toolDir, dllPaths)

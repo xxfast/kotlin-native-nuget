@@ -23,17 +23,17 @@ import kotlin.test.fail
 /** Consumer-side generator contracts for ADR-057. */
 class OverloadGenerationTest {
   private val intDescribe =
-    "method|static|Sample.Overloads.OverloadLab|Describe|(System.Int32)|System.String"
+    "method|static|Test.Overloads.OverloadLab|Describe|(System.Int32)|System.String"
   private val boolDescribe =
-    "method|static|Sample.Overloads.OverloadLab|Describe|(System.Boolean)|System.String"
+    "method|static|Test.Overloads.OverloadLab|Describe|(System.Boolean)|System.String"
   private val stringApply =
-    "method|instance|Sample.Overloads.OverloadLab|Apply|(System.String)|System.String"
+    "method|instance|Test.Overloads.OverloadLab|Apply|(System.String)|System.String"
   private val intApply =
-    "method|instance|Sample.Overloads.OverloadLab|Apply|(System.Int32)|System.String"
+    "method|instance|Test.Overloads.OverloadLab|Apply|(System.Int32)|System.String"
   private val intCtor =
-    "ctor|instance|Sample.Overloads.OverloadLab|.ctor|(System.Int32)|System.Void"
+    "ctor|instance|Test.Overloads.OverloadLab|.ctor|(System.Int32)|System.Void"
   private val boolCtor =
-    "ctor|instance|Sample.Overloads.OverloadLab|.ctor|(System.Boolean)|System.Void"
+    "ctor|instance|Test.Overloads.OverloadLab|.ctor|(System.Boolean)|System.Void"
 
   @Test
   fun `managed signatures survive parsing exactly and are stable under declaration reorder`() {
@@ -324,7 +324,7 @@ class OverloadGenerationTest {
       }]
     """ else "[]"
     return parseReverseIr(
-      fileJson("Sample.Overloads", classJson("OverloadLab", methods, ctors), diagnostics)
+      fileJson("Test.Overloads", classJson("OverloadLab", methods, ctors), diagnostics)
     )
   }
 
@@ -405,7 +405,7 @@ class OverloadGenerationTest {
       "assemblies":[{
         "packageId":"Sample.Dependency",
         "assemblyName":"Sample.Dependency",
-        "namespaces":[{"name":"Sample.Structs","types":[
+        "namespaces":[{"name":"Test.Structs","types":[
           {
             "kind":"struct",
             "name":"Size",
@@ -436,7 +436,7 @@ class OverloadGenerationTest {
               {
                 "managedSignature":"$pointSizeCtor",
                 "parameters":[{"name":"size","type":{
-                  "kind":"struct","namespace":"Sample.Structs","name":"Size"
+                  "kind":"struct","namespace":"Test.Structs","name":"Size"
                 }}]
               }
             ]
@@ -517,21 +517,21 @@ class OverloadGenerationTest {
   )
 
   private val extraDescribe =
-    "method|static|Sample.Overloads.OverloadLab|Describe|(System.Char)|System.String"
+    "method|static|Test.Overloads.OverloadLab|Describe|(System.Char)|System.String"
   private val collisionLeft =
     "method|static|Sample.Collisions.Reader|Read|(Sample.Left.Text)|System.String"
   private val collisionRight =
     "method|static|Sample.Collisions.Reader|Read|(Sample.Right.Text)|System.String"
   private val sizeStateCtor =
-    "ctor|instance|Sample.Structs.Size|.ctor|(System.Int32,System.Int32)|System.Void"
+    "ctor|instance|Test.Structs.Size|.ctor|(System.Int32,System.Int32)|System.Void"
   private val pointStateCtor =
-    "ctor|instance|Sample.Structs.Point|.ctor|(System.Int32,System.Int32)|System.Void"
+    "ctor|instance|Test.Structs.Point|.ctor|(System.Int32,System.Int32)|System.Void"
   private val pointIntCtor =
-    "ctor|instance|Sample.Structs.Point|.ctor|(System.Int32)|System.Void"
+    "ctor|instance|Test.Structs.Point|.ctor|(System.Int32)|System.Void"
   private val pointBoolCtor =
-    "ctor|instance|Sample.Structs.Point|.ctor|(System.Boolean)|System.Void"
+    "ctor|instance|Test.Structs.Point|.ctor|(System.Boolean)|System.Void"
   private val pointSizeCtor =
-    "ctor|instance|Sample.Structs.Point|.ctor|(Sample.Structs.Size)|System.Void"
+    "ctor|instance|Test.Structs.Point|.ctor|(Test.Structs.Size)|System.Void"
   private val qualifiedLeftRead =
     "method|static|Acme.Api.Reader|Read|(Acme.Left.Token)|System.Void"
   private val qualifiedRightRead =

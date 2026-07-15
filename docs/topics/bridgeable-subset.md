@@ -1,7 +1,7 @@
 # The bridgeable subset
 
 Not every C# construct visible in assembly metadata can cross the C ABI. This page describes exactly
-what binds and what doesn't, read directly from `nuget-metadata-reader/Program.cs`, the tool that
+what binds and what doesn't, read directly from `NugetMetadataReader/Program.cs`, the tool that
 does the actual filtering. Where the ADR prose and the reader's real behaviour could be read two
 ways, this page follows the code.
 
@@ -30,7 +30,7 @@ returns, constructors, and properties use the generated Kotlin enum type without
 object handle or registration table for the enum itself.
 
 ```c#
-// sample-dependency/CatMood.cs
+// TestDependency/CatMood.cs
 public enum CatMood
 {
     Playful,
@@ -52,7 +52,7 @@ An enum can appear in the supported members of a bound class. This Kotlin sample
 constructor argument, an instance property, a static property, and an enum return value:
 
 ```kotlin
-// sample-library/src/nativeMain/kotlin/io/github/xxfast/kotlin/native/nuget/sample/enums/CatMoodSample.kt
+// test-library/src/nativeMain/kotlin/io/github/xxfast/kotlin/native/nuget/sample/enums/CatMoodSample.kt
 fun catMoodRoundTrip(): CatMood {
   CatMoodService.defaultMood = CatMood.SLEEPY
 

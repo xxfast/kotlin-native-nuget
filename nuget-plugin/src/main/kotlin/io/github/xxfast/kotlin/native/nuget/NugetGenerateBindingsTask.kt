@@ -94,7 +94,7 @@ private fun enumPackages(
 // ADR-059: the struct equivalent of enumPackages above — every struct declared anywhere in the
 // RirFile, mapped to the Kotlin package its generated `data class` is emitted into. A struct's OWN
 // component can itself be a struct declared in a different Kotlin package (e.g. Nursery in
-// sample.nested nesting Litter from sample.structs), and that reference needs a real
+// test.nested nesting Litter from test.structs), and that reference needs a real
 // `import <pkg>.<StructName>` line — see structFileContent's structImports call — exactly as an
 // enum component reference already does via enumPackages/enumImports.
 private fun structPackages(
@@ -427,7 +427,7 @@ private fun referencedEnumTypes(
 
 // The `import <pkg>.<EnumName>` lines a stub file needs for the enums it references. An enum
 // declared in the same Kotlin package as the referencing stub needs no import; one declared in
-// another package (a C# enum in `Sample.Enums` consumed by a class in `Sample.Text`, say) does, or
+// another package (a C# enum in `Test.Enums` consumed by a class in `Test.Text`, say) does, or
 // the generated stub does not compile.
 private fun enumImports(
   enumTypes: List<RirEnumType>,
@@ -517,7 +517,7 @@ private fun enumFileContent(kotlinPkg: String, enum: RirEnum, packageId: String)
 // immutable, no handle, no close(), no Cleaner. A v1 struct claims zero registration slots (see
 // generateKotlinStubs, which never adds a struct to expectedRegistrations).
 // A struct's components can reference an enum declared in a different Kotlin package than the
-// struct itself (this repo's own bind{} config aliases Sample.Structs and Sample.Enums to
+// struct itself (this repo's own bind{} config aliases Test.Structs and Test.Enums to
 // different packages, so this is the normal case, not an edge one) — mirrors the import handling
 // bindingsFileContent/stubFileContent already do for method/property enum references.
 private fun structFileContent(
@@ -565,7 +565,7 @@ private fun structFileContent(
       ).distinct()
 
   // ADR-059: a struct's OWN direct component can be a struct declared in a different Kotlin
-  // package than this struct (e.g. Nursery in sample.nested nesting Litter from sample.structs) —
+  // package than this struct (e.g. Nursery in test.nested nesting Litter from test.structs) —
   // give it a real `import`, exactly as memberEnumTypes/enumImports already does for an enum
   // component. Only the DIRECT component types are needed here (see structImports).
   val directStructComponentTypes: List<RirStructType> =
@@ -1838,7 +1838,7 @@ private fun stubFileContent(
     appendLine("// Generated: Kotlin-idiomatic stubs for $packageId.${cls.name}")
     appendLine()
     // internal (not public): consumable from anywhere else in this same Gradle module (e.g. the
-    // hand-authored sample-library sources that call it), but invisible to the forward-direction
+    // hand-authored test-library sources that call it), but invisible to the forward-direction
     // (KSP) exporter's public-API scan — this reverse-bound API must not be re-exported forward
     // into the packed nupkg's own Interop.cs (see the matching note on the Bindings.kt file).
     appendLine("internal object ${cls.name} {")
@@ -2133,7 +2133,7 @@ private fun String.indented(indent: String): String =
 // ADR-054: this used to be a constant string baked at GENERATION time. It is now a call to
 // NugetRegistry.notRegistered(...), evaluated at RUNTIME, on the failure path only — so the
 // message can say how many of this build's registrations actually fired ("0 of 7", "6 of 7, only
-// Sample.Text.Template is missing") instead of a fixed sentence that cannot distinguish "nothing
+// Test.Text.Template is missing") instead of a fixed sentence that cannot distinguish "nothing
 // registered" from "everything but this one type registered".
 private fun bindingsNotRegisteredMessage(
   typeName: String,

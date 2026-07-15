@@ -62,8 +62,8 @@ val generateVersionConstant: TaskProvider<Task> = tasks.register("generateVersio
 kotlin.sourceSets.named("main") { kotlin.srcDir(generateVersionConstant) }
 
 tasks.processResources {
-  from(project.file("../nuget-metadata-reader")) {
-    into("nuget-metadata-reader")
+  from(project.file("../NugetMetadataReader")) {
+    into("NugetMetadataReader")
     exclude("bin/**", "obj/**")
   }
 }

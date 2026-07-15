@@ -26,9 +26,9 @@ import kotlin.test.assertTrue
  * ADR-058: C# Shape B structs (no public constructor — public fields or settable auto-properties)
  * in Kotlin.
  *
- * Mirrors ADR-058's Test Design fixture: `Sample.Structs.Extent` (field-only, the canonical
- * ROADMAP shape) and `Sample.Structs.Collar` (mixed field + `set` auto-prop + `init` auto-prop,
- * spanning the full v1 component vocabulary), plus `Sample.Structs.Collars` (static methods
+ * Mirrors ADR-058's Test Design fixture: `Test.Structs.Extent` (field-only, the canonical
+ * ROADMAP shape) and `Test.Structs.Collar` (mixed field + `set` auto-prop + `init` auto-prop,
+ * spanning the full v1 component vocabulary), plus `Test.Structs.Collars` (static methods
  * taking one or two Shape B structs).
  *
  * ADR-056 Decisions 3a/4a and its "Follow-up design: members" section are reused unchanged: the
@@ -51,7 +51,7 @@ class NugetStructShapeBGenerationTest {
   // Extent: field-only Shape B — public int Width; public int Height; — the canonical ROADMAP
   // shape. Members: a computed getter (Area), an instance method returning the struct itself
   // (Grow), and a static factory (Unit) — covers all four "members" categories from point 3.
-  private val extentType = RirStructType(namespace = "Sample.Structs", name = "Extent")
+  private val extentType = RirStructType(namespace = "Test.Structs", name = "Extent")
   private val extent = RirStruct(
     name = "Extent",
     shape = RirStructShape.INITIALIZER,
@@ -88,9 +88,9 @@ class NugetStructShapeBGenerationTest {
     name = "CatMood",
     entries = listOf(RirEnumEntry("Calm", 0), RirEnumEntry("Playful", 1)),
   )
-  private val catMoodType = RirEnumType(namespace = "Sample.Enums", name = "CatMood")
+  private val catMoodType = RirEnumType(namespace = "Test.Enums", name = "CatMood")
 
-  private val collarType = RirStructType(namespace = "Sample.Structs", name = "Collar")
+  private val collarType = RirStructType(namespace = "Test.Structs", name = "Collar")
   private val collar = RirStruct(
     name = "Collar",
     shape = RirStructShape.INITIALIZER,
@@ -152,20 +152,20 @@ class NugetStructShapeBGenerationTest {
   )
 
   private val namespaceAliases: Map<String, Map<String, String>> = mapOf(
-    "SampleDependency" to mapOf(
-      "Sample.Enums" to "sample.enums",
-      "Sample.Structs" to "sample.structs",
+    "TestDependency" to mapOf(
+      "Test.Enums" to "test.enums",
+      "Test.Structs" to "test.structs",
     ),
   )
 
   private val rir = RirFile(
     assemblies = listOf(
       RirAssembly(
-        packageId = "SampleDependency",
-        assemblyName = "SampleDependency",
+        packageId = "TestDependency",
+        assemblyName = "TestDependency",
         namespaces = listOf(
-          RirNamespace(name = "Sample.Enums", types = listOf(catMood)),
-          RirNamespace(name = "Sample.Structs", types = listOf(extent, collar, collars)),
+          RirNamespace(name = "Test.Enums", types = listOf(catMood)),
+          RirNamespace(name = "Test.Structs", types = listOf(extent, collar, collars)),
         ),
       ),
     ),
@@ -205,7 +205,7 @@ class NugetStructShapeBGenerationTest {
     assertContains(collarFile, "val belled: Boolean")
     assertContains(collarFile, "val initial: Char")
     assertContains(collarFile, "val mood: CatMood")
-    assertContains(collarFile, "import sample.enums.CatMood")
+    assertContains(collarFile, "import test.enums.CatMood")
     assertFalse(collarFile.contains("fun close()"))
   }
 
@@ -386,12 +386,12 @@ class NugetStructShapeBGenerationTest {
 
     val extentRegistration: String =
       csharpFiles.single { it.relativePath == "ExtentRegistration.cs" }.content
-    assertContains(extentRegistration, "nuget_sample_structs_extent_register(")
+    assertContains(extentRegistration, "nuget_test_structs_extent_register(")
     assertInOrder(extentRegistration, listOf("Unit_Thunk", "Grow_Thunk", "Area_Get_Thunk"))
 
     val collarRegistration: String =
       csharpFiles.single { it.relativePath == "CollarRegistration.cs" }.content
-    assertContains(collarRegistration, "nuget_sample_structs_collar_register(")
+    assertContains(collarRegistration, "nuget_test_structs_collar_register(")
     assertInOrder(
       collarRegistration,
       listOf("Plain_Thunk", "Resize_Thunk", "IsLoud_Get_Thunk", "Label_Get_Thunk"),

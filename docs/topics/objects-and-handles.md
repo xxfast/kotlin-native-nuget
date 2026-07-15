@@ -65,7 +65,7 @@ internal class Template internal constructor(handle: COpaquePointer) : AutoClose
 `use { }` therefore works exactly as it would on any other `AutoCloseable`:
 
 ```kotlin
-// sample-library/src/nativeMain/kotlin/.../sample/Greetings.kt (real source)
+// test-library/src/nativeMain/kotlin/.../sample/Greetings.kt (real source)
 fun greet(name: String): String {
   val template: Template = requireNotNull(Template.parse("Hello, {name}")) {
     "Template.parse returned null - expected a non-null Template handle"
@@ -94,7 +94,7 @@ constructor(source: String) : this(construct__88b141e80a5108003d6f860a1ce95a8b(s
 
 private fun construct__88b141e80a5108003d6f860a1ce95a8b(source: String): COpaquePointer {
   val fn = requireNotNull(TemplateBindings.ctor__88b141e80a5108003d6f860a1ce95a8bFn) {
-    NugetRegistry.notRegistered("Sample.Text.Template", "SampleDependency")
+    NugetRegistry.notRegistered("Test.Text.Template", "TestDependency")
   }
   val ptr: COpaquePointer? = memScoped { fn.invoke(source.cstr.ptr) }
   return requireNotNull(ptr) {
@@ -104,7 +104,7 @@ private fun construct__88b141e80a5108003d6f860a1ce95a8b(source: String): COpaque
 ```
 
 ```kotlin
-// sample-library/src/nativeMain/kotlin/.../sample/Greetings.kt (real source)
+// test-library/src/nativeMain/kotlin/.../sample/Greetings.kt (real source)
 fun greetViaConstructor(name: String): String {
   val template: Template = Template("Hello, {name}")
   return template.use { Template.render(it, name) }
@@ -136,7 +136,7 @@ not hardcoded per position:
   oblivious (pre-C#-8, or `#nullable disable`) assembly binds this way too, with one
   `info_oblivious_nullability` build warning (see [The bridgeable subset](bridgeable-subset.md)).
 
-`sample-dependency`'s `Sample.Nullability.NicknameBook` exercises every combination:
+`TestDependency`'s `Test.Nullability.NicknameBook` exercises every combination:
 
 ```kotlin
 // build/nuget-interop/kotlin/nativeMain/sample/nullability/NicknameBook.kt (real generated output)

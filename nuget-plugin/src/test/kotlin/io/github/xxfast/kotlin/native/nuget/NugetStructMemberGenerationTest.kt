@@ -25,8 +25,8 @@ import kotlin.test.assertTrue
 /**
  * ADR-056 deferred scope: struct methods + computed properties (ADR-014 reconstruct-on-call).
  *
- * Hand-built reverse-IR mirrors `sample-dependency/Geometry.cs` Point and
- * `sample-dependency/Profile.cs` Profile members.
+ * Hand-built reverse-IR mirrors `TestDependency/Geometry.cs` Point and
+ * `TestDependency/Profile.cs` Profile members.
  *
  * Bind: public non-void instance methods, get-only computed props (not component readNames),
  * static methods → companion. Skip: Equals/GetHashCode/ToString/Deconstruct, operators, setters,
@@ -37,7 +37,7 @@ import kotlin.test.assertTrue
 class NugetStructMemberGenerationTest {
 
   private val pointType: RirStructType =
-    RirStructType(namespace = "Sample.Structs", name = "Point")
+    RirStructType(namespace = "Test.Structs", name = "Point")
 
   private val pointStateCtor: RirConstructor = RirConstructor(
     parameters = listOf(
@@ -126,10 +126,10 @@ class NugetStructMemberGenerationTest {
   private val pointRir: RirFile = RirFile(
     assemblies = listOf(
       RirAssembly(
-        packageId = "SampleDependency",
-        assemblyName = "SampleDependency",
+        packageId = "TestDependency",
+        assemblyName = "TestDependency",
         namespaces = listOf(
-          RirNamespace(name = "Sample.Structs", types = listOf(point)),
+          RirNamespace(name = "Test.Structs", types = listOf(point)),
         ),
       ),
     ),
@@ -137,7 +137,7 @@ class NugetStructMemberGenerationTest {
 
   // Members only (no alternate ctors): must still force Bindings + Registration.
   private val vectorType: RirStructType =
-    RirStructType(namespace = "Sample.Structs", name = "Vector")
+    RirStructType(namespace = "Test.Structs", name = "Vector")
   private val vector: RirStruct = RirStruct(
     name = "Vector",
     components = listOf(
@@ -165,10 +165,10 @@ class NugetStructMemberGenerationTest {
   private val vectorRir: RirFile = RirFile(
     assemblies = listOf(
       RirAssembly(
-        packageId = "SampleDependency",
-        assemblyName = "SampleDependency",
+        packageId = "TestDependency",
+        assemblyName = "TestDependency",
         namespaces = listOf(
-          RirNamespace(name = "Sample.Structs", types = listOf(vector)),
+          RirNamespace(name = "Test.Structs", types = listOf(vector)),
         ),
       ),
     ),
@@ -183,9 +183,9 @@ class NugetStructMemberGenerationTest {
     ),
   )
   private val catMoodType: RirEnumType =
-    RirEnumType(namespace = "Sample.Enums", name = "CatMood")
+    RirEnumType(namespace = "Test.Enums", name = "CatMood")
   private val profileType: RirStructType =
-    RirStructType(namespace = "Sample.Structs", name = "Profile")
+    RirStructType(namespace = "Test.Structs", name = "Profile")
   private val profile: RirStruct = RirStruct(
     name = "Profile",
     components = listOf(
@@ -232,19 +232,19 @@ class NugetStructMemberGenerationTest {
   private val profileRir: RirFile = RirFile(
     assemblies = listOf(
       RirAssembly(
-        packageId = "SampleDependency",
-        assemblyName = "SampleDependency",
+        packageId = "TestDependency",
+        assemblyName = "TestDependency",
         namespaces = listOf(
-          RirNamespace(name = "Sample.Enums", types = listOf(catMood)),
-          RirNamespace(name = "Sample.Structs", types = listOf(profile)),
+          RirNamespace(name = "Test.Enums", types = listOf(catMood)),
+          RirNamespace(name = "Test.Structs", types = listOf(profile)),
         ),
       ),
     ),
   )
   private val profileNamespaceAliases: Map<String, Map<String, String>> = mapOf(
-    "SampleDependency" to mapOf(
-      "Sample.Enums" to "sample.enums",
-      "Sample.Structs" to "sample.structs",
+    "TestDependency" to mapOf(
+      "Test.Enums" to "test.enums",
+      "Test.Structs" to "test.structs",
     ),
   )
 
@@ -366,7 +366,7 @@ class NugetStructMemberGenerationTest {
       generateKotlinStubs(profileRir, namespaceAliases = profileNamespaceAliases)
     val profileFile: String = files.single { it.relativePath.endsWith("/Profile.kt") }.content
 
-    assertContains(profileFile, "import sample.enums.CatMood")
+    assertContains(profileFile, "import test.enums.CatMood")
     assertContains(profileFile, "val label: String")
     assertContains(profileFile, "ProfileBindings.labelGetterFn")
     // string return from reconstructed receiver: components first with their conversions.
@@ -434,7 +434,7 @@ class NugetStructMemberGenerationTest {
     val registration: String =
       files.single { it.relativePath == "PointRegistration.cs" }.content
 
-    assertContains(registration, "nuget_sample_structs_point_register(")
+    assertContains(registration, "nuget_test_structs_point_register(")
     // 5 slots: int alternate ctor + Origin + Format + Offset + Magnitude.
     assertContains(registration, "5,")
     assertInOrder(
@@ -480,7 +480,7 @@ class NugetStructMemberGenerationTest {
 
     // Receiver components use readName (Tag/Active/Grade/Mood). Case-sensitive C# then keeps the
     // WithMood parameter as lowercase `mood` without colliding with component `Mood`.
-    assertContains(registration, "using Sample.Enums;")
+    assertContains(registration, "using Test.Enums;")
     assertContains(
       registration,
       "private static IntPtr Label_Get_Thunk(IntPtr TagPtr, byte Active, ushort Grade, int Mood)",

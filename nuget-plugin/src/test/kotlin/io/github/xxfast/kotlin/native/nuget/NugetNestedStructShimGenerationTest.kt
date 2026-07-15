@@ -22,7 +22,7 @@ import kotlin.test.assertEquals
 /**
  * ADR-059: nested struct components — the C# generator side (`NugetGenerateShimsTask`).
  *
- * Fixture mirrors `sample-dependency/Litter.cs` / `Nursery.cs`: `Profile` (Shape A leaf) and
+ * Fixture mirrors `TestDependency/Litter.cs` / `Nursery.cs`: `Profile` (Shape A leaf) and
  * `Extent` (Shape B leaf) nest inside `Litter` (Shape A OUTER — A-in-A + B-in-A). `Point` (Shape
  * A leaf) and `Collar` (Shape B leaf, mixed field/set/init) nest inside `Nest` (Shape B OUTER —
  * A-in-B + B-in-B), covering all four shape combinations across the two fixtures (Decision 3a).
@@ -44,7 +44,7 @@ class NugetNestedStructShimGenerationTest {
       RirEnumEntry("Calm", 0), RirEnumEntry("Playful", 1), RirEnumEntry("Sleepy", 2),
     ),
   )
-  private val catMoodType = RirEnumType(namespace = "Sample.Enums", name = "CatMood")
+  private val catMoodType = RirEnumType(namespace = "Test.Enums", name = "CatMood")
 
   private val profile = RirStruct(
     name = "Profile",
@@ -56,7 +56,7 @@ class NugetNestedStructShimGenerationTest {
       RirStructComponent(name = "mood", readName = "Mood", type = catMoodType),
     ),
   )
-  private val profileType = RirStructType(namespace = "Sample.Structs", name = "Profile")
+  private val profileType = RirStructType(namespace = "Test.Structs", name = "Profile")
 
   private val extent = RirStruct(
     name = "Extent",
@@ -66,9 +66,9 @@ class NugetNestedStructShimGenerationTest {
       RirStructComponent(name = "height", readName = "Height", type = RirPrimitiveType("int")),
     ),
   )
-  private val extentType = RirStructType(namespace = "Sample.Structs", name = "Extent")
+  private val extentType = RirStructType(namespace = "Test.Structs", name = "Extent")
 
-  private val litterType = RirStructType(namespace = "Sample.Structs", name = "Litter")
+  private val litterType = RirStructType(namespace = "Test.Structs", name = "Litter")
   private val litter = RirStruct(
     name = "Litter",
     shape = RirStructShape.CONSTRUCTOR,
@@ -106,11 +106,11 @@ class NugetNestedStructShimGenerationTest {
   private val littersRir = RirFile(
     assemblies = listOf(
       RirAssembly(
-        packageId = "SampleDependency",
-        assemblyName = "SampleDependency",
+        packageId = "TestDependency",
+        assemblyName = "TestDependency",
         namespaces = listOf(
-          RirNamespace(name = "Sample.Enums", types = listOf(catMood)),
-          RirNamespace(name = "Sample.Structs", types = listOf(profile, extent, litter, litters)),
+          RirNamespace(name = "Test.Enums", types = listOf(catMood)),
+          RirNamespace(name = "Test.Structs", types = listOf(profile, extent, litter, litters)),
         ),
       ),
     ),
@@ -128,7 +128,7 @@ class NugetNestedStructShimGenerationTest {
       RirStructComponent(name = "y", readName = "Y", type = RirPrimitiveType("int")),
     ),
   )
-  private val pointType = RirStructType(namespace = "Sample.Structs", name = "Point")
+  private val pointType = RirStructType(namespace = "Test.Structs", name = "Point")
   private val geometry = RirClass(
     name = "Geometry",
     isAbstract = true,
@@ -148,9 +148,9 @@ class NugetNestedStructShimGenerationTest {
   private val geometryRir = RirFile(
     assemblies = listOf(
       RirAssembly(
-        packageId = "SampleDependency",
-        assemblyName = "SampleDependency",
-        namespaces = listOf(RirNamespace(name = "Sample.Structs", types = listOf(point, geometry))),
+        packageId = "TestDependency",
+        assemblyName = "TestDependency",
+        namespaces = listOf(RirNamespace(name = "Test.Structs", types = listOf(point, geometry))),
       ),
     ),
   )
@@ -249,7 +249,7 @@ class NugetNestedStructShimGenerationTest {
       RirStructComponent(name = "mood", readName = "Mood", type = catMoodType),
     ),
   )
-  private val collarType = RirStructType(namespace = "Sample.Structs", name = "Collar")
+  private val collarType = RirStructType(namespace = "Test.Structs", name = "Collar")
 
   private val nestPoint = RirStruct(
     name = "Point",
@@ -259,9 +259,9 @@ class NugetNestedStructShimGenerationTest {
       RirStructComponent(name = "y", readName = "Y", type = RirPrimitiveType("int")),
     ),
   )
-  private val nestPointType = RirStructType(namespace = "Sample.Structs", name = "Point")
+  private val nestPointType = RirStructType(namespace = "Test.Structs", name = "Point")
 
-  private val nestType = RirStructType(namespace = "Sample.Structs", name = "Nest")
+  private val nestType = RirStructType(namespace = "Test.Structs", name = "Nest")
   private val nest = RirStruct(
     name = "Nest",
     shape = RirStructShape.INITIALIZER,
@@ -290,12 +290,12 @@ class NugetNestedStructShimGenerationTest {
   private val nestRir = RirFile(
     assemblies = listOf(
       RirAssembly(
-        packageId = "SampleDependency",
-        assemblyName = "SampleDependency",
+        packageId = "TestDependency",
+        assemblyName = "TestDependency",
         namespaces = listOf(
-          RirNamespace(name = "Sample.Enums", types = listOf(catMood)),
+          RirNamespace(name = "Test.Enums", types = listOf(catMood)),
           RirNamespace(
-            name = "Sample.Structs",
+            name = "Test.Structs",
             types = listOf(collar, nestPoint, extent, nest, nestFns),
           ),
         ),
@@ -325,8 +325,8 @@ class NugetNestedStructShimGenerationTest {
   }
 
   // ------------------------------------------------------------------
-  // 3. Cross-namespace `using`: a class in Sample.Nested referencing a struct declared in
-  //    Sample.Structs needs `using Sample.Structs;` for its unqualified `new Point(...)` to
+  // 3. Cross-namespace `using`: a class in Test.Nested referencing a struct declared in
+  //    Test.Structs needs `using Test.Structs;` for its unqualified `new Point(...)` to
   //    resolve. Deliberately FLAT (Point has no struct-typed component of its own) so this test
   //    isolates the "using" bug from the (still unimplemented) recursive-flattening throw path —
   //    ADR-059 calls this out as a PRE-EXISTING gap that nesting merely makes routine.
@@ -348,11 +348,11 @@ class NugetNestedStructShimGenerationTest {
   private val crossNamespaceRir = RirFile(
     assemblies = listOf(
       RirAssembly(
-        packageId = "SampleDependency",
-        assemblyName = "SampleDependency",
+        packageId = "TestDependency",
+        assemblyName = "TestDependency",
         namespaces = listOf(
-          RirNamespace(name = "Sample.Structs", types = listOf(point)),
-          RirNamespace(name = "Sample.Nested", types = listOf(nurseries)),
+          RirNamespace(name = "Test.Structs", types = listOf(point)),
+          RirNamespace(name = "Test.Nested", types = listOf(nurseries)),
         ),
       ),
     ),
@@ -365,11 +365,11 @@ class NugetNestedStructShimGenerationTest {
     val registration: String =
       files.single { it.relativePath == "NurseriesRegistration.cs" }.content
 
-    assertContains(registration, "namespace Sample.Nested")
+    assertContains(registration, "namespace Test.Nested")
     assertContains(registration, "new Point(p_X, p_Y)")
     assertContains(
       registration,
-      "using Sample.Structs;",
+      "using Test.Structs;",
       message = "ADR-059: referencedEnumTypes only collects RirEnumType — there is no struct " +
           "equivalent, so a struct declared in a different C# namespace than the class " +
           "referencing it gets no `using`, and the generated `new Point(...)` does not resolve. " +
@@ -408,9 +408,9 @@ class NugetNestedStructShimGenerationTest {
     assemblies = listOf(
       littersRir.assemblies.single().copy(
         namespaces = listOf(
-          RirNamespace(name = "Sample.Enums", types = listOf(catMood)),
+          RirNamespace(name = "Test.Enums", types = listOf(catMood)),
           RirNamespace(
-            name = "Sample.Structs",
+            name = "Test.Structs",
             types = listOf(profile, extent, litter, littersWithMerge),
           ),
         ),
@@ -424,9 +424,9 @@ class NugetNestedStructShimGenerationTest {
       generateKotlinStubs(
         mergeRir,
         namespaceAliases = mapOf(
-          "SampleDependency" to mapOf(
-            "Sample.Enums" to "sample.enums",
-            "Sample.Structs" to "sample.structs",
+          "TestDependency" to mapOf(
+            "Test.Enums" to "test.enums",
+            "Test.Structs" to "test.structs",
           ),
         ),
       )

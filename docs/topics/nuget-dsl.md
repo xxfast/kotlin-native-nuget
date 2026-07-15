@@ -63,7 +63,7 @@ Inside the trailing block, `NugetDependency` exposes:
 ```kotlin
 nuget {
   dependencies {
-    dependency("SampleDependency", version = "1.0.0") {
+    dependency("TestDependency", version = "1.0.0") {
       source = "https://my.private.feed/v3/index.json"
       bind { /* ... */ }
     }
@@ -79,7 +79,7 @@ Configures `NugetBindConfig`. Declaring `bind {}` at all is what triggers `nuget
 
 | Property / function | Type | Required | Default |
 |---|---|---|---|
-| `packageName` | `String?` | no | the dependency id, lowercased with `-` replaced by `_` (e.g. `SampleDependency` becomes `sampledependency`) |
+| `packageName` | `String?` | no | the dependency id, lowercased with `-` replaced by `_` (e.g. `TestDependency` becomes `sampledependency`) |
 | `include(vararg namespace: String)` | function | no | empty, with no `include` at all, every namespace in the package is considered, subject to `exclude` |
 | `exclude(vararg namespace: String)` | function | no | empty |
 | `alias(csharpNamespace, kotlinPackage)` | function | no | none |
@@ -90,11 +90,11 @@ specific C# namespace to a Kotlin package, overriding both `packageName` and the
 default for that namespace only.
 
 ```kotlin
-dependency("SampleDependency", version = "1.0.0") {
+dependency("TestDependency", version = "1.0.0") {
   bind {
-    include("Sample.Text")
-    exclude("Sample.Text.Internal")
-    alias("Sample.Text", "sample.text")
+    include("Test.Text")
+    exclude("Test.Text.Internal")
+    alias("Test.Text", "sample.text")
   }
 }
 ```

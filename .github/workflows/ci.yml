@@ -36,21 +36,21 @@ jobs:
         run: ./gradlew :nuget-plugin:test
 
       - name: Build NuGet package
-        run: ./gradlew :sample-library:packNuget
+        run: ./gradlew :test-library:packNuget
 
       - name: Check generated bindings compile as a consumer (net8.0, warnings as errors)
-        run: dotnet build sample-app/GeneratedBindingsCheck
+        run: dotnet build GeneratedBindingsCheck
 
       - name: Build dotnet tests
-        run: dotnet build sample-app/SampleApp.Tests
+        run: dotnet build IntegrationTests
 
       - name: Check test output
         if: runner.os == 'Windows'
-        run: ls sample-app/SampleApp.Tests/bin/Debug/net10.0/
+        run: ls IntegrationTests/bin/Debug/net10.0/
         shell: bash
 
       - name: Run dotnet tests
-        run: dotnet test sample-app/SampleApp.Tests --no-build
+        run: dotnet test IntegrationTests --no-build
 
   # Consumes the plugin the way a real user does: by maven coordinate, from a separate Gradle
   # build. In this repo `NugetPlugin` always finds `:nuget-processor` as a project, so the

@@ -10,7 +10,7 @@ A Kotlin `object` singleton becomes a static C# class: no instance, no construct
 
 ## Kotlin
 
-A top-level singleton, from `sample-library/src/nativeMain/kotlin/.../cat/CatRegistry.kt`:
+A top-level singleton, from `test-library/src/nativeMain/kotlin/.../cat/CatRegistry.kt`:
 
 ```kotlin
 object CatRegistry {
@@ -28,7 +28,7 @@ object CatRegistry {
 }
 ```
 
-A companion object, from `sample-library/src/nativeMain/kotlin/.../cat/Cat.kt`:
+A companion object, from `test-library/src/nativeMain/kotlin/.../cat/Cat.kt`:
 
 ```kotlin
 class Cat(
@@ -66,7 +66,7 @@ The `Cat` companion's members are generated as static members directly on the `C
 
 ## Using it from C#
 
-Singleton object, from `sample-app/SampleApp.Tests/ObjectTests_Singleton.cs`:
+Singleton object, from `IntegrationTests/ObjectTests_Singleton.cs`:
 
 ```C#
 [Fact]
@@ -86,7 +86,7 @@ public void CatRegistry_RegisterAndCount()
 }
 ```
 
-Companion object, from `sample-app/SampleApp.Tests/CompanionObjectTests.cs`:
+Companion object, from `IntegrationTests/CompanionObjectTests.cs`:
 
 ```C#
 [Fact]

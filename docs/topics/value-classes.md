@@ -9,7 +9,7 @@ A Kotlin `value class` (inline class) wrapping a primitive or `String` becomes a
 
 ## Kotlin
 
-Wrapping a primitive-backed type (`String`), with a validating `init` and a secondary constructor, from `sample-library/src/nativeMain/kotlin/.../cat/CatId.kt`:
+Wrapping a primitive-backed type (`String`), with a validating `init` and a secondary constructor, from `test-library/src/nativeMain/kotlin/.../cat/CatId.kt`:
 
 ```kotlin
 value class CatId(val id: String) {
@@ -23,7 +23,7 @@ value class CatId(val id: String) {
 }
 ```
 
-Wrapping a reference type (`Cat`), from `sample-library/src/nativeMain/kotlin/.../cat/CatResult.kt`:
+Wrapping a reference type (`Cat`), from `test-library/src/nativeMain/kotlin/.../cat/CatResult.kt`:
 
 ```kotlin
 value class CatResult(val cat: Cat) {
@@ -89,7 +89,7 @@ Because `record struct` gives structural equality for free, `CatId`/`CatResult` 
 
 ## Using it from C#
 
-Primitive-backed value class, from `sample-app/SampleApp.Tests/ValueClassTests.cs`:
+Primitive-backed value class, from `IntegrationTests/ValueClassTests.cs`:
 
 ```C#
 [Fact]
@@ -115,7 +115,7 @@ public void CatId_Length_ReturnsUnderlyingStringLength()
 }
 ```
 
-Reference-backed value class, from `sample-app/SampleApp.Tests/ReferenceValueClassTests.cs`:
+Reference-backed value class, from `IntegrationTests/ReferenceValueClassTests.cs`:
 
 ```C#
 [Fact]
@@ -136,7 +136,7 @@ public void CatResult_Equality_SameUnderlying_AreEqual()
 }
 ```
 
-Constructor validation propagating an exception through `CreateChecked`, from `sample-app/SampleApp.Tests/ValueClassConstructorExceptionTests.cs` (see [Exceptions](exceptions.md) for the full picture):
+Constructor validation propagating an exception through `CreateChecked`, from `IntegrationTests/ValueClassConstructorExceptionTests.cs` (see [Exceptions](exceptions.md) for the full picture):
 
 ```C#
 [Fact]

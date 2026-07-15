@@ -16,5 +16,4 @@ dependencyResolutionManagement {
 }
 
 include(":nuget-processor")
-include(":sample-library")
-include(":sample-app")
+include(":test-library")

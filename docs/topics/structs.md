@@ -41,12 +41,12 @@ when the struct has no alternate constructors.
 
 ## The `Point` fixture
 
-`sample-dependency/Geometry.cs` declares a struct whose constructor parameters are lower camelCase
+`TestDependency/Geometry.cs` declares a struct whose constructor parameters are lower camelCase
 while the properties they back are PascalCase, deliberately exercising the case-insensitive
 component-match rule:
 
 ```C#
-// sample-dependency/Geometry.cs (real source)
+// TestDependency/Geometry.cs (real source)
 public readonly struct Point
 {
     public Point(int x, int y)
@@ -96,7 +96,7 @@ internal data class Point(
   constructor(value: Int) : this(construct__e71e420dcea5e3c083737f3c34b97ec7(value))
   fun format(): String {
     val fn = requireNotNull(PointBindings.format__0fb3c58859d9da606915abab731b3187Fn) {
-      NugetRegistry.notRegistered("Sample.Structs.Point", "SampleDependency")
+      NugetRegistry.notRegistered("Test.Structs.Point", "TestDependency")
     }
     val resultPtr = fn.invoke(x, y)
       ?: error("Point.Format returned null, expected a non-null string pointer")
@@ -107,7 +107,7 @@ internal data class Point(
 
   fun offset(dx: Int, dy: Int): Point = memScoped {
     val fn = requireNotNull(PointBindings.offset__8a9f2cbc4c6860d43d71b26e499229c9Fn) {
-      NugetRegistry.notRegistered("Sample.Structs.Point", "SampleDependency")
+      NugetRegistry.notRegistered("Test.Structs.Point", "TestDependency")
     }
     val outX = alloc<IntVar>()
     val outY = alloc<IntVar>()
@@ -117,14 +117,14 @@ internal data class Point(
   val magnitude: Int
     get() {
       val fn = requireNotNull(PointBindings.magnitudeGetterFn) {
-        NugetRegistry.notRegistered("Sample.Structs.Point", "SampleDependency")
+        NugetRegistry.notRegistered("Test.Structs.Point", "TestDependency")
       }
       return fn.invoke(x, y)
     }
   companion object {
     fun origin(): Point = memScoped {
       val fn = requireNotNull(PointBindings.origin__8692fa20d808eeacc66f94518d080914Fn) {
-        NugetRegistry.notRegistered("Sample.Structs.Point", "SampleDependency")
+        NugetRegistry.notRegistered("Test.Structs.Point", "TestDependency")
       }
       val outX = alloc<IntVar>()
       val outY = alloc<IntVar>()
@@ -164,11 +164,11 @@ non-struct (`string`) return.
 
 ## The full v1 component vocabulary
 
-`sample-dependency/Profile.cs` exercises every v1 component kind together: `string`, `bool`, `char`,
+`TestDependency/Profile.cs` exercises every v1 component kind together: `string`, `bool`, `char`,
 and a bound enum:
 
 ```C#
-// sample-dependency/Profile.cs (real source)
+// TestDependency/Profile.cs (real source)
 public readonly struct Profile
 {
     public Profile(string tag, bool active, char grade, CatMood mood)
@@ -219,7 +219,7 @@ Per-component ABI types reuse the existing wire tables (no new scalar is introdu
 | `float` / `double` | `Float` / `Double` | `CPointer<FloatVar>` / `CPointer<DoubleVar>` | `float` / `double` | `float*` / `double*` |
 | `string` | `COpaquePointer?` | `CPointer<COpaquePointerVar>` | `IntPtr` | `IntPtr*` |
 
-`sample-dependency/Metrics.cs` covers the "pass-through" numeric components (`long`/`float`/`double`),
+`TestDependency/Metrics.cs` covers the "pass-through" numeric components (`long`/`float`/`double`),
 each crossing as its own scalar with no ABI-side conversion, unlike `bool`/`char`/`string`/enum.
 
 ## Shape B: structs with no public constructor
@@ -232,11 +232,11 @@ to Shape A: an immutable `data class`. Only the C# reconstruction expression cha
 `new T(a, b)` to an object initializer, `new T { A = a, B = b }`; `init`-only setters bind with no
 special handling, since an object initializer is exactly the context in which `init` is callable.
 
-`sample-dependency/Collar.cs` has both sub-shapes: `Extent` is pure public fields, `Collar` mixes a
+`TestDependency/Collar.cs` has both sub-shapes: `Extent` is pure public fields, `Collar` mixes a
 public field with `set` and `init` auto-properties across the full component vocabulary:
 
 ```C#
-// sample-dependency/Collar.cs (real source)
+// TestDependency/Collar.cs (real source)
 public struct Extent
 {
     public int Width;
@@ -280,7 +280,7 @@ internal data class Extent(
 ) {
   fun grow(by: Int): Extent = memScoped {
     val fn = requireNotNull(ExtentBindings.grow__9121219becc53aca492b7a3eeec39b31Fn) {
-      NugetRegistry.notRegistered("Sample.Structs.Extent", "SampleDependency")
+      NugetRegistry.notRegistered("Test.Structs.Extent", "TestDependency")
     }
     val outWidth = alloc<IntVar>()
     val outHeight = alloc<IntVar>()
@@ -291,7 +291,7 @@ internal data class Extent(
 }
 
 /**
- * Kotlin value type for the C# struct `SampleDependency.Collar`.
+ * Kotlin value type for the C# struct `TestDependency.Collar`.
  *
  * Copied by value across the bridge: equality is structural, and there is nothing to close.
  * The C# struct's fields/properties are settable, but a Kotlin-side change can never be
@@ -333,7 +333,7 @@ private static unsafe void Resize__50abd5f4f4e3ddfc0ecdc552fbbca9ab_Thunk(int Gi
 }
 ```
 
-`sample-dependency/Collars.cs`'s `Pair(Collar a, Extent b)` takes two Shape B structs of different
+`TestDependency/Collars.cs`'s `Pair(Collar a, Extent b)` takes two Shape B structs of different
 sub-shapes in one signature, decomposing both onto the wire and reconstructing each with its own
 object initializer (`build/nuget-interop/csharp/CollarsRegistration.cs`, real output):
 
@@ -346,11 +346,11 @@ private static IntPtr Pair__19127a5e1495d2eeb2514ce30eb72bd2_Thunk(int a_Girth, 
 }
 ```
 
-Hand-written Kotlin in `sample-library` looks exactly like the Shape A samples; nothing about calling
+Hand-written Kotlin in `test-library` looks exactly like the Shape A samples; nothing about calling
 a Shape B struct differs from Kotlin's point of view:
 
 ```kotlin
-// sample-library/.../sample/structs/CollarSample.kt (real source)
+// test-library/.../sample/structs/CollarSample.kt (real source)
 fun describeCollar(
   girth: Int,
   colour: String,
@@ -373,7 +373,7 @@ fun collarNamedArgs(): String {
 ```
 
 ```C#
-// sample-app/SampleApp.Tests/CollarRoundTripTests.cs (real source)
+// IntegrationTests/CollarRoundTripTests.cs (real source)
 [Fact]
 public void DescribeCollar_RendersEveryComponent()
 {
@@ -399,7 +399,7 @@ public void CollarNamedArgs_ComponentNamesMatchDeclarationOrder()
 `initialCode: Int` (rather than a Kotlin `Char`) is the same forward-direction workaround
 `StructsSample.kt`'s `gradeCode` uses: a raw Kotlin `Char` parameter cannot cross the *forward*
 boundary yet (a pre-existing, unrelated gap, tracked in [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md)
-Phase 3). It affects only how this fixture calls into `sample-library`, not the reverse struct
+Phase 3). It affects only how this fixture calls into `test-library`, not the reverse struct
 binding itself, whose own `char` components round-trip correctly.
 
 ### Component order is a hazard Shape A does not have
@@ -429,7 +429,7 @@ recommendation is real advice, not a guarantee.
 
 ## Struct-typed properties and instance methods
 
-A struct works as a parameter or return on both static and instance members. `sample-dependency`'s
+A struct works as a parameter or return on both static and instance members. `TestDependency`'s
 `Cattery` (a bound handle class) has an instance method taking and returning `Metrics`, and a
 **settable** struct-typed property, `CurrentProfile`:
 
@@ -577,10 +577,10 @@ private static IntPtr Label_Get_Thunk(IntPtr TagPtr, byte Active, ushort Grade, 
 }
 ```
 
-Hand-written Kotlin in `sample-library` calls the members like any other Kotlin API:
+Hand-written Kotlin in `test-library` calls the members like any other Kotlin API:
 
 ```kotlin
-// sample-library/.../sample/structs/StructsSample.kt (real source)
+// test-library/.../sample/structs/StructsSample.kt (real source)
 fun pointMagnitude(x: Int, y: Int): Int = Point(x, y).magnitude
 
 fun offsetPoint(x: Int, y: Int, dx: Int, dy: Int): String = Point(x, y).offset(dx, dy).format()
@@ -616,11 +616,11 @@ struct rebuilds itself with its own shape (Shape A: a constructor call, Shape B:
 initializer), nested inside whichever shape the containing struct uses. A-in-A, B-in-A, A-in-B, and
 B-in-B all fall out of the same recursive call.
 
-`sample-dependency/Litter.cs` nests a Shape A struct (`Profile`, the full string/bool/char/enum
+`TestDependency/Litter.cs` nests a Shape A struct (`Profile`, the full string/bool/char/enum
 vocabulary) and a Shape B struct (`Extent`, plain ints) inside one Shape A outer struct:
 
 ```C#
-// sample-dependency/Litter.cs (real source)
+// TestDependency/Litter.cs (real source)
 public readonly struct Litter
 {
     public Litter(Profile mother, Extent basket, int count, CatMood mood)
@@ -700,14 +700,14 @@ as two of its arguments. Read-back uses path expressions (`result.Mother.Tag`, n
 
 ### Depth, and across a package boundary
 
-Nesting itself has no depth limit (the real limit is arity, below). `sample-dependency/Nursery.cs`
+Nesting itself has no depth limit (the real limit is arity, below). `TestDependency/Nursery.cs`
 nests `Litter` inside `Nursery` (depth 2: `Nursery -> Litter -> Profile -> string`), declared in a
 **different C# namespace** than `Litter`'s own, so the generated Kotlin has to import across a
 package boundary and the generated C# has to `using` a namespace it would not otherwise reference:
 
 ```C#
-// sample-dependency/Nursery.cs (real source)
-namespace Sample.Nested;
+// TestDependency/Nursery.cs (real source)
+namespace Test.Nested;
 
 public readonly struct Nursery
 {
@@ -732,15 +732,15 @@ internal data class Nursery(
 )
 ```
 
-and the generated shim adds `using Sample.Structs;` alongside its own namespace, then flattens the
+and the generated shim adds `using Test.Structs;` alongside its own namespace, then flattens the
 whole depth-2 path (`n_Litter_Mother_Tag`, `n_Litter_Basket_Width`, ...)
 (`build/nuget-interop/csharp/NurseriesRegistration.cs`, real output, trimmed):
 
 ```C#
-namespace Sample.Nested
+namespace Test.Nested
 {
-    using Sample.Enums;
-    using Sample.Structs;
+    using Test.Enums;
+    using Test.Structs;
 
     private static unsafe void Rehome__7030230e3e73ec968cf53164b5fcc5be_Thunk(IntPtr n_Litter_Mother_TagPtr, byte n_Litter_Mother_Active, ushort n_Litter_Mother_Grade, int n_Litter_Mother_Mood, int n_Litter_Basket_Width, int n_Litter_Basket_Height, int n_Litter_Count, int n_Litter_Mood, int n_Room, IntPtr* outLitter_Mother_Tag, byte* outLitter_Mother_Active, ushort* outLitter_Mother_Grade, int* outLitter_Mother_Mood, int* outLitter_Basket_Width, int* outLitter_Basket_Height, int* outLitter_Count, int* outLitter_Mood, int* outRoom)
     {
@@ -758,12 +758,12 @@ arity (receiver, if any, plus parameters plus out-pointers, all counted at the l
 **skipped**, not generated, with a `skipped_abi_arity_limit` diagnostic naming the member and the
 count; the rest of the type still binds.
 
-`sample-dependency/Litter.cs`'s `Litters.Merge(Litter, Litter)` pins this deliberately: two `Litter`
+`TestDependency/Litter.cs`'s `Litters.Merge(Litter, Litter)` pins this deliberately: two `Litter`
 parameters (8 leaves each) plus a `Litter` return (8 out-pointers) is 24 arguments, four over the
 ceiling. Real build-log warning:
 
 ```
-w: [nuget:SampleDependency] Skipping Sample.Structs.Litters.Merge(...): flattened ABI arity (24)
+w: [nuget:TestDependency] Skipping Test.Structs.Litters.Merge(...): flattened ABI arity (24)
 exceeds the 22-argument CFunction.invoke ceiling verified for Kotlin/Native (ADR-059 Constraint 3).
 Shrink one of the nested structs in this member's signature (fewer components, or less nesting), or
 split it into multiple members with fewer struct parameters.
@@ -779,7 +779,7 @@ If a nested component itself fails to bind, the whole outer struct is skipped, a
 of the outer struct's own shape rules:
 
 ```C#
-// sample-dependency/UnsupportedStructs.cs (real source)
+// TestDependency/UnsupportedStructs.cs (real source)
 public readonly struct Kennel
 {
     public Kennel(Manual manual, int n) { Manual = manual; N = n; }
@@ -788,14 +788,14 @@ public readonly struct Kennel
 }
 ```
 
-Real diagnostic from `sample-library/build/nuget-interop/reverse-ir.json` (trimmed): when a struct
+Real diagnostic from `test-library/build/nuget-interop/reverse-ir.json` (trimmed): when a struct
 fails **both** shapes, the reason carries both attempts, not just the last one:
 
 ```json
 {
   "kind": "skipped_unsupported_struct",
   "typeName": "Kennel",
-  "reason": "Shape A: property `Manual`: struct `Sample.Structs.Manual` is not bridgeable: property `A` is settable but is not an auto-property (no compiler-generated backing field), so the struct's stored state cannot be proven covered; Shape B: auto-property `Manual` has no public setter and there is no constructor to set it"
+  "reason": "Shape A: property `Manual`: struct `Test.Structs.Manual` is not bridgeable: property `A` is settable but is not an auto-property (no compiler-generated backing field), so the struct's stored state cannot be proven covered; Shape B: auto-property `Manual` has no public setter and there is no constructor to set it"
 }
 ```
 
@@ -805,7 +805,7 @@ Deep structural equality falls out of nesting `data class`es inside each other w
 and `copy()` composes the same way a C# `with` expression would:
 
 ```kotlin
-// sample-library/.../sample/structs/NestedSample.kt (real source)
+// test-library/.../sample/structs/NestedSample.kt (real source)
 fun nestedValueEquality(): Boolean {
   val a = Litter(Profile("o", true, 'A', CatMood.CALM), Extent(1, 2), 3, CatMood.CALM)
   return a == a.copy() &&
@@ -821,7 +821,7 @@ The generated `data class` gives value equality for free, and it holds across in
 calls, not just against itself:
 
 ```kotlin
-// sample-library/src/nativeMain/kotlin/.../sample/structs/StructsSample.kt (real source)
+// test-library/src/nativeMain/kotlin/.../sample/structs/StructsSample.kt (real source)
 fun pointValueEqualityRoundTrip(): Boolean {
   val a = Point(3, 4)
   val b = a.copy()
@@ -844,7 +844,7 @@ struct forward (mapping a plain multi-field data class forward is [ADR-014](http
 concern, single-component value classes only, and out of scope here):
 
 ```C#
-// sample-app/SampleApp.Tests/StructRoundTripTests.cs (real source)
+// IntegrationTests/StructRoundTripTests.cs (real source)
 [Fact]
 public void TranslatePointDescription_MovesBothComponents()
 {
@@ -943,10 +943,10 @@ skipped with its own diagnostic, since a Shape B struct's primary constructor al
 component and an "alternate" would collide with it.
 
 Otherwise the struct is **skipped**, with a `skipped_unsupported_struct` diagnostic naming the failed
-rule. `sample-dependency/UnsupportedStructs.cs` has one adversarial case per rule:
+rule. `TestDependency/UnsupportedStructs.cs` has one adversarial case per rule:
 
 ```C#
-// sample-dependency/UnsupportedStructs.cs (real source)
+// TestDependency/UnsupportedStructs.cs (real source)
 public readonly struct Overstuffed                 // fails Shape A rule 4, then Shape B (uncovered _hidden)
 {
     private readonly int _hidden;
@@ -977,7 +977,7 @@ public struct Nothing { }                              // Shape B: zero stored s
 
 Every one of these is skipped with a `skipped_unsupported_struct` diagnostic in `reverse-ir.json` and
 generates no Kotlin type. Real diagnostics, trimmed, from
-`sample-library/build/nuget-interop/reverse-ir.json`:
+`test-library/build/nuget-interop/reverse-ir.json`:
 
 ```json
 {

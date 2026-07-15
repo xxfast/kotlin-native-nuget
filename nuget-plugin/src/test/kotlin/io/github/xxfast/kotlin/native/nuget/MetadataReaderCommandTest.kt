@@ -8,7 +8,7 @@ import kotlin.test.assertTrue
 
 /**
  * Pins the CLI contract between the Gradle plugin and the C# metadata reader. Pure — no dotnet,
- * no subprocess. The reader's argument parser in `nuget-metadata-reader/Program.cs` must stay in
+ * no subprocess. The reader's argument parser in `NugetMetadataReader/Program.cs` must stay in
  * sync with the argument order asserted here.
  */
 class MetadataReaderCommandTest {

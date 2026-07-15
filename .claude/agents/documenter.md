@@ -73,19 +73,19 @@ grep -rn "not yet\|not supported\|not built\|deferred\|skipped" docs/topics/
 This is the rule that matters most. Do not write API from memory or from an ADR's proposed shape,
 which may have drifted from what shipped.
 
-- **Kotlin source**: `sample-library/src/nativeMain/kotlin/io/github/xxfast/kotlin/native/nuget/sample/`
-- **Generated C# (forward)**: `sample-library/build/generated/ksp/macosArm64/macosArm64Main/resources/Interop.cs`
-- **Generated Kotlin stubs and C# shims (reverse)**: `sample-library/build/nuget-interop/`
-- **Consumer usage**: `sample-app/SampleApp.Tests/*.cs`
-- **Bound C# fixture**: `sample-dependency/`
+- **Kotlin source**: `test-library/src/nativeMain/kotlin/io/github/xxfast/kotlin/native/nuget/sample/`
+- **Generated C# (forward)**: `test-library/build/generated/ksp/macosArm64/macosArm64Main/resources/Interop.cs`
+- **Generated Kotlin stubs and C# shims (reverse)**: `test-library/build/nuget-interop/`
+- **Consumer usage**: `IntegrationTests/*.cs`
+- **Bound C# fixture**: `TestDependency/`
 
-If `build/` is stale or missing, regenerate it (`./gradlew :sample-library:packNuget`, or
-`:sample-library:nugetImport` for reverse output) rather than guessing at the generated shape.
+If `build/` is stale or missing, regenerate it (`./gradlew :test-library:packNuget`, or
+`:test-library:nugetImport` for reverse output) rather than guessing at the generated shape.
 
 Verify every generated symbol you cite actually exists:
 
 ```bash
-grep -n 'EntryPoint = "your_export_name"' sample-library/build/generated/ksp/macosArm64/macosArm64Main/resources/Interop.cs
+grep -n 'EntryPoint = "your_export_name"' test-library/build/generated/ksp/macosArm64/macosArm64Main/resources/Interop.cs
 ```
 
 Trim snippets to the relevant lines, but never alter a signature, a name, or a string literal to
@@ -103,13 +103,13 @@ One or two sentences on what maps to what.
 (mapping table)
 
 ## Kotlin
-(snippet from sample-library)
+(snippet from test-library)
 
 ## Generated C#
 (snippet from Interop.cs)
 
 ## Using it from C#
-(snippet from SampleApp.Tests)
+(snippet from IntegrationTests)
 
 ## Limitations
 (the unchecked ROADMAP items for this area)

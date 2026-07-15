@@ -10,7 +10,7 @@ Kotlin's three flavours of inheritance each get a distinct C# shape: `interface`
 
 ## Kotlin
 
-From `sample-library/src/nativeMain/kotlin/.../cat/Pet.kt` and `Animal.kt`:
+From `test-library/src/nativeMain/kotlin/.../cat/Pet.kt` and `Animal.kt`:
 
 ```kotlin
 interface Pet {
@@ -28,7 +28,7 @@ abstract class Animal(override val name: String) : Pet {
 
 `Cat` (see [Classes and objects](classes-and-objects.md)) extends `Animal`, which implements `Pet`.
 
-A sealed hierarchy, from `sample-library/src/nativeMain/kotlin/.../cat/Observation.kt`:
+A sealed hierarchy, from `test-library/src/nativeMain/kotlin/.../cat/Observation.kt`:
 
 ```kotlin
 sealed class Observation {
@@ -141,7 +141,7 @@ public abstract class Observation : IDisposable
 
 ## Using it from C#
 
-Polymorphism through `IPet`, from `sample-app/SampleApp.Tests/InterfaceTests.cs`:
+Polymorphism through `IPet`, from `IntegrationTests/InterfaceTests.cs`:
 
 ```C#
 [Fact]
@@ -162,7 +162,7 @@ public void IPet_CanBeUsedPolymorphically()
 private static string Greet(IPet pet) => pet.Greet();
 ```
 
-Abstract-class inheritance, from `sample-app/SampleApp.Tests/AbstractClassTests.cs`:
+Abstract-class inheritance, from `IntegrationTests/AbstractClassTests.cs`:
 
 ```C#
 [Fact]
@@ -173,7 +173,7 @@ public void Animal_CannotBeInstantiated()
 }
 ```
 
-Pattern matching over a sealed hierarchy, from `sample-app/SampleApp.Tests/SealedClassTests.cs`:
+Pattern matching over a sealed hierarchy, from `IntegrationTests/SealedClassTests.cs`:
 
 ```C#
 [Fact]

@@ -13,7 +13,7 @@ Kotlin's collection types cross the bridge as an opaque handle plus a small acce
 
 ## Kotlin
 
-From `sample-library/src/nativeMain/kotlin/.../cat/Cat.kt`:
+From `test-library/src/nativeMain/kotlin/.../cat/Cat.kt`:
 
 ```kotlin
 val nicknames: List<String> = listOf("${name}y", "Little $name")
@@ -102,7 +102,7 @@ public IReadOnlySet<string> Traits
 
 ## Using it from C#
 
-`List<T>`, from `sample-app/SampleApp.Tests/ListTests.cs`:
+`List<T>`, from `IntegrationTests/ListTests.cs`:
 
 ```C#
 [Fact]
@@ -114,7 +114,7 @@ public void Cat_Nicknames_ListEquality()
 }
 ```
 
-`MutableList<T>`, from `sample-app/SampleApp.Tests/MutableListTests.cs`:
+`MutableList<T>`, from `IntegrationTests/MutableListTests.cs`:
 
 ```C#
 [Fact]
@@ -130,7 +130,7 @@ public void Cat_FavoriteFoods_IsMutable()
 
 Mutating the returned `IList<string>` only changes the C#-side copy. It does not write back to the Kotlin `Cat` instance, since the collection was eagerly copied at the moment of the property access.
 
-`Map<K,V>`, from `sample-app/SampleApp.Tests/MapTests.cs`:
+`Map<K,V>`, from `IntegrationTests/MapTests.cs`:
 
 ```C#
 [Fact]
@@ -144,7 +144,7 @@ public void Cat_Accessories_GetByKey()
 }
 ```
 
-`Set<T>`, from `sample-app/SampleApp.Tests/SetTests.cs`:
+`Set<T>`, from `IntegrationTests/SetTests.cs`:
 
 ```C#
 [Fact]

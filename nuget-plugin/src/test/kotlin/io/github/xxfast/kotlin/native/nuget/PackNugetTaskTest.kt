@@ -26,7 +26,7 @@ class PackNugetTaskTest {
   }
 
   private fun configureCommon(task: PackNugetTask, outputDir: File) {
-    task.packageId.set("SampleLibrary")
+    task.packageId.set("TestLibrary")
     task.packageVersion.set("1.0.0")
     task.authors.set("Test Author")
     task.packageDescription.set("Test description")
@@ -51,7 +51,7 @@ class PackNugetTaskTest {
 
     task.pack()
 
-    val contentDir = File(outputDir, "SampleLibrary.1.0.0/contentFiles/cs/any")
+    val contentDir = File(outputDir, "TestLibrary.1.0.0/contentFiles/cs/any")
     assertTrue(
       File(contentDir, "Interop.cs").exists(),
       "Interop.cs from the first generatedCsDirs entry must be copied into contentFiles/cs/any/",
@@ -62,7 +62,7 @@ class PackNugetTaskTest {
         "contentFiles/cs/any/",
     )
 
-    val nuspec: String = File(outputDir, "SampleLibrary.1.0.0/SampleLibrary.nuspec").readText()
+    val nuspec: String = File(outputDir, "TestLibrary.1.0.0/TestLibrary.nuspec").readText()
     assertContains(
       nuspec,
       """<file src="contentFiles/cs/any/Interop.cs" target="contentFiles/cs/any/Interop.cs" />""",
@@ -93,7 +93,7 @@ class PackNugetTaskTest {
 
     task.pack()
 
-    val nuspec: String = File(outputDir, "SampleLibrary.1.0.0/SampleLibrary.nuspec").readText()
+    val nuspec: String = File(outputDir, "TestLibrary.1.0.0/TestLibrary.nuspec").readText()
     assertContains(nuspec, "<dependencies>")
     assertContains(nuspec, """<group targetFramework="net8.0">""")
     assertContains(nuspec, """<dependency id="MimeMapping" version="[4.0.0]" />""")
@@ -113,7 +113,7 @@ class PackNugetTaskTest {
 
     task.pack()
 
-    val nuspec: String = File(outputDir, "SampleLibrary.1.0.0/SampleLibrary.nuspec").readText()
+    val nuspec: String = File(outputDir, "TestLibrary.1.0.0/TestLibrary.nuspec").readText()
     assertFalse(
       nuspec.contains("<dependencies>"),
       "no <dependencies> block should be emitted when dependencyVersions is empty",

@@ -36,10 +36,10 @@ Every time an object-typed property or return value crosses the bridge, the gene
 
 ## What ships in the `.nupkg`
 
-Running `packNuget` for `sample-library` produces this layout:
+Running `packNuget` for `test-library` produces this layout:
 
 ```
-SampleLibrary.1.0.0/
+TestLibrary.1.0.0/
 ├── contentFiles/cs/any/Interop.cs
 └── runtimes/
     ├── osx-arm64/native/
@@ -67,14 +67,14 @@ nuget {
 }
 ```
 
-Kotlin sub-packages map relative to `rootPackage`, and the C# namespace root is the package's `packageId`. In `sample-library`, `rootPackage = "io.github.xxfast.kotlin.native.nuget.sample"`, so:
+Kotlin sub-packages map relative to `rootPackage`, and the C# namespace root is the package's `packageId`. In `test-library`, `rootPackage = "io.github.xxfast.kotlin.native.nuget.test"`, so:
 
 | Kotlin package | C# namespace |
 |---|---|
-| `io.github.xxfast.kotlin.native.nuget.sample` | `SampleLibrary` |
-| `io.github.xxfast.kotlin.native.nuget.sample.cat` | `SampleLibrary.Cat` |
-| `io.github.xxfast.kotlin.native.nuget.sample.math` | `SampleLibrary.Math` |
-| `io.github.xxfast.kotlin.native.nuget.sample.mime` | `SampleLibrary.Mime` |
+| `io.github.xxfast.kotlin.native.nuget.test` | `TestLibrary` |
+| `io.github.xxfast.kotlin.native.nuget.test.cat` | `TestLibrary.Cat` |
+| `io.github.xxfast.kotlin.native.nuget.test.math` | `TestLibrary.Math` |
+| `io.github.xxfast.kotlin.native.nuget.test.mime` | `TestLibrary.Mime` |
 
 Every generated declaration lands under its mapped namespace inside the single `Interop.cs` file.
 

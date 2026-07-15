@@ -60,7 +60,7 @@ A fixed set of Kotlin stdlib exceptions map to the closest .NET analog, as a `se
 
 ## Kotlin
 
-Sample throw sites, from `sample-library/src/nativeMain/kotlin/.../cat/MappedExceptions.kt`:
+Sample throw sites, from `test-library/src/nativeMain/kotlin/.../cat/MappedExceptions.kt`:
 
 ```kotlin
 fun checkOreoWeight(grams: Int): String {
@@ -146,7 +146,7 @@ The same pattern appears on property setters (`TreatJar.TreatCount`), getters (`
 
 ## Using it from C#
 
-Type mapping, from `sample-app/SampleApp.Tests/ExceptionTypeMappingTests.cs`:
+Type mapping, from `IntegrationTests/ExceptionTypeMappingTests.cs`:
 
 ```C#
 [Fact]
@@ -187,7 +187,7 @@ public void CatchAll_ViaIKotlinException_Guard_WorksForMappedType()
 }
 ```
 
-Cause chain, from `sample-app/SampleApp.Tests/ExceptionCauseTests.cs`:
+Cause chain, from `IntegrationTests/ExceptionCauseTests.cs`:
 
 ```C#
 [Fact]
@@ -201,7 +201,7 @@ public void Oreo_GroomingFailed_DeepChain_RootCause_IsBaseKotlinException()
 }
 ```
 
-Property propagation, from `sample-app/SampleApp.Tests/PropertyExceptionPropagationTests.cs`:
+Property propagation, from `IntegrationTests/PropertyExceptionPropagationTests.cs`:
 
 ```C#
 [Fact]
@@ -221,7 +221,7 @@ public void SnackBowl_EmptyBowl_GetterThrowsInvalidOperationException()
 }
 ```
 
-Constructor propagation, from `sample-app/SampleApp.Tests/ConstructorExceptionPropagationTests.cs`, including a `data class`'s generated `Copy()`, which re-runs the same `init` validation:
+Constructor propagation, from `IntegrationTests/ConstructorExceptionPropagationTests.cs`, including a `data class`'s generated `Copy()`, which re-runs the same `init` validation:
 
 ```C#
 [Fact]
@@ -240,7 +240,7 @@ public void CatProfile_Copy_NegativeTreatBudget_ThrowsArgumentException()
 }
 ```
 
-Secondary constructors, from `sample-app/SampleApp.Tests/SecondaryConstructorExceptionTests.cs`, exported as separate overloads (`catlitter_create`/`catlitter_create_2`) that each propagate independently:
+Secondary constructors, from `IntegrationTests/SecondaryConstructorExceptionTests.cs`, exported as separate overloads (`catlitter_create`/`catlitter_create_2`) that each propagate independently:
 
 ```C#
 [Fact]
@@ -250,7 +250,7 @@ public void CatLitter_SecondaryConstructor_ZeroBags_ThrowsArgumentException()
 }
 ```
 
-Async exception propagation, from `sample-app/SampleApp.Tests/ExceptionPropagationTests.cs`:
+Async exception propagation, from `IntegrationTests/ExceptionPropagationTests.cs`:
 
 ```C#
 [Fact]

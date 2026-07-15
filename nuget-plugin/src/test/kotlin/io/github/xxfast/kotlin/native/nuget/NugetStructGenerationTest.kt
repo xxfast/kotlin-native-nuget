@@ -21,13 +21,13 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 
 /**
- * ADR-056 walking skeleton: `Sample.Structs.Point` (all-int Shape A struct) and
- * `Sample.Structs.Geometry.Translate(Point, int, int): Point` (a static method with a
+ * ADR-056 walking skeleton: `Test.Structs.Point` (all-int Shape A struct) and
+ * `Test.Structs.Geometry.Translate(Point, int, int): Point` (a static method with a
  * struct-typed parameter AND a struct-typed return — the case that forces both the parameter
  * decomposition and the out-pointer return paths in one signature).
  *
- * Mirrors the real reverse-ir.json emitted by nuget-metadata-reader for
- * sample-dependency/Geometry.cs — see the walking-skeleton task description.
+ * Mirrors the real reverse-ir.json emitted by NugetMetadataReader for
+ * TestDependency/Geometry.cs — see the walking-skeleton task description.
  */
 class NugetStructGenerationTest {
 
@@ -39,7 +39,7 @@ class NugetStructGenerationTest {
     ),
   )
 
-  private val pointType = RirStructType(namespace = "Sample.Structs", name = "Point")
+  private val pointType = RirStructType(namespace = "Test.Structs", name = "Point")
 
   private val geometry = RirClass(
     name = "Geometry",
@@ -62,10 +62,10 @@ class NugetStructGenerationTest {
   private val rir = RirFile(
     assemblies = listOf(
       RirAssembly(
-        packageId = "SampleDependency",
-        assemblyName = "SampleDependency",
+        packageId = "TestDependency",
+        assemblyName = "TestDependency",
         namespaces = listOf(
-          RirNamespace(name = "Sample.Structs", types = listOf(point, geometry)),
+          RirNamespace(name = "Test.Structs", types = listOf(point, geometry)),
         ),
       ),
     ),
@@ -182,7 +182,7 @@ class NugetStructGenerationTest {
   // Component conversion: a struct whose components are string/bool/char/enum — the types that
   // need a REAL per-type conversion (not a raw pass-through), in parameter position, return
   // position, and as a property type. `CatMood` lives in a different namespace than `Profile`
-  // (mirrors this repo's own bind{} config, where Sample.Structs and Sample.Enums are aliased to
+  // (mirrors this repo's own bind{} config, where Test.Structs and Test.Enums are aliased to
   // different Kotlin packages) so these fixtures also cover the cross-package enum import.
   // ------------------------------------------------------------------
 
@@ -190,7 +190,7 @@ class NugetStructGenerationTest {
     name = "CatMood",
     entries = listOf(RirEnumEntry("Calm", 0), RirEnumEntry("Playful", 1)),
   )
-  private val catMoodType = RirEnumType(namespace = "Sample.Enums", name = "CatMood")
+  private val catMoodType = RirEnumType(namespace = "Test.Enums", name = "CatMood")
 
   private val profile = RirStruct(
     name = "Profile",
@@ -202,7 +202,7 @@ class NugetStructGenerationTest {
       RirStructComponent(name = "mood", readName = "Mood", type = catMoodType),
     ),
   )
-  private val profileType = RirStructType(namespace = "Sample.Structs", name = "Profile")
+  private val profileType = RirStructType(namespace = "Test.Structs", name = "Profile")
 
   private val roster = RirClass(
     name = "Roster",
@@ -230,20 +230,20 @@ class NugetStructGenerationTest {
   private val profileRir = RirFile(
     assemblies = listOf(
       RirAssembly(
-        packageId = "SampleDependency",
-        assemblyName = "SampleDependency",
+        packageId = "TestDependency",
+        assemblyName = "TestDependency",
         namespaces = listOf(
-          RirNamespace(name = "Sample.Enums", types = listOf(catMood)),
-          RirNamespace(name = "Sample.Structs", types = listOf(profile, roster)),
+          RirNamespace(name = "Test.Enums", types = listOf(catMood)),
+          RirNamespace(name = "Test.Structs", types = listOf(profile, roster)),
         ),
       ),
     ),
   )
 
   private val profileNamespaceAliases: Map<String, Map<String, String>> = mapOf(
-    "SampleDependency" to mapOf(
-      "Sample.Enums" to "sample.enums",
-      "Sample.Structs" to "sample.structs",
+    "TestDependency" to mapOf(
+      "Test.Enums" to "test.enums",
+      "Test.Structs" to "test.structs",
     ),
   )
 
@@ -253,7 +253,7 @@ class NugetStructGenerationTest {
       generateKotlinStubs(profileRir, namespaceAliases = profileNamespaceAliases)
     val profileFile: GeneratedFile = files.single { it.relativePath.endsWith("/Profile.kt") }
 
-    assertContains(profileFile.content, "import sample.enums.CatMood")
+    assertContains(profileFile.content, "import test.enums.CatMood")
     assertContains(profileFile.content, "val tag: String")
     assertContains(profileFile.content, "val score: Int")
     assertContains(profileFile.content, "val active: Boolean")
@@ -328,7 +328,7 @@ class NugetStructGenerationTest {
     val registration: GeneratedFile = files.single { it.relativePath == "RosterRegistration.cs" }
 
     // A struct-component enum from a different C# namespace needs its own `using`.
-    assertContains(registration.content, "using Sample.Enums;")
+    assertContains(registration.content, "using Test.Enums;")
     // A string RETURN crosses as IntPtr (ADR-049); the string PARAMETER component's declared
     // name gets the existing Ptr suffix (thunkParamName), matching p_TagPtr's use below.
     assertContains(

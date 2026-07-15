@@ -17,7 +17,7 @@ import kotlin.test.assertTrue
  * assertion failure, not a compile error or a thrown exception, because `abiArgs` itself never
  * inspects component `type`s recursively.
  *
- * Fixture mirrors `sample-dependency/Litter.cs` / `Nursery.cs` (already merged): `Profile` (Shape
+ * Fixture mirrors `TestDependency/Litter.cs` / `Nursery.cs` (already merged): `Profile` (Shape
  * A leaf: string/bool/char/enum, the full CONVERTED vocabulary) and `Extent` (Shape B leaf: direct
  * `int`s), nested inside `Litter` (Shape A outer: A-in-A + B-in-A), nested inside `Nursery`
  * (depth 3, a different C# namespace).
@@ -34,7 +34,7 @@ class RirNestedStructBridgingTest {
       RirEnumEntry("Calm", 0), RirEnumEntry("Playful", 1), RirEnumEntry("Sleepy", 2),
     ),
   )
-  private val catMoodType = RirEnumType(namespace = "Sample.Enums", name = "CatMood")
+  private val catMoodType = RirEnumType(namespace = "Test.Enums", name = "CatMood")
 
   // Profile: Shape A leaf, the full converted vocabulary (string/bool/char/enum).
   private val profile = RirStruct(
@@ -47,7 +47,7 @@ class RirNestedStructBridgingTest {
       RirStructComponent(name = "mood", readName = "Mood", type = catMoodType),
     ),
   )
-  private val profileType = RirStructType(namespace = "Sample.Structs", name = "Profile")
+  private val profileType = RirStructType(namespace = "Test.Structs", name = "Profile")
 
   // Extent: Shape B leaf, direct-only int components.
   private val extent = RirStruct(
@@ -58,7 +58,7 @@ class RirNestedStructBridgingTest {
       RirStructComponent(name = "height", readName = "Height", type = RirPrimitiveType("int")),
     ),
   )
-  private val extentType = RirStructType(namespace = "Sample.Structs", name = "Extent")
+  private val extentType = RirStructType(namespace = "Test.Structs", name = "Extent")
 
   // Litter: Shape A OUTER — nests a Shape A component (Profile) and a Shape B component (Extent):
   // A-in-A and B-in-A in one type. Flattens to 8 leaves.
@@ -72,9 +72,9 @@ class RirNestedStructBridgingTest {
       RirStructComponent(name = "mood", readName = "Mood", type = catMoodType),
     ),
   )
-  private val litterType = RirStructType(namespace = "Sample.Structs", name = "Litter")
+  private val litterType = RirStructType(namespace = "Test.Structs", name = "Litter")
 
-  // Nursery: DEPTH 3, a different C# namespace from Litter (Sample.Nested vs Sample.Structs).
+  // Nursery: DEPTH 3, a different C# namespace from Litter (Test.Nested vs Test.Structs).
   private val nursery = RirStruct(
     name = "Nursery",
     shape = RirStructShape.CONSTRUCTOR,
@@ -83,13 +83,13 @@ class RirNestedStructBridgingTest {
       RirStructComponent(name = "room", readName = "Room", type = RirPrimitiveType("int")),
     ),
   )
-  private val nurseryType = RirStructType(namespace = "Sample.Nested", name = "Nursery")
+  private val nurseryType = RirStructType(namespace = "Test.Nested", name = "Nursery")
 
   private val structs: Map<RirTypeKey, RirStruct> = mapOf(
-    RirTypeKey("Sample.Structs", "Profile") to profile,
-    RirTypeKey("Sample.Structs", "Extent") to extent,
-    RirTypeKey("Sample.Structs", "Litter") to litter,
-    RirTypeKey("Sample.Nested", "Nursery") to nursery,
+    RirTypeKey("Test.Structs", "Profile") to profile,
+    RirTypeKey("Test.Structs", "Extent") to extent,
+    RirTypeKey("Test.Structs", "Litter") to litter,
+    RirTypeKey("Test.Nested", "Nursery") to nursery,
   )
 
   // The 8 flattened leaves of Litter, DFS pre-order, in ADR-059's own worked example order.
@@ -119,9 +119,9 @@ class RirNestedStructBridgingTest {
       RirStructComponent(name = "y", readName = "Y", type = RirPrimitiveType("int")),
     ),
   )
-  private val pointType = RirStructType(namespace = "Sample.Structs", name = "Point")
+  private val pointType = RirStructType(namespace = "Test.Structs", name = "Point")
   private val pointStructs: Map<RirTypeKey, RirStruct> =
-    mapOf(RirTypeKey("Sample.Structs", "Point") to point)
+    mapOf(RirTypeKey("Test.Structs", "Point") to point)
 
   @Test
   fun `REGRESSION GUARD — depth 1 abiArgs and abiOutArgs are byte-for-byte unchanged from ADR-056`() {
@@ -246,8 +246,8 @@ class RirNestedStructBridgingTest {
       expected,
       abiArgs(params, structs),
       "abiArgs must be a genuine multi-level tree walk: Nursery -> Litter -> {Profile, Extent} " +
-          "-> scalars, three levels deep, spanning a C# namespace boundary (Sample.Nested vs " +
-          "Sample.Structs) that abiArgs itself is namespace-agnostic about (it only cares about " +
+          "-> scalars, three levels deep, spanning a C# namespace boundary (Test.Nested vs " +
+          "Test.Structs) that abiArgs itself is namespace-agnostic about (it only cares about " +
           "the structs map's keys)",
     )
   }
@@ -280,7 +280,7 @@ class RirNestedStructBridgingTest {
       ),
     )
     val widerStructs: Map<RirTypeKey, RirStruct> =
-      structs + (RirTypeKey("Sample.Structs", "Profile") to widerProfile)
+      structs + (RirTypeKey("Test.Structs", "Profile") to widerProfile)
     val hashAfter: Long = contractHash(cls, registrables, widerStructs)
 
     assertTrue(
@@ -308,7 +308,7 @@ class RirNestedStructBridgingTest {
       RirStructComponent(name = "weight", readName = "Weight", type = RirPrimitiveType("int")),
     ),
   )
-  private val tagType = RirStructType(namespace = "Sample.Structs", name = "Tag")
+  private val tagType = RirStructType(namespace = "Test.Structs", name = "Tag")
 
   // public readonly struct Bad(Tag tag, int tag_Text) { ... }  — flattens to p_Tag_Text (from
   // tag.Text) AND p_Tag_Text (from the sibling int component whose OWN readName is "Tag_Text").
@@ -320,10 +320,10 @@ class RirNestedStructBridgingTest {
       RirStructComponent(name = "tagText", readName = "Tag_Text", type = RirPrimitiveType("int")),
     ),
   )
-  private val badType = RirStructType(namespace = "Sample.Structs", name = "Bad")
+  private val badType = RirStructType(namespace = "Test.Structs", name = "Bad")
   private val badStructs: Map<RirTypeKey, RirStruct> = mapOf(
-    RirTypeKey("Sample.Structs", "Tag") to tag,
-    RirTypeKey("Sample.Structs", "Bad") to bad,
+    RirTypeKey("Test.Structs", "Tag") to tag,
+    RirTypeKey("Test.Structs", "Bad") to bad,
   )
 
   @Test

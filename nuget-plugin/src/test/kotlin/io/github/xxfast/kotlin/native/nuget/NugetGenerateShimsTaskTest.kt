@@ -560,7 +560,7 @@ class NugetGenerateShimsTaskTest {
   // ------------------------------------------------------------------
   // ADR-051: C# objects as opaque handles — C# shim generation
   //
-  // Canonical fixture: Sample.Text.Template — public non-static class with two static methods:
+  // Canonical fixture: Test.Text.Template — public non-static class with two static methods:
   //   Parse(source: string): Template  and  Render(template: Template, name: string): string
   //
   // NOTE: this fixture references RirObjectHandleType (not yet in RirModel.kt) and the isStatic
@@ -572,11 +572,11 @@ class NugetGenerateShimsTaskTest {
   private val templateRir: RirFile = RirFile(
     assemblies = listOf(
       RirAssembly(
-        packageId = "Sample.Text",
-        assemblyName = "Sample.Text",
+        packageId = "Test.Text",
+        assemblyName = "Test.Text",
         namespaces = listOf(
           RirNamespace(
-            name = "Sample.Text",
+            name = "Test.Text",
             types = listOf(
               RirClass(
                 name = "Template",
@@ -585,7 +585,7 @@ class NugetGenerateShimsTaskTest {
                   RirMethod(
                     name = "Parse",
                     isStatic = true,
-                    returnType = RirObjectHandleType(namespace = "Sample.Text", name = "Template"),
+                    returnType = RirObjectHandleType(namespace = "Test.Text", name = "Template"),
                     parameters = listOf(
                       RirParameter(name = "source", type = RirStringType()),
                     ),
@@ -597,7 +597,7 @@ class NugetGenerateShimsTaskTest {
                     parameters = listOf(
                       RirParameter(
                         name = "template",
-                        type = RirObjectHandleType(namespace = "Sample.Text", name = "Template"),
+                        type = RirObjectHandleType(namespace = "Test.Text", name = "Template"),
                       ),
                       RirParameter(name = "name", type = RirStringType()),
                     ),
@@ -771,7 +771,7 @@ class NugetGenerateShimsTaskTest {
   // ADR-052: C# instance constructors in Kotlin — `new Foo(...)` gains a `Ctor_Thunk`, registered
   // first in Initialize(), mirroring ADR-051's Parse_Thunk but unconditionally non-null.
   //
-  // Canonical fixture: Sample.Text.Template — public non-static class with:
+  // Canonical fixture: Test.Text.Template — public non-static class with:
   //   - one public instance constructor: Template(string source)
   //   - the existing ADR-051 statics: Parse(source: string): Template, Render(template, name): string
   //
@@ -784,11 +784,11 @@ class NugetGenerateShimsTaskTest {
   private val templateWithCtorRir: RirFile = RirFile(
     assemblies = listOf(
       RirAssembly(
-        packageId = "Sample.Text",
-        assemblyName = "Sample.Text",
+        packageId = "Test.Text",
+        assemblyName = "Test.Text",
         namespaces = listOf(
           RirNamespace(
-            name = "Sample.Text",
+            name = "Test.Text",
             types = listOf(
               RirClass(
                 name = "Template",
@@ -804,7 +804,7 @@ class NugetGenerateShimsTaskTest {
                   RirMethod(
                     name = "Parse",
                     isStatic = true,
-                    returnType = RirObjectHandleType(namespace = "Sample.Text", name = "Template"),
+                    returnType = RirObjectHandleType(namespace = "Test.Text", name = "Template"),
                     parameters = listOf(
                       RirParameter(name = "source", type = RirStringType()),
                     ),
@@ -816,7 +816,7 @@ class NugetGenerateShimsTaskTest {
                     parameters = listOf(
                       RirParameter(
                         name = "template",
-                        type = RirObjectHandleType(namespace = "Sample.Text", name = "Template"),
+                        type = RirObjectHandleType(namespace = "Test.Text", name = "Template"),
                       ),
                       RirParameter(name = "name", type = RirStringType()),
                     ),
@@ -933,7 +933,7 @@ class NugetGenerateShimsTaskTest {
   //   - a property getter thunk is named `{PropertyName}_Get_Thunk`
   //   - a property setter thunk is named `{PropertyName}_Set_Thunk`
   //
-  // Canonical fixture: Sample.Text.Template — public non-static class with:
+  // Canonical fixture: Test.Text.Template — public non-static class with:
   //   - a public instance constructor Template(string source)                (ADR-052, unchanged)
   //   - static Parse(source: string): Template                               (ADR-051, unchanged)
   //   - instance method Rename(newName: string): void
@@ -949,11 +949,11 @@ class NugetGenerateShimsTaskTest {
   private val templateInstanceRir: RirFile = RirFile(
     assemblies = listOf(
       RirAssembly(
-        packageId = "Sample.Text",
-        assemblyName = "Sample.Text",
+        packageId = "Test.Text",
+        assemblyName = "Test.Text",
         namespaces = listOf(
           RirNamespace(
-            name = "Sample.Text",
+            name = "Test.Text",
             types = listOf(
               RirClass(
                 name = "Template",
@@ -967,7 +967,7 @@ class NugetGenerateShimsTaskTest {
                   RirMethod(
                     name = "Parse",
                     isStatic = true,
-                    returnType = RirObjectHandleType(namespace = "Sample.Text", name = "Template"),
+                    returnType = RirObjectHandleType(namespace = "Test.Text", name = "Template"),
                     parameters = listOf(RirParameter(name = "source", type = RirStringType())),
                   ),
                   RirMethod(
@@ -1188,11 +1188,11 @@ class NugetGenerateShimsTaskTest {
   private val moodRir: RirFile = RirFile(
     assemblies = listOf(
       RirAssembly(
-        packageId = "Sample.Enums",
-        assemblyName = "Sample.Enums",
+        packageId = "Test.Enums",
+        assemblyName = "Test.Enums",
         namespaces = listOf(
           RirNamespace(
-            name = "Sample.Enums",
+            name = "Test.Enums",
             types = listOf(
               RirEnum(
                 name = "Mood",
@@ -1209,11 +1209,11 @@ class NugetGenerateShimsTaskTest {
                   RirMethod(
                     name = "Next",
                     isStatic = true,
-                    returnType = RirEnumType(namespace = "Sample.Enums", name = "Mood"),
+                    returnType = RirEnumType(namespace = "Test.Enums", name = "Mood"),
                     parameters = listOf(
                       RirParameter(
                         name = "mood",
-                        type = RirEnumType(namespace = "Sample.Enums", name = "Mood"),
+                        type = RirEnumType(namespace = "Test.Enums", name = "Mood"),
                       ),
                     ),
                   ),
@@ -1221,7 +1221,7 @@ class NugetGenerateShimsTaskTest {
                 properties = listOf(
                   RirProperty(
                     name = "DefaultMood",
-                    type = RirEnumType(namespace = "Sample.Enums", name = "Mood"),
+                    type = RirEnumType(namespace = "Test.Enums", name = "Mood"),
                     isReadOnly = false,
                     isStatic = true,
                   ),
@@ -1261,16 +1261,16 @@ class NugetGenerateShimsTaskTest {
     val shim: GeneratedFile = generateCSharpShims(moodRir, "sample")
       .single { it.relativePath.endsWith("MoodServiceRegistration.cs") }
 
-    assertContains(shim.content, "namespace Sample.Enums")
+    assertContains(shim.content, "namespace Test.Enums")
     assertFalse(
-      shim.content.contains("using Sample.Enums;"),
-      "the shim already renders inside namespace Sample.Enums; importing it would be redundant",
+      shim.content.contains("using Test.Enums;"),
+      "the shim already renders inside namespace Test.Enums; importing it would be redundant",
     )
   }
 
   // ------------------------------------------------------------------
-  // Cross-namespace enum: Mood is declared in Sample.Enums but consumed by Sample.Text.MoodService,
-  // so the shim (which renders inside `namespace Sample.Text`) must import Sample.Enums or the
+  // Cross-namespace enum: Mood is declared in Test.Enums but consumed by Test.Text.MoodService,
+  // so the shim (which renders inside `namespace Test.Text`) must import Test.Enums or the
   // `(Mood)mood` casts in its thunk bodies do not compile.
   // ------------------------------------------------------------------
 
@@ -1281,7 +1281,7 @@ class NugetGenerateShimsTaskTest {
         assemblyName = "Sample",
         namespaces = listOf(
           RirNamespace(
-            name = "Sample.Enums",
+            name = "Test.Enums",
             types = listOf(
               RirEnum(
                 name = "Mood",
@@ -1293,7 +1293,7 @@ class NugetGenerateShimsTaskTest {
             ),
           ),
           RirNamespace(
-            name = "Sample.Text",
+            name = "Test.Text",
             types = listOf(
               RirClass(
                 name = "MoodService",
@@ -1302,11 +1302,11 @@ class NugetGenerateShimsTaskTest {
                   RirMethod(
                     name = "Next",
                     isStatic = true,
-                    returnType = RirEnumType(namespace = "Sample.Enums", name = "Mood"),
+                    returnType = RirEnumType(namespace = "Test.Enums", name = "Mood"),
                     parameters = listOf(
                       RirParameter(
                         name = "mood",
-                        type = RirEnumType(namespace = "Sample.Enums", name = "Mood"),
+                        type = RirEnumType(namespace = "Test.Enums", name = "Mood"),
                       ),
                     ),
                   ),
@@ -1314,7 +1314,7 @@ class NugetGenerateShimsTaskTest {
                 properties = listOf(
                   RirProperty(
                     name = "DefaultMood",
-                    type = RirEnumType(namespace = "Sample.Enums", name = "Mood"),
+                    type = RirEnumType(namespace = "Test.Enums", name = "Mood"),
                     isStatic = true,
                   ),
                 ),
@@ -1331,8 +1331,8 @@ class NugetGenerateShimsTaskTest {
     val shim: GeneratedFile = generateCSharpShims(crossNamespaceMoodRir, "sample")
       .single { it.relativePath.endsWith("MoodServiceRegistration.cs") }
 
-    assertContains(shim.content, "namespace Sample.Text")
-    assertContains(shim.content, "    using Sample.Enums;")
+    assertContains(shim.content, "namespace Test.Text")
+    assertContains(shim.content, "    using Test.Enums;")
     assertContains(shim.content, "Mood result = MoodService.Next((Mood)mood);")
   }
 
@@ -1351,7 +1351,7 @@ class NugetGenerateShimsTaskTest {
   // itself is unchanged (IntPtr.Zero is already the null sentinel both ways); only local variable
   // nullability annotations and one guard for nullable handle parameters change.
   //
-  // Canonical fixture: Sample.Nullability.NicknameBook, mirroring the ADR's own fixture surface
+  // Canonical fixture: Test.Nullability.NicknameBook, mirroring the ADR's own fixture surface
   // (trimmed to the members this generator's tests need).
   //
   // NOTE: several assertions below are expected to fail against today's generator (the `string
@@ -1364,11 +1364,11 @@ class NugetGenerateShimsTaskTest {
   private val nicknameRir: RirFile = RirFile(
     assemblies = listOf(
       RirAssembly(
-        packageId = "Sample.Nullability",
-        assemblyName = "Sample.Nullability",
+        packageId = "Test.Nullability",
+        assemblyName = "Test.Nullability",
         namespaces = listOf(
           RirNamespace(
-            name = "Sample.Nullability",
+            name = "Test.Nullability",
             types = listOf(
               RirClass(
                 name = "Nickname",
@@ -1403,7 +1403,7 @@ class NugetGenerateShimsTaskTest {
                       RirParameter(
                         name = "nickname",
                         type = RirObjectHandleType(
-                          namespace = "Sample.Nullability",
+                          namespace = "Test.Nullability",
                           name = "Nickname",
                           nullable = true,
                         ),
@@ -1414,7 +1414,7 @@ class NugetGenerateShimsTaskTest {
                     name = "DefaultNickname",
                     isStatic = false,
                     returnType = RirObjectHandleType(
-                      namespace = "Sample.Nullability",
+                      namespace = "Test.Nullability",
                       name = "Nickname",
                       nullable = false,
                     ),
@@ -1492,7 +1492,7 @@ class NugetGenerateShimsTaskTest {
   }
 
   // ------------------------------------------------------------------
-  // ADR-054 walking skeleton: registration observability ABI amendment (Sample.Text.Template).
+  // ADR-054 walking skeleton: registration observability ABI amendment (Test.Text.Template).
   // ------------------------------------------------------------------
 
   @Test
@@ -1514,12 +1514,12 @@ class NugetGenerateShimsTaskTest {
 
     assertContains(
       shim.content,
-      "nuget_sample_text_template_register(\n                    3,",
+      "nuget_test_text_template_register(\n                    3,",
       message = "ADR-054: the ModuleInitializer call must pass slotCount (3: ctor + Parse + " +
           "Render) then contractHash before the thunk pointer arguments, got:\n${shim.content}",
     )
     assertTrue(
-      Regex("nuget_sample_text_template_register\\(\\s*3,\\s*-?\\d+L,").containsMatchIn(shim.content),
+      Regex("nuget_test_text_template_register\\(\\s*3,\\s*-?\\d+L,").containsMatchIn(shim.content),
       "ModuleInitializer must pass a Long contractHash literal as the second argument",
     )
   }
@@ -1534,7 +1534,7 @@ class NugetGenerateShimsTaskTest {
     val kotlinHash: String =
       Regex("expectedHash = (-?\\d+)L").find(bindings.content)!!.groupValues[1]
     val csharpHash: String =
-      Regex("nuget_sample_text_template_register\\(\\s*3,\\s*(-?\\d+)L,").find(shim.content)!!.groupValues[1]
+      Regex("nuget_test_text_template_register\\(\\s*3,\\s*(-?\\d+)L,").find(shim.content)!!.groupValues[1]
 
     assertEquals(
       kotlinHash,
@@ -1596,10 +1596,10 @@ class NugetGenerateShimsTaskTest {
 
     assertContains(
       shim.content,
-      "NugetTrace.Write(\n                \"register enter Sample.Text.Template -> " +
-          "nuget_sample_text_template_register(3 slots) dll=sample\");",
+      "NugetTrace.Write(\n                \"register enter Test.Text.Template -> " +
+          "nuget_test_text_template_register(3 slots) dll=sample\");",
     )
-    assertContains(shim.content, "NugetTrace.Write(\"register ok    Sample.Text.Template\");")
+    assertContains(shim.content, "NugetTrace.Write(\"register ok    Test.Text.Template\");")
     assertContains(
       shim.content,
       "using IoGithubXxfast.KotlinNativeNuget;",

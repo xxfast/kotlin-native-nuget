@@ -1,0 +1,50 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>Test.Text</RootNamespace>
+    <AssemblyName>TestDependency</AssemblyName>
+
+    <!-- NuGet package metadata -->
+    <PackageId>TestDependency</PackageId>
+    <Version>1.0.0</Version>
+    <Authors>xxfast</Authors>
+    <Description>
+      The standing C# fixture library for the reverse bridge (C# to Kotlin), the mirror of
+      what test-library is for the forward direction. Every reverse-direction feature
+      (Phases 9–13) adds its fixture surface here, one feature-scoped namespace/type at a
+      time, instead of hunting for a published package that fits the bridgeable subset.
+      Keep each type within the subset the feature under test needs: no accidental overload
+      sets, no constructs the ADR-043 filter would skip. Current surface:
+      Test.Text.Template — static factory Parse(string) and static consumer
+      Render(Template, string) (ADR-051, opaque handles); public instance constructor
+      Template(string) (ADR-052); instance members Source (get), Name (get/set),
+      Apply(string): string, and Clone(): Template (Phase 9 line 151).
+      Test.Nullability.Nickname / NicknameBook / LegacyNicknameBook — nullable reference
+      type annotations across return/parameter/property positions, plus a `#nullable disable`
+      oblivious island (ADR-053, Phase 9 line 156/157).
+      Test.Household.Toy / Cat / Household / StrayCat — the adversarial reverse fixture
+      (ROADMAP "Tooling &amp; Test Integrity"): 3+ bound classes in one namespace, a
+      cross-referencing settable handle-typed property (Cat.FavoriteToy : Toy), two types
+      sharing a method name (Cat.Describe / Toy.Describe), a many-parameter method with a
+      nullable annotated return (Household.FindToy), and a `#nullable disable` oblivious
+      island whose method deliberately returns a genuine null (StrayCat.Announce).
+    </Description>
+  </PropertyGroup>
+
+  <!--
+    Re-pack command (run from the repo root, or from this directory):
+      dotnet pack TestDependency/TestDependency.csproj -c Release -o test-library/build/nuget
+
+    The output directory is the ADR-050 local feed referenced by the root nuget.config
+    as "test-library/build/nuget".
+
+    NOTE: test-library/build/nuget is a Gradle-generated output directory and is wiped
+    by `./gradlew :test-library:clean :test-library:packNuget`. The build packs this
+    fixture into that feed before packNuget (see the packTestDependency task in
+    test-library/build.gradle.kts), so `dotnet restore` can resolve TestDependency.
+  -->
+
+</Project>

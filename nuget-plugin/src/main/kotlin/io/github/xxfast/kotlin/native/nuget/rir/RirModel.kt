@@ -73,7 +73,7 @@ data class RirEnumEntry(
 // with `new T(a, b)`; Shape B (no such constructor — public fields or settable auto-properties)
 // reconstructs with an object initializer, `new T { A = a, B = b }`. Defaults to CONSTRUCTOR so
 // existing reverse-ir.json without this field (every struct predating ADR-058) still parses as
-// Shape A. Mirrors `RirStructShape` in nuget-metadata-reader/Program.cs.
+// Shape A. Mirrors `RirStructShape` in NugetMetadataReader/Program.cs.
 @Serializable
 enum class RirStructShape {
   @SerialName("constructor")
@@ -89,7 +89,7 @@ enum class RirStructShape {
 // contract for value decomposition; [methods]/[properties] carry ADR-056 deferred scope (struct
 // methods + computed properties, ADR-014 reconstruct-on-call mirror). Defaults empty so existing
 // reverse-ir.json without those arrays still parse. Mirrors `RirStruct` in
-// nuget-metadata-reader/Program.cs field-for-field once the reader enumerates members.
+// NugetMetadataReader/Program.cs field-for-field once the reader enumerates members.
 // ADR-058: [shape] additionally admits "Shape B" structs — no public constructor; components are
 // public settable fields / settable auto-properties instead, in C# declaration (FieldDef) order.
 // [constructors] is always empty for RirStructShape.INITIALIZER (Decision 4a: alternate

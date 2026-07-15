@@ -62,7 +62,7 @@ class RirBridgingTest {
     ),
   )
 
-  private val orderingBoundTypes: Set<RirTypeKey> = setOf(RirTypeKey("Sample.Text", "Template"))
+  private val orderingBoundTypes: Set<RirTypeKey> = setOf(RirTypeKey("Test.Text", "Template"))
 
   @Test
   fun `bridgeableRegistrables appends static property getter-setter pairs after instance property pairs`() {
@@ -162,7 +162,7 @@ class RirBridgingTest {
     properties = listOf(
       RirProperty(
         name = "Parent",
-        type = RirObjectHandleType(namespace = "Sample.Text", name = "Template"),
+        type = RirObjectHandleType(namespace = "Test.Text", name = "Template"),
         isReadOnly = false,
         isStatic = false,
       ),
@@ -170,7 +170,7 @@ class RirBridgingTest {
   )
 
   private val handleSettableBoundTypes: Set<RirTypeKey> =
-    setOf(RirTypeKey("Sample.Text", "Template"))
+    setOf(RirTypeKey("Test.Text", "Template"))
 
   @Test
   fun `handle-typed settable property emits both a getter slot and a setter slot`() {
@@ -195,7 +195,7 @@ class RirBridgingTest {
       RirProperty(
         name = "Favourite",
         type = RirObjectHandleType(
-          namespace = "Sample.Nullability", name = "Nickname", nullable = true,
+          namespace = "Test.Nullability", name = "Nickname", nullable = true,
         ),
         isReadOnly = false,
         isStatic = false,
@@ -203,7 +203,7 @@ class RirBridgingTest {
       RirProperty(
         name = "Primary",
         type = RirObjectHandleType(
-          namespace = "Sample.Nullability", name = "Nickname", nullable = false,
+          namespace = "Test.Nullability", name = "Nickname", nullable = false,
         ),
         isReadOnly = false,
         isStatic = false,
@@ -212,7 +212,7 @@ class RirBridgingTest {
   )
 
   private val nicknameBoundTypes: Set<RirTypeKey> =
-    setOf(RirTypeKey("Sample.Nullability", "Nickname"))
+    setOf(RirTypeKey("Test.Nullability", "Nickname"))
 
   @Test
   fun `ADR-053 a settable handle-typed property always gets a PropertySetter slot, nullable or not`() {
@@ -328,7 +328,7 @@ class RirBridgingTest {
       RirMethod(
         name = "Parse",
         isStatic = true,
-        returnType = RirObjectHandleType(namespace = "Sample.Text", name = "Template"),
+        returnType = RirObjectHandleType(namespace = "Test.Text", name = "Template"),
         parameters = listOf(RirParameter(name = "source", type = RirStringType())),
       ),
     ),
@@ -337,7 +337,7 @@ class RirBridgingTest {
   @Test
   fun `contractHash is a pure function of cls and registrables — same input, same output`() {
     val registrables: List<RirRegistrable> = bridgeableRegistrables(templateCls, emptySet())
-    val boundTypes: Set<RirTypeKey> = setOf(RirTypeKey("Sample.Text", "Template"))
+    val boundTypes: Set<RirTypeKey> = setOf(RirTypeKey("Test.Text", "Template"))
     val registrablesBound: List<RirRegistrable> = bridgeableRegistrables(templateCls, boundTypes)
 
     assertEquals(
@@ -353,7 +353,7 @@ class RirBridgingTest {
 
   @Test
   fun `contractHash changes when a parameter's nullability changes`() {
-    val boundTypes: Set<RirTypeKey> = setOf(RirTypeKey("Sample.Text", "Template"))
+    val boundTypes: Set<RirTypeKey> = setOf(RirTypeKey("Test.Text", "Template"))
     val registrables: List<RirRegistrable> = bridgeableRegistrables(templateCls, boundTypes)
 
     val nullableCls: RirClass = templateCls.copy(
@@ -378,7 +378,7 @@ class RirBridgingTest {
 
   @Test
   fun `contractHash changes when a registrable is added`() {
-    val boundTypes: Set<RirTypeKey> = setOf(RirTypeKey("Sample.Text", "Template"))
+    val boundTypes: Set<RirTypeKey> = setOf(RirTypeKey("Test.Text", "Template"))
     val ctorOnly: RirClass = templateCls.copy(methods = emptyList())
     val ctorOnlyRegistrables: List<RirRegistrable> = bridgeableRegistrables(ctorOnly, boundTypes)
     val fullRegistrables: List<RirRegistrable> = bridgeableRegistrables(templateCls, boundTypes)
@@ -405,9 +405,9 @@ class RirBridgingTest {
       RirStructComponent(name = "y", readName = "Y", type = RirPrimitiveType("int")),
     ),
   )
-  private val pointType = RirStructType(namespace = "Sample.Structs", name = "Point")
+  private val pointType = RirStructType(namespace = "Test.Structs", name = "Point")
   private val structs: Map<RirTypeKey, RirStruct> =
-    mapOf(RirTypeKey("Sample.Structs", "Point") to pointStruct)
+    mapOf(RirTypeKey("Test.Structs", "Point") to pointStruct)
 
   @Test
   fun `abiArgs expands a struct-typed parameter into one component argument per field, ABI-named param_Component`() {
@@ -486,7 +486,7 @@ class RirBridgingTest {
       ),
     )
     val widerStructs: Map<RirTypeKey, RirStruct> =
-      mapOf(RirTypeKey("Sample.Structs", "Point") to widerStruct)
+      mapOf(RirTypeKey("Test.Structs", "Point") to widerStruct)
     val hashAfter: Long = contractHash(cls, registrables, widerStructs)
 
     assertTrue(
@@ -506,7 +506,7 @@ class RirBridgingTest {
   // reorder), where for Shape A it was already a breaking constructor-parameter reorder.
   @Test
   fun `signaturePart must expand a struct reference by component NAMES, not just types, so swapping two same-typed components changes the contractHash of a method that merely mentions the struct`() {
-    // Sample.Structs.Extent { public int Width; public int Height; } — both components are `int`,
+    // Test.Structs.Extent { public int Width; public int Height; } — both components are `int`,
     // so a name-only swap leaves every type-only signature identical.
     val extentWidthHeight = RirStruct(
       name = "Extent",
@@ -521,7 +521,7 @@ class RirBridgingTest {
         RirStructComponent(name = "width", readName = "Width", type = RirPrimitiveType("int")),
       ),
     )
-    val extentType = RirStructType(namespace = "Sample.Structs", name = "Extent")
+    val extentType = RirStructType(namespace = "Test.Structs", name = "Extent")
 
     // `Extents.Grow` only MENTIONS Extent as a parameter/return type — it does not own Extent's
     // register export, so this goes through signaturePart(), not structContractHash().
@@ -535,9 +535,9 @@ class RirBridgingTest {
     val registrables: List<RirRegistrable> = listOf(RirRegistrable.Method(grow))
 
     val structsBefore: Map<RirTypeKey, RirStruct> =
-      mapOf(RirTypeKey("Sample.Structs", "Extent") to extentWidthHeight)
+      mapOf(RirTypeKey("Test.Structs", "Extent") to extentWidthHeight)
     val structsAfter: Map<RirTypeKey, RirStruct> =
-      mapOf(RirTypeKey("Sample.Structs", "Extent") to extentHeightWidth)
+      mapOf(RirTypeKey("Test.Structs", "Extent") to extentHeightWidth)
 
     val hashBefore: Long = contractHash(cls, registrables, structsBefore)
     val hashAfter: Long = contractHash(cls, registrables, structsAfter)

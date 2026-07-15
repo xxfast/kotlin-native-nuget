@@ -33,7 +33,7 @@ class NugetPluginComposabilityTest {
     kotlin.mingwX64 {
       binaries {
         sharedLib {
-          baseName = "sample"
+          baseName = "test"
         }
       }
     }
@@ -50,7 +50,7 @@ class NugetPluginComposabilityTest {
     val project: Project = buildProjectWithSharedLib()
 
     project.extensions.getByType(NugetExtension::class.java).publish {
-      packageId = "SampleLibrary"
+      packageId = "TestLibrary"
       version = "1.0.0"
       authors = "Test Author"
       description = "Test description"
@@ -90,7 +90,7 @@ class NugetPluginComposabilityTest {
     val project: Project = buildProjectWithSharedLib()
 
     project.extensions.getByType(NugetExtension::class.java).publish {
-      packageId = "SampleLibrary"
+      packageId = "TestLibrary"
       version = "1.0.0"
       authors = "Test Author"
       description = "Test description"

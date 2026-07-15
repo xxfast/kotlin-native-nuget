@@ -65,6 +65,6 @@ It does not cover the rest, and no `RIGHT_MARGIN` is set so it will not wrap at 
 ## Build commands
 
 - Compile processor: `./gradlew :nuget-processor:compileKotlin`
-- Full verify: `./gradlew :sample-library:clean :sample-library:packNuget && cd sample-app/SampleApp.Tests && dotnet test`
+- Full verify: `./gradlew :test-library:clean :test-library:packNuget && cd IntegrationTests && dotnet test`
 
 Run the full verify after refactoring to confirm nothing broke.

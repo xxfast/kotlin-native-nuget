@@ -1421,7 +1421,7 @@ internal fun translateEnum(
     }
     .toList()
 
-  return CirEnum(name, entries, properties)
+  return CirEnum(name, libraryName, entries, properties)
 }
 
 internal fun translateValueClass(

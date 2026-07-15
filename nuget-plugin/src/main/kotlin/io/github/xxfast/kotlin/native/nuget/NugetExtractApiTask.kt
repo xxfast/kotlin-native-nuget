@@ -88,7 +88,7 @@ abstract class NugetExtractApiTask : DefaultTask() {
 internal fun unpackMetadataReader(targetDir: File, classLoader: ClassLoader) {
   targetDir.mkdirs()
   listOf("NugetMetadataReader.csproj", "Program.cs").forEach { name ->
-    val resource = "nuget-metadata-reader/$name"
+    val resource = "NugetMetadataReader/$name"
     val stream: InputStream = classLoader.getResourceAsStream(resource)
       ?: error("[nuget] missing bundled resource: $resource (plugin JAR may be corrupt)")
     stream.use { input ->

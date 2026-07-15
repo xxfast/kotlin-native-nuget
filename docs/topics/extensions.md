@@ -9,7 +9,7 @@ Kotlin extension functions and properties don't have a native C# analog (C# has 
 
 ## Kotlin
 
-Extension functions on `String`, from `sample-library/src/nativeMain/kotlin/.../StringExtensions.kt`:
+Extension functions on `String`, from `test-library/src/nativeMain/kotlin/.../StringExtensions.kt`:
 
 ```kotlin
 fun String.meowify(): String = "$this meow!"
@@ -18,7 +18,7 @@ fun String.isPurring(): Boolean = lowercase().contains("purr")
 val String.wordCount: Int get() = trim().split("\\s+".toRegex()).size
 ```
 
-Extension functions and properties on `Cat`, from `sample-library/src/nativeMain/kotlin/.../cat/CatExtensions.kt`:
+Extension functions and properties on `Cat`, from `test-library/src/nativeMain/kotlin/.../cat/CatExtensions.kt`:
 
 ```kotlin
 fun Cat.sayName(): String = "My name is ${this.name}"
@@ -64,7 +64,7 @@ public static partial class CatExtensions
 
 ## Using it from C#
 
-Extension functions, from `sample-app/SampleApp.Tests/ExtensionFunctionTests.cs`:
+Extension functions, from `IntegrationTests/ExtensionFunctionTests.cs`:
 
 ```C#
 [Fact]
@@ -88,7 +88,7 @@ public void Cat_GreetWith()
 }
 ```
 
-Extension properties, from `sample-app/SampleApp.Tests/ExtensionPropertyTests.cs`, called as a method, not a property, on the C# side:
+Extension properties, from `IntegrationTests/ExtensionPropertyTests.cs`, called as a method, not a property, on the C# side:
 
 ```C#
 [Fact]

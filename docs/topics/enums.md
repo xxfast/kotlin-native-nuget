@@ -8,7 +8,7 @@ A Kotlin `enum class` becomes a plain C# `enum` with matching ordinal values. An
 
 ## Kotlin
 
-From `sample-library/src/nativeMain/kotlin/.../cat/Mood.kt`:
+From `test-library/src/nativeMain/kotlin/.../cat/Mood.kt`:
 
 ```kotlin
 enum class Mood {
@@ -57,7 +57,7 @@ var mood: Mood = Mood.SLEEPY
 
 ## Using it from C#
 
-From `sample-app/SampleApp.Tests/EnumTests.cs`:
+From `IntegrationTests/EnumTests.cs`:
 
 ```C#
 [Fact]

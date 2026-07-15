@@ -14,7 +14,7 @@ Primitive types follow the standard [Kotlin/Native C interop mappings](https://k
 
 ## Kotlin
 
-From `sample-library/src/nativeMain/kotlin/.../Mappings.kt`:
+From `test-library/src/nativeMain/kotlin/.../Mappings.kt`:
 
 ```kotlin
 fun string(): String = "Kotlin/Native!"
@@ -141,7 +141,7 @@ Kotlin identifiers that collide with C# keywords (`string`, `byte`, `short`, `in
 
 ## Using it from C#
 
-From `sample-app/SampleApp.Tests/MappingTests.cs`:
+From `IntegrationTests/MappingTests.cs`:
 
 ```C#
 [Fact]

@@ -17,7 +17,7 @@ A fourth shape, C# implementing a Kotlin *interface* and passing it as a paramet
 
 ## Kotlin → C#: lambda properties and returns
 
-From `sample-library/src/nativeMain/kotlin/.../cat/Cat.kt`:
+From `test-library/src/nativeMain/kotlin/.../cat/Cat.kt`:
 
 ```kotlin
 val onMeow: () -> String = { "Meow! My name is $name" }
@@ -49,7 +49,7 @@ public class KotlinFunc<TResult> : IDisposable
 }
 ```
 
-Using it, from `sample-app/SampleApp.Tests/LambdaTests.cs`:
+Using it, from `IntegrationTests/LambdaTests.cs`:
 
 ```C#
 [Fact]
@@ -99,7 +99,7 @@ public string DescribeWith(Func<string, string> format)
 }
 ```
 
-Using it, from `sample-app/SampleApp.Tests/ReverseLambdaTests.cs`:
+Using it, from `IntegrationTests/ReverseLambdaTests.cs`:
 
 ```C#
 [Fact]
@@ -148,7 +148,7 @@ public IDisposable AddMoodListener(Action<Mood> listener)
 }
 ```
 
-Using it, from `sample-app/SampleApp.Tests/StoredCallbackTests.cs`:
+Using it, from `IntegrationTests/StoredCallbackTests.cs`:
 
 ```C#
 [Fact]
@@ -179,7 +179,7 @@ public void Cat_AddMoodListener_NoCallbackAfterDispose()
 
 ## C# implementing a Kotlin interface as a parameter
 
-From `sample-library/src/nativeMain/kotlin/.../cat/CatEventListener.kt` and `CatEventSource.kt`:
+From `test-library/src/nativeMain/kotlin/.../cat/CatEventListener.kt` and `CatEventSource.kt`:
 
 ```kotlin
 interface CatEventListener {
@@ -223,7 +223,7 @@ public IDisposable AddListener(ICatEventListener listener)
 }
 ```
 
-Using it, from `sample-app/SampleApp.Tests/InterfaceBridgingTests.cs`:
+Using it, from `IntegrationTests/InterfaceBridgingTests.cs`:
 
 ```C#
 private class RecordingCatListener : ICatEventListener

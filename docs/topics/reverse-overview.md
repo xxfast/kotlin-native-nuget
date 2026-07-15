@@ -21,7 +21,7 @@ nugetGen              generates a synthetic interop.csproj
     ↓
 nugetRestore          dotnet restore → obj/project.assets.json
     ↓
-nugetExtractApi       nuget-metadata-reader subprocess → reverse-ir.json
+nugetExtractApi       NugetMetadataReader subprocess → reverse-ir.json
     ↓
 nugetGenerateBindings  reverse-ir.json → Kotlin stubs
 nugetGenerateShims     reverse-ir.json → C# registration shims
@@ -49,7 +49,7 @@ multi-feed sources; the plugin re-implements none of that.
 
 ### `nugetExtractApi`: reading ECMA-335 metadata
 
-`nugetExtractApi` invokes `nuget-metadata-reader`, a small bundled `dotnet` console app. It opens
+`nugetExtractApi` invokes `NugetMetadataReader`, a small bundled `dotnet` console app. It opens
 each resolved `.dll` with `System.Reflection.Metadata`'s `PEReader` and `MetadataReader` and reads
 the ECMA-335 metadata tables directly, without loading or executing the assembly. It walks public
 top-level types, filters members through the bridgeable-subset rules (see
@@ -190,11 +190,11 @@ the shim's method signatures are frozen against that one specific assembly. A C#
 nothing more than:
 
 ```xml
-<PackageReference Include="SampleLibrary" Version="1.0.0" />
+<PackageReference Include="TestLibrary" Version="1.0.0" />
 ```
 
 NuGet then compiles the shims, imports the `AllowUnsafeBlocks` MSBuild target, copies the native
-library, and restores `MimeMapping`/`SampleDependency` transitively, with zero hand-edited items.
+library, and restores `MimeMapping`/`TestDependency` transitively, with zero hand-edited items.
 
 ## What you need installed
 

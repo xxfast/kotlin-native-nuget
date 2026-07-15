@@ -22,10 +22,10 @@ import kotlin.test.assertFalse
 /**
  * ADR-059: nested struct components — the KOTLIN generator side (`NugetGenerateBindingsTask`).
  *
- * Fixture mirrors the already-merged `sample-dependency/Litter.cs` / `Nursery.cs` exactly:
+ * Fixture mirrors the already-merged `TestDependency/Litter.cs` / `Nursery.cs` exactly:
  * `Profile` (Shape A leaf: string/bool/char/enum, the full CONVERTED vocabulary) and `Extent`
  * (Shape B leaf: direct `int`s) nest inside `Litter` (Shape A outer — A-in-A + B-in-A), which
- * nests inside `Nursery` (a DIFFERENT C# namespace: `Sample.Nested` vs `Sample.Structs`).
+ * nests inside `Nursery` (a DIFFERENT C# namespace: `Test.Nested` vs `Test.Structs`).
  *
  * Today (verified by reading the source): `cVarType`, `componentRead`, `argConversion`, `cfnType`
  * and `csAbiType`'s mirror all `error()` on a `RirStructType` reaching them, with the message
@@ -46,7 +46,7 @@ class NugetNestedStructKotlinGenerationTest {
       RirEnumEntry("Calm", 0), RirEnumEntry("Playful", 1), RirEnumEntry("Sleepy", 2),
     ),
   )
-  private val catMoodType = RirEnumType(namespace = "Sample.Enums", name = "CatMood")
+  private val catMoodType = RirEnumType(namespace = "Test.Enums", name = "CatMood")
 
   private val profile = RirStruct(
     name = "Profile",
@@ -58,7 +58,7 @@ class NugetNestedStructKotlinGenerationTest {
       RirStructComponent(name = "mood", readName = "Mood", type = catMoodType),
     ),
   )
-  private val profileType = RirStructType(namespace = "Sample.Structs", name = "Profile")
+  private val profileType = RirStructType(namespace = "Test.Structs", name = "Profile")
 
   private val extent = RirStruct(
     name = "Extent",
@@ -68,11 +68,11 @@ class NugetNestedStructKotlinGenerationTest {
       RirStructComponent(name = "height", readName = "Height", type = RirPrimitiveType("int")),
     ),
   )
-  private val extentType = RirStructType(namespace = "Sample.Structs", name = "Extent")
+  private val extentType = RirStructType(namespace = "Test.Structs", name = "Extent")
 
   // Litter: Shape A OUTER, nests Profile (Shape A: string/bool/char/enum, CONVERTED) and Extent
   // (Shape B: direct ints) — A-in-A + B-in-A, mixing converted and direct leaves deliberately.
-  private val litterType = RirStructType(namespace = "Sample.Structs", name = "Litter")
+  private val litterType = RirStructType(namespace = "Test.Structs", name = "Litter")
 
   // Deliberately member-free (no methods/properties/constructors of its OWN): every test in this
   // file reaches Litter only as a COMPONENT or a top-level parameter/return of another type's
@@ -90,10 +90,10 @@ class NugetNestedStructKotlinGenerationTest {
   )
 
   private val namespaceAliases: Map<String, Map<String, String>> = mapOf(
-    "SampleDependency" to mapOf(
-      "Sample.Enums" to "sample.enums",
-      "Sample.Structs" to "sample.structs",
-      "Sample.Nested" to "sample.nested",
+    "TestDependency" to mapOf(
+      "Test.Enums" to "test.enums",
+      "Test.Structs" to "test.structs",
+      "Test.Nested" to "test.nested",
     ),
   )
 
@@ -111,11 +111,11 @@ class NugetNestedStructKotlinGenerationTest {
     val rir = RirFile(
       assemblies = listOf(
         RirAssembly(
-          packageId = "SampleDependency",
-          assemblyName = "SampleDependency",
+          packageId = "TestDependency",
+          assemblyName = "TestDependency",
           namespaces = listOf(
-            RirNamespace(name = "Sample.Enums", types = listOf(catMood)),
-            RirNamespace(name = "Sample.Structs", types = listOf(profile, extent, litter)),
+            RirNamespace(name = "Test.Enums", types = listOf(catMood)),
+            RirNamespace(name = "Test.Structs", types = listOf(profile, extent, litter)),
           ),
         ),
       ),
@@ -138,8 +138,8 @@ class NugetNestedStructKotlinGenerationTest {
   }
 
   // ------------------------------------------------------------------
-  // 2. Cross-package import: `Nursery` (package sample.nested) declares `val litter: Litter`,
-  //    whose type lives in `sample.structs`. `structFileContent` renders a component's type with a
+  // 2. Cross-package import: `Nursery` (package test.nested) declares `val litter: Litter`,
+  //    whose type lives in `test.structs`. `structFileContent` renders a component's type with a
   //    bare, unimported `kotlinType(c.type)` today (verified by reading the source) — this
   //    assertion currently FAILS (missing import), with no exception, because Nursery here has NO
   //    bridgeable members (avoids the separate "nested struct not supported" throw entirely, so
@@ -159,12 +159,12 @@ class NugetNestedStructKotlinGenerationTest {
     val rir = RirFile(
       assemblies = listOf(
         RirAssembly(
-          packageId = "SampleDependency",
-          assemblyName = "SampleDependency",
+          packageId = "TestDependency",
+          assemblyName = "TestDependency",
           namespaces = listOf(
-            RirNamespace(name = "Sample.Enums", types = listOf(catMood)),
-            RirNamespace(name = "Sample.Structs", types = listOf(profile, extent, litter)),
-            RirNamespace(name = "Sample.Nested", types = listOf(nursery)),
+            RirNamespace(name = "Test.Enums", types = listOf(catMood)),
+            RirNamespace(name = "Test.Structs", types = listOf(profile, extent, litter)),
+            RirNamespace(name = "Test.Nested", types = listOf(nursery)),
           ),
         ),
       ),
@@ -177,18 +177,18 @@ class NugetNestedStructKotlinGenerationTest {
     assertContains(nurseryFile, "val litter: Litter")
     assertContains(
       nurseryFile,
-      "import sample.structs.Litter",
+      "import test.structs.Litter",
       message = "ADR-059: structFileContent renders a struct-typed component's Kotlin type with " +
           "kotlinType(c.type) — a bare, unimported simple name — instead of " +
           "declKotlinType(c.type, qualifiedTypeNames), which every OTHER reference site already " +
-          "uses. This is the only fixture shape (Nursery in sample.nested, Litter in " +
-          "sample.structs) that can even observe the bug.",
+          "uses. This is the only fixture shape (Nursery in test.nested, Litter in " +
+          "test.structs) that can even observe the bug.",
     )
   }
 
   // ------------------------------------------------------------------
   // 2b. Cross-package import, STUB FILE (not the struct's own data-class file): `Nurseries`
-  //    (package sample.nested, an object-shape stub — all its methods are static) has a method
+  //    (package test.nested, an object-shape stub — all its methods are static) has a method
   //    returning `Nursery`, whose reassembly (structComponentReads) emits bare `Nursery(...)`,
   //    `Litter(...)`, `Profile(...)`, `Extent(...)` constructor calls — every struct in the
   //    RETURN's component tree, not just the outermost one. `stubFileContent` gathers
@@ -208,7 +208,7 @@ class NugetNestedStructKotlinGenerationTest {
         RirStructComponent(name = "room", readName = "Room", type = RirPrimitiveType("int")),
       ),
     )
-    val nurseryType = RirStructType(namespace = "Sample.Nested", name = "Nursery")
+    val nurseryType = RirStructType(namespace = "Test.Nested", name = "Nursery")
     val nurseries = RirClass(
       name = "Nurseries",
       isAbstract = true,
@@ -225,12 +225,12 @@ class NugetNestedStructKotlinGenerationTest {
     val rir = RirFile(
       assemblies = listOf(
         RirAssembly(
-          packageId = "SampleDependency",
-          assemblyName = "SampleDependency",
+          packageId = "TestDependency",
+          assemblyName = "TestDependency",
           namespaces = listOf(
-            RirNamespace(name = "Sample.Enums", types = listOf(catMood)),
-            RirNamespace(name = "Sample.Structs", types = listOf(profile, extent, litter)),
-            RirNamespace(name = "Sample.Nested", types = listOf(nursery, nurseries)),
+            RirNamespace(name = "Test.Enums", types = listOf(catMood)),
+            RirNamespace(name = "Test.Structs", types = listOf(profile, extent, litter)),
+            RirNamespace(name = "Test.Nested", types = listOf(nursery, nurseries)),
           ),
         ),
       ),
@@ -243,14 +243,14 @@ class NugetNestedStructKotlinGenerationTest {
     assertContains(nurseriesFile, "fun rehome(n: Nursery): Nursery = memScoped {")
     assertContains(
       nurseriesFile,
-      "import sample.structs.Litter",
+      "import test.structs.Litter",
       message = "ADR-059: stubFileContent (the object-shape STUB file, distinct from " +
           "structFileContent's own Nursery.kt) reassembles a returned Nursery with a nested " +
           "Litter(...) constructor call and never imported it — structEnumTypes was gathered " +
           "recursively but there was no struct equivalent",
     )
-    assertContains(nurseriesFile, "import sample.structs.Profile")
-    assertContains(nurseriesFile, "import sample.structs.Extent")
+    assertContains(nurseriesFile, "import test.structs.Profile")
+    assertContains(nurseriesFile, "import test.structs.Extent")
   }
 
   // ------------------------------------------------------------------
@@ -288,12 +288,12 @@ class NugetNestedStructKotlinGenerationTest {
   private val littersRir = RirFile(
     assemblies = listOf(
       RirAssembly(
-        packageId = "SampleDependency",
-        assemblyName = "SampleDependency",
+        packageId = "TestDependency",
+        assemblyName = "TestDependency",
         namespaces = listOf(
-          RirNamespace(name = "Sample.Enums", types = listOf(catMood)),
+          RirNamespace(name = "Test.Enums", types = listOf(catMood)),
           RirNamespace(
-            name = "Sample.Structs",
+            name = "Test.Structs",
             types = listOf(profile, extent, litter, litters),
           ),
         ),

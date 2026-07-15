@@ -13,7 +13,7 @@ Kotlin coroutines map onto .NET's own async model: `suspend fun` becomes `async`
 
 ## `suspend fun`
 
-From `sample-library/src/nativeMain/kotlin/.../cat/AsyncCatService.kt`:
+From `test-library/src/nativeMain/kotlin/.../cat/AsyncCatService.kt`:
 
 ```kotlin
 class AsyncCatService(private val prefix: String) {
@@ -29,7 +29,7 @@ class AsyncCatService(private val prefix: String) {
 }
 ```
 
-Every `suspend fun` becomes an `async Task<T>` method, suffixed `Async`. Using it, from `sample-app/SampleApp.Tests/SuspendFunctionTests.cs`:
+Every `suspend fun` becomes an `async Task<T>` method, suffixed `Async`. Using it, from `IntegrationTests/SuspendFunctionTests.cs`:
 
 ```C#
 [Fact]
@@ -43,7 +43,7 @@ public async Task AsyncCatService_FetchCat_ReturnsCatObject()
 
 ## `suspend () -> R` lambdas
 
-From `sample-library/src/nativeMain/kotlin/.../cat/CatFeeder.kt`:
+From `test-library/src/nativeMain/kotlin/.../cat/CatFeeder.kt`:
 
 ```kotlin
 class CatFeeder(val catName: String) {
@@ -66,7 +66,7 @@ public KotlinSuspendFunc<string> OnFeed => new KotlinSuspendFunc<string>(Native_
 public KotlinSuspendFunc<string, string> OnFeedWith => new KotlinSuspendFunc<string, string>(Native_Get_onFeedWith(_handle));
 ```
 
-Using it, from `sample-app/SampleApp.Tests/SuspendLambdaTests.cs`:
+Using it, from `IntegrationTests/SuspendLambdaTests.cs`:
 
 ```C#
 [Fact]
@@ -93,7 +93,7 @@ public async Task CatFeeder_OnFeed_CancelViaToken_OreoFeedingInterrupted()
 
 ## Structured concurrency and `CancellationToken`
 
-From `sample-library/src/nativeMain/kotlin/.../cat/CatNapService.kt`:
+From `test-library/src/nativeMain/kotlin/.../cat/CatNapService.kt`:
 
 ```kotlin
 class CatNapService {
@@ -110,7 +110,7 @@ class CatNapService {
 }
 ```
 
-Disposing the owning wrapper cancels its scope, which cancels any in-flight coroutine it started, including child coroutines launched inside a `coroutineScope { launch { ... } }`. Using it, from `sample-app/SampleApp.Tests/StructuredConcurrencyTests.cs`:
+Disposing the owning wrapper cancels its scope, which cancels any in-flight coroutine it started, including child coroutines launched inside a `coroutineScope { launch { ... } }`. Using it, from `IntegrationTests/StructuredConcurrencyTests.cs`:
 
 ```C#
 [Fact]
@@ -139,7 +139,7 @@ public async Task ChildCoroutine_CancelsWithParentOnDispose()
 }
 ```
 
-Every generated `async` method also accepts an explicit `CancellationToken`, independent of `Dispose()`. From `sample-app/SampleApp.Tests/CancellationTokenTests.cs`:
+Every generated `async` method also accepts an explicit `CancellationToken`, independent of `Dispose()`. From `IntegrationTests/CancellationTokenTests.cs`:
 
 ```C#
 [Fact]
@@ -171,7 +171,7 @@ public async Task CancelOneNap_SiblingNapCompletes()
 
 ## `IAsyncDisposable` graceful drain
 
-`Dispose()` cancels in-flight work immediately; `DisposeAsync()` instead waits for in-flight coroutines to finish naturally before releasing the handle. From `sample-app/SampleApp.Tests/AsyncDisposableTests.cs`:
+`Dispose()` cancels in-flight work immediately; `DisposeAsync()` instead waits for in-flight coroutines to finish naturally before releasing the handle. From `IntegrationTests/AsyncDisposableTests.cs`:
 
 ```C#
 [Fact]
@@ -256,7 +256,7 @@ public class KotlinFlow<T> : IAsyncEnumerable<T>
 }
 ```
 
-Using it, from `sample-app/SampleApp.Tests/FlowTests.cs`:
+Using it, from `IntegrationTests/FlowTests.cs`:
 
 ```C#
 [Fact]
