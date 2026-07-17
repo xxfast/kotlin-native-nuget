@@ -6,7 +6,7 @@ What has to be true before the plugin is usable by anyone who isn't this repo.
 
 At `0.x` the whole plugin is unstable and the README already carries the experimental badge, so there is no per-direction stability label to hand out. What a user needs is not a compatibility promise but an honest capability ceiling: which constructs cross the bridge today, and which silently don't.
 
-- **Kotlin → C# (forward).** Everything through Phase 6. OOP constructs, generics, collections, lambdas, exceptions, coroutines and `Flow`.
+- **Kotlin → C# (forward).** Everything through Phase 6 — OOP constructs, generics, collections, lambdas, exceptions, coroutines and `Flow` — **on a library shaped like `test-library`**. That qualifier is not throat-clearing; it is the forward P0 section below. The forward direction has no bridgeable-subset boundary and no skip diagnostics, so where it meets a construct it cannot express it emits invalid Kotlin or a C# API that lies, instead of saying so. Closing the distance between the ceiling this line claims and the real one is what those items are.
 - **C# → Kotlin (reverse).** Resolve and bind a NuGet package, call static methods, construct objects, and (since the P1 item below landed) call instance methods and properties on them. The ceiling is still the point, and it is now the README's binds/skipped table: no interfaces, enums, structs, generics, overload sets, nullables, collections or exception propagation.
 - **Distribution:** plugin marker on the Gradle Plugin Portal, `nuget-processor` on mavenCentral.
 
@@ -14,7 +14,7 @@ Anything not on this page is post-launch. See [ROADMAP.md](ROADMAP.md).
 
 ## P0: blocks launch
 
-Nothing here is optional. Today the plugin only works via `includeBuild`; no consumer can apply it.
+Nothing here is optional. The publishing and consumer-path items began from a plugin nobody could apply at all: it only worked via `includeBuild`. The forward-direction items begin from the opposite problem, and only became visible once the first one could — a consumer applied the plugin successfully and found the bridge quietly wrong.
 
 ### Publishing
 
@@ -40,9 +40,27 @@ These two are one item, and CI currently proves nothing about them.
 
 The gate paid for itself on the first run: it caught `CS8604` in `Cat.Owner`'s setter, where the extern for a `String?` property declared a non-nullable `string` parameter (`CirClassTranslator` was inconsistent with `CirTranslator`, which already got this right for top-level properties). Latent in every release so far, and a build break for any consumer using `TreatWarningsAsErrors`.
 
+### The forward direction has never met a consumer
+
+Everything above was verified against `test-library`: our fixture, shaped by us, exercising features we already knew we had built. [NYTimes-KMP](https://github.com/xxfast/NYTimes-KMP) is the first library the forward direction has met that we did not write — an ordinary KMP app packaging its MinGW presentation layer for a WPF host. It hit eight defects, six of them confirmed in source here, on constructs this page calls done.
+
+Not one is a missing Phase. Each is a construct ROADMAP marks `[x]` that breaks or lies on a shape `test-library` happens not to contain. That is the launch risk in one sentence: the gap is not between what we built and what we planned, it is between what we built and what we *tested*.
+
+Each carries its mechanism, `file:line`, and verified/unverified label in [ROADMAP.md](ROADMAP.md), filed under the phase whose `[x]` it contradicts. What follows is why each blocks launch.
+
+- [ ] **An adversarial forward fixture** ([ROADMAP.md](ROADMAP.md), Tooling & Test Integrity). Build it first and fix against it. `GeneratedBindingsCheck` is not broken; it cannot fail on a shape `test-library` does not contain, and the corpus has never been adversarial — `CatRegistry` is the only Kotlin `object` and never returns a `String`, which is exactly the shape that hides the object defect below. The seven shapes NYTimes-KMP suggests are a starting point and not the fixture: it has to be designed to cross every seam, not ported from one app's API surface.
+- [ ] **A Kotlin `object` leaks raw native types through its public C# API** ([ROADMAP.md](ROADMAP.md) Phase 3; NYTimes BUG-007). Not a ceiling we can document our way out of: `object Api { }` is the natural facade for an export module and the first thing a new user reaches for. Every non-primitive return leaks, not only strings, and it compiles clean — which is exactly why the gate never saw it. A flat contradiction of [GOALS.md](GOALS.md) #2.
+- [ ] **Generic type arguments are dropped from generated Kotlin** ([ROADMAP.md](ROADMAP.md) Phase 4; NYTimes BUG-005). `List<T>` renders as a bare `List` and the consumer's build breaks. Collections are marked done in Phase 4 and are the most likely thing in anyone's exported data class.
+- [ ] **Value-class methods drop their parameters** ([ROADMAP.md](ROADMAP.md) Phase 4; NYTimes BUG-009, generalised). Any value-class method taking an argument generates invalid Kotlin; the `CharSequence` delegation NYTimes hit only surfaced it. Two fixes, not one — pass the parameters through, and decide deliberately whether inherited members are in scope.
+- [ ] **A secondary constructor taking an object collides with the native-handle constructor** ([ROADMAP.md](ROADMAP.md) Phase 5; NYTimes BUG-006). `CS0111` in the consumer's build, produced by the very check ADR-034 built to prevent it. Small fix. One half of the report contradicts the source and needs a repro first.
+- [ ] **Reproduce or dismiss the two unverified reports** ([ROADMAP.md](ROADMAP.md) Phase 4 and Phase 6; NYTimes BUG-008 and BUG-010). Fixture shapes 4 and 6. If they do not survive `scripts/verify.sh` from a purged state, say so and close them.
+
+The shape of this is one the repo has already learned once and written down. [ROADMAP.md](ROADMAP.md)'s Tooling & Test Integrity section exists because ADR-053 was the first *reverse* fixture to be realistic and immediately flushed out three latent bugs; the answer was `Test.Household`. The forward direction never got that treatment and carries more surface. NYTimes-KMP has now written our adversarial forward fixture for us, accidentally, in the form of a real application.
+
 ### Documentation
 
 - [x] README: state the reverse-direction capability ceiling explicitly (which constructs bind, which are skipped), add a version compatibility table (Kotlin `2.4.0`, KSP `2.3.9`, .NET `8.0`+), and correct the .NET-SDK prerequisite wording. A new **Consuming NuGet packages from Kotlin** section shows the `bind {}` DSL, the generated Kotlin shape, and what binds vs what is skipped. Kept short on purpose; real docs come later. The .NET-SDK bullet was wrong twice over: nested under Gradle, and implying the forward direction *might* need it. It doesn't. `packNuget` writes the `.nupkg` with `java.util.zip`; only `nugetRestore` and `nugetExtractApi` shell out to `dotnet`.
+- [ ] README: state the **forward**-direction ceiling as plainly as the reverse one already is. The reverse section earns its honesty with a binds/skipped table; the forward section carries an implicit "everything works" that the section above disproves. Until declaration-level scoping lands (P1), it must also state the module-isolation constraint: apply the plugin to a dedicated export module, never to one holding unrelated public API, because the processor has no notion of an export set and will try to bridge everything it can see. NYTimes-KMP found this the hard way and left the `TODO` in its `app/windows/build.gradle.kts` explaining why the module exists at all.
 
 No `@ExperimentalNugetApi` opt-in annotation. It would be ceremony: the whole plugin is `0.x` and badged experimental, so an opt-in gate on one part of it signals a stability gradient that doesn't exist. Revisit at `1.0.0`, when the rest of the surface has something to be stable *relative to*.
 
@@ -50,6 +68,8 @@ No `@ExperimentalNugetApi` opt-in annotation. It would be ceremony: the whole pl
 
 - [x] **Instance methods and instance properties** ([ROADMAP.md](ROADMAP.md) Phase 9 line 151). Landed as a confirmed mirror of ADR-051, no new ADR. A bound C# object's instance methods and properties are now callable from Kotlin, so constructing one is no longer a dead end. Verified end to end through the real `.nupkg` round trip.
 - [x] `dotnet` detection on PATH with explicit install guidance. Both `nugetRestore` and `nugetExtractApi` already detected it, via a `findExecutable` copy-pasted byte-for-byte into each task action, with two different messages, one of which promised the user a `local.properties` override that was never built. Now one tested helper in `NugetTooling.kt`: `findExecutable` plus `requireDotnet`, which throws `GradleException` (matching the sibling "DLL not found" error) rather than `requireNotNull`, since a missing SDK is a user environment problem and not a programmer precondition. No SDK version check: a user on .NET 6 gets `NETSDK1045` from `dotnet restore`, which already names both the problem and the fix.
+- [ ] **Forward unsupported-declaration diagnostics** ([ROADMAP.md](ROADMAP.md), Tooling & Test Integrity). The mirror of [ADR-043](docs/adr/043-bridgeable-subset-boundary.md), which gave the *reverse* direction a defined bridgeable subset and a diagnostic naming each skipped member and why. The forward direction — the one this launch leads with — has neither, so meeting its ceiling emits invalid Kotlin and a compiler error pointing into code the user never wrote. The inversion is hard to defend for long: the newer, preview direction is currently the honest one. P1 rather than P0 only because the P0 fixes above remove the shapes a real consumer actually hits and an isolated export module avoids the rest — but this is what turns the ceiling from a promise in a README into something self-enforcing. Needs an ADR.
+- [ ] **Declaration-level export scoping** ([ROADMAP.md](ROADMAP.md) Phase 2; MF-001, NYTimes BUG-003). `rootPackage` looks like the scoping knob and only renames the C# namespace; the processor bridges every public declaration it can see, which is the opposite of what [GOALS.md](GOALS.md) #1 promises. Deliberately demoted from the crash-avoider it first looks like: once value-class parameters are fixed and unsupported declarations are skipped rather than mis-generated, module isolation is ergonomics rather than a workaround for a build break. Needs an ADR.
 
 ## Cut from MVP
 
@@ -59,18 +79,24 @@ Deliberately not blocking launch. Each moves to [ROADMAP.md](ROADMAP.md).
 |-------------------------------------------------------------------------|------------------------------------------------------------------------------------------------------------------------------------|
 | KDoc → C# XML doc comments                                              | Ergonomics. Generated bindings work without it.                                                                                    |
 | ~~Writerside documentation~~                                            | Pulled back in and done. Writerside instance in `docs/`: Setup, Publishing Kotlin to C#, Consuming C# in Kotlin, a page per feature area, deployed to Pages by `.github/workflows/docs.yml`. The README shrank to a pitch plus links. |
-| Richer sample app                                                       | `test-library` already exercises generics, collections and async. The gap is documentation, not samples.                         |
+| ~~Richer sample app~~                                                   | Pulled back in, in the one form that matters, and now P0 above. The original reasoning — "`test-library` already exercises generics, collections and async; the gap is documentation, not samples" — is precisely the belief NYTimes-KMP falsified. `test-library` exercises those features on the shapes *we thought of*. The gap was never samples-as-documentation; it was fixtures as an adversarial gate. |
+| Transitive model export ([ROADMAP.md](ROADMAP.md) Phase 2; MF-003, NYTimes BUG-004) | `getAllFiles()` sees only the module's own sources, so a `Flow<T>` whose `T` lives in a dependency generates no usable C# model and the consumer hand-writes projection DTOs, as NYTimes-KMP did. The largest of these, and an absent capability rather than a broken promise, so it documents as a ceiling. See the sequencing note below. |
 | Local-feed dev loop for C# consumers (synthesis D6)                     | Developer ergonomics for plugin *users*. The P0 by-coordinate smoke test covers this repo's own need to verify the published path. |
 | GitHub Packages                                                         | Deferred to [ROADMAP.md](ROADMAP.md). It needs an auth token even for public reads, and plugin resolution runs before repositories are configurable, so it can only ever be a mirror. |
-| SharedFlow / StateFlow, remaining Flow edge cases                       | Phase 6 tail.                                                                                                                      |
+| SharedFlow / StateFlow, remaining Flow edge cases (MF-002)              | Phase 6 tail. NYTimes-KMP asks for direct `StateFlow<T>` export and meanwhile exposes a `Flow<T>` compatibility property, which is a mild, self-evident workaround rather than a broken promise — the ceiling holds and the README states it. |
 | Phase 7 remainder (interface returns, C#-implemented Kotlin interfaces) | Forward direction is complete and useful without them.                                                                             |
 | Phases 9–13 beyond the P1 item                                          | The README states the reverse ceiling, so these are absent capabilities rather than broken promises.                               |
+
+Transitive model export and declaration-level scoping are the same missing idea seen from opposite sides: there is no notion of an *export set*. The processor's unit of scope is "the files in this module", which is at once too broad (unrelated public API gets bridged) and too narrow (a referenced type one module away does not). Both resolve to defining the export set as a reachability closure from explicit roots, so whichever lands first should choose that framing rather than patch its own half.
+
+That ordering matters, and there is a trap in it: **transitive export must not land before forward diagnostics and the value-class parameter fix.** Reachability is what module isolation is currently substituting for, so the moment types are pulled across a module boundary it will drag in the exact constructs isolation hides today — a `CharSequence`-delegating value class, a generic suspend extension — and re-arm the breakage NYTimes-KMP is presently working around.
 
 ## Launch order
 
 1. `LICENSE`, version single-sourcing, publishing config.
 2. By-coordinate smoke test. Do not skip this before the first publish. It is the only thing standing between you and a broken `0.1.0` on the Plugin Portal.
 3. ~~`LangVersion` pin~~ + CI compile check. Done: the gate pins `LangVersion` for our own verification rather than imposing it on consumers.
-4. README.
-5. ~~P1~~ done: instance methods and properties landed, so the README's reverse-direction section can describe a bound object you can actually call. Remaining P1 is `dotnet` detection.
-6. Tag, publish, announce.
+4. Adversarial forward fixtures, **then** the forward P0 fixes against them. Fixtures first, not after. Two of the eight NYTimes reports are still unverified prose, and this repo's own rule is that a finding which cannot survive `scripts/verify.sh` from a purged state is not a finding — the same rule that would have saved the hours ADR-053 lost to phantom bugs. Fixtures first also means each fix lands green against a test that was red, which is the only evidence worth having here.
+5. README, including the forward ceiling and the module-isolation constraint.
+6. ~~P1~~ instance methods and properties landed, so the README's reverse-direction section can describe a bound object you can actually call. Remaining P1: `dotnet` detection, forward diagnostics, declaration-level scoping.
+7. Tag, publish, announce.
