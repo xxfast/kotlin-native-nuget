@@ -196,6 +196,12 @@ Nullable primitive and object *properties* on classes follow the same pattern; s
   signature. It still works at runtime, but a consumer passing `null` in a warnings-as-errors project
   hits `CS8625`. Tracked in [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md)
   Phase 2.
+- `Char` is not bridged today — note its absence from the table above. Its outcome is
+  position-dependent: as a parameter it leaks `IntPtr` into the public C# signature (an 8-byte pointer
+  for a 2-byte scalar), as a return it generates invalid Kotlin, and as a class property it is silently
+  skipped from the C# API. Route a `Char` through an `Int` code point instead. Tracked in
+  [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md) Phase 3 and pinned as
+  red cells by the adversarial forward fixture ([ADR-060](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/060-adversarial-forward-fixture.md)).
 
 <seealso>
     <category ref="related">

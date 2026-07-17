@@ -160,6 +160,7 @@ public void Cat_Traits_SetEquality()
 ## Limitations
 
 - `Sequence<T>` is not bridgeable. `Cat.unsupported: Sequence<String>` in the sample library is deliberately left out of the generated `Interop.cs` (no eager-copy story for a lazy sequence).
+- A collection only survives at positions that route through the opaque-handle path — the non-null list *property* shown above (`Cat.nicknames`) is one. At any other site the generated Kotlin drops the element type and renders a raw `List` (invalid Kotlin, *one type argument expected*): a `List<T>` in a data-class constructor, in a generated `copy()`, or a **nullable** list property (`List<T>?`) all break today. Tracked in [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md) Phase 4 and pinned as red cells by the adversarial forward fixture ([ADR-060](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/060-adversarial-forward-fixture.md)).
 
 <seealso>
     <category ref="related">

@@ -4,6 +4,7 @@ ksp = "2.3.9"
 kotlinpoet = "2.2.0"
 coroutines = "1.10.2"
 mavenPublish = "0.37.0"
+junitJupiter = "5.10.1"
 
 [libraries]
 kotlin-test = { module = "org.jetbrains.kotlin:kotlin-test", version.ref = "kotlin" }
@@ -11,6 +12,19 @@ ksp-api = { module = "com.google.devtools.ksp:symbol-processing-api", version.re
 kotlinpoet = { module = "com.squareup:kotlinpoet", version.ref = "kotlinpoet" }
 kotlinpoet-ksp = { module = "com.squareup:kotlinpoet-ksp", version.ref = "kotlinpoet" }
 kotlinx-coroutines-core = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "coroutines" }
+# ADR-060 Tier 1: the KSP2 programmatic entry point (`KotlinSymbolProcessing`) and its
+# `KSPJvmConfig` builder, plus the in-process JVM compiler used to compile generated
+# `CNameExports.kt`. None of these are third-party test harnesses; all three ship from the
+# same KSP/Kotlin distributions already in this build's dependency graph.
+ksp-symbolProcessingAaEmbeddable = { module = "com.google.devtools.ksp:symbol-processing-aa-embeddable", version.ref = "ksp" }
+ksp-symbolProcessingCommonDeps = { module = "com.google.devtools.ksp:symbol-processing-common-deps", version.ref = "ksp" }
+kotlin-compiler-embeddable = { module = "org.jetbrains.kotlin:kotlin-compiler-embeddable", version.ref = "kotlin" }
+# ADR-060 Tier 1's strict `@XFail`: a small JUnit 5 `InvocationInterceptor` extension. Adding
+# `useJUnitPlatform()` also makes Gradle resolve the existing `kotlin-test` dependency to
+# `kotlin-test-junit5` instead of `kotlin-test-junit` (Kotlin Gradle plugin's test-framework
+# auto-selection), so every existing `kotlin.test.Test` in this module keeps running unchanged.
+junit-jupiter-api = { module = "org.junit.jupiter:junit-jupiter-api", version.ref = "junitJupiter" }
+junit-jupiter-engine = { module = "org.junit.jupiter:junit-jupiter-engine", version.ref = "junitJupiter" }
 
 [plugins]
 kotlinJvm = { id = "org.jetbrains.kotlin.jvm", version.ref = "kotlin" }

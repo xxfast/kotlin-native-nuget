@@ -87,6 +87,10 @@ public readonly record struct CatResult(Cat Cat)
 
 Because `record struct` gives structural equality for free, `CatId`/`CatResult` don't need generated `Equals`/`GetHashCode` overrides the way [data classes](data-classes.md) do. C# derives them from the wrapped property automatically.
 
+## Known limitations
+
+Value-class methods are exported **without their parameters**. Both the primitive-underlying and reference-underlying method exporters emit the call with literal empty parens and declare no parameters, so a method taking an argument (e.g. `fun matches(other: String): Boolean`) generates invalid Kotlin. Only zero-arg methods work today — which is exactly what `isValid()` and `isAlive()` above are, and the entire value-class method corpus, so the gap stayed hidden. Tracked in [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md) Phase 4 and pinned as red cells by the adversarial forward fixture ([ADR-060](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/060-adversarial-forward-fixture.md)).
+
 ## Using it from C#
 
 Primitive-backed value class, from `IntegrationTests/ValueClassTests.cs`:

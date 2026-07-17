@@ -103,6 +103,10 @@ public void GreetingIsHelloWorld()
 
 Top-level functions follow the same grouping. `test-library/src/nativeMain/kotlin/.../math/Arithmetic.kt` (`add`, `multiply`, `divide`, `square`) becomes `TestLibrary.Math.Arithmetic`; see [Generics](generics.md) for the `inline fun square` case.
 
+## Known limitations
+
+A top-level **factory** function returning a bridged class — `fun admit(name: String): Patient` — currently generates invalid Kotlin: the export declares a non-null class return whose generated body can default to `null` on the error path. The top-level-function path has no `StableRef` boxing branch for a plain-class return, unlike a companion-object factory (`Cat.fromName`), which is why factories on a companion work and top-level ones do not. Tracked in [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md) Phase 3 and pinned as a red cell by the adversarial forward fixture ([ADR-060](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/060-adversarial-forward-fixture.md)).
+
 <seealso>
     <category ref="related">
         <a href="objects-and-companions.md">Objects and companions</a>

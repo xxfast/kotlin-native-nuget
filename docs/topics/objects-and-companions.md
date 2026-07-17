@@ -64,6 +64,15 @@ public static class CatRegistry
 
 The `Cat` companion's members are generated as static members directly on the `Cat` class itself (`Cat.Species`, `Cat.DefaultBreed`, `Cat.FromName(...)`) rather than a nested type. There's no separate `Cat.Companion` class in the generated output.
 
+## Known limitations
+
+The `object` path has not caught up to the class path, and `CatRegistry` — the only `object` fixture, returning only `Int` and `void` — hides both gaps:
+
+- **A method that returns a non-primitive leaks the raw native type.** The object path has no marshalling at all, so a `String`-returning method on an `object` reaches C# as `IntPtr` (the consumer must call `Marshal.PtrToStringUTF8` themselves), unlike the class path which marshals it to `string`. Tracked in [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md) Phase 3.
+- **Object method names are not PascalCased.** Note the generated `register`/`count`/`clear` above stay camelCase, while the companion's `FromName` is PascalCased — every class and companion method is PascalCased, but an `object`'s methods keep their raw Kotlin name. Tracked in [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md) Phase 3.
+
+Both surface only on an `object` whose methods take or return the shapes `CatRegistry` avoids; they are pinned as red cells by the adversarial forward fixture ([ADR-060](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/060-adversarial-forward-fixture.md)).
+
 ## Using it from C#
 
 Singleton object, from `IntegrationTests/ObjectTests_Singleton.cs`:

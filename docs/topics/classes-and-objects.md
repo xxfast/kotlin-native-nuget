@@ -156,6 +156,10 @@ public void Cat_Age_SetToNull()
 
 Disposal does not cascade. A parent wrapper's `Dispose()` only releases *its own* `StableRef`; any wrapper obtained from a property or method call on that parent holds an independent `StableRef` and must be disposed separately (or leaks). This is deliberate: since every access allocates a new wrapper, there's no tree of ownership for a parent to walk. See [ADR-005](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/005-object-return-semantics.md) for the alternative designs considered (cached wrapper with cascading dispose was rejected).
 
+## Known limitations
+
+Nullability and object-returns are handled at the *property* position (shown above with `Brother`/`Owner`/`Age`), but **not at the class-method-return position**. A method returning `String?`, `Int?`, or an object type (e.g. `fun companion(): Patient`) currently generates invalid Kotlin — the export declares a non-null return while the body can yield `null` — rather than a nullable or handle-backed C# surface. Only the property getter re-reads the type's nullability and boxes object returns through a `StableRef`; the method loop does neither. Tracked in [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md) Phase 3/4 and pinned as red cells by the adversarial forward fixture ([ADR-060](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/060-adversarial-forward-fixture.md)).
+
 <seealso>
     <category ref="related">
         <a href="forward-overview.md">Publishing Kotlin to C#</a>
