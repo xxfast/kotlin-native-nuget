@@ -129,19 +129,20 @@ Each phase must pass its applicable gates before its checklist is advanced.
 
 - [x] Classifier tests cover aliases, nullability, generics, exported and unexported objects, value
   classes, enum, Char, and all collection variants.
-- [ ] A total marshalling matrix proves every `BridgeType` and semantic transfer pair produces either
-  a valid plan or a specific diagnostic.
+- [x] A total marshalling matrix proves every `BridgeType` and semantic transfer pair produces either
+  a valid plan or a specific diagnostic
+  (`ForwardMarshallingMatrixTest`).
 - [x] Negative validation tests cover unknown wire types, missing conversions, invalid call counts,
   raw collections, and missing ownership or cleanup.
-- [ ] A declaration-routing matrix covers every synchronous syntax position with one direct primitive
-  and one conversion-requiring type.
+- [x] A declaration-routing matrix covers every synchronous syntax position with one direct primitive
+  and one conversion-requiring type (`ForwardDeclarationRoutingMatrixTest`).
 - [x] Nullable numeric tests assert one invocation plus `valueOut` for methods and extensions, and the
   preserved two-call signatures for properties and top-level functions.
-- [ ] ABI tests detect missing, duplicated, reordered, wrongly directed, and width-mismatched
-  parameters for every declaration form.
+- [x] ABI tests detect missing, duplicated, reordered, wrongly directed, and width-mismatched
+  parameters for every declaration form (`ForwardAbiDeclarationFormTest`).
 - [x] Tier 1 compiles generated Kotlin and structurally inspects generated C#.
-- [ ] Consumer-side tests cover null and non-null paths, disposal, enum, Char, nullable parameters,
-  Map, Set, and value-class parameters before each corresponding behavior fix.
+- [x] Consumer-side tests cover null and non-null paths, disposal, enum, Char, nullable parameters,
+  Map, Set, and value-class parameters (`MarshallingCoverageTests` plus the phase suites).
 - [x] `GeneratedBindingsCheck` passes with warnings as errors.
 - [x] `scripts/verify.sh` passes from clean fixture state.
 
