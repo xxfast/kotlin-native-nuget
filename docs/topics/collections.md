@@ -159,15 +159,21 @@ public void Cat_Traits_SetEquality()
 
 ## Returned from a method or extension function
 
-`List<T>` also marshals as a class-method or extension-function return, not only as a property.
-The Kotlin side needs no separate export shape: the list is boxed as the same object carrier an
-object return uses, and the shared `NugetListNative` helpers materialize it exactly as they do for
-a property (see [Method returns](classes-and-objects.md) and [ADR-061](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/061-method-return-marshalling.md)):
+`List<T>`, `Map<K,V>`, `Set<T>`, and their mutable variants also marshal as class-method or
+extension-function returns, not only as properties. The collection is boxed as the same object
+carrier an object return uses, and the shared `NugetListNative` / `NugetMapNative` / `NugetSetNative`
+helpers materialize it exactly as they do for a property (see [Method returns](classes-and-objects.md),
+[ADR-061](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/061-method-return-marshalling.md),
+and [ADR-062](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/062-forward-callable-plan.md)):
 
 ```kotlin
 // test-library/.../cat/Cat.kt
 fun tags(): List<String> = listOf("$name-tag", "$name-chip")
 fun scores(): List<Int> = listOf(lives, lives * 2)
+
+// test-library/.../clinic/ClinicSample.kt
+fun scores(): Map<String, Int> = mapOf("weight" to (weight ?: 0))
+fun labels(): Set<String> = setOf(name)
 ```
 
 ```C#
@@ -187,19 +193,84 @@ public IReadOnlyList<string> Tags()
         NugetListNative.Dispose(listHandle);
         return result.AsReadOnly();
 }
+
+public IReadOnlyDictionary<string, int> Scores()
+{
+    IntPtr mapHandle = Native_Scores(_handle, out IntPtr error);
+    if (error != IntPtr.Zero)
+    {
+        throw NugetErrorNative.BuildException(error);
+    }
+    int count = NugetMapNative.Count(mapHandle);
+    var result = new Dictionary<string, int>(count);
+    for (int i = 0; i < count; i++)
+    {
+        var key = NugetMarshal.FromHandle<string>(NugetMapNative.KeyAt(mapHandle, i));
+        var value = NugetMarshal.FromHandle<int>(NugetMapNative.ValueAt(mapHandle, i));
+        result[key] = value;
+    }
+    NugetMapNative.Dispose(mapHandle);
+    return result;
+}
+
+public IReadOnlySet<string> Labels()
+{
+    IntPtr setHandle = Native_Labels(_handle, out IntPtr error);
+    if (error != IntPtr.Zero)
+    {
+        throw NugetErrorNative.BuildException(error);
+    }
+    int count = NugetSetNative.Count(setHandle);
+    var result = new HashSet<string>(count);
+    for (int i = 0; i < count; i++)
+    {
+        result.Add(NugetMarshal.FromHandle<string>(NugetSetNative.ElementAt(setHandle, i)));
+    }
+    NugetSetNative.Dispose(setHandle);
+    return result;
+}
 ```
+
+From `IntegrationTests/ReturnAndPropertyMarshallingTests.cs`:
+
+```C#
+[Fact]
+public void Patient_Scores_ReturnsWeightMap()
+{
+    using var patient = new Patient("Oreo");
+    patient.AdjustWeight(7);
+    var scores = patient.Scores();
+    Assert.Single(scores);
+    Assert.Equal(7, scores["weight"]);
+}
+
+[Fact]
+public void Patient_Labels_ReturnsNameSet()
+{
+    using var patient = new Patient("Oreo");
+    var labels = patient.Labels();
+    Assert.Single(labels);
+    Assert.Contains("Oreo", labels);
+}
+```
+
+`List<T>` **inputs** (method parameters) also plan: the C# side builds a temporary handle via
+`NugetMarshal.CreateList` and the Kotlin side walks it. `Map`/`Set` **inputs** are not planned yet
+(there is no `CreateMap`/`CreateSet` helper); those callables are skipped rather than fallthrough-emitted.
 
 ## Limitations
 
 - `Sequence<T>` is not bridgeable. `Cat.unsupported: Sequence<String>` in the sample library is deliberately left out of the generated `Interop.cs` (no eager-copy story for a lazy sequence).
-- A collection only survives at positions that route through the opaque-handle path — the non-null list *property* shown above (`Cat.nicknames`) is one. At any other site the generated Kotlin drops the element type and renders a raw `List` (invalid Kotlin, *one type argument expected*): a `List<T>` in a data-class constructor, in a generated `copy()`, or a **nullable** list property (`List<T>?`) all break today. Tracked in [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md) Phase 4 and pinned as red cells by the adversarial forward fixture ([ADR-060](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/060-adversarial-forward-fixture.md)).
+- `Map`/`Set` (and mutable variants) as **method parameters** are intentionally skipped: returns and properties work, but there is no create-handle helper for the C#→Kotlin direction yet. Tracked in [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md) Phase 4 ([ADR-062](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/062-forward-callable-plan.md)).
 
 <seealso>
     <category ref="related">
         <a href="generics.md">Generics</a>
+        <a href="classes-and-objects.md">Classes and objects</a>
     </category>
     <category ref="external">
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/011-collection-type-mapping.md">ADR-011: Collection type mapping</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/061-method-return-marshalling.md">ADR-061: Method return marshalling</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/062-forward-callable-plan.md">ADR-062: Forward callable plan</a>
     </category>
 </seealso>

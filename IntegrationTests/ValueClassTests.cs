@@ -1,4 +1,5 @@
 using TestLibrary.Cat;
+using TestLibrary.Clinic;
 
 namespace IntegrationTests;
 
@@ -69,3 +70,30 @@ public class ValueClassTests
         Assert.Contains("oreo-123", id.ToString());
     }
 }
+
+// ADR-060 cells 15/16 — value-class methods with parameters (Phase 9).
+public class ClinicValueClassMethodTests
+{
+    [Fact]
+    public void ChartId_Matches_SameValue_ReturnsTrue()
+    {
+        var id = new ChartId("abc");
+        Assert.True(id.Matches("abc"));
+    }
+
+    [Fact]
+    public void ChartId_Matches_DifferentValue_ReturnsFalse()
+    {
+        var id = new ChartId("abc");
+        Assert.False(id.Matches("xyz"));
+    }
+
+    [Fact]
+    public void ChartRef_Label_AppendsSuffix()
+    {
+        using var patient = new Patient("Rex");
+        var chart = new ChartRef(patient);
+        Assert.Equal("Rex-ward", chart.Label("-ward"));
+    }
+}
+

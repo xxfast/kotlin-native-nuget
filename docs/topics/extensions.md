@@ -6,7 +6,7 @@ Kotlin extension functions and properties don't have a native C# analog (C# has 
 |---|---|---|
 | extension function | static method | true C# extension method (`this` parameter) |
 | extension property | static accessor | see [ADR-013](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/013-extension-property-mapping.md) |
-| extension function return (object, `T?`, `List<T>`, `String?`, `Int?`) | matching C# return type | same cascade as a class-method return, see Return marshalling below and [Classes and objects](classes-and-objects.md) |
+| extension function return (object, `T?`, `List`/`Map`/`Set`, enum, `Char`, `String?`, `Int?`, …) | matching C# return type | same cascade as a class-method return via the shared plan, see Return marshalling below and [Classes and objects](classes-and-objects.md) |
 
 ## Kotlin
 

@@ -85,9 +85,11 @@ internal class ForwardPropertyPlanner(
   private fun extensionProperty(prop: KSPropertyDeclaration): ForwardPropertyPlan? {
     val receiver: KSType = prop.extensionReceiver?.resolve()?.expandAliases() ?: return null
     val receiverType: BridgeType = classifier.classify(receiver)
-    if (receiverType !is BridgeType.ObjectHandle && receiverType !is BridgeType.Primitive && receiverType != BridgeType.String) {
-      return null
-    }
+    val supportedReceiver: Boolean =
+      receiverType is BridgeType.ObjectHandle ||
+          receiverType is BridgeType.Primitive ||
+          receiverType == BridgeType.String
+    if (!supportedReceiver) return null
     val receiverName: String = receiver.declaration.simpleName.asString()
     val name: String = prop.simpleName.asString()
     return propertyPlan(
@@ -161,29 +163,37 @@ internal class ForwardPropertyPlanner(
     is ForwardPropertyReceiver.Handle -> listOf(
       ForwardAbiParameter(
         "handle", ForwardAbiWireType.POINTER, ForwardAbiDirection.IN,
-        ForwardTransfer("handle", BridgeType.ObjectHandle(owner), ForwardFlow.INTO_KOTLIN,
-          ForwardPassing.VALUE, ForwardOwnership.BORROWED, ForwardConversion.HANDLE_TO_STABLE_REF),
+        ForwardTransfer(
+          "handle", BridgeType.ObjectHandle(owner), ForwardFlow.INTO_KOTLIN,
+          ForwardPassing.VALUE, ForwardOwnership.BORROWED, ForwardConversion.HANDLE_TO_STABLE_REF
+        ),
       ),
     )
+
     is ForwardPropertyReceiver.Value -> listOf(valueParameter(type, "receiver"))
     is ForwardPropertyReceiver.Static -> emptyList()
   }
 
   private fun valueParameter(type: BridgeType, name: String = "value"): ForwardAbiParameter = ForwardAbiParameter(
     name, type.inputWireType(), ForwardAbiDirection.IN,
-    ForwardTransfer(name, type, ForwardFlow.INTO_KOTLIN, ForwardPassing.VALUE,
-      ForwardOwnership.BORROWED, type.conversion(ForwardFlow.INTO_KOTLIN)),
+    ForwardTransfer(
+      name, type, ForwardFlow.INTO_KOTLIN, ForwardPassing.VALUE,
+      ForwardOwnership.BORROWED, type.conversion(ForwardFlow.INTO_KOTLIN)
+    ),
   )
 
   private fun errorParameter(): ForwardAbiParameter = ForwardAbiParameter(
     "errorOut", ForwardAbiWireType.POINTER, ForwardAbiDirection.OUT,
-    ForwardTransfer("error", BridgeType.ObjectHandle("kotlin.Throwable"), ForwardFlow.OUT_OF_KOTLIN,
-      ForwardPassing.OUT, ForwardOwnership.BORROWED, ForwardConversion.STABLE_REF_TO_HANDLE),
+    ForwardTransfer(
+      "error", BridgeType.ObjectHandle("kotlin.Throwable"), ForwardFlow.OUT_OF_KOTLIN,
+      ForwardPassing.OUT, ForwardOwnership.BORROWED, ForwardConversion.STABLE_REF_TO_HANDLE
+    ),
   )
 
   private fun isPlannable(type: BridgeType): Boolean = when (type) {
-    BridgeType.Unit, BridgeType.String, is BridgeType.Primitive, is BridgeType.Enum, is BridgeType.ObjectHandle -> true
-    is BridgeType.Collection -> type.kind == CollectionKind.LIST || type.kind == CollectionKind.MUTABLE_LIST
+    BridgeType.Unit, BridgeType.Char, BridgeType.String, is BridgeType.Primitive, is BridgeType.Enum,
+    is BridgeType.ObjectHandle, is BridgeType.Collection -> true
+
     is BridgeType.Nullable -> isPlannable(type.type)
     else -> false
   }
@@ -192,6 +202,7 @@ internal class ForwardPropertyPlanner(
 
   private fun BridgeType.wireType(): ForwardAbiWireType = when (val type = unwrapNullable()) {
     BridgeType.Unit -> ForwardAbiWireType.VOID
+    BridgeType.Char -> ForwardAbiWireType.CHAR16
     BridgeType.String, is BridgeType.ObjectHandle, is BridgeType.Collection -> ForwardAbiWireType.POINTER
     is BridgeType.Enum -> ForwardAbiWireType.INT32
     is BridgeType.Primitive -> when (type.kind) {
@@ -207,6 +218,7 @@ internal class ForwardPropertyPlanner(
       PrimitiveKind.FLOAT -> ForwardAbiWireType.FLOAT32
       PrimitiveKind.DOUBLE -> ForwardAbiWireType.FLOAT64
     }
+
     else -> error("Forward property planner cannot choose a wire type for $type")
   }
 
@@ -216,10 +228,30 @@ internal class ForwardPropertyPlanner(
   }
 
   private fun BridgeType.conversion(flow: ForwardFlow): ForwardConversion? = when (unwrapNullable()) {
-    BridgeType.String -> if (flow == ForwardFlow.INTO_KOTLIN) ForwardConversion.STRING_TO_UTF8 else ForwardConversion.UTF8_TO_STRING
-    is BridgeType.Enum -> if (flow == ForwardFlow.INTO_KOTLIN) ForwardConversion.ORDINAL_TO_ENUM else ForwardConversion.ENUM_TO_ORDINAL
-    is BridgeType.ObjectHandle -> if (flow == ForwardFlow.INTO_KOTLIN) ForwardConversion.HANDLE_TO_STABLE_REF else ForwardConversion.STABLE_REF_TO_HANDLE
-    is BridgeType.Collection -> if (flow == ForwardFlow.INTO_KOTLIN) ForwardConversion.HANDLE_TO_COLLECTION else ForwardConversion.COLLECTION_TO_HANDLE
+    BridgeType.String -> if (flow == ForwardFlow.INTO_KOTLIN) {
+      ForwardConversion.STRING_TO_UTF8
+    } else {
+      ForwardConversion.UTF8_TO_STRING
+    }
+
+    is BridgeType.Enum -> if (flow == ForwardFlow.INTO_KOTLIN) {
+      ForwardConversion.ORDINAL_TO_ENUM
+    } else {
+      ForwardConversion.ENUM_TO_ORDINAL
+    }
+
+    is BridgeType.ObjectHandle -> if (flow == ForwardFlow.INTO_KOTLIN) {
+      ForwardConversion.HANDLE_TO_STABLE_REF
+    } else {
+      ForwardConversion.STABLE_REF_TO_HANDLE
+    }
+
+    is BridgeType.Collection -> if (flow == ForwardFlow.INTO_KOTLIN) {
+      ForwardConversion.HANDLE_TO_COLLECTION
+    } else {
+      ForwardConversion.COLLECTION_TO_HANDLE
+    }
+
     else -> ForwardConversion.DIRECT
   }
 }

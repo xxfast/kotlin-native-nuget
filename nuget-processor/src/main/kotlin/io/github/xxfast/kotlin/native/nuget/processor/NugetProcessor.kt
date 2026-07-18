@@ -57,8 +57,11 @@ import io.github.xxfast.kotlin.native.nuget.processor.exports.addSealedClassExpo
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addSuspendClassMethodExports
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addSuspendFunctionExports
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addValueClassExports
+import io.github.xxfast.kotlin.native.nuget.processor.forward.BridgeType
+import io.github.xxfast.kotlin.native.nuget.processor.forward.CollectionKind
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeTypeContext
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeTypeClassifier
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallablePlan
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallablePlanCatalog
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallablePlanner
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardHelperRequirement
@@ -221,8 +224,16 @@ class NugetProcessor(
       objects.forEach { obj -> obj.qualifiedName?.asString()?.let(::add) }
     }
     val callableCatalog: ForwardCallablePlanCatalog = ForwardCallablePlanner(
-      ForwardBridgeTypeClassifier(ForwardBridgeTypeContext(exportedObjectHandles))
-    ).catalog(classes, functions, extensionFunctions, objects, properties, extensionProperties)
+      ForwardBridgeTypeClassifier(
+        ForwardBridgeTypeContext(
+          exportedObjectHandles = exportedObjectHandles,
+          rootPackage = context.rootPackage,
+          rootNamespace = context.rootNamespace,
+        ),
+      ),
+    ).catalog(
+      classes, functions, extensionFunctions, objects, properties, extensionProperties, valueClasses,
+    )
 
     val cNameExports: FileSpec = generateCNameWrappers(
       functions, genericFunctions, extensionFunctions, extensionProperties,
@@ -246,9 +257,9 @@ class NugetProcessor(
       kotlin = ForwardAbiContract.kotlin(
         cNameExports,
         (
-          callableCatalog.plans.flatMap { plan -> plan.nativeExports.map { call -> call.exportName } } +
-              callableCatalog.propertyPlans.flatMap { plan -> plan.calls().map { call -> call.exportName } }
-          ).toSet(),
+            callableCatalog.plans.flatMap { plan -> plan.nativeExports.map { call -> call.exportName } } +
+                callableCatalog.propertyPlans.flatMap { plan -> plan.calls().map { call -> call.exportName } }
+            ).toSet(),
       ),
     )
     cNameExports.writeTo(codeGenerator, Dependencies(aggregating = true))
@@ -375,7 +386,7 @@ class NugetProcessor(
     enums.forEach { builder.addEnumExports(it) }
     sealedClasses.forEach { builder.addSealedClassExports(it) }
     objects.forEach { builder.addObjectExports(it, callableCatalog) }
-    valueClasses.forEach { builder.addValueClassExports(it) }
+    valueClasses.forEach { builder.addValueClassExports(it, callableCatalog) }
 
     val suspendLambdaTypes: Set<String> = setOf(
       "kotlin.coroutines.SuspendFunction0",
@@ -548,12 +559,29 @@ class NugetProcessor(
         callableCatalog.planFor(symbol) == null && func.returnType?.resolve()?.isListType() == true
       }
 
+    fun BridgeType.collectionKindOrNull(): CollectionKind? {
+      val unwrapped: BridgeType = if (this is BridgeType.Nullable) type else this
+      return (unwrapped as? BridgeType.Collection)?.kind
+    }
+
+    fun ForwardCallablePlan.collectionKinds(): Sequence<CollectionKind> = sequence {
+      publicSignature.result.collectionKindOrNull()?.let { yield(it) }
+      publicSignature.parameters.forEach { parameter ->
+        parameter.type.collectionKindOrNull()?.let { yield(it) }
+      }
+    }
+
+    fun plannedCollectionKinds(): Sequence<CollectionKind> = sequence {
+      callableCatalog.plans.forEach { plan -> yieldAll(plan.collectionKinds()) }
+      callableCatalog.propertyPlans.forEach { plan ->
+        plan.type.collectionKindOrNull()?.let { yield(it) }
+      }
+    }
+
     val needsListSupport: Boolean = classesHaveLists || functionsReturnLists ||
         sealedClassesHaveLists || classMethodsReturnLists || extensionFunctionsReturnLists ||
-        callableCatalog.plans.any { plan ->
-          ForwardHelperRequirement.COLLECTION in plan.helperRequirements
-        } || callableCatalog.propertyPlans.any { plan ->
-          ForwardHelperRequirement.COLLECTION in plan.helperRequirements
+        plannedCollectionKinds().any { kind ->
+          kind == CollectionKind.LIST || kind == CollectionKind.MUTABLE_LIST
         }
 
     val mapTypes: Set<String> = setOf("kotlin.collections.Map", "kotlin.collections.MutableMap")
@@ -565,7 +593,10 @@ class NugetProcessor(
       .any { cls -> cls.getAllProperties().any { prop -> prop.type.resolve().isMapType() } }
 
     val functionsReturnMaps: Boolean = (functions + genericFunctions)
-      .any { func -> func.returnType?.resolve()?.isMapType() == true }
+      .any { func ->
+        val symbol: String = "${func.packageName.asString()}.${func.simpleName.asString()}"
+        callableCatalog.planFor(symbol) == null && func.returnType?.resolve()?.isMapType() == true
+      }
 
     val sealedClassesHaveMaps: Boolean = sealedClasses
       .any { sealed ->
@@ -574,7 +605,10 @@ class NugetProcessor(
         }
       }
 
-    val needsMapSupport: Boolean = classesHaveMaps || functionsReturnMaps || sealedClassesHaveMaps
+    val needsMapSupport: Boolean = classesHaveMaps || functionsReturnMaps || sealedClassesHaveMaps ||
+        plannedCollectionKinds().any { kind ->
+          kind == CollectionKind.MAP || kind == CollectionKind.MUTABLE_MAP
+        }
 
     val setTypes: Set<String> = setOf("kotlin.collections.Set", "kotlin.collections.MutableSet")
 
@@ -585,7 +619,10 @@ class NugetProcessor(
       .any { cls -> cls.getAllProperties().any { prop -> prop.type.resolve().isSetType() } }
 
     val functionsReturnSets: Boolean = (functions + genericFunctions)
-      .any { func -> func.returnType?.resolve()?.isSetType() == true }
+      .any { func ->
+        val symbol: String = "${func.packageName.asString()}.${func.simpleName.asString()}"
+        callableCatalog.planFor(symbol) == null && func.returnType?.resolve()?.isSetType() == true
+      }
 
     val sealedClassesHaveSets: Boolean = sealedClasses
       .any { sealed ->
@@ -594,7 +631,10 @@ class NugetProcessor(
         }
       }
 
-    val needsSetSupport: Boolean = classesHaveSets || functionsReturnSets || sealedClassesHaveSets
+    val needsSetSupport: Boolean = classesHaveSets || functionsReturnSets || sealedClassesHaveSets ||
+        plannedCollectionKinds().any { kind ->
+          kind == CollectionKind.SET || kind == CollectionKind.MUTABLE_SET
+        }
 
     val lambdaTypes: Set<String> = setOf(
       "kotlin.Function0", "kotlin.Function1", "kotlin.Function2", "kotlin.Function3",

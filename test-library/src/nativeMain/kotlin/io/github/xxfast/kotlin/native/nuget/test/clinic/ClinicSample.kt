@@ -58,11 +58,10 @@ class Patient(val name: String) {
   var weight: Int? = null
   var buddy: Patient? = null
 
-  /** Cell 14 · LANDS NOW · obs N. A `Char` property is misclassified as a reference type (`:179`,
-   *  since `Char` is absent from `KOTLIN_TO_CSHARP_RETURN`) and silently skipped (`:186`). Verified:
-   *  Kotlin *does* export `patient_get_grade` (boxed through `StableRef`) and the C# side drops it,
-   *  which `ForwardAbiContract` permits by design (ADR-055: a Kotlin export with no C# import is not
-   *  an error). So the member simply vanishes from the C# API. */
+  /**
+   * Cell 14 · LANDS NOW (MIGRATION.md Phase 8). Char property on the shared property plan —
+   * public C# surface is `char Grade`.
+   */
   val grade: Char = 'A'
 
   /** Control · LANDS NOW: a non-null String method return works. */
@@ -102,6 +101,21 @@ class Patient(val name: String) {
   /** MIGRATION.md Phase 7. Class method × `List<String>` parameter. */
   fun addTags(tags: List<String>): Int = tags.size
 
+  /** MIGRATION.md Phase 8. Class method × enum return (ordinal over INT32). */
+  fun mood(): Mood = Mood.CALM
+
+  /** MIGRATION.md Phase 8. Class method × Map return. */
+  fun scores(): Map<String, Int> = mapOf("weight" to (weight ?: 0))
+
+  /** MIGRATION.md Phase 8. Class method × Set return. */
+  fun labels(): Set<String> = setOf(name)
+
+  /**
+   * Cell 13 · LANDS NOW (MIGRATION.md Phase 8). Char return on the shared callable plan —
+   * catch default is `'\u0000'`, not the legacy `"0"` that broke konanc.
+   */
+  fun initial(): Char = name.first()
+
   companion object {
     /** MIGRATION.md Phase 7. Companion method × `List<String>` parameter. */
     fun batchAdmit(names: List<String>): Int = names.size
@@ -119,12 +133,6 @@ class Patient(val name: String) {
   /** Cell 6 · obs K. Class method × object return. The method loop has no `StableRef` branch, unlike
    *  the property loop (`:361`/`:404`), so ADR-005 holds for properties and not for methods. */
   // fun companion(): Patient = buddy ?: this
-
-  /** Cell 13 · obs K. `Char` return. Not a wire mismatch — it never gets that far:
-   *  `defaultValueFor("kotlin.Char")` is `"0"` (Helpers.kt:27 — it starts with `kotlin.`), so the
-   *  catch branch yields `Int` from a `Char` function. Verified with real konanc:
-   *  *"return type mismatch: expected 'Char', actual 'Comparable<*>'"*. */
-  // fun initial(): Char = name.first()
 }
 
 /**
@@ -144,26 +152,18 @@ class Patient(val name: String) {
 // }
 
 /**
- * Cells 15/16: value-class methods. `ValueClassExports.kt:136-172` never reads `method.parameters` —
- * both branches emit `.method()` with literal empty parens. `CatId.isValid()` and `CatResult.describe()`
- * are the entire value-class method corpus and both are zero-arg, which is why ADR-014 stayed green.
- * Two value classes, because the primitive-underlying (`:160-169`) and reference-underlying
- * (`:145-159`) branches are separate code paths that drop parameters separately.
+ * Cells 15/16 (Phase 9): value-class methods with parameters for both underlying-type branches.
  */
 value class ChartId(val value: String) {
-  /** Cell 15 · QUARANTINED · obs K. Primitive-underlying × method with a parameter. Verified end to
-   *  end through the real processor: the export is `export_chartid_matches(value: String)` calling
-   *  `.matches()` — *"no value passed for parameter 'other'"*. */
-  // fun matches(other: String): Boolean = value == other
+  /** Cell 15: primitive-underlying value-class method with a parameter. */
+  fun matches(other: String): Boolean = value == other
 
-  /** Control · LANDS NOW: the zero-arg shape that passed, and that is the entire corpus today. */
   fun isValid(): Boolean = value.isNotBlank()
 }
 
 value class ChartRef(val patient: Patient) {
-  /** Cell 16 · QUARANTINED · obs K. Reference-underlying × method with a parameter — the *other*
-   *  `ValueClassExports` branch (`:145-159`), which drops parameters separately. */
-  // fun label(suffix: String): String = "${patient.name}$suffix"
+  /** Cell 16: reference-underlying value-class method with a parameter. */
+  fun label(suffix: String): String = "${patient.name}$suffix"
 }
 
 /**

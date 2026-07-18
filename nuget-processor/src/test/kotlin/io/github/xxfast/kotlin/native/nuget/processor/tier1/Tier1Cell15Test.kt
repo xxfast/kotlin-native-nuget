@@ -17,7 +17,6 @@ import kotlin.test.assertTrue
  */
 class Tier1Cell15Test {
   @Test
-  @XFail("ADR-060 cell 15 - value class (primitive-underlying) method drops its parameter")
   fun `cell 15 - value class method parameter survives export and the generated file compiles`() {
     val result = Tier1Harness.run(
       """

@@ -87,9 +87,64 @@ public readonly record struct CatResult(Cat Cat)
 
 Because `record struct` gives structural equality for free, `CatId`/`CatResult` don't need generated `Equals`/`GetHashCode` overrides the way [data classes](data-classes.md) do. C# derives them from the wrapped property automatically.
 
-## Known limitations
+## Methods with parameters
 
-Value-class methods are exported **without their parameters**. Both the primitive-underlying and reference-underlying method exporters emit the call with literal empty parens and declare no parameters, so a method taking an argument (e.g. `fun matches(other: String): Boolean`) generates invalid Kotlin. Only zero-arg methods work today — which is exactly what `isValid()` and `isAlive()` above are, and the entire value-class method corpus, so the gap stayed hidden. Tracked in [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md) Phase 4 and pinned as red cells by the adversarial forward fixture ([ADR-060](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/060-adversarial-forward-fixture.md)).
+Value-class methods (both primitive-underlying and reference-underlying) go through the shared
+callable plan ([ADR-062](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/062-forward-callable-plan.md)),
+including parameters. From `test-library/.../clinic/ClinicSample.kt` (ADR-060 cells 15 and 16):
+
+```kotlin
+value class ChartId(val value: String) {
+  fun matches(other: String): Boolean = value == other
+  fun isValid(): Boolean = value.isNotBlank()
+}
+
+value class ChartRef(val patient: Patient) {
+  fun label(suffix: String): String = "${patient.name}$suffix"
+}
+```
+
+Generated C#, from `Interop.cs`:
+
+```C#
+public readonly record struct ChartId
+{
+    public string Value { get; }
+
+    public ChartId(string value)
+    {
+        Value = Marshal.PtrToStringUTF8(CreateChecked(value))!;
+    }
+
+    public bool Matches(string other) => Native_Matches(Value, other);
+
+    public bool IsValid() => Native_IsValid(Value);
+}
+
+public readonly record struct ChartRef(Patient Patient)
+{
+    public string Label(string suffix) => Marshal.PtrToStringUTF8(Native_Label(Patient._handle, suffix))!;
+}
+```
+
+From `IntegrationTests/ValueClassTests.cs`:
+
+```C#
+[Fact]
+public void ChartId_Matches_SameValue_ReturnsTrue()
+{
+    var id = new ChartId("abc");
+    Assert.True(id.Matches("abc"));
+}
+
+[Fact]
+public void ChartRef_Label_AppendsSuffix()
+{
+    using var patient = new Patient("Rex");
+    var chart = new ChartRef(patient);
+    Assert.Equal("Rex-ward", chart.Label("-ward"));
+}
+```
 
 ## Using it from C#
 
@@ -152,6 +207,14 @@ public void CatId_PrimaryConstructor_TooLong_ThrowsArgumentException()
 }
 ```
 
+## Limitations
+
+- Reference-underlying value-class **primary** constructor `init` validation stays deferred
+  ([ADR-035](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/035-value-class-primary-constructor-validation.md));
+  primitive-underlying validation (the `CatId` path above) is in place.
+- Whether inherited members on a value class (for example `CharSequence` members via `by value`)
+  should be exported is still an open product decision; declared methods with parameters are planned.
+
 <seealso>
     <category ref="related">
         <a href="data-classes.md">Data classes</a>
@@ -161,5 +224,6 @@ public void CatId_PrimaryConstructor_TooLong_ThrowsArgumentException()
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/014-value-class-mapping.md">ADR-014: Value class mapping</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/033-value-class-constructor-exception-propagation.md">ADR-033: Value class constructor exception propagation</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/035-value-class-primary-constructor-validation.md">ADR-035: Value class primary constructor validation</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/062-forward-callable-plan.md">ADR-062: Forward callable plan</a>
     </category>
 </seealso>

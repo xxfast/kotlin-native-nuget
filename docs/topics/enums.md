@@ -85,11 +85,49 @@ public void Mood_Description_ReturnsCorrectString()
 }
 ```
 
+## Returned from a method
+
+An enum-typed method return crosses as an ordinal `int` and is cast back to the C# enum, the same
+way an enum property getter does. From `test-library/.../clinic/ClinicSample.kt`:
+
+```kotlin
+enum class Mood { CALM, ANXIOUS, PLAYFUL }
+
+class Patient(val name: String) {
+  fun mood(): Mood = Mood.CALM
+  fun describeMood(mood: Mood): Int = mood.ordinal
+}
+```
+
+```C#
+public global::TestLibrary.Clinic.Mood Mood()
+{
+    int result = Native_Mood(_handle, out IntPtr error);
+    if (error != IntPtr.Zero)
+    {
+        throw NugetErrorNative.BuildException(error);
+    }
+    return (global::TestLibrary.Clinic.Mood)result;
+}
+```
+
+From `IntegrationTests/ReturnAndPropertyMarshallingTests.cs`:
+
+```C#
+[Fact]
+public void Patient_Mood_ReturnsCalm()
+{
+    using var patient = new Patient("Oreo");
+    Assert.Equal(Mood.Calm, patient.Mood());
+}
+```
+
 <seealso>
     <category ref="related">
         <a href="classes-and-objects.md">Classes and objects</a>
     </category>
     <category ref="external">
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/006-enum-mapping.md">ADR-006: Enum mapping</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/062-forward-callable-plan.md">ADR-062: Forward callable plan</a>
     </category>
 </seealso>

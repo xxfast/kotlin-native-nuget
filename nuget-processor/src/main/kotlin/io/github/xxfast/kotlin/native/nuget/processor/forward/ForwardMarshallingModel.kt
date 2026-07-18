@@ -13,7 +13,17 @@ internal sealed interface BridgeType {
 
   data object String : BridgeType
 
-  data class Enum(val qualifiedName: kotlin.String) : BridgeType
+  /**
+   * @param qualifiedName Kotlin FQCN (used by the Kotlin export for `.entries[n]` / `.ordinal`).
+   * @param csharpType Public C# type spelling. Cross-namespace enums (e.g. reverse-generated
+   *   packages) need `global::Namespace.Name`; same-namespace simple names still work under
+   *   `global::` too, so classification always prefers the fully-qualified form when a root
+   *   namespace is available.
+   */
+  data class Enum(
+    val qualifiedName: kotlin.String,
+    val csharpType: kotlin.String = qualifiedName.substringAfterLast('.'),
+  ) : BridgeType
 
   data class ObjectHandle(val qualifiedName: kotlin.String) : BridgeType
 
@@ -159,10 +169,20 @@ internal enum class ForwardCallableOrigin {
   COMPANION,
   CONSTRUCTOR,
   COPY,
+
+  /**
+   * Value-class constructors, computed properties, and methods. Reconstruction of the value class
+   * from its underlying wire value is owned by the VALUE_CLASS emitters (ADR-014 / ADR-035).
+   */
+  VALUE_CLASS,
 }
 
 internal data class ForwardInvocation(
   val symbol: String,
+  /**
+   * Optional free-form slot. For [ForwardCallableOrigin.VALUE_CLASS] constructors this is the
+   * underlying property name used to unbox the constructed value (`CatId(...).id`).
+   */
   val receiver: String? = null,
   val origin: ForwardCallableOrigin = ForwardCallableOrigin.CLASS,
   /** Kotlin expression before the final method name for static/object calls. */
@@ -222,7 +242,9 @@ internal object ForwardCallablePlanValidator {
 
     validateType(plan.publicSignature.result, "public result")
     plan.publicSignature.parameters.forEach { parameter ->
-      require(parameter.name.isNotBlank()) { "Forward plan ${plan.publicSignature.name} has a blank public parameter name" }
+      require(parameter.name.isNotBlank()) {
+        "Forward plan ${plan.publicSignature.name} has a blank public parameter name"
+      }
       validateType(parameter.type, "public parameter ${parameter.name}")
     }
     plan.nativeExports.forEach { call -> validateCall(plan, call) }
@@ -311,7 +333,7 @@ internal object ForwardCallablePlanValidator {
     when (type) {
       BridgeType.Unit, BridgeType.Char, BridgeType.String, is BridgeType.Primitive, is BridgeType.Enum,
       is BridgeType.ObjectHandle,
-      -> Unit
+        -> Unit
 
       is BridgeType.ValueClass -> validateType(type.underlying, "$position value-class underlying type")
       is BridgeType.Nullable -> {
@@ -394,11 +416,26 @@ internal object ForwardCallablePlanValidator {
   }
 
   private fun ForwardConversion.helper(): ForwardHelperRequirement = when (this) {
-    ForwardConversion.STRING_TO_UTF8, ForwardConversion.UTF8_TO_STRING -> ForwardHelperRequirement.UTF8
-    ForwardConversion.ENUM_TO_ORDINAL, ForwardConversion.ORDINAL_TO_ENUM -> ForwardHelperRequirement.ENUM_ORDINAL
-    ForwardConversion.HANDLE_TO_STABLE_REF, ForwardConversion.STABLE_REF_TO_HANDLE -> ForwardHelperRequirement.STABLE_REF
-    ForwardConversion.BOX_VALUE_CLASS, ForwardConversion.UNBOX_VALUE_CLASS -> ForwardHelperRequirement.VALUE_CLASS
-    ForwardConversion.COLLECTION_TO_HANDLE, ForwardConversion.HANDLE_TO_COLLECTION -> ForwardHelperRequirement.COLLECTION
+    ForwardConversion.STRING_TO_UTF8,
+    ForwardConversion.UTF8_TO_STRING,
+      -> ForwardHelperRequirement.UTF8
+
+    ForwardConversion.ENUM_TO_ORDINAL,
+    ForwardConversion.ORDINAL_TO_ENUM,
+      -> ForwardHelperRequirement.ENUM_ORDINAL
+
+    ForwardConversion.HANDLE_TO_STABLE_REF,
+    ForwardConversion.STABLE_REF_TO_HANDLE,
+      -> ForwardHelperRequirement.STABLE_REF
+
+    ForwardConversion.BOX_VALUE_CLASS,
+    ForwardConversion.UNBOX_VALUE_CLASS,
+      -> ForwardHelperRequirement.VALUE_CLASS
+
+    ForwardConversion.COLLECTION_TO_HANDLE,
+    ForwardConversion.HANDLE_TO_COLLECTION,
+      -> ForwardHelperRequirement.COLLECTION
+
     ForwardConversion.DIRECT -> error("Direct conversion does not require a helper")
   }
 }

@@ -11,6 +11,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.cir.CirObject
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirStaticClass
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirValueClass
 import io.github.xxfast.kotlin.native.nuget.processor.cir.ordinaryNativeImports
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardAbiDirection as PlanAbiDirection
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardAbiWireType
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallablePlan
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallablePlanCatalog
@@ -51,8 +52,12 @@ internal data class ForwardAbiSignature(
 }
 
 internal fun List<ForwardAbiSignature>.canonicalText(): String =
-  sortedWith(compareBy({ signature -> signature.exportName }, { signature -> signature.toString() }))
-    .joinToString("\n")
+  sortedWith(
+    compareBy(
+      { signature -> signature.exportName },
+      { signature -> signature.toString() },
+    ),
+  ).joinToString("\n")
 
 /**
  * A generation-time assertion for C# native declarations represented by [CirDllImport], including
@@ -90,6 +95,7 @@ internal object ForwardAbiContract {
         is CirObject -> declaration.methods.filterIsInstance<CirDllImport>()
         is CirClass -> declaration.ordinaryNativeImports() +
             declaration.companionMembers.filterIsInstance<CirDllImport>()
+
         is CirValueClass -> declaration.ordinaryNativeImports()
         else -> emptyList()
       }
@@ -141,7 +147,8 @@ internal object ForwardAbiContract {
         "Forward ABI unexpected $actualLabel projection for $name: ${actualSignatures.single()}"
       }
       require(actualSignatures.isNotEmpty()) {
-        "Forward ABI missing $actualLabel projection for $name; expected ${expectedSignatures.single()}"
+        "Forward ABI missing $actualLabel projection for $name; " +
+            "expected ${expectedSignatures.single()}"
       }
       require(expectedSignatures.single() == actualSignatures.single()) {
         "Forward ABI plan mismatch for $name against $actualLabel; expected " +
@@ -150,9 +157,11 @@ internal object ForwardAbiContract {
     }
   }
 
-  private fun ForwardCallablePlan.toSignatures(): List<ForwardAbiSignature> = nativeExports.toSignatures()
+  private fun ForwardCallablePlan.toSignatures(): List<ForwardAbiSignature> =
+    nativeExports.toSignatures()
 
-  private fun ForwardPropertyPlan.toSignatures(): List<ForwardAbiSignature> = calls().toSignatures()
+  private fun ForwardPropertyPlan.toSignatures(): List<ForwardAbiSignature> =
+    calls().toSignatures()
 
   private fun List<ForwardNativeCall>.toSignatures(): List<ForwardAbiSignature> = map { call ->
     ForwardAbiSignature(
@@ -168,7 +177,11 @@ internal object ForwardAbiContract {
     ForwardAbiWireType.VOID -> ForwardAbiType.VOID
     ForwardAbiWireType.BOOLEAN -> ForwardAbiType.BOOL
     ForwardAbiWireType.INT8, ForwardAbiWireType.UINT8 -> ForwardAbiType.BYTE
-    ForwardAbiWireType.INT16, ForwardAbiWireType.UINT16, ForwardAbiWireType.CHAR16 -> ForwardAbiType.SHORT
+    ForwardAbiWireType.INT16,
+    ForwardAbiWireType.UINT16,
+    ForwardAbiWireType.CHAR16,
+      -> ForwardAbiType.SHORT
+
     ForwardAbiWireType.INT32, ForwardAbiWireType.UINT32 -> ForwardAbiType.INT
     ForwardAbiWireType.INT64, ForwardAbiWireType.UINT64 -> ForwardAbiType.LONG
     ForwardAbiWireType.FLOAT32 -> ForwardAbiType.FLOAT
@@ -178,11 +191,10 @@ internal object ForwardAbiContract {
     ForwardAbiWireType.UNKNOWN -> error("Forward plan contains an unknown ABI wire type")
   }
 
-  private fun io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardAbiDirection.toAbiDirection():
-      ForwardAbiDirection = when (this) {
-    io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardAbiDirection.IN -> ForwardAbiDirection.IN
-    io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardAbiDirection.OUT -> ForwardAbiDirection.OUT
-    io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardAbiDirection.IN_OUT ->
+  private fun PlanAbiDirection.toAbiDirection(): ForwardAbiDirection = when (this) {
+    PlanAbiDirection.IN -> ForwardAbiDirection.IN
+    PlanAbiDirection.OUT -> ForwardAbiDirection.OUT
+    PlanAbiDirection.IN_OUT ->
       error("Forward plan IN_OUT ABI direction has no legacy ForwardAbiContract projection")
   }
 
@@ -200,7 +212,9 @@ internal object ForwardAbiContract {
         ForwardAbiParameter(csharpType(parameter.nativeType))
       }
     }.toMutableList()
-    if (hasSyncErrorOut) parameters.add(ForwardAbiParameter(ForwardAbiType.POINTER, ForwardAbiDirection.OUT))
+    if (hasSyncErrorOut) {
+      parameters.add(ForwardAbiParameter(ForwardAbiType.POINTER, ForwardAbiDirection.OUT))
+    }
     return ForwardAbiSignature(name, csharpReturnType(returnType), parameters)
   }
 
@@ -222,16 +236,6 @@ internal object ForwardAbiContract {
         ForwardAbiParameter(kotlinParameterType(parameter.type), direction)
       },
     )
-  }
-
-  // Distinct from [kotlinType]/[kotlinReturnType] deliberately: `Char` is only a plannable
-  // *parameter* shape so far (MIGRATION.md Phase 7). Its legacy *result* route still declares an
-  // "IntPtr" C# return for a Kotlin `Char` return (ADR-060 cell 13, Phase 8, out of scope here),
-  // so widening the shared [kotlinType] to recognize `kotlin.Char` would make this checker correctly
-  // flag that pre-existing legacy mismatch too — a real defect, but not this slice's to fix.
-  private fun kotlinParameterType(type: TypeName): ForwardAbiType {
-    val name: String = type.toString().removeSuffix("?")
-    return if (name == "kotlin.Char") ForwardAbiType.SHORT else kotlinType(type)
   }
 
   private fun List<AnnotationSpec>.cNameValue(): String? = firstOrNull { annotation ->
@@ -269,7 +273,8 @@ internal object ForwardAbiContract {
       "kotlin.Unit" -> ForwardAbiType.VOID
       "kotlin.Boolean" -> ForwardAbiType.BOOL
       "kotlin.Byte", "kotlin.UByte" -> ForwardAbiType.BYTE
-      "kotlin.Short", "kotlin.UShort" -> ForwardAbiType.SHORT
+      // Char is CHAR16 on the wire (same ABI width as Short). Phase 8 admits Char results.
+      "kotlin.Char", "kotlin.Short", "kotlin.UShort" -> ForwardAbiType.SHORT
       "kotlin.Int", "kotlin.UInt" -> ForwardAbiType.INT
       "kotlin.Long", "kotlin.ULong" -> ForwardAbiType.LONG
       "kotlin.Float" -> ForwardAbiType.FLOAT
@@ -286,4 +291,6 @@ internal object ForwardAbiContract {
   } else {
     kotlinType(type)
   }
+
+  private fun kotlinParameterType(type: TypeName): ForwardAbiType = kotlinType(type)
 }

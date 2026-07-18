@@ -205,17 +205,23 @@ internal fun CirValueClass.propertyNativeImport(property: CirProperty): CirDllIm
   name = "Native_Get${property.name}",
   parameters = listOf(CirParameter("value", underlyingNativeType)),
   visibility = CirVisibility.PRIVATE,
+  marshalBooleanReturn = property.nativeReturnType == "bool",
 )
 
-internal fun CirValueClass.methodNativeImport(method: CirMethod): CirDllImport = CirDllImport(
-  libraryName = libraryName,
-  entryPoint = "${nativePrefix}_${method.nativeName}",
-  returnType = method.nativeReturnType,
-  name = "Native_${method.name}",
-  parameters = listOf(CirParameter("value", underlyingNativeType)),
-  visibility = CirVisibility.PRIVATE,
-  marshalBooleanReturn = method.nativeReturnType == "bool",
-)
+internal fun CirValueClass.methodNativeImport(method: CirMethod): CirDllImport {
+  val methodParams: List<CirParameter> = method.nativeParameters
+    ?: method.parameters.map { parameter -> parameter.copy(nativeType = parameter.type) }
+  return CirDllImport(
+    libraryName = libraryName,
+    entryPoint = "${nativePrefix}_${method.nativeName}",
+    returnType = method.nativeReturnType,
+    name = "Native_${method.name}",
+    parameters = listOf(CirParameter("value", underlyingNativeType)) + methodParams,
+    visibility = CirVisibility.PRIVATE,
+    hasSyncErrorOut = method.isSyncErrorCheckEnabled,
+    marshalBooleanReturn = method.nativeReturnType == "bool",
+  )
+}
 
 private fun String.toRawNativeParameter(): CirParameter {
   val separator: Int = lastIndexOf(' ')

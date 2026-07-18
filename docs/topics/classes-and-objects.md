@@ -9,7 +9,7 @@ A Kotlin `class` becomes a C# `class` backed by an opaque `StableRef` handle, im
 | member property (get) | property (get) | |
 | member property (get/set) | property (get/set) | |
 | object-typed property/return | property/return | new wrapper per access, identity not preserved |
-| instance method return (object, `T?`, `List<T>`, `String?`, `Int?`) | matching C# return type | same marshalling cascade as the property getter; nullable primitive is single-call, see Method returns below |
+| instance method return (object, `T?`, `List`/`Map`/`Set`, enum, `Char`, `String?`, `Int?`, …) | matching C# return type | same cascade as the property getter via the shared plan ([ADR-062](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/062-forward-callable-plan.md)); nullable numeric is single-call `valueOut`, see Method returns below |
 
 ## Kotlin
 
@@ -159,12 +159,14 @@ Disposal does not cascade. A parent wrapper's `Dispose()` only releases *its own
 
 ## Method returns
 
-An instance method returning an object, a collection, or a nullable type crosses the bridge through
-the same marshalling cascade the property getter already uses. The one exception is a nullable
-**primitive** return: a method might have side effects, so it can't reuse the property getter's
-two-call `hasValue`/`value` pattern (that would invoke the method twice). It gets a single-call
-shape instead: the export returns `bool` (has-value) and writes the value through a `valueOut`
-out-parameter.
+An instance method returning an object, a collection (`List`/`Map`/`Set` and mutable variants), an
+enum, a `Char`, or a nullable type crosses the bridge through the same planned marshalling path the
+property getter uses ([ADR-061](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/061-method-return-marshalling.md),
+[ADR-062](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/062-forward-callable-plan.md)).
+The one exception is a nullable **numeric** return: a method might have side effects, so it can't
+reuse the property getter's two-call `hasValue`/`value` pattern (that would invoke the method twice).
+It gets a single-call shape instead: the export returns `bool` (has-value) and writes the value
+through a `valueOut` out-parameter.
 
 From `test-library/src/nativeMain/kotlin/.../cat/Cat.kt`:
 
@@ -260,10 +262,15 @@ public void Cat_AgeInMonths_NonNullWhenAgeSet()
 ```
 
 The same cascade applies at the extension-function position; see [Extensions](extensions.md).
+Enum, `Char`, and `Map`/`Set` method returns are covered under the shared plan; clinic fixtures
+`Patient.Mood()`, `Patient.Initial()`, `Patient.Scores()`, and `Patient.Labels()` exercise them
+(see [Enums](enums.md), [Primitives and strings](primitives-and-strings.md), [Collections](collections.md)).
 
-## Known limitations
+## Limitations
 
-Method returns for an `enum`, a `Char`, and `Map`/`Set` are outside [ADR-061](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/061-method-return-marshalling.md)'s scope and still hit the pre-existing broken shapes: an enum return falls through the `isEnumReturn` exclusion, a `Char` return hits the same `defaultValueFor("kotlin.Char")` bug as ADR-060 cell 13, and `Map`/`Set` returns hit the same `defaultValueFor` fallback `List` had before its object-carrier fix. Tracked in [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md) Phase 3/4.
+- Nullable `Boolean` method returns remain unplanned and are skipped rather than fallthrough-emitted
+  ([ADR-062](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/062-forward-callable-plan.md)).
+- `Map`/`Set` **inputs** (parameters) are not planned yet; see [Collections](collections.md).
 
 <seealso>
     <category ref="related">
@@ -276,5 +283,6 @@ Method returns for an `enum`, a `Char`, and `Map`/`Set` are outside [ADR-061](ht
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/003-memory-management-across-bridge.md">ADR-003: Memory management across the bridge</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/005-object-return-semantics.md">ADR-005: Object return semantics</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/061-method-return-marshalling.md">ADR-061: Method return marshalling</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/062-forward-callable-plan.md">ADR-062: Forward callable plan</a>
     </category>
 </seealso>

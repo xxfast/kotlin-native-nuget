@@ -81,6 +81,7 @@ internal class ForwardCallablePlanner(
     objects: List<KSClassDeclaration>,
     properties: List<KSPropertyDeclaration>,
     extensionProperties: List<KSPropertyDeclaration>,
+    valueClasses: List<KSClassDeclaration> = emptyList(),
   ): ForwardCallablePlanCatalog {
     val entries: List<ForwardCallableCatalogEntry> = buildList {
       classes.forEach { cls -> addAll(classEntries(cls)) }
@@ -89,11 +90,181 @@ internal class ForwardCallablePlanner(
       extensionFunctions.forEach { function -> add(extensionEntry(function)) }
       objects.forEach { obj -> addAll(objectEntries(obj)) }
       classes.forEach { cls -> addAll(companionEntries(cls)) }
+      valueClasses.forEach { cls -> addAll(valueClassEntries(cls)) }
     }
     val propertyPlans: List<ForwardPropertyPlan> = ForwardPropertyPlanner(classifier).catalog(
       classes, properties, extensionProperties,
     )
     return ForwardCallablePlanCatalog(entries, propertyPlans)
+  }
+
+  /**
+   * Value-class constructors (ADR-035 primary/secondary numbering), non-underlying public
+   * properties, and public methods. Members keep the shipped no-errorOut ABI; only constructors
+   * carry an error slot. The receiver is always the *underlying* wire value (primitive/String as
+   * a Value named `value`, reference as a Handle named `handle`).
+   */
+  private fun valueClassEntries(cls: KSClassDeclaration): List<ForwardCallableCatalogEntry> {
+    val owner: String = cls.qualifiedName?.asString() ?: return emptyList()
+    val prefix: String = cls.simpleName.asString().lowercase()
+    val underlyingParam = cls.primaryConstructor?.parameters?.firstOrNull() ?: return emptyList()
+    val underlyingPropName: String = underlyingParam.name?.asString() ?: return emptyList()
+    val classifiedUnderlying: BridgeType = classifier.classify(underlyingParam.type.resolve())
+    // Sealed (and other handle-shaped specialized) underlyings still cross as StableRef handles
+    // on the shipped ABI — same as ObjectHandle. Map them to a Handle receiver so methods like
+    // ObservationResult.describe keep working after ordinary legacy deletion.
+    val underlyingType: BridgeType = if (
+      classifiedUnderlying is BridgeType.SpecializedProtocol &&
+      classifiedUnderlying.name.startsWith("sealed helper ")
+    ) {
+      BridgeType.ObjectHandle(classifiedUnderlying.name.removePrefix("sealed helper "))
+    } else {
+      classifiedUnderlying
+    }
+    val isReferenceUnderlying: Boolean = underlyingType is BridgeType.ObjectHandle
+
+    val receiver: ForwardReceiver = if (isReferenceUnderlying) {
+      ForwardReceiver.Handle(underlyingType, name = "handle")
+    } else {
+      ForwardReceiver.Value(underlyingType, name = "value")
+    }
+
+    return buildList {
+      addAll(
+        valueClassConstructorEntries(
+          cls,
+          owner,
+          prefix,
+          underlyingPropName,
+          underlyingType,
+          isReferenceUnderlying
+        )
+      )
+      addAll(valueClassPropertyEntries(cls, owner, prefix, underlyingPropName, receiver))
+      addAll(valueClassMethodEntries(cls, owner, prefix, receiver))
+    }
+  }
+
+  private fun valueClassConstructorEntries(
+    cls: KSClassDeclaration,
+    owner: String,
+    prefix: String,
+    underlyingPropName: String,
+    underlyingType: BridgeType,
+    isReferenceUnderlying: Boolean,
+  ): List<ForwardCallableCatalogEntry> {
+    // Constructor exports return the *underlying* value (ADR-014 unwrapped bridge), not a
+    // StableRef of the value class. Reference-underlying primaries are deferred (ADR-035).
+    val secondaryConstructors: List<KSFunctionDeclaration> = cls.declarations
+      .filterIsInstance<KSFunctionDeclaration>()
+      .filter { it.simpleName.asString() == "<init>" }
+      .filter { it != cls.primaryConstructor }
+      .filter { it.getVisibility() == Visibility.PUBLIC }
+      .toList()
+
+    // Reference-underlying constructors stay on the legacy path: ADR-035 defers the primary, and
+    // any secondary still uses the historical export numbering. Planning them would force the
+    // ObjectHandle/StableRef result shape, which is not the shipped (rare) secondary ABI.
+    if (isReferenceUnderlying) return emptyList()
+
+    val exports: List<Pair<KSFunctionDeclaration, Pair<String, String>>> = buildList {
+      val primary = cls.primaryConstructor
+      if (primary != null && primary.getVisibility() == Visibility.PUBLIC) {
+        add(primary to ("${prefix}_create" to ""))
+      }
+      secondaryConstructors.forEachIndexed { index, ctor ->
+        val number: Int = index + 2
+        add(ctor to ("${prefix}_create_$number" to "_$number"))
+      }
+    }
+
+    return exports.map { (ctor, names) ->
+      val (export, suffix) = names
+      planOrSkip(
+        symbol = "$owner.<init>$suffix",
+        publicName = "Create$suffix",
+        exportName = export,
+        receiver = ForwardReceiver.Static,
+        parameters = ctor.parameters.map { parameter ->
+          (parameter.name?.asString() ?: "_") to classifier.classify(parameter.type.resolve())
+        },
+        result = underlyingType,
+        origin = ForwardCallableOrigin.VALUE_CLASS,
+        target = owner,
+        // Underlying property name used by the Kotlin emitter to unbox: `Owner(args).prop`.
+        invocationReceiver = underlyingPropName,
+        includeError = true,
+      )
+    }
+  }
+
+  private fun valueClassPropertyEntries(
+    cls: KSClassDeclaration,
+    owner: String,
+    prefix: String,
+    underlyingPropName: String,
+    receiver: ForwardReceiver,
+  ): List<ForwardCallableCatalogEntry> = cls.getAllProperties()
+    .filter { it.getVisibility() == Visibility.PUBLIC }
+    .filter { it.simpleName.asString() != underlyingPropName }
+    .map { prop ->
+      val name: String = prop.simpleName.asString()
+      planOrSkip(
+        symbol = "$owner.$name",
+        publicName = name.replaceFirstChar { it.uppercase() },
+        exportName = "${prefix}_get_$name",
+        receiver = receiver,
+        parameters = emptyList(),
+        result = classifier.classify(prop.type.resolve()),
+        origin = ForwardCallableOrigin.VALUE_CLASS,
+        target = owner,
+        includeError = false,
+        // Property getter: export name contains `_get_`; emitter uses bare member access.
+        valueClassProperty = true,
+      )
+    }
+    .toList()
+
+  private fun valueClassMethodEntries(
+    cls: KSClassDeclaration,
+    owner: String,
+    prefix: String,
+    receiver: ForwardReceiver,
+  ): List<ForwardCallableCatalogEntry> {
+    val excluded: Set<String> = setOf(
+      "equals", "hashCode", "toString", "<init>",
+      "box-impl", "unbox-impl", "constructor-impl",
+      "hashCode-impl", "equals-impl", "equals-impl0", "toString-impl",
+    )
+    return cls.getAllFunctions()
+      .filter { it.getVisibility() == Visibility.PUBLIC }
+      .filter { it.simpleName.asString() !in excluded }
+      .map { method ->
+        val name: String = method.simpleName.asString()
+        val structuralReason: ForwardPlanSkipReason? = when {
+          method.modifiers.contains(Modifier.SUSPEND) -> ForwardPlanSkipReason.SUSPEND
+          method.typeParameters.isNotEmpty() -> ForwardPlanSkipReason.GENERIC
+          else -> null
+        }
+        if (structuralReason != null) {
+          ForwardCallableCatalogEntry.Skipped("$owner.$name", structuralReason)
+        } else {
+          planOrSkip(
+            symbol = "$owner.$name",
+            publicName = name.replaceFirstChar { it.uppercase() },
+            exportName = "${prefix}_$name",
+            receiver = receiver,
+            parameters = method.parameters.map { parameter ->
+              (parameter.name?.asString() ?: "_") to classifier.classify(parameter.type.resolve())
+            },
+            result = method.returnType?.resolve()?.let(classifier::classify) ?: BridgeType.Unit,
+            origin = ForwardCallableOrigin.VALUE_CLASS,
+            target = owner,
+            includeError = false,
+          )
+        }
+      }
+      .toList()
   }
 
   private fun classEntries(cls: KSClassDeclaration): List<ForwardCallableCatalogEntry> {
@@ -162,28 +333,32 @@ internal class ForwardCallablePlanner(
       constructors
         .filter { constructor -> constructor != primary }
         .forEachIndexed { index, constructor ->
-          add(constructorEntry(
-            constructor,
-            owner,
-            "${prefix}_create_${index + 2}",
-            "Create",
-            result,
-            "_${index + 2}",
-          ))
+          add(
+            constructorEntry(
+              constructor,
+              owner,
+              "${prefix}_create_${index + 2}",
+              "Create",
+              result,
+              "_${index + 2}",
+            )
+          )
         }
       if (cls.modifiers.contains(Modifier.DATA) && primary != null) {
         val receiver = ForwardReceiver.Handle(result)
-        add(planOrSkip(
-          symbol = "$owner.copy",
-          publicName = "Copy",
-          exportName = "${prefix}_copy",
-          receiver = receiver,
-          parameters = primary.parameters.map { parameter ->
-            (parameter.name?.asString() ?: "_") to classifier.classify(parameter.type.resolve())
-          },
-          result = result,
-          origin = ForwardCallableOrigin.COPY,
-        ))
+        add(
+          planOrSkip(
+            symbol = "$owner.copy",
+            publicName = "Copy",
+            exportName = "${prefix}_copy",
+            receiver = receiver,
+            parameters = primary.parameters.map { parameter ->
+              (parameter.name?.asString() ?: "_") to classifier.classify(parameter.type.resolve())
+            },
+            result = result,
+            origin = ForwardCallableOrigin.COPY,
+          )
+        )
       }
     }
   }
@@ -273,21 +448,102 @@ internal class ForwardCallablePlanner(
     }
     if (structuralReason != null) return ForwardCallableCatalogEntry.Skipped(symbol, structuralReason)
     val result: BridgeType = function.returnType?.resolve()?.let(classifier::classify) ?: BridgeType.Unit
-    if (origin == ForwardCallableOrigin.TOP_LEVEL && result is BridgeType.Nullable && result.type is BridgeType.Primitive) {
-      return ForwardCallableCatalogEntry.Skipped(symbol, ForwardPlanSkipReason.NULLABLE)
+    val parameters: List<Pair<String, BridgeType>> = function.parameters.map { parameter ->
+      (parameter.name?.asString() ?: "_") to classifier.classify(parameter.type.resolve())
+    }
+    // ADR-002 / MIGRATION: top-level nullable primitives keep the shipped two-call ABI.
+    if (origin == ForwardCallableOrigin.TOP_LEVEL &&
+      result is BridgeType.Nullable &&
+      result.type is BridgeType.Primitive
+    ) {
+      return topLevelNullablePrimitivePlan(
+        symbol = symbol,
+        publicName = publicName,
+        exportName = exportName,
+        parameters = parameters,
+        result = result,
+      )
     }
     return planOrSkip(
       symbol = symbol,
       publicName = publicName,
       exportName = exportName,
       receiver = ForwardReceiver.Static,
-      parameters = function.parameters.map { parameter ->
-        (parameter.name?.asString() ?: "_") to classifier.classify(parameter.type.resolve())
-      },
+      parameters = parameters,
       result = result,
       origin = origin,
       target = target,
     )
+  }
+
+  /**
+   * Plans a top-level `fun f(...): Primitive?` as [ForwardEvaluation.LEGACY_TWO_CALL]:
+   * `${export}_has_value` (BOOLEAN) + `${export}_value` (primitive wire), matching ADR-002.
+   * Method/extension nullable primitives stay on the ADR-061 single-call `valueOut` shape.
+   */
+  private fun topLevelNullablePrimitivePlan(
+    symbol: String,
+    publicName: String,
+    exportName: String,
+    parameters: List<Pair<String, BridgeType>>,
+    result: BridgeType.Nullable,
+  ): ForwardCallableCatalogEntry {
+    val primitive: BridgeType.Primitive = result.type as BridgeType.Primitive
+    val ineligible: BridgeType? = parameters.map { it.second }.firstOrNull { type ->
+      type.inputSkipReason() != null
+    }
+    if (ineligible != null) {
+      return ForwardCallableCatalogEntry.Skipped(symbol, requireNotNull(ineligible.inputSkipReason()))
+    }
+
+    val error: ForwardAbiParameter = errorParameter()
+    val nativeInputs: List<ForwardAbiParameter> = parameters.flatMap { (name, type) ->
+      nativeInputParameters(name, type)
+    }
+    val presence = ForwardNativeCall(
+      exportName = "${exportName}_has_value",
+      result = ForwardAbiWireType.BOOLEAN,
+      parameters = nativeInputs + error,
+    )
+    val value = ForwardNativeCall(
+      exportName = "${exportName}_value",
+      result = primitive.wireType(),
+      parameters = nativeInputs + error,
+    )
+    val helpers: Set<ForwardHelperRequirement> = buildSet {
+      add(ForwardHelperRequirement.STABLE_REF)
+      if (parameters.any { (_, type) -> type.unwrapNullable() == BridgeType.String }) {
+        add(ForwardHelperRequirement.UTF8)
+      }
+      if (parameters.any { (_, type) -> type.unwrapNullable() is BridgeType.Enum }) {
+        add(ForwardHelperRequirement.ENUM_ORDINAL)
+      }
+      if (parameters.any { (_, type) -> type.unwrapNullable() is BridgeType.Collection }) {
+        add(ForwardHelperRequirement.COLLECTION)
+      }
+    }
+    val plan = ForwardCallablePlan(
+      invocation = ForwardInvocation(
+        symbol = symbol,
+        origin = ForwardCallableOrigin.TOP_LEVEL,
+        target = null,
+      ),
+      publicSignature = ForwardPublicSignature(
+        name = publicName,
+        parameters = parameters.map { (name, type) -> ForwardPublicParameter(name, type) },
+        result = result,
+      ),
+      evaluation = ForwardEvaluation.LEGACY_TWO_CALL,
+      nativeExports = listOf(presence, value),
+      nativeImports = listOf(presence, value),
+      result = ForwardResultConvention(
+        wireType = ForwardAbiWireType.BOOLEAN,
+        transfer = transfer("result", result, ForwardFlow.OUT_OF_KOTLIN),
+      ),
+      errorSlot = error,
+      helperRequirements = helpers,
+    ).validate()
+    return ForwardCallableCatalogEntry.Planned(plan)
   }
 
   private fun extensionEntry(function: KSFunctionDeclaration): ForwardCallableCatalogEntry {
@@ -326,9 +582,16 @@ internal class ForwardCallablePlanner(
     result: BridgeType,
     origin: ForwardCallableOrigin,
     target: String? = null,
+    invocationReceiver: String? = null,
+    includeError: Boolean = true,
+    valueClassProperty: Boolean = false,
   ): ForwardCallableCatalogEntry {
     val inputTypes: List<BridgeType> = buildList {
-      if (receiver is ForwardReceiver.Value) add(receiver.type)
+      when (receiver) {
+        is ForwardReceiver.Value -> add(receiver.type)
+        is ForwardReceiver.Handle -> add(receiver.type)
+        ForwardReceiver.Static -> Unit
+      }
       addAll(parameters.map { it.second })
     }
     val ineligible: BridgeType? = inputTypes
@@ -342,17 +605,36 @@ internal class ForwardCallablePlanner(
       return ForwardCallableCatalogEntry.Skipped(symbol, requireNotNull(result.skipReason()))
     }
 
-    val error: ForwardAbiParameter = errorParameter()
+    val error: ForwardAbiParameter? = if (includeError) errorParameter() else null
     val nativeParameters: List<ForwardAbiParameter> = receiverParameter(receiver) +
         parameters.flatMap { (name, type) -> nativeInputParameters(name, type) } +
-        resultShape.extraParameters + error
+        resultShape.extraParameters + listOfNotNull(error)
     val nativeCall = ForwardNativeCall(
       exportName = exportName,
       result = resultShape.wireType,
       parameters = nativeParameters,
     )
+    val helpers: Set<ForwardHelperRequirement> = buildSet {
+      add(ForwardHelperRequirement.STABLE_REF)
+      if (origin == ForwardCallableOrigin.VALUE_CLASS) add(ForwardHelperRequirement.VALUE_CLASS)
+      addAll(resultShape.helperRequirements)
+      if (inputTypes.any { type -> type.unwrapNullable() == BridgeType.String }) {
+        add(ForwardHelperRequirement.UTF8)
+      }
+      if (inputTypes.any { type -> type.unwrapNullable() is BridgeType.Enum }) {
+        add(ForwardHelperRequirement.ENUM_ORDINAL)
+      }
+      if (inputTypes.any { type -> type.unwrapNullable() is BridgeType.Collection }) {
+        add(ForwardHelperRequirement.COLLECTION)
+      }
+    }
     val plan = ForwardCallablePlan(
-      invocation = ForwardInvocation(symbol, origin = origin, target = target),
+      invocation = ForwardInvocation(
+        symbol = symbol,
+        receiver = invocationReceiver,
+        origin = origin,
+        target = if (valueClassProperty) "$target#property" else target,
+      ),
       publicSignature = ForwardPublicSignature(
         name = publicName,
         parameters = parameters.map { (name, type) -> ForwardPublicParameter(name, type) },
@@ -367,23 +649,7 @@ internal class ForwardCallablePlanner(
       ),
       errorSlot = error,
       cleanup = resultShape.cleanup,
-      helperRequirements = setOf(ForwardHelperRequirement.STABLE_REF) +
-          resultShape.helperRequirements +
-          (if (inputTypes.any { type -> type.unwrapNullable() == BridgeType.String }) {
-            setOf(ForwardHelperRequirement.UTF8)
-          } else {
-            emptySet()
-          }) +
-          (if (inputTypes.any { type -> type.unwrapNullable() is BridgeType.Enum }) {
-            setOf(ForwardHelperRequirement.ENUM_ORDINAL)
-          } else {
-            emptySet()
-          }) +
-          (if (inputTypes.any { type -> type.unwrapNullable() is BridgeType.Collection }) {
-            setOf(ForwardHelperRequirement.COLLECTION)
-          } else {
-            emptySet()
-          }),
+      helperRequirements = helpers,
     ).validate()
     return ForwardCallableCatalogEntry.Planned(plan)
   }
@@ -531,17 +797,41 @@ internal class ForwardCallablePlanner(
   )
 
   private fun BridgeType.shapeOrNull(): ForwardResultShape? = when (this) {
-    BridgeType.Unit, is BridgeType.Primitive -> ForwardResultShape(
+    BridgeType.Unit, is BridgeType.Primitive, BridgeType.Char -> ForwardResultShape(
       wireType = wireType(),
       transfer = transfer("result", this, ForwardFlow.OUT_OF_KOTLIN),
     )
 
+    // String results cross as a native pointer (Kotlin String / C# IntPtr + PtrToStringUTF8),
+    // matching property getters and the shipped value-class method ABI.
+    BridgeType.String -> ForwardResultShape(
+      wireType = ForwardAbiWireType.POINTER,
+      transfer = ForwardTransfer(
+        subject = "result",
+        type = this,
+        flow = ForwardFlow.OUT_OF_KOTLIN,
+        passing = ForwardPassing.VALUE,
+        ownership = ForwardOwnership.MATERIALIZED,
+        conversion = ForwardConversion.UTF8_TO_STRING,
+      ),
+      helperRequirements = setOf(ForwardHelperRequirement.UTF8),
+    )
+
+    is BridgeType.Enum -> ForwardResultShape(
+      wireType = ForwardAbiWireType.INT32,
+      transfer = ForwardTransfer(
+        subject = "result",
+        type = this,
+        flow = ForwardFlow.OUT_OF_KOTLIN,
+        passing = ForwardPassing.VALUE,
+        ownership = ForwardOwnership.BORROWED,
+        conversion = ForwardConversion.ENUM_TO_ORDINAL,
+      ),
+      helperRequirements = setOf(ForwardHelperRequirement.ENUM_ORDINAL),
+    )
+
     is BridgeType.ObjectHandle -> handleResultShape(this)
-    is BridgeType.Collection -> if (kind == CollectionKind.LIST || kind == CollectionKind.MUTABLE_LIST) {
-      handleResultShape(this, ForwardHelperRequirement.COLLECTION)
-    } else {
-      null
-    }
+    is BridgeType.Collection -> handleResultShape(this, ForwardHelperRequirement.COLLECTION)
 
     is BridgeType.Nullable -> nullableResultShape(type)
     else -> null
@@ -621,30 +911,40 @@ internal class ForwardCallablePlanner(
   private sealed interface ForwardReceiver {
     val type: BridgeType?
 
-    data class Handle(override val type: BridgeType) : ForwardReceiver
+    data class Handle(
+      override val type: BridgeType,
+      val name: String = "handle",
+    ) : ForwardReceiver
 
-    data class Value(override val type: BridgeType) : ForwardReceiver
+    data class Value(
+      override val type: BridgeType,
+      val name: String = "receiver",
+    ) : ForwardReceiver
 
-    data object Static : ForwardReceiver { override val type: BridgeType? = null }
+    data object Static : ForwardReceiver {
+      override val type: BridgeType? = null
+    }
   }
 
   private fun receiverParameter(receiver: ForwardReceiver): List<ForwardAbiParameter> = when (receiver) {
-      is ForwardReceiver.Handle -> listOf(ForwardAbiParameter(
-        name = "handle",
+    is ForwardReceiver.Handle -> listOf(
+      ForwardAbiParameter(
+        name = receiver.name,
         wireType = ForwardAbiWireType.POINTER,
         direction = ForwardAbiDirection.IN,
         transfer = ForwardTransfer(
-          subject = "handle",
+          subject = receiver.name,
           type = receiver.type,
           flow = ForwardFlow.INTO_KOTLIN,
           passing = ForwardPassing.VALUE,
           ownership = ForwardOwnership.BORROWED,
           conversion = ForwardConversion.HANDLE_TO_STABLE_REF,
         ),
-      ))
+      )
+    )
 
-      is ForwardReceiver.Value -> nativeInputParameters("receiver", receiver.type)
-      ForwardReceiver.Static -> emptyList()
+    is ForwardReceiver.Value -> nativeInputParameters(receiver.name, receiver.type)
+    ForwardReceiver.Static -> emptyList()
   }
 
   private fun BridgeType.skipReason(): ForwardPlanSkipReason? = when (this) {
@@ -714,7 +1014,7 @@ internal class ForwardCallablePlanner(
     is BridgeType.SpecializedProtocol,
     is BridgeType.RawKSType,
     is BridgeType.Unsupported,
-    -> error("Forward planner requested a wire type for ineligible $this")
+      -> error("Forward planner requested a wire type for ineligible $this")
   }
 
   private fun BridgeType.unwrapNullable(): BridgeType = if (this is BridgeType.Nullable) type else this

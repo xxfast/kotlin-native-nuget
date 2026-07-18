@@ -15,6 +15,31 @@ private fun syncErrorArguments(parameters: String): String = if (parameters.isEm
   "$parameters, out IntPtr error"
 }
 
+/**
+ * Named specialized-protocol CIR adapter for top-level functions that are not planned:
+ * sealed-class and generic-declaration returns. Ordinary callables (including ADR-002
+ * nullable-primitive two-call) are projected from [ForwardCallablePlan].
+ */
+internal fun translateSpecializedFunction(
+  func: KSFunctionDeclaration,
+  libraryName: String,
+  rootPackage: String,
+  rootNamespace: String,
+  tracker: CollectionHelperTracker,
+  exportedTypes: Set<String>,
+  logger: KSPLogger,
+): List<CirMember> {
+  val returnType = func.returnType?.resolve()?.expandAliases()
+  val returnDecl: KSClassDeclaration? = returnType?.declaration as? KSClassDeclaration
+  val isSealedReturnType: Boolean = returnDecl?.modifiers?.contains(Modifier.SEALED) == true
+  val isGenericReturnType: Boolean = returnDecl?.typeParameters?.isNotEmpty() == true &&
+      returnType != null && returnType.arguments.isNotEmpty()
+  if (!isSealedReturnType && !isGenericReturnType) return emptyList()
+  return translateFunction(
+    func, libraryName, rootPackage, rootNamespace, tracker, exportedTypes, logger,
+  )
+}
+
 internal fun translateFunction(
   func: KSFunctionDeclaration,
   libraryName: String,

@@ -18,7 +18,7 @@ class Tier1CompileCellsTest {
    * error-path fallback), so the try/catch expression infers `Patient?` against a declared
    * non-null `Patient` return — "return type mismatch: expected 'Patient', actual 'Patient?'."
    * Same root cause as cells 6 and 10: the object carrier has no `StableRef` branch either.
-  */
+   */
   @Test
   fun `cell 2 - object method returning an object compiles`() {
     val result = Tier1Harness.run(
@@ -128,7 +128,7 @@ class Tier1CompileCellsTest {
    * `null` on the catch path — "return type mismatch: expected 'Patient', actual 'Patient?'."
    * Nobody noticed because every factory in the corpus is a companion (`Cat.fromName`), which
    * routes through a different, StableRef-using path (`ClassExports.kt:760`).
-  */
+   */
   @Test
   fun `cell 10 - top-level factory returning a plain class compiles`() {
     val result = Tier1Harness.run(
@@ -148,14 +148,10 @@ class Tier1CompileCellsTest {
   }
 
   /**
-   * Cell 13 · obs K. Class method return × `Char`. Not a wire mismatch — it never reaches the
-   * wire: `defaultValueFor("kotlin.Char")` is `"0"` (`Helpers.kt:27`, the `startsWith("kotlin.")`
-   * branch), so the catch path yields an `Int` literal from a function declared to return `Char`
-   * — "return type mismatch: expected 'Char', actual ...` (an inferred common supertype of
-   * `Char` and `Int`, verified against the real compiler)."
+   * Cell 13 · LANDS NOW (MIGRATION.md Phase 8). Class method return × `Char` — shared plan path
+   * uses `'\u0000'` as the catch default, so the export is valid Kotlin.
    */
   @Test
-  @XFail("ADR-060 cell 13 - class method returning Char is invalid Kotlin")
   fun `cell 13 - class method returning Char compiles`() {
     val result = Tier1Harness.run(
       """
@@ -179,7 +175,6 @@ class Tier1CompileCellsTest {
    * primitive-underlying branch cell 15 pins. "no value passed for parameter 'suffix'."
    */
   @Test
-  @XFail("ADR-060 cell 16 - value class (reference-underlying) method drops its parameter")
   fun `cell 16 - value class (reference-underlying) method parameter survives export`() {
     val result = Tier1Harness.run(
       """
@@ -332,10 +327,9 @@ class Tier1CompileCellsTest {
    * at all, so nothing invalid ever reaches the compiler either).
    */
   @Test
-  @XFail(
-    "ADR-060 cell 23 - suspend+reified+generic extension function is invalid Kotlin ×4 (BUG-010)",
-  )
   fun `cell 23 - suspend inline reified extension function returning Result compiles`() {
+    // Phase 10: unplanned specialized/unsupported extensions are skipped rather than emitted
+    // with IntPtr/defaultValueFor fallthrough, so the KSP-generated exports compile cleanly.
     val result = Tier1Harness.run(
       """
       package tier1.cell23
@@ -473,12 +467,9 @@ class Tier1CompileCellsTest {
    * reference), which is fine — generic-method support is out of scope here.
    */
   @Test
-  @XFail(
-    "class-method with a method-level type parameter is guarded against crashing the KSP run, " +
-        "but the generated reference to the unbound T is still invalid Kotlin; generic-method " +
-        "support is out of scope for the type-argument fix",
-  )
   fun `class-method with its own type parameter compiles`() {
+    // Phase 10: GENERIC structural skip omits the method from ordinary plan emission, so no
+    // unbound-T export is generated and the remaining CNameExports compile cleanly.
     val result = Tier1Harness.run(
       """
       package tier1.methodtypeparam

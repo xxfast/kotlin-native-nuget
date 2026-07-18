@@ -10,10 +10,13 @@ import io.github.xxfast.kotlin.native.nuget.processor.cir.FLOW_TYPES
 import io.github.xxfast.kotlin.native.nuget.processor.cir.LAMBDA_TYPES
 import io.github.xxfast.kotlin.native.nuget.processor.cir.SUSPEND_LAMBDA_TYPES
 import io.github.xxfast.kotlin.native.nuget.processor.cir.expandAliases
+import io.github.xxfast.kotlin.native.nuget.processor.cir.mapPackageToNamespace
 
 /** The declarations whose StableRef handles are part of this forward export set. */
 internal data class ForwardBridgeTypeContext(
   val exportedObjectHandles: Set<String>,
+  val rootPackage: String = "",
+  val rootNamespace: String = "",
 )
 
 /**
@@ -29,7 +32,8 @@ internal class ForwardBridgeTypeClassifier(
     val classified: BridgeType = classifyNonNullable(expanded)
     // `KSTypeAlias.type.resolve()` describes the alias target and can lose a `?` applied at the
     // alias use site, so retain nullability from both the original use and the expanded target.
-    return if (type.isMarkedNullable || expanded.isMarkedNullable) BridgeType.Nullable(classified) else classified
+    val isNullable: Boolean = type.isMarkedNullable || expanded.isMarkedNullable
+    return if (isNullable) BridgeType.Nullable(classified) else classified
   }
 
   private fun classifyNonNullable(type: KSType): BridgeType {
@@ -41,13 +45,15 @@ internal class ForwardBridgeTypeClassifier(
       )
     }
 
-    val classDeclaration: KSClassDeclaration = declaration as? KSClassDeclaration ?: return BridgeType.RawKSType(
-      declaration.qualifiedName?.asString() ?: declaration.simpleName.asString(),
-    )
-    val qualifiedName: String = classDeclaration.qualifiedName?.asString() ?: return BridgeType.Unsupported(
-      classDeclaration.simpleName.asString(),
-      "local and anonymous declarations are not bridgeable",
-    )
+    val classDeclaration: KSClassDeclaration = declaration as? KSClassDeclaration
+      ?: return BridgeType.RawKSType(
+        declaration.qualifiedName?.asString() ?: declaration.simpleName.asString(),
+      )
+    val qualifiedName: String = classDeclaration.qualifiedName?.asString()
+      ?: return BridgeType.Unsupported(
+        classDeclaration.simpleName.asString(),
+        "local and anonymous declarations are not bridgeable",
+      )
 
     knownScalarType(qualifiedName)?.let { return it }
     if (qualifiedName == "kotlin.Char") return BridgeType.Char
@@ -55,7 +61,20 @@ internal class ForwardBridgeTypeClassifier(
     specializedProtocol(qualifiedName)?.let { return it }
     collectionType(qualifiedName, type.arguments)?.let { return it }
 
-    if (classDeclaration.classKind == ClassKind.ENUM_CLASS) return BridgeType.Enum(qualifiedName)
+    if (classDeclaration.classKind == ClassKind.ENUM_CLASS) {
+      val simpleName: String = classDeclaration.simpleName.asString()
+      val csharpType: String = if (context.rootNamespace.isEmpty()) {
+        simpleName
+      } else {
+        val namespace: String = mapPackageToNamespace(
+          classDeclaration.packageName.asString(),
+          context.rootPackage,
+          context.rootNamespace,
+        )
+        "global::$namespace.$simpleName"
+      }
+      return BridgeType.Enum(qualifiedName, csharpType)
+    }
     if (classDeclaration.modifiers.contains(Modifier.VALUE)) return valueClass(classDeclaration, qualifiedName)
     if (classDeclaration.modifiers.contains(Modifier.SEALED)) {
       return BridgeType.SpecializedProtocol("sealed helper $qualifiedName")
@@ -66,22 +85,34 @@ internal class ForwardBridgeTypeClassifier(
     if (classDeclaration.typeParameters.isNotEmpty()) {
       return BridgeType.SpecializedProtocol("generic declaration $qualifiedName")
     }
-    if (classDeclaration.classKind != ClassKind.CLASS && classDeclaration.classKind != ClassKind.OBJECT) {
-      return BridgeType.Unsupported(qualifiedName, "${classDeclaration.classKind} declarations are not bridgeable")
+    val isClassOrObject: Boolean =
+      classDeclaration.classKind == ClassKind.CLASS ||
+          classDeclaration.classKind == ClassKind.OBJECT
+    if (!isClassOrObject) {
+      return BridgeType.Unsupported(
+        qualifiedName,
+        "${classDeclaration.classKind} declarations are not bridgeable",
+      )
     }
     if (qualifiedName !in context.exportedObjectHandles) {
-      return BridgeType.Unsupported(qualifiedName, "declaration is not in the exported object-handle set")
+      return BridgeType.Unsupported(
+        qualifiedName,
+        "declaration is not in the exported object-handle set",
+      )
     }
     return BridgeType.ObjectHandle(qualifiedName)
   }
 
   private fun valueClass(declaration: KSClassDeclaration, qualifiedName: String): BridgeType {
-    val underlying = declaration.primaryConstructor
+    val underlying: KSType = declaration.primaryConstructor
       ?.parameters
       ?.singleOrNull()
       ?.type
       ?.resolve()
-      ?: return BridgeType.Unsupported(qualifiedName, "value class must have exactly one underlying property")
+      ?: return BridgeType.Unsupported(
+        qualifiedName,
+        "value class must have exactly one underlying property",
+      )
     return BridgeType.ValueClass(qualifiedName, classify(underlying))
   }
 
@@ -107,7 +138,8 @@ internal class ForwardBridgeTypeClassifier(
       return BridgeType.Collection(kind, key = classify(key), value = classify(value))
     }
     if (arguments.size != 1) return BridgeType.RawCollection(kind)
-    val element: KSType = arguments.single().type?.resolve() ?: return BridgeType.RawCollection(kind)
+    val element: KSType = arguments.single().type?.resolve()
+      ?: return BridgeType.RawCollection(kind)
     return BridgeType.Collection(kind, element = classify(element))
   }
 
@@ -130,7 +162,9 @@ internal class ForwardBridgeTypeClassifier(
   private fun specializedProtocol(qualifiedName: String): BridgeType.SpecializedProtocol? = when {
     qualifiedName in FLOW_TYPES -> BridgeType.SpecializedProtocol("flow $qualifiedName")
     qualifiedName in LAMBDA_TYPES -> BridgeType.SpecializedProtocol("lambda $qualifiedName")
-    qualifiedName in SUSPEND_LAMBDA_TYPES -> BridgeType.SpecializedProtocol("suspend lambda $qualifiedName")
+    qualifiedName in SUSPEND_LAMBDA_TYPES ->
+      BridgeType.SpecializedProtocol("suspend lambda $qualifiedName")
+
     else -> null
   }
 }

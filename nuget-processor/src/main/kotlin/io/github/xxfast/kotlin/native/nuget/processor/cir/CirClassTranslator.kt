@@ -13,10 +13,10 @@ import com.google.devtools.ksp.symbol.Variance
 import com.google.devtools.ksp.symbol.Visibility
 import io.github.xxfast.kotlin.native.nuget.processor.exports.findInterfaceBridgePairs
 import io.github.xxfast.kotlin.native.nuget.processor.exports.findStoredCallbackPairs
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallablePlan
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallablePlanCatalog
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCirPlanProjection
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCirPropertyProjection
-import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardHelperRequirement
 import io.github.xxfast.kotlin.native.nuget.processor.forward.planFor
 import io.github.xxfast.kotlin.native.nuget.processor.toCName
 
@@ -54,22 +54,13 @@ internal fun translateClass(
   }
 
   val constructor = cls.primaryConstructor
-  val cirConstructor: CirConstructor? = if (constructor != null) {
+  val cirConstructor: CirConstructor? = if (constructor != null && !isAbstract) {
     val planned = callableCatalog.planFor("${cls.qualifiedName?.asString() ?: name}.<init>")
     if (planned != null) {
+      tracker.trackPlan(planned)
       ForwardCirPlanProjection.constructor(planned)
     } else {
-      val ctorParams: List<CirParameter> = constructor.parameters.map { param ->
-        val resolved: KSType = param.type.resolve().expandAliases()
-        val kotlinType: String = resolved.declaration.simpleName.asString()
-        CirParameter(param.name?.asString() ?: "_", mapParamType(kotlinType))
-      }
-
-      CirConstructor(
-        parameters = ctorParams,
-        body = "",
-        hasErrorCheck = true,
-      )
+      null // ordinary constructor without a plan: no IntPtr fallthrough
     }
   } else null
 
@@ -80,24 +71,14 @@ internal fun translateClass(
     .filter { it != cls.primaryConstructor }
     .filter { it.getVisibility() == Visibility.PUBLIC }
     .toList()
-    .mapIndexed { index, ctor ->
+    .mapIndexedNotNull { index, _ ->
       val suffix = "_${index + 2}"
       val planned = callableCatalog.planFor("${cls.qualifiedName?.asString() ?: name}.<init>$suffix")
       if (planned != null) {
+        tracker.trackPlan(planned)
         ForwardCirPlanProjection.constructor(planned, suffix)
       } else {
-        val params: List<CirParameter> = ctor.parameters.map { param ->
-          val resolved: KSType = param.type.resolve().expandAliases()
-          val kotlinType: String = resolved.declaration.simpleName.asString()
-          CirParameter(param.name?.asString() ?: "_", mapParamType(kotlinType))
-        }
-
-        CirConstructor(
-          parameters = params,
-          body = "",
-          hasErrorCheck = true,
-          nativeSuffix = suffix,
-        )
+        null
       }
     }
 
@@ -123,61 +104,23 @@ internal fun translateClass(
     .mapNotNull { prop ->
       val propName: String = prop.simpleName.asString()
       val planned = callableCatalog.propertyFor("${cls.qualifiedName?.asString() ?: name}.$propName")
-      if (planned != null) return@mapNotNull ForwardCirPropertyProjection.classProperty(planned)
+      if (planned != null) {
+        tracker.trackProperty(planned)
+        return@mapNotNull ForwardCirPropertyProjection.classProperty(planned)
+      }
+      // Named specialized-protocol property adapters only (lambda / suspend-lambda / Flow).
+      // Ordinary property types without a plan are skipped — no mapReturnType IntPtr fallthrough.
       val propTypeResolved: KSType = prop.type.resolve().expandAliases()
-      val propType: String = propTypeResolved.declaration.simpleName.asString()
-      val isNullable: Boolean = propTypeResolved.isMarkedNullable
-      val isMutable: Boolean = prop.isMutable
       val csPropName: String = propName.replaceFirstChar { it.uppercase() }
-
-      val isEnumType: Boolean = (propTypeResolved.declaration as? KSClassDeclaration)
-        ?.classKind == ClassKind.ENUM_CLASS
-
       val qualifiedTypeName: String? = propTypeResolved.declaration.qualifiedName?.asString()
-      val isListType: Boolean = qualifiedTypeName == "kotlin.collections.List"
-      val isMutableListType: Boolean = qualifiedTypeName == "kotlin.collections.MutableList"
-      val isMapType: Boolean = qualifiedTypeName == "kotlin.collections.Map"
-      val isMutableMapType: Boolean = qualifiedTypeName == "kotlin.collections.MutableMap"
-      val isSetType: Boolean = qualifiedTypeName == "kotlin.collections.Set"
-      val isMutableSetType: Boolean = qualifiedTypeName == "kotlin.collections.MutableSet"
-
-      val listElementType: String? = if (isListType || isMutableListType) {
-        val elementType = propTypeResolved.arguments.firstOrNull()?.type?.resolve()
-        val elementTypeName: String = elementType?.declaration?.simpleName?.asString() ?: "Any"
-        KOTLIN_TO_CSHARP_PARAM[elementTypeName] ?: elementTypeName
-      } else null
-
-      val mapKeyType: String? = if (isMapType || isMutableMapType) {
-        val keyType = propTypeResolved.arguments.getOrNull(0)?.type?.resolve()
-        val keyTypeName: String = keyType?.declaration?.simpleName?.asString() ?: "Any"
-        KOTLIN_TO_CSHARP_PARAM[keyTypeName] ?: keyTypeName
-      } else null
-
-      val mapValueType: String? = if (isMapType || isMutableMapType) {
-        val valueType = propTypeResolved.arguments.getOrNull(1)?.type?.resolve()
-        val valueTypeName: String = valueType?.declaration?.simpleName?.asString() ?: "Any"
-        KOTLIN_TO_CSHARP_PARAM[valueTypeName] ?: valueTypeName
-      } else null
-
-      val setElementType: String? = if (isSetType || isMutableSetType) {
-        val elementType = propTypeResolved.arguments.firstOrNull()?.type?.resolve()
-        val elementTypeName: String = elementType?.declaration?.simpleName?.asString() ?: "Any"
-        KOTLIN_TO_CSHARP_PARAM[elementTypeName] ?: elementTypeName
-      } else null
-
-      if (isListType || isMutableListType) tracker.needsList = true
-      if (isMapType || isMutableMapType) tracker.needsMap = true
-      if (isSetType || isMutableSetType) tracker.needsSet = true
 
       val isLambdaType: Boolean = qualifiedTypeName in LAMBDA_TYPES
       val lambdaArity: Int = if (isLambdaType) propTypeResolved.arguments.size - 1 else -1
-
       if (isLambdaType) tracker.lambdaArities.add(lambdaArity)
 
       val isSuspendLambdaType: Boolean = qualifiedTypeName in SUSPEND_LAMBDA_TYPES
       val suspendLambdaArity: Int =
         if (isSuspendLambdaType) propTypeResolved.arguments.size - 1 else -1
-
       if (isSuspendLambdaType) {
         tracker.suspendLambdaArities.add(suspendLambdaArity)
         tracker.needsAsync = true
@@ -189,23 +132,12 @@ internal fun translateClass(
         val elementTypeName: String = elementType?.declaration?.simpleName?.asString() ?: "Any"
         KOTLIN_TO_CSHARP_PARAM[elementTypeName] ?: elementTypeName
       } else null
-
       if (isFlowType) {
         tracker.needsFlow = true
         tracker.needsAsync = true
       }
 
-      val isReferenceType: Boolean = propType !in KOTLIN_TO_CSHARP_RETURN && !isEnumType &&
-          !isListType && !isMutableListType && !isMapType && !isMutableMapType &&
-          !isSetType && !isMutableSetType && !isLambdaType && !isSuspendLambdaType &&
-          !isFlowType
-
-      if (isReferenceType) {
-        if (qualifiedTypeName != null && qualifiedTypeName !in exportedTypes) {
-          logger.warn("Skipping property '${cls.simpleName.asString()}.$propName': unsupported type '$qualifiedTypeName'")
-          return@mapNotNull null
-        }
-      }
+      if (!isLambdaType && !isSuspendLambdaType && !isFlowType) return@mapNotNull null
 
       val lambdaTypeArgs: List<String> = if (isLambdaType) {
         propTypeResolved.arguments.map { arg ->
@@ -243,333 +175,44 @@ internal fun translateClass(
         }
       } else ""
 
-      val isNullablePrimitive: Boolean = isNullable && !isReferenceType && !isEnumType &&
-          !isListType && !isMutableListType && !isMapType && !isMutableMapType &&
-          !isSetType && !isMutableSetType && !isLambdaType && !isSuspendLambdaType
-      val isNullableString: Boolean = isNullablePrimitive && propType == "String"
-      val isNullableValueType: Boolean = isNullablePrimitive && propType != "String"
-
-      val nativeReturnType: String = when {
-        isLambdaType -> "IntPtr"
-        isSuspendLambdaType -> "IntPtr"
-        isFlowType -> "IntPtr"
-        (isListType || isMutableListType) -> "IntPtr"
-        (isMapType || isMutableMapType) -> "IntPtr"
-        (isSetType || isMutableSetType) -> "IntPtr"
-        isEnumType -> "int"
-        isReferenceType -> "IntPtr"
-        isNullableString -> "IntPtr"
-        isNullableValueType -> "bool"
-        else -> mapReturnType(propType)
-      }
-
+      val nativeReturnType: String = "IntPtr"
       val type: String = when {
         isLambdaType -> lambdaCsType
         isSuspendLambdaType -> suspendLambdaCsType
         isFlowType -> "KotlinFlow<$flowElementType>"
-        isListType -> "IReadOnlyList<$listElementType>"
-        isMutableListType -> "IList<$listElementType>"
-        isMapType -> "IReadOnlyDictionary<$mapKeyType, $mapValueType>"
-        isMutableMapType -> "IDictionary<$mapKeyType, $mapValueType>"
-        isSetType -> "IReadOnlySet<$setElementType>"
-        isMutableSetType -> "ISet<$setElementType>"
-        isNullableString -> "string?"
-        isNullableValueType -> "${mapParamType(propType)}?"
-        propType == "String" -> "string"
-        isEnumType -> propType
-        isReferenceType && isNullable -> "$propType?"
-        isReferenceType -> propType
-        else -> mapReturnType(propType)
+        else -> error("unreachable specialized property branch")
       }
 
-      val extraNatives: MutableList<CirExtraNative> = mutableListOf()
-
-      if (isNullableValueType) {
-        val csValueType: String = mapParamType(propType)
-        extraNatives.add(
-          CirExtraNative(
-            entryPointSuffix = "get_${propName}_value",
-            returnType = csValueType,
-            name = "Native_Get_${propName}_value",
-            hasSyncErrorOut = true,
-          )
-        )
-        if (isMutable) {
-          extraNatives.add(
-            CirExtraNative(
-              entryPointSuffix = "set_${propName}_null",
-              returnType = "void",
-              name = "Native_Set_${propName}_null",
-              hasSyncErrorOut = true,
-            )
-          )
-        }
-      }
-
-      val getter: String = if (isLambdaType) {
-        "new $lambdaCsType(Native_Get_$propName(_handle))"
-      } else if (isSuspendLambdaType) {
-        "new $suspendLambdaCsType(Native_Get_$propName(_handle))"
-      } else if (isFlowType) {
-        val collectNativeName = "Native_Get${csPropName}Collect"
-        buildString {
-          appendLine()
-          appendLine("                if (_handle == IntPtr.Zero)")
-          appendLine("                    throw new ObjectDisposedException(nameof(${cls.simpleName.asString()}));")
-          appendLine("                return new KotlinFlow<$flowElementType>((onNext, onComplete, onError, userData) =>")
-          appendLine("                    $collectNativeName(_handle, GetOrCreateScope(), onNext, onComplete, onError, userData));")
-          append("            ")
-        }
-      } else if (isListType) {
-        buildString {
-          appendLine()
-          appendLine("                IntPtr listHandle = Native_Get_$propName(_handle, out IntPtr error);")
-          appendLine("                if (error != IntPtr.Zero)")
-          appendLine("                {")
-          appendLine("                    throw NugetErrorNative.BuildException(error);")
-          appendLine("                }")
-          appendLine("                int count = NugetListNative.Count(listHandle);")
-          appendLine("                var result = new List<$listElementType>(count);")
-          appendLine("                for (int i = 0; i < count; i++)")
-          appendLine("                {")
-          appendLine("                    result.Add(NugetMarshal.FromHandle<$listElementType>(NugetListNative.Get(listHandle, i)));")
-          appendLine("                }")
-          appendLine("                NugetListNative.Dispose(listHandle);")
-          append("                return result.AsReadOnly();")
-        }
-      } else if (isMutableListType) {
-        buildString {
-          appendLine()
-          appendLine("                IntPtr listHandle = Native_Get_$propName(_handle, out IntPtr error);")
-          appendLine("                if (error != IntPtr.Zero)")
-          appendLine("                {")
-          appendLine("                    throw NugetErrorNative.BuildException(error);")
-          appendLine("                }")
-          appendLine("                int count = NugetListNative.Count(listHandle);")
-          appendLine("                var result = new List<$listElementType>(count);")
-          appendLine("                for (int i = 0; i < count; i++)")
-          appendLine("                {")
-          appendLine("                    result.Add(NugetMarshal.FromHandle<$listElementType>(NugetListNative.Get(listHandle, i)));")
-          appendLine("                }")
-          appendLine("                NugetListNative.Dispose(listHandle);")
-          append("                return result;")
-        }
-      } else if (isMapType || isMutableMapType) {
-        buildString {
-          appendLine()
-          appendLine("                IntPtr mapHandle = Native_Get_$propName(_handle, out IntPtr error);")
-          appendLine("                if (error != IntPtr.Zero)")
-          appendLine("                {")
-          appendLine("                    throw NugetErrorNative.BuildException(error);")
-          appendLine("                }")
-          appendLine("                int count = NugetMapNative.Count(mapHandle);")
-          appendLine("                var result = new Dictionary<$mapKeyType, $mapValueType>(count);")
-          appendLine("                for (int i = 0; i < count; i++)")
-          appendLine("                {")
-          appendLine("                    var key = NugetMarshal.FromHandle<$mapKeyType>(NugetMapNative.KeyAt(mapHandle, i));")
-          appendLine("                    var value = NugetMarshal.FromHandle<$mapValueType>(NugetMapNative.ValueAt(mapHandle, i));")
-          appendLine("                    result[key] = value;")
-          appendLine("                }")
-          appendLine("                NugetMapNative.Dispose(mapHandle);")
-          append("                return result;")
-        }
-      } else if (isSetType || isMutableSetType) {
-        buildString {
-          appendLine()
-          appendLine("                IntPtr setHandle = Native_Get_$propName(_handle, out IntPtr error);")
-          appendLine("                if (error != IntPtr.Zero)")
-          appendLine("                {")
-          appendLine("                    throw NugetErrorNative.BuildException(error);")
-          appendLine("                }")
-          appendLine("                int count = NugetSetNative.Count(setHandle);")
-          appendLine("                var result = new HashSet<$setElementType>(count);")
-          appendLine("                for (int i = 0; i < count; i++)")
-          appendLine("                {")
-          appendLine("                    result.Add(NugetMarshal.FromHandle<$setElementType>(NugetSetNative.ElementAt(setHandle, i)));")
-          appendLine("                }")
-          appendLine("                NugetSetNative.Dispose(setHandle);")
-          append("                return result;")
-        }
-      } else when {
-        isNullableString -> buildString {
-          appendLine()
-          appendLine("                IntPtr nativeResult = Native_Get_$propName(_handle, out IntPtr error);")
-          appendLine("                if (error != IntPtr.Zero)")
-          appendLine("                {")
-          appendLine("                    throw NugetErrorNative.BuildException(error);")
-          appendLine("                }")
-          append("                return Marshal.PtrToStringUTF8(nativeResult);")
-        }
-
-        isNullableValueType -> buildString {
-          appendLine()
-          appendLine("                bool hasValue = Native_Get_$propName(_handle, out IntPtr error);")
-          appendLine("                if (error != IntPtr.Zero)")
-          appendLine("                {")
-          appendLine("                    throw NugetErrorNative.BuildException(error);")
-          appendLine("                }")
-          appendLine("                if (!hasValue) return null;")
-          appendLine("                ${mapParamType(propType)} value = Native_Get_${propName}_value(_handle, out IntPtr error2);")
-          appendLine("                if (error2 != IntPtr.Zero)")
-          appendLine("                {")
-          appendLine("                    throw NugetErrorNative.BuildException(error2);")
-          appendLine("                }")
-          append("                return value;")
-        }
-
-        propType == "String" -> buildString {
-          appendLine()
-          appendLine("                IntPtr nativeResult = Native_Get_$propName(_handle, out IntPtr error);")
-          appendLine("                if (error != IntPtr.Zero)")
-          appendLine("                {")
-          appendLine("                    throw NugetErrorNative.BuildException(error);")
-          appendLine("                }")
-          append("                return Marshal.PtrToStringUTF8(nativeResult)!;")
-        }
-
-        isEnumType -> buildString {
-          appendLine()
-          appendLine("                int nativeResult = Native_Get_$propName(_handle, out IntPtr error);")
-          appendLine("                if (error != IntPtr.Zero)")
-          appendLine("                {")
-          appendLine("                    throw NugetErrorNative.BuildException(error);")
-          appendLine("                }")
-          append("                return ($propType)nativeResult;")
-        }
-
-        isReferenceType && isNullable -> buildString {
-          appendLine()
-          appendLine("                IntPtr nativeResult = Native_Get_$propName(_handle, out IntPtr error);")
-          appendLine("                if (error != IntPtr.Zero)")
-          appendLine("                {")
-          appendLine("                    throw NugetErrorNative.BuildException(error);")
-          appendLine("                }")
-          append("                return nativeResult == IntPtr.Zero ? null : new $propType(nativeResult);")
-        }
-
-        isReferenceType -> buildString {
-          appendLine()
-          appendLine("                IntPtr nativeResult = Native_Get_$propName(_handle, out IntPtr error);")
-          appendLine("                if (error != IntPtr.Zero)")
-          appendLine("                {")
-          appendLine("                    throw NugetErrorNative.BuildException(error);")
-          appendLine("                }")
-          append("                return new $propType(nativeResult);")
-        }
-
-        else -> buildString {
-          appendLine()
-          appendLine("                ${nativeReturnType} result = Native_Get_$propName(_handle, out IntPtr error);")
-          appendLine("                if (error != IntPtr.Zero)")
-          appendLine("                {")
-          appendLine("                    throw NugetErrorNative.BuildException(error);")
-          appendLine("                }")
-          append("                return result;")
-        }
-      }
-
-      val hasSyncErrorOut: Boolean = !isLambdaType && !isSuspendLambdaType && !isFlowType
-
-      val isSettable: Boolean = isMutable && !isLambdaType && !isSuspendLambdaType &&
-          !isListType && !isMutableListType && !isMapType && !isMutableMapType &&
-          !isSetType && !isMutableSetType
-
-      val setter: String? = if (isSettable) {
-        when {
-          isNullableString -> buildString {
+      val getter: String = when {
+        isLambdaType -> "new $lambdaCsType(Native_Get_$propName(_handle))"
+        isSuspendLambdaType -> "new $suspendLambdaCsType(Native_Get_$propName(_handle))"
+        isFlowType -> {
+          val collectNativeName = "Native_Get${csPropName}Collect"
+          buildString {
             appendLine()
-            appendLine("                Native_Set_$propName(_handle, value, out IntPtr error);")
-            appendLine("                if (error != IntPtr.Zero)")
-            appendLine("                {")
-            appendLine("                    throw NugetErrorNative.BuildException(error);")
-            append("                }")
-          }
-
-          isNullableValueType -> buildString {
-            appendLine()
-            appendLine("                if (value.HasValue)")
-            appendLine("                {")
-            appendLine("                    Native_Set_$propName(_handle, value.Value, out IntPtr error);")
-            appendLine("                    if (error != IntPtr.Zero)")
-            appendLine("                    {")
-            appendLine("                        throw NugetErrorNative.BuildException(error);")
-            appendLine("                    }")
-            appendLine("                }")
-            appendLine("                else")
-            appendLine("                {")
-            appendLine("                    Native_Set_${propName}_null(_handle, out IntPtr error);")
-            appendLine("                    if (error != IntPtr.Zero)")
-            appendLine("                    {")
-            appendLine("                        throw NugetErrorNative.BuildException(error);")
-            appendLine("                    }")
-            append("                }")
-          }
-
-          propType == "String" -> buildString {
-            appendLine()
-            appendLine("                Native_Set_$propName(_handle, value, out IntPtr error);")
-            appendLine("                if (error != IntPtr.Zero)")
-            appendLine("                {")
-            appendLine("                    throw NugetErrorNative.BuildException(error);")
-            append("                }")
-          }
-
-          isEnumType -> buildString {
-            appendLine()
-            appendLine("                Native_Set_$propName(_handle, (int)value, out IntPtr error);")
-            appendLine("                if (error != IntPtr.Zero)")
-            appendLine("                {")
-            appendLine("                    throw NugetErrorNative.BuildException(error);")
-            append("                }")
-          }
-
-          isReferenceType && isNullable -> buildString {
-            appendLine()
-            appendLine("                Native_Set_$propName(_handle, value?._handle ?? IntPtr.Zero, out IntPtr error);")
-            appendLine("                if (error != IntPtr.Zero)")
-            appendLine("                {")
-            appendLine("                    throw NugetErrorNative.BuildException(error);")
-            append("                }")
-          }
-
-          isReferenceType -> buildString {
-            appendLine()
-            appendLine("                Native_Set_$propName(_handle, value._handle, out IntPtr error);")
-            appendLine("                if (error != IntPtr.Zero)")
-            appendLine("                {")
-            appendLine("                    throw NugetErrorNative.BuildException(error);")
-            append("                }")
-          }
-
-          else -> buildString {
-            appendLine()
-            appendLine("                Native_Set_$propName(_handle, value, out IntPtr error);")
-            appendLine("                if (error != IntPtr.Zero)")
-            appendLine("                {")
-            appendLine("                    throw NugetErrorNative.BuildException(error);")
-            append("                }")
+            appendLine("                if (_handle == IntPtr.Zero)")
+            appendLine("                    throw new ObjectDisposedException(nameof(${cls.simpleName.asString()}));")
+            appendLine("                return new KotlinFlow<$flowElementType>((onNext, onComplete, onError, userData) =>")
+            appendLine("                    $collectNativeName(_handle, GetOrCreateScope(), onNext, onComplete, onError, userData));")
+            append("            ")
           }
         }
-      } else null
 
-      val nativeSetterType: String = when {
-        isNullableValueType -> mapReturnType(propType)
-        isNullableString -> "string?"
-        else -> nativeReturnType
+        else -> error("unreachable specialized property getter")
       }
 
       CirProperty(
         name = csPropName,
         type = type,
         nativeReturnType = nativeReturnType,
-        nativeSetterType = nativeSetterType,
+        nativeSetterType = nativeReturnType,
         nativeName = propName,
         getter = getter,
-        setter = setter,
-        extraNatives = extraNatives,
+        setter = null,
+        extraNatives = emptyList(),
         isFlow = isFlowType,
         flowElementType = flowElementType ?: "",
-        hasSyncErrorOut = hasSyncErrorOut,
+        hasSyncErrorOut = false,
       )
     }.toList()
 
@@ -642,34 +285,45 @@ internal fun translateClass(
 
   val methods: List<CirMethod> = normalMethods
     .filter { it !in interfaceBridgeExcluded }
-    .map { method ->
+    .mapNotNull { method ->
       val methodName: String = method.simpleName.asString()
       val planned = callableCatalog.planFor(
         "${cls.qualifiedName?.asString() ?: name}.$methodName",
       )
       if (planned != null) {
-        if (ForwardHelperRequirement.COLLECTION in planned.helperRequirements) tracker.needsList = true
-        return@map ForwardCirPlanProjection.classMethod(
+        tracker.trackPlan(planned)
+        return@mapNotNull ForwardCirPlanProjection.classMethod(
           plan = planned,
           nativePrefix = prefix,
           isOverride = superClass != null && method.modifiers.contains(Modifier.OVERRIDE),
         )
       }
-      val methodReturnTypeResolved: KSType? = method.returnType?.resolve()?.expandAliases()
+      // Abstract declarations still need a C# abstract method for the public surface even though
+      // they have no native export / plan (planner skips ABSTRACT).
+      val declaredInThisClass: Boolean = method.parentDeclaration == cls
+      val hasImplementation: Boolean = declaredInThisClass ||
+          method.modifiers.contains(Modifier.OVERRIDE)
+      val isMethodAbstract: Boolean = !hasImplementation &&
+          (isAbstract || method.modifiers.contains(Modifier.ABSTRACT))
+      if (!isMethodAbstract) return@mapNotNull null
+      val methodReturnTypeResolved = method.returnType?.resolve()?.expandAliases()
       val methodReturn: String =
         methodReturnTypeResolved?.declaration?.simpleName?.asString() ?: "Unit"
-      val methodReturnQualified: String? =
-        methodReturnTypeResolved?.declaration?.qualifiedName?.asString()
       val isNullableReturn: Boolean = methodReturnTypeResolved?.isMarkedNullable == true
+      val returnType: String = when {
+        methodReturn == "Unit" -> "void"
+        methodReturn == "String" && isNullableReturn -> "string?"
+        methodReturn == "String" -> "string"
+        methodReturn in KOTLIN_TO_CSHARP_RETURN -> {
+          val mapped = KOTLIN_TO_CSHARP_RETURN.getValue(methodReturn)
+          if (isNullableReturn && mapped != "void") "$mapped?" else mapped
+        }
 
-      val csMethodName: String = methodName.replaceFirstChar { it.uppercase() }
-
-      // For enum parameters: public type is the enum name, native type is "int" (ordinal). A
-      // nullable String parameter keeps its "string?" public type (ADR-060 cell 8): Kotlin/Native
-      // already marshals a nullable C string transparently, so no cast is needed at the native
-      // call site either, and "string?" is used for both `type` and `nativeType`.
+        isNullableReturn -> "$methodReturn?"
+        else -> methodReturn
+      }
       val methodParams: List<CirParameter> = method.parameters.map { param ->
-        val resolved: KSType = param.type.resolve().expandAliases()
+        val resolved = param.type.resolve().expandAliases()
         val kotlinType: String = resolved.declaration.simpleName.asString()
         val isEnum: Boolean = (resolved.declaration as? KSClassDeclaration)
           ?.classKind == ClassKind.ENUM_CLASS
@@ -677,192 +331,21 @@ internal fun translateClass(
         val paramType: String = when {
           isEnum -> kotlinType
           isNullableString -> "string?"
-          else -> mapParamType(kotlinType)
+          kotlinType in KOTLIN_TO_CSHARP_PARAM -> KOTLIN_TO_CSHARP_PARAM.getValue(kotlinType)
+          else -> kotlinType
         }
-        CirParameter(
-          name = param.name?.asString() ?: "_",
-          type = paramType,
-          nativeType = if (isEnum) "int" else paramType,
-        )
+        CirParameter(param.name?.asString() ?: "_", paramType)
       }
-
-      val declaredInThisClass: Boolean = method.parentDeclaration == cls
-      val hasImplementation: Boolean = declaredInThisClass ||
-          method.modifiers.contains(Modifier.OVERRIDE)
-      val isMethodAbstract: Boolean = !hasImplementation &&
-          (isAbstract || method.modifiers.contains(Modifier.ABSTRACT))
-      val isOverride: Boolean = superClass != null && method.modifiers.contains(Modifier.OVERRIDE)
-
-      // nativeCallArgs is only used for non-sync-error methods; sync-error path builds its own.
-      val nativeCallArgs: String = (listOf("_handle") +
-          methodParams.map { it.name }).joinToString(", ")
-
-      // ADR-061: route the return through the same marshalling cascade the property getter
-      // already uses (object / nullable object / collection / nullable String / nullable
-      // primitive). Enum returns are left exactly as before (untouched, out of this ADR's scope).
-      val isEnumReturn: Boolean = (methodReturnTypeResolved?.declaration as? KSClassDeclaration)
-        ?.classKind == ClassKind.ENUM_CLASS
-      val isListReturn: Boolean = !isEnumReturn &&
-          (methodReturnQualified == "kotlin.collections.List" ||
-              methodReturnQualified == "kotlin.collections.MutableList")
-      val isMutableListReturn: Boolean = methodReturnQualified == "kotlin.collections.MutableList"
-      val listElementType: String? = if (isListReturn) {
-        val elementType = methodReturnTypeResolved?.arguments?.firstOrNull()?.type?.resolve()
-        val elementTypeName: String = elementType?.declaration?.simpleName?.asString() ?: "Any"
-        KOTLIN_TO_CSHARP_PARAM[elementTypeName] ?: elementTypeName
-      } else null
-      if (isListReturn) tracker.needsList = true
-
-      // "Char" is deliberately treated as primitive-ish here (it has no `KOTLIN_TO_CSHARP_RETURN`
-      // entry) purely to keep it out of the new object-boxing branch below, which would render
-      // nonsensical C# (`new Char(handle)`) for it — mirrors the identical Kotlin-side exclusion
-      // in ClassExports.kt. Not one of ADR-061's five return shapes; still unhandled/out of scope.
-      val isPrimitiveReturn: Boolean =
-        methodReturn in KOTLIN_TO_CSHARP_RETURN || methodReturn == "Char"
-      val isObjectReturn: Boolean = !isEnumReturn && !isPrimitiveReturn && !isListReturn
-      val isNullableStringReturn: Boolean =
-        isPrimitiveReturn && isNullableReturn && methodReturn == "String"
-      val isNullablePrimitiveReturn: Boolean =
-        isPrimitiveReturn && isNullableReturn && methodReturn != "String"
-
-      val returnType: String
-      val nativeReturnType: String
-      val body: String
-      val hasCustomBody: Boolean
-      val extraNativeParams: List<String>
-
-      when {
-        methodReturn == "Unit" -> {
-          returnType = "void"
-          nativeReturnType = "void"
-          body = "Native_$csMethodName($nativeCallArgs)"
-          hasCustomBody = false
-          extraNativeParams = emptyList()
-        }
-
-        isListReturn -> {
-          returnType = if (isMutableListReturn) {
-            "IList<$listElementType>"
-          } else {
-            "IReadOnlyList<$listElementType>"
-          }
-          nativeReturnType = "IntPtr"
-          hasCustomBody = true
-          extraNativeParams = emptyList()
-          body = buildString {
-            appendLine()
-            appendLine("                IntPtr listHandle = Native_$csMethodName($nativeCallArgs, out IntPtr error);")
-            appendLine("                if (error != IntPtr.Zero)")
-            appendLine("                {")
-            appendLine("                    throw NugetErrorNative.BuildException(error);")
-            appendLine("                }")
-            appendLine("                int count = NugetListNative.Count(listHandle);")
-            appendLine("                var result = new List<$listElementType>(count);")
-            appendLine("                for (int i = 0; i < count; i++)")
-            appendLine("                {")
-            appendLine("                    result.Add(NugetMarshal.FromHandle<$listElementType>(NugetListNative.Get(listHandle, i)));")
-            appendLine("                }")
-            appendLine("                NugetListNative.Dispose(listHandle);")
-            append(if (isMutableListReturn) "                return result;" else "                return result.AsReadOnly();")
-          }
-        }
-
-        isObjectReturn && isNullableReturn -> {
-          returnType = "$methodReturn?"
-          nativeReturnType = "IntPtr"
-          hasCustomBody = true
-          extraNativeParams = emptyList()
-          body = buildString {
-            appendLine()
-            appendLine("                IntPtr nativeResult = Native_$csMethodName($nativeCallArgs, out IntPtr error);")
-            appendLine("                if (error != IntPtr.Zero)")
-            appendLine("                {")
-            appendLine("                    throw NugetErrorNative.BuildException(error);")
-            appendLine("                }")
-            append("                return nativeResult == IntPtr.Zero ? null : new $methodReturn(nativeResult);")
-          }
-        }
-
-        isObjectReturn -> {
-          returnType = methodReturn
-          nativeReturnType = "IntPtr"
-          hasCustomBody = true
-          extraNativeParams = emptyList()
-          body = buildString {
-            appendLine()
-            appendLine("                IntPtr nativeResult = Native_$csMethodName($nativeCallArgs, out IntPtr error);")
-            appendLine("                if (error != IntPtr.Zero)")
-            appendLine("                {")
-            appendLine("                    throw NugetErrorNative.BuildException(error);")
-            appendLine("                }")
-            append("                return new $methodReturn(nativeResult);")
-          }
-        }
-
-        isNullableStringReturn -> {
-          returnType = "string?"
-          nativeReturnType = "IntPtr"
-          hasCustomBody = true
-          extraNativeParams = emptyList()
-          body = buildString {
-            appendLine()
-            appendLine("                IntPtr nativeResult = Native_$csMethodName($nativeCallArgs, out IntPtr error);")
-            appendLine("                if (error != IntPtr.Zero)")
-            appendLine("                {")
-            appendLine("                    throw NugetErrorNative.BuildException(error);")
-            appendLine("                }")
-            append("                return Marshal.PtrToStringUTF8(nativeResult);")
-          }
-        }
-
-        isNullablePrimitiveReturn -> {
-          // Nullable-primitive return (ADR-061 §5): single call. Has-value `bool` return plus a
-          // `valueOut` out-parameter, mirroring the identical `out IntPtr error` out-write already
-          // shipped for every sync export, differing only in the `CVariable` width.
-          val csValueType: String = mapParamType(methodReturn)
-          returnType = "$csValueType?"
-          nativeReturnType = "bool"
-          hasCustomBody = true
-          extraNativeParams = listOf("out $csValueType value")
-          body = buildString {
-            appendLine()
-            appendLine("                bool hasValue = Native_$csMethodName($nativeCallArgs, out $csValueType value, out IntPtr error);")
-            appendLine("                if (error != IntPtr.Zero)")
-            appendLine("                {")
-            appendLine("                    throw NugetErrorNative.BuildException(error);")
-            appendLine("                }")
-            append("                return hasValue ? value : null;")
-          }
-        }
-
-        else -> {
-          // Non-null primitives and (untouched) enum returns: unchanged from before this ADR.
-          returnType = if (methodReturn == "String") "string" else mapReturnType(methodReturn)
-          nativeReturnType = mapReturnType(methodReturn)
-          hasCustomBody = false
-          extraNativeParams = emptyList()
-          body = if (methodReturn == "String") {
-            "Marshal.PtrToStringUTF8(Native_$csMethodName($nativeCallArgs))!"
-          } else {
-            "Native_$csMethodName($nativeCallArgs)"
-          }
-        }
-      }
-
       CirMethod(
-        name = csMethodName,
+        name = methodName.replaceFirstChar { it.uppercase() },
         returnType = returnType,
-        nativeReturnType = nativeReturnType,
-        nativeName = methodName,
         parameters = methodParams,
-        body = body,
-        isAbstract = isMethodAbstract,
-        isOverride = isOverride,
-        isSyncErrorCheckEnabled = !isMethodAbstract,
-        extraNativeParams = extraNativeParams,
-        hasCustomBody = hasCustomBody,
+        body = "",
+        isAbstract = true,
+        isOverride = superClass != null && method.modifiers.contains(Modifier.OVERRIDE),
+        isSyncErrorCheckEnabled = false,
       )
-    }.toList()
+    }
 
   if (suspendMethods.isNotEmpty()) tracker.needsAsync = true
 
@@ -989,8 +472,12 @@ internal fun translateClass(
       .flatMap { prop ->
         val symbol: String = "${cls.qualifiedName?.asString() ?: name}.Companion.${prop.simpleName.asString()}"
         val planned = callableCatalog.propertyFor(symbol)
-        if (planned != null) ForwardCirPropertyProjection.staticProperty(planned, libraryName)
-        else translateCompanionProperty(prop, libraryName, prefix)
+        if (planned != null) {
+          tracker.trackProperty(planned)
+          ForwardCirPropertyProjection.staticProperty(planned, libraryName)
+        } else {
+          emptyList()
+        }
       }
       .toList()
 
@@ -1000,8 +487,12 @@ internal fun translateClass(
       .flatMap { func ->
         val symbol: String = "${cls.qualifiedName?.asString() ?: name}.Companion.${func.simpleName.asString()}"
         val planned = callableCatalog.planFor(symbol)
-        if (planned != null) ForwardCirPlanProjection.static(planned, libraryName)
-        else translateCompanionFunction(func, libraryName, prefix, name, tracker)
+        if (planned != null) {
+          tracker.trackPlan(planned)
+          ForwardCirPlanProjection.static(planned, libraryName)
+        } else {
+          emptyList()
+        }
       }
       .toList()
 
@@ -1012,7 +503,10 @@ internal fun translateClass(
   // ClassExports.kt checks for the Kotlin half), else keep the legacy hand-rolled route.
   val copyMethod: CirMethod? = if (isDataClass) {
     callableCatalog.planFor("${cls.qualifiedName?.asString() ?: name}.copy")
-      ?.let { planned -> ForwardCirPlanProjection.classMethod(planned, prefix, isOverride = false) }
+      ?.let { planned ->
+        tracker.trackPlan(planned)
+        ForwardCirPlanProjection.classMethod(planned, prefix, isOverride = false)
+      }
   } else null
 
   return CirClass(
@@ -1317,6 +811,7 @@ internal fun translateObject(
   obj: KSClassDeclaration,
   libraryName: String,
   callableCatalog: ForwardCallablePlanCatalog,
+  tracker: CollectionHelperTracker,
 ): CirObject {
   val name: String = obj.simpleName.asString()
   val prefix: String = name.lowercase()
@@ -1332,72 +827,12 @@ internal fun translateObject(
       val methodName: String = method.simpleName.asString()
       val symbol: String = "${obj.qualifiedName?.asString() ?: name}.$methodName"
       val planned = callableCatalog.planFor(symbol)
-      if (planned != null) return@flatMap ForwardCirPlanProjection.static(planned, libraryName)
-      val cname: String = toCName(methodName)
-      // PascalCase the public method name (ADR-007); the native entry point keeps the
-      // lowercased cname, unchanged (cell 25).
-      val csName: String = methodName.replaceFirstChar { it.uppercase() }
-      val returnType = method.returnType?.resolve()?.expandAliases()
-      val kotlinReturnType: String = returnType?.declaration?.simpleName?.asString() ?: "Unit"
-
-      val params: List<CirParameter> = method.parameters.map { param ->
-        val resolved: KSType = param.type.resolve().expandAliases()
-        val kotlinType: String = resolved.declaration.simpleName.asString()
-        CirParameter(param.name?.asString() ?: "_", mapParamType(kotlinType))
+      if (planned != null) {
+        tracker.trackPlan(planned)
+        ForwardCirPlanProjection.static(planned, libraryName)
+      } else {
+        emptyList()
       }
-
-      val entryPoint: String = "${prefix}_${cname}"
-      val nativeName: String = "${csName}_native"
-
-      if (kotlinReturnType == "String") {
-        val nativeImport = CirDllImport(
-          libraryName = libraryName,
-          entryPoint = entryPoint,
-          returnType = "IntPtr",
-          name = nativeName,
-          parameters = params,
-          visibility = CirVisibility.PRIVATE,
-          hasSyncErrorOut = true,
-        )
-
-        val wrapper = CirMethod(
-          name = csName,
-          returnType = "string",
-          nativeReturnType = "IntPtr",
-          nativeName = nativeName,
-          parameters = params,
-          body = "",
-          isStatic = true,
-          isSyncErrorCheckEnabled = true,
-        )
-
-        return@flatMap listOf(nativeImport, wrapper)
-      }
-
-      val csReturnType: String = mapReturnType(kotlinReturnType)
-      val isVoidReturn: Boolean = kotlinReturnType == "Unit"
-
-      val nativeImport = CirDllImport(
-        libraryName = libraryName,
-        entryPoint = entryPoint,
-        returnType = csReturnType,
-        name = nativeName,
-        parameters = params,
-        visibility = CirVisibility.PRIVATE,
-        hasSyncErrorOut = true,
-      )
-
-      val wrapper = CirMethod(
-        name = csName,
-        returnType = if (isVoidReturn) "void" else csReturnType,
-        nativeName = nativeName,
-        parameters = params,
-        body = "",
-        isStatic = true,
-        isSyncErrorCheckEnabled = true,
-      )
-
-      listOf(nativeImport, wrapper)
     }
     .toList()
 
@@ -1733,8 +1168,10 @@ internal fun translateEnum(
 internal fun translateValueClass(
   cls: KSClassDeclaration,
   libraryName: String,
+  callableCatalog: ForwardCallablePlanCatalog = ForwardCallablePlanCatalog(emptyList()),
 ): CirValueClass {
   val name: String = cls.simpleName.asString()
+  val qualifiedName: String = cls.qualifiedName?.asString() ?: name
   val prefix: String = name.lowercase()
 
   val underlyingParamName: String = cls.primaryConstructor!!.parameters.first().name!!.asString()
@@ -1777,6 +1214,10 @@ internal fun translateValueClass(
     )
   }
 
+  fun buildConstructorFromPlan(plan: ForwardCallablePlan, suffix: String): CirValueClassConstructor {
+    return ForwardCirPlanProjection.valueClassConstructor(plan, suffix, underlyingType == "String")
+  }
+
   val secondaryCtorDecls: List<KSFunctionDeclaration> = cls.declarations
     .filterIsInstance<KSFunctionDeclaration>()
     .filter { it.simpleName.asString() == "<init>" }
@@ -1784,21 +1225,27 @@ internal fun translateValueClass(
     .toList()
 
   val constructors: List<CirValueClassConstructor> = if (isReferenceUnderlying) {
-    // ADR-035: primary `init` validation for reference-underlying value classes is
-    // deferred; keep the existing secondary-only export scheme (old numbering).
+    // ADR-035: primary deferred; secondary-only numbering. Explicit legacy adapter when unplanned.
     secondaryCtorDecls.mapIndexed { index, ctor ->
       val suffix: String = if (index == 0) "" else "_$index"
-      val nativeName: String = if (index == 0) "${prefix}_create" else "${prefix}_create_${index}"
-      buildConstructor(ctor, suffix, nativeName)
+      val symbolSuffix: String = if (index == 0) "" else "_$index"
+      val planned = callableCatalog.planFor("$qualifiedName.<init>$symbolSuffix")
+      if (planned != null) {
+        buildConstructorFromPlan(planned, suffix)
+      } else {
+        val nativeName: String = if (index == 0) "${prefix}_create" else "${prefix}_create_${index}"
+        buildConstructor(ctor, suffix, nativeName)
+      }
     }
   } else {
-    // ADR-035: route the primary through Kotlin so its `init` runs; secondaries
-    // renumber to `_create_2+` (aligns with ADR-034).
+    // ADR-035: plan-only for primitive-underlying constructors.
     buildList {
-      add(buildConstructor(cls.primaryConstructor!!, "", "${prefix}_create"))
-      secondaryCtorDecls.forEachIndexed { index, ctor ->
+      val primaryPlan = callableCatalog.planFor("$qualifiedName.<init>")
+      if (primaryPlan != null) add(buildConstructorFromPlan(primaryPlan, ""))
+      secondaryCtorDecls.forEachIndexed { index, _ ->
         val number: Int = index + 2
-        add(buildConstructor(ctor, "_$number", "${prefix}_create_$number"))
+        val planned = callableCatalog.planFor("$qualifiedName.<init>_$number")
+        if (planned != null) add(buildConstructorFromPlan(planned, "_$number"))
       }
     }
   }
@@ -1806,25 +1253,14 @@ internal fun translateValueClass(
   val properties: List<CirProperty> = cls.getAllProperties()
     .filter { it.getVisibility() == Visibility.PUBLIC }
     .filter { it.simpleName.asString() != underlyingProp.simpleName.asString() }
-    .map { prop ->
+    .mapNotNull { prop ->
       val propName: String = prop.simpleName.asString()
-      val propType: String = prop.type.resolve().expandAliases().declaration.simpleName.asString()
-      val csPropName: String = propName.replaceFirstChar { it.uppercase() }
-      val csReturnType: String = if (propType == "String") "string" else mapReturnType(propType)
-
-      val getter: String = if (propType == "String") {
-        "Marshal.PtrToStringUTF8(Native_Get${csPropName}(${nativeArg}))!"
+      val planned = callableCatalog.planFor("$qualifiedName.$propName")
+      if (planned != null) {
+        ForwardCirPlanProjection.valueClassProperty(planned, nativeArg)
       } else {
-        "Native_Get${csPropName}(${nativeArg})"
+        null
       }
-
-      CirProperty(
-        name = csPropName,
-        type = csReturnType,
-        nativeReturnType = mapReturnType(propType),
-        nativeName = propName,
-        getter = getter,
-      )
     }
     .toList()
 
@@ -1837,32 +1273,14 @@ internal fun translateValueClass(
         "hashCode-impl", "equals-impl", "equals-impl0", "toString-impl",
       )
     }
-    .map { method ->
+    .mapNotNull { method ->
       val methodName: String = method.simpleName.asString()
-      val csMethodName: String = methodName.replaceFirstChar { it.uppercase() }
-      val returnType: KSType? = method.returnType?.resolve()?.expandAliases()
-      val kotlinReturnType: String = returnType?.declaration?.simpleName?.asString() ?: "Unit"
-
-      val csReturnType: String = when (kotlinReturnType) {
-        "String" -> "string"
-        "Unit" -> "void"
-        else -> mapReturnType(kotlinReturnType)
-      }
-
-      val body: String = if (kotlinReturnType == "String") {
-        "Marshal.PtrToStringUTF8(Native_${csMethodName}(${nativeArg}))!"
+      val planned = callableCatalog.planFor("$qualifiedName.$methodName")
+      if (planned != null) {
+        ForwardCirPlanProjection.valueClassMethod(planned, nativeArg)
       } else {
-        "Native_${csMethodName}(${nativeArg})"
+        null
       }
-
-      CirMethod(
-        name = csMethodName,
-        returnType = csReturnType,
-        nativeReturnType = mapReturnType(kotlinReturnType),
-        nativeName = methodName,
-        parameters = emptyList(),
-        body = body,
-      )
     }
     .toList()
 

@@ -103,16 +103,19 @@ public void GreetingIsHelloWorld()
 
 Top-level functions follow the same grouping. `test-library/src/nativeMain/kotlin/.../math/Arithmetic.kt` (`add`, `multiply`, `divide`, `square`) becomes `TestLibrary.Math.Arithmetic`; see [Generics](generics.md) for the `inline fun square` case.
 
-## Known limitations
-
-A top-level **factory** function returning a bridged class — `fun admit(name: String): Patient` — currently generates invalid Kotlin: the export declares a non-null class return whose generated body can default to `null` on the error path. The top-level-function path has no `StableRef` boxing branch for a plain-class return, unlike a companion-object factory (`Cat.fromName`), which is why factories on a companion work and top-level ones do not. Tracked in [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md) Phase 3 and pinned as a red cell by the adversarial forward fixture ([ADR-060](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/060-adversarial-forward-fixture.md)).
+Top-level factory functions that return a bridged class (for example `fun admit(name: String): Patient`
+in the clinic fixture) go through the same shared callable plan as other ordinary sync functions
+([ADR-062](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/062-forward-callable-plan.md))
+and box the result with `StableRef`, matching companion factories such as `Cat.fromName`.
 
 <seealso>
     <category ref="related">
         <a href="objects-and-companions.md">Objects and companions</a>
         <a href="extensions.md">Extensions</a>
+        <a href="classes-and-objects.md">Classes and objects</a>
     </category>
     <category ref="external">
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/007-top-level-function-class-naming.md">ADR-007: Top-level function class naming</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/062-forward-callable-plan.md">ADR-062: Forward callable plan</a>
     </category>
 </seealso>

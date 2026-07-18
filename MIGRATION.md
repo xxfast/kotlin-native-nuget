@@ -4,24 +4,24 @@ This is the living checklist for replacing position-specific forward marshalling
 callable ABI plan shared by Kotlin export generation and C# CIR generation. Each phase must leave the
 bridge working and be independently shippable.
 
-Current status: Phases 1 through 7 complete; Phase 8 next (enum/Char returns, Map/Set collection
-generalization, and remaining return/property gaps).
+Current status: Phases 1 through 10 complete. Ordinary synchronous forward callables are plan-only;
+specialized protocols remain on named legacy routes. See [ADR-062](docs/adr/062-forward-callable-plan.md).
 
 ## Migration invariants
 
-- [ ] Keep ordinary synchronous forward values in scope: properties, constructors, functions,
+- [x] Keep ordinary synchronous forward values in scope: properties, constructors, functions,
   methods, companions, objects, extensions, data-class copy operations, and value-class methods.
-- [ ] Keep suspend, `Flow`, generic-declaration, lambda, callback, interface-bridge, and sealed-helper
+- [x] Keep suspend, `Flow`, generic-declaration, lambda, callback, interface-bridge, and sealed-helper
   protocols on explicit named legacy routes.
-- [ ] Route a callable's Kotlin and C# halves through either the complete legacy path or the complete
+- [x] Route a callable's Kotlin and C# halves through either the complete legacy path or the complete
   planned path. Never split a callable between paths.
-- [ ] Preserve all working native signatures during migration.
-- [ ] Preserve the shipped property and top-level nullable-primitive two-call ABI.
-- [ ] Preserve ADR-061's single-call method and extension `valueOut` ABI.
-- [ ] Fix known unsupported type-by-position combinations only in their named migration slices.
-- [ ] Fail generation with a specific diagnostic for unsupported migrated combinations. Never emit a
+- [x] Preserve all working native signatures during migration.
+- [x] Preserve the shipped property and top-level nullable-primitive two-call ABI.
+- [x] Preserve ADR-061's single-call method and extension `valueOut` ABI.
+- [x] Fix known unsupported type-by-position combinations only in their named migration slices.
+- [x] Fail generation with a specific diagnostic for unsupported migrated combinations. Never emit a
   pointer, raw `IntPtr`, or `0` fallback for an unknown combination.
-- [ ] Derive the runtime ABI contract from the same callable plan used by both renderers.
+- [x] Derive the runtime ABI contract from the same callable plan used by both renderers.
 
 ## Target architecture
 
@@ -33,17 +33,17 @@ generalization, and remaining return/property gaps).
   - passing: value, out, or in/out;
   - evaluation: exactly once or compatibility-only legacy two-call;
   - ownership: borrowed, owned handle, or materialized.
-- [ ] Retain declaration origin only for symbol naming, invocation construction, diagnostics, and
+- [x] Retain declaration origin only for symbol naming, invocation construction, diagnostics, and
   selection of preserved legacy conventions.
 - [x] Introduce a typed `ForwardCallablePlan` containing the invocation, public C# signature, native
   exports/imports, ordered ABI parameters and directions, result convention, error slot, lift/lower
   operations, ownership, cleanup, and helper requirements.
-- [ ] Make composable type marshallers produce declarative value-transfer plans rather than Kotlin or
+- [x] Make composable type marshallers produce declarative value-transfer plans rather than Kotlin or
   C# source text.
-- [ ] Render KotlinPoet exports from the plan and project the same plan into CIR for C# rendering.
-- [ ] Derive a `ForwardAbiSignature` from the plan and compare it with both generated projections.
-- [ ] Replace name-based `valueOut` and `errorOut` inference with explicit parameter direction.
-- [ ] Replace declaration rescans and mutable collection-helper tracking with plan requirements.
+- [x] Render KotlinPoet exports from the plan and project the same plan into CIR for C# rendering.
+- [x] Derive a `ForwardAbiSignature` from the plan and compare it with both generated projections.
+- [x] Replace name-based `valueOut` and `errorOut` inference with explicit parameter direction.
+- [x] Replace declaration rescans and mutable collection-helper tracking with plan requirements.
 
 ## Implementation phases
 
@@ -101,26 +101,27 @@ generalization, and remaining return/property gaps).
 
 ### 8. Remaining synchronous categories
 
-- [ ] Add enum and Char returns across every migrated result position.
-- [ ] Generalize collection returns from List to Map, Set, and mutable variants.
-- [ ] Compose nested element, key, and value marshallers and derive helper requirements from plans.
-- [ ] Fix class and extension enum, Char, Map, and Set return gaps, plus Char properties.
+- [x] Add enum and Char returns across every migrated result position.
+- [x] Generalize collection returns from List to Map, Set, and mutable variants.
+- [x] Compose nested element, key, and value marshallers and derive helper requirements from plans.
+- [x] Fix class and extension enum, Char, Map, and Set return gaps, plus Char properties.
 
 ### 9. Value-class positions
 
-- [ ] Route value-class constructors, properties, and methods through the shared planner.
-- [ ] Preserve reconstruction semantics for reference and primitive underlying types.
-- [ ] Add method parameters for both underlying-type branches, closing ADR-060 cells 15 and 16.
+- [x] Route value-class constructors, properties, and methods through the shared planner.
+- [x] Preserve reconstruction semantics for reference and primitive underlying types.
+- [x] Add method parameters for both underlying-type branches, closing ADR-060 cells 15 and 16.
 
 ### 10. Totality and cleanup
 
-- [ ] Reduce the ordinary synchronous legacy allowlist to zero.
-- [ ] Remove direct position-level selection of parameter/return mappings, StableRef conversion,
+- [x] Reduce the ordinary synchronous legacy allowlist to zero.
+- [x] Remove direct position-level selection of parameter/return mappings, StableRef conversion,
   collection materializers, and general `defaultValueFor` behavior.
-- [ ] Remove pointer and numeric fallthroughs in favor of named KSP diagnostics.
-- [ ] Keep specialized protocols behind explicit adapters rather than a catch-all fallback.
-- [ ] Record the enduring architecture in an ADR referencing ADR-004, ADR-055, and ADR-061.
-- [ ] Run the repository workflow serially: documenter first, then refactorer.
+- [x] Remove pointer and numeric fallthroughs in favor of named KSP diagnostics.
+- [x] Keep specialized protocols behind explicit adapters rather than a catch-all fallback.
+- [x] Record the enduring architecture in an ADR referencing ADR-004, ADR-055, and ADR-061
+  ([ADR-062](docs/adr/062-forward-callable-plan.md)).
+- [x] Run the repository workflow serially: documenter first, then refactorer.
 
 ## Test gates
 

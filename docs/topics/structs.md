@@ -396,11 +396,11 @@ public void CollarNamedArgs_ComponentNamesMatchDeclarationOrder()
 }
 ```
 
-`initialCode: Int` (rather than a Kotlin `Char`) is the same forward-direction workaround
-`StructsSample.kt`'s `gradeCode` uses: a raw Kotlin `Char` parameter cannot cross the *forward*
-boundary yet (a pre-existing, unrelated gap, tracked in [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md)
-Phase 3). It affects only how this fixture calls into `test-library`, not the reverse struct
-binding itself, whose own `char` components round-trip correctly.
+`initialCode: Int` (rather than a Kotlin `Char`) is historical fixture shape: forward `Char`
+parameters, properties, and returns are planned today (see [Primitives and strings](primitives-and-strings.md)
+and clinic `Patient.Tag` / `Grade` / `Initial`). This sample still routes through an `Int` code point
+for its own call site; that choice is not a reverse-struct limitation. The reverse struct's own
+`char` components round-trip correctly either way.
 
 ### Component order is a hazard Shape A does not have
 

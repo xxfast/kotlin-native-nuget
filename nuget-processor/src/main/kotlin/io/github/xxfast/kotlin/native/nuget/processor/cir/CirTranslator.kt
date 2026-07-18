@@ -6,10 +6,11 @@ import com.google.devtools.ksp.symbol.KSClassDeclaration
 import com.google.devtools.ksp.symbol.KSFunctionDeclaration
 import com.google.devtools.ksp.symbol.KSPropertyDeclaration
 import com.google.devtools.ksp.symbol.KSType
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallablePlan
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallablePlanCatalog
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCirPlanProjection
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCirPropertyProjection
-import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardHelperRequirement
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardPropertyPlan
 import io.github.xxfast.kotlin.native.nuget.processor.forward.planFor
 import io.github.xxfast.kotlin.native.nuget.processor.toCName
 import io.github.xxfast.kotlin.native.nuget.processor.toCSharpName
@@ -96,33 +97,39 @@ internal fun translate(
   var needsMarshalHelper: Boolean = false
   val tracker = CollectionHelperTracker()
 
-  for ((key, funcs) in groupByNamespaceAndFile(functions)) {
+  groupByNamespaceAndFile(functions).forEach { (key, funcs) ->
     val (namespace, fileClassName) = key
     val finalClassName: String = resolveStaticClassName(fileClassName, namespace)
     val members: List<CirMember> = funcs.flatMap { function ->
       val symbol: String = "${function.packageName.asString()}.${function.simpleName.asString()}"
-      val planned = callableCatalog.planFor(symbol)
-      if (planned != null) ForwardCirPlanProjection.static(planned, context.libraryName) else translateFunction(
-        function,
-        context.libraryName,
-        context.rootPackage,
-        context.rootNamespace,
-        tracker,
-        exportedTypes,
-        logger,
-      )
+      val planned: ForwardCallablePlan? = callableCatalog.planFor(symbol)
+      if (planned != null) {
+        tracker.trackPlan(planned)
+        ForwardCirPlanProjection.static(planned, context.libraryName)
+      } else {
+        // Named specialized adapters only (sealed / generic-declaration returns).
+        translateSpecializedFunction(
+          function,
+          context.libraryName,
+          context.rootPackage,
+          context.rootNamespace,
+          tracker,
+          exportedTypes,
+          logger,
+        )
+      }
     }
     namespaces.addDeclaration(namespace, CirStaticClass(finalClassName, members))
   }
 
-  for ((key, funcs) in groupByNamespaceAndFile(genericFunctions)) {
+  groupByNamespaceAndFile(genericFunctions).forEach { (key, funcs) ->
     val (namespace, fileClassName) = key
     val finalClassName: String = resolveStaticClassName(fileClassName, namespace)
     val members: List<CirMember> = funcs.flatMap { translateGenericFunction(it, context.libraryName) }
     namespaces.mergeStaticClass(namespace, finalClassName, members)
   }
 
-  for ((key, funcs) in groupByNamespaceAndFile(suspendFunctions)) {
+  groupByNamespaceAndFile(suspendFunctions).forEach { (key, funcs) ->
     val (namespace, fileClassName) = key
     val finalClassName: String = resolveStaticClassName(fileClassName, namespace)
     val members: List<CirMember> = funcs.flatMap { function ->
@@ -131,65 +138,76 @@ internal fun translate(
     namespaces.mergeStaticClass(namespace, finalClassName, members)
   }
 
-  for ((key, props) in groupPropertiesByNamespaceAndFile(properties)) {
+  groupPropertiesByNamespaceAndFile(properties).forEach { (key, props) ->
     val (namespace, fileClassName) = key
     val finalClassName: String = resolveStaticClassName(fileClassName, namespace)
     val members: List<CirMember> = props.flatMap { prop ->
-      val plan = callableCatalog.propertyFor("${prop.packageName.asString()}.${prop.simpleName.asString()}")
-      if (plan != null) ForwardCirPropertyProjection.staticProperty(plan, context.libraryName)
-      else translateProperty(prop, context.libraryName)
+      val plan: ForwardPropertyPlan? =
+        callableCatalog.propertyFor("${prop.packageName.asString()}.${prop.simpleName.asString()}")
+      if (plan != null) {
+        tracker.trackProperty(plan)
+        ForwardCirPropertyProjection.staticProperty(plan, context.libraryName)
+      } else {
+        emptyList()
+      }
     }
     namespaces.mergeStaticClass(namespace, finalClassName, members)
   }
 
-  for ((key, props) in groupPropertiesByNamespaceAndFile(constProperties)) {
+  groupPropertiesByNamespaceAndFile(constProperties).forEach { (key, props) ->
     val (namespace, fileClassName) = key
     val finalClassName: String = resolveStaticClassName(fileClassName, namespace)
     val members: List<CirMember> = props.mapNotNull { translateConstProperty(it) }
     namespaces.mergeStaticClass(namespace, finalClassName, members)
   }
 
-  for (cls in regularClasses) {
+  regularClasses.forEach { cls ->
     namespaces.addDeclaration(
       namespaceOf(cls.packageName.asString()),
-      translateClass(cls, context.libraryName, tracker, exportedTypes, logger, callableCatalog)
+      translateClass(cls, context.libraryName, tracker, exportedTypes, logger, callableCatalog),
     )
   }
 
-  for (cls in genericClasses) {
+  genericClasses.forEach { cls ->
     namespaces.addDeclaration(
       namespaceOf(cls.packageName.asString()),
-      translateGenericClass(cls, context.libraryName, logger)
+      translateGenericClass(cls, context.libraryName, logger),
     )
     needsMarshalHelper = true
   }
 
-  for (cls in valueClasses) {
-    namespaces.addDeclaration(namespaceOf(cls.packageName.asString()), translateValueClass(cls, context.libraryName))
+  valueClasses.forEach { cls ->
+    namespaces.addDeclaration(
+      namespaceOf(cls.packageName.asString()),
+      translateValueClass(cls, context.libraryName, callableCatalog),
+    )
   }
 
-  for (enum in enums) {
-    namespaces.addDeclaration(namespaceOf(enum.packageName.asString()), translateEnum(enum, context.libraryName))
+  enums.forEach { enum ->
+    namespaces.addDeclaration(
+      namespaceOf(enum.packageName.asString()),
+      translateEnum(enum, context.libraryName),
+    )
   }
 
-  for (iface in interfaces) {
+  interfaces.forEach { iface ->
     namespaces.addDeclaration(
       namespaceOf(iface.packageName.asString()),
-      translateInterface(iface, context.libraryName, logger)
+      translateInterface(iface, context.libraryName, logger),
     )
   }
 
-  for (sealed in sealedClasses) {
+  sealedClasses.forEach { sealed ->
     namespaces.addDeclaration(
       namespaceOf(sealed.packageName.asString()),
-      translateSealedClass(sealed, context.libraryName, tracker, exportedTypes, logger)
+      translateSealedClass(sealed, context.libraryName, tracker, exportedTypes, logger),
     )
   }
 
-  for (obj in objects) {
+  objects.forEach { obj ->
     namespaces.addDeclaration(
       namespaceOf(obj.packageName.asString()),
-      translateObject(obj, context.libraryName, callableCatalog),
+      translateObject(obj, context.libraryName, callableCatalog, tracker),
     )
   }
 
@@ -198,8 +216,8 @@ internal fun translate(
       func.extensionReceiver!!.resolve().expandAliases().declaration.simpleName.asString()
     }
 
-  for ((receiverName, funcs) in extensionsByReceiver) {
-    val className = "${receiverName}Extensions"
+  extensionsByReceiver.forEach { (receiverName, funcs) ->
+    val className: String = "${receiverName}Extensions"
     val receiverQualified: String = funcs.first().extensionReceiver!!.resolve().expandAliases()
       .declaration.qualifiedName?.asString() ?: ""
 
@@ -213,16 +231,14 @@ internal fun translate(
     }
 
     val members: List<CirMember> = funcs.flatMap { func ->
-      val planned = callableCatalog.planFor(
+      val planned: ForwardCallablePlan? = callableCatalog.planFor(
         "${func.packageName.asString()}.${func.simpleName.asString()}",
       )
       if (planned != null) {
-        if (ForwardHelperRequirement.COLLECTION in planned.helperRequirements) tracker.needsList = true
+        tracker.trackPlan(planned)
         return@flatMap ForwardCirPlanProjection.extension(planned, context.libraryName)
       }
-      translateExtensionFunction(
-        func, receiverName, receiverQualified, context.libraryName, exportedTypes, tracker,
-      )
+      emptyList() // ordinary unplanned extensions: no fallthrough
     }
 
     namespaces.addDeclaration(namespace, CirStaticClass(className, members))
@@ -235,7 +251,7 @@ internal fun translate(
     }
 
   extensionPropsByReceiver.forEach { (receiverName, props) ->
-    val className = "${receiverName}Extensions"
+    val className: String = "${receiverName}Extensions"
     val receiverQualified: String = props.first().extensionReceiver!!
       .resolve().expandAliases()
       .declaration.qualifiedName?.asString() ?: ""
@@ -250,10 +266,15 @@ internal fun translate(
     }
 
     val members: List<CirMember> = props.flatMap { prop ->
-      val symbol: String = "${prop.packageName.asString()}.$receiverName.${prop.simpleName.asString()}"
-      val plan = callableCatalog.propertyFor(symbol)
-      if (plan != null) ForwardCirPropertyProjection.extension(plan, context.libraryName)
-      else translateExtensionProperty(prop, receiverName, receiverQualified, context.libraryName, exportedTypes)
+      val symbol: String =
+        "${prop.packageName.asString()}.$receiverName.${prop.simpleName.asString()}"
+      val plan: ForwardPropertyPlan? = callableCatalog.propertyFor(symbol)
+      if (plan != null) {
+        tracker.trackProperty(plan)
+        ForwardCirPropertyProjection.extension(plan, context.libraryName)
+      } else {
+        emptyList()
+      }
     }
 
     namespaces.mergeStaticClass(namespace, className, members)
@@ -263,11 +284,17 @@ internal fun translate(
 
   if (tracker.needsFlow) tracker.needsAsync = true
 
-  if (tracker.needsList || tracker.needsMap || tracker.needsSet || tracker.lambdaArities.isNotEmpty() || tracker.needsAsync) {
+  val needsCollectionHelpers: Boolean =
+    tracker.needsList || tracker.needsMap || tracker.needsSet ||
+        tracker.lambdaArities.isNotEmpty() || tracker.needsAsync
+  if (needsCollectionHelpers) {
     needsMarshalHelper = true
   }
 
-  if (functions.isNotEmpty() || classes.isNotEmpty() || objects.isNotEmpty() || sealedClasses.isNotEmpty()) {
+  val needsCoreMarshal: Boolean =
+    functions.isNotEmpty() || classes.isNotEmpty() ||
+        objects.isNotEmpty() || sealedClasses.isNotEmpty()
+  if (needsCoreMarshal) {
     needsMarshalHelper = true
   }
 

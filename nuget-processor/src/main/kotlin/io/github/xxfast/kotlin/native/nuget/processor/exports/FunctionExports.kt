@@ -1,39 +1,43 @@
 package io.github.xxfast.kotlin.native.nuget.processor.exports
 
 import com.google.devtools.ksp.symbol.KSClassDeclaration
-import com.google.devtools.ksp.symbol.ClassKind
 import com.google.devtools.ksp.symbol.KSFunctionDeclaration
 import com.google.devtools.ksp.symbol.KSType
 import com.google.devtools.ksp.symbol.Modifier
-import com.squareup.kotlinpoet.ClassName
 import com.squareup.kotlinpoet.FileSpec
 import com.squareup.kotlinpoet.FunSpec
 import io.github.xxfast.kotlin.native.nuget.processor.cir.expandAliases
 import io.github.xxfast.kotlin.native.nuget.processor.toCName
 
 /**
- * Generates @CName bridge exports for top-level functions.
- * Handles nullable returns (ADR-002), String returns, and sealed class returns.
+ * Named legacy adapter for top-level functions that remain outside the ordinary plan path:
+ * sealed and generic-declaration returns. Ordinary synchronous top-level callables (including
+ * ADR-002 nullable-primitive two-call) are planned and emitted via [addForwardKotlinPlanExport].
  *
- * @see <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/002-nullable-two-call-pattern.md">ADR-002: Nullable two-call pattern</a>
  * @see <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/007-top-level-function-class-naming.md">ADR-007: Top-level function naming</a>
+ * @see <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/009-sealed-class-mapping.md">ADR-009: Sealed class mapping</a>
+ * @see <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/010-generics-mapping.md">ADR-010: Generics mapping</a>
  */
 internal fun FileSpec.Builder.addFunctionExports(func: KSFunctionDeclaration) {
   val cname: String = toCName(func.simpleName.asString())
   val funcName: String = func.simpleName.asString()
   val returnType: KSType? = func.returnType?.resolve()?.expandAliases()
-  val isNullable: Boolean = returnType?.isMarkedNullable == true
-  val qualifiedReturn: String = returnType
-    ?.declaration?.qualifiedName?.asString() ?: "Unit"
+  val returnDecl: KSClassDeclaration? = returnType?.declaration as? KSClassDeclaration
+  val isSealedReturnType: Boolean = returnDecl?.modifiers?.contains(Modifier.SEALED) == true
+  val isGenericReturnType: Boolean = returnDecl?.typeParameters?.isNotEmpty() == true &&
+      returnType.arguments.isNotEmpty()
 
-  // An enum param arrives as its ordinal Int (ADR-006), so convert it back to the entry at the
-  // call site. The ordinal is bounds-checked: an out-of-range one throws inside the try below and
-  // surfaces to the caller through errorOut rather than crashing across the ABI.
+  if (!isGenericReturnType && !isSealedReturnType) {
+    // Ordinary types without a plan are unsupported for emission — never fall through to
+    // IntPtr / defaultValueFor("0") garbage (Phase 10 / MIGRATION invariants).
+    return
+  }
+
   val paramCall: String = func.parameters.joinToString(", ") { param ->
     val resolved: KSType = param.type.resolve().expandAliases()
     val name: String = param.name?.asString() ?: "_"
     val isEnum: Boolean = (resolved.declaration as? KSClassDeclaration)
-      ?.classKind == ClassKind.ENUM_CLASS
+      ?.classKind == com.google.devtools.ksp.symbol.ClassKind.ENUM_CLASS
 
     if (!isEnum) return@joinToString name
 
@@ -41,138 +45,7 @@ internal fun FileSpec.Builder.addFunctionExports(func: KSFunctionDeclaration) {
       ?: resolved.declaration.simpleName.asString()
 
     "($enumName.entries.getOrNull($name) ?: throw IllegalArgumentException(" +
-      "\"Ordinal \" + $name + \" is out of bounds for enum $enumName\"))"
-  }
-
-  val returnDecl: KSClassDeclaration? = returnType?.declaration as? KSClassDeclaration
-  val isEnumReturnType: Boolean = returnDecl?.classKind == ClassKind.ENUM_CLASS
-  val isSealedReturnType: Boolean = returnDecl?.modifiers?.contains(Modifier.SEALED) == true
-  val isGenericReturnType: Boolean = returnDecl?.typeParameters?.isNotEmpty() == true &&
-      returnType.arguments.isNotEmpty()
-
-  if (isNullable) {
-    addFunction(
-      FunSpec.builder("export_${cname}_has_value")
-        .addAnnotation(cNameAnnotation(cname + "_has_value"))
-        .addEnumAwareParameters(func)
-        .addParameter("errorOut", cOpaquePointer.copy(nullable = true))
-        .returns(Boolean::class)
-        .addCode(buildString {
-          appendLine("return try {")
-          appendLine("  %L(%L) != null")
-          appendLine("} catch (e: Throwable) {")
-          appendLine("  if (errorOut != null) {")
-          appendLine("    errorOut.reinterpret<%T>().pointed.value = %T.create(")
-          appendLine("      buildError(e)")
-          appendLine("    ).asCPointer()")
-          appendLine("  }")
-          appendLine("  false")
-          append("}")
-        }, funcName, paramCall, cOpaquePointerVar, stableRef)
-        .build()
-    )
-
-    val valueReturn: String =
-      if (qualifiedReturn == "kotlin.String") "kotlin.String"
-      else qualifiedReturn
-
-    val valueDummy: String = defaultValueFor(valueReturn)
-    val valueReturnType = ClassName.bestGuess(valueReturn).copy(nullable = valueDummy == "null")
-
-    addFunction(
-      FunSpec.builder("export_${cname}_value")
-        .addAnnotation(cNameAnnotation(cname + "_value"))
-        .addEnumAwareParameters(func)
-        .addParameter("errorOut", cOpaquePointer.copy(nullable = true))
-        .returns(valueReturnType)
-        .addCode(buildString {
-          appendLine("return try {")
-          appendLine("  %L(%L)!!")
-          appendLine("} catch (e: Throwable) {")
-          appendLine("  if (errorOut != null) {")
-          appendLine("    errorOut.reinterpret<%T>().pointed.value = %T.create(")
-          appendLine("      buildError(e)")
-          appendLine("    ).asCPointer()")
-          appendLine("  }")
-          appendLine("  $valueDummy")
-          append("}")
-        }, funcName, paramCall, cOpaquePointerVar, stableRef)
-        .build()
-    )
-    return
-  }
-
-  if (isGenericReturnType || isSealedReturnType) {
-    addFunction(
-      FunSpec.builder("export_$cname")
-        .addAnnotation(cNameAnnotation(cname))
-        .addEnumAwareParameters(func)
-        .addParameter("errorOut", cOpaquePointer.copy(nullable = true))
-        .returns(cOpaquePointer.copy(nullable = true))
-        .addCode(buildString {
-          appendLine("return try {")
-          appendLine("  %T.create(%L(%L)).asCPointer()")
-          appendLine("} catch (e: Throwable) {")
-          appendLine("  if (errorOut != null) {")
-          appendLine("    errorOut.reinterpret<%T>().pointed.value = %T.create(")
-          appendLine("      buildError(e)")
-          appendLine("    ).asCPointer()")
-          appendLine("  }")
-          appendLine("  null")
-          append("}")
-        }, stableRef, funcName, paramCall, cOpaquePointerVar, stableRef)
-        .build()
-    )
-    return
-  }
-
-  // Enums cross the native ABI as their ordinal Int (ADR-006). This matters for a public Kotlin
-  // API that returns a reverse-generated enum: it is re-exported by the forward processor when
-  // packaging the sample library for its C# consumer.
-  if (isEnumReturnType) {
-    addFunction(
-      FunSpec.builder("export_$cname")
-        .addAnnotation(cNameAnnotation(cname))
-        .addEnumAwareParameters(func)
-        .addParameter("errorOut", cOpaquePointer.copy(nullable = true))
-        .returns(Int::class)
-        .addCode(buildString {
-          appendLine("return try {")
-          appendLine("  %L(%L).ordinal")
-          appendLine("} catch (e: Throwable) {")
-          appendLine("  if (errorOut != null) {")
-          appendLine("    errorOut.reinterpret<%T>().pointed.value = %T.create(")
-          appendLine("      buildError(e)")
-          appendLine("    ).asCPointer()")
-          appendLine("  }")
-          appendLine("  0")
-          append("}")
-        }, funcName, paramCall, cOpaquePointerVar, stableRef)
-        .build()
-    )
-    return
-  }
-
-  if (qualifiedReturn == "kotlin.Unit") {
-    addFunction(
-      FunSpec.builder("export_$cname")
-        .addAnnotation(cNameAnnotation(cname))
-        .addEnumAwareParameters(func)
-        .addParameter("errorOut", cOpaquePointer.copy(nullable = true))
-        .addCode(buildString {
-          appendLine("try {")
-          appendLine("  %L(%L)")
-          appendLine("} catch (e: Throwable) {")
-          appendLine("  if (errorOut != null) {")
-          appendLine("    errorOut.reinterpret<%T>().pointed.value = %T.create(")
-          appendLine("      buildError(e)")
-          appendLine("    ).asCPointer()")
-          appendLine("  }")
-          append("}")
-        }, funcName, paramCall, cOpaquePointerVar, stableRef)
-        .build()
-    )
-    return
+        "\"Ordinal \" + $name + \" is out of bounds for enum $enumName\"))"
   }
 
   addFunction(
@@ -180,19 +53,19 @@ internal fun FileSpec.Builder.addFunctionExports(func: KSFunctionDeclaration) {
       .addAnnotation(cNameAnnotation(cname))
       .addEnumAwareParameters(func)
       .addParameter("errorOut", cOpaquePointer.copy(nullable = true))
-      .returns(ClassName.bestGuess(qualifiedReturn))
+      .returns(cOpaquePointer.copy(nullable = true))
       .addCode(buildString {
         appendLine("return try {")
-        appendLine("  %L(%L)")
+        appendLine("  %T.create(%L(%L)).asCPointer()")
         appendLine("} catch (e: Throwable) {")
         appendLine("  if (errorOut != null) {")
         appendLine("    errorOut.reinterpret<%T>().pointed.value = %T.create(")
         appendLine("      buildError(e)")
         appendLine("    ).asCPointer()")
         appendLine("  }")
-        appendLine("  ${defaultValueFor(qualifiedReturn)}")
+        appendLine("  null")
         append("}")
-      }, funcName, paramCall, cOpaquePointerVar, stableRef)
+      }, stableRef, funcName, paramCall, cOpaquePointerVar, stableRef)
       .build()
   )
 }

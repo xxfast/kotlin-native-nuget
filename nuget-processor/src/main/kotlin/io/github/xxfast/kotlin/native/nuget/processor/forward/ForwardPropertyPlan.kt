@@ -80,11 +80,9 @@ internal data class ForwardPropertyPlan(
 
   private fun validateType(type: BridgeType) {
     when (type) {
-      BridgeType.Unit, BridgeType.String, is BridgeType.Primitive, is BridgeType.Enum,
-      is BridgeType.ObjectHandle -> Unit
-      is BridgeType.Collection -> require(type.kind == CollectionKind.LIST || type.kind == CollectionKind.MUTABLE_LIST) {
-        "Forward property plan $symbol has unsupported planned collection ${type.kind}"
-      }
+      BridgeType.Unit, BridgeType.Char, BridgeType.String, is BridgeType.Primitive, is BridgeType.Enum,
+      is BridgeType.ObjectHandle, is BridgeType.Collection -> Unit
+
       is BridgeType.Nullable -> validateType(type.type)
       else -> error("Forward property plan $symbol has unsupported type $type")
     }

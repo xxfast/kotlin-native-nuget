@@ -24,9 +24,10 @@ Primitive types follow the standard [Kotlin/Native C interop mappings](https://k
 | `UByte` / `UShort` / `UInt` / `ULong` | ⇄ | `byte` / `ushort` / `uint` / `ulong` |                                   |                                                      |
 | `Float` / `Double`                    | ⇄ | `float` / `double`                   |                                   |                                                      |
 | `Boolean`                             | ⇄ | `bool`                               |                                   |                                                      |
+| `Char`                                | → | `char`                               | 2-byte scalar; property, parameter, and method return | [ADR-062](docs/adr/062-forward-callable-plan.md) |
 | `String`                              | ⇄ | `string`                             | UTF-8 marshalling                 |                                                      |
-| `T?` (nullable primitive)             | → | `T?`                                 | two-call pattern; ← `Nullable<T>` deferred (needs its own wire format) | [ADR-002](docs/adr/002-nullable-two-call-pattern.md), [ADR-053](docs/adr/053-nullable-reference-types-in-kotlin.md) |
-| `String?`                             | ⇄ | `string?`                            | → two-call pattern on returns; → parameter nullability currently dropped in the generated C# signature (tracked in [ROADMAP.md](ROADMAP.md) Phase 2) · ← `NullableAttribute` byte 2 → `String?`, byte 1 → `String`, byte 0/oblivious → `String` plus an `info_oblivious_nullability` warning | [ADR-002](docs/adr/002-nullable-two-call-pattern.md), [ADR-053](docs/adr/053-nullable-reference-types-in-kotlin.md) |
+| `T?` (nullable primitive)             | → | `T?`                                 | two-call on property/top-level returns; method/extension nullable numerics use single-call `valueOut`; ← `Nullable<T>` deferred (needs its own wire format) | [ADR-002](docs/adr/002-nullable-two-call-pattern.md), [ADR-061](docs/adr/061-method-return-marshalling.md), [ADR-053](docs/adr/053-nullable-reference-types-in-kotlin.md) |
+| `String?`                             | ⇄ | `string?`                            | → two-call on property/top-level returns; → nullable parameters carry `?` on the planned C# surface · ← `NullableAttribute` byte 2 → `String?`, byte 1 → `String`, byte 0/oblivious → `String` plus an `info_oblivious_nullability` warning | [ADR-002](docs/adr/002-nullable-two-call-pattern.md), [ADR-053](docs/adr/053-nullable-reference-types-in-kotlin.md), [ADR-062](docs/adr/062-forward-callable-plan.md) |
 
 ## OOP Constructs
 
@@ -49,11 +50,11 @@ Primitive types follow the standard [Kotlin/Native C interop mappings](https://k
 | Kotlin                    | ⇄ | C#                    | Notes                                            | ADRs                                                       |
 |---------------------------|:-:|-----------------------|--------------------------------------------------|------------------------------------------------------------|
 | member property (get/set) | ⇄ | property (get/set)    | → nullable primitive + object properties supported · ← instance or static property, read-only → `val`, settable → `var` with bridge-backed `get()`/`set()`; static properties live in a Kotlin `object` or `companion object`; a settable handle-typed property now renders as `var Foo` / `var Foo?` per its `NullableAttribute`, getter and setter sharing one type | [ADR-051](docs/adr/051-csharp-objects-as-opaque-handles.md), [ADR-053](docs/adr/053-nullable-reference-types-in-kotlin.md) |
-| instance method return (object, `T?`, `List<T>`, `String?`, `Int?`) | → | matching C# return type | same marshalling cascade as the property getter; nullable primitive is single-call (`bool` has-value + `valueOut` out-param), since a method may have side effects and can't be invoked twice | [ADR-061](docs/adr/061-method-return-marshalling.md) |
-| top-level function        | → | `static class` method | one static class per source file                 | [ADR-007](docs/adr/007-top-level-function-class-naming.md) |
+| instance method return (object, `T?`, `List`/`Map`/`Set`, enum, `Char`, `String?`, `Int?`, …) | → | matching C# return type | shared `ForwardCallablePlan` cascade as the property getter; nullable numeric is single-call (`bool` has-value + `valueOut` out-param), since a method may have side effects and can't be invoked twice | [ADR-061](docs/adr/061-method-return-marshalling.md), [ADR-062](docs/adr/062-forward-callable-plan.md) |
+| top-level function        | → | `static class` method | one static class per source file; class-returning factories box via StableRef | [ADR-007](docs/adr/007-top-level-function-class-naming.md), [ADR-062](docs/adr/062-forward-callable-plan.md) |
 | top-level property        | → | static property       | get/set, including nullable                      |                                                            |
 | `const val`               | → | `const`               |                                                  |                                                            |
-| extension function        | → | static method         | return marshalling mirrors the class-method position (object/collection/nullable) | [ADR-061](docs/adr/061-method-return-marshalling.md) |
+| extension function        | → | static method         | return marshalling mirrors the class-method position (object/collection/enum/`Char`/nullable) | [ADR-061](docs/adr/061-method-return-marshalling.md), [ADR-062](docs/adr/062-forward-callable-plan.md) |
 | extension property        | → | static accessor       |                                                  | [ADR-013](docs/adr/013-extension-property-mapping.md)      |
 
 ## Generics
@@ -71,14 +72,14 @@ Primitive types follow the standard [Kotlin/Native C interop mappings](https://k
 
 | Kotlin            | ⇄  | C#                         | Notes                        | ADRs |
 |-------------------|:--:|----------------------------|------------------------------|------|
-| `List<T>`         | →  | `IReadOnlyList<T>`         | eager copy via opaque handle; also marshals as a class-method/extension-function return | [ADR-061](docs/adr/061-method-return-marshalling.md) |
-| `MutableList<T>`  | →  | `IList<T>`                 | eager copy                   |      |
-| `Map<K,V>`        | →  | `IReadOnlyDictionary<K,V>` | eager copy                   |      |
-| `MutableMap<K,V>` | →  | `IDictionary<K,V>`         | eager copy                   |      |
-| `Set<T>`          | →  | `IReadOnlySet<T>`          | eager copy                   |      |
-| `MutableSet<T>`   | →  | `ISet<T>`                  | eager copy                   |      |
+| `List<T>`         | →  | `IReadOnlyList<T>`         | eager copy via opaque handle; property, method return, and method parameter | [ADR-011](docs/adr/011-collection-type-mapping.md), [ADR-061](docs/adr/061-method-return-marshalling.md), [ADR-062](docs/adr/062-forward-callable-plan.md) |
+| `MutableList<T>`  | →  | `IList<T>`                 | eager copy                   | [ADR-011](docs/adr/011-collection-type-mapping.md) |
+| `Map<K,V>`        | →  | `IReadOnlyDictionary<K,V>` | eager copy; property and method **return**; method **parameter** not planned yet (skipped) | [ADR-011](docs/adr/011-collection-type-mapping.md), [ADR-062](docs/adr/062-forward-callable-plan.md) |
+| `MutableMap<K,V>` | →  | `IDictionary<K,V>`         | eager copy; same input gap as `Map` | [ADR-011](docs/adr/011-collection-type-mapping.md), [ADR-062](docs/adr/062-forward-callable-plan.md) |
+| `Set<T>`          | →  | `IReadOnlySet<T>`          | eager copy; property and method **return**; method **parameter** not planned yet (skipped) | [ADR-011](docs/adr/011-collection-type-mapping.md), [ADR-062](docs/adr/062-forward-callable-plan.md) |
+| `MutableSet<T>`   | →  | `ISet<T>`                  | eager copy; same input gap as `Set` | [ADR-011](docs/adr/011-collection-type-mapping.md), [ADR-062](docs/adr/062-forward-callable-plan.md) |
 
-See [ADR-011](docs/adr/011-collection-type-mapping.md).
+See [ADR-011](docs/adr/011-collection-type-mapping.md) and [ADR-062](docs/adr/062-forward-callable-plan.md).
 
 ## Functions & Lambdas
 
@@ -90,7 +91,7 @@ See [ADR-011](docs/adr/011-collection-type-mapping.md).
 | interface parameter (C# → Kotlin)    | → | C# implements `I`-prefixed type | `add`/`remove`-paired, `IDisposable`, N pointers | [ADR-039](docs/adr/039-interface-bridging.md)           |
 | `inline fun`                         | → | regular method                  |                                                  | [ADR-017](docs/adr/017-inline-function-mapping.md)      |
 | `inline fun <reified T>`             | → | typed variants                  | reified type parameters                          |                                                         |
-| value class (`value`/`inline class`) | → | underlying type / record struct |                                                  | [ADR-014](docs/adr/014-value-class-mapping.md)          |
+| value class (`value`/`inline class`) | → | underlying type / record struct | methods with parameters on both underlying branches (e.g. `ChartId.Matches`, `ChartRef.Label`); reference-underlying primary `init` validation deferred | [ADR-014](docs/adr/014-value-class-mapping.md), [ADR-062](docs/adr/062-forward-callable-plan.md), [ADR-035](docs/adr/035-value-class-primary-constructor-validation.md) |
 | same-name function overloads         | ← | method overload set             | each bridgeable member keeps the same Kotlin name; unsupported siblings are diagnosed independently; a true mapped-signature collision fails generation | [ADR-057](docs/adr/057-csharp-overload-sets-in-kotlin.md) |
 
 ## Exception Handling

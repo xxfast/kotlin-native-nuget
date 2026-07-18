@@ -155,15 +155,10 @@ class Tier1StructuralInteropCsTest {
   }
 
   /**
-   * Cell 14 · obs N. Class property × `Char`. `CirClassTranslator.kt:179` misclassifies `Char`
-   * as a reference type (`Char` is absent from `KOTLIN_TO_CSHARP_RETURN`) and `:184-188` warns
-   * and skips it — `ForwardAbiContract` permits a Kotlin export with no C# import by design
-   * (ADR-055), so generation still succeeds and the member simply **vanishes** from the C# API.
-   * Nothing observes this by definition (obs **N**), so Tier 1 asserting the member's presence
-   * directly in the generated text is the *only* place this can ever be red.
+   * Cell 14 · LANDS NOW (MIGRATION.md Phase 8). Class property × `Char` on the shared property
+   * plan — public C# surface includes `char Grade`.
    */
   @Test
-  @XFail("ADR-060 cell 14 - Char property is silently skipped and absent from Interop.cs")
   fun `cell 14 - Char property is present on the generated Patient class`() {
     val result = Tier1Harness.run(
       """
@@ -235,7 +230,10 @@ class Tier1StructuralInteropCsTest {
     )
 
     assertTrue(result.compiledClean, "expected Patient.describe to compile; got: ${result.compileErrors}")
-    assertContains(result.generatedCSharp, "public int Describe(Mood mood)")
+    // Phase 8 qualifies enums as global::Namespace.Name so reverse-generated / cross-namespace
+    // enums resolve; same-namespace simple names remain a substring of that form.
+    assertContains(result.generatedCSharp, "public int Describe(")
+    assertContains(result.generatedCSharp, "Mood mood)")
   }
 
   /** MIGRATION.md Phase 7. Class-method non-nullable object-handle parameter. */

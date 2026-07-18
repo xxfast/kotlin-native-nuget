@@ -2,6 +2,10 @@ package io.github.xxfast.kotlin.native.nuget.processor.cir
 
 import com.google.devtools.ksp.symbol.KSType
 import com.google.devtools.ksp.symbol.KSTypeAlias
+import io.github.xxfast.kotlin.native.nuget.processor.forward.BridgeType
+import io.github.xxfast.kotlin.native.nuget.processor.forward.CollectionKind
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallablePlan
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardPropertyPlan
 
 internal fun KSType.expandAliases(): KSType {
   val decl = declaration
@@ -66,6 +70,26 @@ internal class CollectionHelperTracker {
   val lambdaArities: MutableSet<Int> = mutableSetOf()
   val suspendLambdaArities: MutableSet<Int> = mutableSetOf()
   val callbackDelegates: MutableList<CirCallbackDelegate> = mutableListOf()
+
+  /** Marks List/Map/Set helper needs from a planned [BridgeType] (result, parameter, or property). */
+  fun trackCollection(type: BridgeType) {
+    val unwrapped: BridgeType = if (type is BridgeType.Nullable) type.type else type
+    val collection = unwrapped as? BridgeType.Collection ?: return
+    when (collection.kind) {
+      CollectionKind.LIST, CollectionKind.MUTABLE_LIST -> needsList = true
+      CollectionKind.MAP, CollectionKind.MUTABLE_MAP -> needsMap = true
+      CollectionKind.SET, CollectionKind.MUTABLE_SET -> needsSet = true
+    }
+  }
+
+  fun trackPlan(plan: ForwardCallablePlan) {
+    trackCollection(plan.publicSignature.result)
+    plan.publicSignature.parameters.forEach { parameter -> trackCollection(parameter.type) }
+  }
+
+  fun trackProperty(plan: ForwardPropertyPlan) {
+    trackCollection(plan.type)
+  }
 }
 
 internal fun mapReturnType(kotlinType: String): String =

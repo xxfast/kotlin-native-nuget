@@ -8,9 +8,10 @@ Primitive types follow the standard [Kotlin/Native C interop mappings](https://k
 | `UByte` / `UShort` / `UInt` / `ULong` | `byte` / `ushort` / `uint` / `ulong` | |
 | `Float` / `Double` | `float` / `double` | |
 | `Boolean` | `bool` | |
+| `Char` | `char` | 2-byte scalar (`ushort` at the C ABI); property, parameter, and method return, see [ADR-062](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/062-forward-callable-plan.md) |
 | `String` | `string` | UTF-8 marshalling |
-| `T?` (nullable primitive) | `T?` | two-call pattern, forward only, see [ADR-002](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/002-nullable-two-call-pattern.md) |
-| `String?` | `string?` | forward: two-call pattern (this page); reverse: `NullableAttribute`-driven, see [Objects and handles](objects-and-handles.md) and [ADR-053](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/053-nullable-reference-types-in-kotlin.md) |
+| `T?` (nullable primitive) | `T?` | two-call pattern on property and top-level returns (forward only); method/extension nullable numerics use single-call `valueOut`, see [Classes and objects](classes-and-objects.md) and [ADR-002](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/002-nullable-two-call-pattern.md) / [ADR-061](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/061-method-return-marshalling.md) |
+| `String?` | `string?` | forward: two-call pattern on top-level/property returns (this page); reverse: `NullableAttribute`-driven, see [Objects and handles](objects-and-handles.md) and [ADR-053](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/053-nullable-reference-types-in-kotlin.md) |
 
 ## Kotlin
 
@@ -182,26 +183,96 @@ public void NullableString_WithValue_ReturnsValue()
 
 Nullable primitive and object *properties* on classes follow the same pattern; see `Cat.Owner` and `Cat.Age` in [Classes and objects](classes-and-objects.md).
 
+## Char
+
+`Char` is a 2-byte scalar on both sides (`char` in C#, `KChar`/`unsigned short` at the C ABI). It is
+planned like any other ordinary primitive ([ADR-062](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/062-forward-callable-plan.md)):
+as a property, a method parameter, and a method return.
+
+From `test-library/src/nativeMain/kotlin/.../clinic/ClinicSample.kt`:
+
+```kotlin
+class Patient(val name: String) {
+  val grade: Char = 'A'
+  fun tag(initial: Char): String = "$initial-$name"
+  fun initial(): Char = name.first()
+}
+```
+
+Generated C#, from `Interop.cs`:
+
+```C#
+public char Grade
+{
+    get
+    {
+        char nativeResult = Native_Get_grade(_handle, out IntPtr error);
+        if (error != IntPtr.Zero)
+        {
+            throw NugetErrorNative.BuildException(error);
+        }
+        return nativeResult;
+    }
+}
+
+public string Tag(char initial)
+{
+    IntPtr nativeResult = Native_Tag(_handle, initial, out IntPtr error);
+    if (error != IntPtr.Zero)
+    {
+        throw NugetErrorNative.BuildException(error);
+    }
+    return Marshal.PtrToStringUTF8(nativeResult)!;
+}
+
+public char Initial()
+{
+    char result = Native_Initial(_handle, out IntPtr error);
+    if (error != IntPtr.Zero)
+    {
+        throw NugetErrorNative.BuildException(error);
+    }
+    return result;
+}
+```
+
+From `IntegrationTests/ReturnAndPropertyMarshallingTests.cs` and `MethodParameterMarshallingTests.cs`:
+
+```C#
+[Fact]
+public void Patient_Grade_IsCharProperty()
+{
+    using var patient = new Patient("Oreo");
+    Assert.Equal('A', patient.Grade);
+}
+
+[Fact]
+public void Patient_Initial_ReturnsFirstCharacter()
+{
+    using var patient = new Patient("Oreo");
+    Assert.Equal('O', patient.Initial());
+}
+
+[Fact]
+public void Patient_Tag_MarshalsCharParameter()
+{
+    using var patient = new Patient("Oreo");
+    Assert.Equal("O-Oreo", patient.Tag('O'));
+}
+```
+
 ## Limitations
 
 - Nullable *primitive* mapping (`Int?`, and friends) is forward-only (`→`): the reverse direction has
   no `Nullable<T>` wire format yet (deferred by [ADR-053](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/053-nullable-reference-types-in-kotlin.md)
   Decision 3, not a two-call-pattern gap).
-- Nullable *string* mapping is now `⇄`: forward uses this page's two-call pattern, reverse reads the
-  bound assembly's `NullableAttribute` instead (see [Objects and handles](objects-and-handles.md)).
-  The two mechanisms are unrelated; a reverse-bound `string?` never goes through a `has_value`/`value`
-  pair.
-- Forward-direction nullable *parameters* (`fun f(name: String?)`) currently generate a non-nullable
-  C# parameter (`string name`, not `string?`), silently dropping the annotation from the generated
-  signature. It still works at runtime, but a consumer passing `null` in a warnings-as-errors project
-  hits `CS8625`. Tracked in [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md)
-  Phase 2.
-- `Char` is not bridged today — note its absence from the table above. Its outcome is
-  position-dependent: as a parameter it leaks `IntPtr` into the public C# signature (an 8-byte pointer
-  for a 2-byte scalar), as a return it generates invalid Kotlin, and as a class property it is silently
-  skipped from the C# API. Route a `Char` through an `Int` code point instead. Tracked in
-  [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md) Phase 3 and pinned as
-  red cells by the adversarial forward fixture ([ADR-060](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/060-adversarial-forward-fixture.md)).
+- Nullable *string* mapping is now `⇄`: forward uses this page's two-call pattern on property and
+  top-level returns, reverse reads the bound assembly's `NullableAttribute` instead (see
+  [Objects and handles](objects-and-handles.md)). The two mechanisms are unrelated; a reverse-bound
+  `string?` never goes through a `has_value`/`value` pair.
+- Nullable `Boolean` method returns remain unplanned under the shared callable plan and are skipped
+  rather than fallthrough-emitted. Tracked in [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md)
+  Phase 4 ([ADR-062](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/062-forward-callable-plan.md)).
 
 <seealso>
     <category ref="related">
@@ -212,5 +283,6 @@ Nullable primitive and object *properties* on classes follow the same pattern; s
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/002-nullable-two-call-pattern.md">ADR-002: Nullable two-call pattern</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/024-sync-exception-propagation.md">ADR-024: Synchronous exception propagation</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/053-nullable-reference-types-in-kotlin.md">ADR-053: Nullable reference types in Kotlin</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/062-forward-callable-plan.md">ADR-062: Forward callable plan</a>
     </category>
 </seealso>
