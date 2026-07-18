@@ -107,7 +107,7 @@ data class CirObject(
   val name: String,
   val libraryName: String,
   val nativePrefix: String,
-  val methods: List<CirDllImport>,
+  val methods: List<CirMember>,
 ) : CirDeclaration
 
 enum class CirVariance { INVARIANT, COVARIANT, CONTRAVARIANT }

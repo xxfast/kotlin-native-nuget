@@ -4,7 +4,7 @@ A Kotlin `object` singleton becomes a static C# class: no instance, no construct
 
 | Kotlin | C# | Notes |
 |---|---|---|
-| `object` | `static class` | singleton |
+| `object` | `static class` | singleton; methods are PascalCased and their returns marshalled, exactly like a class method |
 | `data object` (in `sealed class`) | sealed subclass | with `ToString` |
 | companion object | static members | |
 
@@ -46,32 +46,86 @@ class Cat(
 
 ## Generated C#
 
-`CatRegistry` renders as a `static class` with no handle at all. Every member is a direct `[DllImport]`:
+`CatRegistry` renders as a `static class` with no handle at all. Each method is PascalCased and routes through the same static-function marshalling as a top-level function: a private `[DllImport]` extern plus a public wrapper that checks the error out-parameter across the bridge.
 
 ```C#
 public static class CatRegistry
 {
-    [DllImport("sample", CallingConvention = CallingConvention.Cdecl, EntryPoint = "catregistry_register_")]
-    public static extern void register(string name);
+    [DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "catregistry_register_")]
+    private static extern void Register_native(string name, out IntPtr error);
 
-    [DllImport("sample", CallingConvention = CallingConvention.Cdecl, EntryPoint = "catregistry_count")]
-    public static extern int count();
+    public static void Register(string name)
+    {
+        Register_native(name, out IntPtr error);
+        if (error != IntPtr.Zero)
+        {
+            throw NugetErrorNative.BuildException(error);
+        }
+    }
 
-    [DllImport("sample", CallingConvention = CallingConvention.Cdecl, EntryPoint = "catregistry_clear")]
-    public static extern void clear();
+    [DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "catregistry_count")]
+    private static extern int Count_native(out IntPtr error);
+
+    public static int Count()
+    {
+        int result = Count_native(out IntPtr error);
+        if (error != IntPtr.Zero)
+        {
+            throw NugetErrorNative.BuildException(error);
+        }
+        return result;
+    }
+
+    [DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "catregistry_clear")]
+    private static extern void Clear_native(out IntPtr error);
+
+    public static void Clear()
+    {
+        Clear_native(out IntPtr error);
+        if (error != IntPtr.Zero)
+        {
+            throw NugetErrorNative.BuildException(error);
+        }
+    }
+
 }
 ```
 
+A non-primitive return is marshalled to its idiomatic C# type, exactly like a class method — the hidden `IntPtr` and `Marshal.PtrToStringUTF8` live on the generated side, never the consumer's. The `Clinic` object (`test-library/src/nativeMain/kotlin/.../clinic/ClinicSample.kt`) has a `String`-returning method:
+
+```kotlin
+object Clinic {
+  fun greet(name: String): String = "Welcome to the clinic, $name"
+  fun capacity(): Int = 12
+  fun reset() {}
+}
+```
+
+`greet` surfaces as a PascalCased `Greet` returning a real `string`:
+
+```C#
+public static class Clinic
+{
+    [DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "clinic_greet")]
+    private static extern IntPtr Greet_native(string name, out IntPtr error);
+
+    public static string Greet(string name)
+    {
+        IntPtr nativeResult = Greet_native(name, out IntPtr error);
+        if (error != IntPtr.Zero)
+        {
+            throw NugetErrorNative.BuildException(error);
+        }
+        return Marshal.PtrToStringUTF8(nativeResult)!;
+    }
+
+    // Capacity() and Reset() follow the same wrapper pattern as CatRegistry above.
+}
+```
+
+Object methods thus match class and companion methods on both facets: PascalCased names and marshalled returns (completing [ADR-060](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/060-adversarial-forward-fixture.md) cells 1 and 25; naming follows [ADR-007](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/007-top-level-function-class-naming.md)).
+
 The `Cat` companion's members are generated as static members directly on the `Cat` class itself (`Cat.Species`, `Cat.DefaultBreed`, `Cat.FromName(...)`) rather than a nested type. There's no separate `Cat.Companion` class in the generated output.
-
-## Known limitations
-
-The `object` path has not caught up to the class path, and `CatRegistry` — the only `object` fixture, returning only `Int` and `void` — hides both gaps:
-
-- **A method that returns a non-primitive leaks the raw native type.** The object path has no marshalling at all, so a `String`-returning method on an `object` reaches C# as `IntPtr` (the consumer must call `Marshal.PtrToStringUTF8` themselves), unlike the class path which marshals it to `string`. Tracked in [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md) Phase 3.
-- **Object method names are not PascalCased.** Note the generated `register`/`count`/`clear` above stay camelCase, while the companion's `FromName` is PascalCased — every class and companion method is PascalCased, but an `object`'s methods keep their raw Kotlin name. Tracked in [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md) Phase 3.
-
-Both surface only on an `object` whose methods take or return the shapes `CatRegistry` avoids; they are pinned as red cells by the adversarial forward fixture ([ADR-060](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/060-adversarial-forward-fixture.md)).
 
 ## Using it from C#
 
@@ -87,11 +141,22 @@ public void CatRegistry_IsStaticClass()
 [Fact]
 public void CatRegistry_RegisterAndCount()
 {
-    CatRegistry.clear();
-    CatRegistry.register("Oreo");
-    CatRegistry.register("Mylo");
-    Assert.Equal(2, CatRegistry.count());
-    CatRegistry.clear();
+    CatRegistry.Clear();
+    CatRegistry.Register("Oreo");
+    CatRegistry.Register("Mylo");
+    Assert.Equal(2, CatRegistry.Count());
+    CatRegistry.Clear();
+}
+```
+
+An object method with a non-primitive return is called just like any other marshalled member — no `Marshal.PtrToStringUTF8` at the call site. From `IntegrationTests/ObjectMethodMarshallingTests.cs`:
+
+```C#
+[Fact]
+public void Clinic_Greet_ReturnsMarshalledString()
+{
+    string greeting = Clinic.Greet("Bob");
+    Assert.Equal("Welcome to the clinic, Bob", greeting);
 }
 ```
 

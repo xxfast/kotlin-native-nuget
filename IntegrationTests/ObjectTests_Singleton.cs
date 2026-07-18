@@ -13,18 +13,18 @@ public class SingletonTests
     [Fact]
     public void CatRegistry_RegisterAndCount()
     {
-        CatRegistry.clear();
-        CatRegistry.register("Oreo");
-        CatRegistry.register("Mylo");
-        Assert.Equal(2, CatRegistry.count());
-        CatRegistry.clear();
+        CatRegistry.Clear();
+        CatRegistry.Register("Oreo");
+        CatRegistry.Register("Mylo");
+        Assert.Equal(2, CatRegistry.Count());
+        CatRegistry.Clear();
     }
 
     [Fact]
     public void CatRegistry_Clear()
     {
-        CatRegistry.register("Oreo");
-        CatRegistry.clear();
-        Assert.Equal(0, CatRegistry.count());
+        CatRegistry.Register("Oreo");
+        CatRegistry.Clear();
+        Assert.Equal(0, CatRegistry.Count());
     }
 }

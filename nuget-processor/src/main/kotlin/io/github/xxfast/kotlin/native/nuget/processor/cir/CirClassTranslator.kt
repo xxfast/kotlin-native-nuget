@@ -1119,12 +1119,19 @@ internal fun translateObject(
   val name: String = obj.simpleName.asString()
   val prefix: String = name.lowercase()
 
-  val methods: List<CirDllImport> = obj.getAllFunctions()
+  // Object methods are static (no receiver handle), so they route through the same
+  // shape as top-level functions (CirFunctionTranslator's static template) rather than
+  // the class instance-method loop, which hardcodes _handle. See the comment above
+  // this function's call site / ADR-060 cells 1 & 25.
+  val methods: List<CirMember> = obj.getAllFunctions()
     .filter { it.getVisibility() == Visibility.PUBLIC }
     .filter { it.simpleName.asString() !in listOf("equals", "hashCode", "toString", "<init>") }
-    .map { method ->
+    .flatMap { method ->
       val methodName: String = method.simpleName.asString()
       val cname: String = toCName(methodName)
+      // PascalCase the public method name (ADR-007); the native entry point keeps the
+      // lowercased cname, unchanged (cell 25).
+      val csName: String = methodName.replaceFirstChar { it.uppercase() }
       val returnType = method.returnType?.resolve()?.expandAliases()
       val kotlinReturnType: String = returnType?.declaration?.simpleName?.asString() ?: "Unit"
 
@@ -1135,16 +1142,57 @@ internal fun translateObject(
       }
 
       val entryPoint: String = "${prefix}_${cname}"
+      val nativeName: String = "${csName}_native"
 
-      CirDllImport(
+      if (kotlinReturnType == "String") {
+        val nativeImport = CirDllImport(
+          libraryName = libraryName,
+          entryPoint = entryPoint,
+          returnType = "IntPtr",
+          name = nativeName,
+          parameters = params,
+          visibility = CirVisibility.PRIVATE,
+          hasSyncErrorOut = true,
+        )
+
+        val wrapper = CirMethod(
+          name = csName,
+          returnType = "string",
+          nativeReturnType = "IntPtr",
+          nativeName = nativeName,
+          parameters = params,
+          body = "",
+          isStatic = true,
+          isSyncErrorCheckEnabled = true,
+        )
+
+        return@flatMap listOf(nativeImport, wrapper)
+      }
+
+      val csReturnType: String = mapReturnType(kotlinReturnType)
+      val isVoidReturn: Boolean = kotlinReturnType == "Unit"
+
+      val nativeImport = CirDllImport(
         libraryName = libraryName,
         entryPoint = entryPoint,
-        returnType = mapReturnType(kotlinReturnType),
-        name = methodName,
+        returnType = csReturnType,
+        name = nativeName,
         parameters = params,
         visibility = CirVisibility.PRIVATE,
         hasSyncErrorOut = true,
       )
+
+      val wrapper = CirMethod(
+        name = csName,
+        returnType = if (isVoidReturn) "void" else csReturnType,
+        nativeName = nativeName,
+        parameters = params,
+        body = "",
+        isStatic = true,
+        isSyncErrorCheckEnabled = true,
+      )
+
+      listOf(nativeImport, wrapper)
     }
     .toList()
 

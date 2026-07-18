@@ -15,14 +15,15 @@ import kotlin.test.assertContains
 class Tier1StructuralInteropCsTest {
 
   /**
-   * Cell 1 · obs C. `object` method return × `String`. `ObjectExports.kt:69` is fine on the
-   * Kotlin side; `CirObjectRenderer.kt:24` renders the *native* return type as the public C#
-   * one, so the generated method is `public static IntPtr greet(string name)` — a consumer
-   * cannot get a `string` back at all. `CatRegistry` (the only other `object` fixture) never
-   * returns a `String`, which is why this was never caught.
+   * Cell 1 · obs C. `object` method return × `String`. Guards the fix: object methods now route
+   * through the class path's static-function marshalling, so a `String` return marshals to a real
+   * `string`. Before the fix the object path had no marshalling at all — it rendered the *native*
+   * return type as the public one, so `greet` surfaced as `public static IntPtr greet(string name)`
+   * and a consumer could not get a `string` back. `CatRegistry` (the only other `object` fixture)
+   * never returned a `String`, which is why the leak shipped unnoticed. Fixed: ADR-060 cell 1 /
+   * ROADMAP Phase 3.
    */
   @Test
-  @XFail("ADR-060 cell 1 - object method returning String leaks IntPtr into the public C# API")
   fun `cell 1 - object method returning String renders a public string return in Interop cs`() {
     val result = Tier1Harness.run(
       """
@@ -36,7 +37,7 @@ class Tier1StructuralInteropCsTest {
 
     assertContains(
       result.generatedCSharp,
-      "public static string greet(string name)",
+      "public static string Greet(string name)",
       message = "expected Clinic.greet to return string, not IntPtr, in the generated Interop.cs",
     )
   }
@@ -153,34 +154,18 @@ class Tier1StructuralInteropCsTest {
   }
 
   /**
-   * Cell 25 · obs C. `object` method export naming. Not a marshalling defect like cell 1 — a
-   * distinct, independent one found by *not* trusting `CatRegistry` as the oracle for "what the
-   * object path is supposed to do": `CatRegistry` is the only pre-existing `object` fixture, so
-   * treating its output as correct-by-definition is the exact move that let cell 1's leak ship
-   * unnoticed release after release. Checked directly instead: the class path PascalCases a
-   * method name at ~20 call sites in `CirClassTranslator.kt` (verified — `replaceFirstChar {
-   * it.uppercase() }` at, among others, `:631`, `:685`, `:735`); `translateObject` (`:1143`)
-   * never does, assigning the raw Kotlin `methodName` straight to `CirDllImport.name`. Both
-   * `renderDllImport` and `renderObjectMethod` (`CirObjectRenderer.kt:8-9`) then render that same
-   * `name` — for the private `extern` declaration *and* the public C# method — so the object
-   * path's public identifier literally **is** its native-facing name, camelCase and all:
-   * `Clinic.greet()`, not `Clinic.Greet()`. `Clinic.capacity()` (this fixture) is cell 3's own
-   * *control* — the shape ADR-060 calls "the path that works" — which is precisely the point:
-   * the marshalling is fine, but nobody ever asserted the exposed *name*, on the working shape or
-   * the broken one alike. `GOALS.md` #2 asks for an idiomatic C# bridge; `object Clinic { fun
-   * register() }` rendering `Clinic.register()` instead of `Clinic.Register()` is not that.
-   *
-   * The model already carries what a fix needs without touching native linkage:
-   * `CirDllImport.entryPoint` (`CirClassTranslator.kt:1141`, `"${prefix}_${cname}"`) already
-   * carries the real native symbol separately from `name` — the class path uses exactly this
-   * split (a `csMethodName` distinct from the native-facing one) to PascalCase safely. The
-   * object path just never grew the second name. A fix landing for cell 1 (the return-type leak)
-   * would not touch this at all — same "the object path predates the class path's naming layer
-   * and never caught up" root cause as cell 1, a distinct symptom, which is why it needs its own
-   * assertion rather than folding into cell 1's.
+   * Cell 25 · obs C. `object` method export naming. A distinct symptom from cell 1's marshalling
+   * leak but the same root cause — the object path predated the class path's naming layer and
+   * never caught up — so the same fix resolved both: routing objects through the class path's
+   * static-function machinery PascalCases the public name while keeping the native entry point
+   * (`"${prefix}_${cname}"`) lowercased. Before the fix, `translateObject` assigned the raw Kotlin
+   * `methodName` straight to the public identifier, so `object Clinic { fun capacity() }` rendered
+   * `Clinic.capacity()`, not `Clinic.Capacity()` — off-idiom against every class method and against
+   * GOALS.md #2. Found by *not* trusting `CatRegistry` (the only pre-existing `object` fixture) as
+   * the oracle for the object path — the same over-trust that let cell 1's leak ship unnoticed.
+   * Fixed: ADR-060 cell 25 / ROADMAP Phase 3 (PascalCase per ADR-007).
    */
   @Test
-  @XFail("ADR-060 cell 25 - object method export keeps Kotlin casing instead of PascalCase")
   fun `cell 25 - object method is PascalCased in the generated Interop cs`() {
     val result = Tier1Harness.run(
       """

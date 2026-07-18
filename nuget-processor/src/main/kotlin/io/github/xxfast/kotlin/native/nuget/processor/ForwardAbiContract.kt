@@ -75,7 +75,7 @@ internal object ForwardAbiContract {
     .flatMap { declaration ->
       when (declaration) {
         is CirStaticClass -> declaration.members.filterIsInstance<CirDllImport>()
-        is CirObject -> declaration.methods
+        is CirObject -> declaration.methods.filterIsInstance<CirDllImport>()
         else -> emptyList()
       }
     }
