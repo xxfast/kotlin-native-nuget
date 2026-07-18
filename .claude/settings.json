@@ -22,17 +22,6 @@
           }
         ]
       }
-    ],
-    "SubagentStop": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "\"${CLAUDE_PROJECT_DIR:-.}/.claude/hooks/benchmark.sh\" capture",
-            "statusMessage": "Recording what the agent cost"
-          }
-        ]
-      }
     ]
   }
 }
