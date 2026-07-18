@@ -1,6 +1,6 @@
 ---
 name: kotlin-dev
-description: Use to implement the Kotlin side of the Kotlin/Native ↔ C# bridge generator, in either direction. Forward — the KSP processor (CirModel, CirTranslator, CirRenderer, NugetProcessor) that generates C# bindings. Reverse — the NuGet-consumption pipeline in the `nuget-plugin/` Gradle plugin (RIR model, extract/generate tasks) that turns a C# NuGet package into Kotlin bindings. Makes failing tests pass, then verifies the build.
+description: Use to implement the Kotlin side of the Kotlin/Native ↔ C# bridge generator, in either direction. Forward — the KSP processor that generates C# bindings: the ADR-062 forward callable plan (`forward/`, the single source of truth for ordinary sync callables), the CIR model/renderers (`cir/`), and NugetProcessor. Reverse — the NuGet-consumption pipeline in the `nuget-plugin/` Gradle plugin (RIR model, extract/generate tasks) that turns a C# NuGet package into Kotlin bindings. Makes failing tests pass, then verifies the build.
 tools: Read, Write, Edit, Bash, Grep, Glob
 model: sonnet
 ---
@@ -13,10 +13,33 @@ You are implementing the Kotlin side of a Kotlin/Native ↔ C# bridge generator,
 
 Forward — `nuget-processor/` — KSP processor that generates C# bindings and Kotlin bridge wrappers
 
-- `cir/CirModel.kt` — C# AST model (CirFile, CirNamespace, CirClass, CirEnum, etc.)
-- `cir/CirTranslator.kt` — translates KSP declarations → CIR model
-- `cir/CirRenderer.kt` — renders CIR → C# source text
-- `NugetProcessor.kt` — orchestrates KSP pipeline, generates Kotlin bridges via KotlinPoet
+- `forward/` — the ADR-062 forward callable plan, the single source of truth for **ordinary
+  synchronous** callables (properties, constructors, functions, methods, companions, objects,
+  extensions, data-class copy, value-class members):
+  - `ForwardMarshallingModel.kt` — the sealed `BridgeType` model, the semantic transfer models, and
+    the `ForwardCallablePlan` / `ForwardPropertyPlan` types (a plan owns the ordered ABI params +
+    directions, result convention, error slot, ownership, cleanup, helper requirements). Contains no
+    KSP symbols: a plan is complete before either renderer sees it.
+  - `ForwardBridgeTypeClassifier.kt` — classifies an alias-expanded `KSType` once into `BridgeType`
+  - `ForwardCallablePlanner.kt` / `ForwardPropertyPlanner.kt` — build validated plans; the
+    `ForwardPlanSkipReason` enum marks what falls through to a legacy route
+  - `ForwardKotlinPlanEmitter.kt` / `ForwardPropertyKotlinEmitter.kt` — KotlinPoet projection of a plan
+  - `ForwardCirPlanProjection.kt` / `ForwardCirPropertyProjection.kt` — CIR projection of the **same** plan
+- `cir/` — C# intermediate representation, split per concern: `CirModel.kt` (AST: CirFile, CirClass,
+  CirEnum, …), `CirTranslator.kt` + per-family translators (`CirClassTranslator`,
+  `CirFunctionTranslator`), `CirRenderer.kt` + per-family renderers (`CirEnumRenderer`,
+  `CirFunctionRenderer`, `CirFlowRenderer`, `CirMarshalRenderer`, `CirSealedRenderer`, …)
+- `exports/` — per-family Kotlin `@CName` export builders for the specialized protocols still on
+  legacy routes (`SuspendFunctionExports`, `LambdaParameterExports`, `SealedClassExports`,
+  `InterfaceBridgeExports`, `GenericClassExports`, …). Ordinary families no longer live here; they go
+  through the plan.
+- `ForwardAbiContract.kt` — the ADR-055 / ADR-062 generation-time contract check: derives expected ABI
+  signatures from the plan and compares them against both the rendered Kotlin `@CName` set and the CIR
+  `DllImport` set
+- `ForwardAbiLegacyRoutes.kt` — the explicit legacy-route allowlist (no generic fallback)
+- `NugetProcessor.kt` — orchestrates the pipeline: builds the `ForwardCallablePlanCatalog`, projects
+  both halves, runs the contract check, emits everything into a single `Interop.kt` FileSpec (the old
+  `CNameExports.kt` is gone)
 - `NugetProcessorProvider.kt` — KSP entry point
 - `Reserved.kt` — shared C/C# reserved word sets and naming functions
 
@@ -54,12 +77,14 @@ The [refactorer agent](refactorer.md) formats your files afterward. Report the l
 Forward:
 
 - KSP discovers all public top-level functions, classes, and enums
-- KotlinPoet generates `@CName` bridge wrappers (CNameExports.kt)
+- KotlinPoet generates `@CName` bridge wrappers, emitted into a single `Interop.kt` FileSpec
 - CIR model generates Interop.cs (pre-generated C# bindings)
 - StableRef pattern for objects: create on constructor, dispose on IDisposable
 - Enum properties → ordinal-based bridge functions
 - Per-file class naming (ADR-007): file name = C# static class name
-- **Both sides of every export are contract-checked at generation time (ADR-055).** The C# `CirDllImport` and the Kotlin `@CName` `FunSpec` are built by independent code paths, so KSP now normalizes both and fails the build if an export's result type, parameter count, order, wire type, or `out` direction disagree. If you add or change an export family, update **both** paths in the same change.
+- **Ordinary synchronous callables are planned once, then dual-projected (ADR-062).** `ForwardCallablePlanner` classifies each callable's types into `BridgeType` and builds one validated `ForwardCallablePlan` / `ForwardPropertyPlan` that owns the whole ABI. Both halves come off that one plan: KotlinPoet via `addForwardKotlinPlanExport`, CIR via `ForwardCirPlanProjection`. To add or change an ordinary type combination, extend classification + planning **once**, not every export/translator loop. A callable never splits between the plan path and a legacy path.
+- **Specialized protocols stay on named legacy routes** (`ForwardAbiLegacyRoutes.kt`): suspend, `Flow`, lambda/stored-callback/interface-bridge methods, sealed helpers, generic families, and reference-underlying value-class constructors. These still have hand-written export builders in `exports/` and translators in `cir/`, so for those you do update **both** halves in the same change. Ordinary unplanned types (unsupported handles, Map/Set inputs, nested unsupported components) are **skipped** with no emission, never `IntPtr` / `"0"` garbage.
+- **Both halves are contract-checked at generation time (ADR-055, now plan-derived per ADR-062).** `ForwardAbiContract` derives expected signatures from the plan and compares them against both the rendered Kotlin `@CName` set and the CIR `DllImport` set; KSP fails the build if an export's result type, parameter count, order, wire type, or `out` direction disagree.
 - A `Forward ABI mismatch for <export>; expected ..., actual ...` KSP failure is the guard working, not a bug in it. It names both signatures; the difference is the defect. Do not route around it by relaxing the check. This is the exact bug class that shipped the ADR-053 `SIGBUS`: a C# import missing the `out IntPtr error` slot its Kotlin export declared, so a thrown exception wrote through a register the caller never supplied.
 - A Kotlin export with **no** C# import is deliberately allowed (ADR-043 skips members outside the bridgeable subset), so the check is one-directional by design.
 
