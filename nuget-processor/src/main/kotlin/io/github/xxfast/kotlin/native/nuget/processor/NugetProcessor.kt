@@ -638,7 +638,23 @@ class NugetProcessor(
     if (needsMapSupport) builder.addNugetMapHelperExports()
     if (needsSetSupport) builder.addNugetSetHelperExports()
 
-    if (needsLambdaSupport && lambdaArities.any { it > 0 }) builder.addNugetWrapHelperExports()
+    // A collection *parameter* (Phase 7) needs `nuget_wrap_*` too: `NugetMarshal.CreateList<T>`
+    // boxes each primitive/String element through the matching wrap export before handing it to
+    // `nuget_list_add`. Computed once so lambda/suspend-lambda support sharing the same gate below
+    // never emits the wrap exports twice.
+    val needsCollectionParamWrap: Boolean = callableCatalog.plans.any { plan ->
+      ForwardHelperRequirement.COLLECTION in plan.helperRequirements
+    }
+    var wrapHelpersEmitted = false
+    fun addNugetWrapHelperExportsOnce() {
+      if (wrapHelpersEmitted) return
+      wrapHelpersEmitted = true
+      builder.addNugetWrapHelperExports()
+    }
+
+    if ((needsLambdaSupport && lambdaArities.any { it > 0 }) || needsCollectionParamWrap) {
+      addNugetWrapHelperExportsOnce()
+    }
     if (0 in lambdaArities) builder.addNugetFunc0HelperExports()
     if (1 in lambdaArities) builder.addNugetFunc1HelperExports()
     if (2 in lambdaArities) builder.addNugetFunc2HelperExports()
@@ -646,7 +662,7 @@ class NugetProcessor(
 
     val needsSuspendWrap: Boolean = needsSuspendLambdaSupport &&
         suspendLambdaArities.any { it > 0 } && !needsLambdaSupport
-    if (needsSuspendWrap) builder.addNugetWrapHelperExports()
+    if (needsSuspendWrap) addNugetWrapHelperExportsOnce()
     if (0 in suspendLambdaArities) builder.addNugetSuspendFunc0HelperExports()
     if (1 in suspendLambdaArities) builder.addNugetSuspendFunc1HelperExports()
 

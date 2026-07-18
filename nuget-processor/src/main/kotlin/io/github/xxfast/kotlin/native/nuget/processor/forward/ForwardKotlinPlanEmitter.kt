@@ -14,7 +14,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.exports.stableRef
  * selects only Unit and blittable primitive parameters/results, so every parameter is rendered
  * from the ordered native ABI rather than from a declaration-specific KSP rescan.
  */
-internal fun FileSpec.Builder.addForwardKotlinPlanExport(plan: ForwardCallablePlan) {
+internal fun FileSpec.Builder.addForwardKotlinPlanExport(plan: ForwardCallablePlan): FileSpec.Builder {
   plan.validate()
   require(plan.evaluation == ForwardEvaluation.EXACTLY_ONCE) {
     "Forward Kotlin plan emitter only supports exactly-once callables: ${plan.invocation.symbol}"
@@ -46,11 +46,8 @@ internal fun FileSpec.Builder.addForwardKotlinPlanExport(plan: ForwardCallablePl
     builder.addParameter(parameter.name, kotlinType(parameter, index == 0))
   }
 
-  val arguments: String = call.parameters
-    .filter { parameter -> parameter != receiver }
-    .filter { parameter -> parameter.direction == ForwardAbiDirection.IN }
-    .joinToString(", ") { parameter -> parameter.name }
-  val invocation: String = invocationExpression(plan, receiver?.name, arguments)
+  val arguments: String = plan.publicSignature.parameters.joinToString(", ") { parameter -> loweredArgument(parameter) }
+  val invocation: String = invocationExpression(plan, receiver, arguments)
 
   when (val result: BridgeType = plan.publicSignature.result) {
     BridgeType.Unit -> builder.addCode(errorHandlingUnitBody(invocation, error.name), cOpaquePointerVar, stableRef)
@@ -80,6 +77,7 @@ internal fun FileSpec.Builder.addForwardKotlinPlanExport(plan: ForwardCallablePl
   }
 
   addFunction(builder.build())
+  return this
 }
 
 internal fun ForwardCallablePlanCatalog.planFor(symbol: String): ForwardCallablePlan? {
@@ -96,7 +94,79 @@ private fun kotlinType(parameter: ForwardAbiParameter, isReceiver: Boolean): Typ
   require(parameter.direction == ForwardAbiDirection.IN) {
     "Forward Kotlin plan parameter ${parameter.name} has unsupported direction ${parameter.direction}"
   }
-  return kotlinResultType(parameter.wireType)
+  return kotlinInputType(parameter.transfer.type, parameter.wireType)
+}
+
+/**
+ * The Kotlin `@CName` export parameter type for one native ABI parameter, dispatched on its
+ * semantic [BridgeType] (not its wire type alone): a wire type like `POINTER` or `STRING` cannot
+ * by itself distinguish a plain object handle from a nullable one, or a plain string from a
+ * nullable one. A nullable primitive never reaches this dispatch as `Nullable` — the planner
+ * already fanned it out into two non-nullable native parameters (`xHasValue`, `x`) before this
+ * point, so each sees its own non-nullable [BridgeType.Primitive].
+ */
+private fun kotlinInputType(type: BridgeType, wireType: ForwardAbiWireType): TypeName = when (type) {
+  is BridgeType.Primitive, BridgeType.Char, is BridgeType.Enum -> kotlinResultType(wireType)
+  BridgeType.String -> kotlinType("String")
+  is BridgeType.ObjectHandle, is BridgeType.Collection -> cOpaquePointer
+  is BridgeType.Nullable -> when (val inner = type.type) {
+    BridgeType.String -> kotlinType("String").copy(nullable = true)
+    is BridgeType.ObjectHandle -> cOpaquePointer.copy(nullable = true)
+    else -> error("Forward Kotlin plan emitter has no input type for nullable $inner")
+  }
+
+  else -> error("Forward Kotlin plan emitter has no input type for $type")
+}
+
+/** The lowering expression that turns one native ABI value (or pair, for nullable primitives)
+ * back into the Kotlin value the underlying declaration expects, keyed off the *public*
+ * [BridgeType] rather than the native ABI shape.
+ */
+private fun loweredArgument(parameter: ForwardPublicParameter): String = when (val type = parameter.type) {
+  is BridgeType.Primitive, BridgeType.Char, BridgeType.String -> parameter.name
+  is BridgeType.Enum -> "${type.qualifiedName}.entries[${parameter.name}]"
+  is BridgeType.ObjectHandle -> "${parameter.name}.asStableRef<${type.qualifiedName}>().get()"
+  is BridgeType.Collection -> when (type.kind) {
+    CollectionKind.LIST -> "${parameter.name}.asStableRef<MutableList<Any?>>().get()" +
+        ".map { it as ${elementKotlinTypeName(requireNotNull(type.element))} }"
+
+    CollectionKind.MUTABLE_LIST -> "${parameter.name}.asStableRef<MutableList<Any?>>().get()" +
+        ".mapTo(mutableListOf()) { it as ${elementKotlinTypeName(requireNotNull(type.element))} }"
+
+    else -> error("Forward Kotlin plan emitter has no argument lowering for collection kind ${type.kind}")
+  }
+
+  is BridgeType.Nullable -> when (val inner = type.type) {
+    BridgeType.String -> parameter.name
+    is BridgeType.ObjectHandle -> "${parameter.name}?.asStableRef<${inner.qualifiedName}>()?.get()"
+    is BridgeType.Primitive -> "if (${parameter.name}HasValue) ${parameter.name} else null"
+    else -> error("Forward Kotlin plan emitter has no argument lowering for nullable $inner")
+  }
+
+  else -> error("Forward Kotlin plan emitter has no argument lowering for $type")
+}
+
+private fun elementKotlinTypeName(type: BridgeType): String = when (type) {
+  BridgeType.String -> "kotlin.String"
+  BridgeType.Char -> "kotlin.Char"
+  is BridgeType.Primitive -> "kotlin.${type.kind.simpleKotlinName()}"
+  is BridgeType.ObjectHandle -> type.qualifiedName
+  is BridgeType.Enum -> type.qualifiedName
+  else -> error("Forward Kotlin plan emitter has no element type name for $type")
+}
+
+private fun PrimitiveKind.simpleKotlinName(): String = when (this) {
+  PrimitiveKind.BOOLEAN -> "Boolean"
+  PrimitiveKind.BYTE -> "Byte"
+  PrimitiveKind.UBYTE -> "UByte"
+  PrimitiveKind.SHORT -> "Short"
+  PrimitiveKind.USHORT -> "UShort"
+  PrimitiveKind.INT -> "Int"
+  PrimitiveKind.UINT -> "UInt"
+  PrimitiveKind.LONG -> "Long"
+  PrimitiveKind.ULONG -> "ULong"
+  PrimitiveKind.FLOAT -> "Float"
+  PrimitiveKind.DOUBLE -> "Double"
 }
 
 private fun addNullableResult(
@@ -153,8 +223,8 @@ private fun kotlinResultType(wireType: ForwardAbiWireType): TypeName = when (wir
   ForwardAbiWireType.FLOAT32 -> kotlinType("Float")
   ForwardAbiWireType.FLOAT64 -> kotlinType("Double")
   ForwardAbiWireType.STRING -> kotlinType("String")
+  ForwardAbiWireType.CHAR16 -> kotlinType("Char")
   ForwardAbiWireType.VOID,
-  ForwardAbiWireType.CHAR16,
   ForwardAbiWireType.POINTER,
   ForwardAbiWireType.UNKNOWN,
   -> error("Forward Kotlin plan emitter has no direct-value Kotlin type for $wireType")
@@ -179,9 +249,18 @@ private fun cVarType(kind: PrimitiveKind): ClassName = ClassName(
   },
 )
 
+/** The lowered Kotlin expression for an extension function's receiver: an object handle is
+ * un-boxed via `asStableRef`, matching every other object-handle input; a primitive/String
+ * receiver is already the right Kotlin value as-is.
+ */
+private fun receiverExpression(receiver: ForwardAbiParameter): String = when (val type = receiver.transfer.type) {
+  is BridgeType.ObjectHandle -> "${receiver.name}.asStableRef<${type.qualifiedName}>().get()"
+  else -> receiver.name
+}
+
 private fun invocationExpression(
   plan: ForwardCallablePlan,
-  receiver: String?,
+  receiver: ForwardAbiParameter?,
   arguments: String,
 ): String {
   val functionName: String = plan.invocation.symbol.substringAfterLast('.')
@@ -190,7 +269,7 @@ private fun invocationExpression(
       val owner: String = plan.invocation.symbol.substringBeforeLast('.')
       "handle.asStableRef<$owner>().get().$functionName($arguments)"
     }
-    ForwardCallableOrigin.EXTENSION -> "${requireNotNull(receiver)}.$functionName($arguments)"
+    ForwardCallableOrigin.EXTENSION -> "${receiverExpression(requireNotNull(receiver))}.$functionName($arguments)"
     ForwardCallableOrigin.TOP_LEVEL -> "$functionName($arguments)"
     ForwardCallableOrigin.OBJECT, ForwardCallableOrigin.COMPANION ->
       "${requireNotNull(plan.invocation.target)}.$functionName($arguments)"

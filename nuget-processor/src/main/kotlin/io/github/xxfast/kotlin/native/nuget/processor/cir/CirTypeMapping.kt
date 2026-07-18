@@ -27,6 +27,7 @@ internal val KOTLIN_TO_CSHARP_RETURN = mapOf(
 
 internal val KOTLIN_TO_CSHARP_PARAM = mapOf(
   "String" to "string",
+  "Char" to "char",
   "Byte" to "sbyte",
   "UByte" to "byte",
   "Short" to "short",

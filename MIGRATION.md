@@ -4,9 +4,8 @@ This is the living checklist for replacing position-specific forward marshalling
 callable ABI plan shared by Kotlin export generation and C# CIR generation. Each phase must leave the
 bridge working and be independently shippable.
 
-Current status: Phases 1 through 5 complete; Phase 6 in progress. The top-level, object, and companion
-callable subset of Phase 6 is migrated; constructors, secondary constructors, and data-class copy
-operations remain.
+Current status: Phases 1 through 7 complete; Phase 8 next (enum/Char returns, Map/Set collection
+generalization, and remaining return/property gaps).
 
 ## Migration invariants
 
@@ -87,18 +86,18 @@ operations remain.
 
 ### 6. Ordinary callable families
 
-- [ ] Migrate top-level functions, object methods, companion methods, constructors, secondary
+- [x] Migrate top-level functions, object methods, companion methods, constructors, secondary
   constructors, and data-class copy operations.
-- [ ] Preserve the shipped top-level nullable-primitive two-call ABI.
-- [ ] Fix object-method object returns and top-level factory returns in this slice.
+- [x] Preserve the shipped top-level nullable-primitive two-call ABI.
+- [x] Fix object-method object returns and top-level factory returns in this slice.
 
 ### 7. Input positions
 
-- [ ] Migrate parameters across constructors, top-level functions, class methods, companion and
+- [x] Migrate parameters across constructors, top-level functions, class methods, companion and
   object methods, extensions, and setters.
-- [ ] Add correct nullable String, object, and primitive parameter contracts.
-- [ ] Add Char, enum, object-handle, and collection parameter conversion.
-- [ ] Remove only the strict expected failures fixed by this slice.
+- [x] Add correct nullable String, object, and primitive parameter contracts.
+- [x] Add Char, enum, object-handle, and collection parameter conversion.
+- [x] Remove only the strict expected failures fixed by this slice.
 
 ### 8. Remaining synchronous categories
 

@@ -154,6 +154,31 @@ internal fun FileSpec.Builder.addNugetListHelperExports() {
       )
       .build()
   )
+
+  // The reverse of Count/Get above (List result -> C#): builds a growable Kotlin list from a C#
+  // caller one element at a time, for a Kotlin List<T> *parameter* (Phase 7). "MutableList<Any?>"
+  // matches nuget_list_add's own StableRef cast below.
+  addFunction(
+    FunSpec.builder("export_nuget_list_create")
+      .addAnnotation(cNameAnnotation("nuget_list_create"))
+      .returns(cOpaquePointer)
+      .addStatement(
+        "return %T.create(mutableListOf<Any?>()).asCPointer()",
+        stableRef,
+      )
+      .build()
+  )
+
+  addFunction(
+    FunSpec.builder("export_nuget_list_add")
+      .addAnnotation(cNameAnnotation("nuget_list_add"))
+      .addParameter("handle", cOpaquePointer)
+      .addParameter("element", cOpaquePointer)
+      .addStatement(
+        "handle.asStableRef<MutableList<Any?>>().get().add(element.asStableRef<Any>().get())",
+      )
+      .build()
+  )
 }
 
 internal fun FileSpec.Builder.addNugetSetHelperExports() {

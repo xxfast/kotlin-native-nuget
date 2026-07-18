@@ -82,7 +82,6 @@ class Tier1StructuralInteropCsTest {
    * passing `null` gets `CS8625` (an error only under `TreatWarningsAsErrors`).
    */
   @Test
-  @XFail("ADR-060 cell 8 - class method String? parameter renders a non-nullable C# string")
   fun `cell 8 - class method with nullable String parameter renders nullable string in Interop cs`() {
     val result = Tier1Harness.run(
       """
@@ -110,7 +109,6 @@ class Tier1StructuralInteropCsTest {
    * gate was — this is that gate, for Tier 1's own local copy of the shape.
    */
   @Test
-  @XFail("ADR-060 cell 9 - top-level function String? parameter renders a non-nullable C# string")
   fun `cell 9 - top-level function with nullable String parameter renders nullable string in Interop cs`() {
     val result = Tier1Harness.run(
       """
@@ -137,7 +135,6 @@ class Tier1StructuralInteropCsTest {
    * real konanc).
    */
   @Test
-  @XFail("ADR-060 cell 12 - class method Char parameter leaks IntPtr into the public C# API")
   fun `cell 12 - class method with Char parameter renders char in Interop cs`() {
     val result = Tier1Harness.run(
       """
@@ -216,5 +213,136 @@ class Tier1StructuralInteropCsTest {
       message = "expected Clinic.capacity() to render as the idiomatic PascalCase Capacity() " +
           "in the generated Interop.cs (GOALS.md #2)",
     )
+  }
+
+  /**
+   * MIGRATION.md Phase 7 (input positions). Class-method Enum parameter, on a plannable (`Int`)
+   * result so the fixture actually exercises the shared callable plan rather than the pre-existing
+   * legacy enum-param cast (which only ever ran for the ineligible-result legacy route).
+   */
+  @Test
+  fun `class method with Enum parameter renders the enum type in Interop cs`() {
+    val result = Tier1Harness.run(
+      """
+      package tier1.paramenum
+
+      enum class Mood { HAPPY, SAD }
+
+      class Patient(val name: String) {
+        fun describe(mood: Mood): Int = mood.ordinal
+      }
+      """.trimIndent()
+    )
+
+    assertTrue(result.compiledClean, "expected Patient.describe to compile; got: ${result.compileErrors}")
+    assertContains(result.generatedCSharp, "public int Describe(Mood mood)")
+  }
+
+  /** MIGRATION.md Phase 7. Class-method non-nullable object-handle parameter. */
+  @Test
+  fun `class method with non-nullable object-handle parameter renders the class type in Interop cs`() {
+    val result = Tier1Harness.run(
+      """
+      package tier1.paramhandle
+
+      class Buddy(val name: String)
+
+      class Patient(val name: String) {
+        fun attach(buddy: Buddy): Int = buddy.name.length
+      }
+      """.trimIndent()
+    )
+
+    assertTrue(result.compiledClean, "expected Patient.attach to compile; got: ${result.compileErrors}")
+    assertContains(result.generatedCSharp, "public int Attach(Buddy buddy)")
+  }
+
+  /** MIGRATION.md Phase 7. Class-method nullable object-handle parameter. */
+  @Test
+  fun `class method with nullable object-handle parameter renders a nullable class type in Interop cs`() {
+    val result = Tier1Harness.run(
+      """
+      package tier1.paramhandlenullable
+
+      class Buddy(val name: String)
+
+      class Patient(val name: String) {
+        fun attach(buddy: Buddy?) {}
+      }
+      """.trimIndent()
+    )
+
+    assertTrue(result.compiledClean, "expected Patient.attach to compile; got: ${result.compileErrors}")
+    assertContains(result.generatedCSharp, "public void Attach(Buddy? buddy)")
+  }
+
+  /** MIGRATION.md Phase 7. Class-method nullable primitive parameter. */
+  @Test
+  fun `class method with nullable Int parameter renders a nullable int in Interop cs`() {
+    val result = Tier1Harness.run(
+      """
+      package tier1.paramprimnullable
+
+      class Patient(val name: String) {
+        fun setWeight(weight: Int?) {}
+      }
+      """.trimIndent()
+    )
+
+    assertTrue(result.compiledClean, "expected Patient.setWeight to compile; got: ${result.compileErrors}")
+    assertContains(result.generatedCSharp, "public void SetWeight(int? weight)")
+  }
+
+  /** MIGRATION.md Phase 7. Class-method `Char` parameter, on a plannable (`Unit`) result. */
+  @Test
+  fun `class method with Char parameter on a Unit result renders char in Interop cs`() {
+    val result = Tier1Harness.run(
+      """
+      package tier1.paramchar
+
+      class Patient(val name: String) {
+        fun setInitial(initial: Char) {}
+      }
+      """.trimIndent()
+    )
+
+    assertTrue(result.compiledClean, "expected Patient.setInitial to compile; got: ${result.compileErrors}")
+    assertContains(result.generatedCSharp, "public void SetInitial(char initial)")
+  }
+
+  /** MIGRATION.md Phase 7. Class-method `List<String>` parameter. */
+  @Test
+  fun `class method with List of String parameter renders IReadOnlyList of string in Interop cs`() {
+    val result = Tier1Harness.run(
+      """
+      package tier1.paramlist
+
+      class Patient(val name: String) {
+        fun addTags(tags: List<String>) {}
+      }
+      """.trimIndent()
+    )
+
+    assertTrue(result.compiledClean, "expected Patient.addTags to compile; got: ${result.compileErrors}")
+    assertContains(result.generatedCSharp, "public void AddTags(IReadOnlyList<string> tags)")
+  }
+
+  /** MIGRATION.md Phase 7. Class-method `List<SomeExportedClass>` parameter. */
+  @Test
+  fun `class method with List of exported class parameter renders IReadOnlyList of the class in Interop cs`() {
+    val result = Tier1Harness.run(
+      """
+      package tier1.paramlistobj
+
+      class Buddy(val name: String)
+
+      class Patient(val name: String) {
+        fun addBuddies(buddies: List<Buddy>) {}
+      }
+      """.trimIndent()
+    )
+
+    assertTrue(result.compiledClean, "expected Patient.addBuddies to compile; got: ${result.compileErrors}")
+    assertContains(result.generatedCSharp, "public void AddBuddies(IReadOnlyList<Buddy> buddies)")
   }
 }

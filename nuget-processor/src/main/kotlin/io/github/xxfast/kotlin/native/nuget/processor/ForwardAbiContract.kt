@@ -219,9 +219,19 @@ internal object ForwardAbiContract {
         } else {
           ForwardAbiDirection.IN
         }
-        ForwardAbiParameter(kotlinType(parameter.type), direction)
+        ForwardAbiParameter(kotlinParameterType(parameter.type), direction)
       },
     )
+  }
+
+  // Distinct from [kotlinType]/[kotlinReturnType] deliberately: `Char` is only a plannable
+  // *parameter* shape so far (MIGRATION.md Phase 7). Its legacy *result* route still declares an
+  // "IntPtr" C# return for a Kotlin `Char` return (ADR-060 cell 13, Phase 8, out of scope here),
+  // so widening the shared [kotlinType] to recognize `kotlin.Char` would make this checker correctly
+  // flag that pre-existing legacy mismatch too — a real defect, but not this slice's to fix.
+  private fun kotlinParameterType(type: TypeName): ForwardAbiType {
+    val name: String = type.toString().removeSuffix("?")
+    return if (name == "kotlin.Char") ForwardAbiType.SHORT else kotlinType(type)
   }
 
   private fun List<AnnotationSpec>.cNameValue(): String? = firstOrNull { annotation ->
@@ -232,7 +242,7 @@ internal object ForwardAbiContract {
     "void" -> ForwardAbiType.VOID
     "bool" -> ForwardAbiType.BOOL
     "byte", "sbyte" -> ForwardAbiType.BYTE
-    "short", "ushort" -> ForwardAbiType.SHORT
+    "short", "ushort", "char" -> ForwardAbiType.SHORT
     "int", "uint" -> ForwardAbiType.INT
     "long", "ulong" -> ForwardAbiType.LONG
     "float" -> ForwardAbiType.FLOAT

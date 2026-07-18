@@ -14,11 +14,31 @@ internal object ForwardCirPlanProjection {
       "Forward CIR constructor projection received ${plan.invocation.origin}"
     }
     val nativeCall: ForwardNativeCall = plan.singleNativeImport()
+    val publicParams: List<CirParameter> = plan.publicParameters()
+    val needsCustomParams: Boolean = plan.publicSignature.parameters.any { parameter -> !parameter.type.isTrivialInput() }
+    if (!needsCustomParams) {
+      return CirConstructor(parameters = publicParams, body = "", hasErrorCheck = true, nativeSuffix = nativeSuffix)
+    }
+    val prelude: List<String> = plan.publicSignature.parameters.mapNotNull { plan.collectionPrelude(it) }
+    val cleanup: List<String> = plan.publicSignature.parameters.mapNotNull { plan.collectionCleanup(it) }
+    val argumentList: List<String> = plan.publicSignature.parameters.flatMap { plan.callArgument(it) }
+    val callArgs: String = (argumentList + "out IntPtr error").joinToString(", ")
+    val body: String = buildString {
+      prelude.forEach { line -> appendLine("            $line") }
+      appendLine("            IntPtr handle = Native_Create$nativeSuffix($callArgs);")
+      appendLine("            if (error != IntPtr.Zero)")
+      appendLine("            {")
+      appendLine("                throw NugetErrorNative.BuildException(error);")
+      appendLine("            }")
+      cleanup.forEach { line -> appendLine("            $line") }
+      append("            _handle = handle;")
+    }
     return CirConstructor(
-      parameters = plan.publicParameters(nativeCall.parameters),
-      body = "",
-      hasErrorCheck = plan.errorSlot != null,
+      parameters = publicParams,
+      body = body,
+      hasErrorCheck = false,
       nativeSuffix = nativeSuffix,
+      nativeParameters = plan.nativeInCirParameters(nativeCall.parameters),
     )
   }
 
@@ -29,7 +49,7 @@ internal object ForwardCirPlanProjection {
       ForwardCallableOrigin.OBJECT,
       ForwardCallableOrigin.COMPANION,
     )) { "Forward CIR static projection received ${plan.invocation.origin}" }
-    val parameters: List<CirParameter> = plan.publicParameters(nativeCall.parameters)
+    val publicParams: List<CirParameter> = plan.publicParameters()
     val identifier: String = plan.publicSignature.name.removePrefix("@")
     val nativeName: String = if (plan.invocation.origin == ForwardCallableOrigin.COMPANION) {
       "Native_Companion_$identifier"
@@ -38,7 +58,7 @@ internal object ForwardCirPlanProjection {
     }
     val result: CirResultProjection = plan.resultProjection(
       nativeName = nativeName,
-      arguments = parameters.map { parameter -> parameter.name },
+      parameters = plan.publicSignature.parameters,
     )
     return listOf(
       CirDllImport(
@@ -46,7 +66,7 @@ internal object ForwardCirPlanProjection {
         entryPoint = nativeCall.exportName,
         returnType = result.nativeReturnType,
         name = nativeName,
-        parameters = parameters + plan.nativeOutCirParameters(nativeCall),
+        parameters = plan.nativeInCirParameters(nativeCall.parameters) + plan.nativeOutCirParameters(nativeCall),
         visibility = CirVisibility.PRIVATE,
         hasSyncErrorOut = plan.errorSlot != null,
         marshalBooleanReturn = result.nativeReturnType == "bool",
@@ -56,7 +76,7 @@ internal object ForwardCirPlanProjection {
         returnType = result.returnType,
         nativeReturnType = result.nativeReturnType,
         nativeName = nativeName,
-        parameters = parameters.map { parameter -> parameter.copy(nativeType = parameter.type) },
+        parameters = publicParams.map { parameter -> parameter.copy(nativeType = parameter.type) },
         body = result.body,
         isStatic = true,
         isSyncErrorCheckEnabled = !result.hasCustomBody && plan.errorSlot != null,
@@ -77,7 +97,7 @@ internal object ForwardCirPlanProjection {
       "Forward CIR class plan ${plan.invocation.symbol} must begin with a handle receiver"
     }
 
-    val parameters: List<CirParameter> = plan.publicParameters(nativeCall.parameters.drop(1))
+    val publicParams: List<CirParameter> = plan.publicParameters()
     val nativeName: String = nativeCall.exportName.removePrefix("${nativePrefix}_")
     require(nativeName != nativeCall.exportName) {
       "Forward CIR class plan ${plan.invocation.symbol} export ${nativeCall.exportName} " +
@@ -86,19 +106,31 @@ internal object ForwardCirPlanProjection {
 
     val result: CirResultProjection = plan.resultProjection(
       nativeName = "Native_${plan.publicSignature.name}",
-      arguments = listOf("_handle") + parameters.map { parameter -> parameter.name },
+      parameters = plan.publicSignature.parameters,
+      receiverArgument = "_handle",
     )
+    val needsCustomParams: Boolean = plan.publicSignature.parameters.any { parameter -> !parameter.type.isTrivialInput() }
+    val nativeParams: List<CirParameter>? = if (needsCustomParams) {
+      plan.nativeInCirParameters(nativeCall.parameters.drop(1))
+    } else {
+      null
+    }
     return CirMethod(
       name = plan.publicSignature.name,
       returnType = result.returnType,
       nativeReturnType = result.nativeReturnType,
       nativeName = nativeName,
-      parameters = parameters,
+      parameters = publicParams,
       body = result.body,
       isOverride = isOverride,
+      // Unlike static/extension (which hand-build their own CirDllImport), the DllImport here is
+      // derived generically by CirClass.methodNativeImport from this CirMethod, and its trailing
+      // `out IntPtr error` must be present whether or not the *body* is hand-written, so this is
+      // deliberately not gated by `!result.hasCustomBody` the way static/extension are.
       isSyncErrorCheckEnabled = plan.errorSlot != null,
       extraNativeParams = plan.nativeOutParameters(nativeCall),
       hasCustomBody = result.hasCustomBody,
+      nativeParameters = nativeParams,
     )
   }
 
@@ -113,13 +145,21 @@ internal object ForwardCirPlanProjection {
       "Forward CIR extension plan ${plan.invocation.symbol} must begin with a receiver"
     }
     val receiverType: String = receiver.transfer.type.csharpType()
-    val parameters: List<CirParameter> = listOf(
-      CirParameter(receiver.name, receiverType, receiver.wireType.csharpType()),
-    ) + plan.publicParameters(nativeCall.parameters.drop(1))
+    val receiverParam = CirParameter(receiver.name, receiverType, receiver.wireType.csharpType())
+    val publicParams: List<CirParameter> = listOf(receiverParam) + plan.publicParameters()
+    val receiverArgument: String = if (receiver.transfer.type is BridgeType.ObjectHandle) {
+      "receiver._handle"
+    } else {
+      "receiver"
+    }
     val nativeName: String = "Native_${plan.publicSignature.name}"
+    val needsCustomParams: Boolean = receiver.transfer.type is BridgeType.ObjectHandle ||
+        plan.publicSignature.parameters.any { parameter -> !parameter.type.isTrivialInput() }
     val result: CirResultProjection = plan.resultProjection(
       nativeName = nativeName,
-      arguments = parameters.map { parameter -> parameter.name },
+      parameters = plan.publicSignature.parameters,
+      receiverArgument = receiverArgument,
+      forceCustomBody = needsCustomParams,
     )
 
     val nativeImport = CirDllImport(
@@ -127,7 +167,7 @@ internal object ForwardCirPlanProjection {
       entryPoint = nativeCall.exportName,
       returnType = result.nativeReturnType,
       name = nativeName,
-      parameters = parameters + plan.nativeOutCirParameters(nativeCall),
+      parameters = plan.nativeInCirParameters(nativeCall.parameters) + plan.nativeOutCirParameters(nativeCall),
       visibility = CirVisibility.PRIVATE,
       hasSyncErrorOut = plan.errorSlot != null,
       marshalBooleanReturn = result.nativeReturnType == "bool",
@@ -137,7 +177,7 @@ internal object ForwardCirPlanProjection {
       returnType = result.returnType,
       nativeReturnType = result.nativeReturnType,
       nativeName = nativeName,
-      parameters = parameters.map { parameter -> parameter.copy(nativeType = parameter.type) },
+      parameters = publicParams.map { parameter -> parameter.copy(nativeType = parameter.type) },
       body = result.body,
       isStatic = true,
       isExtension = true,
@@ -154,28 +194,77 @@ internal object ForwardCirPlanProjection {
     return nativeImports.single()
   }
 
-  private fun ForwardCallablePlan.publicParameters(
+  /** The public C# parameter list, one entry per declared [ForwardPublicParameter] — independent
+   * of the native ABI's shape (which may fan a single public parameter into several native ones,
+   * or dispose of a materialized handle the public type never mentions).
+   */
+  private fun ForwardCallablePlan.publicParameters(): List<CirParameter> =
+    publicSignature.parameters.map { parameter -> CirParameter(parameter.name, parameter.type.csharpType()) }
+
+  /** The DllImport-only native parameter list: every native ABI IN parameter in [nativeParameters]
+   * (already positioned correctly by the planner, including any nullable-primitive fan-out),
+   * rendered at its wire type for both `type` and `nativeType` since DllImport declarations never
+   * need a public/native distinction of their own — except a nullable String, whose wire type
+   * (`STRING`) carries no nullability of its own: the DllImport parameter must be annotated
+   * `string?` too, or passing the (correctly nullable) public value into it is a CS8604 under
+   * nullable-reference analysis, even though the underlying marshaling is identical either way.
+   */
+  private fun ForwardCallablePlan.nativeInCirParameters(
     nativeParameters: List<ForwardAbiParameter>,
-  ): List<CirParameter> {
-    val error: ForwardAbiParameter? = errorSlot
-    if (error != null) {
-      require(nativeParameters.lastOrNull() == error) {
-        "Forward CIR plan ${invocation.symbol} must end with its error slot"
-      }
-    }
-    val valueParameters: List<ForwardAbiParameter> = nativeParameters
-      .filter { parameter -> parameter.direction == ForwardAbiDirection.IN }
-    require(valueParameters.size == publicSignature.parameters.size) {
-      "Forward CIR plan ${invocation.symbol} has ${valueParameters.size} native values but " +
-          "${publicSignature.parameters.size} public parameters"
-    }
-    return publicSignature.parameters.zip(valueParameters).map { (public, native) ->
-      require(public.name == native.name && native.direction == ForwardAbiDirection.IN) {
-        "Forward CIR plan ${invocation.symbol} parameter ${public.name} is not a direct input"
-      }
-      CirParameter(public.name, public.type.csharpType(), native.wireType.csharpType())
-    }
+  ): List<CirParameter> = nativeParameters
+    .filter { parameter -> parameter.direction == ForwardAbiDirection.IN }
+    .map { native -> CirParameter(native.name, native.nativeCsharpType()) }
+
+  private fun ForwardAbiParameter.nativeCsharpType(): String {
+    val type: BridgeType = transfer.type
+    return if (type is BridgeType.Nullable && type.type == BridgeType.String) "string?" else wireType.csharpType()
   }
+
+  /** A parameter shape whose native ABI representation is identical to its public C# type — no
+   * cast, fan-out, or prelude/cleanup statement required at the call site, so it can still flow
+   * through the pre-existing generic (non-custom-body) rendering paths.
+   */
+  private fun BridgeType.isTrivialInput(): Boolean = when (this) {
+    is BridgeType.Primitive, BridgeType.Char, BridgeType.String -> true
+    is BridgeType.Nullable -> type == BridgeType.String
+    else -> false
+  }
+
+  /** The call-site argument(s) for one public parameter. Every shape contributes exactly one
+   * argument except a nullable primitive, which contributes two (`x.HasValue`,
+   * `x.GetValueOrDefault()`) matching the planner's adjacent native fan-out. A collection
+   * parameter's argument is the local handle variable built by [collectionPrelude], not the
+   * parameter itself.
+   */
+  private fun ForwardCallablePlan.callArgument(parameter: ForwardPublicParameter): List<String> =
+    when (val type = parameter.type) {
+      is BridgeType.Primitive, BridgeType.Char, BridgeType.String -> listOf(parameter.name)
+      is BridgeType.Enum -> listOf("(int)${parameter.name}")
+      is BridgeType.ObjectHandle -> listOf("${parameter.name}._handle")
+      is BridgeType.Collection -> listOf("${parameter.name}Handle")
+      is BridgeType.Nullable -> when (val inner = type.type) {
+        BridgeType.String -> listOf(parameter.name)
+        is BridgeType.ObjectHandle -> listOf("${parameter.name}?._handle ?? IntPtr.Zero")
+        is BridgeType.Primitive -> listOf("${parameter.name}.HasValue", "${parameter.name}.GetValueOrDefault()")
+        else -> error("Forward CIR plan projection has no call argument for nullable $inner")
+      }
+
+      else -> error("Forward CIR plan projection has no call argument for $type")
+    }
+
+  private fun ForwardCallablePlan.collectionPrelude(parameter: ForwardPublicParameter): String? =
+    if (parameter.type is BridgeType.Collection) {
+      "IntPtr ${parameter.name}Handle = NugetMarshal.CreateList(${parameter.name});"
+    } else {
+      null
+    }
+
+  private fun ForwardCallablePlan.collectionCleanup(parameter: ForwardPublicParameter): String? =
+    if (parameter.type is BridgeType.Collection) {
+      "NugetListNative.Dispose(${parameter.name}Handle);"
+    } else {
+      null
+    }
 
   private fun ForwardCallablePlan.nativeOutParameters(nativeCall: ForwardNativeCall): List<String> =
     nativeCall.parameters
@@ -193,22 +282,30 @@ internal object ForwardCirPlanProjection {
 
   private fun ForwardCallablePlan.resultProjection(
     nativeName: String,
-    arguments: List<String>,
+    parameters: List<ForwardPublicParameter>,
+    receiverArgument: String? = null,
+    forceCustomBody: Boolean = false,
   ): CirResultProjection {
-    val callArguments: String = (arguments + nativeOutParameters(nativeImports.single()) +
-        "out IntPtr error").joinToString(", ")
+    val nativeCall: ForwardNativeCall = singleNativeImport()
+    val prelude: List<String> = parameters.mapNotNull { parameter -> collectionPrelude(parameter) }
+    val cleanup: List<String> = parameters.mapNotNull { parameter -> collectionCleanup(parameter) }
+    val argumentList: List<String> = listOfNotNull(receiverArgument) + parameters.flatMap { parameter -> callArgument(parameter) }
+    val callArguments: String = (argumentList + nativeOutParameters(nativeCall) + "out IntPtr error").joinToString(", ")
+    val needsCustomParams: Boolean = forceCustomBody || parameters.any { parameter -> !parameter.type.isTrivialInput() }
     val result: BridgeType = publicSignature.result
     return when (result) {
       is BridgeType.ObjectHandle -> CirResultProjection(
         returnType = result.csharpType(),
         nativeReturnType = "IntPtr",
-        body = checkedPointerBody(nativeName, callArguments, "return new ${result.csharpType()}(nativeResult);"),
+        body = checkedPointerBody(
+          nativeName, callArguments, "return new ${result.csharpType()}(nativeResult);", prelude, cleanup,
+        ),
       )
 
       is BridgeType.Collection -> CirResultProjection(
         returnType = result.csharpType(),
         nativeReturnType = "IntPtr",
-        body = checkedListBody(nativeName, callArguments, result),
+        body = checkedListBody(nativeName, callArguments, result, prelude, cleanup),
       )
 
       is BridgeType.Nullable -> when (val type: BridgeType = result.type) {
@@ -219,13 +316,17 @@ internal object ForwardCirPlanProjection {
             nativeName,
             callArguments,
             "return nativeResult == IntPtr.Zero ? null : new ${type.csharpType()}(nativeResult);",
+            prelude,
+            cleanup,
           ),
         )
 
         BridgeType.String -> CirResultProjection(
           returnType = "string?",
           nativeReturnType = "IntPtr",
-          body = checkedPointerBody(nativeName, callArguments, "return Marshal.PtrToStringUTF8(nativeResult);"),
+          body = checkedPointerBody(
+            nativeName, callArguments, "return Marshal.PtrToStringUTF8(nativeResult);", prelude, cleanup,
+          ),
         )
 
         is BridgeType.Primitive -> {
@@ -233,15 +334,37 @@ internal object ForwardCirPlanProjection {
           CirResultProjection(
             returnType = "$valueType?",
             nativeReturnType = "bool",
-            body = checkedNullableValueBody(nativeName, callArguments),
+            body = checkedNullableValueBody(nativeName, callArguments, prelude, cleanup),
           )
         }
 
-        else -> directResultProjection(result, nativeImports.single().result)
+        else -> directOrCustomResultProjection(
+          result, nativeCall.result, needsCustomParams, nativeName, callArguments, prelude, cleanup,
+        )
       }
 
-      else -> directResultProjection(result, nativeImports.single().result)
+      else -> directOrCustomResultProjection(
+        result, nativeCall.result, needsCustomParams, nativeName, callArguments, prelude, cleanup,
+      )
     }
+  }
+
+  private fun directOrCustomResultProjection(
+    result: BridgeType,
+    wireType: ForwardAbiWireType,
+    needsCustomParams: Boolean,
+    nativeName: String,
+    callArguments: String,
+    prelude: List<String>,
+    cleanup: List<String>,
+  ): CirResultProjection = if (!needsCustomParams) {
+    directResultProjection(result, wireType)
+  } else {
+    CirResultProjection(
+      returnType = result.csharpType(),
+      nativeReturnType = wireType.csharpType(),
+      body = directCustomBody(nativeName, callArguments, result, wireType, prelude, cleanup),
+    )
   }
 
   private fun directResultProjection(result: BridgeType, wireType: ForwardAbiWireType): CirResultProjection =
@@ -252,36 +375,59 @@ internal object ForwardCirPlanProjection {
       hasCustomBody = false,
     )
 
-  private fun checkedPointerBody(nativeName: String, arguments: String, result: String): String = buildString {
+  private fun checkedPointerBody(
+    nativeName: String,
+    arguments: String,
+    result: String,
+    prelude: List<String> = emptyList(),
+    cleanup: List<String> = emptyList(),
+  ): String = buildString {
     appendLine()
+    prelude.forEach { line -> appendLine("            $line") }
     appendLine("            IntPtr nativeResult = $nativeName($arguments);")
     appendLine("            if (error != IntPtr.Zero)")
     appendLine("            {")
     appendLine("                throw NugetErrorNative.BuildException(error);")
     appendLine("            }")
+    cleanup.forEach { line -> appendLine("            $line") }
     append("            $result")
   }
 
-  private fun checkedNullableValueBody(nativeName: String, arguments: String): String = buildString {
+  private fun checkedNullableValueBody(
+    nativeName: String,
+    arguments: String,
+    prelude: List<String> = emptyList(),
+    cleanup: List<String> = emptyList(),
+  ): String = buildString {
     appendLine()
+    prelude.forEach { line -> appendLine("            $line") }
     appendLine("            bool hasValue = $nativeName($arguments);")
     appendLine("            if (error != IntPtr.Zero)")
     appendLine("            {")
     appendLine("                throw NugetErrorNative.BuildException(error);")
     appendLine("            }")
+    cleanup.forEach { line -> appendLine("            $line") }
     append("            return hasValue ? valueOut : null;")
   }
 
-  private fun checkedListBody(nativeName: String, arguments: String, type: BridgeType.Collection): String {
+  private fun checkedListBody(
+    nativeName: String,
+    arguments: String,
+    type: BridgeType.Collection,
+    prelude: List<String> = emptyList(),
+    cleanup: List<String> = emptyList(),
+  ): String {
     val elementType: String = requireNotNull(type.element) { "Forward CIR List result has no element type" }.csharpType()
     val mutable: Boolean = type.kind == CollectionKind.MUTABLE_LIST
     return buildString {
       appendLine()
+      prelude.forEach { line -> appendLine("            $line") }
       appendLine("            IntPtr listHandle = $nativeName($arguments);")
       appendLine("            if (error != IntPtr.Zero)")
       appendLine("            {")
       appendLine("                throw NugetErrorNative.BuildException(error);")
       appendLine("            }")
+      cleanup.forEach { line -> appendLine("            $line") }
       appendLine("            int count = NugetListNative.Count(listHandle);")
       appendLine("            var result = new List<$elementType>(count);")
       appendLine("            for (int i = 0; i < count; i++)")
@@ -291,6 +437,34 @@ internal object ForwardCirPlanProjection {
       appendLine("            NugetListNative.Dispose(listHandle);")
       append("            return " + if (mutable) "result;" else "result.AsReadOnly();")
     }
+  }
+
+  /** A direct (no object/list/nullable materialization) result whose call site still needs to be
+   * hand-built because one of its *parameters* — not its result — requires a raising expression a
+   * plain nativeType-diff cast cannot express (an object handle's `._handle`, a collection's
+   * prelude-built local, or a nullable primitive's two-argument fan-out).
+   */
+  private fun directCustomBody(
+    nativeName: String,
+    arguments: String,
+    result: BridgeType,
+    wireType: ForwardAbiWireType,
+    prelude: List<String>,
+    cleanup: List<String>,
+  ): String = buildString {
+    appendLine()
+    prelude.forEach { line -> appendLine("            $line") }
+    if (result == BridgeType.Unit) {
+      appendLine("            $nativeName($arguments);")
+    } else {
+      appendLine("            ${wireType.csharpType()} nativeResult = $nativeName($arguments);")
+    }
+    appendLine("            if (error != IntPtr.Zero)")
+    appendLine("            {")
+    appendLine("                throw NugetErrorNative.BuildException(error);")
+    appendLine("            }")
+    cleanup.forEach { line -> appendLine("            $line") }
+    if (result != BridgeType.Unit) append("            return nativeResult;")
   }
 
   private data class CirResultProjection(
@@ -303,6 +477,7 @@ internal object ForwardCirPlanProjection {
   private fun BridgeType.csharpType(): String = when (this) {
     BridgeType.Unit -> "void"
     is BridgeType.Primitive -> kind.csharpType()
+    BridgeType.Char -> "char"
     BridgeType.String -> "string"
     is BridgeType.ObjectHandle -> qualifiedName.substringAfterLast('.')
     is BridgeType.Enum -> qualifiedName.substringAfterLast('.')
@@ -336,7 +511,8 @@ internal object ForwardCirPlanProjection {
     ForwardAbiWireType.INT8 -> "sbyte"
     ForwardAbiWireType.UINT8 -> "byte"
     ForwardAbiWireType.INT16 -> "short"
-    ForwardAbiWireType.UINT16, ForwardAbiWireType.CHAR16 -> "ushort"
+    ForwardAbiWireType.UINT16 -> "ushort"
+    ForwardAbiWireType.CHAR16 -> "char"
     ForwardAbiWireType.INT32 -> "int"
     ForwardAbiWireType.UINT32 -> "uint"
     ForwardAbiWireType.INT64 -> "long"

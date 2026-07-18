@@ -121,7 +121,11 @@ internal fun FunSpec.Builder.addEnumAwareParameters(
       continue
     }
 
-    addParameter(name, resolved.toBridgeTypeName(nullable = false))
+    // A nullable String parameter keeps its nullability (ADR-060 cell 9): Kotlin/Native's @CName
+    // boundary already marshals a nullable C string to Kotlin `String?` transparently.
+    val isNullableString: Boolean =
+      resolved.declaration.qualifiedName?.asString() == "kotlin.String" && resolved.isMarkedNullable
+    addParameter(name, resolved.toBridgeTypeName(nullable = isNullableString))
   }
   return this
 }

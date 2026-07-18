@@ -664,16 +664,25 @@ internal fun translateClass(
 
       val csMethodName: String = methodName.replaceFirstChar { it.uppercase() }
 
-      // For enum parameters: public type is the enum name, native type is "int" (ordinal).
+      // For enum parameters: public type is the enum name, native type is "int" (ordinal). A
+      // nullable String parameter keeps its "string?" public type (ADR-060 cell 8): Kotlin/Native
+      // already marshals a nullable C string transparently, so no cast is needed at the native
+      // call site either, and "string?" is used for both `type` and `nativeType`.
       val methodParams: List<CirParameter> = method.parameters.map { param ->
         val resolved: KSType = param.type.resolve().expandAliases()
         val kotlinType: String = resolved.declaration.simpleName.asString()
         val isEnum: Boolean = (resolved.declaration as? KSClassDeclaration)
           ?.classKind == ClassKind.ENUM_CLASS
+        val isNullableString: Boolean = !isEnum && kotlinType == "String" && resolved.isMarkedNullable
+        val paramType: String = when {
+          isEnum -> kotlinType
+          isNullableString -> "string?"
+          else -> mapParamType(kotlinType)
+        }
         CirParameter(
           name = param.name?.asString() ?: "_",
-          type = if (isEnum) kotlinType else mapParamType(kotlinType),
-          nativeType = if (isEnum) "int" else mapParamType(kotlinType),
+          type = paramType,
+          nativeType = if (isEnum) "int" else paramType,
         )
       }
 
@@ -999,6 +1008,13 @@ internal fun translateClass(
     companionConsts + companionProperties + companionFunctions
   } else emptyList()
 
+  // Phase 6: route data-class copy() through the shared plan when it is eligible (same symbol
+  // ClassExports.kt checks for the Kotlin half), else keep the legacy hand-rolled route.
+  val copyMethod: CirMethod? = if (isDataClass) {
+    callableCatalog.planFor("${cls.qualifiedName?.asString() ?: name}.copy")
+      ?.let { planned -> ForwardCirPlanProjection.classMethod(planned, prefix, isOverride = false) }
+  } else null
+
   return CirClass(
     name = name,
     libraryName = libraryName,
@@ -1007,6 +1023,7 @@ internal fun translateClass(
     secondaryConstructors = secondaryConstructors,
     properties = properties,
     methods = methods,
+    copyMethod = copyMethod,
     callbackMethods = callbackMembers,
     storedCallbackMethods = storedCallbackMembers,
     interfaceBridgeMethods = interfaceBridgeMembers,

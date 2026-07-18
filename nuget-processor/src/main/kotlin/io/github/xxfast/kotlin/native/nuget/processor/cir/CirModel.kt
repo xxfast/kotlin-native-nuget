@@ -44,6 +44,10 @@ data class CirClass(
   val secondaryConstructors: List<CirConstructor> = emptyList(),
   val properties: List<CirProperty>,
   val methods: List<CirMethod>,
+  // The data-class `copy()` method when it routes through the shared callable plan (Phase 6);
+  // null when it is ineligible for planning (e.g. an object-typed constructor parameter) and
+  // falls back to the legacy hand-rolled route in `dataClassNativeImports`/`renderDataClassMethods`.
+  val copyMethod: CirMethod? = null,
   val callbackMethods: List<CirCallbackMethod> = emptyList(),
   val storedCallbackMethods: List<CirStoredCallbackMethod> = emptyList(),
   val interfaceBridgeMethods: List<CirInterfaceBridgeMethod> = emptyList(),
@@ -304,6 +308,15 @@ data class CirMethod(
   // renders `body` verbatim via the generic multi-line template, while `isSyncErrorCheckEnabled`
   // still controls the native DllImport's trailing `out IntPtr error` (ADR-061).
   val hasCustomBody: Boolean = false,
+  // Overrides the DllImport's native parameter shape when it differs from [parameters] in count
+  // or order (e.g. one nullable-primitive public parameter fans out into two adjacent native
+  // ones, or a collection parameter's native shape is a single IntPtr list handle rather than its
+  // public `IReadOnlyList<T>` type). Null (the default) keeps deriving the DllImport 1:1 from
+  // [parameters], the existing behavior for every plain (cast-only) parameter shape. Only
+  // consulted for class methods, whose DllImport is derived generically by
+  // [CirClass.methodNativeImport]; static/extension methods build their own [CirDllImport]
+  // directly and ignore this field.
+  val nativeParameters: List<CirParameter>? = null,
 ) : CirMember
 
 data class CirProperty(
@@ -337,6 +350,12 @@ data class CirConstructor(
   // primary's. Empty for the primary (cat_create / Native_Create); "_2", "_3", …
   // for secondaries (cat_create_2 / Native_Create_2). See ADR-034.
   val nativeSuffix: String = "",
+  // Overrides the DllImport's native parameter shape when it differs from [parameters] in count
+  // or order (e.g. one nullable-primitive public parameter fans out into two adjacent native
+  // ones, or a collection parameter's native shape is a single IntPtr list handle rather than its
+  // public `IReadOnlyList<T>` type). Null (the default) keeps deriving the DllImport 1:1 from
+  // [parameters], the existing behavior for every plain (cast-only) parameter shape.
+  val nativeParameters: List<CirParameter>? = null,
 )
 
 data class CirParameter(

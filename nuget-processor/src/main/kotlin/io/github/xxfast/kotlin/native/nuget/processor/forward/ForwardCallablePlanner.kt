@@ -344,7 +344,7 @@ internal class ForwardCallablePlanner(
 
     val error: ForwardAbiParameter = errorParameter()
     val nativeParameters: List<ForwardAbiParameter> = receiverParameter(receiver) +
-        parameters.map { (name, type) -> valueParameter(name, type, ForwardFlow.INTO_KOTLIN) } +
+        parameters.flatMap { (name, type) -> nativeInputParameters(name, type) } +
         resultShape.extraParameters + error
     val nativeCall = ForwardNativeCall(
       exportName = exportName,
@@ -369,11 +369,21 @@ internal class ForwardCallablePlanner(
       cleanup = resultShape.cleanup,
       helperRequirements = setOf(ForwardHelperRequirement.STABLE_REF) +
           resultShape.helperRequirements +
-          if (inputTypes.any { type -> type == BridgeType.String }) {
+          (if (inputTypes.any { type -> type.unwrapNullable() == BridgeType.String }) {
             setOf(ForwardHelperRequirement.UTF8)
           } else {
             emptySet()
-          },
+          }) +
+          (if (inputTypes.any { type -> type.unwrapNullable() is BridgeType.Enum }) {
+            setOf(ForwardHelperRequirement.ENUM_ORDINAL)
+          } else {
+            emptySet()
+          }) +
+          (if (inputTypes.any { type -> type.unwrapNullable() is BridgeType.Collection }) {
+            setOf(ForwardHelperRequirement.COLLECTION)
+          } else {
+            emptySet()
+          }),
     ).validate()
     return ForwardCallableCatalogEntry.Planned(plan)
   }
@@ -402,6 +412,110 @@ internal class ForwardCallablePlanner(
     direction = ForwardAbiDirection.IN,
     transfer = transfer(name, type, flow),
   )
+
+  /**
+   * The native ABI shape for one declared input parameter. Almost every [BridgeType] fans out to
+   * exactly one native parameter; a nullable primitive is the sole exception, fanning out to two
+   * *adjacent* native parameters (`${name}HasValue` then `name`) in place of the single public
+   * parameter, so callers must `flatMap` over the declared parameter list rather than `map`.
+   */
+  private fun nativeInputParameters(name: String, type: BridgeType): List<ForwardAbiParameter> = when (type) {
+    is BridgeType.Primitive, BridgeType.Char, BridgeType.String -> listOf(
+      valueParameter(name, type, ForwardFlow.INTO_KOTLIN),
+    )
+
+    is BridgeType.Enum -> listOf(
+      ForwardAbiParameter(
+        name = name,
+        wireType = ForwardAbiWireType.INT32,
+        direction = ForwardAbiDirection.IN,
+        transfer = ForwardTransfer(
+          name, type, ForwardFlow.INTO_KOTLIN, ForwardPassing.VALUE,
+          ForwardOwnership.BORROWED, ForwardConversion.ORDINAL_TO_ENUM,
+        ),
+      )
+    )
+
+    is BridgeType.ObjectHandle -> listOf(
+      ForwardAbiParameter(
+        name = name,
+        wireType = ForwardAbiWireType.POINTER,
+        direction = ForwardAbiDirection.IN,
+        transfer = ForwardTransfer(
+          name, type, ForwardFlow.INTO_KOTLIN, ForwardPassing.VALUE,
+          ForwardOwnership.BORROWED, ForwardConversion.HANDLE_TO_STABLE_REF,
+        ),
+      )
+    )
+
+    is BridgeType.Collection -> {
+      require(type.kind == CollectionKind.LIST || type.kind == CollectionKind.MUTABLE_LIST) {
+        "Forward planner cannot build an input parameter for collection kind ${type.kind}"
+      }
+      listOf(
+        ForwardAbiParameter(
+          name = name,
+          wireType = ForwardAbiWireType.POINTER,
+          direction = ForwardAbiDirection.IN,
+          transfer = ForwardTransfer(
+            name, type, ForwardFlow.INTO_KOTLIN, ForwardPassing.VALUE,
+            ForwardOwnership.BORROWED, ForwardConversion.HANDLE_TO_COLLECTION,
+          ),
+        )
+      )
+    }
+
+    is BridgeType.Nullable -> when (val inner = type.type) {
+      BridgeType.String -> listOf(
+        ForwardAbiParameter(
+          name = name,
+          wireType = ForwardAbiWireType.STRING,
+          direction = ForwardAbiDirection.IN,
+          transfer = ForwardTransfer(
+            name, type, ForwardFlow.INTO_KOTLIN, ForwardPassing.VALUE,
+            ForwardOwnership.BORROWED, ForwardConversion.STRING_TO_UTF8,
+          ),
+        )
+      )
+
+      is BridgeType.ObjectHandle -> listOf(
+        ForwardAbiParameter(
+          name = name,
+          wireType = ForwardAbiWireType.POINTER,
+          direction = ForwardAbiDirection.IN,
+          transfer = ForwardTransfer(
+            name, type, ForwardFlow.INTO_KOTLIN, ForwardPassing.VALUE,
+            ForwardOwnership.BORROWED, ForwardConversion.HANDLE_TO_STABLE_REF,
+          ),
+        )
+      )
+
+      is BridgeType.Primitive -> listOf(
+        ForwardAbiParameter(
+          name = "${name}HasValue",
+          wireType = ForwardAbiWireType.BOOLEAN,
+          direction = ForwardAbiDirection.IN,
+          transfer = ForwardTransfer(
+            "${name}HasValue", BridgeType.Primitive(PrimitiveKind.BOOLEAN), ForwardFlow.INTO_KOTLIN,
+            ForwardPassing.VALUE, ForwardOwnership.BORROWED, ForwardConversion.DIRECT,
+          ),
+        ),
+        ForwardAbiParameter(
+          name = name,
+          wireType = inner.wireType(),
+          direction = ForwardAbiDirection.IN,
+          transfer = ForwardTransfer(
+            name, inner, ForwardFlow.INTO_KOTLIN, ForwardPassing.VALUE,
+            ForwardOwnership.BORROWED, ForwardConversion.DIRECT,
+          ),
+        ),
+      )
+
+      else -> error("Forward planner cannot build an input parameter for nullable $inner")
+    }
+
+    else -> error("Forward planner cannot build an input parameter for $type")
+  }
 
   private fun transfer(subject: String, type: BridgeType, flow: ForwardFlow): ForwardTransfer = ForwardTransfer(
     subject = subject,
@@ -529,7 +643,7 @@ internal class ForwardCallablePlanner(
         ),
       ))
 
-      is ForwardReceiver.Value -> listOf(valueParameter("receiver", receiver.type, ForwardFlow.INTO_KOTLIN))
+      is ForwardReceiver.Value -> nativeInputParameters("receiver", receiver.type)
       ForwardReceiver.Static -> emptyList()
   }
 
@@ -555,10 +669,22 @@ internal class ForwardCallablePlanner(
     is BridgeType.Unsupported -> ForwardPlanSkipReason.UNSUPPORTED
   }
 
-  private fun BridgeType.inputSkipReason(): ForwardPlanSkipReason? = if (this == BridgeType.String) {
-    null
-  } else {
-    skipReason()
+  private fun BridgeType.inputSkipReason(): ForwardPlanSkipReason? = when (this) {
+    BridgeType.String, BridgeType.Char -> null
+    is BridgeType.Enum -> null
+    is BridgeType.ObjectHandle -> null
+    is BridgeType.Collection -> if (kind == CollectionKind.LIST || kind == CollectionKind.MUTABLE_LIST) {
+      null
+    } else {
+      ForwardPlanSkipReason.COLLECTION
+    }
+
+    is BridgeType.Nullable -> when (type) {
+      BridgeType.String, is BridgeType.ObjectHandle, is BridgeType.Primitive -> null
+      else -> ForwardPlanSkipReason.NULLABLE
+    }
+
+    else -> skipReason()
   }
 
   private fun BridgeType.wireType(): ForwardAbiWireType = when (this) {
@@ -578,7 +704,7 @@ internal class ForwardCallablePlanner(
     }
 
     BridgeType.String -> ForwardAbiWireType.STRING
-    BridgeType.Char,
+    BridgeType.Char -> ForwardAbiWireType.CHAR16
     is BridgeType.Nullable,
     is BridgeType.Collection,
     is BridgeType.RawCollection,

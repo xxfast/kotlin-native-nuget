@@ -10,6 +10,13 @@ package io.github.xxfast.kotlin.native.nuget.test.clinic
 // "What lands in `test-library` now, and what is quarantined" for the full per-cell table.
 
 /**
+ * MIGRATION.md Phase 7 (input positions). A small mood enum, only for exercising an Enum-typed
+ * *parameter* (as opposed to the already-shipped Enum property setter) across a few callable
+ * positions below.
+ */
+enum class Mood { CALM, ANXIOUS, PLAYFUL }
+
+/**
  * The clinic facade — a Kotlin `object`, which is the natural shape for an export module and so
  * the first thing a new consumer meets (GOALS.md #2). `CatRegistry` is the only other `object`
  * fixture and returns only `Int` and `void`, which need no marshalling, so the object path —
@@ -32,6 +39,12 @@ object Clinic {
 
   /** Cell 3, control: `void`. Needs no marshalling, which is why it never proved anything. */
   fun reset() {}
+
+  /**
+   * MIGRATION.md Phase 7. Object method × nullable `Int` parameter (an `Int` result keeps this
+   * on the shared callable plan, unlike a `String` result — see [Patient.rename]'s cell 8 note).
+   */
+  fun setCapacity(value: Int?): Int = value ?: 0
 }
 
 /**
@@ -67,6 +80,32 @@ class Patient(val name: String) {
    *  `unsigned short`, 2 bytes — while C# renders **public** `string Tag(IntPtr initial)`. The
    *  consumer cannot pass a `char` at all, so this is a call-site defect, not a runtime one. */
   fun tag(initial: Char): String = "$initial-$name"
+
+  /**
+   * MIGRATION.md Phase 7 (input positions). Class method × nullable object-handle parameter.
+   * An `Int` result (rather than `String`) so this actually exercises the shared callable plan.
+   */
+  fun attach(buddy: Patient?): Int {
+    this.buddy = buddy
+    return if (buddy == null) 0 else 1
+  }
+
+  /** MIGRATION.md Phase 7. Class method × nullable `Int` parameter. */
+  fun adjustWeight(delta: Int?): Int {
+    weight = (weight ?: 0) + (delta ?: 0)
+    return weight!!
+  }
+
+  /** MIGRATION.md Phase 7. Class method × `Enum` parameter. */
+  fun describeMood(mood: Mood): Int = mood.ordinal
+
+  /** MIGRATION.md Phase 7. Class method × `List<String>` parameter. */
+  fun addTags(tags: List<String>): Int = tags.size
+
+  companion object {
+    /** MIGRATION.md Phase 7. Companion method × `List<String>` parameter. */
+    fun batchAdmit(names: List<String>): Int = names.size
+  }
 
   // ---- QUARANTINED in the Tier 1 harness until each fix lands (all obs K, all verified) ----
 
@@ -146,6 +185,26 @@ value class ChartRef(val patient: Patient) {
  *  returns — a plain class falls to `:178`, which returns the class itself and defaults to `null` on
  *  the catch path. Verified: *"return type mismatch: expected 'Patient', actual 'Patient?'"*. */
 fun admit(name: String): Patient = Patient(name)
+
+/** MIGRATION.md Phase 7 (input positions). Top-level function × non-nullable object-handle
+ *  parameter (an `Int` result, not `String`, so this is on the shared callable plan). */
+fun patientNameLength(patient: Patient): Int = patient.name.length
+
+/**
+ * MIGRATION.md Phase 7. A secondary carrier whose *primary constructor* takes a non-nullable
+ * object-handle parameter alongside a `String` — constructors returning the class handle are
+ * already on the shared plan (Phase 6), so this exercises the newly-admitted parameter shape.
+ */
+class Escort(val patient: Patient, val note: String)
+
+/**
+ * MIGRATION.md Phase 7. Extension function × object-handle receiver and nullable object-handle
+ * parameter, in one shape: `pairWith(null)` clears [Patient.buddy]; `pairWith(other)` sets it.
+ */
+fun Patient.pairWith(other: Patient?): Patient? {
+  buddy = other
+  return buddy
+}
 
 // Deliberately not in this corpus: the cell-23 shape (`suspend inline fun <reified T>
 // Patient.chartEntry(...): Result<T>`). Per ROADMAP.md's forward-diagnostics item (MVP.md P1) its

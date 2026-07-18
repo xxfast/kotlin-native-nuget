@@ -39,7 +39,14 @@ internal fun translateFunction(
     val enumDecl: KSClassDeclaration? = (resolved.declaration as? KSClassDeclaration)
       ?.takeIf { it.classKind == ClassKind.ENUM_CLASS }
 
-    if (enumDecl == null) return@map CirParameter(name, mapParamType(kotlinType))
+    if (enumDecl == null) {
+      // A nullable String parameter keeps its "string?" public/native type (ADR-060 cell 9): both
+      // Kotlin/Native's @CName boundary and the C# DllImport marshal a nullable string
+      // transparently, so no cast is needed at the call site.
+      val isNullableString: Boolean = kotlinType == "String" && resolved.isMarkedNullable
+      val paramType: String = if (isNullableString) "string?" else mapParamType(kotlinType)
+      return@map CirParameter(name, paramType)
+    }
 
     val enumNamespace: String = mapPackageToNamespace(
       enumDecl.packageName.asString(), rootPackage, rootNamespace,

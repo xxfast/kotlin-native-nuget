@@ -23,7 +23,8 @@ internal fun CirClass.constructorNativeImport(ctor: CirConstructor): CirDllImpor
   entryPoint = "${nativePrefix}_create${ctor.nativeSuffix}",
   returnType = "IntPtr",
   name = "Native_Create${ctor.nativeSuffix}",
-  parameters = ctor.parameters.map { parameter -> parameter.copy(nativeType = parameter.type) },
+  parameters = ctor.nativeParameters
+    ?: ctor.parameters.map { parameter -> parameter.copy(nativeType = parameter.type) },
   visibility = CirVisibility.PRIVATE,
   hasSyncErrorOut = true,
 )
@@ -95,7 +96,7 @@ internal fun CirClass.methodNativeImport(method: CirMethod): CirDllImport {
   }
   val parameters: List<CirParameter> = buildList {
     add(CirParameter("handle", "IntPtr"))
-    addAll(method.parameters)
+    addAll(method.nativeParameters ?: method.parameters)
     addAll(method.extraNativeParams.map { declaration -> declaration.toRawNativeParameter() })
   }
   return CirDllImport(
@@ -142,19 +143,24 @@ internal fun CirClass.dataClassNativeImports(): List<CirDllImport> = buildList {
     )
   )
 
-  constructor?.let { ctor ->
-    add(
-      CirDllImport(
-        libraryName = libraryName,
-        entryPoint = "${nativePrefix}_copy",
-        returnType = "IntPtr",
-        name = "Native_Copy",
-        parameters = listOf(CirParameter("handle", "IntPtr")) +
-            ctor.parameters.map { parameter -> parameter.copy(nativeType = parameter.type) },
-        visibility = CirVisibility.PRIVATE,
-        hasSyncErrorOut = true,
+  val copy: CirMethod? = copyMethod
+  if (copy != null) {
+    add(methodNativeImport(copy))
+  } else {
+    constructor?.let { ctor ->
+      add(
+        CirDllImport(
+          libraryName = libraryName,
+          entryPoint = "${nativePrefix}_copy",
+          returnType = "IntPtr",
+          name = "Native_Copy",
+          parameters = listOf(CirParameter("handle", "IntPtr")) +
+              ctor.parameters.map { parameter -> parameter.copy(nativeType = parameter.type) },
+          visibility = CirVisibility.PRIVATE,
+          hasSyncErrorOut = true,
+        )
       )
-    )
+    }
   }
 }
 

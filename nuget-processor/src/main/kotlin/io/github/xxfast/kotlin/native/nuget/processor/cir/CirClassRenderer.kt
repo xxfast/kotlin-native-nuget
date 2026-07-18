@@ -468,7 +468,9 @@ internal fun StringBuilder.renderMethod(method: CirMethod, className: String = "
 internal fun StringBuilder.renderDataClassMethods(cls: CirClass) {
   cls.dataClassNativeImports().forEach { nativeImport -> renderDllImport(nativeImport) }
 
-  if (cls.constructor != null) {
+  if (cls.copyMethod != null) {
+    renderMethod(cls.copyMethod, cls.name)
+  } else if (cls.constructor != null) {
     val copyParams: String = cls.constructor.parameters.joinToString(", ") { "${it.type} ${it.name}" }
     val copyParamNames: String = cls.constructor.parameters.joinToString(", ") { it.name }
     val copyNativeArgs: String = if (copyParamNames.isEmpty()) {

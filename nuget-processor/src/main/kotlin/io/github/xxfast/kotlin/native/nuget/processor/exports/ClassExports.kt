@@ -608,7 +608,11 @@ internal fun FileSpec.Builder.addClassExports(
       if (isEnum) {
         builder.addParameter(paramName, Int::class)
       } else {
-        builder.addParameter(paramName, resolved.toBridgeTypeName(nullable = false))
+        // A nullable String parameter keeps its nullability (ADR-060 cell 8): Kotlin/Native's
+        // @CName boundary already marshals a nullable C string to Kotlin `String?` transparently.
+        val isNullableString: Boolean =
+          resolved.declaration.qualifiedName?.asString() == "kotlin.String" && resolved.isMarkedNullable
+        builder.addParameter(paramName, resolved.toBridgeTypeName(nullable = isNullableString))
       }
     }
 
