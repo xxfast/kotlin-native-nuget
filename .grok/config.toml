@@ -7,8 +7,7 @@
 # Layout:
 #   agents/*.md                     thin wrappers → .claude/agents/* (same names; model: inherit)
 #   skills/feature-design/SKILL.md  thin wrapper → .claude/skills/feature-design
-#   hooks/                          Grok-only guards + benchmark capture
-#   benchmark.csv                   feature-design run costs (Grok only)
+#   hooks/                          Grok-only guards
 
 # IntelliJ IDEA MCP (same endpoint as .codex/config.toml). Requires IDEA running with
 # the MCP plugin listening on this port. Repo-local MCP needs folder trust (--trust / /hooks-trust).

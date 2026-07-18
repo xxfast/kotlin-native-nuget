@@ -16,17 +16,6 @@ Follow the repository's established feature workflow; keep `.claude` as its sour
    - Prefer the registered type over `general-purpose`. Description prefixes (`research_`, `csharp_`, …) are only needed if you must fall back to a shared profile.
    - All roles use `model: inherit` (session default, currently `grok-4.5`).
 4. Preserve the workflow's gates: research and human design review before implementation; consumer-side tests before implementation; `scripts/verify.sh` before the final documentation and refactor pass.
-5. When the shared workflow says to finalize `.claude/benchmark.csv`, use the Grok equivalent instead:
-
-   ```bash
-   bash .grok/hooks/benchmark.sh finalize \
-     --feature "<roadmap item or ADR title>" \
-     --phase "<roadmap phase>" \
-     --direction "<forward|reverse>" \
-     --note "<agent>=<what affected this agent's result>"
-   ```
-
-   `.grok/hooks/project-guards.json` captures each `SubagentStop` into `.grok/benchmark-staging.jsonl` automatically. Do not call `capture` manually and do not write benchmark figures by hand. Do not call `.claude/hooks/benchmark.sh` from a Grok session.
 
 ## Scope
 

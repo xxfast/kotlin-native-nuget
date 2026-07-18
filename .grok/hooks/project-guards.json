@@ -22,17 +22,6 @@
           }
         ]
       }
-    ],
-    "SubagentStop": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "benchmark.sh capture",
-            "timeout": 30
-          }
-        ]
-      }
     ]
   }
 }
