@@ -12,24 +12,40 @@ import io.github.xxfast.kotlin.native.nuget.processor.exports.findInterfaceBridg
 import io.github.xxfast.kotlin.native.nuget.processor.exports.findStoredCallbackPairs
 import io.github.xxfast.kotlin.native.nuget.processor.toCName
 
-internal enum class ForwardPlanSkipReason {
-  ABSTRACT,
-  CALLBACK_PROTOCOL,
-  CHAR,
-  COLLECTION,
-  ENUM,
-  FLOW_PROTOCOL,
-  GENERIC,
-  HANDLE,
-  NULLABLE,
-  OBJECT,
-  SEALED_PROTOCOL,
-  STRING,
-  SUSPEND,
-  SUSPEND_CALLBACK_PROTOCOL,
-  TYPE_PARAMETER,
-  UNSUPPORTED,
-  VALUE_CLASS,
+/**
+ * Why the planner declined to build an ordinary synchronous plan for a callable.
+ *
+ * [droppedFromCSharp] is the load-bearing distinction: a reason is a *drop* only when no named
+ * legacy route re-emits the callable, so the declaration genuinely disappears from the generated
+ * C# API (never as an `IntPtr` / `"0"` fallback, just absent). Those reasons are surfaced as a KSP
+ * warning. Reasons that defer the callable to a named legacy export builder / CIR translator
+ * (`ForwardAbiLegacyRoutes`, ADR-062's legacy-route table) are *not* drops: the callable is still
+ * emitted, only not through the plan, so warning on them would be a false alarm.
+ */
+internal enum class ForwardPlanSkipReason(val droppedFromCSharp: Boolean) {
+  // Deferred to a named legacy route (still emitted, just not via the plan): silent.
+  ABSTRACT(droppedFromCSharp = false),
+  CALLBACK_PROTOCOL(droppedFromCSharp = false),
+  FLOW_PROTOCOL(droppedFromCSharp = false),
+  GENERIC(droppedFromCSharp = false),
+  SEALED_PROTOCOL(droppedFromCSharp = false),
+  SUSPEND(droppedFromCSharp = false),
+  SUSPEND_CALLBACK_PROTOCOL(droppedFromCSharp = false),
+  TYPE_PARAMETER(droppedFromCSharp = false),
+
+  // No legacy home: the callable is dropped from the C# API and must warn. CHAR/STRING/ENUM/HANDLE/
+  // OBJECT are supported ordinary types with no legacy route, so a skip carrying them can only mean
+  // a genuine drop; they are defensively classified as drops even though the planner does not
+  // currently reach them.
+  CHAR(droppedFromCSharp = true),
+  COLLECTION(droppedFromCSharp = true),
+  ENUM(droppedFromCSharp = true),
+  HANDLE(droppedFromCSharp = true),
+  NULLABLE(droppedFromCSharp = true),
+  OBJECT(droppedFromCSharp = true),
+  STRING(droppedFromCSharp = true),
+  UNSUPPORTED(droppedFromCSharp = true),
+  VALUE_CLASS(droppedFromCSharp = true),
 }
 
 internal sealed interface ForwardCallableCatalogEntry {
@@ -65,6 +81,11 @@ internal data class ForwardCallablePlanCatalog(
     require(matches.size <= 1) { "Forward property catalog has duplicate plans for $symbol" }
     return matches.singleOrNull()
   }
+
+  /** The skipped callables that no legacy route re-emits, so they vanish from the C# API. */
+  val droppedCallables: List<ForwardCallableCatalogEntry.Skipped> = entries
+    .filterIsInstance<ForwardCallableCatalogEntry.Skipped>()
+    .filter { entry -> entry.reason.droppedFromCSharp }
 }
 
 /**

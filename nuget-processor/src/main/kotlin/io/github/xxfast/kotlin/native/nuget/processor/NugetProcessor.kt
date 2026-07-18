@@ -78,6 +78,23 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.planFor
 // expects ordinary Kotlin-authored public API. Excluding any `@CName` function here is the general,
 // robust fix: it protects against this exact class of bug for any future generated C export, not
 // just this one registration function.
+// ADR-062: ordinary synchronous callables the planner cannot plan and no named legacy route
+// re-emits simply disappear from the generated C# API (never as an `IntPtr` / `"0"` fallback). Warn
+// once per dropped callable, naming the symbol and the reason, so a consumer whose
+// `fun f(m: Map<K, V>)` vanishes from C# learns why. This is a warning, not an error: existing
+// fixtures intentionally contain such declarations and generation must keep succeeding.
+internal fun warnDroppedForwardCallables(
+  catalog: ForwardCallablePlanCatalog,
+  logger: KSPLogger,
+) {
+  catalog.droppedCallables.forEach { dropped ->
+    logger.warn(
+      "Forward bridge dropped ${dropped.symbol}: its ${dropped.reason} type combination is not " +
+          "supported, so it is omitted from the generated C# API."
+    )
+  }
+}
+
 private fun KSAnnotated.hasCNameAnnotation(): Boolean =
   annotations.any { annotation ->
     val name: String? = annotation.annotationType.resolve().declaration.qualifiedName?.asString()
@@ -234,6 +251,8 @@ class NugetProcessor(
     ).catalog(
       classes, functions, extensionFunctions, objects, properties, extensionProperties, valueClasses,
     )
+
+    warnDroppedForwardCallables(callableCatalog, logger)
 
     val cNameExports: FileSpec = generateCNameWrappers(
       functions, genericFunctions, extensionFunctions, extensionProperties,

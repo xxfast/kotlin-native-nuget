@@ -19,7 +19,9 @@ specialized protocols remain on named legacy routes. See [ADR-062](docs/adr/062-
 - [x] Preserve the shipped property and top-level nullable-primitive two-call ABI.
 - [x] Preserve ADR-061's single-call method and extension `valueOut` ABI.
 - [x] Fix known unsupported type-by-position combinations only in their named migration slices.
-- [x] Fail generation with a specific diagnostic for unsupported migrated combinations. Never emit a
+- [x] Emit a specific KSP warning naming the symbol and reason for every unsupported combination the
+  planner drops from the C# API, and keep generation succeeding (existing fixtures intentionally
+  contain such declarations). Combinations deferred to a named legacy route stay silent. Never emit a
   pointer, raw `IntPtr`, or `0` fallback for an unknown combination.
 - [x] Derive the runtime ABI contract from the same callable plan used by both renderers.
 
