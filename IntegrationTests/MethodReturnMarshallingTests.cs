@@ -101,6 +101,42 @@ public class MethodReturnMarshallingTests
         Assert.Equal(36, oreo.AgeInMonths());
     }
 
+    [Fact]
+    public void Cat_TakeAgeInMonths_InvokesMethodExactlyOnce()
+    {
+        using var oreo = new Cat("Oreo", 9);
+        oreo.Age = 3;
+
+        Assert.Equal(36, oreo.TakeAgeInMonths());
+        Assert.Null(oreo.Age);
+    }
+
+    [Fact]
+    public void Cat_TakeAgeInMonths_NullUsesTheValueOutAbsentBranch()
+    {
+        using var oreo = new Cat("Oreo", 9);
+
+        Assert.Null(oreo.TakeAgeInMonths());
+    }
+
+    [Fact]
+    public void Cat_TakeExtensionAgeInMonths_InvokesExtensionExactlyOnce()
+    {
+        using var oreo = new Cat("Oreo", 9);
+        oreo.Age = 3;
+
+        Assert.Equal(36, oreo.TakeExtensionAgeInMonths());
+        Assert.Null(oreo.Age);
+    }
+
+    [Fact]
+    public void Cat_TakeExtensionAgeInMonths_NullUsesTheValueOutAbsentBranch()
+    {
+        using var oreo = new Cat("Oreo", 9);
+
+        Assert.Null(oreo.TakeExtensionAgeInMonths());
+    }
+
     // ---- Extension-function position (Toy) ----
     // A toy's "owner" is the cat it belongs to. Every null/non-null branch is driven by the
     // toy's own (immutable) fields, since Toy has nothing to mutate.

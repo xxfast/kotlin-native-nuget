@@ -7,11 +7,21 @@ import com.squareup.kotlinpoet.FileSpec
 import com.squareup.kotlinpoet.FunSpec
 import io.github.xxfast.kotlin.native.nuget.processor.cir.expandAliases
 import io.github.xxfast.kotlin.native.nuget.processor.toCName
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallablePlanCatalog
+import io.github.xxfast.kotlin.native.nuget.processor.forward.addForwardPropertyPlanExports
 
-internal fun FileSpec.Builder.addExtensionPropertyExports(prop: KSPropertyDeclaration) {
+internal fun FileSpec.Builder.addExtensionPropertyExports(
+  prop: KSPropertyDeclaration,
+  callableCatalog: ForwardCallablePlanCatalog,
+) {
   val propName: String = prop.simpleName.asString()
   val receiverType: KSType = prop.extensionReceiver!!.resolve().expandAliases()
   val receiverSimpleName: String = receiverType.declaration.simpleName.asString()
+  val planned = callableCatalog.propertyFor("${prop.packageName.asString()}.$receiverSimpleName.$propName")
+  if (planned != null) {
+    addForwardPropertyPlanExports(planned)
+    return
+  }
   val receiverQualified: String = receiverType.declaration.qualifiedName?.asString() ?: return
   val receiverPrefix: String = receiverSimpleName.lowercase()
   val cname: String = "${receiverPrefix}_get_${toCName(propName)}"

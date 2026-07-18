@@ -57,6 +57,14 @@ import io.github.xxfast.kotlin.native.nuget.processor.exports.addSealedClassExpo
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addSuspendClassMethodExports
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addSuspendFunctionExports
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addValueClassExports
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeTypeContext
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeTypeClassifier
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallablePlanCatalog
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallablePlanner
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardHelperRequirement
+import io.github.xxfast.kotlin.native.nuget.processor.forward.addForwardKotlinPlanExport
+import io.github.xxfast.kotlin.native.nuget.processor.forward.calls
+import io.github.xxfast.kotlin.native.nuget.processor.forward.planFor
 
 // A `@kotlin.native.CName`-annotated function is already a C-ABI export by definition (its native
 // export name is fixed by the annotation itself). It must never be picked up by the forward
@@ -198,21 +206,50 @@ class NugetProcessor(
 
     val deps = Dependencies(aggregating = true, *sources)
 
+    // Phase 2 shadow migration: construct the source-neutral catalog once while KSP symbols are
+    // still available, before either legacy emitter runs. It remains observational for now.
+    val exportedObjectHandles: Set<String> = buildSet {
+      allClasses.forEach { cls -> cls.qualifiedName?.asString()?.let(::add) }
+      enums.forEach { enum -> enum.qualifiedName?.asString()?.let(::add) }
+      interfaces.forEach { iface -> iface.qualifiedName?.asString()?.let(::add) }
+      sealedClasses.forEach { sealed ->
+        sealed.qualifiedName?.asString()?.let(::add)
+        sealed.getSealedSubclasses().forEach { subclass ->
+          subclass.qualifiedName?.asString()?.let(::add)
+        }
+      }
+      objects.forEach { obj -> obj.qualifiedName?.asString()?.let(::add) }
+    }
+    val callableCatalog: ForwardCallablePlanCatalog = ForwardCallablePlanner(
+      ForwardBridgeTypeClassifier(ForwardBridgeTypeContext(exportedObjectHandles))
+    ).catalog(classes, functions, extensionFunctions, objects, properties, extensionProperties)
+
     val cNameExports: FileSpec = generateCNameWrappers(
       functions, genericFunctions, extensionFunctions, extensionProperties,
       classes, genericClasses, enums, sealedClasses, objects, properties,
-      valueClasses, suspendFunctions, deps,
+      valueClasses, suspendFunctions, callableCatalog, deps,
     )
     val cirFile: CirFile = generateCSharpBindings(
       functions, genericFunctions, extensionFunctions, extensionProperties,
       allClasses, enums, interfaces, sealedClasses, objects, properties,
-      constProperties, valueClasses, suspendFunctions, deps,
+      constProperties, valueClasses, suspendFunctions, callableCatalog, deps,
     )
 
     val csharpContracts: List<ForwardAbiSignature> = ForwardAbiContract.csharp(cirFile)
     ForwardAbiContract.assertMatches(
       csharp = csharpContracts,
       kotlin = ForwardAbiContract.kotlin(cNameExports, csharpContracts.map { it.exportName }.toSet()),
+    )
+    ForwardAbiContract.assertMatchesPlan(
+      catalog = callableCatalog,
+      csharp = csharpContracts,
+      kotlin = ForwardAbiContract.kotlin(
+        cNameExports,
+        (
+          callableCatalog.plans.flatMap { plan -> plan.nativeExports.map { call -> call.exportName } } +
+              callableCatalog.propertyPlans.flatMap { plan -> plan.calls().map { call -> call.exportName } }
+          ).toSet(),
+      ),
     )
     cNameExports.writeTo(codeGenerator, Dependencies(aggregating = true))
 
@@ -249,6 +286,7 @@ class NugetProcessor(
     constProperties: List<KSPropertyDeclaration>,
     valueClasses: List<KSClassDeclaration>,
     suspendFunctions: List<KSFunctionDeclaration>,
+    callableCatalog: ForwardCallablePlanCatalog,
     deps: Dependencies,
   ): CirFile {
     val cirFile: CirFile = translate(
@@ -267,6 +305,7 @@ class NugetProcessor(
       extensionProperties,
       valueClasses,
       suspendFunctions,
+      callableCatalog,
     )
 
     val csharp: String = renderer.render(cirFile)
@@ -295,6 +334,7 @@ class NugetProcessor(
     properties: List<KSPropertyDeclaration>,
     valueClasses: List<KSClassDeclaration>,
     suspendFunctions: List<KSFunctionDeclaration>,
+    callableCatalog: ForwardCallablePlanCatalog,
     deps: Dependencies,
   ): FileSpec {
     val builder: FileSpec.Builder = FileSpec
@@ -318,7 +358,10 @@ class NugetProcessor(
 
     functions.forEach { func ->
       builder.addImport(func.packageName.asString(), func.simpleName.asString())
-      builder.addFunctionExports(func)
+      val symbol: String = "${func.packageName.asString()}.${func.simpleName.asString()}"
+      val planned = callableCatalog.planFor(symbol)
+      if (planned != null) builder.addForwardKotlinPlanExport(planned)
+      else builder.addFunctionExports(func)
     }
 
     genericFunctions.forEach { func ->
@@ -326,12 +369,12 @@ class NugetProcessor(
       builder.addGenericFunctionExports(func)
     }
 
-    classes.forEach { builder.addClassExports(it) }
-    classes.forEach { builder.addCompanionExports(it) }
+    classes.forEach { builder.addClassExports(it, callableCatalog) }
+    classes.forEach { builder.addCompanionExports(it, callableCatalog) }
     genericClasses.forEach { builder.addGenericClassExports(it) }
     enums.forEach { builder.addEnumExports(it) }
     sealedClasses.forEach { builder.addSealedClassExports(it) }
-    objects.forEach { builder.addObjectExports(it) }
+    objects.forEach { builder.addObjectExports(it, callableCatalog) }
     valueClasses.forEach { builder.addValueClassExports(it) }
 
     val suspendLambdaTypes: Set<String> = setOf(
@@ -450,17 +493,17 @@ class NugetProcessor(
 
     properties.forEach { prop ->
       builder.addImport(prop.packageName.asString(), prop.simpleName.asString())
-      builder.addPropertyExports(prop)
+      builder.addPropertyExports(prop, callableCatalog)
     }
 
     extensionFunctions.forEach { func ->
       builder.addImport(func.packageName.asString(), func.simpleName.asString())
-      builder.addExtensionFunctionExports(func)
+      builder.addExtensionFunctionExports(func, callableCatalog)
     }
 
     extensionProperties.forEach { prop ->
       builder.addImport(prop.packageName.asString(), prop.simpleName.asString())
-      builder.addExtensionPropertyExports(prop)
+      builder.addExtensionPropertyExports(prop, callableCatalog)
     }
 
     val listTypes: Set<String> = setOf("kotlin.collections.List", "kotlin.collections.MutableList")
@@ -486,14 +529,32 @@ class NugetProcessor(
     // helper/exports a List-returning method boxes its handle for are never emitted.
     val classMethodsReturnLists: Boolean = classes
       .any { cls ->
-        cls.getAllFunctions().any { method -> method.returnType?.resolve()?.isListType() == true }
+        val methodsReturnLists: Boolean = cls.getAllFunctions()
+          .any { method ->
+            val symbol: String = "${cls.qualifiedName?.asString()}.${method.simpleName.asString()}"
+            callableCatalog.planFor(symbol) == null && method.returnType?.resolve()?.isListType() == true
+          }
+        val companionMethodsReturnLists: Boolean = cls.declarations
+          .filterIsInstance<KSClassDeclaration>()
+          .filter { declaration -> declaration.isCompanionObject }
+          .flatMap { companion -> companion.getAllFunctions() }
+          .any { method -> method.returnType?.resolve()?.isListType() == true }
+        methodsReturnLists || companionMethodsReturnLists
       }
 
     val extensionFunctionsReturnLists: Boolean = extensionFunctions
-      .any { func -> func.returnType?.resolve()?.isListType() == true }
+      .any { func ->
+        val symbol: String = "${func.packageName.asString()}.${func.simpleName.asString()}"
+        callableCatalog.planFor(symbol) == null && func.returnType?.resolve()?.isListType() == true
+      }
 
     val needsListSupport: Boolean = classesHaveLists || functionsReturnLists ||
-        sealedClassesHaveLists || classMethodsReturnLists || extensionFunctionsReturnLists
+        sealedClassesHaveLists || classMethodsReturnLists || extensionFunctionsReturnLists ||
+        callableCatalog.plans.any { plan ->
+          ForwardHelperRequirement.COLLECTION in plan.helperRequirements
+        } || callableCatalog.propertyPlans.any { plan ->
+          ForwardHelperRequirement.COLLECTION in plan.helperRequirements
+        }
 
     val mapTypes: Set<String> = setOf("kotlin.collections.Map", "kotlin.collections.MutableMap")
 

@@ -202,45 +202,22 @@ internal fun StringBuilder.renderClass(cls: CirClass) {
       appendLine("        private static extern IntPtr Native_Get${prop.name}Collect(IntPtr handle, IntPtr scopeHandle, IntPtr onNext, IntPtr onComplete, IntPtr onError, IntPtr userData);")
       appendLine()
       renderProperty(prop)
+    } else if (prop.usesLegacyNativeImport()) {
+      renderLegacyPropertyNativeImports(cls, prop)
+      renderProperty(prop)
     } else {
-      val getterErrorParam: String = if (prop.hasSyncErrorOut) ", out IntPtr error" else ""
-      appendLine("        [DllImport(\"${cls.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"${cls.nativePrefix}_get_${prop.nativeName}\")]")
-      appendLine("        private static extern ${prop.nativeReturnType} Native_Get_${prop.nativeName}(IntPtr handle$getterErrorParam);")
-      appendLine()
-      if (prop.setter != null) {
-        val setterType: String = prop.nativeSetterType
-        val setterErrorParam: String = if (prop.hasSyncErrorOut) ", out IntPtr error" else ""
-        appendLine("        [DllImport(\"${cls.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"${cls.nativePrefix}_set_${prop.nativeName}\")]")
-        appendLine("        private static extern void Native_Set_${prop.nativeName}(IntPtr handle, $setterType value$setterErrorParam);")
-        appendLine()
-      }
-      for (extra in prop.extraNatives) {
-        val entryPoint = "${cls.nativePrefix}_${extra.entryPointSuffix}"
-        val extraErrorParam: String = if (extra.hasSyncErrorOut) ", out IntPtr error" else ""
-        val paramStr: String = if (extra.hasValueParam) {
-          "IntPtr handle, ${extra.returnType} value$extraErrorParam"
-        } else {
-          "IntPtr handle$extraErrorParam"
-        }
-        val externReturn = if (extra.hasValueParam) "void" else extra.returnType
-        appendLine("        [DllImport(\"${cls.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"$entryPoint\")]")
-        appendLine("        private static extern $externReturn ${extra.name}($paramStr);")
-        appendLine()
-      }
+      cls.propertyNativeImports(prop).forEach { nativeImport -> renderDllImport(nativeImport) }
       renderProperty(prop)
     }
   }
 
   for (method in cls.methods) {
     if (!method.isAbstract) {
-      val nativeParamList: MutableList<String> = (listOf("IntPtr handle") +
-          method.parameters.map { "${it.nativeType} ${it.name}" }).toMutableList()
-      nativeParamList.addAll(method.extraNativeParams)
-      if (method.isSyncErrorCheckEnabled) nativeParamList.add("out IntPtr error")
-      val nativeParams: String = nativeParamList.joinToString(", ")
-      appendLine("        [DllImport(\"${cls.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"${cls.nativePrefix}_${method.nativeName}\")]")
-      appendLine("        private static extern ${method.nativeReturnType} Native_${method.name}($nativeParams);")
-      appendLine()
+      if (method.isAsync || method.isFlow) {
+        renderLegacyMethodNativeImport(cls, method)
+      } else {
+        renderDllImport(cls.methodNativeImport(method))
+      }
     }
     renderMethod(method, cls.name)
   }
@@ -267,8 +244,7 @@ internal fun StringBuilder.renderClass(cls: CirClass) {
 
   if (cls.disposable) {
     renderDispose(
-      libraryName = cls.libraryName,
-      nativePrefix = cls.nativePrefix,
+      nativeImport = cls.disposeNativeImport(),
       isAbstract = cls.isAbstract,
       hasSuperClass = cls.superClass != null,
       hasSuspendMethods = cls.hasSuspendMethods,
@@ -278,15 +254,29 @@ internal fun StringBuilder.renderClass(cls: CirClass) {
   appendLine("    }")
 }
 
+private fun StringBuilder.renderLegacyPropertyNativeImports(cls: CirClass, prop: CirProperty) {
+  val getterErrorParam: String = if (prop.hasSyncErrorOut) ", out IntPtr error" else ""
+  appendLine("        [DllImport(\"${cls.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"${cls.nativePrefix}_get_${prop.nativeName}\")]")
+  appendLine("        private static extern ${prop.nativeReturnType} Native_Get_${prop.nativeName}(IntPtr handle$getterErrorParam);")
+  appendLine()
+}
+
 // Emits the [DllImport] for a constructor's native create entry point plus the
 // C# constructor itself. Used for the primary and every secondary (ADR-034).
 private fun StringBuilder.renderClassConstructor(cls: CirClass, ctor: CirConstructor) {
-  val ctorParamStr: String = ctor.parameters.joinToString(", ") { "${it.type} ${it.name}" }
-  val createParams: String = if (ctorParamStr.isEmpty()) "out IntPtr error" else "$ctorParamStr, out IntPtr error"
-  appendLine("        [DllImport(\"${cls.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"${cls.nativePrefix}_create${ctor.nativeSuffix}\")]")
-  appendLine("        private static extern IntPtr Native_Create${ctor.nativeSuffix}($createParams);")
-  appendLine()
+  renderDllImport(cls.constructorNativeImport(ctor))
   renderConstructor(cls.name, ctor, cls.superClass != null, cls.hasSuspendMethods)
+}
+
+private fun StringBuilder.renderLegacyMethodNativeImport(cls: CirClass, method: CirMethod) {
+  val nativeParamList: MutableList<String> = (listOf("IntPtr handle") +
+      method.parameters.map { "${it.nativeType} ${it.name}" }).toMutableList()
+  nativeParamList.addAll(method.extraNativeParams)
+  if (method.isSyncErrorCheckEnabled) nativeParamList.add("out IntPtr error")
+  val nativeParams: String = nativeParamList.joinToString(", ")
+  appendLine("        [DllImport(\"${cls.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"${cls.nativePrefix}_${method.nativeName}\")]")
+  appendLine("        private static extern ${method.nativeReturnType} Native_${method.name}($nativeParams);")
+  appendLine()
 }
 
 internal fun StringBuilder.renderConstructor(
@@ -393,6 +383,7 @@ internal fun StringBuilder.renderDllImport(import: CirDllImport) {
   val paramStr: String = paramList.joinToString(", ")
 
   appendLine("        [DllImport(\"${import.libraryName}\", CallingConvention = CallingConvention.Cdecl$entryPoint)]")
+  if (import.marshalBooleanReturn) appendLine("        [return: MarshalAs(UnmanagedType.I1)]")
   appendLine("        $visibility static extern ${import.returnType} ${import.name}($paramStr);")
   appendLine()
 }
@@ -475,15 +466,7 @@ internal fun StringBuilder.renderMethod(method: CirMethod, className: String = "
 }
 
 internal fun StringBuilder.renderDataClassMethods(cls: CirClass) {
-  appendLine("        [DllImport(\"${cls.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"${cls.nativePrefix}_equals\")]")
-  appendLine("        private static extern bool Native_Equals(IntPtr handle, IntPtr other);")
-  appendLine()
-  appendLine("        [DllImport(\"${cls.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"${cls.nativePrefix}_hashcode\")]")
-  appendLine("        private static extern int Native_HashCode(IntPtr handle);")
-  appendLine()
-  appendLine("        [DllImport(\"${cls.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"${cls.nativePrefix}_tostring\")]")
-  appendLine("        private static extern IntPtr Native_ToString(IntPtr handle);")
-  appendLine()
+  cls.dataClassNativeImports().forEach { nativeImport -> renderDllImport(nativeImport) }
 
   if (cls.constructor != null) {
     val copyParams: String = cls.constructor.parameters.joinToString(", ") { "${it.type} ${it.name}" }
@@ -493,9 +476,6 @@ internal fun StringBuilder.renderDataClassMethods(cls: CirClass) {
     } else {
       "_handle, $copyParamNames, out IntPtr error"
     }
-    appendLine("        [DllImport(\"${cls.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"${cls.nativePrefix}_copy\")]")
-    appendLine("        private static extern IntPtr Native_Copy(IntPtr handle, $copyParams, out IntPtr error);")
-    appendLine()
     appendLine("        public ${cls.name} Copy($copyParams)")
     appendLine("        {")
     appendLine("            IntPtr handle = Native_Copy($copyNativeArgs);")
@@ -521,8 +501,7 @@ internal fun StringBuilder.renderDataClassMethods(cls: CirClass) {
 }
 
 internal fun StringBuilder.renderDispose(
-  libraryName: String,
-  nativePrefix: String,
+  nativeImport: CirDllImport?,
   isAbstract: Boolean = false,
   hasSuperClass: Boolean = false,
   hasSuspendMethods: Boolean = false,
@@ -533,9 +512,7 @@ internal fun StringBuilder.renderDispose(
   if (isAbstract) {
     appendLine("        public ${abstract}void Dispose();")
   } else {
-    appendLine("        [DllImport(\"$libraryName\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"${nativePrefix}_dispose\")]")
-    appendLine("        private static extern void Native_Dispose(IntPtr handle);")
-    appendLine()
+    renderDllImport(requireNotNull(nativeImport) { "Concrete disposable classes require a native import" })
     appendLine("        public ${override}void Dispose()")
     appendLine("        {")
     appendLine("            IntPtr handle = Interlocked.Exchange(ref _handle, IntPtr.Zero);")

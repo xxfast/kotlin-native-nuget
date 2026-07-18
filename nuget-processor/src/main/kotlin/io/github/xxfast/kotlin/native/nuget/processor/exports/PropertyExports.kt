@@ -7,6 +7,8 @@ import com.squareup.kotlinpoet.FileSpec
 import com.squareup.kotlinpoet.FunSpec
 import io.github.xxfast.kotlin.native.nuget.processor.cir.expandAliases
 import io.github.xxfast.kotlin.native.nuget.processor.toCName
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallablePlanCatalog
+import io.github.xxfast.kotlin.native.nuget.processor.forward.addForwardPropertyPlanExports
 
 /**
  * Generates @CName bridge exports for top-level properties.
@@ -15,8 +17,16 @@ import io.github.xxfast.kotlin.native.nuget.processor.toCName
  *
  * @see <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/002-nullable-two-call-pattern.md">ADR-002: Nullable two-call pattern</a>
  */
-internal fun FileSpec.Builder.addPropertyExports(prop: KSPropertyDeclaration) {
+internal fun FileSpec.Builder.addPropertyExports(
+  prop: KSPropertyDeclaration,
+  callableCatalog: ForwardCallablePlanCatalog,
+) {
   val propName: String = prop.simpleName.asString()
+  val planned = callableCatalog.propertyFor("${prop.packageName.asString()}.$propName")
+  if (planned != null) {
+    addForwardPropertyPlanExports(planned)
+    return
+  }
   val cname: String = toCName(propName)
   val propTypeResolved: KSType = prop.type.resolve().expandAliases()
   val propType: String = propTypeResolved.declaration.qualifiedName?.asString() ?: "Any"

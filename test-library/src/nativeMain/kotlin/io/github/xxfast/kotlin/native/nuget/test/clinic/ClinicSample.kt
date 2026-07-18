@@ -25,7 +25,7 @@ object Clinic {
    *  real konanc: `defaultValueFor` yields `null` for a non-`kotlin.` type, so the export is
    *  `: Patient` returning `Patient?` — *"return type mismatch: expected 'Patient', actual 'Patient?'"*.
    *  Same root cause as cells 6 and 10; the object carrier has no `StableRef` branch either. */
-  // fun intake(name: String): Patient = Patient(name)
+  fun intake(name: String): Patient = Patient(name)
 
   /** Cell 3, control: the exact `CatRegistry` shape. Must stay green — it is the path that works. */
   fun capacity(): Int = 12
@@ -54,6 +54,9 @@ class Patient(val name: String) {
 
   /** Control · LANDS NOW: a non-null String method return works. */
   fun describe(): String = "$name, $weight kg"
+
+  /** Control: a non-null String method parameter and return already work. */
+  fun echoName(value: String): String = value
 
   /** Cell 8 · LANDS NOW · obs C. Class method × `String?` parameter. Renders non-null `string` — the
    *  API lies, and a consumer passing `null` gets `CS8625` (an error only under TWAE). */
@@ -142,7 +145,7 @@ value class ChartRef(val patient: Patient) {
  *  handles nullable (`:53`), sealed-or-generic (`:105`, StableRef), enum (`:132`) and `Unit` (`:156`)
  *  returns — a plain class falls to `:178`, which returns the class itself and defaults to `null` on
  *  the catch path. Verified: *"return type mismatch: expected 'Patient', actual 'Patient?'"*. */
-// fun admit(name: String): Patient = Patient(name)
+fun admit(name: String): Patient = Patient(name)
 
 // Deliberately not in this corpus: the cell-23 shape (`suspend inline fun <reified T>
 // Patient.chartEntry(...): Result<T>`). Per ROADMAP.md's forward-diagnostics item (MVP.md P1) its

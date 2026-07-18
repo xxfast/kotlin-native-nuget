@@ -13,6 +13,11 @@ import com.google.devtools.ksp.symbol.Variance
 import com.google.devtools.ksp.symbol.Visibility
 import io.github.xxfast.kotlin.native.nuget.processor.exports.findInterfaceBridgePairs
 import io.github.xxfast.kotlin.native.nuget.processor.exports.findStoredCallbackPairs
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallablePlanCatalog
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCirPlanProjection
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCirPropertyProjection
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardHelperRequirement
+import io.github.xxfast.kotlin.native.nuget.processor.forward.planFor
 import io.github.xxfast.kotlin.native.nuget.processor.toCName
 
 internal fun translateClass(
@@ -21,6 +26,7 @@ internal fun translateClass(
   tracker: CollectionHelperTracker,
   exportedTypes: Set<String>,
   logger: KSPLogger,
+  callableCatalog: ForwardCallablePlanCatalog,
 ): CirClass {
   val name: String = cls.simpleName.asString()
   val prefix: String = name.lowercase()
@@ -49,17 +55,22 @@ internal fun translateClass(
 
   val constructor = cls.primaryConstructor
   val cirConstructor: CirConstructor? = if (constructor != null) {
-    val ctorParams: List<CirParameter> = constructor.parameters.map { param ->
-      val resolved: KSType = param.type.resolve().expandAliases()
-      val kotlinType: String = resolved.declaration.simpleName.asString()
-      CirParameter(param.name?.asString() ?: "_", mapParamType(kotlinType))
-    }
+    val planned = callableCatalog.planFor("${cls.qualifiedName?.asString() ?: name}.<init>")
+    if (planned != null) {
+      ForwardCirPlanProjection.constructor(planned)
+    } else {
+      val ctorParams: List<CirParameter> = constructor.parameters.map { param ->
+        val resolved: KSType = param.type.resolve().expandAliases()
+        val kotlinType: String = resolved.declaration.simpleName.asString()
+        CirParameter(param.name?.asString() ?: "_", mapParamType(kotlinType))
+      }
 
-    CirConstructor(
-      parameters = ctorParams,
-      body = "",
-      hasErrorCheck = true,
-    )
+      CirConstructor(
+        parameters = ctorParams,
+        body = "",
+        hasErrorCheck = true,
+      )
+    }
   } else null
 
   // Secondary constructors (ADR-034). Entry points start at _create_2 so they
@@ -70,18 +81,24 @@ internal fun translateClass(
     .filter { it.getVisibility() == Visibility.PUBLIC }
     .toList()
     .mapIndexed { index, ctor ->
-      val params: List<CirParameter> = ctor.parameters.map { param ->
-        val resolved: KSType = param.type.resolve().expandAliases()
-        val kotlinType: String = resolved.declaration.simpleName.asString()
-        CirParameter(param.name?.asString() ?: "_", mapParamType(kotlinType))
-      }
+      val suffix = "_${index + 2}"
+      val planned = callableCatalog.planFor("${cls.qualifiedName?.asString() ?: name}.<init>$suffix")
+      if (planned != null) {
+        ForwardCirPlanProjection.constructor(planned, suffix)
+      } else {
+        val params: List<CirParameter> = ctor.parameters.map { param ->
+          val resolved: KSType = param.type.resolve().expandAliases()
+          val kotlinType: String = resolved.declaration.simpleName.asString()
+          CirParameter(param.name?.asString() ?: "_", mapParamType(kotlinType))
+        }
 
-      CirConstructor(
-        parameters = params,
-        body = "",
-        hasErrorCheck = true,
-        nativeSuffix = "_${index + 2}",
-      )
+        CirConstructor(
+          parameters = params,
+          body = "",
+          hasErrorCheck = true,
+          nativeSuffix = suffix,
+        )
+      }
     }
 
   // C has no overloading and C# cannot declare two constructors with identical
@@ -105,6 +122,8 @@ internal fun translateClass(
     }
     .mapNotNull { prop ->
       val propName: String = prop.simpleName.asString()
+      val planned = callableCatalog.propertyFor("${cls.qualifiedName?.asString() ?: name}.$propName")
+      if (planned != null) return@mapNotNull ForwardCirPropertyProjection.classProperty(planned)
       val propTypeResolved: KSType = prop.type.resolve().expandAliases()
       val propType: String = propTypeResolved.declaration.simpleName.asString()
       val isNullable: Boolean = propTypeResolved.isMarkedNullable
@@ -625,6 +644,17 @@ internal fun translateClass(
     .filter { it !in interfaceBridgeExcluded }
     .map { method ->
       val methodName: String = method.simpleName.asString()
+      val planned = callableCatalog.planFor(
+        "${cls.qualifiedName?.asString() ?: name}.$methodName",
+      )
+      if (planned != null) {
+        if (ForwardHelperRequirement.COLLECTION in planned.helperRequirements) tracker.needsList = true
+        return@map ForwardCirPlanProjection.classMethod(
+          plan = planned,
+          nativePrefix = prefix,
+          isOverride = superClass != null && method.modifiers.contains(Modifier.OVERRIDE),
+        )
+      }
       val methodReturnTypeResolved: KSType? = method.returnType?.resolve()?.expandAliases()
       val methodReturn: String =
         methodReturnTypeResolved?.declaration?.simpleName?.asString() ?: "Unit"
@@ -948,7 +978,10 @@ internal fun translateClass(
       .filter { it.getVisibility() == Visibility.PUBLIC }
       .filter { !it.modifiers.contains(Modifier.CONST) }
       .flatMap { prop ->
-        translateCompanionProperty(prop, libraryName, prefix)
+        val symbol: String = "${cls.qualifiedName?.asString() ?: name}.Companion.${prop.simpleName.asString()}"
+        val planned = callableCatalog.propertyFor(symbol)
+        if (planned != null) ForwardCirPropertyProjection.staticProperty(planned, libraryName)
+        else translateCompanionProperty(prop, libraryName, prefix)
       }
       .toList()
 
@@ -956,7 +989,10 @@ internal fun translateClass(
       .filter { it.getVisibility() == Visibility.PUBLIC }
       .filter { it.simpleName.asString() !in listOf("equals", "hashCode", "toString", "<init>") }
       .flatMap { func ->
-        translateCompanionFunction(func, libraryName, prefix, name)
+        val symbol: String = "${cls.qualifiedName?.asString() ?: name}.Companion.${func.simpleName.asString()}"
+        val planned = callableCatalog.planFor(symbol)
+        if (planned != null) ForwardCirPlanProjection.static(planned, libraryName)
+        else translateCompanionFunction(func, libraryName, prefix, name, tracker)
       }
       .toList()
 
@@ -1263,6 +1299,7 @@ internal fun translateSealedClass(
 internal fun translateObject(
   obj: KSClassDeclaration,
   libraryName: String,
+  callableCatalog: ForwardCallablePlanCatalog,
 ): CirObject {
   val name: String = obj.simpleName.asString()
   val prefix: String = name.lowercase()
@@ -1276,6 +1313,9 @@ internal fun translateObject(
     .filter { it.simpleName.asString() !in listOf("equals", "hashCode", "toString", "<init>") }
     .flatMap { method ->
       val methodName: String = method.simpleName.asString()
+      val symbol: String = "${obj.qualifiedName?.asString() ?: name}.$methodName"
+      val planned = callableCatalog.planFor(symbol)
+      if (planned != null) return@flatMap ForwardCirPlanProjection.static(planned, libraryName)
       val cname: String = toCName(methodName)
       // PascalCase the public method name (ADR-007); the native entry point keeps the
       // lowercased cname, unchanged (cell 25).
@@ -1440,6 +1480,7 @@ internal fun translateCompanionFunction(
   libraryName: String,
   classPrefix: String,
   className: String,
+  tracker: CollectionHelperTracker,
 ): List<CirMember> {
   val methodName: String = func.simpleName.asString()
   val cname: String = toCName(methodName)
@@ -1453,67 +1494,119 @@ internal fun translateCompanionFunction(
   }
 
   val entryPoint: String = "${classPrefix}_companion_${cname}"
+  val nativeName: String = "Native_Companion_$csMethodName"
+  val paramNames: String = params.joinToString(", ") { it.name }
+  val nativeCallArgs: String = if (paramNames.isEmpty()) {
+    "out IntPtr error"
+  } else {
+    "$paramNames, out IntPtr error"
+  }
+  val returnQualified: String? = returnType?.declaration?.qualifiedName?.asString()
+  val isListReturn: Boolean = returnQualified in setOf(
+    "kotlin.collections.List",
+    "kotlin.collections.MutableList",
+  )
+  val isMutableListReturn: Boolean = returnQualified == "kotlin.collections.MutableList"
+  val listElementType: String? = if (isListReturn) {
+    val elementType: KSType? = returnType?.arguments?.firstOrNull()?.type?.resolve()
+    val elementTypeName: String = elementType?.declaration?.simpleName?.asString() ?: "Any"
+    KOTLIN_TO_CSHARP_PARAM[elementTypeName] ?: elementTypeName
+  } else null
+  if (isListReturn) tracker.needsList = true
+
+  fun nativeImport(returnType: String): CirDllImport = CirDllImport(
+    libraryName = libraryName,
+    entryPoint = entryPoint,
+    returnType = returnType,
+    name = nativeName,
+    parameters = params,
+    visibility = CirVisibility.PRIVATE,
+    hasSyncErrorOut = true,
+  )
 
   val returnsEnclosingClass: Boolean = kotlinReturnType == className
   val isObjectReturn: Boolean = returnsEnclosingClass ||
-      (kotlinReturnType !in KOTLIN_TO_CSHARP_RETURN && kotlinReturnType != "Unit")
+      (kotlinReturnType !in KOTLIN_TO_CSHARP_RETURN && kotlinReturnType != "Unit" && !isListReturn)
 
-  if (isObjectReturn) {
-    val nativeImport = CirDllImport(
-      libraryName = libraryName,
-      entryPoint = entryPoint,
-      returnType = "IntPtr",
-      name = "Native_Companion_$csMethodName",
+  if (isListReturn) {
+    val returnType: String = if (isMutableListReturn) {
+      "IList<$listElementType>"
+    } else {
+      "IReadOnlyList<$listElementType>"
+    }
+    val body: String = buildString {
+      appendLine()
+      appendLine("                IntPtr listHandle = $nativeName($nativeCallArgs);")
+      appendLine("                if (error != IntPtr.Zero)")
+      appendLine("                {")
+      appendLine("                    throw NugetErrorNative.BuildException(error);")
+      appendLine("                }")
+      appendLine("                int count = NugetListNative.Count(listHandle);")
+      appendLine("                var result = new List<$listElementType>(count);")
+      appendLine("                for (int i = 0; i < count; i++)")
+      appendLine("                {")
+      appendLine("                    result.Add(NugetMarshal.FromHandle<$listElementType>(NugetListNative.Get(listHandle, i)));")
+      appendLine("                }")
+      appendLine("                NugetListNative.Dispose(listHandle);")
+      append(if (isMutableListReturn) "                return result;" else "                return result.AsReadOnly();")
+    }
+    val wrapper = CirMethod(
+      name = csMethodName,
+      returnType = returnType,
+      nativeReturnType = "IntPtr",
+      nativeName = nativeName,
       parameters = params,
-      visibility = CirVisibility.PRIVATE,
+      body = body,
+      isStatic = true,
+      isSyncErrorCheckEnabled = true,
+      hasCustomBody = true,
     )
 
-    val paramNames: String = params.joinToString(", ") { it.name }
+    return listOf(nativeImport("IntPtr"), wrapper)
+  }
+
+  if (isObjectReturn) {
     val wrapper = CirMethod(
       name = csMethodName,
       returnType = kotlinReturnType,
+      nativeReturnType = "IntPtr",
+      nativeName = nativeName,
       parameters = params,
-      body = "new $kotlinReturnType(Native_Companion_$csMethodName($paramNames))",
+      body = buildString {
+        appendLine()
+        appendLine("                IntPtr nativeResult = $nativeName($nativeCallArgs);")
+        appendLine("                if (error != IntPtr.Zero)")
+        appendLine("                {")
+        appendLine("                    throw NugetErrorNative.BuildException(error);")
+        appendLine("                }")
+        append("                return new $kotlinReturnType(nativeResult);")
+      },
       isStatic = true,
+      isSyncErrorCheckEnabled = true,
+      hasCustomBody = true,
     )
 
-    return listOf(nativeImport, wrapper)
+    return listOf(nativeImport("IntPtr"), wrapper)
   }
 
-  if (kotlinReturnType == "String") {
-    val nativeImport = CirDllImport(
-      libraryName = libraryName,
-      entryPoint = entryPoint,
-      returnType = "IntPtr",
-      name = "Native_Companion_$csMethodName",
-      parameters = params,
-      visibility = CirVisibility.PRIVATE,
-    )
-
-    val paramNames: String = params.joinToString(", ") { it.name }
-    val wrapper = CirMethod(
-      name = csMethodName,
-      returnType = "string",
-      parameters = params,
-      body = "Marshal.PtrToStringUTF8(Native_Companion_$csMethodName($paramNames))!",
-      isStatic = true,
-    )
-
-    return listOf(nativeImport, wrapper)
+  val csReturnType: String = when (kotlinReturnType) {
+    "Unit" -> "void"
+    "String" -> "string"
+    else -> mapReturnType(kotlinReturnType)
   }
-
-  val csReturnType: String = if (kotlinReturnType == "Unit") "void" else mapReturnType(kotlinReturnType)
-
-  return listOf(
-    CirDllImport(
-      libraryName = libraryName,
-      entryPoint = entryPoint,
-      returnType = csReturnType,
-      name = "Native_Companion_$csMethodName",
-      parameters = params,
-      visibility = CirVisibility.PUBLIC,
-    )
+  val nativeReturnType: String = if (kotlinReturnType == "String") "IntPtr" else csReturnType
+  val wrapper = CirMethod(
+    name = csMethodName,
+    returnType = csReturnType,
+    nativeReturnType = nativeReturnType,
+    nativeName = nativeName,
+    parameters = params,
+    body = "",
+    isStatic = true,
+    isSyncErrorCheckEnabled = true,
   )
+
+  return listOf(nativeImport(nativeReturnType), wrapper)
 }
 
 internal fun translateInterface(

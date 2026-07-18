@@ -30,3 +30,10 @@ fun Toy.alias(): String? = if (color == "Gray") "$name (aka Grey Ghost)" else nu
 
 /** Nullable primitive return, extension-function position. Non-null only for the "Gray" toys. */
 fun Toy.ageInMonths(): Int? = if (color == "Gray") name.length * 12 else null
+
+/** Consumes `age`, proving the nullable extension return crosses the ABI with one invocation. */
+fun Cat.takeExtensionAgeInMonths(): Int? {
+  val result: Int? = age?.times(12)
+  age = null
+  return result
+}

@@ -9,9 +9,26 @@ import com.squareup.kotlinpoet.FileSpec
 import com.squareup.kotlinpoet.FunSpec
 import com.squareup.kotlinpoet.TypeName
 import io.github.xxfast.kotlin.native.nuget.processor.cir.expandAliases
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallablePlanCatalog
+import io.github.xxfast.kotlin.native.nuget.processor.forward.addForwardKotlinPlanExport
+import io.github.xxfast.kotlin.native.nuget.processor.forward.planFor
 import io.github.xxfast.kotlin.native.nuget.processor.toCName
 
-internal fun FileSpec.Builder.addExtensionFunctionExports(func: KSFunctionDeclaration) {
+internal fun FileSpec.Builder.addExtensionFunctionExports(
+  func: KSFunctionDeclaration,
+  callableCatalog: ForwardCallablePlanCatalog,
+) {
+  val funcName: String = func.simpleName.asString()
+  val symbol: String = "${func.packageName.asString()}.$funcName"
+  val plan = callableCatalog.planFor(symbol)
+  if (plan != null) {
+    addForwardKotlinPlanExport(plan)
+    return
+  }
+  addLegacyExtensionFunctionExports(func)
+}
+
+private fun FileSpec.Builder.addLegacyExtensionFunctionExports(func: KSFunctionDeclaration) {
   val funcName: String = func.simpleName.asString()
   val receiverType: KSType = func.extensionReceiver!!.resolve().expandAliases()
   val receiverSimpleName: String = receiverType.declaration.simpleName.asString()

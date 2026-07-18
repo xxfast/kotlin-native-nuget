@@ -18,9 +18,8 @@ class Tier1CompileCellsTest {
    * error-path fallback), so the try/catch expression infers `Patient?` against a declared
    * non-null `Patient` return — "return type mismatch: expected 'Patient', actual 'Patient?'."
    * Same root cause as cells 6 and 10: the object carrier has no `StableRef` branch either.
-   */
+  */
   @Test
-  @XFail("ADR-060 cell 2 - object method returning an object is invalid Kotlin")
   fun `cell 2 - object method returning an object compiles`() {
     val result = Tier1Harness.run(
       """
@@ -129,9 +128,8 @@ class Tier1CompileCellsTest {
    * `null` on the catch path — "return type mismatch: expected 'Patient', actual 'Patient?'."
    * Nobody noticed because every factory in the corpus is a companion (`Cat.fromName`), which
    * routes through a different, StableRef-using path (`ClassExports.kt:760`).
-   */
+  */
   @Test
-  @XFail("ADR-060 cell 10 - top-level factory function returning a class is invalid Kotlin")
   fun `cell 10 - top-level factory returning a plain class compiles`() {
     val result = Tier1Harness.run(
       """

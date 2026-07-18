@@ -41,4 +41,19 @@ fun nullableStringOrThrow(input: Int): String? = when {
   else -> "value-$input"
 }
 
+// Phase 6 compatibility control: the shipped top-level nullable-primitive ABI invokes this
+// function once for `has_value` and once for `value`.
+private var nullableIntProbeCalls: Int = 0
+
+fun resetNullableIntProbe() {
+  nullableIntProbeCalls = 0
+}
+
+fun nullableIntProbe(): Int? {
+  nullableIntProbeCalls += 1
+  return 42
+}
+
+fun nullableIntProbeCallCount(): Int = nullableIntProbeCalls
+
 fun greeter(greeting: String): (String) -> String = { name -> "$greeting, $name!" }

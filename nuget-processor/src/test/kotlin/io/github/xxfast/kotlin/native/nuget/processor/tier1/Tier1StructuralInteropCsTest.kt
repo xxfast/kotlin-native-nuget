@@ -2,6 +2,7 @@ package io.github.xxfast.kotlin.native.nuget.processor.tier1
 
 import kotlin.test.Test
 import kotlin.test.assertContains
+import kotlin.test.assertTrue
 
 /**
  * ADR-060 obs classes **C** (1, 8, 9, 12), **N** (14), and cell **25** (object export naming) —
@@ -13,6 +14,38 @@ import kotlin.test.assertContains
  * `GeneratedBindingsCheck`'s consumer surface (Tier 2), in the commit that fixes each one.
  */
 class Tier1StructuralInteropCsTest {
+
+  @Test
+  fun `companion functions use checked private imports for every ordinary return shape`() {
+    val result = Tier1Harness.run(
+      """
+      package tier1.companionerrors
+
+      class Factory {
+        companion object {
+          fun reset() {}
+          fun count(): Int = 1
+          fun label(): String = "factory"
+          fun create(): Factory = Factory()
+          fun labels(): List<String> = listOf("factory")
+        }
+      }
+      """.trimIndent()
+    )
+
+    assertTrue(result.compiledClean, "expected companion exports to compile; got: ${result.compileErrors}")
+
+    val generated: String = result.generatedCSharp
+    listOf("Reset", "Count", "Label", "Create", "Labels").forEach { method ->
+      assertContains(generated, "Native_Companion_$method(out IntPtr error)")
+    }
+    assertContains(generated, "public static void Reset()")
+    assertContains(generated, "public static int Count()")
+    assertContains(generated, "public static string Label()")
+    assertContains(generated, "public static Factory Create()")
+    assertContains(generated, "public static IReadOnlyList<string> Labels()")
+    assertContains(generated, "NugetListNative.Count(listHandle)")
+  }
 
   /**
    * Cell 1 · obs C. `object` method return × `String`. Guards the fix: object methods now route

@@ -9,12 +9,15 @@ import com.squareup.kotlinpoet.FileSpec
 import com.squareup.kotlinpoet.FunSpec
 import io.github.xxfast.kotlin.native.nuget.processor.cir.expandAliases
 import io.github.xxfast.kotlin.native.nuget.processor.toCName
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallablePlanCatalog
+import io.github.xxfast.kotlin.native.nuget.processor.forward.addForwardKotlinPlanExport
+import io.github.xxfast.kotlin.native.nuget.processor.forward.planFor
 
 /**
  * Generates @CName bridge exports for Kotlin object singletons.
  * No handle parameter — calls the object's methods directly.
  */
-internal fun FileSpec.Builder.addObjectExports(obj: KSClassDeclaration) {
+internal fun FileSpec.Builder.addObjectExports(obj: KSClassDeclaration, callableCatalog: ForwardCallablePlanCatalog) {
   val name: String = obj.simpleName.asString()
   val qualifiedName: String = obj.qualifiedName?.asString() ?: return
   val prefix: String = name.lowercase()
@@ -26,6 +29,11 @@ internal fun FileSpec.Builder.addObjectExports(obj: KSClassDeclaration) {
 
   for (method in methods) {
     val methodName: String = method.simpleName.asString()
+    val planned = callableCatalog.planFor("$qualifiedName.$methodName")
+    if (planned != null) {
+      addForwardKotlinPlanExport(planned)
+      continue
+    }
     val cname: String = toCName(methodName)
     val entryPoint: String = "${prefix}_${cname}"
     val methodReturn: String = method.returnType?.resolve()?.expandAliases()

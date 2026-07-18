@@ -5,9 +5,17 @@ import com.squareup.kotlinpoet.FileSpec
 import com.squareup.kotlinpoet.FunSpec
 import com.squareup.kotlinpoet.TypeName
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirDllImport
+import io.github.xxfast.kotlin.native.nuget.processor.cir.CirClass
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirFile
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirObject
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirStaticClass
+import io.github.xxfast.kotlin.native.nuget.processor.cir.CirValueClass
+import io.github.xxfast.kotlin.native.nuget.processor.cir.ordinaryNativeImports
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardAbiWireType
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallablePlan
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallablePlanCatalog
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardNativeCall
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardPropertyPlan
 
 internal enum class ForwardAbiType {
   VOID,
@@ -42,10 +50,14 @@ internal data class ForwardAbiSignature(
   }
 }
 
+internal fun List<ForwardAbiSignature>.canonicalText(): String =
+  sortedWith(compareBy({ signature -> signature.exportName }, { signature -> signature.toString() }))
+    .joinToString("\n")
+
 /**
- * A generation-time assertion for the subset of C# native declarations represented directly by
- * [CirDllImport]. Other C# helper declarations are deliberately not collected: they are rendered
- * from helper CIR nodes and do not have a corresponding generated @CName wrapper.
+ * A generation-time assertion for C# native declarations represented by [CirDllImport], including
+ * ordinary class and value-class imports normalized through their shared computed factories.
+ * Specialized helper protocols remain on explicit legacy routes until their migration phase.
  */
 internal object ForwardAbiContract {
   fun assertMatches(csharp: List<ForwardAbiSignature>, kotlin: List<ForwardAbiSignature>) {
@@ -76,6 +88,9 @@ internal object ForwardAbiContract {
       when (declaration) {
         is CirStaticClass -> declaration.members.filterIsInstance<CirDllImport>()
         is CirObject -> declaration.methods.filterIsInstance<CirDllImport>()
+        is CirClass -> declaration.ordinaryNativeImports() +
+            declaration.companionMembers.filterIsInstance<CirDllImport>()
+        is CirValueClass -> declaration.ordinaryNativeImports()
         else -> emptyList()
       }
     }
@@ -85,6 +100,91 @@ internal object ForwardAbiContract {
     .filterIsInstance<FunSpec>()
     .mapNotNull { function -> function.toSignature() }
     .filter { signature -> signature.exportName in expectedNames }
+
+  /**
+   * The first shadow-planning slice is intentionally checked against the existing independent
+   * KotlinPoet and CIR projections. Keeping all three projections independent makes a stale
+   * legacy emitter fail during KSP rather than silently drifting while renderers migrate later.
+   */
+  fun assertMatchesPlan(
+    catalog: ForwardCallablePlanCatalog,
+    csharp: List<ForwardAbiSignature>,
+    kotlin: List<ForwardAbiSignature>,
+  ) {
+    val planned: List<ForwardAbiSignature> =
+      catalog.plans.flatMap { plan -> plan.toSignatures() } +
+          catalog.propertyPlans.flatMap { plan -> plan.toSignatures() }
+    val names: Set<String> = planned.map { signature -> signature.exportName }.toSet()
+    assertProjectionMatches("plan", planned, "C#", csharp.filter { it.exportName in names })
+    assertProjectionMatches("plan", planned, "Kotlin", kotlin.filter { it.exportName in names })
+  }
+
+  private fun assertProjectionMatches(
+    expectedLabel: String,
+    expected: List<ForwardAbiSignature>,
+    actualLabel: String,
+    actual: List<ForwardAbiSignature>,
+  ) {
+    val expectedByName: Map<String, List<ForwardAbiSignature>> = expected.groupBy { it.exportName }
+    val actualByName: Map<String, List<ForwardAbiSignature>> = actual.groupBy { it.exportName }
+    val names: List<String> = (expectedByName.keys + actualByName.keys).sorted()
+    names.forEach { name ->
+      val expectedSignatures: List<ForwardAbiSignature> = expectedByName[name].orEmpty()
+      val actualSignatures: List<ForwardAbiSignature> = actualByName[name].orEmpty()
+      require(expectedSignatures.size <= 1) {
+        "Forward ABI duplicate $expectedLabel signature for $name: $expectedSignatures"
+      }
+      require(actualSignatures.size <= 1) {
+        "Forward ABI duplicate $actualLabel signature for $name: $actualSignatures"
+      }
+      require(expectedSignatures.isNotEmpty()) {
+        "Forward ABI unexpected $actualLabel projection for $name: ${actualSignatures.single()}"
+      }
+      require(actualSignatures.isNotEmpty()) {
+        "Forward ABI missing $actualLabel projection for $name; expected ${expectedSignatures.single()}"
+      }
+      require(expectedSignatures.single() == actualSignatures.single()) {
+        "Forward ABI plan mismatch for $name against $actualLabel; expected " +
+            "${expectedSignatures.single()}, actual ${actualSignatures.single()}"
+      }
+    }
+  }
+
+  private fun ForwardCallablePlan.toSignatures(): List<ForwardAbiSignature> = nativeExports.toSignatures()
+
+  private fun ForwardPropertyPlan.toSignatures(): List<ForwardAbiSignature> = calls().toSignatures()
+
+  private fun List<ForwardNativeCall>.toSignatures(): List<ForwardAbiSignature> = map { call ->
+    ForwardAbiSignature(
+      exportName = call.exportName,
+      result = call.result.toAbiType(),
+      parameters = call.parameters.map { parameter ->
+        ForwardAbiParameter(parameter.wireType.toAbiType(), parameter.direction.toAbiDirection())
+      },
+    )
+  }
+
+  private fun ForwardAbiWireType.toAbiType(): ForwardAbiType = when (this) {
+    ForwardAbiWireType.VOID -> ForwardAbiType.VOID
+    ForwardAbiWireType.BOOLEAN -> ForwardAbiType.BOOL
+    ForwardAbiWireType.INT8, ForwardAbiWireType.UINT8 -> ForwardAbiType.BYTE
+    ForwardAbiWireType.INT16, ForwardAbiWireType.UINT16, ForwardAbiWireType.CHAR16 -> ForwardAbiType.SHORT
+    ForwardAbiWireType.INT32, ForwardAbiWireType.UINT32 -> ForwardAbiType.INT
+    ForwardAbiWireType.INT64, ForwardAbiWireType.UINT64 -> ForwardAbiType.LONG
+    ForwardAbiWireType.FLOAT32 -> ForwardAbiType.FLOAT
+    ForwardAbiWireType.FLOAT64 -> ForwardAbiType.DOUBLE
+    ForwardAbiWireType.STRING -> ForwardAbiType.STRING
+    ForwardAbiWireType.POINTER -> ForwardAbiType.POINTER
+    ForwardAbiWireType.UNKNOWN -> error("Forward plan contains an unknown ABI wire type")
+  }
+
+  private fun io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardAbiDirection.toAbiDirection():
+      ForwardAbiDirection = when (this) {
+    io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardAbiDirection.IN -> ForwardAbiDirection.IN
+    io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardAbiDirection.OUT -> ForwardAbiDirection.OUT
+    io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardAbiDirection.IN_OUT ->
+      error("Forward plan IN_OUT ABI direction has no legacy ForwardAbiContract projection")
+  }
 
   private fun CirDllImport.toSignature(): ForwardAbiSignature? {
     val name: String = entryPoint ?: return null

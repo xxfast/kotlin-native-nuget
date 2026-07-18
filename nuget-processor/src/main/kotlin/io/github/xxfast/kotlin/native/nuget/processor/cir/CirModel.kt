@@ -222,6 +222,7 @@ data class CirDllImport(
   val parameters: List<CirParameter>,
   val visibility: CirVisibility = CirVisibility.PUBLIC,
   val hasSyncErrorOut: Boolean = false,
+  val marshalBooleanReturn: Boolean = false,
 ) : CirMember
 
 // One interface method entry within a CirInterfaceBridgeMethod.

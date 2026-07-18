@@ -15,6 +15,10 @@ import com.squareup.kotlinpoet.FunSpec
 import com.squareup.kotlinpoet.TypeName
 import io.github.xxfast.kotlin.native.nuget.processor.cir.LAMBDA_TYPES
 import io.github.xxfast.kotlin.native.nuget.processor.cir.expandAliases
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallablePlanCatalog
+import io.github.xxfast.kotlin.native.nuget.processor.forward.addForwardKotlinPlanExport
+import io.github.xxfast.kotlin.native.nuget.processor.forward.planFor
+import io.github.xxfast.kotlin.native.nuget.processor.forward.addForwardPropertyPlanExports
 import io.github.xxfast.kotlin.native.nuget.processor.toCName
 
 /**
@@ -25,7 +29,10 @@ import io.github.xxfast.kotlin.native.nuget.processor.toCName
  * @see <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/005-object-return-semantics.md">ADR-005: Object return semantics</a>
  * @see <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/008-data-class-mapping.md">ADR-008: Data class mapping</a>
  */
-internal fun FileSpec.Builder.addClassExports(cls: KSClassDeclaration) {
+internal fun FileSpec.Builder.addClassExports(
+  cls: KSClassDeclaration,
+  callableCatalog: ForwardCallablePlanCatalog,
+) {
   val name: String = cls.simpleName.asString()
   val qualifiedName: String = cls.qualifiedName?.asString() ?: return
   val prefix: String = name.lowercase()
@@ -39,6 +46,10 @@ internal fun FileSpec.Builder.addClassExports(cls: KSClassDeclaration) {
   val constructor: KSFunctionDeclaration? = cls.primaryConstructor
 
   if (constructor != null && !isAbstract) {
+    val planned = callableCatalog.planFor("$qualifiedName.<init>")
+    if (planned != null) {
+      addForwardKotlinPlanExport(planned)
+    } else {
     val ctorParamCall: String = constructor.parameters.joinToString(", ") {
       it.name?.asString() ?: "_"
     }
@@ -63,6 +74,7 @@ internal fun FileSpec.Builder.addClassExports(cls: KSClassDeclaration) {
         }, stableRef, qualifiedName, ctorParamCall, cOpaquePointerVar, stableRef)
         .build()
     )
+    }
   }
 
   if (!isAbstract) {
@@ -72,6 +84,11 @@ internal fun FileSpec.Builder.addClassExports(cls: KSClassDeclaration) {
       .toList()
 
     secondaryConstructors.forEachIndexed { index, ctor ->
+      val planned = callableCatalog.planFor("$qualifiedName.<init>_${index + 2}")
+      if (planned != null) {
+        addForwardKotlinPlanExport(planned)
+        return@forEachIndexed
+      }
       val cname: String = "${prefix}_create_${index + 2}"
       val ctorParamCall: String = ctor.parameters.joinToString(", ") {
         it.name?.asString() ?: "_"
@@ -118,6 +135,11 @@ internal fun FileSpec.Builder.addClassExports(cls: KSClassDeclaration) {
 
   for (prop in properties) {
     val propName: String = prop.simpleName.asString()
+    val planned = callableCatalog.propertyFor("$qualifiedName.$propName")
+    if (planned != null) {
+      addForwardPropertyPlanExports(planned)
+      continue
+    }
     val propTypeResolved: KSType = prop.type.resolve().expandAliases()
     val propType: String = propTypeResolved.declaration.qualifiedName?.asString() ?: "Any"
     val isNullable: Boolean = propTypeResolved.isMarkedNullable
@@ -528,6 +550,11 @@ internal fun FileSpec.Builder.addClassExports(cls: KSClassDeclaration) {
   methods.forEach { method ->
     if (method in interfaceBridgeExcluded) return@forEach
     val methodName: String = method.simpleName.asString()
+    val planned = callableCatalog.planFor("$qualifiedName.$methodName")
+    if (planned != null) {
+      addForwardKotlinPlanExport(planned)
+      return@forEach
+    }
     val methodReturnType: KSType? = method.returnType?.resolve()?.expandAliases()
     val methodReturn: String = methodReturnType?.declaration?.qualifiedName?.asString() ?: "Unit"
     val isNullableReturn: Boolean = methodReturnType?.isMarkedNullable == true
@@ -789,6 +816,11 @@ internal fun FileSpec.Builder.addClassExports(cls: KSClassDeclaration) {
     )
 
     if (constructor != null) {
+      val planned = callableCatalog.planFor("$qualifiedName.copy")
+      if (planned != null) {
+        addForwardKotlinPlanExport(planned)
+        return@addClassExports
+      }
       val copyBuilder: FunSpec.Builder = FunSpec
         .builder("export_${prefix}_copy")
         .addAnnotation(cNameAnnotation("${prefix}_copy"))
@@ -828,7 +860,10 @@ internal fun FileSpec.Builder.addClassExports(cls: KSClassDeclaration) {
   }
 }
 
-internal fun FileSpec.Builder.addCompanionExports(cls: KSClassDeclaration) {
+internal fun FileSpec.Builder.addCompanionExports(
+  cls: KSClassDeclaration,
+  callableCatalog: ForwardCallablePlanCatalog,
+) {
   val name: String = cls.simpleName.asString()
   val qualifiedName: String = cls.qualifiedName?.asString() ?: return
   val prefix: String = name.lowercase()
@@ -844,6 +879,11 @@ internal fun FileSpec.Builder.addCompanionExports(cls: KSClassDeclaration) {
 
   for (method in methods) {
     val methodName: String = method.simpleName.asString()
+    val planned = callableCatalog.planFor("$qualifiedName.Companion.$methodName")
+    if (planned != null) {
+      addForwardKotlinPlanExport(planned)
+      continue
+    }
     val cname: String = toCName(methodName)
     val entryPoint: String = "${prefix}_companion_${cname}"
     val methodReturnType: KSType? = method.returnType?.resolve()?.expandAliases()
@@ -932,6 +972,11 @@ internal fun FileSpec.Builder.addCompanionExports(cls: KSClassDeclaration) {
 
   for (prop in properties) {
     val propName: String = prop.simpleName.asString()
+    val planned = callableCatalog.propertyFor("$qualifiedName.Companion.$propName")
+    if (planned != null) {
+      addForwardPropertyPlanExports(planned)
+      continue
+    }
     val propTypeResolved: KSType = prop.type.resolve().expandAliases()
     val propType: String = propTypeResolved.declaration.qualifiedName?.asString() ?: "Any"
     val isMutable: Boolean = prop.isMutable

@@ -23,16 +23,14 @@ internal fun StringBuilder.renderValueClass(cls: CirValueClass) {
   appendLine("        public ${cls.underlyingType} ${cls.underlyingName} { get; }")
   appendLine()
 
-  cls.constructors.forEach { ctor ->
+  cls.constructors.forEachIndexed { index, ctor ->
     val paramStr: String = ctor.parameters.joinToString(", ") { "${it.type} ${it.name}" }
     val paramNames: String = ctor.parameters.joinToString(", ") { it.name }
     val nativeReturnType: String =
       if (cls.underlyingType == "string") "IntPtr" else cls.underlyingNativeType
     val suffix: String = ctor.nativeSuffix
 
-    appendLine("        [DllImport(\"${cls.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"${ctor.nativeName}\")]")
-    appendLine("        private static extern $nativeReturnType Native_Create$suffix($paramStr, out IntPtr error);")
-    appendLine()
+    renderDllImport(cls.constructorNativeImport(index, ctor))
     appendLine("        private static $nativeReturnType CreateChecked$suffix($paramStr)")
     appendLine("        {")
     appendLine("            $nativeReturnType underlying = Native_Create$suffix($paramNames, out IntPtr error);")
@@ -67,11 +65,9 @@ private fun StringBuilder.renderReferenceValueClass(cls: CirValueClass) {
     val nativeReturnType: String = if (cls.underlyingType == "string") "IntPtr" else cls.underlyingNativeType
     val nativeSuffix: String = if (index > 0) "_$index" else ""
 
-    appendLine("        [DllImport(\"${cls.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"${ctor.nativeName}\")]")
+    renderDllImport(cls.constructorNativeImport(index, ctor))
 
     if (ctor.hasErrorCheck) {
-      appendLine("        private static extern $nativeReturnType Native_Create$nativeSuffix($paramStr, out IntPtr error);")
-      appendLine()
       appendLine("        private static $nativeReturnType CreateChecked$nativeSuffix($paramStr)")
       appendLine("        {")
       appendLine("            $nativeReturnType underlying = Native_Create$nativeSuffix($paramNames, out IntPtr error);")
@@ -81,8 +77,6 @@ private fun StringBuilder.renderReferenceValueClass(cls: CirValueClass) {
       appendLine("            }")
       appendLine("            return underlying;")
       appendLine("        }")
-    } else {
-      appendLine("        private static extern $nativeReturnType Native_Create$nativeSuffix($paramStr);")
     }
 
     appendLine()
@@ -97,23 +91,13 @@ private fun StringBuilder.renderReferenceValueClass(cls: CirValueClass) {
 
 private fun StringBuilder.renderValueClassMembers(cls: CirValueClass) {
   cls.properties.forEach { prop ->
-    appendLine("        [DllImport(\"${cls.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"${cls.nativePrefix}_get_${prop.nativeName}\")]")
-    appendLine("        private static extern ${prop.nativeReturnType} Native_Get${prop.name}(${cls.underlyingNativeType} value);")
-    appendLine()
+    renderDllImport(cls.propertyNativeImport(prop))
     appendLine("        public ${prop.type} ${prop.name} => ${prop.getter};")
     appendLine()
   }
 
   cls.methods.forEach { method ->
-    val nativeReturnType: String = method.nativeReturnType
-    appendLine("        [DllImport(\"${cls.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"${cls.nativePrefix}_${method.nativeName}\")]")
-
-    if (nativeReturnType == "bool") {
-      appendLine("        [return: MarshalAs(UnmanagedType.I1)]")
-    }
-
-    appendLine("        private static extern $nativeReturnType Native_${method.name}(${cls.underlyingNativeType} value);")
-    appendLine()
+    renderDllImport(cls.methodNativeImport(method))
     appendLine("        public ${method.returnType} ${method.name}() => ${method.body};")
     appendLine()
   }

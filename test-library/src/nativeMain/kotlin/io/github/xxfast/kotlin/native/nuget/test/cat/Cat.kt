@@ -87,6 +87,13 @@ class Cat(
   /** Nullable primitive return, single-call out-param per ADR-061. Null until `age` is assigned. */
   fun ageInMonths(): Int? = age?.times(12)
 
+  /** Consumes `age`, so invoking this nullable-returning method twice changes its result. */
+  fun takeAgeInMonths(): Int? {
+    val result: Int? = age?.times(12)
+    age = null
+    return result
+  }
+
   companion object {
     const val SPECIES: String = "Felis catus"
     val defaultBreed: String = "Domestic Shorthair"

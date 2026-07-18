@@ -6,6 +6,11 @@ import com.google.devtools.ksp.symbol.KSClassDeclaration
 import com.google.devtools.ksp.symbol.KSFunctionDeclaration
 import com.google.devtools.ksp.symbol.KSPropertyDeclaration
 import com.google.devtools.ksp.symbol.KSType
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallablePlanCatalog
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCirPlanProjection
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCirPropertyProjection
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardHelperRequirement
+import io.github.xxfast.kotlin.native.nuget.processor.forward.planFor
 import io.github.xxfast.kotlin.native.nuget.processor.toCName
 import io.github.xxfast.kotlin.native.nuget.processor.toCSharpName
 
@@ -22,7 +27,7 @@ data class NugetContext(
   val className: String,
 )
 
-fun translate(
+internal fun translate(
   context: NugetContext,
   logger: KSPLogger,
   functions: List<KSFunctionDeclaration>,
@@ -38,6 +43,7 @@ fun translate(
   extensionProperties: List<KSPropertyDeclaration> = emptyList(),
   valueClasses: List<KSClassDeclaration> = emptyList(),
   suspendFunctions: List<KSFunctionDeclaration> = emptyList(),
+  callableCatalog: ForwardCallablePlanCatalog = ForwardCallablePlanCatalog(emptyList()),
 ): CirFile {
   val (genericClasses, regularClasses) = classes.partition { it.typeParameters.isNotEmpty() }
 
@@ -94,7 +100,9 @@ fun translate(
     val (namespace, fileClassName) = key
     val finalClassName: String = resolveStaticClassName(fileClassName, namespace)
     val members: List<CirMember> = funcs.flatMap { function ->
-      translateFunction(
+      val symbol: String = "${function.packageName.asString()}.${function.simpleName.asString()}"
+      val planned = callableCatalog.planFor(symbol)
+      if (planned != null) ForwardCirPlanProjection.static(planned, context.libraryName) else translateFunction(
         function,
         context.libraryName,
         context.rootPackage,
@@ -126,7 +134,11 @@ fun translate(
   for ((key, props) in groupPropertiesByNamespaceAndFile(properties)) {
     val (namespace, fileClassName) = key
     val finalClassName: String = resolveStaticClassName(fileClassName, namespace)
-    val members: List<CirMember> = props.flatMap { translateProperty(it, context.libraryName) }
+    val members: List<CirMember> = props.flatMap { prop ->
+      val plan = callableCatalog.propertyFor("${prop.packageName.asString()}.${prop.simpleName.asString()}")
+      if (plan != null) ForwardCirPropertyProjection.staticProperty(plan, context.libraryName)
+      else translateProperty(prop, context.libraryName)
+    }
     namespaces.mergeStaticClass(namespace, finalClassName, members)
   }
 
@@ -140,7 +152,7 @@ fun translate(
   for (cls in regularClasses) {
     namespaces.addDeclaration(
       namespaceOf(cls.packageName.asString()),
-      translateClass(cls, context.libraryName, tracker, exportedTypes, logger)
+      translateClass(cls, context.libraryName, tracker, exportedTypes, logger, callableCatalog)
     )
   }
 
@@ -175,7 +187,10 @@ fun translate(
   }
 
   for (obj in objects) {
-    namespaces.addDeclaration(namespaceOf(obj.packageName.asString()), translateObject(obj, context.libraryName))
+    namespaces.addDeclaration(
+      namespaceOf(obj.packageName.asString()),
+      translateObject(obj, context.libraryName, callableCatalog),
+    )
   }
 
   val extensionsByReceiver: Map<String, List<KSFunctionDeclaration>> =
@@ -198,6 +213,13 @@ fun translate(
     }
 
     val members: List<CirMember> = funcs.flatMap { func ->
+      val planned = callableCatalog.planFor(
+        "${func.packageName.asString()}.${func.simpleName.asString()}",
+      )
+      if (planned != null) {
+        if (ForwardHelperRequirement.COLLECTION in planned.helperRequirements) tracker.needsList = true
+        return@flatMap ForwardCirPlanProjection.extension(planned, context.libraryName)
+      }
       translateExtensionFunction(
         func, receiverName, receiverQualified, context.libraryName, exportedTypes, tracker,
       )
@@ -228,7 +250,10 @@ fun translate(
     }
 
     val members: List<CirMember> = props.flatMap { prop ->
-      translateExtensionProperty(prop, receiverName, receiverQualified, context.libraryName, exportedTypes)
+      val symbol: String = "${prop.packageName.asString()}.$receiverName.${prop.simpleName.asString()}"
+      val plan = callableCatalog.propertyFor(symbol)
+      if (plan != null) ForwardCirPropertyProjection.extension(plan, context.libraryName)
+      else translateExtensionProperty(prop, receiverName, receiverQualified, context.libraryName, exportedTypes)
     }
 
     namespaces.mergeStaticClass(namespace, className, members)
