@@ -9,6 +9,16 @@ Implements a new feature using a TDD loop, delegating each step to the appropria
 
 You run in the main conversation thread, so you can spawn subagents and pause to check in with the human. Delegate to the appropriate agent for each step (research, testing, implementation, refactor, docs) and provide them the necessary context and instructions.
 
+## Step 0: Confirm the agent roster (do this first, every run)
+
+This skill dispatches to exactly five agents — `research`, `csharp-dev`, `kotlin-dev`, `refactorer`, `documenter` — all defined in `.claude/agents/`. **The session's injected "Available agent types" list is not a reliable source of truth: it has been observed to omit `csharp-dev` and `documenter`, both of which are configured and callable.** If you trust that list you will silently substitute a wrong agent (or inline the work) at Step 3 or Step 5, which is worse than failing.
+
+So before anything else, bind the roster from ground truth:
+
+- Run `ls .claude/agents/` and confirm all five `.md` files are present.
+- Delegate to all five regardless of whether the injected roster mentions them. If a file is present, the agent exists — call it.
+- Never substitute a different agent for a missing one, and never do the C# (`csharp-dev`) or docs (`documenter`) work yourself in the main thread because the roster "didn't list it."
+
 ## Phase kickoff (batching the human gate)
 
 Many phases (Phases 9–13 especially) are largely reverse-direction work that mirrors an already-decided forward ADR. Do not run the full per-feature loop (research, human gate, implement) one interruption at a time for every item. At the **start of a phase**, classify its roadmap items and batch the human gate:
