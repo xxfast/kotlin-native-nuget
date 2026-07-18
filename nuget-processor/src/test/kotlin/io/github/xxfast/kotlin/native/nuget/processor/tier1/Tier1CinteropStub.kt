@@ -60,7 +60,7 @@ internal object Tier1CinteropStub {
 
     open class COpaquePointer
 
-    class COpaquePointerVar : COpaquePointer()
+    open class COpaquePointerVar : COpaquePointer()
 
     // Real Kotlin/Native exposes a memory-typed variable's `.value` accessor as a top-level
     // extension property (several overloads, one per `*Var` type), not a class member — which
@@ -71,10 +71,25 @@ internal object Tier1CinteropStub {
       get() = null
       set(_) {}
 
+    // ADR-061's nullable-primitive method/extension-function return out-parameter
+    // (`valueOut.reinterpret<IntVar>().pointed.value = result`) needs a stand-in for the specific
+    // `*Var` type it reinterprets to — real Kotlin/Native's `IntVar` is not a `COpaquePointerVar`
+    // subtype, but (per this file's own stated scope) this stub only has to satisfy the exact
+    // call shape the generator emits, not the real typed-memory-access hierarchy. Only `IntVar`
+    // is stubbed: the one blittable numeric width ADR-061's Tier 1 cell (5) actually exercises.
+    class IntVar : COpaquePointerVar()
+
+    var IntVar.value: Int
+      get() = 0
+      set(_) {}
+
     @Suppress("UNCHECKED_CAST")
     fun <T : COpaquePointer> COpaquePointer.reinterpret(): T = this as T
 
-    val COpaquePointerVar.pointed: COpaquePointerVar
+    // Generic (mirroring real Kotlin/Native's `val <T : CVariable> CPointer<T>.pointed: T`) so
+    // `.pointed` preserves the reinterpreted `*Var` type instead of widening it back to
+    // `COpaquePointerVar` — needed for `IntVar.value` (below) to resolve on the result.
+    val <T : COpaquePointerVar> T.pointed: T
       get() = this
 
     class StableRef<T : Any> private constructor(private val referent: T) {

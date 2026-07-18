@@ -45,9 +45,11 @@ class Tier1CompileCellsTest {
    * never re-reads `isMarkedNullable` (unlike the property loop at `:110`), so it declares
    * non-null `String` while the body returns the real nullable value — "return type mismatch:
    * expected 'String', actual 'String?'."
+   *
+   * ADR-061 fixed this: the class-method return loop now re-reads the real nullability instead
+   * of hardcoding non-null.
    */
   @Test
-  @XFail("ADR-060 cell 4 - class method returning String? is invalid Kotlin")
   fun `cell 4 - class method returning nullable String compiles`() {
     val result = Tier1Harness.run(
       """
@@ -69,9 +71,11 @@ class Tier1CompileCellsTest {
   /**
    * Cell 5 · obs K. Class method return × `Int?`. Same mechanism as cell 4, primitive facet —
    * "return type mismatch: expected 'Int', actual 'Int?'."
+   *
+   * ADR-061 fixed this: a nullable-primitive method return now routes through the single-call
+   * has-value + `valueOut` out-parameter (ADR-061 §5) instead of the old by-value declaration.
    */
   @Test
-  @XFail("ADR-060 cell 5 - class method returning Int? is invalid Kotlin")
   fun `cell 5 - class method returning nullable Int compiles`() {
     val result = Tier1Harness.run(
       """
@@ -95,9 +99,11 @@ class Tier1CompileCellsTest {
    * `StableRef` branch, unlike the property loop (`:361`/`:404`) — so ADR-005's object-return
    * handling holds for properties but not methods. "return type mismatch: expected 'Patient',
    * actual 'Patient?'."
+   *
+   * ADR-061 fixed this: the class-method return loop now boxes an object return via `StableRef`,
+   * mirroring the property getter / companion-method loop's already-shipped mechanism.
    */
   @Test
-  @XFail("ADR-060 cell 6 - class method returning an object is invalid Kotlin")
   fun `cell 6 - class method returning an object compiles`() {
     val result = Tier1Harness.run(
       """
@@ -205,7 +211,6 @@ class Tier1CompileCellsTest {
    * (`:621`), so this fixture alone cannot also trip cell 18.
    */
   @Test
-  @XFail("ADR-060 cell 17 - class constructor parameter of type List<T> renders a raw List")
   fun `cell 17 - constructor parameter of type List of String compiles`() {
     val result = Tier1Harness.run(
       """
@@ -230,7 +235,6 @@ class Tier1CompileCellsTest {
    * since `copy()`'s own raw `List` is a separate code site with its own fix.
    */
   @Test
-  @XFail("ADR-060 cell 18 - data class copy() parameter of type List<T> renders a raw List")
   fun `cell 18 - generated copy of a data class with a List property compiles`() {
     val result = Tier1Harness.run(
       """
@@ -254,7 +258,6 @@ class Tier1CompileCellsTest {
    * class with no `List`-typed constructor parameter isolates this from cell 17.
    */
   @Test
-  @XFail("ADR-060 cell 20 - nullable List<T> property renders a raw List")
   fun `cell 20 - nullable List of String property compiles`() {
     val result = Tier1Harness.run(
       """
@@ -269,6 +272,49 @@ class Tier1CompileCellsTest {
     assertTrue(
       result.compiledClean,
       "expected export_visit_get_notes/set_notes to compile; got: ${result.compileErrors}",
+    )
+  }
+
+  /**
+   * BUG-005 (NYTimes-KMP). Data-class constructor parameter × `List<T>`, exercising both the
+   * primary-constructor export and the generated `copy()` export in the same fixture. Companion
+   * to cells 17/18 above, using the exact `List<String>` shape reported upstream.
+   */
+  @Test
+  fun `data class constructor parameter of type List of String compiles`() {
+    val result = Tier1Harness.run(
+      """
+      package tier1.holder
+
+      data class Holder(val tags: List<String>)
+      """.trimIndent()
+    )
+
+    assertTrue(
+      result.compiledClean,
+      "expected export_holder_create/export_holder_copy to compile; got: ${result.compileErrors}",
+    )
+  }
+
+  /**
+   * BUG-005 (NYTimes-KMP). Nullable `List<T>` property getter/setter. Companion to cell 20 above,
+   * using a `List<Int>` element type to widen coverage beyond `String`.
+   */
+  @Test
+  fun `nullable List of Int property compiles`() {
+    val result = Tier1Harness.run(
+      """
+      package tier1.box
+
+      class Box {
+        var items: List<Int>? = null
+      }
+      """.trimIndent()
+    )
+
+    assertTrue(
+      result.compiledClean,
+      "expected export_box_get_items/set_items to compile; got: ${result.compileErrors}",
     )
   }
 
@@ -305,6 +351,148 @@ class Tier1CompileCellsTest {
     assertTrue(
       result.compiledClean,
       "expected export_patient_chartEntry to compile; got: ${result.compileErrors}",
+    )
+  }
+
+  /**
+   * BUG-005 follow-up (ROADMAP line 61 / MVP.md P0). Class-method return × `List<T>`. Fixing the
+   * dropped type argument (`ClassExports.kt`'s `methods.forEach` now renders the return type via
+   * [io.github.xxfast.kotlin.native.nuget.processor.exports.toBridgeTypeName]) surfaces a
+   * distinct, pre-existing defect one layer in: the same loop's catch-branch fallback,
+   * `defaultValueFor(methodReturn)`, treats any `kotlin.`-prefixed qualified name as a primitive
+   * and emits the literal `0` (`Helpers.kt`'s `else` branch) — including
+   * `kotlin.collections.List` — so the try/catch expression infers `Any` against the
+   * now-correctly-declared `List<String>`
+   * return: "return type mismatch: expected 'List<String>', actual 'Any'." This is the exact
+   * defaultValueFor/no-StableRef-branch mechanism already cataloged (and left unfixed) by cells 6,
+   * 10 and 13 above, for a return type this bug's four sites don't reach on their own — out of
+   * scope for the type-argument fix; tracked separately.
+   *
+   * ADR-061 fixed this: the class-method return loop now routes a `List<T>` return through the
+   * same object-carrier + StableRef cascade the property getter already uses.
+   */
+  @Test
+  fun `class-method return of type List of String compiles`() {
+    val result = Tier1Harness.run(
+      """
+      package tier1.methodreturn
+      class Repo {
+        fun tags(): List<String> = listOf("a")
+      }
+      """.trimIndent()
+    )
+
+    assertTrue(
+      result.compiledClean,
+      "expected export_repo_tags to compile; got: ${result.compileErrors}",
+    )
+  }
+
+  /**
+   * BUG-005 follow-up (ROADMAP line 61 / MVP.md P0). Class-method parameter × `List<T>`. The
+   * method-parameter loop in `ClassExports.kt`'s `methods.forEach` still renders the parameter
+   * type via `ClassName.bestGuess(type)`, dropping the `String` type argument.
+   */
+  @Test
+  fun `class-method parameter of type List of String compiles`() {
+    val result = Tier1Harness.run(
+      """
+      package tier1.methodparam
+      class Repo {
+        fun replace(items: List<String>) {}
+      }
+      """.trimIndent()
+    )
+
+    assertTrue(
+      result.compiledClean,
+      "expected export_repo_replace to compile; got: ${result.compileErrors}",
+    )
+  }
+
+  /**
+   * BUG-005 follow-up (ROADMAP line 61 / MVP.md P0). Companion-method parameter and return, both
+   * `List<T>`. `ClassExports.kt`'s companion method loop still renders both via
+   * `ClassName.bestGuess`, dropping the type argument.
+   */
+  @Test
+  fun `companion-method parameter and return of type List of String compiles`() {
+    val result = Tier1Harness.run(
+      """
+      package tier1.companiongeneric
+      class Factory {
+        companion object {
+          fun of(items: List<String>): List<String> = items
+        }
+      }
+      """.trimIndent()
+    )
+
+    assertTrue(
+      result.compiledClean,
+      "expected export_factory_companion_of to compile; got: ${result.compileErrors}",
+    )
+  }
+
+  /**
+   * BUG-005 follow-up (ROADMAP line 61 / MVP.md P0). Extension-function parameter and return,
+   * both `List<T>`, on a non-primitive receiver (handle path). The parameter half of this fixture
+   * is fixed clean by this ticket (`ExtensionFunctionExports.kt` now renders it via
+   * [io.github.xxfast.kotlin.native.nuget.processor.exports.toBridgeTypeName]). The return half
+   * hits the same distinct, pre-existing `defaultValueFor` fallback defect as the class-method
+   * return cell above — `ExtensionFunctionExports.kt`'s non-`Unit` branch has no StableRef
+   * branch either, so its catch-path literal for `kotlin.collections.List` is also the wrong
+   * `0` — out of scope for the type-argument fix; tracked separately.
+   *
+   * ADR-061 fixed this: the extension-function return path now routes a `List<T>` return through
+   * the same object-carrier + StableRef cascade the class-method position (and the property
+   * getter before it) already use.
+   */
+  @Test
+  fun `extension function parameter and return of type List of String compiles`() {
+    val result = Tier1Harness.run(
+      """
+      package tier1.extgeneric
+      class Holder
+      fun Holder.pick(items: List<String>): List<String> = items
+      """.trimIndent()
+    )
+
+    assertTrue(
+      result.compiledClean,
+      "expected export_holder_pick to compile; got: ${result.compileErrors}",
+    )
+  }
+
+  /**
+   * BUG-005 follow-up (ROADMAP line 61 / MVP.md P0). Class-method with its own type parameter
+   * (`fun <T> pick(x: T): T`) — unlike generic top-level functions and generic classes,
+   * `ClassExports.kt`'s method loop filter (~line 451) does not exclude method-level type
+   * parameters, so this shape reaches the same `toBridgeTypeName` call this ticket added to the
+   * class-method param/return sites. Guarded so a bare unresolved `T` no longer crashes the KSP
+   * run itself the way ADR-060 cell 23's `reified T` did before `toBridgeTypeName`'s
+   * `NoSuchElementException` guard (`Helpers.kt`); it still fails to *compile* (an unbound type
+   * reference), which is fine — generic-method support is out of scope here.
+   */
+  @Test
+  @XFail(
+    "class-method with a method-level type parameter is guarded against crashing the KSP run, " +
+        "but the generated reference to the unbound T is still invalid Kotlin; generic-method " +
+        "support is out of scope for the type-argument fix",
+  )
+  fun `class-method with its own type parameter compiles`() {
+    val result = Tier1Harness.run(
+      """
+      package tier1.methodtypeparam
+      class Repo {
+        fun <T> pick(x: T): T = x
+      }
+      """.trimIndent()
+    )
+
+    assertTrue(
+      result.compiledClean,
+      "expected export_repo_pick to compile; got: ${result.compileErrors}",
     )
   }
 }

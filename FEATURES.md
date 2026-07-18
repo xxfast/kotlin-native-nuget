@@ -49,10 +49,11 @@ Primitive types follow the standard [Kotlin/Native C interop mappings](https://k
 | Kotlin                    | ⇄ | C#                    | Notes                                            | ADRs                                                       |
 |---------------------------|:-:|-----------------------|--------------------------------------------------|------------------------------------------------------------|
 | member property (get/set) | ⇄ | property (get/set)    | → nullable primitive + object properties supported · ← instance or static property, read-only → `val`, settable → `var` with bridge-backed `get()`/`set()`; static properties live in a Kotlin `object` or `companion object`; a settable handle-typed property now renders as `var Foo` / `var Foo?` per its `NullableAttribute`, getter and setter sharing one type | [ADR-051](docs/adr/051-csharp-objects-as-opaque-handles.md), [ADR-053](docs/adr/053-nullable-reference-types-in-kotlin.md) |
+| instance method return (object, `T?`, `List<T>`, `String?`, `Int?`) | → | matching C# return type | same marshalling cascade as the property getter; nullable primitive is single-call (`bool` has-value + `valueOut` out-param), since a method may have side effects and can't be invoked twice | [ADR-061](docs/adr/061-method-return-marshalling.md) |
 | top-level function        | → | `static class` method | one static class per source file                 | [ADR-007](docs/adr/007-top-level-function-class-naming.md) |
 | top-level property        | → | static property       | get/set, including nullable                      |                                                            |
 | `const val`               | → | `const`               |                                                  |                                                            |
-| extension function        | → | static method         |                                                  |                                                            |
+| extension function        | → | static method         | return marshalling mirrors the class-method position (object/collection/nullable) | [ADR-061](docs/adr/061-method-return-marshalling.md) |
 | extension property        | → | static accessor       |                                                  | [ADR-013](docs/adr/013-extension-property-mapping.md)      |
 
 ## Generics
@@ -70,7 +71,7 @@ Primitive types follow the standard [Kotlin/Native C interop mappings](https://k
 
 | Kotlin            | ⇄  | C#                         | Notes                        | ADRs |
 |-------------------|:--:|----------------------------|------------------------------|------|
-| `List<T>`         | →  | `IReadOnlyList<T>`         | eager copy via opaque handle |      |
+| `List<T>`         | →  | `IReadOnlyList<T>`         | eager copy via opaque handle; also marshals as a class-method/extension-function return | [ADR-061](docs/adr/061-method-return-marshalling.md) |
 | `MutableList<T>`  | →  | `IList<T>`                 | eager copy                   |      |
 | `Map<K,V>`        | →  | `IReadOnlyDictionary<K,V>` | eager copy                   |      |
 | `MutableMap<K,V>` | →  | `IDictionary<K,V>`         | eager copy                   |      |

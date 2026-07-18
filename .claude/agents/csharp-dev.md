@@ -1,6 +1,6 @@
 ---
 name: csharp-dev
-description: Use for the C# side of the bridge in both directions. Forward (Kotlin/Native → C#): writes failing xunit tests in IntegrationTests/ that define the expected C# API, then builds and runs them. Reverse (C# → Kotlin, NuGet consumption, Phases 8–13): maintains the NugetMetadataReader console app, C#/NuGet test fixtures, and verifies reverse features end-to-end through the same IntegrationTests round trip.
+description: Use for the C# side of the bridge in both directions. Forward (Kotlin/Native → C#) — writes failing xunit tests in IntegrationTests/ that define the expected C# API, then builds and runs them. Reverse (C# → Kotlin, NuGet consumption, Phases 8–13) — maintains the NugetMetadataReader console app, C#/NuGet test fixtures, and verifies reverse features end-to-end through the same IntegrationTests round trip.
 tools: Read, Write, Edit, Bash, Grep, Glob
 model: sonnet
 ---

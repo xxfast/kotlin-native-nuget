@@ -89,7 +89,16 @@ internal object ForwardAbiContract {
   private fun CirDllImport.toSignature(): ForwardAbiSignature? {
     val name: String = entryPoint ?: return null
     val parameters: MutableList<ForwardAbiParameter> = parameters.map { parameter ->
-      ForwardAbiParameter(csharpType(parameter.nativeType))
+      // ADR-061's nullable-primitive out-parameter (`out int value`, etc.) is, at the C ABI
+      // level, exactly the same shape as `out IntPtr error` below: a pointer to a memory slot the
+      // callee writes through. Recognize any `out `-prefixed native type uniformly as (POINTER,
+      // OUT) rather than trying to resolve its pointee width — mirroring the errorOut special
+      // case's own philosophy — so it matches the Kotlin side's `COpaquePointer?` (also POINTER).
+      if (parameter.nativeType.startsWith("out ")) {
+        ForwardAbiParameter(ForwardAbiType.POINTER, ForwardAbiDirection.OUT)
+      } else {
+        ForwardAbiParameter(csharpType(parameter.nativeType))
+      }
     }.toMutableList()
     if (hasSyncErrorOut) parameters.add(ForwardAbiParameter(ForwardAbiType.POINTER, ForwardAbiDirection.OUT))
     return ForwardAbiSignature(name, csharpReturnType(returnType), parameters)
@@ -101,7 +110,11 @@ internal object ForwardAbiContract {
       exportName = name,
       result = kotlinReturnType(returnType),
       parameters = parameters.map { parameter ->
-        val direction: ForwardAbiDirection = if (parameter.name == "errorOut") {
+        // "valueOut" is ADR-061's nullable-primitive return out-parameter, the Kotlin-side
+        // counterpart of the C# `out <T> value` recognized above.
+        val direction: ForwardAbiDirection = if (
+          parameter.name == "errorOut" || parameter.name == "valueOut"
+        ) {
           ForwardAbiDirection.OUT
         } else {
           ForwardAbiDirection.IN

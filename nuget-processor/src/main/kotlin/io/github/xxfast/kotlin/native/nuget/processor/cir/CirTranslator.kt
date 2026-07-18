@@ -1,6 +1,7 @@
 package io.github.xxfast.kotlin.native.nuget.processor.cir
 
 import com.google.devtools.ksp.processing.KSPLogger
+import com.google.devtools.ksp.symbol.ClassKind
 import com.google.devtools.ksp.symbol.KSClassDeclaration
 import com.google.devtools.ksp.symbol.KSFunctionDeclaration
 import com.google.devtools.ksp.symbol.KSPropertyDeclaration
@@ -197,7 +198,9 @@ fun translate(
     }
 
     val members: List<CirMember> = funcs.flatMap { func ->
-      translateExtensionFunction(func, receiverName, receiverQualified, context.libraryName, exportedTypes)
+      translateExtensionFunction(
+        func, receiverName, receiverQualified, context.libraryName, exportedTypes, tracker,
+      )
     }
 
     namespaces.addDeclaration(namespace, CirStaticClass(className, members))
@@ -361,6 +364,7 @@ internal fun translateExtensionFunction(
   receiverQualified: String,
   libraryName: String,
   exportedTypes: Set<String>,
+  tracker: CollectionHelperTracker,
 ): List<CirMember> {
   val funcName: String = func.simpleName.asString()
   val csName: String = toCSharpName(toCName(funcName))
@@ -370,6 +374,8 @@ internal fun translateExtensionFunction(
 
   val returnType = func.returnType?.resolve()?.expandAliases()
   val kotlinReturnType: String = returnType?.declaration?.simpleName?.asString() ?: "Unit"
+  val kotlinReturnQualified: String? = returnType?.declaration?.qualifiedName?.asString()
+  val isNullableReturn: Boolean = returnType?.isMarkedNullable == true
 
   val isExportedReceiver: Boolean = receiverQualified in exportedTypes
 
@@ -381,22 +387,6 @@ internal fun translateExtensionFunction(
     CirParameter(param.name?.asString() ?: "_", mapParamType(kotlinType))
   }
 
-  val allNativeParams: List<CirParameter> = listOf(
-    CirParameter(receiverParamName, nativeReceiverType),
-  ) + extraParams
-
-  val nativeReturnType: String = mapReturnType(kotlinReturnType)
-
-  val dllImport = CirDllImport(
-    libraryName = libraryName,
-    entryPoint = cname,
-    returnType = nativeReturnType,
-    name = "Native_$csName",
-    parameters = allNativeParams,
-    visibility = CirVisibility.PRIVATE,
-    hasSyncErrorOut = true,
-  )
-
   val csReceiverType: String = if (isExportedReceiver) receiverName else mapParamType(receiverName)
   val csReceiverParamName: String = if (isExportedReceiver) receiverName.lowercase() else "receiver"
 
@@ -407,19 +397,158 @@ internal fun translateExtensionFunction(
   val nativeCallReceiver: String = if (isExportedReceiver) "${csReceiverParamName}._handle" else "receiver"
   val nativeCallArgs: String = (listOf(nativeCallReceiver) + extraParams.map { it.name }).joinToString(", ")
 
+  // ADR-061: the same return-marshalling cascade as the class-method position (mirrored 1:1;
+  // see ClassExports.kt's `methods.forEach` loop / CirClassTranslator's `translateClass` "methods"
+  // block for the shared design rationale). Enum returns are left exactly as before.
+  val isEnumReturn: Boolean = (returnType?.declaration as? KSClassDeclaration)
+    ?.classKind == ClassKind.ENUM_CLASS
+  val isListReturn: Boolean = !isEnumReturn &&
+      (kotlinReturnQualified == "kotlin.collections.List" ||
+          kotlinReturnQualified == "kotlin.collections.MutableList")
+  val isMutableListReturn: Boolean = kotlinReturnQualified == "kotlin.collections.MutableList"
+  val listElementType: String? = if (isListReturn) {
+    val elementType = returnType?.arguments?.firstOrNull()?.type?.resolve()
+    val elementTypeName: String = elementType?.declaration?.simpleName?.asString() ?: "Any"
+    KOTLIN_TO_CSHARP_PARAM[elementTypeName] ?: elementTypeName
+  } else null
+  if (isListReturn) tracker.needsList = true
+
+  // "Char" is deliberately treated as primitive-ish here — see CirClassTranslator.kt's identical
+  // exclusion on the mirrored class-method cascade.
+  val isPrimitiveReturn: Boolean =
+    kotlinReturnType in KOTLIN_TO_CSHARP_RETURN || kotlinReturnType == "Char"
+  val isObjectReturn: Boolean = !isEnumReturn && !isPrimitiveReturn && !isListReturn
+  val isNullableStringReturn: Boolean =
+    isPrimitiveReturn && isNullableReturn && kotlinReturnType == "String"
+  val isNullablePrimitiveReturn: Boolean =
+    isPrimitiveReturn && isNullableReturn && kotlinReturnType != "String"
+
+  val nativeReturnType: String
+  val nativeExtraParams: List<CirParameter>
   val csReturnType: String
   val body: String
 
-  if (kotlinReturnType == "String") {
-    csReturnType = "string"
-    body = checkedExtensionBody("IntPtr", "Marshal.PtrToStringUTF8(result)!", csName, nativeCallArgs)
-  } else if (kotlinReturnType == "Unit") {
-    csReturnType = "void"
-    body = checkedExtensionBody(null, "", csName, nativeCallArgs)
-  } else {
-    csReturnType = KOTLIN_TO_CSHARP_PARAM[kotlinReturnType] ?: kotlinReturnType
-    body = checkedExtensionBody(csReturnType, "result", csName, nativeCallArgs)
+  when {
+    kotlinReturnType == "Unit" -> {
+      nativeReturnType = "void"
+      nativeExtraParams = emptyList()
+      csReturnType = "void"
+      body = checkedExtensionBody(null, "", csName, nativeCallArgs)
+    }
+
+    isListReturn -> {
+      nativeReturnType = "IntPtr"
+      nativeExtraParams = emptyList()
+      csReturnType =
+        if (isMutableListReturn) "IList<$listElementType>" else "IReadOnlyList<$listElementType>"
+      body = buildString {
+        appendLine()
+        appendLine("            IntPtr listHandle = Native_$csName(${syncErrorArguments(nativeCallArgs)});")
+        appendLine("            if (error != IntPtr.Zero)")
+        appendLine("            {")
+        appendLine("                throw NugetErrorNative.BuildException(error);")
+        appendLine("            }")
+        appendLine("            int count = NugetListNative.Count(listHandle);")
+        appendLine("            var result = new List<$listElementType>(count);")
+        appendLine("            for (int i = 0; i < count; i++)")
+        appendLine("            {")
+        appendLine("                result.Add(NugetMarshal.FromHandle<$listElementType>(NugetListNative.Get(listHandle, i)));")
+        appendLine("            }")
+        appendLine("            NugetListNative.Dispose(listHandle);")
+        append(if (isMutableListReturn) "            return result;" else "            return result.AsReadOnly();")
+      }
+    }
+
+    isObjectReturn && isNullableReturn -> {
+      nativeReturnType = "IntPtr"
+      nativeExtraParams = emptyList()
+      csReturnType = "$kotlinReturnType?"
+      body = buildString {
+        appendLine()
+        appendLine("            IntPtr nativeResult = Native_$csName(${syncErrorArguments(nativeCallArgs)});")
+        appendLine("            if (error != IntPtr.Zero)")
+        appendLine("            {")
+        appendLine("                throw NugetErrorNative.BuildException(error);")
+        appendLine("            }")
+        append("            return nativeResult == IntPtr.Zero ? null : new $kotlinReturnType(nativeResult);")
+      }
+    }
+
+    isObjectReturn -> {
+      nativeReturnType = "IntPtr"
+      nativeExtraParams = emptyList()
+      csReturnType = kotlinReturnType
+      body = buildString {
+        appendLine()
+        appendLine("            IntPtr nativeResult = Native_$csName(${syncErrorArguments(nativeCallArgs)});")
+        appendLine("            if (error != IntPtr.Zero)")
+        appendLine("            {")
+        appendLine("                throw NugetErrorNative.BuildException(error);")
+        appendLine("            }")
+        append("            return new $kotlinReturnType(nativeResult);")
+      }
+    }
+
+    isNullableStringReturn -> {
+      nativeReturnType = "IntPtr"
+      nativeExtraParams = emptyList()
+      csReturnType = "string?"
+      body = buildString {
+        appendLine()
+        appendLine("            IntPtr nativeResult = Native_$csName(${syncErrorArguments(nativeCallArgs)});")
+        appendLine("            if (error != IntPtr.Zero)")
+        appendLine("            {")
+        appendLine("                throw NugetErrorNative.BuildException(error);")
+        appendLine("            }")
+        append("            return Marshal.PtrToStringUTF8(nativeResult);")
+      }
+    }
+
+    isNullablePrimitiveReturn -> {
+      val csValueType: String = mapParamType(kotlinReturnType)
+      nativeReturnType = "bool"
+      nativeExtraParams = listOf(CirParameter("value", csValueType, "out $csValueType"))
+      csReturnType = "$csValueType?"
+      body = buildString {
+        appendLine()
+        appendLine("            bool hasValue = Native_$csName(${syncErrorArguments("$nativeCallArgs, out $csValueType value")});")
+        appendLine("            if (error != IntPtr.Zero)")
+        appendLine("            {")
+        appendLine("                throw NugetErrorNative.BuildException(error);")
+        appendLine("            }")
+        append("            return hasValue ? value : null;")
+      }
+    }
+
+    kotlinReturnType == "String" -> {
+      nativeReturnType = "IntPtr"
+      nativeExtraParams = emptyList()
+      csReturnType = "string"
+      body =
+        checkedExtensionBody("IntPtr", "Marshal.PtrToStringUTF8(result)!", csName, nativeCallArgs)
+    }
+
+    else -> {
+      nativeReturnType = mapReturnType(kotlinReturnType)
+      nativeExtraParams = emptyList()
+      csReturnType = KOTLIN_TO_CSHARP_PARAM[kotlinReturnType] ?: kotlinReturnType
+      body = checkedExtensionBody(csReturnType, "result", csName, nativeCallArgs)
+    }
   }
+
+  val allNativeParams: List<CirParameter> = listOf(
+    CirParameter(receiverParamName, nativeReceiverType),
+  ) + extraParams + nativeExtraParams
+
+  val dllImport = CirDllImport(
+    libraryName = libraryName,
+    entryPoint = cname,
+    returnType = nativeReturnType,
+    name = "Native_$csName",
+    parameters = allNativeParams,
+    visibility = CirVisibility.PRIVATE,
+    hasSyncErrorOut = true,
+  )
 
   val wrapper = CirMethod(
     name = csName,

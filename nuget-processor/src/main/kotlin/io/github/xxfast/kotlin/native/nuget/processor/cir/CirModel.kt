@@ -294,6 +294,15 @@ data class CirMethod(
   val isSyncErrorCheckEnabled: Boolean = false,
   val isFlow: Boolean = false,
   val flowElementType: String = "",
+  // Extra raw native (DllImport) parameter declarations spliced in between the method's own
+  // parameters and the trailing `out IntPtr error` — e.g. `out int value` for a nullable-
+  // primitive return's out-parameter (ADR-061 §5). Empty for every other shape.
+  val extraNativeParams: List<String> = emptyList(),
+  // When true, `renderMethod` skips `renderSyncErrorCheckMethod`'s auto cast-only cascade (which
+  // has no object-wrap / list-materialize / nullable-primitive-out-param branches) and instead
+  // renders `body` verbatim via the generic multi-line template, while `isSyncErrorCheckEnabled`
+  // still controls the native DllImport's trailing `out IntPtr error` (ADR-061).
+  val hasCustomBody: Boolean = false,
 ) : CirMember
 
 data class CirProperty(

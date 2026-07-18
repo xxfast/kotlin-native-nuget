@@ -62,6 +62,31 @@ class Cat(
     moodListeners.forEach { it(mood) }
   }
 
+  // ADR-061: the method-return matrix at the class-method position, mirroring the property
+  // getter's already-shipped marshalling cascade (object, nullable object, collection,
+  // nullable String, nullable primitive) one seam at a time. `brother`/`owner`/`age` are the
+  // existing nullable-carrying fields (ObjectTests.cs / NullablePropertyTests.cs) — reused here
+  // rather than adding parallel state, so the null/non-null branch of every case is driven by
+  // setting the same fields those tests already exercise.
+
+  /** Object return (converting: handle -> `new Cat`). No brother set -> a cat looks after itself. */
+  fun findOwner(): Cat = brother ?: this
+
+  /** Nullable object return. Null until `brother` is assigned. */
+  fun maybeOwner(): Cat? = brother
+
+  /** Collection return, converting element (String needs marshalling per element). */
+  fun tags(): List<String> = listOf("$name-tag", "$name-chip")
+
+  /** Collection return, non-converting element (Int is blittable). */
+  fun scores(): List<Int> = listOf(lives, lives * 2)
+
+  /** Nullable String return, single-call. Null until `owner` is assigned. */
+  fun alias(): String? = owner?.let { "$name (owned by $it)" }
+
+  /** Nullable primitive return, single-call out-param per ADR-061. Null until `age` is assigned. */
+  fun ageInMonths(): Int? = age?.times(12)
+
   companion object {
     const val SPECIES: String = "Felis catus"
     val defaultBreed: String = "Domestic Shorthair"

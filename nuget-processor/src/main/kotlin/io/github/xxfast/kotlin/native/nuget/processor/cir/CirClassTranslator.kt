@@ -625,8 +625,12 @@ internal fun translateClass(
     .filter { it !in interfaceBridgeExcluded }
     .map { method ->
       val methodName: String = method.simpleName.asString()
-      val methodReturn: String = method.returnType?.resolve()?.expandAliases()
-        ?.declaration?.simpleName?.asString() ?: "Unit"
+      val methodReturnTypeResolved: KSType? = method.returnType?.resolve()?.expandAliases()
+      val methodReturn: String =
+        methodReturnTypeResolved?.declaration?.simpleName?.asString() ?: "Unit"
+      val methodReturnQualified: String? =
+        methodReturnTypeResolved?.declaration?.qualifiedName?.asString()
+      val isNullableReturn: Boolean = methodReturnTypeResolved?.isMarkedNullable == true
 
       val csMethodName: String = methodName.replaceFirstChar { it.uppercase() }
 
@@ -654,26 +658,170 @@ internal fun translateClass(
       val nativeCallArgs: String = (listOf("_handle") +
           methodParams.map { it.name }).joinToString(", ")
 
-      val body: String = if (methodReturn == "String") {
-        "Marshal.PtrToStringUTF8(Native_$csMethodName($nativeCallArgs))!"
-      } else {
-        "Native_$csMethodName($nativeCallArgs)"
-      }
+      // ADR-061: route the return through the same marshalling cascade the property getter
+      // already uses (object / nullable object / collection / nullable String / nullable
+      // primitive). Enum returns are left exactly as before (untouched, out of this ADR's scope).
+      val isEnumReturn: Boolean = (methodReturnTypeResolved?.declaration as? KSClassDeclaration)
+        ?.classKind == ClassKind.ENUM_CLASS
+      val isListReturn: Boolean = !isEnumReturn &&
+          (methodReturnQualified == "kotlin.collections.List" ||
+              methodReturnQualified == "kotlin.collections.MutableList")
+      val isMutableListReturn: Boolean = methodReturnQualified == "kotlin.collections.MutableList"
+      val listElementType: String? = if (isListReturn) {
+        val elementType = methodReturnTypeResolved?.arguments?.firstOrNull()?.type?.resolve()
+        val elementTypeName: String = elementType?.declaration?.simpleName?.asString() ?: "Any"
+        KOTLIN_TO_CSHARP_PARAM[elementTypeName] ?: elementTypeName
+      } else null
+      if (isListReturn) tracker.needsList = true
 
-      val returnType: String = if (methodReturn == "String") "string"
-      else if (methodReturn == "Unit") "void"
-      else mapReturnType(methodReturn)
+      // "Char" is deliberately treated as primitive-ish here (it has no `KOTLIN_TO_CSHARP_RETURN`
+      // entry) purely to keep it out of the new object-boxing branch below, which would render
+      // nonsensical C# (`new Char(handle)`) for it — mirrors the identical Kotlin-side exclusion
+      // in ClassExports.kt. Not one of ADR-061's five return shapes; still unhandled/out of scope.
+      val isPrimitiveReturn: Boolean =
+        methodReturn in KOTLIN_TO_CSHARP_RETURN || methodReturn == "Char"
+      val isObjectReturn: Boolean = !isEnumReturn && !isPrimitiveReturn && !isListReturn
+      val isNullableStringReturn: Boolean =
+        isPrimitiveReturn && isNullableReturn && methodReturn == "String"
+      val isNullablePrimitiveReturn: Boolean =
+        isPrimitiveReturn && isNullableReturn && methodReturn != "String"
+
+      val returnType: String
+      val nativeReturnType: String
+      val body: String
+      val hasCustomBody: Boolean
+      val extraNativeParams: List<String>
+
+      when {
+        methodReturn == "Unit" -> {
+          returnType = "void"
+          nativeReturnType = "void"
+          body = "Native_$csMethodName($nativeCallArgs)"
+          hasCustomBody = false
+          extraNativeParams = emptyList()
+        }
+
+        isListReturn -> {
+          returnType = if (isMutableListReturn) {
+            "IList<$listElementType>"
+          } else {
+            "IReadOnlyList<$listElementType>"
+          }
+          nativeReturnType = "IntPtr"
+          hasCustomBody = true
+          extraNativeParams = emptyList()
+          body = buildString {
+            appendLine()
+            appendLine("                IntPtr listHandle = Native_$csMethodName($nativeCallArgs, out IntPtr error);")
+            appendLine("                if (error != IntPtr.Zero)")
+            appendLine("                {")
+            appendLine("                    throw NugetErrorNative.BuildException(error);")
+            appendLine("                }")
+            appendLine("                int count = NugetListNative.Count(listHandle);")
+            appendLine("                var result = new List<$listElementType>(count);")
+            appendLine("                for (int i = 0; i < count; i++)")
+            appendLine("                {")
+            appendLine("                    result.Add(NugetMarshal.FromHandle<$listElementType>(NugetListNative.Get(listHandle, i)));")
+            appendLine("                }")
+            appendLine("                NugetListNative.Dispose(listHandle);")
+            append(if (isMutableListReturn) "                return result;" else "                return result.AsReadOnly();")
+          }
+        }
+
+        isObjectReturn && isNullableReturn -> {
+          returnType = "$methodReturn?"
+          nativeReturnType = "IntPtr"
+          hasCustomBody = true
+          extraNativeParams = emptyList()
+          body = buildString {
+            appendLine()
+            appendLine("                IntPtr nativeResult = Native_$csMethodName($nativeCallArgs, out IntPtr error);")
+            appendLine("                if (error != IntPtr.Zero)")
+            appendLine("                {")
+            appendLine("                    throw NugetErrorNative.BuildException(error);")
+            appendLine("                }")
+            append("                return nativeResult == IntPtr.Zero ? null : new $methodReturn(nativeResult);")
+          }
+        }
+
+        isObjectReturn -> {
+          returnType = methodReturn
+          nativeReturnType = "IntPtr"
+          hasCustomBody = true
+          extraNativeParams = emptyList()
+          body = buildString {
+            appendLine()
+            appendLine("                IntPtr nativeResult = Native_$csMethodName($nativeCallArgs, out IntPtr error);")
+            appendLine("                if (error != IntPtr.Zero)")
+            appendLine("                {")
+            appendLine("                    throw NugetErrorNative.BuildException(error);")
+            appendLine("                }")
+            append("                return new $methodReturn(nativeResult);")
+          }
+        }
+
+        isNullableStringReturn -> {
+          returnType = "string?"
+          nativeReturnType = "IntPtr"
+          hasCustomBody = true
+          extraNativeParams = emptyList()
+          body = buildString {
+            appendLine()
+            appendLine("                IntPtr nativeResult = Native_$csMethodName($nativeCallArgs, out IntPtr error);")
+            appendLine("                if (error != IntPtr.Zero)")
+            appendLine("                {")
+            appendLine("                    throw NugetErrorNative.BuildException(error);")
+            appendLine("                }")
+            append("                return Marshal.PtrToStringUTF8(nativeResult);")
+          }
+        }
+
+        isNullablePrimitiveReturn -> {
+          // Nullable-primitive return (ADR-061 §5): single call. Has-value `bool` return plus a
+          // `valueOut` out-parameter, mirroring the identical `out IntPtr error` out-write already
+          // shipped for every sync export, differing only in the `CVariable` width.
+          val csValueType: String = mapParamType(methodReturn)
+          returnType = "$csValueType?"
+          nativeReturnType = "bool"
+          hasCustomBody = true
+          extraNativeParams = listOf("out $csValueType value")
+          body = buildString {
+            appendLine()
+            appendLine("                bool hasValue = Native_$csMethodName($nativeCallArgs, out $csValueType value, out IntPtr error);")
+            appendLine("                if (error != IntPtr.Zero)")
+            appendLine("                {")
+            appendLine("                    throw NugetErrorNative.BuildException(error);")
+            appendLine("                }")
+            append("                return hasValue ? value : null;")
+          }
+        }
+
+        else -> {
+          // Non-null primitives and (untouched) enum returns: unchanged from before this ADR.
+          returnType = if (methodReturn == "String") "string" else mapReturnType(methodReturn)
+          nativeReturnType = mapReturnType(methodReturn)
+          hasCustomBody = false
+          extraNativeParams = emptyList()
+          body = if (methodReturn == "String") {
+            "Marshal.PtrToStringUTF8(Native_$csMethodName($nativeCallArgs))!"
+          } else {
+            "Native_$csMethodName($nativeCallArgs)"
+          }
+        }
+      }
 
       CirMethod(
         name = csMethodName,
         returnType = returnType,
-        nativeReturnType = mapReturnType(methodReturn),
+        nativeReturnType = nativeReturnType,
         nativeName = methodName,
         parameters = methodParams,
         body = body,
         isAbstract = isMethodAbstract,
         isOverride = isOverride,
         isSyncErrorCheckEnabled = !isMethodAbstract,
+        extraNativeParams = extraNativeParams,
+        hasCustomBody = hasCustomBody,
       )
     }.toList()
 

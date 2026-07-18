@@ -481,7 +481,19 @@ class NugetProcessor(
         }
       }
 
-    val needsListSupport: Boolean = classesHaveLists || functionsReturnLists || sealedClassesHaveLists
+    // ADR-061: class-method and extension-function returns are a distinct position the property/
+    // top-level-function scans above never covered — widen the gate or the shared NugetListNative
+    // helper/exports a List-returning method boxes its handle for are never emitted.
+    val classMethodsReturnLists: Boolean = classes
+      .any { cls ->
+        cls.getAllFunctions().any { method -> method.returnType?.resolve()?.isListType() == true }
+      }
+
+    val extensionFunctionsReturnLists: Boolean = extensionFunctions
+      .any { func -> func.returnType?.resolve()?.isListType() == true }
+
+    val needsListSupport: Boolean = classesHaveLists || functionsReturnLists ||
+        sealedClassesHaveLists || classMethodsReturnLists || extensionFunctionsReturnLists
 
     val mapTypes: Set<String> = setOf("kotlin.collections.Map", "kotlin.collections.MutableMap")
 

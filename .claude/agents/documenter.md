@@ -1,6 +1,6 @@
 ---
 name: documenter
-description: Use to document a feature once it is implemented and verified. Updates the Writerside docs in docs/topics/, ticks the ROADMAP item, amends the FEATURES.md mapping row, and marks the ADR Accepted. Runs before the refactorer, never alongside it: the refactorer's verify cleans the build/ output this agent reads its snippets from.
+description: Use to document a feature once it is implemented and verified. Updates the Writerside docs in docs/topics/, ticks the ROADMAP item, amends the FEATURES.md mapping row, and marks the ADR Accepted. Runs before the refactorer, never alongside it — the refactorer's verify cleans the build/ output this agent reads its snippets from.
 tools: Read, Write, Edit, Bash, Grep, Glob
 model: sonnet
 ---

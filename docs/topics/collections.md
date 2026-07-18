@@ -157,6 +157,38 @@ public void Cat_Traits_SetEquality()
 }
 ```
 
+## Returned from a method or extension function
+
+`List<T>` also marshals as a class-method or extension-function return, not only as a property.
+The Kotlin side needs no separate export shape: the list is boxed as the same object carrier an
+object return uses, and the shared `NugetListNative` helpers materialize it exactly as they do for
+a property (see [Method returns](classes-and-objects.md) and [ADR-061](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/061-method-return-marshalling.md)):
+
+```kotlin
+// test-library/.../cat/Cat.kt
+fun tags(): List<String> = listOf("$name-tag", "$name-chip")
+fun scores(): List<Int> = listOf(lives, lives * 2)
+```
+
+```C#
+public IReadOnlyList<string> Tags()
+{
+        IntPtr listHandle = Native_Tags(_handle, out IntPtr error);
+        if (error != IntPtr.Zero)
+        {
+            throw NugetErrorNative.BuildException(error);
+        }
+        int count = NugetListNative.Count(listHandle);
+        var result = new List<string>(count);
+        for (int i = 0; i < count; i++)
+        {
+            result.Add(NugetMarshal.FromHandle<string>(NugetListNative.Get(listHandle, i)));
+        }
+        NugetListNative.Dispose(listHandle);
+        return result.AsReadOnly();
+}
+```
+
 ## Limitations
 
 - `Sequence<T>` is not bridgeable. `Cat.unsupported: Sequence<String>` in the sample library is deliberately left out of the generated `Interop.cs` (no eager-copy story for a lazy sequence).
@@ -168,5 +200,6 @@ public void Cat_Traits_SetEquality()
     </category>
     <category ref="external">
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/011-collection-type-mapping.md">ADR-011: Collection type mapping</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/061-method-return-marshalling.md">ADR-061: Method return marshalling</a>
     </category>
 </seealso>

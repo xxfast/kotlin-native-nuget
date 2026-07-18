@@ -217,7 +217,11 @@ internal fun StringBuilder.renderClass(cls: CirClass) {
       for (extra in prop.extraNatives) {
         val entryPoint = "${cls.nativePrefix}_${extra.entryPointSuffix}"
         val extraErrorParam: String = if (extra.hasSyncErrorOut) ", out IntPtr error" else ""
-        val paramStr: String = if (extra.hasValueParam) "IntPtr handle, ${extra.returnType} value$extraErrorParam" else "IntPtr handle$extraErrorParam"
+        val paramStr: String = if (extra.hasValueParam) {
+          "IntPtr handle, ${extra.returnType} value$extraErrorParam"
+        } else {
+          "IntPtr handle$extraErrorParam"
+        }
         val externReturn = if (extra.hasValueParam) "void" else extra.returnType
         appendLine("        [DllImport(\"${cls.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"$entryPoint\")]")
         appendLine("        private static extern $externReturn ${extra.name}($paramStr);")
@@ -230,7 +234,8 @@ internal fun StringBuilder.renderClass(cls: CirClass) {
   for (method in cls.methods) {
     if (!method.isAbstract) {
       val nativeParamList: MutableList<String> = (listOf("IntPtr handle") +
-        method.parameters.map { "${it.nativeType} ${it.name}" }).toMutableList()
+          method.parameters.map { "${it.nativeType} ${it.name}" }).toMutableList()
+      nativeParamList.addAll(method.extraNativeParams)
       if (method.isSyncErrorCheckEnabled) nativeParamList.add("out IntPtr error")
       val nativeParams: String = nativeParamList.joinToString(", ")
       appendLine("        [DllImport(\"${cls.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"${cls.nativePrefix}_${method.nativeName}\")]")
@@ -403,7 +408,7 @@ internal fun StringBuilder.renderMethod(method: CirMethod, className: String = "
     return
   }
 
-  if (method.isSyncErrorCheckEnabled) {
+  if (method.isSyncErrorCheckEnabled && !method.hasCustomBody) {
     renderSyncErrorCheckMethod(method, className)
     return
   }
@@ -417,9 +422,14 @@ internal fun StringBuilder.renderMethod(method: CirMethod, className: String = "
     else "${param.type} ${param.name}"
   }.joinToString(", ")
 
+  // A standalone `T` type-parameter *token* — never a substring match. The old
+  // `.contains("T")` matched the letter T anywhere, including inside an ordinary type name like
+  // `Toy` (ADR-061 surfaced this: an extension function on `Toy` was rendered as a bogus
+  // `ToyExtensions.FindOwner<T>(Toy)`, an uninferable generic method neither side intended).
+  val genericTypeToken: Regex = Regex("(?<![A-Za-z0-9_])T(?![A-Za-z0-9_])")
   val hasGenericType: Boolean = method.typeParameters.isNotEmpty() ||
-    method.returnType.contains("T") ||
-    method.parameters.any { it.type.contains("T") }
+      genericTypeToken.containsMatchIn(method.returnType) ||
+      method.parameters.any { genericTypeToken.containsMatchIn(it.type) }
 
   val genericDecl: String = if (hasGenericType && method.isStatic) {
     val names: String = if (method.typeParameters.isNotEmpty()) {
@@ -478,7 +488,11 @@ internal fun StringBuilder.renderDataClassMethods(cls: CirClass) {
   if (cls.constructor != null) {
     val copyParams: String = cls.constructor.parameters.joinToString(", ") { "${it.type} ${it.name}" }
     val copyParamNames: String = cls.constructor.parameters.joinToString(", ") { it.name }
-    val copyNativeArgs: String = if (copyParamNames.isEmpty()) "_handle, out IntPtr error" else "_handle, $copyParamNames, out IntPtr error"
+    val copyNativeArgs: String = if (copyParamNames.isEmpty()) {
+      "_handle, out IntPtr error"
+    } else {
+      "_handle, $copyParamNames, out IntPtr error"
+    }
     appendLine("        [DllImport(\"${cls.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"${cls.nativePrefix}_copy\")]")
     appendLine("        private static extern IntPtr Native_Copy(IntPtr handle, $copyParams, out IntPtr error);")
     appendLine()
@@ -609,7 +623,7 @@ private fun StringBuilder.renderInterfaceBridgeMethod(method: CirInterfaceBridge
   }
   appendLine(
     "        [DllImport(\"${method.libraryName}\", CallingConvention = CallingConvention.Cdecl, " +
-      "EntryPoint = \"${method.subscribeEntryPoint}\")]"
+        "EntryPoint = \"${method.subscribeEntryPoint}\")]"
   )
   appendLine("        private static extern IntPtr Native_${method.csMethodName}($nativeAddParams);")
   appendLine()
@@ -617,7 +631,7 @@ private fun StringBuilder.renderInterfaceBridgeMethod(method: CirInterfaceBridge
   // DllImport for unsubscribe
   appendLine(
     "        [DllImport(\"${method.libraryName}\", CallingConvention = CallingConvention.Cdecl, " +
-      "EntryPoint = \"${method.removeEntryPoint}\")]"
+        "EntryPoint = \"${method.removeEntryPoint}\")]"
   )
   appendLine(
     "        private static extern void ${method.csRemoveNativeName}(IntPtr handle, IntPtr subscriptionHandle);"
@@ -635,7 +649,7 @@ private fun StringBuilder.renderInterfaceBridgeMethod(method: CirInterfaceBridge
   method.entries.forEach { entry ->
     appendLine(
       "            ${entry.delegateName} ${entry.methodKtName}Cb = " +
-        "${entry.delegateParamList} => { ${entry.callbackBody} };"
+          "${entry.delegateParamList} => { ${entry.callbackBody} };"
     )
   }
 

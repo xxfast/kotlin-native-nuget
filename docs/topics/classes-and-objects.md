@@ -9,6 +9,7 @@ A Kotlin `class` becomes a C# `class` backed by an opaque `StableRef` handle, im
 | member property (get) | property (get) | |
 | member property (get/set) | property (get/set) | |
 | object-typed property/return | property/return | new wrapper per access, identity not preserved |
+| instance method return (object, `T?`, `List<T>`, `String?`, `Int?`) | matching C# return type | same marshalling cascade as the property getter; nullable primitive is single-call, see Method returns below |
 
 ## Kotlin
 
@@ -156,17 +157,124 @@ public void Cat_Age_SetToNull()
 
 Disposal does not cascade. A parent wrapper's `Dispose()` only releases *its own* `StableRef`; any wrapper obtained from a property or method call on that parent holds an independent `StableRef` and must be disposed separately (or leaks). This is deliberate: since every access allocates a new wrapper, there's no tree of ownership for a parent to walk. See [ADR-005](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/005-object-return-semantics.md) for the alternative designs considered (cached wrapper with cascading dispose was rejected).
 
+## Method returns
+
+An instance method returning an object, a collection, or a nullable type crosses the bridge through
+the same marshalling cascade the property getter already uses. The one exception is a nullable
+**primitive** return: a method might have side effects, so it can't reuse the property getter's
+two-call `hasValue`/`value` pattern (that would invoke the method twice). It gets a single-call
+shape instead: the export returns `bool` (has-value) and writes the value through a `valueOut`
+out-parameter.
+
+From `test-library/src/nativeMain/kotlin/.../cat/Cat.kt`:
+
+```kotlin
+/** Object return (converting: handle -> `new Cat`). No brother set -> a cat looks after itself. */
+fun findOwner(): Cat = brother ?: this
+
+/** Nullable object return. Null until `brother` is assigned. */
+fun maybeOwner(): Cat? = brother
+
+/** Collection return, converting element (String needs marshalling per element). */
+fun tags(): List<String> = listOf("$name-tag", "$name-chip")
+
+/** Collection return, non-converting element (Int is blittable). */
+fun scores(): List<Int> = listOf(lives, lives * 2)
+
+/** Nullable String return, single-call. Null until `owner` is assigned. */
+fun alias(): String? = owner?.let { "$name (owned by $it)" }
+
+/** Nullable primitive return, single-call out-param per ADR-061. Null until `age` is assigned. */
+fun ageInMonths(): Int? = age?.times(12)
+```
+
+Generated C#, from `Interop.cs` (the collection return, `Tags()`/`Scores()`, walks the handle the
+same way as a list *property*, see [Collections](collections.md)):
+
+```C#
+public Cat FindOwner()
+{
+        IntPtr nativeResult = Native_FindOwner(_handle, out IntPtr error);
+        if (error != IntPtr.Zero)
+        {
+            throw NugetErrorNative.BuildException(error);
+        }
+        return new Cat(nativeResult);
+}
+
+public Cat? MaybeOwner()
+{
+        IntPtr nativeResult = Native_MaybeOwner(_handle, out IntPtr error);
+        if (error != IntPtr.Zero)
+        {
+            throw NugetErrorNative.BuildException(error);
+        }
+        return nativeResult == IntPtr.Zero ? null : new Cat(nativeResult);
+}
+
+public string? Alias()
+{
+        IntPtr nativeResult = Native_Alias(_handle, out IntPtr error);
+        if (error != IntPtr.Zero)
+        {
+            throw NugetErrorNative.BuildException(error);
+        }
+        return Marshal.PtrToStringUTF8(nativeResult);
+}
+
+[DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "cat_ageInMonths")]
+private static extern bool Native_AgeInMonths(IntPtr handle, out int value, out IntPtr error);
+
+public int? AgeInMonths()
+{
+        bool hasValue = Native_AgeInMonths(_handle, out int value, out IntPtr error);
+        if (error != IntPtr.Zero)
+        {
+            throw NugetErrorNative.BuildException(error);
+        }
+        return hasValue ? value : null;
+}
+```
+
+From `IntegrationTests/MethodReturnMarshallingTests.cs`:
+
+```C#
+[Fact]
+public void Cat_FindOwner_ReturnsBrotherWhenSet()
+{
+    using var oreo = new Cat("Oreo", 9);
+    using var mylo = new Cat("Mylo", 8);
+    oreo.Brother = mylo;
+
+    using Cat owner = oreo.FindOwner();
+    Assert.Equal("Mylo", owner.Name);
+}
+
+[Fact]
+public void Cat_AgeInMonths_NonNullWhenAgeSet()
+{
+    using var oreo = new Cat("Oreo", 9);
+    oreo.Age = 3;
+    Assert.Equal(36, oreo.AgeInMonths());
+}
+```
+
+The same cascade applies at the extension-function position; see [Extensions](extensions.md).
+
 ## Known limitations
 
-Nullability and object-returns are handled at the *property* position (shown above with `Brother`/`Owner`/`Age`), but **not at the class-method-return position**. A method returning `String?`, `Int?`, or an object type (e.g. `fun companion(): Patient`) currently generates invalid Kotlin — the export declares a non-null return while the body can yield `null` — rather than a nullable or handle-backed C# surface. Only the property getter re-reads the type's nullability and boxes object returns through a `StableRef`; the method loop does neither. Tracked in [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md) Phase 3/4 and pinned as red cells by the adversarial forward fixture ([ADR-060](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/060-adversarial-forward-fixture.md)).
+Method returns for an `enum`, a `Char`, and `Map`/`Set` are outside [ADR-061](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/061-method-return-marshalling.md)'s scope and still hit the pre-existing broken shapes: an enum return falls through the `isEnumReturn` exclusion, a `Char` return hits the same `defaultValueFor("kotlin.Char")` bug as ADR-060 cell 13, and `Map`/`Set` returns hit the same `defaultValueFor` fallback `List` had before its object-carrier fix. Tracked in [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md) Phase 3/4.
 
 <seealso>
     <category ref="related">
         <a href="forward-overview.md">Publishing Kotlin to C#</a>
         <a href="interfaces-abstract-sealed.md">Interfaces, abstract and sealed classes</a>
+        <a href="collections.md">Collections</a>
+        <a href="extensions.md">Extensions</a>
     </category>
     <category ref="external">
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/003-memory-management-across-bridge.md">ADR-003: Memory management across the bridge</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/005-object-return-semantics.md">ADR-005: Object return semantics</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/061-method-return-marshalling.md">ADR-061: Method return marshalling</a>
     </category>
 </seealso>

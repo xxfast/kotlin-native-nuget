@@ -12,6 +12,7 @@ import com.google.devtools.ksp.symbol.Visibility
 import com.squareup.kotlinpoet.ClassName
 import com.squareup.kotlinpoet.FileSpec
 import com.squareup.kotlinpoet.FunSpec
+import com.squareup.kotlinpoet.TypeName
 import io.github.xxfast.kotlin.native.nuget.processor.cir.LAMBDA_TYPES
 import io.github.xxfast.kotlin.native.nuget.processor.cir.expandAliases
 import io.github.xxfast.kotlin.native.nuget.processor.toCName
@@ -355,19 +356,27 @@ internal fun FileSpec.Builder.addClassExports(cls: KSClassDeclaration) {
             .addParameter("handle", cOpaquePointer)
             .addParameter("errorOut", cOpaquePointer.copy(nullable = true))
             .returns(cOpaquePointer.copy(nullable = true))
-            .addCode(buildString {
-              appendLine("return try {")
-              appendLine("  val obj: %L? = handle.asStableRef<%L>().get().%L")
-              appendLine("  if (obj == null) null else %T.create(obj).asCPointer()")
-              appendLine("} catch (e: Throwable) {")
-              appendLine("  if (errorOut != null) {")
-              appendLine("    errorOut.reinterpret<%T>().pointed.value = %T.create(")
-              appendLine("      buildError(e)")
-              appendLine("    ).asCPointer()")
-              appendLine("  }")
-              appendLine("  null")
-              append("}")
-            }, propType, qualifiedName, propName, stableRef, cOpaquePointerVar, stableRef)
+            .addCode(
+              buildString {
+                appendLine("return try {")
+                appendLine("  val obj: %T = handle.asStableRef<%L>().get().%L")
+                appendLine("  if (obj == null) null else %T.create(obj).asCPointer()")
+                appendLine("} catch (e: Throwable) {")
+                appendLine("  if (errorOut != null) {")
+                appendLine("    errorOut.reinterpret<%T>().pointed.value = %T.create(")
+                appendLine("      buildError(e)")
+                appendLine("    ).asCPointer()")
+                appendLine("  }")
+                appendLine("  null")
+                append("}")
+              },
+              propTypeResolved.toBridgeTypeName(),
+              qualifiedName,
+              propName,
+              stableRef,
+              cOpaquePointerVar,
+              stableRef,
+            )
             .build()
         )
 
@@ -378,17 +387,27 @@ internal fun FileSpec.Builder.addClassExports(cls: KSClassDeclaration) {
               .addParameter("handle", cOpaquePointer)
               .addParameter("value", cOpaquePointer.copy(nullable = true))
               .addParameter("errorOut", cOpaquePointer.copy(nullable = true))
-              .addCode(buildString {
-                appendLine("try {")
-                appendLine("  handle.asStableRef<%L>().get().%L = value?.asStableRef<%L>()?.get()")
-                appendLine("} catch (e: Throwable) {")
-                appendLine("  if (errorOut != null) {")
-                appendLine("    errorOut.reinterpret<%T>().pointed.value = %T.create(")
-                appendLine("      buildError(e)")
-                appendLine("    ).asCPointer()")
-                appendLine("  }")
-                append("}")
-              }, qualifiedName, propName, propType, cOpaquePointerVar, stableRef)
+              .addCode(
+                buildString {
+                  appendLine("try {")
+                  appendLine(
+                    "  handle.asStableRef<%L>().get().%L = " +
+                        "value?.asStableRef<%T>()?.get()"
+                  )
+                  appendLine("} catch (e: Throwable) {")
+                  appendLine("  if (errorOut != null) {")
+                  appendLine("    errorOut.reinterpret<%T>().pointed.value = %T.create(")
+                  appendLine("      buildError(e)")
+                  appendLine("    ).asCPointer()")
+                  appendLine("  }")
+                  append("}")
+                },
+                qualifiedName,
+                propName,
+                propTypeResolved.toBridgeTypeName(nullable = false),
+                cOpaquePointerVar,
+                stableRef
+              )
               .build()
           )
         }
@@ -444,7 +463,7 @@ internal fun FileSpec.Builder.addClassExports(cls: KSClassDeclaration) {
     .filter {
       val name: String = it.simpleName.asString()
       val isDataClassMethod: Boolean = cls.modifiers.contains(Modifier.DATA) &&
-        (name == "copy" || name.startsWith("component"))
+          (name == "copy" || name.startsWith("component"))
       name !in listOf("equals", "hashCode", "toString", "<init>") && !isDataClassMethod
     }
     .filter { !it.modifiers.contains(Modifier.SUSPEND) }
@@ -509,8 +528,31 @@ internal fun FileSpec.Builder.addClassExports(cls: KSClassDeclaration) {
   methods.forEach { method ->
     if (method in interfaceBridgeExcluded) return@forEach
     val methodName: String = method.simpleName.asString()
-    val methodReturn: String = method.returnType?.resolve()?.expandAliases()
-      ?.declaration?.qualifiedName?.asString() ?: "Unit"
+    val methodReturnType: KSType? = method.returnType?.resolve()?.expandAliases()
+    val methodReturn: String = methodReturnType?.declaration?.qualifiedName?.asString() ?: "Unit"
+    val isNullableReturn: Boolean = methodReturnType?.isMarkedNullable == true
+
+    // ADR-061: route the return through the same marshalling cascade the property getter
+    // already uses (object / nullable object / collection / nullable String / nullable
+    // primitive), instead of the old single `else` branch that declared a by-value return no
+    // body could satisfy (BUG-005 follow-up / ADR-060 cells 4/5/6).
+    val isEnumReturn: Boolean = (methodReturnType?.declaration as? KSClassDeclaration)
+      ?.classKind == ClassKind.ENUM_CLASS
+    // "kotlin.Char" is deliberately included here even though it is not one of ADR-061's five
+    // return shapes: it is excluded so it keeps falling to the `else` bucket below (the *same*
+    // pre-existing, separately-tracked bug as before this ADR — ADR-060 cell 13's
+    // `defaultValueFor` literal-vs-declared-type mismatch), instead of being accidentally
+    // "fixed" by the new StableRef object-boxing branch, which would box a `Char` nonsensically.
+    val isPrimitiveReturn: Boolean = methodReturn in setOf(
+      "kotlin.String", "kotlin.Byte", "kotlin.UByte", "kotlin.Short",
+      "kotlin.UShort", "kotlin.Int", "kotlin.UInt", "kotlin.Long",
+      "kotlin.ULong", "kotlin.Float", "kotlin.Double", "kotlin.Boolean",
+      "kotlin.Char", "kotlin.Unit",
+    )
+    val isListReturn: Boolean = !isEnumReturn &&
+        (methodReturn == "kotlin.collections.List" ||
+            methodReturn == "kotlin.collections.MutableList")
+    val isObjectReturn: Boolean = !isEnumReturn && !isPrimitiveReturn && !isListReturn
 
     // For enum parameters, the C boundary uses Int; convert with EnumClass.entries[value].
     val methodParamCall: String = method.parameters.joinToString(", ") { param ->
@@ -539,40 +581,128 @@ internal fun FileSpec.Builder.addClassExports(cls: KSClassDeclaration) {
       if (isEnum) {
         builder.addParameter(paramName, Int::class)
       } else {
-        val type: String = resolved.declaration.qualifiedName?.asString()
-          ?: resolved.declaration.simpleName.asString()
-        builder.addParameter(paramName, ClassName.bestGuess(type))
+        builder.addParameter(paramName, resolved.toBridgeTypeName(nullable = false))
       }
     }
 
-    builder.addParameter("errorOut", cOpaquePointer.copy(nullable = true))
+    when {
+      methodReturn == "kotlin.Unit" -> {
+        builder.addParameter("errorOut", cOpaquePointer.copy(nullable = true))
+        builder.addCode(buildString {
+          appendLine("try {")
+          appendLine("  handle.asStableRef<%L>().get().%L(%L)")
+          appendLine("} catch (e: Throwable) {")
+          appendLine("  if (errorOut != null) {")
+          appendLine("    errorOut.reinterpret<%T>().pointed.value = %T.create(")
+          appendLine("      buildError(e)")
+          appendLine("    ).asCPointer()")
+          appendLine("  }")
+          append("}")
+        }, qualifiedName, methodName, methodParamCall, cOpaquePointerVar, stableRef)
+      }
 
-    if (methodReturn == "kotlin.Unit") {
-      builder.addCode(buildString {
-        appendLine("try {")
-        appendLine("  handle.asStableRef<%L>().get().%L(%L)")
-        appendLine("} catch (e: Throwable) {")
-        appendLine("  if (errorOut != null) {")
-        appendLine("    errorOut.reinterpret<%T>().pointed.value = %T.create(")
-        appendLine("      buildError(e)")
-        appendLine("    ).asCPointer()")
-        appendLine("  }")
-        append("}")
-      }, qualifiedName, methodName, methodParamCall, cOpaquePointerVar, stableRef)
-    } else {
-      builder.returns(ClassName.bestGuess(methodReturn))
-      builder.addCode(buildString {
-        appendLine("return try {")
-        appendLine("  handle.asStableRef<%L>().get().%L(%L)")
-        appendLine("} catch (e: Throwable) {")
-        appendLine("  if (errorOut != null) {")
-        appendLine("    errorOut.reinterpret<%T>().pointed.value = %T.create(")
-        appendLine("      buildError(e)")
-        appendLine("    ).asCPointer()")
-        appendLine("  }")
-        appendLine("  ${defaultValueFor(methodReturn)}")
-        append("}")
-      }, qualifiedName, methodName, methodParamCall, cOpaquePointerVar, stableRef)
+      isListReturn || (isObjectReturn && !isNullableReturn) -> {
+        // Object return (ADR-061 §1) / collection return (§3): both are, on the Kotlin side,
+        // just the object carrier — box the result via StableRef, mirroring the companion-method
+        // loop's `isObjectReturn` branch (ClassExports.kt's addCompanionExports, below).
+        builder.addParameter("errorOut", cOpaquePointer.copy(nullable = true))
+        builder.returns(cOpaquePointer.copy(nullable = true))
+        builder.addCode(buildString {
+          appendLine("return try {")
+          appendLine("  %T.create(handle.asStableRef<%L>().get().%L(%L)).asCPointer()")
+          appendLine("} catch (e: Throwable) {")
+          appendLine("  if (errorOut != null) {")
+          appendLine("    errorOut.reinterpret<%T>().pointed.value = %T.create(")
+          appendLine("      buildError(e)")
+          appendLine("    ).asCPointer()")
+          appendLine("  }")
+          appendLine("  null")
+          append("}")
+        }, stableRef, qualifiedName, methodName, methodParamCall, cOpaquePointerVar, stableRef)
+      }
+
+      isObjectReturn && isNullableReturn -> {
+        // Nullable object return (ADR-061 §2).
+        builder.addParameter("errorOut", cOpaquePointer.copy(nullable = true))
+        builder.returns(cOpaquePointer.copy(nullable = true))
+        builder.addCode(
+          buildString {
+            appendLine("return try {")
+            appendLine("  val obj: %T = handle.asStableRef<%L>().get().%L(%L)")
+            appendLine("  if (obj == null) null else %T.create(obj).asCPointer()")
+            appendLine("} catch (e: Throwable) {")
+            appendLine("  if (errorOut != null) {")
+            appendLine("    errorOut.reinterpret<%T>().pointed.value = %T.create(")
+            appendLine("      buildError(e)")
+            appendLine("    ).asCPointer()")
+            appendLine("  }")
+            appendLine("  null")
+            append("}")
+          },
+          methodReturnType!!.toBridgeTypeName(),
+          qualifiedName,
+          methodName,
+          methodParamCall,
+          stableRef,
+          cOpaquePointerVar,
+          stableRef
+        )
+      }
+
+      isPrimitiveReturn && isNullableReturn && methodReturn != "kotlin.String" -> {
+        // Nullable primitive return (ADR-061 §5): single call. The method is invoked exactly
+        // once; the has-value `Boolean` return and the `valueOut` out-write mirror the already-
+        // shipped `errorOut` out-write (ADR-024), differing only in the `CVariable` type arg.
+        val nonNullReturnType: TypeName = methodReturnType!!.toBridgeTypeName(nullable = false)
+        builder.addParameter("valueOut", cOpaquePointer.copy(nullable = true))
+        builder.addParameter("errorOut", cOpaquePointer.copy(nullable = true))
+        builder.returns(Boolean::class)
+        builder.addCode(
+          buildString {
+            appendLine("return try {")
+            appendLine("  val result: %T? = handle.asStableRef<%L>().get().%L(%L)")
+            appendLine("  if (result != null && valueOut != null) {")
+            appendLine("    valueOut.reinterpret<%T>().pointed.value = result")
+            appendLine("  }")
+            appendLine("  result != null")
+            appendLine("} catch (e: Throwable) {")
+            appendLine("  if (errorOut != null) {")
+            appendLine("    errorOut.reinterpret<%T>().pointed.value = %T.create(")
+            appendLine("      buildError(e)")
+            appendLine("    ).asCPointer()")
+            appendLine("  }")
+            appendLine("  false")
+            append("}")
+          },
+          nonNullReturnType,
+          qualifiedName,
+          methodName,
+          methodParamCall,
+          cVarTypeFor(methodReturn),
+          cOpaquePointerVar,
+          stableRef
+        )
+      }
+
+      else -> {
+        // Non-null primitives (unchanged) and nullable String (ADR-061 §4): a nullable Kotlin
+        // `String` crosses the ABI as a plain pointer (null for `null`), so this needs no new
+        // shape — just declaring the real nullability instead of the old hardcoded non-null.
+        builder.addParameter("errorOut", cOpaquePointer.copy(nullable = true))
+        builder.returns(methodReturnType?.toBridgeTypeName() ?: ClassName.bestGuess(methodReturn))
+        builder.addCode(buildString {
+          appendLine("return try {")
+          appendLine("  handle.asStableRef<%L>().get().%L(%L)")
+          appendLine("} catch (e: Throwable) {")
+          appendLine("  if (errorOut != null) {")
+          appendLine("    errorOut.reinterpret<%T>().pointed.value = %T.create(")
+          appendLine("      buildError(e)")
+          appendLine("    ).asCPointer()")
+          appendLine("  }")
+          appendLine("  ${defaultValueFor(methodReturn)}")
+          append("}")
+        }, qualifiedName, methodName, methodParamCall, cOpaquePointerVar, stableRef)
+      }
     }
 
     addFunction(builder.build())
@@ -611,9 +741,11 @@ internal fun FileSpec.Builder.addClassExports(cls: KSClassDeclaration) {
       .addParameter("onErrorPtr", cOpaquePointer)
       .addParameter("userData", cOpaquePointer)
       .returns(cOpaquePointer)
-      .addCode(buildFlowMethodCollectBody(
-        qualifiedName, methodName, paramCall, flowElementQualified,
-      ))
+      .addCode(
+        buildFlowMethodCollectBody(
+          qualifiedName, methodName, paramCall, flowElementQualified,
+        )
+      )
 
     addFunction(builder.build())
   }
@@ -664,13 +796,9 @@ internal fun FileSpec.Builder.addClassExports(cls: KSClassDeclaration) {
 
       for (param in constructor.parameters) {
         val resolved = param.type.resolve().expandAliases()
-        val type: String =
-          resolved.declaration.qualifiedName?.asString()
-            ?: resolved.declaration.simpleName.asString()
-
         copyBuilder.addParameter(
           param.name?.asString() ?: "_",
-          ClassName.bestGuess(type),
+          resolved.toBridgeTypeName(nullable = false),
         )
       }
 
@@ -718,8 +846,8 @@ internal fun FileSpec.Builder.addCompanionExports(cls: KSClassDeclaration) {
     val methodName: String = method.simpleName.asString()
     val cname: String = toCName(methodName)
     val entryPoint: String = "${prefix}_companion_${cname}"
-    val methodReturn: String = method.returnType?.resolve()?.expandAliases()
-      ?.declaration?.qualifiedName?.asString() ?: "Unit"
+    val methodReturnType: KSType? = method.returnType?.resolve()?.expandAliases()
+    val methodReturn: String = methodReturnType?.declaration?.qualifiedName?.asString() ?: "Unit"
 
     val methodParamCall: String = method.parameters.joinToString(", ") {
       it.name?.asString() ?: "_"
@@ -731,13 +859,10 @@ internal fun FileSpec.Builder.addCompanionExports(cls: KSClassDeclaration) {
 
     for (param in method.parameters) {
       val resolved = param.type.resolve().expandAliases()
-      val type: String =
-        resolved.declaration.qualifiedName?.asString()
-          ?: resolved.declaration.simpleName.asString()
 
       builder.addParameter(
         param.name?.asString() ?: "_",
-        ClassName.bestGuess(type),
+        resolved.toBridgeTypeName(nullable = false),
       )
     }
 
@@ -745,11 +870,11 @@ internal fun FileSpec.Builder.addCompanionExports(cls: KSClassDeclaration) {
     val returnDecl: KSClassDeclaration? = method.returnType
       ?.resolve()?.expandAliases()?.declaration as? KSClassDeclaration
     val isObjectReturn: Boolean = returnsEnclosingClass ||
-      (returnDecl != null && methodReturn !in setOf(
-        "kotlin.String", "kotlin.Byte", "kotlin.UByte", "kotlin.Short", "kotlin.UShort",
-        "kotlin.Int", "kotlin.UInt", "kotlin.Long", "kotlin.ULong",
-        "kotlin.Float", "kotlin.Double", "kotlin.Boolean", "kotlin.Unit",
-      ))
+        (returnDecl != null && methodReturn !in setOf(
+          "kotlin.String", "kotlin.Byte", "kotlin.UByte", "kotlin.Short", "kotlin.UShort",
+          "kotlin.Int", "kotlin.UInt", "kotlin.Long", "kotlin.ULong",
+          "kotlin.Float", "kotlin.Double", "kotlin.Boolean", "kotlin.Unit",
+        ))
 
     builder.addParameter("errorOut", cOpaquePointer.copy(nullable = true))
 
@@ -780,7 +905,9 @@ internal fun FileSpec.Builder.addCompanionExports(cls: KSClassDeclaration) {
         append("}")
       }, qualifiedName, methodName, methodParamCall, cOpaquePointerVar, stableRef)
     } else {
-      builder.returns(ClassName.bestGuess(methodReturn))
+      builder.returns(
+        methodReturnType?.toBridgeTypeName(nullable = false) ?: ClassName.bestGuess(methodReturn),
+      )
       builder.addCode(buildString {
         appendLine("return try {")
         appendLine("  %L.%L(%L)")
@@ -846,12 +973,18 @@ private fun buildFlowCollectBody(
 ): String = buildString {
   appendLine("val obj = handle.asStableRef<$qualifiedName>().get()")
   appendLine("val scope = scopeHandle.asStableRef<CoroutineScope>().get()")
-  appendLine("val onNext = onNextPtr.reinterpret<CFunction<" +
-    "(COpaquePointer?, Byte, COpaquePointer) -> Unit>>()")
-  appendLine("val onComplete = onCompletePtr.reinterpret<CFunction<" +
-    "(COpaquePointer) -> Unit>>()")
-  appendLine("val onError = onErrorPtr.reinterpret<CFunction<" +
-    "(COpaquePointer?, COpaquePointer) -> Unit>>()")
+  appendLine(
+    "val onNext = onNextPtr.reinterpret<CFunction<" +
+        "(COpaquePointer?, Byte, COpaquePointer) -> Unit>>()"
+  )
+  appendLine(
+    "val onComplete = onCompletePtr.reinterpret<CFunction<" +
+        "(COpaquePointer) -> Unit>>()"
+  )
+  appendLine(
+    "val onError = onErrorPtr.reinterpret<CFunction<" +
+        "(COpaquePointer?, COpaquePointer) -> Unit>>()"
+  )
   appendLine("val job = scope.launch(start = CoroutineStart.ATOMIC) {")
   appendLine("  try {")
   appendLine("    obj.$propName.collect { value ->")
@@ -878,12 +1011,18 @@ private fun buildFlowMethodCollectBody(
 ): String = buildString {
   appendLine("val obj = handle.asStableRef<$qualifiedName>().get()")
   appendLine("val scope = scopeHandle.asStableRef<CoroutineScope>().get()")
-  appendLine("val onNext = onNextPtr.reinterpret<CFunction<" +
-    "(COpaquePointer?, Byte, COpaquePointer) -> Unit>>()")
-  appendLine("val onComplete = onCompletePtr.reinterpret<CFunction<" +
-    "(COpaquePointer) -> Unit>>()")
-  appendLine("val onError = onErrorPtr.reinterpret<CFunction<" +
-    "(COpaquePointer?, COpaquePointer) -> Unit>>()")
+  appendLine(
+    "val onNext = onNextPtr.reinterpret<CFunction<" +
+        "(COpaquePointer?, Byte, COpaquePointer) -> Unit>>()"
+  )
+  appendLine(
+    "val onComplete = onCompletePtr.reinterpret<CFunction<" +
+        "(COpaquePointer) -> Unit>>()"
+  )
+  appendLine(
+    "val onError = onErrorPtr.reinterpret<CFunction<" +
+        "(COpaquePointer?, COpaquePointer) -> Unit>>()"
+  )
   appendLine("val job = scope.launch(start = CoroutineStart.ATOMIC) {")
   appendLine("  try {")
   appendLine("    obj.$methodName($paramCall).collect { value ->")

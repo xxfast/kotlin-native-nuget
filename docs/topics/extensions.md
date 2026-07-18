@@ -6,6 +6,7 @@ Kotlin extension functions and properties don't have a native C# analog (C# has 
 |---|---|---|
 | extension function | static method | true C# extension method (`this` parameter) |
 | extension property | static accessor | see [ADR-013](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/013-extension-property-mapping.md) |
+| extension function return (object, `T?`, `List<T>`, `String?`, `Int?`) | matching C# return type | same cascade as a class-method return, see Return marshalling below and [Classes and objects](classes-and-objects.md) |
 
 ## Kotlin
 
@@ -112,11 +113,100 @@ public void String_GetWordCount_ReturnsTwoForTwoWords()
 }
 ```
 
+## Return marshalling
+
+An extension function's return goes through the same marshalling cascade a class-method return
+does (see [Method returns](classes-and-objects.md) in Classes and objects): object, nullable
+object, collection, nullable `String`, and nullable primitive (single call, `bool` has-value +
+`valueOut` out-parameter, not the property getter's two-call pattern).
+
+From `test-library/src/nativeMain/kotlin/.../cat/CatExtensions.kt`. The receiver is `Toy`, not
+`Cat`: an extension can't be distinguished from a member of the same name on the same receiver, so
+exercising the extension-function export path needs a receiver with no colliding member:
+
+```kotlin
+/** Object return (converting), extension-function position. Always non-null. */
+fun Toy.findOwner(): Cat = Cat(name, color.length)
+
+/** Nullable object return, extension-function position. Non-null only for the "Gray" toys. */
+fun Toy.maybeOwner(): Cat? = if (color == "Gray") Cat(name, name.length) else null
+
+/** Collection return, converting element, extension-function position. */
+fun Toy.tags(): List<String> = listOf("$name-tag", "$color-tag")
+
+/** Collection return, non-converting element, extension-function position. */
+fun Toy.scores(): List<Int> = listOf(name.length, color.length)
+
+/** Nullable String return, extension-function position. Non-null only for the "Gray" toys. */
+fun Toy.alias(): String? = if (color == "Gray") "$name (aka Grey Ghost)" else null
+
+/** Nullable primitive return, extension-function position. Non-null only for the "Gray" toys. */
+fun Toy.ageInMonths(): Int? = if (color == "Gray") name.length * 12 else null
+```
+
+Generated C#, from `Interop.cs`, `ToyExtensions`:
+
+```C#
+public static Cat FindOwner(this Toy toy)
+{
+    IntPtr nativeResult = Native_FindOwner(toy._handle, out IntPtr error);
+    if (error != IntPtr.Zero)
+    {
+        throw NugetErrorNative.BuildException(error);
+    }
+    return new Cat(nativeResult);
+}
+
+public static Cat? MaybeOwner(this Toy toy)
+{
+    IntPtr nativeResult = Native_MaybeOwner(toy._handle, out IntPtr error);
+    if (error != IntPtr.Zero)
+    {
+        throw NugetErrorNative.BuildException(error);
+    }
+    return nativeResult == IntPtr.Zero ? null : new Cat(nativeResult);
+}
+
+public static int? AgeInMonths(this Toy toy)
+{
+    bool hasValue = Native_AgeInMonths(toy._handle, out int value, out IntPtr error);
+    if (error != IntPtr.Zero)
+    {
+        throw NugetErrorNative.BuildException(error);
+    }
+    return hasValue ? value : null;
+}
+```
+
+From `IntegrationTests/MethodReturnMarshallingTests.cs`:
+
+```C#
+[Fact]
+public void Toy_MaybeOwner_NonNullForGrayToy()
+{
+    var mouse = new Toy("Mouse", "Gray");
+    using Cat? owner = mouse.MaybeOwner();
+    Assert.NotNull(owner);
+    Assert.Equal("Mouse", owner!.Name);
+}
+
+[Fact]
+public void Toy_Tags_ReturnsMarshalledStringElements()
+{
+    var mouse = new Toy("Mouse", "Gray");
+    IReadOnlyList<string> tags = mouse.Tags();
+    Assert.Equal(new List<string> { "Mouse-tag", "Gray-tag" }, tags);
+}
+```
+
 <seealso>
     <category ref="related">
         <a href="top-level-declarations.md">Top-level declarations</a>
+        <a href="classes-and-objects.md">Classes and objects</a>
+        <a href="collections.md">Collections</a>
     </category>
     <category ref="external">
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/013-extension-property-mapping.md">ADR-013: Extension property mapping</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/061-method-return-marshalling.md">ADR-061: Method return marshalling</a>
     </category>
 </seealso>
