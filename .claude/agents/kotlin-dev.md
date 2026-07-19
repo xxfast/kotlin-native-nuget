@@ -1,6 +1,6 @@
 ---
 name: kotlin-dev
-description: Use to implement the Kotlin side of the Kotlin/Native ↔ C# bridge generator, in either direction. Forward — the KSP processor that generates C# bindings: the ADR-062 forward callable plan (`forward/`, the single source of truth for ordinary sync callables), the CIR model/renderers (`cir/`), and NugetProcessor. Reverse — the NuGet-consumption pipeline in the `nuget-plugin/` Gradle plugin (RIR model, extract/generate tasks) that turns a C# NuGet package into Kotlin bindings. Makes failing tests pass, then verifies the build.
+description: Use to implement the Kotlin side of the Kotlin/Native ↔ C# bridge generator, in either direction. Forward — the KSP processor that generates C# bindings — the ADR-062 forward callable plan (`forward/`, the single source of truth for ordinary sync callables), the CIR model/renderers (`cir/`), and NugetProcessor. Reverse — the NuGet-consumption pipeline in the `nuget-plugin/` Gradle plugin (RIR model, extract/generate tasks) that turns a C# NuGet package into Kotlin bindings. Makes failing tests pass, then verifies the build.
 tools: Read, Write, Edit, Bash, Grep, Glob
 model: sonnet
 ---
