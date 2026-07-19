@@ -3,6 +3,7 @@
 
 [![Stability](https://kotl.in/badges/experimental.svg)](https://kotlinlang.org/docs/components-stability.html#stability-of-subcomponents)
 [![CI](https://github.com/xxfast/kotlin-native-nuget/actions/workflows/ci.yml/badge.svg)](https://github.com/xxfast/kotlin-native-nuget/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/xxfast/kotlin-native-nuget/graph/badge.svg?token=PEDQUEBEV8)](https://codecov.io/gh/xxfast/kotlin-native-nuget)
 
 A plugin that allows you to publish your Kotlin/Native libraries as NuGet packages to be consumed by .NET projects.
 
