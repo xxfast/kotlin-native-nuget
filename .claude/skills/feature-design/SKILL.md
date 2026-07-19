@@ -78,7 +78,7 @@ Write failing tests on the **consumer side** of the feature. Which side that is 
 ### Step 4: Implementation (`kotlin-dev` agent)
 
 - Make the failing tests pass
-- Update the KSP processor (CirModel, CirTranslator, CirRenderer, NugetProcessor) or the Gradle plugin (`nuget-plugin/`), whichever the feature lives in
+- Update the KSP processor or the Gradle plugin (`nuget-plugin/`), whichever the feature lives in. For a forward feature, an **ordinary synchronous** callable goes through the ADR-062 forward callable plan (`forward/`: classify into `BridgeType`, extend the planner, both halves project from the one plan); a **specialized protocol** (suspend, `Flow`, lambda/callback, sealed, generics) stays on its named legacy route in `exports/` + `cir/`, where you update both halves in the same change
 - Verify all tests pass (existing + new)
 - The loop iterates: tests fail, fix, re-run. Continue the same `kotlin-dev` instance via SendMessage rather than spawning a fresh agent each round. Same for `csharp-dev` if the tests themselves need adjusting.
 - Ask `kotlin-dev` to report back the list of files it touched, you will hand that to the refactorer.

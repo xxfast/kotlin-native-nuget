@@ -214,6 +214,9 @@ public void CatId_PrimaryConstructor_TooLong_ThrowsArgumentException()
   primitive-underlying validation (the `CatId` path above) is in place.
 - Whether inherited members on a value class (for example `CharSequence` members via `by value`)
   should be exported is still an open product decision; declared methods with parameters are planned.
+  In the meantime they are excluded from the generated C# API with a `SKIPPED_INHERITED_MEMBER`
+  diagnostic naming each one, rather than binding silently
+  ([ADR-064](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/064-forward-unsupported-declaration-diagnostics.md)).
 
 <seealso>
     <category ref="related">
@@ -225,5 +228,6 @@ public void CatId_PrimaryConstructor_TooLong_ThrowsArgumentException()
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/033-value-class-constructor-exception-propagation.md">ADR-033: Value class constructor exception propagation</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/035-value-class-primary-constructor-validation.md">ADR-035: Value class primary constructor validation</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/062-forward-callable-plan.md">ADR-062: Forward callable plan</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/064-forward-unsupported-declaration-diagnostics.md">ADR-064: Forward unsupported-declaration diagnostics</a>
     </category>
 </seealso>

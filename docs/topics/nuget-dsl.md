@@ -27,7 +27,9 @@ the DSL itself enforces they're set, but `packNuget` fails once it reads an unse
 | `version` | `String?` | yes | `.nuspec` `<version>` |
 | `authors` | `String?` | yes | `.nuspec` `<authors>` |
 | `description` | `String?` | yes | `.nuspec` `<description>` |
-| `rootPackage` | `String?` | yes | the Kotlin package the generated C# namespaces are rooted at; sub-packages map relative to it |
+| `rootPackage` | `String?` | yes | the Kotlin package the generated C# namespaces are rooted at; sub-packages map relative to it. Also the default export scope: see below |
+| `include(vararg packages: String)` | function | no | empty; when set, only these package prefixes (and their sub-packages) are bridged |
+| `exclude(vararg packages: String)` | function | no | empty; applied after `include`, and always wins over it |
 
 ```kotlin
 nuget {
@@ -40,6 +42,38 @@ nuget {
   }
 }
 ```
+
+### Export scoping
+
+By default `NugetProcessor` bridges every public declaration in the module. `include`/`exclude` on
+`publish {}` scope that down, mirroring `bind { include/exclude }` on the reverse side: a package
+prefix match (`pkg == p || pkg.startsWith("$p.")`), with `exclude` always winning over `include`.
+
+```kotlin
+nuget {
+  publish {
+    packageId = "Contoso.Api"
+    rootPackage = "com.contoso.api"
+    include("com.contoso.api")            // whitelist of package prefixes
+    exclude("com.contoso.api.internal")   // exclude wins
+  }
+}
+```
+
+<note>
+<p>When <code>include</code> is empty, the effective include set defaults to <code>rootPackage</code> if
+set, otherwise to everything (today's behaviour with no scoping configured at all). This makes
+<code>rootPackage</code> a scoping knob, not just a renaming one: a public declaration outside
+<code>rootPackage</code> is no longer bridged unless named explicitly in <code>include</code>.</p>
+</note>
+
+A package that is only reached via `dependencies { dependency(...) { bind { } } }` (the reverse
+stub packages generated for a consumed C# dependency) is always exported regardless of `include`/
+`exclude`, since a module that both publishes forward and consumes a NuGet dependency needs those
+bound types reachable from its own forward return types to keep compiling.
+
+See [ADR-063](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/063-forward-declaration-level-export-scoping.md)
+for the full predicate and the `rootPackage` behaviour-change rationale.
 
 ## `dependencies { }`
 

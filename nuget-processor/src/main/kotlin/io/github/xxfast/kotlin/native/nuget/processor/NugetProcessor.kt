@@ -64,10 +64,15 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeTypeC
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallablePlan
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallablePlanCatalog
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallablePlanner
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnostic
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnosticSink
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnosticTrackingLogger
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardHelperRequirement
 import io.github.xxfast.kotlin.native.nuget.processor.forward.addForwardKotlinPlanExport
 import io.github.xxfast.kotlin.native.nuget.processor.forward.calls
+import io.github.xxfast.kotlin.native.nuget.processor.forward.diagnosticHint
 import io.github.xxfast.kotlin.native.nuget.processor.forward.planFor
+import io.github.xxfast.kotlin.native.nuget.processor.forward.toDiagnosticKind
 
 // A `@kotlin.native.CName`-annotated function is already a C-ABI export by definition (its native
 // export name is fixed by the annotation itself). It must never be picked up by the forward
@@ -78,6 +83,28 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.planFor
 // expects ordinary Kotlin-authored public API. Excluding any `@CName` function here is the general,
 // robust fix: it protects against this exact class of bug for any future generated C export, not
 // just this one registration function.
+// ADR-062/ADR-064: ordinary synchronous callables the planner cannot plan and no named legacy
+// route re-emits simply disappear from the generated C# API (never as an `IntPtr` / `"0"`
+// fallback). Warn once per dropped callable through the named ForwardDiagnostic sink, naming the
+// symbol and the specific kind, so a consumer whose `fun f(m: Map<K, V>)` vanishes from C# learns
+// why. Every one of these is `SKIPPED_*` (warning), never `ERROR_*`: existing fixtures
+// intentionally contain such declarations and generation must keep succeeding.
+internal fun warnDroppedForwardCallables(
+  catalog: ForwardCallablePlanCatalog,
+  logger: KSPLogger,
+) {
+  val diagnostics: List<ForwardDiagnostic> = catalog.droppedCallables.map { dropped ->
+    ForwardDiagnostic(
+      kind = dropped.reason.toDiagnosticKind(),
+      symbol = dropped.node,
+      declaration = dropped.symbol,
+      reason = "its ${dropped.reason} type combination is not supported",
+      hint = dropped.reason.diagnosticHint(),
+    )
+  }
+  ForwardDiagnosticSink.emit(diagnostics, logger)
+}
+
 private fun KSAnnotated.hasCNameAnnotation(): Boolean =
   annotations.any { annotation ->
     val name: String? = annotation.annotationType.resolve().declaration.qualifiedName?.asString()
@@ -86,7 +113,7 @@ private fun KSAnnotated.hasCNameAnnotation(): Boolean =
 
 class NugetProcessor(
   private val codeGenerator: CodeGenerator,
-  private val logger: KSPLogger,
+  logger: KSPLogger,
   private val context: NugetContext,
 ) : SymbolProcessor {
 
@@ -94,13 +121,44 @@ class NugetProcessor(
 
   private val renderer = CirRenderer()
 
+  // ADR-064: every `logger.error(...)` this class makes (directly, or transitively through the
+  // CIR translators it passes this to) routes through this wrapper, so `process()` can tell
+  // whether an ERROR_* diagnostic (e.g. ERROR_CSHARP_SIGNATURE_COLLISION) fired during
+  // generation, in time to skip writing `cNameExports.kt` for a construct that must never
+  // compile — `logger.error` itself returns nothing, and KSP's own round-failure detection only
+  // surfaces after `process()` returns.
+  private val logger: ForwardDiagnosticTrackingLogger = ForwardDiagnosticTrackingLogger(logger)
+
   override fun process(resolver: Resolver): List<KSAnnotated> {
     if (processed) return emptyList()
     processed = true
 
+    // ADR-063: the effective include set is the explicit `include` when non-empty, else
+    // `[rootPackage]` when `rootPackage` is set, else empty (= all). Mirrors the reverse side's
+    // `IsNamespaceIncluded` predicate exactly (exclude wins; empty include = all; prefix match).
+    val effectiveInclude: List<String> = when {
+      context.includePackages.isNotEmpty() -> context.includePackages
+      context.rootPackage.isNotBlank() -> listOf(context.rootPackage)
+      else -> emptyList()
+    }
+
+    fun isPackageExported(pkg: String): Boolean {
+      fun matches(p: String) = pkg == p || pkg.startsWith("$p.")
+      // ADR-063 "Reverse-bound packages are always in scope": checked first, before exclude and
+      // before include. A module that both publishes forward and consumes via `bind {}` returns
+      // reverse-bound types from its own forward code; dropping the bound stub's declaration
+      // while the forward-generated C# still references it is a dangling-reference build break,
+      // not a scoping choice the user asked for.
+      if (context.boundPackages.any(::matches)) return true
+      if (context.excludePackages.any(::matches)) return false
+      if (effectiveInclude.isEmpty()) return true
+      return effectiveInclude.any(::matches)
+    }
+
     val allDeclarations: List<KSDeclaration> = resolver.getAllFiles()
       .flatMap { it.declarations }
       .filter { it.packageName.asString() != "io.github.xxfast.kotlin.native.nuget.generated" }
+      .filter { isPackageExported(it.packageName.asString()) }
       .toList()
 
     val allFunctions: List<KSFunctionDeclaration> = allDeclarations
@@ -235,6 +293,8 @@ class NugetProcessor(
       classes, functions, extensionFunctions, objects, properties, extensionProperties, valueClasses,
     )
 
+    warnDroppedForwardCallables(callableCatalog, logger)
+
     val cNameExports: FileSpec = generateCNameWrappers(
       functions, genericFunctions, extensionFunctions, extensionProperties,
       classes, genericClasses, enums, sealedClasses, objects, properties,
@@ -245,6 +305,11 @@ class NugetProcessor(
       allClasses, enums, interfaces, sealedClasses, objects, properties,
       constProperties, valueClasses, suspendFunctions, callableCatalog, deps,
     )
+
+    // ADR-064: an ERROR_* diagnostic (e.g. ERROR_CSHARP_SIGNATURE_COLLISION, ADR-034) already
+    // failed this KSP round via logger.error above. Stop here rather than also running the ABI
+    // contract checks and writing cNameExports.kt for a construct that must never compile.
+    if (logger.hasFatalDiagnostic) return emptyList()
 
     val csharpContracts: List<ForwardAbiSignature> = ForwardAbiContract.csharp(cirFile)
     ForwardAbiContract.assertMatches(

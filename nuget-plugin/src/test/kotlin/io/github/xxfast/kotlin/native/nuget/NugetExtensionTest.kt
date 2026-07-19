@@ -27,6 +27,24 @@ class NugetExtensionTest {
   }
 
   @Test
+  fun `publish include and exclude populate package prefix lists`() {
+    extension.publish {
+      packageId = "MyLib"
+      version = "1.0.0"
+      authors = "Test Author"
+      description = "Test description"
+      rootPackage = "io.github.test"
+      include("a.b")
+      include("a.c")
+      exclude("a.b.internal")
+    }
+
+    val pub = extension.publish!!
+    assertEquals(listOf("a.b", "a.c"), pub.include)
+    assertEquals(listOf("a.b.internal"), pub.exclude)
+  }
+
+  @Test
   fun `packNuget fails fast with clear message when publish is missing`() {
     assertNull(extension.publish)
 

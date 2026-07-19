@@ -91,6 +91,14 @@ grep -n 'EntryPoint = "your_export_name"' test-library/build/generated/ksp/macos
 Trim snippets to the relevant lines, but never alter a signature, a name, or a string literal to
 make it read better. A snippet that does not match the source is worse than no snippet.
 
+Fence C# snippets with the exact language tag `C#`, never `csharp`. Writerside does not recognize
+the `csharp` tag correctly.
+
+Use Writerside admonitions sparingly when information needs to stand out: `<note>` for important
+constraints or guidance, `<tip>` for optional advice, and `<warning>` for harmful consequences.
+Keep ordinary explanatory text as paragraphs. Inside an admonition, use semantic `<p>`, `<code>`,
+and `<a href="...">` elements. Markdown links do not render reliably inside semantic markup.
+
 ## Page shape
 
 Match the existing pages. They follow:

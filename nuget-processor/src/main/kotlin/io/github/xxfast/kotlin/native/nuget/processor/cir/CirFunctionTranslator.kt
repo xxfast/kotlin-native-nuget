@@ -6,6 +6,9 @@ import com.google.devtools.ksp.symbol.KSClassDeclaration
 import com.google.devtools.ksp.symbol.KSFunctionDeclaration
 import com.google.devtools.ksp.symbol.KSType
 import com.google.devtools.ksp.symbol.Modifier
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnostic
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnosticKind
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnosticSink
 import io.github.xxfast.kotlin.native.nuget.processor.toCName
 import io.github.xxfast.kotlin.native.nuget.processor.toCSharpName
 
@@ -582,7 +585,20 @@ internal fun translateFunction(
       qualifiedReturnType != null && qualifiedReturnType !in exportedTypes
 
   if (isUnknownObjectReturn) {
-    logger.warn("Skipping function '${func.simpleName.asString()}': unsupported return type '$qualifiedReturnType'")
+    ForwardDiagnosticSink.emit(
+      listOf(
+        ForwardDiagnostic(
+          kind = ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_TYPE,
+          symbol = func,
+          declaration = func.simpleName.asString(),
+          reason = "its return type '$qualifiedReturnType' is not in the bridgeable subset " +
+              "(not an exported class/object/enum and not a supported primitive/collection)",
+          hint = "expose a bridgeable wrapper type instead, or add '$qualifiedReturnType' to " +
+              "the export set",
+        ),
+      ),
+      logger,
+    )
     return emptyList()
   }
 

@@ -12,6 +12,12 @@ class NugetProcessorProvider : SymbolProcessorProvider {
       rootNamespace = environment.options["nuget.namespace"] ?: "Interop",
       rootPackage = environment.options["nuget.rootPackage"] ?: "",
       className = environment.options["nuget.className"] ?: "NativeBindings",
+      includePackages = environment.options["nuget.includePackages"]
+        ?.split(",")?.filter { it.isNotBlank() } ?: emptyList(),
+      excludePackages = environment.options["nuget.excludePackages"]
+        ?.split(",")?.filter { it.isNotBlank() } ?: emptyList(),
+      boundPackages = environment.options["nuget.boundPackages"]
+        ?.split(",")?.filter { it.isNotBlank() } ?: emptyList(),
     )
 
     return NugetProcessor(

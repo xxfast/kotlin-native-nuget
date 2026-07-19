@@ -34,18 +34,38 @@ internal object Tier1Harness {
    * to [run] within the same test task share one warm JVM instead of each paying the ~5-6s
    * cold-start cost (verified: a second call in the same worker dropped from ~6s to ~0.6s).
    */
-  fun run(kotlinSource: String, fileName: String = "Fixture.kt"): Tier1Result {
+  fun run(
+    kotlinSource: String,
+    fileName: String = "Fixture.kt",
+    processorOptions: Map<String, String> = emptyMap(),
+  ): Tier1Result = run(mapOf(fileName to kotlinSource), processorOptions)
+
+  /**
+   * Multi-file overload: a Kotlin file may declare only one `package`, so a fixture spanning
+   * several packages (e.g. ADR-063's export-scoping cells) needs several source files in one
+   * compilation unit. [sources] maps file name to file content.
+   */
+  fun run(
+    sources: Map<String, String>,
+    processorOptions: Map<String, String> = emptyMap(),
+  ): Tier1Result {
     val workDir: File = Files.createTempDirectory("nuget-tier1-").toFile()
     try {
-      return runIn(workDir, kotlinSource, fileName)
+      return runIn(workDir, sources, processorOptions)
     } finally {
       workDir.deleteRecursively()
     }
   }
 
-  private fun runIn(workDir: File, kotlinSource: String, fileName: String): Tier1Result {
+  private fun runIn(
+    workDir: File,
+    sources: Map<String, String>,
+    processorOptions: Map<String, String> = emptyMap(),
+  ): Tier1Result {
     val sourceDir: File = workDir.resolve("src").apply { mkdirs() }
-    val fixtureFile: File = sourceDir.resolve(fileName).apply { writeText(kotlinSource) }
+    val fixtureFiles: List<File> = sources.map { (fileName, kotlinSource) ->
+      sourceDir.resolve(fileName).apply { writeText(kotlinSource) }
+    }
 
     val kotlinOutputDir: File = workDir.resolve("ksp-out").apply { mkdirs() }
     val classOutputDir: File = workDir.resolve("ksp-class-out").apply { mkdirs() }
@@ -73,6 +93,7 @@ internal object Tier1Harness {
       // Kotlin 2.4.0 compiler version exactly.
       languageVersion = "2.0"
       apiVersion = "2.0"
+      this.processorOptions = processorOptions
     }.build()
 
     val kspExitCode = KotlinSymbolProcessing(
@@ -111,7 +132,7 @@ internal object Tier1Harness {
     }
 
     val compileMessages = RecordingMessageCollector()
-    compileGenerated(workDir, fixtureFile, generated, compileMessages)
+    compileGenerated(workDir, fixtureFiles, generated, compileMessages)
 
     return Tier1Result(
       kspExitCode = kspExitCode.name,
@@ -125,7 +146,7 @@ internal object Tier1Harness {
 
   private fun compileGenerated(
     workDir: File,
-    fixtureFile: File,
+    fixtureFiles: List<File>,
     generatedCNameExports: String,
     collector: RecordingMessageCollector,
   ) {
@@ -137,7 +158,7 @@ internal object Tier1Harness {
     // `:test-library:compileKotlinMingwX64` compiles the real generated file alongside the rest
     // of the library rather than in isolation.
     val sourceFiles: List<File> = buildList {
-      add(fixtureFile)
+      addAll(fixtureFiles)
       add(compileSourceDir.resolve("CNameExports.kt").apply { writeText(generatedCNameExports) })
       Tier1CinteropStub.files.forEach { (name, content) ->
         add(compileSourceDir.resolve(name).apply { writeText(content) })

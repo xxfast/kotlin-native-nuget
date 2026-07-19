@@ -17,6 +17,9 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallablePla
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallablePlanCatalog
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCirPlanProjection
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCirPropertyProjection
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnostic
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnosticKind
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnosticSink
 import io.github.xxfast.kotlin.native.nuget.processor.forward.planFor
 import io.github.xxfast.kotlin.native.nuget.processor.toCName
 
@@ -89,9 +92,19 @@ internal fun translateClass(
       ctor.parameters.map { it.type }
     }
   if (constructorSignatures.size != constructorSignatures.toSet().size) {
-    logger.error(
-      "Class $name has constructors with identical C# signatures; " +
-          "rename or remove the duplicate (ADR-034).",
+    ForwardDiagnosticSink.emit(
+      listOf(
+        ForwardDiagnostic(
+          kind = ForwardDiagnosticKind.ERROR_CSHARP_SIGNATURE_COLLISION,
+          symbol = cls,
+          declaration = "$name.<init>",
+          reason = "two or more constructors render identical C# parameter types; C# cannot " +
+              "declare two constructors with the same signature (ADR-034)",
+          hint = "rename or remove the duplicate constructor, or change one parameter's type " +
+              "so the rendered C# signatures differ",
+        ),
+      ),
+      logger,
     )
   }
 
@@ -558,10 +571,19 @@ internal fun translateGenericClass(
     }
 
     if (param.variance != Variance.INVARIANT) {
-      logger.warn(
-        "Variance '${param.variance}' on class '${cls.simpleName.asString()}' " +
-            "type parameter '${param.name.asString()}' will be dropped — " +
-            "C# does not support variance on classes"
+      ForwardDiagnosticSink.emit(
+        listOf(
+          ForwardDiagnostic(
+            kind = ForwardDiagnosticKind.INFO_DROPPED_VARIANCE,
+            symbol = cls,
+            declaration = "${cls.simpleName.asString()}<${param.name.asString()}>",
+            reason = "variance '${param.variance}' on this generic class type parameter is " +
+                "dropped; C# does not support variance on classes",
+            hint = "the member still binds; declare the parameter invariant if the dropped " +
+                "variance was load-bearing",
+          ),
+        ),
+        logger,
       )
     }
 
@@ -672,7 +694,21 @@ internal fun translateSealedClass(
               propType !in KOTLIN_TO_CSHARP_RETURN && !isEnumType && !isListType && !isMutableListType && !isMapType && !isMutableMapType && !isSetType && !isMutableSetType && !isLambdaType
 
             if (isReferenceType && qualifiedTypeName != null && qualifiedTypeName !in exportedTypes) {
-              logger.warn("Skipping property '${cls.simpleName.asString()}.${subName}.$propName': unsupported type '$qualifiedTypeName'")
+              ForwardDiagnosticSink.emit(
+                listOf(
+                  ForwardDiagnostic(
+                    kind = ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_TYPE,
+                    symbol = prop,
+                    declaration = "${cls.simpleName.asString()}.$subName.$propName",
+                    reason = "its type '$qualifiedTypeName' is not in the bridgeable subset " +
+                        "(not an exported class/object/enum and not a supported " +
+                        "primitive/collection)",
+                    hint = "expose a bridgeable wrapper type instead, or add " +
+                        "'$qualifiedTypeName' to the export set",
+                  ),
+                ),
+                logger,
+              )
               return@mapNotNull null
             }
 

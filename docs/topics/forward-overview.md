@@ -79,6 +79,41 @@ Kotlin sub-packages map relative to `rootPackage`, and the C# namespace root is 
 
 Every generated declaration lands under its mapped namespace inside the single `Interop.cs` file.
 
+By default every public declaration in the module is bridged, not only those under `rootPackage`.
+`publish { include(...); exclude(...) }` narrows that to an explicit package-prefix allowlist, and
+when `include` is left empty, `rootPackage` itself becomes the default scope. See
+[The nuget {} DSL](nuget-dsl.md) for the full predicate.
+
+## Diagnostics
+
+Not every Kotlin construct can be expressed as C#. When the generator meets one it cannot bridge,
+it names the member and the reason, at the author's own Kotlin source, rather than emitting invalid
+Kotlin or a C# API whose signature lies about its contract. Every diagnostic carries a
+`ForwardDiagnosticKind` whose name encodes its severity:
+
+- **`SKIPPED_*`**: the member is warned about and omitted entirely from the generated C# API.
+  Generation continues. This is the default for a construct the forward direction cannot express
+  (an unsupported type, a `Map`/`Set` parameter, a nullable `Boolean` return, an unsupported
+  generic/suspend combination, a value-class member inherited through interface delegation).
+- **`INFO_*`**: the member still binds, under a documented assumption (for example, `out`/`in`
+  variance on a class type parameter is dropped, but the member still generates).
+- **`ERROR_*`**: generation fails before any C# is written. The only v1 case is two constructors
+  that render an identical C# signature ([ADR-034](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/034-secondary-constructor-exceptions.md)).
+
+A `Map` parameter (see [Collections](collections.md)) is skipped like this:
+
+```
+[nuget:SKIPPED_UNSUPPORTED_INPUT] Skipping Patient.setTags: its COLLECTION type combination is not
+    supported. expose a wrapper taking a List/MutableList (or individual key/value parameters)
+    instead of a Map/Set at this position
+    at Fixture.kt:4
+```
+
+The message names the declaration, the reason, an actionable hint, and, when KSP can resolve it,
+the file and line of the Kotlin declaration that was skipped, something the reverse direction's
+`RirDiagnostic` cannot carry, since it works from compiled metadata rather than source. See each
+forward page's own **Limitations** section for which named diagnostic fires where.
+
 <seealso>
     <category ref="related">
         <a href="classes-and-objects.md">Classes and objects</a>
@@ -90,5 +125,7 @@ Every generated declaration lands under its mapped namespace inside the single `
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/005-object-return-semantics.md">ADR-005: Object return semantics</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/055-forward-abi-contract-check.md">ADR-055: Forward ABI contract check</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/062-forward-callable-plan.md">ADR-062: Forward callable plan</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/063-forward-declaration-level-export-scoping.md">ADR-063: Forward declaration-level export scoping</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/064-forward-unsupported-declaration-diagnostics.md">ADR-064: Forward unsupported-declaration diagnostics</a>
     </category>
 </seealso>

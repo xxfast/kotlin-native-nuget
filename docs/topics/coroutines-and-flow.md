@@ -313,10 +313,18 @@ Hot streams and several `Flow` positions are not yet supported (ROADMAP Phase 6)
 - `suspend fun` returning `Flow<T>` (the outer suspend is untreated separately from a non-suspend `Flow`-returning function)
 - Flow backpressure (bounded `Channel<T>` with explicit resume signaling)
 
+A `suspend inline fun <reified T> Receiver.f(...): Result<T>` extension has no bridge at all: `inline`
+plus `reified` erases at the C ABI, and `suspend` needs a concrete continuation type, so the
+combination has no working route even though `suspend` and a generic type parameter each work on
+their own. It is skipped with a `SKIPPED_UNSUPPORTED_COMBINATION` diagnostic naming the extension,
+rather than the raw `Function1`/`Result` this generated before
+([ADR-064](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/064-forward-unsupported-declaration-diagnostics.md)).
+
 <seealso>
     <category ref="related">
         <a href="lambdas-and-callbacks.md">Lambdas and callbacks</a>
         <a href="exceptions.md">Exceptions</a>
+        <a href="extensions.md">Extensions</a>
     </category>
     <category ref="external">
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/019-suspend-function-mapping.md">ADR-019: Suspend function mapping</a>
@@ -325,5 +333,6 @@ Hot streams and several `Flow` positions are not yet supported (ROADMAP Phase 6)
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/022-cancellation-token-support.md">ADR-022: CancellationToken support</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/025-async-disposable.md">ADR-025: AsyncDisposable</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/026-flow-mapping.md">ADR-026: Flow mapping</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/064-forward-unsupported-declaration-diagnostics.md">ADR-064: Forward unsupported-declaration diagnostics</a>
     </category>
 </seealso>
