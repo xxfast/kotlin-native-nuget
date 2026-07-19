@@ -1,5 +1,6 @@
 package io.github.xxfast.kotlin.native.nuget.processor.tier1
 
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnosticKind
 import kotlin.test.Test
 import kotlin.test.assertTrue
 
@@ -312,24 +313,31 @@ class Tier1CompileCellsTest {
   }
 
   /**
-   * Cell 23 · obs K. Extension function × generic + `inline` + `reified` + `suspend` +
-   * `Result<T>`. `NugetProcessor.kt`'s suspend/generic filter only partitions top-level
-   * `allFunctions`; `extensionFunctions` are never filtered at all, so this shape reaches
-   * `ExtensionFunctionExports.kt` unchanged and fails Kotlin type-checking four different ways at
-   * once (raw `Result<T>`, an unresolved reified `T`, a suspend call outside a coroutine, and
-   * more) — matches BUG-010 from the NYTimes report exactly.
+   * Cell 23 · obs K, migrating to ADR-064's **diagnostic** assertion mode. Extension function ×
+   * generic + `inline` + `reified` + `suspend` + `Result<T>`. `NugetProcessor.kt`'s
+   * suspend/generic filter only partitions top-level `allFunctions`; `extensionFunctions` are
+   * never filtered at all, so this shape reaches `ExtensionFunctionExports.kt` unchanged and
+   * fails Kotlin type-checking four different ways at once (raw `Result<T>`, an unresolved
+   * reified `T`, a suspend call outside a coroutine, and more) — matches BUG-010 from the
+   * NYTimes report exactly.
    *
-   * Per ROADMAP.md ("Forward unsupported-declaration diagnostics", MVP.md P1) this cell's
-   * correct end state is a **named skip**, not working generated code — the same shape of thing
-   * as cell 21 (see [Tier1DiagnosticCellsTest]). It stays a compile-mode assertion here because
-   * the skip mechanism does not exist yet: until it lands, "the generated file compiles" is
-   * still the right positive statement (once diagnostics land, this construct is never emitted
-   * at all, so nothing invalid ever reaches the compiler either).
+   * Per ADR-064 (ROADMAP.md "Forward unsupported-declaration diagnostics", MVP.md P1) this
+   * cell's correct end state is a **named skip with a diagnostic**, the same shape of thing as
+   * cell 21 (see [Tier1DiagnosticCellsTest]). Phase 10 already closed the "no broken source"
+   * half — the planner classifies this shape `Skipped(reason = SUSPEND, droppedFromCSharp =
+   * false)` (a *legacy-route deferral*, silent by design, on the assumption a named legacy route
+   * re-emits it) and `addExtensionFunctionExports` only emits from the plan catalog, so nothing
+   * invalid reaches the compiler today (verified through this same harness). But no legacy route
+   * actually handles *this* combination, so the "deferred, therefore fine" assumption is false
+   * for it specifically, and the callable is dropped with **zero** diagnostic of any kind
+   * (`kspWarnings` is empty) — a silent gap, not yet the honest "skip + named reason" ADR-064
+   * asks for. This test asserts both halves of the fix: the (already-true) absence of broken
+   * source, and the (not-yet-true) `SKIPPED_UNSUPPORTED_COMBINATION` diagnostic.
+   *
+   * Once ADR-064 lands, this cell moves to [Tier1DiagnosticCellsTest] alongside cell 21.
    */
   @Test
-  fun `cell 23 - suspend inline reified extension function returning Result compiles`() {
-    // Phase 10: unplanned specialized/unsupported extensions are skipped rather than emitted
-    // with IntPtr/defaultValueFor fallthrough, so the KSP-generated exports compile cleanly.
+  fun `cell 23 - suspend inline reified extension function returning Result is a named skip`() {
     val result = Tier1Harness.run(
       """
       package tier1.cell23
@@ -342,7 +350,22 @@ class Tier1CompileCellsTest {
 
     assertTrue(
       result.compiledClean,
-      "expected export_patient_chartEntry to compile; got: ${result.compileErrors}",
+      "expected no broken source for chartEntry (already fixed by Phase 10's plan-only " +
+          "extension emitter); got: ${result.compileErrors}",
+    )
+    assertTrue(
+      "export_patient_chartEntry" !in result.generated,
+      "expected chartEntry to be entirely absent from the generated CNameExports.kt (a named " +
+          "skip is never emitted, not even partially); generated=${result.generated}",
+    )
+    assertTrue(
+      result.kspWarnings.any { it.contains(ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_COMBINATION.name) },
+      "expected a SKIPPED_UNSUPPORTED_COMBINATION diagnostic naming Patient.chartEntry as an " +
+          "unbridgeable generic+suspend+inline+reified extension returning Result<T>; today " +
+          "this dropped callable is entirely silent (kspWarnings=${result.kspWarnings}) because " +
+          "the planner's SUSPEND skip reason is droppedFromCSharp=false (a legacy-route " +
+          "deferral), which is wrong for this specific combination since no legacy route " +
+          "handles it",
     )
   }
 

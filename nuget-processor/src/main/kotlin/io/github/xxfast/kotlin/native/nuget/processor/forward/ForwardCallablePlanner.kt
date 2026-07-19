@@ -4,9 +4,11 @@ import com.google.devtools.ksp.getVisibility
 import com.google.devtools.ksp.getConstructors
 import com.google.devtools.ksp.symbol.KSClassDeclaration
 import com.google.devtools.ksp.symbol.KSFunctionDeclaration
+import com.google.devtools.ksp.symbol.KSNode
 import com.google.devtools.ksp.symbol.KSPropertyDeclaration
 import com.google.devtools.ksp.symbol.KSType
 import com.google.devtools.ksp.symbol.Modifier
+import com.google.devtools.ksp.symbol.Origin
 import com.google.devtools.ksp.symbol.Visibility
 import io.github.xxfast.kotlin.native.nuget.processor.exports.findInterfaceBridgePairs
 import io.github.xxfast.kotlin.native.nuget.processor.exports.findStoredCallbackPairs
@@ -46,6 +48,17 @@ internal enum class ForwardPlanSkipReason(val droppedFromCSharp: Boolean) {
   STRING(droppedFromCSharp = true),
   UNSUPPORTED(droppedFromCSharp = true),
   VALUE_CLASS(droppedFromCSharp = true),
+
+  // ADR-064: genuine drops with their own named diagnostic kind, not the generic "type
+  // combination is not supported" bucket the reasons above still render through.
+  /** Cell 23 / BUG-010: a generic + suspend + inline + reified extension returning `Result<T>` —
+   *  the combination has no working legacy route, even though suspend and generic each do
+   *  individually. */
+  UNSUPPORTED_COMBINATION(droppedFromCSharp = true),
+
+  /** ROADMAP line 77: a value-class member inherited via interface delegation (e.g.
+   *  `CharSequence by value`), not declared by the value class itself. */
+  INHERITED_MEMBER(droppedFromCSharp = true),
 }
 
 internal sealed interface ForwardCallableCatalogEntry {
@@ -60,6 +73,10 @@ internal sealed interface ForwardCallableCatalogEntry {
   data class Skipped(
     override val symbol: String,
     val reason: ForwardPlanSkipReason,
+    // ADR-064: the originating declaration, so the diagnostic sink can point KSP/Gradle at the
+    // author's own Kotlin source rather than at generated code. Null only where no single KSNode
+    // cleanly represents the skip.
+    val node: KSNode? = null,
   ) : ForwardCallableCatalogEntry
 }
 
@@ -230,6 +247,22 @@ internal class ForwardCallablePlanner(
     .filter { it.simpleName.asString() != underlyingPropName }
     .map { prop ->
       val name: String = prop.simpleName.asString()
+      // ADR-064 (ROADMAP line 77): a property whose declaration site is not the value class
+      // itself — inherited via interface delegation, e.g. `CharSequence by value`'s `length` —
+      // is a v1 product-scope skip, not a silently-bridged member. `parentDeclaration != cls`
+      // alone is not enough: Kotlin attributes a delegate's *own* synthesized forwarders (e.g.
+      // `length`) to the delegating class itself (`Origin.SYNTHETIC`, `parentDeclaration ==
+      // cls`), so only a genuinely default (JDK) interface member like `CharSequence.isEmpty()`
+      // would be caught by `parentDeclaration` alone (verified through the Tier 1 harness:
+      // `length`/`get`/`subSequence` are `SYNTHETIC` with `parentDeclaration == cls`;
+      // `isEmpty`/`chars`/`codePoints` are `JAVA_LIB` with `parentDeclaration` pointing at
+      // `kotlin.CharSequence`). `Origin.KOTLIN` is what a member the author actually wrote in
+      // this class body carries.
+      if (prop.origin != Origin.KOTLIN || prop.parentDeclaration != cls) {
+        return@map ForwardCallableCatalogEntry.Skipped(
+          "$owner.$name", ForwardPlanSkipReason.INHERITED_MEMBER, node = prop,
+        )
+      }
       planOrSkip(
         symbol = "$owner.$name",
         publicName = name.replaceFirstChar { it.uppercase() },
@@ -242,6 +275,7 @@ internal class ForwardCallablePlanner(
         includeError = false,
         // Property getter: export name contains `_get_`; emitter uses bare member access.
         valueClassProperty = true,
+        node = prop,
       )
     }
     .toList()
@@ -262,13 +296,25 @@ internal class ForwardCallablePlanner(
       .filter { it.simpleName.asString() !in excluded }
       .map { method ->
         val name: String = method.simpleName.asString()
+        // ADR-064 (ROADMAP line 77): a method whose declaration site is not the value class
+        // itself — inherited via interface delegation, e.g. `CharSequence by value`'s `get` —
+        // is a v1 product-scope skip, not a silently-bridged member. See the property filter
+        // above for why `Origin.KOTLIN` (not `parentDeclaration` alone) is the right signal:
+        // `get`/`subSequence` are `SYNTHETIC` delegation forwarders Kotlin attributes to this
+        // very class, while `isEmpty`/`chars`/`codePoints` are `JAVA_LIB` default members of
+        // `kotlin.CharSequence` (verified through the Tier 1 harness).
+        if (method.origin != Origin.KOTLIN || method.parentDeclaration != cls) {
+          return@map ForwardCallableCatalogEntry.Skipped(
+            "$owner.$name", ForwardPlanSkipReason.INHERITED_MEMBER, node = method,
+          )
+        }
         val structuralReason: ForwardPlanSkipReason? = when {
           method.modifiers.contains(Modifier.SUSPEND) -> ForwardPlanSkipReason.SUSPEND
           method.typeParameters.isNotEmpty() -> ForwardPlanSkipReason.GENERIC
           else -> null
         }
         if (structuralReason != null) {
-          ForwardCallableCatalogEntry.Skipped("$owner.$name", structuralReason)
+          ForwardCallableCatalogEntry.Skipped("$owner.$name", structuralReason, node = method)
         } else {
           planOrSkip(
             symbol = "$owner.$name",
@@ -282,6 +328,7 @@ internal class ForwardCallablePlanner(
             origin = ForwardCallableOrigin.VALUE_CLASS,
             target = owner,
             includeError = false,
+            node = method,
           )
         }
       }
@@ -323,7 +370,7 @@ internal class ForwardCallablePlanner(
         else -> null
       }
       if (structuralReason != null) {
-        ForwardCallableCatalogEntry.Skipped(symbol, structuralReason)
+        ForwardCallableCatalogEntry.Skipped(symbol, structuralReason, node = method)
       } else {
         planOrSkip(
           symbol = symbol,
@@ -335,6 +382,7 @@ internal class ForwardCallablePlanner(
           },
           result = method.returnType?.resolve()?.let(classifier::classify) ?: BridgeType.Unit,
           origin = ForwardCallableOrigin.CLASS,
+          node = method,
         )
       }
     }
@@ -378,6 +426,7 @@ internal class ForwardCallablePlanner(
             },
             result = result,
             origin = ForwardCallableOrigin.COPY,
+            node = primary,
           )
         )
       }
@@ -402,6 +451,7 @@ internal class ForwardCallablePlanner(
     result = result,
     origin = ForwardCallableOrigin.CONSTRUCTOR,
     target = owner,
+    node = constructor,
   )
 
   private fun topLevelEntry(function: KSFunctionDeclaration): ForwardCallableCatalogEntry = staticEntry(
@@ -467,7 +517,9 @@ internal class ForwardCallablePlanner(
       function.typeParameters.isNotEmpty() -> ForwardPlanSkipReason.GENERIC
       else -> null
     }
-    if (structuralReason != null) return ForwardCallableCatalogEntry.Skipped(symbol, structuralReason)
+    if (structuralReason != null) {
+      return ForwardCallableCatalogEntry.Skipped(symbol, structuralReason, node = function)
+    }
     val result: BridgeType = function.returnType?.resolve()?.let(classifier::classify) ?: BridgeType.Unit
     val parameters: List<Pair<String, BridgeType>> = function.parameters.map { parameter ->
       (parameter.name?.asString() ?: "_") to classifier.classify(parameter.type.resolve())
@@ -483,6 +535,7 @@ internal class ForwardCallablePlanner(
         exportName = exportName,
         parameters = parameters,
         result = result,
+        node = function,
       )
     }
     return planOrSkip(
@@ -494,6 +547,7 @@ internal class ForwardCallablePlanner(
       result = result,
       origin = origin,
       target = target,
+      node = function,
     )
   }
 
@@ -508,13 +562,16 @@ internal class ForwardCallablePlanner(
     exportName: String,
     parameters: List<Pair<String, BridgeType>>,
     result: BridgeType.Nullable,
+    node: KSNode? = null,
   ): ForwardCallableCatalogEntry {
     val primitive: BridgeType.Primitive = result.type as BridgeType.Primitive
     val ineligible: BridgeType? = parameters.map { it.second }.firstOrNull { type ->
       type.inputSkipReason() != null
     }
     if (ineligible != null) {
-      return ForwardCallableCatalogEntry.Skipped(symbol, requireNotNull(ineligible.inputSkipReason()))
+      return ForwardCallableCatalogEntry.Skipped(
+        symbol, requireNotNull(ineligible.inputSkipReason()), node = node,
+      )
     }
 
     val error: ForwardAbiParameter = errorParameter()
@@ -574,12 +631,29 @@ internal class ForwardCallablePlanner(
     val receiverType: BridgeType = classifier.classify(receiver)
     val functionName: String = function.simpleName.asString()
     val symbol: String = "${function.packageName.asString()}.$functionName"
+
+    // ADR-064 cell 23 / BUG-010: a generic + suspend + inline + reified extension returning
+    // Result<T> has no legacy route at all — inline+reified erases at the C ABI and suspend
+    // needs a concrete continuation type — so it must be recognized as a genuine drop *before*
+    // the general SUSPEND/GENERIC structural checks below classify it as a silent legacy-route
+    // deferral. That classification is correct for an *ordinary* suspend or generic extension
+    // (each has its own working legacy route individually); it is wrong for this specific
+    // combination, since nothing re-emits it. Gated narrowly (suspend + inline + a reified type
+    // parameter + a `kotlin.Result` return) so ordinary suspend/generic extensions are unaffected.
+    if (function.isUnsupportedSuspendGenericResultExtension()) {
+      return ForwardCallableCatalogEntry.Skipped(
+        symbol, ForwardPlanSkipReason.UNSUPPORTED_COMBINATION, node = function,
+      )
+    }
+
     val structuralReason: ForwardPlanSkipReason? = when {
       function.modifiers.contains(Modifier.SUSPEND) -> ForwardPlanSkipReason.SUSPEND
       function.typeParameters.isNotEmpty() -> ForwardPlanSkipReason.GENERIC
       else -> null
     }
-    if (structuralReason != null) return ForwardCallableCatalogEntry.Skipped(symbol, structuralReason)
+    if (structuralReason != null) {
+      return ForwardCallableCatalogEntry.Skipped(symbol, structuralReason, node = function)
+    }
 
     return planOrSkip(
       symbol = symbol,
@@ -591,7 +665,20 @@ internal class ForwardCallablePlanner(
       },
       result = function.returnType?.resolve()?.let(classifier::classify) ?: BridgeType.Unit,
       origin = ForwardCallableOrigin.EXTENSION,
+      node = function,
     )
+  }
+
+  /**
+   * ADR-064 cell 23 / BUG-010: the one suspend+generic extension shape with no working legacy
+   * route (`suspend inline fun <reified T> Receiver.get(...): Result<T>`, NYTimes-KMP BUG-010).
+   */
+  private fun KSFunctionDeclaration.isUnsupportedSuspendGenericResultExtension(): Boolean {
+    if (!modifiers.contains(Modifier.SUSPEND)) return false
+    if (!modifiers.contains(Modifier.INLINE)) return false
+    if (typeParameters.none { it.isReified }) return false
+    val returnDeclaration: String? = returnType?.resolve()?.declaration?.qualifiedName?.asString()
+    return returnDeclaration == "kotlin.Result"
   }
 
   private fun planOrSkip(
@@ -606,6 +693,7 @@ internal class ForwardCallablePlanner(
     invocationReceiver: String? = null,
     includeError: Boolean = true,
     valueClassProperty: Boolean = false,
+    node: KSNode? = null,
   ): ForwardCallableCatalogEntry {
     val inputTypes: List<BridgeType> = buildList {
       when (receiver) {
@@ -618,12 +706,16 @@ internal class ForwardCallablePlanner(
     val ineligible: BridgeType? = inputTypes
       .firstOrNull { type -> type.inputSkipReason() != null }
     if (ineligible != null) {
-      return ForwardCallableCatalogEntry.Skipped(symbol, requireNotNull(ineligible.inputSkipReason()))
+      return ForwardCallableCatalogEntry.Skipped(
+        symbol, requireNotNull(ineligible.inputSkipReason()), node = node,
+      )
     }
 
     val resultShape: ForwardResultShape? = result.shapeOrNull()
     if (resultShape == null) {
-      return ForwardCallableCatalogEntry.Skipped(symbol, requireNotNull(result.skipReason()))
+      return ForwardCallableCatalogEntry.Skipped(
+        symbol, requireNotNull(result.skipReason()), node = node,
+      )
     }
 
     val error: ForwardAbiParameter? = if (includeError) errorParameter() else null

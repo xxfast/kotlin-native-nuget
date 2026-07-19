@@ -84,6 +84,10 @@ class ForwardSkippedCallableWarningTest {
         ForwardPlanSkipReason.STRING,
         ForwardPlanSkipReason.UNSUPPORTED,
         ForwardPlanSkipReason.VALUE_CLASS,
+        // ADR-064: genuine drops with their own named diagnostic kind (cell 23's combination,
+        // and a value-class member inherited via interface delegation).
+        ForwardPlanSkipReason.UNSUPPORTED_COMBINATION,
+        ForwardPlanSkipReason.INHERITED_MEMBER,
       ),
       dropped,
     )

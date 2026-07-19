@@ -261,7 +261,7 @@ public void Patient_Labels_ReturnsNameSet()
 ## Limitations
 
 - `Sequence<T>` is not bridgeable. `Cat.unsupported: Sequence<String>` in the sample library is deliberately left out of the generated `Interop.cs` (no eager-copy story for a lazy sequence).
-- `Map`/`Set` (and mutable variants) as **method parameters** are intentionally skipped: returns and properties work, but there is no create-handle helper for the C#→Kotlin direction yet. Tracked in [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md) Phase 4 ([ADR-062](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/062-forward-callable-plan.md)).
+- `Map`/`Set` (and mutable variants) as **method parameters** are not planned: returns and properties work, but there is no create-handle helper for the C#→Kotlin direction yet. The callable is omitted from the generated C# and a `SKIPPED_UNSUPPORTED_INPUT` diagnostic names it, instead of the silent drop this used to be. Tracked in [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md) Phase 4 ([ADR-062](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/062-forward-callable-plan.md), [ADR-064](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/064-forward-unsupported-declaration-diagnostics.md)).
 
 <seealso>
     <category ref="related">
@@ -272,5 +272,6 @@ public void Patient_Labels_ReturnsNameSet()
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/011-collection-type-mapping.md">ADR-011: Collection type mapping</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/061-method-return-marshalling.md">ADR-061: Method return marshalling</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/062-forward-callable-plan.md">ADR-062: Forward callable plan</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/064-forward-unsupported-declaration-diagnostics.md">ADR-064: Forward unsupported-declaration diagnostics</a>
     </category>
 </seealso>

@@ -270,9 +270,11 @@ public void Patient_Tag_MarshalsCharParameter()
   top-level returns, reverse reads the bound assembly's `NullableAttribute` instead (see
   [Objects and handles](objects-and-handles.md)). The two mechanisms are unrelated; a reverse-bound
   `string?` never goes through a `has_value`/`value` pair.
-- Nullable `Boolean` method returns remain unplanned under the shared callable plan and are skipped
-  rather than fallthrough-emitted. Tracked in [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md)
-  Phase 4 ([ADR-062](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/062-forward-callable-plan.md)).
+- Nullable `Boolean` method returns remain unplanned under the shared callable plan: the callable is
+  omitted and a `SKIPPED_UNSUPPORTED_RETURN` diagnostic names it, rather than the fallthrough-emit
+  this used to be. Tracked in [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md)
+  Phase 4 ([ADR-062](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/062-forward-callable-plan.md),
+  [ADR-064](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/064-forward-unsupported-declaration-diagnostics.md)).
 
 <seealso>
     <category ref="related">
@@ -284,5 +286,6 @@ public void Patient_Tag_MarshalsCharParameter()
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/024-sync-exception-propagation.md">ADR-024: Synchronous exception propagation</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/053-nullable-reference-types-in-kotlin.md">ADR-053: Nullable reference types in Kotlin</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/062-forward-callable-plan.md">ADR-062: Forward callable plan</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/064-forward-unsupported-declaration-diagnostics.md">ADR-064: Forward unsupported-declaration diagnostics</a>
     </category>
 </seealso>

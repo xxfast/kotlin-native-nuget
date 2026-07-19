@@ -268,8 +268,10 @@ Enum, `Char`, and `Map`/`Set` method returns are covered under the shared plan; 
 
 ## Limitations
 
-- Nullable `Boolean` method returns remain unplanned and are skipped rather than fallthrough-emitted
-  ([ADR-062](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/062-forward-callable-plan.md)).
+- Nullable `Boolean` method returns remain unplanned: the callable is omitted and a
+  `SKIPPED_UNSUPPORTED_RETURN` diagnostic names it, rather than the fallthrough-emit this used to be
+  ([ADR-062](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/062-forward-callable-plan.md),
+  [ADR-064](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/064-forward-unsupported-declaration-diagnostics.md)).
 - `Map`/`Set` **inputs** (parameters) are not planned yet; see [Collections](collections.md).
 
 <seealso>
@@ -284,5 +286,6 @@ Enum, `Char`, and `Map`/`Set` method returns are covered under the shared plan; 
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/005-object-return-semantics.md">ADR-005: Object return semantics</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/061-method-return-marshalling.md">ADR-061: Method return marshalling</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/062-forward-callable-plan.md">ADR-062: Forward callable plan</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/064-forward-unsupported-declaration-diagnostics.md">ADR-064: Forward unsupported-declaration diagnostics</a>
     </category>
 </seealso>

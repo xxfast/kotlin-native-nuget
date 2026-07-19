@@ -260,6 +260,14 @@ public void DefaultScores_ReturnsReadOnlyDictionaryOfStringInt()
 }
 ```
 
+## Limitations
+
+- Variance (`out`/`in`) declared on a **generic class**'s own type parameter (as opposed to an
+  interface's, shown above) is dropped: C# does not support variance on classes. The member still
+  binds; the generator notes it with an `INFO_DROPPED_VARIANCE` diagnostic rather than silently
+  ignoring the annotation
+  ([ADR-064](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/064-forward-unsupported-declaration-diagnostics.md)).
+
 <seealso>
     <category ref="related">
         <a href="collections.md">Collections</a>
@@ -271,5 +279,6 @@ public void DefaultScores_ReturnsReadOnlyDictionaryOfStringInt()
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/016-generic-variance-mapping.md">ADR-016: Generic variance mapping</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/017-inline-function-mapping.md">ADR-017: Inline function mapping</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/018-type-alias-mapping.md">ADR-018: Type alias mapping</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/064-forward-unsupported-declaration-diagnostics.md">ADR-064: Forward unsupported-declaration diagnostics</a>
     </category>
 </seealso>
