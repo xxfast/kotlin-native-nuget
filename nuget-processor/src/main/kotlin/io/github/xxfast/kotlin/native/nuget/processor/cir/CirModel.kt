@@ -188,6 +188,9 @@ data class CirErrorHelper(
 
 data class CirFlowHelper(
   val libraryName: String,
+  // ADR-065: also emit the KotlinStateFlow<T> subclass (implies needsFlow -- set by the tracker
+  // whenever any StateFlow member is planned).
+  val includesStateFlow: Boolean = false,
 ) : CirDeclaration
 
 data class CirSubscriptionHelper(
@@ -298,7 +301,14 @@ data class CirMethod(
   val asyncReturnType: String = "",
   val isSyncErrorCheckEnabled: Boolean = false,
   val isFlow: Boolean = false,
+  // ADR-065: true when this is a StateFlow-returning method. Reuses isFlow's whole legacy route
+  // (the _collect export + KotlinFlow substrate) and additionally renders a KotlinStateFlow<T>
+  // wrapper plus a synchronous `_value` native import (see [stateFlowValueNativeName]).
+  val isStateFlow: Boolean = false,
   val flowElementType: String = "",
+  // The native method name (e.g. "Native_MoodReportValue") of the sibling `_value` DllImport
+  // this StateFlow method's companion-member list also carries. Empty unless [isStateFlow].
+  val stateFlowValueNativeName: String = "",
   // Extra raw native (DllImport) parameter declarations spliced in between the method's own
   // parameters and the trailing `out IntPtr error` — e.g. `out int value` for a nullable-
   // primitive return's out-parameter (ADR-061 §5). Empty for every other shape.
@@ -330,6 +340,10 @@ data class CirProperty(
   val extraNatives: List<CirExtraNative> = emptyList(),
   val isStatic: Boolean = false,
   val isFlow: Boolean = false,
+  // ADR-065: true when this is a StateFlow (or read-only MutableStateFlow view) property. Reuses
+  // isFlow's whole legacy route (the _collect export + KotlinFlow substrate) and additionally
+  // renders a KotlinStateFlow<T> wrapper plus a synchronous `_value` native import.
+  val isStateFlow: Boolean = false,
   val flowElementType: String = "",
   val hasSyncErrorOut: Boolean = false,
 ) : CirMember

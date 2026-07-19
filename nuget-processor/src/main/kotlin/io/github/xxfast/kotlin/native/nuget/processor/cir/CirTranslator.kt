@@ -317,7 +317,9 @@ internal fun translate(
     if (tracker.needsAsync) helpers.add(CirScopeHelper(context.libraryName))
     if (tracker.needsAsync) helpers.add(CirJobHelper(context.libraryName))
     helpers.add(CirErrorHelper(context.libraryName))
-    if (tracker.needsFlow) helpers.add(CirFlowHelper(context.libraryName))
+    if (tracker.needsFlow) {
+      helpers.add(CirFlowHelper(context.libraryName, includesStateFlow = tracker.needsStateFlow))
+    }
     if (tracker.callbackDelegates.isNotEmpty()) {
       helpers.add(CirCallbackDelegateHelper(tracker.callbackDelegates.distinctBy { it.name }))
     }

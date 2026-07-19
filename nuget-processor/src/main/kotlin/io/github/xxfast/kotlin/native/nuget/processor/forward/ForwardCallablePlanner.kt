@@ -1070,6 +1070,10 @@ internal class ForwardCallablePlanner(
     is BridgeType.ObjectHandle -> ForwardPlanSkipReason.HANDLE
     is BridgeType.ValueClass -> ForwardPlanSkipReason.VALUE_CLASS
     is BridgeType.SpecializedProtocol -> when {
+      // ADR-065: StateFlow shares the plain-Flow legacy route (both are named legacy exports in
+      // exports/ClassExports.kt + cir/CirFlowRenderer.kt); it is a distinct SpecializedProtocol
+      // name only so the classifier never confuses it with plain Flow (ADR-065 detection order).
+      name.startsWith("state flow ") -> ForwardPlanSkipReason.FLOW_PROTOCOL
       name.startsWith("flow ") -> ForwardPlanSkipReason.FLOW_PROTOCOL
       name.startsWith("suspend lambda ") -> ForwardPlanSkipReason.SUSPEND_CALLBACK_PROTOCOL
       name.startsWith("lambda ") || name.startsWith("interface bridge ") -> ForwardPlanSkipReason.CALLBACK_PROTOCOL

@@ -9,9 +9,11 @@ import com.google.devtools.ksp.symbol.KSPropertyDeclaration
 import com.google.devtools.ksp.symbol.KSType
 import com.google.devtools.ksp.symbol.Modifier
 import com.google.devtools.ksp.symbol.Visibility
+import com.squareup.kotlinpoet.ClassName
 import com.squareup.kotlinpoet.FileSpec
 import com.squareup.kotlinpoet.FunSpec
 import io.github.xxfast.kotlin.native.nuget.processor.cir.LAMBDA_TYPES
+import io.github.xxfast.kotlin.native.nuget.processor.cir.STATE_FLOW_TYPES
 import io.github.xxfast.kotlin.native.nuget.processor.cir.SUSPEND_LAMBDA_TYPES
 import io.github.xxfast.kotlin.native.nuget.processor.cir.expandAliases
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallablePlan
@@ -107,7 +109,12 @@ internal fun FileSpec.Builder.addClassExports(
       )
       return@forEach
     }
-    if (propType != "kotlinx.coroutines.flow.Flow") return@forEach
+    // ADR-065: StateFlow (and the read-only MutableStateFlow view) is checked before/alongside
+    // plain Flow. The `_collect` export is byte-for-byte the same shape for both (StateFlow's
+    // `collect` is inherited from Flow); StateFlow additionally gets a synchronous `_value` export.
+    val isStateFlowProperty: Boolean = propType in STATE_FLOW_TYPES
+    val isFlowProperty: Boolean = propType == "kotlinx.coroutines.flow.Flow"
+    if (!isFlowProperty && !isStateFlowProperty) return@forEach
 
     val flowElementType: KSType? = propTypeResolved.arguments.firstOrNull()?.type?.resolve()
     val flowElementQualified: String =
@@ -126,6 +133,20 @@ internal fun FileSpec.Builder.addClassExports(
         .addCode(buildFlowCollectBody(qualifiedName, propName, flowElementQualified))
         .build()
     )
+
+    if (isStateFlowProperty) {
+      // ADR-065: synchronous `_value` export -- boxes `stateFlow.value as Any` into a StableRef,
+      // structurally identical to a single onNext emission. No errorOut: StateFlow.value cannot
+      // throw (a deliberate narrowing of ADR-030's wrap-all-property-getters policy).
+      addFunction(
+        FunSpec.builder("export_${prefix}_get_${propName}_value")
+          .addAnnotation(cNameAnnotation("${prefix}_get_${propName}_value"))
+          .addParameter("handle", cOpaquePointer)
+          .returns(cOpaquePointer)
+          .addCode(buildStateFlowValuePropertyBody(qualifiedName, propName))
+          .build()
+      )
+    }
   }
 
   val allRegularMethods: List<KSFunctionDeclaration> = cls.getAllFunctions()
@@ -147,16 +168,18 @@ internal fun FileSpec.Builder.addClassExports(
     }
     .toList()
 
+  // ADR-065: StateFlow-returning methods route through the same `_collect` shape as plain-Flow
+  // methods, plus a sibling synchronous `_value` export (see the flowMethods.forEach loop below).
   val flowMethods: List<KSFunctionDeclaration> = allRegularMethods.filter { method ->
     val returnQualified: String? = method.returnType?.resolve()
       ?.expandAliases()?.declaration?.qualifiedName?.asString()
-    returnQualified == "kotlinx.coroutines.flow.Flow"
+    returnQualified == "kotlinx.coroutines.flow.Flow" || returnQualified in STATE_FLOW_TYPES
   }
 
   val allNonFlowMethods: List<KSFunctionDeclaration> = allRegularMethods.filter { method ->
     val returnQualified: String? = method.returnType?.resolve()
       ?.expandAliases()?.declaration?.qualifiedName?.asString()
-    returnQualified != "kotlinx.coroutines.flow.Flow"
+    returnQualified != "kotlinx.coroutines.flow.Flow" && returnQualified !in STATE_FLOW_TYPES
   }
 
   val (lambdaParamMethods, methods) = allNonFlowMethods.partition { method ->
@@ -201,6 +224,8 @@ internal fun FileSpec.Builder.addClassExports(
     val methodName: String = method.simpleName.asString()
     val cname: String = toCName(methodName)
     val returnType: KSType? = method.returnType?.resolve()?.expandAliases()
+    val returnQualified: String? = returnType?.declaration?.qualifiedName?.asString()
+    val isStateFlowMethod: Boolean = returnQualified in STATE_FLOW_TYPES
     val flowElementType: KSType? = returnType?.arguments?.firstOrNull()?.type?.resolve()
     val flowElementQualified: String =
       flowElementType?.declaration?.qualifiedName?.asString() ?: "kotlin.Any"
@@ -214,15 +239,16 @@ internal fun FileSpec.Builder.addClassExports(
       .addParameter("handle", cOpaquePointer)
       .addParameter("scopeHandle", cOpaquePointer)
 
-    method.parameters.forEach { param ->
-      val resolved: KSType = param.type.resolve().expandAliases()
-      val type: String = resolved.declaration.qualifiedName?.asString()
-        ?: resolved.declaration.simpleName.asString()
-      builder.addParameter(
-        param.name?.asString() ?: "_",
-        com.squareup.kotlinpoet.ClassName.bestGuess(type),
-      )
+    fun FunSpec.Builder.addFlowParameters() {
+      method.parameters.forEach { param ->
+        val resolved: KSType = param.type.resolve().expandAliases()
+        val type: String = resolved.declaration.qualifiedName?.asString()
+          ?: resolved.declaration.simpleName.asString()
+        addParameter(param.name?.asString() ?: "_", ClassName.bestGuess(type))
+      }
     }
+
+    builder.addFlowParameters()
 
     builder
       .addParameter("onNextPtr", cOpaquePointer)
@@ -237,6 +263,23 @@ internal fun FileSpec.Builder.addClassExports(
       )
 
     addFunction(builder.build())
+
+    if (isStateFlowMethod) {
+      // ADR-065: sibling synchronous `_value` export -- handle + the method's own parameters,
+      // no scope/callbacks/errorOut (StateFlow.value cannot throw).
+      val valueBuilder: FunSpec.Builder = FunSpec
+        .builder("export_${prefix}_${cname}_value")
+        .addAnnotation(cNameAnnotation("${prefix}_${cname}_value"))
+        .addParameter("handle", cOpaquePointer)
+
+      valueBuilder.addFlowParameters()
+
+      valueBuilder
+        .returns(cOpaquePointer)
+        .addCode(buildStateFlowValueMethodBody(qualifiedName, methodName, paramCall))
+
+      addFunction(valueBuilder.build())
+    }
   }
 
   if (cls.modifiers.contains(Modifier.DATA)) {
@@ -384,4 +427,23 @@ private fun buildFlowMethodCollectBody(
   appendLine("  }")
   appendLine("}")
   append("return StableRef.create(job).asCPointer()")
+}
+
+// ADR-065: the `_value` export body -- boxes `stateFlow.value as Any` into a StableRef, byte-for-
+// byte the same shape as a single onNext emission above. No errorOut: StateFlow.value cannot throw.
+private fun buildStateFlowValuePropertyBody(
+  qualifiedName: String,
+  propName: String,
+): String = buildString {
+  appendLine("val obj = handle.asStableRef<$qualifiedName>().get()")
+  append("return StableRef.create(obj.$propName.value as Any).asCPointer()")
+}
+
+private fun buildStateFlowValueMethodBody(
+  qualifiedName: String,
+  methodName: String,
+  paramCall: String,
+): String = buildString {
+  appendLine("val obj = handle.asStableRef<$qualifiedName>().get()")
+  append("return StableRef.create(obj.$methodName($paramCall).value as Any).asCPointer()")
 }

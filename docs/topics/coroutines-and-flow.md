@@ -10,6 +10,7 @@ Kotlin coroutines map onto .NET's own async model: `suspend fun` becomes `async`
 | coroutine cancellation | `CancellationToken` | [ADR-022](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/022-cancellation-token-support.md) |
 | in-flight async drain | `IAsyncDisposable` | graceful drain, [ADR-025](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/025-async-disposable.md) |
 | `Flow<T>` | `IAsyncEnumerable<T>` | cold streams, [ADR-026](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/026-flow-mapping.md) |
+| `StateFlow<T>` / `MutableStateFlow<T>` | `KotlinStateFlow<T>` | hot, always-current-value; `.Value` + `IAsyncEnumerable<T>`, [ADR-065](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/065-stateflow-mapping.md) |
 
 ## `suspend fun`
 
@@ -301,12 +302,131 @@ public async Task Flow_WithCancellation_ExitsCleanlyAfterFirstItem()
 }
 ```
 
+## `StateFlow<T>`
+
+`StateFlow<T>` is the hot, conflated, always-current-value stream: it always has a `value` readable
+synchronously, replays that current value to every new collector, and conflates intermediate updates.
+From `CatMoodTracker.kt`:
+
+```kotlin
+class CatMoodTracker(private val catName: String) {
+  private val _energyLevel: MutableStateFlow<Int> = MutableStateFlow(100)
+  val energyLevel: StateFlow<Int> = _energyLevel.asStateFlow()
+
+  private val _mood: MutableStateFlow<String> = MutableStateFlow("sleepy")
+  val mood: StateFlow<String> = _mood.asStateFlow()
+
+  private val _playmate: MutableStateFlow<Cat> = MutableStateFlow(Cat(catName))
+  val playmate: StateFlow<Cat> = _playmate.asStateFlow()
+
+  fun moodReport(): StateFlow<String> = mood
+
+  fun bumpEnergy(amount: Int) {
+    _energyLevel.value += amount
+  }
+
+  fun setMood(newMood: String) {
+    _mood.value = newMood
+  }
+}
+```
+
+A `StateFlow<T>` (or `MutableStateFlow<T>`, bound as a read-only view) property or non-suspend
+function return becomes a `KotlinStateFlow<T> : KotlinFlow<T>`. It reuses `KotlinFlow<T>`'s
+`_collect` export and enumerator unchanged, and adds a synchronous `T Value { get; }` backed by a
+second, dedicated `_value` export:
+
+```C#
+public KotlinStateFlow<int> EnergyLevel
+{
+    get
+    {
+        if (_handle == IntPtr.Zero)
+            throw new ObjectDisposedException(nameof(CatMoodTracker));
+        return new KotlinStateFlow<int>((onNext, onComplete, onError, userData) =>
+            Native_GetEnergyLevelCollect(_handle, GetOrCreateScope(), onNext, onComplete, onError, userData),
+            () => Native_GetEnergyLevelValue(_handle));
+    }
+}
+```
+
+`KotlinStateFlow<T>` itself is generated once, alongside `KotlinFlow<T>`:
+
+```C#
+public class KotlinStateFlow<T> : KotlinFlow<T>
+{
+    private readonly Func<IntPtr> _readValue;
+
+    internal KotlinStateFlow(NugetFlowCollectDelegate startCollect, Func<IntPtr> readValue)
+        : base(startCollect)
+    {
+        _readValue = readValue;
+    }
+
+    public T Value => NugetMarshal.FromHandle<T>(_readValue());
+}
+```
+
+Using it, from `IntegrationTests/StateFlowTests.cs`:
+
+```C#
+[Fact]
+public void StateFlowProperty_IntType_ValueReturnsCurrentValueSynchronously_OreoStartsFullOfBeans()
+{
+    // Oreo starts at full energy -- no awaiting required to find out how zoomy he is
+    using var tracker = new CatMoodTracker("Oreo");
+    int current = tracker.EnergyLevel.Value;
+    Assert.Equal(100, current);
+}
+
+[Fact]
+public async Task StateFlowProperty_AwaitForeach_ReplaysCurrentValueAsFirstElement_OreosEnergyReadingStartsCurrent()
+{
+    // A brand-new subscriber immediately sees Oreo's CURRENT energy level, replay-1 semantics
+    using var tracker = new CatMoodTracker("Oreo");
+    var seen = new List<int>();
+    var cts = new CancellationTokenSource();
+    await foreach (var level in tracker.EnergyLevel.WithCancellation(cts.Token))
+    {
+        seen.Add(level);
+        cts.Cancel(); // StateFlow never completes on its own -- must bound with cancellation
+    }
+    Assert.Equal(100, seen[0]);
+}
+
+[Fact]
+public void StateFlowProperty_ReturnsKotlinStateFlow_IsAKotlinFlow_UpcastsLikeKotlinsOwn()
+{
+    // KotlinStateFlow<T> IS-A KotlinFlow<T> / IAsyncEnumerable<T> -- mirrors Kotlin's StateFlow : Flow
+    using var tracker = new CatMoodTracker("Oreo");
+    IAsyncEnumerable<int> asAsyncEnumerable = tracker.EnergyLevel;
+    KotlinFlow<int> asKotlinFlow = tracker.EnergyLevel;
+    Assert.NotNull(asAsyncEnumerable);
+    Assert.NotNull(asKotlinFlow);
+}
+```
+
+<note>
+    <p>A <code>StateFlow&lt;T&gt;</code> <code>await foreach</code> never terminates on its own: it is
+    hot and open, so <code>onComplete</code> is never fired. Bound it with a
+    <code>CancellationToken</code> or a <code>break</code>, exactly as the tests above do.</p>
+</note>
+
+`MutableStateFlow<T>` at a property or function-return position binds as the same read-only
+`KotlinStateFlow<T>` view; a settable `.Value` write is deferred (see Limitations). Object-typed
+elements (`StateFlow<Cat>`) follow ADR-005: each `.Value` read hands back a fresh, disposable
+wrapper, not a cached one.
+
 ## Limitations
 
 Hot streams and several `Flow` positions are not yet supported (ROADMAP Phase 6):
 
 - `SharedFlow<T>` (hot, multi-subscriber)
-- `StateFlow<T>` (hot, always-current-value)
+- Settable `.Value` on `MutableStateFlow<T>` (a C# → Kotlin write; deferred to Phase 7)
+- Nullable `StateFlow<T?>` and `StateFlow<T>?`
+- `suspend fun` returning `StateFlow<T>`
+- `StateFlow<T>` as a function parameter or as a generic type argument
+- `INotifyPropertyChanged` adapter over `KotlinStateFlow<T>` (opt-in convenience, not core)
 - `Flow<T>` as a function **parameter** (C# → Kotlin direction)
 - Nullable `Flow<T>?`
 - `Flow<T>` as a generic type argument (e.g. `Box<Flow<String>>`)
@@ -334,5 +454,6 @@ rather than the raw `Function1`/`Result` this generated before
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/025-async-disposable.md">ADR-025: AsyncDisposable</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/026-flow-mapping.md">ADR-026: Flow mapping</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/064-forward-unsupported-declaration-diagnostics.md">ADR-064: Forward unsupported-declaration diagnostics</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/065-stateflow-mapping.md">ADR-065: StateFlow mapping</a>
     </category>
 </seealso>

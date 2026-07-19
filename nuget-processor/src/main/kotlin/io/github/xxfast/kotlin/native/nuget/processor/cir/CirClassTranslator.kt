@@ -139,18 +139,25 @@ internal fun translateClass(
         tracker.needsAsync = true
       }
 
-      val isFlowType: Boolean = qualifiedTypeName in FLOW_TYPES
-      val flowElementType: String? = if (isFlowType) {
+      // ADR-065: StateFlow (and the read-only MutableStateFlow view) is checked BEFORE FLOW_TYPES
+      // -- it is-a Flow, so an isAssignableFrom-style check would make it match the plain-Flow
+      // branch and silently lose `.Value`. Detection is on the exact declared qualifiedName.
+      val isStateFlowType: Boolean = qualifiedTypeName in STATE_FLOW_TYPES
+      val isFlowType: Boolean = !isStateFlowType && qualifiedTypeName in FLOW_TYPES
+      val flowElementType: String? = if (isFlowType || isStateFlowType) {
         val elementType = propTypeResolved.arguments.firstOrNull()?.type?.resolve()
         val elementTypeName: String = elementType?.declaration?.simpleName?.asString() ?: "Any"
         KOTLIN_TO_CSHARP_PARAM[elementTypeName] ?: elementTypeName
       } else null
-      if (isFlowType) {
+      if (isFlowType || isStateFlowType) {
         tracker.needsFlow = true
         tracker.needsAsync = true
       }
+      if (isStateFlowType) tracker.needsStateFlow = true
 
-      if (!isLambdaType && !isSuspendLambdaType && !isFlowType) return@mapNotNull null
+      if (!isLambdaType && !isSuspendLambdaType && !isFlowType && !isStateFlowType) {
+        return@mapNotNull null
+      }
 
       val lambdaTypeArgs: List<String> = if (isLambdaType) {
         propTypeResolved.arguments.map { arg ->
@@ -192,6 +199,7 @@ internal fun translateClass(
       val type: String = when {
         isLambdaType -> lambdaCsType
         isSuspendLambdaType -> suspendLambdaCsType
+        isStateFlowType -> "KotlinStateFlow<$flowElementType>"
         isFlowType -> "KotlinFlow<$flowElementType>"
         else -> error("unreachable specialized property branch")
       }
@@ -199,6 +207,22 @@ internal fun translateClass(
       val getter: String = when {
         isLambdaType -> "new $lambdaCsType(Native_Get_$propName(_handle))"
         isSuspendLambdaType -> "new $suspendLambdaCsType(Native_Get_$propName(_handle))"
+        isStateFlowType -> {
+          // ADR-065: the collect wiring is byte-for-byte the plain-Flow getter above; the only
+          // addition is the second constructor argument, a synchronous `_value` read lambda.
+          val collectNativeName = "Native_Get${csPropName}Collect"
+          val valueNativeName = "Native_Get${csPropName}Value"
+          buildString {
+            appendLine()
+            appendLine("                if (_handle == IntPtr.Zero)")
+            appendLine("                    throw new ObjectDisposedException(nameof(${cls.simpleName.asString()}));")
+            appendLine("                return new KotlinStateFlow<$flowElementType>((onNext, onComplete, onError, userData) =>")
+            appendLine("                    $collectNativeName(_handle, GetOrCreateScope(), onNext, onComplete, onError, userData),")
+            appendLine("                    () => $valueNativeName(_handle));")
+            append("            ")
+          }
+        }
+
         isFlowType -> {
           val collectNativeName = "Native_Get${csPropName}Collect"
           buildString {
@@ -223,7 +247,8 @@ internal fun translateClass(
         getter = getter,
         setter = null,
         extraNatives = emptyList(),
-        isFlow = isFlowType,
+        isFlow = isFlowType || isStateFlowType,
+        isStateFlow = isStateFlowType,
         flowElementType = flowElementType ?: "",
         hasSyncErrorOut = false,
       )
@@ -254,12 +279,19 @@ internal fun translateClass(
   val (flowMethods, nonFlowMethods) = regularMethods.partition { method ->
     val returnQualified: String? = method.returnType?.resolve()?.expandAliases()
       ?.declaration?.qualifiedName?.asString()
-    returnQualified in FLOW_TYPES
+    returnQualified in FLOW_TYPES || returnQualified in STATE_FLOW_TYPES
   }
 
   if (flowMethods.isNotEmpty()) {
     tracker.needsFlow = true
     tracker.needsAsync = true
+  }
+  if (flowMethods.any { method ->
+      method.returnType?.resolve()?.expandAliases()
+        ?.declaration?.qualifiedName?.asString() in STATE_FLOW_TYPES
+    }
+  ) {
+    tracker.needsStateFlow = true
   }
 
   val (lambdaParamMethods, normalMethods) = nonFlowMethods.partition { method ->
@@ -417,6 +449,8 @@ internal fun translateClass(
     val cname: String = toCName(methodName)
     val csMethodName: String = methodName.replaceFirstChar { it.uppercase() }
     val returnType = method.returnType?.resolve()?.expandAliases()
+    val returnQualified: String? = returnType?.declaration?.qualifiedName?.asString()
+    val isStateFlowMethod: Boolean = returnQualified in STATE_FLOW_TYPES
     val flowElementKotlinType: String = returnType?.arguments
       ?.firstOrNull()?.type?.resolve()
       ?.declaration?.simpleName?.asString() ?: "Any"
@@ -453,6 +487,33 @@ internal fun translateClass(
       "_handle, GetOrCreateScope(), onNext, onComplete, onError, userData"
     } else {
       "_handle, GetOrCreateScope(), $paramNames, onNext, onComplete, onError, userData"
+    }
+
+    if (isStateFlowMethod) {
+      // ADR-065: sibling synchronous `_value` export -- takes handle + the method's own
+      // parameters (no scope, no callbacks, no errorOut; StateFlow.value cannot throw).
+      val valueNativeImport = CirDllImport(
+        libraryName = libraryName,
+        entryPoint = "${prefix}_${cname}_value",
+        returnType = "IntPtr",
+        name = "Native_${csMethodName}Value",
+        parameters = listOf(CirParameter("handle", "IntPtr")) + methodParams,
+        visibility = CirVisibility.PRIVATE,
+      )
+
+      val stateFlowMethod = CirMethod(
+        name = csMethodName,
+        returnType = "KotlinStateFlow<$flowCsElementType>",
+        nativeName = "Native_${csMethodName}Collect",
+        parameters = methodParams,
+        body = nativeCallArgs,
+        isFlow = true,
+        isStateFlow = true,
+        flowElementType = flowCsElementType,
+        stateFlowValueNativeName = "Native_${csMethodName}Value",
+      )
+
+      return@flatMap listOf(nativeImport, valueNativeImport, stateFlowMethod)
     }
 
     val flowMethod = CirMethod(
@@ -542,7 +603,9 @@ internal fun translateClass(
     hasSuspendMethods = cls.getAllFunctions().any { it.modifiers.contains(Modifier.SUSPEND) } ||
         flowMethods.isNotEmpty() ||
         cls.getAllProperties().any { prop ->
-          prop.type.resolve().expandAliases().declaration.qualifiedName?.asString() in FLOW_TYPES
+          val qualified: String? =
+            prop.type.resolve().expandAliases().declaration.qualifiedName?.asString()
+          qualified in FLOW_TYPES || qualified in STATE_FLOW_TYPES
         },
   )
 }

@@ -201,6 +201,13 @@ internal fun StringBuilder.renderClass(cls: CirClass) {
       appendLine("        [DllImport(\"${cls.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"$collectEntryPoint\")]")
       appendLine("        private static extern IntPtr Native_Get${prop.name}Collect(IntPtr handle, IntPtr scopeHandle, IntPtr onNext, IntPtr onComplete, IntPtr onError, IntPtr userData);")
       appendLine()
+      if (prop.isStateFlow) {
+        // ADR-065: synchronous `_value` sibling export -- handle only, no scope/callbacks/errorOut.
+        val valueEntryPoint = "${cls.nativePrefix}_get_${prop.nativeName}_value"
+        appendLine("        [DllImport(\"${cls.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"$valueEntryPoint\")]")
+        appendLine("        private static extern IntPtr Native_Get${prop.name}Value(IntPtr handle);")
+        appendLine()
+      }
       renderProperty(prop)
     } else if (prop.usesLegacyNativeImport()) {
       renderLegacyPropertyNativeImports(cls, prop)

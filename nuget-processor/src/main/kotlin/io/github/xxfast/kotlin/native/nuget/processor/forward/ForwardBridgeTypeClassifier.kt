@@ -8,6 +8,7 @@ import com.google.devtools.ksp.symbol.KSTypeParameter
 import com.google.devtools.ksp.symbol.Modifier
 import io.github.xxfast.kotlin.native.nuget.processor.cir.FLOW_TYPES
 import io.github.xxfast.kotlin.native.nuget.processor.cir.LAMBDA_TYPES
+import io.github.xxfast.kotlin.native.nuget.processor.cir.STATE_FLOW_TYPES
 import io.github.xxfast.kotlin.native.nuget.processor.cir.SUSPEND_LAMBDA_TYPES
 import io.github.xxfast.kotlin.native.nuget.processor.cir.expandAliases
 import io.github.xxfast.kotlin.native.nuget.processor.cir.mapPackageToNamespace
@@ -160,6 +161,10 @@ internal class ForwardBridgeTypeClassifier(
   }
 
   private fun specializedProtocol(qualifiedName: String): BridgeType.SpecializedProtocol? = when {
+    // ADR-065: StateFlow is checked before plain Flow -- it is-a Flow, and this is an exact
+    // qualifiedName match (not isAssignableFrom), so there is no risk of a StateFlow falling
+    // through to the plain-flow branch below and losing its `.Value` legacy-route handling.
+    qualifiedName in STATE_FLOW_TYPES -> BridgeType.SpecializedProtocol("state flow $qualifiedName")
     qualifiedName in FLOW_TYPES -> BridgeType.SpecializedProtocol("flow $qualifiedName")
     qualifiedName in LAMBDA_TYPES -> BridgeType.SpecializedProtocol("lambda $qualifiedName")
     qualifiedName in SUSPEND_LAMBDA_TYPES ->

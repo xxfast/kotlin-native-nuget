@@ -115,6 +115,7 @@ See [ADR-011](docs/adr/011-collection-type-mapping.md) and [ADR-062](docs/adr/06
 | coroutine cancellation   | → | `CancellationToken`                | including suspend lambdas | [ADR-022](docs/adr/022-cancellation-token-support.md) |
 | in-flight async drain    | → | `IAsyncDisposable`                 | graceful drain            | [ADR-025](docs/adr/025-async-disposable.md)           |
 | `Flow<T>`                | → | `IAsyncEnumerable<T>`              | cold streams              | [ADR-026](docs/adr/026-flow-mapping.md)               |
+| `StateFlow<T>` / `MutableStateFlow<T>` | → | `KotlinStateFlow<T>` (`.Value` + `IAsyncEnumerable<T>`) | hot, always-current-value · `MutableStateFlow` binds as a read-only view; settable `.Value` deferred | [ADR-065](docs/adr/065-stateflow-mapping.md) |
 
 > [!NOTE]
-> Hot streams (`SharedFlow`, `StateFlow`), `Flow` parameters, and `Flow` as a generic argument are not yet supported. See [ROADMAP.md](ROADMAP.md) Phase 6.
+> Hot streams (`SharedFlow`), `Flow` parameters, and `Flow` as a generic argument are not yet supported. See [ROADMAP.md](ROADMAP.md) Phase 6.

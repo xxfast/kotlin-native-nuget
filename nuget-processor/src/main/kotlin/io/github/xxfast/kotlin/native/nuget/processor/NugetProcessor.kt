@@ -23,6 +23,7 @@ import com.squareup.kotlinpoet.ksp.writeTo
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirFile
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirRenderer
 import io.github.xxfast.kotlin.native.nuget.processor.cir.NugetContext
+import io.github.xxfast.kotlin.native.nuget.processor.cir.STATE_FLOW_TYPES
 import io.github.xxfast.kotlin.native.nuget.processor.cir.expandAliases
 import io.github.xxfast.kotlin.native.nuget.processor.cir.translate
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addClassExports
@@ -483,15 +484,17 @@ class NugetProcessor(
 
     val classesHaveFlowPropertiesForImports: Boolean = classes.any { cls ->
       cls.getAllProperties().any { prop ->
-        prop.type.resolve().expandAliases().declaration.qualifiedName?.asString() ==
-            "kotlinx.coroutines.flow.Flow"
+        val qualified: String? =
+          prop.type.resolve().expandAliases().declaration.qualifiedName?.asString()
+        qualified == "kotlinx.coroutines.flow.Flow" || qualified in STATE_FLOW_TYPES
       }
     }
 
     val classesHaveFlowMethodsForImports: Boolean = classes.any { cls ->
       cls.getAllFunctions().any { method ->
-        method.returnType?.resolve()?.expandAliases()?.declaration?.qualifiedName?.asString() ==
-            "kotlinx.coroutines.flow.Flow"
+        val qualified: String? =
+          method.returnType?.resolve()?.expandAliases()?.declaration?.qualifiedName?.asString()
+        qualified == "kotlinx.coroutines.flow.Flow" || qualified in STATE_FLOW_TYPES
       }
     }
 
@@ -775,7 +778,7 @@ class NugetProcessor(
       cls.getAllFunctions().any { it.modifiers.contains(Modifier.SUSPEND) }
     }
 
-    val flowTypes: Set<String> = setOf("kotlinx.coroutines.flow.Flow")
+    val flowTypes: Set<String> = setOf("kotlinx.coroutines.flow.Flow") + STATE_FLOW_TYPES
 
     fun KSType.isFlowType(): Boolean =
       expandAliases().declaration.qualifiedName?.asString() in flowTypes

@@ -126,9 +126,32 @@ internal fun StringBuilder.renderFlowHelper(helper: CirFlowHelper) {
   appendLine("        }")
   appendLine("    }")
   appendLine()
+
+  if (helper.includesStateFlow) {
+    // ADR-065: KotlinStateFlow<T> IS-A KotlinFlow<T> -- it inherits the entire collect/enumerator/
+    // cancellation/error machinery above unchanged and adds only a synchronous `Value` read.
+    appendLine("    public class KotlinStateFlow<T> : KotlinFlow<T>")
+    appendLine("    {")
+    appendLine("        private readonly Func<IntPtr> _readValue;")
+    appendLine()
+    appendLine("        internal KotlinStateFlow(NugetFlowCollectDelegate startCollect, Func<IntPtr> readValue)")
+    appendLine("            : base(startCollect)")
+    appendLine("        {")
+    appendLine("            _readValue = readValue;")
+    appendLine("        }")
+    appendLine()
+    appendLine("        public T Value => NugetMarshal.FromHandle<T>(_readValue());")
+    appendLine("    }")
+    appendLine()
+  }
 }
 
 internal fun StringBuilder.renderFlowMethod(method: CirMethod, className: String) {
+  if (method.isStateFlow) {
+    renderStateFlowMethod(method, className)
+    return
+  }
+
   val paramStr: String = method.parameters.joinToString(", ") { "${it.type} ${it.name}" }
   val nativeName: String = method.nativeName
 
@@ -138,6 +161,27 @@ internal fun StringBuilder.renderFlowMethod(method: CirMethod, className: String
   appendLine("                throw new ObjectDisposedException(nameof($className));")
   appendLine("            return new KotlinFlow<${method.flowElementType}>((onNext, onComplete, onError, userData) =>")
   appendLine("                $nativeName(${method.body}));")
+  appendLine("        }")
+  appendLine()
+}
+
+// ADR-065: StateFlow<T> as a non-suspend function return. Identical to renderFlowMethod's
+// `_collect` wiring, plus a synchronous `_value` read passed as the second KotlinStateFlow<T>
+// constructor argument (the method's own parameters, re-read on each `.Value` access).
+internal fun StringBuilder.renderStateFlowMethod(method: CirMethod, className: String) {
+  val paramStr: String = method.parameters.joinToString(", ") { "${it.type} ${it.name}" }
+  val paramNames: String = method.parameters.joinToString(", ") { it.name }
+  val nativeName: String = method.nativeName
+  val valueNativeName: String = method.stateFlowValueNativeName
+  val valueCallArgs: String = if (paramNames.isEmpty()) "_handle" else "_handle, $paramNames"
+
+  appendLine("        public KotlinStateFlow<${method.flowElementType}> ${method.name}($paramStr)")
+  appendLine("        {")
+  appendLine("            if (_handle == IntPtr.Zero)")
+  appendLine("                throw new ObjectDisposedException(nameof($className));")
+  appendLine("            return new KotlinStateFlow<${method.flowElementType}>((onNext, onComplete, onError, userData) =>")
+  appendLine("                $nativeName(${method.body}),")
+  appendLine("                () => $valueNativeName($valueCallArgs));")
   appendLine("        }")
   appendLine()
 }

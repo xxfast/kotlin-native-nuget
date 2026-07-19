@@ -60,12 +60,23 @@ internal val FLOW_TYPES = setOf(
   "kotlinx.coroutines.flow.Flow",
 )
 
+// ADR-065: StateFlow<T> (and, as a read-only view, MutableStateFlow<T>) is a hot,
+// always-current-value stream. It is-a Flow, so detection is on the DECLARED type's exact
+// qualifiedName and is checked BEFORE FLOW_TYPES everywhere FLOW_TYPES is consulted -- never via
+// isAssignableFrom, which would make a StateFlow match the plain-Flow branch and silently lose
+// `.Value`. SharedFlow/MutableSharedFlow remain unlisted and deferred (ROADMAP line 108).
+internal val STATE_FLOW_TYPES = setOf(
+  "kotlinx.coroutines.flow.StateFlow",
+  "kotlinx.coroutines.flow.MutableStateFlow",
+)
+
 internal class CollectionHelperTracker {
   var needsList: Boolean = false
   var needsMap: Boolean = false
   var needsSet: Boolean = false
   var needsAsync: Boolean = false
   var needsFlow: Boolean = false
+  var needsStateFlow: Boolean = false
   var needsSubscription: Boolean = false
   val lambdaArities: MutableSet<Int> = mutableSetOf()
   val suspendLambdaArities: MutableSet<Int> = mutableSetOf()
