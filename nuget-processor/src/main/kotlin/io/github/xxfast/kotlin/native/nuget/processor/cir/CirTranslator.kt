@@ -26,6 +26,9 @@ data class NugetContext(
   val rootNamespace: String,
   val rootPackage: String,
   val className: String,
+  val includePackages: List<String> = emptyList(),
+  val excludePackages: List<String> = emptyList(),
+  val boundPackages: List<String> = emptyList(),
 )
 
 internal fun translate(

@@ -115,9 +115,32 @@ class NugetProcessor(
     if (processed) return emptyList()
     processed = true
 
+    // ADR-063: the effective include set is the explicit `include` when non-empty, else
+    // `[rootPackage]` when `rootPackage` is set, else empty (= all). Mirrors the reverse side's
+    // `IsNamespaceIncluded` predicate exactly (exclude wins; empty include = all; prefix match).
+    val effectiveInclude: List<String> = when {
+      context.includePackages.isNotEmpty() -> context.includePackages
+      context.rootPackage.isNotBlank() -> listOf(context.rootPackage)
+      else -> emptyList()
+    }
+
+    fun isPackageExported(pkg: String): Boolean {
+      fun matches(p: String) = pkg == p || pkg.startsWith("$p.")
+      // ADR-063 "Reverse-bound packages are always in scope": checked first, before exclude and
+      // before include. A module that both publishes forward and consumes via `bind {}` returns
+      // reverse-bound types from its own forward code; dropping the bound stub's declaration
+      // while the forward-generated C# still references it is a dangling-reference build break,
+      // not a scoping choice the user asked for.
+      if (context.boundPackages.any(::matches)) return true
+      if (context.excludePackages.any(::matches)) return false
+      if (effectiveInclude.isEmpty()) return true
+      return effectiveInclude.any(::matches)
+    }
+
     val allDeclarations: List<KSDeclaration> = resolver.getAllFiles()
       .flatMap { it.declarations }
       .filter { it.packageName.asString() != "io.github.xxfast.kotlin.native.nuget.generated" }
+      .filter { isPackageExported(it.packageName.asString()) }
       .toList()
 
     val allFunctions: List<KSFunctionDeclaration> = allDeclarations

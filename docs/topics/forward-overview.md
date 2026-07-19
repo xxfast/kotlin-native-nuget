@@ -79,6 +79,11 @@ Kotlin sub-packages map relative to `rootPackage`, and the C# namespace root is 
 
 Every generated declaration lands under its mapped namespace inside the single `Interop.cs` file.
 
+By default every public declaration in the module is bridged, not only those under `rootPackage`.
+`publish { include(...); exclude(...) }` narrows that to an explicit package-prefix allowlist, and
+when `include` is left empty, `rootPackage` itself becomes the default scope. See
+[The nuget {} DSL](nuget-dsl.md) for the full predicate.
+
 <seealso>
     <category ref="related">
         <a href="classes-and-objects.md">Classes and objects</a>
@@ -90,5 +95,6 @@ Every generated declaration lands under its mapped namespace inside the single `
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/005-object-return-semantics.md">ADR-005: Object return semantics</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/055-forward-abi-contract-check.md">ADR-055: Forward ABI contract check</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/062-forward-callable-plan.md">ADR-062: Forward callable plan</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/063-forward-declaration-level-export-scoping.md">ADR-063: Forward declaration-level export scoping</a>
     </category>
 </seealso>

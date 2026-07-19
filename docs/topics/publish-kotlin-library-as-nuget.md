@@ -53,6 +53,13 @@ nuget {
 }
 ```
 
+<tip>
+<p>By default every public declaration in the module is bridged, not only those under
+<code>rootPackage</code>. Add <code>include(...)</code>/<code>exclude(...)</code> to scope that
+down if the module also holds unrelated public API; see
+<a href="nuget-dsl.md">The nuget {} DSL</a>.</p>
+</tip>
+
 For example, add this API under `src/nativeMain/kotlin/com/example/cats/Cat.kt`:
 
 ```kotlin

@@ -145,8 +145,8 @@ class NugetPlugin : Plugin<Project> {
               ?.firstOrNull()?.baseName
           ) {
             "[nuget] No Kotlin/Native shared library binary configured. " +
-              "nuget { dependencies { bind { ... } } } requires a " +
-              "`binaries { sharedLib { ... } }` target to host the registered C# thunks."
+                "nuget { dependencies { bind { ... } } } requires a " +
+                "`binaries { sharedLib { ... } }` target to host the registered C# thunks."
           }
         }
 
@@ -157,7 +157,7 @@ class NugetPlugin : Plugin<Project> {
           ) { task ->
             task.group = "nuget"
             task.description = "Generates C#-side [UnmanagedCallersOnly] thunks and startup " +
-              "registration shims from reverse-ir.json"
+                "registration shims from reverse-ir.json"
             task.reverseIrFile.set(nugetExtractApi.flatMap { it.reverseIrFile })
             task.nativeLibraryName.set(nativeLibraryName)
             task.csharpOutputDir.set(interopDir.map { it.dir("csharp") })
@@ -242,10 +242,31 @@ class NugetPlugin : Plugin<Project> {
           val kspClass: Class<*> = ksp.javaClass
           val argMethod: Method = kspClass.getMethod("arg", String::class.java, String::class.java)
 
+          // ADR-063 "Reverse-bound packages are always in scope": the superset of Kotlin
+          // packages each bound dependency's reverse-generated stubs can land in, mirroring
+          // `kotlinPackage()`'s resolution order (`NugetGenerateBindingsTask.kt:66-73`): the
+          // namespace aliases, the `packageName` override, and the sanitised `packageId`
+          // fallback. That way an include-based filter can never drop a bound stub the module's
+          // own forward code returns.
+          val boundPackages: List<String> = extension.dependencies
+            .filter { it.bind != null }
+            .flatMap { dep ->
+              val bind = dep.bind!!
+              buildList {
+                addAll(bind.aliases.values)
+                bind.packageName?.let(::add)
+                add(dep.id.lowercase().replace('-', '_'))
+              }
+            }
+            .distinct()
+
           argMethod.invoke(ksp, "nuget.libraryName", baseName ?: "library")
           argMethod.invoke(ksp, "nuget.namespace", pub?.packageId ?: "")
           argMethod.invoke(ksp, "nuget.rootPackage", pub?.rootPackage ?: "")
           argMethod.invoke(ksp, "nuget.className", "${pub?.packageId ?: "Library"}Native")
+          argMethod.invoke(ksp, "nuget.includePackages", pub?.include.orEmpty().joinToString(","))
+          argMethod.invoke(ksp, "nuget.excludePackages", pub?.exclude.orEmpty().joinToString(","))
+          argMethod.invoke(ksp, "nuget.boundPackages", boundPackages.joinToString(","))
         }
       }
 
@@ -264,7 +285,7 @@ class NugetPlugin : Plugin<Project> {
         if (supportedTargets.isEmpty()) {
           project.logger.warn(
             "w: [nuget] No supported native targets found (expected mingw or macOS). " +
-              "Skipping NuGet plugin for project '${project.name}'."
+                "Skipping NuGet plugin for project '${project.name}'."
           )
           return@afterEvaluate
         }
