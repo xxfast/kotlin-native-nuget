@@ -12,6 +12,8 @@ A plugin that allows you to publish your Kotlin/Native libraries as NuGet packag
 
 https://www.youtube.com/watch?v=DywUS-qYn6o
 
+Read the announcement: [Bring your KMP library to NuGet](https://medium.com/proandroiddev/bring-your-kmp-library-to-nuget-02e1131a4707)
+
 ## Stability
 
 `0.x` and experimental. Anything can change between versions.
