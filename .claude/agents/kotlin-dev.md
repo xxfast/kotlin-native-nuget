@@ -72,6 +72,15 @@ The [refactorer agent](refactorer.md) formats your files afterward. Report the l
 - Build sample + package: `./gradlew :test-library:clean :test-library:packNuget`
 - Full verify: run `scripts/verify.sh` (add `--plugin` when Gradle plugin code changed). It packages the sample library, wipes consumer `obj`/`bin`, and runs the .NET tests. Fixture packages now mint a fresh `1.0.0-fixture.<epoch-ms>` version on every pack, so a re-pack can no longer resolve the previous package's contents. Never hand-edit generated output or the NuGet cache to iterate faster.
 
+## Code coverage
+
+- Kover is applied to both JVM builds. Reports (JaCoCo-compatible XML, CI uploads them to Codecov under the `kotlin` flag):
+  - `./gradlew :nuget-processor:koverXmlReport` → `nuget-processor/build/reports/kover/report.xml`
+  - `./gradlew -p nuget-plugin koverXmlReport` → `nuget-plugin/build/reports/kover/report.xml` (nuget-plugin is a composite includeBuild; Kover cannot aggregate across that boundary, so the two reports stay separate by design)
+- `nuget-plugin` pins the Kover version inline in its `plugins {}` block because the included build does not consume the root version catalog. If you bump Kover, bump both places.
+- `:test-library` is Kotlin/Native and has no coverage tooling; leave it out.
+- Use `koverHtmlReport` locally to check whether the code you just added is actually exercised before reporting done.
+
 ## Key patterns
 
 Forward:

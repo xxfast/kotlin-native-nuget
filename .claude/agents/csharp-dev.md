@@ -21,6 +21,12 @@ You are writing tests and verifying the C# consumer side of a Kotlin/Native → 
 - Run tests: `cd IntegrationTests && dotnet test`
 - Full verify: `scripts/verify.sh` repacks the NuGet package, wipes consumer `obj`/`bin`, and runs `dotnet test` end-to-end. Use this for reverse round-trip checks. Never hand-edit generated output or copy files into `~/.nuget/packages/` to skip it: that manufactures bugs that look real.
 
+## Code coverage
+
+- Coverage comes from coverlet: `cd IntegrationTests && dotnet test --collect:"XPlat Code Coverage"`. Output lands at `IntegrationTests/TestResults/<guid>/coverage.cobertura.xml` (CI uploads that glob to Codecov under the `csharp` flag).
+- `IntegrationTests/coverlet.runsettings` is auto-applied via `<RunSettingsFilePath>` in the csproj. `IncludeTestAssembly=true` in it is load-bearing: the generated `Interop.cs` compiles into `IntegrationTests.dll`, and coverlet excludes the test assembly by default, so without it the report is empty. Do not "clean that up".
+- Coverage of the generated shims is a feature, not noise: it shows which generated paths your tests actually exercise. When you add tests for a new bridge feature, checking the shim classes you targeted show up covered is a cheap completeness signal.
+
 ## Test organisation
 
 - `MappingTests.cs` — primitive type mappings (string, byte, int, float, etc.)
