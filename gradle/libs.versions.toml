@@ -5,6 +5,7 @@ kotlinpoet = "2.2.0"
 coroutines = "1.10.2"
 mavenPublish = "0.37.0"
 junitJupiter = "5.10.1"
+kover = "0.9.9"
 
 [libraries]
 kotlin-test = { module = "org.jetbrains.kotlin:kotlin-test", version.ref = "kotlin" }
@@ -31,3 +32,4 @@ kotlinJvm = { id = "org.jetbrains.kotlin.jvm", version.ref = "kotlin" }
 kotlinMultiplatform = { id = "org.jetbrains.kotlin.multiplatform", version.ref = "kotlin" }
 ksp = { id = "com.google.devtools.ksp", version.ref = "ksp" }
 mavenPublish = { id = "com.vanniktech.maven.publish", version.ref = "mavenPublish" }
+kover = { id = "org.jetbrains.kotlinx.kover", version.ref = "kover" }

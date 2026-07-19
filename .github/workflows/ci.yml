@@ -32,8 +32,12 @@ jobs:
 
       # Before packNuget, which pays for a Kotlin/Native link. These previously ran only in
       # release.yml, on a tag, so a PR could break them and CI stayed green until release day.
-      - name: Plugin tests
-        run: ./gradlew :nuget-plugin:test
+      # koverXmlReport runs the tests and writes the JaCoCo-compatible XML in one pass.
+      # nuget-plugin is a composite includeBuild, so its task is addressed with -p nuget-plugin.
+      - name: Plugin tests with coverage
+        run: |
+          ./gradlew :nuget-processor:koverXmlReport
+          ./gradlew -p nuget-plugin koverXmlReport
 
       - name: Build NuGet package
         run: ./gradlew :test-library:packNuget
@@ -49,8 +53,34 @@ jobs:
         run: ls IntegrationTests/bin/Debug/net10.0/
         shell: bash
 
-      - name: Run dotnet tests
-        run: dotnet test IntegrationTests --no-build
+      - name: Run dotnet tests with coverage
+        run: >
+          dotnet test IntegrationTests --no-build
+          --collect:"XPlat Code Coverage"
+          --results-directory IntegrationTests/TestResults
+
+      # Public repo works tokenless, but the token is wired for correctness and in case the
+      # repo ever goes private. Uploads run only on macos-latest: coverage paths are identical
+      # across the matrix and one upload per report keeps the Codecov flags unambiguous.
+      - name: Upload Kotlin coverage to Codecov
+        if: always() && matrix.os == 'macos-latest'
+        uses: codecov/codecov-action@v5
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          flags: kotlin
+          fail_ci_if_error: false
+          files: |
+            nuget-processor/build/reports/kover/report.xml
+            nuget-plugin/build/reports/kover/report.xml
+
+      - name: Upload C# coverage to Codecov
+        if: always() && matrix.os == 'macos-latest'
+        uses: codecov/codecov-action@v5
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          flags: csharp
+          fail_ci_if_error: false
+          files: IntegrationTests/TestResults/**/coverage.cobertura.xml
 
   # Consumes the plugin the way a real user does: by maven coordinate, from a separate Gradle
   # build. In this repo `NugetPlugin` always finds `:nuget-processor` as a project, so the

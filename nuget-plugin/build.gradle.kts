@@ -6,6 +6,7 @@ plugins {
   kotlin("plugin.serialization") version "2.4.0"
   id("com.gradle.plugin-publish") version "1.3.1"
   id("com.vanniktech.maven.publish") version "0.37.0"
+  id("org.jetbrains.kotlinx.kover") version "0.9.9"
 }
 
 // Gradle does not propagate the root build's gradle.properties across a composite

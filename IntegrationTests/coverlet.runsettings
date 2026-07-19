@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="utf-8"?>
+<RunSettings>
+  <RunConfiguration>
+    <!-- Default results directory is <project>/TestResults, which keeps the
+         cobertura output under IntegrationTests/TestResults. CI can still
+         override the location on the command line if it runs from another cwd. -->
+    <ResultsDirectory>TestResults</ResultsDirectory>
+  </RunConfiguration>
+  <DataCollectionRunSettings>
+    <DataCollectors>
+      <DataCollector friendlyName="XPlat Code Coverage">
+        <Configuration>
+          <!-- Pin cobertura so the path glob
+               IntegrationTests/TestResults/**/coverage.cobertura.xml is
+               stable regardless of coverlet's default format. -->
+          <Format>cobertura</Format>
+          <!-- The generated bridge shims and all test code live in the single
+               IntegrationTests test assembly. Coverlet excludes the test
+               assembly by default, which would yield an empty report, so we
+               opt it back in to measure the generated Interop.cs paths. -->
+          <IncludeTestAssembly>true</IncludeTestAssembly>
+          <!-- The generated bridge shims (Interop.cs) compile into the
+               IntegrationTests assembly, so they are measured on purpose:
+               do NOT exclude [IntegrationTests]. Only fixture packages that
+               are pure test scaffolding are dropped from the denominator.
+               These are harmless no-ops when the assemblies are not loaded. -->
+          <Exclude>[TestDependency]*,[TestDependency.*]*</Exclude>
+          <SingleHit>false</SingleHit>
+          <UseSourceLink>false</UseSourceLink>
+        </Configuration>
+      </DataCollector>
+    </DataCollectors>
+  </DataCollectionRunSettings>
+</RunSettings>

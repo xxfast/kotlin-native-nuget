@@ -13,6 +13,11 @@
          RID so the tests build and run on whatever platform they execute on. -->
     <RuntimeIdentifier>$(NETCoreSdkRuntimeIdentifier)</RuntimeIdentifier>
     <SelfContained>false</SelfContained>
+    <!-- Deterministic coverlet coverage: pins cobertura format and the
+         TestResults output dir so CI can glob
+         IntegrationTests/TestResults/**/coverage.cobertura.xml without
+         passing the settings file on the command line. -->
+    <RunSettingsFilePath>$(MSBuildProjectDirectory)/coverlet.runsettings</RunSettingsFilePath>
   </PropertyGroup>
 
   <ItemGroup>
