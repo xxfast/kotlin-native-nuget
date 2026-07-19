@@ -232,6 +232,15 @@ Mirror of Phase 7, composed with its machinery.
 - [ ] Pass Kotlin lambdas where a C# API stores the delegate (lifetime beyond the call — mirror of ADR-037)
 - [ ] Kotlin subclassing C# **classes** — explicitly deferred, revisit only with a concrete use case (synthesis D5, Swift-export precedent)
 
+## Post-migration hardening
+
+Follow-up work from the completed [forward marshalling centralization migration](MIGRATION.md). The clean full verifier passes, but review found four edge cases outside the current fixture coverage.
+
+- [ ] **Surface ordinary planner skips as generation-time diagnostics.** `ForwardCallablePlanCatalog` retains `Skipped` entries, but emission consumes only successful plans, so unsupported ordinary public APIs can disappear silently. Report every non-specialized skip through KSP with the declaration, position/role, classified type, and reason; keep named specialized protocols explicitly exempt. Add a real KSP fixture proving an unsupported declaration fails loudly instead of disappearing.
+- [ ] **Preserve getters for mutable collection properties.** `ForwardPropertyPlanner` currently rejects an entire property when a Kotlin `var` has a collection type, regressing the previously generated read-only C# getter. Plan getter and setter independently: retain the working getter, then either plan the setter when input conversion exists or emit a setter-specific diagnostic. Add regression coverage for the supported declaration positions.
+- [ ] **Make list-input eligibility match element marshalling.** Every `List<T>`/`MutableList<T>` input, while `NugetMarshal.CreateList<T>` can box only a subset, so admitted element types such as `Byte`, `Short`, unsigned primitives, `Char`, enums, and nullable elements can fail at runtime. Compose element lowering from `BridgeType`, or reject unsupported element types during planning with a named diagnostic; add consumer coverage for every admitted element category.
+- [ ] **Dispose temporary list handles on every exit path.** Generated C# checks and throws for a Kotlin error before disposing the temporary StableRef-backed input list, and `CreateList` can leak if enumeration or element conversion throws. Generate `try`/`finally` ownership scopes covering construction and invocation, and add exception-path tests that prove disposal.
+
 ## Launch
 
 The v0.1.0 launch checklist lives in [MVP.md](MVP.md): forward direction stable, reverse direction as a labelled preview, published to the Gradle Plugin Portal and mavenCentral.
