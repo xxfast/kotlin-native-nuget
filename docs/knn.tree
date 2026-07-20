@@ -17,6 +17,7 @@
         <toc-element topic="publish-kotlin-library-as-nuget.md"/>
         <toc-element topic="bind-nuget-package-for-kotlin.md"/>
     </toc-element>
+    <toc-element topic="architecture.md"/>
     <toc-element topic="forward-overview.md">
         <toc-element topic="primitives-and-strings.md"/>
         <toc-element topic="classes-and-objects.md"/>
