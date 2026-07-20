@@ -88,6 +88,8 @@ class ForwardSkippedCallableWarningTest {
         // and a value-class member inherited via interface delegation).
         ForwardPlanSkipReason.UNSUPPORTED_COMBINATION,
         ForwardPlanSkipReason.INHERITED_MEMBER,
+        // ADR-066: a reachable dependency-module type the closure did not admit.
+        ForwardPlanSkipReason.UNEXPORTED_DEPENDENCY_TYPE,
       ),
       dropped,
     )

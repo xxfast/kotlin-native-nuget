@@ -312,7 +312,8 @@ internal object ForwardCirPropertyProjection {
     BridgeType.Char -> "char"
     BridgeType.String -> "string"
     is BridgeType.Enum -> this.csharpType
-    is BridgeType.ObjectHandle -> qualifiedName.substringAfterLast('.')
+    // ADR-066: mirrors `BridgeType.Enum.csharpType` — the classifier already qualified this.
+    is BridgeType.ObjectHandle -> csharpType
     is BridgeType.Collection -> when (kind) {
       CollectionKind.LIST -> "IReadOnlyList<${requireNotNull(element).csharpType()}>"
       CollectionKind.MUTABLE_LIST -> "IList<${requireNotNull(element).csharpType()}>"

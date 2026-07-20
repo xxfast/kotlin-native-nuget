@@ -66,12 +66,17 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallablePla
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallablePlanCatalog
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallablePlanner
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnostic
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnosticKind
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnosticSink
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnosticTrackingLogger
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardHelperRequirement
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardReachabilityBucket
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardReachabilityClosure
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardReachabilityResult
 import io.github.xxfast.kotlin.native.nuget.processor.forward.addForwardKotlinPlanExport
 import io.github.xxfast.kotlin.native.nuget.processor.forward.calls
 import io.github.xxfast.kotlin.native.nuget.processor.forward.diagnosticHint
+import io.github.xxfast.kotlin.native.nuget.processor.forward.isValueClass
 import io.github.xxfast.kotlin.native.nuget.processor.forward.planFor
 import io.github.xxfast.kotlin.native.nuget.processor.forward.toDiagnosticKind
 
@@ -100,7 +105,7 @@ internal fun warnDroppedForwardCallables(
       symbol = dropped.node,
       declaration = dropped.symbol,
       reason = "its ${dropped.reason} type combination is not supported",
-      hint = dropped.reason.diagnosticHint(),
+      hint = dropped.reason.diagnosticHint(dropped.detail),
     )
   }
   ForwardDiagnosticSink.emit(diagnostics, logger)
@@ -201,49 +206,107 @@ class NugetProcessor(
     val constProperties: List<KSPropertyDeclaration> = allProperties
       .filter { it.modifiers.contains(Modifier.CONST) }
 
-    val allClasses: List<KSClassDeclaration> = allDeclarations
+    val rootClasses: List<KSClassDeclaration> = allDeclarations
       .filterIsInstance<KSClassDeclaration>()
       .filter { it.getVisibility() == Visibility.PUBLIC }
       .filter { it.classKind == ClassKind.CLASS }
       .filter { it.parentDeclaration == null }
       .filter { !it.modifiers.contains(Modifier.SEALED) }
-      .filter { !it.modifiers.contains(Modifier.VALUE) }
+      .filter { !it.isValueClass() }
 
-    val valueClasses: List<KSClassDeclaration> = allDeclarations
+    val rootValueClasses: List<KSClassDeclaration> = allDeclarations
       .filterIsInstance<KSClassDeclaration>()
       .filter { it.getVisibility() == Visibility.PUBLIC }
       .filter { it.classKind == ClassKind.CLASS }
       .filter { it.parentDeclaration == null }
-      .filter { it.modifiers.contains(Modifier.VALUE) }
+      .filter { it.isValueClass() }
 
-    val classes: List<KSClassDeclaration> = allClasses.filter { it.typeParameters.isEmpty() }
-    val genericClasses: List<KSClassDeclaration> = allClasses
-      .filter { it.typeParameters.isNotEmpty() }
-
-    val sealedClasses: List<KSClassDeclaration> = allDeclarations
+    val rootSealedClasses: List<KSClassDeclaration> = allDeclarations
       .filterIsInstance<KSClassDeclaration>()
       .filter { it.getVisibility() == Visibility.PUBLIC }
       .filter { it.classKind == ClassKind.CLASS }
       .filter { it.parentDeclaration == null }
       .filter { it.modifiers.contains(Modifier.SEALED) }
 
-    val objects: List<KSClassDeclaration> = allDeclarations
+    val rootObjects: List<KSClassDeclaration> = allDeclarations
       .filterIsInstance<KSClassDeclaration>()
       .filter { it.getVisibility() == Visibility.PUBLIC }
       .filter { it.classKind == ClassKind.OBJECT }
       .filter { it.parentDeclaration == null }
 
-    val enums: List<KSClassDeclaration> = allDeclarations
+    val rootEnums: List<KSClassDeclaration> = allDeclarations
       .filterIsInstance<KSClassDeclaration>()
       .filter { it.getVisibility() == Visibility.PUBLIC }
       .filter { it.classKind == ClassKind.ENUM_CLASS }
       .filter { it.parentDeclaration == null }
 
-    val interfaces: List<KSClassDeclaration> = allDeclarations
+    val rootInterfaces: List<KSClassDeclaration> = allDeclarations
       .filterIsInstance<KSClassDeclaration>()
       .filter { it.getVisibility() == Visibility.PUBLIC }
       .filter { it.classKind == ClassKind.INTERFACE }
       .filter { it.parentDeclaration == null }
+
+    // ADR-066: the reachability closure discovers dependency-module (klib) declarations reachable
+    // from these module-local roots — the only way in, since `getDeclarationsFromPackage` returns
+    // empty for a klib dependency (verified). A discovered declaration is admitted iff it passes
+    // the same `isPackageExported` predicate the roots already did, and only when the module
+    // crosses into `include`/`rootPackage` scope at all (admission rule 4).
+    val reachability: ForwardReachabilityResult = ForwardReachabilityClosure(
+      isPackageExported = ::isPackageExported,
+      crossModuleAdmissionAllowed = effectiveInclude.isNotEmpty(),
+    ).walk(
+      classes = rootClasses,
+      valueClasses = rootValueClasses,
+      sealedClasses = rootSealedClasses,
+      objects = rootObjects,
+      enums = rootEnums,
+      interfaces = rootInterfaces,
+      functions = functions + genericFunctions,
+      extensionFunctions = extensionFunctions,
+      properties = properties + constProperties,
+      extensionProperties = extensionProperties,
+    )
+    if (reachability.admitted.isNotEmpty()) {
+      ForwardDiagnosticSink.emit(
+        listOf(
+          ForwardDiagnostic(
+            kind = ForwardDiagnosticKind.INFO_EXPORTED_FROM_DEPENDENCY,
+            symbol = null,
+            declaration = context.className,
+            reason = "the export closure admitted ${reachability.admitted.size} type(s) from " +
+                "dependency modules: " +
+                reachability.admitted.keys.sorted().joinToString(", "),
+            hint = "these are generated exactly like module-local types; " +
+                "narrow with exclude(...) if any of them should not be part of the public API",
+          ),
+        ),
+        logger,
+      )
+    }
+
+    val dependencyByBucket: Map<ForwardReachabilityBucket, List<KSClassDeclaration>> =
+      reachability.admitted.values.groupBy { cls ->
+        reachability.bucketOf.getValue(requireNotNull(cls.qualifiedName).asString())
+      }
+
+    fun dependenciesIn(bucket: ForwardReachabilityBucket): List<KSClassDeclaration> =
+      dependencyByBucket[bucket] ?: emptyList()
+
+    val allClasses: List<KSClassDeclaration> =
+      rootClasses + dependenciesIn(ForwardReachabilityBucket.CLASS)
+    val valueClasses: List<KSClassDeclaration> =
+      rootValueClasses + dependenciesIn(ForwardReachabilityBucket.VALUE_CLASS)
+    val sealedClasses: List<KSClassDeclaration> =
+      rootSealedClasses + dependenciesIn(ForwardReachabilityBucket.SEALED_CLASS)
+    val objects: List<KSClassDeclaration> =
+      rootObjects + dependenciesIn(ForwardReachabilityBucket.OBJECT)
+    val enums: List<KSClassDeclaration> = rootEnums + dependenciesIn(ForwardReachabilityBucket.ENUM)
+    val interfaces: List<KSClassDeclaration> =
+      rootInterfaces + dependenciesIn(ForwardReachabilityBucket.INTERFACE)
+
+    val classes: List<KSClassDeclaration> = allClasses.filter { it.typeParameters.isEmpty() }
+    val genericClasses: List<KSClassDeclaration> = allClasses
+      .filter { it.typeParameters.isNotEmpty() }
 
     val hasNothingToProcess: Boolean = functions.isEmpty() && genericFunctions.isEmpty() &&
         extensionFunctions.isEmpty() && extensionProperties.isEmpty() &&

@@ -167,7 +167,9 @@ internal fun translate(
   regularClasses.forEach { cls ->
     namespaces.addDeclaration(
       namespaceOf(cls.packageName.asString()),
-      translateClass(cls, context.libraryName, tracker, exportedTypes, logger, callableCatalog),
+      translateClass(
+        cls, context.libraryName, tracker, exportedTypes, logger, callableCatalog, context,
+      ),
     )
   }
 

@@ -302,6 +302,33 @@ public async Task Flow_WithCancellation_ExitsCleanlyAfterFirstItem()
 }
 ```
 
+### `Flow<T>` of a cross-module element type
+
+A `Flow<T>` element type is emitted **qualified**, `global::{namespace}.{Type}`, not by its bare
+simple name. This matters once the element type is admitted from a different Gradle module through
+the export reachability closure ([ADR-066](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/066-forward-export-reachability-closure.md);
+see [The nuget {} DSL](nuget-dsl.md)): an unqualified name would only compile by accident if the
+element type's namespace happened to coincide with the declaring class's own. From
+`test-library/src/nativeMain/kotlin/.../Newsroom.kt`, where `TopStory` lives one module away in
+`:test-models`:
+
+```kotlin
+fun stream(): Flow<TopStory> = flow {
+  emit(TopStory("Oreo escapes the cardboard box (again)", 1, Byline("Mylo")))
+  emit(TopStory("Mylo naps in a sunbeam for six hours straight", 2, null))
+}
+```
+
+```C#
+public KotlinFlow<global::TestLibrary.Models.TopStory> Stream()
+{
+    if (_handle == IntPtr.Zero)
+        throw new ObjectDisposedException(nameof(Newsroom));
+    return new KotlinFlow<global::TestLibrary.Models.TopStory>((onNext, onComplete, onError, userData) =>
+        Native_StreamCollect(_handle, GetOrCreateScope(), onNext, onComplete, onError, userData));
+}
+```
+
 ## `StateFlow<T>`
 
 `StateFlow<T>` is the hot, conflated, always-current-value stream: it always has a `value` readable
@@ -455,5 +482,6 @@ rather than the raw `Function1`/`Result` this generated before
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/026-flow-mapping.md">ADR-026: Flow mapping</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/064-forward-unsupported-declaration-diagnostics.md">ADR-064: Forward unsupported-declaration diagnostics</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/065-stateflow-mapping.md">ADR-065: StateFlow mapping</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/066-forward-export-reachability-closure.md">ADR-066: Forward export reachability closure</a>
     </category>
 </seealso>

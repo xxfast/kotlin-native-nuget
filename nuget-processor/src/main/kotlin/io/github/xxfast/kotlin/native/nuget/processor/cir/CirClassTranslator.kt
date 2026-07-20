@@ -30,6 +30,7 @@ internal fun translateClass(
   exportedTypes: Set<String>,
   logger: KSPLogger,
   callableCatalog: ForwardCallablePlanCatalog,
+  context: NugetContext,
 ): CirClass {
   val name: String = cls.simpleName.asString()
   val prefix: String = name.lowercase()
@@ -145,9 +146,9 @@ internal fun translateClass(
       val isStateFlowType: Boolean = qualifiedTypeName in STATE_FLOW_TYPES
       val isFlowType: Boolean = !isStateFlowType && qualifiedTypeName in FLOW_TYPES
       val flowElementType: String? = if (isFlowType || isStateFlowType) {
-        val elementType = propTypeResolved.arguments.firstOrNull()?.type?.resolve()
-        val elementTypeName: String = elementType?.declaration?.simpleName?.asString() ?: "Any"
-        KOTLIN_TO_CSHARP_PARAM[elementTypeName] ?: elementTypeName
+        // ADR-066: qualified, not by simple name — an admitted dependency-module element type is
+        // not guaranteed to share this class's own namespace.
+        qualifiedElementCsType(propTypeResolved.arguments.firstOrNull()?.type?.resolve(), context)
       } else null
       if (isFlowType || isStateFlowType) {
         tracker.needsFlow = true
@@ -451,11 +452,9 @@ internal fun translateClass(
     val returnType = method.returnType?.resolve()?.expandAliases()
     val returnQualified: String? = returnType?.declaration?.qualifiedName?.asString()
     val isStateFlowMethod: Boolean = returnQualified in STATE_FLOW_TYPES
-    val flowElementKotlinType: String = returnType?.arguments
-      ?.firstOrNull()?.type?.resolve()
-      ?.declaration?.simpleName?.asString() ?: "Any"
+    // ADR-066: qualified, not by simple name — see the sibling property branch above for why.
     val flowCsElementType: String =
-      KOTLIN_TO_CSHARP_PARAM[flowElementKotlinType] ?: flowElementKotlinType
+      qualifiedElementCsType(returnType?.arguments?.firstOrNull()?.type?.resolve(), context)
 
     val methodParams: List<CirParameter> = method.parameters.map { param ->
       val resolved: KSType = param.type.resolve().expandAliases()

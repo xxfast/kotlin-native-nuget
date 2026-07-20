@@ -81,8 +81,14 @@ Every generated declaration lands under its mapped namespace inside the single `
 
 By default every public declaration in the module is bridged, not only those under `rootPackage`.
 `publish { include(...); exclude(...) }` narrows that to an explicit package-prefix allowlist, and
-when `include` is left empty, `rootPackage` itself becomes the default scope. See
-[The nuget {} DSL](nuget-dsl.md) for the full predicate.
+when `include` is left empty, `rootPackage` itself becomes the default scope.
+
+The export set is not limited to the module's own files, either: it is a reachability closure that
+also walks into types declared in a dependency Gradle module (return types, parameter types,
+property types, type arguments of `Flow<T>`/collections, sealed subclasses, primary-constructor
+parameters), admitting each discovered type through the same `include`/`exclude`/`rootPackage`
+predicate. See [The nuget {} DSL](nuget-dsl.md) for the full predicate and the cross-module closure
+rules.
 
 ## Diagnostics
 
@@ -114,6 +120,23 @@ the file and line of the Kotlin declaration that was skipped, something the reve
 `RirDiagnostic` cannot carry, since it works from compiled metadata rather than source. See each
 forward page's own **Limitations** section for which named diagnostic fires where.
 
+Two more kinds cover the cross-module export closure ([ADR-066](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/066-forward-export-reachability-closure.md);
+see [The nuget {} DSL](nuget-dsl.md) for the closure's own rules). A reachable dependency-module type
+outside the effective `include`/`rootPackage` scope is skipped, naming the exact fix, from
+`test-library`'s `Newsroom.sponsor(): Advertisement` (`dev.other.core.Advertisement` sits outside
+`rootPackage`):
+
+```
+[nuget:SKIPPED_UNEXPORTED_DEPENDENCY_TYPE] Skipping Newsroom.sponsor: its UNEXPORTED_DEPENDENCY_TYPE
+    type combination is not supported. add include("dev.other.core") to nuget { publish { } }, or
+    expose a type from an in-scope package instead
+    at Newsroom.kt:63
+```
+
+When at least one dependency-module type *is* admitted, the closure also emits one aggregate
+`INFO_EXPORTED_FROM_DEPENDENCY` line per KSP run rather than one line per type, naming the whole
+admitted set.
+
 <seealso>
     <category ref="related">
         <a href="classes-and-objects.md">Classes and objects</a>
@@ -127,5 +150,6 @@ forward page's own **Limitations** section for which named diagnostic fires wher
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/062-forward-callable-plan.md">ADR-062: Forward callable plan</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/063-forward-declaration-level-export-scoping.md">ADR-063: Forward declaration-level export scoping</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/064-forward-unsupported-declaration-diagnostics.md">ADR-064: Forward unsupported-declaration diagnostics</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/066-forward-export-reachability-closure.md">ADR-066: Forward export reachability closure</a>
     </category>
 </seealso>

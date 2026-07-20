@@ -266,6 +266,75 @@ Enum, `Char`, and `Map`/`Set` method returns are covered under the shared plan; 
 `Patient.Mood()`, `Patient.Initial()`, `Patient.Scores()`, and `Patient.Labels()` exercise them
 (see [Enums](enums.md), [Primitives and strings](primitives-and-strings.md), [Collections](collections.md)).
 
+## Classes declared in a dependency module
+
+A class doesn't need to be declared in the publishing Gradle module to reach the generated C# API.
+The export set is a reachability closure ([ADR-066](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/066-forward-export-reachability-closure.md)):
+starting from the module's own exported declarations, the processor walks return types, parameter
+types, and property types, and admits a discovered type declared in a dependency module (pulled in
+with `implementation(project(":models"))`) through the same `include`/`exclude`/`rootPackage`
+predicate used for the module's own files. See [The nuget {} DSL](nuget-dsl.md) for the full rule.
+
+From `test-library/src/nativeMain/kotlin/.../Newsroom.kt`, where `TopStory` and `Byline` are
+declared one Gradle module away, in `:test-models`:
+
+```kotlin
+// io.github.xxfast.kotlin.native.nuget.test.models, in :test-models
+data class TopStory(val title: String, val rank: Int, val byline: Byline?)
+class Byline(val name: String)
+```
+
+```kotlin
+// io.github.xxfast.kotlin.native.nuget.test, in :test-library
+class Newsroom {
+  fun latest(): TopStory = TopStory("Oreo escapes the cardboard box (again)", 1, Byline("Mylo"))
+}
+```
+
+`Byline` is never returned directly by anything in `:test-library`; it only enters the export set
+because `TopStory.byline` references it, which is what proves the closure keeps walking rather than
+stopping after one hop. Both classes generate exactly like a module-local class, under a namespace
+derived from their own Kotlin package (`TestLibrary.Models`), not the exporting module's:
+
+```C#
+namespace TestLibrary.Models
+{
+    public class TopStory : IDisposable
+    {
+        public string Title { get; }
+        public int Rank { get; }
+        public global::TestLibrary.Models.Byline? Byline { get; }
+        // ...
+    }
+    public class Byline : IDisposable
+    {
+        public string Name { get; }
+        // ...
+    }
+}
+```
+
+From `IntegrationTests/NewsroomReachabilityTests.cs`:
+
+```C#
+[Fact]
+public void Latest_Byline_ReachableOnlyTransitively_ThroughAnAlreadyAdmittedType()
+{
+    using var newsroom = new Newsroom();
+    using TopStory story = newsroom.Latest();
+    using Byline? byline = story.Byline;
+
+    Assert.NotNull(byline);
+    Assert.Equal("Mylo", byline!.Name);
+}
+```
+
+A dependency-module type reached this way is otherwise a completely ordinary handle-backed class:
+cyclic references (`Whisker.purr: Purr?` / `Purr.whisker: Whisker?`) resolve correctly and the
+closure terminates rather than recursing forever, and a type whose package falls outside the
+effective `include`/`rootPackage` scope is skipped with a named diagnostic instead of silently
+binding or breaking the build; see [Publishing Kotlin to C#](forward-overview.md#diagnostics).
+
 ## Limitations
 
 - Nullable `Boolean` method returns remain unplanned: the callable is omitted and a
@@ -280,6 +349,7 @@ Enum, `Char`, and `Map`/`Set` method returns are covered under the shared plan; 
         <a href="interfaces-abstract-sealed.md">Interfaces, abstract and sealed classes</a>
         <a href="collections.md">Collections</a>
         <a href="extensions.md">Extensions</a>
+        <a href="nuget-dsl.md">The nuget {} DSL</a>
     </category>
     <category ref="external">
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/003-memory-management-across-bridge.md">ADR-003: Memory management across the bridge</a>
@@ -287,5 +357,6 @@ Enum, `Char`, and `Map`/`Set` method returns are covered under the shared plan; 
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/061-method-return-marshalling.md">ADR-061: Method return marshalling</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/062-forward-callable-plan.md">ADR-062: Forward callable plan</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/064-forward-unsupported-declaration-diagnostics.md">ADR-064: Forward unsupported-declaration diagnostics</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/066-forward-export-reachability-closure.md">ADR-066: Forward export reachability closure</a>
     </category>
 </seealso>

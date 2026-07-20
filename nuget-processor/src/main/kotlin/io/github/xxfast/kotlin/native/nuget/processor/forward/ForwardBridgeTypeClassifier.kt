@@ -76,7 +76,7 @@ internal class ForwardBridgeTypeClassifier(
       }
       return BridgeType.Enum(qualifiedName, csharpType)
     }
-    if (classDeclaration.modifiers.contains(Modifier.VALUE)) return valueClass(classDeclaration, qualifiedName)
+    if (classDeclaration.isValueClass()) return valueClass(classDeclaration, qualifiedName)
     if (classDeclaration.modifiers.contains(Modifier.SEALED)) {
       return BridgeType.SpecializedProtocol("sealed helper $qualifiedName")
     }
@@ -96,25 +96,64 @@ internal class ForwardBridgeTypeClassifier(
       )
     }
     if (qualifiedName !in context.exportedObjectHandles) {
+      // ADR-066: a declaration read straight off a klib dependency (never seen by
+      // `resolver.getAllFiles()`) carries no containing file — verified in the ADR's spike. A
+      // module-local declaration that simply fell outside the ADR-063 package filter still keeps
+      // the old, generic message; only the cross-module case gets the closure's own diagnostic.
+      val isUnexportedDependency: Boolean = classDeclaration.containingFile == null
       return BridgeType.Unsupported(
         qualifiedName,
-        "declaration is not in the exported object-handle set",
+        if (isUnexportedDependency) {
+          "declared in a dependency module whose package is outside the export scope"
+        } else {
+          "declaration is not in the exported object-handle set"
+        },
+        isUnexportedDependency = isUnexportedDependency,
       )
     }
-    return BridgeType.ObjectHandle(qualifiedName)
+    return BridgeType.ObjectHandle(qualifiedName, csharpType = csharpTypeNameFor(classDeclaration))
+  }
+
+  /**
+   * ADR-066: a bare simple name is the shipped behaviour and stays that way for every
+   * module-local object handle (deliberately narrower than the enum branch's blanket
+   * qualification — this repo's Tier 1/2 fixtures assert exact `MethodName(Type param)`
+   * substrings for module-local handles today, so unconditionally qualifying every ObjectHandle
+   * would be a much larger behavioural change than this feature's scope). An **admitted
+   * dependency-module type** is the one case that must be qualified: it is never guaranteed to
+   * share its referencing class's namespace, and an unqualified name only compiles by accident
+   * when the two happen to coincide (ADR-066 "Failure mode 2", the same defect class as the
+   * `Flow<T>` element-type sites).
+   */
+  private fun csharpTypeNameFor(classDeclaration: KSClassDeclaration): String {
+    val simpleName: String = classDeclaration.simpleName.asString()
+    if (classDeclaration.containingFile != null) return simpleName
+    if (context.rootNamespace.isEmpty()) return simpleName
+    val namespace: String = mapPackageToNamespace(
+      classDeclaration.packageName.asString(),
+      context.rootPackage,
+      context.rootNamespace,
+    )
+    return "global::$namespace.$simpleName"
   }
 
   private fun valueClass(declaration: KSClassDeclaration, qualifiedName: String): BridgeType {
-    val underlying: KSType = declaration.primaryConstructor
-      ?.parameters
-      ?.singleOrNull()
-      ?.type
-      ?.resolve()
+    val underlyingParam = declaration.primaryConstructor?.parameters?.singleOrNull()
       ?: return BridgeType.Unsupported(
         qualifiedName,
         "value class must have exactly one underlying property",
       )
-    return BridgeType.ValueClass(qualifiedName, classify(underlying))
+    val underlyingPropertyName: String = underlyingParam.name?.asString()
+      ?: return BridgeType.Unsupported(
+        qualifiedName,
+        "value class underlying parameter must be named",
+      )
+    return BridgeType.ValueClass(
+      qualifiedName,
+      classify(underlyingParam.type.resolve()),
+      underlyingPropertyName,
+      csharpType = csharpTypeNameFor(declaration),
+    )
   }
 
   private fun collectionType(
@@ -176,3 +215,14 @@ internal class ForwardBridgeTypeClassifier(
 
 internal fun KSType.toBridgeType(context: ForwardBridgeTypeContext): BridgeType =
   ForwardBridgeTypeClassifier(context).classify(this)
+
+/**
+ * ADR-066 verified spike finding: a cross-module (klib) `value class` reports `Modifier.INLINE`,
+ * never `Modifier.VALUE` — only an in-module one reports `VALUE`. Every classification site that
+ * tested `Modifier.VALUE` alone would misclassify an admitted dependency value class as an
+ * ordinary class and export it as an opaque `IDisposable` handle instead of an unwrapped value:
+ * valid-compiling, silently wrong. This is the single shared helper the ADR asks for so a fourth
+ * `Modifier.VALUE`-only site can never be added later against the in-module-only test.
+ */
+internal fun KSClassDeclaration.isValueClass(): Boolean =
+  modifiers.contains(Modifier.VALUE) || modifiers.contains(Modifier.INLINE)

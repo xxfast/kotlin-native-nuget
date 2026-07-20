@@ -75,6 +75,62 @@ bound types reachable from its own forward return types to keep compiling.
 See [ADR-063](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/063-forward-declaration-level-export-scoping.md)
 for the full predicate and the `rootPackage` behaviour-change rationale.
 
+### Cross-module export closure
+
+`include`/`exclude`/`rootPackage` also decide what crosses a Gradle module boundary. The export set
+is a **reachability closure** from the module's own admitted declarations (the roots above): the
+processor walks return types, parameter types, property types, type arguments of an admitted carrier
+(`Flow<T>`, `List<T>`/`Set<T>`/`Map<K,V>`), sealed subclasses, and primary-constructor parameter
+types, and admits every discovered declaration through the *same* `include`/`exclude`/`rootPackage`
+predicate, whether it lives in this module or in a dependency module pulled in with
+`implementation(project(":models"))`. No separate DSL verb is needed: a `:models` module under the
+same `rootPackage` is admitted automatically.
+
+```kotlin
+nuget {
+  publish {
+    packageId = "TestLibrary"
+    rootPackage = "io.github.xxfast.kotlin.native.nuget.test"
+    // io.github.xxfast.kotlin.native.nuget.test.models is under rootPackage: admitted with no
+    // extra config. dev.other.core is not: reachable types from it are skipped unless named here.
+    include("dev.other.core")
+  }
+}
+```
+
+A reachable dependency-module type whose package falls outside the effective include set is skipped
+with `SKIPPED_UNEXPORTED_DEPENDENCY_TYPE`, naming the exact `include(...)` line that would admit it,
+rather than silently dropping the member or leaking an unusable handle. When at least one type is
+admitted from a dependency module, the processor also emits one `INFO_EXPORTED_FROM_DEPENDENCY` line
+per KSP run, naming the whole admitted set, since a per-type warning would be noise at this scale.
+
+<note>
+<p>With neither <code>rootPackage</code> nor <code>include</code> set, the closure never crosses a
+module boundary at all: an empty effective include set means "everything" for the module's own
+files (unchanged from ADR-063) but "nothing" for a dependency module, otherwise a project with no
+scoping configured would pull in every reachable type from every dependency on the classpath,
+including <code>kotlinx.coroutines</code> and <code>kotlin.*</code> themselves.</p>
+</note>
+
+<warning>
+<p>Two published packages that each independently admit the same dependency type get two unrelated
+C# types for one Kotlin type (<code>PackageA.Models.Foo</code> and <code>PackageB.Models.Foo</code>),
+with no conversion between them and no diagnostic, because neither KSP run can see the other
+package's export set. This is an accepted limitation, not a bug: it is the same hazard Kotlin/Native
+framework export already has when two frameworks each <code>export()</code> a shared dependency. See
+<a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/066-forward-export-reachability-closure.md">ADR-066</a>'s
+Consequences section.</p>
+</warning>
+
+Deferred, each needing its own decision: supertype edges (an admitted class implementing an admitted
+interface does not gain `: IFoo` in C#), cross-module generic classes, and cross-module
+`suspend`/`Flow`-returning members on an admitted dependency type (a root may still return
+`Flow<DepType>`; it's the dependency type's *own* suspend/`Flow` members that are skipped).
+
+See
+[ADR-066](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/066-forward-export-reachability-closure.md)
+for the full admission and edge-walking rules.
+
 ## `dependencies { }`
 
 Configures a `NugetDependencyScope`, whose only member is `dependency(...)`.

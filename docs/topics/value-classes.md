@@ -207,8 +207,70 @@ public void CatId_PrimaryConstructor_TooLong_ThrowsArgumentException()
 }
 ```
 
+## As an ordinary return type
+
+A `String`-underlying value class also binds correctly at an *ordinary* position, not only as the
+receiver of its own methods: a plain class-method return typed as the value class. From
+`test-library/src/nativeMain/kotlin/.../Newsroom.kt` (a `value class` declared one Gradle module
+away, in `:test-models`; see [The nuget {} DSL](nuget-dsl.md) for the cross-module export closure):
+
+```kotlin
+value class StoryCode(val value: String)
+
+class Newsroom {
+  fun code(): StoryCode = StoryCode("BREAKING-001")
+}
+```
+
+Generated C#, from `Interop.cs`:
+
+```C#
+public readonly record struct StoryCode
+{
+    public string Value { get; }
+    // ...
+}
+
+public class Newsroom : IDisposable, IAsyncDisposable
+{
+    // ...
+    public global::TestLibrary.Models.StoryCode Code()
+    {
+        IntPtr nativeResult = Native_Code(_handle, out IntPtr error);
+        if (error != IntPtr.Zero)
+        {
+            throw NugetErrorNative.BuildException(error);
+        }
+        return new global::TestLibrary.Models.StoryCode(Marshal.PtrToStringUTF8(nativeResult)!);
+    }
+}
+```
+
+From `IntegrationTests/NewsroomReachabilityTests.cs`:
+
+```C#
+[Fact]
+public void Code_CrossModuleValueClass_BindsAsUnwrappedValue()
+{
+    using var newsroom = new Newsroom();
+    var code = newsroom.Code();
+
+    Assert.Equal("BREAKING-001", code.Value);
+}
+```
+
+`StoryCode` binds as the unwrapped `record struct`, never as an `IDisposable` handle, which is worth
+calling out because it is easy to get wrong here specifically: KSP reports a *cross-module* value
+class with `Modifier.INLINE`, never `Modifier.VALUE`, so a classification check written for
+`Modifier.VALUE` alone would silently misclassify it as an ordinary class.
+
 ## Limitations
 
+- A value class at an ordinary position (a plain method/property return or parameter typed as the
+  value class, rather than the value class's own receiver) is currently scoped to a **`String`
+  underlying type only**, the shape shown above. `Primitive`-, `Enum`-, and object-underlying value
+  classes at an ordinary position, and value classes at ordinary **parameter** positions, are not yet
+  planned (see [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md)).
 - Reference-underlying value-class **primary** constructor `init` validation stays deferred
   ([ADR-035](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/035-value-class-primary-constructor-validation.md));
   primitive-underlying validation (the `CatId` path above) is in place.
@@ -222,6 +284,7 @@ public void CatId_PrimaryConstructor_TooLong_ThrowsArgumentException()
     <category ref="related">
         <a href="data-classes.md">Data classes</a>
         <a href="exceptions.md">Exceptions</a>
+        <a href="nuget-dsl.md">The nuget {} DSL</a>
     </category>
     <category ref="external">
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/014-value-class-mapping.md">ADR-014: Value class mapping</a>
@@ -229,5 +292,6 @@ public void CatId_PrimaryConstructor_TooLong_ThrowsArgumentException()
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/035-value-class-primary-constructor-validation.md">ADR-035: Value class primary constructor validation</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/062-forward-callable-plan.md">ADR-062: Forward callable plan</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/064-forward-unsupported-declaration-diagnostics.md">ADR-064: Forward unsupported-declaration diagnostics</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/066-forward-export-reachability-closure.md">ADR-066: Forward export reachability closure</a>
     </category>
 </seealso>

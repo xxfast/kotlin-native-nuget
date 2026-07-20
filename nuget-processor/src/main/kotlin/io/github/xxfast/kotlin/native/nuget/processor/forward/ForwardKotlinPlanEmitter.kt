@@ -105,11 +105,42 @@ internal fun FileSpec.Builder.addForwardKotlinPlanExport(plan: ForwardCallablePl
       errorName = error.name,
     )
 
+    is BridgeType.ValueClass ->
+      addValueClassOrdinaryResult(builder, result, invocation, call.result, error.name)
+
     else -> error("Forward Kotlin plan emitter has no Phase 4 result route for $result")
   }
 
   addFunction(builder.build())
   return this
+}
+
+/**
+ * ADR-014 (ordinary position, ADR-066's fixture gap): a value class returned by an *ordinary*
+ * callable is unboxed to its underlying property before crossing the wire — `Newsroom.code():
+ * StoryCode` exports `code().value`, not a StableRef of `StoryCode` itself. Scoped to a `String`
+ * underlying, matching [ForwardCallablePlanner]'s planner-side scoping.
+ */
+private fun addValueClassOrdinaryResult(
+  builder: FunSpec.Builder,
+  type: BridgeType.ValueClass,
+  invocation: String,
+  nativeResult: ForwardAbiWireType,
+  errorName: String,
+) {
+  require(type.underlying == BridgeType.String) {
+    "Forward Kotlin plan emitter only supports a String-underlying value class at an ordinary " +
+        "result position: $type"
+  }
+  require(nativeResult == ForwardAbiWireType.POINTER) {
+    "Forward Kotlin value-class String result must use POINTER wire type: $type"
+  }
+  builder.returns(kotlinType("String"))
+  builder.addCode(
+    errorHandlingValueBody("$invocation.${type.underlyingPropertyName}", errorName, "\"\""),
+    cOpaquePointerVar,
+    stableRef,
+  )
 }
 
 /**

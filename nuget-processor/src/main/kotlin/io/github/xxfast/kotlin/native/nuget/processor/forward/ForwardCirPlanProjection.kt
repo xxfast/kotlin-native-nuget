@@ -516,6 +516,22 @@ internal object ForwardCirPlanProjection {
         body = checkedCollectionBody(nativeName, callArguments, result, prelude, cleanup),
       )
 
+      // ADR-014 (ordinary position, ADR-066's fixture gap): always a custom body, regardless of
+      // `needsCustomParams` — a value class's zero-parameter own getter (`Newsroom.Code()`) would
+      // otherwise fall through to the generic pass-through renderer, which has no wrap-in-struct
+      // case. Scoped to a String underlying, matching the planner's own scoping.
+      is BridgeType.ValueClass -> CirResultProjection(
+        returnType = result.csharpType,
+        nativeReturnType = "IntPtr",
+        body = checkedPointerBody(
+          nativeName,
+          callArguments,
+          "return new ${result.csharpType}(Marshal.PtrToStringUTF8(nativeResult)!);",
+          prelude,
+          cleanup,
+        ),
+      )
+
       is BridgeType.Nullable -> when (val type: BridgeType = result.type) {
         is BridgeType.ObjectHandle -> CirResultProjection(
           returnType = "${type.csharpType()}?",
@@ -746,7 +762,11 @@ internal object ForwardCirPlanProjection {
     is BridgeType.Primitive -> kind.csharpType()
     BridgeType.Char -> "char"
     BridgeType.String -> "string"
-    is BridgeType.ObjectHandle -> qualifiedName.substringAfterLast('.')
+    // ADR-066: the classifier already computed the correctly-qualified public spelling (bare
+    // simple name in this class's own namespace, `global::Namespace.Name` otherwise) — mirrors
+    // `BridgeType.Enum.csharpType`'s existing shape exactly.
+    is BridgeType.ObjectHandle -> csharpType
+    is BridgeType.ValueClass -> csharpType
     is BridgeType.Enum -> this.csharpType
     is BridgeType.Collection -> when (kind) {
       CollectionKind.LIST -> "IReadOnlyList<${requireNotNull(element).csharpType()}>"

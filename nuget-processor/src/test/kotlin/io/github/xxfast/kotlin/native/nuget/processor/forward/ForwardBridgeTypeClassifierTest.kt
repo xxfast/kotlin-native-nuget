@@ -173,13 +173,24 @@ class ForwardBridgeTypeClassifierTest {
     "getModifiers" to modifiers,
     "getPrimaryConstructor" to primaryConstructor,
     "getTypeParameters" to emptyList<Any>(),
+    // ADR-066: every fixture here represents a module-local declaration (`containingFile != null`
+    // is the verified cross-module/klib signal the classifier now branches on), so a non-null
+    // stand-in keeps these tests on the pre-existing "declaration is not in the exported
+    // object-handle set" message rather than the new dependency-module one.
+    "getContainingFile" to proxy<com.google.devtools.ksp.symbol.KSFile>(),
   )
 
   private fun constructor(underlying: KSType): KSFunctionDeclaration = proxy(
     "getParameters" to listOf(valueParameter(underlying)),
   )
 
-  private fun valueParameter(type: KSType): KSValueParameter = proxy("getType" to typeReference(type))
+  private fun valueParameter(type: KSType): KSValueParameter = proxy(
+    "getType" to typeReference(type),
+    // ADR-066: `BridgeType.ValueClass.underlyingPropertyName` needs the parameter's name to
+    // unbox a value-class *result* at an ordinary position; every real fixture in this repo
+    // names it `value`, matching `BridgeType.ValueClass`'s own default.
+    "getName" to name("value"),
+  )
 
   private fun name(value: String): KSName = proxy("asString" to value)
 

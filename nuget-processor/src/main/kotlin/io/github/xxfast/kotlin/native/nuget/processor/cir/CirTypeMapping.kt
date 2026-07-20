@@ -1,5 +1,7 @@
 package io.github.xxfast.kotlin.native.nuget.processor.cir
 
+import com.google.devtools.ksp.symbol.KSClassDeclaration
+import com.google.devtools.ksp.symbol.KSDeclaration
 import com.google.devtools.ksp.symbol.KSType
 import com.google.devtools.ksp.symbol.KSTypeAlias
 import io.github.xxfast.kotlin.native.nuget.processor.forward.BridgeType
@@ -130,4 +132,25 @@ internal fun mapPackageToNamespace(
     }
 
   return "$rootNamespace.$suffix"
+}
+
+/**
+ * ADR-066: the `Flow<T>`/`StateFlow<T>` element-type route mapped its element by *simple* name
+ * (`declaration.simpleName.asString()`), so `Flow<TopStory>` emitted the unqualified `KotlinFlow
+ * <TopStory>` — a type that only resolves inside `Interop.cs` when the element's namespace
+ * happens to coincide with the enclosing class's own namespace, which an admitted dependency-
+ * module type is never guaranteed to do. Mirrors [ForwardBridgeTypeClassifier]'s enum branch
+ * exactly: a known scalar keeps its C# primitive spelling, otherwise a same-namespace reference
+ * stays bare and everything else renders `global::Namespace.Name`.
+ */
+internal fun qualifiedElementCsType(type: KSType?, context: NugetContext): String {
+  val declaration: KSDeclaration = type?.expandAliases()?.declaration ?: return "Any"
+  val simpleName: String = declaration.simpleName.asString()
+  KOTLIN_TO_CSHARP_PARAM[simpleName]?.let { return it }
+  val classDeclaration: KSClassDeclaration = declaration as? KSClassDeclaration ?: return simpleName
+  if (context.rootNamespace.isEmpty()) return simpleName
+  val namespace: String = mapPackageToNamespace(
+    classDeclaration.packageName.asString(), context.rootPackage, context.rootNamespace,
+  )
+  return "global::$namespace.$simpleName"
 }

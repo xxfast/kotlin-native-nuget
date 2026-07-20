@@ -267,11 +267,17 @@ public void DefaultScores_ReturnsReadOnlyDictionaryOfStringInt()
   binds; the generator notes it with an `INFO_DROPPED_VARIANCE` diagnostic rather than silently
   ignoring the annotation
   ([ADR-064](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/064-forward-unsupported-declaration-diagnostics.md)).
+- A generic class declared in a dependency module and admitted through the
+  [export reachability closure](nuget-dsl.md) resolves fully but still routes to the legacy generic
+  protocol, which has never been exercised across a module boundary; it is skipped with the existing
+  diagnostic rather than generated
+  ([ADR-066](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/066-forward-export-reachability-closure.md)).
 
 <seealso>
     <category ref="related">
         <a href="collections.md">Collections</a>
         <a href="value-classes.md">Value classes</a>
+        <a href="nuget-dsl.md">The nuget {} DSL</a>
     </category>
     <category ref="external">
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/010-generics-mapping.md">ADR-010: Generics mapping</a>
@@ -280,5 +286,6 @@ public void DefaultScores_ReturnsReadOnlyDictionaryOfStringInt()
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/017-inline-function-mapping.md">ADR-017: Inline function mapping</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/018-type-alias-mapping.md">ADR-018: Type alias mapping</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/064-forward-unsupported-declaration-diagnostics.md">ADR-064: Forward unsupported-declaration diagnostics</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/066-forward-export-reachability-closure.md">ADR-066: Forward export reachability closure</a>
     </category>
 </seealso>

@@ -109,6 +109,9 @@ kotlin {
   sourceSets {
     nativeMain.dependencies {
       implementation(libs.kotlinx.coroutines.core)
+      // ADR-066: a real second Gradle module, one klib boundary away. Consumed here so the
+      // forward export reachability closure has a genuine cross-module type graph to walk.
+      implementation(project(":test-models"))
     }
     nativeTest.dependencies {
       implementation(libs.kotlin.test)

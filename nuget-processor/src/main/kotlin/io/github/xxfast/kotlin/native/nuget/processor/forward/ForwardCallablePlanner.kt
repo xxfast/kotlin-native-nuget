@@ -7,8 +7,8 @@ import com.google.devtools.ksp.symbol.KSFunctionDeclaration
 import com.google.devtools.ksp.symbol.KSNode
 import com.google.devtools.ksp.symbol.KSPropertyDeclaration
 import com.google.devtools.ksp.symbol.KSType
+import com.google.devtools.ksp.getAllSuperTypes
 import com.google.devtools.ksp.symbol.Modifier
-import com.google.devtools.ksp.symbol.Origin
 import com.google.devtools.ksp.symbol.Visibility
 import io.github.xxfast.kotlin.native.nuget.processor.exports.findInterfaceBridgePairs
 import io.github.xxfast.kotlin.native.nuget.processor.exports.findStoredCallbackPairs
@@ -59,6 +59,12 @@ internal enum class ForwardPlanSkipReason(val droppedFromCSharp: Boolean) {
   /** ROADMAP line 77: a value-class member inherited via interface delegation (e.g.
    *  `CharSequence by value`), not declared by the value class itself. */
   INHERITED_MEMBER(droppedFromCSharp = true),
+
+  /** ADR-066: a reachable, structurally bridgeable declaration in a dependency module whose
+   *  package the reachability closure did not admit (out of scope, not unsupported). Carries its
+   *  own diagnostic kind (`SKIPPED_UNEXPORTED_DEPENDENCY_TYPE`) naming the `include(...)` fix,
+   *  rather than the generic "declaration is not in the exported object-handle set" message. */
+  UNEXPORTED_DEPENDENCY_TYPE(droppedFromCSharp = true),
 }
 
 internal sealed interface ForwardCallableCatalogEntry {
@@ -77,6 +83,10 @@ internal sealed interface ForwardCallableCatalogEntry {
     // author's own Kotlin source rather than at generated code. Null only where no single KSNode
     // cleanly represents the skip.
     val node: KSNode? = null,
+    // ADR-066: the unexported dependency type's qualified name, when `reason ==
+    // UNEXPORTED_DEPENDENCY_TYPE`. Carries enough for the diagnostic sink to build the
+    // `include("<package>")` hint without re-deriving it from the generic reason enum.
+    val detail: String? = null,
   ) : ForwardCallableCatalogEntry
 }
 
@@ -167,6 +177,23 @@ internal class ForwardCallablePlanner(
       ForwardReceiver.Value(underlyingType, name = "value")
     }
 
+    // ADR-066 amendment to ADR-064's SKIPPED_INHERITED_MEMBER filter: `origin != Origin.KOTLIN`
+    // is wrong once a value class can live in a dependency module — every member of a KOTLIN_LIB
+    // declaration (author-declared or not) reports `origin == KOTLIN_LIB`, so the old rule would
+    // drop the entire cross-module value class, not just its delegated members. The only
+    // origin-independent signal available, verified against a real klib, is "a supertype declares
+    // a member with this simple name" — this also correctly catches interface delegation
+    // (`CharSequence by value`), which forwards members with `parentDeclaration == cls` and is
+    // otherwise indistinguishable from a hand-written member. Computed once per class: cheap
+    // relative to walking every member, and `getAllSuperTypes()` is documented as expensive.
+    val inheritedNames: Set<String> = cls.getAllSuperTypes()
+      .mapNotNull { superType -> superType.declaration as? KSClassDeclaration }
+      .flatMap { superType ->
+        superType.getAllFunctions().map { function -> function.simpleName.asString() } +
+            superType.getAllProperties().map { property -> property.simpleName.asString() }
+      }
+      .toSet()
+
     return buildList {
       addAll(
         valueClassConstructorEntries(
@@ -178,8 +205,10 @@ internal class ForwardCallablePlanner(
           isReferenceUnderlying
         )
       )
-      addAll(valueClassPropertyEntries(cls, owner, prefix, underlyingPropName, receiver))
-      addAll(valueClassMethodEntries(cls, owner, prefix, receiver))
+      addAll(
+        valueClassPropertyEntries(cls, owner, prefix, underlyingPropName, receiver, inheritedNames),
+      )
+      addAll(valueClassMethodEntries(cls, owner, prefix, receiver, inheritedNames))
     }
   }
 
@@ -242,23 +271,18 @@ internal class ForwardCallablePlanner(
     prefix: String,
     underlyingPropName: String,
     receiver: ForwardReceiver,
+    inheritedNames: Set<String>,
   ): List<ForwardCallableCatalogEntry> = cls.getAllProperties()
     .filter { it.getVisibility() == Visibility.PUBLIC }
     .filter { it.simpleName.asString() != underlyingPropName }
     .map { prop ->
       val name: String = prop.simpleName.asString()
-      // ADR-064 (ROADMAP line 77): a property whose declaration site is not the value class
-      // itself — inherited via interface delegation, e.g. `CharSequence by value`'s `length` —
-      // is a v1 product-scope skip, not a silently-bridged member. `parentDeclaration != cls`
-      // alone is not enough: Kotlin attributes a delegate's *own* synthesized forwarders (e.g.
-      // `length`) to the delegating class itself (`Origin.SYNTHETIC`, `parentDeclaration ==
-      // cls`), so only a genuinely default (JDK) interface member like `CharSequence.isEmpty()`
-      // would be caught by `parentDeclaration` alone (verified through the Tier 1 harness:
-      // `length`/`get`/`subSequence` are `SYNTHETIC` with `parentDeclaration == cls`;
-      // `isEmpty`/`chars`/`codePoints` are `JAVA_LIB` with `parentDeclaration` pointing at
-      // `kotlin.CharSequence`). `Origin.KOTLIN` is what a member the author actually wrote in
-      // this class body carries.
-      if (prop.origin != Origin.KOTLIN || prop.parentDeclaration != cls) {
+      // ADR-064 (ROADMAP line 77), amended by ADR-066: a property whose declaration site is not
+      // the value class itself, or that a supertype (including an interface delegate, e.g.
+      // `CharSequence by value`'s `length`) also declares by this simple name, is a v1
+      // product-scope skip, not a silently-bridged member. See `valueClassEntries` for why the
+      // supertype-name check (not `Origin.KOTLIN`) is the origin-independent signal this needs.
+      if (prop.parentDeclaration != cls || name in inheritedNames) {
         return@map ForwardCallableCatalogEntry.Skipped(
           "$owner.$name", ForwardPlanSkipReason.INHERITED_MEMBER, node = prop,
         )
@@ -285,6 +309,7 @@ internal class ForwardCallablePlanner(
     owner: String,
     prefix: String,
     receiver: ForwardReceiver,
+    inheritedNames: Set<String>,
   ): List<ForwardCallableCatalogEntry> {
     val excluded: Set<String> = setOf(
       "equals", "hashCode", "toString", "<init>",
@@ -296,14 +321,12 @@ internal class ForwardCallablePlanner(
       .filter { it.simpleName.asString() !in excluded }
       .map { method ->
         val name: String = method.simpleName.asString()
-        // ADR-064 (ROADMAP line 77): a method whose declaration site is not the value class
-        // itself — inherited via interface delegation, e.g. `CharSequence by value`'s `get` —
-        // is a v1 product-scope skip, not a silently-bridged member. See the property filter
-        // above for why `Origin.KOTLIN` (not `parentDeclaration` alone) is the right signal:
-        // `get`/`subSequence` are `SYNTHETIC` delegation forwarders Kotlin attributes to this
-        // very class, while `isEmpty`/`chars`/`codePoints` are `JAVA_LIB` default members of
-        // `kotlin.CharSequence` (verified through the Tier 1 harness).
-        if (method.origin != Origin.KOTLIN || method.parentDeclaration != cls) {
+        // ADR-064 (ROADMAP line 77), amended by ADR-066: see `valueClassPropertyEntries` above —
+        // the same supertype-simple-name signal (not `Origin.KOTLIN`) catches both genuine
+        // supertype inheritance and interface delegation (`CharSequence by value`'s `get` /
+        // `subSequence`), the two constructs `parentDeclaration` alone cannot tell apart
+        // cross-module.
+        if (method.parentDeclaration != cls || name in inheritedNames) {
           return@map ForwardCallableCatalogEntry.Skipped(
             "$owner.$name", ForwardPlanSkipReason.INHERITED_MEMBER, node = method,
           )
@@ -571,6 +594,7 @@ internal class ForwardCallablePlanner(
     if (ineligible != null) {
       return ForwardCallableCatalogEntry.Skipped(
         symbol, requireNotNull(ineligible.inputSkipReason()), node = node,
+        detail = ineligible.unexportedDependencyDetail(),
       )
     }
 
@@ -708,6 +732,7 @@ internal class ForwardCallablePlanner(
     if (ineligible != null) {
       return ForwardCallableCatalogEntry.Skipped(
         symbol, requireNotNull(ineligible.inputSkipReason()), node = node,
+        detail = ineligible.unexportedDependencyDetail(),
       )
     }
 
@@ -715,6 +740,7 @@ internal class ForwardCallablePlanner(
     if (resultShape == null) {
       return ForwardCallableCatalogEntry.Skipped(
         symbol, requireNotNull(result.skipReason()), node = node,
+        detail = result.unexportedDependencyDetail(),
       )
     }
 
@@ -944,7 +970,22 @@ internal class ForwardCallablePlanner(
     )
 
     is BridgeType.ObjectHandle -> handleResultShape(this)
-    is BridgeType.Collection -> handleResultShape(this, ForwardHelperRequirement.COLLECTION)
+    // ADR-014 gap this feature's fixture flushed out: a value class returned by an *ordinary*
+    // (non-value-class-own) callable never had a planner-side result shape, despite the model/
+    // validator already carrying BOX_VALUE_CLASS/UNBOX_VALUE_CLASS conversions for exactly this
+    // position. Scoped to a String underlying only (what the fixture needs); every other
+    // underlying keeps its existing VALUE_CLASS skip rather than risk a wire shape this change
+    // was not verified against.
+    is BridgeType.ValueClass -> valueClassResultShape(this)
+    // ADR-066: an unsupported (or reachable-but-out-of-scope) element/key/value must not reach
+    // ForwardCallablePlanValidator as a built Collection shape — that error()s the whole plan
+    // rather than skipping just this one callable (the archive(): List<TopStory> crash this
+    // feature's fixture flushed out, predating ADR-066 but only reachable once it exists).
+    is BridgeType.Collection -> if (isBridgeableComponent()) {
+      handleResultShape(this, ForwardHelperRequirement.COLLECTION)
+    } else {
+      null
+    }
 
     is BridgeType.Nullable -> nullableResultShape(type)
     else -> null
@@ -1013,6 +1054,28 @@ internal class ForwardCallablePlanner(
     helperRequirements = setOfNotNull(helper),
   )
 
+  /**
+   * ADR-014 (ordinary position): the value class's underlying wire value crosses the boundary
+   * unchanged; the Kotlin export unboxes it (`result.${underlyingPropertyName}`, wired by
+   * [ForwardCallableOrigin] alone — the Kotlin emitter reads `type.underlyingPropertyName`
+   * directly) and the C# wrapper reconstructs `new StructType(rawValue)`. Reuses the underlying's
+   * own shape verbatim except for the outer transfer, which must record `type` (not the
+   * underlying) with [ForwardConversion.UNBOX_VALUE_CLASS] — the tag [ForwardCallablePlanValidator
+   * .requiredConversion] demands for a `BridgeType.ValueClass` result.
+   */
+  private fun valueClassResultShape(type: BridgeType.ValueClass): ForwardResultShape? {
+    if (type.underlying != BridgeType.String) return null
+    val underlyingShape: ForwardResultShape = type.underlying.shapeOrNull() ?: return null
+    return underlyingShape.copy(
+      transfer = underlyingShape.transfer.copy(
+        type = type,
+        conversion = ForwardConversion.UNBOX_VALUE_CLASS,
+      ),
+      helperRequirements = underlyingShape.helperRequirements +
+          ForwardHelperRequirement.VALUE_CLASS,
+    )
+  }
+
   private data class ForwardResultShape(
     val wireType: ForwardAbiWireType,
     val transfer: ForwardTransfer,
@@ -1060,12 +1123,63 @@ internal class ForwardCallablePlanner(
     ForwardReceiver.Static -> emptyList()
   }
 
+  /** ADR-066: the qualified name to feed the `SKIPPED_UNEXPORTED_DEPENDENCY_TYPE` hint, when this
+   *  (possibly nullable-wrapped) type is the direct reason a callable was dropped because it is a
+   *  reachable-but-out-of-scope dependency type. `null` for every other skip reason. */
+  private fun BridgeType.unexportedDependencyDetail(): String? =
+    (unwrapNullable() as? BridgeType.Unsupported)
+      ?.takeIf { unsupported -> unsupported.isUnexportedDependency }
+      ?.rendered
+
+  /**
+   * ADR-066: a collection whose element (or map key/value) type is itself unsupported must skip
+   * the whole callable through the normal named-diagnostic path, not reach the plan validator —
+   * `handleResultShape`/`inputSkipReason` used to build a Collection shape unconditionally, so an
+   * unsupported element only surfaced as a hard `IllegalStateException` out of
+   * `ForwardCallablePlanValidator.validateType`, crashing the entire `packNuget` rather than
+   * skipping the one member. Mirrors [ForwardCallablePlanValidator.validateType]'s error branches
+   * exactly, so anything that would `error(...)` there returns `false` here instead.
+   */
+  private fun BridgeType.isBridgeableComponent(): Boolean = when (this) {
+    BridgeType.Unit, BridgeType.Char, BridgeType.String, is BridgeType.Primitive,
+    is BridgeType.Enum, is BridgeType.ObjectHandle,
+      -> true
+
+    is BridgeType.ValueClass -> underlying.isBridgeableComponent()
+    is BridgeType.Nullable -> type !is BridgeType.Nullable && type != BridgeType.Unit &&
+        type.isBridgeableComponent()
+
+    is BridgeType.Collection -> {
+      val isMap: Boolean = kind == CollectionKind.MAP || kind == CollectionKind.MUTABLE_MAP
+      if (isMap) {
+        key?.isBridgeableComponent() == true && value?.isBridgeableComponent() == true
+      } else {
+        element?.isBridgeableComponent() == true
+      }
+    }
+
+    is BridgeType.RawCollection, is BridgeType.RawKSType, is BridgeType.SpecializedProtocol,
+    is BridgeType.Unsupported,
+      -> false
+  }
+
   private fun BridgeType.skipReason(): ForwardPlanSkipReason? = when (this) {
     BridgeType.Unit, is BridgeType.Primitive -> null
     BridgeType.Char -> ForwardPlanSkipReason.CHAR
     BridgeType.String -> ForwardPlanSkipReason.STRING
     is BridgeType.Nullable -> ForwardPlanSkipReason.NULLABLE
-    is BridgeType.Collection, is BridgeType.RawCollection -> ForwardPlanSkipReason.COLLECTION
+    // ADR-066: a bridgeable-shaped Collection (List/MutableList result, Map/Set) that still
+    // reaches here failed for its own reason (nothing else calls skipReason() on a bridgeable
+    // Collection); an unsupported element/key/value attributes to that component's own reason
+    // (e.g. UNEXPORTED_DEPENDENCY_TYPE) instead of the generic COLLECTION bucket, which
+    // `toDiagnosticKind()` reserves for the genuinely input-position case.
+    is BridgeType.Collection -> if (isBridgeableComponent()) {
+      ForwardPlanSkipReason.COLLECTION
+    } else {
+      (element ?: key ?: value)?.skipReason() ?: ForwardPlanSkipReason.UNSUPPORTED
+    }
+
+    is BridgeType.RawCollection -> ForwardPlanSkipReason.COLLECTION
     is BridgeType.Enum -> ForwardPlanSkipReason.ENUM
     is BridgeType.ObjectHandle -> ForwardPlanSkipReason.HANDLE
     is BridgeType.ValueClass -> ForwardPlanSkipReason.VALUE_CLASS
@@ -1083,17 +1197,25 @@ internal class ForwardCallablePlanner(
     }
 
     is BridgeType.RawKSType -> error("Forward planner received raw KSP type $rendered")
-    is BridgeType.Unsupported -> ForwardPlanSkipReason.UNSUPPORTED
+    is BridgeType.Unsupported -> if (isUnexportedDependency) {
+      ForwardPlanSkipReason.UNEXPORTED_DEPENDENCY_TYPE
+    } else {
+      ForwardPlanSkipReason.UNSUPPORTED
+    }
   }
 
   private fun BridgeType.inputSkipReason(): ForwardPlanSkipReason? = when (this) {
     BridgeType.String, BridgeType.Char -> null
     is BridgeType.Enum -> null
     is BridgeType.ObjectHandle -> null
-    is BridgeType.Collection -> if (kind == CollectionKind.LIST || kind == CollectionKind.MUTABLE_LIST) {
-      null
-    } else {
-      ForwardPlanSkipReason.COLLECTION
+    is BridgeType.Collection -> when {
+      kind != CollectionKind.LIST && kind != CollectionKind.MUTABLE_LIST ->
+        ForwardPlanSkipReason.COLLECTION
+      // ADR-066: an unsupported element must not silently produce a Collection shape that later
+      // crashes plan validation — route it through the same skip path as any other unsupported
+      // input, preferring the element's own reason (e.g. UNEXPORTED_DEPENDENCY_TYPE) when known.
+      !isBridgeableComponent() -> element?.skipReason() ?: ForwardPlanSkipReason.UNSUPPORTED
+      else -> null
     }
 
     is BridgeType.Nullable -> when (type) {

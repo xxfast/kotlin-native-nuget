@@ -25,9 +25,33 @@ internal sealed interface BridgeType {
     val csharpType: kotlin.String = qualifiedName.substringAfterLast('.'),
   ) : BridgeType
 
-  data class ObjectHandle(val qualifiedName: kotlin.String) : BridgeType
+  /**
+   * @param qualifiedName Kotlin FQCN.
+   * @param csharpType Public C# type spelling. ADR-066: mirrors [Enum]'s existing qualification
+   *   shape exactly — a same-namespace reference stays a bare simple name, but any admitted
+   *   dependency-module (or otherwise cross-namespace) type must render as `global::Namespace.
+   *   Name`, or a two-namespace assembly (e.g. `TestLibrary` referencing `TestLibrary.Models`)
+   *   fails `CS0246` in generated code the consumer never wrote.
+   */
+  data class ObjectHandle(
+    val qualifiedName: kotlin.String,
+    val csharpType: kotlin.String = qualifiedName.substringAfterLast('.'),
+  ) : BridgeType
 
-  data class ValueClass(val qualifiedName: kotlin.String, val underlying: BridgeType) : BridgeType
+  /**
+   * @param underlyingPropertyName the value class's single primary-constructor parameter name,
+   *   needed to unbox a value-class *result* at an ordinary (non-value-class-own) position: e.g.
+   *   `Newsroom.code(): StoryCode` must call `.value` on the computed `StoryCode` before crossing
+   *   the wire as its underlying wire value (ADR-014's "wraps/unwraps at the boundary").
+   * @param csharpType mirrors [ObjectHandle.csharpType] (ADR-066): a bare simple name for a
+   *   module-local declaration, `global::Namespace.Name` for an admitted dependency-module one.
+   */
+  data class ValueClass(
+    val qualifiedName: kotlin.String,
+    val underlying: BridgeType,
+    val underlyingPropertyName: kotlin.String = "value",
+    val csharpType: kotlin.String = qualifiedName.substringAfterLast('.'),
+  ) : BridgeType
 
   data class Collection(
     val kind: CollectionKind,
@@ -44,8 +68,21 @@ internal sealed interface BridgeType {
   /** A planning bug: raw KSP types must not leak beyond classification. */
   data class RawKSType(val rendered: kotlin.String) : BridgeType
 
-  /** A type deliberately outside the ordinary synchronous bridgeable subset. */
-  data class Unsupported(val rendered: kotlin.String, val reason: kotlin.String) : BridgeType
+  /**
+   * A type deliberately outside the ordinary synchronous bridgeable subset.
+   *
+   * @param isUnexportedDependency ADR-066: true when [rendered] is a cross-module (klib)
+   *   declaration's qualified name that the reachability closure discovered but did not admit
+   *   (its package failed [io.github.xxfast.kotlin.native.nuget.processor.forward
+   *   .ForwardBridgeTypeContext.exportedObjectHandles]'s membership test for scope reasons, not
+   *   because the shape itself is unsupported). Lets the planner route this specific case to
+   *   `SKIPPED_UNEXPORTED_DEPENDENCY_TYPE` instead of the generic `SKIPPED_UNSUPPORTED_TYPE`.
+   */
+  data class Unsupported(
+    val rendered: kotlin.String,
+    val reason: kotlin.String,
+    val isUnexportedDependency: kotlin.Boolean = false,
+  ) : BridgeType
 
   /** A collection whose component type was lost during classification. */
   data class RawCollection(val kind: CollectionKind) : BridgeType

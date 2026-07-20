@@ -62,6 +62,16 @@ internal enum class ForwardDiagnosticKind(val severity: ForwardDiagnosticSeverit
   /** ADR-034: two or more constructors render identical C# parameter types. Fatal: silently
    *  dropping one would change the API contract unpredictably. */
   ERROR_CSHARP_SIGNATURE_COLLISION(ForwardDiagnosticSeverity.ERROR),
+
+  /** ADR-066: a reachable, structurally bridgeable declaration in a dependency module whose
+   *  package the reachability closure did not admit — out of scope, not unsupported. Replaces
+   *  the misleading `SKIPPED_UNSUPPORTED_TYPE` this case used to fall through to. */
+  SKIPPED_UNEXPORTED_DEPENDENCY_TYPE(ForwardDiagnosticSeverity.WARNING),
+
+  /** ADR-066: the closure's blast-radius manifest — emitted once per KSP run (not once per
+   *  admitted type, which would be noise at scale), aggregating every dependency-module type the
+   *  closure admitted into the export set. */
+  INFO_EXPORTED_FROM_DEPENDENCY(ForwardDiagnosticSeverity.INFO),
 }
 
 /**
@@ -124,6 +134,9 @@ internal fun ForwardPlanSkipReason.toDiagnosticKind(): ForwardDiagnosticKind = w
 
   ForwardPlanSkipReason.INHERITED_MEMBER -> ForwardDiagnosticKind.SKIPPED_INHERITED_MEMBER
 
+  ForwardPlanSkipReason.UNEXPORTED_DEPENDENCY_TYPE ->
+    ForwardDiagnosticKind.SKIPPED_UNEXPORTED_DEPENDENCY_TYPE
+
   ForwardPlanSkipReason.CHAR,
   ForwardPlanSkipReason.ENUM,
   ForwardPlanSkipReason.HANDLE,
@@ -147,8 +160,23 @@ internal fun ForwardPlanSkipReason.toDiagnosticKind(): ForwardDiagnosticKind = w
   )
 }
 
-/** ADR-064: an actionable per-reason hint, kept alongside the mapping above it documents. */
-internal fun ForwardPlanSkipReason.diagnosticHint(): String = when (this) {
+/**
+ * ADR-064: an actionable per-reason hint, kept alongside the mapping above it documents.
+ *
+ * @param detail ADR-066: the unexported dependency type's qualified name
+ *   ([ForwardCallableCatalogEntry.Skipped.detail]), used only by [ForwardPlanSkipReason
+ *   .UNEXPORTED_DEPENDENCY_TYPE] to name the exact `include(...)` fix. Ignored by every other
+ *   reason.
+ */
+internal fun ForwardPlanSkipReason.diagnosticHint(detail: String? = null): String = when (this) {
+  ForwardPlanSkipReason.UNEXPORTED_DEPENDENCY_TYPE -> {
+    val dependencyPackage: String = detail
+      ?.let { qualifiedName -> qualifiedName.substringBeforeLast('.', qualifiedName) }
+      ?: "the dependency's package"
+    "add include(\"$dependencyPackage\") to nuget { publish { } }, or expose a type from an " +
+        "in-scope package instead"
+  }
+
   ForwardPlanSkipReason.COLLECTION ->
     "expose a wrapper taking a List/MutableList (or individual key/value parameters) instead " +
         "of a Map/Set at this position"

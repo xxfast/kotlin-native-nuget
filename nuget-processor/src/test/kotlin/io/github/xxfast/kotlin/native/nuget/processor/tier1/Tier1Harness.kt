@@ -38,20 +38,25 @@ internal object Tier1Harness {
     kotlinSource: String,
     fileName: String = "Fixture.kt",
     processorOptions: Map<String, String> = emptyMap(),
-  ): Tier1Result = run(mapOf(fileName to kotlinSource), processorOptions)
+    libraries: List<File> = emptyList(),
+  ): Tier1Result = run(mapOf(fileName to kotlinSource), processorOptions, libraries)
 
   /**
    * Multi-file overload: a Kotlin file may declare only one `package`, so a fixture spanning
    * several packages (e.g. ADR-063's export-scoping cells) needs several source files in one
    * compilation unit. [sources] maps file name to file content.
+   *
+   * @param libraries ADR-066: extra KSP `libraries` classpath entries beyond `kotlin-stdlib`, e.g.
+   *   a [Tier1DependencyLibrary]-compiled jar standing in for a genuinely separate Gradle module.
    */
   fun run(
     sources: Map<String, String>,
     processorOptions: Map<String, String> = emptyMap(),
+    libraries: List<File> = emptyList(),
   ): Tier1Result {
     val workDir: File = Files.createTempDirectory("nuget-tier1-").toFile()
     try {
-      return runIn(workDir, sources, processorOptions)
+      return runIn(workDir, sources, processorOptions, libraries)
     } finally {
       workDir.deleteRecursively()
     }
@@ -61,6 +66,7 @@ internal object Tier1Harness {
     workDir: File,
     sources: Map<String, String>,
     processorOptions: Map<String, String> = emptyMap(),
+    libraries: List<File> = emptyList(),
   ): Tier1Result {
     val sourceDir: File = workDir.resolve("src").apply { mkdirs() }
     val fixtureFiles: List<File> = sources.map { (fileName, kotlinSource) ->
@@ -78,7 +84,7 @@ internal object Tier1Harness {
     val config: KSPJvmConfig = KSPJvmConfig.Builder().apply {
       moduleName = "tier1-fixture"
       sourceRoots = listOf(sourceDir)
-      libraries = listOf(Tier1Classpath.kotlinStdlib)
+      this.libraries = listOf(Tier1Classpath.kotlinStdlib) + libraries
       projectBaseDir = workDir
       outputBaseDir = workDir
       this.cachesDir = cachesDir
@@ -132,7 +138,7 @@ internal object Tier1Harness {
     }
 
     val compileMessages = RecordingMessageCollector()
-    compileGenerated(workDir, fixtureFiles, generated, compileMessages)
+    compileGenerated(workDir, fixtureFiles, generated, compileMessages, libraries)
 
     return Tier1Result(
       kspExitCode = kspExitCode.name,
@@ -149,6 +155,7 @@ internal object Tier1Harness {
     fixtureFiles: List<File>,
     generatedCNameExports: String,
     collector: RecordingMessageCollector,
+    libraries: List<File> = emptyList(),
   ) {
     val compileSourceDir: File = workDir.resolve("compile-src").apply { mkdirs() }
     val compileOutDir: File = workDir.resolve("compile-out").apply { mkdirs() }
@@ -168,7 +175,7 @@ internal object Tier1Harness {
     val arguments = K2JVMCompilerArguments().apply {
       freeArgs = sourceFiles.map { it.absolutePath }
       destination = compileOutDir.absolutePath
-      classpath = listOf(Tier1Classpath.kotlinStdlib, Tier1Classpath.kotlinxCoroutinesCore)
+      classpath = (listOf(Tier1Classpath.kotlinStdlib, Tier1Classpath.kotlinxCoroutinesCore) + libraries)
         .joinToString(File.pathSeparator) { it.absolutePath }
       noStdlib = true
       noReflect = true
