@@ -129,4 +129,19 @@ class NugetExtensionTest {
     val ids: List<String> = extension.dependencies.map { it.id }
     assertEquals(listOf("First", "Second", "Third"), ids)
   }
+
+  @Test
+  fun `aliasing the same csharp namespace twice keeps only the last kotlin package`() {
+    extension.dependencies {
+      dependency("Acme.Utilities") {
+        bind {
+          alias("Foo", kotlinPackage = "a.b")
+          alias("Foo", kotlinPackage = "a.c")
+        }
+      }
+    }
+
+    val bind = extension.dependencies.single().bind!!
+    assertEquals(mapOf("Foo" to "a.c"), bind.aliases)
+  }
 }

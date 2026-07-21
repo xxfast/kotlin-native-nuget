@@ -1,7 +1,9 @@
 package io.github.xxfast.kotlin.native.nuget.rir
 
 import kotlin.test.Test
+import kotlin.test.assertContains
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
 class DllPathDerivationTest {
@@ -153,5 +155,89 @@ class DllPathDerivationTest {
       "/custom/packages/root/serilog/3.1.1/lib/net8.0/Serilog.dll",
       dlls[0],
     )
+  }
+
+  @Test
+  fun `deriveDllPaths matches package id case-insensitively and keys result by caller casing`() {
+    val paths: Map<String, List<String>> = deriveDllPaths(
+      assetsJson = singlePackageAssetsJson,
+      packageIds = setOf("newtonsoft.json"),
+    )
+
+    assertEquals(1, paths.size)
+    val dlls: List<String> = requireNotNull(paths["newtonsoft.json"])
+    assertEquals(1, dlls.size)
+    assertEquals(
+      "/home/user/.nuget/packages/newtonsoft.json/13.0.3/lib/net8.0/Newtonsoft.Json.dll",
+      dlls[0],
+    )
+  }
+
+  @Test
+  fun `deriveDllPaths fails fast when a targets entry has no matching libraries entry`() {
+    val json = """
+      {
+        "targets": {
+          "net8.0": {
+            "Foo/1.0.0": {
+              "type": "package",
+              "runtime": {
+                "lib/net8.0/Foo.dll": {}
+              }
+            }
+          }
+        },
+        "libraries": {},
+        "project": {
+          "restore": {
+            "packagesPath": "/home/user/.nuget/packages"
+          }
+        }
+      }
+    """.trimIndent()
+
+    val error = assertFailsWith<IllegalArgumentException> {
+      deriveDllPaths(assetsJson = json, packageIds = setOf("Foo"))
+    }
+
+    assertContains(error.message.orEmpty(), "no libraries entry for 'Foo/1.0.0'")
+  }
+
+  @Test
+  fun `deriveDllPaths returns empty map when targets has no net8_0 entry`() {
+    val json = """
+      {
+        "targets": {
+          "net9.0": {
+            "Foo/1.0.0": {
+              "type": "package",
+              "runtime": {
+                "lib/net9.0/Foo.dll": {}
+              }
+            }
+          }
+        },
+        "libraries": {
+          "Foo/1.0.0": {
+            "sha512": "abc123",
+            "type": "package",
+            "path": "foo/1.0.0",
+            "files": []
+          }
+        },
+        "project": {
+          "restore": {
+            "packagesPath": "/home/user/.nuget/packages"
+          }
+        }
+      }
+    """.trimIndent()
+
+    val paths: Map<String, List<String>> = deriveDllPaths(
+      assetsJson = json,
+      packageIds = setOf("Foo"),
+    )
+
+    assertTrue(paths.isEmpty())
   }
 }

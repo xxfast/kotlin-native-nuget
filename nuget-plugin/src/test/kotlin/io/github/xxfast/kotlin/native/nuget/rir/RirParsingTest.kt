@@ -2,6 +2,7 @@ package io.github.xxfast.kotlin.native.nuget.rir
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
 
 class RirParsingTest {
@@ -817,5 +818,201 @@ class RirParsingTest {
     assertEquals(RirDiagnosticKind.INFO_OBLIVIOUS_NULLABILITY, diagnostic.kind)
     assertEquals("LegacyNicknameBook", diagnostic.typeName)
     assertEquals("Find", diagnostic.memberName)
+  }
+
+  // ------------------------------------------------------------------
+  // ADR-058: RirStruct (kind=struct namespace type) and RirStructType (kind=struct type ref).
+  // ------------------------------------------------------------------
+
+  @Test
+  fun `reverse-ir json with a struct type deserializes to RirStruct with components`() {
+    val json = """
+      {
+        "assemblies": [
+          {
+            "packageId": "Test.Structs",
+            "assemblyName": "Test.Structs",
+            "namespaces": [
+              {
+                "name": "Test.Structs",
+                "types": [
+                  {
+                    "kind": "struct",
+                    "name": "Point",
+                    "components": [
+                      { "name": "x", "readName": "X", "type": { "kind": "primitive", "name": "int" } }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    """.trimIndent()
+
+    val file: RirFile = parseReverseIr(json)
+
+    val type: RirType = file.assemblies[0].namespaces[0].types[0]
+    assertIs<RirStruct>(type)
+    assertEquals("Point", type.name)
+    assertEquals(1, type.components.size)
+    assertEquals("x", type.components[0].name)
+    assertEquals("X", type.components[0].readName)
+  }
+
+  @Test
+  fun `RirStruct without a shape field defaults to CONSTRUCTOR (backward compat)`() {
+    val json = """
+      {
+        "assemblies": [
+          {
+            "packageId": "Test.Structs",
+            "assemblyName": "Test.Structs",
+            "namespaces": [
+              {
+                "name": "Test.Structs",
+                "types": [
+                  {
+                    "kind": "struct",
+                    "name": "Point",
+                    "components": [
+                      { "name": "x", "readName": "X", "type": { "kind": "primitive", "name": "int" } }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    """.trimIndent()
+
+    val file: RirFile = parseReverseIr(json)
+
+    val type = file.assemblies[0].namespaces[0].types[0] as RirStruct
+    assertEquals(
+      RirStructShape.CONSTRUCTOR,
+      type.shape,
+      "an old reverse-ir.json with no 'shape' key must still parse — additive default CONSTRUCTOR",
+    )
+  }
+
+  @Test
+  fun `RirStruct with shape initializer deserializes to INITIALIZER`() {
+    val json = """
+      {
+        "assemblies": [
+          {
+            "packageId": "Test.Structs",
+            "assemblyName": "Test.Structs",
+            "namespaces": [
+              {
+                "name": "Test.Structs",
+                "types": [
+                  {
+                    "kind": "struct",
+                    "name": "Point",
+                    "shape": "initializer",
+                    "components": [
+                      { "name": "x", "readName": "X", "type": { "kind": "primitive", "name": "int" } }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    """.trimIndent()
+
+    val file: RirFile = parseReverseIr(json)
+
+    val type = file.assemblies[0].namespaces[0].types[0] as RirStruct
+    assertEquals(RirStructShape.INITIALIZER, type.shape)
+  }
+
+  @Test
+  fun `type ref kind struct deserializes to RirStructType with namespace and name`() {
+    val json = """
+      {
+        "assemblies": [
+          {
+            "packageId": "Test.Structs",
+            "assemblyName": "Test.Structs",
+            "namespaces": [
+              {
+                "name": "Test.Structs",
+                "types": [
+                  {
+                    "kind": "class",
+                    "name": "Foo",
+                    "methods": [
+                      {
+                        "name": "Origin",
+                        "isStatic": true,
+                        "returnType": { "kind": "struct", "namespace": "Test.Structs", "name": "Point" },
+                        "parameters": []
+                      }
+                    ],
+                    "properties": []
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    """.trimIndent()
+
+    val file: RirFile = parseReverseIr(json)
+
+    val cls = file.assemblies[0].namespaces[0].types[0] as RirClass
+    val returnType: RirTypeRef = cls.methods[0].returnType
+    assertIs<RirStructType>(returnType)
+    assertEquals("Test.Structs", returnType.namespace)
+    assertEquals("Point", returnType.name)
+  }
+
+  // ------------------------------------------------------------------
+  // The `Json { ignoreUnknownKeys = true }` boundary contract: unknown KEYS are ignored, but an
+  // unrecognized polymorphic discriminator VALUE is not a key — kotlinx.serialization has no
+  // matching subclass to deserialize into and fails the whole parse. A newer metadata reader
+  // emitting one type kind this Gradle plugin version does not yet know about fails fast rather
+  // than silently dropping that one type.
+  // ------------------------------------------------------------------
+
+  @Test
+  fun `parseReverseIr fails on an unrecognized type kind`() {
+    val json = """
+      {
+        "assemblies": [
+          {
+            "packageId": "Test.Future",
+            "assemblyName": "Test.Future",
+            "namespaces": [
+              {
+                "name": "Test.Future",
+                "types": [
+                  {
+                    "kind": "future_kind",
+                    "name": "FromTheFuture"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    """.trimIndent()
+
+    // Verified at runtime: the concrete exception is
+    // kotlinx.serialization.json.internal.JsonDecodingException, an internal implementation type
+    // (package `kotlinx.serialization.json.internal`) not part of kotlinx.serialization's public
+    // API. We assert against its public, stable supertype, kotlinx.serialization.SerializationException,
+    // which is the actual documented contract for "this JSON could not be decoded".
+    assertFailsWith<kotlinx.serialization.SerializationException> {
+      parseReverseIr(json)
+    }
   }
 }

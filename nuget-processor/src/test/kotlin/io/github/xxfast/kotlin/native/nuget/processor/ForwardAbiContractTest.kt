@@ -227,6 +227,112 @@ class ForwardAbiContractTest {
   }
 
   @Test
+  fun `reports duplicate C# import`() {
+    val error: IllegalArgumentException = assertFailsWith {
+      ForwardAbiContract.assertMatches(
+        csharp = listOf(signature("combine"), signature("combine", result = ForwardAbiType.INT)),
+        kotlin = listOf(signature("combine")),
+      )
+    }
+
+    assertTrue(error.message!!.contains("duplicate C# import for"))
+  }
+
+  @Test
+  fun `reports duplicate Kotlin export`() {
+    val error: IllegalArgumentException = assertFailsWith {
+      ForwardAbiContract.assertMatches(
+        csharp = listOf(signature("combine")),
+        kotlin = listOf(signature("combine"), signature("combine", result = ForwardAbiType.INT)),
+      )
+    }
+
+    assertTrue(error.message!!.contains("duplicate Kotlin export for"))
+  }
+
+  @Test
+  fun `reports missing C# import when only the Kotlin side declares the export`() {
+    val error: IllegalArgumentException = assertFailsWith {
+      ForwardAbiContract.assertMatches(
+        csharp = emptyList(),
+        kotlin = listOf(signature("orphan")),
+      )
+    }
+
+    assertTrue(error.message!!.contains("missing C# import for"))
+  }
+
+  @Test
+  fun `reports missing Kotlin export when only the C# side declares the import`() {
+    val error: IllegalArgumentException = assertFailsWith {
+      ForwardAbiContract.assertMatches(
+        csharp = listOf(signature("orphan")),
+        kotlin = emptyList(),
+      )
+    }
+
+    assertTrue(error.message!!.contains("missing Kotlin export for"))
+  }
+
+  @Test
+  fun `fails fast on a plan with an unknown ABI wire type`() {
+    val int: BridgeType.Primitive = BridgeType.Primitive(PrimitiveKind.INT)
+    val call = ForwardNativeCall("counter_increment", ForwardAbiWireType.UNKNOWN, emptyList())
+    val plan = ForwardCallablePlan(
+      invocation = ForwardInvocation("sample.Counter.increment"),
+      publicSignature = ForwardPublicSignature("Increment", emptyList(), int),
+      evaluation = ForwardEvaluation.EXACTLY_ONCE,
+      nativeExports = listOf(call),
+      nativeImports = listOf(call),
+      result = ForwardResultConvention(
+        ForwardAbiWireType.INT32,
+        ForwardTransfer(
+          "result", int, ForwardFlow.OUT_OF_KOTLIN, ForwardPassing.VALUE,
+          ForwardOwnership.BORROWED, ForwardConversion.DIRECT,
+        ),
+      ),
+    )
+    val catalog = ForwardCallablePlanCatalog(listOf(ForwardCallableCatalogEntry.Planned(plan)))
+
+    assertFailsWith<IllegalStateException> {
+      ForwardAbiContract.assertMatchesPlan(catalog, emptyList(), emptyList())
+    }
+  }
+
+  @Test
+  fun `fails fast on a plan parameter with an IN_OUT ABI direction`() {
+    val int: BridgeType.Primitive = BridgeType.Primitive(PrimitiveKind.INT)
+    val transfer = ForwardTransfer(
+      "value", int, ForwardFlow.INTO_KOTLIN, ForwardPassing.IN_OUT,
+      ForwardOwnership.BORROWED, ForwardConversion.DIRECT,
+    )
+    val call = ForwardNativeCall(
+      "counter_increment",
+      ForwardAbiWireType.INT32,
+      listOf(PlannedAbiParameter("value", ForwardAbiWireType.INT32, PlannedAbiDirection.IN_OUT, transfer)),
+    )
+    val plan = ForwardCallablePlan(
+      invocation = ForwardInvocation("sample.Counter.increment"),
+      publicSignature = ForwardPublicSignature("Increment", emptyList(), int),
+      evaluation = ForwardEvaluation.EXACTLY_ONCE,
+      nativeExports = listOf(call),
+      nativeImports = listOf(call),
+      result = ForwardResultConvention(
+        ForwardAbiWireType.INT32,
+        ForwardTransfer(
+          "result", int, ForwardFlow.OUT_OF_KOTLIN, ForwardPassing.VALUE,
+          ForwardOwnership.BORROWED, ForwardConversion.DIRECT,
+        ),
+      ),
+    )
+    val catalog = ForwardCallablePlanCatalog(listOf(ForwardCallableCatalogEntry.Planned(plan)))
+
+    assertFailsWith<IllegalStateException> {
+      ForwardAbiContract.assertMatchesPlan(catalog, emptyList(), emptyList())
+    }
+  }
+
+  @Test
   fun `checks a shadow plan against both legacy ABI projections`() {
     val catalog = ForwardCallablePlanCatalog(
       listOf(ForwardCallableCatalogEntry.Planned(shadowPlan()))

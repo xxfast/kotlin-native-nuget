@@ -119,4 +119,72 @@ class PackNugetTaskTest {
       "no <dependencies> block should be emitted when dependencyVersions is empty",
     )
   }
+
+  @Test
+  fun `pack copies native libraries into runtimes rid native`() {
+    val task: PackNugetTask = newTask()
+
+    val csDir: File = Files.createTempDirectory("ksp-cs").toFile()
+    File(csDir, "Interop.cs").writeText("// forward bindings\n")
+
+    val nativeDir: File = Files.createTempDirectory("native-libs").toFile()
+    File(nativeDir, "Sample.dll").writeText("fake native binary")
+
+    val outputDir: File = Files.createTempDirectory("pack-out").toFile()
+    configureCommon(task, outputDir)
+    task.generatedCsDirs.from(csDir)
+    task.dependencyVersions.set(emptyMap())
+    task.nativeLibDirs.set(mapOf("win-x64" to nativeDir.path))
+
+    task.pack()
+
+    val copied = File(outputDir, "TestLibrary.1.0.0/runtimes/win-x64/native/Sample.dll")
+    assertTrue(copied.exists(), "Sample.dll must be copied into runtimes/win-x64/native/")
+  }
+
+  @Test
+  fun `pack filters out non-native files from a nativeLibDirs source`() {
+    val task: PackNugetTask = newTask()
+
+    val csDir: File = Files.createTempDirectory("ksp-cs").toFile()
+    File(csDir, "Interop.cs").writeText("// forward bindings\n")
+
+    val nativeDir: File = Files.createTempDirectory("native-libs").toFile()
+    File(nativeDir, "Sample.dll").writeText("fake native binary")
+    File(nativeDir, "Sample.pdb").writeText("fake debug symbols")
+    File(nativeDir, "Sample.xml").writeText("<doc></doc>")
+
+    val outputDir: File = Files.createTempDirectory("pack-out").toFile()
+    configureCommon(task, outputDir)
+    task.generatedCsDirs.from(csDir)
+    task.dependencyVersions.set(emptyMap())
+    task.nativeLibDirs.set(mapOf("win-x64" to nativeDir.path))
+
+    task.pack()
+
+    val nativeOutDir = File(outputDir, "TestLibrary.1.0.0/runtimes/win-x64/native")
+    assertTrue(File(nativeOutDir, "Sample.dll").exists())
+    assertFalse(File(nativeOutDir, "Sample.pdb").exists())
+    assertFalse(File(nativeOutDir, "Sample.xml").exists())
+  }
+
+  @Test
+  fun `pack skips a nativeLibDirs entry whose path does not exist`() {
+    val task: PackNugetTask = newTask()
+
+    val csDir: File = Files.createTempDirectory("ksp-cs").toFile()
+    File(csDir, "Interop.cs").writeText("// forward bindings\n")
+
+    val outputDir: File = Files.createTempDirectory("pack-out").toFile()
+    configureCommon(task, outputDir)
+    task.generatedCsDirs.from(csDir)
+    task.dependencyVersions.set(emptyMap())
+    task.nativeLibDirs.set(mapOf("osx-arm64" to "/nonexistent/path/xyz"))
+
+    task.pack()
+
+    val nativeOutDir = File(outputDir, "TestLibrary.1.0.0/runtimes/osx-arm64/native")
+    val entries: Array<File> = nativeOutDir.listFiles() ?: emptyArray()
+    assertTrue(entries.isEmpty(), "no files should have been copied for a nativeLibDirs entry whose path does not exist")
+  }
 }

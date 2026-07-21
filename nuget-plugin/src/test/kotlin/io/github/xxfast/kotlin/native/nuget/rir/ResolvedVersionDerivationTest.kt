@@ -72,4 +72,14 @@ class ResolvedVersionDerivationTest {
 
     assertTrue(versions.isEmpty())
   }
+
+  @Test
+  fun `deriveResolvedVersions matches package id case-insensitively and keys result by caller casing`() {
+    val versions: Map<String, String> = deriveResolvedVersions(
+      assetsJson = mimeMappingAssetsJson,
+      packageIds = setOf("mimemapping"),
+    )
+
+    assertEquals(mapOf("mimemapping" to "4.0.0"), versions)
+  }
 }
