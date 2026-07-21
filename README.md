@@ -146,4 +146,4 @@ Full docs: **[xxfast.github.io/kotlin-native-nuget](https://xxfast.github.io/kot
 - [Gradle tasks](https://xxfast.github.io/kotlin-native-nuget/gradle-tasks.html) and the [`nuget {}` DSL reference](https://xxfast.github.io/kotlin-native-nuget/nuget-dsl.html)
 
 > [!TIP]
-> See [ARCHITECTURE.md](ARCHITECTURE.md) for how the bridge is built, [ROADMAP.md](ROADMAP.md) for what's next, and [docs/adr/](docs/adr/) for the architecture decision records.
+> See the [architecture overview](https://xxfast.github.io/kotlin-native-nuget/architecture.html) for how the bridge is built, [ROADMAP.md](ROADMAP.md) for what's next, and [docs/adr/](docs/adr/) for the architecture decision records.

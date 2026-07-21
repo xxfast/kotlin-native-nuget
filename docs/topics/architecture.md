@@ -2,7 +2,24 @@
 
 The plugin is one machine run in two directions. Each way, an **intermediate representation** (IR) sits in the middle: a **reader** fills it from one language's metadata, and a **renderer** emits the other language's source. The forward and reverse pipelines are deliberate mirrors of each other.
 
-This page traces one real type through every stage in each direction, using the plugin's own generated output from `test-library`.
+This page covers how the bridge is built, then traces one real type through every stage in each direction, using the plugin's own generated output from `test-library`.
+
+## Build pipeline
+
+```
+Gradle Plugin (Kotlin side)          NuGet Package       C# Consumer
+┌─────────────────────────┐     ┌────────────────┐     ┌──────────────┐
+│ Compile Kotlin/Native   │     │ native libs    │     │ Add package  │
+│ KSP → CIR → Interop.cs  │────>│ Interop.cs     │────>│ Build        │
+│ KotlinPoet → exports.kt │     └────────────────┘     │ Run          │
+│ Link shared libraries   │                            └──────────────┘
+│ Package as .nupkg       │
+└─────────────────────────┘
+```
+
+- **Gradle plugin** compiles Kotlin/Native, runs KSP to generate C# bindings (via the CIR model) and Kotlin bridge wrappers (via KotlinPoet, `CNameExports.kt`), links shared libraries, and packages everything.
+- **NuGet package** ships native libs + pre-generated `Interop.cs`. No consumer-side tooling required.
+- **Consumer** just includes the package — bindings are ready at build time.
 
 ## Two mirrored IRs
 
@@ -13,7 +30,7 @@ Feature logic lives only in the IR plus its reader and renderer. The task plumbi
 | Middle IR | `CirModel` (in `nuget-processor/`) | `RirModel` (in `nuget-plugin/`) |
 | Reader that fills it | KSP, over Kotlin symbols | `NugetMetadataReader`, over ECMA-335 assembly metadata |
 | Handoff | in-memory, same JVM process | `reverse-ir.json`, across a process boundary |
-| Renderer that emits source | `CirRenderer` → `Interop.cs` / `Bridges.kt` | Kotlin-stub + C#-shim codegen |
+| Renderer that emits source | `CirRenderer` → `Interop.cs` / `CNameExports.kt` | Kotlin-stub + C#-shim codegen |
 | Runtime direction | C# calls Kotlin (P/Invoke) | Kotlin calls C# (function pointers) |
 | Decision record | [ADR-004](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/004-cir-intermediate-representation.md) | [ADR-046](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/046-reverse-ir-model-and-json-contract.md) |
 
@@ -242,7 +259,7 @@ At runtime, Kotlin `template.apply(name)` invokes the stored function pointer, w
 
 The Kotlin/Native library always runs inside a .NET host process, so neither direction needs a runtime host. Forward calls go out over P/Invoke; reverse calls go out over function pointers registered once, at startup.
 
-- **Forward, C# calls Kotlin.** A `[DllImport]` bound to a generated `@CName` export. Synchronous and direct. Errors ride back through an `out IntPtr error` the export fills from any thrown `Throwable`.
+- **Forward, C# calls Kotlin.** A `[DllImport]` bound to a generated `@CName` export. Synchronous and direct. Errors ride back through an `out IntPtr error` the export fills from any thrown `Throwable`. A forward call can also carry a delegate the other way: C# pins a `Func<>`/`Action<>` with `GCHandle` and hands it over as a function pointer, which Kotlin `reinterpret`s to `CPointer<CFunction<…>>` and invokes as a lambda (inside `filter`/`map`/…), calling back into C#. See [ADR-036](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/036-reverse-interop-mechanism.md).
 - **Reverse, Kotlin calls C#.** No P/Invoke into C#. At startup, a `[ModuleInitializer]` hands Kotlin every thunk pointer (contract-checked), which Kotlin stores in a bindings table. Each later call invokes the stored pointer. A stale shim is caught at registration: a mismatched `slotCount` or `contractHash` refuses to store any pointer.
 
 ## The Gradle tasks that build the artifacts
@@ -276,6 +293,7 @@ Two task chains, one per direction. See [Gradle tasks](gradle-tasks.md) for the 
     </category>
     <category ref="external">
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/004-cir-intermediate-representation.md">ADR-004: CIR intermediate representation</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/036-reverse-interop-mechanism.md">ADR-036: Reverse interop mechanism</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/042-assembly-metadata-extraction.md">ADR-042: Assembly metadata extraction</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/046-reverse-ir-model-and-json-contract.md">ADR-046: Reverse IR model and JSON contract</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/048-kotlin-stub-generation-from-reverse-ir.md">ADR-048: Kotlin stub generation from reverse IR</a>
