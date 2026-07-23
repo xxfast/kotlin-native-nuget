@@ -21,6 +21,13 @@ import kotlinx.coroutines.flow.asStateFlow
  * All mutations are driven by explicit methods ([bumpEnergy], [setMood], [setPlaymate]) --
  * never a timer -- so tests can assert deterministic conflated updates without racing a
  * background emitter.
+ *
+ * ADR-067 extends this fixture with the two nullable StateFlow shapes:
+ *  - [nickname]:    `StateFlow<String?>` -- nullable REFERENCE element (`.Value` is `string?`)
+ *  - [streak]:      `StateFlow<Int?>`    -- nullable VALUE element (`.Value` is `int?`, needs the
+ *                    `Nullable<T>`-aware unwrap; a plain `int` would pass trivially and hide the seam)
+ *  - [maybeMood]:   `StateFlow<String>?` -- nullable MEMBER, absent until [startTracking]
+ *  - [maybeStreak]: `StateFlow<Int?>?`   -- nullable MEMBER *and* nullable VALUE element, together
  */
 class CatMoodTracker(private val catName: String) {
   private val _energyLevel: MutableStateFlow<Int> = MutableStateFlow(100)
@@ -57,5 +64,91 @@ class CatMoodTracker(private val catName: String) {
   /** Deterministic mutation -- replaces [playmate] with a freshly named [Cat]. */
   fun setPlaymate(name: String) {
     _playmate.value = Cat(name)
+  }
+
+  // --- ADR-067: nullable element -- the tracker always exists, its current value can be null ---
+
+  private val _nickname: MutableStateFlow<String?> = MutableStateFlow(null)
+
+  /**
+   * StateFlow<String?> -- nullable REFERENCE element. `.Value` is `string?`; a null current
+   * value crosses as IntPtr.Zero and reuses `FromHandle<T>` unchanged (already null-safe).
+   */
+  val nickname: StateFlow<String?> = _nickname.asStateFlow()
+
+  private val _streak: MutableStateFlow<Int?> = MutableStateFlow(null)
+
+  /**
+   * StateFlow<Int?> -- nullable VALUE element. `.Value` is `int?`; needs the new
+   * `Nullable<T>`-aware unwrap (a plain `int` would need no conversion and pass trivially).
+   */
+  val streak: StateFlow<Int?> = _streak.asStateFlow()
+
+  /** Deterministic mutation -- sets [nickname], which may be null. */
+  fun setNickname(name: String?) {
+    _nickname.value = name
+  }
+
+  /** Deterministic mutation -- sets [streak], which may be null. */
+  fun setStreak(n: Int?) {
+    _streak.value = n
+  }
+
+  // --- ADR-067: nullable member -- the whole StateFlow can be absent until tracking starts ---
+
+  private var _maybeMood: MutableStateFlow<String>? = null
+
+  /**
+   * StateFlow<String>? -- nullable MEMBER. Null until [startTracking] is called; the `_has_value`
+   * presence-probe backs the C# getter, which returns `null` before subscription.
+   */
+  val maybeMood: StateFlow<String>? get() = _maybeMood?.asStateFlow()
+
+  /** Deterministic mutation -- brings [maybeMood] into existence with [initial]. */
+  fun startTracking(initial: String) {
+    _maybeMood = MutableStateFlow(initial)
+  }
+
+  /** Deterministic mutation -- sets [maybeMood]'s current value, once tracking has started. */
+  fun setMaybeMood(m: String) {
+    _maybeMood?.value = m
+  }
+
+  // --- ADR-067: both together -- nullable member AND nullable value element ---
+
+  private var _maybeStreak: MutableStateFlow<Int?>? = null
+
+  /** StateFlow<Int?>? -- nullable member AND nullable value element, exercised together. */
+  val maybeStreak: StateFlow<Int?>? get() = _maybeStreak?.asStateFlow()
+
+  /** Deterministic mutation -- brings [maybeStreak] into existence with [initial] (may be null). */
+  fun startStreakTracking(initial: Int?) {
+    _maybeStreak = MutableStateFlow(initial)
+  }
+
+  /** Deterministic mutation -- sets [maybeStreak]'s current value, once tracking has started. */
+  fun setMaybeStreak(n: Int?) {
+    _maybeStreak?.value = n
+  }
+
+  // --- ADR-068: suspend fun returning StateFlow<T> -- outer suspend kept as Task, inner is ADR-065's
+  // KotlinStateFlow<T> unchanged. Both genuinely suspend (a real delay) before handing back the SAME
+  // underlying MutableStateFlow already exposed elsewhere, so mutation is observable across every
+  // surface position and the outer suspend is not vestigial. ---
+
+  /**
+   * ADR-068: `suspend fun` returning `StateFlow<String>` -- primitive/value-element variant.
+   * Genuinely suspends (a real await) before handing back the SAME underlying [_mood]
+   * MutableStateFlow as [mood]/[moodReport].
+   */
+  suspend fun awaitMoodReport(): StateFlow<String> {
+    kotlinx.coroutines.delay(1)
+    return mood
+  }
+
+  /** ADR-068: object-element variant -- suspend fun returning StateFlow<Cat>. */
+  suspend fun awaitPlaymateReport(): StateFlow<Cat> {
+    kotlinx.coroutines.delay(1)
+    return playmate
   }
 }

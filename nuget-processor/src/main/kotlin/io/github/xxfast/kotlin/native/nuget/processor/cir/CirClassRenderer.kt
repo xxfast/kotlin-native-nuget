@@ -207,6 +207,14 @@ internal fun StringBuilder.renderClass(cls: CirClass) {
         appendLine("        [DllImport(\"${cls.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"$valueEntryPoint\")]")
         appendLine("        private static extern IntPtr Native_Get${prop.name}Value(IntPtr handle);")
         appendLine()
+        if (prop.isNullableMember) {
+          // ADR-067: nullable member -- sibling `_has_value` presence-probe export.
+          val hasValueEntryPoint = "${cls.nativePrefix}_get_${prop.nativeName}_has_value"
+          appendLine("        [DllImport(\"${cls.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"$hasValueEntryPoint\")]")
+          appendLine("        [return: MarshalAs(UnmanagedType.I1)]")
+          appendLine("        private static extern bool Native_Get${prop.name}HasValue(IntPtr handle);")
+          appendLine()
+        }
       }
       renderProperty(prop)
     } else if (prop.usesLegacyNativeImport()) {

@@ -79,6 +79,10 @@ internal class CollectionHelperTracker {
   var needsAsync: Boolean = false
   var needsFlow: Boolean = false
   var needsStateFlow: Boolean = false
+
+  // ADR-068: at least one `suspend fun` returns StateFlow<T>/MutableStateFlow<T> -- gates the two
+  // shared generic `nuget_stateflow_collect`/`nuget_stateflow_value` handle-keyed exports.
+  var needsSuspendStateFlow: Boolean = false
   var needsSubscription: Boolean = false
   val lambdaArities: MutableSet<Int> = mutableSetOf()
   val suspendLambdaArities: MutableSet<Int> = mutableSetOf()
@@ -153,4 +157,18 @@ internal fun qualifiedElementCsType(type: KSType?, context: NugetContext): Strin
     classDeclaration.packageName.asString(), context.rootPackage, context.rootNamespace,
   )
   return "global::$namespace.$simpleName"
+}
+
+/**
+ * ADR-067: threads a nullable *element* (`StateFlow<T?>`) through to the C# type argument. Both
+ * value types (`int?` → real `Nullable<int>`) and reference types (`string?`/`Cat?` — a compile-
+ * time-only annotation) accept the trailing `?`; C# does not reject it on either kind.
+ */
+internal fun qualifiedElementCsType(
+  type: KSType?,
+  context: NugetContext,
+  nullable: Boolean,
+): String {
+  val base: String = qualifiedElementCsType(type, context)
+  return if (nullable) "$base?" else base
 }

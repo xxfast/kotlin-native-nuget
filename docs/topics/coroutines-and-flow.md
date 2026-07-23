@@ -11,6 +11,9 @@ Kotlin coroutines map onto .NET's own async model: `suspend fun` becomes `async`
 | in-flight async drain | `IAsyncDisposable` | graceful drain, [ADR-025](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/025-async-disposable.md) |
 | `Flow<T>` | `IAsyncEnumerable<T>` | cold streams, [ADR-026](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/026-flow-mapping.md) |
 | `StateFlow<T>` / `MutableStateFlow<T>` | `KotlinStateFlow<T>` | hot, always-current-value; `.Value` + `IAsyncEnumerable<T>`, [ADR-065](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/065-stateflow-mapping.md) |
+| `StateFlow<T?>` (nullable element) | `KotlinStateFlow<T?>` | `.Value` and each emission are `T?`, [ADR-067](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/067-nullable-stateflow-mapping.md) |
+| `StateFlow<T>?` (nullable member) | `KotlinStateFlow<T>?` | presence-probed; `null` before the member exists, [ADR-067](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/067-nullable-stateflow-mapping.md) |
+| `suspend fun` returning `StateFlow<T>` | `Task<KotlinStateFlow<T>>` | outer suspend kept as `Task`, not collapsed to a sync return; class methods only, [ADR-068](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/068-suspend-returning-stateflow.md) |
 
 ## `suspend fun`
 
@@ -444,20 +447,199 @@ public void StateFlowProperty_ReturnsKotlinStateFlow_IsAKotlinFlow_UpcastsLikeKo
 elements (`StateFlow<Cat>`) follow ADR-005: each `.Value` read hands back a fresh, disposable
 wrapper, not a cached one.
 
+## Nullable `StateFlow<T?>` and `StateFlow<T>?`
+
+A `StateFlow` can be nullable in two independent ways, and they can combine: the *element* can be
+nullable (`StateFlow<T?>`, the tracker always exists but its current value can be null) or the
+*member itself* can be nullable (`StateFlow<T>?`, the whole property or return can be absent). From
+`CatMoodTracker.kt`:
+
+```kotlin
+private val _nickname: MutableStateFlow<String?> = MutableStateFlow(null)
+val nickname: StateFlow<String?> = _nickname.asStateFlow()   // nullable reference element
+
+private val _streak: MutableStateFlow<Int?> = MutableStateFlow(null)
+val streak: StateFlow<Int?> = _streak.asStateFlow()          // nullable value element
+
+private var _maybeMood: MutableStateFlow<String>? = null
+val maybeMood: StateFlow<String>? get() = _maybeMood?.asStateFlow()   // nullable member
+
+private var _maybeStreak: MutableStateFlow<Int?>? = null
+val maybeStreak: StateFlow<Int?>? get() = _maybeStreak?.asStateFlow()   // both, together
+```
+
+A nullable element surfaces as `KotlinStateFlow<T?>`; `.Value` and every `await foreach` emission
+are `T?`. A reference element (`String?`, `Cat?`) needs no marshalling change, a null current value
+is just `IntPtr.Zero`. A value element (`Int?`) reuses the shipped per-primitive box readers through
+a `Nullable<T>`-aware branch in `NugetMarshal.FromHandle<T>`:
+
+```C#
+public KotlinStateFlow<string?> Nickname { get; }   // reference element, unchanged marshalling
+public KotlinStateFlow<int?> Streak { get; }        // value element, Nullable<T>-aware unwrap
+```
+
+A nullable member surfaces as `KotlinStateFlow<T>?`. There is no single handle to null-check for a
+whole StateFlow (it is reconstructed from per-member `_collect` / `_value` exports), so the getter
+calls a dedicated `_has_value` presence-probe export first and returns `null` before constructing
+anything:
+
+```C#
+[DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "catmoodtracker_get_maybeMood_has_value")]
+[return: MarshalAs(UnmanagedType.I1)]
+private static extern bool Native_GetMaybeMoodHasValue(IntPtr handle);
+
+public KotlinStateFlow<string>? MaybeMood
+{
+    get
+    {
+        if (_handle == IntPtr.Zero)
+            throw new ObjectDisposedException(nameof(CatMoodTracker));
+        if (!Native_GetMaybeMoodHasValue(_handle))
+            return null;
+        return new KotlinStateFlow<string>((onNext, onComplete, onError, userData) =>
+            Native_GetMaybeMoodCollect(_handle, GetOrCreateScope(), onNext, onComplete, onError, userData),
+            () => Native_GetMaybeMoodValue(_handle));
+    }
+}
+```
+
+Both compose: `maybeStreak: StateFlow<Int?>?` becomes `KotlinStateFlow<int?>?`, the presence probe
+guarding a nullable-element `KotlinStateFlow<int?>`.
+
+Using it, from `IntegrationTests/NullableStateFlowTests.cs`:
+
+```C#
+[Fact]
+public void NullableValueElement_StartsNull_NotDefaultZero_OreosStreakIsUntracked()
+{
+    // Oreo's win streak hasn't started -- must be null, NOT default(int) == 0.
+    using var tracker = new CatMoodTracker("Oreo");
+    KotlinStateFlow<int?> streak = tracker.Streak;
+    Assert.Null(streak.Value);
+}
+
+[Fact]
+public void NullableMember_AbsentUntilTrackingStarts_MyloHasNoMoodTrackingYet()
+{
+    // The whole StateFlow is null until StartTracking() is called -- not merely a null value
+    using var tracker = new CatMoodTracker("Mylo");
+    Assert.Null(tracker.MaybeMood);
+}
+
+[Fact]
+public void NullableMemberAndValueElement_PresentButValueNull_OreoTracksAnUntrackedStreak()
+{
+    // The member becomes present, but its current value is still null -- both nulls at once,
+    // and they must be distinguishable: MaybeStreak itself is non-null, MaybeStreak.Value is null.
+    using var tracker = new CatMoodTracker("Oreo");
+    tracker.StartStreakTracking(null);
+
+    KotlinStateFlow<int?>? maybeStreak = tracker.MaybeStreak;
+    Assert.NotNull(maybeStreak);
+    Assert.Null(maybeStreak!.Value);
+}
+```
+
+<note>
+    <p>A null current value crossing over <code>await foreach</code> is a genuine emission, not the
+    cancel signal. Both are distinguished by the same <code>isCancelled</code> byte the base
+    <code>KotlinFlow&lt;T&gt;</code> uses: <code>(null, isCancelled=0)</code> is a null element,
+    <code>(null, isCancelled=1)</code> is cancellation.</p>
+</note>
+
+<note>
+    <p>The nullable-member <code>_has_value</code> probe is generated symmetrically for both a
+    nullable <code>StateFlow&lt;T&gt;?</code> property and a non-suspend function returning a
+    nullable <code>StateFlow&lt;T&gt;?</code>. Only the property shape has an integration test
+    today; the function-return shape compiles but is untested.</p>
+</note>
+
+## `suspend fun` returning `StateFlow<T>`
+
+A `suspend fun` can genuinely suspend before handing back a `StateFlow<T>`, for example to build
+the holder lazily. The outer suspend is **kept as a `Task`**, it is not collapsed into a
+synchronous return: composing ADR-019's `suspend` → `Task` mapping over ADR-065's `StateFlow<T>` →
+`KotlinStateFlow<T>` mapping gives `Task<KotlinStateFlow<T>> XxxAsync()`. From `CatMoodTracker.kt`:
+
+```kotlin
+suspend fun awaitMoodReport(): StateFlow<String> {
+  kotlinx.coroutines.delay(1)
+  return mood
+}
+
+suspend fun awaitPlaymateReport(): StateFlow<Cat> {
+  kotlinx.coroutines.delay(1)
+  return playmate
+}
+```
+
+Both return the *same* underlying `MutableStateFlow` already exposed through `mood`/`moodReport()`
+and `playmate` respectively, so mutation stays observable across every surface position. The
+generated C#:
+
+```C#
+public Task<KotlinStateFlow<string>> AwaitMoodReportAsync(CancellationToken cancellationToken = default)
+public Task<KotlinStateFlow<global::TestLibrary.Cat.Cat>> AwaitPlaymateReportAsync(CancellationToken cancellationToken = default)
+```
+
+The awaited `StateFlow` handle is no longer re-derivable from the parent object plus arguments (the
+call that produced it was itself suspend), so its `_collect`/`_value` reads go through a shared
+generic pair keyed on the flow's own handle, `nuget_stateflow_collect` / `nuget_stateflow_value`
+(`NugetStateFlowNative` in the generated C#), rather than the per-member exports ADR-065 uses for a
+non-suspend `StateFlow`. The resulting `KotlinStateFlow<T>` also owns that handle and disposes it
+via `IDisposable`.
+
+<note>
+    <p>The one `await` is the outer suspend. Everything after it, <code>.Value</code>,
+    <code>await foreach</code>, the <code>IAsyncEnumerable&lt;T&gt;</code> upcast, is ADR-065's
+    <code>KotlinStateFlow&lt;T&gt;</code> unchanged.</p>
+</note>
+
+Using it, from `IntegrationTests/SuspendStateFlowTests.cs`:
+
+```C#
+[Fact]
+public async Task AwaitMoodReport_ValueReadsCurrentValueSynchronouslyAfterAwait_OreoIsSleepyByDefault()
+{
+    // After the single await, .Value is synchronous thereafter -- exactly ADR-065's contract.
+    using var tracker = new CatMoodTracker("Oreo");
+    KotlinStateFlow<string> report = await tracker.AwaitMoodReportAsync();
+    Assert.Equal("sleepy", report.Value);
+}
+
+[Fact]
+public async Task AwaitPlaymateReport_ValueReturnsFreshDisposableWrapper_OreoGreetsHisPlaymate()
+{
+    // Object-element .Value returns a fresh, working, disposable Cat wrapper (ADR-005).
+    using var tracker = new CatMoodTracker("Oreo");
+    using var playmate = (await tracker.AwaitPlaymateReportAsync()).Value;
+    Assert.Equal("Oreo", playmate.Name);
+    Assert.Equal("Meow! My name is Oreo", playmate.Meow());
+}
+```
+
+<note>
+    <p>Only a class method is supported in v1. A top-level <code>suspend fun</code> returning a
+    <code>StateFlow&lt;T&gt;</code> (no parent scope) is deferred.</p>
+</note>
+
 ## Limitations
 
 Hot streams and several `Flow` positions are not yet supported (ROADMAP Phase 6):
 
 - `SharedFlow<T>` (hot, multi-subscriber)
 - Settable `.Value` on `MutableStateFlow<T>` (a C# → Kotlin write; deferred to Phase 7)
-- Nullable `StateFlow<T?>` and `StateFlow<T>?`
-- `suspend fun` returning `StateFlow<T>`
+- Top-level `suspend fun` returning `StateFlow<T>` (no parent class scope; class methods only in v1)
 - `StateFlow<T>` as a function parameter or as a generic type argument
+- `suspend fun` returning a nullable `StateFlow<T?>` / `StateFlow<T>?`, and nullable `StateFlow` as a function parameter or generic type argument
+- `Boolean?` / `Char?` value elements on a nullable `StateFlow` (the same width fragility as ADR-061)
+- Settable nullable `.Value` on a nullable `MutableStateFlow<T?>` (rides the non-nullable settable-`.Value` deferral above)
+- Nullable `SharedFlow<T>` (follows `SharedFlow<T>` itself, still deferred)
 - `INotifyPropertyChanged` adapter over `KotlinStateFlow<T>` (opt-in convenience, not core)
 - `Flow<T>` as a function **parameter** (C# → Kotlin direction)
 - Nullable `Flow<T>?`
 - `Flow<T>` as a generic type argument (e.g. `Box<Flow<String>>`)
-- `suspend fun` returning `Flow<T>` (the outer suspend is untreated separately from a non-suspend `Flow`-returning function)
+- `suspend fun` returning `Flow<T>` (would follow the same outer-suspend-kept-as-`Task` decision [ADR-068](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/068-suspend-returning-stateflow.md) made for its `StateFlow` sibling, not yet implemented)
 - Flow backpressure (bounded `Channel<T>` with explicit resume signaling)
 
 A `suspend inline fun <reified T> Receiver.f(...): Result<T>` extension has no bridge at all: `inline`
@@ -483,5 +665,7 @@ rather than the raw `Function1`/`Result` this generated before
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/064-forward-unsupported-declaration-diagnostics.md">ADR-064: Forward unsupported-declaration diagnostics</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/065-stateflow-mapping.md">ADR-065: StateFlow mapping</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/066-forward-export-reachability-closure.md">ADR-066: Forward export reachability closure</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/067-nullable-stateflow-mapping.md">ADR-067: Nullable StateFlow mapping</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/068-suspend-returning-stateflow.md">ADR-068: suspend fun returning StateFlow&lt;T&gt;</a>
     </category>
 </seealso>

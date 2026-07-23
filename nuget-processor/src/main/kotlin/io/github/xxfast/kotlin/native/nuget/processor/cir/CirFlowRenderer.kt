@@ -130,20 +130,50 @@ internal fun StringBuilder.renderFlowHelper(helper: CirFlowHelper) {
   if (helper.includesStateFlow) {
     // ADR-065: KotlinStateFlow<T> IS-A KotlinFlow<T> -- it inherits the entire collect/enumerator/
     // cancellation/error machinery above unchanged and adds only a synchronous `Value` read.
-    appendLine("    public class KotlinStateFlow<T> : KotlinFlow<T>")
+    // ADR-068: an optional `ownedHandle` -- set only for the awaited-suspend variant, where this
+    // wrapper owns the flow's own StableRef and must dispose it. The ADR-065 property/method
+    // variants pass no owned handle (they hold none) and are unchanged; `Dispose()` no-ops for
+    // them.
+    appendLine("    public class KotlinStateFlow<T> : KotlinFlow<T>, IDisposable")
     appendLine("    {")
     appendLine("        private readonly Func<IntPtr> _readValue;")
+    appendLine("        private IntPtr _ownedHandle;")
     appendLine()
-    appendLine("        internal KotlinStateFlow(NugetFlowCollectDelegate startCollect, Func<IntPtr> readValue)")
+    appendLine("        internal KotlinStateFlow(NugetFlowCollectDelegate startCollect, Func<IntPtr> readValue, IntPtr ownedHandle = default)")
     appendLine("            : base(startCollect)")
     appendLine("        {")
     appendLine("            _readValue = readValue;")
+    appendLine("            _ownedHandle = ownedHandle;")
     appendLine("        }")
     appendLine()
     appendLine("        public T Value => NugetMarshal.FromHandle<T>(_readValue());")
+    appendLine()
+    appendLine("        public void Dispose()")
+    appendLine("        {")
+    appendLine("            IntPtr handle = Interlocked.Exchange(ref _ownedHandle, IntPtr.Zero);")
+    appendLine("            if (handle != IntPtr.Zero)")
+    appendLine("            {")
+    appendLine("                NugetMarshal.Dispose(handle);")
+    appendLine("            }")
+    appendLine("        }")
     appendLine("    }")
     appendLine()
   }
+}
+
+// ADR-068: shared static class holding the two generic exports keyed on an already-obtained
+// StateFlow<*> handle -- `Collect`/`Value` operate directly on the awaited flow's own StableRef,
+// unlike every ADR-065 per-member `_collect`/`_value` DllImport, which is scoped to one class.
+internal fun StringBuilder.renderStateFlowHandleHelper(helper: CirStateFlowHandleHelper) {
+  appendLine("    internal static class NugetStateFlowNative")
+  appendLine("    {")
+  appendLine("        [DllImport(\"${helper.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"nuget_stateflow_collect\")]")
+  appendLine("        internal static extern IntPtr Collect(IntPtr flowHandle, IntPtr scopeHandle, IntPtr onNext, IntPtr onComplete, IntPtr onError, IntPtr userData);")
+  appendLine()
+  appendLine("        [DllImport(\"${helper.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"nuget_stateflow_value\")]")
+  appendLine("        internal static extern IntPtr Value(IntPtr flowHandle);")
+  appendLine("    }")
+  appendLine()
 }
 
 internal fun StringBuilder.renderFlowMethod(method: CirMethod, className: String) {
@@ -168,17 +198,25 @@ internal fun StringBuilder.renderFlowMethod(method: CirMethod, className: String
 // ADR-065: StateFlow<T> as a non-suspend function return. Identical to renderFlowMethod's
 // `_collect` wiring, plus a synchronous `_value` read passed as the second KotlinStateFlow<T>
 // constructor argument (the method's own parameters, re-read on each `.Value` access).
+// ADR-067: a nullable member (`StateFlow<T>?` return) additionally probes `_has_value` before
+// constructing and returns `null` when absent.
 internal fun StringBuilder.renderStateFlowMethod(method: CirMethod, className: String) {
   val paramStr: String = method.parameters.joinToString(", ") { "${it.type} ${it.name}" }
   val paramNames: String = method.parameters.joinToString(", ") { it.name }
   val nativeName: String = method.nativeName
   val valueNativeName: String = method.stateFlowValueNativeName
   val valueCallArgs: String = if (paramNames.isEmpty()) "_handle" else "_handle, $paramNames"
+  val nullableSuffix: String = if (method.isStateFlowNullableMember) "?" else ""
 
-  appendLine("        public KotlinStateFlow<${method.flowElementType}> ${method.name}($paramStr)")
+  appendLine("        public KotlinStateFlow<${method.flowElementType}>$nullableSuffix ${method.name}($paramStr)")
   appendLine("        {")
   appendLine("            if (_handle == IntPtr.Zero)")
   appendLine("                throw new ObjectDisposedException(nameof($className));")
+  if (method.isStateFlowNullableMember) {
+    val hasValueNativeName: String = method.stateFlowHasValueNativeName
+    appendLine("            if (!$hasValueNativeName($valueCallArgs))")
+    appendLine("                return null;")
+  }
   appendLine("            return new KotlinStateFlow<${method.flowElementType}>((onNext, onComplete, onError, userData) =>")
   appendLine("                $nativeName(${method.body}),")
   appendLine("                () => $valueNativeName($valueCallArgs));")

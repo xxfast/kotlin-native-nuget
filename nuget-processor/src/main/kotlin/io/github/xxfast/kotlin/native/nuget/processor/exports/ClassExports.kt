@@ -119,6 +119,9 @@ internal fun FileSpec.Builder.addClassExports(
     val flowElementType: KSType? = propTypeResolved.arguments.firstOrNull()?.type?.resolve()
     val flowElementQualified: String =
       flowElementType?.declaration?.qualifiedName?.asString() ?: "kotlin.Any"
+    // ADR-067: nullable element/member threading is StateFlow-only; nullable Flow stays deferred.
+    val elementNullable: Boolean = isStateFlowProperty && flowElementType?.isMarkedNullable == true
+    val memberNullable: Boolean = isStateFlowProperty && propTypeResolved.isMarkedNullable
 
     addFunction(
       FunSpec.builder("export_${prefix}_get_${propName}_collect")
@@ -130,7 +133,11 @@ internal fun FileSpec.Builder.addClassExports(
         .addParameter("onErrorPtr", cOpaquePointer)
         .addParameter("userData", cOpaquePointer)
         .returns(cOpaquePointer)
-        .addCode(buildFlowCollectBody(qualifiedName, propName, flowElementQualified))
+        .addCode(
+          buildFlowCollectBody(
+            qualifiedName, propName, flowElementQualified, elementNullable, memberNullable,
+          )
+        )
         .build()
     )
 
@@ -138,14 +145,36 @@ internal fun FileSpec.Builder.addClassExports(
       // ADR-065: synchronous `_value` export -- boxes `stateFlow.value as Any` into a StableRef,
       // structurally identical to a single onNext emission. No errorOut: StateFlow.value cannot
       // throw (a deliberate narrowing of ADR-030's wrap-all-property-getters policy).
+      // ADR-067: a nullable element or nullable member widens the return to `COpaquePointer?` and
+      // guards the box with `if (v != null) … else null`.
       addFunction(
         FunSpec.builder("export_${prefix}_get_${propName}_value")
           .addAnnotation(cNameAnnotation("${prefix}_get_${propName}_value"))
           .addParameter("handle", cOpaquePointer)
-          .returns(cOpaquePointer)
-          .addCode(buildStateFlowValuePropertyBody(qualifiedName, propName))
+          .returns(
+            if (elementNullable || memberNullable) cOpaquePointer.copy(nullable = true)
+            else cOpaquePointer
+          )
+          .addCode(
+            buildStateFlowValuePropertyBody(
+              qualifiedName, propName, elementNullable, memberNullable,
+            ),
+          )
           .build()
       )
+
+      if (memberNullable) {
+        // ADR-067: nullable member -- presence-probe export backing the C# `_has_value` two-call
+        // pattern; the getter returns `null` when this is false, else constructs normally.
+        addFunction(
+          FunSpec.builder("export_${prefix}_get_${propName}_has_value")
+            .addAnnotation(cNameAnnotation("${prefix}_get_${propName}_has_value"))
+            .addParameter("handle", cOpaquePointer)
+            .returns(Boolean::class)
+            .addCode(buildStateFlowHasValuePropertyBody(qualifiedName, propName))
+            .build()
+        )
+      }
     }
   }
 
@@ -229,6 +258,9 @@ internal fun FileSpec.Builder.addClassExports(
     val flowElementType: KSType? = returnType?.arguments?.firstOrNull()?.type?.resolve()
     val flowElementQualified: String =
       flowElementType?.declaration?.qualifiedName?.asString() ?: "kotlin.Any"
+    // ADR-067: nullable element/member threading is StateFlow-only; nullable Flow stays deferred.
+    val elementNullable: Boolean = isStateFlowMethod && flowElementType?.isMarkedNullable == true
+    val memberNullable: Boolean = isStateFlowMethod && returnType?.isMarkedNullable == true
 
     val paramCall: String = method.parameters
       .joinToString(", ") { it.name?.asString() ?: "_" }
@@ -259,6 +291,7 @@ internal fun FileSpec.Builder.addClassExports(
       .addCode(
         buildFlowMethodCollectBody(
           qualifiedName, methodName, paramCall, flowElementQualified,
+          elementNullable, memberNullable,
         )
       )
 
@@ -267,6 +300,8 @@ internal fun FileSpec.Builder.addClassExports(
     if (isStateFlowMethod) {
       // ADR-065: sibling synchronous `_value` export -- handle + the method's own parameters,
       // no scope/callbacks/errorOut (StateFlow.value cannot throw).
+      // ADR-067: a nullable element or nullable member widens the return to `COpaquePointer?` and
+      // guards the box with `if (v != null) … else null`.
       val valueBuilder: FunSpec.Builder = FunSpec
         .builder("export_${prefix}_${cname}_value")
         .addAnnotation(cNameAnnotation("${prefix}_${cname}_value"))
@@ -275,10 +310,34 @@ internal fun FileSpec.Builder.addClassExports(
       valueBuilder.addFlowParameters()
 
       valueBuilder
-        .returns(cOpaquePointer)
-        .addCode(buildStateFlowValueMethodBody(qualifiedName, methodName, paramCall))
+        .returns(
+          if (elementNullable || memberNullable) cOpaquePointer.copy(nullable = true)
+          else cOpaquePointer
+        )
+        .addCode(
+          buildStateFlowValueMethodBody(
+            qualifiedName, methodName, paramCall, elementNullable, memberNullable,
+          )
+        )
 
       addFunction(valueBuilder.build())
+
+      if (memberNullable) {
+        // ADR-067: nullable member -- presence-probe export backing the C# `_has_value` two-call
+        // pattern; the getter returns `null` when this is false, else constructs normally.
+        val hasValueBuilder: FunSpec.Builder = FunSpec
+          .builder("export_${prefix}_${cname}_has_value")
+          .addAnnotation(cNameAnnotation("${prefix}_${cname}_has_value"))
+          .addParameter("handle", cOpaquePointer)
+
+        hasValueBuilder.addFlowParameters()
+
+        hasValueBuilder
+          .returns(Boolean::class)
+          .addCode(buildStateFlowHasValueMethodBody(qualifiedName, methodName, paramCall))
+
+        addFunction(hasValueBuilder.build())
+      }
     }
   }
 
@@ -354,10 +413,24 @@ internal fun FileSpec.Builder.addCompanionExports(
     }
 }
 
+// ADR-067: `?` on the member access when the whole StateFlow member/return can be null (a
+// defensive guard -- the C# side only reaches this after its `_has_value` probe is true, but a
+// race should not crash the coroutine); plain `.` (unchanged ADR-065 shape) otherwise.
+private fun memberAccessor(receiver: String, memberNullable: Boolean): String =
+  if (memberNullable) "$receiver?" else receiver
+
+// ADR-067: the collected/read item expression -- a null-guarded box when the element itself is
+// nullable (`StateFlow<T?>`), else the original unguarded `value as Any` box (ADR-065 unchanged).
+private fun itemBoxExpr(elementNullable: Boolean): String =
+  if (elementNullable) "if (value != null) StableRef.create(value).asCPointer() else null"
+  else "StableRef.create(value as Any).asCPointer()"
+
 private fun buildFlowCollectBody(
   qualifiedName: String,
   propName: String,
   flowElementQualified: String,
+  elementNullable: Boolean = false,
+  memberNullable: Boolean = false,
 ): String = buildString {
   appendLine("val obj = handle.asStableRef<$qualifiedName>().get()")
   appendLine("val scope = scopeHandle.asStableRef<CoroutineScope>().get()")
@@ -375,8 +448,8 @@ private fun buildFlowCollectBody(
   )
   appendLine("val job = scope.launch(start = CoroutineStart.ATOMIC) {")
   appendLine("  try {")
-  appendLine("    obj.$propName.collect { value ->")
-  appendLine("      val itemRef = StableRef.create(value as Any).asCPointer()")
+  appendLine("    obj.${memberAccessor(propName, memberNullable)}.collect { value ->")
+  appendLine("      val itemRef = ${itemBoxExpr(elementNullable)}")
   appendLine("      onNext.invoke(itemRef, 0.toByte(), userData)")
   appendLine("    }")
   appendLine("    onComplete.invoke(userData)")
@@ -396,6 +469,8 @@ private fun buildFlowMethodCollectBody(
   methodName: String,
   paramCall: String,
   flowElementQualified: String,
+  elementNullable: Boolean = false,
+  memberNullable: Boolean = false,
 ): String = buildString {
   appendLine("val obj = handle.asStableRef<$qualifiedName>().get()")
   appendLine("val scope = scopeHandle.asStableRef<CoroutineScope>().get()")
@@ -413,8 +488,10 @@ private fun buildFlowMethodCollectBody(
   )
   appendLine("val job = scope.launch(start = CoroutineStart.ATOMIC) {")
   appendLine("  try {")
-  appendLine("    obj.$methodName($paramCall).collect { value ->")
-  appendLine("      val itemRef = StableRef.create(value as Any).asCPointer()")
+  appendLine(
+    "    obj.${memberAccessor("$methodName($paramCall)", memberNullable)}.collect { value ->",
+  )
+  appendLine("      val itemRef = ${itemBoxExpr(elementNullable)}")
   appendLine("      onNext.invoke(itemRef, 0.toByte(), userData)")
   appendLine("    }")
   appendLine("    onComplete.invoke(userData)")
@@ -431,19 +508,54 @@ private fun buildFlowMethodCollectBody(
 
 // ADR-065: the `_value` export body -- boxes `stateFlow.value as Any` into a StableRef, byte-for-
 // byte the same shape as a single onNext emission above. No errorOut: StateFlow.value cannot throw.
+// ADR-067: a nullable element or nullable member instead reads the value into a local and only
+// boxes it when non-null, returning `null` (a widened `COpaquePointer?`) otherwise.
 private fun buildStateFlowValuePropertyBody(
   qualifiedName: String,
   propName: String,
+  elementNullable: Boolean = false,
+  memberNullable: Boolean = false,
 ): String = buildString {
   appendLine("val obj = handle.asStableRef<$qualifiedName>().get()")
-  append("return StableRef.create(obj.$propName.value as Any).asCPointer()")
+  if (!elementNullable && !memberNullable) {
+    append("return StableRef.create(obj.$propName.value as Any).asCPointer()")
+  } else {
+    appendLine("val v = obj.${memberAccessor(propName, memberNullable)}.value")
+    append("return if (v != null) StableRef.create(v).asCPointer() else null")
+  }
 }
 
 private fun buildStateFlowValueMethodBody(
   qualifiedName: String,
   methodName: String,
   paramCall: String,
+  elementNullable: Boolean = false,
+  memberNullable: Boolean = false,
 ): String = buildString {
   appendLine("val obj = handle.asStableRef<$qualifiedName>().get()")
-  append("return StableRef.create(obj.$methodName($paramCall).value as Any).asCPointer()")
+  if (!elementNullable && !memberNullable) {
+    append("return StableRef.create(obj.$methodName($paramCall).value as Any).asCPointer()")
+  } else {
+    appendLine("val v = obj.${memberAccessor("$methodName($paramCall)", memberNullable)}.value")
+    append("return if (v != null) StableRef.create(v).asCPointer() else null")
+  }
+}
+
+// ADR-067: nullable-member presence probe -- backs the C# `_has_value` two-call pattern. A pure,
+// idempotent read of a `val`/getter-backed StateFlow reference; safe to call before subscribing.
+private fun buildStateFlowHasValuePropertyBody(
+  qualifiedName: String,
+  propName: String,
+): String = buildString {
+  appendLine("val obj = handle.asStableRef<$qualifiedName>().get()")
+  append("return obj.$propName != null")
+}
+
+private fun buildStateFlowHasValueMethodBody(
+  qualifiedName: String,
+  methodName: String,
+  paramCall: String,
+): String = buildString {
+  appendLine("val obj = handle.asStableRef<$qualifiedName>().get()")
+  append("return obj.$methodName($paramCall) != null")
 }

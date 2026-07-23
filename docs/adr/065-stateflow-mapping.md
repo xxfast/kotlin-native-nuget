@@ -470,8 +470,11 @@ This is the exact hazard the task flagged.
   `.Value` a `T?` (needs the nullable cascade of ADR-002/061 at the value getter); `StateFlow<T>?`
   needs the two-call nullable pattern around the whole member. Both deferred (mirror ROADMAP line 112
   for Flow).
-- **`suspend fun` returning `StateFlow<T>`** — treat as non-suspend returning StateFlow when it
-  lands (mirror ROADMAP line 110 / ADR-026).
+- **`suspend fun` returning `StateFlow<T>`**: ~~treat as non-suspend returning StateFlow when it
+  lands (mirror ROADMAP line 110 / ADR-026)~~. **Superseded/corrected by
+  [ADR-068](068-suspend-returning-stateflow.md) (Accepted):** that literal reading is a compile
+  error, a `suspend fun` cannot be called from a non-suspend `@CName` export. The outer suspend is
+  kept as `Task`, composing ADR-019 over this mapping: `Task<KotlinStateFlow<T>> XxxAsync()`.
 - **`StateFlow<T>` as a function parameter** (C# → Kotlin) and **as a generic type argument**
   (`Box<StateFlow<String>>`) — deferred, mirroring the corresponding Flow items (ROADMAP lines
   113-114).

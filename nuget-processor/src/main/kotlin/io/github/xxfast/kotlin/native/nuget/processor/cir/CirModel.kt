@@ -193,6 +193,14 @@ data class CirFlowHelper(
   val includesStateFlow: Boolean = false,
 ) : CirDeclaration
 
+// ADR-068: the two shared generic exports keyed on an already-obtained StateFlow<*> handle --
+// `Collect`/`Value` on the awaited flow's own StableRef, rather than re-invoking a parent member.
+// Emitted once per module (like [CirScopeHelper]/[CirJobHelper]), regardless of how many
+// suspend-StateFlow members exist across every class.
+data class CirStateFlowHandleHelper(
+  val libraryName: String,
+) : CirDeclaration
+
 data class CirSubscriptionHelper(
   val libraryName: String,
 ) : CirDeclaration
@@ -309,6 +317,13 @@ data class CirMethod(
   // The native method name (e.g. "Native_MoodReportValue") of the sibling `_value` DllImport
   // this StateFlow method's companion-member list also carries. Empty unless [isStateFlow].
   val stateFlowValueNativeName: String = "",
+  // ADR-067: true when the StateFlow member itself is nullable (`StateFlow<T>?` return). Renders
+  // the return type as `KotlinStateFlow<T>?` and gates a `_has_value` presence-probe DllImport /
+  // null-check before construction. Empty (false) unless [isStateFlow].
+  val isStateFlowNullableMember: Boolean = false,
+  // The native method name (e.g. "Native_MoodReportHasValue") of the sibling `_has_value`
+  // presence-probe DllImport. Empty unless [isStateFlowNullableMember].
+  val stateFlowHasValueNativeName: String = "",
   // Extra raw native (DllImport) parameter declarations spliced in between the method's own
   // parameters and the trailing `out IntPtr error` — e.g. `out int value` for a nullable-
   // primitive return's out-parameter (ADR-061 §5). Empty for every other shape.
@@ -346,6 +361,10 @@ data class CirProperty(
   val isStateFlow: Boolean = false,
   val flowElementType: String = "",
   val hasSyncErrorOut: Boolean = false,
+  // ADR-067: true when the StateFlow member itself is nullable (`StateFlow<T>?` property). Renders
+  // the property type as `KotlinStateFlow<T>?` and gates a `_has_value` presence-probe DllImport /
+  // null-check before construction. False unless [isStateFlow].
+  val isNullableMember: Boolean = false,
 ) : CirMember
 
 data class CirExtraNative(
