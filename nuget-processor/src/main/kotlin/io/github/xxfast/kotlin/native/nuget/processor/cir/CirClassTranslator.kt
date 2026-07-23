@@ -145,10 +145,18 @@ internal fun translateClass(
       // branch and silently lose `.Value`. Detection is on the exact declared qualifiedName.
       val isStateFlowType: Boolean = qualifiedTypeName in STATE_FLOW_TYPES
       val isFlowType: Boolean = !isStateFlowType && qualifiedTypeName in FLOW_TYPES
+      val flowElementTypeResolved: KSType? = if (isFlowType || isStateFlowType) {
+        propTypeResolved.arguments.firstOrNull()?.type?.resolve()
+      } else null
+      // ADR-067: nullable element (`StateFlow<T?>`) and nullable member (`StateFlow<T>?`) are only
+      // threaded for StateFlow; nullable Flow is out of scope (ADR-065 deferred).
+      val isNullableElement: Boolean =
+        isStateFlowType && flowElementTypeResolved?.isMarkedNullable == true
+      val isNullableMember: Boolean = isStateFlowType && propTypeResolved.isMarkedNullable
       val flowElementType: String? = if (isFlowType || isStateFlowType) {
         // ADR-066: qualified, not by simple name — an admitted dependency-module element type is
         // not guaranteed to share this class's own namespace.
-        qualifiedElementCsType(propTypeResolved.arguments.firstOrNull()?.type?.resolve(), context)
+        qualifiedElementCsType(flowElementTypeResolved, context, isNullableElement)
       } else null
       if (isFlowType || isStateFlowType) {
         tracker.needsFlow = true
@@ -200,7 +208,7 @@ internal fun translateClass(
       val type: String = when {
         isLambdaType -> lambdaCsType
         isSuspendLambdaType -> suspendLambdaCsType
-        isStateFlowType -> "KotlinStateFlow<$flowElementType>"
+        isStateFlowType -> "KotlinStateFlow<$flowElementType>${if (isNullableMember) "?" else ""}"
         isFlowType -> "KotlinFlow<$flowElementType>"
         else -> error("unreachable specialized property branch")
       }
@@ -211,12 +219,18 @@ internal fun translateClass(
         isStateFlowType -> {
           // ADR-065: the collect wiring is byte-for-byte the plain-Flow getter above; the only
           // addition is the second constructor argument, a synchronous `_value` read lambda.
+          // ADR-067: a nullable member additionally probes `_has_value` before constructing.
           val collectNativeName = "Native_Get${csPropName}Collect"
           val valueNativeName = "Native_Get${csPropName}Value"
+          val hasValueNativeName = "Native_Get${csPropName}HasValue"
           buildString {
             appendLine()
             appendLine("                if (_handle == IntPtr.Zero)")
             appendLine("                    throw new ObjectDisposedException(nameof(${cls.simpleName.asString()}));")
+            if (isNullableMember) {
+              appendLine("                if (!$hasValueNativeName(_handle))")
+              appendLine("                    return null;")
+            }
             appendLine("                return new KotlinStateFlow<$flowElementType>((onNext, onComplete, onError, userData) =>")
             appendLine("                    $collectNativeName(_handle, GetOrCreateScope(), onNext, onComplete, onError, userData),")
             appendLine("                    () => $valueNativeName(_handle));")
@@ -252,6 +266,7 @@ internal fun translateClass(
         isStateFlow = isStateFlowType,
         flowElementType = flowElementType ?: "",
         hasSyncErrorOut = false,
+        isNullableMember = isNullableMember,
       )
     }.toList()
 
@@ -452,9 +467,15 @@ internal fun translateClass(
     val returnType = method.returnType?.resolve()?.expandAliases()
     val returnQualified: String? = returnType?.declaration?.qualifiedName?.asString()
     val isStateFlowMethod: Boolean = returnQualified in STATE_FLOW_TYPES
+    val flowElementTypeResolved: KSType? = returnType?.arguments?.firstOrNull()?.type?.resolve()
+    // ADR-067: nullable element/member threading mirrors the sibling property branch above;
+    // nullable Flow stays out of scope (ADR-065 deferred).
+    val isNullableElement: Boolean =
+      isStateFlowMethod && flowElementTypeResolved?.isMarkedNullable == true
+    val isNullableMember: Boolean = isStateFlowMethod && returnType?.isMarkedNullable == true
     // ADR-066: qualified, not by simple name — see the sibling property branch above for why.
     val flowCsElementType: String =
-      qualifiedElementCsType(returnType?.arguments?.firstOrNull()?.type?.resolve(), context)
+      qualifiedElementCsType(flowElementTypeResolved, context, isNullableElement)
 
     val methodParams: List<CirParameter> = method.parameters.map { param ->
       val resolved: KSType = param.type.resolve().expandAliases()
@@ -500,9 +521,23 @@ internal fun translateClass(
         visibility = CirVisibility.PRIVATE,
       )
 
+      // ADR-067: nullable member -- sibling `_has_value` presence-probe DllImport, same
+      // parameter shape as `_value` (handle + the method's own parameters).
+      val hasValueNativeImport: CirDllImport? = if (isNullableMember) {
+        CirDllImport(
+          libraryName = libraryName,
+          entryPoint = "${prefix}_${cname}_has_value",
+          returnType = "bool",
+          name = "Native_${csMethodName}HasValue",
+          parameters = listOf(CirParameter("handle", "IntPtr")) + methodParams,
+          visibility = CirVisibility.PRIVATE,
+          marshalBooleanReturn = true,
+        )
+      } else null
+
       val stateFlowMethod = CirMethod(
         name = csMethodName,
-        returnType = "KotlinStateFlow<$flowCsElementType>",
+        returnType = "KotlinStateFlow<$flowCsElementType>${if (isNullableMember) "?" else ""}",
         nativeName = "Native_${csMethodName}Collect",
         parameters = methodParams,
         body = nativeCallArgs,
@@ -510,9 +545,14 @@ internal fun translateClass(
         isStateFlow = true,
         flowElementType = flowCsElementType,
         stateFlowValueNativeName = "Native_${csMethodName}Value",
+        isStateFlowNullableMember = isNullableMember,
+        stateFlowHasValueNativeName =
+          if (isNullableMember) "Native_${csMethodName}HasValue" else "",
       )
 
-      return@flatMap listOf(nativeImport, valueNativeImport, stateFlowMethod)
+      return@flatMap listOfNotNull(
+        nativeImport, valueNativeImport, hasValueNativeImport, stateFlowMethod,
+      )
     }
 
     val flowMethod = CirMethod(

@@ -168,17 +168,25 @@ internal fun StringBuilder.renderFlowMethod(method: CirMethod, className: String
 // ADR-065: StateFlow<T> as a non-suspend function return. Identical to renderFlowMethod's
 // `_collect` wiring, plus a synchronous `_value` read passed as the second KotlinStateFlow<T>
 // constructor argument (the method's own parameters, re-read on each `.Value` access).
+// ADR-067: a nullable member (`StateFlow<T>?` return) additionally probes `_has_value` before
+// constructing and returns `null` when absent.
 internal fun StringBuilder.renderStateFlowMethod(method: CirMethod, className: String) {
   val paramStr: String = method.parameters.joinToString(", ") { "${it.type} ${it.name}" }
   val paramNames: String = method.parameters.joinToString(", ") { it.name }
   val nativeName: String = method.nativeName
   val valueNativeName: String = method.stateFlowValueNativeName
   val valueCallArgs: String = if (paramNames.isEmpty()) "_handle" else "_handle, $paramNames"
+  val nullableSuffix: String = if (method.isStateFlowNullableMember) "?" else ""
 
-  appendLine("        public KotlinStateFlow<${method.flowElementType}> ${method.name}($paramStr)")
+  appendLine("        public KotlinStateFlow<${method.flowElementType}>$nullableSuffix ${method.name}($paramStr)")
   appendLine("        {")
   appendLine("            if (_handle == IntPtr.Zero)")
   appendLine("                throw new ObjectDisposedException(nameof($className));")
+  if (method.isStateFlowNullableMember) {
+    val hasValueNativeName: String = method.stateFlowHasValueNativeName
+    appendLine("            if (!$hasValueNativeName($valueCallArgs))")
+    appendLine("                return null;")
+  }
   appendLine("            return new KotlinStateFlow<${method.flowElementType}>((onNext, onComplete, onError, userData) =>")
   appendLine("                $nativeName(${method.body}),")
   appendLine("                () => $valueNativeName($valueCallArgs));")

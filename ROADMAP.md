@@ -111,7 +111,8 @@
 - [ ] Map `SharedFlow<T>` (hot stream with subscribers — may map to `IAsyncEnumerable<T>` with replay or `IObservable<T>`)
 - [x] Map `StateFlow<T>` (hot stream with always-current-value → `KotlinStateFlow<T> : KotlinFlow<T>` with synchronous `.Value`) (see [ADR-065](docs/adr/065-stateflow-mapping.md))
   - [ ] Settable `.Value` on `MutableStateFlow<T>` — needs a C#→Kotlin value-setter export (a reverse-direction write of `T` into `stateFlow.value`); deferred to Phase 7 bidirectional support
-  - [ ] Nullable `StateFlow<T?>` (element) and `StateFlow<T>?` (member) — mirrors the Flow nullable items below (ROADMAP line 112)
+  - [x] Nullable `StateFlow<T?>` (element) and `StateFlow<T>?` (member) — mirrors the Flow nullable items below (ROADMAP line 112) (see [ADR-067](docs/adr/067-nullable-stateflow-mapping.md))
+    - [ ] Nullable-member support (`_has_value` probe) is generated symmetrically for both a `StateFlow<T>?` property and a non-suspend function returning `StateFlow<T>?`, but only the property shape has a fixture/test (`CatMoodTracker.maybeMood`/`maybeStreak`, `NullableStateFlowTests.cs`). The function-return shape compiles but is untested; confirm it before relying on it.
   - [ ] `suspend fun` returning `StateFlow<T>` (mirrors the `Flow<T>` item above; treat as non-suspend returning StateFlow when it lands)
   - [ ] `StateFlow<T>` as a function parameter (C#→Kotlin) and as a generic type argument (e.g. `Box<StateFlow<String>>`) — mirrors the `Flow<T>` items below
   - [ ] `INotifyPropertyChanged` adapter over `KotlinStateFlow<T>` — deferred, opt-in convenience for XAML data-binding, not the v1 core

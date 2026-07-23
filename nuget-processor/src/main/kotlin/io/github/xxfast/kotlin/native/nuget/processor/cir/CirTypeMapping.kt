@@ -154,3 +154,17 @@ internal fun qualifiedElementCsType(type: KSType?, context: NugetContext): Strin
   )
   return "global::$namespace.$simpleName"
 }
+
+/**
+ * ADR-067: threads a nullable *element* (`StateFlow<T?>`) through to the C# type argument. Both
+ * value types (`int?` → real `Nullable<int>`) and reference types (`string?`/`Cat?` — a compile-
+ * time-only annotation) accept the trailing `?`; C# does not reject it on either kind.
+ */
+internal fun qualifiedElementCsType(
+  type: KSType?,
+  context: NugetContext,
+  nullable: Boolean,
+): String {
+  val base: String = qualifiedElementCsType(type, context)
+  return if (nullable) "$base?" else base
+}
