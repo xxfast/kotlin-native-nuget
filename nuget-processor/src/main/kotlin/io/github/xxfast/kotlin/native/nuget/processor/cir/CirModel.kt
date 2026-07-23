@@ -193,6 +193,14 @@ data class CirFlowHelper(
   val includesStateFlow: Boolean = false,
 ) : CirDeclaration
 
+// ADR-068: the two shared generic exports keyed on an already-obtained StateFlow<*> handle --
+// `Collect`/`Value` on the awaited flow's own StableRef, rather than re-invoking a parent member.
+// Emitted once per module (like [CirScopeHelper]/[CirJobHelper]), regardless of how many
+// suspend-StateFlow members exist across every class.
+data class CirStateFlowHandleHelper(
+  val libraryName: String,
+) : CirDeclaration
+
 data class CirSubscriptionHelper(
   val libraryName: String,
 ) : CirDeclaration

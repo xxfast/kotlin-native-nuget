@@ -612,7 +612,12 @@ Flow collection uses the class's `CoroutineScope` (same as suspend methods). Thi
 - **`SharedFlow<T>`** — hot stream with subscribers; semantically different from cold Flow; needs separate mapping (may be `IAsyncEnumerable<T>` with replay, or `IObservable<T>`, or a custom type).
 - **`StateFlow<T>`** — hot stream with always-current-value; may map to a C# property + change notification; needs separate analysis.
 - **`Flow<T>` as a function parameter** — passing a C#-implemented `IAsyncEnumerable<T>` into Kotlin as a `Flow<T>` (bidirectional); requires Phase 6 C#→Kotlin support.
-- **`suspend fun` returning `Flow<T>`** — the outer `suspend` rarely matters (returning a Flow is not a suspend operation); treat as non-suspend for v1.
+- **`suspend fun` returning `Flow<T>`**: ~~the outer `suspend` rarely matters (returning a Flow is
+  not a suspend operation); treat as non-suspend for v1~~. **Note:** for the StateFlow sibling,
+  [ADR-068](068-suspend-returning-stateflow.md) (Accepted) established the opposite decision. The
+  outer suspend is kept as `Task`, because a `suspend fun` cannot be called from a non-suspend
+  `@CName` export in the first place. When this `Flow<T>` item lands it should follow ADR-068's
+  `Task<KotlinFlow<T>>` shape, not the "treat as non-suspend" phrasing above. Not yet implemented.
 - **Nullable `Flow<T>?`** — deferred (requires the two-call nullable pattern from ADR-002, combined with the flow export).
 - **Backpressure** — bounded `Channel<T>` with explicit resume signaling; deferred for v1 (unbounded channel is safe for most use cases).
 - **`Flow<T>` as a generic type argument** — e.g., `Box<Flow<String>>`; deferred (generics containing Flow types).

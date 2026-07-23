@@ -55,7 +55,7 @@ internal fun StringBuilder.renderAsyncMethod(method: CirMethod, className: Strin
     "CancellationToken cancellationToken = default"
   } else {
     method.parameters.joinToString(", ") { "${it.type} ${it.name}" } +
-      ", CancellationToken cancellationToken = default"
+        ", CancellationToken cancellationToken = default"
   }
 
   val nativeCallArgs: String = if (method.isStatic) {
@@ -66,10 +66,28 @@ internal fun StringBuilder.renderAsyncMethod(method: CirMethod, className: Strin
     else "_handle, GetOrCreateScope(), $paramNames, callback, GCHandle.ToIntPtr(tcsHandle)"
   }
 
+  // ADR-068: `suspend fun` returning StateFlow<T> -- the awaited resultPtr IS the StateFlow
+  // object's own StableRef handle. Wrap it in a handle-owning KotlinStateFlow<T> (via the two
+  // shared generic `nuget_stateflow_collect`/`nuget_stateflow_value` exports) instead of the
+  // ordinary object-return `new T(resultPtr)` shape below -- a KotlinStateFlow<T> has no
+  // single-IntPtr constructor.
+  val isStateFlowReturn: Boolean = method.asyncReturnType.startsWith("KotlinStateFlow<")
+
   val resultExtraction: String = when {
     isUnit -> "t.SetResult(true);"
+    isStateFlowReturn -> buildString {
+      appendLine("IntPtr flowHandle = resultPtr;")
+      appendLine("                    IntPtr collectScope = GetOrCreateScope();")
+      appendLine("                    t.SetResult(new ${method.asyncReturnType}(")
+      appendLine("                        (flowOnNext, flowOnComplete, flowOnError, flowUserData) =>")
+      appendLine("                            NugetStateFlowNative.Collect(flowHandle, collectScope, flowOnNext, flowOnComplete, flowOnError, flowUserData),")
+      appendLine("                        () => NugetStateFlowNative.Value(flowHandle),")
+      append("                        flowHandle));")
+    }
+
     method.asyncReturnType in primitiveAsyncTypes ->
       "t.SetResult(NugetMarshal.FromHandle<${method.asyncReturnType}>(resultPtr));"
+
     else ->
       "t.SetResult(new ${method.asyncReturnType}(resultPtr));"
   }

@@ -55,6 +55,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.exports.addExtensionProper
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addObjectExports
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addPropertyExports
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addSealedClassExports
+import io.github.xxfast.kotlin.native.nuget.processor.exports.addStateFlowHandleExports
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addSuspendClassMethodExports
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addSuspendFunctionExports
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addValueClassExports
@@ -866,6 +867,18 @@ class NugetProcessor(
     if (needsScopeHelpers) builder.addNugetScopeDrainExport()
     if (needsScopeHelpers) builder.addNugetJobHelperExports()
     builder.addNugetErrorHelperExports()
+
+    // ADR-068: `suspend fun` returning StateFlow<T>/MutableStateFlow<T> needs the two shared
+    // generic exports keyed on the awaited flow's own handle -- generated once per module,
+    // regardless of how many suspend-StateFlow members exist across every class.
+    val classesHaveSuspendStateFlowMethods: Boolean = classes.any { cls ->
+      cls.getAllFunctions().any { method ->
+        method.modifiers.contains(Modifier.SUSPEND) &&
+            method.returnType?.resolve()?.expandAliases()
+              ?.declaration?.qualifiedName?.asString() in STATE_FLOW_TYPES
+      }
+    }
+    if (classesHaveSuspendStateFlowMethods) builder.addStateFlowHandleExports()
 
     return builder.build()
   }

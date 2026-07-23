@@ -130,4 +130,25 @@ class CatMoodTracker(private val catName: String) {
   fun setMaybeStreak(n: Int?) {
     _maybeStreak?.value = n
   }
+
+  // --- ADR-068: suspend fun returning StateFlow<T> -- outer suspend kept as Task, inner is ADR-065's
+  // KotlinStateFlow<T> unchanged. Both genuinely suspend (a real delay) before handing back the SAME
+  // underlying MutableStateFlow already exposed elsewhere, so mutation is observable across every
+  // surface position and the outer suspend is not vestigial. ---
+
+  /**
+   * ADR-068: `suspend fun` returning `StateFlow<String>` -- primitive/value-element variant.
+   * Genuinely suspends (a real await) before handing back the SAME underlying [_mood]
+   * MutableStateFlow as [mood]/[moodReport].
+   */
+  suspend fun awaitMoodReport(): StateFlow<String> {
+    kotlinx.coroutines.delay(1)
+    return mood
+  }
+
+  /** ADR-068: object-element variant -- suspend fun returning StateFlow<Cat>. */
+  suspend fun awaitPlaymateReport(): StateFlow<Cat> {
+    kotlinx.coroutines.delay(1)
+    return playmate
+  }
 }

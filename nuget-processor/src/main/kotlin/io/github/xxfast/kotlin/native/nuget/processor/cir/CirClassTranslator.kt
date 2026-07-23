@@ -289,8 +289,19 @@ internal fun translateClass(
       }
     }
 
-  val (suspendMethods, regularMethods) = filteredMethods
+  val (allSuspendMethods, regularMethods) = filteredMethods
     .partition { it.modifiers.contains(Modifier.SUSPEND) }
+
+  // ADR-068: a `suspend fun` returning StateFlow<T>/MutableStateFlow<T> is peeled into its own
+  // bucket BEFORE the plain-async `asyncMembers` path (below) claims it -- that path would
+  // otherwise resolve the return type's simple name "StateFlow" through KOTLIN_TO_CSHARP_PARAM
+  // (a miss) and emit an undefined-type `Task<StateFlow>`. `suspend fun` returning plain Flow<T>
+  // stays on the (separately deferred) legacy asyncMembers path -- out of scope for this ADR.
+  val (suspendStateFlowMethods, suspendMethods) = allSuspendMethods.partition { method ->
+    val returnQualified: String? = method.returnType?.resolve()?.expandAliases()
+      ?.declaration?.qualifiedName?.asString()
+    returnQualified in STATE_FLOW_TYPES
+  }
 
   val (flowMethods, nonFlowMethods) = regularMethods.partition { method ->
     val returnQualified: String? = method.returnType?.resolve()?.expandAliases()
@@ -301,6 +312,13 @@ internal fun translateClass(
   if (flowMethods.isNotEmpty()) {
     tracker.needsFlow = true
     tracker.needsAsync = true
+  }
+
+  if (suspendStateFlowMethods.isNotEmpty()) {
+    tracker.needsFlow = true
+    tracker.needsStateFlow = true
+    tracker.needsAsync = true
+    tracker.needsSuspendStateFlow = true
   }
   if (flowMethods.any { method ->
       method.returnType?.resolve()?.expandAliases()
@@ -451,6 +469,60 @@ internal fun translateClass(
     val asyncMethod = CirMethod(
       name = "${csMethodName}Async",
       returnType = taskReturnType,
+      parameters = methodParams,
+      body = "",
+      isAsync = true,
+      asyncReturnType = asyncReturnType,
+    )
+
+    listOf(nativeImport, asyncMethod)
+  }
+
+  // ADR-068: `suspend fun` returning StateFlow<T>/MutableStateFlow<T> -- the `_async` export is
+  // byte-for-byte [asyncMembers]'s shape above (it already boxes the awaited StateFlow object as
+  // a StableRef handle; SuspendFunctionExports.kt needs no change). The rendered method differs:
+  // `renderAsyncMethod` recognizes the `KotlinStateFlow<` asyncReturnType prefix and wraps the
+  // awaited handle in a handle-owning KotlinStateFlow<T> via the shared
+  // `nuget_stateflow_collect`/`nuget_stateflow_value` exports, instead of `new T(resultPtr)`.
+  val suspendStateFlowMembers: List<CirMember> = suspendStateFlowMethods.flatMap { method ->
+    val methodName: String = method.simpleName.asString()
+    val cname: String = toCName(methodName)
+    val csMethodName: String = methodName.replaceFirstChar { it.uppercase() }
+    val returnType = method.returnType?.resolve()?.expandAliases()
+    val flowElementTypeResolved: KSType? = returnType?.arguments?.firstOrNull()?.type?.resolve()
+    // v1 scope (ADR-068): nullable element/member is deferred; mirror ADR-065's plain (non-null)
+    // shape only.
+    val flowCsElementType: String = qualifiedElementCsType(flowElementTypeResolved, context)
+
+    val methodParams: List<CirParameter> = method.parameters.map { param ->
+      val resolved: KSType = param.type.resolve().expandAliases()
+      val kotlinType: String = resolved.declaration.simpleName.asString()
+      CirParameter(param.name?.asString() ?: "_", mapParamType(kotlinType))
+    }
+
+    val nativeParams: List<CirParameter> = listOf(
+      CirParameter("handle", "IntPtr"),
+      CirParameter("scopeHandle", "IntPtr"),
+    ) + methodParams +
+        listOf(
+          CirParameter("callback", "NugetAsyncCallback"),
+          CirParameter("userData", "IntPtr"),
+        )
+
+    val nativeImport = CirDllImport(
+      libraryName = libraryName,
+      entryPoint = "${prefix}_${cname}_async",
+      returnType = "IntPtr",
+      name = "Native_${csMethodName}Async",
+      parameters = nativeParams,
+      visibility = CirVisibility.PRIVATE,
+    )
+
+    val asyncReturnType = "KotlinStateFlow<$flowCsElementType>"
+
+    val asyncMethod = CirMethod(
+      name = "${csMethodName}Async",
+      returnType = "Task<$asyncReturnType>",
       parameters = methodParams,
       body = "",
       isAsync = true,
@@ -638,7 +710,7 @@ internal fun translateClass(
     superClass = superClass,
     isDataClass = isDataClass,
     isAbstract = isAbstract,
-    companionMembers = companionMembers + asyncMembers + flowMembers,
+    companionMembers = companionMembers + asyncMembers + suspendStateFlowMembers + flowMembers,
     hasSuspendMethods = cls.getAllFunctions().any { it.modifiers.contains(Modifier.SUSPEND) } ||
         flowMethods.isNotEmpty() ||
         cls.getAllProperties().any { prop ->

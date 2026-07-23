@@ -322,6 +322,9 @@ internal fun translate(
     if (tracker.needsFlow) {
       helpers.add(CirFlowHelper(context.libraryName, includesStateFlow = tracker.needsStateFlow))
     }
+    if (tracker.needsSuspendStateFlow) {
+      helpers.add(CirStateFlowHandleHelper(context.libraryName))
+    }
     if (tracker.callbackDelegates.isNotEmpty()) {
       helpers.add(CirCallbackDelegateHelper(tracker.callbackDelegates.distinctBy { it.name }))
     }

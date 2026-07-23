@@ -79,6 +79,10 @@ internal class CollectionHelperTracker {
   var needsAsync: Boolean = false
   var needsFlow: Boolean = false
   var needsStateFlow: Boolean = false
+
+  // ADR-068: at least one `suspend fun` returns StateFlow<T>/MutableStateFlow<T> -- gates the two
+  // shared generic `nuget_stateflow_collect`/`nuget_stateflow_value` handle-keyed exports.
+  var needsSuspendStateFlow: Boolean = false
   var needsSubscription: Boolean = false
   val lambdaArities: MutableSet<Int> = mutableSetOf()
   val suspendLambdaArities: MutableSet<Int> = mutableSetOf()
