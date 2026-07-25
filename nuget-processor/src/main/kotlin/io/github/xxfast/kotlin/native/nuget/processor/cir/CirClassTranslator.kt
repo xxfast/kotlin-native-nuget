@@ -86,11 +86,18 @@ internal fun translateClass(
       }
     }
 
-  // C has no overloading and C# cannot declare two constructors with identical
-  // parameter types — fail fast rather than emit uncompilable C# (ADR-034).
+  // C has no overloading and C# cannot declare two constructors with identical parameter
+  // types — fail fast rather than emit uncompilable C# (ADR-034). C# nullable *reference*
+  // annotations (e.g. "Patient" vs "Patient?") are not part of a method's signature, so they
+  // must be normalized away before comparing; nullable *value* types (e.g. "int" vs "int?")
+  // really are distinct signatures and must NOT be normalized (CirParameter.isReferenceType,
+  // sourced from BridgeType, tells them apart).
   val constructorSignatures: List<List<String>> =
     (listOfNotNull(cirConstructor) + secondaryConstructors).map { ctor ->
-      ctor.parameters.map { it.type }
+      ctor.parameters.map { param ->
+        val stripReferenceNullability: Boolean = param.isReferenceType && param.type.endsWith("?")
+        if (stripReferenceNullability) param.type.dropLast(1) else param.type
+      }
     }
   if (constructorSignatures.size != constructorSignatures.toSet().size) {
     ForwardDiagnosticSink.emit(

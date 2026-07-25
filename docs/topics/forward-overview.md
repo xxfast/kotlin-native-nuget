@@ -105,6 +105,12 @@ Kotlin or a C# API whose signature lies about its contract. Every diagnostic car
   variance on a class type parameter is dropped, but the member still generates).
 - **`ERROR_*`**: generation fails before any C# is written. The only v1 case is two constructors
   that render an identical C# signature ([ADR-034](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/034-secondary-constructor-exceptions.md)).
+  This also catches two constructors that differ only in *reference*-type nullability
+  (`constructor(from: Patient)` next to `constructor(from: Patient?)`): C# does not treat a nullable
+  reference annotation as part of a method's signature, so both would otherwise render, correctly but
+  uncompilably, as `Referral(Patient from)` and `Referral(Patient? from)` (`CS0111`). Nullable
+  **value** types are unaffected and keep working: `constructor(n: Int)` next to
+  `constructor(n: Int?)` render genuinely distinct signatures and are not treated as a collision.
 
 A `Map` parameter (see [Collections](collections.md)) is skipped like this:
 

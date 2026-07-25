@@ -301,11 +301,31 @@ Three findings forced this, all verified:
 
 - **Cell 21's correct end state is a diagnostic, not working code.** ADR-034 already decided that a C#
   constructor-signature collision is a fail-fast (`CirClassTranslator.kt:93-98` calls `logger.error`).
-  The fix is to add the handle constructor to the set that check already computes — after which
-  `class Referral { constructor(from: Patient) }` **fails generation by design**. So `Referral` can never
-  live in `test-library`, before or after the fix. It is a permanent Tier 1 *diagnostic* cell, exactly
-  like cell 23. (Its Kotlin does compile — verified with real konanc — so the `CS0111` genuinely would
-  reach `Interop.cs` and brick every consumer, which is the other reason it stays out.)
+
+  **Correction (retargeted, not fixed as written):** the mechanism first proposed here, the always-emitted
+  `internal Referral(IntPtr handle)` colliding with a secondary constructor's `mapParamType`'s `?: "IntPtr"`
+  fallthrough, was fixed as a side effect of [ADR-062](062-forward-callable-plan.md): constructors now
+  project through `ForwardCirPlanProjection.constructor(...)` -> `BridgeType.csharpType()`, so an
+  object-typed parameter renders as the wrapper type (`Patient`), not `IntPtr`. Nobody fixed cell 21
+  deliberately; it fell out of ADR-062's unrelated projection change and went unnoticed until this
+  correction. Verified by running the original fixture through `Tier1Harness`: `public Referral(Patient
+  from)` generates, `kspExitCode=OK`, `kspErrors=[]`.
+
+  The cell now pins a different collision in the same family: two secondary constructors that differ
+  only in *reference*-type nullability, `constructor(from: Patient)` next to
+  `constructor(from: Patient?)`. C# does not treat a nullable reference annotation as part of a
+  signature, so ADR-034's raw-string comparison (`CirClassTranslator.kt:89-98`) saw no duplicate and let
+  both `public Referral(Patient from)` and `public Referral(Patient? from)` generate, `CS0111` in the
+  consumer. Fixed by normalizing reference-type nullability out of the comparison before it runs
+  (`CirParameter.isReferenceType`, sourced from `BridgeType.isCSharpReferenceType()`); nullable value
+  types (`Int` vs `Int?`) are left alone since those really are distinct C# signatures.
+
+  So `class Referral { constructor(from: Patient); constructor(from: Patient?) }` **still fails
+  generation by design**, under the named kind `ERROR_CSHARP_SIGNATURE_COLLISION`
+  ([ADR-064](064-forward-unsupported-declaration-diagnostics.md)). `Referral` still can never live in
+  `test-library`, unchanged: it remains a permanent Tier 1 *diagnostic* cell, exactly like cell 23. (Its
+  Kotlin does compile, verified with real konanc, so the `CS0111` genuinely would reach `Interop.cs` and
+  brick every consumer, which is the other reason it stays out.)
 - **There are no runtime-only cells**, so Tier 3 has nothing to be red about (see the matrix).
 - **The one remaining case for a Tier 2 red — an expected-errors manifest — is rejected**, next.
 
