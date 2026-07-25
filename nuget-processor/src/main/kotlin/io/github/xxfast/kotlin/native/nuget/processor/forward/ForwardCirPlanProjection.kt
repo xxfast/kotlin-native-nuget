@@ -485,7 +485,7 @@ internal object ForwardCirPlanProjection {
   // *declaration*; the call-site local variable declaration ([nativeOutParameters]) needs no
   // attribute (MarshalAs is a declaration-only concern).
   private fun outParameterMarshalPrefix(type: BridgeType): String =
-    if (type is BridgeType.Primitive && type.kind == PrimitiveKind.BOOLEAN) {
+    if (type == BridgeType.Primitive(PrimitiveKind.BOOLEAN)) {
       "[MarshalAs(UnmanagedType.I1)] "
     } else {
       ""
