@@ -406,7 +406,13 @@ internal object ForwardCirPlanProjection {
    * or dispose of a materialized handle the public type never mentions).
    */
   private fun ForwardCallablePlan.publicParameters(): List<CirParameter> =
-    publicSignature.parameters.map { parameter -> CirParameter(parameter.name, parameter.type.csharpType()) }
+    publicSignature.parameters.map { parameter ->
+      CirParameter(
+        name = parameter.name,
+        type = parameter.type.csharpType(),
+        isReferenceType = parameter.type.isCSharpReferenceType(),
+      )
+    }
 
   /** The DllImport-only native parameter list: every native ABI IN parameter in [nativeParameters]
    * (already positioned correctly by the planner, including any nullable-primitive fan-out),
@@ -783,6 +789,24 @@ internal object ForwardCirPlanProjection {
 
     is BridgeType.Nullable -> "${type.csharpType()}?"
     else -> error("Forward CIR direct-value projection cannot render public type $this")
+  }
+
+  /**
+   * Whether this type's rendered [csharpType] spelling is a C# reference type, i.e. whether a
+   * nullable annotation on it is erased from the method signature (ADR-034's duplicate-
+   * constructor check relies on this to know when it may strip a trailing "?" before comparing
+   * rendered signatures). [BridgeType.Enum] and [BridgeType.ValueClass] are C# value types
+   * (`readonly record struct`, `enum`), so `T` and `T?` really are distinct overloads for them —
+   * unlike [BridgeType.String], [BridgeType.ObjectHandle], and [BridgeType.Collection], which
+   * render as classes/interfaces.
+   */
+  private fun BridgeType.isCSharpReferenceType(): Boolean = when (this) {
+    is BridgeType.Nullable -> type.isCSharpReferenceType()
+    BridgeType.String, is BridgeType.ObjectHandle, is BridgeType.Collection -> true
+    BridgeType.Unit, is BridgeType.Primitive, BridgeType.Char,
+    is BridgeType.Enum, is BridgeType.ValueClass -> false
+
+    else -> error("Forward CIR direct-value projection cannot classify public type $this")
   }
 
   private fun PrimitiveKind.csharpType(): String = when (this) {

@@ -397,6 +397,13 @@ data class CirParameter(
   // Native (DllImport) type; differs from type when the public C# type needs a cast
   // at the call site (e.g. enum method params: public type "Mood", native type "int").
   val nativeType: String = type,
+  // Whether [type]'s underlying (non-nullable) C# spelling is a reference type. Only
+  // constructor parameters currently rely on this (ADR-034's duplicate-constructor check must
+  // strip a reference type's trailing "?" before comparing signatures, since C# nullable
+  // reference annotations are not part of a method signature — unlike nullable *value* types,
+  // where e.g. `int` and `int?` really are distinct overloads). Defaults to true so call sites
+  // that never populate it keep today's "compare the raw rendered string" behavior.
+  val isReferenceType: Boolean = true,
 )
 
 data class CirConst(
