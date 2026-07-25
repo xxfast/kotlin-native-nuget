@@ -99,8 +99,8 @@ Kotlin or a C# API whose signature lies about its contract. Every diagnostic car
 
 - **`SKIPPED_*`**: the member is warned about and omitted entirely from the generated C# API.
   Generation continues. This is the default for a construct the forward direction cannot express
-  (an unsupported type, a `Map`/`Set` parameter, a nullable `Boolean` return, an unsupported
-  generic/suspend combination, a value-class member inherited through interface delegation).
+  (an unsupported type, a `Map`/`Set` parameter, an unsupported generic/suspend combination, a
+  value-class member inherited through interface delegation).
 - **`INFO_*`**: the member still binds, under a documented assumption (for example, `out`/`in`
   variance on a class type parameter is dropped, but the member still generates).
 - **`ERROR_*`**: generation fails before any C# is written. The only v1 case is two constructors

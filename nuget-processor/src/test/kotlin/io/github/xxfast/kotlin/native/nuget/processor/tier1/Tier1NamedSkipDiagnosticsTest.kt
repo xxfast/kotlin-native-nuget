@@ -87,14 +87,13 @@ class Tier1NamedSkipDiagnosticsTest {
   }
 
   /**
-   * ROADMAP line 79 (ADR-061 deferred width). A nullable `Boolean` method *return* has no
-   * single-call ABI shape (`nullableResultShape` only handles non-boolean primitives), so the
-   * planner already skips it (`ForwardPlanSkipReason.NULLABLE`, `droppedFromCSharp = true`) with
-   * today's generic message (verified through this harness). ADR-064 names this
-   * `SKIPPED_UNSUPPORTED_RETURN`.
+   * ADR-069 closed ADR-061's deferred width: a nullable `Boolean` method *return* now has the same
+   * single-call `valueOut` ABI shape as every other nullable primitive (`BooleanVar` on the Kotlin
+   * side, `[MarshalAs(UnmanagedType.I1)] out bool valueOut` on the C# side), so it is bound rather
+   * than skipped. Inverted from the pre-ADR-069 "fires SKIPPED_UNSUPPORTED_RETURN" assertion.
    */
   @Test
-  fun `class method with nullable Boolean return fires SKIPPED_UNSUPPORTED_RETURN and is omitted`() {
+  fun `class method with nullable Boolean return is bound, not skipped`() {
     val result = Tier1Harness.run(
       """
       package tier1.skipnullboolreturn
@@ -110,13 +109,14 @@ class Tier1NamedSkipDiagnosticsTest {
       "expected no broken source for isEligible; got: ${result.compileErrors}",
     )
     assertTrue(
-      "export_patient_isEligible" !in result.generated,
-      "expected isEligible to be entirely absent from the generated CNameExports.kt; " +
-          "generated=${result.generated}",
+      "export_patient_isEligible" in result.generated,
+      "expected isEligible to be bound in the generated Interop.kt; generated=${result.generated}",
     )
     assertTrue(
-      result.kspWarnings.any { it.contains(ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_RETURN.name) },
-      "expected a SKIPPED_UNSUPPORTED_RETURN diagnostic naming Patient.isEligible's nullable " +
+      result.kspWarnings.none {
+        it.contains(ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_RETURN.name)
+      },
+      "expected no SKIPPED_UNSUPPORTED_RETURN diagnostic for Patient.isEligible's nullable " +
           "Boolean return; kspWarnings=${result.kspWarnings}",
     )
   }

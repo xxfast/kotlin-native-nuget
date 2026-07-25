@@ -1006,7 +1006,7 @@ internal class ForwardCallablePlanner(
     )
 
     is BridgeType.ObjectHandle -> handleResultShape(BridgeType.Nullable(type))
-    is BridgeType.Primitive -> if (type.kind != PrimitiveKind.BOOLEAN) {
+    is BridgeType.Primitive -> {
       val nullable: BridgeType = BridgeType.Nullable(type)
       ForwardResultShape(
         wireType = ForwardAbiWireType.BOOLEAN,
@@ -1027,8 +1027,6 @@ internal class ForwardCallablePlanner(
           )
         ),
       )
-    } else {
-      null
     }
 
     else -> null

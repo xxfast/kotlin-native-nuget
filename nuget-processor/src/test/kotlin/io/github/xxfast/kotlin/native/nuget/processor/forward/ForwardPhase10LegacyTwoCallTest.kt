@@ -8,6 +8,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.cir.CirStaticClass
 import kotlin.test.Test
 import kotlin.test.assertContains
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 
 /**
  * Phase 10: top-level nullable primitives stay on ADR-002 two-call via
@@ -52,6 +53,33 @@ class ForwardPhase10LegacyTwoCallTest {
     assertEquals("nullableIntProbe_value", plan.nativeExports[1].exportName)
   }
 
+  @Test
+  fun `legacy two-call value export takes BOOLEAN and still rejects VOID`() {
+    // A nullable top-level Boolean now rides this route, so BOOLEAN is a legal value wire type.
+    // VOID never is: the two-call shape reads the value from the export's return, so a void
+    // export would silently produce a nullable that can never carry a value.
+    val boolean: ForwardCallablePlan = legacyTwoCallPlan(
+      symbol = "sample.nullableBoolean",
+      export = "nullableBoolean",
+      publicName = "nullableBoolean",
+      primitive = BridgeType.Primitive(PrimitiveKind.BOOLEAN),
+      parameters = emptyList(),
+      valueWire = ForwardAbiWireType.BOOLEAN,
+    )
+    assertContains(renderKotlin(boolean), "@CName(\"nullableBoolean_value\")")
+
+    val void: ForwardCallablePlan = legacyTwoCallPlan(
+      symbol = "sample.nullableVoid",
+      export = "nullableVoid",
+      publicName = "nullableVoid",
+      primitive = BridgeType.Primitive(PrimitiveKind.INT),
+      parameters = emptyList(),
+      valueWire = ForwardAbiWireType.VOID,
+    )
+    val failure: IllegalArgumentException = assertFailsWith { renderKotlin(void) }
+    assertContains(failure.message.orEmpty(), "must return the primitive wire type")
+  }
+
   private fun renderKotlin(plan: ForwardCallablePlan): String {
     val builder: FileSpec.Builder = FileSpec.builder("sample", "Exports")
     builder.addForwardKotlinPlanExport(plan)
@@ -72,6 +100,7 @@ class ForwardPhase10LegacyTwoCallTest {
     publicName: String,
     primitive: BridgeType.Primitive,
     parameters: List<ForwardPublicParameter>,
+    valueWire: ForwardAbiWireType = ForwardAbiWireType.INT32,
   ): ForwardCallablePlan {
     val result = BridgeType.Nullable(primitive)
     val error = ForwardAbiParameter(
@@ -99,7 +128,7 @@ class ForwardPhase10LegacyTwoCallTest {
       )
     }
     val presence = ForwardNativeCall("${export}_has_value", ForwardAbiWireType.BOOLEAN, inputs + error)
-    val value = ForwardNativeCall("${export}_value", ForwardAbiWireType.INT32, inputs + error)
+    val value = ForwardNativeCall("${export}_value", valueWire, inputs + error)
     return ForwardCallablePlan(
       invocation = ForwardInvocation(symbol, origin = ForwardCallableOrigin.TOP_LEVEL),
       publicSignature = ForwardPublicSignature(publicName, parameters, result),

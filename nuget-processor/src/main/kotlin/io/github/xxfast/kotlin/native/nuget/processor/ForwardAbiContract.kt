@@ -206,7 +206,11 @@ internal object ForwardAbiContract {
       // callee writes through. Recognize any `out `-prefixed native type uniformly as (POINTER,
       // OUT) rather than trying to resolve its pointee width — mirroring the errorOut special
       // case's own philosophy — so it matches the Kotlin side's `COpaquePointer?` (also POINTER).
-      if (parameter.nativeType.startsWith("out ")) {
+      // ADR-069: a Boolean out-parameter's DllImport declaration carries a leading
+      // `[MarshalAs(UnmanagedType.I1)] ` attribute (the C# marshaller's default `out bool` read is
+      // 4 bytes against Kotlin's 1-byte `BooleanVar` write); strip it before the `out `-prefix
+      // check below, which recognizes the pointer shape by native-type text.
+      if (parameter.nativeType.substringAfterLast("] ").startsWith("out ")) {
         ForwardAbiParameter(ForwardAbiType.POINTER, ForwardAbiDirection.OUT)
       } else {
         ForwardAbiParameter(csharpType(parameter.nativeType))
