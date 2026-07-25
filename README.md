@@ -98,6 +98,10 @@ IPet pet = oreo;                            // interface polymorphism
 Animal animal = oreo;                       // abstract class hierarchy
 ```
 
+By default the processor bridges every public declaration it can see in the module, not just the ones under `rootPackage`. `rootPackage` only names the generated C# namespace. If your module has unrelated public API, scope it with `publish { include(...); exclude(...) }`.
+
+Not everything bridges. The forward direction has a defined bridgeable subset; declarations outside it are skipped with a named diagnostic rather than silently dropped or miscompiled. See [Publishing Kotlin to C#](https://xxfast.github.io/kotlin-native-nuget/forward-overview.html) for the full mapping and its limits.
+
 ## C# -> Kotlin
 
 ```c#
