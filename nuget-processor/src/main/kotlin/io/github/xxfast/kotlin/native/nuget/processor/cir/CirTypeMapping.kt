@@ -1,5 +1,6 @@
 package io.github.xxfast.kotlin.native.nuget.processor.cir
 
+import com.google.devtools.ksp.symbol.ClassKind
 import com.google.devtools.ksp.symbol.KSClassDeclaration
 import com.google.devtools.ksp.symbol.KSDeclaration
 import com.google.devtools.ksp.symbol.KSType
@@ -67,10 +68,14 @@ internal val FLOW_TYPES = setOf(
 // qualifiedName and is checked BEFORE FLOW_TYPES everywhere FLOW_TYPES is consulted -- never via
 // isAssignableFrom, which would make a StateFlow match the plain-Flow branch and silently lose
 // `.Value`. SharedFlow/MutableSharedFlow remain unlisted and deferred (ROADMAP line 108).
-internal val STATE_FLOW_TYPES = setOf(
-  "kotlinx.coroutines.flow.StateFlow",
-  "kotlinx.coroutines.flow.MutableStateFlow",
-)
+//
+// ADR-071: split into MUTABLE_STATE_FLOW_TYPES / READ_ONLY_STATE_FLOW_TYPES so a genuinely
+// DECLARED `MutableStateFlow<T>` (not narrowed through `.asStateFlow()`) can additionally gain a
+// settable `.Value`. STATE_FLOW_TYPES stays their union so every existing call site (which only
+// needs "is this a StateFlow-shaped member at all") is unchanged.
+internal val MUTABLE_STATE_FLOW_TYPES = setOf("kotlinx.coroutines.flow.MutableStateFlow")
+internal val READ_ONLY_STATE_FLOW_TYPES = setOf("kotlinx.coroutines.flow.StateFlow")
+internal val STATE_FLOW_TYPES = READ_ONLY_STATE_FLOW_TYPES + MUTABLE_STATE_FLOW_TYPES
 
 internal class CollectionHelperTracker {
   var needsList: Boolean = false
@@ -79,6 +84,10 @@ internal class CollectionHelperTracker {
   var needsAsync: Boolean = false
   var needsFlow: Boolean = false
   var needsStateFlow: Boolean = false
+
+  // ADR-071: at least one publicly-DECLARED MutableStateFlow<T> member/return needs the settable
+  // `KotlinMutableStateFlow<T>` subclass emitted (implies needsStateFlow, which implies needsFlow).
+  var needsMutableStateFlow: Boolean = false
 
   // ADR-068: at least one `suspend fun` returns StateFlow<T>/MutableStateFlow<T> -- gates the two
   // shared generic `nuget_stateflow_collect`/`nuget_stateflow_value` handle-keyed exports.
@@ -107,6 +116,35 @@ internal class CollectionHelperTracker {
   fun trackProperty(plan: ForwardPropertyPlan) {
     trackCollection(plan.type)
   }
+}
+
+/**
+ * ADR-071 v1 scope: a `MutableStateFlow<T>` element the settable-`.Value` write seam supports --
+ * a primitive/`Char`/`String` (crosses by value, no conversion or one conversion) or an ordinary
+ * class/object element (crosses as a handle). Enum elements are explicitly out of scope in both
+ * directions (a pre-existing gap: `NugetMarshal.FromHandle<T>` has no enum branch) and everything
+ * else (collections, lambdas, nullable) is deferred, so this deliberately returns `false` for them
+ * -- the declared `MutableStateFlow<T>` keeps ADR-065/067's read-only `KotlinStateFlow<T>` mapping.
+ */
+internal fun isMutableStateFlowElementSupported(elementType: KSType?): Boolean {
+  val declaration = elementType?.expandAliases()?.declaration ?: return false
+  val simpleName: String = declaration.simpleName.asString()
+  if (KOTLIN_TO_CSHARP_PARAM.containsKey(simpleName)) return true
+  val classDeclaration: KSClassDeclaration = declaration as? KSClassDeclaration ?: return false
+  if (classDeclaration.classKind == ClassKind.ENUM_CLASS) return false
+  return classDeclaration.classKind == ClassKind.CLASS ||
+      classDeclaration.classKind == ClassKind.OBJECT
+}
+
+/**
+ * True when a (already-[isMutableStateFlowElementSupported]) element crosses the write seam as an
+ * object handle rather than by value -- i.e. it is not one of the [KOTLIN_TO_CSHARP_PARAM]
+ * primitive/`Char`/`String` scalars.
+ */
+internal fun isMutableStateFlowElementObject(elementType: KSType?): Boolean {
+  val declaration = elementType?.expandAliases()?.declaration ?: return false
+  val simpleName: String = declaration.simpleName.asString()
+  return !KOTLIN_TO_CSHARP_PARAM.containsKey(simpleName)
 }
 
 internal fun mapReturnType(kotlinType: String): String =

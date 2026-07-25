@@ -216,6 +216,15 @@ internal fun StringBuilder.renderClass(cls: CirClass) {
           appendLine("        private static extern bool Native_Get${prop.name}HasValue(IntPtr handle);")
           appendLine()
         }
+        if (prop.isMutableStateFlow) {
+          // ADR-071: sibling `_set_value` export -- handle + the element's own wire type + a
+          // trailing `out IntPtr error` (the Kotlin setter can throw, MutableStateFlow.value
+          // conflates by Any.equals on the previous value).
+          val setValueEntryPoint = "${cls.nativePrefix}_set_${prop.nativeName}_value"
+          appendLine("        [DllImport(\"${cls.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"$setValueEntryPoint\")]")
+          appendLine("        private static extern void Native_Set${prop.name}Value(IntPtr handle, ${prop.nativeSetterType} value, out IntPtr error);")
+          appendLine()
+        }
       }
       renderProperty(prop)
     } else if (prop.usesLegacyNativeImport()) {

@@ -175,6 +175,16 @@ internal fun translateClass(
       val isNullableElement: Boolean =
         isStateFlowType && flowElementTypeResolved?.isMarkedNullable == true
       val isNullableMember: Boolean = isStateFlowType && propTypeResolved.isMarkedNullable
+      // ADR-071: a genuinely DECLARED MutableStateFlow<T> (not narrowed through .asStateFlow())
+      // gains a settable `.Value` -- gated on the exact declared type, a non-nullable
+      // element/member (both deferred), and a v1-supported element (primitive/String/object).
+      val isMutableStateFlowProperty: Boolean = isStateFlowType &&
+          qualifiedTypeName in MUTABLE_STATE_FLOW_TYPES &&
+          !isNullableElement && !isNullableMember &&
+          isMutableStateFlowElementSupported(flowElementTypeResolved)
+      val isMutableStateFlowObjectElement: Boolean =
+        isMutableStateFlowProperty && isMutableStateFlowElementObject(flowElementTypeResolved)
+      if (isMutableStateFlowProperty) tracker.needsMutableStateFlow = true
       val flowElementType: String? = if (isFlowType || isStateFlowType) {
         // ADR-066: qualified, not by simple name — an admitted dependency-module element type is
         // not guaranteed to share this class's own namespace.
@@ -230,6 +240,7 @@ internal fun translateClass(
       val type: String = when {
         isLambdaType -> lambdaCsType
         isSuspendLambdaType -> suspendLambdaCsType
+        isMutableStateFlowProperty -> "KotlinMutableStateFlow<$flowElementType>"
         isStateFlowType -> "KotlinStateFlow<$flowElementType>${if (isNullableMember) "?" else ""}"
         isFlowType -> "KotlinFlow<$flowElementType>"
         else -> error("unreachable specialized property branch")
@@ -242,9 +253,14 @@ internal fun translateClass(
           // ADR-065: the collect wiring is byte-for-byte the plain-Flow getter above; the only
           // addition is the second constructor argument, a synchronous `_value` read lambda.
           // ADR-067: a nullable member additionally probes `_has_value` before constructing.
+          // ADR-071: a settable member additionally passes a third `Action<T>` write lambda,
+          // backed by the sibling `_set_value` export.
           val collectNativeName = "Native_Get${csPropName}Collect"
           val valueNativeName = "Native_Get${csPropName}Value"
           val hasValueNativeName = "Native_Get${csPropName}HasValue"
+          val setValueNativeName = "Native_Set${csPropName}Value"
+          val ctorName: String =
+            if (isMutableStateFlowProperty) "KotlinMutableStateFlow" else "KotlinStateFlow"
           buildString {
             appendLine()
             appendLine("                if (_handle == IntPtr.Zero)")
@@ -253,9 +269,28 @@ internal fun translateClass(
               appendLine("                if (!$hasValueNativeName(_handle))")
               appendLine("                    return null;")
             }
-            appendLine("                return new KotlinStateFlow<$flowElementType>((onNext, onComplete, onError, userData) =>")
+            appendLine("                return new $ctorName<$flowElementType>((onNext, onComplete, onError, userData) =>")
             appendLine("                    $collectNativeName(_handle, GetOrCreateScope(), onNext, onComplete, onError, userData),")
-            appendLine("                    () => $valueNativeName(_handle));")
+            if (isMutableStateFlowProperty) {
+              appendLine("                    () => $valueNativeName(_handle),")
+              val writeReceiver: String = if (isMutableStateFlowObjectElement) "v._handle" else "v"
+              if (isMutableStateFlowObjectElement) {
+                appendLine("                    v =>")
+                appendLine("                    {")
+                appendLine("                        if (v is null) throw new ArgumentNullException(nameof(v));")
+                appendLine("                        $setValueNativeName(_handle, $writeReceiver, out IntPtr error);")
+                appendLine("                        if (error != IntPtr.Zero) throw NugetErrorNative.BuildException(error);")
+                appendLine("                    });")
+              } else {
+                appendLine("                    v =>")
+                appendLine("                    {")
+                appendLine("                        $setValueNativeName(_handle, $writeReceiver, out IntPtr error);")
+                appendLine("                        if (error != IntPtr.Zero) throw NugetErrorNative.BuildException(error);")
+                appendLine("                    });")
+              }
+            } else {
+              appendLine("                    () => $valueNativeName(_handle));")
+            }
             append("            ")
           }
         }
@@ -275,11 +310,21 @@ internal fun translateClass(
         else -> error("unreachable specialized property getter")
       }
 
+      // ADR-071: the setter's native (DllImport) parameter type -- the element's own C# wire type
+      // for a primitive/String, else IntPtr for an object handle. Only meaningful when
+      // [isMutableStateFlowProperty]; [nativeSetterType] otherwise stays [nativeReturnType]
+      // (unused, since a read-only StateFlow property has no setter).
+      val mutableStateFlowNativeSetterType: String = when {
+        !isMutableStateFlowProperty -> nativeReturnType
+        isMutableStateFlowObjectElement -> "IntPtr"
+        else -> flowElementType ?: nativeReturnType
+      }
+
       CirProperty(
         name = csPropName,
         type = type,
         nativeReturnType = nativeReturnType,
-        nativeSetterType = nativeReturnType,
+        nativeSetterType = mutableStateFlowNativeSetterType,
         nativeName = propName,
         getter = getter,
         setter = null,
@@ -289,6 +334,9 @@ internal fun translateClass(
         flowElementType = flowElementType ?: "",
         hasSyncErrorOut = false,
         isNullableMember = isNullableMember,
+        isMutableStateFlow = isMutableStateFlowProperty,
+        stateFlowSetValueNativeName =
+          if (isMutableStateFlowProperty) "Native_Set${csPropName}Value" else "",
       )
     }.toList()
 
@@ -568,6 +616,16 @@ internal fun translateClass(
     val isNullableElement: Boolean =
       isStateFlowMethod && flowElementTypeResolved?.isMarkedNullable == true
     val isNullableMember: Boolean = isStateFlowMethod && returnType?.isMarkedNullable == true
+    // ADR-071: mirrors the sibling property branch above -- a genuinely DECLARED
+    // MutableStateFlow<T> function return (not narrowed to StateFlow<T>) gains a settable
+    // `.Value`, gated on non-nullable element/member (both deferred) and a v1-supported element.
+    val isMutableStateFlowMethod: Boolean = isStateFlowMethod &&
+        returnQualified in MUTABLE_STATE_FLOW_TYPES &&
+        !isNullableElement && !isNullableMember &&
+        isMutableStateFlowElementSupported(flowElementTypeResolved)
+    val isMutableStateFlowObjectElement: Boolean =
+      isMutableStateFlowMethod && isMutableStateFlowElementObject(flowElementTypeResolved)
+    if (isMutableStateFlowMethod) tracker.needsMutableStateFlow = true
     // ADR-066: qualified, not by simple name — see the sibling property branch above for why.
     val flowCsElementType: String =
       qualifiedElementCsType(flowElementTypeResolved, context, isNullableElement)
@@ -630,9 +688,31 @@ internal fun translateClass(
         )
       } else null
 
+      // ADR-071: sibling `_set_value` DllImport -- handle + the method's own parameters + the
+      // element's own wire type + a trailing `out IntPtr error` (the Kotlin setter can throw,
+      // MutableStateFlow.value conflates by Any.equals on the previous value).
+      val setValueNativeImport: CirDllImport? = if (isMutableStateFlowMethod) {
+        val setValueParamType: String =
+          if (isMutableStateFlowObjectElement) "IntPtr" else flowCsElementType
+        CirDllImport(
+          libraryName = libraryName,
+          entryPoint = "${prefix}_${cname}_set_value",
+          returnType = "void",
+          name = "Native_${csMethodName}SetValue",
+          parameters = listOf(CirParameter("handle", "IntPtr")) + methodParams +
+              listOf(CirParameter("value", setValueParamType)),
+          visibility = CirVisibility.PRIVATE,
+          hasSyncErrorOut = true,
+        )
+      } else null
+
       val stateFlowMethod = CirMethod(
         name = csMethodName,
-        returnType = "KotlinStateFlow<$flowCsElementType>${if (isNullableMember) "?" else ""}",
+        returnType = if (isMutableStateFlowMethod) {
+          "KotlinMutableStateFlow<$flowCsElementType>"
+        } else {
+          "KotlinStateFlow<$flowCsElementType>${if (isNullableMember) "?" else ""}"
+        },
         nativeName = "Native_${csMethodName}Collect",
         parameters = methodParams,
         body = nativeCallArgs,
@@ -643,10 +723,18 @@ internal fun translateClass(
         isStateFlowNullableMember = isNullableMember,
         stateFlowHasValueNativeName =
           if (isNullableMember) "Native_${csMethodName}HasValue" else "",
+        isMutableStateFlow = isMutableStateFlowMethod,
+        stateFlowSetValueNativeName =
+          if (isMutableStateFlowMethod) "Native_${csMethodName}SetValue" else "",
+        isMutableStateFlowElementObject = isMutableStateFlowObjectElement,
       )
 
       return@flatMap listOfNotNull(
-        nativeImport, valueNativeImport, hasValueNativeImport, stateFlowMethod,
+        nativeImport,
+        valueNativeImport,
+        hasValueNativeImport,
+        setValueNativeImport,
+        stateFlowMethod,
       )
     }
 
