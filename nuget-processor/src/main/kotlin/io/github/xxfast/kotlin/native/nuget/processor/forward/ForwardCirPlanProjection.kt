@@ -280,6 +280,7 @@ internal object ForwardCirPlanProjection {
         parameters = inParams,
         visibility = CirVisibility.PRIVATE,
         hasSyncErrorOut = true,
+        marshalBooleanReturn = csharpReturnType == "bool",
       ),
       CirMethod(
         name = plan.publicSignature.name,
@@ -335,7 +336,7 @@ internal object ForwardCirPlanProjection {
       // `out IntPtr error` must be present whether or not the *body* is hand-written, so this is
       // deliberately not gated by `!result.hasCustomBody` the way static/extension are.
       isSyncErrorCheckEnabled = plan.errorSlot != null,
-      extraNativeParams = plan.nativeOutParameters(nativeCall),
+      extraNativeParams = plan.nativeOutDeclarationParameters(nativeCall),
       hasCustomBody = result.hasCustomBody,
       nativeParameters = nativeParams,
     )
@@ -479,10 +480,32 @@ internal object ForwardCirPlanProjection {
       null
     }
 
+  // ADR-069: default P/Invoke `out bool` marshalling reads 4 bytes; Kotlin's `BooleanVar` writes 1
+  // (`putByte`). Every `out`-parameter Boolean nullable-result slot needs this on the DllImport
+  // *declaration*; the call-site local variable declaration ([nativeOutParameters]) needs no
+  // attribute (MarshalAs is a declaration-only concern).
+  private fun outParameterMarshalPrefix(type: BridgeType): String =
+    if (type is BridgeType.Primitive && type.kind == PrimitiveKind.BOOLEAN) {
+      "[MarshalAs(UnmanagedType.I1)] "
+    } else {
+      ""
+    }
+
   private fun ForwardCallablePlan.nativeOutParameters(nativeCall: ForwardNativeCall): List<String> =
     nativeCall.parameters
       .filter { parameter -> parameter != errorSlot && parameter.direction == ForwardAbiDirection.OUT }
       .map { parameter -> "out ${parameter.transfer.type.csharpType()} ${parameter.name}" }
+
+  private fun ForwardCallablePlan.nativeOutDeclarationParameters(
+    nativeCall: ForwardNativeCall,
+  ): List<String> = nativeCall.parameters
+    .filter { parameter ->
+      parameter != errorSlot && parameter.direction == ForwardAbiDirection.OUT
+    }
+    .map { parameter ->
+      val marshal: String = outParameterMarshalPrefix(parameter.transfer.type)
+      "${marshal}out ${parameter.transfer.type.csharpType()} ${parameter.name}"
+    }
 
   private fun ForwardCallablePlan.nativeOutCirParameters(
     nativeCall: ForwardNativeCall,
@@ -490,7 +513,8 @@ internal object ForwardCirPlanProjection {
     .filter { parameter -> parameter != errorSlot && parameter.direction == ForwardAbiDirection.OUT }
     .map { parameter ->
       val type: String = parameter.transfer.type.csharpType()
-      CirParameter(parameter.name, type, "out $type")
+      val marshal: String = outParameterMarshalPrefix(parameter.transfer.type)
+      CirParameter(parameter.name, type, "${marshal}out $type")
     }
 
   private fun ForwardCallablePlan.resultProjection(

@@ -9,7 +9,7 @@ A Kotlin `class` becomes a C# `class` backed by an opaque `StableRef` handle, im
 | member property (get) | property (get) | |
 | member property (get/set) | property (get/set) | |
 | object-typed property/return | property/return | new wrapper per access, identity not preserved |
-| instance method return (object, `T?`, `List`/`Map`/`Set`, enum, `Char`, `String?`, `Int?`, …) | matching C# return type | same cascade as the property getter via the shared plan ([ADR-062](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/062-forward-callable-plan.md)); nullable numeric is single-call `valueOut`, see Method returns below |
+| instance method return (object, `T?`, `List`/`Map`/`Set`, enum, `Char`, `String?`, `Int?`, `Boolean?`, …) | matching C# return type | same cascade as the property getter via the shared plan ([ADR-062](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/062-forward-callable-plan.md)); nullable primitive (including `Boolean?`) is single-call `valueOut`, see Method returns below |
 
 ## Kotlin
 
@@ -163,10 +163,10 @@ An instance method returning an object, a collection (`List`/`Map`/`Set` and mut
 enum, a `Char`, or a nullable type crosses the bridge through the same planned marshalling path the
 property getter uses ([ADR-061](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/061-method-return-marshalling.md),
 [ADR-062](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/062-forward-callable-plan.md)).
-The one exception is a nullable **numeric** return: a method might have side effects, so it can't
-reuse the property getter's two-call `hasValue`/`value` pattern (that would invoke the method twice).
-It gets a single-call shape instead: the export returns `bool` (has-value) and writes the value
-through a `valueOut` out-parameter.
+The one exception is a nullable **primitive** return (including `Boolean?`): a method might have side
+effects, so it can't reuse the property getter's two-call `hasValue`/`value` pattern (that would
+invoke the method twice). It gets a single-call shape instead: the export returns `bool` (has-value)
+and writes the value through a `valueOut` out-parameter.
 
 From `test-library/src/nativeMain/kotlin/.../cat/Cat.kt`:
 
@@ -188,6 +188,14 @@ fun alias(): String? = owner?.let { "$name (owned by $it)" }
 
 /** Nullable primitive return, single-call out-param per ADR-061. Null until `age` is assigned. */
 fun ageInMonths(): Int? = age?.times(12)
+```
+
+`Boolean?` returns take the same single-call shape, from `test-library/src/nativeMain/kotlin/.../cat/NullableBooleanSample.kt`:
+
+```kotlin
+class CatChecklist(var vaccinated: Boolean? = null) {
+  fun isGroomed(state: Int): Boolean? = tribool(state)
+}
 ```
 
 Generated C#, from `Interop.cs` (the collection return, `Tags()`/`Scores()`, walks the handle the
@@ -238,6 +246,26 @@ public int? AgeInMonths()
 }
 ```
 
+`Boolean?`'s single-call `valueOut` needs an explicit `[MarshalAs(UnmanagedType.I1)]`: Kotlin/Native
+writes a `Boolean` as one byte and C#'s default marshalling reads four, see
+[ADR-069](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/069-nullable-boolean-marshalling.md).
+Also from `Interop.cs`:
+
+```C#
+[DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "catchecklist_isGroomed")]
+private static extern bool Native_IsGroomed(IntPtr handle, int state, [MarshalAs(UnmanagedType.I1)] out bool valueOut, out IntPtr error);
+
+public bool? IsGroomed(int state)
+{
+    bool hasValue = Native_IsGroomed(_handle, state, out bool valueOut, out IntPtr error);
+    if (error != IntPtr.Zero)
+    {
+        throw NugetErrorNative.BuildException(error);
+    }
+    return hasValue ? valueOut : null;
+}
+```
+
 From `IntegrationTests/MethodReturnMarshallingTests.cs`:
 
 ```C#
@@ -258,6 +286,18 @@ public void Cat_AgeInMonths_NonNullWhenAgeSet()
     using var oreo = new Cat("Oreo", 9);
     oreo.Age = 3;
     Assert.Equal(36, oreo.AgeInMonths());
+}
+```
+
+From `IntegrationTests/NullableBooleanTests.cs`, asserting `false` explicitly on a `bool?` (not
+`Assert.NotNull`, which a missing `MarshalAs` would still pass):
+
+```C#
+[Fact]
+public void CatChecklist_IsGroomed_False()
+{
+    using var checklist = new CatChecklist(null);
+    Assert.False(checklist.IsGroomed(1));
 }
 ```
 
@@ -337,10 +377,6 @@ binding or breaking the build; see [Publishing Kotlin to C#](forward-overview.md
 
 ## Limitations
 
-- Nullable `Boolean` method returns remain unplanned: the callable is omitted and a
-  `SKIPPED_UNSUPPORTED_RETURN` diagnostic names it, rather than the fallthrough-emit this used to be
-  ([ADR-062](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/062-forward-callable-plan.md),
-  [ADR-064](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/064-forward-unsupported-declaration-diagnostics.md)).
 - `Map`/`Set` **inputs** (parameters) are not planned yet; see [Collections](collections.md).
 
 <seealso>
@@ -358,5 +394,6 @@ binding or breaking the build; see [Publishing Kotlin to C#](forward-overview.md
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/062-forward-callable-plan.md">ADR-062: Forward callable plan</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/064-forward-unsupported-declaration-diagnostics.md">ADR-064: Forward unsupported-declaration diagnostics</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/066-forward-export-reachability-closure.md">ADR-066: Forward export reachability closure</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/069-nullable-boolean-marshalling.md">ADR-069: Nullable Boolean marshalling</a>
     </category>
 </seealso>

@@ -170,7 +170,7 @@ private fun FileSpec.Builder.addLegacyTwoCallKotlinExport(plan: ForwardCallableP
   require(presence.result == ForwardAbiWireType.BOOLEAN) {
     "Legacy two-call presence export must return BOOLEAN: ${plan.invocation.symbol}"
   }
-  require(value.result != ForwardAbiWireType.BOOLEAN && value.result != ForwardAbiWireType.VOID) {
+  require(value.result != ForwardAbiWireType.VOID) {
     "Legacy two-call value export must return the primitive wire type: ${plan.invocation.symbol}"
   }
 
@@ -494,7 +494,7 @@ private fun cVarType(kind: PrimitiveKind): ClassName = ClassName(
     PrimitiveKind.ULONG -> "ULongVar"
     PrimitiveKind.FLOAT -> "FloatVar"
     PrimitiveKind.DOUBLE -> "DoubleVar"
-    PrimitiveKind.BOOLEAN -> error("Boolean nullable return is not a Phase 4 route")
+    PrimitiveKind.BOOLEAN -> "BooleanVar"
   },
 )
 

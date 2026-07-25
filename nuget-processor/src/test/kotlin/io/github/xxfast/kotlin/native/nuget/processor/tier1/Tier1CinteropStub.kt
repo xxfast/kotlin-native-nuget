@@ -83,6 +83,15 @@ internal object Tier1CinteropStub {
       get() = 0
       set(_) {}
 
+    // ADR-069's method/extension/object/companion `Boolean?` return uses this same reinterpret
+    // shape with `BooleanVar` in place of `IntVar` (kept as a distinct stub so a signature drift
+    // in either is caught independently).
+    class BooleanVar : COpaquePointerVar()
+
+    var BooleanVar.value: Boolean
+      get() = false
+      set(_) {}
+
     @Suppress("UNCHECKED_CAST")
     fun <T : COpaquePointer> COpaquePointer.reinterpret(): T = this as T
 

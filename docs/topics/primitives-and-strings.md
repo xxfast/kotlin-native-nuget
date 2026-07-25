@@ -10,7 +10,7 @@ Primitive types follow the standard [Kotlin/Native C interop mappings](https://k
 | `Boolean` | `bool` | |
 | `Char` | `char` | 2-byte scalar (`ushort` at the C ABI); property, parameter, and method return, see [ADR-062](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/062-forward-callable-plan.md) |
 | `String` | `string` | UTF-8 marshalling |
-| `T?` (nullable primitive) | `T?` | two-call pattern on property and top-level returns (forward only); method/extension nullable numerics use single-call `valueOut`, see [Classes and objects](classes-and-objects.md) and [ADR-002](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/002-nullable-two-call-pattern.md) / [ADR-061](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/061-method-return-marshalling.md) |
+| `T?` (nullable primitive) | `T?` | two-call pattern on property and top-level returns (forward only); method/extension nullable returns use single-call `valueOut`, see [Classes and objects](classes-and-objects.md) and [ADR-002](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/002-nullable-two-call-pattern.md) / [ADR-061](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/061-method-return-marshalling.md); `Boolean?` needs an explicit `[MarshalAs(UnmanagedType.I1)]` at both seams, see Nullable Boolean below and [ADR-069](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/069-nullable-boolean-marshalling.md) |
 | `String?` | `string?` | forward: two-call pattern on top-level/property returns (this page); reverse: `NullableAttribute`-driven, see [Objects and handles](objects-and-handles.md) and [ADR-053](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/053-nullable-reference-types-in-kotlin.md) |
 
 ## Kotlin
@@ -261,6 +261,84 @@ public void Patient_Tag_MarshalsCharParameter()
 }
 ```
 
+## Nullable Boolean
+
+`Boolean?` maps to `bool?` at every forward position: constructor parameter, ordinary parameter,
+property getter/setter, method/extension/`object`/companion method return, and top-level function
+return. It needed its own fix beyond the general nullable-primitive two-call pattern above: Kotlin/Native
+writes a `Boolean` as **one byte** (`kotlinx.cinterop.BooleanVar` is `Type(1)`, a 1-byte `putByte`
+write), while C#'s default P/Invoke marshalling reads **four**. Every seam that crosses a `Boolean`
+value now carries `[MarshalAs(UnmanagedType.I1)]`.
+
+<warning>
+    <p>Without <code>[MarshalAs(UnmanagedType.I1)]</code>, a native <code>false</code> can surface in
+    C# as <code>true</code> whenever the marshaller's stack temp holds nonzero garbage in its upper
+    three bytes. This was confirmed by a spike before the fix landed
+    (<a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/069-nullable-boolean-marshalling.md">ADR-069</a>).</p>
+</warning>
+
+The top-level position uses the same two-call pattern as `nullableInt`/`nullableString` above, with the
+attribute added to both calls. From `test-library/src/nativeMain/kotlin/.../cat/NullableBooleanSample.kt`:
+
+```kotlin
+fun chipImplanted(state: Int): Boolean? = tribool(state)
+```
+
+Generated C#, from `Interop.cs`:
+
+```C#
+[DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "chipImplanted_has_value")]
+[return: MarshalAs(UnmanagedType.I1)]
+private static extern bool chipImplanted_has_value(int state, out IntPtr error);
+
+[DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "chipImplanted_value")]
+[return: MarshalAs(UnmanagedType.I1)]
+private static extern bool chipImplanted_value(int state, out IntPtr error);
+
+public static bool? chipImplanted(int state)
+{
+    bool __nuget_hasValue = chipImplanted_has_value(state, out IntPtr __nuget_hasValueError);
+    if (__nuget_hasValueError != IntPtr.Zero)
+    {
+        throw NugetErrorNative.BuildException(__nuget_hasValueError);
+    }
+    if (!__nuget_hasValue) return null;
+    bool __nuget_value = chipImplanted_value(state, out IntPtr __nuget_valueError);
+    if (__nuget_valueError != IntPtr.Zero)
+    {
+        throw NugetErrorNative.BuildException(__nuget_valueError);
+    }
+    return __nuget_value;
+}
+```
+
+From `IntegrationTests/NullableBooleanTests.cs`, asserting `false` explicitly on a `bool?` (not
+`Assert.NotNull`, which the width bug above would still pass):
+
+```C#
+[Fact]
+public void NullableBooleanSample_ChipImplanted_False()
+{
+    Assert.False(NullableBooleanSample.chipImplanted(1));
+}
+
+[Fact]
+public void NullableBooleanSample_ChipImplanted_Null()
+{
+    Assert.Null(NullableBooleanSample.chipImplanted(2));
+}
+```
+
+The method/extension/`object`/companion single-call `valueOut` shape gets the same attribute on the
+out-parameter; see [Classes and objects](classes-and-objects.md#method-returns).
+
+<note>
+    <p><code>Char?</code> is a separate, still-deferred problem: Kotlin <code>Char</code> is 2-byte
+    UTF-16 against C#'s default 1-byte ANSI <code>char</code> marshalling, so it needs a
+    <code>ushort</code>-narrowing wire type rather than <code>MarshalAs(I1)</code>. Non-null
+    <code>Char</code> (above) is unaffected.</p>
+</note>
+
 ## Limitations
 
 - Nullable *primitive* mapping (`Int?`, and friends) is forward-only (`→`): the reverse direction has
@@ -270,11 +348,9 @@ public void Patient_Tag_MarshalsCharParameter()
   top-level returns, reverse reads the bound assembly's `NullableAttribute` instead (see
   [Objects and handles](objects-and-handles.md)). The two mechanisms are unrelated; a reverse-bound
   `string?` never goes through a `has_value`/`value` pair.
-- Nullable `Boolean` method returns remain unplanned under the shared callable plan: the callable is
-  omitted and a `SKIPPED_UNSUPPORTED_RETURN` diagnostic names it, rather than the fallthrough-emit
-  this used to be. Tracked in [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md)
-  Phase 4 ([ADR-062](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/062-forward-callable-plan.md),
-  [ADR-064](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/064-forward-unsupported-declaration-diagnostics.md)).
+- `Char?` stays deferred: it needs a `ushort`-narrowing wire type, a different fix from `Boolean?`'s
+  `MarshalAs(I1)` above. Tracked in [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md)
+  Phase 4.
 
 <seealso>
     <category ref="related">
@@ -287,5 +363,6 @@ public void Patient_Tag_MarshalsCharParameter()
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/053-nullable-reference-types-in-kotlin.md">ADR-053: Nullable reference types in Kotlin</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/062-forward-callable-plan.md">ADR-062: Forward callable plan</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/064-forward-unsupported-declaration-diagnostics.md">ADR-064: Forward unsupported-declaration diagnostics</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/069-nullable-boolean-marshalling.md">ADR-069: Nullable Boolean marshalling</a>
     </category>
 </seealso>
