@@ -9,7 +9,6 @@ import com.google.devtools.ksp.processing.SymbolProcessor
 import com.google.devtools.ksp.symbol.KSAnnotated
 import com.google.devtools.ksp.symbol.KSClassDeclaration
 import com.google.devtools.ksp.symbol.KSDeclaration
-import com.google.devtools.ksp.symbol.KSFile
 import com.google.devtools.ksp.symbol.KSFunctionDeclaration
 import com.google.devtools.ksp.symbol.KSPropertyDeclaration
 import com.google.devtools.ksp.symbol.KSType
@@ -317,24 +316,18 @@ class NugetProcessor(
         extensionFunctions.isEmpty() && extensionProperties.isEmpty() &&
         classes.isEmpty() && genericClasses.isEmpty() && enums.isEmpty() &&
         interfaces.isEmpty() && sealedClasses.isEmpty() && objects.isEmpty() &&
-        properties.isEmpty() && constProperties.isEmpty() && valueClasses.isEmpty()
+        properties.isEmpty() && constProperties.isEmpty() && valueClasses.isEmpty() &&
+        suspendFunctions.isEmpty()
     if (hasNothingToProcess) return emptyList()
 
-    val sources: Array<KSFile> = (functions.mapNotNull { it.containingFile } +
-        genericFunctions.mapNotNull { it.containingFile } +
-        extensionFunctions.mapNotNull { it.containingFile } +
-        extensionProperties.mapNotNull { it.containingFile } +
-        classes.mapNotNull { it.containingFile } +
-        genericClasses.mapNotNull { it.containingFile } +
-        enums.mapNotNull { it.containingFile } +
-        interfaces.mapNotNull { it.containingFile } +
-        sealedClasses.mapNotNull { it.containingFile } +
-        objects.mapNotNull { it.containingFile } +
-        properties.mapNotNull { it.containingFile } +
-        constProperties.mapNotNull { it.containingFile } +
-        valueClasses.mapNotNull { it.containingFile }).toTypedArray()
-
-    val deps = Dependencies(aggregating = true, *sources)
+    // This processor is whole-module by construction: every round rescans
+    // resolver.getAllFiles() and rewrites one Interop.cs and one CNameExports.kt from
+    // everything. A narrower dependency set (e.g. only the files backing the declaration
+    // buckets above) has never been correct here, since it silently drops any bucket an
+    // agent forgets to list (see ROADMAP.md Tier 1 suspendFunctions). ALL_FILES gives every
+    // incremental round the same semantics as a clean build, the only configuration known
+    // to be correct.
+    val deps = Dependencies.ALL_FILES
 
     // Phase 2 shadow migration: construct the source-neutral catalog once while KSP symbols are
     // still available, before either legacy emitter runs. It remains observational for now.
@@ -429,7 +422,7 @@ class NugetProcessor(
             ).toSet(),
       ),
     )
-    cNameExports.writeTo(codeGenerator, Dependencies(aggregating = true))
+    cNameExports.writeTo(codeGenerator, deps)
 
     logger.info(
       "Generated bindings for ${functions.size} functions" +
