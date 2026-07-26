@@ -12,10 +12,14 @@ import com.google.devtools.ksp.symbol.Visibility
 import com.squareup.kotlinpoet.ClassName
 import com.squareup.kotlinpoet.FileSpec
 import com.squareup.kotlinpoet.FunSpec
+import com.squareup.kotlinpoet.TypeName
 import io.github.xxfast.kotlin.native.nuget.processor.cir.LAMBDA_TYPES
+import io.github.xxfast.kotlin.native.nuget.processor.cir.MUTABLE_STATE_FLOW_TYPES
 import io.github.xxfast.kotlin.native.nuget.processor.cir.STATE_FLOW_TYPES
 import io.github.xxfast.kotlin.native.nuget.processor.cir.SUSPEND_LAMBDA_TYPES
 import io.github.xxfast.kotlin.native.nuget.processor.cir.expandAliases
+import io.github.xxfast.kotlin.native.nuget.processor.cir.isMutableStateFlowElementObject
+import io.github.xxfast.kotlin.native.nuget.processor.cir.isMutableStateFlowElementSupported
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallablePlan
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallablePlanCatalog
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardPropertyPlan
@@ -172,6 +176,29 @@ internal fun FileSpec.Builder.addClassExports(
             .addParameter("handle", cOpaquePointer)
             .returns(Boolean::class)
             .addCode(buildStateFlowHasValuePropertyBody(qualifiedName, propName))
+            .build()
+        )
+      }
+
+      // ADR-071: a genuinely DECLARED MutableStateFlow<T> (not narrowed through .asStateFlow())
+      // additionally gains a settable `.Value`, gated on non-nullable element/member (both
+      // deferred) and a v1-supported element (primitive/String/object; enum stays deferred).
+      val isMutableStateFlowProperty: Boolean = propType in MUTABLE_STATE_FLOW_TYPES &&
+          !elementNullable && !memberNullable &&
+          isMutableStateFlowElementSupported(flowElementType)
+      if (isMutableStateFlowProperty) {
+        val (valueParamType: TypeName, assignment: String) =
+          mutableStateFlowValueParameter(flowElementType)
+        addFunction(
+          FunSpec.builder("export_${prefix}_set_${propName}_value")
+            .addAnnotation(cNameAnnotation("${prefix}_set_${propName}_value"))
+            .addParameter("handle", cOpaquePointer)
+            .addParameter("value", valueParamType)
+            .addParameter("errorOut", cOpaquePointer.copy(nullable = true))
+            .addCode(
+              buildStateFlowSetValuePropertyBody(qualifiedName, propName, assignment),
+              cOpaquePointerVar, stableRef,
+            )
             .build()
         )
       }
@@ -337,6 +364,33 @@ internal fun FileSpec.Builder.addClassExports(
           .addCode(buildStateFlowHasValueMethodBody(qualifiedName, methodName, paramCall))
 
         addFunction(hasValueBuilder.build())
+      }
+
+      // ADR-071: a genuinely DECLARED MutableStateFlow<T> function return additionally gains a
+      // settable `.Value`, gated on non-nullable element/member (both deferred) and a
+      // v1-supported element (primitive/String/object; enum stays deferred).
+      val isMutableStateFlowMethod: Boolean = returnQualified in MUTABLE_STATE_FLOW_TYPES &&
+          !elementNullable && !memberNullable &&
+          isMutableStateFlowElementSupported(flowElementType)
+      if (isMutableStateFlowMethod) {
+        val (valueParamType: TypeName, assignment: String) =
+          mutableStateFlowValueParameter(flowElementType)
+        val setValueBuilder: FunSpec.Builder = FunSpec
+          .builder("export_${prefix}_${cname}_set_value")
+          .addAnnotation(cNameAnnotation("${prefix}_${cname}_set_value"))
+          .addParameter("handle", cOpaquePointer)
+
+        setValueBuilder.addFlowParameters()
+
+        setValueBuilder
+          .addParameter("value", valueParamType)
+          .addParameter("errorOut", cOpaquePointer.copy(nullable = true))
+          .addCode(
+            buildStateFlowSetValueMethodBody(qualifiedName, methodName, paramCall, assignment),
+            cOpaquePointerVar, stableRef,
+          )
+
+        addFunction(setValueBuilder.build())
       }
     }
   }
@@ -558,4 +612,65 @@ private fun buildStateFlowHasValueMethodBody(
 ): String = buildString {
   appendLine("val obj = handle.asStableRef<$qualifiedName>().get()")
   append("return obj.$methodName($paramCall) != null")
+}
+
+/**
+ * ADR-071: classifies a (already-[isMutableStateFlowElementSupported]) MutableStateFlow<T>
+ * element for the settable `.Value` write seam -- the exported setter's Kotlin parameter type and
+ * the assignment expression that unwraps it. Primitive/`Char`/`String` cross by value (no
+ * conversion, or the one conversion `String` already needs); an ordinary class/object element
+ * crosses as a `COpaquePointer` and is unwrapped via `asStableRef`, byte-for-byte the same shape
+ * as `ForwardPropertyKotlinEmitter.valueExpression`'s `ObjectHandle` branch.
+ */
+private fun mutableStateFlowValueParameter(elementType: KSType?): Pair<TypeName, String> {
+  val declaration = elementType?.expandAliases()?.declaration
+  val simpleName: String = declaration?.simpleName?.asString() ?: "Any"
+  return if (isMutableStateFlowElementObject(elementType)) {
+    val qualifiedElementName: String = (declaration as KSClassDeclaration)
+      .qualifiedName?.asString() ?: simpleName
+    cOpaquePointer to "value.asStableRef<$qualifiedElementName>().get()"
+  } else {
+    ClassName("kotlin", simpleName) to "value"
+  }
+}
+
+// ADR-071: the `_set_value` export body -- writes `value` (already unwrapped by [assignment]) into
+// the underlying MutableStateFlow's `.value`. MutableStateFlow.value's setter conflates by
+// `Any.equals` on the PREVIOUS value (kotlinx.coroutines StateFlow.kt), so a throwing `equals`
+// (or a throwing object `equals`/handle dereference) propagates out and is wrapped via `errorOut`,
+// the same ADR-030 shape every ordinary `var` property setter already carries.
+private fun buildStateFlowSetValuePropertyBody(
+  qualifiedName: String,
+  propName: String,
+  assignment: String,
+): String = buildString {
+  appendLine("try {")
+  appendLine("  handle.asStableRef<$qualifiedName>().get().$propName.value = $assignment")
+  appendLine("} catch (e: Throwable) {")
+  appendLine("  if (errorOut != null) {")
+  appendLine("    errorOut.reinterpret<%T>().pointed.value = %T.create(")
+  appendLine("      buildError(e)")
+  appendLine("    ).asCPointer()")
+  appendLine("  }")
+  append("}")
+}
+
+private fun buildStateFlowSetValueMethodBody(
+  qualifiedName: String,
+  methodName: String,
+  paramCall: String,
+  assignment: String,
+): String = buildString {
+  appendLine("try {")
+  appendLine(
+    "  handle.asStableRef<$qualifiedName>().get().$methodName($paramCall).value = " +
+        "$assignment"
+  )
+  appendLine("} catch (e: Throwable) {")
+  appendLine("  if (errorOut != null) {")
+  appendLine("    errorOut.reinterpret<%T>().pointed.value = %T.create(")
+  appendLine("      buildError(e)")
+  appendLine("    ).asCPointer()")
+  appendLine("  }")
+  append("}")
 }

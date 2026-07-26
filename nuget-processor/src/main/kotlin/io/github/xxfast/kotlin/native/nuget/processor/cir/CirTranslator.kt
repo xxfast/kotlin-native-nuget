@@ -385,7 +385,13 @@ internal fun translate(
     if (tracker.needsAsync) helpers.add(CirJobHelper(context.libraryName))
     helpers.add(CirErrorHelper(context.libraryName))
     if (tracker.needsFlow) {
-      helpers.add(CirFlowHelper(context.libraryName, includesStateFlow = tracker.needsStateFlow))
+      helpers.add(
+        CirFlowHelper(
+          context.libraryName,
+          includesStateFlow = tracker.needsStateFlow,
+          includesMutableStateFlow = tracker.needsMutableStateFlow,
+        ),
+      )
     }
     if (tracker.needsSuspendStateFlow) {
       helpers.add(CirStateFlowHandleHelper(context.libraryName))

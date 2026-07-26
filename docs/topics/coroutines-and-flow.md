@@ -10,7 +10,8 @@ Kotlin coroutines map onto .NET's own async model: `suspend fun` becomes `async`
 | coroutine cancellation | `CancellationToken` | [ADR-022](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/022-cancellation-token-support.md) |
 | in-flight async drain | `IAsyncDisposable` | graceful drain, [ADR-025](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/025-async-disposable.md) |
 | `Flow<T>` | `IAsyncEnumerable<T>` | cold streams, [ADR-026](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/026-flow-mapping.md) |
-| `StateFlow<T>` / `MutableStateFlow<T>` | `KotlinStateFlow<T>` | hot, always-current-value; `.Value` + `IAsyncEnumerable<T>`, [ADR-065](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/065-stateflow-mapping.md) |
+| `StateFlow<T>` (incl. `MutableStateFlow<T>` narrowed via `.asStateFlow()`) | `KotlinStateFlow<T>` | hot, always-current-value; get-only `.Value` + `IAsyncEnumerable<T>`, [ADR-065](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/065-stateflow-mapping.md) |
+| `MutableStateFlow<T>` (declared publicly) | `KotlinMutableStateFlow<T> : KotlinStateFlow<T>` | settable `.Value`, keyed on the declared type, [ADR-071](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/071-mutable-stateflow-mapping.md) |
 | `StateFlow<T?>` (nullable element) | `KotlinStateFlow<T?>` | `.Value` and each emission are `T?`, [ADR-067](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/067-nullable-stateflow-mapping.md) |
 | `StateFlow<T>?` (nullable member) | `KotlinStateFlow<T>?` | presence-probed; `null` before the member exists, [ADR-067](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/067-nullable-stateflow-mapping.md) |
 | `suspend fun` returning `StateFlow<T>` | `Task<KotlinStateFlow<T>>` | outer suspend kept as `Task`, not collapsed to a sync return; class methods only, [ADR-068](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/068-suspend-returning-stateflow.md) |
@@ -443,9 +444,144 @@ public void StateFlowProperty_ReturnsKotlinStateFlow_IsAKotlinFlow_UpcastsLikeKo
 </note>
 
 `MutableStateFlow<T>` at a property or function-return position binds as the same read-only
-`KotlinStateFlow<T>` view; a settable `.Value` write is deferred (see Limitations). Object-typed
+`KotlinStateFlow<T>` view **when the declared type is `StateFlow<T>`**, for example the ubiquitous
+`private val _x = MutableStateFlow(...)` / `val x: StateFlow<T> = _x` idiom above. Object-typed
 elements (`StateFlow<Cat>`) follow ADR-005: each `.Value` read hands back a fresh, disposable
-wrapper, not a cached one.
+wrapper, not a cached one. A `MutableStateFlow<T>`-**declared** member gets a settable `.Value`
+instead; see the next section.
+
+## Settable `.Value` on `MutableStateFlow<T>`
+
+A member whose **declared** type is `MutableStateFlow<T>`, not narrowed to `StateFlow<T>`, surfaces
+as `KotlinMutableStateFlow<T> : KotlinStateFlow<T>` with a settable `.Value`. Detection keys on the
+declared type only, so this is purely additive: every `StateFlow<T>`-declared member (including the
+`.asStateFlow()`-narrowed idiom above) is completely unaffected and stays get-only. From
+`CatMoodTracker.kt`:
+
+```kotlin
+/** MutableStateFlow<Int> -- primitive element, no conversion at the write seam. */
+val treatCount: MutableStateFlow<Int> = MutableStateFlow(0)
+
+/** MutableStateFlow<String> -- needs conversion (string marshalling) at the write seam. */
+val collarColour: MutableStateFlow<String> = MutableStateFlow("red")
+
+/** MutableStateFlow<Cat> -- object element; crosses as a handle in both directions. */
+val favouriteToy: MutableStateFlow<Cat> = MutableStateFlow(Cat("Mittens"))
+
+/**
+ * MutableStateFlow<T> as a non-suspend function return, sharing [treatCount]'s storage so a
+ * write through one surface position is observable through the other.
+ */
+fun treatJar(): MutableStateFlow<Int> = treatCount
+```
+
+The generated `KotlinMutableStateFlow<T>` extends `KotlinStateFlow<T>` and `new`-shadows `Value`
+with a setter, since C# does not allow an `override` to add a `set` accessor to a get-only base
+property (`CS0546`):
+
+```C#
+public class KotlinMutableStateFlow<T> : KotlinStateFlow<T>
+{
+    private readonly Action<T> _writeValue;
+
+    internal KotlinMutableStateFlow(
+        NugetFlowCollectDelegate startCollect,
+        Func<IntPtr> readValue,
+        Action<T> writeValue,
+        IntPtr ownedHandle = default)
+        : base(startCollect, readValue, ownedHandle)
+    {
+        _writeValue = writeValue;
+    }
+
+    public new T Value
+    {
+        get => base.Value;
+        set => _writeValue(value);
+    }
+}
+```
+
+The generated property getter for `treatCount`:
+
+```C#
+public KotlinMutableStateFlow<int> TreatCount
+{
+    get
+    {
+        if (_handle == IntPtr.Zero)
+            throw new ObjectDisposedException(nameof(CatMoodTracker));
+        return new KotlinMutableStateFlow<int>((onNext, onComplete, onError, userData) =>
+            Native_GetTreatCountCollect(_handle, GetOrCreateScope(), onNext, onComplete, onError, userData),
+            () => Native_GetTreatCountValue(_handle),
+            v =>
+            {
+                Native_SetTreatCountValue(_handle, v, out IntPtr error);
+                if (error != IntPtr.Zero) throw NugetErrorNative.BuildException(error);
+            });
+    
+    }
+}
+```
+
+Using it, from `IntegrationTests/MutableStateFlowTests.cs`:
+
+```C#
+[Fact]
+public void SettableValue_IntElement_NoConversion_MyloGetsSevenTreats()
+{
+    // Mylo earns 7 treats -- a plain Int write, the cheapest seam on the write path
+    using var tracker = new CatMoodTracker("Mylo");
+    tracker.TreatCount.Value = 7;
+    Assert.Equal(7, tracker.TreatCount.Value);
+    Assert.Equal(7, tracker.TreatsGivenSoFar()); // the write really landed in Kotlin, not just C#
+}
+
+[Fact]
+public void SettableValue_ObjectElement_CrossesAsAHandle_MyloGetsANewFavouriteToy()
+{
+    // Mylo's favourite toy is a Cat -- an object element, unwrapped via the handle
+    using var tracker = new CatMoodTracker("Mylo");
+    using var mouse = new Cat("Mouse", 9);
+    tracker.FavouriteToy.Value = mouse;
+    using var toy = tracker.FavouriteToy.Value; // fresh wrapper per read (ADR-005)
+    Assert.Equal("Mouse", toy.Name);
+}
+
+[Fact]
+public void SettableValue_PropertyAndFunctionReturn_ShareStorage_OreosTreatJarMatchesTreatCount()
+{
+    // TreatJar() is a non-suspend function return sharing storage with the TreatCount property
+    using var tracker = new CatMoodTracker("Oreo");
+    tracker.TreatJar().Value = 11;
+    Assert.Equal(11, tracker.TreatCount.Value);
+}
+```
+
+<note>
+    <p>The setter carries an <code>errorOut</code>, unlike the getter. Kotlin's
+    <code>MutableStateFlow.value</code> setter conflates by calling <code>Any.equals</code> on the
+    <b>previous</b> value, so a throwing <code>equals</code> propagates out of the write. This is a
+    deliberate asymmetry with the get-only <code>.Value</code>'s exception-free read.</p>
+</note>
+
+```C#
+[Fact]
+public void SettableValue_SetterExceptionPropagation_OreosGrudgeAgainstTheVetCannotBeReplaced()
+{
+    // Grudge.equals always throws -- MutableStateFlow.value's setter conflates by Any.equals
+    // on the PREVIOUS value, so the throw propagates out of the setter export via errorOut.
+    using var tracker = new CatMoodTracker("Oreo");
+    using var newGrudge = new Grudge("the carrier");
+    Assert.Throws<KotlinInvalidOperationException>(() => tracker.Grudge.Value = newGrudge);
+}
+```
+
+A `.Value` write from an arbitrary .NET threadpool thread is safe, verified by
+`SettableValue_WriteFromThreadpoolThread_MyloGetsHisTreatFromABackgroundThread`. A write is also
+observed by a live collector, replay-1 and conflated, exactly like the read-only case above, and
+`KotlinMutableStateFlow<T>` upcasts to `KotlinStateFlow<T>`, `KotlinFlow<T>`, and
+`IAsyncEnumerable<T>`, mirroring Kotlin's own `MutableStateFlow : StateFlow : Flow`.
 
 ## Nullable `StateFlow<T?>` and `StateFlow<T>?`
 
@@ -628,12 +764,14 @@ public async Task AwaitPlaymateReport_ValueReturnsFreshDisposableWrapper_OreoGre
 Hot streams and several `Flow` positions are not yet supported (ROADMAP Phase 6):
 
 - `SharedFlow<T>` (hot, multi-subscriber)
-- Settable `.Value` on `MutableStateFlow<T>` (a C# → Kotlin write; deferred to Phase 7)
+- `StateFlow<SomeEnum>` / `MutableStateFlow<SomeEnum>`: `NugetMarshal.FromHandle<T>` has no enum branch, so an enum element is unsupported on the `.Value` read path (pre-existing, predates both `StateFlow` mappings)
+- `CompareAndSet` / `Update` / `Emit` / `TryEmit` / `ReplayCache` / `SubscriptionCount` on `MutableStateFlow<T>`
+- Nullable element write (`MutableStateFlow<T?>.Value = ...`), nullable member write, and `suspend fun` returning `MutableStateFlow<T>`
+- Reassigning the whole `MutableStateFlow<T>` member itself (a `var` member, not just its `.value`)
 - Top-level `suspend fun` returning `StateFlow<T>` (no parent class scope; class methods only in v1)
 - `StateFlow<T>` as a function parameter or as a generic type argument
 - `suspend fun` returning a nullable `StateFlow<T?>` / `StateFlow<T>?`, and nullable `StateFlow` as a function parameter or generic type argument
 - `Boolean?` / `Char?` value elements on a nullable `StateFlow` (the same width fragility as ADR-061)
-- Settable nullable `.Value` on a nullable `MutableStateFlow<T?>` (rides the non-nullable settable-`.Value` deferral above)
 - Nullable `SharedFlow<T>` (follows `SharedFlow<T>` itself, still deferred)
 - `INotifyPropertyChanged` adapter over `KotlinStateFlow<T>` (opt-in convenience, not core)
 - `Flow<T>` as a function **parameter** (C# → Kotlin direction)
@@ -667,5 +805,6 @@ rather than the raw `Function1`/`Result` this generated before
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/066-forward-export-reachability-closure.md">ADR-066: Forward export reachability closure</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/067-nullable-stateflow-mapping.md">ADR-067: Nullable StateFlow mapping</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/068-suspend-returning-stateflow.md">ADR-068: suspend fun returning StateFlow&lt;T&gt;</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/071-mutable-stateflow-mapping.md">ADR-071: MutableStateFlow&lt;T&gt; mapping</a>
     </category>
 </seealso>

@@ -28,6 +28,16 @@ import kotlinx.coroutines.flow.asStateFlow
  *                    `Nullable<T>`-aware unwrap; a plain `int` would pass trivially and hide the seam)
  *  - [maybeMood]:   `StateFlow<String>?` -- nullable MEMBER, absent until [startTracking]
  *  - [maybeStreak]: `StateFlow<Int?>?`   -- nullable MEMBER *and* nullable VALUE element, together
+ *
+ * ADR-071 extends this fixture with genuinely-declared (not `.asStateFlow()`-narrowed)
+ * `MutableStateFlow<T>` members, so C# gets a settable `.Value`:
+ *  - [treatCount]:    `MutableStateFlow<Int>`    -- primitive element, no conversion at the write seam
+ *  - [collarColour]:  `MutableStateFlow<String>` -- needs conversion at the write seam
+ *  - [favouriteToy]:  `MutableStateFlow<Cat>`    -- object element, crosses as a handle
+ *  - [treatJar]:      `MutableStateFlow<Int>` as a non-suspend function return, sharing storage
+ *                      with [treatCount]
+ *  - [grudge]:        `MutableStateFlow<Grudge>` whose element's `equals` throws, forcing the
+ *                      setter's ADR-030 `errorOut` path
  */
 class CatMoodTracker(private val catName: String) {
   private val _energyLevel: MutableStateFlow<Int> = MutableStateFlow(100)
@@ -151,4 +161,42 @@ class CatMoodTracker(private val catName: String) {
     kotlinx.coroutines.delay(1)
     return playmate
   }
+
+  // --- ADR-071: MutableStateFlow<T> declared PUBLICLY -- settable .Value from C#. Contrast with
+  // [mood]/[energyLevel] above, which are MutableStateFlow-backed but declared as read-only
+  // StateFlow views and must keep their get-only .Value. ---
+
+  /** MutableStateFlow<Int> -- primitive element, no conversion at the write seam. */
+  val treatCount: MutableStateFlow<Int> = MutableStateFlow(0)
+
+  /** MutableStateFlow<String> -- needs conversion (string marshalling) at the write seam. */
+  val collarColour: MutableStateFlow<String> = MutableStateFlow("red")
+
+  /** MutableStateFlow<Cat> -- object element; crosses as a handle in both directions. */
+  val favouriteToy: MutableStateFlow<Cat> = MutableStateFlow(Cat("Mittens"))
+
+  /**
+   * MutableStateFlow<T> as a non-suspend function return, sharing [treatCount]'s storage so a
+   * write through one surface position is observable through the other.
+   */
+  fun treatJar(): MutableStateFlow<Int> = treatCount
+
+  /** Kotlin-side read-back: proves a C# write really landed in Kotlin, not just in a C# cache. */
+  fun treatsGivenSoFar(): Int = treatCount.value
+
+  val grudge: MutableStateFlow<Grudge> = MutableStateFlow(Grudge("the vet"))
+}
+
+/**
+ * ADR-071: an element type whose `equals` throws, so the Kotlin `value` setter itself throws
+ * (MutableStateFlow conflates by Any.equals -- StateFlow.kt:332). Forces the ADR-030 errorOut
+ * path on the setter export to be genuinely reachable rather than defensive-only.
+ *
+ * Deliberately a top-level class (not nested inside [CatMoodTracker]) -- nested-class bridging
+ * is not an established, tested feature of this generator, and this fixture must not risk an
+ * unrelated build failure that masks the real ADR-071 failure signal.
+ */
+class Grudge(val reason: String) {
+  override fun equals(other: Any?): Boolean = error("Cats never forgive: $reason")
+  override fun hashCode(): Int = reason.hashCode()
 }

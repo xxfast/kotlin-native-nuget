@@ -459,9 +459,15 @@ This is the exact hazard the task flagged.
 
 ### Deferred (each its own ROADMAP item)
 
-- **Settable `.Value`** (true `MutableStateFlow<T>` write) — needs a C#→Kotlin value-**setter**
+- **Settable `.Value`** (true `MutableStateFlow<T>` write): ~~needs a C#→Kotlin value-**setter**
   export (a reverse-direction write of `T` into `stateFlow.value`), which is a Phase 7 bidirectional
-  concern, not a forward-only mapping. Until then `MutableStateFlow` binds as the read-only view.
+  concern, not a forward-only mapping~~. **Corrected by [ADR-071](071-mutable-stateflow-mapping.md)
+  (Accepted):** that rationale was wrong. A `.Value` write is still C# calling a Kotlin `@CName`
+  export with `T` as an ordinary input parameter, exactly like any generated setter; nothing about
+  it needs Phase 7's delegate/function-pointer/`GCHandle` machinery. ADR-071 ships
+  `KotlinMutableStateFlow<T> : KotlinStateFlow<T>` with a `new`-shadowed settable `Value` for a
+  `MutableStateFlow<T>`-**declared** member. Until then `MutableStateFlow` binds as the read-only
+  view.
 - **`INotifyPropertyChanged` adapter** — a deferred, opt-in convenience for XAML data-binding,
   layered on top of `KotlinStateFlow<T>` (Alternative 2); not the v1 core.
 - **`SharedFlow<T>`** (ROADMAP line 108) — configurable replay/buffer; a distinct mapping (a C#-side

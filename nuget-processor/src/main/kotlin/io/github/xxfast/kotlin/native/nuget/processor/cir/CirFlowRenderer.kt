@@ -158,6 +158,35 @@ internal fun StringBuilder.renderFlowHelper(helper: CirFlowHelper) {
     appendLine("        }")
     appendLine("    }")
     appendLine()
+
+    if (helper.includesMutableStateFlow) {
+      // ADR-071: settable `.Value`. `new`, not `override` -- KotlinStateFlow<T>.Value has no
+      // overridable set accessor, so C# rejects `override` with CS0546 (verified by spike, see
+      // ADR-071 "Spikes run for this ADR"). The base and derived getters read the same
+      // `_readValue` delegate, so a base-typed reference observes a write made through the
+      // derived setter.
+      appendLine("    public class KotlinMutableStateFlow<T> : KotlinStateFlow<T>")
+      appendLine("    {")
+      appendLine("        private readonly Action<T> _writeValue;")
+      appendLine()
+      appendLine("        internal KotlinMutableStateFlow(")
+      appendLine("            NugetFlowCollectDelegate startCollect,")
+      appendLine("            Func<IntPtr> readValue,")
+      appendLine("            Action<T> writeValue,")
+      appendLine("            IntPtr ownedHandle = default)")
+      appendLine("            : base(startCollect, readValue, ownedHandle)")
+      appendLine("        {")
+      appendLine("            _writeValue = writeValue;")
+      appendLine("        }")
+      appendLine()
+      appendLine("        public new T Value")
+      appendLine("        {")
+      appendLine("            get => base.Value;")
+      appendLine("            set => _writeValue(value);")
+      appendLine("        }")
+      appendLine("    }")
+      appendLine()
+    }
   }
 }
 
@@ -200,6 +229,9 @@ internal fun StringBuilder.renderFlowMethod(method: CirMethod, className: String
 // constructor argument (the method's own parameters, re-read on each `.Value` access).
 // ADR-067: a nullable member (`StateFlow<T>?` return) additionally probes `_has_value` before
 // constructing and returns `null` when absent.
+// ADR-071: a genuinely DECLARED MutableStateFlow<T> return additionally passes a third
+// `Action<T>` write lambda, backed by the sibling `_set_value` export, and constructs
+// KotlinMutableStateFlow<T> instead of KotlinStateFlow<T>.
 internal fun StringBuilder.renderStateFlowMethod(method: CirMethod, className: String) {
   val paramStr: String = method.parameters.joinToString(", ") { "${it.type} ${it.name}" }
   val paramNames: String = method.parameters.joinToString(", ") { it.name }
@@ -207,8 +239,10 @@ internal fun StringBuilder.renderStateFlowMethod(method: CirMethod, className: S
   val valueNativeName: String = method.stateFlowValueNativeName
   val valueCallArgs: String = if (paramNames.isEmpty()) "_handle" else "_handle, $paramNames"
   val nullableSuffix: String = if (method.isStateFlowNullableMember) "?" else ""
+  val ctorName: String =
+    if (method.isMutableStateFlow) "KotlinMutableStateFlow" else "KotlinStateFlow"
 
-  appendLine("        public KotlinStateFlow<${method.flowElementType}>$nullableSuffix ${method.name}($paramStr)")
+  appendLine("        public $ctorName<${method.flowElementType}>$nullableSuffix ${method.name}($paramStr)")
   appendLine("        {")
   appendLine("            if (_handle == IntPtr.Zero)")
   appendLine("                throw new ObjectDisposedException(nameof($className));")
@@ -217,9 +251,23 @@ internal fun StringBuilder.renderStateFlowMethod(method: CirMethod, className: S
     appendLine("            if (!$hasValueNativeName($valueCallArgs))")
     appendLine("                return null;")
   }
-  appendLine("            return new KotlinStateFlow<${method.flowElementType}>((onNext, onComplete, onError, userData) =>")
+  appendLine("            return new $ctorName<${method.flowElementType}>((onNext, onComplete, onError, userData) =>")
   appendLine("                $nativeName(${method.body}),")
-  appendLine("                () => $valueNativeName($valueCallArgs));")
+  if (method.isMutableStateFlow) {
+    val setValueNativeName: String = method.stateFlowSetValueNativeName
+    val writeReceiver: String = if (method.isMutableStateFlowElementObject) "v._handle" else "v"
+    appendLine("                () => $valueNativeName($valueCallArgs),")
+    appendLine("                v =>")
+    appendLine("                {")
+    if (method.isMutableStateFlowElementObject) {
+      appendLine("                    if (v is null) throw new ArgumentNullException(nameof(v));")
+    }
+    appendLine("                    $setValueNativeName($valueCallArgs, $writeReceiver, out IntPtr error);")
+    appendLine("                    if (error != IntPtr.Zero) throw NugetErrorNative.BuildException(error);")
+    appendLine("                });")
+  } else {
+    appendLine("                () => $valueNativeName($valueCallArgs));")
+  }
   appendLine("        }")
   appendLine()
 }

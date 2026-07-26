@@ -195,6 +195,9 @@ data class CirFlowHelper(
   // ADR-065: also emit the KotlinStateFlow<T> subclass (implies needsFlow -- set by the tracker
   // whenever any StateFlow member is planned).
   val includesStateFlow: Boolean = false,
+  // ADR-071: also emit the KotlinMutableStateFlow<T> subclass (implies includesStateFlow -- set by
+  // the tracker whenever a publicly-DECLARED MutableStateFlow<T> member/return is planned).
+  val includesMutableStateFlow: Boolean = false,
 ) : CirDeclaration
 
 // ADR-068: the two shared generic exports keyed on an already-obtained StateFlow<*> handle --
@@ -328,6 +331,17 @@ data class CirMethod(
   // The native method name (e.g. "Native_MoodReportValue") of the sibling `_value` DllImport
   // this StateFlow method's companion-member list also carries. Empty unless [isStateFlow].
   val stateFlowValueNativeName: String = "",
+  // ADR-071: true when this is a MutableStateFlow-returning method whose element/member is not
+  // nullable (v1 scope) -- renders KotlinMutableStateFlow<T> instead of KotlinStateFlow<T> and
+  // additionally carries the sibling `_set_value` DllImport named by
+  // [stateFlowSetValueNativeName]. Empty (false) unless [isStateFlow].
+  val isMutableStateFlow: Boolean = false,
+  // The native method name (e.g. "Native_MoodReportSetValue") of the sibling `_set_value`
+  // DllImport. Empty unless [isMutableStateFlow].
+  val stateFlowSetValueNativeName: String = "",
+  // ADR-071: true when the settable element crosses the write seam as an object handle (v.Handle)
+  // rather than by value. Only consulted when [isMutableStateFlow].
+  val isMutableStateFlowElementObject: Boolean = false,
   // ADR-067: true when the StateFlow member itself is nullable (`StateFlow<T>?` return). Renders
   // the return type as `KotlinStateFlow<T>?` and gates a `_has_value` presence-probe DllImport /
   // null-check before construction. Empty (false) unless [isStateFlow].
@@ -382,6 +396,13 @@ data class CirProperty(
   // the property type as `KotlinStateFlow<T>?` and gates a `_has_value` presence-probe DllImport /
   // null-check before construction. False unless [isStateFlow].
   val isNullableMember: Boolean = false,
+  // ADR-071: true when this is a MutableStateFlow property whose element/member is not nullable
+  // (v1 scope) -- renders KotlinMutableStateFlow<T> instead of KotlinStateFlow<T> and additionally
+  // carries the sibling `_set_value` DllImport named by [stateFlowSetValueNativeName].
+  val isMutableStateFlow: Boolean = false,
+  // The native method name (e.g. "Native_SetTreatCountValue") of the sibling `_set_value`
+  // DllImport. Empty unless [isMutableStateFlow].
+  val stateFlowSetValueNativeName: String = "",
 ) : CirMember
 
 data class CirExtraNative(
