@@ -32,6 +32,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.exports.addEnumExports
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addFunctionExports
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addGenericClassExports
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addGenericFunctionExports
+import io.github.xxfast.kotlin.native.nuget.processor.exports.addInterfaceExports
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addNugetHelperExports
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addNugetListHelperExports
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addNugetMapHelperExports
@@ -63,6 +64,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.BridgeType
 import io.github.xxfast.kotlin.native.nuget.processor.forward.CollectionKind
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeTypeContext
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeTypeClassifier
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallableCatalogEntry
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallablePlan
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallablePlanCatalog
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallablePlanner
@@ -71,6 +73,8 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnosticK
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnosticSink
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnosticTrackingLogger
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardHelperRequirement
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardPropertyPlan
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardPropertyPlanner
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardReachabilityBucket
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardReachabilityClosure
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardReachabilityResult
@@ -346,16 +350,49 @@ class NugetProcessor(
       }
       objects.forEach { obj -> obj.qualifiedName?.asString()?.let(::add) }
     }
-    val callableCatalog: ForwardCallablePlanCatalog = ForwardCallablePlanner(
-      ForwardBridgeTypeClassifier(
-        ForwardBridgeTypeContext(
-          exportedObjectHandles = exportedObjectHandles,
-          rootPackage = context.rootPackage,
-          rootNamespace = context.rootNamespace,
-        ),
+    val forwardClassifier = ForwardBridgeTypeClassifier(
+      ForwardBridgeTypeContext(
+        exportedObjectHandles = exportedObjectHandles,
+        rootPackage = context.rootPackage,
+        rootNamespace = context.rootNamespace,
       ),
-    ).catalog(
+    )
+    val forwardPlanner = ForwardCallablePlanner(forwardClassifier)
+    val forwardPropertyPlanner = ForwardPropertyPlanner(forwardClassifier)
+    val ordinaryCatalog: ForwardCallablePlanCatalog = forwardPlanner.catalog(
       classes, functions, extensionFunctions, objects, properties, extensionProperties, valueClasses,
+    )
+
+    // ADR-040 sub-decision C.1 (reachability-driven): a Kotlin interface gets a concrete backing
+    // class + `foo_*` dispatch exports only when it actually appears in a planned return position
+    // (method result, property type — including nullable) among the *ordinary* plans built above.
+    // Computed before the interface's own members are planned, so there is no ordering cycle: an
+    // interface's own members never mention that same interface as their receiver's result type.
+    fun BridgeType.interfaceQualifiedNameOrNull(): String? {
+      val unwrapped: BridgeType = if (this is BridgeType.Nullable) type else this
+      return (unwrapped as? BridgeType.Interface)?.qualifiedName
+    }
+
+    val reachableInterfaceNames: Set<String> = buildSet {
+      ordinaryCatalog.plans.forEach { plan ->
+        plan.publicSignature.result.interfaceQualifiedNameOrNull()?.let(::add)
+      }
+      ordinaryCatalog.propertyPlans.forEach { plan ->
+        plan.type.interfaceQualifiedNameOrNull()?.let(::add)
+      }
+    }
+    val reachableInterfaces: List<KSClassDeclaration> = interfaces
+      .filter { iface -> iface.qualifiedName?.asString() in reachableInterfaceNames }
+
+    val interfaceEntries: List<ForwardCallableCatalogEntry> = reachableInterfaces.flatMap { iface ->
+      forwardPlanner.interfaceEntries(iface)
+    }
+    val interfacePropertyPlans: List<ForwardPropertyPlan> = reachableInterfaces.flatMap { iface ->
+      forwardPropertyPlanner.interfaceProperties(iface)
+    }
+    val callableCatalog: ForwardCallablePlanCatalog = ForwardCallablePlanCatalog(
+      entries = ordinaryCatalog.entries + interfaceEntries,
+      propertyPlans = ordinaryCatalog.propertyPlans + interfacePropertyPlans,
     )
 
     warnDroppedForwardCallables(callableCatalog, logger)
@@ -363,12 +400,12 @@ class NugetProcessor(
     val cNameExports: FileSpec = generateCNameWrappers(
       functions, genericFunctions, extensionFunctions, extensionProperties,
       classes, genericClasses, enums, sealedClasses, objects, properties,
-      valueClasses, suspendFunctions, callableCatalog, deps,
+      valueClasses, suspendFunctions, callableCatalog, deps, reachableInterfaces,
     )
     val cirFile: CirFile = generateCSharpBindings(
       functions, genericFunctions, extensionFunctions, extensionProperties,
       allClasses, enums, interfaces, sealedClasses, objects, properties,
-      constProperties, valueClasses, suspendFunctions, callableCatalog, deps,
+      constProperties, valueClasses, suspendFunctions, callableCatalog, deps, reachableInterfaces,
     )
 
     // ADR-064: an ERROR_* diagnostic (e.g. ERROR_CSHARP_SIGNATURE_COLLISION, ADR-034) already
@@ -429,6 +466,7 @@ class NugetProcessor(
     suspendFunctions: List<KSFunctionDeclaration>,
     callableCatalog: ForwardCallablePlanCatalog,
     deps: Dependencies,
+    reachableInterfaces: List<KSClassDeclaration>,
   ): CirFile {
     val cirFile: CirFile = translate(
       context,
@@ -447,6 +485,7 @@ class NugetProcessor(
       valueClasses,
       suspendFunctions,
       callableCatalog,
+      reachableInterfaces,
     )
 
     val csharp: String = renderer.render(cirFile)
@@ -477,6 +516,7 @@ class NugetProcessor(
     suspendFunctions: List<KSFunctionDeclaration>,
     callableCatalog: ForwardCallablePlanCatalog,
     deps: Dependencies,
+    reachableInterfaces: List<KSClassDeclaration>,
   ): FileSpec {
     val builder: FileSpec.Builder = FileSpec
       .builder("io.github.xxfast.kotlin.native.nuget.generated", "CNameExports")
@@ -517,6 +557,7 @@ class NugetProcessor(
     sealedClasses.forEach { builder.addSealedClassExports(it) }
     objects.forEach { builder.addObjectExports(it, callableCatalog) }
     valueClasses.forEach { builder.addValueClassExports(it, callableCatalog) }
+    reachableInterfaces.forEach { builder.addInterfaceExports(it, callableCatalog) }
 
     val suspendLambdaTypes: Set<String> = setOf(
       "kotlin.coroutines.SuspendFunction0",

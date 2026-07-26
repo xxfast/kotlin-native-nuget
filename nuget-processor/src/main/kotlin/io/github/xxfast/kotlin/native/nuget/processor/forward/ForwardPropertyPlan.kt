@@ -81,7 +81,7 @@ internal data class ForwardPropertyPlan(
   private fun validateType(type: BridgeType) {
     when (type) {
       BridgeType.Unit, BridgeType.Char, BridgeType.String, is BridgeType.Primitive, is BridgeType.Enum,
-      is BridgeType.ObjectHandle, is BridgeType.Collection -> Unit
+      is BridgeType.ObjectHandle, is BridgeType.Interface, is BridgeType.Collection -> Unit
 
       is BridgeType.Nullable -> validateType(type.type)
       else -> error("Forward property plan $symbol has unsupported type $type")

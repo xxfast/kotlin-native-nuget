@@ -296,6 +296,7 @@ internal object ForwardCirPlanProjection {
     plan: ForwardCallablePlan,
     nativePrefix: String,
     isOverride: Boolean,
+    isVirtual: Boolean = false,
   ): CirMethod {
     val nativeCall: ForwardNativeCall = plan.singleNativeImport()
     val receiver: ForwardAbiParameter = nativeCall.parameters.firstOrNull()
@@ -331,6 +332,7 @@ internal object ForwardCirPlanProjection {
       parameters = publicParams,
       body = result.body,
       isOverride = isOverride,
+      isVirtual = isVirtual,
       // Unlike static/extension (which hand-build their own CirDllImport), the DllImport here is
       // derived generically by CirClass.methodNativeImport from this CirMethod, and its trailing
       // `out IntPtr error` must be present whether or not the *body* is hand-written, so this is
@@ -455,10 +457,19 @@ internal object ForwardCirPlanProjection {
       is BridgeType.Primitive, BridgeType.Char, BridgeType.String -> listOf(parameter.name)
       is BridgeType.Enum -> listOf("(int)${parameter.name}")
       is BridgeType.ObjectHandle -> listOf("${parameter.name}._handle")
+      // ADR-040 sub-decision B: an interface-typed parameter's public static type is `IFoo`, which
+      // does not carry `._handle` (that is only true of the generated `Foo` backing class). The
+      // one shared reflective helper extracts it regardless of which concrete type implements
+      // `IFoo`, and throws NotSupportedException for a C#-implemented (non-Kotlin-backed) one.
+      is BridgeType.Interface -> listOf("NugetMarshal.HandleOf(${parameter.name})")
       is BridgeType.Collection -> listOf("${parameter.name}Handle")
       is BridgeType.Nullable -> when (val inner = type.type) {
         BridgeType.String -> listOf(parameter.name)
         is BridgeType.ObjectHandle -> listOf("${parameter.name}?._handle ?? IntPtr.Zero")
+        is BridgeType.Interface -> listOf(
+          "${parameter.name} != null ? NugetMarshal.HandleOf(${parameter.name}) : IntPtr.Zero",
+        )
+
         is BridgeType.Primitive -> listOf("${parameter.name}.HasValue", "${parameter.name}.GetValueOrDefault()")
         else -> error("Forward CIR plan projection has no call argument for nullable $inner")
       }
@@ -540,6 +551,16 @@ internal object ForwardCirPlanProjection {
         ),
       )
 
+      // ADR-040: the public return type is the projected interface (`IPet`); construction uses
+      // the generated backing wrapper class (`Pet`) instead.
+      is BridgeType.Interface -> CirResultProjection(
+        returnType = result.csharpType(),
+        nativeReturnType = "IntPtr",
+        body = checkedPointerBody(
+          nativeName, callArguments, "return new ${result.backingType}(nativeResult);", prelude, cleanup,
+        ),
+      )
+
       is BridgeType.Collection -> CirResultProjection(
         returnType = result.csharpType(),
         nativeReturnType = "IntPtr",
@@ -570,6 +591,18 @@ internal object ForwardCirPlanProjection {
             nativeName,
             callArguments,
             "return nativeResult == IntPtr.Zero ? null : new ${type.csharpType()}(nativeResult);",
+            prelude,
+            cleanup,
+          ),
+        )
+
+        is BridgeType.Interface -> CirResultProjection(
+          returnType = "${type.csharpType()}?",
+          nativeReturnType = "IntPtr",
+          body = checkedPointerBody(
+            nativeName,
+            callArguments,
+            "return nativeResult == IntPtr.Zero ? null : new ${type.backingType}(nativeResult);",
             prelude,
             cleanup,
           ),
@@ -796,6 +829,9 @@ internal object ForwardCirPlanProjection {
     // simple name in this class's own namespace, `global::Namespace.Name` otherwise) — mirrors
     // `BridgeType.Enum.csharpType`'s existing shape exactly.
     is BridgeType.ObjectHandle -> csharpType
+    // ADR-040: the public C# spelling is the projected interface (`IPet`), never the backing
+    // wrapper class — the wrapper is a construction-only implementation detail.
+    is BridgeType.Interface -> csharpType
     is BridgeType.ValueClass -> csharpType
     is BridgeType.Enum -> this.csharpType
     is BridgeType.Collection -> when (kind) {
@@ -826,7 +862,7 @@ internal object ForwardCirPlanProjection {
    */
   private fun BridgeType.isCSharpReferenceType(): Boolean = when (this) {
     is BridgeType.Nullable -> type.isCSharpReferenceType()
-    BridgeType.String, is BridgeType.ObjectHandle, is BridgeType.Collection -> true
+    BridgeType.String, is BridgeType.ObjectHandle, is BridgeType.Interface, is BridgeType.Collection -> true
     BridgeType.Unit, is BridgeType.Primitive, BridgeType.Char,
     is BridgeType.Enum, is BridgeType.ValueClass -> false
 

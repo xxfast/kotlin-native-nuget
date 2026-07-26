@@ -10,9 +10,13 @@ import io.github.xxfast.kotlin.native.nuget.processor.cir.CirVisibility
 
 /** C# projection for the planned property path. */
 internal object ForwardCirPropertyProjection {
-  fun classProperty(plan: ForwardPropertyPlan): CirProperty {
+  fun classProperty(
+    plan: ForwardPropertyPlan,
+    isOverride: Boolean = false,
+    isVirtual: Boolean = false,
+  ): CirProperty {
     require(plan.position == ForwardPropertyPosition.CLASS) { "Expected class property plan" }
-    return property(plan, receiver = "_handle", isStatic = false)
+    return property(plan, receiver = "_handle", isStatic = false, isOverride = isOverride, isVirtual = isVirtual)
   }
 
   fun staticProperty(plan: ForwardPropertyPlan, libraryName: String): List<CirMember> {
@@ -58,7 +62,13 @@ internal object ForwardCirPropertyProjection {
     return imports + listOfNotNull(getter, setter)
   }
 
-  private fun property(plan: ForwardPropertyPlan, receiver: String, isStatic: Boolean): CirProperty {
+  private fun property(
+    plan: ForwardPropertyPlan,
+    receiver: String,
+    isStatic: Boolean,
+    isOverride: Boolean = false,
+    isVirtual: Boolean = false,
+  ): CirProperty {
     val directGetter: ForwardNativeCall = plan.getter.calls().first()
     return CirProperty(
       name = plan.publicName,
@@ -70,6 +80,8 @@ internal object ForwardCirPropertyProjection {
       setter = plan.setter?.let { setterBody(plan, receiver) },
       extraNatives = classExtraNatives(plan),
       isStatic = isStatic,
+      isOverride = isOverride,
+      isVirtual = isVirtual,
       hasSyncErrorOut = true,
     )
   }
@@ -167,7 +179,9 @@ internal object ForwardCirPropertyProjection {
     val callArgs: String = listOf(args, "out IntPtr error").filter { it.isNotBlank() }.joinToString(", ")
     when (val value = type.unwrapNullable()) {
       BridgeType.String -> appendLine("            IntPtr nativeResult = $native($callArgs);")
-      is BridgeType.ObjectHandle, is BridgeType.Collection -> appendLine("            IntPtr nativeResult = $native($callArgs);")
+      is BridgeType.ObjectHandle, is BridgeType.Interface, is BridgeType.Collection ->
+        appendLine("            IntPtr nativeResult = $native($callArgs);")
+
       else -> appendLine("            ${type.wireType().csharpWireType()} nativeResult = $native($callArgs);")
     }
     appendErrorCheck(this)
@@ -176,11 +190,19 @@ internal object ForwardCirPropertyProjection {
       is BridgeType.Nullable -> when (val inner = value.type) {
         BridgeType.String -> append("            return Marshal.PtrToStringUTF8(nativeResult);")
         is BridgeType.ObjectHandle -> append("            return nativeResult == IntPtr.Zero ? null : new ${inner.csharpType()}(nativeResult);")
+        // ADR-040: construct via the backing wrapper class, not the interface spelling.
+        is BridgeType.Interface -> append(
+          "            return nativeResult == IntPtr.Zero ? null : new ${inner.backingType}(nativeResult);",
+        )
+
         else -> append("            return nativeResult;")
       }
 
       is BridgeType.Enum -> append("            return (${value.csharpType()})nativeResult;")
       is BridgeType.ObjectHandle -> append("            return new ${value.csharpType()}(nativeResult);")
+      is BridgeType.Interface ->
+        append("            return new ${value.backingType}(nativeResult);")
+
       is BridgeType.Collection -> append(collectionMaterialize(value))
       else -> append("            return nativeResult;")
     }
@@ -278,7 +300,7 @@ internal object ForwardCirPropertyProjection {
   private fun setterNativeType(type: BridgeType): String = when (val value = type.unwrapNullable()) {
     BridgeType.String -> if (type is BridgeType.Nullable) "string?" else "string"
     is BridgeType.Enum -> "int"
-    is BridgeType.ObjectHandle -> "IntPtr"
+    is BridgeType.ObjectHandle, is BridgeType.Interface -> "IntPtr"
     else -> value.wireType().csharpWireType()
   }
 
@@ -286,6 +308,14 @@ internal object ForwardCirPropertyProjection {
     when (val value = type.unwrapNullable()) {
       is BridgeType.Enum -> "(int)$name"
       is BridgeType.ObjectHandle -> if (type is BridgeType.Nullable) "$name?._handle ?? IntPtr.Zero" else "$name._handle"
+      // ADR-040 sub-decision B: the setter's static parameter type is `IFoo`, so extraction goes
+      // through the shared reflective helper rather than a direct `._handle` field read.
+      is BridgeType.Interface -> if (type is BridgeType.Nullable) {
+        "$name != null ? NugetMarshal.HandleOf($name) : IntPtr.Zero"
+      } else {
+        "NugetMarshal.HandleOf($name)"
+      }
+
       else -> name
     }
 
@@ -293,7 +323,9 @@ internal object ForwardCirPropertyProjection {
   private fun BridgeType.wireType(): ForwardAbiWireType = when (val type = unwrapNullable()) {
     BridgeType.Unit -> ForwardAbiWireType.VOID
     BridgeType.Char -> ForwardAbiWireType.CHAR16
-    BridgeType.String, is BridgeType.ObjectHandle, is BridgeType.Collection -> ForwardAbiWireType.POINTER
+    BridgeType.String, is BridgeType.ObjectHandle, is BridgeType.Interface, is BridgeType.Collection ->
+      ForwardAbiWireType.POINTER
+
     is BridgeType.Enum -> ForwardAbiWireType.INT32
     is BridgeType.Primitive -> type.kind.wireType()
     else -> error("No property wire type for $type")
@@ -314,6 +346,8 @@ internal object ForwardCirPropertyProjection {
     is BridgeType.Enum -> this.csharpType
     // ADR-066: mirrors `BridgeType.Enum.csharpType` — the classifier already qualified this.
     is BridgeType.ObjectHandle -> csharpType
+    // ADR-040: the public C# spelling is the projected interface, never the backing class.
+    is BridgeType.Interface -> csharpType
     is BridgeType.Collection -> when (kind) {
       CollectionKind.LIST -> "IReadOnlyList<${requireNotNull(element).csharpType()}>"
       CollectionKind.MUTABLE_LIST -> "IList<${requireNotNull(element).csharpType()}>"

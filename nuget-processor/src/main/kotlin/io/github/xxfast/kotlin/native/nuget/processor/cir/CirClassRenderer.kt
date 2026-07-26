@@ -134,6 +134,7 @@ internal fun StringBuilder.renderStaticClass(cls: CirStaticClass) {
 
 internal fun StringBuilder.renderClass(cls: CirClass) {
   val abstract: String = if (cls.isAbstract) "abstract " else ""
+  val sealedModifier: String = if (cls.isSealed) "sealed " else ""
 
   val implements: String = when {
     cls.superClass != null -> " : ${cls.superClass}"
@@ -143,7 +144,7 @@ internal fun StringBuilder.renderClass(cls: CirClass) {
     else -> ""
   }
 
-  appendLine("    public ${abstract}class ${cls.name}$implements")
+  appendLine("    public $sealedModifier${abstract}class ${cls.name}$implements")
   appendLine("    {")
 
   if (cls.superClass == null) {
@@ -330,10 +331,11 @@ internal fun StringBuilder.renderConstructor(
 
 internal fun StringBuilder.renderProperty(prop: CirProperty) {
   val static: String = if (prop.isStatic) "static " else ""
+  val modifier: String = if (prop.isOverride) "override " else if (prop.isVirtual) "virtual " else ""
   val isMultiLineGetter: Boolean = prop.getter.contains('\n')
   val isMultiLineSetter: Boolean = prop.setter?.contains('\n') == true
   if (isMultiLineGetter && prop.setter != null) {
-    appendLine("        public ${static}${prop.type} ${prop.name}")
+    appendLine("        public ${static}${modifier}${prop.type} ${prop.name}")
     appendLine("        {")
     appendLine("            get")
     appendLine("            {${prop.getter}")
@@ -343,16 +345,16 @@ internal fun StringBuilder.renderProperty(prop: CirProperty) {
     appendLine("            }")
     appendLine("        }")
   } else if (isMultiLineGetter) {
-    appendLine("        public ${static}${prop.type} ${prop.name}")
+    appendLine("        public ${static}${modifier}${prop.type} ${prop.name}")
     appendLine("        {")
     appendLine("            get")
     appendLine("            {${prop.getter}")
     appendLine("            }")
     appendLine("        }")
   } else if (prop.setter == null) {
-    appendLine("        public ${static}${prop.type} ${prop.name} => ${prop.getter};")
+    appendLine("        public ${static}${modifier}${prop.type} ${prop.name} => ${prop.getter};")
   } else if (isMultiLineSetter) {
-    appendLine("        public ${static}${prop.type} ${prop.name}")
+    appendLine("        public ${static}${modifier}${prop.type} ${prop.name}")
     appendLine("        {")
     appendLine("            get => ${prop.getter};")
     appendLine("            set")
@@ -360,7 +362,7 @@ internal fun StringBuilder.renderProperty(prop: CirProperty) {
     appendLine("            }")
     appendLine("        }")
   } else {
-    appendLine("        public ${static}${prop.type} ${prop.name}")
+    appendLine("        public ${static}${modifier}${prop.type} ${prop.name}")
     appendLine("        {")
     appendLine("            get => ${prop.getter};")
     appendLine("            set => ${prop.setter};")
@@ -421,7 +423,7 @@ internal fun StringBuilder.renderMethod(method: CirMethod, className: String = "
 
   val visibility: String = if (method.visibility == CirVisibility.PRIVATE) "private" else "public"
   val static: String = if (method.isStatic) "static " else ""
-  val override: String = if (method.isOverride) "override " else ""
+  val override: String = if (method.isOverride) "override " else if (method.isVirtual) "virtual " else ""
   val abstract: String = if (method.isAbstract) "abstract " else ""
   val paramStr: String = method.parameters.mapIndexed { index, param ->
     if (method.isExtension && index == 0) "this ${param.type} ${param.name}"

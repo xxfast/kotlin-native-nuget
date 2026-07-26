@@ -23,6 +23,17 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnosticS
 import io.github.xxfast.kotlin.native.nuget.processor.forward.planFor
 import io.github.xxfast.kotlin.native.nuget.processor.toCName
 
+/**
+ * ADR-040 fixture gap: a Kotlin `override` member with no CLASS supertype (so it implements an
+ * *interface* member, not a class one) stays open by Kotlin default unless explicitly `final` —
+ * `Animal.fetch(item)` implementing `Pet.fetch`, further overridden by `Cat.fetch`, is exactly
+ * this shape. C# requires the base declaration to say `virtual` for that further `override` to
+ * compile (CS0506 otherwise); this was never needed before this feature because no prior fixture
+ * combined an interface-implementing class with a subclass re-overriding the same member.
+ */
+private fun Set<Modifier>.isOpenInterfaceImplementation(superClass: String?): Boolean =
+  superClass == null && contains(Modifier.OVERRIDE) && !contains(Modifier.FINAL)
+
 internal fun translateClass(
   cls: KSClassDeclaration,
   libraryName: String,
@@ -127,7 +138,11 @@ internal fun translateClass(
       val planned = callableCatalog.propertyFor("${cls.qualifiedName?.asString() ?: name}.$propName")
       if (planned != null) {
         tracker.trackProperty(planned)
-        return@mapNotNull ForwardCirPropertyProjection.classProperty(planned)
+        return@mapNotNull ForwardCirPropertyProjection.classProperty(
+          planned,
+          isOverride = superClass != null && prop.modifiers.contains(Modifier.OVERRIDE),
+          isVirtual = prop.modifiers.isOpenInterfaceImplementation(superClass),
+        )
       }
       // Named specialized-protocol property adapters only (lambda / suspend-lambda / Flow).
       // Ordinary property types without a plan are skipped — no mapReturnType IntPtr fallthrough.
@@ -382,6 +397,7 @@ internal fun translateClass(
           plan = planned,
           nativePrefix = prefix,
           isOverride = superClass != null && method.modifiers.contains(Modifier.OVERRIDE),
+          isVirtual = method.modifiers.isOpenInterfaceImplementation(superClass),
         )
       }
       // Abstract declarations still need a C# abstract method for the public surface even though
@@ -1343,6 +1359,65 @@ internal fun translateInterface(
   return CirInterface(interfaceName, typeParams, properties, methods)
 }
 
+/**
+ * ADR-040: the concrete handle-backed wrapper class generated alongside `IFoo` for a reachable
+ * Kotlin interface (one that appears in a planned return position — see the reachable-interfaces
+ * computation in [io.github.xxfast.kotlin.native.nuget.processor.NugetProcessor]). Deliberately
+ * reuses [CirClass] rather than a bespoke declaration node: every member here already has a
+ * dispatch-export plan built by `ForwardCallablePlanner.interfaceEntries` /
+ * `ForwardPropertyPlanner.interfaceProperties`, so the existing property/method DllImport
+ * derivation, dispose rendering and ABI-contract signature extraction all apply unchanged — a
+ * dispatch export IS an ordinary class-shaped native import once its plan exists.
+ */
+internal fun translateInterfaceBackingClass(
+  iface: KSClassDeclaration,
+  libraryName: String,
+  callableCatalog: ForwardCallablePlanCatalog,
+  tracker: CollectionHelperTracker,
+): CirClass {
+  val name: String = iface.simpleName.asString()
+  val prefix: String = name.lowercase()
+  val ifaceQualified: String = iface.qualifiedName?.asString() ?: name
+
+  val properties: List<CirProperty> = iface.getAllProperties()
+    .filter { it.getVisibility() == Visibility.PUBLIC }
+    .filter { prop -> prop.parentDeclaration == iface }
+    .mapNotNull { prop ->
+      val symbol = "$ifaceQualified.${prop.simpleName.asString()}"
+      callableCatalog.propertyFor(symbol)?.let { plan ->
+        tracker.trackProperty(plan)
+        ForwardCirPropertyProjection.classProperty(plan)
+      }
+    }
+    .toList()
+
+  val methods: List<CirMethod> = iface.getAllFunctions()
+    .filter { it.getVisibility() == Visibility.PUBLIC }
+    .filter { it.simpleName.asString() !in setOf("equals", "hashCode", "toString", "<init>") }
+    .filter { method -> method.parentDeclaration == iface }
+    .mapNotNull { method ->
+      val symbol = "$ifaceQualified.${method.simpleName.asString()}"
+      callableCatalog.planFor(symbol)?.let { plan ->
+        tracker.trackPlan(plan)
+        ForwardCirPlanProjection.classMethod(plan, prefix, isOverride = false)
+      }
+    }
+    .toList()
+
+  return CirClass(
+    name = name,
+    libraryName = libraryName,
+    nativePrefix = prefix,
+    constructor = null,
+    properties = properties,
+    methods = methods,
+    interfaces = listOf("I$name"),
+    hasInternalHandleConstructor = true,
+    disposable = true,
+    isSealed = true,
+  )
+}
+
 internal fun translateEnum(
   enum: KSClassDeclaration,
   libraryName: String,
@@ -1519,10 +1594,18 @@ internal fun translateValueClass(
   )
 }
 
+/**
+ * ADR-040 fixture gap: never previously threaded [KSType.isMarkedNullable] — no prior fixture had
+ * a nullable-typed interface property (ADR-039's `add*`/`remove*` interfaces are all
+ * non-nullable). `Pet.nickname: String?` needs `IPet.Nickname` to render `string?`, or a
+ * concrete (correctly nullable) implementer's getter mismatches the interface's (implicitly
+ * non-nullable) one under nullable-reference analysis (CS8766).
+ */
 private fun mapInterfacePropertyType(type: KSType): String {
   val typeName: String = type.declaration.simpleName.asString()
-  return if (typeName == "String") "string"
-  else mapParamType(typeName)
+  val nullableSuffix: String = if (type.isMarkedNullable) "?" else ""
+  return if (typeName == "String") "string$nullableSuffix"
+  else "${mapParamType(typeName)}$nullableSuffix"
 }
 
 private fun translateCallbackMethod(

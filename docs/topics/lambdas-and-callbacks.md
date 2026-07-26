@@ -251,10 +251,9 @@ public void CatEventSource_AddListener_TriggerFiresBothOnMeowAndOnPurr()
 
 ## Limitations
 
-Be precise about what's supported here: interface *parameters* are only the `add`/`remove`-paired subscription shape shown above. The following are explicitly not built (ROADMAP Phase 7):
+Be precise about what's supported here: interface *parameters* passed from C# to Kotlin are only the `add`/`remove`-paired subscription shape shown above. A Kotlin interface as a **return type** is now supported, see [Interfaces, abstract and sealed classes](interfaces-abstract-sealed.md#interface-typed-return-values); its interface-typed *parameter* side accepts only a Kotlin-backed `IFoo`, not a C#-implemented one. The following are still explicitly not built (ROADMAP Phase 7):
 
-- A Kotlin interface as a **return type** (generating a concrete handle-backed `sealed class Foo : IFoo` per interface, so a Kotlin function could return `IFoo`) is not implemented ([ADR-040](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/040-interface-return-type-mapping.md)).
-- General C#-implemented interface parameters without an `add`/`remove` pair, i.e. a Kotlin function that takes an interface once and doesn't need a disposable subscription, are not implemented; there's no GCHandle release strategy for that shape yet.
+- General C#-implemented interface parameters without an `add`/`remove` pair, i.e. a Kotlin function that takes an interface once and doesn't need a disposable subscription, are not implemented; there's no GCHandle release strategy for that shape yet. This also covers passing a C#-implemented `IFoo` into an ordinary interface-typed parameter like `Cat.Befriend`, which throws `NotSupportedException` in v1.
 - Exception propagation from inside a C# callback back into Kotlin is not implemented (the forward-direction `ADR-024`/`ADR-028`/`ADR-029` machinery has no mirror here yet).
 - `Flow<T>` or a suspend lambda (`suspend (T) -> R`) as a function parameter is not implemented.
 
@@ -268,6 +267,6 @@ Be precise about what's supported here: interface *parameters* are only the `add
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/036-reverse-interop-mechanism.md">ADR-036: Reverse interop mechanism</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/037-stored-callbacks.md">ADR-037: Stored callbacks</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/039-interface-bridging.md">ADR-039: Interface bridging</a>
-        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/040-interface-return-type-mapping.md">ADR-040: Interface return type mapping (not yet built)</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/040-interface-return-type-mapping.md">ADR-040: Interface return type mapping</a>
     </category>
 </seealso>

@@ -312,6 +312,23 @@ internal fun StringBuilder.renderMarshalHelper(helper: CirMarshalHelper) {
   appendLine("            }")
   appendLine("            return listHandle;")
   appendLine("        }")
+  appendLine()
+  // ADR-040 sub-decision B: the one shared reflective helper for an interface-typed parameter
+  // (e.g. `Cat.Befriend(IPet pet)`). The static parameter type is the projected interface, which
+  // does not carry `_handle` (only the generated backing wrapper class does), so extraction is
+  // reflective here rather than a direct field read. Throws for a C#-implemented (non-Kotlin-
+  // backed) IFoo -- ROADMAP line 145+ owns that case; this is the v1 boundary.
+  appendLine("        internal static IntPtr HandleOf(object value)")
+  appendLine("        {")
+  appendLine("            var field = value.GetType().GetField(\"_handle\",")
+  appendLine("                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Public);")
+  appendLine("            if (field == null)")
+  appendLine("            {")
+  appendLine("                throw new NotSupportedException(")
+  appendLine("                    $\"{value.GetType().Name} is not a Kotlin-backed object; passing a C#-implemented interface is not supported yet.\");")
+  appendLine("            }")
+  appendLine("            return (IntPtr)field.GetValue(value)!;")
+  appendLine("        }")
   appendLine("    }")
   appendLine()
 }

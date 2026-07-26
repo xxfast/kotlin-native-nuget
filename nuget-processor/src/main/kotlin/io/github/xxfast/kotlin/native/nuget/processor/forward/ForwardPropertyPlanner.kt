@@ -47,6 +47,31 @@ internal class ForwardPropertyPlanner(
       .toList()
   }
 
+  /**
+   * ADR-040: dispatch-export property plans for an interface's own declared properties
+   * (reachability-driven — only called for interfaces already known to appear in a planned return
+   * position). Shaped exactly like [classProperties], with the interface's own qualified name as
+   * both the symbol owner and the `asStableRef` receiver type.
+   */
+  fun interfaceProperties(iface: KSClassDeclaration): List<ForwardPropertyPlan> {
+    val owner: String = iface.qualifiedName?.asString() ?: return emptyList()
+    val prefix: String = iface.simpleName.asString().lowercase()
+    return iface.getAllProperties()
+      .filter { it.getVisibility() == Visibility.PUBLIC }
+      .filter { prop -> prop.parentDeclaration == iface }
+      .mapNotNull { prop ->
+        propertyPlan(
+          symbol = "$owner.${prop.simpleName.asString()}",
+          position = ForwardPropertyPosition.CLASS,
+          receiver = ForwardPropertyReceiver.Handle(owner),
+          prop = prop,
+          getExport = "${prefix}_get_${prop.simpleName.asString()}",
+          setExport = "${prefix}_set_${prop.simpleName.asString()}",
+        )
+      }
+      .toList()
+  }
+
   private fun companionProperties(cls: KSClassDeclaration): List<ForwardPropertyPlan> {
     val companion: KSClassDeclaration = cls.declarations.filterIsInstance<KSClassDeclaration>()
       .firstOrNull { it.isCompanionObject } ?: return emptyList()
@@ -192,7 +217,7 @@ internal class ForwardPropertyPlanner(
 
   private fun isPlannable(type: BridgeType): Boolean = when (type) {
     BridgeType.Unit, BridgeType.Char, BridgeType.String, is BridgeType.Primitive, is BridgeType.Enum,
-    is BridgeType.ObjectHandle, is BridgeType.Collection -> true
+    is BridgeType.ObjectHandle, is BridgeType.Interface, is BridgeType.Collection -> true
 
     is BridgeType.Nullable -> isPlannable(type.type)
     else -> false
@@ -203,7 +228,9 @@ internal class ForwardPropertyPlanner(
   private fun BridgeType.wireType(): ForwardAbiWireType = when (val type = unwrapNullable()) {
     BridgeType.Unit -> ForwardAbiWireType.VOID
     BridgeType.Char -> ForwardAbiWireType.CHAR16
-    BridgeType.String, is BridgeType.ObjectHandle, is BridgeType.Collection -> ForwardAbiWireType.POINTER
+    BridgeType.String, is BridgeType.ObjectHandle, is BridgeType.Interface, is BridgeType.Collection ->
+      ForwardAbiWireType.POINTER
+
     is BridgeType.Enum -> ForwardAbiWireType.INT32
     is BridgeType.Primitive -> when (type.kind) {
       PrimitiveKind.BOOLEAN -> ForwardAbiWireType.BOOLEAN
@@ -240,7 +267,7 @@ internal class ForwardPropertyPlanner(
       ForwardConversion.ENUM_TO_ORDINAL
     }
 
-    is BridgeType.ObjectHandle -> if (flow == ForwardFlow.INTO_KOTLIN) {
+    is BridgeType.ObjectHandle, is BridgeType.Interface -> if (flow == ForwardFlow.INTO_KOTLIN) {
       ForwardConversion.HANDLE_TO_STABLE_REF
     } else {
       ForwardConversion.STABLE_REF_TO_HANDLE

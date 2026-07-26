@@ -358,6 +358,54 @@ internal class ForwardCallablePlanner(
       .toList()
   }
 
+  /**
+   * ADR-040: dispatch-export plans for an interface's own declared members (reachability-driven —
+   * only called for interfaces the caller already determined appear in a planned return
+   * position). The receiver classifies as [BridgeType.ObjectHandle] rather than
+   * [BridgeType.Interface] even though the receiver *is* an interface — a receiver is only ever
+   * lowered via `asStableRef`, never constructed, so the extra construction spelling
+   * [BridgeType.Interface] carries would be unused (sub-decision A.1's Consequences #3).
+   *
+   * Unlike [classEntries], an interface member with no body still needs an export (the concrete
+   * object behind the handle always implements it), so the ABSTRACT structural skip does not
+   * apply here.
+   */
+  fun interfaceEntries(iface: KSClassDeclaration): List<ForwardCallableCatalogEntry> {
+    val ifaceName: String = iface.qualifiedName?.asString() ?: return emptyList()
+    val prefix: String = iface.simpleName.asString().lowercase()
+    val receiverType: BridgeType = BridgeType.ObjectHandle(ifaceName)
+    val methods: List<KSFunctionDeclaration> = iface.getAllFunctions()
+      .filter { method -> method.getVisibility() == Visibility.PUBLIC }
+      .filter { method -> method.simpleName.asString() !in setOf("equals", "hashCode", "toString", "<init>") }
+      .filter { method -> method.parentDeclaration == iface }
+      .toList()
+
+    return methods.map { method ->
+      val symbol: String = "$ifaceName.${method.simpleName.asString()}"
+      val structuralReason: ForwardPlanSkipReason? = when {
+        method.modifiers.contains(Modifier.SUSPEND) -> ForwardPlanSkipReason.SUSPEND
+        method.typeParameters.isNotEmpty() -> ForwardPlanSkipReason.GENERIC
+        else -> null
+      }
+      if (structuralReason != null) {
+        ForwardCallableCatalogEntry.Skipped(symbol, structuralReason, node = method)
+      } else {
+        planOrSkip(
+          symbol = symbol,
+          publicName = method.simpleName.asString().replaceFirstChar { it.uppercase() },
+          exportName = "${prefix}_${method.simpleName.asString()}",
+          receiver = ForwardReceiver.Handle(receiverType),
+          parameters = method.parameters.map { parameter ->
+            (parameter.name?.asString() ?: "_") to classifier.classify(parameter.type.resolve())
+          },
+          result = method.returnType?.resolve()?.let(classifier::classify) ?: BridgeType.Unit,
+          origin = ForwardCallableOrigin.CLASS,
+          node = method,
+        )
+      }
+    }
+  }
+
   private fun classEntries(cls: KSClassDeclaration): List<ForwardCallableCatalogEntry> {
     val className: String = cls.simpleName.asString()
     val prefix: String = className.lowercase()
@@ -841,7 +889,7 @@ internal class ForwardCallablePlanner(
       )
     )
 
-    is BridgeType.ObjectHandle -> listOf(
+    is BridgeType.ObjectHandle, is BridgeType.Interface -> listOf(
       ForwardAbiParameter(
         name = name,
         wireType = ForwardAbiWireType.POINTER,
@@ -883,7 +931,7 @@ internal class ForwardCallablePlanner(
         )
       )
 
-      is BridgeType.ObjectHandle -> listOf(
+      is BridgeType.ObjectHandle, is BridgeType.Interface -> listOf(
         ForwardAbiParameter(
           name = name,
           wireType = ForwardAbiWireType.POINTER,
@@ -969,7 +1017,7 @@ internal class ForwardCallablePlanner(
       helperRequirements = setOf(ForwardHelperRequirement.ENUM_ORDINAL),
     )
 
-    is BridgeType.ObjectHandle -> handleResultShape(this)
+    is BridgeType.ObjectHandle, is BridgeType.Interface -> handleResultShape(this)
     // ADR-014 gap this feature's fixture flushed out: a value class returned by an *ordinary*
     // (non-value-class-own) callable never had a planner-side result shape, despite the model/
     // validator already carrying BOX_VALUE_CLASS/UNBOX_VALUE_CLASS conversions for exactly this
@@ -1005,7 +1053,7 @@ internal class ForwardCallablePlanner(
       helperRequirements = setOf(ForwardHelperRequirement.UTF8),
     )
 
-    is BridgeType.ObjectHandle -> handleResultShape(BridgeType.Nullable(type))
+    is BridgeType.ObjectHandle, is BridgeType.Interface -> handleResultShape(BridgeType.Nullable(type))
     is BridgeType.Primitive -> {
       val nullable: BridgeType = BridgeType.Nullable(type)
       ForwardResultShape(
@@ -1156,6 +1204,10 @@ internal class ForwardCallablePlanner(
       }
     }
 
+    // ADR-040: an interface element inside a collection is deferred v1 scope ("collections of
+    // interfaces" — Scope section); routed through the ordinary COLLECTION skip rather than
+    // silently building an untested shape.
+    is BridgeType.Interface,
     is BridgeType.RawCollection, is BridgeType.RawKSType, is BridgeType.SpecializedProtocol,
     is BridgeType.Unsupported,
       -> false
@@ -1180,6 +1232,9 @@ internal class ForwardCallablePlanner(
     is BridgeType.RawCollection -> ForwardPlanSkipReason.COLLECTION
     is BridgeType.Enum -> ForwardPlanSkipReason.ENUM
     is BridgeType.ObjectHandle -> ForwardPlanSkipReason.HANDLE
+    // Never actually reached by an ordinary interface result (shapeOrNull's Interface branch
+    // always succeeds); only reachable defensively via a Collection-of-Interface element skip.
+    is BridgeType.Interface -> ForwardPlanSkipReason.HANDLE
     is BridgeType.ValueClass -> ForwardPlanSkipReason.VALUE_CLASS
     is BridgeType.SpecializedProtocol -> when {
       // ADR-065: StateFlow shares the plain-Flow legacy route (both are named legacy exports in
@@ -1205,7 +1260,10 @@ internal class ForwardCallablePlanner(
   private fun BridgeType.inputSkipReason(): ForwardPlanSkipReason? = when (this) {
     BridgeType.String, BridgeType.Char -> null
     is BridgeType.Enum -> null
-    is BridgeType.ObjectHandle -> null
+    // ADR-040 sub-decision B: an interface-typed parameter is plannable — the C# lowering routes
+    // through NugetMarshal.HandleOf (ForwardCirPlanProjection.callArgument), which throws
+    // NotSupportedException at runtime for a C#-implemented (non-Kotlin-backed) IFoo.
+    is BridgeType.ObjectHandle, is BridgeType.Interface -> null
     is BridgeType.Collection -> when {
       kind != CollectionKind.LIST && kind != CollectionKind.MUTABLE_LIST ->
         ForwardPlanSkipReason.COLLECTION
@@ -1247,6 +1305,7 @@ internal class ForwardCallablePlanner(
     is BridgeType.RawCollection,
     is BridgeType.Enum,
     is BridgeType.ObjectHandle,
+    is BridgeType.Interface,
     is BridgeType.ValueClass,
     is BridgeType.SpecializedProtocol,
     is BridgeType.RawKSType,
