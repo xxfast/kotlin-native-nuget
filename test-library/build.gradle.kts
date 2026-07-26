@@ -206,6 +206,8 @@ nuget {
         alias("Test.Structs", "test.structs")
         include("Test.Nested")
         alias("Test.Nested", "test.nested")
+        include("Test.Menagerie")
+        alias("Test.Menagerie", "test.menagerie")
       }
     }
   }

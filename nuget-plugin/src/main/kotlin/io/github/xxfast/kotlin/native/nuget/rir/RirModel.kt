@@ -43,14 +43,32 @@ data class RirClass(
   // ADR-052: at most one public instance `.ctor` per type in v1 (additive; old JSON parses with
   // an empty list — a type with no public instance constructor has no RirConstructor entries).
   val constructors: List<RirConstructor> = emptyList(),
+  // ADR-070 Decision 5: every interface this class implements, from
+  // TypeDefinition.GetInterfaceImplementations() — verified to be the FULL TRANSITIVE closure for
+  // a class (a class implementing `ITagged : IFeedable` lists both), not just the directly-
+  // declared one. Each entry is "{Namespace}.{Name}"; defaulted so old reverse-ir.json still
+  // parses. Filtered to interfaces that are themselves admissible and bound is a generator-side
+  // concern (RirBridging.classInterfaceSupertypes), not the reader's.
+  val interfaces: List<String> = emptyList(),
 ) : RirType
 
+// ADR-070: a C#-declared, admissible (Decision 6), bound interface. [methods]/[properties] are
+// this interface's OWN declared members only (never members inherited from a base interface —
+// verified: `ITagged : IFeedable` reaches the reader with only its own `Tag`), because a Kotlin
+// `interface IDerived : IBase` inherits IBase's members through ordinary Kotlin interface
+// inheritance and the IDerivedHandle wrapper dispatches them through IBase's own registration
+// slots (Decision 5) — nothing needs to be re-declared or re-registered here.
 @Serializable
 @SerialName("interface")
 data class RirInterface(
   override val name: String,
   val methods: List<RirMethod> = emptyList(),
   val properties: List<RirProperty> = emptyList(),
+  // ADR-070 Decision 5: base interfaces this interface directly extends (verified: unlike a
+  // class, an interface's own InterfaceImpl table lists only its DIRECT bases —
+  // `ITagged : IFeedable` lists just IFeedable), "{Namespace}.{Name}" each. Defaulted so old
+  // reverse-ir.json still parses.
+  val interfaces: List<String> = emptyList(),
 ) : RirType
 
 // Phase 9: a C# enum admitted by the metadata reader's deliberately narrow reverse mapping.
@@ -203,6 +221,19 @@ data class RirStructType(
   val name: String,
 ) : RirTypeRef
 
+// ADR-070 Decision 1: a reference to a bound, admissible C# interface. Wire-identical to
+// RirObjectHandleType (IntPtr from GCHandle.ToIntPtr(GCHandle.Alloc(obj)), IntPtr.Zero for null)
+// — the difference is entirely Kotlin-side: a value arriving at an interface-typed position
+// always wraps as the interface's OWN `{Name}Handle` implementation, never the concrete bound
+// class (ADR-070 Decision 3), because the wire carries no runtime type tag.
+@Serializable
+@SerialName("interface")
+data class RirInterfaceType(
+  val namespace: String,
+  val name: String,
+  val nullable: Boolean = false,
+) : RirTypeRef
+
 @Serializable
 data class RirDiagnostic(
   val kind: RirDiagnosticKind,
@@ -273,4 +304,42 @@ enum class RirDiagnosticKind {
   // `#nullable disable` island inside an otherwise-annotated assembly.
   @SerialName("info_oblivious_nullability")
   INFO_OBLIVIOUS_NULLABILITY,
+
+  // ADR-070 Decision 6: an open generic interface (`IFoo`1`) — the arity-mangled CLR name is not
+  // valid Kotlin. Interface-level (unlike skipped_open_generic, which is per-member).
+  @SerialName("skipped_generic_interface")
+  SKIPPED_GENERIC_INTERFACE,
+
+  // ADR-070 Decision 6: a `static`/`static abstract`/`static virtual` interface member — calling
+  // it through the interface itself is CS8926 for the abstract/virtual case.
+  @SerialName("skipped_interface_static_member")
+  SKIPPED_INTERFACE_STATIC_MEMBER,
+
+  // ADR-070 Decision 6: an indexer (`this[int]`) — reaches the reader as a parameterless property
+  // literally named `Item`, which would emit an uncompilable `receiver.Item`. Pre-existing gap,
+  // also affects classes.
+  @SerialName("skipped_indexer")
+  SKIPPED_INDEXER,
+
+  // ADR-070 Decision 6: a `event` member — currently dropped with no diagnostic at all.
+  // Pre-existing gap, also affects classes.
+  @SerialName("skipped_event")
+  SKIPPED_EVENT,
+
+  // ADR-070 Decision 6: an interface with zero admissible members — nothing to generate, must not
+  // emit an empty registration export.
+  @SerialName("skipped_empty_interface")
+  SKIPPED_EMPTY_INTERFACE,
+
+  // ADR-070 Decision 5: a bound class's supertype for a given interface is omitted because at
+  // least one interface member has no identically-signed public member on the class (e.g. an
+  // explicit interface implementation, which is non-public in metadata).
+  @SerialName("skipped_interface_supertype")
+  SKIPPED_INTERFACE_SUPERTYPE,
+
+  // ADR-070 Decision 5: a derived interface (`IDerived : IBase`) is bound with only its own
+  // declared members because IBase is not itself admissible/bound — IDerived's Kotlin interface
+  // omits the `: IBase` supertype and IDerivedHandle cannot dispatch IBase's members.
+  @SerialName("info_inherited_interface_members_absent")
+  INFO_INHERITED_INTERFACE_MEMBERS_ABSENT,
 }

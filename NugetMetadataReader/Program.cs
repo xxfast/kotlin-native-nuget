@@ -190,6 +190,12 @@ internal static class AssemblyExtractor
         // the class fall-through (Constraint 3's bug: today every struct is emitted as a class).
         var structTypes = CollectStructTypes(
             mr, namespaceMap, boundHandleTypeNames, enumTypes);
+        // ADR-070: admissible, bound interfaces (Decision 6) — collected BEFORE ProcessType runs
+        // so a member elsewhere in this assembly that references one resolves to
+        // RirInterfaceType, mirroring boundHandleTypeNames/enumTypes/structTypes above.
+        var (boundInterfaceTypeNames, interfaceDiagnostics) = CollectBoundInterfaceTypeNames(
+            mr, namespaceMap, boundHandleTypeNames, enumTypes, structTypes);
+        diagnostics.AddRange(interfaceDiagnostics);
 
         var rirNamespaces = new List<RirNamespace>();
 
@@ -201,7 +207,8 @@ internal static class AssemblyExtractor
             {
                 var typeDef = mr.GetTypeDefinition(typeHandle);
                 var (rirType, typeDiagnostics) = ProcessType(
-                    mr, typeHandle, typeDef, boundHandleTypeNames, enumTypes, structTypes);
+                    mr, typeHandle, typeDef, boundHandleTypeNames, enumTypes, structTypes,
+                    boundInterfaceTypeNames);
                 if (rirType is not null) rirTypes.Add(rirType);
                 diagnostics.AddRange(typeDiagnostics);
             }
@@ -268,6 +275,158 @@ internal static class AssemblyExtractor
         }
 
         return names;
+    }
+
+    /// <summary>
+    /// ADR-070 Decision 6: the fully-qualified names of every admissible, bound C# interface —
+    /// public (already guaranteed by <c>namespaceMap</c>'s own inclusion filter), top-level,
+    /// non-generic, with at least one admissible member. Mirrors
+    /// <see cref="CollectBoundHandleTypeNames"/>'s role for handle-eligible classes; also returns
+    /// the interface-level diagnostics (generic interface, empty interface) this pass discovers.
+    /// </summary>
+    /// <remarks>
+    /// Single-pass, unlike <c>CollectStructTypes</c>'s fixed point: an interface member whose OWN
+    /// type is ANOTHER interface is treated as inadmissible for the purpose of THIS admissibility
+    /// check (the admissibility set being computed is not yet known to itself). This can only ever
+    /// make an interface member LOOK less admissible than it truly is — never falsely admissible —
+    /// so the worst case is an interface with an interface-typed member and no other admissible
+    /// member is (incorrectly) reported as <c>skipped_empty_interface</c>. Not hit by the shipped
+    /// fixture (no interface declares an interface-typed member); fixing it is a straightforward
+    /// fixed-point extension if a future fixture needs it.
+    /// </remarks>
+    private static (HashSet<string> Names, List<RirDiagnostic> Diagnostics) CollectBoundInterfaceTypeNames(
+        MetadataReader mr,
+        Dictionary<string, List<TypeDefinitionHandle>> namespaceMap,
+        HashSet<string> boundHandleTypeNames,
+        IReadOnlyDictionary<string, EnumExtraction> enumTypes,
+        IReadOnlyDictionary<string, StructExtraction> structTypes)
+    {
+        var names = new HashSet<string>(StringComparer.Ordinal);
+        var diagnostics = new List<RirDiagnostic>();
+        var emptyInterfaceNames = new HashSet<string>(StringComparer.Ordinal);
+
+        foreach (var (ns, typeHandles) in namespaceMap)
+        {
+            foreach (var typeHandle in typeHandles)
+            {
+                var typeDef = mr.GetTypeDefinition(typeHandle);
+                bool isInterface = (typeDef.Attributes & System.Reflection.TypeAttributes.ClassSemanticsMask)
+                    == System.Reflection.TypeAttributes.Interface;
+                if (!isInterface) continue;
+
+                var typeName = mr.GetString(typeDef.Name);
+                var fullName = string.IsNullOrEmpty(ns) ? typeName : $"{ns}.{typeName}";
+
+                // ADR-070 Decision 6: the arity-mangled CLR name (IFoo`1) is not valid Kotlin.
+                if (typeName.Contains('`'))
+                {
+                    diagnostics.Add(new RirDiagnostic(
+                        kind: "skipped_generic_interface",
+                        typeName: typeName,
+                        memberName: "",
+                        memberSignature: fullName,
+                        reason: $"open generic interface `{fullName}` — the arity-mangled CLR name " +
+                            "is not valid Kotlin",
+                        hint: "Generic interfaces are out of scope (ADR-070 v1); expose a closed, " +
+                            "non-generic adapter interface."));
+                    continue;
+                }
+
+                // No diagnostic here for the empty case (unlike the generic-interface branch
+                // above): ProcessType's REAL member processing (per-member diagnostics: static,
+                // DIM, indexer, ...) runs regardless of this admissibility pre-check, and adds its
+                // own skipped_empty_interface only after seeing the true (post-diagnostic) empty
+                // result — adding one here too would duplicate it.
+                if (!HasAtLeastOneAdmissibleInterfaceMember(
+                    mr, typeDef, boundHandleTypeNames, enumTypes, structTypes, emptyInterfaceNames))
+                {
+                    continue;
+                }
+
+                names.Add(fullName);
+            }
+        }
+
+        return (names, diagnostics);
+    }
+
+    /// <summary>
+    /// ADR-070 Decision 6: does this interface have at least one instance method or instance
+    /// property whose declared signature is fully in the v1 vocabulary, is not a default
+    /// interface method, and (for a property) is not an indexer? No diagnostics here — the real
+    /// per-member diagnostics (skipped_default_interface_method, skipped_interface_static_member,
+    /// skipped_indexer, ...) are emitted once, by the real extraction pass in <c>ProcessType</c>/
+    /// <c>TryMapMethod</c>/<c>TryDecodePropertyType</c>, not duplicated here.
+    /// </summary>
+    private static bool HasAtLeastOneAdmissibleInterfaceMember(
+        MetadataReader mr,
+        TypeDefinition typeDef,
+        HashSet<string> boundHandleTypeNames,
+        IReadOnlyDictionary<string, EnumExtraction> enumTypes,
+        IReadOnlyDictionary<string, StructExtraction> structTypes,
+        HashSet<string> boundInterfaceTypeNames)
+    {
+        var decoder = new SignatureDecoder(
+            mr, boundHandleTypeNames, enumTypes, structTypes, boundInterfaceTypeNames);
+
+        foreach (var handle in typeDef.GetMethods())
+        {
+            var method = mr.GetMethodDefinition(handle);
+            if ((method.Attributes & System.Reflection.MethodAttributes.MemberAccessMask)
+                != System.Reflection.MethodAttributes.Public) continue;
+            // Property accessors (get_X/set_X) and .cctor carry SpecialName — accessors are
+            // evaluated via the property loop below, not here.
+            if ((method.Attributes & System.Reflection.MethodAttributes.SpecialName) != 0) continue;
+            // ADR-070 Decision 6: no static interface member is admissible.
+            if ((method.Attributes & System.Reflection.MethodAttributes.Static) != 0) continue;
+            // Default interface method (non-abstract, has an IL body).
+            if ((method.Attributes & System.Reflection.MethodAttributes.Abstract) == 0
+                && method.RelativeVirtualAddress != 0) continue;
+
+            MethodSignature<TypeRefOrDiag> sig;
+            try
+            {
+                sig = method.DecodeSignature(decoder, genericContext: null);
+            }
+            catch (BadImageFormatException)
+            {
+                continue;
+            }
+
+            if (sig.ReturnType.TypeRef is null) continue;
+            if (sig.ParameterTypes.Any(p => p.TypeRef is null)) continue;
+            return true;
+        }
+
+        foreach (var handle in typeDef.GetProperties())
+        {
+            var propDef = mr.GetPropertyDefinition(handle);
+            var accessors = propDef.GetAccessors();
+            if (accessors.Getter.IsNil) continue;
+
+            var getterDef = mr.GetMethodDefinition(accessors.Getter);
+            if ((getterDef.Attributes & System.Reflection.MethodAttributes.MemberAccessMask)
+                != System.Reflection.MethodAttributes.Public) continue;
+            if ((getterDef.Attributes & System.Reflection.MethodAttributes.Static) != 0) continue;
+            // ADR-070 Decision 6: an indexer's getter takes the index as a real parameter — an
+            // ordinary property's getter takes none.
+            if (getterDef.GetParameters().Count > 0) continue;
+
+            MethodSignature<TypeRefOrDiag> sig;
+            try
+            {
+                sig = propDef.DecodeSignature(decoder, genericContext: null);
+            }
+            catch (BadImageFormatException)
+            {
+                continue;
+            }
+
+            if (sig.ReturnType.TypeRef is null) continue;
+            return true;
+        }
+
+        return false;
     }
 
     // Reverse enum v1 is intentionally narrow: only public, top-level default-int enums with
@@ -1074,8 +1233,10 @@ internal static class AssemblyExtractor
         TypeDefinition typeDef,
         HashSet<string> boundHandleTypeNames,
         IReadOnlyDictionary<string, EnumExtraction> enumTypes,
-        IReadOnlyDictionary<string, StructExtraction> structTypes)
+        IReadOnlyDictionary<string, StructExtraction> structTypes,
+        HashSet<string>? boundInterfaceTypeNames = null)
     {
+        boundInterfaceTypeNames ??= new HashSet<string>(StringComparer.Ordinal);
         var typeName = mr.GetString(typeDef.Name);
         var ns = mr.GetString(typeDef.Namespace);
         var fullName = string.IsNullOrEmpty(ns) ? typeName : $"{ns}.{typeName}";
@@ -1117,6 +1278,13 @@ internal static class AssemblyExtractor
         // A C# static class is `abstract sealed` in ECMA-335 metadata (ADR-051).
         var isSealed = (typeDef.Attributes & System.Reflection.TypeAttributes.Sealed) != 0;
         var isStatic = isAbstract && isSealed;
+
+        // ADR-070 Decision 6: a generic interface's mangled name (IFoo`1) is not valid Kotlin —
+        // CollectBoundInterfaceTypeNames already added the skipped_generic_interface diagnostic;
+        // skip silently here (member processing would be pointless and the arity-mangled name
+        // must never reach a RirInterface).
+        if (isInterface && typeName.Contains('`'))
+            return (null, Array.Empty<RirDiagnostic>());
 
         var methods = new List<RirMethod>();
         var diagnostics = new List<RirDiagnostic>();
@@ -1170,7 +1338,7 @@ internal static class AssemblyExtractor
                 var methodDef = mr.GetMethodDefinition(methodHandle);
                 var (rirMethod, methodDiagnostic, obliviousDiagnostic) = TryMapMethod(
                     mr, typeHandle, methodHandle, methodDef, typeName, isInterface,
-                    boundHandleTypeNames, enumTypes, structTypes);
+                    boundHandleTypeNames, enumTypes, structTypes, boundInterfaceTypeNames);
                 if (rirMethod is not null)
                 {
                     methods.Add(rirMethod);
@@ -1196,7 +1364,7 @@ internal static class AssemblyExtractor
             {
                 var (rirCtor, ctorDiagnostic, ctorObliviousDiagnostic) = TryMapConstructor(
                     mr, typeHandle, ctorHandle, typeName, boundHandleTypeNames, enumTypes,
-                    structTypes, isState: false);
+                    structTypes, isState: false, boundInterfaceTypeNames);
                 if (rirCtor is not null)
                 {
                     constructors.Add(rirCtor);
@@ -1210,6 +1378,30 @@ internal static class AssemblyExtractor
 
         ValidateManagedSignatures(typeName, methods.Select(m => m.ManagedSignature)
             .Concat(constructors.Select(c => c.ManagedSignature)));
+
+        // --- Events (ADR-070 Decision 6: currently dropped with no diagnostic at all — a
+        // pre-existing gap this ADR makes routine, for classes as well as interfaces) ---
+        foreach (var eventHandle in typeDef.GetEvents())
+        {
+            var eventDef = mr.GetEventDefinition(eventHandle);
+            var accessors = eventDef.GetAccessors();
+            bool isPublic = !accessors.Adder.IsNil
+                && (mr.GetMethodDefinition(accessors.Adder).Attributes
+                    & System.Reflection.MethodAttributes.MemberAccessMask)
+                    == System.Reflection.MethodAttributes.Public;
+            if (!isPublic) continue;
+
+            var eventName = mr.GetString(eventDef.Name);
+            diagnostics.Add(new RirDiagnostic(
+                kind: "skipped_event",
+                typeName: typeName,
+                memberName: eventName,
+                memberSignature: eventName,
+                reason: "C# events are not part of the v1 vocabulary — add_/remove_ are SpecialName " +
+                    "methods with no single concrete export site",
+                hint: "Expose an equivalent method pair (e.g. Subscribe/Unsubscribe with a callback " +
+                    "parameter) in a C# adapter, once callback parameters are supported."));
+        }
 
         // --- Properties ---
         var properties = new List<RirProperty>();
@@ -1229,8 +1421,43 @@ internal static class AssemblyExtractor
             if ((getterDef.Attributes & System.Reflection.MethodAttributes.MemberAccessMask)
                 != System.Reflection.MethodAttributes.Public) continue;
 
+            bool propIsStatic = (getterDef.Attributes & System.Reflection.MethodAttributes.Static) != 0;
+
+            // ADR-070 Decision 6: no static interface property is admissible.
+            if (isInterface && propIsStatic)
+            {
+                diagnostics.Add(new RirDiagnostic(
+                    kind: "skipped_interface_static_member",
+                    typeName: typeName,
+                    memberName: propName,
+                    memberSignature: propName,
+                    reason: "static interface property — a static virtual/abstract interface member " +
+                        "is CS8926 when called through the interface itself",
+                    hint: "Expose an equivalent static member on a concrete adapter class."));
+                continue;
+            }
+
+            // ADR-070 Decision 6: an indexer reaches metadata as a property literally named "Item"
+            // whose getter takes the index as a real parameter — emitting it as a parameterless
+            // property would render an uncompilable `receiver.Item`. Pre-existing gap for classes
+            // too (this ADR makes it routine there as well).
+            if (getterDef.GetParameters().Count > 0)
+            {
+                diagnostics.Add(new RirDiagnostic(
+                    kind: "skipped_indexer",
+                    typeName: typeName,
+                    memberName: propName,
+                    memberSignature: propName,
+                    reason: "indexer — reaches metadata as a parameterless-looking property whose " +
+                        "getter actually takes the index as a parameter; a generated `receiver.Item` " +
+                        "would not compile",
+                    hint: "Expose an equivalent named method (e.g. GetAt(int)) in a C# adapter."));
+                continue;
+            }
+
             var (propTypeRef, propDiagnostic) = TryDecodePropertyType(
-                mr, propDef, propName, typeName, boundHandleTypeNames, enumTypes, structTypes);
+                mr, propDef, propName, typeName, boundHandleTypeNames, enumTypes, structTypes,
+                boundInterfaceTypeNames);
             if (propTypeRef is not null)
             {
                 // Same masked-equality fix as the getter check above: a non-zero AND against
@@ -1240,7 +1467,6 @@ internal static class AssemblyExtractor
                     || (mr.GetMethodDefinition(accessors.Setter).Attributes
                         & System.Reflection.MethodAttributes.MemberAccessMask)
                         != System.Reflection.MethodAttributes.Public;
-                bool propIsStatic = (getterDef.Attributes & System.Reflection.MethodAttributes.Static) != 0;
 
                 // ADR-053: a property carries exactly one NullableAttribute (on the Property row
                 // itself), falling back to its declaring TypeDef's NullableContextAttribute — "a
@@ -1275,11 +1501,76 @@ internal static class AssemblyExtractor
             }
         }
 
+        // ADR-070 Decision 6: an interface that ends up with zero admissible members (every
+        // method/property was individually skipped above — static, DIM, indexer, or an
+        // inadmissible type — or it declared none) emits NO RirType at all, on top of whatever
+        // per-member diagnostics already fired. This runs AFTER real member processing (not a
+        // separate silent pre-check) specifically so a lone-member interface like
+        // `IWithDim { string Greeting() => ...; }` still gets its real
+        // skipped_default_interface_method diagnostic, not just the coarser empty-interface one.
+        if (isInterface && methods.Count == 0 && properties.Count == 0)
+        {
+            diagnostics.Add(new RirDiagnostic(
+                kind: "skipped_empty_interface",
+                typeName: typeName,
+                memberName: "",
+                memberSignature: fullName,
+                reason: $"interface `{fullName}` has zero admissible members (ADR-070 Decision 6)",
+                hint: "Nothing to generate — every member is either unsupported (static, " +
+                    "default-implemented, an indexer, an event, or an inadmissible type) or the " +
+                    "interface declares none."));
+            return (null, diagnostics);
+        }
+
+        // ADR-070 Decision 5: GetInterfaceImplementations() (verified: the FULL TRANSITIVE closure
+        // for a class, DIRECT bases only for an interface), resolved to "{Namespace}.{Name}".
+        // Unfiltered — admissibility/boundness filtering is a Kotlin-side (Gradle plugin) concern.
+        var implementedInterfaces = ResolveInterfaceImplementations(mr, typeDef);
+
         RirType rirType = isInterface
-            ? new RirInterface(typeName, methods, properties)
-            : new RirClass(typeName, isAbstract && !isInterface, isStatic, methods, properties, constructors);
+            ? new RirInterface(typeName, methods, properties, implementedInterfaces)
+            : new RirClass(
+                typeName, isAbstract && !isInterface, isStatic, methods, properties, constructors,
+                implementedInterfaces);
 
         return (rirType, diagnostics);
+    }
+
+    /// <summary>
+    /// ADR-070 Decision 5: resolves every entry in [typeDef]'s own InterfaceImpl table to
+    /// "{Namespace}.{Name}", skipping any interface reference this reader cannot resolve to a
+    /// name (e.g. a TypeSpec — a generic interface instantiation — which has no simple namespace/
+    /// name pair; the Kotlin-side admissibility filter would reject it anyway per Decision 6).
+    /// </summary>
+    private static List<string> ResolveInterfaceImplementations(MetadataReader mr, TypeDefinition typeDef)
+    {
+        var result = new List<string>();
+        foreach (var implHandle in typeDef.GetInterfaceImplementations())
+        {
+            var impl = mr.GetInterfaceImplementation(implHandle);
+            var ifaceHandle = impl.Interface;
+            string? ns = null;
+            string? name = null;
+            switch (ifaceHandle.Kind)
+            {
+                case HandleKind.TypeReference:
+                    var typeRef = mr.GetTypeReference((TypeReferenceHandle)ifaceHandle);
+                    ns = mr.GetString(typeRef.Namespace);
+                    name = mr.GetString(typeRef.Name);
+                    break;
+                case HandleKind.TypeDefinition:
+                    var referencedDef = mr.GetTypeDefinition((TypeDefinitionHandle)ifaceHandle);
+                    ns = mr.GetString(referencedDef.Namespace);
+                    name = mr.GetString(referencedDef.Name);
+                    break;
+                // TypeSpecification (a generic interface instantiation) has no simple name — skip.
+            }
+
+            if (name is null) continue;
+            result.Add(string.IsNullOrEmpty(ns) ? name : $"{ns}.{name}");
+        }
+
+        return result;
     }
 
     /// <summary>
@@ -1315,10 +1606,12 @@ internal static class AssemblyExtractor
         HashSet<string> boundHandleTypeNames,
         IReadOnlyDictionary<string, EnumExtraction> enumTypes,
         IReadOnlyDictionary<string, StructExtraction> structTypes,
-        bool isState)
+        bool isState,
+        HashSet<string>? boundInterfaceTypeNames = null)
     {
         var methodDef = mr.GetMethodDefinition(methodHandle);
-        var decoder = new SignatureDecoder(mr, boundHandleTypeNames, enumTypes, structTypes);
+        var decoder = new SignatureDecoder(
+            mr, boundHandleTypeNames, enumTypes, structTypes, boundInterfaceTypeNames);
         MethodSignature<TypeRefOrDiag> sig;
 
         try
@@ -1400,7 +1693,8 @@ internal static class AssemblyExtractor
         bool isInterface,
         HashSet<string> boundHandleTypeNames,
         IReadOnlyDictionary<string, EnumExtraction> enumTypes,
-        IReadOnlyDictionary<string, StructExtraction> structTypes)
+        IReadOnlyDictionary<string, StructExtraction> structTypes,
+        HashSet<string>? boundInterfaceTypeNames = null)
     {
         var methodName = mr.GetString(methodDef.Name);
         bool isStatic = (methodDef.Attributes & System.Reflection.MethodAttributes.Static) != 0;
@@ -1420,7 +1714,22 @@ internal static class AssemblyExtractor
                 hint: "Override this method in a concrete adapter class."), null);
         }
 
-        var decoder = new SignatureDecoder(mr, boundHandleTypeNames, enumTypes, structTypes);
+        // ADR-070 Decision 6: no static interface member is admissible — a static
+        // abstract/virtual interface member is CS8926 when called through the interface itself.
+        if (isInterface && isStatic)
+        {
+            return (null, new RirDiagnostic(
+                kind: "skipped_interface_static_member",
+                typeName: typeName,
+                memberName: methodName,
+                memberSignature: methodName,
+                reason: "static interface method — a static virtual/abstract interface member is " +
+                    "CS8926 when called through the interface itself",
+                hint: "Expose an equivalent static member on a concrete adapter class."), null);
+        }
+
+        var decoder = new SignatureDecoder(
+            mr, boundHandleTypeNames, enumTypes, structTypes, boundInterfaceTypeNames);
         MethodSignature<TypeRefOrDiag> sig;
 
         try
@@ -1543,9 +1852,11 @@ internal static class AssemblyExtractor
         string typeName,
         HashSet<string> boundHandleTypeNames,
         IReadOnlyDictionary<string, EnumExtraction> enumTypes,
-        IReadOnlyDictionary<string, StructExtraction> structTypes)
+        IReadOnlyDictionary<string, StructExtraction> structTypes,
+        HashSet<string>? boundInterfaceTypeNames = null)
     {
-        var decoder = new SignatureDecoder(mr, boundHandleTypeNames, enumTypes, structTypes);
+        var decoder = new SignatureDecoder(
+            mr, boundHandleTypeNames, enumTypes, structTypes, boundInterfaceTypeNames);
         MethodSignature<TypeRefOrDiag> sig;
 
         try
@@ -1925,12 +2236,17 @@ internal static class NullabilityHelpers
     /// <see cref="RirObjectHandleType"/>. Value types (<see cref="RirPrimitiveType"/>,
     /// <see cref="RirEnumType"/>) and <see cref="RirVoidType"/> are unaffected — a nullable value
     /// type is <c>System.Nullable&lt;T&gt;</c>, a distinct closed generic struct, deferred.</summary>
-    public static bool IsNullableCapable(RirTypeRef typeRef) => typeRef is RirStringType or RirObjectHandleType;
+    /// ADR-070, load-bearing: <see cref="RirInterfaceType"/> MUST be included here — an omission
+    /// would silently bind every interface reference non-null with no warning, byte for byte the
+    /// ADR-053 failure class this project has already paid for once.
+    public static bool IsNullableCapable(RirTypeRef typeRef) =>
+        typeRef is RirStringType or RirObjectHandleType or RirInterfaceType;
 
     public static RirTypeRef ApplyNullable(RirTypeRef typeRef, bool nullable) => typeRef switch
     {
         RirStringType => new RirStringType(nullable),
         RirObjectHandleType h => new RirObjectHandleType(h.Namespace, h.Name, nullable),
+        RirInterfaceType i => new RirInterfaceType(i.Namespace, i.Name, nullable),
         _ => typeRef,
     };
 }
@@ -2095,17 +2411,27 @@ internal sealed class SignatureDecoder : ISignatureTypeProvider<TypeRefOrDiag, o
     /// </summary>
     private readonly IReadOnlyDictionary<string, StructExtraction> _structTypes;
 
+    /// <summary>
+    /// ADR-070: the set of fully-qualified names of admissible, bound interfaces (Decision 6).
+    /// Built by <c>AssemblyExtractor.CollectBoundInterfaceTypeNames</c>, mirrors
+    /// <see cref="_boundHandleTypeNames"/>.
+    /// </summary>
+    private readonly HashSet<string> _boundInterfaceTypeNames;
+
     public SignatureDecoder(
         MetadataReader mr,
         HashSet<string>? boundHandleTypeNames = null,
         IReadOnlyDictionary<string, EnumExtraction>? enumTypes = null,
-        IReadOnlyDictionary<string, StructExtraction>? structTypes = null)
+        IReadOnlyDictionary<string, StructExtraction>? structTypes = null,
+        HashSet<string>? boundInterfaceTypeNames = null)
     {
         _mr = mr;
         _boundHandleTypeNames = boundHandleTypeNames
             ?? new HashSet<string>(StringComparer.Ordinal);
         _enumTypes = enumTypes ?? new Dictionary<string, EnumExtraction>(StringComparer.Ordinal);
         _structTypes = structTypes ?? new Dictionary<string, StructExtraction>(StringComparer.Ordinal);
+        _boundInterfaceTypeNames = boundInterfaceTypeNames
+            ?? new HashSet<string>(StringComparer.Ordinal);
     }
 
     // Primitives
@@ -2199,14 +2525,33 @@ internal sealed class SignatureDecoder : ISignatureTypeProvider<TypeRefOrDiag, o
         if (_boundHandleTypeNames.Contains(fullName))
             return new TypeRefOrDiag(new RirObjectHandleType(ns, name), null, fullName);
 
-        // Type is in the same assembly but is NOT a bound handle type (excluded namespace,
-        // interface, static class, value type, or ref struct already handled above). Members
-        // that reference it are skipped with a diagnostic (ADR-051; ADR-043 fail-fast contract).
+        // ADR-070 Decision 1: an admissible, bound interface crosses the bridge exactly like a
+        // handle (checked after enum/struct/class-handle, before the final unbound fallback —
+        // order is about keeping the existing branches untouched, not correctness: an interface is
+        // never an enum or a struct).
+        if (_boundInterfaceTypeNames.Contains(fullName))
+            return new TypeRefOrDiag(new RirInterfaceType(ns, name), null, fullName);
+
+        // Type is in the same assembly but is NOT a bound handle type or a bound interface
+        // (excluded namespace, inadmissible interface, static class, value type, or ref struct
+        // already handled above). Members that reference it are skipped with a diagnostic (ADR-051;
+        // ADR-043 fail-fast contract).
+        // ADR-070: an interface that IS bound but not itself admissible (Decision 6) gets an
+        // interface-specific reason — "bind this type's namespace" is actively wrong there, the
+        // namespace is already bound.
+        bool isInadmissibleInterface = (typeDef.Attributes & System.Reflection.TypeAttributes.ClassSemanticsMask)
+            == System.Reflection.TypeAttributes.Interface;
         return new TypeRefOrDiag(null,
             new PendingDiagnostic(
                 "skipped_unbound_type_reference",
-                $"type `{fullName}` is not a bridgeable bound class in this extraction run",
-                "Bind this type's namespace to make it a handle type, or expose an equivalent static API."),
+                isInadmissibleInterface
+                    ? $"type `{fullName}` is an interface, but is not admissible (ADR-070 Decision 6 " +
+                      "— generic, empty, or every member is skipped) in this extraction run"
+                    : $"type `{fullName}` is not a bridgeable bound class in this extraction run",
+                isInadmissibleInterface
+                    ? "Remove the disqualifying shape (generic parameter, zero admissible members) " +
+                      "from this interface, or expose an equivalent static API."
+                    : "Bind this type's namespace to make it a handle type, or expose an equivalent static API."),
             fullName);
     }
 
@@ -2360,7 +2705,8 @@ internal sealed class RirClass : RirType
         bool isStatic,
         IReadOnlyList<RirMethod> methods,
         IReadOnlyList<RirProperty> properties,
-        IReadOnlyList<RirConstructor>? constructors = null)
+        IReadOnlyList<RirConstructor>? constructors = null,
+        IReadOnlyList<string>? interfaces = null)
     {
         Name = name;
         IsAbstract = isAbstract;
@@ -2368,6 +2714,7 @@ internal sealed class RirClass : RirType
         Methods = methods;
         Properties = properties;
         Constructors = constructors ?? Array.Empty<RirConstructor>();
+        Interfaces = interfaces ?? Array.Empty<string>();
     }
 
     public override string Name { get; }
@@ -2381,20 +2728,38 @@ internal sealed class RirClass : RirType
     /// classes, interfaces, abstract classes, and classes with no public instance constructor.
     /// </summary>
     public IReadOnlyList<RirConstructor> Constructors { get; }
+    /// <summary>
+    /// ADR-070 Decision 5: every interface this class implements, from
+    /// <c>TypeDefinition.GetInterfaceImplementations()</c> (verified to be the FULL TRANSITIVE
+    /// closure for a class), each "{Namespace}.{Name}". Unfiltered — whether a given entry is
+    /// itself admissible and bound is a Kotlin-side (Gradle plugin) concern.
+    /// </summary>
+    public IReadOnlyList<string> Interfaces { get; }
 }
 
 internal sealed class RirInterface : RirType
 {
-    public RirInterface(string name, IReadOnlyList<RirMethod> methods, IReadOnlyList<RirProperty> properties)
+    public RirInterface(
+        string name,
+        IReadOnlyList<RirMethod> methods,
+        IReadOnlyList<RirProperty> properties,
+        IReadOnlyList<string>? interfaces = null)
     {
         Name = name;
         Methods = methods;
         Properties = properties;
+        Interfaces = interfaces ?? Array.Empty<string>();
     }
 
     public override string Name { get; }
     public IReadOnlyList<RirMethod> Methods { get; }
     public IReadOnlyList<RirProperty> Properties { get; }
+    /// <summary>
+    /// ADR-070 Decision 5: base interfaces this interface directly extends (verified: unlike a
+    /// class, an interface's own InterfaceImpl table lists only its DIRECT bases), each
+    /// "{Namespace}.{Name}". Unfiltered, same as <see cref="RirClass.Interfaces"/>.
+    /// </summary>
+    public IReadOnlyList<string> Interfaces { get; }
 }
 
 internal sealed class RirEnum : RirType
@@ -2608,6 +2973,7 @@ internal sealed class RirConstructor
 [JsonDerivedType(typeof(RirObjectHandleType), "handle")]
 [JsonDerivedType(typeof(RirEnumType), "enum")]
 [JsonDerivedType(typeof(RirStructType), "struct")]
+[JsonDerivedType(typeof(RirInterfaceType), "interface")]
 internal abstract class RirTypeRef { }
 
 internal sealed class RirVoidType : RirTypeRef
@@ -2692,6 +3058,27 @@ internal sealed class RirStructType : RirTypeRef
 
     public string Namespace { get; }
     public string Name { get; }
+}
+
+/// <summary>
+/// ADR-070 Decision 1: a reference to a bound, admissible C# interface. Wire-identical to
+/// <see cref="RirObjectHandleType"/> (IntPtr from GCHandle.ToIntPtr(GCHandle.Alloc(obj)),
+/// IntPtr.Zero for null) — the difference is entirely Kotlin-side: a value arriving at an
+/// interface-typed position always wraps as the interface's own {Name}Handle implementation.
+/// Mirrors <c>RirInterfaceType</c> in <c>RirModel.kt</c> field-for-field.
+/// </summary>
+internal sealed class RirInterfaceType : RirTypeRef
+{
+    public RirInterfaceType(string @namespace, string name, bool nullable = false)
+    {
+        Namespace = @namespace;
+        Name = name;
+        Nullable = nullable;
+    }
+
+    public string Namespace { get; }
+    public string Name { get; }
+    public bool Nullable { get; }
 }
 
 internal sealed class RirNamespace
@@ -2784,6 +3171,7 @@ internal sealed class RirDiagnostic
 [JsonSerializable(typeof(RirObjectHandleType))]
 [JsonSerializable(typeof(RirEnumType))]
 [JsonSerializable(typeof(RirStructType))]
+[JsonSerializable(typeof(RirInterfaceType))]
 [JsonSerializable(typeof(RirDiagnostic))]
 [JsonSourceGenerationOptions(
     WriteIndented = true,
