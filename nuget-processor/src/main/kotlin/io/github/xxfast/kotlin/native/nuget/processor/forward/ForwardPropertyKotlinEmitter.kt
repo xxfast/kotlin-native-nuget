@@ -59,7 +59,7 @@ private fun FileSpec.Builder.addGetter(plan: ForwardPropertyPlan, call: ForwardN
         builder.addCode(valueBody(access, "errorOut", "null"), cOpaquePointerVar, stableRef)
       }
 
-      is BridgeType.ObjectHandle -> {
+      is BridgeType.ObjectHandle, is BridgeType.Interface -> {
         builder.returns(cOpaquePointer.copy(nullable = true))
         builder.addCode(
           nullableHandleBody(access, "errorOut"),
@@ -81,7 +81,7 @@ private fun FileSpec.Builder.addGetter(plan: ForwardPropertyPlan, call: ForwardN
       )
     }
 
-    is BridgeType.ObjectHandle, is BridgeType.Collection -> {
+    is BridgeType.ObjectHandle, is BridgeType.Interface, is BridgeType.Collection -> {
       builder.returns(cOpaquePointer.copy(nullable = true))
       builder.addCode(handleBody(access, "errorOut"), stableRef, cOpaquePointerVar, stableRef)
     }
@@ -183,12 +183,14 @@ private fun ForwardPropertyPlan.valueExpression(): String = when (val type: Brid
   is BridgeType.Nullable -> when (val inner: BridgeType = type.type) {
     is BridgeType.Primitive, BridgeType.Char, BridgeType.String -> "value"
     is BridgeType.ObjectHandle -> "value?.asStableRef<${inner.qualifiedName}>()?.get()"
+    is BridgeType.Interface -> "value?.asStableRef<${inner.qualifiedName}>()?.get()"
     else -> error("Forward property emitter has no nullable setter route for $type")
   }
 
   is BridgeType.Primitive, BridgeType.Char, BridgeType.String -> "value"
   is BridgeType.Enum -> "${type.qualifiedName}.entries[value]"
   is BridgeType.ObjectHandle -> "value.asStableRef<${type.qualifiedName}>().get()"
+  is BridgeType.Interface -> "value.asStableRef<${type.qualifiedName}>().get()"
   else -> error("Forward property emitter has no setter route for $type")
 }
 
@@ -198,7 +200,7 @@ private fun kotlinInputType(type: BridgeType): TypeName = when (type) {
   BridgeType.Char -> kotlinType("Char")
   BridgeType.String -> kotlinType("String")
   is BridgeType.Enum -> kotlinType("Int")
-  is BridgeType.ObjectHandle, is BridgeType.Collection ->
+  is BridgeType.ObjectHandle, is BridgeType.Interface, is BridgeType.Collection ->
     cOpaquePointer.copy(nullable = type is BridgeType.Nullable)
 
   else -> error("Forward property emitter has no input type for $type")

@@ -80,8 +80,17 @@ internal class ForwardBridgeTypeClassifier(
     if (classDeclaration.modifiers.contains(Modifier.SEALED)) {
       return BridgeType.SpecializedProtocol("sealed helper $qualifiedName")
     }
+    // ADR-040: an interface with type parameters stays on the pre-existing "generic declaration"
+    // legacy route (unchanged from before this ADR) rather than becoming a plannable
+    // BridgeType.Interface — chosen ahead of the ADR-039 add*/remove* pair exclusion below, since
+    // the classifier is deliberately position-agnostic (ForwardCallablePlanner.classEntries
+    // already excludes add*/remove* pair methods from planOrSkip before classification's result
+    // would matter for them).
+    if (classDeclaration.classKind == ClassKind.INTERFACE && classDeclaration.typeParameters.isNotEmpty()) {
+      return BridgeType.SpecializedProtocol("generic declaration $qualifiedName")
+    }
     if (classDeclaration.classKind == ClassKind.INTERFACE) {
-      return BridgeType.SpecializedProtocol("interface bridge $qualifiedName")
+      return interfaceType(classDeclaration, qualifiedName)
     }
     if (classDeclaration.typeParameters.isNotEmpty()) {
       return BridgeType.SpecializedProtocol("generic declaration $qualifiedName")
@@ -112,6 +121,42 @@ internal class ForwardBridgeTypeClassifier(
       )
     }
     return BridgeType.ObjectHandle(qualifiedName, csharpType = csharpTypeNameFor(classDeclaration))
+  }
+
+  /**
+   * ADR-040: an interface at an ordinary (non ADR-039 add/remove-pair) position. Mirrors the
+   * [ObjectHandle] membership check exactly, but the public spelling is `I$simpleName` (the
+   * projected interface) and the construction spelling is the bare `$simpleName` (the generated
+   * backing wrapper class) — qualified together for an admitted dependency-module interface, the
+   * same qualification rule [csharpTypeNameFor] already applies to a class/object handle.
+   */
+  private fun interfaceType(declaration: KSClassDeclaration, qualifiedName: String): BridgeType {
+    if (qualifiedName !in context.exportedObjectHandles) {
+      val isUnexportedDependency: Boolean = declaration.containingFile == null
+      return BridgeType.Unsupported(
+        qualifiedName,
+        if (isUnexportedDependency) {
+          "declared in a dependency module whose package is outside the export scope"
+        } else {
+          "declaration is not in the exported object-handle set"
+        },
+        isUnexportedDependency = isUnexportedDependency,
+      )
+    }
+    val simpleName: String = declaration.simpleName.asString()
+    if (declaration.containingFile != null || context.rootNamespace.isEmpty()) {
+      return BridgeType.Interface(qualifiedName, csharpType = "I$simpleName", backingType = simpleName)
+    }
+    val namespace: String = mapPackageToNamespace(
+      declaration.packageName.asString(),
+      context.rootPackage,
+      context.rootNamespace,
+    )
+    return BridgeType.Interface(
+      qualifiedName,
+      csharpType = "global::$namespace.I$simpleName",
+      backingType = "global::$namespace.$simpleName",
+    )
   }
 
   /**

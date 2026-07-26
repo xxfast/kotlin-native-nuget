@@ -92,7 +92,7 @@ internal fun FileSpec.Builder.addForwardKotlinPlanExport(plan: ForwardCallablePl
       )
     }
 
-    is BridgeType.ObjectHandle, is BridgeType.Collection -> {
+    is BridgeType.ObjectHandle, is BridgeType.Interface, is BridgeType.Collection -> {
       builder.returns(cOpaquePointer.copy(nullable = true))
       builder.addCode(handleResultBody(invocation, error.name), stableRef, cOpaquePointerVar, stableRef)
     }
@@ -426,7 +426,7 @@ private fun addNullableResult(
   errorName: String,
 ) {
   when (type) {
-    is BridgeType.ObjectHandle -> {
+    is BridgeType.ObjectHandle, is BridgeType.Interface -> {
       builder.returns(cOpaquePointer.copy(nullable = true))
       builder.addCode(nullableHandleResultBody(invocation, errorName), stableRef, cOpaquePointerVar, stableRef)
     }
@@ -541,10 +541,10 @@ private fun invocationExpression(
 private fun kotlinInputType(type: BridgeType, wireType: ForwardAbiWireType): TypeName = when (type) {
   is BridgeType.Primitive, BridgeType.Char, is BridgeType.Enum -> kotlinResultType(wireType)
   BridgeType.String -> kotlinType("String")
-  is BridgeType.ObjectHandle, is BridgeType.Collection -> cOpaquePointer
+  is BridgeType.ObjectHandle, is BridgeType.Interface, is BridgeType.Collection -> cOpaquePointer
   is BridgeType.Nullable -> when (val inner = type.type) {
     BridgeType.String -> kotlinType("String").copy(nullable = true)
-    is BridgeType.ObjectHandle -> cOpaquePointer.copy(nullable = true)
+    is BridgeType.ObjectHandle, is BridgeType.Interface -> cOpaquePointer.copy(nullable = true)
     else -> error("Forward Kotlin plan emitter has no input type for nullable $inner")
   }
 
@@ -652,6 +652,9 @@ private fun loweredArgument(parameter: ForwardPublicParameter): String =
     is BridgeType.ObjectHandle ->
       "${parameter.name}.asStableRef<${type.qualifiedName}>().get()"
 
+    is BridgeType.Interface ->
+      "${parameter.name}.asStableRef<${type.qualifiedName}>().get()"
+
     is BridgeType.Collection -> when (type.kind) {
       CollectionKind.LIST ->
         "${parameter.name}.asStableRef<MutableList<Any?>>().get()" +
@@ -669,6 +672,9 @@ private fun loweredArgument(parameter: ForwardPublicParameter): String =
     is BridgeType.Nullable -> when (val inner: BridgeType = type.type) {
       BridgeType.String -> parameter.name
       is BridgeType.ObjectHandle ->
+        "${parameter.name}?.asStableRef<${inner.qualifiedName}>()?.get()"
+
+      is BridgeType.Interface ->
         "${parameter.name}?.asStableRef<${inner.qualifiedName}>()?.get()"
 
       is BridgeType.Primitive ->

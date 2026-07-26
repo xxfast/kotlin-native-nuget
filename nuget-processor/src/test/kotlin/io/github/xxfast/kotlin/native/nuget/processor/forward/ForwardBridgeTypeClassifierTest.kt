@@ -22,6 +22,55 @@ class ForwardBridgeTypeClassifierTest {
     ForwardBridgeTypeContext(exportedObjectHandles = setOf("sample.Patient", "sample.Record")),
   )
 
+  private val interfaceClassifier = ForwardBridgeTypeClassifier(
+    ForwardBridgeTypeContext(exportedObjectHandles = setOf("sample.Pet")),
+  )
+
+  @Test
+  fun `classifies an exported interface as BridgeType Interface with I-prefixed csharpType`() {
+    assertEquals(
+      BridgeType.Interface("sample.Pet", csharpType = "IPet", backingType = "Pet"),
+      interfaceClassifier.classify(type("sample.Pet", classKind = ClassKind.INTERFACE)),
+    )
+  }
+
+  @Test
+  fun `classifies a nullable exported interface as Nullable of BridgeType Interface`() {
+    assertEquals(
+      BridgeType.Nullable(BridgeType.Interface("sample.Pet", csharpType = "IPet", backingType = "Pet")),
+      interfaceClassifier.classify(type("sample.Pet", classKind = ClassKind.INTERFACE, nullable = true)),
+    )
+  }
+
+  @Test
+  fun `classifies an unexported interface as Unsupported not silently dropped as a specialized protocol`() {
+    val unexported = assertIs<BridgeType.Unsupported>(
+      interfaceClassifier.classify(type("sample.Stranger", classKind = ClassKind.INTERFACE)),
+    )
+    assertEquals("declaration is not in the exported object-handle set", unexported.reason)
+  }
+
+  @Test
+  fun `classifies a generic interface as the pre-existing generic declaration legacy route`() {
+    val genericInterface = classDeclaration(
+      qualifiedName = "sample.Pet",
+      classKind = ClassKind.INTERFACE,
+    )
+    val withTypeParameter = Proxy.newProxyInstance(
+      KSClassDeclaration::class.java.classLoader,
+      arrayOf(KSClassDeclaration::class.java),
+    ) { _, method, _ ->
+      when (method.name) {
+        "getTypeParameters" -> listOf(proxy<KSTypeParameter>("getSimpleName" to name("T")))
+        else -> method.invoke(genericInterface)
+      }
+    } as KSClassDeclaration
+    assertEquals(
+      BridgeType.SpecializedProtocol("generic declaration sample.Pet"),
+      interfaceClassifier.classify(type(withTypeParameter)),
+    )
+  }
+
   @Test
   fun `classifies alias-expanded primitives nullable strings and Char`() {
     val stringAlias = alias("sample.Nickname", type("kotlin.String"))
@@ -67,7 +116,12 @@ class ForwardBridgeTypeClassifierTest {
         CollectionKind.LIST,
         element = BridgeType.Nullable(BridgeType.Primitive(PrimitiveKind.INT)),
       ),
-      classifier.classify(type("kotlin.collections.List", arguments = listOf(argument(type("kotlin.Int", nullable = true))))),
+      classifier.classify(
+        type(
+          "kotlin.collections.List",
+          arguments = listOf(argument(type("kotlin.Int", nullable = true)))
+        )
+      ),
     )
     assertEquals(
       BridgeType.Collection(

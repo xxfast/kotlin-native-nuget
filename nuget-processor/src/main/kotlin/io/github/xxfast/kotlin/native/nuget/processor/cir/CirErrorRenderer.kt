@@ -143,7 +143,7 @@ internal fun StringBuilder.renderMappedException(name: String, base: String) {
 internal fun StringBuilder.renderSyncErrorCheckMethod(method: CirMethod, className: String = "") {
   val visibility: String = if (method.visibility == CirVisibility.PRIVATE) "private" else "public"
   val static: String = if (method.isStatic) "static " else ""
-  val override: String = if (method.isOverride) "override " else ""
+  val override: String = if (method.isOverride) "override " else if (method.isVirtual) "virtual " else ""
   val paramStr: String = method.parameters.mapIndexed { index, param ->
     if (method.isExtension && index == 0) "this ${param.type} ${param.name}"
     else "${param.type} ${param.name}"

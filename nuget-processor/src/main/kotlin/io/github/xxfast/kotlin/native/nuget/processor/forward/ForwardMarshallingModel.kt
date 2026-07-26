@@ -39,6 +39,26 @@ internal sealed interface BridgeType {
   ) : BridgeType
 
   /**
+   * ADR-040: a Kotlin interface returned or accepted at an ordinary position. Wire-identical to
+   * [ObjectHandle] (POINTER, STABLE_REF_TO_HANDLE/HANDLE_TO_STABLE_REF, OWNED_HANDLE +
+   * DISPOSE_STABLE_REF for a result), differing only in the two places where the *public C#
+   * spelling* ([csharpType], the projected interface `IFoo`) and the *construction expression*
+   * ([backingType], the generated concrete handle-backed wrapper `Foo`) diverge.
+   *
+   * @param qualifiedName Kotlin FQCN of the interface declaration.
+   * @param csharpType the public C# interface spelling (`IPet`, or `global::Namespace.IPet` for an
+   *   admitted dependency-module interface), mirroring [ObjectHandle.csharpType]'s qualification
+   *   rule.
+   * @param backingType the generated concrete wrapper class spelling (`Pet`, or
+   *   `global::Namespace.Pet`) used only in construction expressions (`new Pet(handle)`).
+   */
+  data class Interface(
+    val qualifiedName: kotlin.String,
+    val csharpType: kotlin.String = "I${qualifiedName.substringAfterLast('.')}",
+    val backingType: kotlin.String = qualifiedName.substringAfterLast('.'),
+  ) : BridgeType
+
+  /**
    * @param underlyingPropertyName the value class's single primary-constructor parameter name,
    *   needed to unbox a value-class *result* at an ordinary (non-value-class-own) position: e.g.
    *   `Newsroom.code(): StoryCode` must call `.value` on the computed `StoryCode` before crossing
@@ -369,7 +389,7 @@ internal object ForwardCallablePlanValidator {
   private fun validateType(type: BridgeType, position: String) {
     when (type) {
       BridgeType.Unit, BridgeType.Char, BridgeType.String, is BridgeType.Primitive, is BridgeType.Enum,
-      is BridgeType.ObjectHandle,
+      is BridgeType.ObjectHandle, is BridgeType.Interface,
         -> Unit
 
       is BridgeType.ValueClass -> validateType(type.underlying, "$position value-class underlying type")
@@ -423,7 +443,7 @@ internal object ForwardCallablePlanValidator {
       ForwardConversion.ENUM_TO_ORDINAL
     }
 
-    is BridgeType.ObjectHandle -> if (flow == ForwardFlow.INTO_KOTLIN) {
+    is BridgeType.ObjectHandle, is BridgeType.Interface -> if (flow == ForwardFlow.INTO_KOTLIN) {
       ForwardConversion.HANDLE_TO_STABLE_REF
     } else {
       ForwardConversion.STABLE_REF_TO_HANDLE

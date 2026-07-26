@@ -10,6 +10,9 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallablePla
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallablePlanCatalog
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCirPlanProjection
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCirPropertyProjection
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnostic
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnosticKind
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnosticSink
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardPropertyPlan
 import io.github.xxfast.kotlin.native.nuget.processor.forward.planFor
 import io.github.xxfast.kotlin.native.nuget.processor.toCName
@@ -48,6 +51,10 @@ internal fun translate(
   valueClasses: List<KSClassDeclaration> = emptyList(),
   suspendFunctions: List<KSFunctionDeclaration> = emptyList(),
   callableCatalog: ForwardCallablePlanCatalog = ForwardCallablePlanCatalog(emptyList()),
+  // ADR-040: the reachability-driven subset of [interfaces] that appears in a planned return
+  // position, and therefore gets a concrete `sealed class Foo : IFoo` backing wrapper plus
+  // `foo_*` dispatch exports alongside the unconditional `IFoo` declaration.
+  interfaceBackingClasses: List<KSClassDeclaration> = emptyList(),
 ): CirFile {
   val (genericClasses, regularClasses) = classes.partition { it.typeParameters.isNotEmpty() }
 
@@ -93,7 +100,19 @@ internal fun translate(
       it.simpleName.asString() == fileClassName && namespaceOf(it.packageName.asString()) == namespace
     }
 
-    return if (conflictsWithClass || conflictsWithSealed) "${fileClassName}Kt" else fileClassName
+    // ADR-040: a reachable interface's generated backing class (`Pet`) is exactly as real a
+    // static-class-name conflict as an ordinary class/sealed-class — e.g. `Pet.kt`'s top-level
+    // `strayPet()` would otherwise collide with the backing wrapper for `interface Pet`, both
+    // named "Pet" in the same namespace.
+    val conflictsWithInterfaceBackingClass: Boolean = interfaceBackingClasses.any {
+      it.simpleName.asString() == fileClassName && namespaceOf(it.packageName.asString()) == namespace
+    }
+
+    return if (conflictsWithClass || conflictsWithSealed || conflictsWithInterfaceBackingClass) {
+      "${fileClassName}Kt"
+    } else {
+      fileClassName
+    }
   }
 
   val namespaces: MutableList<CirNamespace> = mutableListOf()
@@ -199,6 +218,52 @@ internal fun translate(
     namespaces.addDeclaration(
       namespaceOf(iface.packageName.asString()),
       translateInterface(iface, context.libraryName, logger),
+    )
+  }
+
+  // ADR-040: name collision, "not currently handled" per the ADR's Breaking-changes section — a
+  // Kotlin interface `Pet` whose generated backing class `Pet` clashes with an existing C# type
+  // in the same namespace (a class/object/enum/value-class/sealed-class also named `Pet`) must
+  // fail fast rather than emit ambiguous code, mirroring the existing
+  // ERROR_CSHARP_SIGNATURE_COLLISION style (`CirClassTranslator.kt`'s duplicate-constructor check).
+  val existingTypeNamesByNamespace: MutableMap<String, MutableSet<String>> = mutableMapOf()
+  fun recordExistingTypeName(pkg: String, simpleName: String) {
+    existingTypeNamesByNamespace.getOrPut(namespaceOf(pkg)) { mutableSetOf() }.add(simpleName)
+  }
+  (regularClasses + genericClasses + valueClasses + enums + objects).forEach { decl ->
+    recordExistingTypeName(decl.packageName.asString(), decl.simpleName.asString())
+  }
+  sealedClasses.forEach { sealed ->
+    recordExistingTypeName(sealed.packageName.asString(), sealed.simpleName.asString())
+    sealed.getSealedSubclasses().forEach { sub ->
+      recordExistingTypeName(sub.packageName.asString(), sub.simpleName.asString())
+    }
+  }
+
+  interfaceBackingClasses.forEach { iface ->
+    val namespace: String = namespaceOf(iface.packageName.asString())
+    val backingName: String = iface.simpleName.asString()
+    val collides: Boolean = existingTypeNamesByNamespace[namespace]?.contains(backingName) == true
+    if (collides) {
+      ForwardDiagnosticSink.emit(
+        listOf(
+          ForwardDiagnostic(
+            kind = ForwardDiagnosticKind.ERROR_CSHARP_SIGNATURE_COLLISION,
+            symbol = iface,
+            declaration = backingName,
+            reason = "the generated interface backing class '$backingName' collides with an " +
+                "existing C# type of the same name in namespace '$namespace' (ADR-040)",
+            hint = "rename the Kotlin interface, or the colliding declaration, so the generated " +
+                "backing class name is unique",
+          ),
+        ),
+        logger,
+      )
+      return@forEach
+    }
+    namespaces.addDeclaration(
+      namespace,
+      translateInterfaceBackingClass(iface, context.libraryName, callableCatalog, tracker),
     )
   }
 

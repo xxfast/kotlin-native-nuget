@@ -57,6 +57,10 @@ data class CirClass(
   val hasInternalHandleConstructor: Boolean = true,
   val isDataClass: Boolean = false,
   val isAbstract: Boolean = false,
+  // ADR-040: true for the generated interface backing wrapper (`sealed class Pet : IPet`) — no
+  // public constructor, and the `sealed` modifier communicates that consumers should implement
+  // `IPet` rather than subclass this handle wrapper.
+  val isSealed: Boolean = false,
   val companionMembers: List<CirMember> = emptyList(),
   val hasSuspendMethods: Boolean = false,
 ) : CirDeclaration
@@ -303,6 +307,13 @@ data class CirMethod(
   val isStatic: Boolean = false,
   val isAbstract: Boolean = false,
   val isOverride: Boolean = false,
+  // ADR-040 fixture gap: a class method that implements an interface member (no CLASS supertype,
+  // so `isOverride` is false) but whose Kotlin `override` is not `final` is open for further
+  // override by a subclass (Kotlin's default: an `override` member stays open unless marked
+  // `final`) — Animal.fetch(item) implementing Pet.fetch, further overridden by Cat.fetch, is
+  // exactly this shape. C# requires the base declaration to say `virtual` for that subclass
+  // `override` to compile (CS0506 otherwise).
+  val isVirtual: Boolean = false,
   val isExtension: Boolean = false,
   val typeParameters: List<CirTypeParameter> = emptyList(),
   val isAsync: Boolean = false,
@@ -354,6 +365,12 @@ data class CirProperty(
   val setter: String? = null,
   val extraNatives: List<CirExtraNative> = emptyList(),
   val isStatic: Boolean = false,
+  // ADR-040 fixture gap: the property-side twin of [CirMethod.isOverride]/[CirMethod.isVirtual] —
+  // a property never carried either concept before this feature, because no prior fixture had a
+  // class property implementing an interface member and then a subclass overriding it again
+  // (Cat.Nickname overriding Animal.Nickname's implementation of Pet.nickname).
+  val isOverride: Boolean = false,
+  val isVirtual: Boolean = false,
   val isFlow: Boolean = false,
   // ADR-065: true when this is a StateFlow (or read-only MutableStateFlow view) property. Reuses
   // isFlow's whole legacy route (the _collect export + KotlinFlow substrate) and additionally

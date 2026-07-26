@@ -88,7 +88,7 @@ class ForwardMarshallingMatrixTest {
     ForwardFlow.INTO_KOTLIN -> when (type) {
       is BridgeType.Primitive, BridgeType.Char, BridgeType.String, is BridgeType.Enum,
       is BridgeType.ObjectHandle,
-      -> true
+        -> true
 
       is BridgeType.Collection ->
         type.kind == CollectionKind.LIST || type.kind == CollectionKind.MUTABLE_LIST
@@ -642,6 +642,7 @@ class ForwardMarshallingMatrixTest {
     BridgeType.String -> "String"
     is BridgeType.Enum -> "Enum"
     is BridgeType.ObjectHandle -> "ObjectHandle"
+    is BridgeType.Interface -> "Interface"
     is BridgeType.ValueClass -> "ValueClass"
     is BridgeType.Collection -> "Collection(${type.kind})"
     is BridgeType.Nullable -> "Nullable(${typeLabel(type.type)})"

@@ -7,6 +7,27 @@ class Cat(
   var brother: Cat? = null
   var owner: String? = null
   var age: Int? = null
+
+  // ADR-040: interface-typed return/parameter positions.
+  override val nickname: String? = "${name}y" // the "present" branch; Animal's default is null
+  override fun fetch(item: String): String = "$name fetches the $item"
+
+  /** Nullable interface-typed property, both get and set. */
+  var friend: Pet? = null
+
+  /** Interface-typed parameter: only accepts a Kotlin-backed `Pet` in v1 (ADR-040 sub-decision B). */
+  fun befriend(pet: Pet) {
+    friend = pet
+  }
+
+  /** Non-null interface-typed method return. */
+  fun closestFriend(): Pet = friend ?: this
+
+  /** Nullable interface-typed method return. */
+  fun maybeFriend(): Pet? = friend
+
+  /** Non-null interface-typed property. */
+  val self: Pet get() = this
   var mood: Mood = Mood.SLEEPY
   val nicknames: List<String> = listOf("${name}y", "Little $name")
   val toys: List<Toy> = listOf(Toy("Mouse", "Gray"), Toy("Ball", "Red"))
