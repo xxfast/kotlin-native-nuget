@@ -6,6 +6,8 @@ import io.github.xxfast.kotlin.native.nuget.rir.RirClass
 import io.github.xxfast.kotlin.native.nuget.rir.RirConstructor
 import io.github.xxfast.kotlin.native.nuget.rir.RirEnumType
 import io.github.xxfast.kotlin.native.nuget.rir.RirFile
+import io.github.xxfast.kotlin.native.nuget.rir.RirInterface
+import io.github.xxfast.kotlin.native.nuget.rir.RirInterfaceType
 import io.github.xxfast.kotlin.native.nuget.rir.RirMethod
 import io.github.xxfast.kotlin.native.nuget.rir.RirObjectHandleType
 import io.github.xxfast.kotlin.native.nuget.rir.RirParameter
@@ -23,7 +25,9 @@ import io.github.xxfast.kotlin.native.nuget.rir.abiArgs
 import io.github.xxfast.kotlin.native.nuget.rir.abiOutArgs
 import io.github.xxfast.kotlin.native.nuget.rir.abiReturnType
 import io.github.xxfast.kotlin.native.nuget.rir.boundHandleTypes
+import io.github.xxfast.kotlin.native.nuget.rir.boundInterfaceTypes
 import io.github.xxfast.kotlin.native.nuget.rir.boundStructTypes
+import io.github.xxfast.kotlin.native.nuget.rir.bridgeableInterfaceRegistrables
 import io.github.xxfast.kotlin.native.nuget.rir.bridgeableRegistrables
 import io.github.xxfast.kotlin.native.nuget.rir.bridgeId
 import io.github.xxfast.kotlin.native.nuget.rir.bridgeableStructRegistrables
@@ -65,6 +69,8 @@ fun generateCSharpShims(file: RirFile, nativeLibraryName: String): List<Generate
 
   // ADR-051: derive once for the whole file — same helper as generateKotlinStubs (anti-drift).
   val boundTypes: Set<RirTypeKey> = boundHandleTypes(file)
+  // ADR-070: same anti-drift pattern.
+  val boundIfaces: Map<RirTypeKey, RirInterface> = boundInterfaceTypes(file)
   // ADR-056: same anti-drift pattern — both this task and NugetGenerateBindingsTask resolve a
   // RirStructType reference's component list through this map.
   val structs: Map<RirTypeKey, RirStruct> = boundStructTypes(file)
@@ -91,7 +97,8 @@ fun generateCSharpShims(file: RirFile, nativeLibraryName: String): List<Generate
         // then bridgeable static methods) that NugetGenerateBindingsTask derives its register
         // signature/body from — anti-drift for the DllImport params / ModuleInitializer args
         // below.
-        val registrables: List<RirRegistrable> = bridgeableRegistrables(cls, boundTypes, structs)
+        val registrables: List<RirRegistrable> =
+          bridgeableRegistrables(cls, boundTypes, structs, boundIfaces)
 
         if (registrables.isEmpty()) return@forEach
 
@@ -126,6 +133,35 @@ fun generateCSharpShims(file: RirFile, nativeLibraryName: String): List<Generate
               exportName = exportName,
               nativeLibraryName = nativeLibraryName,
               structs = structs,
+            ),
+          )
+        )
+      }
+
+      // ADR-070 Decision 2: one registration export/shim per admissible interface, structurally
+      // identical to a class's but with NO constructor slot and ONLY the interface's OWN
+      // registrables (Decision 5's handle-agnostic dispatch means a derived interface never
+      // re-registers a base interface's members).
+      namespace.types.filterIsInstance<RirInterface>().forEach { iface ->
+        val registrables: List<RirRegistrable> =
+          bridgeableInterfaceRegistrables(iface, boundTypes, boundIfaces)
+        if (registrables.isEmpty()) return@forEach
+
+        // ADR-070: an interface member always has a receiver (Decision 6 excludes statics), so
+        // every admissible interface needs the shared GCHandle-free runtime, same as a class with
+        // any instance member.
+        needsRuntime = true
+
+        val exportName: String = registrationExportName(namespace.name, iface.name)
+        result.add(
+          GeneratedFile(
+            relativePath = "${iface.name}Registration.cs",
+            content = interfaceRegistrationFileContent(
+              namespaceName = namespace.name,
+              iface = iface,
+              registrables = registrables,
+              exportName = exportName,
+              nativeLibraryName = nativeLibraryName,
             ),
           )
         )
@@ -167,6 +203,8 @@ private fun csAbiType(type: RirTypeRef): String = when (type) {
   is RirVoidType -> "void"
   is RirStringType -> "IntPtr"
   is RirObjectHandleType -> "IntPtr"
+  // ADR-070 Decision 1: wire-identical to a handle (IntPtr from GCHandle.ToIntPtr).
+  is RirInterfaceType -> "IntPtr"
   is RirEnumType -> "int"
   // ADR-056: a struct never reaches csAbiType directly — every call site expands it via
   // abiArgs/abiOutArgs (whose AbiArg.type is always scalar) before asking for an ABI type.
@@ -198,6 +236,10 @@ private fun csNativeType(type: RirTypeRef): String = when (type) {
   is RirStringType -> "string"
   // ADR-051: the natural C# type for a handle is the simple type name (e.g. Template).
   is RirObjectHandleType -> type.name
+  // ADR-070: on the C# side an interface reference IS the C# interface itself — no distinction
+  // from a handle beyond the type name (the generated shim never sees "Handle"; that suffix is
+  // Kotlin-only, ADR-070 Decision 3).
+  is RirInterfaceType -> type.name
   is RirEnumType -> type.name
   // ADR-056: the natural C# type for a struct is its own simple type name (e.g. Point) — used for
   // the `Point result = ...;` local the struct-return thunk branch declares before writing each
@@ -236,6 +278,13 @@ private fun csReturnConversion(type: RirTypeRef, valueExpr: String): String = wh
         "csReturnConversion"
   )
 
+  // ADR-070: same null-check-then-GCHandle.Alloc shape as a handle return — see callBodyLines'
+  // RirInterfaceType branch, not csReturnConversion.
+  is RirInterfaceType -> error(
+    "[nuget] interface returns have their own null-check shape — see callBodyLines, not " +
+        "csReturnConversion"
+  )
+
   is RirEnumType -> "(int)$valueExpr"
   // ADR-059: csReturnConversion is only ever called on a LEAF (scalar) type — structOutWrites
   // recurses through a struct-typed component itself, before any of ITS OWN components reach this
@@ -264,6 +313,7 @@ private fun String.toMethodCamelCase(): String = replaceFirstChar { it.lowercase
 private fun thunkParamName(p: RirParameter): String = when (p.type) {
   is RirStringType -> "${p.name}Ptr"
   is RirObjectHandleType -> "${p.name}Handle"
+  is RirInterfaceType -> "${p.name}Handle"
   // ADR-056: a struct-typed parameter never reaches thunkParamName — its thunk-level parameter
   // NAMES are the shared abiArgs() expansion's own AbiArg.name (e.g. "p_X", "p_Y"), built directly
   // in buildThunkMethod's inParamDecls, not derived from a single RirParameter.
@@ -284,6 +334,11 @@ private fun paramConversion(p: RirParameter): String = when (p.type) {
     else "Marshal.PtrToStringUTF8(${thunkParamName(p)})!"
   // ADR-051: unpack the handle back to the managed type via GCHandle.FromIntPtr.
   is RirObjectHandleType -> "(${p.type.name})GCHandle.FromIntPtr(${thunkParamName(p)}).Target!"
+  // ADR-070: an interface parameter unpacks identically — GCHandle.FromIntPtr's Target is the
+  // real runtime object, cast to the interface type; the CLR dispatches virtually from there
+  // (verified: interface dispatch through a thunk needs no bound, public, or even named runtime
+  // type on the Kotlin side).
+  is RirInterfaceType -> "(${p.type.name})GCHandle.FromIntPtr(${thunkParamName(p)}).Target!"
   is RirEnumType -> "(${p.type.name})${thunkParamName(p)}"
   is RirVoidType -> thunkParamName(p)
   // ADR-056: a struct-typed parameter is reconstructed via `new T(...)` in paramBinding, which
@@ -406,6 +461,19 @@ private fun paramBinding(p: RirParameter, structs: Map<RirTypeKey, RirStruct>): 
     )
   }
   if (type is RirObjectHandleType && type.nullable) {
+    val handleName: String = thunkParamName(p)
+    return ParamBinding(
+      declarationLines = listOf(
+        "${type.name}? ${p.name} = $handleName == IntPtr.Zero",
+        "    ? null",
+        "    : (${type.name})GCHandle.FromIntPtr($handleName).Target!;",
+      ),
+      expression = p.name,
+    )
+  }
+  // ADR-070: a nullable interface parameter needs the same IntPtr.Zero guard as a nullable
+  // handle parameter — see the branch above.
+  if (type is RirInterfaceType && type.nullable) {
     val handleName: String = thunkParamName(p)
     return ParamBinding(
       declarationLines = listOf(
@@ -679,6 +747,280 @@ private fun registrationFileContent(
   """.trimMargin()
 }
 
+// ADR-070 Decision 2: `{Name}Registration.cs` — an interface's own registration export/shim,
+// structurally identical to a class's (registrationFileContent) but with no constructor slot (an
+// interface has none) and every thunk's receiver cast to the INTERFACE itself, not any concrete
+// class — the exact mechanism verified in the ADR's spike: a thunk may dispatch through any
+// interface, including to a runtime type it never names.
+private fun interfaceRegistrationFileContent(
+  namespaceName: String,
+  iface: RirInterface,
+  registrables: List<RirRegistrable>,
+  exportName: String,
+  nativeLibraryName: String,
+): String {
+  val enumNamespaces: List<String> = registrables.flatMap { r ->
+    when (r) {
+      is RirRegistrable.Method -> listOfNotNull(r.method.returnType as? RirEnumType) +
+          r.method.parameters.mapNotNull { it.type as? RirEnumType }
+
+      is RirRegistrable.PropertyGetter -> listOfNotNull(r.property.type as? RirEnumType)
+      is RirRegistrable.PropertySetter -> listOfNotNull(r.property.type as? RirEnumType)
+      is RirRegistrable.Ctor -> error("[nuget] an interface never has a constructor (ADR-070)")
+    }
+  }.map { it.namespace }.distinct().filter { it != namespaceName }
+
+  val usings: String = (
+      listOf(
+        "System", "System.Runtime.CompilerServices", "System.Runtime.InteropServices",
+        "IoGithubXxfast.KotlinNativeNuget",
+      ) + enumNamespaces
+      ).joinToString("\n") { "    using $it;" }
+
+  val slotCount: Int = registrables.size
+  val hash: Long = contractHash(iface.name, registrables, emptyMap())
+  val qualifiedType = "$namespaceName.${iface.name}"
+  val slotWord: String = if (slotCount == 1) "slot" else "slots"
+
+  val registrableParams: String = registrables.joinToString(", ") { r ->
+    when (r) {
+      is RirRegistrable.Method ->
+        "IntPtr ${r.method.name.toMethodCamelCase()}${r.method.bridgeSuffix()}Ptr"
+
+      is RirRegistrable.PropertyGetter -> "IntPtr ${r.property.name.toMethodCamelCase()}GetterPtr"
+      is RirRegistrable.PropertySetter -> "IntPtr ${r.property.name.toMethodCamelCase()}SetterPtr"
+      is RirRegistrable.Ctor -> error("[nuget] an interface never has a constructor (ADR-070)")
+    }
+  }
+  val dllImportParams = "int slotCount, long contractHash, $registrableParams"
+
+  val moduleInitArgs: String = (listOf("$slotCount", "${hash}L") + registrables.map { r ->
+    when (r) {
+      is RirRegistrable.Method -> {
+        val inTypes: List<String> = r.method.parameters.map { csAbiType(it.type) }
+        val paramTypes: String = (listOf("IntPtr") + inTypes).joinToString(", ")
+        val retType: String = csAbiType(r.method.returnType)
+        "(IntPtr)(delegate* unmanaged[Cdecl]<$paramTypes, $retType>)" +
+            "(&${r.method.name}${r.method.bridgeSuffix()}_Thunk)"
+      }
+
+      is RirRegistrable.PropertyGetter -> {
+        val retType: String = csAbiType(r.property.type)
+        "(IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, $retType>)(&${r.property.name}_Get_Thunk)"
+      }
+
+      is RirRegistrable.PropertySetter -> {
+        val valType: String = csAbiType(r.property.type)
+        "(IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, $valType, void>)" +
+            "(&${r.property.name}_Set_Thunk)"
+      }
+
+      is RirRegistrable.Ctor -> error("[nuget] an interface never has a constructor (ADR-070)")
+    }
+  }).joinToString(",\n                    ")
+
+  val thunks: String = registrables.joinToString("\n\n") { r ->
+    when (r) {
+      is RirRegistrable.Method -> buildInterfaceThunkMethod(iface, r.method)
+      is RirRegistrable.PropertyGetter -> buildInterfacePropertyGetterThunk(iface, r.property)
+      is RirRegistrable.PropertySetter -> buildInterfacePropertySetterThunk(iface, r.property)
+      is RirRegistrable.Ctor -> error("[nuget] an interface never has a constructor (ADR-070)")
+    }
+  }
+
+  return """
+    |// <auto-generated>
+    |// Generated by nugetGenerateShims from reverse-ir.json (ADR-070). Do not edit by hand.
+    |// C# registration shim for $namespaceName.${iface.name}.
+    |// </auto-generated>
+    |#nullable enable
+    |
+    |namespace $namespaceName
+    |{
+    |$usings
+    |
+    |    internal static class ${iface.name}Registration
+    |    {
+    |        [DllImport("$nativeLibraryName", CallingConvention = CallingConvention.Cdecl,
+    |            EntryPoint = "$exportName")]
+    |        private static extern void $exportName($dllImportParams);
+    |
+    |        [ModuleInitializer]
+    |        internal static unsafe void Initialize()
+    |        {
+    |            NugetTrace.Write(
+    |                "register enter $qualifiedType -> $exportName($slotCount $slotWord) dll=$nativeLibraryName");
+    |            try
+    |            {
+    |                $exportName(
+    |                    $moduleInitArgs);
+    |            }
+    |            catch (DllNotFoundException e)
+    |            {
+    |                NugetTrace.WriteAlways(${'$'}"FATAL: native library '$nativeLibraryName' not found: {e.Message}");
+    |                throw;
+    |            }
+    |            catch (EntryPointNotFoundException e)
+    |            {
+    |                NugetTrace.WriteAlways(${'$'}"FATAL: export '$exportName' missing from " +
+    |                    ${'$'}"'$nativeLibraryName'. The native library predates this shim (stale build state). {e.Message}");
+    |                throw;
+    |            }
+    |            NugetTrace.Write("register ok    $qualifiedType");
+    |        }
+    |
+    |$thunks
+    |    }
+    |}
+  """.trimMargin()
+}
+
+// ADR-070: an interface thunk is a class thunk (buildThunkMethod) restricted to Decision 6's v1
+// vocabulary (no statics, no structs) — the receiver casts to the INTERFACE, not any concrete
+// class (verified: dispatch through a thunk needs no bound, public, or even named runtime type).
+private fun buildInterfaceThunkMethod(iface: RirInterface, method: RirMethod): String {
+  val thunkName = "${method.name}${method.bridgeSuffix()}_Thunk"
+  val paramBindings: List<ParamBinding> = method.parameters.map { paramBinding(it, emptyMap()) }
+  val paramDeclarationLines: List<String> = paramBindings.flatMap { it.declarationLines }
+  val callArgs: String = paramBindings.joinToString(", ") { it.expression }
+  val receiverLine: String =
+    "${iface.name} receiver = (${iface.name})GCHandle.FromIntPtr(selfHandle).Target!;"
+  val callExpr = "receiver.${method.name}($callArgs)"
+  val inParamDecls: List<String> = method.parameters.map { p ->
+    "${csAbiType(p.type)} ${thunkParamName(p)}"
+  }
+  val paramList: String = (listOf("IntPtr selfHandle") + inParamDecls).joinToString(", ")
+  val retAbiType: String = csAbiType(method.returnType)
+
+  val callBodyLines: List<String> = when (val retType: RirTypeRef = method.returnType) {
+    is RirVoidType -> listOf("$callExpr;")
+    is RirStringType -> listOf(
+      "${if (retType.isNullable) "string?" else "string"} result = $callExpr;",
+      "return ${csReturnConversion(retType, "result")};",
+    )
+
+    is RirObjectHandleType -> listOf(
+      "${csNativeType(retType)}? result = $callExpr;",
+      "return result is null ? IntPtr.Zero : GCHandle.ToIntPtr(GCHandle.Alloc(result));",
+    )
+
+    is RirInterfaceType -> listOf(
+      "${csNativeType(retType)}? result = $callExpr;",
+      "return result is null ? IntPtr.Zero : GCHandle.ToIntPtr(GCHandle.Alloc(result));",
+    )
+
+    is RirEnumType -> listOf(
+      "${csNativeType(retType)} result = $callExpr;",
+      "return ${csReturnConversion(retType, "result")};",
+    )
+
+    is RirPrimitiveType -> when (retType.name) {
+      "bool" -> listOf(
+        "bool result = $callExpr;",
+        "return ${csReturnConversion(retType, "result")};",
+      )
+
+      "char" -> listOf(
+        "char result = $callExpr;",
+        "return ${csReturnConversion(retType, "result")};",
+      )
+
+      else -> listOf("${csNativeType(retType)} result = $callExpr;", "return result;")
+    }
+
+    is RirStructType -> error(
+      "[nuget] struct-typed interface members are out of scope (ADR-070 v1)",
+    )
+  }
+
+  val bodyLines: List<String> = listOf(receiverLine) + paramDeclarationLines + callBodyLines
+  val body: String = bodyLines.joinToString("\n") { "            $it" }
+
+  // ADR-049 "let it crash" (unchanged for interfaces): no try/catch.
+  return """
+    |        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+    |        private static $retAbiType $thunkName($paramList)
+    |        {
+    |$body
+    |        }
+  """.trimMargin()
+}
+
+private fun buildInterfacePropertyGetterThunk(iface: RirInterface, property: RirProperty): String {
+  val thunkName = "${property.name}_Get_Thunk"
+  val receiverLine: String =
+    "${iface.name} receiver = (${iface.name})GCHandle.FromIntPtr(selfHandle).Target!;"
+  val getExpr = "receiver.${property.name}"
+  val retAbiType: String = csAbiType(property.type)
+
+  val bodyLines: List<String> = when (val type: RirTypeRef = property.type) {
+    is RirVoidType -> error("[nuget] a property cannot have void type")
+    is RirStringType -> listOf(
+      "${if (type.isNullable) "string?" else "string"} result = $getExpr;",
+      "return ${csReturnConversion(type, "result")};",
+    )
+
+    is RirObjectHandleType -> listOf(
+      "${csNativeType(type)}? result = $getExpr;",
+      "return result is null ? IntPtr.Zero : GCHandle.ToIntPtr(GCHandle.Alloc(result));",
+    )
+
+    is RirInterfaceType -> listOf(
+      "${csNativeType(type)}? result = $getExpr;",
+      "return result is null ? IntPtr.Zero : GCHandle.ToIntPtr(GCHandle.Alloc(result));",
+    )
+
+    is RirEnumType -> listOf(
+      "${csNativeType(type)} result = $getExpr;",
+      "return ${csReturnConversion(type, "result")};",
+    )
+
+    is RirPrimitiveType -> when (type.name) {
+      "bool" -> listOf("bool result = $getExpr;", "return ${csReturnConversion(type, "result")};")
+      "char" -> listOf("char result = $getExpr;", "return ${csReturnConversion(type, "result")};")
+      else -> listOf("${csNativeType(type)} result = $getExpr;", "return result;")
+    }
+
+    is RirStructType -> error(
+      "[nuget] struct-typed interface members are out of scope (ADR-070 v1)",
+    )
+  }
+
+  val body: String =
+    (listOf(receiverLine) + bodyLines).joinToString("\n") { "            $it" }
+
+  // ADR-049 "let it crash" (unchanged for interfaces): no try/catch.
+  return """
+    |        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+    |        private static $retAbiType $thunkName(IntPtr selfHandle)
+    |        {
+    |$body
+    |        }
+  """.trimMargin()
+}
+
+private fun buildInterfacePropertySetterThunk(iface: RirInterface, property: RirProperty): String {
+  val thunkName = "${property.name}_Set_Thunk"
+  val valueParam = RirParameter(name = "value", type = property.type)
+  val receiverLine: String =
+    "${iface.name} receiver = (${iface.name})GCHandle.FromIntPtr(selfHandle).Target!;"
+  val assignTarget = "receiver.${property.name}"
+  val valueBinding: ParamBinding = paramBinding(valueParam, emptyMap())
+  val assignLine = "$assignTarget = ${valueBinding.expression};"
+  val body: String = (listOf(receiverLine) + valueBinding.declarationLines + assignLine)
+    .joinToString("\n") { "            $it" }
+  val paramList = "IntPtr selfHandle, ${csAbiType(property.type)} ${thunkParamName(valueParam)}"
+
+  // ADR-049 "let it crash" (unchanged for interfaces): no try/catch.
+  return """
+    |        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+    |        private static void $thunkName($paramList)
+    |        {
+    |$body
+    |        }
+  """.trimMargin()
+}
+
 private fun buildThunkMethod(
   cls: RirClass,
   method: RirMethod,
@@ -753,6 +1095,14 @@ private fun buildThunkMethod(
     // C# API claims the return is never null — a lying API becomes a clear Kotlin-side
     // IllegalStateException instead of a crash deep in some later thunk.
     is RirObjectHandleType -> listOf(
+      "${csNativeType(retType)}? result = $callExpr;",
+      "return result is null ? IntPtr.Zero : GCHandle.ToIntPtr(GCHandle.Alloc(result));",
+    )
+
+    // ADR-070 Decision 1: byte-identical to the handle-return branch above — GCHandle.Alloc works
+    // on any interface-typed reference exactly as it does on a class reference (verified: interface
+    // dispatch through a thunk needs no bound, public, or even named runtime type).
+    is RirInterfaceType -> listOf(
       "${csNativeType(retType)}? result = $callExpr;",
       "return result is null ? IntPtr.Zero : GCHandle.ToIntPtr(GCHandle.Alloc(result));",
     )
@@ -857,6 +1207,12 @@ private fun buildPropertyGetterThunkMethod(
     // property returns null, return IntPtr.Zero — identical for both a nullable- and a non-null-
     // annotated property, same rationale as buildThunkMethod's handle-return branch above.
     is RirObjectHandleType -> listOf(
+      "${csNativeType(type)}? result = $getExpr;",
+      "return result is null ? IntPtr.Zero : GCHandle.ToIntPtr(GCHandle.Alloc(result));",
+    )
+
+    // ADR-070: byte-identical to the handle-property branch above.
+    is RirInterfaceType -> listOf(
       "${csNativeType(type)}? result = $getExpr;",
       "return result is null ? IntPtr.Zero : GCHandle.ToIntPtr(GCHandle.Alloc(result));",
     )
@@ -1202,6 +1558,10 @@ private fun buildStructMethodThunk(
     is RirObjectHandleType -> error(
       "[nuget] handle returns on struct methods are out of scope (ADR-056 deferred)",
     )
+
+    is RirInterfaceType -> error(
+      "[nuget] interface returns on struct methods are out of scope (ADR-070 v1)",
+    )
   }
 
   val bodyLines: List<String> = paramDeclarationLines + callBodyLines
@@ -1274,6 +1634,10 @@ private fun buildStructPropertyGetterThunk(
 
     is RirObjectHandleType -> error(
       "[nuget] handle-typed computed properties on structs are out of scope (ADR-056 deferred)",
+    )
+
+    is RirInterfaceType -> error(
+      "[nuget] interface-typed computed properties on structs are out of scope (ADR-070 v1)",
     )
   }
 

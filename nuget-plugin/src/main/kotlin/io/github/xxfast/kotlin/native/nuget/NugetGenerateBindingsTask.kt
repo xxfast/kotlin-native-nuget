@@ -9,6 +9,8 @@ import io.github.xxfast.kotlin.native.nuget.rir.RirDiagnosticKind
 import io.github.xxfast.kotlin.native.nuget.rir.RirEnum
 import io.github.xxfast.kotlin.native.nuget.rir.RirEnumType
 import io.github.xxfast.kotlin.native.nuget.rir.RirFile
+import io.github.xxfast.kotlin.native.nuget.rir.RirInterface
+import io.github.xxfast.kotlin.native.nuget.rir.RirInterfaceType
 import io.github.xxfast.kotlin.native.nuget.rir.RirMethod
 import io.github.xxfast.kotlin.native.nuget.rir.RirObjectHandleType
 import io.github.xxfast.kotlin.native.nuget.rir.RirParameter
@@ -27,14 +29,19 @@ import io.github.xxfast.kotlin.native.nuget.rir.abiOutArgs
 import io.github.xxfast.kotlin.native.nuget.rir.abiReturnType
 import io.github.xxfast.kotlin.native.nuget.rir.arityLimitDiagnostics
 import io.github.xxfast.kotlin.native.nuget.rir.boundHandleTypes
+import io.github.xxfast.kotlin.native.nuget.rir.boundInterfaceTypes
 import io.github.xxfast.kotlin.native.nuget.rir.boundStructTypes
+import io.github.xxfast.kotlin.native.nuget.rir.bridgeableInterfaceRegistrables
 import io.github.xxfast.kotlin.native.nuget.rir.bridgeableRegistrables
 import io.github.xxfast.kotlin.native.nuget.rir.bridgeId
 import io.github.xxfast.kotlin.native.nuget.rir.bridgeableStructRegistrables
 import io.github.xxfast.kotlin.native.nuget.rir.bridgeSuffix
+import io.github.xxfast.kotlin.native.nuget.rir.classInterfaceSupertypes
 import io.github.xxfast.kotlin.native.nuget.rir.collisionDiagnostics
 import io.github.xxfast.kotlin.native.nuget.rir.contractHash
+import io.github.xxfast.kotlin.native.nuget.rir.interfaceBaseKeys
 import io.github.xxfast.kotlin.native.nuget.rir.isNullable
+import io.github.xxfast.kotlin.native.nuget.rir.parseInterfaceRef
 import io.github.xxfast.kotlin.native.nuget.rir.parseReverseIr
 import io.github.xxfast.kotlin.native.nuget.rir.registrationExportName
 import io.github.xxfast.kotlin.native.nuget.rir.structArityLimitDiagnostics
@@ -111,6 +118,23 @@ private fun structPackages(
   }
 }.toMap()
 
+// ADR-070: the interface equivalent of enumPackages/structPackages above — every admissible,
+// bound interface declared anywhere in the RirFile, mapped to the Kotlin package its generated
+// `interface`/`{Name}Handle` pair is emitted into.
+private fun interfacePackages(
+  file: RirFile,
+  packageNameOverrides: Map<String, String>,
+  namespaceAliases: Map<String, Map<String, String>>,
+): Map<RirTypeKey, String> = file.assemblies.flatMap { assembly ->
+  assembly.namespaces.flatMap { namespace ->
+    namespace.types.filterIsInstance<RirInterface>().map { iface ->
+      RirTypeKey(namespace.name, iface.name) to kotlinPackage(
+        assembly.packageId, namespace.name, packageNameOverrides, namespaceAliases,
+      )
+    }
+  }
+}.toMap()
+
 // ADR-056/059: does this type reference — either directly, or (if it is a struct) through one of
 // its OWN components, AT ANY NESTING DEPTH — satisfy [predicate]? Every "does this file need X"
 // detector below (needsInterop, needsEnums, hasStringReturn, hasStringParam, hasEnumReturn, ...)
@@ -133,6 +157,13 @@ private fun typeContains(
 
 private fun isStringRef(type: RirTypeRef): Boolean = type is RirStringType
 private fun isEnumRef(type: RirTypeRef): Boolean = type is RirEnumType
+
+// ADR-070: a handle-typed reference and an interface-typed reference (RirInterfaceType) both cross
+// the ABI as the same COpaquePointer? slot and both force NugetRuntime.kt (NugetObjectHandle/
+// Cleaner) to be emitted — shared so the "does this member need a handle" checks below don't
+// duplicate the two-branch `is` check at each call site.
+private fun isHandleLike(type: RirTypeRef): Boolean =
+  type is RirObjectHandleType || type is RirInterfaceType
 
 // ADR-056/059: every enum a struct's OWN components reference, AT ANY NESTING DEPTH — used to
 // widen the `import <pkg>.<Enum>` resolution (enumImports/referencedEnumTypes) beyond top-level
@@ -172,12 +203,17 @@ fun generateKotlinStubs(
   // ADR-051: derive once for the whole file — both generators must use the same helper
   // (anti-drift contract, ADR-049 Alternative 10 extended by ADR-051).
   val boundTypes: Set<RirTypeKey> = boundHandleTypes(file)
+  // ADR-070: derived once for the whole file, same anti-drift pattern.
+  val boundIfaces: Map<RirTypeKey, RirInterface> = boundInterfaceTypes(file)
   val enumPkgs: Map<RirTypeKey, String> =
     enumPackages(file, packageNameOverrides, namespaceAliases)
   // ADR-059: derived once for the whole file, same anti-drift pattern as enumPkgs — a struct's own
   // struct-typed component can be declared in a different Kotlin package (see structImports).
   val structPkgs: Map<RirTypeKey, String> =
     structPackages(file, packageNameOverrides, namespaceAliases)
+  // ADR-070: derived once for the whole file, same anti-drift pattern as structPkgs.
+  val interfacePkgs: Map<RirTypeKey, String> =
+    interfacePackages(file, packageNameOverrides, namespaceAliases)
   // ADR-056: derived once for the whole file, same anti-drift pattern — both this task and
   // NugetGenerateShimsTask resolve a RirStructType reference's component list through this map.
   val structs: Map<RirTypeKey, RirStruct> = boundStructTypes(file)
@@ -250,7 +286,8 @@ fun generateKotlinStubs(
         // per-property getter/[setter] pairs — is the single source of truth both this task and
         // NugetGenerateShimsTask derive their registration-order-sensitive output from. Member-name
         // collisions with the ADR-051 wrapper (handle/close/cleaner) are already excluded here.
-        val registrables: List<RirRegistrable> = bridgeableRegistrables(cls, boundTypes, structs)
+        val registrables: List<RirRegistrable> =
+          bridgeableRegistrables(cls, boundTypes, structs, boundIfaces)
         val ctors: List<RirConstructor> =
           registrables.filterIsInstance<RirRegistrable.Ctor>().map { it.ctor }
         val staticMethods: List<RirMethod> = registrables
@@ -289,14 +326,15 @@ fun generateKotlinStubs(
         // instance method/property at all (both require the receiver `handle` field regardless of
         // whether a handle TYPE appears in any individual signature). Emitted once (below),
         // regardless of how many classes trigger it.
+        // ADR-070: an interface-typed member also forces NugetRuntime.kt — an interface value
+        // wraps in `{Name}Handle`, which needs the same NugetObjectHandle/Cleaner machinery.
         val methodsHaveHandle: Boolean = allMethods.any { method ->
-          method.returnType is RirObjectHandleType ||
-              method.parameters.any { p -> p.type is RirObjectHandleType }
+          isHandleLike(method.returnType) || method.parameters.any { p -> isHandleLike(p.type) }
         }
         val hasInstanceMember: Boolean =
           ctors.isNotEmpty() || instanceMethods.isNotEmpty() || instancePropertyGetters.isNotEmpty()
         val instancePropertiesHaveHandle: Boolean =
-          instancePropertyGetters.any { it.type is RirObjectHandleType }
+          instancePropertyGetters.any { isHandleLike(it.type) }
         val hasHandle: Boolean =
           methodsHaveHandle || hasInstanceMember || instancePropertiesHaveHandle
         if (hasHandle) needsRuntime = true
@@ -323,6 +361,26 @@ fun generateKotlinStubs(
             ),
           )
         )
+        // ADR-070 Decision 5: the interface supertypes this class declares (already filtered to
+        // "maximal" — a redundant base of another declared supertype is dropped), plus every
+        // Kotlin member name (method/property) those supertypes' EFFECTIVE (own + inherited)
+        // members require an `override` modifier for.
+        val supertypeKeys: List<RirTypeKey> = classInterfaceSupertypes(cls, boundIfaces)
+        val supertypeNames: List<String> = supertypeKeys.map { it.name }
+        val effectiveSupertypeMembers: List<OwnedInterfaceMember> = supertypeKeys.flatMap { key ->
+          effectiveInterfaceRegistrables(boundIfaces.getValue(key), boundTypes, boundIfaces)
+        }
+        val overrideMethodNames: Set<String> = effectiveSupertypeMembers
+          .mapNotNull {
+            (it.registrable as? RirRegistrable.Method)?.method?.name?.toMethodCamelCase()
+          }
+          .toSet()
+        val overridePropertyNames: Set<String> = effectiveSupertypeMembers
+          .mapNotNull {
+            (it.registrable as? RirRegistrable.PropertyGetter)?.property?.name?.toMethodCamelCase()
+          }
+          .toSet()
+
         result.add(
           GeneratedFile(
             relativePath = "nativeMain/$pkgPath/${cls.name}.kt",
@@ -330,7 +388,62 @@ fun generateKotlinStubs(
               kotlinPkg, cls, staticMethods, instanceMethods, ctors,
               instancePropertyGetters, staticPropertyGetters, propertySetterNames,
               assembly.packageId, namespace.name, enumPkgs, structPkgs, structs,
-              qualifiedTypeNames,
+              qualifiedTypeNames, supertypeNames, overrideMethodNames, overridePropertyNames,
+            ),
+          )
+        )
+      }
+
+      // ADR-070: an admissible, bound interface always emits its pure `interface` + `{Name}Handle`
+      // wrapper + `{Name}Bindings.kt` registration trio — mirrors the struct/class loops above.
+      namespace.types.filterIsInstance<RirInterface>().forEach { iface ->
+        val registrables: List<RirRegistrable> =
+          bridgeableInterfaceRegistrables(iface, boundTypes, boundIfaces)
+        if (registrables.isEmpty()) return@forEach
+
+        val methods: List<RirMethod> =
+          registrables.filterIsInstance<RirRegistrable.Method>().map { it.method }
+        val propertyGetters: List<RirProperty> =
+          registrables.filterIsInstance<RirRegistrable.PropertyGetter>().map { it.property }
+        val propertySetterNames: Set<String> = registrables
+          .filterIsInstance<RirRegistrable.PropertySetter>()
+          .map { it.property.name }
+          .toSet()
+
+        val hasString: Boolean = methods.any { m ->
+          m.returnType is RirStringType || m.parameters.any { it.type is RirStringType }
+        } || propertyGetters.any { it.type is RirStringType }
+        if (hasString) needsInterop = true
+        val hasEnumReturn: Boolean = methods.any { it.returnType is RirEnumType } ||
+            propertyGetters.any { it.type is RirEnumType }
+        if (hasEnumReturn) needsEnums = true
+        // ADR-070: an interface's own `{Name}Handle` wrapper always needs NugetObjectHandle/Cleaner
+        // (Decision 2's Xamarin-Invoker shape), regardless of its members' own types.
+        needsRuntime = true
+
+        val exportName: String = registrationExportName(namespace.name, iface.name)
+        expectedRegistrations.add("${namespace.name}.${iface.name}")
+
+        result.add(
+          GeneratedFile(
+            relativePath = "nativeMain/$pkgPath/${iface.name}.kt",
+            content = interfaceFileContent(kotlinPkg, iface, boundIfaces, assembly.packageId),
+          )
+        )
+        result.add(
+          GeneratedFile(
+            relativePath = "nativeMain/$pkgPath/${iface.name}Handle.kt",
+            content = interfaceHandleFileContent(
+              kotlinPkg, iface, boundIfaces, boundTypes, assembly.packageId, namespace.name,
+              enumPkgs, interfacePkgs, qualifiedTypeNames,
+            ),
+          )
+        )
+        result.add(
+          GeneratedFile(
+            relativePath = "nativeMain/$pkgPath/${iface.name}Bindings.kt",
+            content = interfaceBindingsFileContent(
+              kotlinPkg, namespace.name, iface, registrables, exportName, assembly.packageId,
             ),
           )
         )
@@ -1078,6 +1191,10 @@ private fun buildStructStubMethod(
     is RirObjectHandleType -> error(
       "[nuget] handle returns on struct methods are out of scope (ADR-056 deferred)",
     )
+
+    is RirInterfaceType -> error(
+      "[nuget] interface returns on struct methods are out of scope (ADR-070 v1)",
+    )
   }
 }
 
@@ -1185,6 +1302,10 @@ private fun buildStructStubProperty(
     is RirObjectHandleType -> error(
       "[nuget] handle-typed computed properties on structs are out of scope (ADR-056 deferred)",
     )
+
+    is RirInterfaceType -> error(
+      "[nuget] interface-typed computed properties on structs are out of scope (ADR-070 v1)",
+    )
   }
 
   return "val $name: $declType\n" + getterBlock.prependIndent("  ")
@@ -1200,6 +1321,11 @@ private fun kotlinType(type: RirTypeRef): String = when (type) {
   // the ABI-level expansion (abiArgs/abiOutArgs) is an implementation detail of the call site, not
   // of the declared Kotlin signature.
   is RirStructType -> type.name
+  // ADR-070 Decision 1/3: the DECLARED Kotlin type for an interface reference is the pure
+  // interface's own simple name (e.g. IFeedable) — a value arriving there is always wrapped in
+  // the interface's OWN `{Name}Handle` implementation (buildStubMethod/buildStubProperty's
+  // RirInterfaceType branch), which upcasts to this declared type.
+  is RirInterfaceType -> type.name
   is RirPrimitiveType -> when (type.name) {
     "bool" -> "Boolean"
     "byte" -> "UByte"
@@ -1233,6 +1359,7 @@ private fun declKotlinType(
     is RirObjectHandleType -> RirTypeKey(type.namespace, type.name)
     is RirEnumType -> RirTypeKey(type.namespace, type.name)
     is RirStructType -> RirTypeKey(type.namespace, type.name)
+    is RirInterfaceType -> RirTypeKey(type.namespace, type.name)
     else -> null
   }
   val rendered: String = key?.let { qualifiedTypeNames[it] } ?: kotlinType(type)
@@ -1265,6 +1392,8 @@ private fun cfnType(type: RirTypeRef): String = when (type) {
   is RirEnumType -> "Int"
   // ADR-051: handles cross the ABI as IntPtr ↔ COpaquePointer? (same slot as strings).
   is RirObjectHandleType -> "COpaquePointer?"
+  // ADR-070 Decision 1: wire-identical to a handle (GCHandle.ToIntPtr / IntPtr.Zero).
+  is RirInterfaceType -> "COpaquePointer?"
   // ADR-056: a struct never reaches cfnType directly — abiArgs/abiOutArgs expand it into scalar
   // components before any call site asks for a CFunction type. Struct-typed constructor
   // parameters and properties are not yet supported (v1 scope: static/instance methods only).
@@ -1311,6 +1440,7 @@ private fun cVarType(type: RirTypeRef): String = when (type) {
   is RirStringType -> "COpaquePointerVar"
   is RirEnumType -> "IntVar"
   is RirObjectHandleType -> "COpaquePointerVar"
+  is RirInterfaceType -> "COpaquePointerVar"
   is RirVoidType -> error("[nuget] void cannot be a struct out-pointer component")
   is RirStructType -> error("[nuget] nested struct components are not supported in v1 (ADR-056)")
 }
@@ -1381,6 +1511,10 @@ private fun componentRead(type: RirTypeRef, arg: AbiArg): ComponentRead {
     is RirObjectHandleType -> error(
       "[nuget] handle-typed struct components are not supported (ADR-056/059 v1 component " +
           "vocabulary is primitives, string, bound enums, and bound structs only)"
+    )
+
+    is RirInterfaceType -> error(
+      "[nuget] interface-typed struct components are not supported (ADR-070 v1)",
     )
 
     is RirVoidType -> error("[nuget] void cannot be a struct component")
@@ -1700,10 +1834,12 @@ private fun stubFileContent(
   structPkgs: Map<RirTypeKey, String>,
   structs: Map<RirTypeKey, RirStruct>,
   qualifiedTypeNames: Map<RirTypeKey, String>,
+  interfaceSupertypeNames: List<String> = emptyList(),
+  overrideMethodNames: Set<String> = emptySet(),
+  overridePropertyNames: Set<String> = emptySet(),
 ): String {
   val hasHandle: Boolean = staticMethods.any { method ->
-    method.returnType is RirObjectHandleType ||
-        method.parameters.any { p -> p.type is RirObjectHandleType }
+    isHandleLike(method.returnType) || method.parameters.any { p -> isHandleLike(p.type) }
   }
 
   // ADR-051: a non-static class that appears as a handle type in its own bridgeable methods
@@ -1721,7 +1857,7 @@ private fun stubFileContent(
       kotlinPkg, cls, staticMethods, instanceMethods, ctors,
       instancePropertyGetters, staticPropertyGetters, propertySetterNames, packageId,
       namespaceName, enumPkgs, structPkgs, structs,
-      qualifiedTypeNames,
+      qualifiedTypeNames, interfaceSupertypeNames, overrideMethodNames, overridePropertyNames,
     )
   }
 
@@ -1879,6 +2015,9 @@ private fun classWrapperContent(
   structPkgs: Map<RirTypeKey, String>,
   structs: Map<RirTypeKey, RirStruct>,
   qualifiedTypeNames: Map<RirTypeKey, String>,
+  interfaceSupertypeNames: List<String> = emptyList(),
+  overrideMethodNames: Set<String> = emptySet(),
+  overridePropertyNames: Set<String> = emptySet(),
 ): String {
   val allMethods: List<RirMethod> = staticMethods + instanceMethods
   val methodsHaveString: Boolean =
@@ -1905,6 +2044,7 @@ private fun classWrapperContent(
       instanceSettablePropertiesHaveString || staticSettablePropertiesHaveString
 
   val imports: MutableList<String> = mutableListOf(
+    "import $INTERNAL_PKG.NugetHandleOwner",
     "import $INTERNAL_PKG.NugetObjectHandle",
     "import $INTERNAL_PKG.NugetRegistry",
     "import kotlin.experimental.ExperimentalNativeApi",
@@ -1912,6 +2052,18 @@ private fun classWrapperContent(
     "import kotlinx.cinterop.COpaquePointer",
     "import kotlinx.cinterop.invoke",
   )
+  // ADR-070 Decision 4: an interface-typed parameter's argConversion(...) calls the shared
+  // `nugetHandle()` extension — needed whenever this class has an instance method/property/ctor
+  // parameter typed as an interface.
+  val methodsHaveInterfaceParam: Boolean =
+    allMethods.any { m -> m.parameters.any { it.type is RirInterfaceType } }
+  val ctorsHaveInterfaceParam: Boolean =
+    ctors.any { it.parameters.any { p -> p.type is RirInterfaceType } }
+  val settablePropertiesHaveInterfaceParam: Boolean =
+    instancePropertyGetters.any { it.type is RirInterfaceType && it.name in propertySetterNames }
+  val hasInterfaceParam: Boolean =
+    methodsHaveInterfaceParam || ctorsHaveInterfaceParam || settablePropertiesHaveInterfaceParam
+  if (hasInterfaceParam) imports.add("import $INTERNAL_PKG.nugetHandle")
   if (hasStringReturn) {
     imports.add("import $INTERNAL_PKG.freeManagedString")
     imports.add("import kotlinx.cinterop.ByteVar")
@@ -1977,13 +2129,17 @@ private fun classWrapperContent(
   imports.addAll(structImports(structReturnTypes, structPkgs, kotlinPkg))
 
   val instanceMethodsText: String = instanceMethods.joinToString("\n\n") {
-    buildStubMethod(cls, it, packageId, namespaceName, structs, qualifiedTypeNames)
+    buildStubMethod(
+      cls, it, packageId, namespaceName, structs, qualifiedTypeNames,
+      isOverride = it.name.toMethodCamelCase() in overrideMethodNames,
+    )
   }
   val propertiesText: String = instancePropertyGetters.joinToString("\n\n") { property ->
     buildStubProperty(
       cls, property, hasSetter = property.name in propertySetterNames, packageId, namespaceName,
       structs,
       qualifiedTypeNames,
+      isOverride = property.name.toMethodCamelCase() in overridePropertyNames,
     )
   }
   val staticMethodsText: String = staticMethods.joinToString("\n\n") {
@@ -2022,10 +2178,16 @@ private fun classWrapperContent(
     )
     appendLine(" */")
     appendLine("@OptIn(ExperimentalNativeApi::class)")
+    // ADR-070 Decision 5: every admissible+bound interface this class implements identically is
+    // declared as a Kotlin supertype, ahead of the ADR-070 Decision 4 NugetHandleOwner marker
+    // every wrapper carries (so an interface-typed parameter position can unwrap this class
+    // generically) and AutoCloseable.
+    val supertypes: String =
+      (interfaceSupertypeNames + listOf("NugetHandleOwner", "AutoCloseable")).joinToString(", ")
     appendLine(
-      "internal class ${cls.name} internal constructor(handle: COpaquePointer) : AutoCloseable {",
+      "internal class ${cls.name} internal constructor(handle: COpaquePointer) : $supertypes {",
     )
-    appendLine("  internal val handle: NugetObjectHandle = NugetObjectHandle(handle)")
+    appendLine("  override val handle: NugetObjectHandle = NugetObjectHandle(handle)")
     appendLine()
     appendLine("  @Suppress(\"unused\")")
     appendLine("  private val cleaner = createCleaner(this.handle) { it.free() }")
@@ -2083,6 +2245,15 @@ private fun argConversion(type: RirTypeRef, name: String): String = when {
   // use-after-close (throws IllegalStateException if the handle was already freed).
   type is RirObjectHandleType && type.nullable -> "$name?.handle?.require(\"${type.name}\")"
   type is RirObjectHandleType -> "$name.handle.require(\"${type.name}\")"
+  // ADR-070 Decision 4: an interface-typed value may be a Kotlin-side implementation of the
+  // interface (out of scope until Phase 13), so it is not unwrapped via a `.handle` member on the
+  // interface itself (the generated interface stays pure, no handle member — Decision 4) but via
+  // the NugetHandleOwner marker every generated wrapper (a bound class, or an interface's own
+  // {Name}Handle) implements.
+  type is RirInterfaceType && type.nullable ->
+    "$name?.nugetHandle(\"${type.name}\")?.require(\"${type.name}\")"
+
+  type is RirInterfaceType -> "$name.nugetHandle(\"${type.name}\").require(\"${type.name}\")"
   type is RirEnumType -> "$name.ordinal"
   type is RirPrimitiveType && type.name == "char" -> "$name.code.toUShort()"
   // ADR-059: a struct-typed argument must be decomposed into its LEAVES via structArgConversions
@@ -2203,6 +2374,7 @@ private fun buildStubMethod(
   namespaceName: String,
   structs: Map<RirTypeKey, RirStruct>,
   qualifiedTypeNames: Map<RirTypeKey, String>,
+  isOverride: Boolean = false,
 ): String {
   val name: String = method.name.toMethodCamelCase()
   val fnVar: String =
@@ -2256,7 +2428,7 @@ private fun buildStubMethod(
   // Each branch below renders a self-contained block (`fun` at column 0, its body at column 2)
   // so the caller can shift the whole block to its actual embedding depth with a single
   // String.prependIndent() call, rather than baking one specific nesting depth into this function.
-  return when (val retType = method.returnType) {
+  val rendered: String = when (val retType = method.returnType) {
     is RirVoidType -> """
       |fun $name($params)$retSuffix {
       |  val fn = requireNotNull($fnVar) {
@@ -2312,6 +2484,30 @@ private fun buildStubMethod(
       |  }
       |  val ptr: COpaquePointer? = $invokeCall
       |  return ${retType.name}(requireNotNull(ptr) {
+      |    "$nonNullHandleMsg"
+      |  })
+      |}
+    """.trimMargin()
+
+    // ADR-070 Decision 3: an interface-typed return always wraps in the interface's OWN
+    // `{Name}Handle` implementation (never the concrete bound class the runtime object might
+    // actually be — the wire carries no type tag), which upcasts to the declared interface type.
+    // Otherwise byte-identical to the handle-return branch above.
+    is RirInterfaceType -> if (retType.nullable) """
+      |fun $name($params)$retSuffix {
+      |  val fn = requireNotNull($fnVar) {
+      |    $failMsg
+      |  }
+      |  val ptr: COpaquePointer? = $invokeCall
+      |  return ptr?.let { ${retType.name}Handle(it) }
+      |}
+    """.trimMargin() else """
+      |fun $name($params)$retSuffix {
+      |  val fn = requireNotNull($fnVar) {
+      |    $failMsg
+      |  }
+      |  val ptr: COpaquePointer? = $invokeCall
+      |  return ${retType.name}Handle(requireNotNull(ptr) {
       |    "$nonNullHandleMsg"
       |  })
       |}
@@ -2373,6 +2569,10 @@ private fun buildStubMethod(
       """.trimMargin()
     }
   }
+  // ADR-070 Decision 5: a matching class member gains `override` — the ONE call site both a
+  // simple and a struct-return branch share, rather than baking the keyword into every one of
+  // the branches above ("fun $name(" appears exactly once, at the very start of each block).
+  return if (isOverride) rendered.replaceFirst("fun $name(", "override fun $name(") else rendered
 }
 
 // Phase 9 (ROADMAP line 151): a bridgeable instance property renders as:
@@ -2393,6 +2593,7 @@ private fun buildStubProperty(
   namespaceName: String,
   structs: Map<RirTypeKey, RirStruct>,
   qualifiedTypeNames: Map<RirTypeKey, String>,
+  isOverride: Boolean = false,
 ): String {
   val name: String = property.name.toMethodCamelCase()
   val bindingsObj: String = bindingsObjectName(cls.name)
@@ -2490,6 +2691,28 @@ private fun buildStubProperty(
       |}
     """.trimMargin()
 
+    // ADR-070 Decision 3: identical to the handle-property branch above, but wraps in the
+    // interface's OWN `{Name}Handle` implementation — never the concrete bound class.
+    is RirInterfaceType -> if (type.nullable) """
+      |get() {
+      |  val fn = requireNotNull($getterFnVar) {
+      |    $failMsg
+      |  }
+      |  val ptr: COpaquePointer? = $getterInvoke
+      |  return ptr?.let { ${type.name}Handle(it) }
+      |}
+    """.trimMargin() else """
+      |get() {
+      |  val fn = requireNotNull($getterFnVar) {
+      |    $failMsg
+      |  }
+      |  val ptr: COpaquePointer? = $getterInvoke
+      |  return ${type.name}Handle(requireNotNull(ptr) {
+      |    "$nonNullHandleMsg"
+      |  })
+      |}
+    """.trimMargin()
+
     // Bounds-checked through the shared nugetEnumEntry helper: see buildStubMethod's enum branch.
     is RirEnumType -> """
       |get() {
@@ -2555,8 +2778,9 @@ private fun buildStubProperty(
     null
   }
 
+  val overridePrefix: String = if (isOverride) "override " else ""
   return buildString {
-    appendLine("$keyword $name: $declType")
+    appendLine("$overridePrefix$keyword $name: $declType")
     append(getterBlock.indented("  "))
     if (setterBlock != null) {
       appendLine()
@@ -2662,6 +2886,29 @@ private fun nugetRuntimeContent(): String = """
   |    return raw
   |  }
   |}
+  |
+  |// ADR-070 Decision 4: every generated wrapper (a bound class, or an interface's own
+  |// `{Name}Handle`) implements this marker so an interface-typed parameter position can unwrap
+  |// ANY wrapper generically, without the generated interface itself carrying a handle member
+  |// (Decision 4 keeps the generated `interface IFoo` pure — no source break when Phase 13 later
+  |// lets Kotlin implement it).
+  |internal interface NugetHandleOwner {
+  |  // Kotlin does not allow an explicit `internal` modifier on an abstract interface member (only
+  |  // `public`/`private` are legal there); this member's effective visibility is bounded by the
+  |  // enclosing `internal interface` itself, so it is invisible outside this module either way.
+  |  val handle: NugetObjectHandle
+  |}
+  |
+  |// ADR-070 Decision 4: the exact mirror of ADR-040's shipped
+  |// `NugetMarshal.HandleOf(object)`, which throws for a Kotlin-implemented C# interface passed
+  |// back to C#. An extension on Any (not on the generated interface itself) because the
+  |// interface stays pure — this is the ONE place that downcasts to NugetHandleOwner.
+  |internal fun Any.nugetHandle(interfaceName: String): NugetObjectHandle =
+  |  (this as? NugetHandleOwner)?.handle
+  |    ?: error(
+  |      "[nuget] ${'$'}{this::class.simpleName} is a Kotlin implementation of ${'$'}interfaceName; " +
+  |          "passing a Kotlin-implemented C# interface back to C# is not supported yet."
+  |    )
 """.trimMargin().trim()
 
 // ADR-054: NugetRegistry.kt — the always-on registration registry + contract self-check, emitted
@@ -2831,6 +3078,582 @@ private fun nugetEnumsContent(): String = """
   |}
 """.trimMargin().trim()
 
+// ADR-070 Decision 2: one member of an admissible interface, tagged with the C# NATIVE
+// (`{Name}Bindings`) object it is registered under — its OWN declaring interface's, never the
+// derived interface asking for it. This is what lets `{Derived}Handle` dispatch an inherited
+// member through the BASE interface's own slot table (Decision 5's "handle-agnostic" insight:
+// nothing needs to be re-registered) while a locally-declared member dispatches through its own.
+private data class OwnedInterfaceMember(
+  val bindingsObjectName: String,
+  val registrable: RirRegistrable,
+)
+
+// ADR-070 Decision 5: [iface]'s OWN bridgeable registrables, plus (recursively) every ADMISSIBLE,
+// BOUND base interface's own — each tagged with the Bindings object that actually owns its slot.
+private fun effectiveInterfaceRegistrables(
+  iface: RirInterface,
+  boundHandleTypes: Set<RirTypeKey>,
+  boundIfaces: Map<RirTypeKey, RirInterface>,
+): List<OwnedInterfaceMember> {
+  val own: List<OwnedInterfaceMember> =
+    bridgeableInterfaceRegistrables(iface, boundHandleTypes, boundIfaces)
+      .map { OwnedInterfaceMember("${iface.name}Bindings", it) }
+  val fromBases: List<OwnedInterfaceMember> = interfaceBaseKeys(iface, boundIfaces).flatMap { key ->
+    effectiveInterfaceRegistrables(boundIfaces.getValue(key), boundHandleTypes, boundIfaces)
+  }
+  return own + fromBases
+}
+
+// ADR-070 Decision 1: the DECLARED Kotlin signature text for one interface member — shared by the
+// pure `interface` (interfaceFileContent) and its `{Name}Handle` implementation
+// (interfaceHandleFileContent), so a member's declared type/nullability can never drift between
+// the two.
+private fun interfaceMemberSignature(
+  registrable: RirRegistrable,
+  qualifiedTypeNames: Map<RirTypeKey, String>,
+): String = when (registrable) {
+  is RirRegistrable.Method -> {
+    val params: String = registrable.method.parameters.joinToString(", ") { p ->
+      "${p.name}: ${declKotlinType(p.type, qualifiedTypeNames)}"
+    }
+    val retSuffix: String = if (registrable.method.returnType is RirVoidType) ""
+    else ": ${declKotlinType(registrable.method.returnType, qualifiedTypeNames)}"
+    "fun ${registrable.method.name.toMethodCamelCase()}($params)$retSuffix"
+  }
+
+  is RirRegistrable.PropertyGetter -> {
+    val keyword: String = if (registrable.property.isReadOnly) "val" else "var"
+    "$keyword ${registrable.property.name.toMethodCamelCase()}: " +
+        declKotlinType(registrable.property.type, qualifiedTypeNames)
+  }
+
+  is RirRegistrable.PropertySetter -> error(
+    "[nuget] a PropertySetter never renders its own declaration line (see PropertyGetter " +
+        "with isReadOnly=false, which renders 'var')",
+  )
+
+  is RirRegistrable.Ctor -> error("[nuget] an interface never has a constructor (ADR-070)")
+}
+
+// ADR-070 Decision 1: the pure Kotlin `interface` for an admissible, bound C# interface — members
+// only, no handle. Declares Kotlin supertypes for every admissible+bound base interface (Decision
+// 5) so ordinary Kotlin interface inheritance provides the DECLARED (not dispatched — see
+// interfaceHandleFileContent) member set for a derived interface's own callers.
+private fun interfaceFileContent(
+  kotlinPkg: String,
+  iface: RirInterface,
+  boundIfaces: Map<RirTypeKey, RirInterface>,
+  packageId: String,
+  interfacePkgs: Map<RirTypeKey, String> = emptyMap(),
+  qualifiedTypeNames: Map<RirTypeKey, String> = emptyMap(),
+): String {
+  val baseKeys: List<RirTypeKey> = interfaceBaseKeys(iface, boundIfaces)
+  val supertypesSuffix: String =
+    if (baseKeys.isEmpty()) "" else " : " + baseKeys.joinToString(", ") { it.name }
+  val imports: List<String> = baseKeys
+    .filter { interfacePkgs[it] != null && interfacePkgs[it] != kotlinPkg }
+    .map { "import ${interfacePkgs.getValue(it)}.${it.name}" }
+    .distinct()
+    .sorted()
+  val importsBlock: String = if (imports.isEmpty()) "" else imports.joinToString("\n") + "\n\n"
+
+  val ownRegistrables: List<RirRegistrable> =
+    iface.methods.filterNot { it.isStatic }.map { RirRegistrable.Method(it) } +
+        iface.properties.filterNot { it.isStatic }.map { RirRegistrable.PropertyGetter(it) }
+  val members: String = ownRegistrables.joinToString("\n") { r ->
+    "  ${interfaceMemberSignature(r, qualifiedTypeNames)}"
+  }
+  val body: String = if (members.isEmpty()) "" else "\n$members\n"
+
+  return """
+    |package $kotlinPkg
+    |
+    |${importsBlock}// Generated: pure Kotlin interface for the C# interface `$packageId.${iface.name}`
+    |// (ADR-070). No handle member by design (Decision 4) — see [${iface.name}Handle] for the
+    |// handle-backed implementation reached across the bridge.
+    |internal interface ${iface.name}$supertypesSuffix {$body}
+  """.trimMargin().trim()
+}
+
+// ADR-070 Decision 1 (the "Invoker" shape, mirroring Xamarin's Java interface bindings): the
+// handle-backed implementation of an admissible interface — every effective (own + inherited)
+// member dispatches through its OWN declaring interface's registered slot table, using THIS
+// wrapper's single handle (Decision 5's "handle-agnostic" mechanism — nothing needs to be
+// re-registered for a derived interface).
+private fun interfaceHandleFileContent(
+  kotlinPkg: String,
+  iface: RirInterface,
+  boundIfaces: Map<RirTypeKey, RirInterface>,
+  boundHandleTypes: Set<RirTypeKey>,
+  packageId: String,
+  namespaceName: String,
+  enumPkgs: Map<RirTypeKey, String>,
+  interfacePkgs: Map<RirTypeKey, String>,
+  qualifiedTypeNames: Map<RirTypeKey, String>,
+): String {
+  val effective: List<OwnedInterfaceMember> =
+    effectiveInterfaceRegistrables(iface, boundHandleTypes, boundIfaces)
+
+  val hasString: Boolean = effective.any { m ->
+    when (val r = m.registrable) {
+      is RirRegistrable.Method -> r.method.returnType is RirStringType ||
+          r.method.parameters.any { it.type is RirStringType }
+
+      is RirRegistrable.PropertyGetter -> r.property.type is RirStringType
+      else -> false
+    }
+  }
+  val hasEnumReturn: Boolean = effective.any { m ->
+    when (val r = m.registrable) {
+      is RirRegistrable.Method -> r.method.returnType is RirEnumType
+      is RirRegistrable.PropertyGetter -> r.property.type is RirEnumType
+      else -> false
+    }
+  }
+  val enumTypes: List<RirEnumType> = effective.mapNotNull { m ->
+    when (val r = m.registrable) {
+      is RirRegistrable.Method -> r.method.returnType as? RirEnumType
+      is RirRegistrable.PropertyGetter -> r.property.type as? RirEnumType
+      else -> null
+    }
+  }.distinct()
+
+  val imports: MutableList<String> = mutableListOf(
+    "import $INTERNAL_PKG.NugetHandleOwner",
+    "import $INTERNAL_PKG.NugetObjectHandle",
+    "import $INTERNAL_PKG.NugetRegistry",
+    "import $INTERNAL_PKG.nugetHandle",
+    "import kotlin.experimental.ExperimentalNativeApi",
+    "import kotlin.native.ref.createCleaner",
+    "import kotlinx.cinterop.COpaquePointer",
+    "import kotlinx.cinterop.invoke",
+  )
+  if (hasString) {
+    imports.add("import $INTERNAL_PKG.freeManagedString")
+    imports.add("import kotlinx.cinterop.ByteVar")
+    imports.add("import kotlinx.cinterop.reinterpret")
+    imports.add("import kotlinx.cinterop.toKString")
+  }
+  val hasStringParam: Boolean = effective.any { m ->
+    (m.registrable as? RirRegistrable.Method)?.method?.parameters
+      ?.any { it.type is RirStringType } == true
+  }
+  if (hasStringParam) {
+    imports.add("import kotlinx.cinterop.cstr")
+    imports.add("import kotlinx.cinterop.memScoped")
+    imports.add("import kotlinx.cinterop.ptr")
+  }
+  if (hasEnumReturn) imports.add("import $INTERNAL_PKG.nugetEnumEntry")
+  imports.addAll(enumImports(enumTypes, enumPkgs, kotlinPkg))
+
+  val baseKeys: List<RirTypeKey> = interfaceBaseKeys(iface, boundIfaces)
+  imports.addAll(
+    baseKeys.filter { interfacePkgs[it] != null && interfacePkgs[it] != kotlinPkg }
+      .map { "import ${interfacePkgs.getValue(it)}.${it.name}" },
+  )
+
+  // ADR-070: a settable property is TWO registrables (PropertyGetter + PropertySetter, Decision
+  // 2) but must render as ONE Kotlin member (val/var with an attached get()/set() — a bare
+  // `set(value) { ... }` with no preceding property declaration does not compile). Grouped by
+  // (bindingsObjectName, property name) so an inherited settable property (getter owned by one
+  // interface's Bindings object, setter by the same) still combines correctly.
+  val setterKeys: Set<Pair<String, String>> = effective
+    .mapNotNull { owned ->
+      (owned.registrable as? RirRegistrable.PropertySetter)
+        ?.let { owned.bindingsObjectName to it.property.name }
+    }
+    .toSet()
+  val memberBlocks: List<String> = effective.mapNotNull { owned ->
+    when (owned.registrable) {
+      is RirRegistrable.Method ->
+        interfaceHandleMethodMember(iface.name, owned, packageId, namespaceName)
+
+      is RirRegistrable.PropertyGetter -> {
+        val hasSetter: Boolean =
+          (owned.bindingsObjectName to owned.registrable.property.name) in setterKeys
+        interfaceHandlePropertyMember(iface.name, owned, hasSetter, packageId, namespaceName)
+      }
+      // Consumed above via the getter pass (Decision, "one Kotlin member per property").
+      is RirRegistrable.PropertySetter -> null
+      is RirRegistrable.Ctor -> error("[nuget] an interface never has a constructor (ADR-070)")
+    }
+  }
+  val membersText: String = memberBlocks.joinToString("\n\n") { it.prependIndent("  ") }
+
+  return buildString {
+    appendLine("@file:OptIn(kotlinx.cinterop.ExperimentalForeignApi::class)")
+    appendLine()
+    appendLine("package $kotlinPkg")
+    appendLine()
+    imports.distinct().sorted().forEach { appendLine(it) }
+    appendLine()
+    appendLine(
+      "// Generated: the handle-backed implementation of the C# interface " +
+          "`$packageId.${iface.name}` (ADR-070's \"Invoker\" shape).",
+    )
+    appendLine()
+    appendLine("/**")
+    appendLine(" * A value received at an [${iface.name}]-typed position — always this wrapper,")
+    appendLine(
+      " * never the concrete bound class the underlying C# object might also be (ADR-070 " +
+          "Decision 3).",
+    )
+    appendLine(" */")
+    appendLine("@OptIn(ExperimentalNativeApi::class)")
+    appendLine(
+      "internal class ${iface.name}Handle internal constructor(handle: COpaquePointer) : " +
+          "${iface.name}, NugetHandleOwner, AutoCloseable {",
+    )
+    appendLine("  override val handle: NugetObjectHandle = NugetObjectHandle(handle)")
+    appendLine()
+    appendLine("  @Suppress(\"unused\")")
+    appendLine("  private val cleaner = createCleaner(this.handle) { it.free() }")
+    appendLine()
+    appendLine("  override fun close(): Unit = handle.free()")
+    if (membersText.isNotEmpty()) {
+      appendLine()
+      appendLine(membersText)
+    }
+    append("}")
+  }
+}
+
+// ADR-070 Decision 2/5: one dispatched METHOD member of `{Name}Handle` — routes through [owned]'s
+// OWN declaring interface's Bindings object (which may not be [handleTypeName] itself, for an
+// inherited member), using this wrapper's own `handle` field as the receiver either way (a base
+// interface's slot table is handle-agnostic).
+private fun interfaceHandleMethodMember(
+  handleTypeName: String,
+  owned: OwnedInterfaceMember,
+  packageId: String,
+  namespaceName: String,
+): String {
+  val r = owned.registrable as RirRegistrable.Method
+  val failMsg: String = bindingsNotRegisteredMessage(handleTypeName, packageId, namespaceName)
+  val receiverArg = "handle.require(\"$handleTypeName\")"
+  val name: String = r.method.name.toMethodCamelCase()
+  val fnVar = "${owned.bindingsObjectName}.$name${r.method.bridgeSuffix()}Fn"
+  val params: String =
+    r.method.parameters.joinToString(", ") { "${it.name}: ${declKotlinType(it.type)}" }
+  val retSuffix: String =
+    if (r.method.returnType is RirVoidType) "" else ": ${declKotlinType(r.method.returnType)}"
+  val hasStringParam: Boolean = r.method.parameters.any { it.type is RirStringType }
+  val paramArgs: List<String> = r.method.parameters.map { argConversion(it.type, it.name) }
+  val invokeArgs: String = (listOf(receiverArg) + paramArgs).joinToString(", ")
+  val invokeCall: String =
+    if (hasStringParam) "memScoped { fn.invoke($invokeArgs) }" else "fn.invoke($invokeArgs)"
+  return interfaceHandleReturnBlock(
+    "override fun $name($params)$retSuffix", r.method.returnType, fnVar, failMsg, invokeCall,
+    "$handleTypeName.${r.method.name}",
+  )
+}
+
+// ADR-070 Decision 2/5: one dispatched PROPERTY member of `{Name}Handle` — a settable property is
+// TWO registrables (getter + setter) but ONE Kotlin member (a `var` with an attached get()/set()),
+// mirroring buildStubProperty's [hasSetter] shape for a class member.
+private fun interfaceHandlePropertyMember(
+  handleTypeName: String,
+  owned: OwnedInterfaceMember,
+  hasSetter: Boolean,
+  packageId: String,
+  namespaceName: String,
+): String {
+  val r = owned.registrable as RirRegistrable.PropertyGetter
+  val failMsg: String = bindingsNotRegisteredMessage(handleTypeName, packageId, namespaceName)
+  val receiverArg = "handle.require(\"$handleTypeName\")"
+  val name: String = r.property.name.toMethodCamelCase()
+  val getterFnVar = "${owned.bindingsObjectName}.${name}GetterFn"
+  val invokeCall = "fn.invoke($receiverArg)"
+  val getterBlock: String = interfaceHandleReturnBlock(
+    "get()", r.property.type, getterFnVar, failMsg, invokeCall,
+    "$handleTypeName.${r.property.name}",
+  )
+  val keyword: String = if (hasSetter) "var" else "val"
+
+  val setterBlock: String? = if (!hasSetter) null else {
+    val setterFnVar = "${owned.bindingsObjectName}.${name}SetterFn"
+    val valueArg: String = argConversion(r.property.type, "value")
+    val hasStringValue: Boolean = r.property.type is RirStringType
+    val invokeSetterCall: String = if (hasStringValue) {
+      "memScoped { fn.invoke($receiverArg, $valueArg) }"
+    } else {
+      "fn.invoke($receiverArg, $valueArg)"
+    }
+    """
+      |set(value) {
+      |  val fn = requireNotNull($setterFnVar) {
+      |    $failMsg
+      |  }
+      |  $invokeSetterCall
+      |}
+    """.trimMargin()
+  }
+
+  return buildString {
+    appendLine("override $keyword $name: ${declKotlinType(r.property.type)}")
+    append(getterBlock.prependIndent("  "))
+    if (setterBlock != null) {
+      appendLine()
+      append(setterBlock.prependIndent("  "))
+    }
+  }
+}
+
+// ADR-070: shared return-handling for an interface member's dispatch body — the SAME per-type
+// conversion buildStubMethod/buildStubProperty already use for a class member, restricted to the
+// v1 interface-member vocabulary (Decision 6: void, string, primitives, bound enums, bound class
+// handles, bound interface handles — no structs).
+private fun interfaceHandleReturnBlock(
+  signature: String,
+  returnType: RirTypeRef,
+  fnVar: String,
+  failMsg: String,
+  invokeCall: String,
+  memberQualifiedName: String,
+): String {
+  val nullMsg = "$memberQualifiedName returned null, expected a non-null string pointer"
+  val nonNullHandleMsg = "$memberQualifiedName returned null, but the C# API annotates it non-null."
+  return when (returnType) {
+    is RirVoidType -> """
+      |$signature {
+      |  val fn = requireNotNull($fnVar) {
+      |    $failMsg
+      |  }
+      |  $invokeCall
+      |}
+    """.trimMargin()
+
+    is RirStringType -> if (returnType.nullable) """
+      |$signature {
+      |  val fn = requireNotNull($fnVar) {
+      |    $failMsg
+      |  }
+      |  val resultPtr = $invokeCall
+      |    ?: return null
+      |  val result = resultPtr.reinterpret<ByteVar>().toKString()
+      |  freeManagedString(resultPtr)
+      |  return result
+      |}
+    """.trimMargin() else """
+      |$signature {
+      |  val fn = requireNotNull($fnVar) {
+      |    $failMsg
+      |  }
+      |  val resultPtr = $invokeCall
+      |    ?: error("$nullMsg")
+      |  val result = resultPtr.reinterpret<ByteVar>().toKString()
+      |  freeManagedString(resultPtr)
+      |  return result
+      |}
+    """.trimMargin()
+
+    is RirObjectHandleType -> if (returnType.nullable) """
+      |$signature {
+      |  val fn = requireNotNull($fnVar) {
+      |    $failMsg
+      |  }
+      |  val ptr: COpaquePointer? = $invokeCall
+      |  return ptr?.let { ${returnType.name}(it) }
+      |}
+    """.trimMargin() else """
+      |$signature {
+      |  val fn = requireNotNull($fnVar) {
+      |    $failMsg
+      |  }
+      |  val ptr: COpaquePointer? = $invokeCall
+      |  return ${returnType.name}(requireNotNull(ptr) {
+      |    "$nonNullHandleMsg"
+      |  })
+      |}
+    """.trimMargin()
+
+    is RirInterfaceType -> if (returnType.nullable) """
+      |$signature {
+      |  val fn = requireNotNull($fnVar) {
+      |    $failMsg
+      |  }
+      |  val ptr: COpaquePointer? = $invokeCall
+      |  return ptr?.let { ${returnType.name}Handle(it) }
+      |}
+    """.trimMargin() else """
+      |$signature {
+      |  val fn = requireNotNull($fnVar) {
+      |    $failMsg
+      |  }
+      |  val ptr: COpaquePointer? = $invokeCall
+      |  return ${returnType.name}Handle(requireNotNull(ptr) {
+      |    "$nonNullHandleMsg"
+      |  })
+      |}
+    """.trimMargin()
+
+    is RirEnumType -> """
+      |$signature {
+      |  val fn = requireNotNull($fnVar) {
+      |    $failMsg
+      |  }
+      |  return nugetEnumEntry(${returnType.name}.entries, $invokeCall, "${returnType.name}")
+      |}
+    """.trimMargin()
+
+    is RirPrimitiveType -> {
+      val returnExpr: String =
+        if (returnType.name == "char") "$invokeCall.toInt().toChar()" else invokeCall
+      """
+        |$signature {
+        |  val fn = requireNotNull($fnVar) {
+        |    $failMsg
+        |  }
+        |  return $returnExpr
+        |}
+      """.trimMargin()
+    }
+
+    is RirStructType -> error(
+      "[nuget] struct-typed interface members are out of scope (ADR-070 v1)",
+    )
+  }
+}
+
+// ADR-070 Decision 2: `{Name}Bindings.kt` — an interface's own registration export
+// (`nuget_{ns}_{Name}_register`) and function-pointer table, structurally identical to a class's
+// (bindingsFileContent) but with NO constructor slot (an interface has none) and only [iface]'s
+// OWN registrables (never inherited ones — Decision 5's handle-agnostic dispatch means a derived
+// interface's Handle wrapper calls the BASE interface's Bindings object directly, so nothing here
+// needs to duplicate it).
+private fun interfaceBindingsFileContent(
+  kotlinPkg: String,
+  namespaceName: String,
+  iface: RirInterface,
+  registrables: List<RirRegistrable>,
+  exportName: String,
+  packageId: String,
+): String {
+  val objectName = "${iface.name}Bindings"
+  val hasString: Boolean = registrables.any { r ->
+    when (r) {
+      is RirRegistrable.Method -> r.method.returnType is RirStringType ||
+          r.method.parameters.any { it.type is RirStringType }
+
+      is RirRegistrable.PropertyGetter -> r.property.type is RirStringType
+      is RirRegistrable.PropertySetter -> r.property.type is RirStringType
+      is RirRegistrable.Ctor -> error("[nuget] an interface never has a constructor (ADR-070)")
+    }
+  }
+  val imports: List<String> = buildList {
+    if (hasString) {
+      add("import $INTERNAL_PKG.freeManagedString")
+      add("import kotlinx.cinterop.ByteVar")
+    }
+    add("import $INTERNAL_PKG.NugetRegistry")
+    add("import kotlinx.cinterop.CFunction")
+    add("import kotlinx.cinterop.COpaquePointer")
+    add("import kotlinx.cinterop.CPointer")
+    add("import kotlinx.cinterop.reinterpret")
+    add("import kotlin.experimental.ExperimentalNativeApi")
+  }
+
+  val fnVars: String = registrables.joinToString("\n\n") { r ->
+    when (r) {
+      is RirRegistrable.Method -> {
+        // ADR-070: an interface method always has a receiver (no statics reach RirInterface,
+        // Decision 6) — the SAME COpaquePointer? receiver slot a class instance method uses.
+        val paramCfnTypes: String =
+          (listOf("COpaquePointer?") + r.method.parameters.map { cfnType(it.type) })
+            .joinToString(", ")
+        val retCfnType: String = cfnType(r.method.returnType)
+        "@Suppress(\"NOTHING_TO_INLINE\")\n" +
+            "internal var ${r.method.name.toMethodCamelCase()}${r.method.bridgeSuffix()}Fn: " +
+            "CPointer<CFunction<($paramCfnTypes) -> $retCfnType>>? = null"
+      }
+
+      is RirRegistrable.PropertyGetter -> {
+        val name: String = r.property.name.toMethodCamelCase()
+        "@Suppress(\"NOTHING_TO_INLINE\")\n" +
+            "internal var ${name}GetterFn: " +
+            "CPointer<CFunction<(COpaquePointer?) -> ${cfnType(r.property.type)}>>? = null"
+      }
+
+      is RirRegistrable.PropertySetter -> {
+        val name: String = r.property.name.toMethodCamelCase()
+        "@Suppress(\"NOTHING_TO_INLINE\")\n" +
+            "internal var ${name}SetterFn: " +
+            "CPointer<CFunction<(COpaquePointer?, ${cfnType(r.property.type)}) -> Unit>>? = null"
+      }
+
+      is RirRegistrable.Ctor -> error("[nuget] an interface never has a constructor (ADR-070)")
+    }
+  }
+  val params: String = registrables.joinToString(",\n  ") { r ->
+    when (r) {
+      is RirRegistrable.Method ->
+        "${r.method.name.toMethodCamelCase()}${r.method.bridgeSuffix()}Ptr: COpaquePointer?"
+
+      is RirRegistrable.PropertyGetter ->
+        "${r.property.name.toMethodCamelCase()}GetterPtr: COpaquePointer?"
+
+      is RirRegistrable.PropertySetter ->
+        "${r.property.name.toMethodCamelCase()}SetterPtr: COpaquePointer?"
+
+      is RirRegistrable.Ctor -> error("[nuget] an interface never has a constructor (ADR-070)")
+    }
+  }
+  val assignments: String = registrables.joinToString("\n  ") { r ->
+    when (r) {
+      is RirRegistrable.Method -> {
+        val name: String = r.method.name.toMethodCamelCase() + r.method.bridgeSuffix()
+        "$objectName.${name}Fn = requireNotNull(${name}Ptr).reinterpret()"
+      }
+
+      is RirRegistrable.PropertyGetter -> {
+        val name: String = r.property.name.toMethodCamelCase()
+        "$objectName.${name}GetterFn = requireNotNull(${name}GetterPtr).reinterpret()"
+      }
+
+      is RirRegistrable.PropertySetter -> {
+        val name: String = r.property.name.toMethodCamelCase()
+        "$objectName.${name}SetterFn = requireNotNull(${name}SetterPtr).reinterpret()"
+      }
+
+      is RirRegistrable.Ctor -> error("[nuget] an interface never has a constructor (ADR-070)")
+    }
+  }
+  // ADR-070 Work item 7: contractHash's leading parameter generalized to a bare name — an
+  // interface's own name works identically for its register export's contract.
+  val hash: Long = contractHash(iface.name, registrables, emptyMap())
+
+  return """
+    |@file:OptIn(kotlinx.cinterop.ExperimentalForeignApi::class)
+    |
+    |package $kotlinPkg
+    |
+    |${imports.joinToString("\n")}
+    |
+    |internal object $objectName {
+    |${fnVars.indented("  ")}
+    |}
+    |
+    |@OptIn(ExperimentalNativeApi::class)
+    |@CName("$exportName")
+    |fun $exportName(
+    |  slotCount: Int,
+    |  contractHash: Long,
+    |  $params,
+    |) {
+    |  NugetRegistry.checkContract(
+    |    qualifiedType = "$namespaceName.${iface.name}",
+    |    packageId = "$packageId",
+    |    slotCount = slotCount,
+    |    contractHash = contractHash,
+    |    expectedSlots = ${registrables.size},
+    |    expectedHash = ${hash}L,
+    |  )
+    |  $assignments
+    |  NugetRegistry.record("$namespaceName.${iface.name}", ${registrables.size})
+    |}
+  """.trimMargin().trim()
+}
+
 // ROADMAP line 142 ("surface RirDiagnostics to the build") + rule 5's existing
 // member-name-collision warning generalized into ONE pure, testable function: every diagnostic
 // that will ever reach a consumer's build log — whether it was emitted directly by the metadata
@@ -2929,6 +3752,7 @@ private fun RirTypeRef.kotlinCollisionType(): String = when (this) {
   is RirObjectHandleType -> "$namespace.$name${if (isNullable) "?" else ""}"
   is RirEnumType -> "$namespace.$name"
   is RirStructType -> "$namespace.$name"
+  is RirInterfaceType -> "$namespace.$name${if (isNullable) "?" else ""}"
   else -> declKotlinType(this)
 }
 

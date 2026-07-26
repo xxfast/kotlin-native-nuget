@@ -37,6 +37,86 @@ fun boundStructTypes(file: RirFile): Map<RirTypeKey, RirStruct> =
     }
   }.toMap()
 
+// ADR-070: every admissible, bound RirInterface across the whole RirFile, keyed the same way as
+// boundHandleTypes/boundStructTypes. A RirInterfaceType reference is v1-bridgeable iff its
+// (namespace, name) pair is in this map's keys — mirrors boundStructTypes' role of also resolving
+// the full declaration (methods/properties/interfaces), which both generators need at codegen time.
+fun boundInterfaceTypes(file: RirFile): Map<RirTypeKey, RirInterface> =
+  file.assemblies.flatMap { assembly ->
+    assembly.namespaces.flatMap { namespace ->
+      namespace.types
+        .filterIsInstance<RirInterface>()
+        .map { iface -> RirTypeKey(namespace.name, iface.name) to iface }
+    }
+  }.toMap()
+
+// ADR-070: parses one "{Namespace}.{Name}" entry from RirClass.interfaces/RirInterface.interfaces
+// into a RirTypeKey. The namespace may itself contain dots, so the SIMPLE name (which never does)
+// is split off from the end.
+fun parseInterfaceRef(qualifiedName: String): RirTypeKey =
+  RirTypeKey(
+    namespace = qualifiedName.substringBeforeLast('.'),
+    name = qualifiedName.substringAfterLast('.'),
+  )
+
+// ADR-070 Decision 5: this interface's own directly-declared base interfaces (verified: unlike a
+// class, an interface's InterfaceImpl table lists only DIRECT bases), filtered to those that are
+// themselves admissible and bound in this extraction run.
+fun interfaceBaseKeys(
+  iface: RirInterface,
+  boundInterfaceTypes: Map<RirTypeKey, RirInterface>,
+): List<RirTypeKey> =
+  iface.interfaces.map(::parseInterfaceRef).filter { it in boundInterfaceTypes }
+
+// ADR-070 Decision 5: does [cls] (or, recursively, an interface) declare an identically-signed
+// public member for every one of [iface]'s OWN declared members? Matched against the RAW
+// methods/properties lists (not any bridgeability filter) because an explicit C# interface
+// implementation is non-public in metadata and therefore simply ABSENT from cls.methods/
+// cls.properties — there is nothing to "not match", the member never reached the RIR at all.
+// RirMethod/RirProperty/RirTypeRef are plain data classes, so structural equality on
+// (name, parameter types, return type) / (name, type) is exactly "identically signed".
+fun classImplementsInterface(cls: RirClass, iface: RirInterface): Boolean {
+  val methodsOk: Boolean = iface.methods.all { im ->
+    cls.methods.any { cm ->
+      !cm.isStatic && cm.name == im.name &&
+          cm.parameters.map { it.type } == im.parameters.map { it.type } &&
+          cm.returnType == im.returnType
+    }
+  }
+  val propertiesOk: Boolean = iface.properties.all { ip ->
+    cls.properties.any { cp ->
+      !cp.isStatic && cp.name == ip.name && cp.type == ip.type && (ip.isReadOnly || !cp.isReadOnly)
+    }
+  }
+  return methodsOk && propertiesOk
+}
+
+// ADR-070 Decision 5: the interface supertypes [cls] should declare in its generated Kotlin class
+// — every admissible+bound interface in cls.interfaces (verified: the FULL TRANSITIVE closure for
+// a class) that classImplementsInterface accepts, with any interface that is itself a
+// (transitive) base of another qualifying interface dropped — Kotlin interface inheritance
+// already provides it, so declaring both would be redundant (e.g. a class implementing
+// `ITagged : IFeedable` declares only `: ITagged`, not `: ITagged, IFeedable`).
+fun classInterfaceSupertypes(
+  cls: RirClass,
+  boundInterfaceTypes: Map<RirTypeKey, RirInterface>,
+): List<RirTypeKey> {
+  val candidates: List<RirTypeKey> =
+    cls.interfaces.map(::parseInterfaceRef).filter { it in boundInterfaceTypes }
+  val qualifying: List<RirTypeKey> = candidates.filter { key ->
+    classImplementsInterface(cls, boundInterfaceTypes.getValue(key))
+  }
+
+  fun transitiveBases(key: RirTypeKey): Set<RirTypeKey> {
+    val direct: List<RirTypeKey> =
+      interfaceBaseKeys(boundInterfaceTypes.getValue(key), boundInterfaceTypes)
+    return direct.toSet() + direct.flatMap(::transitiveBases)
+  }
+
+  val allBases: Set<RirTypeKey> = qualifying.flatMap(::transitiveBases).toSet()
+  return qualifying.filterNot { it in allBases }
+}
+
 // ADR-056: one ABI-level argument. `type` is always a scalar — never a RirStructType, because
 // abiArgs/abiOutArgs have already expanded any struct into its components. `isOutPointer` marks a
 // struct-return out-parameter (see abiOutArgs); an ordinary in-argument is isOutPointer = false.
@@ -139,15 +219,25 @@ fun abiReturnType(returnType: RirTypeRef, structs: Map<RirTypeKey, RirStruct>): 
 // ADR-051: signature extended with boundHandleTypes (derived once per RirFile via the
 // boundHandleTypes() helper above) so that RirObjectHandleType references can be resolved. Both
 // generators derive the set via the shared helper, closing the same drift risk as this function.
-fun bridgeableStaticMethods(cls: RirClass, boundHandleTypes: Set<RirTypeKey>): List<RirMethod> =
-  cls.methods.filter { it.isStatic && isV1Bridgeable(it, boundHandleTypes) }
+fun bridgeableStaticMethods(
+  cls: RirClass,
+  boundHandleTypes: Set<RirTypeKey>,
+  boundInterfaceTypes: Map<RirTypeKey, RirInterface> = emptyMap(),
+): List<RirMethod> =
+  cls.methods.filter { it.isStatic && isV1Bridgeable(it, boundHandleTypes, boundInterfaceTypes) }
 
 // ADR-052: mirrors bridgeableStaticMethods, but for public instance constructors. v1 supports at
 // most one public instance constructor per type — the metadata reader emits either zero or one
 // RirConstructor per class; multiple public `.ctor`s are grouped and skipped as an overload set
 // upstream (skipped_overload_set diagnostic) and never reach either generator.
-fun bridgeableConstructors(cls: RirClass, boundHandleTypes: Set<RirTypeKey>): List<RirConstructor> =
-  cls.constructors.filter { ctor -> ctor.parameters.all { isV1Type(it.type, boundHandleTypes) } }
+fun bridgeableConstructors(
+  cls: RirClass,
+  boundHandleTypes: Set<RirTypeKey>,
+  boundInterfaceTypes: Map<RirTypeKey, RirInterface> = emptyMap(),
+): List<RirConstructor> =
+  cls.constructors.filter { ctor ->
+    ctor.parameters.all { isV1Type(it.type, boundHandleTypes, boundInterfaceTypes) }
+  }
 
 fun bridgeableStructConstructors(
   struct: RirStruct,
@@ -351,16 +441,55 @@ fun RirRegistrable.bridgeId(): String = bridgeId(identity())
 
 // Phase 9 (ROADMAP line 151): v1-bridgeable instance methods on a bound class — mirrors
 // bridgeableStaticMethods, but for `!isStatic` methods.
-fun bridgeableInstanceMethods(cls: RirClass, boundHandleTypes: Set<RirTypeKey>): List<RirMethod> =
-  cls.methods.filter { !it.isStatic && isV1Bridgeable(it, boundHandleTypes) }
+fun bridgeableInstanceMethods(
+  cls: RirClass,
+  boundHandleTypes: Set<RirTypeKey>,
+  boundInterfaceTypes: Map<RirTypeKey, RirInterface> = emptyMap(),
+): List<RirMethod> =
+  cls.methods.filter { !it.isStatic && isV1Bridgeable(it, boundHandleTypes, boundInterfaceTypes) }
 
 // Phase 9: v1-bridgeable properties on a bound class. Static properties support strings and the
 // current primitive subset; handle-typed static properties remain deferred with handle setters.
-fun bridgeableProperties(cls: RirClass, boundHandleTypes: Set<RirTypeKey>): List<RirProperty> =
+fun bridgeableProperties(
+  cls: RirClass,
+  boundHandleTypes: Set<RirTypeKey>,
+  boundInterfaceTypes: Map<RirTypeKey, RirInterface> = emptyMap(),
+): List<RirProperty> =
   cls.properties.filter { property ->
-    isV1Type(property.type, boundHandleTypes) &&
+    isV1Type(property.type, boundHandleTypes, boundInterfaceTypes) &&
         (!property.isStatic || property.type !is RirObjectHandleType)
   }
+
+// ADR-070 Decision 2: the canonical registration ordering for an admissible interface — instance
+// methods (sorted by identity) → per-property [getter, setter?] (sorted by name). No constructors
+// (an interface has none) and no statics (Decision 6 skips every static interface member before
+// it reaches RirInterface). A strict subset of bridgeableRegistrablesCandidates' class ordering.
+fun bridgeableInterfaceRegistrables(
+  iface: RirInterface,
+  boundHandleTypes: Set<RirTypeKey>,
+  boundInterfaceTypes: Map<RirTypeKey, RirInterface> = emptyMap(),
+): List<RirRegistrable> {
+  val methods: List<RirRegistrable> = iface.methods
+    .filterNot { it.isStatic }
+    .filter { isV1Bridgeable(it, boundHandleTypes, boundInterfaceTypes) }
+    .sortedBy { it.identity() }
+    .map { RirRegistrable.Method(it) }
+
+  val properties: List<RirProperty> = iface.properties
+    .filterNot { it.isStatic }
+    .filter { isV1Type(it.type, boundHandleTypes, boundInterfaceTypes) }
+    .sortedBy { it.name }
+
+  val propertyRegistrables: List<RirRegistrable> = properties.flatMap { property ->
+    val getter: RirRegistrable = RirRegistrable.PropertyGetter(property)
+    if (property.isReadOnly) listOf(getter)
+    else listOf(getter, RirRegistrable.PropertySetter(property))
+  }
+
+  val result: List<RirRegistrable> = methods + propertyRegistrables
+  bridgeIds(result.map { it.identity() })
+  return result
+}
 
 // Phase 9 (ROADMAP line 151, rule 5 — human-approved v1 scope call): the Kotlin member names
 // already claimed by the ADR-051 wrapper class itself. An instance member whose Kotlin name
@@ -432,6 +561,10 @@ val RirTypeRef.isNullable: Boolean
   get() = when (this) {
     is RirStringType -> nullable
     is RirObjectHandleType -> nullable
+    // ADR-070 Decision 1, load-bearing: an un-extended nullability accessor would silently bind
+    // every interface reference non-null (the exact ADR-053 failure class this project already
+    // paid for once) — see NullabilityHelpers.IsNullableCapable/ApplyNullable on the reader side.
+    is RirInterfaceType -> nullable
     else -> false
   }
 
@@ -445,6 +578,7 @@ private fun RirTypeRef.describe(): String = when (this) {
   is RirObjectHandleType -> "$namespace.$name"
   is RirEnumType -> "$namespace.$name"
   is RirStructType -> "$namespace.$name"
+  is RirInterfaceType -> "$namespace.$name"
 }
 
 // ADR-059 Decision 5a: the verified Kotlin/Native `CFunction.invoke` argument ceiling
@@ -516,13 +650,16 @@ private fun arityLimitDiagnostic(typeName: String, r: RirRegistrable, arity: Int
 private fun bridgeableRegistrablesCandidates(
   cls: RirClass,
   boundHandleTypes: Set<RirTypeKey>,
+  boundInterfaceTypes: Map<RirTypeKey, RirInterface> = emptyMap(),
 ): List<RirRegistrable> {
   val collidingNames: Set<String> = collisionDiagnostics(cls).map { it.memberName }.toSet()
 
-  val instanceMethods: List<RirMethod> = bridgeableInstanceMethods(cls, boundHandleTypes)
-    .filterNot { it.name in collidingNames }
+  val instanceMethods: List<RirMethod> =
+    bridgeableInstanceMethods(cls, boundHandleTypes, boundInterfaceTypes)
+      .filterNot { it.name in collidingNames }
 
-  val properties: List<RirProperty> = bridgeableProperties(cls, boundHandleTypes)
+  val properties: List<RirProperty> =
+    bridgeableProperties(cls, boundHandleTypes, boundInterfaceTypes)
   val instanceProperties: List<RirProperty> = properties
     .filterNot { it.isStatic }
     .filterNot { it.name in collidingNames }
@@ -546,11 +683,11 @@ private fun bridgeableRegistrablesCandidates(
     if (hasManagedIdentity) values.sortedBy(identity) else values
 
   val constructors: List<RirRegistrable> = canonical(
-    bridgeableConstructors(cls, boundHandleTypes), RirConstructor::identity,
+    bridgeableConstructors(cls, boundHandleTypes, boundInterfaceTypes), RirConstructor::identity,
   )
     .map { RirRegistrable.Ctor(it) }
   val staticMethods: List<RirRegistrable> = canonical(
-    bridgeableStaticMethods(cls, boundHandleTypes), RirMethod::identity,
+    bridgeableStaticMethods(cls, boundHandleTypes, boundInterfaceTypes), RirMethod::identity,
   )
     .map { RirRegistrable.Method(it) }
   val sortedInstanceMethods: List<RirRegistrable> = canonical(
@@ -575,8 +712,9 @@ fun arityLimitDiagnostics(
   cls: RirClass,
   boundHandleTypes: Set<RirTypeKey>,
   structs: Map<RirTypeKey, RirStruct> = emptyMap(),
+  boundInterfaceTypes: Map<RirTypeKey, RirInterface> = emptyMap(),
 ): List<RirDiagnostic> =
-  bridgeableRegistrablesCandidates(cls, boundHandleTypes).mapNotNull { r ->
+  bridgeableRegistrablesCandidates(cls, boundHandleTypes, boundInterfaceTypes).mapNotNull { r ->
     val arity: Int = r.abiArity(structs, receiverArity = 1, ctorOutArity = 0)
     if (arity <= ABI_ARITY_CEILING) null else arityLimitDiagnostic(cls.name, r, arity)
   }
@@ -597,10 +735,13 @@ fun bridgeableRegistrables(
   cls: RirClass,
   boundHandleTypes: Set<RirTypeKey>,
   structs: Map<RirTypeKey, RirStruct> = emptyMap(),
+  boundInterfaceTypes: Map<RirTypeKey, RirInterface> = emptyMap(),
 ): List<RirRegistrable> {
-  val candidates: List<RirRegistrable> = bridgeableRegistrablesCandidates(cls, boundHandleTypes)
+  val candidates: List<RirRegistrable> =
+    bridgeableRegistrablesCandidates(cls, boundHandleTypes, boundInterfaceTypes)
   val overLimit: Set<String> =
-    arityLimitDiagnostics(cls, boundHandleTypes, structs).map { it.memberSignature }.toSet()
+    arityLimitDiagnostics(cls, boundHandleTypes, structs, boundInterfaceTypes)
+      .map { it.memberSignature }.toSet()
   val result: List<RirRegistrable> = candidates.filterNot { it.identity() in overLimit }
   bridgeIds(result.map { it.identity() })
   return result
@@ -609,12 +750,20 @@ fun bridgeableRegistrables(
 // ADR-048 v1 bridgeable subset: static methods only, void/string/primitive/handle parameter and
 // return types (overload sets, ref struct, open generics, dynamic, and DIMs are already filtered
 // out before either generator sees them, per ADR-043).
-private fun isV1Bridgeable(method: RirMethod, boundHandleTypes: Set<RirTypeKey>): Boolean {
-  if (!isV1Type(method.returnType, boundHandleTypes)) return false
-  return method.parameters.all { isV1Type(it.type, boundHandleTypes) }
+private fun isV1Bridgeable(
+  method: RirMethod,
+  boundHandleTypes: Set<RirTypeKey>,
+  boundInterfaceTypes: Map<RirTypeKey, RirInterface> = emptyMap(),
+): Boolean {
+  if (!isV1Type(method.returnType, boundHandleTypes, boundInterfaceTypes)) return false
+  return method.parameters.all { isV1Type(it.type, boundHandleTypes, boundInterfaceTypes) }
 }
 
-private fun isV1Type(type: RirTypeRef, boundHandleTypes: Set<RirTypeKey>): Boolean = when (type) {
+private fun isV1Type(
+  type: RirTypeRef,
+  boundHandleTypes: Set<RirTypeKey>,
+  boundInterfaceTypes: Map<RirTypeKey, RirInterface> = emptyMap(),
+): Boolean = when (type) {
   is RirVoidType -> true
   is RirStringType -> true
   is RirPrimitiveType -> type.name in setOf(
@@ -624,6 +773,8 @@ private fun isV1Type(type: RirTypeRef, boundHandleTypes: Set<RirTypeKey>): Boole
   // class. Types outside the bound set stay unmapped and produce a skipped_unbound_type_reference
   // diagnostic from the reader — never reach here as bridgeable candidates.
   is RirObjectHandleType -> RirTypeKey(type.namespace, type.name) in boundHandleTypes
+  // ADR-070: an interface ref is bridgeable iff it resolves to an admissible, bound RirInterface.
+  is RirInterfaceType -> RirTypeKey(type.namespace, type.name) in boundInterfaceTypes
   // The metadata reader only emits RirEnumType for a validated default-int, contiguous enum.
   is RirEnumType -> true
   // ADR-056: like RirEnumType above, the metadata reader only emits RirStructType for a struct
@@ -645,8 +796,19 @@ fun contractHash(
   cls: RirClass,
   registrables: List<RirRegistrable>,
   structs: Map<RirTypeKey, RirStruct>,
+): Long = contractHash(cls.name, registrables, structs)
+
+// ADR-070 Work item 7: contractHash's leading parameter generalized from a RirClass to a bare
+// name — cls.name was the only member of RirClass this function ever read (verified,
+// RirBridging.kt), so an interface's own name works identically for
+// nuget_{ns}_{IFoo}_register's contract, with no change to the hash algorithm itself. The
+// RirClass overload above is kept as a thin convenience wrapper for existing call sites.
+fun contractHash(
+  name: String,
+  registrables: List<RirRegistrable>,
+  structs: Map<RirTypeKey, RirStruct>,
 ): Long {
-  val signature: String = cls.name + "|" +
+  val signature: String = name + "|" +
       registrables.joinToString("|") { it.contractSignature(structs) }
   return fnv1a64(signature)
 }

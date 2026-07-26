@@ -11,7 +11,7 @@ ways, this page follows the code.
 |---|---|
 | Public top-level class | Yes, if it has at least one bridgeable member |
 | Public top-level static class | Yes, as a Kotlin `object` (see [Static classes and methods](static-classes-and-methods.md)) |
-| Interface | No members are bound to Kotlin; a default (non-abstract, non-static) interface method is explicitly skipped and diagnosed |
+| Interface | Yes, as a Kotlin `interface` plus a handle-backed implementation, when it is public, top-level, non-generic, and has at least one admissible member. See [Interfaces](#interfaces) below |
 | Enum | Yes, as a standalone Kotlin `enum class`, when it is public, top-level, default-`int` backed, non-`[Flags]`, and has unique contiguous values from `0` through `N-1` |
 | Struct / value type | Yes, but never as a **handle**. A struct is its own RIR node (never emitted as a class), and `CollectBoundHandleTypeNames` explicitly excludes any type whose base type is `System.ValueType` or `System.Enum`, so it can never become an object-handle parameter or return. A bridgeable struct decomposes into an immutable Kotlin `data class` instead, whether it has a state constructor ("Shape A") or only public settable fields/auto-properties ("Shape B"); see [C# structs](structs.md) |
 | `ref struct` (`Span<T>`, `ReadOnlySpan<T>`, custom) | No. Detected via the `IsByRefLikeAttribute` custom attribute; any member referencing one is skipped and diagnosed (`skipped_ref_struct`) |
@@ -19,8 +19,7 @@ ways, this page follows the code.
 | Generic type | Not explicitly filtered at the type level. A generic class is still enumerated as a candidate type, but virtually every member whose signature actually uses the open type parameter is skipped per-member (`skipped_open_generic`) when the parameter or return type is decoded, so a generic type in practice binds nothing unless it happens to expose non-generic members |
 | Record | Not recognized as a distinct construct at all: a C# `record class` compiles to an ordinary class in IL with no marker, and each constructor/member is evaluated by the same rules as any other class |
 
-Classes (static or not) and supported enums produce Kotlin output. Interfaces are extracted into the
-RIR as `RirInterface` but no stub is generated from them today.
+Classes (static or not), supported enums, and admissible interfaces produce Kotlin output.
 
 ## Enums
 
@@ -77,6 +76,102 @@ fun catMoodRoundTrip(): CatMood {
   supported.
 
 Unsupported enums are excluded with a `skipped_unsupported_enum` diagnostic in `reverse-ir.json`.
+
+## Interfaces
+
+A public, top-level, non-generic C# interface with at least one admissible member becomes a pure
+Kotlin `interface`, plus a handle-backed implementation class (the same shape Xamarin calls an
+"Invoker" for a bound Java interface):
+
+```c#
+// TestDependency/Menagerie.cs
+public interface IFeedable
+{
+    string Describe();
+    int Legs { get; }
+    void Feed(string food);
+    string? Nickname { get; set; }
+}
+```
+
+```kotlin
+// build/nuget-interop/kotlin/nativeMain/test/menagerie/IFeedable.kt
+internal interface IFeedable {
+  fun describe(): String
+  fun feed(food: String)
+  val legs: Int
+  var nickname: String?
+}
+```
+
+The interface itself carries no handle. A value arriving at an interface-typed position (a return,
+a parameter, or a property) is wrapped in a generated `IFeedableHandle`, which implements `IFeedable`
+and dispatches every member through its own registration slot table, one `[UnmanagedCallersOnly]`
+thunk per member, keyed on the interface rather than any concrete class:
+
+```kotlin
+// build/nuget-interop/kotlin/nativeMain/test/menagerie/IFeedableHandle.kt (excerpt)
+internal class IFeedableHandle internal constructor(handle: COpaquePointer) : IFeedable, NugetHandleOwner, AutoCloseable {
+  override val handle: NugetObjectHandle = NugetObjectHandle(handle)
+  ...
+  override fun describe(): String {
+    val fn = requireNotNull(IFeedableBindings.describe__fa0681f6f7a68dd9b326d010404efcfbFn) { ... }
+    ...
+  }
+}
+```
+
+Because the per-interface slot table is keyed on the interface, not the runtime class, dispatch
+works for a runtime type the generator never even named, bound or not, public or not: a `Sanctuary`
+method returning `IFeedable` can hand back an `internal` C# class and Kotlin still calls through it
+correctly.
+
+Interface inheritance binds too: `interface ITagged : IFeedable` becomes `interface ITagged :
+IFeedable` in Kotlin, and `ITaggedHandle` dispatches `IFeedable`'s inherited members through
+`IFeedable`'s own slots, with no re-registration needed, as long as `IFeedable` is itself admissible
+and bound. If the base interface is not admissible, the derived interface binds with only its own
+declared members and an `info_inherited_interface_members_absent` diagnostic.
+
+A bound class declares an implemented interface as a Kotlin supertype only when every interface
+member has an identically-signed **public** bridged member on the class:
+
+```kotlin
+// build/nuget-interop/kotlin/nativeMain/test/menagerie/TaggedFerret.kt (excerpt)
+internal class TaggedFerret internal constructor(handle: COpaquePointer) : ITagged, NugetHandleOwner, AutoCloseable {
+  ...
+}
+```
+
+A C# **explicit** interface implementation (`string IFeedable.Describe() => ...;`) is non-public in
+metadata, so the reader can't see it as a class member at all; such a class omits the supertype
+entirely and gets a `skipped_interface_supertype` diagnostic instead of invalid Kotlin.
+
+<note>
+<p>An interface-typed value always becomes the generated handle type (<code>IFeedableHandle</code>),
+never the concrete bound class, even when the runtime object is bound. There is no downcast:
+<code>star() as? Ferret</code> is always <code>null</code>. This extends the "new wrapper per
+crossing, no identity caching" rule from identity to type: one C# object reachable both as
+<code>IFeedable</code> and as a bound <code>Ferret</code> yields two unrelated Kotlin objects of two
+unrelated Kotlin types.</p>
+</note>
+
+Passing a bound class at an interface-typed parameter works through the same `NugetHandleOwner`
+marker every generated wrapper implements; passing a Kotlin *implementation* of the interface back
+to C# is not supported yet (see [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md) Phase 13).
+
+### Interface limitations
+
+- Generic interfaces (`IBox<T>`) do not bind: `skipped_generic_interface`.
+- Any `static`, `static abstract`, or `static virtual` interface member is skipped:
+  `skipped_interface_static_member`.
+- A default interface method is skipped: `skipped_default_interface_method` (unchanged, pre-existing).
+- An indexer (`this[int]`) is skipped: `skipped_indexer`. This also now applies to classes, a
+  pre-existing silent gap turned into a diagnostic.
+- An `event` member is skipped: `skipped_event`. This also now applies to classes, a pre-existing
+  silent gap turned into a diagnostic.
+- An interface with zero admissible members is skipped entirely: `skipped_empty_interface`.
+- No downcast from an interface-typed value to a concrete bound class (see the note above).
+- Kotlin implementing a C#-declared interface and passing it back to C# is not supported.
 
 ## Constructors
 
@@ -220,6 +315,13 @@ enum class RirDiagnosticKind {
   ERROR_KOTLIN_SIGNATURE_COLLISION,
   INFO_ASYNC_NOT_YET_MAPPED,
   INFO_OBLIVIOUS_NULLABILITY,      // ADR-053: an un-annotated (oblivious) reference type bound non-null
+  SKIPPED_GENERIC_INTERFACE,               // ADR-070: open generic interface, arity-mangled CLR name
+  SKIPPED_INTERFACE_STATIC_MEMBER,         // ADR-070: static/static abstract/static virtual interface member
+  SKIPPED_INDEXER,                         // ADR-070: this[int] (also fires for classes)
+  SKIPPED_EVENT,                           // ADR-070: event member (also fires for classes)
+  SKIPPED_EMPTY_INTERFACE,                 // ADR-070: interface with zero admissible members
+  SKIPPED_INTERFACE_SUPERTYPE,             // ADR-070: a class's interface member is non-public (explicit impl)
+  INFO_INHERITED_INTERFACE_MEMBERS_ABSENT, // ADR-070: base interface not admissible/bound
 }
 ```
 
@@ -269,5 +371,6 @@ queryable diagnostics report (only a Gradle log line exists today), tracked in
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/053-nullable-reference-types-in-kotlin.md">ADR-053: Nullable reference types in Kotlin</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/056-csharp-structs-in-kotlin.md">ADR-056: C# structs (value types) in Kotlin</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/058-csharp-shape-b-structs-in-kotlin.md">ADR-058: C# Shape B structs in Kotlin</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/070-csharp-interfaces-in-kotlin.md">ADR-070: C# interfaces in Kotlin</a>
     </category>
 </seealso>

@@ -367,7 +367,10 @@ class NugetGenerateBindingsTaskTest {
     val files: List<GeneratedFile> = generateKotlinStubs(templateRir)
 
     val stub: GeneratedFile = files.single { it.relativePath.endsWith("Template.kt") }
-    assertContains(stub.content, "internal val handle: NugetObjectHandle")
+    // ADR-070: `internal val handle` became `override val handle` — every wrapper now implements
+    // the NugetHandleOwner marker (Decision 4); the field stays `internal` (inherited from the
+    // interface member's own explicit `internal` modifier), the literal text just changed.
+    assertContains(stub.content, "override val handle: NugetObjectHandle")
   }
 
   @Test

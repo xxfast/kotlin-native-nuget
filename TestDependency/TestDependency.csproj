@@ -31,6 +31,13 @@
       sharing a method name (Cat.Describe / Toy.Describe), a many-parameter method with a
       nullable annotated return (Household.FindToy), and a `#nullable disable` oblivious
       island whose method deliberately returns a genuine null (StrayCat.Announce).
+      Test.Menagerie.IFeedable / ITagged / Ferret / Shy / TaggedFerret / Nocturnal /
+      Sanctuary — ADR-070 fixture: a C#-declared interface surfacing in Kotlin as a Kotlin
+      `interface` plus a handle-backed implementation, exercised at return, parameter and
+      settable-nullable-property positions, an explicit-implementation negative case
+      (Shy), an unbound-internal-runtime-type case (Nocturnal), interface inheritance
+      (ITagged : IFeedable), and one interface per Decision 6 diagnostic (IBox&lt;T&gt;,
+      IWithStatics, IWithDim, IIndexedThing, IEmpty).
     </Description>
   </PropertyGroup>
 
