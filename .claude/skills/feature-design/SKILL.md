@@ -9,15 +9,23 @@ Implements a new feature using a TDD loop, delegating each step to the appropria
 
 You run in the main conversation thread, so you can spawn subagents and pause to check in with the human. Delegate to the appropriate agent for each step (research, testing, implementation, refactor, docs) and provide them the necessary context and instructions.
 
-## Step 0: Confirm the agent roster (do this first, every run)
+## Step 0: Validate the item before you design anything (hard gate, every run)
 
-This skill dispatches to exactly five agents — `research`, `csharp-dev`, `kotlin-dev`, `refactorer`, `documenter` — all defined in `.claude/agents/`. **The session's injected "Available agent types" list is not a reliable source of truth: it has been observed to omit `csharp-dev` and `documenter`, both of which are configured and callable.** If you trust that list you will silently substitute a wrong agent (or inline the work) at Step 3 or Step 5, which is worse than failing.
+No later step can catch a wrong-item run: from Step 1 on, every artefact is derived from the design, so tests, code and docs all agree with each other while disagreeing with the request. Do this before any research agent, any ADR, and any design question.
 
-So before anything else, bind the roster from ground truth:
+**0. Bind the agent roster.** `ls .claude/agents/` and confirm the five agents this skill dispatches to (`research`, `csharp-dev`, `kotlin-dev`, `refactorer`, `documenter`). If a file is present the agent exists, call it, regardless of whether the session's injected "Available agent types" list mentions it: that list has been observed to omit `csharp-dev` and `documenter`. Never substitute a different agent for one you think is missing, and never absorb the C# or docs work into the main thread because the roster "didn't list it".
 
-- Run `ls .claude/agents/` and confirm all five `.md` files are present.
-- Delegate to all five regardless of whether the injected roster mentions them. If a file is present, the agent exists — call it.
-- Never substitute a different agent for a missing one, and never do the C# (`csharp-dev`) or docs (`documenter`) work yourself in the main thread because the roster "didn't list it."
+**1. Restate the item from its own words, with every linked ADR still closed.** One sentence: what does a consumer get? For a bridge feature the restatement must name the **direction** (Kotlin → C# forward, or C# → Kotlin reverse) and **which side declares** the type or contract versus merely consumes it. A title alone reads either way once an ADR has primed you.
+
+**2. Read the item's neighbours and its section heading.** `git log -S"<the item text>" -- ROADMAP.md` shows what arrived alongside it; items added together disambiguate each other. **If the section's stated direction contradicts your restatement, stop and ask.**
+
+**3. Check the item is reachable.** Does it need machinery from a later phase, or a sibling item still unticked? If so it is **blocked**: stop, and report what it needs, which item or phase owns that, and what you could do instead. Never build the nearest reachable thing against a blocked item's checkbox.
+
+**4. If an ADR is linked, verify its scope matches your restatement.** An ADR is evidence about *how*, never authority over *what*. If its subject and your restatement differ, **stop and escalate** with both side by side. Do not reconcile it yourself, and do not adopt the ADR's framing for being more detailed or more confident.
+
+**5. State the restatement back to the human before Step 1**, with reachability. This is the only point where the request and the plan are compared directly.
+
+Carry the restatement forward verbatim: Step 2 is judged against it, and Step 5 may tick the item only if what shipped matches it. Work worth doing that is **not** this item gets its own item, and the requested one stays open.
 
 ## Phase kickoff (batching the human gate)
 
@@ -53,6 +61,8 @@ Then run the per-feature Step 3–5 loop below for each item.
 - Get feedback and iterate on the design before implementation
 - Call out any deferred scope and ask if we want to schedule this on the roadmap
 - This step is crucial to ensure we're building the right thing before writing code
+- **Lead with the Step 0 restatement and say plainly whether the design still satisfies it.** Research routinely reshapes a feature, and the reshaped version can drift off the item without anybody noticing, because from here on every artefact is derived from the design rather than from the request. Put the restatement and what you are about to build next to each other and confirm they match.
+- **Ask at least one *what* question, not only *how* questions.** A gate made entirely of implementation choices ("which plan model?", "which handle-extraction strategy?") reads as thorough and validates nothing about scope: every option builds the same possibly-wrong feature. If you have no *what* question, say explicitly "this still delivers <restatement>" so the claim is on the record and the human can contradict it.
 - Once the human agrees with the approach, move to the next step (the ADR is accepted later, in Step 5, once the feature is implemented and verified)
 
 ### Step 3: Testing
@@ -103,7 +113,7 @@ rebuilds with nobody reading behind it.
 
 - **`documenter` agent** (first): hand it the feature, the ADR (if any), the ROADMAP item it completes, the sample/test files that exercise it, and **every bug the feature discovered but did not fix**. That last one is yours to pass on: the split-out bugs exist only in the implementing agents' reports, which the `documenter` cannot see, so if you do not forward them they are lost. Give it the symptom, the root cause and `file:line` if an agent established one, and whether it was actually verified. It owns every doc surface:
   - the Writerside pages in `docs/topics/`: the mapping table, the snippets, and (most easily missed) deleting the now-false line from the page's **Limitations** section
-  - ROADMAP.md: tick the completed item, link its ADR
+  - ROADMAP.md: tick the completed item, link its ADR. **Before instructing the tick, re-read the item's own text and confirm what shipped satisfies the Step 0 restatement.** You are the only one who can: the `documenter` never saw the original request and will tick whatever line you name. If the delivered work is good but is not this item, it gets its **own** item and the requested one stays open, with a note on it saying what does and does not cover it. Also confirm the item's sub-bullets say the same thing as its parent line, since a parent that contradicts its own children is a mislabel to escalate, not to tick around
   - FEATURES.md: add or amend the mapping row in its feature category, ADR link in the ADRs column (skip if the feature adds no bridge mapping, e.g. pure plugin/DSL work). The catalogue is bidirectional: each row carries a **direction** glyph (`→` Kotlin → C#, `←` C# → Kotlin, `⇄` both). For a reverse feature, flip an existing row's glyph toward `⇄` (or add a `←` row) and use the Notes to capture any asymmetry (`→ … · ← …`) when the directions diverge
   - mark the relevant ADR as `Accepted`
 - **`refactorer` agent** (second, only once the `documenter` has reported back): do not scan the changed files yourself. Hand it `kotlin-dev`'s reported list of touched files and let it judge against [STYLE.md](../../../STYLE.md) and fix any violations in one pass. It reports back the files it changed (or "no violations") plus the test result.
@@ -115,6 +125,7 @@ this step only after the feature is verified and the build artefacts are current
 ## Rules
 
 - You must delegate to the appropriate subagent
+- **Build the item you were asked for, or say you are not.** Step 0's restatement is the contract; a linked ADR is evidence about how, never authority over what. If the item is blocked, or the ADR's scope does not match it, stop and tell the human before designing anything. Delivered work never consumes the checkbox of an item it does not satisfy. This is the one failure the rest of the workflow structurally cannot catch: from Step 1 onward every artefact is derived from the design, so tests, code and docs will all agree with each other while disagreeing with the request.
 - Research agents run in background when independent
 - After research is complete, share findings with humans for feedback before proceeding to implementation
 - Tests before implementation (step 3 before step 4)
