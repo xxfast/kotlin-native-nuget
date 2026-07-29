@@ -79,12 +79,16 @@ Primitive types follow the standard [Kotlin/Native C interop mappings](https://k
 
 | Kotlin                      | ⇄ | C#                    | Notes                                   | ADRs                                                       |
 |-----------------------------|:-:|-----------------------|-----------------------------------------|------------------------------------------------------------|
-| `class<T>`                  | → | `class<T>`            | type-erased bridge + generic C# wrapper | [ADR-010](docs/adr/010-generics-mapping.md)                |
-| `class<T>(...)` constructor | → | typed constructors    | typed arguments through the bridge      |                                                            |
+| `class<T>`                  | ⇄ | `class<T>`            | → type-erased bridge + generic C# wrapper · ← a bound generic class reached through a closed instantiation (`Box<int>`) binds as a real Kotlin generic class over a per-instantiation witness, never a monomorphized family; BCL instantiations (`List<int>`) are diagnosed, not bound `[8]` | [ADR-010](docs/adr/010-generics-mapping.md), [ADR-072](docs/adr/072-closed-constructed-generics-in-kotlin.md) |
+| `class<T>(...)` constructor | ⇄ | typed constructors    | → typed arguments through the bridge · ← one Kotlin fake top-level constructor per unambiguous instantiation `[8]` |                                                            |
 | `fun <T> f()`               | → | typed variants        | runtime dispatch via `NugetMarshal`     |                                                            |
 | `<T : Bound>` constraint    | → | `where T : ...`       |                                         | [ADR-015](docs/adr/015-generic-type-constraint-mapping.md) |
 | `out T` / `in T` variance   | → | `out T` / `in T`      |                                         | [ADR-016](docs/adr/016-generic-variance-mapping.md)        |
 | `typealias`                 | → | C# alias / underlying | generic type aliases                    | [ADR-018](docs/adr/018-type-alias-mapping.md)              |
+
+**Notes**
+
+- **`[8]`** ← Only generic **classes** bind, and only through a closed instantiation the reader can discover (`Box<int>`, `Pairing<string, int>`); open generic *types* stay excluded per ADR-043. Every member, including one that mentions no type parameter, dispatches through a per-instantiation witness object, since `[UnmanagedCallersOnly]` cannot be generic (`CS8895`). No Kotlin type-parameter constraints are emitted. Two instantiations whose fake constructor erases to the same non-null Kotlin parameter list both lose it (`skipped_ambiguous_generic_constructor`); a generic definition with zero discovered instantiations emits nothing at all. Generic interfaces, generic structs, and BCL collection instantiations as Kotlin collections stay open (see ROADMAP.md Phase 10).
 
 ## Collections
 

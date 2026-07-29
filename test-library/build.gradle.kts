@@ -208,6 +208,8 @@ nuget {
         alias("Test.Nested", "test.nested")
         include("Test.Menagerie")
         alias("Test.Menagerie", "test.menagerie")
+        include("Test.Boxes")
+        alias("Test.Boxes", "test.boxes")
       }
     }
   }

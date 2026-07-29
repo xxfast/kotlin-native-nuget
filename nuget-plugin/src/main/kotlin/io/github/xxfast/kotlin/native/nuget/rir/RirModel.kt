@@ -50,7 +50,21 @@ data class RirClass(
   // parses. Filtered to interfaces that are themselves admissible and bound is a generator-side
   // concern (RirBridging.classInterfaceSupertypes), not the reader's.
   val interfaces: List<String> = emptyList(),
+  // ADR-072 Decision 3: generic parameter names, verbatim from GenericParam.Name, in declared
+  // order ("T", or "TKey"/"TValue" for arity 2). Empty for a non-generic class (the overwhelming
+  // majority), which is also what makes this additive against old reverse-ir.json.
+  val typeParameters: List<String> = emptyList(),
+  // ADR-072 Decision 2: the closed instantiations of this generic definition discovered by the
+  // reader's fixed-point enumeration pass. Empty for a non-generic class, and ALSO empty for a
+  // generic definition with zero discovered instantiations (Decision 10: such a definition emits
+  // nothing at all: this is the regression seam for the `Box`1` leak).
+  val instantiations: List<RirInstantiation> = emptyList(),
 ) : RirType
+
+// ADR-072 Decision 3: one closed instantiation of a generic RirClass, positionally matching that
+// class's own [RirClass.typeParameters] (same arity, same order).
+@Serializable
+data class RirInstantiation(val typeArguments: List<RirTypeRef>)
 
 // ADR-070: a C#-declared, admissible (Decision 6), bound interface. [methods]/[properties] are
 // this interface's OWN declared members only (never members inherited from a base interface —
@@ -234,6 +248,28 @@ data class RirInterfaceType(
   val nullable: Boolean = false,
 ) : RirTypeRef
 
+// ADR-072 Decision 3: a member type that IS a type parameter of its declaring generic type
+// ([index] into that type's own [RirClass.typeParameters], [name] verbatim, e.g. "T"/"TKey").
+// Never nullable on its own: a type-parameter reference's nullability, if any, comes from the
+// substituted type argument at each instantiation (Decision 7), not from this node.
+@Serializable
+@SerialName("typeparam")
+data class RirTypeParameterType(val index: Int, val name: String) : RirTypeRef
+
+// ADR-072 Decision 3: a member type that is a closed instantiation of a bound generic definition
+// ([namespace]/[name] identify the OPEN definition by its CLR name, e.g. "Box`1"; Decision 10
+// strips the arity suffix at emission time, never here). [nullable] reflects this REFERENCE's own
+// NullableAttribute payload (`Box<int>?` vs `Box<int>`), independent of any of [typeArguments]'
+// own nullability (`Box<string?>`).
+@Serializable
+@SerialName("generic")
+data class RirGenericInstanceType(
+  val namespace: String,
+  val name: String,
+  val typeArguments: List<RirTypeRef>,
+  val nullable: Boolean = false,
+) : RirTypeRef
+
 @Serializable
 data class RirDiagnostic(
   val kind: RirDiagnosticKind,
@@ -342,4 +378,38 @@ enum class RirDiagnosticKind {
   // omits the `: IBase` supertype and IDerivedHandle cannot dispatch IBase's members.
   @SerialName("info_inherited_interface_members_absent")
   INFO_INHERITED_INTERFACE_MEMBERS_ABSENT,
+
+  // ADR-072 Decision 9: an instantiation whose definition lives outside the bound assemblies
+  // (`List<int>`, `Dictionary<string,int>`): no members are ever extracted for it, so it is
+  // diagnosed and skipped rather than bound as a handle with nothing on it.
+  @SerialName("skipped_unbound_generic_instantiation")
+  SKIPPED_UNBOUND_GENERIC_INSTANTIATION,
+
+  // ADR-072 Decision 6: a type argument outside the v1 vocabulary (another generic instantiation,
+  // a struct, an array, a ref struct, an unresolved type parameter, an unbound external type).
+  @SerialName("skipped_generic_type_argument")
+  SKIPPED_GENERIC_TYPE_ARGUMENT,
+
+  // ADR-072 Decision 7: a member whose type is a bare type parameter annotated nullable
+  // (`T? Peek()`), not representable per instantiation in v1.
+  @SerialName("skipped_nullable_type_parameter")
+  SKIPPED_NULLABLE_TYPE_PARAMETER,
+
+  // ADR-072 Decision 5: two or more instantiations of one generic definition erase (to non-null
+  // Kotlin types) to the same fake-constructor parameter list. ALL of them lose their fake
+  // constructor (never "all but one": the outcome must not depend on declaration order).
+  @SerialName("skipped_ambiguous_generic_constructor")
+  SKIPPED_AMBIGUOUS_GENERIC_CONSTRUCTOR,
+
+  // ADR-072 Decision 10: a bound generic definition with zero discovered instantiations. Nothing
+  // is emitted for it at all (no Kotlin type, no export, no C# class). This is what closes the
+  // latent `Box`1` interpolation leak (Context item 2).
+  @SerialName("info_uninstantiated_generic_type")
+  INFO_UNINSTANTIATED_GENERIC_TYPE,
+
+  // ADR-072 Decision 10: `Box` and `Box`1` declared in the same namespace (or two instantiations
+  // of one definition sharing an internal tag) cannot both produce a Kotlin type/tag named
+  // `Box`. This is a hard generation failure, mirroring ERROR_KOTLIN_SIGNATURE_COLLISION.
+  @SerialName("error_generic_arity_name_collision")
+  ERROR_GENERIC_ARITY_NAME_COLLISION,
 }

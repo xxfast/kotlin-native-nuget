@@ -197,6 +197,24 @@ internal static class AssemblyExtractor
             mr, namespaceMap, boundHandleTypeNames, enumTypes, structTypes);
         diagnostics.AddRange(interfaceDiagnostics);
 
+        // ADR-072 Decision 8: every bound, non-interface, non-value-type class with a non-zero
+        // generic arity is a generic definition this ADR can bind: GenericParam.Name, verbatim, in
+        // declared order. Collected BEFORE the instantiation-enumeration pass below, which needs to
+        // know (a) which fully-qualified names are generic definitions at all, to correctly
+        // configure each SignatureDecoder's declaringTypeParameters (Decision 3), and (b) their
+        // arity, to substitute Phase B shapes positionally.
+        var genericClassTypeParameters = CollectGenericClassTypeParameters(mr, namespaceMap, boundHandleTypeNames);
+
+        // ADR-072 Decision 2: the reader's own fixed-point pass over every public member SIGNATURE
+        // (as opposed to CollectStructTypes' fixed point over TYPES). Phase A discovers every
+        // concrete, bound generic instantiation reachable from any member anywhere in the bound
+        // surface; Phase B substitutes those into the definitions' own self-referencing shapes
+        // (`Box<T>.Rewrap(): Box<T>`) until no more are discovered. Must run BEFORE ProcessType so
+        // each generic RirClass can carry its completed instantiations list.
+        var instantiationsByDefinition = CollectGenericInstantiations(
+            mr, namespaceMap, boundHandleTypeNames, enumTypes, structTypes, boundInterfaceTypeNames,
+            genericClassTypeParameters);
+
         var rirNamespaces = new List<RirNamespace>();
 
         foreach (var (ns, typeHandles) in namespaceMap.OrderBy(kv => kv.Key))
@@ -208,7 +226,7 @@ internal static class AssemblyExtractor
                 var typeDef = mr.GetTypeDefinition(typeHandle);
                 var (rirType, typeDiagnostics) = ProcessType(
                     mr, typeHandle, typeDef, boundHandleTypeNames, enumTypes, structTypes,
-                    boundInterfaceTypeNames);
+                    boundInterfaceTypeNames, genericClassTypeParameters, instantiationsByDefinition);
                 if (rirType is not null) rirTypes.Add(rirType);
                 diagnostics.AddRange(typeDiagnostics);
             }
@@ -427,6 +445,289 @@ internal static class AssemblyExtractor
         }
 
         return false;
+    }
+
+    /// <summary>
+    /// ADR-072 Decision 8: <c>GenericParam.Name</c>, verbatim, in declared order, for every bound,
+    /// wrapper-eligible class (mirrors <see cref="CollectBoundHandleTypeNames"/>'s own eligibility:
+    /// non-interface, non-static, non-value-type, non-ref-struct) with a non-zero generic arity.
+    /// A generic STRUCT is deliberately excluded here: <c>CollectStructTypes</c> already marks it
+    /// Unsupported ("generic struct ... not bridgeable in v1"), and generic structs stay deferred
+    /// (ADR-072 Scope).
+    /// </summary>
+    private static Dictionary<string, IReadOnlyList<string>> CollectGenericClassTypeParameters(
+        MetadataReader mr,
+        Dictionary<string, List<TypeDefinitionHandle>> namespaceMap,
+        HashSet<string> boundHandleTypeNames)
+    {
+        var result = new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal);
+
+        foreach (var (ns, typeHandles) in namespaceMap)
+        {
+            foreach (var typeHandle in typeHandles)
+            {
+                var typeDef = mr.GetTypeDefinition(typeHandle);
+                var typeName = mr.GetString(typeDef.Name);
+                var fullName = string.IsNullOrEmpty(ns) ? typeName : $"{ns}.{typeName}";
+                if (!boundHandleTypeNames.Contains(fullName)) continue;
+
+                var genericParams = typeDef.GetGenericParameters();
+                if (genericParams.Count == 0) continue;
+
+                var names = new List<string>(genericParams.Count);
+                foreach (var gpHandle in genericParams)
+                {
+                    var gp = mr.GetGenericParameter(gpHandle);
+                    names.Add(mr.GetString(gp.Name));
+                }
+
+                result[fullName] = names;
+            }
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// ADR-072 Decision 2: the reader's own instantiation-enumeration pass, over member SIGNATURES
+    /// (not types, that's <see cref="CollectStructTypes"/>'s fixed point). Two phases, to avoid a
+    /// circular dependency between "is this member bridgeable" and "is this instantiation bound":
+    /// <list type="bullet">
+    /// <item>Phase A (discovery): decode every public member signature of every included type,
+    /// regardless of whether that member will separately survive the ordinary bridgeability filter
+    /// (Phase A deliberately over-collects: an unused slot table is the cheap direction of the
+    /// error). Any top-level return/parameter/property type that resolves to a
+    /// <see cref="RirGenericInstanceType"/> is a shape: concrete (no <see cref="RirTypeParameterType"/>
+    /// anywhere in its type arguments) becomes a Phase A candidate directly; one that still carries a
+    /// placeholder for the ENCLOSING generic type's own parameter (only possible while decoding that
+    /// type's own members, e.g. <c>Box&lt;T&gt;.Rewrap(): Box&lt;T&gt;</c>) is recorded as a "self
+    /// shape" owned by that definition, awaiting Phase B.</item>
+    /// <item>Phase B (closure): for every concrete candidate of definition D, substitute its type
+    /// arguments into every self shape owned by D, producing new candidates; iterate to a fixed
+    /// point. Termination is structural (Decision 6 forbids a nested generic instantiation as a type
+    /// argument, so the vocabulary is finite and each round only adds), but a hard 8-round cap is
+    /// enforced and a failure to converge throws rather than loops, per the repo's fail-fast
+    /// convention.</item>
+    /// </list>
+    /// Inferred (not verified by an actual multi-round run): that an instantiation reached only via
+    /// Phase B substitution is discoverable before the ordinary bridgeability filter runs. This
+    /// pass runs entirely independently of, and before, that filter, which is what makes it true by
+    /// construction here.
+    /// </summary>
+    private static Dictionary<string, List<RirInstantiation>> CollectGenericInstantiations(
+        MetadataReader mr,
+        Dictionary<string, List<TypeDefinitionHandle>> namespaceMap,
+        HashSet<string> boundHandleTypeNames,
+        IReadOnlyDictionary<string, EnumExtraction> enumTypes,
+        IReadOnlyDictionary<string, StructExtraction> structTypes,
+        HashSet<string> boundInterfaceTypeNames,
+        IReadOnlyDictionary<string, IReadOnlyList<string>> genericClassTypeParameters)
+    {
+        var candidates = new List<RirGenericInstanceType>();
+        var selfShapesByOwner = new Dictionary<string, List<RirGenericInstanceType>>(StringComparer.Ordinal);
+
+        void Record(string ownerFullName, RirGenericInstanceType shape)
+        {
+            if (NullabilityHelpers.ContainsTypeParameter(shape))
+            {
+                if (!selfShapesByOwner.TryGetValue(ownerFullName, out var shapes))
+                {
+                    shapes = new List<RirGenericInstanceType>();
+                    selfShapesByOwner[ownerFullName] = shapes;
+                }
+
+                if (!shapes.Any(s => GenericInstanceEquals(s, shape))) shapes.Add(shape);
+            }
+            else if (!candidates.Any(c => GenericInstanceEquals(c, shape)))
+            {
+                candidates.Add(shape);
+            }
+        }
+
+        void HarvestFromType(RirTypeRef? type, EntityHandle memberHandle, EntityHandle methodHandle,
+            EntityHandle typeHandle, string ownerFullName)
+        {
+            if (type is null) return;
+            var resolution = NullabilityHelpers.ResolveTree(mr, type, memberHandle, methodHandle, typeHandle);
+            if (resolution.Type is RirGenericInstanceType shape) Record(ownerFullName, shape);
+        }
+
+        foreach (var (ns, typeHandles) in namespaceMap)
+        {
+            foreach (var typeHandle in typeHandles)
+            {
+                var typeDef = mr.GetTypeDefinition(typeHandle);
+                var typeName = mr.GetString(typeDef.Name);
+                var fullName = string.IsNullOrEmpty(ns) ? typeName : $"{ns}.{typeName}";
+                genericClassTypeParameters.TryGetValue(fullName, out var declaringParams);
+
+                foreach (var methodHandle in typeDef.GetMethods())
+                {
+                    var method = mr.GetMethodDefinition(methodHandle);
+                    if ((method.Attributes & System.Reflection.MethodAttributes.MemberAccessMask)
+                        != System.Reflection.MethodAttributes.Public) continue;
+
+                    var methodName = mr.GetString(method.Name);
+                    bool isCtor = methodName == ".ctor";
+                    bool isSpecialName = (method.Attributes & System.Reflection.MethodAttributes.SpecialName) != 0;
+                    // Property accessors (get_X/set_X) are harvested via the property loop below,
+                    // to decode each property's type exactly once.
+                    if (isSpecialName && !isCtor) continue;
+
+                    var decoder = new SignatureDecoder(
+                        mr, boundHandleTypeNames, enumTypes, structTypes, boundInterfaceTypeNames, declaringParams);
+                    MethodSignature<TypeRefOrDiag> sig;
+                    try
+                    {
+                        sig = method.DecodeSignature(decoder, genericContext: null);
+                    }
+                    catch (BadImageFormatException)
+                    {
+                        continue;
+                    }
+
+                    var paramHandlesBySeq = MapParameterHandlesBySequenceNumber(mr, method);
+                    for (int i = 0; i < sig.ParameterTypes.Length; i++)
+                    {
+                        int seq = i + 1;
+                        var paramHandle = paramHandlesBySeq.TryGetValue(seq, out var ph) ? ph : default;
+                        HarvestFromType(sig.ParameterTypes[i].TypeRef, paramHandle, methodHandle, typeHandle, fullName);
+                    }
+
+                    if (!isCtor)
+                    {
+                        var returnParamHandle = paramHandlesBySeq.TryGetValue(0, out var rph) ? rph : default;
+                        HarvestFromType(sig.ReturnType.TypeRef, returnParamHandle, methodHandle, typeHandle, fullName);
+                    }
+                }
+
+                foreach (var propHandle in typeDef.GetProperties())
+                {
+                    var propDef = mr.GetPropertyDefinition(propHandle);
+                    var accessors = propDef.GetAccessors();
+                    if (accessors.Getter.IsNil) continue;
+
+                    var getterDef = mr.GetMethodDefinition(accessors.Getter);
+                    if ((getterDef.Attributes & System.Reflection.MethodAttributes.MemberAccessMask)
+                        != System.Reflection.MethodAttributes.Public) continue;
+                    if (getterDef.GetParameters().Count > 0) continue; // indexer
+
+                    var decoder = new SignatureDecoder(
+                        mr, boundHandleTypeNames, enumTypes, structTypes, boundInterfaceTypeNames, declaringParams);
+                    MethodSignature<TypeRefOrDiag> sig;
+                    try
+                    {
+                        sig = propDef.DecodeSignature(decoder, genericContext: null);
+                    }
+                    catch (BadImageFormatException)
+                    {
+                        continue;
+                    }
+
+                    HarvestFromType(sig.ReturnType.TypeRef, propHandle, methodHandle: default, typeHandle, fullName);
+                }
+            }
+        }
+
+        // Phase B: fixed point over the (small) set of concrete candidates and self shapes found
+        // above. Structurally bounded (Decision 6), but fail loudly rather than loop if it isn't.
+        int iteration = 0;
+        bool grew = true;
+        while (grew)
+        {
+            iteration++;
+            if (iteration > 8)
+            {
+                throw new InvalidDataException(
+                    "ADR-072 Decision 2: generic instantiation closure did not converge within 8 " +
+                    "rounds. This should be structurally impossible (Decision 6 forbids a nested " +
+                    "generic instantiation as a type argument, which is what bounds the candidate " +
+                    "set), so this indicates a reader bug rather than a legitimately cyclic input.");
+            }
+
+            grew = false;
+            foreach (var candidate in candidates.ToList())
+            {
+                var ownerFullName = string.IsNullOrEmpty(candidate.Namespace)
+                    ? candidate.Name
+                    : $"{candidate.Namespace}.{candidate.Name}";
+                if (!selfShapesByOwner.TryGetValue(ownerFullName, out var shapes)) continue;
+
+                foreach (var shape in shapes)
+                {
+                    var substitutedArgs = shape.TypeArguments
+                        .Select(a => a is RirTypeParameterType tp ? candidate.TypeArguments[tp.Index] : a)
+                        .ToList();
+                    var substituted = new RirGenericInstanceType(
+                        shape.Namespace, shape.Name, substitutedArgs, shape.Nullable);
+
+                    if (NullabilityHelpers.ContainsTypeParameter(substituted))
+                    {
+                        // Defensive: every placeholder should have been resolved by the
+                        // substitution above. Do not add a still-open shape as a candidate.
+                        continue;
+                    }
+
+                    if (!candidates.Any(c => GenericInstanceEquals(c, substituted)))
+                    {
+                        candidates.Add(substituted);
+                        grew = true;
+                    }
+                }
+            }
+        }
+
+        var result = new Dictionary<string, List<RirInstantiation>>(StringComparer.Ordinal);
+        foreach (var candidate in candidates)
+        {
+            var defFullName = string.IsNullOrEmpty(candidate.Namespace)
+                ? candidate.Name
+                : $"{candidate.Namespace}.{candidate.Name}";
+            if (!result.TryGetValue(defFullName, out var list))
+            {
+                list = new List<RirInstantiation>();
+                result[defFullName] = list;
+            }
+
+            list.Add(new RirInstantiation(candidate.TypeArguments));
+        }
+
+        return result;
+    }
+
+    /// <summary>Structural equality for two <see cref="RirGenericInstanceType"/> shapes, used to
+    /// dedupe Phase A/B candidates and self shapes by value, since the RIR model classes are plain
+    /// classes (not records) with no built-in value equality.</summary>
+    private static bool GenericInstanceEquals(RirGenericInstanceType a, RirGenericInstanceType b)
+    {
+        if (a.Namespace != b.Namespace || a.Name != b.Name || a.Nullable != b.Nullable) return false;
+        if (a.TypeArguments.Count != b.TypeArguments.Count) return false;
+        for (int i = 0; i < a.TypeArguments.Count; i++)
+        {
+            if (!TypeRefEquals(a.TypeArguments[i], b.TypeArguments[i])) return false;
+        }
+
+        return true;
+    }
+
+    private static bool TypeRefEquals(RirTypeRef a, RirTypeRef b)
+    {
+        if (ReferenceEquals(a, b)) return true;
+        return (a, b) switch
+        {
+            (RirVoidType, RirVoidType) => true,
+            (RirStringType x, RirStringType y) => x.Nullable == y.Nullable,
+            (RirPrimitiveType x, RirPrimitiveType y) => x.Name == y.Name,
+            (RirObjectHandleType x, RirObjectHandleType y) =>
+                x.Namespace == y.Namespace && x.Name == y.Name && x.Nullable == y.Nullable,
+            (RirEnumType x, RirEnumType y) => x.Namespace == y.Namespace && x.Name == y.Name,
+            (RirStructType x, RirStructType y) => x.Namespace == y.Namespace && x.Name == y.Name,
+            (RirInterfaceType x, RirInterfaceType y) =>
+                x.Namespace == y.Namespace && x.Name == y.Name && x.Nullable == y.Nullable,
+            (RirTypeParameterType x, RirTypeParameterType y) => x.Index == y.Index && x.Name == y.Name,
+            (RirGenericInstanceType x, RirGenericInstanceType y) => GenericInstanceEquals(x, y),
+            _ => false,
+        };
     }
 
     // Reverse enum v1 is intentionally narrow: only public, top-level default-int enums with
@@ -723,14 +1024,22 @@ internal static class AssemblyExtractor
                     mr, propDef, propName, name, boundHandleTypeNames, enumTypes, result);
                 if (propTypeRef is not null)
                 {
-                    var finalPropTypeRef = propTypeRef;
-                    if (NullabilityHelpers.IsNullableCapable(propTypeRef))
+                    var resolution = NullabilityHelpers.ResolveTree(
+                        mr, propTypeRef, handle, methodHandle: default, extraction.TypeHandle);
+                    if (resolution.Diagnostic is not null)
                     {
-                        bool nullable = NullabilityHelpers.Resolve(
-                            mr, handle, methodHandle: default, extraction.TypeHandle,
-                            out bool wasOblivious);
-                        finalPropTypeRef = NullabilityHelpers.ApplyNullable(propTypeRef, nullable);
-                        if (wasOblivious)
+                        diagnostics.Add(new RirDiagnostic(
+                            kind: resolution.Diagnostic.Kind,
+                            typeName: name,
+                            memberName: propName,
+                            memberSignature: propName,
+                            reason: resolution.Diagnostic.Reason,
+                            hint: resolution.Diagnostic.Hint));
+                    }
+                    else
+                    {
+                        var finalPropTypeRef = resolution.Type!;
+                        if (resolution.Oblivious)
                         {
                             diagnostics.Add(new RirDiagnostic(
                                 kind: "info_oblivious_nullability",
@@ -743,8 +1052,8 @@ internal static class AssemblyExtractor
                                 hint: "Compile the declaring type inside a `#nullable enable` region to " +
                                     "make its null-safety explicit."));
                         }
+                        properties.Add(new RirProperty(propName, finalPropTypeRef, isReadOnly: true, propIsStatic));
                     }
-                    properties.Add(new RirProperty(propName, finalPropTypeRef, isReadOnly: true, propIsStatic));
                 }
                 else if (propDiagnostic is not null)
                     diagnostics.Add(propDiagnostic);
@@ -1234,9 +1543,13 @@ internal static class AssemblyExtractor
         HashSet<string> boundHandleTypeNames,
         IReadOnlyDictionary<string, EnumExtraction> enumTypes,
         IReadOnlyDictionary<string, StructExtraction> structTypes,
-        HashSet<string>? boundInterfaceTypeNames = null)
+        HashSet<string>? boundInterfaceTypeNames = null,
+        IReadOnlyDictionary<string, IReadOnlyList<string>>? genericClassTypeParameters = null,
+        IReadOnlyDictionary<string, List<RirInstantiation>>? instantiationsByDefinition = null)
     {
         boundInterfaceTypeNames ??= new HashSet<string>(StringComparer.Ordinal);
+        genericClassTypeParameters ??= new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal);
+        instantiationsByDefinition ??= new Dictionary<string, List<RirInstantiation>>(StringComparer.Ordinal);
         var typeName = mr.GetString(typeDef.Name);
         var ns = mr.GetString(typeDef.Namespace);
         var fullName = string.IsNullOrEmpty(ns) ? typeName : $"{ns}.{typeName}";
@@ -1270,6 +1583,31 @@ internal static class AssemblyExtractor
                 hint: "See ADR-056 Decision 3a: a bridgeable struct has exactly one public " +
                     "constructor covering all stored state, with primitive/string/bound-enum " +
                     "components matching the constructor parameters case-insensitively.") });
+        }
+
+        // ADR-072 Decision 10: a package-declared generic class definition. Two possible outcomes:
+        // zero discovered instantiations emits NOTHING at all (this closes the latent `Box`1` leak,
+        // Context item 2: a generic class definition used to reach the RIR under its arity-mangled
+        // CLR name with no guard whatsoever), or the completed instantiations list from the reader's
+        // own Phase A/B enumeration (CollectGenericInstantiations) attaches to the RirClass below.
+        IReadOnlyList<string>? declaringTypeParameters = null;
+        List<RirInstantiation>? discoveredInstantiations = null;
+        if (genericClassTypeParameters.TryGetValue(fullName, out var typeParams))
+        {
+            declaringTypeParameters = typeParams;
+            if (!instantiationsByDefinition.TryGetValue(fullName, out discoveredInstantiations)
+                || discoveredInstantiations.Count == 0)
+            {
+                return (null, new[] { new RirDiagnostic(
+                    kind: "info_uninstantiated_generic_type",
+                    typeName: typeName,
+                    memberName: "",
+                    memberSignature: fullName,
+                    reason: $"generic definition `{fullName}` has no discovered closed instantiation " +
+                        "anywhere in the bound API surface (ADR-072 Decision 10)",
+                    hint: "Nothing to generate. Bind at least one member that returns, takes, or " +
+                        "otherwise instantiates this type with concrete type arguments.") });
+            }
         }
 
         var isInterface = (typeDef.Attributes & System.Reflection.TypeAttributes.ClassSemanticsMask)
@@ -1338,7 +1676,8 @@ internal static class AssemblyExtractor
                 var methodDef = mr.GetMethodDefinition(methodHandle);
                 var (rirMethod, methodDiagnostic, obliviousDiagnostic) = TryMapMethod(
                     mr, typeHandle, methodHandle, methodDef, typeName, isInterface,
-                    boundHandleTypeNames, enumTypes, structTypes, boundInterfaceTypeNames);
+                    boundHandleTypeNames, enumTypes, structTypes, boundInterfaceTypeNames,
+                    declaringTypeParameters);
                 if (rirMethod is not null)
                 {
                     methods.Add(rirMethod);
@@ -1364,7 +1703,7 @@ internal static class AssemblyExtractor
             {
                 var (rirCtor, ctorDiagnostic, ctorObliviousDiagnostic) = TryMapConstructor(
                     mr, typeHandle, ctorHandle, typeName, boundHandleTypeNames, enumTypes,
-                    structTypes, isState: false, boundInterfaceTypeNames);
+                    structTypes, isState: false, boundInterfaceTypeNames, declaringTypeParameters);
                 if (rirCtor is not null)
                 {
                     constructors.Add(rirCtor);
@@ -1457,7 +1796,7 @@ internal static class AssemblyExtractor
 
             var (propTypeRef, propDiagnostic) = TryDecodePropertyType(
                 mr, propDef, propName, typeName, boundHandleTypeNames, enumTypes, structTypes,
-                boundInterfaceTypeNames);
+                boundInterfaceTypeNames, declaringTypeParameters);
             if (propTypeRef is not null)
             {
                 // Same masked-equality fix as the getter check above: a non-zero AND against
@@ -1471,14 +1810,22 @@ internal static class AssemblyExtractor
                 // ADR-053: a property carries exactly one NullableAttribute (on the Property row
                 // itself), falling back to its declaring TypeDef's NullableContextAttribute — "a
                 // Property cannot carry a context" (no method tier), hence `methodHandle: default`.
-                var finalPropTypeRef = propTypeRef;
-                if (NullabilityHelpers.IsNullableCapable(propTypeRef))
+                var resolution = NullabilityHelpers.ResolveTree(
+                    mr, propTypeRef, handle, methodHandle: default, typeHandle);
+                if (resolution.Diagnostic is not null)
                 {
-                    bool nullable = NullabilityHelpers.Resolve(
-                        mr, handle, methodHandle: default, typeHandle, out bool wasOblivious);
-                    finalPropTypeRef = NullabilityHelpers.ApplyNullable(propTypeRef, nullable);
-
-                    if (wasOblivious)
+                    diagnostics.Add(new RirDiagnostic(
+                        kind: resolution.Diagnostic.Kind,
+                        typeName: typeName,
+                        memberName: propName,
+                        memberSignature: propName,
+                        reason: resolution.Diagnostic.Reason,
+                        hint: resolution.Diagnostic.Hint));
+                }
+                else
+                {
+                    var finalPropTypeRef = resolution.Type!;
+                    if (resolution.Oblivious)
                     {
                         diagnostics.Add(new RirDiagnostic(
                             kind: "info_oblivious_nullability",
@@ -1491,9 +1838,9 @@ internal static class AssemblyExtractor
                             hint: "Compile the declaring type inside a `#nullable enable` region to " +
                                 "make its null-safety explicit."));
                     }
-                }
 
-                properties.Add(new RirProperty(propName, finalPropTypeRef, isReadOnly, propIsStatic));
+                    properties.Add(new RirProperty(propName, finalPropTypeRef, isReadOnly, propIsStatic));
+                }
             }
             else if (propDiagnostic is not null)
             {
@@ -1531,7 +1878,7 @@ internal static class AssemblyExtractor
             ? new RirInterface(typeName, methods, properties, implementedInterfaces)
             : new RirClass(
                 typeName, isAbstract && !isInterface, isStatic, methods, properties, constructors,
-                implementedInterfaces);
+                implementedInterfaces, declaringTypeParameters, discoveredInstantiations);
 
         return (rirType, diagnostics);
     }
@@ -1607,11 +1954,13 @@ internal static class AssemblyExtractor
         IReadOnlyDictionary<string, EnumExtraction> enumTypes,
         IReadOnlyDictionary<string, StructExtraction> structTypes,
         bool isState,
-        HashSet<string>? boundInterfaceTypeNames = null)
+        HashSet<string>? boundInterfaceTypeNames = null,
+        IReadOnlyList<string>? declaringTypeParameters = null)
     {
         var methodDef = mr.GetMethodDefinition(methodHandle);
         var decoder = new SignatureDecoder(
-            mr, boundHandleTypeNames, enumTypes, structTypes, boundInterfaceTypeNames);
+            mr, boundHandleTypeNames, enumTypes, structTypes, boundInterfaceTypeNames,
+            declaringTypeParameters);
         MethodSignature<TypeRefOrDiag> sig;
 
         try
@@ -1657,12 +2006,21 @@ internal static class AssemblyExtractor
                 if (!string.IsNullOrEmpty(pn)) paramName = pn;
             }
 
-            if (NullabilityHelpers.IsNullableCapable(paramTypeRef))
+            var resolution = NullabilityHelpers.ResolveTree(mr, paramTypeRef, paramHandle, methodHandle, typeHandle);
+            if (resolution.Diagnostic is not null)
             {
-                bool nullable = NullabilityHelpers.Resolve(mr, paramHandle, methodHandle, typeHandle, out bool oblivious);
-                paramTypeRef = NullabilityHelpers.ApplyNullable(paramTypeRef, nullable);
-                anyOblivious |= oblivious;
+                var fullSig = BuildSignatureString(mr, methodDef, ".ctor");
+                return (null, new RirDiagnostic(
+                    kind: resolution.Diagnostic.Kind,
+                    typeName: typeName,
+                    memberName: ".ctor",
+                    memberSignature: fullSig,
+                    reason: resolution.Diagnostic.Reason,
+                    hint: resolution.Diagnostic.Hint), null);
             }
+
+            paramTypeRef = resolution.Type!;
+            anyOblivious |= resolution.Oblivious;
 
             parameters.Add(new RirParameter(paramName, paramTypeRef));
         }
@@ -1694,7 +2052,8 @@ internal static class AssemblyExtractor
         HashSet<string> boundHandleTypeNames,
         IReadOnlyDictionary<string, EnumExtraction> enumTypes,
         IReadOnlyDictionary<string, StructExtraction> structTypes,
-        HashSet<string>? boundInterfaceTypeNames = null)
+        HashSet<string>? boundInterfaceTypeNames = null,
+        IReadOnlyList<string>? declaringTypeParameters = null)
     {
         var methodName = mr.GetString(methodDef.Name);
         bool isStatic = (methodDef.Attributes & System.Reflection.MethodAttributes.Static) != 0;
@@ -1729,7 +2088,8 @@ internal static class AssemblyExtractor
         }
 
         var decoder = new SignatureDecoder(
-            mr, boundHandleTypeNames, enumTypes, structTypes, boundInterfaceTypeNames);
+            mr, boundHandleTypeNames, enumTypes, structTypes, boundInterfaceTypeNames,
+            declaringTypeParameters);
         MethodSignature<TypeRefOrDiag> sig;
 
         try
@@ -1791,12 +2151,24 @@ internal static class AssemblyExtractor
         // pseudo-parameter"), which only exists when the return's byte differs from whatever its
         // MethodDef/TypeDef NullableContext would otherwise supply. Absent that row, `default`
         // (nil) correctly falls through to the method/type context tiers.
-        if (NullabilityHelpers.IsNullableCapable(returnTypeRef))
         {
             ParameterHandle returnParamHandle = paramHandlesBySeq.TryGetValue(0, out var rph) ? rph : default;
-            bool nullable = NullabilityHelpers.Resolve(mr, returnParamHandle, methodHandle, typeHandle, out bool oblivious);
-            returnTypeRef = NullabilityHelpers.ApplyNullable(returnTypeRef, nullable);
-            anyOblivious |= oblivious;
+            var returnResolution = NullabilityHelpers.ResolveTree(
+                mr, returnTypeRef, returnParamHandle, methodHandle, typeHandle);
+            if (returnResolution.Diagnostic is not null)
+            {
+                var fullSig = BuildSignatureString(mr, methodDef, methodName);
+                return (null, new RirDiagnostic(
+                    kind: returnResolution.Diagnostic.Kind,
+                    typeName: typeName,
+                    memberName: methodName,
+                    memberSignature: fullSig,
+                    reason: returnResolution.Diagnostic.Reason,
+                    hint: returnResolution.Diagnostic.Hint), null);
+            }
+
+            returnTypeRef = returnResolution.Type!;
+            anyOblivious |= returnResolution.Oblivious;
         }
 
         // Map parameters.
@@ -1817,12 +2189,21 @@ internal static class AssemblyExtractor
                 if (!string.IsNullOrEmpty(pn)) paramName = pn;
             }
 
-            if (NullabilityHelpers.IsNullableCapable(paramTypeRef))
+            var paramResolution = NullabilityHelpers.ResolveTree(mr, paramTypeRef, paramHandle, methodHandle, typeHandle);
+            if (paramResolution.Diagnostic is not null)
             {
-                bool nullable = NullabilityHelpers.Resolve(mr, paramHandle, methodHandle, typeHandle, out bool oblivious);
-                paramTypeRef = NullabilityHelpers.ApplyNullable(paramTypeRef, nullable);
-                anyOblivious |= oblivious;
+                var fullSig = BuildSignatureString(mr, methodDef, methodName);
+                return (null, new RirDiagnostic(
+                    kind: paramResolution.Diagnostic.Kind,
+                    typeName: typeName,
+                    memberName: methodName,
+                    memberSignature: fullSig,
+                    reason: paramResolution.Diagnostic.Reason,
+                    hint: paramResolution.Diagnostic.Hint), null);
             }
+
+            paramTypeRef = paramResolution.Type!;
+            anyOblivious |= paramResolution.Oblivious;
 
             parameters.Add(new RirParameter(paramName, paramTypeRef));
         }
@@ -1853,10 +2234,12 @@ internal static class AssemblyExtractor
         HashSet<string> boundHandleTypeNames,
         IReadOnlyDictionary<string, EnumExtraction> enumTypes,
         IReadOnlyDictionary<string, StructExtraction> structTypes,
-        HashSet<string>? boundInterfaceTypeNames = null)
+        HashSet<string>? boundInterfaceTypeNames = null,
+        IReadOnlyList<string>? declaringTypeParameters = null)
     {
         var decoder = new SignatureDecoder(
-            mr, boundHandleTypeNames, enumTypes, structTypes, boundInterfaceTypeNames);
+            mr, boundHandleTypeNames, enumTypes, structTypes, boundInterfaceTypeNames,
+            declaringTypeParameters);
         MethodSignature<TypeRefOrDiag> sig;
 
         try
@@ -2127,35 +2510,173 @@ internal static class NullabilityHelpers
     }
 
     /// <summary>
-    /// Resolves whether a single reference-typed slot (a parameter, the return-value
-    /// pseudo-parameter, or a property) is nullable, per the ADR-053 fallback chain:
-    /// <c>memberHandle</c>'s own <c>NullableAttribute</c> -&gt; <c>methodHandle</c>'s
-    /// <c>NullableContextAttribute</c> -&gt; <c>typeHandle</c>'s <c>NullableContextAttribute</c>
-    /// -&gt; oblivious (byte 0). Pass <c>default</c> for <paramref name="memberHandle"/> when the
-    /// slot has no metadata row of its own (e.g. a return value whose method has no
-    /// `Sequence == 0` `Param` row), and for <paramref name="methodHandle"/> when the chain has no
-    /// method tier (a property "cannot carry a context", ADR-053).
+    /// ADR-072 Decision 7: the outcome of resolving nullability across a WHOLE type tree, not a
+    /// single slot. <see cref="Type"/> is the input type with every annotatable node's
+    /// <c>nullable</c> flag applied (null if <see cref="Diagnostic"/> is set, meaning the whole
+    /// member must be skipped). <see cref="Oblivious"/> mirrors the old single-slot semantics: true
+    /// when the WHOLE tree fell back to the byte-0 default with no NullableAttribute/
+    /// NullableContextAttribute resolving it anywhere in the chain.
     /// </summary>
-    public static bool Resolve(
+    public readonly record struct TreeResolution(RirTypeRef? Type, bool Oblivious, PendingDiagnostic? Diagnostic);
+
+    /// <summary>
+    /// True for every <see cref="RirTypeRef"/> shape a <c>NullableAttribute</c> byte can land on
+    /// (an "annotatable node" per the Roslyn nullable-metadata spec: a reference type or a type
+    /// parameter; a value type contributes no byte). Pre-ADR-072 this was "does the WHOLE type
+    /// carry a single nullable flag"; ADR-072 generalises it to "does the type TREE contain at
+    /// least one such node", because <see cref="RirGenericInstanceType"/> can itself be nullable
+    /// AND recursively contain nullable-capable type arguments (<c>Box&lt;string?&gt;?</c>).
+    /// </summary>
+    private static bool IsAnnotatable(RirTypeRef type) =>
+        type is RirStringType or RirObjectHandleType or RirInterfaceType or RirTypeParameterType
+            or RirGenericInstanceType;
+
+    /// <summary>
+    /// ADR-072 Decision 7: the number of annotatable nodes in <paramref name="type"/>'s pre-order
+    /// flattening: one byte in a <c>NullableAttribute</c> byte[] per node. A primitive/enum/struct/
+    /// void node contributes zero; a string/handle/interface/type-parameter node contributes
+    /// exactly one; a generic instance contributes one for itself plus its own type arguments'
+    /// counts (recursively, though Decision 6 forbids a further-nested generic instantiation as an
+    /// argument, so this never recurses more than one extra level in practice).
+    /// </summary>
+    internal static int CountAnnotatableNodes(RirTypeRef type) => type switch
+    {
+        RirStringType or RirObjectHandleType or RirInterfaceType or RirTypeParameterType => 1,
+        RirGenericInstanceType g => 1 + g.TypeArguments.Sum(CountAnnotatableNodes),
+        _ => 0,
+    };
+
+    /// <summary>
+    /// ADR-072 Decision 7: resolves nullability across <paramref name="type"/>'s WHOLE tree (not
+    /// just its top node), replacing the old single-slot <c>Resolve</c>/<c>IsNullableCapable</c>/
+    /// <c>ApplyNullable</c> triple. For a depth-1 type (the overwhelming majority: a bare string,
+    /// handle, or interface reference) this behaves byte-for-byte identically to the old code; the
+    /// generalisation only has an observable effect once <see cref="CountAnnotatableNodes"/> is
+    /// greater than one, i.e. a <see cref="RirGenericInstanceType"/> with an annotatable type
+    /// argument (<c>Box&lt;string?&gt;</c>).
+    /// </summary>
+    public static TreeResolution ResolveTree(
+        MetadataReader mr,
+        RirTypeRef type,
+        EntityHandle memberHandle,
+        EntityHandle methodHandle,
+        EntityHandle typeHandle)
+    {
+        int nodeCount = CountAnnotatableNodes(type);
+        if (nodeCount == 0) return new TreeResolution(type, false, null);
+
+        var bytes = ResolveByteArray(mr, memberHandle, methodHandle, typeHandle, nodeCount,
+            out bool oblivious, out bool mismatch);
+        if (mismatch || bytes is null)
+        {
+            // ADR-072 Decision 7: fail fast rather than guess when the decoded byte count does not
+            // match the computed annotatable-node count. The shape is outside what this reader's
+            // v1 vocabulary (and Decision 6) can produce, so silently reusing byte 0 (or any other
+            // byte) here would be exactly the ADR-053 failure class this project has already paid
+            // for twice.
+            return new TreeResolution(null, false, new PendingDiagnostic(
+                "skipped_generic_type_argument",
+                $"NullableAttribute byte count did not resolve to the {nodeCount} annotatable " +
+                    "node(s) computed for this member's type (ADR-072 Decision 7); refusing to guess",
+                "Simplify this member's nullable annotations, or expose an equivalent C# adapter " +
+                    "with a simpler shape."));
+        }
+
+        int cursor = 0;
+        bool hitNullableTypeParameter = false;
+        var applied = ApplyPreOrder(type, bytes, ref cursor, ref hitNullableTypeParameter);
+        if (hitNullableTypeParameter)
+        {
+            return new TreeResolution(null, false, new PendingDiagnostic(
+                "skipped_nullable_type_parameter",
+                "a bare type-parameter-typed member is annotated nullable (`T?`), not " +
+                    "representable per instantiation (ADR-072 Decision 7)",
+                "Expose a non-nullable overload, or wrap the nullable case in a dedicated C# " +
+                    "adapter type."));
+        }
+
+        return new TreeResolution(applied, oblivious, null);
+    }
+
+    /// <summary>
+    /// Consumes one byte per annotatable node from <paramref name="bytes"/> in pre-order, applying
+    /// each to its node. A bare <see cref="RirTypeParameterType"/> carries no <c>nullable</c> field
+    /// of its own (ADR-072 Decision 3): if its byte says nullable, that is reported back via
+    /// <paramref name="hitNullableTypeParameter"/> rather than applied, since <c>T?</c> at a bare
+    /// type-parameter position is not representable per instantiation (Decision 7).
+    /// </summary>
+    private static RirTypeRef ApplyPreOrder(
+        RirTypeRef type, byte[] bytes, ref int cursor, ref bool hitNullableTypeParameter)
+    {
+        switch (type)
+        {
+            case RirStringType:
+                return new RirStringType(bytes[cursor++] == 2);
+            case RirObjectHandleType h:
+                return new RirObjectHandleType(h.Namespace, h.Name, bytes[cursor++] == 2);
+            case RirInterfaceType i:
+                return new RirInterfaceType(i.Namespace, i.Name, bytes[cursor++] == 2);
+            case RirTypeParameterType tp:
+                if (bytes[cursor++] == 2) hitNullableTypeParameter = true;
+                return tp;
+            case RirGenericInstanceType g:
+            {
+                bool outerNullable = bytes[cursor++] == 2;
+                var newArgs = new List<RirTypeRef>(g.TypeArguments.Count);
+                foreach (var arg in g.TypeArguments)
+                {
+                    newArgs.Add(CountAnnotatableNodes(arg) == 0
+                        ? arg
+                        : ApplyPreOrder(arg, bytes, ref cursor, ref hitNullableTypeParameter));
+                }
+
+                return new RirGenericInstanceType(g.Namespace, g.Name, newArgs, outerNullable);
+            }
+            default:
+                return type;
+        }
+    }
+
+    /// <summary>
+    /// ADR-072 Decision 7 fallback chain, generalised from a single byte to a
+    /// <paramref name="nodeCount"/>-length array: <paramref name="memberHandle"/>'s own
+    /// <c>NullableAttribute</c> (exact bytes, no broadcasting) -&gt; <paramref name="methodHandle"/>'s
+    /// <c>NullableContextAttribute</c> -&gt; <paramref name="typeHandle"/>'s
+    /// <c>NullableContextAttribute</c> -&gt; oblivious (byte 0). The context tiers are always a
+    /// SINGLE byte per the Roslyn spec (a context is an ambient default, never per-node), so that
+    /// byte broadcasts uniformly across every node, which is exactly what the pre-ADR-072 code
+    /// already did for the (then-only) single-node case.
+    /// </summary>
+    private static byte[]? ResolveByteArray(
         MetadataReader mr,
         EntityHandle memberHandle,
         EntityHandle methodHandle,
         EntityHandle typeHandle,
-        out bool wasOblivious)
+        int nodeCount,
+        out bool oblivious,
+        out bool mismatch)
     {
-        byte? resolved = memberHandle.IsNil ? null : GetNullableAttributeByte(mr, memberHandle);
-        if (resolved is null && !methodHandle.IsNil) resolved = GetNullableContextByte(mr, methodHandle);
-        if (resolved is null) resolved = GetNullableContextByte(mr, typeHandle);
+        var memberBytes = memberHandle.IsNil ? null : GetNullableAttributeBytes(mr, memberHandle);
+        if (memberBytes is not null)
+        {
+            oblivious = false;
+            mismatch = memberBytes.Length != nodeCount;
+            return mismatch ? null : memberBytes;
+        }
 
-        byte b = resolved ?? 0;
-        wasOblivious = b == 0;
-        return b == 2;
+        byte? contextByte = methodHandle.IsNil ? null : GetNullableContextByte(mr, methodHandle);
+        contextByte ??= GetNullableContextByte(mr, typeHandle);
+
+        byte b = contextByte ?? 0;
+        oblivious = b == 0;
+        mismatch = false;
+        return Enumerable.Repeat(b, nodeCount).ToArray();
     }
 
-    private static byte? GetNullableAttributeByte(MetadataReader mr, EntityHandle handle)
+    private static byte[]? GetNullableAttributeBytes(MetadataReader mr, EntityHandle handle)
     {
         var attr = FindCustomAttribute(mr, handle, NullableAttributeFullName);
-        return attr is CustomAttribute found ? DecodeNullableAttributeByte(mr, found) : null;
+        return attr is CustomAttribute found ? DecodeNullableAttributeBytes(mr, found) : null;
     }
 
     private static byte? GetNullableContextByte(MetadataReader mr, EntityHandle handle)
@@ -2182,23 +2703,28 @@ internal static class NullabilityHelpers
     }
 
     /// <summary>
-    /// Decodes a <c>NullableAttribute</c>'s payload: either a single <c>byte</c> or a
-    /// <c>byte[]</c> ("used when all values in the byte[] are the same" per the Roslyn spec) — the
-    /// v1 bridgeable subset only ever produces depth-1 type trees, so the array form (when it
-    /// appears at all) is always uniform and index 0 is always representative.
+    /// Decodes a <c>NullableAttribute</c>'s payload IN FULL: either a single <c>byte</c> (wrapped in
+    /// a one-element array) or the complete <c>byte[]</c> payload, pre-order, one element per
+    /// annotatable node (ADR-072 Decision 7; this replaces the old index-0-only decode, which
+    /// silently lost every node past the first: verified real blobs, `Box&lt;string?&gt;` is
+    /// `[1,2]`, `Pairing&lt;string,string?&gt;` is `[1,1,2]`).
     /// </summary>
-    private static byte? DecodeNullableAttributeByte(MetadataReader mr, CustomAttribute attr)
+    private static byte[]? DecodeNullableAttributeBytes(MetadataReader mr, CustomAttribute attr)
     {
         var isByteArray = CustomAttributeCtorTakesByteArray(mr, attr.Constructor);
         var reader = mr.GetBlobReader(attr.Value);
         if (reader.ReadUInt16() != 1) return null; // malformed prolog
 
-        if (!isByteArray) return reader.ReadByte();
+        if (!isByteArray) return new[] { reader.ReadByte() };
 
         // SZArray fixed-arg encoding: a 4-byte element count (0xFFFFFFFF for a null array),
-        // then that many elements. Take index 0; a null or empty array carries no usable value.
+        // then that many elements, pre-order.
         int count = reader.ReadInt32();
-        return count > 0 ? reader.ReadByte() : null;
+        if (count < 0) return null; // null array, carries no usable value
+
+        var result = new byte[count];
+        for (int i = 0; i < count; i++) result[i] = reader.ReadByte();
+        return result;
     }
 
     /// <summary>
@@ -2231,23 +2757,17 @@ internal static class NullabilityHelpers
         }
     }
 
-    /// <summary>True for the two reference-typed <see cref="RirTypeRef"/> shapes that carry a
-    /// <c>nullable</c> flag (ADR-053 2a): <see cref="RirStringType"/> and
-    /// <see cref="RirObjectHandleType"/>. Value types (<see cref="RirPrimitiveType"/>,
-    /// <see cref="RirEnumType"/>) and <see cref="RirVoidType"/> are unaffected — a nullable value
-    /// type is <c>System.Nullable&lt;T&gt;</c>, a distinct closed generic struct, deferred.</summary>
-    /// ADR-070, load-bearing: <see cref="RirInterfaceType"/> MUST be included here — an omission
-    /// would silently bind every interface reference non-null with no warning, byte for byte the
-    /// ADR-053 failure class this project has already paid for once.
-    public static bool IsNullableCapable(RirTypeRef typeRef) =>
-        typeRef is RirStringType or RirObjectHandleType or RirInterfaceType;
-
-    public static RirTypeRef ApplyNullable(RirTypeRef typeRef, bool nullable) => typeRef switch
+    /// <summary>
+    /// ADR-072: whether <paramref name="type"/>'s tree contains a <see cref="RirTypeParameterType"/>
+    /// anywhere: the discriminator between a Phase A concrete instantiation candidate and a Phase B
+    /// "self shape" still awaiting substitution (Decision 2). Never recurses past one extra level in
+    /// practice (Decision 6 forbids a nested generic instantiation as a type argument).
+    /// </summary>
+    internal static bool ContainsTypeParameter(RirTypeRef type) => type switch
     {
-        RirStringType => new RirStringType(nullable),
-        RirObjectHandleType h => new RirObjectHandleType(h.Namespace, h.Name, nullable),
-        RirInterfaceType i => new RirInterfaceType(i.Namespace, i.Name, nullable),
-        _ => typeRef,
+        RirTypeParameterType => true,
+        RirGenericInstanceType g => g.TypeArguments.Any(ContainsTypeParameter),
+        _ => false,
     };
 }
 
@@ -2418,12 +2938,24 @@ internal sealed class SignatureDecoder : ISignatureTypeProvider<TypeRefOrDiag, o
     /// </summary>
     private readonly HashSet<string> _boundInterfaceTypeNames;
 
+    /// <summary>
+    /// ADR-072 Decision 2/3: the generic parameter names of the type whose OWN member is currently
+    /// being decoded (index-aligned, e.g. <c>["T"]</c> for <c>Box\`1</c>, <c>["TKey","TValue"]</c>
+    /// for <c>Pairing\`2</c>), or null when decoding a member of a non-generic type (the
+    /// overwhelming majority). A bare <c>!0</c> reference in the signature resolves against this
+    /// list to <see cref="RirTypeParameterType"/> when non-null and in range; otherwise it is an
+    /// unresolvable open generic type parameter (<c>skipped_open_generic</c>, ADR-043's surviving
+    /// half, unchanged by this ADR).
+    /// </summary>
+    private readonly IReadOnlyList<string>? _declaringTypeParameters;
+
     public SignatureDecoder(
         MetadataReader mr,
         HashSet<string>? boundHandleTypeNames = null,
         IReadOnlyDictionary<string, EnumExtraction>? enumTypes = null,
         IReadOnlyDictionary<string, StructExtraction>? structTypes = null,
-        HashSet<string>? boundInterfaceTypeNames = null)
+        HashSet<string>? boundInterfaceTypeNames = null,
+        IReadOnlyList<string>? declaringTypeParameters = null)
     {
         _mr = mr;
         _boundHandleTypeNames = boundHandleTypeNames
@@ -2432,6 +2964,7 @@ internal sealed class SignatureDecoder : ISignatureTypeProvider<TypeRefOrDiag, o
         _structTypes = structTypes ?? new Dictionary<string, StructExtraction>(StringComparer.Ordinal);
         _boundInterfaceTypeNames = boundInterfaceTypeNames
             ?? new HashSet<string>(StringComparer.Ordinal);
+        _declaringTypeParameters = declaringTypeParameters;
     }
 
     // Primitives
@@ -2592,7 +3125,7 @@ internal sealed class SignatureDecoder : ISignatureTypeProvider<TypeRefOrDiag, o
         return spec.DecodeSignature(this, genericContext);
     }
 
-    // Generic instantiation e.g. Task<int>, IEnumerable<string>.
+    // Generic instantiation e.g. Task<int>, IEnumerable<string>, Box<int>, List<int>.
     public TypeRefOrDiag GetGenericInstantiation(TypeRefOrDiag genericType, ImmutableArray<TypeRefOrDiag> typeArguments)
     {
         var rawName = genericType.RawTypeName;
@@ -2601,15 +3134,85 @@ internal sealed class SignatureDecoder : ISignatureTypeProvider<TypeRefOrDiag, o
         if (IsAsyncTypeName(rawName))
             return new TypeRefOrDiag(null, null, rawName);
 
-        // All other generic instantiations are not in the v1 vocabulary.
-        // The diagnostic from GetTypeFromReference on the open base type is deliberately dropped:
-        // a skipped_unbound_type_reference on List<string> would be noise with no actionable fix.
-        return new TypeRefOrDiag(null, null, rawName ?? "?");
+        // ADR-072 Decision 2/9: the verified discriminator. A generic definition BOUND in this
+        // extraction run resolves GetTypeFromDefinition to a non-null RirObjectHandleType (the open
+        // definition IS a class in _boundHandleTypeNames, arity-mangled name and all); a BCL/
+        // external definition (List<T>, Dictionary<K,V>, ...) arrives with a null TypeRef instead.
+        if (genericType.TypeRef is RirObjectHandleType handleRef)
+        {
+            // Decision 6: validate every type argument against the v1 vocabulary before building
+            // the instance. A single disqualifying argument (a nested generic instantiation, a
+            // struct, an array, a ref struct, an unresolved type parameter, or an unbound external
+            // type) disqualifies the WHOLE instantiation. The caller (TryMapMethod/
+            // TryMapConstructor/TryDecodePropertyType) already treats a non-null Diagnostic as
+            // "skip this member entirely", which is exactly the ADR's rule.
+            var mappedArgs = new List<RirTypeRef>(typeArguments.Length);
+            foreach (var arg in typeArguments)
+            {
+                if (arg.TypeRef is null || !IsV1GenericTypeArgument(arg.TypeRef))
+                {
+                    return new TypeRefOrDiag(null,
+                        new PendingDiagnostic(
+                            "skipped_generic_type_argument",
+                            $"type argument `{arg.RawTypeName ?? "?"}` of `{rawName}` is outside the " +
+                                "v1 generic type-argument vocabulary (ADR-072 Decision 6): only a " +
+                                "primitive, string, bound enum, bound class handle, bound interface, " +
+                                "or (inside the definition's own members) the definition's own type " +
+                                "parameter is admissible.",
+                            "Replace this type argument with one from the v1 vocabulary, or expose " +
+                                "an equivalent C# adapter."),
+                        rawName);
+                }
+
+                mappedArgs.Add(arg.TypeRef);
+            }
+
+            return new TypeRefOrDiag(
+                new RirGenericInstanceType(handleRef.Namespace, handleRef.Name, mappedArgs),
+                null,
+                rawName);
+        }
+
+        // ADR-072 Decision 9: the definition lives outside the bound assemblies (List<int>,
+        // Dictionary<string,int>, ...). No members are ever extracted for such a definition, so
+        // binding it as a handle would produce a value with nothing on it. Diagnosed rather than
+        // silently dropped (this used to be a deliberate, undiagnosed drop).
+        return new TypeRefOrDiag(null,
+            new PendingDiagnostic(
+                "skipped_unbound_generic_instantiation",
+                $"instantiation of `{rawName}`: its generic definition lives outside the bound " +
+                    "assemblies, so it has no extracted members and cannot be bound as a handle " +
+                    "(ADR-072 Decision 9)",
+                "Bind this collection idiom via the collections item (ROADMAP line 220) once " +
+                    "available, or expose an equivalent adapter with a concrete element type."),
+            rawName ?? "?");
     }
 
-    // Open generic type parameter (T, TResult, etc.).
+    /// <summary>ADR-072 Decision 6: the v1 vocabulary for a generic type argument. A primitive,
+    /// string, bound enum, bound class handle, bound interface, or (only meaningful while decoding
+    /// the generic definition's own members) that definition's own type parameter. Explicitly
+    /// EXCLUDED, each disqualifying the whole instantiation: a nested generic instantiation
+    /// (<see cref="RirGenericInstanceType"/>, load-bearing for Decision 2's termination argument), a
+    /// struct (<see cref="RirStructType"/>), and <see cref="RirVoidType"/>.</summary>
+    private static bool IsV1GenericTypeArgument(RirTypeRef type) => type switch
+    {
+        RirPrimitiveType or RirStringType or RirEnumType or RirObjectHandleType or RirInterfaceType
+            or RirTypeParameterType => true,
+        _ => false,
+    };
+
+    // Open generic type parameter (T, TKey, TValue, etc.) at the TYPE level (`!0`).
     public TypeRefOrDiag GetGenericTypeParameter(object? genericContext, int index)
     {
+        // ADR-072 Decision 3: while decoding a generic type's OWN member signatures, `!index`
+        // resolves to that type's own declared parameter: a real, representable Kotlin type
+        // parameter, not an unresolvable open reference.
+        if (_declaringTypeParameters is not null && index >= 0 && index < _declaringTypeParameters.Count)
+        {
+            var name = _declaringTypeParameters[index];
+            return new TypeRefOrDiag(new RirTypeParameterType(index, name), null, name);
+        }
+
         return new TypeRefOrDiag(null,
             new PendingDiagnostic(
                 "skipped_open_generic",
@@ -2706,7 +3309,9 @@ internal sealed class RirClass : RirType
         IReadOnlyList<RirMethod> methods,
         IReadOnlyList<RirProperty> properties,
         IReadOnlyList<RirConstructor>? constructors = null,
-        IReadOnlyList<string>? interfaces = null)
+        IReadOnlyList<string>? interfaces = null,
+        IReadOnlyList<string>? typeParameters = null,
+        IReadOnlyList<RirInstantiation>? instantiations = null)
     {
         Name = name;
         IsAbstract = isAbstract;
@@ -2715,6 +3320,8 @@ internal sealed class RirClass : RirType
         Properties = properties;
         Constructors = constructors ?? Array.Empty<RirConstructor>();
         Interfaces = interfaces ?? Array.Empty<string>();
+        TypeParameters = typeParameters ?? Array.Empty<string>();
+        Instantiations = instantiations ?? Array.Empty<RirInstantiation>();
     }
 
     public override string Name { get; }
@@ -2735,6 +3342,31 @@ internal sealed class RirClass : RirType
     /// itself admissible and bound is a Kotlin-side (Gradle plugin) concern.
     /// </summary>
     public IReadOnlyList<string> Interfaces { get; }
+    /// <summary>
+    /// ADR-072 Decision 3/8: generic parameter names, verbatim from <c>GenericParam.Name</c>, in
+    /// declared order (<c>["T"]</c>, or <c>["TKey","TValue"]</c> for arity 2). Empty for a
+    /// non-generic class (the overwhelming majority).
+    /// </summary>
+    public IReadOnlyList<string> TypeParameters { get; }
+    /// <summary>
+    /// ADR-072 Decision 2: the closed instantiations of this generic definition discovered by the
+    /// reader's Phase A/B fixed-point enumeration. Empty for a non-generic class, and ALSO empty for
+    /// a generic definition with zero discovered instantiations. Decision 10: such a definition
+    /// emits NOTHING at all (see the <c>info_uninstantiated_generic_type</c> guard in
+    /// <c>ProcessType</c>), so this field is never observed empty for a type that reached the RIR
+    /// with a non-empty <see cref="TypeParameters"/>.
+    /// </summary>
+    public IReadOnlyList<RirInstantiation> Instantiations { get; }
+}
+
+/// <summary>
+/// ADR-072 Decision 3: one closed instantiation of a generic <see cref="RirClass"/>, positionally
+/// matching that class's own <see cref="RirClass.TypeParameters"/> (same arity, same order).
+/// </summary>
+internal sealed class RirInstantiation
+{
+    public RirInstantiation(IReadOnlyList<RirTypeRef> typeArguments) => TypeArguments = typeArguments;
+    public IReadOnlyList<RirTypeRef> TypeArguments { get; }
 }
 
 internal sealed class RirInterface : RirType
@@ -2974,6 +3606,8 @@ internal sealed class RirConstructor
 [JsonDerivedType(typeof(RirEnumType), "enum")]
 [JsonDerivedType(typeof(RirStructType), "struct")]
 [JsonDerivedType(typeof(RirInterfaceType), "interface")]
+[JsonDerivedType(typeof(RirTypeParameterType), "typeparam")]
+[JsonDerivedType(typeof(RirGenericInstanceType), "generic")]
 internal abstract class RirTypeRef { }
 
 internal sealed class RirVoidType : RirTypeRef
@@ -3081,6 +3715,51 @@ internal sealed class RirInterfaceType : RirTypeRef
     public bool Nullable { get; }
 }
 
+/// <summary>
+/// ADR-072 Decision 3: a member type that IS a type parameter of its declaring generic type
+/// (<see cref="Index"/> into that type's own <see cref="RirClass.TypeParameters"/>, <see cref="Name"/>
+/// verbatim, e.g. "T"/"TKey"). Never nullable on its own: a type-parameter reference's
+/// nullability, if any, comes from the substituted type argument at each instantiation (Decision 7),
+/// not from this node. Mirrors <c>RirTypeParameterType</c> in <c>RirModel.kt</c> field-for-field.
+/// </summary>
+internal sealed class RirTypeParameterType : RirTypeRef
+{
+    public RirTypeParameterType(int index, string name)
+    {
+        Index = index;
+        Name = name;
+    }
+
+    public int Index { get; }
+    public string Name { get; }
+}
+
+/// <summary>
+/// ADR-072 Decision 3: a member type that is a closed instantiation of a bound generic definition
+/// (<see cref="Namespace"/>/<see cref="Name"/> identify the OPEN definition by its CLR name, e.g.
+/// "Box`1"; Decision 10 strips the arity suffix at emission time, never here).
+/// <see cref="Nullable"/> reflects this REFERENCE's own <c>NullableAttribute</c> payload
+/// (<c>Box&lt;int&gt;?</c> vs <c>Box&lt;int&gt;</c>), independent of any of
+/// <see cref="TypeArguments"/>' own nullability (<c>Box&lt;string?&gt;</c>). Mirrors
+/// <c>RirGenericInstanceType</c> in <c>RirModel.kt</c> field-for-field.
+/// </summary>
+internal sealed class RirGenericInstanceType : RirTypeRef
+{
+    public RirGenericInstanceType(
+        string @namespace, string name, IReadOnlyList<RirTypeRef> typeArguments, bool nullable = false)
+    {
+        Namespace = @namespace;
+        Name = name;
+        TypeArguments = typeArguments;
+        Nullable = nullable;
+    }
+
+    public string Namespace { get; }
+    public string Name { get; }
+    public IReadOnlyList<RirTypeRef> TypeArguments { get; }
+    public bool Nullable { get; }
+}
+
 internal sealed class RirNamespace
 {
     public RirNamespace(string name, IReadOnlyList<RirType> types)
@@ -3172,6 +3851,9 @@ internal sealed class RirDiagnostic
 [JsonSerializable(typeof(RirEnumType))]
 [JsonSerializable(typeof(RirStructType))]
 [JsonSerializable(typeof(RirInterfaceType))]
+[JsonSerializable(typeof(RirInstantiation))]
+[JsonSerializable(typeof(RirTypeParameterType))]
+[JsonSerializable(typeof(RirGenericInstanceType))]
 [JsonSerializable(typeof(RirDiagnostic))]
 [JsonSourceGenerationOptions(
     WriteIndented = true,

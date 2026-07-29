@@ -50,6 +50,21 @@ fun boundInterfaceTypes(file: RirFile): Map<RirTypeKey, RirInterface> =
     }
   }.toMap()
 
+// ADR-072: every generic class DEFINITION (typeParameters.isNotEmpty()) declared anywhere in the
+// RirFile, keyed the same way as boundHandleTypes/boundStructTypes/boundInterfaceTypes. A
+// RirGenericInstanceType reference at an ORDINARY (non-generic) member's return/parameter/property
+// position is v1-bridgeable iff its (namespace, name) resolves here. [name] keeps the CLR name
+// verbatim ("Box`1"), matching RirGenericInstanceType.name.
+fun boundGenericClassDefinitions(file: RirFile): Map<RirTypeKey, RirClass> =
+  file.assemblies.flatMap { assembly ->
+    assembly.namespaces.flatMap { namespace ->
+      namespace.types
+        .filterIsInstance<RirClass>()
+        .filter { it.typeParameters.isNotEmpty() }
+        .map { cls -> RirTypeKey(namespace.name, cls.name) to cls }
+    }
+  }.toMap()
+
 // ADR-070: parses one "{Namespace}.{Name}" entry from RirClass.interfaces/RirInterface.interfaces
 // into a RirTypeKey. The namespace may itself contain dots, so the SIMPLE name (which never does)
 // is split off from the end.
@@ -223,8 +238,11 @@ fun bridgeableStaticMethods(
   cls: RirClass,
   boundHandleTypes: Set<RirTypeKey>,
   boundInterfaceTypes: Map<RirTypeKey, RirInterface> = emptyMap(),
-): List<RirMethod> =
-  cls.methods.filter { it.isStatic && isV1Bridgeable(it, boundHandleTypes, boundInterfaceTypes) }
+  boundGenericClassDefinitions: Map<RirTypeKey, RirClass> = emptyMap(),
+): List<RirMethod> = cls.methods.filter {
+  it.isStatic &&
+      isV1Bridgeable(it, boundHandleTypes, boundInterfaceTypes, boundGenericClassDefinitions)
+}
 
 // ADR-052: mirrors bridgeableStaticMethods, but for public instance constructors. v1 supports at
 // most one public instance constructor per type — the metadata reader emits either zero or one
@@ -234,9 +252,12 @@ fun bridgeableConstructors(
   cls: RirClass,
   boundHandleTypes: Set<RirTypeKey>,
   boundInterfaceTypes: Map<RirTypeKey, RirInterface> = emptyMap(),
+  boundGenericClassDefinitions: Map<RirTypeKey, RirClass> = emptyMap(),
 ): List<RirConstructor> =
   cls.constructors.filter { ctor ->
-    ctor.parameters.all { isV1Type(it.type, boundHandleTypes, boundInterfaceTypes) }
+    ctor.parameters.all {
+      isV1Type(it.type, boundHandleTypes, boundInterfaceTypes, boundGenericClassDefinitions)
+    }
   }
 
 fun bridgeableStructConstructors(
@@ -445,8 +466,11 @@ fun bridgeableInstanceMethods(
   cls: RirClass,
   boundHandleTypes: Set<RirTypeKey>,
   boundInterfaceTypes: Map<RirTypeKey, RirInterface> = emptyMap(),
-): List<RirMethod> =
-  cls.methods.filter { !it.isStatic && isV1Bridgeable(it, boundHandleTypes, boundInterfaceTypes) }
+  boundGenericClassDefinitions: Map<RirTypeKey, RirClass> = emptyMap(),
+): List<RirMethod> = cls.methods.filter {
+  !it.isStatic &&
+      isV1Bridgeable(it, boundHandleTypes, boundInterfaceTypes, boundGenericClassDefinitions)
+}
 
 // Phase 9: v1-bridgeable properties on a bound class. Static properties support strings and the
 // current primitive subset; handle-typed static properties remain deferred with handle setters.
@@ -454,9 +478,10 @@ fun bridgeableProperties(
   cls: RirClass,
   boundHandleTypes: Set<RirTypeKey>,
   boundInterfaceTypes: Map<RirTypeKey, RirInterface> = emptyMap(),
+  boundGenericClassDefinitions: Map<RirTypeKey, RirClass> = emptyMap(),
 ): List<RirProperty> =
   cls.properties.filter { property ->
-    isV1Type(property.type, boundHandleTypes, boundInterfaceTypes) &&
+    isV1Type(property.type, boundHandleTypes, boundInterfaceTypes, boundGenericClassDefinitions) &&
         (!property.isStatic || property.type !is RirObjectHandleType)
   }
 
@@ -565,7 +590,12 @@ val RirTypeRef.isNullable: Boolean
     // every interface reference non-null (the exact ADR-053 failure class this project already
     // paid for once) — see NullabilityHelpers.IsNullableCapable/ApplyNullable on the reader side.
     is RirInterfaceType -> nullable
-    else -> false
+    // ADR-072 Decision 3 / ADR-053 failure class, third instance: a Box<int>? reference itself
+    // can be independently nullable, regardless of its type argument's own nullability.
+    is RirGenericInstanceType -> nullable
+    is RirVoidType, is RirPrimitiveType, is RirEnumType, is RirStructType,
+    is RirTypeParameterType,
+      -> false
   }
 
 // Short human-readable type description for collisionDiagnostics' memberSignature/reason text
@@ -579,6 +609,16 @@ private fun RirTypeRef.describe(): String = when (this) {
   is RirEnumType -> "$namespace.$name"
   is RirStructType -> "$namespace.$name"
   is RirInterfaceType -> "$namespace.$name"
+  // ADR-072 Decision 3, load-bearing (RirBridging.kt:882 signaturePart's else -> describe()
+  // sibling bug): MUST recurse over typeArguments, or Box<int> and Box<string> describe()
+  // identically and every caller that hangs a distinction off describe() alone (contractHash's
+  // signaturePart below) silently collides.
+  is RirGenericInstanceType ->
+    "$namespace.$name[${
+      typeArguments.joinToString(",") { it.describe() + if (it.isNullable) "?" else "" }
+    }]"
+
+  is RirTypeParameterType -> name
 }
 
 // ADR-059 Decision 5a: the verified Kotlin/Native `CFunction.invoke` argument ceiling
@@ -651,15 +691,17 @@ private fun bridgeableRegistrablesCandidates(
   cls: RirClass,
   boundHandleTypes: Set<RirTypeKey>,
   boundInterfaceTypes: Map<RirTypeKey, RirInterface> = emptyMap(),
+  boundGenericClassDefinitions: Map<RirTypeKey, RirClass> = emptyMap(),
 ): List<RirRegistrable> {
   val collidingNames: Set<String> = collisionDiagnostics(cls).map { it.memberName }.toSet()
 
-  val instanceMethods: List<RirMethod> =
-    bridgeableInstanceMethods(cls, boundHandleTypes, boundInterfaceTypes)
-      .filterNot { it.name in collidingNames }
+  val instanceMethods: List<RirMethod> = bridgeableInstanceMethods(
+    cls, boundHandleTypes, boundInterfaceTypes, boundGenericClassDefinitions,
+  )
+    .filterNot { it.name in collidingNames }
 
   val properties: List<RirProperty> =
-    bridgeableProperties(cls, boundHandleTypes, boundInterfaceTypes)
+    bridgeableProperties(cls, boundHandleTypes, boundInterfaceTypes, boundGenericClassDefinitions)
   val instanceProperties: List<RirProperty> = properties
     .filterNot { it.isStatic }
     .filterNot { it.name in collidingNames }
@@ -683,11 +725,17 @@ private fun bridgeableRegistrablesCandidates(
     if (hasManagedIdentity) values.sortedBy(identity) else values
 
   val constructors: List<RirRegistrable> = canonical(
-    bridgeableConstructors(cls, boundHandleTypes, boundInterfaceTypes), RirConstructor::identity,
+    bridgeableConstructors(
+      cls, boundHandleTypes, boundInterfaceTypes, boundGenericClassDefinitions,
+    ),
+    RirConstructor::identity,
   )
     .map { RirRegistrable.Ctor(it) }
   val staticMethods: List<RirRegistrable> = canonical(
-    bridgeableStaticMethods(cls, boundHandleTypes, boundInterfaceTypes), RirMethod::identity,
+    bridgeableStaticMethods(
+      cls, boundHandleTypes, boundInterfaceTypes, boundGenericClassDefinitions,
+    ),
+    RirMethod::identity,
   )
     .map { RirRegistrable.Method(it) }
   val sortedInstanceMethods: List<RirRegistrable> = canonical(
@@ -713,11 +761,15 @@ fun arityLimitDiagnostics(
   boundHandleTypes: Set<RirTypeKey>,
   structs: Map<RirTypeKey, RirStruct> = emptyMap(),
   boundInterfaceTypes: Map<RirTypeKey, RirInterface> = emptyMap(),
+  boundGenericClassDefinitions: Map<RirTypeKey, RirClass> = emptyMap(),
 ): List<RirDiagnostic> =
-  bridgeableRegistrablesCandidates(cls, boundHandleTypes, boundInterfaceTypes).mapNotNull { r ->
-    val arity: Int = r.abiArity(structs, receiverArity = 1, ctorOutArity = 0)
-    if (arity <= ABI_ARITY_CEILING) null else arityLimitDiagnostic(cls.name, r, arity)
-  }
+  bridgeableRegistrablesCandidates(
+    cls, boundHandleTypes, boundInterfaceTypes, boundGenericClassDefinitions,
+  )
+    .mapNotNull { r ->
+      val arity: Int = r.abiArity(structs, receiverArity = 1, ctorOutArity = 0)
+      if (arity <= ABI_ARITY_CEILING) null else arityLimitDiagnostic(cls.name, r, arity)
+    }
 
 // ADR-052 "shared bridgeable ordering", extended by Phase 9 line 151 and ADR-059 Decision 5a: the
 // constructor pointer (if any) first, then bridgeable static methods, then bridgeable instance
@@ -736,12 +788,15 @@ fun bridgeableRegistrables(
   boundHandleTypes: Set<RirTypeKey>,
   structs: Map<RirTypeKey, RirStruct> = emptyMap(),
   boundInterfaceTypes: Map<RirTypeKey, RirInterface> = emptyMap(),
+  boundGenericClassDefinitions: Map<RirTypeKey, RirClass> = emptyMap(),
 ): List<RirRegistrable> {
-  val candidates: List<RirRegistrable> =
-    bridgeableRegistrablesCandidates(cls, boundHandleTypes, boundInterfaceTypes)
-  val overLimit: Set<String> =
-    arityLimitDiagnostics(cls, boundHandleTypes, structs, boundInterfaceTypes)
-      .map { it.memberSignature }.toSet()
+  val candidates: List<RirRegistrable> = bridgeableRegistrablesCandidates(
+    cls, boundHandleTypes, boundInterfaceTypes, boundGenericClassDefinitions,
+  )
+  val overLimit: Set<String> = arityLimitDiagnostics(
+    cls, boundHandleTypes, structs, boundInterfaceTypes, boundGenericClassDefinitions,
+  )
+    .map { it.memberSignature }.toSet()
   val result: List<RirRegistrable> = candidates.filterNot { it.identity() in overLimit }
   bridgeIds(result.map { it.identity() })
   return result
@@ -754,15 +809,21 @@ private fun isV1Bridgeable(
   method: RirMethod,
   boundHandleTypes: Set<RirTypeKey>,
   boundInterfaceTypes: Map<RirTypeKey, RirInterface> = emptyMap(),
+  boundGenericClassDefinitions: Map<RirTypeKey, RirClass> = emptyMap(),
 ): Boolean {
-  if (!isV1Type(method.returnType, boundHandleTypes, boundInterfaceTypes)) return false
-  return method.parameters.all { isV1Type(it.type, boundHandleTypes, boundInterfaceTypes) }
+  val returnIsV1: Boolean =
+    isV1Type(method.returnType, boundHandleTypes, boundInterfaceTypes, boundGenericClassDefinitions)
+  if (!returnIsV1) return false
+  return method.parameters.all {
+    isV1Type(it.type, boundHandleTypes, boundInterfaceTypes, boundGenericClassDefinitions)
+  }
 }
 
 private fun isV1Type(
   type: RirTypeRef,
   boundHandleTypes: Set<RirTypeKey>,
   boundInterfaceTypes: Map<RirTypeKey, RirInterface> = emptyMap(),
+  boundGenericClassDefinitions: Map<RirTypeKey, RirClass> = emptyMap(),
 ): Boolean = when (type) {
   is RirVoidType -> true
   is RirStringType -> true
@@ -781,6 +842,28 @@ private fun isV1Type(
   // that already passed its own Decision 3a validation (component types included) — the struct's
   // own component types are checked there, not here.
   is RirStructType -> true
+  // ADR-072 Scope: an ORDINARY (non-generic) member referencing a closed generic instantiation IS
+  // in scope for this shared v1-bridgeable filter: the instantiation itself still crosses the
+  // ABI wire-identically to a RirObjectHandleType (an erased GCHandle IntPtr), and its member
+  // dispatch goes through the dedicated per-instantiation witness (NugetGenerateBindingsTask/
+  // NugetGenerateShimsTask's generic* helpers) rather than the ordinary bindings table, only the
+  // FILTER lives here. Bridgeable iff BOTH: (a) the referenced definition is a bound generic class
+  // (defends against a stale/hand-built RIR referencing an unbound definition; the real reader
+  // never emits RirGenericInstanceType for one, per Decision 9's null-TypeRef discriminator), and
+  // (b) this exact closed instantiation was actually discovered by the reader's Decision 2
+  // fixed-point pass (`definition.instantiations`); an instantiation nobody enumerated has no
+  // witness/bindings object to dispatch through, so admitting it here would silently emit a call to
+  // a table that was never generated. Both failures fall through to `false`, the same fail-closed
+  // shape skipped_unbound_generic_instantiation/skipped_generic_type_argument rely on upstream.
+  is RirGenericInstanceType -> {
+    val definition: RirClass? =
+      boundGenericClassDefinitions[RirTypeKey(type.namespace, type.name)]
+    definition != null && definition.instantiations.any { it.typeArguments == type.typeArguments }
+  }
+  // A bare type parameter reference can only ever appear inside a generic type's OWN member
+  // signatures, which never reach this shared non-generic filter (Decision 3: the generic path is
+  // routed BEFORE this one). Fail-closed.
+  is RirTypeParameterType -> false
 }
 
 // ADR-054: a pure, deterministic 64-bit hash (FNV-1a) over the ordered registrable signature list
@@ -895,7 +978,11 @@ private fun RirTypeRef.signaturePart(structs: Map<RirTypeKey, RirStruct>): Strin
 // FNV-1a 64-bit over the UTF-8 bytes of [s]. Deterministic across JVM versions/platforms (unlike
 // relying on String.hashCode() consistency), which both Gradle tasks need since they run this
 // function independently in the same build.
-private fun fnv1a64(s: String): Long {
+// ADR-072: internal (not private) so the generic-class witness generation in
+// NugetGenerateBindingsTask.kt can hash its own per-instantiation contract signature. That
+// signature is built off the SUBSTITUTED type list, which the existing contractHash overloads
+// (built for RirRegistrable's own unsubstituted signaturePart) cannot express.
+internal fun fnv1a64(s: String): Long {
   var hash = -3750763034362895579L // FNV-1a 64-bit offset basis (14695981039346656037 as Long)
   s.toByteArray(Charsets.UTF_8).forEach { byte ->
     hash = hash xor (byte.toLong() and 0xffL)

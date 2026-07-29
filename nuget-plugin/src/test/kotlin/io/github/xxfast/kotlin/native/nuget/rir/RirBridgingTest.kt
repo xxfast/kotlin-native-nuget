@@ -551,4 +551,80 @@ class RirBridgingTest {
           "structContractHash which already hashes the struct's OWN components as name:type",
     )
   }
+
+  // ------------------------------------------------------------------
+  // ADR-072: isV1Type's RirGenericInstanceType branch. An ORDINARY (non-generic) member
+  // referencing a closed generic instantiation is bridgeable iff BOTH its definition resolves in
+  // boundGenericClassDefinitions AND the exact instantiation was discovered by the reader's
+  // Decision 2 pass (definition.instantiations). Neither condition is optional: admitting an
+  // instantiation nobody enumerated would dispatch through a witness/bindings table that was
+  // never generated.
+  // ------------------------------------------------------------------
+
+  private val boxDefinition: RirClass = RirClass(
+    name = "Box`1",
+    typeParameters = listOf("T"),
+    instantiations = listOf(RirInstantiation(typeArguments = listOf(RirPrimitiveType("int")))),
+  )
+  private val genericDefs: Map<RirTypeKey, RirClass> =
+    mapOf(RirTypeKey("Test.Boxes", "Box`1") to boxDefinition)
+
+  private fun boxesClassReturning(typeArgument: RirTypeRef): RirClass {
+    val method = RirMethod(
+      name = "OfNumber",
+      isStatic = true,
+      returnType = RirGenericInstanceType(
+        namespace = "Test.Boxes", name = "Box`1", typeArguments = listOf(typeArgument),
+      ),
+      parameters = emptyList(),
+    )
+    return RirClass(name = "Boxes", isStatic = true, methods = listOf(method))
+  }
+
+  @Test
+  fun `an ordinary member returning a DISCOVERED closed instantiation is admitted as bridgeable`() {
+    val cls: RirClass = boxesClassReturning(RirPrimitiveType("int"))
+
+    val registrables: List<RirRegistrable> = bridgeableRegistrables(
+      cls, boundHandleTypes = emptySet(), boundGenericClassDefinitions = genericDefs,
+    )
+
+    assertTrue(
+      registrables.any { it is RirRegistrable.Method && it.method.name == "OfNumber" },
+      "Box<int> was discovered (boxDefinition.instantiations contains it) and its definition is " +
+          "bound, the member must no longer be silently dropped",
+    )
+  }
+
+  @Test
+  fun `an ordinary member returning an UNDISCOVERED instantiation of a bound definition is skipped`() {
+    // Box<string> is never in boxDefinition.instantiations (only Box<int> is).
+    val cls: RirClass = boxesClassReturning(RirStringType())
+
+    val registrables: List<RirRegistrable> = bridgeableRegistrables(
+      cls, boundHandleTypes = emptySet(), boundGenericClassDefinitions = genericDefs,
+    )
+
+    assertFalse(
+      registrables.any { it is RirRegistrable.Method && it.method.name == "OfNumber" },
+      "Box<string> was never discovered by the reader's Decision 2 pass, it must be SKIPPED, " +
+          "not admitted, even though Box`1 itself is a bound generic definition",
+    )
+  }
+
+  @Test
+  fun `an ordinary member referencing an instantiation of an UNBOUND definition is skipped`() {
+    val cls: RirClass = boxesClassReturning(RirPrimitiveType("int"))
+
+    // No boundGenericClassDefinitions passed at all, so Box`1 resolves nowhere.
+    val registrables: List<RirRegistrable> =
+      bridgeableRegistrables(cls, boundHandleTypes = emptySet())
+
+    assertFalse(
+      registrables.any { it is RirRegistrable.Method && it.method.name == "OfNumber" },
+      "a generic instantiation whose definition never resolves in boundGenericClassDefinitions " +
+          "must stay fail-closed. This is the defensive half of the same filter, guarding a " +
+          "stale/hand-built RIR rather than trusting RirGenericInstanceType's own shape",
+    )
+  }
 }
