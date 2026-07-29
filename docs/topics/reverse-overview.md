@@ -73,6 +73,11 @@ alternate ctors → static methods → instance methods → computed getters); t
 Shape B, the object-initializer reconstruction) remains slot-free. Members alone force a registration
 export even without alternate constructors. See [C# structs](structs.md).
 
+A generic class definition reached through at least one closed instantiation (`Box<int>`) is
+extracted too, and binds as a real Kotlin generic class rather than a monomorphized family: one
+registration export per closed instantiation, since a `[UnmanagedCallersOnly]` thunk can never be
+generic. See [Generic types](generic-types.md).
+
 ### `nugetGenerateBindings` and `nugetGenerateShims`: two generators, one contract
 
 Both tasks read the identical `reverse-ir.json` and must agree on one shared contract, fixed by
@@ -212,9 +217,11 @@ install pointer rather than a cryptic subprocess error.
         <a href="registration-diagnostics.md">Registration diagnostics</a>
         <a href="instance-members.md">Instance members</a>
         <a href="structs.md">C# structs</a>
+        <a href="generic-types.md">Generic types</a>
         <a href="bridgeable-subset.md">The bridgeable subset</a>
     </category>
     <category ref="external">
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/072-closed-constructed-generics-in-kotlin.md">ADR-072: Closed constructed generics from C# in Kotlin</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/041-kotlin-to-csharp-call-mechanism.md">ADR-041: Kotlin → managed C# call mechanism</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/042-assembly-metadata-extraction.md">ADR-042: Assembly metadata extraction</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/045-nuget-resolution-pipeline.md">ADR-045: NuGet resolution pipeline</a>

@@ -6,6 +6,8 @@ import io.github.xxfast.kotlin.native.nuget.rir.RirClass
 import io.github.xxfast.kotlin.native.nuget.rir.RirConstructor
 import io.github.xxfast.kotlin.native.nuget.rir.RirEnumType
 import io.github.xxfast.kotlin.native.nuget.rir.RirFile
+import io.github.xxfast.kotlin.native.nuget.rir.RirGenericInstanceType
+import io.github.xxfast.kotlin.native.nuget.rir.RirInstantiation
 import io.github.xxfast.kotlin.native.nuget.rir.RirInterface
 import io.github.xxfast.kotlin.native.nuget.rir.RirInterfaceType
 import io.github.xxfast.kotlin.native.nuget.rir.RirMethod
@@ -19,11 +21,13 @@ import io.github.xxfast.kotlin.native.nuget.rir.RirStruct
 import io.github.xxfast.kotlin.native.nuget.rir.RirStructShape
 import io.github.xxfast.kotlin.native.nuget.rir.RirStructType
 import io.github.xxfast.kotlin.native.nuget.rir.RirTypeKey
+import io.github.xxfast.kotlin.native.nuget.rir.RirTypeParameterType
 import io.github.xxfast.kotlin.native.nuget.rir.RirTypeRef
 import io.github.xxfast.kotlin.native.nuget.rir.RirVoidType
 import io.github.xxfast.kotlin.native.nuget.rir.abiArgs
 import io.github.xxfast.kotlin.native.nuget.rir.abiOutArgs
 import io.github.xxfast.kotlin.native.nuget.rir.abiReturnType
+import io.github.xxfast.kotlin.native.nuget.rir.boundGenericClassDefinitions
 import io.github.xxfast.kotlin.native.nuget.rir.boundHandleTypes
 import io.github.xxfast.kotlin.native.nuget.rir.boundInterfaceTypes
 import io.github.xxfast.kotlin.native.nuget.rir.boundStructTypes
@@ -33,6 +37,7 @@ import io.github.xxfast.kotlin.native.nuget.rir.bridgeId
 import io.github.xxfast.kotlin.native.nuget.rir.bridgeableStructRegistrables
 import io.github.xxfast.kotlin.native.nuget.rir.bridgeSuffix
 import io.github.xxfast.kotlin.native.nuget.rir.contractHash
+import io.github.xxfast.kotlin.native.nuget.rir.fnv1a64
 import io.github.xxfast.kotlin.native.nuget.rir.isNullable
 import io.github.xxfast.kotlin.native.nuget.rir.parseReverseIr
 import io.github.xxfast.kotlin.native.nuget.rir.registrationExportName
@@ -74,6 +79,10 @@ fun generateCSharpShims(file: RirFile, nativeLibraryName: String): List<Generate
   // ADR-056: same anti-drift pattern — both this task and NugetGenerateBindingsTask resolve a
   // RirStructType reference's component list through this map.
   val structs: Map<RirTypeKey, RirStruct> = boundStructTypes(file)
+  // ADR-072: same anti-drift pattern. An ordinary (non-generic) member referencing a closed
+  // generic instantiation is bridgeable iff its definition resolves here AND the exact
+  // instantiation was discovered by the reader's Decision 2 pass.
+  val genericDefs: Map<RirTypeKey, RirClass> = boundGenericClassDefinitions(file)
 
   file.assemblies.forEach { assembly ->
     assembly.namespaces.forEach { namespace ->
@@ -92,51 +101,75 @@ fun generateCSharpShims(file: RirFile, nativeLibraryName: String): List<Generate
           )
         }
       }
-      namespace.types.filterIsInstance<RirClass>().forEach { cls ->
-        // ADR-052 "shared bridgeable ordering": the exact same ordered list (constructor first,
-        // then bridgeable static methods) that NugetGenerateBindingsTask derives its register
-        // signature/body from — anti-drift for the DllImport params / ModuleInitializer args
-        // below.
-        val registrables: List<RirRegistrable> =
-          bridgeableRegistrables(cls, boundTypes, structs, boundIfaces)
-
-        if (registrables.isEmpty()) return@forEach
-
-        // ADR-051/052/Phase 9 line 151: track whether any method has a handle type, the class has
-        // a public instance constructor (a constructor's return is implicitly a handle —
-        // GCHandle.Alloc), or the class has any instance method/property at all — every one of
-        // these forces the Kotlin side into the ADR-051 wrapper shape (NugetObjectHandle +
-        // Cleaner), which always calls the shared free-handle thunk this file registers,
-        // regardless of whether any individual signature happens to use a handle TYPE — for
-        // NugetRuntimeRegistration.cs.
-        val hasHandle: Boolean = registrables.any { r ->
-          when (r) {
-            is RirRegistrable.Ctor -> true
-            is RirRegistrable.Method -> r.method.returnType is RirObjectHandleType ||
-                r.method.parameters.any { p -> p.type is RirObjectHandleType } || !r.method.isStatic
-
-            is RirRegistrable.PropertyGetter -> !r.property.isStatic
-            is RirRegistrable.PropertySetter -> !r.property.isStatic
+      // ADR-072 Decision 4: one registration export/C# class PER INSTANTIATION, never one per
+  // definition, routed BEFORE the ordinary (non-generic) class path below, mirroring
+      // NugetGenerateBindingsTask's routing. A definition with zero discovered instantiations
+      // emits nothing (Decision 10).
+      namespace.types.filterIsInstance<RirClass>()
+        .filter { it.typeParameters.isNotEmpty() }
+        .forEach { cls ->
+          cls.instantiations.forEach { inst ->
+            val tag: String = instantiationTag(cls, inst)
+            val exportName: String = registrationExportName(namespace.name, tag)
+            result.add(
+              GeneratedFile(
+                relativePath = "${tag}Registration.cs",
+                content = genericRegistrationFileContent(
+                  namespace.name, cls, inst, tag, exportName, nativeLibraryName,
+                ),
+              )
+            )
           }
+          if (cls.instantiations.isNotEmpty()) needsRuntime = true
         }
-        if (hasHandle) needsRuntime = true
 
-        val exportName: String = registrationExportName(namespace.name, cls.name)
+      namespace.types.filterIsInstance<RirClass>().filterNot { it.typeParameters.isNotEmpty() }
+        .forEach { cls ->
+          // ADR-052 "shared bridgeable ordering": the exact same ordered list (constructor first,
+          // then bridgeable static methods) that NugetGenerateBindingsTask derives its register
+          // signature/body from: anti-drift for the DllImport params / ModuleInitializer args
+          // below.
+          val registrables: List<RirRegistrable> =
+            bridgeableRegistrables(cls, boundTypes, structs, boundIfaces, genericDefs)
 
-        result.add(
-          GeneratedFile(
-            relativePath = "${cls.name}Registration.cs",
-            content = registrationFileContent(
-              namespaceName = namespace.name,
-              cls = cls,
-              registrables = registrables,
-              exportName = exportName,
-              nativeLibraryName = nativeLibraryName,
-              structs = structs,
-            ),
+          if (registrables.isEmpty()) return@forEach
+
+          // ADR-051/052/Phase 9 line 151: track whether any method has a handle type, the class has
+          // a public instance constructor (a constructor's return is implicitly a handle,
+          // GCHandle.Alloc), or the class has any instance method/property at all. Every one of
+          // these forces the Kotlin side into the ADR-051 wrapper shape (NugetObjectHandle +
+          // Cleaner), which always calls the shared free-handle thunk this file registers,
+          // regardless of whether any individual signature happens to use a handle TYPE, for
+          // NugetRuntimeRegistration.cs.
+          val hasHandle: Boolean = registrables.any { r ->
+            when (r) {
+              is RirRegistrable.Ctor -> true
+              is RirRegistrable.Method -> r.method.returnType is RirObjectHandleType ||
+                  r.method.parameters.any { p -> p.type is RirObjectHandleType } ||
+                  !r.method.isStatic
+
+              is RirRegistrable.PropertyGetter -> !r.property.isStatic
+              is RirRegistrable.PropertySetter -> !r.property.isStatic
+            }
+          }
+          if (hasHandle) needsRuntime = true
+
+          val exportName: String = registrationExportName(namespace.name, cls.name)
+
+          result.add(
+            GeneratedFile(
+              relativePath = "${cls.name}Registration.cs",
+              content = registrationFileContent(
+                namespaceName = namespace.name,
+                cls = cls,
+                registrables = registrables,
+                exportName = exportName,
+                nativeLibraryName = nativeLibraryName,
+                structs = structs,
+              ),
+            )
           )
-        )
-      }
+        }
 
       // ADR-070 Decision 2: one registration export/shim per admissible interface, structurally
       // identical to a class's but with NO constructor slot and ONLY the interface's OWN
@@ -227,6 +260,15 @@ private fun csAbiType(type: RirTypeRef): String = when (type) {
           "update the v1 inverse type-mapping table in NugetGenerateShimsTask.kt"
     )
   }
+
+  // ADR-072 Decision 1: wire-identical to a handle. A generic instantiation crosses the
+  // [UnmanagedCallersOnly] boundary as an erased GCHandle IntPtr, regardless of its type
+  // argument(s) (CS8894 forbids the closed generic itself, never its GCHandle wrapper).
+  is RirGenericInstanceType -> "IntPtr"
+  is RirTypeParameterType -> error(
+    "[nuget] a bare type parameter must be substituted to a concrete type before reaching " +
+        "csAbiType()"
+  )
 }
 
 // The real, natural C# type for the actual method call/return (as opposed to the ABI-level type
@@ -259,7 +301,32 @@ private fun csNativeType(type: RirTypeRef): String = when (type) {
           "update the v1 inverse type-mapping table in NugetGenerateShimsTask.kt"
     )
   }
+
+  // ADR-072 Decision 10: the real C# type for a generic instantiation strips the CLR arity
+  // suffix and renders its own type arguments recursively (e.g. "Box<int>", "Box<Box<int>>" if
+  // that were ever legal, Decision 6 already excludes nested instantiations at the RIR level).
+  // Decision 7: each type ARGUMENT'S own nullability is rendered inline (csGenericArgumentType),
+  // never through csNativeType directly, see that function's KDoc for why.
+  is RirGenericInstanceType ->
+    "${type.name.substringBefore('`')}<${
+      type.typeArguments.joinToString(", ") { csGenericArgumentType(it) }
+    }>"
+
+  is RirTypeParameterType -> type.name
 }
+
+// ADR-072 Decision 4/7: renders ONE type argument of a closed generic instantiation with its OWN
+// nullable annotation inline ("string" vs "string?"), so `Box<string>` and `Box<string?>` are
+// DIFFERENT C# closed types, matching two DIFFERENT Kotlin witnesses/contract hashes on the other
+// side of the bridge. Deliberately distinct from a bare csNativeType() call: every other call site
+// (a top-level parameter/return/local declaration) already appends its own "?" conditionally
+// (e.g. buildThunkMethod's `"${csNativeType(retType)}? result = ..."`), so making csNativeType
+// itself nullable-aware would double the "?" at every one of those sites. A type ARGUMENT has no
+// such caller-side "?": it must be inline or the annotation is lost, which is exactly the bug
+// this fixes (`Boxes.OfMaybeText`'s `Box<string?>` was rendered as the same closed type as
+// `Box<string>`, CS8619 at the real call site).
+private fun csGenericArgumentType(type: RirTypeRef): String =
+  csNativeType(type) + if (type.isNullable) "?" else ""
 
 // ADR-056/049: the C# ABI-crossing conversion for a value of type [type] on the RETURN side —
 // shared by a top-level method/property return (wrapped in "return ...;") and a struct
@@ -299,6 +366,18 @@ private fun csReturnConversion(type: RirTypeRef, valueExpr: String): String = wh
     "char" -> "(ushort)$valueExpr"
     else -> valueExpr
   }
+
+  // ADR-072: same null-check-then-GCHandle.Alloc shape as a handle/interface return, see
+  // callBodyLines, not csReturnConversion.
+  is RirGenericInstanceType -> error(
+    "[nuget] generic-instantiation returns have their own null-check shape. See " +
+        "callBodyLines, not csReturnConversion"
+  )
+
+  is RirTypeParameterType -> error(
+    "[nuget] a bare type parameter must be substituted to a concrete type before reaching " +
+        "csReturnConversion()"
+  )
 }
 
 // PascalCase method name → camelCase: lowercase the first character only.
@@ -321,6 +400,11 @@ private fun thunkParamName(p: RirParameter): String = when (p.type) {
     "[nuget] struct ${p.type.namespace}.${p.type.name} must be expanded via abiArgs before " +
         "reaching thunkParamName."
   )
+
+  // ADR-072 Decision 3, NugetGenerateShimsTask.kt:313 permissive site: a generic-instance
+  // parameter is wire-identical to a handle and must keep the same "Handle" suffix convention;
+  // the fall-through `else -> p.name` would silently lose it.
+  is RirGenericInstanceType -> "${p.name}Handle"
 
   else -> p.name
 }
@@ -353,6 +437,16 @@ private fun paramConversion(p: RirParameter): String = when (p.type) {
     "char" -> "(char)${thunkParamName(p)}"
     else -> thunkParamName(p)
   }
+
+  // ADR-072 Decision 1: unpacks identically to a handle/interface parameter, cast to the
+  // concrete closed instantiation's own C# type (e.g. "(Box<int>)").
+  is RirGenericInstanceType ->
+    "(${csNativeType(p.type)})GCHandle.FromIntPtr(${thunkParamName(p)}).Target!"
+
+  is RirTypeParameterType -> error(
+    "[nuget] a bare type parameter must be substituted to a concrete type before reaching " +
+        "paramConversion()"
+  )
 }
 
 // ADR-053: a nullable-annotated handle parameter cannot be unpacked inline via the plain
@@ -484,6 +578,22 @@ private fun paramBinding(p: RirParameter, structs: Map<RirTypeKey, RirStruct>): 
       expression = p.name,
     )
   }
+  // ADR-072 Decision 3: a nullable-annotated generic-instantiation parameter is wire-identical
+  // to a nullable handle/interface parameter and needs the SAME IntPtr.Zero guard.
+  // paramConversion's unconditional `!` (correct for the non-null case) would otherwise NPE on a
+  // legitimate null.
+  if (type is RirGenericInstanceType && type.nullable) {
+    val handleName: String = thunkParamName(p)
+    val nativeType: String = csNativeType(type)
+    return ParamBinding(
+      declarationLines = listOf(
+        "$nativeType? ${p.name} = $handleName == IntPtr.Zero",
+        "    ? null",
+        "    : ($nativeType)GCHandle.FromIntPtr($handleName).Target!;",
+      ),
+      expression = p.name,
+    )
+  }
   return ParamBinding(declarationLines = emptyList(), expression = paramConversion(p))
 }
 
@@ -509,6 +619,14 @@ private fun structEnumComponents(
 // registrationFileContent/structRegistrationFileContent), exactly as an enum reference already
 // gets one — `referencedEnumTypes` used to collect ONLY RirEnumType, with no struct equivalent at
 // all, which is the bug this function fixes.
+// ADR-072 Decision 3: an ordinary (non-generic) class referencing a bridgeable closed
+// instantiation renders its C# type BARE ("Box<int>", never namespace-qualified, see
+// csNativeType) directly into the thunk's receiver cast and local declarations
+// (buildThunkMethod/paramBinding), exactly like a struct's own bare `new Litter(...)`
+// reconstruction, so the instantiation's OWN namespace needs the same `using` a struct
+// reference gets when it differs from the namespace the thunk renders inside. Every other leaf
+// (RirObjectHandleType/RirInterfaceType/RirEnumType/primitives/void) is unaffected by this
+// function and stays on `else -> emptySet()` by design (struct-and-generic-only).
 private fun structTypeNamespaces(
   type: RirTypeRef,
   structs: Map<RirTypeKey, RirStruct>,
@@ -519,6 +637,8 @@ private fun structTypeNamespaces(
       setOf(type.namespace) + struct?.components.orEmpty()
         .flatMap { c -> structTypeNamespaces(c.type, structs) }.toSet()
     }
+
+    is RirGenericInstanceType -> setOf(type.namespace)
 
     else -> emptySet()
   }
@@ -540,6 +660,14 @@ private fun referencedStructNamespaces(
     }
   }.toSet()
 
+// ADR-072 Decision 6: an enum is in the v1 type-argument vocabulary, so a bridgeable generic
+// instantiation's C# type (csNativeType's "Box<CatMood>" rendering) can name an enum that never
+// appears at this member's own top level. Mirrors the Kotlin side's genericInstanceEnumArgs (one
+// level: Decision 6 forbids a nested generic instantiation as a type argument).
+private fun genericInstanceEnumArgs(type: RirTypeRef): List<RirEnumType> =
+  if (type is RirGenericInstanceType) type.typeArguments.filterIsInstance<RirEnumType>()
+  else emptyList()
+
 // Every enum type referenced by a class's registrable members, deduplicated — including one
 // referenced only as a STRUCT COMPONENT AT ANY NESTING DEPTH (a shim renders inside
 // `namespace $namespaceName`, so an enum declared elsewhere needs a `using`, whether it appears
@@ -552,22 +680,273 @@ private fun referencedEnumTypes(
   registrables.flatMap { r ->
     when (r) {
       is RirRegistrable.Ctor -> r.ctor.parameters.flatMap {
-        listOfNotNull(it.type as? RirEnumType) + structEnumComponents(it.type, structs)
+        listOfNotNull(it.type as? RirEnumType) + structEnumComponents(it.type, structs) +
+            genericInstanceEnumArgs(it.type)
       }
 
       is RirRegistrable.Method -> listOfNotNull(r.method.returnType as? RirEnumType) +
           structEnumComponents(r.method.returnType, structs) +
+          genericInstanceEnumArgs(r.method.returnType) +
           r.method.parameters.flatMap {
-            listOfNotNull(it.type as? RirEnumType) + structEnumComponents(it.type, structs)
+            listOfNotNull(it.type as? RirEnumType) + structEnumComponents(it.type, structs) +
+                genericInstanceEnumArgs(it.type)
           }
 
       is RirRegistrable.PropertyGetter -> listOfNotNull(r.property.type as? RirEnumType) +
-          structEnumComponents(r.property.type, structs)
+          structEnumComponents(r.property.type, structs) +
+          genericInstanceEnumArgs(r.property.type)
 
       is RirRegistrable.PropertySetter -> listOfNotNull(r.property.type as? RirEnumType) +
-          structEnumComponents(r.property.type, structs)
+          structEnumComponents(r.property.type, structs) +
+          genericInstanceEnumArgs(r.property.type)
     }
   }.distinct()
+
+// ADR-072: the RirObjectHandleType mirror of genericInstanceEnumArgs above. A bridgeable generic
+// instantiation's own type argument can be a bound class handle (`Box<Ferret>`), not just an enum.
+private fun genericInstanceHandleArgs(type: RirTypeRef): List<RirObjectHandleType> =
+  if (type is RirGenericInstanceType) type.typeArguments.filterIsInstance<RirObjectHandleType>()
+  else emptyList()
+
+// ADR-072: the RirObjectHandleType mirror of referencedEnumTypes above: every C# namespace a
+// class's registrable members reference a BOUND CLASS HANDLE through, either directly (a plain
+// `Ferret` parameter/return) or as a generic instantiation's own type argument (`Box<Ferret>`).
+// This was missing entirely before this feature (structTypeNamespaces is "struct-and-generic-only
+// by design", per its own KDoc), which is exactly the twin of the Kotlin-side `Boxes.kt` missing
+// `Ferret` import this ADR's fixture also exercises: `Boxes.OfFerret(Ferret ferret)` needs
+// `using Test.Menagerie;` here precisely because its Kotlin counterpart needed `import
+// test.menagerie.Ferret` there.
+private fun referencedHandleNamespaces(
+  registrables: List<RirRegistrable>,
+): Set<String> =
+  registrables.flatMap { r ->
+    when (r) {
+      is RirRegistrable.Ctor -> r.ctor.parameters.flatMap {
+        listOfNotNull((it.type as? RirObjectHandleType)?.namespace) +
+            genericInstanceHandleArgs(it.type).map { h -> h.namespace }
+      }
+
+      is RirRegistrable.Method ->
+        listOfNotNull((r.method.returnType as? RirObjectHandleType)?.namespace) +
+            genericInstanceHandleArgs(r.method.returnType).map { it.namespace } +
+            r.method.parameters.flatMap {
+              listOfNotNull((it.type as? RirObjectHandleType)?.namespace) +
+                  genericInstanceHandleArgs(it.type).map { h -> h.namespace }
+            }
+
+      is RirRegistrable.PropertyGetter ->
+        listOfNotNull((r.property.type as? RirObjectHandleType)?.namespace) +
+            genericInstanceHandleArgs(r.property.type).map { it.namespace }
+
+      is RirRegistrable.PropertySetter ->
+        listOfNotNull((r.property.type as? RirObjectHandleType)?.namespace) +
+            genericInstanceHandleArgs(r.property.type).map { it.namespace }
+    }
+  }.toSet()
+
+// ADR-072 Decision 4: one registration export/C# class PER CLOSED INSTANTIATION of a generic
+// class definition. CS8895 forbids a generic [UnmanagedCallersOnly] thunk, so every thunk here
+// names the CONCRETE closed type (`Box<int>`), never the open definition.
+private fun genericRegistrationFileContent(
+  namespaceName: String,
+  cls: RirClass,
+  instantiation: RirInstantiation,
+  tag: String,
+  exportName: String,
+  nativeLibraryName: String,
+): String {
+  val args: List<RirTypeRef> = instantiation.typeArguments
+  // ADR-072 Decision 7: each type argument's own nullability must be rendered inline
+  // (csGenericArgumentType), or `Box<string?>` and `Box<string>` collapse to the same closed C#
+  // type name, and `new Box<string>(...)` mismatches the REAL `Box<string?>` at the actual call
+  // site (CS8619).
+  val closedTypeName: String =
+    "${cls.name.substringBefore('`')}<${args.joinToString(", ") { csGenericArgumentType(it) }}>"
+  val registrables: List<RirRegistrable> = genericDefinitionRegistrables(cls)
+  val qualifiedName =
+    "$namespaceName.${cls.name}[${canonicalInstantiationSignature(instantiation)}]"
+  val hash: Long = fnv1a64(
+    "$qualifiedName|" + registrables.joinToString("|") { substitutedIdentity(it, args) },
+  )
+  val slotCount: Int = registrables.size
+
+  fun thunkName(r: RirRegistrable): String = when (r) {
+    is RirRegistrable.Ctor -> "Construct_Thunk"
+    is RirRegistrable.Method -> "${r.method.name}_Thunk"
+    is RirRegistrable.PropertyGetter -> "${r.property.name}_Get_Thunk"
+    is RirRegistrable.PropertySetter -> "${r.property.name}_Set_Thunk"
+  }
+
+  fun ownParams(r: RirRegistrable): List<RirParameter> = when (r) {
+    is RirRegistrable.Ctor -> r.ctor.parameters
+    is RirRegistrable.Method -> r.method.parameters
+    is RirRegistrable.PropertyGetter -> emptyList()
+    is RirRegistrable.PropertySetter -> listOf(RirParameter("value", r.property.type))
+  }
+
+  fun ownReturnType(r: RirRegistrable): RirTypeRef = when (r) {
+    is RirRegistrable.Ctor -> RirVoidType // handled specially below, real ABI return is IntPtr
+    is RirRegistrable.Method -> r.method.returnType
+    is RirRegistrable.PropertyGetter -> r.property.type
+    is RirRegistrable.PropertySetter -> RirVoidType
+  }
+
+  fun isStatic(r: RirRegistrable): Boolean = when (r) {
+    is RirRegistrable.Ctor -> true
+    is RirRegistrable.Method -> r.method.isStatic
+    is RirRegistrable.PropertyGetter -> r.property.isStatic
+    is RirRegistrable.PropertySetter -> r.property.isStatic
+  }
+
+  // The delegate signature the [ModuleInitializer] call's function-pointer expression needs.
+  fun delegateParamTypes(r: RirRegistrable): List<String> {
+    val receiver: List<String> = if (r is RirRegistrable.Ctor || isStatic(r)) emptyList()
+    else listOf("IntPtr")
+    val own: List<String> =
+      ownParams(r).map { p -> csAbiType(substituteGenericType(p.type, args)) }
+    return receiver + own
+  }
+
+  fun delegateReturnType(r: RirRegistrable): String = if (r is RirRegistrable.Ctor) {
+    "IntPtr"
+  } else {
+    csAbiType(substituteGenericType(ownReturnType(r), args))
+  }
+
+  val thunks: String = registrables.joinToString("\n\n") { r ->
+    val receiverParam: List<String> = if (r is RirRegistrable.Ctor || isStatic(r)) emptyList()
+    else listOf("IntPtr selfHandle")
+    val inParamDecls: List<String> = ownParams(r).map { p ->
+      val substituted = RirParameter(p.name, substituteGenericType(p.type, args))
+      "${csAbiType(substituted.type)} ${thunkParamName(substituted)}"
+    }
+    val paramList: String = (receiverParam + inParamDecls).joinToString(", ")
+    val retAbi: String = delegateReturnType(r)
+    val receiverLine: String = if (r is RirRegistrable.Ctor || isStatic(r)) {
+      ""
+    } else {
+      "$closedTypeName receiver = " +
+          "($closedTypeName)GCHandle.FromIntPtr(selfHandle).Target!;\n            "
+    }
+    val callArgs: String = ownParams(r).joinToString(", ") { p ->
+      paramConversion(RirParameter(p.name, substituteGenericType(p.type, args)))
+    }
+
+    val body: String = when (r) {
+      is RirRegistrable.Ctor -> {
+        "return GCHandle.ToIntPtr(GCHandle.Alloc(new $closedTypeName($callArgs)));"
+      }
+
+      is RirRegistrable.PropertySetter -> {
+        val receiverExpr = if (isStatic(r)) closedTypeName else "receiver"
+        "$receiverExpr.${r.property.name} = $callArgs;"
+      }
+
+      else -> {
+        // Ctor and PropertySetter are already handled by the outer `when`, so the compiler proves
+        // this nested `when` over the remaining sealed subtypes (Method | PropertyGetter) is
+        // exhaustive without an `else`. An explicit `else -> error(...)` here is unreachable and
+        // the compiler flags it as redundant.
+        val callExpr: String = when (r) {
+          is RirRegistrable.Method ->
+            "${if (r.method.isStatic) closedTypeName else "receiver"}.${r.method.name}($callArgs)"
+
+          is RirRegistrable.PropertyGetter ->
+            "${if (r.property.isStatic) closedTypeName else "receiver"}.${r.property.name}"
+        }
+        val retType: RirTypeRef = substituteGenericType(ownReturnType(r), args)
+        when {
+          retType is RirVoidType -> "$callExpr;"
+          retType is RirGenericInstanceType || retType is RirObjectHandleType -> {
+            val nativeType: String = csNativeType(retType)
+            "$nativeType? result = $callExpr;\n            " +
+                "return result is null ? IntPtr.Zero : GCHandle.ToIntPtr(GCHandle.Alloc(result));"
+          }
+
+          retType is RirStringType -> "return ${csReturnConversion(retType, callExpr)};"
+          retType is RirEnumType -> "return ${csReturnConversion(retType, callExpr)};"
+          retType is RirPrimitiveType && retType.name in setOf("bool", "char") ->
+            "return ${csReturnConversion(retType, callExpr)};"
+
+          else -> "return $callExpr;"
+        }
+      }
+    }
+
+    """
+            [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+            private static $retAbi ${thunkName(r)}($paramList)
+            {
+                $receiverLine$body
+            }
+    """.trimIndent().prependIndent("        ")
+  }
+
+  val registrableParams: String =
+    registrables.joinToString(", ") { r -> "IntPtr ${genericMemberName(r)}Ptr" }
+  val dllImportParams = "int slotCount, long contractHash, $registrableParams"
+
+  val moduleInitArgs: String = (listOf("$slotCount", "${hash}L") + registrables.map { r ->
+    val paramTypes: List<String> = delegateParamTypes(r)
+    val fnTypeParams: String =
+      (paramTypes + delegateReturnType(r)).joinToString(", ")
+    "(IntPtr)(delegate* unmanaged[Cdecl]<$fnTypeParams>)(&${thunkName(r)})"
+  }).joinToString(", ")
+
+  // ADR-072: this witness's SUBSTITUTED param/return types can name a cross-namespace enum or
+  // bound-class-handle (`Box<CatMood>`'s `construct(CatMood value)`, `Box<Ferret>`'s `Ferret`
+  // return). Previously this file had a FIXED `using` list that never accounted for either,
+  // mirroring the exact gap this ADR's Kotlin-side genericAwareReferencedEnumTypes/
+  // genericAwareReferencedHandleTypes fixed on the other side of the bridge.
+  val substitutedTypes: List<RirTypeRef> = registrables.flatMap { r ->
+    ownParams(r).map { p -> substituteGenericType(p.type, args) } +
+        listOf(substituteGenericType(ownReturnType(r), args))
+  }
+  val enumNamespaces: List<String> =
+    substitutedTypes.filterIsInstance<RirEnumType>().map { it.namespace }
+  val handleNamespaces: List<String> =
+    substitutedTypes.filterIsInstance<RirObjectHandleType>().map { it.namespace }
+  val interfaceNamespaces: List<String> =
+    substitutedTypes.filterIsInstance<RirInterfaceType>().map { it.namespace }
+  val allNamespaces: List<String> = (enumNamespaces + handleNamespaces + interfaceNamespaces)
+    .distinct()
+    .filter { it != namespaceName }
+    .sorted()
+  val usings: String = (
+      listOf(
+        "System", "System.Runtime.CompilerServices", "System.Runtime.InteropServices",
+        "IoGithubXxfast.KotlinNativeNuget",
+      ) + allNamespaces
+      ).joinToString("\n") { "    using $it;" }
+
+  return """
+    |// <auto-generated>
+    |// Generated by nugetGenerateShims from reverse-ir.json (ADR-049). Do not edit by hand.
+    |// C# registration shim for $qualifiedName.
+    |// </auto-generated>
+    |#nullable enable
+    |
+    |namespace $namespaceName
+    |{
+    |$usings
+    |
+    |    internal static class ${tag}Registration
+    |    {
+    |        [DllImport("$nativeLibraryName", CallingConvention = CallingConvention.Cdecl,
+    |            EntryPoint = "$exportName")]
+    |        private static extern void $exportName($dllImportParams);
+    |
+    |${thunks.indented("    ")}
+    |
+    |        [ModuleInitializer]
+    |        internal static unsafe void Register()
+    |        {
+    |            $exportName($moduleInitArgs);
+    |        }
+    |    }
+    |}
+  """.trimMargin().trim()
+}
 
 private fun registrationFileContent(
   namespaceName: String,
@@ -592,7 +971,14 @@ private fun registrationFileContent(
   val structNamespaces: List<String> = referencedStructNamespaces(registrables, structs)
     .filter { it != namespaceName }
 
-  val allNamespaces: List<String> = (enumNamespaces + structNamespaces).distinct().sorted()
+  // ADR-072: a bound-class-handle-typed reference (a plain parameter/return, or a generic
+  // instantiation's own type argument) also needs a `using` when it lives in a different C#
+  // namespace than this shim renders inside, see referencedHandleNamespaces' KDoc.
+  val handleNamespaces: List<String> = referencedHandleNamespaces(registrables)
+    .filter { it != namespaceName }
+
+  val allNamespaces: List<String> =
+    (enumNamespaces + structNamespaces + handleNamespaces).distinct().sorted()
 
   // ADR-054: IoGithubXxfast.KotlinNativeNuget carries NugetTrace, referenced by the
   // [ModuleInitializer] below in every generated {Type}Registration.cs.
@@ -931,6 +1317,11 @@ private fun buildInterfaceThunkMethod(iface: RirInterface, method: RirMethod): S
     is RirStructType -> error(
       "[nuget] struct-typed interface members are out of scope (ADR-070 v1)",
     )
+
+    is RirGenericInstanceType, is RirTypeParameterType -> error(
+      "[nuget] generic-typed interface members are out of scope (ADR-070/ADR-072: generic " +
+          "interfaces are excluded)",
+    )
   }
 
   val bodyLines: List<String> = listOf(receiverLine) + paramDeclarationLines + callBodyLines
@@ -983,6 +1374,11 @@ private fun buildInterfacePropertyGetterThunk(iface: RirInterface, property: Rir
 
     is RirStructType -> error(
       "[nuget] struct-typed interface members are out of scope (ADR-070 v1)",
+    )
+
+    is RirGenericInstanceType, is RirTypeParameterType -> error(
+      "[nuget] generic-typed interface members are out of scope (ADR-070/ADR-072: generic " +
+          "interfaces are excluded)",
     )
   }
 
@@ -1143,6 +1539,17 @@ private fun buildThunkMethod(
         "return result;",
       )
     }
+
+    // ADR-072 Decision 1: byte-identical to the handle/interface-return branches above.
+    is RirGenericInstanceType -> listOf(
+      "${csNativeType(retType)}? result = $callExpr;",
+      "return result is null ? IntPtr.Zero : GCHandle.ToIntPtr(GCHandle.Alloc(result));",
+    )
+
+    is RirTypeParameterType -> error(
+      "[nuget] a bare type parameter must be substituted to a concrete type before reaching " +
+          "buildThunkMethod()"
+    )
   }
 
   val bodyLines: List<String> = listOfNotNull(receiverLine) + paramDeclarationLines + callBodyLines
@@ -1238,6 +1645,17 @@ private fun buildPropertyGetterThunkMethod(
         "return result;",
       )
     }
+
+    // ADR-072 Decision 1: byte-identical to the handle/interface-property branches above.
+    is RirGenericInstanceType -> listOf(
+      "${csNativeType(type)}? result = $getExpr;",
+      "return result is null ? IntPtr.Zero : GCHandle.ToIntPtr(GCHandle.Alloc(result));",
+    )
+
+    is RirTypeParameterType -> error(
+      "[nuget] a bare type parameter must be substituted to a concrete type before reaching " +
+          "buildPropertyGetterThunkMethod()"
+    )
   }
 
   val body: String =
@@ -1562,6 +1980,11 @@ private fun buildStructMethodThunk(
     is RirInterfaceType -> error(
       "[nuget] interface returns on struct methods are out of scope (ADR-070 v1)",
     )
+
+    is RirGenericInstanceType, is RirTypeParameterType -> error(
+      "[nuget] generic instantiations/type parameters on struct methods are out of scope " +
+          "(ADR-072 Decision 6: struct type arguments are excluded)",
+    )
   }
 
   val bodyLines: List<String> = paramDeclarationLines + callBodyLines
@@ -1638,6 +2061,11 @@ private fun buildStructPropertyGetterThunk(
 
     is RirInterfaceType -> error(
       "[nuget] interface-typed computed properties on structs are out of scope (ADR-070 v1)",
+    )
+
+    is RirGenericInstanceType, is RirTypeParameterType -> error(
+      "[nuget] generic instantiations/type parameters on struct properties are out of scope " +
+          "(ADR-072 Decision 6: struct type arguments are excluded)",
     )
   }
 

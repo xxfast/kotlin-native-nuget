@@ -9,6 +9,8 @@ import io.github.xxfast.kotlin.native.nuget.rir.RirDiagnosticKind
 import io.github.xxfast.kotlin.native.nuget.rir.RirEnum
 import io.github.xxfast.kotlin.native.nuget.rir.RirEnumType
 import io.github.xxfast.kotlin.native.nuget.rir.RirFile
+import io.github.xxfast.kotlin.native.nuget.rir.RirGenericInstanceType
+import io.github.xxfast.kotlin.native.nuget.rir.RirInstantiation
 import io.github.xxfast.kotlin.native.nuget.rir.RirInterface
 import io.github.xxfast.kotlin.native.nuget.rir.RirInterfaceType
 import io.github.xxfast.kotlin.native.nuget.rir.RirMethod
@@ -22,23 +24,27 @@ import io.github.xxfast.kotlin.native.nuget.rir.RirStruct
 import io.github.xxfast.kotlin.native.nuget.rir.RirStructShape
 import io.github.xxfast.kotlin.native.nuget.rir.RirStructType
 import io.github.xxfast.kotlin.native.nuget.rir.RirTypeKey
+import io.github.xxfast.kotlin.native.nuget.rir.RirTypeParameterType
 import io.github.xxfast.kotlin.native.nuget.rir.RirTypeRef
 import io.github.xxfast.kotlin.native.nuget.rir.RirVoidType
 import io.github.xxfast.kotlin.native.nuget.rir.abiArgs
 import io.github.xxfast.kotlin.native.nuget.rir.abiOutArgs
 import io.github.xxfast.kotlin.native.nuget.rir.abiReturnType
 import io.github.xxfast.kotlin.native.nuget.rir.arityLimitDiagnostics
+import io.github.xxfast.kotlin.native.nuget.rir.boundGenericClassDefinitions
 import io.github.xxfast.kotlin.native.nuget.rir.boundHandleTypes
 import io.github.xxfast.kotlin.native.nuget.rir.boundInterfaceTypes
 import io.github.xxfast.kotlin.native.nuget.rir.boundStructTypes
 import io.github.xxfast.kotlin.native.nuget.rir.bridgeableInterfaceRegistrables
 import io.github.xxfast.kotlin.native.nuget.rir.bridgeableRegistrables
 import io.github.xxfast.kotlin.native.nuget.rir.bridgeId
+import io.github.xxfast.kotlin.native.nuget.rir.bridgeIds
 import io.github.xxfast.kotlin.native.nuget.rir.bridgeableStructRegistrables
 import io.github.xxfast.kotlin.native.nuget.rir.bridgeSuffix
 import io.github.xxfast.kotlin.native.nuget.rir.classInterfaceSupertypes
 import io.github.xxfast.kotlin.native.nuget.rir.collisionDiagnostics
 import io.github.xxfast.kotlin.native.nuget.rir.contractHash
+import io.github.xxfast.kotlin.native.nuget.rir.fnv1a64
 import io.github.xxfast.kotlin.native.nuget.rir.interfaceBaseKeys
 import io.github.xxfast.kotlin.native.nuget.rir.isNullable
 import io.github.xxfast.kotlin.native.nuget.rir.parseInterfaceRef
@@ -135,6 +141,27 @@ private fun interfacePackages(
   }
 }.toMap()
 
+// ADR-072: the RirObjectHandleType equivalent of enumPackages/structPackages/interfacePackages
+// above: every bound (non-static) RirClass declared anywhere in the RirFile, mapped to the
+// Kotlin package its generated wrapper class is emitted into. This was missing before this
+// feature: a bound class used as a PARAMETER or RETURN type in a different Kotlin package than
+// its own declaration (e.g. `Boxes.OfFerret(Ferret ferret)` in `test.boxes` referencing `Ferret`
+// in `test.menagerie`) rendered with no `import` line at all: a latent gap, never exercised by
+// any fixture before `Box<Ferret>` forced the first cross-package bound-class-handle parameter.
+private fun handlePackages(
+  file: RirFile,
+  packageNameOverrides: Map<String, String>,
+  namespaceAliases: Map<String, Map<String, String>>,
+): Map<RirTypeKey, String> = file.assemblies.flatMap { assembly ->
+  assembly.namespaces.flatMap { namespace ->
+    namespace.types.filterIsInstance<RirClass>().filter { !it.isStatic }.map { cls ->
+      RirTypeKey(namespace.name, cls.name) to kotlinPackage(
+        assembly.packageId, namespace.name, packageNameOverrides, namespaceAliases,
+      )
+    }
+  }
+}.toMap()
+
 // ADR-056/059: does this type reference — either directly, or (if it is a struct) through one of
 // its OWN components, AT ANY NESTING DEPTH — satisfy [predicate]? Every "does this file need X"
 // detector below (needsInterop, needsEnums, hasStringReturn, hasStringParam, hasEnumReturn, ...)
@@ -189,6 +216,7 @@ fun generateKotlinStubs(
 ): List<GeneratedFile> {
   validateDiagnostics(file)
   validateKotlinSignatures(file)
+  validateGenericArityCollisions(file)
   val result: MutableList<GeneratedFile> = mutableListOf()
   var needsInterop = false
   var needsRuntime = false
@@ -205,6 +233,10 @@ fun generateKotlinStubs(
   val boundTypes: Set<RirTypeKey> = boundHandleTypes(file)
   // ADR-070: derived once for the whole file, same anti-drift pattern.
   val boundIfaces: Map<RirTypeKey, RirInterface> = boundInterfaceTypes(file)
+  // ADR-072: derived once for the whole file, same anti-drift pattern. An ordinary (non-generic)
+  // member referencing a closed generic instantiation is bridgeable iff its definition resolves
+  // here AND the exact instantiation was discovered by the reader's Decision 2 pass.
+  val genericDefs: Map<RirTypeKey, RirClass> = boundGenericClassDefinitions(file)
   val enumPkgs: Map<RirTypeKey, String> =
     enumPackages(file, packageNameOverrides, namespaceAliases)
   // ADR-059: derived once for the whole file, same anti-drift pattern as enumPkgs — a struct's own
@@ -214,6 +246,12 @@ fun generateKotlinStubs(
   // ADR-070: derived once for the whole file, same anti-drift pattern as structPkgs.
   val interfacePkgs: Map<RirTypeKey, String> =
     interfacePackages(file, packageNameOverrides, namespaceAliases)
+  // ADR-072: derived once for the whole file, same anti-drift pattern as enumPkgs/structPkgs. A
+  // bound-class-handle-typed reference (an ordinary class parameter/return, or a generic
+  // instantiation's own type argument) needs an `import <pkg>.<ClassName>` line whenever it is
+  // declared in a different Kotlin package than the referencing file.
+  val handlePkgs: Map<RirTypeKey, String> =
+    handlePackages(file, packageNameOverrides, namespaceAliases)
   // ADR-056: derived once for the whole file, same anti-drift pattern — both this task and
   // NugetGenerateShimsTask resolve a RirStructType reference's component list through this map.
   val structs: Map<RirTypeKey, RirStruct> = boundStructTypes(file)
@@ -280,119 +318,150 @@ fun generateKotlinStubs(
         }
       }
 
-      namespace.types.filterIsInstance<RirClass>().forEach { cls ->
-        // ADR-052/Phase 9 line 151 "shared bridgeable ordering": ONE ordered list — constructor
-        // (if any) first, then bridgeable static methods, then bridgeable instance methods, then
-        // per-property getter/[setter] pairs — is the single source of truth both this task and
-        // NugetGenerateShimsTask derive their registration-order-sensitive output from. Member-name
-        // collisions with the ADR-051 wrapper (handle/close/cleaner) are already excluded here.
-        val registrables: List<RirRegistrable> =
-          bridgeableRegistrables(cls, boundTypes, structs, boundIfaces)
-        val ctors: List<RirConstructor> =
-          registrables.filterIsInstance<RirRegistrable.Ctor>().map { it.ctor }
-        val staticMethods: List<RirMethod> = registrables
-          .filterIsInstance<RirRegistrable.Method>()
-          .map { it.method }.filter { it.isStatic }
-        val instanceMethods: List<RirMethod> = registrables
-          .filterIsInstance<RirRegistrable.Method>()
-          .map { it.method }.filter { !it.isStatic }
-        val propertyGetters: List<RirProperty> =
-          registrables.filterIsInstance<RirRegistrable.PropertyGetter>().map { it.property }
-        val instancePropertyGetters: List<RirProperty> = propertyGetters.filterNot { it.isStatic }
-        val staticPropertyGetters: List<RirProperty> = propertyGetters.filter { it.isStatic }
-        val propertySetterNames: Set<String> = registrables
-          .filterIsInstance<RirRegistrable.PropertySetter>()
-          .map { it.property.name }
-          .toSet()
-
-        if (registrables.isEmpty()) return@forEach
-
-        val allMethods: List<RirMethod> = staticMethods + instanceMethods
-        val methodsHaveString: Boolean = allMethods.any { method ->
-          typeContains(method.returnType, structs, ::isStringRef) ||
-              method.parameters.any { p -> typeContains(p.type, structs, ::isStringRef) }
-        }
-        val ctorsHaveString: Boolean = ctors.any { ctor ->
-          ctor.parameters.any { p -> typeContains(p.type, structs, ::isStringRef) }
-        }
-        val propertiesHaveString: Boolean =
-          propertyGetters.any { typeContains(it.type, structs, ::isStringRef) }
-        val hasString: Boolean = methodsHaveString || ctorsHaveString || propertiesHaveString
-        if (hasString) needsInterop = true
-
-        // ADR-051/052/Phase 9 line 151: NugetRuntime.kt is needed whenever any bridgeable
-        // signature contains a handle type, the class has a public instance constructor (a
-        // constructor's return is implicitly the class's own handle type), or the class has any
-        // instance method/property at all (both require the receiver `handle` field regardless of
-        // whether a handle TYPE appears in any individual signature). Emitted once (below),
-        // regardless of how many classes trigger it.
-        // ADR-070: an interface-typed member also forces NugetRuntime.kt — an interface value
-        // wraps in `{Name}Handle`, which needs the same NugetObjectHandle/Cleaner machinery.
-        val methodsHaveHandle: Boolean = allMethods.any { method ->
-          isHandleLike(method.returnType) || method.parameters.any { p -> isHandleLike(p.type) }
-        }
-        val hasInstanceMember: Boolean =
-          ctors.isNotEmpty() || instanceMethods.isNotEmpty() || instancePropertyGetters.isNotEmpty()
-        val instancePropertiesHaveHandle: Boolean =
-          instancePropertyGetters.any { isHandleLike(it.type) }
-        val hasHandle: Boolean =
-          methodsHaveHandle || hasInstanceMember || instancePropertiesHaveHandle
-        if (hasHandle) needsRuntime = true
-
-        // NugetEnums.kt is needed whenever a bridgeable member RECEIVES an enum from C# (a method
-        // return or a property value): that is the only direction where the ordinal can be out of
-        // range, since a C# enum is not a closed set ((CatMood)99 is a legal C# value). Enum
-        // arguments travel the other way as Kotlin's own `.ordinal` and are always in range.
-        val methodsHaveEnumReturn: Boolean =
-          allMethods.any { typeContains(it.returnType, structs, ::isEnumRef) }
-        val propertiesHaveEnumReturn: Boolean =
-          propertyGetters.any { typeContains(it.type, structs, ::isEnumRef) }
-        val hasEnumReturn: Boolean = methodsHaveEnumReturn || propertiesHaveEnumReturn
-        if (hasEnumReturn) needsEnums = true
-
-        val exportName: String = registrationExportName(namespace.name, cls.name)
-        expectedRegistrations.add("${namespace.name}.${cls.name}")
-
-        result.add(
-          GeneratedFile(
-            relativePath = "nativeMain/$pkgPath/${cls.name}Bindings.kt",
-            content = bindingsFileContent(
-              kotlinPkg, cls, registrables, exportName, assembly.packageId, namespace.name, structs,
-            ),
+      // ADR-072 Decision 3: a generic class definition (typeParameters.isNotEmpty()) is routed to
+      // the dedicated generic-class witness path BEFORE the ordinary class path below, never
+      // both, and never falling through to the ordinary path (whose isV1Type gate would silently
+      // emit nothing for it).
+      namespace.types.filterIsInstance<RirClass>()
+        .filter { it.typeParameters.isNotEmpty() }
+        .forEach { cls ->
+          val genericFiles: List<GeneratedFile> = genericClassFiles(
+            cls, kotlinPkg, namespace.name, assembly.packageId, enumPkgs, handlePkgs,
           )
-        )
-        // ADR-070 Decision 5: the interface supertypes this class declares (already filtered to
-        // "maximal" — a redundant base of another declared supertype is dropped), plus every
-        // Kotlin member name (method/property) those supertypes' EFFECTIVE (own + inherited)
-        // members require an `override` modifier for.
-        val supertypeKeys: List<RirTypeKey> = classInterfaceSupertypes(cls, boundIfaces)
-        val supertypeNames: List<String> = supertypeKeys.map { it.name }
-        val effectiveSupertypeMembers: List<OwnedInterfaceMember> = supertypeKeys.flatMap { key ->
-          effectiveInterfaceRegistrables(boundIfaces.getValue(key), boundTypes, boundIfaces)
+          if (genericFiles.isNotEmpty()) {
+            result.addAll(genericFiles)
+            needsRuntime = true
+            if (genericClassNeedsInterop(cls)) needsInterop = true
+            if (genericClassNeedsEnums(cls)) needsEnums = true
+            cls.instantiations.forEach { inst ->
+              // Decision 10: the DISPLAYED qualified name strips the CLR arity suffix: never
+              // leak `Box`1` into generated source (NugetRegistry.kt's `expected` list literal).
+              expectedRegistrations.add(
+                "${namespace.name}.${cls.name.substringBefore('`')}" +
+                    "[${canonicalInstantiationSignature(inst)}]",
+              )
+            }
+          }
         }
-        val overrideMethodNames: Set<String> = effectiveSupertypeMembers
-          .mapNotNull {
-            (it.registrable as? RirRegistrable.Method)?.method?.name?.toMethodCamelCase()
-          }
-          .toSet()
-        val overridePropertyNames: Set<String> = effectiveSupertypeMembers
-          .mapNotNull {
-            (it.registrable as? RirRegistrable.PropertyGetter)?.property?.name?.toMethodCamelCase()
-          }
-          .toSet()
 
-        result.add(
-          GeneratedFile(
-            relativePath = "nativeMain/$pkgPath/${cls.name}.kt",
-            content = stubFileContent(
-              kotlinPkg, cls, staticMethods, instanceMethods, ctors,
-              instancePropertyGetters, staticPropertyGetters, propertySetterNames,
-              assembly.packageId, namespace.name, enumPkgs, structPkgs, structs,
-              qualifiedTypeNames, supertypeNames, overrideMethodNames, overridePropertyNames,
-            ),
+      namespace.types.filterIsInstance<RirClass>().filterNot { it.typeParameters.isNotEmpty() }
+        .forEach { cls ->
+          // ADR-052/Phase 9 line 151 "shared bridgeable ordering": ONE ordered list, constructor
+          // (if any) first, then bridgeable static methods, then bridgeable instance methods, then
+          // per-property getter/[setter] pairs. That list is the single source of truth both this
+          // task and NugetGenerateShimsTask derive their registration-order-sensitive output from.
+          // Member-name collisions with the ADR-051 wrapper (handle/close/cleaner) are already
+          // excluded here.
+          val registrables: List<RirRegistrable> =
+            bridgeableRegistrables(cls, boundTypes, structs, boundIfaces, genericDefs)
+          val ctors: List<RirConstructor> =
+            registrables.filterIsInstance<RirRegistrable.Ctor>().map { it.ctor }
+          val staticMethods: List<RirMethod> = registrables
+            .filterIsInstance<RirRegistrable.Method>()
+            .map { it.method }.filter { it.isStatic }
+          val instanceMethods: List<RirMethod> = registrables
+            .filterIsInstance<RirRegistrable.Method>()
+            .map { it.method }.filter { !it.isStatic }
+          val propertyGetters: List<RirProperty> =
+            registrables.filterIsInstance<RirRegistrable.PropertyGetter>().map { it.property }
+          val instancePropertyGetters: List<RirProperty> = propertyGetters.filterNot { it.isStatic }
+          val staticPropertyGetters: List<RirProperty> = propertyGetters.filter { it.isStatic }
+          val propertySetterNames: Set<String> = registrables
+            .filterIsInstance<RirRegistrable.PropertySetter>()
+            .map { it.property.name }
+            .toSet()
+
+          if (registrables.isEmpty()) return@forEach
+
+          val allMethods: List<RirMethod> = staticMethods + instanceMethods
+          val methodsHaveString: Boolean = allMethods.any { method ->
+            typeContains(method.returnType, structs, ::isStringRef) ||
+                method.parameters.any { p -> typeContains(p.type, structs, ::isStringRef) }
+          }
+          val ctorsHaveString: Boolean = ctors.any { ctor ->
+            ctor.parameters.any { p -> typeContains(p.type, structs, ::isStringRef) }
+          }
+          val propertiesHaveString: Boolean =
+            propertyGetters.any { typeContains(it.type, structs, ::isStringRef) }
+          val hasString: Boolean = methodsHaveString || ctorsHaveString || propertiesHaveString
+          if (hasString) needsInterop = true
+
+          // ADR-051/052/Phase 9 line 151: NugetRuntime.kt is needed whenever any bridgeable
+          // signature contains a handle type, the class has a public instance constructor (a
+          // constructor's return is implicitly the class's own handle type), or the class has any
+          // instance method/property at all (both require the receiver `handle` field regardless of
+          // whether a handle TYPE appears in any individual signature). Emitted once (below),
+          // regardless of how many classes trigger it.
+          // ADR-070: an interface-typed member also forces NugetRuntime.kt: an interface value
+          // wraps in `{Name}Handle`, which needs the same NugetObjectHandle/Cleaner machinery.
+          val methodsHaveHandle: Boolean = allMethods.any { method ->
+            isHandleLike(method.returnType) || method.parameters.any { p -> isHandleLike(p.type) }
+          }
+          val hasInstanceMember: Boolean = ctors.isNotEmpty() ||
+              instanceMethods.isNotEmpty() || instancePropertyGetters.isNotEmpty()
+          val instancePropertiesHaveHandle: Boolean =
+            instancePropertyGetters.any { isHandleLike(it.type) }
+          val hasHandle: Boolean =
+            methodsHaveHandle || hasInstanceMember || instancePropertiesHaveHandle
+          if (hasHandle) needsRuntime = true
+
+          // NugetEnums.kt is needed whenever a bridgeable member RECEIVES an enum from C# (a method
+          // return or a property value): that is the only direction where the ordinal can be out of
+          // range, since a C# enum is not a closed set ((CatMood)99 is a legal C# value). Enum
+          // arguments travel the other way as Kotlin's own `.ordinal` and are always in range.
+          val methodsHaveEnumReturn: Boolean =
+            allMethods.any { typeContains(it.returnType, structs, ::isEnumRef) }
+          val propertiesHaveEnumReturn: Boolean =
+            propertyGetters.any { typeContains(it.type, structs, ::isEnumRef) }
+          val hasEnumReturn: Boolean = methodsHaveEnumReturn || propertiesHaveEnumReturn
+          if (hasEnumReturn) needsEnums = true
+
+          val exportName: String = registrationExportName(namespace.name, cls.name)
+          expectedRegistrations.add("${namespace.name}.${cls.name}")
+
+          result.add(
+            GeneratedFile(
+              relativePath = "nativeMain/$pkgPath/${cls.name}Bindings.kt",
+              content = bindingsFileContent(
+                kotlinPkg, cls, registrables, exportName, assembly.packageId, namespace.name,
+                structs,
+              ),
+            )
           )
-        )
-      }
+          // ADR-070 Decision 5: the interface supertypes this class declares (already filtered to
+          // "maximal": a redundant base of another declared supertype is dropped), plus every
+          // Kotlin member name (method/property) those supertypes' EFFECTIVE (own + inherited)
+          // members require an `override` modifier for.
+          val supertypeKeys: List<RirTypeKey> = classInterfaceSupertypes(cls, boundIfaces)
+          val supertypeNames: List<String> = supertypeKeys.map { it.name }
+          val effectiveSupertypeMembers: List<OwnedInterfaceMember> = supertypeKeys.flatMap { key ->
+            effectiveInterfaceRegistrables(boundIfaces.getValue(key), boundTypes, boundIfaces)
+          }
+          val overrideMethodNames: Set<String> = effectiveSupertypeMembers
+            .mapNotNull {
+              (it.registrable as? RirRegistrable.Method)?.method?.name?.toMethodCamelCase()
+            }
+            .toSet()
+          val overridePropertyNames: Set<String> = effectiveSupertypeMembers
+            .mapNotNull {
+              (it.registrable as? RirRegistrable.PropertyGetter)
+                ?.property?.name?.toMethodCamelCase()
+            }
+            .toSet()
+
+          result.add(
+            GeneratedFile(
+              relativePath = "nativeMain/$pkgPath/${cls.name}.kt",
+              content = stubFileContent(
+                kotlinPkg, cls, staticMethods, instanceMethods, ctors,
+                instancePropertyGetters, staticPropertyGetters, propertySetterNames,
+                assembly.packageId, namespace.name, enumPkgs, structPkgs, handlePkgs, structs,
+                qualifiedTypeNames, supertypeNames, overrideMethodNames, overridePropertyNames,
+                genericDefs,
+              ),
+            )
+          )
+        }
 
       // ADR-070: an admissible, bound interface always emits its pure `interface` + `{Name}Handle`
       // wrapper + `{Name}Bindings.kt` registration trio — mirrors the struct/class loops above.
@@ -518,10 +587,779 @@ fun generateKotlinStubs(
   return result
 }
 
+// ============================================================================================
+// ADR-072: closed constructed generics. Decision 1 (Kotlin shape), Decision 4 (per-instantiation
+// slot accounting), Decision 5 (fake-constructor ambiguity), Decision 10 (names / the `Box`1` leak
+// fix). A generic class definition never falls through to the ordinary (non-generic) class path
+// above (see generateKotlinStubs' routing), so everything below is self-contained rather than
+// threading typeParameters/instantiations through the shared bridgeableRegistrables machinery.
+// ============================================================================================
+
+// ADR-072 Decision 3: substitutes [args] (positionally matching the declaring class's own
+// typeParameters) into [type], recursively: a bare type parameter resolves directly; a generic
+// instantiation (including a self-referencing one, e.g. `Box<T>.Rewrap(): Box<T>`) substitutes
+// through its own typeArguments; every other type is unaffected (Decision 6: no other shape can
+// contain an unresolved type parameter).
+internal fun substituteGenericType(
+  type: RirTypeRef,
+  args: List<RirTypeRef>,
+): RirTypeRef = when (type) {
+  is RirTypeParameterType -> args[type.index]
+  is RirGenericInstanceType -> type.copy(
+    typeArguments = type.typeArguments.map { substituteGenericType(it, args) },
+  )
+
+  else -> type
+}
+
+// ADR-072 Decision 1: the Kotlin-facing type for a (possibly unsubstituted) generic-aware type
+// reference: a bare type parameter renders as its own name ("T"), a generic instantiation strips
+// the CLR arity suffix and renders its OWN type arguments recursively ("Box<Int>"), and every
+// other leaf falls back to the ordinary declKotlinType rendering.
+private fun genericAwareKotlinType(type: RirTypeRef): String = when (type) {
+  is RirTypeParameterType -> type.name
+  is RirGenericInstanceType -> {
+    val base: String = type.name.substringBefore('`')
+    val args: String = type.typeArguments.joinToString(", ") { genericAwareKotlinType(it) }
+    "$base<$args>" + if (type.nullable) "?" else ""
+  }
+
+  else -> declKotlinType(type)
+}
+
+// ADR-072 Decision 10: the internal instantiation tag for ONE type argument, the Kotlin simple
+// type name, "Nullable"-prefixed for a nullable reference argument. Anything outside Decision 6's
+// v1 vocabulary fails fast (the reader is responsible for never emitting such an instantiation as
+// "discovered" in the first place; reaching here means that contract was violated).
+internal fun instantiationArgTag(type: RirTypeRef): String = when (type) {
+  is RirPrimitiveType -> kotlinType(type)
+  is RirStringType -> (if (type.nullable) "Nullable" else "") + "String"
+  is RirObjectHandleType -> (if (type.nullable) "Nullable" else "") + type.name
+  is RirEnumType -> type.name
+  is RirInterfaceType -> (if (type.nullable) "Nullable" else "") + type.name
+  is RirVoidType -> error("[nuget] void cannot be a generic type argument")
+  is RirStructType -> error(
+    "[nuget] struct type arguments are excluded from v1 (ADR-072 Decision 6): " +
+        "${type.namespace}.${type.name}"
+  )
+
+  is RirGenericInstanceType -> error(
+    "[nuget] nested generic instantiations are excluded from v1 (ADR-072 Decision 6): " +
+        "${type.namespace}.${type.name}"
+  )
+
+  is RirTypeParameterType -> error(
+    "[nuget] an unresolved type parameter cannot be a generic type argument: ${type.name}"
+  )
+}
+
+// ADR-072 Decision 10: "BoxOfInt", "BoxOfNullableString", "PairingOfStringAndInt". The
+// definition's own stripped simple name, "Of", then each argument's own tag joined by "And".
+internal fun instantiationTag(cls: RirClass, instantiation: RirInstantiation): String {
+  val base: String = cls.name.substringBefore('`')
+  val argTags: String = instantiation.typeArguments.joinToString("And") { instantiationArgTag(it) }
+  return "${base}Of$argTags"
+}
+
+// ADR-072 Decision 1: the per-instantiation witness object an ORDINARY (non-generic) member must
+// pass alongside the wrapper's handle when constructing a value of [type]: "Box(fn.invoke(...)
+// ?: error(...), BoxOfStringBridge)" per Decision 1's rewrap() sketch. The witness is chosen
+// entirely at generation time from the instantiation discovered at THIS position, never at
+// runtime. Fails fast if [type]'s definition is not in [genericDefs]. That should already be
+// impossible by the time this is called, because the shared isV1Type filter only ever admits an
+// instantiation whose definition resolved there (see RirBridging.kt's isV1Type
+// RirGenericInstanceType branch).
+private fun witnessObjectName(
+  type: RirGenericInstanceType,
+  genericDefs: Map<RirTypeKey, RirClass>,
+): String {
+  val definition: RirClass = requireNotNull(genericDefs[RirTypeKey(type.namespace, type.name)]) {
+    "[nuget] generic instantiation ${type.namespace}.${type.name} referenced at an ordinary " +
+        "member position, but its definition was not found among the bound generic class " +
+        "definitions. This should already have been excluded by the shared isV1Type filter."
+  }
+  return "${instantiationTag(definition, RirInstantiation(type.typeArguments))}Bridge"
+}
+
+// ADR-072 Decision 4: the canonical instantiation signature Decision 4 hashes the contract
+// against: "Test.Boxes.Box`1[System.Int32]" style, using the SAME describe()-shaped rendering
+// contractHash's own signaturePart already produces for a RirGenericInstanceType (so a definition
+// reference and its own instantiation's canonical name are never independently re-derived).
+internal fun canonicalInstantiationSignature(instantiation: RirInstantiation): String =
+  instantiation.typeArguments.joinToString(",") { instantiationCanonicalArg(it) }
+
+internal fun instantiationCanonicalArg(type: RirTypeRef): String = when (type) {
+  is RirPrimitiveType -> canonicalPrimitiveName(type.name)
+  is RirStringType -> "System.String" + if (type.nullable) "?" else ""
+  is RirObjectHandleType -> "${type.namespace}.${type.name}" + if (type.nullable) "?" else ""
+  is RirEnumType -> "${type.namespace}.${type.name}"
+  is RirInterfaceType -> "${type.namespace}.${type.name}" + if (type.nullable) "?" else ""
+  else -> error("[nuget] unexpected generic type argument shape: $type")
+}
+
+internal fun canonicalPrimitiveName(name: String): String = when (name) {
+  "bool" -> "System.Boolean"
+  "byte" -> "System.Byte"
+  "short" -> "System.Int16"
+  "int" -> "System.Int32"
+  "long" -> "System.Int64"
+  "float" -> "System.Single"
+  "double" -> "System.Double"
+  "char" -> "System.Char"
+  else -> error("[nuget] Unknown primitive type name '$name'")
+}
+
+// ADR-072 Decision 3: the definition's OWN ordered registrable list. Constructor (if any), then
+// static methods, then instance methods, then per-property getter/[setter] pairs, in RIR
+// declaration order. Unlike bridgeableRegistrablesCandidates, no isV1Type filter runs here: a
+// generic definition's own member types are RirTypeParameterType/RirGenericInstanceType-shaped by
+// construction and never pass that ordinary (non-generic) filter, so every declared member is
+// treated as bridgeable. Decision 6's vocabulary check already ran per-instantiation, one layer
+// up, before this list is used to render anything.
+internal fun genericDefinitionRegistrables(cls: RirClass): List<RirRegistrable> {
+  val ctor: List<RirRegistrable> = cls.constructors.map { RirRegistrable.Ctor(it) }
+  val staticMethods: List<RirRegistrable> =
+    cls.methods.filter { it.isStatic }.map { RirRegistrable.Method(it) }
+  val instanceMethods: List<RirRegistrable> =
+    cls.methods.filterNot { it.isStatic }.map { RirRegistrable.Method(it) }
+  val instanceProperties: List<RirRegistrable> = cls.properties.filterNot { it.isStatic }
+    .flatMap { p ->
+      if (p.isReadOnly) listOf(RirRegistrable.PropertyGetter(p))
+      else listOf(RirRegistrable.PropertyGetter(p), RirRegistrable.PropertySetter(p))
+    }
+  val staticProperties: List<RirRegistrable> = cls.properties.filter { it.isStatic }
+    .flatMap { p ->
+      if (p.isReadOnly) listOf(RirRegistrable.PropertyGetter(p))
+      else listOf(RirRegistrable.PropertyGetter(p), RirRegistrable.PropertySetter(p))
+    }
+  return ctor + staticMethods + instanceMethods + instanceProperties + staticProperties
+}
+
+// The witness-interface-level Kotlin member NAME for one registrable: a constructor is always
+// named "construct" (there is no C# member name to reuse), everything else reuses its ordinary
+// camelCase Kotlin name.
+internal fun genericMemberName(r: RirRegistrable): String = when (r) {
+  is RirRegistrable.Ctor -> "construct"
+  is RirRegistrable.Method -> r.method.name.toMethodCamelCase()
+  is RirRegistrable.PropertyGetter -> r.property.name.toMethodCamelCase()
+  is RirRegistrable.PropertySetter -> r.property.name.toMethodCamelCase() + "Set"
+}
+
+internal fun genericMemberParams(r: RirRegistrable): List<RirParameter> = when (r) {
+  is RirRegistrable.Ctor -> r.ctor.parameters
+  is RirRegistrable.Method -> r.method.parameters
+  is RirRegistrable.PropertyGetter -> emptyList()
+  is RirRegistrable.PropertySetter -> listOf(RirParameter("value", r.property.type))
+}
+
+// The witness-interface-level Kotlin RETURN type for one registrable, generic-aware (may still
+// contain RirTypeParameterType/RirGenericInstanceType at the DEFINITION level; a witness OBJECT
+// renders the same registrable after substituteGenericType has replaced every type parameter with
+// its instantiation's concrete argument).
+internal fun genericMemberReturnType(r: RirRegistrable, cls: RirClass): RirTypeRef = when (r) {
+  is RirRegistrable.Ctor -> RirGenericInstanceType(
+    namespace = "", name = cls.name,
+    typeArguments = cls.typeParameters.mapIndexed { i, n -> RirTypeParameterType(i, n) },
+  )
+
+  is RirRegistrable.Method -> r.method.returnType
+  is RirRegistrable.PropertyGetter -> r.property.type
+  is RirRegistrable.PropertySetter -> RirVoidType
+}
+
+// ADR-072 Decision 3: `BoxBridge<T>`, one witness interface per generic definition, declaring
+// EVERY registrable member (constructor included, as "construct"), each taking the receiver
+// `NugetObjectHandle` first (construct excepted, since it has no receiver yet). Rendered against
+// the definition's OWN (unsubstituted) type parameters. Decision 1's "every member goes through
+// the witness, including a T-free member" is why describe()-shaped members are declared here too.
+private fun genericBridgeInterfaceFileContent(
+  cls: RirClass,
+  kotlinPkg: String,
+  enumPkgs: Map<RirTypeKey, String>,
+  handlePkgs: Map<RirTypeKey, String>,
+): String {
+  val simpleName: String = cls.name.substringBefore('`')
+  val typeParams: String = cls.typeParameters.joinToString(", ")
+  val registrables: List<RirRegistrable> = genericDefinitionRegistrables(cls)
+  val members: String = registrables.joinToString("\n") { r ->
+    val isCtor: Boolean = r is RirRegistrable.Ctor
+    val receiverParam: String = if (isCtor) "" else "handle: NugetObjectHandle"
+    val ownParams: String = genericMemberParams(r).joinToString(", ") { p ->
+      "${p.name}: ${genericAwareKotlinType(p.type)}"
+    }
+    val allParams: String =
+      listOf(receiverParam, ownParams).filter { it.isNotEmpty() }.joinToString(", ")
+    // A constructor slot's real return is the raw ADR-051 handle, not a Box<T> instance. The
+    // fake top-level constructor (genericClassWrapperFileContent) is the one that wraps it.
+    val retSuffix: String = if (isCtor) ": NugetObjectHandle" else {
+      val retType: RirTypeRef = genericMemberReturnType(r, cls)
+      if (retType is RirVoidType) "" else ": ${genericAwareKotlinType(retType)}"
+    }
+    "  fun ${genericMemberName(r)}($allParams)$retSuffix"
+  }
+  // ADR-072: the definition's OWN (unsubstituted) member signatures can still name a concrete
+  // cross-package enum/handle type directly (not just through T). See
+  // genericAwareReferencedEnumTypes' KDoc for why this file previously emitted such a reference
+  // with no `import` line at all.
+  val referencedTypes: List<RirTypeRef> = registrables.flatMap { r ->
+    genericMemberParams(r).map { it.type } + genericMemberReturnType(r, cls)
+  }
+  val enumImportLines: List<String> = enumImports(
+    referencedTypes.flatMap(::genericAwareReferencedEnumTypes).distinct(), enumPkgs, kotlinPkg,
+  )
+  val handleImportLines: List<String> = handleImports(
+    referencedTypes.flatMap(::genericAwareReferencedHandleTypes).distinct(), handlePkgs, kotlinPkg,
+  )
+  val imports: String =
+    (listOf("import $INTERNAL_PKG.NugetObjectHandle") + enumImportLines + handleImportLines)
+      .distinct().joinToString("\n")
+  return """
+    |package $kotlinPkg
+    |
+    |$imports
+    |
+    |// Generated (ADR-072): one witness per closed instantiation of `$simpleName<$typeParams>`
+    |// implements this interface: every member, T-free members included, dispatches through it.
+    |internal interface ${simpleName}Bridge<$typeParams> {
+    |$members
+    |}
+  """.trimMargin().trim()
+}
+
+// ADR-072 Decision 1: the generic class itself, `internal class Box<T>` over an ADR-051 erased
+// handle plus a per-instantiation witness, every member delegating to the witness. Also emits one
+// top-level fake-constructor function per UNAMBIGUOUS instantiation (Decision 5).
+private fun genericClassWrapperFileContent(
+  cls: RirClass,
+  kotlinPkg: String,
+  unambiguousInstantiations: List<RirInstantiation>,
+  enumPkgs: Map<RirTypeKey, String>,
+  handlePkgs: Map<RirTypeKey, String>,
+): String {
+  val simpleName: String = cls.name.substringBefore('`')
+  val typeParams: String = cls.typeParameters.joinToString(", ")
+  val registrables: List<RirRegistrable> = genericDefinitionRegistrables(cls)
+  val ctorRegistrable: RirRegistrable.Ctor? =
+    registrables.filterIsInstance<RirRegistrable.Ctor>().firstOrNull()
+
+  val nonCtorRegistrables: List<RirRegistrable> =
+    registrables.filterNot { it is RirRegistrable.Ctor }
+  val members: String = nonCtorRegistrables.joinToString("\n\n") { r ->
+    val name: String = genericMemberName(r)
+    val bridgeName: String = if (r is RirRegistrable.PropertySetter) "${name}Set" else name
+    val ownParams: String = genericMemberParams(r).joinToString(", ") { p -> p.name }
+    val retType: RirTypeRef = genericMemberReturnType(r, cls)
+    val retSuffix: String =
+      if (retType is RirVoidType) "" else ": ${genericAwareKotlinType(retType)}"
+    when (r) {
+      is RirRegistrable.PropertyGetter ->
+        "  val $name$retSuffix get() = bridge.$bridgeName(handle)"
+
+      is RirRegistrable.PropertySetter ->
+        "  fun set${name.replaceFirstChar { it.uppercaseChar() }}(value: " +
+            "${genericAwareKotlinType(genericMemberParams(r).single().type)}) {\n" +
+            "    bridge.$bridgeName(handle, value)\n  }"
+
+      else -> {
+        val params: String = genericMemberParams(r).joinToString(", ") { p ->
+          "${p.name}: ${genericAwareKotlinType(p.type)}"
+        }
+        val invokeArgs: String = (listOf("handle") + genericMemberParams(r).map { it.name })
+          .joinToString(", ")
+        "  fun $name($params)$retSuffix = bridge.$name($invokeArgs)"
+      }
+    }
+  }
+
+  val fakeCtors: String = if (ctorRegistrable == null) "" else unambiguousInstantiations
+    .joinToString("\n") { inst ->
+      val tag: String = instantiationTag(cls, inst)
+      val params: String = ctorRegistrable.ctor.parameters.joinToString(", ") { p ->
+        "${p.name}: ${genericAwareKotlinType(substituteGenericType(p.type, inst.typeArguments))}"
+      }
+      val args: String = ctorRegistrable.ctor.parameters.joinToString(", ") { it.name }
+      val retTypeArgs: String = inst.typeArguments.joinToString(", ") { genericAwareKotlinType(it) }
+      // internal (not public): matches the internal visibility of `$simpleName` itself. A public
+      // top-level function returning an internal generic type is a visibility error the Kotlin
+      // compiler would catch, but it is ALSO a public API surface the forward-direction (KSP)
+      // exporter's public-API scan would try to bridge back into C#: a reverse-bound generic
+      // type must stay invisible to that scan exactly like every other reverse-generated
+      // declaration (see the "internal (not public)" notes on
+      // stubFileContent/classWrapperContent/structFileContent).
+      """
+      |internal fun $simpleName($params): $simpleName<$retTypeArgs> {
+      |  val handle = ${tag}Bridge.construct($args)
+      |  return $simpleName(handle, ${tag}Bridge)
+      |}
+    """.trimMargin()
+    }
+
+  // ADR-072: cross-package enum/handle imports; see genericAwareReferencedEnumTypes' KDoc. Two
+  // sources: the definition's OWN member signatures (registrables, unsubstituted, rarely a
+  // concrete type, but Describe()-shaped members can still name one directly), and each
+  // unambiguous instantiation's OWN type arguments (the fake constructors, e.g.
+  // `fun Box(value: CatMood): Box<CatMood>`), which is the one this feature's fixture exercises.
+  val memberTypes: List<RirTypeRef> = registrables
+    .flatMap { r -> genericMemberParams(r).map { it.type } + genericMemberReturnType(r, cls) }
+  val instantiationArgTypes: List<RirTypeRef> =
+    unambiguousInstantiations.flatMap { it.typeArguments }
+  val referencedTypes: List<RirTypeRef> = memberTypes + instantiationArgTypes
+  val enumImportLines: List<String> = enumImports(
+    referencedTypes.flatMap(::genericAwareReferencedEnumTypes).distinct(), enumPkgs, kotlinPkg,
+  )
+  val handleImportLines: List<String> = handleImports(
+    referencedTypes.flatMap(::genericAwareReferencedHandleTypes).distinct(), handlePkgs, kotlinPkg,
+  )
+  val imports: String = (
+      listOf(
+        "import $INTERNAL_PKG.NugetHandleOwner",
+        "import $INTERNAL_PKG.NugetObjectHandle",
+        "import kotlinx.cinterop.COpaquePointer",
+      ) + enumImportLines + handleImportLines
+      ).distinct().joinToString("\n")
+
+  return """
+    |@file:OptIn(
+    |  kotlinx.cinterop.ExperimentalForeignApi::class,
+    |  kotlin.experimental.ExperimentalNativeApi::class,
+    |)
+    |
+    |package $kotlinPkg
+    |
+    |$imports
+    |
+    |// Generated (ADR-072 Decision 1): a real Kotlin generic class over an erased ADR-051 handle.
+    |// Every member (T-free members included, CS8895's constraint) dispatches through [bridge].
+    |internal class $simpleName<$typeParams> internal constructor(
+    |  handle: NugetObjectHandle,
+    |  private val bridge: ${simpleName}Bridge<$typeParams>,
+    |) : NugetHandleOwner, AutoCloseable {
+    |  override val handle: NugetObjectHandle = handle
+    |
+    |  @Suppress("unused")
+    |  private val cleaner = kotlin.native.ref.createCleaner(this.handle) { it.free() }
+    |
+    |  override fun close(): Unit = handle.free()
+    |
+    |$members
+    |}
+    |
+    |$fakeCtors
+  """.trimMargin().trim()
+}
+
+// ADR-072 Decision 4/10: `BoxOfIntBridge.kt`, one witness OBJECT per closed instantiation,
+// implementing the definition's own BoxBridge<T> with T substituted to this instantiation's
+// concrete argument(s), plus its OWN registration export/fn-pointer table (folded into the same
+// file rather than a separate Bindings.kt: one fewer generated file per instantiation, and this
+// witness is already the only thing that needs the pointers).
+private fun genericWitnessObjectFileContent(
+  cls: RirClass,
+  instantiation: RirInstantiation,
+  namespaceName: String,
+  packageId: String,
+  exportName: String,
+  kotlinPkg: String,
+  enumPkgs: Map<RirTypeKey, String>,
+  handlePkgs: Map<RirTypeKey, String>,
+): String {
+  val simpleName: String = cls.name.substringBefore('`')
+  val tag: String = instantiationTag(cls, instantiation)
+  val args: List<RirTypeRef> = instantiation.typeArguments
+  val typeArgsRendered: String = args.joinToString(", ") { genericAwareKotlinType(it) }
+  val registrables: List<RirRegistrable> = genericDefinitionRegistrables(cls)
+  bridgeIds(registrables.map { substitutedIdentity(it, args) })
+
+  // Decision 10: DISPLAYED (embedded as a string literal in generated source) qualified name
+  // strips the CLR arity suffix: the `Box`1` leak this feature fixes. The hash below is computed
+  // over its own private, backtick-carrying signature (never emitted as a literal), so hashing is
+  // unaffected by this display-only stripping.
+  val qualifiedName =
+    "$namespaceName.$simpleName[${canonicalInstantiationSignature(instantiation)}]"
+  val hashQualifiedName =
+    "$namespaceName.${cls.name}[${canonicalInstantiationSignature(instantiation)}]"
+  val failMsg = "NugetRegistry.notRegistered(\"$qualifiedName\", \"$packageId\")"
+
+  val fnVars: String = registrables.joinToString("\n") { r ->
+    val name: String = genericMemberName(r)
+    val paramTypes: List<String> = (
+        (if (r !is RirRegistrable.Ctor) listOf("COpaquePointer?") else emptyList()) +
+            genericMemberParams(r).map { cfnType(substituteGenericType(it.type, args)) }
+        )
+    val retType: RirTypeRef = substituteGenericType(genericMemberReturnType(r, cls), args)
+    val retCfn: String = if (retType is RirVoidType) "Unit" else cfnType(retType)
+    "  internal var ${name}Fn: CPointer<CFunction<(${paramTypes.joinToString(", ")}) -> " +
+        "$retCfn>>? = null"
+  }
+
+  val overrides: String = registrables.joinToString("\n\n") { r ->
+    val name: String = genericMemberName(r)
+    val isCtor: Boolean = r is RirRegistrable.Ctor
+    val receiverParam: String = if (isCtor) "" else "handle: NugetObjectHandle"
+    val ownParams: List<RirParameter> = genericMemberParams(r)
+    val ownParamsRendered: String = ownParams.joinToString(", ") { p ->
+      "${p.name}: ${genericAwareKotlinType(substituteGenericType(p.type, args))}"
+    }
+    val allParams: String =
+      listOf(receiverParam, ownParamsRendered).filter { it.isNotEmpty() }.joinToString(", ")
+    val retType: RirTypeRef = substituteGenericType(genericMemberReturnType(r, cls), args)
+    val retSuffix: String = if (isCtor) {
+      ": NugetObjectHandle"
+    } else if (retType is RirVoidType) {
+      ""
+    } else {
+      ": ${genericAwareKotlinType(retType)}"
+    }
+    val receiverArg: List<String> =
+      if (isCtor) emptyList() else listOf("handle.require(\"$simpleName\")")
+    val convertedArgs: List<String> = ownParams.map { p ->
+      argConversion(substituteGenericType(p.type, args), p.name)
+    }
+    val invokeArgs: String = (receiverArg + convertedArgs).joinToString(", ")
+    // ADR-072: a substituted string-typed OWN parameter's argConversion(...) is `.cstr.ptr`, which
+    // must be allocated inside a `memScoped { ... }` block and released at its end. Mirrors
+    // buildStubMethod's own `hasStringParam` -> memScoped wrapping. This witness previously called
+    // `.invoke(...)` un-scoped whenever a substituted parameter happened to be a string.
+    val hasStringOwnParam: Boolean =
+      ownParams.any { p -> substituteGenericType(p.type, args) is RirStringType }
+    val rawInvoke = "requireNotNull($name" + "Fn) { $failMsg }.invoke($invokeArgs)"
+    val callExpr = if (hasStringOwnParam) "memScoped { $rawInvoke }" else rawInvoke
+    val body: String = when {
+      isCtor -> "NugetObjectHandle(requireNotNull($callExpr) { \"$simpleName constructor " +
+          "returned null\" })"
+
+      retType is RirVoidType -> callExpr
+      // ADR-072: the raw callExpr is the erased ADR-051 GCHandle IntPtr (a COpaquePointer?), NOT a
+      // NugetObjectHandle. Every OTHER handle-returning site in this file (buildStubMethod's
+      // RirObjectHandleType/RirInterfaceType branches) wraps it in NugetObjectHandle(...) before
+      // handing it to a wrapper constructor. This site previously passed the raw pointer straight
+      // into `$retSimple(...)`, which does not compile: the generic class's own constructor
+      // requires `handle: NugetObjectHandle`.
+      retType is RirGenericInstanceType -> {
+        val retSimple: String = retType.name.substringBefore('`')
+        val retTag: String = instantiationTag(cls, RirInstantiation(retType.typeArguments))
+        // ADR-053/ADR-070/ADR-072, third instance: a NULLABLE generic-instance return (e.g. a
+        // hypothetical `Box<T>? Rewrap()`) must map a null pointer to Kotlin `null`, not guard.
+        // Mirrors the RirObjectHandleType/RirInterfaceType branches below, which already got this
+        // right. A non-null-annotated return keeps the existing fail-fast requireNotNull.
+        if (retType.nullable) {
+          "$callExpr?.let { $retSimple(NugetObjectHandle(it), ${retTag}Bridge) }"
+        } else {
+          "$retSimple(NugetObjectHandle(requireNotNull($callExpr) " +
+              "{ \"$simpleName.$name returned null\" }), ${retTag}Bridge)"
+        }
+      }
+
+      // ADR-072: a bound-class-handle type argument (Decision 6) returned by a substituted member
+      // (e.g. `Box<Ferret>.value`) needs the SAME wrapping an ordinary (non-generic) handle return
+      // gets (buildStubMethod's RirObjectHandleType branch): this file previously returned the
+      // raw pointer unwrapped, which does not typecheck against the declared `Ferret` return type.
+      retType is RirObjectHandleType -> if (retType.nullable) {
+        "$callExpr?.let { ${retType.name}(it) }"
+      } else {
+        "${retType.name}(requireNotNull($callExpr) { \"$simpleName.$name returned null\" })"
+      }
+
+      // ADR-072: the interface equivalent of the RirObjectHandleType branch above. A bound
+      // interface type argument returns through its `{Name}Handle` concrete wrapper, exactly like
+      // buildStubMethod's RirInterfaceType branch.
+      retType is RirInterfaceType -> if (retType.nullable) {
+        "$callExpr?.let { ${retType.name}Handle(it) }"
+      } else {
+        "${retType.name}Handle(requireNotNull($callExpr) { \"$simpleName.$name returned null\" })"
+      }
+
+      // ADR-053, third instance: a NULLABLE-annotated string return (e.g. `Box<string?>.value`)
+      // must map a null pointer to Kotlin `null`, the same shape buildStubMethod's own
+      // RirStringType branch already uses (`?: return null` there, `?.let { ... }` here since this
+      // site builds a single expression). A non-null-annotated return keeps the existing
+      // fail-fast requireNotNull.
+      retType is RirStringType -> if (retType.nullable) {
+        "$callExpr?.let { val s = it.reinterpret<ByteVar>().toKString(); " +
+            "freeManagedString(it); s }"
+      } else {
+        "requireNotNull($callExpr) { \"$simpleName.$name returned " +
+            "null\" }.let { val s = it.reinterpret<ByteVar>().toKString(); " +
+            "freeManagedString(it); s }"
+      }
+
+      retType is RirEnumType ->
+        "nugetEnumEntry(${retType.name}.entries, $callExpr, \"${retType.name}\")"
+
+      else -> callExpr
+    }
+    "  override fun $name($allParams)$retSuffix = $body"
+  }
+
+  val assignments: String = registrables.joinToString("\n  ") { r ->
+    val name: String = genericMemberName(r)
+    "${tag}Bridge.${name}Fn = requireNotNull(${name}Ptr).reinterpret()"
+  }
+  val params: String = registrables.joinToString(",\n  ") { r ->
+    "${genericMemberName(r)}Ptr: COpaquePointer?"
+  }
+  // Must match NugetGenerateShimsTask's genericRegistrationFileContent hash input EXACTLY (both
+  // built off the SAME hashQualifiedName/substitutedIdentity; ADR-054's contract check depends
+  // on the two sides never independently re-deriving this).
+  val hash: Long = fnv1a64(
+    "$hashQualifiedName|" + registrables.joinToString("|") { substitutedIdentity(it, args) },
+  )
+
+  // ADR-072: cross-package enum/handle imports for this witness's SUBSTITUTED signatures; see
+  // genericAwareReferencedEnumTypes' KDoc. Every registrable's param/return type after
+  // substituteGenericType(..., args) can name a concrete enum/handle type (the whole point of a
+  // per-instantiation witness), and this file previously had a FIXED import list that never
+  // accounted for that.
+  val substitutedParamTypes: List<RirTypeRef> = registrables.flatMap { r ->
+    genericMemberParams(r).map { p -> substituteGenericType(p.type, args) }
+  }
+  val substitutedReturnTypes: List<RirTypeRef> = registrables.map { r ->
+    substituteGenericType(genericMemberReturnType(r, cls), args)
+  }
+  val substitutedTypes: List<RirTypeRef> = substitutedParamTypes + substitutedReturnTypes
+  val enumImportLines: List<String> = enumImports(
+    substitutedTypes.flatMap(::genericAwareReferencedEnumTypes).distinct(), enumPkgs, kotlinPkg,
+  )
+  val handleImportLines: List<String> = handleImports(
+    substitutedTypes.flatMap(::genericAwareReferencedHandleTypes).distinct(), handlePkgs, kotlinPkg,
+  )
+  // ADR-072: a string-typed (or string-carrying) SUBSTITUTED parameter's argConversion(...) uses
+  // `.cstr.ptr` (the same conversion any bound string parameter uses): this witness's previously
+  // FIXED import list never accounted for a substituted param needing it (e.g. `Box<String>`'s
+  // `construct(value: String)`).
+  val hasStringParam: Boolean = substitutedParamTypes.any { it is RirStringType }
+  val imports: String = (
+      listOf(
+        "import $INTERNAL_PKG.NugetObjectHandle",
+        "import $INTERNAL_PKG.NugetRegistry",
+        "import $INTERNAL_PKG.freeManagedString",
+        "import $INTERNAL_PKG.nugetEnumEntry",
+        "import kotlinx.cinterop.ByteVar",
+        "import kotlinx.cinterop.CFunction",
+        "import kotlinx.cinterop.COpaquePointer",
+        "import kotlinx.cinterop.CPointer",
+        "import kotlinx.cinterop.invoke",
+        "import kotlinx.cinterop.reinterpret",
+        "import kotlinx.cinterop.toKString",
+        "import kotlin.experimental.ExperimentalNativeApi",
+      ) + enumImportLines + handleImportLines +
+          (
+              if (hasStringParam) {
+                listOf(
+                  "import kotlinx.cinterop.cstr",
+                  "import kotlinx.cinterop.memScoped",
+                  "import kotlinx.cinterop.ptr",
+                )
+              } else {
+                emptyList()
+              }
+              )
+      ).distinct().joinToString("\n")
+
+  return """
+    |@file:OptIn(kotlinx.cinterop.ExperimentalForeignApi::class)
+    |
+    |package $kotlinPkg
+    |
+    |$imports
+    |
+    |// Generated (ADR-072 Decision 1/4): the witness for $simpleName<$typeArgsRendered>.
+    |internal object ${tag}Bridge : ${simpleName}Bridge<$typeArgsRendered> {
+    |${fnVars.indented("  ")}
+    |
+    |$overrides
+    |}
+    |
+    |@OptIn(ExperimentalNativeApi::class)
+    |@CName("$exportName")
+    |fun $exportName(
+    |  slotCount: Int,
+    |  contractHash: Long,
+    |  $params,
+    |) {
+    |  NugetRegistry.checkContract(
+    |    qualifiedType = "$qualifiedName",
+    |    packageId = "$packageId",
+    |    slotCount = slotCount,
+    |    contractHash = contractHash,
+    |    expectedSlots = ${registrables.size},
+    |    expectedHash = ${hash}L,
+    |  )
+    |  $assignments
+    |  NugetRegistry.record("$qualifiedName", ${registrables.size})
+    |}
+  """.trimMargin().trim()
+}
+
+// bridgeId's identity, computed off the SUBSTITUTED signature (Decision 4: bridgeId/bridgeSuffix
+// digests are only ever used to name members WITHIN one instantiation's own witness object,
+// never shared across instantiations, so calling bridgeIds() per instantiation (never over the
+// union) is both correct and sufficient here).
+internal fun substitutedIdentity(r: RirRegistrable, args: List<RirTypeRef>): String = when (r) {
+  is RirRegistrable.Ctor -> "ctor(" +
+      r.ctor.parameters.joinToString(",") { substituteGenericType(it.type, args).toString() } + ")"
+
+  is RirRegistrable.Method -> "method:${r.method.name}(" +
+      r.method.parameters.joinToString(",") { substituteGenericType(it.type, args).toString() } +
+      "):" + substituteGenericType(r.method.returnType, args).toString()
+
+  is RirRegistrable.PropertyGetter ->
+    "get:${r.property.name}:${substituteGenericType(r.property.type, args)}"
+
+  is RirRegistrable.PropertySetter ->
+    "set:${r.property.name}:${substituteGenericType(r.property.type, args)}"
+}
+
+// ADR-072 Decision 5: the fake constructor's own erased (ignoring nullability entirely,
+// kotlinType, not declKotlinType) Kotlin parameter-type list for one instantiation, shared by
+// unambiguousInstantiations and ambiguousGenericConstructorDiagnostics below, which group the SAME
+// instantiations by this SAME signature for complementary purposes (keep vs. diagnose).
+private fun erasedFakeConstructorSignature(ctor: RirConstructor, inst: RirInstantiation): String =
+  ctor.parameters.joinToString(",") { p ->
+    kotlinType(substituteGenericType(p.type, inst.typeArguments))
+  }
+
+// ADR-072 Decision 5: the ambiguity rule. Two or more instantiations of ONE definition whose fake
+// constructor erases to the same Kotlin parameter-type list must ALL lose their fake constructor,
+// regardless of declaration order (grouping is inherently order-independent, unlike a sequential
+// "keep the first" pick).
+internal fun unambiguousInstantiations(cls: RirClass): List<RirInstantiation> {
+  val ctor: RirConstructor = cls.constructors.firstOrNull() ?: return emptyList()
+  val groups: Map<String, List<RirInstantiation>> =
+    cls.instantiations.groupBy { erasedFakeConstructorSignature(ctor, it) }
+  return cls.instantiations.filter { inst ->
+    groups.getValue(erasedFakeConstructorSignature(ctor, inst)).size == 1
+  }
+}
+
+internal fun ambiguousGenericConstructorDiagnostics(cls: RirClass): List<RirDiagnostic> {
+  val ctor: RirConstructor = cls.constructors.firstOrNull() ?: return emptyList()
+  val groups: Map<String, List<RirInstantiation>> =
+    cls.instantiations.groupBy { erasedFakeConstructorSignature(ctor, it) }
+  return groups.values.filter { it.size > 1 }.flatMap { group ->
+    group.map { inst ->
+      RirDiagnostic(
+        kind = RirDiagnosticKind.SKIPPED_AMBIGUOUS_GENERIC_CONSTRUCTOR,
+        typeName = cls.name,
+        memberName = "constructor",
+        memberSignature = canonicalInstantiationSignature(inst),
+        reason = "two or more instantiations of ${cls.name} erase their fake constructor to the " +
+            "same Kotlin parameter list (${erasedFakeConstructorSignature(ctor, inst)}): " +
+            "ambiguous, ALL are skipped",
+        hint = "Obtain an instance of this instantiation from a bound member instead of a " +
+            "top-level fake constructor.",
+      )
+    }
+  }
+}
+
+// ADR-072 Decision 10: `Box` and `Box`1` in one namespace (or two instantiations of ONE
+// definition sharing an internal tag) is a hard generation failure.
+private fun validateGenericArityCollisions(rir: RirFile) {
+  rir.assemblies.forEach { assembly ->
+    assembly.namespaces.forEach { namespace ->
+      val classes: List<RirClass> = namespace.types.filterIsInstance<RirClass>()
+      val bySimpleName: Map<String, List<RirClass>> =
+        classes.groupBy { it.name.substringBefore('`') }
+      bySimpleName.forEach { (simpleName, group) ->
+        require(group.size == 1) {
+          val names: String = group.joinToString("`, `") { it.name }
+          "[nuget] error_generic_arity_name_collision: `$names` in namespace `${namespace.name}` " +
+              "all strip to the Kotlin name `$simpleName`."
+        }
+      }
+      classes.filter { it.typeParameters.isNotEmpty() }.forEach { cls ->
+        val tags: Map<String, List<RirInstantiation>> =
+          cls.instantiations.groupBy { instantiationTag(cls, it) }
+        tags.forEach { (tag, group) ->
+          require(group.size == 1) {
+            "[nuget] error_generic_arity_name_collision: two instantiations of `${cls.name}` " +
+                "both produce the internal tag `$tag`."
+          }
+        }
+      }
+    }
+  }
+}
+
+// ADR-072 Decision 10: a generic definition with zero discovered instantiations emits NOTHING at
+// all: no Kotlin type, no witness, no bindings, no registration export (this is what closes the
+// `Box`1` leak). Returns the empty list for that case; the caller (generateKotlinStubs) adds no
+// files and records no expected registration.
+private fun genericClassFiles(
+  cls: RirClass,
+  kotlinPkg: String,
+  namespaceName: String,
+  packageId: String,
+  enumPkgs: Map<RirTypeKey, String>,
+  handlePkgs: Map<RirTypeKey, String>,
+): List<GeneratedFile> {
+  if (cls.instantiations.isEmpty()) return emptyList()
+  val pkgPath: String = kotlinPkg.replace('.', '/')
+  val simpleName: String = cls.name.substringBefore('`')
+  val unambiguous: List<RirInstantiation> = unambiguousInstantiations(cls)
+
+  val result: MutableList<GeneratedFile> = mutableListOf(
+    GeneratedFile(
+      relativePath = "nativeMain/$pkgPath/$simpleName.kt",
+      content = genericClassWrapperFileContent(cls, kotlinPkg, unambiguous, enumPkgs, handlePkgs),
+    ),
+    GeneratedFile(
+      relativePath = "nativeMain/$pkgPath/${simpleName}Bridge.kt",
+      content = genericBridgeInterfaceFileContent(cls, kotlinPkg, enumPkgs, handlePkgs),
+    ),
+  )
+  cls.instantiations.forEach { inst ->
+    val tag: String = instantiationTag(cls, inst)
+    val exportName: String = registrationExportName(namespaceName, tag)
+    result.add(
+      GeneratedFile(
+        relativePath = "nativeMain/$pkgPath/${tag}Bridge.kt",
+        content = genericWitnessObjectFileContent(
+          cls, inst, namespaceName, packageId, exportName, kotlinPkg, enumPkgs, handlePkgs,
+        ),
+      )
+    )
+  }
+  return result
+}
+
+// ADR-072: whether any generic definition/instantiation member needs NugetInterop.kt (a string
+// anywhere in the SUBSTITUTED signature of any registrable, across all instantiations).
+private fun genericClassNeedsInterop(cls: RirClass): Boolean {
+  val registrables: List<RirRegistrable> = genericDefinitionRegistrables(cls)
+  return cls.instantiations.any { inst ->
+    registrables.any { r ->
+      val params: List<RirTypeRef> = genericMemberParams(r).map { it.type }
+      val ret: RirTypeRef = genericMemberReturnType(r, cls)
+      (params + ret).any { substituteGenericType(it, inst.typeArguments) is RirStringType }
+    }
+  }
+}
+
+private fun genericClassNeedsEnums(cls: RirClass): Boolean {
+  val registrables: List<RirRegistrable> = genericDefinitionRegistrables(cls)
+  return cls.instantiations.any { inst ->
+    registrables.any { r ->
+      val ret: RirTypeRef = genericMemberReturnType(r, cls)
+      substituteGenericType(ret, inst.typeArguments) is RirEnumType
+    }
+  }
+}
+
 // Every enum type referenced by a class's bridgeable members, in declaration order, deduplicated.
 // The referencing class's stub must import each one that lives in a different Kotlin package than
 // the stub itself, so this covers every position an enum can appear in: method returns, method
 // parameters, constructor parameters and property types.
+// ADR-072 Decision 6: an enum is in the v1 type-argument vocabulary, so a bridgeable generic
+// instantiation's declared Kotlin type (declKotlinType's "Box<CatMood>" rendering) can name an enum
+// that never appears at this member's own top level: referencedEnumTypes below must also widen
+// into [type]'s typeArguments (one level: Decision 6 forbids a nested generic instantiation as a
+// type argument, so no deeper recursion is possible) or the import for it is silently missing.
+private fun genericInstanceEnumArgs(type: RirTypeRef): List<RirEnumType> =
+  if (type is RirGenericInstanceType) type.typeArguments.filterIsInstance<RirEnumType>()
+  else emptyList()
+
 private fun referencedEnumTypes(
   methods: List<RirMethod>,
   ctors: List<RirConstructor>,
@@ -529,11 +1367,17 @@ private fun referencedEnumTypes(
 ): List<RirEnumType> {
   val fromMethods: List<RirEnumType> = methods.flatMap { method ->
     listOfNotNull(method.returnType as? RirEnumType) +
-        method.parameters.mapNotNull { it.type as? RirEnumType }
+        method.parameters.mapNotNull { it.type as? RirEnumType } +
+        genericInstanceEnumArgs(method.returnType) +
+        method.parameters.flatMap { genericInstanceEnumArgs(it.type) }
   }
-  val fromCtors: List<RirEnumType> =
-    ctors.flatMap { ctor -> ctor.parameters.mapNotNull { it.type as? RirEnumType } }
-  val fromProperties: List<RirEnumType> = properties.mapNotNull { it.type as? RirEnumType }
+  val fromCtors: List<RirEnumType> = ctors.flatMap { ctor ->
+    ctor.parameters.mapNotNull { it.type as? RirEnumType } +
+        ctor.parameters.flatMap { genericInstanceEnumArgs(it.type) }
+  }
+  val fromProperties: List<RirEnumType> = properties.flatMap { property ->
+    listOfNotNull(property.type as? RirEnumType) + genericInstanceEnumArgs(property.type)
+  }
 
   return (fromMethods + fromCtors + fromProperties).distinct()
 }
@@ -583,6 +1427,71 @@ private fun structImports(
   .map { (pkg, name) -> "import $pkg.$name" }
   .distinct()
   .sorted()
+
+// ADR-072: the RirObjectHandleType equivalent of enumImports/structImports above: the
+// `import <pkg>.<ClassName>` lines a file needs for the bound-class-handle-typed references it
+// makes (method/ctor/property top-level types, plus one level into a generic instantiation's own
+// type arguments, see genericAwareReferencedHandleTypes).
+private fun handleImports(
+  handleTypes: List<RirObjectHandleType>,
+  handlePkgs: Map<RirTypeKey, String>,
+  kotlinPkg: String,
+): List<String> = handleTypes
+  .map { type ->
+    val pkg: String = requireNotNull(handlePkgs[RirTypeKey(type.namespace, type.name)]) {
+      "[nuget] Class ${type.namespace}.${type.name} is referenced by a bound member as a handle " +
+          "type but is not declared anywhere in the reverse IR. The metadata reader must emit " +
+          "every referenced class as a declaration, or the generated stub cannot import it."
+    }
+    pkg to type.name
+  }
+  .filter { (pkg, _) -> pkg != kotlinPkg }
+  .map { (pkg, name) -> "import $pkg.$name" }
+  .distinct()
+  .sorted()
+
+// The bound-class-handle-typed references a stub file needs an `import <pkg>.<ClassName>` line
+// for: every method/ctor/property top-level RirObjectHandleType, mirroring referencedEnumTypes.
+private fun referencedHandleTypes(
+  methods: List<RirMethod>,
+  ctors: List<RirConstructor>,
+  properties: List<RirProperty>,
+): List<RirObjectHandleType> {
+  val fromMethods: List<RirObjectHandleType> = methods.flatMap { method ->
+    listOfNotNull(method.returnType as? RirObjectHandleType) +
+        method.parameters.mapNotNull { it.type as? RirObjectHandleType }
+  }
+  val fromCtors: List<RirObjectHandleType> = ctors.flatMap { ctor ->
+    ctor.parameters.mapNotNull { it.type as? RirObjectHandleType }
+  }
+  val fromProperties: List<RirObjectHandleType> =
+    properties.mapNotNull { it.type as? RirObjectHandleType }
+  return (fromMethods + fromCtors + fromProperties).distinct()
+}
+
+// ADR-072: every enum/handle TYPE genuinely reachable from a (possibly generic-aware) type
+// reference: a bare RirEnumType/RirObjectHandleType names itself, and a RirGenericInstanceType
+// widens ONE level into its own type arguments (Decision 6 forbids a nested generic instantiation
+// as a type argument, so no deeper recursion is possible/needed). Used by the generic-class file
+// content builders below (genericBridgeInterfaceFileContent/genericClassWrapperFileContent/
+// genericWitnessObjectFileContent), which otherwise have NO import-collection at all: they render
+// every cross-package enum/handle reference (a fake constructor's own type argument, e.g.
+// `fun Box(value: CatMood): Box<CatMood>`, or a witness's substituted member signature) as a bare
+// unqualified name with no `import` line, which compiles only by accident when the referenced type
+// happens to share a package: the exact hazard this feature's `Box<CatMood>`/`Box<Ferret>`
+// fixture seams exist to catch.
+private fun genericAwareReferencedEnumTypes(type: RirTypeRef): List<RirEnumType> = when (type) {
+  is RirEnumType -> listOf(type)
+  is RirGenericInstanceType -> type.typeArguments.flatMap(::genericAwareReferencedEnumTypes)
+  else -> emptyList()
+}
+
+private fun genericAwareReferencedHandleTypes(type: RirTypeRef): List<RirObjectHandleType> =
+  when (type) {
+    is RirObjectHandleType -> listOf(type)
+    is RirGenericInstanceType -> type.typeArguments.flatMap(::genericAwareReferencedHandleTypes)
+    else -> emptyList()
+  }
 
 // ADR-059: every struct TYPE in [type]'s own component tree, including [type] itself if it is a
 // struct — the outer struct AND every struct-typed component, at any nesting depth. Needed
@@ -1195,6 +2104,11 @@ private fun buildStructStubMethod(
     is RirInterfaceType -> error(
       "[nuget] interface returns on struct methods are out of scope (ADR-070 v1)",
     )
+
+    is RirGenericInstanceType, is RirTypeParameterType -> error(
+      "[nuget] generic instantiations/type parameters on struct methods are out of scope " +
+          "(ADR-072 Decision 6: struct type arguments are excluded)",
+    )
   }
 }
 
@@ -1306,6 +2220,11 @@ private fun buildStructStubProperty(
     is RirInterfaceType -> error(
       "[nuget] interface-typed computed properties on structs are out of scope (ADR-070 v1)",
     )
+
+    is RirGenericInstanceType, is RirTypeParameterType -> error(
+      "[nuget] generic instantiations/type parameters on struct properties are out of scope " +
+          "(ADR-072 Decision 6: struct type arguments are excluded)",
+    )
   }
 
   return "val $name: $declType\n" + getterBlock.prependIndent("  ")
@@ -1340,6 +2259,14 @@ private fun kotlinType(type: RirTypeRef): String = when (type) {
           "update the v1 type-mapping table in NugetGenerateBindingsTask.kt"
     )
   }
+
+  // ADR-072: a generic instantiation/type parameter never reaches this ORDINARY (non-generic)
+  // type renderer: it is only ever bridgeable through the dedicated generic-class witness path
+  // (genericAwareKotlinType), which substitutes it away before any ordinary rendering runs.
+  is RirGenericInstanceType, is RirTypeParameterType -> error(
+    "[nuget] a generic instantiation/type parameter must be substituted/rendered through the " +
+        "dedicated ADR-072 generic-class path, never through kotlinType()"
+  )
 }
 
 // ADR-053: the *declared* Kotlin type for a parameter, return, or property — kotlinType's bare
@@ -1355,6 +2282,19 @@ private fun declKotlinType(
   type: RirTypeRef,
   qualifiedTypeNames: Map<RirTypeKey, String>,
 ): String {
+  // ADR-072 Decision 3, NugetGenerateBindingsTask.kt:1358 permissive site: a RirGenericInstanceType
+  // reference also needs cross-package qualification: silently rendering an unqualified simple
+  // name would be a latent name collision, the exact same hazard qualifiedTypeNames already closes
+  // for handle/enum/struct/interface references.
+  if (type is RirGenericInstanceType) {
+    val key = RirTypeKey(type.namespace, type.name)
+    val base: String = qualifiedTypeNames[key] ?: type.name.substringBefore('`')
+    val args: String =
+      type.typeArguments.joinToString(", ") { declKotlinType(it, qualifiedTypeNames) }
+    return "$base<$args>" + if (type.isNullable) "?" else ""
+  }
+  if (type is RirTypeParameterType) return type.name
+
   val key: RirTypeKey? = when (type) {
     is RirObjectHandleType -> RirTypeKey(type.namespace, type.name)
     is RirEnumType -> RirTypeKey(type.namespace, type.name)
@@ -1417,6 +2357,16 @@ private fun cfnType(type: RirTypeRef): String = when (type) {
           "update the v1 type-mapping table in NugetGenerateBindingsTask.kt"
     )
   }
+
+  // ADR-072 Decision 1: wire-identical to a handle. A generic instantiation crosses the ABI as
+  // an erased GCHandle IntPtr regardless of its type argument(s), exactly like RirObjectHandleType
+  // above (CS8894 forbids a closed generic itself on an [UnmanagedCallersOnly] signature, but its
+  // GCHandle wrapper is ordinary).
+  is RirGenericInstanceType -> "COpaquePointer?"
+  is RirTypeParameterType -> error(
+    "[nuget] a bare type parameter must be substituted to a concrete type before reaching " +
+        "cfnType()"
+  )
 }
 
 // ADR-056: the kotlinx.cinterop CVariable subtype an out-pointer component allocates via
@@ -1443,6 +2393,10 @@ private fun cVarType(type: RirTypeRef): String = when (type) {
   is RirInterfaceType -> "COpaquePointerVar"
   is RirVoidType -> error("[nuget] void cannot be a struct out-pointer component")
   is RirStructType -> error("[nuget] nested struct components are not supported in v1 (ADR-056)")
+  is RirGenericInstanceType, is RirTypeParameterType -> error(
+    "[nuget] generic instantiations/type parameters are not supported as struct components " +
+        "(ADR-072 Decision 6: struct type arguments are excluded)"
+  )
 }
 
 private fun cfnOutPointerType(type: RirTypeRef): String = "CPointer<${cVarType(type)}>"
@@ -1526,6 +2480,11 @@ private fun componentRead(type: RirTypeRef, arg: AbiArg): ComponentRead {
     is RirStructType -> error(
       "[nuget] struct ${type.namespace}.${type.name} must be expanded via structComponentReads " +
           "before reaching componentRead — componentRead only accepts leaf (scalar) types."
+    )
+
+    is RirGenericInstanceType, is RirTypeParameterType -> error(
+      "[nuget] generic instantiations/type parameters are not supported as struct components " +
+          "(ADR-072 Decision 6: struct type arguments are excluded)"
     )
   }
 }
@@ -1832,11 +2791,13 @@ private fun stubFileContent(
   namespaceName: String,
   enumPkgs: Map<RirTypeKey, String>,
   structPkgs: Map<RirTypeKey, String>,
+  handlePkgs: Map<RirTypeKey, String>,
   structs: Map<RirTypeKey, RirStruct>,
   qualifiedTypeNames: Map<RirTypeKey, String>,
   interfaceSupertypeNames: List<String> = emptyList(),
   overrideMethodNames: Set<String> = emptySet(),
   overridePropertyNames: Set<String> = emptySet(),
+  genericDefs: Map<RirTypeKey, RirClass> = emptyMap(),
 ): String {
   val hasHandle: Boolean = staticMethods.any { method ->
     isHandleLike(method.returnType) || method.parameters.any { p -> isHandleLike(p.type) }
@@ -1856,8 +2817,9 @@ private fun stubFileContent(
     return classWrapperContent(
       kotlinPkg, cls, staticMethods, instanceMethods, ctors,
       instancePropertyGetters, staticPropertyGetters, propertySetterNames, packageId,
-      namespaceName, enumPkgs, structPkgs, structs,
+      namespaceName, enumPkgs, structPkgs, handlePkgs, structs,
       qualifiedTypeNames, interfaceSupertypeNames, overrideMethodNames, overridePropertyNames,
+      genericDefs,
     )
   }
 
@@ -1878,6 +2840,25 @@ private fun stubFileContent(
   // calls otherwise resolve to an unrelated same-named `invoke`, e.g. kotlin.DeepRecursiveFunction,
   // producing confusing "cannot infer type parameter" errors instead of a missing-import error).
   val imports: MutableList<String> = mutableListOf("import kotlinx.cinterop.invoke")
+  // ADR-072: a static method/property returning a bound-class-handle, interface, or generic
+  // instantiation declares `val ptr: COpaquePointer? = ...` (buildStubMethod's
+  // RirObjectHandleType/RirInterfaceType/RirGenericInstanceType branches). This object-shape
+  // file previously had NO import for it at all, a latent gap never exercised before this
+  // feature's `Boxes.OfFerret`/`Boxes.OfMood` (returning `Box<Ferret>`/`Box<CatMood>`) forced the
+  // first static method on a static class to return one of these shapes.
+  val hasHandleReturn: Boolean = staticMethods.any { isHandleLike(it.returnType) } ||
+      staticMethods.any { it.returnType is RirGenericInstanceType } ||
+      staticPropertyGetters.any { isHandleLike(it.type) } ||
+      staticPropertyGetters.any { it.type is RirGenericInstanceType }
+  if (hasHandleReturn) imports.add("import kotlinx.cinterop.COpaquePointer")
+  // ADR-072: a generic-instance return additionally wraps the raw pointer in NugetObjectHandle
+  // before handing it to the generic class's own constructor (see buildStubMethod's
+  // RirGenericInstanceType branch), needed here, never for a plain RirObjectHandleType return,
+  // since an ordinary bound class's public constructor takes the raw COpaquePointer itself.
+  val hasGenericInstanceReturn: Boolean =
+    staticMethods.any { it.returnType is RirGenericInstanceType } ||
+        staticPropertyGetters.any { it.type is RirGenericInstanceType }
+  if (hasGenericInstanceReturn) imports.add("import $INTERNAL_PKG.NugetObjectHandle")
   if (hasStringReturn) {
     imports.add("import $INTERNAL_PKG.freeManagedString")
     imports.add("import kotlinx.cinterop.ByteVar")
@@ -1946,19 +2927,32 @@ private fun stubFileContent(
       ).distinct()
   imports.addAll(structImports(structReturnTypes, structPkgs, kotlinPkg))
 
+  // ADR-072: a static method/ctor/property whose signature names another bound class as a handle
+  // type (e.g. `Boxes.OfFerret(Ferret ferret)`, `Ferret` declared in a different Kotlin package
+  // than `Boxes`) needs the same `import` coverage enumImports already gives enum references;
+  // this was missing before this feature (see handleImports' KDoc).
+  imports.addAll(
+    handleImports(
+      referencedHandleTypes(staticMethods, ctors, staticPropertyGetters), handlePkgs, kotlinPkg,
+    )
+  )
+
   // ADR-054: NugetRegistry.notRegistered(...) is called at runtime (not baked as a constant
   // string) so the "N of M registrations fired" message reflects what actually landed by the time
   // a bridge call fails, rather than the fixed generation-time text this replaces.
   imports.add("import $INTERNAL_PKG.NugetRegistry")
 
   val methods: String = staticMethods.joinToString("\n\n") {
-    buildStubMethod(cls, it, packageId, namespaceName, structs, qualifiedTypeNames)
+    buildStubMethod(
+      cls, it, packageId, namespaceName, structs, qualifiedTypeNames, genericDefs = genericDefs,
+    )
   }
   val properties: String = staticPropertyGetters.joinToString("\n\n") { property ->
     buildStubProperty(
       cls, property, hasSetter = property.name in propertySetterNames, packageId, namespaceName,
       structs,
       qualifiedTypeNames,
+      genericDefs = genericDefs,
     )
   }
 
@@ -2013,11 +3007,13 @@ private fun classWrapperContent(
   namespaceName: String,
   enumPkgs: Map<RirTypeKey, String>,
   structPkgs: Map<RirTypeKey, String>,
+  handlePkgs: Map<RirTypeKey, String>,
   structs: Map<RirTypeKey, RirStruct>,
   qualifiedTypeNames: Map<RirTypeKey, String>,
   interfaceSupertypeNames: List<String> = emptyList(),
   overrideMethodNames: Set<String> = emptySet(),
   overridePropertyNames: Set<String> = emptySet(),
+  genericDefs: Map<RirTypeKey, RirClass> = emptyMap(),
 ): String {
   val allMethods: List<RirMethod> = staticMethods + instanceMethods
   val methodsHaveString: Boolean =
@@ -2128,10 +3124,20 @@ private fun classWrapperContent(
       ).distinct()
   imports.addAll(structImports(structReturnTypes, structPkgs, kotlinPkg))
 
+  // ADR-072: same missing-import gap as the object-shape path (stubFileContent); see
+  // handleImports' KDoc. A wrapper's OWN handle type never needs an import (it is this file's own
+  // declared class); any OTHER bound class named as a method/ctor/property type does.
+  imports.addAll(
+    handleImports(
+      referencedHandleTypes(allMethods, ctors, allPropertyGetters), handlePkgs, kotlinPkg,
+    )
+  )
+
   val instanceMethodsText: String = instanceMethods.joinToString("\n\n") {
     buildStubMethod(
       cls, it, packageId, namespaceName, structs, qualifiedTypeNames,
       isOverride = it.name.toMethodCamelCase() in overrideMethodNames,
+      genericDefs = genericDefs,
     )
   }
   val propertiesText: String = instancePropertyGetters.joinToString("\n\n") { property ->
@@ -2140,16 +3146,20 @@ private fun classWrapperContent(
       structs,
       qualifiedTypeNames,
       isOverride = property.name.toMethodCamelCase() in overridePropertyNames,
+      genericDefs = genericDefs,
     )
   }
   val staticMethodsText: String = staticMethods.joinToString("\n\n") {
-    buildStubMethod(cls, it, packageId, namespaceName, structs, qualifiedTypeNames)
+    buildStubMethod(
+      cls, it, packageId, namespaceName, structs, qualifiedTypeNames, genericDefs = genericDefs,
+    )
   }
   val staticPropertiesText: String = staticPropertyGetters.joinToString("\n\n") { property ->
     buildStubProperty(
       cls, property, hasSetter = property.name in propertySetterNames, packageId, namespaceName,
       structs,
       qualifiedTypeNames,
+      genericDefs = genericDefs,
     )
   }
 
@@ -2264,6 +3274,15 @@ private fun argConversion(type: RirTypeRef, name: String): String = when {
         "before reaching argConversion — argConversion only accepts leaf (scalar) types."
   )
 
+  // ADR-072 Decision 3, NugetGenerateBindingsTask.kt:2241 permissive site (the one the compiler
+  // cannot force): a generic-instance argument is wire-identical to a handle and must be
+  // unwrapped the SAME way: the boolean-guard `when`'s fall-through `else -> name` would
+  // otherwise silently pass the raw Kotlin wrapper instead of its handle.
+  type is RirGenericInstanceType && type.nullable ->
+    "$name?.handle?.require(\"${type.name.substringBefore('`')}\")"
+
+  type is RirGenericInstanceType -> "$name.handle.require(\"${type.name.substringBefore('`')}\")"
+
   else -> name
 }
 
@@ -2295,7 +3314,7 @@ private fun structArgConversions(
 // The generated members this file assembles are separated by blank lines; padding them would leave
 // trailing whitespace on lines that must stay empty (STYLE.md: "blank lines... should contain no
 // characters at all").
-private fun String.indented(indent: String): String =
+internal fun String.indented(indent: String): String =
   lineSequence().joinToString("\n") { line -> if (line.isBlank()) line else indent + line }
 
 // Shared "bindings not registered" guard message — used by buildStubMethod, buildConstructHelper,
@@ -2375,6 +3394,7 @@ private fun buildStubMethod(
   structs: Map<RirTypeKey, RirStruct>,
   qualifiedTypeNames: Map<RirTypeKey, String>,
   isOverride: Boolean = false,
+  genericDefs: Map<RirTypeKey, RirClass> = emptyMap(),
 ): String {
   val name: String = method.name.toMethodCamelCase()
   val fnVar: String =
@@ -2568,6 +3588,44 @@ private fun buildStubMethod(
         |}
       """.trimMargin()
     }
+
+    // ADR-072: an ordinary (non-generic) member returning a bridgeable closed instantiation
+    // constructs the SAME per-instantiation wrapper the fake-constructor/`rewrap()` sites use
+    // (Decision 1), passing the pointer plus this position's own witness, chosen entirely at
+    // generation time from the discovered instantiation, never dispatched at runtime. Otherwise
+    // byte-identical to the ordinary handle-return branch above.
+    is RirGenericInstanceType -> {
+      val simpleName: String = retType.name.substringBefore('`')
+      val witness: String = witnessObjectName(retType, genericDefs)
+      // ADR-072: the generic class's own constructor takes `handle: NugetObjectHandle`, not the
+      // raw ADR-051 GCHandle pointer: wrap it exactly like the ordinary RirObjectHandleType
+      // branch above does (`${retType.name}(requireNotNull(ptr) {...})`), or this does not
+      // typecheck.
+      if (retType.nullable) """
+        |fun $name($params)$retSuffix {
+        |  val fn = requireNotNull($fnVar) {
+        |    $failMsg
+        |  }
+        |  val ptr: COpaquePointer? = $invokeCall
+        |  return ptr?.let { $simpleName(NugetObjectHandle(it), $witness) }
+        |}
+      """.trimMargin() else """
+        |fun $name($params)$retSuffix {
+        |  val fn = requireNotNull($fnVar) {
+        |    $failMsg
+        |  }
+        |  val ptr: COpaquePointer? = $invokeCall
+        |  return $simpleName(NugetObjectHandle(requireNotNull(ptr) {
+        |    "$nonNullHandleMsg"
+        |  }), $witness)
+        |}
+      """.trimMargin()
+    }
+
+    is RirTypeParameterType -> error(
+      "[nuget] a bare type parameter must be substituted/rendered through the dedicated ADR-072 " +
+          "generic-class path, never through buildStubMethod()"
+    )
   }
   // ADR-070 Decision 5: a matching class member gains `override` — the ONE call site both a
   // simple and a struct-return branch share, rather than baking the keyword into every one of
@@ -2594,6 +3652,7 @@ private fun buildStubProperty(
   structs: Map<RirTypeKey, RirStruct>,
   qualifiedTypeNames: Map<RirTypeKey, String>,
   isOverride: Boolean = false,
+  genericDefs: Map<RirTypeKey, RirClass> = emptyMap(),
 ): String {
   val name: String = property.name.toMethodCamelCase()
   val bindingsObj: String = bindingsObjectName(cls.name)
@@ -2736,6 +3795,41 @@ private fun buildStubProperty(
         |}
       """.trimMargin()
     }
+
+    // ADR-072: mirrors buildStubMethod's own RirGenericInstanceType branch above: a bridgeable
+    // generic instantiation constructs the per-instantiation wrapper with THIS position's own
+    // witness, chosen entirely at generation time.
+    is RirGenericInstanceType -> {
+      val simpleName: String = type.name.substringBefore('`')
+      val witness: String = witnessObjectName(type, genericDefs)
+      // ADR-072: same NugetObjectHandle wrapping fix as buildStubMethod's own
+      // RirGenericInstanceType branch: the generic class's constructor takes a
+      // NugetObjectHandle, not the raw pointer.
+      if (type.nullable) """
+        |get() {
+        |  val fn = requireNotNull($getterFnVar) {
+        |    $failMsg
+        |  }
+        |  val ptr: COpaquePointer? = $getterInvoke
+        |  return ptr?.let { $simpleName(NugetObjectHandle(it), $witness) }
+        |}
+      """.trimMargin() else """
+        |get() {
+        |  val fn = requireNotNull($getterFnVar) {
+        |    $failMsg
+        |  }
+        |  val ptr: COpaquePointer? = $getterInvoke
+        |  return $simpleName(NugetObjectHandle(requireNotNull(ptr) {
+        |    "$nonNullHandleMsg"
+        |  }), $witness)
+        |}
+      """.trimMargin()
+    }
+
+    is RirTypeParameterType -> error(
+      "[nuget] a bare type parameter must be substituted/rendered through the dedicated ADR-072 " +
+          "generic-class path, never through buildStubProperty()"
+    )
   }
 
   val setterBlock: String? = if (hasSetter) {
@@ -3512,6 +4606,11 @@ private fun interfaceHandleReturnBlock(
     is RirStructType -> error(
       "[nuget] struct-typed interface members are out of scope (ADR-070 v1)",
     )
+
+    is RirGenericInstanceType, is RirTypeParameterType -> error(
+      "[nuget] generic-typed interface members are out of scope (ADR-070/ADR-072: generic " +
+          "interfaces are excluded)",
+    )
   }
 }
 
@@ -3666,6 +4765,9 @@ internal fun diagnosticWarnings(rir: RirFile): List<String> {
   validateDiagnostics(rir)
   val boundTypes: Set<RirTypeKey> = boundHandleTypes(rir)
   val structs: Map<RirTypeKey, RirStruct> = boundStructTypes(rir)
+  // ADR-072: derived once here too, so a member skipped for exceeding the arity ceiling is still
+  // reported even when its signature mentions a bridgeable generic instantiation.
+  val genericDefs: Map<RirTypeKey, RirClass> = boundGenericClassDefinitions(rir)
   val fromReader: List<Pair<String, RirDiagnostic>> = rir.assemblies.flatMap { assembly ->
     assembly.diagnostics.map { assembly.packageId to it }
   }
@@ -3683,13 +4785,28 @@ internal fun diagnosticWarnings(rir: RirFile): List<String> {
   val fromArityLimits: List<Pair<String, RirDiagnostic>> = rir.assemblies.flatMap { assembly ->
     assembly.namespaces.flatMap { namespace ->
       namespace.types.filterIsInstance<RirClass>().flatMap { cls ->
-        arityLimitDiagnostics(cls, boundTypes, structs).map { assembly.packageId to it }
+        arityLimitDiagnostics(cls, boundTypes, structs, boundGenericClassDefinitions = genericDefs)
+          .map { assembly.packageId to it }
       } + namespace.types.filterIsInstance<RirStruct>().flatMap { struct ->
         structArityLimitDiagnostics(struct, boundTypes, structs).map { assembly.packageId to it }
       }
     }
   }
-  return (fromReader + fromCollisions + fromArityLimits)
+  // ADR-072 Decision 5: the analogous plugin-derived entry point for
+  // skipped_ambiguous_generic_constructor, mirroring fromCollisions/fromArityLimits above,
+  // routed through the SAME internal diagnosticWarnings(rir) surface as every other
+  // plugin-derived kind, rather than left with no named entry point at all.
+  val fromAmbiguousGenericConstructors: List<Pair<String, RirDiagnostic>> =
+    rir.assemblies.flatMap { assembly ->
+      assembly.namespaces.flatMap { namespace ->
+        namespace.types.filterIsInstance<RirClass>()
+          .filter { it.typeParameters.isNotEmpty() }
+          .flatMap { cls ->
+            ambiguousGenericConstructorDiagnostics(cls).map { assembly.packageId to it }
+          }
+      }
+    }
+  return (fromReader + fromCollisions + fromArityLimits + fromAmbiguousGenericConstructors)
     .map { (packageId, diagnostic) -> formatDiagnostic(packageId, diagnostic) }
 }
 
@@ -3709,41 +4826,52 @@ private fun validateDiagnostics(rir: RirFile) {
 
 private fun validateKotlinSignatures(rir: RirFile) {
   val structs: Map<RirTypeKey, RirStruct> = boundStructTypes(rir)
+  val genericDefs: Map<RirTypeKey, RirClass> = boundGenericClassDefinitions(rir)
   rir.assemblies.forEach { assembly ->
     assembly.namespaces.forEach { namespace ->
-      namespace.types.filterIsInstance<RirClass>().forEach { cls ->
-        val methods: List<RirMethod> = cls.methods.filter { method ->
-          bridgeableRegistrables(cls, boundHandleTypes(rir), structs).any { registrable ->
-            registrable is RirRegistrable.Method && registrable.method === method
+      // ADR-072: a generic class definition's members are RirTypeParameterType/
+      // RirGenericInstanceType-shaped by construction: kotlinCollisionType() has no ordinary
+      // rendering for those (they route through the dedicated generic-class path instead), so
+      // this ordinary (non-generic) collision check must not run on cls.constructors/cls.methods
+      // for a generic definition at all. An ordinary member mentioning a bridgeable generic
+      // instantiation, however, is a normal registrable and must still be checked here.
+      namespace.types.filterIsInstance<RirClass>().filterNot { it.typeParameters.isNotEmpty() }
+        .forEach { cls ->
+          val registrables: List<RirRegistrable> = bridgeableRegistrables(
+            cls, boundHandleTypes(rir), structs, boundGenericClassDefinitions = genericDefs,
+          )
+          val methods: List<RirMethod> = cls.methods.filter { method ->
+            registrables.any { registrable ->
+              registrable is RirRegistrable.Method && registrable.method === method
+            }
           }
-        }
-        methods.groupBy { method ->
-          val scope: String = if (method.isStatic) "static" else "instance"
-          "$scope:${method.name.toMethodCamelCase()}(" +
-              method.parameters.joinToString(",") { it.type.kotlinCollisionType() } + ")"
-        }.values.filter { it.size > 1 }.forEach { collision ->
-          val first: RirMethod = collision.first()
-          val params: String = first.parameters.joinToString(", ") { p ->
-            "${p.name}: ${declKotlinType(p.type)}"
+          methods.groupBy { method ->
+            val scope: String = if (method.isStatic) "static" else "instance"
+            "$scope:${method.name.toMethodCamelCase()}(" +
+                method.parameters.joinToString(",") { it.type.kotlinCollisionType() } + ")"
+          }.values.filter { it.size > 1 }.forEach { collision ->
+            val first: RirMethod = collision.first()
+            val params: String = first.parameters.joinToString(", ") { p ->
+              "${p.name}: ${declKotlinType(p.type)}"
+            }
+            require(false) {
+              "[nuget] Kotlin signature collision: " +
+                  collision.joinToString(" and ") { "`${it.managedSignature}`" } +
+                  " both map to `fun ${first.name.toMethodCamelCase()}($params)`. " +
+                  "Expose a differently named C# adapter."
+            }
           }
-          require(false) {
-            "[nuget] Kotlin signature collision: " +
-                collision.joinToString(" and ") { "`${it.managedSignature}`" } +
-                " both map to `fun ${first.name.toMethodCamelCase()}($params)`. " +
-                "Expose a differently named C# adapter."
-          }
-        }
 
-        cls.constructors.groupBy { ctor ->
-          ctor.parameters.joinToString(",") { it.type.kotlinCollisionType() }
-        }.values.filter { it.size > 1 }.forEach { collision ->
-          require(false) {
-            "[nuget] Kotlin constructor signature collision: " +
-                collision.joinToString(" and ") { "`${it.managedSignature}`" } +
-                ". Expose a differently named C# adapter."
+          cls.constructors.groupBy { ctor ->
+            ctor.parameters.joinToString(",") { it.type.kotlinCollisionType() }
+          }.values.filter { it.size > 1 }.forEach { collision ->
+            require(false) {
+              "[nuget] Kotlin constructor signature collision: " +
+                  collision.joinToString(" and ") { "`${it.managedSignature}`" } +
+                  ". Expose a differently named C# adapter."
+            }
           }
         }
-      }
     }
   }
 }
@@ -3753,6 +4881,13 @@ private fun RirTypeRef.kotlinCollisionType(): String = when (this) {
   is RirEnumType -> "$namespace.$name"
   is RirStructType -> "$namespace.$name"
   is RirInterfaceType -> "$namespace.$name${if (isNullable) "?" else ""}"
+  // ADR-072 Decision 3, NugetGenerateBindingsTask.kt:3751 permissive site: same gap as
+  // declKotlinType's own qualification fix: without this branch two overloads differing only in
+  // a generic instantiation's namespace could collide undetected inside the ADR-057 diagnostic.
+  is RirGenericInstanceType ->
+    "$namespace.$name[${typeArguments.joinToString(",") { it.kotlinCollisionType() }}]" +
+        if (isNullable) "?" else ""
+
   else -> declKotlinType(this)
 }
 

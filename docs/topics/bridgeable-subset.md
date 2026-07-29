@@ -16,7 +16,7 @@ ways, this page follows the code.
 | Struct / value type | Yes, but never as a **handle**. A struct is its own RIR node (never emitted as a class), and `CollectBoundHandleTypeNames` explicitly excludes any type whose base type is `System.ValueType` or `System.Enum`, so it can never become an object-handle parameter or return. A bridgeable struct decomposes into an immutable Kotlin `data class` instead, whether it has a state constructor ("Shape A") or only public settable fields/auto-properties ("Shape B"); see [C# structs](structs.md) |
 | `ref struct` (`Span<T>`, `ReadOnlySpan<T>`, custom) | No. Detected via the `IsByRefLikeAttribute` custom attribute; any member referencing one is skipped and diagnosed (`skipped_ref_struct`) |
 | Nested type (public or not) | No. The reader filters on `TypeAttributes.VisibilityMask == Public`, which excludes `NestedPublic` as well as every non-public visibility. Only top-level public types are candidates at all |
-| Generic type | Not explicitly filtered at the type level. A generic class is still enumerated as a candidate type, but virtually every member whose signature actually uses the open type parameter is skipped per-member (`skipped_open_generic`) when the parameter or return type is decoded, so a generic type in practice binds nothing unless it happens to expose non-generic members |
+| Generic type | An open generic type parameter still skips per-member (`skipped_open_generic`). A generic **class** reached through at least one closed instantiation (`Box<int>`) binds fully as a real Kotlin generic class, one per instantiation registration export; see [Generic types](generic-types.md) and [ADR-072](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/072-closed-constructed-generics-in-kotlin.md). Generic **interfaces** still don't bind at all (`skipped_generic_interface`) |
 | Record | Not recognized as a distinct construct at all: a C# `record class` compiles to an ordinary class in IL with no marker, and each constructor/member is evaluated by the same rules as any other class |
 
 Classes (static or not), supported enums, and admissible interfaces produce Kotlin output.
@@ -72,8 +72,9 @@ fun catMoodRoundTrip(): CatMood {
 - The underlying type must be the default C# `int`.
 - Values must be unique and contiguous from `0` through `N-1`. Explicit, sparse, negative, and
   aliased values do not bind.
-- Nullable enums, nested enums, and enums in collections or generic type arguments are not yet
-  supported.
+- Nullable enums, nested enums, and enums as a collection element (`List<CatMood>`) are not yet
+  supported. An enum used as the type argument of a bound generic **class** (`Box<CatMood>`) is
+  supported, since it's in the [Generic types](generic-types.md) v1 vocabulary (ADR-072).
 
 Unsupported enums are excluded with a `skipped_unsupported_enum` diagnostic in `reverse-ir.json`.
 
@@ -251,7 +252,10 @@ struct out-pointer convention is exactly the format `Nullable<T>` needs, so this
 needs no further ADR, only the reader work to stop dropping `System.Nullable<T>` at
 `GetGenericInstantiation` (tracked in [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md) Phase 9).
 
-Everything else, arrays, collections, delegates, `dynamic`, `object`, open generics, does not bridge.
+Everything else, arrays, collections, delegates, `dynamic`, `object`, open generics, and generic
+instantiations of a definition outside the bound assemblies (`List<int>`), does not bridge. A closed
+instantiation of a bound generic **class** is the one generic shape that does; see
+[Generic types](generic-types.md).
 `System.String` is the only external (out-of-assembly) reference type recognized; every other
 external type reference is unbound and diagnosed (`skipped_unbound_type_reference`).
 
@@ -322,6 +326,12 @@ enum class RirDiagnosticKind {
   SKIPPED_EMPTY_INTERFACE,                 // ADR-070: interface with zero admissible members
   SKIPPED_INTERFACE_SUPERTYPE,             // ADR-070: a class's interface member is non-public (explicit impl)
   INFO_INHERITED_INTERFACE_MEMBERS_ABSENT, // ADR-070: base interface not admissible/bound
+  SKIPPED_UNBOUND_GENERIC_INSTANTIATION,   // ADR-072: instantiation of a definition outside the bound assemblies
+  SKIPPED_GENERIC_TYPE_ARGUMENT,           // ADR-072: type argument outside the v1 vocabulary
+  SKIPPED_NULLABLE_TYPE_PARAMETER,         // ADR-072: a bare type parameter annotated nullable
+  SKIPPED_AMBIGUOUS_GENERIC_CONSTRUCTOR,   // ADR-072: Gradle-plugin-side only, see below
+  INFO_UNINSTANTIATED_GENERIC_TYPE,        // ADR-072: bound generic definition, zero discovered instantiations
+  ERROR_GENERIC_ARITY_NAME_COLLISION,      // ADR-072: Gradle-plugin-side only, see below
 }
 ```
 
@@ -349,6 +359,16 @@ kind is logged as "Skipping ..." (the member is absent from the
 generated output); an `INFO_*` kind is logged as "Note ..." (the member still binds, under an assumed
 policy).
 
+<note>
+<p>Not every diagnostic kind can appear in <code>reverse-ir.json</code>. <code>skipped_ambiguous_generic_constructor</code>
+and <code>error_generic_arity_name_collision</code> (ADR-072) are computed entirely Gradle-plugin-side,
+the same way <code>skipped_member_name_collision</code> already was: the ambiguity rule is stated in
+terms of parameter lists erased to non-null <b>Kotlin</b> types, which only <code>NugetGenerateBindingsTask</code>
+can compute, not the metadata reader. A build log line is the only place either one shows up; a
+generic-heavy package's <code>reverse-ir.json</code> alone will not explain why a fake constructor
+or a whole type is missing.</p>
+</note>
+
 If a method you expected to see in Kotlin is missing, the build log now names it and says why; the
 underlying `reverse-ir.json` `diagnostics` array is still there for programmatic inspection, but
 reading it by hand is no longer the only way to find out. What is not yet built: a structured,
@@ -362,10 +382,12 @@ queryable diagnostics report (only a Gradle log line exists today), tracked in
         <a href="objects-and-handles.md">Objects and handles</a>
         <a href="instance-members.md">Instance members</a>
         <a href="structs.md">C# structs</a>
+        <a href="generic-types.md">Generic types</a>
         <a href="registration-diagnostics.md">Registration diagnostics</a>
     </category>
     <category ref="external">
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/043-bridgeable-subset-boundary.md">ADR-043: Bridgeable subset boundary</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/072-closed-constructed-generics-in-kotlin.md">ADR-072: Closed constructed generics from C# in Kotlin</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/046-reverse-ir-model-and-json-contract.md">ADR-046: Reverse IR model and JSON contract</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/049-csharp-registration-shim-generation.md">ADR-049: C# registration shim generation</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/053-nullable-reference-types-in-kotlin.md">ADR-053: Nullable reference types in Kotlin</a>
