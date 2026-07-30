@@ -62,11 +62,68 @@ internal object Tier1Harness {
     }
   }
 
+  /**
+   * Two-pass incremental run: pass 1 processes [initial] fully against a fresh `cachesDir`,
+   * pass 2 rewrites [editedFile] to [editedContent] and re-runs KSP2 against the SAME
+   * `cachesDir` / `projectBaseDir` / `outputBaseDir`, with `incremental = true` and
+   * `modifiedSources` naming only the edited file — the in-process equivalent of Gradle's
+   * build-edit-build. KSP2 keys incrementality off `cachesDir` state, not process state
+   * (`rebuild = !cachesUpToDateFile.exists()`, written by `updateCachesAndOutputs` at the end
+   * of a run; verified by reading KSP 2.3.9 sources), so two [KotlinSymbolProcessing.execute]
+   * calls in one JVM against the same dirs reproduce that cache state transition. ADR-060's
+   * "KSP2 is re-entrant within one JVM" note only verified the non-incremental path; this is
+   * the first Tier 1 use of the incremental engine across two in-process runs.
+   *
+   * Returns pass 2's [Tier1Result]. Pass 2 re-runs the compile step against pass 2's generated
+   * `CNameExports.kt` alone — a partial regeneration may not compile standalone against the
+   * full fixture, so callers exercising this path should treat [Tier1Result.compileErrors] as
+   * informational and assert on [Tier1Result.generatedFiles] instead.
+   */
+  fun runIncremental(
+    initial: Map<String, String>,
+    editedFile: String,
+    editedContent: String,
+    processorOptions: Map<String, String> = emptyMap(),
+    libraries: List<File> = emptyList(),
+  ): Tier1Result {
+    val workDir: File = Files.createTempDirectory("nuget-tier1-incr-").toFile()
+    try {
+      // Pass 1 must ALSO run with incremental = true: KSP2's incremental engine keys off
+      // `cachesUpToDateFile.exists()` in `cachesDir`, written by `updateCachesAndOutputs` only
+      // when a run actually executed the incremental machinery. A pass 1 that runs the plain
+      // non-incremental path never writes that marker, so pass 2's `incremental = true` would
+      // see no up-to-date cache and fall back to a full rebuild — silently defeating the whole
+      // point of this harness by never taking the partial/dirty-files-only branch at all.
+      runIn(workDir, initial, processorOptions, libraries, incremental = true)
+
+      val sourceDir: File = workDir.resolve("src")
+      val editedFileHandle: File = sourceDir.resolve(editedFile)
+      require(editedFileHandle.exists()) {
+        "editedFile '$editedFile' was not among the initial sources written to $sourceDir"
+      }
+      editedFileHandle.writeText(editedContent)
+
+      return runIn(
+        workDir,
+        initial + (editedFile to editedContent),
+        processorOptions,
+        libraries,
+        incremental = true,
+        modifiedSources = listOf(editedFileHandle),
+      )
+    } finally {
+      workDir.deleteRecursively()
+    }
+  }
+
   private fun runIn(
     workDir: File,
     sources: Map<String, String>,
     processorOptions: Map<String, String> = emptyMap(),
     libraries: List<File> = emptyList(),
+    incremental: Boolean = false,
+    modifiedSources: List<File> = emptyList(),
+    removedSources: List<File> = emptyList(),
   ): Tier1Result {
     val sourceDir: File = workDir.resolve("src").apply { mkdirs() }
     val fixtureFiles: List<File> = sources.map { (fileName, kotlinSource) ->
@@ -100,6 +157,9 @@ internal object Tier1Harness {
       languageVersion = "2.0"
       apiVersion = "2.0"
       this.processorOptions = processorOptions
+      this.incremental = incremental
+      this.modifiedSources = modifiedSources
+      this.removedSources = removedSources
     }.build()
 
     val kspExitCode = KotlinSymbolProcessing(
