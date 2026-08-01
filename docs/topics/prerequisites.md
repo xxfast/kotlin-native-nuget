@@ -26,9 +26,10 @@ additional tooling.
 
 ## Compatibility
 
-| kotlin-native-nuget | Kotlin  | KSP     | Gradle | JDK | .NET   |
-|----------------------|---------|---------|--------|-----|--------|
-| `0.1.0`              | `2.4.0` | `2.3.9` | `9.1`  | 17+ | `8.0`+ |
+| kotlin-native-nuget | Kotlin   | KSP      | Gradle | JDK | .NET   |
+|----------------------|----------|----------|--------|-----|--------|
+| `0.2.0`              | `2.4.10` | `2.3.10` | `9.1`  | 17+ | `8.0`+ |
+| `0.1.0`              | `2.4.0`  | `2.3.9`  | `9.1`  | 17+ | `8.0`+ |
 
 KSP is pinned to its Kotlin version, so bumping Kotlin without bumping the plugin is not
 supported.
