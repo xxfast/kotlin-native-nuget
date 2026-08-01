@@ -255,13 +255,175 @@ public void Patient_Labels_ReturnsNameSet()
 ```
 
 `List<T>` **inputs** (method parameters) also plan: the C# side builds a temporary handle via
-`NugetMarshal.CreateList` and the Kotlin side walks it. `Map`/`Set` **inputs** are not planned yet
-(there is no `CreateMap`/`CreateSet` helper); those callables are skipped rather than fallthrough-emitted.
+`NugetMarshal.CreateList` and the Kotlin side walks it. `Map`, `MutableMap`, `Set` and `MutableSet`
+**inputs** plan the same way, via `NugetMarshal.CreateMap`/`CreateSet`.
+
+## Method parameters
+
+A `Map<K,V>`, `MutableMap<K,V>`, `Set<T>` or `MutableSet<T>` parameter mirrors the return-position
+mapping above, at every call position: class method, companion method, top-level function,
+extension function, and constructor.
+
+From `test-library/.../clinic/ClinicSample.kt`:
+
+```kotlin
+class Patient(val name: String) {
+  fun recordScores(scores: Map<String, Int>): Int = scores.values.sum()
+
+  fun tallyScores(scores: MutableMap<String, Int>): Int {
+    scores["total"] = scores.values.sum()
+    return scores.size
+  }
+
+  fun linkWard(ward: Map<String, Patient>): Int = ward.values.count { it.name.isNotBlank() }
+
+  fun addLabels(labels: Set<String>): Int = labels.size
+
+  fun addCodes(codes: MutableSet<Int>): Int {
+    codes.add(0)
+    return codes.size
+  }
+
+  companion object {
+    fun batchScore(scores: Map<String, Int>): Int = scores.size
+  }
+}
+
+fun countLabels(labels: Set<String>): Int = labels.size
+
+fun Patient.mergeScores(extra: Map<String, Int>): Int = extra.size
+
+class Ward(val name: String, val tags: Set<String>)
+```
+
+Generated C#, from `Interop.cs`:
+
+```C#
+public int RecordScores(IReadOnlyDictionary<string, int> scores)
+{
+    IntPtr scoresHandle = NugetMarshal.CreateMap(scores);
+    int nativeResult = Native_RecordScores(_handle, scoresHandle, out IntPtr error);
+    if (error != IntPtr.Zero)
+    {
+        throw NugetErrorNative.BuildException(error);
+    }
+    NugetMapNative.Dispose(scoresHandle);
+    return nativeResult;
+}
+
+public int TallyScores(IDictionary<string, int> scores)
+{
+    IntPtr scoresHandle = NugetMarshal.CreateMap(scores);
+    int nativeResult = Native_TallyScores(_handle, scoresHandle, out IntPtr error);
+    if (error != IntPtr.Zero)
+    {
+        throw NugetErrorNative.BuildException(error);
+    }
+    NugetMapNative.Dispose(scoresHandle);
+    return nativeResult;
+}
+
+public int LinkWard(IReadOnlyDictionary<string, Patient> ward)
+{
+    IntPtr wardHandle = NugetMarshal.CreateMap(ward);
+    int nativeResult = Native_LinkWard(_handle, wardHandle, out IntPtr error);
+    if (error != IntPtr.Zero)
+    {
+        throw NugetErrorNative.BuildException(error);
+    }
+    NugetMapNative.Dispose(wardHandle);
+    return nativeResult;
+}
+
+public int AddLabels(IReadOnlySet<string> labels)
+{
+    IntPtr labelsHandle = NugetMarshal.CreateSet(labels);
+    int nativeResult = Native_AddLabels(_handle, labelsHandle, out IntPtr error);
+    if (error != IntPtr.Zero)
+    {
+        throw NugetErrorNative.BuildException(error);
+    }
+    NugetSetNative.Dispose(labelsHandle);
+    return nativeResult;
+}
+
+public int AddCodes(ISet<int> codes)
+{
+    IntPtr codesHandle = NugetMarshal.CreateSet(codes);
+    int nativeResult = Native_AddCodes(_handle, codesHandle, out IntPtr error);
+    if (error != IntPtr.Zero)
+    {
+        throw NugetErrorNative.BuildException(error);
+    }
+    NugetSetNative.Dispose(codesHandle);
+    return nativeResult;
+}
+
+public static int BatchScore(IReadOnlyDictionary<string, int> scores) { /* same shape, static */ }
+
+public static int countLabels(IReadOnlySet<string> labels) { /* top-level function */ }
+
+public static int MergeScores(this Patient receiver, IReadOnlyDictionary<string, int> extra) { /* extension */ }
+
+public Ward(string name, IReadOnlySet<string> tags) { /* constructor */ }
+```
+
+<note>
+    <p>A <code>MutableMap</code>/<code>MutableSet</code> parameter does not write back. Contents
+    are copied into Kotlin. Changes Kotlin makes are not reflected back in the collection you
+    passed. This matches <code>MutableList</code>'s existing input behavior.</p>
+</note>
+
+From `IntegrationTests/MapSetParameterMarshallingTests.cs`:
+
+```C#
+[Fact]
+public void Patient_RecordScores_SumsTheValues()
+{
+    using var oreo = new Patient("Oreo");
+
+    int total = oreo.RecordScores(new Dictionary<string, int> { ["agility"] = 3, ["cuddles"] = 4 });
+
+    Assert.Equal(7, total);
+}
+
+// ADR-073 no-write-back regression: the Kotlin body puts "total" into its copy, but Oreo's own
+// Dictionary must come back untouched.
+[Fact]
+public void Patient_TallyScores_MutatesKotlinsCopyOnly_CallersDictionaryIsUnchanged()
+{
+    using var oreo = new Patient("Oreo");
+    var scores = new Dictionary<string, int> { ["agility"] = 3 };
+
+    int tally = oreo.TallyScores(scores);
+
+    Assert.Equal(2, tally);
+    Assert.Single(scores);
+    Assert.False(scores.ContainsKey("total"));
+    Assert.Equal(3, scores["agility"]);
+}
+
+[Fact]
+public void Ward_Constructor_MarshalsSetParameter()
+{
+    using var ward = new Ward("East Wing", new HashSet<string> { "quiet", "sunny" });
+
+    Assert.Equal("East Wing", ward.Name);
+    Assert.Equal(2, ward.Tags.Count);
+    Assert.Contains("quiet", ward.Tags);
+}
+```
+
+A plain `Dictionary`/`HashSet` is directly assignable at every one of the four parameter kinds; a
+bare `IDictionary<K,V>` cannot be passed to a `Map<K,V>` parameter (it needs `IReadOnlyDictionary`),
+and a bare `IReadOnlyDictionary<K,V>` cannot be passed to a `MutableMap<K,V>` parameter (it needs
+`IDictionary`). Same asymmetry for `Set`/`ISet`/`IReadOnlySet`.
 
 ## Limitations
 
 - `Sequence<T>` is not bridgeable. `Cat.unsupported: Sequence<String>` in the sample library is deliberately left out of the generated `Interop.cs` (no eager-copy story for a lazy sequence).
-- `Map`/`Set` (and mutable variants) as **method parameters** are not planned: returns and properties work, but there is no create-handle helper for the C#→Kotlin direction yet. The callable is omitted from the generated C# and a `SKIPPED_UNSUPPORTED_INPUT` diagnostic names it, instead of the silent drop this used to be. Tracked in [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md) Phase 4 ([ADR-062](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/062-forward-callable-plan.md), [ADR-064](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/064-forward-unsupported-declaration-diagnostics.md)).
+- Only a strict subset of key/value/element types binds at a `Map`/`Set` parameter position: `String`, `Int`, `Long`, `Float`, `Double`, `Boolean`, and object handles (a class instance, boxed via reflection over its `_handle` field). Anything else, an enum (`Map<String, Mood>`), `Char` (`Set<Char>`), a nullable component (`Map<String, Int?>`), a nested collection (`Set<List<String>>`), a value class, or an interface, is skipped with `SKIPPED_UNSUPPORTED_INPUT` rather than crashing or binding incorrectly. `List`/`MutableList` parameters accept a wider (and, for some of those same shapes, unsafe) set of component types; see [ADR-073](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/073-map-and-set-parameters.md)'s Deferred section and [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md) for the tracked gap.
+- `MutableMap`/`MutableSet` parameters do not write back, matching `MutableList`. Contents are copied into Kotlin; changes Kotlin makes are not reflected back in the collection you passed.
 
 <seealso>
     <category ref="related">
@@ -273,5 +435,6 @@ public void Patient_Labels_ReturnsNameSet()
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/061-method-return-marshalling.md">ADR-061: Method return marshalling</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/062-forward-callable-plan.md">ADR-062: Forward callable plan</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/064-forward-unsupported-declaration-diagnostics.md">ADR-064: Forward unsupported-declaration diagnostics</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/073-map-and-set-parameters.md">ADR-073: Map/Set parameters</a>
     </category>
 </seealso>

@@ -477,19 +477,30 @@ internal object ForwardCirPlanProjection {
       else -> error("Forward CIR plan projection has no call argument for $type")
     }
 
-  private fun ForwardCallablePlan.collectionPrelude(parameter: ForwardPublicParameter): String? =
-    if (parameter.type is BridgeType.Collection) {
-      "IntPtr ${parameter.name}Handle = NugetMarshal.CreateList(${parameter.name});"
-    } else {
-      null
+  private fun ForwardCallablePlan.collectionPrelude(parameter: ForwardPublicParameter): String? {
+    val type: BridgeType.Collection = parameter.type as? BridgeType.Collection ?: return null
+    val factory: String = when (type.kind) {
+      CollectionKind.LIST, CollectionKind.MUTABLE_LIST -> "CreateList"
+      CollectionKind.MAP, CollectionKind.MUTABLE_MAP -> "CreateMap"
+      CollectionKind.SET, CollectionKind.MUTABLE_SET -> "CreateSet"
     }
+    return "IntPtr ${parameter.name}Handle = NugetMarshal.$factory(${parameter.name});"
+  }
 
-  private fun ForwardCallablePlan.collectionCleanup(parameter: ForwardPublicParameter): String? =
-    if (parameter.type is BridgeType.Collection) {
-      "NugetListNative.Dispose(${parameter.name}Handle);"
-    } else {
-      null
+  // ADR-073: load-bearing, not cosmetic. All three Dispose members bind to the same
+  // `nuget_dispose` entry point, so emitting NugetListNative.Dispose for a map/set handle would be
+  // *runtime*-correct, but a callable whose only collection is a Map/Set never causes
+  // NugetMapNative/NugetSetNative to be tracked as needed for List, so NugetListNative is never
+  // emitted at all, and the mismatched call is a CS0103 compile error, not a runtime bug.
+  private fun ForwardCallablePlan.collectionCleanup(parameter: ForwardPublicParameter): String? {
+    val type: BridgeType.Collection = parameter.type as? BridgeType.Collection ?: return null
+    val native: String = when (type.kind) {
+      CollectionKind.LIST, CollectionKind.MUTABLE_LIST -> "NugetListNative"
+      CollectionKind.MAP, CollectionKind.MUTABLE_MAP -> "NugetMapNative"
+      CollectionKind.SET, CollectionKind.MUTABLE_SET -> "NugetSetNative"
     }
+    return "$native.Dispose(${parameter.name}Handle);"
+  }
 
   // ADR-069: default P/Invoke `out bool` marshalling reads 4 bytes; Kotlin's `BooleanVar` writes 1
   // (`putByte`). Every `out`-parameter Boolean nullable-result slot needs this on the DllImport

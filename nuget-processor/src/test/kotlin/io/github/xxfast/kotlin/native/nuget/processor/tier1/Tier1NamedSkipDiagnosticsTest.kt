@@ -20,51 +20,155 @@ import kotlin.test.assertTrue
 class Tier1NamedSkipDiagnosticsTest {
 
   /**
-   * ROADMAP line 78. `Map`/`Set` (and their mutable variants) as a method *parameter* have no
-   * `CreateMap`/`CreateSet` helper, so the planner already skips them
-   * (`ForwardPlanSkipReason.COLLECTION`, `droppedFromCSharp = true`) with today's generic
-   * message: "its COLLECTION type combination is not supported" (verified through this harness).
-   * ADR-064 names this specific case `SKIPPED_UNSUPPORTED_INPUT`.
+   * ADR-073 closed the general `Map<String, String>` case (`CreateMap`/`nuget_map_put` now
+   * exist), but the write side can only box a strict subset of component types
+   * (`isWrappableComponent()`): the six `nuget_wrap_*` primitives plus an object handle. An enum
+   * *value* (`Mood`) is outside that subset -- no `nuget_wrap_enum` exists -- so it must still
+   * fire `SKIPPED_UNSUPPORTED_INPUT`, exactly as `Tier1NamedSkipDiagnosticsTest` verified for the
+   * pre-ADR-073 general case.
    */
   @Test
-  fun `class method with Map parameter fires SKIPPED_UNSUPPORTED_INPUT and is omitted`() {
+  fun `class method with Map enum-value parameter fires SKIPPED_UNSUPPORTED_INPUT and is omitted`() {
     val result = Tier1Harness.run(
       """
       package tier1.skipmapinput
 
+      enum class Mood { CALM, ANXIOUS }
+
       class Patient(val name: String) {
-        fun setTags(tags: Map<String, String>): Int = tags.size
+        fun setMoods(moods: Map<String, Mood>): Int = moods.size
       }
       """.trimIndent()
     )
 
     assertTrue(
       result.compiledClean,
-      "expected no broken source for setTags; got: ${result.compileErrors}",
+      "expected no broken source for setMoods; got: ${result.compileErrors}",
     )
     assertTrue(
-      "export_patient_setTags" !in result.generated,
-      "expected setTags to be entirely absent from the generated CNameExports.kt; " +
+      "export_patient_setMoods" !in result.generated,
+      "expected setMoods to be entirely absent from the generated CNameExports.kt; " +
           "generated=${result.generated}",
     )
     assertTrue(
       result.kspWarnings.any { it.contains(ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_INPUT.name) },
-      "expected a SKIPPED_UNSUPPORTED_INPUT diagnostic naming Patient.setTags's Map parameter; " +
+      "expected a SKIPPED_UNSUPPORTED_INPUT diagnostic naming Patient.setMoods's Map parameter; " +
           "kspWarnings=${result.kspWarnings}",
     )
   }
 
   /**
-   * ROADMAP line 78. `Set`/`MutableSet` as a method parameter, the sibling shape to the `Map`
-   * case above — a distinct `CollectionKind` at the same `inputSkipReason()` site.
+   * ADR-073's sibling case for `Set`: a `Char` element has no `nuget_wrap_char`, so it stays
+   * outside `isWrappableComponent()` even though `Set<String>` itself now binds.
    */
   @Test
-  fun `class method with Set parameter fires SKIPPED_UNSUPPORTED_INPUT and is omitted`() {
+  fun `class method with Set Char-element parameter fires SKIPPED_UNSUPPORTED_INPUT and is omitted`() {
     val result = Tier1Harness.run(
       """
       package tier1.skipsetinput
 
       class Patient(val name: String) {
+        fun setInitials(initials: Set<Char>): Int = initials.size
+      }
+      """.trimIndent()
+    )
+
+    assertTrue(
+      result.compiledClean,
+      "expected no broken source for setInitials; got: ${result.compileErrors}",
+    )
+    assertTrue(
+      "export_patient_setInitials" !in result.generated,
+      "expected setInitials to be entirely absent from the generated CNameExports.kt; " +
+          "generated=${result.generated}",
+    )
+    assertTrue(
+      result.kspWarnings.any { it.contains(ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_INPUT.name) },
+      "expected a SKIPPED_UNSUPPORTED_INPUT diagnostic naming Patient.setInitials's Set " +
+          "parameter; kspWarnings=${result.kspWarnings}",
+    )
+  }
+
+  /**
+   * ADR-073: a nullable map *value* (`Map<String, Int?>`) is outside `isWrappableComponent()` --
+   * `nuget_map_put`'s `value` parameter is a non-nullable `COpaquePointer`, so `null` cannot cross
+   * -- and must still fire `SKIPPED_UNSUPPORTED_INPUT` rather than silently crash or bind wrong.
+   */
+  @Test
+  fun `class method with Map nullable-value parameter fires SKIPPED_UNSUPPORTED_INPUT and is omitted`() {
+    val result = Tier1Harness.run(
+      """
+      package tier1.skipmapnullableinput
+
+      class Patient(val name: String) {
+        fun setOptionalScores(scores: Map<String, Int?>): Int = scores.size
+      }
+      """.trimIndent()
+    )
+
+    assertTrue(
+      result.compiledClean,
+      "expected no broken source for setOptionalScores; got: ${result.compileErrors}",
+    )
+    assertTrue(
+      "export_patient_setOptionalScores" !in result.generated,
+      "expected setOptionalScores to be entirely absent from the generated CNameExports.kt; " +
+          "generated=${result.generated}",
+    )
+    assertTrue(
+      result.kspWarnings.any { it.contains(ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_INPUT.name) },
+      "expected a SKIPPED_UNSUPPORTED_INPUT diagnostic naming Patient.setOptionalScores's Map " +
+          "parameter; kspWarnings=${result.kspWarnings}",
+    )
+  }
+
+  /**
+   * ADR-073: a nested collection element (`Set<List<String>>`) is outside `isWrappableComponent()`
+   * -- there is no way to box a `List<String>` through the same-shaped `Wrap<T>` reflective
+   * `_handle` fallback -- and must still fire `SKIPPED_UNSUPPORTED_INPUT`.
+   */
+  @Test
+  fun `class method with Set nested-collection-element parameter fires SKIPPED_UNSUPPORTED_INPUT and is omitted`() {
+    val result = Tier1Harness.run(
+      """
+      package tier1.skipsetnestedinput
+
+      class Patient(val name: String) {
+        fun setTagGroups(groups: Set<List<String>>): Int = groups.size
+      }
+      """.trimIndent()
+    )
+
+    assertTrue(
+      result.compiledClean,
+      "expected no broken source for setTagGroups; got: ${result.compileErrors}",
+    )
+    assertTrue(
+      "export_patient_setTagGroups" !in result.generated,
+      "expected setTagGroups to be entirely absent from the generated CNameExports.kt; " +
+          "generated=${result.generated}",
+    )
+    assertTrue(
+      result.kspWarnings.any { it.contains(ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_INPUT.name) },
+      "expected a SKIPPED_UNSUPPORTED_INPUT diagnostic naming Patient.setTagGroups's Set " +
+          "parameter; kspWarnings=${result.kspWarnings}",
+    )
+  }
+
+  /**
+   * ADR-073: `Map<String, Int>` and `Set<String>` parameters now bind (this is the feature this
+   * ADR shipped), replacing the pre-ADR-073 general skip case above. This is the positive
+   * counterpart to the negative cells above -- proving the narrowed clause still admits the
+   * ordinary component types it must.
+   */
+  @Test
+  fun `class method with Map or Set of wrappable components binds instead of skipping`() {
+    val result = Tier1Harness.run(
+      """
+      package tier1.bindmapsetinput
+
+      class Patient(val name: String) {
+        fun setTags(tags: Map<String, String>): Int = tags.size
         fun setAllergies(allergies: Set<String>): Int = allergies.size
       }
       """.trimIndent()
@@ -72,17 +176,22 @@ class Tier1NamedSkipDiagnosticsTest {
 
     assertTrue(
       result.compiledClean,
-      "expected no broken source for setAllergies; got: ${result.compileErrors}",
+      "expected no broken source for setTags/setAllergies; got: ${result.compileErrors}",
     )
     assertTrue(
-      "export_patient_setAllergies" !in result.generated,
-      "expected setAllergies to be entirely absent from the generated CNameExports.kt; " +
+      "export_patient_setTags" in result.generated,
+      "expected setTags (Map<String, String>) to bind now that ADR-073 shipped; " +
           "generated=${result.generated}",
     )
     assertTrue(
-      result.kspWarnings.any { it.contains(ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_INPUT.name) },
-      "expected a SKIPPED_UNSUPPORTED_INPUT diagnostic naming Patient.setAllergies's Set " +
-          "parameter; kspWarnings=${result.kspWarnings}",
+      "export_patient_setAllergies" in result.generated,
+      "expected setAllergies (Set<String>) to bind now that ADR-073 shipped; " +
+          "generated=${result.generated}",
+    )
+    assertTrue(
+      result.kspWarnings.none { it.contains(ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_INPUT.name) },
+      "expected no SKIPPED_UNSUPPORTED_INPUT diagnostic for either wrappable-component callable; " +
+          "kspWarnings=${result.kspWarnings}",
     )
   }
 

@@ -101,6 +101,33 @@ class Patient(val name: String) {
   /** MIGRATION.md Phase 7. Class method × `List<String>` parameter. */
   fun addTags(tags: List<String>): Int = tags.size
 
+  /** ADR-073. Class method × `Map<String, Int>` parameter: String key (boxed via
+   *  nuget_wrap_string), Int value (boxed via nuget_wrap_int). */
+  fun recordScores(scores: Map<String, Int>): Int = scores.values.sum()
+
+  /** ADR-073. Class method × `MutableMap<String, Int>` parameter. The Kotlin body mutates, and the
+   *  C# test asserts the caller's dictionary is UNCHANGED afterwards: this is the no-write-back
+   *  regression cell. */
+  fun tallyScores(scores: MutableMap<String, Int>): Int {
+    scores["total"] = scores.values.sum()
+    return scores.size
+  }
+
+  /** ADR-073. Class method × `Map<String, Patient>` parameter: the object-handle value cell,
+   *  which exercises CreateMap's reflective `_handle` fallback on the value side. ADR-073 flagged
+   *  this as the one path nobody had executed on the C# side; this cell is what verified it. */
+  fun linkWard(ward: Map<String, Patient>): Int = ward.values.count { it.name.isNotBlank() }
+
+  /** ADR-073. Class method × `Set<String>` parameter. */
+  fun addLabels(labels: Set<String>): Int = labels.size
+
+  /** ADR-073. Class method × `MutableSet<Int>` parameter: Int element (not String), and the second
+   *  no-write-back assertion. */
+  fun addCodes(codes: MutableSet<Int>): Int {
+    codes.add(0)
+    return codes.size
+  }
+
   /** MIGRATION.md Phase 8. Class method × enum return (ordinal over INT32). */
   fun mood(): Mood = Mood.CALM
 
@@ -119,6 +146,10 @@ class Patient(val name: String) {
   companion object {
     /** MIGRATION.md Phase 7. Companion method × `List<String>` parameter. */
     fun batchAdmit(names: List<String>): Int = names.size
+
+    /** ADR-073. Companion method × `Map<String, Int>` parameter, mirroring [batchAdmit] so the
+     *  static call position is covered for maps too. */
+    fun batchScore(scores: Map<String, Int>): Int = scores.size
   }
 
   // ---- QUARANTINED in the Tier 1 harness until each fix lands (all obs K, all verified) ----
@@ -190,6 +221,9 @@ fun admit(name: String): Patient = Patient(name)
  *  parameter (an `Int` result, not `String`, so this is on the shared callable plan). */
 fun patientNameLength(patient: Patient): Int = patient.name.length
 
+/** ADR-073. Top-level function × `Set<String>` parameter. */
+fun countLabels(labels: Set<String>): Int = labels.size
+
 /**
  * MIGRATION.md Phase 7. A secondary carrier whose *primary constructor* takes a non-nullable
  * object-handle parameter alongside a `String` — constructors returning the class handle are
@@ -205,6 +239,12 @@ fun Patient.pairWith(other: Patient?): Patient? {
   buddy = other
   return buddy
 }
+
+/** ADR-073. Extension function × `Map<String, Int>` parameter, over an object-handle receiver. */
+fun Patient.mergeScores(extra: Map<String, Int>): Int = extra.size
+
+/** ADR-073. Constructor × `Set<String>` parameter. */
+class Ward(val name: String, val tags: Set<String>)
 
 // Deliberately not in this corpus: the cell-23 shape (`suspend inline fun <reified T>
 // Patient.chartEntry(...): Result<T>`). Per ROADMAP.md's forward-diagnostics item (MVP.md P1) its

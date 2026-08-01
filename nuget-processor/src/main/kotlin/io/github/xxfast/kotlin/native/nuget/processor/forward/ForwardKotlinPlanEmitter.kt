@@ -664,9 +664,27 @@ private fun loweredArgument(parameter: ForwardPublicParameter): String =
         "${parameter.name}.asStableRef<MutableList<Any?>>().get()" +
             ".mapTo(mutableListOf()) { it as ${elementKotlinTypeName(requireNotNull(type.element))} }"
 
-      else -> error(
-        "Forward Kotlin plan emitter has no argument lowering for collection kind ${type.kind}",
-      )
+      // ADR-073: copy-in, mirroring the List/MutableList pair above. Neither map kind writes
+      // back -- see the ADR's "no write-back" decision.
+      CollectionKind.MAP ->
+        "${parameter.name}.asStableRef<MutableMap<Any?, Any?>>().get()" +
+            ".entries.associate { (k, v) -> " +
+            "(k as ${elementKotlinTypeName(requireNotNull(type.key))}) " +
+            "to (v as ${elementKotlinTypeName(requireNotNull(type.value))}) }"
+
+      CollectionKind.MUTABLE_MAP ->
+        "${parameter.name}.asStableRef<MutableMap<Any?, Any?>>().get()" +
+            ".entries.associateTo(mutableMapOf()) { (k, v) -> " +
+            "(k as ${elementKotlinTypeName(requireNotNull(type.key))}) " +
+            "to (v as ${elementKotlinTypeName(requireNotNull(type.value))}) }"
+
+      // ADR-073: SET and MUTABLE_SET deliberately share one lowering -- mapTo(mutableSetOf())
+      // yields a MutableSet<T>, which satisfies a Set<T> parameter too, so there is no reason to
+      // split them the way the list pair is split.
+      CollectionKind.SET, CollectionKind.MUTABLE_SET ->
+        "${parameter.name}.asStableRef<MutableSet<Any?>>().get()" +
+            ".mapTo(mutableSetOf()) { " +
+            "it as ${elementKotlinTypeName(requireNotNull(type.element))} }"
     }
 
     is BridgeType.Nullable -> when (val inner: BridgeType = type.type) {

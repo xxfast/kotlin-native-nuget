@@ -901,22 +901,19 @@ internal class ForwardCallablePlanner(
       )
     )
 
-    is BridgeType.Collection -> {
-      require(type.kind == CollectionKind.LIST || type.kind == CollectionKind.MUTABLE_LIST) {
-        "Forward planner cannot build an input parameter for collection kind ${type.kind}"
-      }
-      listOf(
-        ForwardAbiParameter(
-          name = name,
-          wireType = ForwardAbiWireType.POINTER,
-          direction = ForwardAbiDirection.IN,
-          transfer = ForwardTransfer(
-            name, type, ForwardFlow.INTO_KOTLIN, ForwardPassing.VALUE,
-            ForwardOwnership.BORROWED, ForwardConversion.HANDLE_TO_COLLECTION,
-          ),
-        )
+    // ADR-073: the POINTER / IN / HANDLE_TO_COLLECTION shape is the same for all six collection
+    // kinds; only the C# prelude/cleanup factory and the Kotlin lowering expression are kind-aware.
+    is BridgeType.Collection -> listOf(
+      ForwardAbiParameter(
+        name = name,
+        wireType = ForwardAbiWireType.POINTER,
+        direction = ForwardAbiDirection.IN,
+        transfer = ForwardTransfer(
+          name, type, ForwardFlow.INTO_KOTLIN, ForwardPassing.VALUE,
+          ForwardOwnership.BORROWED, ForwardConversion.HANDLE_TO_COLLECTION,
+        ),
       )
-    }
+    )
 
     is BridgeType.Nullable -> when (val inner = type.type) {
       BridgeType.String -> listOf(
@@ -1213,6 +1210,29 @@ internal class ForwardCallablePlanner(
       -> false
   }
 
+  /**
+   * ADR-073: the component types the C# write side can actually box, for an input-position
+   * `Map`/`Set` (and their mutable variants): the six `nuget_wrap_*` primitives plus an object
+   * handle (via `CreateMap`/`CreateSet`'s reflective `_handle` fallback). Narrower than
+   * [isBridgeableComponent], which also admits `Nullable`, `ValueClass`, `Char`, nested
+   * `Collection`, `Enum` and the narrow-primitive kinds (none of which the write side can box),
+   * because those overshoots would otherwise either crash `packNuget`
+   * (`ValueClass`/`Nullable`/nested `Collection`, no `elementKotlinTypeName` branch) or throw at
+   * runtime (`NotSupportedException`, no matching `nuget_wrap_*`). Deliberately *not* applied to
+   * `List`; narrowing the list-element predicate is a separate, deferred decision (ADR-073 Scope
+   * item 1).
+   */
+  private fun BridgeType.isWrappableComponent(): Boolean = when (this) {
+    BridgeType.String -> true
+    is BridgeType.Primitive -> kind in setOf(
+      PrimitiveKind.INT, PrimitiveKind.LONG, PrimitiveKind.FLOAT,
+      PrimitiveKind.DOUBLE, PrimitiveKind.BOOLEAN,
+    )
+
+    is BridgeType.ObjectHandle -> true
+    else -> false
+  }
+
   private fun BridgeType.skipReason(): ForwardPlanSkipReason? = when (this) {
     BridgeType.Unit, is BridgeType.Primitive -> null
     BridgeType.Char -> ForwardPlanSkipReason.CHAR
@@ -1264,14 +1284,24 @@ internal class ForwardCallablePlanner(
     // through NugetMarshal.HandleOf (ForwardCirPlanProjection.callArgument), which throws
     // NotSupportedException at runtime for a C#-implemented (non-Kotlin-backed) IFoo.
     is BridgeType.ObjectHandle, is BridgeType.Interface -> null
+    // ADR-066: an unsupported element must not silently produce a Collection shape that later
+    // crashes plan validation — route it through the same skip path as any other unsupported
+    // input, preferring the (element ?: key ?: value)'s own reason (e.g.
+    // UNEXPORTED_DEPENDENCY_TYPE) when known.
     is BridgeType.Collection -> when {
-      kind != CollectionKind.LIST && kind != CollectionKind.MUTABLE_LIST ->
-        ForwardPlanSkipReason.COLLECTION
-      // ADR-066: an unsupported element must not silently produce a Collection shape that later
-      // crashes plan validation — route it through the same skip path as any other unsupported
-      // input, preferring the element's own reason (e.g. UNEXPORTED_DEPENDENCY_TYPE) when known.
-      !isBridgeableComponent() -> element?.skipReason() ?: ForwardPlanSkipReason.UNSUPPORTED
-      else -> null
+      !isBridgeableComponent() ->
+        (element ?: key ?: value)?.skipReason() ?: ForwardPlanSkipReason.UNSUPPORTED
+
+      kind == CollectionKind.LIST || kind == CollectionKind.MUTABLE_LIST -> null
+      // ADR-073: map/set inputs are admitted only for components the write side can box
+      // (isWrappableComponent); List is deliberately left on the wider isBridgeableComponent
+      // check above (ADR-073 Scope item 1, out of scope for this change).
+      kind == CollectionKind.MAP || kind == CollectionKind.MUTABLE_MAP ->
+        if (key?.isWrappableComponent() == true && value?.isWrappableComponent() == true) null
+        else ForwardPlanSkipReason.COLLECTION
+
+      else ->
+        if (element?.isWrappableComponent() == true) null else ForwardPlanSkipReason.COLLECTION
     }
 
     is BridgeType.Nullable -> when (type) {
