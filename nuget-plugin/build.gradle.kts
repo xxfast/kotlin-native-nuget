@@ -2,8 +2,8 @@ import java.util.Properties
 
 plugins {
   `java-gradle-plugin`
-  kotlin("jvm") version "2.4.0"
-  kotlin("plugin.serialization") version "2.4.0"
+  kotlin("jvm") version "2.4.10"
+  kotlin("plugin.serialization") version "2.4.10"
   id("com.gradle.plugin-publish") version "1.3.1"
   id("com.vanniktech.maven.publish") version "0.37.0"
   id("org.jetbrains.kotlinx.kover") version "0.9.9"
@@ -32,7 +32,7 @@ repositories {
 dependencies {
   implementation(kotlin("gradle-plugin-api"))
   implementation(kotlin("gradle-plugin"))
-  implementation("com.google.devtools.ksp:symbol-processing-gradle-plugin:2.3.9")
+  implementation("com.google.devtools.ksp:symbol-processing-gradle-plugin:2.3.10")
   implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.8.1")
 
   testImplementation(kotlin("test"))
