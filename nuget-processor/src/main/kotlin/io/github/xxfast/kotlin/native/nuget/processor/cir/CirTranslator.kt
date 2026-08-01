@@ -369,7 +369,13 @@ internal fun translate(
   }
 
   if (needsMarshalHelper) {
-    val helpers: MutableList<CirDeclaration> = mutableListOf(CirMarshalHelper(context.libraryName))
+    val helpers: MutableList<CirDeclaration> = mutableListOf(
+      CirMarshalHelper(
+        context.libraryName,
+        includesMap = tracker.needsMap,
+        includesSet = tracker.needsSet,
+      ),
+    )
     if (tracker.needsList) helpers.add(CirListHelper(context.libraryName))
     if (tracker.needsMap) helpers.add(CirMapHelper(context.libraryName))
     if (tracker.needsSet) helpers.add(CirSetHelper(context.libraryName))

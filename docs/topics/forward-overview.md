@@ -112,10 +112,11 @@ Kotlin or a C# API whose signature lies about its contract. Every diagnostic car
   **value** types are unaffected and keep working: `constructor(n: Int)` next to
   `constructor(n: Int?)` render genuinely distinct signatures and are not treated as a collision.
 
-A `Map` parameter (see [Collections](collections.md)) is skipped like this:
+A `Map`/`Set` parameter with an unsupported key/value/element type (see [Collections](collections.md))
+is skipped like this:
 
 ```
-[nuget:SKIPPED_UNSUPPORTED_INPUT] Skipping Patient.setTags: its COLLECTION type combination is not
+[nuget:SKIPPED_UNSUPPORTED_INPUT] Skipping Patient.setMoods: its COLLECTION type combination is not
     supported. expose a wrapper taking a List/MutableList (or individual key/value parameters)
     instead of a Map/Set at this position
     at Fixture.kt:4

@@ -138,6 +138,14 @@ data class CirGenericClass(
 
 data class CirMarshalHelper(
   val libraryName: String,
+  // ADR-073: NugetMarshal.CreateMap/CreateSet call into NugetMapNative/NugetSetNative, which are
+  // only emitted (as separate CirMapHelper/CirSetHelper declarations) when the tracker actually
+  // saw a Map/Set collection anywhere in the file. Gating these two method bodies on the same
+  // flags keeps a library with, say, only List parameters (and no Map/Set at all) compiling --
+  // otherwise CreateMap/CreateSet would reference a native class that was never emitted, a
+  // CS0103 for every such consumer.
+  val includesMap: Boolean = false,
+  val includesSet: Boolean = false,
 ) : CirDeclaration
 
 data class CirListHelper(

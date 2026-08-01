@@ -203,6 +203,30 @@ internal fun FileSpec.Builder.addNugetSetHelperExports() {
       )
       .build()
   )
+
+  // The reverse of Count/ElementAt above (Set result -> C#): builds a growable Kotlin set from a
+  // C# caller one element at a time, for a Kotlin Set<T>/MutableSet<T> *parameter* (ADR-073).
+  addFunction(
+    FunSpec.builder("export_nuget_set_create")
+      .addAnnotation(cNameAnnotation("nuget_set_create"))
+      .returns(cOpaquePointer)
+      .addStatement(
+        "return %T.create(mutableSetOf<Any?>()).asCPointer()",
+        stableRef,
+      )
+      .build()
+  )
+
+  addFunction(
+    FunSpec.builder("export_nuget_set_add")
+      .addAnnotation(cNameAnnotation("nuget_set_add"))
+      .addParameter("handle", cOpaquePointer)
+      .addParameter("element", cOpaquePointer)
+      .addStatement(
+        "handle.asStableRef<MutableSet<Any?>>().get().add(element.asStableRef<Any>().get())",
+      )
+      .build()
+  )
 }
 
 internal fun FileSpec.Builder.addNugetMapHelperExports() {
@@ -237,6 +261,33 @@ internal fun FileSpec.Builder.addNugetMapHelperExports() {
       .addStatement(
         "return %T.create(handle.asStableRef<Map<*, *>>().get().values.toList()[index]!!).asCPointer()",
         stableRef,
+      )
+      .build()
+  )
+
+  // The reverse of Count/KeyAt/ValueAt above (Map result -> C#): builds a growable Kotlin map
+  // from a C# caller one entry at a time, for a Kotlin Map<K,V>/MutableMap<K,V> *parameter*
+  // (ADR-073).
+  addFunction(
+    FunSpec.builder("export_nuget_map_create")
+      .addAnnotation(cNameAnnotation("nuget_map_create"))
+      .returns(cOpaquePointer)
+      .addStatement(
+        "return %T.create(mutableMapOf<Any?, Any?>()).asCPointer()",
+        stableRef,
+      )
+      .build()
+  )
+
+  addFunction(
+    FunSpec.builder("export_nuget_map_put")
+      .addAnnotation(cNameAnnotation("nuget_map_put"))
+      .addParameter("handle", cOpaquePointer)
+      .addParameter("key", cOpaquePointer)
+      .addParameter("value", cOpaquePointer)
+      .addStatement(
+        "handle.asStableRef<MutableMap<Any?, Any?>>().get()[key.asStableRef<Any>().get()] = " +
+            "value.asStableRef<Any>().get()",
       )
       .build()
   )
