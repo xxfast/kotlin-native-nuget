@@ -50,6 +50,22 @@ Then run the per-feature Step 3–5 loop below for each item.
 - Write an [ADR](../../../docs/adr) if the decision is non-trivial
 - Define the expected API for the consumer: C# for forward features, Kotlin for reverse (Phase 8) and Gradle plugin features
 
+**Budget: 20 minutes.** Put it in the prompt. Tell the agent to run `date` when it starts and to check it again before opening any new expensive line of investigation, not only at the end. At the deadline it stops and reports what it has, naming every question it did not resolve, rather than quietly continuing. A partial ADR you can read at Step 2 beats a complete one that lands fifteen minutes later, because Step 2 is a human gate either way and unresolved questions are exactly what that gate is for.
+
+**The budget is a checkpoint, not a ceiling.** Some features genuinely deserve more, and the agent is the one best placed to know. Tell it that if it hits 20 minutes with a load-bearing question still open, it should **ask for an extension** in its report rather than either guessing or padding out what it has. The ask has to be specific enough to decide on: what is unresolved, what it would spend the extra time doing, and what goes wrong downstream if it proceeds without the answer. "I'd like more time" is not an ask.
+
+The agent cannot reach the human itself, it has no `AskUserQuestion`, so **you relay it**. Put its request to the human with your own read on whether it is worth granting, then resume the **same** agent with `SendMessage` rather than spawning a fresh one, so its context survives and the extension buys only the new work instead of paying for a cold restart.
+
+Grant it for a mechanism claim that would silently produce wrong output if wrong. Decline it for more prior art, more alternatives, or more confirmation of something already decided. That is the same line item 1 below draws, applied at the checkpoint instead of at the start.
+
+Spend the budget in this order. Left alone, research tends to spend it in reverse, because a prior-art sweep always has one more ecosystem to check while a spike has an end:
+
+1. **The spike on the claim the design rests on.** This is what the budget is *for*. Ask of each mechanism claim: if this is wrong, does the implementation silently produce wrong output? Spike only the ones that answer yes. A wrong mechanism claim surfaces mid-implementation otherwise, at many times the cost, and this repo has [paid that](../../../CLAUDE.md) more than once.
+2. **The repo's own constraints, read in source.** Cheap, fast, and always decision-relevant.
+3. **Prior art, only to the depth that changes the decision.** One precedent that clearly settles it is worth more than four that agree. Stop at the first that decides the question; the rest is confirmation, and confirmation is what the budget gets cut from.
+
+**Do not downsize the model to fit the budget.** `research` is the one step every later artefact is derived from, so a cheap wrong ADR is the most expensive thing this workflow can produce: tests, code and docs all end up agreeing with each other while disagreeing with reality, and nothing downstream can catch it. `.claude/agents/research.md` deliberately declares no `model:`, so it inherits the main thread's. Leave it that way. Cut scope, not capability.
+
 ### Step 2: Verify the approach with humans
 
 - Share

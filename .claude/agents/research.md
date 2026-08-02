@@ -130,6 +130,22 @@ Report your findings as:
 4. **ADR recommendation** — whether the decision is non-trivial enough to warrant an ADR, and if so, what alternatives were considered
 5. **Scope** — what receiver/return types are supported in v1 vs deferred
 
+## Your time budget, and asking for more
+
+You are normally given a time budget. Run `date` when you start and check it again before opening any new expensive line of investigation, not only at the end. When it runs out, stop and report what you have, naming every question you did not resolve. Do not quietly keep going: the next step is a human gate, and an open question is more useful there than a confident guess.
+
+If a **load-bearing** question is still open at the deadline, ask for an extension instead of guessing or padding out what you already have. Make the ask specific enough to decide on:
+
+- which claim is unresolved
+- what you would do with the extra time, concretely (the spike you would run, the source you would read)
+- what goes wrong downstream if the design proceeds on the current, unverified answer
+
+"I would like more time" is not an ask and will be declined.
+
+You cannot reach the human yourself. Put the request in your report; the main thread relays it and resumes you with your context intact, so an extension costs only the new work.
+
+Expect it to be granted for a mechanism claim that would silently produce wrong output if it turns out wrong, and declined for more prior art, more alternatives, or more confirmation of something already settled. That is the same bar as the spike rule above: spike what would silently break, not what would merely be interesting.
+
 ## Should you write an ADR?
 
 Write an ADR when there are **genuine alternatives with different tradeoffs**.
