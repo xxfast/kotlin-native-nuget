@@ -380,7 +380,13 @@ private fun valueClassReconstruction(plan: ForwardCallablePlan, call: ForwardNat
 
 internal fun ForwardCallablePlanCatalog.planFor(symbol: String): ForwardCallablePlan? {
   val matches: List<ForwardCallablePlan> = plans.filter { plan -> plan.invocation.symbol == symbol }
-  require(matches.size <= 1) { "Forward callable catalog has duplicate plans for $symbol" }
+  // ADR-074: this invariant must be unreachable once the `allDeclarations` funnel filters
+  // `isExpect` (an unfiltered expect/actual pair is what used to trip it). A fresh firing means a
+  // *new* source of duplicate qualified names, not this one.
+  require(matches.size <= 1) {
+    "Forward callable catalog has duplicate plans for $symbol; two declarations share one " +
+        "qualified name (an unfiltered expect/actual pair is the usual cause)"
+  }
   return matches.singleOrNull()
 }
 

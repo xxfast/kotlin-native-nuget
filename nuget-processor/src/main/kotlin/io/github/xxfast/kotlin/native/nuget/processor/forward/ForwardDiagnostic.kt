@@ -72,6 +72,12 @@ internal enum class ForwardDiagnosticKind(val severity: ForwardDiagnosticSeverit
    *  admitted type, which would be noise at scale), aggregating every dependency-module type the
    *  closure admitted into the export set. */
   INFO_EXPORTED_FROM_DEPENDENCY(ForwardDiagnosticSeverity.INFO),
+
+  /** ADR-074: an `expect class` actualized by an `actual typealias` whose target is not in the
+   *  forward export set (a platform-library type, a stdlib type, or an out-of-scope package).
+   *  Distinct from SKIPPED_UNEXPORTED_DEPENDENCY_TYPE, whose `include(...)` hint is wrong here:
+   *  a platform library can never be brought into scope. */
+  SKIPPED_ACTUAL_TYPEALIAS_TARGET(ForwardDiagnosticSeverity.WARNING),
 }
 
 /**
@@ -137,6 +143,9 @@ internal fun ForwardPlanSkipReason.toDiagnosticKind(): ForwardDiagnosticKind = w
   ForwardPlanSkipReason.UNEXPORTED_DEPENDENCY_TYPE ->
     ForwardDiagnosticKind.SKIPPED_UNEXPORTED_DEPENDENCY_TYPE
 
+  ForwardPlanSkipReason.ACTUAL_TYPEALIAS_TARGET ->
+    ForwardDiagnosticKind.SKIPPED_ACTUAL_TYPEALIAS_TARGET
+
   ForwardPlanSkipReason.CHAR,
   ForwardPlanSkipReason.ENUM,
   ForwardPlanSkipReason.HANDLE,
@@ -165,8 +174,9 @@ internal fun ForwardPlanSkipReason.toDiagnosticKind(): ForwardDiagnosticKind = w
  *
  * @param detail ADR-066: the unexported dependency type's qualified name
  *   ([ForwardCallableCatalogEntry.Skipped.detail]), used only by [ForwardPlanSkipReason
- *   .UNEXPORTED_DEPENDENCY_TYPE] to name the exact `include(...)` fix. Ignored by every other
- *   reason.
+ *   .UNEXPORTED_DEPENDENCY_TYPE] to name the exact `include(...)` fix. ADR-074: for
+ *   [ForwardPlanSkipReason.ACTUAL_TYPEALIAS_TARGET], the same slot instead carries
+ *   `"<expect qualified name>-><target rendered name>"`. Ignored by every other reason.
  */
 internal fun ForwardPlanSkipReason.diagnosticHint(detail: String? = null): String = when (this) {
   ForwardPlanSkipReason.UNEXPORTED_DEPENDENCY_TYPE -> {
@@ -175,6 +185,14 @@ internal fun ForwardPlanSkipReason.diagnosticHint(detail: String? = null): Strin
       ?: "the dependency's package"
     "add include(\"$dependencyPackage\") to nuget { publish { } }, or expose a type from an " +
         "in-scope package instead"
+  }
+
+  ForwardPlanSkipReason.ACTUAL_TYPEALIAS_TARGET -> {
+    val parts: List<String>? = detail?.split("->", limit = 2)?.takeIf { it.size == 2 }
+    val expectName: String = parts?.get(0) ?: "the expect type"
+    val targetName: String = parts?.get(1) ?: "its actual typealias target"
+    "the `actual typealias` for `$expectName` resolves to `$targetName`, which the forward " +
+        "direction does not export; wrap it in a class you declare and expose that instead"
   }
 
   ForwardPlanSkipReason.COLLECTION ->

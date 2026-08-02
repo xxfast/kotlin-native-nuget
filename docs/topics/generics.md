@@ -278,6 +278,7 @@ public void DefaultScores_ReturnsReadOnlyDictionaryOfStringInt()
         <a href="collections.md">Collections</a>
         <a href="value-classes.md">Value classes</a>
         <a href="nuget-dsl.md">The nuget {} DSL</a>
+        <a href="expect-actual.md">expect/actual declarations</a>
     </category>
     <category ref="external">
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/010-generics-mapping.md">ADR-010: Generics mapping</a>

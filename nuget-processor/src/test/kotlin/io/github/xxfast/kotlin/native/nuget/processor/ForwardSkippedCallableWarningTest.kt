@@ -90,6 +90,8 @@ class ForwardSkippedCallableWarningTest {
         ForwardPlanSkipReason.INHERITED_MEMBER,
         // ADR-066: a reachable dependency-module type the closure did not admit.
         ForwardPlanSkipReason.UNEXPORTED_DEPENDENCY_TYPE,
+        // ADR-074: an actual typealias target the forward direction does not export.
+        ForwardPlanSkipReason.ACTUAL_TYPEALIAS_TARGET,
       ),
       dropped,
     )

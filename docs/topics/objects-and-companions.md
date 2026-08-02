@@ -187,5 +187,6 @@ public void CompanionFactoryMethod()
     <category ref="related">
         <a href="interfaces-abstract-sealed.md">Interfaces, abstract and sealed classes</a>
         <a href="top-level-declarations.md">Top-level declarations</a>
+        <a href="expect-actual.md">expect/actual declarations</a>
     </category>
 </seealso>

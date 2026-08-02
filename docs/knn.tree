@@ -26,6 +26,7 @@
         <toc-element topic="enums.md"/>
         <toc-element topic="objects-and-companions.md"/>
         <toc-element topic="top-level-declarations.md"/>
+        <toc-element topic="expect-actual.md"/>
         <toc-element topic="extensions.md"/>
         <toc-element topic="generics.md"/>
         <toc-element topic="value-classes.md"/>

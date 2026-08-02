@@ -232,6 +232,9 @@ class ForwardBridgeTypeClassifierTest {
     // stand-in keeps these tests on the pre-existing "declaration is not in the exported
     // object-handle set" message rather than the new dependency-module one.
     "getContainingFile" to proxy<com.google.devtools.ksp.symbol.KSFile>(),
+    // ADR-074: every fixture here is an ordinary (non-`expect`) declaration; the classifier now
+    // reads this before anything else in `classifyNonNullable`.
+    "isExpect" to false,
   )
 
   private fun constructor(underlying: KSType): KSFunctionDeclaration = proxy(

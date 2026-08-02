@@ -1,0 +1,29 @@
+package io.github.xxfast.kotlin.native.nuget.test.platform
+
+// ADR-074 fixture: the mingwX64 actuals for `PlatformApi.kt`. Deliberately named differently from
+// the macosArm64 file (`PlatformApiMacos.kt`) so Decision 3 (the C# static class name comes from
+// the EXPECT's file, `PlatformApi`, not the actual's) is under test rather than accidentally
+// satisfied by two identically-named files. The public surface here must stay identical to
+// `PlatformApiMacos.kt`; only the returned values differ.
+
+actual class Device actual constructor(private val name: String) {
+  actual fun describe(): String = "$name on mingw"
+  actual val id: String = "mingw-device"
+}
+
+actual class Sensor {
+  actual fun reading(): Int = 24
+}
+
+actual fun platformName(): String = "mingw"
+actual val platformTag: String = "win-x64"
+
+actual object PlatformRegistry {
+  actual fun count(): Int = 1
+}
+
+actual typealias Clock = SystemClock
+
+/** Redirect at a RETURN position: this IS an `actual`, so per Decision 3 it binds as
+ *  `PlatformApi.defaultClock()` in the generated C#, returning `SystemClock` per Decision 2. */
+actual fun defaultClock(): Clock = SystemClock()
