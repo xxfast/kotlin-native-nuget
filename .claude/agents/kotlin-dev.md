@@ -79,7 +79,8 @@ The [refactorer agent](refactorer.md) formats your files afterward. Report the l
   - `./gradlew -p nuget-plugin koverXmlReport` → `nuget-plugin/build/reports/kover/report.xml` (nuget-plugin is a composite includeBuild; Kover cannot aggregate across that boundary, so the two reports stay separate by design)
 - `nuget-plugin` pins the Kover version inline in its `plugins {}` block because the included build does not consume the root version catalog. If you bump Kover, bump both places.
 - `:test-library` is Kotlin/Native and has no coverage tooling; leave it out.
-- Use `koverHtmlReport` locally to check whether the code you just added is actually exercised before reporting done.
+- **Check coverage on the code you added, before you report done, and say what it showed.** `koverLog` prints the summary straight to the console and is the fast one; `koverHtmlReport` when you need to see *which* branch is cold. The usual miss is a branch you introduced and never reached: a new skip reason, a fallback, a defensive guard, the second half of a `when`. Finding it here costs seconds; finding it in review costs a round trip, and not finding it at all means shipping a path no test has ever executed.
+- **Within reason.** Codecov is `informational: true`, deliberately not a gate. Coverage is a diagnostic for finding branches you forgot to test, never a number to chase. Do not write a test whose purpose is to touch a line, and do not restructure code to make a report look better. Deliberately uncovered code is a fine outcome (a `require` that should never fire, an `else` that is unreachable by construction); just name it in your report rather than leaving it unmentioned, so the reader knows it was a decision and not an oversight.
 
 ## Key patterns
 
