@@ -3,6 +3,7 @@ package io.github.xxfast.kotlin.native.nuget.processor.cir
 import com.google.devtools.ksp.processing.KSPLogger
 import com.google.devtools.ksp.symbol.ClassKind
 import com.google.devtools.ksp.symbol.KSClassDeclaration
+import com.google.devtools.ksp.symbol.KSDeclaration
 import com.google.devtools.ksp.symbol.KSFunctionDeclaration
 import com.google.devtools.ksp.symbol.KSPropertyDeclaration
 import com.google.devtools.ksp.symbol.KSType
@@ -55,6 +56,10 @@ internal fun translate(
   // position, and therefore gets a concrete `sealed class Foo : IFoo` backing wrapper plus
   // `foo_*` dispatch exports alongside the unconditional `IFoo` declaration.
   interfaceBackingClasses: List<KSClassDeclaration> = emptyList(),
+  // ADR-074 Decision 3: the by-qualified-name index of every filtered `expect` declaration, so a
+  // top-level `actual fun`/`val` can take its C# static class name from the *expect's* file
+  // instead of its own (per-target) file.
+  expectsByName: Map<String, KSDeclaration> = emptyMap(),
 ): CirFile {
   val (genericClasses, regularClasses) = classes.partition { it.typeParameters.isNotEmpty() }
 
@@ -73,12 +78,26 @@ internal fun translate(
   fun namespaceOf(pkg: String): String =
     mapPackageToNamespace(pkg, context.rootPackage, context.rootNamespace)
 
+  // ADR-074 Decision 3: without this, `expect fun platformName()` in `nativeMain/Platform.kt` with
+  // actuals in `macosArm64Main/PlatformMacos.kt` and `mingwX64Main/PlatformMingw.kt` produces
+  // `public static class PlatformMacos` in one target's `Interop.cs` and `PlatformMingw` in the
+  // other's, while `packNuget` packages exactly one target's output and ships every target's
+  // binary. Kotlin requires an `expect` and its `actual` to live in the same module, so within one
+  // compilation this lookup always hits for a genuine `actual`; the fallback is defensive only.
+  fun expectFileNameOrNull(declaration: KSDeclaration): String? {
+    if (!declaration.isActual) return null
+    val qualifiedName: String = declaration.qualifiedName?.asString() ?: return null
+    return expectsByName[qualifiedName]?.containingFile?.fileName?.removeSuffix(".kt")
+  }
+
   fun groupByNamespaceAndFile(
     funcs: List<KSFunctionDeclaration>,
   ): Map<Pair<String, String>, List<KSFunctionDeclaration>> =
     funcs.groupBy { func ->
       val namespace: String = namespaceOf(func.packageName.asString())
-      val fileName: String = func.containingFile?.fileName?.removeSuffix(".kt") ?: context.className
+      val fileName: String = expectFileNameOrNull(func)
+        ?: func.containingFile?.fileName?.removeSuffix(".kt")
+        ?: context.className
       namespace to fileName
     }
 
@@ -87,7 +106,9 @@ internal fun translate(
   ): Map<Pair<String, String>, List<KSPropertyDeclaration>> =
     props.groupBy { prop ->
       val namespace: String = namespaceOf(prop.packageName.asString())
-      val fileName: String = prop.containingFile?.fileName?.removeSuffix(".kt") ?: context.className
+      val fileName: String = expectFileNameOrNull(prop)
+        ?: prop.containingFile?.fileName?.removeSuffix(".kt")
+        ?: context.className
       namespace to fileName
     }
 

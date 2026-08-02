@@ -108,11 +108,16 @@ in the clinic fixture) go through the same shared callable plan as other ordinar
 ([ADR-062](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/062-forward-callable-plan.md))
 and box the result with `StableRef`, matching companion factories such as `Cat.fromName`.
 
+A top-level `expect fun`/`expect val` follows the same grouping rule, but the static class name is
+taken from the **expect's** file, not whichever `{target}Main` file supplied the `actual` body. See
+[expect/actual declarations](expect-actual.md).
+
 <seealso>
     <category ref="related">
         <a href="objects-and-companions.md">Objects and companions</a>
         <a href="extensions.md">Extensions</a>
         <a href="classes-and-objects.md">Classes and objects</a>
+        <a href="expect-actual.md">expect/actual declarations</a>
     </category>
     <category ref="external">
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/007-top-level-function-class-naming.md">ADR-007: Top-level function class naming</a>

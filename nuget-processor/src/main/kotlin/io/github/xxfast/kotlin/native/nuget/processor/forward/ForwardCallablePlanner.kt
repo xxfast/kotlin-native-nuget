@@ -65,6 +65,13 @@ internal enum class ForwardPlanSkipReason(val droppedFromCSharp: Boolean) {
    *  own diagnostic kind (`SKIPPED_UNEXPORTED_DEPENDENCY_TYPE`) naming the `include(...)` fix,
    *  rather than the generic "declaration is not in the exported object-handle set" message. */
   UNEXPORTED_DEPENDENCY_TYPE(droppedFromCSharp = true),
+
+  /** ADR-074: an `expect class` actualized by an `actual typealias` whose erased target the
+   *  forward direction does not export (a platform-library type, a stdlib type, an out-of-scope
+   *  package, or a parameterized target — v1 admits only a redirect to a plain class). Distinct
+   *  from [UNEXPORTED_DEPENDENCY_TYPE], whose `include(...)` hint is wrong here: a platform
+   *  library can never be brought into scope. */
+  ACTUAL_TYPEALIAS_TARGET(droppedFromCSharp = true),
 }
 
 internal sealed interface ForwardCallableCatalogEntry {
@@ -105,7 +112,13 @@ internal data class ForwardCallablePlanCatalog(
 
   fun propertyFor(symbol: String): ForwardPropertyPlan? {
     val matches: List<ForwardPropertyPlan> = propertyPlans.filter { plan -> plan.symbol == symbol }
-    require(matches.size <= 1) { "Forward property catalog has duplicate plans for $symbol" }
+    // ADR-074: this invariant must be unreachable once the `allDeclarations` funnel filters
+    // `isExpect` (an unfiltered expect/actual pair is what used to trip it). A fresh firing means
+    // a *new* source of duplicate qualified names, not this one.
+    require(matches.size <= 1) {
+      "Forward property catalog has duplicate plans for $symbol; two declarations share one " +
+          "qualified name (an unfiltered expect/actual pair is the usual cause)"
+    }
     return matches.singleOrNull()
   }
 
@@ -642,7 +655,8 @@ internal class ForwardCallablePlanner(
     if (ineligible != null) {
       return ForwardCallableCatalogEntry.Skipped(
         symbol, requireNotNull(ineligible.inputSkipReason()), node = node,
-        detail = ineligible.unexportedDependencyDetail(),
+        detail = ineligible.actualTypeAliasTargetDetail()
+          ?: ineligible.unexportedDependencyDetail(),
       )
     }
 
@@ -780,7 +794,8 @@ internal class ForwardCallablePlanner(
     if (ineligible != null) {
       return ForwardCallableCatalogEntry.Skipped(
         symbol, requireNotNull(ineligible.inputSkipReason()), node = node,
-        detail = ineligible.unexportedDependencyDetail(),
+        detail = ineligible.actualTypeAliasTargetDetail()
+          ?: ineligible.unexportedDependencyDetail(),
       )
     }
 
@@ -788,7 +803,7 @@ internal class ForwardCallablePlanner(
     if (resultShape == null) {
       return ForwardCallableCatalogEntry.Skipped(
         symbol, requireNotNull(result.skipReason()), node = node,
-        detail = result.unexportedDependencyDetail(),
+        detail = result.actualTypeAliasTargetDetail() ?: result.unexportedDependencyDetail(),
       )
     }
 
@@ -1174,6 +1189,16 @@ internal class ForwardCallablePlanner(
       ?.takeIf { unsupported -> unsupported.isUnexportedDependency }
       ?.rendered
 
+  /** ADR-074: the `expect` name and its erased-to target, when this (possibly nullable-wrapped)
+   *  type is the direct reason a callable was dropped because its `actual typealias` target is
+   *  not exportable. Encoded as `"<expect qualified name>-><target rendered name>"` so
+   *  [ForwardDiagnosticKind.SKIPPED_ACTUAL_TYPEALIAS_TARGET]'s hint can name both without a
+   *  second detail slot on [ForwardCallableCatalogEntry.Skipped]. `null` for every other reason. */
+  private fun BridgeType.actualTypeAliasTargetDetail(): String? =
+    (unwrapNullable() as? BridgeType.Unsupported)
+      ?.takeIf { unsupported -> unsupported.isActualTypeAliasTarget }
+      ?.let { unsupported -> "${unsupported.actualTypeAliasExpectName}->${unsupported.rendered}" }
+
   /**
    * ADR-066: a collection whose element (or map key/value) type is itself unsupported must skip
    * the whole callable through the normal named-diagnostic path, not reach the plan validator —
@@ -1270,10 +1295,13 @@ internal class ForwardCallablePlanner(
     }
 
     is BridgeType.RawKSType -> error("Forward planner received raw KSP type $rendered")
-    is BridgeType.Unsupported -> if (isUnexportedDependency) {
-      ForwardPlanSkipReason.UNEXPORTED_DEPENDENCY_TYPE
-    } else {
-      ForwardPlanSkipReason.UNSUPPORTED
+    // ADR-074: checked ahead of isUnexportedDependency -- an actual-typealias-target redirect can
+    // land on either an out-of-scope module-local type or a cross-module one, and both must carry
+    // this ADR's own diagnostic, not the generic UNEXPORTED_DEPENDENCY_TYPE include(...) hint.
+    is BridgeType.Unsupported -> when {
+      isActualTypeAliasTarget -> ForwardPlanSkipReason.ACTUAL_TYPEALIAS_TARGET
+      isUnexportedDependency -> ForwardPlanSkipReason.UNEXPORTED_DEPENDENCY_TYPE
+      else -> ForwardPlanSkipReason.UNSUPPORTED
     }
   }
 

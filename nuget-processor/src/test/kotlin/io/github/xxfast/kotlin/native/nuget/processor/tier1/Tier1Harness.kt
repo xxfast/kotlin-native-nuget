@@ -48,15 +48,21 @@ internal object Tier1Harness {
    *
    * @param libraries ADR-066: extra KSP `libraries` classpath entries beyond `kotlin-stdlib`, e.g.
    *   a [Tier1DependencyLibrary]-compiled jar standing in for a genuinely separate Gradle module.
+   * @param commonSources ADR-074: an `expect`/`actual` fixture's `expect` half, compiled as a
+   *   separate `commonSourceRoots` root from [sources]' `sourceRoots` — mirroring a real
+   *   multiplatform compilation's `nativeMain`/`{target}Main` split (Verified: a JVM KSP2 run so
+   *   configured processes both, `EXIT=OK`, `getAllFiles()` listing both). File names must not
+   *   collide with [sources]'.
    */
   fun run(
     sources: Map<String, String>,
     processorOptions: Map<String, String> = emptyMap(),
     libraries: List<File> = emptyList(),
+    commonSources: Map<String, String> = emptyMap(),
   ): Tier1Result {
     val workDir: File = Files.createTempDirectory("nuget-tier1-").toFile()
     try {
-      return runIn(workDir, sources, processorOptions, libraries)
+      return runIn(workDir, sources, processorOptions, libraries, commonSources = commonSources)
     } finally {
       workDir.deleteRecursively()
     }
@@ -124,10 +130,20 @@ internal object Tier1Harness {
     incremental: Boolean = false,
     modifiedSources: List<File> = emptyList(),
     removedSources: List<File> = emptyList(),
+    // ADR-074: an `expect`/`actual` fixture's `expect` half. Written under its own root and
+    // wired through `KSPConfig.Builder.commonSourceRoots` rather than mixed into [sourceDir],
+    // mirroring the real `nativeMain` (common) vs `{target}Main` (platform) split KSP2 sees for
+    // an actual native compilation (ADR-074 spike finding 1).
+    commonSources: Map<String, String> = emptyMap(),
   ): Tier1Result {
     val sourceDir: File = workDir.resolve("src").apply { mkdirs() }
     val fixtureFiles: List<File> = sources.map { (fileName, kotlinSource) ->
       sourceDir.resolve(fileName).apply { writeText(kotlinSource) }
+    }
+
+    val commonSourceDir: File = workDir.resolve("common-src").apply { mkdirs() }
+    val commonFixtureFiles: List<File> = commonSources.map { (fileName, kotlinSource) ->
+      commonSourceDir.resolve(fileName).apply { writeText(kotlinSource) }
     }
 
     val kotlinOutputDir: File = workDir.resolve("ksp-out").apply { mkdirs() }
@@ -141,6 +157,7 @@ internal object Tier1Harness {
     val config: KSPJvmConfig = KSPJvmConfig.Builder().apply {
       moduleName = "tier1-fixture"
       sourceRoots = listOf(sourceDir)
+      if (commonFixtureFiles.isNotEmpty()) commonSourceRoots = listOf(commonSourceDir)
       this.libraries = listOf(Tier1Classpath.kotlinStdlib) + libraries
       projectBaseDir = workDir
       outputBaseDir = workDir
@@ -198,7 +215,14 @@ internal object Tier1Harness {
     }
 
     val compileMessages = RecordingMessageCollector()
-    compileGenerated(workDir, fixtureFiles, generated, compileMessages, libraries)
+    // ADR-074: best-effort only when `commonSources` is non-empty. `K2JVMCompiler.exec()` here
+    // is a plain single-target compile with no `-Xcommon-sources`/multiplatform wiring, unlike
+    // KSP2's own Analysis API session above, so an expect/actual fixture may legitimately fail
+    // this step even though generation itself succeeded; callers exercising such a fixture must
+    // treat `compileErrors` as informational (mirrors `runIncremental`'s existing precedent).
+    compileGenerated(
+      workDir, fixtureFiles + commonFixtureFiles, generated, compileMessages, libraries,
+    )
 
     return Tier1Result(
       kspExitCode = kspExitCode.name,

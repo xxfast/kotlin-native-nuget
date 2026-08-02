@@ -386,6 +386,7 @@ binding or breaking the build; see [Publishing Kotlin to C#](forward-overview.md
         <a href="collections.md">Collections</a>
         <a href="extensions.md">Extensions</a>
         <a href="nuget-dsl.md">The nuget {} DSL</a>
+        <a href="expect-actual.md">expect/actual declarations</a>
     </category>
     <category ref="external">
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/003-memory-management-across-bridge.md">ADR-003: Memory management across the bridge</a>

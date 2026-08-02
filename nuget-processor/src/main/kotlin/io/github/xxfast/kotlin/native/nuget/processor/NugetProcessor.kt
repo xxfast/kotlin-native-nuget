@@ -1,5 +1,6 @@
 package io.github.xxfast.kotlin.native.nuget.processor
 
+import com.google.devtools.ksp.findActualType
 import com.google.devtools.ksp.getVisibility
 import com.google.devtools.ksp.processing.CodeGenerator
 import com.google.devtools.ksp.processing.Dependencies
@@ -12,6 +13,7 @@ import com.google.devtools.ksp.symbol.KSDeclaration
 import com.google.devtools.ksp.symbol.KSFunctionDeclaration
 import com.google.devtools.ksp.symbol.KSPropertyDeclaration
 import com.google.devtools.ksp.symbol.KSType
+import com.google.devtools.ksp.symbol.KSTypeAlias
 import com.google.devtools.ksp.symbol.ClassKind
 import com.google.devtools.ksp.symbol.Modifier
 import com.google.devtools.ksp.symbol.Visibility
@@ -165,11 +167,46 @@ class NugetProcessor(
       return effectiveInclude.any(::matches)
     }
 
-    val allDeclarations: List<KSDeclaration> = resolver.getAllFiles()
+    // ADR-074: for a native compilation `getAllFiles()` returns both halves of every
+    // `expect`/`actual` pair as two files of one compilation (Verified, spike finding 1), so this
+    // raw list is the shared input for the `isExpect` filter below, the by-name expect index, and
+    // Decision 2's `actual typealias` target map.
+    val allFilesDeclarations: List<KSDeclaration> = resolver.getAllFiles()
       .flatMap { it.declarations }
+      .toList()
+
+    val allDeclarations: List<KSDeclaration> = allFilesDeclarations
       .filter { it.packageName.asString() != "io.github.xxfast.kotlin.native.nuget.generated" }
+      // ADR-074: the `actual` is the export root. Without this every pair is planned twice under
+      // one qualified name and trips a catalog duplicate guard. Same rule, same three declaration
+      // kinds, as Kotlin/Native's own C export (`CAdapterGenerator`) and ObjC export. No
+      // diagnostic: filtering an `expect` is normal and every Kotlin backend does it silently.
+      .filter { !it.isExpect }
       .filter { isPackageExported(it.packageName.asString()) }
       .toList()
+
+    // ADR-074: kept because the `actual` is structurally complete but metadata-poor (no KDoc, no
+    // annotations, no parameter defaults). `findExpects()` is Verified empty on KSP 2.3.10, so the
+    // qualified name is the only available link. Consumed by Decision 2 (actual typealias target
+    // redirect) and Decision 3 (per-file C# static class naming).
+    val expectsByName: Map<String, KSDeclaration> = allFilesDeclarations
+      .filter { it.isExpect }
+      .mapNotNull { declaration ->
+        declaration.qualifiedName?.asString()?.let { name -> name to declaration }
+      }
+      .toMap()
+
+    // ADR-074 Decision 2: collected from the same funnel input, before the `isExpect` filter drops
+    // the paired expect class. `findActualType()` resolves the alias to its target
+    // KSClassDeclaration (Verified, spike finding 8); keyed by the alias's own qualified name,
+    // which is always the *expect*'s qualified name (Kotlin requires an `actual typealias` to
+    // share the expect's package and simple name), since a type reference to that name is exactly
+    // what the classifier/reachability-closure redirect needs to intercept.
+    val actualTypeAliasTargets: Map<String, KSClassDeclaration> = allFilesDeclarations
+      .filterIsInstance<KSTypeAlias>()
+      .filter { it.isActual }
+      .mapNotNull { alias -> alias.qualifiedName?.asString()?.let { it to alias.findActualType() } }
+      .toMap()
 
     val allFunctions: List<KSFunctionDeclaration> = allDeclarations
       .filterIsInstance<KSFunctionDeclaration>()
@@ -258,6 +295,7 @@ class NugetProcessor(
     val reachability: ForwardReachabilityResult = ForwardReachabilityClosure(
       isPackageExported = ::isPackageExported,
       crossModuleAdmissionAllowed = effectiveInclude.isNotEmpty(),
+      actualTypeAliasTargets = actualTypeAliasTargets,
     ).walk(
       classes = rootClasses,
       valueClasses = rootValueClasses,
@@ -348,6 +386,7 @@ class NugetProcessor(
         exportedObjectHandles = exportedObjectHandles,
         rootPackage = context.rootPackage,
         rootNamespace = context.rootNamespace,
+        actualTypeAliasTargets = actualTypeAliasTargets,
       ),
     )
     val forwardPlanner = ForwardCallablePlanner(forwardClassifier)
@@ -399,6 +438,7 @@ class NugetProcessor(
       functions, genericFunctions, extensionFunctions, extensionProperties,
       allClasses, enums, interfaces, sealedClasses, objects, properties,
       constProperties, valueClasses, suspendFunctions, callableCatalog, deps, reachableInterfaces,
+      expectsByName,
     )
 
     // ADR-064: an ERROR_* diagnostic (e.g. ERROR_CSHARP_SIGNATURE_COLLISION, ADR-034) already
@@ -460,6 +500,7 @@ class NugetProcessor(
     callableCatalog: ForwardCallablePlanCatalog,
     deps: Dependencies,
     reachableInterfaces: List<KSClassDeclaration>,
+    expectsByName: Map<String, KSDeclaration>,
   ): CirFile {
     val cirFile: CirFile = translate(
       context,
@@ -479,6 +520,7 @@ class NugetProcessor(
       suspendFunctions,
       callableCatalog,
       reachableInterfaces,
+      expectsByName,
     )
 
     val csharp: String = renderer.render(cirFile)

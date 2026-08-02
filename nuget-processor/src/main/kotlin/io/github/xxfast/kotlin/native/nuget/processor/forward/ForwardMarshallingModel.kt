@@ -97,11 +97,23 @@ internal sealed interface BridgeType {
    *   .ForwardBridgeTypeContext.exportedObjectHandles]'s membership test for scope reasons, not
    *   because the shape itself is unsupported). Lets the planner route this specific case to
    *   `SKIPPED_UNEXPORTED_DEPENDENCY_TYPE` instead of the generic `SKIPPED_UNSUPPORTED_TYPE`.
+   * @param isActualTypeAliasTarget ADR-074: true when [rendered] is the qualified name (or simple
+   *   name, if unqualified) of an `actual typealias`'s erased target that the forward direction
+   *   cannot export (a platform-library type, a stdlib type, an out-of-scope package, or a
+   *   parameterized target — v1 admits only a redirect to a plain class). Lets the planner route
+   *   this case to its own `SKIPPED_ACTUAL_TYPEALIAS_TARGET` diagnostic, whose hint differs from
+   *   [isUnexportedDependency]'s: a platform library can never be brought into scope with
+   *   `include(...)`.
+   * @param actualTypeAliasExpectName ADR-074: the `expect` class's qualified name, when
+   *   [isActualTypeAliasTarget] is true; carried for the diagnostic hint's "the actual typealias
+   *   for `<expect name>` resolves to..." message.
    */
   data class Unsupported(
     val rendered: kotlin.String,
     val reason: kotlin.String,
     val isUnexportedDependency: kotlin.Boolean = false,
+    val isActualTypeAliasTarget: kotlin.Boolean = false,
+    val actualTypeAliasExpectName: kotlin.String? = null,
   ) : BridgeType
 
   /** A collection whose component type was lost during classification. */

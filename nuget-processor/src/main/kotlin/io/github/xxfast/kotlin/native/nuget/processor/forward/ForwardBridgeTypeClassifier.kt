@@ -18,6 +18,11 @@ internal data class ForwardBridgeTypeContext(
   val exportedObjectHandles: Set<String>,
   val rootPackage: String = "",
   val rootNamespace: String = "",
+  /** ADR-074 Decision 2: `actual typealias` targets, keyed by the `expect` class's qualified name.
+   *  A type reference to such a name resolves to the `expect` class declaration itself, never to
+   *  the alias (spike finding 8), so the classifier must redirect by name before it ever reaches
+   *  the [exportedObjectHandles] membership check. */
+  val actualTypeAliasTargets: Map<String, KSClassDeclaration> = emptyMap(),
 )
 
 /**
@@ -55,6 +60,18 @@ internal class ForwardBridgeTypeClassifier(
         classDeclaration.simpleName.asString(),
         "local and anonymous declarations are not bridgeable",
       )
+
+    // ADR-074 Decision 2: a reference to an `actual typealias`-actualized `expect class` resolves
+    // to the `expect` declaration itself, from every source set, never to the alias (spike finding
+    // 8) -- `expandAliases()` (ADR-018) structurally cannot see through it, since `KSType
+    // .declaration` here is a class, not a `KSTypeAlias`. Applied before every other branch below,
+    // including the `exportedObjectHandles` membership check, so the C# type this produces is
+    // always the target's.
+    if (classDeclaration.isExpect) {
+      context.actualTypeAliasTargets[qualifiedName]?.let { target ->
+        return classifyActualTypeAliasTarget(qualifiedName, target)
+      }
+    }
 
     knownScalarType(qualifiedName)?.let { return it }
     if (qualifiedName == "kotlin.Char") return BridgeType.Char
@@ -121,6 +138,39 @@ internal class ForwardBridgeTypeClassifier(
       )
     }
     return BridgeType.ObjectHandle(qualifiedName, csharpType = csharpTypeNameFor(classDeclaration))
+  }
+
+  /**
+   * ADR-074 Decision 2 (2a): erase an `actual typealias` to its target and classify that instead
+   * — the C# type is always the target's, never the `expect`'s, exactly as an ordinary
+   * `typealias` is erased under ADR-018. v1 admits only a redirect to a plain, non-generic class
+   * (Consequences, "deferred" list); anything else, including a target the forward direction
+   * cannot otherwise export, takes the `SKIPPED_ACTUAL_TYPEALIAS_TARGET` path via
+   * [BridgeType.Unsupported.isActualTypeAliasTarget] rather than the generic
+   * `SKIPPED_UNEXPORTED_DEPENDENCY_TYPE`/`SKIPPED_UNSUPPORTED_TYPE` messages, since a platform
+   * library or stdlib type can never be brought into scope with `include(...)`.
+   */
+  private fun classifyActualTypeAliasTarget(
+    expectQualifiedName: String,
+    target: KSClassDeclaration,
+  ): BridgeType {
+    val targetQualifiedName: String? = target.qualifiedName?.asString()
+    if (targetQualifiedName == null || target.typeParameters.isNotEmpty()) {
+      return BridgeType.Unsupported(
+        targetQualifiedName ?: target.simpleName.asString(),
+        "actual typealias target is not a plain, non-generic class",
+        isActualTypeAliasTarget = true,
+        actualTypeAliasExpectName = expectQualifiedName,
+      )
+    }
+    val classified: BridgeType = classifyNonNullable(target.asStarProjectedType())
+    if (classified is BridgeType.Unsupported) {
+      return classified.copy(
+        isActualTypeAliasTarget = true,
+        actualTypeAliasExpectName = expectQualifiedName,
+      )
+    }
+    return classified
   }
 
   /**

@@ -49,6 +49,11 @@ internal class ForwardReachabilityClosure(
    *  empty effective include set means "admit everything" for the module's own files (ADR-063),
    *  but must mean "no cross-module admission" here — the deliberate asymmetry ADR-066 documents. */
   private val crossModuleAdmissionAllowed: Boolean,
+  /** ADR-074 Decision 2: `actual typealias` targets, keyed by the `expect` class's qualified name.
+   *  A type reference to such a name resolves to the `expect` class declaration from every source
+   *  set (spike finding 8), never to the alias, so this closure must redirect by name exactly as
+   *  the classifier does. */
+  private val actualTypeAliasTargets: Map<String, KSClassDeclaration> = emptyMap(),
 ) {
   private val visited: MutableSet<String> = mutableSetOf()
   private val admitted: MutableMap<String, KSClassDeclaration> = mutableMapOf()
@@ -121,7 +126,16 @@ internal class ForwardReachabilityClosure(
    *  through a `?` to the same class declaration the walk needs to reach. */
   private fun visitType(type: KSType) {
     val expanded: KSType = type.expandAliases()
-    val classDeclaration: KSClassDeclaration = expanded.declaration as? KSClassDeclaration ?: return
+    val rawDeclaration: KSClassDeclaration = expanded.declaration as? KSClassDeclaration ?: return
+    val rawQualifiedName: String = rawDeclaration.qualifiedName?.asString() ?: return
+
+    // ADR-074 Decision 2: a reference to an `actual typealias`-actualized `expect class` resolves
+    // to the `expect` declaration itself (spike finding 8), so `expandAliases()` above structurally
+    // cannot see through it. Redirect by name to the alias's erased target before this closure
+    // applies any of its own rules to it.
+    val classDeclaration: KSClassDeclaration =
+      if (rawDeclaration.isExpect) actualTypeAliasTargets[rawQualifiedName] ?: rawDeclaration
+      else rawDeclaration
     val qualifiedName: String = classDeclaration.qualifiedName?.asString() ?: return
 
     if (qualifiedName in INTRINSIC_TERMINALS) {
@@ -138,6 +152,11 @@ internal class ForwardReachabilityClosure(
     val qualifiedName: String = classDeclaration.qualifiedName?.asString() ?: return
     if (qualifiedName in visited) return
     visited += qualifiedName
+
+    // ADR-074 Decision 1 (defensive): a cross-module (klib) declaration reporting `isExpect` must
+    // not be admitted. Not spiked for a cross-module expect/actual pair; costs one condition and
+    // removes the question.
+    if (classDeclaration.isExpect) return
 
     // `containingFile == null` is the verified cross-module signal (ADR-066 spike): a klib
     // declaration carries no containing file, a module-local one always does.
