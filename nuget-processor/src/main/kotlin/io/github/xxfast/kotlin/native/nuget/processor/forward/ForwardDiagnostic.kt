@@ -120,8 +120,9 @@ internal object ForwardDiagnosticSink {
  *
  * `COLLECTION` and `NULLABLE` are fixed mappings per the ADR Decision table, not a general
  * input/return disambiguation: `COLLECTION` only currently arises from an input-position skip
- * (`Map`/`Set` method parameters — a `List`/`MutableList` element accepts them and every other
- * collection *return* already has a working shape), and `NULLABLE` is asserted at the
+ * (`List`/`Map`/`Set` method parameters whose component isn't wrappable — ADR-074 narrowed
+ * `List`/`MutableList` to the same `isWrappableComponent()` predicate `Map`/`Set` already used,
+ * and every collection *return* already has a working shape), and `NULLABLE` is asserted at the
  * nullable-Boolean-return site (ADR-061's deferred width). A future reason that is genuinely
  * ambiguous between input and return position would need the planner to carry that distinction
  * explicitly rather than relying on this table.

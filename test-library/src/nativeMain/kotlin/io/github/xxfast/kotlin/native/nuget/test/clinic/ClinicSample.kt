@@ -101,6 +101,12 @@ class Patient(val name: String) {
   /** MIGRATION.md Phase 7. Class method × `List<String>` parameter. */
   fun addTags(tags: List<String>): Int = tags.size
 
+  /** ADR-074. Class method × object-handle `List<Patient>` parameter — the reflective `_handle`
+   *  fallback in `Wrap<T>`, exercised end to end for the first time. This is the strongest
+   *  over-narrowing regression gate for the ADR-074 predicate change and must stay green both
+   *  before and after it lands. */
+  fun addBuddies(buddies: List<Patient>): Int = buddies.size
+
   /** ADR-073. Class method × `Map<String, Int>` parameter: String key (boxed via
    *  nuget_wrap_string), Int value (boxed via nuget_wrap_int). */
   fun recordScores(scores: Map<String, Int>): Int = scores.values.sum()

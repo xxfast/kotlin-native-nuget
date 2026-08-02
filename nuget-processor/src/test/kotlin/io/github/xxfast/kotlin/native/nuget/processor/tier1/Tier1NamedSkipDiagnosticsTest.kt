@@ -52,7 +52,9 @@ class Tier1NamedSkipDiagnosticsTest {
     )
     assertTrue(
       result.kspWarnings.any { it.contains(ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_INPUT.name) },
-      "expected a SKIPPED_UNSUPPORTED_INPUT diagnostic naming Patient.setMoods's Map parameter; " +
+      // ADR-074 correction: the diagnostic names the callable (Patient.setMoods), not the Map
+      // parameter itself.
+      "expected a SKIPPED_UNSUPPORTED_INPUT diagnostic naming the callable Patient.setMoods; " +
           "kspWarnings=${result.kspWarnings}",
     )
   }
@@ -84,8 +86,10 @@ class Tier1NamedSkipDiagnosticsTest {
     )
     assertTrue(
       result.kspWarnings.any { it.contains(ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_INPUT.name) },
-      "expected a SKIPPED_UNSUPPORTED_INPUT diagnostic naming Patient.setInitials's Set " +
-          "parameter; kspWarnings=${result.kspWarnings}",
+      // ADR-074 correction: the diagnostic names the callable (Patient.setInitials), not the Set
+      // parameter itself.
+      "expected a SKIPPED_UNSUPPORTED_INPUT diagnostic naming the callable Patient.setInitials; " +
+          "kspWarnings=${result.kspWarnings}",
     )
   }
 
@@ -117,8 +121,10 @@ class Tier1NamedSkipDiagnosticsTest {
     )
     assertTrue(
       result.kspWarnings.any { it.contains(ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_INPUT.name) },
-      "expected a SKIPPED_UNSUPPORTED_INPUT diagnostic naming Patient.setOptionalScores's Map " +
-          "parameter; kspWarnings=${result.kspWarnings}",
+      // ADR-074 correction: the diagnostic names the callable (Patient.setOptionalScores), not
+      // the Map parameter itself.
+      "expected a SKIPPED_UNSUPPORTED_INPUT diagnostic naming the callable " +
+          "Patient.setOptionalScores; kspWarnings=${result.kspWarnings}",
     )
   }
 
@@ -150,8 +156,10 @@ class Tier1NamedSkipDiagnosticsTest {
     )
     assertTrue(
       result.kspWarnings.any { it.contains(ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_INPUT.name) },
-      "expected a SKIPPED_UNSUPPORTED_INPUT diagnostic naming Patient.setTagGroups's Set " +
-          "parameter; kspWarnings=${result.kspWarnings}",
+      // ADR-074 correction: the diagnostic names the callable (Patient.setTagGroups), not the Set
+      // parameter itself.
+      "expected a SKIPPED_UNSUPPORTED_INPUT diagnostic naming the callable Patient.setTagGroups; " +
+          "kspWarnings=${result.kspWarnings}",
     )
   }
 

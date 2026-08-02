@@ -1211,16 +1211,16 @@ internal class ForwardCallablePlanner(
   }
 
   /**
-   * ADR-073: the component types the C# write side can actually box, for an input-position
-   * `Map`/`Set` (and their mutable variants): the six `nuget_wrap_*` primitives plus an object
-   * handle (via `CreateMap`/`CreateSet`'s reflective `_handle` fallback). Narrower than
-   * [isBridgeableComponent], which also admits `Nullable`, `ValueClass`, `Char`, nested
-   * `Collection`, `Enum` and the narrow-primitive kinds (none of which the write side can box),
-   * because those overshoots would otherwise either crash `packNuget`
-   * (`ValueClass`/`Nullable`/nested `Collection`, no `elementKotlinTypeName` branch) or throw at
-   * runtime (`NotSupportedException`, no matching `nuget_wrap_*`). Deliberately *not* applied to
-   * `List`; narrowing the list-element predicate is a separate, deferred decision (ADR-073 Scope
-   * item 1).
+   * ADR-073/ADR-074: the component types the C# write side can actually box, for an
+   * input-position `List`/`Map`/`Set` (and their mutable variants): the six `nuget_wrap_*`
+   * primitives plus an object handle (via `CreateList`/`CreateMap`/`CreateSet`'s reflective
+   * `_handle` fallback). Narrower than [isBridgeableComponent], which also admits `Nullable`,
+   * `ValueClass`, `Char`, nested `Collection`, `Enum` and the narrow-primitive kinds (none of
+   * which the write side can box), because those overshoots would otherwise either crash
+   * `packNuget` (`ValueClass`/`Nullable`/nested `Collection`, no `elementKotlinTypeName` branch)
+   * or throw at runtime (`NotSupportedException`, no matching `nuget_wrap_*`). Applied to every
+   * collection kind at an input position (ADR-074 closed the former `List`/`MutableList`
+   * carve-out).
    */
   private fun BridgeType.isWrappableComponent(): Boolean = when (this) {
     BridgeType.String -> true
@@ -1288,14 +1288,14 @@ internal class ForwardCallablePlanner(
     // crashes plan validation — route it through the same skip path as any other unsupported
     // input, preferring the (element ?: key ?: value)'s own reason (e.g.
     // UNEXPORTED_DEPENDENCY_TYPE) when known.
+    // ADR-074: one predicate for every collection kind at an input position. The leading
+    // !isBridgeableComponent() arm is kept so an element with its own attributable reason (e.g.
+    // UNEXPORTED_DEPENDENCY_TYPE, ADR-066) still reports that reason rather than the generic
+    // COLLECTION bucket.
     is BridgeType.Collection -> when {
       !isBridgeableComponent() ->
         (element ?: key ?: value)?.skipReason() ?: ForwardPlanSkipReason.UNSUPPORTED
 
-      kind == CollectionKind.LIST || kind == CollectionKind.MUTABLE_LIST -> null
-      // ADR-073: map/set inputs are admitted only for components the write side can box
-      // (isWrappableComponent); List is deliberately left on the wider isBridgeableComponent
-      // check above (ADR-073 Scope item 1, out of scope for this change).
       kind == CollectionKind.MAP || kind == CollectionKind.MUTABLE_MAP ->
         if (key?.isWrappableComponent() == true && value?.isWrappableComponent() == true) null
         else ForwardPlanSkipReason.COLLECTION

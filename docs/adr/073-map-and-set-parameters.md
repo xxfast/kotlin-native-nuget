@@ -140,9 +140,13 @@ mapped-types documentation; not spiked.)
 the Swift side ([KT-80417](https://youtrack.jetbrains.com/issue/KT-80417)). See
 [native-swift-export](https://kotlinlang.org/docs/native-swift-export.html). (Inferred, from docs.)
 
-**Kotlin/JS `@JsExport` and Kotlin/Wasm.** `List`, `MutableList`, `Map`, `MutableMap`, `Set`,
-`MutableSet` are **not exportable at all**; a declaration using one is a compile error. See
-[js-to-kotlin-interop](https://kotlinlang.org/docs/js-to-kotlin-interop.html). (Inferred, from docs.)
+**Kotlin/JS `@JsExport` and Kotlin/Wasm.** **Correction (ADR-074):** the current
+[js-to-kotlin-interop](https://kotlinlang.org/docs/js-to-kotlin-interop.html) page documents Kotlin
+collections mapping to `KtList`/`KtMap`/`KtSet` with conversions to JavaScript views, not a compile
+error; the compiler diagnostic for a non-exportable type in an exported signature is a suppressible
+warning (`NON_EXPORTABLE_TYPE`), not an error. This ADR's original text, that `List`, `MutableList`,
+`Map`, `MutableMap`, `Set`, `MutableSet` are "not exportable at all" and that a declaration using one
+is a compile error, was reading an older version of that page. (Inferred, from the current doc page.)
 
 **CsWinRT / WinRT.** Mirrors mutability at both positions:
 `IMap<K,V>` to `IDictionary<K,V>`, `IMapView<K,V>` to `IReadOnlyDictionary<K,V>`,
@@ -360,8 +364,8 @@ overshoots are already latent defects on the shipped `List` parameter path:
 |---|---|---|
 | `String`, `Int`, `Long`, `Float`, `Double`, `Boolean` | admits | works; `nuget_wrap_*` exists for exactly these six (`exports/GenericClassExports.kt:363-386`, Verified) and `CreateList` branches on exactly these six (`cir/CirMarshalRenderer.kt:299-304`, Verified) |
 | `ObjectHandle` | admits | works; `CreateList`'s reflective `_handle` fallback (`cir/CirMarshalRenderer.kt:305-311`, Verified). Covered by `Tier1StructuralInteropCsTest.kt:344` (Verified) |
-| `Byte`, `UByte`, `Short`, `UShort`, `UInt`, `ULong`, `Char` | admits | **runtime `NotSupportedException`**: no `nuget_wrap_*` for them, so `CreateList` falls to the `_handle` branch, finds no field, and throws (Inferred from reading both sites; not spiked) |
-| `Enum` | admits | same runtime `NotSupportedException` (Inferred, same reasoning) |
+| `Byte`, `UByte`, `Short`, `UShort`, `UInt`, `ULong`, `Char` | admits | **runtime `NotSupportedException`**: no `nuget_wrap_*` for them, so `CreateList` falls to the `_handle` branch, finds no field, and throws (Inferred from reading both sites, same `Wrap<T>` mechanism confirmed for the `Enum` row below; the narrow-primitive cases themselves were not separately spiked) |
+| `Enum` | admits | same runtime `NotSupportedException`, now **Verified by execution** ([ADR-074](074-list-input-component-narrowing.md): a temporary `List<Mood>` fixture threw `System.NotSupportedException: Cannot pass Mood to a Kotlin collection` on a non-empty call, and returned 0 for an empty one, since `CreateList`'s per-element loop never reaches `Wrap<T>`) |
 | `ValueClass`, nested `Collection` | admits | **`packNuget` crash**: `elementKotlinTypeName` has no branch and calls `error(...)` (`forward/ForwardKotlinPlanEmitter.kt:398-405`, Verified) |
 | `Nullable` of anything | admits | **`packNuget` crash**, same `error(...)` line (Verified) |
 | `Interface` | rejects | skipped, per ADR-040's deferral |
@@ -560,14 +564,19 @@ the four kinds as tabulated, wraps rather than copies at the input position, pro
 `MutableList`, and **segfaults** when handed a plain `NSMutableDictionary`/`NSMutableSet`; the eight
 BCL assignability relations quoted in options 1 and 2.
 
+**Verified by execution** ([ADR-074](074-list-input-component-narrowing.md), settled during its
+implementation): the `Enum` row of the component table throws `NotSupportedException` at runtime for
+a `List<T>` parameter. A temporary `List<Mood>` fixture threw `System.NotSupportedException: Cannot
+pass Mood to a Kotlin collection` on a non-empty call, and returned 0 for an empty one.
+
 **Inferred** (documentation only, nobody ran it):
 
-1. That the narrow-primitive (`Byte`/`UByte`/`Short`/`UShort`/`UInt`/`ULong`/`Char`) and `Enum` rows of
-   the component table throw `NotSupportedException` at runtime today for a `List<T>` parameter. This
-   follows from reading `CreateList`'s branch set and its reflective fallback, but no test exercises
-   it. **If this is wrong, the only consequence is that the "latent defects" framing in Scope
-   overstates the problem; the v1 allow-list is correct either way**, because those types genuinely
-   have no `nuget_wrap_*` export.
+1. That the narrow-primitive (`Byte`/`UByte`/`Short`/`UShort`/`UInt`/`ULong`/`Char`) rows of the
+   component table throw `NotSupportedException` at runtime today for a `List<T>` parameter. The
+   `Enum` row was confirmed by execution above, via the same `Wrap<T>` mechanism, but the
+   narrow-primitive cases themselves were not separately spiked. **If this is wrong, the only
+   consequence is that the "latent defects" framing in Scope overstates the problem; the v1
+   allow-list is correct either way**, because those types genuinely have no `nuget_wrap_*` export.
 2. Kotlin/JVM's zero-conversion collection identity, Swift Export's collection status, `@JsExport`'s
    non-exportability of collections, and the CsWinRT mapping table. All four are prior-art context and
    none of them constrain the implementation.
@@ -702,9 +711,11 @@ name. Without these, a later widening of `isWrappableComponent()` would silently
   plus fixtures and tests.
 - `csharpType()`, the helper gates, `callArgument`, the ABI parameter shape, and every `Dispose`
   binding are untouched.
-- Four new native exports change the ADR-055 forward ABI contract hash, so a stale C# shim against a
-  new library (or vice versa) will be rejected at startup with the usual mismatch message. Expected;
-  purge and rebuild.
+- **Correction (ADR-074):** there is no ADR-055 forward ABI contract hash. `contractHash`/`slotCount`
+  is an ADR-054 mechanism, reverse direction only, under `nuget-plugin/`. What actually happens when
+  four new native exports are added is that the `.dylib`'s exported symbol set changes; a stale C#
+  shim against a fresh library fails at `DllImport` resolution rather than at any hash check. Purge
+  and rebuild either way.
 - `CreateList`'s internals are refactored onto `Wrap<T>`. Behaviour-preserving, but it does move a
   shipped code path, so `MethodParameterMarshallingTests.Patient_AddTags_*` and
   `MarshallingCoverageTests` are the regression gate.
@@ -732,8 +743,9 @@ requirement above is part of the decision rather than a follow-up.
 4. **Nullable components** (`Map<String, Int?>`, `Set<String?>`, `List<Foo?>`). Needs a nullable
    `COpaquePointer?` on `nuget_map_put` / `nuget_set_add` / `nuget_list_add` plus a null-tolerant
    lowering (`it as? T`). Cheap for the value/element position, and it would let the generated API stop
-   lying about `Map<String, Int?>`. Not free: it also changes `nuget_list_add`'s signature, hence the
-   ABI hash, so it belongs with item 1.
+   lying about `Map<String, Int?>`. **Correction (ADR-074):** it does change `nuget_list_add`'s
+   signature, but that is not an ABI-hash coupling to item 1 (no such hash exists, see above); the two
+   items touch the same predicate, not the same ABI, and can be sequenced independently.
 5. **Value-class and nested-collection components.** Both currently crash `packNuget`; both need
    `elementKotlinTypeName` branches and a `Wrap<T>` story. Value-class components are the collection
    facet of the still-open "value class at an ordinary parameter position" ROADMAP item.

@@ -419,10 +419,56 @@ bare `IDictionary<K,V>` cannot be passed to a `Map<K,V>` parameter (it needs `IR
 and a bare `IReadOnlyDictionary<K,V>` cannot be passed to a `MutableMap<K,V>` parameter (it needs
 `IDictionary`). Same asymmetry for `Set`/`ISet`/`IReadOnlySet`.
 
+### `List<T>` parameter component narrowing
+
+A `List<T>`/`MutableList<T>` parameter binds only for the same component types a `Map`/`Set`
+parameter does: `String`, `Int`, `Long`, `Float`, `Double`, `Boolean`, or an object handle. This is
+the same `isWrappableComponent()` gate, applied to `List` as well as `Map`/`Set`.
+
+From `test-library/.../clinic/ClinicSample.kt`, the object-handle case:
+
+```kotlin
+class Patient(val name: String) {
+  fun addTags(tags: List<String>): Int = tags.size
+
+  fun addBuddies(buddies: List<Patient>): Int = buddies.size
+}
+```
+
+From `IntegrationTests/MethodParameterMarshallingTests.cs`:
+
+```C#
+[Fact]
+public void Patient_AddBuddies_ReturnsTheCount()
+{
+    using var oreo = new Patient("Oreo");
+    using var mylo = new Patient("Mylo");
+    using var buddy = new Patient("Buddy");
+
+    Assert.Equal(2, oreo.AddBuddies(new List<Patient> { mylo, buddy }));
+}
+```
+
+A `List<T>` parameter whose element type the C# write side cannot box, an enum (`List<Mood>`),
+`Char` (`List<Char>`), a narrow primitive (`List<Short>`), a nullable component (`List<String?>`), a
+value class (`List<StoryCode>`), or a nested collection (`List<List<String>>`), is skipped with a
+`SKIPPED_UNSUPPORTED_INPUT` diagnostic naming the callable, instead of crashing `packNuget` or
+compiling into a method that throws `NotSupportedException` on its first real call.
+
+<note>
+    <p>Before this narrowing, three of these shapes crashed the whole <code>packNuget</code> run,
+    and the other three bound and compiled but threw at runtime. Calling
+    <code>Patient.addMoods(List&lt;Mood&gt;)</code> with a non-empty list, for example, threw
+    <code>System.NotSupportedException: Cannot pass Mood to a Kotlin collection</code>; called with
+    an empty list it quietly returned <code>0</code>, since the per-element boxing loop is never
+    reached for an empty collection. None of the six shapes work today; the change only turns each
+    one into a compile-time absence rather than a runtime or build-time failure.</p>
+</note>
+
 ## Limitations
 
 - `Sequence<T>` is not bridgeable. `Cat.unsupported: Sequence<String>` in the sample library is deliberately left out of the generated `Interop.cs` (no eager-copy story for a lazy sequence).
-- Only a strict subset of key/value/element types binds at a `Map`/`Set` parameter position: `String`, `Int`, `Long`, `Float`, `Double`, `Boolean`, and object handles (a class instance, boxed via reflection over its `_handle` field). Anything else, an enum (`Map<String, Mood>`), `Char` (`Set<Char>`), a nullable component (`Map<String, Int?>`), a nested collection (`Set<List<String>>`), a value class, or an interface, is skipped with `SKIPPED_UNSUPPORTED_INPUT` rather than crashing or binding incorrectly. `List`/`MutableList` parameters accept a wider (and, for some of those same shapes, unsafe) set of component types; see [ADR-073](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/073-map-and-set-parameters.md)'s Deferred section and [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md) for the tracked gap.
+- Only a strict subset of key/value/element types binds at a `List`/`Map`/`Set` parameter position: `String`, `Int`, `Long`, `Float`, `Double`, `Boolean`, and object handles (a class instance, boxed via reflection over its `_handle` field). Anything else, an enum (`Map<String, Mood>`, `List<Mood>`), `Char` (`Set<Char>`, `List<Char>`), a narrow primitive (`List<Short>`), a nullable component (`Map<String, Int?>`, `List<String?>`), a nested collection (`Set<List<String>>`, `List<List<String>>`), a value class (`List<StoryCode>`), or an interface, is skipped with `SKIPPED_UNSUPPORTED_INPUT` rather than crashing or binding incorrectly. Closing any of these shapes (nullable components, enum/narrow-primitive boxing, value-class/nested-collection boxing) is tracked in [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md).
 - `MutableMap`/`MutableSet` parameters do not write back, matching `MutableList`. Contents are copied into Kotlin; changes Kotlin makes are not reflected back in the collection you passed.
 
 <seealso>
@@ -436,5 +482,6 @@ and a bare `IReadOnlyDictionary<K,V>` cannot be passed to a `MutableMap<K,V>` pa
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/062-forward-callable-plan.md">ADR-062: Forward callable plan</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/064-forward-unsupported-declaration-diagnostics.md">ADR-064: Forward unsupported-declaration diagnostics</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/073-map-and-set-parameters.md">ADR-073: Map/Set parameters</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/074-list-input-component-narrowing.md">ADR-074: List input component narrowing</a>
     </category>
 </seealso>

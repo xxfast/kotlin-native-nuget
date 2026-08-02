@@ -125,6 +125,28 @@ public class MethodParameterMarshallingTests
         Assert.Equal(0, patient.AddTags(new List<string>()));
     }
 
+    // ADR-074. List<Patient> parameter, class method: the object-handle element cell, exercising
+    // Wrap<T>'s reflective `_handle` fallback for a list for the first time. This is the primary
+    // over-narrowing regression gate for the ADR-074 predicate change and must stay green both
+    // before and after it lands.
+    [Fact]
+    public void Patient_AddBuddies_ReturnsTheCount()
+    {
+        using var oreo = new Patient("Oreo");
+        using var mylo = new Patient("Mylo");
+        using var buddy = new Patient("Buddy");
+
+        Assert.Equal(2, oreo.AddBuddies(new List<Patient> { mylo, buddy }));
+    }
+
+    [Fact]
+    public void Patient_AddBuddies_WithEmptyList_ReturnsZero()
+    {
+        using var oreo = new Patient("Oreo");
+
+        Assert.Equal(0, oreo.AddBuddies(new List<Patient>()));
+    }
+
     // List<string> parameter, companion method.
     [Fact]
     public void Patient_BatchAdmit_ReturnsTheCount()

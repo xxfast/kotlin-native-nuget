@@ -395,6 +395,12 @@ private fun kotlinType(parameter: ForwardAbiParameter, isReceiver: Boolean): Typ
   return kotlinInputType(parameter.transfer.type, parameter.wireType)
 }
 
+// ADR-074: the Char/Primitive/Enum branches are unreachable at an input position now that
+// isWrappableComponent() gates every collection kind there (it admits only String/wrappable
+// Primitive/ObjectHandle) -- element planning never reaches this function with a Char, a
+// narrow-primitive kind or an Enum any more. Left in place, ready-made, for ROADMAP line 95
+// (enum and narrow-primitive components), which will need matching nuget_wrap_* exports and
+// Wrap<T> branches before these can be exercised again.
 private fun elementKotlinTypeName(type: BridgeType): String = when (type) {
   BridgeType.String -> "kotlin.String"
   BridgeType.Char -> "kotlin.Char"
