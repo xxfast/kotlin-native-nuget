@@ -471,20 +471,40 @@ internal object ForwardCirPlanProjection {
         )
 
         is BridgeType.Primitive -> listOf("${parameter.name}.HasValue", "${parameter.name}.GetValueOrDefault()")
+        // ADR-075: a nullable collection *parameter* (e.g. a data class's `notes: List<String>?`
+        // constructor parameter) shares [ForwardPropertyPlan]'s setter route exactly: the local
+        // handle variable [collectionPrelude] built already folds the null check in, so the call
+        // argument itself is unconditional either way.
+        is BridgeType.Collection -> listOf("${parameter.name}Handle")
         else -> error("Forward CIR plan projection has no call argument for nullable $inner")
       }
 
       else -> error("Forward CIR plan projection has no call argument for $type")
     }
 
+  /** [type] with one `Nullable` layer removed only when it wraps a `Collection`, alongside
+   *  whether that layer was present — the same collection factory/dispose call applies either
+   *  way, but a nullable source value needs the `!= null ? ... : IntPtr.Zero` guard around it. */
+  private fun BridgeType.asNullableAwareCollection(): Pair<BridgeType.Collection, Boolean>? =
+    when (this) {
+      is BridgeType.Collection -> this to false
+      is BridgeType.Nullable -> (type as? BridgeType.Collection)?.let { it to true }
+      else -> null
+    }
+
   private fun ForwardCallablePlan.collectionPrelude(parameter: ForwardPublicParameter): String? {
-    val type: BridgeType.Collection = parameter.type as? BridgeType.Collection ?: return null
+    val (type, nullable) = parameter.type.asNullableAwareCollection() ?: return null
     val factory: String = when (type.kind) {
       CollectionKind.LIST, CollectionKind.MUTABLE_LIST -> "CreateList"
       CollectionKind.MAP, CollectionKind.MUTABLE_MAP -> "CreateMap"
       CollectionKind.SET, CollectionKind.MUTABLE_SET -> "CreateSet"
     }
-    return "IntPtr ${parameter.name}Handle = NugetMarshal.$factory(${parameter.name});"
+    val value: String = if (nullable) {
+      "${parameter.name} != null ? NugetMarshal.$factory(${parameter.name}) : IntPtr.Zero"
+    } else {
+      "NugetMarshal.$factory(${parameter.name})"
+    }
+    return "IntPtr ${parameter.name}Handle = $value;"
   }
 
   // ADR-073: load-bearing, not cosmetic. All three Dispose members bind to the same
@@ -493,13 +513,19 @@ internal object ForwardCirPlanProjection {
   // NugetMapNative/NugetSetNative to be tracked as needed for List, so NugetListNative is never
   // emitted at all, and the mismatched call is a CS0103 compile error, not a runtime bug.
   private fun ForwardCallablePlan.collectionCleanup(parameter: ForwardPublicParameter): String? {
-    val type: BridgeType.Collection = parameter.type as? BridgeType.Collection ?: return null
+    val (type, nullable) = parameter.type.asNullableAwareCollection() ?: return null
     val native: String = when (type.kind) {
       CollectionKind.LIST, CollectionKind.MUTABLE_LIST -> "NugetListNative"
       CollectionKind.MAP, CollectionKind.MUTABLE_MAP -> "NugetMapNative"
       CollectionKind.SET, CollectionKind.MUTABLE_SET -> "NugetSetNative"
     }
-    return "$native.Dispose(${parameter.name}Handle);"
+    // ADR-075: a null source value never built a handle above (it stayed IntPtr.Zero), and
+    // `nuget_dispose`'s `handle.asStableRef<Any>().dispose()` is not null-safe.
+    return if (nullable) {
+      "if (${parameter.name}Handle != IntPtr.Zero) { $native.Dispose(${parameter.name}Handle); }"
+    } else {
+      "$native.Dispose(${parameter.name}Handle);"
+    }
   }
 
   // ADR-069: default P/Invoke `out bool` marshalling reads 4 bytes; Kotlin's `BooleanVar` writes 1

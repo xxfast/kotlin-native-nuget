@@ -550,7 +550,9 @@ private fun kotlinInputType(type: BridgeType, wireType: ForwardAbiWireType): Typ
   is BridgeType.ObjectHandle, is BridgeType.Interface, is BridgeType.Collection -> cOpaquePointer
   is BridgeType.Nullable -> when (val inner = type.type) {
     BridgeType.String -> kotlinType("String").copy(nullable = true)
-    is BridgeType.ObjectHandle, is BridgeType.Interface -> cOpaquePointer.copy(nullable = true)
+    is BridgeType.ObjectHandle, is BridgeType.Interface, is BridgeType.Collection ->
+      cOpaquePointer.copy(nullable = true)
+
     else -> error("Forward Kotlin plan emitter has no input type for nullable $inner")
   }
 
@@ -661,37 +663,7 @@ private fun loweredArgument(parameter: ForwardPublicParameter): String =
     is BridgeType.Interface ->
       "${parameter.name}.asStableRef<${type.qualifiedName}>().get()"
 
-    is BridgeType.Collection -> when (type.kind) {
-      CollectionKind.LIST ->
-        "${parameter.name}.asStableRef<MutableList<Any?>>().get()" +
-            ".map { it as ${elementKotlinTypeName(requireNotNull(type.element))} }"
-
-      CollectionKind.MUTABLE_LIST ->
-        "${parameter.name}.asStableRef<MutableList<Any?>>().get()" +
-            ".mapTo(mutableListOf()) { it as ${elementKotlinTypeName(requireNotNull(type.element))} }"
-
-      // ADR-073: copy-in, mirroring the List/MutableList pair above. Neither map kind writes
-      // back -- see the ADR's "no write-back" decision.
-      CollectionKind.MAP ->
-        "${parameter.name}.asStableRef<MutableMap<Any?, Any?>>().get()" +
-            ".entries.associate { (k, v) -> " +
-            "(k as ${elementKotlinTypeName(requireNotNull(type.key))}) " +
-            "to (v as ${elementKotlinTypeName(requireNotNull(type.value))}) }"
-
-      CollectionKind.MUTABLE_MAP ->
-        "${parameter.name}.asStableRef<MutableMap<Any?, Any?>>().get()" +
-            ".entries.associateTo(mutableMapOf()) { (k, v) -> " +
-            "(k as ${elementKotlinTypeName(requireNotNull(type.key))}) " +
-            "to (v as ${elementKotlinTypeName(requireNotNull(type.value))}) }"
-
-      // ADR-073: SET and MUTABLE_SET deliberately share one lowering -- mapTo(mutableSetOf())
-      // yields a MutableSet<T>, which satisfies a Set<T> parameter too, so there is no reason to
-      // split them the way the list pair is split.
-      CollectionKind.SET, CollectionKind.MUTABLE_SET ->
-        "${parameter.name}.asStableRef<MutableSet<Any?>>().get()" +
-            ".mapTo(mutableSetOf()) { " +
-            "it as ${elementKotlinTypeName(requireNotNull(type.element))} }"
-    }
+    is BridgeType.Collection -> loweredCollectionExpression(parameter.name, type)
 
     is BridgeType.Nullable -> when (val inner: BridgeType = type.type) {
       BridgeType.String -> parameter.name
@@ -704,8 +676,64 @@ private fun loweredArgument(parameter: ForwardPublicParameter): String =
       is BridgeType.Primitive ->
         "if (${parameter.name}HasValue) ${parameter.name} else null"
 
+      // ADR-075: a nullable collection *parameter* (e.g. a data class's `notes: List<String>?`
+      // constructor parameter, mirroring `Visit.notes` as a property) is now planned when its
+      // component is eligible (`ForwardCallablePlanner.inputSkipReason()`'s Nullable branch),
+      // sharing the same `?.`-guarded lowering the property setter emitter uses.
+      is BridgeType.Collection ->
+        loweredCollectionExpression(parameter.name, inner, nullable = true)
+
       else -> error("Forward Kotlin plan emitter has no argument lowering for nullable $inner")
     }
 
     else -> error("Forward Kotlin plan emitter has no argument lowering for $type")
   }
+
+/**
+ * The six-kind collection lowering, shared by [loweredArgument] (a callable parameter) and
+ * [ForwardPropertyKotlinEmitter]'s `valueExpression()` (a property setter's value, ADR-075) — the
+ * two emitters already diverge in shape elsewhere, so this one shared expression builder is kept
+ * rather than risking the two collection lowerings drifting apart. [nullable] renders every step
+ * of the chain with `?.` instead of `.`, matching the nullable-`ObjectHandle`/`Interface`
+ * lowerings one case above: a null `COpaquePointer` never reaches `asStableRef` because `?.`
+ * short-circuits.
+ */
+internal fun loweredCollectionExpression(
+  name: String,
+  type: BridgeType.Collection,
+  nullable: Boolean = false,
+): String {
+  val dot: String = if (nullable) "?." else "."
+  return when (type.kind) {
+    CollectionKind.LIST ->
+      "$name${dot}asStableRef<MutableList<Any?>>()${dot}get()" +
+          "${dot}map { it as ${elementKotlinTypeName(requireNotNull(type.element))} }"
+
+    CollectionKind.MUTABLE_LIST ->
+      "$name${dot}asStableRef<MutableList<Any?>>()${dot}get()" +
+          "${dot}mapTo(mutableListOf()) { " +
+          "it as ${elementKotlinTypeName(requireNotNull(type.element))} }"
+
+    // ADR-073: copy-in, mirroring the List/MutableList pair above. Neither map kind writes
+    // back -- see the ADR's "no write-back" decision.
+    CollectionKind.MAP ->
+      "$name${dot}asStableRef<MutableMap<Any?, Any?>>()${dot}get()" +
+          "${dot}entries${dot}associate { (k, v) -> " +
+          "(k as ${elementKotlinTypeName(requireNotNull(type.key))}) " +
+          "to (v as ${elementKotlinTypeName(requireNotNull(type.value))}) }"
+
+    CollectionKind.MUTABLE_MAP ->
+      "$name${dot}asStableRef<MutableMap<Any?, Any?>>()${dot}get()" +
+          "${dot}entries${dot}associateTo(mutableMapOf()) { (k, v) -> " +
+          "(k as ${elementKotlinTypeName(requireNotNull(type.key))}) " +
+          "to (v as ${elementKotlinTypeName(requireNotNull(type.value))}) }"
+
+    // ADR-073: SET and MUTABLE_SET deliberately share one lowering -- mapTo(mutableSetOf())
+    // yields a MutableSet<T>, which satisfies a Set<T> parameter too, so there is no reason to
+    // split them the way the list pair is split.
+    CollectionKind.SET, CollectionKind.MUTABLE_SET ->
+      "$name${dot}asStableRef<MutableSet<Any?>>()${dot}get()" +
+          "${dot}mapTo(mutableSetOf()) { " +
+          "it as ${elementKotlinTypeName(requireNotNull(type.element))} }"
+  }
+}

@@ -1,6 +1,6 @@
 # Collections
 
-Kotlin's collection types cross the bridge as an opaque handle plus a small accessor surface (`Count`/`Get`/`ContainsKey`/...), then get eagerly copied into a real .NET collection on the C# side. There's no lazy bridging or lasting connection between the returned C# collection and the Kotlin one after the copy.
+Kotlin's collection types cross the bridge as an opaque handle plus a small accessor surface (`Count`/`Get`/`ContainsKey`/...), then get eagerly copied into a real .NET collection on the C# side. There's no lazy bridging or lasting connection between the returned C# collection and the Kotlin one after the copy. A `var` collection property can still be **reassigned**, though: the whole collection is replaced on the Kotlin side, see [Mutable collection properties](#mutable-collection-properties) below.
 
 | Kotlin | C# | Notes |
 |---|---|---|
@@ -10,6 +10,7 @@ Kotlin's collection types cross the bridge as an opaque handle plus a small acce
 | `MutableMap<K,V>` | `IDictionary<K,V>` | eager copy |
 | `Set<T>` | `IReadOnlySet<T>` | eager copy |
 | `MutableSet<T>` | `ISet<T>` | eager copy |
+| `T?` (nullable collection reference) | `T?` | `null` ⇄ `IntPtr.Zero`, both directions; independent of element/component nullability |
 
 ## Kotlin
 
@@ -419,11 +420,273 @@ bare `IDictionary<K,V>` cannot be passed to a `Map<K,V>` parameter (it needs `IR
 and a bare `IReadOnlyDictionary<K,V>` cannot be passed to a `MutableMap<K,V>` parameter (it needs
 `IDictionary`). Same asymmetry for `Set`/`ISet`/`IReadOnlySet`.
 
+## Nullable collection references
+
+A `List`/`Map`/`Set` property (`val` or `var`) can itself be nullable
+(`List<String>?`), independent of whether its elements are. A `null` Kotlin value crosses as
+`IntPtr.Zero` and materializes as C# `null`, not an empty collection or a stray handle
+([ADR-075](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/075-collection-property-getter-setter-independence.md)).
+The same nullable shape also plans as an ordinary callable **parameter**: a constructor, method, or
+generated `copy()` can take a `List<String>?`.
+
+From `test-library/.../clinic/ClinicSample.kt`:
+
+```kotlin
+data class Visit(
+  val patient: String,
+  val symptoms: List<String>,
+  val notes: List<String>? = null,
+)
+
+class Roster(nurse: Nurse?) {
+  val staff: List<Nurse>? = nurse?.let { listOf(it) }
+}
+```
+
+Generated C#, from `Interop.cs`. The constructor builds `notesHandle` only when `notes` isn't `null`;
+the getter checks for a null handle before walking it:
+
+```C#
+public Visit(string patient, IReadOnlyList<string> symptoms, IReadOnlyList<string>? notes)
+{
+    IntPtr symptomsHandle = NugetMarshal.CreateList(symptoms);
+    IntPtr notesHandle = notes != null ? NugetMarshal.CreateList(notes) : IntPtr.Zero;
+    IntPtr handle = Native_Create(patient, symptomsHandle, notesHandle, out IntPtr error);
+    if (error != IntPtr.Zero)
+    {
+        throw NugetErrorNative.BuildException(error);
+    }
+    NugetListNative.Dispose(symptomsHandle);
+    if (notesHandle != IntPtr.Zero) { NugetListNative.Dispose(notesHandle); }
+    _handle = handle;
+}
+
+public IReadOnlyList<string>? Notes
+{
+    get
+    {            IntPtr nativeResult = Native_Get_notes(_handle, out IntPtr error);
+    if (error != IntPtr.Zero)
+    {
+        throw NugetErrorNative.BuildException(error);
+    }
+    if (nativeResult == IntPtr.Zero) return null;
+    int count = NugetListNative.Count(nativeResult);
+    var result = new List<string>(count);
+    for (int i = 0; i < count; i++)
+    {
+        result.Add(NugetMarshal.FromHandle<string>(NugetListNative.Get(nativeResult, i)));
+    }
+    NugetListNative.Dispose(nativeResult);
+    return result.AsReadOnly();
+    }
+}
+```
+
+`Roster.Staff: IReadOnlyList<Nurse>?` follows the same shape for an `ObjectHandle` element, which
+still needs `FromHandle<Nurse>` per entry once the null-handle check passes.
+
+From `IntegrationTests/CollectionPropertyIndependenceTests.cs`:
+
+```C#
+[Fact]
+public void Visit_Notes_WhenNull_IsNullNotAStrayHandle()
+{
+    using var visit = new Visit("Mylo", new List<string> { "sneezing" }, null);
+
+    // This is the actual reported bug: a null Kotlin handle must come back as C# `null`,
+    // not a boxed IntPtr or an empty list.
+    Assert.Null(visit.Notes);
+}
+
+[Fact]
+public void Roster_Staff_WithNoAttendingNurse_IsNull()
+{
+    using var roster = new Roster(null);
+
+    Assert.Null(roster.Staff);
+}
+```
+
+## Mutable collection properties
+
+A `var`-declared collection property plans its getter and setter independently
+([ADR-075](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/075-collection-property-getter-setter-independence.md)).
+The getter is unconditional and has no element-type restriction: every element type that
+materializes for a `val` also materializes for a `var`. The setter is narrower: it binds only when
+every component, the element for `List`/`Set`, the key **and** value for `Map`, satisfies the same
+`isWrappableComponent()` predicate the `Map`/`Set` **parameter** side above already uses
+(`String`, `Int`, `Long`, `Float`, `Double`, `Boolean`, or an object handle), applied to `List` too.
+When a component fails that check, the property still generates, get-only, with a
+`SKIPPED_UNSUPPORTED_INPUT` diagnostic naming it.
+
+From `test-library/.../clinic/ChartSample.kt`:
+
+```kotlin
+class Chart(val patientName: String) {
+  /** Eligible: `CreateList` + `Wrap<T>` string. */
+  var tags: List<String> = emptyList()
+
+  /** Eligible: `CreateMap`, wrappable key (String) AND value (Int). */
+  var counts: Map<String, Int> = emptyMap()
+
+  /** Eligible: ObjectHandle element ([Nurse]) + the mutable-list lowering. */
+  var seen: MutableList<Nurse> = mutableListOf()
+
+  /** Eligible: the SET/MUTABLE_SET shared lowering. */
+  var codes: Set<String> = emptySet()
+
+  /** Eligible, and nullable. Round-trips both ways: assign a list and read it back, assign `null`
+   *  and read back `null`. */
+  var notes: List<String>? = null
+
+  /** Ineligible: `Mood` is an enum element, not `isWrappableComponent()`. Must become a get-only
+   *  C# property (`{ get; }`, no `set`) plus a `SKIPPED_UNSUPPORTED_INPUT` diagnostic. */
+  var moods: List<Mood> = emptyList()
+
+  /** Ineligible for a different reason: the *element* is nullable (`String?`, not `String`), not
+   *  the collection reference. */
+  var aliases: List<String?> = emptyList()
+}
+```
+
+Generated C#, from `Interop.cs`. `Tags` shows an eligible setter (built via the same
+`NugetMarshal.CreateList` a `List` **parameter** uses); `Notes` shows the nullable-reference variant,
+`value != null ? CreateList(value) : IntPtr.Zero`; `Moods` shows the ineligible fallback, get-only,
+no setter emitted at all:
+
+```C#
+public IReadOnlyList<string> Tags
+{
+    get
+    {            IntPtr nativeResult = Native_Get_tags(_handle, out IntPtr error);
+    if (error != IntPtr.Zero)
+    {
+        throw NugetErrorNative.BuildException(error);
+    }
+    int count = NugetListNative.Count(nativeResult);
+    var result = new List<string>(count);
+    for (int i = 0; i < count; i++)
+    {
+        result.Add(NugetMarshal.FromHandle<string>(NugetListNative.Get(nativeResult, i)));
+    }
+    NugetListNative.Dispose(nativeResult);
+    return result.AsReadOnly();
+    }
+    set
+    {            Native_Set_tags(_handle, NugetMarshal.CreateList(value), out IntPtr error);
+    if (error != IntPtr.Zero)
+    {
+        throw NugetErrorNative.BuildException(error);
+    }
+    }
+}
+
+public IReadOnlyList<string>? Notes
+{
+    get { /* same walk as Tags, plus: if (nativeResult == IntPtr.Zero) return null; */ }
+    set
+    {            Native_Set_notes(_handle, value != null ? NugetMarshal.CreateList(value) : IntPtr.Zero, out IntPtr error);
+    if (error != IntPtr.Zero)
+    {
+        throw NugetErrorNative.BuildException(error);
+    }
+    }
+}
+
+public IReadOnlyList<global::TestLibrary.Clinic.Mood> Moods
+{
+    get { /* same walk as Tags: the getter is unrestricted */ }
+    // no setter: Mood fails isWrappableComponent(), so this stays get-only.
+}
+```
+
+From `IntegrationTests/CollectionPropertyIndependenceTests.cs`:
+
+```C#
+[Fact]
+public void Chart_Tags_ListOfString_RoundTrips()
+{
+    using var chart = new Chart("Oreo");
+
+    chart.Tags = new List<string> { "black", "white", "biscuit" };
+
+    Assert.Equal(new[] { "black", "white", "biscuit" }, chart.Tags);
+}
+
+[Fact]
+public void Chart_Notes_AssignedNull_RoundTrips()
+{
+    using var chart = new Chart("Mylo");
+    chart.Notes = new List<string> { "temporary" };
+    Assert.NotNull(chart.Notes);
+
+    chart.Notes = null;
+
+    Assert.Null(chart.Notes);
+}
+
+[Fact]
+public void Chart_Moods_EnumElement_HasNoPublicSetter()
+{
+    var property = typeof(Chart).GetProperty(nameof(Chart.Moods));
+
+    Assert.NotNull(property);
+    Assert.NotNull(property!.GetGetMethod());
+    Assert.Null(property.GetSetMethod());
+}
+```
+
+<note>
+    <p>The setter reassigns the whole collection: <code>chart.Tags = new List&lt;string&gt; { ... }</code>
+    replaces the Kotlin-side list. The getter is still a <b>detached copy</b> per
+    <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/011-collection-type-mapping.md">ADR-011</a>:
+    mutating the <code>IList&lt;Nurse&gt;</code> returned by <code>chart.Seen</code> in place does not
+    reach Kotlin. Read, extend on the C# side, and reassign to get the change across (read-modify-write).</p>
+</note>
+
+```C#
+var attending = new List<Nurse>(chart.Seen) { barton };
+chart.Seen = attending;
+```
+
+The same eligibility predicate applies to a collection-typed extension property, including one whose
+receiver crosses the bridge by value (a `String`- or object-underlying value class) rather than by
+object handle. From `test-library/.../clinic/ClinicSample.kt`:
+
+```kotlin
+var ChartId.symptomTags: List<String>
+  get() = chartIdSymptomTags[this] ?: emptyList()
+  set(value) {
+    chartIdSymptomTags[this] = value
+  }
+```
+
+```C#
+public static IReadOnlyList<string> GetSymptomTags(this ChartId receiver) { /* same walk */ }
+
+public static void SetSymptomTags(this ChartId receiver, IReadOnlyList<string> value)
+{            Native_ChartidSetSymptomTags(receiver.Value, NugetMarshal.CreateList(value), out IntPtr error);
+    ...
+}
+```
+
+An ineligible setter emits a warning naming the property and the offending component, and states
+that the C# property stays read-only rather than that the property was dropped:
+
+```
+[nuget:SKIPPED_UNSUPPORTED_INPUT] Skipping Chart.moods: its setter is not generated because the
+    element type Mood cannot be written into a Kotlin collection. the C# property Moods is
+    read-only
+    at ChartSample.kt:37
+```
+
 ## Limitations
 
 - `Sequence<T>` is not bridgeable. `Cat.unsupported: Sequence<String>` in the sample library is deliberately left out of the generated `Interop.cs` (no eager-copy story for a lazy sequence).
 - Only a strict subset of key/value/element types binds at a `Map`/`Set` parameter position: `String`, `Int`, `Long`, `Float`, `Double`, `Boolean`, and object handles (a class instance, boxed via reflection over its `_handle` field). Anything else, an enum (`Map<String, Mood>`), `Char` (`Set<Char>`), a nullable component (`Map<String, Int?>`), a nested collection (`Set<List<String>>`), a value class, or an interface, is skipped with `SKIPPED_UNSUPPORTED_INPUT` rather than crashing or binding incorrectly. `List`/`MutableList` parameters accept a wider (and, for some of those same shapes, unsafe) set of component types; see [ADR-073](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/073-map-and-set-parameters.md)'s Deferred section and [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md) for the tracked gap.
 - `MutableMap`/`MutableSet` parameters do not write back, matching `MutableList`. Contents are copied into Kotlin; changes Kotlin makes are not reflected back in the collection you passed.
+- A collection property **setter** uses the same wrappable-component predicate as a `Map`/`Set` parameter above, but applies it to `List` as well, so it is stricter than a `List` *parameter* (which still binds a wider, less safe set of element types, see above). An enum element (`List<Mood>`), a nullable element (`List<String?>`), a value-class element, or a nested-collection element skips the setter with `SKIPPED_UNSUPPORTED_INPUT` and falls back to a get-only property; the getter itself has no such restriction. See [ADR-075](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/075-collection-property-getter-setter-independence.md) and [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md) for the tracked write-side gap.
+- Reading an enum-element collection getter (`List<Mood>`) is untested and known-broken at runtime: `NugetMarshal.FromHandle<T>` has no enum branch, so `chart.Moods` would throw `MissingMethodException`. Pre-existing, not introduced by the setter-independence feature; see [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md).
 
 <seealso>
     <category ref="related">
@@ -436,5 +699,6 @@ and a bare `IReadOnlyDictionary<K,V>` cannot be passed to a `MutableMap<K,V>` pa
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/062-forward-callable-plan.md">ADR-062: Forward callable plan</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/064-forward-unsupported-declaration-diagnostics.md">ADR-064: Forward unsupported-declaration diagnostics</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/073-map-and-set-parameters.md">ADR-073: Map/Set parameters</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/075-collection-property-getter-setter-independence.md">ADR-075: Collection property getter/setter independence</a>
     </category>
 </seealso>

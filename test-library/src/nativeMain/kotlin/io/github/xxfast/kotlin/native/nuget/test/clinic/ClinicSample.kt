@@ -17,6 +17,14 @@ package io.github.xxfast.kotlin.native.nuget.test.clinic
 enum class Mood { CALM, ANXIOUS, PLAYFUL }
 
 /**
+ * ADR-075 · getter facet. A minimal ObjectHandle-typed element for a nullable collection property
+ * whose element itself needs conversion through `FromHandle<T>`, unlike [Visit.notes]'s
+ * conversion-free `String` element (see [Roster]). Deliberately its own tiny type: nothing else
+ * about this cell needs testing.
+ */
+class Nurse(val name: String)
+
+/**
  * The clinic facade — a Kotlin `object`, which is the natural shape for an export module and so
  * the first thing a new consumer meets (GOALS.md #2). `CatRegistry` is the only other `object`
  * fixture and returns only `Int` and `void`, which need no marshalling, so the object path —
@@ -198,18 +206,49 @@ value class ChartRef(val patient: Patient) {
 }
 
 /**
- * Cells 17/18/20: generic type arguments. `parameterizedBy` appears zero times in the processor, so
- * every `bestGuess` site renders a raw `List`. The three failing sites are the data-class constructor,
- * the generated `copy()` (`ClassExports.kt:687`) and the nullable list property getter; the non-null
- * list property (`Cat.nicknames`) escapes only by routing through the handle path, which is why
- * collections look complete from the C# side.
+ * ADR-075 · extension-property + setter regression cell. Same eligibility predicate as an ordinary
+ * property setter ([Chart.tags] in `ChartSample.kt`), but the receiver crosses the bridge by value
+ * ([ChartId]'s underlying `String`, not an ObjectHandle) — nobody had combined that with a
+ * collection setter before this change. Backed by a package-level map keyed by the value class
+ * itself: value classes derive structural equality from their underlying value, so two [ChartId]s
+ * built from the same string collide on the same entry, which is the correct behaviour for a
+ * by-value receiver.
  */
-// QUARANTINED · obs K (cells 17/18/20) until the type-argument fix lands.
-// data class Visit(
-//   val patient: String,
-//   val symptoms: List<String>,
-//   val notes: List<String>? = null,
-// )
+private val chartIdSymptomTags: MutableMap<ChartId, List<String>> = mutableMapOf()
+
+var ChartId.symptomTags: List<String>
+  get() = chartIdSymptomTags[this] ?: emptyList()
+  set(value) {
+    chartIdSymptomTags[this] = value
+  }
+
+/**
+ * Cells 17/18/20: generic type arguments. `parameterizedBy` appeared zero times in the processor,
+ * so every `bestGuess` site rendered a raw `List`. The three failing sites were the data-class
+ * constructor, the generated `copy()` (`ClassExports.kt:687`) and the nullable list property
+ * getter; the non-null list property (`Cat.nicknames`) escaped only by routing through the handle
+ * path, which is why collections looked complete from the C# side.
+ *
+ * ADR-075 · getter facet. `notes` is the conversion-free control for the nullable-collection
+ * getter: a raw `String` element, `null` on an unset visit rather than a stray `IntPtr`. See
+ * [Roster.staff] for the ObjectHandle-element counterpart.
+ */
+data class Visit(
+  val patient: String,
+  val symptoms: List<String>,
+  val notes: List<String>? = null,
+)
+
+/**
+ * ADR-075 · getter facet. Hosts `staff: List<Nurse>?`, a nullable collection getter whose element
+ * is an ObjectHandle ([Nurse]), unlike [Visit.notes]'s raw `String` element. `nurse` is a plain
+ * nullable ObjectHandle constructor parameter (an already-supported shape), so this cell exercises
+ * only the getter side: a populated roster proves the ObjectHandle element materializes through
+ * `FromHandle<T>`; an empty one proves the null-handle guard returns `null`, not a stray `IntPtr`.
+ */
+class Roster(nurse: Nurse?) {
+  val staff: List<Nurse>? = nurse?.let { listOf(it) }
+}
 
 /** Cell 10 · QUARANTINED · obs K. A top-level factory returning a plain class. `FunctionExports.kt`
  *  handles nullable (`:53`), sealed-or-generic (`:105`, StableRef), enum (`:132`) and `Unit` (`:156`)

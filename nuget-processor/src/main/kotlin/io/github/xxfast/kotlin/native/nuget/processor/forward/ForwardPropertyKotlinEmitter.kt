@@ -59,7 +59,10 @@ private fun FileSpec.Builder.addGetter(plan: ForwardPropertyPlan, call: ForwardN
         builder.addCode(valueBody(access, "errorOut", "null"), cOpaquePointerVar, stableRef)
       }
 
-      is BridgeType.ObjectHandle, is BridgeType.Interface -> {
+      // ADR-075: a nullable collection has no element-type restriction on the read side --
+      // `nullableHandleBody` already returns Kotlin `null` for a null result before ever building
+      // a `StableRef`, the same route a nullable `ObjectHandle`/`Interface` getter takes.
+      is BridgeType.ObjectHandle, is BridgeType.Interface, is BridgeType.Collection -> {
         builder.returns(cOpaquePointer.copy(nullable = true))
         builder.addCode(
           nullableHandleBody(access, "errorOut"),
@@ -172,6 +175,12 @@ private fun ForwardPropertyPlan.accessExpression(): String =
       is BridgeType.ObjectHandle ->
         "receiver.asStableRef<${type.qualifiedName}>().get().$kotlinName"
 
+      // ADR-075: an extension property whose receiver is a value class crosses the bridge as its
+      // own underlying primitive/String value (ADR-014), exactly like
+      // `ForwardKotlinPlanEmitter.valueClassReconstruction`'s `Owner(value)` for the value class's
+      // own declared members -- the receiver must be reconstructed before the property access.
+      is BridgeType.ValueClass -> "${type.qualifiedName}(receiver).$kotlinName"
+
       else -> "receiver.$kotlinName"
     }
 
@@ -184,6 +193,10 @@ private fun ForwardPropertyPlan.valueExpression(): String = when (val type: Brid
     is BridgeType.Primitive, BridgeType.Char, BridgeType.String -> "value"
     is BridgeType.ObjectHandle -> "value?.asStableRef<${inner.qualifiedName}>()?.get()"
     is BridgeType.Interface -> "value?.asStableRef<${inner.qualifiedName}>()?.get()"
+    // ADR-075 Question D: a nullable collection setter is an ordinary `Direct` route with a
+    // nullable `COpaquePointer` value -- `?.` short-circuits before `asStableRef` is ever reached
+    // for a null wire value, so the property's static type stays the property's own `List<T>?`.
+    is BridgeType.Collection -> loweredCollectionExpression("value", inner, nullable = true)
     else -> error("Forward property emitter has no nullable setter route for $type")
   }
 
@@ -191,6 +204,7 @@ private fun ForwardPropertyPlan.valueExpression(): String = when (val type: Brid
   is BridgeType.Enum -> "${type.qualifiedName}.entries[value]"
   is BridgeType.ObjectHandle -> "value.asStableRef<${type.qualifiedName}>().get()"
   is BridgeType.Interface -> "value.asStableRef<${type.qualifiedName}>().get()"
+  is BridgeType.Collection -> loweredCollectionExpression("value", type)
   else -> error("Forward property emitter has no setter route for $type")
 }
 
@@ -200,6 +214,9 @@ private fun kotlinInputType(type: BridgeType): TypeName = when (type) {
   BridgeType.Char -> kotlinType("Char")
   BridgeType.String -> kotlinType("String")
   is BridgeType.Enum -> kotlinType("Int")
+  // ADR-075: only ever reached for an extension property's receiver -- the underlying is what
+  // actually crosses the wire (ADR-014).
+  is BridgeType.ValueClass -> kotlinInputType(type.underlying)
   is BridgeType.ObjectHandle, is BridgeType.Interface, is BridgeType.Collection ->
     cOpaquePointer.copy(nullable = type is BridgeType.Nullable)
 
