@@ -16,20 +16,32 @@ internal object ForwardCirPropertyProjection {
     isVirtual: Boolean = false,
   ): CirProperty {
     require(plan.position == ForwardPropertyPosition.CLASS) { "Expected class property plan" }
-    return property(plan, receiver = "_handle", isStatic = false, isOverride = isOverride, isVirtual = isVirtual)
+    return property(
+      plan,
+      receiver = "_handle",
+      isStatic = false,
+      isOverride = isOverride,
+      isVirtual = isVirtual,
+    )
   }
 
   fun staticProperty(plan: ForwardPropertyPlan, libraryName: String): List<CirMember> {
-    require(plan.position == ForwardPropertyPosition.TOP_LEVEL || plan.position == ForwardPropertyPosition.COMPANION) {
-      "Expected static property plan"
+    val isStaticPosition: Boolean =
+      plan.position == ForwardPropertyPosition.TOP_LEVEL ||
+          plan.position == ForwardPropertyPosition.COMPANION
+    require(isStaticPosition) { "Expected static property plan" }
+    val imports: List<CirDllImport> = plan.calls().map { call ->
+      nativeImport(call, libraryName, emptyList(), plan)
     }
-    val imports: List<CirDllImport> = plan.calls().map { call -> nativeImport(call, libraryName, emptyList(), plan) }
     return imports + property(plan, receiver = "", isStatic = true)
   }
 
   fun extension(plan: ForwardPropertyPlan, libraryName: String): List<CirMember> {
-    require(plan.position == ForwardPropertyPosition.EXTENSION) { "Expected extension property plan" }
-    val receiver = plan.receiver as ForwardPropertyReceiver.Value
+    require(plan.position == ForwardPropertyPosition.EXTENSION) {
+      "Expected extension property plan"
+    }
+    val receiver: ForwardPropertyReceiver.Value =
+      plan.receiver as ForwardPropertyReceiver.Value
     val publicReceiver: String = receiver.type.csharpType()
     val nativeReceiver: String = plan.calls().first().parameters
       .first { parameter -> parameter.name == "receiver" }
@@ -83,7 +95,11 @@ internal object ForwardCirPropertyProjection {
       name = plan.publicName,
       type = plan.type.csharpType(),
       nativeReturnType = directGetter.result.csharpWireType(),
-      nativeSetterType = if (plan.setter != null) setterNativeType(plan.type) else directGetter.result.csharpWireType(),
+      nativeSetterType = if (plan.setter != null) {
+        setterNativeType(plan.type)
+      } else {
+        directGetter.result.csharpWireType()
+      },
       nativeName = plan.kotlinName,
       getter = getterBody(plan, receiver),
       setter = plan.setter?.let { setterBody(plan, receiver) },
@@ -92,18 +108,41 @@ internal object ForwardCirPropertyProjection {
       isOverride = isOverride,
       isVirtual = isVirtual,
       hasSyncErrorOut = true,
+      // ADR-076: Instant Direct getter OUT components after handle.
+      nativeGetterParameters = instantGetterOutParameters(plan),
+      // ADR-076: Instant/Instant? multi-component setter IN fan-out.
+      nativeSetterParameters = instantSetterInParameters(plan),
     )
   }
 
   private fun classExtraNatives(plan: ForwardPropertyPlan): List<CirExtraNative> = buildList {
     if (plan.getter is ForwardPropertyGetter.LegacyTwoCall) {
-      val value = plan.getter.value
+      val value: ForwardNativeCall = plan.getter.value
+      // ADR-076: Instant? value export carries OUT component parameters.
+      val isNullableInstant: Boolean =
+        plan.type is BridgeType.Nullable && plan.type.type == BridgeType.Instant
+      val outParams: List<CirParameter> = if (isNullableInstant) {
+        value.parameters
+          .filter { parameter ->
+            parameter.direction == ForwardAbiDirection.OUT && parameter.name != "errorOut"
+          }
+          .map { parameter ->
+            CirParameter(
+              parameter.name,
+              parameter.transfer.type.csharpType(),
+              "out ${parameter.transfer.type.csharpType()}",
+            )
+          }
+      } else {
+        emptyList()
+      }
       add(
         CirExtraNative(
           "get_${plan.kotlinName}_value",
           value.result.csharpWireType(),
           "Native_Get_${plan.kotlinName}_value",
-          hasSyncErrorOut = true
+          hasSyncErrorOut = true,
+          parameters = outParams,
         )
       )
     }
@@ -119,6 +158,42 @@ internal object ForwardCirPropertyProjection {
     }
   }
 
+  /** ADR-076: OUT component CirParameters for a non-null Instant Direct getter. */
+  private fun instantGetterOutParameters(plan: ForwardPropertyPlan): List<CirParameter> {
+    if (plan.type != BridgeType.Instant) return emptyList()
+    val call: ForwardNativeCall = (plan.getter as ForwardPropertyGetter.Direct).call
+    return call.parameters
+      .filter { parameter ->
+        parameter.direction == ForwardAbiDirection.OUT && parameter.name != "errorOut"
+      }
+      .map { parameter ->
+        CirParameter(
+          parameter.name,
+          parameter.transfer.type.csharpType(),
+          "out ${parameter.transfer.type.csharpType()}",
+        )
+      }
+  }
+
+  /** ADR-076: multi-component IN CirParameters for Instant / Instant? Direct setters. */
+  private fun instantSetterInParameters(plan: ForwardPropertyPlan): List<CirParameter>? {
+    val isInstant: Boolean = plan.type == BridgeType.Instant
+    val isNullableInstant: Boolean =
+      plan.type is BridgeType.Nullable && plan.type.type == BridgeType.Instant
+    if (!isInstant && !isNullableInstant) return null
+    val call: ForwardNativeCall =
+      (plan.setter as? ForwardPropertySetter.Direct)?.call ?: return null
+    return call.parameters
+      .filter { parameter ->
+        parameter.name != "handle" &&
+            parameter.name != "receiver" &&
+            parameter.name != "errorOut"
+      }
+      .map { parameter ->
+        CirParameter(parameter.name, parameter.wireType.csharpWireType())
+      }
+  }
+
   private fun nativeImport(
     call: ForwardNativeCall,
     libraryName: String,
@@ -126,11 +201,21 @@ internal object ForwardCirPropertyProjection {
     plan: ForwardPropertyPlan,
   ): CirDllImport {
     val values: List<CirParameter> = call.parameters
-      .filter { parameter -> parameter.name != "handle" && parameter.name != "receiver" && parameter.name != "errorOut" }
+      .filter { parameter ->
+        parameter.name != "handle" &&
+            parameter.name != "receiver" &&
+            parameter.name != "errorOut"
+      }
       .map { parameter ->
-        val type: String = if (parameter.name == "value") setterNativeType(plan.type)
-        else parameter.wireType.csharpWireType()
-        CirParameter(parameter.name, type)
+        // ADR-076: OUT Instant components carry `out long` / `out int` native types.
+        if (parameter.direction == ForwardAbiDirection.OUT) {
+          val csharpType: String = parameter.transfer.type.csharpType()
+          CirParameter(parameter.name, csharpType, "out $csharpType")
+        } else if (parameter.name == "value") {
+          CirParameter(parameter.name, setterNativeType(plan.type))
+        } else {
+          CirParameter(parameter.name, parameter.wireType.csharpWireType())
+        }
       }
     val nativeName: String = call.exportName
       .split('_')
@@ -165,7 +250,20 @@ internal object ForwardCirPropertyProjection {
     val prefix: String = listOf(receiver).filter { it.isNotBlank() }.joinToString(", ")
     fun args(extra: String = ""): String = listOf(prefix, extra).filter { it.isNotBlank() }.joinToString(", ")
     return when (val setter = plan.setter) {
-      is ForwardPropertySetter.Direct -> checkedVoidBody(nativeName(plan, setter.call), args(plan.valueArgument()))
+      // ADR-076: Instant / Instant? setters need a component-prelude before the native call.
+      is ForwardPropertySetter.Direct -> {
+        val isInstant: Boolean = plan.type == BridgeType.Instant
+        val isNullableInstant: Boolean =
+          plan.type is BridgeType.Nullable && plan.type.type == BridgeType.Instant
+        if (isInstant) {
+          instantSetterBody(nativeName(plan, setter.call), prefix, nullable = false)
+        } else if (isNullableInstant) {
+          instantSetterBody(nativeName(plan, setter.call), prefix, nullable = true)
+        } else {
+          checkedVoidBody(nativeName(plan, setter.call), args(plan.valueArgument()))
+        }
+      }
+
       is ForwardPropertySetter.NullableDispatch -> buildString {
         appendLine(); appendLine("            if (value.HasValue)"); appendLine("            {")
         append(
@@ -184,7 +282,71 @@ internal object ForwardCirPropertyProjection {
     }
   }
 
+  /** ADR-076: Instant/Instant? property setter body with ToInstantComponents prelude. */
+  private fun instantSetterBody(
+    native: String,
+    receiver: String,
+    nullable: Boolean,
+  ): String = buildString {
+    appendLine()
+    if (nullable) {
+      // GetValueOrDefault (not .Value): CS8629 under warnings-as-errors, even inside a HasValue guard.
+      appendLine("            bool valueHasValue = value.HasValue;")
+      appendLine("            long value_epochSeconds = 0;")
+      appendLine("            int value_nanosecondsOfSecond = 0;")
+      appendLine("            if (valueHasValue)")
+      appendLine("            {")
+      appendLine(
+        "                NugetMarshal.ToInstantComponents(" +
+            "value.GetValueOrDefault(), out value_epochSeconds, out value_nanosecondsOfSecond);",
+      )
+      appendLine("            }")
+      val callArgs: String = listOf(
+        receiver,
+        "valueHasValue",
+        "value_epochSeconds",
+        "value_nanosecondsOfSecond",
+        "out IntPtr error",
+      ).filter { it.isNotBlank() }.joinToString(", ")
+      appendLine("            $native($callArgs);")
+    } else {
+      appendLine("            long value_epochSeconds;")
+      appendLine("            int value_nanosecondsOfSecond;")
+      appendLine(
+        "            NugetMarshal.ToInstantComponents(" +
+            "value, out value_epochSeconds, out value_nanosecondsOfSecond);",
+      )
+      val callArgs: String = listOf(
+        receiver,
+        "value_epochSeconds",
+        "value_nanosecondsOfSecond",
+        "out IntPtr error",
+      ).filter { it.isNotBlank() }.joinToString(", ")
+      appendLine("            $native($callArgs);")
+    }
+    appendLine("            if (error != IntPtr.Zero)")
+    appendLine("            {")
+    appendLine("                throw NugetErrorNative.BuildException(error);")
+    append("            }")
+  }
+
   private fun checkedGetter(native: String, args: String, type: BridgeType): String = buildString {
+    // ADR-076: Instant Direct getter is void + two OUT components.
+    if (type == BridgeType.Instant) {
+      val callArgs: String = listOf(
+        args,
+        "out long epochSecondsOut",
+        "out int nanosecondsOfSecondOut",
+        "out IntPtr error",
+      ).filter { it.isNotBlank() }.joinToString(", ")
+      appendLine("            $native($callArgs);")
+      appendErrorCheck(this)
+      append(
+        "            return NugetMarshal.FromInstantComponents(" +
+            "epochSecondsOut, nanosecondsOfSecondOut);",
+      )
+      return@buildString
+    }
     val callArgs: String = listOf(args, "out IntPtr error").filter { it.isNotBlank() }.joinToString(", ")
     when (val value = type.unwrapNullable()) {
       BridgeType.String -> appendLine("            IntPtr nativeResult = $native($callArgs);")
@@ -224,16 +386,54 @@ internal object ForwardCirPropertyProjection {
     }
   }
 
-  private fun legacyGetter(presence: String, value: String, args: String, type: BridgeType): String {
-    val primitive: BridgeType.Primitive = (type as BridgeType.Nullable).type as BridgeType.Primitive
-    val presenceArgs: String = listOf(args, "out IntPtr error").filter { it.isNotBlank() }.joinToString(", ")
-    val valueArgs: String = listOf(args, "out IntPtr error2").filter { it.isNotBlank() }.joinToString(", ")
+  private fun legacyGetter(
+    presence: String,
+    value: String,
+    args: String,
+    type: BridgeType,
+  ): String {
+    val inner: BridgeType = (type as BridgeType.Nullable).type
+    val presenceArgs: String =
+      listOf(args, "out IntPtr error").filter { it.isNotBlank() }.joinToString(", ")
+    // ADR-076: Instant? value export is void + two OUT components.
+    if (inner == BridgeType.Instant) {
+      val valueArgs: String = listOf(
+        args,
+        "out long epochSecondsOut",
+        "out int nanosecondsOfSecondOut",
+        "out IntPtr error2",
+      ).filter { it.isNotBlank() }.joinToString(", ")
+      return buildString {
+        appendLine()
+        appendLine("            bool hasValue = $presence($presenceArgs);")
+        appendErrorCheck(this)
+        appendLine("            if (!hasValue) return null;")
+        appendLine("            $value($valueArgs);")
+        appendLine("            if (error2 != IntPtr.Zero)")
+        appendLine("            {")
+        appendLine("                throw NugetErrorNative.BuildException(error2);")
+        appendLine("            }")
+        append(
+          "            return NugetMarshal.FromInstantComponents(" +
+              "epochSecondsOut, nanosecondsOfSecondOut);",
+        )
+      }
+    }
+    val primitive: BridgeType.Primitive = inner as BridgeType.Primitive
+    val valueArgs: String =
+      listOf(args, "out IntPtr error2").filter { it.isNotBlank() }.joinToString(", ")
     return buildString {
-      appendLine(); appendLine("            bool hasValue = $presence($presenceArgs);"); appendErrorCheck(this)
+      appendLine()
+      appendLine("            bool hasValue = $presence($presenceArgs);")
+      appendErrorCheck(this)
       appendLine("            if (!hasValue) return null;")
-      appendLine("            ${primitive.wireType().csharpWireType()} value = $value($valueArgs);")
-      appendLine("            if (error2 != IntPtr.Zero)"); appendLine("            {")
-      appendLine("                throw NugetErrorNative.BuildException(error2);"); appendLine("            }")
+      appendLine(
+        "            ${primitive.wireType().csharpWireType()} value = $value($valueArgs);",
+      )
+      appendLine("            if (error2 != IntPtr.Zero)")
+      appendLine("            {")
+      appendLine("                throw NugetErrorNative.BuildException(error2);")
+      appendLine("            }")
       append("            return value;")
     }
   }
@@ -354,6 +554,8 @@ internal object ForwardCirPropertyProjection {
   private fun BridgeType.unwrapNullable(): BridgeType = if (this is BridgeType.Nullable) type else this
   private fun BridgeType.wireType(): ForwardAbiWireType = when (val type = unwrapNullable()) {
     BridgeType.Unit -> ForwardAbiWireType.VOID
+    // ADR-076: Instant results use VOID + OUT components.
+    BridgeType.Instant -> ForwardAbiWireType.VOID
     BridgeType.Char -> ForwardAbiWireType.CHAR16
     BridgeType.String, is BridgeType.ObjectHandle, is BridgeType.Interface, is BridgeType.Collection ->
       ForwardAbiWireType.POINTER
@@ -363,25 +565,16 @@ internal object ForwardCirPropertyProjection {
     else -> error("No property wire type for $type")
   }
 
-  private fun PrimitiveKind.wireType(): ForwardAbiWireType = when (this) {
-    PrimitiveKind.BOOLEAN -> ForwardAbiWireType.BOOLEAN; PrimitiveKind.BYTE -> ForwardAbiWireType.INT8; PrimitiveKind.UBYTE -> ForwardAbiWireType.UINT8
-    PrimitiveKind.SHORT -> ForwardAbiWireType.INT16; PrimitiveKind.USHORT -> ForwardAbiWireType.UINT16; PrimitiveKind.INT -> ForwardAbiWireType.INT32
-    PrimitiveKind.UINT -> ForwardAbiWireType.UINT32; PrimitiveKind.LONG -> ForwardAbiWireType.INT64; PrimitiveKind.ULONG -> ForwardAbiWireType.UINT64
-    PrimitiveKind.FLOAT -> ForwardAbiWireType.FLOAT32; PrimitiveKind.DOUBLE -> ForwardAbiWireType.FLOAT64
-  }
-
   private fun BridgeType.csharpType(): String = when (this) {
     is BridgeType.Nullable -> "${type.csharpType()}?"
     is BridgeType.Primitive -> kind.csharpType()
     BridgeType.Char -> "char"
     BridgeType.String -> "string"
+    // ADR-076: Instant public C# type.
+    BridgeType.Instant -> "DateTimeOffset"
     is BridgeType.Enum -> this.csharpType
-    // ADR-066: mirrors `BridgeType.Enum.csharpType` — the classifier already qualified this.
     is BridgeType.ObjectHandle -> csharpType
-    // ADR-040: the public C# spelling is the projected interface, never the backing class.
     is BridgeType.Interface -> csharpType
-    // ADR-075: only reached for an extension property's receiver -- the public C# receiver type
-    // is the value class itself (e.g. `ChartId`), never its underlying wire value.
     is BridgeType.ValueClass -> csharpType
     is BridgeType.Collection -> when (kind) {
       CollectionKind.LIST -> "IReadOnlyList<${requireNotNull(element).csharpType()}>"
@@ -399,17 +592,50 @@ internal object ForwardCirPropertyProjection {
     else -> error("No C# property type for $this")
   }
 
+  private fun PrimitiveKind.wireType(): ForwardAbiWireType = when (this) {
+    PrimitiveKind.BOOLEAN -> ForwardAbiWireType.BOOLEAN
+    PrimitiveKind.BYTE -> ForwardAbiWireType.INT8
+    PrimitiveKind.UBYTE -> ForwardAbiWireType.UINT8
+    PrimitiveKind.SHORT -> ForwardAbiWireType.INT16
+    PrimitiveKind.USHORT -> ForwardAbiWireType.UINT16
+    PrimitiveKind.INT -> ForwardAbiWireType.INT32
+    PrimitiveKind.UINT -> ForwardAbiWireType.UINT32
+    PrimitiveKind.LONG -> ForwardAbiWireType.INT64
+    PrimitiveKind.ULONG -> ForwardAbiWireType.UINT64
+    PrimitiveKind.FLOAT -> ForwardAbiWireType.FLOAT32
+    PrimitiveKind.DOUBLE -> ForwardAbiWireType.FLOAT64
+  }
+
   private fun PrimitiveKind.csharpType(): String = when (this) {
-    PrimitiveKind.BOOLEAN -> "bool"; PrimitiveKind.BYTE -> "sbyte"; PrimitiveKind.UBYTE -> "byte"; PrimitiveKind.SHORT -> "short"; PrimitiveKind.USHORT -> "ushort"
-    PrimitiveKind.INT -> "int"; PrimitiveKind.UINT -> "uint"; PrimitiveKind.LONG -> "long"; PrimitiveKind.ULONG -> "ulong"; PrimitiveKind.FLOAT -> "float"; PrimitiveKind.DOUBLE -> "double"
+    PrimitiveKind.BOOLEAN -> "bool"
+    PrimitiveKind.BYTE -> "sbyte"
+    PrimitiveKind.UBYTE -> "byte"
+    PrimitiveKind.SHORT -> "short"
+    PrimitiveKind.USHORT -> "ushort"
+    PrimitiveKind.INT -> "int"
+    PrimitiveKind.UINT -> "uint"
+    PrimitiveKind.LONG -> "long"
+    PrimitiveKind.ULONG -> "ulong"
+    PrimitiveKind.FLOAT -> "float"
+    PrimitiveKind.DOUBLE -> "double"
   }
 
   private fun ForwardAbiWireType.csharpWireType(): String = when (this) {
-    ForwardAbiWireType.VOID -> "void"; ForwardAbiWireType.BOOLEAN -> "bool"; ForwardAbiWireType.INT8 -> "sbyte"; ForwardAbiWireType.UINT8 -> "byte"
-    ForwardAbiWireType.INT16 -> "short"; ForwardAbiWireType.UINT16 -> "ushort"; ForwardAbiWireType.CHAR16 -> "char"
-    ForwardAbiWireType.INT32 -> "int"; ForwardAbiWireType.UINT32 -> "uint"
-    ForwardAbiWireType.INT64 -> "long"; ForwardAbiWireType.UINT64 -> "ulong"; ForwardAbiWireType.FLOAT32 -> "float"; ForwardAbiWireType.FLOAT64 -> "double"
-    ForwardAbiWireType.STRING -> "string"; ForwardAbiWireType.POINTER -> "IntPtr"
+    ForwardAbiWireType.VOID -> "void"
+    ForwardAbiWireType.BOOLEAN -> "bool"
+    ForwardAbiWireType.INT8 -> "sbyte"
+    ForwardAbiWireType.UINT8 -> "byte"
+    ForwardAbiWireType.INT16 -> "short"
+    ForwardAbiWireType.UINT16 -> "ushort"
+    ForwardAbiWireType.CHAR16 -> "char"
+    ForwardAbiWireType.INT32 -> "int"
+    ForwardAbiWireType.UINT32 -> "uint"
+    ForwardAbiWireType.INT64 -> "long"
+    ForwardAbiWireType.UINT64 -> "ulong"
+    ForwardAbiWireType.FLOAT32 -> "float"
+    ForwardAbiWireType.FLOAT64 -> "double"
+    ForwardAbiWireType.STRING -> "string"
+    ForwardAbiWireType.POINTER -> "IntPtr"
     ForwardAbiWireType.UNKNOWN -> error("Unknown property wire type")
   }
 }

@@ -26,11 +26,13 @@ Primitive types follow the standard [Kotlin/Native C interop mappings](https://k
 | `String`                              | ⇄ | `string`                             | UTF-8 marshalling                                                                                                       |                                                                                                                                                                           |
 | `T?` (nullable primitive)             | → | `T?`                                 | two-call on property/top-level returns; method/extension nullable returns single-call `valueOut`; `Boolean?` carries `[MarshalAs(UnmanagedType.I1)]` at every position, `Char?` still deferred · ← deferred `[1]`    | [ADR-002](docs/adr/002-nullable-two-call-pattern.md), [ADR-061](docs/adr/061-method-return-marshalling.md), [ADR-053](docs/adr/053-nullable-reference-types-in-kotlin.md), [ADR-069](docs/adr/069-nullable-boolean-marshalling.md) |
 | `String?`                             | ⇄ | `string?`                            | → two-call on property/top-level returns; nullable params carry `?` on the planned C# surface · ← metadata-driven `[2]` | [ADR-002](docs/adr/002-nullable-two-call-pattern.md), [ADR-053](docs/adr/053-nullable-reference-types-in-kotlin.md), [ADR-062](docs/adr/062-forward-callable-plan.md)     |
+| `kotlin.time.Instant` / `Instant?`    | → | `DateTimeOffset` / `DateTimeOffset?` | UTC (`Offset == TimeSpan.Zero`); wire is epoch seconds + nanoseconds; C# truncates sub-100 ns; year 0001–9999 only · ← deferred; Duration / collection Instant deferred `[3]` | [ADR-076](docs/adr/076-kotlin-time-instant-mapping.md), [ADR-062](docs/adr/062-forward-callable-plan.md) |
 
 **Notes**
 
 - **`[1]`** ← `Nullable<T>` is deferred: it needs its own wire format.
 - **`[2]`** ← `NullableAttribute` byte 2 → `String?`, byte 1 → `String`, byte 0/oblivious → `String` (with an `info_oblivious_nullability` warning).
+- **`[3]`** → First-class stdlib built-in (not a handle, not a custom mapper). `kotlinx.datetime.Instant` as a 0.7+ typealias expands via ADR-018; pre-0.7 class form deferred.
 
 ## OOP Constructs
 

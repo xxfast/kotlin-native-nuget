@@ -1,6 +1,6 @@
 # Primitives and strings
 
-Primitive types follow the standard [Kotlin/Native C interop mappings](https://kotlinlang.org/docs/mapping-primitive-data-types-from-c.html#inspect-generated-kotlin-apis-for-a-c-library). Strings marshal as UTF-8. Nullable primitives and nullable strings use a two-call pattern since a C ABI value type can't itself carry "no value".
+Primitive types follow the standard [Kotlin/Native C interop mappings](https://kotlinlang.org/docs/mapping-primitive-data-types-from-c.html#inspect-generated-kotlin-apis-for-a-c-library). Strings marshal as UTF-8. `kotlin.time.Instant` is a first-class built-in (same category as `String`), not a StableRef handle. Nullable primitives and nullable strings use a two-call pattern since a C ABI value type can't itself carry "no value".
 
 | Kotlin | C# | Notes |
 |---|---|---|
@@ -10,6 +10,8 @@ Primitive types follow the standard [Kotlin/Native C interop mappings](https://k
 | `Boolean` | `bool` | |
 | `Char` | `char` | 2-byte scalar (`ushort` at the C ABI); property, parameter, and method return, see [ADR-062](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/062-forward-callable-plan.md) |
 | `String` | `string` | UTF-8 marshalling |
+| `kotlin.time.Instant` | `System.DateTimeOffset` | UTC (`Offset == TimeSpan.Zero`); wire is epoch seconds + nanoseconds; property, constructor/method parameter, return; see Instant below and [ADR-076](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/076-kotlin-time-instant-mapping.md) |
+| `Instant?` | `DateTimeOffset?` | two-call on property getters; method returns use single-call has-value + two OUT components; parameters fan out to has-value + components |
 | `T?` (nullable primitive) | `T?` | two-call pattern on property and top-level returns (forward only); method/extension nullable returns use single-call `valueOut`, see [Classes and objects](classes-and-objects.md) and [ADR-002](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/002-nullable-two-call-pattern.md) / [ADR-061](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/061-method-return-marshalling.md); `Boolean?` needs an explicit `[MarshalAs(UnmanagedType.I1)]` at both seams, see Nullable Boolean below and [ADR-069](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/069-nullable-boolean-marshalling.md) |
 | `String?` | `string?` | forward: two-call pattern on top-level/property returns (this page); reverse: `NullableAttribute`-driven, see [Objects and handles](objects-and-handles.md) and [ADR-053](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/053-nullable-reference-types-in-kotlin.md) |
 
@@ -339,6 +341,226 @@ out-parameter; see [Classes and objects](classes-and-objects.md#method-returns).
     <code>Char</code> (above) is unaffected.</p>
 </note>
 
+## Instant
+
+`kotlin.time.Instant` (stdlib 2.3+) is a first-class forward built-in, same category as `String`.
+It maps to idiomatic `System.DateTimeOffset` with UTC offset zero, not to an opaque handle and not
+via `include("kotlin.time")`.
+
+| Kotlin | C# |
+|---|---|
+| `kotlin.time.Instant` | `System.DateTimeOffset` (`Offset == TimeSpan.Zero`) |
+| `Instant?` | `DateTimeOffset?` |
+
+Wire form is Instant's own storage: `epochSeconds: Long` + `nanosecondsOfSecond: Int`. The public
+C# type truncates sub-100 ns (`nanos / 100` ticks) and throws `ArgumentOutOfRangeException` (via
+checked tick math) for values outside year 0001–9999. Positions in v1: data-class / constructor
+parameter, property get/set, method / object parameter and return, including nullables. Ordinary
+ADR-062 path throughout.
+
+From `test-library/src/nativeMain/kotlin/.../time/InstantSample.kt`:
+
+```kotlin
+data class CatPassport(
+  val catName: String,
+  val microchippedAt: Instant,
+)
+
+class VetAppointment(var arrivedAt: Instant? = null) {
+  fun nextSlot(): Instant = OreoMicrochippedAt
+
+  fun maybeCheckout(checkedOut: Boolean): Instant? =
+    if (checkedOut) OreoMicrochippedAt else null
+
+  fun secondsSinceEpoch(at: Instant): Long = at.epochSeconds
+
+  fun echo(at: Instant): Instant = at
+
+  fun describeDeparture(at: Instant?): String =
+    if (at == null) "still in clinic" else "left at ${at.epochSeconds}"
+
+  fun maybeEcho(at: Instant?): Instant? = at
+}
+
+object PassportOffice {
+  fun defaultMicrochipDate(): Instant = OreoMicrochippedAt
+
+  fun isAfterOreo(at: Instant): Boolean = at > OreoMicrochippedAt
+}
+```
+
+Generated C#, from `Interop.cs` (`TestLibrary.Time`). A non-null Instant parameter fans out to two
+ABI scalars; a non-null return uses void + two OUT component pointers; helpers live on
+`NugetMarshal`:
+
+```C#
+internal static void ToInstantComponents(DateTimeOffset value, out long epochSeconds, out int nanosecondsOfSecond)
+{
+    DateTimeOffset utc = value.ToUniversalTime();
+    long unixTicks = utc.UtcTicks - DateTimeOffset.UnixEpoch.UtcTicks;
+    epochSeconds = System.Math.DivRem(unixTicks, TimeSpan.TicksPerSecond, out long remTicks);
+    nanosecondsOfSecond = (int)(remTicks * 100);
+}
+
+internal static DateTimeOffset FromInstantComponents(long epochSeconds, int nanosecondsOfSecond)
+{
+    return DateTimeOffset.UnixEpoch.AddTicks(
+        checked(epochSeconds * TimeSpan.TicksPerSecond + nanosecondsOfSecond / 100));
+}
+```
+
+DTO constructor + property getter (NYTimes `published_date` shape):
+
+```C#
+[DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "catpassport_create")]
+private static extern IntPtr Native_Create(string catName, long microchippedAt_epochSeconds, int microchippedAt_nanosecondsOfSecond, out IntPtr error);
+
+public CatPassport(string catName, DateTimeOffset microchippedAt)
+{
+    long microchippedAt_epochSeconds;
+    int microchippedAt_nanosecondsOfSecond;
+    NugetMarshal.ToInstantComponents(microchippedAt, out microchippedAt_epochSeconds, out microchippedAt_nanosecondsOfSecond);
+    IntPtr handle = Native_Create(catName, microchippedAt_epochSeconds, microchippedAt_nanosecondsOfSecond, out IntPtr error);
+    if (error != IntPtr.Zero)
+    {
+        throw NugetErrorNative.BuildException(error);
+    }
+    _handle = handle;
+}
+
+[DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "catpassport_get_microchippedAt")]
+private static extern void Native_Get_microchippedAt(IntPtr handle, out long epochSecondsOut, out int nanosecondsOfSecondOut, out IntPtr error);
+
+public DateTimeOffset MicrochippedAt
+{
+    get
+    {
+        Native_Get_microchippedAt(_handle, out long epochSecondsOut, out int nanosecondsOfSecondOut, out IntPtr error);
+        if (error != IntPtr.Zero)
+        {
+            throw NugetErrorNative.BuildException(error);
+        }
+        return NugetMarshal.FromInstantComponents(epochSecondsOut, nanosecondsOfSecondOut);
+    }
+}
+```
+
+`Instant?` property (ADR-002 two-call getter + three-slot setter):
+
+```C#
+public DateTimeOffset? ArrivedAt
+{
+    get
+    {
+        bool hasValue = Native_Get_arrivedAt(_handle, out IntPtr error);
+        if (error != IntPtr.Zero)
+        {
+            throw NugetErrorNative.BuildException(error);
+        }
+        if (!hasValue) return null;
+        Native_Get_arrivedAt_value(_handle, out long epochSecondsOut, out int nanosecondsOfSecondOut, out IntPtr error2);
+        if (error2 != IntPtr.Zero)
+        {
+            throw NugetErrorNative.BuildException(error2);
+        }
+        return NugetMarshal.FromInstantComponents(epochSecondsOut, nanosecondsOfSecondOut);
+    }
+    set
+    {
+        bool valueHasValue = value.HasValue;
+        long value_epochSeconds = 0;
+        int value_nanosecondsOfSecond = 0;
+        if (valueHasValue)
+        {
+            NugetMarshal.ToInstantComponents(value.GetValueOrDefault(), out value_epochSeconds, out value_nanosecondsOfSecond);
+        }
+        Native_Set_arrivedAt(_handle, valueHasValue, value_epochSeconds, value_nanosecondsOfSecond, out IntPtr error);
+        if (error != IntPtr.Zero)
+        {
+            throw NugetErrorNative.BuildException(error);
+        }
+    }
+}
+```
+
+Method return (void + two OUT) and `Instant?` return (has-value + two OUT):
+
+```C#
+public DateTimeOffset NextSlot()
+{
+    Native_NextSlot(_handle, out long epochSecondsOut, out int nanosecondsOfSecondOut, out IntPtr error);
+    if (error != IntPtr.Zero)
+    {
+        throw NugetErrorNative.BuildException(error);
+    }
+    return NugetMarshal.FromInstantComponents(epochSecondsOut, nanosecondsOfSecondOut);
+}
+
+public DateTimeOffset? MaybeCheckout(bool checkedOut)
+{
+    bool hasValue = Native_MaybeCheckout(_handle, checkedOut, out long epochSecondsOut, out int nanosecondsOfSecondOut, out IntPtr error);
+    if (error != IntPtr.Zero)
+    {
+        throw NugetErrorNative.BuildException(error);
+    }
+    return hasValue ? NugetMarshal.FromInstantComponents(epochSecondsOut, nanosecondsOfSecondOut) : null;
+}
+```
+
+From `IntegrationTests/InstantMappingTests.cs` (samples use nanos divisible by 100 so equality
+survives tick truncation):
+
+```C#
+[Fact]
+public void CatPassport_MicrochippedAt_ConstructorAndGetter()
+{
+    using var passport = new CatPassport("Oreo", OreoMicrochippedAt);
+
+    Assert.Equal("Oreo", passport.CatName);
+    Assert.Equal(OreoMicrochippedAt, passport.MicrochippedAt);
+    Assert.Equal(TimeSpan.Zero, passport.MicrochippedAt.Offset);
+}
+
+[Fact]
+public void VetAppointment_ArrivedAt_SetAndClear()
+{
+    using var appt = new VetAppointment(null);
+
+    appt.ArrivedAt = OreoMicrochippedAt;
+    Assert.Equal(OreoMicrochippedAt, appt.ArrivedAt);
+    Assert.Equal(TimeSpan.Zero, appt.ArrivedAt!.Value.Offset);
+
+    appt.ArrivedAt = null;
+    Assert.Null(appt.ArrivedAt);
+}
+
+[Fact]
+public void VetAppointment_Echo_RoundTripsDateTimeOffset()
+{
+    using var appt = new VetAppointment(null);
+    DateTimeOffset echoed = appt.Echo(OreoMicrochippedAt);
+
+    Assert.Equal(OreoMicrochippedAt, echoed);
+    Assert.Equal(TimeSpan.Zero, echoed.Offset);
+}
+
+[Fact]
+public void PassportOffice_DefaultMicrochipDate_ReturnsOreoTime()
+{
+    DateTimeOffset date = PassportOffice.DefaultMicrochipDate();
+
+    Assert.Equal(OreoMicrochippedAt, date);
+    Assert.Equal(TimeSpan.Zero, date.Offset);
+}
+```
+
+<warning>
+    <p>Stay inside year 0001–9999 when materializing to <code>DateTimeOffset</code>. Instant
+    sentinels such as <code>DISTANT_PAST</code> / <code>DISTANT_FUTURE</code> throw on the C# side
+    rather than clamp. Sub-100-nanosecond Instant bits are dropped at the public C# boundary
+    (<a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/076-kotlin-time-instant-mapping.md">ADR-076</a>).</p>
+</warning>
+
 ## Limitations
 
 - Nullable *primitive* mapping (`Int?`, and friends) is forward-only (`→`): the reverse direction has
@@ -351,11 +573,16 @@ out-parameter; see [Classes and objects](classes-and-objects.md#method-returns).
 - `Char?` stays deferred: it needs a `ushort`-narrowing wire type, a different fix from `Boolean?`'s
   `MarshalAs(I1)` above. Tracked in [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md)
   Phase 4.
+- `Instant` is forward-only (`→`). Reverse `DateTimeOffset` → Kotlin Instant, `kotlin.time.Duration`
+  → `TimeSpan`, Instant as a collection / Flow element, and the pre-0.7 `kotlinx.datetime.Instant`
+  class form are deferred ([ADR-076](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/076-kotlin-time-instant-mapping.md)).
+  kotlinx-datetime 0.7+ `typealias Instant = kotlin.time.Instant` expands via [ADR-018](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/018-type-alias-mapping.md).
 
 <seealso>
     <category ref="related">
         <a href="classes-and-objects.md">Classes and objects</a>
         <a href="objects-and-handles.md">Objects and handles</a>
+        <a href="data-classes.md">Data classes</a>
     </category>
     <category ref="external">
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/002-nullable-two-call-pattern.md">ADR-002: Nullable two-call pattern</a>
@@ -364,5 +591,6 @@ out-parameter; see [Classes and objects](classes-and-objects.md#method-returns).
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/062-forward-callable-plan.md">ADR-062: Forward callable plan</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/064-forward-unsupported-declaration-diagnostics.md">ADR-064: Forward unsupported-declaration diagnostics</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/069-nullable-boolean-marshalling.md">ADR-069: Nullable Boolean marshalling</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/076-kotlin-time-instant-mapping.md">ADR-076: Kotlin time Instant mapping</a>
     </category>
 </seealso>

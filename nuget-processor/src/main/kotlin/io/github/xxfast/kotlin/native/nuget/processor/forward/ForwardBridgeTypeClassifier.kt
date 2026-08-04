@@ -76,6 +76,8 @@ internal class ForwardBridgeTypeClassifier(
     knownScalarType(qualifiedName)?.let { return it }
     if (qualifiedName == "kotlin.Char") return BridgeType.Char
     if (qualifiedName == "kotlin.String") return BridgeType.String
+    // ADR-076: first-class built-in, same place as String. Never an object-handle / include() path.
+    if (qualifiedName == "kotlin.time.Instant") return BridgeType.Instant
     specializedProtocol(qualifiedName)?.let { return it }
     collectionType(qualifiedName, type.arguments)?.let { return it }
 
@@ -99,11 +101,14 @@ internal class ForwardBridgeTypeClassifier(
     }
     // ADR-040: an interface with type parameters stays on the pre-existing "generic declaration"
     // legacy route (unchanged from before this ADR) rather than becoming a plannable
-    // BridgeType.Interface — chosen ahead of the ADR-039 add*/remove* pair exclusion below, since
+    // BridgeType.Interface -- chosen ahead of the ADR-039 add*/remove* pair exclusion below, since
     // the classifier is deliberately position-agnostic (ForwardCallablePlanner.classEntries
     // already excludes add*/remove* pair methods from planOrSkip before classification's result
     // would matter for them).
-    if (classDeclaration.classKind == ClassKind.INTERFACE && classDeclaration.typeParameters.isNotEmpty()) {
+    val isGenericInterface: Boolean =
+      classDeclaration.classKind == ClassKind.INTERFACE &&
+          classDeclaration.typeParameters.isNotEmpty()
+    if (isGenericInterface) {
       return BridgeType.SpecializedProtocol("generic declaration $qualifiedName")
     }
     if (classDeclaration.classKind == ClassKind.INTERFACE) {
@@ -123,7 +128,7 @@ internal class ForwardBridgeTypeClassifier(
     }
     if (qualifiedName !in context.exportedObjectHandles) {
       // ADR-066: a declaration read straight off a klib dependency (never seen by
-      // `resolver.getAllFiles()`) carries no containing file — verified in the ADR's spike. A
+      // `resolver.getAllFiles()`) carries no containing file -- verified in the ADR's spike. A
       // module-local declaration that simply fell outside the ADR-063 package filter still keeps
       // the old, generic message; only the cross-module case gets the closure's own diagnostic.
       val isUnexportedDependency: Boolean = classDeclaration.containingFile == null
@@ -142,7 +147,7 @@ internal class ForwardBridgeTypeClassifier(
 
   /**
    * ADR-074 Decision 2 (2a): erase an `actual typealias` to its target and classify that instead
-   * — the C# type is always the target's, never the `expect`'s, exactly as an ordinary
+   * -- the C# type is always the target's, never the `expect`'s, exactly as an ordinary
    * `typealias` is erased under ADR-018. v1 admits only a redirect to a plain, non-generic class
    * (Consequences, "deferred" list); anything else, including a target the forward direction
    * cannot otherwise export, takes the `SKIPPED_ACTUAL_TYPEALIAS_TARGET` path via
@@ -177,7 +182,7 @@ internal class ForwardBridgeTypeClassifier(
    * ADR-040: an interface at an ordinary (non ADR-039 add/remove-pair) position. Mirrors the
    * [ObjectHandle] membership check exactly, but the public spelling is `I$simpleName` (the
    * projected interface) and the construction spelling is the bare `$simpleName` (the generated
-   * backing wrapper class) — qualified together for an admitted dependency-module interface, the
+   * backing wrapper class) -- qualified together for an admitted dependency-module interface, the
    * same qualification rule [csharpTypeNameFor] already applies to a class/object handle.
    */
   private fun interfaceType(declaration: KSClassDeclaration, qualifiedName: String): BridgeType {
@@ -195,7 +200,11 @@ internal class ForwardBridgeTypeClassifier(
     }
     val simpleName: String = declaration.simpleName.asString()
     if (declaration.containingFile != null || context.rootNamespace.isEmpty()) {
-      return BridgeType.Interface(qualifiedName, csharpType = "I$simpleName", backingType = simpleName)
+      return BridgeType.Interface(
+        qualifiedName,
+        csharpType = "I$simpleName",
+        backingType = simpleName,
+      )
     }
     val namespace: String = mapPackageToNamespace(
       declaration.packageName.asString(),
@@ -212,7 +221,7 @@ internal class ForwardBridgeTypeClassifier(
   /**
    * ADR-066: a bare simple name is the shipped behaviour and stays that way for every
    * module-local object handle (deliberately narrower than the enum branch's blanket
-   * qualification — this repo's Tier 1/2 fixtures assert exact `MethodName(Type param)`
+   * qualification -- this repo's Tier 1/2 fixtures assert exact `MethodName(Type param)`
    * substrings for module-local handles today, so unconditionally qualifying every ObjectHandle
    * would be a much larger behavioural change than this feature's scope). An **admitted
    * dependency-module type** is the one case that must be qualified: it is never guaranteed to
@@ -313,7 +322,7 @@ internal fun KSType.toBridgeType(context: ForwardBridgeTypeContext): BridgeType 
 
 /**
  * ADR-066 verified spike finding: a cross-module (klib) `value class` reports `Modifier.INLINE`,
- * never `Modifier.VALUE` — only an in-module one reports `VALUE`. Every classification site that
+ * never `Modifier.VALUE` -- only an in-module one reports `VALUE`. Every classification site that
  * tested `Modifier.VALUE` alone would misclassify an admitted dependency value class as an
  * ordinary class and export it as an opaque `IDisposable` handle instead of an unwrapped value:
  * valid-compiling, silently wrong. This is the single shared helper the ADR asks for so a fourth

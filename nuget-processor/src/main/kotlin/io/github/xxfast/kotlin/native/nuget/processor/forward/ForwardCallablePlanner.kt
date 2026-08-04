@@ -51,7 +51,7 @@ internal enum class ForwardPlanSkipReason(val droppedFromCSharp: Boolean) {
 
   // ADR-064: genuine drops with their own named diagnostic kind, not the generic "type
   // combination is not supported" bucket the reasons above still render through.
-  /** Cell 23 / BUG-010: a generic + suspend + inline + reified extension returning `Result<T>` —
+  /** Cell 23 / BUG-010: a generic + suspend + inline + reified extension returning `Result<T>` --
    *  the combination has no working legacy route, even though suspend and generic each do
    *  individually. */
   UNSUPPORTED_COMBINATION(droppedFromCSharp = true),
@@ -68,7 +68,7 @@ internal enum class ForwardPlanSkipReason(val droppedFromCSharp: Boolean) {
 
   /** ADR-074: an `expect class` actualized by an `actual typealias` whose erased target the
    *  forward direction does not export (a platform-library type, a stdlib type, an out-of-scope
-   *  package, or a parameterized target — v1 admits only a redirect to a plain class). Distinct
+   *  package, or a parameterized target -- v1 admits only a redirect to a plain class). Distinct
    *  from [UNEXPORTED_DEPENDENCY_TYPE], whose `include(...)` hint is wrong here: a platform
    *  library can never be brought into scope. */
   ACTUAL_TYPEALIAS_TARGET(droppedFromCSharp = true),
@@ -105,7 +105,7 @@ internal sealed interface ForwardCallableCatalogEntry {
 internal data class ForwardCallablePlanCatalog(
   val entries: List<ForwardCallableCatalogEntry>,
   val propertyPlans: List<ForwardPropertyPlan> = emptyList(),
-  // ADR-075: the property planner's own diagnostic channel — a mutable collection property
+  // ADR-075: the property planner's own diagnostic channel -- a mutable collection property
   // planned with `setter = null` because a component failed `isWrappableComponent()`, so the
   // consumer learns the C# property survives read-only rather than silently losing its setter.
   val droppedPropertySetters: List<ForwardDroppedPropertySetter> = emptyList(),
@@ -177,7 +177,7 @@ internal class ForwardCallablePlanner(
     val underlyingPropName: String = underlyingParam.name?.asString() ?: return emptyList()
     val classifiedUnderlying: BridgeType = classifier.classify(underlyingParam.type.resolve())
     // Sealed (and other handle-shaped specialized) underlyings still cross as StableRef handles
-    // on the shipped ABI — same as ObjectHandle. Map them to a Handle receiver so methods like
+    // on the shipped ABI -- same as ObjectHandle. Map them to a Handle receiver so methods like
     // ObservationResult.describe keep working after ordinary legacy deletion.
     val underlyingType: BridgeType = if (
       classifiedUnderlying is BridgeType.SpecializedProtocol &&
@@ -196,11 +196,11 @@ internal class ForwardCallablePlanner(
     }
 
     // ADR-066 amendment to ADR-064's SKIPPED_INHERITED_MEMBER filter: `origin != Origin.KOTLIN`
-    // is wrong once a value class can live in a dependency module — every member of a KOTLIN_LIB
+    // is wrong once a value class can live in a dependency module -- every member of a KOTLIN_LIB
     // declaration (author-declared or not) reports `origin == KOTLIN_LIB`, so the old rule would
     // drop the entire cross-module value class, not just its delegated members. The only
     // origin-independent signal available, verified against a real klib, is "a supertype declares
-    // a member with this simple name" — this also correctly catches interface delegation
+    // a member with this simple name" -- this also correctly catches interface delegation
     // (`CharSequence by value`), which forwards members with `parentDeclaration == cls` and is
     // otherwise indistinguishable from a hand-written member. Computed once per class: cheap
     // relative to walking every member, and `getAllSuperTypes()` is documented as expensive.
@@ -339,7 +339,7 @@ internal class ForwardCallablePlanner(
       .filter { it.simpleName.asString() !in excluded }
       .map { method ->
         val name: String = method.simpleName.asString()
-        // ADR-064 (ROADMAP line 77), amended by ADR-066: see `valueClassPropertyEntries` above —
+        // ADR-064 (ROADMAP line 77), amended by ADR-066: see `valueClassPropertyEntries` above --
         // the same supertype-simple-name signal (not `Origin.KOTLIN`) catches both genuine
         // supertype inheritance and interface delegation (`CharSequence by value`'s `get` /
         // `subSequence`), the two constructs `parentDeclaration` alone cannot tell apart
@@ -377,10 +377,10 @@ internal class ForwardCallablePlanner(
   }
 
   /**
-   * ADR-040: dispatch-export plans for an interface's own declared members (reachability-driven —
+   * ADR-040: dispatch-export plans for an interface's own declared members (reachability-driven --
    * only called for interfaces the caller already determined appear in a planned return
    * position). The receiver classifies as [BridgeType.ObjectHandle] rather than
-   * [BridgeType.Interface] even though the receiver *is* an interface — a receiver is only ever
+   * [BridgeType.Interface] even though the receiver *is* an interface -- a receiver is only ever
    * lowered via `asStableRef`, never constructed, so the extra construction spelling
    * [BridgeType.Interface] carries would be unused (sub-decision A.1's Consequences #3).
    *
@@ -394,7 +394,9 @@ internal class ForwardCallablePlanner(
     val receiverType: BridgeType = BridgeType.ObjectHandle(ifaceName)
     val methods: List<KSFunctionDeclaration> = iface.getAllFunctions()
       .filter { method -> method.getVisibility() == Visibility.PUBLIC }
-      .filter { method -> method.simpleName.asString() !in setOf("equals", "hashCode", "toString", "<init>") }
+      .filter { method ->
+        method.simpleName.asString() !in setOf("equals", "hashCode", "toString", "<init>")
+      }
       .filter { method -> method.parentDeclaration == iface }
       .toList()
 
@@ -450,12 +452,15 @@ internal class ForwardCallablePlanner(
       .toSet()
 
     return methods.map { method ->
-      val symbol: String = "${cls.qualifiedName?.asString() ?: className}.${method.simpleName.asString()}"
+      val owner: String = cls.qualifiedName?.asString() ?: className
+      val symbol: String = "$owner.${method.simpleName.asString()}"
+      val isCallbackProtocol: Boolean =
+        method in interfaceBridgeMethods || method in storedCallbackMethods
       val structuralReason: ForwardPlanSkipReason? = when {
         method.modifiers.contains(Modifier.ABSTRACT) -> ForwardPlanSkipReason.ABSTRACT
         method.modifiers.contains(Modifier.SUSPEND) -> ForwardPlanSkipReason.SUSPEND
         method.typeParameters.isNotEmpty() -> ForwardPlanSkipReason.GENERIC
-        method in interfaceBridgeMethods || method in storedCallbackMethods -> ForwardPlanSkipReason.CALLBACK_PROTOCOL
+        isCallbackProtocol -> ForwardPlanSkipReason.CALLBACK_PROTOCOL
         else -> null
       }
       if (structuralReason != null) {
@@ -543,7 +548,9 @@ internal class ForwardCallablePlanner(
     node = constructor,
   )
 
-  private fun topLevelEntry(function: KSFunctionDeclaration): ForwardCallableCatalogEntry = staticEntry(
+  private fun topLevelEntry(
+    function: KSFunctionDeclaration,
+  ): ForwardCallableCatalogEntry = staticEntry(
     function = function,
     symbol = "${function.packageName.asString()}.${function.simpleName.asString()}",
     publicName = toCName(function.simpleName.asString()).csharpIdentifier(),
@@ -609,7 +616,8 @@ internal class ForwardCallablePlanner(
     if (structuralReason != null) {
       return ForwardCallableCatalogEntry.Skipped(symbol, structuralReason, node = function)
     }
-    val result: BridgeType = function.returnType?.resolve()?.let(classifier::classify) ?: BridgeType.Unit
+    val result: BridgeType =
+      function.returnType?.resolve()?.let(classifier::classify) ?: BridgeType.Unit
     val parameters: List<Pair<String, BridgeType>> = function.parameters.map { parameter ->
       (parameter.name?.asString() ?: "_") to classifier.classify(parameter.type.resolve())
     }
@@ -724,8 +732,8 @@ internal class ForwardCallablePlanner(
     val symbol: String = "${function.packageName.asString()}.$functionName"
 
     // ADR-064 cell 23 / BUG-010: a generic + suspend + inline + reified extension returning
-    // Result<T> has no legacy route at all — inline+reified erases at the C ABI and suspend
-    // needs a concrete continuation type — so it must be recognized as a genuine drop *before*
+    // Result<T> has no legacy route at all -- inline+reified erases at the C ABI and suspend
+    // needs a concrete continuation type -- so it must be recognized as a genuine drop *before*
     // the general SUSPEND/GENERIC structural checks below classify it as a silent legacy-route
     // deferral. That classification is correct for an *ordinary* suspend or generic extension
     // (each has its own working legacy route individually); it is wrong for this specific
@@ -746,10 +754,11 @@ internal class ForwardCallablePlanner(
       return ForwardCallableCatalogEntry.Skipped(symbol, structuralReason, node = function)
     }
 
+    val receiverPrefix: String = receiver.declaration.simpleName.asString().lowercase()
     return planOrSkip(
       symbol = symbol,
       publicName = toCName(functionName).replaceFirstChar { it.uppercase() },
-      exportName = "${receiver.declaration.simpleName.asString().lowercase()}_${toCName(functionName)}",
+      exportName = "${receiverPrefix}_${toCName(functionName)}",
       receiver = ForwardReceiver.Value(receiverType),
       parameters = function.parameters.map { parameter ->
         (parameter.name?.asString() ?: "_") to classifier.classify(parameter.type.resolve())
@@ -888,14 +897,23 @@ internal class ForwardCallablePlanner(
 
   /**
    * The native ABI shape for one declared input parameter. Almost every [BridgeType] fans out to
-   * exactly one native parameter; a nullable primitive is the sole exception, fanning out to two
-   * *adjacent* native parameters (`${name}HasValue` then `name`) in place of the single public
-   * parameter, so callers must `flatMap` over the declared parameter list rather than `map`.
+   * exactly one native parameter; multi-component exceptions fan out to adjacent native parameters
+   * in place of the single public parameter, so callers must `flatMap` over the declared parameter
+   * list rather than `map`:
+   * - nullable primitive → `${name}HasValue` then `name`
+   * - Instant (ADR-076) → `${name}_epochSeconds` then `${name}_nanosecondsOfSecond`
+   * - Instant? → has-value flag then the two Instant components
    */
-  private fun nativeInputParameters(name: String, type: BridgeType): List<ForwardAbiParameter> = when (type) {
+  private fun nativeInputParameters(
+    name: String,
+    type: BridgeType,
+  ): List<ForwardAbiParameter> = when (type) {
     is BridgeType.Primitive, BridgeType.Char, BridgeType.String -> listOf(
       valueParameter(name, type, ForwardFlow.INTO_KOTLIN),
     )
+
+    // ADR-076: Instant lowers to two scalar IN components (epochSeconds, nanosecondsOfSecond).
+    BridgeType.Instant -> instantInputComponents(name)
 
     is BridgeType.Enum -> listOf(
       ForwardAbiParameter(
@@ -962,7 +980,7 @@ internal class ForwardCallablePlanner(
 
       // ADR-075: the wire value's own nullability (`IntPtr.Zero` for a null collection reference)
       // is completely independent of the collection's element eligibility, already checked by
-      // `inputSkipReason()` before this ever runs — same POINTER / HANDLE_TO_COLLECTION shape as
+      // `inputSkipReason()` before this ever runs -- same POINTER / HANDLE_TO_COLLECTION shape as
       // the non-null case three cases above, the C# side's `CreateList(...) : IntPtr.Zero`
       // ternary is the only difference (ForwardCirPlanProjection.collectionPrelude).
       is BridgeType.Collection -> listOf(
@@ -998,13 +1016,45 @@ internal class ForwardCallablePlanner(
         ),
       )
 
+      // ADR-076: Instant? → has-value + two Instant components (3 ABI slots).
+      BridgeType.Instant -> listOf(
+        ForwardAbiParameter(
+          name = "${name}HasValue",
+          wireType = ForwardAbiWireType.BOOLEAN,
+          direction = ForwardAbiDirection.IN,
+          transfer = ForwardTransfer(
+            "${name}HasValue", BridgeType.Primitive(PrimitiveKind.BOOLEAN), ForwardFlow.INTO_KOTLIN,
+            ForwardPassing.VALUE, ForwardOwnership.BORROWED, ForwardConversion.DIRECT,
+          ),
+        ),
+      ) + instantInputComponents(name)
+
       else -> error("Forward planner cannot build an input parameter for nullable $inner")
     }
 
     else -> error("Forward planner cannot build an input parameter for $type")
   }
 
-  private fun transfer(subject: String, type: BridgeType, flow: ForwardFlow): ForwardTransfer = ForwardTransfer(
+  /** ADR-076: the two scalar IN components of a non-null Instant parameter. */
+  private fun instantInputComponents(name: String): List<ForwardAbiParameter> =
+    listOf(
+      valueParameter(
+        "${name}_epochSeconds",
+        BridgeType.Primitive(PrimitiveKind.LONG),
+        ForwardFlow.INTO_KOTLIN,
+      ),
+      valueParameter(
+        "${name}_nanosecondsOfSecond",
+        BridgeType.Primitive(PrimitiveKind.INT),
+        ForwardFlow.INTO_KOTLIN,
+      ),
+    )
+
+  private fun transfer(
+    subject: String,
+    type: BridgeType,
+    flow: ForwardFlow,
+  ): ForwardTransfer = ForwardTransfer(
     subject = subject,
     type = type,
     flow = flow,
@@ -1038,6 +1088,14 @@ internal class ForwardCallablePlanner(
       helperRequirements = setOf(ForwardHelperRequirement.UTF8),
     )
 
+    // ADR-076: Instant cannot return two scalars as one C return. VOID + two OUT component
+    // pointers (one Kotlin evaluation), reconstructed as DateTimeOffset on the C# side.
+    BridgeType.Instant -> ForwardResultShape(
+      wireType = ForwardAbiWireType.VOID,
+      transfer = transfer("result", this, ForwardFlow.OUT_OF_KOTLIN),
+      extraParameters = instantResultOutParameters(),
+    )
+
     is BridgeType.Enum -> ForwardResultShape(
       wireType = ForwardAbiWireType.INT32,
       transfer = ForwardTransfer(
@@ -1060,7 +1118,7 @@ internal class ForwardCallablePlanner(
     // was not verified against.
     is BridgeType.ValueClass -> valueClassResultShape(this)
     // ADR-066: an unsupported (or reachable-but-out-of-scope) element/key/value must not reach
-    // ForwardCallablePlanValidator as a built Collection shape — that error()s the whole plan
+    // ForwardCallablePlanValidator as a built Collection shape -- that error()s the whole plan
     // rather than skipping just this one callable (the archive(): List<TopStory> crash this
     // feature's fixture flushed out, predating ADR-066 but only reachable once it exists).
     is BridgeType.Collection -> if (isBridgeableComponent()) {
@@ -1111,8 +1169,46 @@ internal class ForwardCallablePlanner(
       )
     }
 
+    // ADR-076: Instant? return is Boolean has-value + two OUT component pointers (ADR-061 shape
+    // widened to two outs). Single Kotlin evaluation of the result.
+    BridgeType.Instant -> ForwardResultShape(
+      wireType = ForwardAbiWireType.BOOLEAN,
+      transfer = transfer("result", BridgeType.Nullable(type), ForwardFlow.OUT_OF_KOTLIN),
+      extraParameters = instantResultOutParameters(),
+    )
+
     else -> null
   }
+
+  /** ADR-076: OUT component slots shared by Instant and Instant? results. */
+  private fun instantResultOutParameters(): List<ForwardAbiParameter> = listOf(
+    ForwardAbiParameter(
+      name = "epochSecondsOut",
+      wireType = ForwardAbiWireType.POINTER,
+      direction = ForwardAbiDirection.OUT,
+      transfer = ForwardTransfer(
+        subject = "epochSecondsOut",
+        type = BridgeType.Primitive(PrimitiveKind.LONG),
+        flow = ForwardFlow.OUT_OF_KOTLIN,
+        passing = ForwardPassing.OUT,
+        ownership = ForwardOwnership.BORROWED,
+        conversion = ForwardConversion.DIRECT,
+      ),
+    ),
+    ForwardAbiParameter(
+      name = "nanosecondsOfSecondOut",
+      wireType = ForwardAbiWireType.POINTER,
+      direction = ForwardAbiDirection.OUT,
+      transfer = ForwardTransfer(
+        subject = "nanosecondsOfSecondOut",
+        type = BridgeType.Primitive(PrimitiveKind.INT),
+        flow = ForwardFlow.OUT_OF_KOTLIN,
+        passing = ForwardPassing.OUT,
+        ownership = ForwardOwnership.BORROWED,
+        conversion = ForwardConversion.DIRECT,
+      ),
+    ),
+  )
 
   private fun handleResultShape(
     type: BridgeType,
@@ -1137,10 +1233,10 @@ internal class ForwardCallablePlanner(
   /**
    * ADR-014 (ordinary position): the value class's underlying wire value crosses the boundary
    * unchanged; the Kotlin export unboxes it (`result.${underlyingPropertyName}`, wired by
-   * [ForwardCallableOrigin] alone — the Kotlin emitter reads `type.underlyingPropertyName`
+   * [ForwardCallableOrigin] alone -- the Kotlin emitter reads `type.underlyingPropertyName`
    * directly) and the C# wrapper reconstructs `new StructType(rawValue)`. Reuses the underlying's
    * own shape verbatim except for the outer transfer, which must record `type` (not the
-   * underlying) with [ForwardConversion.UNBOX_VALUE_CLASS] — the tag [ForwardCallablePlanValidator
+   * underlying) with [ForwardConversion.UNBOX_VALUE_CLASS] -- the tag [ForwardCallablePlanValidator
    * .requiredConversion] demands for a `BridgeType.ValueClass` result.
    */
   private fun valueClassResultShape(type: BridgeType.ValueClass): ForwardResultShape? {
@@ -1182,7 +1278,9 @@ internal class ForwardCallablePlanner(
     }
   }
 
-  private fun receiverParameter(receiver: ForwardReceiver): List<ForwardAbiParameter> = when (receiver) {
+  private fun receiverParameter(
+    receiver: ForwardReceiver,
+  ): List<ForwardAbiParameter> = when (receiver) {
     is ForwardReceiver.Handle -> listOf(
       ForwardAbiParameter(
         name = receiver.name,
@@ -1222,7 +1320,7 @@ internal class ForwardCallablePlanner(
       ?.let { unsupported -> "${unsupported.actualTypeAliasExpectName}->${unsupported.rendered}" }
 
   private fun BridgeType.skipReason(): ForwardPlanSkipReason? = when (this) {
-    BridgeType.Unit, is BridgeType.Primitive -> null
+    BridgeType.Unit, is BridgeType.Primitive, BridgeType.Instant -> null
     BridgeType.Char -> ForwardPlanSkipReason.CHAR
     BridgeType.String -> ForwardPlanSkipReason.STRING
     is BridgeType.Nullable -> ForwardPlanSkipReason.NULLABLE
@@ -1251,10 +1349,14 @@ internal class ForwardCallablePlanner(
       name.startsWith("state flow ") -> ForwardPlanSkipReason.FLOW_PROTOCOL
       name.startsWith("flow ") -> ForwardPlanSkipReason.FLOW_PROTOCOL
       name.startsWith("suspend lambda ") -> ForwardPlanSkipReason.SUSPEND_CALLBACK_PROTOCOL
-      name.startsWith("lambda ") || name.startsWith("interface bridge ") -> ForwardPlanSkipReason.CALLBACK_PROTOCOL
+      name.startsWith("lambda ") || name.startsWith("interface bridge ") ->
+        ForwardPlanSkipReason.CALLBACK_PROTOCOL
+
       name.startsWith("sealed helper ") -> ForwardPlanSkipReason.SEALED_PROTOCOL
       name.startsWith("generic declaration ") -> ForwardPlanSkipReason.GENERIC
-      else -> error("Forward planner has no explicit legacy route for specialized protocol $name")
+      else -> error(
+        "Forward planner has no explicit legacy route for specialized protocol $name",
+      )
     }
 
     is BridgeType.RawKSType -> error("Forward planner received raw KSP type $rendered")
@@ -1269,25 +1371,30 @@ internal class ForwardCallablePlanner(
   }
 
   private fun BridgeType.inputSkipReason(): ForwardPlanSkipReason? = when (this) {
-    BridgeType.String, BridgeType.Char -> null
+    BridgeType.String, BridgeType.Char, BridgeType.Instant -> null
     is BridgeType.Enum -> null
-    // ADR-040 sub-decision B: an interface-typed parameter is plannable — the C# lowering routes
+    // ADR-040 sub-decision B: an interface-typed parameter is plannable -- the C# lowering routes
     // through NugetMarshal.HandleOf (ForwardCirPlanProjection.callArgument), which throws
     // NotSupportedException at runtime for a C#-implemented (non-Kotlin-backed) IFoo.
     is BridgeType.ObjectHandle, is BridgeType.Interface -> null
     // ADR-066: an unsupported element must not silently produce a Collection shape that later
-    // crashes plan validation — route it through the same skip path as any other unsupported
+    // crashes plan validation -- route it through the same skip path as any other unsupported
     // input, preferring the (element ?: key ?: value)'s own reason (e.g.
     // UNEXPORTED_DEPENDENCY_TYPE) when known.
     is BridgeType.Collection -> collectionInputSkipReason()
 
     // ADR-075: a nullable collection input (e.g. a data class's `notes: List<String>?` primary
     // constructor parameter, mirroring `Visit.notes` as a *property*) shares exactly the same
-    // per-kind eligibility as a non-null collection input — the collection reference's own
+    // per-kind eligibility as a non-null collection input -- the collection reference's own
     // nullability is orthogonal to its components' marshallability, same as the property setter
     // side of this same ADR.
     is BridgeType.Nullable -> when (val inner = type) {
-      BridgeType.String, is BridgeType.ObjectHandle, is BridgeType.Primitive -> null
+      BridgeType.String,
+      is BridgeType.ObjectHandle,
+      is BridgeType.Primitive,
+      BridgeType.Instant,
+        -> null
+
       is BridgeType.Collection -> inner.collectionInputSkipReason()
       else -> ForwardPlanSkipReason.NULLABLE
     }
@@ -1329,6 +1436,8 @@ internal class ForwardCallablePlanner(
 
     BridgeType.String -> ForwardAbiWireType.STRING
     BridgeType.Char -> ForwardAbiWireType.CHAR16
+    // ADR-076: Instant never has a single wire type (always multi-component fan-out).
+    BridgeType.Instant,
     is BridgeType.Nullable,
     is BridgeType.Collection,
     is BridgeType.RawCollection,
@@ -1342,7 +1451,8 @@ internal class ForwardCallablePlanner(
       -> error("Forward planner requested a wire type for ineligible $this")
   }
 
-  private fun BridgeType.unwrapNullable(): BridgeType = if (this is BridgeType.Nullable) type else this
+  private fun BridgeType.unwrapNullable(): BridgeType =
+    if (this is BridgeType.Nullable) type else this
 
   private fun String.csharpIdentifier(): String = if (this in CSHARP_KEYWORDS) "@$this" else this
 
@@ -1363,18 +1473,19 @@ internal class ForwardCallablePlanner(
 
 /**
  * ADR-066: a collection whose element (or map key/value) type is itself unsupported must skip
- * the whole callable through the normal named-diagnostic path, not reach the plan validator —
+ * the whole callable through the normal named-diagnostic path, not reach the plan validator --
  * `handleResultShape`/`inputSkipReason` used to build a Collection shape unconditionally, so an
  * unsupported element only surfaced as a hard `IllegalStateException` out of
  * `ForwardCallablePlanValidator.validateType`, crashing the entire `packNuget` rather than
  * skipping the one member. Mirrors [ForwardCallablePlanValidator.validateType]'s error branches
  * exactly, so anything that would `error(...)` there returns `false` here instead.
  *
- * ADR-075: lifted from a `ForwardCallablePlanner` private member to file-level `internal` — the
- * body touches no planner state — so [ForwardPropertyPlanner] can reuse it unchanged for a
+ * ADR-075: lifted from a `ForwardCallablePlanner` private member to file-level `internal` -- the
+ * body touches no planner state -- so [ForwardPropertyPlanner] can reuse it unchanged for a
  * collection property's setter eligibility.
  */
 internal fun BridgeType.isBridgeableComponent(): Boolean = when (this) {
+  // Instant is a first-class scalar but out of v1 collection-element scope (ADR-076 C1).
   BridgeType.Unit, BridgeType.Char, BridgeType.String, is BridgeType.Primitive,
   is BridgeType.Enum, is BridgeType.ObjectHandle,
     -> true
@@ -1393,9 +1504,10 @@ internal fun BridgeType.isBridgeableComponent(): Boolean = when (this) {
   }
 
   // ADR-040: an interface element inside a collection is deferred v1 scope ("collections of
-  // interfaces" — Scope section); routed through the ordinary COLLECTION skip rather than
+  // interfaces" -- Scope section); routed through the ordinary COLLECTION skip rather than
   // silently building an untested shape.
-  is BridgeType.Interface,
+  // ADR-076: Instant is out of v1 collection-element scope.
+  BridgeType.Instant, is BridgeType.Interface,
   is BridgeType.RawCollection, is BridgeType.RawKSType, is BridgeType.SpecializedProtocol,
   is BridgeType.Unsupported,
     -> false
@@ -1415,7 +1527,7 @@ internal fun BridgeType.isBridgeableComponent(): Boolean = when (this) {
  * `List` is deliberately included (ADR-075 Question A alternative A1): no `List` property setter
  * binds at all today, so there is no backward-compatible `List` parameter shape to preserve.
  *
- * ADR-075: lifted from a `ForwardCallablePlanner` private member to file-level `internal` — the
+ * ADR-075: lifted from a `ForwardCallablePlanner` private member to file-level `internal` -- the
  * body touches no planner state.
  */
 internal fun BridgeType.isWrappableComponent(): Boolean = when (this) {

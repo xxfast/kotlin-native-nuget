@@ -14,6 +14,13 @@ internal sealed interface BridgeType {
   data object String : BridgeType
 
   /**
+   * ADR-076: `kotlin.time.Instant` as a first-class forward built-in. Public C# is
+   * `System.DateTimeOffset` (UTC); wire is `epochSeconds: Long` + `nanosecondsOfSecond: Int`.
+   * Multi-component ordinary scalar (2 ABI slots, 3 when nullable), never a StableRef handle.
+   */
+  data object Instant : BridgeType
+
+  /**
    * @param qualifiedName Kotlin FQCN (used by the Kotlin export for `.entries[n]` / `.ordinal`).
    * @param csharpType Public C# type spelling. Cross-namespace enums (e.g. reverse-generated
    *   packages) need `global::Namespace.Name`; same-namespace simple names still work under
@@ -28,7 +35,7 @@ internal sealed interface BridgeType {
   /**
    * @param qualifiedName Kotlin FQCN.
    * @param csharpType Public C# type spelling. ADR-066: mirrors [Enum]'s existing qualification
-   *   shape exactly — a same-namespace reference stays a bare simple name, but any admitted
+   *   shape exactly -- a same-namespace reference stays a bare simple name, but any admitted
    *   dependency-module (or otherwise cross-namespace) type must render as `global::Namespace.
    *   Name`, or a two-namespace assembly (e.g. `TestLibrary` referencing `TestLibrary.Models`)
    *   fails `CS0246` in generated code the consumer never wrote.
@@ -100,7 +107,7 @@ internal sealed interface BridgeType {
    * @param isActualTypeAliasTarget ADR-074: true when [rendered] is the qualified name (or simple
    *   name, if unqualified) of an `actual typealias`'s erased target that the forward direction
    *   cannot export (a platform-library type, a stdlib type, an out-of-scope package, or a
-   *   parameterized target — v1 admits only a redirect to a plain class). Lets the planner route
+   *   parameterized target -- v1 admits only a redirect to a plain class). Lets the planner route
    *   this case to its own `SKIPPED_ACTUAL_TYPEALIAS_TARGET` diagnostic, whose hint differs from
    *   [isUnexportedDependency]'s: a platform library can never be brought into scope with
    *   `include(...)`.
@@ -302,11 +309,16 @@ internal data class ForwardCallablePlan(
 
 internal object ForwardCallablePlanValidator {
   fun validate(plan: ForwardCallablePlan) {
-    require(plan.invocation.symbol.isNotBlank()) { "Forward plan invocation symbol must not be blank" }
-    require(plan.publicSignature.name.isNotBlank()) { "Forward plan public signature name must not be blank" }
+    require(plan.invocation.symbol.isNotBlank()) {
+      "Forward plan invocation symbol must not be blank"
+    }
+    require(plan.publicSignature.name.isNotBlank()) {
+      "Forward plan public signature name must not be blank"
+    }
     validateCallCount(plan)
     require(plan.nativeExports == plan.nativeImports) {
-      "Forward plan ${plan.publicSignature.name} has different native export and import ABI projections"
+      "Forward plan ${plan.publicSignature.name} has different native export " +
+          "and import ABI projections"
     }
 
     validateType(plan.publicSignature.result, "public result")
@@ -400,11 +412,16 @@ internal object ForwardCallablePlanValidator {
 
   private fun validateType(type: BridgeType, position: String) {
     when (type) {
-      BridgeType.Unit, BridgeType.Char, BridgeType.String, is BridgeType.Primitive, is BridgeType.Enum,
+      BridgeType.Unit, BridgeType.Char, BridgeType.String, BridgeType.Instant,
+      is BridgeType.Primitive, is BridgeType.Enum,
       is BridgeType.ObjectHandle, is BridgeType.Interface,
         -> Unit
 
-      is BridgeType.ValueClass -> validateType(type.underlying, "$position value-class underlying type")
+      is BridgeType.ValueClass -> validateType(
+        type.underlying,
+        "$position value-class underlying type",
+      )
+
       is BridgeType.Nullable -> {
         require(type.type !is BridgeType.Nullable && type.type != BridgeType.Unit) {
           "Forward plan $position has an invalid nullable type"
@@ -413,13 +430,20 @@ internal object ForwardCallablePlanValidator {
       }
 
       is BridgeType.Collection -> validateCollection(type, position)
-      is BridgeType.RawCollection -> error("Forward plan $position contains raw ${type.kind} collection")
-      is BridgeType.RawKSType -> error("Forward plan $position contains raw KSType ${type.rendered}")
+      is BridgeType.RawCollection ->
+        error("Forward plan $position contains raw ${type.kind} collection")
+
+      is BridgeType.RawKSType ->
+        error("Forward plan $position contains raw KSType ${type.rendered}")
+
       is BridgeType.SpecializedProtocol -> error(
-        "Forward plan $position uses specialized protocol ${type.name}; it requires a named legacy route"
+        "Forward plan $position uses specialized protocol ${type.name}; " +
+            "it requires a named legacy route",
       )
 
-      is BridgeType.Unsupported -> error("Forward plan $position has unsupported type ${type.rendered}: ${type.reason}")
+      is BridgeType.Unsupported -> error(
+        "Forward plan $position has unsupported type ${type.rendered}: ${type.reason}",
+      )
     }
   }
 
@@ -476,7 +500,8 @@ internal object ForwardCallablePlanValidator {
     else -> null
   }
 
-  private fun BridgeType.unwrapNullable(): BridgeType = if (this is BridgeType.Nullable) type else this
+  private fun BridgeType.unwrapNullable(): BridgeType =
+    if (this is BridgeType.Nullable) type else this
 
   private fun ForwardAbiDirection.passing(): ForwardPassing = when (this) {
     ForwardAbiDirection.IN -> ForwardPassing.VALUE

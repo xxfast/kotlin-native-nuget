@@ -351,6 +351,39 @@ internal fun StringBuilder.renderMarshalHelper(helper: CirMarshalHelper) {
   appendLine("            }")
   appendLine("            return (IntPtr)field.GetValue(value)!;")
   appendLine("        }")
+  appendLine()
+  // ADR-076: Instant <-> DateTimeOffset component helpers.
+  // Wire is epochSeconds + nanosecondsOfSecond; C# truncates sub-100ns (nanos % 100)
+  // and throws for values outside year 0001-9999.
+  appendLine(
+    "        internal static void ToInstantComponents(" +
+        "DateTimeOffset value, out long epochSeconds, out int nanosecondsOfSecond)",
+  )
+  appendLine("        {")
+  appendLine("            DateTimeOffset utc = value.ToUniversalTime();")
+  appendLine(
+    "            long unixTicks = utc.UtcTicks - DateTimeOffset.UnixEpoch.UtcTicks;",
+  )
+  // Fully-qualified: a consumer namespace may declare its own `Math` type
+  // (fixture has TestLibrary.Math).
+  appendLine(
+    "            epochSeconds = System.Math.DivRem(" +
+        "unixTicks, TimeSpan.TicksPerSecond, out long remTicks);",
+  )
+  appendLine("            nanosecondsOfSecond = (int)(remTicks * 100);")
+  appendLine("        }")
+  appendLine()
+  appendLine(
+    "        internal static DateTimeOffset FromInstantComponents(" +
+        "long epochSeconds, int nanosecondsOfSecond)",
+  )
+  appendLine("        {")
+  appendLine("            return DateTimeOffset.UnixEpoch.AddTicks(")
+  appendLine(
+    "                checked(epochSeconds * TimeSpan.TicksPerSecond " +
+        "+ nanosecondsOfSecond / 100));",
+  )
+  appendLine("        }")
   appendLine("    }")
   appendLine()
 }

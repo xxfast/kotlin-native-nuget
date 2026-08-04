@@ -57,7 +57,7 @@ data class CirClass(
   val hasInternalHandleConstructor: Boolean = true,
   val isDataClass: Boolean = false,
   val isAbstract: Boolean = false,
-  // ADR-040: true for the generated interface backing wrapper (`sealed class Pet : IPet`) — no
+  // ADR-040: true for the generated interface backing wrapper (`sealed class Pet : IPet`) -- no
   // public constructor, and the `sealed` modifier communicates that consumers should implement
   // `IPet` rather than subclass this handle wrapper.
   val isSealed: Boolean = false,
@@ -321,7 +321,7 @@ data class CirMethod(
   // ADR-040 fixture gap: a class method that implements an interface member (no CLASS supertype,
   // so `isOverride` is false) but whose Kotlin `override` is not `final` is open for further
   // override by a subclass (Kotlin's default: an `override` member stays open unless marked
-  // `final`) — Animal.fetch(item) implementing Pet.fetch, further overridden by Cat.fetch, is
+  // `final`) -- Animal.fetch(item) implementing Pet.fetch, further overridden by Cat.fetch, is
   // exactly this shape. C# requires the base declaration to say `virtual` for that subclass
   // `override` to compile (CS0506 otherwise).
   val isVirtual: Boolean = false,
@@ -358,7 +358,7 @@ data class CirMethod(
   // presence-probe DllImport. Empty unless [isStateFlowNullableMember].
   val stateFlowHasValueNativeName: String = "",
   // Extra raw native (DllImport) parameter declarations spliced in between the method's own
-  // parameters and the trailing `out IntPtr error` — e.g. `out int value` for a nullable-
+  // parameters and the trailing `out IntPtr error` -- e.g. `out int value` for a nullable-
   // primitive return's out-parameter (ADR-061 §5). Empty for every other shape.
   val extraNativeParams: List<String> = emptyList(),
   // When true, `renderMethod` skips `renderSyncErrorCheckMethod`'s auto cast-only cascade (which
@@ -387,7 +387,7 @@ data class CirProperty(
   val setter: String? = null,
   val extraNatives: List<CirExtraNative> = emptyList(),
   val isStatic: Boolean = false,
-  // ADR-040 fixture gap: the property-side twin of [CirMethod.isOverride]/[CirMethod.isVirtual] —
+  // ADR-040 fixture gap: the property-side twin of [CirMethod.isOverride]/[CirMethod.isVirtual] --
   // a property never carried either concept before this feature, because no prior fixture had a
   // class property implementing an interface member and then a subclass overriding it again
   // (Cat.Nickname overriding Animal.Nickname's implementation of Pet.nickname).
@@ -411,6 +411,12 @@ data class CirProperty(
   // The native method name (e.g. "Native_SetTreatCountValue") of the sibling `_set_value`
   // DllImport. Empty unless [isMutableStateFlow].
   val stateFlowSetValueNativeName: String = "",
+  // ADR-076: extra getter DllImport parameters after `handle` (e.g. Instant OUT components).
+  // Empty keeps the historical single-handle getter shape.
+  val nativeGetterParameters: List<CirParameter> = emptyList(),
+  // ADR-076: when non-null, replaces the single `value` setter param with this list after handle
+  // (e.g. Instant two/three-component IN fan-out). Null keeps the historical single-value setter.
+  val nativeSetterParameters: List<CirParameter>? = null,
 ) : CirMember
 
 data class CirExtraNative(
@@ -419,6 +425,9 @@ data class CirExtraNative(
   val name: String,
   val hasValueParam: Boolean = false,
   val hasSyncErrorOut: Boolean = false,
+  // ADR-076: additional parameters after `handle` (e.g. Instant value-export OUT components).
+  // When non-empty, supersedes [hasValueParam]'s single optional `value` param.
+  val parameters: List<CirParameter> = emptyList(),
 )
 
 data class CirConstructor(
@@ -446,7 +455,7 @@ data class CirParameter(
   // Whether [type]'s underlying (non-nullable) C# spelling is a reference type. Only
   // constructor parameters currently rely on this (ADR-034's duplicate-constructor check must
   // strip a reference type's trailing "?" before comparing signatures, since C# nullable
-  // reference annotations are not part of a method signature — unlike nullable *value* types,
+  // reference annotations are not part of a method signature -- unlike nullable *value* types,
   // where e.g. `int` and `int?` really are distinct overloads). Defaults to true so call sites
   // that never populate it keep today's "compare the raw rendered string" behavior.
   val isReferenceType: Boolean = true,

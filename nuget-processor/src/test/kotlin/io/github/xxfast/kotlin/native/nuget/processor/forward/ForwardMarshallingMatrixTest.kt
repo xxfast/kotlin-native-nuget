@@ -86,15 +86,18 @@ class ForwardMarshallingMatrixTest {
   private fun ordinaryEligible(type: BridgeType, flow: ForwardFlow): Boolean = when (flow) {
     ForwardFlow.OUT_OF_KOTLIN -> resultShape(type) != null
     ForwardFlow.INTO_KOTLIN -> when (type) {
-      is BridgeType.Primitive, BridgeType.Char, BridgeType.String, is BridgeType.Enum,
-      is BridgeType.ObjectHandle,
+      is BridgeType.Primitive, BridgeType.Char, BridgeType.String, BridgeType.Instant,
+      is BridgeType.Enum, is BridgeType.ObjectHandle,
         -> true
 
       is BridgeType.Collection ->
         type.kind == CollectionKind.LIST || type.kind == CollectionKind.MUTABLE_LIST
 
       is BridgeType.Nullable -> when (type.type) {
-        BridgeType.String, is BridgeType.ObjectHandle, is BridgeType.Primitive -> true
+        BridgeType.String, is BridgeType.ObjectHandle, is BridgeType.Primitive,
+        BridgeType.Instant,
+          -> true
+
         else -> false
       }
 
@@ -105,7 +108,7 @@ class ForwardMarshallingMatrixTest {
   private fun matrixCells(): List<MatrixCell> = buildList {
     // Direct primitives (every kind) + Unit/Char/String as both input and result.
     PrimitiveKind.entries.forEach { kind ->
-      val primitive = BridgeType.Primitive(kind)
+      val primitive: BridgeType.Primitive = BridgeType.Primitive(kind)
       add(valid(primitive, ForwardFlow.INTO_KOTLIN))
       add(valid(primitive, ForwardFlow.OUT_OF_KOTLIN))
     }
@@ -115,6 +118,11 @@ class ForwardMarshallingMatrixTest {
     add(valid(BridgeType.Char, ForwardFlow.OUT_OF_KOTLIN))
     add(valid(BridgeType.String, ForwardFlow.INTO_KOTLIN))
     add(valid(BridgeType.String, ForwardFlow.OUT_OF_KOTLIN))
+    // ADR-076: Instant as first-class multi-component built-in.
+    add(valid(BridgeType.Instant, ForwardFlow.INTO_KOTLIN))
+    add(valid(BridgeType.Instant, ForwardFlow.OUT_OF_KOTLIN))
+    add(valid(BridgeType.Nullable(BridgeType.Instant), ForwardFlow.INTO_KOTLIN))
+    add(valid(BridgeType.Nullable(BridgeType.Instant), ForwardFlow.OUT_OF_KOTLIN))
 
     val enum = BridgeType.Enum("sample.Mood")
     add(valid(enum, ForwardFlow.INTO_KOTLIN))
@@ -301,7 +309,7 @@ class ForwardMarshallingMatrixTest {
 
   /**
    * Intentionally incomplete plan: places [type] on the public result/parameter without the
-   * conversions, ownership, or helpers ordinary sync requires — so [ForwardCallablePlan.validate]
+   * conversions, ownership, or helpers ordinary sync requires -- so [ForwardCallablePlan.validate]
    * surfaces a specific diagnostic.
    */
   private fun naïvePlan(type: BridgeType, flow: ForwardFlow): ForwardCallablePlan {
@@ -391,6 +399,37 @@ class ForwardMarshallingMatrixTest {
       helpers = setOf(ForwardHelperRequirement.UTF8),
     )
 
+    // ADR-076: Instant → VOID + two OUT components.
+    BridgeType.Instant -> ResultShape(
+      ForwardAbiWireType.VOID,
+      ForwardTransfer(
+        "result", type, ForwardFlow.OUT_OF_KOTLIN, ForwardPassing.VALUE,
+        ForwardOwnership.BORROWED, ForwardConversion.DIRECT,
+      ),
+      extra = listOf(
+        ForwardAbiParameter(
+          "epochSecondsOut",
+          ForwardAbiWireType.POINTER,
+          ForwardAbiDirection.OUT,
+          ForwardTransfer(
+            "epochSecondsOut", BridgeType.Primitive(PrimitiveKind.LONG),
+            ForwardFlow.OUT_OF_KOTLIN, ForwardPassing.OUT,
+            ForwardOwnership.BORROWED, ForwardConversion.DIRECT,
+          ),
+        ),
+        ForwardAbiParameter(
+          "nanosecondsOfSecondOut",
+          ForwardAbiWireType.POINTER,
+          ForwardAbiDirection.OUT,
+          ForwardTransfer(
+            "nanosecondsOfSecondOut", BridgeType.Primitive(PrimitiveKind.INT),
+            ForwardFlow.OUT_OF_KOTLIN, ForwardPassing.OUT,
+            ForwardOwnership.BORROWED, ForwardConversion.DIRECT,
+          ),
+        ),
+      ),
+    )
+
     is BridgeType.Enum -> ResultShape(
       ForwardAbiWireType.INT32,
       ForwardTransfer(
@@ -461,13 +500,47 @@ class ForwardMarshallingMatrixTest {
         null
       }
 
+      // ADR-076: Instant? → Boolean has-value + two OUT components.
+      BridgeType.Instant -> ResultShape(
+        ForwardAbiWireType.BOOLEAN,
+        ForwardTransfer(
+          "result", type, ForwardFlow.OUT_OF_KOTLIN, ForwardPassing.VALUE,
+          ForwardOwnership.BORROWED, ForwardConversion.DIRECT,
+        ),
+        extra = listOf(
+          ForwardAbiParameter(
+            "epochSecondsOut",
+            ForwardAbiWireType.POINTER,
+            ForwardAbiDirection.OUT,
+            ForwardTransfer(
+              "epochSecondsOut", BridgeType.Primitive(PrimitiveKind.LONG),
+              ForwardFlow.OUT_OF_KOTLIN, ForwardPassing.OUT,
+              ForwardOwnership.BORROWED, ForwardConversion.DIRECT,
+            ),
+          ),
+          ForwardAbiParameter(
+            "nanosecondsOfSecondOut",
+            ForwardAbiWireType.POINTER,
+            ForwardAbiDirection.OUT,
+            ForwardTransfer(
+              "nanosecondsOfSecondOut", BridgeType.Primitive(PrimitiveKind.INT),
+              ForwardFlow.OUT_OF_KOTLIN, ForwardPassing.OUT,
+              ForwardOwnership.BORROWED, ForwardConversion.DIRECT,
+            ),
+          ),
+        ),
+      )
+
       else -> null
     }
 
     else -> null
   }
 
-  private fun nativeInputs(name: String, type: BridgeType): List<ForwardAbiParameter> = when (type) {
+  private fun nativeInputs(
+    name: String,
+    type: BridgeType,
+  ): List<ForwardAbiParameter> = when (type) {
     is BridgeType.Primitive, BridgeType.Char -> listOf(
       ForwardAbiParameter(
         name,
@@ -488,6 +561,30 @@ class ForwardMarshallingMatrixTest {
         ForwardTransfer(
           name, type, ForwardFlow.INTO_KOTLIN, ForwardPassing.VALUE,
           ForwardOwnership.BORROWED, ForwardConversion.STRING_TO_UTF8,
+        ),
+      ),
+    )
+
+    // ADR-076: Instant → two IN components.
+    BridgeType.Instant -> listOf(
+      ForwardAbiParameter(
+        "${name}_epochSeconds",
+        ForwardAbiWireType.INT64,
+        ForwardAbiDirection.IN,
+        ForwardTransfer(
+          "${name}_epochSeconds", BridgeType.Primitive(PrimitiveKind.LONG),
+          ForwardFlow.INTO_KOTLIN, ForwardPassing.VALUE,
+          ForwardOwnership.BORROWED, ForwardConversion.DIRECT,
+        ),
+      ),
+      ForwardAbiParameter(
+        "${name}_nanosecondsOfSecond",
+        ForwardAbiWireType.INT32,
+        ForwardAbiDirection.IN,
+        ForwardTransfer(
+          "${name}_nanosecondsOfSecond", BridgeType.Primitive(PrimitiveKind.INT),
+          ForwardFlow.INTO_KOTLIN, ForwardPassing.VALUE,
+          ForwardOwnership.BORROWED, ForwardConversion.DIRECT,
         ),
       ),
     )
@@ -574,6 +671,19 @@ class ForwardMarshallingMatrixTest {
         ),
       )
 
+      // ADR-076: Instant? → hasValue + two Instant components.
+      BridgeType.Instant -> listOf(
+        ForwardAbiParameter(
+          "${name}HasValue",
+          ForwardAbiWireType.BOOLEAN,
+          ForwardAbiDirection.IN,
+          ForwardTransfer(
+            "${name}HasValue", BridgeType.Primitive(PrimitiveKind.BOOLEAN), ForwardFlow.INTO_KOTLIN,
+            ForwardPassing.VALUE, ForwardOwnership.BORROWED, ForwardConversion.DIRECT,
+          ),
+        ),
+      ) + nativeInputs(name, BridgeType.Instant)
+
       else -> error("no input shape for $type")
     }
 
@@ -640,6 +750,7 @@ class ForwardMarshallingMatrixTest {
     is BridgeType.Primitive -> "Primitive(${type.kind})"
     BridgeType.Char -> "Char"
     BridgeType.String -> "String"
+    BridgeType.Instant -> "Instant"
     is BridgeType.Enum -> "Enum"
     is BridgeType.ObjectHandle -> "ObjectHandle"
     is BridgeType.Interface -> "Interface"

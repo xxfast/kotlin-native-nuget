@@ -204,8 +204,8 @@ internal object ForwardAbiContract {
       // ADR-061's nullable-primitive out-parameter (`out int value`, etc.) is, at the C ABI
       // level, exactly the same shape as `out IntPtr error` below: a pointer to a memory slot the
       // callee writes through. Recognize any `out `-prefixed native type uniformly as (POINTER,
-      // OUT) rather than trying to resolve its pointee width — mirroring the errorOut special
-      // case's own philosophy — so it matches the Kotlin side's `COpaquePointer?` (also POINTER).
+      // OUT) rather than trying to resolve its pointee width -- mirroring the errorOut special
+      // case's own philosophy -- so it matches the Kotlin side's `COpaquePointer?` (also POINTER).
       // ADR-069: a Boolean out-parameter's DllImport declaration carries a leading
       // `[MarshalAs(UnmanagedType.I1)] ` attribute (the C# marshaller's default `out bool` read is
       // 4 bytes against Kotlin's 1-byte `BooleanVar` write); strip it before the `out `-prefix
@@ -228,16 +228,19 @@ internal object ForwardAbiContract {
       exportName = name,
       result = kotlinReturnType(returnType),
       parameters = parameters.map { parameter ->
-        // "valueOut" is ADR-061's nullable-primitive return out-parameter, the Kotlin-side
-        // counterpart of the C# `out <T> value` recognized above.
+        // Out-pointer convention on the Kotlin side: a COpaquePointer? named `*Out` is a write-
+        // through slot (ADR-024 `errorOut`, ADR-061 `valueOut`, ADR-076 Instant component outs).
+        // A plain `Boolean checkedOut` must NOT match just because the name ends in Out -- gate on
+        // POINTER wire type so ordinary bool/int parameters keep IN direction.
+        val type: ForwardAbiType = kotlinParameterType(parameter.type)
         val direction: ForwardAbiDirection = if (
-          parameter.name == "errorOut" || parameter.name == "valueOut"
+          type == ForwardAbiType.POINTER && parameter.name.endsWith("Out")
         ) {
           ForwardAbiDirection.OUT
         } else {
           ForwardAbiDirection.IN
         }
-        ForwardAbiParameter(kotlinParameterType(parameter.type), direction)
+        ForwardAbiParameter(type, direction)
       },
     )
   }

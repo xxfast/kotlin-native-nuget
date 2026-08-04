@@ -39,7 +39,8 @@ internal fun CirClass.propertyNativeImports(property: CirProperty): List<CirDllI
       entryPoint = "${nativePrefix}_get_${property.nativeName}",
       returnType = property.nativeReturnType,
       name = "Native_Get_${property.nativeName}",
-      parameters = listOf(CirParameter("handle", "IntPtr")),
+      // ADR-076: Instant Direct getters append OUT component params after handle.
+      parameters = listOf(CirParameter("handle", "IntPtr")) + property.nativeGetterParameters,
       visibility = CirVisibility.PRIVATE,
       hasSyncErrorOut = property.hasSyncErrorOut,
       marshalBooleanReturn = property.nativeReturnType == "bool",
@@ -47,16 +48,16 @@ internal fun CirClass.propertyNativeImports(property: CirProperty): List<CirDllI
   )
 
   if (property.setter != null) {
+    val setterParams: List<CirParameter> = property.nativeSetterParameters
+      ?: listOf(CirParameter("value", property.nativeSetterType))
     add(
       CirDllImport(
         libraryName = libraryName,
         entryPoint = "${nativePrefix}_set_${property.nativeName}",
         returnType = "void",
         name = "Native_Set_${property.nativeName}",
-        parameters = listOf(
-          CirParameter("handle", "IntPtr"),
-          CirParameter("value", property.nativeSetterType),
-        ),
+        // ADR-076: Instant/Instant? setters replace the single value with multi-component INs.
+        parameters = listOf(CirParameter("handle", "IntPtr")) + setterParams,
         visibility = CirVisibility.PRIVATE,
         hasSyncErrorOut = property.hasSyncErrorOut,
       )
@@ -66,18 +67,27 @@ internal fun CirClass.propertyNativeImports(property: CirProperty): List<CirDllI
   property.extraNatives.forEach { extra ->
     val parameters: List<CirParameter> = buildList {
       add(CirParameter("handle", "IntPtr"))
-      if (extra.hasValueParam) add(CirParameter("value", extra.returnType))
+      // ADR-076: Instant? value export carries explicit OUT component parameters.
+      if (extra.parameters.isNotEmpty()) {
+        addAll(extra.parameters)
+      } else if (extra.hasValueParam) {
+        add(CirParameter("value", extra.returnType))
+      }
     }
+    val isHistoricalValueSetter: Boolean =
+      extra.hasValueParam && extra.parameters.isEmpty()
+    val marshalBooleanReturn: Boolean =
+      !extra.hasValueParam && extra.returnType == "bool"
     add(
       CirDllImport(
         libraryName = libraryName,
         entryPoint = "${nativePrefix}_${extra.entryPointSuffix}",
-        returnType = if (extra.hasValueParam) "void" else extra.returnType,
+        returnType = if (isHistoricalValueSetter) "void" else extra.returnType,
         name = extra.name,
         parameters = parameters,
         visibility = CirVisibility.PRIVATE,
         hasSyncErrorOut = extra.hasSyncErrorOut,
-        marshalBooleanReturn = !extra.hasValueParam && extra.returnType == "bool",
+        marshalBooleanReturn = marshalBooleanReturn,
       )
     )
   }

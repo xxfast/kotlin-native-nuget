@@ -1,6 +1,6 @@
 package io.github.xxfast.kotlin.native.nuget.processor.forward
 
-/** The declaration position determines the receiver and export naming, not marshalling semantics. */
+/** Declaration position sets receiver and export naming, not marshalling semantics. */
 internal enum class ForwardPropertyPosition { CLASS, TOP_LEVEL, EXTENSION, COMPANION }
 
 internal sealed interface ForwardPropertyReceiver {
@@ -54,8 +54,13 @@ internal data class ForwardPropertyPlan(
     getter.calls().forEach(::validateCall)
     setter?.calls()?.forEach(::validateCall)
     if (getter is ForwardPropertyGetter.LegacyTwoCall) {
-      require(type is BridgeType.Nullable && type.type is BridgeType.Primitive) {
-        "Forward property plan $symbol uses LegacyTwoCall for non-nullable primitive $type"
+      // ADR-076: Instant? reuses the two-call presence/value shape (value writes OUT components).
+      val isNullablePrimitive: Boolean =
+        type is BridgeType.Nullable && type.type is BridgeType.Primitive
+      val isNullableInstant: Boolean =
+        type is BridgeType.Nullable && type.type == BridgeType.Instant
+      require(isNullablePrimitive || isNullableInstant) {
+        "Forward property plan $symbol uses LegacyTwoCall for non-nullable-primitive/Instant $type"
       }
       require(getter.presence.result == ForwardAbiWireType.BOOLEAN) {
         "Forward property plan $symbol LegacyTwoCall presence export must return BOOLEAN"
@@ -80,7 +85,8 @@ internal data class ForwardPropertyPlan(
 
   private fun validateType(type: BridgeType) {
     when (type) {
-      BridgeType.Unit, BridgeType.Char, BridgeType.String, is BridgeType.Primitive, is BridgeType.Enum,
+      BridgeType.Unit, BridgeType.Char, BridgeType.String, BridgeType.Instant,
+      is BridgeType.Primitive, is BridgeType.Enum,
       is BridgeType.ObjectHandle, is BridgeType.Interface, is BridgeType.Collection -> Unit
 
       is BridgeType.Nullable -> validateType(type.type)

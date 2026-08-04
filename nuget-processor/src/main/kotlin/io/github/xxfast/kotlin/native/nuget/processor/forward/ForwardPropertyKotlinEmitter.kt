@@ -53,6 +53,14 @@ private fun FileSpec.Builder.addGetter(plan: ForwardPropertyPlan, call: ForwardN
       builder.addCode(valueBody(access, "errorOut", "\"\""), cOpaquePointerVar, stableRef)
     }
 
+    // ADR-076: Instant Direct getter writes two OUT components (void return).
+    // Rebuild parameters so OUT components sit before errorOut (exportBuilder already
+    // appended errorOut for the ordinary Direct path).
+    BridgeType.Instant -> {
+      addFunction(instantComponentExport(plan, call, access, forceNonNull = false).build())
+      return
+    }
+
     is BridgeType.Nullable -> when (val inner: BridgeType = type.type) {
       BridgeType.String -> {
         builder.returns(kotlinType(type))
@@ -112,8 +120,15 @@ private fun FileSpec.Builder.addNullableValueGetter(
   plan: ForwardPropertyPlan,
   call: ForwardNativeCall,
 ) {
-  val type: BridgeType.Primitive =
-    (plan.type as BridgeType.Nullable).type as BridgeType.Primitive
+  val inner: BridgeType = (plan.type as BridgeType.Nullable).type
+  // ADR-076: Instant? value export is void + two OUT component writes (not a returned primitive).
+  if (inner == BridgeType.Instant) {
+    addFunction(
+      instantComponentExport(plan, call, plan.accessExpression(), forceNonNull = true).build(),
+    )
+    return
+  }
+  val type: BridgeType.Primitive = inner as BridgeType.Primitive
   val builder: FunSpec.Builder = exportBuilder(call, plan.receiver).returns(kotlinType(type))
   builder.addCode(
     valueBody("${plan.accessExpression()}!!", "errorOut", primitiveDefault(type)),
@@ -129,7 +144,21 @@ private fun FileSpec.Builder.addSetter(
   assignsNull: Boolean?,
 ) {
   val builder: FunSpec.Builder = exportBuilder(call, plan.receiver, includeError = false)
-  if (assignsNull != true) {
+  // ADR-076: Instant/Instant? setters take multi-component IN scalars, not a single "value".
+  val isInstant: Boolean = plan.type == BridgeType.Instant
+  val isNullableInstant: Boolean =
+    plan.type is BridgeType.Nullable && plan.type.type == BridgeType.Instant
+  if (isInstant || isNullableInstant) {
+    call.parameters
+      .filter { parameter ->
+        parameter.name != "handle" &&
+            parameter.name != "receiver" &&
+            parameter.name != "errorOut"
+      }
+      .forEach { parameter ->
+        builder.addParameter(parameter.name, kotlinInputType(parameter.transfer.type))
+      }
+  } else if (assignsNull != true) {
     val valueType: BridgeType = requireNotNull(
       call.parameters.firstOrNull { it.name == "value" }?.transfer?.type,
     ) {
@@ -146,6 +175,41 @@ private fun FileSpec.Builder.addSetter(
   }
   builder.addCode(unitBody(assignment, "errorOut"), cOpaquePointerVar, stableRef)
   addFunction(builder.build())
+}
+
+/**
+ * ADR-076: Instant component-writing export. Parameters follow the plan call order:
+ * receiver (if any), OUT components, errorOut. [forceNonNull] unwraps with `!!` for the
+ * Instant? two-call value export.
+ */
+private fun instantComponentExport(
+  plan: ForwardPropertyPlan,
+  call: ForwardNativeCall,
+  access: String,
+  forceNonNull: Boolean,
+): FunSpec.Builder {
+  val builder: FunSpec.Builder = exportBuilder(call, plan.receiver, includeError = false)
+  call.parameters
+    .filter { parameter ->
+      parameter.name != "handle" && parameter.name != "receiver" && parameter.name != "errorOut"
+    }
+    .forEach { parameter ->
+      if (parameter.direction == ForwardAbiDirection.OUT) {
+        builder.addParameter(parameter.name, cOpaquePointer.copy(nullable = true))
+      } else {
+        builder.addParameter(parameter.name, kotlinInputType(parameter.transfer.type))
+      }
+    }
+  builder.addParameter("errorOut", cOpaquePointer.copy(nullable = true))
+  val expression: String = if (forceNonNull) "$access!!" else access
+  builder.addCode(
+    instantWriteBody(expression, "errorOut"),
+    ClassName("kotlinx.cinterop", "LongVar"),
+    ClassName("kotlinx.cinterop", "IntVar"),
+    cOpaquePointerVar,
+    stableRef,
+  )
+  return builder
 }
 
 private fun exportBuilder(
@@ -191,6 +255,11 @@ private fun ForwardPropertyPlan.accessExpression(): String =
 private fun ForwardPropertyPlan.valueExpression(): String = when (val type: BridgeType = type) {
   is BridgeType.Nullable -> when (val inner: BridgeType = type.type) {
     is BridgeType.Primitive, BridgeType.Char, BridgeType.String -> "value"
+    // ADR-076: Instant? setter reconstructs from has-value + two components.
+    BridgeType.Instant ->
+      "if (valueHasValue) kotlin.time.Instant.fromEpochSeconds(" +
+          "value_epochSeconds, value_nanosecondsOfSecond) else null"
+
     is BridgeType.ObjectHandle -> "value?.asStableRef<${inner.qualifiedName}>()?.get()"
     is BridgeType.Interface -> "value?.asStableRef<${inner.qualifiedName}>()?.get()"
     // ADR-075 Question D: a nullable collection setter is an ordinary `Direct` route with a
@@ -201,6 +270,10 @@ private fun ForwardPropertyPlan.valueExpression(): String = when (val type: Brid
   }
 
   is BridgeType.Primitive, BridgeType.Char, BridgeType.String -> "value"
+  // ADR-076: Instant setter reconstructs from the two fan-out IN components.
+  BridgeType.Instant ->
+    "kotlin.time.Instant.fromEpochSeconds(value_epochSeconds, value_nanosecondsOfSecond)"
+
   is BridgeType.Enum -> "${type.qualifiedName}.entries[value]"
   is BridgeType.ObjectHandle -> "value.asStableRef<${type.qualifiedName}>().get()"
   is BridgeType.Interface -> "value.asStableRef<${type.qualifiedName}>().get()"
@@ -308,5 +381,24 @@ private fun nullableHandleBody(invocation: String, error: String): String = buil
   appendLine("    ).asCPointer()")
   appendLine("  }")
   appendLine("  null")
+  append("}")
+}
+
+/** ADR-076: write Instant components through OUT pointers (void export). */
+private fun instantWriteBody(access: String, error: String): String = buildString {
+  appendLine("try {")
+  appendLine("  val result = $access")
+  appendLine("  if (epochSecondsOut != null) {")
+  appendLine("    epochSecondsOut.reinterpret<%T>().pointed.value = result.epochSeconds")
+  appendLine("  }")
+  appendLine("  if (nanosecondsOfSecondOut != null) {")
+  appendLine("    nanosecondsOfSecondOut.reinterpret<%T>().pointed.value = result.nanosecondsOfSecond")
+  appendLine("  }")
+  appendLine("} catch (e: Throwable) {")
+  appendLine("  if ($error != null) {")
+  appendLine("    $error.reinterpret<%T>().pointed.value = %T.create(")
+  appendLine("      buildError(e)")
+  appendLine("    ).asCPointer()")
+  appendLine("  }")
   append("}")
 }

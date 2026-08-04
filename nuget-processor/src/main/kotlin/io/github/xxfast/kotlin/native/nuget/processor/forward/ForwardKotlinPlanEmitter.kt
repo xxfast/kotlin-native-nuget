@@ -35,7 +35,12 @@ internal fun FileSpec.Builder.addForwardKotlinPlanExport(plan: ForwardCallablePl
   require(call.result == plan.result.wireType) {
     "Forward Kotlin plan ${plan.invocation.symbol} has different native and result wire types"
   }
-  require((call.result == ForwardAbiWireType.VOID) == (plan.publicSignature.result == BridgeType.Unit)) {
+  // ADR-076: Instant returns VOID + OUT components (not Unit). Instant? returns BOOLEAN + OUTs.
+  val allowsVoidNonUnit: Boolean = plan.publicSignature.result == BridgeType.Instant
+  require(
+    (call.result == ForwardAbiWireType.VOID) ==
+        (plan.publicSignature.result == BridgeType.Unit || allowsVoidNonUnit),
+  ) {
     "Forward Kotlin plan ${plan.invocation.symbol} has incompatible public and native results"
   }
   require(receiver == null || receiver.direction == ForwardAbiDirection.IN) {
@@ -97,6 +102,26 @@ internal fun FileSpec.Builder.addForwardKotlinPlanExport(plan: ForwardCallablePl
       builder.addCode(handleResultBody(invocation, error.name), stableRef, cOpaquePointerVar, stableRef)
     }
 
+    // ADR-076: Instant result writes epochSeconds/nanosecondsOfSecond through OUT pointers.
+    BridgeType.Instant -> {
+      require(call.result == ForwardAbiWireType.VOID) {
+        "Forward Kotlin Instant result must use VOID wire type: ${plan.invocation.symbol}"
+      }
+      val epochOut: String = requireNotNull(
+        call.parameters.firstOrNull { parameter -> parameter.name == "epochSecondsOut" }?.name,
+      ) { "Forward Kotlin Instant result is missing epochSecondsOut" }
+      val nanosOut: String = requireNotNull(
+        call.parameters.firstOrNull { parameter -> parameter.name == "nanosecondsOfSecondOut" }?.name,
+      ) { "Forward Kotlin Instant result is missing nanosecondsOfSecondOut" }
+      builder.addCode(
+        instantResultBody(invocation, epochOut, nanosOut, error.name),
+        ClassName("kotlinx.cinterop", "LongVar"),
+        ClassName("kotlinx.cinterop", "IntVar"),
+        cOpaquePointerVar,
+        stableRef,
+      )
+    }
+
     is BridgeType.Nullable -> addNullableResult(
       builder = builder,
       type = result.type,
@@ -117,7 +142,7 @@ internal fun FileSpec.Builder.addForwardKotlinPlanExport(plan: ForwardCallablePl
 
 /**
  * ADR-014 (ordinary position, ADR-066's fixture gap): a value class returned by an *ordinary*
- * callable is unboxed to its underlying property before crossing the wire — `Newsroom.code():
+ * callable is unboxed to its underlying property before crossing the wire -- `Newsroom.code():
  * StoryCode` exports `code().value`, not a StableRef of `StoryCode` itself. Scoped to a `String`
  * underlying, matching [ForwardCallablePlanner]'s planner-side scoping.
  */
@@ -461,6 +486,27 @@ private fun addNullableResult(
       )
     }
 
+    // ADR-076: Instant? → Boolean has-value + two OUT component writes.
+    BridgeType.Instant -> {
+      require(call.result == ForwardAbiWireType.BOOLEAN) {
+        "Forward Kotlin nullable Instant result must use BOOLEAN"
+      }
+      val epochOut: String = requireNotNull(
+        call.parameters.firstOrNull { parameter -> parameter.name == "epochSecondsOut" }?.name,
+      ) { "Forward Kotlin Instant? result is missing epochSecondsOut" }
+      val nanosOut: String = requireNotNull(
+        call.parameters.firstOrNull { parameter -> parameter.name == "nanosecondsOfSecondOut" }?.name,
+      ) { "Forward Kotlin Instant? result is missing nanosecondsOfSecondOut" }
+      builder.returns(kotlinType("Boolean"))
+      builder.addCode(
+        nullableInstantResultBody(invocation, epochOut, nanosOut, errorName),
+        ClassName("kotlinx.cinterop", "LongVar"),
+        ClassName("kotlinx.cinterop", "IntVar"),
+        cOpaquePointerVar,
+        stableRef,
+      )
+    }
+
     else -> error("Forward Kotlin plan emitter has no nullable result route for $type")
   }
 }
@@ -636,6 +682,58 @@ private fun nullablePrimitiveResultBody(
   append("}")
 }
 
+/** ADR-076: Instant result writes both components through OUT pointers (void export). */
+private fun instantResultBody(
+  invocation: String,
+  epochOutName: String,
+  nanosOutName: String,
+  errorName: String,
+): String = buildString {
+  appendLine("try {")
+  appendLine("  val result = $invocation")
+  appendLine("  if ($epochOutName != null) {")
+  appendLine("    $epochOutName.reinterpret<%T>().pointed.value = result.epochSeconds")
+  appendLine("  }")
+  appendLine("  if ($nanosOutName != null) {")
+  appendLine("    $nanosOutName.reinterpret<%T>().pointed.value = result.nanosecondsOfSecond")
+  appendLine("  }")
+  appendLine("} catch (e: Throwable) {")
+  appendLine("  if ($errorName != null) {")
+  appendLine("    $errorName.reinterpret<%T>().pointed.value = %T.create(")
+  appendLine("      buildError(e)")
+  appendLine("    ).asCPointer()")
+  appendLine("  }")
+  append("}")
+}
+
+/** ADR-076: Instant? result returns has-value and writes components only when non-null. */
+private fun nullableInstantResultBody(
+  invocation: String,
+  epochOutName: String,
+  nanosOutName: String,
+  errorName: String,
+): String = buildString {
+  appendLine("return try {")
+  appendLine("  val result = $invocation")
+  appendLine("  if (result != null) {")
+  appendLine("    if ($epochOutName != null) {")
+  appendLine("      $epochOutName.reinterpret<%T>().pointed.value = result.epochSeconds")
+  appendLine("    }")
+  appendLine("    if ($nanosOutName != null) {")
+  appendLine("      $nanosOutName.reinterpret<%T>().pointed.value = result.nanosecondsOfSecond")
+  appendLine("    }")
+  appendLine("  }")
+  appendLine("  result != null")
+  appendLine("} catch (e: Throwable) {")
+  appendLine("  if ($errorName != null) {")
+  appendLine("    $errorName.reinterpret<%T>().pointed.value = %T.create(")
+  appendLine("      buildError(e)")
+  appendLine("    ).asCPointer()")
+  appendLine("  }")
+  appendLine("  false")
+  append("}")
+}
+
 private fun defaultResult(type: BridgeType): String = when (type) {
   BridgeType.Char -> "'\\u0000'"
   is BridgeType.Primitive -> when (type.kind) {
@@ -656,6 +754,11 @@ private fun defaultResult(type: BridgeType): String = when (type) {
 private fun loweredArgument(parameter: ForwardPublicParameter): String =
   when (val type: BridgeType = parameter.type) {
     is BridgeType.Primitive, BridgeType.Char, BridgeType.String -> parameter.name
+    // ADR-076: reconstruct Instant from the two fan-out IN components.
+    BridgeType.Instant ->
+      "kotlin.time.Instant.fromEpochSeconds(" +
+          "${parameter.name}_epochSeconds, ${parameter.name}_nanosecondsOfSecond)"
+
     is BridgeType.Enum -> "${type.qualifiedName}.entries[${parameter.name}]"
     is BridgeType.ObjectHandle ->
       "${parameter.name}.asStableRef<${type.qualifiedName}>().get()"
@@ -676,6 +779,11 @@ private fun loweredArgument(parameter: ForwardPublicParameter): String =
       is BridgeType.Primitive ->
         "if (${parameter.name}HasValue) ${parameter.name} else null"
 
+      // ADR-076: Instant? reconstructs only when the has-value flag is true.
+      BridgeType.Instant ->
+        "if (${parameter.name}HasValue) kotlin.time.Instant.fromEpochSeconds(" +
+            "${parameter.name}_epochSeconds, ${parameter.name}_nanosecondsOfSecond) else null"
+
       // ADR-075: a nullable collection *parameter* (e.g. a data class's `notes: List<String>?`
       // constructor parameter, mirroring `Visit.notes` as a property) is now planned when its
       // component is eligible (`ForwardCallablePlanner.inputSkipReason()`'s Nullable branch),
@@ -691,7 +799,7 @@ private fun loweredArgument(parameter: ForwardPublicParameter): String =
 
 /**
  * The six-kind collection lowering, shared by [loweredArgument] (a callable parameter) and
- * [ForwardPropertyKotlinEmitter]'s `valueExpression()` (a property setter's value, ADR-075) — the
+ * [ForwardPropertyKotlinEmitter]'s `valueExpression()` (a property setter's value, ADR-075) -- the
  * two emitters already diverge in shape elsewhere, so this one shared expression builder is kept
  * rather than risking the two collection lowerings drifting apart. [nullable] renders every step
  * of the chain with `?.` instead of `.`, matching the nullable-`ObjectHandle`/`Interface`

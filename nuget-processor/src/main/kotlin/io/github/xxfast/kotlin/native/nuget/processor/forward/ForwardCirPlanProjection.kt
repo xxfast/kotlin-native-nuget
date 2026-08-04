@@ -39,7 +39,7 @@ internal object ForwardCirPlanProjection {
     )
   }
 
-  /** Value-class computed property getter — no errorOut (shipped ABI). */
+  /** Value-class computed property getter -- no errorOut (shipped ABI). */
   fun valueClassProperty(plan: ForwardCallablePlan, nativeReceiverArg: String): CirProperty {
     require(plan.invocation.origin == ForwardCallableOrigin.VALUE_CLASS) {
       "Forward CIR value-class property projection received ${plan.invocation.origin}"
@@ -60,7 +60,7 @@ internal object ForwardCirPlanProjection {
     )
   }
 
-  /** Value-class method — parameters included; no errorOut (shipped ABI). */
+  /** Value-class method -- parameters included; no errorOut (shipped ABI). */
   fun valueClassMethod(plan: ForwardCallablePlan, nativeReceiverArg: String): CirMethod {
     require(plan.invocation.origin == ForwardCallableOrigin.VALUE_CLASS) {
       "Forward CIR value-class method projection received ${plan.invocation.origin}"
@@ -138,7 +138,7 @@ internal object ForwardCirPlanProjection {
     if (!needsCustomParams) {
       return CirConstructor(parameters = publicParams, body = "", hasErrorCheck = true, nativeSuffix = nativeSuffix)
     }
-    val prelude: List<String> = plan.publicSignature.parameters.mapNotNull { plan.collectionPrelude(it) }
+    val prelude: List<String> = plan.inputPrelude()
     val cleanup: List<String> = plan.publicSignature.parameters.mapNotNull { plan.collectionCleanup(it) }
     val argumentList: List<String> = plan.publicSignature.parameters.flatMap { plan.callArgument(it) }
     val callArgs: String = (argumentList + "out IntPtr error").joinToString(", ")
@@ -404,7 +404,7 @@ internal object ForwardCirPlanProjection {
     return nativeImports.single()
   }
 
-  /** The public C# parameter list, one entry per declared [ForwardPublicParameter] — independent
+  /** The public C# parameter list, one entry per declared [ForwardPublicParameter] -- independent
    * of the native ABI's shape (which may fan a single public parameter into several native ones,
    * or dispose of a materialized handle the public type never mentions).
    */
@@ -420,7 +420,7 @@ internal object ForwardCirPlanProjection {
   /** The DllImport-only native parameter list: every native ABI IN parameter in [nativeParameters]
    * (already positioned correctly by the planner, including any nullable-primitive fan-out),
    * rendered at its wire type for both `type` and `nativeType` since DllImport declarations never
-   * need a public/native distinction of their own — except a nullable String, whose wire type
+   * need a public/native distinction of their own -- except a nullable String, whose wire type
    * (`STRING`) carries no nullability of its own: the DllImport parameter must be annotated
    * `string?` too, or passing the (correctly nullable) public value into it is a CS8604 under
    * nullable-reference analysis, even though the underlying marshaling is identical either way.
@@ -436,12 +436,13 @@ internal object ForwardCirPlanProjection {
     return if (type is BridgeType.Nullable && type.type == BridgeType.String) "string?" else wireType.csharpType()
   }
 
-  /** A parameter shape whose native ABI representation is identical to its public C# type — no
+  /** A parameter shape whose native ABI representation is identical to its public C# type -- no
    * cast, fan-out, or prelude/cleanup statement required at the call site, so it can still flow
    * through the pre-existing generic (non-custom-body) rendering paths.
    */
   private fun BridgeType.isTrivialInput(): Boolean = when (this) {
     is BridgeType.Primitive, BridgeType.Char, BridgeType.String -> true
+    // ADR-076: Instant fans out to two/three ABI args and needs a ToInstantComponents prelude.
     is BridgeType.Nullable -> type == BridgeType.String
     else -> false
   }
@@ -455,6 +456,12 @@ internal object ForwardCirPlanProjection {
   private fun ForwardCallablePlan.callArgument(parameter: ForwardPublicParameter): List<String> =
     when (val type = parameter.type) {
       is BridgeType.Primitive, BridgeType.Char, BridgeType.String -> listOf(parameter.name)
+      // ADR-076: Instant fan-out uses locals built by [instantPrelude].
+      BridgeType.Instant -> listOf(
+        "${parameter.name}_epochSeconds",
+        "${parameter.name}_nanosecondsOfSecond",
+      )
+
       is BridgeType.Enum -> listOf("(int)${parameter.name}")
       is BridgeType.ObjectHandle -> listOf("${parameter.name}._handle")
       // ADR-040 sub-decision B: an interface-typed parameter's public static type is `IFoo`, which
@@ -471,6 +478,12 @@ internal object ForwardCirPlanProjection {
         )
 
         is BridgeType.Primitive -> listOf("${parameter.name}.HasValue", "${parameter.name}.GetValueOrDefault()")
+        // ADR-076: Instant? → hasValue + two component locals from [instantPrelude].
+        BridgeType.Instant -> listOf(
+          "${parameter.name}HasValue",
+          "${parameter.name}_epochSeconds",
+          "${parameter.name}_nanosecondsOfSecond",
+        )
         // ADR-075: a nullable collection *parameter* (e.g. a data class's `notes: List<String>?`
         // constructor parameter) shares [ForwardPropertyPlan]'s setter route exactly: the local
         // handle variable [collectionPrelude] built already folds the null check in, so the call
@@ -483,7 +496,7 @@ internal object ForwardCirPlanProjection {
     }
 
   /** [type] with one `Nullable` layer removed only when it wraps a `Collection`, alongside
-   *  whether that layer was present — the same collection factory/dispose call applies either
+   *  whether that layer was present -- the same collection factory/dispose call applies either
    *  way, but a nullable source value needs the `!= null ? ... : IntPtr.Zero` guard around it. */
   private fun BridgeType.asNullableAwareCollection(): Pair<BridgeType.Collection, Boolean>? =
     when (this) {
@@ -505,6 +518,42 @@ internal object ForwardCirPlanProjection {
       "NugetMarshal.$factory(${parameter.name})"
     }
     return "IntPtr ${parameter.name}Handle = $value;"
+  }
+
+  /**
+   * ADR-076: materialize Instant / Instant? public parameters into the fan-out IN locals that
+   * [callArgument] passes to the native call. Returns multi-line prelude text (joined by the
+   * caller), or null when the parameter is not Instant-shaped.
+   */
+  private fun ForwardCallablePlan.instantPrelude(parameter: ForwardPublicParameter): List<String>? {
+    val type: BridgeType = parameter.type
+    if (type == BridgeType.Instant) {
+      return listOf(
+        "long ${parameter.name}_epochSeconds;",
+        "int ${parameter.name}_nanosecondsOfSecond;",
+        "NugetMarshal.ToInstantComponents(${parameter.name}, " +
+            "out ${parameter.name}_epochSeconds, " +
+            "out ${parameter.name}_nanosecondsOfSecond);",
+      )
+    }
+    val isNullableInstant: Boolean =
+      type is BridgeType.Nullable && type.type == BridgeType.Instant
+    if (isNullableInstant) {
+      // GetValueOrDefault (not .Value): CS8629 under warnings-as-errors, even inside a HasValue guard.
+      return listOf(
+        "bool ${parameter.name}HasValue = ${parameter.name}.HasValue;",
+        "long ${parameter.name}_epochSeconds = 0;",
+        "int ${parameter.name}_nanosecondsOfSecond = 0;",
+        "if (${parameter.name}HasValue)",
+        "{",
+        "    NugetMarshal.ToInstantComponents(" +
+            "${parameter.name}.GetValueOrDefault(), " +
+            "out ${parameter.name}_epochSeconds, " +
+            "out ${parameter.name}_nanosecondsOfSecond);",
+        "}",
+      )
+    }
+    return null
   }
 
   // ADR-073: load-bearing, not cosmetic. All three Dispose members bind to the same
@@ -565,6 +614,16 @@ internal object ForwardCirPlanProjection {
       CirParameter(parameter.name, type, "${marshal}out $type")
     }
 
+  /** Collection + Instant input preludes for one plan's public parameters, in declaration order. */
+  private fun ForwardCallablePlan.inputPrelude(
+    parameters: List<ForwardPublicParameter> = publicSignature.parameters,
+  ): List<String> = parameters.flatMap { parameter ->
+    buildList {
+      collectionPrelude(parameter)?.let(::add)
+      instantPrelude(parameter)?.let(::addAll)
+    }
+  }
+
   private fun ForwardCallablePlan.resultProjection(
     nativeName: String,
     parameters: List<ForwardPublicParameter>,
@@ -572,7 +631,7 @@ internal object ForwardCirPlanProjection {
     forceCustomBody: Boolean = false,
   ): CirResultProjection {
     val nativeCall: ForwardNativeCall = singleNativeImport()
-    val prelude: List<String> = parameters.mapNotNull { parameter -> collectionPrelude(parameter) }
+    val prelude: List<String> = inputPrelude(parameters)
     val cleanup: List<String> = parameters.mapNotNull { parameter -> collectionCleanup(parameter) }
     val argumentList: List<String> =
       listOfNotNull(receiverArgument) + parameters.flatMap { parameter -> callArgument(parameter) }
@@ -580,6 +639,13 @@ internal object ForwardCirPlanProjection {
     val needsCustomParams: Boolean = forceCustomBody || parameters.any { parameter -> !parameter.type.isTrivialInput() }
     val result: BridgeType = publicSignature.result
     return when (result) {
+      // ADR-076: Instant return is void + two OUT components, reconstructed as DateTimeOffset.
+      BridgeType.Instant -> CirResultProjection(
+        returnType = "DateTimeOffset",
+        nativeReturnType = "void",
+        body = checkedInstantBody(nativeName, callArguments, nullable = false, prelude, cleanup),
+      )
+
       is BridgeType.ObjectHandle -> CirResultProjection(
         returnType = result.csharpType(),
         nativeReturnType = "IntPtr",
@@ -605,7 +671,7 @@ internal object ForwardCirPlanProjection {
       )
 
       // ADR-014 (ordinary position, ADR-066's fixture gap): always a custom body, regardless of
-      // `needsCustomParams` — a value class's zero-parameter own getter (`Newsroom.Code()`) would
+      // `needsCustomParams` -- a value class's zero-parameter own getter (`Newsroom.Code()`) would
       // otherwise fall through to the generic pass-through renderer, which has no wrap-in-struct
       // case. Scoped to a String underlying, matching the planner's own scoping.
       is BridgeType.ValueClass -> CirResultProjection(
@@ -662,6 +728,13 @@ internal object ForwardCirPlanProjection {
           )
         }
 
+        // ADR-076: Instant? → has-value bool + two OUT components.
+        BridgeType.Instant -> CirResultProjection(
+          returnType = "DateTimeOffset?",
+          nativeReturnType = "bool",
+          body = checkedInstantBody(nativeName, callArguments, nullable = true, prelude, cleanup),
+        )
+
         else -> directOrCustomResultProjection(
           result, nativeCall.result, needsCustomParams, nativeName, callArguments, prelude, cleanup,
         )
@@ -669,6 +742,39 @@ internal object ForwardCirPlanProjection {
 
       else -> directOrCustomResultProjection(
         result, nativeCall.result, needsCustomParams, nativeName, callArguments, prelude, cleanup,
+      )
+    }
+  }
+
+  /** ADR-076: Instant / Instant? result body from OUT components. */
+  private fun checkedInstantBody(
+    nativeName: String,
+    arguments: String,
+    nullable: Boolean,
+    prelude: List<String> = emptyList(),
+    cleanup: List<String> = emptyList(),
+  ): String = buildString {
+    appendLine()
+    prelude.forEach { line -> appendLine("            $line") }
+    if (nullable) {
+      appendLine("            bool hasValue = $nativeName($arguments);")
+    } else {
+      appendLine("            $nativeName($arguments);")
+    }
+    appendLine("            if (error != IntPtr.Zero)")
+    appendLine("            {")
+    appendLine("                throw NugetErrorNative.BuildException(error);")
+    appendLine("            }")
+    cleanup.forEach { line -> appendLine("            $line") }
+    if (nullable) {
+      append(
+        "            return hasValue ? NugetMarshal.FromInstantComponents(" +
+            "epochSecondsOut, nanosecondsOfSecondOut) : null;",
+      )
+    } else {
+      append(
+        "            return NugetMarshal.FromInstantComponents(" +
+            "epochSecondsOut, nanosecondsOfSecondOut);",
       )
     }
   }
@@ -817,7 +923,7 @@ internal object ForwardCirPlanProjection {
   }
 
   /** A direct (no object/list/nullable materialization) result whose call site still needs to be
-   * hand-built because one of its *parameters* — not its result — requires a raising expression a
+   * hand-built because one of its *parameters* -- not its result -- requires a raising expression a
    * plain nativeType-diff cast cannot express (an object handle's `._handle`, a collection's
    * prelude-built local, or a nullable primitive's two-argument fan-out).
    */
@@ -862,12 +968,14 @@ internal object ForwardCirPlanProjection {
     is BridgeType.Primitive -> kind.csharpType()
     BridgeType.Char -> "char"
     BridgeType.String -> "string"
+    // ADR-076: Instant → DateTimeOffset (UTC). Value type, so Instant? is DateTimeOffset?.
+    BridgeType.Instant -> "DateTimeOffset"
     // ADR-066: the classifier already computed the correctly-qualified public spelling (bare
-    // simple name in this class's own namespace, `global::Namespace.Name` otherwise) — mirrors
+    // simple name in this class's own namespace, `global::Namespace.Name` otherwise) -- mirrors
     // `BridgeType.Enum.csharpType`'s existing shape exactly.
     is BridgeType.ObjectHandle -> csharpType
     // ADR-040: the public C# spelling is the projected interface (`IPet`), never the backing
-    // wrapper class — the wrapper is a construction-only implementation detail.
+    // wrapper class -- the wrapper is a construction-only implementation detail.
     is BridgeType.Interface -> csharpType
     is BridgeType.ValueClass -> csharpType
     is BridgeType.Enum -> this.csharpType
@@ -893,14 +1001,15 @@ internal object ForwardCirPlanProjection {
    * nullable annotation on it is erased from the method signature (ADR-034's duplicate-
    * constructor check relies on this to know when it may strip a trailing "?" before comparing
    * rendered signatures). [BridgeType.Enum] and [BridgeType.ValueClass] are C# value types
-   * (`readonly record struct`, `enum`), so `T` and `T?` really are distinct overloads for them —
+   * (`readonly record struct`, `enum`), so `T` and `T?` really are distinct overloads for them --
    * unlike [BridgeType.String], [BridgeType.ObjectHandle], and [BridgeType.Collection], which
    * render as classes/interfaces.
    */
   private fun BridgeType.isCSharpReferenceType(): Boolean = when (this) {
     is BridgeType.Nullable -> type.isCSharpReferenceType()
     BridgeType.String, is BridgeType.ObjectHandle, is BridgeType.Interface, is BridgeType.Collection -> true
-    BridgeType.Unit, is BridgeType.Primitive, BridgeType.Char,
+    // ADR-076: DateTimeOffset is a struct (value type); Instant? is Nullable<DateTimeOffset>.
+    BridgeType.Unit, is BridgeType.Primitive, BridgeType.Char, BridgeType.Instant,
     is BridgeType.Enum, is BridgeType.ValueClass -> false
 
     else -> error("Forward CIR direct-value projection cannot classify public type $this")
