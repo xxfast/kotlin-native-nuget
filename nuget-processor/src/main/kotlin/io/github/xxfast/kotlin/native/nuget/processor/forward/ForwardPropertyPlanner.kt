@@ -170,7 +170,10 @@ internal class ForwardPropertyPlanner(
     if (!isPlannable(type)) return null
     val name: String = prop.simpleName.asString()
     val publicName: String = name.replaceFirstChar { it.uppercase() }
-    val getter: ForwardPropertyGetter = if (type is BridgeType.Nullable && type.type is BridgeType.Primitive) {
+    // ADR-076: Instant shares the nullable-primitive LegacyTwoCall shape exactly.
+    val isNullableLegacyPrimitive: Boolean = type is BridgeType.Nullable &&
+        (type.type is BridgeType.Primitive || type.type == BridgeType.Instant)
+    val getter: ForwardPropertyGetter = if (isNullableLegacyPrimitive) {
       ForwardPropertyGetter.LegacyTwoCall(
         presence = nativeCall(getExport, ForwardAbiWireType.BOOLEAN, receiver, emptyList()),
         value = nativeCall("${getExport}_value", type.type.wireType(), receiver, emptyList()),
@@ -190,9 +193,11 @@ internal class ForwardPropertyPlanner(
       type = type,
       getter = getter,
       setter = setter,
-      helperRequirements = if (type.unwrapNullable() is BridgeType.Collection) {
-        setOf(ForwardHelperRequirement.COLLECTION)
-      } else emptySet(),
+      helperRequirements = when (type.unwrapNullable()) {
+        is BridgeType.Collection -> setOf(ForwardHelperRequirement.COLLECTION)
+        BridgeType.Instant -> setOf(ForwardHelperRequirement.INSTANT)
+        else -> emptySet()
+      },
     ).validate()
   }
 
@@ -214,7 +219,10 @@ internal class ForwardPropertyPlanner(
     receiver: ForwardPropertyReceiver,
   ): ForwardPropertySetter? {
     if (!prop.isMutable) return null
-    if (type is BridgeType.Nullable && type.type is BridgeType.Primitive) {
+    // ADR-076: Instant shares the nullable-primitive NullableDispatch setter shape exactly.
+    val isNullableLegacyPrimitive: Boolean = type is BridgeType.Nullable &&
+        (type.type is BridgeType.Primitive || type.type == BridgeType.Instant)
+    if (isNullableLegacyPrimitive) {
       return ForwardPropertySetter.NullableDispatch(
         value = nativeCall(
           setExport, ForwardAbiWireType.VOID, receiver, listOf(valueParameter(type.type)),
@@ -272,6 +280,7 @@ internal class ForwardPropertyPlanner(
     BridgeType.Unit -> "Unit"
     BridgeType.Char -> "Char"
     BridgeType.String -> "String"
+    BridgeType.Instant -> "Instant"
     is BridgeType.Primitive -> kind.name.lowercase().replaceFirstChar { it.uppercase() }
     is BridgeType.Enum -> qualifiedName.substringAfterLast('.')
     is BridgeType.ObjectHandle -> qualifiedName.substringAfterLast('.')
@@ -328,8 +337,9 @@ internal class ForwardPropertyPlanner(
   )
 
   private fun isPlannable(type: BridgeType): Boolean = when (type) {
-    BridgeType.Unit, BridgeType.Char, BridgeType.String, is BridgeType.Primitive, is BridgeType.Enum,
-    is BridgeType.ObjectHandle, is BridgeType.Interface, is BridgeType.Collection -> true
+    BridgeType.Unit, BridgeType.Char, BridgeType.String, BridgeType.Instant,
+    is BridgeType.Primitive, is BridgeType.Enum, is BridgeType.ObjectHandle,
+    is BridgeType.Interface, is BridgeType.Collection -> true
 
     is BridgeType.Nullable -> isPlannable(type.type)
     else -> false
@@ -344,6 +354,8 @@ internal class ForwardPropertyPlanner(
       ForwardAbiWireType.POINTER
 
     is BridgeType.Enum -> ForwardAbiWireType.INT32
+    // ADR-076: wires as its own INT64 tick representation, same as a Primitive(LONG).
+    BridgeType.Instant -> ForwardAbiWireType.INT64
     is BridgeType.Primitive -> when (type.kind) {
       PrimitiveKind.BOOLEAN -> ForwardAbiWireType.BOOLEAN
       PrimitiveKind.BYTE -> ForwardAbiWireType.INT8
@@ -394,6 +406,12 @@ internal class ForwardPropertyPlanner(
       ForwardConversion.HANDLE_TO_COLLECTION
     } else {
       ForwardConversion.COLLECTION_TO_HANDLE
+    }
+
+    BridgeType.Instant -> if (flow == ForwardFlow.INTO_KOTLIN) {
+      ForwardConversion.TICKS_TO_INSTANT
+    } else {
+      ForwardConversion.INSTANT_TO_TICKS
     }
 
     else -> ForwardConversion.DIRECT

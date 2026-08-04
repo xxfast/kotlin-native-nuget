@@ -223,13 +223,19 @@ internal object ForwardCirPlanProjection {
     }
     val nullable: BridgeType.Nullable = plan.publicSignature.result as? BridgeType.Nullable
       ?: error("Legacy two-call plan ${plan.invocation.symbol} requires a nullable result")
-    val primitive: BridgeType.Primitive = nullable.type as? BridgeType.Primitive
-      ?: error("Legacy two-call plan ${plan.invocation.symbol} requires a nullable primitive")
+    val inner: BridgeType = nullable.type
+    require(inner is BridgeType.Primitive || inner == BridgeType.Instant) {
+      "Legacy two-call plan ${plan.invocation.symbol} requires a nullable primitive or Instant"
+    }
     val presence: ForwardNativeCall = plan.nativeImports[0]
     val value: ForwardNativeCall = plan.nativeImports[1]
     val publicParams: List<CirParameter> = plan.publicParameters()
     val csName: String = plan.publicSignature.name.removePrefix("@")
-    val csharpReturnType: String = primitive.csharpType()
+    // ADR-076: the DllImport/local-variable wire type is always the raw representation (`long`
+    // for Instant); the public return type is the semantic one (`DateTimeOffset?`).
+    val dllImportReturnType: String =
+      if (inner is BridgeType.Primitive) inner.csharpType() else "long"
+    val publicReturnType: String = "${inner.csharpType()}?"
     val callArgs: String = plan.publicSignature.parameters
       .flatMap { parameter -> plan.callArgument(parameter) }
       .joinToString(", ")
@@ -245,6 +251,11 @@ internal object ForwardCirPlanProjection {
     }
     val presenceName: String = "${csName}_has_value"
     val valueName: String = "${csName}_value"
+    val returnExpression: String = if (inner == BridgeType.Instant) {
+      "new global::System.DateTimeOffset(__nuget_value, global::System.TimeSpan.Zero)"
+    } else {
+      "__nuget_value"
+    }
     val body: String = buildString {
       appendLine()
       appendLine("            bool __nuget_hasValue = $presenceName($hasValueCallArgs);")
@@ -253,12 +264,12 @@ internal object ForwardCirPlanProjection {
       appendLine("                throw NugetErrorNative.BuildException(__nuget_hasValueError);")
       appendLine("            }")
       appendLine("            if (!__nuget_hasValue) return null;")
-      appendLine("            $csharpReturnType __nuget_value = $valueName($valueCallArgs);")
+      appendLine("            $dllImportReturnType __nuget_value = $valueName($valueCallArgs);")
       appendLine("            if (__nuget_valueError != IntPtr.Zero)")
       appendLine("            {")
       appendLine("                throw NugetErrorNative.BuildException(__nuget_valueError);")
       appendLine("            }")
-      append("            return __nuget_value;")
+      append("            return $returnExpression;")
     }
     val inParams: List<CirParameter> = plan.nativeInCirParameters(presence.parameters)
     return listOf(
@@ -275,16 +286,16 @@ internal object ForwardCirPlanProjection {
       CirDllImport(
         libraryName = libraryName,
         entryPoint = value.exportName,
-        returnType = csharpReturnType,
+        returnType = dllImportReturnType,
         name = valueName,
         parameters = inParams,
         visibility = CirVisibility.PRIVATE,
         hasSyncErrorOut = true,
-        marshalBooleanReturn = csharpReturnType == "bool",
+        marshalBooleanReturn = dllImportReturnType == "bool",
       ),
       CirMethod(
         name = plan.publicSignature.name,
-        returnType = "$csharpReturnType?",
+        returnType = publicReturnType,
         parameters = publicParams,
         body = body,
         isStatic = true,
@@ -456,6 +467,9 @@ internal object ForwardCirPlanProjection {
     when (val type = parameter.type) {
       is BridgeType.Primitive, BridgeType.Char, BridgeType.String -> listOf(parameter.name)
       is BridgeType.Enum -> listOf("(int)${parameter.name}")
+      // ADR-076: UtcTicks is load-bearing (verified) -- a consumer holding a non-UTC
+      // DateTimeOffset must not send its wall-clock ticks.
+      BridgeType.Instant -> listOf("${parameter.name}.UtcTicks")
       is BridgeType.ObjectHandle -> listOf("${parameter.name}._handle")
       // ADR-040 sub-decision B: an interface-typed parameter's public static type is `IFoo`, which
       // does not carry `._handle` (that is only true of the generated `Foo` backing class). The
@@ -471,6 +485,12 @@ internal object ForwardCirPlanProjection {
         )
 
         is BridgeType.Primitive -> listOf("${parameter.name}.HasValue", "${parameter.name}.GetValueOrDefault()")
+        // ADR-076: same HasValue/GetValueOrDefault pair as the nullable Primitive case above,
+        // with the ticks conversion applied to the value half.
+        BridgeType.Instant -> listOf(
+          "${parameter.name}.HasValue", "${parameter.name}.GetValueOrDefault().UtcTicks",
+        )
+
         // ADR-075: a nullable collection *parameter* (e.g. a data class's `notes: List<String>?`
         // constructor parameter) shares [ForwardPropertyPlan]'s setter route exactly: the local
         // handle variable [collectionPrelude] built already folds the null check in, so the call
@@ -620,6 +640,15 @@ internal object ForwardCirPlanProjection {
         ),
       )
 
+      // ADR-076: always a custom body, regardless of `needsCustomParams` -- same reasoning as
+      // ValueClass above: a raw `long -> DateTimeOffset` C# cast is illegal, so this can never go
+      // through directOrCustomResultProjection's no-custom-body cast route.
+      BridgeType.Instant -> CirResultProjection(
+        returnType = result.csharpType(),
+        nativeReturnType = "long",
+        body = checkedInstantBody(nativeName, callArguments, prelude, cleanup),
+      )
+
       is BridgeType.Nullable -> when (val type: BridgeType = result.type) {
         is BridgeType.ObjectHandle -> CirResultProjection(
           returnType = "${type.csharpType()}?",
@@ -661,6 +690,15 @@ internal object ForwardCirPlanProjection {
             body = checkedNullableValueBody(nativeName, callArguments, prelude, cleanup),
           )
         }
+
+        // ADR-076: same BOOLEAN + valueOut shape as the nullable Primitive case above; valueOut
+        // itself is declared as a raw `long` (its transfer type is Primitive(LONG), not Instant --
+        // see ForwardCallablePlanner.nullableResultShape), converted to DateTimeOffset here.
+        BridgeType.Instant -> CirResultProjection(
+          returnType = "${type.csharpType()}?",
+          nativeReturnType = "bool",
+          body = checkedNullableInstantValueBody(nativeName, callArguments, prelude, cleanup),
+        )
 
         else -> directOrCustomResultProjection(
           result, nativeCall.result, needsCustomParams, nativeName, callArguments, prelude, cleanup,
@@ -732,6 +770,52 @@ internal object ForwardCirPlanProjection {
     appendLine("            }")
     cleanup.forEach { line -> appendLine("            $line") }
     append("            return hasValue ? valueOut : null;")
+  }
+
+  /** ADR-076: same shape as [checkedNullableValueBody], except `valueOut` is a raw `long` of
+   *  ticks (its own transfer stays `Primitive(LONG)`, never `Instant`) and must be lifted into a
+   *  `DateTimeOffset` in the return expression. */
+  private fun checkedNullableInstantValueBody(
+    nativeName: String,
+    arguments: String,
+    prelude: List<String> = emptyList(),
+    cleanup: List<String> = emptyList(),
+  ): String = buildString {
+    appendLine()
+    prelude.forEach { line -> appendLine("            $line") }
+    appendLine("            bool hasValue = $nativeName($arguments);")
+    appendLine("            if (error != IntPtr.Zero)")
+    appendLine("            {")
+    appendLine("                throw NugetErrorNative.BuildException(error);")
+    appendLine("            }")
+    cleanup.forEach { line -> appendLine("            $line") }
+    append(
+      "            return hasValue ? " +
+          "new global::System.DateTimeOffset(valueOut, global::System.TimeSpan.Zero) : " +
+          "(global::System.DateTimeOffset?)null;",
+    )
+  }
+
+  /** ADR-076: non-nullable Instant result -- the native call returns a raw `long` of ticks,
+   *  which must be lifted into a `DateTimeOffset` in the return expression. Always a custom body
+   *  (see the `BridgeType.Instant` branch in [resultProjection]). */
+  private fun checkedInstantBody(
+    nativeName: String,
+    arguments: String,
+    prelude: List<String> = emptyList(),
+    cleanup: List<String> = emptyList(),
+  ): String = buildString {
+    appendLine()
+    prelude.forEach { line -> appendLine("            $line") }
+    appendLine("            long nativeResult = $nativeName($arguments);")
+    appendLine("            if (error != IntPtr.Zero)")
+    appendLine("            {")
+    appendLine("                throw NugetErrorNative.BuildException(error);")
+    appendLine("            }")
+    cleanup.forEach { line -> appendLine("            $line") }
+    append(
+      "            return new global::System.DateTimeOffset(nativeResult, global::System.TimeSpan.Zero);",
+    )
   }
 
   private fun checkedCollectionBody(
@@ -862,6 +946,9 @@ internal object ForwardCirPlanProjection {
     is BridgeType.Primitive -> kind.csharpType()
     BridgeType.Char -> "char"
     BridgeType.String -> "string"
+    // ADR-076: the public C# type is always System.DateTimeOffset, fully qualified so no "using
+    // System;" is required in the generated file.
+    BridgeType.Instant -> "global::System.DateTimeOffset"
     // ADR-066: the classifier already computed the correctly-qualified public spelling (bare
     // simple name in this class's own namespace, `global::Namespace.Name` otherwise) — mirrors
     // `BridgeType.Enum.csharpType`'s existing shape exactly.
@@ -900,7 +987,8 @@ internal object ForwardCirPlanProjection {
   private fun BridgeType.isCSharpReferenceType(): Boolean = when (this) {
     is BridgeType.Nullable -> type.isCSharpReferenceType()
     BridgeType.String, is BridgeType.ObjectHandle, is BridgeType.Interface, is BridgeType.Collection -> true
-    BridgeType.Unit, is BridgeType.Primitive, BridgeType.Char,
+    // ADR-076: DateTimeOffset is a C# value type, same as Enum/ValueClass.
+    BridgeType.Unit, is BridgeType.Primitive, BridgeType.Char, BridgeType.Instant,
     is BridgeType.Enum, is BridgeType.ValueClass -> false
 
     else -> error("Forward CIR direct-value projection cannot classify public type $this")

@@ -14,6 +14,15 @@ internal sealed interface BridgeType {
   data object String : BridgeType
 
   /**
+   * ADR-076: `kotlin.time.Instant`. Wires as a single `INT64` of .NET ticks (100ns since
+   * 0001-01-01T00:00:00 UTC); the public C# type is `System.DateTimeOffset` with `Offset` always
+   * `TimeSpan.Zero`. Modelled like [Enum]: a semantic type with a required conversion on both
+   * sides plus a helper requirement -- a new sealed variant, not a reuse of `Primitive(LONG)`
+   * with a flag, so the compiler enumerates every `when` that must change.
+   */
+  data object Instant : BridgeType
+
+  /**
    * @param qualifiedName Kotlin FQCN (used by the Kotlin export for `.entries[n]` / `.ordinal`).
    * @param csharpType Public C# type spelling. Cross-namespace enums (e.g. reverse-generated
    *   packages) need `global::Namespace.Name`; same-namespace simple names still work under
@@ -186,6 +195,12 @@ internal enum class ForwardConversion {
   UNBOX_VALUE_CLASS,
   COLLECTION_TO_HANDLE,
   HANDLE_TO_COLLECTION,
+
+  /** ADR-076: Kotlin `Instant` -> .NET ticks (`Long`), out of Kotlin. */
+  INSTANT_TO_TICKS,
+
+  /** ADR-076: .NET ticks (`Long`) -> Kotlin `Instant`, into Kotlin. */
+  TICKS_TO_INSTANT,
 }
 
 internal enum class ForwardHelperRequirement {
@@ -195,6 +210,9 @@ internal enum class ForwardHelperRequirement {
   VALUE_CLASS,
   COLLECTION,
   ERROR_TRANSFER,
+
+  /** ADR-076: the generated `toDotNetTicks()`/`instantFromDotNetTicks()` conversion pair. */
+  INSTANT,
 }
 
 internal enum class ForwardCleanupKind { DISPOSE_STABLE_REF, FREE_UTF8, RELEASE_HANDLE }
@@ -400,8 +418,9 @@ internal object ForwardCallablePlanValidator {
 
   private fun validateType(type: BridgeType, position: String) {
     when (type) {
-      BridgeType.Unit, BridgeType.Char, BridgeType.String, is BridgeType.Primitive, is BridgeType.Enum,
-      is BridgeType.ObjectHandle, is BridgeType.Interface,
+      BridgeType.Unit, BridgeType.Char, BridgeType.String, BridgeType.Instant,
+      is BridgeType.Primitive, is BridgeType.Enum, is BridgeType.ObjectHandle,
+      is BridgeType.Interface,
         -> Unit
 
       is BridgeType.ValueClass -> validateType(type.underlying, "$position value-class underlying type")
@@ -473,6 +492,12 @@ internal object ForwardCallablePlanValidator {
       ForwardConversion.COLLECTION_TO_HANDLE
     }
 
+    BridgeType.Instant -> if (flow == ForwardFlow.INTO_KOTLIN) {
+      ForwardConversion.TICKS_TO_INSTANT
+    } else {
+      ForwardConversion.INSTANT_TO_TICKS
+    }
+
     else -> null
   }
 
@@ -504,6 +529,10 @@ internal object ForwardCallablePlanValidator {
     ForwardConversion.COLLECTION_TO_HANDLE,
     ForwardConversion.HANDLE_TO_COLLECTION,
       -> ForwardHelperRequirement.COLLECTION
+
+    ForwardConversion.INSTANT_TO_TICKS,
+    ForwardConversion.TICKS_TO_INSTANT,
+      -> ForwardHelperRequirement.INSTANT
 
     ForwardConversion.DIRECT -> error("Direct conversion does not require a helper")
   }

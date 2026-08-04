@@ -76,6 +76,10 @@ internal class ForwardBridgeTypeClassifier(
     knownScalarType(qualifiedName)?.let { return it }
     if (qualifiedName == "kotlin.Char") return BridgeType.Char
     if (qualifiedName == "kotlin.String") return BridgeType.String
+    // ADR-076: kotlin.time.Instant is a known stdlib type, in the same category as Char/String --
+    // recognized here, before the exportedObjectHandles membership check below, so it never falls
+    // through to SKIPPED_UNEXPORTED_DEPENDENCY_TYPE with an unactionable include(...) hint.
+    if (qualifiedName == "kotlin.time.Instant") return BridgeType.Instant
     specializedProtocol(qualifiedName)?.let { return it }
     collectionType(qualifiedName, type.arguments)?.let { return it }
 

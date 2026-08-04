@@ -831,3 +831,69 @@ internal fun FileSpec.Builder.addNugetFunc3HelperExports() {
       .build()
   )
 }
+
+/**
+ * ADR-076: the `kotlin.time.Instant` <-> .NET-ticks conversion pair. `toDotNetTicks()` truncates
+ * toward the epoch-0001 origin (the ticks are non-negative, so truncation is floor) and throws for
+ * an `Instant` outside years 0001-9999; `instantFromDotNetTicks` is its exact inverse, including
+ * the negative-remainder path for any tick value before the 1970 Unix epoch.
+ */
+internal fun FileSpec.Builder.addNugetInstantHelperExports() {
+  val instant = ClassName("kotlin.time", "Instant")
+
+  addProperty(
+    PropertySpec.builder("TICKS_UNIX_EPOCH", Long::class)
+      .addModifiers(KModifier.PRIVATE, KModifier.CONST)
+      .initializer("621_355_968_000_000_000L")
+      .build()
+  )
+  addProperty(
+    PropertySpec.builder("EPOCH_SECONDS_MIN", Long::class)
+      .addModifiers(KModifier.PRIVATE, KModifier.CONST)
+      .initializer("-62_135_596_800L")
+      .build()
+  )
+  addProperty(
+    PropertySpec.builder("EPOCH_SECONDS_MAX", Long::class)
+      .addModifiers(KModifier.PRIVATE, KModifier.CONST)
+      .initializer("253_402_300_799L")
+      .build()
+  )
+
+  addFunction(
+    FunSpec.builder("toDotNetTicks")
+      .addModifiers(KModifier.INTERNAL)
+      .receiver(instant)
+      .returns(Long::class)
+      .addCode(buildString {
+        appendLine("require(epochSeconds in EPOCH_SECONDS_MIN..EPOCH_SECONDS_MAX) {")
+        appendLine(
+          "  \"Instant \$this is outside System.DateTimeOffset's range " +
+              "(0001-01-01T00:00:00Z..9999-12-31T23:59:59.9999999Z)\""
+        )
+        appendLine("}")
+        append("return TICKS_UNIX_EPOCH + epochSeconds * 10_000_000L + nanosecondsOfSecond / 100")
+      })
+      .build()
+  )
+
+  addFunction(
+    FunSpec.builder("instantFromDotNetTicks")
+      .addModifiers(KModifier.INTERNAL)
+      .addParameter("ticks", Long::class)
+      .returns(instant)
+      .addCode(buildString {
+        appendLine("require(ticks in 0L..3_155_378_975_999_999_999L) {")
+        appendLine("  \"Tick value \$ticks is not a valid System.DateTimeOffset\"")
+        appendLine("}")
+        appendLine("val sinceEpoch: Long = ticks - TICKS_UNIX_EPOCH")
+        appendLine("return Instant.fromEpochSeconds(")
+        appendLine("  epochSeconds = sinceEpoch / 10_000_000L,")
+        // KotlinPoet's addCode(String) always parses "%" as a format specifier, even on this
+        // single-arg overload -- "%%" is the escape for a literal modulo operator.
+        appendLine("  nanosecondAdjustment = ((sinceEpoch %% 10_000_000L) * 100L).toInt(),")
+        append(")")
+      })
+      .build()
+  )
+}

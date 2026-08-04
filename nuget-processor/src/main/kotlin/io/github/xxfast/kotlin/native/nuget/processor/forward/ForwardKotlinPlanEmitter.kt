@@ -92,6 +92,18 @@ internal fun FileSpec.Builder.addForwardKotlinPlanExport(plan: ForwardCallablePl
       )
     }
 
+    BridgeType.Instant -> {
+      require(call.result == ForwardAbiWireType.INT64) {
+        "Forward Kotlin Instant result must use INT64 wire type: ${plan.invocation.symbol}"
+      }
+      builder.returns(kotlinResultType(call.result))
+      builder.addCode(
+        errorHandlingValueBody("$invocation.toDotNetTicks()", error.name, "0L"),
+        cOpaquePointerVar,
+        stableRef,
+      )
+    }
+
     is BridgeType.ObjectHandle, is BridgeType.Interface, is BridgeType.Collection -> {
       builder.returns(cOpaquePointer.copy(nullable = true))
       builder.addCode(handleResultBody(invocation, error.name), stableRef, cOpaquePointerVar, stableRef)
@@ -160,8 +172,11 @@ private fun FileSpec.Builder.addLegacyTwoCallKotlinExport(plan: ForwardCallableP
   }
   val result: BridgeType.Nullable = plan.publicSignature.result as? BridgeType.Nullable
     ?: error("Legacy two-call plan ${plan.invocation.symbol} requires a nullable result")
-  val primitive: BridgeType.Primitive = result.type as? BridgeType.Primitive
-    ?: error("Legacy two-call plan ${plan.invocation.symbol} requires a nullable primitive")
+  // ADR-076: a top-level nullable Instant shares this shape too.
+  val inner: BridgeType = result.type
+  require(inner is BridgeType.Primitive || inner == BridgeType.Instant) {
+    "Legacy two-call plan ${plan.invocation.symbol} requires a nullable primitive or Instant"
+  }
   val error: ForwardAbiParameter = requireNotNull(plan.errorSlot) {
     "Legacy two-call plan ${plan.invocation.symbol} is missing its error slot"
   }
@@ -199,9 +214,12 @@ private fun FileSpec.Builder.addLegacyTwoCallKotlinExport(plan: ForwardCallableP
   )
   addFunction(presenceBuilder.build())
 
+  val valueExpression: String =
+    if (inner == BridgeType.Instant) "$invocation!!.toDotNetTicks()" else "$invocation!!"
+  val valueDefault: String = if (inner == BridgeType.Instant) "0L" else defaultResult(inner)
   val valueBuilder: FunSpec.Builder = exportBuilder(value).returns(kotlinResultType(value.result))
   valueBuilder.addCode(
-    errorHandlingValueBody("$invocation!!", error.name, defaultResult(primitive)),
+    errorHandlingValueBody(valueExpression, error.name, valueDefault),
     cOpaquePointerVar,
     stableRef,
   )
@@ -461,6 +479,24 @@ private fun addNullableResult(
       )
     }
 
+    // ADR-076: same BOOLEAN + valueOut shape as the nullable-primitive case above, except the
+    // Kotlin Instant result is converted to ticks before it is written into valueOut.
+    BridgeType.Instant -> {
+      require(call.result == ForwardAbiWireType.BOOLEAN) {
+        "Forward Kotlin nullable Instant result must use BOOLEAN"
+      }
+      val valueOut: ForwardAbiParameter = requireNotNull(
+        call.parameters.firstOrNull { parameter -> parameter.name == "valueOut" },
+      ) { "Forward Kotlin nullable Instant result is missing valueOut" }
+      builder.returns(kotlinType("Boolean"))
+      builder.addCode(
+        nullableInstantResultBody(invocation, valueOut.name, errorName),
+        cVarType(PrimitiveKind.LONG),
+        cOpaquePointerVar,
+        stableRef,
+      )
+    }
+
     else -> error("Forward Kotlin plan emitter has no nullable result route for $type")
   }
 }
@@ -545,7 +581,9 @@ private fun invocationExpression(
 }
 
 private fun kotlinInputType(type: BridgeType, wireType: ForwardAbiWireType): TypeName = when (type) {
-  is BridgeType.Primitive, BridgeType.Char, is BridgeType.Enum -> kotlinResultType(wireType)
+  is BridgeType.Primitive, BridgeType.Char, is BridgeType.Enum,
+  BridgeType.Instant -> kotlinResultType(wireType)
+
   BridgeType.String -> kotlinType("String")
   is BridgeType.ObjectHandle, is BridgeType.Interface, is BridgeType.Collection -> cOpaquePointer
   is BridgeType.Nullable -> when (val inner = type.type) {
@@ -636,6 +674,30 @@ private fun nullablePrimitiveResultBody(
   append("}")
 }
 
+/** ADR-076: same shape as [nullablePrimitiveResultBody], except the Kotlin `Instant` result is
+ *  converted to ticks (via the generated `toDotNetTicks()` helper) before it is written into
+ *  [valueOutName] -- the wire payload is a plain `Long`, not the semantic `Instant` itself. */
+private fun nullableInstantResultBody(
+  invocation: String,
+  valueOutName: String,
+  errorName: String,
+): String = buildString {
+  appendLine("return try {")
+  appendLine("  val result = $invocation")
+  appendLine("  if (result != null && $valueOutName != null) {")
+  appendLine("    $valueOutName.reinterpret<%T>().pointed.value = result.toDotNetTicks()")
+  appendLine("  }")
+  appendLine("  result != null")
+  appendLine("} catch (e: Throwable) {")
+  appendLine("  if ($errorName != null) {")
+  appendLine("    $errorName.reinterpret<%T>().pointed.value = %T.create(")
+  appendLine("      buildError(e)")
+  appendLine("    ).asCPointer()")
+  appendLine("  }")
+  appendLine("  false")
+  append("}")
+}
+
 private fun defaultResult(type: BridgeType): String = when (type) {
   BridgeType.Char -> "'\\u0000'"
   is BridgeType.Primitive -> when (type.kind) {
@@ -657,6 +719,8 @@ private fun loweredArgument(parameter: ForwardPublicParameter): String =
   when (val type: BridgeType = parameter.type) {
     is BridgeType.Primitive, BridgeType.Char, BridgeType.String -> parameter.name
     is BridgeType.Enum -> "${type.qualifiedName}.entries[${parameter.name}]"
+    // ADR-076: the wire value is a raw INT64 of ticks; convert it back to an Instant.
+    BridgeType.Instant -> "instantFromDotNetTicks(${parameter.name})"
     is BridgeType.ObjectHandle ->
       "${parameter.name}.asStableRef<${type.qualifiedName}>().get()"
 
@@ -675,6 +739,11 @@ private fun loweredArgument(parameter: ForwardPublicParameter): String =
 
       is BridgeType.Primitive ->
         "if (${parameter.name}HasValue) ${parameter.name} else null"
+
+      // ADR-076: same HasValue-guard shape as the nullable Primitive case above, plus the same
+      // TICKS_TO_INSTANT conversion the non-nullable Instant branch above uses.
+      BridgeType.Instant ->
+        "if (${parameter.name}HasValue) instantFromDotNetTicks(${parameter.name}) else null"
 
       // ADR-075: a nullable collection *parameter* (e.g. a data class's `notes: List<String>?`
       // constructor parameter, mirroring `Visit.notes` as a property) is now planned when its

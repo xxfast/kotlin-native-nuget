@@ -640,6 +640,7 @@ class ForwardMarshallingMatrixTest {
     is BridgeType.Primitive -> "Primitive(${type.kind})"
     BridgeType.Char -> "Char"
     BridgeType.String -> "String"
+    BridgeType.Instant -> "Instant"
     is BridgeType.Enum -> "Enum"
     is BridgeType.ObjectHandle -> "ObjectHandle"
     is BridgeType.Interface -> "Interface"

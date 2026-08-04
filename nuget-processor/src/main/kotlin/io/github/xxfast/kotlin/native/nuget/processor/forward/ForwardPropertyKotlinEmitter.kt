@@ -84,6 +84,15 @@ private fun FileSpec.Builder.addGetter(plan: ForwardPropertyPlan, call: ForwardN
       )
     }
 
+    BridgeType.Instant -> {
+      builder.returns(kotlinType("Long"))
+      builder.addCode(
+        valueBody("$access.toDotNetTicks()", "errorOut", "0L"),
+        cOpaquePointerVar,
+        stableRef,
+      )
+    }
+
     is BridgeType.ObjectHandle, is BridgeType.Interface, is BridgeType.Collection -> {
       builder.returns(cOpaquePointer.copy(nullable = true))
       builder.addCode(handleBody(access, "errorOut"), stableRef, cOpaquePointerVar, stableRef)
@@ -112,14 +121,34 @@ private fun FileSpec.Builder.addNullableValueGetter(
   plan: ForwardPropertyPlan,
   call: ForwardNativeCall,
 ) {
-  val type: BridgeType.Primitive =
-    (plan.type as BridgeType.Nullable).type as BridgeType.Primitive
-  val builder: FunSpec.Builder = exportBuilder(call, plan.receiver).returns(kotlinType(type))
-  builder.addCode(
-    valueBody("${plan.accessExpression()}!!", "errorOut", primitiveDefault(type)),
-    cOpaquePointerVar,
-    stableRef,
-  )
+  val inner: BridgeType = (plan.type as BridgeType.Nullable).type
+  val builder: FunSpec.Builder = when (inner) {
+    is BridgeType.Primitive -> {
+      val getterBuilder: FunSpec.Builder = exportBuilder(call, plan.receiver)
+        .returns(kotlinType(inner))
+      getterBuilder.addCode(
+        valueBody("${plan.accessExpression()}!!", "errorOut", primitiveDefault(inner)),
+        cOpaquePointerVar,
+        stableRef,
+      )
+      getterBuilder
+    }
+
+    // ADR-076: same LegacyTwoCall value shape as the nullable Primitive case above, converted to
+    // ticks before it crosses the wire.
+    BridgeType.Instant -> {
+      val getterBuilder: FunSpec.Builder = exportBuilder(call, plan.receiver)
+        .returns(kotlinType("Long"))
+      getterBuilder.addCode(
+        valueBody("${plan.accessExpression()}!!.toDotNetTicks()", "errorOut", "0L"),
+        cOpaquePointerVar,
+        stableRef,
+      )
+      getterBuilder
+    }
+
+    else -> error("Forward property nullable value getter is invalid for ${plan.symbol}: $inner")
+  }
   addFunction(builder.build())
 }
 
@@ -193,6 +222,8 @@ private fun ForwardPropertyPlan.valueExpression(): String = when (val type: Brid
     is BridgeType.Primitive, BridgeType.Char, BridgeType.String -> "value"
     is BridgeType.ObjectHandle -> "value?.asStableRef<${inner.qualifiedName}>()?.get()"
     is BridgeType.Interface -> "value?.asStableRef<${inner.qualifiedName}>()?.get()"
+    // ADR-076: the wire value is a raw INT64 of ticks; convert it back to an Instant.
+    BridgeType.Instant -> "instantFromDotNetTicks(value)"
     // ADR-075 Question D: a nullable collection setter is an ordinary `Direct` route with a
     // nullable `COpaquePointer` value -- `?.` short-circuits before `asStableRef` is ever reached
     // for a null wire value, so the property's static type stays the property's own `List<T>?`.
@@ -202,6 +233,7 @@ private fun ForwardPropertyPlan.valueExpression(): String = when (val type: Brid
 
   is BridgeType.Primitive, BridgeType.Char, BridgeType.String -> "value"
   is BridgeType.Enum -> "${type.qualifiedName}.entries[value]"
+  BridgeType.Instant -> "instantFromDotNetTicks(value)"
   is BridgeType.ObjectHandle -> "value.asStableRef<${type.qualifiedName}>().get()"
   is BridgeType.Interface -> "value.asStableRef<${type.qualifiedName}>().get()"
   is BridgeType.Collection -> loweredCollectionExpression("value", type)
@@ -214,6 +246,7 @@ private fun kotlinInputType(type: BridgeType): TypeName = when (type) {
   BridgeType.Char -> kotlinType("Char")
   BridgeType.String -> kotlinType("String")
   is BridgeType.Enum -> kotlinType("Int")
+  BridgeType.Instant -> kotlinType("Long")
   // ADR-075: only ever reached for an extension property's receiver -- the underlying is what
   // actually crosses the wire (ADR-014).
   is BridgeType.ValueClass -> kotlinInputType(type.underlying)

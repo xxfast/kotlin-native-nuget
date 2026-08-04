@@ -215,6 +215,12 @@ internal object ForwardCirPropertyProjection {
       }
 
       is BridgeType.Enum -> append("            return (${value.csharpType()})nativeResult;")
+      // ADR-076: nativeResult is a raw `long` of ticks (see the first `when` above); lift it into
+      // a DateTimeOffset rather than casting (a `long -> DateTimeOffset` C# cast is illegal).
+      BridgeType.Instant -> append(
+        "            return new global::System.DateTimeOffset(nativeResult, global::System.TimeSpan.Zero);",
+      )
+
       is BridgeType.ObjectHandle -> append("            return new ${value.csharpType()}(nativeResult);")
       is BridgeType.Interface ->
         append("            return new ${value.backingType}(nativeResult);")
@@ -225,16 +231,26 @@ internal object ForwardCirPropertyProjection {
   }
 
   private fun legacyGetter(presence: String, value: String, args: String, type: BridgeType): String {
-    val primitive: BridgeType.Primitive = (type as BridgeType.Nullable).type as BridgeType.Primitive
+    val inner: BridgeType = (type as BridgeType.Nullable).type
+    require(inner is BridgeType.Primitive || inner == BridgeType.Instant) {
+      "Forward property legacy getter requires a nullable primitive or Instant, got $type"
+    }
     val presenceArgs: String = listOf(args, "out IntPtr error").filter { it.isNotBlank() }.joinToString(", ")
     val valueArgs: String = listOf(args, "out IntPtr error2").filter { it.isNotBlank() }.joinToString(", ")
+    // ADR-076: the "value" wire read is always the raw representation (`long` ticks for Instant);
+    // the return expression lifts it into the semantic type.
+    val returnExpression: String = if (inner == BridgeType.Instant) {
+      "new global::System.DateTimeOffset(value, global::System.TimeSpan.Zero)"
+    } else {
+      "value"
+    }
     return buildString {
       appendLine(); appendLine("            bool hasValue = $presence($presenceArgs);"); appendErrorCheck(this)
       appendLine("            if (!hasValue) return null;")
-      appendLine("            ${primitive.wireType().csharpWireType()} value = $value($valueArgs);")
+      appendLine("            ${inner.wireType().csharpWireType()} value = $value($valueArgs);")
       appendLine("            if (error2 != IntPtr.Zero)"); appendLine("            {")
       appendLine("                throw NugetErrorNative.BuildException(error2);"); appendLine("            }")
-      append("            return value;")
+      append("            return $returnExpression;")
     }
   }
 
@@ -323,6 +339,9 @@ internal object ForwardCirPropertyProjection {
   private fun ForwardPropertyPlan.valueArgument(name: String = "value"): String =
     when (val value = type.unwrapNullable()) {
       is BridgeType.Enum -> "(int)$name"
+      // ADR-076: UtcTicks is load-bearing (verified) -- a consumer holding a non-UTC
+      // DateTimeOffset must not send its wall-clock ticks.
+      BridgeType.Instant -> "$name.UtcTicks"
       is BridgeType.ObjectHandle -> if (type is BridgeType.Nullable) "$name?._handle ?? IntPtr.Zero" else "$name._handle"
       // ADR-040 sub-decision B: the setter's static parameter type is `IFoo`, so extraction goes
       // through the shared reflective helper rather than a direct `._handle` field read.
@@ -359,6 +378,8 @@ internal object ForwardCirPropertyProjection {
       ForwardAbiWireType.POINTER
 
     is BridgeType.Enum -> ForwardAbiWireType.INT32
+    // ADR-076: wires as its own INT64 tick representation, same as a Primitive(LONG).
+    BridgeType.Instant -> ForwardAbiWireType.INT64
     is BridgeType.Primitive -> type.kind.wireType()
     else -> error("No property wire type for $type")
   }
@@ -375,6 +396,9 @@ internal object ForwardCirPropertyProjection {
     is BridgeType.Primitive -> kind.csharpType()
     BridgeType.Char -> "char"
     BridgeType.String -> "string"
+    // ADR-076: the public C# type is always System.DateTimeOffset, fully qualified so no "using
+    // System;" is required in the generated file.
+    BridgeType.Instant -> "global::System.DateTimeOffset"
     is BridgeType.Enum -> this.csharpType
     // ADR-066: mirrors `BridgeType.Enum.csharpType` — the classifier already qualified this.
     is BridgeType.ObjectHandle -> csharpType

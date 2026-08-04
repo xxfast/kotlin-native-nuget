@@ -79,6 +79,8 @@ class ForwardSkippedCallableWarningTest {
         ForwardPlanSkipReason.COLLECTION,
         ForwardPlanSkipReason.ENUM,
         ForwardPlanSkipReason.HANDLE,
+        // ADR-076: same defensive classification as CHAR/STRING/ENUM/HANDLE/OBJECT.
+        ForwardPlanSkipReason.INSTANT,
         ForwardPlanSkipReason.NULLABLE,
         ForwardPlanSkipReason.OBJECT,
         ForwardPlanSkipReason.STRING,
