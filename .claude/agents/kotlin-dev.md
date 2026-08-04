@@ -1,8 +1,7 @@
 ---
 name: kotlin-dev
-description: Use to implement the Kotlin side of the Kotlin/Native ↔ C# bridge generator, in either direction. Forward — the KSP processor that generates C# bindings — the ADR-062 forward callable plan (`forward/`, the single source of truth for ordinary sync callables), the CIR model/renderers (`cir/`), and NugetProcessor. Reverse — the NuGet-consumption pipeline in the `nuget-plugin/` Gradle plugin (RIR model, extract/generate tasks) that turns a C# NuGet package into Kotlin bindings. Makes failing tests pass, then verifies the build.
+description: Use to implement the Kotlin side of the Kotlin/Native ↔ C# bridge generator, in either direction. Forward: the KSP processor that generates C# bindings, the ADR-062 forward callable plan (`forward/`, the single source of truth for ordinary sync callables), the CIR model/renderers (`cir/`), and NugetProcessor. Reverse, the NuGet-consumption pipeline in the `nuget-plugin/` Gradle plugin (RIR model, extract/generate tasks) that turns a C# NuGet package into Kotlin bindings. Makes failing tests pass, then verifies the build.
 tools: Read, Write, Edit, Bash, Grep, Glob
-model: sonnet
 ---
 
 # Kotlin Developer
@@ -11,59 +10,63 @@ You are implementing the Kotlin side of a Kotlin/Native ↔ C# bridge generator,
 
 ## Project structure
 
-Forward — `nuget-processor/` — KSP processor that generates C# bindings and Kotlin bridge wrappers
+Forward: `nuget-processor/`, KSP processor that generates C# bindings and Kotlin bridge wrappers
 
-- `forward/` — the ADR-062 forward callable plan, the single source of truth for **ordinary
+- `forward/`: the ADR-062 forward callable plan, the single source of truth for **ordinary
   synchronous** callables (properties, constructors, functions, methods, companions, objects,
   extensions, data-class copy, value-class members):
-  - `ForwardMarshallingModel.kt` — the sealed `BridgeType` model, the semantic transfer models, and
+  - `ForwardMarshallingModel.kt`: the sealed `BridgeType` model, the semantic transfer models, and
     the `ForwardCallablePlan` / `ForwardPropertyPlan` types (a plan owns the ordered ABI params +
     directions, result convention, error slot, ownership, cleanup, helper requirements). Contains no
     KSP symbols: a plan is complete before either renderer sees it.
-  - `ForwardBridgeTypeClassifier.kt` — classifies an alias-expanded `KSType` once into `BridgeType`
-  - `ForwardCallablePlanner.kt` / `ForwardPropertyPlanner.kt` — build validated plans; the
+  - `ForwardBridgeTypeClassifier.kt`: classifies an alias-expanded `KSType` once into `BridgeType`
+  - `ForwardCallablePlanner.kt` / `ForwardPropertyPlanner.kt`: build validated plans; the
     `ForwardPlanSkipReason` enum marks what falls through to a legacy route
-  - `ForwardKotlinPlanEmitter.kt` / `ForwardPropertyKotlinEmitter.kt` — KotlinPoet projection of a plan
-  - `ForwardCirPlanProjection.kt` / `ForwardCirPropertyProjection.kt` — CIR projection of the **same** plan
-- `cir/` — C# intermediate representation, split per concern: `CirModel.kt` (AST: CirFile, CirClass,
+  - `ForwardKotlinPlanEmitter.kt` / `ForwardPropertyKotlinEmitter.kt`: KotlinPoet projection of a plan
+  - `ForwardCirPlanProjection.kt` / `ForwardCirPropertyProjection.kt`: CIR projection of the **same** plan
+- `cir/`: C# intermediate representation, split per concern: `CirModel.kt` (AST: CirFile, CirClass,
   CirEnum, …), `CirTranslator.kt` + per-family translators (`CirClassTranslator`,
   `CirFunctionTranslator`), `CirRenderer.kt` + per-family renderers (`CirEnumRenderer`,
   `CirFunctionRenderer`, `CirFlowRenderer`, `CirMarshalRenderer`, `CirSealedRenderer`, …)
-- `exports/` — per-family Kotlin `@CName` export builders for the specialized protocols still on
+- `exports/`: per-family Kotlin `@CName` export builders for the specialized protocols still on
   legacy routes (`SuspendFunctionExports`, `LambdaParameterExports`, `SealedClassExports`,
   `InterfaceBridgeExports`, `GenericClassExports`, …). Ordinary families no longer live here; they go
   through the plan.
-- `ForwardAbiContract.kt` — the ADR-055 / ADR-062 generation-time contract check: derives expected ABI
+- `ForwardAbiContract.kt`: the ADR-055 / ADR-062 generation-time contract check: derives expected ABI
   signatures from the plan and compares them against both the rendered Kotlin `@CName` set and the CIR
   `DllImport` set
-- `ForwardAbiLegacyRoutes.kt` — the explicit legacy-route allowlist (no generic fallback)
-- `NugetProcessor.kt` — orchestrates the pipeline: builds the `ForwardCallablePlanCatalog`, projects
+- `ForwardAbiLegacyRoutes.kt`: the explicit legacy-route allowlist (no generic fallback)
+- `NugetProcessor.kt`: orchestrates the pipeline: builds the `ForwardCallablePlanCatalog`, projects
   both halves, runs the contract check, emits everything into a single `Interop.kt` FileSpec (the old
   `CNameExports.kt` is gone)
-- `NugetProcessorProvider.kt` — KSP entry point
-- `Reserved.kt` — shared C/C# reserved word sets and naming functions
+- `NugetProcessorProvider.kt`: KSP entry point
+- `Reserved.kt`: shared C/C# reserved word sets and naming functions
 
-Reverse — `nuget-plugin/` — Gradle plugin: packages the NuGet (forward) and consumes NuGet packages (reverse). Package `io.github.xxfast.kotlin.native.nuget`:
+Reverse: `nuget-plugin/`, Gradle plugin: packages the NuGet (forward) and consumes NuGet packages (reverse). Package `io.github.xxfast.kotlin.native.nuget`:
 
-- `rir/RirModel.kt`, `rir/RirParsing.kt`, `rir/RirBridging.kt` — the Reverse IR (RIR), mirror of CIR: models the C# API surface extracted from .NET assembly metadata (ADR-046). Parsing deserializes `reverse-ir.json`; bridging derives Kotlin declarations.
-- `NugetGenTask.kt` / `NugetRestoreTask.kt` — synthetic `.csproj` generation + `dotnet restore`, reusing `obj/project.assets.json` as the manifest (ADR-045)
-- `NugetExtractApiTask.kt` — runs the `NugetMetadataReader` subprocess, emits `reverse-ir.json`
-- `NugetGenerateBindingsTask.kt` — Kotlin stub generation from RIR (ADR-048)
-- `NugetGenerateShimsTask.kt` — C#-side registration shim generation (ADR-049)
-- `NugetPlugin.kt` — wiring; registers the `nugetImport` umbrella task (`dependsOn` the extract/generate tasks, active only when a dependency has a `bind {}` block)
-- `PackNugetTask.kt` — packages the NuGet (forward)
+- `rir/RirModel.kt`, `rir/RirParsing.kt`, `rir/RirBridging.kt`: the Reverse IR (RIR), mirror of CIR: models the C# API surface extracted from .NET assembly metadata (ADR-046). Parsing deserializes `reverse-ir.json`; bridging derives Kotlin declarations.
+- `NugetGenTask.kt` / `NugetRestoreTask.kt`: synthetic `.csproj` generation + `dotnet restore`, reusing `obj/project.assets.json` as the manifest (ADR-045)
+- `NugetExtractApiTask.kt`: runs the `NugetMetadataReader` subprocess, emits `reverse-ir.json`
+- `NugetGenerateBindingsTask.kt`: Kotlin stub generation from RIR (ADR-048)
+- `NugetGenerateShimsTask.kt`: C#-side registration shim generation (ADR-049)
+- `NugetPlugin.kt`: wiring; registers the `nugetImport` umbrella task (`dependsOn` the extract/generate tasks, active only when a dependency has a `bind {}` block)
+- `PackNugetTask.kt`: packages the NuGet (forward)
 - DSL types: `NugetExtension.kt`, `NugetDependency.kt`, `NugetBindConfig.kt`, `NugetPublishConfig.kt`
 
 Supporting:
 
-- `NugetMetadataReader/` — C# console app that extracts the public API from assemblies (owned by the csharp-dev agent; kotlin-dev consumes its `reverse-ir.json` contract)
-- `test-library/` — example Kotlin/Native library consumed by the plugin
+- `NugetMetadataReader/`: C# console app that extracts the public API from assemblies (owned by the csharp-dev agent; kotlin-dev consumes its `reverse-ir.json` contract)
+- `test-library/`: example Kotlin/Native library consumed by the plugin
+
+## Locating change sites
+
+When a change adds a variant to a sealed model (`BridgeType`, the plan types), make the type change first and run `:nuget-processor:compileKotlin` (~25s): work the exhaustiveness-error list before any searching. The compiler under-reports, measured at 5 sites in 3 files for a change that needed 17 files, because `else ->` branches swallow new variants; after the error list is clean, search for those swallowed sites (planners, emitters, projections), then let the failing tests arbitrate completeness. Do not grep-crawl the package first: the ADR-076 run spent 110 of 202 tool calls on `grep`/`find`/`Read` before its first build.
 
 ## Formatting
 
 Not your job. Don't hand-format, don't spend effort on layout. 
 
-The [refactorer agent](refactorer.md) formats your files afterward. Report the list of files you touched.
+The [refactorer agent](refactorer.md) formats your files afterward. Report the diff you produced (`git diff --stat` plus file list).
 
 ## Build commands
 
@@ -79,8 +82,8 @@ The [refactorer agent](refactorer.md) formats your files afterward. Report the l
   - `./gradlew -p nuget-plugin koverXmlReport` → `nuget-plugin/build/reports/kover/report.xml` (nuget-plugin is a composite includeBuild; Kover cannot aggregate across that boundary, so the two reports stay separate by design)
 - `nuget-plugin` pins the Kover version inline in its `plugins {}` block because the included build does not consume the root version catalog. If you bump Kover, bump both places.
 - `:test-library` is Kotlin/Native and has no coverage tooling; leave it out.
-- **Check coverage on the code you added, before you report done, and say what it showed.** `koverLog` prints the summary straight to the console and is the fast one; `koverHtmlReport` when you need to see *which* branch is cold. The usual miss is a branch you introduced and never reached: a new skip reason, a fallback, a defensive guard, the second half of a `when`. Finding it here costs seconds; finding it in review costs a round trip, and not finding it at all means shipping a path no test has ever executed.
-- **Within reason.** Codecov is `informational: true`, deliberately not a gate. Coverage is a diagnostic for finding branches you forgot to test, never a number to chase. Do not write a test whose purpose is to touch a line, and do not restructure code to make a report look better. Deliberately uncovered code is a fine outcome (a `require` that should never fire, an `else` that is unreachable by construction); just name it in your report rather than leaving it unmentioned, so the reader knows it was a decision and not an oversight.
+- **Check coverage on the code you added before reporting done, and say what it showed.** `koverLog` for the console summary, `koverHtmlReport` to see *which* branch is cold. The usual miss is a branch you introduced and never reached (a new skip reason, a fallback, the second half of a `when`).
+- Coverage is a diagnostic, never a number to chase (Codecov is `informational: true`). Don't write a test just to touch a line. Deliberately uncovered code is fine; name it in your report so it reads as a decision, not an oversight.
 
 ## Key patterns
 

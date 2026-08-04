@@ -5,167 +5,104 @@ description: Implements a new bridge feature end to end using a TDD loop. Orches
 
 # Feature Design
 
-Implements a new feature using a TDD loop, delegating each step to the appropriate subagent.
-
-You run in the main conversation thread, so you can spawn subagents and pause to check in with the human. Delegate to the appropriate agent for each step (research, testing, implementation, refactor, docs) and provide them the necessary context and instructions.
+A TDD loop run from the main thread: research, human gate, failing tests, implementation, docs and style. Delegate each step to its agent with the context it needs.
 
 ## Step 0: Validate the item before you design anything (hard gate, every run)
 
-No later step can catch a wrong-item run: from Step 1 on, every artefact is derived from the design, so tests, code and docs all agree with each other while disagreeing with the request. Do this before any research agent, any ADR, and any design question.
+No later step can catch a wrong-item run: from Step 1 on every artefact is derived from the design, so tests, code and docs all agree with each other while disagreeing with the request.
 
-**0. Bind the agent roster.** `ls .claude/agents/` and confirm the five agents this skill dispatches to (`research`, `csharp-dev`, `kotlin-dev`, `refactorer`, `documenter`). If a file is present the agent exists, call it, regardless of whether the session's injected "Available agent types" list mentions it: that list has been observed to omit `csharp-dev` and `documenter`. Never substitute a different agent for one you think is missing, and never absorb the C# or docs work into the main thread because the roster "didn't list it".
+0. **Bind the agent roster.** `ls .claude/agents/` and confirm the five agents (`research`, `csharp-dev`, `kotlin-dev`, `refactorer`, `documenter`). A present file means the agent exists, even when the session's "Available agent types" list omits it (observed for `csharp-dev` and `documenter`). Never substitute or absorb the work into the main thread.
+1. **Restate the item from its own words, with every linked ADR still closed.** One sentence: what does a consumer get? Name the **direction** (Kotlin → C# forward, C# → Kotlin reverse) and **which side declares** the type or contract versus merely consumes it.
+2. **Read the item's neighbours and section heading.** `git log -S"<item text>" -- ROADMAP.md` shows what arrived alongside it. If the section's stated direction contradicts your restatement, stop and ask.
+3. **Check the item is reachable.** If it needs a later phase or an unticked sibling it is **blocked**: report what it needs and stop. Never build the nearest reachable thing against a blocked item's checkbox.
+4. **If an ADR is linked, verify its scope matches the restatement.** An ADR is evidence about *how*, never authority over *what*. On mismatch, stop and escalate with both side by side; do not adopt the ADR's framing for being more detailed.
+5. **State the restatement back to the human before Step 1**, with reachability.
 
-**1. Restate the item from its own words, with every linked ADR still closed.** One sentence: what does a consumer get? For a bridge feature the restatement must name the **direction** (Kotlin → C# forward, or C# → Kotlin reverse) and **which side declares** the type or contract versus merely consumes it. A title alone reads either way once an ADR has primed you.
-
-**2. Read the item's neighbours and its section heading.** `git log -S"<the item text>" -- ROADMAP.md` shows what arrived alongside it; items added together disambiguate each other. **If the section's stated direction contradicts your restatement, stop and ask.**
-
-**3. Check the item is reachable.** Does it need machinery from a later phase, or a sibling item still unticked? If so it is **blocked**: stop, and report what it needs, which item or phase owns that, and what you could do instead. Never build the nearest reachable thing against a blocked item's checkbox.
-
-**4. If an ADR is linked, verify its scope matches your restatement.** An ADR is evidence about *how*, never authority over *what*. If its subject and your restatement differ, **stop and escalate** with both side by side. Do not reconcile it yourself, and do not adopt the ADR's framing for being more detailed or more confident.
-
-**5. State the restatement back to the human before Step 1**, with reachability. This is the only point where the request and the plan are compared directly.
-
-Carry the restatement forward verbatim: Step 2 is judged against it, and Step 5 may tick the item only if what shipped matches it. Work worth doing that is **not** this item gets its own item, and the requested one stays open.
+Carry the restatement forward verbatim: Step 2 is judged against it, and Step 5 may tick the item only if what shipped matches it.
 
 ## Phase kickoff (batching the human gate)
 
-Many phases (Phases 9–13 especially) are largely reverse-direction work that mirrors an already-decided forward ADR. Do not run the full per-feature loop (research, human gate, implement) one interruption at a time for every item. At the **start of a phase**, classify its roadmap items and batch the human gate:
+At the start of a phase (Phases 9–13 especially), classify its items instead of running one full loop per item:
 
-- **"mirror" items**: annotated "mirror of ADR-XXX" in ROADMAP.md; the reverse mapping exactly mirrors an existing forward ADR.
-  - Skip the heavy research step and the up-front Step 2 human gate. Run a **light** research pass to confirm the mirror actually applies (per the `research` agent's own "don't write an ADR" guidance), then go straight to Step 3 tests. The human reviews the **implemented result** rather than the plan.
-  - If the mirror turns out **not** to hold cleanly, stop and escalate to the normal Step 2 check-in.
-- **"needs-ADR" items**: no clean forward mirror, a real design decision.
-  - Fan out one **background** `research` agent per item, in parallel.
-  - Collect all their draft ADRs/findings and present them to the human in a **single Step 2 review sitting**, instead of one interruption per feature.
+- **"mirror" items** (annotated "mirror of ADR-XXX"): skip heavy research and the up-front Step 2 gate. Run a light research pass to confirm the mirror applies, then go straight to Step 3; the human reviews the implemented result. If the mirror does not hold cleanly, escalate to the normal Step 2 check-in.
+- **"needs-ADR" items**: fan out one **background** `research` agent per item in parallel, then present all findings in a single Step 2 sitting.
 
-Then run the per-feature Step 3–5 loop below for each item.
+## Budgets
+
+A budget is a checkpoint, not a ceiling, and goes **in the agent's prompt**: run `date` at start and re-check it before each new expensive line of work. At the deadline the agent stops and reports, naming every unresolved question, rather than continuing quietly; if a load-bearing question is open it asks for an extension with a specific reason (what is unresolved, what the time buys, what breaks without it). Agents have no `AskUserQuestion`, so **you relay the ask** with your own recommendation, then resume the **same** agent via `SendMessage`. Grant extensions for a mechanism claim that would silently produce wrong output if wrong; decline them for more prior art or confirmation.
+
+## Model selection
+
+No agent file pins a `model:`; you choose per dispatch (the Agent tool's `model` parameter, omit to inherit the main-thread model). `research` always inherits: see Step 1. `kotlin-dev` inherits for real features; downgrade only for mechanical mirror items. `documenter` and `refactorer` usually run downgraded fine. Whether a larger model converges in fewer steps is unmeasured (the ADR-076 implementation ran on sonnet: 202 steps, 50 minutes), so record each agent's model and duration in your report.
 
 ## Workflow
 
-### Step 1: Research (`research` agent)
+### Step 1: Research (`research` agent). Budget: 20 minutes
 
-- Delegate to the `research` agent
-- Investigate how the feature should work
-- Research how Kotlin handles the same problem for Java interop, Swift Export, and ObjC Export
+- Investigate how the feature should work; check how Kotlin handles the same problem for Java interop, Swift Export and ObjC Export
 - Write an [ADR](../../../docs/adr) if the decision is non-trivial
-- Define the expected API for the consumer: C# for forward features, Kotlin for reverse (Phase 8) and Gradle plugin features
+- Define the expected consumer API: C# for forward features, Kotlin for reverse (Phase 8) and Gradle plugin features
 
-**Budget: 20 minutes.** Put it in the prompt. Tell the agent to run `date` when it starts and to check it again before opening any new expensive line of investigation, not only at the end. At the deadline it stops and reports what it has, naming every question it did not resolve, rather than quietly continuing. A partial ADR you can read at Step 2 beats a complete one that lands fifteen minutes later, because Step 2 is a human gate either way and unresolved questions are exactly what that gate is for.
+Spend the budget in this order (left alone, research spends it in reverse, because a prior-art sweep always has one more ecosystem while a spike has an end):
 
-**The budget is a checkpoint, not a ceiling.** Some features genuinely deserve more, and the agent is the one best placed to know. Tell it that if it hits 20 minutes with a load-bearing question still open, it should **ask for an extension** in its report rather than either guessing or padding out what it has. The ask has to be specific enough to decide on: what is unresolved, what it would spend the extra time doing, and what goes wrong downstream if it proceeds without the answer. "I'd like more time" is not an ask.
+1. **Spike the claim the design rests on.** For each mechanism claim ask: if this is wrong, does the implementation silently produce wrong output? Spike the ones that answer yes, only those; a wrong one otherwise surfaces mid-implementation at many times the cost ([CLAUDE.md](../../../CLAUDE.md) records several).
+2. **The repo's own constraints, read in source.** Cheap and always decision-relevant.
+3. **Prior art, only to the depth that changes the decision.** Stop at the first precedent that settles it; the rest is confirmation, and confirmation is what the budget gets cut from.
 
-The agent cannot reach the human itself, it has no `AskUserQuestion`, so **you relay it**. Put its request to the human with your own read on whether it is worth granting, then resume the **same** agent with `SendMessage` rather than spawning a fresh one, so its context survives and the extension buys only the new work instead of paying for a cold restart.
-
-Grant it for a mechanism claim that would silently produce wrong output if wrong. Decline it for more prior art, more alternatives, or more confirmation of something already decided. That is the same line item 1 below draws, applied at the checkpoint instead of at the start.
-
-Spend the budget in this order. Left alone, research tends to spend it in reverse, because a prior-art sweep always has one more ecosystem to check while a spike has an end:
-
-1. **The spike on the claim the design rests on.** This is what the budget is *for*. Ask of each mechanism claim: if this is wrong, does the implementation silently produce wrong output? Spike only the ones that answer yes. A wrong mechanism claim surfaces mid-implementation otherwise, at many times the cost, and this repo has [paid that](../../../CLAUDE.md) more than once.
-2. **The repo's own constraints, read in source.** Cheap, fast, and always decision-relevant.
-3. **Prior art, only to the depth that changes the decision.** One precedent that clearly settles it is worth more than four that agree. Stop at the first that decides the question; the rest is confirmation, and confirmation is what the budget gets cut from.
-
-**Do not downsize the model to fit the budget.** `research` is the one step every later artefact is derived from, so a cheap wrong ADR is the most expensive thing this workflow can produce: tests, code and docs all end up agreeing with each other while disagreeing with reality, and nothing downstream can catch it. `.claude/agents/research.md` deliberately declares no `model:`, so it inherits the main thread's. Leave it that way. Cut scope, not capability.
+**Never downsize `research` to fit the budget.** A cheap wrong ADR is the most expensive artefact this workflow can produce, because everything downstream derives from it. Cut scope, not capability.
 
 ### Step 2: Verify the approach with humans
 
-- Share
-  - Research findings and rationales
-  - ADR (if any)
-  - Proposed API for
-    - Sample app, library
-    - Sample tests
-- Get feedback and iterate on the design before implementation
-- Call out any deferred scope and ask if we want to schedule this on the roadmap
-- This step is crucial to ensure we're building the right thing before writing code
-- **Lead with the Step 0 restatement and say plainly whether the design still satisfies it.** Research routinely reshapes a feature, and the reshaped version can drift off the item without anybody noticing, because from here on every artefact is derived from the design rather than from the request. Put the restatement and what you are about to build next to each other and confirm they match.
-- **Ask at least one *what* question, not only *how* questions.** A gate made entirely of implementation choices ("which plan model?", "which handle-extraction strategy?") reads as thorough and validates nothing about scope: every option builds the same possibly-wrong feature. If you have no *what* question, say explicitly "this still delivers <restatement>" so the claim is on the record and the human can contradict it.
-- **If the gate contains a scope fork, recommend the narrowest option that satisfies the restatement.** See "The restatement is a ceiling as well as a floor" in Rules. This is the moment that rule exists for, and it is easy to miss here because everything else at this gate rewards thoroughness. Two specific traps: a design that has grown past the restatement during research still needs the *narrow* recommendation, not a defence of the grown version; and "the deferred half shares a code path with what I'm shipping" justifies pulling in adjacent lines, never an adjacent capability.
-- Once the human agrees with the approach, move to the next step (the ADR is accepted later, in Step 5, once the feature is implemented and verified)
+- Share the research findings, the ADR (if any), and the proposed consumer API with sample tests; iterate before implementation
+- **Lead with the Step 0 restatement and say plainly whether the design still satisfies it.** Research reshapes features; put the restatement and what you are about to build side by side.
+- **Ask at least one *what* question, not only *how* questions.** A gate made only of implementation choices validates nothing about scope. If you have no *what* question, state "this still delivers <restatement>" so the human can contradict it.
+- **At a scope fork, recommend the narrowest option that satisfies the restatement** (see Rules). A design that grew during research still gets the narrow recommendation, and "the deferred half shares a code path" never justifies pulling in an adjacent capability.
+- Call out deferred scope and ask whether to schedule it on the roadmap
+- The ADR is accepted later, in Step 5, once the feature is implemented and verified
 
-### Step 3: Testing
+### Step 3: Testing (failing tests on the consumer side)
 
-Write failing tests on the **consumer side** of the feature. Which side that is depends on the feature:
+- **Forward feature (Kotlin → C#)**: `csharp-dev` writes failing xunit tests in `IntegrationTests/` that define the expected API (follow existing patterns, `using var` for IDisposable), adding Kotlin sample source in `test-library/` if needed.
+- **Reverse / ecosystem feature (C# → Kotlin, Phase 8+)**: there is **no runnable Kotlin-side unit test of the reverse bridge**; the generated stubs fail fast unless the .NET host has registered the function-pointer table (ADR-041/048). Use the two real seams:
+  - **Fast inner loop** (`kotlin-dev`, where the TDD happens): failing generator-level tests in `nuget-plugin/src/test/kotlin`, a `reverse-ir.json` fixture in, expected Kotlin stub / C# shim text out. Precedents: `NugetGenerateBindingsTaskTest`, `NugetGenerateShimsTaskTest`.
+  - **Outer loop** (`csharp-dev`): extend `TestDependency/` (the standing ADR-050 local-feed fixture) inside the ADR-043 bridgeable subset, then assert the ADR-050 round trip in `IntegrationTests` xunit tests. Do not hunt for a published package that fits the subset.
+- **Gradle plugin feature (DSL, tasks, wiring)**: `kotlin-dev` writes failing `ProjectBuilder` tests in `nuget-plugin/src/test/kotlin` that apply the plugin and assert the extension model / task wiring. Defer TestKit functional tests until there is behavior `ProjectBuilder` cannot reach.
 
-- **Forward bridge feature (Kotlin → C#)**: `csharp-dev` agent
-  - Write failing C# tests that define the expected API
-  - Tests go in `IntegrationTests/`
-  - Follow existing test patterns (xunit, `using var` for IDisposable)
-  - Add sample Kotlin source in `test-library/` if needed
-- **Reverse / ecosystem feature (C# → Kotlin, Phase 8+)**: `kotlin-dev` + `csharp-dev` agents
-  - There is **no runnable Kotlin-side unit test of the reverse bridge**: the generated Kotlin stubs fail fast unless the .NET host process has registered the function-pointer table (ADR-041/048), so Kotlin/Native code cannot exercise the reverse bridge standalone. Do not write "failing Kotlin tests that define the expected Kotlin-side API", there is nowhere for them to run. Use the two real test seams instead:
-    - **Fast inner loop (where the TDD happens)**: `kotlin-dev` agent
-      - Write failing generator-level unit tests in `nuget-plugin/src/test/kotlin`: a `reverse-ir.json` fixture in, expected Kotlin stub text and/or C# shim text out. Precedents: `NugetGenerateBindingsTaskTest`, `NugetGenerateShimsTaskTest`.
-    - **Outer loop (end-to-end round trip)**: `csharp-dev` agent
-      - Extend `TestDependency/` (the standing C# fixture library, bound via the ADR-050 local feed) with the feature's fixture surface, a feature-scoped namespace/type kept inside the ADR-043 bridgeable subset. Do not hunt for a published package that fits the subset.
-      - Add the ADR-050 round trip: test-library Kotlin calls the bound `TestDependency` API, is surfaced forward to C#, and is asserted in `IntegrationTests` xunit tests.
-- **Gradle plugin feature (DSL, tasks, wiring)**: `kotlin-dev` agent
-  - Write failing `ProjectBuilder` unit tests in `nuget-plugin/src/test/kotlin` that apply the plugin, configure the DSL as a consumer would, and assert the extension model / task wiring
-  - Defer Gradle TestKit functional tests until there is task behavior that ProjectBuilder cannot reach
+### Step 4: Implementation (`kotlin-dev` agent). Budget: 25 minutes
 
-### Step 4: Implementation (`kotlin-dev` agent)
+- Make the failing tests pass. A forward **ordinary synchronous** callable goes through the ADR-062 forward callable plan (`forward/`: classify into `BridgeType`, extend the planner, both halves project from the one plan); a **specialized protocol** (suspend, `Flow`, lambda/callback, sealed, generics) stays on its named legacy route in `exports/` + `cir/`, both halves updated in the same change.
+- Iterate warm: continue the same `kotlin-dev` via `SendMessage` each round rather than spawning fresh (same for `csharp-dev` if the tests need adjusting).
+- **Compile first, but a green compile does not mean "all sites found".** Make the `BridgeType` change, run `:nuget-processor:compileKotlin` (25 seconds), and work the exhaustiveness errors; put that in the prompt. The ADR-076 run instead spent 110 of 202 tool calls on `grep`/`find`/`Read`. But measured with a dummy variant, the compiler flags only 5 sites in 3 files against the 17 files ADR-076 touched: 16 `else ->` branches over `BridgeType` swallow a new variant, so the emitters and projections never error. Build, fix the error list, then search for the `else`-swallowed sites, and let the failing tests arbitrate completeness. The durable fix is code, its own ROADMAP item: make those `else ->`s explicit so the compiler *can* enumerate a variant.
+- An implementation still grinding at 50 minutes has stopped converging.
+- Have it report the **diff** it produced (`git diff --stat` plus file list), which you hand to the refactorer.
 
-- Make the failing tests pass
-- Update the KSP processor or the Gradle plugin (`nuget-plugin/`), whichever the feature lives in. For a forward feature, an **ordinary synchronous** callable goes through the ADR-062 forward callable plan (`forward/`: classify into `BridgeType`, extend the planner, both halves project from the one plan); a **specialized protocol** (suspend, `Flow`, lambda/callback, sealed, generics) stays on its named legacy route in `exports/` + `cir/`, where you update both halves in the same change
-- Verify all tests pass (existing + new)
-- The loop iterates: tests fail, fix, re-run. Continue the same `kotlin-dev` instance via SendMessage rather than spawning a fresh agent each round. Same for `csharp-dev` if the tests themselves need adjusting.
-- Ask `kotlin-dev` to report back the list of files it touched, you will hand that to the refactorer.
+### Step 5: Docs and style (last step; `documenter` first, then `refactorer`, never parallel)
 
-### Step 5: Docs and style review (last step, run serially)
+The `refactorer`'s verify starts with `:test-library:clean`, which deletes the `build/` output the `documenter` lifts every snippet from; in parallel the docs silently lose snippets. After `kotlin-dev`'s green verify `build/` is current, so the `documenter` runs first, purely read-only, then the `refactorer` cleans and rebuilds with nobody reading behind it.
 
-Once the feature is implemented and verified, run the `documenter` **first**, then the `refactorer`. Do
-**not** run them in parallel.
-
-They look disjoint (the `refactorer` only touches Kotlin, the `documenter` only touches Markdown), but
-file ownership is not the axis that matters. The `refactorer`'s verify begins with
-`./gradlew :test-library:clean`, which **deletes `test-library/build/`**, and that directory is the
-`documenter`'s entire evidence base: every snippet it writes is lifted from the generated `Interop.cs`
-and the reverse output under `build/nuget-interop/`. Run them together and the `documenter` greps a
-directory that is being deleted and rebuilt underneath it. It does not crash, it silently drops the
-snippet it could not back with real code, and then it reaches for `./gradlew :test-library:packNuget`
-to regenerate what the `refactorer` just removed, which queues on the Gradle project lock.
-
-Running the `documenter` first avoids all of it: `build/` is already current from `kotlin-dev`'s passing
-verify, so the `documenter` is pure read-only and never touches Gradle. The `refactorer` then cleans and
-rebuilds with nobody reading behind it.
-
-- **`documenter` agent** (first): hand it the feature, the ADR (if any), the ROADMAP item it completes, the sample/test files that exercise it, and **every bug the feature discovered but did not fix**. That last one is yours to pass on: the split-out bugs exist only in the implementing agents' reports, which the `documenter` cannot see, so if you do not forward them they are lost. Give it the symptom, the root cause and `file:line` if an agent established one, and whether it was actually verified. It owns every doc surface:
-  - the Writerside pages in `docs/topics/`: the mapping table, the snippets, and (most easily missed) deleting the now-false line from the page's **Limitations** section
-  - ROADMAP.md: tick the completed item, link its ADR. **Before instructing the tick, re-read the item's own text and confirm what shipped satisfies the Step 0 restatement.** You are the only one who can: the `documenter` never saw the original request and will tick whatever line you name. If the delivered work is good but is not this item, it gets its **own** item and the requested one stays open, with a note on it saying what does and does not cover it. Also confirm the item's sub-bullets say the same thing as its parent line, since a parent that contradicts its own children is a mislabel to escalate, not to tick around
-  - FEATURES.md: add or amend the mapping row in its feature category, ADR link in the ADRs column (skip if the feature adds no bridge mapping, e.g. pure plugin/DSL work). The catalogue is bidirectional: each row carries a **direction** glyph (`→` Kotlin → C#, `←` C# → Kotlin, `⇄` both). For a reverse feature, flip an existing row's glyph toward `⇄` (or add a `←` row) and use the Notes to capture any asymmetry (`→ … · ← …`) when the directions diverge
-  - mark the relevant ADR as `Accepted`
-- **`refactorer` agent** (second, only once the `documenter` has reported back): do not scan the changed files yourself. Hand it `kotlin-dev`'s reported list of touched files and let it judge against [STYLE.md](../../../STYLE.md) and fix any violations in one pass. It reports back the files it changed (or "no violations") plus the test result.
-
-The `documenter` writes every snippet from code that compiles (`test-library/`, the generated
-`Interop.cs`, the generated reverse output under `build/nuget-interop/`, `IntegrationTests/`), so run
-this step only after the feature is verified and the build artefacts are current.
+- **`documenter`**: hand it the feature, the ADR, the ROADMAP item, the sample/test files, and **every bug split out but not fixed** (they exist only in the implementing agents' reports; if you do not forward them they are lost). Give symptom, root cause, `file:line`, and whether verified. It owns every doc surface: the Writerside pages in `docs/topics/` (mapping table, snippets, and deleting the now-false **Limitations** line), the ROADMAP tick with ADR link, the FEATURES.md row with its direction glyph (`→` forward, `←` reverse, `⇄` both, Notes for asymmetry), and marking the ADR `Accepted`. **Before instructing the tick, re-read the item's text against the Step 0 restatement**: the `documenter` never saw the request and will tick whatever line you name. Delivered-but-different work gets its own item, and a parent line that contradicts its sub-bullets is a mislabel to escalate, not tick around.
+- **`refactorer`**: budget 10 minutes. Hand it the **diff** (`git diff main...HEAD`), never a path list, judging only diff-touched lines against [STYLE.md](../../../STYLE.md). Measured: 16 paths cost 15 minutes and a fifth of the feature's output tokens to wrap ten lines, because a path list makes it read large pre-existing files in full. It reports the files it changed (or "no violations") plus the test result.
 
 ## Rules
 
-- You must delegate to the appropriate subagent
-- **Build the item you were asked for, or say you are not.** Step 0's restatement is the contract; a linked ADR is evidence about how, never authority over what. If the item is blocked, or the ADR's scope does not match it, stop and tell the human before designing anything. Delivered work never consumes the checkbox of an item it does not satisfy. This is the one failure the rest of the workflow structurally cannot catch: from Step 1 onward every artefact is derived from the design, so tests, code and docs will all agree with each other while disagreeing with the request.
-- **The restatement is a ceiling as well as a floor.** The rule above stops you shipping the wrong thing. This one stops you shipping four times the right thing, which nothing else in this file defends against: every other rule here pushes toward completeness, and following all of them faithfully still produces a change nobody asked for. At any scope fork, put **Recommended** on the narrowest option that satisfies the Step 0 restatement, never the most complete one, and price both in concrete terms ("two `when` branches" against "most of an ADR"). An adjacent ROADMAP item that shares a code path earns a *mention* as a follow-up; sharing a function is not sharing a request. The human may widen it, and then you build it in full, but the recommendation that got them there has to have been the narrow one. Worked example: `ADR-075` began as a two-branch crash fix, was widened twice on the assistant's own recommendation, and shipped as four subsystems.
-- **Cost scales with surface touched, not with build time.** `scripts/verify.sh` runs in about 25 seconds (ROADMAP records 38s clean-room, 18s warm, and an explicit "do not re-add a `--fast` mode"). Build time is therefore never why a feature took long and never worth optimising, and a retrospective that blames it is wrong. What costs is agent tokens, scaling with how many files each agent has to read, reason about and write. ADR-075 ran 1.29M subagent tokens across six agents and ~90 minutes for a change touching 7 production files, 2 test files, 2 fixtures and 6 doc surfaces; the reported bug needed three. Price a proposed widening in files touched, and **measure before asserting any timing claim** — CLAUDE.md's "instrument before hypothesizing" applies to your own reports about the workflow, not only to debugging it.
-- **Check the record before proposing a ROADMAP item.** `grep` ROADMAP.md for the idea first, including as a *rejected* one. It carries decisions with measurements attached ("Rejected: a `scripts/verify.sh --fast` mode … Do not re-add it"), and re-proposing something already settled wastes the human's time and undermines every other finding in the same report.
-- Research agents run in background when independent
-- After research is complete, share findings with humans for feedback before proceeding to implementation
-- Tests before implementation (step 3 before step 4)
-- **The fixture must cross every mechanism, not the fewest types.** Build it once, complete, before implementation starts. A fixture trimmed to the "simplest" type routinely picks the one type that needs no work at the seam the feature is actually about (an `int` struct component needs no marshalling conversion, so a generator that open-codes conversion passes anyway). That is worse than no fixture: it goes green, it is wrong, and the implementation gets shaped around the triviality. Pick the fixture that forces every seam to exist: one type that needs conversion, one that does not. **Bound this to seams the feature actually crosses.** "Every mechanism" means every mechanism the change goes through, not every mechanism near it. A cell added because "nobody has checked that shape" is speculation, and speculation in a fixture is a commitment: if the shape turns out to be unimplemented, the feature now has to implement it before its tests can go green. Unknown adjacent territory is a ROADMAP item, not a fixture cell. In `ADR-075` one speculative cell (a collection setter on a value-class extension receiver, added with the words "nobody has checked it") pulled an entirely unsupported subsystem into the change.
-- Pass agents file paths and intent, not file contents. They have Read and know the project layout, so let them read what they need.
-- Reuse warm agents (SendMessage) when iterating instead of spawning fresh ones
-- After implementation, verify locally by running `scripts/verify.sh` (add `--plugin` for Gradle plugin changes to also run the `nuget-plugin/` plugin unit tests). Fixture packages mint a fresh `1.0.0-fixture.<epoch-ms>` version on every pack, so a re-pack can no longer silently resolve against the old package. The script still wipes consumer `obj`/`bin` to keep the run self-contained.
-- **No manual path around `verify.sh`.** Never hand-edit generated output, hand-patch a generated shim, or copy files into `~/.nuget/packages/` to iterate faster. It manufactures bugs that look real, and you then pay to debug something that does not exist.
-- **Instrument before hypothesizing.** When the round trip fails, get evidence about what actually executes (is registration even firing? what does the generated artefact really contain?) before forming a theory. Never spend a long agent round bisecting a hypothesis that a cheap probe could have falsified in minutes.
-- **Split pre-existing bugs out.** A bug the fixture uncovers but the feature did not cause gets reported and split into its own commit/ticket immediately, it does not silently expand the feature's scope. A fixture that is the first to exercise some combination (first two bound classes in one namespace, first nullable-returning export that throws) *should* be expected to flush out latent bugs. That means the existing fixtures were unrealistic, it is not a distraction. **Track every one you split out and hand the list to the `documenter` in Step 5**, which records them in ROADMAP.md. Splitting a bug out and then forgetting it is worse than never finding it: the next feature pays to rediscover it.
-- **No orphaned builds.** Agents must not leave a Gradle build running in the background: it holds the project lock and silently starves every agent behind it. When an agent goes quiet, check `ps` and `./gradlew --status` for an orphaned build before assuming the agent is stuck or thinking.
-- Step 5 is the last step, run only after the feature is verified. Run `documenter` first, then `refactorer`, **serially**. The `refactorer`'s verify starts with `:test-library:clean`, which deletes the `build/` output the `documenter` reads its snippets from; in parallel they race and the docs quietly lose snippets.
-- **Two agents that both drive Gradle cannot run in parallel in this repo.** One takes the project lock and the other queues silently. Parallel fan-out is safe only for agents that touch neither Gradle nor `build/` (e.g. several `research` agents at phase kickoff).
-- Never write the docs yourself. The `documenter` grounds every snippet in the real generated output; writing them from the main thread means writing them from memory.
+- Delegate every step to its subagent; never absorb the work into the main thread.
+- **Build the item you were asked for, or say you are not.** The Step 0 restatement is the contract. If the item is blocked or an ADR's scope mismatches it, stop and tell the human before designing anything. Delivered work never consumes the checkbox of an item it does not satisfy.
+- **The restatement is a ceiling as well as a floor.** Every other rule here pushes toward completeness; this one stops you shipping four times the right thing. At any scope fork put **Recommended** on the narrowest option that satisfies the restatement and price both in concrete terms ("two `when` branches" against "most of an ADR"). Sharing a code path is not sharing a request. ADR-075 began as a two-branch crash fix and shipped as four subsystems, widened twice on the assistant's own recommendation.
+- **Cost scales with surface touched, not build time.** `scripts/verify.sh` is 38s clean-room, 18s warm (ROADMAP; a `--fast` mode was rejected, do not re-add it), so build time is never why a feature took long. What costs is agent tokens, which scale with files read and written: ADR-075 ran six agents for ~97 minutes and 115k output tokens (~3M with cache writes) for a change whose reported bug needed three files. Price a proposed widening in files touched, and **measure before asserting any timing claim**. Corollary: a 25-second build is the cheapest experiment in this repo, so run builds to learn things (the "5 errors in 3 files" figure above was measured that way).
+- **Check ROADMAP.md before proposing an item**, including as a *rejected* one; re-proposing a settled decision wastes the human's time.
+- Tests before implementation (Step 3 before Step 4); research findings go to the human before implementation.
+- **The fixture crosses every seam the feature actually crosses, and no more.** Build it once, complete, before implementation. The "simplest" type is routinely the one needing no work at the seam under test (an `int` component needs no conversion), so the fixture goes green while wrong: include one type that needs conversion and one that does not. But speculation in a fixture is a commitment: one "nobody has checked that shape" cell in ADR-075 pulled an unsupported subsystem into the change. Unknown adjacent territory is a ROADMAP item, not a fixture cell.
+- Pass agents file paths and intent, not file contents; reuse warm agents via `SendMessage` when iterating.
+- After implementation run `scripts/verify.sh` (add `--plugin` for Gradle plugin changes). Fixture packs mint a fresh immutable version on every pack, so a re-pack cannot silently resolve against the old package.
+- CLAUDE.md's rules bind every agent here too, no restating needed: no manual path around `verify.sh`, instrument before hypothesizing, no stale-artifact debugging.
+- **Split pre-existing bugs out** into their own commit/ticket; a first-of-its-kind fixture flushing latent bugs means the old fixtures were unrealistic. Track every one and hand the list to the `documenter` in Step 5; a split-out bug forgotten is worse than never found.
+- **Two Gradle-driving agents never run in parallel**: one takes the project lock, the other queues silently. Parallel fan-out is safe only for agents touching neither Gradle nor `build/` (e.g. `research` at phase kickoff). When an agent goes quiet, check for an orphaned build (CLAUDE.md) before assuming it is thinking.
+- Never write the docs yourself; the `documenter` grounds every snippet in real generated output, the main thread would write them from memory.
 
 ## Prompting subagents
 
-When delegating to subagents:
 - Describe what the expected consumer-side API looks like (from the tests)
-- List specific file paths to modify and let the agent read them, do not paste file contents
+- List specific file paths to modify and let the agent read them; do not paste file contents
 - Ask them to run the verify commands before reporting success
 - Ask them to report the files they changed and the test result, not full diffs
 - When continuing a warm agent, send only the new instruction (e.g. the failing test output)

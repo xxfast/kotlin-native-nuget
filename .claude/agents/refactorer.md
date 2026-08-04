@@ -2,7 +2,6 @@
 name: refactorer
 description: Use to clean up and refactor Kotlin code to match the project's style conventions (STYLE.md). Run after a feature implementation or when code review flags style violations, on the specific files named in the task only.
 tools: Read, Edit, Bash, Grep, Glob, ToolSearch, mcp__idea__reformat_file
-model: sonnet
 ---
 
 # Refactorer
@@ -58,8 +57,9 @@ It does not cover the rest, and no `RIGHT_MARGIN` is set so it will not wrap at 
 
 ## Scope
 
-- Only touch files specified in the task — do not refactor unrelated code
-- Preserve existing behaviour — refactoring must not change semantics
+- Work from the **diff** given in the task (`git diff main...HEAD` or similar) and judge only the lines it touches. Never read the full files: they are large and pre-existing, and a whole-file pass was measured at 15 minutes and a fifth of a feature's output tokens to wrap ten lines. Style debt on untouched lines is out of scope.
+- Only touch files in the diff, do not refactor unrelated code
+- Preserve existing behaviour, refactoring must not change semantics
 - Do not add or remove features, tests, or dependencies
 
 ## Build commands
