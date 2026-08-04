@@ -2,6 +2,7 @@ package io.github.xxfast.kotlin.native.nuget.processor.forward
 
 import com.google.devtools.ksp.getVisibility
 import com.google.devtools.ksp.symbol.KSClassDeclaration
+import com.google.devtools.ksp.symbol.KSNode
 import com.google.devtools.ksp.symbol.KSPropertyDeclaration
 import com.google.devtools.ksp.symbol.KSType
 import com.google.devtools.ksp.symbol.Modifier
@@ -9,10 +10,29 @@ import com.google.devtools.ksp.symbol.Visibility
 import io.github.xxfast.kotlin.native.nuget.processor.cir.expandAliases
 import io.github.xxfast.kotlin.native.nuget.processor.toCName
 
+/**
+ * ADR-075: a mutable collection property whose declared type is a `Collection` (optionally
+ * `Nullable`) but whose element (or map key/value) fails [isWrappableComponent] — the property
+ * still plans, with `setter = null`, so the getter survives; this is what feeds the diagnostic
+ * naming the offending component and stating that the C# property is read-only.
+ */
+internal data class ForwardDroppedPropertySetter(
+  val symbol: String,
+  val node: KSNode?,
+  val publicName: String,
+  val componentDescription: String,
+)
+
 /** Builds the property slice while leaving unsupported/specialized properties on their named legacy paths. */
 internal class ForwardPropertyPlanner(
   private val classifier: ForwardBridgeTypeClassifier,
 ) {
+  private val droppedSetters: MutableList<ForwardDroppedPropertySetter> = mutableListOf()
+
+  /** ADR-075: every collection property setter this planner declined to build because a
+   *  component failed [isWrappableComponent] — the property itself is still planned, get-only. */
+  val droppedPropertySetters: List<ForwardDroppedPropertySetter> get() = droppedSetters
+
   fun catalog(
     classes: List<KSClassDeclaration>,
     topLevel: List<KSPropertyDeclaration>,
@@ -110,10 +130,17 @@ internal class ForwardPropertyPlanner(
   private fun extensionProperty(prop: KSPropertyDeclaration): ForwardPropertyPlan? {
     val receiver: KSType = prop.extensionReceiver?.resolve()?.expandAliases() ?: return null
     val receiverType: BridgeType = classifier.classify(receiver)
+    // ADR-075: a value class crosses the bridge as its own underlying primitive/String value
+    // (ADR-014), the same wire shape its own declared members already use
+    // (`ForwardCallablePlanner.valueClassEntries`) — a reference-underlying value class is not
+    // admitted here, matching that same route's ADR-035 deferral.
+    val isSupportedValueClass: Boolean = receiverType is BridgeType.ValueClass &&
+        (receiverType.underlying is BridgeType.Primitive || receiverType.underlying == BridgeType.String)
     val supportedReceiver: Boolean =
       receiverType is BridgeType.ObjectHandle ||
           receiverType is BridgeType.Primitive ||
-          receiverType == BridgeType.String
+          receiverType == BridgeType.String ||
+          isSupportedValueClass
     if (!supportedReceiver) return null
     val receiverName: String = receiver.declaration.simpleName.asString()
     val name: String = prop.simpleName.asString()
@@ -136,8 +163,13 @@ internal class ForwardPropertyPlanner(
     setExport: String,
   ): ForwardPropertyPlan? {
     val type: BridgeType = classifier.classify(prop.type.resolve())
-    if (!isPlannable(type) || (prop.isMutable && type.unwrapNullable() is BridgeType.Collection)) return null
+    // ADR-075: getter eligibility never depended on mutability or on the collection facet — a
+    // `Collection` (nullable or not) is unconditionally plannable (`isPlannable` already recurses
+    // through `Nullable`). Whether a *setter* can also be built is a wholly separate question,
+    // decided below, independent of the getter.
+    if (!isPlannable(type)) return null
     val name: String = prop.simpleName.asString()
+    val publicName: String = name.replaceFirstChar { it.uppercase() }
     val getter: ForwardPropertyGetter = if (type is BridgeType.Nullable && type.type is BridgeType.Primitive) {
       ForwardPropertyGetter.LegacyTwoCall(
         presence = nativeCall(getExport, ForwardAbiWireType.BOOLEAN, receiver, emptyList()),
@@ -146,24 +178,15 @@ internal class ForwardPropertyPlanner(
     } else {
       ForwardPropertyGetter.Direct(nativeCall(getExport, type.wireType(), receiver, emptyList()))
     }
-    val setter: ForwardPropertySetter? = if (!prop.isMutable) null else if (
-      type is BridgeType.Nullable && type.type is BridgeType.Primitive
-    ) {
-      ForwardPropertySetter.NullableDispatch(
-        value = nativeCall(setExport, ForwardAbiWireType.VOID, receiver, listOf(valueParameter(type.type))),
-        nullValue = nativeCall("${setExport}_null", ForwardAbiWireType.VOID, receiver, emptyList()),
-      )
-    } else {
-      ForwardPropertySetter.Direct(
-        nativeCall(setExport, ForwardAbiWireType.VOID, receiver, listOf(valueParameter(type))),
-      )
-    }
+    val setter: ForwardPropertySetter? = collectionSetterOrNull(
+      symbol, publicName, prop, type, setExport, receiver,
+    )
     return ForwardPropertyPlan(
       symbol = symbol,
       position = position,
       receiver = receiver,
       kotlinName = name,
-      publicName = name.replaceFirstChar { it.uppercase() },
+      publicName = publicName,
       type = type,
       getter = getter,
       setter = setter,
@@ -171,6 +194,95 @@ internal class ForwardPropertyPlanner(
         setOf(ForwardHelperRequirement.COLLECTION)
       } else emptySet(),
     ).validate()
+  }
+
+  /**
+   * ADR-075 Decision 2. `null` when [prop] is not `var` (an ordinary, expected get-only shape —
+   * no diagnostic). For a `var`, every non-`Collection` type keeps its pre-existing setter shape
+   * unchanged; a `Collection` (or `Nullable` of one) is eligible only when every component
+   * (element for list/set, key **and** value for map) satisfies [isWrappableComponent] — the
+   * collection reference's own nullability is orthogonal to that check (Question D). An
+   * ineligible collection setter records one [ForwardDroppedPropertySetter] and returns `null`,
+   * so the property still plans, get-only.
+   */
+  private fun collectionSetterOrNull(
+    symbol: String,
+    publicName: String,
+    prop: KSPropertyDeclaration,
+    type: BridgeType,
+    setExport: String,
+    receiver: ForwardPropertyReceiver,
+  ): ForwardPropertySetter? {
+    if (!prop.isMutable) return null
+    if (type is BridgeType.Nullable && type.type is BridgeType.Primitive) {
+      return ForwardPropertySetter.NullableDispatch(
+        value = nativeCall(
+          setExport, ForwardAbiWireType.VOID, receiver, listOf(valueParameter(type.type)),
+        ),
+        nullValue = nativeCall("${setExport}_null", ForwardAbiWireType.VOID, receiver, emptyList()),
+      )
+    }
+    val collection: BridgeType.Collection? = type.unwrapNullable() as? BridgeType.Collection
+    if (collection != null && !collection.isSetterEligible()) {
+      droppedSetters.add(
+        ForwardDroppedPropertySetter(
+          symbol = symbol,
+          node = prop,
+          publicName = publicName,
+          componentDescription = collection.ineligibleComponentDescription(),
+        ),
+      )
+      return null
+    }
+    return ForwardPropertySetter.Direct(
+      nativeCall(setExport, ForwardAbiWireType.VOID, receiver, listOf(valueParameter(type))),
+    )
+  }
+
+  /** ADR-075 Question A alternative A1: every component must satisfy [isWrappableComponent],
+   *  for every collection kind including `LIST` — a property setter starts on the strict
+   *  predicate rather than inheriting the callable parameter side's known-broken `List` shapes. */
+  private fun BridgeType.Collection.isSetterEligible(): Boolean {
+    val isMap: Boolean = kind == CollectionKind.MAP || kind == CollectionKind.MUTABLE_MAP
+    return if (isMap) {
+      key?.isWrappableComponent() == true && value?.isWrappableComponent() == true
+    } else {
+      element?.isWrappableComponent() == true
+    }
+  }
+
+  /** The offending component(s), for the [ForwardDroppedPropertySetter] diagnostic wording. */
+  private fun BridgeType.Collection.ineligibleComponentDescription(): String {
+    val isMap: Boolean = kind == CollectionKind.MAP || kind == CollectionKind.MUTABLE_MAP
+    if (!isMap) return "element type ${element?.diagnosticTypeName() ?: "unknown"}"
+    val keyOk: Boolean = key?.isWrappableComponent() == true
+    val valueOk: Boolean = value?.isWrappableComponent() == true
+    return when {
+      !keyOk && !valueOk ->
+        "key type ${key?.diagnosticTypeName() ?: "unknown"} and value type " +
+            "${value?.diagnosticTypeName() ?: "unknown"}"
+
+      !keyOk -> "key type ${key?.diagnosticTypeName() ?: "unknown"}"
+      else -> "value type ${value?.diagnosticTypeName() ?: "unknown"}"
+    }
+  }
+
+  /** A short, human-readable name for a diagnostic message — never used to drive marshalling. */
+  private fun BridgeType.diagnosticTypeName(): String = when (this) {
+    BridgeType.Unit -> "Unit"
+    BridgeType.Char -> "Char"
+    BridgeType.String -> "String"
+    is BridgeType.Primitive -> kind.name.lowercase().replaceFirstChar { it.uppercase() }
+    is BridgeType.Enum -> qualifiedName.substringAfterLast('.')
+    is BridgeType.ObjectHandle -> qualifiedName.substringAfterLast('.')
+    is BridgeType.Interface -> qualifiedName.substringAfterLast('.')
+    is BridgeType.ValueClass -> qualifiedName.substringAfterLast('.')
+    is BridgeType.Collection -> "Collection"
+    is BridgeType.Nullable -> "${type.diagnosticTypeName()}?"
+    is BridgeType.SpecializedProtocol -> name
+    is BridgeType.RawCollection -> "Collection"
+    is BridgeType.RawKSType -> rendered
+    is BridgeType.Unsupported -> rendered
   }
 
   private fun nativeCall(
@@ -246,11 +358,16 @@ internal class ForwardPropertyPlanner(
       PrimitiveKind.DOUBLE -> ForwardAbiWireType.FLOAT64
     }
 
+    // ADR-075: only reachable for an extension property's *receiver* (ADR-014 unwraps at the
+    // boundary) — no ordinary property is ever declared `: SomeValueClass` on the plan path.
+    is BridgeType.ValueClass -> type.underlying.wireType()
+
     else -> error("Forward property planner cannot choose a wire type for $type")
   }
 
-  private fun BridgeType.inputWireType(): ForwardAbiWireType = when (unwrapNullable()) {
+  private fun BridgeType.inputWireType(): ForwardAbiWireType = when (val type = unwrapNullable()) {
     BridgeType.String -> ForwardAbiWireType.STRING
+    is BridgeType.ValueClass -> type.underlying.inputWireType()
     else -> wireType()
   }
 

@@ -250,6 +250,12 @@ class Tier1CompileCellsTest {
    * getter/setter both fall back to `bestGuess` on the raw declaration name, rendering a
    * parameterless `List` — "one type argument expected for 'interface List<out E>'." A plain
    * class with no `List`-typed constructor parameter isolates this from cell 17.
+   *
+   * ADR-075: structural, not just `compiledClean` — `String` is a wrappable element, so the
+   * setter is eligible too; a `compiledClean`-only assertion would pass equally against a
+   * generator that silently dropped the setter (which is exactly what happened here before
+   * ADR-075: `prop.isMutable && ... is Collection` unconditionally returned `null`, so this cell
+   * was asserting against a property that was never generated at all).
    */
   @Test
   fun `cell 20 - nullable List of String property compiles`() {
@@ -266,6 +272,24 @@ class Tier1CompileCellsTest {
     assertTrue(
       result.compiledClean,
       "expected export_visit_get_notes/set_notes to compile; got: ${result.compileErrors}",
+    )
+    assertTrue(
+      "export_visit_get_notes" in result.generated,
+      "expected the getter export to be generated; generated=${result.generated}",
+    )
+    assertTrue(
+      "export_visit_set_notes" in result.generated,
+      "expected the setter export to be generated (String is a wrappable element); " +
+          "generated=${result.generated}",
+    )
+    val cs: String = result.generatedCSharp
+    assertTrue(
+      "public IReadOnlyList<string>? Notes" in cs,
+      "expected a nullable IReadOnlyList<string> property; generatedCSharp:\n$cs",
+    )
+    assertTrue(
+      "if (nativeResult == IntPtr.Zero) return null;" in cs,
+      "expected the zero-handle guard before materializing elements; generatedCSharp:\n$cs",
     )
   }
 
@@ -293,6 +317,9 @@ class Tier1CompileCellsTest {
   /**
    * BUG-005 (NYTimes-KMP). Nullable `List<T>` property getter/setter. Companion to cell 20 above,
    * using a `List<Int>` element type to widen coverage beyond `String`.
+   *
+   * ADR-075: structural, for the same reason as cell 20 above — `Int` is a wrappable element, so
+   * the setter must actually be generated, not merely absent-without-breaking-compilation.
    */
   @Test
   fun `nullable List of Int property compiles`() {
@@ -309,6 +336,141 @@ class Tier1CompileCellsTest {
     assertTrue(
       result.compiledClean,
       "expected export_box_get_items/set_items to compile; got: ${result.compileErrors}",
+    )
+    assertTrue(
+      "export_box_get_items" in result.generated,
+      "expected the getter export to be generated; generated=${result.generated}",
+    )
+    assertTrue(
+      "export_box_set_items" in result.generated,
+      "expected the setter export to be generated (Int is a wrappable element); " +
+          "generated=${result.generated}",
+    )
+    val cs: String = result.generatedCSharp
+    assertTrue(
+      "public IReadOnlyList<int>? Items" in cs,
+      "expected a nullable IReadOnlyList<int> property; generatedCSharp:\n$cs",
+    )
+  }
+
+  /**
+   * ADR-075 Decision 2, sibling of the two cells above: an *ineligible* setter. `Mood` is an enum
+   * element — outside `isWrappableComponent()` — so the getter still binds but the setter must be
+   * absent, with a `SKIPPED_UNSUPPORTED_INPUT` diagnostic naming it (worded as the C# property
+   * remaining read-only, never as the property having been dropped).
+   */
+  @Test
+  fun `class property with List of enum element has no setter and fires SKIPPED_UNSUPPORTED_INPUT`() {
+    val result = Tier1Harness.run(
+      """
+      package tier1.moodbox
+
+      enum class Mood { CALM, ANXIOUS }
+
+      class Box {
+        var moods: List<Mood> = emptyList()
+      }
+      """.trimIndent()
+    )
+
+    assertTrue(
+      result.compiledClean,
+      "expected export_box_get_moods to compile; got: ${result.compileErrors}",
+    )
+    assertTrue(
+      "export_box_get_moods" in result.generated,
+      "expected the getter export to still be generated; generated=${result.generated}",
+    )
+    assertTrue(
+      "export_box_set_moods" !in result.generated,
+      "expected no setter export (Mood is not a wrappable element); generated=${result.generated}",
+    )
+    assertTrue(
+      result.kspWarnings.any { it.contains(ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_INPUT.name) },
+      "expected a SKIPPED_UNSUPPORTED_INPUT diagnostic naming Box.moods's setter; " +
+          "kspWarnings=${result.kspWarnings}",
+    )
+  }
+
+  /**
+   * ADR-075 Decision 2, the `Map` sibling of the cell above — the fixture corpus only exercises
+   * an ineligible `List` element (`moods`/`aliases`); this is the only cell anywhere that reaches
+   * `ineligibleComponentDescription()`'s map branch (a wrappable `String` key, an unwrappable
+   * `Mood` value), so the diagnostic must name the *value*, not the element.
+   */
+  @Test
+  fun `class property with Map of String to enum value has no setter and names the value type`() {
+    val result = Tier1Harness.run(
+      """
+      package tier1.moodmap
+
+      enum class Mood { CALM, ANXIOUS }
+
+      class Box {
+        var scores: Map<String, Mood> = emptyMap()
+      }
+      """.trimIndent()
+    )
+
+    assertTrue(
+      result.compiledClean,
+      "expected export_box_get_scores to compile; got: ${result.compileErrors}",
+    )
+    assertTrue(
+      "export_box_get_scores" in result.generated,
+      "expected the getter export to still be generated; generated=${result.generated}",
+    )
+    assertTrue(
+      "export_box_set_scores" !in result.generated,
+      "expected no setter export (Mood is not a wrappable map value); " +
+          "generated=${result.generated}",
+    )
+    assertTrue(
+      result.kspWarnings.any {
+        it.contains(ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_INPUT.name) &&
+            it.contains("value type Mood")
+      },
+      "expected a SKIPPED_UNSUPPORTED_INPUT diagnostic naming Box.scores's value type; " +
+          "kspWarnings=${result.kspWarnings}",
+    )
+  }
+
+  /**
+   * ADR-075: the `Visit(patient, symptoms, notes)` data-class primary constructor from the
+   * shipped fixture only ever runs through the real `packNuget`/konanc pipeline, never through
+   * this JVM-only harness — so this is the fast regression guard for the *general callable*
+   * half of the change: `ForwardCallablePlanner.inputSkipReason()`'s Nullable branch now admits
+   * `Nullable(Collection)` (previously an unconditional `NULLABLE` skip, dropping the whole
+   * constructor silently), and `ForwardCirPlanProjection.collectionPrelude`/`collectionCleanup`
+   * fold the null check into the `CreateList`/`Dispose` calls rather than needing a `Collection`
+   * cast that would have thrown for a `Nullable` wrapper.
+   */
+  @Test
+  fun `data class constructor with nullable List of String parameter compiles`() {
+    val result = Tier1Harness.run(
+      """
+      package tier1.nullablelistctor
+
+      data class Visit(val patient: String, val notes: List<String>? = null)
+      """.trimIndent()
+    )
+
+    assertTrue(
+      result.compiledClean,
+      "expected export_visit_create to compile; got: ${result.compileErrors}",
+    )
+    assertTrue(
+      "export_visit_create" in result.generated,
+      "expected the constructor export to be generated; generated=${result.generated}",
+    )
+    val cs: String = result.generatedCSharp
+    assertTrue(
+      "public Visit(string patient, IReadOnlyList<string>? notes)" in cs,
+      "expected the constructor to take the nullable collection parameter; generatedCSharp:\n$cs",
+    )
+    assertTrue(
+      "notes != null ? NugetMarshal.CreateList(notes) : IntPtr.Zero" in cs,
+      "expected the null-guarded CreateList prelude; generatedCSharp:\n$cs",
     )
   }
 

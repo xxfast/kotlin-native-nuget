@@ -117,6 +117,27 @@ internal fun warnDroppedForwardCallables(
   ForwardDiagnosticSink.emit(diagnostics, logger)
 }
 
+// ADR-075 Decision 2/Question C: a mutable collection property whose element (or map key/value)
+// fails `isWrappableComponent()` still plans -- get-only -- so this is a *partial* skip, not the
+// callable-style "this member vanished entirely" one above. Wording says so explicitly: the C#
+// property survives read-only, it was not dropped.
+internal fun warnDroppedForwardPropertySetters(
+  catalog: ForwardCallablePlanCatalog,
+  logger: KSPLogger,
+) {
+  val diagnostics: List<ForwardDiagnostic> = catalog.droppedPropertySetters.map { dropped ->
+    ForwardDiagnostic(
+      kind = ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_INPUT,
+      symbol = dropped.node,
+      declaration = dropped.symbol,
+      reason = "its setter is not generated because the ${dropped.componentDescription} cannot " +
+          "be written into a Kotlin collection",
+      hint = "the C# property ${dropped.publicName} is read-only",
+    )
+  }
+  ForwardDiagnosticSink.emit(diagnostics, logger)
+}
+
 private fun KSAnnotated.hasCNameAnnotation(): Boolean =
   annotations.any { annotation ->
     val name: String? = annotation.annotationType.resolve().declaration.qualifiedName?.asString()
@@ -425,9 +446,15 @@ class NugetProcessor(
     val callableCatalog: ForwardCallablePlanCatalog = ForwardCallablePlanCatalog(
       entries = ordinaryCatalog.entries + interfaceEntries,
       propertyPlans = ordinaryCatalog.propertyPlans + interfacePropertyPlans,
+      // ADR-075: `ordinaryCatalog`'s own planner already folded the class/top-level/extension
+      // property setter drops in; `forwardPropertyPlanner` here is the second, separate instance
+      // (interface dispatch properties only), so its drops need adding explicitly.
+      droppedPropertySetters = ordinaryCatalog.droppedPropertySetters +
+          forwardPropertyPlanner.droppedPropertySetters,
     )
 
     warnDroppedForwardCallables(callableCatalog, logger)
+    warnDroppedForwardPropertySetters(callableCatalog, logger)
 
     val cNameExports: FileSpec = generateCNameWrappers(
       functions, genericFunctions, extensionFunctions, extensionProperties,
@@ -890,8 +917,17 @@ class NugetProcessor(
     // boxes each primitive/String element through the matching wrap export before handing it to
     // `nuget_list_add`. Computed once so lambda/suspend-lambda support sharing the same gate below
     // never emits the wrap exports twice.
+    //
+    // ADR-075: a property *setter* is the same `CreateList`/`CreateMap`/`CreateSet` write side, so
+    // it needs the same gate -- a class whose only collection input is a property setter (no
+    // method/constructor collection parameter anywhere) would otherwise generate C# calling
+    // `nuget_wrap_*` against a native library that never exported it. `helperRequirements` also
+    // carries `COLLECTION` for a getter-only collection property (the *read* side never needs
+    // wrapping), so this is gated on `setter != null`, not on the marker alone.
     val needsCollectionParamWrap: Boolean = callableCatalog.plans.any { plan ->
       ForwardHelperRequirement.COLLECTION in plan.helperRequirements
+    } || callableCatalog.propertyPlans.any { plan ->
+      plan.setter != null && ForwardHelperRequirement.COLLECTION in plan.helperRequirements
     }
     var wrapHelpersEmitted = false
     fun addNugetWrapHelperExportsOnce() {

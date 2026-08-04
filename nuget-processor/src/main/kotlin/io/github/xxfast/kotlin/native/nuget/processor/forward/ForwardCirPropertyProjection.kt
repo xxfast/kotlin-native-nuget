@@ -34,7 +34,16 @@ internal object ForwardCirPropertyProjection {
     val nativeReceiver: String = plan.calls().first().parameters
       .first { parameter -> parameter.name == "receiver" }
       .wireType.csharpWireType()
-    val receiverArgument: String = if (receiver.type is BridgeType.ObjectHandle) "receiver._handle" else "receiver"
+    // ADR-075: an extension receiver that is a value class passes its underlying value to the
+    // native call, exactly like the value class's own generated members
+    // (`renderValueClassMembers`'s `underlyingName` -- the Kotlin `value` property capitalized).
+    val receiverArgument: String = when (val receiverType = receiver.type) {
+      is BridgeType.ObjectHandle -> "receiver._handle"
+      is BridgeType.ValueClass ->
+        "receiver.${receiverType.underlyingPropertyName.replaceFirstChar { it.uppercase() }}"
+
+      else -> "receiver"
+    }
     val imports: List<CirMember> = plan.calls().map { call ->
       nativeImport(call, libraryName, listOf(CirParameter("receiver", nativeReceiver)), plan)
     }
@@ -195,6 +204,13 @@ internal object ForwardCirPropertyProjection {
           "            return nativeResult == IntPtr.Zero ? null : new ${inner.backingType}(nativeResult);",
         )
 
+        // ADR-075: a null handle means Kotlin `null`, guarded before the ordinary
+        // `collectionMaterialize` -- reads impose no element-type restriction, unlike a setter.
+        is BridgeType.Collection -> append(
+          "            if (nativeResult == IntPtr.Zero) return null;\n" +
+              collectionMaterialize(inner),
+        )
+
         else -> append("            return nativeResult;")
       }
 
@@ -316,6 +332,22 @@ internal object ForwardCirPropertyProjection {
         "NugetMarshal.HandleOf($name)"
       }
 
+      // ADR-075 Decision 3: a nullable collection is a call-site conditional, not a
+      // nullable-returning `CreateList`/`CreateMap`/`CreateSet` -- character-for-character the
+      // same shape as the nullable-`Interface` arm above.
+      is BridgeType.Collection -> {
+        val factory: String = when (value.kind) {
+          CollectionKind.LIST, CollectionKind.MUTABLE_LIST -> "CreateList"
+          CollectionKind.MAP, CollectionKind.MUTABLE_MAP -> "CreateMap"
+          CollectionKind.SET, CollectionKind.MUTABLE_SET -> "CreateSet"
+        }
+        if (type is BridgeType.Nullable) {
+          "$name != null ? NugetMarshal.$factory($name) : IntPtr.Zero"
+        } else {
+          "NugetMarshal.$factory($name)"
+        }
+      }
+
       else -> name
     }
 
@@ -348,6 +380,9 @@ internal object ForwardCirPropertyProjection {
     is BridgeType.ObjectHandle -> csharpType
     // ADR-040: the public C# spelling is the projected interface, never the backing class.
     is BridgeType.Interface -> csharpType
+    // ADR-075: only reached for an extension property's receiver -- the public C# receiver type
+    // is the value class itself (e.g. `ChartId`), never its underlying wire value.
+    is BridgeType.ValueClass -> csharpType
     is BridgeType.Collection -> when (kind) {
       CollectionKind.LIST -> "IReadOnlyList<${requireNotNull(element).csharpType()}>"
       CollectionKind.MUTABLE_LIST -> "IList<${requireNotNull(element).csharpType()}>"

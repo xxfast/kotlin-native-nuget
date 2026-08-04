@@ -64,6 +64,39 @@ class Tier1OrdinarySurfaceTest {
     assertContains(cs, "SetDoubled(this int")
   }
 
+  /**
+   * ADR-075: an extension property whose receiver is a value class crosses the bridge as its own
+   * underlying primitive/String value (ADR-014), exactly like the value class's own declared
+   * members (`ForwardCallablePlanner.valueClassEntries`) — nobody had combined that with a
+   * collection setter before this change (`ChartId.symptomTags` in the shipped fixture). This is
+   * the JVM-tier companion to that fixture: fast to run, and the only place that structurally
+   * asserts the generated C# receiver argument (`receiver.Value`), independent of the real
+   * konanc/dotnet round trip.
+   */
+  @Test
+  fun `extension property on value class receiver with collection setter surfaces as static Get Set methods`() {
+    val result = Tier1Harness.run(
+      """
+      package tier1.valueclassextprop
+
+      @JvmInline
+      value class Tag(val value: String)
+
+      private val store: MutableMap<Tag, List<String>> = mutableMapOf()
+
+      var Tag.labels: List<String>
+        get() = store[this] ?: emptyList()
+        set(value) { store[this] = value }
+      """.trimIndent(),
+    )
+
+    assertTrue(result.compiledClean, "got: ${result.compileErrors}")
+    val cs = result.generatedCSharp
+    assertContains(cs, "GetLabels(this Tag")
+    assertContains(cs, "SetLabels(this Tag")
+    assertContains(cs, "receiver.Value")
+  }
+
   @Test
   fun `companion property surfaces as static class members`() {
     val result = Tier1Harness.run(
