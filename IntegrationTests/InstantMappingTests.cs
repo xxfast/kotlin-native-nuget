@@ -157,6 +157,84 @@ public class InstantMappingTests
         Assert.Null(result);
     }
 
+    // --- Instant? as a plain method parameter (adjacent-pair HasValue + INT64 shape), not just
+    //     a ctor param ---
+
+    [Fact]
+    public void DescribeSighting_NullableMethodParameter_NullBranch_ReportsNoSighting()
+    {
+        using var log = new SightingLog(DateTimeOffset.UnixEpoch, null);
+
+        Assert.Equal("no sighting reported", log.DescribeSighting(null));
+    }
+
+    [Fact]
+    public void DescribeSighting_NullableMethodParameter_ValueBranch_ReportsEpochSeconds()
+    {
+        using var log = new SightingLog(DateTimeOffset.UnixEpoch, null);
+
+        Assert.Equal("sighted at 0", log.DescribeSighting(DateTimeOffset.UnixEpoch));
+    }
+
+    // --- Echo round trips: Instant? both ways, and non-null Instant both ways ---
+
+    [Fact]
+    public void MaybeEcho_NullableInAndOut_NullBranch_StaysNull()
+    {
+        using var log = new SightingLog(DateTimeOffset.UnixEpoch, null);
+
+        Assert.Null(log.MaybeEcho(null));
+    }
+
+    [Fact]
+    public void MaybeEcho_NullableInAndOut_ValueBranch_RoundTripsExactly()
+    {
+        var at = new DateTimeOffset(2024, 3, 8, 12, 34, 56, 123, new TimeSpan(5, 30, 0));
+        using var log = new SightingLog(DateTimeOffset.UnixEpoch, null);
+
+        var result = log.MaybeEcho(at);
+
+        Assert.Equal(at, result);
+        Assert.Equal(TimeSpan.Zero, result!.Value.Offset);
+    }
+
+    [Fact]
+    public void Echo_NonNullInAndOut_RoundTripsExactly()
+    {
+        var at = new DateTimeOffset(2024, 3, 8, 12, 34, 56, 123, new TimeSpan(5, 30, 0));
+        using var log = new SightingLog(DateTimeOffset.UnixEpoch, null);
+
+        var result = log.Echo(at);
+
+        Assert.Equal(at, result);
+        Assert.Equal(TimeSpan.Zero, result.Offset);
+    }
+
+    // --- Instant on a Kotlin object (static export path, ForwardCallableOrigin.OBJECT) ---
+
+    [Fact]
+    public void WatchClock_Founded_StaticNonNullReturn_MatchesTheSightingEpoch()
+    {
+        var founded = WatchClock.Founded();
+
+        Assert.Equal(SightingLogKt.sightingEpoch(), founded);
+        Assert.Equal(TimeSpan.Zero, founded.Offset);
+    }
+
+    [Fact]
+    public void WatchClock_IsAfterFounding_StaticNonNullParameter_TrueWhenAfter()
+    {
+        var afterFounding = WatchClock.Founded().AddDays(1);
+
+        Assert.True(WatchClock.IsAfterFounding(afterFounding));
+    }
+
+    [Fact]
+    public void WatchClock_IsAfterFounding_StaticNonNullParameter_FalseWhenBefore()
+    {
+        Assert.False(WatchClock.IsAfterFounding(DateTimeOffset.UnixEpoch));
+    }
+
     // --- Out-of-range Instant: the throwing contract, not a wrapped/clamped value ---
 
     [Fact]

@@ -412,6 +412,14 @@ class SightingLog(val firstSeen: Instant, var lastSeen: Instant?) {  // ctor par
   fun elapsedSeconds(until: Instant): Long                            // method parameter
   fun nextExpected(): Instant                                         // method return
   fun earliestUnconfirmed(): Instant?                                 // nullable method return (valueOut)
+  fun describeSighting(at: Instant?): String                          // nullable Instant as a plain method parameter
+  fun maybeEcho(at: Instant?): Instant?                                // nullable Instant in and out, same callable
+  fun echo(at: Instant): Instant                                      // non-null Instant in and out, same callable
+}
+
+object WatchClock {                                                   // static export path (ForwardCallableOrigin.OBJECT)
+  fun founded(): Instant                                              // static non-null return
+  fun isAfterFounding(at: Instant): Boolean                           // static non-null parameter
 }
 
 fun sightingEpoch(): Instant                                          // top-level return

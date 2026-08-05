@@ -7,8 +7,11 @@ import kotlin.time.Instant
 // has entries for one cat at a time. This fixture crosses every position the ADR asks for:
 // ctor param (non-null + nullable), val property, var nullable property, method parameter,
 // method return, nullable method return (valueOut), top-level return, top-level nullable
-// return, and one member that returns an out-of-range Instant to exercise the throwing
-// contract.
+// return, one member that returns an out-of-range Instant to exercise the throwing contract,
+// a nullable Instant as a plain method parameter (not just a ctor param), an echo method that
+// round-trips a nullable Instant both ways, an echo method that round-trips a non-null Instant
+// both ways, and an `object` (static export) crossing a non-null Instant return and a non-null
+// Instant parameter.
 
 class SightingLog(val firstSeen: Instant, var lastSeen: Instant?) {
   /** Seconds between [firstSeen] and [until] -- exercises Instant as a method parameter. */
@@ -29,6 +32,33 @@ class SightingLog(val firstSeen: Instant, var lastSeen: Instant?) {
    * C# exception rather than a wrapped value.
    */
   fun escapedForEternity(): Instant = Instant.DISTANT_FUTURE
+
+  /**
+   * Describes a reported sighting time, or the absence of one -- exercises `Instant?` as a plain
+   * method parameter (the adjacent-pair `${name}HasValue` + INT64 shape), distinct from the
+   * nullable ctor param above.
+   */
+  fun describeSighting(at: Instant?): String =
+    if (at == null) "no sighting reported" else "sighted at ${at.epochSeconds}"
+
+  /** Echoes a possibly-unreported sighting straight back -- nullable Instant in, nullable Instant out. */
+  fun maybeEcho(at: Instant?): Instant? = at
+
+  /** Echoes a confirmed sighting straight back -- non-null Instant in, non-null Instant out. */
+  fun echo(at: Instant): Instant = at
+}
+
+/**
+ * Oreo and Mylo's shared neighbourhood watch clock -- exercises Instant on a Kotlin `object`
+ * (the static export path, ForwardCallableOrigin.OBJECT), which flows through the same
+ * staticEntry -> planOrSkip path as ordinary class methods.
+ */
+object WatchClock {
+  /** The watch program's founding moment, the same instant [sightingEpoch] returns. */
+  fun founded(): Instant = sightingEpoch()
+
+  /** True if [at] is after the watch program was founded -- non-null Instant parameter, Boolean return. */
+  fun isAfterFounding(at: Instant): Boolean = at > founded()
 }
 
 /**
