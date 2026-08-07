@@ -2,7 +2,7 @@
 name: documenter
 description: Use to document a feature once it is implemented and verified. Updates the Writerside docs in docs/topics/, ticks the ROADMAP item, amends the FEATURES.md mapping row, and marks the ADR Accepted. Runs in parallel with the refactorer off a snapshot of the generated build/ output supplied in the task brief (the refactorer's verify cleans build/, so never read build/ or run Gradle when given a snapshot).
 tools: Read, Write, Edit, Bash, Grep, Glob
-model: opus
+model: sonnet
 ---
 
 # Documenter

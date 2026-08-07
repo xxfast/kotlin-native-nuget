@@ -38,10 +38,6 @@ A budget is a checkpoint, not a ceiling, and goes **in the agent's prompt**: run
 
 Escalate only when the agent cannot tell which case it is in: it puts the question in its report (agents have no `AskUserQuestion`), **you relay it** with your own recommendation, then resume the **same** agent via `SendMessage`.
 
-## Model selection
-
-`csharp-dev`, `kotlin-dev`, `refactorer` and `documenter` pin `model: opus` in their frontmatter. `research` deliberately has no pin and inherits the main-thread model: a cheap wrong ADR is the most expensive artefact this workflow can produce, so it gets the strongest model in the session. The Agent tool's `model` parameter still overrides frontmatter per dispatch when a run warrants it (e.g. downgrade further for a mechanical mirror item; bump `kotlin-dev` back up if an opus run fails to converge). Whether a larger model converges in fewer steps is unmeasured (the ADR-076 implementation ran on sonnet: 202 steps, 50 minutes), so record each agent's model and duration in your report.
-
 ## Workflow
 
 ### Step 1: Research (`research` agent). Budget: 20 minutes

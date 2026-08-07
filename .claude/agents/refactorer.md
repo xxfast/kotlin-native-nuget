@@ -2,7 +2,7 @@
 name: refactorer
 description: Use to clean up and refactor Kotlin code to match the project's style conventions (STYLE.md). Run after a feature implementation or when code review flags style violations, on the specific files named in the task only.
 tools: Read, Edit, Bash, Grep, Glob, ToolSearch, mcp__idea__reformat_file
-model: opus
+model: sonnet
 ---
 
 # Refactorer
