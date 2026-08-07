@@ -1,5 +1,26 @@
 package io.github.xxfast.kotlin.native.nuget.processor.cir
 
+/**
+ * The per-width constructor exports an unconstrained generic class emits on the Kotlin side, in the
+ * order `GenericClassExports` writes them: entry-point suffix to the C# parameter type of the value
+ * being constructed. The `object` fallback (a handle to an already-bridged reference) is appended
+ * separately because its dispatch is a reflection lookup rather than a `typeof(T)` comparison.
+ */
+private val GENERIC_CREATE_WIDTHS: List<Pair<String, String>> = listOf(
+  "string" to "string",
+  "byte" to "sbyte",
+  "ubyte" to "byte",
+  "short" to "short",
+  "ushort" to "ushort",
+  "int" to "int",
+  "uint" to "uint",
+  "long" to "long",
+  "ulong" to "ulong",
+  "float" to "float",
+  "double" to "double",
+  "bool" to "bool",
+)
+
 internal fun StringBuilder.renderGenericClass(cls: CirGenericClass) {
   val typeParams: String = cls.typeParameters.joinToString(", ") { it.name }
 
@@ -8,7 +29,19 @@ internal fun StringBuilder.renderGenericClass(cls: CirGenericClass) {
   appendLine("    internal static class ${cls.name}Native")
   appendLine("    {")
 
-  if (isConstrained && cls.hasPublicConstructor) {
+  if (cls.hasPublicConstructor) {
+    // An unconstrained type parameter admits the primitive widths too, and each one is a separate
+    // Kotlin export carrying this class's own native prefix. Declaring them here rather than
+    // reaching for a shared helper is what keeps the constructor bound to its own class: the handle
+    // that comes back is a StableRef to an instance of *this* class, which this class's
+    // `_get_value` export downcasts.
+    if (!isConstrained) {
+      GENERIC_CREATE_WIDTHS.forEach { (suffix, type) ->
+        appendLine("        [DllImport(\"${cls.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"${cls.nativePrefix}_create_$suffix\")]")
+        appendLine("        internal static extern IntPtr Create_$suffix($type value, out IntPtr error);")
+        appendLine()
+      }
+    }
     appendLine("        [DllImport(\"${cls.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"${cls.nativePrefix}_create_object\")]")
     appendLine("        internal static extern IntPtr Create_object(IntPtr value, out IntPtr error);")
     appendLine()
@@ -53,7 +86,26 @@ internal fun StringBuilder.renderGenericClass(cls: CirGenericClass) {
       appendLine("            }")
       appendLine("            _handle = handle;")
     } else {
-      appendLine("            _handle = NugetMarshal.CreateBox<${cls.typeParameters[0].name}>(value);")
+      val param: String = cls.typeParameters[0].name
+      appendLine("            IntPtr error;")
+      appendLine("            IntPtr handle;")
+      GENERIC_CREATE_WIDTHS.forEachIndexed { index, (suffix, type) ->
+        val branch: String = if (index == 0) "if" else "else if"
+        appendLine("            $branch (typeof($param) == typeof($type)) handle = ${cls.name}Native.Create_$suffix(($type)(object)value!, out error);")
+      }
+      appendLine("            else")
+      appendLine("            {")
+      appendLine("                var field = typeof($param).GetField(\"_handle\",")
+      appendLine("                    System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Public);")
+      appendLine("                if (field == null) throw new NotSupportedException($\"Cannot create ${cls.name}<{typeof($param).Name}>\");")
+      appendLine("                handle = ${cls.name}Native.Create_object((IntPtr)field.GetValue(value)!, out error);")
+      appendLine("            }")
+      appendLine()
+      appendLine("            if (error != IntPtr.Zero)")
+      appendLine("            {")
+      appendLine("                throw NugetErrorNative.BuildException(error);")
+      appendLine("            }")
+      appendLine("            _handle = handle;")
     }
     appendLine("        }")
     appendLine()

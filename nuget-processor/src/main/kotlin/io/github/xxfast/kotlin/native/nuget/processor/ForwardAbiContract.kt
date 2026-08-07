@@ -65,6 +65,9 @@ internal fun List<ForwardAbiSignature>.canonicalText(): String =
  * Specialized helper protocols remain on explicit legacy routes until their migration phase.
  */
 internal object ForwardAbiContract {
+  private const val ENTRY_POINT_MARKER: String = "EntryPoint = \""
+  private const val EXTERN_MARKER: String = "static extern "
+
   fun assertMatches(csharp: List<ForwardAbiSignature>, kotlin: List<ForwardAbiSignature>) {
     val csharpByName: Map<String, List<ForwardAbiSignature>> = csharp.groupBy { it.exportName }
     val kotlinByName: Map<String, List<ForwardAbiSignature>> = kotlin.groupBy { it.exportName }
@@ -101,6 +104,39 @@ internal object ForwardAbiContract {
       }
     }
     .mapNotNull { import -> import.toSignature() }
+
+  /**
+   * ADR-078: the specialized legacy protocols print their `DllImport` declarations as raw renderer
+   * text, so there is no [CirDllImport] node to normalize. Collect them from the rendered C# that
+   * actually ships instead, which makes a renderer edit visible to the contract check by
+   * construction. [ordinaryNames] drops the entry points the structural [csharp] collector already
+   * covers, so a route migrating to a plan moves between the two universes automatically.
+   */
+  fun csharpLegacy(renderedCsharp: String, ordinaryNames: Set<String>): List<ForwardAbiSignature> {
+    val lines: List<String> = renderedCsharp.lines()
+    val collected: List<ForwardAbiSignature> = lines.mapIndexedNotNull { index, line ->
+      val name: String = line.entryPointName() ?: return@mapIndexedNotNull null
+      // The attribute and its declaration are adjacent apart from further attribute lines a
+      // marshalled return adds (`[return: MarshalAs(UnmanagedType.I1)]`). Anything else means the
+      // renderer's format moved, which must fail loudly rather than silently shrink coverage.
+      val declaration: String = lines.drop(index + 1)
+        .map { candidate -> candidate.trim() }
+        .firstOrNull { candidate -> candidate.isNotEmpty() && !candidate.startsWith("[") }
+        .orEmpty()
+      check(declaration.contains(EXTERN_MARKER)) {
+        "Forward ABI legacy import for $name has no extern declaration; found \"$declaration\""
+      }
+      if (name in ordinaryNames) null else externSignature(name, declaration)
+    }
+
+    val distinct: List<ForwardAbiSignature> = collected.distinct()
+    distinct.groupBy { signature -> signature.exportName }.forEach { (name, signatures) ->
+      require(signatures.size == 1) {
+        "Forward ABI conflicting C# legacy imports for $name: ${signatures.joinToString(", ")}"
+      }
+    }
+    return distinct
+  }
 
   fun kotlin(file: FileSpec, expectedNames: Set<String>): List<ForwardAbiSignature> = file.members
     .filterIsInstance<FunSpec>()
@@ -240,6 +276,34 @@ internal object ForwardAbiContract {
         ForwardAbiParameter(kotlinParameterType(parameter.type), direction)
       },
     )
+  }
+
+  private fun String.entryPointName(): String? {
+    if (!contains(ENTRY_POINT_MARKER)) return null
+    return substringAfter(ENTRY_POINT_MARKER).substringBefore("\"")
+  }
+
+  private fun externSignature(name: String, declaration: String): ForwardAbiSignature {
+    val header: String = declaration.substringAfter(EXTERN_MARKER).substringBefore("(").trim()
+    val parameters: List<ForwardAbiParameter> = declaration
+      .substringAfter("(")
+      .substringBeforeLast(")")
+      .split(",")
+      .map { parameter -> parameter.trim() }
+      .filter { parameter -> parameter.isNotEmpty() }
+      .map { parameter -> parameter.toAbiParameter() }
+    return ForwardAbiSignature(name, csharpReturnType(header.substringBeforeLast(" ")), parameters)
+  }
+
+  // The same normalization the CirDllImport path applies: strip a leading `[MarshalAs(...)] `, read
+  // any `out `-prefixed parameter as the (POINTER, OUT) slot it is at the C ABI, and fall through
+  // to csharpType otherwise (an unknown token, such as a marshalled delegate, is a pointer).
+  private fun String.toAbiParameter(): ForwardAbiParameter {
+    val declaration: String = substringAfterLast("] ").trim()
+    if (declaration.startsWith("out ")) {
+      return ForwardAbiParameter(ForwardAbiType.POINTER, ForwardAbiDirection.OUT)
+    }
+    return ForwardAbiParameter(csharpType(declaration.substringBeforeLast(" ").trim()))
   }
 
   private fun List<AnnotationSpec>.cNameValue(): String? = firstOrNull { annotation ->
