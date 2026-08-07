@@ -196,6 +196,11 @@ internal class ForwardPropertyPlanner(
       helperRequirements = when (type.unwrapNullable()) {
         is BridgeType.Collection -> setOf(ForwardHelperRequirement.COLLECTION)
         BridgeType.Instant -> setOf(ForwardHelperRequirement.INSTANT)
+        // ADR-077 sub-item 2: same pairing as the callable side (the value-class step plus its
+        // String underlying's UTF-8 crossing).
+        is BridgeType.ValueClass ->
+          setOf(ForwardHelperRequirement.VALUE_CLASS, ForwardHelperRequirement.UTF8)
+
         else -> emptySet()
       },
     ).validate()
@@ -341,7 +346,14 @@ internal class ForwardPropertyPlanner(
     is BridgeType.Primitive, is BridgeType.Enum, is BridgeType.ObjectHandle,
     is BridgeType.Interface, is BridgeType.Collection -> true
 
-    is BridgeType.Nullable -> isPlannable(type.type)
+    // ADR-077 sub-item 2: a String-underlying value-class property plans; other underlyings are
+    // sub-item 4 and stay unplannable.
+    is BridgeType.ValueClass -> type.underlying == BridgeType.String
+
+    // ADR-077 sub-item 3 guard: without the `!is ValueClass` check the recursion would auto-admit
+    // `Nullable(ValueClass)` properties, whose nullable getter/setter shapes only land with
+    // sub-item 3. Remove the guard in that commit.
+    is BridgeType.Nullable -> type.type !is BridgeType.ValueClass && isPlannable(type.type)
     else -> false
   }
 
@@ -370,8 +382,9 @@ internal class ForwardPropertyPlanner(
       PrimitiveKind.DOUBLE -> ForwardAbiWireType.FLOAT64
     }
 
-    // ADR-075: only reachable for an extension property's *receiver* (ADR-014 unwraps at the
-    // boundary) — no ordinary property is ever declared `: SomeValueClass` on the plan path.
+    // ADR-014 unwraps at the boundary: the underlying's wire is used both for an extension
+    // property's value-class *receiver* (ADR-075) and, since ADR-077 sub-item 2, for an ordinary
+    // property declared `: SomeValueClass` (getter result and setter value alike).
     is BridgeType.ValueClass -> type.underlying.wireType()
 
     else -> error("Forward property planner cannot choose a wire type for $type")
@@ -412,6 +425,14 @@ internal class ForwardPropertyPlanner(
       ForwardConversion.TICKS_TO_INSTANT
     } else {
       ForwardConversion.INSTANT_TO_TICKS
+    }
+
+    // ADR-077 sub-item 2: without this branch the `else` silently tags the transfer DIRECT, and
+    // ForwardPropertyPlan.validate() never checks conversions, so nothing would catch it.
+    is BridgeType.ValueClass -> if (flow == ForwardFlow.INTO_KOTLIN) {
+      ForwardConversion.BOX_VALUE_CLASS
+    } else {
+      ForwardConversion.UNBOX_VALUE_CLASS
     }
 
     else -> ForwardConversion.DIRECT

@@ -98,6 +98,17 @@ private fun FileSpec.Builder.addGetter(plan: ForwardPropertyPlan, call: ForwardN
       builder.addCode(handleBody(access, "errorOut"), stableRef, cOpaquePointerVar, stableRef)
     }
 
+    // ADR-077 sub-item 2: unbox to the underlying property, so the export ships the plain String
+    // over the same wire an ordinary String getter uses; C# reconstructs the record struct.
+    is BridgeType.ValueClass -> {
+      builder.returns(kotlinType("String"))
+      builder.addCode(
+        valueBody("$access.${type.underlyingPropertyName}", "errorOut", "\"\""),
+        cOpaquePointerVar,
+        stableRef,
+      )
+    }
+
     else -> error("Forward property emitter has no getter route for $type")
   }
   addFunction(builder.build())
@@ -237,6 +248,9 @@ private fun ForwardPropertyPlan.valueExpression(): String = when (val type: Brid
   is BridgeType.ObjectHandle -> "value.asStableRef<${type.qualifiedName}>().get()"
   is BridgeType.Interface -> "value.asStableRef<${type.qualifiedName}>().get()"
   is BridgeType.Collection -> loweredCollectionExpression("value", type)
+  // ADR-077 sub-item 2: re-wrap the raw underlying value, re-running the value class's own `init`
+  // validation, exactly like the callable parameter lowering in ForwardKotlinPlanEmitter.
+  is BridgeType.ValueClass -> "${type.qualifiedName}(value)"
   else -> error("Forward property emitter has no setter route for $type")
 }
 
@@ -247,8 +261,9 @@ private fun kotlinInputType(type: BridgeType): TypeName = when (type) {
   BridgeType.String -> kotlinType("String")
   is BridgeType.Enum -> kotlinType("Int")
   BridgeType.Instant -> kotlinType("Long")
-  // ADR-075: only ever reached for an extension property's receiver -- the underlying is what
-  // actually crosses the wire (ADR-014).
+  // ADR-014: the underlying is what actually crosses the wire, both for an extension property's
+  // value-class receiver (ADR-075) and for an ordinary value-class property's setter value
+  // (ADR-077 sub-item 2).
   is BridgeType.ValueClass -> kotlinInputType(type.underlying)
   is BridgeType.ObjectHandle, is BridgeType.Interface, is BridgeType.Collection ->
     cOpaquePointer.copy(nullable = type is BridgeType.Nullable)

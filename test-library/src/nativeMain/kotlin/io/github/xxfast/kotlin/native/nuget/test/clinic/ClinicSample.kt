@@ -72,6 +72,24 @@ class Patient(val name: String) {
    */
   val grade: Char = 'A'
 
+  /**
+   * ADR-077 sub-item 2 · mutable property position. String-underlying value class as a `var`
+   * property: the getter unboxes to the underlying `String` on the wire and C# reconstructs the
+   * record struct; the setter passes `value.Value` and Kotlin re-wraps with `ChartId(raw)`.
+   * [chartStatus] observes it Kotlin-side. Plans via `isPlannable`'s `ValueClass` branch.
+   * Non-null on purpose: `ChartId?` is sub-item 3.
+   */
+  var currentChart: ChartId = ChartId("CH-0")
+
+  /**
+   * ADR-077 sub-item 2 · the Kotlin-side observation for [currentChart]'s setter. Calls
+   * `isValid()` on the stored value, so a C# write must have arrived as a genuinely re-wrapped
+   * [ChartId] for either branch to make sense. Plain `String` return: already supported, so this
+   * method binds independently of the property.
+   */
+  fun chartStatus(): String =
+    if (currentChart.isValid()) "$name charted at ${currentChart.value}" else "$name uncharted"
+
   /** Control · LANDS NOW: a non-null String method return works. */
   fun describe(): String = "$name, $weight kg"
 
@@ -233,8 +251,8 @@ var ChartId.symptomTags: List<String>
 
 /**
  * ADR-077 sub-item 1 · constructor position (regular class). [chart] is a plain constructor
- * parameter, not a `val`: the property facet of a value-class type is sub-item 2 and stays skipped
- * until then, so this cell measures the constructor seam alone. [label] is an ordinary `String`
+ * parameter, not a `val` (the property facet is [Patient.currentChart]'s and [ChartEntry.id]'s
+ * job), so this cell measures the constructor seam alone. [label] is an ordinary `String`
  * property, which is what the C# side reads back to prove Kotlin saw a re-wrapped [ChartId].
  */
 class Admission(chart: ChartId, val ward: String) {
@@ -244,8 +262,8 @@ class Admission(chart: ChartId, val ward: String) {
 /**
  * ADR-077 sub-item 1 · data-class primary-constructor position, and the generated `copy()` that
  * mirrors it. A data class primary constructor parameter *must* be `val`/`var`, so [id] is also a
- * property; the property facet is sub-item 2 and is expected to stay skipped for now, so nothing
- * asserts on a generated `Id`. [label] exposes the same information through an already-supported
+ * property: the sub-item 2 read-only getter cell (`entry.Id` in C#), asserted by
+ * `ValueClassPropertyTests`. [label] exposes the same information through an already-supported
  * `String` return.
  */
 data class ChartEntry(val id: ChartId, val note: String) {

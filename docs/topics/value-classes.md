@@ -7,6 +7,7 @@ A Kotlin `value class` (inline class) wrapping a primitive or `String` becomes a
 | `value`/`inline class` | underlying type / `record struct` | see [ADR-014](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/014-value-class-mapping.md) |
 | value class wrapping a reference type | `record struct` | wraps the object's own handle type |
 | `String`-underlying value class as an ordinary parameter | the same `record struct` | the wire carries the underlying `String`; see [ADR-077](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/077-value-classes-at-ordinary-positions.md) |
+| `String`-underlying value class as a `val`/`var` property | the same `record struct`, a settable C# property when the Kotlin property is `var` | getter reconstructs from the underlying `String`, setter unwraps it; see [ADR-077](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/077-value-classes-at-ordinary-positions.md) |
 
 ## Kotlin
 
@@ -400,19 +401,119 @@ public void ClinicSample_ChartSummary_TopLevelFunctionParameter_RoundTripsTheUnw
     </p>
 </note>
 
+## As a property
+
+A `String`-underlying value class also binds as a `val`/`var` property on a class or data class, not
+only as a constructor parameter. The getter reconstructs the `record struct` from the wire `String`;
+a `var` property's setter unwraps `value.Value` on the way in and Kotlin re-wraps it with `ChartId(value)`,
+so any `init` validation on the value class runs on every write.
+
+From `test-library/src/nativeMain/kotlin/.../clinic/ClinicSample.kt`:
+
+```kotlin
+var currentChart: ChartId = ChartId("CH-0")
+
+fun chartStatus(): String =
+  if (currentChart.isValid()) "$name charted at ${currentChart.value}" else "$name uncharted"
+```
+
+```kotlin
+data class ChartEntry(val id: ChartId, val note: String) {
+  fun label(): String = "${id.value}: $note"
+}
+```
+
+### Generated C#
+
+`ChartEntry.id` is `val`, so it renders as a get-only property. `Patient.currentChart` is `var`, so it
+renders with a setter too. From `Interop.cs`:
+
+```C#
+public ChartId Id
+{
+    get
+    {            IntPtr nativeResult = Native_Get_id(_handle, out IntPtr error);
+    if (error != IntPtr.Zero)
+    {
+        throw NugetErrorNative.BuildException(error);
+    }
+    return new ChartId(Marshal.PtrToStringUTF8(nativeResult)!);
+    }
+}
+```
+
+```C#
+public ChartId CurrentChart
+{
+    get
+    {            IntPtr nativeResult = Native_Get_currentChart(_handle, out IntPtr error);
+    if (error != IntPtr.Zero)
+    {
+        throw NugetErrorNative.BuildException(error);
+    }
+    return new ChartId(Marshal.PtrToStringUTF8(nativeResult)!);
+    }
+    set
+    {            Native_Set_currentChart(_handle, value.Value, out IntPtr error);
+    if (error != IntPtr.Zero)
+    {
+        throw NugetErrorNative.BuildException(error);
+    }
+    }
+}
+```
+
+### Using it from C#
+
+From `IntegrationTests/ValueClassPropertyTests.cs`:
+
+```C#
+[Fact]
+public void ChartEntry_Id_ValGetter_ReturnsTheRecordStructWithTheConstructedValue()
+{
+    using var entry = new ChartEntry(new ChartId("CH-OREO-4"), "stuck in a vase");
+
+    ChartId id = entry.Id;
+
+    Assert.Equal("CH-OREO-4", id.Value);
+    Assert.Equal(new ChartId("CH-OREO-4"), id);
+}
+
+[Fact]
+public void Patient_CurrentChart_Setter_IsObservedByKotlinAsARewrappedChartId()
+{
+    using var oreo = new Patient("Oreo");
+
+    // chartStatus() calls isValid() on the stored ChartId, so both branches only make sense
+    // if the C# write arrived re-wrapped as a genuine value class, not a smuggled raw string.
+    oreo.CurrentChart = new ChartId("CH-9");
+    Assert.Equal("Oreo charted at CH-9", oreo.ChartStatus());
+
+    oreo.CurrentChart = new ChartId("   ");
+    Assert.Equal("Oreo uncharted", oreo.ChartStatus());
+}
+```
+
+<note>
+    <p>
+        <code>ChartEntry.Id</code> and <code>Patient.CurrentChart</code> are unwrapped record
+        structs, not handles, so neither needs <code>using</code>. The setter round trip proves the
+        write reached Kotlin as a re-wrapped <code>ChartId</code>: <code>ChartStatus()</code> calls
+        <code>ChartId.isValid()</code> Kotlin-side, so a smuggled raw string could not take either
+        branch correctly.
+    </p>
+</note>
+
 ## Limitations
 
 - A value class at an ordinary position (rather than as the value class's own receiver) is currently
-  scoped to a **`String` underlying type only**, the two shapes shown above: an ordinary method
-  return and an ordinary parameter. `Primitive`-, `Enum`- and object-underlying value classes at an
-  ordinary position are not yet planned, and neither is `Nullable(ValueClass)` (a `ChartId?`
-  parameter, return or property). Each keeps a named `VALUE_CLASS` skip. See
+  scoped to a **`String` underlying type only**, the three shapes shown above: an ordinary method
+  return, an ordinary parameter, and a `val`/`var` property. `Primitive`-, `Enum`- and
+  object-underlying value classes at an ordinary position are not yet planned, and neither is
+  `Nullable(ValueClass)` (a `ChartId?` parameter, return or property). Each keeps a named
+  `VALUE_CLASS` skip. See
   [ADR-077](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/077-value-classes-at-ordinary-positions.md)
   and [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md).
-- A **property** typed as a value class (`val id: ChartId` on a class or data class) does not bind.
-  `ChartEntry` takes its `ChartId` through the constructor and `copy()`, but no `Id` property is
-  generated, so the fixture reads the value back through an ordinary `String` member (`Label()`).
-  Unlike a skipped parameter, a skipped value-class property emits **no diagnostic** at all.
 - A value class as a collection element (`List<ChartId>`, `Map<String, ChartId>`) has no boxing
   story on the C# write side and is skipped; see [Collections](collections.md).
 - Reference-underlying value-class **primary** constructor `init` validation stays deferred

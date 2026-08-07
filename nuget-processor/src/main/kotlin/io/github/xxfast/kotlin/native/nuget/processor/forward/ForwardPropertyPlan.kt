@@ -87,6 +87,8 @@ internal data class ForwardPropertyPlan(
       is BridgeType.Primitive, is BridgeType.Enum, is BridgeType.ObjectHandle,
       is BridgeType.Interface, is BridgeType.Collection -> Unit
 
+      // ADR-077 sub-item 2: a value-class property is valid exactly when its underlying is.
+      is BridgeType.ValueClass -> validateType(type.underlying)
       is BridgeType.Nullable -> validateType(type.type)
       else -> error("Forward property plan $symbol has unsupported type $type")
     }

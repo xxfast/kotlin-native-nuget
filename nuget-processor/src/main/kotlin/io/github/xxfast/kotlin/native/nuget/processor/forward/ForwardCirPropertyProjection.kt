@@ -188,7 +188,9 @@ internal object ForwardCirPropertyProjection {
     val callArgs: String = listOf(args, "out IntPtr error").filter { it.isNotBlank() }.joinToString(", ")
     when (val value = type.unwrapNullable()) {
       BridgeType.String -> appendLine("            IntPtr nativeResult = $native($callArgs);")
-      is BridgeType.ObjectHandle, is BridgeType.Interface, is BridgeType.Collection ->
+      // ADR-077 sub-item 2: a String-underlying value class rides the same pointer wire as a
+      // plain String getter.
+      is BridgeType.ObjectHandle, is BridgeType.Interface, is BridgeType.Collection, is BridgeType.ValueClass ->
         appendLine("            IntPtr nativeResult = $native($callArgs);")
 
       else -> appendLine("            ${type.wireType().csharpWireType()} nativeResult = $native($callArgs);")
@@ -196,6 +198,11 @@ internal object ForwardCirPropertyProjection {
     appendErrorCheck(this)
     when (val value = type) {
       BridgeType.String -> append("            return Marshal.PtrToStringUTF8(nativeResult)!;")
+      // ADR-077 sub-item 2: reconstruct the record struct from the raw underlying string. Without
+      // this branch the `else` below returns the raw IntPtr (CS0029 in generated code).
+      is BridgeType.ValueClass -> append(
+        "            return new ${value.csharpType()}(Marshal.PtrToStringUTF8(nativeResult)!);",
+      )
       is BridgeType.Nullable -> when (val inner = value.type) {
         BridgeType.String -> append("            return Marshal.PtrToStringUTF8(nativeResult);")
         is BridgeType.ObjectHandle -> append("            return nativeResult == IntPtr.Zero ? null : new ${inner.csharpType()}(nativeResult);")
@@ -333,6 +340,9 @@ internal object ForwardCirPropertyProjection {
     BridgeType.String -> if (type is BridgeType.Nullable) "string?" else "string"
     is BridgeType.Enum -> "int"
     is BridgeType.ObjectHandle, is BridgeType.Interface -> "IntPtr"
+    // ADR-077 sub-item 2: the underlying string crosses the setter wire (non-null only in this
+    // slice; the nullable spelling arrives with sub-item 3).
+    is BridgeType.ValueClass -> "string"
     else -> value.wireType().csharpWireType()
   }
 
@@ -367,6 +377,12 @@ internal object ForwardCirPropertyProjection {
         }
       }
 
+      // ADR-077 sub-item 2: unwrap the record struct to its capitalized underlying property.
+      // The old `else -> name` fell through here and passed the struct where the native import
+      // expects `string` (CS1503 in generated code).
+      is BridgeType.ValueClass ->
+        "$name.${value.underlyingPropertyName.replaceFirstChar { it.uppercase() }}"
+
       else -> name
     }
 
@@ -381,6 +397,8 @@ internal object ForwardCirPropertyProjection {
     // ADR-076: wires as its own INT64 tick representation, same as a Primitive(LONG).
     BridgeType.Instant -> ForwardAbiWireType.INT64
     is BridgeType.Primitive -> type.kind.wireType()
+    // ADR-077 sub-item 2: the underlying's wire, matching ForwardPropertyPlanner.wireType().
+    is BridgeType.ValueClass -> type.underlying.wireType()
     else -> error("No property wire type for $type")
   }
 
@@ -404,8 +422,9 @@ internal object ForwardCirPropertyProjection {
     is BridgeType.ObjectHandle -> csharpType
     // ADR-040: the public C# spelling is the projected interface, never the backing class.
     is BridgeType.Interface -> csharpType
-    // ADR-075: only reached for an extension property's receiver -- the public C# receiver type
-    // is the value class itself (e.g. `ChartId`), never its underlying wire value.
+    // The public C# spelling is the value class itself (e.g. `ChartId`), never its underlying
+    // wire value: true for an extension property's receiver (ADR-075) and for an ordinary
+    // value-class-typed property (ADR-077 sub-item 2).
     is BridgeType.ValueClass -> csharpType
     is BridgeType.Collection -> when (kind) {
       CollectionKind.LIST -> "IReadOnlyList<${requireNotNull(element).csharpType()}>"
