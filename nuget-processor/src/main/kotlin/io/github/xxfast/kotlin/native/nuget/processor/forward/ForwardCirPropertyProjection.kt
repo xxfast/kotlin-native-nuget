@@ -188,21 +188,21 @@ internal object ForwardCirPropertyProjection {
     val callArgs: String = listOf(args, "out IntPtr error").filter { it.isNotBlank() }.joinToString(", ")
     when (val value = type.unwrapNullable()) {
       BridgeType.String -> appendLine("            IntPtr nativeResult = $native($callArgs);")
-      // ADR-077 sub-item 2: a String-underlying value class rides the same pointer wire as a
-      // plain String getter.
-      is BridgeType.ObjectHandle, is BridgeType.Interface, is BridgeType.Collection, is BridgeType.ValueClass ->
+      is BridgeType.ObjectHandle, is BridgeType.Interface, is BridgeType.Collection ->
         appendLine("            IntPtr nativeResult = $native($callArgs);")
 
+      // ADR-077 sub-items 2/4: a value class rides its underlying's wire (IntPtr for
+      // String/ObjectHandle, int ordinal for enum, the primitive's own wire otherwise), which is
+      // exactly what `wireType()`'s ValueClass branch resolves to in the fallthrough below.
       else -> appendLine("            ${type.wireType().csharpWireType()} nativeResult = $native($callArgs);")
     }
     appendErrorCheck(this)
     when (val value = type) {
       BridgeType.String -> append("            return Marshal.PtrToStringUTF8(nativeResult)!;")
-      // ADR-077 sub-item 2: reconstruct the record struct from the raw underlying string. Without
-      // this branch the `else` below returns the raw IntPtr (CS0029 in generated code).
-      is BridgeType.ValueClass -> append(
-        "            return new ${value.csharpType()}(Marshal.PtrToStringUTF8(nativeResult)!);",
-      )
+      // ADR-077 sub-items 2/4: reconstruct the record struct, composing the underlying's own step.
+      // Without this branch the `else` below returns the raw wire value (CS0029 in generated code).
+      is BridgeType.ValueClass ->
+        append("            return ${valueClassGetterReconstruction(value)};")
       is BridgeType.Nullable -> when (val inner = value.type) {
         BridgeType.String -> append("            return Marshal.PtrToStringUTF8(nativeResult);")
         is BridgeType.ObjectHandle -> append("            return nativeResult == IntPtr.Zero ? null : new ${inner.csharpType()}(nativeResult);")
@@ -218,10 +218,11 @@ internal object ForwardCirPropertyProjection {
               collectionMaterialize(inner),
         )
 
-        // ADR-077 sub-item 3: the ADR-075 null-handle guard, then the sub-item 2 reconstruction.
+        // ADR-077 sub-items 3/4: the ADR-075 null-handle guard, then the per-underlying
+        // reconstruction (String and ObjectHandle underlyings both ride the IntPtr wire).
         is BridgeType.ValueClass -> append(
           "            return nativeResult == IntPtr.Zero ? null : " +
-              "new ${inner.csharpType()}(Marshal.PtrToStringUTF8(nativeResult)!);",
+              "${valueClassGetterReconstruction(inner)};",
         )
 
         else -> append("            return nativeResult;")
@@ -241,6 +242,21 @@ internal object ForwardCirPropertyProjection {
       is BridgeType.Collection -> append(collectionMaterialize(value))
       else -> append("            return nativeResult;")
     }
+  }
+
+  /**
+   * ADR-077 sub-item 4: rebuild the record struct from `nativeResult`, composing the underlying's
+   * own step (UTF-8, enum cast, handle wrapper) inside the constructor call.
+   */
+  private fun valueClassGetterReconstruction(type: BridgeType.ValueClass): String {
+    val inner: String = when (val underlying: BridgeType = type.underlying) {
+      BridgeType.String -> "Marshal.PtrToStringUTF8(nativeResult)!"
+      is BridgeType.Enum -> "(${underlying.csharpType})nativeResult"
+      is BridgeType.ObjectHandle -> "new ${underlying.csharpType()}(nativeResult)"
+      is BridgeType.Primitive -> "nativeResult"
+      else -> error("Forward CIR property projection has no value-class reconstruction for $underlying")
+    }
+    return "new ${type.csharpType()}($inner)"
   }
 
   private fun legacyGetter(presence: String, value: String, args: String, type: BridgeType): String {
@@ -346,9 +362,14 @@ internal object ForwardCirPropertyProjection {
     BridgeType.String -> if (type is BridgeType.Nullable) "string?" else "string"
     is BridgeType.Enum -> "int"
     is BridgeType.ObjectHandle, is BridgeType.Interface -> "IntPtr"
-    // ADR-077: the underlying string crosses the setter wire; the outer nullability decides the
-    // spelling, exactly like the plain-String arm above (sub-items 2 and 3).
-    is BridgeType.ValueClass -> if (type is BridgeType.Nullable) "string?" else "string"
+    // ADR-077: the underlying's wire crosses the setter (sub-item 4 keys it per kind); the outer
+    // nullability decides the String spelling, exactly like the plain-String arm above.
+    is BridgeType.ValueClass -> when (value.underlying) {
+      BridgeType.String -> if (type is BridgeType.Nullable) "string?" else "string"
+      is BridgeType.Enum -> "int"
+      is BridgeType.ObjectHandle -> "IntPtr"
+      else -> value.underlying.wireType().csharpWireType()
+    }
     else -> value.wireType().csharpWireType()
   }
 
@@ -383,13 +404,21 @@ internal object ForwardCirPropertyProjection {
         }
       }
 
-      // ADR-077 sub-items 2/3: unwrap the record struct to its capitalized underlying property,
-      // with null propagation for the nullable spelling (a C# null ships the null pointer). The
-      // old `else -> name` fell through here and passed the struct where the native import
-      // expects `string` (CS1503 in generated code).
+      // ADR-077 sub-items 2/3/4: unwrap the record struct to its capitalized underlying property
+      // and lower it to the wire per underlying, with null propagation for the nullable spelling
+      // (a C# null ships the null pointer). The old `else -> name` fell through here and passed
+      // the struct where the native import expects the wire type (CS1503 in generated code).
       is BridgeType.ValueClass -> {
-        val underlying: String = value.underlyingPropertyName.replaceFirstChar { it.uppercase() }
-        if (type is BridgeType.Nullable) "$name?.$underlying" else "$name.$underlying"
+        val prop: String = value.underlyingPropertyName.replaceFirstChar { it.uppercase() }
+        val nullable: Boolean = type is BridgeType.Nullable
+        val unwrapped: String = if (nullable) "$name?.$prop" else "$name.$prop"
+        when (value.underlying) {
+          is BridgeType.Enum -> "(int)$unwrapped"
+          is BridgeType.ObjectHandle ->
+            if (nullable) "$unwrapped._handle ?? IntPtr.Zero" else "$unwrapped._handle"
+
+          else -> unwrapped
+        }
       }
 
       else -> name

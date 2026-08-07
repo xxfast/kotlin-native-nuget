@@ -53,6 +53,15 @@ object Clinic {
    * on the shared callable plan, unlike a `String` result — see [Patient.rename]'s cell 8 note).
    */
   fun setCapacity(value: Int?): Int = value ?: 0
+
+  /**
+   * ADR-077 sub-item 4 · primitive-underlying value class, param + return in one call. Mirrors
+   * the ADR's own consumer-API sketch (`clinic.Prescribe(new Dosage(2.5))`). The wire carries
+   * [Dosage]'s underlying `Double` directly (the primitive's own wire); Kotlin reconstructs the
+   * result with `Dosage(v)`, C# unwraps the argument with `dosage.Milligrams` and rebuilds the
+   * result with `new Dosage(nativeResult)`.
+   */
+  fun prescribe(dosage: Dosage): Dosage = Dosage(dosage.milligrams * 2)
 }
 
 /**
@@ -109,6 +118,59 @@ class Patient(val name: String) {
    * [ChartId] after.
    */
   fun previousChart(): ChartId? = backupChart
+
+  /**
+   * ADR-077 sub-item 4 · primitive-underlying value class, property position. The getter/setter
+   * wire is [Dosage]'s underlying `Double` directly, same shape as an ordinary `Double` property;
+   * only the box/unbox at the boundary is new.
+   */
+  var dosage: Dosage = Dosage(1.0)
+
+  /**
+   * ADR-077 sub-item 4 · enum-underlying value class, property position. The wire is [Mood]'s
+   * int ordinal; Kotlin unboxes with `.mood.ordinal` and re-wraps with
+   * `Temperament(Mood.entries[value])`, C# reconstructs `new Temperament((Mood)raw)` and passes
+   * `(int)value.Mood`.
+   */
+  var temperament: Temperament = Temperament(Mood.CALM)
+
+  /**
+   * ADR-077 sub-item 4 · enum-underlying value class, param + return in one call (the
+   * [Clinic.prescribe] shape on the enum underlying). Branches on the wrapped [Mood], so the
+   * parameter must arrive as a genuinely re-wrapped [Temperament].
+   */
+  fun soothe(current: Temperament): Temperament =
+    if (current.mood == Mood.ANXIOUS) Temperament(Mood.CALM) else current
+
+  /**
+   * ADR-077 sub-item 4 · ObjectHandle-underlying value class, property position. [ChartRef]
+   * wraps a `Patient`, so this patient owns a self-referential chart reference; nothing about
+   * that is special to the bridge, it just keeps the fixture to one type. The wire is a
+   * StableRef pointer, same as an ordinary object-handle property.
+   */
+  var chartRef: ChartRef = ChartRef(this)
+
+  /**
+   * ADR-077 sub-item 4 · ObjectHandle-underlying value class, parameter position. Returns
+   * `String` (already supported), so only the parameter facet is new here; [ownReferral] below
+   * is the matching return-position cell.
+   */
+  fun reassign(referral: ChartRef): String = "$name reassigned to ${referral.patient.name}"
+
+  /**
+   * ADR-077 sub-item 4 · ObjectHandle-underlying value class, return position. Pairs with
+   * [reassign] above so param and return are each exercised by a distinct method, not folded
+   * into one call the way [prescribe] and [soothe] are.
+   */
+  fun ownReferral(): ChartRef = ChartRef(this)
+
+  /**
+   * ADR-077 sub-item 4 · `Nullable(ValueClass(ObjectHandle))`, the one deferred-until-now cell:
+   * rides the null pointer exactly like sub-item 3's `ChartId?`, since an ObjectHandle underlying
+   * is already pointer-shaped on the wire. Primitive/enum-underlying nullables stay deferred (the
+   * wire has no in-band null for those).
+   */
+  var backupReferral: ChartRef? = null
 
   /** Control · LANDS NOW: a non-null String method return works. */
   fun describe(): String = "$name, $weight kg"
@@ -259,6 +321,24 @@ value class ChartRef(val patient: Patient) {
   /** Cell 16: reference-underlying value-class method with a parameter. */
   fun label(suffix: String): String = "${patient.name}$suffix"
 }
+
+/**
+ * ADR-077 sub-item 4 · primitive-underlying value class at ordinary positions ([Clinic.prescribe]
+ * param + return, [Patient.dosage] property). Milligrams rather than a raw `Double` name so a
+ * consumer reading `dosage.Milligrams` in C# has a reason to be reading a [Dosage], not just a
+ * number.
+ */
+value class Dosage(val milligrams: Double)
+
+/**
+ * ADR-077 sub-item 4 · enum-underlying value class. The bare declaration used to crash
+ * `packNuget` outright on both KSP targets (`java.lang.IllegalArgumentException: Forward ABI
+ * missing C# projection for temperament_create; expected temperament_create(in int, out pointer)
+ * -> int`); it now packs as a `readonly record struct Temperament` wrapping [Mood]. Its use at
+ * ordinary positions ([Patient.temperament] property, [Patient.soothe] param + return) is the
+ * next slice and stays quarantined above.
+ */
+value class Temperament(val mood: Mood)
 
 /**
  * ADR-075 · extension-property + setter regression cell. Same eligibility predicate as an ordinary

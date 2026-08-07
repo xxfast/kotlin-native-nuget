@@ -1,7 +1,7 @@
 # ADR-077: Value classes at ordinary positions: parameters, properties, nullables, and non-String underlyings
 
 ## Status
-Proposed
+Accepted
 
 ## Context
 
@@ -272,6 +272,20 @@ Assert.Equal(5.0, doubled.Milligrams);
 ChartRef r = clinic.RefFor(patient);
 Assert.Equal("Oreo", r.Patient.Name);
 ```
+
+**Correction, recorded when sub-item 4 shipped (a):** the risk flagged above as inferred was worse
+than predicted. Declaring the bare `value class Temperament(val mood: Mood)` fixture crashed
+`packNuget` outright on both KSP targets, not merely rendered an incorrect struct:
+`java.lang.IllegalArgumentException: Forward ABI missing C# projection for temperament_create;
+expected temperament_create(in int, out pointer) -> int`. Three separate classifiers disagreed on
+whether an enum underlying is a reference type. This was fixed as a prerequisite, in a separate
+commit before the ordinary-position work in this sub-item landed.
+
+**Correction, recorded when sub-item 4 shipped (b):** sub-item 3's `nullableResultShape` `ValueClass`
+branch was String-only, not just its `Nullable(ValueClass)` × {Primitive, Enum} exclusion noted
+above. A `ChartRef?` method return (`Nullable(ValueClass(ObjectHandle))`) silently dropped the whole
+callable rather than binding, until a Tier 1 test written for this sub-item caught it. It now rides
+the same nullable-pointer shape as `ChartId?`, retagged `UNBOX_VALUE_CLASS`.
 
 ## Consequences
 

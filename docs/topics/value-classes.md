@@ -9,6 +9,9 @@ A Kotlin `value class` (inline class) wrapping a primitive or `String` becomes a
 | `String`-underlying value class as an ordinary parameter | the same `record struct` | the wire carries the underlying `String`; see [ADR-077](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/077-value-classes-at-ordinary-positions.md) |
 | `String`-underlying value class as a `val`/`var` property | the same `record struct`, a settable C# property when the Kotlin property is `var` | getter reconstructs from the underlying `String`, setter unwraps it; see [ADR-077](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/077-value-classes-at-ordinary-positions.md) |
 | `Nullable(ValueClass(String))` at a parameter, property or return position | `ChartId?` (`Nullable<ChartId>`), never a reference nullable | rides the same null pointer as nullable `String`/`ObjectHandle`, no has-value pair; see [ADR-077](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/077-value-classes-at-ordinary-positions.md) |
+| `Primitive`-underlying value class at an ordinary position | the same `record struct` | wire is the primitive's own wire (e.g. `Double`); see below |
+| `Enum`-underlying value class at an ordinary position | the same `record struct` | wire is the enum's `int` ordinal, cast back with `(EnumType)`; see below |
+| `ObjectHandle`-underlying value class at an ordinary position, incl. `Nullable(ValueClass(ObjectHandle))` | the same `record struct`, `?` rides the null pointer | wire is the wrapped object's own StableRef handle; see below |
 
 ## Kotlin
 
@@ -630,21 +633,230 @@ public void Patient_TransferTo_NullableParameter_NullCrossesAsNullNotAnEmptyChar
     </p>
 </note>
 
+## Non-`String` underlyings at an ordinary position
+
+A `Primitive`-, `Enum`-, or `ObjectHandle`-underlying value class also binds at an ordinary
+position, not only `String`. Each rides its underlying's own wire, re-tagged as a value-class
+box/unbox at the boundary: a `Double` underlying crosses as `double`, an enum underlying crosses as
+its `int` ordinal, and an `ObjectHandle` underlying crosses as the wrapped object's own StableRef
+handle (including `OWNED_HANDLE` ownership and `DISPOSE_STABLE_REF` cleanup on a returned value, the
+same cleanup an ordinary object-handle return already gets).
+
+From `test-library/src/nativeMain/kotlin/.../clinic/ClinicSample.kt`:
+
+```kotlin
+value class Dosage(val milligrams: Double)
+
+value class Temperament(val mood: Mood)
+
+value class ChartRef(val patient: Patient) {
+  fun label(suffix: String): String = "${patient.name}$suffix"
+}
+
+object Clinic {
+  fun prescribe(dosage: Dosage): Dosage = Dosage(dosage.milligrams * 2)
+}
+
+class Patient(val name: String) {
+  var dosage: Dosage = Dosage(1.0)
+  var temperament: Temperament = Temperament(Mood.CALM)
+  var chartRef: ChartRef = ChartRef(this)
+  var backupReferral: ChartRef? = null
+
+  fun soothe(current: Temperament): Temperament =
+    if (current.mood == Mood.ANXIOUS) Temperament(Mood.CALM) else current
+
+  fun reassign(referral: ChartRef): String = "$name reassigned to ${referral.patient.name}"
+
+  fun ownReferral(): ChartRef = ChartRef(this)
+}
+```
+
+Generated C#, from `Interop.cs`. The `Primitive` underlying (`Dosage`) passes and returns the
+`double` directly:
+
+```C#
+[DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "clinic_prescribe")]
+private static extern double Native_Prescribe(double dosage, out IntPtr error);
+
+public static Dosage Prescribe(Dosage dosage)
+{
+    double nativeResult = Native_Prescribe(dosage.Milligrams, out IntPtr error);
+    if (error != IntPtr.Zero)
+    {
+        throw NugetErrorNative.BuildException(error);
+    }
+    return new Dosage(nativeResult);
+}
+```
+
+The `Enum` underlying (`Temperament`) passes and returns the `Mood` ordinal as `int`, cast back on
+the way out:
+
+```C#
+public readonly record struct Temperament
+{
+    public Mood Mood { get; }
+    // ...
+}
+
+[DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "patient_soothe")]
+private static extern int Native_Soothe(IntPtr handle, int current, out IntPtr error);
+
+public Temperament Soothe(Temperament current)
+{
+    int nativeResult = Native_Soothe(_handle, (int)current.Mood, out IntPtr error);
+    if (error != IntPtr.Zero)
+    {
+        throw NugetErrorNative.BuildException(error);
+    }
+    return new Temperament((global::TestLibrary.Clinic.Mood)nativeResult);
+}
+```
+
+The `ObjectHandle` underlying (`ChartRef`, wrapping `Patient`) passes and returns the wrapped
+object's own handle, and the getter/return path reconstructs a new `Patient` around it:
+
+```C#
+public readonly record struct ChartRef(Patient Patient)
+{
+    // ...
+}
+
+[DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "patient_get_chartRef")]
+private static extern IntPtr Native_Get_chartRef(IntPtr handle, out IntPtr error);
+
+public ChartRef ChartRef
+{
+    get
+    {
+        IntPtr nativeResult = Native_Get_chartRef(_handle, out IntPtr error);
+        if (error != IntPtr.Zero)
+        {
+            throw NugetErrorNative.BuildException(error);
+        }
+        return new ChartRef(new Patient(nativeResult));
+    }
+    set
+    {
+        Native_Set_chartRef(_handle, value.Patient._handle, out IntPtr error);
+        if (error != IntPtr.Zero)
+        {
+            throw NugetErrorNative.BuildException(error);
+        }
+    }
+}
+
+[DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "patient_reassign")]
+private static extern IntPtr Native_Reassign(IntPtr handle, IntPtr referral, out IntPtr error);
+
+public string Reassign(ChartRef referral)
+{
+    IntPtr nativeResult = Native_Reassign(_handle, referral.Patient._handle, out IntPtr error);
+    if (error != IntPtr.Zero)
+    {
+        throw NugetErrorNative.BuildException(error);
+    }
+    return Marshal.PtrToStringUTF8(nativeResult)!;
+}
+```
+
+`Nullable(ValueClass(ObjectHandle))` (`Patient.backupReferral: ChartRef?`) rides the same null
+pointer as `ChartId?` above, since an `ObjectHandle` underlying is already pointer-shaped on the
+wire:
+
+```C#
+public ChartRef? BackupReferral
+{
+    get
+    {
+        IntPtr nativeResult = Native_Get_backupReferral(_handle, out IntPtr error);
+        if (error != IntPtr.Zero)
+        {
+            throw NugetErrorNative.BuildException(error);
+        }
+        return nativeResult == IntPtr.Zero ? null : new ChartRef(new Patient(nativeResult));
+    }
+    set
+    {
+        Native_Set_backupReferral(_handle, value?.Patient._handle ?? IntPtr.Zero, out IntPtr error);
+        if (error != IntPtr.Zero)
+        {
+            throw NugetErrorNative.BuildException(error);
+        }
+    }
+}
+```
+
+`Nullable(ValueClass)` over a `Primitive`- or `Enum`-underlying value class stays out of scope: see
+Limitations below.
+
+### Using it from C#
+
+From `IntegrationTests/ValueClassUnderlyingTests.cs`:
+
+```C#
+[Fact]
+public void Clinic_Prescribe_PrimitiveUnderlyingValueClass_ParamAndReturnRoundTripTheDoubledAmount()
+{
+    Dosage doubled = Clinic.Prescribe(new Dosage(2.5));
+
+    Assert.Equal(5.0, doubled.Milligrams);
+}
+
+[Fact]
+public void Patient_Soothe_EnumUnderlyingValueClass_ParamAndReturnSurviveTheOrdinalWireBothDirections()
+{
+    using var oreo = new Patient("Oreo");
+
+    // Anxious (1) in, Calm (0) out: a different Mood on each side of the call, not a
+    // same-value echo that would pass even if the ordinal never actually crossed the wire.
+    Temperament soothed = oreo.Soothe(new Temperament(Mood.Anxious));
+    Assert.Equal(Mood.Calm, soothed.Mood);
+}
+
+[Fact]
+public void Patient_Reassign_ObjectHandleUnderlyingValueClass_ParameterRoundTripsTheUnwrappedChartRef()
+{
+    using var oreo = new Patient("Oreo");
+    using var mylo = new Patient("Mylo");
+
+    Assert.Equal("Oreo reassigned to Mylo", oreo.Reassign(new ChartRef(mylo)));
+}
+
+[Fact]
+public void Patient_BackupReferral_NullableObjectHandleUnderlyingValueClass_RoundTripsAValueThenBackToNull()
+{
+    using var oreo = new Patient("Oreo");
+    using var mylo = new Patient("Mylo");
+
+    oreo.BackupReferral = new ChartRef(mylo);
+
+    Assert.Equal("Mylo", oreo.BackupReferral!.Value.Patient.Name);
+
+    oreo.BackupReferral = null;
+
+    Assert.Null(oreo.BackupReferral);
+}
+```
+
+<note>
+    <p>
+        Declaring an enum-underlying value class used to crash <code>packNuget</code> outright
+        (three separate classifiers disagreed on whether the underlying was a reference type). That
+        is fixed; an enum-underlying value class now packs as an ordinary <code>readonly record
+        struct</code> wrapping the enum.
+    </p>
+</note>
+
 ## Limitations
 
-- A value class at an ordinary position (rather than as the value class's own receiver) is currently
-  scoped to a **`String` underlying type only**: an ordinary method return, an ordinary parameter, a
-  `val`/`var` property, and now `Nullable(ValueClass(String))` at all three of those positions.
-  `Primitive`-, `Enum`- and object-underlying value classes at an ordinary position are not yet
-  planned and keep a named `VALUE_CLASS` skip. See
+- `Nullable(ValueClass)` over a `Primitive`- or `Enum`-underlying value class is deferred, not
+  merely unplanned: the primitive/enum wire has no in-band way to carry `null`, so that combination
+  needs a has-value pair that does not exist yet, unlike `String`/`ObjectHandle` underlyings, which
+  already ride a null pointer. It keeps a named `VALUE_CLASS` skip. See
   [ADR-077](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/077-value-classes-at-ordinary-positions.md)
   and [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md).
-- `Nullable(ValueClass)` over a `Primitive`- or `Enum`-underlying value class is deferred, not merely
-  unplanned: the primitive/enum wire has no in-band way to carry `null`, so that combination needs a
-  has-value pair that does not exist yet. `ObjectHandle`-underlying already rides a null pointer, so
-  its nullable combination is expected to land alongside the non-`String`-underlying work
-  (sub-item 4). Only the `String` underlying above, which also rides a nullable pointer, is in scope
-  today.
 - A value class as a collection element (`List<ChartId>`, `Map<String, ChartId>`) has no boxing
   story on the C# write side and is skipped; see [Collections](collections.md).
 - Reference-underlying value-class **primary** constructor `init` validation stays deferred

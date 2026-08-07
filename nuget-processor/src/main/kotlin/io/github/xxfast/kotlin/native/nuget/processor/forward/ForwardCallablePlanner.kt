@@ -698,12 +698,14 @@ internal class ForwardCallablePlanner(
     )
     val helpers: Set<ForwardHelperRequirement> = buildSet {
       add(ForwardHelperRequirement.STABLE_REF)
-      // ADR-077 sub-item 1: same value-class input helper as `planOrSkip`, so a top-level
+      // ADR-077: same value-class input helper as `planOrSkip`, so a top-level
       // `fun f(id: ChartId): Int?` on this two-call route validates too.
-      if (parameters.any { (_, type) -> type.unwrapNullable() is BridgeType.ValueClass }) {
-        add(ForwardHelperRequirement.VALUE_CLASS)
-        add(ForwardHelperRequirement.UTF8)
-      }
+      parameters.mapNotNull { (_, type) -> (type.unwrapNullable() as? BridgeType.ValueClass)?.underlying }
+        .forEach { underlying ->
+          add(ForwardHelperRequirement.VALUE_CLASS)
+          if (underlying == BridgeType.String) add(ForwardHelperRequirement.UTF8)
+          if (underlying is BridgeType.Enum) add(ForwardHelperRequirement.ENUM_ORDINAL)
+        }
       if (parameters.any { (_, type) -> type.unwrapNullable() == BridgeType.String }) {
         add(ForwardHelperRequirement.UTF8)
       }
@@ -868,13 +870,15 @@ internal class ForwardCallablePlanner(
       add(ForwardHelperRequirement.STABLE_REF)
       if (origin == ForwardCallableOrigin.VALUE_CLASS) add(ForwardHelperRequirement.VALUE_CLASS)
       addAll(resultShape.helperRequirements)
-      // ADR-077 sub-item 1: a value-class *input* also needs the helper, otherwise the validator's
+      // ADR-077: a value-class *input* also needs the helper, otherwise the validator's
       // `requiredConversion.helper() in helperRequirements` check rejects its BOX_VALUE_CLASS
-      // transfer. Its String underlying carries the UTF-8 helper in as well.
-      if (inputTypes.any { type -> type.unwrapNullable() is BridgeType.ValueClass }) {
-        add(ForwardHelperRequirement.VALUE_CLASS)
-        add(ForwardHelperRequirement.UTF8)
-      }
+      // transfer. The underlying carries its own helper in (UTF-8 / enum ordinal per kind).
+      inputTypes.mapNotNull { type -> (type.unwrapNullable() as? BridgeType.ValueClass)?.underlying }
+        .forEach { underlying ->
+          add(ForwardHelperRequirement.VALUE_CLASS)
+          if (underlying == BridgeType.String) add(ForwardHelperRequirement.UTF8)
+          if (underlying is BridgeType.Enum) add(ForwardHelperRequirement.ENUM_ORDINAL)
+        }
       if (inputTypes.any { type -> type.unwrapNullable() == BridgeType.String }) {
         add(ForwardHelperRequirement.UTF8)
       }
@@ -988,14 +992,15 @@ internal class ForwardCallablePlanner(
       )
     )
 
-    // ADR-077 sub-item 1: one native parameter carrying the underlying's wire value (String only
-    // in this commit). The transfer keeps the *value class* as its type and tags BOX_VALUE_CLASS,
-    // which is what `ForwardCallablePlanValidator.requiredConversion` demands; the underlying's own
-    // step (UTF-8 here) composes inside the emitted expression rather than stacking a conversion.
+    // ADR-077: one native parameter carrying the underlying's wire value (String/primitive
+    // directly, enum as its int ordinal, ObjectHandle as a StableRef pointer). The transfer keeps
+    // the *value class* as its type and tags BOX_VALUE_CLASS, which is what
+    // `ForwardCallablePlanValidator.requiredConversion` demands; the underlying's own step
+    // composes inside the emitted expression rather than stacking a conversion.
     is BridgeType.ValueClass -> listOf(
       ForwardAbiParameter(
         name = name,
-        wireType = type.underlying.wireType(),
+        wireType = type.underlying.underlyingWireType(),
         direction = ForwardAbiDirection.IN,
         transfer = ForwardTransfer(
           name, type, ForwardFlow.INTO_KOTLIN, ForwardPassing.VALUE,
@@ -1060,12 +1065,13 @@ internal class ForwardCallablePlanner(
         )
       )
 
-      // ADR-077 sub-item 3: one STRING-wire parameter like the non-null value-class input above;
-      // the transfer records the *nullable* type so both emitters lower with null propagation.
+      // ADR-077 sub-items 3/4: one pointer-shaped parameter like the non-null value-class input
+      // above (STRING wire for a String underlying, POINTER for an ObjectHandle one); the
+      // transfer records the *nullable* type so both emitters lower with null propagation.
       is BridgeType.ValueClass -> listOf(
         ForwardAbiParameter(
           name = name,
-          wireType = ForwardAbiWireType.STRING,
+          wireType = inner.underlying.underlyingWireType(),
           direction = ForwardAbiDirection.IN,
           transfer = ForwardTransfer(
             name, type, ForwardFlow.INTO_KOTLIN, ForwardPassing.VALUE,
@@ -1223,12 +1229,12 @@ internal class ForwardCallablePlanner(
     )
 
     is BridgeType.ObjectHandle, is BridgeType.Interface -> handleResultShape(BridgeType.Nullable(type))
-    // ADR-077 sub-item 3: reuses the nullable-String shape above verbatim (null rides the null
-    // pointer; a value class's underlying String is non-nullable by construction, so there is no
-    // third state), with only the transfer's type and conversion tag changed. String underlying
-    // only; the nullable x non-String-underlying combination stays deferred.
-    is BridgeType.ValueClass -> if (type.underlying == BridgeType.String) {
-      ForwardResultShape(
+    // ADR-077 sub-items 3/4: reuses the corresponding nullable pointer shape verbatim (null rides
+    // the null pointer; a value class's underlying is non-nullable by construction, so there is
+    // no third state), with only the transfer's type and conversion tag changed. Pointer-shaped
+    // underlyings only (String, ObjectHandle); nullable x primitive/enum stays deferred.
+    is BridgeType.ValueClass -> when (type.underlying) {
+      BridgeType.String -> ForwardResultShape(
         wireType = ForwardAbiWireType.POINTER,
         transfer = ForwardTransfer(
           subject = "result",
@@ -1240,8 +1246,15 @@ internal class ForwardCallablePlanner(
         ),
         helperRequirements = setOf(ForwardHelperRequirement.UTF8, ForwardHelperRequirement.VALUE_CLASS),
       )
-    } else {
-      null
+
+      is BridgeType.ObjectHandle -> handleResultShape(BridgeType.Nullable(type)).let { shape ->
+        shape.copy(
+          transfer = shape.transfer.copy(conversion = ForwardConversion.UNBOX_VALUE_CLASS),
+          helperRequirements = shape.helperRequirements + ForwardHelperRequirement.VALUE_CLASS,
+        )
+      }
+
+      else -> null
     }
 
     is BridgeType.Primitive -> {
@@ -1334,7 +1347,11 @@ internal class ForwardCallablePlanner(
    * .requiredConversion] demands for a `BridgeType.ValueClass` result.
    */
   private fun valueClassResultShape(type: BridgeType.ValueClass): ForwardResultShape? {
-    if (type.underlying != BridgeType.String) return null
+    // ADR-077 sub-item 4: the underlying's own shape verbatim (wire, ownership, cleanup: an
+    // ObjectHandle underlying keeps OWNED_HANDLE + DISPOSE_STABLE_REF from handleResultShape),
+    // with only the transfer re-typed to the value class and re-tagged UNBOX_VALUE_CLASS. The
+    // underlying's own step (ordinal, StableRef, UTF-8) composes inside the emitted expressions.
+    if (!type.underlying.isOrdinaryValueClassUnderlying()) return null
     val underlyingShape: ForwardResultShape = type.underlying.shapeOrNull() ?: return null
     return underlyingShape.copy(
       transfer = underlyingShape.transfer.copy(
@@ -1345,6 +1362,14 @@ internal class ForwardCallablePlanner(
           ForwardHelperRequirement.VALUE_CLASS,
     )
   }
+
+  /**
+   * ADR-077 sub-item 4: the underlyings a value class may carry across an ordinary position.
+   * Everything else (nested value classes, collections, nullables) keeps the VALUE_CLASS skip.
+   */
+  private fun BridgeType.isOrdinaryValueClassUnderlying(): Boolean =
+    this == BridgeType.String || this is BridgeType.Primitive ||
+        this is BridgeType.Enum || this is BridgeType.ObjectHandle
 
   private data class ForwardResultShape(
     val wireType: ForwardAbiWireType,
@@ -1474,11 +1499,10 @@ internal class ForwardCallablePlanner(
     // UNEXPORTED_DEPENDENCY_TYPE) when known.
     is BridgeType.Collection -> collectionInputSkipReason()
 
-    // ADR-077 sub-item 1: a value class crosses as its underlying wire value, so an ordinary
-    // parameter is plannable exactly when that underlying is. Only the String underlying lands in
-    // this commit (sub-item 4 widens it to primitive/enum/ObjectHandle underlyings).
+    // ADR-077: a value class crosses as its underlying wire value, so an ordinary parameter is
+    // plannable exactly when that underlying is (String/primitive/enum/ObjectHandle, sub-item 4).
     is BridgeType.ValueClass ->
-      if (underlying == BridgeType.String) null else ForwardPlanSkipReason.VALUE_CLASS
+      if (underlying.isOrdinaryValueClassUnderlying()) null else ForwardPlanSkipReason.VALUE_CLASS
 
     // ADR-075: a nullable collection input (e.g. a data class's `notes: List<String>?` primary
     // constructor parameter, mirroring `Visit.notes` as a *property*) shares exactly the same
@@ -1490,10 +1514,15 @@ internal class ForwardCallablePlanner(
       BridgeType.Instant -> null
 
       is BridgeType.Collection -> inner.collectionInputSkipReason()
-      // ADR-077 sub-item 3: null rides the null pointer on the same string wire as the non-null
-      // parameter (sub-item 1). String underlying only.
+      // ADR-077 sub-items 3/4: null rides the null pointer, so only pointer-wired underlyings
+      // (String, ObjectHandle) are admissible; a primitive/enum wire has no in-band null and its
+      // nullable spelling stays deferred with the named skip.
       is BridgeType.ValueClass ->
-        if (inner.underlying == BridgeType.String) null else ForwardPlanSkipReason.VALUE_CLASS
+        if (inner.underlying == BridgeType.String || inner.underlying is BridgeType.ObjectHandle) {
+          null
+        } else {
+          ForwardPlanSkipReason.VALUE_CLASS
+        }
 
       else -> ForwardPlanSkipReason.NULLABLE
     }
@@ -1553,6 +1582,18 @@ internal class ForwardCallablePlanner(
   }
 
   private fun BridgeType.unwrapNullable(): BridgeType = if (this is BridgeType.Nullable) type else this
+
+  /**
+   * ADR-077 sub-item 4: the wire a value-class *underlying* rides. Unlike [wireType], which
+   * rejects Enum/ObjectHandle at a declared position (they have their own transfer machinery
+   * there), an underlying crosses as its ordinal / StableRef pointer inside a single-slot
+   * value-class transfer.
+   */
+  private fun BridgeType.underlyingWireType(): ForwardAbiWireType = when (this) {
+    is BridgeType.Enum -> ForwardAbiWireType.INT32
+    is BridgeType.ObjectHandle -> ForwardAbiWireType.POINTER
+    else -> wireType()
+  }
 
   private fun String.csharpIdentifier(): String = if (this in CSHARP_KEYWORDS) "@$this" else this
 

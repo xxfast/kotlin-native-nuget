@@ -196,10 +196,14 @@ internal class ForwardPropertyPlanner(
       helperRequirements = when (type.unwrapNullable()) {
         is BridgeType.Collection -> setOf(ForwardHelperRequirement.COLLECTION)
         BridgeType.Instant -> setOf(ForwardHelperRequirement.INSTANT)
-        // ADR-077 sub-item 2: same pairing as the callable side (the value-class step plus its
-        // String underlying's UTF-8 crossing).
-        is BridgeType.ValueClass ->
-          setOf(ForwardHelperRequirement.VALUE_CLASS, ForwardHelperRequirement.UTF8)
+        // ADR-077: same pairing as the callable side (the value-class step plus the underlying's
+        // own helper, keyed per kind in sub-item 4).
+        is BridgeType.ValueClass -> buildSet {
+          add(ForwardHelperRequirement.VALUE_CLASS)
+          val underlying: BridgeType = (type.unwrapNullable() as BridgeType.ValueClass).underlying
+          if (underlying == BridgeType.String) add(ForwardHelperRequirement.UTF8)
+          if (underlying is BridgeType.Enum) add(ForwardHelperRequirement.ENUM_ORDINAL)
+        }
 
         else -> emptySet()
       },
@@ -346,11 +350,25 @@ internal class ForwardPropertyPlanner(
     is BridgeType.Primitive, is BridgeType.Enum, is BridgeType.ObjectHandle,
     is BridgeType.Interface, is BridgeType.Collection -> true
 
-    // ADR-077 sub-item 2: a String-underlying value-class property plans; other underlyings are
-    // sub-item 4 and stay unplannable.
-    is BridgeType.ValueClass -> type.underlying == BridgeType.String
+    // ADR-077 sub-items 2/4: a value-class property plans when its underlying does
+    // (String/primitive/enum/ObjectHandle).
+    is BridgeType.ValueClass -> type.underlying == BridgeType.String ||
+        type.underlying is BridgeType.Primitive ||
+        type.underlying is BridgeType.Enum ||
+        type.underlying is BridgeType.ObjectHandle
 
-    is BridgeType.Nullable -> isPlannable(type.type)
+    // ADR-077 sub-item 4: a *nullable* value-class property needs a pointer-shaped underlying
+    // (String, ObjectHandle) to carry null in-band; the primitive/enum-underlying nullable
+    // spelling stays deferred, so it must not ride the plain recursion.
+    is BridgeType.Nullable -> {
+      val inner: BridgeType = type.type
+      if (inner is BridgeType.ValueClass) {
+        inner.underlying == BridgeType.String || inner.underlying is BridgeType.ObjectHandle
+      } else {
+        isPlannable(inner)
+      }
+    }
+
     else -> false
   }
 
