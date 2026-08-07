@@ -87,6 +87,11 @@ data class CirValueClassConstructor(
   // primary (catid_create / Native_Create); "_2", "_3", … for secondaries. See
   // ADR-035 (aligns value classes with ADR-034's regular-class scheme).
   val nativeSuffix: String = "",
+  // ADR-077: wire-typed DllImport parameters and lowered call arguments when the public and
+  // native shapes differ (an enum parameter is `Mood` publicly but `int` on the wire, called as
+  // `(int)mood`). Null means the public shape is already the wire shape, the pre-existing routes.
+  val nativeParameters: List<CirParameter>? = null,
+  val nativeArguments: List<String>? = null,
 )
 
 data class CirEnum(

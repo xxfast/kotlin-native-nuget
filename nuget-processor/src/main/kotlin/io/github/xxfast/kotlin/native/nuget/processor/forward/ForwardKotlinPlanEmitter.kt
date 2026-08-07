@@ -140,19 +140,48 @@ private fun addValueClassOrdinaryResult(
   nativeResult: ForwardAbiWireType,
   errorName: String,
 ) {
-  require(type.underlying == BridgeType.String) {
-    "Forward Kotlin plan emitter only supports a String-underlying value class at an ordinary " +
-        "result position: $type"
+  val unboxed = "$invocation.${type.underlyingPropertyName}"
+  when (val underlying: BridgeType = type.underlying) {
+    BridgeType.String -> {
+      require(nativeResult == ForwardAbiWireType.POINTER) {
+        "Forward Kotlin value-class String result must use POINTER wire type: $type"
+      }
+      builder.returns(kotlinType("String"))
+      builder.addCode(
+        errorHandlingValueBody(unboxed, errorName, "\"\""),
+        cOpaquePointerVar,
+        stableRef,
+      )
+    }
+
+    // ADR-077 sub-item 4: the underlying's own result emission with the unboxing composed in.
+    is BridgeType.Primitive -> {
+      builder.returns(kotlinResultType(nativeResult))
+      builder.addCode(
+        errorHandlingValueBody(unboxed, errorName, defaultResult(underlying)),
+        cOpaquePointerVar,
+        stableRef,
+      )
+    }
+
+    is BridgeType.Enum -> {
+      builder.returns(kotlinType("Int"))
+      builder.addCode(
+        errorHandlingValueBody("$unboxed.ordinal", errorName, "0"),
+        cOpaquePointerVar,
+        stableRef,
+      )
+    }
+
+    is BridgeType.ObjectHandle -> {
+      builder.returns(cOpaquePointer.copy(nullable = true))
+      builder.addCode(handleResultBody(unboxed, errorName), stableRef, cOpaquePointerVar, stableRef)
+    }
+
+    else -> error(
+      "Forward Kotlin plan emitter has no ordinary value-class result for underlying $underlying",
+    )
   }
-  require(nativeResult == ForwardAbiWireType.POINTER) {
-    "Forward Kotlin value-class String result must use POINTER wire type: $type"
-  }
-  builder.returns(kotlinType("String"))
-  builder.addCode(
-    errorHandlingValueBody("$invocation.${type.underlyingPropertyName}", errorName, "\"\""),
-    cOpaquePointerVar,
-    stableRef,
-  )
 }
 
 /**
@@ -463,6 +492,31 @@ private fun addNullableResult(
       builder.addCode(errorHandlingValueBody(invocation, errorName, "null"), cOpaquePointerVar, stableRef)
     }
 
+    // ADR-077 sub-items 3/4: safe-call unboxing; a Kotlin null ships the null pointer, either as
+    // a null String pointer or as a null StableRef pointer for an ObjectHandle underlying.
+    is BridgeType.ValueClass -> {
+      require(call.result == ForwardAbiWireType.POINTER) {
+        "Forward Kotlin nullable value-class result must use POINTER"
+      }
+      val unboxed = "$invocation?.${type.underlyingPropertyName}"
+      if (type.underlying is BridgeType.ObjectHandle) {
+        builder.returns(cOpaquePointer.copy(nullable = true))
+        builder.addCode(
+          nullableHandleResultBody(unboxed, errorName),
+          stableRef,
+          cOpaquePointerVar,
+          stableRef,
+        )
+      } else {
+        builder.returns(kotlinType("String").copy(nullable = true))
+        builder.addCode(
+          errorHandlingValueBody(unboxed, errorName, "null"),
+          cOpaquePointerVar,
+          stableRef,
+        )
+      }
+    }
+
     is BridgeType.Primitive -> {
       require(call.result == ForwardAbiWireType.BOOLEAN) {
         "Forward Kotlin nullable primitive result must use BOOLEAN"
@@ -586,10 +640,17 @@ private fun kotlinInputType(type: BridgeType, wireType: ForwardAbiWireType): Typ
 
   BridgeType.String -> kotlinType("String")
   is BridgeType.ObjectHandle, is BridgeType.Interface, is BridgeType.Collection -> cOpaquePointer
+  // ADR-077 sub-item 1: a value class crosses as its underlying wire value, so the export's
+  // parameter is typed as the underlying (String today) and `loweredArgument` re-wraps it.
+  is BridgeType.ValueClass -> kotlinInputType(type.underlying, wireType)
   is BridgeType.Nullable -> when (val inner = type.type) {
     BridgeType.String -> kotlinType("String").copy(nullable = true)
     is BridgeType.ObjectHandle, is BridgeType.Interface, is BridgeType.Collection ->
       cOpaquePointer.copy(nullable = true)
+
+    // ADR-077 sub-item 3: the underlying (String today) with the outer nullability re-applied.
+    is BridgeType.ValueClass ->
+      kotlinInputType(inner.underlying, wireType).copy(nullable = true)
 
     else -> error("Forward Kotlin plan emitter has no input type for nullable $inner")
   }
@@ -729,6 +790,11 @@ private fun loweredArgument(parameter: ForwardPublicParameter): String =
 
     is BridgeType.Collection -> loweredCollectionExpression(parameter.name, type)
 
+    // ADR-077: re-wrap the underlying wire value (re-running the value class's own `init`), with
+    // the underlying's own lowering composed inside the constructor call (sub-item 4).
+    is BridgeType.ValueClass ->
+      "${type.qualifiedName}(${valueClassUnderlyingLowering(parameter.name, type.underlying)})"
+
     is BridgeType.Nullable -> when (val inner: BridgeType = type.type) {
       BridgeType.String -> parameter.name
       is BridgeType.ObjectHandle ->
@@ -752,10 +818,29 @@ private fun loweredArgument(parameter: ForwardPublicParameter): String =
       is BridgeType.Collection ->
         loweredCollectionExpression(parameter.name, inner, nullable = true)
 
+      // ADR-077 sub-items 3/4: `?.let` re-wraps only a non-null wire value, so a C# null arrives
+      // as a genuine Kotlin null rather than a value class wrapping a default.
+      is BridgeType.ValueClass -> {
+        val lowered: String = valueClassUnderlyingLowering("it", inner.underlying)
+        "${parameter.name}?.let { ${inner.qualifiedName}($lowered) }"
+      }
+
       else -> error("Forward Kotlin plan emitter has no argument lowering for nullable $inner")
     }
 
     else -> error("Forward Kotlin plan emitter has no argument lowering for $type")
+  }
+
+/**
+ * ADR-077 sub-item 4: the wire-to-underlying step composed inside a value-class re-wrap. Shared by
+ * [loweredArgument] and [ForwardPropertyKotlinEmitter]'s setter lowering: the wire carries the
+ * *underlying's* representation (int ordinal, StableRef pointer), never the value class itself.
+ */
+internal fun valueClassUnderlyingLowering(name: String, underlying: BridgeType): String =
+  when (underlying) {
+    is BridgeType.Enum -> "${underlying.qualifiedName}.entries[$name]"
+    is BridgeType.ObjectHandle -> "$name.asStableRef<${underlying.qualifiedName}>().get()"
+    else -> name
   }
 
 /**

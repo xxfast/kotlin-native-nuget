@@ -1,7 +1,9 @@
 package io.github.xxfast.kotlin.native.nuget.processor.exports
 
 import com.google.devtools.ksp.getVisibility
+import com.google.devtools.ksp.symbol.ClassKind
 import com.google.devtools.ksp.symbol.KSClassDeclaration
+import com.google.devtools.ksp.symbol.KSDeclaration
 import com.google.devtools.ksp.symbol.KSFunctionDeclaration
 import com.google.devtools.ksp.symbol.KSType
 import com.google.devtools.ksp.symbol.KSValueParameter
@@ -35,9 +37,16 @@ internal fun FileSpec.Builder.addValueClassExports(
 
   val underlyingProp: KSValueParameter = cls.primaryConstructor!!.parameters.first()
   val underlyingPropName: String = underlyingProp.name?.asString() ?: return
-  val underlyingType: String =
-    underlyingProp.type.resolve().expandAliases().declaration.qualifiedName?.asString() ?: return
-  val isReferenceUnderlying: Boolean = underlyingType !in PRIMITIVE_TYPES
+  val underlyingDeclaration: KSDeclaration =
+    underlyingProp.type.resolve().expandAliases().declaration
+  val underlyingType: String = underlyingDeclaration.qualifiedName?.asString() ?: return
+  // ADR-077 sub-item 4 prerequisite: an enum underlying crosses as its int ordinal, so it is a
+  // value underlying. The qualified-name set cannot see that; misclassifying it as reference
+  // deferred the primary constructor here while the planner still planned `_create`, leaving the
+  // Kotlin half of that export missing (the contract check's crash).
+  val isEnumUnderlying: Boolean =
+    (underlyingDeclaration as? KSClassDeclaration)?.classKind == ClassKind.ENUM_CLASS
+  val isReferenceUnderlying: Boolean = !isEnumUnderlying && underlyingType !in PRIMITIVE_TYPES
 
   val secondaryConstructors: List<KSFunctionDeclaration> = cls.declarations
     .filterIsInstance<KSFunctionDeclaration>()

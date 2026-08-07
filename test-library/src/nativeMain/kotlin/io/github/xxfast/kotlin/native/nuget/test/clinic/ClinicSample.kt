@@ -53,6 +53,15 @@ object Clinic {
    * on the shared callable plan, unlike a `String` result — see [Patient.rename]'s cell 8 note).
    */
   fun setCapacity(value: Int?): Int = value ?: 0
+
+  /**
+   * ADR-077 sub-item 4 · primitive-underlying value class, param + return in one call. Mirrors
+   * the ADR's own consumer-API sketch (`clinic.Prescribe(new Dosage(2.5))`). The wire carries
+   * [Dosage]'s underlying `Double` directly (the primitive's own wire); Kotlin reconstructs the
+   * result with `Dosage(v)`, C# unwraps the argument with `dosage.Milligrams` and rebuilds the
+   * result with `new Dosage(nativeResult)`.
+   */
+  fun prescribe(dosage: Dosage): Dosage = Dosage(dosage.milligrams * 2)
 }
 
 /**
@@ -71,6 +80,97 @@ class Patient(val name: String) {
    * public C# surface is `char Grade`.
    */
   val grade: Char = 'A'
+
+  /**
+   * ADR-077 sub-item 2 · mutable property position. String-underlying value class as a `var`
+   * property: the getter unboxes to the underlying `String` on the wire and C# reconstructs the
+   * record struct; the setter passes `value.Value` and Kotlin re-wraps with `ChartId(raw)`.
+   * [chartStatus] observes it Kotlin-side. Plans via `isPlannable`'s `ValueClass` branch.
+   * Non-null on purpose: `ChartId?` is sub-item 3.
+   */
+  var currentChart: ChartId = ChartId("CH-0")
+
+  /**
+   * ADR-077 sub-item 2 · the Kotlin-side observation for [currentChart]'s setter. Calls
+   * `isValid()` on the stored value, so a C# write must have arrived as a genuinely re-wrapped
+   * [ChartId] for either branch to make sense. Plain `String` return: already supported, so this
+   * method binds independently of the property.
+   */
+  fun chartStatus(): String =
+    if (currentChart.isValid()) "$name charted at ${currentChart.value}" else "$name uncharted"
+
+  /**
+   * ADR-077 sub-item 3 · nullable property (`var`) position. `ChartId?` rides the null pointer
+   * already used by the nullable-String/ObjectHandle property shapes: no has-value pair, because
+   * the underlying `String` is non-nullable by construction. [hasBackup] and [previousChart]
+   * observe it Kotlin-side, so a C# write only reads back correctly if it arrived as a genuine
+   * `null` or a genuinely re-wrapped [ChartId]. Plans once the sub-item-2 `isPlannable` guard on
+   * `Nullable(ValueClass)` is removed.
+   */
+  var backupChart: ChartId? = null
+
+  /** ADR-077 sub-item 3 · the Kotlin-side observation for [backupChart]'s setter. */
+  fun hasBackup(): Boolean = backupChart != null
+
+  /**
+   * ADR-077 sub-item 3 · nullable return position. Returns [backupChart] itself, so this method
+   * and the property getter share one piece of state: `null` before any C# write, the re-wrapped
+   * [ChartId] after.
+   */
+  fun previousChart(): ChartId? = backupChart
+
+  /**
+   * ADR-077 sub-item 4 · primitive-underlying value class, property position. The getter/setter
+   * wire is [Dosage]'s underlying `Double` directly, same shape as an ordinary `Double` property;
+   * only the box/unbox at the boundary is new.
+   */
+  var dosage: Dosage = Dosage(1.0)
+
+  /**
+   * ADR-077 sub-item 4 · enum-underlying value class, property position. The wire is [Mood]'s
+   * int ordinal; Kotlin unboxes with `.mood.ordinal` and re-wraps with
+   * `Temperament(Mood.entries[value])`, C# reconstructs `new Temperament((Mood)raw)` and passes
+   * `(int)value.Mood`.
+   */
+  var temperament: Temperament = Temperament(Mood.CALM)
+
+  /**
+   * ADR-077 sub-item 4 · enum-underlying value class, param + return in one call (the
+   * [Clinic.prescribe] shape on the enum underlying). Branches on the wrapped [Mood], so the
+   * parameter must arrive as a genuinely re-wrapped [Temperament].
+   */
+  fun soothe(current: Temperament): Temperament =
+    if (current.mood == Mood.ANXIOUS) Temperament(Mood.CALM) else current
+
+  /**
+   * ADR-077 sub-item 4 · ObjectHandle-underlying value class, property position. [ChartRef]
+   * wraps a `Patient`, so this patient owns a self-referential chart reference; nothing about
+   * that is special to the bridge, it just keeps the fixture to one type. The wire is a
+   * StableRef pointer, same as an ordinary object-handle property.
+   */
+  var chartRef: ChartRef = ChartRef(this)
+
+  /**
+   * ADR-077 sub-item 4 · ObjectHandle-underlying value class, parameter position. Returns
+   * `String` (already supported), so only the parameter facet is new here; [ownReferral] below
+   * is the matching return-position cell.
+   */
+  fun reassign(referral: ChartRef): String = "$name reassigned to ${referral.patient.name}"
+
+  /**
+   * ADR-077 sub-item 4 · ObjectHandle-underlying value class, return position. Pairs with
+   * [reassign] above so param and return are each exercised by a distinct method, not folded
+   * into one call the way [prescribe] and [soothe] are.
+   */
+  fun ownReferral(): ChartRef = ChartRef(this)
+
+  /**
+   * ADR-077 sub-item 4 · `Nullable(ValueClass(ObjectHandle))`, the one deferred-until-now cell:
+   * rides the null pointer exactly like sub-item 3's `ChartId?`, since an ObjectHandle underlying
+   * is already pointer-shaped on the wire. Primitive/enum-underlying nullables stay deferred (the
+   * wire has no in-band null for those).
+   */
+  var backupReferral: ChartRef? = null
 
   /** Control · LANDS NOW: a non-null String method return works. */
   fun describe(): String = "$name, $weight kg"
@@ -139,6 +239,23 @@ class Patient(val name: String) {
   /** MIGRATION.md Phase 8. Class method × enum return (ordinal over INT32). */
   fun mood(): Mood = Mood.CALM
 
+  /**
+   * ADR-077 sub-item 1 · class-method position. String-underlying value class as an ordinary
+   * *parameter*: the wire carries the underlying `String` and Kotlin re-wraps it with
+   * `ChartId(raw)`. Calls a [ChartId] member on purpose, so a raw string smuggled through as the
+   * parameter would not compile on the Kotlin side. `inputSkipReason()`'s `ValueClass` branch
+   * admits the String underlying, so this method plans and both halves bind.
+   */
+  fun retag(id: ChartId): String = if (id.isValid()) "$name@${id.value}" else "$name@untagged"
+
+  /**
+   * ADR-077 sub-item 3 · nullable parameter position. Mirrors [retag]'s non-null parameter but
+   * proves Kotlin sees `null` as `null` on the wire, not a [ChartId] wrapping an empty string:
+   * only the null branch is reachable without a real re-wrapped value ever having crossed.
+   */
+  fun transferTo(to: ChartId?): String =
+    if (to != null) "$name transferred to ${to.value}" else "$name has no transfer"
+
   /** MIGRATION.md Phase 8. Class method × Map return. */
   fun scores(): Map<String, Int> = mapOf("weight" to (weight ?: 0))
 
@@ -206,6 +323,24 @@ value class ChartRef(val patient: Patient) {
 }
 
 /**
+ * ADR-077 sub-item 4 · primitive-underlying value class at ordinary positions ([Clinic.prescribe]
+ * param + return, [Patient.dosage] property). Milligrams rather than a raw `Double` name so a
+ * consumer reading `dosage.Milligrams` in C# has a reason to be reading a [Dosage], not just a
+ * number.
+ */
+value class Dosage(val milligrams: Double)
+
+/**
+ * ADR-077 sub-item 4 · enum-underlying value class. The bare declaration used to crash
+ * `packNuget` outright on both KSP targets (`java.lang.IllegalArgumentException: Forward ABI
+ * missing C# projection for temperament_create; expected temperament_create(in int, out pointer)
+ * -> int`); it now packs as a `readonly record struct Temperament` wrapping [Mood]. Its use at
+ * ordinary positions ([Patient.temperament] property, [Patient.soothe] param + return) is the
+ * next slice and stays quarantined above.
+ */
+value class Temperament(val mood: Mood)
+
+/**
  * ADR-075 · extension-property + setter regression cell. Same eligibility predicate as an ordinary
  * property setter ([Chart.tags] in `ChartSample.kt`), but the receiver crosses the bridge by value
  * ([ChartId]'s underlying `String`, not an ObjectHandle) — nobody had combined that with a
@@ -221,6 +356,41 @@ var ChartId.symptomTags: List<String>
   set(value) {
     chartIdSymptomTags[this] = value
   }
+
+/**
+ * ADR-077 sub-item 1 · constructor position (regular class). [chart] is a plain constructor
+ * parameter, not a `val` (the property facet is [Patient.currentChart]'s and [ChartEntry.id]'s
+ * job), so this cell measures the constructor seam alone. [label] is an ordinary `String`
+ * property, which is what the C# side reads back to prove Kotlin saw a re-wrapped [ChartId].
+ */
+class Admission(chart: ChartId, val ward: String) {
+  val label: String = "${chart.value}/$ward"
+}
+
+/**
+ * ADR-077 sub-item 1 · data-class primary-constructor position, and the generated `copy()` that
+ * mirrors it. A data class primary constructor parameter *must* be `val`/`var`, so [id] is also a
+ * property: the sub-item 2 read-only getter cell (`entry.Id` in C#), asserted by
+ * `ValueClassPropertyTests`. [label] exposes the same information through an already-supported
+ * `String` return.
+ */
+data class ChartEntry(val id: ChartId, val note: String) {
+  fun label(): String = "${id.value}: $note"
+}
+
+/**
+ * ADR-077 sub-item 1 · extension-function position. Object-handle receiver ([Patient], already
+ * supported) × value-class parameter, so the only new seam is the parameter.
+ */
+fun Patient.chartLabel(id: ChartId): String = "$name reads ${id.value}"
+
+/**
+ * ADR-077 sub-item 1 · top-level-function position. Mirrors [Patient.retag] on the top-level
+ * carrier, and likewise calls a [ChartId] member so the parameter has to arrive as a real value
+ * class rather than its underlying `String`.
+ */
+fun chartSummary(id: ChartId): String =
+  if (id.isValid()) "Chart ${id.value} filed" else "Chart missing"
 
 /**
  * Cells 17/18/20: generic type arguments. `parameterizedBy` appeared zero times in the processor,

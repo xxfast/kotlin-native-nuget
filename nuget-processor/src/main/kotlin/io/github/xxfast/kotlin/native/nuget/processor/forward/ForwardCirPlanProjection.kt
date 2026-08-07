@@ -25,17 +25,25 @@ internal object ForwardCirPlanProjection {
     }
     val publicParams: List<CirParameter> = plan.publicParameters()
     val paramNames: String = publicParams.joinToString(", ") { it.name }
-    val body: String = if (underlyingIsString) {
-      "Marshal.PtrToStringUTF8(CreateChecked$nativeSuffix($paramNames))!"
-    } else {
-      "CreateChecked$nativeSuffix($paramNames)"
+    val result: BridgeType = plan.publicSignature.result
+    val body: String = when {
+      underlyingIsString -> "Marshal.PtrToStringUTF8(CreateChecked$nativeSuffix($paramNames))!"
+      // ADR-077: an enum underlying crosses as its int ordinal; cast it back to the enum for the
+      // struct member assignment.
+      result is BridgeType.Enum -> "(${result.csharpType})CreateChecked$nativeSuffix($paramNames)"
+      else -> "CreateChecked$nativeSuffix($paramNames)"
     }
+    val nativeCall: ForwardNativeCall = plan.nativeExports.single()
     return CirValueClassConstructor(
       parameters = publicParams,
-      nativeName = plan.nativeExports.single().exportName,
+      nativeName = nativeCall.exportName,
       body = body,
       hasErrorCheck = plan.errorSlot != null,
       nativeSuffix = nativeSuffix,
+      // ADR-077: the DllImport and its call site follow the plan's wire shape, so an enum
+      // parameter imports as `int` and is passed as `(int)name`, matching the Kotlin export.
+      nativeParameters = plan.nativeInCirParameters(nativeCall.parameters),
+      nativeArguments = plan.publicSignature.parameters.flatMap { plan.callArgument(it) },
     )
   }
 
@@ -444,7 +452,15 @@ internal object ForwardCirPlanProjection {
 
   private fun ForwardAbiParameter.nativeCsharpType(): String {
     val type: BridgeType = transfer.type
-    return if (type is BridgeType.Nullable && type.type == BridgeType.String) "string?" else wireType.csharpType()
+    // ADR-077 sub-items 3/4: a nullable value class with a *String* underlying rides the nullable
+    // string wire, so the DllImport parameter must be `string?` for the same CS8604 reason as a
+    // nullable String. An ObjectHandle underlying stays on the plain IntPtr wire.
+    val isNullableStringWire: Boolean = type is BridgeType.Nullable &&
+        (
+            type.type == BridgeType.String ||
+                (type.type as? BridgeType.ValueClass)?.underlying == BridgeType.String
+            )
+    return if (isNullableStringWire) "string?" else wireType.csharpType()
   }
 
   /** A parameter shape whose native ABI representation is identical to its public C# type — no
@@ -477,6 +493,21 @@ internal object ForwardCirPlanProjection {
       // `IFoo`, and throws NotSupportedException for a C#-implemented (non-Kotlin-backed) one.
       is BridgeType.Interface -> listOf("NugetMarshal.HandleOf(${parameter.name})")
       is BridgeType.Collection -> listOf("${parameter.name}Handle")
+      // ADR-077: the generated `readonly record struct` capitalizes the Kotlin underlying
+      // property (`value` -> `Value`, CirClassTranslator); the unwrapped value is lowered to its
+      // wire form per underlying (sub-item 4), and Kotlin re-wraps it on the other side.
+      is BridgeType.ValueClass -> {
+        val prop: String = type.underlyingPropertyName.replaceFirstChar { it.uppercase() }
+        val unwrapped = "${parameter.name}.$prop"
+        listOf(
+          when (type.underlying) {
+            is BridgeType.Enum -> "(int)$unwrapped"
+            is BridgeType.ObjectHandle -> "$unwrapped._handle"
+            else -> unwrapped
+          }
+        )
+      }
+
       is BridgeType.Nullable -> when (val inner = type.type) {
         BridgeType.String -> listOf(parameter.name)
         is BridgeType.ObjectHandle -> listOf("${parameter.name}?._handle ?? IntPtr.Zero")
@@ -496,6 +527,20 @@ internal object ForwardCirPlanProjection {
         // handle variable [collectionPrelude] built already folds the null check in, so the call
         // argument itself is unconditional either way.
         is BridgeType.Collection -> listOf("${parameter.name}Handle")
+        // ADR-077 sub-items 3/4: null propagation into the pointer-shaped marshalling; a C# null
+        // ships the null pointer (null string reference, or IntPtr.Zero for a handle underlying).
+        is BridgeType.ValueClass -> {
+          val prop: String = inner.underlyingPropertyName.replaceFirstChar { it.uppercase() }
+          val unwrapped = "${parameter.name}?.$prop"
+          listOf(
+            if (inner.underlying is BridgeType.ObjectHandle) {
+              "$unwrapped._handle ?? IntPtr.Zero"
+            } else {
+              unwrapped
+            }
+          )
+        }
+
         else -> error("Forward CIR plan projection has no call argument for nullable $inner")
       }
 
@@ -627,18 +672,23 @@ internal object ForwardCirPlanProjection {
       // ADR-014 (ordinary position, ADR-066's fixture gap): always a custom body, regardless of
       // `needsCustomParams` — a value class's zero-parameter own getter (`Newsroom.Code()`) would
       // otherwise fall through to the generic pass-through renderer, which has no wrap-in-struct
-      // case. Scoped to a String underlying, matching the planner's own scoping.
-      is BridgeType.ValueClass -> CirResultProjection(
-        returnType = result.csharpType,
-        nativeReturnType = "IntPtr",
-        body = checkedPointerBody(
-          nativeName,
-          callArguments,
-          "return new ${result.csharpType}(Marshal.PtrToStringUTF8(nativeResult)!);",
-          prelude,
-          cleanup,
-        ),
-      )
+      // case. ADR-077 sub-item 4 dispatches per underlying: the wire carries the underlying's
+      // representation and the reconstruction composes the underlying's own step.
+      is BridgeType.ValueClass -> {
+        val wire: String = valueClassUnderlyingWireCs(result.underlying)
+        CirResultProjection(
+          returnType = result.csharpType,
+          nativeReturnType = wire,
+          body = checkedTypedBody(
+            nativeName,
+            callArguments,
+            wire,
+            "return ${valueClassReconstructionCs(result, "nativeResult")};",
+            prelude,
+            cleanup,
+          ),
+        )
+      }
 
       // ADR-076: always a custom body, regardless of `needsCustomParams` -- same reasoning as
       // ValueClass above: a raw `long -> DateTimeOffset` C# cast is illegal, so this can never go
@@ -679,6 +729,22 @@ internal object ForwardCirPlanProjection {
           nativeReturnType = "IntPtr",
           body = checkedPointerBody(
             nativeName, callArguments, "return Marshal.PtrToStringUTF8(nativeResult);", prelude, cleanup,
+          ),
+        )
+
+        // ADR-077 sub-items 3/4: `ChartId?` is Nullable<ChartId> automatically (the record struct
+        // is a value type); reconstruct only for a non-zero pointer, the ADR-075 null-handle
+        // guard. Both admissible underlyings (String, ObjectHandle) ride an IntPtr wire.
+        is BridgeType.ValueClass -> CirResultProjection(
+          returnType = "${type.csharpType}?",
+          nativeReturnType = "IntPtr",
+          body = checkedPointerBody(
+            nativeName,
+            callArguments,
+            "return nativeResult == IntPtr.Zero ? null : " +
+                "${valueClassReconstructionCs(type, "nativeResult")};",
+            prelude,
+            cleanup,
           ),
         )
 
@@ -736,6 +802,51 @@ internal object ForwardCirPlanProjection {
       body = "",
       hasCustomBody = false,
     )
+
+  /**
+   * ADR-077 sub-item 4: the C# spelling of a value-class underlying's wire ("double", "int"
+   * ordinal, "IntPtr" for String/ObjectHandle).
+   */
+  private fun valueClassUnderlyingWireCs(underlying: BridgeType): String = when (underlying) {
+    BridgeType.String, is BridgeType.ObjectHandle -> "IntPtr"
+    is BridgeType.Enum -> "int"
+    is BridgeType.Primitive -> underlying.kind.csharpType()
+    else -> error("Forward CIR plan projection has no value-class underlying wire for $underlying")
+  }
+
+  /**
+   * ADR-077 sub-item 4: rebuild the record struct from its wire value, composing the underlying's
+   * own step (UTF-8, enum cast, handle wrapper) inside the constructor call.
+   */
+  private fun valueClassReconstructionCs(type: BridgeType.ValueClass, wireValue: String): String {
+    val inner: String = when (val underlying: BridgeType = type.underlying) {
+      BridgeType.String -> "Marshal.PtrToStringUTF8($wireValue)!"
+      is BridgeType.Enum -> "(${underlying.csharpType})$wireValue"
+      is BridgeType.ObjectHandle -> "new ${underlying.csharpType()}($wireValue)"
+      is BridgeType.Primitive -> wireValue
+      else -> error("Forward CIR plan projection has no value-class reconstruction for $underlying")
+    }
+    return "new ${type.csharpType}($inner)"
+  }
+
+  private fun checkedTypedBody(
+    nativeName: String,
+    arguments: String,
+    wireCs: String,
+    result: String,
+    prelude: List<String> = emptyList(),
+    cleanup: List<String> = emptyList(),
+  ): String = buildString {
+    appendLine()
+    prelude.forEach { line -> appendLine("            $line") }
+    appendLine("            $wireCs nativeResult = $nativeName($arguments);")
+    appendLine("            if (error != IntPtr.Zero)")
+    appendLine("            {")
+    appendLine("                throw NugetErrorNative.BuildException(error);")
+    appendLine("            }")
+    cleanup.forEach { line -> appendLine("            $line") }
+    append("            $result")
+  }
 
   private fun checkedPointerBody(
     nativeName: String,
