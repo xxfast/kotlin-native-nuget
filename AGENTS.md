@@ -22,7 +22,7 @@ Read [ROADMAP.md](ROADMAP.md) to understand the planned features and priorities 
 - Delegate to the [csharp-dev agent](.claude/agents/csharp-dev.md) for C# test development
 - Delegate to the [kotlin-dev agent](.claude/agents/kotlin-dev.md) for Kotlin implementation
 - Delegate to the [refactorer agent](.claude/agents/refactorer.md) for style cleanup and refactoring
-- Delegate to the [documenter agent](.claude/agents/documenter.md) to document a shipped feature: the Writerside pages in `docs/topics/`, ROADMAP.md, FEATURES.md, ADR status. Runs in parallel with the refactorer (Markdown vs Kotlin, no file overlap)
+- Delegate to the [documenter agent](.claude/agents/documenter.md) to document a shipped feature: the Writerside pages in `docs/topics/`, ROADMAP.md, FEATURES.md, ADR status. Runs in parallel with the refactorer (Markdown vs Kotlin, no file overlap), but only off a main-thread snapshot of the generated `build/` output, since the refactorer's verify cleans `build/` (see the feature-design skill's Step 5)
 
 ## Follow Standard Coding Conventions
 

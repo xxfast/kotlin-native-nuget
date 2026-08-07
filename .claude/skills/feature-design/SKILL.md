@@ -7,7 +7,7 @@ description: Implements a new bridge feature end to end using a TDD loop. Orches
 
 A TDD loop run from the main thread: research, human gate, failing tests, implementation, docs and style. Delegate each step to its agent with the context it needs.
 
-## Step 0: Validate the item before you design anything (hard gate, every run)
+## Step 0: Validate the item before you design anything (checks every run; blocks only on failure)
 
 No later step can catch a wrong-item run: from Step 1 on every artefact is derived from the design, so tests, code and docs all agree with each other while disagreeing with the request.
 
@@ -16,7 +16,7 @@ No later step can catch a wrong-item run: from Step 1 on every artefact is deriv
 2. **Read the item's neighbours and section heading.** `git log -S"<item text>" -- ROADMAP.md` shows what arrived alongside it. If the section's stated direction contradicts your restatement, stop and ask.
 3. **Check the item is reachable.** If it needs a later phase or an unticked sibling it is **blocked**: report what it needs and stop. Never build the nearest reachable thing against a blocked item's checkbox.
 4. **If an ADR is linked, verify its scope matches the restatement.** An ADR is evidence about *how*, never authority over *what*. On mismatch, stop and escalate with both side by side; do not adopt the ADR's framing for being more detailed.
-5. **State the restatement back to the human before Step 1**, with reachability.
+5. **State the restatement to the human and dispatch Step 1 in the same message.** Do not wait for a reply: Step 2 is where the human confirms the restatement, side by side with the findings. Hard-stop before dispatching only when a check above failed (blocked item, direction contradiction, ADR scope mismatch).
 
 Carry the restatement forward verbatim: Step 2 is judged against it, and Step 5 may tick the item only if what shipped matches it.
 
@@ -27,13 +27,20 @@ At the start of a phase (Phases 9–13 especially), classify its items instead o
 - **"mirror" items** (annotated "mirror of ADR-XXX"): skip heavy research and the up-front Step 2 gate. Run a light research pass to confirm the mirror applies, then go straight to Step 3; the human reviews the implemented result. If the mirror does not hold cleanly, escalate to the normal Step 2 check-in.
 - **"needs-ADR" items**: fan out one **background** `research` agent per item in parallel, then present all findings in a single Step 2 sitting.
 
+Step 0's checks still run per item, but batch the restatements: state them all in one message alongside the kickoff dispatch, never one interruption per item.
+
 ## Budgets
 
-A budget is a checkpoint, not a ceiling, and goes **in the agent's prompt**: run `date` at start and re-check it before each new expensive line of work. At the deadline the agent stops and reports, naming every unresolved question, rather than continuing quietly; if a load-bearing question is open it asks for an extension with a specific reason (what is unresolved, what the time buys, what breaks without it). Agents have no `AskUserQuestion`, so **you relay the ask** with your own recommendation, then resume the **same** agent via `SendMessage`. Grant extensions for a mechanism claim that would silently produce wrong output if wrong; decline them for more prior art or confirmation.
+A budget is a checkpoint, not a ceiling, and goes **in the agent's prompt**: run `date` at start and re-check it before each new expensive line of work. What happens at the deadline depends on what is still open, and the common case must not stop:
+
+- **A load-bearing question is still open** (one whose wrong answer silently produces wrong output downstream): the agent finishes that line of work and notes the overrun in its report. This is the one case an extension would always be granted for, so it is pre-authorized; a stop-relay-resume round trip to ask costs more than the answer.
+- **Anything else is open** (more prior art, more alternatives, confirmation of something settled): the agent stops and reports, naming every unresolved question. Those asks would be declined, so the stop *is* the answer.
+
+Escalate only when the agent cannot tell which case it is in: it puts the question in its report (agents have no `AskUserQuestion`), **you relay it** with your own recommendation, then resume the **same** agent via `SendMessage`.
 
 ## Model selection
 
-No agent file pins a `model:`; you choose per dispatch (the Agent tool's `model` parameter, omit to inherit the main-thread model). `research` always inherits: see Step 1. `kotlin-dev` inherits for real features; downgrade only for mechanical mirror items. `documenter` and `refactorer` usually run downgraded fine. Whether a larger model converges in fewer steps is unmeasured (the ADR-076 implementation ran on sonnet: 202 steps, 50 minutes), so record each agent's model and duration in your report.
+`csharp-dev`, `kotlin-dev`, `refactorer` and `documenter` pin `model: opus` in their frontmatter. `research` deliberately has no pin and inherits the main-thread model: a cheap wrong ADR is the most expensive artefact this workflow can produce, so it gets the strongest model in the session. The Agent tool's `model` parameter still overrides frontmatter per dispatch when a run warrants it (e.g. downgrade further for a mechanical mirror item; bump `kotlin-dev` back up if an opus run fails to converge). Whether a larger model converges in fewer steps is unmeasured (the ADR-076 implementation ran on sonnet: 202 steps, 50 minutes), so record each agent's model and duration in your report.
 
 ## Workflow
 
@@ -76,9 +83,9 @@ Spend the budget in this order (left alone, research spends it in reverse, becau
 - An implementation still grinding at 50 minutes has stopped converging.
 - Have it report the **diff** it produced (`git diff --stat` plus file list), which you hand to the refactorer.
 
-### Step 5: Docs and style (last step; `documenter` first, then `refactorer`, never parallel)
+### Step 5: Docs and style (`documenter` and `refactorer` in parallel, off a snapshot)
 
-The `refactorer`'s verify starts with `:test-library:clean`, which deletes the `build/` output the `documenter` lifts every snippet from; in parallel the docs silently lose snippets. After `kotlin-dev`'s green verify `build/` is current, so the `documenter` runs first, purely read-only, then the `refactorer` cleans and rebuilds with nobody reading behind it.
+The `refactorer`'s verify starts with `:test-library:clean`, which deletes the `build/` output the `documenter` lifts every snippet from; naive parallelism silently loses snippets. So snapshot first, then fan out: after `kotlin-dev`'s green verify (`build/` is current), **you** copy the generated output the documenter reads (`test-library/build/generated/`, `test-library/build/nuget-interop/`) into the scratchpad before dispatching either agent, hand the `documenter` the snapshot paths, and tell it not to run Gradle (the `refactorer` holds the project lock). Then both run in parallel: Markdown vs Kotlin, no file overlap. If the snapshot copy fails, fall back to serial, `documenter` first.
 
 - **`documenter`**: hand it the feature, the ADR, the ROADMAP item, the sample/test files, and **every bug split out but not fixed** (they exist only in the implementing agents' reports; if you do not forward them they are lost). Give symptom, root cause, `file:line`, and whether verified. It owns every doc surface: the Writerside pages in `docs/topics/` (mapping table, snippets, and deleting the now-false **Limitations** line), the ROADMAP tick with ADR link, the FEATURES.md row with its direction glyph (`→` forward, `←` reverse, `⇄` both, Notes for asymmetry), and marking the ADR `Accepted`. **Before instructing the tick, re-read the item's text against the Step 0 restatement**: the `documenter` never saw the request and will tick whatever line you name. Delivered-but-different work gets its own item, and a parent line that contradicts its sub-bullets is a mislabel to escalate, not tick around.
 - **`refactorer`**: budget 10 minutes. Hand it the **diff** (`git diff main...HEAD`), never a path list, judging only diff-touched lines against [STYLE.md](../../../STYLE.md). Measured: 16 paths cost 15 minutes and a fifth of the feature's output tokens to wrap ten lines, because a path list makes it read large pre-existing files in full. It reports the files it changed (or "no violations") plus the test result.
