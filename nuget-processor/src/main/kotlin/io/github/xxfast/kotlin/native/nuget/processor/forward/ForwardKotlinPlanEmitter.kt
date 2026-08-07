@@ -147,7 +147,11 @@ private fun addValueClassOrdinaryResult(
         "Forward Kotlin value-class String result must use POINTER wire type: $type"
       }
       builder.returns(kotlinType("String"))
-      builder.addCode(errorHandlingValueBody(unboxed, errorName, "\"\""), cOpaquePointerVar, stableRef)
+      builder.addCode(
+        errorHandlingValueBody(unboxed, errorName, "\"\""),
+        cOpaquePointerVar,
+        stableRef,
+      )
     }
 
     // ADR-077 sub-item 4: the underlying's own result emission with the unboxing composed in.
@@ -162,7 +166,11 @@ private fun addValueClassOrdinaryResult(
 
     is BridgeType.Enum -> {
       builder.returns(kotlinType("Int"))
-      builder.addCode(errorHandlingValueBody("$unboxed.ordinal", errorName, "0"), cOpaquePointerVar, stableRef)
+      builder.addCode(
+        errorHandlingValueBody("$unboxed.ordinal", errorName, "0"),
+        cOpaquePointerVar,
+        stableRef,
+      )
     }
 
     is BridgeType.ObjectHandle -> {
@@ -170,7 +178,9 @@ private fun addValueClassOrdinaryResult(
       builder.addCode(handleResultBody(unboxed, errorName), stableRef, cOpaquePointerVar, stableRef)
     }
 
-    else -> error("Forward Kotlin plan emitter has no ordinary value-class result for underlying $underlying")
+    else -> error(
+      "Forward Kotlin plan emitter has no ordinary value-class result for underlying $underlying",
+    )
   }
 }
 
@@ -491,10 +501,19 @@ private fun addNullableResult(
       val unboxed = "$invocation?.${type.underlyingPropertyName}"
       if (type.underlying is BridgeType.ObjectHandle) {
         builder.returns(cOpaquePointer.copy(nullable = true))
-        builder.addCode(nullableHandleResultBody(unboxed, errorName), stableRef, cOpaquePointerVar, stableRef)
+        builder.addCode(
+          nullableHandleResultBody(unboxed, errorName),
+          stableRef,
+          cOpaquePointerVar,
+          stableRef,
+        )
       } else {
         builder.returns(kotlinType("String").copy(nullable = true))
-        builder.addCode(errorHandlingValueBody(unboxed, errorName, "null"), cOpaquePointerVar, stableRef)
+        builder.addCode(
+          errorHandlingValueBody(unboxed, errorName, "null"),
+          cOpaquePointerVar,
+          stableRef,
+        )
       }
     }
 
@@ -801,8 +820,10 @@ private fun loweredArgument(parameter: ForwardPublicParameter): String =
 
       // ADR-077 sub-items 3/4: `?.let` re-wraps only a non-null wire value, so a C# null arrives
       // as a genuine Kotlin null rather than a value class wrapping a default.
-      is BridgeType.ValueClass ->
-        "${parameter.name}?.let { ${inner.qualifiedName}(${valueClassUnderlyingLowering("it", inner.underlying)}) }"
+      is BridgeType.ValueClass -> {
+        val lowered: String = valueClassUnderlyingLowering("it", inner.underlying)
+        "${parameter.name}?.let { ${inner.qualifiedName}($lowered) }"
+      }
 
       else -> error("Forward Kotlin plan emitter has no argument lowering for nullable $inner")
     }

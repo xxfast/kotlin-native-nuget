@@ -1570,7 +1570,8 @@ internal fun translateValueClass(
   val isEnumUnderlying: Boolean =
     (underlyingResolved.declaration as? KSClassDeclaration)?.classKind == ClassKind.ENUM_CLASS
   val underlyingNativeType: String = if (isEnumUnderlying) "int" else mapParamType(underlyingType)
-  val isReferenceUnderlying: Boolean = !isEnumUnderlying && underlyingType !in KOTLIN_TO_CSHARP_PARAM
+  val isReferenceUnderlying: Boolean =
+    !isEnumUnderlying && underlyingType !in KOTLIN_TO_CSHARP_PARAM
 
   val nativeArg: String = if (isReferenceUnderlying) "${underlyingName}._handle" else underlyingName
 

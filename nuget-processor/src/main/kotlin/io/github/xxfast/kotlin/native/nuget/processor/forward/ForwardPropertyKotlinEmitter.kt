@@ -78,7 +78,12 @@ private fun FileSpec.Builder.addGetter(plan: ForwardPropertyPlan, call: ForwardN
         val unboxed = "$access?.${inner.underlyingPropertyName}"
         if (inner.underlying is BridgeType.ObjectHandle) {
           builder.returns(cOpaquePointer.copy(nullable = true))
-          builder.addCode(nullableHandleBody(unboxed, "errorOut"), stableRef, cOpaquePointerVar, stableRef)
+          builder.addCode(
+            nullableHandleBody(unboxed, "errorOut"),
+            stableRef,
+            cOpaquePointerVar,
+            stableRef,
+          )
         } else {
           builder.returns(kotlinType("String").copy(nullable = true))
           builder.addCode(valueBody(unboxed, "errorOut", "null"), cOpaquePointerVar, stableRef)
@@ -133,7 +138,11 @@ private fun FileSpec.Builder.addGetter(plan: ForwardPropertyPlan, call: ForwardN
 
         is BridgeType.Enum -> {
           builder.returns(kotlinType("Int"))
-          builder.addCode(valueBody("$unboxed.ordinal", "errorOut", "0"), cOpaquePointerVar, stableRef)
+          builder.addCode(
+            valueBody("$unboxed.ordinal", "errorOut", "0"),
+            cOpaquePointerVar,
+            stableRef,
+          )
         }
 
         is BridgeType.ObjectHandle -> {
@@ -141,7 +150,9 @@ private fun FileSpec.Builder.addGetter(plan: ForwardPropertyPlan, call: ForwardN
           builder.addCode(handleBody(unboxed, "errorOut"), stableRef, cOpaquePointerVar, stableRef)
         }
 
-        else -> error("Forward property emitter has no value-class getter for underlying $underlying")
+        else -> error(
+          "Forward property emitter has no value-class getter for underlying $underlying",
+        )
       }
     }
 
@@ -277,8 +288,11 @@ private fun ForwardPropertyPlan.valueExpression(): String = when (val type: Brid
     is BridgeType.Collection -> loweredCollectionExpression("value", inner, nullable = true)
     // ADR-077 sub-items 3/4: `?.let` re-wraps only a non-null wire value, matching the callable
     // parameter lowering in ForwardKotlinPlanEmitter.
-    is BridgeType.ValueClass ->
-      "value?.let { ${inner.qualifiedName}(${valueClassUnderlyingLowering("it", inner.underlying)}) }"
+    is BridgeType.ValueClass -> {
+      val lowered: String = valueClassUnderlyingLowering("it", inner.underlying)
+      "value?.let { ${inner.qualifiedName}($lowered) }"
+    }
+
     else -> error("Forward property emitter has no nullable setter route for $type")
   }
 
@@ -289,9 +303,11 @@ private fun ForwardPropertyPlan.valueExpression(): String = when (val type: Brid
   is BridgeType.Interface -> "value.asStableRef<${type.qualifiedName}>().get()"
   is BridgeType.Collection -> loweredCollectionExpression("value", type)
   // ADR-077 sub-items 2/4: re-wrap the raw underlying wire value, re-running the value class's
-  // own `init` validation, exactly like the callable parameter lowering in ForwardKotlinPlanEmitter.
+  // own `init` validation, exactly like the callable parameter lowering in
+  // ForwardKotlinPlanEmitter.
   is BridgeType.ValueClass ->
     "${type.qualifiedName}(${valueClassUnderlyingLowering("value", type.underlying)})"
+
   else -> error("Forward property emitter has no setter route for $type")
 }
 

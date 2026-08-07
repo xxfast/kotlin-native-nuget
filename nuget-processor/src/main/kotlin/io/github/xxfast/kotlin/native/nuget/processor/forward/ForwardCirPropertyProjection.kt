@@ -203,6 +203,7 @@ internal object ForwardCirPropertyProjection {
       // Without this branch the `else` below returns the raw wire value (CS0029 in generated code).
       is BridgeType.ValueClass ->
         append("            return ${valueClassGetterReconstruction(value)};")
+
       is BridgeType.Nullable -> when (val inner = value.type) {
         BridgeType.String -> append("            return Marshal.PtrToStringUTF8(nativeResult);")
         is BridgeType.ObjectHandle -> append("            return nativeResult == IntPtr.Zero ? null : new ${inner.csharpType()}(nativeResult);")
@@ -254,7 +255,9 @@ internal object ForwardCirPropertyProjection {
       is BridgeType.Enum -> "(${underlying.csharpType})nativeResult"
       is BridgeType.ObjectHandle -> "new ${underlying.csharpType()}(nativeResult)"
       is BridgeType.Primitive -> "nativeResult"
-      else -> error("Forward CIR property projection has no value-class reconstruction for $underlying")
+      else -> error(
+        "Forward CIR property projection has no value-class reconstruction for $underlying",
+      )
     }
     return "new ${type.csharpType()}($inner)"
   }
@@ -370,6 +373,7 @@ internal object ForwardCirPropertyProjection {
       is BridgeType.ObjectHandle -> "IntPtr"
       else -> value.underlying.wireType().csharpWireType()
     }
+
     else -> value.wireType().csharpWireType()
   }
 

@@ -3,6 +3,7 @@ package io.github.xxfast.kotlin.native.nuget.processor.exports
 import com.google.devtools.ksp.getVisibility
 import com.google.devtools.ksp.symbol.ClassKind
 import com.google.devtools.ksp.symbol.KSClassDeclaration
+import com.google.devtools.ksp.symbol.KSDeclaration
 import com.google.devtools.ksp.symbol.KSFunctionDeclaration
 import com.google.devtools.ksp.symbol.KSType
 import com.google.devtools.ksp.symbol.KSValueParameter
@@ -36,7 +37,8 @@ internal fun FileSpec.Builder.addValueClassExports(
 
   val underlyingProp: KSValueParameter = cls.primaryConstructor!!.parameters.first()
   val underlyingPropName: String = underlyingProp.name?.asString() ?: return
-  val underlyingDeclaration = underlyingProp.type.resolve().expandAliases().declaration
+  val underlyingDeclaration: KSDeclaration =
+    underlyingProp.type.resolve().expandAliases().declaration
   val underlyingType: String = underlyingDeclaration.qualifiedName?.asString() ?: return
   // ADR-077 sub-item 4 prerequisite: an enum underlying crosses as its int ordinal, so it is a
   // value underlying. The qualified-name set cannot see that; misclassifying it as reference

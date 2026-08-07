@@ -700,7 +700,8 @@ internal class ForwardCallablePlanner(
       add(ForwardHelperRequirement.STABLE_REF)
       // ADR-077: same value-class input helper as `planOrSkip`, so a top-level
       // `fun f(id: ChartId): Int?` on this two-call route validates too.
-      parameters.mapNotNull { (_, type) -> (type.unwrapNullable() as? BridgeType.ValueClass)?.underlying }
+      parameters
+        .mapNotNull { (_, type) -> (type.unwrapNullable() as? BridgeType.ValueClass)?.underlying }
         .forEach { underlying ->
           add(ForwardHelperRequirement.VALUE_CLASS)
           if (underlying == BridgeType.String) add(ForwardHelperRequirement.UTF8)
@@ -873,7 +874,8 @@ internal class ForwardCallablePlanner(
       // ADR-077: a value-class *input* also needs the helper, otherwise the validator's
       // `requiredConversion.helper() in helperRequirements` check rejects its BOX_VALUE_CLASS
       // transfer. The underlying carries its own helper in (UTF-8 / enum ordinal per kind).
-      inputTypes.mapNotNull { type -> (type.unwrapNullable() as? BridgeType.ValueClass)?.underlying }
+      inputTypes
+        .mapNotNull { type -> (type.unwrapNullable() as? BridgeType.ValueClass)?.underlying }
         .forEach { underlying ->
           add(ForwardHelperRequirement.VALUE_CLASS)
           if (underlying == BridgeType.String) add(ForwardHelperRequirement.UTF8)
@@ -1244,7 +1246,10 @@ internal class ForwardCallablePlanner(
           ownership = ForwardOwnership.MATERIALIZED,
           conversion = ForwardConversion.UNBOX_VALUE_CLASS,
         ),
-        helperRequirements = setOf(ForwardHelperRequirement.UTF8, ForwardHelperRequirement.VALUE_CLASS),
+        helperRequirements = setOf(
+          ForwardHelperRequirement.UTF8,
+          ForwardHelperRequirement.VALUE_CLASS,
+        ),
       )
 
       is BridgeType.ObjectHandle -> handleResultShape(BridgeType.Nullable(type)).let { shape ->

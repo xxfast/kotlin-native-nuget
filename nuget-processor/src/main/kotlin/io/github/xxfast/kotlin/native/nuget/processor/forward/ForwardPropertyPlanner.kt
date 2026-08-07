@@ -352,10 +352,12 @@ internal class ForwardPropertyPlanner(
 
     // ADR-077 sub-items 2/4: a value-class property plans when its underlying does
     // (String/primitive/enum/ObjectHandle).
-    is BridgeType.ValueClass -> type.underlying == BridgeType.String ||
-        type.underlying is BridgeType.Primitive ||
-        type.underlying is BridgeType.Enum ||
-        type.underlying is BridgeType.ObjectHandle
+    is BridgeType.ValueClass -> when (type.underlying) {
+      BridgeType.String, is BridgeType.Primitive, is BridgeType.Enum,
+      is BridgeType.ObjectHandle -> true
+
+      else -> false
+    }
 
     // ADR-077 sub-item 4: a *nullable* value-class property needs a pointer-shaped underlying
     // (String, ObjectHandle) to carry null in-band; the primitive/enum-underlying nullable

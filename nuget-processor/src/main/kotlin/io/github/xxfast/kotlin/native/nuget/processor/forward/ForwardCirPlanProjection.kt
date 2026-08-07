@@ -497,7 +497,8 @@ internal object ForwardCirPlanProjection {
       // property (`value` -> `Value`, CirClassTranslator); the unwrapped value is lowered to its
       // wire form per underlying (sub-item 4), and Kotlin re-wraps it on the other side.
       is BridgeType.ValueClass -> {
-        val unwrapped = "${parameter.name}.${type.underlyingPropertyName.replaceFirstChar { it.uppercase() }}"
+        val prop: String = type.underlyingPropertyName.replaceFirstChar { it.uppercase() }
+        val unwrapped = "${parameter.name}.$prop"
         listOf(
           when (type.underlying) {
             is BridgeType.Enum -> "(int)$unwrapped"
@@ -529,7 +530,8 @@ internal object ForwardCirPlanProjection {
         // ADR-077 sub-items 3/4: null propagation into the pointer-shaped marshalling; a C# null
         // ships the null pointer (null string reference, or IntPtr.Zero for a handle underlying).
         is BridgeType.ValueClass -> {
-          val unwrapped = "${parameter.name}?.${inner.underlyingPropertyName.replaceFirstChar { it.uppercase() }}"
+          val prop: String = inner.underlyingPropertyName.replaceFirstChar { it.uppercase() }
+          val unwrapped = "${parameter.name}?.$prop"
           listOf(
             if (inner.underlying is BridgeType.ObjectHandle) {
               "$unwrapped._handle ?? IntPtr.Zero"
