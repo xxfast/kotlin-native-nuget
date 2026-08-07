@@ -306,7 +306,7 @@ fun chartSummary(id: ChartId): String =
   if (id.isValid()) "Chart ${id.value} filed" else "Chart missing"
 ```
 
-### Generated C#
+### Generated C# {id="generated-c_1"}
 
 Every position takes the `ChartId` struct publicly and passes `id.Value` to a `string` native
 parameter. From `Interop.cs`:
