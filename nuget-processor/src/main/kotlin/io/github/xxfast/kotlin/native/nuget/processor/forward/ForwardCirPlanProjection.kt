@@ -477,6 +477,12 @@ internal object ForwardCirPlanProjection {
       // `IFoo`, and throws NotSupportedException for a C#-implemented (non-Kotlin-backed) one.
       is BridgeType.Interface -> listOf("NugetMarshal.HandleOf(${parameter.name})")
       is BridgeType.Collection -> listOf("${parameter.name}Handle")
+      // ADR-077 sub-item 1: the generated `readonly record struct` capitalizes the Kotlin
+      // underlying property (`value` -> `Value`, CirClassTranslator), and that underlying value is
+      // exactly what the native import expects; Kotlin re-wraps it on the other side.
+      is BridgeType.ValueClass ->
+        listOf("${parameter.name}.${type.underlyingPropertyName.replaceFirstChar { it.uppercase() }}")
+
       is BridgeType.Nullable -> when (val inner = type.type) {
         BridgeType.String -> listOf(parameter.name)
         is BridgeType.ObjectHandle -> listOf("${parameter.name}?._handle ?? IntPtr.Zero")

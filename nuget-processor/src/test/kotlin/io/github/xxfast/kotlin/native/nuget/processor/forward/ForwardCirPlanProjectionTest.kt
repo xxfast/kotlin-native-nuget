@@ -95,6 +95,33 @@ class ForwardCirPlanProjectionTest {
     assertEquals(true, rendered.contains("Native_Scale(receiver, factor, out IntPtr error)"))
   }
 
+  @Test
+  fun `value class parameter passes its underlying property into the string wire`() {
+    val chartId = BridgeType.ValueClass("sample.ChartId", BridgeType.String)
+    val plan: ForwardCallablePlan = plan(
+      symbol = "sample.Counter.retag",
+      exportName = "counter_retag",
+      receiver = "handle",
+      result = BridgeType.Primitive(PrimitiveKind.INT),
+      parameters = listOf("id" to chartId),
+    )
+
+    val method: CirMethod = ForwardCirPlanProjection.classMethod(plan, "counter", isOverride = false)
+    val import: CirDllImport = CirClass(
+      name = "Counter",
+      libraryName = "sample",
+      nativePrefix = "counter",
+      constructor = null,
+      properties = emptyList(),
+      methods = listOf(method),
+    ).ordinaryNativeImports().single { it.name == "Native_Retag" }
+
+    // Public surface takes the struct; the native import takes its underlying string.
+    assertEquals(listOf("ChartId"), method.parameters.map { it.type })
+    assertEquals(listOf("IntPtr", "string"), import.parameters.map { it.nativeType })
+    assertEquals(true, method.body?.contains("Native_Retag(_handle, id.Value, out IntPtr error)"))
+  }
+
   private fun plan(
     symbol: String,
     exportName: String,
@@ -144,7 +171,7 @@ class ForwardCirPlanProjectionTest {
           ForwardFlow.INTO_KOTLIN,
           ForwardPassing.VALUE,
           ForwardOwnership.BORROWED,
-          ForwardConversion.DIRECT,
+          if (type is BridgeType.ValueClass) ForwardConversion.BOX_VALUE_CLASS else ForwardConversion.DIRECT,
         ),
       )
     }
@@ -171,7 +198,13 @@ class ForwardCirPlanProjectionTest {
         ),
       ),
       errorSlot = error,
-      helperRequirements = setOf(ForwardHelperRequirement.STABLE_REF),
+      helperRequirements = buildSet {
+        add(ForwardHelperRequirement.STABLE_REF)
+        if (parameters.any { it.second is BridgeType.ValueClass }) {
+          add(ForwardHelperRequirement.VALUE_CLASS)
+          add(ForwardHelperRequirement.UTF8)
+        }
+      },
     ).validate()
   }
 
@@ -183,6 +216,8 @@ class ForwardCirPlanProjectionTest {
       else -> error("Test only needs Int and Double")
     }
 
+    BridgeType.String -> ForwardAbiWireType.STRING
+    is BridgeType.ValueClass -> wireType(type.underlying)
     else -> error("Test only needs direct types")
   }
 }

@@ -698,6 +698,12 @@ internal class ForwardCallablePlanner(
     )
     val helpers: Set<ForwardHelperRequirement> = buildSet {
       add(ForwardHelperRequirement.STABLE_REF)
+      // ADR-077 sub-item 1: same value-class input helper as `planOrSkip`, so a top-level
+      // `fun f(id: ChartId): Int?` on this two-call route validates too.
+      if (parameters.any { (_, type) -> type.unwrapNullable() is BridgeType.ValueClass }) {
+        add(ForwardHelperRequirement.VALUE_CLASS)
+        add(ForwardHelperRequirement.UTF8)
+      }
       if (parameters.any { (_, type) -> type.unwrapNullable() == BridgeType.String }) {
         add(ForwardHelperRequirement.UTF8)
       }
@@ -862,6 +868,13 @@ internal class ForwardCallablePlanner(
       add(ForwardHelperRequirement.STABLE_REF)
       if (origin == ForwardCallableOrigin.VALUE_CLASS) add(ForwardHelperRequirement.VALUE_CLASS)
       addAll(resultShape.helperRequirements)
+      // ADR-077 sub-item 1: a value-class *input* also needs the helper, otherwise the validator's
+      // `requiredConversion.helper() in helperRequirements` check rejects its BOX_VALUE_CLASS
+      // transfer. Its String underlying carries the UTF-8 helper in as well.
+      if (inputTypes.any { type -> type.unwrapNullable() is BridgeType.ValueClass }) {
+        add(ForwardHelperRequirement.VALUE_CLASS)
+        add(ForwardHelperRequirement.UTF8)
+      }
       if (inputTypes.any { type -> type.unwrapNullable() == BridgeType.String }) {
         add(ForwardHelperRequirement.UTF8)
       }
@@ -971,6 +984,22 @@ internal class ForwardCallablePlanner(
         transfer = ForwardTransfer(
           name, type, ForwardFlow.INTO_KOTLIN, ForwardPassing.VALUE,
           ForwardOwnership.BORROWED, ForwardConversion.HANDLE_TO_STABLE_REF,
+        ),
+      )
+    )
+
+    // ADR-077 sub-item 1: one native parameter carrying the underlying's wire value (String only
+    // in this commit). The transfer keeps the *value class* as its type and tags BOX_VALUE_CLASS,
+    // which is what `ForwardCallablePlanValidator.requiredConversion` demands; the underlying's own
+    // step (UTF-8 here) composes inside the emitted expression rather than stacking a conversion.
+    is BridgeType.ValueClass -> listOf(
+      ForwardAbiParameter(
+        name = name,
+        wireType = type.underlying.wireType(),
+        direction = ForwardAbiDirection.IN,
+        transfer = ForwardTransfer(
+          name, type, ForwardFlow.INTO_KOTLIN, ForwardPassing.VALUE,
+          ForwardOwnership.BORROWED, ForwardConversion.BOX_VALUE_CLASS,
         ),
       )
     )
@@ -1409,6 +1438,12 @@ internal class ForwardCallablePlanner(
     // input, preferring the (element ?: key ?: value)'s own reason (e.g.
     // UNEXPORTED_DEPENDENCY_TYPE) when known.
     is BridgeType.Collection -> collectionInputSkipReason()
+
+    // ADR-077 sub-item 1: a value class crosses as its underlying wire value, so an ordinary
+    // parameter is plannable exactly when that underlying is. Only the String underlying lands in
+    // this commit (sub-item 4 widens it to primitive/enum/ObjectHandle underlyings).
+    is BridgeType.ValueClass ->
+      if (underlying == BridgeType.String) null else ForwardPlanSkipReason.VALUE_CLASS
 
     // ADR-075: a nullable collection input (e.g. a data class's `notes: List<String>?` primary
     // constructor parameter, mirroring `Visit.notes` as a *property*) shares exactly the same

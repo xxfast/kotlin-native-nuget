@@ -139,6 +139,15 @@ class Patient(val name: String) {
   /** MIGRATION.md Phase 8. Class method × enum return (ordinal over INT32). */
   fun mood(): Mood = Mood.CALM
 
+  /**
+   * ADR-077 sub-item 1 · class-method position. String-underlying value class as an ordinary
+   * *parameter*: the wire carries the underlying `String` and Kotlin re-wraps it with
+   * `ChartId(raw)`. Calls a [ChartId] member on purpose, so a raw string smuggled through as the
+   * parameter would not compile on the Kotlin side. `inputSkipReason()`'s `ValueClass` branch
+   * admits the String underlying, so this method plans and both halves bind.
+   */
+  fun retag(id: ChartId): String = if (id.isValid()) "$name@${id.value}" else "$name@untagged"
+
   /** MIGRATION.md Phase 8. Class method × Map return. */
   fun scores(): Map<String, Int> = mapOf("weight" to (weight ?: 0))
 
@@ -221,6 +230,41 @@ var ChartId.symptomTags: List<String>
   set(value) {
     chartIdSymptomTags[this] = value
   }
+
+/**
+ * ADR-077 sub-item 1 · constructor position (regular class). [chart] is a plain constructor
+ * parameter, not a `val`: the property facet of a value-class type is sub-item 2 and stays skipped
+ * until then, so this cell measures the constructor seam alone. [label] is an ordinary `String`
+ * property, which is what the C# side reads back to prove Kotlin saw a re-wrapped [ChartId].
+ */
+class Admission(chart: ChartId, val ward: String) {
+  val label: String = "${chart.value}/$ward"
+}
+
+/**
+ * ADR-077 sub-item 1 · data-class primary-constructor position, and the generated `copy()` that
+ * mirrors it. A data class primary constructor parameter *must* be `val`/`var`, so [id] is also a
+ * property; the property facet is sub-item 2 and is expected to stay skipped for now, so nothing
+ * asserts on a generated `Id`. [label] exposes the same information through an already-supported
+ * `String` return.
+ */
+data class ChartEntry(val id: ChartId, val note: String) {
+  fun label(): String = "${id.value}: $note"
+}
+
+/**
+ * ADR-077 sub-item 1 · extension-function position. Object-handle receiver ([Patient], already
+ * supported) × value-class parameter, so the only new seam is the parameter.
+ */
+fun Patient.chartLabel(id: ChartId): String = "$name reads ${id.value}"
+
+/**
+ * ADR-077 sub-item 1 · top-level-function position. Mirrors [Patient.retag] on the top-level
+ * carrier, and likewise calls a [ChartId] member so the parameter has to arrive as a real value
+ * class rather than its underlying `String`.
+ */
+fun chartSummary(id: ChartId): String =
+  if (id.isValid()) "Chart ${id.value} filed" else "Chart missing"
 
 /**
  * Cells 17/18/20: generic type arguments. `parameterizedBy` appeared zero times in the processor,

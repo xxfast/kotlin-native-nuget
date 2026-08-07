@@ -586,6 +586,9 @@ private fun kotlinInputType(type: BridgeType, wireType: ForwardAbiWireType): Typ
 
   BridgeType.String -> kotlinType("String")
   is BridgeType.ObjectHandle, is BridgeType.Interface, is BridgeType.Collection -> cOpaquePointer
+  // ADR-077 sub-item 1: a value class crosses as its underlying wire value, so the export's
+  // parameter is typed as the underlying (String today) and `loweredArgument` re-wraps it.
+  is BridgeType.ValueClass -> kotlinInputType(type.underlying, wireType)
   is BridgeType.Nullable -> when (val inner = type.type) {
     BridgeType.String -> kotlinType("String").copy(nullable = true)
     is BridgeType.ObjectHandle, is BridgeType.Interface, is BridgeType.Collection ->
@@ -728,6 +731,11 @@ private fun loweredArgument(parameter: ForwardPublicParameter): String =
       "${parameter.name}.asStableRef<${type.qualifiedName}>().get()"
 
     is BridgeType.Collection -> loweredCollectionExpression(parameter.name, type)
+
+    // ADR-077 sub-item 1: re-wrap the underlying wire value, which re-runs the value class's own
+    // `init` validation on the Kotlin side (the mirror of the shipped `$invocation.value` unboxing
+    // on the result side).
+    is BridgeType.ValueClass -> "${type.qualifiedName}(${parameter.name})"
 
     is BridgeType.Nullable -> when (val inner: BridgeType = type.type) {
       BridgeType.String -> parameter.name
