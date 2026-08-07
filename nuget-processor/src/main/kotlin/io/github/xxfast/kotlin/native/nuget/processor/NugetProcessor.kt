@@ -145,6 +145,13 @@ private fun KSAnnotated.hasCNameAnnotation(): Boolean =
     name == "kotlin.native.CName"
   }
 
+/**
+ * The generated C# in both the forms the ABI contract check needs: the CIR nodes for the ordinary
+ * universe, and the rendered text that was written to Interop.cs for the legacy one (ADR-078).
+ * Rendered once, so what is checked is what ships.
+ */
+private data class CsharpBindings(val cir: CirFile, val rendered: String)
+
 class NugetProcessor(
   private val codeGenerator: CodeGenerator,
   logger: KSPLogger,
@@ -462,7 +469,7 @@ class NugetProcessor(
       classes, genericClasses, enums, sealedClasses, objects, properties,
       valueClasses, suspendFunctions, callableCatalog, deps, reachableInterfaces,
     )
-    val cirFile: CirFile = generateCSharpBindings(
+    val bindings: CsharpBindings = generateCSharpBindings(
       functions, genericFunctions, extensionFunctions, extensionProperties,
       allClasses, enums, interfaces, sealedClasses, objects, properties,
       constProperties, valueClasses, suspendFunctions, callableCatalog, deps, reachableInterfaces,
@@ -474,7 +481,15 @@ class NugetProcessor(
     // contract checks and writing cNameExports.kt for a construct that must never compile.
     if (logger.hasFatalDiagnostic) return emptyList()
 
-    val csharpContracts: List<ForwardAbiSignature> = ForwardAbiContract.csharp(cirFile)
+    // ADR-078: the ordinary universe comes off the CIR nodes, the specialized legacy protocols off
+    // the same rendered text that was just written to Interop.cs, so both halves of every route are
+    // compared rather than only the planned ones.
+    val ordinaryContracts: List<ForwardAbiSignature> = ForwardAbiContract.csharp(bindings.cir)
+    val csharpContracts: List<ForwardAbiSignature> = ordinaryContracts +
+        ForwardAbiContract.csharpLegacy(
+          bindings.rendered,
+          ordinaryContracts.map { signature -> signature.exportName }.toSet(),
+        )
     ForwardAbiContract.assertMatches(
       csharp = csharpContracts,
       kotlin = ForwardAbiContract.kotlin(cNameExports, csharpContracts.map { it.exportName }.toSet()),
@@ -529,7 +544,7 @@ class NugetProcessor(
     deps: Dependencies,
     reachableInterfaces: List<KSClassDeclaration>,
     expectsByName: Map<String, KSDeclaration>,
-  ): CirFile {
+  ): CsharpBindings {
     val cirFile: CirFile = translate(
       context,
       logger,
@@ -561,7 +576,7 @@ class NugetProcessor(
     )
 
     file.writer().use { writer -> writer.write(csharp) }
-    return cirFile
+    return CsharpBindings(cirFile, csharp)
   }
 
   private fun generateCNameWrappers(
@@ -907,7 +922,16 @@ class NugetProcessor(
 
     val needsLambdaSupport: Boolean = lambdaArities.isNotEmpty()
 
-    val needsHelpers: Boolean = genericClasses.isNotEmpty() ||
+    // The C# `NugetMarshal` helper class is emitted for any module that declares a function, class,
+    // object or sealed class (`CirTranslator`'s core-marshal condition), and it declares the
+    // `nuget_unwrap_*` / `nuget_dispose` / `nuget_wrap_*` imports unconditionally in its body. The
+    // Kotlin exports have to ship under at least as broad a condition, or the C# side imports
+    // symbols the native library never exported.
+    val needsCoreMarshal: Boolean = functions.isNotEmpty() || classes.isNotEmpty() ||
+        objects.isNotEmpty() || sealedClasses.isNotEmpty() || suspendFunctions.isNotEmpty() ||
+        properties.isNotEmpty()
+
+    val needsHelpers: Boolean = genericClasses.isNotEmpty() || needsCoreMarshal ||
         needsListSupport || needsMapSupport || needsSetSupport || needsLambdaSupport
     if (needsHelpers) builder.addNugetHelperExports()
     if (needsListSupport) builder.addNugetListHelperExports()
@@ -937,7 +961,11 @@ class NugetProcessor(
       builder.addNugetWrapHelperExports()
     }
 
-    if ((needsLambdaSupport && lambdaArities.any { it > 0 }) || needsCollectionParamWrap) {
+    if (
+      (needsLambdaSupport && lambdaArities.any { it > 0 }) ||
+      needsCollectionParamWrap ||
+      needsCoreMarshal
+    ) {
       addNugetWrapHelperExportsOnce()
     }
     if (0 in lambdaArities) builder.addNugetFunc0HelperExports()
