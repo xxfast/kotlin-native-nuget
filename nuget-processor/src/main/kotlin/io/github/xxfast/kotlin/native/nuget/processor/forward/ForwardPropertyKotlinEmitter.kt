@@ -72,6 +72,17 @@ private fun FileSpec.Builder.addGetter(plan: ForwardPropertyPlan, call: ForwardN
         )
       }
 
+      // ADR-077 sub-item 3: safe-call unboxing over the nullable-String getter wire; a Kotlin
+      // null ships the null pointer.
+      is BridgeType.ValueClass -> {
+        builder.returns(kotlinType("String").copy(nullable = true))
+        builder.addCode(
+          valueBody("$access?.${inner.underlyingPropertyName}", "errorOut", "null"),
+          cOpaquePointerVar,
+          stableRef,
+        )
+      }
+
       else -> error("Forward property direct nullable getter is invalid for ${plan.symbol}: $inner")
     }
 
@@ -239,6 +250,9 @@ private fun ForwardPropertyPlan.valueExpression(): String = when (val type: Brid
     // nullable `COpaquePointer` value -- `?.` short-circuits before `asStableRef` is ever reached
     // for a null wire value, so the property's static type stays the property's own `List<T>?`.
     is BridgeType.Collection -> loweredCollectionExpression("value", inner, nullable = true)
+    // ADR-077 sub-item 3: `?.let` re-wraps only a non-null wire value, matching the callable
+    // parameter lowering in ForwardKotlinPlanEmitter.
+    is BridgeType.ValueClass -> "value?.let { ${inner.qualifiedName}(it) }"
     else -> error("Forward property emitter has no nullable setter route for $type")
   }
 

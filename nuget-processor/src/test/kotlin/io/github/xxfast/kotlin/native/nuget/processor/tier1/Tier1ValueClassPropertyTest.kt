@@ -2,20 +2,20 @@ package io.github.xxfast.kotlin.native.nuget.processor.tier1
 
 import kotlin.test.Test
 import kotlin.test.assertContains
-import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 /**
- * ADR-077 sub-item 2: a String-underlying value-class-typed `val`/`var` property, driven through
- * the real `NugetProcessor`. Getter unboxes to the underlying `String` on the Kotlin side and C#
- * reconstructs the record struct; setter passes `value.Value` and Kotlin re-wraps. The
- * `Nullable(ValueClass)` guard (sub-item 3) is asserted from the same fixture: a `ChartId?`
- * property must stay entirely absent from the generated C#.
+ * ADR-077 sub-items 2 and 3: value-class-typed properties, driven through the real
+ * `NugetProcessor`. Non-null (sub-item 2): the getter unboxes to the underlying `String` on the
+ * Kotlin side and C# reconstructs the record struct; the setter passes `value.Value` and Kotlin
+ * re-wraps. Nullable (sub-item 3): the same wire, with the null pointer carrying `null` and `?.`
+ * propagation on both sides, surfacing as C# `ChartId?` (a genuine `Nullable<ChartId>`, since the
+ * record struct is a value type).
  */
 class Tier1ValueClassPropertyTest {
 
   @Test
-  fun `String-underlying value class property plans on both halves and nullable stays guarded`() {
+  fun `String-underlying value class property plans on both halves`() {
     val result = Tier1Harness.run(
       """
       package tier1.valueclassprop
@@ -25,9 +25,6 @@ class Tier1ValueClassPropertyTest {
 
       class Patient(val name: String) {
         var currentChart: ChartId = ChartId("CH-0")
-
-        // Sub-item 3 guard: Nullable(ValueClass) must not ride isPlannable's Nullable recursion.
-        var backupChart: ChartId? = null
       }
       """.trimIndent(),
     )
@@ -42,6 +39,33 @@ class Tier1ValueClassPropertyTest {
     assertContains(cs, "public ChartId CurrentChart")
     assertContains(cs, "return new ChartId(Marshal.PtrToStringUTF8(nativeResult)!);")
     assertContains(cs, "Native_Set_currentChart(_handle, value.Value, out IntPtr error)")
-    assertFalse(cs.contains("BackupChart"), "Nullable(ValueClass) property must stay skipped until sub-item 3")
+  }
+
+  @Test
+  fun `nullable String-underlying value class property rides the null pointer on both halves`() {
+    val result = Tier1Harness.run(
+      """
+      package tier1.valueclassnullprop
+
+      @JvmInline
+      value class ChartId(val value: String)
+
+      class Patient(val name: String) {
+        var backupChart: ChartId? = null
+      }
+      """.trimIndent(),
+    )
+
+    assertTrue(result.compiledClean, "expected nullable value-class property exports to compile; got: ${result.compileErrors}")
+
+    val kotlin: String = result.generated
+    assertContains(kotlin, "get().backupChart?.value")
+    assertContains(kotlin, "get().backupChart = value?.let { tier1.valueclassnullprop.ChartId(it) }")
+
+    val cs: String = result.generatedCSharp
+    assertContains(cs, "public ChartId? BackupChart")
+    assertContains(cs, "return nativeResult == IntPtr.Zero ? null : new ChartId(Marshal.PtrToStringUTF8(nativeResult)!);")
+    assertContains(cs, "Native_Set_backupChart(_handle, value?.Value, out IntPtr error)")
+    assertContains(cs, "string? value, out IntPtr error);")
   }
 }

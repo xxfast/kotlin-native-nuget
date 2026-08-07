@@ -218,6 +218,12 @@ internal object ForwardCirPropertyProjection {
               collectionMaterialize(inner),
         )
 
+        // ADR-077 sub-item 3: the ADR-075 null-handle guard, then the sub-item 2 reconstruction.
+        is BridgeType.ValueClass -> append(
+          "            return nativeResult == IntPtr.Zero ? null : " +
+              "new ${inner.csharpType()}(Marshal.PtrToStringUTF8(nativeResult)!);",
+        )
+
         else -> append("            return nativeResult;")
       }
 
@@ -340,9 +346,9 @@ internal object ForwardCirPropertyProjection {
     BridgeType.String -> if (type is BridgeType.Nullable) "string?" else "string"
     is BridgeType.Enum -> "int"
     is BridgeType.ObjectHandle, is BridgeType.Interface -> "IntPtr"
-    // ADR-077 sub-item 2: the underlying string crosses the setter wire (non-null only in this
-    // slice; the nullable spelling arrives with sub-item 3).
-    is BridgeType.ValueClass -> "string"
+    // ADR-077: the underlying string crosses the setter wire; the outer nullability decides the
+    // spelling, exactly like the plain-String arm above (sub-items 2 and 3).
+    is BridgeType.ValueClass -> if (type is BridgeType.Nullable) "string?" else "string"
     else -> value.wireType().csharpWireType()
   }
 
@@ -377,11 +383,14 @@ internal object ForwardCirPropertyProjection {
         }
       }
 
-      // ADR-077 sub-item 2: unwrap the record struct to its capitalized underlying property.
-      // The old `else -> name` fell through here and passed the struct where the native import
+      // ADR-077 sub-items 2/3: unwrap the record struct to its capitalized underlying property,
+      // with null propagation for the nullable spelling (a C# null ships the null pointer). The
+      // old `else -> name` fell through here and passed the struct where the native import
       // expects `string` (CS1503 in generated code).
-      is BridgeType.ValueClass ->
-        "$name.${value.underlyingPropertyName.replaceFirstChar { it.uppercase() }}"
+      is BridgeType.ValueClass -> {
+        val underlying: String = value.underlyingPropertyName.replaceFirstChar { it.uppercase() }
+        if (type is BridgeType.Nullable) "$name?.$underlying" else "$name.$underlying"
+      }
 
       else -> name
     }

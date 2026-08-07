@@ -8,6 +8,7 @@ A Kotlin `value class` (inline class) wrapping a primitive or `String` becomes a
 | value class wrapping a reference type | `record struct` | wraps the object's own handle type |
 | `String`-underlying value class as an ordinary parameter | the same `record struct` | the wire carries the underlying `String`; see [ADR-077](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/077-value-classes-at-ordinary-positions.md) |
 | `String`-underlying value class as a `val`/`var` property | the same `record struct`, a settable C# property when the Kotlin property is `var` | getter reconstructs from the underlying `String`, setter unwraps it; see [ADR-077](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/077-value-classes-at-ordinary-positions.md) |
+| `Nullable(ValueClass(String))` at a parameter, property or return position | `ChartId?` (`Nullable<ChartId>`), never a reference nullable | rides the same null pointer as nullable `String`/`ObjectHandle`, no has-value pair; see [ADR-077](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/077-value-classes-at-ordinary-positions.md) |
 
 ## Kotlin
 
@@ -504,16 +505,146 @@ public void Patient_CurrentChart_Setter_IsObservedByKotlinAsARewrappedChartId()
     </p>
 </note>
 
+## Nullable
+
+`ChartId?` also binds at property, parameter and return positions, as a genuine C# nullable value
+type: `ChartId?` = `Nullable<ChartId>`, never a reference nullable. There is no has-value pair on
+the wire: the underlying `String` is non-nullable by construction, so a `null` `ChartId?` rides the
+same null pointer already used by nullable `String`/`ObjectHandle` shapes. C# reconstructs only on a
+non-zero pointer; Kotlin lowers with `?.let { ChartId(it) }` on the way in and `?.value` on the way
+out.
+
+From `test-library/src/nativeMain/kotlin/.../clinic/ClinicSample.kt`:
+
+```kotlin
+var backupChart: ChartId? = null
+
+fun hasBackup(): Boolean = backupChart != null
+
+fun previousChart(): ChartId? = backupChart
+
+fun transferTo(to: ChartId?): String =
+  if (to != null) "$name transferred to ${to.value}" else "$name has no transfer"
+```
+
+Generated C#, from `Interop.cs`:
+
+```C#
+public ChartId? BackupChart
+{
+    get
+    {            IntPtr nativeResult = Native_Get_backupChart(_handle, out IntPtr error);
+    if (error != IntPtr.Zero)
+    {
+        throw NugetErrorNative.BuildException(error);
+    }
+    return nativeResult == IntPtr.Zero ? null : new ChartId(Marshal.PtrToStringUTF8(nativeResult)!);
+    }
+    set
+    {            Native_Set_backupChart(_handle, value?.Value, out IntPtr error);
+    if (error != IntPtr.Zero)
+    {
+        throw NugetErrorNative.BuildException(error);
+    }
+    }
+}
+```
+
+```C#
+[DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "patient_transferTo")]
+private static extern IntPtr Native_TransferTo(IntPtr handle, string? to, out IntPtr error);
+
+public string TransferTo(ChartId? to)
+{
+    IntPtr nativeResult = Native_TransferTo(_handle, to?.Value, out IntPtr error);
+    if (error != IntPtr.Zero)
+    {
+        throw NugetErrorNative.BuildException(error);
+    }
+    return Marshal.PtrToStringUTF8(nativeResult)!;
+}
+```
+
+```C#
+[DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "patient_previousChart")]
+private static extern IntPtr Native_PreviousChart(IntPtr handle, out IntPtr error);
+
+public ChartId? PreviousChart()
+{
+    IntPtr nativeResult = Native_PreviousChart(_handle, out IntPtr error);
+    if (error != IntPtr.Zero)
+    {
+        throw NugetErrorNative.BuildException(error);
+    }
+    return nativeResult == IntPtr.Zero ? null : new ChartId(Marshal.PtrToStringUTF8(nativeResult)!);
+}
+```
+
+### Using it from C#
+
+From `IntegrationTests/ValueClassNullableTests.cs`:
+
+```C#
+[Fact]
+public void Patient_BackupChart_NullableProperty_StartsNull()
+{
+    using var oreo = new Patient("Oreo");
+
+    Assert.Null(oreo.BackupChart);
+    Assert.False(oreo.HasBackup());
+}
+
+[Fact]
+public void Patient_BackupChart_NullableProperty_RoundTripsAValueThenBackToNull()
+{
+    using var mylo = new Patient("Mylo");
+
+    mylo.BackupChart = new ChartId("CH-3");
+
+    Assert.Equal(new ChartId("CH-3"), mylo.BackupChart);
+    Assert.True(mylo.HasBackup());
+
+    mylo.BackupChart = null;
+
+    Assert.Null(mylo.BackupChart);
+    Assert.False(mylo.HasBackup());
+}
+
+[Fact]
+public void Patient_TransferTo_NullableParameter_NullCrossesAsNullNotAnEmptyChartId()
+{
+    using var oreo = new Patient("Oreo");
+
+    // Proves Kotlin sees a genuine null, not a ChartId wrapping an empty string: only the
+    // null branch of transferTo is reachable this way.
+    Assert.Equal("Oreo has no transfer", oreo.TransferTo(null));
+}
+```
+
+<note>
+    <p>
+        <code>BackupChart</code> and <code>PreviousChart()</code> return <code>Nullable&lt;ChartId&gt;</code>,
+        not a reference type, so <code>ChartId?</code> is still a value on the stack when it is
+        non-null. The <code>Nullable&lt;T&gt;</code> wrapper is what carries the "no value" state,
+        not a null reference.
+    </p>
+</note>
+
 ## Limitations
 
 - A value class at an ordinary position (rather than as the value class's own receiver) is currently
-  scoped to a **`String` underlying type only**, the three shapes shown above: an ordinary method
-  return, an ordinary parameter, and a `val`/`var` property. `Primitive`-, `Enum`- and
-  object-underlying value classes at an ordinary position are not yet planned, and neither is
-  `Nullable(ValueClass)` (a `ChartId?` parameter, return or property). Each keeps a named
-  `VALUE_CLASS` skip. See
+  scoped to a **`String` underlying type only**: an ordinary method return, an ordinary parameter, a
+  `val`/`var` property, and now `Nullable(ValueClass(String))` at all three of those positions.
+  `Primitive`-, `Enum`- and object-underlying value classes at an ordinary position are not yet
+  planned and keep a named `VALUE_CLASS` skip. See
   [ADR-077](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/077-value-classes-at-ordinary-positions.md)
   and [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md).
+- `Nullable(ValueClass)` over a `Primitive`- or `Enum`-underlying value class is deferred, not merely
+  unplanned: the primitive/enum wire has no in-band way to carry `null`, so that combination needs a
+  has-value pair that does not exist yet. `ObjectHandle`-underlying already rides a null pointer, so
+  its nullable combination is expected to land alongside the non-`String`-underlying work
+  (sub-item 4). Only the `String` underlying above, which also rides a nullable pointer, is in scope
+  today.
 - A value class as a collection element (`List<ChartId>`, `Map<String, ChartId>`) has no boxing
   story on the C# write side and is skipped; see [Collections](collections.md).
 - Reference-underlying value-class **primary** constructor `init` validation stays deferred

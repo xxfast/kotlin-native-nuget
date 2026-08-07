@@ -444,7 +444,11 @@ internal object ForwardCirPlanProjection {
 
   private fun ForwardAbiParameter.nativeCsharpType(): String {
     val type: BridgeType = transfer.type
-    return if (type is BridgeType.Nullable && type.type == BridgeType.String) "string?" else wireType.csharpType()
+    // ADR-077 sub-item 3: a nullable value class's wire is its underlying nullable string, so the
+    // DllImport parameter must be `string?` for the same CS8604 reason as a nullable String.
+    val isNullableStringWire: Boolean = type is BridgeType.Nullable &&
+        (type.type == BridgeType.String || type.type is BridgeType.ValueClass)
+    return if (isNullableStringWire) "string?" else wireType.csharpType()
   }
 
   /** A parameter shape whose native ABI representation is identical to its public C# type — no
@@ -502,6 +506,11 @@ internal object ForwardCirPlanProjection {
         // handle variable [collectionPrelude] built already folds the null check in, so the call
         // argument itself is unconditional either way.
         is BridgeType.Collection -> listOf("${parameter.name}Handle")
+        // ADR-077 sub-item 3: null propagation into the nullable-string marshalling; a C# null
+        // ships the null pointer.
+        is BridgeType.ValueClass ->
+          listOf("${parameter.name}?.${inner.underlyingPropertyName.replaceFirstChar { it.uppercase() }}")
+
         else -> error("Forward CIR plan projection has no call argument for nullable $inner")
       }
 
@@ -685,6 +694,21 @@ internal object ForwardCirPlanProjection {
           nativeReturnType = "IntPtr",
           body = checkedPointerBody(
             nativeName, callArguments, "return Marshal.PtrToStringUTF8(nativeResult);", prelude, cleanup,
+          ),
+        )
+
+        // ADR-077 sub-item 3: `ChartId?` is Nullable<ChartId> automatically (the record struct is
+        // a value type); reconstruct only for a non-zero pointer, the ADR-075 null-handle guard.
+        is BridgeType.ValueClass -> CirResultProjection(
+          returnType = "${type.csharpType}?",
+          nativeReturnType = "IntPtr",
+          body = checkedPointerBody(
+            nativeName,
+            callArguments,
+            "return nativeResult == IntPtr.Zero ? null : " +
+                "new ${type.csharpType}(Marshal.PtrToStringUTF8(nativeResult)!);",
+            prelude,
+            cleanup,
           ),
         )
 

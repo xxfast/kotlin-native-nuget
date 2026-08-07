@@ -1060,6 +1060,20 @@ internal class ForwardCallablePlanner(
         )
       )
 
+      // ADR-077 sub-item 3: one STRING-wire parameter like the non-null value-class input above;
+      // the transfer records the *nullable* type so both emitters lower with null propagation.
+      is BridgeType.ValueClass -> listOf(
+        ForwardAbiParameter(
+          name = name,
+          wireType = ForwardAbiWireType.STRING,
+          direction = ForwardAbiDirection.IN,
+          transfer = ForwardTransfer(
+            name, type, ForwardFlow.INTO_KOTLIN, ForwardPassing.VALUE,
+            ForwardOwnership.BORROWED, ForwardConversion.BOX_VALUE_CLASS,
+          ),
+        )
+      )
+
       is BridgeType.Primitive -> listOf(
         ForwardAbiParameter(
           name = "${name}HasValue",
@@ -1209,6 +1223,27 @@ internal class ForwardCallablePlanner(
     )
 
     is BridgeType.ObjectHandle, is BridgeType.Interface -> handleResultShape(BridgeType.Nullable(type))
+    // ADR-077 sub-item 3: reuses the nullable-String shape above verbatim (null rides the null
+    // pointer; a value class's underlying String is non-nullable by construction, so there is no
+    // third state), with only the transfer's type and conversion tag changed. String underlying
+    // only; the nullable x non-String-underlying combination stays deferred.
+    is BridgeType.ValueClass -> if (type.underlying == BridgeType.String) {
+      ForwardResultShape(
+        wireType = ForwardAbiWireType.POINTER,
+        transfer = ForwardTransfer(
+          subject = "result",
+          type = BridgeType.Nullable(type),
+          flow = ForwardFlow.OUT_OF_KOTLIN,
+          passing = ForwardPassing.VALUE,
+          ownership = ForwardOwnership.MATERIALIZED,
+          conversion = ForwardConversion.UNBOX_VALUE_CLASS,
+        ),
+        helperRequirements = setOf(ForwardHelperRequirement.UTF8, ForwardHelperRequirement.VALUE_CLASS),
+      )
+    } else {
+      null
+    }
+
     is BridgeType.Primitive -> {
       val nullable: BridgeType = BridgeType.Nullable(type)
       ForwardResultShape(
@@ -1455,6 +1490,11 @@ internal class ForwardCallablePlanner(
       BridgeType.Instant -> null
 
       is BridgeType.Collection -> inner.collectionInputSkipReason()
+      // ADR-077 sub-item 3: null rides the null pointer on the same string wire as the non-null
+      // parameter (sub-item 1). String underlying only.
+      is BridgeType.ValueClass ->
+        if (inner.underlying == BridgeType.String) null else ForwardPlanSkipReason.VALUE_CLASS
+
       else -> ForwardPlanSkipReason.NULLABLE
     }
 

@@ -50,4 +50,39 @@ class Tier1ValueClassParameterTest {
     assertContains(cs, "Native_chartSummary(id.Value, out IntPtr error)")
     assertContains(cs, "public static int? chartLength(ChartId id)")
   }
+
+  @Test
+  fun `nullable value class parameter and return ride the null pointer on both halves`() {
+    val result = Tier1Harness.run(
+      """
+      package tier1.valueclassnullparam
+
+      @JvmInline
+      value class ChartId(val value: String)
+
+      class Patient(val name: String) {
+        var backup: ChartId? = null
+
+        // ADR-077 sub-item 3 · nullable parameter position.
+        fun transferTo(to: ChartId?): String = to?.value ?: "none"
+
+        // ADR-077 sub-item 3 · nullable return position.
+        fun previousChart(): ChartId? = backup
+      }
+      """.trimIndent(),
+    )
+
+    assertTrue(result.compiledClean, "expected nullable value-class exports to compile; got: ${result.compileErrors}")
+
+    val kotlin: String = result.generated
+    assertContains(kotlin, "transferTo(to?.let { tier1.valueclassnullparam.ChartId(it) })")
+    assertContains(kotlin, "previousChart()?.value")
+
+    val cs: String = result.generatedCSharp
+    assertContains(cs, "public string TransferTo(ChartId? to)")
+    assertContains(cs, "Native_TransferTo(_handle, to?.Value, out IntPtr error)")
+    assertContains(cs, "string? to, out IntPtr error);")
+    assertContains(cs, "public ChartId? PreviousChart()")
+    assertContains(cs, "return nativeResult == IntPtr.Zero ? null : new ChartId(Marshal.PtrToStringUTF8(nativeResult)!);")
+  }
 }

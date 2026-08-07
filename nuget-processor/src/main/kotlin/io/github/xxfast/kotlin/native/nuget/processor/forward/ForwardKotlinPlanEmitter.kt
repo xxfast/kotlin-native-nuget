@@ -463,6 +463,20 @@ private fun addNullableResult(
       builder.addCode(errorHandlingValueBody(invocation, errorName, "null"), cOpaquePointerVar, stableRef)
     }
 
+    // ADR-077 sub-item 3: safe-call unboxing; a Kotlin null ships the null pointer on the same
+    // wire the nullable-String result above uses.
+    is BridgeType.ValueClass -> {
+      require(call.result == ForwardAbiWireType.POINTER) {
+        "Forward Kotlin nullable value-class result must use POINTER"
+      }
+      builder.returns(kotlinType("String").copy(nullable = true))
+      builder.addCode(
+        errorHandlingValueBody("$invocation?.${type.underlyingPropertyName}", errorName, "null"),
+        cOpaquePointerVar,
+        stableRef,
+      )
+    }
+
     is BridgeType.Primitive -> {
       require(call.result == ForwardAbiWireType.BOOLEAN) {
         "Forward Kotlin nullable primitive result must use BOOLEAN"
@@ -593,6 +607,10 @@ private fun kotlinInputType(type: BridgeType, wireType: ForwardAbiWireType): Typ
     BridgeType.String -> kotlinType("String").copy(nullable = true)
     is BridgeType.ObjectHandle, is BridgeType.Interface, is BridgeType.Collection ->
       cOpaquePointer.copy(nullable = true)
+
+    // ADR-077 sub-item 3: the underlying (String today) with the outer nullability re-applied.
+    is BridgeType.ValueClass ->
+      kotlinInputType(inner.underlying, wireType).copy(nullable = true)
 
     else -> error("Forward Kotlin plan emitter has no input type for nullable $inner")
   }
@@ -759,6 +777,11 @@ private fun loweredArgument(parameter: ForwardPublicParameter): String =
       // sharing the same `?.`-guarded lowering the property setter emitter uses.
       is BridgeType.Collection ->
         loweredCollectionExpression(parameter.name, inner, nullable = true)
+
+      // ADR-077 sub-item 3: `?.let` re-wraps only a non-null wire value, so a C# null arrives as
+      // a genuine Kotlin null rather than a ChartId wrapping an empty string.
+      is BridgeType.ValueClass ->
+        "${parameter.name}?.let { ${inner.qualifiedName}(it) }"
 
       else -> error("Forward Kotlin plan emitter has no argument lowering for nullable $inner")
     }

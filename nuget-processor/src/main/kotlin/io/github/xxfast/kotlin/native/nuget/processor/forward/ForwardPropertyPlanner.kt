@@ -350,10 +350,7 @@ internal class ForwardPropertyPlanner(
     // sub-item 4 and stay unplannable.
     is BridgeType.ValueClass -> type.underlying == BridgeType.String
 
-    // ADR-077 sub-item 3 guard: without the `!is ValueClass` check the recursion would auto-admit
-    // `Nullable(ValueClass)` properties, whose nullable getter/setter shapes only land with
-    // sub-item 3. Remove the guard in that commit.
-    is BridgeType.Nullable -> type.type !is BridgeType.ValueClass && isPlannable(type.type)
+    is BridgeType.Nullable -> isPlannable(type.type)
     else -> false
   }
 

@@ -90,6 +90,26 @@ class Patient(val name: String) {
   fun chartStatus(): String =
     if (currentChart.isValid()) "$name charted at ${currentChart.value}" else "$name uncharted"
 
+  /**
+   * ADR-077 sub-item 3 · nullable property (`var`) position. `ChartId?` rides the null pointer
+   * already used by the nullable-String/ObjectHandle property shapes: no has-value pair, because
+   * the underlying `String` is non-nullable by construction. [hasBackup] and [previousChart]
+   * observe it Kotlin-side, so a C# write only reads back correctly if it arrived as a genuine
+   * `null` or a genuinely re-wrapped [ChartId]. Plans once the sub-item-2 `isPlannable` guard on
+   * `Nullable(ValueClass)` is removed.
+   */
+  var backupChart: ChartId? = null
+
+  /** ADR-077 sub-item 3 · the Kotlin-side observation for [backupChart]'s setter. */
+  fun hasBackup(): Boolean = backupChart != null
+
+  /**
+   * ADR-077 sub-item 3 · nullable return position. Returns [backupChart] itself, so this method
+   * and the property getter share one piece of state: `null` before any C# write, the re-wrapped
+   * [ChartId] after.
+   */
+  fun previousChart(): ChartId? = backupChart
+
   /** Control · LANDS NOW: a non-null String method return works. */
   fun describe(): String = "$name, $weight kg"
 
@@ -165,6 +185,14 @@ class Patient(val name: String) {
    * admits the String underlying, so this method plans and both halves bind.
    */
   fun retag(id: ChartId): String = if (id.isValid()) "$name@${id.value}" else "$name@untagged"
+
+  /**
+   * ADR-077 sub-item 3 · nullable parameter position. Mirrors [retag]'s non-null parameter but
+   * proves Kotlin sees `null` as `null` on the wire, not a [ChartId] wrapping an empty string:
+   * only the null branch is reachable without a real re-wrapped value ever having crossed.
+   */
+  fun transferTo(to: ChartId?): String =
+    if (to != null) "$name transferred to ${to.value}" else "$name has no transfer"
 
   /** MIGRATION.md Phase 8. Class method × Map return. */
   fun scores(): Map<String, Int> = mapOf("weight" to (weight ?: 0))
