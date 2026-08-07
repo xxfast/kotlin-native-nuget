@@ -192,7 +192,10 @@ internal fun CirValueClass.constructorNativeImport(
     entryPoint = ctor.nativeName,
     returnType = if (underlyingType == "string") "IntPtr" else underlyingNativeType,
     name = "Native_Create$suffix",
-    parameters = ctor.parameters.map { parameter -> parameter.copy(nativeType = parameter.type) },
+    // ADR-077: prefer the plan-projected wire shape (an enum parameter imports as `int`, its
+    // ordinal); fall back to the public shape for the legacy (non-plan) route.
+    parameters = ctor.nativeParameters
+      ?: ctor.parameters.map { parameter -> parameter.copy(nativeType = parameter.type) },
     visibility = CirVisibility.PRIVATE,
     hasSyncErrorOut = !underlyingIsReference || ctor.hasErrorCheck,
   )

@@ -1562,8 +1562,15 @@ internal fun translateValueClass(
   val underlyingType: String = underlyingResolved.declaration.simpleName.asString()
   val underlyingName: String =
     underlyingProp.simpleName.asString().replaceFirstChar { it.uppercase() }
-  val underlyingNativeType: String = mapParamType(underlyingType)
-  val isReferenceUnderlying: Boolean = underlyingType !in KOTLIN_TO_CSHARP_PARAM
+  // ADR-077 sub-item 4 prerequisite: an enum underlying is a *value* underlying (ordinal over the
+  // int wire), not a reference one. The name-map check below cannot see that ("Mood" is not in
+  // KOTLIN_TO_CSHARP_PARAM), and misclassifying it as reference used to defer the primary
+  // constructor per ADR-035 while the planner (which classifies with BridgeType, not names) still
+  // planned `_create` -- the exact one-sided ABI the contract check then failed on.
+  val isEnumUnderlying: Boolean =
+    (underlyingResolved.declaration as? KSClassDeclaration)?.classKind == ClassKind.ENUM_CLASS
+  val underlyingNativeType: String = if (isEnumUnderlying) "int" else mapParamType(underlyingType)
+  val isReferenceUnderlying: Boolean = !isEnumUnderlying && underlyingType !in KOTLIN_TO_CSHARP_PARAM
 
   val nativeArg: String = if (isReferenceUnderlying) "${underlyingName}._handle" else underlyingName
 
@@ -1665,7 +1672,8 @@ internal fun translateValueClass(
     .toList()
 
   val csUnderlyingType: String = if (underlyingType == "String") "string"
-  else if (isReferenceUnderlying) underlyingType
+  // The public member is the C# enum itself (`Mood`); only the wire is its int ordinal.
+  else if (isEnumUnderlying || isReferenceUnderlying) underlyingType
   else mapParamType(underlyingType)
 
   return CirValueClass(

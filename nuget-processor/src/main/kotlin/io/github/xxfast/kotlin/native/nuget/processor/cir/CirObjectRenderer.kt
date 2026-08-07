@@ -26,6 +26,9 @@ internal fun StringBuilder.renderValueClass(cls: CirValueClass) {
   cls.constructors.forEachIndexed { index, ctor ->
     val paramStr: String = ctor.parameters.joinToString(", ") { "${it.type} ${it.name}" }
     val paramNames: String = ctor.parameters.joinToString(", ") { it.name }
+    // ADR-077: the native call lowers each argument to its wire shape when the projection
+    // supplied one ((int)mood for an enum parameter); public and wire coincide otherwise.
+    val nativeArgs: String = ctor.nativeArguments?.joinToString(", ") ?: paramNames
     val nativeReturnType: String =
       if (cls.underlyingType == "string") "IntPtr" else cls.underlyingNativeType
     val suffix: String = ctor.nativeSuffix
@@ -33,7 +36,7 @@ internal fun StringBuilder.renderValueClass(cls: CirValueClass) {
     renderDllImport(cls.constructorNativeImport(index, ctor))
     appendLine("        private static $nativeReturnType CreateChecked$suffix($paramStr)")
     appendLine("        {")
-    appendLine("            $nativeReturnType underlying = Native_Create$suffix($paramNames, out IntPtr error);")
+    appendLine("            $nativeReturnType underlying = Native_Create$suffix($nativeArgs, out IntPtr error);")
     appendLine("            if (error != IntPtr.Zero)")
     appendLine("            {")
     appendLine("                throw NugetErrorNative.BuildException(error);")

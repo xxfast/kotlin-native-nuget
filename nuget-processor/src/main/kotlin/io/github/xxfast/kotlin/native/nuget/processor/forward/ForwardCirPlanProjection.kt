@@ -25,17 +25,25 @@ internal object ForwardCirPlanProjection {
     }
     val publicParams: List<CirParameter> = plan.publicParameters()
     val paramNames: String = publicParams.joinToString(", ") { it.name }
-    val body: String = if (underlyingIsString) {
-      "Marshal.PtrToStringUTF8(CreateChecked$nativeSuffix($paramNames))!"
-    } else {
-      "CreateChecked$nativeSuffix($paramNames)"
+    val result: BridgeType = plan.publicSignature.result
+    val body: String = when {
+      underlyingIsString -> "Marshal.PtrToStringUTF8(CreateChecked$nativeSuffix($paramNames))!"
+      // ADR-077: an enum underlying crosses as its int ordinal; cast it back to the enum for the
+      // struct member assignment.
+      result is BridgeType.Enum -> "(${result.csharpType})CreateChecked$nativeSuffix($paramNames)"
+      else -> "CreateChecked$nativeSuffix($paramNames)"
     }
+    val nativeCall: ForwardNativeCall = plan.nativeExports.single()
     return CirValueClassConstructor(
       parameters = publicParams,
-      nativeName = plan.nativeExports.single().exportName,
+      nativeName = nativeCall.exportName,
       body = body,
       hasErrorCheck = plan.errorSlot != null,
       nativeSuffix = nativeSuffix,
+      // ADR-077: the DllImport and its call site follow the plan's wire shape, so an enum
+      // parameter imports as `int` and is passed as `(int)name`, matching the Kotlin export.
+      nativeParameters = plan.nativeInCirParameters(nativeCall.parameters),
+      nativeArguments = plan.publicSignature.parameters.flatMap { plan.callArgument(it) },
     )
   }
 
