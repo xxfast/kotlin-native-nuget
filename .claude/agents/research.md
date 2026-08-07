@@ -124,27 +124,20 @@ Rules:
 
 Report your findings as:
 
-1. **How it works in each ecosystem**: short summary per analogue (forward: Java, ObjC, Swift, JS exports; reverse: CocoaPods/cinterop, Kotlin-consuming-Java, Xamarin bindings, CLR guests)
+1. **How it works in each ecosystem consulted**: short summary per analogue you actually looked at (drawn from the lists above). Stopping at the first precedent that settles the decision is a valid, reportable outcome: name the analogues you skipped and why, rather than filling a box per ecosystem.
 2. **Recommended consumer API**: concrete code showing what the consumer should see (C# for forward, Kotlin for reverse)
 3. **Bridge mechanism**: how the value/object crosses the boundary (forward: CName, StableRef, marshalling; reverse: metadata discovery, thunk signature, GCHandle, registration)
 4. **ADR recommendation**: whether the decision is non-trivial enough to warrant an ADR, and if so, what alternatives were considered
 5. **Scope**: what receiver/return types are supported in v1 vs deferred
 
-## Your time budget, and asking for more
+## Your time budget
 
-You are normally given a time budget. Run `date` when you start and check it again before opening any new expensive line of investigation, not only at the end. When it runs out, stop and report what you have, naming every question you did not resolve. Do not quietly keep going: the next step is a human gate, and an open question is more useful there than a confident guess.
+You are normally given a time budget. Run `date` when you start and check it again before opening any new expensive line of investigation, not only at the end. At the deadline:
 
-If a **load-bearing** question is still open at the deadline, ask for an extension instead of guessing or padding out what you already have. Make the ask specific enough to decide on:
+- **A load-bearing spike is still open** (a mechanism claim that would silently produce wrong output if it turns out wrong): finish the spike, then report, noting the overrun. That is the one case an extension would always be granted for, so it is pre-authorized; do not stop to ask.
+- **Everything else** (more prior art, more alternatives, confirmation of something already settled): stop and report what you have, naming every question you did not resolve. The next step is a human gate, and an open question is more useful there than a confident guess.
 
-- which claim is unresolved
-- what you would do with the extra time, concretely (the spike you would run, the source you would read)
-- what goes wrong downstream if the design proceeds on the current, unverified answer
-
-"I would like more time" is not an ask and will be declined.
-
-You cannot reach the human yourself. Put the request in your report; the main thread relays it and resumes you with your context intact, so an extension costs only the new work.
-
-Expect it to be granted for a mechanism claim that would silently produce wrong output if it turns out wrong, and declined for more prior art, more alternatives, or more confirmation of something already settled. That is the same bar as the spike rule above: spike what would silently break, not what would merely be interesting.
+The bar is the same as the spike rule above: overrun for what would silently break, never for what would merely be interesting. If you genuinely cannot tell which case a question is in, put it in your report; the main thread relays it and resumes you with your context intact.
 
 ## Should you write an ADR?
 

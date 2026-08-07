@@ -43,6 +43,12 @@ internal enum class ForwardPlanSkipReason(val droppedFromCSharp: Boolean) {
   COLLECTION(droppedFromCSharp = true),
   ENUM(droppedFromCSharp = true),
   HANDLE(droppedFromCSharp = true),
+
+  // ADR-076: same defensive classification as CHAR/STRING/ENUM/HANDLE/OBJECT above -- Instant is a
+  // supported ordinary type with no legacy route, so a skip carrying it can only mean a genuine
+  // drop, even though the planner does not currently reach it (shapeOrNull's Instant branch
+  // always succeeds).
+  INSTANT(droppedFromCSharp = true),
   NULLABLE(droppedFromCSharp = true),
   OBJECT(droppedFromCSharp = true),
   STRING(droppedFromCSharp = true),
@@ -614,9 +620,11 @@ internal class ForwardCallablePlanner(
       (parameter.name?.asString() ?: "_") to classifier.classify(parameter.type.resolve())
     }
     // ADR-002 / MIGRATION: top-level nullable primitives keep the shipped two-call ABI.
+    // ADR-076: a top-level nullable Instant shares the same two-call shape (ADR-069 recorded that
+    // this path crashes packNuget for a shape it does not handle, rather than skipping).
     if (origin == ForwardCallableOrigin.TOP_LEVEL &&
       result is BridgeType.Nullable &&
-      result.type is BridgeType.Primitive
+      (result.type is BridgeType.Primitive || result.type == BridgeType.Instant)
     ) {
       return topLevelNullablePrimitivePlan(
         symbol = symbol,
@@ -641,9 +649,10 @@ internal class ForwardCallablePlanner(
   }
 
   /**
-   * Plans a top-level `fun f(...): Primitive?` as [ForwardEvaluation.LEGACY_TWO_CALL]:
-   * `${export}_has_value` (BOOLEAN) + `${export}_value` (primitive wire), matching ADR-002.
-   * Method/extension nullable primitives stay on the ADR-061 single-call `valueOut` shape.
+   * Plans a top-level `fun f(...): Primitive?` (or, per ADR-076, `Instant?`) as
+   * [ForwardEvaluation.LEGACY_TWO_CALL]: `${export}_has_value` (BOOLEAN) + `${export}_value`
+   * (primitive/ticks wire), matching ADR-002. Method/extension nullable primitives stay on the
+   * ADR-061 single-call `valueOut` shape.
    */
   private fun topLevelNullablePrimitivePlan(
     symbol: String,
@@ -653,7 +662,10 @@ internal class ForwardCallablePlanner(
     result: BridgeType.Nullable,
     node: KSNode? = null,
   ): ForwardCallableCatalogEntry {
-    val primitive: BridgeType.Primitive = result.type as BridgeType.Primitive
+    val inner: BridgeType = result.type
+    require(inner is BridgeType.Primitive || inner == BridgeType.Instant) {
+      "Forward planner topLevelNullablePrimitivePlan received unsupported inner type $inner"
+    }
     val ineligible: BridgeType? = parameters.map { it.second }.firstOrNull { type ->
       type.inputSkipReason() != null
     }
@@ -674,9 +686,14 @@ internal class ForwardCallablePlanner(
       result = ForwardAbiWireType.BOOLEAN,
       parameters = nativeInputs + error,
     )
+    val valueWireType: ForwardAbiWireType = if (inner is BridgeType.Primitive) {
+      inner.wireType()
+    } else {
+      ForwardAbiWireType.INT64
+    }
     val value = ForwardNativeCall(
       exportName = "${exportName}_value",
-      result = primitive.wireType(),
+      result = valueWireType,
       parameters = nativeInputs + error,
     )
     val helpers: Set<ForwardHelperRequirement> = buildSet {
@@ -690,6 +707,26 @@ internal class ForwardCallablePlanner(
       if (parameters.any { (_, type) -> type.unwrapNullable() is BridgeType.Collection }) {
         add(ForwardHelperRequirement.COLLECTION)
       }
+      val resultIsInstant: Boolean = inner == BridgeType.Instant
+      val hasInstantParameter: Boolean =
+        parameters.any { (_, type) -> type.unwrapNullable() == BridgeType.Instant }
+      if (resultIsInstant || hasInstantParameter) {
+        add(ForwardHelperRequirement.INSTANT)
+      }
+    }
+    // ADR-076: the generic `transfer()` helper only special-cases String; an Instant result needs
+    // its own INSTANT_TO_TICKS conversion tagged explicitly, or plan validation rejects it.
+    val resultTransfer: ForwardTransfer = if (inner == BridgeType.Instant) {
+      ForwardTransfer(
+        subject = "result",
+        type = result,
+        flow = ForwardFlow.OUT_OF_KOTLIN,
+        passing = ForwardPassing.VALUE,
+        ownership = ForwardOwnership.BORROWED,
+        conversion = ForwardConversion.INSTANT_TO_TICKS,
+      )
+    } else {
+      transfer("result", result, ForwardFlow.OUT_OF_KOTLIN)
     }
     val plan = ForwardCallablePlan(
       invocation = ForwardInvocation(
@@ -707,7 +744,7 @@ internal class ForwardCallablePlanner(
       nativeImports = listOf(presence, value),
       result = ForwardResultConvention(
         wireType = ForwardAbiWireType.BOOLEAN,
-        transfer = transfer("result", result, ForwardFlow.OUT_OF_KOTLIN),
+        transfer = resultTransfer,
       ),
       errorSlot = error,
       helperRequirements = helpers,
@@ -834,6 +871,9 @@ internal class ForwardCallablePlanner(
       if (inputTypes.any { type -> type.unwrapNullable() is BridgeType.Collection }) {
         add(ForwardHelperRequirement.COLLECTION)
       }
+      if (inputTypes.any { type -> type.unwrapNullable() == BridgeType.Instant }) {
+        add(ForwardHelperRequirement.INSTANT)
+      }
     }
     val plan = ForwardCallablePlan(
       invocation = ForwardInvocation(
@@ -895,6 +935,20 @@ internal class ForwardCallablePlanner(
   private fun nativeInputParameters(name: String, type: BridgeType): List<ForwardAbiParameter> = when (type) {
     is BridgeType.Primitive, BridgeType.Char, BridgeType.String -> listOf(
       valueParameter(name, type, ForwardFlow.INTO_KOTLIN),
+    )
+
+    // ADR-076: the wire value is a raw INT64 of ticks; the Kotlin export converts it back to an
+    // Instant via the TICKS_TO_INSTANT helper before use.
+    BridgeType.Instant -> listOf(
+      ForwardAbiParameter(
+        name = name,
+        wireType = ForwardAbiWireType.INT64,
+        direction = ForwardAbiDirection.IN,
+        transfer = ForwardTransfer(
+          name, type, ForwardFlow.INTO_KOTLIN, ForwardPassing.VALUE,
+          ForwardOwnership.BORROWED, ForwardConversion.TICKS_TO_INSTANT,
+        ),
+      )
     )
 
     is BridgeType.Enum -> listOf(
@@ -998,6 +1052,29 @@ internal class ForwardCallablePlanner(
         ),
       )
 
+      // ADR-076 §4.1: same adjacent-pair shape as the nullable-primitive case above, except the
+      // value slot carries the TICKS_TO_INSTANT conversion (the wire value is still a raw INT64).
+      BridgeType.Instant -> listOf(
+        ForwardAbiParameter(
+          name = "${name}HasValue",
+          wireType = ForwardAbiWireType.BOOLEAN,
+          direction = ForwardAbiDirection.IN,
+          transfer = ForwardTransfer(
+            "${name}HasValue", BridgeType.Primitive(PrimitiveKind.BOOLEAN), ForwardFlow.INTO_KOTLIN,
+            ForwardPassing.VALUE, ForwardOwnership.BORROWED, ForwardConversion.DIRECT,
+          ),
+        ),
+        ForwardAbiParameter(
+          name = name,
+          wireType = ForwardAbiWireType.INT64,
+          direction = ForwardAbiDirection.IN,
+          transfer = ForwardTransfer(
+            name, inner, ForwardFlow.INTO_KOTLIN, ForwardPassing.VALUE,
+            ForwardOwnership.BORROWED, ForwardConversion.TICKS_TO_INSTANT,
+          ),
+        ),
+      )
+
       else -> error("Forward planner cannot build an input parameter for nullable $inner")
     }
 
@@ -1049,6 +1126,21 @@ internal class ForwardCallablePlanner(
         conversion = ForwardConversion.ENUM_TO_ORDINAL,
       ),
       helperRequirements = setOf(ForwardHelperRequirement.ENUM_ORDINAL),
+    )
+
+    // ADR-076: same shape as Enum above -- a semantic result with a required conversion, wired
+    // as its own primitive-like representation (INT64 ticks).
+    BridgeType.Instant -> ForwardResultShape(
+      wireType = ForwardAbiWireType.INT64,
+      transfer = ForwardTransfer(
+        subject = "result",
+        type = this,
+        flow = ForwardFlow.OUT_OF_KOTLIN,
+        passing = ForwardPassing.VALUE,
+        ownership = ForwardOwnership.BORROWED,
+        conversion = ForwardConversion.INSTANT_TO_TICKS,
+      ),
+      helperRequirements = setOf(ForwardHelperRequirement.INSTANT),
     )
 
     is BridgeType.ObjectHandle, is BridgeType.Interface -> handleResultShape(this)
@@ -1110,6 +1202,40 @@ internal class ForwardCallablePlanner(
         ),
       )
     }
+
+    // ADR-076 §4.2: same BOOLEAN-result + valueOut OUT-pointer shape as the nullable-primitive
+    // case above -- the whole nullable story reduces to the already-shipped nullable-primitive
+    // INT64 machinery. The outer "result" transfer carries the semantic INSTANT_TO_TICKS
+    // conversion; valueOut itself carries the already-converted raw ticks (a plain Long), so its
+    // own transfer stays DIRECT and the DllImport/local-variable declarations it drives (which
+    // read `transfer.type.csharpType()`) render "long", not "DateTimeOffset".
+    BridgeType.Instant -> ForwardResultShape(
+      wireType = ForwardAbiWireType.BOOLEAN,
+      transfer = ForwardTransfer(
+        subject = "result",
+        type = BridgeType.Nullable(type),
+        flow = ForwardFlow.OUT_OF_KOTLIN,
+        passing = ForwardPassing.VALUE,
+        ownership = ForwardOwnership.BORROWED,
+        conversion = ForwardConversion.INSTANT_TO_TICKS,
+      ),
+      extraParameters = listOf(
+        ForwardAbiParameter(
+          name = "valueOut",
+          wireType = ForwardAbiWireType.POINTER,
+          direction = ForwardAbiDirection.OUT,
+          transfer = ForwardTransfer(
+            subject = "valueOut",
+            type = BridgeType.Primitive(PrimitiveKind.LONG),
+            flow = ForwardFlow.OUT_OF_KOTLIN,
+            passing = ForwardPassing.OUT,
+            ownership = ForwardOwnership.BORROWED,
+            conversion = ForwardConversion.DIRECT,
+          ),
+        )
+      ),
+      helperRequirements = setOf(ForwardHelperRequirement.INSTANT),
+    )
 
     else -> null
   }
@@ -1225,6 +1351,9 @@ internal class ForwardCallablePlanner(
     BridgeType.Unit, is BridgeType.Primitive -> null
     BridgeType.Char -> ForwardPlanSkipReason.CHAR
     BridgeType.String -> ForwardPlanSkipReason.STRING
+    // ADR-076: defensive only -- shapeOrNull's Instant branch always succeeds, same as CHAR/
+    // STRING above.
+    BridgeType.Instant -> ForwardPlanSkipReason.INSTANT
     is BridgeType.Nullable -> ForwardPlanSkipReason.NULLABLE
     // ADR-066: a bridgeable-shaped Collection (List/MutableList result, Map/Set) that still
     // reaches here failed for its own reason (nothing else calls skipReason() on a bridgeable
@@ -1269,7 +1398,7 @@ internal class ForwardCallablePlanner(
   }
 
   private fun BridgeType.inputSkipReason(): ForwardPlanSkipReason? = when (this) {
-    BridgeType.String, BridgeType.Char -> null
+    BridgeType.String, BridgeType.Char, BridgeType.Instant -> null
     is BridgeType.Enum -> null
     // ADR-040 sub-decision B: an interface-typed parameter is plannable — the C# lowering routes
     // through NugetMarshal.HandleOf (ForwardCirPlanProjection.callArgument), which throws
@@ -1287,7 +1416,9 @@ internal class ForwardCallablePlanner(
     // nullability is orthogonal to its components' marshallability, same as the property setter
     // side of this same ADR.
     is BridgeType.Nullable -> when (val inner = type) {
-      BridgeType.String, is BridgeType.ObjectHandle, is BridgeType.Primitive -> null
+      BridgeType.String, is BridgeType.ObjectHandle, is BridgeType.Primitive,
+      BridgeType.Instant -> null
+
       is BridgeType.Collection -> inner.collectionInputSkipReason()
       else -> ForwardPlanSkipReason.NULLABLE
     }
@@ -1329,6 +1460,10 @@ internal class ForwardCallablePlanner(
 
     BridgeType.String -> ForwardAbiWireType.STRING
     BridgeType.Char -> ForwardAbiWireType.CHAR16
+    // ADR-076: like Enum, Instant always needs an explicit conversion tag (INSTANT_TO_TICKS/
+    // TICKS_TO_INSTANT) at its own call site rather than this untagged pass-through -- every
+    // caller builds its own ForwardTransfer for it instead of reaching this generic helper.
+    BridgeType.Instant,
     is BridgeType.Nullable,
     is BridgeType.Collection,
     is BridgeType.RawCollection,
@@ -1395,7 +1530,9 @@ internal fun BridgeType.isBridgeableComponent(): Boolean = when (this) {
   // ADR-040: an interface element inside a collection is deferred v1 scope ("collections of
   // interfaces" — Scope section); routed through the ordinary COLLECTION skip rather than
   // silently building an untested shape.
-  is BridgeType.Interface,
+  // ADR-076: "Instant as a collection element" is explicitly deferred (its own boxing question,
+  // ADR-073/075's isWrappableComponent allow-list territory) -- same route.
+  is BridgeType.Interface, BridgeType.Instant,
   is BridgeType.RawCollection, is BridgeType.RawKSType, is BridgeType.SpecializedProtocol,
   is BridgeType.Unsupported,
     -> false

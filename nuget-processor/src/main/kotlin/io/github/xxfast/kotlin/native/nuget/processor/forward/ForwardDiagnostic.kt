@@ -149,6 +149,7 @@ internal fun ForwardPlanSkipReason.toDiagnosticKind(): ForwardDiagnosticKind = w
   ForwardPlanSkipReason.CHAR,
   ForwardPlanSkipReason.ENUM,
   ForwardPlanSkipReason.HANDLE,
+  ForwardPlanSkipReason.INSTANT,
   ForwardPlanSkipReason.OBJECT,
   ForwardPlanSkipReason.STRING,
   ForwardPlanSkipReason.UNSUPPORTED,

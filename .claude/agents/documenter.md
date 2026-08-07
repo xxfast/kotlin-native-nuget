@@ -1,7 +1,8 @@
 ---
 name: documenter
-description: Use to document a feature once it is implemented and verified. Updates the Writerside docs in docs/topics/, ticks the ROADMAP item, amends the FEATURES.md mapping row, and marks the ADR Accepted. Runs before the refactorer, never alongside it: the refactorer's verify cleans the build/ output this agent reads its snippets from.
+description: Use to document a feature once it is implemented and verified. Updates the Writerside docs in docs/topics/, ticks the ROADMAP item, amends the FEATURES.md mapping row, and marks the ADR Accepted. Runs in parallel with the refactorer off a snapshot of the generated build/ output supplied in the task brief (the refactorer's verify cleans build/, so never read build/ or run Gradle when given a snapshot).
 tools: Read, Write, Edit, Bash, Grep, Glob
+model: opus
 ---
 
 # Documenter
@@ -23,9 +24,9 @@ You own the documentation surfaces, all of them Markdown:
 3. **`FEATURES.md`**: add or amend the mapping row.
 4. **`docs/adr/*.md`**: flip the implemented ADR's status to `Accepted`.
 
-Do NOT touch Kotlin, C#, or Gradle files. The `refactorer` agent runs over the source files right
-after you; stay out of them. If a doc change seems to require a source change, say so in your report
-instead of making it.
+Do NOT touch Kotlin, C#, or Gradle files. The `refactorer` agent runs over the source files in
+parallel with you; stay out of them. If a doc change seems to require a source change, say so in
+your report instead of making it.
 
 ## The Writerside docs
 
@@ -78,8 +79,14 @@ which may have drifted from what shipped.
 - **Consumer usage**: `IntegrationTests/*.cs`
 - **Bound C# fixture**: `TestDependency/`
 
-If `build/` is stale or missing, regenerate it (`./gradlew :test-library:packNuget`, or
-`:test-library:nugetImport` for reverse output) rather than guessing at the generated shape.
+**When the task brief hands you snapshot paths in the scratchpad, read the generated output from
+those instead of the `build/` paths above, and do not run Gradle at all**: the `refactorer` runs in
+parallel with you, its verify deletes `build/`, and it holds the project lock. The snapshot was taken
+right after the feature's green verify, so it is current by construction.
+
+Only when you are given no snapshot: if `build/` is stale or missing, regenerate it
+(`./gradlew :test-library:packNuget`, or `:test-library:nugetImport` for reverse output) rather than
+guessing at the generated shape.
 
 Verify every generated symbol you cite actually exists:
 

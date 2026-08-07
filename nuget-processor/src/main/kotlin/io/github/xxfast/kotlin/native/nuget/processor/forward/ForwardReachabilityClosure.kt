@@ -200,6 +200,9 @@ internal class ForwardReachabilityClosure(
       "kotlin.Boolean", "kotlin.Byte", "kotlin.UByte", "kotlin.Short", "kotlin.UShort",
       "kotlin.Int", "kotlin.UInt", "kotlin.Long", "kotlin.ULong", "kotlin.Float", "kotlin.Double",
       "kotlin.Unit", "kotlin.Char", "kotlin.String",
+      // ADR-076: a known stdlib scalar, same as String/Char above -- the closure must stop
+      // walking it as a class edge.
+      "kotlin.time.Instant",
     )
     val COLLECTION_TYPES: Set<String> = setOf(
       "kotlin.collections.List", "kotlin.collections.MutableList",

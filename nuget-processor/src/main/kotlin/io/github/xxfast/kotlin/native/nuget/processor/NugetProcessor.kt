@@ -49,6 +49,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.exports.addNugetScopeHelpe
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addNugetScopeDrainExport
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addNugetJobHelperExports
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addNugetErrorHelperExports
+import io.github.xxfast.kotlin.native.nuget.processor.exports.addNugetInstantHelperExports
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addStoredCallbackExports
 import io.github.xxfast.kotlin.native.nuget.processor.exports.findStoredCallbackPairs
 import io.github.xxfast.kotlin.native.nuget.processor.exports.findInterfaceBridgePairs
@@ -979,6 +980,15 @@ class NugetProcessor(
     if (needsScopeHelpers) builder.addNugetScopeDrainExport()
     if (needsScopeHelpers) builder.addNugetJobHelperExports()
     builder.addNugetErrorHelperExports()
+
+    // ADR-076: the toDotNetTicks()/instantFromDotNetTicks() conversion pair, generated only when
+    // some plan actually crosses an Instant.
+    val needsInstantSupport: Boolean = callableCatalog.plans.any { plan ->
+      ForwardHelperRequirement.INSTANT in plan.helperRequirements
+    } || callableCatalog.propertyPlans.any { plan ->
+      ForwardHelperRequirement.INSTANT in plan.helperRequirements
+    }
+    if (needsInstantSupport) builder.addNugetInstantHelperExports()
 
     // ADR-068: `suspend fun` returning StateFlow<T>/MutableStateFlow<T> needs the two shared
     // generic exports keyed on the awaited flow's own handle -- generated once per module,
