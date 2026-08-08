@@ -393,13 +393,26 @@ internal object ForwardCirPlanProjection {
     val receiverType: String = receiver.transfer.type.csharpType()
     val receiverParam = CirParameter(receiver.name, receiverType, receiver.wireType.csharpType())
     val publicParams: List<CirParameter> = listOf(receiverParam) + plan.publicParameters()
-    val receiverArgument: String = if (receiver.transfer.type is BridgeType.ObjectHandle) {
-      "receiver._handle"
-    } else {
-      "receiver"
+    val receiverArgument: String = when (val type: BridgeType = receiver.transfer.type) {
+      is BridgeType.ObjectHandle -> "receiver._handle"
+      // A value-class receiver unwraps to its capitalized underlying property and then lowers to
+      // the wire per underlying, the same two steps a value-class *parameter* takes in
+      // `callArguments` (ADR-077 sub-item 4). Passing the record struct itself would hand the
+      // native import the wrong type (CS1503 in generated code).
+      is BridgeType.ValueClass -> {
+        val unwrapped = "receiver.${type.underlyingPropertyName.replaceFirstChar { it.uppercase() }}"
+        when (type.underlying) {
+          is BridgeType.Enum -> "(int)$unwrapped"
+          is BridgeType.ObjectHandle -> "$unwrapped._handle"
+          else -> unwrapped
+        }
+      }
+
+      else -> "receiver"
     }
     val nativeName: String = "Native_${plan.publicSignature.name}"
     val needsCustomParams: Boolean = receiver.transfer.type is BridgeType.ObjectHandle ||
+        receiver.transfer.type is BridgeType.ValueClass ||
         plan.publicSignature.parameters.any { parameter -> !parameter.type.isTrivialInput() }
     val result: CirResultProjection = plan.resultProjection(
       nativeName = nativeName,

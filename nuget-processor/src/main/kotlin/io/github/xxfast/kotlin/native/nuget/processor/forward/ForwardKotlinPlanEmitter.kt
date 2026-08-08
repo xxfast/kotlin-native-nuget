@@ -759,13 +759,18 @@ private fun cVarType(kind: PrimitiveKind): ClassName = ClassName(
 )
 
 /** The lowered Kotlin expression for an extension function's receiver: an object handle is
- * un-boxed via `asStableRef`, matching every other object-handle input; a primitive/String
- * receiver is already the right Kotlin value as-is.
+ * un-boxed via `asStableRef`, matching every other object-handle input; a value class is
+ * reconstructed from its underlying wire, the same `Owner(value)` re-wrap [loweredArgument]
+ * applies at a parameter slot (ADR-077), which also re-runs the value class's own `init`
+ * validation; a primitive/String receiver is already the right Kotlin value as-is.
  */
 private fun receiverExpression(receiver: ForwardAbiParameter): String =
   when (val type: BridgeType = receiver.transfer.type) {
     is BridgeType.ObjectHandle ->
       "${receiver.name}.asStableRef<${type.qualifiedName}>().get()"
+
+    is BridgeType.ValueClass ->
+      "${type.qualifiedName}(${valueClassUnderlyingLowering(receiver.name, type.underlying)})"
 
     else -> receiver.name
   }

@@ -309,10 +309,13 @@ private fun ForwardPropertyPlan.accessExpression(): String =
         "receiver.asStableRef<${type.qualifiedName}>().get().$kotlinName"
 
       // ADR-075: an extension property whose receiver is a value class crosses the bridge as its
-      // own underlying primitive/String value (ADR-014), exactly like
+      // own underlying value (ADR-014), exactly like
       // `ForwardKotlinPlanEmitter.valueClassReconstruction`'s `Owner(value)` for the value class's
-      // own declared members -- the receiver must be reconstructed before the property access.
-      is BridgeType.ValueClass -> "${type.qualifiedName}(receiver).$kotlinName"
+      // own declared members -- the receiver must be reconstructed before the property access. The
+      // wire carries the *underlying's* representation, so an enum ordinal / StableRef pointer is
+      // lowered first by the same shared helper the setter value uses.
+      is BridgeType.ValueClass ->
+        "${type.qualifiedName}(${valueClassUnderlyingLowering("receiver", type.underlying)}).$kotlinName"
 
       else -> "receiver.$kotlinName"
     }

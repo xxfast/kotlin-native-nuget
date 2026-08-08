@@ -37,10 +37,19 @@ internal object ForwardCirPropertyProjection {
     // ADR-075: an extension receiver that is a value class passes its underlying value to the
     // native call, exactly like the value class's own generated members
     // (`renderValueClassMembers`'s `underlyingName` -- the Kotlin `value` property capitalized).
+    // The underlying itself then unwraps to its own wire, mirroring the parameter lowering in
+    // `ForwardCirPlanProjection.callArguments`: an enum casts to its `int` ordinal, an object
+    // handle hands over its `_handle`.
     val receiverArgument: String = when (val receiverType = receiver.type) {
       is BridgeType.ObjectHandle -> "receiver._handle"
-      is BridgeType.ValueClass ->
-        "receiver.${receiverType.underlyingPropertyName.replaceFirstChar { it.uppercase() }}"
+      is BridgeType.ValueClass -> {
+        val underlying = "receiver.${receiverType.underlyingPropertyName.replaceFirstChar { it.uppercase() }}"
+        when (receiverType.underlying) {
+          is BridgeType.Enum -> "(int)$underlying"
+          is BridgeType.ObjectHandle -> "$underlying._handle"
+          else -> underlying
+        }
+      }
 
       else -> "receiver"
     }

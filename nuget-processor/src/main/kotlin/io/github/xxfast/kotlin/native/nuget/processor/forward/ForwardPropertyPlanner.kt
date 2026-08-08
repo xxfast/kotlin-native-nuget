@@ -162,12 +162,19 @@ internal class ForwardPropertyPlanner(
   private fun extensionProperty(prop: KSPropertyDeclaration): ForwardPropertyPlan? {
     val receiver: KSType = prop.extensionReceiver?.resolve()?.expandAliases() ?: return null
     val receiverType: BridgeType = classifier.classify(receiver)
-    // ADR-075: a value class crosses the bridge as its own underlying primitive/String value
-    // (ADR-014), the same wire shape its own declared members already use
-    // (`ForwardCallablePlanner.valueClassEntries`) — a reference-underlying value class is not
-    // admitted here, matching that same route's ADR-035 deferral.
+    // ADR-075: a value class crosses the bridge as its own underlying value (ADR-014), the same
+    // wire shape its own declared members already use (`ForwardCallablePlanner.valueClassEntries`).
+    // The receiver admits every underlying `isPlannable` admits at an ordinary position (ADR-077's
+    // String/Primitive/Enum/ObjectHandle set): the receiver is reconstructed from that wire before
+    // the property access, so an enum ordinal or a StableRef pointer is no harder here than it is
+    // in a parameter slot.
     val isSupportedValueClass: Boolean = receiverType is BridgeType.ValueClass &&
-        (receiverType.underlying is BridgeType.Primitive || receiverType.underlying == BridgeType.String)
+        when (receiverType.underlying) {
+          BridgeType.String, is BridgeType.Primitive, is BridgeType.Enum,
+          is BridgeType.ObjectHandle -> true
+
+          else -> false
+        }
     val supportedReceiver: Boolean =
       receiverType is BridgeType.ObjectHandle ||
           receiverType is BridgeType.Primitive ||
