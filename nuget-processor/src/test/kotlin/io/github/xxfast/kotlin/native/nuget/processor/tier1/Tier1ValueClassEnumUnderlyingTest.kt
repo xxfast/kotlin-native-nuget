@@ -87,7 +87,7 @@ class Tier1ValueClassEnumUnderlyingTest {
   }
 
   @Test
-  fun `nullable primitive- and enum-underlying value classes keep the named skip everywhere`() {
+  fun `nullable primitive- and enum-underlying value classes ride the has-value fan-out`() {
     val result = Tier1Harness.run(
       """
       package tier1.valueclassnullableskip
@@ -101,24 +101,55 @@ class Tier1ValueClassEnumUnderlyingTest {
       value class Dosage(val milligrams: Double)
 
       class Patient(val name: String) {
-        // ADR-077 deferred: the int/double wire has no in-band null, so every position below must
-        // skip with the named VALUE_CLASS diagnostic, never plan and never crash.
+        // ADR-077 deferred these; ADR-079 binds them. The int/double wire has no in-band null, so
+        // each position below rides its own out-of-band has-value channel instead: ADR-002's
+        // LegacyTwoCall getter + NullableDispatch setter for the properties, the adjacent
+        // name-plus-HasValue parameter pair, ADR-061's BOOLEAN + valueOut for the return.
         var restingTemperament: Temperament? = null
         var lastDosage: Dosage? = null
 
         fun calm(current: Temperament?): String = current?.mood?.name ?: "none"
 
         fun latest(): Dosage? = lastDosage
+
+        fun mood(): Temperament? = restingTemperament
       }
+
+      // ADR-002's two-call `_has_value` + `_value`, the top-level return's own shape.
+      fun standardDosage(kind: Int): Dosage? = if (kind < 0) null else Dosage(kind * 0.5)
       """.trimIndent(),
     )
 
-    assertTrue(result.compiledClean, "expected the deferred nullables to skip cleanly; got: ${result.compileErrors}")
+    assertTrue(result.compiledClean, "expected the nullable underlyings to bind; got: ${result.compileErrors}")
+
+    val kotlin: String = result.generated
+    // Parameter: the HasValue flag decides, so the value slot's dead default is never re-wrapped.
+    assertContains(
+      kotlin,
+      "if (currentHasValue) tier1.valueclassnullableskip.Temperament(" +
+          "tier1.valueclassnullableskip.Mood.entries[current]) else null",
+    )
+    // Return: the unboxed underlying is written through the underlying's own CVar.
+    assertContains(kotlin, "valueOut.reinterpret<DoubleVar>().pointed.value = result.milligrams")
+    assertContains(kotlin, "valueOut.reinterpret<IntVar>().pointed.value = result.mood.ordinal")
+    // Top-level return: ADR-002's two-call pair, the `_value` half unboxing to the underlying.
+    assertContains(kotlin, "@CName(\"standardDosage_has_value\")")
+    assertContains(kotlin, "@CName(\"standardDosage_value\")")
+    assertContains(kotlin, "standardDosage(kind)!!.milligrams")
 
     val cs: String = result.generatedCSharp
-    assertFalse(cs.contains("RestingTemperament"), "Nullable(ValueClass(Enum)) property must stay skipped")
-    assertFalse(cs.contains("LastDosage"), "Nullable(ValueClass(Primitive)) property must stay skipped")
-    assertFalse(cs.contains("Calm("), "Nullable(ValueClass(Enum)) parameter must skip the whole callable")
-    assertFalse(cs.contains("Latest("), "Nullable(ValueClass(Primitive)) return must skip the whole callable")
+    assertContains(cs, "public Temperament? RestingTemperament")
+    assertContains(cs, "public Dosage? LastDosage")
+    assertContains(cs, "return new Temperament((global::Interop.Mood)value);")
+    assertContains(cs, "Native_Set_lastDosage(_handle, value.Value.Milligrams, out IntPtr error)")
+    assertContains(cs, "Native_Calm(_handle, current.HasValue, (int)current.GetValueOrDefault().Mood")
+    assertContains(cs, "public Dosage? Latest()")
+    assertContains(cs, "hasValue ? new Dosage(valueOut) : (Dosage?)null;")
+    // The enum underlying's valueOut is the bare `int` ordinal, cast back on reconstruction.
+    assertContains(cs, "out int valueOut")
+    assertContains(cs, "hasValue ? new Temperament((global::Interop.Mood)valueOut) : (Temperament?)null;")
+    assertContains(cs, "private static extern double standardDosage_value(int kind, out IntPtr error);")
+    assertContains(cs, "public static Dosage? standardDosage(int kind)")
+    assertContains(cs, "return new Dosage(__nuget_value);")
   }
 }

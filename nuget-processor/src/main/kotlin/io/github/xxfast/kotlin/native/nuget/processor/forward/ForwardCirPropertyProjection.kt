@@ -171,7 +171,7 @@ internal object ForwardCirPropertyProjection {
         append(
           checkedVoidBody(
             nativeName(plan, setter.value),
-            args(plan.valueArgument("value.Value")),
+            args(plan.valueArgument("value.Value", nonNull = true)),
             indent = "                "
           )
         )
@@ -249,12 +249,15 @@ internal object ForwardCirPropertyProjection {
    * ADR-077 sub-item 4: rebuild the record struct from `nativeResult`, composing the underlying's
    * own step (UTF-8, enum cast, handle wrapper) inside the constructor call.
    */
-  private fun valueClassGetterReconstruction(type: BridgeType.ValueClass): String {
+  private fun valueClassGetterReconstruction(
+    type: BridgeType.ValueClass,
+    wireValue: String = "nativeResult",
+  ): String {
     val inner: String = when (val underlying: BridgeType = type.underlying) {
-      BridgeType.String -> "Marshal.PtrToStringUTF8(nativeResult)!"
-      is BridgeType.Enum -> "(${underlying.csharpType})nativeResult"
-      is BridgeType.ObjectHandle -> "new ${underlying.csharpType()}(nativeResult)"
-      is BridgeType.Primitive -> "nativeResult"
+      BridgeType.String -> "Marshal.PtrToStringUTF8($wireValue)!"
+      is BridgeType.Enum -> "(${underlying.csharpType})$wireValue"
+      is BridgeType.ObjectHandle -> "new ${underlying.csharpType()}($wireValue)"
+      is BridgeType.Primitive -> wireValue
       else -> error(
         "Forward CIR property projection has no value-class reconstruction for $underlying",
       )
@@ -264,17 +267,26 @@ internal object ForwardCirPropertyProjection {
 
   private fun legacyGetter(presence: String, value: String, args: String, type: BridgeType): String {
     val inner: BridgeType = (type as BridgeType.Nullable).type
-    require(inner is BridgeType.Primitive || inner == BridgeType.Instant) {
-      "Forward property legacy getter requires a nullable primitive or Instant, got $type"
+    // ADR-079: a Primitive/Enum-underlying value class rides the same two-call getter; the
+    // `_value` read's local type comes from the underlying's wire (`wireType()` delegates).
+    require(
+      inner is BridgeType.Primitive || inner == BridgeType.Instant ||
+          inner is BridgeType.ValueClass
+    ) {
+      "Forward property legacy getter requires a nullable primitive, Instant or value class, " +
+          "got $type"
     }
     val presenceArgs: String = listOf(args, "out IntPtr error").filter { it.isNotBlank() }.joinToString(", ")
     val valueArgs: String = listOf(args, "out IntPtr error2").filter { it.isNotBlank() }.joinToString(", ")
     // ADR-076: the "value" wire read is always the raw representation (`long` ticks for Instant);
     // the return expression lifts it into the semantic type.
-    val returnExpression: String = if (inner == BridgeType.Instant) {
-      "new global::System.DateTimeOffset(value, global::System.TimeSpan.Zero)"
-    } else {
-      "value"
+    val returnExpression: String = when {
+      inner == BridgeType.Instant ->
+        "new global::System.DateTimeOffset(value, global::System.TimeSpan.Zero)"
+
+      // ADR-079: rebuild the record struct from the underlying wire value the `_value` call read.
+      inner is BridgeType.ValueClass -> valueClassGetterReconstruction(inner, "value")
+      else -> "value"
     }
     return buildString {
       appendLine(); appendLine("            bool hasValue = $presence($presenceArgs);"); appendErrorCheck(this)
@@ -377,7 +389,13 @@ internal object ForwardCirPropertyProjection {
     else -> value.wireType().csharpWireType()
   }
 
-  private fun ForwardPropertyPlan.valueArgument(name: String = "value"): String =
+  /** [nonNull] marks a call site that has already unwrapped the `Nullable<T>` (the
+   *  `NullableDispatch` setter's `value.Value`), so no `?.` propagation may be emitted: `?.` on a
+   *  non-nullable struct is a C# error. */
+  private fun ForwardPropertyPlan.valueArgument(
+    name: String = "value",
+    nonNull: Boolean = false,
+  ): String =
     when (val value = type.unwrapNullable()) {
       is BridgeType.Enum -> "(int)$name"
       // ADR-076: UtcTicks is load-bearing (verified) -- a consumer holding a non-UTC
@@ -414,7 +432,7 @@ internal object ForwardCirPropertyProjection {
       // the struct where the native import expects the wire type (CS1503 in generated code).
       is BridgeType.ValueClass -> {
         val prop: String = value.underlyingPropertyName.replaceFirstChar { it.uppercase() }
-        val nullable: Boolean = type is BridgeType.Nullable
+        val nullable: Boolean = type is BridgeType.Nullable && !nonNull
         val unwrapped: String = if (nullable) "$name?.$prop" else "$name.$prop"
         when (value.underlying) {
           is BridgeType.Enum -> "(int)$unwrapped"

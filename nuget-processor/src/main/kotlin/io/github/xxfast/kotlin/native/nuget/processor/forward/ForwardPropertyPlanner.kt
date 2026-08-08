@@ -23,15 +23,31 @@ internal data class ForwardDroppedPropertySetter(
   val componentDescription: String,
 )
 
+/**
+ * A property whose declared type [ForwardPropertyPlanner.isPlannable] rejects outright, so the
+ * whole property (getter and setter alike) is absent from the generated C#. Unlike
+ * [ForwardDroppedPropertySetter], which is a partial skip, nothing of this property survives.
+ */
+internal data class ForwardDroppedProperty(
+  val symbol: String,
+  val node: KSNode?,
+  val typeDescription: String,
+)
+
 /** Builds the property slice while leaving unsupported/specialized properties on their named legacy paths. */
 internal class ForwardPropertyPlanner(
   private val classifier: ForwardBridgeTypeClassifier,
 ) {
   private val droppedSetters: MutableList<ForwardDroppedPropertySetter> = mutableListOf()
+  private val dropped: MutableList<ForwardDroppedProperty> = mutableListOf()
 
   /** ADR-075: every collection property setter this planner declined to build because a
    *  component failed [isWrappableComponent] — the property itself is still planned, get-only. */
   val droppedPropertySetters: List<ForwardDroppedPropertySetter> get() = droppedSetters
+
+  /** Every property this planner declined to plan at all, minus the ones a legacy route still
+   *  re-emits (see [recordDropped]). */
+  val droppedProperties: List<ForwardDroppedProperty> get() = dropped
 
   fun catalog(
     classes: List<KSClassDeclaration>,
@@ -167,16 +183,20 @@ internal class ForwardPropertyPlanner(
     // `Collection` (nullable or not) is unconditionally plannable (`isPlannable` already recurses
     // through `Nullable`). Whether a *setter* can also be built is a wholly separate question,
     // decided below, independent of the getter.
-    if (!isPlannable(type)) return null
+    if (!isPlannable(type)) {
+      recordDropped(symbol, prop, type)
+      return null
+    }
     val name: String = prop.simpleName.asString()
     val publicName: String = name.replaceFirstChar { it.uppercase() }
     // ADR-076: Instant shares the nullable-primitive LegacyTwoCall shape exactly.
-    val isNullableLegacyPrimitive: Boolean = type is BridgeType.Nullable &&
-        (type.type is BridgeType.Primitive || type.type == BridgeType.Instant)
-    val getter: ForwardPropertyGetter = if (isNullableLegacyPrimitive) {
+    // ADR-079: so does a Primitive/Enum-underlying value class, with the `_value` call returning
+    // the underlying's wire (`wireType()` already delegates through the value class).
+    val fanOutInner: BridgeType? = type.hasValueFanOutInner()
+    val getter: ForwardPropertyGetter = if (fanOutInner != null) {
       ForwardPropertyGetter.LegacyTwoCall(
         presence = nativeCall(getExport, ForwardAbiWireType.BOOLEAN, receiver, emptyList()),
-        value = nativeCall("${getExport}_value", type.type.wireType(), receiver, emptyList()),
+        value = nativeCall("${getExport}_value", fanOutInner.wireType(), receiver, emptyList()),
       )
     } else {
       ForwardPropertyGetter.Direct(nativeCall(getExport, type.wireType(), receiver, emptyList()))
@@ -229,12 +249,13 @@ internal class ForwardPropertyPlanner(
   ): ForwardPropertySetter? {
     if (!prop.isMutable) return null
     // ADR-076: Instant shares the nullable-primitive NullableDispatch setter shape exactly.
-    val isNullableLegacyPrimitive: Boolean = type is BridgeType.Nullable &&
-        (type.type is BridgeType.Primitive || type.type == BridgeType.Instant)
-    if (isNullableLegacyPrimitive) {
+    // ADR-079: and so does a Primitive/Enum-underlying value class -- `valueParameter` already
+    // resolves the wire through the underlying and tags BOX_VALUE_CLASS.
+    val fanOutInner: BridgeType? = type.hasValueFanOutInner()
+    if (fanOutInner != null) {
       return ForwardPropertySetter.NullableDispatch(
         value = nativeCall(
-          setExport, ForwardAbiWireType.VOID, receiver, listOf(valueParameter(type.type)),
+          setExport, ForwardAbiWireType.VOID, receiver, listOf(valueParameter(fanOutInner)),
         ),
         nullValue = nativeCall("${setExport}_null", ForwardAbiWireType.VOID, receiver, emptyList()),
       )
@@ -282,6 +303,23 @@ internal class ForwardPropertyPlanner(
       !keyOk -> "key type ${key?.diagnosticTypeName() ?: "unknown"}"
       else -> "value type ${value?.diagnosticTypeName() ?: "unknown"}"
     }
+  }
+
+  /**
+   * Records one unplannable property for the `SKIPPED_UNSUPPORTED_PROPERTY` diagnostic, unless a
+   * legacy route still re-emits it. The specialized callback/flow protocols are unplannable *by
+   * design*: `CirClassTranslator`'s lambda and flow adapters bind them, so warning that they were
+   * skipped would tell a consumer a working property had vanished. `Nullable` is unwrapped first,
+   * so a `StateFlow<T>?` is excluded on the same grounds as a bare `StateFlow<T>`.
+   */
+  private fun recordDropped(symbol: String, prop: KSPropertyDeclaration, type: BridgeType) {
+    val protocol: BridgeType.SpecializedProtocol? =
+      type.unwrapNullable() as? BridgeType.SpecializedProtocol
+    val isLegacyRouted: Boolean = protocol != null && LEGACY_ROUTED_PROTOCOLS.any { prefix ->
+      protocol.name.startsWith(prefix)
+    }
+    if (isLegacyRouted) return
+    dropped.add(ForwardDroppedProperty(symbol, prop, type.diagnosticTypeName()))
   }
 
   /** A short, human-readable name for a diagnostic message — never used to drive marshalling. */
@@ -359,19 +397,31 @@ internal class ForwardPropertyPlanner(
       else -> false
     }
 
-    // ADR-077 sub-item 4: a *nullable* value-class property needs a pointer-shaped underlying
-    // (String, ObjectHandle) to carry null in-band; the primitive/enum-underlying nullable
-    // spelling stays deferred, so it must not ride the plain recursion.
-    is BridgeType.Nullable -> {
-      val inner: BridgeType = type.type
-      if (inner is BridgeType.ValueClass) {
-        inner.underlying == BridgeType.String || inner.underlying is BridgeType.ObjectHandle
-      } else {
-        isPlannable(inner)
-      }
-    }
+    // ADR-077 sub-item 4 carried the pointer-shaped underlyings (String, ObjectHandle), which
+    // carry null in-band; ADR-079 adds the Primitive/Enum ones on the LegacyTwoCall /
+    // NullableDispatch has-value shapes, so the nullable spelling is now plannable exactly when
+    // the non-null one is and the plain recursion is right again.
+    is BridgeType.Nullable -> isPlannable(type.type)
 
     else -> false
+  }
+
+  /**
+   * ADR-079: the inner type of a nullable that needs the out-of-band has-value channel (ADR-002's
+   * `LegacyTwoCall` getter / `NullableDispatch` setter), or `null` when this type does not. A bare
+   * primitive, an [BridgeType.Instant] (ADR-076) and a Primitive/Enum-underlying value class all
+   * qualify: none of their wires has a spare null.
+   */
+  private fun BridgeType.hasValueFanOutInner(): BridgeType? {
+    if (this !is BridgeType.Nullable) return null
+    return when (type) {
+      is BridgeType.Primitive, BridgeType.Instant -> type
+      is BridgeType.ValueClass ->
+        if (type.underlying is BridgeType.Primitive || type.underlying is BridgeType.Enum) type
+        else null
+
+      else -> null
+    }
   }
 
   private fun BridgeType.unwrapNullable(): BridgeType = if (this is BridgeType.Nullable) type else this
@@ -453,5 +503,13 @@ internal class ForwardPropertyPlanner(
     }
 
     else -> ForwardConversion.DIRECT
+  }
+
+  private companion object {
+    /** The [BridgeType.SpecializedProtocol] name prefixes whose properties a legacy route still
+     *  re-emits, so [recordDropped] must stay silent about them. Matches the prefixes
+     *  `ForwardBridgeTypeClassifier` mints and `ForwardCallablePlanner.skipReason` routes. */
+    val LEGACY_ROUTED_PROTOCOLS: List<String> =
+      listOf("lambda ", "suspend lambda ", "flow ", "state flow ")
   }
 }

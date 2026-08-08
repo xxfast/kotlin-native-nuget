@@ -203,8 +203,14 @@ private fun FileSpec.Builder.addLegacyTwoCallKotlinExport(plan: ForwardCallableP
     ?: error("Legacy two-call plan ${plan.invocation.symbol} requires a nullable result")
   // ADR-076: a top-level nullable Instant shares this shape too.
   val inner: BridgeType = result.type
-  require(inner is BridgeType.Primitive || inner == BridgeType.Instant) {
-    "Legacy two-call plan ${plan.invocation.symbol} requires a nullable primitive or Instant"
+  // ADR-079: a Primitive/Enum-underlying value class rides the same two-call shape, unboxing to
+  // the underlying on the `_value` call.
+  require(
+    inner is BridgeType.Primitive || inner == BridgeType.Instant ||
+        inner is BridgeType.ValueClass
+  ) {
+    "Legacy two-call plan ${plan.invocation.symbol} requires a nullable primitive, Instant " +
+        "or value class"
   }
   val error: ForwardAbiParameter = requireNotNull(plan.errorSlot) {
     "Legacy two-call plan ${plan.invocation.symbol} is missing its error slot"
@@ -243,9 +249,21 @@ private fun FileSpec.Builder.addLegacyTwoCallKotlinExport(plan: ForwardCallableP
   )
   addFunction(presenceBuilder.build())
 
-  val valueExpression: String =
-    if (inner == BridgeType.Instant) "$invocation!!.toDotNetTicks()" else "$invocation!!"
-  val valueDefault: String = if (inner == BridgeType.Instant) "0L" else defaultResult(inner)
+  val valueExpression: String = when {
+    inner == BridgeType.Instant -> "$invocation!!.toDotNetTicks()"
+    // ADR-079: unbox to the underlying (the ordinal for an enum underlying) on the `_value` call.
+    inner is BridgeType.ValueClass -> "$invocation!!.${inner.underlyingPropertyName}" +
+        if (inner.underlying is BridgeType.Enum) ".ordinal" else ""
+
+    else -> "$invocation!!"
+  }
+  val valueDefault: String = when {
+    inner == BridgeType.Instant -> "0L"
+    inner is BridgeType.ValueClass ->
+      if (inner.underlying is BridgeType.Enum) "0" else defaultResult(inner.underlying)
+
+    else -> defaultResult(inner)
+  }
   val valueBuilder: FunSpec.Builder = exportBuilder(value).returns(kotlinResultType(value.result))
   valueBuilder.addCode(
     errorHandlingValueBody(valueExpression, error.name, valueDefault),
@@ -494,12 +512,37 @@ private fun addNullableResult(
 
     // ADR-077 sub-items 3/4: safe-call unboxing; a Kotlin null ships the null pointer, either as
     // a null String pointer or as a null StableRef pointer for an ObjectHandle underlying.
+    // ADR-079: a Primitive/Enum underlying has no null pointer to ride, so it takes the ADR-061
+    // BOOLEAN + valueOut shape instead, writing the *unboxed* underlying (the ordinal for an enum)
+    // through the underlying's own CVar.
     is BridgeType.ValueClass -> {
+      val underlying: BridgeType = type.underlying
+      if (underlying is BridgeType.Primitive || underlying is BridgeType.Enum) {
+        require(call.result == ForwardAbiWireType.BOOLEAN) {
+          "Forward Kotlin nullable value-class result over a primitive/enum underlying " +
+              "must use BOOLEAN"
+        }
+        val valueOut: ForwardAbiParameter = requireNotNull(
+          call.parameters.firstOrNull { parameter -> parameter.name == "valueOut" },
+        ) { "Forward Kotlin nullable value-class result is missing valueOut" }
+        val written: String = "result.${type.underlyingPropertyName}" +
+            if (underlying is BridgeType.Enum) ".ordinal" else ""
+        val kind: PrimitiveKind =
+          if (underlying is BridgeType.Primitive) underlying.kind else PrimitiveKind.INT
+        builder.returns(kotlinType("Boolean"))
+        builder.addCode(
+          nullablePrimitiveResultBody(invocation, valueOut.name, errorName, written),
+          cVarType(kind),
+          cOpaquePointerVar,
+          stableRef,
+        )
+        return
+      }
       require(call.result == ForwardAbiWireType.POINTER) {
         "Forward Kotlin nullable value-class result must use POINTER"
       }
       val unboxed = "$invocation?.${type.underlyingPropertyName}"
-      if (type.underlying is BridgeType.ObjectHandle) {
+      if (underlying is BridgeType.ObjectHandle) {
         builder.returns(cOpaquePointer.copy(nullable = true))
         builder.addCode(
           nullableHandleResultBody(unboxed, errorName),
@@ -714,15 +757,19 @@ private fun nullableHandleResultBody(invocation: String, errorName: String): Str
   append("}")
 }
 
+/** [valueExpression] is what gets written into [valueOutName] once `result` is known non-null; it
+ *  is `result` itself for a bare primitive and, per ADR-079, the unboxed underlying
+ *  (`result.milligrams`, `result.mood.ordinal`) for a value-class result. */
 private fun nullablePrimitiveResultBody(
   invocation: String,
   valueOutName: String,
   errorName: String,
+  valueExpression: String = "result",
 ): String = buildString {
   appendLine("return try {")
   appendLine("  val result = $invocation")
   appendLine("  if (result != null && $valueOutName != null) {")
-  appendLine("    $valueOutName.reinterpret<%T>().pointed.value = result")
+  appendLine("    $valueOutName.reinterpret<%T>().pointed.value = $valueExpression")
   appendLine("  }")
   appendLine("  result != null")
   appendLine("} catch (e: Throwable) {")
@@ -820,10 +867,16 @@ private fun loweredArgument(parameter: ForwardPublicParameter): String =
 
       // ADR-077 sub-items 3/4: `?.let` re-wraps only a non-null wire value, so a C# null arrives
       // as a genuine Kotlin null rather than a value class wrapping a default.
-      is BridgeType.ValueClass -> {
-        val lowered: String = valueClassUnderlyingLowering("it", inner.underlying)
-        "${parameter.name}?.let { ${inner.qualifiedName}($lowered) }"
-      }
+      // ADR-079: a Primitive/Enum underlying arrives as the adjacent HasValue pair instead, so the
+      // guard is the `${name}HasValue` flag (the value slot's dead default is never re-wrapped).
+      is BridgeType.ValueClass ->
+        if (inner.underlying is BridgeType.Primitive || inner.underlying is BridgeType.Enum) {
+          val lowered: String = valueClassUnderlyingLowering(parameter.name, inner.underlying)
+          "if (${parameter.name}HasValue) ${inner.qualifiedName}($lowered) else null"
+        } else {
+          val lowered: String = valueClassUnderlyingLowering("it", inner.underlying)
+          "${parameter.name}?.let { ${inner.qualifiedName}($lowered) }"
+        }
 
       else -> error("Forward Kotlin plan emitter has no argument lowering for nullable $inner")
     }

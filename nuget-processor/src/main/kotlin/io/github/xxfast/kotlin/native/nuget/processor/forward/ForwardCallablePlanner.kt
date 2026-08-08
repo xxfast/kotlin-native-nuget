@@ -115,6 +115,10 @@ internal data class ForwardCallablePlanCatalog(
   // planned with `setter = null` because a component failed `isWrappableComponent()`, so the
   // consumer learns the C# property survives read-only rather than silently losing its setter.
   val droppedPropertySetters: List<ForwardDroppedPropertySetter> = emptyList(),
+  // The property planner's whole-property channel: a property whose type it cannot plan at all,
+  // minus the ones a legacy route still re-emits. Separate from droppedPropertySetters above,
+  // which is a partial skip (the getter survives).
+  val droppedProperties: List<ForwardDroppedProperty> = emptyList(),
 ) {
   val plans: List<ForwardCallablePlan> = entries.mapNotNull { entry ->
     (entry as? ForwardCallableCatalogEntry.Planned)?.plan
@@ -167,7 +171,9 @@ internal class ForwardCallablePlanner(
     val propertyPlans: List<ForwardPropertyPlan> = planner.catalog(
       classes, properties, extensionProperties,
     )
-    return ForwardCallablePlanCatalog(entries, propertyPlans, planner.droppedPropertySetters)
+    return ForwardCallablePlanCatalog(
+      entries, propertyPlans, planner.droppedPropertySetters, planner.droppedProperties,
+    )
   }
 
   /**
@@ -622,9 +628,12 @@ internal class ForwardCallablePlanner(
     // ADR-002 / MIGRATION: top-level nullable primitives keep the shipped two-call ABI.
     // ADR-076: a top-level nullable Instant shares the same two-call shape (ADR-069 recorded that
     // this path crashes packNuget for a shape it does not handle, rather than skipping).
+    // ADR-079: a top-level `Dosage?` / `Temperament?` return shares the same two-call shape, with
+    // the `_value` call returning the underlying's own wire.
     if (origin == ForwardCallableOrigin.TOP_LEVEL &&
       result is BridgeType.Nullable &&
-      (result.type is BridgeType.Primitive || result.type == BridgeType.Instant)
+      (result.type is BridgeType.Primitive || result.type == BridgeType.Instant ||
+          (result.type as? BridgeType.ValueClass)?.underlying?.isHasValueFanOutUnderlying() == true)
     ) {
       return topLevelNullablePrimitivePlan(
         symbol = symbol,
@@ -663,7 +672,10 @@ internal class ForwardCallablePlanner(
     node: KSNode? = null,
   ): ForwardCallableCatalogEntry {
     val inner: BridgeType = result.type
-    require(inner is BridgeType.Primitive || inner == BridgeType.Instant) {
+    require(
+      inner is BridgeType.Primitive || inner == BridgeType.Instant ||
+          (inner as? BridgeType.ValueClass)?.underlying?.isHasValueFanOutUnderlying() == true
+    ) {
       "Forward planner topLevelNullablePrimitivePlan received unsupported inner type $inner"
     }
     val ineligible: BridgeType? = parameters.map { it.second }.firstOrNull { type ->
@@ -686,10 +698,12 @@ internal class ForwardCallablePlanner(
       result = ForwardAbiWireType.BOOLEAN,
       parameters = nativeInputs + error,
     )
-    val valueWireType: ForwardAbiWireType = if (inner is BridgeType.Primitive) {
-      inner.wireType()
-    } else {
-      ForwardAbiWireType.INT64
+    val valueWireType: ForwardAbiWireType = when (inner) {
+      is BridgeType.Primitive -> inner.wireType()
+      // ADR-079: the `_value` call returns the underlying's wire (the primitive's own, INT32 for
+      // an enum ordinal); the box step composes in the emitted expressions at both ends.
+      is BridgeType.ValueClass -> inner.underlying.underlyingWireType()
+      else -> ForwardAbiWireType.INT64
     }
     val value = ForwardNativeCall(
       exportName = "${exportName}_value",
@@ -722,17 +736,29 @@ internal class ForwardCallablePlanner(
       if (resultIsInstant || hasInstantParameter) {
         add(ForwardHelperRequirement.INSTANT)
       }
+      // ADR-079: the value-class *result* on this two-call route carries its own helpers, the
+      // same way `nullableResultShape`'s new branch does for the single-call route.
+      if (inner is BridgeType.ValueClass) {
+        add(ForwardHelperRequirement.VALUE_CLASS)
+        if (inner.underlying is BridgeType.Enum) add(ForwardHelperRequirement.ENUM_ORDINAL)
+      }
     }
     // ADR-076: the generic `transfer()` helper only special-cases String; an Instant result needs
     // its own INSTANT_TO_TICKS conversion tagged explicitly, or plan validation rejects it.
-    val resultTransfer: ForwardTransfer = if (inner == BridgeType.Instant) {
+    // ADR-079: likewise a value-class result must carry UNBOX_VALUE_CLASS explicitly.
+    val resultConversion: ForwardConversion? = when {
+      inner == BridgeType.Instant -> ForwardConversion.INSTANT_TO_TICKS
+      inner is BridgeType.ValueClass -> ForwardConversion.UNBOX_VALUE_CLASS
+      else -> null
+    }
+    val resultTransfer: ForwardTransfer = if (resultConversion != null) {
       ForwardTransfer(
         subject = "result",
         type = result,
         flow = ForwardFlow.OUT_OF_KOTLIN,
         passing = ForwardPassing.VALUE,
         ownership = ForwardOwnership.BORROWED,
-        conversion = ForwardConversion.INSTANT_TO_TICKS,
+        conversion = resultConversion,
       )
     } else {
       transfer("result", result, ForwardFlow.OUT_OF_KOTLIN)
@@ -1070,17 +1096,45 @@ internal class ForwardCallablePlanner(
       // ADR-077 sub-items 3/4: one pointer-shaped parameter like the non-null value-class input
       // above (STRING wire for a String underlying, POINTER for an ObjectHandle one); the
       // transfer records the *nullable* type so both emitters lower with null propagation.
-      is BridgeType.ValueClass -> listOf(
-        ForwardAbiParameter(
-          name = name,
-          wireType = inner.underlying.underlyingWireType(),
-          direction = ForwardAbiDirection.IN,
-          transfer = ForwardTransfer(
-            name, type, ForwardFlow.INTO_KOTLIN, ForwardPassing.VALUE,
-            ForwardOwnership.BORROWED, ForwardConversion.BOX_VALUE_CLASS,
+      // ADR-079: a Primitive/Enum underlying has no in-band null on its wire, so it fans out to
+      // the same adjacent HasValue pair the nullable-primitive and nullable-Instant cases below
+      // use, with the value slot carrying the (non-null) value class + BOX_VALUE_CLASS -- exactly
+      // how Instant's pair carries Instant + TICKS_TO_INSTANT.
+      is BridgeType.ValueClass -> if (inner.underlying.isHasValueFanOutUnderlying()) {
+        listOf(
+          ForwardAbiParameter(
+            name = "${name}HasValue",
+            wireType = ForwardAbiWireType.BOOLEAN,
+            direction = ForwardAbiDirection.IN,
+            transfer = ForwardTransfer(
+              "${name}HasValue", BridgeType.Primitive(PrimitiveKind.BOOLEAN),
+              ForwardFlow.INTO_KOTLIN, ForwardPassing.VALUE, ForwardOwnership.BORROWED,
+              ForwardConversion.DIRECT,
+            ),
+          ),
+          ForwardAbiParameter(
+            name = name,
+            wireType = inner.underlying.underlyingWireType(),
+            direction = ForwardAbiDirection.IN,
+            transfer = ForwardTransfer(
+              name, inner, ForwardFlow.INTO_KOTLIN, ForwardPassing.VALUE,
+              ForwardOwnership.BORROWED, ForwardConversion.BOX_VALUE_CLASS,
+            ),
           ),
         )
-      )
+      } else {
+        listOf(
+          ForwardAbiParameter(
+            name = name,
+            wireType = inner.underlying.underlyingWireType(),
+            direction = ForwardAbiDirection.IN,
+            transfer = ForwardTransfer(
+              name, type, ForwardFlow.INTO_KOTLIN, ForwardPassing.VALUE,
+              ForwardOwnership.BORROWED, ForwardConversion.BOX_VALUE_CLASS,
+            ),
+          )
+        )
+      }
 
       is BridgeType.Primitive -> listOf(
         ForwardAbiParameter(
@@ -1259,6 +1313,42 @@ internal class ForwardCallablePlanner(
         )
       }
 
+      // ADR-079: the ADR-061 single-call shape (BOOLEAN has-value result + `valueOut` OUT
+      // pointer), same as the nullable-primitive and nullable-Instant cases below. The outer
+      // transfer carries the Nullable value class + UNBOX_VALUE_CLASS; `valueOut` carries the
+      // *bare* underlying primitive (INT for an enum ordinal) so it renders as `double`/`int` on
+      // the C# side and inherits ADR-069's [MarshalAs(UnmanagedType.I1)] for a Boolean underlying.
+      is BridgeType.Primitive, is BridgeType.Enum -> ForwardResultShape(
+        wireType = ForwardAbiWireType.BOOLEAN,
+        transfer = ForwardTransfer(
+          subject = "result",
+          type = BridgeType.Nullable(type),
+          flow = ForwardFlow.OUT_OF_KOTLIN,
+          passing = ForwardPassing.VALUE,
+          ownership = ForwardOwnership.BORROWED,
+          conversion = ForwardConversion.UNBOX_VALUE_CLASS,
+        ),
+        extraParameters = listOf(
+          ForwardAbiParameter(
+            name = "valueOut",
+            wireType = ForwardAbiWireType.POINTER,
+            direction = ForwardAbiDirection.OUT,
+            transfer = ForwardTransfer(
+              subject = "valueOut",
+              type = type.underlying.valueOutTransferType(),
+              flow = ForwardFlow.OUT_OF_KOTLIN,
+              passing = ForwardPassing.OUT,
+              ownership = ForwardOwnership.BORROWED,
+              conversion = ForwardConversion.DIRECT,
+            ),
+          )
+        ),
+        helperRequirements = buildSet {
+          add(ForwardHelperRequirement.VALUE_CLASS)
+          if (type.underlying is BridgeType.Enum) add(ForwardHelperRequirement.ENUM_ORDINAL)
+        },
+      )
+
       else -> null
     }
 
@@ -1375,6 +1465,25 @@ internal class ForwardCallablePlanner(
   private fun BridgeType.isOrdinaryValueClassUnderlying(): Boolean =
     this == BridgeType.String || this is BridgeType.Primitive ||
         this is BridgeType.Enum || this is BridgeType.ObjectHandle
+
+  /**
+   * ADR-079: the value-class underlyings whose wire has no in-band null, so a
+   * `Nullable(ValueClass)` over them needs the out-of-band has-value channel (an adjacent BOOLEAN
+   * parameter at an input position, a BOOLEAN result + `valueOut` at a return one). String and
+   * ObjectHandle underlyings ride their own null pointer instead (ADR-077 sub-items 3/4).
+   */
+  private fun BridgeType.isHasValueFanOutUnderlying(): Boolean =
+    this is BridgeType.Primitive || this is BridgeType.Enum
+
+  /**
+   * ADR-079: the type an ADR-061 `valueOut` slot carries for a has-value fan-out value class. It is
+   * the *bare* underlying primitive (an enum's ordinal is a plain INT), never the value class
+   * itself, so the slot renders as `double`/`int` in the DllImport and inherits ADR-069's
+   * `[MarshalAs(UnmanagedType.I1)]` for a Boolean underlying. Mirrors Instant's `Primitive(LONG)`
+   * valueOut.
+   */
+  private fun BridgeType.valueOutTransferType(): BridgeType =
+    if (this is BridgeType.Enum) BridgeType.Primitive(PrimitiveKind.INT) else this
 
   private data class ForwardResultShape(
     val wireType: ForwardAbiWireType,
@@ -1519,15 +1628,13 @@ internal class ForwardCallablePlanner(
       BridgeType.Instant -> null
 
       is BridgeType.Collection -> inner.collectionInputSkipReason()
-      // ADR-077 sub-items 3/4: null rides the null pointer, so only pointer-wired underlyings
-      // (String, ObjectHandle) are admissible; a primitive/enum wire has no in-band null and its
-      // nullable spelling stays deferred with the named skip.
+      // ADR-077 sub-items 3/4: null rides the null pointer for the pointer-wired underlyings
+      // (String, ObjectHandle). ADR-079: a Primitive/Enum underlying has no in-band null, so it
+      // fans out to the has-value pair instead; either way the nullable spelling is plannable
+      // exactly when the underlying is (`isOrdinaryValueClassUnderlying`, the non-null rule).
       is BridgeType.ValueClass ->
-        if (inner.underlying == BridgeType.String || inner.underlying is BridgeType.ObjectHandle) {
-          null
-        } else {
-          ForwardPlanSkipReason.VALUE_CLASS
-        }
+        if (inner.underlying.isOrdinaryValueClassUnderlying()) null
+        else ForwardPlanSkipReason.VALUE_CLASS
 
       else -> ForwardPlanSkipReason.NULLABLE
     }

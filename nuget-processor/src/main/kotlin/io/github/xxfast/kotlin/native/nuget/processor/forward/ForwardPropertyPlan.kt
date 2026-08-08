@@ -54,8 +54,13 @@ internal data class ForwardPropertyPlan(
     getter.calls().forEach(::validateCall)
     setter?.calls()?.forEach(::validateCall)
     // ADR-076: Instant shares the nullable-primitive LegacyTwoCall/NullableDispatch shape exactly.
-    val isNullableLegacyPrimitive: Boolean = type is BridgeType.Nullable &&
-        (type.type is BridgeType.Primitive || type.type == BridgeType.Instant)
+    // ADR-079: so does a value class whose underlying is a Primitive or an Enum -- neither wire
+    // has a spare null, so both need the out-of-band has-value channel.
+    val nullableInner: BridgeType? = (type as? BridgeType.Nullable)?.type
+    val underlying: BridgeType? = (nullableInner as? BridgeType.ValueClass)?.underlying
+    val isNullableLegacyPrimitive: Boolean = nullableInner is BridgeType.Primitive ||
+        nullableInner == BridgeType.Instant ||
+        underlying is BridgeType.Primitive || underlying is BridgeType.Enum
     if (getter is ForwardPropertyGetter.LegacyTwoCall) {
       require(isNullableLegacyPrimitive) {
         "Forward property plan $symbol uses LegacyTwoCall for non-nullable primitive $type"

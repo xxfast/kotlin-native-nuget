@@ -122,6 +122,21 @@ is skipped like this:
     at Fixture.kt:4
 ```
 
+A property whose declared type the property planner has no getter/setter shape for is skipped the
+same way, naming the property's own type. `Cat.unsupported: Sequence<String>` is the fixture:
+
+```
+[nuget:SKIPPED_UNSUPPORTED_PROPERTY] Skipping Cat.unsupported: its type generic declaration
+    kotlin.sequences.Sequence has no property getter or setter shape. expose a bridgeable property
+    (or a getter function) whose type is not generic declaration kotlin.sequences.Sequence, and
+    export that instead
+    at Cat.kt:46
+```
+
+`SKIPPED_UNSUPPORTED_PROPERTY` never fires for a property whose type is a lambda, suspend lambda,
+`Flow`, or `StateFlow` (nullable or not): those are unplannable by design and still bind through a
+named legacy route, so warning would tell a consumer a working property had vanished.
+
 The message names the declaration, the reason, an actionable hint, and, when KSP can resolve it,
 the file and line of the Kotlin declaration that was skipped, something the reverse direction's
 `RirDiagnostic` cannot carry, since it works from compiled metadata rather than source. See each
