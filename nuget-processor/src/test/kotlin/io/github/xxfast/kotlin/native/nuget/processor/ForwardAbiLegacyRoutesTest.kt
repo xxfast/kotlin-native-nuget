@@ -30,6 +30,7 @@ class ForwardAbiLegacyRoutesTest {
         ForwardAbiLegacyRoute.LAMBDA_PARAMETER_METHOD,
         ForwardAbiLegacyRoute.STORED_CALLBACK_METHOD,
         ForwardAbiLegacyRoute.INTERFACE_BRIDGE_METHOD,
+        ForwardAbiLegacyRoute.INTERFACE_BRIDGE_FACTORY,
       ),
       ForwardAbiLegacyRoute.entries.toSet(),
     )

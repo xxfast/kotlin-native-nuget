@@ -150,8 +150,10 @@ internal object ForwardCirPlanProjection {
     if (!needsCustomParams) {
       return CirConstructor(parameters = publicParams, body = "", hasErrorCheck = true, nativeSuffix = nativeSuffix)
     }
-    val prelude: List<String> = plan.publicSignature.parameters.mapNotNull { plan.collectionPrelude(it) }
-    val cleanup: List<String> = plan.publicSignature.parameters.mapNotNull { plan.collectionCleanup(it) }
+    val prelude: List<String> =
+      plan.publicSignature.parameters.mapNotNull { plan.collectionPrelude(it) ?: plan.interfacePrelude(it) }
+    val cleanup: List<String> =
+      plan.publicSignature.parameters.mapNotNull { plan.collectionCleanup(it) ?: plan.interfaceCleanup(it) }
     val argumentList: List<String> = plan.publicSignature.parameters.flatMap { plan.callArgument(it) }
     val callArgs: String = (argumentList + "out IntPtr error").joinToString(", ")
     val body: String = buildString {
@@ -526,7 +528,9 @@ internal object ForwardCirPlanProjection {
       // does not carry `._handle` (that is only true of the generated `Foo` backing class). The
       // one shared reflective helper extracts it regardless of which concrete type implements
       // `IFoo`, and throws NotSupportedException for a C#-implemented (non-Kotlin-backed) one.
-      is BridgeType.Interface -> listOf("NugetMarshal.HandleOf(${parameter.name})")
+      // ADR-084 stage 3: the extraction moved into the prelude, because a C#-implemented value
+      // mints a transfer handle that [interfaceCleanup] disposes once the crossing is done.
+      is BridgeType.Interface -> listOf("${parameter.name}Handle")
       is BridgeType.Collection -> listOf("${parameter.name}Handle")
       // ADR-077: the generated `readonly record struct` capitalizes the Kotlin underlying
       // property (`value` -> `Value`, CirClassTranslator); the unwrapped value is lowered to its
@@ -546,9 +550,7 @@ internal object ForwardCirPlanProjection {
       is BridgeType.Nullable -> when (val inner = type.type) {
         BridgeType.String -> listOf(parameter.name)
         is BridgeType.ObjectHandle -> listOf("${parameter.name}?._handle ?? IntPtr.Zero")
-        is BridgeType.Interface -> listOf(
-          "${parameter.name} != null ? NugetMarshal.HandleOf(${parameter.name}) : IntPtr.Zero",
-        )
+        is BridgeType.Interface -> listOf("${parameter.name}Handle")
 
         is BridgeType.Primitive -> listOf("${parameter.name}.HasValue", "${parameter.name}.GetValueOrDefault()")
         // ADR-080: same HasValue/GetValueOrDefault pair, the value half lowered to the ordinal.
@@ -627,6 +629,30 @@ internal object ForwardCirPlanProjection {
     return "IntPtr ${parameter.name}Handle = $value;"
   }
 
+  /**
+   * ADR-084 stage 3: an interface-typed argument is extracted before the call, reporting whether
+   * `HandleOf` *minted* a bridge transfer handle (a C#-implemented object) or read a Kotlin-backed
+   * wrapper's own `_handle`.
+   */
+  private fun ForwardCallablePlan.interfacePrelude(parameter: ForwardPublicParameter): String? {
+    val nullable: Boolean = parameter.type is BridgeType.Nullable
+    if (!parameter.type.isInterfaceInput()) return null
+    val helper: String = if (nullable) "HandleOfOrZero" else "HandleOf"
+    return "IntPtr ${parameter.name}Handle = " +
+        "NugetMarshal.$helper(${parameter.name}, out bool ${parameter.name}Owned);"
+  }
+
+  /**
+   * The transfer handle was only ever a vehicle for the crossing: Kotlin has taken its own
+   * reference to the bridge by now, and holding this StableRef would root the bridge forever
+   * (which is what stops the ADR-084 facet 4 cleaner from ever running). A wrapper's `_handle` is
+   * owned by that wrapper and is never disposed here.
+   */
+  private fun ForwardCallablePlan.interfaceCleanup(parameter: ForwardPublicParameter): String? {
+    if (!parameter.type.isInterfaceInput()) return null
+    return "if (${parameter.name}Owned) { NugetMarshal.Dispose(${parameter.name}Handle); }"
+  }
+
   // ADR-073: load-bearing, not cosmetic. All three Dispose members bind to the same
   // `nuget_dispose` entry point, so emitting NugetListNative.Dispose for a map/set handle would be
   // *runtime*-correct, but a callable whose only collection is a Map/Set never causes
@@ -692,8 +718,10 @@ internal object ForwardCirPlanProjection {
     forceCustomBody: Boolean = false,
   ): CirResultProjection {
     val nativeCall: ForwardNativeCall = singleNativeImport()
-    val prelude: List<String> = parameters.mapNotNull { parameter -> collectionPrelude(parameter) }
-    val cleanup: List<String> = parameters.mapNotNull { parameter -> collectionCleanup(parameter) }
+    val prelude: List<String> =
+      parameters.mapNotNull { parameter -> collectionPrelude(parameter) ?: interfacePrelude(parameter) }
+    val cleanup: List<String> =
+      parameters.mapNotNull { parameter -> collectionCleanup(parameter) ?: interfaceCleanup(parameter) }
     val argumentList: List<String> =
       listOfNotNull(receiverArgument) + parameters.flatMap { parameter -> callArgument(parameter) }
     val callArguments: String = (argumentList + nativeOutParameters(nativeCall) + "out IntPtr error").joinToString(", ")
@@ -714,7 +742,11 @@ internal object ForwardCirPlanProjection {
         returnType = result.csharpType(),
         nativeReturnType = "IntPtr",
         body = checkedPointerBody(
-          nativeName, callArguments, "return new ${result.backingType}(nativeResult);", prelude, cleanup,
+          nativeName,
+          callArguments,
+          "return ${interfaceReturnExpression(result.csharpType(), result.backingType)};",
+          prelude,
+          cleanup,
         ),
       )
 
@@ -773,7 +805,12 @@ internal object ForwardCirPlanProjection {
           body = checkedPointerBody(
             nativeName,
             callArguments,
-            "return nativeResult == IntPtr.Zero ? null : new ${type.backingType}(nativeResult);",
+            "return nativeResult == IntPtr.Zero ? null : ${
+              interfaceReturnExpression(
+                type.csharpType(),
+                type.backingType
+              )
+            };",
             prelude,
             cleanup,
           ),
@@ -1256,3 +1293,17 @@ internal object ForwardCirPlanProjection {
     ForwardAbiWireType.UNKNOWN -> error("Forward CIR projection cannot render an unknown wire type")
   }
 }
+
+/**
+ * ADR-084 facet 5: ask the returned handle whether a C# object is already behind it before wrapping
+ * it in the generated backing class. A Kotlin-backed handle carries no token, so the wrapper
+ * construction is unchanged; a bridge handle resolves to the original C#-implemented instance, so
+ * `Assert.Same(dog, oreo.ClosestFriend())` holds and no read round-trips through two bridges.
+ */
+internal fun interfaceReturnExpression(csharpType: String, backingType: String): String =
+  "(NugetMarshal.TryResolveCSharp(nativeResult, out $csharpType csharpOriginal) " +
+      "? csharpOriginal : new $backingType(nativeResult))"
+
+/** True for `IFoo` and `IFoo?` alike: both cross as one handle argument. */
+private fun BridgeType.isInterfaceInput(): Boolean =
+  this is BridgeType.Interface || (this is BridgeType.Nullable && type is BridgeType.Interface)

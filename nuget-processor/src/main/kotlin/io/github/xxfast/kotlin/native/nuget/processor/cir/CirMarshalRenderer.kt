@@ -273,18 +273,72 @@ internal fun StringBuilder.renderMarshalHelper(helper: CirMarshalHelper) {
   // ADR-040 sub-decision B: the one shared reflective helper for an interface-typed parameter
   // (e.g. `Cat.Befriend(IPet pet)`). The static parameter type is the projected interface, which
   // does not carry `_handle` (only the generated backing wrapper class does), so extraction is
-  // reflective here rather than a direct field read. Throws for a C#-implemented (non-Kotlin-
-  // backed) IFoo -- ROADMAP line 145+ owns that case; this is the v1 boundary.
+  // reflective here rather than a direct field read.
+  //
+  // ADR-084 facet 3: no `_handle` means the value is C#-implemented, and the bridge factory turns
+  // it into a Kotlin-side `object : Foo` handle so the ordinary handle path below it is reused
+  // unchanged. Without a bridge layer in this module there is nothing to fall back to, so the
+  // ADR-040 boundary exception stands.
   appendLine("        internal static IntPtr HandleOf(object value)")
   appendLine("        {")
   appendLine("            var field = value.GetType().GetField(\"_handle\",")
   appendLine("                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Public);")
   appendLine("            if (field == null)")
   appendLine("            {")
-  appendLine("                throw new NotSupportedException(")
-  appendLine("                    $\"{value.GetType().Name} is not a Kotlin-backed object; passing a C#-implemented interface is not supported yet.\");")
+  if (helper.includesBridge) {
+    appendLine("                return NugetBridge.HandleFor(value);")
+  } else {
+    appendLine("                throw new NotSupportedException(")
+    appendLine("                    $\"{value.GetType().Name} is not a Kotlin-backed object; passing a C#-implemented interface is not supported yet.\");")
+  }
   appendLine("            }")
   appendLine("            return (IntPtr)field.GetValue(value)!;")
+  appendLine("        }")
+  appendLine()
+  // ADR-084 stage 3: the same extraction, reporting whether it *minted* a transfer handle. A
+  // Kotlin-backed wrapper's `_handle` belongs to that wrapper and must never be disposed here; a
+  // bridge handle is a one-crossing transfer the call site frees once the native call returns.
+  appendLine("        internal static IntPtr HandleOf(object value, out bool owned)")
+  appendLine("        {")
+  appendLine("            var field = value.GetType().GetField(\"_handle\",")
+  appendLine("                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Public);")
+  appendLine("            if (field == null)")
+  appendLine("            {")
+  appendLine("                owned = true;")
+  appendLine("                return HandleOf(value);")
+  appendLine("            }")
+  appendLine("            owned = false;")
+  appendLine("            return (IntPtr)field.GetValue(value)!;")
+  appendLine("        }")
+  appendLine()
+  appendLine("        internal static IntPtr HandleOfOrZero(object? value, out bool owned)")
+  appendLine("        {")
+  appendLine("            if (value == null)")
+  appendLine("            {")
+  appendLine("                owned = false;")
+  appendLine("                return IntPtr.Zero;")
+  appendLine("            }")
+  appendLine("            return HandleOf(value, out owned);")
+  appendLine("        }")
+  appendLine()
+  appendLine("        [DllImport(\"${helper.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"nuget_csharp_token\")]")
+  appendLine("        private static extern IntPtr Native_csharp_token(IntPtr handle);")
+  appendLine()
+  // ADR-084 facet 5: ask the handle whether a C# object is already behind it before wrapping it in
+  // a second bridge. A Kotlin-backed object answers IntPtr.Zero and the caller wraps as before.
+  appendLine("        internal static bool TryResolveCSharp<T>(IntPtr handle, out T original) where T : class")
+  appendLine("        {")
+  appendLine("            IntPtr token = Native_csharp_token(handle);")
+  appendLine("            if (token == IntPtr.Zero)")
+  appendLine("            {")
+  appendLine("                original = null!;")
+  appendLine("                return false;")
+  appendLine("            }")
+  // The returned StableRef was minted for this crossing only; the original object is reached
+  // through the token, so the fresh handle would otherwise leak.
+  appendLine("            Native_dispose(handle);")
+  appendLine("            original = (T)GCHandle.FromIntPtr(token).Target!;")
+  appendLine("            return true;")
   appendLine("        }")
   appendLine("    }")
   appendLine()

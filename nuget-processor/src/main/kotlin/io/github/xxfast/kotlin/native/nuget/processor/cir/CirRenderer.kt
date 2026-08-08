@@ -38,6 +38,7 @@ class CirRenderer {
         is CirStateFlowHandleHelper -> renderStateFlowHandleHelper(declaration)
         is CirCallbackDelegateHelper -> renderCallbackDelegateHelper(declaration)
         is CirSubscriptionHelper -> renderSubscriptionHelper(declaration)
+        is CirBridgeHelper -> renderBridgeHelper(declaration)
         is CirStaticClass -> renderStaticClass(declaration)
         is CirInterface -> renderInterface(declaration)
         is CirClass -> renderClass(declaration)

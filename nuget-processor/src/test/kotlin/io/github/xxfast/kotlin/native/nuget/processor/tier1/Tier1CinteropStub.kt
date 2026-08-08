@@ -122,6 +122,48 @@ internal object Tier1CinteropStub {
     @Suppress("UNCHECKED_CAST")
     fun <T : Any> COpaquePointer.asStableRef(): StableRef<T> =
       StableRef.create(this as T)
+
+    // ADR-084's bridge factory reinterprets each incoming slot pointer as a C function pointer and
+    // invokes it. Real Kotlin/Native spells that `CPointer<CFunction<(A) -> R>>` with one `invoke`
+    // extension per arity; per this file's stated scope the stand-in only has to satisfy the
+    // emitted call shapes (a slot is arity 0-2 plus its trailing context pointer), so `CFunction`
+    // is itself the pointer here and the arities are spelled out.
+    class CFunction<F : Function<*>> : COpaquePointer()
+
+    fun <R> CFunction<(COpaquePointer) -> R>.invoke(ctx: COpaquePointer): R =
+      TODO("Tier 1 compiles generated code, it never runs it")
+
+    fun <P0, R> CFunction<(P0, COpaquePointer) -> R>.invoke(arg0: P0, ctx: COpaquePointer): R =
+      TODO("Tier 1 compiles generated code, it never runs it")
+
+    fun <P0, P1, R> CFunction<(P0, P1, COpaquePointer) -> R>.invoke(
+      arg0: P0,
+      arg1: P1,
+      ctx: COpaquePointer,
+    ): R = TODO("Tier 1 compiles generated code, it never runs it")
+  """.trimIndent()
+
+  // ADR-084 stage 2: the bridge object's cleaner and the forced-collection support export. Real
+  // Kotlin/Native's `createCleaner` is `@ExperimentalNativeApi` and returns an opaque `Cleaner`;
+  // `GC.collect()` is `@NativeRuntimeApi`. Only the shapes the generator emits are reproduced.
+  private val cleanerStub: String = """
+    package kotlin.native.ref
+
+    class Cleaner internal constructor()
+
+    fun <T> createCleaner(argument: T, block: (T) -> Unit): Cleaner = Cleaner()
+  """.trimIndent()
+
+  private val runtimeStub: String = """
+    package kotlin.native.runtime
+
+    @RequiresOptIn
+    @Retention(AnnotationRetention.BINARY)
+    annotation class NativeRuntimeApi
+
+    object GC {
+      fun collect() {}
+    }
   """.trimIndent()
 
   /** relative file name -> file content, ready for [Tier1Harness] to write to disk and compile. */
@@ -129,5 +171,7 @@ internal object Tier1CinteropStub {
     "Tier1Stub_KotlinNative.kt" to cNameStub,
     "Tier1Stub_ExperimentalNativeApi.kt" to experimentalNativeApiStub,
     "Tier1Stub_Cinterop.kt" to cinteropStub,
+    "Tier1Stub_Cleaner.kt" to cleanerStub,
+    "Tier1Stub_Runtime.kt" to runtimeStub,
   )
 }

@@ -175,7 +175,17 @@ internal object ForwardCirPropertyProjection {
     val prefix: String = listOf(receiver).filter { it.isNotBlank() }.joinToString(", ")
     fun args(extra: String = ""): String = listOf(prefix, extra).filter { it.isNotBlank() }.joinToString(", ")
     return when (val setter = plan.setter) {
-      is ForwardPropertySetter.Direct -> checkedVoidBody(nativeName(plan, setter.call), args(plan.valueArgument()))
+      is ForwardPropertySetter.Direct -> buildString {
+        val prelude: String? = plan.setterPrelude()
+        if (prelude != null) appendLine("            $prelude")
+        append(checkedVoidBody(nativeName(plan, setter.call), args(plan.valueArgument())))
+        val cleanup: String? = plan.setterCleanup()
+        if (cleanup != null) {
+          appendLine()
+          append("            $cleanup")
+        }
+      }
+
       is ForwardPropertySetter.NullableDispatch -> buildString {
         appendLine(); appendLine("            if (value.HasValue)"); appendLine("            {")
         append(
@@ -219,7 +229,8 @@ internal object ForwardCirPropertyProjection {
         is BridgeType.ObjectHandle -> append("            return nativeResult == IntPtr.Zero ? null : new ${inner.csharpType()}(nativeResult);")
         // ADR-040: construct via the backing wrapper class, not the interface spelling.
         is BridgeType.Interface -> append(
-          "            return nativeResult == IntPtr.Zero ? null : new ${inner.backingType}(nativeResult);",
+          "            return nativeResult == IntPtr.Zero ? null : " +
+              "${interfaceReturnExpression(inner.csharpType(), inner.backingType)};",
         )
 
         // ADR-075: a null handle means Kotlin `null`, guarded before the ordinary
@@ -248,7 +259,7 @@ internal object ForwardCirPropertyProjection {
 
       is BridgeType.ObjectHandle -> append("            return new ${value.csharpType()}(nativeResult);")
       is BridgeType.Interface ->
-        append("            return new ${value.backingType}(nativeResult);")
+        append("            return ${interfaceReturnExpression(value.csharpType(), value.backingType)};")
 
       is BridgeType.Collection -> append(collectionMaterialize(value))
       else -> append("            return nativeResult;")
@@ -429,6 +440,63 @@ internal object ForwardCirPropertyProjection {
     else -> value.wireType().csharpWireType()
   }
 
+  /**
+   * ADR-084 stage 3: the two pointer-shaped setter values need a statement *after* the native call,
+   * which a single argument expression cannot carry. An interface value mints a bridge transfer
+   * handle whose disposal is what lets the bridge ever be collected; a collection value builds a
+   * Kotlin list/map/set handle that was likewise never freed. One mechanism closes both.
+   */
+  private fun ForwardPropertyPlan.setterPrelude(name: String = "value"): String? {
+    val nullable: Boolean = type is BridgeType.Nullable
+    return when (val value = type.unwrapNullable()) {
+      is BridgeType.Interface -> {
+        val helper: String = if (nullable) "HandleOfOrZero" else "HandleOf"
+        "IntPtr valueHandle = NugetMarshal.$helper($name, out bool valueOwned);"
+      }
+
+      is BridgeType.Collection -> {
+        val factory: String = when (value.kind) {
+          CollectionKind.LIST, CollectionKind.MUTABLE_LIST -> "CreateList"
+          CollectionKind.MAP, CollectionKind.MUTABLE_MAP -> "CreateMap"
+          CollectionKind.SET, CollectionKind.MUTABLE_SET -> "CreateSet"
+        }
+        // ADR-081: the setter's elements are projected to their underlying before boxing, the same
+        // per-element projection a collection *parameter* uses.
+        val source: String = collectionCreateArgument(name, value) { it.csharpType() }
+        // ADR-075 Decision 3: a null source ships the null pointer rather than an empty collection.
+        val built: String = if (nullable) {
+          "$name != null ? NugetMarshal.$factory($source) : IntPtr.Zero"
+        } else {
+          "NugetMarshal.$factory($source)"
+        }
+        "IntPtr valueHandle = $built;"
+      }
+
+      else -> null
+    }
+  }
+
+  private fun ForwardPropertyPlan.setterCleanup(): String? = when (val value = type.unwrapNullable()) {
+    // Only a minted bridge handle is disposed: a Kotlin-backed wrapper's `_handle` belongs to that
+    // wrapper, and `owned` is how HandleOf reports which of the two it returned.
+    is BridgeType.Interface -> "if (valueOwned) { NugetMarshal.Dispose(valueHandle); }"
+    is BridgeType.Collection -> {
+      val native: String = when (value.kind) {
+        CollectionKind.LIST, CollectionKind.MUTABLE_LIST -> "NugetListNative"
+        CollectionKind.MAP, CollectionKind.MUTABLE_MAP -> "NugetMapNative"
+        CollectionKind.SET, CollectionKind.MUTABLE_SET -> "NugetSetNative"
+      }
+      // ADR-075: a null value never built a handle, and `nuget_dispose` is not null-safe.
+      if (type is BridgeType.Nullable) {
+        "if (valueHandle != IntPtr.Zero) { $native.Dispose(valueHandle); }"
+      } else {
+        "$native.Dispose(valueHandle);"
+      }
+    }
+
+    else -> null
+  }
+
   /** [nonNull] marks a call site that has already unwrapped the `Nullable<T>` (the
    *  `NullableDispatch` setter's `value.Value`), so no `?.` propagation may be emitted: `?.` on a
    *  non-nullable struct is a C# error. */
@@ -444,30 +512,14 @@ internal object ForwardCirPropertyProjection {
       is BridgeType.ObjectHandle -> if (type is BridgeType.Nullable) "$name?._handle ?? IntPtr.Zero" else "$name._handle"
       // ADR-040 sub-decision B: the setter's static parameter type is `IFoo`, so extraction goes
       // through the shared reflective helper rather than a direct `._handle` field read.
-      is BridgeType.Interface -> if (type is BridgeType.Nullable) {
-        "$name != null ? NugetMarshal.HandleOf($name) : IntPtr.Zero"
-      } else {
-        "NugetMarshal.HandleOf($name)"
-      }
+      // ADR-084 stage 3: extraction moved into [setterPrelude], because a C#-implemented value
+      // mints a transfer handle that has to be disposed *after* the native call.
+      is BridgeType.Interface -> "valueHandle"
 
       // ADR-075 Decision 3: a nullable collection is a call-site conditional, not a
       // nullable-returning `CreateList`/`CreateMap`/`CreateSet` -- character-for-character the
       // same shape as the nullable-`Interface` arm above.
-      is BridgeType.Collection -> {
-        val factory: String = when (value.kind) {
-          CollectionKind.LIST, CollectionKind.MUTABLE_LIST -> "CreateList"
-          CollectionKind.MAP, CollectionKind.MUTABLE_MAP -> "CreateMap"
-          CollectionKind.SET, CollectionKind.MUTABLE_SET -> "CreateSet"
-        }
-        // ADR-081: the setter's elements are projected to their underlying before boxing, the same
-        // per-element projection a collection *parameter* uses.
-        val source: String = collectionCreateArgument(name, value) { it.csharpType() }
-        if (type is BridgeType.Nullable) {
-          "$name != null ? NugetMarshal.$factory($source) : IntPtr.Zero"
-        } else {
-          "NugetMarshal.$factory($source)"
-        }
-      }
+      is BridgeType.Collection -> "valueHandle"
 
       // ADR-077 sub-items 2/3/4: unwrap the record struct to its capitalized underlying property
       // and lower it to the wire per underlying, with null propagation for the nullable spelling

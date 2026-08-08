@@ -251,9 +251,9 @@ public void CatEventSource_AddListener_TriggerFiresBothOnMeowAndOnPurr()
 
 ## Limitations
 
-Be precise about what's supported here: interface *parameters* passed from C# to Kotlin are only the `add`/`remove`-paired subscription shape shown above. A Kotlin interface as a **return type** is now supported, see [Interfaces, abstract and sealed classes](interfaces-abstract-sealed.md#interface-typed-return-values); its interface-typed *parameter* side accepts only a Kotlin-backed `IFoo`, not a C#-implemented one. The following are still explicitly not built (ROADMAP Phase 7):
+Be precise about what's supported here: the interface *parameter* shape on **this** page is only the `add`/`remove`-paired subscription route shown above. A Kotlin interface as a **return type**, and a general (non-subscription) interface-typed parameter or property setter, are both now supported too, see [Interfaces, abstract and sealed classes](interfaces-abstract-sealed.md#interface-typed-return-values) and its [Implementing a Kotlin interface in C#](interfaces-abstract-sealed.md#implementing-a-kotlin-interface-in-c) section: a C#-implemented `IFoo` (no `_handle`) can be passed at an ordinary interface-typed parameter like `Cat.Befriend`, dispatched through a per-interface bridge factory rather than throwing `NotSupportedException`. The following are still explicitly not built (ROADMAP Phase 7):
 
-- General C#-implemented interface parameters without an `add`/`remove` pair, i.e. a Kotlin function that takes an interface once and doesn't need a disposable subscription, are not implemented; there's no GCHandle release strategy for that shape yet. This also covers passing a C#-implemented `IFoo` into an ordinary interface-typed parameter like `Cat.Befriend`, which throws `NotSupportedException` in v1.
+- Converging the `add`/`remove` subscription route above onto that general bridge factory is not done; the two routes are separate machinery today, and the subscription route has its own known gaps (a non-Unit-returning or property-bearing subscription interface generates non-compiling Kotlin with no diagnostic), tracked in [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md).
 - Exception propagation from inside a C# callback back into Kotlin is not implemented (the forward-direction `ADR-024`/`ADR-028`/`ADR-029` machinery has no mirror here yet).
 - `Flow<T>` or a suspend lambda (`suspend (T) -> R`) as a function parameter is not implemented.
 
@@ -268,5 +268,6 @@ Be precise about what's supported here: interface *parameters* passed from C# to
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/037-stored-callbacks.md">ADR-037: Stored callbacks</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/039-interface-bridging.md">ADR-039: Interface bridging</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/040-interface-return-type-mapping.md">ADR-040: Interface return type mapping</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/084-csharp-implemented-interfaces.md">ADR-084: C#-implemented Kotlin interfaces</a>
     </category>
 </seealso>
