@@ -201,7 +201,8 @@ class NugetInterfaceGenerationTest {
     assertContains(file.content, "fun introduce(feedable: IFeedable): String {")
     // ADR-085: the scope's handleOf(...) unwraps a generated wrapper exactly as nugetHandle() did,
     // and additionally owns (and frees) a handle minted for a Kotlin implementation.
-    assertContains(file.content, "handleOf(feedable, \"IFeedable\")")
+    // The name is the QUALIFIED C# one: it keys nugetMintBridge's target dispatch.
+    assertContains(file.content, "handleOf(feedable, \"Test.Menagerie.IFeedable\")")
   }
 
   @Test

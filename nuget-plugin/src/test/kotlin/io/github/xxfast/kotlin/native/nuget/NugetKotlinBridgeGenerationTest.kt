@@ -4,6 +4,9 @@ import io.github.xxfast.kotlin.native.nuget.rir.RirAssembly
 import io.github.xxfast.kotlin.native.nuget.rir.RirClass
 import io.github.xxfast.kotlin.native.nuget.rir.RirDiagnostic
 import io.github.xxfast.kotlin.native.nuget.rir.RirDiagnosticKind
+import io.github.xxfast.kotlin.native.nuget.rir.RirEnum
+import io.github.xxfast.kotlin.native.nuget.rir.RirEnumEntry
+import io.github.xxfast.kotlin.native.nuget.rir.RirEnumType
 import io.github.xxfast.kotlin.native.nuget.rir.RirFile
 import io.github.xxfast.kotlin.native.nuget.rir.RirInterface
 import io.github.xxfast.kotlin.native.nuget.rir.RirInterfaceType
@@ -96,6 +99,53 @@ class NugetKotlinBridgeGenerationTest {
     ),
   )
 
+  // ADR-085 follow-up fixtures: a SECOND independent bound interface (so one Kotlin class can
+  // implement both — the multi-interface dispatch bug) whose enum-typed settable property is
+  // declared in ANOTHER namespace, i.e. another generated Kotlin package.
+  private val energyMembers = listOf(
+    RirEnumEntry("Low", 0), RirEnumEntry("Medium", 1), RirEnumEntry("High", 2),
+  )
+
+  private val energyLevel = RirEnumType(namespace = "Test.Wellness", name = "EnergyLevel")
+
+  private val iPerformer = RirInterface(
+    name = "IPerformer",
+    methods = listOf(RirMethod(name = "Perform", returnType = RirStringType(nullable = false))),
+    properties = listOf(
+      RirProperty(name = "Energy", type = energyLevel, isReadOnly = false),
+    ),
+  )
+
+  // The two namespaces must alias to distinct Kotlin packages, as the real TestDependency bind
+  // block does — that is what makes the enum reference cross-package at all.
+  private val menagerieAliases: Map<String, Map<String, String>> = mapOf(
+    "TestDependency" to mapOf(
+      "Test.Menagerie" to "test.menagerie",
+      "Test.Wellness" to "test.wellness",
+    ),
+  )
+
+  private val rirWithPerformer = RirFile(
+    assemblies = listOf(
+      RirAssembly(
+        packageId = "TestDependency",
+        assemblyName = "TestDependency",
+        namespaces = listOf(
+          RirNamespace(name = "Test.Menagerie", types = listOf(iFeedable, iPerformer)),
+          RirNamespace(
+            name = "Test.Wellness",
+            types = listOf(RirEnum(name = "EnergyLevel", entries = energyMembers)),
+          ),
+        ),
+      ),
+    ),
+  )
+
+  // ADR-087 stage 1 is ABI-neutral, so this literal must survive the wrapper. It is derived from
+  // IFeedable's member shapes alone (RirBridging.kotlinBridgeContractHash) — nothing about a slot
+  // BODY may move it, or every already-shipped C# shim fails the ADR-054 registration check.
+  private val contractHashOfIFeedable = 2957489357822963940L
+
   private val rirWithSanctuary = RirFile(
     assemblies = listOf(
       RirAssembly(
@@ -119,19 +169,19 @@ class NugetKotlinBridgeGenerationTest {
 
     assertContains(
       file.content,
-      "private fun iFeedableDescribeSlot(ctx: COpaquePointer?): COpaquePointer? = " +
-          "nugetKotlinString(ctx!!.asStableRef<IFeedable>().get().describe())",
+      "private fun iFeedableDescribeSlot(ctx: COpaquePointer?): COpaquePointer? = try {\n" +
+          "  nugetKotlinString(ctx!!.asStableRef<IFeedable>().get().describe())\n",
     )
     assertContains(
       file.content,
-      "private fun iFeedableFeedSlot(ctx: COpaquePointer?, a0: COpaquePointer?): Unit = " +
-          "ctx!!.asStableRef<IFeedable>().get()" +
-          ".feed(requireNotNull(a0).reinterpret<ByteVar>().toKString())",
+      "private fun iFeedableFeedSlot(ctx: COpaquePointer?, a0: COpaquePointer?): Unit = try {\n" +
+          "  ctx!!.asStableRef<IFeedable>().get()" +
+          ".feed(requireNotNull(a0).reinterpret<ByteVar>().toKString())\n",
     )
     assertContains(
       file.content,
-      "private fun iFeedableLegsGetterSlot(ctx: COpaquePointer?): Int = " +
-          "ctx!!.asStableRef<IFeedable>().get().legs",
+      "private fun iFeedableLegsGetterSlot(ctx: COpaquePointer?): Int = try {\n" +
+          "  ctx!!.asStableRef<IFeedable>().get().legs\n",
     )
     assertContains(file.content, "private fun iFeedableNicknameGetterSlot(")
     assertContains(
@@ -172,10 +222,13 @@ class NugetKotlinBridgeGenerationTest {
     val dispatcher: GeneratedFile =
       files.single { it.relativePath.endsWith("/NugetKotlinBridges.kt") }
 
-    assertContains(runtime.content, "?: nugetMintBridge(this)?.let { NugetObjectHandle(it) }")
+    assertContains(
+      runtime.content, "?: nugetMintBridge(this, interfaceName)?.let { NugetObjectHandle(it) }",
+    )
     assertContains(
       dispatcher.content,
-      "value is testdependency.IFeedable -> testdependency.mintIFeedableBridge(value)",
+      "interfaceName == \"Test.Menagerie.IFeedable\" && value is testdependency.IFeedable -> " +
+          "testdependency.mintIFeedableBridge(value)",
     )
     // The error(...) survives for a value implementing no bridgeable bound interface.
     assertContains(runtime.content, "is a Kotlin implementation of ")
@@ -250,13 +303,13 @@ class NugetKotlinBridgeGenerationTest {
     assertContains(
       file.content,
       "val resultPtr = nugetTransferScope { fn.invoke(handle.require(\"Sanctuary\"), " +
-          "handleOf(feedable, \"IFeedable\")) }",
+          "handleOf(feedable, \"Test.Menagerie.IFeedable\")) }",
     )
     // Property-setter position, nullable: the same scope, through handleOfOrNull.
     assertContains(
       file.content,
       "nugetTransferScope { fn.invoke(handle.require(\"Sanctuary\"), " +
-          "handleOfOrNull(value, \"IFeedable\")) }",
+          "handleOfOrNull(value, \"Test.Menagerie.IFeedable\")) }",
     )
     assertContains(
       file.content, "import io.github.xxfast.kotlin.native.nuget.internal.nugetTransferScope",
@@ -272,6 +325,149 @@ class NugetKotlinBridgeGenerationTest {
     assertContains(
       runtime.content, "if (kotlinReleaseCount.compareAndSet(current, current + 1)) break",
     )
+  }
+
+  // ------------------------------------------------------------------
+  // Cross-package enum imports (the three interface files)
+  // ------------------------------------------------------------------
+
+  @Test
+  fun `an interface's cross-package enum member is imported in all three generated files`() {
+    val files: List<GeneratedFile> =
+      generateKotlinStubs(rirWithPerformer, namespaceAliases = menagerieAliases)
+    val expected = "import test.wellness.EnergyLevel"
+
+    val iface: GeneratedFile = files.single { it.relativePath.endsWith("/IPerformer.kt") }
+    val handle: GeneratedFile = files.single { it.relativePath.endsWith("/IPerformerHandle.kt") }
+    val bindings: GeneratedFile =
+      files.single { it.relativePath.endsWith("/IPerformerBindings.kt") }
+
+    // The pure stub declares `var energy: EnergyLevel`...
+    assertContains(iface.content, expected)
+    assertContains(iface.content, "var energy: EnergyLevel")
+    // ...the handle wrapper implements it...
+    assertContains(handle.content, expected)
+    // ...and the slot body names the enum for the INBOUND (setter) crossing.
+    assertContains(bindings.content, expected)
+    assertContains(bindings.content, "nugetEnumEntry(EnergyLevel.entries, a0, \"EnergyLevel\")")
+  }
+
+  @Test
+  fun `a same-package enum member needs no import`() {
+    val samePkg: RirFile = RirFile(
+      assemblies = listOf(
+        RirAssembly(
+          packageId = "TestDependency",
+          assemblyName = "TestDependency",
+          namespaces = listOf(
+            RirNamespace(
+              name = "Test.Menagerie",
+              types = listOf(
+                iPerformer.copy(
+                  properties = listOf(
+                    RirProperty(
+                      name = "Energy",
+                      type = energyLevel.copy(namespace = "Test.Menagerie"),
+                      isReadOnly = false,
+                    ),
+                  ),
+                ),
+                RirEnum(name = "EnergyLevel", entries = energyMembers),
+              ),
+            ),
+          ),
+        ),
+      ),
+    )
+    val bindings: GeneratedFile = generateKotlinStubs(samePkg)
+      .single { it.relativePath.endsWith("/IPerformerBindings.kt") }
+
+    assertFalse(bindings.content.contains("import testdependency.EnergyLevel"))
+    assertFalse(bindings.content.contains("import test.wellness.EnergyLevel"))
+    assertContains(bindings.content, "nugetEnumEntry(EnergyLevel.entries, a0, \"EnergyLevel\")")
+  }
+
+  // ------------------------------------------------------------------
+  // Target-keyed bridge dispatch
+  // ------------------------------------------------------------------
+
+  @Test
+  fun `nugetMintBridge dispatches on the target interface, not the first matching arm`() {
+    val dispatcher: GeneratedFile =
+      generateKotlinStubs(rirWithPerformer, namespaceAliases = menagerieAliases)
+        .single { it.relativePath.endsWith("/NugetKotlinBridges.kt") }
+
+    assertContains(
+      dispatcher.content,
+      "internal fun nugetMintBridge(value: Any, interfaceName: String): COpaquePointer?",
+    )
+    // Both arms are present and BOTH are gated on the crossing position's qualified C# name, so a
+    // Kotlin class implementing both mints the bridge the position asked for.
+    assertContains(
+      dispatcher.content,
+      "interfaceName == \"Test.Menagerie.IFeedable\" && value is test.menagerie.IFeedable -> " +
+          "test.menagerie.mintIFeedableBridge(value)",
+    )
+    assertContains(
+      dispatcher.content,
+      "interfaceName == \"Test.Menagerie.IPerformer\" && value is test.menagerie.IPerformer -> " +
+          "test.menagerie.mintIPerformerBridge(value)",
+    )
+  }
+
+  @Test
+  fun `the transfer scope keeps the readable simple name in its messages`() {
+    val runtime: GeneratedFile = generateKotlinStubs(rirWithSanctuary)
+      .single { it.relativePath.endsWith("/NugetRuntime.kt") }
+
+    assertContains(runtime.content, "return handle.require(interfaceName.substringAfterLast('.'))")
+    assertContains(runtime.content, "\${interfaceName.substringAfterLast('.')}")
+    assertContains(runtime.content, "is a Kotlin implementation of ")
+  }
+
+  // ------------------------------------------------------------------
+  // ADR-087 stage 1: named per-slot fast-fail
+  // ------------------------------------------------------------------
+
+  @Test
+  fun `every slot body is wrapped in a fast-fail that names the C# member and rethrows`() {
+    val file: GeneratedFile = generateKotlinStubs(rir)
+      .single { it.relativePath.endsWith("/IFeedableBindings.kt") }
+
+    // Method, getter and setter alike, named by their C# names (the audience is the C# consumer).
+    listOf("IFeedable.Describe", "IFeedable.Feed", "IFeedable.Legs", "IFeedable.Nickname")
+      .forEach { member ->
+        assertContains(
+          file.content,
+          "    \"[nuget] Kotlin implementation of `$member` threw \" +\n" +
+              "      \"\${t::class.qualifiedName ?: \"an exception\"}: \${t.message}. \" +\n" +
+              "      \"A Kotlin-implemented C# interface member must not throw " +
+              "(ADR-087 stage 1); \" +\n" +
+              "      \"the process will now terminate.\"",
+        )
+      }
+    // Termination semantics are unchanged: the catch rethrows.
+    assertContains(file.content, "} catch (t: Throwable) {")
+    assertContains(file.content, "  throw t\n}")
+    // The setter's block body wraps too (its body is a statement, not an expression).
+    assertContains(
+      file.content,
+      "private fun iFeedableNicknameSetterSlot(ctx: COpaquePointer?, a0: COpaquePointer?) {\n" +
+          "  try {\n" +
+          "    ctx!!.asStableRef<IFeedable>().get().nickname = " +
+          "a0?.reinterpret<ByteVar>()?.toKString()\n",
+    )
+  }
+
+  @Test
+  fun `the fast-fail wrapper is ABI-neutral - slot count and contract hash do not move`() {
+    val bindings: GeneratedFile = generateKotlinStubs(rir)
+      .single { it.relativePath.endsWith("/IFeedableBindings.kt") }
+
+    // Pinned literals: the wrapper is a body-only change, so a stale shim stays compatible. If
+    // either of these moves, the ADR-054 registration check will reject every shipped consumer.
+    assertContains(bindings.content, "expectedSlots = 7,")
+    assertContains(bindings.content, "expectedHash = ${contractHashOfIFeedable}L,")
   }
 
   // ------------------------------------------------------------------

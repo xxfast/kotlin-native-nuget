@@ -165,6 +165,60 @@ public class MenagerieRoundTripTests
         Assert.True(same, "expected sanctuary.featured to resolve back to the original Goat instance");
     }
 
+    // ADR-085 follow-up fixtures. Both are EXPECTED TO FAIL as of this commit.
+    //
+    // Item A (multi-interface dispatch bug): `nugetMintBridge` in the generated
+    // `NugetKotlinBridges.kt` dispatches by `is` first-match in RIR iteration order and ignores
+    // which interface the crossing position needs (`Any.nugetHandle(interfaceName)` receives the
+    // needed interface name but never passes it to `nugetMintBridge`). `RingLeader` implements
+    // BOTH `IFeedable` and `IPerformer` (independent interfaces, neither derives from the other).
+    // `IFeedable` is declared first in Menagerie.cs, so it is checked first in the generated
+    // `when`; a value passed at the IPerformer-typed position (`Applaud`) still matches
+    // `is IFeedable` first and mints the WRONG bridge, one that does not implement `IPerformer` at
+    // all. This should surface here as an `InvalidCastException` (or similar) out of the native
+    // call, not a normal assertion mismatch — see the verify.sh evidence in the task report for
+    // what actually happens, since item B's compile failure currently blocks this from running at
+    // all.
+    //
+    // Item B (cross-package enum slot import): `IPerformer.Energy` is `Test.Wellness.EnergyLevel`,
+    // a namespace independent of `IPerformer`'s own `Test.Menagerie`. The generated
+    // `IPerformerBindings.kt` slot body for the setter needs to reference `EnergyLevel` by its
+    // bound Kotlin name but the generator never imports it, so `test-library`'s Kotlin compile
+    // fails before this C# test project even builds (see `RingLeaderRecharge_...` below).
+
+    [Fact]
+    public void RingLeaderIntroduceViaFeedable_DispatchesIntoFeedableNotPerformer()
+    {
+        // RingLeader implements BOTH IFeedable and IPerformer. Crossing at the IFeedable-typed
+        // parameter (Sanctuary.Introduce) must mint/resolve an IFeedable bridge and dispatch
+        // Describe()/Legs, not IPerformer's slot table.
+        string result = MenagerieSample.ringLeaderIntroduceViaFeedable();
+        Assert.Equal("introduced Mylo the ringleader with 2 legs", result);
+    }
+
+    [Fact]
+    public void RingLeaderApplaudViaPerformer_DispatchesIntoPerformerNotFeedable()
+    {
+        // Same dual-interface Kotlin object, crossing at the IPerformer-typed parameter this
+        // time. `IFeedable` is declared first in Menagerie.cs, so today's first-match dispatch
+        // mints an IFeedable bridge here too, which does not implement IPerformer at all.
+        string result = MenagerieSample.ringLeaderApplaudViaPerformer();
+        Assert.Equal("Mylo takes a bow", result);
+    }
+
+    [Fact]
+    public void RingLeaderRecharge_CrossPackageEnumSetterAndGetter_RoundTrips()
+    {
+        // IPerformer.Energy is Test.Wellness.EnergyLevel, a namespace independent of IPerformer's
+        // own Test.Menagerie. The setter is the inbound crossing that needs the generated
+        // IPerformerBindings.kt slot body to import EnergyLevel; today it does not, so
+        // test-library fails to compile before this assertion can even run.
+        string result = MenagerieSample.ringLeaderRecharge();
+        // The reverse enum generator emits SCREAMING_CASE entries (`HIGH`), so Kotlin's
+        // EnergyLevel.name is "HIGH", not the C# spelling.
+        Assert.Equal("HIGH", result);
+    }
+
     // ADR-085 lifetime (the reverse mirror of ADR-084's release tests in BidirectionalTests.cs):
     // the factory's GCHandle is a TRANSFER handle the Kotlin call site frees once the native call
     // returns, so a bridge C# did not store has no roots left and the .NET GC can collect it. Its

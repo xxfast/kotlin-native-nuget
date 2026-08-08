@@ -1,3 +1,5 @@
+using Test.Wellness;
+
 namespace Test.Menagerie;
 
 /// <summary>
@@ -28,6 +30,27 @@ public interface IFeedable
 public interface ITagged : IFeedable
 {
     string Tag { get; }
+}
+
+/// <summary>
+/// ADR-085 follow-up fixture (multi-interface dispatch bug): a second admissible bound
+/// interface, deliberately INDEPENDENT of <see cref="IFeedable"/> — it does not derive from it
+/// (a derived interface, like <see cref="ITagged"/>, is a named skip today, not a candidate for
+/// this bug). A Kotlin class implementing both this and <see cref="IFeedable"/> exercises
+/// `nugetMintBridge`'s interface dispatch at two distinct crossing positions.
+/// </summary>
+public interface IPerformer
+{
+    string Perform();
+
+    /// <summary>
+    /// ADR-085 follow-up fixture (cross-package enum slot import): an enum-typed, SETTABLE
+    /// property whose type (<see cref="EnergyLevel"/>) is declared in a namespace other than this
+    /// interface's own (<see cref="Test.Wellness"/> vs <see cref="Test.Menagerie"/>). The setter
+    /// is the INBOUND crossing the bug hits; the getter alone would not (enum returns don't hit
+    /// it).
+    /// </summary>
+    EnergyLevel Energy { get; set; }
 }
 
 /// <summary>
@@ -155,6 +178,27 @@ public class Sanctuary
 
     /// <summary>Derived-interface RETURN (Decision 5's interface-inheritance case).</summary>
     public ITagged Flagship() => new TaggedFerret();
+
+    /// <summary>
+    /// ADR-085 follow-up fixture: interface-typed PARAMETER through the SECOND admissible
+    /// interface, <see cref="IPerformer"/>, independent of <see cref="Introduce"/>'s
+    /// <see cref="IFeedable"/> position. A dual-interface Kotlin object crossing here must
+    /// dispatch into its <see cref="IPerformer"/> slot table, not its <see cref="IFeedable"/>
+    /// one.
+    /// </summary>
+    public string Applaud(IPerformer performer) => performer.Perform();
+
+    /// <summary>
+    /// ADR-085 follow-up fixture: writes then reads <see cref="IPerformer.Energy"/> (enum getter
+    /// AND setter) on an interface-typed argument, exercising the cross-package enum slot
+    /// (<see cref="EnergyLevel"/> lives in <see cref="Test.Wellness"/>, not
+    /// <see cref="Test.Menagerie"/>) on a possibly Kotlin-implemented bridge.
+    /// </summary>
+    public EnergyLevel Recharge(IPerformer performer, EnergyLevel level)
+    {
+        performer.Energy = level;
+        return performer.Energy;
+    }
 }
 
 // Negative cases, one per Decision 6 diagnostic. None of these is implemented by any class in

@@ -231,9 +231,9 @@ fun generateKotlinStubs(
   // is prepended after the loop, once whether-any-class-needs-it is known.
   val expectedRegistrations: MutableList<String> = mutableListOf()
 
-  // ADR-085: (kotlinPkg, interfaceName) for every interface a Kotlin class can implement and hand
-  // back to C#. Drives the single generated nugetMintBridge dispatcher.
-  val bridgeDispatch: MutableList<Pair<String, String>> = mutableListOf()
+  // ADR-085: one arm per interface a Kotlin class can implement and hand back to C#. Drives the
+  // single generated nugetMintBridge dispatcher.
+  val bridgeDispatch: MutableList<BridgeDispatchArm> = mutableListOf()
 
   // ADR-051: derive once for the whole file — both generators must use the same helper
   // (anti-drift contract, ADR-049 Alternative 10 extended by ADR-051).
@@ -501,13 +501,18 @@ fun generateKotlinStubs(
         expectedRegistrations.add("${namespace.name}.${iface.name}")
         // ADR-085: a plannable interface contributes one `is <Interface> ->` arm to the shared
         // nugetMintBridge dispatcher emitted below.
-        kotlinBridgePlan(iface, boundTypes, boundIfaces)
-          ?.let { bridgeDispatch.add(kotlinPkg to it.iface.name) }
+        kotlinBridgePlan(iface, boundTypes, boundIfaces)?.let {
+          bridgeDispatch.add(
+            BridgeDispatchArm(kotlinPkg, it.iface.name, "${namespace.name}.${iface.name}"),
+          )
+        }
 
         result.add(
           GeneratedFile(
             relativePath = "nativeMain/$pkgPath/${iface.name}.kt",
-            content = interfaceFileContent(kotlinPkg, iface, boundIfaces, assembly.packageId),
+            content = interfaceFileContent(
+              kotlinPkg, iface, boundIfaces, assembly.packageId, enumPkgs,
+            ),
           )
         )
         result.add(
@@ -524,7 +529,7 @@ fun generateKotlinStubs(
             relativePath = "nativeMain/$pkgPath/${iface.name}Bindings.kt",
             content = interfaceBindingsFileContent(
               kotlinPkg, namespace.name, iface, registrables, exportName, assembly.packageId,
-              kotlinBridgePlan(iface, boundTypes, boundIfaces),
+              kotlinBridgePlan(iface, boundTypes, boundIfaces), enumPkgs,
             ),
           )
         )
@@ -1423,6 +1428,23 @@ private fun enumImports(
   .map { (pkg, name) -> "import $pkg.$name" }
   .distinct()
   .sorted()
+
+// ADR-070/085: every enum type a set of interface registrables NAMES in generated Kotlin source —
+// return types, method parameters, and property types (getter and setter alike). An inbound
+// position (parameter, setter) names the enum just as much as an outbound one does
+// (`nugetEnumEntry(EnergyLevel.entries, ...)`), so all three interface files need the same import
+// coverage the class/struct files already get from enumImports.
+private fun registrableEnumTypes(registrables: List<RirRegistrable>): List<RirEnumType> =
+  registrables.flatMap { r ->
+    when (r) {
+      is RirRegistrable.Method -> listOfNotNull(r.method.returnType as? RirEnumType) +
+          r.method.parameters.mapNotNull { it.type as? RirEnumType }
+
+      is RirRegistrable.PropertyGetter -> listOfNotNull(r.property.type as? RirEnumType)
+      is RirRegistrable.PropertySetter -> listOfNotNull(r.property.type as? RirEnumType)
+      is RirRegistrable.Ctor -> emptyList()
+    }
+  }.distinct()
 
 // ADR-059: the struct equivalent of enumImports above — the `import <pkg>.<StructName>` lines a
 // struct's own generated data class file needs for the DIRECT struct-typed components it declares
@@ -3291,8 +3313,12 @@ private fun argConversion(type: RirTypeRef, name: String): String = when {
   // ADR-085: `handleOf` is a member of the NugetTransferScope this call site is wrapped in (see
   // wrapInvoke), so a bridge minted for a Kotlin implementation is freed after the native call
   // returns instead of rooting the bridge forever.
-  type is RirInterfaceType && type.nullable -> "handleOfOrNull($name, \"${type.name}\")"
-  type is RirInterfaceType -> "handleOf($name, \"${type.name}\")"
+  // The name passed is the QUALIFIED C# name: it keys nugetMintBridge's dispatch, so it must
+  // identify the target position's interface unambiguously across namespaces.
+  type is RirInterfaceType && type.nullable ->
+    "handleOfOrNull($name, \"${type.namespace}.${type.name}\")"
+
+  type is RirInterfaceType -> "handleOf($name, \"${type.namespace}.${type.name}\")"
   type is RirEnumType -> "$name.ordinal"
   type is RirPrimitiveType && type.name == "char" -> "$name.code.toUShort()"
   // ADR-059: a struct-typed argument must be decomposed into its LEAVES via structArgConversions
@@ -4035,12 +4061,16 @@ private fun nugetRuntimeContent(): String = """
   |// ADR-085: a value that is NOT a generated wrapper is a Kotlin implementation of the interface;
   |// mint a C#-side bridge for it (nugetMintBridge, generated into NugetKotlinBridges.kt). The
   |// error(...) text survives for a value implementing no bridgeable bound interface.
+  |// [interfaceName] is the TARGET position's fully qualified C# name (`Test.Menagerie.IFeedable`):
+  |// a Kotlin class may implement several bound interfaces, and only the crossing position knows
+  |// which bridge C# is asking for. The error text keeps the readable simple name.
   |internal fun Any.nugetHandle(interfaceName: String): NugetObjectHandle =
   |  (this as? NugetHandleOwner)?.handle
-  |    ?: nugetMintBridge(this)?.let { NugetObjectHandle(it) }
+  |    ?: nugetMintBridge(this, interfaceName)?.let { NugetObjectHandle(it) }
   |    ?: error(
-  |      "[nuget] ${'$'}{this::class.simpleName} is a Kotlin implementation of ${'$'}interfaceName; " +
-  |          "passing a Kotlin-implemented C# interface back to C# is not supported yet."
+  |      "[nuget] ${'$'}{this::class.simpleName} is a Kotlin implementation of " +
+  |          "${'$'}{interfaceName.substringAfterLast('.')}; passing a Kotlin-implemented C# " +
+  |          "interface back to C# is not supported yet."
   |    )
   |
   |// ADR-085 ownership: a MINTED bridge handle is a TRANSFER handle — the call site that minted
@@ -4055,7 +4085,7 @@ private fun nugetRuntimeContent(): String = """
   |    val owned: Boolean = value !is NugetHandleOwner
   |    val handle: NugetObjectHandle = value.nugetHandle(interfaceName)
   |    if (owned) minted.add(handle)
-  |    return handle.require(interfaceName)
+  |    return handle.require(interfaceName.substringAfterLast('.'))
   |  }
   |
   |  fun handleOfOrNull(value: Any?, interfaceName: String): COpaquePointer? =
@@ -4114,13 +4144,23 @@ private fun nugetRuntimeContent(): String = """
   |}
 """.trimMargin().trim()
 
+// ADR-085: one nugetMintBridge arm — [kotlinPkg].[name] is the generated Kotlin interface a value
+// must be an instance of, [qualifiedName] is the C# `{Namespace}.{Type}` the crossing position
+// asks for (the dispatch key; two namespaces can declare the same simple name).
+private data class BridgeDispatchArm(
+  val kotlinPkg: String,
+  val name: String,
+  val qualifiedName: String,
+)
+
 // ADR-085: NugetKotlinBridges.kt — the single dispatcher nugetHandle()'s fallback calls, one arm
 // per interface a Kotlin class can implement and hand back to C#. Deliberately a separate file
 // from NugetRuntime.kt: this one references the generated per-interface mint functions in their
 // own packages, and NugetRuntime.kt is fixed content with no knowledge of them.
-private fun nugetKotlinBridgesContent(dispatch: List<Pair<String, String>>): String {
-  val arms: String = dispatch.joinToString("\n") { (pkg, name) ->
-    "  value is $pkg.$name -> $pkg.mint${name}Bridge(value)"
+private fun nugetKotlinBridgesContent(dispatch: List<BridgeDispatchArm>): String {
+  val arms: String = dispatch.joinToString("\n") { arm ->
+    "  interfaceName == \"${arm.qualifiedName}\" && value is ${arm.kotlinPkg}.${arm.name} -> " +
+        "${arm.kotlinPkg}.mint${arm.name}Bridge(value)"
   }
   val body: String = if (arms.isEmpty()) "  else -> null" else "$arms\n  else -> null"
   return """
@@ -4133,7 +4173,11 @@ private fun nugetKotlinBridgesContent(dispatch: List<Pair<String, String>>): Str
     |// Generated (ADR-085): dispatch from a Kotlin object at an interface-typed position to the
     |// factory that mints its C#-side bridge. `null` means no bound interface matched, which is
     |// exactly the case nugetHandle() still error(...)s for.
-    |internal fun nugetMintBridge(value: Any): COpaquePointer? = when {
+    |// Keyed on the TARGET position's interface (its fully qualified C# name — two namespaces may
+    |// declare the same simple name), not on the value's own type alone: a Kotlin class
+    |// implementing two bound interfaces must mint the bridge the CROSSING POSITION asks for, and
+    |// a first-match-by-declaration-order `when` silently mints the other one.
+    |internal fun nugetMintBridge(value: Any, interfaceName: String): COpaquePointer? = when {
     |$body
     |}
   """.trimMargin().trim()
@@ -4372,22 +4416,28 @@ private fun interfaceFileContent(
   iface: RirInterface,
   boundIfaces: Map<RirTypeKey, RirInterface>,
   packageId: String,
+  enumPkgs: Map<RirTypeKey, String> = emptyMap(),
   interfacePkgs: Map<RirTypeKey, String> = emptyMap(),
   qualifiedTypeNames: Map<RirTypeKey, String> = emptyMap(),
 ): String {
   val baseKeys: List<RirTypeKey> = interfaceBaseKeys(iface, boundIfaces)
   val supertypesSuffix: String =
     if (baseKeys.isEmpty()) "" else " : " + baseKeys.joinToString(", ") { it.name }
-  val imports: List<String> = baseKeys
-    .filter { interfacePkgs[it] != null && interfacePkgs[it] != kotlinPkg }
-    .map { "import ${interfacePkgs.getValue(it)}.${it.name}" }
-    .distinct()
-    .sorted()
-  val importsBlock: String = if (imports.isEmpty()) "" else imports.joinToString("\n") + "\n\n"
 
   val ownRegistrables: List<RirRegistrable> =
     iface.methods.filterNot { it.isStatic }.map { RirRegistrable.Method(it) } +
         iface.properties.filterNot { it.isStatic }.map { RirRegistrable.PropertyGetter(it) }
+
+  // A member's DECLARED type can name an enum from another bound package (`var energy:
+  // EnergyLevel`), exactly as a bound class's member can — same enumImports resolution.
+  val imports: List<String> = (baseKeys
+    .filter { interfacePkgs[it] != null && interfacePkgs[it] != kotlinPkg }
+    .map { "import ${interfacePkgs.getValue(it)}.${it.name}" } +
+      enumImports(registrableEnumTypes(ownRegistrables), enumPkgs, kotlinPkg))
+    .distinct()
+    .sorted()
+  val importsBlock: String = if (imports.isEmpty()) "" else imports.joinToString("\n") + "\n\n"
+
   val members: String = ownRegistrables.joinToString("\n") { r ->
     "  ${interfaceMemberSignature(r, qualifiedTypeNames)}"
   }
@@ -4438,13 +4488,7 @@ private fun interfaceHandleFileContent(
       else -> false
     }
   }
-  val enumTypes: List<RirEnumType> = effective.mapNotNull { m ->
-    when (val r = m.registrable) {
-      is RirRegistrable.Method -> r.method.returnType as? RirEnumType
-      is RirRegistrable.PropertyGetter -> r.property.type as? RirEnumType
-      else -> null
-    }
-  }.distinct()
+  val enumTypes: List<RirEnumType> = registrableEnumTypes(effective.map { it.registrable })
 
   val imports: MutableList<String> = mutableListOf(
     "import $INTERNAL_PKG.NugetHandleOwner",
@@ -4762,6 +4806,7 @@ private fun interfaceBindingsFileContent(
   exportName: String,
   packageId: String,
   bridgePlan: KotlinBridgePlan? = null,
+  enumPkgs: Map<RirTypeKey, String> = emptyMap(),
 ): String {
   val objectName = "${iface.name}Bindings"
   val hasString: Boolean = registrables.any { r ->
@@ -4802,6 +4847,10 @@ private fun interfaceBindingsFileContent(
         }
       }
       if (hasEnumSlot) add("import $INTERNAL_PKG.nugetEnumEntry")
+      // A slot body NAMES its enum types (`nugetEnumEntry(EnergyLevel.entries, ...)`); one
+      // declared in another bound package needs the same import a class stub gets. Only the
+      // minted-bridge half names an enum at all — the registration half is all wire types.
+      addAll(enumImports(registrableEnumTypes(bridgePlan.slots), enumPkgs, kotlinPkg))
     }
   }
 
@@ -5014,27 +5063,53 @@ private fun kotlinBridgeSlotFunction(
         .mapIndexed { i, p -> kotlinBridgeInbound(p.type, "a$i") }
         .joinToString(", ")
       val call = "$target.${slot.method.name.toMethodCamelCase()}($args)"
+      val body: String = kotlinBridgeOutbound(slot.method.returnType, call)
       fnName to "private fun $fnName($declaredParams): ${cfnType(slot.method.returnType)} = " +
-          kotlinBridgeOutbound(slot.method.returnType, call)
+          kotlinSlotFastFail(iface, slot.method.name, body)
     }
 
     is RirRegistrable.PropertyGetter -> {
       val fnName = "$prefix${slot.property.name}GetterSlot"
       val call = "$target.${slot.property.name.toMethodCamelCase()}"
+      val body: String = kotlinBridgeOutbound(slot.property.type, call)
       fnName to "private fun $fnName(ctx: COpaquePointer?): ${cfnType(slot.property.type)} = " +
-          kotlinBridgeOutbound(slot.property.type, call)
+          kotlinSlotFastFail(iface, slot.property.name, body)
     }
 
     is RirRegistrable.PropertySetter -> {
       val fnName = "$prefix${slot.property.name}SetterSlot"
       val value: String = kotlinBridgeInbound(slot.property.type, "a0")
+      val body = "$target.${slot.property.name.toMethodCamelCase()} = $value"
       fnName to
           "private fun $fnName(ctx: COpaquePointer?, a0: ${cfnType(slot.property.type)}) {\n" +
-          "  $target.${slot.property.name.toMethodCamelCase()} = $value\n}"
+          kotlinSlotFastFail(iface, slot.property.name, body).prependIndent("  ") + "\n}"
     }
 
     is RirRegistrable.Ctor -> error("[nuget] an interface never has a constructor (ADR-070)")
   }
+}
+
+// ADR-087 stage 1: a slot body that throws escapes the staticCFunction and terminates the host
+// through Kotlin/Native's unhandled-callback path, naming nothing but mangled `knbridge` frames.
+// Catch-print-rethrow keeps those termination semantics byte for byte (verified in the ADR's
+// spike) and prepends one line attributing the failure to the C# member the operator knows. ABI
+// neutral: body only, no signature and no contract-hash movement, so stage 2 (envelope
+// propagation) edits exactly this catch.
+private fun kotlinSlotFastFail(iface: String, member: String, body: String): String {
+  val d = '$'
+  return """
+    |try {
+    |  $body
+    |} catch (t: Throwable) {
+    |  println(
+    |    "[nuget] Kotlin implementation of `$iface.$member` threw " +
+    |      "$d{t::class.qualifiedName ?: "an exception"}: $d{t.message}. " +
+    |      "A Kotlin-implemented C# interface member must not throw (ADR-087 stage 1); " +
+    |      "the process will now terminate."
+    |  )
+    |  throw t
+    |}
+  """.trimMargin()
 }
 
 // C# -> Kotlin across a bridge slot: the wire value as the Kotlin member declares it.

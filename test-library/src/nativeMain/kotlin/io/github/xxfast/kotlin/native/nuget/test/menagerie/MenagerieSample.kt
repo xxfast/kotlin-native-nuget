@@ -3,8 +3,10 @@ package io.github.xxfast.kotlin.native.nuget.test.menagerie
 import io.github.xxfast.kotlin.native.nuget.internal.nugetKotlinReleaseCount
 import test.menagerie.Ferret
 import test.menagerie.IFeedable
+import test.menagerie.IPerformer
 import test.menagerie.ITagged
 import test.menagerie.Sanctuary
+import test.wellness.EnergyLevel
 
 // ADR-070: C#-declared interfaces surfacing in Kotlin as a Kotlin `interface`, backed by a
 // generated handle implementation (the "Invoker" shape), the reverse mirror of ADR-040.
@@ -196,4 +198,62 @@ fun kotlinGoatStoredFeaturedIsSameInstance(): Boolean = heldSanctuary?.featured 
 fun kotlinGoatDropHeld() {
   heldSanctuary = null
   heldGoat = null
+}
+
+// ADR-085 follow-up fixtures.
+//
+// (1) Multi-interface dispatch: `RingLeader` implements BOTH `IFeedable` and `IPerformer`, two
+// admissible bound interfaces that are deliberately independent of each other (`IPerformer` does
+// not derive from `IFeedable`). `nugetMintBridge` dispatches on `is` checks in RIR iteration
+// order and ignores which interface the crossing position actually needs
+// (`Any.nugetHandle(interfaceName)` receives the needed interface name but drops it on the floor
+// before calling `nugetMintBridge(this)`), so a bridge minted for one position can be minted
+// against the wrong interface's slot table. Mylo takes centre ring.
+//
+// (2) Cross-package enum slot import: `IPerformer.Energy` is `test.wellness.EnergyLevel`, a
+// bound package independent of `IPerformer`'s own `test.menagerie`. The setter is the INBOUND
+// crossing that needs the generated `IPerformerBindings.kt` slot body to import `EnergyLevel`.
+private class RingLeader : IFeedable, IPerformer {
+  override fun describe(): String = "Mylo the ringleader"
+
+  override val legs: Int get() = 2
+
+  override fun feed(food: String) {
+    // Not exercised by these probes; present only so the IFeedable contract is fully satisfied.
+  }
+
+  override var nickname: String? = null
+
+  override fun perform(): String = "Mylo takes a bow"
+
+  override var energy: EnergyLevel = EnergyLevel.LOW
+}
+
+/**
+ * [Sanctuary.introduce] (the [IFeedable] position) called with a Kotlin object that ALSO
+ * implements [IPerformer]. Must dispatch into [RingLeader.describe]/[RingLeader.legs], not
+ * [IPerformer]'s slot table.
+ */
+fun ringLeaderIntroduceViaFeedable(): String {
+  val sanctuary = Sanctuary()
+  return sanctuary.introduce(RingLeader())
+}
+
+/**
+ * [Sanctuary.applaud] (the [IPerformer] position) called with the SAME dual-interface Kotlin
+ * object type. Must dispatch into [RingLeader.perform], not [IFeedable]'s slot table.
+ */
+fun ringLeaderApplaudViaPerformer(): String {
+  val sanctuary = Sanctuary()
+  return sanctuary.applaud(RingLeader())
+}
+
+/**
+ * [Sanctuary.recharge] writes then reads [IPerformer.energy] (cross-package enum setter AND
+ * getter) on a Kotlin-implemented [IPerformer] from the C# side of the crossing.
+ */
+fun ringLeaderRecharge(): String {
+  val sanctuary = Sanctuary()
+  val result: EnergyLevel = sanctuary.recharge(RingLeader(), EnergyLevel.HIGH)
+  return result.name
 }
