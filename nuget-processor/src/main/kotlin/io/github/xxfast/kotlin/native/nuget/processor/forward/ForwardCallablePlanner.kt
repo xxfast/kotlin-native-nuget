@@ -3,13 +3,16 @@ package io.github.xxfast.kotlin.native.nuget.processor.forward
 import com.google.devtools.ksp.getVisibility
 import com.google.devtools.ksp.getConstructors
 import com.google.devtools.ksp.symbol.KSClassDeclaration
+import com.google.devtools.ksp.symbol.KSDeclaration
 import com.google.devtools.ksp.symbol.KSFunctionDeclaration
 import com.google.devtools.ksp.symbol.KSNode
 import com.google.devtools.ksp.symbol.KSPropertyDeclaration
 import com.google.devtools.ksp.symbol.KSType
+import com.google.devtools.ksp.symbol.KSTypeParameter
 import com.google.devtools.ksp.getAllSuperTypes
 import com.google.devtools.ksp.symbol.Modifier
 import com.google.devtools.ksp.symbol.Visibility
+import io.github.xxfast.kotlin.native.nuget.processor.cir.expandAliases
 import io.github.xxfast.kotlin.native.nuget.processor.exports.findInterfaceBridgePairs
 import io.github.xxfast.kotlin.native.nuget.processor.exports.findStoredCallbackPairs
 import io.github.xxfast.kotlin.native.nuget.processor.toCName
@@ -104,6 +107,82 @@ internal sealed interface ForwardCallableCatalogEntry {
 }
 
 /**
+ * ADR-082's 2026-08-08 amendment: the declared-vs-inherited signal for value-class members.
+ *
+ * Every member a supertype declares, indexed for signature comparison. A member is inherited when
+ * a supertype declares one of the same *kind* with the same simple name, the same arity, and
+ * per-position matching parameter types (resolved qualified name plus nullability). A
+ * supertype-side type *parameter* matches any argument type, deliberately conservatively: it
+ * over-drops (loud diagnostic, non-colliding name as workaround) rather than exporting something
+ * that may be a delegation forwarder.
+ *
+ * The simple-name rule this replaces also dropped author-declared members whose name merely
+ * collided with a supertype's (`fun get(key: String)` next to `CharSequence.get(index: Int)`).
+ * Properties keep the name-only comparison, and only against supertype *properties*: Kotlin
+ * properties cannot overload.
+ */
+internal class ForwardSupertypeMembers private constructor(
+  private val propertyNames: Set<String>,
+  private val functions: List<Signature>,
+) {
+  /** [parameters] holds one key per position; `null` is a supertype type parameter (wildcard). */
+  private data class Signature(val name: String, val parameters: List<String?>)
+
+  fun declares(property: KSPropertyDeclaration): Boolean =
+    property.simpleName.asString() in propertyNames
+
+  fun declares(function: KSFunctionDeclaration): Boolean {
+    val name: String = function.simpleName.asString()
+    val parameters: List<String?> = function.parameters.map { parameter ->
+      typeKey(parameter.type.resolve())
+    }
+    return functions.any { signature ->
+      signature.name == name &&
+          signature.parameters.size == parameters.size &&
+          signature.parameters.zip(parameters).all { (inherited, declared) ->
+            inherited == null || inherited == declared
+          }
+    }
+  }
+
+  companion object {
+    fun of(cls: KSClassDeclaration): ForwardSupertypeMembers {
+      val superTypes: List<KSClassDeclaration> = cls.getAllSuperTypes()
+        .mapNotNull { superType -> superType.declaration as? KSClassDeclaration }
+        .toList()
+      return ForwardSupertypeMembers(
+        propertyNames = superTypes
+          .flatMap { superType ->
+            superType.getAllProperties().map { property -> property.simpleName.asString() }
+          }
+          .toSet(),
+        functions = superTypes.flatMap { superType ->
+          superType.getAllFunctions().map { function ->
+            Signature(
+              name = function.simpleName.asString(),
+              parameters = function.parameters.map { parameter ->
+                typeKey(parameter.type.resolve())
+              },
+            )
+          }
+        },
+      )
+    }
+
+    /** Null for a type-parameter position, which the comparison treats as a wildcard. */
+    private fun typeKey(type: KSType): String? {
+      val expanded: KSType = type.expandAliases()
+      val declaration: KSDeclaration = expanded.declaration
+      if (declaration is KSTypeParameter) return null
+      val name: String = declaration.qualifiedName?.asString()
+        ?: declaration.simpleName.asString()
+      val nullable: Boolean = type.isMarkedNullable || expanded.isMarkedNullable
+      return if (nullable) "$name?" else name
+    }
+  }
+}
+
+/**
  * Complete planning result for the first migration slice. Every callable inspected by this
  * planner is either [ForwardCallableCatalogEntry.Planned] or explicitly [Skipped]; no raw KSP
  * type or implicit fallback reaches the emission phase.
@@ -119,6 +198,9 @@ internal data class ForwardCallablePlanCatalog(
   // minus the ones a legacy route still re-emits. Separate from droppedPropertySetters above,
   // which is a partial skip (the getter survives).
   val droppedProperties: List<ForwardDroppedProperty> = emptyList(),
+  // The receiver-side counterpart of droppedProperties: an extension property dropped for its
+  // receiver type rather than its own type. Same diagnostic kind, different wording.
+  val droppedExtensionReceivers: List<ForwardDroppedExtensionReceiver> = emptyList(),
 ) {
   val plans: List<ForwardCallablePlan> = entries.mapNotNull { entry ->
     (entry as? ForwardCallableCatalogEntry.Planned)?.plan
@@ -140,6 +222,29 @@ internal data class ForwardCallablePlanCatalog(
   val droppedCallables: List<ForwardCallableCatalogEntry.Skipped> = entries
     .filterIsInstance<ForwardCallableCatalogEntry.Skipped>()
     .filter { entry -> entry.reason.droppedFromCSharp }
+
+  /**
+   * ADR-082: the planned value-class property getters of [owner], in planning order.
+   *
+   * Both emitters read their member plans off the catalog rather than re-deriving a plan key per
+   * `getAllProperties()` / `getAllFunctions()` entry. Symbol-per-declaration re-derivation breaks
+   * as soon as two declared members share a simple name (the overload numbering lives in the
+   * planner, and a second `getAllFunctions()` entry re-emitted the *first* one's plan).
+   * Constructors are excluded: their reference-underlying branch still has a legacy route that
+   * needs the declaration itself.
+   */
+  fun valueClassProperties(owner: String): List<ForwardCallablePlan> = valueClassMembers(owner)
+    .filter { plan -> plan.invocation.target?.endsWith("#property") == true }
+
+  /** ADR-082: the planned value-class methods of [owner], in planning order. See above. */
+  fun valueClassMethods(owner: String): List<ForwardCallablePlan> = valueClassMembers(owner)
+    .filter { plan -> plan.invocation.target?.endsWith("#property") != true }
+
+  private fun valueClassMembers(owner: String): List<ForwardCallablePlan> = plans.filter { plan ->
+    plan.invocation.origin == ForwardCallableOrigin.VALUE_CLASS &&
+        plan.invocation.symbol.substringBeforeLast('.') == owner &&
+        !plan.invocation.symbol.substringAfterLast('.').startsWith("<init>")
+  }
 }
 
 /**
@@ -173,6 +278,7 @@ internal class ForwardCallablePlanner(
     )
     return ForwardCallablePlanCatalog(
       entries, propertyPlans, planner.droppedPropertySetters, planner.droppedProperties,
+      planner.droppedExtensionReceivers,
     )
   }
 
@@ -212,17 +318,12 @@ internal class ForwardCallablePlanner(
     // declaration (author-declared or not) reports `origin == KOTLIN_LIB`, so the old rule would
     // drop the entire cross-module value class, not just its delegated members. The only
     // origin-independent signal available, verified against a real klib, is "a supertype declares
-    // a member with this simple name" — this also correctly catches interface delegation
-    // (`CharSequence by value`), which forwards members with `parentDeclaration == cls` and is
-    // otherwise indistinguishable from a hand-written member. Computed once per class: cheap
+    // this member" — this also correctly catches interface delegation (`CharSequence by value`),
+    // which forwards members with `parentDeclaration == cls` and is otherwise indistinguishable
+    // from a hand-written member. ADR-082's 2026-08-08 amendment narrows the comparison from
+    // simple names to signatures; see [ForwardSupertypeMembers]. Computed once per class: cheap
     // relative to walking every member, and `getAllSuperTypes()` is documented as expensive.
-    val inheritedNames: Set<String> = cls.getAllSuperTypes()
-      .mapNotNull { superType -> superType.declaration as? KSClassDeclaration }
-      .flatMap { superType ->
-        superType.getAllFunctions().map { function -> function.simpleName.asString() } +
-            superType.getAllProperties().map { property -> property.simpleName.asString() }
-      }
-      .toSet()
+    val inherited: ForwardSupertypeMembers = ForwardSupertypeMembers.of(cls)
 
     return buildList {
       addAll(
@@ -236,9 +337,9 @@ internal class ForwardCallablePlanner(
         )
       )
       addAll(
-        valueClassPropertyEntries(cls, owner, prefix, underlyingPropName, receiver, inheritedNames),
+        valueClassPropertyEntries(cls, owner, prefix, underlyingPropName, receiver, inherited),
       )
-      addAll(valueClassMethodEntries(cls, owner, prefix, receiver, inheritedNames))
+      addAll(valueClassMethodEntries(cls, owner, prefix, receiver, inherited))
     }
   }
 
@@ -301,7 +402,7 @@ internal class ForwardCallablePlanner(
     prefix: String,
     underlyingPropName: String,
     receiver: ForwardReceiver,
-    inheritedNames: Set<String>,
+    inherited: ForwardSupertypeMembers,
   ): List<ForwardCallableCatalogEntry> = cls.getAllProperties()
     .filter { it.getVisibility() == Visibility.PUBLIC }
     .filter { it.simpleName.asString() != underlyingPropName }
@@ -311,8 +412,10 @@ internal class ForwardCallablePlanner(
       // the value class itself, or that a supertype (including an interface delegate, e.g.
       // `CharSequence by value`'s `length`) also declares by this simple name, is a v1
       // product-scope skip, not a silently-bridged member. See `valueClassEntries` for why the
-      // supertype-name check (not `Origin.KOTLIN`) is the origin-independent signal this needs.
-      if (prop.parentDeclaration != cls || name in inheritedNames) {
+      // supertype check (not `Origin.KOTLIN`) is the origin-independent signal this needs.
+      // Properties compare by name alone (Kotlin properties cannot overload) and only against
+      // supertype properties — ADR-082's amendment.
+      if (prop.parentDeclaration != cls || inherited.declares(prop)) {
         return@map ForwardCallableCatalogEntry.Skipped(
           "$owner.$name", ForwardPlanSkipReason.INHERITED_MEMBER, node = prop,
         )
@@ -339,40 +442,49 @@ internal class ForwardCallablePlanner(
     owner: String,
     prefix: String,
     receiver: ForwardReceiver,
-    inheritedNames: Set<String>,
+    inherited: ForwardSupertypeMembers,
   ): List<ForwardCallableCatalogEntry> {
     val excluded: Set<String> = setOf(
       "equals", "hashCode", "toString", "<init>",
       "box-impl", "unbox-impl", "constructor-impl",
       "hashCode-impl", "equals-impl", "equals-impl0", "toString-impl",
     )
+    // ADR-082 amendment fix B: overload numbering, mirroring the secondary-constructor scheme.
+    // Counted over *declared* same-name members in `getAllFunctions()` order, so a skipped
+    // (inherited) namesake never consumes a number and the first declared overload keeps the
+    // shipped unsuffixed export name.
+    val occurrences: MutableMap<String, Int> = mutableMapOf()
     return cls.getAllFunctions()
       .filter { it.getVisibility() == Visibility.PUBLIC }
       .filter { it.simpleName.asString() !in excluded }
       .map { method ->
         val name: String = method.simpleName.asString()
-        // ADR-064 (ROADMAP line 77), amended by ADR-066: see `valueClassPropertyEntries` above —
-        // the same supertype-simple-name signal (not `Origin.KOTLIN`) catches both genuine
-        // supertype inheritance and interface delegation (`CharSequence by value`'s `get` /
-        // `subSequence`), the two constructs `parentDeclaration` alone cannot tell apart
-        // cross-module.
-        if (method.parentDeclaration != cls || name in inheritedNames) {
+        // ADR-064 (ROADMAP line 77), amended by ADR-066 and narrowed by ADR-082: the supertype
+        // *signature* signal (not `Origin.KOTLIN`, and no longer the simple name) catches both
+        // genuine supertype inheritance and interface delegation (`CharSequence by value`'s `get`
+        // / `subSequence`), the two constructs `parentDeclaration` alone cannot tell apart
+        // cross-module, while letting an unrelated same-name overload (`get(key: String)`)
+        // through.
+        if (method.parentDeclaration != cls || inherited.declares(method)) {
           return@map ForwardCallableCatalogEntry.Skipped(
             "$owner.$name", ForwardPlanSkipReason.INHERITED_MEMBER, node = method,
           )
         }
+        val occurrence: Int = occurrences.merge(name, 1, Int::plus)!!
+        val suffix: String = if (occurrence == 1) "" else "_$occurrence"
+        val symbol: String = "$owner.$name$suffix"
         val structuralReason: ForwardPlanSkipReason? = when {
           method.modifiers.contains(Modifier.SUSPEND) -> ForwardPlanSkipReason.SUSPEND
           method.typeParameters.isNotEmpty() -> ForwardPlanSkipReason.GENERIC
           else -> null
         }
         if (structuralReason != null) {
-          ForwardCallableCatalogEntry.Skipped("$owner.$name", structuralReason, node = method)
+          ForwardCallableCatalogEntry.Skipped(symbol, structuralReason, node = method)
         } else {
           planOrSkip(
-            symbol = "$owner.$name",
+            symbol = symbol,
             publicName = name.replaceFirstChar { it.uppercase() },
-            exportName = "${prefix}_$name",
+            exportName = "${prefix}_$name$suffix",
             receiver = receiver,
             parameters = method.parameters.map { parameter ->
               (parameter.name?.asString() ?: "_") to classifier.classify(parameter.type.resolve())
@@ -381,6 +493,8 @@ internal class ForwardCallablePlanner(
             origin = ForwardCallableOrigin.VALUE_CLASS,
             target = owner,
             includeError = false,
+            // The symbol carries the overload suffix; the Kotlin call site must not.
+            member = name,
             node = method,
           )
         }
@@ -439,6 +553,7 @@ internal class ForwardCallablePlanner(
   private fun classEntries(cls: KSClassDeclaration): List<ForwardCallableCatalogEntry> {
     val className: String = cls.simpleName.asString()
     val prefix: String = className.lowercase()
+    val superClass: KSClassDeclaration? = cls.forwardSuperClass()
     val receiverType: BridgeType = BridgeType.ObjectHandle(
       requireNotNull(cls.qualifiedName?.asString()) {
         "Forward class planner cannot create a handle for local ${className}"
@@ -452,7 +567,10 @@ internal class ForwardCallablePlanner(
             (name == "copy" || name.startsWith("component"))
         name !in setOf("equals", "hashCode", "toString", "<init>") && !isDataClassMethod
       }
-      .filter { method -> method.parentDeclaration == cls }
+      // Shared with `CirClassTranslator` and `ForwardPropertyPlanner`: a defaulted interface
+      // member the class does not override still binds here, because the C# class declares that
+      // interface and must carry the member (`ForwardClassMembership.kt`).
+      .filter { method -> method.isForwardPlannableMemberOf(cls, superClass) }
       .toList()
     val interfaceBridgeMethods: Set<KSFunctionDeclaration> = findInterfaceBridgePairs(methods)
       .flatMap { pair -> listOf(pair.first, pair.second) }
@@ -633,6 +751,7 @@ internal class ForwardCallablePlanner(
     if (origin == ForwardCallableOrigin.TOP_LEVEL &&
       result is BridgeType.Nullable &&
       (result.type is BridgeType.Primitive || result.type == BridgeType.Instant ||
+          result.type is BridgeType.Enum ||
           (result.type as? BridgeType.ValueClass)?.underlying?.isHasValueFanOutUnderlying() == true)
     ) {
       return topLevelNullablePrimitivePlan(
@@ -674,6 +793,7 @@ internal class ForwardCallablePlanner(
     val inner: BridgeType = result.type
     require(
       inner is BridgeType.Primitive || inner == BridgeType.Instant ||
+          inner is BridgeType.Enum ||
           (inner as? BridgeType.ValueClass)?.underlying?.isHasValueFanOutUnderlying() == true
     ) {
       "Forward planner topLevelNullablePrimitivePlan received unsupported inner type $inner"
@@ -703,6 +823,8 @@ internal class ForwardCallablePlanner(
       // ADR-079: the `_value` call returns the underlying's wire (the primitive's own, INT32 for
       // an enum ordinal); the box step composes in the emitted expressions at both ends.
       is BridgeType.ValueClass -> inner.underlying.underlyingWireType()
+      // ADR-080: a bare nullable enum returns its `int` ordinal on the same `_value` call.
+      is BridgeType.Enum -> ForwardAbiWireType.INT32
       else -> ForwardAbiWireType.INT64
     }
     val value = ForwardNativeCall(
@@ -742,6 +864,8 @@ internal class ForwardCallablePlanner(
         add(ForwardHelperRequirement.VALUE_CLASS)
         if (inner.underlying is BridgeType.Enum) add(ForwardHelperRequirement.ENUM_ORDINAL)
       }
+      // ADR-080: a bare nullable enum result needs the ordinal helper too.
+      if (inner is BridgeType.Enum) add(ForwardHelperRequirement.ENUM_ORDINAL)
     }
     // ADR-076: the generic `transfer()` helper only special-cases String; an Instant result needs
     // its own INSTANT_TO_TICKS conversion tagged explicitly, or plan validation rejects it.
@@ -749,6 +873,8 @@ internal class ForwardCallablePlanner(
     val resultConversion: ForwardConversion? = when {
       inner == BridgeType.Instant -> ForwardConversion.INSTANT_TO_TICKS
       inner is BridgeType.ValueClass -> ForwardConversion.UNBOX_VALUE_CLASS
+      // ADR-080: the ordinal lowering is explicit for the same reason.
+      inner is BridgeType.Enum -> ForwardConversion.ENUM_TO_ORDINAL
       else -> null
     }
     val resultTransfer: ForwardTransfer = if (resultConversion != null) {
@@ -856,6 +982,7 @@ internal class ForwardCallablePlanner(
     invocationReceiver: String? = null,
     includeError: Boolean = true,
     valueClassProperty: Boolean = false,
+    member: String? = null,
     node: KSNode? = null,
   ): ForwardCallableCatalogEntry {
     val inputTypes: List<BridgeType> = buildList {
@@ -926,6 +1053,7 @@ internal class ForwardCallablePlanner(
         receiver = invocationReceiver,
         origin = origin,
         target = if (valueClassProperty) "$target#property" else target,
+        member = member,
       ),
       publicSignature = ForwardPublicSignature(
         name = publicName,
@@ -1153,6 +1281,29 @@ internal class ForwardCallablePlanner(
           transfer = ForwardTransfer(
             name, inner, ForwardFlow.INTO_KOTLIN, ForwardPassing.VALUE,
             ForwardOwnership.BORROWED, ForwardConversion.DIRECT,
+          ),
+        ),
+      )
+
+      // ADR-080: same adjacent-pair shape, the value slot carrying the `int` ordinal with the
+      // ORDINAL_TO_ENUM conversion (ADR-079's enum-underlying value class minus the box).
+      is BridgeType.Enum -> listOf(
+        ForwardAbiParameter(
+          name = "${name}HasValue",
+          wireType = ForwardAbiWireType.BOOLEAN,
+          direction = ForwardAbiDirection.IN,
+          transfer = ForwardTransfer(
+            "${name}HasValue", BridgeType.Primitive(PrimitiveKind.BOOLEAN), ForwardFlow.INTO_KOTLIN,
+            ForwardPassing.VALUE, ForwardOwnership.BORROWED, ForwardConversion.DIRECT,
+          ),
+        ),
+        ForwardAbiParameter(
+          name = name,
+          wireType = ForwardAbiWireType.INT32,
+          direction = ForwardAbiDirection.IN,
+          transfer = ForwardTransfer(
+            name, inner, ForwardFlow.INTO_KOTLIN, ForwardPassing.VALUE,
+            ForwardOwnership.BORROWED, ForwardConversion.ORDINAL_TO_ENUM,
           ),
         ),
       )
@@ -1409,6 +1560,36 @@ internal class ForwardCallablePlanner(
       helperRequirements = setOf(ForwardHelperRequirement.INSTANT),
     )
 
+    // ADR-080: a bare nullable enum is ADR-079's value-class-over-enum shape with the box step
+    // deleted -- BOOLEAN has-value result plus a `valueOut` carrying the plain `int` ordinal.
+    is BridgeType.Enum -> ForwardResultShape(
+      wireType = ForwardAbiWireType.BOOLEAN,
+      transfer = ForwardTransfer(
+        subject = "result",
+        type = BridgeType.Nullable(type),
+        flow = ForwardFlow.OUT_OF_KOTLIN,
+        passing = ForwardPassing.VALUE,
+        ownership = ForwardOwnership.BORROWED,
+        conversion = ForwardConversion.ENUM_TO_ORDINAL,
+      ),
+      extraParameters = listOf(
+        ForwardAbiParameter(
+          name = "valueOut",
+          wireType = ForwardAbiWireType.POINTER,
+          direction = ForwardAbiDirection.OUT,
+          transfer = ForwardTransfer(
+            subject = "valueOut",
+            type = type.valueOutTransferType(),
+            flow = ForwardFlow.OUT_OF_KOTLIN,
+            passing = ForwardPassing.OUT,
+            ownership = ForwardOwnership.BORROWED,
+            conversion = ForwardConversion.DIRECT,
+          ),
+        )
+      ),
+      helperRequirements = setOf(ForwardHelperRequirement.ENUM_ORDINAL),
+    )
+
     else -> null
   }
 
@@ -1627,6 +1808,10 @@ internal class ForwardCallablePlanner(
       BridgeType.String, is BridgeType.ObjectHandle, is BridgeType.Primitive,
       BridgeType.Instant -> null
 
+      // ADR-080: a bare nullable enum fans out to the has-value pair with the ordinal in the
+      // value slot, exactly like ADR-079's enum-underlying value class minus the box.
+      is BridgeType.Enum -> null
+
       is BridgeType.Collection -> inner.collectionInputSkipReason()
       // ADR-077 sub-items 3/4: null rides the null pointer for the pointer-wired underlyings
       // (String, ObjectHandle). ADR-079: a Primitive/Enum underlying has no in-band null, so it
@@ -1646,13 +1831,28 @@ internal class ForwardCallablePlanner(
     !isBridgeableComponent() ->
       (element ?: key ?: value)?.skipReason() ?: ForwardPlanSkipReason.UNSUPPORTED
 
-    kind == CollectionKind.LIST || kind == CollectionKind.MUTABLE_LIST -> null
+    // ADR-083: a *nullable* List element is admitted only when its inner type is wrappable; every
+    // other nullable spelling (Char?, narrow primitives, bare Enum?, Instant?, nested Collection?)
+    // becomes a named skip here instead of the KSP crash it used to be in componentLowering. The
+    // non-null element gate stays on the wider isBridgeableComponent (ADR-073 Scope item 1): no
+    // nullable element binds today, so narrowing only the nullable spellings costs nothing.
+    kind == CollectionKind.LIST || kind == CollectionKind.MUTABLE_LIST ->
+      if (element is BridgeType.Nullable && !element.isWrappableComponent()) {
+        ForwardPlanSkipReason.COLLECTION
+      } else {
+        null
+      }
+
     // ADR-073: map/set inputs are admitted only for components the write side can box
-    // (isWrappableComponent); List is deliberately left on the wider isBridgeableComponent
-    // check above (ADR-073 Scope item 1, out of scope for this change).
-    kind == CollectionKind.MAP || kind == CollectionKind.MUTABLE_MAP ->
-      if (key?.isWrappableComponent() == true && value?.isWrappableComponent() == true) null
-      else ForwardPlanSkipReason.COLLECTION
+    // (isWrappableComponent). ADR-083: the *key* additionally has to be non-nullable -- a C#
+    // Dictionary cannot hold a null key, so a nullable-key map has no idiomatic projection and
+    // skips named, even though its value slot would be fine.
+    kind == CollectionKind.MAP || kind == CollectionKind.MUTABLE_MAP -> {
+      val keyAdmitted: Boolean =
+        key?.let { it !is BridgeType.Nullable && it.isWrappableComponent() } == true
+      val valueAdmitted: Boolean = value?.isWrappableComponent() == true
+      if (keyAdmitted && valueAdmitted) null else ForwardPlanSkipReason.COLLECTION
+    }
 
     else ->
       if (element?.isWrappableComponent() == true) null else ForwardPlanSkipReason.COLLECTION
@@ -1769,12 +1969,13 @@ internal fun BridgeType.isBridgeableComponent(): Boolean = when (this) {
 /**
  * ADR-073: the component types the C# write side can actually box, for an input-position
  * `Map`/`Set` (and their mutable variants): the six `nuget_wrap_*` primitives plus an object
- * handle (via `CreateMap`/`CreateSet`'s reflective `_handle` fallback). Narrower than
- * [isBridgeableComponent], which also admits `Nullable`, `ValueClass`, `Char`, nested
- * `Collection`, `Enum` and the narrow-primitive kinds (none of which the write side can box),
- * because those overshoots would otherwise either crash `packNuget`
- * (`ValueClass`/`Nullable`/nested `Collection`, no `elementKotlinTypeName` branch) or throw at
- * runtime (`NotSupportedException`, no matching `nuget_wrap_*`). Deliberately *not* applied to
+ * handle (via `CreateMap`/`CreateSet`'s reflective `_handle` fallback), plus (ADR-081) a value
+ * class over any of those underlyings, projected to the underlying per element. Narrower than
+ * [isBridgeableComponent], which also admits `Nullable`, `Char`, nested `Collection`, bare `Enum`
+ * and the narrow-primitive kinds (none of which the write side can box), because those overshoots
+ * would otherwise either crash `packNuget` (`Nullable`/nested `Collection`, no
+ * `elementKotlinTypeName` branch) or throw at runtime (`NotSupportedException`, no matching
+ * `nuget_wrap_*`). Deliberately *not* applied to
  * `List` at a *callable parameter* position; narrowing that predicate is a separate, deferred
  * decision (ADR-073 Scope item 1). ADR-075 reuses this for a collection *property setter*, where
  * `List` is deliberately included (ADR-075 Question A alternative A1): no `List` property setter
@@ -1791,5 +1992,20 @@ internal fun BridgeType.isWrappableComponent(): Boolean = when (this) {
   )
 
   is BridgeType.ObjectHandle -> true
+
+  // ADR-081: a value-class component crosses as its *underlying*, projected per element at the C#
+  // call site (`x.Value`, `(int)x.Mood`, `x.Patient`) before `Wrap<T>` is ever instantiated, so the
+  // write side only ever boxes a type it already handles. The `Enum` case is scoped to this branch
+  // deliberately: a *bare* enum component stays unwrappable (its own ROADMAP item), only the
+  // value-class wrapper over an enum rides the existing int-ordinal wire.
+  is BridgeType.ValueClass ->
+    underlying is BridgeType.Enum || underlying.isWrappableComponent()
+
+  // ADR-083: a component slot is already pointer-shaped (every element crosses as a boxed
+  // StableRef handle), so the null pointer is an in-band null for every wrappable component kind
+  // -- including Int?, which at an *ordinary* position needs the ADR-079 has-value pair. Nesting
+  // is excluded, matching isBridgeableComponent's own no-nested-nullable rule.
+  is BridgeType.Nullable -> type !is BridgeType.Nullable && type.isWrappableComponent()
+
   else -> false
 }

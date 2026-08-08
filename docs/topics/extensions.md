@@ -113,6 +113,69 @@ public void String_GetWordCount_ReturnsTwoForTwoWords()
 }
 ```
 
+## Value-class receivers
+
+A value class also works as the receiver of an extension function or extension property, over any
+of the four underlyings admitted at ordinary positions: `String`, a primitive, an enum, or
+`ObjectHandle` (see [Value classes](value-classes.md#as-an-extension-receiver)). `ChartId.abbreviate`
+(`String` underlying) and `Temperament.escalate` (`Mood` enum underlying, returning another
+`Temperament`), from `test-library/src/nativeMain/kotlin/.../clinic/ClinicSample.kt`:
+
+```kotlin
+fun ChartId.abbreviate(length: Int): String = value.take(length)
+
+fun Temperament.escalate(): Temperament = when (mood) {
+  Mood.CALM -> Temperament(Mood.ANXIOUS)
+  Mood.ANXIOUS -> Temperament(Mood.PLAYFUL)
+  Mood.PLAYFUL -> Temperament(Mood.PLAYFUL)
+}
+```
+
+The receiver crosses as its underlying wire value, re-wrapped with the value class's own
+constructor on the Kotlin side so `init` runs, exactly like a value-class parameter
+([ADR-077](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/077-value-classes-at-ordinary-positions.md)).
+Generated C#, from `Interop.cs`:
+
+```C#
+public static partial class TemperamentExtensions
+{
+    [DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "temperament_escalate")]
+    private static extern int Native_Escalate(int receiver, out IntPtr error);
+
+    public static Temperament Escalate(this Temperament receiver)
+    {
+        int nativeResult = Native_Escalate((int)receiver.Mood, out IntPtr error);
+        if (error != IntPtr.Zero)
+        {
+            throw NugetErrorNative.BuildException(error);
+        }
+        return new Temperament((global::TestLibrary.Clinic.Mood)nativeResult);
+    }
+}
+```
+
+## Limitations
+
+An extension property only binds when its *receiver* is `String`, a primitive, a class in the
+export set (an `ObjectHandle`), or a value class over any of those four underlyings. A receiver
+outside that set (a generic class, an interface, an unexported type) is warned about and the whole
+property is dropped, naming the receiver rather than the property's own type:
+
+```
+[nuget:SKIPPED_UNSUPPORTED_PROPERTY] Skipping tier1.skipreceiver.Box.label: its extension receiver
+    type generic declaration tier1.skipreceiver.Box is not a supported extension-property receiver.
+    declare the property on a class, String, primitive, or value class receiver, or expose a
+    top-level getter function instead
+    at <file>:<line>
+```
+
+An extension property typed `Flow`, `StateFlow`, or a lambda is also named as a skip rather than
+exported, even on an otherwise-supported receiver: unlike a class property, no legacy adapter
+re-emits it, so it is not exempt from the diagnostic the way a class property of the same type is.
+
+See [Publishing Kotlin to C#: Diagnostics](forward-overview.md#diagnostics) for the full diagnostic
+model.
+
 ## Return marshalling
 
 An extension function's return goes through the same marshalling cascade a class-method return
@@ -204,9 +267,12 @@ public void Toy_Tags_ReturnsMarshalledStringElements()
         <a href="top-level-declarations.md">Top-level declarations</a>
         <a href="classes-and-objects.md">Classes and objects</a>
         <a href="collections.md">Collections</a>
+        <a href="value-classes.md">Value classes</a>
     </category>
     <category ref="external">
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/013-extension-property-mapping.md">ADR-013: Extension property mapping</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/061-method-return-marshalling.md">ADR-061: Method return marshalling</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/064-forward-unsupported-declaration-diagnostics.md">ADR-064: Forward unsupported-declaration diagnostics</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/077-value-classes-at-ordinary-positions.md">ADR-077: Value classes at ordinary positions</a>
     </category>
 </seealso>

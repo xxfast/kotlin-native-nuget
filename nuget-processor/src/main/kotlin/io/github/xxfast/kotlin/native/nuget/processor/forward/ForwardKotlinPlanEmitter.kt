@@ -105,8 +105,13 @@ internal fun FileSpec.Builder.addForwardKotlinPlanExport(plan: ForwardCallablePl
     }
 
     is BridgeType.ObjectHandle, is BridgeType.Interface, is BridgeType.Collection -> {
+      // ADR-081: a collection with a value-class component boxes a projected copy of itself, so the
+      // per-element boxes carry the underlying rather than the value class.
+      val boxed: String =
+        if (result is BridgeType.Collection) collectionResultProjection(invocation, result)
+        else invocation
       builder.returns(cOpaquePointer.copy(nullable = true))
-      builder.addCode(handleResultBody(invocation, error.name), stableRef, cOpaquePointerVar, stableRef)
+      builder.addCode(handleResultBody(boxed, error.name), stableRef, cOpaquePointerVar, stableRef)
     }
 
     is BridgeType.Nullable -> addNullableResult(
@@ -207,10 +212,10 @@ private fun FileSpec.Builder.addLegacyTwoCallKotlinExport(plan: ForwardCallableP
   // the underlying on the `_value` call.
   require(
     inner is BridgeType.Primitive || inner == BridgeType.Instant ||
-        inner is BridgeType.ValueClass
+        inner is BridgeType.ValueClass || inner is BridgeType.Enum
   ) {
-    "Legacy two-call plan ${plan.invocation.symbol} requires a nullable primitive, Instant " +
-        "or value class"
+    "Legacy two-call plan ${plan.invocation.symbol} requires a nullable primitive, Instant, " +
+        "enum or value class"
   }
   val error: ForwardAbiParameter = requireNotNull(plan.errorSlot) {
     "Legacy two-call plan ${plan.invocation.symbol} is missing its error slot"
@@ -255,10 +260,13 @@ private fun FileSpec.Builder.addLegacyTwoCallKotlinExport(plan: ForwardCallableP
     inner is BridgeType.ValueClass -> "$invocation!!.${inner.underlyingPropertyName}" +
         if (inner.underlying is BridgeType.Enum) ".ordinal" else ""
 
+    // ADR-080: the bare enum's own ordinal, no unbox step in front of it.
+    inner is BridgeType.Enum -> "$invocation!!.ordinal"
     else -> "$invocation!!"
   }
   val valueDefault: String = when {
     inner == BridgeType.Instant -> "0L"
+    inner is BridgeType.Enum -> "0"
     inner is BridgeType.ValueClass ->
       if (inner.underlying is BridgeType.Enum) "0" else defaultResult(inner.underlying)
 
@@ -319,7 +327,8 @@ internal fun FileSpec.Builder.addForwardValueClassPlanExport(plan: ForwardCallab
   val arguments: String = plan.publicSignature.parameters.joinToString(", ") { parameter ->
     loweredArgument(parameter)
   }
-  val memberName: String = plan.invocation.symbol.substringAfterLast('.')
+  val memberName: String =
+    plan.invocation.member ?: plan.invocation.symbol.substringAfterLast('.')
   val invocation: String = when {
     isConstructor -> {
       val underlyingProp: String = requireNotNull(plan.invocation.receiver) {
@@ -388,11 +397,17 @@ internal fun FileSpec.Builder.addForwardValueClassPlanExport(plan: ForwardCallab
     }
 
     is BridgeType.ObjectHandle, is BridgeType.Collection -> {
+      // ADR-081: same projected-copy boxing as the ordinary result route above.
+      val boxed: String =
+        if (result is BridgeType.Collection) collectionResultProjection(invocation, result)
+        else invocation
       builder.returns(cOpaquePointer.copy(nullable = true))
       if (error != null) {
-        builder.addCode(handleResultBody(invocation, error.name), stableRef, cOpaquePointerVar, stableRef)
+        builder.addCode(
+          handleResultBody(boxed, error.name), stableRef, cOpaquePointerVar, stableRef,
+        )
       } else {
-        builder.addStatement("return %T.create(%L).asCPointer()", stableRef, invocation)
+        builder.addStatement("return %T.create(%L).asCPointer()", stableRef, boxed)
       }
     }
 
@@ -473,6 +488,96 @@ private fun elementKotlinTypeName(type: BridgeType): String = when (type) {
   is BridgeType.ObjectHandle -> type.qualifiedName
   is BridgeType.Enum -> type.qualifiedName
   else -> error("Forward Kotlin plan emitter has no element type name for $type")
+}
+
+/**
+ * ADR-081: one component of an incoming collection, cast out of the `Any?` box and, for a value
+ * class, re-wrapped. The box never holds the value class itself: the C# call site projected it to
+ * the underlying before boxing, so the cast targets the *underlying's* wire type (an int ordinal
+ * for an enum underlying) and the value class is reconstructed here, per element, re-running its
+ * own `init` exactly as ADR-077's ordinary-position lowering does.
+ */
+internal fun componentLowering(name: String, type: BridgeType): String = when (type) {
+  is BridgeType.ValueClass -> when (val underlying: BridgeType = type.underlying) {
+    is BridgeType.Enum ->
+      "${type.qualifiedName}(${underlying.qualifiedName}.entries[$name as kotlin.Int])"
+
+    else -> "${type.qualifiedName}($name as ${elementKotlinTypeName(underlying)})"
+  }
+
+  // ADR-083: a null component arrived as the null pointer and is already `null` in the `Any?` box,
+  // so the cast simply goes nullable (`as T?` accepts null). A value class re-wraps under `?.let`
+  // so its own `init` runs for the present elements only.
+  is BridgeType.Nullable -> when (val inner: BridgeType = type.type) {
+    is BridgeType.ValueClass -> when (val underlying: BridgeType = inner.underlying) {
+      is BridgeType.Enum ->
+        "($name as kotlin.Int?)?.let { v -> " +
+            "${inner.qualifiedName}(${underlying.qualifiedName}.entries[v]) }"
+
+      else ->
+        "($name as ${elementKotlinTypeName(underlying)}?)?.let { v -> ${inner.qualifiedName}(v) }"
+    }
+
+    else -> "$name as ${elementKotlinTypeName(inner)}?"
+  }
+
+  else -> "$name as ${elementKotlinTypeName(type)}"
+}
+
+/**
+ * ADR-081, read side: the projection appended to a collection-returning invocation before its
+ * result is boxed as one `StableRef`. A value-class component is mapped to its underlying (the int
+ * ordinal for an enum underlying, the underlying instance for an ObjectHandle underlying), so the
+ * generic `nuget_list_get`/`nuget_set_element_at`/`nuget_map_*_at` boxes a value the C# side's
+ * `FromHandle<underlying>` can read; C# re-wraps per element. Boxing the value class itself is what
+ * bound-and-broke before this ADR. Returns [invocation] unchanged when no component is a value
+ * class, so every other collection result keeps its exact previous body.
+ */
+internal fun collectionResultProjection(
+  invocation: String,
+  type: BridgeType.Collection,
+  nullable: Boolean = false,
+): String {
+  val dot: String = if (nullable) "?." else "."
+  return when (type.kind) {
+    CollectionKind.LIST, CollectionKind.MUTABLE_LIST -> {
+      val element: BridgeType = requireNotNull(type.element) {
+        "Forward Kotlin collection result has no element type"
+      }
+      if (element.componentValueClass() == null) invocation
+      else "$invocation${dot}map { ${componentRaising("it", element)} }"
+    }
+
+    // mapTo(mutableSetOf()) rather than map: `nuget_set_count`/`nuget_set_element_at` cast the box
+    // back to `Set<*>`, so the projected copy must still be a Set.
+    CollectionKind.SET, CollectionKind.MUTABLE_SET -> {
+      val element: BridgeType = requireNotNull(type.element) {
+        "Forward Kotlin collection result has no element type"
+      }
+      if (element.componentValueClass() == null) invocation
+      else "$invocation${dot}mapTo(mutableSetOf()) { ${componentRaising("it", element)} }"
+    }
+
+    CollectionKind.MAP, CollectionKind.MUTABLE_MAP -> {
+      val key: BridgeType = requireNotNull(type.key) { "Forward Kotlin Map result has no key type" }
+      val value: BridgeType =
+        requireNotNull(type.value) { "Forward Kotlin Map result has no value type" }
+      if (key.componentValueClass() == null && value.componentValueClass() == null) invocation
+      else "$invocation${dot}entries${dot}associate { (k, v) -> " +
+          "${componentRaising("k", key)} to ${componentRaising("v", value)} }"
+    }
+  }
+}
+
+/** The inverse of [componentLowering]: one outgoing component projected to the wire value the
+ *  generic box can carry. Identity for everything but a value class (ADR-083: `?.`-lifted when the
+ *  component is a nullable value class -- a plain nullable component stays identity, since the box
+ *  already holds `Any?` and the nullable read exports carry the null through). */
+private fun componentRaising(name: String, type: BridgeType): String {
+  val valueClass: BridgeType.ValueClass = type.componentValueClass() ?: return name
+  val dot: String = if (type is BridgeType.Nullable) "?." else "."
+  return "$name$dot${valueClass.underlyingPropertyName}" +
+      if (valueClass.underlying is BridgeType.Enum) "$dot" + "ordinal" else ""
 }
 
 private fun PrimitiveKind.simpleKotlinName(): String = when (this) {
@@ -576,6 +681,23 @@ private fun addNullableResult(
       )
     }
 
+    // ADR-080: same BOOLEAN + valueOut shape, writing the `int` ordinal into valueOut.
+    is BridgeType.Enum -> {
+      require(call.result == ForwardAbiWireType.BOOLEAN) {
+        "Forward Kotlin nullable enum result must use BOOLEAN"
+      }
+      val valueOut: ForwardAbiParameter = requireNotNull(
+        call.parameters.firstOrNull { parameter -> parameter.name == "valueOut" },
+      ) { "Forward Kotlin nullable enum result is missing valueOut" }
+      builder.returns(kotlinType("Boolean"))
+      builder.addCode(
+        nullablePrimitiveResultBody(invocation, valueOut.name, errorName, "result.ordinal"),
+        cVarType(PrimitiveKind.INT),
+        cOpaquePointerVar,
+        stableRef,
+      )
+    }
+
     // ADR-076: same BOOLEAN + valueOut shape as the nullable-primitive case above, except the
     // Kotlin Instant result is converted to ticks before it is written into valueOut.
     BridgeType.Instant -> {
@@ -638,13 +760,18 @@ private fun cVarType(kind: PrimitiveKind): ClassName = ClassName(
 )
 
 /** The lowered Kotlin expression for an extension function's receiver: an object handle is
- * un-boxed via `asStableRef`, matching every other object-handle input; a primitive/String
- * receiver is already the right Kotlin value as-is.
+ * un-boxed via `asStableRef`, matching every other object-handle input; a value class is
+ * reconstructed from its underlying wire, the same `Owner(value)` re-wrap [loweredArgument]
+ * applies at a parameter slot (ADR-077), which also re-runs the value class's own `init`
+ * validation; a primitive/String receiver is already the right Kotlin value as-is.
  */
 private fun receiverExpression(receiver: ForwardAbiParameter): String =
   when (val type: BridgeType = receiver.transfer.type) {
     is BridgeType.ObjectHandle ->
       "${receiver.name}.asStableRef<${type.qualifiedName}>().get()"
+
+    is BridgeType.ValueClass ->
+      "${type.qualifiedName}(${valueClassUnderlyingLowering(receiver.name, type.underlying)})"
 
     else -> receiver.name
   }
@@ -853,6 +980,10 @@ private fun loweredArgument(parameter: ForwardPublicParameter): String =
       is BridgeType.Primitive ->
         "if (${parameter.name}HasValue) ${parameter.name} else null"
 
+      // ADR-080: same HasValue guard, with the ordinal lookup the non-null enum branch uses.
+      is BridgeType.Enum ->
+        "if (${parameter.name}HasValue) ${inner.qualifiedName}.entries[${parameter.name}] else null"
+
       // ADR-076: same HasValue-guard shape as the nullable Primitive case above, plus the same
       // TICKS_TO_INSTANT conversion the non-nullable Instant branch above uses.
       BridgeType.Instant ->
@@ -914,26 +1045,26 @@ internal fun loweredCollectionExpression(
   return when (type.kind) {
     CollectionKind.LIST ->
       "$name${dot}asStableRef<MutableList<Any?>>()${dot}get()" +
-          "${dot}map { it as ${elementKotlinTypeName(requireNotNull(type.element))} }"
+          "${dot}map { ${componentLowering("it", requireNotNull(type.element))} }"
 
     CollectionKind.MUTABLE_LIST ->
       "$name${dot}asStableRef<MutableList<Any?>>()${dot}get()" +
           "${dot}mapTo(mutableListOf()) { " +
-          "it as ${elementKotlinTypeName(requireNotNull(type.element))} }"
+          "${componentLowering("it", requireNotNull(type.element))} }"
 
     // ADR-073: copy-in, mirroring the List/MutableList pair above. Neither map kind writes
     // back -- see the ADR's "no write-back" decision.
     CollectionKind.MAP ->
       "$name${dot}asStableRef<MutableMap<Any?, Any?>>()${dot}get()" +
           "${dot}entries${dot}associate { (k, v) -> " +
-          "(k as ${elementKotlinTypeName(requireNotNull(type.key))}) " +
-          "to (v as ${elementKotlinTypeName(requireNotNull(type.value))}) }"
+          "(${componentLowering("k", requireNotNull(type.key))}) " +
+          "to (${componentLowering("v", requireNotNull(type.value))}) }"
 
     CollectionKind.MUTABLE_MAP ->
       "$name${dot}asStableRef<MutableMap<Any?, Any?>>()${dot}get()" +
           "${dot}entries${dot}associateTo(mutableMapOf()) { (k, v) -> " +
-          "(k as ${elementKotlinTypeName(requireNotNull(type.key))}) " +
-          "to (v as ${elementKotlinTypeName(requireNotNull(type.value))}) }"
+          "(${componentLowering("k", requireNotNull(type.key))}) " +
+          "to (${componentLowering("v", requireNotNull(type.value))}) }"
 
     // ADR-073: SET and MUTABLE_SET deliberately share one lowering -- mapTo(mutableSetOf())
     // yields a MutableSet<T>, which satisfies a Set<T> parameter too, so there is no reason to
@@ -941,6 +1072,6 @@ internal fun loweredCollectionExpression(
     CollectionKind.SET, CollectionKind.MUTABLE_SET ->
       "$name${dot}asStableRef<MutableSet<Any?>>()${dot}get()" +
           "${dot}mapTo(mutableSetOf()) { " +
-          "it as ${elementKotlinTypeName(requireNotNull(type.element))} }"
+          "${componentLowering("it", requireNotNull(type.element))} }"
   }
 }

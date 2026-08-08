@@ -90,12 +90,12 @@ class Tier1NamedSkipDiagnosticsTest {
   }
 
   /**
-   * ADR-073: a nullable map *value* (`Map<String, Int?>`) is outside `isWrappableComponent()` --
-   * `nuget_map_put`'s `value` parameter is a non-nullable `COpaquePointer`, so `null` cannot cross
-   * -- and must still fire `SKIPPED_UNSUPPORTED_INPUT` rather than silently crash or bind wrong.
+   * ADR-083 supersedes the ADR-073 skip this cell used to assert: a nullable map *value*
+   * (`Map<String, Int?>`) now rides the null pointer in `nuget_map_put`'s value slot, so the
+   * method binds. The nullable *key* spelling keeps a named skip of its own, one cell below.
    */
   @Test
-  fun `class method with Map nullable-value parameter fires SKIPPED_UNSUPPORTED_INPUT and is omitted`() {
+  fun `class method with Map nullable-value parameter binds`() {
     val result = Tier1Harness.run(
       """
       package tier1.skipmapnullableinput
@@ -111,13 +111,41 @@ class Tier1NamedSkipDiagnosticsTest {
       "expected no broken source for setOptionalScores; got: ${result.compileErrors}",
     )
     assertTrue(
-      "export_patient_setOptionalScores" !in result.generated,
-      "expected setOptionalScores to be entirely absent from the generated CNameExports.kt; " +
+      "export_patient_setOptionalScores" in result.generated,
+      "expected setOptionalScores to bind now that a nullable map value is admitted; " +
+          "generated=${result.generated}",
+    )
+  }
+
+  /**
+   * ADR-083: a nullable map *key* (`Map<String?, Int>`) stays excluded by name -- a C#
+   * `Dictionary` cannot hold a null key, so there is no idiomatic projection for it -- even though
+   * the same nullable spelling is admitted in the value slot by the cell above.
+   */
+  @Test
+  fun `class method with Map nullable-key parameter fires SKIPPED_UNSUPPORTED_INPUT and is omitted`() {
+    val result = Tier1Harness.run(
+      """
+      package tier1.skipmapnullablekeyinput
+
+      class Patient(val name: String) {
+        fun setKeyedScores(scores: Map<String?, Int>): Int = scores.size
+      }
+      """.trimIndent()
+    )
+
+    assertTrue(
+      result.compiledClean,
+      "expected no broken source for setKeyedScores; got: ${result.compileErrors}",
+    )
+    assertTrue(
+      "export_patient_setKeyedScores" !in result.generated,
+      "expected setKeyedScores to be entirely absent from the generated CNameExports.kt; " +
           "generated=${result.generated}",
     )
     assertTrue(
       result.kspWarnings.any { it.contains(ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_INPUT.name) },
-      "expected a SKIPPED_UNSUPPORTED_INPUT diagnostic naming Patient.setOptionalScores's Map " +
+      "expected a SKIPPED_UNSUPPORTED_INPUT diagnostic naming Patient.setKeyedScores's Map " +
           "parameter; kspWarnings=${result.kspWarnings}",
     )
   }
@@ -357,6 +385,120 @@ class Tier1NamedSkipDiagnosticsTest {
       },
       "a StateFlow property still binds through the legacy flow adapter, so warning that it was " +
           "skipped would be a false positive; kspWarnings=${result.kspWarnings}",
+    )
+  }
+
+  /**
+   * The false negative in the exclusion above: `LEGACY_ROUTED_PROTOCOLS` is position-agnostic, but
+   * the legacy flow/lambda adapters live in `CirClassTranslator` and only re-emit **class**
+   * properties. An extension property typed `StateFlow<T>` on a perfectly supported receiver has no
+   * adapter at all, so the exclusion silences a genuine drop.
+   */
+  @Test
+  fun `extension property with a StateFlow type fires SKIPPED_UNSUPPORTED_PROPERTY and is omitted`() {
+    val result = Tier1Harness.run(
+      """
+      package tier1.skipextensionflow
+
+      import kotlinx.coroutines.flow.MutableStateFlow
+      import kotlinx.coroutines.flow.StateFlow
+
+      class Patient(val name: String)
+
+      val Patient.status: StateFlow<Int> get() = MutableStateFlow(0)
+      """.trimIndent(),
+      libraries = listOf(Tier1Classpath.kotlinxCoroutinesCore),
+    )
+
+    assertTrue(
+      result.compiledClean,
+      "expected no broken source for Patient.status; got: ${result.compileErrors}",
+    )
+    assertFalse(
+      result.generated.contains("patient_get_status"),
+      "expected the extension StateFlow property to be entirely absent from the generated " +
+          "exports; generated=${result.generated}",
+    )
+    assertTrue(
+      result.kspWarnings.any {
+        it.contains(ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_PROPERTY.name) &&
+            it.contains("Patient.status")
+      },
+      "no adapter re-emits an extension StateFlow property, so it must be named as a skip; " +
+          "kspWarnings=${result.kspWarnings}",
+    )
+  }
+
+  /**
+   * The *receiver* half of the same gap. The sibling cell above covers an unplannable property
+   * **type**; an extension property whose receiver type the planner cannot wire vanished just as
+   * silently, from a completely separate bail (`ForwardPropertyPlanner.extensionProperty`), and
+   * needed its own record because the property's own type (`String` here) is perfectly supported,
+   * so the type-based wording would name the wrong thing.
+   */
+  @Test
+  fun `extension property with an unsupported receiver fires SKIPPED_UNSUPPORTED_PROPERTY and is omitted`() {
+    val result = Tier1Harness.run(
+      """
+      package tier1.skipreceiver
+
+      class Box<T>(val value: T)
+
+      class Patient(val name: String)
+
+      val Box<Int>.label: String get() = "x"
+      """.trimIndent()
+    )
+
+    assertTrue(
+      result.compiledClean,
+      "expected no broken source for Box<Int>.label; got: ${result.compileErrors}",
+    )
+    assertFalse(
+      result.generated.contains("box_get_label"),
+      "expected the unsupported-receiver extension property to be entirely absent from the " +
+          "generated exports; generated=${result.generated}",
+    )
+    assertTrue(
+      result.kspWarnings.any {
+        it.contains(ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_PROPERTY.name) &&
+            it.contains("Box.label")
+      },
+      "expected a SKIPPED_UNSUPPORTED_PROPERTY diagnostic naming the Box receiver; " +
+          "kspWarnings=${result.kspWarnings}",
+    )
+  }
+
+  /**
+   * The negative half: a supported receiver still binds and stays silent. There is no exclusion
+   * cell for this diagnostic beyond this one, because nothing legacy-routes an extension property
+   * by *receiver*: the `LEGACY_ROUTED_PROTOCOLS` escape hatch keys off the property's own type, so
+   * an unsupported receiver is always a genuine drop.
+   */
+  @Test
+  fun `extension property with a supported receiver binds and fires no SKIPPED_UNSUPPORTED_PROPERTY`() {
+    val result = Tier1Harness.run(
+      """
+      package tier1.bindreceiver
+
+      val String.wordCount: Int get() = trim().split(" ").size
+      """.trimIndent()
+    )
+
+    assertTrue(
+      result.compiledClean,
+      "expected no broken source for String.wordCount; got: ${result.compileErrors}",
+    )
+    assertTrue(
+      result.generated.contains("string_get_wordCount"),
+      "expected the String-receiver extension property to still bind; " +
+          "generated=${result.generated}",
+    )
+    assertFalse(
+      result.kspWarnings.any {
+        it.contains(ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_PROPERTY.name)
+      },
+      "a supported receiver is not a skip; kspWarnings=${result.kspWarnings}",
     )
   }
 }

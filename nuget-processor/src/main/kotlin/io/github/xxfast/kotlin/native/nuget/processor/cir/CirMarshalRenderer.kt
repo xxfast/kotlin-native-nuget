@@ -225,12 +225,17 @@ internal fun StringBuilder.renderMarshalHelper(helper: CirMarshalHelper) {
   // type is added in exactly one place.
   appendLine("        internal static IntPtr Wrap<T>(T value)")
   appendLine("        {")
-  appendLine("            if (typeof(T) == typeof(string)) return nuget_wrap_string((string)(object)value!);")
-  appendLine("            if (typeof(T) == typeof(int)) return nuget_wrap_int((int)(object)value!);")
-  appendLine("            if (typeof(T) == typeof(long)) return nuget_wrap_long((long)(object)value!);")
-  appendLine("            if (typeof(T) == typeof(float)) return nuget_wrap_float((float)(object)value!);")
-  appendLine("            if (typeof(T) == typeof(double)) return nuget_wrap_double((double)(object)value!);")
-  appendLine("            if (typeof(T) == typeof(bool)) return nuget_wrap_bool((bool)(object)value!);")
+  // ADR-083: the null pointer is the null component, for every component kind. The dispatch below
+  // is on the *underlying* type because typeof(int?) != typeof(int), so without the normalization
+  // a T of `int?` would miss every branch and fall into the reflective _handle fallback.
+  appendLine("            if (value == null) return IntPtr.Zero;")
+  appendLine("            var type = Nullable.GetUnderlyingType(typeof(T)) ?? typeof(T);")
+  appendLine("            if (type == typeof(string)) return nuget_wrap_string((string)(object)value!);")
+  appendLine("            if (type == typeof(int)) return nuget_wrap_int((int)(object)value!);")
+  appendLine("            if (type == typeof(long)) return nuget_wrap_long((long)(object)value!);")
+  appendLine("            if (type == typeof(float)) return nuget_wrap_float((float)(object)value!);")
+  appendLine("            if (type == typeof(double)) return nuget_wrap_double((double)(object)value!);")
+  appendLine("            if (type == typeof(bool)) return nuget_wrap_bool((bool)(object)value!);")
   appendLine("            var field = typeof(T).GetField(\"_handle\",")
   appendLine("                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Public);")
   appendLine("            if (field == null) throw new NotSupportedException($\"Cannot pass {typeof(T).Name} to a Kotlin collection\");")

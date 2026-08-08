@@ -11,4 +11,21 @@ package io.github.xxfast.kotlin.native.nuget.test.models
  */
 value class StoryUri(val value: String) : CharSequence by value {
   fun shout(): String = value.uppercase()
+
+  /**
+   * ADR-082 amendment (2026-08-08), fix A: a declared member whose simple name collides with a
+   * supertype member (`CharSequence.get(index: Int): Char`) but is not that member's signature.
+   * Same kind (function) and name (`get`) and arity (1), but the parameter type at position 0 is
+   * `String` here versus `Int` on the supertype, so the new signature-level rule must classify
+   * this as declared and export it, while `get(index: Int)` itself keeps skipping as the genuine
+   * inherited signature. Reads `value` as a `?`-delimited, `&`-separated query string and returns
+   * the first matching parameter, or the empty string if [key] is absent.
+   */
+  fun get(key: String): String =
+    value.substringAfter('?', missingDelimiterValue = "")
+      .split('&')
+      .map { it.split('=', limit = 2) }
+      .firstOrNull { it[0] == key }
+      ?.getOrNull(1)
+      ?: ""
 }

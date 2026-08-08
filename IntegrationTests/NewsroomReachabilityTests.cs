@@ -117,11 +117,16 @@ public class NewsroomReachabilityTests
         // ADR-064): `get`/`subSequence`/`length`, forwarded by `CharSequence by value`
         // delegation, report origin == KOTLIN_LIB and parentDeclaration == StoryUri itself --
         // identical, cross-module, to a hand-written member on both signals. Only "a supertype
-        // declares a member with this simple name" tells them apart. `Shout()` is genuinely
-        // author-declared and must survive the same filter that drops the delegated three.
+        // declares this member" tells them apart. `Shout()` is genuinely author-declared and must
+        // survive the same filter that drops the delegated three.
+        //
+        // ADR-082's 2026-08-08 amendment narrowed that signal from the simple name to the full
+        // signature, and StoryUri gained a declared `get(key: String)` to prove it: the delegated
+        // `get(index: Int)` still has to be absent, so the overload is named explicitly here
+        // rather than by bare name. `ValueClassDeclaredMemberTests` owns the positive half.
         var type = typeof(StoryUri);
 
-        Assert.Null(type.GetMethod("Get"));
+        Assert.Null(type.GetMethod("Get", new[] { typeof(int) }));
         Assert.Null(type.GetMethod("SubSequence"));
         Assert.Null(type.GetProperty("Length"));
         Assert.NotNull(type.GetMethod("Shout"));

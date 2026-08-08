@@ -34,12 +34,25 @@ internal data class ForwardDroppedProperty(
   val typeDescription: String,
 )
 
+/**
+ * An extension property whose *receiver* type has no supported wire shape, so the whole property is
+ * absent from the generated C#. Separate from [ForwardDroppedProperty] because the property's own
+ * type is usually fine here: reusing that record would name the property's type in a message about
+ * its receiver, which is worse than no message.
+ */
+internal data class ForwardDroppedExtensionReceiver(
+  val symbol: String,
+  val node: KSNode?,
+  val receiverDescription: String,
+)
+
 /** Builds the property slice while leaving unsupported/specialized properties on their named legacy paths. */
 internal class ForwardPropertyPlanner(
   private val classifier: ForwardBridgeTypeClassifier,
 ) {
   private val droppedSetters: MutableList<ForwardDroppedPropertySetter> = mutableListOf()
   private val dropped: MutableList<ForwardDroppedProperty> = mutableListOf()
+  private val droppedReceivers: MutableList<ForwardDroppedExtensionReceiver> = mutableListOf()
 
   /** ADR-075: every collection property setter this planner declined to build because a
    *  component failed [isWrappableComponent] — the property itself is still planned, get-only. */
@@ -48,6 +61,9 @@ internal class ForwardPropertyPlanner(
   /** Every property this planner declined to plan at all, minus the ones a legacy route still
    *  re-emits (see [recordDropped]). */
   val droppedProperties: List<ForwardDroppedProperty> get() = dropped
+
+  /** Every extension property this planner declined to plan because of its receiver type. */
+  val droppedExtensionReceivers: List<ForwardDroppedExtensionReceiver> get() = droppedReceivers
 
   fun catalog(
     classes: List<KSClassDeclaration>,
@@ -64,12 +80,13 @@ internal class ForwardPropertyPlanner(
 
   private fun classProperties(cls: KSClassDeclaration): List<ForwardPropertyPlan> {
     val owner: String = cls.qualifiedName?.asString() ?: return emptyList()
-    val hasSuperClass: Boolean = cls.superTypes.any { type ->
-      type.resolve().declaration.qualifiedName?.asString() != "kotlin.Any"
-    }
+    // One shared predicate with `CirClassTranslator` (see `ForwardClassMembership.kt`): this used
+    // to count any non-`Any` supertype, so an interface-only class planned none of its inherited
+    // members while the translator still rendered them into `: IGreeter`.
+    val superClass: KSClassDeclaration? = cls.forwardSuperClass()
     return cls.getAllProperties()
       .filter { it.getVisibility() == Visibility.PUBLIC }
-      .filter { prop -> !hasSuperClass || prop.parentDeclaration == cls }
+      .filter { prop -> prop.isForwardPlannableMemberOf(cls, superClass) }
       .mapNotNull { prop ->
         propertyPlan(
           symbol = "$owner.${prop.simpleName.asString()}",
@@ -146,20 +163,39 @@ internal class ForwardPropertyPlanner(
   private fun extensionProperty(prop: KSPropertyDeclaration): ForwardPropertyPlan? {
     val receiver: KSType = prop.extensionReceiver?.resolve()?.expandAliases() ?: return null
     val receiverType: BridgeType = classifier.classify(receiver)
-    // ADR-075: a value class crosses the bridge as its own underlying primitive/String value
-    // (ADR-014), the same wire shape its own declared members already use
-    // (`ForwardCallablePlanner.valueClassEntries`) — a reference-underlying value class is not
-    // admitted here, matching that same route's ADR-035 deferral.
+    // ADR-075: a value class crosses the bridge as its own underlying value (ADR-014), the same
+    // wire shape its own declared members already use (`ForwardCallablePlanner.valueClassEntries`).
+    // The receiver admits every underlying `isPlannable` admits at an ordinary position (ADR-077's
+    // String/Primitive/Enum/ObjectHandle set): the receiver is reconstructed from that wire before
+    // the property access, so an enum ordinal or a StableRef pointer is no harder here than it is
+    // in a parameter slot.
     val isSupportedValueClass: Boolean = receiverType is BridgeType.ValueClass &&
-        (receiverType.underlying is BridgeType.Primitive || receiverType.underlying == BridgeType.String)
+        when (receiverType.underlying) {
+          BridgeType.String, is BridgeType.Primitive, is BridgeType.Enum,
+          is BridgeType.ObjectHandle -> true
+
+          else -> false
+        }
     val supportedReceiver: Boolean =
       receiverType is BridgeType.ObjectHandle ||
           receiverType is BridgeType.Primitive ||
           receiverType == BridgeType.String ||
           isSupportedValueClass
-    if (!supportedReceiver) return null
     val receiverName: String = receiver.declaration.simpleName.asString()
     val name: String = prop.simpleName.asString()
+    // ADR-064's position coverage: the receiver is the last position that used to vanish silently.
+    // Nothing legacy-routes an extension property by receiver, so unlike `recordDropped` there is
+    // no re-emission to exclude here.
+    if (!supportedReceiver) {
+      droppedReceivers.add(
+        ForwardDroppedExtensionReceiver(
+          symbol = "${prop.packageName.asString()}.$receiverName.$name",
+          node = prop,
+          receiverDescription = receiverType.diagnosticTypeName(),
+        ),
+      )
+      return null
+    }
     return propertyPlan(
       symbol = "${prop.packageName.asString()}.$receiverName.$name",
       position = ForwardPropertyPosition.EXTENSION,
@@ -184,7 +220,7 @@ internal class ForwardPropertyPlanner(
     // through `Nullable`). Whether a *setter* can also be built is a wholly separate question,
     // decided below, independent of the getter.
     if (!isPlannable(type)) {
-      recordDropped(symbol, prop, type)
+      recordDropped(symbol, position, prop, type)
       return null
     }
     val name: String = prop.simpleName.asString()
@@ -311,11 +347,22 @@ internal class ForwardPropertyPlanner(
    * design*: `CirClassTranslator`'s lambda and flow adapters bind them, so warning that they were
    * skipped would tell a consumer a working property had vanished. `Nullable` is unwrapped first,
    * so a `StateFlow<T>?` is excluded on the same grounds as a bare `StateFlow<T>`.
+   *
+   * The exclusion is **position-aware**: those adapters live in `CirClassTranslator`'s
+   * `getAllProperties()` loop, so they only ever re-emit a property declared *on* a class. An
+   * extension property has no adapter anywhere, so excluding it turned a real drop into silence
+   * (`val Patient.status: StateFlow<Int>` vanished from the generated C# with no diagnostic).
    */
-  private fun recordDropped(symbol: String, prop: KSPropertyDeclaration, type: BridgeType) {
+  private fun recordDropped(
+    symbol: String,
+    position: ForwardPropertyPosition,
+    prop: KSPropertyDeclaration,
+    type: BridgeType,
+  ) {
     val protocol: BridgeType.SpecializedProtocol? =
       type.unwrapNullable() as? BridgeType.SpecializedProtocol
-    val isLegacyRouted: Boolean = protocol != null && LEGACY_ROUTED_PROTOCOLS.any { prefix ->
+    val isLegacyRouted: Boolean = position != ForwardPropertyPosition.EXTENSION &&
+        protocol != null && LEGACY_ROUTED_PROTOCOLS.any { prefix ->
       protocol.name.startsWith(prefix)
     }
     if (isLegacyRouted) return
@@ -415,7 +462,8 @@ internal class ForwardPropertyPlanner(
   private fun BridgeType.hasValueFanOutInner(): BridgeType? {
     if (this !is BridgeType.Nullable) return null
     return when (type) {
-      is BridgeType.Primitive, BridgeType.Instant -> type
+      // ADR-080: a bare enum wires as its `int` ordinal, which has no spare null either.
+      is BridgeType.Primitive, BridgeType.Instant, is BridgeType.Enum -> type
       is BridgeType.ValueClass ->
         if (type.underlying is BridgeType.Primitive || type.underlying is BridgeType.Enum) type
         else null
@@ -506,8 +554,8 @@ internal class ForwardPropertyPlanner(
   }
 
   private companion object {
-    /** The [BridgeType.SpecializedProtocol] name prefixes whose properties a legacy route still
-     *  re-emits, so [recordDropped] must stay silent about them. Matches the prefixes
+    /** The [BridgeType.SpecializedProtocol] name prefixes whose *class* properties a legacy route
+     *  still re-emits, so [recordDropped] must stay silent about them there. Matches the prefixes
      *  `ForwardBridgeTypeClassifier` mints and `ForwardCallablePlanner.skipReason` routes. */
     val LEGACY_ROUTED_PROTOCOLS: List<String> =
       listOf("lambda ", "suspend lambda ", "flow ", "state flow ")

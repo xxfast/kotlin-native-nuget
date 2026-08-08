@@ -46,8 +46,9 @@ internal enum class ForwardDiagnosticKind(val severity: ForwardDiagnosticSeverit
    *  ADR-061 deferred width). */
   SKIPPED_UNSUPPORTED_RETURN(ForwardDiagnosticSeverity.WARNING),
 
-  /** A property whose classified type the property planner has no getter/setter shape for, so the
-   *  whole property is absent from the generated C#. Completes the position naming alongside
+  /** A property whose classified type the property planner has no getter/setter shape for, or an
+   *  extension property whose *receiver* type has no supported wire shape, so the whole property
+   *  is absent from the generated C#. Completes the position naming alongside
    *  [SKIPPED_UNSUPPORTED_INPUT] (a parameter) and [SKIPPED_UNSUPPORTED_RETURN] (a return);
    *  a property used to be the one position that vanished with no diagnostic at all.
    *

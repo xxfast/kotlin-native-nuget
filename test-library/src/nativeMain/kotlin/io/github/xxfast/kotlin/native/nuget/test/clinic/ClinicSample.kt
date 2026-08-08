@@ -357,6 +357,17 @@ value class ChartId(val value: String) {
   fun matches(other: String): Boolean = value == other
 
   fun isValid(): Boolean = value.isNotBlank()
+
+  /**
+   * ADR-082 amendment (2026-08-08), fix B: the first of two declared same-name overloads on a
+   * value class. Exercises the secondary-constructor-style export-name numbering
+   * (`${prefix}_$name` for this one, `${prefix}_${name}_2` for the next) that the C# surface
+   * must resolve back to a single natural overload set on `ChartId`.
+   */
+  fun describe(): String = "Chart $value"
+
+  /** Second declared overload of [describe]; must not collide with the first at the C symbol level. */
+  fun describe(prefix: String): String = "$prefix $value"
 }
 
 value class ChartRef(val patient: Patient) {
@@ -404,6 +415,75 @@ var ChartId.symptomTags: List<String>
   set(value) {
     chartIdSymptomTags[this] = value
   }
+
+/**
+ * Extension-property-receiver widening, half 1 · no ADR, a clean mirror of ADR-077's parameter
+ * lowering at the receiver slot. `ForwardPropertyPlanner.extensionProperty`'s `supportedReceiver`
+ * check has admitted a value-class receiver only over a `Primitive`/`String` underlying
+ * ([ChartId.symptomTags] above is the `String` precedent); an enum-underlying or
+ * ObjectHandle-underlying receiver still hits the named `SKIPPED_UNSUPPORTED_PROPERTY` receiver
+ * diagnostic and the whole property vanishes. [Dosage.label] below closes the primitive-underlying
+ * cell ROADMAP.md names as untested even though `Primitive` is already in the admit list ("A
+ * primitive-underlying value-class extension-property receiver is also untested, only the
+ * `String`-underlying case (`ChartId`) is covered"); [Temperament.note] and [ChartRef.annotation]
+ * are the two cells that do not admit at all yet. Backed by a package-level map per receiver, same
+ * shape as [chartIdSymptomTags]: a value class's structural equality (delegating to its underlying
+ * value) makes it a correct map key, and for [ChartRef] specifically that equality delegates to the
+ * identical [Patient] instance the StableRef returns, so keying by [ChartRef] only works because a
+ * repeated crossing of the same handle resolves to the same Kotlin object.
+ */
+private val dosageLabels: MutableMap<Dosage, String> = mutableMapOf()
+
+/** Primitive-underlying (`Double`) receiver — the ROADMAP-noted untested cell. */
+var Dosage.label: String
+  get() = dosageLabels[this] ?: ""
+  set(value) {
+    dosageLabels[this] = value
+  }
+
+private val temperamentNotes: MutableMap<Temperament, String> = mutableMapOf()
+
+/** Enum-underlying (`Mood`) receiver — skips today via `SKIPPED_UNSUPPORTED_PROPERTY`. */
+var Temperament.note: String
+  get() = temperamentNotes[this] ?: ""
+  set(value) {
+    temperamentNotes[this] = value
+  }
+
+private val chartRefAnnotations: MutableMap<ChartRef, String> = mutableMapOf()
+
+/** ObjectHandle-underlying (`Patient`) receiver — skips today via `SKIPPED_UNSUPPORTED_PROPERTY`. */
+var ChartRef.annotation: String
+  get() = chartRefAnnotations[this] ?: ""
+  set(value) {
+    chartRefAnnotations[this] = value
+  }
+
+/**
+ * Extension-property-receiver widening, half 2 · no ADR, same mirror as the properties above but
+ * for the callable plan: `ForwardCallablePlanner.extensionEntry` has *admitted* a value-class
+ * receiver of any underlying since ADR-077 (`inputSkipReason()` does not special-case the receiver
+ * position), but nothing downstream lowers it correctly. `ChartId.abbreviate` (`String` underlying)
+ * and `Temperament.escalate` (`Mood` enum underlying, and a [Temperament] *return* in the same
+ * call) are the first fixtures to declare one; zero existed before this, so this shape has never
+ * actually run. Expected failure, captured verbatim rather than fixed here: on the Kotlin side,
+ * `ForwardKotlinPlanEmitter.receiverExpression` only special-cases an `ObjectHandle` receiver, so
+ * the generated wrapper declares its `receiver` parameter typed as the *wire* (`String` for
+ * [ChartId], `Int` for [Temperament]'s ordinal) and then calls `receiver.abbreviate(...)` /
+ * `receiver.escalate()` directly on that wire value, which does not compile: neither `String` nor
+ * `Int` has an `abbreviate`/`escalate` member. On the C# side, the generated `DllImport` expects
+ * the underlying wire type but the generated call site still passes the raw value-class struct.
+ */
+fun ChartId.abbreviate(length: Int): String = value.take(length)
+
+/**
+ * Enum-underlying receiver AND a value-class return in the same call, per the class doc above.
+ */
+fun Temperament.escalate(): Temperament = when (mood) {
+  Mood.CALM -> Temperament(Mood.ANXIOUS)
+  Mood.ANXIOUS -> Temperament(Mood.PLAYFUL)
+  Mood.PLAYFUL -> Temperament(Mood.PLAYFUL)
+}
 
 /**
  * ADR-077 sub-item 1 · constructor position (regular class). [chart] is a plain constructor

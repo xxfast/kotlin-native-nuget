@@ -36,9 +36,10 @@ class Chart(val patientName: String) {
    *  property. */
   var moods: List<Mood> = emptyList()
 
-  /** Ineligible for a different reason than [moods]: the *element* is nullable
-   *  (`String?`, not `String`), not the collection reference. Sharp on purpose — the collection
-   *  reference's own nullability ([notes]) and its components' marshallability ([aliases]) are
-   *  independent questions. Must also become get-only + `SKIPPED_UNSUPPORTED_INPUT`. */
+  /** Eligible as of ADR-083, which was not the case when ADR-075 wrote this cell: the *element*
+   *  is nullable (`String?`, not `String`), not the collection reference, and a null component now
+   *  rides the null pointer in its own slot. Still sharp on purpose — the collection reference's
+   *  own nullability ([notes]) and its components' marshallability ([aliases]) are independent
+   *  questions; this one is now settable, [moods] (an enum element) still is not. */
   var aliases: List<String?> = emptyList()
 }

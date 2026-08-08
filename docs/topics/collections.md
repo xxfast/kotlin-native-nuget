@@ -543,8 +543,10 @@ class Chart(val patientName: String) {
    *  C# property (`{ get; }`, no `set`) plus a `SKIPPED_UNSUPPORTED_INPUT` diagnostic. */
   var moods: List<Mood> = emptyList()
 
-  /** Ineligible for a different reason: the *element* is nullable (`String?`, not `String`), not
-   *  the collection reference. */
+  /** Eligible as of [ADR-083](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/083-nullable-collection-components.md):
+   *  the *element* is nullable (`String?`, not `String`), and a null component now rides the null
+   *  pointer in its own slot. [moods] above (an enum element) is still ineligible for a different
+   *  reason. */
   var aliases: List<String?> = emptyList()
 }
 ```
@@ -680,18 +682,89 @@ that the C# property stays read-only rather than that the property was dropped:
     at ChartSample.kt:37
 ```
 
+## Nullable collection components
+
+A `null` list element, set element, or map value now crosses the bridge: it rides the same
+pointer every non-null component already crosses as, `IntPtr.Zero` on the way in, a null-checked
+read on the way out, for every wrappable component kind including a value class
+([ADR-083](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/083-nullable-collection-components.md)).
+No has-value pair is needed: the component slot is already pointer-shaped.
+
+From `test-library/.../clinic/NullableComponentCollectionsSample.kt`:
+
+```kotlin
+fun tagRoll(tags: List<String?>): String = tags.joinToString(",") { it ?: "null" }
+
+fun scoreBoard(scores: Map<String, Int?>): String =
+  scores.entries.sortedBy { it.key }.joinToString(";") { "${it.key}=${it.value ?: "null"}" }
+
+fun fileCharts(charts: List<ChartId?>): String =
+  charts.joinToString(",") { it?.value ?: "null" }
+```
+
+Generated C#, from `Interop.cs`. `TagRoll` boxes each `string?` element as-is; `FileCharts`
+`?.`-projects each nullable `ChartId` element to its `string?` underlying before boxing, composing
+[ADR-081](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/081-value-class-collection-components.md)'s
+per-element projection with the null-pointer slot:
+
+```C#
+public string TagRoll(IReadOnlyList<string?> tags)
+{
+    IntPtr tagsHandle = NugetMarshal.CreateList(tags);
+    IntPtr nativeResult = Native_TagRoll(_handle, tagsHandle, out IntPtr error);
+    if (error != IntPtr.Zero)
+    {
+        throw NugetErrorNative.BuildException(error);
+    }
+    NugetListNative.Dispose(tagsHandle);
+    return Marshal.PtrToStringUTF8(nativeResult)!;
+}
+
+public string FileCharts(IReadOnlyList<ChartId?> charts)
+{
+    IntPtr chartsHandle = NugetMarshal.CreateList(global::System.Linq.Enumerable.Select(charts, x => x?.Value));
+    IntPtr nativeResult = Native_FileCharts(_handle, chartsHandle, out IntPtr error);
+    ...
+}
+```
+
+The read side closes the same way: a returned collection containing a null element no longer NPEs
+on first read (previously a bind-then-break, since `isBridgeableComponent()`'s `Nullable` branch
+already admitted these shapes at return positions before the read export itself could handle them).
+From `IntegrationTests/NullableComponentCollectionTests.cs`:
+
+```C#
+[Fact]
+public void ChartLedger_MissingTags_MethodReturn_NullAtNonFirstIndexDoesNotThrow()
+{
+    using var ledger = new ChartLedger();
+
+    IReadOnlyList<string?> tags = ledger.MissingTags();
+
+    Assert.Equal(3, tags.Count);
+    Assert.Equal("OREO", tags[0]);
+    Assert.Null(tags[1]);
+    Assert.Equal("MYLO", tags[2]);
+}
+```
+
+A nullable map **key** is not part of this: `Map<String?, Int>` still skips named at a parameter
+position, since a C# `Dictionary` can't hold a null key.
+
 ## Limitations
 
 - `Sequence<T>` is not bridgeable. `Cat.unsupported: Sequence<String>` in the sample library is deliberately left out of the generated `Interop.cs` (no eager-copy story for a lazy sequence).
-- Only a strict subset of key/value/element types binds at a `Map`/`Set` parameter position: `String`, `Int`, `Long`, `Float`, `Double`, `Boolean`, and object handles (a class instance, boxed via reflection over its `_handle` field). Anything else, an enum (`Map<String, Mood>`), `Char` (`Set<Char>`), a nullable component (`Map<String, Int?>`), a nested collection (`Set<List<String>>`), a value class, or an interface, is skipped with `SKIPPED_UNSUPPORTED_INPUT` rather than crashing or binding incorrectly. `List`/`MutableList` parameters accept a wider (and, for some of those same shapes, unsafe) set of component types; see [ADR-073](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/073-map-and-set-parameters.md)'s Deferred section and [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md) for the tracked gap.
+- Only a strict subset of key/value/element types binds at a `Map`/`Set` parameter position: `String`, `Int`, `Long`, `Float`, `Double`, `Boolean`, object handles (a class instance, boxed via reflection over its `_handle` field), and a value class over any of those four underlyings, including an enum-underlying value class via its `int` ordinal (see [Value classes](value-classes.md#as-a-collection-component), [ADR-081](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/081-value-class-collection-components.md)). A `Nullable` spelling of any of those (`Map<String, Int?>`, `Set<String?>`, `List<ChartId?>`) binds too: a null element, set member, or map value rides a null pointer in the component slot on both the write and read side, no has-value pair needed (see [ADR-083](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/083-nullable-collection-components.md)). Anything else, a *bare* enum (`Map<String, Mood>`, not wrapped in a value class), `Char` (`Set<Char>`), a nested collection (`Set<List<String>>`), or an interface, is skipped with `SKIPPED_UNSUPPORTED_INPUT` rather than crashing or binding incorrectly. A nullable map **key** (`Map<String?, Int>`) is still a named skip at the parameter position: a C# `Dictionary` can't hold a null key. `List`/`MutableList` parameters accept a wider (and, for some of those same shapes, unsafe) set of non-nullable component types; see [ADR-073](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/073-map-and-set-parameters.md)'s Deferred section and [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md) for the tracked gap.
 - `MutableMap`/`MutableSet` parameters do not write back, matching `MutableList`. Contents are copied into Kotlin; changes Kotlin makes are not reflected back in the collection you passed.
-- A collection property **setter** uses the same wrappable-component predicate as a `Map`/`Set` parameter above, but applies it to `List` as well, so it is stricter than a `List` *parameter* (which still binds a wider, less safe set of element types, see above). An enum element (`List<Mood>`), a nullable element (`List<String?>`), a value-class element, or a nested-collection element skips the setter with `SKIPPED_UNSUPPORTED_INPUT` and falls back to a get-only property; the getter itself has no such restriction. See [ADR-075](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/075-collection-property-getter-setter-independence.md) and [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md) for the tracked write-side gap.
-- Reading an enum-element collection getter (`List<Mood>`) is untested and known-broken at runtime: `NugetMarshal.FromHandle<T>` has no enum branch, so `chart.Moods` would throw `MissingMethodException`. Pre-existing, not introduced by the setter-independence feature; see [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md).
+- A collection property **setter** uses the same wrappable-component predicate as a `Map`/`Set` parameter above, but applies it to `List` as well, so it is stricter than a `List` *parameter* (which still binds a wider, less safe set of non-nullable element types, see above). A *bare* enum element (`List<Mood>`, not wrapped in a value class) or a nested-collection element skips the setter with `SKIPPED_UNSUPPORTED_INPUT` and falls back to a get-only property; a value-class element (see [Value classes](value-classes.md#as-a-collection-component), [ADR-081](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/081-value-class-collection-components.md)) and a nullable element ([ADR-083](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/083-nullable-collection-components.md)) both bind; the getter itself has no such restriction. See [ADR-075](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/075-collection-property-getter-setter-independence.md) and [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md) for the remaining write-side gaps.
+- Reading a *bare* enum-element collection getter (`List<Mood>`, not wrapped in a value class) is untested and known-broken at runtime: `NugetMarshal.FromHandle<T>` has no enum branch, so `chart.Moods` would throw `MissingMethodException`. Pre-existing, not introduced by the setter-independence feature; see [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md). A value-class-wrapped enum element (`Set<Temperament>`) does not hit this: it reads via the underlying `int` ordinal and re-wraps, see [Value classes](value-classes.md#as-a-collection-component).
+- A nested-collection component (`List<List<ChartId>>`) still has no representation on the write side; see [Value classes](value-classes.md#as-a-collection-component) and [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md).
 
 <seealso>
     <category ref="related">
         <a href="generics.md">Generics</a>
         <a href="classes-and-objects.md">Classes and objects</a>
+        <a href="value-classes.md">Value classes</a>
     </category>
     <category ref="external">
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/011-collection-type-mapping.md">ADR-011: Collection type mapping</a>
@@ -700,5 +773,7 @@ that the C# property stays read-only rather than that the property was dropped:
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/064-forward-unsupported-declaration-diagnostics.md">ADR-064: Forward unsupported-declaration diagnostics</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/073-map-and-set-parameters.md">ADR-073: Map/Set parameters</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/075-collection-property-getter-setter-independence.md">ADR-075: Collection property getter/setter independence</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/081-value-class-collection-components.md">ADR-081: Value-class collection components</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/083-nullable-collection-components.md">ADR-083: Nullable collection components</a>
     </category>
 </seealso>

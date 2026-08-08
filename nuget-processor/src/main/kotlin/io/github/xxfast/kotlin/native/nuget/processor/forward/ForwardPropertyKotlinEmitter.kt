@@ -63,9 +63,16 @@ private fun FileSpec.Builder.addGetter(plan: ForwardPropertyPlan, call: ForwardN
       // `nullableHandleBody` already returns Kotlin `null` for a null result before ever building
       // a `StableRef`, the same route a nullable `ObjectHandle`/`Interface` getter takes.
       is BridgeType.ObjectHandle, is BridgeType.Interface, is BridgeType.Collection -> {
+        // ADR-081: a value-class component is projected to its underlying before boxing, with the
+        // whole chain `?.`-guarded so a null property value still ships a null pointer.
+        val boxed: String = if (inner is BridgeType.Collection) {
+          collectionResultProjection(access, inner, nullable = true)
+        } else {
+          access
+        }
         builder.returns(cOpaquePointer.copy(nullable = true))
         builder.addCode(
-          nullableHandleBody(access, "errorOut"),
+          nullableHandleBody(boxed, "errorOut"),
           stableRef,
           cOpaquePointerVar,
           stableRef,
@@ -112,8 +119,12 @@ private fun FileSpec.Builder.addGetter(plan: ForwardPropertyPlan, call: ForwardN
     }
 
     is BridgeType.ObjectHandle, is BridgeType.Interface, is BridgeType.Collection -> {
+      // ADR-081: read side of a collection property whose component is a value class -- box a copy
+      // projected to the underlying, the shape a C# per-element re-wrap can read.
+      val boxed: String =
+        if (type is BridgeType.Collection) collectionResultProjection(access, type) else access
       builder.returns(cOpaquePointer.copy(nullable = true))
-      builder.addCode(handleBody(access, "errorOut"), stableRef, cOpaquePointerVar, stableRef)
+      builder.addCode(handleBody(boxed, "errorOut"), stableRef, cOpaquePointerVar, stableRef)
     }
 
     // ADR-077 sub-items 2/4: unbox to the underlying property, so the export ships the
@@ -205,6 +216,15 @@ private fun FileSpec.Builder.addNullableValueGetter(
       getterBuilder
     }
 
+    // ADR-080: a bare nullable enum rides the same LegacyTwoCall `_value` call as its ordinal.
+    is BridgeType.Enum -> exportBuilder(call, plan.receiver)
+      .returns(kotlinType("Int"))
+      .addCode(
+        valueBody("${plan.accessExpression()}!!.ordinal", "errorOut", "0"),
+        cOpaquePointerVar,
+        stableRef,
+      )
+
     // ADR-079: a Primitive/Enum-underlying value class rides the same LegacyTwoCall `_value` call,
     // unboxed to the underlying (the ordinal for an enum underlying).
     is BridgeType.ValueClass -> {
@@ -289,10 +309,15 @@ private fun ForwardPropertyPlan.accessExpression(): String =
         "receiver.asStableRef<${type.qualifiedName}>().get().$kotlinName"
 
       // ADR-075: an extension property whose receiver is a value class crosses the bridge as its
-      // own underlying primitive/String value (ADR-014), exactly like
+      // own underlying value (ADR-014), exactly like
       // `ForwardKotlinPlanEmitter.valueClassReconstruction`'s `Owner(value)` for the value class's
-      // own declared members -- the receiver must be reconstructed before the property access.
-      is BridgeType.ValueClass -> "${type.qualifiedName}(receiver).$kotlinName"
+      // own declared members -- the receiver must be reconstructed before the property access. The
+      // wire carries the *underlying's* representation, so an enum ordinal / StableRef pointer is
+      // lowered first by the same shared helper the setter value uses.
+      is BridgeType.ValueClass -> {
+        val lowered: String = valueClassUnderlyingLowering("receiver", type.underlying)
+        "${type.qualifiedName}($lowered).$kotlinName"
+      }
 
       else -> "receiver.$kotlinName"
     }
@@ -308,6 +333,9 @@ private fun ForwardPropertyPlan.valueExpression(): String = when (val type: Brid
     is BridgeType.Interface -> "value?.asStableRef<${inner.qualifiedName}>()?.get()"
     // ADR-076: the wire value is a raw INT64 of ticks; convert it back to an Instant.
     BridgeType.Instant -> "instantFromDotNetTicks(value)"
+    // ADR-080: the NullableDispatch `set` export carries the bare ordinal (`set_null` is the
+    // other export), so the entry lookup is unconditional.
+    is BridgeType.Enum -> "${inner.qualifiedName}.entries[value]"
     // ADR-075 Question D: a nullable collection setter is an ordinary `Direct` route with a
     // nullable `COpaquePointer` value -- `?.` short-circuits before `asStableRef` is ever reached
     // for a null wire value, so the property's static type stays the property's own `List<T>?`.

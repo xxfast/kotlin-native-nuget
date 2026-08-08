@@ -147,9 +147,11 @@ internal fun FileSpec.Builder.addNugetListHelperExports() {
       .addAnnotation(cNameAnnotation("nuget_list_get"))
       .addParameter("handle", cOpaquePointer)
       .addParameter("index", Int::class)
-      .returns(cOpaquePointer)
+      // ADR-083: a null element rides the null pointer out, closing the `[index]!!` NPE that any
+      // returned collection carrying a null used to hit at its first read.
+      .returns(cOpaquePointer.copy(nullable = true))
       .addStatement(
-        "return %T.create(handle.asStableRef<List<*>>().get()[index]!!).asCPointer()",
+        "return handle.asStableRef<List<*>>().get()[index]?.let { %T.create(it).asCPointer() }",
         stableRef,
       )
       .build()
@@ -173,9 +175,11 @@ internal fun FileSpec.Builder.addNugetListHelperExports() {
     FunSpec.builder("export_nuget_list_add")
       .addAnnotation(cNameAnnotation("nuget_list_add"))
       .addParameter("handle", cOpaquePointer)
-      .addParameter("element", cOpaquePointer)
+      // ADR-083: a null pointer in the element slot means "this element is null" -- the slot is
+      // already pointer-shaped, so no has-value pair is needed for any component kind.
+      .addParameter("element", cOpaquePointer.copy(nullable = true))
       .addStatement(
-        "handle.asStableRef<MutableList<Any?>>().get().add(element.asStableRef<Any>().get())",
+        "handle.asStableRef<MutableList<Any?>>().get().add(element?.asStableRef<Any>()?.get())",
       )
       .build()
   )
@@ -196,9 +200,11 @@ internal fun FileSpec.Builder.addNugetSetHelperExports() {
       .addAnnotation(cNameAnnotation("nuget_set_element_at"))
       .addParameter("handle", cOpaquePointer)
       .addParameter("index", Int::class)
-      .returns(cOpaquePointer)
+      // ADR-083: see nuget_list_get -- a null element rides the null pointer out.
+      .returns(cOpaquePointer.copy(nullable = true))
       .addStatement(
-        "return %T.create(handle.asStableRef<Set<*>>().get().toList()[index]!!).asCPointer()",
+        "return handle.asStableRef<Set<*>>().get().toList()[index]" +
+            "?.let { %T.create(it).asCPointer() }",
         stableRef,
       )
       .build()
@@ -221,9 +227,10 @@ internal fun FileSpec.Builder.addNugetSetHelperExports() {
     FunSpec.builder("export_nuget_set_add")
       .addAnnotation(cNameAnnotation("nuget_set_add"))
       .addParameter("handle", cOpaquePointer)
-      .addParameter("element", cOpaquePointer)
+      // ADR-083: see nuget_list_add -- the null pointer is the null element.
+      .addParameter("element", cOpaquePointer.copy(nullable = true))
       .addStatement(
-        "handle.asStableRef<MutableSet<Any?>>().get().add(element.asStableRef<Any>().get())",
+        "handle.asStableRef<MutableSet<Any?>>().get().add(element?.asStableRef<Any>()?.get())",
       )
       .build()
   )
@@ -244,9 +251,13 @@ internal fun FileSpec.Builder.addNugetMapHelperExports() {
       .addAnnotation(cNameAnnotation("nuget_map_key_at"))
       .addParameter("handle", cOpaquePointer)
       .addParameter("index", Int::class)
-      .returns(cOpaquePointer)
+      // ADR-083: see nuget_list_get. A nullable map *key* is never admitted at an input position
+      // (a Dictionary cannot hold one), but a returned map can carry one, so the read is lifted
+      // here too rather than left as an NPE.
+      .returns(cOpaquePointer.copy(nullable = true))
       .addStatement(
-        "return %T.create(handle.asStableRef<Map<*, *>>().get().keys.toList()[index]!!).asCPointer()",
+        "return handle.asStableRef<Map<*, *>>().get().keys.toList()[index]" +
+            "?.let { %T.create(it).asCPointer() }",
         stableRef,
       )
       .build()
@@ -257,9 +268,11 @@ internal fun FileSpec.Builder.addNugetMapHelperExports() {
       .addAnnotation(cNameAnnotation("nuget_map_value_at"))
       .addParameter("handle", cOpaquePointer)
       .addParameter("index", Int::class)
-      .returns(cOpaquePointer)
+      // ADR-083: see nuget_list_get -- a null map value rides the null pointer out.
+      .returns(cOpaquePointer.copy(nullable = true))
       .addStatement(
-        "return %T.create(handle.asStableRef<Map<*, *>>().get().values.toList()[index]!!).asCPointer()",
+        "return handle.asStableRef<Map<*, *>>().get().values.toList()[index]" +
+            "?.let { %T.create(it).asCPointer() }",
         stableRef,
       )
       .build()
@@ -283,11 +296,14 @@ internal fun FileSpec.Builder.addNugetMapHelperExports() {
     FunSpec.builder("export_nuget_map_put")
       .addAnnotation(cNameAnnotation("nuget_map_put"))
       .addParameter("handle", cOpaquePointer)
-      .addParameter("key", cOpaquePointer)
-      .addParameter("value", cOpaquePointer)
+      // ADR-083: the value slot carries a null as the null pointer. The key slot goes nullable at
+      // the wire too even though the planner never admits a nullable key -- a defensive wire beats
+      // an NPE if a gate is ever wrong.
+      .addParameter("key", cOpaquePointer.copy(nullable = true))
+      .addParameter("value", cOpaquePointer.copy(nullable = true))
       .addStatement(
-        "handle.asStableRef<MutableMap<Any?, Any?>>().get()[key.asStableRef<Any>().get()] = " +
-            "value.asStableRef<Any>().get()",
+        "handle.asStableRef<MutableMap<Any?, Any?>>().get()[key?.asStableRef<Any>()?.get()] = " +
+            "value?.asStableRef<Any>()?.get()",
       )
       .build()
   )

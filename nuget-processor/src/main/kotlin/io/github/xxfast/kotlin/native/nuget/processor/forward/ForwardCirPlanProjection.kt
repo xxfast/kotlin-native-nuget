@@ -76,13 +76,17 @@ internal object ForwardCirPlanProjection {
     val publicParams: List<CirParameter> = plan.publicParameters()
     val argumentList: List<String> = listOf(nativeReceiverArg) +
         plan.publicSignature.parameters.flatMap { parameter -> plan.callArgument(parameter) }
-    val nativeName: String = "Native_${plan.publicSignature.name}"
+    // ADR-082 overload numbering: the symbol's last segment carries the `_2` suffix, the public
+    // name does not (the C# surface is one natural overload set). The `DllImport` name must follow
+    // the *numbered* name, or two overloads that happen to share a wire shape would declare the
+    // same extern twice (CS0111). Unsuffixed members render exactly as before.
+    val methodName: String = plan.invocation.symbol.substringAfterLast('.')
+    val nativeName: String = "Native_${methodName.replaceFirstChar { it.uppercase() }}"
     val (returnType, nativeReturnType, expression) = valueClassMemberExpression(
       plan = plan,
       nativeName = nativeName,
       callArguments = argumentList.joinToString(", "),
     )
-    val methodName: String = plan.invocation.symbol.substringAfterLast('.')
     val needsCustomParams: Boolean =
       plan.publicSignature.parameters.any { parameter -> !parameter.type.isTrivialInput() }
     val nativeParams: List<CirParameter>? = if (needsCustomParams) {
@@ -236,10 +240,10 @@ internal object ForwardCirPlanProjection {
     // `_value` DllImport declared at the underlying's wire.
     require(
       inner is BridgeType.Primitive || inner == BridgeType.Instant ||
-          inner is BridgeType.ValueClass
+          inner is BridgeType.ValueClass || inner is BridgeType.Enum
     ) {
-      "Legacy two-call plan ${plan.invocation.symbol} requires a nullable primitive, Instant " +
-          "or value class"
+      "Legacy two-call plan ${plan.invocation.symbol} requires a nullable primitive, Instant, " +
+          "enum or value class"
     }
     val presence: ForwardNativeCall = plan.nativeImports[0]
     val value: ForwardNativeCall = plan.nativeImports[1]
@@ -250,6 +254,8 @@ internal object ForwardCirPlanProjection {
     val dllImportReturnType: String = when (inner) {
       is BridgeType.Primitive -> inner.csharpType()
       is BridgeType.ValueClass -> valueClassUnderlyingWireCs(inner.underlying)
+      // ADR-080: the `_value` call returns the bare `int` ordinal.
+      is BridgeType.Enum -> "int"
       else -> "long"
     }
     val publicReturnType: String = "${inner.csharpType()}?"
@@ -275,6 +281,8 @@ internal object ForwardCirPlanProjection {
       // ADR-079: rebuild the record struct from the underlying wire value the `_value` call
       // returned; the null case already returned above on `!__nuget_hasValue`.
       inner is BridgeType.ValueClass -> valueClassReconstructionCs(inner, "__nuget_value")
+      // ADR-080: lift the ordinal back into the enum.
+      inner is BridgeType.Enum -> "(${inner.csharpType()})__nuget_value"
       else -> "__nuget_value"
     }
     val body: String = buildString {
@@ -389,13 +397,27 @@ internal object ForwardCirPlanProjection {
     val receiverType: String = receiver.transfer.type.csharpType()
     val receiverParam = CirParameter(receiver.name, receiverType, receiver.wireType.csharpType())
     val publicParams: List<CirParameter> = listOf(receiverParam) + plan.publicParameters()
-    val receiverArgument: String = if (receiver.transfer.type is BridgeType.ObjectHandle) {
-      "receiver._handle"
-    } else {
-      "receiver"
+    val receiverArgument: String = when (val type: BridgeType = receiver.transfer.type) {
+      is BridgeType.ObjectHandle -> "receiver._handle"
+      // A value-class receiver unwraps to its capitalized underlying property and then lowers to
+      // the wire per underlying, the same two steps a value-class *parameter* takes in
+      // `callArguments` (ADR-077 sub-item 4). Passing the record struct itself would hand the
+      // native import the wrong type (CS1503 in generated code).
+      is BridgeType.ValueClass -> {
+        val unwrapped: String =
+          "receiver.${type.underlyingPropertyName.replaceFirstChar { it.uppercase() }}"
+        when (type.underlying) {
+          is BridgeType.Enum -> "(int)$unwrapped"
+          is BridgeType.ObjectHandle -> "$unwrapped._handle"
+          else -> unwrapped
+        }
+      }
+
+      else -> "receiver"
     }
     val nativeName: String = "Native_${plan.publicSignature.name}"
     val needsCustomParams: Boolean = receiver.transfer.type is BridgeType.ObjectHandle ||
+        receiver.transfer.type is BridgeType.ValueClass ||
         plan.publicSignature.parameters.any { parameter -> !parameter.type.isTrivialInput() }
     val result: CirResultProjection = plan.resultProjection(
       nativeName = nativeName,
@@ -529,6 +551,11 @@ internal object ForwardCirPlanProjection {
         )
 
         is BridgeType.Primitive -> listOf("${parameter.name}.HasValue", "${parameter.name}.GetValueOrDefault()")
+        // ADR-080: same HasValue/GetValueOrDefault pair, the value half lowered to the ordinal.
+        is BridgeType.Enum -> listOf(
+          "${parameter.name}.HasValue", "(int)${parameter.name}.GetValueOrDefault()",
+        )
+
         // ADR-076: same HasValue/GetValueOrDefault pair as the nullable Primitive case above,
         // with the ticks conversion applied to the value half.
         BridgeType.Instant -> listOf(
@@ -590,10 +617,12 @@ internal object ForwardCirPlanProjection {
       CollectionKind.MAP, CollectionKind.MUTABLE_MAP -> "CreateMap"
       CollectionKind.SET, CollectionKind.MUTABLE_SET -> "CreateSet"
     }
+    // ADR-081: a value-class component is projected to its underlying per element before boxing.
+    val source: String = collectionCreateArgument(parameter.name, type) { it.csharpType() }
     val value: String = if (nullable) {
-      "${parameter.name} != null ? NugetMarshal.$factory(${parameter.name}) : IntPtr.Zero"
+      "${parameter.name} != null ? NugetMarshal.$factory($source) : IntPtr.Zero"
     } else {
-      "NugetMarshal.$factory(${parameter.name})"
+      "NugetMarshal.$factory($source)"
     }
     return "IntPtr ${parameter.name}Handle = $value;"
   }
@@ -802,6 +831,18 @@ internal object ForwardCirPlanProjection {
           )
         }
 
+        // ADR-080: same BOOLEAN + valueOut shape; valueOut is a plain `int` ordinal (its transfer
+        // type is Primitive(INT), see ForwardCallablePlanner.valueOutTransferType), cast back to
+        // the enum here. The `(Mood?)null` cast keeps the ternary's two arms unifiable.
+        is BridgeType.Enum -> CirResultProjection(
+          returnType = "${type.csharpType()}?",
+          nativeReturnType = "bool",
+          body = checkedNullableValueBody(
+            nativeName, callArguments, prelude, cleanup,
+            "hasValue ? (${type.csharpType()})valueOut : (${type.csharpType()}?)null",
+          ),
+        )
+
         // ADR-076: same BOOLEAN + valueOut shape as the nullable Primitive case above; valueOut
         // itself is declared as a raw `long` (its transfer type is Primitive(LONG), not Instant --
         // see ForwardCallablePlanner.nullableResultShape), converted to DateTimeOffset here.
@@ -985,9 +1026,10 @@ internal object ForwardCirPlanProjection {
     cleanup: List<String> = emptyList(),
   ): String = when (type.kind) {
     CollectionKind.LIST, CollectionKind.MUTABLE_LIST -> {
-      val elementType: String = requireNotNull(type.element) {
+      val element: BridgeType = requireNotNull(type.element) {
         "Forward CIR List result has no element type"
-      }.csharpType()
+      }
+      val elementType: String = element.csharpType()
       val mutable: Boolean = type.kind == CollectionKind.MUTABLE_LIST
       buildString {
         appendLine()
@@ -1002,7 +1044,13 @@ internal object ForwardCirPlanProjection {
         appendLine("            var result = new List<$elementType>(count);")
         appendLine("            for (int i = 0; i < count; i++)")
         appendLine("            {")
-        appendLine("                result.Add(NugetMarshal.FromHandle<$elementType>(NugetListNative.Get(listHandle, i)));")
+        val read: CirComponentRead = collectionComponentRead(
+          "elementHandle",
+          "NugetListNative.Get(listHandle, i)",
+          element,
+        ) { it.csharpType() }
+        read.declaration?.let { appendLine("                $it") }
+        appendLine("                result.Add(${read.expression});")
         appendLine("            }")
         appendLine("            NugetListNative.Dispose(listHandle);")
         append("            return " + if (mutable) "result;" else "result.AsReadOnly();")
@@ -1010,8 +1058,11 @@ internal object ForwardCirPlanProjection {
     }
 
     CollectionKind.MAP, CollectionKind.MUTABLE_MAP -> {
-      val keyType: String = requireNotNull(type.key) { "Forward CIR Map result has no key type" }.csharpType()
-      val valueType: String = requireNotNull(type.value) { "Forward CIR Map result has no value type" }.csharpType()
+      val key: BridgeType = requireNotNull(type.key) { "Forward CIR Map result has no key type" }
+      val value: BridgeType =
+        requireNotNull(type.value) { "Forward CIR Map result has no value type" }
+      val keyType: String = key.csharpType()
+      val valueType: String = value.csharpType()
       buildString {
         appendLine()
         prelude.forEach { line -> appendLine("            $line") }
@@ -1025,8 +1076,20 @@ internal object ForwardCirPlanProjection {
         appendLine("            var result = new Dictionary<$keyType, $valueType>(count);")
         appendLine("            for (int i = 0; i < count; i++)")
         appendLine("            {")
-        appendLine("                var key = NugetMarshal.FromHandle<$keyType>(NugetMapNative.KeyAt(mapHandle, i));")
-        appendLine("                var value = NugetMarshal.FromHandle<$valueType>(NugetMapNative.ValueAt(mapHandle, i));")
+        val readKey: CirComponentRead = collectionComponentRead(
+          "keyHandle",
+          "NugetMapNative.KeyAt(mapHandle, i)",
+          key,
+        ) { it.csharpType() }
+        val readValue: CirComponentRead = collectionComponentRead(
+          "valueHandle",
+          "NugetMapNative.ValueAt(mapHandle, i)",
+          value,
+        ) { it.csharpType() }
+        readKey.declaration?.let { appendLine("                $it") }
+        appendLine("                var key = ${readKey.expression};")
+        readValue.declaration?.let { appendLine("                $it") }
+        appendLine("                var value = ${readValue.expression};")
         appendLine("                result[key] = value;")
         appendLine("            }")
         appendLine("            NugetMapNative.Dispose(mapHandle);")
@@ -1035,9 +1098,10 @@ internal object ForwardCirPlanProjection {
     }
 
     CollectionKind.SET, CollectionKind.MUTABLE_SET -> {
-      val elementType: String = requireNotNull(type.element) {
+      val element: BridgeType = requireNotNull(type.element) {
         "Forward CIR Set result has no element type"
-      }.csharpType()
+      }
+      val elementType: String = element.csharpType()
       buildString {
         appendLine()
         prelude.forEach { line -> appendLine("            $line") }
@@ -1051,7 +1115,13 @@ internal object ForwardCirPlanProjection {
         appendLine("            var result = new HashSet<$elementType>(count);")
         appendLine("            for (int i = 0; i < count; i++)")
         appendLine("            {")
-        appendLine("                result.Add(NugetMarshal.FromHandle<$elementType>(NugetSetNative.ElementAt(setHandle, i)));")
+        val read: CirComponentRead = collectionComponentRead(
+          "elementHandle",
+          "NugetSetNative.ElementAt(setHandle, i)",
+          element,
+        ) { it.csharpType() }
+        read.declaration?.let { appendLine("                $it") }
+        appendLine("                result.Add(${read.expression});")
         appendLine("            }")
         appendLine("            NugetSetNative.Dispose(setHandle);")
         append("            return result;")

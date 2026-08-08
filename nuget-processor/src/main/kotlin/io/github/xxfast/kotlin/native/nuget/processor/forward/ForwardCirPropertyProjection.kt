@@ -37,10 +37,20 @@ internal object ForwardCirPropertyProjection {
     // ADR-075: an extension receiver that is a value class passes its underlying value to the
     // native call, exactly like the value class's own generated members
     // (`renderValueClassMembers`'s `underlyingName` -- the Kotlin `value` property capitalized).
+    // The underlying itself then unwraps to its own wire, mirroring the parameter lowering in
+    // `ForwardCirPlanProjection.callArguments`: an enum casts to its `int` ordinal, an object
+    // handle hands over its `_handle`.
     val receiverArgument: String = when (val receiverType = receiver.type) {
       is BridgeType.ObjectHandle -> "receiver._handle"
-      is BridgeType.ValueClass ->
-        "receiver.${receiverType.underlyingPropertyName.replaceFirstChar { it.uppercase() }}"
+      is BridgeType.ValueClass -> {
+        val underlying: String =
+          "receiver.${receiverType.underlyingPropertyName.replaceFirstChar { it.uppercase() }}"
+        when (receiverType.underlying) {
+          is BridgeType.Enum -> "(int)$underlying"
+          is BridgeType.ObjectHandle -> "$underlying._handle"
+          else -> underlying
+        }
+      }
 
       else -> "receiver"
     }
@@ -271,10 +281,10 @@ internal object ForwardCirPropertyProjection {
     // `_value` read's local type comes from the underlying's wire (`wireType()` delegates).
     require(
       inner is BridgeType.Primitive || inner == BridgeType.Instant ||
-          inner is BridgeType.ValueClass
+          inner is BridgeType.ValueClass || inner is BridgeType.Enum
     ) {
-      "Forward property legacy getter requires a nullable primitive, Instant or value class, " +
-          "got $type"
+      "Forward property legacy getter requires a nullable primitive, Instant, enum or value " +
+          "class, got $type"
     }
     val presenceArgs: String = listOf(args, "out IntPtr error").filter { it.isNotBlank() }.joinToString(", ")
     val valueArgs: String = listOf(args, "out IntPtr error2").filter { it.isNotBlank() }.joinToString(", ")
@@ -286,6 +296,8 @@ internal object ForwardCirPropertyProjection {
 
       // ADR-079: rebuild the record struct from the underlying wire value the `_value` call read.
       inner is BridgeType.ValueClass -> valueClassGetterReconstruction(inner, "value")
+      // ADR-080: lift the `int` ordinal back into the enum.
+      inner is BridgeType.Enum -> "(${inner.csharpType()})value"
       else -> "value"
     }
     return buildString {
@@ -313,14 +325,21 @@ internal object ForwardCirPropertyProjection {
 
   private fun collectionMaterialize(type: BridgeType.Collection): String = when (type.kind) {
     CollectionKind.LIST, CollectionKind.MUTABLE_LIST -> {
-      val element: String = requireNotNull(type.element).csharpType()
+      val component: BridgeType = requireNotNull(type.element)
+      val element: String = component.csharpType()
       val readOnly: Boolean = type.kind == CollectionKind.LIST
       buildString {
+        val read: CirComponentRead = collectionComponentRead(
+          "elementHandle",
+          "NugetListNative.Get(nativeResult, i)",
+          component,
+        ) { it.csharpType() }
         appendLine("            int count = NugetListNative.Count(nativeResult);")
         appendLine("            var result = new List<$element>(count);")
         appendLine("            for (int i = 0; i < count; i++)")
         appendLine("            {")
-        appendLine("                result.Add(NugetMarshal.FromHandle<$element>(NugetListNative.Get(nativeResult, i)));")
+        read.declaration?.let { appendLine("                $it") }
+        appendLine("                result.Add(${read.expression});")
         appendLine("            }")
         appendLine("            NugetListNative.Dispose(nativeResult);")
         append("            return " + if (readOnly) "result.AsReadOnly();" else "result;")
@@ -328,15 +347,29 @@ internal object ForwardCirPropertyProjection {
     }
 
     CollectionKind.MAP, CollectionKind.MUTABLE_MAP -> {
-      val key: String = requireNotNull(type.key).csharpType()
-      val value: String = requireNotNull(type.value).csharpType()
+      val keyComponent: BridgeType = requireNotNull(type.key)
+      val valueComponent: BridgeType = requireNotNull(type.value)
+      val key: String = keyComponent.csharpType()
+      val value: String = valueComponent.csharpType()
       buildString {
+        val readKey: CirComponentRead = collectionComponentRead(
+          "keyHandle",
+          "NugetMapNative.KeyAt(nativeResult, i)",
+          keyComponent,
+        ) { it.csharpType() }
+        val readValue: CirComponentRead = collectionComponentRead(
+          "valueHandle",
+          "NugetMapNative.ValueAt(nativeResult, i)",
+          valueComponent,
+        ) { it.csharpType() }
         appendLine("            int count = NugetMapNative.Count(nativeResult);")
         appendLine("            var result = new Dictionary<$key, $value>(count);")
         appendLine("            for (int i = 0; i < count; i++)")
         appendLine("            {")
-        appendLine("                var mapKey = NugetMarshal.FromHandle<$key>(NugetMapNative.KeyAt(nativeResult, i));")
-        appendLine("                var mapValue = NugetMarshal.FromHandle<$value>(NugetMapNative.ValueAt(nativeResult, i));")
+        readKey.declaration?.let { appendLine("                $it") }
+        appendLine("                var mapKey = ${readKey.expression};")
+        readValue.declaration?.let { appendLine("                $it") }
+        appendLine("                var mapValue = ${readValue.expression};")
         appendLine("                result[mapKey] = mapValue;")
         appendLine("            }")
         appendLine("            NugetMapNative.Dispose(nativeResult);")
@@ -345,13 +378,20 @@ internal object ForwardCirPropertyProjection {
     }
 
     CollectionKind.SET, CollectionKind.MUTABLE_SET -> {
-      val element: String = requireNotNull(type.element).csharpType()
+      val component: BridgeType = requireNotNull(type.element)
+      val element: String = component.csharpType()
       buildString {
+        val read: CirComponentRead = collectionComponentRead(
+          "elementHandle",
+          "NugetSetNative.ElementAt(nativeResult, i)",
+          component,
+        ) { it.csharpType() }
         appendLine("            int count = NugetSetNative.Count(nativeResult);")
         appendLine("            var result = new HashSet<$element>(count);")
         appendLine("            for (int i = 0; i < count; i++)")
         appendLine("            {")
-        appendLine("                result.Add(NugetMarshal.FromHandle<$element>(NugetSetNative.ElementAt(nativeResult, i)));")
+        read.declaration?.let { appendLine("                $it") }
+        appendLine("                result.Add(${read.expression});")
         appendLine("            }")
         appendLine("            NugetSetNative.Dispose(nativeResult);")
         append("            return result;")
@@ -419,10 +459,13 @@ internal object ForwardCirPropertyProjection {
           CollectionKind.MAP, CollectionKind.MUTABLE_MAP -> "CreateMap"
           CollectionKind.SET, CollectionKind.MUTABLE_SET -> "CreateSet"
         }
+        // ADR-081: the setter's elements are projected to their underlying before boxing, the same
+        // per-element projection a collection *parameter* uses.
+        val source: String = collectionCreateArgument(name, value) { it.csharpType() }
         if (type is BridgeType.Nullable) {
-          "$name != null ? NugetMarshal.$factory($name) : IntPtr.Zero"
+          "$name != null ? NugetMarshal.$factory($source) : IntPtr.Zero"
         } else {
-          "NugetMarshal.$factory($name)"
+          "NugetMarshal.$factory($source)"
         }
       }
 

@@ -20,6 +20,8 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCirProperty
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnostic
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnosticKind
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnosticSink
+import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardSuperClass
+import io.github.xxfast.kotlin.native.nuget.processor.forward.isForwardMemberOf
 import io.github.xxfast.kotlin.native.nuget.processor.forward.planFor
 import io.github.xxfast.kotlin.native.nuget.processor.toCName
 
@@ -48,14 +50,10 @@ internal fun translateClass(
   val isDataClass: Boolean = cls.modifiers.contains(Modifier.DATA)
   val isAbstract: Boolean = cls.modifiers.contains(Modifier.ABSTRACT)
 
-  val superClass: String? = cls.superTypes
-    .map { it.resolve().declaration }
-    .filterIsInstance<KSClassDeclaration>()
-    .firstOrNull { decl ->
-      decl.classKind == ClassKind.CLASS &&
-          decl.qualifiedName?.asString() != "kotlin.Any"
-    }
-    ?.simpleName?.asString()
+  // The shared has-superclass predicate (`ForwardClassMembership.kt`), the same instance the two
+  // planners filter their members with, so a member can never be kept here and skipped there.
+  val superClassDeclaration: KSClassDeclaration? = cls.forwardSuperClass()
+  val superClass: String? = superClassDeclaration?.simpleName?.asString()
 
   val interfaces: List<String> = if (superClass != null) {
     emptyList()
@@ -129,10 +127,7 @@ internal fun translateClass(
 
   val properties: List<CirProperty> = cls.getAllProperties()
     .filter { it.getVisibility() == Visibility.PUBLIC }
-    .filter { prop ->
-      if (superClass == null) return@filter true
-      prop.parentDeclaration == cls
-    }
+    .filter { prop -> prop.isForwardMemberOf(cls, superClassDeclaration) }
     .mapNotNull { prop ->
       val propName: String = prop.simpleName.asString()
       val planned = callableCatalog.propertyFor("${cls.qualifiedName?.asString() ?: name}.$propName")
@@ -352,11 +347,7 @@ internal fun translateClass(
           isDataClassMethod
       if (isSkipped) return@filter false
 
-      if (superClass != null) {
-        method.parentDeclaration == cls
-      } else {
-        true
-      }
+      method.isForwardMemberOf(cls, superClassDeclaration)
     }
 
   val (allSuspendMethods, regularMethods) = filteredMethods
@@ -1548,6 +1539,7 @@ internal fun translateEnum(
 internal fun translateValueClass(
   cls: KSClassDeclaration,
   libraryName: String,
+  logger: KSPLogger,
   callableCatalog: ForwardCallablePlanCatalog = ForwardCallablePlanCatalog(emptyList()),
 ): CirValueClass {
   val name: String = cls.simpleName.asString()
@@ -1638,39 +1630,45 @@ internal fun translateValueClass(
     }
   }
 
-  val properties: List<CirProperty> = cls.getAllProperties()
-    .filter { it.getVisibility() == Visibility.PUBLIC }
-    .filter { it.simpleName.asString() != underlyingProp.simpleName.asString() }
-    .mapNotNull { prop ->
-      val propName: String = prop.simpleName.asString()
-      val planned = callableCatalog.planFor("$qualifiedName.$propName")
-      if (planned != null) {
-        ForwardCirPlanProjection.valueClassProperty(planned, nativeArg)
-      } else {
-        null
-      }
-    }
-    .toList()
+  // ADR-082: members come off the catalog, not from a per-declaration plan lookup — see
+  // `addValueClassExports` for why (overload numbering makes the symbol per-declaration
+  // underivable here, and the two halves must not drift).
+  val properties: List<CirProperty> = callableCatalog.valueClassProperties(qualifiedName)
+    .map { plan -> ForwardCirPlanProjection.valueClassProperty(plan, nativeArg) }
 
-  val methods: List<CirMethod> = cls.getAllFunctions()
-    .filter { it.getVisibility() == Visibility.PUBLIC }
-    .filter {
-      it.simpleName.asString() !in listOf(
-        "equals", "hashCode", "toString", "<init>",
-        "box-impl", "unbox-impl", "constructor-impl",
-        "hashCode-impl", "equals-impl", "equals-impl0", "toString-impl",
-      )
+  val methods: List<CirMethod> = callableCatalog.valueClassMethods(qualifiedName)
+    .map { plan -> ForwardCirPlanProjection.valueClassMethod(plan, nativeArg) }
+
+  // C# cannot declare two methods whose parameter types are identical (ADR-034). Value-class
+  // overloads share one public name, so two of them rendering the same C# parameter list is
+  // uncompilable output — fail fast, the same way the constructor check above does. Reference
+  // nullability is not part of a C# signature; nullable *value* types are.
+  val methodSignatures: List<List<String>> = methods.map { method ->
+    listOf(method.name) + method.parameters.map { param ->
+      val stripReferenceNullability: Boolean = param.isReferenceType && param.type.endsWith("?")
+      if (stripReferenceNullability) param.type.dropLast(1) else param.type
     }
-    .mapNotNull { method ->
-      val methodName: String = method.simpleName.asString()
-      val planned = callableCatalog.planFor("$qualifiedName.$methodName")
-      if (planned != null) {
-        ForwardCirPlanProjection.valueClassMethod(planned, nativeArg)
-      } else {
-        null
-      }
-    }
-    .toList()
+  }
+  val collidingSignatures: Set<List<String>> = methodSignatures
+    .groupBy { it }
+    .filterValues { it.size > 1 }
+    .keys
+  collidingSignatures.forEach { signature ->
+    ForwardDiagnosticSink.emit(
+      listOf(
+        ForwardDiagnostic(
+          kind = ForwardDiagnosticKind.ERROR_CSHARP_SIGNATURE_COLLISION,
+          symbol = cls,
+          declaration = "$name.${signature.first()}",
+          reason = "two or more overloads render identical C# parameter types; C# cannot " +
+              "declare two methods with the same signature (ADR-034)",
+          hint = "rename one overload, or change a parameter's type so the rendered C# " +
+              "signatures differ",
+        ),
+      ),
+      logger,
+    )
+  }
 
   val csUnderlyingType: String = if (underlyingType == "String") "string"
   // The public member is the C# enum itself (`Mood`); only the wire is its int ordinal.
