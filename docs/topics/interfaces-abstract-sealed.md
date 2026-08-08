@@ -140,6 +140,89 @@ public abstract class Observation : IDisposable
 
 `Alive` and `Dead` are Kotlin `data class` subtypes, so they also get `Equals`/`GetHashCode`/`ToString` (see [Data classes](data-classes.md)). `Superposition` is a `data object`, so it has a fixed `ToString()` and no `Equals`/`GetHashCode` override (reference equality is enough for a singleton).
 
+## Defaulted interface members on implementing classes
+
+A class implementing an interface without overriding one of its defaulted members still has to carry that member in C#: the generated class declares the interface, so omitting the member is `CS0535`. The defaulted body is reached by ordinary dynamic dispatch on the Kotlin instance behind the handle, so no separate delegation is generated for it.
+
+From `test-library/src/nativeMain/kotlin/.../cat/Greeter.kt`:
+
+```kotlin
+interface Greeter {
+  val greeting: String get() = "hello"
+
+  fun greet(): String = "$greeting from a $species"
+
+  val species: String
+}
+
+class Parrot(override val species: String) : Greeter
+```
+
+`Parrot` declares only `species`; `greeting` and `greet()` are inherited defaults, and both still bind:
+
+```C#
+public class Parrot : IGreeter
+{
+    internal IntPtr _handle;
+
+    public Parrot(string species)
+    {
+        /* ... */
+    }
+
+    public virtual string Species
+    {
+        get { /* ... */ }
+    }
+
+    public string Greeting
+    {
+        get { /* ... */ }
+    }
+
+    public string Greet()
+    {
+        /* ... */
+    }
+}
+```
+
+From `IntegrationTests/DefaultedInterfaceMemberTests.cs`:
+
+```C#
+[Fact]
+public void Parrot_Greeting_UsesDefaultProperty()
+{
+    using var parrot = new Parrot("macaw");
+    Assert.Equal("hello", parrot.Greeting);
+}
+
+[Fact]
+public void Parrot_Greet_UsesDefaultMethod()
+{
+    using var parrot = new Parrot("macaw");
+    Assert.Equal("hello from a macaw", parrot.Greet());
+}
+
+[Fact]
+public void IGreeter_Greet_ReachesTheDefaultThroughTheInterface()
+{
+    using IGreeter greeter = new Parrot("cockatoo");
+    Assert.Equal("hello", greeter.Greeting);
+    Assert.Equal("hello from a cockatoo", greeter.Greet());
+}
+```
+
+<note>
+    <p>
+        This used to be a gap: a class with no <code>ClassKind.CLASS</code> supertype (interface-only)
+        skipped its defaulted interface members entirely, with no export, no C# member, and no
+        diagnostic, while the generated class still declared the interface. Two planners and one
+        translator each answered "does this class have a superclass" differently; all four
+        membership checks now share one predicate.
+    </p>
+</note>
+
 ## Interface-typed return values
 
 A Kotlin function or property whose declared return type is an interface (`fun closestFriend(): Pet`, `var friend: Pet?`) surfaces in C# as `IFoo` / `IFoo?`, constructed from the generated `sealed class Foo : IFoo` backing wrapper. The concrete Kotlin object behind the interface can be any implementation, including an anonymous `object`, which is why the wrapper dispatches through generated Kotlin interface-dispatch exports (`pet_get_name`, `pet_speak`, ...) rather than resolving a concrete C# type.

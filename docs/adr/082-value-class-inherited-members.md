@@ -26,6 +26,18 @@ value class's export set? This ADR closes it.
   entry and no diagnostic.
 - `ForwardPropertyPlanner.classProperties` filters to declared-only whenever the class has any
   non-`Any` supertype (`ForwardPropertyPlanner.kt:83-88`).
+- **Correction (2026-08-08, verified by a runtime probe, `Tier1InheritedMemberDiagnosticsTest`):**
+  the silent drop above is a drop of the *export*, not of the member from the C# API. A generated
+  ordinary-class subclass (`public class Dog : Animal`) extends its C# base class, so `Animal`'s
+  inherited `speak()`/`legs`/`name` stay reachable on a `Dog` through ordinary C# inheritance; the
+  filter only skips a duplicate re-export on the subclass. The comparison below ("ordinary classes
+  already drop inherited members silently") is therefore true of the export set, not of what a
+  consumer can call, and does not by itself support adding a `SKIPPED_INHERITED_MEMBER` diagnostic
+  to the ordinary-class path, since that diagnostic would name a member that works. The comparison's
+  actual point survives: a value class renders as a `struct` with no base type, so its equivalent
+  drop *is* a genuine loss from the C# API, which is the asymmetry that justifies warning on the
+  value-class path specifically. See ROADMAP.md's now-closed "ordinary classes drop inherited
+  members silently" item for the full probe.
 - So the value-class filter under ADR-064 already matches ordinary-class behaviour, and is in fact
   *louder* about it (it emits a diagnostic where ordinary classes emit nothing).
 
@@ -212,10 +224,13 @@ design.
 - Overload mangling for value-class export names and a signature-level (rather than simple-name)
   inherited signal, originally deferred here, are now an **approved follow-up**: see the
   Amendment in the Decision section. The decision itself is unchanged.
-- Latent inconsistency, out of scope here but recorded: ordinary classes drop inherited members
-  **silently** (no diagnostic), while value classes warn. If diagnostics parity is wanted,
-  ordinary classes should gain the same `SKIPPED_INHERITED_MEMBER` entry, not the other way
-  around.
+- **Closed by a runtime probe, not by code (2026-08-08):** the "latent inconsistency" this bullet
+  originally recorded, that ordinary classes drop inherited members **silently** (no diagnostic)
+  while value classes warn, rests on the export-set drop only. `Tier1InheritedMemberDiagnosticsTest`
+  showed the inherited member is not actually missing from the C# API for an ordinary class (the
+  generated subclass extends its C# base class), so a `SKIPPED_INHERITED_MEMBER` diagnostic there
+  would name a member that works and was not added. See the correction in Context above. Diagnostics
+  parity, if ever wanted, is therefore not the right shape to close.
 - Latent bug, out of scope here but recorded (verified by source): **ordinary classes have no
   overload scheme at all.** `classEntries` names every method export `"${prefix}_$name"`
   (`ForwardCallablePlanner.kt:484`) and keys every plan by `"$owner.$name"`, so two same-class

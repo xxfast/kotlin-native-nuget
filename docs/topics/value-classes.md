@@ -1422,13 +1422,86 @@ string sub = uri.Value.Substring(0, 5); // more than CharSequence could ever off
 <note>
     <p>
         Declaring the member directly on the value class, rather than through delegation, still
-        binds normally: a member is only skipped when its simple name matches something a
-        supertype also declares.
+        binds normally: a member is skipped only when it shares a supertype member's kind, simple
+        name, arity, and per-position parameter types. A declared member whose name merely collides
+        with a supertype member's, but not its parameter types, exports.
     </p>
 </note>
 
+The signature-level check is what tells the genuine `CharSequence.get(index: Int)` apart from an
+unrelated, author-declared overload of the same name. `StoryUri` (`:test-models`, cross-module)
+declares both a `shout()` (no collision) and a `get(key: String)` that only shares `CharSequence
+.get`'s name and arity:
+
+```kotlin
+value class StoryUri(val value: String) : CharSequence by value {
+  fun shout(): String = value.uppercase()
+
+  fun get(key: String): String =
+    value.substringAfter('?', missingDelimiterValue = "")
+      .split('&')
+      .map { it.split('=', limit = 2) }
+      .firstOrNull { it[0] == key }
+      ?.getOrNull(1)
+      ?: ""
+}
+```
+
+`get(key: String)` exports as a single `Get(string)` overload; the delegated `get(index: Int)`,
+`subSequence`, and `length` stay absent, not merely shadowed:
+
+```C#
+public readonly record struct StoryUri
+{
+    public string Value { get; }
+
+    public string Shout() => Marshal.PtrToStringUTF8(Native_Shout(Value))!;
+
+    public string Get(string key) => Marshal.PtrToStringUTF8(Native_Get(Value, key))!;
+}
+```
+
+From `IntegrationTests/ValueClassDeclaredMemberTests.cs`:
+
+```C#
+[Fact]
+public void StoryUri_Get_UnrelatedOverloadOfDelegatedIndexer_ReturnsMatchingQueryParameter()
+{
+    var uri = new StoryUri("cats.news/oreo-escapes?cat=oreo&mood=zoomies");
+
+    Assert.Equal("oreo", uri.Get("cat"));
+    Assert.Equal("zoomies", uri.Get("mood"));
+}
+```
+
+Two declared members that share a name with *each other* (not with a supertype) also export, as one
+natural C# overload set. `ChartId` (`:test-library`) declares two `describe` overloads:
+
+```kotlin
+value class ChartId(val value: String) {
+  fun describe(): String = "Chart $value"
+  fun describe(prefix: String): String = "$prefix $value"
+}
+```
+
+The export symbols, the `DllImport` `EntryPoint`s, and the private extern names carry a
+constructor-style numbering (the first overload unnumbered, the next `_2`), mirroring the existing
+secondary-constructor scheme; the C# surface stays one shared `Describe` overload set:
+
+```C#
+[DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "chartid_describe")]
+private static extern IntPtr Native_Describe(string value);
+
+public string Describe() => Marshal.PtrToStringUTF8(Native_Describe(Value))!;
+
+[DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "chartid_describe_2")]
+private static extern IntPtr Native_Describe_2(string value, string prefix);
+
+public string Describe(string prefix) => Marshal.PtrToStringUTF8(Native_Describe_2(Value, prefix))!;
+```
+
 See [ADR-082](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/082-value-class-inherited-members.md)
-for the full reasoning.
+for the full reasoning, including its 2026-08-08 amendment.
 
 ## Limitations
 
@@ -1436,10 +1509,12 @@ for the full reasoning.
   ([ADR-035](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/035-value-class-primary-constructor-validation.md));
   primitive-underlying validation (the `CatId` path above) is in place.
 - Inherited/delegation-forwarded members are excluded by design, not deferred; see
-  [Inherited members](#inherited-members) above. One accepted side effect: the exclusion signal is
-  simple-name matching, so an author-declared member whose name merely collides with any supertype
-  member (an explicit `override`, or an unrelated overload sharing a name) is also skipped under
-  the same diagnostic. The workaround is a non-colliding name.
+  [Inherited members](#inherited-members) above. The exclusion signal is signature-level (kind,
+  simple name, arity, and per-position parameter types), so an unrelated overload sharing only a
+  name now exports. One accepted, narrower residual: a same-arity overload whose colliding position
+  is a supertype type parameter still over-drops conservatively (the type parameter matches
+  anything), and an explicit `override` of the inherited signature itself still skips by design. The
+  workaround is a non-colliding name.
 - A **nullable** value-class collection component (`List<ChartId?>`) now binds, riding a null
   pointer in the component slot ([ADR-083](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/083-nullable-collection-components.md)).
   A **nested**-collection component (`List<List<ChartId>>`) still has no representation on the
