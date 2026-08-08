@@ -1,3 +1,5 @@
+using System.Runtime.CompilerServices;
+using TestLibrary;
 using TestLibrary.Cat;
 
 namespace IntegrationTests;
@@ -91,5 +93,80 @@ public class BidirectionalTests
         // dispatched instance.
         Assert.Equal("Rex", friend.Name);
         Assert.Equal("Woof!", friend.Speak());
+    }
+
+    // ADR-084 stage 2 (facet 4): the bridge object owns a Kotlin `createCleaner` holding only the
+    // release function pointer and its context, so when Kotlin's GC collects the bridge the C# side
+    // is called back and frees every GCHandle it pinned for that object.
+    //
+    // The spike behind the ADR proved a live stack frame roots the bridge even after `= null`, so
+    // the object is created and dropped inside a separate method frame, and the assertion polls a
+    // bounded number of forced collections rather than sleeping once.
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static void BefriendAndDrop(Cat oreo) => oreo.Befriend(new Dog("Rex"));
+
+    [Fact]
+    public void BridgedPet_ReleasesItsCSharpHandles_AfterKotlinDropsTheBridge()
+    {
+        using var oreo = new Cat("Oreo", 9);
+        // Settle anything an earlier test in this class left pending, so the delta below can only
+        // be Rex's bridge: without this, "some bridge was released" would pass vacuously.
+        NugetBridge.ReleaseTransferHandles();
+        SettleReleases();
+        int before = NugetBridgeState.ReleasedCount;
+
+        BefriendAndDrop(oreo);
+        // Kotlin's own reference to the bridge (`friend = pet`) is the thing that must go for the
+        // bridge to become collectible.
+        oreo.Friend = null;
+        // ...and the transfer StableRef the factory minted is C#'s reference to it.
+        NugetBridge.ReleaseTransferHandles();
+
+        Assert.True(
+            ReleaseFiredWithin(before, TimeSpan.FromSeconds(5)),
+            $"expected the Kotlin cleaner to invoke the release slot; ReleasedCount stayed at {before}");
+    }
+
+    // The other half of the release contract: a bridge Kotlin still holds must survive a collection
+    // untouched. A premature release would free the delegate GCHandles under a live bridge, so the
+    // next dispatch would call through a dead function pointer instead of returning "Woof!".
+    [Fact]
+    public void LiveBridgedPet_SurvivesACollection_AndStillDispatches()
+    {
+        using var oreo = new Cat("Oreo", 9);
+        using IPet dog = new Dog("Rex");
+        oreo.Befriend(dog);
+
+        NugetBridge.GcCollect();
+        GC.Collect();
+        GC.WaitForPendingFinalizers();
+
+        Assert.Equal("Woof!", oreo.ClosestFriend().Speak());
+        Assert.Equal("Rex says: Woof!", oreo.Interview(dog));
+    }
+
+    private static void SettleReleases()
+    {
+        for (int round = 0; round < 5; round++)
+        {
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
+            NugetBridge.GcCollect();
+            Thread.Sleep(25);
+        }
+    }
+
+    private static bool ReleaseFiredWithin(int before, TimeSpan budget)
+    {
+        DateTime deadline = DateTime.UtcNow + budget;
+        while (DateTime.UtcNow < deadline)
+        {
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
+            NugetBridge.GcCollect();
+            if (NugetBridgeState.ReleasedCount > before) return true;
+            Thread.Sleep(25);
+        }
+        return false;
     }
 }

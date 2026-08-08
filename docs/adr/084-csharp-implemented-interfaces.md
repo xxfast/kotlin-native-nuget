@@ -333,6 +333,24 @@ convention), the ctx exists for the release call and the identity token.
 once both Kotlin drops its own references and C# drops the implementing object. Until the
 finalizer runs, the bridge stays alive; that is a delayed release, not a leak. **Inferred.**
 
+**Falsified while implementing commit 2.** That finalizer can never run: the state is reachable
+from a strong root at all times, through `pins -> release delegate -> state` and through
+`pins -> slot delegates -> impl -> ConditionalWeakTable[impl] -> state`. Both chains are cut only
+by `FreeAll`, which only the cleaner calls, which needs `KotlinHandle` disposed first: a cycle.
+Making the roots weak instead is not an option, because Kotlin holding the bridge *must* keep the
+implementing C# object alive (the ARC analogue), which is exactly what the strong `pins -> impl`
+chain provides.
+
+So the ownership rule is inverted: the C# state must **not** hold a strong reference to the Kotlin
+bridge at all. The factory's StableRef is a *transfer* handle, valid for the call that consumes it;
+Kotlin's own reference is then the only root, and its collection drives the release. Commit 2 ships
+the mechanism with `NugetBridge.ReleaseTransferHandles()` as the explicit hand-back, because the
+automatic hand-back has to happen at the interface-parameter call site (dispose the handle after
+the native call, and only when `HandleOf` actually minted it rather than reading a wrapper's
+`_handle`), which is a `ForwardCirPlanProjection` change, not a bridge-layer change. That call-site
+disposal is the remaining work for facet 4; until it lands, a bridge whose transfer handle is never
+handed back stays alive, which is the interim leak, narrowed from "always" to "until hand-back".
+
 ### Consumer C# (end state)
 
 ```csharp
@@ -403,7 +421,10 @@ C# class (v1: first match wins, diagnostic on ambiguity).
 2. **Commit 2 (facet 4):** release slot + `createCleaner` in the bridge object, `nuget_gc_collect`
    export, deterministic release test (drop the C# and Kotlin references **in a helper method
    frame**, then force Kotlin GC and assert the release callback fired; the spike showed a live
-   frame local defeats this).
+   frame local defeats this). Shipped, with the transfer-handle correction above: the release is
+   observable through `NugetBridgeState.ReleasedCount`, which `FreeAll` increments after freeing
+   the delegate pins and the self handle. The automatic transfer-handle disposal at the call site
+   is deferred with facet 5.
 3. **Commit 3 (facet 5):** `NugetCSharpBridge` marker + `nuget_csharp_token` probe +
    `ConditionalWeakTable` reuse; `Assert.Same` round-trip tests, including "pass the same Dog to
    two Kotlin sinks, Kotlin sees one object".

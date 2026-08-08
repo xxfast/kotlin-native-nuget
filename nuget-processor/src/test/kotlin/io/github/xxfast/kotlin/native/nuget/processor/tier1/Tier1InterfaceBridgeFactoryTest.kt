@@ -93,7 +93,7 @@ class Tier1InterfaceBridgeFactoryTest {
     assertContains(cs, "return result is null ? IntPtr.Zero : NugetMarshal.WrapString(result);")
     assertContains(cs, "NugetBridgeObjectObjectCallback fetch = (arg0, _) => {")
     assertContains(cs, "NugetMarshal.FromHandle<string>(arg0)")
-    assertContains(cs, "NugetBridgeVoidCallback release = _ => { };")
+    assertContains(cs, "NugetBridgeVoidCallback release = _ => state.FreeAll();")
     assertContains(cs, "state.Pin(nameGet, legsGet, nicknameGet, speak, fetch, nap, release);")
     assertContains(cs, "if (error != IntPtr.Zero) throw NugetErrorNative.BuildException(error);")
   }
@@ -110,6 +110,43 @@ class Tier1InterfaceBridgeFactoryTest {
     )
     assertContains(cs, "ConditionalWeakTable<object, NugetBridgeState> States")
     assertContains(cs, "implements no bridgeable Kotlin interface.")
+  }
+
+  @Test
+  fun `the bridge object owns a cleaner holding only the release pointer and its context`() {
+    val result = Tier1Harness.run(source)
+    val kotlin: String = result.generated
+
+    assertContains(kotlin, "val releaseFn = releasePtr.reinterpret<CFunction<(COpaquePointer) -> Unit>>()")
+    // The cleaner's argument is the fn/ctx pair and its block captures nothing: anything reaching
+    // the bridge would root the object whose collection is the trigger.
+    assertContains(kotlin, "private val cleaner = createCleaner(releaseFn to releaseCtx) { (fn, ctx) ->")
+    assertContains(kotlin, "fn.invoke(ctx)")
+    assertFalse(
+      kotlin.contains("createCleaner(bridge"),
+      "the cleaner must never hold the bridge object itself",
+    )
+    // The forced-collection support export ships with the factories.
+    assertContains(kotlin, "@CName(\"nuget_gc_collect\")")
+    assertContains(kotlin, "GC.collect()")
+  }
+
+  @Test
+  fun `the C# release slot frees that object's handles and is observable`() {
+    val result = Tier1Harness.run(source)
+    val cs: String = result.generatedCSharp
+
+    assertContains(cs, "IntPtr ctx = state.Root();")
+    assertContains(cs, "internal static int ReleasedCount;")
+    assertContains(cs, "if (System.Threading.Interlocked.Exchange(ref _freed, 1) != 0) return;")
+    assertContains(cs, "if (pin.IsAllocated) pin.Free();")
+    assertContains(cs, "if (_self.IsAllocated) _self.Free();")
+    assertContains(cs, "System.Threading.Interlocked.Increment(ref ReleasedCount);")
+    assertContains(cs, "EntryPoint = \"nuget_gc_collect\"")
+    assertContains(cs, "internal static void GcCollect() => Native_GcCollect();")
+    // A bridge whose transfer handle was handed back must be rebuilt, not reused at IntPtr.Zero.
+    assertContains(cs, "if (state.KotlinHandle == IntPtr.Zero)")
+    assertContains(cs, "States.Remove(impl);")
   }
 
   @Test

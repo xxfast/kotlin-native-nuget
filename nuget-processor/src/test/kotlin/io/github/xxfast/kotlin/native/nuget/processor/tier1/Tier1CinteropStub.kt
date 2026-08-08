@@ -143,10 +143,35 @@ internal object Tier1CinteropStub {
     ): R = TODO("Tier 1 compiles generated code, it never runs it")
   """.trimIndent()
 
+  // ADR-084 stage 2: the bridge object's cleaner and the forced-collection support export. Real
+  // Kotlin/Native's `createCleaner` is `@ExperimentalNativeApi` and returns an opaque `Cleaner`;
+  // `GC.collect()` is `@NativeRuntimeApi`. Only the shapes the generator emits are reproduced.
+  private val cleanerStub: String = """
+    package kotlin.native.ref
+
+    class Cleaner internal constructor()
+
+    fun <T> createCleaner(argument: T, block: (T) -> Unit): Cleaner = Cleaner()
+  """.trimIndent()
+
+  private val runtimeStub: String = """
+    package kotlin.native.runtime
+
+    @RequiresOptIn
+    @Retention(AnnotationRetention.BINARY)
+    annotation class NativeRuntimeApi
+
+    object GC {
+      fun collect() {}
+    }
+  """.trimIndent()
+
   /** relative file name -> file content, ready for [Tier1Harness] to write to disk and compile. */
   val files: List<Pair<String, String>> = listOf(
     "Tier1Stub_KotlinNative.kt" to cNameStub,
     "Tier1Stub_ExperimentalNativeApi.kt" to experimentalNativeApiStub,
     "Tier1Stub_Cinterop.kt" to cinteropStub,
+    "Tier1Stub_Cleaner.kt" to cleanerStub,
+    "Tier1Stub_Runtime.kt" to runtimeStub,
   )
 }

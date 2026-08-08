@@ -33,6 +33,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.exports.addEnumExports
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addFunctionExports
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addGenericClassExports
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addGenericFunctionExports
+import io.github.xxfast.kotlin.native.nuget.processor.exports.addGcCollectExport
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addInterfaceBridgeFactoryExport
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addInterfaceExports
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addNugetHelperExports
@@ -77,6 +78,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnosticS
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnosticTrackingLogger
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardHelperRequirement
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardPropertyPlan
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeInterfacePlan
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardInterfaceBridgePlanner
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardPropertyPlanner
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardReachabilityBucket
@@ -693,9 +695,12 @@ class NugetProcessor(
     reachableInterfaces.forEach { builder.addInterfaceExports(it, callableCatalog) }
     // ADR-084 stage 1: the per-interface bridge factory, projected from the same slot plan the C#
     // `{Iface}BridgeState` is projected from (see `ForwardInterfaceBridgePlanner`).
-    reachableInterfaces
-      .mapNotNull { iface -> ForwardInterfaceBridgePlanner.plan(iface) }
-      .forEach { plan -> builder.addInterfaceBridgeFactoryExport(plan) }
+    val bridgePlans: List<ForwardBridgeInterfacePlan> =
+      reachableInterfaces.mapNotNull { iface -> ForwardInterfaceBridgePlanner.plan(iface) }
+    bridgePlans.forEach { plan -> builder.addInterfaceBridgeFactoryExport(plan) }
+    // ADR-084 stage 2: the release path is only observable with a forced GC round, so the support
+    // export ships with the factories it exists to exercise.
+    if (bridgePlans.isNotEmpty()) builder.addGcCollectExport()
 
     val suspendLambdaTypes: Set<String> = setOf(
       "kotlin.coroutines.SuspendFunction0",
@@ -774,8 +779,10 @@ class NugetProcessor(
     }
 
     // ADR-084: every bridge factory slot is a `fn.invoke(...)` on a reinterpreted CFunction too.
-    val hasBridgeFactories: Boolean =
-      reachableInterfaces.any { iface -> ForwardInterfaceBridgePlanner.plan(iface) != null }
+    val hasBridgeFactories: Boolean = bridgePlans.isNotEmpty()
+
+    // ADR-084 stage 2: the bridge object's cleaner.
+    if (hasBridgeFactories) builder.addImport("kotlin.native.ref", "createCleaner")
 
     val needsCallbackImports: Boolean = hasLambdaParamMethods || hasStoredCallbackMethods ||
         hasInterfaceBridgeMethods || hasBridgeFactories

@@ -1,5 +1,7 @@
 package io.github.xxfast.kotlin.native.nuget.processor.exports
 
+import com.squareup.kotlinpoet.AnnotationSpec
+import com.squareup.kotlinpoet.ClassName
 import com.squareup.kotlinpoet.FileSpec
 import com.squareup.kotlinpoet.FunSpec
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeInterfacePlan
@@ -16,9 +18,11 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.kotlinWire
  * export (`cat_befriend`, `catextensions_interview`) is reused unchanged: C# converts first, then
  * goes down the ordinary handle path.
  *
- * The release pair is in the ABI from stage 1 but nothing invokes it yet: the Kotlin-side
- * `createCleaner` that calls it is ADR-084 facet 4 (stage 2), so a bridged object's C#-side
- * GCHandles stay alive for the process (the ADR's documented interim leak).
+ * ADR-084 facet 4: the bridge object owns a `createCleaner` whose argument is the release function
+ * pointer paired with its context, and whose block captures nothing. Capturing the bridge (or
+ * anything reaching it) in either half would root the object the cleaner exists to observe, so the
+ * pair is the whole state: when Kotlin's GC collects the bridge, the cleaner worker invokes the
+ * C#-side release, which frees that object's pinned delegate handles.
  *
  * String ownership across a slot: Kotlin mints the `StableRef` for a String *argument* and does not
  * dispose it, because the C# side's `NugetMarshal.FromHandle<string>` disposes it on read (one
@@ -35,7 +39,12 @@ internal fun FileSpec.Builder.addInterfaceBridgeFactoryExport(plan: ForwardBridg
             ".reinterpret<CFunction<($args) -> ${slot.result.wire.kotlinWire()}>>()"
       )
     }
+    appendLine("  val releaseFn = releasePtr.reinterpret<CFunction<(COpaquePointer) -> Unit>>()")
     appendLine("  val bridge = object : ${plan.qualifiedName} {")
+    appendLine("    @Suppress(\"unused\")")
+    appendLine("    private val cleaner = createCleaner(releaseFn to releaseCtx) { (fn, ctx) ->")
+    appendLine("      fn.invoke(ctx)")
+    appendLine("    }")
     plan.slots.forEach { slot -> appendSlotOverride(slot) }
     appendLine("  }")
     appendLine("  StableRef.create(bridge).asCPointer()")
@@ -51,6 +60,11 @@ internal fun FileSpec.Builder.addInterfaceBridgeFactoryExport(plan: ForwardBridg
 
   val builder: FunSpec.Builder = FunSpec.builder("export_${plan.exportName}")
     .addAnnotation(cNameAnnotation(plan.exportName))
+    .addAnnotation(
+      AnnotationSpec.builder(ClassName("kotlin", "OptIn"))
+        .addMember("%T::class", ClassName("kotlin.experimental", "ExperimentalNativeApi"))
+        .build()
+    )
 
   plan.slots.forEach { slot ->
     builder.addParameter("${slot.slotPrefix}Ptr", cOpaquePointer)
@@ -63,6 +77,25 @@ internal fun FileSpec.Builder.addInterfaceBridgeFactoryExport(plan: ForwardBridg
   builder.addCode(body)
 
   addFunction(builder.build())
+}
+
+/**
+ * ADR-084 stage 2: the support export that forces a Kotlin GC round, so a host (and the release
+ * test) can observe the cleaner-driven release deterministically instead of waiting for a natural
+ * collection. Emitted alongside the factories, never on its own.
+ */
+internal fun FileSpec.Builder.addGcCollectExport() {
+  addFunction(
+    FunSpec.builder("export_nuget_gc_collect")
+      .addAnnotation(cNameAnnotation("nuget_gc_collect"))
+      .addAnnotation(
+        AnnotationSpec.builder(ClassName("kotlin", "OptIn"))
+          .addMember("%T::class", ClassName("kotlin.native.runtime", "NativeRuntimeApi"))
+          .build()
+      )
+      .addStatement("%T.collect()", ClassName("kotlin.native.runtime", "GC"))
+      .build()
+  )
 }
 
 private fun StringBuilder.appendSlotOverride(slot: ForwardBridgeSlot) {
