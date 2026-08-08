@@ -357,6 +357,17 @@ value class ChartId(val value: String) {
   fun matches(other: String): Boolean = value == other
 
   fun isValid(): Boolean = value.isNotBlank()
+
+  /**
+   * ADR-082 amendment (2026-08-08), fix B: the first of two declared same-name overloads on a
+   * value class. Exercises the secondary-constructor-style export-name numbering
+   * (`${prefix}_$name` for this one, `${prefix}_${name}_2` for the next) that the C# surface
+   * must resolve back to a single natural overload set on `ChartId`.
+   */
+  fun describe(): String = "Chart $value"
+
+  /** Second declared overload of [describe]; must not collide with the first at the C symbol level. */
+  fun describe(prefix: String): String = "$prefix $value"
 }
 
 value class ChartRef(val patient: Patient) {

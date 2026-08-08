@@ -1,13 +1,11 @@
 package io.github.xxfast.kotlin.native.nuget.processor.exports
 
-import com.google.devtools.ksp.getVisibility
 import com.google.devtools.ksp.symbol.ClassKind
 import com.google.devtools.ksp.symbol.KSClassDeclaration
 import com.google.devtools.ksp.symbol.KSDeclaration
 import com.google.devtools.ksp.symbol.KSFunctionDeclaration
 import com.google.devtools.ksp.symbol.KSType
 import com.google.devtools.ksp.symbol.KSValueParameter
-import com.google.devtools.ksp.symbol.Visibility
 import com.squareup.kotlinpoet.ClassName
 import com.squareup.kotlinpoet.FileSpec
 import com.squareup.kotlinpoet.FunSpec
@@ -125,26 +123,10 @@ internal fun FileSpec.Builder.addValueClassExports(
     addFunction(builder.build())
   }
 
-  cls.getAllProperties()
-    .filter { it.getVisibility() == Visibility.PUBLIC }
-    .filter { it.simpleName.asString() != underlyingPropName }
-    .forEach { prop ->
-      val planned: ForwardCallablePlan? =
-        callableCatalog.planFor("$qualifiedName.${prop.simpleName.asString()}")
-      if (planned != null) addForwardKotlinPlanExport(planned)
-    }
-
-  val excluded: Set<String> = setOf(
-    "equals", "hashCode", "toString", "<init>",
-    "box-impl", "unbox-impl", "constructor-impl",
-    "hashCode-impl", "equals-impl", "equals-impl0", "toString-impl",
-  )
-  cls.getAllFunctions()
-    .filter { it.getVisibility() == Visibility.PUBLIC }
-    .filter { it.simpleName.asString() !in excluded }
-    .forEach { method ->
-      val planned: ForwardCallablePlan? =
-        callableCatalog.planFor("$qualifiedName.${method.simpleName.asString()}")
-      if (planned != null) addForwardKotlinPlanExport(planned)
-    }
+  // ADR-082: members come off the catalog, not from a per-declaration plan lookup. Two declared
+  // same-name methods share a simple name but not a plan symbol (the planner numbers overloads),
+  // and re-deriving `"$qualifiedName.$name"` per `getAllFunctions()` entry emitted the first
+  // overload's export twice and the second's never.
+  callableCatalog.valueClassProperties(qualifiedName).forEach { addForwardKotlinPlanExport(it) }
+  callableCatalog.valueClassMethods(qualifiedName).forEach { addForwardKotlinPlanExport(it) }
 }

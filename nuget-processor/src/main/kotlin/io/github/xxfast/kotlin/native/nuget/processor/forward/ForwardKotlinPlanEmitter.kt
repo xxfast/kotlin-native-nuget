@@ -327,7 +327,8 @@ internal fun FileSpec.Builder.addForwardValueClassPlanExport(plan: ForwardCallab
   val arguments: String = plan.publicSignature.parameters.joinToString(", ") { parameter ->
     loweredArgument(parameter)
   }
-  val memberName: String = plan.invocation.symbol.substringAfterLast('.')
+  val memberName: String =
+    plan.invocation.member ?: plan.invocation.symbol.substringAfterLast('.')
   val invocation: String = when {
     isConstructor -> {
       val underlyingProp: String = requireNotNull(plan.invocation.receiver) {

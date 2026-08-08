@@ -3,13 +3,16 @@ package io.github.xxfast.kotlin.native.nuget.processor.forward
 import com.google.devtools.ksp.getVisibility
 import com.google.devtools.ksp.getConstructors
 import com.google.devtools.ksp.symbol.KSClassDeclaration
+import com.google.devtools.ksp.symbol.KSDeclaration
 import com.google.devtools.ksp.symbol.KSFunctionDeclaration
 import com.google.devtools.ksp.symbol.KSNode
 import com.google.devtools.ksp.symbol.KSPropertyDeclaration
 import com.google.devtools.ksp.symbol.KSType
+import com.google.devtools.ksp.symbol.KSTypeParameter
 import com.google.devtools.ksp.getAllSuperTypes
 import com.google.devtools.ksp.symbol.Modifier
 import com.google.devtools.ksp.symbol.Visibility
+import io.github.xxfast.kotlin.native.nuget.processor.cir.expandAliases
 import io.github.xxfast.kotlin.native.nuget.processor.exports.findInterfaceBridgePairs
 import io.github.xxfast.kotlin.native.nuget.processor.exports.findStoredCallbackPairs
 import io.github.xxfast.kotlin.native.nuget.processor.toCName
@@ -104,6 +107,82 @@ internal sealed interface ForwardCallableCatalogEntry {
 }
 
 /**
+ * ADR-082's 2026-08-08 amendment: the declared-vs-inherited signal for value-class members.
+ *
+ * Every member a supertype declares, indexed for signature comparison. A member is inherited when
+ * a supertype declares one of the same *kind* with the same simple name, the same arity, and
+ * per-position matching parameter types (resolved qualified name plus nullability). A
+ * supertype-side type *parameter* matches any argument type, deliberately conservatively: it
+ * over-drops (loud diagnostic, non-colliding name as workaround) rather than exporting something
+ * that may be a delegation forwarder.
+ *
+ * The simple-name rule this replaces also dropped author-declared members whose name merely
+ * collided with a supertype's (`fun get(key: String)` next to `CharSequence.get(index: Int)`).
+ * Properties keep the name-only comparison, and only against supertype *properties*: Kotlin
+ * properties cannot overload.
+ */
+internal class ForwardSupertypeMembers private constructor(
+  private val propertyNames: Set<String>,
+  private val functions: List<Signature>,
+) {
+  /** [parameters] holds one key per position; `null` is a supertype type parameter (wildcard). */
+  private data class Signature(val name: String, val parameters: List<String?>)
+
+  fun declares(property: KSPropertyDeclaration): Boolean =
+    property.simpleName.asString() in propertyNames
+
+  fun declares(function: KSFunctionDeclaration): Boolean {
+    val name: String = function.simpleName.asString()
+    val parameters: List<String?> = function.parameters.map { parameter ->
+      typeKey(parameter.type.resolve())
+    }
+    return functions.any { signature ->
+      signature.name == name &&
+          signature.parameters.size == parameters.size &&
+          signature.parameters.zip(parameters).all { (inherited, declared) ->
+            inherited == null || inherited == declared
+          }
+    }
+  }
+
+  companion object {
+    fun of(cls: KSClassDeclaration): ForwardSupertypeMembers {
+      val superTypes: List<KSClassDeclaration> = cls.getAllSuperTypes()
+        .mapNotNull { superType -> superType.declaration as? KSClassDeclaration }
+        .toList()
+      return ForwardSupertypeMembers(
+        propertyNames = superTypes
+          .flatMap { superType ->
+            superType.getAllProperties().map { property -> property.simpleName.asString() }
+          }
+          .toSet(),
+        functions = superTypes.flatMap { superType ->
+          superType.getAllFunctions().map { function ->
+            Signature(
+              name = function.simpleName.asString(),
+              parameters = function.parameters.map { parameter ->
+                typeKey(parameter.type.resolve())
+              },
+            )
+          }
+        },
+      )
+    }
+
+    /** Null for a type-parameter position, which the comparison treats as a wildcard. */
+    private fun typeKey(type: KSType): String? {
+      val expanded: KSType = type.expandAliases()
+      val declaration: KSDeclaration = expanded.declaration
+      if (declaration is KSTypeParameter) return null
+      val name: String = declaration.qualifiedName?.asString()
+        ?: declaration.simpleName.asString()
+      val nullable: Boolean = type.isMarkedNullable || expanded.isMarkedNullable
+      return if (nullable) "$name?" else name
+    }
+  }
+}
+
+/**
  * Complete planning result for the first migration slice. Every callable inspected by this
  * planner is either [ForwardCallableCatalogEntry.Planned] or explicitly [Skipped]; no raw KSP
  * type or implicit fallback reaches the emission phase.
@@ -143,6 +222,29 @@ internal data class ForwardCallablePlanCatalog(
   val droppedCallables: List<ForwardCallableCatalogEntry.Skipped> = entries
     .filterIsInstance<ForwardCallableCatalogEntry.Skipped>()
     .filter { entry -> entry.reason.droppedFromCSharp }
+
+  /**
+   * ADR-082: the planned value-class property getters of [owner], in planning order.
+   *
+   * Both emitters read their member plans off the catalog rather than re-deriving a plan key per
+   * `getAllProperties()` / `getAllFunctions()` entry. Symbol-per-declaration re-derivation breaks
+   * as soon as two declared members share a simple name (the overload numbering lives in the
+   * planner, and a second `getAllFunctions()` entry re-emitted the *first* one's plan).
+   * Constructors are excluded: their reference-underlying branch still has a legacy route that
+   * needs the declaration itself.
+   */
+  fun valueClassProperties(owner: String): List<ForwardCallablePlan> =
+    valueClassMembers(owner).filter { plan -> plan.invocation.target?.endsWith("#property") == true }
+
+  /** ADR-082: the planned value-class methods of [owner], in planning order. See above. */
+  fun valueClassMethods(owner: String): List<ForwardCallablePlan> =
+    valueClassMembers(owner).filter { plan -> plan.invocation.target?.endsWith("#property") != true }
+
+  private fun valueClassMembers(owner: String): List<ForwardCallablePlan> = plans.filter { plan ->
+    plan.invocation.origin == ForwardCallableOrigin.VALUE_CLASS &&
+        plan.invocation.symbol.substringBeforeLast('.') == owner &&
+        !plan.invocation.symbol.substringAfterLast('.').startsWith("<init>")
+  }
 }
 
 /**
@@ -216,17 +318,12 @@ internal class ForwardCallablePlanner(
     // declaration (author-declared or not) reports `origin == KOTLIN_LIB`, so the old rule would
     // drop the entire cross-module value class, not just its delegated members. The only
     // origin-independent signal available, verified against a real klib, is "a supertype declares
-    // a member with this simple name" — this also correctly catches interface delegation
-    // (`CharSequence by value`), which forwards members with `parentDeclaration == cls` and is
-    // otherwise indistinguishable from a hand-written member. Computed once per class: cheap
+    // this member" — this also correctly catches interface delegation (`CharSequence by value`),
+    // which forwards members with `parentDeclaration == cls` and is otherwise indistinguishable
+    // from a hand-written member. ADR-082's 2026-08-08 amendment narrows the comparison from
+    // simple names to signatures; see [ForwardSupertypeMembers]. Computed once per class: cheap
     // relative to walking every member, and `getAllSuperTypes()` is documented as expensive.
-    val inheritedNames: Set<String> = cls.getAllSuperTypes()
-      .mapNotNull { superType -> superType.declaration as? KSClassDeclaration }
-      .flatMap { superType ->
-        superType.getAllFunctions().map { function -> function.simpleName.asString() } +
-            superType.getAllProperties().map { property -> property.simpleName.asString() }
-      }
-      .toSet()
+    val inherited: ForwardSupertypeMembers = ForwardSupertypeMembers.of(cls)
 
     return buildList {
       addAll(
@@ -240,9 +337,9 @@ internal class ForwardCallablePlanner(
         )
       )
       addAll(
-        valueClassPropertyEntries(cls, owner, prefix, underlyingPropName, receiver, inheritedNames),
+        valueClassPropertyEntries(cls, owner, prefix, underlyingPropName, receiver, inherited),
       )
-      addAll(valueClassMethodEntries(cls, owner, prefix, receiver, inheritedNames))
+      addAll(valueClassMethodEntries(cls, owner, prefix, receiver, inherited))
     }
   }
 
@@ -305,7 +402,7 @@ internal class ForwardCallablePlanner(
     prefix: String,
     underlyingPropName: String,
     receiver: ForwardReceiver,
-    inheritedNames: Set<String>,
+    inherited: ForwardSupertypeMembers,
   ): List<ForwardCallableCatalogEntry> = cls.getAllProperties()
     .filter { it.getVisibility() == Visibility.PUBLIC }
     .filter { it.simpleName.asString() != underlyingPropName }
@@ -315,8 +412,10 @@ internal class ForwardCallablePlanner(
       // the value class itself, or that a supertype (including an interface delegate, e.g.
       // `CharSequence by value`'s `length`) also declares by this simple name, is a v1
       // product-scope skip, not a silently-bridged member. See `valueClassEntries` for why the
-      // supertype-name check (not `Origin.KOTLIN`) is the origin-independent signal this needs.
-      if (prop.parentDeclaration != cls || name in inheritedNames) {
+      // supertype check (not `Origin.KOTLIN`) is the origin-independent signal this needs.
+      // Properties compare by name alone (Kotlin properties cannot overload) and only against
+      // supertype properties — ADR-082's amendment.
+      if (prop.parentDeclaration != cls || inherited.declares(prop)) {
         return@map ForwardCallableCatalogEntry.Skipped(
           "$owner.$name", ForwardPlanSkipReason.INHERITED_MEMBER, node = prop,
         )
@@ -343,40 +442,49 @@ internal class ForwardCallablePlanner(
     owner: String,
     prefix: String,
     receiver: ForwardReceiver,
-    inheritedNames: Set<String>,
+    inherited: ForwardSupertypeMembers,
   ): List<ForwardCallableCatalogEntry> {
     val excluded: Set<String> = setOf(
       "equals", "hashCode", "toString", "<init>",
       "box-impl", "unbox-impl", "constructor-impl",
       "hashCode-impl", "equals-impl", "equals-impl0", "toString-impl",
     )
+    // ADR-082 amendment fix B: overload numbering, mirroring the secondary-constructor scheme.
+    // Counted over *declared* same-name members in `getAllFunctions()` order, so a skipped
+    // (inherited) namesake never consumes a number and the first declared overload keeps the
+    // shipped unsuffixed export name.
+    val occurrences: MutableMap<String, Int> = mutableMapOf()
     return cls.getAllFunctions()
       .filter { it.getVisibility() == Visibility.PUBLIC }
       .filter { it.simpleName.asString() !in excluded }
       .map { method ->
         val name: String = method.simpleName.asString()
-        // ADR-064 (ROADMAP line 77), amended by ADR-066: see `valueClassPropertyEntries` above —
-        // the same supertype-simple-name signal (not `Origin.KOTLIN`) catches both genuine
-        // supertype inheritance and interface delegation (`CharSequence by value`'s `get` /
-        // `subSequence`), the two constructs `parentDeclaration` alone cannot tell apart
-        // cross-module.
-        if (method.parentDeclaration != cls || name in inheritedNames) {
+        // ADR-064 (ROADMAP line 77), amended by ADR-066 and narrowed by ADR-082: the supertype
+        // *signature* signal (not `Origin.KOTLIN`, and no longer the simple name) catches both
+        // genuine supertype inheritance and interface delegation (`CharSequence by value`'s `get`
+        // / `subSequence`), the two constructs `parentDeclaration` alone cannot tell apart
+        // cross-module, while letting an unrelated same-name overload (`get(key: String)`)
+        // through.
+        if (method.parentDeclaration != cls || inherited.declares(method)) {
           return@map ForwardCallableCatalogEntry.Skipped(
             "$owner.$name", ForwardPlanSkipReason.INHERITED_MEMBER, node = method,
           )
         }
+        val occurrence: Int = occurrences.merge(name, 1, Int::plus)!!
+        val suffix: String = if (occurrence == 1) "" else "_$occurrence"
+        val symbol: String = "$owner.$name$suffix"
         val structuralReason: ForwardPlanSkipReason? = when {
           method.modifiers.contains(Modifier.SUSPEND) -> ForwardPlanSkipReason.SUSPEND
           method.typeParameters.isNotEmpty() -> ForwardPlanSkipReason.GENERIC
           else -> null
         }
         if (structuralReason != null) {
-          ForwardCallableCatalogEntry.Skipped("$owner.$name", structuralReason, node = method)
+          ForwardCallableCatalogEntry.Skipped(symbol, structuralReason, node = method)
         } else {
           planOrSkip(
-            symbol = "$owner.$name",
+            symbol = symbol,
             publicName = name.replaceFirstChar { it.uppercase() },
-            exportName = "${prefix}_$name",
+            exportName = "${prefix}_$name$suffix",
             receiver = receiver,
             parameters = method.parameters.map { parameter ->
               (parameter.name?.asString() ?: "_") to classifier.classify(parameter.type.resolve())
@@ -385,6 +493,8 @@ internal class ForwardCallablePlanner(
             origin = ForwardCallableOrigin.VALUE_CLASS,
             target = owner,
             includeError = false,
+            // The symbol carries the overload suffix; the Kotlin call site must not.
+            member = name,
             node = method,
           )
         }
@@ -868,6 +978,7 @@ internal class ForwardCallablePlanner(
     invocationReceiver: String? = null,
     includeError: Boolean = true,
     valueClassProperty: Boolean = false,
+    member: String? = null,
     node: KSNode? = null,
   ): ForwardCallableCatalogEntry {
     val inputTypes: List<BridgeType> = buildList {
@@ -938,6 +1049,7 @@ internal class ForwardCallablePlanner(
         receiver = invocationReceiver,
         origin = origin,
         target = if (valueClassProperty) "$target#property" else target,
+        member = member,
       ),
       publicSignature = ForwardPublicSignature(
         name = publicName,

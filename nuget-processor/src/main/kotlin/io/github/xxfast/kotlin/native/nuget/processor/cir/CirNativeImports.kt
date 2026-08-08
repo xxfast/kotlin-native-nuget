@@ -218,7 +218,9 @@ internal fun CirValueClass.methodNativeImport(method: CirMethod): CirDllImport {
     libraryName = libraryName,
     entryPoint = "${nativePrefix}_${method.nativeName}",
     returnType = method.nativeReturnType,
-    name = "Native_${method.name}",
+    // ADR-082: the numbered native name, not the (shared) public overload name — see
+    // `ForwardCirPlanProjection.valueClassMethod`. Identical for unsuffixed members.
+    name = "Native_${method.nativeName.replaceFirstChar { it.uppercase() }}",
     parameters = listOf(CirParameter("value", underlyingNativeType)) + methodParams,
     visibility = CirVisibility.PRIVATE,
     hasSyncErrorOut = method.isSyncErrorCheckEnabled,

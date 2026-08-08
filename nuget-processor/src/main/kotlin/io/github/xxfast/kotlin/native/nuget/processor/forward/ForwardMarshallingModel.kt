@@ -274,6 +274,12 @@ internal data class ForwardInvocation(
   val origin: ForwardCallableOrigin = ForwardCallableOrigin.CLASS,
   /** Kotlin expression before the final method name for static/object calls. */
   val target: String? = null,
+  /**
+   * The declared Kotlin member name, when the symbol's last segment is not it. ADR-082's overload
+   * numbering suffixes the *symbol* (`ChartId.describe_2`) to keep catalog keys unique; the Kotlin
+   * call site still has to say `describe`.
+   */
+  val member: String? = null,
 )
 
 internal data class ForwardResultConvention(

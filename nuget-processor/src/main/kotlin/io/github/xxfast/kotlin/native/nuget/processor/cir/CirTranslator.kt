@@ -224,7 +224,7 @@ internal fun translate(
   valueClasses.forEach { cls ->
     namespaces.addDeclaration(
       namespaceOf(cls.packageName.asString()),
-      translateValueClass(cls, context.libraryName, callableCatalog),
+      translateValueClass(cls, context.libraryName, logger, callableCatalog),
     )
   }
 

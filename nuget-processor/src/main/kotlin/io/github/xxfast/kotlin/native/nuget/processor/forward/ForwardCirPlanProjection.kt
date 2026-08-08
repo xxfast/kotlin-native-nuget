@@ -76,13 +76,17 @@ internal object ForwardCirPlanProjection {
     val publicParams: List<CirParameter> = plan.publicParameters()
     val argumentList: List<String> = listOf(nativeReceiverArg) +
         plan.publicSignature.parameters.flatMap { parameter -> plan.callArgument(parameter) }
-    val nativeName: String = "Native_${plan.publicSignature.name}"
+    // ADR-082 overload numbering: the symbol's last segment carries the `_2` suffix, the public
+    // name does not (the C# surface is one natural overload set). The `DllImport` name must follow
+    // the *numbered* name, or two overloads that happen to share a wire shape would declare the
+    // same extern twice (CS0111). Unsuffixed members render exactly as before.
+    val methodName: String = plan.invocation.symbol.substringAfterLast('.')
+    val nativeName: String = "Native_${methodName.replaceFirstChar { it.uppercase() }}"
     val (returnType, nativeReturnType, expression) = valueClassMemberExpression(
       plan = plan,
       nativeName = nativeName,
       callArguments = argumentList.joinToString(", "),
     )
-    val methodName: String = plan.invocation.symbol.substringAfterLast('.')
     val needsCustomParams: Boolean =
       plan.publicSignature.parameters.any { parameter -> !parameter.type.isTrivialInput() }
     val nativeParams: List<CirParameter>? = if (needsCustomParams) {
