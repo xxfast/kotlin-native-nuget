@@ -271,10 +271,10 @@ internal object ForwardCirPropertyProjection {
     // `_value` read's local type comes from the underlying's wire (`wireType()` delegates).
     require(
       inner is BridgeType.Primitive || inner == BridgeType.Instant ||
-          inner is BridgeType.ValueClass
+          inner is BridgeType.ValueClass || inner is BridgeType.Enum
     ) {
-      "Forward property legacy getter requires a nullable primitive, Instant or value class, " +
-          "got $type"
+      "Forward property legacy getter requires a nullable primitive, Instant, enum or value " +
+          "class, got $type"
     }
     val presenceArgs: String = listOf(args, "out IntPtr error").filter { it.isNotBlank() }.joinToString(", ")
     val valueArgs: String = listOf(args, "out IntPtr error2").filter { it.isNotBlank() }.joinToString(", ")
@@ -286,6 +286,8 @@ internal object ForwardCirPropertyProjection {
 
       // ADR-079: rebuild the record struct from the underlying wire value the `_value` call read.
       inner is BridgeType.ValueClass -> valueClassGetterReconstruction(inner, "value")
+      // ADR-080: lift the `int` ordinal back into the enum.
+      inner is BridgeType.Enum -> "(${inner.csharpType()})value"
       else -> "value"
     }
     return buildString {

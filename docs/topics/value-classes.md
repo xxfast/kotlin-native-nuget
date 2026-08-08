@@ -1115,15 +1115,11 @@ public void ClinicSample_StandardDosage_NullablePrimitiveUnderlyingTopLevelRetur
     </p>
 </note>
 
-Bare `Mood?` (a nullable enum, not wrapped in a value class) is unaffected by this feature and stays
-out of scope entirely; see Limitations below.
+Bare `Mood?` (a nullable enum, not wrapped in a value class) is a different feature, riding this same
+has-value fan-out with the box/unbox step removed; see [Enums: Nullable](enums.md#nullable).
 
 ## Limitations
 
-- A bare `Nullable(Enum)` (`Mood?`, not wrapped in a value class) is out of scope at every
-  position; it is not part of this page's `Nullable(ValueClass)` shape. See
-  [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md) for the
-  property-position hazard it leaves open.
 - A value class as a collection element (`List<ChartId>`, `Map<String, ChartId>`) has no boxing
   story on the C# write side and is skipped; see [Collections](collections.md).
 - Reference-underlying value-class **primary** constructor `init` validation stays deferred
@@ -1138,6 +1134,7 @@ out of scope entirely; see Limitations below.
 <seealso>
     <category ref="related">
         <a href="data-classes.md">Data classes</a>
+        <a href="enums.md">Enums</a>
         <a href="exceptions.md">Exceptions</a>
         <a href="nuget-dsl.md">The nuget {} DSL</a>
     </category>
@@ -1150,5 +1147,6 @@ out of scope entirely; see Limitations below.
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/066-forward-export-reachability-closure.md">ADR-066: Forward export reachability closure</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/077-value-classes-at-ordinary-positions.md">ADR-077: Value classes at ordinary positions</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/079-nullable-primitive-enum-underlying-value-classes.md">ADR-079: Nullable(ValueClass) over Primitive/Enum-underlying value classes</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/080-bare-nullable-enum.md">ADR-080: Bare nullable enums</a>
     </category>
 </seealso>

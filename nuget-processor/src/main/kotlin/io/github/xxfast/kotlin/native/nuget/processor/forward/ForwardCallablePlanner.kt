@@ -633,6 +633,7 @@ internal class ForwardCallablePlanner(
     if (origin == ForwardCallableOrigin.TOP_LEVEL &&
       result is BridgeType.Nullable &&
       (result.type is BridgeType.Primitive || result.type == BridgeType.Instant ||
+          result.type is BridgeType.Enum ||
           (result.type as? BridgeType.ValueClass)?.underlying?.isHasValueFanOutUnderlying() == true)
     ) {
       return topLevelNullablePrimitivePlan(
@@ -674,6 +675,7 @@ internal class ForwardCallablePlanner(
     val inner: BridgeType = result.type
     require(
       inner is BridgeType.Primitive || inner == BridgeType.Instant ||
+          inner is BridgeType.Enum ||
           (inner as? BridgeType.ValueClass)?.underlying?.isHasValueFanOutUnderlying() == true
     ) {
       "Forward planner topLevelNullablePrimitivePlan received unsupported inner type $inner"
@@ -703,6 +705,8 @@ internal class ForwardCallablePlanner(
       // ADR-079: the `_value` call returns the underlying's wire (the primitive's own, INT32 for
       // an enum ordinal); the box step composes in the emitted expressions at both ends.
       is BridgeType.ValueClass -> inner.underlying.underlyingWireType()
+      // ADR-080: a bare nullable enum returns its `int` ordinal on the same `_value` call.
+      is BridgeType.Enum -> ForwardAbiWireType.INT32
       else -> ForwardAbiWireType.INT64
     }
     val value = ForwardNativeCall(
@@ -742,6 +746,8 @@ internal class ForwardCallablePlanner(
         add(ForwardHelperRequirement.VALUE_CLASS)
         if (inner.underlying is BridgeType.Enum) add(ForwardHelperRequirement.ENUM_ORDINAL)
       }
+      // ADR-080: a bare nullable enum result needs the ordinal helper too.
+      if (inner is BridgeType.Enum) add(ForwardHelperRequirement.ENUM_ORDINAL)
     }
     // ADR-076: the generic `transfer()` helper only special-cases String; an Instant result needs
     // its own INSTANT_TO_TICKS conversion tagged explicitly, or plan validation rejects it.
@@ -749,6 +755,8 @@ internal class ForwardCallablePlanner(
     val resultConversion: ForwardConversion? = when {
       inner == BridgeType.Instant -> ForwardConversion.INSTANT_TO_TICKS
       inner is BridgeType.ValueClass -> ForwardConversion.UNBOX_VALUE_CLASS
+      // ADR-080: the ordinal lowering is explicit for the same reason.
+      inner is BridgeType.Enum -> ForwardConversion.ENUM_TO_ORDINAL
       else -> null
     }
     val resultTransfer: ForwardTransfer = if (resultConversion != null) {
@@ -1157,6 +1165,29 @@ internal class ForwardCallablePlanner(
         ),
       )
 
+      // ADR-080: same adjacent-pair shape, the value slot carrying the `int` ordinal with the
+      // ORDINAL_TO_ENUM conversion (ADR-079's enum-underlying value class minus the box).
+      is BridgeType.Enum -> listOf(
+        ForwardAbiParameter(
+          name = "${name}HasValue",
+          wireType = ForwardAbiWireType.BOOLEAN,
+          direction = ForwardAbiDirection.IN,
+          transfer = ForwardTransfer(
+            "${name}HasValue", BridgeType.Primitive(PrimitiveKind.BOOLEAN), ForwardFlow.INTO_KOTLIN,
+            ForwardPassing.VALUE, ForwardOwnership.BORROWED, ForwardConversion.DIRECT,
+          ),
+        ),
+        ForwardAbiParameter(
+          name = name,
+          wireType = ForwardAbiWireType.INT32,
+          direction = ForwardAbiDirection.IN,
+          transfer = ForwardTransfer(
+            name, inner, ForwardFlow.INTO_KOTLIN, ForwardPassing.VALUE,
+            ForwardOwnership.BORROWED, ForwardConversion.ORDINAL_TO_ENUM,
+          ),
+        ),
+      )
+
       // ADR-076 §4.1: same adjacent-pair shape as the nullable-primitive case above, except the
       // value slot carries the TICKS_TO_INSTANT conversion (the wire value is still a raw INT64).
       BridgeType.Instant -> listOf(
@@ -1409,6 +1440,36 @@ internal class ForwardCallablePlanner(
       helperRequirements = setOf(ForwardHelperRequirement.INSTANT),
     )
 
+    // ADR-080: a bare nullable enum is ADR-079's value-class-over-enum shape with the box step
+    // deleted -- BOOLEAN has-value result plus a `valueOut` carrying the plain `int` ordinal.
+    is BridgeType.Enum -> ForwardResultShape(
+      wireType = ForwardAbiWireType.BOOLEAN,
+      transfer = ForwardTransfer(
+        subject = "result",
+        type = BridgeType.Nullable(type),
+        flow = ForwardFlow.OUT_OF_KOTLIN,
+        passing = ForwardPassing.VALUE,
+        ownership = ForwardOwnership.BORROWED,
+        conversion = ForwardConversion.ENUM_TO_ORDINAL,
+      ),
+      extraParameters = listOf(
+        ForwardAbiParameter(
+          name = "valueOut",
+          wireType = ForwardAbiWireType.POINTER,
+          direction = ForwardAbiDirection.OUT,
+          transfer = ForwardTransfer(
+            subject = "valueOut",
+            type = type.valueOutTransferType(),
+            flow = ForwardFlow.OUT_OF_KOTLIN,
+            passing = ForwardPassing.OUT,
+            ownership = ForwardOwnership.BORROWED,
+            conversion = ForwardConversion.DIRECT,
+          ),
+        )
+      ),
+      helperRequirements = setOf(ForwardHelperRequirement.ENUM_ORDINAL),
+    )
+
     else -> null
   }
 
@@ -1626,6 +1687,10 @@ internal class ForwardCallablePlanner(
     is BridgeType.Nullable -> when (val inner = type) {
       BridgeType.String, is BridgeType.ObjectHandle, is BridgeType.Primitive,
       BridgeType.Instant -> null
+
+      // ADR-080: a bare nullable enum fans out to the has-value pair with the ordinal in the
+      // value slot, exactly like ADR-079's enum-underlying value class minus the box.
+      is BridgeType.Enum -> null
 
       is BridgeType.Collection -> inner.collectionInputSkipReason()
       // ADR-077 sub-items 3/4: null rides the null pointer for the pointer-wired underlyings

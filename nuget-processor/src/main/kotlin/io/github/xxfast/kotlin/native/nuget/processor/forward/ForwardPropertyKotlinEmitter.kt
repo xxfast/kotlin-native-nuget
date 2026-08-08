@@ -205,6 +205,15 @@ private fun FileSpec.Builder.addNullableValueGetter(
       getterBuilder
     }
 
+    // ADR-080: a bare nullable enum rides the same LegacyTwoCall `_value` call as its ordinal.
+    is BridgeType.Enum -> exportBuilder(call, plan.receiver)
+      .returns(kotlinType("Int"))
+      .addCode(
+        valueBody("${plan.accessExpression()}!!.ordinal", "errorOut", "0"),
+        cOpaquePointerVar,
+        stableRef,
+      )
+
     // ADR-079: a Primitive/Enum-underlying value class rides the same LegacyTwoCall `_value` call,
     // unboxed to the underlying (the ordinal for an enum underlying).
     is BridgeType.ValueClass -> {
@@ -308,6 +317,9 @@ private fun ForwardPropertyPlan.valueExpression(): String = when (val type: Brid
     is BridgeType.Interface -> "value?.asStableRef<${inner.qualifiedName}>()?.get()"
     // ADR-076: the wire value is a raw INT64 of ticks; convert it back to an Instant.
     BridgeType.Instant -> "instantFromDotNetTicks(value)"
+    // ADR-080: the NullableDispatch `set` export carries the bare ordinal (`set_null` is the
+    // other export), so the entry lookup is unconditional.
+    is BridgeType.Enum -> "${inner.qualifiedName}.entries[value]"
     // ADR-075 Question D: a nullable collection setter is an ordinary `Direct` route with a
     // nullable `COpaquePointer` value -- `?.` short-circuits before `asStableRef` is ever reached
     // for a null wire value, so the property's static type stays the property's own `List<T>?`.

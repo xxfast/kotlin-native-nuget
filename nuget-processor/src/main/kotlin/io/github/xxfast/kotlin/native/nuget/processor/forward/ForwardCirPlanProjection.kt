@@ -236,10 +236,10 @@ internal object ForwardCirPlanProjection {
     // `_value` DllImport declared at the underlying's wire.
     require(
       inner is BridgeType.Primitive || inner == BridgeType.Instant ||
-          inner is BridgeType.ValueClass
+          inner is BridgeType.ValueClass || inner is BridgeType.Enum
     ) {
-      "Legacy two-call plan ${plan.invocation.symbol} requires a nullable primitive, Instant " +
-          "or value class"
+      "Legacy two-call plan ${plan.invocation.symbol} requires a nullable primitive, Instant, " +
+          "enum or value class"
     }
     val presence: ForwardNativeCall = plan.nativeImports[0]
     val value: ForwardNativeCall = plan.nativeImports[1]
@@ -250,6 +250,8 @@ internal object ForwardCirPlanProjection {
     val dllImportReturnType: String = when (inner) {
       is BridgeType.Primitive -> inner.csharpType()
       is BridgeType.ValueClass -> valueClassUnderlyingWireCs(inner.underlying)
+      // ADR-080: the `_value` call returns the bare `int` ordinal.
+      is BridgeType.Enum -> "int"
       else -> "long"
     }
     val publicReturnType: String = "${inner.csharpType()}?"
@@ -275,6 +277,8 @@ internal object ForwardCirPlanProjection {
       // ADR-079: rebuild the record struct from the underlying wire value the `_value` call
       // returned; the null case already returned above on `!__nuget_hasValue`.
       inner is BridgeType.ValueClass -> valueClassReconstructionCs(inner, "__nuget_value")
+      // ADR-080: lift the ordinal back into the enum.
+      inner is BridgeType.Enum -> "(${inner.csharpType()})__nuget_value"
       else -> "__nuget_value"
     }
     val body: String = buildString {
@@ -529,6 +533,11 @@ internal object ForwardCirPlanProjection {
         )
 
         is BridgeType.Primitive -> listOf("${parameter.name}.HasValue", "${parameter.name}.GetValueOrDefault()")
+        // ADR-080: same HasValue/GetValueOrDefault pair, the value half lowered to the ordinal.
+        is BridgeType.Enum -> listOf(
+          "${parameter.name}.HasValue", "(int)${parameter.name}.GetValueOrDefault()",
+        )
+
         // ADR-076: same HasValue/GetValueOrDefault pair as the nullable Primitive case above,
         // with the ticks conversion applied to the value half.
         BridgeType.Instant -> listOf(
@@ -801,6 +810,18 @@ internal object ForwardCirPlanProjection {
             body = checkedNullableValueBody(nativeName, callArguments, prelude, cleanup),
           )
         }
+
+        // ADR-080: same BOOLEAN + valueOut shape; valueOut is a plain `int` ordinal (its transfer
+        // type is Primitive(INT), see ForwardCallablePlanner.valueOutTransferType), cast back to
+        // the enum here. The `(Mood?)null` cast keeps the ternary's two arms unifiable.
+        is BridgeType.Enum -> CirResultProjection(
+          returnType = "${type.csharpType()}?",
+          nativeReturnType = "bool",
+          body = checkedNullableValueBody(
+            nativeName, callArguments, prelude, cleanup,
+            "hasValue ? (${type.csharpType()})valueOut : (${type.csharpType()}?)null",
+          ),
+        )
 
         // ADR-076: same BOOLEAN + valueOut shape as the nullable Primitive case above; valueOut
         // itself is declared as a raw `long` (its transfer type is Primitive(LONG), not Instant --

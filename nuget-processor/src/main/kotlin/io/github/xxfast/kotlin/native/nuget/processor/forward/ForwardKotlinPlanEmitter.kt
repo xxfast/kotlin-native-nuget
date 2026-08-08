@@ -207,10 +207,10 @@ private fun FileSpec.Builder.addLegacyTwoCallKotlinExport(plan: ForwardCallableP
   // the underlying on the `_value` call.
   require(
     inner is BridgeType.Primitive || inner == BridgeType.Instant ||
-        inner is BridgeType.ValueClass
+        inner is BridgeType.ValueClass || inner is BridgeType.Enum
   ) {
-    "Legacy two-call plan ${plan.invocation.symbol} requires a nullable primitive, Instant " +
-        "or value class"
+    "Legacy two-call plan ${plan.invocation.symbol} requires a nullable primitive, Instant, " +
+        "enum or value class"
   }
   val error: ForwardAbiParameter = requireNotNull(plan.errorSlot) {
     "Legacy two-call plan ${plan.invocation.symbol} is missing its error slot"
@@ -255,10 +255,13 @@ private fun FileSpec.Builder.addLegacyTwoCallKotlinExport(plan: ForwardCallableP
     inner is BridgeType.ValueClass -> "$invocation!!.${inner.underlyingPropertyName}" +
         if (inner.underlying is BridgeType.Enum) ".ordinal" else ""
 
+    // ADR-080: the bare enum's own ordinal, no unbox step in front of it.
+    inner is BridgeType.Enum -> "$invocation!!.ordinal"
     else -> "$invocation!!"
   }
   val valueDefault: String = when {
     inner == BridgeType.Instant -> "0L"
+    inner is BridgeType.Enum -> "0"
     inner is BridgeType.ValueClass ->
       if (inner.underlying is BridgeType.Enum) "0" else defaultResult(inner.underlying)
 
@@ -576,6 +579,23 @@ private fun addNullableResult(
       )
     }
 
+    // ADR-080: same BOOLEAN + valueOut shape, writing the `int` ordinal into valueOut.
+    is BridgeType.Enum -> {
+      require(call.result == ForwardAbiWireType.BOOLEAN) {
+        "Forward Kotlin nullable enum result must use BOOLEAN"
+      }
+      val valueOut: ForwardAbiParameter = requireNotNull(
+        call.parameters.firstOrNull { parameter -> parameter.name == "valueOut" },
+      ) { "Forward Kotlin nullable enum result is missing valueOut" }
+      builder.returns(kotlinType("Boolean"))
+      builder.addCode(
+        nullablePrimitiveResultBody(invocation, valueOut.name, errorName, "result.ordinal"),
+        cVarType(PrimitiveKind.INT),
+        cOpaquePointerVar,
+        stableRef,
+      )
+    }
+
     // ADR-076: same BOOLEAN + valueOut shape as the nullable-primitive case above, except the
     // Kotlin Instant result is converted to ticks before it is written into valueOut.
     BridgeType.Instant -> {
@@ -852,6 +872,10 @@ private fun loweredArgument(parameter: ForwardPublicParameter): String =
 
       is BridgeType.Primitive ->
         "if (${parameter.name}HasValue) ${parameter.name} else null"
+
+      // ADR-080: same HasValue guard, with the ordinal lookup the non-null enum branch uses.
+      is BridgeType.Enum ->
+        "if (${parameter.name}HasValue) ${inner.qualifiedName}.entries[${parameter.name}] else null"
 
       // ADR-076: same HasValue-guard shape as the nullable Primitive case above, plus the same
       // TICKS_TO_INSTANT conversion the non-nullable Instant branch above uses.

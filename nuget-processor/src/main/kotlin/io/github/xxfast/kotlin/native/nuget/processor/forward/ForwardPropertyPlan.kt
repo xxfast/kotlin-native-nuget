@@ -58,8 +58,9 @@ internal data class ForwardPropertyPlan(
     // has a spare null, so both need the out-of-band has-value channel.
     val nullableInner: BridgeType? = (type as? BridgeType.Nullable)?.type
     val underlying: BridgeType? = (nullableInner as? BridgeType.ValueClass)?.underlying
+    // ADR-080: a bare nullable enum rides the same shapes, its `int` ordinal in the value slot.
     val isNullableLegacyPrimitive: Boolean = nullableInner is BridgeType.Primitive ||
-        nullableInner == BridgeType.Instant ||
+        nullableInner == BridgeType.Instant || nullableInner is BridgeType.Enum ||
         underlying is BridgeType.Primitive || underlying is BridgeType.Enum
     if (getter is ForwardPropertyGetter.LegacyTwoCall) {
       require(isNullableLegacyPrimitive) {

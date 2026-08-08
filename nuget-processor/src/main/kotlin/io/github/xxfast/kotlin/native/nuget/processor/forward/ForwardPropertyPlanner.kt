@@ -415,7 +415,8 @@ internal class ForwardPropertyPlanner(
   private fun BridgeType.hasValueFanOutInner(): BridgeType? {
     if (this !is BridgeType.Nullable) return null
     return when (type) {
-      is BridgeType.Primitive, BridgeType.Instant -> type
+      // ADR-080: a bare enum wires as its `int` ordinal, which has no spare null either.
+      is BridgeType.Primitive, BridgeType.Instant, is BridgeType.Enum -> type
       is BridgeType.ValueClass ->
         if (type.underlying is BridgeType.Primitive || type.underlying is BridgeType.Enum) type
         else null
