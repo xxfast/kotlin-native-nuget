@@ -1,6 +1,7 @@
 package io.github.xxfast.kotlin.native.nuget
 
 import io.github.xxfast.kotlin.native.nuget.rir.AbiArg
+import io.github.xxfast.kotlin.native.nuget.rir.KotlinBridgePlan
 import io.github.xxfast.kotlin.native.nuget.rir.NUGET_RUNTIME_CONTRACT_HASH
 import io.github.xxfast.kotlin.native.nuget.rir.RirClass
 import io.github.xxfast.kotlin.native.nuget.rir.RirConstructor
@@ -47,6 +48,8 @@ import io.github.xxfast.kotlin.native.nuget.rir.contractHash
 import io.github.xxfast.kotlin.native.nuget.rir.fnv1a64
 import io.github.xxfast.kotlin.native.nuget.rir.interfaceBaseKeys
 import io.github.xxfast.kotlin.native.nuget.rir.isNullable
+import io.github.xxfast.kotlin.native.nuget.rir.kotlinBridgeContractHash
+import io.github.xxfast.kotlin.native.nuget.rir.kotlinBridgePlan
 import io.github.xxfast.kotlin.native.nuget.rir.parseInterfaceRef
 import io.github.xxfast.kotlin.native.nuget.rir.parseReverseIr
 import io.github.xxfast.kotlin.native.nuget.rir.registrationExportName
@@ -227,6 +230,10 @@ fun generateKotlinStubs(
   // registrations fired" message can name exactly what did/did not land. "<runtime>" (if needed)
   // is prepended after the loop, once whether-any-class-needs-it is known.
   val expectedRegistrations: MutableList<String> = mutableListOf()
+
+  // ADR-085: (kotlinPkg, interfaceName) for every interface a Kotlin class can implement and hand
+  // back to C#. Drives the single generated nugetMintBridge dispatcher.
+  val bridgeDispatch: MutableList<Pair<String, String>> = mutableListOf()
 
   // ADR-051: derive once for the whole file — both generators must use the same helper
   // (anti-drift contract, ADR-049 Alternative 10 extended by ADR-051).
@@ -492,6 +499,10 @@ fun generateKotlinStubs(
 
         val exportName: String = registrationExportName(namespace.name, iface.name)
         expectedRegistrations.add("${namespace.name}.${iface.name}")
+        // ADR-085: a plannable interface contributes one `is <Interface> ->` arm to the shared
+        // nugetMintBridge dispatcher emitted below.
+        kotlinBridgePlan(iface, boundTypes, boundIfaces)
+          ?.let { bridgeDispatch.add(kotlinPkg to it.iface.name) }
 
         result.add(
           GeneratedFile(
@@ -513,6 +524,7 @@ fun generateKotlinStubs(
             relativePath = "nativeMain/$pkgPath/${iface.name}Bindings.kt",
             content = interfaceBindingsFileContent(
               kotlinPkg, namespace.name, iface, registrables, exportName, assembly.packageId,
+              kotlinBridgePlan(iface, boundTypes, boundIfaces),
             ),
           )
         )
@@ -546,6 +558,14 @@ fun generateKotlinStubs(
       GeneratedFile(
         relativePath = "nativeMain/$INTERNAL_DIR/NugetRuntime.kt",
         content = nugetRuntimeContent(),
+      )
+    )
+    // ADR-085: the ONE dispatcher nugetHandle()'s fallback calls. Emitted alongside NugetRuntime.kt
+    // (which declares nugetHandle) even when nothing is plannable, so nugetHandle always resolves.
+    result.add(
+      GeneratedFile(
+        relativePath = "nativeMain/$INTERNAL_DIR/NugetKotlinBridges.kt",
+        content = nugetKotlinBridgesContent(bridgeDispatch),
       )
     )
   }
@@ -1064,7 +1084,7 @@ private fun genericWitnessObjectFileContent(
       // interface type argument returns through its `{Name}Handle` concrete wrapper, exactly like
       // buildStubMethod's RirInterfaceType branch.
       retType is RirInterfaceType -> if (retType.nullable) {
-        "$callExpr?.let { ${retType.name}Handle(it) }"
+        "$callExpr?.let { nuget${retType.name}Value(it) }"
       } else {
         "${retType.name}Handle(requireNotNull($callExpr) { \"$simpleName.$name returned null\" })"
       }
@@ -3059,7 +3079,7 @@ private fun classWrapperContent(
     instancePropertyGetters.any { it.type is RirInterfaceType && it.name in propertySetterNames }
   val hasInterfaceParam: Boolean =
     methodsHaveInterfaceParam || ctorsHaveInterfaceParam || settablePropertiesHaveInterfaceParam
-  if (hasInterfaceParam) imports.add("import $INTERNAL_PKG.nugetHandle")
+  if (hasInterfaceParam) imports.add("import $INTERNAL_PKG.nugetTransferScope")
   if (hasStringReturn) {
     imports.add("import $INTERNAL_PKG.freeManagedString")
     imports.add("import kotlinx.cinterop.ByteVar")
@@ -3248,6 +3268,14 @@ private fun classWrapperContent(
 // requires a non-null receiver, so a nullable string is guarded with an explicit if/else; a
 // nullable handle uses a safe-call chain instead (both still evaluate inside the same
 // memScoped/fn.invoke(...) call site as the non-null case — no separate branch needed there).
+// ADR-085: the two scopes a generated invoke may need, innermost first. memScoped owns the
+// `.cstr.ptr` buffers of string arguments; nugetTransferScope owns the bridge handles minted for
+// Kotlin-implemented interface arguments (freed after the call, never before it).
+private fun wrapInvoke(rawInvoke: String, hasStringArg: Boolean, hasInterfaceArg: Boolean): String {
+  val scoped: String = if (hasStringArg) "memScoped { $rawInvoke }" else rawInvoke
+  return if (hasInterfaceArg) "nugetTransferScope { $scoped }" else scoped
+}
+
 private fun argConversion(type: RirTypeRef, name: String): String = when {
   type is RirStringType && type.nullable -> "if ($name == null) null else $name.cstr.ptr"
   type is RirStringType -> "$name.cstr.ptr"
@@ -3260,10 +3288,11 @@ private fun argConversion(type: RirTypeRef, name: String): String = when {
   // interface itself (the generated interface stays pure, no handle member — Decision 4) but via
   // the NugetHandleOwner marker every generated wrapper (a bound class, or an interface's own
   // {Name}Handle) implements.
-  type is RirInterfaceType && type.nullable ->
-    "$name?.nugetHandle(\"${type.name}\")?.require(\"${type.name}\")"
-
-  type is RirInterfaceType -> "$name.nugetHandle(\"${type.name}\").require(\"${type.name}\")"
+  // ADR-085: `handleOf` is a member of the NugetTransferScope this call site is wrapped in (see
+  // wrapInvoke), so a bridge minted for a Kotlin implementation is freed after the native call
+  // returns instead of rooting the bridge forever.
+  type is RirInterfaceType && type.nullable -> "handleOfOrNull($name, \"${type.name}\")"
+  type is RirInterfaceType -> "handleOf($name, \"${type.name}\")"
   type is RirEnumType -> "$name.ordinal"
   type is RirPrimitiveType && type.name == "char" -> "$name.code.toUShort()"
   // ADR-059: a struct-typed argument must be decomposed into its LEAVES via structArgConversions
@@ -3367,8 +3396,9 @@ private fun buildConstructHelper(
     structArgConversions(p.type, p.name, structs)
   }.joinToString(", ")
 
+  val hasInterfaceParam: Boolean = ctor.parameters.any { it.type is RirInterfaceType }
   val invokeCall: String =
-    if (hasStringParam) "memScoped { fn.invoke($invokeArgs) }" else "fn.invoke($invokeArgs)"
+    wrapInvoke("fn.invoke($invokeArgs)", hasStringParam, hasInterfaceParam)
 
   val failMsg: String = bindingsNotRegisteredMessage(cls.name, packageId, namespaceName)
   val bindingsObj: String = bindingsObjectName(cls.name)
@@ -3437,8 +3467,11 @@ private fun buildStubMethod(
 
   val failMsg: String = bindingsNotRegisteredMessage(cls.name, packageId, namespaceName)
 
+  // ADR-085: an interface-typed parameter may mint a bridge, whose transfer handle this call
+  // site owns and frees after the invoke (wrapInvoke's nugetTransferScope).
+  val hasInterfaceParam: Boolean = method.parameters.any { it.type is RirInterfaceType }
   val invokeCall: String =
-    if (hasStringParam) "memScoped { fn.invoke($invokeArgs) }" else "fn.invoke($invokeArgs)"
+    wrapInvoke("fn.invoke($invokeArgs)", hasStringParam, hasInterfaceParam)
 
   val nullMsg: String = "${cls.name}.${method.name} returned null" +
       ", expected a non-null string pointer"
@@ -3519,7 +3552,7 @@ private fun buildStubMethod(
       |    $failMsg
       |  }
       |  val ptr: COpaquePointer? = $invokeCall
-      |  return ptr?.let { ${retType.name}Handle(it) }
+      |  return ptr?.let { nuget${retType.name}Value(it) }
       |}
     """.trimMargin() else """
       |fun $name($params)$retSuffix {
@@ -3527,7 +3560,7 @@ private fun buildStubMethod(
       |    $failMsg
       |  }
       |  val ptr: COpaquePointer? = $invokeCall
-      |  return ${retType.name}Handle(requireNotNull(ptr) {
+      |  return nuget${retType.name}Value(requireNotNull(ptr) {
       |    "$nonNullHandleMsg"
       |  })
       |}
@@ -3758,7 +3791,7 @@ private fun buildStubProperty(
       |    $failMsg
       |  }
       |  val ptr: COpaquePointer? = $getterInvoke
-      |  return ptr?.let { ${type.name}Handle(it) }
+      |  return ptr?.let { nuget${type.name}Value(it) }
       |}
     """.trimMargin() else """
       |get() {
@@ -3766,7 +3799,7 @@ private fun buildStubProperty(
       |    $failMsg
       |  }
       |  val ptr: COpaquePointer? = $getterInvoke
-      |  return ${type.name}Handle(requireNotNull(ptr) {
+      |  return nuget${type.name}Value(requireNotNull(ptr) {
       |    "$nonNullHandleMsg"
       |  })
       |}
@@ -3852,13 +3885,9 @@ private fun buildStubProperty(
       if (hasStringComponent) "memScoped { fn.invoke($invokeArgs) }" else "fn.invoke($invokeArgs)"
     } else {
       val valueArg: String = argConversion(propType, "value")
-      val hasStringValue: Boolean = propType is RirStringType
-      if (hasStringValue) {
-        if (receiverArg == null) "memScoped { fn.invoke($valueArg) }"
-        else "memScoped { fn.invoke($receiverArg, $valueArg) }"
-      } else {
+      val raw: String =
         if (receiverArg == null) "fn.invoke($valueArg)" else "fn.invoke($receiverArg, $valueArg)"
-      }
+      wrapInvoke(raw, propType is RirStringType, propType is RirInterfaceType)
     }
     """
       |set(value) {
@@ -3934,7 +3963,13 @@ private fun nugetRuntimeContent(): String = """
   |import kotlinx.cinterop.COpaquePointer
   |import kotlinx.cinterop.CFunction
   |import kotlinx.cinterop.CPointer
+  |import kotlinx.cinterop.ByteVar
+  |import kotlinx.cinterop.allocArray
+  |import kotlinx.cinterop.asStableRef
+  |import kotlinx.cinterop.free
   |import kotlinx.cinterop.invoke
+  |import kotlinx.cinterop.nativeHeap
+  |import kotlinx.cinterop.set
   |import kotlinx.cinterop.reinterpret
   |import kotlin.experimental.ExperimentalNativeApi
   |
@@ -3997,13 +4032,112 @@ private fun nugetRuntimeContent(): String = """
   |// `NugetMarshal.HandleOf(object)`, which throws for a Kotlin-implemented C# interface passed
   |// back to C#. An extension on Any (not on the generated interface itself) because the
   |// interface stays pure — this is the ONE place that downcasts to NugetHandleOwner.
+  |// ADR-085: a value that is NOT a generated wrapper is a Kotlin implementation of the interface;
+  |// mint a C#-side bridge for it (nugetMintBridge, generated into NugetKotlinBridges.kt). The
+  |// error(...) text survives for a value implementing no bridgeable bound interface.
   |internal fun Any.nugetHandle(interfaceName: String): NugetObjectHandle =
   |  (this as? NugetHandleOwner)?.handle
+  |    ?: nugetMintBridge(this)?.let { NugetObjectHandle(it) }
   |    ?: error(
   |      "[nuget] ${'$'}{this::class.simpleName} is a Kotlin implementation of ${'$'}interfaceName; " +
   |          "passing a Kotlin-implemented C# interface back to C# is not supported yet."
   |    )
+  |
+  |// ADR-085 ownership: a MINTED bridge handle is a TRANSFER handle — the call site that minted
+  |// it frees it once the native call returns, leaving C#'s own managed reference (if it stored the
+  |// bridge) as the only root. A wrapper's OWN handle is never freed here: it belongs to the
+  |// wrapper's Cleaner. The distinction is the whole reason this is a scope and not an expression:
+  |// the free needs an "after the call" point, exactly like memScoped's deallocation.
+  |internal class NugetTransferScope {
+  |  private val minted: MutableList<NugetObjectHandle> = mutableListOf()
+  |
+  |  fun handleOf(value: Any, interfaceName: String): COpaquePointer {
+  |    val owned: Boolean = value !is NugetHandleOwner
+  |    val handle: NugetObjectHandle = value.nugetHandle(interfaceName)
+  |    if (owned) minted.add(handle)
+  |    return handle.require(interfaceName)
+  |  }
+  |
+  |  fun handleOfOrNull(value: Any?, interfaceName: String): COpaquePointer? =
+  |    if (value == null) null else handleOf(value, interfaceName)
+  |
+  |  fun releaseMinted() {
+  |    minted.forEach { it.free() }
+  |    minted.clear()
+  |  }
+  |}
+  |
+  |// The receiver is resolved the same way memScoped's is: an interface-typed argument's conversion
+  |// is `handleOf(...)`, a member of THIS scope, so a call site that can mint must wrap its invoke.
+  |internal inline fun <R> nugetTransferScope(block: NugetTransferScope.() -> R): R {
+  |  val scope = NugetTransferScope()
+  |  try {
+  |    return scope.block()
+  |  } finally {
+  |    scope.releaseMinted()
+  |  }
+  |}
+  |
+  |// ADR-085: a Kotlin member reached through a bridge slot returns its String on the Kotlin native
+  |// heap; C# reads it with Marshal.PtrToStringUTF8 and hands the pointer straight back to
+  |// nuget_kotlin_string_free. The inverse of the shipped CoTaskMemUTF8 -> toKString wire.
+  |internal fun nugetKotlinString(value: String?): COpaquePointer? {
+  |  if (value == null) return null
+  |  val bytes: ByteArray = value.encodeToByteArray()
+  |  val ptr: CPointer<ByteVar> = nativeHeap.allocArray(bytes.size + 1)
+  |  bytes.forEachIndexed { i, b -> ptr[i] = b }
+  |  ptr[bytes.size] = 0
+  |  return ptr
+  |}
+  |
+  |// ADR-085: a C# bridge's SafeHandle releases the Kotlin object it holds through this export.
+  |@OptIn(ExperimentalNativeApi::class)
+  |@CName("nuget_kotlin_string_free")
+  |fun nuget_kotlin_string_free(ptr: COpaquePointer) {
+  |  nativeHeap.free(ptr)
+  |}
+  |
+  |// ADR-085 observability (the reverse mirror of ADR-084's NugetBridgeState.ReleasedCount): a
+  |// release is GC-timed on the .NET side, so the only way to assert it happened is to count it.
+  |private val kotlinReleaseCount = AtomicInt(0)
+  |
+  |internal fun nugetKotlinReleaseCount(): Int = kotlinReleaseCount.value
+  |
+  |@OptIn(ExperimentalNativeApi::class)
+  |@CName("nuget_kotlin_release")
+  |fun nuget_kotlin_release(ctx: COpaquePointer) {
+  |  while (true) {
+  |    val current: Int = kotlinReleaseCount.value
+  |    if (kotlinReleaseCount.compareAndSet(current, current + 1)) break
+  |  }
+  |  ctx.asStableRef<Any>().dispose()
+  |}
 """.trimMargin().trim()
+
+// ADR-085: NugetKotlinBridges.kt — the single dispatcher nugetHandle()'s fallback calls, one arm
+// per interface a Kotlin class can implement and hand back to C#. Deliberately a separate file
+// from NugetRuntime.kt: this one references the generated per-interface mint functions in their
+// own packages, and NugetRuntime.kt is fixed content with no knowledge of them.
+private fun nugetKotlinBridgesContent(dispatch: List<Pair<String, String>>): String {
+  val arms: String = dispatch.joinToString("\n") { (pkg, name) ->
+    "  value is $pkg.$name -> $pkg.mint${name}Bridge(value)"
+  }
+  val body: String = if (arms.isEmpty()) "  else -> null" else "$arms\n  else -> null"
+  return """
+    |@file:OptIn(kotlinx.cinterop.ExperimentalForeignApi::class)
+    |
+    |package $INTERNAL_PKG
+    |
+    |import kotlinx.cinterop.COpaquePointer
+    |
+    |// Generated (ADR-085): dispatch from a Kotlin object at an interface-typed position to the
+    |// factory that mints its C#-side bridge. `null` means no bound interface matched, which is
+    |// exactly the case nugetHandle() still error(...)s for.
+    |internal fun nugetMintBridge(value: Any): COpaquePointer? = when {
+    |$body
+    |}
+  """.trimMargin().trim()
+}
 
 // ADR-054: NugetRegistry.kt — the always-on registration registry + contract self-check, emitted
 // once whenever anything in this build registers (any bound class, or the shared runtime).
@@ -4316,7 +4450,7 @@ private fun interfaceHandleFileContent(
     "import $INTERNAL_PKG.NugetHandleOwner",
     "import $INTERNAL_PKG.NugetObjectHandle",
     "import $INTERNAL_PKG.NugetRegistry",
-    "import $INTERNAL_PKG.nugetHandle",
+    "import $INTERNAL_PKG.nugetTransferScope",
     "import kotlin.experimental.ExperimentalNativeApi",
     "import kotlin.native.ref.createCleaner",
     "import kotlinx.cinterop.COpaquePointer",
@@ -4432,10 +4566,11 @@ private fun interfaceHandleMethodMember(
   val retSuffix: String =
     if (r.method.returnType is RirVoidType) "" else ": ${declKotlinType(r.method.returnType)}"
   val hasStringParam: Boolean = r.method.parameters.any { it.type is RirStringType }
+  val hasInterfaceParam: Boolean = r.method.parameters.any { it.type is RirInterfaceType }
   val paramArgs: List<String> = r.method.parameters.map { argConversion(it.type, it.name) }
   val invokeArgs: String = (listOf(receiverArg) + paramArgs).joinToString(", ")
   val invokeCall: String =
-    if (hasStringParam) "memScoped { fn.invoke($invokeArgs) }" else "fn.invoke($invokeArgs)"
+    wrapInvoke("fn.invoke($invokeArgs)", hasStringParam, hasInterfaceParam)
   return interfaceHandleReturnBlock(
     "override fun $name($params)$retSuffix", r.method.returnType, fnVar, failMsg, invokeCall,
     "$handleTypeName.${r.method.name}",
@@ -4467,12 +4602,11 @@ private fun interfaceHandlePropertyMember(
   val setterBlock: String? = if (!hasSetter) null else {
     val setterFnVar = "${owned.bindingsObjectName}.${name}SetterFn"
     val valueArg: String = argConversion(r.property.type, "value")
-    val hasStringValue: Boolean = r.property.type is RirStringType
-    val invokeSetterCall: String = if (hasStringValue) {
-      "memScoped { fn.invoke($receiverArg, $valueArg) }"
-    } else {
-      "fn.invoke($receiverArg, $valueArg)"
-    }
+    val invokeSetterCall: String = wrapInvoke(
+      "fn.invoke($receiverArg, $valueArg)",
+      r.property.type is RirStringType,
+      r.property.type is RirInterfaceType,
+    )
     """
       |set(value) {
       |  val fn = requireNotNull($setterFnVar) {
@@ -4567,7 +4701,7 @@ private fun interfaceHandleReturnBlock(
       |    $failMsg
       |  }
       |  val ptr: COpaquePointer? = $invokeCall
-      |  return ptr?.let { ${returnType.name}Handle(it) }
+      |  return ptr?.let { nuget${returnType.name}Value(it) }
       |}
     """.trimMargin() else """
       |$signature {
@@ -4575,7 +4709,7 @@ private fun interfaceHandleReturnBlock(
       |    $failMsg
       |  }
       |  val ptr: COpaquePointer? = $invokeCall
-      |  return ${returnType.name}Handle(requireNotNull(ptr) {
+      |  return nuget${returnType.name}Value(requireNotNull(ptr) {
       |    "$nonNullHandleMsg"
       |  })
       |}
@@ -4627,6 +4761,7 @@ private fun interfaceBindingsFileContent(
   registrables: List<RirRegistrable>,
   exportName: String,
   packageId: String,
+  bridgePlan: KotlinBridgePlan? = null,
 ): String {
   val objectName = "${iface.name}Bindings"
   val hasString: Boolean = registrables.any { r ->
@@ -4645,11 +4780,29 @@ private fun interfaceBindingsFileContent(
       add("import kotlinx.cinterop.ByteVar")
     }
     add("import $INTERNAL_PKG.NugetRegistry")
+    add("import $INTERNAL_PKG.NugetObjectHandle")
     add("import kotlinx.cinterop.CFunction")
     add("import kotlinx.cinterop.COpaquePointer")
     add("import kotlinx.cinterop.CPointer")
+    add("import kotlinx.cinterop.asStableRef")
+    add("import kotlinx.cinterop.invoke")
     add("import kotlinx.cinterop.reinterpret")
     add("import kotlin.experimental.ExperimentalNativeApi")
+    // ADR-085: only the minted-bridge half needs these.
+    if (bridgePlan != null) {
+      add("import $INTERNAL_PKG.nugetKotlinString")
+      add("import kotlinx.cinterop.StableRef")
+      add("import kotlinx.cinterop.staticCFunction")
+      if (hasString) add("import kotlinx.cinterop.toKString")
+      val hasEnumSlot: Boolean = bridgePlan.slots.any { r ->
+        when (r) {
+          is RirRegistrable.Method -> r.method.parameters.any { it.type is RirEnumType }
+          is RirRegistrable.PropertySetter -> r.property.type is RirEnumType
+          else -> false
+        }
+      }
+      if (hasEnumSlot) add("import $INTERNAL_PKG.nugetEnumEntry")
+    }
   }
 
   val fnVars: String = registrables.joinToString("\n\n") { r ->
@@ -4719,7 +4872,34 @@ private fun interfaceBindingsFileContent(
   }
   // ADR-070 Work item 7: contractHash's leading parameter generalized to a bare name — an
   // interface's own name works identically for its register export's contract.
-  val hash: Long = contractHash(iface.name, registrables, emptyMap())
+  val memberHash: Long = contractHash(iface.name, registrables, emptyMap())
+
+  // ADR-085: a plannable interface registers TWO extra trailing slots — the C# bridge factory and
+  // the identity-token probe — so slotCount and the contract hash both shift, and a stale shim
+  // that knows nothing of them is rejected at startup rather than mis-assigning pointers.
+  val slotCount: Int = registrables.size + if (bridgePlan == null) 0 else 2
+  val hash: Long = if (bridgePlan == null) memberHash else kotlinBridgeContractHash(memberHash)
+  val bridgeFnVars: String = if (bridgePlan == null) "" else {
+    val factoryParams: String =
+      (bridgePlan.slots.map { "COpaquePointer?" } + "COpaquePointer?").joinToString(", ")
+    "\n\n" + """
+      |internal var createBridgeFn:
+      |  CPointer<CFunction<($factoryParams) -> COpaquePointer?>>? = null
+      |
+      |internal var bridgeTokenFn:
+      |  CPointer<CFunction<(COpaquePointer?) -> COpaquePointer?>>? = null
+    """.trimMargin()
+  }
+  val bridgeParams: String =
+    if (bridgePlan == null) "" else "\n  createBridgePtr: COpaquePointer?," +
+        "\n  bridgeTokenPtr: COpaquePointer?,"
+  val bridgeAssignments: String = if (bridgePlan == null) "" else
+    "\n  $objectName.createBridgeFn = requireNotNull(createBridgePtr).reinterpret()" +
+        "\n  $objectName.bridgeTokenFn = requireNotNull(bridgeTokenPtr).reinterpret()"
+  val bridgeBlock: String =
+    if (bridgePlan == null) "" else
+      "\n\n" + kotlinBridgeBlock(bridgePlan, objectName, packageId, namespaceName)
+  val valueHelper: String = kotlinInterfaceValueHelper(iface, bridgePlan != null)
 
   return """
     |@file:OptIn(kotlinx.cinterop.ExperimentalForeignApi::class)
@@ -4729,7 +4909,7 @@ private fun interfaceBindingsFileContent(
     |${imports.joinToString("\n")}
     |
     |internal object $objectName {
-    |${fnVars.indented("  ")}
+    |${fnVars.indented("  ")}${bridgeFnVars.indented("  ")}
     |}
     |
     |@OptIn(ExperimentalNativeApi::class)
@@ -4737,20 +4917,141 @@ private fun interfaceBindingsFileContent(
     |fun $exportName(
     |  slotCount: Int,
     |  contractHash: Long,
-    |  $params,
+    |  $params,$bridgeParams
     |) {
     |  NugetRegistry.checkContract(
     |    qualifiedType = "$namespaceName.${iface.name}",
     |    packageId = "$packageId",
     |    slotCount = slotCount,
     |    contractHash = contractHash,
-    |    expectedSlots = ${registrables.size},
+    |    expectedSlots = $slotCount,
     |    expectedHash = ${hash}L,
     |  )
-    |  $assignments
-    |  NugetRegistry.record("$namespaceName.${iface.name}", ${registrables.size})
-    |}
+    |  $assignments$bridgeAssignments
+    |  NugetRegistry.record("$namespaceName.${iface.name}", $slotCount)
+    |}$bridgeBlock
+    |
+    |$valueHelper
   """.trimMargin().trim()
+}
+
+// ADR-085 identity: a value arriving at an [iface]-typed RETURN position is normally wrapped as
+// `{Name}Handle`, but when the underlying C# object is a bridge THIS build minted for a Kotlin
+// object, the original Kotlin object must come back (`assertSame`), not a wrapper around a bridge
+// around it. Always emitted so every return site can call it unconditionally; without a plan it
+// is just the wrapper construction it replaces.
+private fun kotlinInterfaceValueHelper(iface: RirInterface, planned: Boolean): String =
+  if (!planned) """
+    |internal fun nuget${iface.name}Value(ptr: COpaquePointer): ${iface.name} =
+    |  ${iface.name}Handle(ptr)
+  """.trimMargin() else """
+    |internal fun nuget${iface.name}Value(ptr: COpaquePointer): ${iface.name} {
+    |  val token: COpaquePointer? = ${iface.name}Bindings.bridgeTokenFn?.invoke(ptr)
+    |  if (token != null) {
+    |    // The bridge owns the ctx StableRef, and C# owns the bridge; this fresh transfer GCHandle
+    |    // is ours to free (ADR-085's transfer-handle ownership, mirroring ADR-084 as shipped).
+    |    NugetObjectHandle(ptr).free()
+    |    return token.asStableRef<Any>().get() as ${iface.name}
+    |  }
+    |  return ${iface.name}Handle(ptr)
+    |}
+  """.trimMargin()
+
+// ADR-085: the Kotlin half of a minted bridge — one top-level `staticCFunction`-able slot
+// function per registered member (slot i here is slot i in the C# bridge's parameter list, both
+// derived from the SAME KotlinBridgePlan) plus the mint entry point nugetMintBridge dispatches to.
+private fun kotlinBridgeBlock(
+  plan: KotlinBridgePlan,
+  objectName: String,
+  packageId: String,
+  namespaceName: String,
+): String {
+  val iface: String = plan.iface.name
+  val prefix: String = iface.replaceFirstChar { it.lowercaseChar() }
+  val slotFns: List<Pair<String, String>> =
+    plan.slots.map { kotlinBridgeSlotFunction(plan, prefix, it) }
+  val failMsg: String = bindingsNotRegisteredMessage(iface, packageId, namespaceName)
+  val mintArgs: String = (slotFns.map { "staticCFunction(::${it.first})" } + "ctx")
+    .joinToString(",\n    ")
+  return """
+    |${slotFns.joinToString("\n\n") { it.second }}
+    |
+    |// ADR-085: mint a C#-side bridge implementing `$iface` over a Kotlin object. The returned
+    |// GCHandle is a TRANSFER handle: C# keeps its own managed reference if it stores the bridge.
+    |internal fun mint${iface}Bridge(impl: $iface): COpaquePointer {
+    |  val fn = requireNotNull($objectName.createBridgeFn) {
+    |    $failMsg
+    |  }
+    |  val ctx: COpaquePointer = StableRef.create(impl).asCPointer()
+    |  return requireNotNull(
+    |    fn.invoke(
+    |    $mintArgs,
+    |    ),
+    |  ) {
+    |    "[nuget] Create${iface}Bridge returned a null bridge handle."
+    |  }
+    |}
+  """.trimMargin()
+}
+
+// One slot: (function name, source). The ctx pointer is always the StableRef of the Kotlin object;
+// every other parameter and the return value ride the ADR-049/051 reverse wire types, read the
+// other way round (Kotlin implements what C# calls, instead of calling what C# implements).
+private fun kotlinBridgeSlotFunction(
+  plan: KotlinBridgePlan,
+  prefix: String,
+  slot: RirRegistrable,
+): Pair<String, String> {
+  val iface: String = plan.iface.name
+  val target = "ctx!!.asStableRef<$iface>().get()"
+  return when (slot) {
+    is RirRegistrable.Method -> {
+      val fnName = "$prefix${slot.method.name}${slot.method.bridgeSuffix()}Slot"
+      val declaredParams: String = (listOf("ctx: COpaquePointer?") +
+          slot.method.parameters.mapIndexed { i, p -> "a$i: ${cfnType(p.type)}" })
+        .joinToString(", ")
+      val args: String = slot.method.parameters
+        .mapIndexed { i, p -> kotlinBridgeInbound(p.type, "a$i") }
+        .joinToString(", ")
+      val call = "$target.${slot.method.name.toMethodCamelCase()}($args)"
+      fnName to "private fun $fnName($declaredParams): ${cfnType(slot.method.returnType)} = " +
+          kotlinBridgeOutbound(slot.method.returnType, call)
+    }
+
+    is RirRegistrable.PropertyGetter -> {
+      val fnName = "$prefix${slot.property.name}GetterSlot"
+      val call = "$target.${slot.property.name.toMethodCamelCase()}"
+      fnName to "private fun $fnName(ctx: COpaquePointer?): ${cfnType(slot.property.type)} = " +
+          kotlinBridgeOutbound(slot.property.type, call)
+    }
+
+    is RirRegistrable.PropertySetter -> {
+      val fnName = "$prefix${slot.property.name}SetterSlot"
+      val value: String = kotlinBridgeInbound(slot.property.type, "a0")
+      fnName to
+          "private fun $fnName(ctx: COpaquePointer?, a0: ${cfnType(slot.property.type)}) {\n" +
+          "  $target.${slot.property.name.toMethodCamelCase()} = $value\n}"
+    }
+
+    is RirRegistrable.Ctor -> error("[nuget] an interface never has a constructor (ADR-070)")
+  }
+}
+
+// C# -> Kotlin across a bridge slot: the wire value as the Kotlin member declares it.
+private fun kotlinBridgeInbound(type: RirTypeRef, name: String): String = when {
+  type is RirStringType && type.nullable -> "$name?.reinterpret<ByteVar>()?.toKString()"
+  type is RirStringType -> "requireNotNull($name).reinterpret<ByteVar>().toKString()"
+  type is RirEnumType -> "nugetEnumEntry(${type.name}.entries, $name, \"${type.name}\")"
+  type is RirPrimitiveType && type.name == "char" -> "$name.toInt().toChar()"
+  else -> name
+}
+
+// Kotlin -> C# across a bridge slot: the Kotlin member's value as the wire expects it.
+private fun kotlinBridgeOutbound(type: RirTypeRef, expr: String): String = when {
+  type is RirStringType -> "nugetKotlinString($expr)"
+  type is RirEnumType -> "$expr.ordinal"
+  type is RirPrimitiveType && type.name == "char" -> "$expr.code.toUShort()"
+  else -> expr
 }
 
 // ROADMAP line 142 ("surface RirDiagnostics to the build") + rule 5's existing

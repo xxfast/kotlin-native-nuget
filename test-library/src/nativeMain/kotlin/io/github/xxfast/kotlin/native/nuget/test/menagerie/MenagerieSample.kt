@@ -1,5 +1,6 @@
 package io.github.xxfast.kotlin.native.nuget.test.menagerie
 
+import io.github.xxfast.kotlin.native.nuget.internal.nugetKotlinReleaseCount
 import test.menagerie.Ferret
 import test.menagerie.IFeedable
 import test.menagerie.ITagged
@@ -93,4 +94,106 @@ fun flagshipTagAndLegs(): String {
   val sanctuary = Sanctuary()
   val flagship: ITagged = sanctuary.flagship()
   return "${flagship.tag}/${flagship.legs}"
+}
+
+// ADR-085: Kotlin-implemented C# interfaces passed back to C#. `Goat` is a plain Kotlin class
+// implementing `IFeedable` — no `NugetHandleOwner`, so today's `nugetHandle()` fallback hits its
+// `error(...)` branch instead of minting a bridge. Two male cats, Oreo (black, white middle) and
+// Mylo (brown and creamy, like the drink) already own the ADR-053/070 fixtures above, so this one
+// gets its own cat-flavoured resident: Nibbles the goat.
+private class Goat : IFeedable {
+  var meals: Int = 0
+    private set
+
+  override fun describe(): String = "Nibbles the goat"
+
+  override val legs: Int get() = 4
+
+  override fun feed(food: String) {
+    meals++
+  }
+
+  override var nickname: String? = null
+}
+
+/**
+ * [Sanctuary.introduce] taking a Kotlin-implemented [IFeedable] (Decision 4's `nugetHandle()`
+ * fallback, the ADR-085 insertion point): a String-returning member ([IFeedable.describe]) PLUS
+ * an Int getter ([IFeedable.legs]), both dispatched back into Kotlin through a minted bridge.
+ */
+fun kotlinGoatIntroduce(): String {
+  val sanctuary = Sanctuary()
+  val goat = Goat()
+  return sanctuary.introduce(goat)
+}
+
+/**
+ * [Sanctuary.feedAnimal] calls [IFeedable.feed] (string PARAMETER, `Unit` return) on a
+ * Kotlin-implemented [IFeedable]. Asserts the dispatch actually reached the Kotlin object by
+ * reading `goat.meals` back on the Kotlin side afterwards — not just that the call didn't throw.
+ */
+fun kotlinGoatFeedCount(food: String): Int {
+  val sanctuary = Sanctuary()
+  val goat = Goat()
+  sanctuary.feedAnimal(goat, food)
+  return goat.meals
+}
+
+/**
+ * [Sanctuary.rename] writes then reads [IFeedable.nickname] (nullable string, getter AND setter
+ * slots) on a Kotlin-implemented [IFeedable] from the C# side of the crossing. Exercises both a
+ * real value and the null branch, so the null-vs-empty-string distinction is observable.
+ */
+fun kotlinGoatRename(nickname: String?): String? {
+  val sanctuary = Sanctuary()
+  val goat = Goat()
+  return sanctuary.rename(goat, nickname)
+}
+
+/**
+ * [Sanctuary.featured] stores a Kotlin-implemented [IFeedable] and hands it back. Per ADR-085,
+ * Kotlin-side identity is promised (unlike C#-side identity, which is not): the value read back
+ * must be the SAME [Goat] instance, not merely an equal one — `===`, not `describe() ==`.
+ */
+fun kotlinGoatFeaturedIsSameInstance(): Boolean {
+  val sanctuary = Sanctuary()
+  val goat = Goat()
+  sanctuary.featured = goat
+  val featured: IFeedable? = sanctuary.featured
+  return featured === goat
+}
+
+// ADR-085 lifetime: the bridge C# holds for a Kotlin object is released by the .NET GC, so the
+// only way to observe a release is to count it. `nugetKotlinReleaseCount()` is the reverse mirror
+// of the forward direction's `NugetBridgeState.ReleasedCount`; the counter moves when a collected
+// bridge's SafeHandle calls the `nuget_kotlin_release` export.
+
+/** How many Kotlin objects the reverse bridge has released so far, process-wide. */
+fun kotlinBridgeReleaseCount(): Int = nugetKotlinReleaseCount()
+
+// A Sanctuary that C# keeps a bridge alive through, held across two calls so the host can force a
+// collection in between. Nulled by [kotlinGoatDropHeld] so the pair does not outlive its test.
+private var heldSanctuary: Sanctuary? = null
+private var heldGoat: Goat? = null
+
+/** Stores a Kotlin-implemented [IFeedable] in C#, which keeps its own reference to the bridge. */
+fun kotlinGoatStoreFeatured() {
+  val sanctuary = Sanctuary()
+  val goat = Goat()
+  sanctuary.featured = goat
+  heldSanctuary = sanctuary
+  heldGoat = goat
+}
+
+/**
+ * Reads the stored value back after the host has forced a collection: resolving it goes through
+ * the LIVE bridge (its identity-token probe, and therefore its ctx StableRef), so a prematurely
+ * released bridge cannot pass this.
+ */
+fun kotlinGoatStoredFeaturedIsSameInstance(): Boolean = heldSanctuary?.featured === heldGoat
+
+/** Drops both held references so the stored bridge becomes collectible again. */
+fun kotlinGoatDropHeld() {
+  heldSanctuary = null
+  heldGoat = null
 }

@@ -373,6 +373,12 @@ enum class RirDiagnosticKind {
   @SerialName("skipped_interface_supertype")
   SKIPPED_INTERFACE_SUPERTYPE,
 
+  // ADR-085: a bound interface a Kotlin class CAN implement but that cannot be handed back to C#
+  // as a minted bridge — a member outside the v1 slot vocabulary, or interface inheritance.
+  // Plugin-derived (kotlinBridgeDiagnostics), never emitted by the metadata reader.
+  @SerialName("skipped_kotlin_bridge")
+  SKIPPED_KOTLIN_BRIDGE,
+
   // ADR-070 Decision 5: a derived interface (`IDerived : IBase`) is bound with only its own
   // declared members because IBase is not itself admissible/bound — IDerived's Kotlin interface
   // omits the `: IBase` supertype and IDerivedHandle cannot dispatch IBase's members.

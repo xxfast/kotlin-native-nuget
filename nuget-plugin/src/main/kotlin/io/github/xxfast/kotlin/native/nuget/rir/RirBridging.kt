@@ -1015,3 +1015,145 @@ fun String.toTypeSnake(): String = buildString {
     append(c.lowercaseChar())
   }
 }
+
+// ADR-085: the ONE planner both generator tasks share for a Kotlin-implemented C# interface
+// passed back to C#. Slot-order drift between the Kotlin `staticCFunction` block and the C#
+// bridge class is the classic silent-ABI bug (the contract hash covers the member list, not the
+// per-slot meaning), so neither task derives its own ordering: both call kotlinBridgePlan.
+data class KotlinBridgePlan(
+  val iface: RirInterface,
+  // Exactly the interface's own registration slots, in registration order — the bridge's
+  // function-pointer parameters are the same list, so slot i on the Kotlin side is slot i on the
+  // C# side by construction.
+  val slots: List<RirRegistrable>,
+)
+
+// ADR-085 v1 slot vocabulary: Unit (return only), primitives incl. bool/char, bound enums,
+// String and String?. Handle/interface/struct/generic-typed slots are deferred (they need the
+// GCHandle round trip in the C#->Kotlin direction, which v1 does not wire).
+private fun isKotlinBridgeSlotType(type: RirTypeRef, isReturn: Boolean): Boolean = when (type) {
+  is RirVoidType -> isReturn
+  is RirPrimitiveType -> true
+  is RirEnumType -> true
+  is RirStringType -> true
+  is RirObjectHandleType, is RirInterfaceType, is RirStructType,
+  is RirGenericInstanceType, is RirTypeParameterType,
+    -> false
+}
+
+// ADR-085: v1 method arity ceiling (mirrors ADR-084's forward vocabulary).
+private const val KOTLIN_BRIDGE_MAX_ARITY: Int = 2
+
+// The reason a member keeps `nugetHandle()`'s error(...) instead of a minted bridge, or null when
+// the member is admissible.
+private fun kotlinBridgeSlotSkipReason(r: RirRegistrable): String? = when (r) {
+  is RirRegistrable.Method -> when {
+    r.method.parameters.size > KOTLIN_BRIDGE_MAX_ARITY ->
+      "arity ${r.method.parameters.size} exceeds the v1 ceiling of $KOTLIN_BRIDGE_MAX_ARITY"
+
+    !isKotlinBridgeSlotType(r.method.returnType, isReturn = true) ->
+      "return type ${r.method.returnType.describe()} is outside the v1 slot vocabulary"
+
+    else -> r.method.parameters
+      .firstOrNull { !isKotlinBridgeSlotType(it.type, isReturn = false) }
+      ?.let { "parameter `${it.name}: ${it.type.describe()}` is outside the v1 slot vocabulary" }
+  }
+
+  is RirRegistrable.PropertyGetter ->
+    if (isKotlinBridgeSlotType(r.property.type, isReturn = false)) null
+    else "property type ${r.property.type.describe()} is outside the v1 slot vocabulary"
+
+  is RirRegistrable.PropertySetter ->
+    if (isKotlinBridgeSlotType(r.property.type, isReturn = false)) null
+    else "property type ${r.property.type.describe()} is outside the v1 slot vocabulary"
+
+  is RirRegistrable.Ctor -> "an interface never has a constructor (ADR-070)"
+}
+
+private fun RirRegistrable.memberName(): String = when (this) {
+  is RirRegistrable.Method -> method.name
+  is RirRegistrable.PropertyGetter -> property.name
+  is RirRegistrable.PropertySetter -> property.name
+  is RirRegistrable.Ctor -> "<ctor>"
+}
+
+// ADR-085: the bridge plan for [iface], or null when at least one member is out of vocabulary (in
+// which case kotlinBridgeDiagnostics names what and why). All-or-nothing per interface: a bridge
+// that implements only some of a C# interface's members does not compile on the C# side.
+fun kotlinBridgePlan(
+  iface: RirInterface,
+  boundHandleTypes: Set<RirTypeKey>,
+  boundInterfaceTypes: Map<RirTypeKey, RirInterface> = emptyMap(),
+): KotlinBridgePlan? {
+  val hasDiagnostics: Boolean =
+    kotlinBridgeDiagnostics(iface, boundHandleTypes, boundInterfaceTypes).isNotEmpty()
+  if (hasDiagnostics) return null
+  val slots: List<RirRegistrable> =
+    bridgeableInterfaceRegistrables(iface, boundHandleTypes, boundInterfaceTypes)
+  if (slots.isEmpty()) return null
+  return KotlinBridgePlan(iface, slots)
+}
+
+// ADR-085: `skipped_kotlin_bridge`, one per reason this interface cannot be implemented in Kotlin
+// and handed back to C#. Never silence: an interface without a plan keeps ADR-070's error(...).
+fun kotlinBridgeDiagnostics(
+  iface: RirInterface,
+  boundHandleTypes: Set<RirTypeKey>,
+  boundInterfaceTypes: Map<RirTypeKey, RirInterface> = emptyMap(),
+): List<RirDiagnostic> {
+  val hint: String = "Implement it in C# instead, or restrict the member to the ADR-085 v1 slot " +
+      "vocabulary (arity 0-2; Unit/primitive/Boolean/enum/String/String? returns and parameters)."
+  // ADR-085 Deferred: a derived interface needs its base's slots flattened into one factory.
+  if (interfaceBaseKeys(iface, boundInterfaceTypes).isNotEmpty()) {
+    return listOf(
+      RirDiagnostic(
+        kind = RirDiagnosticKind.SKIPPED_KOTLIN_BRIDGE,
+        typeName = iface.name,
+        memberName = "",
+        memberSignature = iface.name,
+        reason = "interface inheritance is deferred: a Kotlin implementer needs the base " +
+            "interface's slots flattened into this interface's factory",
+        hint = hint,
+      ),
+    )
+  }
+  // Members the interface declares but the reverse pipeline never registered at all (ADR-070's
+  // own admissibility) can never be dispatched into a Kotlin object either.
+  val registered: List<RirRegistrable> =
+    bridgeableInterfaceRegistrables(iface, boundHandleTypes, boundInterfaceTypes)
+  val registeredNames: Set<String> = registered.map { it.memberName() }.toSet()
+  val unregistered: List<RirDiagnostic> =
+    (iface.methods.map { it.name } + iface.properties.map { it.name })
+      .distinct()
+      .filterNot { it in registeredNames }
+      .map { name ->
+        RirDiagnostic(
+          kind = RirDiagnosticKind.SKIPPED_KOTLIN_BRIDGE,
+          typeName = iface.name,
+          memberName = name,
+          memberSignature = "${iface.name}.$name",
+          reason = "the member is not bridgeable in the C#->Kotlin direction either " +
+              "(ADR-070 admissibility), so no slot can dispatch it",
+          hint = hint,
+        )
+      }
+  val outOfVocabulary: List<RirDiagnostic> = registered.mapNotNull { r ->
+    kotlinBridgeSlotSkipReason(r)?.let { reason ->
+      RirDiagnostic(
+        kind = RirDiagnosticKind.SKIPPED_KOTLIN_BRIDGE,
+        typeName = iface.name,
+        memberName = r.memberName(),
+        memberSignature = "${iface.name}.${r.memberName()}",
+        reason = reason,
+        hint = hint,
+      )
+    }
+  }
+  return unregistered + outOfVocabulary
+}
+
+// ADR-085: an interface that plans a bridge registers TWO extra slots (the bridge factory and the
+// identity-token probe) on top of its member slots, so its contract hash must differ from the
+// same interface without them. Both generators derive it through this one function.
+fun kotlinBridgeContractHash(memberHash: Long): Long =
+  memberHash xor fnv1a64("kotlin_bridge_v1:createBridge+bridgeToken")

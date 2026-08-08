@@ -133,6 +133,26 @@ public class Sanctuary
         set => _featured = value;
     }
 
+    /// <summary>
+    /// ADR-085: C# calling the string PARAMETER member (<see cref="IFeedable.Feed"/>) on an
+    /// interface-typed argument whose runtime type may be a Kotlin-implemented bridge. Exercises
+    /// the void-returning, arity-1 string-input slot from the C# side of the crossing.
+    /// </summary>
+    public void FeedAnimal(IFeedable feedable, string food) => feedable.Feed(food);
+
+    /// <summary>
+    /// ADR-085: C# writing then reading <see cref="IFeedable.Nickname"/> on an interface-typed
+    /// argument, exercising both the setter AND getter slots (not just the getter, as
+    /// <see cref="Introduce"/> does) on a possibly Kotlin-implemented bridge. <paramref
+    /// name="nickname"/> may be null, so the null-vs-empty-string distinction rides the same
+    /// nullable-string slot as <see cref="IFeedable.Nickname"/> itself.
+    /// </summary>
+    public string? Rename(IFeedable feedable, string? nickname)
+    {
+        feedable.Nickname = nickname;
+        return feedable.Nickname;
+    }
+
     /// <summary>Derived-interface RETURN (Decision 5's interface-inheritance case).</summary>
     public ITagged Flagship() => new TaggedFerret();
 }

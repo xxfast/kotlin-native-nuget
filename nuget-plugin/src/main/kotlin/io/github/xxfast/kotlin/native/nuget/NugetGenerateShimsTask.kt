@@ -1,6 +1,7 @@
 package io.github.xxfast.kotlin.native.nuget
 
 import io.github.xxfast.kotlin.native.nuget.rir.AbiArg
+import io.github.xxfast.kotlin.native.nuget.rir.KotlinBridgePlan
 import io.github.xxfast.kotlin.native.nuget.rir.NUGET_RUNTIME_CONTRACT_HASH
 import io.github.xxfast.kotlin.native.nuget.rir.RirClass
 import io.github.xxfast.kotlin.native.nuget.rir.RirConstructor
@@ -39,6 +40,8 @@ import io.github.xxfast.kotlin.native.nuget.rir.bridgeSuffix
 import io.github.xxfast.kotlin.native.nuget.rir.contractHash
 import io.github.xxfast.kotlin.native.nuget.rir.fnv1a64
 import io.github.xxfast.kotlin.native.nuget.rir.isNullable
+import io.github.xxfast.kotlin.native.nuget.rir.kotlinBridgeContractHash
+import io.github.xxfast.kotlin.native.nuget.rir.kotlinBridgePlan
 import io.github.xxfast.kotlin.native.nuget.rir.parseReverseIr
 import io.github.xxfast.kotlin.native.nuget.rir.registrationExportName
 import io.github.xxfast.kotlin.native.nuget.rir.structContractHash
@@ -102,7 +105,7 @@ fun generateCSharpShims(file: RirFile, nativeLibraryName: String): List<Generate
         }
       }
       // ADR-072 Decision 4: one registration export/C# class PER INSTANTIATION, never one per
-  // definition, routed BEFORE the ordinary (non-generic) class path below, mirroring
+      // definition, routed BEFORE the ordinary (non-generic) class path below, mirroring
       // NugetGenerateBindingsTask's routing. A definition with zero discovered instantiations
       // emits nothing (Decision 10).
       namespace.types.filterIsInstance<RirClass>()
@@ -195,6 +198,7 @@ fun generateCSharpShims(file: RirFile, nativeLibraryName: String): List<Generate
               registrables = registrables,
               exportName = exportName,
               nativeLibraryName = nativeLibraryName,
+              bridgePlan = kotlinBridgePlan(iface, boundTypes, boundIfaces),
             ),
           )
         )
@@ -1144,6 +1148,7 @@ private fun interfaceRegistrationFileContent(
   registrables: List<RirRegistrable>,
   exportName: String,
   nativeLibraryName: String,
+  bridgePlan: KotlinBridgePlan? = null,
 ): String {
   val enumNamespaces: List<String> = registrables.flatMap { r ->
     when (r) {
@@ -1163,8 +1168,11 @@ private fun interfaceRegistrationFileContent(
       ) + enumNamespaces
       ).joinToString("\n") { "    using $it;" }
 
-  val slotCount: Int = registrables.size
-  val hash: Long = contractHash(iface.name, registrables, emptyMap())
+  // ADR-085: a plannable interface registers two extra trailing slots (bridge factory + identity
+  // token probe). Both numbers come off the shared planner/hash, never re-derived here.
+  val memberHash: Long = contractHash(iface.name, registrables, emptyMap())
+  val slotCount: Int = registrables.size + if (bridgePlan == null) 0 else 2
+  val hash: Long = if (bridgePlan == null) memberHash else kotlinBridgeContractHash(memberHash)
   val qualifiedType = "$namespaceName.${iface.name}"
   val slotWord: String = if (slotCount == 1) "slot" else "slots"
 
@@ -1178,7 +1186,20 @@ private fun interfaceRegistrationFileContent(
       is RirRegistrable.Ctor -> error("[nuget] an interface never has a constructor (ADR-070)")
     }
   }
-  val dllImportParams = "int slotCount, long contractHash, $registrableParams"
+  val bridgeParams: String =
+    if (bridgePlan == null) "" else ", IntPtr createBridgePtr, IntPtr bridgeTokenPtr"
+  val dllImportParams = "int slotCount, long contractHash, $registrableParams$bridgeParams"
+
+  // ADR-085: the two extra slots, appended in the SAME order the Kotlin register export declares
+  // them (createBridge, bridgeToken).
+  val bridgeInitArgs: List<String> = if (bridgePlan == null) emptyList() else {
+    val factoryParams: String =
+      (bridgePlan.slots.map { "IntPtr" } + "IntPtr" + "IntPtr").joinToString(", ")
+    listOf(
+      "(IntPtr)(delegate* unmanaged[Cdecl]<$factoryParams>)(&Create${iface.name}Bridge)",
+      "(IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, IntPtr>)(&${iface.name}KotlinToken)",
+    )
+  }
 
   val moduleInitArgs: String = (listOf("$slotCount", "${hash}L") + registrables.map { r ->
     when (r) {
@@ -1203,16 +1224,16 @@ private fun interfaceRegistrationFileContent(
 
       is RirRegistrable.Ctor -> error("[nuget] an interface never has a constructor (ADR-070)")
     }
-  }).joinToString(",\n                    ")
+  } + bridgeInitArgs).joinToString(",\n                    ")
 
-  val thunks: String = registrables.joinToString("\n\n") { r ->
+  val thunks: String = (registrables.joinToString("\n\n") { r ->
     when (r) {
       is RirRegistrable.Method -> buildInterfaceThunkMethod(iface, r.method)
       is RirRegistrable.PropertyGetter -> buildInterfacePropertyGetterThunk(iface, r.property)
       is RirRegistrable.PropertySetter -> buildInterfacePropertySetterThunk(iface, r.property)
       is RirRegistrable.Ctor -> error("[nuget] an interface never has a constructor (ADR-070)")
     }
-  }
+  }) + if (bridgePlan == null) "" else "\n\n" + kotlinBridgeCsharp(bridgePlan)
 
   return """
     |// <auto-generated>
@@ -2164,6 +2185,45 @@ private fun nugetRuntimeRegistrationContent(nativeLibraryName: String): String =
   |        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
   |        private static void FreeGcHandle_Thunk(IntPtr handle) => GCHandle.FromIntPtr(handle).Free();
   |    }
+  |
+  |    // ADR-085: the two shared Kotlin exports a minted bridge calls. Neither is registered: both
+  |    // are ordinary exports of the native library, like nuget_runtime_register itself.
+  |    internal static class NugetKotlinNative
+  |    {
+  |        [DllImport("$nativeLibraryName", CallingConvention = CallingConvention.Cdecl,
+  |            EntryPoint = "nuget_kotlin_release")]
+  |        internal static extern void nuget_kotlin_release(IntPtr ctx);
+  |
+  |        [DllImport("$nativeLibraryName", CallingConvention = CallingConvention.Cdecl,
+  |            EntryPoint = "nuget_kotlin_string_free")]
+  |        internal static extern void nuget_kotlin_string_free(IntPtr ptr);
+  |    }
+  |
+  |    // ADR-085 identity: implemented by every generated bridge so Kotlin's interface-return path
+  |    // can recognise its own object coming back and resolve it to the original Kotlin instance.
+  |    internal interface INugetKotlinBridge
+  |    {
+  |        IntPtr NugetToken { get; }
+  |    }
+  |
+  |    // ADR-085 lifetime: the .NET GC owns the bridge; when it collects one, critical finalization
+  |    // disposes the Kotlin StableRef the bridge was dispatching into. Never "prompt", and (as
+  |    // documented for .NET) not run at process exit — same posture as the Kotlin-side Cleaner.
+  |    internal sealed class KotlinRefHandle : SafeHandle
+  |    {
+  |        internal KotlinRefHandle(IntPtr ctx) : base(IntPtr.Zero, ownsHandle: true)
+  |        {
+  |            SetHandle(ctx);
+  |        }
+  |
+  |        public override bool IsInvalid => handle == IntPtr.Zero;
+  |
+  |        protected override bool ReleaseHandle()
+  |        {
+  |            NugetKotlinNative.nuget_kotlin_release(handle);
+  |            return true;
+  |        }
+  |    }
   |}
 """.trimMargin().trim()
 
@@ -2241,4 +2301,205 @@ abstract class NugetGenerateShimsTask : DefaultTask() {
       out.writeText(generated.content)
     }
   }
+}
+
+// ADR-085: the C# half of a Kotlin-implemented interface — a real managed implementation of the
+// bound interface whose every member calls a Kotlin-minted function pointer, plus the factory
+// thunk Kotlin invokes to build one and the identity-token probe Kotlin's return path uses to
+// recover the original Kotlin object. Slot order comes from the SAME KotlinBridgePlan the Kotlin
+// generator projects, so field i here is `staticCFunction` i there.
+private fun kotlinBridgeCsharp(plan: KotlinBridgePlan): String {
+  val iface: String = plan.iface.name
+  val bridge = "${iface}Bridge"
+  val fields: List<Pair<String, String>> = plan.slots.map { slotFieldName(it) to slotFnPtrType(it) }
+  val fieldDecls: String = fields.joinToString("\n") { (name, type) ->
+    "            private readonly $type $name;"
+  }
+  val ctorParams: String = (fields.map { (name, type) -> "$type ${name.removePrefix("_")}" } +
+      "IntPtr ctx").joinToString(", ")
+  val ctorAssignments: String = (fields.map { (name, _) -> "$name = ${name.removePrefix("_")};" } +
+      "_ctx = new KotlinRefHandle(ctx);").joinToString("\n") { "                $it" }
+  val members: String = bridgeMembers(plan).joinToString("\n\n")
+
+  val factoryParams: String = (plan.slots.map { "IntPtr ${slotFieldName(it).removePrefix("_")}" } +
+      "IntPtr ctx").joinToString(", ")
+  val factoryArgs: String = (fields.map { (name, type) ->
+    "($type)${name.removePrefix("_")}"
+  } + "ctx").joinToString(", ")
+
+  return """
+    |        // ADR-085: a Kotlin object implementing $iface, seen by C# as a real $iface.
+    |        private sealed unsafe class $bridge : $iface, INugetKotlinBridge
+    |        {
+    |            private readonly KotlinRefHandle _ctx;
+    |$fieldDecls
+    |
+    |            internal $bridge($ctorParams)
+    |            {
+    |$ctorAssignments
+    |            }
+    |
+    |            // The Kotlin StableRef pointer, the identity token Kotlin's return path
+    |            // probes for.
+    |            public IntPtr NugetToken => _ctx.DangerousGetHandle();
+    |
+    |$members
+    |        }
+    |
+    |        // Transfer handle: Kotlin frees this GCHandle after the call it minted the bridge for.
+    |        // If C# stored the bridge, an ordinary managed reference keeps it alive; if not, the
+    |        // .NET GC collects it and KotlinRefHandle releases the Kotlin StableRef.
+    |        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+    |        private static unsafe IntPtr Create${iface}Bridge($factoryParams) =>
+    |            GCHandle.ToIntPtr(GCHandle.Alloc(new $bridge($factoryArgs)));
+    |
+    |        // ADR-085 identity: IntPtr.Zero for anything that is not a bridge THIS build minted.
+    |        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+    |        private static IntPtr ${iface}KotlinToken(IntPtr handle) =>
+    |            GCHandle.FromIntPtr(handle).Target is INugetKotlinBridge bridge
+    |                ? bridge.NugetToken
+    |                : IntPtr.Zero;
+  """.trimMargin()
+}
+
+private fun slotFieldName(slot: RirRegistrable): String = when (slot) {
+  is RirRegistrable.Method ->
+    "_${slot.method.name.toMethodCamelCase()}${slot.method.bridgeSuffix()}"
+
+  is RirRegistrable.PropertyGetter -> "_${slot.property.name.toMethodCamelCase()}Getter"
+  is RirRegistrable.PropertySetter -> "_${slot.property.name.toMethodCamelCase()}Setter"
+  is RirRegistrable.Ctor -> error("[nuget] an interface never has a constructor (ADR-070)")
+}
+
+private fun slotFnPtrType(slot: RirRegistrable): String {
+  val signature: List<String> = when (slot) {
+    is RirRegistrable.Method -> listOf("IntPtr") +
+        slot.method.parameters.map { csAbiType(it.type) } +
+        csAbiType(slot.method.returnType)
+
+    is RirRegistrable.PropertyGetter -> listOf("IntPtr", csAbiType(slot.property.type))
+    is RirRegistrable.PropertySetter ->
+      listOf("IntPtr", csAbiType(slot.property.type), "void")
+
+    is RirRegistrable.Ctor -> error("[nuget] an interface never has a constructor (ADR-070)")
+  }
+  return "delegate* unmanaged[Cdecl]<${signature.joinToString(", ")}>"
+}
+
+// One C# member per slot, except a settable property, whose getter+setter slots render as ONE
+// property with both accessors (the same grouping the Kotlin side applies, mirrored).
+private fun bridgeMembers(plan: KotlinBridgePlan): List<String> {
+  val setterSlots: Map<String, RirRegistrable.PropertySetter> = plan.slots
+    .filterIsInstance<RirRegistrable.PropertySetter>()
+    .associateBy { it.property.name }
+  return plan.slots.mapNotNull { slot ->
+    when (slot) {
+      is RirRegistrable.Method -> bridgeMethodMember(slot)
+      is RirRegistrable.PropertyGetter ->
+        bridgePropertyMember(slot, setterSlots[slot.property.name])
+
+      is RirRegistrable.PropertySetter -> null
+      is RirRegistrable.Ctor -> error("[nuget] an interface never has a constructor (ADR-070)")
+    }
+  }
+}
+
+private fun bridgeMethodMember(slot: RirRegistrable.Method): String {
+  val method = slot.method
+  val params: String = method.parameters.joinToString(", ") { p ->
+    "${csNativeType(p.type)}${if (p.type.isNullable) "?" else ""} ${p.name}"
+  }
+  val returnType: String =
+    csNativeType(method.returnType) + if (method.returnType.isNullable) "?" else ""
+  val stringParams: List<RirParameter> = method.parameters.filter { it.type is RirStringType }
+  val prologue: List<String> = stringParams.map { p ->
+    "IntPtr ${p.name}Ptr = Marshal.StringToCoTaskMemUTF8(${p.name});"
+  }
+  val args: String = (listOf("_ctx.DangerousGetHandle()") +
+      method.parameters.map { bridgeArgExpression(it.type, it.name) }).joinToString(", ")
+  val call = "${slotFieldName(slot)}($args)"
+  val core: List<String> = bridgeCallLines(method.returnType, call)
+  val body: List<String> = if (stringParams.isEmpty()) prologue + core else
+    prologue + listOf("try", "{") + core.map { "    $it" } + listOf("}", "finally", "{") +
+        stringParams.map { "    Marshal.FreeCoTaskMem(${it.name}Ptr);" } + listOf("}")
+  return """
+    |            public $returnType ${method.name}($params)
+    |            {
+    |${body.joinToString("\n") { "                $it" }}
+    |            }
+  """.trimMargin()
+}
+
+private fun bridgePropertyMember(
+  getter: RirRegistrable.PropertyGetter,
+  setter: RirRegistrable.PropertySetter?,
+): String {
+  val type: String =
+    csNativeType(getter.property.type) + if (getter.property.type.isNullable) "?" else ""
+  val getBody: List<String> =
+    bridgeCallLines(getter.property.type, "${slotFieldName(getter)}(_ctx.DangerousGetHandle())")
+  val getBlock: String = """
+    |                get
+    |                {
+    |${getBody.joinToString("\n") { "                    $it" }}
+    |                }
+  """.trimMargin()
+  val setBlock: String = if (setter == null) "" else {
+    val isString: Boolean = setter.property.type is RirStringType
+    val call =
+      "${slotFieldName(setter)}(_ctx.DangerousGetHandle(), " +
+          "${bridgeArgExpression(setter.property.type, "value")});"
+    val lines: List<String> = if (!isString) listOf(call) else listOf(
+      "IntPtr valuePtr = Marshal.StringToCoTaskMemUTF8(value);",
+      "try", "{", "    $call", "}", "finally", "{", "    Marshal.FreeCoTaskMem(valuePtr);", "}",
+    )
+    "\n" + """
+      |                set
+      |                {
+      |${lines.joinToString("\n") { "                    $it" }}
+      |                }
+    """.trimMargin()
+  }
+  return """
+    |            public $type ${getter.property.name}
+    |            {
+    |$getBlock$setBlock
+    |            }
+  """.trimMargin()
+}
+
+// C# -> Kotlin across a bridge slot. A string was already marshalled into `{name}Ptr` by the
+// caller's prologue (the allocator frees its own buffer once the synchronous call returns).
+private fun bridgeArgExpression(type: RirTypeRef, name: String): String = when {
+  type is RirStringType -> "${name}Ptr"
+  type is RirEnumType -> "(int)$name"
+  type is RirPrimitiveType && type.name == "bool" -> "$name ? (byte)1 : (byte)0"
+  type is RirPrimitiveType && type.name == "char" -> "(ushort)$name"
+  else -> name
+}
+
+// Kotlin -> C#: the call plus the conversion of its wire result, as statements (a string return
+// needs the free of Kotlin's native-heap buffer, so it cannot be a single expression).
+private fun bridgeCallLines(type: RirTypeRef, call: String): List<String> = when {
+  type is RirVoidType -> listOf("$call;")
+  type is RirStringType -> listOf(
+    "IntPtr resultPtr = $call;",
+    "try",
+    "{",
+    if (type.isNullable) {
+      "    return resultPtr == IntPtr.Zero ? null : Marshal.PtrToStringUTF8(resultPtr);"
+    } else {
+      "    return Marshal.PtrToStringUTF8(resultPtr)!;"
+    },
+    "}",
+    "finally",
+    "{",
+    "    if (resultPtr != IntPtr.Zero) NugetKotlinNative.nuget_kotlin_string_free(resultPtr);",
+    "}",
+  )
+
+  type is RirEnumType -> listOf("return (${csNativeType(type)})$call;")
+  type is RirPrimitiveType && type.name == "bool" -> listOf("return $call != 0;")
+  type is RirPrimitiveType && type.name == "char" -> listOf("return (char)$call;")
+  else -> listOf("return $call;")
 }
