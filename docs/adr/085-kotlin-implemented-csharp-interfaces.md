@@ -378,3 +378,47 @@ fixture exists to exercise this).
 with the same `while (true) { ... compareAndSet(current, current + 1) ... }` loop `NugetObjectHandle.free()`
 and `NugetRegistry.record` already use elsewhere in the runtime, not a fetch-and-add primitive that
 does not exist on this type.
+
+## Addendum (2026-08-09): target-keyed dispatch, and a cross-package enum import errata
+
+Two follow-up fixes landed against this ADR's shipped v1, both found and closed in the same batch,
+verified by `scripts/verify.sh` (939 passed / 0 failed).
+
+**Dispatch was first-match, not target-keyed.** This ADR's Decision section shows `nugetMintBridge`
+dispatching on `is IFeedable -> ...` per bound interface, with no mention of which interface the
+crossing position actually needs; the Scope section's Deferred list even named the gap: "a Kotlin
+class implementing multiple bound interfaces (v1: first match ... wins; emit a diagnostic on
+ambiguity)". As shipped, that was worse than a diagnosable ambiguity: `RingLeader : IFeedable,
+IPerformer` (two independent interfaces, neither derives from the other) passed at the
+`IPerformer`-typed `Sanctuary.Applaud` parameter still matched `is IFeedable` first, because
+`IFeedable` is declared first in `Menagerie.cs`, and minted a bridge that does not implement
+`IPerformer` at all.
+
+**Corrected as shipped**: `nugetMintBridge(value: Any, interfaceName: String)` takes the crossing
+position's fully qualified C# interface name as a second parameter, threaded through
+`Any.nugetHandle(interfaceName)` (already carrying that name for its error-message branch) and
+`NugetTransferScope.handleOf`. Dispatch keys on `interfaceName` first, `is` second:
+
+```kotlin
+// build/nuget-interop/kotlin/nativeMain/io/github/xxfast/kotlin/native/nuget/internal/NugetKotlinBridges.kt
+internal fun nugetMintBridge(value: Any, interfaceName: String): COpaquePointer? = when {
+  interfaceName == "Test.Menagerie.IFeedable" && value is test.menagerie.IFeedable -> test.menagerie.mintIFeedableBridge(value)
+  interfaceName == "Test.Menagerie.IPerformer" && value is test.menagerie.IPerformer -> test.menagerie.mintIPerformerBridge(value)
+  else -> null
+}
+```
+
+The once-planned "ambiguity diagnostic" this ADR flagged as future work is moot: there is no longer
+an ambiguous case to diagnose, since no crossing position is `Any`-typed and every `when` branch is
+keyed on the specific interface that position asks for. The Deferred list's "first match wins" line
+is superseded by this addendum.
+
+**Cross-package enum slot import was also missing, and the gap predates this ADR.** `IPerformer`
+(the `RingLeader` follow-up fixture, `TestDependency/Menagerie.cs`) declares `var energy:
+EnergyLevel`, where `EnergyLevel` lives in `Test.Wellness`, a namespace independent of
+`IPerformer`'s own `Test.Menagerie`. The generated Kotlin never imported it, and the miss was not
+confined to the ADR-085 slot body this ADR's Decision section describes: the pure `IPerformer.kt`
+stub and the ADR-070 handle-backed `IPerformerHandle.kt` were unimported too. Fixed with a shared
+`registrableEnumTypes` collector applied at every interface-file emission position, not a
+slot-codegen-only patch. See [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md)
+Phase 13 for the ticked items.

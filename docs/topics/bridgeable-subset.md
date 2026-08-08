@@ -189,11 +189,28 @@ a C#-side bridge instead of erroring:
 // build/nuget-interop/kotlin/nativeMain/io/github/xxfast/kotlin/native/nuget/internal/NugetRuntime.kt
 internal fun Any.nugetHandle(interfaceName: String): NugetObjectHandle =
   (this as? NugetHandleOwner)?.handle
-    ?: nugetMintBridge(this)?.let { NugetObjectHandle(it) }
+    ?: nugetMintBridge(this, interfaceName)?.let { NugetObjectHandle(it) }
     ?: error(
-      "[nuget] ${this::class.simpleName} is a Kotlin implementation of $interfaceName; " +
-          "passing a Kotlin-implemented C# interface back to C# is not supported yet."
+      "[nuget] ${this::class.simpleName} is a Kotlin implementation of " +
+          "${interfaceName.substringAfterLast('.')}; passing a Kotlin-implemented C# " +
+          "interface back to C# is not supported yet."
     )
+```
+
+`interfaceName` is the crossing position's fully qualified C# interface name
+(`Test.Menagerie.IPerformer`), not just the value's runtime type. That matters when a single Kotlin
+class implements more than one bound interface: `nugetMintBridge` keys its dispatch on that name,
+so `RingLeader : IFeedable, IPerformer` mints an `IFeedable` bridge at an `IFeedable`-typed parameter
+and an `IPerformer` bridge at an `IPerformer`-typed one, regardless of which interface `Menagerie.cs`
+declares first:
+
+```kotlin
+// build/nuget-interop/kotlin/nativeMain/io/github/xxfast/kotlin/native/nuget/internal/NugetKotlinBridges.kt
+internal fun nugetMintBridge(value: Any, interfaceName: String): COpaquePointer? = when {
+  interfaceName == "Test.Menagerie.IFeedable" && value is test.menagerie.IFeedable -> test.menagerie.mintIFeedableBridge(value)
+  interfaceName == "Test.Menagerie.IPerformer" && value is test.menagerie.IPerformer -> test.menagerie.mintIPerformerBridge(value)
+  else -> null
+}
 ```
 
 The generated `mintIFeedableBridge` mints a `StableRef` for the Kotlin object and hands one
@@ -266,6 +283,15 @@ pin is released only when the .NET GC actually collects the bridge C# was holdin
 <code>SafeHandle</code> release back into Kotlin; a dropped object can therefore linger for a while
 after C# lets go of its own reference, until both garbage collectors get around to it. This is
 expected, GC-timed behaviour, not a leak.</p>
+</warning>
+
+<warning>
+<p>A Kotlin-implemented member must not throw. Every generated slot body catches the exception,
+prints one line naming the C# member (<code>IFeedable.Describe</code>), and rethrows, so the
+process still terminates, now with attribution instead of an anonymous, mangled stack
+(<a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/087-kotlin-slot-exceptions.md">ADR-087</a>
+stage 1). The exception does not yet reach the C# caller as a catchable <code>KotlinException</code>;
+that propagation is stage 2 and is unshipped.</p>
 </warning>
 
 v1 slot vocabulary: `val`/`var` property getter-and-setter slots, and methods of arity 0-2

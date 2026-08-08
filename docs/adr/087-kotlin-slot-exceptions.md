@@ -2,7 +2,11 @@
 
 ## Status
 
-Proposed
+Proposed. **Stage 1 (the named per-slot fast-fail wrapper) is implemented and verified**:
+`scripts/verify.sh` passes 939/0 with every generated slot body (`IFeedableBindings.kt`,
+`IPerformerBindings.kt`) wrapped exactly as the Decision section's Stage 1 shows, message text and
+all. Stage 2 (the catchable error-envelope propagation) is unshipped; this ADR stays `Proposed`
+until that lands too.
 
 ## Context
 
@@ -122,7 +126,11 @@ never drift.
 
 ### Stage 1: named per-slot fast-fail (ships alone)
 
-Every generated slot body (method, getter, setter) becomes:
+**Shipped as designed.** Every generated slot body (method, getter, setter) in the real
+`IFeedableBindings.kt`/`IPerformerBindings.kt` output carries exactly this wrapper, message text
+included; the snippet below is simplified only in the slot's own function name
+(`iFeedableDescribeSlot` here vs. the real signature-hashed
+`iFeedableDescribe__fa0681f6f7a68dd9b326d010404efcfbSlot`):
 
 ```kotlin
 private fun iFeedableDescribeSlot(ctx: COpaquePointer?): CPointer<ByteVar> =
