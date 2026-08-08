@@ -113,6 +113,24 @@ public void String_GetWordCount_ReturnsTwoForTwoWords()
 }
 ```
 
+## Limitations
+
+An extension property only binds when its *receiver* is `String`, a primitive, a class in the
+export set (an `ObjectHandle`), or a value class underlying `Primitive` or `String`. A receiver
+outside that set (a generic class, an interface, an unexported type) is warned about and the whole
+property is dropped, naming the receiver rather than the property's own type:
+
+```
+[nuget:SKIPPED_UNSUPPORTED_PROPERTY] Skipping tier1.skipreceiver.Box.label: its extension receiver
+    type generic declaration tier1.skipreceiver.Box is not a supported extension-property receiver.
+    declare the property on a class, String, primitive, or a primitive/String-underlying value class
+    receiver, or expose a top-level getter function instead
+    at <file>:<line>
+```
+
+See [Publishing Kotlin to C#: Diagnostics](forward-overview.md#diagnostics) for the full diagnostic
+model.
+
 ## Return marshalling
 
 An extension function's return goes through the same marshalling cascade a class-method return
@@ -208,5 +226,6 @@ public void Toy_Tags_ReturnsMarshalledStringElements()
     <category ref="external">
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/013-extension-property-mapping.md">ADR-013: Extension property mapping</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/061-method-return-marshalling.md">ADR-061: Method return marshalling</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/064-forward-unsupported-declaration-diagnostics.md">ADR-064: Forward unsupported-declaration diagnostics</a>
     </category>
 </seealso>

@@ -119,6 +119,9 @@ internal data class ForwardCallablePlanCatalog(
   // minus the ones a legacy route still re-emits. Separate from droppedPropertySetters above,
   // which is a partial skip (the getter survives).
   val droppedProperties: List<ForwardDroppedProperty> = emptyList(),
+  // The receiver-side counterpart of droppedProperties: an extension property dropped for its
+  // receiver type rather than its own type. Same diagnostic kind, different wording.
+  val droppedExtensionReceivers: List<ForwardDroppedExtensionReceiver> = emptyList(),
 ) {
   val plans: List<ForwardCallablePlan> = entries.mapNotNull { entry ->
     (entry as? ForwardCallableCatalogEntry.Planned)?.plan
@@ -173,6 +176,7 @@ internal class ForwardCallablePlanner(
     )
     return ForwardCallablePlanCatalog(
       entries, propertyPlans, planner.droppedPropertySetters, planner.droppedProperties,
+      planner.droppedExtensionReceivers,
     )
   }
 

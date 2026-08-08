@@ -34,12 +34,25 @@ internal data class ForwardDroppedProperty(
   val typeDescription: String,
 )
 
+/**
+ * An extension property whose *receiver* type has no supported wire shape, so the whole property is
+ * absent from the generated C#. Separate from [ForwardDroppedProperty] because the property's own
+ * type is usually fine here: reusing that record would name the property's type in a message about
+ * its receiver, which is worse than no message.
+ */
+internal data class ForwardDroppedExtensionReceiver(
+  val symbol: String,
+  val node: KSNode?,
+  val receiverDescription: String,
+)
+
 /** Builds the property slice while leaving unsupported/specialized properties on their named legacy paths. */
 internal class ForwardPropertyPlanner(
   private val classifier: ForwardBridgeTypeClassifier,
 ) {
   private val droppedSetters: MutableList<ForwardDroppedPropertySetter> = mutableListOf()
   private val dropped: MutableList<ForwardDroppedProperty> = mutableListOf()
+  private val droppedReceivers: MutableList<ForwardDroppedExtensionReceiver> = mutableListOf()
 
   /** ADR-075: every collection property setter this planner declined to build because a
    *  component failed [isWrappableComponent] — the property itself is still planned, get-only. */
@@ -48,6 +61,9 @@ internal class ForwardPropertyPlanner(
   /** Every property this planner declined to plan at all, minus the ones a legacy route still
    *  re-emits (see [recordDropped]). */
   val droppedProperties: List<ForwardDroppedProperty> get() = dropped
+
+  /** Every extension property this planner declined to plan because of its receiver type. */
+  val droppedExtensionReceivers: List<ForwardDroppedExtensionReceiver> get() = droppedReceivers
 
   fun catalog(
     classes: List<KSClassDeclaration>,
@@ -157,9 +173,21 @@ internal class ForwardPropertyPlanner(
           receiverType is BridgeType.Primitive ||
           receiverType == BridgeType.String ||
           isSupportedValueClass
-    if (!supportedReceiver) return null
     val receiverName: String = receiver.declaration.simpleName.asString()
     val name: String = prop.simpleName.asString()
+    // ADR-064's position coverage: the receiver is the last position that used to vanish silently.
+    // Nothing legacy-routes an extension property by receiver, so unlike `recordDropped` there is
+    // no re-emission to exclude here.
+    if (!supportedReceiver) {
+      droppedReceivers.add(
+        ForwardDroppedExtensionReceiver(
+          symbol = "${prop.packageName.asString()}.$receiverName.$name",
+          node = prop,
+          receiverDescription = receiverType.diagnosticTypeName(),
+        ),
+      )
+      return null
+    }
     return propertyPlan(
       symbol = "${prop.packageName.asString()}.$receiverName.$name",
       position = ForwardPropertyPosition.EXTENSION,

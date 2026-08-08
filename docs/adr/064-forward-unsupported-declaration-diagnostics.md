@@ -213,6 +213,7 @@ a **skip + named diagnostic**; the one collision row is **fatal**.
 | **Nullable `Boolean` method return** (ROADMAP line 79, ADR-061 deferred width) | **No** (v1) | **skip + `SKIPPED_UNSUPPORTED_RETURN`** | planner `NULLABLE` |
 | **`Char` at positions ADR-062 did not close**, and other `Unsupported` types (`Sequence`, local/anonymous, non-exported handle, bare type parameter) | **No** | **skip + `SKIPPED_UNSUPPORTED_TYPE`** | classifier `Unsupported` |
 | **A property whose type `ForwardPropertyPlanner.isPlannable` rejects** (added later, no ADR: this completes the position naming below) | **No** | **skip + `SKIPPED_UNSUPPORTED_PROPERTY`** | `ForwardPropertyPlanner.recordDropped`, excluding lambda/suspend-lambda/`Flow`/`StateFlow`, which still bind via a legacy route |
+| **An extension property whose *receiver* type is unsupported** (added later, no ADR: closes this ADR's position coverage) | **No** | **skip + `SKIPPED_UNSUPPORTED_PROPERTY`** | `ForwardPropertyPlanner.extensionProperty`, naming the receiver's classified type; no legacy route re-emits by receiver, so no exclusion is needed |
 | **Variance (`out`/`in`) on a class type parameter** | Partially, dropped, member still binds | **`INFO_DROPPED_VARIANCE`** (note, not skip) | `CirClassTranslator.kt:561` |
 | **Two constructors that collapse to one C# signature** (cell 21, ADR-034) | **No, and ambiguous** | **`ERROR_CSHARP_SIGNATURE_COLLISION`, fatal** | `CirClassTranslator.kt:92` / `CirFunctionTranslator.kt:89` |
 
@@ -254,6 +255,15 @@ records every property it declines to plan and routes it through the same `Forwa
 except a lambda/suspend-lambda/`Flow`/`StateFlow`-typed property (nullable or not), which is
 unplannable by design and still bound by `CirClassTranslator`'s legacy adapters, so naming it would
 be a false positive.
+
+**Later addition, same sink:** the position table above still had one gap after
+`SKIPPED_UNSUPPORTED_PROPERTY` landed: an extension property whose *receiver* type is unsupported
+(`ForwardPropertyPlanner.extensionProperty`'s bare `return null`) is a distinct drop site from the
+type-based one, since the property's own declared type is usually fine and naming it would send the
+reader after the wrong declaration. A new `ForwardDroppedExtensionReceiver` record and
+`warnDroppedForwardExtensionReceivers` function feed the same `SKIPPED_UNSUPPORTED_PROPERTY` kind,
+this time naming the receiver's classified type instead of the property's own. This closes the
+position coverage this ADR set out to have; no new diagnostic kind was needed.
 
 Severity is encoded both by the `SKIPPED_/INFO_/ERROR_` name prefix (so it reads like reverse in a
 log) and by an explicit field (so the sink does not string-match its own enum). The message format

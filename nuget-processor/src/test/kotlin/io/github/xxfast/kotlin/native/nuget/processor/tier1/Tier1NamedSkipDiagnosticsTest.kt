@@ -359,4 +359,77 @@ class Tier1NamedSkipDiagnosticsTest {
           "skipped would be a false positive; kspWarnings=${result.kspWarnings}",
     )
   }
+
+  /**
+   * The *receiver* half of the same gap. The sibling cell above covers an unplannable property
+   * **type**; an extension property whose receiver type the planner cannot wire vanished just as
+   * silently, from a completely separate bail (`ForwardPropertyPlanner.extensionProperty`), and
+   * needed its own record because the property's own type (`String` here) is perfectly supported,
+   * so the type-based wording would name the wrong thing.
+   */
+  @Test
+  fun `extension property with an unsupported receiver fires SKIPPED_UNSUPPORTED_PROPERTY and is omitted`() {
+    val result = Tier1Harness.run(
+      """
+      package tier1.skipreceiver
+
+      class Box<T>(val value: T)
+
+      class Patient(val name: String)
+
+      val Box<Int>.label: String get() = "x"
+      """.trimIndent()
+    )
+
+    assertTrue(
+      result.compiledClean,
+      "expected no broken source for Box<Int>.label; got: ${result.compileErrors}",
+    )
+    assertFalse(
+      result.generated.contains("box_get_label"),
+      "expected the unsupported-receiver extension property to be entirely absent from the " +
+          "generated exports; generated=${result.generated}",
+    )
+    assertTrue(
+      result.kspWarnings.any {
+        it.contains(ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_PROPERTY.name) &&
+            it.contains("Box.label")
+      },
+      "expected a SKIPPED_UNSUPPORTED_PROPERTY diagnostic naming the Box receiver; " +
+          "kspWarnings=${result.kspWarnings}",
+    )
+  }
+
+  /**
+   * The negative half: a supported receiver still binds and stays silent. There is no exclusion
+   * cell for this diagnostic beyond this one, because nothing legacy-routes an extension property
+   * by *receiver*: the `LEGACY_ROUTED_PROTOCOLS` escape hatch keys off the property's own type, so
+   * an unsupported receiver is always a genuine drop.
+   */
+  @Test
+  fun `extension property with a supported receiver binds and fires no SKIPPED_UNSUPPORTED_PROPERTY`() {
+    val result = Tier1Harness.run(
+      """
+      package tier1.bindreceiver
+
+      val String.wordCount: Int get() = trim().split(" ").size
+      """.trimIndent()
+    )
+
+    assertTrue(
+      result.compiledClean,
+      "expected no broken source for String.wordCount; got: ${result.compileErrors}",
+    )
+    assertTrue(
+      result.generated.contains("string_get_wordCount"),
+      "expected the String-receiver extension property to still bind; " +
+          "generated=${result.generated}",
+    )
+    assertFalse(
+      result.kspWarnings.any {
+        it.contains(ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_PROPERTY.name)
+      },
+      "a supported receiver is not a skip; kspWarnings=${result.kspWarnings}",
+    )
+  }
 }

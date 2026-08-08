@@ -160,6 +160,28 @@ internal fun warnDroppedForwardProperties(
   ForwardDiagnosticSink.emit(diagnostics, logger)
 }
 
+// Second producer for the same kind (the established `SKIPPED_UNSUPPORTED_INPUT` pattern, fed by
+// both setter drops and input skips): an extension property dropped for its *receiver* type rather
+// than its own. The wording says receiver explicitly, because the property's declared type is
+// typically supported and naming it would send the author after the wrong declaration.
+internal fun warnDroppedForwardExtensionReceivers(
+  catalog: ForwardCallablePlanCatalog,
+  logger: KSPLogger,
+) {
+  val diagnostics: List<ForwardDiagnostic> = catalog.droppedExtensionReceivers.map { dropped ->
+    ForwardDiagnostic(
+      kind = ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_PROPERTY,
+      symbol = dropped.node,
+      declaration = dropped.symbol,
+      reason = "its extension receiver type ${dropped.receiverDescription} is not a supported " +
+          "extension-property receiver",
+      hint = "declare the property on a class, String, primitive, or a primitive/String-underlying " +
+          "value class receiver, or expose a top-level getter function instead",
+    )
+  }
+  ForwardDiagnosticSink.emit(diagnostics, logger)
+}
+
 private fun KSAnnotated.hasCNameAnnotation(): Boolean =
   annotations.any { annotation ->
     val name: String? = annotation.annotationType.resolve().declaration.qualifiedName?.asString()
@@ -483,11 +505,17 @@ class NugetProcessor(
       // Same two-instance merge as the setter drops above, for the whole-property channel.
       droppedProperties = ordinaryCatalog.droppedProperties +
           forwardPropertyPlanner.droppedProperties,
+      // The interface-dispatch instance has no extension properties of its own, so this merge is
+      // only ever the ordinary planner's list today; it is written as a merge anyway so a future
+      // second producer does not silently lose its drops.
+      droppedExtensionReceivers = ordinaryCatalog.droppedExtensionReceivers +
+          forwardPropertyPlanner.droppedExtensionReceivers,
     )
 
     warnDroppedForwardCallables(callableCatalog, logger)
     warnDroppedForwardPropertySetters(callableCatalog, logger)
     warnDroppedForwardProperties(callableCatalog, logger)
+    warnDroppedForwardExtensionReceivers(callableCatalog, logger)
 
     val cNameExports: FileSpec = generateCNameWrappers(
       functions, genericFunctions, extensionFunctions, extensionProperties,
