@@ -150,7 +150,13 @@ private fun slotLambda(slot: ForwardBridgeSlot): String {
     when (parameter.type.wire) {
       // FromHandle disposes the StableRef the Kotlin side minted; that side deliberately does not.
       ForwardBridgeWire.OBJECT ->
-        body.append("${parameter.type.csharp} value$index = NugetMarshal.FromHandle<${parameter.type.csharp.removeSuffix("?")}>(arg$index); ")
+        body.append(
+          "${parameter.type.csharp} value$index = NugetMarshal.FromHandle<${
+            parameter.type.csharp.removeSuffix(
+              "?"
+            )
+          }>(arg$index); "
+        )
 
       ForwardBridgeWire.BOOLEAN -> body.append("bool value$index = arg$index != 0; ")
       ForwardBridgeWire.ENUM -> body.append("${parameter.type.csharp} value$index = (${parameter.type.csharp})arg$index; ")

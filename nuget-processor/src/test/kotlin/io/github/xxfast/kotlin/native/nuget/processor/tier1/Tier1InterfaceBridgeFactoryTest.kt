@@ -81,7 +81,7 @@ class Tier1InterfaceBridgeFactoryTest {
     assertContains(
       cs,
       "return (NugetMarshal.TryResolveCSharp(nativeResult, out IPet csharpOriginal) " +
-        "? csharpOriginal : new Pet(nativeResult));",
+          "? csharpOriginal : new Pet(nativeResult));",
     )
   }
 
@@ -126,7 +126,10 @@ class Tier1InterfaceBridgeFactoryTest {
 
     assertContains(cs, "internal sealed class PetBridgeState : NugetBridgeState")
     assertContains(cs, "EntryPoint = \"pet_bridge_create\"")
-    assertContains(cs, "NugetBridgeObjectCallback speak = _ => { string result = impl.Speak(); return NugetMarshal.WrapString(result); };")
+    assertContains(
+      cs,
+      "NugetBridgeObjectCallback speak = _ => { string result = impl.Speak(); return NugetMarshal.WrapString(result); };"
+    )
     assertContains(cs, "NugetBridgeIntCallback legsGet = _ => { return impl.Legs; };")
     assertContains(cs, "return result is null ? IntPtr.Zero : NugetMarshal.WrapString(result);")
     assertContains(cs, "NugetBridgeObjectObjectCallback fetch = (arg0, _) => {")

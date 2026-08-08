@@ -45,7 +45,7 @@ class ForwardInterfaceCirProjectionTest {
     assertTrue(
       method.body.contains(
         "return (NugetMarshal.TryResolveCSharp(nativeResult, out IPet csharpOriginal) " +
-          "? csharpOriginal : new Pet(nativeResult));",
+            "? csharpOriginal : new Pet(nativeResult));",
       ),
     )
   }
@@ -65,8 +65,8 @@ class ForwardInterfaceCirProjectionTest {
     assertTrue(
       method.body.contains(
         "return nativeResult == IntPtr.Zero ? null : " +
-          "(NugetMarshal.TryResolveCSharp(nativeResult, out IPet csharpOriginal) " +
-          "? csharpOriginal : new Pet(nativeResult));",
+            "(NugetMarshal.TryResolveCSharp(nativeResult, out IPet csharpOriginal) " +
+            "? csharpOriginal : new Pet(nativeResult));",
       ),
     )
   }

@@ -23,6 +23,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.cir.expandAliases
  */
 internal enum class ForwardBridgeWire {
   UNIT,
+
   /** A `StableRef` handle (String today; object slots are deferred by the ADR). */
   OBJECT,
   BOOLEAN,

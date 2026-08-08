@@ -185,6 +185,7 @@ internal object ForwardCirPropertyProjection {
           append("            $cleanup")
         }
       }
+
       is ForwardPropertySetter.NullableDispatch -> buildString {
         appendLine(); appendLine("            if (value.HasValue)"); appendLine("            {")
         append(

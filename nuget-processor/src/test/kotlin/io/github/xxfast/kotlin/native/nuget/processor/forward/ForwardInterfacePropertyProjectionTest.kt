@@ -20,7 +20,8 @@ class ForwardInterfacePropertyProjectionTest {
     "handle", BridgeType.ObjectHandle("sample.Cat"), ForwardFlow.INTO_KOTLIN, ForwardPassing.VALUE,
     ForwardOwnership.BORROWED, ForwardConversion.HANDLE_TO_STABLE_REF,
   )
-  private val handleParameter = ForwardAbiParameter("handle", ForwardAbiWireType.POINTER, ForwardAbiDirection.IN, handleTransfer)
+  private val handleParameter =
+    ForwardAbiParameter("handle", ForwardAbiWireType.POINTER, ForwardAbiDirection.IN, handleTransfer)
   private val errorParameter = ForwardAbiParameter(
     "errorOut", ForwardAbiWireType.POINTER, ForwardAbiDirection.OUT,
     ForwardTransfer(
@@ -31,7 +32,14 @@ class ForwardInterfacePropertyProjectionTest {
 
   private fun valueParameter(type: BridgeType): ForwardAbiParameter = ForwardAbiParameter(
     "value", ForwardAbiWireType.POINTER, ForwardAbiDirection.IN,
-    ForwardTransfer("value", type, ForwardFlow.INTO_KOTLIN, ForwardPassing.VALUE, ForwardOwnership.BORROWED, ForwardConversion.HANDLE_TO_STABLE_REF),
+    ForwardTransfer(
+      "value",
+      type,
+      ForwardFlow.INTO_KOTLIN,
+      ForwardPassing.VALUE,
+      ForwardOwnership.BORROWED,
+      ForwardConversion.HANDLE_TO_STABLE_REF
+    ),
   )
 
   @Test
@@ -55,7 +63,7 @@ class ForwardInterfacePropertyProjectionTest {
     assertTrue(
       property.getter.contains(
         "return (NugetMarshal.TryResolveCSharp(nativeResult, out IPet csharpOriginal) " +
-          "? csharpOriginal : new Pet(nativeResult));",
+            "? csharpOriginal : new Pet(nativeResult));",
       ),
     )
   }
@@ -88,8 +96,8 @@ class ForwardInterfacePropertyProjectionTest {
     assertTrue(
       property.getter.contains(
         "return nativeResult == IntPtr.Zero ? null : " +
-          "(NugetMarshal.TryResolveCSharp(nativeResult, out IPet csharpOriginal) " +
-          "? csharpOriginal : new Pet(nativeResult));",
+            "(NugetMarshal.TryResolveCSharp(nativeResult, out IPet csharpOriginal) " +
+            "? csharpOriginal : new Pet(nativeResult));",
       ),
       "expected the nullable getter to null-guard then construct the backing class; got: ${property.getter}",
     )
@@ -98,7 +106,7 @@ class ForwardInterfacePropertyProjectionTest {
       // ADR-084 stage 3: the nullable lowering is HandleOfOrZero (null ships IntPtr.Zero and mints
       // nothing), extracted before the call so a minted transfer handle can be disposed after it.
       setter.contains("IntPtr valueHandle = NugetMarshal.HandleOfOrZero(value, out bool valueOwned);") &&
-        setter.contains("if (valueOwned) { NugetMarshal.Dispose(valueHandle); }"),
+          setter.contains("if (valueOwned) { NugetMarshal.Dispose(valueHandle); }"),
       "expected the nullable setter to lower through the shared HandleOf reflective helper with " +
           "a null guard, not a direct ._handle read; got: $setter",
     )
@@ -130,8 +138,8 @@ class ForwardInterfacePropertyProjectionTest {
     val setter: String = requireNotNull(property.setter) { "expected a setter body" }
     assertTrue(
       setter.contains("IntPtr valueHandle = NugetMarshal.HandleOf(value, out bool valueOwned);") &&
-        setter.contains("if (valueOwned) { NugetMarshal.Dispose(valueHandle); }") &&
-        !setter.contains("value != null"),
+          setter.contains("if (valueOwned) { NugetMarshal.Dispose(valueHandle); }") &&
+          !setter.contains("value != null"),
       "expected a plain HandleOf lowering with no null guard for a non-nullable interface " +
           "property; got: $setter",
     )

@@ -150,8 +150,10 @@ internal object ForwardCirPlanProjection {
     if (!needsCustomParams) {
       return CirConstructor(parameters = publicParams, body = "", hasErrorCheck = true, nativeSuffix = nativeSuffix)
     }
-    val prelude: List<String> = plan.publicSignature.parameters.mapNotNull { plan.collectionPrelude(it) ?: plan.interfacePrelude(it) }
-    val cleanup: List<String> = plan.publicSignature.parameters.mapNotNull { plan.collectionCleanup(it) ?: plan.interfaceCleanup(it) }
+    val prelude: List<String> =
+      plan.publicSignature.parameters.mapNotNull { plan.collectionPrelude(it) ?: plan.interfacePrelude(it) }
+    val cleanup: List<String> =
+      plan.publicSignature.parameters.mapNotNull { plan.collectionCleanup(it) ?: plan.interfaceCleanup(it) }
     val argumentList: List<String> = plan.publicSignature.parameters.flatMap { plan.callArgument(it) }
     val callArgs: String = (argumentList + "out IntPtr error").joinToString(", ")
     val body: String = buildString {
@@ -716,8 +718,10 @@ internal object ForwardCirPlanProjection {
     forceCustomBody: Boolean = false,
   ): CirResultProjection {
     val nativeCall: ForwardNativeCall = singleNativeImport()
-    val prelude: List<String> = parameters.mapNotNull { parameter -> collectionPrelude(parameter) ?: interfacePrelude(parameter) }
-    val cleanup: List<String> = parameters.mapNotNull { parameter -> collectionCleanup(parameter) ?: interfaceCleanup(parameter) }
+    val prelude: List<String> =
+      parameters.mapNotNull { parameter -> collectionPrelude(parameter) ?: interfacePrelude(parameter) }
+    val cleanup: List<String> =
+      parameters.mapNotNull { parameter -> collectionCleanup(parameter) ?: interfaceCleanup(parameter) }
     val argumentList: List<String> =
       listOfNotNull(receiverArgument) + parameters.flatMap { parameter -> callArgument(parameter) }
     val callArguments: String = (argumentList + nativeOutParameters(nativeCall) + "out IntPtr error").joinToString(", ")
@@ -738,7 +742,11 @@ internal object ForwardCirPlanProjection {
         returnType = result.csharpType(),
         nativeReturnType = "IntPtr",
         body = checkedPointerBody(
-          nativeName, callArguments, "return ${interfaceReturnExpression(result.csharpType(), result.backingType)};", prelude, cleanup,
+          nativeName,
+          callArguments,
+          "return ${interfaceReturnExpression(result.csharpType(), result.backingType)};",
+          prelude,
+          cleanup,
         ),
       )
 
@@ -797,7 +805,12 @@ internal object ForwardCirPlanProjection {
           body = checkedPointerBody(
             nativeName,
             callArguments,
-            "return nativeResult == IntPtr.Zero ? null : ${interfaceReturnExpression(type.csharpType(), type.backingType)};",
+            "return nativeResult == IntPtr.Zero ? null : ${
+              interfaceReturnExpression(
+                type.csharpType(),
+                type.backingType
+              )
+            };",
             prelude,
             cleanup,
           ),
