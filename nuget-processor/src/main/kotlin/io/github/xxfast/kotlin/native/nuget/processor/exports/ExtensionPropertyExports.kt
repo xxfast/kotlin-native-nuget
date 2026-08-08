@@ -9,7 +9,9 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardPropertyPla
 import io.github.xxfast.kotlin.native.nuget.processor.forward.addForwardPropertyPlanExports
 
 /**
- * Extension properties via [ForwardPropertyPlan]. Unplanned properties are skipped.
+ * Extension properties via [ForwardPropertyPlan]. Unplanned properties are skipped, import
+ * included: adding it ahead of the plan gate left a dead `import` line in `CNameExports.kt` for
+ * every dropped extension property (unsupported receiver, unsupported type, or legacy-routed).
  */
 internal fun FileSpec.Builder.addExtensionPropertyExports(
   prop: KSPropertyDeclaration,
@@ -21,5 +23,7 @@ internal fun FileSpec.Builder.addExtensionPropertyExports(
   val planned: ForwardPropertyPlan? = callableCatalog.propertyFor(
     "${prop.packageName.asString()}.$receiverSimpleName.$propName",
   )
-  if (planned != null) addForwardPropertyPlanExports(planned)
+  if (planned == null) return
+  addImport(prop.packageName.asString(), propName)
+  addForwardPropertyPlanExports(planned)
 }

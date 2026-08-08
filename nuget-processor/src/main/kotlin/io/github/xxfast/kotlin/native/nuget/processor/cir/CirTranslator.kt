@@ -332,7 +332,10 @@ internal fun translate(
       emptyList() // ordinary unplanned extensions: no fallthrough
     }
 
-    namespaces.addDeclaration(namespace, CirStaticClass(className, members))
+    // A group whose members are all unplanned would otherwise emit an empty
+    // `{Receiver}Extensions` class. Extension *properties* below merge into the same class, so a
+    // receiver that only keeps a property still gets one.
+    if (members.isNotEmpty()) namespaces.addDeclaration(namespace, CirStaticClass(className, members))
   }
 
   val extensionPropsByReceiver: Map<String, List<KSPropertyDeclaration>> =
@@ -368,7 +371,10 @@ internal fun translate(
       }
     }
 
-    namespaces.mergeStaticClass(namespace, className, members)
+    // Same rule as the extension-function groups above: no surviving member, no class. Merging an
+    // empty member list into an existing class is a no-op, but creating one from nothing is the
+    // empty-class bug.
+    if (members.isNotEmpty()) namespaces.mergeStaticClass(namespace, className, members)
   }
 
   if (tracker.suspendLambdaArities.isNotEmpty()) tracker.needsAsync = true

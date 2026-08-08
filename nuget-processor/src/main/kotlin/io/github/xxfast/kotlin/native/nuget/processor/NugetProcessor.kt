@@ -816,10 +816,9 @@ class NugetProcessor(
       builder.addExtensionFunctionExports(func, callableCatalog)
     }
 
-    extensionProperties.forEach { prop ->
-      builder.addImport(prop.packageName.asString(), prop.simpleName.asString())
-      builder.addExtensionPropertyExports(prop, callableCatalog)
-    }
+    // The import lives inside addExtensionPropertyExports, behind the plan gate: adding it here
+    // left a dead import for every dropped extension property.
+    extensionProperties.forEach { prop -> builder.addExtensionPropertyExports(prop, callableCatalog) }
 
     val listTypes: Set<String> = setOf("kotlin.collections.List", "kotlin.collections.MutableList")
 
