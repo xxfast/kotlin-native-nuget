@@ -1,6 +1,7 @@
 package io.github.xxfast.kotlin.native.nuget.processor
 
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirAsyncHelper
+import io.github.xxfast.kotlin.native.nuget.processor.cir.CirBridgeHelper
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirCallbackDelegateHelper
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirCallbackMethod
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirClass
@@ -49,6 +50,11 @@ internal enum class ForwardAbiLegacyRoute {
   LAMBDA_PARAMETER_METHOD,
   STORED_CALLBACK_METHOD,
   INTERFACE_BRIDGE_METHOD,
+
+  // ADR-084: the per-interface bridge factory (`pet_bridge_create`) that makes a C#-implemented
+  // Kotlin interface passable to Kotlin. Its slot list is planned once and projected to both sides,
+  // but the flat 2N+3 ABI has no ForwardCallablePlan shape, so it stays a named legacy route.
+  INTERFACE_BRIDGE_FACTORY,
 }
 
 internal object ForwardAbiLegacyRoutes {
@@ -85,6 +91,7 @@ internal object ForwardAbiLegacyRoutes {
         add(member, ForwardAbiLegacyRoute.SUSPEND_METHOD)
       }
 
+      is CirBridgeHelper -> add(ForwardAbiLegacyRoute.INTERFACE_BRIDGE_FACTORY)
       is CirGenericClass -> add(ForwardAbiLegacyRoute.GENERIC_CLASS)
       is CirSealedClass -> add(ForwardAbiLegacyRoute.SEALED_CLASS)
       is CirAsyncHelper,

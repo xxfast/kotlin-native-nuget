@@ -8,6 +8,7 @@ Kotlin's three flavours of inheritance each get a distinct C# shape: `interface`
 | `abstract class` | `abstract class` | `_handle` inherited by subclasses |
 | `sealed class` | `abstract class` | subclasses nested, see [ADR-009](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/009-sealed-class-mapping.md) |
 | interface-typed return (method result or property) | `IFoo` / `IFoo?` | backed by a generated `sealed class Foo : IFoo`, see [ADR-040](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/040-interface-return-type-mapping.md) |
+| interface-typed parameter, a C# class implementing `IFoo` | accepted, no `_handle` needed | dispatched through a per-interface bridge factory, see [ADR-084](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/084-csharp-implemented-interfaces.md) |
 
 ## Kotlin
 
@@ -315,12 +316,14 @@ public IPet? Friend
     {
         IntPtr nativeResult = Native_Get_friend(_handle, out IntPtr error);
         if (error != IntPtr.Zero) throw NugetErrorNative.BuildException(error);
-        return nativeResult == IntPtr.Zero ? null : new Pet(nativeResult);
+        return nativeResult == IntPtr.Zero ? null : (NugetMarshal.TryResolveCSharp(nativeResult, out IPet csharpOriginal) ? csharpOriginal : new Pet(nativeResult));
     }
     set
     {
-        Native_Set_friend(_handle, value != null ? NugetMarshal.HandleOf(value) : IntPtr.Zero, out IntPtr error);
+        IntPtr valueHandle = NugetMarshal.HandleOfOrZero(value, out bool valueOwned);
+        Native_Set_friend(_handle, valueHandle, out IntPtr error);
         if (error != IntPtr.Zero) throw NugetErrorNative.BuildException(error);
+        if (valueOwned) { NugetMarshal.Dispose(valueHandle); }
     }
 }
 
@@ -328,11 +331,13 @@ public IPet ClosestFriend()
 {
     IntPtr nativeResult = Native_ClosestFriend(_handle, out IntPtr error);
     if (error != IntPtr.Zero) throw NugetErrorNative.BuildException(error);
-    return new Pet(nativeResult);
+    return (NugetMarshal.TryResolveCSharp(nativeResult, out IPet csharpOriginal) ? csharpOriginal : new Pet(nativeResult));
 }
 ```
 
-`befriend(pet: Pet)` is an interface-typed **parameter**. In v1 it accepts only a Kotlin-backed `IPet` (one of the generated wrapper classes, which carry `_handle`), extracted via a shared reflective helper:
+`NugetMarshal.TryResolveCSharp` probes the returned handle for a C#-originated bridge token before falling back to the ordinary `new Pet(nativeResult)` wrapper; see [Implementing a Kotlin interface in C#](#implementing-a-kotlin-interface-in-c) below. `HandleOfOrZero`/`HandleOf` return an `owned` flag so the caller can dispose a handle it minted itself (a bridge transfer handle) without touching one it merely read off an existing wrapper's `_handle`.
+
+`befriend(pet: Pet)` is an interface-typed **parameter**. It accepts a Kotlin-backed `IPet` (one of the generated wrapper classes, which carry `_handle`) or a C#-implemented one (see [Implementing a Kotlin interface in C#](#implementing-a-kotlin-interface-in-c) below), extracted via a shared helper:
 
 ```C#
 [DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "cat_befriend")]
@@ -340,12 +345,14 @@ private static extern void Native_Befriend(IntPtr handle, IntPtr pet, out IntPtr
 
 public void Befriend(IPet pet)
 {
-    Native_Befriend(_handle, NugetMarshal.HandleOf(pet), out IntPtr error);
+    IntPtr petHandle = NugetMarshal.HandleOf(pet, out bool petOwned);
+    Native_Befriend(_handle, petHandle, out IntPtr error);
     if (error != IntPtr.Zero) throw NugetErrorNative.BuildException(error);
+    if (petOwned) { NugetMarshal.Dispose(petHandle); }
 }
 ```
 
-`NugetMarshal.HandleOf` reads the `_handle` field by reflection and throws `NotSupportedException` when it is absent, i.e. when the object is a C#-implemented `IPet` rather than a Kotlin one:
+`NugetMarshal.HandleOf` reads the `_handle` field by reflection; when it is absent, i.e. the object is a C#-implemented `IPet` rather than a Kotlin one, it falls back to a bridge instead of throwing:
 
 ```C#
 internal static IntPtr HandleOf(object value)
@@ -354,15 +361,16 @@ internal static IntPtr HandleOf(object value)
         System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Public);
     if (field == null)
     {
-        throw new NotSupportedException(
-            $"{value.GetType().Name} is not a Kotlin-backed object; passing a C#-implemented interface is not supported yet.");
+        return NugetBridge.HandleFor(value);
     }
     return (IntPtr)field.GetValue(value)!;
 }
 ```
 
+The `petOwned` flag distinguishes a handle `HandleOf` merely read off an existing wrapper (not owned, must not be disposed here) from one it minted fresh for a bridge (owned, a one-shot transfer handle disposed right after the call).
+
 <note>
-    <p>Each interface-typed return mints a <b>fresh</b> <code>StableRef</code>, so a returned <code>IPet</code> wrapper disposes independently of the object it came from. Reading <code>cat.Friend</code> twice produces two distinct C# wrapper instances over the same underlying Kotlin object, consistent with <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/005-object-return-semantics.md">ADR-005</a>.</p>
+    <p>Each interface-typed return mints a <b>fresh</b> <code>StableRef</code>, so a returned <code>IPet</code> wrapper disposes independently of the object it came from. Reading a Kotlin-backed <code>cat.Friend</code> twice produces two distinct C# wrapper instances over the same underlying Kotlin object, consistent with <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/005-object-return-semantics.md">ADR-005</a>. A <b>C#-implemented</b> <code>IPet</code> stored and read back does not go through this path at all: it resolves to the original C# instance instead, see <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/084-csharp-implemented-interfaces.md">ADR-084</a>.</p>
 </note>
 
 ## Using interface-typed returns from C#
@@ -402,15 +410,19 @@ public void StrayPet_AnonymousKotlinObject_DispatchesThroughIPet()
 }
 ```
 
-Passing a C#-implemented `IPet` to `Befriend` compiles (the parameter type is just `IPet`) but throws at runtime, from `IntegrationTests/BidirectionalTests.cs`:
+## Implementing a Kotlin interface in C#
+
+A C# class implementing `IPet` with no `_handle` field, an ordinary class, not one of the generated wrappers, can now be passed at an interface-typed parameter or property setter. `HandleOf`'s bridge fallback builds a Kotlin-side object with one function pointer per interface member and dispatches through it, so a Kotlin call against the parameter reaches the real C# implementation, not a stub.
+
+From `IntegrationTests/BidirectionalTests.cs`:
 
 ```C#
 private class Dog : IPet
 {
     public string Name { get; }
     public int Legs => 4;
-    public string? Nickname => null;
-    public Dog(string name) { Name = name; }
+    public string? Nickname { get; }
+    public Dog(string name, string? nickname = null) { Name = name; Nickname = nickname; }
     public string Speak() => "Woof!";
     public string Greet() => $"Hi, I'm {Name} the dog";
     public string Fetch(string item) => $"{Name} enthusiastically fetches the {item}";
@@ -419,13 +431,110 @@ private class Dog : IPet
 }
 
 [Fact]
-public void Cat_Befriend_CSharpImplementedPet_ThrowsNotSupportedException()
+public void CSharpDog_ImplementsIPet()
+{
+    using IPet dog = new Dog("Rex");
+    using var oreo = new Cat("Oreo", 9);
+
+    oreo.Befriend(dog);
+
+    // Both values only come back correct if Kotlin actually dispatched into `dog` through the
+    // generated function-pointer slots: `ClosestFriend().Speak()` calls back into the C# object,
+    // and `Interview` is a Kotlin extension (`"${pet.name} says: ${pet.speak()}"`) that reads two
+    // separate slots and composes the result itself.
+    Assert.Equal("Woof!", oreo.ClosestFriend().Speak());
+    Assert.Equal("Rex says: Woof!", oreo.Interview(dog));
+}
+
+[Fact]
+public void StoredCSharpPet_RoundTripsToTheOriginalInstance()
 {
     using var oreo = new Cat("Oreo", 9);
     using IPet dog = new Dog("Rex");
-    Assert.Throws<NotSupportedException>(() => oreo.Befriend(dog));
+
+    oreo.Befriend(dog);
+
+    Assert.Same(dog, oreo.ClosestFriend());
+    Assert.Same(dog, oreo.Friend);
 }
 ```
+
+### Generated Kotlin: the bridge factory
+
+One factory export per interface, `pet_bridge_create`, with a fnPtr/ctx pair per member (`val` getters and non-`Unit`-returning methods included) plus a release fnPtr/ctx pair. It builds an anonymous `object : Pet` that dispatches every member through its own slot and carries a `createCleaner` tied to the release slot:
+
+From `CNameExports.kt`:
+
+```kotlin
+@CName("pet_bridge_create")
+@OptIn(ExperimentalNativeApi::class)
+public fun export_pet_bridge_create(
+  nameGetPtr: COpaquePointer, nameGetCtx: COpaquePointer,
+  legsGetPtr: COpaquePointer, legsGetCtx: COpaquePointer,
+  nicknameGetPtr: COpaquePointer, nicknameGetCtx: COpaquePointer,
+  speakPtr: COpaquePointer, speakCtx: COpaquePointer,
+  greetPtr: COpaquePointer, greetCtx: COpaquePointer,
+  fetchPtr: COpaquePointer, fetchCtx: COpaquePointer,
+  napPtr: COpaquePointer, napCtx: COpaquePointer,
+  releasePtr: COpaquePointer, releaseCtx: COpaquePointer,
+  token: COpaquePointer,
+  errorOut: COpaquePointer?,
+): COpaquePointer? = try {
+  val nameGetFn = nameGetPtr.reinterpret<CFunction<(COpaquePointer) -> COpaquePointer?>>()
+  val releaseFn = releasePtr.reinterpret<CFunction<(COpaquePointer) -> Unit>>()
+  // ... one reinterpret per remaining slot ...
+  val bridge = object : io.github.xxfast.kotlin.native.nuget.test.cat.Pet, NugetCSharpBridge {
+    override val nugetToken: COpaquePointer = token
+    @Suppress("unused")
+    private val cleaner = createCleaner(releaseFn to releaseCtx) { (fn, ctx) ->
+      fn.invoke(ctx)
+    }
+    override val name: String
+      get() {
+        val ref = nameGetFn.invoke(nameGetCtx)!!
+        val value = ref.asStableRef<String>().get()
+        ref.asStableRef<Any>().dispose()
+        return value
+      }
+    // ... legs, nickname, speak(), greet(), fetch(item), nap() follow the same pattern ...
+  }
+  StableRef.create(bridge).asCPointer()
+} catch (e: Throwable) { /* ... */ null }
+```
+
+### Generated C#: the bridge state
+
+C# pins one delegate per slot, calls the factory once per crossing, and frees every pin from the release slot:
+
+```C#
+internal sealed class PetBridgeState : NugetBridgeState
+{
+    [DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "pet_bridge_create")]
+    private static extern IntPtr Native_Create(IntPtr nameGetPtr, IntPtr nameGetCtx, /* ... */ IntPtr token, out IntPtr error);
+
+    internal static PetBridgeState Create(TestLibrary.Cat.IPet impl)
+    {
+        var state = new PetBridgeState();
+        IntPtr ctx = state.Root();
+        IntPtr token = state.TokenFor(impl);
+        NugetBridgeObjectCallback nameGet = _ => { string result = impl.Name; return NugetMarshal.WrapString(result); };
+        // ... legsGet, nicknameGet, speak, greet, fetch follow the same pattern ...
+        NugetBridgeVoidCallback release = _ => state.FreeAll();
+        state.Pin(nameGet, legsGet, nicknameGet, speak, greet, fetch, nap, release);
+        state.KotlinHandle = Native_Create(/* ... */ token, out IntPtr error);
+        if (error != IntPtr.Zero) throw NugetErrorNative.BuildException(error);
+        return state;
+    }
+}
+```
+
+### Lifetime and identity
+
+<note>
+    <p>The bridge's Kotlin-side cleaner only fires on a later GC round, never at the moment the C# reference is dropped: release is <b>GC-timed, not deterministic</b>. A <code>nuget_gc_collect</code> export exists so tests, and hosts that genuinely need it, can force a collection round rather than wait for one.</p>
+</note>
+
+`NugetMarshal.TryResolveCSharp` (used by every interface-typed return and getter shown above) probes a returned handle's `nuget_csharp_token` before constructing a fresh wrapper, so a stored C#-implemented object handed back to C# resolves to the **original instance**: `Assert.Same(dog, oreo.Friend)` holds. This is C#-side identity only. Passing the same `Dog` to Kotlin twice builds two separate bridge objects, one per crossing, so Kotlin-side `===` on the underlying bridge is not preserved, the same way identity is not preserved across two reads of a Kotlin-backed interface return (see the note above).
 
 <note>
     <p>An <code>internal IntPtr NugetHandle</code> member on the generated <code>IFoo</code> was considered instead of the reflective helper, and rejected: <code>Interop.cs</code> compiles into the consumer assembly, so an abstract member would break any consumer-written <code>IFoo</code> implementer with <code>CS0535</code>.</p>
@@ -433,11 +542,13 @@ public void Cat_Befriend_CSharpImplementedPet_ThrowsNotSupportedException()
 
 ## Limitations
 
-- Passing a **C#-implemented** interface to an interface-typed parameter is not supported; `NugetMarshal.HandleOf` throws `NotSupportedException`. Only a Kotlin-backed `IFoo` wrapper can be passed. General C#-implemented interface parameters (the mirror direction) is a separate, deferred ROADMAP item.
+- A C#-implemented interface's bridge factory only ever gets `val` getters and `Unit`/primitive/`Boolean`/enum/`String`/`String?`-returning methods of arity 0-2. An interface with a `var` property, an object- or collection-typed member, a `suspend` member, or generics plans **no factory at all**, silently: `NugetMarshal.HandleOf` keeps the old `NotSupportedException` for it, with no diagnostic naming why.
+- A C#-implemented object's bridge is released only when Kotlin's GC actually collects it, on a later collection round; there is no deterministic, prompt release comparable to `IDisposable`.
+- Kotlin-side `===` on a C#-implemented object's bridge is not preserved across repeated crossings of the same C# instance: each crossing builds a new bridge object. C#-side identity (`Assert.Same` on the object read back from Kotlin) is preserved via a token probe.
 - An interface member whose own return type is another interface or a class handle (chained resolution) is not supported.
 - Interfaces with generic type parameters, suspend interface members, and `Flow`/`StateFlow`-valued interface members are not supported as return positions.
 - A backing class and its dispatch exports are only generated for interfaces that actually appear in a planned return position; an interface only ever used as an `add`/`remove` subscription parameter (like `ICatEventListener`, see [Lambdas and callbacks](lambdas-and-callbacks.md)) does not get one.
-- Object identity is not preserved across reads: two reads of the same interface-typed property produce two distinct C# wrapper instances over the same Kotlin object (each disposes independently).
+- Object identity is not preserved across reads of a **Kotlin-backed** interface-typed property: two reads produce two distinct C# wrapper instances over the same Kotlin object (each disposes independently). A **C#-implemented** object read back is the one exception, see above.
 
 ## Using it from C#
 
@@ -502,5 +613,6 @@ public void Observation_WorksWithPatternMatching()
     <category ref="external">
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/009-sealed-class-mapping.md">ADR-009: Sealed class mapping</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/040-interface-return-type-mapping.md">ADR-040: Interface return type mapping</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/084-csharp-implemented-interfaces.md">ADR-084: C#-implemented Kotlin interfaces</a>
     </category>
 </seealso>

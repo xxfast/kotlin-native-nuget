@@ -1,5 +1,7 @@
 package io.github.xxfast.kotlin.native.nuget.processor.cir
 
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeInterfacePlan
+
 data class CirFile(
   val usings: List<String> = listOf("System", "System.Runtime.InteropServices"),
   val namespaces: List<CirNamespace>,
@@ -151,7 +153,27 @@ data class CirMarshalHelper(
   // CS0103 for every such consumer.
   val includesMap: Boolean = false,
   val includesSet: Boolean = false,
+  // ADR-084: `HandleOf` falls back to `NugetBridge.HandleFor` for a value with no `_handle` (a
+  // C#-implemented Kotlin interface). Gated on the same principle as includesMap/includesSet: the
+  // fallback only compiles where a CirBridgeHelper was actually emitted.
+  val includesBridge: Boolean = false,
 ) : CirDeclaration
+
+// ADR-084: the C#-implemented-interface bridge layer -- `NugetBridge`, `NugetBridgeState`, and one
+// `{Iface}BridgeState` per bridgeable interface. Emitted only when at least one interface plans.
+internal data class CirBridgeHelper(
+  val libraryName: String,
+  val interfaces: List<CirBridgeInterface>,
+) : CirDeclaration
+
+// The bridge layer is emitted into the root namespace while `IPet` lives in the namespace mapped
+// from its Kotlin package, so every reference to the projected interface has to be qualified.
+internal data class CirBridgeInterface(
+  val csNamespace: String,
+  val plan: ForwardBridgeInterfacePlan,
+) {
+  val csQualifiedName: String = "$csNamespace.${plan.csName}"
+}
 
 data class CirListHelper(
   val libraryName: String,

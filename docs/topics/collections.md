@@ -575,11 +575,13 @@ public IReadOnlyList<string> Tags
     return result.AsReadOnly();
     }
     set
-    {            Native_Set_tags(_handle, NugetMarshal.CreateList(value), out IntPtr error);
+    {            IntPtr valueHandle = NugetMarshal.CreateList(value);
+    Native_Set_tags(_handle, valueHandle, out IntPtr error);
     if (error != IntPtr.Zero)
     {
         throw NugetErrorNative.BuildException(error);
     }
+    NugetListNative.Dispose(valueHandle);
     }
 }
 
@@ -587,11 +589,13 @@ public IReadOnlyList<string>? Notes
 {
     get { /* same walk as Tags, plus: if (nativeResult == IntPtr.Zero) return null; */ }
     set
-    {            Native_Set_notes(_handle, value != null ? NugetMarshal.CreateList(value) : IntPtr.Zero, out IntPtr error);
+    {            IntPtr valueHandle = value != null ? NugetMarshal.CreateList(value) : IntPtr.Zero;
+    Native_Set_notes(_handle, valueHandle, out IntPtr error);
     if (error != IntPtr.Zero)
     {
         throw NugetErrorNative.BuildException(error);
     }
+    if (valueHandle != IntPtr.Zero) { NugetListNative.Dispose(valueHandle); }
     }
 }
 
@@ -667,8 +671,10 @@ var ChartId.symptomTags: List<String>
 public static IReadOnlyList<string> GetSymptomTags(this ChartId receiver) { /* same walk */ }
 
 public static void SetSymptomTags(this ChartId receiver, IReadOnlyList<string> value)
-{            Native_ChartidSetSymptomTags(receiver.Value, NugetMarshal.CreateList(value), out IntPtr error);
+{            IntPtr valueHandle = NugetMarshal.CreateList(value);
+    Native_ChartidSetSymptomTags(receiver.Value, valueHandle, out IntPtr error);
     ...
+    NugetListNative.Dispose(valueHandle);
 }
 ```
 
