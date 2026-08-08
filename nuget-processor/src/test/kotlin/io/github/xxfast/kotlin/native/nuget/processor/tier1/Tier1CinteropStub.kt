@@ -92,6 +92,14 @@ internal object Tier1CinteropStub {
       get() = false
       set(_) {}
 
+    // ADR-079's `Dosage?` (a Double-underlying value class) method return writes its unboxed
+    // underlying through the same reinterpret shape, so the Double width needs a stand-in too.
+    class DoubleVar : COpaquePointerVar()
+
+    var DoubleVar.value: Double
+      get() = 0.0
+      set(_) {}
+
     @Suppress("UNCHECKED_CAST")
     fun <T : COpaquePointer> COpaquePointer.reinterpret(): T = this as T
 

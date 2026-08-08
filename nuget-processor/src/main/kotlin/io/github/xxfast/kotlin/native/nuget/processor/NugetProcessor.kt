@@ -139,6 +139,27 @@ internal fun warnDroppedForwardPropertySetters(
   ForwardDiagnosticSink.emit(diagnostics, logger)
 }
 
+// The whole-property counterpart to the partial setter skip above: the property planner had no
+// getter or setter shape for the declared type at all, so nothing of the member reaches C#. The
+// hint names the property's own type rather than a fixed example, so it stays accurate for every
+// type that lands here.
+internal fun warnDroppedForwardProperties(
+  catalog: ForwardCallablePlanCatalog,
+  logger: KSPLogger,
+) {
+  val diagnostics: List<ForwardDiagnostic> = catalog.droppedProperties.map { dropped ->
+    ForwardDiagnostic(
+      kind = ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_PROPERTY,
+      symbol = dropped.node,
+      declaration = dropped.symbol,
+      reason = "its type ${dropped.typeDescription} has no property getter or setter shape",
+      hint = "expose a bridgeable property (or a getter function) whose type is not " +
+          "${dropped.typeDescription}, and export that instead",
+    )
+  }
+  ForwardDiagnosticSink.emit(diagnostics, logger)
+}
+
 private fun KSAnnotated.hasCNameAnnotation(): Boolean =
   annotations.any { annotation ->
     val name: String? = annotation.annotationType.resolve().declaration.qualifiedName?.asString()
@@ -459,10 +480,14 @@ class NugetProcessor(
       // (interface dispatch properties only), so its drops need adding explicitly.
       droppedPropertySetters = ordinaryCatalog.droppedPropertySetters +
           forwardPropertyPlanner.droppedPropertySetters,
+      // Same two-instance merge as the setter drops above, for the whole-property channel.
+      droppedProperties = ordinaryCatalog.droppedProperties +
+          forwardPropertyPlanner.droppedProperties,
     )
 
     warnDroppedForwardCallables(callableCatalog, logger)
     warnDroppedForwardPropertySetters(callableCatalog, logger)
+    warnDroppedForwardProperties(callableCatalog, logger)
 
     val cNameExports: FileSpec = generateCNameWrappers(
       functions, genericFunctions, extensionFunctions, extensionProperties,

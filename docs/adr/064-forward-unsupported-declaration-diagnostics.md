@@ -212,6 +212,7 @@ a **skip + named diagnostic**; the one collision row is **fatal**.
 | **`Map`/`Set` (and mutable) as method *parameters*** (ROADMAP line 78, no `CreateMap`/`CreateSet` helper) | **No** (v1) | **skip + `SKIPPED_UNSUPPORTED_INPUT`** | planner `inputSkipReason()` = `COLLECTION` |
 | **Nullable `Boolean` method return** (ROADMAP line 79, ADR-061 deferred width) | **No** (v1) | **skip + `SKIPPED_UNSUPPORTED_RETURN`** | planner `NULLABLE` |
 | **`Char` at positions ADR-062 did not close**, and other `Unsupported` types (`Sequence`, local/anonymous, non-exported handle, bare type parameter) | **No** | **skip + `SKIPPED_UNSUPPORTED_TYPE`** | classifier `Unsupported` |
+| **A property whose type `ForwardPropertyPlanner.isPlannable` rejects** (added later, no ADR: this completes the position naming below) | **No** | **skip + `SKIPPED_UNSUPPORTED_PROPERTY`** | `ForwardPropertyPlanner.recordDropped`, excluding lambda/suspend-lambda/`Flow`/`StateFlow`, which still bind via a legacy route |
 | **Variance (`out`/`in`) on a class type parameter** | Partially, dropped, member still binds | **`INFO_DROPPED_VARIANCE`** (note, not skip) | `CirClassTranslator.kt:561` |
 | **Two constructors that collapse to one C# signature** (cell 21, ADR-034) | **No, and ambiguous** | **`ERROR_CSHARP_SIGNATURE_COLLISION`, fatal** | `CirClassTranslator.kt:92` / `CirFunctionTranslator.kt:89` |
 
@@ -239,10 +240,20 @@ internal enum class ForwardDiagnosticKind(val severity: Severity) {
   SKIPPED_UNSUPPORTED_RETURN(Severity.WARNING),
   SKIPPED_UNSUPPORTED_COMBINATION(Severity.WARNING),   // cell 23
   SKIPPED_INHERITED_MEMBER(Severity.WARNING),          // ROADMAP L77
+  SKIPPED_UNSUPPORTED_PROPERTY(Severity.WARNING),      // added later, completes the position naming
   INFO_DROPPED_VARIANCE(Severity.INFO),
   ERROR_CSHARP_SIGNATURE_COLLISION(Severity.ERROR),    // cell 21, ADR-034
 }
 ```
+
+**Later addition, same sink:** `SKIPPED_UNSUPPORTED_PROPERTY` closed the one position this ADR's
+original table left unnamed. `SKIPPED_UNSUPPORTED_INPUT` covers a parameter and
+`SKIPPED_UNSUPPORTED_RETURN` a return, but a property `ForwardPropertyPlanner.isPlannable` rejected
+still vanished with no diagnostic at all (tracked on `ROADMAP.md`). `ForwardPropertyPlanner` now
+records every property it declines to plan and routes it through the same `ForwardDiagnosticSink`,
+except a lambda/suspend-lambda/`Flow`/`StateFlow`-typed property (nullable or not), which is
+unplannable by design and still bound by `CirClassTranslator`'s legacy adapters, so naming it would
+be a false positive.
 
 Severity is encoded both by the `SKIPPED_/INFO_/ERROR_` name prefix (so it reads like reverse in a
 log) and by an explicit field (so the sink does not string-match its own enum). The message format

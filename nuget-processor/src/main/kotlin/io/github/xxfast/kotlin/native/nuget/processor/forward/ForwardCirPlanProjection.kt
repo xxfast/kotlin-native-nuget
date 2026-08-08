@@ -232,8 +232,14 @@ internal object ForwardCirPlanProjection {
     val nullable: BridgeType.Nullable = plan.publicSignature.result as? BridgeType.Nullable
       ?: error("Legacy two-call plan ${plan.invocation.symbol} requires a nullable result")
     val inner: BridgeType = nullable.type
-    require(inner is BridgeType.Primitive || inner == BridgeType.Instant) {
-      "Legacy two-call plan ${plan.invocation.symbol} requires a nullable primitive or Instant"
+    // ADR-079: a Primitive/Enum-underlying value class rides the same two-call shape, with the
+    // `_value` DllImport declared at the underlying's wire.
+    require(
+      inner is BridgeType.Primitive || inner == BridgeType.Instant ||
+          inner is BridgeType.ValueClass
+    ) {
+      "Legacy two-call plan ${plan.invocation.symbol} requires a nullable primitive, Instant " +
+          "or value class"
     }
     val presence: ForwardNativeCall = plan.nativeImports[0]
     val value: ForwardNativeCall = plan.nativeImports[1]
@@ -241,8 +247,11 @@ internal object ForwardCirPlanProjection {
     val csName: String = plan.publicSignature.name.removePrefix("@")
     // ADR-076: the DllImport/local-variable wire type is always the raw representation (`long`
     // for Instant); the public return type is the semantic one (`DateTimeOffset?`).
-    val dllImportReturnType: String =
-      if (inner is BridgeType.Primitive) inner.csharpType() else "long"
+    val dllImportReturnType: String = when (inner) {
+      is BridgeType.Primitive -> inner.csharpType()
+      is BridgeType.ValueClass -> valueClassUnderlyingWireCs(inner.underlying)
+      else -> "long"
+    }
     val publicReturnType: String = "${inner.csharpType()}?"
     val callArgs: String = plan.publicSignature.parameters
       .flatMap { parameter -> plan.callArgument(parameter) }
@@ -259,10 +268,14 @@ internal object ForwardCirPlanProjection {
     }
     val presenceName: String = "${csName}_has_value"
     val valueName: String = "${csName}_value"
-    val returnExpression: String = if (inner == BridgeType.Instant) {
-      "new global::System.DateTimeOffset(__nuget_value, global::System.TimeSpan.Zero)"
-    } else {
-      "__nuget_value"
+    val returnExpression: String = when {
+      inner == BridgeType.Instant ->
+        "new global::System.DateTimeOffset(__nuget_value, global::System.TimeSpan.Zero)"
+
+      // ADR-079: rebuild the record struct from the underlying wire value the `_value` call
+      // returned; the null case already returned above on `!__nuget_hasValue`.
+      inner is BridgeType.ValueClass -> valueClassReconstructionCs(inner, "__nuget_value")
+      else -> "__nuget_value"
     }
     val body: String = buildString {
       appendLine()
@@ -529,16 +542,29 @@ internal object ForwardCirPlanProjection {
         is BridgeType.Collection -> listOf("${parameter.name}Handle")
         // ADR-077 sub-items 3/4: null propagation into the pointer-shaped marshalling; a C# null
         // ships the null pointer (null string reference, or IntPtr.Zero for a handle underlying).
+        // ADR-079: a Primitive/Enum underlying has no null pointer, so it contributes the same
+        // HasValue/GetValueOrDefault pair as the nullable Primitive case above, with the value
+        // half unwrapped to the underlying. `GetValueOrDefault()` on an empty Nullable<Dosage>
+        // yields `default(Dosage)` (the validating constructor is bypassed), and Kotlin never
+        // reads that dead value because HasValue is false.
         is BridgeType.ValueClass -> {
           val prop: String = inner.underlyingPropertyName.replaceFirstChar { it.uppercase() }
-          val unwrapped = "${parameter.name}?.$prop"
-          listOf(
-            if (inner.underlying is BridgeType.ObjectHandle) {
-              "$unwrapped._handle ?? IntPtr.Zero"
-            } else {
-              unwrapped
-            }
-          )
+          if (inner.underlying is BridgeType.Primitive || inner.underlying is BridgeType.Enum) {
+            val unwrapped = "${parameter.name}.GetValueOrDefault().$prop"
+            listOf(
+              "${parameter.name}.HasValue",
+              if (inner.underlying is BridgeType.Enum) "(int)$unwrapped" else unwrapped,
+            )
+          } else {
+            val unwrapped = "${parameter.name}?.$prop"
+            listOf(
+              if (inner.underlying is BridgeType.ObjectHandle) {
+                "$unwrapped._handle ?? IntPtr.Zero"
+              } else {
+                unwrapped
+              }
+            )
+          }
         }
 
         else -> error("Forward CIR plan projection has no call argument for nullable $inner")
@@ -735,18 +761,37 @@ internal object ForwardCirPlanProjection {
         // ADR-077 sub-items 3/4: `ChartId?` is Nullable<ChartId> automatically (the record struct
         // is a value type); reconstruct only for a non-zero pointer, the ADR-075 null-handle
         // guard. Both admissible underlyings (String, ObjectHandle) ride an IntPtr wire.
-        is BridgeType.ValueClass -> CirResultProjection(
-          returnType = "${type.csharpType}?",
-          nativeReturnType = "IntPtr",
-          body = checkedPointerBody(
-            nativeName,
-            callArguments,
-            "return nativeResult == IntPtr.Zero ? null : " +
-                "${valueClassReconstructionCs(type, "nativeResult")};",
-            prelude,
-            cleanup,
-          ),
-        )
+        // ADR-079: a Primitive/Enum underlying takes the ADR-061 BOOLEAN + valueOut shape
+        // instead; valueOut is declared at the *bare* underlying wire (`double`, `int` ordinal,
+        // and `bool` with ADR-069's [MarshalAs(UnmanagedType.I1)]), reconstructed here.
+        is BridgeType.ValueClass ->
+          if (type.underlying is BridgeType.Primitive || type.underlying is BridgeType.Enum) {
+            CirResultProjection(
+              returnType = "${type.csharpType}?",
+              nativeReturnType = "bool",
+              body = checkedNullableValueBody(
+                nativeName,
+                callArguments,
+                prelude,
+                cleanup,
+                "hasValue ? ${valueClassReconstructionCs(type, "valueOut")} : " +
+                    "(${type.csharpType}?)null",
+              ),
+            )
+          } else {
+            CirResultProjection(
+              returnType = "${type.csharpType}?",
+              nativeReturnType = "IntPtr",
+              body = checkedPointerBody(
+                nativeName,
+                callArguments,
+                "return nativeResult == IntPtr.Zero ? null : " +
+                    "${valueClassReconstructionCs(type, "nativeResult")};",
+                prelude,
+                cleanup,
+              ),
+            )
+          }
 
         is BridgeType.Primitive -> {
           val valueType: String = type.csharpType()
@@ -866,11 +911,14 @@ internal object ForwardCirPlanProjection {
     append("            $result")
   }
 
+  /** [returnExpression] defaults to the bare `valueOut` a nullable primitive returns; ADR-079's
+   *  value-class results pass the reconstruction (`hasValue ? new Dosage(valueOut) : ...`). */
   private fun checkedNullableValueBody(
     nativeName: String,
     arguments: String,
     prelude: List<String> = emptyList(),
     cleanup: List<String> = emptyList(),
+    returnExpression: String = "hasValue ? valueOut : null",
   ): String = buildString {
     appendLine()
     prelude.forEach { line -> appendLine("            $line") }
@@ -880,7 +928,7 @@ internal object ForwardCirPlanProjection {
     appendLine("                throw NugetErrorNative.BuildException(error);")
     appendLine("            }")
     cleanup.forEach { line -> appendLine("            $line") }
-    append("            return hasValue ? valueOut : null;")
+    append("            return $returnExpression;")
   }
 
   /** ADR-076: same shape as [checkedNullableValueBody], except `valueOut` is a raw `long` of

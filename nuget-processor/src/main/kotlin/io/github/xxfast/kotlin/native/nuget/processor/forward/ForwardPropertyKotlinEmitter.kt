@@ -205,6 +205,32 @@ private fun FileSpec.Builder.addNullableValueGetter(
       getterBuilder
     }
 
+    // ADR-079: a Primitive/Enum-underlying value class rides the same LegacyTwoCall `_value` call,
+    // unboxed to the underlying (the ordinal for an enum underlying).
+    is BridgeType.ValueClass -> {
+      val unboxed = "${plan.accessExpression()}!!.${inner.underlyingPropertyName}"
+      val getterBuilder: FunSpec.Builder = exportBuilder(call, plan.receiver)
+      when (val underlying: BridgeType = inner.underlying) {
+        is BridgeType.Primitive -> getterBuilder
+          .returns(kotlinType(underlying))
+          .addCode(
+            valueBody(unboxed, "errorOut", primitiveDefault(underlying)),
+            cOpaquePointerVar,
+            stableRef,
+          )
+
+        is BridgeType.Enum -> getterBuilder
+          .returns(kotlinType("Int"))
+          .addCode(valueBody("$unboxed.ordinal", "errorOut", "0"), cOpaquePointerVar, stableRef)
+
+        else -> error(
+          "Forward property nullable value getter has no value-class underlying route for " +
+              "${plan.symbol}: $underlying",
+        )
+      }
+      getterBuilder
+    }
+
     else -> error("Forward property nullable value getter is invalid for ${plan.symbol}: $inner")
   }
   addFunction(builder.build())
@@ -288,10 +314,16 @@ private fun ForwardPropertyPlan.valueExpression(): String = when (val type: Brid
     is BridgeType.Collection -> loweredCollectionExpression("value", inner, nullable = true)
     // ADR-077 sub-items 3/4: `?.let` re-wraps only a non-null wire value, matching the callable
     // parameter lowering in ForwardKotlinPlanEmitter.
-    is BridgeType.ValueClass -> {
-      val lowered: String = valueClassUnderlyingLowering("it", inner.underlying)
-      "value?.let { ${inner.qualifiedName}($lowered) }"
-    }
+    // ADR-079: a Primitive/Enum underlying takes the NullableDispatch route instead, whose `set`
+    // export receives the bare underlying wire (non-null by construction; `set_null` is the other
+    // export), so the value is re-wrapped unconditionally.
+    is BridgeType.ValueClass ->
+      if (inner.underlying is BridgeType.Primitive || inner.underlying is BridgeType.Enum) {
+        "${inner.qualifiedName}(${valueClassUnderlyingLowering("value", inner.underlying)})"
+      } else {
+        val lowered: String = valueClassUnderlyingLowering("it", inner.underlying)
+        "value?.let { ${inner.qualifiedName}($lowered) }"
+      }
 
     else -> error("Forward property emitter has no nullable setter route for $type")
   }

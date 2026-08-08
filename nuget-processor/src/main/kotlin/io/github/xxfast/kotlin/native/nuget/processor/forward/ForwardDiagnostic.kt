@@ -46,6 +46,16 @@ internal enum class ForwardDiagnosticKind(val severity: ForwardDiagnosticSeverit
    *  ADR-061 deferred width). */
   SKIPPED_UNSUPPORTED_RETURN(ForwardDiagnosticSeverity.WARNING),
 
+  /** A property whose classified type the property planner has no getter/setter shape for, so the
+   *  whole property is absent from the generated C#. Completes the position naming alongside
+   *  [SKIPPED_UNSUPPORTED_INPUT] (a parameter) and [SKIPPED_UNSUPPORTED_RETURN] (a return);
+   *  a property used to be the one position that vanished with no diagnostic at all.
+   *
+   *  Never fires for a property the legacy routes still re-emit (lambda, suspend lambda, Flow,
+   *  StateFlow): those are unplannable on purpose and bind through `CirClassTranslator`'s
+   *  adapters, so a warning would be a false positive. */
+  SKIPPED_UNSUPPORTED_PROPERTY(ForwardDiagnosticSeverity.WARNING),
+
   /** Cell 23 / BUG-010: a generic + `suspend` + `inline` + `reified` extension returning
    *  `Result<T>` — the *combination* has no working legacy route, even though `suspend` and
    *  `generic` each have one individually. */

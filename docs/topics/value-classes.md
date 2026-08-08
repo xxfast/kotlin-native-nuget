@@ -12,6 +12,7 @@ A Kotlin `value class` (inline class) wrapping a primitive or `String` becomes a
 | `Primitive`-underlying value class at an ordinary position | the same `record struct` | wire is the primitive's own wire (e.g. `Double`); see below |
 | `Enum`-underlying value class at an ordinary position | the same `record struct` | wire is the enum's `int` ordinal, cast back with `(EnumType)`; see below |
 | `ObjectHandle`-underlying value class at an ordinary position, incl. `Nullable(ValueClass(ObjectHandle))` | the same `record struct`, `?` rides the null pointer | wire is the wrapped object's own StableRef handle; see below |
+| `Nullable(ValueClass)` over a `Primitive`- or `Enum`-underlying value class, at parameter, property, or return position | `Dosage?` / `Temperament?` (`Nullable<T>`), never a reference nullable | no null pointer on the wire, so it reuses the position's has-value fan-out (input pair, ADR-061 single-call `valueOut`, ADR-002 `LegacyTwoCall`/`NullableDispatch`, or the top-level two-call), value slot at the underlying's own wire; see [ADR-079](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/079-nullable-primitive-enum-underlying-value-classes.md) and below |
 
 ## Kotlin
 
@@ -788,8 +789,9 @@ public ChartRef? BackupReferral
 }
 ```
 
-`Nullable(ValueClass)` over a `Primitive`- or `Enum`-underlying value class stays out of scope: see
-Limitations below.
+`Nullable(ValueClass)` over a `Primitive`- or `Enum`-underlying value class also binds, but it needs
+a has-value channel rather than a null pointer: see [Nullable over Primitive and Enum
+underlyings](#nullable-over-primitive-and-enum-underlyings) below.
 
 ### Using it from C#
 
@@ -849,14 +851,279 @@ public void Patient_BackupReferral_NullableObjectHandleUnderlyingValueClass_Roun
     </p>
 </note>
 
+## Nullable over Primitive and Enum underlyings
+
+Unlike `String`/`ObjectHandle` underlyings, a `Double` wire or an enum's `int`-ordinal wire has no
+spare pointer to carry `null`, so `Dosage?`/`Temperament?` reuse whichever has-value shape the
+position already has for a nullable primitive: an adjacent `HasValue` parameter pair at inputs, the
+single-call `valueOut` out-parameter at method/top-level returns, and the `LegacyTwoCall`/
+`NullableDispatch` pair at properties. The value slot carries the underlying's own wire (the
+primitive itself, or the enum's `int` ordinal), with the box/unbox step composed on top, same as
+the [ADR-076](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/076-instant-mapping.md)
+`Instant` conversion. A Boolean-underlying value class (`Flag`) inherits
+[ADR-069](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/069-nullable-boolean-marshalling.md)'s
+`[MarshalAs(UnmanagedType.I1)]` for free, since its single-call `valueOut` is typed at the bare
+underlying `Boolean`.
+
+From `test-library/src/nativeMain/kotlin/.../clinic/ClinicSample.kt`:
+
+```kotlin
+value class Dosage(val milligrams: Double)
+value class Temperament(val mood: Mood)
+value class Flag(val value: Boolean)
+
+class Patient(val name: String) {
+  var lastDosage: Dosage? = null
+  fun hasDosage(): Boolean = lastDosage != null
+
+  var maybeTemperament: Temperament? = null
+
+  fun taper(target: Dosage?): Dosage? = target?.let { Dosage(it.milligrams / 2) }
+
+  fun quarantineFlag(known: Boolean): Flag? = if (known) Flag(false) else null
+}
+
+class Prescription(dosage: Dosage?, val patient: String) {
+  val label: String =
+    if (dosage != null) "$patient: ${dosage.milligrams}mg" else "$patient: no dosage prescribed"
+}
+
+fun Patient.matchesTemperament(expected: Temperament?): Boolean =
+  expected == null || temperament.mood == expected.mood
+
+fun describeTemperament(temperament: Temperament?): String =
+  if (temperament != null) "Mood: ${temperament.mood}" else "Mood: unknown"
+
+fun standardDosage(kind: Int): Dosage? =
+  if (kind < 0) null else Dosage(kind * 0.5)
+```
+
+### Generated C# {id="generated-c_2"}
+
+The property, `LegacyTwoCall` getter + `NullableDispatch` setter, from `Interop.cs`:
+
+```C#
+[DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "patient_get_lastDosage")]
+[return: MarshalAs(UnmanagedType.I1)]
+private static extern bool Native_Get_lastDosage(IntPtr handle, out IntPtr error);
+
+[DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "patient_set_lastDosage")]
+private static extern void Native_Set_lastDosage(IntPtr handle, double value, out IntPtr error);
+
+[DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "patient_get_lastDosage_value")]
+private static extern double Native_Get_lastDosage_value(IntPtr handle, out IntPtr error);
+
+[DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "patient_set_lastDosage_null")]
+private static extern void Native_Set_lastDosage_null(IntPtr handle, out IntPtr error);
+
+public Dosage? LastDosage
+{
+    get
+    {
+    bool hasValue = Native_Get_lastDosage(_handle, out IntPtr error);
+    if (error != IntPtr.Zero)
+    {
+        throw NugetErrorNative.BuildException(error);
+    }
+    if (!hasValue) return null;
+    double value = Native_Get_lastDosage_value(_handle, out IntPtr error2);
+    if (error2 != IntPtr.Zero)
+    {
+        throw NugetErrorNative.BuildException(error2);
+    }
+    return new Dosage(value);
+    }
+    set
+    {
+    if (value.HasValue)
+    {
+        Native_Set_lastDosage(_handle, value.Value.Milligrams, out IntPtr error);
+        if (error != IntPtr.Zero)
+        {
+            throw NugetErrorNative.BuildException(error);
+        }
+    }
+    else
+    {
+        Native_Set_lastDosage_null(_handle, out IntPtr error);
+        if (error != IntPtr.Zero)
+        {
+            throw NugetErrorNative.BuildException(error);
+        }
+    }
+    }
+}
+```
+
+The enum-underlying property (`MaybeTemperament`) is the same shape, with the value slot's `int`
+cast back through `(Mood)`. The method parameter + return, single-call `valueOut`:
+
+```C#
+[DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "patient_taper")]
+private static extern bool Native_Taper(IntPtr handle, bool targetHasValue, double target, out double valueOut, out IntPtr error);
+
+public Dosage? Taper(Dosage? target)
+{
+    bool hasValue = Native_Taper(_handle, target.HasValue, target.GetValueOrDefault().Milligrams, out double valueOut, out IntPtr error);
+    if (error != IntPtr.Zero)
+    {
+        throw NugetErrorNative.BuildException(error);
+    }
+    return hasValue ? new Dosage(valueOut) : (Dosage?)null;
+}
+```
+
+The Boolean-underlying return (`QuarantineFlag`), carrying `[MarshalAs(UnmanagedType.I1)]` on the
+`valueOut` out-parameter:
+
+```C#
+[DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "patient_quarantineFlag")]
+private static extern bool Native_QuarantineFlag(IntPtr handle, bool known, [MarshalAs(UnmanagedType.I1)] out bool valueOut, out IntPtr error);
+
+public Flag? QuarantineFlag(bool known)
+{
+    bool hasValue = Native_QuarantineFlag(_handle, known, out bool valueOut, out IntPtr error);
+    if (error != IntPtr.Zero)
+    {
+        throw NugetErrorNative.BuildException(error);
+    }
+    return hasValue ? new Flag(valueOut) : (Flag?)null;
+}
+```
+
+The extension parameter (`MatchesTemperament`), the top-level parameter
+(`describeTemperament`) and the top-level two-call return (`standardDosage`):
+
+```C#
+[DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "patient_matchesTemperament")]
+[return: MarshalAs(UnmanagedType.I1)]
+private static extern bool Native_MatchesTemperament(IntPtr receiver, bool expectedHasValue, int expected, out IntPtr error);
+
+public static bool MatchesTemperament(this Patient receiver, Temperament? expected)
+{
+    bool nativeResult = Native_MatchesTemperament(receiver._handle, expected.HasValue, (int)expected.GetValueOrDefault().Mood, out IntPtr error);
+    if (error != IntPtr.Zero)
+    {
+        throw NugetErrorNative.BuildException(error);
+    }
+    return nativeResult;
+}
+
+[DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "describeTemperament")]
+private static extern IntPtr Native_describeTemperament(bool temperamentHasValue, int temperament, out IntPtr error);
+
+public static string describeTemperament(Temperament? temperament)
+{
+    IntPtr nativeResult = Native_describeTemperament(temperament.HasValue, (int)temperament.GetValueOrDefault().Mood, out IntPtr error);
+    if (error != IntPtr.Zero)
+    {
+        throw NugetErrorNative.BuildException(error);
+    }
+    return Marshal.PtrToStringUTF8(nativeResult)!;
+}
+
+[DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "standardDosage_has_value")]
+[return: MarshalAs(UnmanagedType.I1)]
+private static extern bool standardDosage_has_value(int kind, out IntPtr error);
+
+[DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "standardDosage_value")]
+private static extern double standardDosage_value(int kind, out IntPtr error);
+
+public static Dosage? standardDosage(int kind)
+{
+    bool __nuget_hasValue = standardDosage_has_value(kind, out IntPtr __nuget_hasValueError);
+    if (__nuget_hasValueError != IntPtr.Zero)
+    {
+        throw NugetErrorNative.BuildException(__nuget_hasValueError);
+    }
+    if (!__nuget_hasValue) return null;
+    double __nuget_value = standardDosage_value(kind, out IntPtr __nuget_valueError);
+    if (__nuget_valueError != IntPtr.Zero)
+    {
+        throw NugetErrorNative.BuildException(__nuget_valueError);
+    }
+    return new Dosage(__nuget_value);
+}
+```
+
+### Using it from C# {id="using-it-from-c_2"}
+
+From `IntegrationTests/ValueClassNullableUnderlyingTests.cs`:
+
+```C#
+[Fact]
+public void Patient_LastDosage_NullablePrimitiveUnderlyingProperty_RoundTripsAValueThenBackToNull()
+{
+    using var oreo = new Patient("Oreo");
+
+    oreo.LastDosage = new Dosage(3.5);
+
+    Assert.Equal(3.5, oreo.LastDosage!.Value.Milligrams);
+    Assert.True(oreo.HasDosage());
+
+    oreo.LastDosage = null;
+
+    Assert.Null(oreo.LastDosage);
+    Assert.False(oreo.HasDosage());
+}
+
+[Fact]
+public void Patient_MaybeTemperament_NullableEnumUnderlyingProperty_CalmOrdinalZeroSurvivesAsNonNull()
+{
+    using var oreo = new Patient("Oreo");
+
+    // Mood.Calm is ordinal 0: the sentinel-catching cell for the has-value/value mix-up.
+    oreo.MaybeTemperament = new Temperament(Mood.Calm);
+
+    Assert.NotNull(oreo.MaybeTemperament);
+    Assert.Equal(Mood.Calm, oreo.MaybeTemperament!.Value.Mood);
+}
+
+[Fact]
+public void Patient_QuarantineFlag_BooleanUnderlyingNullableReturn_FalseSurvivesDistinctFromNull()
+{
+    using var oreo = new Patient("Oreo");
+
+    // known = false: never checked, so the return is a genuine null.
+    Assert.Null(oreo.QuarantineFlag(false));
+
+    // known = true: checked and cleared, so the return is Flag(false) -- not null, and not
+    // silently read back as a truthy 4-byte value.
+    Flag? flag = oreo.QuarantineFlag(true);
+
+    Assert.NotNull(flag);
+    Assert.False(flag!.Value.Value);
+}
+
+[Fact]
+public void ClinicSample_StandardDosage_NullablePrimitiveUnderlyingTopLevelReturn_ZeroSurvivesAsNonNull()
+{
+    // 0.0 is a legitimate Dosage, not the in-band sentinel this two-call shape exists to avoid
+    // confusing with null.
+    Dosage? dosage = ClinicSample.standardDosage(0);
+
+    Assert.NotNull(dosage);
+    Assert.Equal(0.0, dosage!.Value.Milligrams);
+}
+```
+
+<note>
+    <p>
+        <code>Mood.Calm</code> (ordinal 0), <code>0.0</code>, and a Boolean-underlying
+        <code>Flag(false)</code> are the mandatory cells for this shape: each is exactly where an
+        in-band sentinel, or a has-value/value mix-up, would pass for the wrong reason.
+    </p>
+</note>
+
+Bare `Mood?` (a nullable enum, not wrapped in a value class) is unaffected by this feature and stays
+out of scope entirely; see Limitations below.
+
 ## Limitations
 
-- `Nullable(ValueClass)` over a `Primitive`- or `Enum`-underlying value class is deferred, not
-  merely unplanned: the primitive/enum wire has no in-band way to carry `null`, so that combination
-  needs a has-value pair that does not exist yet, unlike `String`/`ObjectHandle` underlyings, which
-  already ride a null pointer. It keeps a named `VALUE_CLASS` skip. See
-  [ADR-077](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/077-value-classes-at-ordinary-positions.md)
-  and [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md).
+- A bare `Nullable(Enum)` (`Mood?`, not wrapped in a value class) is out of scope at every
+  position; it is not part of this page's `Nullable(ValueClass)` shape. See
+  [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md) for the
+  property-position hazard it leaves open.
 - A value class as a collection element (`List<ChartId>`, `Map<String, ChartId>`) has no boxing
   story on the C# write side and is skipped; see [Collections](collections.md).
 - Reference-underlying value-class **primary** constructor `init` validation stays deferred
@@ -882,5 +1149,6 @@ public void Patient_BackupReferral_NullableObjectHandleUnderlyingValueClass_Roun
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/064-forward-unsupported-declaration-diagnostics.md">ADR-064: Forward unsupported-declaration diagnostics</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/066-forward-export-reachability-closure.md">ADR-066: Forward export reachability closure</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/077-value-classes-at-ordinary-positions.md">ADR-077: Value classes at ordinary positions</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/079-nullable-primitive-enum-underlying-value-classes.md">ADR-079: Nullable(ValueClass) over Primitive/Enum-underlying value classes</a>
     </category>
 </seealso>

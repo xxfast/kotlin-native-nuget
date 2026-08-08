@@ -151,6 +151,48 @@ class Patient(val name: String) {
   var chartRef: ChartRef = ChartRef(this)
 
   /**
+   * ADR-079 · property getter/setter position, `Nullable(ValueClass)` over a Primitive
+   * underlying. The has-value pair fans out through `ForwardPropertyPlanner`'s
+   * `LegacyTwoCall`/`NullableDispatch` shapes, same machinery as [backupChart]'s String-underlying
+   * nullable, but with [Dosage]'s `Double` on the value slot instead of a null pointer. [hasDosage]
+   * observes it Kotlin-side, mirroring [hasBackup].
+   */
+  var lastDosage: Dosage? = null
+
+  /** ADR-079 · the Kotlin-side observation for [lastDosage]'s setter. */
+  fun hasDosage(): Boolean = lastDosage != null
+
+  /**
+   * ADR-079 · property getter/setter position, `Nullable(ValueClass)` over an Enum underlying.
+   * Same shape as [lastDosage] but with [Mood]'s ordinal on the value slot. [temperamentStatus]
+   * observes it Kotlin-side, mirroring [chartStatus].
+   */
+  var maybeTemperament: Temperament? = null
+
+  /** ADR-079 · the Kotlin-side observation for [maybeTemperament]'s setter. */
+  fun temperamentStatus(): String =
+    maybeTemperament?.let { "$name is ${it.mood}" } ?: "$name has no recorded temperament"
+
+  /**
+   * ADR-079 · method parameter AND method return, Primitive underlying, in one call (the ADR's
+   * own consumer-API sketch). `null` in means `null` out (the has-value pair reports false on
+   * both the input and output slots); a real [Dosage] halves. Also the fixture cell for
+   * `Nullable(Primitive) == 0.0` surviving as non-null when tapering a `1.0` down to `0.5` is not
+   * itself the zero cell -- [standardDosage] below is.
+   */
+  fun taper(target: Dosage?): Dosage? = target?.let { Dosage(it.milligrams / 2) }
+
+  /**
+   * ADR-079 item 2 · the decisive Boolean-underlying value-class check: `Flag(false)` must
+   * survive a nullable return distinguishably from `null`, proving the ADR-069
+   * `[MarshalAs(UnmanagedType.I1)]` 1-byte contract still fires when the `valueOut` transfer is
+   * inherited from a value class's underlying `Boolean` rather than a bare `Boolean`. `known =
+   * false` means "never checked" (`null`); `known = true` returns the flag itself, which is
+   * `Flag(false)` (checked, and cleared) -- never a stray 4-byte read landing on a truthy value.
+   */
+  fun quarantineFlag(known: Boolean): Flag? = if (known) Flag(false) else null
+
+  /**
    * ADR-077 sub-item 4 · ObjectHandle-underlying value class, parameter position. Returns
    * `String` (already supported), so only the parameter facet is new here; [ownReferral] below
    * is the matching return-position cell.
@@ -341,6 +383,12 @@ value class Dosage(val milligrams: Double)
 value class Temperament(val mood: Mood)
 
 /**
+ * ADR-079 item 2 · Boolean-underlying value class. Exists only so a nullable return crossing
+ * `false` is provably distinct from crossing `null` -- see [Patient.quarantineFlag].
+ */
+value class Flag(val value: Boolean)
+
+/**
  * ADR-075 · extension-property + setter regression cell. Same eligibility predicate as an ordinary
  * property setter ([Chart.tags] in `ChartSample.kt`), but the receiver crosses the bridge by value
  * ([ChartId]'s underlying `String`, not an ObjectHandle) — nobody had combined that with a
@@ -368,6 +416,18 @@ class Admission(chart: ChartId, val ward: String) {
 }
 
 /**
+ * ADR-079 · constructor parameter position, `Nullable(ValueClass)` over a Primitive underlying.
+ * Mirrors [Admission]'s non-null ctor-parameter cell, but with a nullable [Dosage]: the has-value
+ * pair fans out at the constructor the same way it does at [Patient.taper]'s parameter, and
+ * [label] reads back whichever branch actually crossed so a smuggled default dosage would not
+ * compile-and-pass by coincidence.
+ */
+class Prescription(dosage: Dosage?, val patient: String) {
+  val label: String =
+    if (dosage != null) "$patient: ${dosage.milligrams}mg" else "$patient: no dosage prescribed"
+}
+
+/**
  * ADR-077 sub-item 1 · data-class primary-constructor position, and the generated `copy()` that
  * mirrors it. A data class primary constructor parameter *must* be `val`/`var`, so [id] is also a
  * property: the sub-item 2 read-only getter cell (`entry.Id` in C#), asserted by
@@ -385,12 +445,39 @@ data class ChartEntry(val id: ChartId, val note: String) {
 fun Patient.chartLabel(id: ChartId): String = "$name reads ${id.value}"
 
 /**
+ * ADR-079 · extension-function parameter position, `Nullable(ValueClass)` over an Enum
+ * underlying. `null` means "no expected mood filter"; a wrapped [Temperament] must arrive as a
+ * genuine re-wrapped value for the ordinal comparison against [Patient.temperament] to be
+ * meaningful rather than accidental.
+ */
+fun Patient.matchesTemperament(expected: Temperament?): Boolean =
+  expected == null || temperament.mood == expected.mood
+
+/**
  * ADR-077 sub-item 1 · top-level-function position. Mirrors [Patient.retag] on the top-level
  * carrier, and likewise calls a [ChartId] member so the parameter has to arrive as a real value
  * class rather than its underlying `String`.
  */
 fun chartSummary(id: ChartId): String =
   if (id.isValid()) "Chart ${id.value} filed" else "Chart missing"
+
+/**
+ * ADR-079 · top-level-function parameter position, `Nullable(ValueClass)` over an Enum
+ * underlying. Mirrors [Patient.matchesTemperament] on the top-level carrier.
+ */
+fun describeTemperament(temperament: Temperament?): String =
+  if (temperament != null) "Mood: ${temperament.mood}" else "Mood: unknown"
+
+/**
+ * ADR-079 · top-level-function return position, `Nullable(ValueClass)` over a Primitive
+ * underlying (the ADR's own consumer-API sketch: `fun standardDosage(kind: Int): Dosage?`).
+ * `kind < 0` is the `null` cell (ADR-002 two-call reports `_has_value = false`); `kind == 0` is
+ * the mandatory `0.0`-survives-as-non-null cell (`Dosage(0.0)`, not the in-band sentinel a
+ * two-call shape is specifically here to avoid confusing with `null`); a positive `kind` returns
+ * a real half-milligram-per-unit dose.
+ */
+fun standardDosage(kind: Int): Dosage? =
+  if (kind < 0) null else Dosage(kind * 0.5)
 
 /**
  * Cells 17/18/20: generic type arguments. `parameterizedBy` appeared zero times in the processor,

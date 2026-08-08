@@ -276,4 +276,87 @@ class Tier1NamedSkipDiagnosticsTest {
           "skipped",
     )
   }
+
+  /**
+   * The property planner's own honest-skip cell. `isPlannable` rejects a type the property
+   * position has no shape for, and until now the property just vanished from the generated C#
+   * with no diagnostic at all: the one gap in ADR-064's position naming (`_INPUT` covered a
+   * parameter, `_RETURN` a return, nothing covered a property). A `Box<Int>`-typed property is
+   * the simplest such type: the classifier hands back a generic declaration, which no property
+   * getter or setter can wire.
+   */
+  @Test
+  fun `class property with an unplannable type fires SKIPPED_UNSUPPORTED_PROPERTY and is omitted`() {
+    val result = Tier1Harness.run(
+      """
+      package tier1.skipproperty
+
+      class Box<T>(val value: T)
+
+      class Patient(val name: String) {
+        var box: Box<Int> = Box(1)
+      }
+      """.trimIndent()
+    )
+
+    assertTrue(
+      result.compiledClean,
+      "expected no broken source for Patient.box; got: ${result.compileErrors}",
+    )
+    assertFalse(
+      result.generated.contains("export_patient_get_box"),
+      "expected the unplannable property to be entirely absent from the generated exports; " +
+          "generated=${result.generated}",
+    )
+    assertTrue(
+      result.kspWarnings.any {
+        it.contains(ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_PROPERTY.name) &&
+            it.contains("Patient.box")
+      },
+      "expected a SKIPPED_UNSUPPORTED_PROPERTY diagnostic naming Patient.box; " +
+          "kspWarnings=${result.kspWarnings}",
+    )
+  }
+
+  /**
+   * The exclusion that keeps the new kind honest. A `StateFlow<T>` property is *not* dropped: it
+   * is unplannable by the plan path on purpose and re-emitted by `CirClassTranslator`'s legacy
+   * flow adapter, so warning about it would be a false positive telling a consumer their working
+   * property vanished.
+   */
+  @Test
+  fun `class property with a StateFlow type fires no SKIPPED_UNSUPPORTED_PROPERTY`() {
+    val result = Tier1Harness.run(
+      """
+      package tier1.skippropertyflow
+
+      import kotlinx.coroutines.flow.MutableStateFlow
+      import kotlinx.coroutines.flow.StateFlow
+
+      class Patient(val name: String) {
+        val mood: StateFlow<Int> = MutableStateFlow(0)
+      }
+      """.trimIndent(),
+      // Without coroutines on KSP's own classpath the classifier sees `<ERROR TYPE: StateFlow>`
+      // and the fixture would prove nothing about the exclusion.
+      libraries = listOf(Tier1Classpath.kotlinxCoroutinesCore),
+    )
+
+    // `compiledClean` is deliberately not asserted here: the legacy flow adapter emits
+    // `CFunction`-typed subscription callbacks, which Tier1CinteropStub does not model (a
+    // pre-existing harness limit, unrelated to this diagnostic). What matters is that the export
+    // is emitted at all, which is exactly why warning about it would be a false positive.
+    assertTrue(
+      result.generated.contains("patient_get_mood_collect"),
+      "expected the StateFlow property to still be emitted by the legacy flow adapter; " +
+          "generated=${result.generated}",
+    )
+    assertFalse(
+      result.kspWarnings.any {
+        it.contains(ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_PROPERTY.name)
+      },
+      "a StateFlow property still binds through the legacy flow adapter, so warning that it was " +
+          "skipped would be a false positive; kspWarnings=${result.kspWarnings}",
+    )
+  }
 }
