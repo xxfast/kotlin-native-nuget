@@ -2,7 +2,6 @@ package io.github.xxfast.kotlin.native.nuget.processor.exports
 
 import com.google.devtools.ksp.getConstructors
 import com.google.devtools.ksp.getVisibility
-import com.google.devtools.ksp.symbol.ClassKind
 import com.google.devtools.ksp.symbol.KSClassDeclaration
 import com.google.devtools.ksp.symbol.KSFunctionDeclaration
 import com.google.devtools.ksp.symbol.KSPropertyDeclaration
@@ -21,6 +20,8 @@ import io.github.xxfast.kotlin.native.nuget.processor.cir.expandAliases
 import io.github.xxfast.kotlin.native.nuget.processor.cir.isMutableStateFlowElementObject
 import io.github.xxfast.kotlin.native.nuget.processor.cir.isMutableStateFlowElementSupported
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallablePlan
+import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardSuperClass
+import io.github.xxfast.kotlin.native.nuget.processor.forward.isForwardMemberOf
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallablePlanCatalog
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardPropertyPlan
 import io.github.xxfast.kotlin.native.nuget.processor.forward.addForwardKotlinPlanExport
@@ -46,10 +47,10 @@ internal fun FileSpec.Builder.addClassExports(
   val prefix: String = name.lowercase()
   val isAbstract: Boolean = cls.modifiers.contains(Modifier.ABSTRACT)
 
-  val hasSuperClass: Boolean = cls.superTypes
-    .map { it.resolve().declaration }
-    .filterIsInstance<KSClassDeclaration>()
-    .any { it.classKind == ClassKind.CLASS && it.qualifiedName?.asString() != "kotlin.Any" }
+  // The shared has-superclass predicate (`ForwardClassMembership.kt`), so this emitter keeps
+  // exactly the member set the planner planned: a defaulted interface member the class does not
+  // override is bound here too, and the ABI contract check is what would catch any drift.
+  val superClass: KSClassDeclaration? = cls.forwardSuperClass()
 
   val constructor: KSFunctionDeclaration? = cls.primaryConstructor
 
@@ -81,10 +82,7 @@ internal fun FileSpec.Builder.addClassExports(
 
   val properties: List<KSPropertyDeclaration> = cls.getAllProperties()
     .filter { it.getVisibility() == Visibility.PUBLIC }
-    .filter { prop ->
-      if (!hasSuperClass) return@filter true
-      prop.parentDeclaration == cls
-    }
+    .filter { prop -> prop.isForwardMemberOf(cls, superClass) }
     .toList()
 
   properties.forEach { prop ->
@@ -215,12 +213,7 @@ internal fun FileSpec.Builder.addClassExports(
     }
     .filter { !it.modifiers.contains(Modifier.SUSPEND) }
     .filter { method ->
-      if (hasSuperClass) {
-        method.parentDeclaration == cls && !method.modifiers.contains(Modifier.ABSTRACT)
-      } else {
-        val declaredInThisClass: Boolean = method.parentDeclaration == cls
-        declaredInThisClass && !method.modifiers.contains(Modifier.ABSTRACT)
-      }
+      method.isForwardMemberOf(cls, superClass) && !method.modifiers.contains(Modifier.ABSTRACT)
     }
     .toList()
 

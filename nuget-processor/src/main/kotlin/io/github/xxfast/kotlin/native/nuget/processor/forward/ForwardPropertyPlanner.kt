@@ -80,12 +80,13 @@ internal class ForwardPropertyPlanner(
 
   private fun classProperties(cls: KSClassDeclaration): List<ForwardPropertyPlan> {
     val owner: String = cls.qualifiedName?.asString() ?: return emptyList()
-    val hasSuperClass: Boolean = cls.superTypes.any { type ->
-      type.resolve().declaration.qualifiedName?.asString() != "kotlin.Any"
-    }
+    // One shared predicate with `CirClassTranslator` (see `ForwardClassMembership.kt`): this used
+    // to count any non-`Any` supertype, so an interface-only class planned none of its inherited
+    // members while the translator still rendered them into `: IGreeter`.
+    val superClass: KSClassDeclaration? = cls.forwardSuperClass()
     return cls.getAllProperties()
       .filter { it.getVisibility() == Visibility.PUBLIC }
-      .filter { prop -> !hasSuperClass || prop.parentDeclaration == cls }
+      .filter { prop -> prop.isForwardPlannableMemberOf(cls, superClass) }
       .mapNotNull { prop ->
         propertyPlan(
           symbol = "$owner.${prop.simpleName.asString()}",

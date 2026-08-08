@@ -123,7 +123,6 @@ class Tier1InheritedMemberDiagnosticsTest {
    * of `Host`, so it should bind), not the buggy one.
    */
   @Test
-  @XFail("ROADMAP: interface-only class drops its defaulted interface members, emitting a C# type that does not implement the interface it declares")
   fun `interface-only class binds its defaulted interface members`() {
     val result = Tier1Harness.run(
       """

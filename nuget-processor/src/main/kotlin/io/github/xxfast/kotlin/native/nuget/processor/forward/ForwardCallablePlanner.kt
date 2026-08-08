@@ -553,6 +553,7 @@ internal class ForwardCallablePlanner(
   private fun classEntries(cls: KSClassDeclaration): List<ForwardCallableCatalogEntry> {
     val className: String = cls.simpleName.asString()
     val prefix: String = className.lowercase()
+    val superClass: KSClassDeclaration? = cls.forwardSuperClass()
     val receiverType: BridgeType = BridgeType.ObjectHandle(
       requireNotNull(cls.qualifiedName?.asString()) {
         "Forward class planner cannot create a handle for local ${className}"
@@ -566,7 +567,10 @@ internal class ForwardCallablePlanner(
             (name == "copy" || name.startsWith("component"))
         name !in setOf("equals", "hashCode", "toString", "<init>") && !isDataClassMethod
       }
-      .filter { method -> method.parentDeclaration == cls }
+      // Shared with `CirClassTranslator` and `ForwardPropertyPlanner`: a defaulted interface
+      // member the class does not override still binds here, because the C# class declares that
+      // interface and must carry the member (`ForwardClassMembership.kt`).
+      .filter { method -> method.isForwardPlannableMemberOf(cls, superClass) }
       .toList()
     val interfaceBridgeMethods: Set<KSFunctionDeclaration> = findInterfaceBridgePairs(methods)
       .flatMap { pair -> listOf(pair.first, pair.second) }

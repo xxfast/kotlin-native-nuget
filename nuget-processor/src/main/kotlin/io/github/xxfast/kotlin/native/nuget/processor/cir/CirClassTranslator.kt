@@ -20,6 +20,8 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCirProperty
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnostic
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnosticKind
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnosticSink
+import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardSuperClass
+import io.github.xxfast.kotlin.native.nuget.processor.forward.isForwardMemberOf
 import io.github.xxfast.kotlin.native.nuget.processor.forward.planFor
 import io.github.xxfast.kotlin.native.nuget.processor.toCName
 
@@ -48,14 +50,10 @@ internal fun translateClass(
   val isDataClass: Boolean = cls.modifiers.contains(Modifier.DATA)
   val isAbstract: Boolean = cls.modifiers.contains(Modifier.ABSTRACT)
 
-  val superClass: String? = cls.superTypes
-    .map { it.resolve().declaration }
-    .filterIsInstance<KSClassDeclaration>()
-    .firstOrNull { decl ->
-      decl.classKind == ClassKind.CLASS &&
-          decl.qualifiedName?.asString() != "kotlin.Any"
-    }
-    ?.simpleName?.asString()
+  // The shared has-superclass predicate (`ForwardClassMembership.kt`), the same instance the two
+  // planners filter their members with, so a member can never be kept here and skipped there.
+  val superClassDeclaration: KSClassDeclaration? = cls.forwardSuperClass()
+  val superClass: String? = superClassDeclaration?.simpleName?.asString()
 
   val interfaces: List<String> = if (superClass != null) {
     emptyList()
@@ -129,10 +127,7 @@ internal fun translateClass(
 
   val properties: List<CirProperty> = cls.getAllProperties()
     .filter { it.getVisibility() == Visibility.PUBLIC }
-    .filter { prop ->
-      if (superClass == null) return@filter true
-      prop.parentDeclaration == cls
-    }
+    .filter { prop -> prop.isForwardMemberOf(cls, superClassDeclaration) }
     .mapNotNull { prop ->
       val propName: String = prop.simpleName.asString()
       val planned = callableCatalog.propertyFor("${cls.qualifiedName?.asString() ?: name}.$propName")
@@ -352,11 +347,7 @@ internal fun translateClass(
           isDataClassMethod
       if (isSkipped) return@filter false
 
-      if (superClass != null) {
-        method.parentDeclaration == cls
-      } else {
-        true
-      }
+      method.isForwardMemberOf(cls, superClassDeclaration)
     }
 
   val (allSuspendMethods, regularMethods) = filteredMethods
