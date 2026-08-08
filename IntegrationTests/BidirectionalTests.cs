@@ -95,6 +95,71 @@ public class BidirectionalTests
         Assert.Equal("Woof!", friend.Speak());
     }
 
+    // ADR-084 stage 3 (facet 5): a stored C#-implemented pet handed back to C# must resolve to the
+    // original instance. Without the token probe, `ClosestFriend()` wraps the bridge handle in a
+    // second `Pet` wrapper, so every read round-trips through two bridges and `Assert.Same` fails.
+    [Fact]
+    public void StoredCSharpPet_RoundTripsToTheOriginalInstance()
+    {
+        using var oreo = new Cat("Oreo", 9);
+        using IPet dog = new Dog("Rex");
+
+        oreo.Befriend(dog);
+
+        Assert.Same(dog, oreo.ClosestFriend());
+        Assert.Same(dog, oreo.Friend);
+    }
+
+    [Fact]
+    public void RepeatedCrossings_ResolveToTheOneCSharpInstance()
+    {
+        using var oreo = new Cat("Oreo", 9);
+        using IPet dog = new Dog("Rex");
+
+        oreo.Befriend(dog);
+        Assert.Same(dog, oreo.ClosestFriend());
+
+        // A second crossing of the same object: the identity must survive a fresh bridge, and the
+        // slots must still dispatch (a stale handle would fault or return the wrong value here).
+        oreo.Befriend(dog);
+        Assert.Same(dog, oreo.ClosestFriend());
+        Assert.Equal("Woof!", oreo.ClosestFriend().Speak());
+    }
+
+    // The probe must not hijack a Kotlin-backed pet: its handle carries no bridge token, so the
+    // return position still constructs the generated wrapper.
+    [Fact]
+    public void KotlinBackedPet_StillResolvesToItsWrapper()
+    {
+        using var oreo = new Cat("Oreo", 9);
+        using var mochi = new Cat("Mochi", 7);
+
+        oreo.Befriend(mochi);
+        using IPet friend = oreo.ClosestFriend();
+
+        Assert.IsNotType<Dog>(friend);
+        Assert.Equal("Mochi", friend.Name);
+    }
+
+    [Fact]
+    public void MixedStores_ResolveIndependently()
+    {
+        using var oreo = new Cat("Oreo", 9);
+        using var mochi = new Cat("Mochi", 7);
+        using IPet dog = new Dog("Rex");
+
+        oreo.Befriend(dog);
+        Assert.Same(dog, oreo.ClosestFriend());
+
+        oreo.Befriend(mochi);
+        using IPet kotlinFriend = oreo.ClosestFriend();
+        Assert.IsNotType<Dog>(kotlinFriend);
+        Assert.Equal("Mochi", kotlinFriend.Name);
+
+        oreo.Befriend(dog);
+        Assert.Same(dog, oreo.ClosestFriend());
+    }
+
     // ADR-084 stage 2 (facet 4): the bridge object owns a Kotlin `createCleaner` holding only the
     // release function pointer and its context, so when Kotlin's GC collects the bridge the C# side
     // is called back and frees every GCHandle it pinned for that object.
@@ -111,16 +176,14 @@ public class BidirectionalTests
         using var oreo = new Cat("Oreo", 9);
         // Settle anything an earlier test in this class left pending, so the delta below can only
         // be Rex's bridge: without this, "some bridge was released" would pass vacuously.
-        NugetBridge.ReleaseTransferHandles();
         SettleReleases();
         int before = NugetBridgeState.ReleasedCount;
 
         BefriendAndDrop(oreo);
-        // Kotlin's own reference to the bridge (`friend = pet`) is the thing that must go for the
-        // bridge to become collectible.
+        // Kotlin's own reference to the bridge (`friend = pet`) is the only root left: ADR-084
+        // stage 3 disposes the factory's transfer handle at the call site, so dropping this makes
+        // the bridge collectible with no explicit hand-back from the host.
         oreo.Friend = null;
-        // ...and the transfer StableRef the factory minted is C#'s reference to it.
-        NugetBridge.ReleaseTransferHandles();
 
         Assert.True(
             ReleaseFiredWithin(before, TimeSpan.FromSeconds(5)),
@@ -143,6 +206,30 @@ public class BidirectionalTests
 
         Assert.Equal("Woof!", oreo.ClosestFriend().Speak());
         Assert.Equal("Rex says: Woof!", oreo.Interview(dog));
+    }
+
+    // The property-setter position of the same crossing: `Friend = dog` mints a transfer handle
+    // exactly like `Befriend(dog)` does, and must dispose it after the native call. Until it did,
+    // that handle rooted the bridge forever and the cleaner could never fire.
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static void AssignFriendAndDrop(Cat oreo) => oreo.Friend = new Dog("Rex");
+
+    [Fact]
+    public void PetAssignedThroughTheSetter_DispatchesAndThenReleases()
+    {
+        using var oreo = new Cat("Oreo", 9);
+        SettleReleases();
+        int before = NugetBridgeState.ReleasedCount;
+
+        AssignFriendAndDrop(oreo);
+        Assert.Equal("Woof!", oreo.ClosestFriend().Speak());
+        Assert.Equal("Rex", oreo.Friend!.Name);
+
+        oreo.Friend = null;
+
+        Assert.True(
+            ReleaseFiredWithin(before, TimeSpan.FromSeconds(5)),
+            $"expected the setter's transfer handle to be released; ReleasedCount stayed at {before}");
     }
 
     private static void SettleReleases()

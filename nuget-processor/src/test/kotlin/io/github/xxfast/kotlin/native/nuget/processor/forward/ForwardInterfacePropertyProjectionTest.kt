@@ -51,7 +51,13 @@ class ForwardInterfacePropertyProjectionTest {
     val property: CirProperty = ForwardCirPropertyProjection.classProperty(plan)
 
     assertEquals("IPet", property.type)
-    assertTrue(property.getter.contains("return new Pet(nativeResult);"))
+    // ADR-084 facet 5: the wrapper construction is now the identity probe's fallback.
+    assertTrue(
+      property.getter.contains(
+        "return (NugetMarshal.TryResolveCSharp(nativeResult, out IPet csharpOriginal) " +
+          "? csharpOriginal : new Pet(nativeResult));",
+      ),
+    )
   }
 
   @Test
@@ -80,12 +86,19 @@ class ForwardInterfacePropertyProjectionTest {
 
     assertEquals("IPet?", property.type)
     assertTrue(
-      property.getter.contains("return nativeResult == IntPtr.Zero ? null : new Pet(nativeResult);"),
+      property.getter.contains(
+        "return nativeResult == IntPtr.Zero ? null : " +
+          "(NugetMarshal.TryResolveCSharp(nativeResult, out IPet csharpOriginal) " +
+          "? csharpOriginal : new Pet(nativeResult));",
+      ),
       "expected the nullable getter to null-guard then construct the backing class; got: ${property.getter}",
     )
     val setter: String = requireNotNull(property.setter) { "expected a setter body" }
     assertTrue(
-      setter.contains("value != null ? NugetMarshal.HandleOf(value) : IntPtr.Zero"),
+      // ADR-084 stage 3: the nullable lowering is HandleOfOrZero (null ships IntPtr.Zero and mints
+      // nothing), extracted before the call so a minted transfer handle can be disposed after it.
+      setter.contains("IntPtr valueHandle = NugetMarshal.HandleOfOrZero(value, out bool valueOwned);") &&
+        setter.contains("if (valueOwned) { NugetMarshal.Dispose(valueHandle); }"),
       "expected the nullable setter to lower through the shared HandleOf reflective helper with " +
           "a null guard, not a direct ._handle read; got: $setter",
     )
@@ -116,7 +129,9 @@ class ForwardInterfacePropertyProjectionTest {
 
     val setter: String = requireNotNull(property.setter) { "expected a setter body" }
     assertTrue(
-      setter.contains("NugetMarshal.HandleOf(value)") && !setter.contains("value != null"),
+      setter.contains("IntPtr valueHandle = NugetMarshal.HandleOf(value, out bool valueOwned);") &&
+        setter.contains("if (valueOwned) { NugetMarshal.Dispose(valueHandle); }") &&
+        !setter.contains("value != null"),
       "expected a plain HandleOf lowering with no null guard for a non-nullable interface " +
           "property; got: $setter",
     )

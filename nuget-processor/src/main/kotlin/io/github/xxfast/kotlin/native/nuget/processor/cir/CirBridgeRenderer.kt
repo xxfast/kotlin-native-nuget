@@ -19,36 +19,21 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.delegateParamList
 internal fun StringBuilder.renderBridgeHelper(helper: CirBridgeHelper) {
   appendLine("    internal static class NugetBridge")
   appendLine("    {")
-  // A ConditionalWeakTable keeps one bridge per implementing object, so passing the same instance
-  // twice reaches Kotlin as the same bridge object rather than minting a second one.
-  appendLine("        private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<object, NugetBridgeState> States = new();")
-  appendLine()
+  // ADR-084 stage 3: one bridge per *crossing*, not per object. The handle the factory returns is a
+  // transfer the call site disposes once the native call is done, which is what leaves Kotlin's own
+  // reference as the bridge's only root; caching it would hand out a disposed StableRef next time.
+  // C#-side identity does not depend on the reuse: it comes from the token (facet 5).
   appendLine("        internal static IntPtr HandleFor(object impl)")
   appendLine("        {")
   helper.interfaces.forEach { entry ->
     val plan: ForwardBridgeInterfacePlan = entry.plan
     appendLine("            if (impl is ${entry.csQualifiedName} ${plan.simpleName.lowercase()}Impl)")
     appendLine("            {")
-    appendLine("                return Resolve(impl, _ => ${plan.stateClassName}.Create(${plan.simpleName.lowercase()}Impl));")
+    appendLine("                return ${plan.stateClassName}.Create(${plan.simpleName.lowercase()}Impl).KotlinHandle;")
     appendLine("            }")
   }
   appendLine("            throw new NotSupportedException(")
   appendLine("                \$\"{impl.GetType().Name} implements no bridgeable Kotlin interface.\");")
-  appendLine("        }")
-  appendLine()
-  // A bridge whose transfer handle was handed back (see ReleaseTransferHandles) must not be reused:
-  // its handle is gone, and the Kotlin object behind it may already be collected.
-  appendLine("        private static IntPtr Resolve(")
-  appendLine("            object impl,")
-  appendLine("            System.Runtime.CompilerServices.ConditionalWeakTable<object, NugetBridgeState>.CreateValueCallback factory)")
-  appendLine("        {")
-  appendLine("            NugetBridgeState state = States.GetValue(impl, factory);")
-  appendLine("            if (state.KotlinHandle == IntPtr.Zero)")
-  appendLine("            {")
-  appendLine("                States.Remove(impl);")
-  appendLine("                state = States.GetValue(impl, factory);")
-  appendLine("            }")
-  appendLine("            return state.KotlinHandle;")
   appendLine("        }")
   appendLine()
   appendLine("        [DllImport(\"${helper.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"nuget_gc_collect\")]")
@@ -58,15 +43,6 @@ internal fun StringBuilder.renderBridgeHelper(helper: CirBridgeHelper) {
   // promptly. Hosts that need to observe it (and the release test) force a round here.
   appendLine("        internal static void GcCollect() => Native_GcCollect();")
   appendLine()
-  // ADR-084 stage 2 interim: the StableRef the factory returns is C#'s own strong reference to the
-  // Kotlin bridge, so nothing can collect the bridge while it is held. Handing it back leaves
-  // Kotlin's own reference as the only root, which is what lets the cleaner ever run. The
-  // automatic trigger (disposing the transfer handle at the interface-parameter call site) is not
-  // in this stage; see the ADR's lifetime note.
-  appendLine("        internal static void ReleaseTransferHandles()")
-  appendLine("        {")
-  appendLine("            NugetBridgeState.ReleaseTransferHandles();")
-  appendLine("        }")
   appendLine("    }")
   appendLine()
 
@@ -78,10 +54,9 @@ internal fun StringBuilder.renderBridgeHelper(helper: CirBridgeHelper) {
   // runs on its own worker thread, so a test cannot see the callback any other way.
   appendLine("        internal static int ReleasedCount;")
   appendLine()
-  appendLine("        private static readonly System.Collections.Generic.List<NugetBridgeState> Live = new();")
-  appendLine()
   appendLine("        private readonly System.Collections.Generic.List<GCHandle> _pins = new();")
   appendLine("        private GCHandle _self;")
+  appendLine("        private GCHandle _token;")
   appendLine("        private int _freed;")
   appendLine()
   appendLine("        internal void Pin(params Delegate[] delegates)")
@@ -94,36 +69,35 @@ internal fun StringBuilder.renderBridgeHelper(helper: CirBridgeHelper) {
   appendLine("        internal IntPtr Root()")
   appendLine("        {")
   appendLine("            _self = GCHandle.Alloc(this);")
-  appendLine("            lock (Live) Live.Add(this);")
   appendLine("            return GCHandle.ToIntPtr(_self);")
   appendLine("        }")
+  appendLine()
   appendLine()
   // Called from the Kotlin cleaner worker thread, once, when the bridge object is collected.
   // Freeing the release delegate's own pin from inside its invocation is safe: the executing
   // delegate is rooted by the call in progress.
+  // ADR-084 facet 5: the identity token is a GCHandle to the implementing object itself, so the
+  // shared probe resolves the original instance without knowing any bridge-state type. It also
+  // roots that object for exactly as long as the Kotlin bridge lives, the ARC analogue.
+  appendLine("        internal IntPtr TokenFor(object impl)")
+  appendLine("        {")
+  appendLine("            _token = GCHandle.Alloc(impl);")
+  appendLine("            return GCHandle.ToIntPtr(_token);")
+  appendLine("        }")
+  appendLine()
   appendLine("        internal void FreeAll()")
   appendLine("        {")
   appendLine("            if (System.Threading.Interlocked.Exchange(ref _freed, 1) != 0) return;")
-  appendLine("            lock (Live) Live.Remove(this);")
   appendLine("            foreach (GCHandle pin in _pins)")
   appendLine("            {")
   appendLine("                if (pin.IsAllocated) pin.Free();")
   appendLine("            }")
   appendLine("            _pins.Clear();")
   appendLine("            if (_self.IsAllocated) _self.Free();")
+  appendLine("            if (_token.IsAllocated) _token.Free();")
   appendLine("            System.Threading.Interlocked.Increment(ref ReleasedCount);")
   appendLine("        }")
   appendLine()
-  appendLine("        internal static void ReleaseTransferHandles()")
-  appendLine("        {")
-  appendLine("            NugetBridgeState[] states;")
-  appendLine("            lock (Live) states = Live.ToArray();")
-  appendLine("            foreach (NugetBridgeState state in states)")
-  appendLine("            {")
-  appendLine("                IntPtr handle = System.Threading.Interlocked.Exchange(ref state.KotlinHandle, IntPtr.Zero);")
-  appendLine("                if (handle != IntPtr.Zero) NugetMarshal.Dispose(handle);")
-  appendLine("            }")
-  appendLine("        }")
   appendLine("    }")
   appendLine()
 
@@ -136,7 +110,7 @@ private fun StringBuilder.renderBridgeState(libraryName: String, entry: CirBridg
   appendLine("    {")
   val nativeParams: List<String> = plan.slots.flatMap { slot ->
     listOf("IntPtr ${slot.slotPrefix}Ptr", "IntPtr ${slot.slotPrefix}Ctx")
-  } + listOf("IntPtr releasePtr", "IntPtr releaseCtx", "out IntPtr error")
+  } + listOf("IntPtr releasePtr", "IntPtr releaseCtx", "IntPtr token", "out IntPtr error")
   appendLine("        [DllImport(\"$libraryName\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"${plan.exportName}\")]")
   appendLine("        private static extern IntPtr Native_Create(${nativeParams.joinToString(", ")});")
   appendLine()
@@ -144,6 +118,7 @@ private fun StringBuilder.renderBridgeState(libraryName: String, entry: CirBridg
   appendLine("        {")
   appendLine("            var state = new ${plan.stateClassName}();")
   appendLine("            IntPtr ctx = state.Root();")
+  appendLine("            IntPtr token = state.TokenFor(impl);")
   plan.slots.forEach { slot ->
     appendLine("            ${slot.delegateName()} ${slot.slotPrefix} = ${slotLambda(slot)};")
   }
@@ -152,7 +127,7 @@ private fun StringBuilder.renderBridgeState(libraryName: String, entry: CirBridg
   appendLine("            state.Pin($pinned);")
   val callArgs: List<String> = plan.slots.flatMap { slot ->
     listOf("Marshal.GetFunctionPointerForDelegate(${slot.slotPrefix})", "ctx")
-  } + listOf("Marshal.GetFunctionPointerForDelegate(release)", "ctx", "out IntPtr error")
+  } + listOf("Marshal.GetFunctionPointerForDelegate(release)", "ctx", "token", "out IntPtr error")
   appendLine("            state.KotlinHandle = Native_Create(")
   appendLine("                ${callArgs.joinToString(", ")});")
   appendLine("            if (error != IntPtr.Zero) throw NugetErrorNative.BuildException(error);")

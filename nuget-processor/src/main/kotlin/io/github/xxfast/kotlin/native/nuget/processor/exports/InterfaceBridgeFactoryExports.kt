@@ -4,6 +4,8 @@ import com.squareup.kotlinpoet.AnnotationSpec
 import com.squareup.kotlinpoet.ClassName
 import com.squareup.kotlinpoet.FileSpec
 import com.squareup.kotlinpoet.FunSpec
+import com.squareup.kotlinpoet.KModifier
+import com.squareup.kotlinpoet.TypeSpec
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeInterfacePlan
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeSlot
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeWire
@@ -40,7 +42,10 @@ internal fun FileSpec.Builder.addInterfaceBridgeFactoryExport(plan: ForwardBridg
       )
     }
     appendLine("  val releaseFn = releasePtr.reinterpret<CFunction<(COpaquePointer) -> Unit>>()")
-    appendLine("  val bridge = object : ${plan.qualifiedName} {")
+    appendLine("  val bridge = object : ${plan.qualifiedName}, NugetCSharpBridge {")
+    // ADR-084 facet 5: the token is a GCHandle to the *implementing C# object*, so the return-
+    // position probe resolves the original instance without knowing any bridge-state type.
+    appendLine("    override val nugetToken: COpaquePointer = token")
     appendLine("    @Suppress(\"unused\")")
     appendLine("    private val cleaner = createCleaner(releaseFn to releaseCtx) { (fn, ctx) ->")
     appendLine("      fn.invoke(ctx)")
@@ -72,11 +77,41 @@ internal fun FileSpec.Builder.addInterfaceBridgeFactoryExport(plan: ForwardBridg
   }
   builder.addParameter("releasePtr", cOpaquePointer)
   builder.addParameter("releaseCtx", cOpaquePointer)
+  builder.addParameter("token", cOpaquePointer)
   builder.addParameter("errorOut", cOpaquePointer.copy(nullable = true))
   builder.returns(cOpaquePointer.copy(nullable = true))
   builder.addCode(body)
 
   addFunction(builder.build())
+}
+
+/**
+ * ADR-084 facet 5: the marker every generated bridge object implements, plus the shared probe the
+ * C# return position asks before wrapping a handle. A Kotlin-backed object answers null (it does
+ * not implement the marker), so the ordinary wrapper construction stands; a bridge answers the
+ * GCHandle of the C# object behind it, and C# hands that original instance back instead of
+ * double-bridging it.
+ *
+ * Both are emitted unconditionally: the C# probe lives in `NugetMarshal`, which every module with
+ * an interface return has, including modules whose interfaces did not plan a bridge factory.
+ */
+internal fun FileSpec.Builder.addCSharpBridgeMarker() {
+  addType(
+    TypeSpec.interfaceBuilder("NugetCSharpBridge")
+      .addModifiers(KModifier.INTERNAL)
+      .addProperty("nugetToken", cOpaquePointer)
+      .build()
+  )
+  addFunction(
+    FunSpec.builder("export_nuget_csharp_token")
+      .addAnnotation(cNameAnnotation("nuget_csharp_token"))
+      .addParameter("handle", cOpaquePointer)
+      .returns(cOpaquePointer.copy(nullable = true))
+      .addStatement(
+        "return (handle.asStableRef<Any>().get() as? NugetCSharpBridge)?.nugetToken",
+      )
+      .build()
+  )
 }
 
 /**

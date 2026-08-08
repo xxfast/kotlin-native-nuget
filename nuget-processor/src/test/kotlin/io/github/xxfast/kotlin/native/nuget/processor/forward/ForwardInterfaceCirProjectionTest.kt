@@ -41,7 +41,13 @@ class ForwardInterfaceCirProjectionTest {
     val method: CirMethod = ForwardCirPlanProjection.classMethod(plan, "cat", isOverride = false)
 
     assertEquals("IPet", method.returnType)
-    assertTrue(method.body.contains("return new Pet(nativeResult);"))
+    // ADR-084 facet 5: the wrapper construction is now the fallback of the identity probe.
+    assertTrue(
+      method.body.contains(
+        "return (NugetMarshal.TryResolveCSharp(nativeResult, out IPet csharpOriginal) " +
+          "? csharpOriginal : new Pet(nativeResult));",
+      ),
+    )
   }
 
   @Test
@@ -56,7 +62,13 @@ class ForwardInterfaceCirProjectionTest {
     val method: CirMethod = ForwardCirPlanProjection.classMethod(plan, "cat", isOverride = false)
 
     assertEquals("IPet?", method.returnType)
-    assertTrue(method.body.contains("return nativeResult == IntPtr.Zero ? null : new Pet(nativeResult);"))
+    assertTrue(
+      method.body.contains(
+        "return nativeResult == IntPtr.Zero ? null : " +
+          "(NugetMarshal.TryResolveCSharp(nativeResult, out IPet csharpOriginal) " +
+          "? csharpOriginal : new Pet(nativeResult));",
+      ),
+    )
   }
 
   @Test
@@ -71,7 +83,10 @@ class ForwardInterfaceCirProjectionTest {
     val method: CirMethod = ForwardCirPlanProjection.classMethod(plan, "cat", isOverride = false)
 
     assertEquals("IPet", method.parameters.single { it.name == "pet" }.type)
-    assertTrue(method.body.contains("NugetMarshal.HandleOf(pet)"))
+    // ADR-084 stage 3: extraction moved into the prelude so the minted transfer handle can be
+    // disposed once the crossing is done.
+    assertTrue(method.body.contains("IntPtr petHandle = NugetMarshal.HandleOf(pet, out bool petOwned);"))
+    assertTrue(method.body.contains("if (petOwned) { NugetMarshal.Dispose(petHandle); }"))
   }
 
   private fun classMethodPlan(

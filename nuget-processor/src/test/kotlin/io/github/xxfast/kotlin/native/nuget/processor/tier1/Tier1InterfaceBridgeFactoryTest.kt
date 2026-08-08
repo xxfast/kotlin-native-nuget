@@ -56,6 +56,44 @@ class Tier1InterfaceBridgeFactoryTest {
     assertContains(kotlin, "napPtr")
     assertContains(kotlin, "releasePtr")
     assertContains(kotlin, "releaseCtx")
+    assertContains(kotlin, "token")
+  }
+
+  @Test
+  fun `the identity marker and its probe pair across both halves`() {
+    val result = Tier1Harness.run(source)
+
+    val kotlin: String = result.generated
+    assertContains(kotlin, "internal interface NugetCSharpBridge")
+    assertContains(kotlin, "public val nugetToken: COpaquePointer")
+    assertContains(kotlin, "@CName(\"nuget_csharp_token\")")
+    assertContains(kotlin, "(handle.asStableRef<Any>().get() as? NugetCSharpBridge)?.nugetToken")
+    // The bridge answers with the GCHandle of the C# object behind it.
+    assertContains(kotlin, "override val nugetToken: COpaquePointer = token")
+
+    val cs: String = result.generatedCSharp
+    assertContains(cs, "EntryPoint = \"nuget_csharp_token\"")
+    assertContains(cs, "internal static bool TryResolveCSharp<T>(IntPtr handle, out T original) where T : class")
+    assertContains(cs, "original = (T)GCHandle.FromIntPtr(token).Target!;")
+    assertContains(cs, "IntPtr token = state.TokenFor(impl);")
+    // The return position probes before wrapping, so a stored C#-implemented pet comes back as
+    // itself rather than as a second wrapper over its own bridge.
+    assertContains(
+      cs,
+      "return (NugetMarshal.TryResolveCSharp(nativeResult, out IPet csharpOriginal) " +
+        "? csharpOriginal : new Pet(nativeResult));",
+    )
+  }
+
+  @Test
+  fun `an interface argument disposes only a minted transfer handle`() {
+    val result = Tier1Harness.run(source)
+    val cs: String = result.generatedCSharp
+
+    assertContains(cs, "IntPtr petHandle = NugetMarshal.HandleOf(pet, out bool petOwned);")
+    assertContains(cs, "if (petOwned) { NugetMarshal.Dispose(petHandle); }")
+    // A Kotlin-backed wrapper's own `_handle` is never disposed by the call site.
+    assertContains(cs, "owned = false;")
   }
 
   @Test
@@ -108,7 +146,7 @@ class Tier1InterfaceBridgeFactoryTest {
       cs.contains("passing a C#-implemented interface is not supported yet"),
       "the ADR-040 boundary exception must be gone once a bridge layer is emitted",
     )
-    assertContains(cs, "ConditionalWeakTable<object, NugetBridgeState> States")
+    assertContains(cs, "return PetBridgeState.Create(petImpl).KotlinHandle;")
     assertContains(cs, "implements no bridgeable Kotlin interface.")
   }
 
@@ -144,9 +182,7 @@ class Tier1InterfaceBridgeFactoryTest {
     assertContains(cs, "System.Threading.Interlocked.Increment(ref ReleasedCount);")
     assertContains(cs, "EntryPoint = \"nuget_gc_collect\"")
     assertContains(cs, "internal static void GcCollect() => Native_GcCollect();")
-    // A bridge whose transfer handle was handed back must be rebuilt, not reused at IntPtr.Zero.
-    assertContains(cs, "if (state.KotlinHandle == IntPtr.Zero)")
-    assertContains(cs, "States.Remove(impl);")
+    assertContains(cs, "if (_token.IsAllocated) _token.Free();")
   }
 
   @Test

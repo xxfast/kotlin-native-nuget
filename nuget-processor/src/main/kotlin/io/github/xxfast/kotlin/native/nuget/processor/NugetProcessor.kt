@@ -33,6 +33,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.exports.addEnumExports
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addFunctionExports
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addGenericClassExports
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addGenericFunctionExports
+import io.github.xxfast.kotlin.native.nuget.processor.exports.addCSharpBridgeMarker
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addGcCollectExport
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addInterfaceBridgeFactoryExport
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addInterfaceExports
@@ -701,6 +702,9 @@ class NugetProcessor(
     // ADR-084 stage 2: the release path is only observable with a forced GC round, so the support
     // export ships with the factories it exists to exercise.
     if (bridgePlans.isNotEmpty()) builder.addGcCollectExport()
+    // ADR-084 facet 5: the marker and its probe pair with `NugetMarshal.TryResolveCSharp`, which
+    // every module carrying an interface return emits, so both halves are unconditional.
+    builder.addCSharpBridgeMarker()
 
     val suspendLambdaTypes: Set<String> = setOf(
       "kotlin.coroutines.SuspendFunction0",

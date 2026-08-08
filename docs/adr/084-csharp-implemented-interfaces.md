@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed
+Accepted
 
 ## Context
 
@@ -343,13 +343,23 @@ chain provides.
 
 So the ownership rule is inverted: the C# state must **not** hold a strong reference to the Kotlin
 bridge at all. The factory's StableRef is a *transfer* handle, valid for the call that consumes it;
-Kotlin's own reference is then the only root, and its collection drives the release. Commit 2 ships
-the mechanism with `NugetBridge.ReleaseTransferHandles()` as the explicit hand-back, because the
-automatic hand-back has to happen at the interface-parameter call site (dispose the handle after
-the native call, and only when `HandleOf` actually minted it rather than reading a wrapper's
-`_handle`), which is a `ForwardCirPlanProjection` change, not a bridge-layer change. That call-site
-disposal is the remaining work for facet 4; until it lands, a bridge whose transfer handle is never
-handed back stays alive, which is the interim leak, narrowed from "always" to "until hand-back".
+Kotlin's own reference is then the only root, and its collection drives the release. Commit 2 shipped the mechanism with an explicit hand-back; **commit 3 makes it automatic**:
+`HandleOf(value, out bool owned)` reports whether it minted a bridge handle or read a wrapper's own
+`_handle`, and the interface-parameter call site disposes the minted one after the native call
+returns, reusing the same prelude/cleanup slots collection parameters already use
+(`ForwardCirPlanProjection`). Nothing is left for a host to call.
+
+Two consequences of the inversion, both **verified** by the shipped tests:
+- The `ConditionalWeakTable` reuse is gone: one bridge is built per *crossing*, because a cached
+  handle is a disposed handle by the time the next crossing asks for it. The ADR's claim that the
+  same C# object "reaches Kotlin as the same bridge object, preserving Kotlin-side `===` identity
+  too" is therefore **false as shipped**. C#-side identity does not depend on it (it comes from
+  the token, facet 5), and no test asserts Kotlin-side `===`. Restoring it would need a Kotlin-side
+  weak table keyed by token, which is not in this ADR.
+- The property *setter* position (`cat.Friend = dog`) is released too. It needed the same
+  prelude/cleanup slots the parameter path uses, which that projection did not have; adding them
+  also freed the collection setter's `CreateList`/`CreateMap`/`CreateSet` handle, a pre-existing
+  leak of the identical shape that came along for free with the shared mechanism.
 
 ### Consumer C# (end state)
 
@@ -425,9 +435,14 @@ C# class (v1: first match wins, diagnostic on ambiguity).
    observable through `NugetBridgeState.ReleasedCount`, which `FreeAll` increments after freeing
    the delegate pins and the self handle. The automatic transfer-handle disposal at the call site
    is deferred with facet 5.
-3. **Commit 3 (facet 5):** `NugetCSharpBridge` marker + `nuget_csharp_token` probe +
-   `ConditionalWeakTable` reuse; `Assert.Same` round-trip tests, including "pass the same Dog to
-   two Kotlin sinks, Kotlin sees one object".
+3. **Commit 3 (facet 5):** `NugetCSharpBridge` marker + `nuget_csharp_token` probe; `Assert.Same`
+   round-trip tests. Shipped, with two corrections to the sketch above: the token is a `GCHandle`
+   to the **implementing object itself**, not to the `BridgeState` (so the shared probe helper
+   needs no bridge-state type and can live in `NugetMarshal`, which every module with an interface
+   return already has, including modules whose interfaces did not plan a factory); and the
+   `ConditionalWeakTable` reuse is dropped for the transfer-handle reason above, so "pass the same
+   Dog to two Kotlin sinks, Kotlin sees one object" is **not** shipped. The C#-side round trip
+   (`Assert.Same(dog, oreo.ClosestFriend())`, repeated crossings, mixed C#/Kotlin stores) is.
 
 ### Tests that change
 
