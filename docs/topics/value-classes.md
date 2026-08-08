@@ -1337,16 +1337,45 @@ public void ChartBook_RecordMoods_SetOfTemperamentParameter_RoundTripsANonFirstO
     </p>
 </note>
 
+## Inherited members
+
+Members a value class inherits from a supertype, most commonly through interface delegation
+(`value class ArticleUri(val value: String) : CharSequence by value`), are **never** exported to
+C#, permanently. Only members the value class declares itself are bridged. Each excluded member is
+named individually in the build log with a `SKIPPED_INHERITED_MEMBER` diagnostic, so the omission
+is visible rather than silent.
+
+The underlying property is always present and strictly richer than any bridged subset could be, so
+consumers reach the supertype's own API through it:
+
+```C#
+var uri = new StoryUri("nyt://article/1234");
+int n = uri.Value.Length;               // string's own, richer API
+char c = uri.Value[3];
+string sub = uri.Value.Substring(0, 5); // more than CharSequence could ever offer
+```
+
+<note>
+    <p>
+        Declaring the member directly on the value class, rather than through delegation, still
+        binds normally: a member is only skipped when its simple name matches something a
+        supertype also declares.
+    </p>
+</note>
+
+See [ADR-082](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/082-value-class-inherited-members.md)
+for the full reasoning.
+
 ## Limitations
 
 - Reference-underlying value-class **primary** constructor `init` validation stays deferred
   ([ADR-035](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/035-value-class-primary-constructor-validation.md));
   primitive-underlying validation (the `CatId` path above) is in place.
-- Whether inherited members on a value class (for example `CharSequence` members via `by value`)
-  should be exported is still an open product decision; declared methods with parameters are planned.
-  In the meantime they are excluded from the generated C# API with a `SKIPPED_INHERITED_MEMBER`
-  diagnostic naming each one, rather than binding silently
-  ([ADR-064](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/064-forward-unsupported-declaration-diagnostics.md)).
+- Inherited/delegation-forwarded members are excluded by design, not deferred; see
+  [Inherited members](#inherited-members) above. One accepted side effect: the exclusion signal is
+  simple-name matching, so an author-declared member whose name merely collides with any supertype
+  member (an explicit `override`, or an unrelated overload sharing a name) is also skipped under
+  the same diagnostic. The workaround is a non-colliding name.
 - A **nullable** value-class collection component (`List<ChartId?>`) has no representation on the
   write side yet; it stays a named skip. A **nested**-collection component
   (`List<List<ChartId>>`) is the same story. A **bare** enum component, not wrapped in a value
@@ -1373,5 +1402,6 @@ public void ChartBook_RecordMoods_SetOfTemperamentParameter_RoundTripsANonFirstO
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/079-nullable-primitive-enum-underlying-value-classes.md">ADR-079: Nullable(ValueClass) over Primitive/Enum-underlying value classes</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/080-bare-nullable-enum.md">ADR-080: Bare nullable enums</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/081-value-class-collection-components.md">ADR-081: Value-class collection components</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/082-value-class-inherited-members.md">ADR-082: Value-class inherited members</a>
     </category>
 </seealso>
