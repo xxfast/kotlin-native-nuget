@@ -400,7 +400,8 @@ internal object ForwardCirPlanProjection {
       // `callArguments` (ADR-077 sub-item 4). Passing the record struct itself would hand the
       // native import the wrong type (CS1503 in generated code).
       is BridgeType.ValueClass -> {
-        val unwrapped = "receiver.${type.underlyingPropertyName.replaceFirstChar { it.uppercase() }}"
+        val unwrapped: String =
+          "receiver.${type.underlyingPropertyName.replaceFirstChar { it.uppercase() }}"
         when (type.underlying) {
           is BridgeType.Enum -> "(int)$unwrapped"
           is BridgeType.ObjectHandle -> "$unwrapped._handle"

@@ -314,8 +314,10 @@ private fun ForwardPropertyPlan.accessExpression(): String =
       // own declared members -- the receiver must be reconstructed before the property access. The
       // wire carries the *underlying's* representation, so an enum ordinal / StableRef pointer is
       // lowered first by the same shared helper the setter value uses.
-      is BridgeType.ValueClass ->
-        "${type.qualifiedName}(${valueClassUnderlyingLowering("receiver", type.underlying)}).$kotlinName"
+      is BridgeType.ValueClass -> {
+        val lowered: String = valueClassUnderlyingLowering("receiver", type.underlying)
+        "${type.qualifiedName}($lowered).$kotlinName"
+      }
 
       else -> "receiver.$kotlinName"
     }

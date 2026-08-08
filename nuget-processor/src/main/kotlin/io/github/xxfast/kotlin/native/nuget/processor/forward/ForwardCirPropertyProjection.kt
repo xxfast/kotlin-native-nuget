@@ -43,7 +43,8 @@ internal object ForwardCirPropertyProjection {
     val receiverArgument: String = when (val receiverType = receiver.type) {
       is BridgeType.ObjectHandle -> "receiver._handle"
       is BridgeType.ValueClass -> {
-        val underlying = "receiver.${receiverType.underlyingPropertyName.replaceFirstChar { it.uppercase() }}"
+        val underlying: String =
+          "receiver.${receiverType.underlyingPropertyName.replaceFirstChar { it.uppercase() }}"
         when (receiverType.underlying) {
           is BridgeType.Enum -> "(int)$underlying"
           is BridgeType.ObjectHandle -> "$underlying._handle"

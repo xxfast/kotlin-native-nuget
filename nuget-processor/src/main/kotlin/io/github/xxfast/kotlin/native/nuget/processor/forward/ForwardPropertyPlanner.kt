@@ -362,8 +362,8 @@ internal class ForwardPropertyPlanner(
       type.unwrapNullable() as? BridgeType.SpecializedProtocol
     val isLegacyRouted: Boolean = position != ForwardPropertyPosition.EXTENSION &&
         protocol != null && LEGACY_ROUTED_PROTOCOLS.any { prefix ->
-          protocol.name.startsWith(prefix)
-        }
+      protocol.name.startsWith(prefix)
+    }
     if (isLegacyRouted) return
     dropped.add(ForwardDroppedProperty(symbol, prop, type.diagnosticTypeName()))
   }

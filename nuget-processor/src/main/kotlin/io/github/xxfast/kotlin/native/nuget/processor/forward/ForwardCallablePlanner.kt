@@ -1731,14 +1731,12 @@ internal class ForwardCallablePlanner(
     // (isWrappableComponent). ADR-083: the *key* additionally has to be non-nullable -- a C#
     // Dictionary cannot hold a null key, so a nullable-key map has no idiomatic projection and
     // skips named, even though its value slot would be fine.
-    kind == CollectionKind.MAP || kind == CollectionKind.MUTABLE_MAP ->
-      if (key?.let { it !is BridgeType.Nullable && it.isWrappableComponent() } == true &&
-        value?.isWrappableComponent() == true
-      ) {
-        null
-      } else {
-        ForwardPlanSkipReason.COLLECTION
-      }
+    kind == CollectionKind.MAP || kind == CollectionKind.MUTABLE_MAP -> {
+      val keyAdmitted: Boolean =
+        key?.let { it !is BridgeType.Nullable && it.isWrappableComponent() } == true
+      val valueAdmitted: Boolean = value?.isWrappableComponent() == true
+      if (keyAdmitted && valueAdmitted) null else ForwardPlanSkipReason.COLLECTION
+    }
 
     else ->
       if (element?.isWrappableComponent() == true) null else ForwardPlanSkipReason.COLLECTION
