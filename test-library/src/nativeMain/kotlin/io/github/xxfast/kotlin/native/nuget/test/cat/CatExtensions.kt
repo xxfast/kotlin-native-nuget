@@ -3,6 +3,14 @@ package io.github.xxfast.kotlin.native.nuget.test.cat
 fun Cat.sayName(): String = "My name is ${this.name}"
 fun Cat.greetWith(greeting: String): String = "$greeting, ${this.name}!"
 
+// ADR-084 stage 1: a Kotlin-side consumer that CALLS the passed pet's members (a property
+// getter, `name`, and a non-Unit-returning method, `speak()`) and composes the result itself.
+// This is what proves dispatch actually crosses through the C#-supplied function pointers when
+// `pet` is a bridge object backing a C#-implemented `Pet` - an echo or a Kotlin-side default
+// could satisfy a test that merely forwards `pet` back out, but composing the string here means
+// both slot invocations had to succeed and return real values from the C# side.
+fun Cat.interview(pet: Pet): String = "${pet.name} says: ${pet.speak()}"
+
 val Cat.isKitten: Boolean get() = lives > 7
 val Cat.label: String get() = "${name} (${mood.name.lowercase()})"
 

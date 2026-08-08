@@ -273,16 +273,24 @@ internal fun StringBuilder.renderMarshalHelper(helper: CirMarshalHelper) {
   // ADR-040 sub-decision B: the one shared reflective helper for an interface-typed parameter
   // (e.g. `Cat.Befriend(IPet pet)`). The static parameter type is the projected interface, which
   // does not carry `_handle` (only the generated backing wrapper class does), so extraction is
-  // reflective here rather than a direct field read. Throws for a C#-implemented (non-Kotlin-
-  // backed) IFoo -- ROADMAP line 145+ owns that case; this is the v1 boundary.
+  // reflective here rather than a direct field read.
+  //
+  // ADR-084 facet 3: no `_handle` means the value is C#-implemented, and the bridge factory turns
+  // it into a Kotlin-side `object : Foo` handle so the ordinary handle path below it is reused
+  // unchanged. Without a bridge layer in this module there is nothing to fall back to, so the
+  // ADR-040 boundary exception stands.
   appendLine("        internal static IntPtr HandleOf(object value)")
   appendLine("        {")
   appendLine("            var field = value.GetType().GetField(\"_handle\",")
   appendLine("                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Public);")
   appendLine("            if (field == null)")
   appendLine("            {")
-  appendLine("                throw new NotSupportedException(")
-  appendLine("                    $\"{value.GetType().Name} is not a Kotlin-backed object; passing a C#-implemented interface is not supported yet.\");")
+  if (helper.includesBridge) {
+    appendLine("                return NugetBridge.HandleFor(value);")
+  } else {
+    appendLine("                throw new NotSupportedException(")
+    appendLine("                    $\"{value.GetType().Name} is not a Kotlin-backed object; passing a C#-implemented interface is not supported yet.\");")
+  }
   appendLine("            }")
   appendLine("            return (IntPtr)field.GetValue(value)!;")
   appendLine("        }")

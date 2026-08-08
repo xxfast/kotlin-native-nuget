@@ -11,9 +11,11 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallablePla
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallablePlanCatalog
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCirPlanProjection
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCirPropertyProjection
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeInterfacePlan
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnostic
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnosticKind
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnosticSink
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardInterfaceBridgePlanner
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardPropertyPlan
 import io.github.xxfast.kotlin.native.nuget.processor.forward.planFor
 import io.github.xxfast.kotlin.native.nuget.processor.toCName
@@ -397,14 +399,32 @@ internal fun translate(
     needsMarshalHelper = true
   }
 
+  // ADR-084 stage 1: every interface with a C# backing wrapper (i.e. reachable at a return or
+  // parameter position) that plans cleanly gets a bridge factory, so a C# class implementing it can
+  // be passed to Kotlin. An interface with an out-of-scope member plans to null and simply gets no
+  // factory: `HandleOf` keeps throwing for it rather than emitting a half-supported ABI.
+  val bridgePlans: List<CirBridgeInterface> = interfaceBackingClasses.mapNotNull { iface ->
+    val plan: ForwardBridgeInterfacePlan = ForwardInterfaceBridgePlanner.plan(iface) ?: return@mapNotNull null
+    CirBridgeInterface(namespaceOf(iface.packageName.asString()), plan)
+  }
+  if (bridgePlans.isNotEmpty()) {
+    tracker.callbackDelegates.addAll(
+      bridgeDelegates(bridgePlans).filter { delegate ->
+        tracker.callbackDelegates.none { existing -> existing.name == delegate.name }
+      },
+    )
+  }
+
   if (needsMarshalHelper) {
     val helpers: MutableList<CirDeclaration> = mutableListOf(
       CirMarshalHelper(
         context.libraryName,
         includesMap = tracker.needsMap,
         includesSet = tracker.needsSet,
+        includesBridge = bridgePlans.isNotEmpty(),
       ),
     )
+    if (bridgePlans.isNotEmpty()) helpers.add(CirBridgeHelper(context.libraryName, bridgePlans))
     if (tracker.needsList) helpers.add(CirListHelper(context.libraryName))
     if (tracker.needsMap) helpers.add(CirMapHelper(context.libraryName))
     if (tracker.needsSet) helpers.add(CirSetHelper(context.libraryName))
