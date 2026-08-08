@@ -138,15 +138,16 @@ same way, naming the property's own type. `Cat.unsupported: Sequence<String>` is
 named legacy route, so warning would tell a consumer a working property had vanished.
 
 The same kind also fires when an extension property's *receiver* type, not its declared type, is
-what the planner can't wire. `String`, a primitive, `ObjectHandle` classes, and a value class
-underlying `Primitive` or `String` are the supported receivers; anything else warns and the property
-is dropped entirely, naming the receiver rather than the property's own (usually fine) type:
+what the planner can't wire. `String`, a primitive, `ObjectHandle` classes, and a value class over
+any of the four underlyings admitted at ordinary positions (`String`, a primitive, an enum, or
+`ObjectHandle`) are the supported receivers; anything else warns and the property is dropped
+entirely, naming the receiver rather than the property's own (usually fine) type:
 
 ```
 [nuget:SKIPPED_UNSUPPORTED_PROPERTY] Skipping tier1.skipreceiver.Box.label: its extension receiver
     type generic declaration tier1.skipreceiver.Box is not a supported extension-property receiver.
-    declare the property on a class, String, primitive, or a primitive/String-underlying value class
-    receiver, or expose a top-level getter function instead
+    declare the property on a class, String, primitive, or value class receiver, or expose a
+    top-level getter function instead
     at <file>:<line>
 ```
 

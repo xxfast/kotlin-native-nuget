@@ -14,6 +14,8 @@ A Kotlin `value class` (inline class) wrapping a primitive or `String` becomes a
 | `ObjectHandle`-underlying value class at an ordinary position, incl. `Nullable(ValueClass(ObjectHandle))` | the same `record struct`, `?` rides the null pointer | wire is the wrapped object's own StableRef handle; see below |
 | `Nullable(ValueClass)` over a `Primitive`- or `Enum`-underlying value class, at parameter, property, or return position | `Dosage?` / `Temperament?` (`Nullable<T>`), never a reference nullable | no null pointer on the wire, so it reuses the position's has-value fan-out (input pair, ADR-061 single-call `valueOut`, ADR-002 `LegacyTwoCall`/`NullableDispatch`, or the top-level two-call), value slot at the underlying's own wire; see [ADR-079](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/079-nullable-primitive-enum-underlying-value-classes.md) and below |
 | value class as a `List`/`Map`/`Set` component (element, key or value), at input position, collection property setter, method return or property getter | the same `record struct`, in `IReadOnlyList<T>`/`IReadOnlyDictionary<K,V>`/`IReadOnlySet<T>` etc. | wire carries the **underlying** value per element, re-wrapped on the way in and out, for all four ADR-077 underlyings including an enum underlying via its `int` ordinal; see [ADR-081](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/081-value-class-collection-components.md) and below |
+| `Nullable(ValueClass)` as a `List`/`Map` value/`Set` component | same as above, with a null element/value riding a null pointer in the component slot | nullable map **keys** stay a named skip (`Dictionary` can't hold `null`); see [ADR-083](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/083-nullable-collection-components.md) and [Collections](collections.md) |
+| value class as an extension-function or extension-property **receiver**, any of the four ADR-077 underlyings | the receiver's own underlying type in the generated signature (`this Temperament receiver`) | receiver unwrapped at the call site, re-wrapped with the value class's own constructor before use; no dedicated ADR, mirrors ADR-077's parameter lowering; see below |
 
 ## Kotlin
 
@@ -1337,6 +1339,68 @@ public void ChartBook_RecordMoods_SetOfTemperamentParameter_RoundTripsANonFirstO
     </p>
 </note>
 
+## As an extension receiver
+
+A value class also works as the *receiver* of an extension function or extension property, over
+any of the four underlyings admitted at ordinary positions: `String`, a primitive, an enum, or
+`ObjectHandle`. The receiver crosses as its underlying wire value and is re-wrapped with the value
+class's own constructor before use, so `init` still runs, the same treatment a value-class
+parameter gets ([ADR-077](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/077-value-classes-at-ordinary-positions.md)).
+No dedicated ADR: this is a mirror of ADR-077's lowering applied at the receiver slot rather than a
+parameter slot.
+
+From `test-library/.../clinic/ClinicSample.kt`. `Dosage.label` is a primitive-underlying (`Double`)
+extension property; `Temperament.note` is enum-underlying; `ChartRef.annotation` is
+`ObjectHandle`-underlying; `ChartId.abbreviate` and `Temperament.escalate` are extension functions
+on `String`- and enum-underlying receivers, the latter also returning a value class:
+
+```kotlin
+var Dosage.label: String
+  get() = dosageLabels[this] ?: ""
+  set(value) {
+    dosageLabels[this] = value
+  }
+
+var Temperament.note: String
+  get() = temperamentNotes[this] ?: ""
+  set(value) {
+    temperamentNotes[this] = value
+  }
+
+fun ChartId.abbreviate(length: Int): String = value.take(length)
+
+fun Temperament.escalate(): Temperament = when (mood) {
+  Mood.CALM -> Temperament(Mood.ANXIOUS)
+  Mood.ANXIOUS -> Temperament(Mood.PLAYFUL)
+  Mood.PLAYFUL -> Temperament(Mood.PLAYFUL)
+}
+```
+
+Generated C#, from `Interop.cs`. The receiver is unwrapped to its underlying at the call site
+(`receiver.Value`, `(int)receiver.Mood`, `receiver.Patient._handle`) and a value-class return
+reconstructs on the way back:
+
+```C#
+public static partial class TemperamentExtensions
+{
+    [DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "temperament_escalate")]
+    private static extern int Native_Escalate(int receiver, out IntPtr error);
+
+    public static Temperament Escalate(this Temperament receiver)
+    {
+        int nativeResult = Native_Escalate((int)receiver.Mood, out IntPtr error);
+        if (error != IntPtr.Zero)
+        {
+            throw NugetErrorNative.BuildException(error);
+        }
+        return new Temperament((global::TestLibrary.Clinic.Mood)nativeResult);
+    }
+}
+```
+
+See [Extensions](extensions.md) for the general extension-function/property mapping and its
+receiver-eligibility diagnostic.
+
 ## Inherited members
 
 Members a value class inherits from a supertype, most commonly through interface delegation
@@ -1376,11 +1440,12 @@ for the full reasoning.
   simple-name matching, so an author-declared member whose name merely collides with any supertype
   member (an explicit `override`, or an unrelated overload sharing a name) is also skipped under
   the same diagnostic. The workaround is a non-colliding name.
-- A **nullable** value-class collection component (`List<ChartId?>`) has no representation on the
-  write side yet; it stays a named skip. A **nested**-collection component
-  (`List<List<ChartId>>`) is the same story. A **bare** enum component, not wrapped in a value
-  class (`Set<Mood>`), and the narrow-primitive components (`Byte`, `Short`, `Char`, ...) also stay
-  out of scope; see [Collections](collections.md) and [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md).
+- A **nullable** value-class collection component (`List<ChartId?>`) now binds, riding a null
+  pointer in the component slot ([ADR-083](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/083-nullable-collection-components.md)).
+  A **nested**-collection component (`List<List<ChartId>>`) still has no representation on the
+  write side. A **bare** enum component, not wrapped in a value class (`Set<Mood>`), and the
+  narrow-primitive components (`Byte`, `Short`, `Char`, ...) also stay out of scope; see
+  [Collections](collections.md) and [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md).
 
 <seealso>
     <category ref="related">
@@ -1403,5 +1468,6 @@ for the full reasoning.
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/080-bare-nullable-enum.md">ADR-080: Bare nullable enums</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/081-value-class-collection-components.md">ADR-081: Value-class collection components</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/082-value-class-inherited-members.md">ADR-082: Value-class inherited members</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/083-nullable-collection-components.md">ADR-083: Nullable collection components</a>
     </category>
 </seealso>

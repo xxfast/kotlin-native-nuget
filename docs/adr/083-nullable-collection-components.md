@@ -1,7 +1,7 @@
 # ADR-083: Nullable collection components: the null pointer in the component slot, both directions
 
 ## Status
-Proposed
+Accepted
 
 ## Context
 
