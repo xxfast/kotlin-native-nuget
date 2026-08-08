@@ -402,7 +402,9 @@ internal fun FileSpec.Builder.addForwardValueClassPlanExport(plan: ForwardCallab
         else invocation
       builder.returns(cOpaquePointer.copy(nullable = true))
       if (error != null) {
-        builder.addCode(handleResultBody(boxed, error.name), stableRef, cOpaquePointerVar, stableRef)
+        builder.addCode(
+          handleResultBody(boxed, error.name), stableRef, cOpaquePointerVar, stableRef,
+        )
       } else {
         builder.addStatement("return %T.create(%L).asCPointer()", stableRef, boxed)
       }

@@ -175,8 +175,9 @@ internal fun warnDroppedForwardExtensionReceivers(
       declaration = dropped.symbol,
       reason = "its extension receiver type ${dropped.receiverDescription} is not a supported " +
           "extension-property receiver",
-      hint = "declare the property on a class, String, primitive, or a primitive/String-underlying " +
-          "value class receiver, or expose a top-level getter function instead",
+      hint = "declare the property on a class, String, primitive, or a " +
+          "primitive/String-underlying value class receiver, or expose a top-level getter " +
+          "function instead",
     )
   }
   ForwardDiagnosticSink.emit(diagnostics, logger)
@@ -818,7 +819,9 @@ class NugetProcessor(
 
     // The import lives inside addExtensionPropertyExports, behind the plan gate: adding it here
     // left a dead import for every dropped extension property.
-    extensionProperties.forEach { prop -> builder.addExtensionPropertyExports(prop, callableCatalog) }
+    extensionProperties.forEach { prop ->
+      builder.addExtensionPropertyExports(prop, callableCatalog)
+    }
 
     val listTypes: Set<String> = setOf("kotlin.collections.List", "kotlin.collections.MutableList")
 

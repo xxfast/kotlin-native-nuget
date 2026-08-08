@@ -62,7 +62,8 @@ internal fun collectionComponentRead(
   component: BridgeType,
   csharpType: (BridgeType) -> String,
 ): String {
-  val raw: String = "NugetMarshal.FromHandle<${componentWireCsharpType(component, csharpType)}>($handle)"
+  val wireType: String = componentWireCsharpType(component, csharpType)
+  val raw: String = "NugetMarshal.FromHandle<$wireType>($handle)"
   if (component !is BridgeType.ValueClass) return raw
   // An enum underlying rides the int-ordinal wire, so the cast back to the C# enum is what makes
   // the record struct's own constructor applicable.
@@ -76,7 +77,10 @@ internal fun collectionComponentRead(
 
 /** The static C# type actually crossing the wire for [component]: the value class's underlying
  *  (`int` for an enum underlying), or the component's own public type. */
-private fun componentWireCsharpType(component: BridgeType, csharpType: (BridgeType) -> String): String =
+private fun componentWireCsharpType(
+  component: BridgeType,
+  csharpType: (BridgeType) -> String,
+): String =
   if (component !is BridgeType.ValueClass) csharpType(component)
   else if (component.underlying is BridgeType.Enum) "int"
   else csharpType(component.underlying)

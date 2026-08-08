@@ -335,7 +335,9 @@ internal fun translate(
     // A group whose members are all unplanned would otherwise emit an empty
     // `{Receiver}Extensions` class. Extension *properties* below merge into the same class, so a
     // receiver that only keeps a property still gets one.
-    if (members.isNotEmpty()) namespaces.addDeclaration(namespace, CirStaticClass(className, members))
+    if (members.isNotEmpty()) {
+      namespaces.addDeclaration(namespace, CirStaticClass(className, members))
+    }
   }
 
   val extensionPropsByReceiver: Map<String, List<KSPropertyDeclaration>> =

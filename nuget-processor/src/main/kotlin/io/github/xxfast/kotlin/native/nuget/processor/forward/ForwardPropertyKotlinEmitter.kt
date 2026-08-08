@@ -65,9 +65,11 @@ private fun FileSpec.Builder.addGetter(plan: ForwardPropertyPlan, call: ForwardN
       is BridgeType.ObjectHandle, is BridgeType.Interface, is BridgeType.Collection -> {
         // ADR-081: a value-class component is projected to its underlying before boxing, with the
         // whole chain `?.`-guarded so a null property value still ships a null pointer.
-        val boxed: String =
-          if (inner is BridgeType.Collection) collectionResultProjection(access, inner, nullable = true)
-          else access
+        val boxed: String = if (inner is BridgeType.Collection) {
+          collectionResultProjection(access, inner, nullable = true)
+        } else {
+          access
+        }
         builder.returns(cOpaquePointer.copy(nullable = true))
         builder.addCode(
           nullableHandleBody(boxed, "errorOut"),

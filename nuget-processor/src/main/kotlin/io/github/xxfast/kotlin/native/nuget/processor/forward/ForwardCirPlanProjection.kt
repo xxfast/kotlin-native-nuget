@@ -1037,7 +1037,8 @@ internal object ForwardCirPlanProjection {
 
     CollectionKind.MAP, CollectionKind.MUTABLE_MAP -> {
       val key: BridgeType = requireNotNull(type.key) { "Forward CIR Map result has no key type" }
-      val value: BridgeType = requireNotNull(type.value) { "Forward CIR Map result has no value type" }
+      val value: BridgeType =
+        requireNotNull(type.value) { "Forward CIR Map result has no value type" }
       val keyType: String = key.csharpType()
       val valueType: String = value.csharpType()
       buildString {
