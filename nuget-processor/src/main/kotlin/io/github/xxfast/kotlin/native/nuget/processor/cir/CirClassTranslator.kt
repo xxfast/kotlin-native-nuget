@@ -1649,7 +1649,11 @@ internal fun translateValueClass(
       if (stripReferenceNullability) param.type.dropLast(1) else param.type
     }
   }
-  methodSignatures.groupBy { it }.filterValues { it.size > 1 }.keys.forEach { signature ->
+  val collidingSignatures: Set<List<String>> = methodSignatures
+    .groupBy { it }
+    .filterValues { it.size > 1 }
+    .keys
+  collidingSignatures.forEach { signature ->
     ForwardDiagnosticSink.emit(
       listOf(
         ForwardDiagnostic(

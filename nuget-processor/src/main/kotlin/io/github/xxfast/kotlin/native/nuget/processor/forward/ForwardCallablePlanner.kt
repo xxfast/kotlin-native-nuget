@@ -233,12 +233,12 @@ internal data class ForwardCallablePlanCatalog(
    * Constructors are excluded: their reference-underlying branch still has a legacy route that
    * needs the declaration itself.
    */
-  fun valueClassProperties(owner: String): List<ForwardCallablePlan> =
-    valueClassMembers(owner).filter { plan -> plan.invocation.target?.endsWith("#property") == true }
+  fun valueClassProperties(owner: String): List<ForwardCallablePlan> = valueClassMembers(owner)
+    .filter { plan -> plan.invocation.target?.endsWith("#property") == true }
 
   /** ADR-082: the planned value-class methods of [owner], in planning order. See above. */
-  fun valueClassMethods(owner: String): List<ForwardCallablePlan> =
-    valueClassMembers(owner).filter { plan -> plan.invocation.target?.endsWith("#property") != true }
+  fun valueClassMethods(owner: String): List<ForwardCallablePlan> = valueClassMembers(owner)
+    .filter { plan -> plan.invocation.target?.endsWith("#property") != true }
 
   private fun valueClassMembers(owner: String): List<ForwardCallablePlan> = plans.filter { plan ->
     plan.invocation.origin == ForwardCallableOrigin.VALUE_CLASS &&
