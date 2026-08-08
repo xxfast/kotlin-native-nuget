@@ -128,6 +128,10 @@ property is dropped, naming the receiver rather than the property's own type:
     at <file>:<line>
 ```
 
+An extension property typed `Flow`, `StateFlow`, or a lambda is also named as a skip rather than
+exported, even on an otherwise-supported receiver: unlike a class property, no legacy adapter
+re-emits it, so it is not exempt from the diagnostic the way a class property of the same type is.
+
 See [Publishing Kotlin to C#: Diagnostics](forward-overview.md#diagnostics) for the full diagnostic
 model.
 
