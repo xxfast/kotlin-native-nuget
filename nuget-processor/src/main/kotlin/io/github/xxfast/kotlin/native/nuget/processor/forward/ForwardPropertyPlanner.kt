@@ -212,7 +212,7 @@ internal class ForwardPropertyPlanner(
     // through `Nullable`). Whether a *setter* can also be built is a wholly separate question,
     // decided below, independent of the getter.
     if (!isPlannable(type)) {
-      recordDropped(symbol, prop, type)
+      recordDropped(symbol, position, prop, type)
       return null
     }
     val name: String = prop.simpleName.asString()
@@ -339,13 +339,24 @@ internal class ForwardPropertyPlanner(
    * design*: `CirClassTranslator`'s lambda and flow adapters bind them, so warning that they were
    * skipped would tell a consumer a working property had vanished. `Nullable` is unwrapped first,
    * so a `StateFlow<T>?` is excluded on the same grounds as a bare `StateFlow<T>`.
+   *
+   * The exclusion is **position-aware**: those adapters live in `CirClassTranslator`'s
+   * `getAllProperties()` loop, so they only ever re-emit a property declared *on* a class. An
+   * extension property has no adapter anywhere, so excluding it turned a real drop into silence
+   * (`val Patient.status: StateFlow<Int>` vanished from the generated C# with no diagnostic).
    */
-  private fun recordDropped(symbol: String, prop: KSPropertyDeclaration, type: BridgeType) {
+  private fun recordDropped(
+    symbol: String,
+    position: ForwardPropertyPosition,
+    prop: KSPropertyDeclaration,
+    type: BridgeType,
+  ) {
     val protocol: BridgeType.SpecializedProtocol? =
       type.unwrapNullable() as? BridgeType.SpecializedProtocol
-    val isLegacyRouted: Boolean = protocol != null && LEGACY_ROUTED_PROTOCOLS.any { prefix ->
-      protocol.name.startsWith(prefix)
-    }
+    val isLegacyRouted: Boolean = position != ForwardPropertyPosition.EXTENSION &&
+        protocol != null && LEGACY_ROUTED_PROTOCOLS.any { prefix ->
+          protocol.name.startsWith(prefix)
+        }
     if (isLegacyRouted) return
     dropped.add(ForwardDroppedProperty(symbol, prop, type.diagnosticTypeName()))
   }
@@ -535,8 +546,8 @@ internal class ForwardPropertyPlanner(
   }
 
   private companion object {
-    /** The [BridgeType.SpecializedProtocol] name prefixes whose properties a legacy route still
-     *  re-emits, so [recordDropped] must stay silent about them. Matches the prefixes
+    /** The [BridgeType.SpecializedProtocol] name prefixes whose *class* properties a legacy route
+     *  still re-emits, so [recordDropped] must stay silent about them there. Matches the prefixes
      *  `ForwardBridgeTypeClassifier` mints and `ForwardCallablePlanner.skipReason` routes. */
     val LEGACY_ROUTED_PROTOCOLS: List<String> =
       listOf("lambda ", "suspend lambda ", "flow ", "state flow ")

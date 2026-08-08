@@ -361,6 +361,47 @@ class Tier1NamedSkipDiagnosticsTest {
   }
 
   /**
+   * The false negative in the exclusion above: `LEGACY_ROUTED_PROTOCOLS` is position-agnostic, but
+   * the legacy flow/lambda adapters live in `CirClassTranslator` and only re-emit **class**
+   * properties. An extension property typed `StateFlow<T>` on a perfectly supported receiver has no
+   * adapter at all, so the exclusion silences a genuine drop.
+   */
+  @Test
+  fun `extension property with a StateFlow type fires SKIPPED_UNSUPPORTED_PROPERTY and is omitted`() {
+    val result = Tier1Harness.run(
+      """
+      package tier1.skipextensionflow
+
+      import kotlinx.coroutines.flow.MutableStateFlow
+      import kotlinx.coroutines.flow.StateFlow
+
+      class Patient(val name: String)
+
+      val Patient.status: StateFlow<Int> get() = MutableStateFlow(0)
+      """.trimIndent(),
+      libraries = listOf(Tier1Classpath.kotlinxCoroutinesCore),
+    )
+
+    assertTrue(
+      result.compiledClean,
+      "expected no broken source for Patient.status; got: ${result.compileErrors}",
+    )
+    assertFalse(
+      result.generated.contains("patient_get_status"),
+      "expected the extension StateFlow property to be entirely absent from the generated " +
+          "exports; generated=${result.generated}",
+    )
+    assertTrue(
+      result.kspWarnings.any {
+        it.contains(ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_PROPERTY.name) &&
+            it.contains("Patient.status")
+      },
+      "no adapter re-emits an extension StateFlow property, so it must be named as a skip; " +
+          "kspWarnings=${result.kspWarnings}",
+    )
+  }
+
+  /**
    * The *receiver* half of the same gap. The sibling cell above covers an unplannable property
    * **type**; an extension property whose receiver type the planner cannot wire vanished just as
    * silently, from a completely separate bail (`ForwardPropertyPlanner.extensionProperty`), and
