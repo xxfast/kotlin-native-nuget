@@ -1838,12 +1838,13 @@ internal fun BridgeType.isBridgeableComponent(): Boolean = when (this) {
 /**
  * ADR-073: the component types the C# write side can actually box, for an input-position
  * `Map`/`Set` (and their mutable variants): the six `nuget_wrap_*` primitives plus an object
- * handle (via `CreateMap`/`CreateSet`'s reflective `_handle` fallback). Narrower than
- * [isBridgeableComponent], which also admits `Nullable`, `ValueClass`, `Char`, nested
- * `Collection`, `Enum` and the narrow-primitive kinds (none of which the write side can box),
- * because those overshoots would otherwise either crash `packNuget`
- * (`ValueClass`/`Nullable`/nested `Collection`, no `elementKotlinTypeName` branch) or throw at
- * runtime (`NotSupportedException`, no matching `nuget_wrap_*`). Deliberately *not* applied to
+ * handle (via `CreateMap`/`CreateSet`'s reflective `_handle` fallback), plus (ADR-081) a value
+ * class over any of those underlyings, projected to the underlying per element. Narrower than
+ * [isBridgeableComponent], which also admits `Nullable`, `Char`, nested `Collection`, bare `Enum`
+ * and the narrow-primitive kinds (none of which the write side can box), because those overshoots
+ * would otherwise either crash `packNuget` (`Nullable`/nested `Collection`, no
+ * `elementKotlinTypeName` branch) or throw at runtime (`NotSupportedException`, no matching
+ * `nuget_wrap_*`). Deliberately *not* applied to
  * `List` at a *callable parameter* position; narrowing that predicate is a separate, deferred
  * decision (ADR-073 Scope item 1). ADR-075 reuses this for a collection *property setter*, where
  * `List` is deliberately included (ADR-075 Question A alternative A1): no `List` property setter
@@ -1860,5 +1861,14 @@ internal fun BridgeType.isWrappableComponent(): Boolean = when (this) {
   )
 
   is BridgeType.ObjectHandle -> true
+
+  // ADR-081: a value-class component crosses as its *underlying*, projected per element at the C#
+  // call site (`x.Value`, `(int)x.Mood`, `x.Patient`) before `Wrap<T>` is ever instantiated, so the
+  // write side only ever boxes a type it already handles. The `Enum` case is scoped to this branch
+  // deliberately: a *bare* enum component stays unwrappable (its own ROADMAP item), only the
+  // value-class wrapper over an enum rides the existing int-ordinal wire.
+  is BridgeType.ValueClass ->
+    underlying is BridgeType.Enum || underlying.isWrappableComponent()
+
   else -> false
 }

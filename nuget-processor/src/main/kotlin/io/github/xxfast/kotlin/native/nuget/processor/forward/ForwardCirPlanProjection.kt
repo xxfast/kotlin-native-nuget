@@ -599,10 +599,12 @@ internal object ForwardCirPlanProjection {
       CollectionKind.MAP, CollectionKind.MUTABLE_MAP -> "CreateMap"
       CollectionKind.SET, CollectionKind.MUTABLE_SET -> "CreateSet"
     }
+    // ADR-081: a value-class component is projected to its underlying per element before boxing.
+    val source: String = collectionCreateArgument(parameter.name, type) { it.csharpType() }
     val value: String = if (nullable) {
-      "${parameter.name} != null ? NugetMarshal.$factory(${parameter.name}) : IntPtr.Zero"
+      "${parameter.name} != null ? NugetMarshal.$factory($source) : IntPtr.Zero"
     } else {
-      "NugetMarshal.$factory(${parameter.name})"
+      "NugetMarshal.$factory($source)"
     }
     return "IntPtr ${parameter.name}Handle = $value;"
   }
@@ -1006,9 +1008,10 @@ internal object ForwardCirPlanProjection {
     cleanup: List<String> = emptyList(),
   ): String = when (type.kind) {
     CollectionKind.LIST, CollectionKind.MUTABLE_LIST -> {
-      val elementType: String = requireNotNull(type.element) {
+      val element: BridgeType = requireNotNull(type.element) {
         "Forward CIR List result has no element type"
-      }.csharpType()
+      }
+      val elementType: String = element.csharpType()
       val mutable: Boolean = type.kind == CollectionKind.MUTABLE_LIST
       buildString {
         appendLine()
@@ -1023,7 +1026,9 @@ internal object ForwardCirPlanProjection {
         appendLine("            var result = new List<$elementType>(count);")
         appendLine("            for (int i = 0; i < count; i++)")
         appendLine("            {")
-        appendLine("                result.Add(NugetMarshal.FromHandle<$elementType>(NugetListNative.Get(listHandle, i)));")
+        val read: String =
+          collectionComponentRead("NugetListNative.Get(listHandle, i)", element) { it.csharpType() }
+        appendLine("                result.Add($read);")
         appendLine("            }")
         appendLine("            NugetListNative.Dispose(listHandle);")
         append("            return " + if (mutable) "result;" else "result.AsReadOnly();")
@@ -1031,8 +1036,10 @@ internal object ForwardCirPlanProjection {
     }
 
     CollectionKind.MAP, CollectionKind.MUTABLE_MAP -> {
-      val keyType: String = requireNotNull(type.key) { "Forward CIR Map result has no key type" }.csharpType()
-      val valueType: String = requireNotNull(type.value) { "Forward CIR Map result has no value type" }.csharpType()
+      val key: BridgeType = requireNotNull(type.key) { "Forward CIR Map result has no key type" }
+      val value: BridgeType = requireNotNull(type.value) { "Forward CIR Map result has no value type" }
+      val keyType: String = key.csharpType()
+      val valueType: String = value.csharpType()
       buildString {
         appendLine()
         prelude.forEach { line -> appendLine("            $line") }
@@ -1046,8 +1053,12 @@ internal object ForwardCirPlanProjection {
         appendLine("            var result = new Dictionary<$keyType, $valueType>(count);")
         appendLine("            for (int i = 0; i < count; i++)")
         appendLine("            {")
-        appendLine("                var key = NugetMarshal.FromHandle<$keyType>(NugetMapNative.KeyAt(mapHandle, i));")
-        appendLine("                var value = NugetMarshal.FromHandle<$valueType>(NugetMapNative.ValueAt(mapHandle, i));")
+        val readKey: String =
+          collectionComponentRead("NugetMapNative.KeyAt(mapHandle, i)", key) { it.csharpType() }
+        val readValue: String =
+          collectionComponentRead("NugetMapNative.ValueAt(mapHandle, i)", value) { it.csharpType() }
+        appendLine("                var key = $readKey;")
+        appendLine("                var value = $readValue;")
         appendLine("                result[key] = value;")
         appendLine("            }")
         appendLine("            NugetMapNative.Dispose(mapHandle);")
@@ -1056,9 +1067,10 @@ internal object ForwardCirPlanProjection {
     }
 
     CollectionKind.SET, CollectionKind.MUTABLE_SET -> {
-      val elementType: String = requireNotNull(type.element) {
+      val element: BridgeType = requireNotNull(type.element) {
         "Forward CIR Set result has no element type"
-      }.csharpType()
+      }
+      val elementType: String = element.csharpType()
       buildString {
         appendLine()
         prelude.forEach { line -> appendLine("            $line") }
@@ -1072,7 +1084,11 @@ internal object ForwardCirPlanProjection {
         appendLine("            var result = new HashSet<$elementType>(count);")
         appendLine("            for (int i = 0; i < count; i++)")
         appendLine("            {")
-        appendLine("                result.Add(NugetMarshal.FromHandle<$elementType>(NugetSetNative.ElementAt(setHandle, i)));")
+        val read: String = collectionComponentRead(
+          "NugetSetNative.ElementAt(setHandle, i)",
+          element,
+        ) { it.csharpType() }
+        appendLine("                result.Add($read);")
         appendLine("            }")
         appendLine("            NugetSetNative.Dispose(setHandle);")
         append("            return result;")

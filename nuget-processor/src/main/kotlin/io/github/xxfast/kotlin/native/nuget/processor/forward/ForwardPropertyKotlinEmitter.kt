@@ -63,9 +63,14 @@ private fun FileSpec.Builder.addGetter(plan: ForwardPropertyPlan, call: ForwardN
       // `nullableHandleBody` already returns Kotlin `null` for a null result before ever building
       // a `StableRef`, the same route a nullable `ObjectHandle`/`Interface` getter takes.
       is BridgeType.ObjectHandle, is BridgeType.Interface, is BridgeType.Collection -> {
+        // ADR-081: a value-class component is projected to its underlying before boxing, with the
+        // whole chain `?.`-guarded so a null property value still ships a null pointer.
+        val boxed: String =
+          if (inner is BridgeType.Collection) collectionResultProjection(access, inner, nullable = true)
+          else access
         builder.returns(cOpaquePointer.copy(nullable = true))
         builder.addCode(
-          nullableHandleBody(access, "errorOut"),
+          nullableHandleBody(boxed, "errorOut"),
           stableRef,
           cOpaquePointerVar,
           stableRef,
@@ -112,8 +117,12 @@ private fun FileSpec.Builder.addGetter(plan: ForwardPropertyPlan, call: ForwardN
     }
 
     is BridgeType.ObjectHandle, is BridgeType.Interface, is BridgeType.Collection -> {
+      // ADR-081: read side of a collection property whose component is a value class -- box a copy
+      // projected to the underlying, the shape a C# per-element re-wrap can read.
+      val boxed: String =
+        if (type is BridgeType.Collection) collectionResultProjection(access, type) else access
       builder.returns(cOpaquePointer.copy(nullable = true))
-      builder.addCode(handleBody(access, "errorOut"), stableRef, cOpaquePointerVar, stableRef)
+      builder.addCode(handleBody(boxed, "errorOut"), stableRef, cOpaquePointerVar, stableRef)
     }
 
     // ADR-077 sub-items 2/4: unbox to the underlying property, so the export ships the

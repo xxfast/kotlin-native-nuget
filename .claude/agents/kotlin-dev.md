@@ -38,8 +38,7 @@ Forward: `nuget-processor/`, KSP processor that generates C# bindings and Kotlin
   `DllImport` set
 - `ForwardAbiLegacyRoutes.kt`: the explicit legacy-route allowlist (no generic fallback)
 - `NugetProcessor.kt`: orchestrates the pipeline: builds the `ForwardCallablePlanCatalog`, projects
-  both halves, runs the contract check, emits everything into a single `Interop.kt` FileSpec (the old
-  `CNameExports.kt` is gone)
+  both halves, runs the contract check, emits everything into a single `CNameExports.kt` FileSpec
 - `NugetProcessorProvider.kt`: KSP entry point
 - `Reserved.kt`: shared C/C# reserved word sets and naming functions
 
@@ -91,7 +90,7 @@ The [refactorer agent](refactorer.md) formats your files afterward. Report the d
 Forward:
 
 - KSP discovers all public top-level functions, classes, and enums
-- KotlinPoet generates `@CName` bridge wrappers, emitted into a single `Interop.kt` FileSpec
+- KotlinPoet generates `@CName` bridge wrappers, emitted into a single `CNameExports.kt` FileSpec
 - CIR model generates Interop.cs (pre-generated C# bindings)
 - StableRef pattern for objects: create on constructor, dispose on IDisposable
 - Enum properties → ordinal-based bridge functions

@@ -13,6 +13,7 @@ A Kotlin `value class` (inline class) wrapping a primitive or `String` becomes a
 | `Enum`-underlying value class at an ordinary position | the same `record struct` | wire is the enum's `int` ordinal, cast back with `(EnumType)`; see below |
 | `ObjectHandle`-underlying value class at an ordinary position, incl. `Nullable(ValueClass(ObjectHandle))` | the same `record struct`, `?` rides the null pointer | wire is the wrapped object's own StableRef handle; see below |
 | `Nullable(ValueClass)` over a `Primitive`- or `Enum`-underlying value class, at parameter, property, or return position | `Dosage?` / `Temperament?` (`Nullable<T>`), never a reference nullable | no null pointer on the wire, so it reuses the position's has-value fan-out (input pair, ADR-061 single-call `valueOut`, ADR-002 `LegacyTwoCall`/`NullableDispatch`, or the top-level two-call), value slot at the underlying's own wire; see [ADR-079](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/079-nullable-primitive-enum-underlying-value-classes.md) and below |
+| value class as a `List`/`Map`/`Set` component (element, key or value), at input position, collection property setter, method return or property getter | the same `record struct`, in `IReadOnlyList<T>`/`IReadOnlyDictionary<K,V>`/`IReadOnlySet<T>` etc. | wire carries the **underlying** value per element, re-wrapped on the way in and out, for all four ADR-077 underlyings including an enum underlying via its `int` ordinal; see [ADR-081](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/081-value-class-collection-components.md) and below |
 
 ## Kotlin
 
@@ -1118,10 +1119,226 @@ public void ClinicSample_StandardDosage_NullablePrimitiveUnderlyingTopLevelRetur
 Bare `Mood?` (a nullable enum, not wrapped in a value class) is a different feature, riding this same
 has-value fan-out with the box/unbox step removed; see [Enums: Nullable](enums.md#nullable).
 
+## As a collection component
+
+A value-class component (element, map key, or map value) of `List`/`MutableList`/`Map`/`MutableMap`/
+`Set`/`MutableSet` also binds, at input positions, collection property setters, method returns, and
+property getters, for all four ADR-077 underlyings (`String`, the wrappable primitives,
+`ObjectHandle`, and an enum-underlying value class riding its `int` ordinal). The collection's wire
+never carries the value class itself, only the **underlying**: C# projects each element to its
+underlying before boxing (`x.Value`, `(int)x.Mood`, `x.Patient`), and Kotlin re-wraps per element on
+the way in and projects to the underlying on the way out. Method returns and property getters used to
+bind and then throw at runtime (`NugetMarshal.FromHandle<ChartId>` had no route to a struct whose only
+public constructor takes a `string`); that is fixed here, not merely narrowed. Only the value-class
+*wrapper* over an enum is admitted; a bare enum component (`Set<Mood>`, unwrapped) stays with its own
+sibling ROADMAP item, see [Collections](collections.md).
+
+From `test-library/src/nativeMain/kotlin/.../clinic/ValueClassCollectionsSample.kt`:
+
+```kotlin
+class ChartBook(charts: List<ChartId>) {
+  fun sectioned(sections: Map<String, ChartId>): String =
+    sections.entries.sortedBy { it.key }.joinToString(";") { "${it.key}=${it.value.value}" }
+
+  fun tallyByChart(counts: Map<ChartId, Int>): Int = counts.values.sum()
+
+  fun sumDosages(doses: MutableList<Dosage>): Double = doses.sumOf { it.milligrams }
+
+  fun namesOf(refs: List<ChartRef>): String = refs.joinToString(",") { it.patient.name }
+
+  fun recordMoods(moods: Set<Temperament>): String =
+    moods.map { it.mood }.sortedBy { it.ordinal }.joinToString(",")
+
+  fun issuedCharts(): List<ChartId> = listOf(ChartId("CH-OREO-9"), ChartId("CH-MYLO-4"))
+
+  var pendingCharts: List<ChartId> = listOf(ChartId("CH-PEND-1"), ChartId("CH-PEND-2"))
+
+  fun moodsOnFile(): Set<Temperament> = setOf(Temperament(Mood.ANXIOUS), Temperament(Mood.PLAYFUL))
+}
+```
+
+### Generated C# {id="generated-c_3"}
+
+The `String` underlying at a `Map` value position (`Sectioned`) and key position (`TallyByChart`),
+from `Interop.cs`:
+
+```C#
+public string Sectioned(IReadOnlyDictionary<string, ChartId> sections)
+{
+    IntPtr sectionsHandle = NugetMarshal.CreateMap(global::System.Linq.Enumerable.Select(sections, x => new KeyValuePair<string, string>(x.Key, x.Value.Value)));
+    // ...
+}
+
+public int TallyByChart(IReadOnlyDictionary<ChartId, int> counts)
+{
+    IntPtr countsHandle = NugetMarshal.CreateMap(global::System.Linq.Enumerable.Select(counts, x => new KeyValuePair<string, int>(x.Key.Value, x.Value)));
+    // ...
+}
+```
+
+The primitive underlying (`Dosage`) and the object-handle underlying (`ChartRef`), each at a `List`
+element position:
+
+```C#
+public double SumDosages(IList<Dosage> doses)
+{
+    IntPtr dosesHandle = NugetMarshal.CreateList(global::System.Linq.Enumerable.Select(doses, x => x.Milligrams));
+    // ...
+}
+
+public string NamesOf(IReadOnlyList<ChartRef> refs)
+{
+    IntPtr refsHandle = NugetMarshal.CreateList(global::System.Linq.Enumerable.Select(refs, x => x.Patient));
+    // ...
+}
+```
+
+The enum underlying (`Temperament`) at a `Set` element position pre-casts to the `int` ordinal before
+boxing, riding the existing `Wrap<int>` branch:
+
+```C#
+public string RecordMoods(IReadOnlySet<Temperament> moods)
+{
+    IntPtr moodsHandle = NugetMarshal.CreateSet(global::System.Linq.Enumerable.Select(moods, x => (int)x.Mood));
+    // ...
+}
+```
+
+The read side (method return, property getter), the shape that used to bind and then break: each
+element is read as its underlying and re-wrapped:
+
+```C#
+public IReadOnlyList<ChartId> IssuedCharts()
+{
+    // ...
+    var result = new List<ChartId>(count);
+    for (int i = 0; i < count; i++)
+    {
+        result.Add(new ChartId(NugetMarshal.FromHandle<string>(NugetListNative.Get(listHandle, i))));
+    }
+    // ...
+}
+
+public IReadOnlySet<Temperament> MoodsOnFile()
+{
+    // ...
+    var result = new HashSet<Temperament>(count);
+    for (int i = 0; i < count; i++)
+    {
+        result.Add(new Temperament((global::TestLibrary.Clinic.Mood)NugetMarshal.FromHandle<int>(NugetSetNative.ElementAt(setHandle, i))));
+    }
+    // ...
+}
+```
+
+The `var` property setter projects to the underlying the same way an input parameter does:
+
+```C#
+public IReadOnlyList<ChartId> PendingCharts
+{
+    get { /* same walk as IssuedCharts */ }
+    set
+    {            Native_Set_pendingCharts(_handle, NugetMarshal.CreateList(global::System.Linq.Enumerable.Select(value, x => x.Value)), out IntPtr error);
+    // ...
+    }
+}
+```
+
+The Kotlin side lowers each input element back into a value class before the call, and projects each
+result element to its underlying before boxing. From the generated `CNameExports.kt`:
+
+```kotlin
+@CName("chartbook_sectioned")
+public fun export_chartbook_sectioned(
+  handle: COpaquePointer,
+  sections: COpaquePointer,
+  errorOut: COpaquePointer?,
+): String = try {
+  handle.asStableRef<io.github.xxfast.kotlin.native.nuget.test.clinic.ChartBook>().get().sectioned(sections.asStableRef<MutableMap<Any?, Any?>>().get().entries.associate { (k, v) -> (k as kotlin.String) to (io.github.xxfast.kotlin.native.nuget.test.clinic.ChartId(v as kotlin.String)) })
+} catch (e: Throwable) {
+  // ...
+}
+
+@CName("chartbook_recordMoods")
+public fun export_chartbook_recordMoods(
+  handle: COpaquePointer,
+  moods: COpaquePointer,
+  errorOut: COpaquePointer?,
+): String = try {
+  handle.asStableRef<io.github.xxfast.kotlin.native.nuget.test.clinic.ChartBook>().get().recordMoods(moods.asStableRef<MutableSet<Any?>>().get().mapTo(mutableSetOf()) { io.github.xxfast.kotlin.native.nuget.test.clinic.Temperament(io.github.xxfast.kotlin.native.nuget.test.clinic.Mood.entries[it as kotlin.Int]) })
+} catch (e: Throwable) {
+  // ...
+}
+
+@CName("chartbook_issuedCharts")
+public fun export_chartbook_issuedCharts(handle: COpaquePointer, errorOut: COpaquePointer?): COpaquePointer? = try {
+  StableRef.create(handle.asStableRef<io.github.xxfast.kotlin.native.nuget.test.clinic.ChartBook>().get().issuedCharts().map { it.value }).asCPointer()
+} catch (e: Throwable) {
+  // ...
+}
+```
+
+### Using it from C# {id="using-it-from-c_3"}
+
+From `IntegrationTests/ValueClassCollectionTests.cs`:
+
+```C#
+[Fact]
+public void ChartBook_TallyByChart_MapWithChartIdKey_SumsValuesAndLooksUpByReconstructedKey()
+{
+    using var book = new ChartBook(new List<ChartId>());
+
+    var counts = new Dictionary<ChartId, int>
+    {
+        [new ChartId("CH-1")] = 3,
+        [new ChartId("CH-2")] = 4,
+    };
+
+    Assert.Equal(7, book.TallyByChart(counts));
+
+    // Key equality must survive the wire: look the entry up with a freshly-constructed
+    // ChartId, not the same instance that was inserted.
+    Assert.Equal(4, counts[new ChartId("CH-2")]);
+}
+
+[Fact]
+public void ChartBook_IssuedCharts_MethodReturn_RoundTripsEveryElementsValue()
+{
+    using var book = new ChartBook(new List<ChartId>());
+
+    IReadOnlyList<ChartId> issued = book.IssuedCharts();
+
+    Assert.Equal(2, issued.Count);
+    Assert.Equal("CH-OREO-9", issued[0].Value);
+    Assert.Equal("CH-MYLO-4", issued[1].Value);
+}
+
+[Fact]
+public void ChartBook_RecordMoods_SetOfTemperamentParameter_RoundTripsANonFirstOrdinal()
+{
+    using var book = new ChartBook(new List<ChartId>());
+
+    // Anxious (ordinal 1, not the first Mood entry) alongside Playful (ordinal 2): a
+    // pre-cast that always sends 0 (Calm) cannot pass this.
+    string moods = book.RecordMoods(new HashSet<Temperament>
+    {
+        new Temperament(Mood.Anxious),
+        new Temperament(Mood.Playful),
+    });
+
+    Assert.Equal("ANXIOUS,PLAYFUL", moods);
+}
+```
+
+<note>
+    <p>
+        Every assertion in the fixture uses multiple, distinct-valued elements and checks values, not
+        just counts, so a first-element-only echo or a swapped key/value cannot pass by coincidence.
+    </p>
+</note>
+
 ## Limitations
 
-- A value class as a collection element (`List<ChartId>`, `Map<String, ChartId>`) has no boxing
-  story on the C# write side and is skipped; see [Collections](collections.md).
 - Reference-underlying value-class **primary** constructor `init` validation stays deferred
   ([ADR-035](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/035-value-class-primary-constructor-validation.md));
   primitive-underlying validation (the `CatId` path above) is in place.
@@ -1130,12 +1347,18 @@ has-value fan-out with the box/unbox step removed; see [Enums: Nullable](enums.m
   In the meantime they are excluded from the generated C# API with a `SKIPPED_INHERITED_MEMBER`
   diagnostic naming each one, rather than binding silently
   ([ADR-064](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/064-forward-unsupported-declaration-diagnostics.md)).
+- A **nullable** value-class collection component (`List<ChartId?>`) has no representation on the
+  write side yet; it stays a named skip. A **nested**-collection component
+  (`List<List<ChartId>>`) is the same story. A **bare** enum component, not wrapped in a value
+  class (`Set<Mood>`), and the narrow-primitive components (`Byte`, `Short`, `Char`, ...) also stay
+  out of scope; see [Collections](collections.md) and [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md).
 
 <seealso>
     <category ref="related">
         <a href="data-classes.md">Data classes</a>
         <a href="enums.md">Enums</a>
         <a href="exceptions.md">Exceptions</a>
+        <a href="collections.md">Collections</a>
         <a href="nuget-dsl.md">The nuget {} DSL</a>
     </category>
     <category ref="external">
@@ -1145,8 +1368,10 @@ has-value fan-out with the box/unbox step removed; see [Enums: Nullable](enums.m
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/062-forward-callable-plan.md">ADR-062: Forward callable plan</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/064-forward-unsupported-declaration-diagnostics.md">ADR-064: Forward unsupported-declaration diagnostics</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/066-forward-export-reachability-closure.md">ADR-066: Forward export reachability closure</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/073-map-and-set-parameters.md">ADR-073: Map/Set parameters</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/077-value-classes-at-ordinary-positions.md">ADR-077: Value classes at ordinary positions</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/079-nullable-primitive-enum-underlying-value-classes.md">ADR-079: Nullable(ValueClass) over Primitive/Enum-underlying value classes</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/080-bare-nullable-enum.md">ADR-080: Bare nullable enums</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/081-value-class-collection-components.md">ADR-081: Value-class collection components</a>
     </category>
 </seealso>
