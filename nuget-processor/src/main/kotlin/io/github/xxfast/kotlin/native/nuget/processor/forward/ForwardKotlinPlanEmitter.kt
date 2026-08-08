@@ -504,6 +504,22 @@ internal fun componentLowering(name: String, type: BridgeType): String = when (t
     else -> "${type.qualifiedName}($name as ${elementKotlinTypeName(underlying)})"
   }
 
+  // ADR-083: a null component arrived as the null pointer and is already `null` in the `Any?` box,
+  // so the cast simply goes nullable (`as T?` accepts null). A value class re-wraps under `?.let`
+  // so its own `init` runs for the present elements only.
+  is BridgeType.Nullable -> when (val inner: BridgeType = type.type) {
+    is BridgeType.ValueClass -> when (val underlying: BridgeType = inner.underlying) {
+      is BridgeType.Enum ->
+        "($name as kotlin.Int?)?.let { v -> " +
+            "${inner.qualifiedName}(${underlying.qualifiedName}.entries[v]) }"
+
+      else ->
+        "($name as ${elementKotlinTypeName(underlying)}?)?.let { v -> ${inner.qualifiedName}(v) }"
+    }
+
+    else -> "$name as ${elementKotlinTypeName(inner)}?"
+  }
+
   else -> "$name as ${elementKotlinTypeName(type)}"
 }
 
@@ -527,7 +543,7 @@ internal fun collectionResultProjection(
       val element: BridgeType = requireNotNull(type.element) {
         "Forward Kotlin collection result has no element type"
       }
-      if (element !is BridgeType.ValueClass) invocation
+      if (element.componentValueClass() == null) invocation
       else "$invocation${dot}map { ${componentRaising("it", element)} }"
     }
 
@@ -537,7 +553,7 @@ internal fun collectionResultProjection(
       val element: BridgeType = requireNotNull(type.element) {
         "Forward Kotlin collection result has no element type"
       }
-      if (element !is BridgeType.ValueClass) invocation
+      if (element.componentValueClass() == null) invocation
       else "$invocation${dot}mapTo(mutableSetOf()) { ${componentRaising("it", element)} }"
     }
 
@@ -545,7 +561,7 @@ internal fun collectionResultProjection(
       val key: BridgeType = requireNotNull(type.key) { "Forward Kotlin Map result has no key type" }
       val value: BridgeType =
         requireNotNull(type.value) { "Forward Kotlin Map result has no value type" }
-      if (key !is BridgeType.ValueClass && value !is BridgeType.ValueClass) invocation
+      if (key.componentValueClass() == null && value.componentValueClass() == null) invocation
       else "$invocation${dot}entries${dot}associate { (k, v) -> " +
           "${componentRaising("k", key)} to ${componentRaising("v", value)} }"
     }
@@ -553,11 +569,15 @@ internal fun collectionResultProjection(
 }
 
 /** The inverse of [componentLowering]: one outgoing component projected to the wire value the
- *  generic box can carry. Identity for everything but a value class. */
-private fun componentRaising(name: String, type: BridgeType): String =
-  if (type !is BridgeType.ValueClass) name
-  else "$name.${type.underlyingPropertyName}" +
-      if (type.underlying is BridgeType.Enum) ".ordinal" else ""
+ *  generic box can carry. Identity for everything but a value class (ADR-083: `?.`-lifted when the
+ *  component is a nullable value class -- a plain nullable component stays identity, since the box
+ *  already holds `Any?` and the nullable read exports carry the null through). */
+private fun componentRaising(name: String, type: BridgeType): String {
+  val valueClass: BridgeType.ValueClass = type.componentValueClass() ?: return name
+  val dot: String = if (type is BridgeType.Nullable) "?." else "."
+  return "$name$dot${valueClass.underlyingPropertyName}" +
+      if (valueClass.underlying is BridgeType.Enum) "$dot" + "ordinal" else ""
+}
 
 private fun PrimitiveKind.simpleKotlinName(): String = when (this) {
   PrimitiveKind.BOOLEAN -> "Boolean"

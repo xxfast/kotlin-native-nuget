@@ -157,14 +157,17 @@ public class CollectionPropertyIndependenceTests
         Assert.Null(property.GetSetMethod());
     }
 
+    // ADR-083 promoted this cell out of the ineligible group above: a nullable element is no longer
+    // what makes a collection property setter ineligible (an enum element, Moods, still is), so
+    // this asserts the round trip instead of the shape.
     [Fact]
-    public void Chart_Aliases_NullableElement_HasNoPublicSetter()
+    public void Chart_Aliases_NullableElement_RoundTripsThroughItsSetter()
     {
-        var property = typeof(Chart).GetProperty(nameof(Chart.Aliases));
+        using var chart = new Chart("Mylo");
 
-        Assert.NotNull(property);
-        Assert.NotNull(property!.GetGetMethod());
-        Assert.Null(property.GetSetMethod());
+        chart.Aliases = new List<string?> { "mylo", null, "my-lo" };
+
+        Assert.Equal(new[] { "mylo", null, "my-lo" }, chart.Aliases);
     }
 
     // --- Setter facet: an extension property whose receiver crosses the bridge by value

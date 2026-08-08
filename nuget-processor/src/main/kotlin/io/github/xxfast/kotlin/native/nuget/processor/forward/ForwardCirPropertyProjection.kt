@@ -319,7 +319,8 @@ internal object ForwardCirPropertyProjection {
       val element: String = component.csharpType()
       val readOnly: Boolean = type.kind == CollectionKind.LIST
       buildString {
-        val read: String = collectionComponentRead(
+        val read: CirComponentRead = collectionComponentRead(
+          "elementHandle",
           "NugetListNative.Get(nativeResult, i)",
           component,
         ) { it.csharpType() }
@@ -327,7 +328,8 @@ internal object ForwardCirPropertyProjection {
         appendLine("            var result = new List<$element>(count);")
         appendLine("            for (int i = 0; i < count; i++)")
         appendLine("            {")
-        appendLine("                result.Add($read);")
+        read.declaration?.let { appendLine("                $it") }
+        appendLine("                result.Add(${read.expression});")
         appendLine("            }")
         appendLine("            NugetListNative.Dispose(nativeResult);")
         append("            return " + if (readOnly) "result.AsReadOnly();" else "result;")
@@ -340,11 +342,13 @@ internal object ForwardCirPropertyProjection {
       val key: String = keyComponent.csharpType()
       val value: String = valueComponent.csharpType()
       buildString {
-        val readKey: String = collectionComponentRead(
+        val readKey: CirComponentRead = collectionComponentRead(
+          "keyHandle",
           "NugetMapNative.KeyAt(nativeResult, i)",
           keyComponent,
         ) { it.csharpType() }
-        val readValue: String = collectionComponentRead(
+        val readValue: CirComponentRead = collectionComponentRead(
+          "valueHandle",
           "NugetMapNative.ValueAt(nativeResult, i)",
           valueComponent,
         ) { it.csharpType() }
@@ -352,8 +356,10 @@ internal object ForwardCirPropertyProjection {
         appendLine("            var result = new Dictionary<$key, $value>(count);")
         appendLine("            for (int i = 0; i < count; i++)")
         appendLine("            {")
-        appendLine("                var mapKey = $readKey;")
-        appendLine("                var mapValue = $readValue;")
+        readKey.declaration?.let { appendLine("                $it") }
+        appendLine("                var mapKey = ${readKey.expression};")
+        readValue.declaration?.let { appendLine("                $it") }
+        appendLine("                var mapValue = ${readValue.expression};")
         appendLine("                result[mapKey] = mapValue;")
         appendLine("            }")
         appendLine("            NugetMapNative.Dispose(nativeResult);")
@@ -365,7 +371,8 @@ internal object ForwardCirPropertyProjection {
       val component: BridgeType = requireNotNull(type.element)
       val element: String = component.csharpType()
       buildString {
-        val read: String = collectionComponentRead(
+        val read: CirComponentRead = collectionComponentRead(
+          "elementHandle",
           "NugetSetNative.ElementAt(nativeResult, i)",
           component,
         ) { it.csharpType() }
@@ -373,7 +380,8 @@ internal object ForwardCirPropertyProjection {
         appendLine("            var result = new HashSet<$element>(count);")
         appendLine("            for (int i = 0; i < count; i++)")
         appendLine("            {")
-        appendLine("                result.Add($read);")
+        read.declaration?.let { appendLine("                $it") }
+        appendLine("                result.Add(${read.expression});")
         appendLine("            }")
         appendLine("            NugetSetNative.Dispose(nativeResult);")
         append("            return result;")

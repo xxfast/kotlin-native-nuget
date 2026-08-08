@@ -1715,13 +1715,30 @@ internal class ForwardCallablePlanner(
     !isBridgeableComponent() ->
       (element ?: key ?: value)?.skipReason() ?: ForwardPlanSkipReason.UNSUPPORTED
 
-    kind == CollectionKind.LIST || kind == CollectionKind.MUTABLE_LIST -> null
+    // ADR-083: a *nullable* List element is admitted only when its inner type is wrappable; every
+    // other nullable spelling (Char?, narrow primitives, bare Enum?, Instant?, nested Collection?)
+    // becomes a named skip here instead of the KSP crash it used to be in componentLowering. The
+    // non-null element gate stays on the wider isBridgeableComponent (ADR-073 Scope item 1): no
+    // nullable element binds today, so narrowing only the nullable spellings costs nothing.
+    kind == CollectionKind.LIST || kind == CollectionKind.MUTABLE_LIST ->
+      if (element is BridgeType.Nullable && !element.isWrappableComponent()) {
+        ForwardPlanSkipReason.COLLECTION
+      } else {
+        null
+      }
+
     // ADR-073: map/set inputs are admitted only for components the write side can box
-    // (isWrappableComponent); List is deliberately left on the wider isBridgeableComponent
-    // check above (ADR-073 Scope item 1, out of scope for this change).
+    // (isWrappableComponent). ADR-083: the *key* additionally has to be non-nullable -- a C#
+    // Dictionary cannot hold a null key, so a nullable-key map has no idiomatic projection and
+    // skips named, even though its value slot would be fine.
     kind == CollectionKind.MAP || kind == CollectionKind.MUTABLE_MAP ->
-      if (key?.isWrappableComponent() == true && value?.isWrappableComponent() == true) null
-      else ForwardPlanSkipReason.COLLECTION
+      if (key?.let { it !is BridgeType.Nullable && it.isWrappableComponent() } == true &&
+        value?.isWrappableComponent() == true
+      ) {
+        null
+      } else {
+        ForwardPlanSkipReason.COLLECTION
+      }
 
     else ->
       if (element?.isWrappableComponent() == true) null else ForwardPlanSkipReason.COLLECTION
@@ -1869,6 +1886,12 @@ internal fun BridgeType.isWrappableComponent(): Boolean = when (this) {
   // value-class wrapper over an enum rides the existing int-ordinal wire.
   is BridgeType.ValueClass ->
     underlying is BridgeType.Enum || underlying.isWrappableComponent()
+
+  // ADR-083: a component slot is already pointer-shaped (every element crosses as a boxed
+  // StableRef handle), so the null pointer is an in-band null for every wrappable component kind
+  // -- including Int?, which at an *ordinary* position needs the ADR-079 has-value pair. Nesting
+  // is excluded, matching isBridgeableComponent's own no-nested-nullable rule.
+  is BridgeType.Nullable -> type !is BridgeType.Nullable && type.isWrappableComponent()
 
   else -> false
 }

@@ -1026,9 +1026,13 @@ internal object ForwardCirPlanProjection {
         appendLine("            var result = new List<$elementType>(count);")
         appendLine("            for (int i = 0; i < count; i++)")
         appendLine("            {")
-        val read: String =
-          collectionComponentRead("NugetListNative.Get(listHandle, i)", element) { it.csharpType() }
-        appendLine("                result.Add($read);")
+        val read: CirComponentRead = collectionComponentRead(
+          "elementHandle",
+          "NugetListNative.Get(listHandle, i)",
+          element,
+        ) { it.csharpType() }
+        read.declaration?.let { appendLine("                $it") }
+        appendLine("                result.Add(${read.expression});")
         appendLine("            }")
         appendLine("            NugetListNative.Dispose(listHandle);")
         append("            return " + if (mutable) "result;" else "result.AsReadOnly();")
@@ -1054,12 +1058,20 @@ internal object ForwardCirPlanProjection {
         appendLine("            var result = new Dictionary<$keyType, $valueType>(count);")
         appendLine("            for (int i = 0; i < count; i++)")
         appendLine("            {")
-        val readKey: String =
-          collectionComponentRead("NugetMapNative.KeyAt(mapHandle, i)", key) { it.csharpType() }
-        val readValue: String =
-          collectionComponentRead("NugetMapNative.ValueAt(mapHandle, i)", value) { it.csharpType() }
-        appendLine("                var key = $readKey;")
-        appendLine("                var value = $readValue;")
+        val readKey: CirComponentRead = collectionComponentRead(
+          "keyHandle",
+          "NugetMapNative.KeyAt(mapHandle, i)",
+          key,
+        ) { it.csharpType() }
+        val readValue: CirComponentRead = collectionComponentRead(
+          "valueHandle",
+          "NugetMapNative.ValueAt(mapHandle, i)",
+          value,
+        ) { it.csharpType() }
+        readKey.declaration?.let { appendLine("                $it") }
+        appendLine("                var key = ${readKey.expression};")
+        readValue.declaration?.let { appendLine("                $it") }
+        appendLine("                var value = ${readValue.expression};")
         appendLine("                result[key] = value;")
         appendLine("            }")
         appendLine("            NugetMapNative.Dispose(mapHandle);")
@@ -1085,11 +1097,13 @@ internal object ForwardCirPlanProjection {
         appendLine("            var result = new HashSet<$elementType>(count);")
         appendLine("            for (int i = 0; i < count; i++)")
         appendLine("            {")
-        val read: String = collectionComponentRead(
+        val read: CirComponentRead = collectionComponentRead(
+          "elementHandle",
           "NugetSetNative.ElementAt(setHandle, i)",
           element,
         ) { it.csharpType() }
-        appendLine("                result.Add($read);")
+        read.declaration?.let { appendLine("                $it") }
+        appendLine("                result.Add(${read.expression});")
         appendLine("            }")
         appendLine("            NugetSetNative.Dispose(setHandle);")
         append("            return result;")

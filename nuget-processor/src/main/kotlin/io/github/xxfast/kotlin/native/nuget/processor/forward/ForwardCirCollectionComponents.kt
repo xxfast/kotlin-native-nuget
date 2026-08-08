@@ -35,7 +35,7 @@ internal fun collectionCreateArgument(
   CollectionKind.MAP, CollectionKind.MUTABLE_MAP -> {
     val key: BridgeType = requireNotNull(type.key) { "Forward CIR Map input has no key type" }
     val value: BridgeType = requireNotNull(type.value) { "Forward CIR Map input has no value type" }
-    if (key !is BridgeType.ValueClass && value !is BridgeType.ValueClass) {
+    if (key.componentValueClass() == null && value.componentValueClass() == null) {
       name
     } else {
       // The key and value slots project independently: either side may be the value class.
@@ -49,15 +49,48 @@ internal fun collectionCreateArgument(
   else -> {
     val element: BridgeType =
       requireNotNull(type.element) { "Forward CIR collection input has no element type" }
-    if (element !is BridgeType.ValueClass) name
+    if (element.componentValueClass() == null) name
     else "$SELECT($name, x => ${componentWireExpression("x", element)})"
   }
 }
 
+/**
+ * One component read out of its native box, as an optional local [declaration] to emit before the
+ * read plus the [expression] that produces the component value.
+ *
+ * ADR-083: only a *nullable* component needs the declaration. Its handle has to be tested against
+ * `IntPtr.Zero` and then read, and the handle expression cannot simply be repeated: every
+ * `Get`/`KeyAt`/`ValueAt` call mints a fresh `StableRef` on the Kotlin side. A non-nullable
+ * component keeps its exact pre-ADR-083 single-expression rendering, with no declaration.
+ */
+internal class CirComponentRead(val declaration: String?, val expression: String)
+
 /** Reads one component out of its native box: `FromHandle<T>` for an ordinary component, and for a
  *  value class `FromHandle<underlying>` with the record struct reconstructed around it (re-running
- *  the value class's own `init`, per element, exactly as ADR-077 does at ordinary positions). */
+ *  the value class's own `init`, per element, exactly as ADR-077 does at ordinary positions).
+ *  [local] names the handle local a nullable component needs; it is unused otherwise. */
 internal fun collectionComponentRead(
+  local: String,
+  handle: String,
+  component: BridgeType,
+  csharpType: (BridgeType) -> String,
+): CirComponentRead {
+  if (component !is BridgeType.Nullable) {
+    return CirComponentRead(null, componentReadExpression(handle, component, csharpType))
+  }
+  // ADR-083: the null pointer *is* the null component. The cast on the null arm is what gives the
+  // conditional a common type when the present arm is a value type (`int`, a record struct).
+  val nullArm: String = "(${csharpType(component)})null"
+  val present: String = componentReadExpression(local, component.type, csharpType)
+  return CirComponentRead(
+    "IntPtr $local = $handle;",
+    "$local == IntPtr.Zero ? $nullArm : $present",
+  )
+}
+
+/** The non-null half of [collectionComponentRead]: [handle]'s box unwrapped, and re-wrapped when
+ *  the component is a value class. */
+private fun componentReadExpression(
   handle: String,
   component: BridgeType,
   csharpType: (BridgeType) -> String,
@@ -76,19 +109,38 @@ internal fun collectionComponentRead(
 }
 
 /** The static C# type actually crossing the wire for [component]: the value class's underlying
- *  (`int` for an enum underlying), or the component's own public type. */
+ *  (`int` for an enum underlying), or the component's own public type. ADR-083: a nullable value
+ *  class rides the nullable spelling of that same underlying (`string?`, `int?`). */
 private fun componentWireCsharpType(
   component: BridgeType,
   csharpType: (BridgeType) -> String,
-): String =
-  if (component !is BridgeType.ValueClass) csharpType(component)
-  else if (component.underlying is BridgeType.Enum) "int"
-  else csharpType(component.underlying)
+): String {
+  val valueClass: BridgeType.ValueClass =
+    component.componentValueClass() ?: return csharpType(component)
+  val suffix: String = if (component is BridgeType.Nullable) "?" else ""
+  return if (valueClass.underlying is BridgeType.Enum) "int$suffix"
+  else "${csharpType(valueClass.underlying)}$suffix"
+}
 
-/** One outgoing component projected to its wire value: `x.Value`, `(int)x.Mood`, `x.Patient`. */
+/** One outgoing component projected to its wire value: `x.Value`, `(int)x.Mood`, `x.Patient`, and
+ *  (ADR-083) their `?.`-lifted forms when the component is a nullable value class. */
 private fun componentWireExpression(access: String, component: BridgeType): String {
-  if (component !is BridgeType.ValueClass) return access
-  val unwrapped: String =
-    "$access.${component.underlyingPropertyName.replaceFirstChar { it.uppercase() }}"
-  return if (component.underlying is BridgeType.Enum) "(int)$unwrapped" else unwrapped
+  val valueClass: BridgeType.ValueClass = component.componentValueClass() ?: return access
+  val property: String = valueClass.underlyingPropertyName.replaceFirstChar { it.uppercase() }
+  val isEnum: Boolean = valueClass.underlying is BridgeType.Enum
+  if (component !is BridgeType.Nullable) {
+    return if (isEnum) "(int)$access.$property" else "$access.$property"
+  }
+  // A `Nullable<T>` of a record struct still projects its underlying through `?.`; the enum
+  // ordinal needs the explicit conditional because the `(int)` cast is not itself lifted.
+  return if (isEnum) "$access == null ? (int?)null : (int)$access.Value.$property"
+  else "$access?.$property"
+}
+
+/** The value class a component projects through, seeing past ADR-083's nullable spelling; `null`
+ *  when the component needs no value-class projection at all. */
+internal fun BridgeType.componentValueClass(): BridgeType.ValueClass? = when (this) {
+  is BridgeType.ValueClass -> this
+  is BridgeType.Nullable -> type as? BridgeType.ValueClass
+  else -> null
 }

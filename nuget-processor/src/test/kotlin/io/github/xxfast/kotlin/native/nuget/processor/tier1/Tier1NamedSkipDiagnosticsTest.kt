@@ -90,12 +90,12 @@ class Tier1NamedSkipDiagnosticsTest {
   }
 
   /**
-   * ADR-073: a nullable map *value* (`Map<String, Int?>`) is outside `isWrappableComponent()` --
-   * `nuget_map_put`'s `value` parameter is a non-nullable `COpaquePointer`, so `null` cannot cross
-   * -- and must still fire `SKIPPED_UNSUPPORTED_INPUT` rather than silently crash or bind wrong.
+   * ADR-083 supersedes the ADR-073 skip this cell used to assert: a nullable map *value*
+   * (`Map<String, Int?>`) now rides the null pointer in `nuget_map_put`'s value slot, so the
+   * method binds. The nullable *key* spelling keeps a named skip of its own, one cell below.
    */
   @Test
-  fun `class method with Map nullable-value parameter fires SKIPPED_UNSUPPORTED_INPUT and is omitted`() {
+  fun `class method with Map nullable-value parameter binds`() {
     val result = Tier1Harness.run(
       """
       package tier1.skipmapnullableinput
@@ -111,13 +111,41 @@ class Tier1NamedSkipDiagnosticsTest {
       "expected no broken source for setOptionalScores; got: ${result.compileErrors}",
     )
     assertTrue(
-      "export_patient_setOptionalScores" !in result.generated,
-      "expected setOptionalScores to be entirely absent from the generated CNameExports.kt; " +
+      "export_patient_setOptionalScores" in result.generated,
+      "expected setOptionalScores to bind now that a nullable map value is admitted; " +
+          "generated=${result.generated}",
+    )
+  }
+
+  /**
+   * ADR-083: a nullable map *key* (`Map<String?, Int>`) stays excluded by name -- a C#
+   * `Dictionary` cannot hold a null key, so there is no idiomatic projection for it -- even though
+   * the same nullable spelling is admitted in the value slot by the cell above.
+   */
+  @Test
+  fun `class method with Map nullable-key parameter fires SKIPPED_UNSUPPORTED_INPUT and is omitted`() {
+    val result = Tier1Harness.run(
+      """
+      package tier1.skipmapnullablekeyinput
+
+      class Patient(val name: String) {
+        fun setKeyedScores(scores: Map<String?, Int>): Int = scores.size
+      }
+      """.trimIndent()
+    )
+
+    assertTrue(
+      result.compiledClean,
+      "expected no broken source for setKeyedScores; got: ${result.compileErrors}",
+    )
+    assertTrue(
+      "export_patient_setKeyedScores" !in result.generated,
+      "expected setKeyedScores to be entirely absent from the generated CNameExports.kt; " +
           "generated=${result.generated}",
     )
     assertTrue(
       result.kspWarnings.any { it.contains(ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_INPUT.name) },
-      "expected a SKIPPED_UNSUPPORTED_INPUT diagnostic naming Patient.setOptionalScores's Map " +
+      "expected a SKIPPED_UNSUPPORTED_INPUT diagnostic naming Patient.setKeyedScores's Map " +
           "parameter; kspWarnings=${result.kspWarnings}",
     )
   }
