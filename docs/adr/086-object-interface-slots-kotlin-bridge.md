@@ -2,7 +2,23 @@
 
 ## Status
 
-Proposed
+Accepted. Shipped and verified: `scripts/verify.sh` passes 944/0/1-skipped (the one skip is
+[ADR-087](docs/adr/087-kotlin-slot-exceptions.md)'s, not this ADR's). Corrections against the
+Decision section below, found while building the fixture:
+
+- The `IKeeper` fixture originally over-asserted Kotlin-side identity for a **C#-originated** slot
+  parameter (`Zookeeper.stored === pet` after `groom(pet)`), which this ADR's own identity table
+  does not promise: a parameter transfers a fresh Kotlin wrapper per crossing, not the caller's own
+  wrapper. The shipped probe asserts transfer-ownership liveness instead
+  (`zookeeper.stored?.mealCount == 1 && pet.mealCount == 1`, i.e. the stored wrapper is still usable,
+  and reads the same underlying C# object, after the delivering call returns), which is the
+  substantive guarantee transfer ownership actually makes.
+- "An unbound object/interface type keeps the named skip" is correct in outcome but not in
+  mechanism as first stated: `isKotlinBridgeSlotType`'s new bound-set check
+  (`RirObjectHandleType`/`RirInterfaceType` membership) is belt-and-braces, not the reason the skip
+  fires. [ADR-070](docs/adr/070-csharp-interfaces-in-kotlin.md)'s own admissibility (a type never
+  reaching `boundHandleTypes`/`boundInterfaceTypes` at all) already excludes an unbound type before
+  this ADR's check is ever reached.
 
 ## Context
 
@@ -214,13 +230,22 @@ types (`cfnType`); wrapper `createCleaner` → `free()` → `freeGcHandleFn` own
 `kotlinBridgeContractHash`; the absence of any reverse collection mapping; ADR-084's forward
 planner deferring object slots.
 
-Inferred (documentation, not executed; nobody has verified these against a running bridge):
-1. `GCHandle.Alloc(GCHandle.FromIntPtr(h).Target)` yields an independent handle to the same
-   object, and freeing the duplicate leaves the original valid (the dup thunk's entire premise;
-   documented .NET behaviour, https://learn.microsoft.com/dotnet/api/system.runtime.interopservices.gchandle).
-   If wrong, failures are loud (`InvalidOperationException`/invalid-handle), not silent.
-2. The cleaner-vs-borrowed-return race that motivates dup (Alternative 3). Unverified in either
-   direction; the chosen design is safe whether or not the race is reproducible.
-3. `(Ferret)GCHandle.FromIntPtr(ret).Target` then `Free()` in a bridge member is well-ordered
-   (the read completes before the free; trivially true in straight-line code, but no repo test
-   exercises resolve-then-free in this order yet).
+Verified by spike (2026-08-09, ahead of the fixture landing), promoted from Inferred:
+1. `GCHandle.Alloc(GCHandle.FromIntPtr(h).Target)` yields an **independent** handle to the same
+   object: freeing the duplicate leaves the original handle allocated and its `.Target` still
+   resolvable, confirmed by allocating a dup, freeing it, then resolving the original handle again
+   and observing the same object identity. Also confirmed: `GCHandle.Alloc(null)` is legal .NET API
+   (allocates a handle whose `.Target` is `null`), so the dup thunk's own null-safety cannot rely on
+   `GCHandle.Alloc` throwing on a null target; the generated `nugetHandleOut`/dup call sites guard on
+   `IntPtr.Zero` before ever calling the thunk, never on a null `.Target` after.
+2. `(Ferret)GCHandle.FromIntPtr(ret).Target` then `Free()` in a bridge member (resolve-then-free) is
+   well-ordered under the spike's straight-line execution: the read completes and is used before the
+   handle is freed, on every repetition. Repo-verified further by the shipped `IKeeperBridge.Groom`
+   body (`IKeeperRegistration.cs`), which follows exactly this pattern under
+   `scripts/verify.sh`'s real fixture, not just the standalone spike.
+
+Inferred (documentation, not executed; nobody has verified this against a running bridge):
+1. The cleaner-vs-borrowed-return race that motivated choosing dup over Alternative 3. Unverified
+   in either direction, and deliberately: the chosen design is safe whether or not the race is
+   reproducible, so there was nothing to spike for it (unlike the two claims above, which the
+   design's correctness actually depends on and which the spike above now backs).

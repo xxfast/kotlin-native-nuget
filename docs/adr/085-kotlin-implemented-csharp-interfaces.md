@@ -422,3 +422,38 @@ stub and the ADR-070 handle-backed `IPerformerHandle.kt` were unimported too. Fi
 `registrableEnumTypes` collector applied at every interface-file emission position, not a
 slot-codegen-only patch. See [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md)
 Phase 13 for the ticked items.
+
+## Addendum (Phase 13 Wave 2): derived-interface flattening
+
+This ADR's Scope section named a Kotlin implementation of a *derived* interface (`ITagged :
+IFeedable`) as out of v1, a named `skipped_kotlin_bridge` diagnostic. It now binds, via
+`flattenedBridgeInterfaces` (`RirBridging.kt`): a depth-first walk of an interface's direct bases,
+each base visited (and its own slots emitted) before the interface that derives from it, deduped by
+interface key (a diamond `IC : IA, IB` where both derive from `IBase` reaches `IBase` once) and, in
+`kotlinBridgeSlots`, by member `contractSignature` (a derived interface's C# `new`-redeclaration of
+a base member doesn't double-slot: the base's slot, visited first, serves both). `mintITaggedBridge`
+takes the flattened factory signature in that order: `IFeedable`'s five slots, then `ITagged`'s own
+`tag` getter.
+
+`kotlinBridgeContractHash` (`RirBridging.kt:1246`) was widened at the same time to hash the
+flattened, ordered slot signature list rather than only the interface's own registration slots. This
+closes a real drift hole this ADR's Decision section had already flagged in its slot-order-drift
+comment but had not, before this addendum, actually closed for the derived case: without it, a
+*base* interface gaining a member would change a *derived* interface's flattened factory arity while
+leaving the derived interface's own `slotCount`/hash untouched, an ADR-054-invisible ABI break.
+
+Fixture: `Tabby : ITagged` (`test-library/.../menagerie/MenagerieSample.kt`),
+`IntegrationTests/MenagerieRoundTripTests.cs`'s
+`KotlinTabbyShowcase_DerivedInterfaceFlattening_DispatchesOwnAndInheritedMembers` (own member `Tag`
+plus inherited `Legs` through the derived-typed
+crossing) and `KotlinTabbyIntroduceViaFeedable_SameObjectCrossesAtBasePosition` (the same instance
+at the base-typed crossing). The base-typed crossing needed no fix: ordinary Kotlin interface
+inheritance already dispatched a derived implementation correctly through the base interface's own
+slot table before this addendum: only the derived-typed crossing (`Sanctuary.Showcase(ITagged)`)
+was blocked, since minting *that* bridge is what needed the flattened factory.
+
+**Still open, unfixed by this addendum:** `interfaceFileContent`'s production call site still passes
+neither `interfacePkgs` nor `qualifiedTypeNames`, so a pure interface's cross-package base-interface
+import is still never emitted (`NugetGenerateBindingsTask.kt:515`). `ITagged` and `IFeedable` share a
+package in the fixture, so this stays unreached in practice; see [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md)
+Phase 13.

@@ -285,20 +285,49 @@ after C# lets go of its own reference, until both garbage collectors get around 
 expected, GC-timed behaviour, not a leak.</p>
 </warning>
 
+A Kotlin implementation of a **derived** interface binds too: `Tabby : ITagged` (where `ITagged :
+IFeedable`) mints one flattened factory covering `ITagged`'s own slots plus every slot it inherits
+from `IFeedable`, base before own, so C# calling either `Sanctuary.Showcase(ITagged)` or
+`Sanctuary.Introduce(IFeedable)` with the same `Tabby` dispatches correctly at both positions.
+Bound-object-handle and bound-interface parameters, returns, and properties (nullable included) bind
+too, ownership following one rule: the side that receives the handle owns it. A C# object handed
+into a Kotlin slot parameter transfers ownership to Kotlin, so a Kotlin implementation can safely
+store it past the call that delivered it, the same posture an ordinary reverse-bound parameter
+already has. A value a slot returns is always a fresh transfer handle the C# bridge member resolves
+and frees immediately, so returning the implementation's own stored wrapper never hands back a
+handle whose Kotlin owner could be collected mid-read
+([ADR-086](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/086-object-interface-slots-kotlin-bridge.md)).
+
 <warning>
-<p>A Kotlin-implemented member must not throw. Every generated slot body catches the exception,
-prints one line naming the C# member (<code>IFeedable.Describe</code>), and rethrows, so the
-process still terminates, now with attribution instead of an anonymous, mangled stack
+<p>A Kotlin-implemented member that throws is now catchable from C#, but only when C# calls the
+bridge member directly. Every generated slot body catches the exception, writes a Kotlin-owned
+error envelope through a trailing out-parameter, and returns a dummy value; the C# bridge member
+checks that out-parameter and throws the same public <code>KotlinException</code> family a forward
+call throws, naming the member (<code>IFeedableBridge.Describe</code>) in its own stack trace
 (<a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/087-kotlin-slot-exceptions.md">ADR-087</a>
-stage 1). The exception does not yet reach the C# caller as a catchable <code>KotlinException</code>;
-that propagation is stage 2 and is unshipped.</p>
+stage 2).</p>
+</warning>
+
+<warning>
+<p>That propagation does not reach a call that <i>originates</i> in Kotlin. If Kotlin calls a
+reverse-bound C# method (<code>Sanctuary.Introduce</code>, say) and that method calls the
+Kotlin-implemented member internally, the thrown exception still terminates the process: the
+Kotlin→C# call crosses its own <code>[UnmanagedCallersOnly]</code> thunk, which has no error
+out-parameter of its own (<a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md">ROADMAP.md</a>
+Phase 11, unshipped), so the C# exception has nowhere to go once it escapes the bridge member. Only
+a call C# makes directly into the bridge, holding a stored reference and calling a member on it, is
+catchable today.</p>
 </warning>
 
 v1 slot vocabulary: `val`/`var` property getter-and-setter slots, and methods of arity 0-2
-returning `Unit`, a primitive, `Boolean`, an enum, `String`, or `String?`. A bound-object-handle
-parameter or return, an object/collection-typed slot, a `Task`-returning member, or a derived
-interface (`ITagged : IFeedable`) is out of v1 and falls to a named `skipped_kotlin_bridge`
-diagnostic rather than a silent drop; see [ADR-085](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/085-kotlin-implemented-csharp-interfaces.md)
+returning `Unit`, a primitive, `Boolean`, an enum, `String`, `String?`, a bound-object handle, or a
+bound interface (nullable included for the last two). Still out of v1 and named-skipped
+(`skipped_kotlin_bridge`) rather than silently dropped: a struct-typed slot, a generic-instance
+slot, a collection-typed slot (`List`/`Map`/`Set`, blocked on the reverse direction having no BCL
+collection mapping at any position yet, see [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md)
+Phase 10), and a `Task`-returning member. See [ADR-085](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/085-kotlin-implemented-csharp-interfaces.md),
+[ADR-086](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/086-object-interface-slots-kotlin-bridge.md),
+[ADR-087](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/087-kotlin-slot-exceptions.md),
 and [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md) Phase 13 for
 what's still open.
 
@@ -314,11 +343,10 @@ what's still open.
   silent gap turned into a diagnostic.
 - An interface with zero admissible members is skipped entirely: `skipped_empty_interface`.
 - No downcast from an interface-typed value to a concrete bound class (see the note above).
-- A Kotlin implementation of a derived interface (`ITagged : IFeedable`) is not supported: no
-  flattened derived factory exists yet, so it is a named `skipped_kotlin_bridge` diagnostic.
-- A Kotlin implementation with a bound-object-handle parameter/return, an object/collection-typed
-  member, or a `Task`-returning member is out of the v1 slot vocabulary and named-skipped
-  (`skipped_kotlin_bridge`), not bridged.
+- A Kotlin implementation with a struct-typed, generic-instance-typed, or collection-typed
+  (`List`/`Map`/`Set`) member, or a `Task`-returning member, is out of the v1 slot vocabulary and
+  named-skipped (`skipped_kotlin_bridge`), not bridged. An *unbound* object or interface type at a
+  slot position keeps the same named skip; a bound one now binds (see the ADR-086 note above).
 
 ## Constructors
 
@@ -436,6 +464,14 @@ private static IntPtr SerializeObject_Thunk(int value)
 Graceful propagation into a catchable Kotlin exception is tracked as
 [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md) Phase 11.
 
+<note>
+<p>A Kotlin-implemented interface member is the one place propagation already works, and only
+partially: see the two warnings under "Implementing a C#-declared interface in Kotlin" earlier on
+this page. It is catchable when C# calls the bridge member directly, and still fatal when the call
+originates in Kotlin and calls back into the member through a reverse-bound method, exactly the gap
+this section describes, since that outer reverse thunk has no error path of its own.</p>
+</note>
+
 ## Diagnostics: recorded in the RIR and surfaced to the build
 
 Every skip the metadata reader makes is recorded in `reverse-ir.json`, under each assembly's
@@ -542,5 +578,7 @@ queryable diagnostics report (only a Gradle log line exists today), tracked in
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/058-csharp-shape-b-structs-in-kotlin.md">ADR-058: C# Shape B structs in Kotlin</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/070-csharp-interfaces-in-kotlin.md">ADR-070: C# interfaces in Kotlin</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/085-kotlin-implemented-csharp-interfaces.md">ADR-085: Kotlin-implemented C# interfaces</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/086-object-interface-slots-kotlin-bridge.md">ADR-086: Object- and interface-typed slots for a Kotlin-implemented C# interface</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/087-kotlin-slot-exceptions.md">ADR-087: Exceptions from Kotlin-implemented C# interface members</a>
     </category>
 </seealso>

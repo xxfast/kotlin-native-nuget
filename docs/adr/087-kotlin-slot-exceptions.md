@@ -2,11 +2,40 @@
 
 ## Status
 
-Proposed. **Stage 1 (the named per-slot fast-fail wrapper) is implemented and verified**:
-`scripts/verify.sh` passes 939/0 with every generated slot body (`IFeedableBindings.kt`,
-`IPerformerBindings.kt`) wrapped exactly as the Decision section's Stage 1 shows, message text and
-all. Stage 2 (the catchable error-envelope propagation) is unshipped; this ADR stays `Proposed`
-until that lands too.
+Accepted. Both stages are shipped: `scripts/verify.sh` passes 944/0/1-skipped, every generated slot
+body (`IFeedableBindings.kt`, `IKeeperBindings.kt`, `IPerformerBindings.kt`, `ITaggedBindings.kt`)
+carries the trailing error out-parameter, and the C# bridge members throw the mapped
+`KotlinException` family on a throw. One correction against the Decision section's "wiring
+questions", forced by an actually-false Inferred claim, not a preference:
+
+- **"Reverse-generated Kotlin and KSP-generated forward Kotlin compile into one module" is false,
+  not merely unverified.** KSP emits `CNameExports.kt` into the per-target child source set
+  (`macosArm64Main`), while the reverse bindings live in `nativeMain`, that child's **parent**; a
+  parent source set cannot see a child's declarations, so the forward `NugetError` was never
+  referencable from the reverse runtime at all. The ADR's own Decision section had already named
+  the fallback for exactly this case, and that fallback is what shipped: a reverse-owned
+  `NugetKotlinError` class plus eight `nuget_kotlin_error_*` accessor exports (`NugetRuntime.kt`)
+  for the **read** side, while the **thrown** types stay the forward-generated **public**
+  `KotlinException` family, qualified by a new `forwardNamespace` (the `nuget { publish { } }`
+  `packageId`) threaded through `NugetPlugin.kt` into `NugetGenerateShimsTask`, so
+  `TestLibrary.KotlinInvalidOperationException` etc. resolve across the namespace boundary.
+- One direct consequence, not itself wrong but worth naming: `NugetKotlinErrors.Map`
+  (`NugetRuntimeRegistration.cs`) duplicates the forward `BuildMapped` switch's nine rows verbatim,
+  because `BuildMapped` is `private` (`CirErrorRenderer.kt:59`) and the reverse side cannot call it.
+  Tracked as its own cheap follow-up in [ROADMAP.md](ROADMAP.md) Tooling & Test Integrity (expose a
+  public forward exception factory).
+
+Everything else in the Decision and Mechanism claims ledger below shipped as designed, including the
+one deliberately-retained boundary: propagation is catchable only when C# calls a bridge member
+**directly**. A call that originates in Kotlin and reaches the same member indirectly through an
+ordinary reverse-bound method (`Sanctuary.Introduce` calling `IFeedable.Describe()` internally)
+still terminates the host, because that outer Kotlin→C# call crosses its own
+`[UnmanagedCallersOnly]` reverse thunk, which has no error path of its own: out of this ADR's
+scope by design (see Deferred below), tracked as its own ROADMAP Phase 11 item.
+`IntegrationTests/MenagerieRoundTripTests.cs`'s
+`KotlinNoVacancy_DescribeThrows_MapsToKotlinInvalidOperationException` stays `[Fact(Skip = "needs
+reverse-thunk (C#->Kotlin) error propagation; ADR-087 stage 2's slot half is done")]` for exactly
+that reason.
 
 ## Context
 
@@ -320,13 +349,20 @@ Kotlin (`CirTranslator.kt:441`, `NugetProcessor.kt:1086`, `GenericClassExports.k
 `Check<T>`, the ADR-029 type map, public `KotlinException` family); contract-tag mechanism
 (`RirBridging.kt:1158`) and the same-arity-drift warning it exists for (`RirBridging.kt:931`).
 
-Inferred (not verified; each fails loudly at build time, not silently, if wrong):
-1. Reverse-generated Kotlin and KSP-generated forward Kotlin compile into one Kotlin/Native
-   module, so the public `NugetError` class is referencable from `NugetRuntime.kt`'s new
-   `nugetKotlinError`. Fallback: reverse-owned envelope copy + accessors.
-2. The reverse shims can reference the forward `internal` `NugetErrorNative` across namespaces
-   within the consumer assembly, and the shims generator can learn that namespace. Fallback: a
-   reverse-owned accessor helper that still throws the forward public exception types.
-3. Dummy-return values for wire types other than `Int` and pointers (byte `0` for `bool`, etc.)
+Corrected from Inferred to **false**, shipped fallback used instead (see Status above):
+1. "Reverse-generated Kotlin and KSP-generated forward Kotlin compile into one Kotlin/Native
+   module" does not hold: KSP emits into a per-target child source set, these bindings live in
+   `nativeMain`, the parent, and a parent cannot see a child's declarations. Shipped: a
+   reverse-owned `NugetKotlinError` envelope class plus its own `nuget_kotlin_error_*` accessor
+   exports (`NugetRuntime.kt`), exactly the fallback this ADR had already named.
+2. Resolved without needing the `internal NugetErrorNative` reach this claim asked about at all:
+   the shipped `NugetKotlinErrors` (`NugetRuntimeRegistration.cs`) is its own `internal static`
+   class with its own `[DllImport]`s against the `nuget_kotlin_error_*` exports and its own
+   `Map` switch, qualified by the new `forwardNamespace` (`NugetPlugin.kt:166`, the `nuget {
+   publish { } }` `packageId`) only at the point it constructs a `TestLibrary.KotlinException`
+   subtype, never by reaching into the forward-generated class.
+
+Inferred (not verified; fails loudly at build time, not silently, if wrong):
+1. Dummy-return values for wire types other than `Int` and pointers (byte `0` for `bool`, etc.)
    are safe because the C# member checks `errOut` first; composition of shipped pieces, not
    spiked per type.
