@@ -251,6 +251,21 @@ internal data class ForwardCallablePlanCatalog(
   fun valueClassMethods(owner: String): List<ForwardCallablePlan> = valueClassMembers(owner)
     .filter { plan -> plan.invocation.target?.endsWith("#property") != true }
 
+  /**
+   * ADR-090: the planned ordinary-class methods of [owner], in planning order.
+   *
+   * Same reason as [valueClassMethods]: with overload numbering in the planner, a symbol is no
+   * longer derivable from a `getAllFunctions()` entry, so both emitters read the member plans off
+   * the catalog instead. The owner filter is *exact*, not a prefix: `interfaceEntries` also emits
+   * CLASS-origin plans, keyed by the interface's own qualified name. Constructors are excluded
+   * (their own origin aside, `<init>` never belongs to the method surface).
+   */
+  fun classMethods(owner: String): List<ForwardCallablePlan> = plans.filter { plan ->
+    plan.invocation.origin == ForwardCallableOrigin.CLASS &&
+        plan.invocation.symbol.substringBeforeLast('.') == owner &&
+        !plan.invocation.symbol.substringAfterLast('.').startsWith("<init>")
+  }
+
   private fun valueClassMembers(owner: String): List<ForwardCallablePlan> = plans.filter { plan ->
     plan.invocation.origin == ForwardCallableOrigin.VALUE_CLASS &&
         plan.invocation.symbol.substringBeforeLast('.') == owner &&
@@ -590,8 +605,17 @@ internal class ForwardCallablePlanner(
       .flatMap { pair -> listOf(pair.first, pair.second) }
       .toSet()
 
+    val owner: String = cls.qualifiedName?.asString() ?: className
+    // ADR-090: overload numbering, the scheme `valueClassMethodEntries` uses (itself ADR-034's
+    // secondary-constructor scheme). Counted over the *declared plannable* members in
+    // `getAllFunctions()` order — the counter increments before the structural check, so a
+    // skipped namesake still consumes its number and numbering stays declaration-order stable.
+    val occurrences: MutableMap<String, Int> = mutableMapOf()
     return methods.map { method ->
-      val symbol: String = "${cls.qualifiedName?.asString() ?: className}.${method.simpleName.asString()}"
+      val name: String = method.simpleName.asString()
+      val occurrence: Int = occurrences.merge(name, 1, Int::plus)!!
+      val suffix: String = if (occurrence == 1) "" else "_$occurrence"
+      val symbol: String = "$owner.$name$suffix"
       val structuralReason: ForwardPlanSkipReason? = when {
         method.modifiers.contains(Modifier.ABSTRACT) -> ForwardPlanSkipReason.ABSTRACT
         method.modifiers.contains(Modifier.SUSPEND) -> ForwardPlanSkipReason.SUSPEND
@@ -604,14 +628,20 @@ internal class ForwardCallablePlanner(
       } else {
         planOrSkip(
           symbol = symbol,
-          publicName = method.simpleName.asString().replaceFirstChar { it.uppercase() },
-          exportName = "${prefix}_${method.simpleName.asString()}",
+          publicName = name.replaceFirstChar { it.uppercase() },
+          exportName = "${prefix}_$name$suffix",
           receiver = ForwardReceiver.Handle(receiverType),
           parameters = method.parameters.map { parameter ->
             (parameter.name?.asString() ?: "_") to classifier.classify(parameter.type.resolve())
           },
           result = method.returnType?.resolve()?.let(classifier::classify) ?: BridgeType.Unit,
           origin = ForwardCallableOrigin.CLASS,
+          // The symbol carries the overload suffix; the Kotlin call site must not.
+          member = name,
+          // ADR-090: the C# modifiers, read here because a planned entry keeps no declaration.
+          isOverride = superClass != null && method.modifiers.contains(Modifier.OVERRIDE),
+          isVirtual = superClass == null && method.modifiers.contains(Modifier.OVERRIDE) &&
+              !method.modifiers.contains(Modifier.FINAL),
           node = method,
         )
       }
@@ -994,6 +1024,8 @@ internal class ForwardCallablePlanner(
     includeError: Boolean = true,
     valueClassProperty: Boolean = false,
     member: String? = null,
+    isOverride: Boolean = false,
+    isVirtual: Boolean = false,
     node: KSNode? = null,
   ): ForwardCallableCatalogEntry {
     val inputTypes: List<BridgeType> = buildList {
@@ -1075,6 +1107,8 @@ internal class ForwardCallablePlanner(
         name = publicName,
         parameters = parameters.map { (name, type) -> ForwardPublicParameter(name, type) },
         result = result,
+        isOverride = isOverride,
+        isVirtual = isVirtual,
       ),
       evaluation = ForwardEvaluation.EXACTLY_ONCE,
       nativeExports = listOf(nativeCall),

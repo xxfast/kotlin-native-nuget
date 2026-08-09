@@ -797,7 +797,10 @@ private fun invocationExpression(
   receiver: ForwardAbiParameter?,
   arguments: String,
 ): String {
-  val functionName: String = plan.invocation.symbol.substringAfterLast('.')
+  // ADR-090: an overload's symbol carries the `_2` suffix so catalog keys stay unique; the Kotlin
+  // call site must say the declared name. `member` is null for every unnumbered callable.
+  val functionName: String =
+    plan.invocation.member ?: plan.invocation.symbol.substringAfterLast('.')
   return when (plan.invocation.origin) {
     ForwardCallableOrigin.CLASS -> {
       val owner: String = plan.invocation.symbol.substringBeforeLast('.')

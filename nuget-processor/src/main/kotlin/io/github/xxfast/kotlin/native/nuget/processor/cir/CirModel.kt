@@ -339,6 +339,13 @@ data class CirMethod(
   val returnType: String,
   val nativeReturnType: String = returnType,
   val nativeName: String = "Native_$name",
+  /**
+   * ADR-090: the private `[DllImport]` extern's C# name, when it is not `Native_$name`.
+   *
+   * Two overloads share one public name but must not share one extern (CS0111), so a numbered
+   * member carries the numbered extern name here. Null keeps the shipped `Native_$name`.
+   */
+  val externName: String? = null,
   val parameters: List<CirParameter>,
   val body: String,
   val visibility: CirVisibility = CirVisibility.PUBLIC,

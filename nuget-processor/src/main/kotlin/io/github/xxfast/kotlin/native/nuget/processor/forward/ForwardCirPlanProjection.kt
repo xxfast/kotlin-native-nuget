@@ -358,8 +358,15 @@ internal object ForwardCirPlanProjection {
           "does not begin with $nativePrefix"
     }
 
+    // ADR-090 overload numbering: the symbol's last segment carries the `_2` suffix, the public
+    // name does not (the C# surface is one natural overload set). The `DllImport` name must follow
+    // the *numbered* name, or two overloads that happen to share a wire shape (an `Int` and an
+    // enum parameter both cross as `int`) would declare the same extern twice (CS0111). Unsuffixed
+    // members render exactly as before.
+    val externName: String = "Native_" + plan.invocation.symbol.substringAfterLast('.')
+      .replaceFirstChar { it.uppercase() }
     val result: CirResultProjection = plan.resultProjection(
-      nativeName = "Native_${plan.publicSignature.name}",
+      nativeName = externName,
       parameters = plan.publicSignature.parameters,
       receiverArgument = "_handle",
     )
@@ -375,6 +382,7 @@ internal object ForwardCirPlanProjection {
       returnType = result.returnType,
       nativeReturnType = result.nativeReturnType,
       nativeName = nativeName,
+      externName = externName,
       parameters = publicParams,
       body = result.body,
       isOverride = isOverride,

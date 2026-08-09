@@ -255,19 +255,16 @@ internal fun FileSpec.Builder.addClassExports(
 
   val interfaceBridgePairs: List<Pair<KSFunctionDeclaration, KSFunctionDeclaration>> =
     findInterfaceBridgePairs(methods)
-  val interfaceBridgeExcluded: Set<KSFunctionDeclaration> =
-    (interfaceBridgePairs.map { it.first } + interfaceBridgePairs.map { it.second }).toSet()
-
   interfaceBridgePairs.forEach { (addMethod, removeMethod) ->
     addInterfaceBridgeExports(addMethod, removeMethod, qualifiedName, prefix)
   }
 
-  methods.forEach { method ->
-    if (method in interfaceBridgeExcluded) return@forEach
-    val methodName: String = method.simpleName.asString()
-    val planned: ForwardCallablePlan? = callableCatalog.planFor("$qualifiedName.$methodName")
-    if (planned != null) addForwardKotlinPlanExport(planned)
-  }
+  // ADR-090: member plans come off the catalog, not from a per-declaration plan lookup. Overload
+  // numbering lives in the planner, so `"$qualifiedName.$methodName"` is no longer a plan key for
+  // anything past the first same-name declaration (and re-emitted the first one's plan). Flow,
+  // lambda-parameter, stored-callback and interface-bridge members never produce a CLASS plan
+  // (the planner skips them), so catalog iteration cannot double-emit the routes above.
+  callableCatalog.classMethods(qualifiedName).forEach { plan -> addForwardKotlinPlanExport(plan) }
 
   flowMethods.forEach { method ->
     val methodName: String = method.simpleName.asString()
