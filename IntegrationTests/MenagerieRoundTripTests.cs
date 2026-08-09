@@ -97,6 +97,141 @@ public class MenagerieRoundTripTests
         string result = MenagerieSample.flagshipTagAndLegs();
         Assert.Equal("flagship/4", result);
     }
+
+    // ADR-085: Kotlin-implemented C# interfaces passed back to C#. Every fixture in this block
+    // is EXPECTED TO FAIL as of this commit — `nugetHandle()` still hits the `error(...)` branch
+    // for a plain Kotlin `Goat : IFeedable` (no `NugetHandleOwner`), so `MenagerieSample.kt`'s
+    // ADR-085 functions abort the Kotlin/Native process at the point of the interface-typed
+    // crossing, which surfaces here as the native library aborting or the whole test host
+    // crashing rather than a normal Assert failure. See the class doc comment on
+    // `MenagerieRoundTripTests` above for how a Kotlin-side compile break (if any) would instead
+    // fail earlier, at build time.
+
+    [Fact]
+    public void KotlinGoatIntroduce_DispatchesDescribeAndLegsIntoKotlin()
+    {
+        // Sanctuary.Introduce(IFeedable) called with a Kotlin-implemented Goat (not a bound
+        // Ferret): the String-returning Describe() member PLUS the Int Legs getter must both
+        // dispatch back into the Kotlin object through a minted bridge.
+        string result = MenagerieSample.kotlinGoatIntroduce();
+        Assert.Equal("introduced Nibbles the goat with 4 legs", result);
+    }
+
+    [Fact]
+    public void KotlinGoatFeedCount_DispatchesVoidStringParameterMember()
+    {
+        // Sanctuary.FeedAnimal(IFeedable, string) calls IFeedable.Feed(string) — a void-returning,
+        // string-PARAMETER member — on a Kotlin-implemented Goat. The Kotlin side counts calls in
+        // `goat.meals`, read back after the C#->Kotlin round trip to prove the call actually
+        // reached the Kotlin object rather than merely not throwing.
+        int meals = MenagerieSample.kotlinGoatFeedCount("kibble");
+        Assert.Equal(1, meals);
+    }
+
+    [Fact]
+    public void KotlinGoatRename_WritesThenReadsNicknameThroughBothSlots()
+    {
+        // Sanctuary.Rename(IFeedable, string?) writes then reads IFeedable.Nickname on a
+        // Kotlin-implemented Goat: exercises BOTH the setter and getter slots (Introduce only
+        // ever exercises a getter), mirroring Mylo's brown-and-creamy nickname fixtures elsewhere.
+        string? result = MenagerieSample.kotlinGoatRename("Mylo");
+        Assert.Equal("Mylo", result);
+    }
+
+    [Fact]
+    public void KotlinGoatRename_NullNickname_IsDistinctFromEmptyString()
+    {
+        // Same setter/getter round trip, but with null: the nullable-string slot must ride
+        // IntPtr.Zero through, not collapse null into "".
+        string? result = MenagerieSample.kotlinGoatRename(null);
+        Assert.Null(result);
+    }
+
+    [Fact]
+    public void KotlinGoatRename_EmptyStringNickname_IsNotNull()
+    {
+        string? result = MenagerieSample.kotlinGoatRename("");
+        Assert.NotNull(result);
+        Assert.Equal("", result);
+    }
+
+    [Fact]
+    public void KotlinGoatFeaturedIsSameInstance_KotlinSideIdentityIsPreserved()
+    {
+        // Sanctuary.Featured stores a Kotlin-implemented Goat and hands it back. ADR-085 promises
+        // Kotlin-side identity (not C#-side): the value read back on the Kotlin side of the
+        // crossing must be the SAME Goat instance, via the token probe, not merely an equal one.
+        bool same = MenagerieSample.kotlinGoatFeaturedIsSameInstance();
+        Assert.True(same, "expected sanctuary.featured to resolve back to the original Goat instance");
+    }
+
+    // ADR-085 lifetime (the reverse mirror of ADR-084's release tests in BidirectionalTests.cs):
+    // the factory's GCHandle is a TRANSFER handle the Kotlin call site frees once the native call
+    // returns, so a bridge C# did not store has no roots left and the .NET GC can collect it. Its
+    // KotlinRefHandle then releases the Kotlin object through nuget_kotlin_release, which is what
+    // the counter observes. Release is GC-timed and never prompt, so this polls forced collections
+    // rather than asserting once.
+    [Fact]
+    public void KotlinGoatBridge_IsReleased_AfterTheTransferHandleIsFreed()
+    {
+        // Settle anything an earlier test in this class left pending, so the delta below can only
+        // be this call's bridge.
+        SettleKotlinReleases();
+        int before = MenagerieSample.kotlinBridgeReleaseCount();
+
+        // Introduce does not store the feedable, so nothing on either side roots the bridge once
+        // the call site disposes its transfer handle.
+        MenagerieSample.kotlinGoatIntroduce();
+
+        Assert.True(
+            KotlinReleaseFiredWithin(before, TimeSpan.FromSeconds(5)),
+            $"expected the collected bridge to release its Kotlin object; " +
+            $"kotlinBridgeReleaseCount stayed at {before}");
+    }
+
+    // The other half of the contract: a bridge C# still holds must survive a collection. Reading
+    // Sanctuary.Featured back goes through that live bridge's identity token (and therefore its
+    // ctx StableRef), so a prematurely released bridge cannot pass this.
+    [Fact]
+    public void LiveKotlinGoatBridge_SurvivesACollection_AndStillResolves()
+    {
+        MenagerieSample.kotlinGoatStoreFeatured();
+
+        for (int round = 0; round < 3; round++)
+        {
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
+        }
+
+        Assert.True(
+            MenagerieSample.kotlinGoatStoredFeaturedIsSameInstance(),
+            "a bridge C# still references must survive a collection and still resolve its Kotlin object");
+
+        MenagerieSample.kotlinGoatDropHeld();
+    }
+
+    private static void SettleKotlinReleases()
+    {
+        for (int round = 0; round < 5; round++)
+        {
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
+            Thread.Sleep(25);
+        }
+    }
+
+    private static bool KotlinReleaseFiredWithin(int before, TimeSpan budget)
+    {
+        DateTime deadline = DateTime.UtcNow + budget;
+        while (DateTime.UtcNow < deadline)
+        {
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
+            if (MenagerieSample.kotlinBridgeReleaseCount() > before) return true;
+            Thread.Sleep(25);
+        }
+        return false;
+    }
 }
 
 // Decision 6's five negative cases, one per diagnostic. These interfaces are never referenced

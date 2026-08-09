@@ -160,12 +160,13 @@ class NugetInterfaceGenerationTest {
   }
 
   @Test
-  fun `IFeedable register export has no constructor slot and expects 5 slots`() {
+  fun `IFeedable register export has no constructor slot and expects 5 member slots`() {
     val files: List<GeneratedFile> = generateKotlinStubs(rir)
     val file: GeneratedFile = files.single { it.relativePath.endsWith("/IFeedableBindings.kt") }
 
-    // describe, feed, legsGetter, nicknameGetter, nicknameSetter = 5 slots.
-    assertContains(file.content, "expectedSlots = 5,")
+    // describe, feed, legsGetter, nicknameGetter, nicknameSetter = 5 member slots, plus ADR-085's
+    // two bridge slots (createBridge, bridgeToken) because IFeedable is Kotlin-implementable.
+    assertContains(file.content, "expectedSlots = 7,")
     assertFalse(file.content.contains("ctor"))
   }
 
@@ -189,16 +190,18 @@ class NugetInterfaceGenerationTest {
     val file: GeneratedFile = files.single { it.relativePath.endsWith("/Sanctuary.kt") }
 
     assertContains(file.content, "fun star(): IFeedable {")
-    assertContains(file.content, "IFeedableHandle(requireNotNull(ptr)")
+    assertContains(file.content, "nugetIFeedableValue(requireNotNull(ptr)")
   }
 
   @Test
-  fun `Sanctuary introduce lowers an interface-typed parameter via nugetHandle`() {
+  fun `Sanctuary introduce lowers an interface-typed parameter through the transfer scope`() {
     val files: List<GeneratedFile> = generateKotlinStubs(rir)
     val file: GeneratedFile = files.single { it.relativePath.endsWith("/Sanctuary.kt") }
 
     assertContains(file.content, "fun introduce(feedable: IFeedable): String {")
-    assertContains(file.content, "feedable.nugetHandle(\"IFeedable\").require(\"IFeedable\")")
+    // ADR-085: the scope's handleOf(...) unwraps a generated wrapper exactly as nugetHandle() did,
+    // and additionally owns (and frees) a handle minted for a Kotlin implementation.
+    assertContains(file.content, "handleOf(feedable, \"IFeedable\")")
   }
 
   @Test
@@ -207,7 +210,7 @@ class NugetInterfaceGenerationTest {
     val file: GeneratedFile = files.single { it.relativePath.endsWith("/Sanctuary.kt") }
 
     assertContains(file.content, "var featured: IFeedable?")
-    assertContains(file.content, "ptr?.let { IFeedableHandle(it) }")
+    assertContains(file.content, "ptr?.let { nugetIFeedableValue(it) }")
   }
 
   @Test
@@ -216,7 +219,7 @@ class NugetInterfaceGenerationTest {
     val file: GeneratedFile = files.single { it.relativePath.endsWith("/Sanctuary.kt") }
 
     assertContains(file.content, "fun flagship(): ITagged {")
-    assertContains(file.content, "ITaggedHandle(requireNotNull(ptr)")
+    assertContains(file.content, "nugetITaggedValue(requireNotNull(ptr)")
   }
 
   @Test

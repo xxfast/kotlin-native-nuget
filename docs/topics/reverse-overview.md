@@ -234,5 +234,6 @@ install pointer rather than a cryptic subprocess error.
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/057-csharp-overload-sets-in-kotlin.md">ADR-057: C# overload sets in Kotlin</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/058-csharp-shape-b-structs-in-kotlin.md">ADR-058: C# Shape B structs in Kotlin</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/070-csharp-interfaces-in-kotlin.md">ADR-070: C# interfaces in Kotlin</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/085-kotlin-implemented-csharp-interfaces.md">ADR-085: Kotlin-implemented C# interfaces</a>
     </category>
 </seealso>
