@@ -90,7 +90,9 @@ class Tier1InterfaceBridgeFactoryTest {
     val result = Tier1Harness.run(source)
     val cs: String = result.generatedCSharp
 
-    assertContains(cs, "IntPtr petHandle = NugetMarshal.HandleOf(pet, out bool petOwned);")
+    // ROADMAP:130: the transfer handle is disposed in a `finally`, so the locals are declared
+    // before the `try` and the extraction is an assignment.
+    assertContains(cs, "petHandle = NugetMarshal.HandleOf(pet, out petOwned);")
     assertContains(cs, "if (petOwned) { NugetMarshal.Dispose(petHandle); }")
     // A Kotlin-backed wrapper's own `_handle` is never disposed by the call site.
     assertContains(cs, "owned = false;")

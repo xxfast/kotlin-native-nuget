@@ -175,16 +175,14 @@ internal object ForwardCirPropertyProjection {
     val prefix: String = listOf(receiver).filter { it.isNotBlank() }.joinToString(", ")
     fun args(extra: String = ""): String = listOf(prefix, extra).filter { it.isNotBlank() }.joinToString(", ")
     return when (val setter = plan.setter) {
-      is ForwardPropertySetter.Direct -> buildString {
-        val prelude: String? = plan.setterPrelude()
-        if (prelude != null) appendLine("            $prelude")
-        append(checkedVoidBody(nativeName(plan, setter.call), args(plan.valueArgument())))
-        val cleanup: String? = plan.setterCleanup()
-        if (cleanup != null) {
-          appendLine()
-          append("            $cleanup")
-        }
-      }
+      // ROADMAP:130: the setter's temporary handle is released in a `finally`, so the error
+      // check's throw cannot skip it. With no handle to release the body keeps its flat shape.
+      is ForwardPropertySetter.Direct -> forwardCirHandleScope(
+        prelude = listOfNotNull(plan.setterPrelude()),
+        cleanup = listOfNotNull(plan.setterCleanup()),
+        core = checkedVoidBody(nativeName(plan, setter.call), args(plan.valueArgument())),
+        leadingNewline = false,
+      )
 
       is ForwardPropertySetter.NullableDispatch -> buildString {
         appendLine(); appendLine("            if (value.HasValue)"); appendLine("            {")
@@ -446,12 +444,16 @@ internal object ForwardCirPropertyProjection {
    * handle whose disposal is what lets the bridge ever be collected; a collection value builds a
    * Kotlin list/map/set handle that was likewise never freed. One mechanism closes both.
    */
-  private fun ForwardPropertyPlan.setterPrelude(name: String = "value"): String? {
+  private fun ForwardPropertyPlan.setterPrelude(name: String = "value"): ForwardCirHandleStep? {
     val nullable: Boolean = type is BridgeType.Nullable
     return when (val value = type.unwrapNullable()) {
       is BridgeType.Interface -> {
         val helper: String = if (nullable) "HandleOfOrZero" else "HandleOf"
-        "IntPtr valueHandle = NugetMarshal.$helper($name, out bool valueOwned);"
+        ForwardCirHandleStep(
+          flat = "IntPtr valueHandle = NugetMarshal.$helper($name, out bool valueOwned);",
+          declarations = listOf("IntPtr valueHandle = IntPtr.Zero;", "bool valueOwned = false;"),
+          statement = "valueHandle = NugetMarshal.$helper($name, out valueOwned);",
+        )
       }
 
       is BridgeType.Collection -> {
@@ -469,7 +471,11 @@ internal object ForwardCirPropertyProjection {
         } else {
           "NugetMarshal.$factory($source)"
         }
-        "IntPtr valueHandle = $built;"
+        ForwardCirHandleStep(
+          flat = "IntPtr valueHandle = $built;",
+          declarations = listOf("IntPtr valueHandle = IntPtr.Zero;"),
+          statement = "valueHandle = $built;",
+        )
       }
 
       else -> null
@@ -487,11 +493,9 @@ internal object ForwardCirPropertyProjection {
         CollectionKind.SET, CollectionKind.MUTABLE_SET -> "NugetSetNative"
       }
       // ADR-075: a null value never built a handle, and `nuget_dispose` is not null-safe.
-      if (type is BridgeType.Nullable) {
-        "if (valueHandle != IntPtr.Zero) { $native.Dispose(valueHandle); }"
-      } else {
-        "$native.Dispose(valueHandle);"
-      }
+      // ROADMAP:130: unconditional now, because the `finally` this lands in is also reached by a
+      // throw from the creation itself, where the handle is still Zero.
+      "if (valueHandle != IntPtr.Zero) { $native.Dispose(valueHandle); }"
     }
 
     else -> null

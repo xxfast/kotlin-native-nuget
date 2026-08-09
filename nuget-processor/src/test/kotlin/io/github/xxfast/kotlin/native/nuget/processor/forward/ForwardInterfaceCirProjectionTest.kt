@@ -84,8 +84,11 @@ class ForwardInterfaceCirProjectionTest {
 
     assertEquals("IPet", method.parameters.single { it.name == "pet" }.type)
     // ADR-084 stage 3: extraction moved into the prelude so the minted transfer handle can be
-    // disposed once the crossing is done.
-    assertTrue(method.body.contains("IntPtr petHandle = NugetMarshal.HandleOf(pet, out bool petOwned);"))
+    // disposed once the crossing is done. ROADMAP:130: both locals are declared before the `try`
+    // that the disposing `finally` guards, so the extraction is an assignment.
+    assertTrue(method.body.contains("IntPtr petHandle = IntPtr.Zero;"))
+    assertTrue(method.body.contains("bool petOwned = false;"))
+    assertTrue(method.body.contains("petHandle = NugetMarshal.HandleOf(pet, out petOwned);"))
     assertTrue(method.body.contains("if (petOwned) { NugetMarshal.Dispose(petHandle); }"))
   }
 
