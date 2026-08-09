@@ -1,7 +1,9 @@
 package io.github.xxfast.kotlin.native.nuget.processor.cir
 
 class CirRenderer {
-  fun render(file: CirFile): String = buildString {
+  fun render(file: CirFile): String = renderFile(file).withUtf8StringParameters()
+
+  private fun renderFile(file: CirFile): String = buildString {
     appendLine("#nullable enable")
     appendLine()
 

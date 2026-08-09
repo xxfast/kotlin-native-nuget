@@ -71,7 +71,7 @@ class CirOrdinaryRendererTest {
     assertContains(rendered, "internal IntPtr _handle;")
     assertContains(
       rendered,
-      "private static extern IntPtr Native_Create(string name, out IntPtr error);",
+      "private static extern IntPtr Native_Create([MarshalAs(UnmanagedType.LPUTF8Str)] string name, out IntPtr error);",
     )
     assertContains(rendered, "public Patient(string name)")
     assertContains(rendered, "IntPtr handle = Native_Create(name, out IntPtr error);")
@@ -133,7 +133,7 @@ class CirOrdinaryRendererTest {
 
     assertContains(
       rendered,
-      "private static extern IntPtr Native_Create_2(string name, int age, out IntPtr error);",
+      "private static extern IntPtr Native_Create_2([MarshalAs(UnmanagedType.LPUTF8Str)] string name, int age, out IntPtr error);",
     )
     assertContains(rendered, "public Patient(string name, int age)")
     assertContains(rendered, "Native_Create_2(name, age, out IntPtr error)")
@@ -630,7 +630,7 @@ class CirOrdinaryRendererTest {
     assertContains(rendered, "public static class Clinic")
     assertContains(
       rendered,
-      "private static extern IntPtr Native_Greet(string name, out IntPtr error);",
+      "private static extern IntPtr Native_Greet([MarshalAs(UnmanagedType.LPUTF8Str)] string name, out IntPtr error);",
     )
     assertContains(rendered, "public static string Greet(string name)")
     assertContains(rendered, "IntPtr nativeResult = Native_Greet(name, out IntPtr error);")

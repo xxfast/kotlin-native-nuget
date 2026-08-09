@@ -45,7 +45,7 @@ class ForwardPhase9ValueClassProjectionTest {
     assertEquals(listOf("other"), method.parameters.map { it.name })
     assertEquals("bool", method.returnType)
     assertContains(csharp, "public bool Matches(string other)")
-    assertContains(csharp, "Native_Matches(string value, string other)")
+    assertContains(csharp, "Native_Matches([MarshalAs(UnmanagedType.LPUTF8Str)] string value, [MarshalAs(UnmanagedType.LPUTF8Str)] string other)")
   }
 
   @Test

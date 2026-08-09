@@ -99,7 +99,7 @@ class Tier1ValueClassReceiverTest {
     )
 
     val cs: String = result.generatedCSharp
-    assertContains(cs, "private static extern IntPtr Native_Abbreviate(string receiver, int length, out IntPtr error);")
+    assertContains(cs, "private static extern IntPtr Native_Abbreviate([MarshalAs(UnmanagedType.LPUTF8Str)] string receiver, int length, out IntPtr error);")
     assertContains(cs, "Native_Abbreviate(receiver.Value, length, out IntPtr error)")
     assertContains(cs, "private static extern int Native_Escalate(int receiver, out IntPtr error);")
     assertContains(cs, "public static Temperament Escalate(this Temperament receiver)")
