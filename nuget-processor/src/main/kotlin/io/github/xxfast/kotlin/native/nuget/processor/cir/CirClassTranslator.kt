@@ -901,9 +901,14 @@ internal fun translateGenericClass(
       val propName: String = prop.simpleName.asString()
       val csPropName: String = propName.replaceFirstChar { it.uppercase() }
 
+      // ADR-083: a nullable property reads back as the null pointer, so surface it as `T?`. C# 9
+      // allows `T?` on an unconstrained type parameter; a value-type instantiation still collapses
+      // it to `default(T)`, which is what the Zero branch of NugetMarshal.FromHandle returns.
+      val isNullable: Boolean = prop.type.resolve().isMarkedNullable
+
       CirProperty(
         name = csPropName,
-        type = typeParams.first().name,
+        type = if (isNullable) "${typeParams.first().name}?" else typeParams.first().name,
         nativeReturnType = "IntPtr",
         nativeName = propName,
         getter = "NugetMarshal.FromHandle<${typeParams.first().name}>(${name}Native.Get_$propName(_handle))",
