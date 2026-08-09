@@ -257,8 +257,16 @@ class NugetInterfaceGenerationTest {
 
     assertContains(registration.content, "Tag_Get_Thunk")
     assertFalse(
-      registration.content.contains("Describe"),
+      registration.content.contains("Describe_Thunk"),
       "ITagged's own export never re-registers IFeedable's members",
+    )
+    // Scoped to the REGISTER export deliberately: since ADR-085 Wave 2 this same file also carries
+    // the ITaggedBridge class, which DOES implement IFeedable's Describe (flattened slots), so a
+    // whole-file "no Describe anywhere" assertion no longer says what it means to say.
+    assertContains(
+      registration.content,
+      "private static extern void nuget_test_menagerie_i_tagged_register(int slotCount, " +
+          "long contractHash, IntPtr tagGetterPtr, IntPtr createBridgePtr, IntPtr bridgeTokenPtr);",
     )
   }
 

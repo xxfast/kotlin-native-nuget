@@ -3,6 +3,7 @@ package io.github.xxfast.kotlin.native.nuget.test.menagerie
 import io.github.xxfast.kotlin.native.nuget.internal.nugetKotlinReleaseCount
 import test.menagerie.Ferret
 import test.menagerie.IFeedable
+import test.menagerie.IKeeper
 import test.menagerie.IPerformer
 import test.menagerie.ITagged
 import test.menagerie.Sanctuary
@@ -256,4 +257,159 @@ fun ringLeaderRecharge(): String {
   val sanctuary = Sanctuary()
   val result: EnergyLevel = sanctuary.recharge(RingLeader(), EnergyLevel.HIGH)
   return result.name
+}
+
+// Phase 13 Wave 2, item 1 (ADR-086 addendum / ADR-085 "Deferred" list): derived-interface
+// flattening. `ITagged : IFeedable` today plans no Kotlin bridge factory at all -- a Kotlin class
+// implementing `ITagged` is a named `skipped_kotlin_bridge`, so `nugetMintBridge` has no branch
+// for it and `Any.nugetHandle("Test.Menagerie.ITagged")` falls through to its `error(...)`
+// branch. Tabby (tabby cat, tagged) is the fixture.
+private class Tabby : ITagged {
+  override fun describe(): String = "Tabby the tagged tabby"
+
+  override val legs: Int get() = 4
+
+  override fun feed(food: String) {
+    // Not exercised by these probes; present only so the IFeedable contract is fully satisfied.
+  }
+
+  override var nickname: String? = null
+
+  override val tag: String get() = "tabby"
+}
+
+/**
+ * [Sanctuary.showcase] takes an [ITagged]-typed parameter and calls BOTH [ITagged.tag] (own
+ * member) AND [IFeedable.legs] (inherited member) on a Kotlin-implemented [ITagged]. The
+ * flattened bridge this needs does not exist today: expect this to fail at the crossing rather
+ * than return "tabby: 4 legs".
+ */
+fun kotlinTabbyShowcase(): String {
+  val sanctuary = Sanctuary()
+  return sanctuary.showcase(Tabby())
+}
+
+/**
+ * The SAME Kotlin [Tabby] instance, crossing instead at the BASE [IFeedable]-typed position
+ * ([Sanctuary.introduce]). A flattened `ITagged` bridge must satisfy both this and
+ * [kotlinTabbyShowcase]'s crossing, per the item-1 brief.
+ */
+fun kotlinTabbyIntroduceViaFeedable(): String {
+  val sanctuary = Sanctuary()
+  return sanctuary.introduce(Tabby())
+}
+
+// Phase 13 Wave 2, item 2 (ADR-086): object- and interface-typed slots on a Kotlin-implemented
+// bound interface. `IKeeper` plans no Kotlin bridge factory today either -- `Ferret`/`IFeedable`
+// parameters, returns, and the nullable `Ferret?` property are all outside the v1 slot vocabulary
+// (`isKotlinBridgeSlotType` only admits `Unit`/primitive/`Boolean`/enum/`String`/`String?`), so
+// every `IKeeper` member is a named `skipped_kotlin_bridge` and minting hits the same
+// `error(...)` fallback item 1 hits.
+private class Zookeeper : IKeeper {
+  /** Set by [groom]; proves the received [Ferret] parameter transferred ownership into Kotlin
+   * (a borrowed handle could not be safely stored past the call that received it). */
+  var stored: Ferret? = null
+    private set
+
+  /** Set by [pair]; proves the received [IFeedable] parameter resolves to the ORIGINAL Kotlin
+   * object when it is Kotlin-implemented (the token-probe identity ADR-086 promises). */
+  var lastPaired: IFeedable? = null
+    private set
+
+  override var favorite: Ferret? = null
+
+  override fun groom(pet: Ferret): Ferret {
+    stored = pet
+    pet.feed("brush")
+    return pet
+  }
+
+  override fun pair(other: IFeedable): IFeedable {
+    lastPaired = other
+    return other
+  }
+}
+
+/**
+ * [Sanctuary.keeperRoundTrip] drives every [IKeeper] crossing from the C# side of a
+ * Kotlin-implemented interface: a bound-object PARAMETER+RETURN ([IKeeper.groom] -- ownership
+ * transfers to Kotlin, [Zookeeper.stored] proves it, and the SAME [Ferret] returns to C#), a
+ * nullable bound-object PROPERTY ([IKeeper.favorite], null then non-null), and a
+ * bound-INTERFACE parameter+return ([IKeeper.pair]) with a REAL C# [Ferret] as the partner: per
+ * ADR-086's identity table, C#-side identity IS promised for a C#-originated object, so the
+ * embedded `pairedIsSamePartner` check inside [Sanctuary.keeperRoundTrip] must be true.
+ */
+fun kotlinZookeeperRoundTripWithFerretPartner(): String {
+  val sanctuary = Sanctuary()
+  val zookeeper = Zookeeper()
+  val pet = Ferret()
+  val partner = Ferret()
+  val result = sanctuary.keeperRoundTrip(zookeeper, pet, partner)
+  // ADR-086's identity table: a C# object crossing INTO a Kotlin slot parameter gets a fresh
+  // wrapper per crossing, so `zookeeper.stored === pet` is deliberately NOT promised (the two
+  // wrappers hold two GCHandles to the one C# object). What transfer ownership does promise, and
+  // what the borrow alternative could not, is that the stored wrapper is still usable AFTER the
+  // call that delivered it returned: a borrowed handle would have been freed at that point.
+  // Rendered C#-style so the consumer test reads one uniform token set across all six fields.
+  // mealCount (groom() fed the pet once) reads through the STORED wrapper's own handle and lands
+  // on the same C# instance `pet` wraps, which is the substantive half of what `===` was reaching
+  // for: same object, still alive, after the delivering call returned.
+  val storedStillUsable: Boolean = zookeeper.stored?.mealCount == 1 && pet.mealCount == 1
+  return "$result|${if (storedStillUsable) "True" else "False"}"
+}
+
+/**
+ * Same [IKeeper.pair] crossing, but the partner is a Kotlin-implemented [Goat] instead of a real
+ * [Ferret]. ADR-086's identity table promises only KOTLIN-side identity for this origin (the
+ * token probe resolving the parameter back to the ORIGINAL [Goat], checked here via
+ * [Zookeeper.lastPaired] `===`) -- C#-side `ReferenceEquals` is explicitly NOT promised for a
+ * plain Kotlin return (a fresh bridge mints per crossing), so this probe asserts only the
+ * Kotlin-side identity, never [Sanctuary.keeperRoundTrip]'s own `pairedIsSamePartner`.
+ */
+fun kotlinZookeeperRoundTripWithGoatPartner(): Boolean {
+  val sanctuary = Sanctuary()
+  val zookeeper = Zookeeper()
+  val pet = Ferret()
+  val goat = Goat()
+  sanctuary.keeperRoundTrip(zookeeper, pet, goat)
+  return zookeeper.lastPaired === goat
+}
+
+// Phase 13 Wave 2, item 3 (ADR-087 stage 2): catchable propagation from a Kotlin-implemented
+// slot. Stage 1 (shipped) wraps every slot body in try/catch/rethrow that only NAMES the
+// offending member before the process still terminates (SIGABRT) on an actual throw -- these
+// fixtures exist for the C# tests that exercise them, but those tests are Skip'd until stage 2's
+// error-envelope propagation lands (see `MenagerieRoundTripTests.cs`).
+private class NoVacancy : IFeedable {
+  override fun describe(): String = throw IllegalStateException("no vacancy")
+
+  override val legs: Int get() = 4
+
+  override fun feed(food: String) {
+    // Not exercised; present only so the IFeedable contract is fully satisfied.
+  }
+
+  override var nickname: String? = null
+}
+
+/**
+ * [Sanctuary.introduce] calls BOTH [IFeedable.describe] (throws here) AND [IFeedable.legs] on a
+ * Kotlin-implemented [IFeedable]. Crosses the not-yet-shipped ADR-087 stage 2 envelope; today
+ * this terminates the whole host process (stage 1's rethrow), so the C# test calling this is
+ * Skip'd, never run by `scripts/verify.sh`.
+ */
+fun kotlinNoVacancyIntroduceThrows(): String {
+  val sanctuary = Sanctuary()
+  return sanctuary.introduce(NoVacancy())
+}
+
+/**
+ * [Sanctuary.legsOnly] calls ONLY [IFeedable.legs] on the SAME kind of throwing implementation as
+ * [kotlinNoVacancyIntroduceThrows]: a non-throwing sibling slot on an interface that also has a
+ * throwing member must keep working today (no ABI change from stage 1) and must not gain a tax
+ * once the stage 2 envelope lands. This test is NOT Skip'd.
+ */
+fun kotlinNoVacancyLegsOnly(): Int {
+  val sanctuary = Sanctuary()
+  return sanctuary.legsOnly(NoVacancy())
 }

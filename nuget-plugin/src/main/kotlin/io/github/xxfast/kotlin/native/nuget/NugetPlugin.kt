@@ -160,6 +160,10 @@ class NugetPlugin : Plugin<Project> {
                 "registration shims from reverse-ir.json"
             task.reverseIrFile.set(nugetExtractApi.flatMap { it.reverseIrFile })
             task.nativeLibraryName.set(nativeLibraryName)
+            // ADR-087 stage 2: the same value the forward KSP run uses for `nuget.namespace`, so
+            // the reverse shims can throw through the forward error mapping instead of owning a
+            // second copy of ADR-029's table.
+            task.forwardNamespace.set(project.provider { extension.publish?.packageId ?: "" })
             task.csharpOutputDir.set(interopDir.map { it.dir("csharp") })
           }
 

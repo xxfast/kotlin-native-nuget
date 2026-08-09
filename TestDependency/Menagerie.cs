@@ -54,6 +54,33 @@ public interface IPerformer
 }
 
 /// <summary>
+/// ADR-086 fixture (Phase 13 Wave 2, item 2): object- and interface-typed slots on a
+/// Kotlin-implemented bound interface. Reuses <see cref="Ferret"/> and <see cref="IFeedable"/>
+/// per the ADR's guidance ("adapt the consumer sample to the real Menagerie types") rather than
+/// inventing parallel bound types.
+/// </summary>
+public interface IKeeper
+{
+    /// <summary>Nullable bound-object PROPERTY slot: getter AND setter.</summary>
+    Ferret? Favorite { get; set; }
+
+    /// <summary>
+    /// Bound-object PARAMETER (ownership transfers to Kotlin on this crossing, so the
+    /// implementation may safely STORE <paramref name="pet"/>) and RETURN (a fresh transfer
+    /// handle; C#-side identity is promised for a C#-originated object per ADR-086's identity
+    /// table, so a caller handed back the same reference it passed in).
+    /// </summary>
+    Ferret Groom(Ferret pet);
+
+    /// <summary>
+    /// Bound-INTERFACE PARAMETER and RETURN, round-tripping through the identity mechanism
+    /// ADR-086 specifies per origin: the token probe for a Kotlin-implemented
+    /// <paramref name="other"/>, plain <c>GCHandle.Target</c> resolution for a C#-implemented one.
+    /// </summary>
+    IFeedable Pair(IFeedable other);
+}
+
+/// <summary>
 /// Every member is a public, identically-signed implementation of <see cref="IFeedable"/>, so
 /// per Decision 5 the bound Kotlin class declares the <c>IFeedable</c> supertype.
 /// </summary>
@@ -178,6 +205,51 @@ public class Sanctuary
 
     /// <summary>Derived-interface RETURN (Decision 5's interface-inheritance case).</summary>
     public ITagged Flagship() => new TaggedFerret();
+
+    /// <summary>
+    /// ADR-086 fixture (Phase 13 Wave 2, item 1): derived-interface FLATTENING. Takes an
+    /// <see cref="ITagged"/>-typed PARAMETER and calls BOTH its own member (<see cref="ITagged.Tag"/>)
+    /// and a member it inherits from <see cref="IFeedable"/> (<see cref="IFeedable.Legs"/>), so a
+    /// Kotlin-implemented <c>ITagged</c> must satisfy both slot tables through one flattened
+    /// factory rather than the base interface's factory alone.
+    /// </summary>
+    public string Showcase(ITagged tagged) => $"{tagged.Tag}: {tagged.Legs} legs";
+
+    /// <summary>
+    /// ADR-086/087 fixture: calls ONLY <see cref="IFeedable.Legs"/>, never
+    /// <see cref="IFeedable.Describe"/>, so a Kotlin implementation whose <c>Describe()</c> throws
+    /// cannot block exercising a non-throwing sibling slot on the same interface.
+    /// </summary>
+    public int LegsOnly(IFeedable feedable) => feedable.Legs;
+
+    /// <summary>
+    /// ADR-086 fixture (Phase 13 Wave 2, item 2): drives every <see cref="IKeeper"/> crossing from
+    /// the C# side of a Kotlin-implemented object/interface slot. <paramref name="pet"/> is a
+    /// C#-created <see cref="Ferret"/>, so the bound-object param+return identity check
+    /// (<see cref="IKeeper.Groom"/>) is a plain <see cref="object.ReferenceEquals(object?, object?)"/>
+    /// right here, where C# still holds the original reference — the Kotlin side of that same
+    /// crossing only ever sees a fresh wrapper per crossing (ADR-086's identity table promises
+    /// Kotlin-side identity is NOT guaranteed there, only the C#-side return is). Likewise
+    /// <paramref name="partner"/>'s round trip through <see cref="IKeeper.Pair"/> resolves per
+    /// ADR-086's identity table by origin: true here (C#-side <c>ReferenceEquals</c>) when
+    /// <paramref name="partner"/> is a real C# object, not promised when it is a bridge for a
+    /// Kotlin-implemented one (a fresh bridge mints per return crossing there instead).
+    /// </summary>
+    public string KeeperRoundTrip(IKeeper keeper, Ferret pet, IFeedable partner)
+    {
+        bool favoriteStartsNull = keeper.Favorite is null;
+
+        Ferret groomed = keeper.Groom(pet);
+        bool groomedIsSamePet = ReferenceEquals(groomed, pet);
+
+        keeper.Favorite = pet;
+        bool favoriteIsSamePet = ReferenceEquals(keeper.Favorite, pet);
+
+        IFeedable paired = keeper.Pair(partner);
+        bool pairedIsSamePartner = ReferenceEquals(paired, partner);
+
+        return $"{favoriteStartsNull}|{groomedIsSamePet}|{favoriteIsSamePet}|{pairedIsSamePartner}|{paired.Describe()}";
+    }
 
     /// <summary>
     /// ADR-085 follow-up fixture: interface-typed PARAMETER through the SECOND admissible

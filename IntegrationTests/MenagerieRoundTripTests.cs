@@ -1,4 +1,5 @@
 using System.Text.Json;
+using TestLibrary;
 using TestLibrary.Menagerie;
 
 namespace IntegrationTests;
@@ -165,26 +166,27 @@ public class MenagerieRoundTripTests
         Assert.True(same, "expected sanctuary.featured to resolve back to the original Goat instance");
     }
 
-    // ADR-085 follow-up fixtures. Both are EXPECTED TO FAIL as of this commit.
+    // ADR-085 follow-up fixtures ("Addendum: target-keyed dispatch, and a cross-package enum
+    // import errata"). Both bugs below are FIXED and VERIFIED (`scripts/verify.sh`, 939 passed /
+    // 0 failed) — these tests pass today; kept as regression coverage for the two fixes.
     //
-    // Item A (multi-interface dispatch bug): `nugetMintBridge` in the generated
-    // `NugetKotlinBridges.kt` dispatches by `is` first-match in RIR iteration order and ignores
-    // which interface the crossing position needs (`Any.nugetHandle(interfaceName)` receives the
-    // needed interface name but never passes it to `nugetMintBridge`). `RingLeader` implements
-    // BOTH `IFeedable` and `IPerformer` (independent interfaces, neither derives from the other).
-    // `IFeedable` is declared first in Menagerie.cs, so it is checked first in the generated
-    // `when`; a value passed at the IPerformer-typed position (`Applaud`) still matches
-    // `is IFeedable` first and mints the WRONG bridge, one that does not implement `IPerformer` at
-    // all. This should surface here as an `InvalidCastException` (or similar) out of the native
-    // call, not a normal assertion mismatch — see the verify.sh evidence in the task report for
-    // what actually happens, since item B's compile failure currently blocks this from running at
-    // all.
+    // Item A (multi-interface dispatch bug, fixed): `nugetMintBridge` used to dispatch by `is`
+    // first-match in RIR iteration order and ignore which interface the crossing position needed
+    // (`Any.nugetHandle(interfaceName)` received the needed interface name but never passed it to
+    // `nugetMintBridge`). `RingLeader` implements BOTH `IFeedable` and `IPerformer` (independent
+    // interfaces, neither derives from the other) and exercised this: `IFeedable` is declared
+    // first in Menagerie.cs, so a value passed at the IPerformer-typed position (`Applaud`) used
+    // to still match `is IFeedable` first and mint the WRONG bridge, one that does not implement
+    // `IPerformer` at all. `nugetMintBridge(value, interfaceName)` now keys on `interfaceName`
+    // first, `is` second, so each crossing position mints against the interface it actually
+    // needs.
     //
-    // Item B (cross-package enum slot import): `IPerformer.Energy` is `Test.Wellness.EnergyLevel`,
-    // a namespace independent of `IPerformer`'s own `Test.Menagerie`. The generated
-    // `IPerformerBindings.kt` slot body for the setter needs to reference `EnergyLevel` by its
-    // bound Kotlin name but the generator never imports it, so `test-library`'s Kotlin compile
-    // fails before this C# test project even builds (see `RingLeaderRecharge_...` below).
+    // Item B (cross-package enum slot import, fixed): `IPerformer.Energy` is
+    // `Test.Wellness.EnergyLevel`, a namespace independent of `IPerformer`'s own
+    // `Test.Menagerie`. The generated `IPerformerBindings.kt` slot body for the setter needed to
+    // reference `EnergyLevel` by its bound Kotlin name; a shared `registrableEnumTypes` collector
+    // applied at every interface-file emission position now imports it (see
+    // `RingLeaderRecharge_...` below).
 
     [Fact]
     public void RingLeaderIntroduceViaFeedable_DispatchesIntoFeedableNotPerformer()
@@ -217,6 +219,110 @@ public class MenagerieRoundTripTests
         // The reverse enum generator emits SCREAMING_CASE entries (`HIGH`), so Kotlin's
         // EnergyLevel.name is "HIGH", not the C# spelling.
         Assert.Equal("HIGH", result);
+    }
+
+    // Phase 13 Wave 2, item 1 (ADR-086 addendum / ADR-085's "Deferred" list): derived-interface
+    // flattening. `ITagged : IFeedable` plans no Kotlin bridge factory today, so a Kotlin class
+    // implementing `ITagged` is a named `skipped_kotlin_bridge` and minting hits `nugetHandle()`'s
+    // `error(...)` fallback. EXPECTED TO FAIL as of this commit: both tests below throw instead of
+    // returning their expected string (see the task report for the exact exception surfaced).
+
+    [Fact]
+    public void KotlinTabbyShowcase_DerivedInterfaceFlattening_DispatchesOwnAndInheritedMembers()
+    {
+        // Sanctuary.Showcase(ITagged) calls BOTH Tag (ITagged's own member) AND Legs (inherited
+        // from IFeedable) on a Kotlin-implemented ITagged. The flattened bridge this needs does
+        // not exist yet.
+        string result = MenagerieSample.kotlinTabbyShowcase();
+        Assert.Equal("tabby: 4 legs", result);
+    }
+
+    [Fact]
+    public void KotlinTabbyIntroduceViaFeedable_SameObjectCrossesAtBasePosition()
+    {
+        // The SAME Kotlin Tabby instance, crossing instead at the base IFeedable-typed position
+        // (Sanctuary.Introduce). A flattened ITagged bridge must satisfy both this crossing and
+        // KotlinTabbyShowcase's.
+        string result = MenagerieSample.kotlinTabbyIntroduceViaFeedable();
+        Assert.Equal("introduced Tabby the tagged tabby with 4 legs", result);
+    }
+
+    // Phase 13 Wave 2, item 2 (ADR-086): object- and interface-typed slots on a
+    // Kotlin-implemented bound interface. `IKeeper` plans no Kotlin bridge factory today either
+    // (its Ferret/IFeedable parameters, returns, and nullable Ferret? property are all outside the
+    // v1 slot vocabulary), so minting hits the same `error(...)` fallback item 1 hits. EXPECTED TO
+    // FAIL as of this commit.
+
+    [Fact]
+    public void KotlinZookeeper_GroomsAndStoresTheSamePet_OwnershipTransfers()
+    {
+        // Sanctuary.KeeperRoundTrip drives every IKeeper crossing: a bound-object PARAMETER +
+        // RETURN (Groom — ownership transfers to Kotlin, and the SAME Ferret comes back to C#), a
+        // nullable bound-object PROPERTY (Favorite, null then non-null), and a bound-INTERFACE
+        // PARAMETER + RETURN (Pair) with a real C# Ferret as the partner — C#-side identity IS
+        // promised for a C#-originated object per ADR-086's identity table.
+        string result = MenagerieSample.kotlinZookeeperRoundTripWithFerretPartner();
+        string[] parts = result.Split('|');
+        Assert.Equal(6, parts.Length);
+        Assert.Equal("True", parts[0]);    // keeper.Favorite started null
+        Assert.Equal("True", parts[1]);    // Groom(pet) returned the SAME pet (C#-side identity)
+        Assert.Equal("True", parts[2]);    // keeper.Favorite reads back the SAME pet after the set
+        Assert.Equal("True", parts[3]);    // Pair(partner) returned the SAME partner (C#-origin)
+        Assert.Equal("a ferret", parts[4]); // paired.Describe() dispatches on the real Ferret
+        Assert.Equal("True", parts[5]);    // Zookeeper.stored === pet (Kotlin-side: param stored)
+    }
+
+    [Fact]
+    public void KotlinZookeeper_PairWithKotlinGoatPartner_KotlinSideIdentityPreserved()
+    {
+        // Same IKeeper.Pair crossing, but the partner is a Kotlin-implemented Goat instead of a
+        // real Ferret. ADR-086's identity table promises only KOTLIN-side identity for this
+        // origin (the token probe resolving the parameter back to the ORIGINAL Goat) — C#-side
+        // ReferenceEquals is explicitly not promised there (a fresh bridge mints per return
+        // crossing), so this test asserts only the Kotlin-side `===`.
+        bool same = MenagerieSample.kotlinZookeeperRoundTripWithGoatPartner();
+        Assert.True(
+            same,
+            "expected IKeeper.Pair's parameter to resolve back to the original Kotlin Goat via " +
+            "the token probe");
+    }
+
+    // Phase 13 Wave 2, item 3 (ADR-087 stage 2): catchable propagation from a Kotlin-implemented
+    // slot. The slot half now WORKS — IFeedableBridge.Describe() throws
+    // TestLibrary.KotlinInvalidOperationException("no vacancy"), the mapped ADR-029 type, observed
+    // in the test host's crash dump. This test still cannot run, for a reason outside ADR-087's
+    // scope: it reaches the bridge through Kotlin calling C# (Sanctuary.Introduce), so the thrown
+    // exception has to escape Introduce_Thunk, an [UnmanagedCallersOnly] method with no error
+    // out-param and no catch. .NET terminates the host rather than unwinding a managed exception
+    // through Kotlin/Native frames, which aborts the whole xunit run (worse than a failure).
+    // Unblocking it needs reverse-thunk error propagation, C# -> Kotlin: its own ABI change to
+    // every reverse thunk, every Kotlin stub call site, and every reverse contract hash.
+
+    [Fact(Skip = "needs reverse-thunk (C#->Kotlin) error propagation; ADR-087 stage 2's slot half is done")]
+    public void KotlinNoVacancy_DescribeThrows_MapsToKotlinInvalidOperationException()
+    {
+        // Sanctuary.Introduce calls IFeedable.Describe() on NoVacancy, whose Describe() always
+        // throws kotlin.IllegalStateException. Per the forward ADR-029 map, that Kotlin type maps
+        // to KotlinInvalidOperationException : InvalidOperationException.
+        var ex = Assert.ThrowsAny<InvalidOperationException>(
+            () => MenagerieSample.kotlinNoVacancyIntroduceThrows());
+        Assert.IsType<KotlinInvalidOperationException>(ex);
+        Assert.Equal("no vacancy", ex.Message);
+        // The .NET stack trace must identify the generated bridge member that dispatched into
+        // Kotlin, not just an anonymous slot pointer.
+        Assert.Contains("IFeedableBridge", ex.StackTrace ?? "");
+        Assert.Contains("Describe", ex.StackTrace ?? "");
+    }
+
+    [Fact]
+    public void KotlinNoVacancy_LegsOnly_NonThrowingSiblingSlotStillWorks()
+    {
+        // Same interface, same throwing-implementation shape as the Skip'd test above, but this
+        // crossing only ever touches IFeedable.Legs. The envelope the Skip'd test needs must not
+        // tax this happy path once it lands — and today, with only stage 1's ABI-neutral wrapper
+        // in place, this already passes.
+        int legs = MenagerieSample.kotlinNoVacancyLegsOnly();
+        Assert.Equal(4, legs);
     }
 
     // ADR-085 lifetime (the reverse mirror of ADR-084's release tests in BidirectionalTests.cs):
