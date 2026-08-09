@@ -3,19 +3,21 @@ name: Docs
 on:
   push:
     branches: [main]
+  pull_request:
+    paths:
+      - 'docs/**'
+      - '.github/workflows/docs.yml'
   workflow_dispatch:
 
 permissions:
   contents: read
-  id-token: write
-  pages: write
 
 env:
   INSTANCE: docs/knn
 
 concurrency:
-  group: pages
-  cancel-in-progress: false
+  group: docs-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   build:
@@ -64,6 +66,14 @@ jobs:
           instance: ${{ env.INSTANCE }}
 
   deploy:
+    if: github.event_name != 'pull_request'
+    permissions:
+      contents: read
+      id-token: write
+      pages: write
+    concurrency:
+      group: pages
+      cancel-in-progress: false
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}

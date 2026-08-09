@@ -254,7 +254,7 @@ public static global::TestLibrary.Cat.Mood? napMood(int hour)
 }
 ```
 
-### Using it from C#
+### Using it from C# {id="using-it-from-c_1"}
 
 From `IntegrationTests/NullableEnumTests.cs`:
 

@@ -100,6 +100,35 @@ make it read better. A snippet that does not match the source is worse than no s
 Fence C# snippets with the exact language tag `C#`, never `csharp`. Writerside does not recognize
 the `csharp` tag correctly.
 
+### Headings become anchor ids: keep them unique per page
+
+Writerside derives an anchor id from every heading's text (`## Generated C#` becomes
+`generated-c`), and ids must be unique within a page or the Docs CI build fails with MRK003.
+The page shape below repeats `Generated C#` and `Using it from C#` across sections, so the
+moment a page has more than one of either, every later occurrence needs an explicit unique id
+scoped to its section:
+
+```
+### Generated C# {id="property-generated-c"}
+```
+
+### Run the docs check before you report
+
+The Docs CI (`.github/workflows/docs.yml`) builds the Writerside instance and fails on
+build-time errors from the JetBrains checker (duplicate element ids, broken links and anchors,
+missing topics in `knn.tree`, and so on). Catch it yourself before you report:
+
+```bash
+scripts/verify-docs.sh
+```
+
+This runs the **same builder image and checks as CI**, locally, via Docker. It needs the Docker
+daemon: if it says the daemon is unreachable, run `colima start --memory 8` and retry (the builder
+needs the 8GiB; the default 2GiB VM OOM-kills it). It does not touch
+Gradle or `build/`, so it is always safe to run even when the refactorer holds the project lock.
+If it fails, fix the pages and rerun until it passes; a report with this check failing is not
+done.
+
 Use Writerside admonitions sparingly when information needs to stand out: `<note>` for important
 constraints or guidance, `<tip>` for optional advice, and `<warning>` for harmful consequences.
 Keep ordinary explanatory text as paragraphs. Inside an admonition, use semantic `<p>`, `<code>`,
@@ -191,6 +220,7 @@ instead.
 - Every generated symbol you cited exists in the real generated output.
 - No em-dashes in your prose.
 - `grep -rn "topic=" docs/knn.tree` lists every page you added.
+- `scripts/verify-docs.sh` passes.
 
 Report: (1) pages amended and what changed, (2) any Limitations claim you deleted, (3) anything the
 implementation does that contradicts the ADR or FEATURES.md, (4) any snippet you could not back with
