@@ -361,7 +361,7 @@ public fun export_patient_retag(
 }
 ```
 
-### Using it from C#
+### Using it from C# {id="using-it-from-c_1"}
 
 From `IntegrationTests/ValueClassParameterTests.cs`:
 
@@ -431,7 +431,7 @@ data class ChartEntry(val id: ChartId, val note: String) {
 }
 ```
 
-### Generated C#
+### Generated C# {id="generated-c_4"}
 
 `ChartEntry.id` is `val`, so it renders as a get-only property. `Patient.currentChart` is `var`, so it
 renders with a setter too. From `Interop.cs`:
@@ -471,7 +471,7 @@ public ChartId CurrentChart
 }
 ```
 
-### Using it from C#
+### Using it from C# {id="using-it-from-c_4"}
 
 From `IntegrationTests/ValueClassPropertyTests.cs`:
 
@@ -587,7 +587,7 @@ public ChartId? PreviousChart()
 }
 ```
 
-### Using it from C#
+### Using it from C# {id="using-it-from-c_5"}
 
 From `IntegrationTests/ValueClassNullableTests.cs`:
 
@@ -796,7 +796,7 @@ public ChartRef? BackupReferral
 a has-value channel rather than a null pointer: see [Nullable over Primitive and Enum
 underlyings](#nullable-over-primitive-and-enum-underlyings) below.
 
-### Using it from C#
+### Using it from C# {id="using-it-from-c_6"}
 
 From `IntegrationTests/ValueClassUnderlyingTests.cs`:
 
