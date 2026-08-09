@@ -219,7 +219,18 @@ miss is a loud Kotlin compile error.
   mapping existing at all, Phase 10); struct-typed slots (need the abiArgs component expansion at
   a slot boundary); generic-instance slots (`Box<int>`, wire-identical but witness resolution at
   a slot position is untested); `Task` members (Phase 12/13, unchanged); bridge reuse per Kotlin
-  object (unchanged, ROADMAP Phase 13).
+  object (**since superseded**, see the addendum below).
+
+## Addendum (Phase 13 Wave 3): superseded by ADR-089 for a live bridge
+
+The table's "a plain-Kotlin return mints **one bridge per crossing**; the ROADMAP 'bridge reuse per
+Kotlin object' item is deliberately not advanced here" line, and this section's "bridge reuse per
+Kotlin object (unchanged, ROADMAP Phase 13)" line above, are superseded by
+[ADR-089](089-bridge-reuse-per-kotlin-object.md): a plain-Kotlin return now reuses the same bridge
+across crossings, for as long as C# keeps it alive, since `nugetHandleOut`'s plain-Kotlin-impl branch
+calls the same `nugetMintBridge` this ADR already routed slot returns through, and that function is
+where ADR-089's reuse table lives. This ADR's own text is left as written; ADR-089 is the current
+source of truth.
 
 ## Mechanism claims ledger
 

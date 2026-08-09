@@ -457,3 +457,14 @@ neither `interfacePkgs` nor `qualifiedTypeNames`, so a pure interface's cross-pa
 import is still never emitted (`NugetGenerateBindingsTask.kt:515`). `ITagged` and `IFeedable` share a
 package in the fixture, so this stays unreached in practice; see [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md)
 Phase 13.
+
+## Addendum (Phase 13 Wave 3): superseded by ADR-089 for a live bridge
+
+This ADR's "one bridge per crossing, no reuse table" posture (Decision, line 127; Consequences,
+line 148) is superseded for a **live** bridge by
+[ADR-089](089-bridge-reuse-per-kotlin-object.md): while C# keeps a bridge alive, a later crossing of
+the same Kotlin object now resolves to that same bridge, and C#-side `ReferenceEquals` holds. Once
+C# drops every reference and the .NET GC collects the bridge, a later crossing mints a fresh one,
+the same GC-timed posture every release in this ADR already had. This ADR's own text is left as
+written, a point-in-time record of the v1 posture; ADR-089 is the current source of truth for
+identity across crossings.

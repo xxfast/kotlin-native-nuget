@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed
+Accepted
 
 ## Context
 
@@ -216,10 +216,12 @@ parameters** and **method / top-level function returns**. Interfaces only, and o
 manifest lists (ADR-070-admissible, with returns further gated on Kotlin-implementability as
 above).
 
-**Deferred (each a named ROADMAP candidate):**
+**Deferred (each a named ROADMAP candidate), shipped as a named skip rather than silence, per the
+addendum below:**
 - Nullable bound interfaces (`IFeedable?`; the null-pointer ride is natural but adds emitter
-  routes in four positions).
-- Bound interfaces at property positions and as collection components.
+  routes in four positions). Shipped skip: `SKIPPED_BOUND_TYPE_POSITION`.
+- Bound interfaces at property positions and as collection components. Shipped skip:
+  `SKIPPED_BOUND_TYPE_POSITION` at both.
 - Bound **classes** at forward positions (`fun sanctuary(): Sanctuary`): same handle mechanics,
   needs the class stub public and the internal `(COpaquePointer)` constructor route; bigger
   visibility blast radius, so explicitly out.
@@ -276,3 +278,81 @@ above).
   C#-implemented objects would double-free or dangle: the implementing agent must cover it with a
   deterministic release test (the ADR-085 pattern) in the first commit that emits it.
 - Ordinal↔value mismatch for non-sequential C# enums in the deferred enum-unification item.
+
+## Implementation Addendum (2026-08-09)
+
+Corrections found while shipping, none changing the Decision's shape.
+
+**"Emit the stub as public" was wrong as stated.** A public interface over an internal class stub
+does not compile, and the real build caught it on `IKeeper` (`TestDependency/Menagerie.cs`), whose
+members take and return `Ferret`, a bound class stub that stays `internal` (bound classes at forward
+positions are still deferred, see Scope). Shipped instead: `interfaceStubIsPublic` (
+`NugetGenerateBindingsTask.kt:259`), a predicate over the interface's own declared surface plus its
+bases, public iff nothing in that surface is an internal bound-class/struct/generic-instance stub
+and every base interface is itself public. `IKeeper` stays `internal` and off `bound-types.json`;
+`IFeedable`, `ITagged`, and `IPerformer` (whose surfaces name only primitives, `String`, and each
+other) go public.
+
+**The "`ITagged` has no mint" claim went stale mid-batch.** It was true when this ADR was drafted,
+but [ADR-086](086-object-interface-slots-kotlin-bridge.md)'s derived-interface flattening landed
+first in the same batch and gave `ITagged` a flattened `mintITaggedBridge`. `bound-types.json` in
+this repo's own fixture now lists all three bound interfaces (`IFeedable`, `ITagged`, `IPerformer`)
+as `"implementable": true`; `SKIPPED_UNIMPLEMENTABLE_BOUND_INTERFACE` is real and shipped (
+`ForwardDiagnosticKind`, `ForwardPlanSkipReason.UNIMPLEMENTABLE_BOUND_INTERFACE`) but has no example
+left in this project's own fixtures to fire against: it is pinned instead by
+`Tier1BoundInterfacePositionTest`'s synthetic `implementable = false` manifest entry. The
+`implementable` manifest flag itself is unchanged and load-bearing at return positions.
+
+**ADR-086's dup thunk widened from conditional to unconditional per plannable interface.**
+`KotlinBridgePlan.needsDupHandle` (`RirBridging.kt:1049`) defaults to `true` for every interface
+this ADR plans a bridge factory for, not only ones with a handle-out **slot**. A forward return
+(`fun resident(): IFeedable`) is not a slot at all, so slot shape can no longer gate the thunk's
+registration; the cost is one extra registration pointer per plannable interface, and both
+generators derive it from the same `KotlinBridgePlan`, so the ADR-054 contract hash moves in
+lockstep on both sides.
+
+**The dup-spike caveat is obsolete.** [ADR-086](086-object-interface-slots-kotlin-bridge.md) shipped
+the `GCHandle.Alloc(GCHandle.FromIntPtr(h).Target)` duplicate thunk before this ADR landed, so the
+"nobody has executed this exact dup" caveat above no longer applies; `Farm_Adopt_...SameInstanceBack`
+(`IntegrationTests/BidirectionalTests.cs`) exercises it live via `Assert.Same(goat, farm.Resident())`
+on every forward return of a stored C#-implemented resident.
+
+**Transitive reachability confirmed, not merely assumed.** `Test.Menagerie` resolves inside
+`IntegrationTests` even though the project has no direct `PackageReference` to `TestDependency`:
+`TestLibrary`'s own generated `.nuspec` declares `TestDependency` as a package dependency with no
+`exclude`, so NuGet's transitive restore surfaces `TestDependency.dll` as a compile asset (confirmed
+via `IntegrationTests/obj/project.assets.json`, `TestDependency/<version>` under `net10.0`'s
+`compile` assets), noted in the test header directly above the `Farm_*` fixtures.
+
+**One asymmetry for the record, left as shipped rather than reconciled.** A property-position bound-
+interface skip routes through a `boundInterface: Boolean` flag on `ForwardDroppedProperty`
+(`NugetProcessor.kt`'s `warnDroppedForwardProperties`) rather than through `ForwardPlanSkipReason`,
+the enum every parameter/return skip uses. Properties already had their own drop-tracking shape
+(`ForwardDroppedProperty`, predating this ADR) independent of the callable catalog's skip-reason
+enum, so the flag composes with the existing shape rather than routing properties through a second,
+parallel enum. Documented as-is; a later pass may unify the two skip-reporting shapes, but that is
+out of this ADR's scope.
+
+**Non-exhaustive `when` sites needed an explicit branch, not just a new sealed variant.**
+[ADR-076](076-instant-mapping.md)'s lesson (choose a *new* `BridgeType` variant so the compiler
+enumerates every `when`) held for every **exhaustive** `when (type)` in the forward pipeline: adding
+`BridgeType.BoundInterface` failed the build at every one of those until a branch was added, exactly
+as intended. It does not help a `when` that already has a catch-all `else`, which compiles either way
+and silently routes the new variant into whatever the `else` does. Three such sites had to be found
+and patched by inspection rather than by the compiler:
+
+- `ForwardCallablePlanner.skipReason()`'s `is BridgeType.Nullable` arm (`ForwardCallablePlanner.kt:1801`):
+  without an explicit `BoundInterface` check, `IFeedable?` at a return position would have reported
+  the generic `ForwardPlanSkipReason.NULLABLE` (a hint about `Boolean`) instead of
+  `BOUND_INTERFACE_POSITION`.
+- `ForwardCallablePlanner.inputSkipReason()`'s `is BridgeType.Nullable` arm (`ForwardCallablePlanner.kt:1897`):
+  the same swallow, at the parameter side.
+- `ForwardMarshallingModel.requiredConversion()` (`ForwardMarshallingModel.kt:508`, terminal
+  `else -> null`): without the explicit `BoundInterface` branch, the validator would have read "no
+  conversion required" for a type whose transfer is tagged `GC_HANDLE_TO_BOUND_VALUE`/
+  `BOUND_VALUE_TO_GC_HANDLE`, and rejected the plan as carrying an "unnecessary conversion", a
+  build-time crash rather than silent wrong output, but still a site the compiler could not catch.
+
+Recorded as a new ROADMAP item (Tooling & Test Integrity) rather than folded into the ADR-062
+"route legacy protocols through `BridgeType`" item, since it is a distinct hazard: exhaustive-`when`
+coverage, not `BridgeType` adoption.

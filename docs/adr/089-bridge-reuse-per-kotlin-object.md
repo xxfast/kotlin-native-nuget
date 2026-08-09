@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed
+Accepted
 
 ## Context
 
@@ -246,3 +246,45 @@ works on weak handles) is **verified** by the spike quoted in Context.
 - Deterministic tests for "fresh bridge after collection" must drop the C# reference inside a
   helper frame before forcing GC (the live-stack-frame lesson, re-confirmed by this ADR's own
   spike misfiring in Debug until phases moved into `NoInlining` helpers).
+
+## Implementation Addendum (2026-08-09)
+
+**`kotlin.native.identityHashCode` moves from Inferred to Verified.** A konanc probe confirmed it is
+an extension on `Any?` (not `Any`, so it accepts a null receiver and returns `0` rather than
+throwing), gated behind `@OptIn(ExperimentalNativeApi::class)`. Shipped exactly as designed:
+`NugetIdentityKey.hashCode()` (`NugetGenerateBindingsTask.kt`, generated into every consumer's
+`NugetRuntime.kt`) carries the same opt-in the generated files already needed for `@CName`.
+
+**The finalizer re-entry design in the Decision's release path is deliberately unshipped.** The
+Decision sketched an *eager* free (step 2 of the release path: free the evicted entry's weak handle
+from inside `nuget_kotlin_release`, on the .NET finalizer thread, itself inside a C#-to-Kotlin
+P/Invoke) and named the lazy-free fallback only as a hedge. The shipped design goes straight to the
+hedge: a dead weak handle found by `evict()` is queued on `nugetPendingWeakFrees` (a lock-free
+`AtomicReference<List<COpaquePointer>>`) rather than freed on the spot, and the queue drains on the
+next mint for *any* interface, which always runs on an ordinary caller thread. The one exception is
+`resolve()` detecting a bridge already dead: that frees its own now-useless weak handle eagerly, but
+on the calling thread, never inside the finalizer-thread release path. The finalizer re-entry shape
+this ADR flagged as unspiked was never exercised; the design does not depend on it.
+
+**The lock resolved to a CAS spinlock on `AtomicInt`**, per the ADR's own recommendation and in the
+same style as `NugetObjectHandle.free`/`NugetRegistry.record`: `NugetBridgeTable.locked {}`
+busy-waits on `lock.compareAndSet(0, 1)` around a critical section that is at most a map lookup plus
+one GCHandle thunk call.
+
+**A race beyond anything the Decision named was found and closed: concurrent mint for the same
+implementation object.** Two threads racing `mint{Iface}Bridge(impl)` for the same `impl` can both
+miss the reuse table (both see no entry), both mint a real, valid bridge, and both call
+`store(impl, ...)`. `NugetBridgeTable.store` handles this explicitly: `entries.put(...)` returns the
+previous entry when one exists, and if the racing store *did* overwrite a fresher one, the loser's
+weak handle is queued for eviction via the same `nugetPendingWeakFrees` path rather than leaked or
+silently dropped. Both minted bridges are individually valid C# objects; only the one nobody will
+resolve through the table again has its weak handle reclaimed.
+
+**Consumer promise verified end to end.** `MenagerieRoundTripTests.cs`'s
+`KotlinGoatRememberedTwice_SameInstanceCrossingIsReused` crosses the same Kotlin `Goat` into
+`Sanctuary.Remember` twice while the first bridge stays referenced, and asserts the second crossing
+resolves to the same C#-side instance; its sibling
+`KotlinGoatsRememberedTwice_DifferentInstancesAreNeverSame` pins that two distinct `Goat` instances
+are never conflated by identity-keyed reuse. `LiveKotlinGoatBridge_SurvivesACollection_AndStillResolves`
+(pre-existing, ADR-085) continues to pass unchanged: a live bridge survives forced GC rounds and
+still resolves.
