@@ -10,6 +10,7 @@ A Kotlin `class` becomes a C# `class` backed by an opaque `StableRef` handle, im
 | member property (get/set) | property (get/set) | |
 | object-typed property/return | property/return | new wrapper per access, identity not preserved |
 | instance method return (object, `T?`, `List`/`Map`/`Set`, enum, `Char`, `String?`, `Int?`, `Boolean?`, …) | matching C# return type | same cascade as the property getter via the shared plan ([ADR-062](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/062-forward-callable-plan.md)); nullable primitive (including `Boolean?`) is single-call `valueOut`, see Method returns below |
+| two or more same-named methods | one C# overload set | numbered native export/extern name, unnumbered public name; see Method overloads below ([ADR-090](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/090-ordinary-class-method-overloads.md)) |
 
 ## Kotlin
 
@@ -306,6 +307,123 @@ Enum, `Char`, and `Map`/`Set` method returns are covered under the shared plan; 
 `Patient.Mood()`, `Patient.Initial()`, `Patient.Scores()`, and `Patient.Labels()` exercise them
 (see [Enums](enums.md), [Primitives and strings](primitives-and-strings.md), [Collections](collections.md)).
 
+## Method overloads
+
+Two or more same-named methods on an exported class generate one natural C# overload set. From
+`test-library/src/nativeMain/kotlin/.../cat/CatNarrator.kt`:
+
+```kotlin
+class CatNarrator(val name: String) {
+  fun describe(): String = "$name is a cat"
+
+  fun describe(prefix: String): String = "$prefix $name"
+
+  fun describe(prefix: String, excited: Boolean): String =
+    if (excited) "$prefix $name!!!" else "$prefix $name, quietly"
+
+  fun rate(stars: Int): String = "$name rated $stars"
+
+  fun rate(mood: Mood): String = "$name is ${mood.name.lowercase()}"
+}
+```
+
+### Generated C# {id="overloads-generated-c"}
+
+From `Interop.cs`. The native export symbol, the `DllImport` `EntryPoint`, and the private extern
+name all carry constructor-style numbering (the first declared overload unnumbered, the next `_2`,
+and so on, counted in declaration order), but the public C# surface stays one shared name with no
+visible numbering:
+
+```C#
+[DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "catnarrator_describe")]
+private static extern IntPtr Native_Describe(IntPtr handle, out IntPtr error);
+
+public string Describe()
+{
+    IntPtr nativeResult = Native_Describe(_handle, out IntPtr error);
+    if (error != IntPtr.Zero)
+    {
+        throw NugetErrorNative.BuildException(error);
+    }
+    return Marshal.PtrToStringUTF8(nativeResult)!;
+}
+
+[DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "catnarrator_describe_2")]
+private static extern IntPtr Native_Describe_2(IntPtr handle, [MarshalAs(UnmanagedType.LPUTF8Str)] string prefix, out IntPtr error);
+
+public string Describe(string prefix)
+{
+    IntPtr nativeResult = Native_Describe_2(_handle, prefix, out IntPtr error);
+    if (error != IntPtr.Zero)
+    {
+        throw NugetErrorNative.BuildException(error);
+    }
+    return Marshal.PtrToStringUTF8(nativeResult)!;
+}
+
+[DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "catnarrator_rate")]
+private static extern IntPtr Native_Rate(IntPtr handle, int stars, out IntPtr error);
+
+public string Rate(int stars) { /* ... */ }
+
+[DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "catnarrator_rate_2")]
+private static extern IntPtr Native_Rate_2(IntPtr handle, int mood, out IntPtr error);
+
+public string Rate(global::TestLibrary.Cat.Mood mood) { /* ... */ }
+```
+
+`rate(Int)` and `rate(Mood)` are the pair that matters here: an `Int` and an enum both cross the C
+ABI as `int`, so they share one wire shape. The private extern *name* is numbered too
+(`Native_Rate`/`Native_Rate_2`), not just the `EntryPoint`; numbering only the `EntryPoint` would
+declare `Native_Rate` twice and fail to compile with CS0111.
+
+<note>
+    <p>
+        The numbering is declaration-order dependent and lives only in the native export symbol,
+        the <code>DllImport</code> <code>EntryPoint</code>, and the private extern name, none of
+        which is a public surface. Reordering the Kotlin declarations renumbers the native exports,
+        but the C ABI is not public: the shim and the native library always ship from one build,
+        guarded by <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/054-reverse-bridge-registration-observability.md">ADR-054</a>'s
+        contract-hash check.
+    </p>
+</note>
+
+## Using it from C# {id="overloads-using-it-from-c"}
+
+From `IntegrationTests/MethodOverloadTests.cs`:
+
+```C#
+[Fact]
+public void Describe_AllThreeOverloads_ShareOneInstanceAndStayDistinct()
+{
+    // One receiver, three arities: proves the numbered exports all reach the same Kotlin
+    // object rather than each overload standing up its own state.
+    using var narrator = new CatNarrator("Oreo");
+
+    Assert.Equal("Oreo is a cat", narrator.Describe());
+    Assert.Equal("the biscuit cat Oreo", narrator.Describe("the biscuit cat"));
+    Assert.Equal("the biscuit cat Oreo!!!", narrator.Describe("the biscuit cat", true));
+}
+
+[Fact]
+public void Rate_WithMood_DispatchesToEnumOverload()
+{
+    using var narrator = new CatNarrator("Mylo");
+
+    Assert.Equal("Mylo is grumpy", narrator.Rate(Mood.Grumpy));
+    Assert.Equal("Mylo is sleepy", narrator.Rate(Mood.Sleepy));
+}
+```
+
+<warning>
+    <p>
+        C# cannot overload on reference nullability alone. A same-name pair like
+        <code>fun tag(s: String)</code> / <code>fun tag(s: String?)</code> would render two
+        identical C# signatures, so generation fails with the named
+        <code>ERROR_CSHARP_SIGNATURE_COLLISION</code> diagnostic instead of emitting invalid C#.
+    </p>
+</warning>
+
 ## Classes declared in a dependency module
 
 A class doesn't need to be declared in the publishing Gradle module to reach the generated C# API.
@@ -378,6 +496,10 @@ binding or breaking the build; see [Publishing Kotlin to C#](forward-overview.md
 ## Limitations
 
 - `Map`/`Set` **inputs** (parameters) are not planned yet; see [Collections](collections.md).
+- Method overloads only have this numbering scheme on the class-method route. A same-name pair on
+  an `object` member, a companion member, a top-level function, or an extension function still
+  crashes `packNuget` with the same `planFor` duplicate-plans error; see
+  [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md).
 
 <seealso>
     <category ref="related">
@@ -396,5 +518,7 @@ binding or breaking the build; see [Publishing Kotlin to C#](forward-overview.md
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/064-forward-unsupported-declaration-diagnostics.md">ADR-064: Forward unsupported-declaration diagnostics</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/066-forward-export-reachability-closure.md">ADR-066: Forward export reachability closure</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/069-nullable-boolean-marshalling.md">ADR-069: Nullable Boolean marshalling</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/082-value-class-inherited-members.md">ADR-082: Value-class inherited members</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/090-ordinary-class-method-overloads.md">ADR-090: Ordinary-class method overloads</a>
     </category>
 </seealso>

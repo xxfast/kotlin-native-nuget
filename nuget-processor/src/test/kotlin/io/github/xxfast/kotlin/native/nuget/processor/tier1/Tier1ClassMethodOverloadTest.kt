@@ -39,7 +39,10 @@ class Tier1ClassMethodOverloadTest {
       """.trimIndent(),
     )
 
-    assertTrue(result.compiledClean, "expected all three overloads to compile; got: ${result.compileErrors}")
+    assertTrue(
+      result.compiledClean,
+      "expected all three overloads to compile; got: ${result.compileErrors}",
+    )
 
     val kotlin: String = result.generated
     assertContains(kotlin, "@CName(\"narrator_describe\")")
@@ -89,7 +92,10 @@ class Tier1ClassMethodOverloadTest {
       """.trimIndent(),
     )
 
-    assertTrue(result.compiledClean, "expected both rate overloads to compile; got: ${result.compileErrors}")
+    assertTrue(
+      result.compiledClean,
+      "expected both rate overloads to compile; got: ${result.compileErrors}",
+    )
 
     val cs: String = result.generatedCSharp
     assertContains(cs, "EntryPoint = \"narrator_rate\"")
@@ -122,8 +128,11 @@ class Tier1ClassMethodOverloadTest {
     )
 
     assertTrue(
-      result.kspErrors.any { it.contains(ForwardDiagnosticKind.ERROR_CSHARP_SIGNATURE_COLLISION.name) },
-      "expected the reference-nullability collision to fail generation; kspErrors=${result.kspErrors}",
+      result.kspErrors.any {
+        it.contains(ForwardDiagnosticKind.ERROR_CSHARP_SIGNATURE_COLLISION.name)
+      },
+      "expected the reference-nullability collision to fail generation; " +
+          "kspErrors=${result.kspErrors}",
     )
   }
 
@@ -144,7 +153,10 @@ class Tier1ClassMethodOverloadTest {
       """.trimIndent(),
     )
 
-    assertTrue(result.compiledClean, "expected the plain class to compile; got: ${result.compileErrors}")
+    assertTrue(
+      result.compiledClean,
+      "expected the plain class to compile; got: ${result.compileErrors}",
+    )
 
     val kotlin: String = result.generated
     assertContains(kotlin, "@CName(\"narrator_describe\")")
@@ -155,6 +167,9 @@ class Tier1ClassMethodOverloadTest {
     val cs: String = result.generatedCSharp
     assertContains(cs, "Native_Describe(")
     assertContains(cs, "Native_Greet(")
-    assertFalse(cs.contains("Native_Describe_2"), "no numbering without overloads; generatedCSharp=$cs")
+    assertFalse(
+      cs.contains("Native_Describe_2"),
+      "no numbering without overloads; generatedCSharp=$cs",
+    )
   }
 }

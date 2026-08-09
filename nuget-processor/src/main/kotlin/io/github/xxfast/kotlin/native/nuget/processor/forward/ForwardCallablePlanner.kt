@@ -616,6 +616,11 @@ internal class ForwardCallablePlanner(
       val occurrence: Int = occurrences.merge(name, 1, Int::plus)!!
       val suffix: String = if (occurrence == 1) "" else "_$occurrence"
       val symbol: String = "$owner.$name$suffix"
+      // ADR-090: the C# modifiers, computed here because a planned entry keeps no declaration.
+      val isOverride: Boolean = superClass != null && method.modifiers.contains(Modifier.OVERRIDE)
+      val isVirtual: Boolean = superClass == null &&
+          method.modifiers.contains(Modifier.OVERRIDE) &&
+          !method.modifiers.contains(Modifier.FINAL)
       val structuralReason: ForwardPlanSkipReason? = when {
         method.modifiers.contains(Modifier.ABSTRACT) -> ForwardPlanSkipReason.ABSTRACT
         method.modifiers.contains(Modifier.SUSPEND) -> ForwardPlanSkipReason.SUSPEND
@@ -638,10 +643,8 @@ internal class ForwardCallablePlanner(
           origin = ForwardCallableOrigin.CLASS,
           // The symbol carries the overload suffix; the Kotlin call site must not.
           member = name,
-          // ADR-090: the C# modifiers, read here because a planned entry keeps no declaration.
-          isOverride = superClass != null && method.modifiers.contains(Modifier.OVERRIDE),
-          isVirtual = superClass == null && method.modifiers.contains(Modifier.OVERRIDE) &&
-              !method.modifiers.contains(Modifier.FINAL),
+          isOverride = isOverride,
+          isVirtual = isVirtual,
           node = method,
         )
       }

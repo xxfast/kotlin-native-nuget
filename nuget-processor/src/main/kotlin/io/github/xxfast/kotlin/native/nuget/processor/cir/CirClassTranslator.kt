@@ -426,18 +426,18 @@ internal fun translateClass(
   // ADR-090: planned members come off the catalog (overload numbering makes the plan symbol
   // per-declaration underivable, and the two halves must not drift — the same move ADR-082 made
   // for value classes). `isOverride` / `isVirtual` ride the plan, computed in `classEntries`.
-  val plannedMethods: List<CirMethod> =
-    callableCatalog.classMethods(cls.qualifiedName?.asString() ?: name).map { plan ->
-      tracker.trackPlan(plan)
-      ForwardCirPlanProjection.classMethod(
-        plan = plan,
-        nativePrefix = prefix,
-        isOverride = plan.publicSignature.isOverride,
-        isVirtual = plan.publicSignature.isVirtual,
-      )
-    }
-  val plannedMemberNames: Set<String> = callableCatalog
-    .classMethods(cls.qualifiedName?.asString() ?: name)
+  val plannedMethodPlans: List<ForwardCallablePlan> =
+    callableCatalog.classMethods(cls.qualifiedName?.asString() ?: name)
+  val plannedMethods: List<CirMethod> = plannedMethodPlans.map { plan ->
+    tracker.trackPlan(plan)
+    ForwardCirPlanProjection.classMethod(
+      plan = plan,
+      nativePrefix = prefix,
+      isOverride = plan.publicSignature.isOverride,
+      isVirtual = plan.publicSignature.isVirtual,
+    )
+  }
+  val plannedMemberNames: Set<String> = plannedMethodPlans
     .mapNotNull { plan -> plan.invocation.member }
     .toSet()
 

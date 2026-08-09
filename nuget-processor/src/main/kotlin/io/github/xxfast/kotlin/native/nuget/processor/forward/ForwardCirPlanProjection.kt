@@ -363,8 +363,8 @@ internal object ForwardCirPlanProjection {
     // the *numbered* name, or two overloads that happen to share a wire shape (an `Int` and an
     // enum parameter both cross as `int`) would declare the same extern twice (CS0111). Unsuffixed
     // members render exactly as before.
-    val externName: String = "Native_" + plan.invocation.symbol.substringAfterLast('.')
-      .replaceFirstChar { it.uppercase() }
+    val externName: String =
+      "Native_" + plan.invocation.symbol.substringAfterLast('.').replaceFirstChar { it.uppercase() }
     val result: CirResultProjection = plan.resultProjection(
       nativeName = externName,
       parameters = plan.publicSignature.parameters,
