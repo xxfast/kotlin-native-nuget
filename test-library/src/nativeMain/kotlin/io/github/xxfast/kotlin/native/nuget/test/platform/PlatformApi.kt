@@ -38,6 +38,17 @@ expect class Sensor {
   fun reading(): Int
 }
 
+/**
+ * ADR-091 row: a primary-constructor TRAILING DEFAULT on an `expect class`. Kotlin forbids an
+ * `actual` from restating a default, so `hasDefault` is `true` here and `false` on both actuals —
+ * the omitting overload only exists if the planner resolves the bit through `expectsByName`
+ * rather than off the exported (actual) declaration. The default (`5`) is declared once, here,
+ * so a `Beacon("...")` reporting anything other than 5 means the wrong side was consulted.
+ */
+expect class Beacon(name: String, interval: Int = 5) {
+  fun describe(): String
+}
+
 /** Top-level `expect fun`; the C# static class name must be `PlatformApi` (Decision 3). */
 expect fun platformName(): String
 

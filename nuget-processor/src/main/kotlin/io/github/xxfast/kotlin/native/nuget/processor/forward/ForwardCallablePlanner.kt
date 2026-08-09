@@ -266,6 +266,19 @@ internal data class ForwardCallablePlanCatalog(
         !plan.invocation.symbol.substringAfterLast('.').startsWith("<init>")
   }
 
+  /**
+   * ADR-091: the planned constructors of [owner], in planning order (primary, secondaries, then
+   * the synthesized omitting overloads).
+   *
+   * Same reason as [classMethods]: the ADR-034 `_$n` sequence now also carries planner-synthesized
+   * entries that no `getConstructors()` walk can see, so both emitters read constructors off the
+   * catalog instead of re-deriving a plan key per declaration. Owner-exact matching.
+   */
+  fun constructors(owner: String): List<ForwardCallablePlan> = plans.filter { plan ->
+    plan.invocation.origin == ForwardCallableOrigin.CONSTRUCTOR &&
+        plan.invocation.symbol.substringBeforeLast('.') == owner
+  }
+
   private fun valueClassMembers(owner: String): List<ForwardCallablePlan> = plans.filter { plan ->
     plan.invocation.origin == ForwardCallableOrigin.VALUE_CLASS &&
         plan.invocation.symbol.substringBeforeLast('.') == owner &&
@@ -279,6 +292,12 @@ internal data class ForwardCallablePlanCatalog(
  */
 internal class ForwardCallablePlanner(
   private val classifier: ForwardBridgeTypeClassifier,
+  /**
+   * ADR-091: the ADR-074 expect index, keyed by qualified name. Only source of parameter defaults
+   * for an `expect`/`actual` class, whose `actual` (the export root) always reports
+   * `hasDefault = false`.
+   */
+  private val expectsByName: Map<String, KSDeclaration> = emptyMap(),
 ) {
   fun catalog(
     classes: List<KSClassDeclaration>,
@@ -660,22 +679,45 @@ internal class ForwardCallablePlanner(
       .filter { it.getVisibility() == Visibility.PUBLIC }
       .toList()
     val primary = cls.primaryConstructor
+    val secondaries: List<KSFunctionDeclaration> = constructors.filter { it != primary }
     return buildList {
       if (primary != null) add(constructorEntry(primary, owner, "${prefix}_create", "Create", result, ""))
-      constructors
-        .filter { constructor -> constructor != primary }
-        .forEachIndexed { index, constructor ->
+      secondaries.forEachIndexed { index, constructor ->
+        add(
+          constructorEntry(
+            constructor,
+            owner,
+            "${prefix}_create_${index + 2}",
+            "Create",
+            result,
+            "_${index + 2}",
+          )
+        )
+      }
+      // ADR-091: one omitting overload per trailing-defaulted suffix (the `@JvmOverloads` rule).
+      // The truncated parameter list is the *only* change: the Kotlin wrapper builds its call from
+      // the plan, so `Cat(name)` compiles and Kotlin computes `lives = 9` at the call site.
+      // Numbers continue ADR-034's `_$n` sequence, primary's suffixes first then each secondary's
+      // in declaration order, so unsuffixed/secondary exports render byte-identically to before.
+      var next: Int = secondaries.size + 2
+      (listOfNotNull(primary) + secondaries).forEach { constructor ->
+        val defaults: List<Boolean> = defaultFlags(cls, constructor, isPrimary = constructor == primary)
+        val trailing: Int = defaults.reversed().takeWhile { it }.count()
+        repeat(trailing) { index ->
+          val number: Int = next++
           add(
             constructorEntry(
               constructor,
               owner,
-              "${prefix}_create_${index + 2}",
+              "${prefix}_create_$number",
               "Create",
               result,
-              "_${index + 2}",
+              "_$number",
+              omitted = index + 1,
             )
           )
         }
+      }
       if (cls.modifiers.contains(Modifier.DATA) && primary != null) {
         val receiver = ForwardReceiver.Handle(result)
         add(
@@ -696,6 +738,33 @@ internal class ForwardCallablePlanner(
     }
   }
 
+  /**
+   * ADR-091: per-parameter "has a default", positionally.
+   *
+   * KSP exposes exactly one bit ([com.google.devtools.ksp.symbol.KSValueParameter.hasDefault]) and
+   * never the default expression, which is why the feature is overload synthesis rather than C#
+   * optional parameters. For an `expect`/`actual` class the bit is erased on the exported root
+   * (ADR-074 exports the `actual`, and Kotlin forbids an `actual` from restating a default), so
+   * the expect's primary constructor is consulted positionally through [expectsByName], and only
+   * for the actual's own primary constructor, since matching secondaries across the pair needs a
+   * signature rule no spike has verified.
+   */
+  private fun defaultFlags(
+    cls: KSClassDeclaration,
+    constructor: KSFunctionDeclaration,
+    isPrimary: Boolean,
+  ): List<Boolean> {
+    val expectParameters: List<com.google.devtools.ksp.symbol.KSValueParameter> =
+      if (!isPrimary) emptyList()
+      else (expectsByName[cls.qualifiedName?.asString()] as? KSClassDeclaration)
+        ?.primaryConstructor
+        ?.parameters
+        .orEmpty()
+    return constructor.parameters.mapIndexed { index, parameter ->
+      parameter.hasDefault || expectParameters.getOrNull(index)?.hasDefault == true
+    }
+  }
+
   private fun constructorEntry(
     constructor: KSFunctionDeclaration,
     owner: String,
@@ -703,12 +772,13 @@ internal class ForwardCallablePlanner(
     publicName: String,
     result: BridgeType.ObjectHandle,
     suffix: String,
+    omitted: Int = 0,
   ): ForwardCallableCatalogEntry = planOrSkip(
     symbol = "$owner.<init>$suffix",
     publicName = publicName,
     exportName = export,
     receiver = ForwardReceiver.Static,
-    parameters = constructor.parameters.map { parameter ->
+    parameters = constructor.parameters.dropLast(omitted).map { parameter ->
       (parameter.name?.asString() ?: "_") to classifier.classify(parameter.type.resolve())
     },
     result = result,
