@@ -150,7 +150,8 @@ class NugetPluginKspArgsWiringTest {
     val ksp: KspExtension = project.extensions.getByType(KspExtension::class.java)
     val manifest: String = ksp.arguments.getValue("nuget.boundTypesManifest")
 
-    assertTrue(manifest.endsWith("build/nuget-interop/bound-types.json"), manifest)
+    val normalized: String = manifest.replace(File.separatorChar, '/')
+    assertTrue(normalized.endsWith("build/nuget-interop/bound-types.json"), manifest)
     assertTrue(File(manifest).isAbsolute, manifest)
   }
 
