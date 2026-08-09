@@ -2189,19 +2189,22 @@ private fun nugetRuntimeRegistrationContent(
   |    {
   |        [DllImport("$nativeLibraryName", CallingConvention = CallingConvention.Cdecl,
   |            EntryPoint = "nuget_runtime_register")]
-  |        private static extern void nuget_runtime_register(int slotCount, long contractHash, IntPtr freeGcHandlePtr);
+  |        private static extern void nuget_runtime_register(int slotCount, long contractHash,
+  |            IntPtr freeGcHandlePtr, IntPtr weakenGcHandlePtr, IntPtr resolveGcHandlePtr);
   |
   |        [ModuleInitializer]
   |        internal static unsafe void Initialize()
   |        {
   |            NugetTrace.Write(
-  |                "register enter <runtime> -> nuget_runtime_register(1 slot) dll=$nativeLibraryName");
+  |                "register enter <runtime> -> nuget_runtime_register(3 slots) dll=$nativeLibraryName");
   |            try
   |            {
   |                nuget_runtime_register(
-  |                    1,
+  |                    3,
   |                    ${NUGET_RUNTIME_CONTRACT_HASH}L,
-  |                    (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, void>)(&FreeGcHandle_Thunk));
+  |                    (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, void>)(&FreeGcHandle_Thunk),
+  |                    (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, IntPtr>)(&WeakenGcHandle_Thunk),
+  |                    (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, IntPtr>)(&ResolveGcHandle_Thunk));
   |            }
   |            catch (DllNotFoundException e)
   |            {
@@ -2221,6 +2224,21 @@ private fun nugetRuntimeRegistrationContent(
   |        // CLR attaches unknown native threads automatically on entry.
   |        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
   |        private static void FreeGcHandle_Thunk(IntPtr handle) => GCHandle.FromIntPtr(handle).Free();
+  |
+  |        // ADR-089: a weak GCHandle to the same target, for Kotlin's per-interface bridge reuse
+  |        // table. Spike-verified: a weak handle does not root the bridge, so the table cannot
+  |        // re-create the cross-runtime strong cycle that falsified ADR-084's reuse design.
+  |        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+  |        private static IntPtr WeakenGcHandle_Thunk(IntPtr strong) =>
+  |            GCHandle.ToIntPtr(GCHandle.Alloc(GCHandle.FromIntPtr(strong).Target, GCHandleType.Weak));
+  |
+  |        // ADR-089: a fresh strong TRANSFER handle to the weak handle's target, or Zero once the
+  |        // .NET GC collected it — the signal for Kotlin to mint a new bridge.
+  |        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+  |        private static IntPtr ResolveGcHandle_Thunk(IntPtr weak) =>
+  |            GCHandle.FromIntPtr(weak).Target is object target
+  |                ? GCHandle.ToIntPtr(GCHandle.Alloc(target))
+  |                : IntPtr.Zero;
   |    }
   |
   |    // ADR-085: the two shared Kotlin exports a minted bridge calls. Neither is registered: both

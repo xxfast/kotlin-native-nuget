@@ -370,6 +370,29 @@ public class MenagerieRoundTripTests
         MenagerieSample.kotlinGoatDropHeld();
     }
 
+    // Phase 13 Wave 3, item 1: bridge reuse per Kotlin object. `nugetMintBridge` mints a fresh
+    // bridge on every crossing today, so two crossings of the same Kotlin Goat give C# two
+    // distinct IFeedable instances even while `Sanctuary.Remember` still holds the first one
+    // alive. EXPECTED TO FAIL as of this commit (two bridges, not one) until bridge reuse lands.
+    [Fact]
+    public void KotlinGoatRememberedTwice_SameInstanceCrossingIsReused()
+    {
+        bool same = MenagerieSample.kotlinGoatRememberedTwiceAreSame();
+        Assert.True(
+            same,
+            "expected the SECOND crossing of the same live Kotlin Goat to resolve to the SAME " +
+            "C#-side bridge instance as the first crossing, not mint a fresh one");
+    }
+
+    // Regression pin: two DIFFERENT Kotlin Goat instances must never report ReferenceEquals,
+    // whether or not bridge reuse has landed. Passes today; must keep passing after.
+    [Fact]
+    public void KotlinGoatsRememberedTwice_DifferentInstancesAreNeverSame()
+    {
+        bool same = MenagerieSample.kotlinGoatsRememberedTwiceAreNotSame();
+        Assert.False(same, "expected two different Kotlin Goat instances to never be ReferenceEquals");
+    }
+
     private static void SettleKotlinReleases()
     {
         for (int round = 0; round < 5; round++)

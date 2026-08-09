@@ -4030,6 +4030,8 @@ private fun nugetRuntimeContent(): String = """
   |package $INTERNAL_PKG
   |
   |import kotlin.concurrent.AtomicInt
+  |import kotlin.concurrent.AtomicReference
+  |import kotlin.native.identityHashCode
   |import kotlinx.cinterop.COpaquePointer
   |import kotlinx.cinterop.CFunction
   |import kotlinx.cinterop.CPointer
@@ -4046,25 +4048,158 @@ private fun nugetRuntimeContent(): String = """
   |
   |internal var freeGcHandleFn: CPointer<CFunction<(COpaquePointer) -> Unit>>? = null
   |
+  |// ADR-089: a weak GCHandle to the same target as the given strong one. Verified by spike: a weak
+  |// handle does NOT root the bridge, which is what lets the reuse table hold one without
+  |// re-creating the cross-runtime strong cycle that killed ADR-084's reuse design.
+  |internal var weakenGcHandleFn:
+  |  CPointer<CFunction<(COpaquePointer) -> COpaquePointer?>>? = null
+  |
+  |// ADR-089: a FRESH strong transfer handle to the weak handle's target, or null once the .NET GC
+  |// has collected it (the mint-fresh signal).
+  |internal var resolveGcHandleFn:
+  |  CPointer<CFunction<(COpaquePointer) -> COpaquePointer?>>? = null
+  |
   |// ADR-054: slotCount/contractHash are the same two leading scalars every register export gains
-  |// (slotCount is always 1 here — the runtime shim registers exactly one thunk). The pointer
-  |// parameter is nullable so a stale caller passing zero args (pre-ADR-054) is read-only-safe up
-  |// to the checkContract call, which never touches freeGcHandlePtr before deciding to proceed.
+  |// (slotCount is always 3 here — the runtime shim registers exactly the free/weaken/resolve
+  |// thunks). The pointer parameters are nullable so a stale caller passing zero args (pre-ADR-054)
+  |// is read-only-safe up to the checkContract call, which never touches them before deciding to
+  |// proceed.
   |@OptIn(ExperimentalNativeApi::class)
   |@CName("nuget_runtime_register")
-  |fun nuget_runtime_register(slotCount: Int, contractHash: Long, freeGcHandlePtr: COpaquePointer?) {
+  |fun nuget_runtime_register(
+  |  slotCount: Int,
+  |  contractHash: Long,
+  |  freeGcHandlePtr: COpaquePointer?,
+  |  weakenGcHandlePtr: COpaquePointer?,
+  |  resolveGcHandlePtr: COpaquePointer?,
+  |) {
   |  NugetRegistry.checkContract(
   |    qualifiedType = "<runtime>",
   |    packageId = "",
   |    slotCount = slotCount,
   |    contractHash = contractHash,
-  |    expectedSlots = 1,
+  |    expectedSlots = 3,
   |    expectedHash = ${NUGET_RUNTIME_CONTRACT_HASH}L,
   |  )
   |  freeGcHandleFn = requireNotNull(freeGcHandlePtr) {
   |    "nuget_runtime_register passed a null freeGcHandle thunk pointer."
   |  }.reinterpret()
-  |  NugetRegistry.record("<runtime>", 1)
+  |  weakenGcHandleFn = requireNotNull(weakenGcHandlePtr) {
+  |    "nuget_runtime_register passed a null weakenGcHandle thunk pointer."
+  |  }.reinterpret()
+  |  resolveGcHandleFn = requireNotNull(resolveGcHandlePtr) {
+  |    "nuget_runtime_register passed a null resolveGcHandle thunk pointer."
+  |  }.reinterpret()
+  |  NugetRegistry.record("<runtime>", 3)
+  |}
+  |
+  |// ADR-089: the reuse table's key. Identity, never `equals` — a Kotlin data class implementing a
+  |// bound interface must still get one bridge PER INSTANCE, and `kotlin.native.identityHashCode`
+  |// is the only stable per-instance hash on this target (verified against Kotlin/Native 2.4.10).
+  |private class NugetIdentityKey(val ref: Any) {
+  |  override fun equals(other: Any?): Boolean = other is NugetIdentityKey && other.ref === ref
+  |
+  |  @OptIn(ExperimentalNativeApi::class)
+  |  override fun hashCode(): Int = ref.identityHashCode()
+  |}
+  |
+  |// [weakBridge] never roots the C# bridge (spike-verified); [ctx] is the StableRef pointer the
+  |// bridge dispatches through, and the guard the release path matches on.
+  |private class NugetBridgeEntry(val weakBridge: COpaquePointer, val ctx: COpaquePointer)
+  |
+  |// ADR-089 lazy free: `nuget_kotlin_release` runs on the .NET finalizer thread INSIDE a C#-to-Kotlin
+  |// P/Invoke, and calling a Kotlin-to-C# thunk from there is an unspiked re-entry shape. So an
+  |// evicted weak handle is queued here instead of freed on the spot, and drained on the next mint
+  |// (an ordinary caller thread). Bounded: at most one queued handle per dead bridge.
+  |private val nugetPendingWeakFrees = AtomicReference<List<COpaquePointer>>(emptyList())
+  |
+  |private fun nugetQueueWeakFree(handle: COpaquePointer) {
+  |  while (true) {
+  |    val current: List<COpaquePointer> = nugetPendingWeakFrees.value
+  |    if (nugetPendingWeakFrees.compareAndSet(current, current + handle)) return
+  |  }
+  |}
+  |
+  |private fun nugetDrainWeakFrees() {
+  |  while (true) {
+  |    val current: List<COpaquePointer> = nugetPendingWeakFrees.value
+  |    if (current.isEmpty()) return
+  |    if (nugetPendingWeakFrees.compareAndSet(current, emptyList())) {
+  |      val fn = requireNotNull(freeGcHandleFn) { NugetRegistry.notRegistered("<runtime>", "") }
+  |      current.forEach { fn.invoke(it) }
+  |      return
+  |    }
+  |  }
+  |}
+  |
+  |// ADR-089: every table registers itself here so the interface-agnostic release path can offer a
+  |// dying ctx to all of them. Per-interface tables, so one Kotlin object implementing two bound
+  |// interfaces holds up to one live bridge per interface.
+  |private val nugetBridgeTables = AtomicReference<List<NugetBridgeTable>>(emptyList())
+  |
+  |// ADR-089: the per-interface bridge reuse table. One instance per `{Iface}Bindings.kt`.
+  |// Every access is guarded by a CAS spinlock in the same style as NugetObjectHandle.free and
+  |// NugetRegistry.record (no new dependency); contention is one acquisition per interface-typed
+  |// crossing plus one per finalized bridge, nowhere near a per-member hot path.
+  |internal class NugetBridgeTable {
+  |  private val entries: MutableMap<NugetIdentityKey, NugetBridgeEntry> = mutableMapOf()
+  |  private val lock = AtomicInt(0)
+  |
+  |  init {
+  |    while (true) {
+  |      val current: List<NugetBridgeTable> = nugetBridgeTables.value
+  |      if (nugetBridgeTables.compareAndSet(current, current + this)) break
+  |    }
+  |  }
+  |
+  |  private fun <R> locked(block: () -> R): R {
+  |    while (!lock.compareAndSet(0, 1)) {
+  |      // Spin. The critical sections are a map lookup plus one GCHandle thunk call.
+  |    }
+  |    try {
+  |      return block()
+  |    } finally {
+  |      lock.value = 0
+  |    }
+  |  }
+  |
+  |  // A FRESH strong transfer handle to the bridge already minted for [impl], or null when there is
+  |  // none (or the .NET GC collected it, in which case the dead entry is cleaned out here).
+  |  fun resolve(impl: Any): COpaquePointer? = locked {
+  |    nugetDrainWeakFrees()
+  |    val key = NugetIdentityKey(impl)
+  |    val entry: NugetBridgeEntry = entries[key] ?: return@locked null
+  |    val fn = requireNotNull(resolveGcHandleFn) { NugetRegistry.notRegistered("<runtime>", "") }
+  |    val resolved: COpaquePointer? = fn.invoke(entry.weakBridge)
+  |    if (resolved != null) return@locked resolved
+  |    entries.remove(key)
+  |    val free = requireNotNull(freeGcHandleFn) { NugetRegistry.notRegistered("<runtime>", "") }
+  |    free.invoke(entry.weakBridge)
+  |    null
+  |  }
+  |
+  |  // Records the freshly minted [bridge] weakly. [ctx] is the release-path guard.
+  |  fun store(impl: Any, bridge: COpaquePointer, ctx: COpaquePointer): Unit = locked {
+  |    val fn = requireNotNull(weakenGcHandleFn) { NugetRegistry.notRegistered("<runtime>", "") }
+  |    val weak: COpaquePointer = requireNotNull(fn.invoke(bridge)) {
+  |      "[nuget] weakenGcHandle returned null for a live bridge handle."
+  |    }
+  |    val previous: NugetBridgeEntry? = entries.put(NugetIdentityKey(impl), NugetBridgeEntry(weak, ctx))
+  |    // Two threads minting for the same object concurrently is the only way to get here; the loser
+  |    // is a valid bridge nobody will reuse, so drop its weak handle rather than leak it.
+  |    if (previous != null) nugetQueueWeakFree(previous.weakBridge)
+  |  }
+  |
+  |  // ADR-089 ctx-guarded eviction: only the entry this exact ctx belongs to is removed. Without the
+  |  // guard, a late finalizer for bridge #1 would evict the live entry a later crossing installed
+  |  // for bridge #2 and leak #2's weak handle.
+  |  fun evict(impl: Any, ctx: COpaquePointer): Unit = locked {
+  |    val key = NugetIdentityKey(impl)
+  |    val entry: NugetBridgeEntry = entries[key] ?: return@locked
+  |    if (entry.ctx.rawValue != ctx.rawValue) return@locked
+  |    entries.remove(key)
+  |    nugetQueueWeakFree(entry.weakBridge)
+  |  }
   |}
   |
   |// Holder passed as the Cleaner resource. Deliberately a separate object from the wrapper so the
@@ -4305,7 +4440,14 @@ private fun nugetRuntimeContent(): String = """
   |    val current: Int = kotlinReleaseCount.value
   |    if (kotlinReleaseCount.compareAndSet(current, current + 1)) break
   |  }
-  |  ctx.asStableRef<Any>().dispose()
+  |  // ADR-089: the bridge this ctx belonged to is gone, so drop its reuse entry before the impl
+  |  // loses its last root. Offered to every table because the release path is interface-agnostic;
+  |  // the ctx guard inside evict() means at most one table owns this ctx, and a table holding a
+  |  // NEWER bridge for the same impl is left alone.
+  |  val ref = ctx.asStableRef<Any>()
+  |  val impl: Any = ref.get()
+  |  nugetBridgeTables.value.forEach { it.evict(impl, ctx) }
+  |  ref.dispose()
   |}
 """.trimMargin().trim()
 
@@ -5008,6 +5150,8 @@ private fun interfaceBindingsFileContent(
     // ADR-085: only the minted-bridge half needs these.
     if (bridgePlan != null) {
       add("import $INTERNAL_PKG.nugetKotlinString")
+      // ADR-089: the per-interface bridge reuse table beside mint{Iface}Bridge.
+      add("import $INTERNAL_PKG.NugetBridgeTable")
       add("import kotlinx.cinterop.StableRef")
       add("import kotlinx.cinterop.staticCFunction")
       if (bridgeHasString) add("import kotlinx.cinterop.toKString")
@@ -5220,20 +5364,31 @@ private fun kotlinBridgeBlock(
   return """
     |${slotFns.joinToString("\n\n") { it.second }}
     |
+    |// ADR-089: this interface's bridge reuse table, keyed on the implementation object's identity.
+    |// Holds the bridge WEAKLY, so it never roots what the .NET GC owns.
+    |private val ${prefix}BridgeTable: NugetBridgeTable = NugetBridgeTable()
+    |
     |// ADR-085: mint a C#-side bridge implementing `$iface` over a Kotlin object. The returned
     |// GCHandle is a TRANSFER handle: C# keeps its own managed reference if it stores the bridge.
+    |// ADR-089: resolve-or-mint. While C# keeps the first bridge alive, every later crossing of the
+    |// SAME Kotlin object resolves to it, so C#-side ReferenceEquals holds. Once the bridge is
+    |// collected the table's weak handle resolves to null and this mints a fresh one.
     |internal fun mint${iface}Bridge(impl: $iface): COpaquePointer {
+    |  val reused: COpaquePointer? = ${prefix}BridgeTable.resolve(impl)
+    |  if (reused != null) return reused
     |  val fn = requireNotNull($objectName.createBridgeFn) {
     |    $failMsg
     |  }
     |  val ctx: COpaquePointer = StableRef.create(impl).asCPointer()
-    |  return requireNotNull(
+    |  val bridge: COpaquePointer = requireNotNull(
     |    fn.invoke(
     |    $mintArgs,
     |    ),
     |  ) {
     |    "[nuget] Create${iface}Bridge returned a null bridge handle."
     |  }
+    |  ${prefix}BridgeTable.store(impl, bridge, ctx)
+    |  return bridge
     |}
   """.trimMargin()
 }

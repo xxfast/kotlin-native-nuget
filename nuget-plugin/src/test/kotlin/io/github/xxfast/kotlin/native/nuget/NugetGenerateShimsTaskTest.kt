@@ -1545,18 +1545,45 @@ class NugetGenerateShimsTaskTest {
   }
 
   @Test
-  fun `NugetRuntimeRegistration cs gains leading slotCount 1 and a contractHash literal`() {
+  fun `NugetRuntimeRegistration cs gains leading slotCount 3 and a contractHash literal`() {
     val files: List<GeneratedFile> = generateCSharpShims(templateWithCtorRir, "sample")
     val runtimeShim: GeneratedFile = requireNotNull(
       files.find { it.relativePath.endsWith("NugetRuntimeRegistration.cs") }
     ) { "NugetRuntimeRegistration.cs must be generated" }
 
-    assertContains(runtimeShim.content, "int slotCount, long contractHash, IntPtr freeGcHandlePtr")
-    assertTrue(
-      Regex("nuget_runtime_register\\(\\s*1,\\s*-?\\d+L,").containsMatchIn(runtimeShim.content),
-      "ADR-054: nuget_runtime_register must be called with slotCount=1 and a Long contractHash " +
-          "literal, got:\n${runtimeShim.content}",
+    assertContains(runtimeShim.content, "int slotCount, long contractHash,")
+    assertContains(
+      runtimeShim.content,
+      "IntPtr freeGcHandlePtr, IntPtr weakenGcHandlePtr, IntPtr resolveGcHandlePtr",
     )
+    assertTrue(
+      Regex("nuget_runtime_register\\(\\s*3,\\s*-?\\d+L,").containsMatchIn(runtimeShim.content),
+      "ADR-054/089: nuget_runtime_register must be called with slotCount=3 and a Long " +
+          "contractHash literal, got:\n${runtimeShim.content}",
+    )
+  }
+
+  // ADR-089: the two reuse thunks ride the SHARED runtime registration, interface-agnostic.
+  @Test
+  fun `NugetRuntimeRegistration cs registers the weaken and resolve GCHandle thunks`() {
+    val runtimeShim: GeneratedFile = generateCSharpShims(templateWithCtorRir, "sample")
+      .single { it.relativePath.endsWith("NugetRuntimeRegistration.cs") }
+
+    assertContains(
+      runtimeShim.content,
+      "(IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, IntPtr>)(&WeakenGcHandle_Thunk)",
+    )
+    assertContains(
+      runtimeShim.content,
+      "(IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, IntPtr>)(&ResolveGcHandle_Thunk)",
+    )
+    // Weak, never Normal: a strong cached handle roots the bridge forever (ADR-089 alternative 3).
+    assertContains(
+      runtimeShim.content,
+      "GCHandle.ToIntPtr(GCHandle.Alloc(GCHandle.FromIntPtr(strong).Target, GCHandleType.Weak))",
+    )
+    // Dead weak handle -> Zero, the mint-fresh signal.
+    assertContains(runtimeShim.content, ": IntPtr.Zero;")
   }
 
   // ------------------------------------------------------------------
@@ -1608,15 +1635,15 @@ class NugetGenerateShimsTaskTest {
   }
 
   @Test
-  fun `NugetRuntimeRegistration cs emits register enter (singular slot) and ok trace lines`() {
+  fun `NugetRuntimeRegistration cs emits register enter and ok trace lines`() {
     val files: List<GeneratedFile> = generateCSharpShims(templateWithCtorRir, "sample")
     val runtimeShim: GeneratedFile =
       files.single { it.relativePath.endsWith("NugetRuntimeRegistration.cs") }
 
     assertContains(
       runtimeShim.content,
-      "register enter <runtime> -> nuget_runtime_register(1 slot) dll=sample",
-      message = "singular \"1 slot\", not \"1 slots\"",
+      "register enter <runtime> -> nuget_runtime_register(3 slots) dll=sample",
+      message = "ADR-089: the shared runtime registers free + weaken + resolve",
     )
     assertContains(runtimeShim.content, "NugetTrace.Write(\"register ok    <runtime>\");")
   }

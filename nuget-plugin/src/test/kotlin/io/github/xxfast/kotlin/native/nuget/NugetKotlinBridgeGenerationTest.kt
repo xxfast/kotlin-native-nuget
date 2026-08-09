@@ -1,5 +1,6 @@
 package io.github.xxfast.kotlin.native.nuget
 
+import io.github.xxfast.kotlin.native.nuget.rir.NUGET_RUNTIME_CONTRACT_HASH
 import io.github.xxfast.kotlin.native.nuget.rir.RirAssembly
 import io.github.xxfast.kotlin.native.nuget.rir.RirClass
 import io.github.xxfast.kotlin.native.nuget.rir.RirDiagnostic
@@ -21,6 +22,7 @@ import io.github.xxfast.kotlin.native.nuget.rir.RirRegistrable
 import io.github.xxfast.kotlin.native.nuget.rir.RirStringType
 import io.github.xxfast.kotlin.native.nuget.rir.RirVoidType
 import io.github.xxfast.kotlin.native.nuget.rir.boundHandleTypes
+import io.github.xxfast.kotlin.native.nuget.rir.fnv1a64
 import io.github.xxfast.kotlin.native.nuget.rir.boundInterfaceTypes
 import io.github.xxfast.kotlin.native.nuget.rir.kotlinBridgeDiagnostics
 import io.github.xxfast.kotlin.native.nuget.rir.kotlinBridgePlan
@@ -250,9 +252,109 @@ class NugetKotlinBridgeGenerationTest {
       .single { it.relativePath.endsWith("/NugetRuntime.kt") }
 
     assertContains(runtime.content, "@CName(\"nuget_kotlin_release\")")
-    assertContains(runtime.content, "ctx.asStableRef<Any>().dispose()")
+    assertContains(runtime.content, "val ref = ctx.asStableRef<Any>()")
+    assertContains(runtime.content, "ref.dispose()")
     assertContains(runtime.content, "@CName(\"nuget_kotlin_string_free\")")
     assertContains(runtime.content, "nativeHeap.free(ptr)")
+  }
+
+  // ------------------------------------------------------------------
+  // ADR-089: bridge reuse per Kotlin object.
+  // ------------------------------------------------------------------
+
+  @Test
+  fun `each plannable interface gets its own identity-keyed, weak-valued reuse table`() {
+    val runtime: GeneratedFile = generateKotlinStubs(rir)
+      .single { it.relativePath.endsWith("/NugetRuntime.kt") }
+    val bindings: GeneratedFile = generateKotlinStubs(rir)
+      .single { it.relativePath.endsWith("/IFeedableBindings.kt") }
+
+    // Per interface, beside mint{Iface}Bridge.
+    assertContains(
+      bindings.content,
+      "import io.github.xxfast.kotlin.native.nuget.internal.NugetBridgeTable",
+    )
+    assertContains(
+      bindings.content, "private val iFeedableBridgeTable: NugetBridgeTable = NugetBridgeTable()",
+    )
+    // Identity, never equals: two equal-but-distinct impls must get two bridges.
+    assertContains(
+      runtime.content,
+      "override fun equals(other: Any?): Boolean = other is NugetIdentityKey && other.ref === ref",
+    )
+    assertContains(runtime.content, "override fun hashCode(): Int = ref.identityHashCode()")
+    assertContains(runtime.content, "import kotlin.native.identityHashCode")
+    // The bridge side of the pairing is WEAK; a strong cache re-creates the cycle ADR-084 hit.
+    assertContains(
+      runtime.content, "private class NugetBridgeEntry(val weakBridge: COpaquePointer, val ctx: COpaquePointer)",
+    )
+  }
+
+  @Test
+  fun `mintBridge resolves before minting and records the fresh bridge weakly`() {
+    val bindings: GeneratedFile = generateKotlinStubs(rir)
+      .single { it.relativePath.endsWith("/IFeedableBindings.kt") }
+
+    assertContains(
+      bindings.content,
+      """
+        |  val reused: COpaquePointer? = iFeedableBridgeTable.resolve(impl)
+        |  if (reused != null) return reused
+      """.trimMargin(),
+    )
+    assertContains(bindings.content, "iFeedableBridgeTable.store(impl, bridge, ctx)")
+    assertContains(bindings.content, "  return bridge")
+  }
+
+  @Test
+  fun `a dead weak handle is invalidated so the next crossing mints fresh`() {
+    val runtime: GeneratedFile = generateKotlinStubs(rir)
+      .single { it.relativePath.endsWith("/NugetRuntime.kt") }
+
+    assertContains(runtime.content, "val resolved: COpaquePointer? = fn.invoke(entry.weakBridge)")
+    assertContains(runtime.content, "if (resolved != null) return@locked resolved")
+    assertContains(runtime.content, "entries.remove(key)")
+  }
+
+  @Test
+  fun `release evicts only the entry whose ctx it owns`() {
+    val runtime: GeneratedFile = generateKotlinStubs(rir)
+      .single { it.relativePath.endsWith("/NugetRuntime.kt") }
+
+    // The late-finalizer race: bridge #1's release must not evict bridge #2's live entry.
+    assertContains(runtime.content, "if (entry.ctx.rawValue != ctx.rawValue) return@locked")
+    assertContains(runtime.content, "nugetBridgeTables.value.forEach { it.evict(impl, ctx) }")
+    // Lazy free (ADR-089 named fallback): the finalizer-thread re-entry shape is unspiked, so the
+    // dead weak handle is queued and freed on the next mint instead.
+    assertContains(runtime.content, "nugetQueueWeakFree(entry.weakBridge)")
+    assertContains(runtime.content, "nugetDrainWeakFrees()")
+  }
+
+  @Test
+  fun `the shared runtime registration grows to three slots and moves its contract hash`() {
+    val runtime: GeneratedFile = generateKotlinStubs(rir)
+      .single { it.relativePath.endsWith("/NugetRuntime.kt") }
+
+    assertContains(runtime.content, "expectedSlots = 3,")
+    assertContains(runtime.content, "expectedHash = ${NUGET_RUNTIME_CONTRACT_HASH}L,")
+    assertContains(runtime.content, "NugetRegistry.record(\"<runtime>\", 3)")
+    assertContains(runtime.content, "weakenGcHandleFn = requireNotNull(weakenGcHandlePtr)")
+    assertContains(runtime.content, "resolveGcHandleFn = requireNotNull(resolveGcHandlePtr)")
+    // The hash pin: both halves bake THIS literal, and it is no longer the 1-slot one.
+    assertEquals(
+      fnv1a64(
+        "runtime:freeGcHandle(handle:COpaquePointer):Unit;" +
+            "weakenGcHandle(handle:COpaquePointer):COpaquePointer;" +
+            "resolveGcHandle(handle:COpaquePointer):COpaquePointer"
+      ),
+      NUGET_RUNTIME_CONTRACT_HASH,
+    )
+    assertNotEquals(
+      fnv1a64("runtime:freeGcHandle(handle:COpaquePointer):Unit"),
+      NUGET_RUNTIME_CONTRACT_HASH,
+      "ADR-089: growing the shared runtime from 1 slot to 3 MUST move the contract hash, so a " +
+          "stale shim fails the ADR-054 check instead of mis-assigning pointers",
+    )
   }
 
   @Test

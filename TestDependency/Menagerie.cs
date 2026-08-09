@@ -165,6 +165,7 @@ internal class Nocturnal : IFeedable
 public class Sanctuary
 {
     private IFeedable? _featured;
+    private readonly List<IFeedable> _remembered = new();
 
     /// <summary>Interface-typed RETURN of a publicly bound implementation.</summary>
     public IFeedable Star() => new Ferret { Nickname = "Bandit" };
@@ -271,6 +272,25 @@ public class Sanctuary
         performer.Energy = level;
         return performer.Energy;
     }
+
+    /// <summary>
+    /// Phase 13 Wave 3 fixture (bridge reuse per Kotlin object): HOLDS every
+    /// <see cref="IFeedable"/> reference it receives, so an earlier crossing's bridge stays alive
+    /// here across a REPEAT crossing of the same Kotlin object. Today's mint-per-crossing
+    /// mechanism gives the two most recent entries distinct C#-side instances even when the
+    /// underlying Kotlin object is identical; <see cref="RememberedAreSame"/> is the probe that
+    /// observes it.
+    /// </summary>
+    public void Remember(IFeedable feedable) => _remembered.Add(feedable);
+
+    /// <summary>
+    /// Whether the two most recently <see cref="Remember"/>-ed references are
+    /// <see cref="object.ReferenceEquals(object?, object?)"/>. Two crossings of the SAME live
+    /// Kotlin object should report <c>true</c> once bridge reuse lands; two crossings of
+    /// DIFFERENT Kotlin objects must report <c>false</c> regardless.
+    /// </summary>
+    public bool RememberedAreSame() =>
+        _remembered.Count >= 2 && ReferenceEquals(_remembered[^1], _remembered[^2]);
 }
 
 // Negative cases, one per Decision 6 diagnostic. None of these is implemented by any class in

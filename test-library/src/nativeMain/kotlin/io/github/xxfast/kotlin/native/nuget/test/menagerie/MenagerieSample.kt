@@ -413,3 +413,34 @@ fun kotlinNoVacancyLegsOnly(): Int {
   val sanctuary = Sanctuary()
   return sanctuary.legsOnly(NoVacancy())
 }
+
+// Phase 13 Wave 3, item 1: bridge reuse per Kotlin object. Today `nugetMintBridge` mints a fresh
+// bridge on EVERY crossing, so two crossings of the SAME Kotlin object give C# two distinct
+// IFeedable instances even while the first bridge is still alive on the C# side (held here by
+// `Sanctuary.remember`). Reuses `Goat` again -- Nibbles gets a third outing.
+
+/**
+ * The SAME Kotlin [Goat] instance crosses [Sanctuary.remember] TWICE, back to back. `Sanctuary`
+ * holds the first reference (a live bridge) across the second crossing, so once bridge reuse
+ * lands, [Sanctuary.rememberedAreSame] must report `true` — today it reports `false`, because
+ * each crossing mints a fresh bridge regardless of the live one `Sanctuary` still references.
+ */
+fun kotlinGoatRememberedTwiceAreSame(): Boolean {
+  val sanctuary = Sanctuary()
+  val goat = Goat()
+  sanctuary.remember(goat)
+  sanctuary.remember(goat)
+  return sanctuary.rememberedAreSame()
+}
+
+/**
+ * Regression pin: TWO DIFFERENT Kotlin [Goat] instances must never report same, whether or not
+ * bridge reuse lands. Passes today and must keep passing after — reuse is keyed on the Kotlin
+ * object's identity, not merely on it being a [Goat].
+ */
+fun kotlinGoatsRememberedTwiceAreNotSame(): Boolean {
+  val sanctuary = Sanctuary()
+  sanctuary.remember(Goat())
+  sanctuary.remember(Goat())
+  return sanctuary.rememberedAreSame()
+}

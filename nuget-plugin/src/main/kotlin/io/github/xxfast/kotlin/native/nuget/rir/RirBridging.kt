@@ -991,11 +991,18 @@ internal fun fnv1a64(s: String): Long {
   return hash
 }
 
-// ADR-054: nuget_runtime_register has no RirClass/registrable list to hash (the shared GCHandle-
-// free thunk is a fixed, single-slot contract, not derived from reverse-ir.json), so both
-// generators bake this same literal constant rather than each independently re-deriving a "fake"
-// one-element registrable list. Computed via the same fnv1a64 so it is not a magic number.
-val NUGET_RUNTIME_CONTRACT_HASH: Long = fnv1a64("runtime:freeGcHandle(handle:COpaquePointer):Unit")
+// ADR-054: nuget_runtime_register has no RirClass/registrable list to hash (the shared GCHandle
+// thunks are a fixed contract, not derived from reverse-ir.json), so both generators bake this same
+// literal constant rather than each independently re-deriving a "fake" registrable list. Computed
+// via the same fnv1a64 so it is not a magic number.
+// ADR-089: the shared runtime grew from 1 slot to 3 (weaken/resolve joined free), so this string
+// names all three. Both halves regenerate together on every consumer build; a mixed build fails the
+// ADR-054 check loudly at startup instead of mis-assigning pointers.
+val NUGET_RUNTIME_CONTRACT_HASH: Long = fnv1a64(
+  "runtime:freeGcHandle(handle:COpaquePointer):Unit;" +
+      "weakenGcHandle(handle:COpaquePointer):COpaquePointer;" +
+      "resolveGcHandle(handle:COpaquePointer):COpaquePointer"
+)
 
 // Shared registration export-name derivation (ADR-048's naming contract, which ADR-049's C# side
 // must match exactly): "nuget_{ns_snake}_{type_snake}_register". Sharing this function (rather than
