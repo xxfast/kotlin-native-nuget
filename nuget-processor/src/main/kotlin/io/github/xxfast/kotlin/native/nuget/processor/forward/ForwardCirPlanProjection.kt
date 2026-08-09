@@ -151,7 +151,11 @@ internal object ForwardCirPlanProjection {
       return CirConstructor(parameters = publicParams, body = "", hasErrorCheck = true, nativeSuffix = nativeSuffix)
     }
     val prelude: List<String> =
-      plan.publicSignature.parameters.mapNotNull { plan.collectionPrelude(it) ?: plan.interfacePrelude(it) ?: plan.boundInterfacePrelude(it) }
+      plan.publicSignature.parameters.mapNotNull { parameter ->
+        plan.collectionPrelude(parameter)
+          ?: plan.interfacePrelude(parameter)
+          ?: plan.boundInterfacePrelude(parameter)
+      }
     val cleanup: List<String> =
       plan.publicSignature.parameters.mapNotNull { plan.collectionCleanup(it) ?: plan.interfaceCleanup(it) }
     val argumentList: List<String> = plan.publicSignature.parameters.flatMap { plan.callArgument(it) }
@@ -739,7 +743,9 @@ internal object ForwardCirPlanProjection {
     val nativeCall: ForwardNativeCall = singleNativeImport()
     val prelude: List<String> =
       parameters.mapNotNull { parameter ->
-        collectionPrelude(parameter) ?: interfacePrelude(parameter) ?: boundInterfacePrelude(parameter)
+        collectionPrelude(parameter)
+          ?: interfacePrelude(parameter)
+          ?: boundInterfacePrelude(parameter)
       }
     val cleanup: List<String> =
       parameters.mapNotNull { parameter -> collectionCleanup(parameter) ?: interfaceCleanup(parameter) }

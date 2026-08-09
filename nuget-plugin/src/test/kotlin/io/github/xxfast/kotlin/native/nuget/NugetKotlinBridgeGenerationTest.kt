@@ -189,20 +189,23 @@ class NugetKotlinBridgeGenerationTest {
 
     assertContains(
       file.content,
-      "private fun iFeedableDescribeSlot(ctx: COpaquePointer?, errOut: CPointer<COpaquePointerVar>?): " +
+      "private fun iFeedableDescribeSlot(ctx: COpaquePointer?, " +
+          "errOut: CPointer<COpaquePointerVar>?): " +
           "COpaquePointer? = try {\n" +
           "  nugetKotlinString(ctx!!.asStableRef<IFeedable>().get().describe())\n",
     )
     assertContains(
       file.content,
-      "private fun iFeedableFeedSlot(ctx: COpaquePointer?, a0: COpaquePointer?, errOut: CPointer<COpaquePointerVar>?): " +
+      "private fun iFeedableFeedSlot(ctx: COpaquePointer?, a0: COpaquePointer?, " +
+          "errOut: CPointer<COpaquePointerVar>?): " +
           "Unit = try {\n" +
           "  ctx!!.asStableRef<IFeedable>().get()" +
           ".feed(requireNotNull(a0).reinterpret<ByteVar>().toKString())\n",
     )
     assertContains(
       file.content,
-      "private fun iFeedableLegsGetterSlot(ctx: COpaquePointer?, errOut: CPointer<COpaquePointerVar>?): Int = try {\n" +
+      "private fun iFeedableLegsGetterSlot(ctx: COpaquePointer?, " +
+          "errOut: CPointer<COpaquePointerVar>?): Int = try {\n" +
           "  ctx!!.asStableRef<IFeedable>().get().legs\n",
     )
     assertContains(file.content, "private fun iFeedableNicknameGetterSlot(")
@@ -297,7 +300,8 @@ class NugetKotlinBridgeGenerationTest {
     assertContains(runtime.content, "import kotlin.native.identityHashCode")
     // The bridge side of the pairing is WEAK; a strong cache re-creates the cycle ADR-084 hit.
     assertContains(
-      runtime.content, "private class NugetBridgeEntry(val weakBridge: COpaquePointer, val ctx: COpaquePointer)",
+      runtime.content,
+      "private class NugetBridgeEntry(val weakBridge: COpaquePointer, val ctx: COpaquePointer)",
     )
   }
 
@@ -716,14 +720,16 @@ class NugetKotlinBridgeGenerationTest {
     )
     assertContains(file.content, "private readonly KotlinRefHandle _ctx;")
     assertContains(
-      file.content, "private readonly delegate* unmanaged[Cdecl]<IntPtr, IntPtr*, IntPtr> _describe;",
+      file.content,
+      "private readonly delegate* unmanaged[Cdecl]<IntPtr, IntPtr*, IntPtr> _describe;",
     )
     assertContains(
       file.content,
       "private readonly delegate* unmanaged[Cdecl]<IntPtr, IntPtr, IntPtr*, void> _feed;",
     )
     assertContains(
-      file.content, "private readonly delegate* unmanaged[Cdecl]<IntPtr, IntPtr*, int> _legsGetter;",
+      file.content,
+      "private readonly delegate* unmanaged[Cdecl]<IntPtr, IntPtr*, int> _legsGetter;",
     )
     assertContains(file.content, "public IntPtr NugetToken => _ctx.DangerousGetHandle();")
     // String return: read Kotlin's UTF-8 buffer, then hand it straight back to Kotlin to free.
@@ -1104,7 +1110,10 @@ class NugetKotlinBridgeGenerationTest {
       file.content,
       "    ctx!!.asStableRef<IKeeper>().get().favorite = a0?.let { Ferret(it) }",
     )
-    assertContains(file.content, "import io.github.xxfast.kotlin.native.nuget.internal.nugetHandleOut")
+    assertContains(
+      file.content,
+      "import io.github.xxfast.kotlin.native.nuget.internal.nugetHandleOut",
+    )
     // The dup thunk is a registered slot like any other, and the register export takes it LAST.
     assertContains(
       file.content,
@@ -1156,7 +1165,8 @@ class NugetKotlinBridgeGenerationTest {
       "        private static IntPtr IKeeperDupHandle(IntPtr handle) =>\n" +
           "            handle == IntPtr.Zero\n" +
           "                ? IntPtr.Zero\n" +
-          "                : GCHandle.ToIntPtr(GCHandle.Alloc(GCHandle.FromIntPtr(handle).Target));",
+          "                : GCHandle.ToIntPtr(GCHandle.Alloc(GCHandle.FromIntPtr(handle)" +
+          ".Target));",
     )
     assertContains(
       file.content,
@@ -1249,7 +1259,8 @@ class NugetKotlinBridgeGenerationTest {
     // ADR-086 gated this on "some slot hands a handle OUT"; ADR-088 made it unconditional,
     // because a forward RETURN position (`fun resident(): IFeedable`) is not a slot at all and any
     // plannable interface can appear at one. IFeedable is all strings/ints and still needs it.
-    val plan = requireNotNull(kotlinBridgePlan(iFeedable, boundHandleTypes(rir), boundInterfaceTypes(rir)))
+    val plan =
+      requireNotNull(kotlinBridgePlan(iFeedable, boundHandleTypes(rir), boundInterfaceTypes(rir)))
     assertTrue(plan.needsDupHandle)
     val file: GeneratedFile = generateKotlinStubs(rir)
       .single { it.relativePath.endsWith("/IFeedableBindings.kt") }

@@ -109,7 +109,8 @@ internal fun FileSpec.Builder.addForwardKotlinPlanExport(plan: ForwardCallablePl
     // only names it. Same POINTER result and error-slot shape as the handle branch below.
     is BridgeType.BoundInterface -> {
       require(call.result == ForwardAbiWireType.POINTER) {
-        "Forward Kotlin bound-interface result must use POINTER wire type: ${plan.invocation.symbol}"
+        "Forward Kotlin bound-interface result must use POINTER wire type: " +
+            plan.invocation.symbol
       }
       builder.returns(cOpaquePointer.copy(nullable = true))
       builder.addCode(

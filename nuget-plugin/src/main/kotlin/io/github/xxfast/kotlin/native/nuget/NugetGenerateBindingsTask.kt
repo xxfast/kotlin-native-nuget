@@ -1576,9 +1576,9 @@ private fun slotHandleImports(
       else -> error("[nuget] only handle-backed slot types reach slotHandleImports")
     }
     val pkg: String = requireNotNull(typePkgs[key]) {
-      "[nuget] ${key.namespace}.${key.name} is named by a Kotlin bridge slot but has no generated " +
-          "Kotlin package. The planner admitted an unbound type — that is a planner bug, not a " +
-          "reverse-IR gap."
+      "[nuget] ${key.namespace}.${key.name} is named by a Kotlin bridge slot but has no " +
+          "generated Kotlin package. The planner admitted an unbound type — that is a planner " +
+          "bug, not a reverse-IR gap."
     }
     if (pkg == kotlinPkg) emptyList()
     else if (type is RirInterfaceType) listOf("import $pkg.$name", "import $pkg.nuget${name}Value")

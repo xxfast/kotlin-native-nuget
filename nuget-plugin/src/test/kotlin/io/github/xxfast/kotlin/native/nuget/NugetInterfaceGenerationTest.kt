@@ -269,8 +269,8 @@ class NugetInterfaceGenerationTest {
     assertContains(
       registration.content,
       "private static extern void nuget_test_menagerie_i_tagged_register(int slotCount, " +
-          "long contractHash, IntPtr tagGetterPtr, IntPtr createBridgePtr, IntPtr bridgeTokenPtr, " +
-          "IntPtr dupHandlePtr);",
+          "long contractHash, IntPtr tagGetterPtr, IntPtr createBridgePtr, " +
+          "IntPtr bridgeTokenPtr, IntPtr dupHandlePtr);",
     )
   }
 

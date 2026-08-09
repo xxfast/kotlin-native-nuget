@@ -2287,28 +2287,36 @@ private fun nugetRuntimeRegistrationContent(
   |    // so a consumer writes one catch for both directions.
   |    internal static class NugetKotlinErrors
   |    {
-  |        [DllImport("$nativeLibraryName", CallingConvention = CallingConvention.Cdecl, EntryPoint = "nuget_kotlin_error_type")]
+  |        [DllImport("$nativeLibraryName", CallingConvention = CallingConvention.Cdecl,
+  |            EntryPoint = "nuget_kotlin_error_type")]
   |        private static extern IntPtr Native_type(IntPtr handle);
   |
-  |        [DllImport("$nativeLibraryName", CallingConvention = CallingConvention.Cdecl, EntryPoint = "nuget_kotlin_error_message")]
+  |        [DllImport("$nativeLibraryName", CallingConvention = CallingConvention.Cdecl,
+  |            EntryPoint = "nuget_kotlin_error_message")]
   |        private static extern IntPtr Native_message(IntPtr handle);
   |
-  |        [DllImport("$nativeLibraryName", CallingConvention = CallingConvention.Cdecl, EntryPoint = "nuget_kotlin_error_stacktrace")]
+  |        [DllImport("$nativeLibraryName", CallingConvention = CallingConvention.Cdecl,
+  |            EntryPoint = "nuget_kotlin_error_stacktrace")]
   |        private static extern IntPtr Native_stacktrace(IntPtr handle);
   |
-  |        [DllImport("$nativeLibraryName", CallingConvention = CallingConvention.Cdecl, EntryPoint = "nuget_kotlin_error_cause_count")]
+  |        [DllImport("$nativeLibraryName", CallingConvention = CallingConvention.Cdecl,
+  |            EntryPoint = "nuget_kotlin_error_cause_count")]
   |        private static extern int Native_causeCount(IntPtr handle);
   |
-  |        [DllImport("$nativeLibraryName", CallingConvention = CallingConvention.Cdecl, EntryPoint = "nuget_kotlin_error_cause_type")]
+  |        [DllImport("$nativeLibraryName", CallingConvention = CallingConvention.Cdecl,
+  |            EntryPoint = "nuget_kotlin_error_cause_type")]
   |        private static extern IntPtr Native_causeType(IntPtr handle, int index);
   |
-  |        [DllImport("$nativeLibraryName", CallingConvention = CallingConvention.Cdecl, EntryPoint = "nuget_kotlin_error_cause_message")]
+  |        [DllImport("$nativeLibraryName", CallingConvention = CallingConvention.Cdecl,
+  |            EntryPoint = "nuget_kotlin_error_cause_message")]
   |        private static extern IntPtr Native_causeMessage(IntPtr handle, int index);
   |
-  |        [DllImport("$nativeLibraryName", CallingConvention = CallingConvention.Cdecl, EntryPoint = "nuget_kotlin_error_cause_stacktrace")]
+  |        [DllImport("$nativeLibraryName", CallingConvention = CallingConvention.Cdecl,
+  |            EntryPoint = "nuget_kotlin_error_cause_stacktrace")]
   |        private static extern IntPtr Native_causeStackTrace(IntPtr handle, int index);
   |
-  |        [DllImport("$nativeLibraryName", CallingConvention = CallingConvention.Cdecl, EntryPoint = "nuget_kotlin_error_free")]
+  |        [DllImport("$nativeLibraryName", CallingConvention = CallingConvention.Cdecl,
+  |            EntryPoint = "nuget_kotlin_error_free")]
   |        private static extern void Native_free(IntPtr handle);
   |
   |        private static string Read(IntPtr ptr)
@@ -2660,26 +2668,27 @@ private fun bridgeCallLines(
   type is RirVoidType -> listOf("$call;") + errorCheckLines(errorNamespace)
   type is RirStringType -> listOf("IntPtr resultPtr = $call;") + errorCheckLines(errorNamespace) +
       listOf(
-    "try",
-    "{",
-    if (type.isNullable) {
-      "    return resultPtr == IntPtr.Zero ? null : Marshal.PtrToStringUTF8(resultPtr);"
-    } else {
-      "    return Marshal.PtrToStringUTF8(resultPtr)!;"
-    },
-    "}",
-    "finally",
-    "{",
-    "    if (resultPtr != IntPtr.Zero) NugetKotlinNative.nuget_kotlin_string_free(resultPtr);",
-    "}",
-  )
+        "try",
+        "{",
+        if (type.isNullable) {
+          "    return resultPtr == IntPtr.Zero ? null : Marshal.PtrToStringUTF8(resultPtr);"
+        } else {
+          "    return Marshal.PtrToStringUTF8(resultPtr)!;"
+        },
+        "}",
+        "finally",
+        "{",
+        "    if (resultPtr != IntPtr.Zero) NugetKotlinNative.nuget_kotlin_string_free(resultPtr);",
+        "}",
+      )
 
   // ADR-086: a handle-backed return is a FRESH transfer handle (Kotlin dup'd it, or minted a
   // bridge). Resolve the target, then free the duplicate; the object itself is rooted by whatever
   // owns it on its own side. Spiked: the read completes before the free in straight-line code, and
   // freeing this handle leaves the original allocated.
   type.isHandleBacked() -> listOf("IntPtr resultPtr = $call;") + errorCheckLines(errorNamespace) +
-      (if (!type.isNullable) emptyList() else listOf("if (resultPtr == IntPtr.Zero) return null;")) +
+      (if (!type.isNullable) emptyList()
+      else listOf("if (resultPtr == IntPtr.Zero) return null;")) +
       listOf(
         "GCHandle resultHandle = GCHandle.FromIntPtr(resultPtr);",
         "try",

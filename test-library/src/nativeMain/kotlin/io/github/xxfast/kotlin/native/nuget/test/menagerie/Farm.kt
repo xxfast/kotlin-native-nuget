@@ -26,8 +26,9 @@ import test.menagerie.IFeedable
 /**
  * A forward-exported class taking/returning [IFeedable] at ordinary parameter and return
  * positions: the ADR-088 v1 scope (non-nullable, ordinary function parameters/returns only, no
- * properties or collections). Named after the animal home a stray joins, mirroring [test.menagerie.Sanctuary]
- * on the reverse side. Two male cats, Oreo and Mylo, already own the ADR-053/070/085 fixtures
+ * properties or collections). Named after the animal home a stray joins, mirroring
+ * [test.menagerie.Sanctuary] on the reverse side. Two male cats, Oreo and Mylo, already own the
+ * ADR-053/070/085 fixtures
  * elsewhere in this package, so `Farm`'s resident is a stray with no name yet until [adopt]
  * gives it one.
  */

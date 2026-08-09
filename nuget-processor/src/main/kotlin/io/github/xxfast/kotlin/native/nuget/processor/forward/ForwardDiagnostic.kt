@@ -246,8 +246,8 @@ internal fun ForwardPlanSkipReason.diagnosticHint(detail: String? = null): Strin
 
   ForwardPlanSkipReason.UNIMPLEMENTABLE_BOUND_INTERFACE ->
     "no mint{Interface}Bridge exists for this bound interface (ADR-085 inadmissible), so a " +
-        "Kotlin implementation of it cannot be handed back to C#; take it as a parameter instead, " +
-        "or return an interface the reverse bindings can bridge"
+        "Kotlin implementation of it cannot be handed back to C#; take it as a parameter " +
+        "instead, or return an interface the reverse bindings can bridge"
 
   else ->
     "expose a bridgeable adapter using only supported parameter/return shapes and export that " +
