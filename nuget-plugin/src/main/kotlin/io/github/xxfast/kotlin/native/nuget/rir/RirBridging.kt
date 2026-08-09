@@ -991,11 +991,18 @@ internal fun fnv1a64(s: String): Long {
   return hash
 }
 
-// ADR-054: nuget_runtime_register has no RirClass/registrable list to hash (the shared GCHandle-
-// free thunk is a fixed, single-slot contract, not derived from reverse-ir.json), so both
-// generators bake this same literal constant rather than each independently re-deriving a "fake"
-// one-element registrable list. Computed via the same fnv1a64 so it is not a magic number.
-val NUGET_RUNTIME_CONTRACT_HASH: Long = fnv1a64("runtime:freeGcHandle(handle:COpaquePointer):Unit")
+// ADR-054: nuget_runtime_register has no RirClass/registrable list to hash (the shared GCHandle
+// thunks are a fixed contract, not derived from reverse-ir.json), so both generators bake this same
+// literal constant rather than each independently re-deriving a "fake" registrable list. Computed
+// via the same fnv1a64 so it is not a magic number.
+// ADR-089: the shared runtime grew from 1 slot to 3 (weaken/resolve joined free), so this string
+// names all three. Both halves regenerate together on every consumer build; a mixed build fails the
+// ADR-054 check loudly at startup instead of mis-assigning pointers.
+val NUGET_RUNTIME_CONTRACT_HASH: Long = fnv1a64(
+  "runtime:freeGcHandle(handle:COpaquePointer):Unit;" +
+      "weakenGcHandle(handle:COpaquePointer):COpaquePointer;" +
+      "resolveGcHandle(handle:COpaquePointer):COpaquePointer"
+)
 
 // Shared registration export-name derivation (ADR-048's naming contract, which ADR-049's C# side
 // must match exactly): "nuget_{ns_snake}_{type_snake}_register". Sharing this function (rather than
@@ -1022,23 +1029,96 @@ fun String.toTypeSnake(): String = buildString {
 // per-slot meaning), so neither task derives its own ordering: both call kotlinBridgePlan.
 data class KotlinBridgePlan(
   val iface: RirInterface,
-  // Exactly the interface's own registration slots, in registration order — the bridge's
+  // The FLATTENED slot list: every inherited base interface's registration slots (depth-first,
+  // bases before own — see kotlinBridgeSlots) followed by this interface's own. The bridge's
   // function-pointer parameters are the same list, so slot i on the Kotlin side is slot i on the
-  // C# side by construction.
+  // C# side by construction. A derived interface needs its bases' slots in its OWN factory: the
+  // C# compiler forces `ITaggedBridge : ITagged` to implement IFeedable's members too, and the
+  // only thing that can serve them is a function pointer this factory received.
   val slots: List<RirRegistrable>,
+  // ADR-086: a slot hands a handle-backed value OUT (a bound-object or bound-interface return or
+  // getter), so this interface registers the extra per-interface `dupHandle` thunk. The out
+  // direction must produce a FRESH transfer handle: the wrapper that owns the original may be
+  // unreachable the instant the slot returns, and its cleaner is free to release it while C# is
+  // still resolving the pointer.
+  // ADR-088 widened this from "some slot has a handle-out position" to *every* plannable
+  // interface: a bound interface can now also be handed out at an ordinary FORWARD return
+  // (`fun resident(): IFeedable`), which is not a slot at all, so slot shape no longer decides.
+  // The cost is one extra registration pointer per interface; both sides derive it from this one
+  // plan, so the ADR-054 contract hash moves in lockstep.
+  val needsDupHandle: Boolean = true,
 )
 
+// ADR-086: the two slot types that ride the ADR-051 GCHandle IntPtr wire and therefore carry
+// object IDENTITY rather than a copied value.
+internal fun RirTypeRef.isHandleBacked(): Boolean =
+  this is RirObjectHandleType || this is RirInterfaceType
+
+// ADR-085 Wave 2: the interfaces whose members a bridge for [iface] must implement, in SLOT
+// ORDER — depth-first over direct bases in DECLARED order, each base emitted before the
+// interface that derives from it, deduped by interface key on first visit (C# interfaces
+// diamond: `IC : IA, IB` where both derive from `IBase` reaches IBase twice).
+//
+// Deliberately NOT effectiveInterfaceRegistrables (NugetGenerateBindingsTask.kt), which is
+// OWN-first and answers a different question: which Bindings object owns the slot a
+// {Derived}Handle dispatches an inherited member through. This one is the bridge factory's
+// parameter order, and it is base-first so appending a member to a derived interface does not
+// renumber its bases' slots.
+fun flattenedBridgeInterfaces(
+  iface: RirInterface,
+  boundInterfaceTypes: Map<RirTypeKey, RirInterface>,
+): List<RirInterface> {
+  val seen: MutableSet<RirTypeKey> = mutableSetOf()
+  // The root's own key, so a (metadata-illegal, but cheap to guard) inheritance cycle terminates
+  // instead of overflowing the stack.
+  boundInterfaceTypes.entries.firstOrNull { it.value == iface }?.let { seen.add(it.key) }
+  val ordered: MutableList<RirInterface> = mutableListOf()
+
+  fun visit(current: RirInterface) {
+    interfaceBaseKeys(current, boundInterfaceTypes)
+      .filter(seen::add)
+      .forEach { visit(boundInterfaceTypes.getValue(it)) }
+    ordered.add(current)
+  }
+
+  visit(iface)
+  return ordered
+}
+
+// The flattened slot list itself. Deduped by member identity as well as by interface: a derived
+// interface may RE-declare a base member (C# `new`), and one C# bridge class can only carry one
+// public member for the two — the base's slot (visited first) serves both.
+fun kotlinBridgeSlots(
+  iface: RirInterface,
+  boundHandleTypes: Set<RirTypeKey>,
+  boundInterfaceTypes: Map<RirTypeKey, RirInterface>,
+): List<RirRegistrable> = flattenedBridgeInterfaces(iface, boundInterfaceTypes)
+  .flatMap { bridgeableInterfaceRegistrables(it, boundHandleTypes, boundInterfaceTypes) }
+  .distinctBy { it.contractSignature(emptyMap()) }
+
 // ADR-085 v1 slot vocabulary: Unit (return only), primitives incl. bool/char, bound enums,
-// String and String?. Handle/interface/struct/generic-typed slots are deferred (they need the
-// GCHandle round trip in the C#->Kotlin direction, which v1 does not wire).
-private fun isKotlinBridgeSlotType(type: RirTypeRef, isReturn: Boolean): Boolean = when (type) {
+// String and String?. ADR-086 adds bound-object handles and bound interfaces (nullable included)
+// at every position: both ride the same ADR-051 GCHandle IntPtr wire the rest of the reverse
+// pipeline already uses. Structs (need abiArgs component expansion at a slot boundary), generic
+// instantiations (witness resolution at a slot position is untested) and type parameters stay
+// out; so do collections, which reach here as RirGenericInstanceType and have no reverse
+// marshalling at ANY position yet (ADR-072).
+//
+// An UNBOUND object/interface type also stays out: there is no generated Kotlin wrapper to hand
+// the slot body, so admitting it would emit source that does not compile.
+private fun isKotlinBridgeSlotType(
+  type: RirTypeRef,
+  isReturn: Boolean,
+  boundHandleTypes: Set<RirTypeKey>,
+  boundInterfaceTypes: Map<RirTypeKey, RirInterface>,
+): Boolean = when (type) {
   is RirVoidType -> isReturn
   is RirPrimitiveType -> true
   is RirEnumType -> true
   is RirStringType -> true
-  is RirObjectHandleType, is RirInterfaceType, is RirStructType,
-  is RirGenericInstanceType, is RirTypeParameterType,
-    -> false
+  is RirObjectHandleType -> RirTypeKey(type.namespace, type.name) in boundHandleTypes
+  is RirInterfaceType -> RirTypeKey(type.namespace, type.name) in boundInterfaceTypes
+  is RirStructType, is RirGenericInstanceType, is RirTypeParameterType -> false
 }
 
 // ADR-085: v1 method arity ceiling (mirrors ADR-084's forward vocabulary).
@@ -1046,28 +1126,36 @@ private const val KOTLIN_BRIDGE_MAX_ARITY: Int = 2
 
 // The reason a member keeps `nugetHandle()`'s error(...) instead of a minted bridge, or null when
 // the member is admissible.
-private fun kotlinBridgeSlotSkipReason(r: RirRegistrable): String? = when (r) {
-  is RirRegistrable.Method -> when {
-    r.method.parameters.size > KOTLIN_BRIDGE_MAX_ARITY ->
-      "arity ${r.method.parameters.size} exceeds the v1 ceiling of $KOTLIN_BRIDGE_MAX_ARITY"
+private fun kotlinBridgeSlotSkipReason(
+  r: RirRegistrable,
+  boundHandleTypes: Set<RirTypeKey>,
+  boundInterfaceTypes: Map<RirTypeKey, RirInterface>,
+): String? {
+  fun admits(type: RirTypeRef, isReturn: Boolean): Boolean =
+    isKotlinBridgeSlotType(type, isReturn, boundHandleTypes, boundInterfaceTypes)
+  return when (r) {
+    is RirRegistrable.Method -> when {
+      r.method.parameters.size > KOTLIN_BRIDGE_MAX_ARITY ->
+        "arity ${r.method.parameters.size} exceeds the v1 ceiling of $KOTLIN_BRIDGE_MAX_ARITY"
 
-    !isKotlinBridgeSlotType(r.method.returnType, isReturn = true) ->
-      "return type ${r.method.returnType.describe()} is outside the v1 slot vocabulary"
+      !admits(r.method.returnType, isReturn = true) ->
+        "return type ${r.method.returnType.describe()} is outside the slot vocabulary"
 
-    else -> r.method.parameters
-      .firstOrNull { !isKotlinBridgeSlotType(it.type, isReturn = false) }
-      ?.let { "parameter `${it.name}: ${it.type.describe()}` is outside the v1 slot vocabulary" }
+      else -> r.method.parameters
+        .firstOrNull { !admits(it.type, isReturn = false) }
+        ?.let { "parameter `${it.name}: ${it.type.describe()}` is outside the slot vocabulary" }
+    }
+
+    is RirRegistrable.PropertyGetter ->
+      if (admits(r.property.type, isReturn = false)) null
+      else "property type ${r.property.type.describe()} is outside the slot vocabulary"
+
+    is RirRegistrable.PropertySetter ->
+      if (admits(r.property.type, isReturn = false)) null
+      else "property type ${r.property.type.describe()} is outside the slot vocabulary"
+
+    is RirRegistrable.Ctor -> "an interface never has a constructor (ADR-070)"
   }
-
-  is RirRegistrable.PropertyGetter ->
-    if (isKotlinBridgeSlotType(r.property.type, isReturn = false)) null
-    else "property type ${r.property.type.describe()} is outside the v1 slot vocabulary"
-
-  is RirRegistrable.PropertySetter ->
-    if (isKotlinBridgeSlotType(r.property.type, isReturn = false)) null
-    else "property type ${r.property.type.describe()} is outside the v1 slot vocabulary"
-
-  is RirRegistrable.Ctor -> "an interface never has a constructor (ADR-070)"
 }
 
 private fun RirRegistrable.memberName(): String = when (this) {
@@ -1089,9 +1177,12 @@ fun kotlinBridgePlan(
     kotlinBridgeDiagnostics(iface, boundHandleTypes, boundInterfaceTypes).isNotEmpty()
   if (hasDiagnostics) return null
   val slots: List<RirRegistrable> =
-    bridgeableInterfaceRegistrables(iface, boundHandleTypes, boundInterfaceTypes)
+    kotlinBridgeSlots(iface, boundHandleTypes, boundInterfaceTypes)
   if (slots.isEmpty()) return null
-  return KotlinBridgePlan(iface, slots)
+  // ADR-088: unconditional. `slots.any { it.hasHandleOutPosition() }` (ADR-086) only covered
+  // reverse slots; a forward return position is not a slot, and any plannable interface can
+  // appear at one.
+  return KotlinBridgePlan(iface, slots, needsDupHandle = true)
 }
 
 // ADR-085: `skipped_kotlin_bridge`, one per reason this interface cannot be implemented in Kotlin
@@ -1101,59 +1192,78 @@ fun kotlinBridgeDiagnostics(
   boundHandleTypes: Set<RirTypeKey>,
   boundInterfaceTypes: Map<RirTypeKey, RirInterface> = emptyMap(),
 ): List<RirDiagnostic> {
-  val hint: String = "Implement it in C# instead, or restrict the member to the ADR-085 v1 slot " +
-      "vocabulary (arity 0-2; Unit/primitive/Boolean/enum/String/String? returns and parameters)."
-  // ADR-085 Deferred: a derived interface needs its base's slots flattened into one factory.
-  if (interfaceBaseKeys(iface, boundInterfaceTypes).isNotEmpty()) {
-    return listOf(
-      RirDiagnostic(
-        kind = RirDiagnosticKind.SKIPPED_KOTLIN_BRIDGE,
-        typeName = iface.name,
-        memberName = "",
-        memberSignature = iface.name,
-        reason = "interface inheritance is deferred: a Kotlin implementer needs the base " +
-            "interface's slots flattened into this interface's factory",
-        hint = hint,
-      ),
-    )
-  }
-  // Members the interface declares but the reverse pipeline never registered at all (ADR-070's
-  // own admissibility) can never be dispatched into a Kotlin object either.
-  val registered: List<RirRegistrable> =
-    bridgeableInterfaceRegistrables(iface, boundHandleTypes, boundInterfaceTypes)
-  val registeredNames: Set<String> = registered.map { it.memberName() }.toSet()
-  val unregistered: List<RirDiagnostic> =
-    (iface.methods.map { it.name } + iface.properties.map { it.name })
-      .distinct()
-      .filterNot { it in registeredNames }
-      .map { name ->
+  val hint: String = "Implement it in C# instead, or restrict the member to the slot vocabulary " +
+      "(arity 0-2; Unit/primitive/Boolean/enum/String/String? per ADR-085, plus bound-object and " +
+      "bound-interface types per ADR-086, nullable included). Collections, structs, generic " +
+      "instantiations and Task members stay out of scope."
+  // ADR-085 Wave 2: a derived interface's bridge implements its bases' members too, so a base
+  // member outside the vocabulary blocks the DERIVED interface's bridge as well — the walk covers
+  // the same flattened interface list kotlinBridgeSlots does.
+  return flattenedBridgeInterfaces(iface, boundInterfaceTypes).flatMap { declaring ->
+    // Members the interface declares but the reverse pipeline never registered at all (ADR-070's
+    // own admissibility) can never be dispatched into a Kotlin object either.
+    val registered: List<RirRegistrable> =
+      bridgeableInterfaceRegistrables(declaring, boundHandleTypes, boundInterfaceTypes)
+    val registeredNames: Set<String> = registered.map { it.memberName() }.toSet()
+    val inherited: String =
+      if (declaring == iface) "" else "inherited from ${declaring.name}: "
+    val unregistered: List<RirDiagnostic> =
+      (declaring.methods.map { it.name } + declaring.properties.map { it.name })
+        .distinct()
+        .filterNot { it in registeredNames }
+        .map { name ->
+          RirDiagnostic(
+            kind = RirDiagnosticKind.SKIPPED_KOTLIN_BRIDGE,
+            typeName = iface.name,
+            memberName = name,
+            memberSignature = "${declaring.name}.$name",
+            reason = inherited + "the member is not bridgeable in the C#->Kotlin direction " +
+                "either (ADR-070 admissibility), so no slot can dispatch it",
+            hint = hint,
+          )
+        }
+    val outOfVocabulary: List<RirDiagnostic> = registered.mapNotNull { r ->
+      kotlinBridgeSlotSkipReason(r, boundHandleTypes, boundInterfaceTypes)?.let { reason ->
         RirDiagnostic(
           kind = RirDiagnosticKind.SKIPPED_KOTLIN_BRIDGE,
           typeName = iface.name,
-          memberName = name,
-          memberSignature = "${iface.name}.$name",
-          reason = "the member is not bridgeable in the C#->Kotlin direction either " +
-              "(ADR-070 admissibility), so no slot can dispatch it",
+          memberName = r.memberName(),
+          memberSignature = "${declaring.name}.${r.memberName()}",
+          reason = inherited + reason,
           hint = hint,
         )
       }
-  val outOfVocabulary: List<RirDiagnostic> = registered.mapNotNull { r ->
-    kotlinBridgeSlotSkipReason(r)?.let { reason ->
-      RirDiagnostic(
-        kind = RirDiagnosticKind.SKIPPED_KOTLIN_BRIDGE,
-        typeName = iface.name,
-        memberName = r.memberName(),
-        memberSignature = "${iface.name}.${r.memberName()}",
-        reason = reason,
-        hint = hint,
-      )
     }
+    unregistered + outOfVocabulary
   }
-  return unregistered + outOfVocabulary
 }
 
 // ADR-085: an interface that plans a bridge registers TWO extra slots (the bridge factory and the
 // identity-token probe) on top of its member slots, so its contract hash must differ from the
 // same interface without them. Both generators derive it through this one function.
-fun kotlinBridgeContractHash(memberHash: Long): Long =
-  memberHash xor fnv1a64("kotlin_bridge_v1:createBridge+bridgeToken")
+//
+// ADR-085 Wave 2: [slots] is the FLATTENED factory signature, hashed in order. [memberHash] alone
+// covers only the interface's OWN registration slots, so without this a BASE interface gaining a
+// member would change the derived factory's ARITY while leaving the derived interface's slotCount
+// and hash untouched — silent ABI drift, the exact class of bug ADR-054's check exists to catch.
+// ADR-086: an interface with a handle-backed out position registers a THIRD extra slot (the dup
+// thunk), so its tag moves to v2 — a v1 shim against a v2 native library (or the reverse) is a
+// loud ADR-054 contract failure instead of a pointer-table mis-assignment.
+fun kotlinBridgeContractHash(memberHash: Long, plan: KotlinBridgePlan): Long =
+  kotlinBridgeContractHash(memberHash, plan.slots, plan.needsDupHandle)
+
+fun kotlinBridgeContractHash(
+  memberHash: Long,
+  slots: List<RirRegistrable>,
+  needsDupHandle: Boolean = false,
+): Long {
+  // ADR-087 stage 2 made the tag uniformly v2: EVERY slot signature gained the trailing error
+  // out-param, an arity change slotCount cannot see, so every interface's hash must move in the
+  // same coordinated bump (a v1 shim against a v2 native library now fails the ADR-054 check
+  // loudly instead of writing an argument into the error slot's register).
+  val extra: String =
+    if (needsDupHandle) "+bridgeToken+dupHandle+err_envelope" else "+bridgeToken+err_envelope"
+  val factory: String = "kotlin_bridge_v2:createBridge(" +
+      slots.joinToString("|") { it.contractSignature(emptyMap()) } + ")$extra"
+  return memberHash xor fnv1a64(factory)
+}

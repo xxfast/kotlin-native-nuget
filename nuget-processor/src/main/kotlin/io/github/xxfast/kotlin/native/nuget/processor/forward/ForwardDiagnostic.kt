@@ -89,6 +89,16 @@ internal enum class ForwardDiagnosticKind(val severity: ForwardDiagnosticSeverit
    *  Distinct from SKIPPED_UNEXPORTED_DEPENDENCY_TYPE, whose `include(...)` hint is wrong here:
    *  a platform library can never be brought into scope. */
   SKIPPED_ACTUAL_TYPEALIAS_TARGET(ForwardDiagnosticSeverity.WARNING),
+
+  /** ADR-088: a bound C# interface (an ADR-070 stub) at a position v1 does not marshal — nullable,
+   *  property, collection component, receiver. Explicitly NOT `SKIPPED_UNSUPPORTED_TYPE`: the type
+   *  is fully bridgeable at ordinary parameter/return positions, so the message names the position
+   *  and the original C# type rather than blaming the type. */
+  SKIPPED_BOUND_TYPE_POSITION(ForwardDiagnosticSeverity.WARNING),
+
+  /** ADR-088: a bound C# interface at a RETURN position with no `mint{Iface}Bridge` (ADR-085
+   *  inadmissible), so a Kotlin implementation of it cannot be handed back to C#. */
+  SKIPPED_UNIMPLEMENTABLE_BOUND_INTERFACE(ForwardDiagnosticSeverity.WARNING),
 }
 
 /**
@@ -157,6 +167,12 @@ internal fun ForwardPlanSkipReason.toDiagnosticKind(): ForwardDiagnosticKind = w
   ForwardPlanSkipReason.ACTUAL_TYPEALIAS_TARGET ->
     ForwardDiagnosticKind.SKIPPED_ACTUAL_TYPEALIAS_TARGET
 
+  ForwardPlanSkipReason.BOUND_INTERFACE_POSITION ->
+    ForwardDiagnosticKind.SKIPPED_BOUND_TYPE_POSITION
+
+  ForwardPlanSkipReason.UNIMPLEMENTABLE_BOUND_INTERFACE ->
+    ForwardDiagnosticKind.SKIPPED_UNIMPLEMENTABLE_BOUND_INTERFACE
+
   ForwardPlanSkipReason.CHAR,
   ForwardPlanSkipReason.ENUM,
   ForwardPlanSkipReason.HANDLE,
@@ -222,6 +238,16 @@ internal fun ForwardPlanSkipReason.diagnosticHint(detail: String? = null): Strin
   ForwardPlanSkipReason.INHERITED_MEMBER ->
     "declare the member directly on the value class itself instead of relying on interface " +
         "delegation"
+
+  ForwardPlanSkipReason.BOUND_INTERFACE_POSITION ->
+    "ADR-088 v1 marshals a bound C# interface at ordinary, non-nullable function/method/" +
+        "constructor parameters and method/function returns only; expose one of those instead of " +
+        "a nullable, property or collection-component position"
+
+  ForwardPlanSkipReason.UNIMPLEMENTABLE_BOUND_INTERFACE ->
+    "no mint{Interface}Bridge exists for this bound interface (ADR-085 inadmissible), so a " +
+        "Kotlin implementation of it cannot be handed back to C#; take it as a parameter " +
+        "instead, or return an interface the reverse bindings can bridge"
 
   else ->
     "expose a bridgeable adapter using only supported parameter/return shapes and export that " +

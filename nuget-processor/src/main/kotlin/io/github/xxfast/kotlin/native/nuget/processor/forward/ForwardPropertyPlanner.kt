@@ -32,6 +32,11 @@ internal data class ForwardDroppedProperty(
   val symbol: String,
   val node: KSNode?,
   val typeDescription: String,
+  /** ADR-088: the declared type is a bound C# interface, which v1 marshals at ordinary
+   *  parameter/return positions but not at a property. Routes the diagnostic to the named
+   *  `SKIPPED_BOUND_TYPE_POSITION` kind instead of the generic unsupported-property one, whose
+   *  "expose a property whose type is not IFeedable" hint would be actively misleading. */
+  val boundInterface: Boolean = false,
 )
 
 /**
@@ -366,7 +371,12 @@ internal class ForwardPropertyPlanner(
       protocol.name.startsWith(prefix)
     }
     if (isLegacyRouted) return
-    dropped.add(ForwardDroppedProperty(symbol, prop, type.diagnosticTypeName()))
+    dropped.add(
+      ForwardDroppedProperty(
+        symbol, prop, type.diagnosticTypeName(),
+        boundInterface = type.unwrapNullable() is BridgeType.BoundInterface,
+      )
+    )
   }
 
   /** A short, human-readable name for a diagnostic message — never used to drive marshalling. */
@@ -379,6 +389,7 @@ internal class ForwardPropertyPlanner(
     is BridgeType.Enum -> qualifiedName.substringAfterLast('.')
     is BridgeType.ObjectHandle -> qualifiedName.substringAfterLast('.')
     is BridgeType.Interface -> qualifiedName.substringAfterLast('.')
+    is BridgeType.BoundInterface -> qualifiedName.substringAfterLast('.')
     is BridgeType.ValueClass -> qualifiedName.substringAfterLast('.')
     is BridgeType.Collection -> "Collection"
     is BridgeType.Nullable -> "${type.diagnosticTypeName()}?"

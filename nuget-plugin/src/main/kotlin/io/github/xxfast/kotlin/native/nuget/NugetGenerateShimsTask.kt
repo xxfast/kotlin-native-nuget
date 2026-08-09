@@ -40,6 +40,7 @@ import io.github.xxfast.kotlin.native.nuget.rir.bridgeSuffix
 import io.github.xxfast.kotlin.native.nuget.rir.contractHash
 import io.github.xxfast.kotlin.native.nuget.rir.fnv1a64
 import io.github.xxfast.kotlin.native.nuget.rir.isNullable
+import io.github.xxfast.kotlin.native.nuget.rir.isHandleBacked
 import io.github.xxfast.kotlin.native.nuget.rir.kotlinBridgeContractHash
 import io.github.xxfast.kotlin.native.nuget.rir.kotlinBridgePlan
 import io.github.xxfast.kotlin.native.nuget.rir.parseReverseIr
@@ -71,7 +72,14 @@ import java.io.File
 // Exception behaviour (ADR-049 "let it crash"): thunk bodies never catch. A thrown C# exception
 // escapes the [UnmanagedCallersOnly] method and fast-fails the host process — this is deliberate,
 // not an oversight; do not "harden" a thunk with try/catch (see ADR-049 Consequences).
-fun generateCSharpShims(file: RirFile, nativeLibraryName: String): List<GeneratedFile> {
+// [errorNamespace] (ADR-087 stage 2) is the FORWARD bindings' C# namespace, i.e. the publish
+// packageId. Defaulted so every existing caller (and the generator tests) keeps compiling; the
+// Gradle task passes the configured value.
+fun generateCSharpShims(
+  file: RirFile,
+  nativeLibraryName: String,
+  errorNamespace: String = "",
+): List<GeneratedFile> {
   val result: MutableList<GeneratedFile> = mutableListOf()
   var needsRuntime = false
 
@@ -193,6 +201,7 @@ fun generateCSharpShims(file: RirFile, nativeLibraryName: String): List<Generate
           GeneratedFile(
             relativePath = "${iface.name}Registration.cs",
             content = interfaceRegistrationFileContent(
+              errorNamespace = errorNamespace,
               namespaceName = namespace.name,
               iface = iface,
               registrables = registrables,
@@ -210,7 +219,7 @@ fun generateCSharpShims(file: RirFile, nativeLibraryName: String): List<Generate
     result.add(
       GeneratedFile(
         relativePath = "NugetRuntimeRegistration.cs",
-        content = nugetRuntimeRegistrationContent(nativeLibraryName),
+        content = nugetRuntimeRegistrationContent(nativeLibraryName, errorNamespace),
       )
     )
   }
@@ -1143,6 +1152,7 @@ private fun registrationFileContent(
 // class — the exact mechanism verified in the ADR's spike: a thunk may dispatch through any
 // interface, including to a runtime type it never names.
 private fun interfaceRegistrationFileContent(
+  errorNamespace: String,
   namespaceName: String,
   iface: RirInterface,
   registrables: List<RirRegistrable>,
@@ -1150,7 +1160,10 @@ private fun interfaceRegistrationFileContent(
   nativeLibraryName: String,
   bridgePlan: KotlinBridgePlan? = null,
 ): String {
-  val enumNamespaces: List<String> = registrables.flatMap { r ->
+  // ADR-085 Wave 2: the bridge class implements the FLATTENED slot list, so an inherited
+  // enum-typed member needs its declaring namespace's using here even when no own registration
+  // slot names that enum.
+  val enumNamespaces: List<String> = (registrables + bridgePlan?.slots.orEmpty()).flatMap { r ->
     when (r) {
       is RirRegistrable.Method -> listOfNotNull(r.method.returnType as? RirEnumType) +
           r.method.parameters.mapNotNull { it.type as? RirEnumType }
@@ -1171,8 +1184,14 @@ private fun interfaceRegistrationFileContent(
   // ADR-085: a plannable interface registers two extra trailing slots (bridge factory + identity
   // token probe). Both numbers come off the shared planner/hash, never re-derived here.
   val memberHash: Long = contractHash(iface.name, registrables, emptyMap())
-  val slotCount: Int = registrables.size + if (bridgePlan == null) 0 else 2
-  val hash: Long = if (bridgePlan == null) memberHash else kotlinBridgeContractHash(memberHash)
+  val extraSlots: Int = when {
+    bridgePlan == null -> 0
+    bridgePlan.needsDupHandle -> 3
+    else -> 2
+  }
+  val slotCount: Int = registrables.size + extraSlots
+  val hash: Long =
+    if (bridgePlan == null) memberHash else kotlinBridgeContractHash(memberHash, bridgePlan)
   val qualifiedType = "$namespaceName.${iface.name}"
   val slotWord: String = if (slotCount == 1) "slot" else "slots"
 
@@ -1186,8 +1205,14 @@ private fun interfaceRegistrationFileContent(
       is RirRegistrable.Ctor -> error("[nuget] an interface never has a constructor (ADR-070)")
     }
   }
-  val bridgeParams: String =
-    if (bridgePlan == null) "" else ", IntPtr createBridgePtr, IntPtr bridgeTokenPtr"
+  val bridgeParams: String = when {
+    bridgePlan == null -> ""
+    // ADR-086: the dup thunk is a THIRD extra slot, appended after the ADR-085 pair.
+    bridgePlan.needsDupHandle ->
+      ", IntPtr createBridgePtr, IntPtr bridgeTokenPtr, IntPtr dupHandlePtr"
+
+    else -> ", IntPtr createBridgePtr, IntPtr bridgeTokenPtr"
+  }
   val dllImportParams = "int slotCount, long contractHash, $registrableParams$bridgeParams"
 
   // ADR-085: the two extra slots, appended in the SAME order the Kotlin register export declares
@@ -1198,6 +1223,8 @@ private fun interfaceRegistrationFileContent(
     listOf(
       "(IntPtr)(delegate* unmanaged[Cdecl]<$factoryParams>)(&Create${iface.name}Bridge)",
       "(IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, IntPtr>)(&${iface.name}KotlinToken)",
+    ) + if (!bridgePlan.needsDupHandle) emptyList() else listOf(
+      "(IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, IntPtr>)(&${iface.name}DupHandle)",
     )
   }
 
@@ -1233,7 +1260,7 @@ private fun interfaceRegistrationFileContent(
       is RirRegistrable.PropertySetter -> buildInterfacePropertySetterThunk(iface, r.property)
       is RirRegistrable.Ctor -> error("[nuget] an interface never has a constructor (ADR-070)")
     }
-  }) + if (bridgePlan == null) "" else "\n\n" + kotlinBridgeCsharp(bridgePlan)
+  }) + if (bridgePlan == null) "" else "\n\n" + kotlinBridgeCsharp(bridgePlan, errorNamespace)
 
   return """
     |// <auto-generated>
@@ -2135,7 +2162,17 @@ private fun buildStructCtorThunkMethod(
 // ADR-051: NugetRuntimeRegistration.cs — emitted once per generateCSharpShims run when any
 // handle type appears in the IR. Registers the shared GCHandle.Free thunk so Kotlin's Cleaner
 // and close() can release handles without a static P/Invoke (ADR-041 registration table).
-private fun nugetRuntimeRegistrationContent(nativeLibraryName: String): String = """
+private fun nugetRuntimeRegistrationContent(
+  nativeLibraryName: String,
+  errorNamespace: String,
+): String {
+  // ADR-087 stage 2 wiring: the exception TYPES are the forward-generated PUBLIC KotlinException
+  // family (one hierarchy for consumers, whichever direction threw); only the envelope READ is
+  // reverse-owned, because the reverse Kotlin cannot see the forward NugetError class across the
+  // source-set boundary. Unqualified when no publish {} configured a forward namespace: an
+  // unresolved name is a loud compile error, never a swallowed exception.
+  val ex: String = if (errorNamespace.isEmpty()) "" else "$errorNamespace."
+  return """
   |// <auto-generated>
   |// Generated by nugetGenerateShims (ADR-051). Do not edit by hand.
   |// Shared runtime registration for GCHandle freeing.
@@ -2152,19 +2189,22 @@ private fun nugetRuntimeRegistrationContent(nativeLibraryName: String): String =
   |    {
   |        [DllImport("$nativeLibraryName", CallingConvention = CallingConvention.Cdecl,
   |            EntryPoint = "nuget_runtime_register")]
-  |        private static extern void nuget_runtime_register(int slotCount, long contractHash, IntPtr freeGcHandlePtr);
+  |        private static extern void nuget_runtime_register(int slotCount, long contractHash,
+  |            IntPtr freeGcHandlePtr, IntPtr weakenGcHandlePtr, IntPtr resolveGcHandlePtr);
   |
   |        [ModuleInitializer]
   |        internal static unsafe void Initialize()
   |        {
   |            NugetTrace.Write(
-  |                "register enter <runtime> -> nuget_runtime_register(1 slot) dll=$nativeLibraryName");
+  |                "register enter <runtime> -> nuget_runtime_register(3 slots) dll=$nativeLibraryName");
   |            try
   |            {
   |                nuget_runtime_register(
-  |                    1,
+  |                    3,
   |                    ${NUGET_RUNTIME_CONTRACT_HASH}L,
-  |                    (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, void>)(&FreeGcHandle_Thunk));
+  |                    (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, void>)(&FreeGcHandle_Thunk),
+  |                    (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, IntPtr>)(&WeakenGcHandle_Thunk),
+  |                    (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, IntPtr>)(&ResolveGcHandle_Thunk));
   |            }
   |            catch (DllNotFoundException e)
   |            {
@@ -2184,6 +2224,21 @@ private fun nugetRuntimeRegistrationContent(nativeLibraryName: String): String =
   |        // CLR attaches unknown native threads automatically on entry.
   |        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
   |        private static void FreeGcHandle_Thunk(IntPtr handle) => GCHandle.FromIntPtr(handle).Free();
+  |
+  |        // ADR-089: a weak GCHandle to the same target, for Kotlin's per-interface bridge reuse
+  |        // table. Spike-verified: a weak handle does not root the bridge, so the table cannot
+  |        // re-create the cross-runtime strong cycle that falsified ADR-084's reuse design.
+  |        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+  |        private static IntPtr WeakenGcHandle_Thunk(IntPtr strong) =>
+  |            GCHandle.ToIntPtr(GCHandle.Alloc(GCHandle.FromIntPtr(strong).Target, GCHandleType.Weak));
+  |
+  |        // ADR-089: a fresh strong TRANSFER handle to the weak handle's target, or Zero once the
+  |        // .NET GC collected it — the signal for Kotlin to mint a new bridge.
+  |        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+  |        private static IntPtr ResolveGcHandle_Thunk(IntPtr weak) =>
+  |            GCHandle.FromIntPtr(weak).Target is object target
+  |                ? GCHandle.ToIntPtr(GCHandle.Alloc(target))
+  |                : IntPtr.Zero;
   |    }
   |
   |    // ADR-085: the two shared Kotlin exports a minted bridge calls. Neither is registered: both
@@ -2224,8 +2279,91 @@ private fun nugetRuntimeRegistrationContent(nativeLibraryName: String): String =
   |            return true;
   |        }
   |    }
+  |
+  |    // ADR-087 stage 2: reads a Kotlin slot's error envelope and maps it onto the SAME ADR-029
+  |    // exception hierarchy a forward call throws. The READ is reverse-owned (the reverse Kotlin
+  |    // owns its own envelope class, see NugetRuntime.kt, because it cannot see the forward
+  |    // NugetError across the source-set boundary); the THROWN types are the forward PUBLIC ones,
+  |    // so a consumer writes one catch for both directions.
+  |    internal static class NugetKotlinErrors
+  |    {
+  |        [DllImport("$nativeLibraryName", CallingConvention = CallingConvention.Cdecl,
+  |            EntryPoint = "nuget_kotlin_error_type")]
+  |        private static extern IntPtr Native_type(IntPtr handle);
+  |
+  |        [DllImport("$nativeLibraryName", CallingConvention = CallingConvention.Cdecl,
+  |            EntryPoint = "nuget_kotlin_error_message")]
+  |        private static extern IntPtr Native_message(IntPtr handle);
+  |
+  |        [DllImport("$nativeLibraryName", CallingConvention = CallingConvention.Cdecl,
+  |            EntryPoint = "nuget_kotlin_error_stacktrace")]
+  |        private static extern IntPtr Native_stacktrace(IntPtr handle);
+  |
+  |        [DllImport("$nativeLibraryName", CallingConvention = CallingConvention.Cdecl,
+  |            EntryPoint = "nuget_kotlin_error_cause_count")]
+  |        private static extern int Native_causeCount(IntPtr handle);
+  |
+  |        [DllImport("$nativeLibraryName", CallingConvention = CallingConvention.Cdecl,
+  |            EntryPoint = "nuget_kotlin_error_cause_type")]
+  |        private static extern IntPtr Native_causeType(IntPtr handle, int index);
+  |
+  |        [DllImport("$nativeLibraryName", CallingConvention = CallingConvention.Cdecl,
+  |            EntryPoint = "nuget_kotlin_error_cause_message")]
+  |        private static extern IntPtr Native_causeMessage(IntPtr handle, int index);
+  |
+  |        [DllImport("$nativeLibraryName", CallingConvention = CallingConvention.Cdecl,
+  |            EntryPoint = "nuget_kotlin_error_cause_stacktrace")]
+  |        private static extern IntPtr Native_causeStackTrace(IntPtr handle, int index);
+  |
+  |        [DllImport("$nativeLibraryName", CallingConvention = CallingConvention.Cdecl,
+  |            EntryPoint = "nuget_kotlin_error_free")]
+  |        private static extern void Native_free(IntPtr handle);
+  |
+  |        private static string Read(IntPtr ptr)
+  |        {
+  |            if (ptr == IntPtr.Zero) return string.Empty;
+  |            try { return Marshal.PtrToStringUTF8(ptr) ?? string.Empty; }
+  |            finally { NugetKotlinNative.nuget_kotlin_string_free(ptr); }
+  |        }
+  |
+  |        internal static Exception Build(IntPtr errorPtr)
+  |        {
+  |            int causeCount = Native_causeCount(errorPtr);
+  |            Exception? inner = null;
+  |            for (int i = causeCount - 1; i >= 1; i--)
+  |            {
+  |                inner = Map(
+  |                    Read(Native_causeType(errorPtr, i)),
+  |                    Read(Native_causeMessage(errorPtr, i)),
+  |                    Read(Native_causeStackTrace(errorPtr, i)),
+  |                    inner);
+  |            }
+  |            string kotlinType = Read(Native_type(errorPtr));
+  |            string message = Read(Native_message(errorPtr));
+  |            string stackTrace = Read(Native_stacktrace(errorPtr));
+  |            Native_free(errorPtr);
+  |            return Map(kotlinType, message, stackTrace, inner);
+  |        }
+  |
+  |        // Mirrors the forward BuildMapped switch (ADR-029). Duplicated, not shared: the forward
+  |        // one is `private`. If the forward table gains a row, add it here too.
+  |        private static Exception Map(string kotlinType, string message, string stackTrace, Exception? inner) =>
+  |            kotlinType switch
+  |            {
+  |                "kotlin.IllegalArgumentException" => new ${ex}KotlinArgumentException(kotlinType, message, stackTrace, inner),
+  |                "kotlin.IllegalStateException" => new ${ex}KotlinInvalidOperationException(kotlinType, message, stackTrace, inner),
+  |                "kotlin.NoSuchElementException" => new ${ex}KotlinInvalidOperationException(kotlinType, message, stackTrace, inner),
+  |                "kotlin.ConcurrentModificationException" => new ${ex}KotlinInvalidOperationException(kotlinType, message, stackTrace, inner),
+  |                "kotlin.UnsupportedOperationException" => new ${ex}KotlinNotSupportedException(kotlinType, message, stackTrace, inner),
+  |                "kotlin.ClassCastException" => new ${ex}KotlinInvalidCastException(kotlinType, message, stackTrace, inner),
+  |                "kotlin.ArithmeticException" => new ${ex}KotlinArithmeticException(kotlinType, message, stackTrace, inner),
+  |                "kotlin.NumberFormatException" => new ${ex}KotlinFormatException(kotlinType, message, stackTrace, inner),
+  |                _ => new ${ex}KotlinException(kotlinType, message, stackTrace, inner)
+  |            };
+  |    }
   |}
 """.trimMargin().trim()
+}
 
 // ADR-054: NugetTrace.cs — the opt-in registration trace sink, C# side. Emitted once per
 // generateCSharpShims run, whenever anything else is (every generated [ModuleInitializer]
@@ -2282,6 +2420,14 @@ abstract class NugetGenerateShimsTask : DefaultTask() {
   @get:Input
   abstract val nativeLibraryName: Property<String>
 
+  // ADR-087 stage 2: the FORWARD bindings' C# namespace (the publish packageId), whose
+  // NugetErrorNative.BuildException maps a slot's error envelope onto the same ADR-029 exception
+  // hierarchy a forward call throws. Empty when the project has no `publish {}` block, in which
+  // case no forward Interop.cs exists to reuse and the generated members keep their pre-stage-2
+  // shape.
+  @get:Input
+  abstract val forwardNamespace: Property<String>
+
   @get:OutputDirectory
   abstract val csharpOutputDir: DirectoryProperty
 
@@ -2292,6 +2438,7 @@ abstract class NugetGenerateShimsTask : DefaultTask() {
     val files: List<GeneratedFile> = generateCSharpShims(
       file = rir,
       nativeLibraryName = nativeLibraryName.get(),
+      errorNamespace = forwardNamespace.get(),
     )
 
     val outputDir: File = csharpOutputDir.get().asFile
@@ -2308,7 +2455,7 @@ abstract class NugetGenerateShimsTask : DefaultTask() {
 // thunk Kotlin invokes to build one and the identity-token probe Kotlin's return path uses to
 // recover the original Kotlin object. Slot order comes from the SAME KotlinBridgePlan the Kotlin
 // generator projects, so field i here is `staticCFunction` i there.
-private fun kotlinBridgeCsharp(plan: KotlinBridgePlan): String {
+private fun kotlinBridgeCsharp(plan: KotlinBridgePlan, errorNamespace: String): String {
   val iface: String = plan.iface.name
   val bridge = "${iface}Bridge"
   val fields: List<Pair<String, String>> = plan.slots.map { slotFieldName(it) to slotFnPtrType(it) }
@@ -2319,13 +2466,28 @@ private fun kotlinBridgeCsharp(plan: KotlinBridgePlan): String {
       "IntPtr ctx").joinToString(", ")
   val ctorAssignments: String = (fields.map { (name, _) -> "$name = ${name.removePrefix("_")};" } +
       "_ctx = new KotlinRefHandle(ctx);").joinToString("\n") { "                $it" }
-  val members: String = bridgeMembers(plan).joinToString("\n\n")
+  val members: String = bridgeMembers(plan, errorNamespace).joinToString("\n\n")
 
   val factoryParams: String = (plan.slots.map { "IntPtr ${slotFieldName(it).removePrefix("_")}" } +
       "IntPtr ctx").joinToString(", ")
   val factoryArgs: String = (fields.map { (name, type) ->
     "($type)${name.removePrefix("_")}"
   } + "ctx").joinToString(", ")
+
+  // ADR-086: Kotlin calls this to turn the GCHandle a wrapper OWNS into an independent transfer
+  // handle it can hand out of a slot. Spiked (scratchpad console app, this feature's round):
+  // GCHandle.Alloc(GCHandle.FromIntPtr(h).Target) resolves to the SAME instance, and freeing the
+  // duplicate leaves the original allocated — so the Kotlin wrapper's cleaner is unaffected.
+  val dupThunk: String = if (!plan.needsDupHandle) "" else "\n" + """
+    |
+    |        // ADR-086: an INDEPENDENT GCHandle for the same object. The caller (the C# bridge
+    |        // member receiving a slot's return value) frees this one; the original stays valid.
+    |        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+    |        private static IntPtr ${iface}DupHandle(IntPtr handle) =>
+    |            handle == IntPtr.Zero
+    |                ? IntPtr.Zero
+    |                : GCHandle.ToIntPtr(GCHandle.Alloc(GCHandle.FromIntPtr(handle).Target));
+  """.trimMargin()
 
   return """
     |        // ADR-085: a Kotlin object implementing $iface, seen by C# as a real $iface.
@@ -2358,7 +2520,7 @@ private fun kotlinBridgeCsharp(plan: KotlinBridgePlan): String {
     |        private static IntPtr ${iface}KotlinToken(IntPtr handle) =>
     |            GCHandle.FromIntPtr(handle).Target is INugetKotlinBridge bridge
     |                ? bridge.NugetToken
-    |                : IntPtr.Zero;
+    |                : IntPtr.Zero;$dupThunk
   """.trimMargin()
 }
 
@@ -2371,15 +2533,21 @@ private fun slotFieldName(slot: RirRegistrable): String = when (slot) {
   is RirRegistrable.Ctor -> error("[nuget] an interface never has a constructor (ADR-070)")
 }
 
+// ADR-087 stage 2: "IntPtr*", the trailing error out-param, sits immediately before the return
+// type on every slot (the Kotlin `errOut` is the last VALUE parameter; a function-pointer type
+// spells its return last).
 private fun slotFnPtrType(slot: RirRegistrable): String {
   val signature: List<String> = when (slot) {
     is RirRegistrable.Method -> listOf("IntPtr") +
         slot.method.parameters.map { csAbiType(it.type) } +
+        "IntPtr*" +
         csAbiType(slot.method.returnType)
 
-    is RirRegistrable.PropertyGetter -> listOf("IntPtr", csAbiType(slot.property.type))
+    is RirRegistrable.PropertyGetter ->
+      listOf("IntPtr", "IntPtr*", csAbiType(slot.property.type))
+
     is RirRegistrable.PropertySetter ->
-      listOf("IntPtr", csAbiType(slot.property.type), "void")
+      listOf("IntPtr", csAbiType(slot.property.type), "IntPtr*", "void")
 
     is RirRegistrable.Ctor -> error("[nuget] an interface never has a constructor (ADR-070)")
   }
@@ -2388,15 +2556,15 @@ private fun slotFnPtrType(slot: RirRegistrable): String {
 
 // One C# member per slot, except a settable property, whose getter+setter slots render as ONE
 // property with both accessors (the same grouping the Kotlin side applies, mirrored).
-private fun bridgeMembers(plan: KotlinBridgePlan): List<String> {
+private fun bridgeMembers(plan: KotlinBridgePlan, errorNamespace: String): List<String> {
   val setterSlots: Map<String, RirRegistrable.PropertySetter> = plan.slots
     .filterIsInstance<RirRegistrable.PropertySetter>()
     .associateBy { it.property.name }
   return plan.slots.mapNotNull { slot ->
     when (slot) {
-      is RirRegistrable.Method -> bridgeMethodMember(slot)
+      is RirRegistrable.Method -> bridgeMethodMember(slot, errorNamespace)
       is RirRegistrable.PropertyGetter ->
-        bridgePropertyMember(slot, setterSlots[slot.property.name])
+        bridgePropertyMember(slot, setterSlots[slot.property.name], errorNamespace)
 
       is RirRegistrable.PropertySetter -> null
       is RirRegistrable.Ctor -> error("[nuget] an interface never has a constructor (ADR-070)")
@@ -2404,7 +2572,7 @@ private fun bridgeMembers(plan: KotlinBridgePlan): List<String> {
   }
 }
 
-private fun bridgeMethodMember(slot: RirRegistrable.Method): String {
+private fun bridgeMethodMember(slot: RirRegistrable.Method, errorNamespace: String): String {
   val method = slot.method
   val params: String = method.parameters.joinToString(", ") { p ->
     "${csNativeType(p.type)}${if (p.type.isNullable) "?" else ""} ${p.name}"
@@ -2416,10 +2584,10 @@ private fun bridgeMethodMember(slot: RirRegistrable.Method): String {
     "IntPtr ${p.name}Ptr = Marshal.StringToCoTaskMemUTF8(${p.name});"
   }
   val args: String = (listOf("_ctx.DangerousGetHandle()") +
-      method.parameters.map { bridgeArgExpression(it.type, it.name) }).joinToString(", ")
+      method.parameters.map { bridgeArgExpression(it.type, it.name) } + "&err").joinToString(", ")
   val call = "${slotFieldName(slot)}($args)"
-  val core: List<String> = bridgeCallLines(method.returnType, call)
-  val body: List<String> = if (stringParams.isEmpty()) prologue + core else
+  val core: List<String> = bridgeCallLines(method.returnType, call, errorNamespace)
+  val body: List<String> = ERR_SLOT_DECL + if (stringParams.isEmpty()) prologue + core else
     prologue + listOf("try", "{") + core.map { "    $it" } + listOf("}", "finally", "{") +
         stringParams.map { "    Marshal.FreeCoTaskMem(${it.name}Ptr);" } + listOf("}")
   return """
@@ -2433,11 +2601,14 @@ private fun bridgeMethodMember(slot: RirRegistrable.Method): String {
 private fun bridgePropertyMember(
   getter: RirRegistrable.PropertyGetter,
   setter: RirRegistrable.PropertySetter?,
+  errorNamespace: String,
 ): String {
   val type: String =
     csNativeType(getter.property.type) + if (getter.property.type.isNullable) "?" else ""
-  val getBody: List<String> =
-    bridgeCallLines(getter.property.type, "${slotFieldName(getter)}(_ctx.DangerousGetHandle())")
+  val getBody: List<String> = ERR_SLOT_DECL + bridgeCallLines(
+    getter.property.type, "${slotFieldName(getter)}(_ctx.DangerousGetHandle(), &err)",
+    errorNamespace,
+  )
   val getBlock: String = """
     |                get
     |                {
@@ -2448,11 +2619,12 @@ private fun bridgePropertyMember(
     val isString: Boolean = setter.property.type is RirStringType
     val call =
       "${slotFieldName(setter)}(_ctx.DangerousGetHandle(), " +
-          "${bridgeArgExpression(setter.property.type, "value")});"
-    val lines: List<String> = if (!isString) listOf(call) else listOf(
+          "${bridgeArgExpression(setter.property.type, "value")}, &err);"
+    val check: List<String> = errorCheckLines(errorNamespace)
+    val lines: List<String> = ERR_SLOT_DECL + if (!isString) listOf(call) + check else listOf(
       "IntPtr valuePtr = Marshal.StringToCoTaskMemUTF8(value);",
       "try", "{", "    $call", "}", "finally", "{", "    Marshal.FreeCoTaskMem(valuePtr);", "}",
-    )
+    ) + check
     "\n" + """
       |                set
       |                {
@@ -2475,31 +2647,84 @@ private fun bridgeArgExpression(type: RirTypeRef, name: String): String = when {
   type is RirEnumType -> "(int)$name"
   type is RirPrimitiveType && type.name == "bool" -> "$name ? (byte)1 : (byte)0"
   type is RirPrimitiveType && type.name == "char" -> "(ushort)$name"
+  // ADR-086: a handle-backed argument TRANSFERS to Kotlin — the Kotlin slot wraps it and the
+  // wrapper's cleaner frees it through the shared freeGcHandle thunk. C# must NOT free it here:
+  // a Kotlin implementation storing what it received (the normal reason a member takes an object)
+  // would otherwise hold a wrapper over a released GCHandle.
+  type.isHandleBacked() && type.isNullable ->
+    "$name is null ? IntPtr.Zero : GCHandle.ToIntPtr(GCHandle.Alloc($name))"
+
+  type.isHandleBacked() -> "GCHandle.ToIntPtr(GCHandle.Alloc($name))"
   else -> name
 }
 
 // Kotlin -> C#: the call plus the conversion of its wire result, as statements (a string return
 // needs the free of Kotlin's native-heap buffer, so it cannot be a single expression).
-private fun bridgeCallLines(type: RirTypeRef, call: String): List<String> = when {
-  type is RirVoidType -> listOf("$call;")
-  type is RirStringType -> listOf(
-    "IntPtr resultPtr = $call;",
-    "try",
-    "{",
-    if (type.isNullable) {
-      "    return resultPtr == IntPtr.Zero ? null : Marshal.PtrToStringUTF8(resultPtr);"
-    } else {
-      "    return Marshal.PtrToStringUTF8(resultPtr)!;"
-    },
-    "}",
-    "finally",
-    "{",
-    "    if (resultPtr != IntPtr.Zero) NugetKotlinNative.nuget_kotlin_string_free(resultPtr);",
-    "}",
-  )
+private fun bridgeCallLines(
+  type: RirTypeRef,
+  call: String,
+  errorNamespace: String,
+): List<String> = when {
+  type is RirVoidType -> listOf("$call;") + errorCheckLines(errorNamespace)
+  type is RirStringType -> listOf("IntPtr resultPtr = $call;") + errorCheckLines(errorNamespace) +
+      listOf(
+        "try",
+        "{",
+        if (type.isNullable) {
+          "    return resultPtr == IntPtr.Zero ? null : Marshal.PtrToStringUTF8(resultPtr);"
+        } else {
+          "    return Marshal.PtrToStringUTF8(resultPtr)!;"
+        },
+        "}",
+        "finally",
+        "{",
+        "    if (resultPtr != IntPtr.Zero) NugetKotlinNative.nuget_kotlin_string_free(resultPtr);",
+        "}",
+      )
 
-  type is RirEnumType -> listOf("return (${csNativeType(type)})$call;")
-  type is RirPrimitiveType && type.name == "bool" -> listOf("return $call != 0;")
-  type is RirPrimitiveType && type.name == "char" -> listOf("return (char)$call;")
-  else -> listOf("return $call;")
+  // ADR-086: a handle-backed return is a FRESH transfer handle (Kotlin dup'd it, or minted a
+  // bridge). Resolve the target, then free the duplicate; the object itself is rooted by whatever
+  // owns it on its own side. Spiked: the read completes before the free in straight-line code, and
+  // freeing this handle leaves the original allocated.
+  type.isHandleBacked() -> listOf("IntPtr resultPtr = $call;") + errorCheckLines(errorNamespace) +
+      (if (!type.isNullable) emptyList()
+      else listOf("if (resultPtr == IntPtr.Zero) return null;")) +
+      listOf(
+        "GCHandle resultHandle = GCHandle.FromIntPtr(resultPtr);",
+        "try",
+        "{",
+        "    return (${csNativeType(type)})resultHandle.Target!;",
+        "}",
+        "finally",
+        "{",
+        "    resultHandle.Free();",
+        "}",
+      )
+
+  // Every scalar cell: land the wire value in a local, check the error slot, then convert. A
+  // thrown slot returns a dummy (0/false/null), so interpreting it before the check would hand the
+  // caller a fabricated value in place of an exception.
+  type is RirEnumType -> listOf("${csAbiType(type)} result = $call;") +
+      errorCheckLines(errorNamespace) + listOf("return (${csNativeType(type)})result;")
+
+  type is RirPrimitiveType && type.name == "bool" -> listOf("byte result = $call;") +
+      errorCheckLines(errorNamespace) + listOf("return result != 0;")
+
+  type is RirPrimitiveType && type.name == "char" -> listOf("ushort result = $call;") +
+      errorCheckLines(errorNamespace) + listOf("return (char)result;")
+
+  else -> listOf("${csAbiType(type)} result = $call;") + errorCheckLines(errorNamespace) +
+      listOf("return result;")
 }
+
+// ADR-087 stage 2: the error slot every bridge member declares, and the check it performs before
+// interpreting any result.
+private val ERR_SLOT_DECL: List<String> = listOf("IntPtr err = IntPtr.Zero;")
+
+// REUSE, not re-implementation: [errorNamespace] is the FORWARD bindings' C# namespace (the
+// publish packageId), whose `internal static NugetErrorNative.BuildException` maps the envelope to
+// ADR-029's KotlinException hierarchy. Forward Interop.cs and these reverse shims are contentFiles
+// of the SAME consumer assembly, so `internal` reaches; a consumer therefore catches one exception
+// hierarchy regardless of which direction threw.
+private fun errorCheckLines(@Suppress("UNUSED_PARAMETER") errorNamespace: String): List<String> =
+  listOf("if (err != IntPtr.Zero) throw NugetKotlinErrors.Build(err);")

@@ -151,7 +151,11 @@ internal object ForwardCirPlanProjection {
       return CirConstructor(parameters = publicParams, body = "", hasErrorCheck = true, nativeSuffix = nativeSuffix)
     }
     val prelude: List<String> =
-      plan.publicSignature.parameters.mapNotNull { plan.collectionPrelude(it) ?: plan.interfacePrelude(it) }
+      plan.publicSignature.parameters.mapNotNull { parameter ->
+        plan.collectionPrelude(parameter)
+          ?: plan.interfacePrelude(parameter)
+          ?: plan.boundInterfacePrelude(parameter)
+      }
     val cleanup: List<String> =
       plan.publicSignature.parameters.mapNotNull { plan.collectionCleanup(it) ?: plan.interfaceCleanup(it) }
     val argumentList: List<String> = plan.publicSignature.parameters.flatMap { plan.callArgument(it) }
@@ -531,6 +535,10 @@ internal object ForwardCirPlanProjection {
       // ADR-084 stage 3: the extraction moved into the prelude, because a C#-implemented value
       // mints a transfer handle that [interfaceCleanup] disposes once the crossing is done.
       is BridgeType.Interface -> listOf("${parameter.name}Handle")
+      // ADR-088: the transfer GCHandle allocated by [boundInterfacePrelude]. No `HandleOf`
+      // reflection here: a bound interface's implementations are ordinary managed objects on this
+      // side, Kotlin-backed or not, so the handle is simply an alloc over whatever came in.
+      is BridgeType.BoundInterface -> listOf("${parameter.name}Handle")
       is BridgeType.Collection -> listOf("${parameter.name}Handle")
       // ADR-077: the generated `readonly record struct` capitalizes the Kotlin underlying
       // property (`value` -> `Value`, CirClassTranslator); the unwrapped value is lowered to its
@@ -653,6 +661,21 @@ internal object ForwardCirPlanProjection {
     return "if (${parameter.name}Owned) { NugetMarshal.Dispose(${parameter.name}Handle); }"
   }
 
+  /**
+   * ADR-088: a bound C# interface argument crosses as a fresh transfer GCHandle. There is
+   * deliberately no matching cleanup: the RECEIVING side owns it. Kotlin's `nuget{Iface}Value`
+   * either frees the handle itself (token-probe hit, the value was a Kotlin object all along) or
+   * hands it to the ADR-070 wrapper's cleaner. Freeing it here as well would double-free, and NOT
+   * allocating a fresh one would let a Kotlin `Farm` store a handle C# then released.
+   */
+  private fun ForwardCallablePlan.boundInterfacePrelude(
+    parameter: ForwardPublicParameter,
+  ): String? {
+    if (parameter.type !is BridgeType.BoundInterface) return null
+    return "IntPtr ${parameter.name}Handle = " +
+        "GCHandle.ToIntPtr(GCHandle.Alloc(${parameter.name}));"
+  }
+
   // ADR-073: load-bearing, not cosmetic. All three Dispose members bind to the same
   // `nuget_dispose` entry point, so emitting NugetListNative.Dispose for a map/set handle would be
   // *runtime*-correct, but a callable whose only collection is a Map/Set never causes
@@ -719,7 +742,11 @@ internal object ForwardCirPlanProjection {
   ): CirResultProjection {
     val nativeCall: ForwardNativeCall = singleNativeImport()
     val prelude: List<String> =
-      parameters.mapNotNull { parameter -> collectionPrelude(parameter) ?: interfacePrelude(parameter) }
+      parameters.mapNotNull { parameter ->
+        collectionPrelude(parameter)
+          ?: interfacePrelude(parameter)
+          ?: boundInterfacePrelude(parameter)
+      }
     val cleanup: List<String> =
       parameters.mapNotNull { parameter -> collectionCleanup(parameter) ?: interfaceCleanup(parameter) }
     val argumentList: List<String> =
@@ -745,6 +772,22 @@ internal object ForwardCirPlanProjection {
           nativeName,
           callArguments,
           "return ${interfaceReturnExpression(result.csharpType(), result.backingType)};",
+          prelude,
+          cleanup,
+        ),
+      )
+
+      // ADR-088: the returned pointer is a FRESH transfer GCHandle (Kotlin either duplicated a
+      // wrapper's handle or minted a bridge), so this side resolves the target and frees the
+      // duplicate. Freeing is not optional: the handle is ours, and the object itself stays rooted
+      // by whatever managed reference already held it.
+      is BridgeType.BoundInterface -> CirResultProjection(
+        returnType = result.csharpType(),
+        nativeReturnType = "IntPtr",
+        body = checkedPointerBody(
+          nativeName,
+          callArguments,
+          boundInterfaceReturnStatements(result.csharpType()),
           prelude,
           cleanup,
         ),
@@ -1222,6 +1265,10 @@ internal object ForwardCirPlanProjection {
     // ADR-040: the public C# spelling is the projected interface (`IPet`), never the backing
     // wrapper class — the wrapper is a construction-only implementation detail.
     is BridgeType.Interface -> csharpType
+    // ADR-088: the ORIGINAL bound interface (`global::Test.Menagerie.IFeedable`), read from the
+    // plugin's manifest. The only C# spelling in the forward pipeline that this pipeline does not
+    // own, and the whole point of the feature: no duplicated `IIFeedable`.
+    is BridgeType.BoundInterface -> csharpType
     is BridgeType.ValueClass -> csharpType
     is BridgeType.Enum -> this.csharpType
     is BridgeType.Collection -> when (kind) {
@@ -1252,7 +1299,8 @@ internal object ForwardCirPlanProjection {
    */
   private fun BridgeType.isCSharpReferenceType(): Boolean = when (this) {
     is BridgeType.Nullable -> type.isCSharpReferenceType()
-    BridgeType.String, is BridgeType.ObjectHandle, is BridgeType.Interface, is BridgeType.Collection -> true
+    BridgeType.String, is BridgeType.ObjectHandle, is BridgeType.Interface,
+    is BridgeType.BoundInterface, is BridgeType.Collection -> true
     // ADR-076: DateTimeOffset is a C# value type, same as Enum/ValueClass.
     BridgeType.Unit, is BridgeType.Primitive, BridgeType.Char, BridgeType.Instant,
     is BridgeType.Enum, is BridgeType.ValueClass -> false
@@ -1303,6 +1351,21 @@ internal object ForwardCirPlanProjection {
 internal fun interfaceReturnExpression(csharpType: String, backingType: String): String =
   "(NugetMarshal.TryResolveCSharp(nativeResult, out $csharpType csharpOriginal) " +
       "? csharpOriginal : new $backingType(nativeResult))"
+
+/**
+ * ADR-088: resolve the fresh transfer GCHandle Kotlin returned, then free it. `Target!` is safe by
+ * construction: Kotlin's `nuget{Iface}HandleOut` never yields a handle over null (it `require`s a
+ * non-null result), and the null pointer case is already excluded because v1 does not marshal a
+ * nullable bound interface.
+ *
+ * The indentation matches [checkedPointerBody]'s own 12-space statement column; only the first
+ * line is placed by the caller.
+ */
+private fun boundInterfaceReturnStatements(csharpType: String): String =
+  "GCHandle resultGcHandle = GCHandle.FromIntPtr(nativeResult);\n" +
+      "            $csharpType resultValue = ($csharpType)resultGcHandle.Target!;\n" +
+      "            resultGcHandle.Free();\n" +
+      "            return resultValue;"
 
 /** True for `IFoo` and `IFoo?` alike: both cross as one handle argument. */
 private fun BridgeType.isInterfaceInput(): Boolean =

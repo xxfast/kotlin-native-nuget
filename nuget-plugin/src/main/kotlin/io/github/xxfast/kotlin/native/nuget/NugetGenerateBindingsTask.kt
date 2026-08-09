@@ -48,6 +48,7 @@ import io.github.xxfast.kotlin.native.nuget.rir.contractHash
 import io.github.xxfast.kotlin.native.nuget.rir.fnv1a64
 import io.github.xxfast.kotlin.native.nuget.rir.interfaceBaseKeys
 import io.github.xxfast.kotlin.native.nuget.rir.isNullable
+import io.github.xxfast.kotlin.native.nuget.rir.isHandleBacked
 import io.github.xxfast.kotlin.native.nuget.rir.kotlinBridgeContractHash
 import io.github.xxfast.kotlin.native.nuget.rir.kotlinBridgePlan
 import io.github.xxfast.kotlin.native.nuget.rir.parseInterfaceRef
@@ -63,11 +64,13 @@ import org.gradle.api.provider.MapProperty
 import org.gradle.api.tasks.Input
 import org.gradle.api.tasks.InputFile
 import org.gradle.api.tasks.OutputDirectory
+import org.gradle.api.tasks.OutputFile
 import org.gradle.api.tasks.TaskAction
 import java.io.File
 
 private const val INTERNAL_PKG = "io.github.xxfast.kotlin.native.nuget.internal"
 private const val INTERNAL_DIR = "io/github/xxfast/kotlin/native/nuget/internal"
+
 
 data class GeneratedFile(
   val relativePath: String,
@@ -212,6 +215,119 @@ private fun structEnumComponents(
   }
 }
 
+/**
+ * ADR-088: one bound C# interface, as the FORWARD pipeline needs to see it. The forward
+ * classifier cannot derive any of this from `nuget.boundPackages` (a flat package list): the
+ * namespace-alias map is not invertible, and nothing in it says whether a Kotlin class can
+ * implement the interface and hand it back.
+ *
+ * @param kotlinName the generated pure stub's Kotlin qualified name (`test.menagerie.IFeedable`),
+ *   which is what a `KSType` resolves to at a forward position.
+ * @param csharpName the ORIGINAL C# full name (`Test.Menagerie.IFeedable`). The forward pipeline
+ *   emits this verbatim rather than re-projecting a duplicate `IIFeedable`, so a value handed back
+ *   by a forward API composes with the bound reverse API.
+ * @param implementable ADR-085 admissibility, i.e. `mint{Iface}Bridge` exists. Required at return
+ *   positions (a plain Kotlin implementation has to become a C#-side bridge); a parameter position
+ *   only needs `nuget{Iface}Value`, which every listed interface has.
+ */
+internal data class BoundTypeEntry(
+  val kotlinName: String,
+  val csharpName: String,
+  val implementable: Boolean,
+)
+
+// ADR-088: the cross-pipeline manifest, one entry per bound interface that got an ADR-070 pure
+// stub. Written beside the generated Kotlin (`bound-types.json`) and handed to KSP as
+// `nuget.boundTypesManifest`. Kept pure and hand-rolled (no kotlinx.serialization writer): the
+// reader is the KSP processor, which has no JSON dependency at all, so the shape stays flat and
+// literal on purpose.
+/**
+ * ADR-088: whether this interface's pure stub can be emitted `public`.
+ *
+ * The ADR assumed every pure interface could go public unconditionally ("only the pure interfaces
+ * are needed in user signatures"). That is wrong, and the real build caught it: `IKeeper`'s members
+ * take and return `Ferret`, a bound CLASS stub, which stays `internal` (bound classes at forward
+ * positions are explicitly deferred). A public interface over an internal type does not compile,
+ * so an interface is public exactly when nothing in its declared surface is an internal stub:
+ * no bound-class handle, struct or generic instantiation, and every base/member interface public
+ * in turn.
+ *
+ * [seen] breaks the cycle a mutually-referencing interface pair would otherwise cause; a member
+ * whose own resolution is still in progress is treated as public, which is safe because the
+ * pair either both qualify or the offending non-interface type fails one of them outright.
+ */
+internal fun interfaceStubIsPublic(
+  iface: RirInterface,
+  boundIfaces: Map<RirTypeKey, RirInterface>,
+  seen: Set<String> = emptySet(),
+): Boolean {
+  if (iface.name in seen) return true
+  val visited: Set<String> = seen + iface.name
+
+  fun RirTypeRef.isPublicFacing(): Boolean = when (this) {
+    is RirObjectHandleType, is RirStructType, is RirGenericInstanceType -> false
+    is RirInterfaceType -> boundIfaces[RirTypeKey(namespace, name)]
+      ?.let { referenced -> interfaceStubIsPublic(referenced, boundIfaces, visited) } ?: false
+
+    else -> true
+  }
+
+  val declared: List<RirTypeRef> =
+    iface.methods.filterNot { it.isStatic }.flatMap { m ->
+      m.parameters.map { it.type } + m.returnType
+    } + iface.properties.filterNot { it.isStatic }.map { it.type }
+
+  val basesPublic: Boolean = interfaceBaseKeys(iface, boundIfaces).all { base ->
+    interfaceStubIsPublic(boundIfaces.getValue(base), boundIfaces, visited)
+  }
+  return basesPublic && declared.all { it.isPublicFacing() }
+}
+
+internal fun boundTypeEntries(
+  file: RirFile,
+  packageNameOverrides: Map<String, String> = emptyMap(),
+  namespaceAliases: Map<String, Map<String, String>> = emptyMap(),
+): List<BoundTypeEntry> {
+  val boundTypes: Set<RirTypeKey> = boundHandleTypes(file)
+  val boundIfaces: Map<RirTypeKey, RirInterface> = boundInterfaceTypes(file)
+  return file.assemblies.flatMap { assembly ->
+    assembly.namespaces.flatMap { namespace ->
+      val kotlinPkg: String = kotlinPackage(
+        assembly.packageId, namespace.name, packageNameOverrides, namespaceAliases,
+      )
+      namespace.types.filterIsInstance<RirInterface>()
+        // The same admissibility gate the stub loop in generateKotlinStubs uses, so the manifest
+        // can never name an interface that has no generated Kotlin declaration to classify.
+        .filter { bridgeableInterfaceRegistrables(it, boundTypes, boundIfaces).isNotEmpty() }
+        // ADR-088: only a PUBLIC stub can appear in a consumer's public forward API, so an
+        // interface held back to `internal` (its surface names an internal class/struct stub) is
+        // not a forward-position candidate and must not be in the manifest.
+        .filter { interfaceStubIsPublic(it, boundIfaces) }
+        .map { iface ->
+          BoundTypeEntry(
+            kotlinName = "$kotlinPkg.${iface.name}",
+            csharpName = "${namespace.name}.${iface.name}",
+            implementable = kotlinBridgePlan(iface, boundTypes, boundIfaces) != null,
+          )
+        }
+    }
+  }
+}
+
+internal fun boundTypesManifest(
+  file: RirFile,
+  packageNameOverrides: Map<String, String> = emptyMap(),
+  namespaceAliases: Map<String, Map<String, String>> = emptyMap(),
+): String {
+  val entries: String = boundTypeEntries(file, packageNameOverrides, namespaceAliases)
+    .joinToString(",\n") { entry ->
+      "    { \"kotlinName\": \"${entry.kotlinName}\", \"csharpName\": \"${entry.csharpName}\", " +
+          "\"implementable\": ${entry.implementable} }"
+    }
+  val body: String = if (entries.isEmpty()) "" else "\n$entries\n  "
+  return "{\n  \"interfaces\": [$body]\n}\n"
+}
+
 fun generateKotlinStubs(
   file: RirFile,
   packageNameOverrides: Map<String, String> = emptyMap(),
@@ -231,9 +347,9 @@ fun generateKotlinStubs(
   // is prepended after the loop, once whether-any-class-needs-it is known.
   val expectedRegistrations: MutableList<String> = mutableListOf()
 
-  // ADR-085: (kotlinPkg, interfaceName) for every interface a Kotlin class can implement and hand
-  // back to C#. Drives the single generated nugetMintBridge dispatcher.
-  val bridgeDispatch: MutableList<Pair<String, String>> = mutableListOf()
+  // ADR-085: one arm per interface a Kotlin class can implement and hand back to C#. Drives the
+  // single generated nugetMintBridge dispatcher.
+  val bridgeDispatch: MutableList<BridgeDispatchArm> = mutableListOf()
 
   // ADR-051: derive once for the whole file — both generators must use the same helper
   // (anti-drift contract, ADR-049 Alternative 10 extended by ADR-051).
@@ -501,13 +617,18 @@ fun generateKotlinStubs(
         expectedRegistrations.add("${namespace.name}.${iface.name}")
         // ADR-085: a plannable interface contributes one `is <Interface> ->` arm to the shared
         // nugetMintBridge dispatcher emitted below.
-        kotlinBridgePlan(iface, boundTypes, boundIfaces)
-          ?.let { bridgeDispatch.add(kotlinPkg to it.iface.name) }
+        kotlinBridgePlan(iface, boundTypes, boundIfaces)?.let {
+          bridgeDispatch.add(
+            BridgeDispatchArm(kotlinPkg, it.iface.name, "${namespace.name}.${iface.name}"),
+          )
+        }
 
         result.add(
           GeneratedFile(
             relativePath = "nativeMain/$pkgPath/${iface.name}.kt",
-            content = interfaceFileContent(kotlinPkg, iface, boundIfaces, assembly.packageId),
+            content = interfaceFileContent(
+              kotlinPkg, iface, boundIfaces, assembly.packageId, enumPkgs,
+            ),
           )
         )
         result.add(
@@ -524,7 +645,8 @@ fun generateKotlinStubs(
             relativePath = "nativeMain/$pkgPath/${iface.name}Bindings.kt",
             content = interfaceBindingsFileContent(
               kotlinPkg, namespace.name, iface, registrables, exportName, assembly.packageId,
-              kotlinBridgePlan(iface, boundTypes, boundIfaces),
+              kotlinBridgePlan(iface, boundTypes, boundIfaces), enumPkgs,
+              handlePkgs + interfacePkgs,
             ),
           )
         )
@@ -1423,6 +1545,64 @@ private fun enumImports(
   .map { (pkg, name) -> "import $pkg.$name" }
   .distinct()
   .sorted()
+
+// ADR-086: the imports a handle-backed slot BODY needs — the generated wrapper class for a bound
+// object (`Ferret(ptr)`), and for a bound interface both the interface type and its own package's
+// `nuget{Iface}Value` helper. Same cross-package hazard enumImports closes for enum-typed slots;
+// a miss here is a loud Kotlin compile error, never silent.
+private fun slotHandleImports(
+  slots: List<RirRegistrable>,
+  typePkgs: Map<RirTypeKey, String>,
+  kotlinPkg: String,
+): List<String> = slots
+  .flatMap { r ->
+    when (r) {
+      is RirRegistrable.Method -> listOf(r.method.returnType) + r.method.parameters.map { it.type }
+      is RirRegistrable.PropertyGetter -> listOf(r.property.type)
+      is RirRegistrable.PropertySetter -> listOf(r.property.type)
+      is RirRegistrable.Ctor -> emptyList()
+    }
+  }
+  .filter { it.isHandleBacked() }
+  .flatMap { type ->
+    val key: RirTypeKey = when (type) {
+      is RirObjectHandleType -> RirTypeKey(type.namespace, type.name)
+      is RirInterfaceType -> RirTypeKey(type.namespace, type.name)
+      else -> error("[nuget] only handle-backed slot types reach slotHandleImports")
+    }
+    val name: String = when (type) {
+      is RirObjectHandleType -> type.name
+      is RirInterfaceType -> type.name
+      else -> error("[nuget] only handle-backed slot types reach slotHandleImports")
+    }
+    val pkg: String = requireNotNull(typePkgs[key]) {
+      "[nuget] ${key.namespace}.${key.name} is named by a Kotlin bridge slot but has no " +
+          "generated Kotlin package. The planner admitted an unbound type — that is a planner " +
+          "bug, not a reverse-IR gap."
+    }
+    if (pkg == kotlinPkg) emptyList()
+    else if (type is RirInterfaceType) listOf("import $pkg.$name", "import $pkg.nuget${name}Value")
+    else listOf("import $pkg.$name")
+  }
+  .distinct()
+  .sorted()
+
+// ADR-070/085: every enum type a set of interface registrables NAMES in generated Kotlin source —
+// return types, method parameters, and property types (getter and setter alike). An inbound
+// position (parameter, setter) names the enum just as much as an outbound one does
+// (`nugetEnumEntry(EnergyLevel.entries, ...)`), so all three interface files need the same import
+// coverage the class/struct files already get from enumImports.
+private fun registrableEnumTypes(registrables: List<RirRegistrable>): List<RirEnumType> =
+  registrables.flatMap { r ->
+    when (r) {
+      is RirRegistrable.Method -> listOfNotNull(r.method.returnType as? RirEnumType) +
+          r.method.parameters.mapNotNull { it.type as? RirEnumType }
+
+      is RirRegistrable.PropertyGetter -> listOfNotNull(r.property.type as? RirEnumType)
+      is RirRegistrable.PropertySetter -> listOfNotNull(r.property.type as? RirEnumType)
+      is RirRegistrable.Ctor -> emptyList()
+    }
+  }.distinct()
 
 // ADR-059: the struct equivalent of enumImports above — the `import <pkg>.<StructName>` lines a
 // struct's own generated data class file needs for the DIRECT struct-typed components it declares
@@ -3291,8 +3471,12 @@ private fun argConversion(type: RirTypeRef, name: String): String = when {
   // ADR-085: `handleOf` is a member of the NugetTransferScope this call site is wrapped in (see
   // wrapInvoke), so a bridge minted for a Kotlin implementation is freed after the native call
   // returns instead of rooting the bridge forever.
-  type is RirInterfaceType && type.nullable -> "handleOfOrNull($name, \"${type.name}\")"
-  type is RirInterfaceType -> "handleOf($name, \"${type.name}\")"
+  // The name passed is the QUALIFIED C# name: it keys nugetMintBridge's dispatch, so it must
+  // identify the target position's interface unambiguously across namespaces.
+  type is RirInterfaceType && type.nullable ->
+    "handleOfOrNull($name, \"${type.namespace}.${type.name}\")"
+
+  type is RirInterfaceType -> "handleOf($name, \"${type.namespace}.${type.name}\")"
   type is RirEnumType -> "$name.ordinal"
   type is RirPrimitiveType && type.name == "char" -> "$name.code.toUShort()"
   // ADR-059: a struct-typed argument must be decomposed into its LEAVES via structArgConversions
@@ -3960,11 +4144,14 @@ private fun nugetRuntimeContent(): String = """
   |package $INTERNAL_PKG
   |
   |import kotlin.concurrent.AtomicInt
+  |import kotlin.concurrent.AtomicReference
+  |import kotlin.native.identityHashCode
   |import kotlinx.cinterop.COpaquePointer
   |import kotlinx.cinterop.CFunction
   |import kotlinx.cinterop.CPointer
   |import kotlinx.cinterop.ByteVar
   |import kotlinx.cinterop.allocArray
+  |import kotlinx.cinterop.StableRef
   |import kotlinx.cinterop.asStableRef
   |import kotlinx.cinterop.free
   |import kotlinx.cinterop.invoke
@@ -3975,25 +4162,158 @@ private fun nugetRuntimeContent(): String = """
   |
   |internal var freeGcHandleFn: CPointer<CFunction<(COpaquePointer) -> Unit>>? = null
   |
+  |// ADR-089: a weak GCHandle to the same target as the given strong one. Verified by spike: a weak
+  |// handle does NOT root the bridge, which is what lets the reuse table hold one without
+  |// re-creating the cross-runtime strong cycle that killed ADR-084's reuse design.
+  |internal var weakenGcHandleFn:
+  |  CPointer<CFunction<(COpaquePointer) -> COpaquePointer?>>? = null
+  |
+  |// ADR-089: a FRESH strong transfer handle to the weak handle's target, or null once the .NET GC
+  |// has collected it (the mint-fresh signal).
+  |internal var resolveGcHandleFn:
+  |  CPointer<CFunction<(COpaquePointer) -> COpaquePointer?>>? = null
+  |
   |// ADR-054: slotCount/contractHash are the same two leading scalars every register export gains
-  |// (slotCount is always 1 here — the runtime shim registers exactly one thunk). The pointer
-  |// parameter is nullable so a stale caller passing zero args (pre-ADR-054) is read-only-safe up
-  |// to the checkContract call, which never touches freeGcHandlePtr before deciding to proceed.
+  |// (slotCount is always 3 here — the runtime shim registers exactly the free/weaken/resolve
+  |// thunks). The pointer parameters are nullable so a stale caller passing zero args (pre-ADR-054)
+  |// is read-only-safe up to the checkContract call, which never touches them before deciding to
+  |// proceed.
   |@OptIn(ExperimentalNativeApi::class)
   |@CName("nuget_runtime_register")
-  |fun nuget_runtime_register(slotCount: Int, contractHash: Long, freeGcHandlePtr: COpaquePointer?) {
+  |fun nuget_runtime_register(
+  |  slotCount: Int,
+  |  contractHash: Long,
+  |  freeGcHandlePtr: COpaquePointer?,
+  |  weakenGcHandlePtr: COpaquePointer?,
+  |  resolveGcHandlePtr: COpaquePointer?,
+  |) {
   |  NugetRegistry.checkContract(
   |    qualifiedType = "<runtime>",
   |    packageId = "",
   |    slotCount = slotCount,
   |    contractHash = contractHash,
-  |    expectedSlots = 1,
+  |    expectedSlots = 3,
   |    expectedHash = ${NUGET_RUNTIME_CONTRACT_HASH}L,
   |  )
   |  freeGcHandleFn = requireNotNull(freeGcHandlePtr) {
   |    "nuget_runtime_register passed a null freeGcHandle thunk pointer."
   |  }.reinterpret()
-  |  NugetRegistry.record("<runtime>", 1)
+  |  weakenGcHandleFn = requireNotNull(weakenGcHandlePtr) {
+  |    "nuget_runtime_register passed a null weakenGcHandle thunk pointer."
+  |  }.reinterpret()
+  |  resolveGcHandleFn = requireNotNull(resolveGcHandlePtr) {
+  |    "nuget_runtime_register passed a null resolveGcHandle thunk pointer."
+  |  }.reinterpret()
+  |  NugetRegistry.record("<runtime>", 3)
+  |}
+  |
+  |// ADR-089: the reuse table's key. Identity, never `equals` — a Kotlin data class implementing a
+  |// bound interface must still get one bridge PER INSTANCE, and `kotlin.native.identityHashCode`
+  |// is the only stable per-instance hash on this target (verified against Kotlin/Native 2.4.10).
+  |private class NugetIdentityKey(val ref: Any) {
+  |  override fun equals(other: Any?): Boolean = other is NugetIdentityKey && other.ref === ref
+  |
+  |  @OptIn(ExperimentalNativeApi::class)
+  |  override fun hashCode(): Int = ref.identityHashCode()
+  |}
+  |
+  |// [weakBridge] never roots the C# bridge (spike-verified); [ctx] is the StableRef pointer the
+  |// bridge dispatches through, and the guard the release path matches on.
+  |private class NugetBridgeEntry(val weakBridge: COpaquePointer, val ctx: COpaquePointer)
+  |
+  |// ADR-089 lazy free: `nuget_kotlin_release` runs on the .NET finalizer thread INSIDE a C#-to-Kotlin
+  |// P/Invoke, and calling a Kotlin-to-C# thunk from there is an unspiked re-entry shape. So an
+  |// evicted weak handle is queued here instead of freed on the spot, and drained on the next mint
+  |// (an ordinary caller thread). Bounded: at most one queued handle per dead bridge.
+  |private val nugetPendingWeakFrees = AtomicReference<List<COpaquePointer>>(emptyList())
+  |
+  |private fun nugetQueueWeakFree(handle: COpaquePointer) {
+  |  while (true) {
+  |    val current: List<COpaquePointer> = nugetPendingWeakFrees.value
+  |    if (nugetPendingWeakFrees.compareAndSet(current, current + handle)) return
+  |  }
+  |}
+  |
+  |private fun nugetDrainWeakFrees() {
+  |  while (true) {
+  |    val current: List<COpaquePointer> = nugetPendingWeakFrees.value
+  |    if (current.isEmpty()) return
+  |    if (nugetPendingWeakFrees.compareAndSet(current, emptyList())) {
+  |      val fn = requireNotNull(freeGcHandleFn) { NugetRegistry.notRegistered("<runtime>", "") }
+  |      current.forEach { fn.invoke(it) }
+  |      return
+  |    }
+  |  }
+  |}
+  |
+  |// ADR-089: every table registers itself here so the interface-agnostic release path can offer a
+  |// dying ctx to all of them. Per-interface tables, so one Kotlin object implementing two bound
+  |// interfaces holds up to one live bridge per interface.
+  |private val nugetBridgeTables = AtomicReference<List<NugetBridgeTable>>(emptyList())
+  |
+  |// ADR-089: the per-interface bridge reuse table. One instance per `{Iface}Bindings.kt`.
+  |// Every access is guarded by a CAS spinlock in the same style as NugetObjectHandle.free and
+  |// NugetRegistry.record (no new dependency); contention is one acquisition per interface-typed
+  |// crossing plus one per finalized bridge, nowhere near a per-member hot path.
+  |internal class NugetBridgeTable {
+  |  private val entries: MutableMap<NugetIdentityKey, NugetBridgeEntry> = mutableMapOf()
+  |  private val lock = AtomicInt(0)
+  |
+  |  init {
+  |    while (true) {
+  |      val current: List<NugetBridgeTable> = nugetBridgeTables.value
+  |      if (nugetBridgeTables.compareAndSet(current, current + this)) break
+  |    }
+  |  }
+  |
+  |  private fun <R> locked(block: () -> R): R {
+  |    while (!lock.compareAndSet(0, 1)) {
+  |      // Spin. The critical sections are a map lookup plus one GCHandle thunk call.
+  |    }
+  |    try {
+  |      return block()
+  |    } finally {
+  |      lock.value = 0
+  |    }
+  |  }
+  |
+  |  // A FRESH strong transfer handle to the bridge already minted for [impl], or null when there is
+  |  // none (or the .NET GC collected it, in which case the dead entry is cleaned out here).
+  |  fun resolve(impl: Any): COpaquePointer? = locked {
+  |    nugetDrainWeakFrees()
+  |    val key = NugetIdentityKey(impl)
+  |    val entry: NugetBridgeEntry = entries[key] ?: return@locked null
+  |    val fn = requireNotNull(resolveGcHandleFn) { NugetRegistry.notRegistered("<runtime>", "") }
+  |    val resolved: COpaquePointer? = fn.invoke(entry.weakBridge)
+  |    if (resolved != null) return@locked resolved
+  |    entries.remove(key)
+  |    val free = requireNotNull(freeGcHandleFn) { NugetRegistry.notRegistered("<runtime>", "") }
+  |    free.invoke(entry.weakBridge)
+  |    null
+  |  }
+  |
+  |  // Records the freshly minted [bridge] weakly. [ctx] is the release-path guard.
+  |  fun store(impl: Any, bridge: COpaquePointer, ctx: COpaquePointer): Unit = locked {
+  |    val fn = requireNotNull(weakenGcHandleFn) { NugetRegistry.notRegistered("<runtime>", "") }
+  |    val weak: COpaquePointer = requireNotNull(fn.invoke(bridge)) {
+  |      "[nuget] weakenGcHandle returned null for a live bridge handle."
+  |    }
+  |    val previous: NugetBridgeEntry? = entries.put(NugetIdentityKey(impl), NugetBridgeEntry(weak, ctx))
+  |    // Two threads minting for the same object concurrently is the only way to get here; the loser
+  |    // is a valid bridge nobody will reuse, so drop its weak handle rather than leak it.
+  |    if (previous != null) nugetQueueWeakFree(previous.weakBridge)
+  |  }
+  |
+  |  // ADR-089 ctx-guarded eviction: only the entry this exact ctx belongs to is removed. Without the
+  |  // guard, a late finalizer for bridge #1 would evict the live entry a later crossing installed
+  |  // for bridge #2 and leak #2's weak handle.
+  |  fun evict(impl: Any, ctx: COpaquePointer): Unit = locked {
+  |    val key = NugetIdentityKey(impl)
+  |    val entry: NugetBridgeEntry = entries[key] ?: return@locked
+  |    if (entry.ctx.rawValue != ctx.rawValue) return@locked
+  |    entries.remove(key)
+  |    nugetQueueWeakFree(entry.weakBridge)
+  |  }
   |}
   |
   |// Holder passed as the Cleaner resource. Deliberately a separate object from the wrapper so the
@@ -4035,13 +4355,137 @@ private fun nugetRuntimeContent(): String = """
   |// ADR-085: a value that is NOT a generated wrapper is a Kotlin implementation of the interface;
   |// mint a C#-side bridge for it (nugetMintBridge, generated into NugetKotlinBridges.kt). The
   |// error(...) text survives for a value implementing no bridgeable bound interface.
+  |// [interfaceName] is the TARGET position's fully qualified C# name (`Test.Menagerie.IFeedable`):
+  |// a Kotlin class may implement several bound interfaces, and only the crossing position knows
+  |// which bridge C# is asking for. The error text keeps the readable simple name.
   |internal fun Any.nugetHandle(interfaceName: String): NugetObjectHandle =
   |  (this as? NugetHandleOwner)?.handle
-  |    ?: nugetMintBridge(this)?.let { NugetObjectHandle(it) }
+  |    ?: nugetMintBridge(this, interfaceName)?.let { NugetObjectHandle(it) }
   |    ?: error(
-  |      "[nuget] ${'$'}{this::class.simpleName} is a Kotlin implementation of ${'$'}interfaceName; " +
-  |          "passing a Kotlin-implemented C# interface back to C# is not supported yet."
+  |      "[nuget] ${'$'}{this::class.simpleName} is a Kotlin implementation of " +
+  |          "${'$'}{interfaceName.substringAfterLast('.')}; passing a Kotlin-implemented C# " +
+  |          "interface back to C# is not supported yet."
   |    )
+  |
+  |// ADR-087 stage 2: the envelope a throwing slot writes through its trailing error out-param.
+  |// Structurally identical to the FORWARD pipeline's NugetError (type, message, stack, cause
+  |// chain, same seen-set cycle guard) but reverse-owned, because the ADR's "both halves compile
+  |// into one module" claim does not hold: KSP emits CNameExports.kt into the per-target source
+  |// set (macosArm64Main), while these reverse bindings live in nativeMain, its PARENT — a parent
+  |// source set cannot see a child's declarations. The C# side still throws the forward PUBLIC
+  |// KotlinException hierarchy, so consumers keep ONE catch hierarchy across both directions.
+  |internal class NugetKotlinError(
+  |  val type: String,
+  |  val message: String,
+  |  val stackTrace: String,
+  |  val cause: NugetKotlinError?,
+  |)
+  |
+  |internal fun nugetKotlinError(t: Throwable): COpaquePointer {
+  |  val seen: MutableSet<Throwable> = mutableSetOf()
+  |  fun build(e: Throwable): NugetKotlinError? {
+  |    if (!seen.add(e)) return null
+  |    return NugetKotlinError(
+  |      type = e::class.qualifiedName ?: e::class.simpleName ?: "UnknownException",
+  |      message = e.message ?: "Kotlin error",
+  |      stackTrace = e.stackTraceToString(),
+  |      cause = e.cause?.let(::build),
+  |    )
+  |  }
+  |  return StableRef.create(build(t)!!).asCPointer()
+  |}
+  |
+  |private tailrec fun NugetKotlinError.at(index: Int): NugetKotlinError =
+  |  if (index == 0) this else cause!!.at(index - 1)
+  |
+  |private fun COpaquePointer.error(): NugetKotlinError = asStableRef<NugetKotlinError>().get()
+  |
+  |// The accessor exports the C# side reads the envelope through. Deliberately NOT the forward
+  |// nuget_error_* entry points: those resolve a StableRef of the FORWARD NugetError class, and
+  |// handing them a reverse envelope would be an unchecked cast. Strings ride the same
+  |// nugetKotlinString / nuget_kotlin_string_free wire every other reverse string uses.
+  |@OptIn(ExperimentalNativeApi::class)
+  |@CName("nuget_kotlin_error_type")
+  |fun nuget_kotlin_error_type(handle: COpaquePointer): COpaquePointer? =
+  |  nugetKotlinString(handle.error().type)
+  |
+  |@OptIn(ExperimentalNativeApi::class)
+  |@CName("nuget_kotlin_error_message")
+  |fun nuget_kotlin_error_message(handle: COpaquePointer): COpaquePointer? =
+  |  nugetKotlinString(handle.error().message)
+  |
+  |@OptIn(ExperimentalNativeApi::class)
+  |@CName("nuget_kotlin_error_stacktrace")
+  |fun nuget_kotlin_error_stacktrace(handle: COpaquePointer): COpaquePointer? =
+  |  nugetKotlinString(handle.error().stackTrace)
+  |
+  |@OptIn(ExperimentalNativeApi::class)
+  |@CName("nuget_kotlin_error_cause_count")
+  |fun nuget_kotlin_error_cause_count(handle: COpaquePointer): Int {
+  |  var count = 0
+  |  var current: NugetKotlinError? = handle.error()
+  |  while (current != null) {
+  |    count++
+  |    current = current.cause
+  |  }
+  |  return count
+  |}
+  |
+  |@OptIn(ExperimentalNativeApi::class)
+  |@CName("nuget_kotlin_error_cause_type")
+  |fun nuget_kotlin_error_cause_type(handle: COpaquePointer, index: Int): COpaquePointer? =
+  |  nugetKotlinString(handle.error().at(index).type)
+  |
+  |@OptIn(ExperimentalNativeApi::class)
+  |@CName("nuget_kotlin_error_cause_message")
+  |fun nuget_kotlin_error_cause_message(handle: COpaquePointer, index: Int): COpaquePointer? =
+  |  nugetKotlinString(handle.error().at(index).message)
+  |
+  |@OptIn(ExperimentalNativeApi::class)
+  |@CName("nuget_kotlin_error_cause_stacktrace")
+  |fun nuget_kotlin_error_cause_stacktrace(handle: COpaquePointer, index: Int): COpaquePointer? =
+  |  nugetKotlinString(handle.error().at(index).stackTrace)
+  |
+  |@OptIn(ExperimentalNativeApi::class)
+  |@CName("nuget_kotlin_error_free")
+  |fun nuget_kotlin_error_free(handle: COpaquePointer) {
+  |  handle.asStableRef<NugetKotlinError>().dispose()
+  |}
+  |
+  |// ADR-086: the OUT-direction lowering for a handle-backed bridge slot (a bound-object or
+  |// bound-interface return or getter). Always a FRESH transfer handle, which the C# bridge member
+  |// resolves and frees immediately:
+  |//   - a generated wrapper (NugetHandleOwner) DUPLICATES its GCHandle through the per-interface
+  |//     dup thunk. Returning the wrapper's own pointer instead would hand C# a handle whose Kotlin
+  |//     owner may already be unreachable, leaving its cleaner free to release it mid-read.
+  |//   - a plain Kotlin implementation mints a bridge, which is already a fresh transfer handle
+  |//     (ADR-085). One bridge per crossing; C#-side identity across crossings stays unpromised.
+  |// Spiked before use: GCHandle.Alloc(GCHandle.FromIntPtr(h).Target) yields an independent handle
+  |// to the SAME instance, and freeing the duplicate leaves the original allocated and resolvable.
+  |internal fun nugetHandleOut(
+  |  value: Any?,
+  |  typeName: String,
+  |  dup: CPointer<CFunction<(COpaquePointer?) -> COpaquePointer?>>?,
+  |): COpaquePointer? {
+  |  if (value == null) return null
+  |  val simple: String = typeName.substringAfterLast('.')
+  |  val owner = value as? NugetHandleOwner
+  |  if (owner != null) {
+  |    val dupFn = requireNotNull(dup) {
+  |      "[nuget] the ${'$'}simple bridge has no dupHandle thunk registered; the compiled C# shim " +
+  |          "predates ADR-086's handle-backed slots (stale build state)."
+  |    }
+  |    return requireNotNull(dupFn.invoke(owner.handle.require(simple))) {
+  |      "[nuget] dupHandle returned null for a ${'$'}simple handle."
+  |    }
+  |  }
+  |  return nugetMintBridge(value, typeName)
+  |    ?: error(
+  |      "[nuget] ${'$'}{value::class.simpleName} was returned at a ${'$'}simple position but is " +
+  |          "neither a generated wrapper nor a Kotlin implementation of a bound interface this " +
+  |          "build can bridge."
+  |    )
+  |}
   |
   |// ADR-085 ownership: a MINTED bridge handle is a TRANSFER handle — the call site that minted
   |// it frees it once the native call returns, leaving C#'s own managed reference (if it stored the
@@ -4055,7 +4499,7 @@ private fun nugetRuntimeContent(): String = """
   |    val owned: Boolean = value !is NugetHandleOwner
   |    val handle: NugetObjectHandle = value.nugetHandle(interfaceName)
   |    if (owned) minted.add(handle)
-  |    return handle.require(interfaceName)
+  |    return handle.require(interfaceName.substringAfterLast('.'))
   |  }
   |
   |  fun handleOfOrNull(value: Any?, interfaceName: String): COpaquePointer? =
@@ -4110,17 +4554,34 @@ private fun nugetRuntimeContent(): String = """
   |    val current: Int = kotlinReleaseCount.value
   |    if (kotlinReleaseCount.compareAndSet(current, current + 1)) break
   |  }
-  |  ctx.asStableRef<Any>().dispose()
+  |  // ADR-089: the bridge this ctx belonged to is gone, so drop its reuse entry before the impl
+  |  // loses its last root. Offered to every table because the release path is interface-agnostic;
+  |  // the ctx guard inside evict() means at most one table owns this ctx, and a table holding a
+  |  // NEWER bridge for the same impl is left alone.
+  |  val ref = ctx.asStableRef<Any>()
+  |  val impl: Any = ref.get()
+  |  nugetBridgeTables.value.forEach { it.evict(impl, ctx) }
+  |  ref.dispose()
   |}
 """.trimMargin().trim()
+
+// ADR-085: one nugetMintBridge arm — [kotlinPkg].[name] is the generated Kotlin interface a value
+// must be an instance of, [qualifiedName] is the C# `{Namespace}.{Type}` the crossing position
+// asks for (the dispatch key; two namespaces can declare the same simple name).
+private data class BridgeDispatchArm(
+  val kotlinPkg: String,
+  val name: String,
+  val qualifiedName: String,
+)
 
 // ADR-085: NugetKotlinBridges.kt — the single dispatcher nugetHandle()'s fallback calls, one arm
 // per interface a Kotlin class can implement and hand back to C#. Deliberately a separate file
 // from NugetRuntime.kt: this one references the generated per-interface mint functions in their
 // own packages, and NugetRuntime.kt is fixed content with no knowledge of them.
-private fun nugetKotlinBridgesContent(dispatch: List<Pair<String, String>>): String {
-  val arms: String = dispatch.joinToString("\n") { (pkg, name) ->
-    "  value is $pkg.$name -> $pkg.mint${name}Bridge(value)"
+private fun nugetKotlinBridgesContent(dispatch: List<BridgeDispatchArm>): String {
+  val arms: String = dispatch.joinToString("\n") { arm ->
+    "  interfaceName == \"${arm.qualifiedName}\" && value is ${arm.kotlinPkg}.${arm.name} -> " +
+        "${arm.kotlinPkg}.mint${arm.name}Bridge(value)"
   }
   val body: String = if (arms.isEmpty()) "  else -> null" else "$arms\n  else -> null"
   return """
@@ -4133,7 +4594,11 @@ private fun nugetKotlinBridgesContent(dispatch: List<Pair<String, String>>): Str
     |// Generated (ADR-085): dispatch from a Kotlin object at an interface-typed position to the
     |// factory that mints its C#-side bridge. `null` means no bound interface matched, which is
     |// exactly the case nugetHandle() still error(...)s for.
-    |internal fun nugetMintBridge(value: Any): COpaquePointer? = when {
+    |// Keyed on the TARGET position's interface (its fully qualified C# name — two namespaces may
+    |// declare the same simple name), not on the value's own type alone: a Kotlin class
+    |// implementing two bound interfaces must mint the bridge the CROSSING POSITION asks for, and
+    |// a first-match-by-declaration-order `when` silently mints the other one.
+    |internal fun nugetMintBridge(value: Any, interfaceName: String): COpaquePointer? = when {
     |$body
     |}
   """.trimMargin().trim()
@@ -4372,22 +4837,32 @@ private fun interfaceFileContent(
   iface: RirInterface,
   boundIfaces: Map<RirTypeKey, RirInterface>,
   packageId: String,
+  enumPkgs: Map<RirTypeKey, String> = emptyMap(),
   interfacePkgs: Map<RirTypeKey, String> = emptyMap(),
   qualifiedTypeNames: Map<RirTypeKey, String> = emptyMap(),
 ): String {
   val baseKeys: List<RirTypeKey> = interfaceBaseKeys(iface, boundIfaces)
+  // ADR-088: public when nothing in the declared surface is an internal stub (see
+  // interfaceStubIsPublic); `IKeeper`, whose members name the internal `Ferret` class stub, is the
+  // case that keeps this a predicate rather than an unconditional flip.
+  val visibility: String = if (interfaceStubIsPublic(iface, boundIfaces)) "" else "internal "
   val supertypesSuffix: String =
     if (baseKeys.isEmpty()) "" else " : " + baseKeys.joinToString(", ") { it.name }
-  val imports: List<String> = baseKeys
-    .filter { interfacePkgs[it] != null && interfacePkgs[it] != kotlinPkg }
-    .map { "import ${interfacePkgs.getValue(it)}.${it.name}" }
-    .distinct()
-    .sorted()
-  val importsBlock: String = if (imports.isEmpty()) "" else imports.joinToString("\n") + "\n\n"
 
   val ownRegistrables: List<RirRegistrable> =
     iface.methods.filterNot { it.isStatic }.map { RirRegistrable.Method(it) } +
         iface.properties.filterNot { it.isStatic }.map { RirRegistrable.PropertyGetter(it) }
+
+  // A member's DECLARED type can name an enum from another bound package (`var energy:
+  // EnergyLevel`), exactly as a bound class's member can — same enumImports resolution.
+  val imports: List<String> = (baseKeys
+    .filter { interfacePkgs[it] != null && interfacePkgs[it] != kotlinPkg }
+    .map { "import ${interfacePkgs.getValue(it)}.${it.name}" } +
+      enumImports(registrableEnumTypes(ownRegistrables), enumPkgs, kotlinPkg))
+    .distinct()
+    .sorted()
+  val importsBlock: String = if (imports.isEmpty()) "" else imports.joinToString("\n") + "\n\n"
+
   val members: String = ownRegistrables.joinToString("\n") { r ->
     "  ${interfaceMemberSignature(r, qualifiedTypeNames)}"
   }
@@ -4399,7 +4874,12 @@ private fun interfaceFileContent(
     |${importsBlock}// Generated: pure Kotlin interface for the C# interface `$packageId.${iface.name}`
     |// (ADR-070). No handle member by design (Decision 4) — see [${iface.name}Handle] for the
     |// handle-backed implementation reached across the bridge.
-    |internal interface ${iface.name}$supertypesSuffix {$body}
+    |// ADR-088: `public`, unlike the handle/class/bindings stubs, which stay `internal`. A
+    |// consumer's own PUBLIC forward-exported API may take or return this interface
+    |// (`fun adopt(feedable: IFeedable)`), and Kotlin rejects a public signature over an internal
+    |// type. Only the pure interfaces go public: keeping the rest internal is what keeps them out
+    |// of the forward export scan, whose root buckets admit PUBLIC declarations only.
+    |${visibility}interface ${iface.name}$supertypesSuffix {$body}
   """.trimMargin().trim()
 }
 
@@ -4438,13 +4918,7 @@ private fun interfaceHandleFileContent(
       else -> false
     }
   }
-  val enumTypes: List<RirEnumType> = effective.mapNotNull { m ->
-    when (val r = m.registrable) {
-      is RirRegistrable.Method -> r.method.returnType as? RirEnumType
-      is RirRegistrable.PropertyGetter -> r.property.type as? RirEnumType
-      else -> null
-    }
-  }.distinct()
+  val enumTypes: List<RirEnumType> = registrableEnumTypes(effective.map { it.registrable })
 
   val imports: MutableList<String> = mutableListOf(
     "import $INTERNAL_PKG.NugetHandleOwner",
@@ -4762,9 +5236,14 @@ private fun interfaceBindingsFileContent(
   exportName: String,
   packageId: String,
   bridgePlan: KotlinBridgePlan? = null,
+  enumPkgs: Map<RirTypeKey, String> = emptyMap(),
+  // ADR-086: the generated Kotlin package of every bound class/interface, so a handle-backed slot
+  // body can import a wrapper (or a nuget{Iface}Value helper) declared in another bound namespace.
+  typePkgs: Map<RirTypeKey, String> = emptyMap(),
 ): String {
   val objectName = "${iface.name}Bindings"
-  val hasString: Boolean = registrables.any { r ->
+
+  fun namesString(list: List<RirRegistrable>): Boolean = list.any { r ->
     when (r) {
       is RirRegistrable.Method -> r.method.returnType is RirStringType ||
           r.method.parameters.any { it.type is RirStringType }
@@ -4774,11 +5253,14 @@ private fun interfaceBindingsFileContent(
       is RirRegistrable.Ctor -> error("[nuget] an interface never has a constructor (ADR-070)")
     }
   }
+
+  val hasString: Boolean = namesString(registrables)
+  // ADR-085 Wave 2: a FLATTENED slot list can name a String no own registration slot does (the
+  // string member is the base interface's), and the slot bodies still need ByteVar/toKString.
+  val bridgeHasString: Boolean = bridgePlan != null && namesString(bridgePlan.slots)
   val imports: List<String> = buildList {
-    if (hasString) {
-      add("import $INTERNAL_PKG.freeManagedString")
-      add("import kotlinx.cinterop.ByteVar")
-    }
+    if (hasString) add("import $INTERNAL_PKG.freeManagedString")
+    if (hasString || bridgeHasString) add("import kotlinx.cinterop.ByteVar")
     add("import $INTERNAL_PKG.NugetRegistry")
     add("import $INTERNAL_PKG.NugetObjectHandle")
     add("import kotlinx.cinterop.CFunction")
@@ -4791,9 +5273,11 @@ private fun interfaceBindingsFileContent(
     // ADR-085: only the minted-bridge half needs these.
     if (bridgePlan != null) {
       add("import $INTERNAL_PKG.nugetKotlinString")
+      // ADR-089: the per-interface bridge reuse table beside mint{Iface}Bridge.
+      add("import $INTERNAL_PKG.NugetBridgeTable")
       add("import kotlinx.cinterop.StableRef")
       add("import kotlinx.cinterop.staticCFunction")
-      if (hasString) add("import kotlinx.cinterop.toKString")
+      if (bridgeHasString) add("import kotlinx.cinterop.toKString")
       val hasEnumSlot: Boolean = bridgePlan.slots.any { r ->
         when (r) {
           is RirRegistrable.Method -> r.method.parameters.any { it.type is RirEnumType }
@@ -4802,6 +5286,18 @@ private fun interfaceBindingsFileContent(
         }
       }
       if (hasEnumSlot) add("import $INTERNAL_PKG.nugetEnumEntry")
+      // ADR-087 stage 2: every slot writes its error envelope through a trailing out-param.
+      add("import $INTERNAL_PKG.nugetKotlinError")
+      add("import kotlinx.cinterop.COpaquePointerVar")
+      add("import kotlinx.cinterop.pointed")
+      add("import kotlinx.cinterop.value")
+      // ADR-086: the out-direction handle lowering, needed only by a handle-backed return/getter.
+      if (bridgePlan.needsDupHandle) add("import $INTERNAL_PKG.nugetHandleOut")
+      addAll(slotHandleImports(bridgePlan.slots, typePkgs, kotlinPkg))
+      // A slot body NAMES its enum types (`nugetEnumEntry(EnergyLevel.entries, ...)`); one
+      // declared in another bound package needs the same import a class stub gets. Only the
+      // minted-bridge half names an enum at all — the registration half is all wire types.
+      addAll(enumImports(registrableEnumTypes(bridgePlan.slots), enumPkgs, kotlinPkg))
     }
   }
 
@@ -4877,8 +5373,19 @@ private fun interfaceBindingsFileContent(
   // ADR-085: a plannable interface registers TWO extra trailing slots — the C# bridge factory and
   // the identity-token probe — so slotCount and the contract hash both shift, and a stale shim
   // that knows nothing of them is rejected at startup rather than mis-assigning pointers.
-  val slotCount: Int = registrables.size + if (bridgePlan == null) 0 else 2
-  val hash: Long = if (bridgePlan == null) memberHash else kotlinBridgeContractHash(memberHash)
+  // ADR-086: a handle-backed out position adds a THIRD — the dup thunk.
+  val extraSlots: Int = when {
+    bridgePlan == null -> 0
+    bridgePlan.needsDupHandle -> 3
+    else -> 2
+  }
+  val slotCount: Int = registrables.size + extraSlots
+  val hash: Long =
+    if (bridgePlan == null) memberHash else kotlinBridgeContractHash(memberHash, bridgePlan)
+  val dupFnVar: String = if (bridgePlan?.needsDupHandle != true) "" else "\n\n" + """
+    |internal var dupHandleFn:
+    |  CPointer<CFunction<(COpaquePointer?) -> COpaquePointer?>>? = null
+  """.trimMargin()
   val bridgeFnVars: String = if (bridgePlan == null) "" else {
     val factoryParams: String =
       (bridgePlan.slots.map { "COpaquePointer?" } + "COpaquePointer?").joinToString(", ")
@@ -4888,18 +5395,23 @@ private fun interfaceBindingsFileContent(
       |
       |internal var bridgeTokenFn:
       |  CPointer<CFunction<(COpaquePointer?) -> COpaquePointer?>>? = null
-    """.trimMargin()
+    """.trimMargin() + dupFnVar
   }
   val bridgeParams: String =
     if (bridgePlan == null) "" else "\n  createBridgePtr: COpaquePointer?," +
-        "\n  bridgeTokenPtr: COpaquePointer?,"
+        "\n  bridgeTokenPtr: COpaquePointer?," +
+        if (bridgePlan.needsDupHandle) "\n  dupHandlePtr: COpaquePointer?," else ""
   val bridgeAssignments: String = if (bridgePlan == null) "" else
     "\n  $objectName.createBridgeFn = requireNotNull(createBridgePtr).reinterpret()" +
-        "\n  $objectName.bridgeTokenFn = requireNotNull(bridgeTokenPtr).reinterpret()"
+        "\n  $objectName.bridgeTokenFn = requireNotNull(bridgeTokenPtr).reinterpret()" +
+        if (bridgePlan.needsDupHandle) {
+          "\n  $objectName.dupHandleFn = requireNotNull(dupHandlePtr).reinterpret()"
+        } else ""
   val bridgeBlock: String =
     if (bridgePlan == null) "" else
       "\n\n" + kotlinBridgeBlock(bridgePlan, objectName, packageId, namespaceName)
-  val valueHelper: String = kotlinInterfaceValueHelper(iface, bridgePlan != null)
+  val valueHelper: String =
+    kotlinInterfaceValueHelper(iface, namespaceName, bridgePlan != null)
 
   return """
     |@file:OptIn(kotlinx.cinterop.ExperimentalForeignApi::class)
@@ -4940,7 +5452,11 @@ private fun interfaceBindingsFileContent(
 // object, the original Kotlin object must come back (`assertSame`), not a wrapper around a bridge
 // around it. Always emitted so every return site can call it unconditionally; without a plan it
 // is just the wrapper construction it replaces.
-private fun kotlinInterfaceValueHelper(iface: RirInterface, planned: Boolean): String =
+private fun kotlinInterfaceValueHelper(
+  iface: RirInterface,
+  namespaceName: String,
+  planned: Boolean,
+): String =
   if (!planned) """
     |internal fun nuget${iface.name}Value(ptr: COpaquePointer): ${iface.name} =
     |  ${iface.name}Handle(ptr)
@@ -4955,6 +5471,19 @@ private fun kotlinInterfaceValueHelper(iface: RirInterface, planned: Boolean): S
     |  }
     |  return ${iface.name}Handle(ptr)
     |}
+    |
+    |// ADR-088: the OUT counterpart of nuget${iface.name}Value, for a forward-exported Kotlin API
+    |// returning this bound interface. The forward KSP emitter calls this by name rather than
+    |// inlining nugetHandleOut, so the dup-thunk reference and the C# type string stay owned by the
+    |// pipeline that generated them. Always a fresh transfer handle: a wrapper duplicates its
+    |// GCHandle, a plain Kotlin implementation mints a bridge.
+    |internal fun nuget${iface.name}HandleOut(value: ${iface.name}): COpaquePointer =
+    |  requireNotNull(
+    |    nugetHandleOut(value, "$namespaceName.${iface.name}", ${iface.name}Bindings.dupHandleFn)
+    |  ) {
+    |    "[nuget] ${iface.name} was returned across the forward bridge as null; the declared " +
+    |        "Kotlin return type is non-nullable."
+    |  }
   """.trimMargin()
 
 // ADR-085: the Kotlin half of a minted bridge — one top-level `staticCFunction`-able slot
@@ -4969,27 +5498,38 @@ private fun kotlinBridgeBlock(
   val iface: String = plan.iface.name
   val prefix: String = iface.replaceFirstChar { it.lowercaseChar() }
   val slotFns: List<Pair<String, String>> =
-    plan.slots.map { kotlinBridgeSlotFunction(plan, prefix, it) }
+    plan.slots.map { kotlinBridgeSlotFunction(plan, prefix, objectName, it) }
   val failMsg: String = bindingsNotRegisteredMessage(iface, packageId, namespaceName)
   val mintArgs: String = (slotFns.map { "staticCFunction(::${it.first})" } + "ctx")
     .joinToString(",\n    ")
   return """
     |${slotFns.joinToString("\n\n") { it.second }}
     |
+    |// ADR-089: this interface's bridge reuse table, keyed on the implementation object's identity.
+    |// Holds the bridge WEAKLY, so it never roots what the .NET GC owns.
+    |private val ${prefix}BridgeTable: NugetBridgeTable = NugetBridgeTable()
+    |
     |// ADR-085: mint a C#-side bridge implementing `$iface` over a Kotlin object. The returned
     |// GCHandle is a TRANSFER handle: C# keeps its own managed reference if it stores the bridge.
+    |// ADR-089: resolve-or-mint. While C# keeps the first bridge alive, every later crossing of the
+    |// SAME Kotlin object resolves to it, so C#-side ReferenceEquals holds. Once the bridge is
+    |// collected the table's weak handle resolves to null and this mints a fresh one.
     |internal fun mint${iface}Bridge(impl: $iface): COpaquePointer {
+    |  val reused: COpaquePointer? = ${prefix}BridgeTable.resolve(impl)
+    |  if (reused != null) return reused
     |  val fn = requireNotNull($objectName.createBridgeFn) {
     |    $failMsg
     |  }
     |  val ctx: COpaquePointer = StableRef.create(impl).asCPointer()
-    |  return requireNotNull(
+    |  val bridge: COpaquePointer = requireNotNull(
     |    fn.invoke(
     |    $mintArgs,
     |    ),
     |  ) {
     |    "[nuget] Create${iface}Bridge returned a null bridge handle."
     |  }
+    |  ${prefix}BridgeTable.store(impl, bridge, ctx)
+    |  return bridge
     |}
   """.trimMargin()
 }
@@ -5000,57 +5540,128 @@ private fun kotlinBridgeBlock(
 private fun kotlinBridgeSlotFunction(
   plan: KotlinBridgePlan,
   prefix: String,
+  objectName: String,
   slot: RirRegistrable,
 ): Pair<String, String> {
   val iface: String = plan.iface.name
   val target = "ctx!!.asStableRef<$iface>().get()"
+  // ADR-086: only a handle-backed out cell reads this; it is null for every other slot shape.
+  val dupFnRef = "$objectName.dupHandleFn"
   return when (slot) {
     is RirRegistrable.Method -> {
       val fnName = "$prefix${slot.method.name}${slot.method.bridgeSuffix()}Slot"
       val declaredParams: String = (listOf("ctx: COpaquePointer?") +
-          slot.method.parameters.mapIndexed { i, p -> "a$i: ${cfnType(p.type)}" })
+          slot.method.parameters.mapIndexed { i, p -> "a$i: ${cfnType(p.type)}" } + ERR_OUT_PARAM)
         .joinToString(", ")
       val args: String = slot.method.parameters
         .mapIndexed { i, p -> kotlinBridgeInbound(p.type, "a$i") }
         .joinToString(", ")
       val call = "$target.${slot.method.name.toMethodCamelCase()}($args)"
-      fnName to "private fun $fnName($declaredParams): ${cfnType(slot.method.returnType)} = " +
-          kotlinBridgeOutbound(slot.method.returnType, call)
+      val body: String = kotlinBridgeOutbound(slot.method.returnType, call, dupFnRef)
+      val ret: String = cfnType(slot.method.returnType)
+      fnName to "private fun $fnName($declaredParams): $ret = " +
+          kotlinSlotEnvelope(body, ret)
     }
 
     is RirRegistrable.PropertyGetter -> {
       val fnName = "$prefix${slot.property.name}GetterSlot"
       val call = "$target.${slot.property.name.toMethodCamelCase()}"
-      fnName to "private fun $fnName(ctx: COpaquePointer?): ${cfnType(slot.property.type)} = " +
-          kotlinBridgeOutbound(slot.property.type, call)
+      val body: String = kotlinBridgeOutbound(slot.property.type, call, dupFnRef)
+      val ret: String = cfnType(slot.property.type)
+      fnName to "private fun $fnName(ctx: COpaquePointer?, $ERR_OUT_PARAM): $ret = " +
+          kotlinSlotEnvelope(body, ret)
     }
 
     is RirRegistrable.PropertySetter -> {
       val fnName = "$prefix${slot.property.name}SetterSlot"
       val value: String = kotlinBridgeInbound(slot.property.type, "a0")
+      val body = "$target.${slot.property.name.toMethodCamelCase()} = $value"
       fnName to
-          "private fun $fnName(ctx: COpaquePointer?, a0: ${cfnType(slot.property.type)}) {\n" +
-          "  $target.${slot.property.name.toMethodCamelCase()} = $value\n}"
+          "private fun $fnName(ctx: COpaquePointer?, a0: ${cfnType(slot.property.type)}, " +
+          "$ERR_OUT_PARAM) {\n" +
+          kotlinSlotEnvelope(body, "Unit").prependIndent("  ") + "\n}"
     }
 
     is RirRegistrable.Ctor -> error("[nuget] an interface never has a constructor (ADR-070)")
   }
 }
 
+// ADR-087 stage 2: the trailing out-param every slot gains, the slot-boundary mirror of ADR-024's
+// forward error slot. C# passes `IntPtr*`; a nullable receiver keeps a (stale, pre-stage-2) caller
+// passing nothing from writing through a wild pointer.
+private const val ERR_OUT_PARAM = "errOut: CPointer<COpaquePointerVar>?"
+
+// ADR-087 stage 2: what a slot returns after it has written the envelope. Never read by C# (the
+// bridge member checks errOut FIRST), so the only requirement is that it type-checks and allocates
+// nothing — in particular a string slot returns a null pointer, which the C# side must not hand to
+// nuget_kotlin_string_free.
+private fun cfnDummyValue(cfnType: String): String = when (cfnType) {
+  "Unit" -> ""
+  "Boolean" -> "false"
+  "Byte" -> "0"
+  "UByte" -> "0u"
+  "Short" -> "0"
+  "UShort" -> "0u"
+  "Int" -> "0"
+  "Long" -> "0L"
+  "Float" -> "0.0f"
+  "Double" -> "0.0"
+  "COpaquePointer?" -> "null"
+  else -> error(
+    "[nuget] ADR-087 stage 2 has no dummy return value for slot wire type '$cfnType'. " +
+        "Add one here when the slot vocabulary grows; a slot that throws MUST still return."
+  )
+}
+
+// ADR-087 stage 2: the slot body's error boundary. Stage 1's catch printed one attribution line
+// and rethrew, so the host still died through Kotlin/Native's unhandled-callback path; the SAME
+// catch now writes the forward NugetError envelope through the trailing errOut and returns a
+// dummy, so the exception becomes an ordinary catchable .NET exception in the C# bridge member.
+// No println: the throw may be handled by the consumer, and attribution no longer needs stdout —
+// the .NET stack trace names the generated bridge member, and the envelope carries the Kotlin
+// type, message and Kotlin stack unmangled (ADR-029's KotlinException.KotlinStackTrace).
+private fun kotlinSlotEnvelope(body: String, cfnType: String): String {
+  val dummy: String = cfnDummyValue(cfnType)
+  val dummyLine: String = if (dummy.isEmpty()) "" else "\n  $dummy"
+  return """
+    |try {
+    |  $body
+    |} catch (t: Throwable) {
+    |  errOut?.pointed?.value = nugetKotlinError(t)$dummyLine
+    |}
+  """.trimMargin()
+}
+
 // C# -> Kotlin across a bridge slot: the wire value as the Kotlin member declares it.
+// ADR-086: a handle-backed inbound value is a TRANSFER handle. A bound object becomes the ordinary
+// generated wrapper, whose cleaner frees the GCHandle exactly like any other reverse handle, so a
+// Kotlin implementation may STORE what it receives (the whole point of transfer over borrow). A
+// bound interface goes through the shipped nuget{Iface}Value helper, which returns the ORIGINAL
+// Kotlin object (freeing the transfer handle) when the value is a bridge this build minted.
 private fun kotlinBridgeInbound(type: RirTypeRef, name: String): String = when {
   type is RirStringType && type.nullable -> "$name?.reinterpret<ByteVar>()?.toKString()"
   type is RirStringType -> "requireNotNull($name).reinterpret<ByteVar>().toKString()"
   type is RirEnumType -> "nugetEnumEntry(${type.name}.entries, $name, \"${type.name}\")"
   type is RirPrimitiveType && type.name == "char" -> "$name.toInt().toChar()"
+  type is RirObjectHandleType && type.nullable -> "$name?.let { ${type.name}(it) }"
+  type is RirObjectHandleType -> "${type.name}(requireNotNull($name))"
+  type is RirInterfaceType && type.nullable -> "$name?.let { nuget${type.name}Value(it) }"
+  type is RirInterfaceType -> "nuget${type.name}Value(requireNotNull($name))"
   else -> name
 }
 
 // Kotlin -> C# across a bridge slot: the Kotlin member's value as the wire expects it.
-private fun kotlinBridgeOutbound(type: RirTypeRef, expr: String): String = when {
+// [dupFnRef] is this interface's registered dup thunk, needed only by the handle-backed cells.
+private fun kotlinBridgeOutbound(type: RirTypeRef, expr: String, dupFnRef: String): String = when {
   type is RirStringType -> "nugetKotlinString($expr)"
   type is RirEnumType -> "$expr.ordinal"
   type is RirPrimitiveType && type.name == "char" -> "$expr.code.toUShort()"
+  type is RirObjectHandleType ->
+    "nugetHandleOut($expr, \"${type.namespace}.${type.name}\", $dupFnRef)"
+
+  type is RirInterfaceType ->
+    "nugetHandleOut($expr, \"${type.namespace}.${type.name}\", $dupFnRef)"
+
   else -> expr
 }
 
@@ -5222,6 +5833,13 @@ abstract class NugetGenerateBindingsTask : DefaultTask() {
   @get:OutputDirectory
   abstract val kotlinOutputDir: DirectoryProperty
 
+  // ADR-088: the cross-pipeline bound-type manifest the forward KSP run reads through the
+  // `nuget.boundTypesManifest` option. A separate OutputFile, not a file inside kotlinOutputDir:
+  // that directory is wired as a Kotlin `srcDir`, and a stray .json in a source root is at best
+  // noise and at worst a compiler input.
+  @get:OutputFile
+  abstract val boundTypesManifestFile: RegularFileProperty
+
   @TaskAction
   fun generate() {
     val rir: RirFile = parseReverseIr(reverseIrFile.get().asFile.readText())
@@ -5248,5 +5866,18 @@ abstract class NugetGenerateBindingsTask : DefaultTask() {
       out.parentFile.mkdirs()
       out.writeText(generated.content)
     }
+
+    // ADR-088: written unconditionally (an empty `interfaces` array when nothing is bound), so
+    // the forward processor's option always points at a file that exists — a missing manifest is
+    // then a real wiring fault, not "this build happened to bind no interfaces".
+    val manifest: File = boundTypesManifestFile.get().asFile
+    manifest.parentFile.mkdirs()
+    manifest.writeText(
+      boundTypesManifest(
+        file = rir,
+        packageNameOverrides = packageNameOverrides.get(),
+        namespaceAliases = namespaceAliases.get(),
+      )
+    )
   }
 }

@@ -5,8 +5,10 @@ import org.gradle.api.Project
 import org.gradle.api.internal.project.ProjectInternal
 import org.gradle.testfixtures.ProjectBuilder
 import org.jetbrains.kotlin.gradle.dsl.KotlinMultiplatformExtension
+import java.io.File
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertTrue
 
 /**
  * ADR-063: `publish { include(...); exclude(...) }` must be wired through to the KSP processor as
@@ -118,5 +120,57 @@ class NugetPluginKspArgsWiringTest {
     val boundPackages: Set<String> = args.getValue("nuget.boundPackages").split(",").toSet()
 
     assertEquals(setOf("acme.core", "acme"), boundPackages)
+  }
+
+  /**
+   * ADR-088: the manifest path rides the same channel as `nuget.boundPackages`. Absolute, because
+   * KSP resolves nothing relative to the project dir, and pointed at `nugetGenerateBindings`'
+   * own output file.
+   */
+  @Test
+  fun `the bound-types manifest path is wired as a KSP arg when a dependency is bound`() {
+    val project: Project = buildProjectWithSharedLib()
+
+    project.extensions.getByType(NugetExtension::class.java).publish {
+      packageId = "TestLibrary"
+      version = "1.0.0"
+      authors = "Test Author"
+      description = "Test description"
+    }
+
+    project.extensions.getByType(NugetExtension::class.java).dependencies {
+      dependency("Acme") {
+        version = "1.0.0"
+        bind { packageName = "acme" }
+      }
+    }
+
+    project.evaluate()
+
+    val ksp: KspExtension = project.extensions.getByType(KspExtension::class.java)
+    val manifest: String = ksp.arguments.getValue("nuget.boundTypesManifest")
+
+    val normalized: String = manifest.replace(File.separatorChar, '/')
+    assertTrue(normalized.endsWith("build/nuget-interop/bound-types.json"), manifest)
+    assertTrue(File(manifest).isAbsolute, manifest)
+  }
+
+  /** No `bind {}` means no manifest task ran, so the option must stay empty rather than promise a
+   *  file that will never exist. */
+  @Test
+  fun `the bound-types manifest arg is empty with no bound dependency`() {
+    val project: Project = buildProjectWithSharedLib()
+
+    project.extensions.getByType(NugetExtension::class.java).publish {
+      packageId = "TestLibrary"
+      version = "1.0.0"
+      authors = "Test Author"
+      description = "Test description"
+    }
+
+    project.evaluate()
+
+    val ksp: KspExtension = project.extensions.getByType(KspExtension::class.java)
+    assertEquals("", ksp.arguments["nuget.boundTypesManifest"])
   }
 }

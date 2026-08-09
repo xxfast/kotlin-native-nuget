@@ -189,11 +189,28 @@ a C#-side bridge instead of erroring:
 // build/nuget-interop/kotlin/nativeMain/io/github/xxfast/kotlin/native/nuget/internal/NugetRuntime.kt
 internal fun Any.nugetHandle(interfaceName: String): NugetObjectHandle =
   (this as? NugetHandleOwner)?.handle
-    ?: nugetMintBridge(this)?.let { NugetObjectHandle(it) }
+    ?: nugetMintBridge(this, interfaceName)?.let { NugetObjectHandle(it) }
     ?: error(
-      "[nuget] ${this::class.simpleName} is a Kotlin implementation of $interfaceName; " +
-          "passing a Kotlin-implemented C# interface back to C# is not supported yet."
+      "[nuget] ${this::class.simpleName} is a Kotlin implementation of " +
+          "${interfaceName.substringAfterLast('.')}; passing a Kotlin-implemented C# " +
+          "interface back to C# is not supported yet."
     )
+```
+
+`interfaceName` is the crossing position's fully qualified C# interface name
+(`Test.Menagerie.IPerformer`), not just the value's runtime type. That matters when a single Kotlin
+class implements more than one bound interface: `nugetMintBridge` keys its dispatch on that name,
+so `RingLeader : IFeedable, IPerformer` mints an `IFeedable` bridge at an `IFeedable`-typed parameter
+and an `IPerformer` bridge at an `IPerformer`-typed one, regardless of which interface `Menagerie.cs`
+declares first:
+
+```kotlin
+// build/nuget-interop/kotlin/nativeMain/io/github/xxfast/kotlin/native/nuget/internal/NugetKotlinBridges.kt
+internal fun nugetMintBridge(value: Any, interfaceName: String): COpaquePointer? = when {
+  interfaceName == "Test.Menagerie.IFeedable" && value is test.menagerie.IFeedable -> test.menagerie.mintIFeedableBridge(value)
+  interfaceName == "Test.Menagerie.IPerformer" && value is test.menagerie.IPerformer -> test.menagerie.mintIPerformerBridge(value)
+  else -> null
+}
 ```
 
 The generated `mintIFeedableBridge` mints a `StableRef` for the Kotlin object and hands one
@@ -246,7 +263,7 @@ From C#, a Kotlin-implemented `IFeedable` is indistinguishable from a bound one:
 `Sanctuary.FeedAnimal`, and `Sanctuary.Featured` all dispatch straight into the Kotlin object, and
 the Kotlin side can observe the call landed:
 
-```csharp
+```C#
 // IntegrationTests/MenagerieRoundTripTests.cs
 string result = MenagerieSample.kotlinGoatIntroduce();
 Assert.Equal("introduced Nibbles the goat with 4 legs", result);
@@ -255,9 +272,15 @@ Assert.Equal("introduced Nibbles the goat with 4 legs", result);
 <note>
 <p>Storing a Kotlin-implemented object in C# and reading it back resolves to the original Kotlin
 instance on the Kotlin side (<code>sanctuary.featured === goat</code>), through an
-identity-token probe registered alongside the interface's own factory thunk. The reverse is not
-promised: C#-side <code>ReferenceEquals</code> across two crossings of the same Kotlin object does
-not hold, since each crossing mints its own bridge object, one bridge per crossing, no reuse table.</p>
+identity-token probe registered alongside the interface's own factory thunk. The reverse now holds
+too, while the bridge is alive: repeated crossings of the same Kotlin object resolve to the
+<b>same</b> C#-side bridge instance, so <code>ReferenceEquals</code> holds
+(<a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/089-bridge-reuse-per-kotlin-object.md">ADR-089</a>).
+Each interface a Kotlin object implements keeps its own reuse table, keyed on the object's
+identity: <code>RingLeader : IFeedable, IPerformer</code> holds up to one live <code>IFeedable</code>
+bridge and one live <code>IPerformer</code> bridge at a time, each reused independently. If C# drops
+every reference and the .NET GC collects the bridge, the next crossing mints a fresh one; the
+promise is scoped to a live bridge, not forever.</p>
 </note>
 
 <warning>
@@ -268,13 +291,202 @@ after C# lets go of its own reference, until both garbage collectors get around 
 expected, GC-timed behaviour, not a leak.</p>
 </warning>
 
+A Kotlin implementation of a **derived** interface binds too: `Tabby : ITagged` (where `ITagged :
+IFeedable`) mints one flattened factory covering `ITagged`'s own slots plus every slot it inherits
+from `IFeedable`, base before own, so C# calling either `Sanctuary.Showcase(ITagged)` or
+`Sanctuary.Introduce(IFeedable)` with the same `Tabby` dispatches correctly at both positions.
+Bound-object-handle and bound-interface parameters, returns, and properties (nullable included) bind
+too, ownership following one rule: the side that receives the handle owns it. A C# object handed
+into a Kotlin slot parameter transfers ownership to Kotlin, so a Kotlin implementation can safely
+store it past the call that delivered it, the same posture an ordinary reverse-bound parameter
+already has. A value a slot returns is always a fresh transfer handle the C# bridge member resolves
+and frees immediately, so returning the implementation's own stored wrapper never hands back a
+handle whose Kotlin owner could be collected mid-read
+([ADR-086](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/086-object-interface-slots-kotlin-bridge.md)).
+
+### Bridge reuse
+
+Each `{Iface}Bindings.kt` (per plannable interface) carries a small identity-keyed table. `mint{Iface}Bridge`
+consults it before minting a new bridge, and stores the freshly minted one weakly, so the table never
+roots the bridge and cannot recreate the strong cross-runtime cycle that killed the reuse design in
+[ADR-084](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/084-csharp-implemented-interfaces.md):
+
+```kotlin
+// build/nuget-interop/kotlin/nativeMain/test/menagerie/IFeedableBindings.kt (excerpt)
+private val iFeedableBridgeTable: NugetBridgeTable = NugetBridgeTable()
+
+internal fun mintIFeedableBridge(impl: IFeedable): COpaquePointer {
+  val reused: COpaquePointer? = iFeedableBridgeTable.resolve(impl)
+  if (reused != null) return reused
+  val fn = requireNotNull(IFeedableBindings.createBridgeFn) { ... }
+  val ctx: COpaquePointer = StableRef.create(impl).asCPointer()
+  val bridge: COpaquePointer = requireNotNull(fn.invoke(/* slot pointers */, ctx)) { ... }
+  iFeedableBridgeTable.store(impl, bridge, ctx)
+  return bridge
+}
+```
+
+The table's key is `kotlin.native.identityHashCode`-based (identity, never `equals`), and it holds
+the bridge through two new interface-agnostic C# thunks riding the shared `<runtime>` registration:
+
+```C#
+// generated NugetRuntimeRegistration.cs (excerpt)
+[UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+private static IntPtr WeakenGcHandle_Thunk(IntPtr strong) =>
+    GCHandle.ToIntPtr(GCHandle.Alloc(GCHandle.FromIntPtr(strong).Target, GCHandleType.Weak));
+
+[UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+private static IntPtr ResolveGcHandle_Thunk(IntPtr weak) =>
+    GCHandle.FromIntPtr(weak).Target is object target
+        ? GCHandle.ToIntPtr(GCHandle.Alloc(target))
+        : IntPtr.Zero;
+```
+
+`resolve` promotes the weak handle to a fresh strong transfer handle while the bridge is alive, or
+returns `null` once the .NET GC has collected it, the mint-fresh signal. Eviction happens in
+`nuget_kotlin_release` (the same export a dropped bridge's `SafeHandle` already called), guarded by
+the releasing bridge's own ctx pointer, so a late finalizer for a since-replaced bridge can never
+evict a newer, still-live entry for the same object
+([ADR-089](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/089-bridge-reuse-per-kotlin-object.md)).
+
+<note>
+<p>A dead weak handle found by <code>resolve()</code> is freed immediately, on the calling thread.
+A weak handle evicted by <code>nuget_kotlin_release</code> is freed <b>lazily</b> instead, queued and
+drained on the next mint for any interface, rather than freed from inside the release call itself:
+that call already runs on the .NET finalizer thread, inside a C#-to-Kotlin P/Invoke, and calling
+back into a Kotlin-to-C# thunk from there is a re-entry shape the ADR left unspiked. The design does
+not depend on which variant runs; both keep the table's weak handles bounded.</p>
+</note>
+
+<warning>
+<p>A Kotlin-implemented member that throws is now catchable from C#, but only when C# calls the
+bridge member directly. Every generated slot body catches the exception, writes a Kotlin-owned
+error envelope through a trailing out-parameter, and returns a dummy value; the C# bridge member
+checks that out-parameter and throws the same public <code>KotlinException</code> family a forward
+call throws, naming the member (<code>IFeedableBridge.Describe</code>) in its own stack trace
+(<a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/087-kotlin-slot-exceptions.md">ADR-087</a>
+stage 2).</p>
+</warning>
+
+<warning>
+<p>That propagation does not reach a call that <i>originates</i> in Kotlin. If Kotlin calls a
+reverse-bound C# method (<code>Sanctuary.Introduce</code>, say) and that method calls the
+Kotlin-implemented member internally, the thrown exception still terminates the process: the
+Kotlin→C# call crosses its own <code>[UnmanagedCallersOnly]</code> thunk, which has no error
+out-parameter of its own (<a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md">ROADMAP.md</a>
+Phase 11, unshipped), so the C# exception has nowhere to go once it escapes the bridge member. Only
+a call C# makes directly into the bridge, holding a stored reference and calling a member on it, is
+catchable today.</p>
+</warning>
+
 v1 slot vocabulary: `val`/`var` property getter-and-setter slots, and methods of arity 0-2
-returning `Unit`, a primitive, `Boolean`, an enum, `String`, or `String?`. A bound-object-handle
-parameter or return, an object/collection-typed slot, a `Task`-returning member, or a derived
-interface (`ITagged : IFeedable`) is out of v1 and falls to a named `skipped_kotlin_bridge`
-diagnostic rather than a silent drop; see [ADR-085](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/085-kotlin-implemented-csharp-interfaces.md)
+returning `Unit`, a primitive, `Boolean`, an enum, `String`, `String?`, a bound-object handle, or a
+bound interface (nullable included for the last two). Still out of v1 and named-skipped
+(`skipped_kotlin_bridge`) rather than silently dropped: a struct-typed slot, a generic-instance
+slot, a collection-typed slot (`List`/`Map`/`Set`, blocked on the reverse direction having no BCL
+collection mapping at any position yet, see [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md)
+Phase 10), and a `Task`-returning member. See [ADR-085](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/085-kotlin-implemented-csharp-interfaces.md),
+[ADR-086](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/086-object-interface-slots-kotlin-bridge.md),
+[ADR-087](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/087-kotlin-slot-exceptions.md),
 and [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md) Phase 13 for
 what's still open.
+
+### Bound C# interfaces at forward positions
+
+Everything above wires the reverse pipeline's own crossing points (`Sanctuary.Introduce` and
+friends). A bound C# interface can also appear at an ordinary **forward** parameter or return, on a
+Kotlin author's own public API, with the original C# type name, not a re-projected duplicate:
+
+```kotlin
+// test-library/.../menagerie/Farm.kt
+class Farm {
+  private var resident: IFeedable? = null
+
+  fun adopt(feedable: IFeedable) {
+    resident = feedable
+  }
+
+  fun resident(): IFeedable =
+    resident ?: error("Farm.resident() called before Farm.adopt()")
+}
+```
+
+The generated C# names the real `Test.Menagerie.IFeedable` from the consumer's own `TestDependency`
+dependency, not a duplicate:
+
+```C#
+// generated Interop.cs (excerpt)
+public global::Test.Menagerie.IFeedable Resident()
+{
+    IntPtr nativeResult = Native_Resident(_handle, out IntPtr error);
+    if (error != IntPtr.Zero) throw NugetErrorNative.BuildException(error);
+    GCHandle resultGcHandle = GCHandle.FromIntPtr(nativeResult);
+    global::Test.Menagerie.IFeedable resultValue = (global::Test.Menagerie.IFeedable)resultGcHandle.Target!;
+    resultGcHandle.Free();
+    return resultValue;
+}
+
+public void Adopt(global::Test.Menagerie.IFeedable feedable)
+{
+    IntPtr feedableHandle = GCHandle.ToIntPtr(GCHandle.Alloc(feedable));
+    Native_Adopt(_handle, feedableHandle, out IntPtr error);
+    if (error != IntPtr.Zero) throw NugetErrorNative.BuildException(error);
+}
+```
+
+A parameter is an ordinary GCHandle transfer resolved by the same `nuget{Iface}Value` token probe
+the reverse pipeline already generates, so a C#-implemented value passed in and returned back out is
+the same managed instance, and a Kotlin implementation passed in resolves to the original Kotlin
+object:
+
+```C#
+// IntegrationTests/BidirectionalTests.cs
+var farm = new Farm();
+var goat = new CSharpGoat();
+farm.Adopt(goat);
+Assert.Same(goat, farm.Resident());
+```
+
+`Test.Menagerie` resolves in a consumer that never directly references `TestDependency`: `TestLibrary`'s
+own nuspec declares it as a package dependency, so NuGet's transitive restore surfaces it
+([ADR-088](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/088-kotlin-implemented-interfaces-at-forward-positions.md)).
+
+<note>
+<p>The ADR-070 pure interface stub is public precisely so a Kotlin author can put it in their own
+public signature; every other generated file for a bound interface (the handle class, class stubs,
+bindings objects) stays <code>internal</code>. Whether the stub is emitted public at all is a
+per-interface predicate, not a blanket flip: a stub goes public only when neither it nor any of its
+bases has an internal class stub anywhere in its declared surface. <code>IKeeper</code> (whose
+members reference the bound class <code>Ferret</code>, itself internal) stays internal and off the
+forward export scan for exactly that reason: a public interface referencing an internal class would
+not compile.</p>
+</note>
+
+v1 scope: non-nullable bound interfaces at ordinary parameters and method/top-level-function
+returns, gated on the plugin's cross-pipeline manifest (`bound-types.json`). A return additionally
+needs the interface to be Kotlin-implementable (the manifest's `implementable` flag, ADR-085
+admissibility): a plain Kotlin implementation returned from a forward position has nothing to become
+on the C# side otherwise. Every position outside that scope is a named skip, never silence:
+
+```
+[nuget:SKIPPED_BOUND_TYPE_POSITION] Skipping ...: ... . ADR-088 v1 marshals a bound C# interface at
+ordinary, non-nullable function/method/constructor parameters and method/function returns only;
+expose one of those instead of a nullable, property or collection-component position
+```
+
+- Nullable positions (`IFeedable?`): `SKIPPED_BOUND_TYPE_POSITION`.
+- Property positions: `SKIPPED_BOUND_TYPE_POSITION` (property drops carry their own
+  `boundInterface` flag rather than the parameter/return skip-reason enum, so the message can name
+  the position without a second detail slot).
+- Collection components (`List<IFeedable>` and friends): `SKIPPED_BOUND_TYPE_POSITION`.
+- Bound **classes** at forward positions (`fun sanctuary(): Sanctuary`): not attempted at all, a
+  bigger visibility change than this feature took on.
+- A return of a plain Kotlin implementation of an interface the manifest does not flag
+  Kotlin-implementable (no `mint{Iface}Bridge` for it): `SKIPPED_UNIMPLEMENTABLE_BOUND_INTERFACE`.
+  The same interface stays admissible as a **parameter**, since that direction only needs
+  `nuget{Iface}Value`. Every bound interface in this project's own fixtures is Kotlin-implementable
+  today, so this skip fires only against a synthetic manifest entry in the test suite, not against
+  `IFeedable`/`ITagged`/`IPerformer`.
 
 ### Interface limitations
 
@@ -288,11 +500,10 @@ what's still open.
   silent gap turned into a diagnostic.
 - An interface with zero admissible members is skipped entirely: `skipped_empty_interface`.
 - No downcast from an interface-typed value to a concrete bound class (see the note above).
-- A Kotlin implementation of a derived interface (`ITagged : IFeedable`) is not supported: no
-  flattened derived factory exists yet, so it is a named `skipped_kotlin_bridge` diagnostic.
-- A Kotlin implementation with a bound-object-handle parameter/return, an object/collection-typed
-  member, or a `Task`-returning member is out of the v1 slot vocabulary and named-skipped
-  (`skipped_kotlin_bridge`), not bridged.
+- A Kotlin implementation with a struct-typed, generic-instance-typed, or collection-typed
+  (`List`/`Map`/`Set`) member, or a `Task`-returning member, is out of the v1 slot vocabulary and
+  named-skipped (`skipped_kotlin_bridge`), not bridged. An *unbound* object or interface type at a
+  slot position keeps the same named skip; a bound one now binds (see the ADR-086 note above).
 
 ## Constructors
 
@@ -410,6 +621,14 @@ private static IntPtr SerializeObject_Thunk(int value)
 Graceful propagation into a catchable Kotlin exception is tracked as
 [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md) Phase 11.
 
+<note>
+<p>A Kotlin-implemented interface member is the one place propagation already works, and only
+partially: see the two warnings under "Implementing a C#-declared interface in Kotlin" earlier on
+this page. It is catchable when C# calls the bridge member directly, and still fatal when the call
+originates in Kotlin and calls back into the member through a reverse-bound method, exactly the gap
+this section describes, since that outer reverse thunk has no error path of its own.</p>
+</note>
+
 ## Diagnostics: recorded in the RIR and surfaced to the build
 
 Every skip the metadata reader makes is recorded in `reverse-ir.json`, under each assembly's
@@ -516,5 +735,7 @@ queryable diagnostics report (only a Gradle log line exists today), tracked in
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/058-csharp-shape-b-structs-in-kotlin.md">ADR-058: C# Shape B structs in Kotlin</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/070-csharp-interfaces-in-kotlin.md">ADR-070: C# interfaces in Kotlin</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/085-kotlin-implemented-csharp-interfaces.md">ADR-085: Kotlin-implemented C# interfaces</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/086-object-interface-slots-kotlin-bridge.md">ADR-086: Object- and interface-typed slots for a Kotlin-implemented C# interface</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/087-kotlin-slot-exceptions.md">ADR-087: Exceptions from Kotlin-implemented C# interface members</a>
     </category>
 </seealso>

@@ -1,6 +1,8 @@
 using System.Runtime.CompilerServices;
 using TestLibrary;
 using TestLibrary.Cat;
+using TestLibrary.Menagerie;
+using Test.Menagerie;
 
 namespace IntegrationTests;
 
@@ -255,5 +257,81 @@ public class BidirectionalTests
             Thread.Sleep(25);
         }
         return false;
+    }
+
+    // ADR-088: a bound C# interface (`Test.Menagerie.IFeedable`, the ADR-070 stub) at ORDINARY
+    // FORWARD parameter/return positions on a public Kotlin class (`Farm`). Unlike ADR-084's
+    // `IPet` (a Kotlin-declared interface the C# side implements against a purely forward-facing
+    // contract), `IFeedable` here is the ORIGINAL type the consumer already has from the
+    // TestDependency package -- not a re-projected duplicate. `Test.Menagerie` resolves in this
+    // project without a direct PackageReference: TestLibrary's own nuspec declares TestDependency
+    // as a package dependency (no `exclude` attribute), so NuGet's transitive restore surfaces
+    // `TestDependency.dll` as a compile asset here too (confirmed via
+    // `IntegrationTests/obj/project.assets.json`: `TestDependency/<version>` appears under
+    // `net10.0`'s `compile` assets even though `IntegrationTests.csproj` never references it).
+    //
+    // EXPECTED TO FAIL TODAY: `Farm.Adopt`/`Farm.Resident` do not exist because the Kotlin
+    // fixture (`Farm.kt`) does not compile yet -- the ADR-070 stub interface is `internal`, and a
+    // public Kotlin declaration exposing an internal type in its signature is a compile error
+    // (`EXPOSED_PARAMETER_TYPE`/`EXPOSED_FUNCTION_RETURN_TYPE`). That failure aborts
+    // `nugetGenerateBindings`/the native build before `TestLibrary.Menagerie.Farm` is ever
+    // generated, so this whole test assembly fails to build -- the same shape as the Wave 1
+    // enum-import round.
+    private class CSharpGoat : IFeedable
+    {
+        public int MealsFed { get; private set; }
+
+        public string Describe() => "Nibbles the C#-side goat";
+
+        public int Legs => 4;
+
+        public void Feed(string food) => MealsFed++;
+
+        public string? Nickname { get; set; }
+    }
+
+    [Fact]
+    public void Farm_Adopt_StoresTheCSharpImplementedResident_SameInstanceBack()
+    {
+        var farm = new Farm();
+        var goat = new CSharpGoat();
+
+        farm.Adopt(goat);
+
+        // ADR-088's identity promise for a C#-originated object: the return-side GCHandle
+        // duplicate must hand back the SAME managed instance, not a fresh wrapper over it.
+        Assert.Same(goat, farm.Resident());
+    }
+
+    [Fact]
+    public void Farm_ResidentLegs_DispatchesIntoTheCSharpImplementedResident()
+    {
+        var farm = new Farm();
+        var goat = new CSharpGoat();
+
+        farm.Adopt(goat);
+
+        // Proves the forward parameter crossing did not just stash a copy or a null-op stub: the
+        // Kotlin side actually called back into `CSharpGoat.Legs` through the bound interface.
+        Assert.Equal(4, farm.ResidentLegs());
+    }
+
+    [Fact]
+    public void Farm_Resident_ComposesWithTheBoundReverseApi()
+    {
+        // The consumer-experience claim from the ADR: the value Farm hands back is the REAL
+        // `Test.Menagerie.IFeedable`, so it must be usable wherever the bound reverse API (a
+        // Kotlin type implementing the same interface, e.g. `Ferret`) is usable -- no conversion
+        // layer, just one type.
+        var farm = new Farm();
+        var goat = new CSharpGoat();
+        farm.Adopt(goat);
+
+        IFeedable resident = farm.Resident();
+
+        Assert.Equal("Nibbles the C#-side goat", resident.Describe());
+        Assert.Equal(0, goat.MealsFed);
+        resident.Feed("hay");
+        Assert.Equal(1, goat.MealsFed);
     }
 }

@@ -378,3 +378,93 @@ fixture exists to exercise this).
 with the same `while (true) { ... compareAndSet(current, current + 1) ... }` loop `NugetObjectHandle.free()`
 and `NugetRegistry.record` already use elsewhere in the runtime, not a fetch-and-add primitive that
 does not exist on this type.
+
+## Addendum (2026-08-09): target-keyed dispatch, and a cross-package enum import errata
+
+Two follow-up fixes landed against this ADR's shipped v1, both found and closed in the same batch,
+verified by `scripts/verify.sh` (939 passed / 0 failed).
+
+**Dispatch was first-match, not target-keyed.** This ADR's Decision section shows `nugetMintBridge`
+dispatching on `is IFeedable -> ...` per bound interface, with no mention of which interface the
+crossing position actually needs; the Scope section's Deferred list even named the gap: "a Kotlin
+class implementing multiple bound interfaces (v1: first match ... wins; emit a diagnostic on
+ambiguity)". As shipped, that was worse than a diagnosable ambiguity: `RingLeader : IFeedable,
+IPerformer` (two independent interfaces, neither derives from the other) passed at the
+`IPerformer`-typed `Sanctuary.Applaud` parameter still matched `is IFeedable` first, because
+`IFeedable` is declared first in `Menagerie.cs`, and minted a bridge that does not implement
+`IPerformer` at all.
+
+**Corrected as shipped**: `nugetMintBridge(value: Any, interfaceName: String)` takes the crossing
+position's fully qualified C# interface name as a second parameter, threaded through
+`Any.nugetHandle(interfaceName)` (already carrying that name for its error-message branch) and
+`NugetTransferScope.handleOf`. Dispatch keys on `interfaceName` first, `is` second:
+
+```kotlin
+// build/nuget-interop/kotlin/nativeMain/io/github/xxfast/kotlin/native/nuget/internal/NugetKotlinBridges.kt
+internal fun nugetMintBridge(value: Any, interfaceName: String): COpaquePointer? = when {
+  interfaceName == "Test.Menagerie.IFeedable" && value is test.menagerie.IFeedable -> test.menagerie.mintIFeedableBridge(value)
+  interfaceName == "Test.Menagerie.IPerformer" && value is test.menagerie.IPerformer -> test.menagerie.mintIPerformerBridge(value)
+  else -> null
+}
+```
+
+The once-planned "ambiguity diagnostic" this ADR flagged as future work is moot: there is no longer
+an ambiguous case to diagnose, since no crossing position is `Any`-typed and every `when` branch is
+keyed on the specific interface that position asks for. The Deferred list's "first match wins" line
+is superseded by this addendum.
+
+**Cross-package enum slot import was also missing, and the gap predates this ADR.** `IPerformer`
+(the `RingLeader` follow-up fixture, `TestDependency/Menagerie.cs`) declares `var energy:
+EnergyLevel`, where `EnergyLevel` lives in `Test.Wellness`, a namespace independent of
+`IPerformer`'s own `Test.Menagerie`. The generated Kotlin never imported it, and the miss was not
+confined to the ADR-085 slot body this ADR's Decision section describes: the pure `IPerformer.kt`
+stub and the ADR-070 handle-backed `IPerformerHandle.kt` were unimported too. Fixed with a shared
+`registrableEnumTypes` collector applied at every interface-file emission position, not a
+slot-codegen-only patch. See [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md)
+Phase 13 for the ticked items.
+
+## Addendum (Phase 13 Wave 2): derived-interface flattening
+
+This ADR's Scope section named a Kotlin implementation of a *derived* interface (`ITagged :
+IFeedable`) as out of v1, a named `skipped_kotlin_bridge` diagnostic. It now binds, via
+`flattenedBridgeInterfaces` (`RirBridging.kt`): a depth-first walk of an interface's direct bases,
+each base visited (and its own slots emitted) before the interface that derives from it, deduped by
+interface key (a diamond `IC : IA, IB` where both derive from `IBase` reaches `IBase` once) and, in
+`kotlinBridgeSlots`, by member `contractSignature` (a derived interface's C# `new`-redeclaration of
+a base member doesn't double-slot: the base's slot, visited first, serves both). `mintITaggedBridge`
+takes the flattened factory signature in that order: `IFeedable`'s five slots, then `ITagged`'s own
+`tag` getter.
+
+`kotlinBridgeContractHash` (`RirBridging.kt:1246`) was widened at the same time to hash the
+flattened, ordered slot signature list rather than only the interface's own registration slots. This
+closes a real drift hole this ADR's Decision section had already flagged in its slot-order-drift
+comment but had not, before this addendum, actually closed for the derived case: without it, a
+*base* interface gaining a member would change a *derived* interface's flattened factory arity while
+leaving the derived interface's own `slotCount`/hash untouched, an ADR-054-invisible ABI break.
+
+Fixture: `Tabby : ITagged` (`test-library/.../menagerie/MenagerieSample.kt`),
+`IntegrationTests/MenagerieRoundTripTests.cs`'s
+`KotlinTabbyShowcase_DerivedInterfaceFlattening_DispatchesOwnAndInheritedMembers` (own member `Tag`
+plus inherited `Legs` through the derived-typed
+crossing) and `KotlinTabbyIntroduceViaFeedable_SameObjectCrossesAtBasePosition` (the same instance
+at the base-typed crossing). The base-typed crossing needed no fix: ordinary Kotlin interface
+inheritance already dispatched a derived implementation correctly through the base interface's own
+slot table before this addendum: only the derived-typed crossing (`Sanctuary.Showcase(ITagged)`)
+was blocked, since minting *that* bridge is what needed the flattened factory.
+
+**Still open, unfixed by this addendum:** `interfaceFileContent`'s production call site still passes
+neither `interfacePkgs` nor `qualifiedTypeNames`, so a pure interface's cross-package base-interface
+import is still never emitted (`NugetGenerateBindingsTask.kt:515`). `ITagged` and `IFeedable` share a
+package in the fixture, so this stays unreached in practice; see [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md)
+Phase 13.
+
+## Addendum (Phase 13 Wave 3): superseded by ADR-089 for a live bridge
+
+This ADR's "one bridge per crossing, no reuse table" posture (Decision, line 127; Consequences,
+line 148) is superseded for a **live** bridge by
+[ADR-089](089-bridge-reuse-per-kotlin-object.md): while C# keeps a bridge alive, a later crossing of
+the same Kotlin object now resolves to that same bridge, and C#-side `ReferenceEquals` holds. Once
+C# drops every reference and the .NET GC collects the bridge, a later crossing mints a fresh one,
+the same GC-timed posture every release in this ADR already had. This ADR's own text is left as
+written, a point-in-time record of the v1 posture; ADR-089 is the current source of truth for
+identity across crossings.
