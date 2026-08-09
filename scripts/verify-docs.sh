@@ -7,7 +7,9 @@ set -euo pipefail
 # builder's report.json, which is what writerside-checker-action does in CI.
 #
 # Needs a Docker daemon. On this repo's dev machines that is colima:
-#   brew install colima docker && colima start
+#   brew install colima docker && colima start --memory 8
+# The builder is a headless IntelliJ; colima's default 2GiB VM gets it
+# OOM-killed mid-build. 8GiB is known good and colima remembers the setting.
 # The first run pulls the builder image (several GB); later runs are quick.
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -18,29 +20,32 @@ INSTANCE="docs/knn"
 IMAGE="registry.jetbrains.team/p/writerside/builder/writerside-builder:232.10275"
 
 if ! command -v docker >/dev/null 2>&1; then
-  echo "docker CLI not found. Install it with: brew install colima docker && colima start" >&2
+  echo "docker CLI not found. Install it with: brew install colima docker && colima start --memory 8" >&2
   exit 1
 fi
 if ! docker info >/dev/null 2>&1; then
-  echo "Docker daemon not reachable. Start it with: colima start" >&2
+  echo "Docker daemon not reachable. Start it with: colima start --memory 8" >&2
   exit 1
 fi
 
-OUT="$(mktemp -d)"
+# Must live under $HOME: colima only shares $HOME with the VM, so a
+# /var/folders mktemp dir would silently mount as an empty VM-local dir.
+OUT="$(mktemp -d "$HOME/.cache/verify-docs.XXXXXX")"
 trap 'rm -rf "$OUT"' EXIT
 
 echo "==> Building Writerside instance $INSTANCE with $IMAGE"
 docker run --rm \
   -v "$ROOT":/opt/sources \
-  -v "$OUT":/opt/target \
+  -v "$OUT":/opt/out \
   "$IMAGE" \
   /bin/bash -c "
     export DISPLAY=:99
     Xvfb :99 >/dev/null 2>&1 &
     git config --global --add safe.directory /opt/sources >/dev/null 2>&1 || true
-    /opt/builder/bin/idea.sh helpbuilderinspect -source-dir /opt/sources -product $INSTANCE --runner github -output-dir /opt/target/ || true
+    /opt/builder/bin/idea.sh helpbuilderinspect -source-dir /opt/sources -product $INSTANCE --runner github -output-dir /opt/out/artifacts/ || true
   "
 
+OUT="$OUT/artifacts"
 if [ ! -f "$OUT/report.json" ]; then
   echo "docs check FAILED: builder produced no report.json (build did not run to completion)" >&2
   ls -la "$OUT" >&2 || true
@@ -54,43 +59,22 @@ import sys
 with open(sys.argv[1]) as f:
     report = json.load(f)
 
-# The report nests problems per file/check; walk it and pick up anything
-# carrying a severity, the same set writerside-checker-action reports.
-problems = []
-def walk(node):
-    if isinstance(node, dict):
-        if "severity" in node:
-            problems.append(node)
-        for value in node.values():
-            walk(value)
-    elif isinstance(node, list):
-        for value in node:
-            walk(value)
-walk(report)
+# report.json shape: testsErrors / testsWarnings map a problem id (e.g. MRK003)
+# to a list of {problemId, name, description}; counts live in testsErrorsCount,
+# testsWarningsCount, testsTotal.
+def emit(bucket, label):
+    count = 0
+    for problem_id, problems in sorted((report.get(bucket) or {}).items()):
+        for problem in problems:
+            print(f"{label}: {problem_id}: {problem.get('name', '')}: {problem.get('description', '')}")
+            count += 1
+    return count
 
-def describe(problem):
-    parts = []
-    for key in ("code", "id", "type"):
-        if problem.get(key):
-            parts.append(str(problem[key]))
-            break
-    for key in ("title", "message", "description", "text"):
-        if problem.get(key):
-            parts.append(str(problem[key]))
-            break
-    for key in ("file", "path", "location"):
-        if problem.get(key):
-            parts.append(str(problem[key]))
-            break
-    return ": ".join(parts) or json.dumps(problem)
-
-errors = [p for p in problems if str(p.get("severity", "")).upper() in ("ERROR", "FATAL")]
-for problem in problems:
-    label = "ERROR" if problem in errors else str(problem.get("severity", "INFO")).upper()
-    print(f"{label}: {describe(problem)}")
+warnings = emit("testsWarnings", "WARNING")
+errors = emit("testsErrors", "ERROR")
 
 if errors:
-    print(f"\ndocs check FAILED: {len(errors)} error(s)")
+    print(f"\ndocs check FAILED: {errors} error(s)")
     sys.exit(1)
-print("docs check passed")
+print(f"docs check passed: {report.get('testsTotal')} checks, {warnings} warning(s)")
 EOF

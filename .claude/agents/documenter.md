@@ -123,7 +123,8 @@ scripts/verify-docs.sh
 ```
 
 This runs the **same builder image and checks as CI**, locally, via Docker. It needs the Docker
-daemon: if it says the daemon is unreachable, run `colima start` and retry. It does not touch
+daemon: if it says the daemon is unreachable, run `colima start --memory 8` and retry (the builder
+needs the 8GiB; the default 2GiB VM OOM-kills it). It does not touch
 Gradle or `build/`, so it is always safe to run even when the refactorer holds the project lock.
 If it fails, fix the pages and rerun until it passes; a report with this check failing is not
 done.
