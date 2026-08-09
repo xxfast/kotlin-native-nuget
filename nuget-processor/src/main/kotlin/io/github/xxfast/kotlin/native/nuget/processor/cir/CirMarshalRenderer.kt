@@ -366,7 +366,11 @@ internal fun StringBuilder.renderMarshalHelper(helper: CirMarshalHelper) {
  * `Dispose` members bind to the same `nuget_dispose` entry point, but a file that only ever saw a
  * Map never emits NugetListNative at all, so naming the wrong one is a CS0103.
  */
-private fun StringBuilder.appendCollectionFactoryGuard(native: String, handle: String, fill: String) {
+private fun StringBuilder.appendCollectionFactoryGuard(
+  native: String,
+  handle: String,
+  fill: String,
+) {
   appendLine("            try")
   appendLine("            {")
   appendLine("                $fill")

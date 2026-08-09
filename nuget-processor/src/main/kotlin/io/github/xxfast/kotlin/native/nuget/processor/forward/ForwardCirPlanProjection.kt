@@ -718,7 +718,8 @@ internal object ForwardCirPlanProjection {
     // `nuget_dispose`'s `handle.asStableRef<Any>().dispose()` is not null-safe. ROADMAP:130: the
     // guard is now unconditional rather than keyed on [nullable], because this runs in a `finally`
     // that a throw *from the creation itself* also reaches, where any handle is still Zero.
-    return "if (${parameter.name}Handle != IntPtr.Zero) { $native.Dispose(${parameter.name}Handle); }"
+    return "if (${parameter.name}Handle != IntPtr.Zero) { " +
+        "$native.Dispose(${parameter.name}Handle); }"
   }
 
   // ADR-069: default P/Invoke `out bool` marshalling reads 4 bytes; Kotlin's `BooleanVar` writes 1
@@ -1114,7 +1115,8 @@ internal object ForwardCirPlanProjection {
       appendLine("            long nativeResult = $nativeName($arguments);")
       appendErrorCheck()
       append(
-        "            return new global::System.DateTimeOffset(nativeResult, global::System.TimeSpan.Zero);",
+        "            return new global::System.DateTimeOffset(nativeResult, " +
+            "global::System.TimeSpan.Zero);",
       )
     },
   )
@@ -1125,7 +1127,11 @@ internal object ForwardCirPlanProjection {
     type: BridgeType.Collection,
     prelude: List<ForwardCirHandleStep> = emptyList(),
     cleanup: List<String> = emptyList(),
-  ): String = forwardCirHandleScope(prelude, cleanup, collectionMaterializingCore(nativeName, arguments, type))
+  ): String = forwardCirHandleScope(
+    prelude,
+    cleanup,
+    collectionMaterializingCore(nativeName, arguments, type),
+  )
 
   /** The result-side read of a collection handle: the call, the error check, and the
    *  materialization loop. The *parameter* handles it may have been given are released by the

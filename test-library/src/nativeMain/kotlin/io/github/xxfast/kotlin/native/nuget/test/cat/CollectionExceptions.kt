@@ -10,7 +10,9 @@ class Auditor {
     throw IllegalStateException("audit failed: ${entries.size} entries do not balance")
 
   fun crossCheck(entries: List<String>, labels: Set<String>): Int =
-    throw IllegalStateException("cross-check failed: ${entries.size} entries, ${labels.size} labels")
+    throw IllegalStateException(
+      "cross-check failed: ${entries.size} entries, ${labels.size} labels",
+    )
 }
 
 /** A ledger of treats handed out. An empty one is a mistake, not a fresh start. */

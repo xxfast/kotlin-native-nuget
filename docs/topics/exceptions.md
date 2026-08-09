@@ -144,6 +144,10 @@ public static string checkOreoWeight(int grams)
 
 The same pattern appears on property setters (`TreatJar.TreatCount`), getters (`SnackBowl.NextSnack`), and constructors (`Kitten(string, int)`), all shown throughout this project's `Interop.cs`. `CatId`'s value-class constructor routes through a private `CreateChecked` helper that does the same check (see [Value classes](value-classes.md)).
 
+A method with a `List`/`Map`/`Set` parameter wraps the error check in a `try`/`finally` instead of
+the flat shape above, so a temporary collection handle is released whether the call returns or
+throws; see [Collections](collections.md#exception-safety-on-collection-parameters).
+
 ## Using it from C#
 
 Type mapping, from `IntegrationTests/ExceptionTypeMappingTests.cs`:

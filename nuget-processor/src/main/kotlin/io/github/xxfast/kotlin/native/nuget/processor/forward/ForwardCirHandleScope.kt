@@ -44,7 +44,11 @@ internal fun forwardCirHandleScope(
     appendLine("${indent}try")
     appendLine("$indent{")
     prelude.forEach { step -> appendLine("$inner${step.statement}") }
-    appendLine(core.trim('\n').lines().joinToString("\n") { line -> if (line.isBlank()) line else "    $line" })
+    val indentedCore: String =
+      core.trim('\n').lines().joinToString("\n") { line ->
+        if (line.isBlank()) line else "    $line"
+      }
+    appendLine(indentedCore)
     appendLine("$indent}")
     appendLine("${indent}finally")
     appendLine("$indent{")
