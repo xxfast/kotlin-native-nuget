@@ -64,6 +64,7 @@ import org.gradle.api.provider.MapProperty
 import org.gradle.api.tasks.Input
 import org.gradle.api.tasks.InputFile
 import org.gradle.api.tasks.OutputDirectory
+import org.gradle.api.tasks.OutputFile
 import org.gradle.api.tasks.TaskAction
 import java.io.File
 
@@ -212,6 +213,119 @@ private fun structEnumComponents(
   return struct?.components.orEmpty().flatMap { c ->
     listOfNotNull(c.type as? RirEnumType) + structEnumComponents(c.type, structs)
   }
+}
+
+/**
+ * ADR-088: one bound C# interface, as the FORWARD pipeline needs to see it. The forward
+ * classifier cannot derive any of this from `nuget.boundPackages` (a flat package list): the
+ * namespace-alias map is not invertible, and nothing in it says whether a Kotlin class can
+ * implement the interface and hand it back.
+ *
+ * @param kotlinName the generated pure stub's Kotlin qualified name (`test.menagerie.IFeedable`),
+ *   which is what a `KSType` resolves to at a forward position.
+ * @param csharpName the ORIGINAL C# full name (`Test.Menagerie.IFeedable`). The forward pipeline
+ *   emits this verbatim rather than re-projecting a duplicate `IIFeedable`, so a value handed back
+ *   by a forward API composes with the bound reverse API.
+ * @param implementable ADR-085 admissibility, i.e. `mint{Iface}Bridge` exists. Required at return
+ *   positions (a plain Kotlin implementation has to become a C#-side bridge); a parameter position
+ *   only needs `nuget{Iface}Value`, which every listed interface has.
+ */
+internal data class BoundTypeEntry(
+  val kotlinName: String,
+  val csharpName: String,
+  val implementable: Boolean,
+)
+
+// ADR-088: the cross-pipeline manifest, one entry per bound interface that got an ADR-070 pure
+// stub. Written beside the generated Kotlin (`bound-types.json`) and handed to KSP as
+// `nuget.boundTypesManifest`. Kept pure and hand-rolled (no kotlinx.serialization writer): the
+// reader is the KSP processor, which has no JSON dependency at all, so the shape stays flat and
+// literal on purpose.
+/**
+ * ADR-088: whether this interface's pure stub can be emitted `public`.
+ *
+ * The ADR assumed every pure interface could go public unconditionally ("only the pure interfaces
+ * are needed in user signatures"). That is wrong, and the real build caught it: `IKeeper`'s members
+ * take and return `Ferret`, a bound CLASS stub, which stays `internal` (bound classes at forward
+ * positions are explicitly deferred). A public interface over an internal type does not compile,
+ * so an interface is public exactly when nothing in its declared surface is an internal stub:
+ * no bound-class handle, struct or generic instantiation, and every base/member interface public
+ * in turn.
+ *
+ * [seen] breaks the cycle a mutually-referencing interface pair would otherwise cause; a member
+ * whose own resolution is still in progress is treated as public, which is safe because the
+ * pair either both qualify or the offending non-interface type fails one of them outright.
+ */
+internal fun interfaceStubIsPublic(
+  iface: RirInterface,
+  boundIfaces: Map<RirTypeKey, RirInterface>,
+  seen: Set<String> = emptySet(),
+): Boolean {
+  if (iface.name in seen) return true
+  val visited: Set<String> = seen + iface.name
+
+  fun RirTypeRef.isPublicFacing(): Boolean = when (this) {
+    is RirObjectHandleType, is RirStructType, is RirGenericInstanceType -> false
+    is RirInterfaceType -> boundIfaces[RirTypeKey(namespace, name)]
+      ?.let { referenced -> interfaceStubIsPublic(referenced, boundIfaces, visited) } ?: false
+
+    else -> true
+  }
+
+  val declared: List<RirTypeRef> =
+    iface.methods.filterNot { it.isStatic }.flatMap { m ->
+      m.parameters.map { it.type } + m.returnType
+    } + iface.properties.filterNot { it.isStatic }.map { it.type }
+
+  val basesPublic: Boolean = interfaceBaseKeys(iface, boundIfaces).all { base ->
+    interfaceStubIsPublic(boundIfaces.getValue(base), boundIfaces, visited)
+  }
+  return basesPublic && declared.all { it.isPublicFacing() }
+}
+
+internal fun boundTypeEntries(
+  file: RirFile,
+  packageNameOverrides: Map<String, String> = emptyMap(),
+  namespaceAliases: Map<String, Map<String, String>> = emptyMap(),
+): List<BoundTypeEntry> {
+  val boundTypes: Set<RirTypeKey> = boundHandleTypes(file)
+  val boundIfaces: Map<RirTypeKey, RirInterface> = boundInterfaceTypes(file)
+  return file.assemblies.flatMap { assembly ->
+    assembly.namespaces.flatMap { namespace ->
+      val kotlinPkg: String = kotlinPackage(
+        assembly.packageId, namespace.name, packageNameOverrides, namespaceAliases,
+      )
+      namespace.types.filterIsInstance<RirInterface>()
+        // The same admissibility gate the stub loop in generateKotlinStubs uses, so the manifest
+        // can never name an interface that has no generated Kotlin declaration to classify.
+        .filter { bridgeableInterfaceRegistrables(it, boundTypes, boundIfaces).isNotEmpty() }
+        // ADR-088: only a PUBLIC stub can appear in a consumer's public forward API, so an
+        // interface held back to `internal` (its surface names an internal class/struct stub) is
+        // not a forward-position candidate and must not be in the manifest.
+        .filter { interfaceStubIsPublic(it, boundIfaces) }
+        .map { iface ->
+          BoundTypeEntry(
+            kotlinName = "$kotlinPkg.${iface.name}",
+            csharpName = "${namespace.name}.${iface.name}",
+            implementable = kotlinBridgePlan(iface, boundTypes, boundIfaces) != null,
+          )
+        }
+    }
+  }
+}
+
+internal fun boundTypesManifest(
+  file: RirFile,
+  packageNameOverrides: Map<String, String> = emptyMap(),
+  namespaceAliases: Map<String, Map<String, String>> = emptyMap(),
+): String {
+  val entries: String = boundTypeEntries(file, packageNameOverrides, namespaceAliases)
+    .joinToString(",\n") { entry ->
+      "    { \"kotlinName\": \"${entry.kotlinName}\", \"csharpName\": \"${entry.csharpName}\", " +
+          "\"implementable\": ${entry.implementable} }"
+    }
+  val body: String = if (entries.isEmpty()) "" else "\n$entries\n  "
+  return "{\n  \"interfaces\": [$body]\n}\n"
 }
 
 fun generateKotlinStubs(
@@ -4728,6 +4842,10 @@ private fun interfaceFileContent(
   qualifiedTypeNames: Map<RirTypeKey, String> = emptyMap(),
 ): String {
   val baseKeys: List<RirTypeKey> = interfaceBaseKeys(iface, boundIfaces)
+  // ADR-088: public when nothing in the declared surface is an internal stub (see
+  // interfaceStubIsPublic); `IKeeper`, whose members name the internal `Ferret` class stub, is the
+  // case that keeps this a predicate rather than an unconditional flip.
+  val visibility: String = if (interfaceStubIsPublic(iface, boundIfaces)) "" else "internal "
   val supertypesSuffix: String =
     if (baseKeys.isEmpty()) "" else " : " + baseKeys.joinToString(", ") { it.name }
 
@@ -4756,7 +4874,12 @@ private fun interfaceFileContent(
     |${importsBlock}// Generated: pure Kotlin interface for the C# interface `$packageId.${iface.name}`
     |// (ADR-070). No handle member by design (Decision 4) — see [${iface.name}Handle] for the
     |// handle-backed implementation reached across the bridge.
-    |internal interface ${iface.name}$supertypesSuffix {$body}
+    |// ADR-088: `public`, unlike the handle/class/bindings stubs, which stay `internal`. A
+    |// consumer's own PUBLIC forward-exported API may take or return this interface
+    |// (`fun adopt(feedable: IFeedable)`), and Kotlin rejects a public signature over an internal
+    |// type. Only the pure interfaces go public: keeping the rest internal is what keeps them out
+    |// of the forward export scan, whose root buckets admit PUBLIC declarations only.
+    |${visibility}interface ${iface.name}$supertypesSuffix {$body}
   """.trimMargin().trim()
 }
 
@@ -5287,7 +5410,8 @@ private fun interfaceBindingsFileContent(
   val bridgeBlock: String =
     if (bridgePlan == null) "" else
       "\n\n" + kotlinBridgeBlock(bridgePlan, objectName, packageId, namespaceName)
-  val valueHelper: String = kotlinInterfaceValueHelper(iface, bridgePlan != null)
+  val valueHelper: String =
+    kotlinInterfaceValueHelper(iface, namespaceName, bridgePlan != null)
 
   return """
     |@file:OptIn(kotlinx.cinterop.ExperimentalForeignApi::class)
@@ -5328,7 +5452,11 @@ private fun interfaceBindingsFileContent(
 // object, the original Kotlin object must come back (`assertSame`), not a wrapper around a bridge
 // around it. Always emitted so every return site can call it unconditionally; without a plan it
 // is just the wrapper construction it replaces.
-private fun kotlinInterfaceValueHelper(iface: RirInterface, planned: Boolean): String =
+private fun kotlinInterfaceValueHelper(
+  iface: RirInterface,
+  namespaceName: String,
+  planned: Boolean,
+): String =
   if (!planned) """
     |internal fun nuget${iface.name}Value(ptr: COpaquePointer): ${iface.name} =
     |  ${iface.name}Handle(ptr)
@@ -5343,6 +5471,19 @@ private fun kotlinInterfaceValueHelper(iface: RirInterface, planned: Boolean): S
     |  }
     |  return ${iface.name}Handle(ptr)
     |}
+    |
+    |// ADR-088: the OUT counterpart of nuget${iface.name}Value, for a forward-exported Kotlin API
+    |// returning this bound interface. The forward KSP emitter calls this by name rather than
+    |// inlining nugetHandleOut, so the dup-thunk reference and the C# type string stay owned by the
+    |// pipeline that generated them. Always a fresh transfer handle: a wrapper duplicates its
+    |// GCHandle, a plain Kotlin implementation mints a bridge.
+    |internal fun nuget${iface.name}HandleOut(value: ${iface.name}): COpaquePointer =
+    |  requireNotNull(
+    |    nugetHandleOut(value, "$namespaceName.${iface.name}", ${iface.name}Bindings.dupHandleFn)
+    |  ) {
+    |    "[nuget] ${iface.name} was returned across the forward bridge as null; the declared " +
+    |        "Kotlin return type is non-nullable."
+    |  }
   """.trimMargin()
 
 // ADR-085: the Kotlin half of a minted bridge — one top-level `staticCFunction`-able slot
@@ -5692,6 +5833,13 @@ abstract class NugetGenerateBindingsTask : DefaultTask() {
   @get:OutputDirectory
   abstract val kotlinOutputDir: DirectoryProperty
 
+  // ADR-088: the cross-pipeline bound-type manifest the forward KSP run reads through the
+  // `nuget.boundTypesManifest` option. A separate OutputFile, not a file inside kotlinOutputDir:
+  // that directory is wired as a Kotlin `srcDir`, and a stray .json in a source root is at best
+  // noise and at worst a compiler input.
+  @get:OutputFile
+  abstract val boundTypesManifestFile: RegularFileProperty
+
   @TaskAction
   fun generate() {
     val rir: RirFile = parseReverseIr(reverseIrFile.get().asFile.readText())
@@ -5718,5 +5866,18 @@ abstract class NugetGenerateBindingsTask : DefaultTask() {
       out.parentFile.mkdirs()
       out.writeText(generated.content)
     }
+
+    // ADR-088: written unconditionally (an empty `interfaces` array when nothing is bound), so
+    // the forward processor's option always points at a file that exists — a missing manifest is
+    // then a real wiring fault, not "this build happened to bind no interfaces".
+    val manifest: File = boundTypesManifestFile.get().asFile
+    manifest.parentFile.mkdirs()
+    manifest.writeText(
+      boundTypesManifest(
+        file = rir,
+        packageNameOverrides = packageNameOverrides.get(),
+        namespaceAliases = namespaceAliases.get(),
+      )
+    )
   }
 }

@@ -26,6 +26,45 @@ class ForwardBridgeTypeClassifierTest {
     ForwardBridgeTypeContext(exportedObjectHandles = setOf("sample.Pet")),
   )
 
+  /** ADR-088: a bound stub is deliberately NOT in [ForwardBridgeTypeContext.exportedObjectHandles]
+   *  (it is excluded from the forward root buckets so it is never re-projected as `IIFeedable`),
+   *  so the manifest branch has to win before the membership check. */
+  private val boundClassifier = ForwardBridgeTypeClassifier(
+    ForwardBridgeTypeContext(
+      exportedObjectHandles = setOf("sample.Pet"),
+      boundInterfaces = mapOf(
+        "test.menagerie.IFeedable" to
+            ForwardBoundInterface("test.menagerie.IFeedable", "Test.Menagerie.IFeedable", true),
+        "test.menagerie.ICrowded" to
+            ForwardBoundInterface("test.menagerie.ICrowded", "Test.Menagerie.ICrowded", false),
+      ),
+    ),
+  )
+
+  @Test
+  fun `classifies a manifest-listed interface as BoundInterface with the ORIGINAL C# name`() {
+    assertEquals(
+      BridgeType.BoundInterface(
+        "test.menagerie.IFeedable",
+        csharpType = "global::Test.Menagerie.IFeedable",
+        implementable = true,
+      ),
+      boundClassifier.classify(type("test.menagerie.IFeedable", classKind = ClassKind.INTERFACE)),
+    )
+  }
+
+  @Test
+  fun `carries the manifest implementable flag through classification`() {
+    assertEquals(
+      BridgeType.BoundInterface(
+        "test.menagerie.ICrowded",
+        csharpType = "global::Test.Menagerie.ICrowded",
+        implementable = false,
+      ),
+      boundClassifier.classify(type("test.menagerie.ICrowded", classKind = ClassKind.INTERFACE)),
+    )
+  }
+
   @Test
   fun `classifies an exported interface as BridgeType Interface with I-prefixed csharpType`() {
     assertEquals(

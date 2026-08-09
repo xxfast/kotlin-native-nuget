@@ -81,6 +81,17 @@ internal enum class ForwardPlanSkipReason(val droppedFromCSharp: Boolean) {
    *  from [UNEXPORTED_DEPENDENCY_TYPE], whose `include(...)` hint is wrong here: a platform
    *  library can never be brought into scope. */
   ACTUAL_TYPEALIAS_TARGET(droppedFromCSharp = true),
+
+  /** ADR-088: a bound C# interface at a position v1 does not marshal (nullable, property,
+   *  collection component, receiver). Named rather than folded into the generic UNSUPPORTED
+   *  bucket: the type IS bridgeable, just not here, and the hint differs accordingly. */
+  BOUND_INTERFACE_POSITION(droppedFromCSharp = true),
+
+  /** ADR-088: a bound C# interface at a RETURN position that the manifest flags as not
+   *  Kotlin-implementable (no `mint{Iface}Bridge`), so a plain Kotlin implementation of it cannot
+   *  be lowered to a C#-side bridge. Parameter positions of the same interface stay admissible:
+   *  they only need `nuget{Iface}Value`. */
+  UNIMPLEMENTABLE_BOUND_INTERFACE(droppedFromCSharp = true),
 }
 
 internal sealed interface ForwardCallableCatalogEntry {
@@ -1046,6 +1057,11 @@ internal class ForwardCallablePlanner(
       if (inputTypes.any { type -> type.unwrapNullable() == BridgeType.Instant }) {
         add(ForwardHelperRequirement.INSTANT)
       }
+      // ADR-088: the reverse pipeline already generated these helpers into the same compilation;
+      // the requirement is recorded only so the validator's conversion/helper pairing check holds.
+      if (inputTypes.any { type -> type.unwrapNullable() is BridgeType.BoundInterface }) {
+        add(ForwardHelperRequirement.BOUND_INTERFACE)
+      }
     }
     val plan = ForwardCallablePlan(
       invocation = ForwardInvocation(
@@ -1144,6 +1160,22 @@ internal class ForwardCallablePlanner(
         transfer = ForwardTransfer(
           name, type, ForwardFlow.INTO_KOTLIN, ForwardPassing.VALUE,
           ForwardOwnership.BORROWED, ForwardConversion.HANDLE_TO_STABLE_REF,
+        ),
+      )
+    )
+
+    // ADR-088: same POINTER/IN wire as the two above, but the pointer is a transfer GCHandle the
+    // C# wrapper allocated. Kotlin RECEIVES ownership (`nuget{Iface}Value` either frees it on a
+    // token-probe hit or hands it to the wrapper's cleaner), which is why the transfer is not
+    // BORROWED: nothing on the C# side frees it after the call.
+    is BridgeType.BoundInterface -> listOf(
+      ForwardAbiParameter(
+        name = name,
+        wireType = ForwardAbiWireType.POINTER,
+        direction = ForwardAbiDirection.IN,
+        transfer = ForwardTransfer(
+          name, type, ForwardFlow.INTO_KOTLIN, ForwardPassing.VALUE,
+          ForwardOwnership.MATERIALIZED, ForwardConversion.GC_HANDLE_TO_BOUND_VALUE,
         ),
       )
     )
@@ -1400,6 +1432,11 @@ internal class ForwardCallablePlanner(
     )
 
     is BridgeType.ObjectHandle, is BridgeType.Interface -> handleResultShape(this)
+    // ADR-088: gated on the manifest's Kotlin-implementability flag. Without a
+    // `mint{Iface}Bridge`, a plain Kotlin implementation returned here has nothing to become on
+    // the C# side, and v1 refuses to emit a route that works for one origin and traps for the
+    // other (the skip is named UNIMPLEMENTABLE_BOUND_INTERFACE).
+    is BridgeType.BoundInterface -> if (implementable) boundInterfaceResultShape(this) else null
     // ADR-014 gap this feature's fixture flushed out: a value class returned by an *ordinary*
     // (non-value-class-own) callable never had a planner-side result shape, despite the model/
     // validator already carrying BOX_VALUE_CLASS/UNBOX_VALUE_CLASS conversions for exactly this
@@ -1593,6 +1630,27 @@ internal class ForwardCallablePlanner(
     else -> null
   }
 
+  /**
+   * ADR-088: a bound C# interface returned OUT of Kotlin. Wire-shaped like [handleResultShape] (a
+   * POINTER), but deliberately NOT it: the pointer is a GCHandle, not a StableRef, so the
+   * ownership and cleanup are the other way round. C# owns the fresh transfer handle and frees it
+   * the moment it resolves `.Target`, which is why this is MATERIALIZED with no Kotlin-side
+   * cleanup rather than OWNED_HANDLE + DISPOSE_STABLE_REF.
+   */
+  private fun boundInterfaceResultShape(type: BridgeType.BoundInterface): ForwardResultShape =
+    ForwardResultShape(
+      wireType = ForwardAbiWireType.POINTER,
+      transfer = ForwardTransfer(
+        subject = "result",
+        type = type,
+        flow = ForwardFlow.OUT_OF_KOTLIN,
+        passing = ForwardPassing.VALUE,
+        ownership = ForwardOwnership.MATERIALIZED,
+        conversion = ForwardConversion.BOUND_VALUE_TO_GC_HANDLE,
+      ),
+      helperRequirements = setOf(ForwardHelperRequirement.BOUND_INTERFACE),
+    )
+
   private fun handleResultShape(
     type: BridgeType,
     helper: ForwardHelperRequirement? = null,
@@ -1738,7 +1796,11 @@ internal class ForwardCallablePlanner(
     // ADR-076: defensive only -- shapeOrNull's Instant branch always succeeds, same as CHAR/
     // STRING above.
     BridgeType.Instant -> ForwardPlanSkipReason.INSTANT
-    is BridgeType.Nullable -> ForwardPlanSkipReason.NULLABLE
+    // ADR-088: same deferred nullable position as the input side, named the same way instead of
+    // reaching the generic NULLABLE bucket.
+    is BridgeType.Nullable ->
+      if (type is BridgeType.BoundInterface) ForwardPlanSkipReason.BOUND_INTERFACE_POSITION
+      else ForwardPlanSkipReason.NULLABLE
     // ADR-066: a bridgeable-shaped Collection (List/MutableList result, Map/Set) that still
     // reaches here failed for its own reason (nothing else calls skipReason() on a bridgeable
     // Collection); an unsupported element/key/value attributes to that component's own reason
@@ -1756,6 +1818,13 @@ internal class ForwardCallablePlanner(
     // Never actually reached by an ordinary interface result (shapeOrNull's Interface branch
     // always succeeds); only reachable defensively via a Collection-of-Interface element skip.
     is BridgeType.Interface -> ForwardPlanSkipReason.HANDLE
+    // ADR-088: shapeOrNull's BoundInterface branch succeeds only for a manifest-flagged
+    // Kotlin-implementable interface, so reaching here at a return position means exactly the
+    // "no mint{Iface}Bridge" case. A collection element reaches here too, and takes the position
+    // skip instead (collections of bound interfaces are deferred).
+    is BridgeType.BoundInterface ->
+      if (implementable) ForwardPlanSkipReason.BOUND_INTERFACE_POSITION
+      else ForwardPlanSkipReason.UNIMPLEMENTABLE_BOUND_INTERFACE
     is BridgeType.ValueClass -> ForwardPlanSkipReason.VALUE_CLASS
     is BridgeType.SpecializedProtocol -> when {
       // ADR-065: StateFlow shares the plain-Flow legacy route (both are named legacy exports in
@@ -1788,6 +1857,10 @@ internal class ForwardCallablePlanner(
     // through NugetMarshal.HandleOf (ForwardCirPlanProjection.callArgument), which throws
     // NotSupportedException at runtime for a C#-implemented (non-Kotlin-backed) IFoo.
     is BridgeType.ObjectHandle, is BridgeType.Interface -> null
+    // ADR-088: admissible at a parameter position regardless of `implementable` — the incoming
+    // GCHandle only needs `nuget{Iface}Value`, which every manifest-listed interface has. Only a
+    // RETURN of a plain Kotlin implementation needs the mint.
+    is BridgeType.BoundInterface -> null
     // ADR-066: an unsupported element must not silently produce a Collection shape that later
     // crashes plan validation — route it through the same skip path as any other unsupported
     // input, preferring the (element ?: key ?: value)'s own reason (e.g.
@@ -1820,6 +1893,12 @@ internal class ForwardCallablePlanner(
       is BridgeType.ValueClass ->
         if (inner.underlying.isOrdinaryValueClassUnderlying()) null
         else ForwardPlanSkipReason.VALUE_CLASS
+
+      // ADR-088: `IFeedable?` is on this ADR's deferred list. The null-pointer ride is natural,
+      // but it needs its own lowering in four emitter positions; until then the skip names the
+      // position rather than falling through to the generic NULLABLE bucket below, whose
+      // diagnostic kind is SKIPPED_UNSUPPORTED_RETURN and whose hint talks about Booleans.
+      is BridgeType.BoundInterface -> ForwardPlanSkipReason.BOUND_INTERFACE_POSITION
 
       else -> ForwardPlanSkipReason.NULLABLE
     }
@@ -1886,6 +1965,9 @@ internal class ForwardCallablePlanner(
     is BridgeType.Enum,
     is BridgeType.ObjectHandle,
     is BridgeType.Interface,
+    // ADR-088: like ObjectHandle/Interface, a bound interface always builds its own tagged
+    // ForwardTransfer at its call site rather than reaching this untagged pass-through.
+    is BridgeType.BoundInterface,
     is BridgeType.ValueClass,
     is BridgeType.SpecializedProtocol,
     is BridgeType.RawKSType,
@@ -1960,7 +2042,9 @@ internal fun BridgeType.isBridgeableComponent(): Boolean = when (this) {
   // silently building an untested shape.
   // ADR-076: "Instant as a collection element" is explicitly deferred (its own boxing question,
   // ADR-073/075's isWrappableComponent allow-list territory) -- same route.
-  is BridgeType.Interface, BridgeType.Instant,
+  // ADR-088: "bound interfaces as collection components" is on this ADR's own deferred list, for
+  // the same reason -- the wrap/box helpers have no route for a GCHandle element.
+  is BridgeType.Interface, is BridgeType.BoundInterface, BridgeType.Instant,
   is BridgeType.RawCollection, is BridgeType.RawKSType, is BridgeType.SpecializedProtocol,
   is BridgeType.Unsupported,
     -> false

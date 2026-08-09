@@ -127,6 +127,8 @@ class NugetPlugin : Plugin<Project> {
             )
             task.namespaceAliases.set(bound.associate { it.id to it.bind!!.aliases })
             task.kotlinOutputDir.set(interopDir.map { it.dir("kotlin") })
+            // ADR-088: beside the generated Kotlin, not inside it — see the task property.
+            task.boundTypesManifestFile.set(interopDir.map { it.file("bound-types.json") })
           }
 
         nugetImport.configure { task -> task.dependsOn(nugetGenerateBindings) }
@@ -271,6 +273,17 @@ class NugetPlugin : Plugin<Project> {
           argMethod.invoke(ksp, "nuget.includePackages", pub?.include.orEmpty().joinToString(","))
           argMethod.invoke(ksp, "nuget.excludePackages", pub?.exclude.orEmpty().joinToString(","))
           argMethod.invoke(ksp, "nuget.boundPackages", boundPackages.joinToString(","))
+
+          // ADR-088: the same channel as `nuget.boundPackages`, carrying what a flat package list
+          // cannot — the ORIGINAL C# full name per bound interface, and whether a Kotlin class can
+          // implement it. Empty when nothing is bound (the manifest task never ran, so pointing at
+          // a path would promise a file that does not exist). Ordering is already guaranteed:
+          // `kspKotlin{Target}` dependsOn `nugetGenerateBindings`.
+          val boundTypesManifest: String = if (boundPackages.isEmpty()) "" else {
+            project.layout.buildDirectory.get().asFile
+              .resolve("nuget-interop/bound-types.json").absolutePath
+          }
+          argMethod.invoke(ksp, "nuget.boundTypesManifest", boundTypesManifest)
         }
       }
 

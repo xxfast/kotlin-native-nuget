@@ -1036,22 +1036,18 @@ data class KotlinBridgePlan(
   // C# compiler forces `ITaggedBridge : ITagged` to implement IFeedable's members too, and the
   // only thing that can serve them is a function pointer this factory received.
   val slots: List<RirRegistrable>,
-  // ADR-086: at least one slot hands a handle-backed value OUT (a bound-object or bound-interface
-  // return or getter), so this interface registers the extra per-interface `dupHandle` thunk. The
-  // out direction must produce a FRESH transfer handle: the wrapper that owns the original may be
+  // ADR-086: a slot hands a handle-backed value OUT (a bound-object or bound-interface return or
+  // getter), so this interface registers the extra per-interface `dupHandle` thunk. The out
+  // direction must produce a FRESH transfer handle: the wrapper that owns the original may be
   // unreachable the instant the slot returns, and its cleaner is free to release it while C# is
   // still resolving the pointer.
-  val needsDupHandle: Boolean = false,
+  // ADR-088 widened this from "some slot has a handle-out position" to *every* plannable
+  // interface: a bound interface can now also be handed out at an ordinary FORWARD return
+  // (`fun resident(): IFeedable`), which is not a slot at all, so slot shape no longer decides.
+  // The cost is one extra registration pointer per interface; both sides derive it from this one
+  // plan, so the ADR-054 contract hash moves in lockstep.
+  val needsDupHandle: Boolean = true,
 )
-
-// ADR-086: the out positions that force the dup thunk. A parameter/setter is IN-bound (C# mints
-// the handle, Kotlin's wrapper cleaner owns it), so it never needs dup.
-private fun RirRegistrable.hasHandleOutPosition(): Boolean = when (this) {
-  is RirRegistrable.Method -> method.returnType.isHandleBacked()
-  is RirRegistrable.PropertyGetter -> property.type.isHandleBacked()
-  is RirRegistrable.PropertySetter -> false
-  is RirRegistrable.Ctor -> false
-}
 
 // ADR-086: the two slot types that ride the ADR-051 GCHandle IntPtr wire and therefore carry
 // object IDENTITY rather than a copied value.
@@ -1183,7 +1179,10 @@ fun kotlinBridgePlan(
   val slots: List<RirRegistrable> =
     kotlinBridgeSlots(iface, boundHandleTypes, boundInterfaceTypes)
   if (slots.isEmpty()) return null
-  return KotlinBridgePlan(iface, slots, needsDupHandle = slots.any { it.hasHandleOutPosition() })
+  // ADR-088: unconditional. `slots.any { it.hasHandleOutPosition() }` (ADR-086) only covered
+  // reverse slots; a forward return position is not a slot, and any plannable interface can
+  // appear at one.
+  return KotlinBridgePlan(iface, slots, needsDupHandle = true)
 }
 
 // ADR-085: `skipped_kotlin_bridge`, one per reason this interface cannot be implemented in Kotlin

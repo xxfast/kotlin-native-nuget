@@ -1,6 +1,7 @@
 package io.github.xxfast.kotlin.native.nuget.processor.cir
 
 import com.google.devtools.ksp.processing.KSPLogger
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBoundInterface
 import com.google.devtools.ksp.symbol.ClassKind
 import com.google.devtools.ksp.symbol.KSClassDeclaration
 import com.google.devtools.ksp.symbol.KSDeclaration
@@ -35,6 +36,11 @@ data class NugetContext(
   val includePackages: List<String> = emptyList(),
   val excludePackages: List<String> = emptyList(),
   val boundPackages: List<String> = emptyList(),
+  /** ADR-088: the bound C# interfaces the plugin's `bound-types.json` manifest declares, keyed by
+   *  the generated Kotlin stub's qualified name. Empty when nothing is bound, or when the option
+   *  is absent (an older plugin against a newer processor), in which case every bound interface at
+   *  a forward position keeps the pre-ADR-088 behaviour. */
+  val boundInterfaces: Map<String, ForwardBoundInterface> = emptyMap(),
 )
 
 internal fun translate(

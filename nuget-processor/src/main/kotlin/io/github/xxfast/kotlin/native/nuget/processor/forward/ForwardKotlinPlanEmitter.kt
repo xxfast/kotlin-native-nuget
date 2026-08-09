@@ -104,6 +104,21 @@ internal fun FileSpec.Builder.addForwardKotlinPlanExport(plan: ForwardCallablePl
       )
     }
 
+    // ADR-088: a GCHandle, not a StableRef — the reverse pipeline's own `nuget{Iface}HandleOut`
+    // decides between duplicating a wrapper's handle and minting a bridge, so the forward emitter
+    // only names it. Same POINTER result and error-slot shape as the handle branch below.
+    is BridgeType.BoundInterface -> {
+      require(call.result == ForwardAbiWireType.POINTER) {
+        "Forward Kotlin bound-interface result must use POINTER wire type: ${plan.invocation.symbol}"
+      }
+      builder.returns(cOpaquePointer.copy(nullable = true))
+      builder.addCode(
+        errorHandlingValueBody(result.handleOutExpression(invocation), error.name, "null"),
+        cOpaquePointerVar,
+        stableRef,
+      )
+    }
+
     is BridgeType.ObjectHandle, is BridgeType.Interface, is BridgeType.Collection -> {
       // ADR-081: a collection with a value-class component boxes a projected copy of itself, so the
       // per-element boxes carry the underlying rather than the value class.
@@ -810,6 +825,8 @@ private fun kotlinInputType(type: BridgeType, wireType: ForwardAbiWireType): Typ
 
   BridgeType.String -> kotlinType("String")
   is BridgeType.ObjectHandle, is BridgeType.Interface, is BridgeType.Collection -> cOpaquePointer
+  // ADR-088: the transfer GCHandle the C# wrapper allocated.
+  is BridgeType.BoundInterface -> cOpaquePointer
   // ADR-077 sub-item 1: a value class crosses as its underlying wire value, so the export's
   // parameter is typed as the underlying (String today) and `loweredArgument` re-wraps it.
   is BridgeType.ValueClass -> kotlinInputType(type.underlying, wireType)
@@ -839,6 +856,19 @@ private fun errorHandlingUnitBody(invocation: String, errorName: String): String
   appendLine("  }")
   append("}")
 }
+
+/**
+ * ADR-088: the reverse pipeline generates `nuget{Iface}Value` / `nuget{Iface}HandleOut` beside the
+ * interface stub, in the stub's own Kotlin package. Both are `internal`, which is no obstacle: the
+ * reverse bindings and this forward output compile into the same module. Fully qualified rather
+ * than imported, matching how the plan emitter already names every other cross-package symbol.
+ */
+private fun BridgeType.BoundInterface.valueHelper(): String =
+  "${qualifiedName.substringBeforeLast('.')}.nuget${qualifiedName.substringAfterLast('.')}Value"
+
+private fun BridgeType.BoundInterface.handleOutExpression(invocation: String): String =
+  "${qualifiedName.substringBeforeLast('.')}." +
+      "nuget${qualifiedName.substringAfterLast('.')}HandleOut($invocation)"
 
 private fun errorHandlingValueBody(
   invocation: String,
@@ -961,6 +991,11 @@ private fun loweredArgument(parameter: ForwardPublicParameter): String =
 
     is BridgeType.Interface ->
       "${parameter.name}.asStableRef<${type.qualifiedName}>().get()"
+
+    // ADR-088: the reverse pipeline's own resolver. It frees the incoming transfer handle and
+    // returns the ORIGINAL Kotlin object on a token-probe hit; otherwise it wraps the handle in
+    // the ADR-070 `{Iface}Handle`, whose cleaner owns it from here on.
+    is BridgeType.BoundInterface -> "${type.valueHelper()}(${parameter.name})"
 
     is BridgeType.Collection -> loweredCollectionExpression(parameter.name, type)
 

@@ -110,7 +110,8 @@ class NugetInterfaceGenerationTest {
     val files: List<GeneratedFile> = generateKotlinStubs(rir)
     val file: GeneratedFile = files.single { it.relativePath.endsWith("/IFeedable.kt") }
 
-    assertContains(file.content, "internal interface IFeedable {")
+    // ADR-088: `public`, so a consumer's own public forward API can name it.
+    assertContains(file.content, "\ninterface IFeedable {")
     assertContains(file.content, "fun describe(): String")
     assertContains(file.content, "fun feed(food: String)")
     assertContains(file.content, "val legs: Int")
@@ -126,7 +127,7 @@ class NugetInterfaceGenerationTest {
     val files: List<GeneratedFile> = generateKotlinStubs(rir)
     val file: GeneratedFile = files.single { it.relativePath.endsWith("/ITagged.kt") }
 
-    assertContains(file.content, "internal interface ITagged : IFeedable {")
+    assertContains(file.content, "\ninterface ITagged : IFeedable {")
     assertContains(file.content, "val tag: String")
     assertFalse(file.content.contains("fun describe"), "inherited members are not redeclared")
   }
@@ -165,8 +166,10 @@ class NugetInterfaceGenerationTest {
     val file: GeneratedFile = files.single { it.relativePath.endsWith("/IFeedableBindings.kt") }
 
     // describe, feed, legsGetter, nicknameGetter, nicknameSetter = 5 member slots, plus ADR-085's
-    // two bridge slots (createBridge, bridgeToken) because IFeedable is Kotlin-implementable.
-    assertContains(file.content, "expectedSlots = 7,")
+    // two bridge slots (createBridge, bridgeToken) because IFeedable is Kotlin-implementable, plus
+    // ADR-088's dup thunk, which every plannable interface now registers (a forward return
+    // position can hand any of them back).
+    assertContains(file.content, "expectedSlots = 8,")
     assertFalse(file.content.contains("ctor"))
   }
 
@@ -266,7 +269,8 @@ class NugetInterfaceGenerationTest {
     assertContains(
       registration.content,
       "private static extern void nuget_test_menagerie_i_tagged_register(int slotCount, " +
-          "long contractHash, IntPtr tagGetterPtr, IntPtr createBridgePtr, IntPtr bridgeTokenPtr);",
+          "long contractHash, IntPtr tagGetterPtr, IntPtr createBridgePtr, IntPtr bridgeTokenPtr, " +
+          "IntPtr dupHandlePtr);",
     )
   }
 

@@ -644,6 +644,7 @@ class ForwardMarshallingMatrixTest {
     is BridgeType.Enum -> "Enum"
     is BridgeType.ObjectHandle -> "ObjectHandle"
     is BridgeType.Interface -> "Interface"
+    is BridgeType.BoundInterface -> "BoundInterface"
     is BridgeType.ValueClass -> "ValueClass"
     is BridgeType.Collection -> "Collection(${type.kind})"
     is BridgeType.Nullable -> "Nullable(${typeLabel(type.type)})"

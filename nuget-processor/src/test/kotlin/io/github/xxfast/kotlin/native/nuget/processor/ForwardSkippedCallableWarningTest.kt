@@ -94,6 +94,10 @@ class ForwardSkippedCallableWarningTest {
         ForwardPlanSkipReason.UNEXPORTED_DEPENDENCY_TYPE,
         // ADR-074: an actual typealias target the forward direction does not export.
         ForwardPlanSkipReason.ACTUAL_TYPEALIAS_TARGET,
+        // ADR-088: a bound C# interface at a position v1 does not marshal, and one that cannot be
+        // implemented in Kotlin at a return position. Both are real drops with their own kinds.
+        ForwardPlanSkipReason.BOUND_INTERFACE_POSITION,
+        ForwardPlanSkipReason.UNIMPLEMENTABLE_BOUND_INTERFACE,
       ),
       dropped,
     )

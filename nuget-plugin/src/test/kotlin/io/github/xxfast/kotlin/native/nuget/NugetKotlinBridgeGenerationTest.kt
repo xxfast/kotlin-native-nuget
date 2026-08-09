@@ -123,6 +123,15 @@ class NugetKotlinBridgeGenerationTest {
 
   // The two namespaces must alias to distinct Kotlin packages, as the real TestDependency bind
   // block does — that is what makes the enum reference cross-package at all.
+  // ADR-088: append one more interface to an existing single-namespace fixture.
+  private fun RirFile.withInterface(iface: RirInterface): RirFile = copy(
+    assemblies = assemblies.map { assembly ->
+      assembly.copy(
+        namespaces = assembly.namespaces.map { ns -> ns.copy(types = ns.types + iface) },
+      )
+    },
+  )
+
   private val menagerieAliases: Map<String, Map<String, String>> = mapOf(
     "TestDependency" to mapOf(
       "Test.Menagerie" to "test.menagerie",
@@ -153,7 +162,9 @@ class NugetKotlinBridgeGenerationTest {
   // Moved twice, deliberately, in this wave: once when the flattened factory signature entered
   // the hash, once when ADR-087 stage 2's errOut param moved every slot onto the uniform
   // kotlin_bridge_v2 tag. Both are coordinated regenerations of both halves.
-  private val contractHashOfIFeedable = -7783318298045765409L
+  // Moved a third time by ADR-088, which registers the dup thunk for EVERY plannable interface
+  // (a forward return position can hand any of them back), not just those with a handle-out slot.
+  private val contractHashOfIFeedable = -294924446988834285L
 
   private val rirWithSanctuary = RirFile(
     assemblies = listOf(
@@ -379,7 +390,7 @@ class NugetKotlinBridgeGenerationTest {
       planned.content,
       "IFeedableBindings.createBridgeFn = requireNotNull(createBridgePtr).reinterpret()",
     )
-    assertContains(planned.content, "expectedSlots = 7,")
+    assertContains(planned.content, "expectedSlots = 8,")
 
     val hashOf: (String) -> String = { content ->
       content.substringAfter("expectedHash = ").substringBefore("L,")
@@ -670,7 +681,7 @@ class NugetKotlinBridgeGenerationTest {
       .content.substringAfter("expectedHash = ").substringBefore("L,")
     val csharpHash: String = generateCSharpShims(rir, "TestLibraryNative")
       .single { it.relativePath == "IFeedableRegistration.cs" }
-      .content.substringAfter("                    7,\n                    ").substringBefore("L,")
+      .content.substringAfter("                    8,\n                    ").substringBefore("L,")
 
     assertEquals(kotlinHash, csharpHash)
     // ...and it is NOT the pre-envelope value the round-1 flattening test pinned.
@@ -686,7 +697,7 @@ class NugetKotlinBridgeGenerationTest {
 
     // Pinned literals: the wrapper is a body-only change, so a stale shim stays compatible. If
     // either of these moves, the ADR-054 registration check will reject every shipped consumer.
-    assertContains(bindings.content, "expectedSlots = 7,")
+    assertContains(bindings.content, "expectedSlots = 8,")
     assertContains(bindings.content, "expectedHash = ${contractHashOfIFeedable}L,")
   }
 
@@ -753,7 +764,7 @@ class NugetKotlinBridgeGenerationTest {
       file.content,
       "GCHandle.FromIntPtr(handle).Target is INugetKotlinBridge bridge",
     )
-    assertContains(file.content, "7,")
+    assertContains(file.content, "8,")
   }
 
   @Test
@@ -898,8 +909,8 @@ class NugetKotlinBridgeGenerationTest {
     assertNotEquals(hashOf(before), hashOf(after))
     // ITagged's OWN registration slots did not move — only the flattened factory did, which is
     // exactly the drift a memberHash-only contract cannot see.
-    assertContains(before, "expectedSlots = 3,")
-    assertContains(after, "expectedSlots = 3,")
+    assertContains(before, "expectedSlots = 4,")
+    assertContains(after, "expectedSlots = 4,")
   }
 
   @Test
@@ -952,8 +963,8 @@ class NugetKotlinBridgeGenerationTest {
       "(IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, IntPtr, IntPtr, IntPtr, IntPtr, IntPtr, " +
           "IntPtr, IntPtr>)(&CreateITaggedBridge)",
     )
-    // ITagged registers ONE own member slot plus the two bridge slots.
-    assertContains(file.content, "                    3,")
+    // ITagged registers ONE own member slot plus the two bridge slots, plus ADR-088's dup thunk.
+    assertContains(file.content, "                    4,")
   }
 
   // ------------------------------------------------------------------
@@ -1158,14 +1169,91 @@ class NugetKotlinBridgeGenerationTest {
     assertContains(file.content, "                    7,")
   }
 
+  // ------------------------------------------------------------------
+  // ADR-088: stub visibility + the cross-pipeline bound-types manifest
+  // ------------------------------------------------------------------
+
+  /** Arity 3 is outside the ADR-085 slot vocabulary, so `ICrowded` has no `mintICrowdedBridge` —
+   *  but every member type is public-facing, so its stub still goes public. Exactly the
+   *  "listed, not implementable" case the manifest's flag exists to carry. */
+  private val iCrowded = RirInterface(
+    name = "ICrowded",
+    methods = listOf(
+      RirMethod(
+        name = "Herd", returnType = RirVoidType,
+        parameters = listOf(
+          RirParameter("a", RirStringType(nullable = false)),
+          RirParameter("b", RirStringType(nullable = false)),
+          RirParameter("c", RirStringType(nullable = false)),
+        ),
+      ),
+    ),
+  )
+
   @Test
-  fun `an interface with no handle-backed OUT position registers no dup thunk`() {
-    // IFeedable is all strings/ints: ADR-085's two extra slots, v1 tag, no dup.
+  fun `a pure interface stub is public unless its surface names an internal stub`() {
+    val files: List<GeneratedFile> = generateKotlinStubs(rirWithKeeper)
+
+    // ADR-088's prerequisite: a consumer's own public forward API can name IFeedable.
+    val feedable: String = files.single { it.relativePath.endsWith("/IFeedable.kt") }.content
+    assertContains(feedable, "\ninterface IFeedable {")
+    assertFalse(feedable.contains("internal interface IFeedable"))
+
+    // ...but IKeeper's members take and return `Ferret`, an internal CLASS stub (bound classes at
+    // forward positions are deferred), and a public interface over an internal type does not
+    // compile. The ADR assumed the flip was unconditional; it is not.
+    val keeper: String = files.single { it.relativePath.endsWith("/IKeeper.kt") }.content
+    assertContains(keeper, "internal interface IKeeper {")
+  }
+
+  @Test
+  fun `the bound-types manifest carries the C# name and the implementable flag`() {
+    val entries: List<BoundTypeEntry> = boundTypeEntries(
+      rirWithKeeper.withInterface(iCrowded),
+      namespaceAliases = menagerieAliases,
+    )
+
+    assertEquals(
+      BoundTypeEntry("test.menagerie.IFeedable", "Test.Menagerie.IFeedable", implementable = true),
+      entries.single { it.kotlinName.endsWith(".IFeedable") },
+    )
+    // Admissible (ADR-070) and public, so the forward classifier may map it at a PARAMETER
+    // position; not Kotlin-implementable, so a return of it takes the named skip.
+    assertEquals(
+      BoundTypeEntry("test.menagerie.ICrowded", "Test.Menagerie.ICrowded", implementable = false),
+      entries.single { it.kotlinName.endsWith(".ICrowded") },
+    )
+    // An interface held back to `internal` can never appear in a public forward signature, so it
+    // is not a forward-position candidate at all.
+    assertTrue(entries.none { it.kotlinName.endsWith(".IKeeper") }, entries.toString())
+  }
+
+  @Test
+  fun `the manifest renders as a flat JSON array the processor can parse`() {
+    val json: String = boundTypesManifest(rirOf(iFeedable), namespaceAliases = menagerieAliases)
+
+    assertEquals(
+      """
+      {
+        "interfaces": [
+          { "kotlinName": "test.menagerie.IFeedable", "csharpName": "Test.Menagerie.IFeedable", "implementable": true }
+        ]
+      }
+      """.trimIndent() + "\n",
+      json,
+    )
+  }
+
+  @Test
+  fun `every plannable interface registers the dup thunk, handle-backed slots or not`() {
+    // ADR-086 gated this on "some slot hands a handle OUT"; ADR-088 made it unconditional,
+    // because a forward RETURN position (`fun resident(): IFeedable`) is not a slot at all and any
+    // plannable interface can appear at one. IFeedable is all strings/ints and still needs it.
     val plan = requireNotNull(kotlinBridgePlan(iFeedable, boundHandleTypes(rir), boundInterfaceTypes(rir)))
-    assertFalse(plan.needsDupHandle)
+    assertTrue(plan.needsDupHandle)
     val file: GeneratedFile = generateKotlinStubs(rir)
       .single { it.relativePath.endsWith("/IFeedableBindings.kt") }
-    assertFalse(file.content.contains("dupHandleFn"))
+    assertContains(file.content, "dupHandleFn")
   }
 
   @Test

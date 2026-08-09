@@ -75,6 +75,8 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallablePla
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallablePlanner
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnostic
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnosticKind
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardPlanSkipReason
+import io.github.xxfast.kotlin.native.nuget.processor.forward.diagnosticHint
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnosticSink
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnosticTrackingLogger
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardHelperRequirement
@@ -153,14 +155,27 @@ internal fun warnDroppedForwardProperties(
   logger: KSPLogger,
 ) {
   val diagnostics: List<ForwardDiagnostic> = catalog.droppedProperties.map { dropped ->
-    ForwardDiagnostic(
-      kind = ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_PROPERTY,
-      symbol = dropped.node,
-      declaration = dropped.symbol,
-      reason = "its type ${dropped.typeDescription} has no property getter or setter shape",
-      hint = "expose a bridgeable property (or a getter function) whose type is not " +
-          "${dropped.typeDescription}, and export that instead",
-    )
+    // ADR-088: a bound C# interface is bridgeable, just not at a property; its message says so
+    // rather than telling the author to stop using the type.
+    if (dropped.boundInterface) {
+      ForwardDiagnostic(
+        kind = ForwardDiagnosticKind.SKIPPED_BOUND_TYPE_POSITION,
+        symbol = dropped.node,
+        declaration = dropped.symbol,
+        reason = "the bound C# interface ${dropped.typeDescription} is not marshalled at a " +
+            "property position",
+        hint = ForwardPlanSkipReason.BOUND_INTERFACE_POSITION.diagnosticHint(),
+      )
+    } else {
+      ForwardDiagnostic(
+        kind = ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_PROPERTY,
+        symbol = dropped.node,
+        declaration = dropped.symbol,
+        reason = "its type ${dropped.typeDescription} has no property getter or setter shape",
+        hint = "expose a bridgeable property (or a getter function) whose type is not " +
+            "${dropped.typeDescription}, and export that instead",
+      )
+    }
   }
   ForwardDiagnosticSink.emit(diagnostics, logger)
 }
@@ -363,6 +378,12 @@ class NugetProcessor(
       .filter { it.getVisibility() == Visibility.PUBLIC }
       .filter { it.classKind == ClassKind.INTERFACE }
       .filter { it.parentDeclaration == null }
+      // ADR-088: a bound interface's ADR-070 stub is now `public`, so without this it would enter
+      // the forward export scan and be re-projected as a DUPLICATE `IIFeedable` + backing wrapper
+      // (the shipped enum-duplication precedent, deliberately not extended). The classifier maps
+      // it to the ORIGINAL `Test.Menagerie.IFeedable` instead, which is only coherent if this
+      // pipeline never mints a second managed type for the same concept.
+      .filter { it.qualifiedName?.asString() !in context.boundInterfaces }
 
     // ADR-066: the reachability closure discovers dependency-module (klib) declarations reachable
     // from these module-local roots — the only way in, since `getDeclarationsFromPackage` returns
@@ -464,6 +485,7 @@ class NugetProcessor(
         rootPackage = context.rootPackage,
         rootNamespace = context.rootNamespace,
         actualTypeAliasTargets = actualTypeAliasTargets,
+        boundInterfaces = context.boundInterfaces,
       ),
     )
     val forwardPlanner = ForwardCallablePlanner(forwardClassifier)

@@ -23,6 +23,11 @@ internal data class ForwardBridgeTypeContext(
    *  the alias (spike finding 8), so the classifier must redirect by name before it ever reaches
    *  the [exportedObjectHandles] membership check. */
   val actualTypeAliasTargets: Map<String, KSClassDeclaration> = emptyMap(),
+  /** ADR-088: the plugin's `bound-types.json`, keyed by the generated stub's Kotlin FQCN. The
+   *  forward pipeline cannot derive a bound interface's original C# spelling from anything else
+   *  it holds: `nuget.boundPackages` is a flat package list, and the namespace-alias map that
+   *  produced the Kotlin package is not invertible. */
+  val boundInterfaces: Map<String, ForwardBoundInterface> = emptyMap(),
 )
 
 /**
@@ -71,6 +76,18 @@ internal class ForwardBridgeTypeClassifier(
       context.actualTypeAliasTargets[qualifiedName]?.let { target ->
         return classifyActualTypeAliasTarget(qualifiedName, target)
       }
+    }
+
+    // ADR-088: checked before the exportedObjectHandles membership test (and before every other
+    // shape branch) — a bound stub is deliberately kept OUT of the forward root buckets so it is
+    // never re-projected as a duplicate `IIFeedable`, which means it would otherwise fall straight
+    // through to `SKIPPED_UNSUPPORTED_TYPE`.
+    context.boundInterfaces[qualifiedName]?.let { bound ->
+      return BridgeType.BoundInterface(
+        qualifiedName = qualifiedName,
+        csharpType = "global::${bound.csharpName}",
+        implementable = bound.implementable,
+      )
     }
 
     knownScalarType(qualifiedName)?.let { return it }
