@@ -80,7 +80,8 @@ internal fun translateClass(
   // An unsuffixed plan is the primary; everything else renders as an overload. A primary skipped
   // by the planner leaves `constructor` null with no IntPtr fallthrough, exactly as before.
   val cirConstructor: CirConstructor? = cirConstructors.firstOrNull { it.nativeSuffix.isEmpty() }
-  val secondaryConstructors: List<CirConstructor> = cirConstructors.filter { it.nativeSuffix.isNotEmpty() }
+  val secondaryConstructors: List<CirConstructor> =
+    cirConstructors.filter { it.nativeSuffix.isNotEmpty() }
 
   // C has no overloading and C# cannot declare two constructors with identical parameter
   // types — fail fast rather than emit uncompilable C# (ADR-034). C# nullable *reference*

@@ -9,6 +9,7 @@ import com.google.devtools.ksp.symbol.KSNode
 import com.google.devtools.ksp.symbol.KSPropertyDeclaration
 import com.google.devtools.ksp.symbol.KSType
 import com.google.devtools.ksp.symbol.KSTypeParameter
+import com.google.devtools.ksp.symbol.KSValueParameter
 import com.google.devtools.ksp.getAllSuperTypes
 import com.google.devtools.ksp.symbol.Modifier
 import com.google.devtools.ksp.symbol.Visibility
@@ -701,7 +702,8 @@ internal class ForwardCallablePlanner(
       // in declaration order, so unsuffixed/secondary exports render byte-identically to before.
       var next: Int = secondaries.size + 2
       (listOfNotNull(primary) + secondaries).forEach { constructor ->
-        val defaults: List<Boolean> = defaultFlags(cls, constructor, isPrimary = constructor == primary)
+        val defaults: List<Boolean> =
+          defaultFlags(cls, constructor, isPrimary = constructor == primary)
         val trailing: Int = defaults.reversed().takeWhile { it }.count()
         repeat(trailing) { index ->
           val number: Int = next++
@@ -741,20 +743,20 @@ internal class ForwardCallablePlanner(
   /**
    * ADR-091: per-parameter "has a default", positionally.
    *
-   * KSP exposes exactly one bit ([com.google.devtools.ksp.symbol.KSValueParameter.hasDefault]) and
-   * never the default expression, which is why the feature is overload synthesis rather than C#
-   * optional parameters. For an `expect`/`actual` class the bit is erased on the exported root
-   * (ADR-074 exports the `actual`, and Kotlin forbids an `actual` from restating a default), so
-   * the expect's primary constructor is consulted positionally through [expectsByName], and only
-   * for the actual's own primary constructor, since matching secondaries across the pair needs a
-   * signature rule no spike has verified.
+   * KSP exposes exactly one bit ([KSValueParameter.hasDefault]) and never the default expression,
+   * which is why the feature is overload synthesis rather than C# optional parameters. For an
+   * `expect`/`actual` class the bit is erased on the exported root (ADR-074 exports the `actual`,
+   * and Kotlin forbids an `actual` from restating a default), so the expect's primary constructor
+   * is consulted positionally through [expectsByName], and only for the actual's own primary
+   * constructor, since matching secondaries across the pair needs a signature rule no spike has
+   * verified.
    */
   private fun defaultFlags(
     cls: KSClassDeclaration,
     constructor: KSFunctionDeclaration,
     isPrimary: Boolean,
   ): List<Boolean> {
-    val expectParameters: List<com.google.devtools.ksp.symbol.KSValueParameter> =
+    val expectParameters: List<KSValueParameter> =
       if (!isPrimary) emptyList()
       else (expectsByName[cls.qualifiedName?.asString()] as? KSClassDeclaration)
         ?.primaryConstructor

@@ -15,7 +15,10 @@ actual class Sensor {
   actual fun reading(): Int = 42
 }
 
-/** ADR-091: the default for `interval` is declared on the expect only; an actual may not restate it. */
+/**
+ * ADR-091: the default for `interval` is declared on the expect only; an actual may not restate
+ * it.
+ */
 actual class Beacon actual constructor(
   private val name: String,
   private val interval: Int,

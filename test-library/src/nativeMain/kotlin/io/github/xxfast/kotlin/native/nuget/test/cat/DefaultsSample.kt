@@ -16,9 +16,10 @@ package io.github.xxfast.kotlin.native.nuget.test.cat
 //                     table, not here.
 //
 // The class-with-ONE-trailing-default row is already covered by [Cat] (`lives: Int = 9`), and the
-// `expect`/`actual` row (where `hasDefault` lives only on the expect) by `platform/PlatformApi.kt`'s
-// `Beacon`. Every default value here is distinct and non-obvious, so an overload wired to the
-// wrong Kotlin constructor shows up as a wrong value rather than a plausible one.
+// `expect`/`actual` row (where `hasDefault` lives only on the expect) by
+// `platform/PlatformApi.kt`'s `Beacon`. Every default value here is distinct and non-obvious, so
+// an overload wired to the wrong Kotlin constructor shows up as a wrong value rather than a
+// plausible one.
 
 /**
  * Two trailing defaults: Oreo's travel carrier. Synthesizes `Carrier(string, int)` (k=1) and
@@ -51,7 +52,7 @@ class Kennel(
  */
 class ScratchPost(val label: String) {
   constructor(label: String, height: Int, sturdy: Boolean = true) :
-    this("$label/${height}cm/${if (sturdy) "sturdy" else "wobbly"}")
+      this("$label/${height}cm/${if (sturdy) "sturdy" else "wobbly"}")
 
   fun describe(): String = "scratch post $label"
 }
