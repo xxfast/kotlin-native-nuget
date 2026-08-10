@@ -6,6 +6,7 @@ Generic classes and functions cross the bridge through a type-erased native laye
 |---|---|---|
 | `class<T>` | `class<T>` | type-erased bridge + generic C# wrapper |
 | `class<T>(...)` constructor | typed constructors | typed arguments through the bridge |
+| nullable property (`val x: T?`) | `T?` | a `null` read surfaces as `null`, or `default(T)` at a value-type instantiation, see [ADR-083](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/083-nullable-collection-components.md) |
 | `fun <T> f()` | typed variants | runtime dispatch via `NugetMarshal` |
 | `<T : Bound>` constraint | `where T : ...` | see [ADR-015](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/015-generic-type-constraint-mapping.md) |
 | `out T` / `in T` variance | `out T` / `in T` | see [ADR-016](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/016-generic-variance-mapping.md) |
@@ -22,6 +23,15 @@ class Box<T>(val value: T) {
   init {
     require(value.toString().isNotEmpty()) { "Box cannot hold a blank value" }
   }
+}
+```
+
+A generic class with a nullable property, from `test-library/src/nativeMain/kotlin/.../cat/Slot.kt`:
+
+```kotlin
+class Slot<T>(val value: T) {
+  val previous: T? = null
+  val current: T? = value
 }
 ```
 
@@ -92,6 +102,23 @@ public class Box<T> : IDisposable
     }
 
     public T Value => NugetMarshal.FromHandle<T>(BoxNative.Get_value(_handle));
+
+    public void Dispose() { /* ... */ }
+}
+```
+
+`Slot<T>` shows the two property shapes side by side: `Value` and `Current` are typed `T`/`T?` matching their Kotlin declarations, and a `null` read collapses to `default(T)` at a value-type instantiation because `NugetMarshal.FromHandle<T>` already returns `default!` for a zero handle:
+
+```C#
+public class Slot<T> : IDisposable
+{
+    internal IntPtr _handle;
+
+    public T Value => NugetMarshal.FromHandle<T>(SlotNative.Get_value(_handle));
+
+    public T? Previous => NugetMarshal.FromHandle<T>(SlotNative.Get_previous(_handle));
+
+    public T? Current => NugetMarshal.FromHandle<T>(SlotNative.Get_current(_handle));
 
     public void Dispose() { /* ... */ }
 }
@@ -181,6 +208,26 @@ public void Box_Cat_ConstructorAndGetter()
     using var box = new Box<Cat>(oreo);
     using Cat cat = box.Value;
     Assert.Equal("Oreo", cat.Name);
+}
+```
+
+A nullable property on a generic class, from `IntegrationTests/NullableGenericPropertyTests.cs`:
+
+```C#
+[Fact]
+public void Slot_String_NullPrevious()
+{
+    using var slot = new Slot<string>("hi");
+    Assert.Null(slot.Previous);
+}
+
+// Unconstrained generics in C# collapse a null T to default(T), so a value-type
+// instantiation sees 0 where the reference-type ones see null. Mylo gets 42 naps.
+[Fact]
+public void Slot_Int_PreviousCollapsesToDefault()
+{
+    using var slot = new Slot<int>(42);
+    Assert.Equal(0, slot.Previous);
 }
 ```
 
@@ -286,6 +333,7 @@ public void DefaultScores_ReturnsReadOnlyDictionaryOfStringInt()
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/016-generic-variance-mapping.md">ADR-016: Generic variance mapping</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/017-inline-function-mapping.md">ADR-017: Inline function mapping</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/018-type-alias-mapping.md">ADR-018: Type alias mapping</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/083-nullable-collection-components.md">ADR-083: Nullable collection components</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/064-forward-unsupported-declaration-diagnostics.md">ADR-064: Forward unsupported-declaration diagnostics</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/066-forward-export-reachability-closure.md">ADR-066: Forward export reachability closure</a>
     </category>

@@ -88,10 +88,12 @@ internal fun FileSpec.Builder.addGenericClassExports(cls: KSClassDeclaration) {
       FunSpec.builder("export_${prefix}_get_$propName")
         .addAnnotation(cNameAnnotation("${prefix}_get_$propName"))
         .addParameter("handle", cOpaquePointer)
-        .returns(cOpaquePointer)
+        // ADR-083: a null property value rides the null pointer out, closing the `.prop!!` NPE that
+        // any nullable property on a generic class used to hit at its first read.
+        .returns(cOpaquePointer.copy(nullable = true))
         .addStatement(
-          "return %T.create(handle.asStableRef<%L<*>>().get().%L!!).asCPointer()",
-          stableRef, qualifiedName, propName,
+          "return handle.asStableRef<%L<*>>().get().%L?.let { %T.create(it).asCPointer() }",
+          qualifiedName, propName, stableRef,
         )
         .build()
     )
