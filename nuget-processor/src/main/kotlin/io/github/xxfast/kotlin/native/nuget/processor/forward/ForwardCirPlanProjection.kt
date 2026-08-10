@@ -150,7 +150,7 @@ internal object ForwardCirPlanProjection {
     if (!needsCustomParams) {
       return CirConstructor(parameters = publicParams, body = "", hasErrorCheck = true, nativeSuffix = nativeSuffix)
     }
-    val prelude: List<String> =
+    val prelude: List<ForwardCirHandleStep> =
       plan.publicSignature.parameters.mapNotNull { parameter ->
         plan.collectionPrelude(parameter)
           ?: plan.interfacePrelude(parameter)
@@ -160,16 +160,16 @@ internal object ForwardCirPlanProjection {
       plan.publicSignature.parameters.mapNotNull { plan.collectionCleanup(it) ?: plan.interfaceCleanup(it) }
     val argumentList: List<String> = plan.publicSignature.parameters.flatMap { plan.callArgument(it) }
     val callArgs: String = (argumentList + "out IntPtr error").joinToString(", ")
-    val body: String = buildString {
-      prelude.forEach { line -> appendLine("            $line") }
-      appendLine("            IntPtr handle = Native_Create$nativeSuffix($callArgs);")
-      appendLine("            if (error != IntPtr.Zero)")
-      appendLine("            {")
-      appendLine("                throw NugetErrorNative.BuildException(error);")
-      appendLine("            }")
-      cleanup.forEach { line -> appendLine("            $line") }
-      append("            _handle = handle;")
-    }
+    val body: String = forwardCirHandleScope(
+      prelude,
+      cleanup,
+      leadingNewline = false,
+      core = buildString {
+        appendLine("            IntPtr handle = Native_Create$nativeSuffix($callArgs);")
+        appendErrorCheck()
+        append("            _handle = handle;")
+      },
+    )
     return CirConstructor(
       parameters = publicParams,
       body = body,
@@ -628,7 +628,9 @@ internal object ForwardCirPlanProjection {
       else -> null
     }
 
-  private fun ForwardCallablePlan.collectionPrelude(parameter: ForwardPublicParameter): String? {
+  private fun ForwardCallablePlan.collectionPrelude(
+    parameter: ForwardPublicParameter,
+  ): ForwardCirHandleStep? {
     val (type, nullable) = parameter.type.asNullableAwareCollection() ?: return null
     val factory: String = when (type.kind) {
       CollectionKind.LIST, CollectionKind.MUTABLE_LIST -> "CreateList"
@@ -642,7 +644,11 @@ internal object ForwardCirPlanProjection {
     } else {
       "NugetMarshal.$factory($source)"
     }
-    return "IntPtr ${parameter.name}Handle = $value;"
+    return ForwardCirHandleStep(
+      flat = "IntPtr ${parameter.name}Handle = $value;",
+      declarations = listOf("IntPtr ${parameter.name}Handle = IntPtr.Zero;"),
+      statement = "${parameter.name}Handle = $value;",
+    )
   }
 
   /**
@@ -650,12 +656,22 @@ internal object ForwardCirPlanProjection {
    * `HandleOf` *minted* a bridge transfer handle (a C#-implemented object) or read a Kotlin-backed
    * wrapper's own `_handle`.
    */
-  private fun ForwardCallablePlan.interfacePrelude(parameter: ForwardPublicParameter): String? {
+  private fun ForwardCallablePlan.interfacePrelude(
+    parameter: ForwardPublicParameter,
+  ): ForwardCirHandleStep? {
     val nullable: Boolean = parameter.type is BridgeType.Nullable
     if (!parameter.type.isInterfaceInput()) return null
     val helper: String = if (nullable) "HandleOfOrZero" else "HandleOf"
-    return "IntPtr ${parameter.name}Handle = " +
-        "NugetMarshal.$helper(${parameter.name}, out bool ${parameter.name}Owned);"
+    return ForwardCirHandleStep(
+      flat = "IntPtr ${parameter.name}Handle = " +
+          "NugetMarshal.$helper(${parameter.name}, out bool ${parameter.name}Owned);",
+      declarations = listOf(
+        "IntPtr ${parameter.name}Handle = IntPtr.Zero;",
+        "bool ${parameter.name}Owned = false;",
+      ),
+      statement = "${parameter.name}Handle = " +
+          "NugetMarshal.$helper(${parameter.name}, out ${parameter.name}Owned);",
+    )
   }
 
   /**
@@ -678,10 +694,12 @@ internal object ForwardCirPlanProjection {
    */
   private fun ForwardCallablePlan.boundInterfacePrelude(
     parameter: ForwardPublicParameter,
-  ): String? {
+  ): ForwardCirHandleStep? {
     if (parameter.type !is BridgeType.BoundInterface) return null
-    return "IntPtr ${parameter.name}Handle = " +
-        "GCHandle.ToIntPtr(GCHandle.Alloc(${parameter.name}));"
+    // No cleanup, so nothing to hoist: the local stays declared where it is used.
+    return ForwardCirHandleStep(
+      "IntPtr ${parameter.name}Handle = GCHandle.ToIntPtr(GCHandle.Alloc(${parameter.name}));",
+    )
   }
 
   // ADR-073: load-bearing, not cosmetic. All three Dispose members bind to the same
@@ -690,19 +708,18 @@ internal object ForwardCirPlanProjection {
   // NugetMapNative/NugetSetNative to be tracked as needed for List, so NugetListNative is never
   // emitted at all, and the mismatched call is a CS0103 compile error, not a runtime bug.
   private fun ForwardCallablePlan.collectionCleanup(parameter: ForwardPublicParameter): String? {
-    val (type, nullable) = parameter.type.asNullableAwareCollection() ?: return null
+    val (type, _) = parameter.type.asNullableAwareCollection() ?: return null
     val native: String = when (type.kind) {
       CollectionKind.LIST, CollectionKind.MUTABLE_LIST -> "NugetListNative"
       CollectionKind.MAP, CollectionKind.MUTABLE_MAP -> "NugetMapNative"
       CollectionKind.SET, CollectionKind.MUTABLE_SET -> "NugetSetNative"
     }
     // ADR-075: a null source value never built a handle above (it stayed IntPtr.Zero), and
-    // `nuget_dispose`'s `handle.asStableRef<Any>().dispose()` is not null-safe.
-    return if (nullable) {
-      "if (${parameter.name}Handle != IntPtr.Zero) { $native.Dispose(${parameter.name}Handle); }"
-    } else {
-      "$native.Dispose(${parameter.name}Handle);"
-    }
+    // `nuget_dispose`'s `handle.asStableRef<Any>().dispose()` is not null-safe. ROADMAP:130: the
+    // guard is now unconditional rather than keyed on [nullable], because this runs in a `finally`
+    // that a throw *from the creation itself* also reaches, where any handle is still Zero.
+    return "if (${parameter.name}Handle != IntPtr.Zero) { " +
+        "$native.Dispose(${parameter.name}Handle); }"
   }
 
   // ADR-069: default P/Invoke `out bool` marshalling reads 4 bytes; Kotlin's `BooleanVar` writes 1
@@ -749,7 +766,7 @@ internal object ForwardCirPlanProjection {
     forceCustomBody: Boolean = false,
   ): CirResultProjection {
     val nativeCall: ForwardNativeCall = singleNativeImport()
-    val prelude: List<String> =
+    val prelude: List<ForwardCirHandleStep> =
       parameters.mapNotNull { parameter ->
         collectionPrelude(parameter)
           ?: interfacePrelude(parameter)
@@ -957,7 +974,7 @@ internal object ForwardCirPlanProjection {
     needsCustomParams: Boolean,
     nativeName: String,
     callArguments: String,
-    prelude: List<String>,
+    prelude: List<ForwardCirHandleStep>,
     cleanup: List<String>,
   ): CirResultProjection = if (!needsCustomParams) {
     directResultProjection(result, wireType)
@@ -1008,36 +1025,39 @@ internal object ForwardCirPlanProjection {
     arguments: String,
     wireCs: String,
     result: String,
-    prelude: List<String> = emptyList(),
+    prelude: List<ForwardCirHandleStep> = emptyList(),
     cleanup: List<String> = emptyList(),
-  ): String = buildString {
-    appendLine()
-    prelude.forEach { line -> appendLine("            $line") }
-    appendLine("            $wireCs nativeResult = $nativeName($arguments);")
-    appendLine("            if (error != IntPtr.Zero)")
-    appendLine("            {")
-    appendLine("                throw NugetErrorNative.BuildException(error);")
-    appendLine("            }")
-    cleanup.forEach { line -> appendLine("            $line") }
-    append("            $result")
-  }
+  ): String = forwardCirHandleScope(
+    prelude,
+    cleanup,
+    buildString {
+      appendLine("            $wireCs nativeResult = $nativeName($arguments);")
+      appendErrorCheck()
+      append("            $result")
+    },
+  )
 
   private fun checkedPointerBody(
     nativeName: String,
     arguments: String,
     result: String,
-    prelude: List<String> = emptyList(),
+    prelude: List<ForwardCirHandleStep> = emptyList(),
     cleanup: List<String> = emptyList(),
-  ): String = buildString {
-    appendLine()
-    prelude.forEach { line -> appendLine("            $line") }
-    appendLine("            IntPtr nativeResult = $nativeName($arguments);")
+  ): String = forwardCirHandleScope(
+    prelude,
+    cleanup,
+    buildString {
+      appendLine("            IntPtr nativeResult = $nativeName($arguments);")
+      appendErrorCheck()
+      append("            $result")
+    },
+  )
+
+  private fun StringBuilder.appendErrorCheck() {
     appendLine("            if (error != IntPtr.Zero)")
     appendLine("            {")
     appendLine("                throw NugetErrorNative.BuildException(error);")
     appendLine("            }")
-    cleanup.forEach { line -> appendLine("            $line") }
-    append("            $result")
   }
 
   /** [returnExpression] defaults to the bare `valueOut` a nullable primitive returns; ADR-079's
@@ -1045,20 +1065,18 @@ internal object ForwardCirPlanProjection {
   private fun checkedNullableValueBody(
     nativeName: String,
     arguments: String,
-    prelude: List<String> = emptyList(),
+    prelude: List<ForwardCirHandleStep> = emptyList(),
     cleanup: List<String> = emptyList(),
     returnExpression: String = "hasValue ? valueOut : null",
-  ): String = buildString {
-    appendLine()
-    prelude.forEach { line -> appendLine("            $line") }
-    appendLine("            bool hasValue = $nativeName($arguments);")
-    appendLine("            if (error != IntPtr.Zero)")
-    appendLine("            {")
-    appendLine("                throw NugetErrorNative.BuildException(error);")
-    appendLine("            }")
-    cleanup.forEach { line -> appendLine("            $line") }
-    append("            return $returnExpression;")
-  }
+  ): String = forwardCirHandleScope(
+    prelude,
+    cleanup,
+    buildString {
+      appendLine("            bool hasValue = $nativeName($arguments);")
+      appendErrorCheck()
+      append("            return $returnExpression;")
+    },
+  )
 
   /** ADR-076: same shape as [checkedNullableValueBody], except `valueOut` is a raw `long` of
    *  ticks (its own transfer stays `Primitive(LONG)`, never `Instant`) and must be lifted into a
@@ -1066,23 +1084,21 @@ internal object ForwardCirPlanProjection {
   private fun checkedNullableInstantValueBody(
     nativeName: String,
     arguments: String,
-    prelude: List<String> = emptyList(),
+    prelude: List<ForwardCirHandleStep> = emptyList(),
     cleanup: List<String> = emptyList(),
-  ): String = buildString {
-    appendLine()
-    prelude.forEach { line -> appendLine("            $line") }
-    appendLine("            bool hasValue = $nativeName($arguments);")
-    appendLine("            if (error != IntPtr.Zero)")
-    appendLine("            {")
-    appendLine("                throw NugetErrorNative.BuildException(error);")
-    appendLine("            }")
-    cleanup.forEach { line -> appendLine("            $line") }
-    append(
-      "            return hasValue ? " +
-          "new global::System.DateTimeOffset(valueOut, global::System.TimeSpan.Zero) : " +
-          "(global::System.DateTimeOffset?)null;",
-    )
-  }
+  ): String = forwardCirHandleScope(
+    prelude,
+    cleanup,
+    buildString {
+      appendLine("            bool hasValue = $nativeName($arguments);")
+      appendErrorCheck()
+      append(
+        "            return hasValue ? " +
+            "new global::System.DateTimeOffset(valueOut, global::System.TimeSpan.Zero) : " +
+            "(global::System.DateTimeOffset?)null;",
+      )
+    },
+  )
 
   /** ADR-076: non-nullable Instant result -- the native call returns a raw `long` of ticks,
    *  which must be lifted into a `DateTimeOffset` in the return expression. Always a custom body
@@ -1090,28 +1106,41 @@ internal object ForwardCirPlanProjection {
   private fun checkedInstantBody(
     nativeName: String,
     arguments: String,
-    prelude: List<String> = emptyList(),
+    prelude: List<ForwardCirHandleStep> = emptyList(),
     cleanup: List<String> = emptyList(),
-  ): String = buildString {
-    appendLine()
-    prelude.forEach { line -> appendLine("            $line") }
-    appendLine("            long nativeResult = $nativeName($arguments);")
-    appendLine("            if (error != IntPtr.Zero)")
-    appendLine("            {")
-    appendLine("                throw NugetErrorNative.BuildException(error);")
-    appendLine("            }")
-    cleanup.forEach { line -> appendLine("            $line") }
-    append(
-      "            return new global::System.DateTimeOffset(nativeResult, global::System.TimeSpan.Zero);",
-    )
-  }
+  ): String = forwardCirHandleScope(
+    prelude,
+    cleanup,
+    buildString {
+      appendLine("            long nativeResult = $nativeName($arguments);")
+      appendErrorCheck()
+      append(
+        "            return new global::System.DateTimeOffset(nativeResult, " +
+            "global::System.TimeSpan.Zero);",
+      )
+    },
+  )
 
   private fun checkedCollectionBody(
     nativeName: String,
     arguments: String,
     type: BridgeType.Collection,
-    prelude: List<String> = emptyList(),
+    prelude: List<ForwardCirHandleStep> = emptyList(),
     cleanup: List<String> = emptyList(),
+  ): String = forwardCirHandleScope(
+    prelude,
+    cleanup,
+    collectionMaterializingCore(nativeName, arguments, type),
+  )
+
+  /** The result-side read of a collection handle: the call, the error check, and the
+   *  materialization loop. The *parameter* handles it may have been given are released by the
+   *  [forwardCirHandleScope] around it; the result handle's own Dispose is the last statement of
+   *  the loop below. */
+  private fun collectionMaterializingCore(
+    nativeName: String,
+    arguments: String,
+    type: BridgeType.Collection,
   ): String = when (type.kind) {
     CollectionKind.LIST, CollectionKind.MUTABLE_LIST -> {
       val element: BridgeType = requireNotNull(type.element) {
@@ -1120,14 +1149,8 @@ internal object ForwardCirPlanProjection {
       val elementType: String = element.csharpType()
       val mutable: Boolean = type.kind == CollectionKind.MUTABLE_LIST
       buildString {
-        appendLine()
-        prelude.forEach { line -> appendLine("            $line") }
         appendLine("            IntPtr listHandle = $nativeName($arguments);")
-        appendLine("            if (error != IntPtr.Zero)")
-        appendLine("            {")
-        appendLine("                throw NugetErrorNative.BuildException(error);")
-        appendLine("            }")
-        cleanup.forEach { line -> appendLine("            $line") }
+        appendErrorCheck()
         appendLine("            int count = NugetListNative.Count(listHandle);")
         appendLine("            var result = new List<$elementType>(count);")
         appendLine("            for (int i = 0; i < count; i++)")
@@ -1152,14 +1175,8 @@ internal object ForwardCirPlanProjection {
       val keyType: String = key.csharpType()
       val valueType: String = value.csharpType()
       buildString {
-        appendLine()
-        prelude.forEach { line -> appendLine("            $line") }
         appendLine("            IntPtr mapHandle = $nativeName($arguments);")
-        appendLine("            if (error != IntPtr.Zero)")
-        appendLine("            {")
-        appendLine("                throw NugetErrorNative.BuildException(error);")
-        appendLine("            }")
-        cleanup.forEach { line -> appendLine("            $line") }
+        appendErrorCheck()
         appendLine("            int count = NugetMapNative.Count(mapHandle);")
         appendLine("            var result = new Dictionary<$keyType, $valueType>(count);")
         appendLine("            for (int i = 0; i < count; i++)")
@@ -1191,14 +1208,8 @@ internal object ForwardCirPlanProjection {
       }
       val elementType: String = element.csharpType()
       buildString {
-        appendLine()
-        prelude.forEach { line -> appendLine("            $line") }
         appendLine("            IntPtr setHandle = $nativeName($arguments);")
-        appendLine("            if (error != IntPtr.Zero)")
-        appendLine("            {")
-        appendLine("                throw NugetErrorNative.BuildException(error);")
-        appendLine("            }")
-        cleanup.forEach { line -> appendLine("            $line") }
+        appendErrorCheck()
         appendLine("            int count = NugetSetNative.Count(setHandle);")
         appendLine("            var result = new HashSet<$elementType>(count);")
         appendLine("            for (int i = 0; i < count; i++)")
@@ -1227,29 +1238,27 @@ internal object ForwardCirPlanProjection {
     arguments: String,
     result: BridgeType,
     wireType: ForwardAbiWireType,
-    prelude: List<String>,
+    prelude: List<ForwardCirHandleStep>,
     cleanup: List<String>,
-  ): String = buildString {
-    appendLine()
-    prelude.forEach { line -> appendLine("            $line") }
-    if (result == BridgeType.Unit) {
-      appendLine("            $nativeName($arguments);")
-    } else {
-      appendLine("            ${wireType.csharpType()} nativeResult = $nativeName($arguments);")
-    }
-    appendLine("            if (error != IntPtr.Zero)")
-    appendLine("            {")
-    appendLine("                throw NugetErrorNative.BuildException(error);")
-    appendLine("            }")
-    cleanup.forEach { line -> appendLine("            $line") }
-    if (result is BridgeType.Enum) {
-      append("            return (${result.csharpType()})nativeResult;")
-    } else if (result == BridgeType.String) {
-      append("            return Marshal.PtrToStringUTF8(nativeResult)!;")
-    } else if (result != BridgeType.Unit) {
-      append("            return nativeResult;")
-    }
-  }
+  ): String = forwardCirHandleScope(
+    prelude,
+    cleanup,
+    buildString {
+      if (result == BridgeType.Unit) {
+        appendLine("            $nativeName($arguments);")
+      } else {
+        appendLine("            ${wireType.csharpType()} nativeResult = $nativeName($arguments);")
+      }
+      appendErrorCheck()
+      if (result is BridgeType.Enum) {
+        append("            return (${result.csharpType()})nativeResult;")
+      } else if (result == BridgeType.String) {
+        append("            return Marshal.PtrToStringUTF8(nativeResult)!;")
+      } else if (result != BridgeType.Unit) {
+        append("            return nativeResult;")
+      }
+    },
+  )
 
   private data class CirResultProjection(
     val returnType: String,

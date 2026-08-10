@@ -245,7 +245,15 @@ internal fun StringBuilder.renderMarshalHelper(helper: CirMarshalHelper) {
   appendLine("        public static IntPtr CreateList<T>(IEnumerable<T> values)")
   appendLine("        {")
   appendLine("            IntPtr listHandle = NugetListNative.Create();")
-  appendLine("            foreach (T value in values) NugetListNative.Add(listHandle, Wrap(value));")
+  // A `catch`, not a `finally`: the happy path hands the live handle to the caller. An element's
+  // own Wrap/enumeration can throw halfway through, and the partially built Kotlin collection is
+  // a rooted StableRef nobody else has a reference to. `throw;` rethrows the original, preserving
+  // the stack -- callers (and the ROADMAP:130 tests) see the consumer's exception, not a wrapper.
+  appendCollectionFactoryGuard(
+    "NugetListNative",
+    "listHandle",
+    "foreach (T value in values) NugetListNative.Add(listHandle, Wrap(value));",
+  )
   appendLine("            return listHandle;")
   appendLine("        }")
   appendLine()
@@ -255,7 +263,11 @@ internal fun StringBuilder.renderMarshalHelper(helper: CirMarshalHelper) {
     appendLine("        public static IntPtr CreateSet<T>(IEnumerable<T> values)")
     appendLine("        {")
     appendLine("            IntPtr setHandle = NugetSetNative.Create();")
-    appendLine("            foreach (T value in values) NugetSetNative.Add(setHandle, Wrap(value));")
+    appendCollectionFactoryGuard(
+      "NugetSetNative",
+      "setHandle",
+      "foreach (T value in values) NugetSetNative.Add(setHandle, Wrap(value));",
+    )
     appendLine("            return setHandle;")
     appendLine("        }")
     appendLine()
@@ -265,7 +277,11 @@ internal fun StringBuilder.renderMarshalHelper(helper: CirMarshalHelper) {
     appendLine("        public static IntPtr CreateMap<TKey, TValue>(IEnumerable<KeyValuePair<TKey, TValue>> values)")
     appendLine("        {")
     appendLine("            IntPtr mapHandle = NugetMapNative.Create();")
-    appendLine("            foreach (var pair in values) NugetMapNative.Put(mapHandle, Wrap(pair.Key), Wrap(pair.Value));")
+    appendCollectionFactoryGuard(
+      "NugetMapNative",
+      "mapHandle",
+      "foreach (var pair in values) NugetMapNative.Put(mapHandle, Wrap(pair.Key), Wrap(pair.Value));",
+    )
     appendLine("            return mapHandle;")
     appendLine("        }")
     appendLine()
@@ -342,6 +358,28 @@ internal fun StringBuilder.renderMarshalHelper(helper: CirMarshalHelper) {
   appendLine("        }")
   appendLine("    }")
   appendLine()
+}
+
+/**
+ * The `try { fill } catch { Dispose(handle); throw; }` guard shared by CreateList/CreateSet/
+ * CreateMap. [native] is the per-kind static class the ADR-073 discipline requires: all three
+ * `Dispose` members bind to the same `nuget_dispose` entry point, but a file that only ever saw a
+ * Map never emits NugetListNative at all, so naming the wrong one is a CS0103.
+ */
+private fun StringBuilder.appendCollectionFactoryGuard(
+  native: String,
+  handle: String,
+  fill: String,
+) {
+  appendLine("            try")
+  appendLine("            {")
+  appendLine("                $fill")
+  appendLine("            }")
+  appendLine("            catch")
+  appendLine("            {")
+  appendLine("                $native.Dispose($handle);")
+  appendLine("                throw;")
+  appendLine("            }")
 }
 
 internal fun StringBuilder.renderListHelper(helper: CirListHelper) {

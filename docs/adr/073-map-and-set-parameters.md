@@ -745,3 +745,9 @@ requirement above is part of the decision rather than a follow-up.
    (`directCustomBody`, Verified), so a Kotlin exception leaks the collection handle. Pre-existing for
    lists, inherited unchanged by map and set. A `try`/`finally` around the native call is the fix, and
    it applies to every collection parameter at once.
+
+   **Closed 2026-08-10** (addendum, not a rewrite of the line above): every call site with a
+   temporary collection or interface transfer handle now goes through
+   `ForwardCirHandleScope.forwardCirHandleScope`, wrapping the native call in the `try`/`finally`
+   this line asked for. See [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md)
+   and [Collections](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/topics/collections.md#exception-safety-on-collection-parameters).

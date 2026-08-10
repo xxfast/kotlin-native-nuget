@@ -420,6 +420,87 @@ bare `IDictionary<K,V>` cannot be passed to a `Map<K,V>` parameter (it needs `IR
 and a bare `IReadOnlyDictionary<K,V>` cannot be passed to a `MutableMap<K,V>` parameter (it needs
 `IDictionary`). Same asymmetry for `Set`/`ISet`/`IReadOnlySet`.
 
+## Exception safety on collection parameters
+
+A collection parameter's temporary native handle is released on every exit path, not only the
+successful one. If the Kotlin callee throws, the generated C# still disposes the handle it built:
+a parameter list with at least one collection argument pre-declares the handle as `IntPtr.Zero`,
+builds it inside a `try`, and disposes it (zero-guarded) in a matching `finally`, whether the call
+returns or throws.
+
+From `test-library/.../cat/CollectionExceptions.kt`:
+
+```kotlin
+class Auditor {
+  fun audit(entries: List<String>): Int =
+    throw IllegalStateException("audit failed: ${entries.size} entries do not balance")
+}
+```
+
+Generated C#, from `Interop.cs`:
+
+```C#
+public int Audit(IReadOnlyList<string> entries)
+{
+    IntPtr entriesHandle = IntPtr.Zero;
+    try
+    {
+        entriesHandle = NugetMarshal.CreateList(entries);
+        int nativeResult = Native_Audit(_handle, entriesHandle, out IntPtr error);
+        if (error != IntPtr.Zero)
+        {
+            throw NugetErrorNative.BuildException(error);
+        }
+        return nativeResult;
+    }
+    finally
+    {
+        if (entriesHandle != IntPtr.Zero) { NugetListNative.Dispose(entriesHandle); }
+    }
+}
+```
+
+The same guarded `finally` also covers a constructor's `Nullable(Collection)` prelude (`Visit`'s
+`notesHandle`, see [Nullable collection references](#nullable-collection-references) below) and an
+interface transfer handle: whatever temporary handle a call site builds, it is released whether the
+callee returns or throws.
+
+`NugetMarshal.CreateList`/`CreateMap`/`CreateSet` are exception-safe on the way in too. If
+enumerating the C# collection argument throws partway through, a custom `IEnumerable`
+implementation that fails mid-`MoveNext`, the partially-built native handle is disposed and the
+original C# exception surfaces unmasked, not wrapped and not replaced by a Kotlin-side error:
+
+```C#
+public static IntPtr CreateList<T>(IEnumerable<T> values)
+{
+    IntPtr listHandle = NugetListNative.Create();
+    try
+    {
+        foreach (T value in values) NugetListNative.Add(listHandle, Wrap(value));
+    }
+    catch
+    {
+        NugetListNative.Dispose(listHandle);
+        throw;
+    }
+    return listHandle;
+}
+```
+
+From `IntegrationTests/CollectionParameterCleanupTests.cs`:
+
+```C#
+[Fact]
+public void Audit_CollectionThrowsMidEnumeration_SurfacesOriginalException()
+{
+    using var auditor = new Auditor();
+    var ex = Assert.Throws<GrumpyCatException>(
+        () => auditor.Audit(new GrumpyList("Oreo: 3 treats")));
+    Assert.Equal("Oreo swatted the ledger off the table", ex.Message);
+    Assert.IsNotAssignableFrom<IKotlinException>(ex);
+}
+```
+
 ## Nullable collection references
 
 A `List`/`Map`/`Set` property (`val` or `var`) can itself be nullable

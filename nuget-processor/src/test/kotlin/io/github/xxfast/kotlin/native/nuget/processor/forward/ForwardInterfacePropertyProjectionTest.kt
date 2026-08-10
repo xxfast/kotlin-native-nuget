@@ -105,7 +105,10 @@ class ForwardInterfacePropertyProjectionTest {
     assertTrue(
       // ADR-084 stage 3: the nullable lowering is HandleOfOrZero (null ships IntPtr.Zero and mints
       // nothing), extracted before the call so a minted transfer handle can be disposed after it.
-      setter.contains("IntPtr valueHandle = NugetMarshal.HandleOfOrZero(value, out bool valueOwned);") &&
+      // ROADMAP:130: the locals are declared ahead of the `try` the disposing `finally` guards.
+      setter.contains("IntPtr valueHandle = IntPtr.Zero;") &&
+          setter.contains("bool valueOwned = false;") &&
+          setter.contains("valueHandle = NugetMarshal.HandleOfOrZero(value, out valueOwned);") &&
           setter.contains("if (valueOwned) { NugetMarshal.Dispose(valueHandle); }"),
       "expected the nullable setter to lower through the shared HandleOf reflective helper with " +
           "a null guard, not a direct ._handle read; got: $setter",
@@ -137,7 +140,7 @@ class ForwardInterfacePropertyProjectionTest {
 
     val setter: String = requireNotNull(property.setter) { "expected a setter body" }
     assertTrue(
-      setter.contains("IntPtr valueHandle = NugetMarshal.HandleOf(value, out bool valueOwned);") &&
+      setter.contains("valueHandle = NugetMarshal.HandleOf(value, out valueOwned);") &&
           setter.contains("if (valueOwned) { NugetMarshal.Dispose(valueHandle); }") &&
           !setter.contains("value != null"),
       "expected a plain HandleOf lowering with no null guard for a non-nullable interface " +
