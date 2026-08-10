@@ -6,13 +6,17 @@ import org.gradle.api.file.DirectoryProperty
 import org.gradle.api.provider.MapProperty
 import org.gradle.api.provider.Property
 import org.gradle.api.tasks.Input
+import org.gradle.api.tasks.InputDirectory
 import org.gradle.api.tasks.InputFiles
+import org.gradle.api.tasks.Optional
 import org.gradle.api.tasks.OutputDirectory
 import org.gradle.api.tasks.TaskAction
 import java.io.File
 import java.util.UUID
 import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
+
+private val NATIVE_EXTENSIONS = setOf("dll", "dylib", "so")
 
 abstract class PackNugetTask : DefaultTask() {
   @get:Input
@@ -45,6 +49,13 @@ abstract class PackNugetTask : DefaultTask() {
   @get:Input
   abstract val dependencyVersions: MapProperty<String, String>
 
+  // ADR-093: native libraries built on another host, laid out as <dir>/<rid>/native/*.dll|dylib|so.
+  // Staged after the locally linked RIDs into the same runtimes/ tree, so one pack produces one
+  // package covering more RIDs than this host can link.
+  @get:Optional
+  @get:InputDirectory
+  abstract val prebuiltRuntimesDir: DirectoryProperty
+
   @get:OutputDirectory
   abstract val outputDir: DirectoryProperty
 
@@ -58,18 +69,24 @@ abstract class PackNugetTask : DefaultTask() {
     nupkgDir.deleteRecursively()
     nupkgDir.mkdirs()
 
-    for ((rid, libPath) in nativeLibDirs.get()) {
-      val nativeDir = File(nupkgDir, "runtimes/$rid/native")
-      nativeDir.mkdirs()
+    val localRids: Map<String, String> = nativeLibDirs.get()
 
-      val libs: List<File> = File(libPath).listFiles()
-        ?.filter { it.extension in listOf("dll", "dylib", "so") }
-        ?: continue
+    localRids.forEach { (rid, libPath) ->
+      val sourceDir = File(libPath)
+      val libs: List<File> = nativeLibsIn(sourceDir)
 
-      for (lib in libs) {
-        lib.copyTo(File(nativeDir, lib.name), overwrite = true)
+      // ADR-093: targets whose link task is disabled on this host never reach nativeLibDirs, so an
+      // entry with nothing to copy means the link ran and produced nothing. Silently skipping it
+      // shipped packages missing a platform.
+      check(libs.isNotEmpty()) {
+        "No native library (.dll, .dylib, .so) found for RID '$rid' in " +
+            "${sourceDir.absolutePath}. The link task for this target produced nothing to pack."
       }
+
+      copyNativeLibs(libs, File(nupkgDir, "runtimes/$rid/native"))
     }
+
+    stagePrebuiltRuntimes(nupkgDir, localRids)
 
     val contentDir = File(nupkgDir, "contentFiles/cs/any")
     contentDir.mkdirs()
@@ -101,6 +118,62 @@ abstract class PackNugetTask : DefaultTask() {
     logger.lifecycle("NuGet package written at: ${nupkgFile.absolutePath}")
   }
 
+  private fun nativeLibsIn(dir: File): List<File> =
+    dir.listFiles()?.filter { it.isFile && it.extension in NATIVE_EXTENSIONS }.orEmpty()
+
+  private fun copyNativeLibs(libs: List<File>, targetDir: File) {
+    targetDir.mkdirs()
+    libs.forEach { lib -> lib.copyTo(File(targetDir, lib.name), overwrite = true) }
+  }
+
+  // ADR-093: merges another host's runtimes/ tree into this pack. Every failure here is a CI
+  // misconfiguration (an artifact download that fetched nothing, or two hosts producing the same
+  // RID), so each one names the RID rather than shipping a package whose contents depend on
+  // iteration order.
+  private fun stagePrebuiltRuntimes(nupkgDir: File, localRids: Map<String, String>) {
+    if (!prebuiltRuntimesDir.isPresent) return
+
+    val root: File = prebuiltRuntimesDir.get().asFile
+    val ridDirs: List<File> = root.listFiles()?.filter { it.isDirectory }?.sortedBy { it.name }
+      .orEmpty()
+
+    require(ridDirs.isNotEmpty()) {
+      "prebuiltRuntimes directory ${root.absolutePath} has no RID subdirectory. Expected layout: " +
+          "<prebuiltRuntimes>/<rid>/native/ containing at least one .dll, .dylib or .so file."
+    }
+
+    ridDirs.forEach { ridDir ->
+      val rid: String = ridDir.name
+      val localPath: String? = localRids[rid]
+
+      require(localPath == null) {
+        "RID '$rid' is both linked locally (from $localPath) and supplied as a prebuilt runtime " +
+            "(from ${ridDir.absolutePath}). Pick one producer per RID: disable the local " +
+            "target, or drop the RID from prebuiltRuntimes."
+      }
+
+      val nativeDir = File(ridDir, "native")
+      val libs: List<File> = nativeLibsIn(nativeDir)
+
+      require(libs.isNotEmpty()) {
+        "Prebuilt RID '$rid' contributes no native library. Expected " +
+            "${nativeDir.absolutePath} to contain at least one .dll, .dylib or .so file " +
+            "(layout: <prebuiltRuntimes>/<rid>/native/)."
+      }
+
+      // ADR-093: the RID set NuGet accepts is open, so an unknown name may be a legitimate
+      // artifact from a newer plugin on the other host. Warn, do not block the pack.
+      if (rid !in KONAN_TO_RID.values) {
+        logger.warn(
+          "w: [nuget] Prebuilt RID '$rid' is not one this plugin version can build " +
+              "(${KONAN_TO_RID.values.sorted().joinToString(", ")}). Packing it as given."
+        )
+      }
+
+      copyNativeLibs(libs, File(nupkgDir, "runtimes/$rid/native"))
+    }
+  }
+
   @Suppress("HttpUrlsUsage")
   private fun generateTargets(id: String): String = """
     |<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
@@ -118,7 +191,7 @@ abstract class PackNugetTask : DefaultTask() {
   ): String {
     val fileEntries: String = csFiles.joinToString("\n") { file ->
       "      <file src=\"contentFiles/cs/any/${file.name}\" " +
-        "target=\"contentFiles/cs/any/${file.name}\" />"
+          "target=\"contentFiles/cs/any/${file.name}\" />"
     }
 
     val dependenciesBlock: String = if (dependencyVersions.isEmpty()) {

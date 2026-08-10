@@ -34,8 +34,9 @@ kotlin {
 ```
 
 Replace `<version>` with the version shown in [Getting started](getting-started.md), and keep it
-pinned. Only configured targets in the [supported target table](prerequisites.md) are added to the
-package.
+pinned. Only configured targets in the [supported target table](prerequisites.md) that this host
+can link are added to the package this way; a RID built on another host can still be added via
+`prebuiltRuntimes`, see [One package for every platform](#one-package-for-every-platform) below.
 
 <warning>
 <p>Applying a <b>second</b> Kotlin compiler plugin (for example, the Koin compiler plugin) to a
@@ -190,6 +191,48 @@ native asset beside the host. For a cross-platform project, use the SDK host RID
 
 Do not hardcode one host RID into a cross-platform test project. For deployment, select the RID of
 the target environment.
+
+### One package for every platform
+
+No single host can link every RID: a macOS host links `macosArm64` and cross-compiles `mingwX64`,
+but a Windows host can only link `mingwX64`, and neither can link the other's Apple- or
+Windows-only targets. `prebuiltRuntimes` merges another host's already-linked `runtimes/` output
+into this host's own pack, so one host still produces one publishable package instead of each CI
+leg shipping a package that only covers its own platform.
+
+A typical two-host flow: the Windows leg runs `packNuget` and uploads its staged `runtimes/`
+folder as a CI artifact, then the macOS leg downloads that artifact into a local directory and
+points at it before running its own `packNuget`:
+
+```kotlin
+nuget {
+  publish {
+    packageId = "MyCatLib"
+    version = "1.0.0"
+    authors = "yourname"
+    description = "A Kotlin/Native library for cat lovers"
+    rootPackage = "com.example.cats"
+    prebuiltRuntimes = file("build/prebuilt-runtimes")  // <rid>/native/*.dll|*.dylib|*.so
+  }
+}
+```
+
+The resulting package carries a `runtimes/<rid>/native/` folder for both the locally linked RID and
+the prebuilt one:
+
+```
+MyCatLib.1.0.0.nupkg
+├── runtimes/osx-arm64/native/libmycatlib.dylib   (locally linked)
+├── runtimes/win-x64/native/mycatlib.dll          (prebuilt)
+├── contentFiles/cs/any/*.cs
+├── build/MyCatLib.targets
+└── MyCatLib.nuspec
+```
+
+See [The nuget {} DSL](nuget-dsl.md) for the full validation rules (an empty prebuilt directory, a
+RID declared both locally and prebuilt, an unknown RID name) and
+[ADR-093](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/093-multi-rid-package-inputs.md)
+for the design rationale.
 
 ## 4. Iterate locally without bumping the version
 
