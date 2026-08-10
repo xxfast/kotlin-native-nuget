@@ -103,7 +103,8 @@ internal fun CirClass.methodNativeImport(method: CirMethod): CirDllImport {
     libraryName = libraryName,
     entryPoint = "${nativePrefix}_${method.nativeName}",
     returnType = method.nativeReturnType,
-    name = "Native_${method.name}",
+    // ADR-090: the numbered extern name for an overload, the shipped `Native_$name` otherwise.
+    name = method.externName ?: "Native_${method.name}",
     parameters = parameters,
     visibility = CirVisibility.PRIVATE,
     hasSyncErrorOut = method.isSyncErrorCheckEnabled,

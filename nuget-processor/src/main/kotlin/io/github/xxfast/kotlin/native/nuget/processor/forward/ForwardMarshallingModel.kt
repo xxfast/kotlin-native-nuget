@@ -285,6 +285,16 @@ internal data class ForwardPublicSignature(
   val name: String,
   val parameters: List<ForwardPublicParameter>,
   val result: BridgeType,
+  /**
+   * ADR-090: the C# member modifiers, computed at planning time and carried on the plan.
+   *
+   * A planned entry does not retain its `KSNode`, and once ordinary-class methods are emitted off
+   * the catalog (overload numbering makes the plan symbol per-declaration underivable) the C#
+   * translator has no declaration to read `override` / `open` off. Only CLASS-origin class methods
+   * and properties set these; every other origin leaves them false.
+   */
+  val isOverride: Boolean = false,
+  val isVirtual: Boolean = false,
 )
 
 /** Symbol-level invocation information. Renderers decide syntax later. */

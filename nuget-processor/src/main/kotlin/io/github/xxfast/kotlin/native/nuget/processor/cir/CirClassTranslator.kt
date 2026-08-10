@@ -423,24 +423,31 @@ internal fun translateClass(
       translateInterfaceBridgeMethod(addMethod, removeMethod, libraryName, prefix, name, tracker)
     }
 
-  val methods: List<CirMethod> = normalMethods
+  // ADR-090: planned members come off the catalog (overload numbering makes the plan symbol
+  // per-declaration underivable, and the two halves must not drift — the same move ADR-082 made
+  // for value classes). `isOverride` / `isVirtual` ride the plan, computed in `classEntries`.
+  val plannedMethodPlans: List<ForwardCallablePlan> =
+    callableCatalog.classMethods(cls.qualifiedName?.asString() ?: name)
+  val plannedMethods: List<CirMethod> = plannedMethodPlans.map { plan ->
+    tracker.trackPlan(plan)
+    ForwardCirPlanProjection.classMethod(
+      plan = plan,
+      nativePrefix = prefix,
+      isOverride = plan.publicSignature.isOverride,
+      isVirtual = plan.publicSignature.isVirtual,
+    )
+  }
+  val plannedMemberNames: Set<String> = plannedMethodPlans
+    .mapNotNull { plan -> plan.invocation.member }
+    .toSet()
+
+  // Abstract declarations still need a C# abstract method for the public surface even though they
+  // have no native export / plan (planner skips ABSTRACT), so they stay on the declaration walk.
+  val abstractMethods: List<CirMethod> = normalMethods
     .filter { it !in interfaceBridgeExcluded }
     .mapNotNull { method ->
       val methodName: String = method.simpleName.asString()
-      val planned = callableCatalog.planFor(
-        "${cls.qualifiedName?.asString() ?: name}.$methodName",
-      )
-      if (planned != null) {
-        tracker.trackPlan(planned)
-        return@mapNotNull ForwardCirPlanProjection.classMethod(
-          plan = planned,
-          nativePrefix = prefix,
-          isOverride = superClass != null && method.modifiers.contains(Modifier.OVERRIDE),
-          isVirtual = method.modifiers.isOpenInterfaceImplementation(superClass),
-        )
-      }
-      // Abstract declarations still need a C# abstract method for the public surface even though
-      // they have no native export / plan (planner skips ABSTRACT).
+      if (methodName in plannedMemberNames) return@mapNotNull null
       val declaredInThisClass: Boolean = method.parentDeclaration == cls
       val hasImplementation: Boolean = declaredInThisClass ||
           method.modifiers.contains(Modifier.OVERRIDE)
@@ -485,6 +492,39 @@ internal fun translateClass(
         isAbstract = true,
         isOverride = superClass != null && method.modifiers.contains(Modifier.OVERRIDE),
         isSyncErrorCheckEnabled = false,
+      )
+    }
+
+  val methods: List<CirMethod> = plannedMethods + abstractMethods
+
+  // C# cannot declare two methods whose parameter types are identical (ADR-034/ADR-090). Ordinary
+  // class overloads share one public name, so two of them rendering the same C# parameter list is
+  // uncompilable output — fail fast, the same way the constructor check above does. Reference
+  // nullability is not part of a C# signature; nullable *value* types are.
+  val methodSignatures: List<List<String>> = plannedMethods.map { method ->
+    listOf(method.name) + method.parameters.map { param ->
+      val stripReferenceNullability: Boolean = param.isReferenceType && param.type.endsWith("?")
+      if (stripReferenceNullability) param.type.dropLast(1) else param.type
+    }
+  }
+  methodSignatures
+    .groupBy { signature -> signature }
+    .filterValues { group -> group.size > 1 }
+    .keys
+    .forEach { signature ->
+      ForwardDiagnosticSink.emit(
+        listOf(
+          ForwardDiagnostic(
+            kind = ForwardDiagnosticKind.ERROR_CSHARP_SIGNATURE_COLLISION,
+            symbol = cls,
+            declaration = "$name.${signature.first()}",
+            reason = "two or more overloads render identical C# parameter types; C# cannot " +
+                "declare two methods with the same signature (ADR-034)",
+            hint = "rename one overload, or change a parameter's type so the rendered C# " +
+                "signatures differ",
+          ),
+        ),
+        logger,
       )
     }
 
