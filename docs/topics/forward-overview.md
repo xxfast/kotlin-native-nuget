@@ -173,6 +173,23 @@ When at least one dependency-module type *is* admitted, the closure also emits o
 `INFO_EXPORTED_FROM_DEPENDENCY` line per KSP run rather than one line per type, naming the whole
 admitted set.
 
+## Limitations
+
+<note>
+<p>Another Kotlin compiler plugin on the same target's <code>kotlinCompilerPluginClasspath</code>
+can crash <b>link time</b> for a <code>sharedLib</code>, even though ordinary compilation succeeds.
+This is not a bug in this plugin; it is the pre-existing Kotlin/Native backend issue
+<a href="https://youtrack.jetbrains.com/issue/KT-62984">KT-62984</a>, and it is triggered by any
+plugin that generates IR without a klib origin, not by anything this project's KSP processor
+emits.</p>
+<p>The crash is a <code>NullPointerException</code> in <code>CAdapterCodegen.buildCAdapter</code>
+during C-export codegen, which every forward-direction target hits because every forward target
+links a <code>sharedLib</code>. Marking the affected declarations <code>internal</code> does not
+help, since the crashing IR belongs to the other plugin, not to user code. See
+<a href="publish-kotlin-library-as-nuget.md">Publish a Kotlin/Native library as NuGet</a> for the
+symptom and the classpath-exclusion workaround.</p>
+</note>
+
 <seealso>
     <category ref="related">
         <a href="classes-and-objects.md">Classes and objects</a>

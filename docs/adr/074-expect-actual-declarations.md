@@ -33,10 +33,21 @@ collection-element crash they killed generation for the **entire module**, not o
 | `actual typealias` | **no crash**, silently wrong: the `expect` side is emitted as a second, degenerate C# class carrying only the `internal X(IntPtr handle)` constructor, with no members and no public constructor, sitting beside the real aliased type |
 
 This was found while investigating a downstream report (PeopleInSpace `windows/LIMITATIONS.md`)
-that blamed the Koin compiler plugin. **Koin is not the cause and needs no special handling**
-(Verified by execution: the full Koin compiler-plugin setup packs green through `packNuget`
-including `GeneratedBindingsCheck`). Koin was the carrier only, because its idiomatic platform
-module is written `@Module expect class NativeModule()`. Nothing in this ADR is Koin-specific.
+that blamed the Koin compiler plugin. **Koin is not the cause of this KSP-time crash and needs no
+special handling for it** (Verified by execution: the full Koin compiler-plugin setup packs green
+through `packNuget` including `GeneratedBindingsCheck`). Koin was the carrier only, because its
+idiomatic platform module is written `@Module expect class NativeModule()`. Nothing in this ADR is
+Koin-specific.
+
+That verification is scoped to this KSP-time duplicate-plan crash only. A separate, still-live
+issue was found later on plugin 0.3.0 with Kotlin 2.4.10: having the Koin compiler plugin on a
+`sharedLib` target's `kotlinCompilerPluginClasspath` crashes *link time* C-export codegen with
+`NullPointerException at KlibModuleOriginKt.getKlibModuleOrigin` / `CAdapterCodegen.buildCAdapter`,
+regardless of the annotated declaration's visibility. That is the pre-existing Kotlin/Native
+backend bug [KT-62984](https://youtrack.jetbrains.com/issue/KT-62984), unrelated to the
+`expect`/`actual` handling this ADR decides; see
+[Publish a Kotlin/Native library as NuGet](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/topics/publish-kotlin-library-as-nuget.md)
+for the symptom and workaround.
 
 ### What KSP actually shows (Verified by spike, this session)
 
