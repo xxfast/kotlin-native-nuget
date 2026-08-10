@@ -12,7 +12,7 @@ Registered when `nuget { publish { } }` is set **and** the Kotlin Multiplatform 
 
 | Task | Description | Depends on |
 |---|---|---|
-| `packNuget` | Packages the Kotlin/Native shared library as a NuGet package | the shared-lib link tasks, `kspKotlin{Target}`, and `nugetGenerateShims` (only if the project also binds a dependency) |
+| `packNuget` | Packages the Kotlin/Native shared library as a NuGet package | the shared-lib link tasks, `kspKotlin{Target}`, `nugetGenerateShims` (only if the project also binds a dependency), and `nugetSnapshotVersion`/`nugetSnapshotVersionProps` (only when `snapshot = true`) |
 
 `packNuget` writes the staged package to `build/nuget/{packageId}.{version}/` and the zipped
 `.nupkg` to `build/nuget/{packageId}.{version}.nupkg`. It reads the C# KSP generates at
@@ -20,6 +20,18 @@ Registered when `nuget { publish { } }` is set **and** the Kotlin Multiplatform 
 a dependency, merges the reverse-direction C# shims from `nugetGenerateShims` into the same
 `contentFiles/cs/any/` folder and pins each bound dependency at its exact resolved version in the
 `.nuspec` `<dependencies>` block.
+
+Registered only when `nuget { publish { snapshot = true } }` is set:
+
+| Task | Description | Writes |
+|---|---|---|
+| `nugetSnapshotVersion` | Mints a unique snapshot version for this build | `build/nuget-snapshot-version.txt` |
+| `nugetSnapshotVersionProps` | Writes the MSBuild props file pinning the current snapshot version | `versionPropsFile`, default `<rootProject>/build/{packageId}Versions.props` |
+
+Both are `@DisableCachingByDefault` and never up to date, since a snapshot build's whole point is a
+fresh timestamp every run. See [The nuget {} DSL](nuget-dsl.md) for `snapshot`/`versionPropsFile`
+and [Publish a Kotlin/Native library as NuGet](publish-kotlin-library-as-nuget.md) for the consumer
+side.
 
 KSP's own `kspKotlin{Target}` task (registered by the Kotlin Gradle plugin, not this plugin)
 generates `Interop.cs` and the Kotlin bridge wrappers. `packNuget` depends on it but does not

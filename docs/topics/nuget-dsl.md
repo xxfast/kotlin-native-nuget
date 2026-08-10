@@ -30,6 +30,8 @@ the DSL itself enforces they're set, but `packNuget` fails once it reads an unse
 | `rootPackage` | `String?` | yes | the Kotlin package the generated C# namespaces are rooted at; sub-packages map relative to it. Also the default export scope: see below |
 | `include(vararg packages: String)` | function | no | empty; when set, only these package prefixes (and their sub-packages) are bridged |
 | `exclude(vararg packages: String)` | function | no | empty; applied after `include`, and always wins over it |
+| `snapshot` | `Boolean` | no | `false`; when `true`, `packNuget` mints `<version>-snapshot.<epochMillis>` at execution time instead of using `version` literally, and always writes an MSBuild props file. Requires `packageId` and a non-blank `version` |
+| `versionPropsFile` | `File?` | no | `null`; only consulted when `snapshot` is `true`. Default `<rootProject>/build/<packageId>Versions.props` |
 
 ```kotlin
 nuget {
@@ -42,6 +44,37 @@ nuget {
   }
 }
 ```
+
+### Snapshot versioning
+
+With `snapshot = true`, every `packNuget` run produces a fresh, immutable package identity instead
+of reusing `version` as-is, so a .NET consumer's next restore always sees a new version and never
+serves NuGet's cached copy of the previous build:
+
+```kotlin
+nuget {
+  publish {
+    packageId = "MyCatLib"
+    version = "1.0.0"
+    authors = "yourname"
+    description = "My Kotlin/Native library"
+    rootPackage = "com.example.cats"
+    snapshot = true
+  }
+}
+```
+
+`packNuget` then depends on two extra tasks: `nugetSnapshotVersion` mints
+`1.0.0-snapshot.<epochMillis>` at execution time, and `nugetSnapshotVersionProps` writes an MSBuild
+props file pinning it under a property name derived from `packageId`. MSBuild property names
+cannot contain dots or start with a digit, so the id is sanitized: every character outside
+`[A-Za-z0-9_]` is dropped, a leading digit gets a `_` prefix, and `Version` is appended
+(`MyCatLib` becomes `MyCatLibVersion`, `PeopleInSpace.Kotlin` becomes `PeopleInSpaceKotlinVersion`).
+
+See [Publish a Kotlin/Native library as NuGet](publish-kotlin-library-as-nuget.md) for the full
+local-iteration flow and the consumer-side props import, and
+[ADR-092](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/092-snapshot-versioning-dsl.md)
+for the version-ordering and property-naming rationale.
 
 ### Export scoping
 

@@ -363,16 +363,29 @@ class NugetPlugin : Plugin<Project> {
         // variable) because the two afterEvaluate blocks are independent closures.
         val boundDeps: List<NugetDependency> = extension.dependencies.filter { it.bind != null }
 
+        // ADR-092: `snapshot = true` replaces the declared version with one minted at execution
+        // time, and emits the props file consumers import to reference it.
+        val snapshot: SnapshotVersioning? =
+          if (pub.snapshot) registerSnapshotVersioning(project, pub) else null
+
         project.tasks.register("packNuget", PackNugetTask::class.java)
           .configure { task ->
             task.group = "nuget"
             task.description = "Packages the Kotlin/Native shared library as a NuGet package"
             task.packageId.set(pub.packageId)
-            task.packageVersion.set(pub.version)
+
+            if (snapshot == null) {
+              task.packageVersion.set(pub.version)
+            } else {
+              task.packageVersion.set(snapshot.version)
+              task.dependsOn(snapshot.versionTask, snapshot.propsTask)
+            }
+
             task.authors.set(pub.authors)
             task.packageDescription.set(pub.description)
             task.nativeLibDirs.set(libDirs)
             task.nativeLibFiles.from(libDirs.values.map { project.fileTree(it) })
+
             task.generatedCsDirs.from(kspOutputDir)
             task.outputDir.set(project.layout.buildDirectory.dir("nuget"))
 
