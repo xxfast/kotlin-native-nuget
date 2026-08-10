@@ -1,9 +1,11 @@
 package io.github.xxfast.kotlin.native.nuget.processor.cir
 
 internal fun StringBuilder.renderSealedClass(sealed: CirSealedClass) {
-  appendLine("    public abstract class ${sealed.name} : IDisposable")
+  appendLine("    public abstract class ${sealed.name} : IDisposable, INugetHandle")
   appendLine("    {")
   appendLine("        internal IntPtr _handle;")
+  appendLine()
+  appendLine("        IntPtr INugetHandle.Handle => _handle;")
   appendLine()
   appendLine("        internal ${sealed.name}(IntPtr handle)")
   appendLine("        {")

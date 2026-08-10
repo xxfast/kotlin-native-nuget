@@ -831,20 +831,17 @@ internal fun translateGenericFunction(
       }
     }
 
+    // ADR-094: the object argument answers INugetHandle (a miss is an InvalidCastException where it
+    // used to be a NullReferenceException), and the result comes back out of the generated factory
+    // registry rather than Activator.CreateInstance.
     if (returnsGenericClass) {
-      appendLine("      var field = typeof(T).GetField(\"_handle\",")
-      appendLine("        System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Public);")
-      appendLine("      IntPtr handle = (IntPtr)field!.GetValue($paramName)!;")
+      appendLine("      IntPtr handle = ((INugetHandle)$paramName!).Handle;")
       appendLine("      IntPtr result = NugetErrorNative.Check(${csName}_object_native(handle, out error), error);")
       appendLine("      return new ${returnTypeName}<T>(result);")
     } else {
-      appendLine("      var field = typeof(T).GetField(\"_handle\",")
-      appendLine("        System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Public);")
-      appendLine("      IntPtr handle = (IntPtr)field!.GetValue($paramName)!;")
+      appendLine("      IntPtr handle = ((INugetHandle)$paramName!).Handle;")
       appendLine("      IntPtr result = NugetErrorNative.Check(${csName}_object_native(handle, out error), error);")
-      appendLine("      return (T)Activator.CreateInstance(typeof(T),")
-      appendLine("        System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Public,")
-      appendLine("        null, new object[] { result }, null)!;")
+      appendLine("      return NugetMarshal.Materialize<T>(result);")
     }
   }
 

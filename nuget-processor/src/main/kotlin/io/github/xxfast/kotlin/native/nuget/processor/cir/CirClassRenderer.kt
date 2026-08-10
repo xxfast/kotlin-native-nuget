@@ -68,18 +68,20 @@ internal fun StringBuilder.renderGenericClass(cls: CirGenericClass) {
     }
 
   val whereStr: String = if (whereClause.isNotEmpty()) " $whereClause" else ""
-  appendLine("    public class ${cls.name}<$typeParams> : IDisposable$whereStr")
+  appendLine("    public class ${cls.name}<$typeParams> : IDisposable, INugetHandle$whereStr")
   appendLine("    {")
   appendLine("        internal IntPtr _handle;")
+  appendLine()
+  appendLine("        IntPtr INugetHandle.Handle => _handle;")
   appendLine()
 
   if (cls.hasPublicConstructor) {
     appendLine("        public ${cls.name}(${cls.typeParameters[0].name} value)")
     appendLine("        {")
     if (isConstrained) {
-      appendLine("            var field = typeof(${cls.typeParameters[0].name}).GetField(\"_handle\",")
-      appendLine("                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Public);")
-      appendLine("            IntPtr handle = ${cls.name}Native.Create_object((IntPtr)field!.GetValue(value)!, out IntPtr error);")
+      // ADR-094: the bound is a Kotlin interface whose only implementations are generated wrappers,
+      // so the cast succeeds wherever the old `field!` read did.
+      appendLine("            IntPtr handle = ${cls.name}Native.Create_object(((INugetHandle)value!).Handle, out IntPtr error);")
       appendLine("            if (error != IntPtr.Zero)")
       appendLine("            {")
       appendLine("                throw NugetErrorNative.BuildException(error);")
@@ -95,10 +97,8 @@ internal fun StringBuilder.renderGenericClass(cls: CirGenericClass) {
       }
       appendLine("            else")
       appendLine("            {")
-      appendLine("                var field = typeof($param).GetField(\"_handle\",")
-      appendLine("                    System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Public);")
-      appendLine("                if (field == null) throw new NotSupportedException($\"Cannot create ${cls.name}<{typeof($param).Name}>\");")
-      appendLine("                handle = ${cls.name}Native.Create_object((IntPtr)field.GetValue(value)!, out error);")
+      appendLine("                if (value is not INugetHandle wrapper) throw new NotSupportedException($\"Cannot create ${cls.name}<{typeof($param).Name}>\");")
+      appendLine("                handle = ${cls.name}Native.Create_object(wrapper.Handle, out error);")
       appendLine("            }")
       appendLine()
       appendLine("            if (error != IntPtr.Zero)")
@@ -188,12 +188,14 @@ internal fun StringBuilder.renderClass(cls: CirClass) {
   val abstract: String = if (cls.isAbstract) "abstract " else ""
   val sealedModifier: String = if (cls.isSealed) "sealed " else ""
 
+  // ADR-094: a class declares `_handle` (and therefore implements INugetHandle) exactly when it has
+  // no superclass; a derived class inherits both the field and the explicit implementation.
   val implements: String = when {
     cls.superClass != null -> " : ${cls.superClass}"
-    cls.interfaces.isNotEmpty() -> " : ${cls.interfaces.joinToString(", ")}"
-    cls.disposable && cls.hasSuspendMethods -> " : IDisposable, IAsyncDisposable"
-    cls.disposable -> " : IDisposable"
-    else -> ""
+    cls.interfaces.isNotEmpty() -> " : ${(cls.interfaces + "INugetHandle").joinToString(", ")}"
+    cls.disposable && cls.hasSuspendMethods -> " : IDisposable, IAsyncDisposable, INugetHandle"
+    cls.disposable -> " : IDisposable, INugetHandle"
+    else -> " : INugetHandle"
   }
 
   appendLine("    public $sealedModifier${abstract}class ${cls.name}$implements")
@@ -204,6 +206,8 @@ internal fun StringBuilder.renderClass(cls: CirClass) {
     if (cls.hasSuspendMethods) {
       appendLine("        internal IntPtr _scopeHandle;")
     }
+    appendLine()
+    appendLine("        IntPtr INugetHandle.Handle => _handle;")
     appendLine()
 
     if (cls.hasSuspendMethods) {

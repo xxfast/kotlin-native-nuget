@@ -124,18 +124,20 @@ public class Slot<T> : IDisposable
 }
 ```
 
-`PetBox<T>` carries the constraint through to C#'s `where` clause, and reflects out the `_handle` field of the constrained argument to pass across the bridge:
+`PetBox<T>` carries the constraint through to C#'s `where` clause. `T`'s bound (`IPet`) is backed by a
+generated wrapper that implements the internal `INugetHandle` interface, so the constructor casts to
+it directly instead of reflecting for a `_handle` field (see [ADR-094](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/094-reflection-free-generic-dispatch.md)):
 
 ```C#
-public class PetBox<T> : IDisposable where T : IPet
+public class PetBox<T> : IDisposable, INugetHandle where T : IPet
 {
     internal IntPtr _handle;
 
+    IntPtr INugetHandle.Handle => _handle;
+
     public PetBox(T value)
     {
-        var field = typeof(T).GetField("_handle",
-            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Public);
-        IntPtr handle = PetBoxNative.Create_object((IntPtr)field!.GetValue(value)!, out IntPtr error);
+        IntPtr handle = PetBoxNative.Create_object(((INugetHandle)value!).Handle, out IntPtr error);
         if (error != IntPtr.Zero)
         {
             throw NugetErrorNative.BuildException(error);
@@ -149,20 +151,22 @@ public class PetBox<T> : IDisposable where T : IPet
 }
 ```
 
-A generic function dispatches per primitive type at runtime, falling back to the object/handle path otherwise:
+A generic function dispatches per primitive type at runtime, falling back to the object/handle path
+otherwise. The object path materialises `T` from a generated factory registry
+(`NugetMarshal.Materialize<T>`) rather than reflecting over `T`'s constructor:
 
 ```C#
 public static T identity<T>(T value)
 {
+    IntPtr error;
     if (typeof(T) == typeof(string))
-        return (T)(object)Marshal.PtrToStringUTF8(identity_string_native((string)(object)value!))!;
+        return (T)(object)Marshal.PtrToStringUTF8(NugetErrorNative.Check(identity_string_native((string)(object)value!, out error), error))!;
     if (typeof(T) == typeof(int))
-        return (T)(object)identity_int_native((int)(object)value!);
+        return (T)(object)NugetErrorNative.Check(identity_int_native((int)(object)value!, out error), error);
     // ... long, float, double, bool ...
-    var field = typeof(T).GetField("_handle", /* ... */);
-    IntPtr handle = (IntPtr)field!.GetValue(value)!;
-    IntPtr result = identity_object_native(handle);
-    return (T)Activator.CreateInstance(typeof(T), /* ... */, new object[] { result }, null)!;
+    IntPtr handle = ((INugetHandle)value!).Handle;
+    IntPtr result = NugetErrorNative.Check(identity_object_native(handle, out error), error);
+    return NugetMarshal.Materialize<T>(result);
 }
 ```
 
@@ -171,10 +175,10 @@ A constrained generic function carries the `where` clause the same way as the cl
 ```C#
 public static T adoptPet<T>(T pet) where T : IPet
 {
-    var field = typeof(T).GetField("_handle", /* ... */);
-    IntPtr handle = (IntPtr)field!.GetValue(pet)!;
-    IntPtr result = adoptPet_object_native(handle);
-    return (T)Activator.CreateInstance(typeof(T), /* ... */, new object[] { result }, null)!;
+    IntPtr error;
+    IntPtr handle = ((INugetHandle)pet!).Handle;
+    IntPtr result = NugetErrorNative.Check(adoptPet_object_native(handle, out error), error);
+    return NugetMarshal.Materialize<T>(result);
 }
 ```
 
@@ -336,5 +340,6 @@ public void DefaultScores_ReturnsReadOnlyDictionaryOfStringInt()
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/083-nullable-collection-components.md">ADR-083: Nullable collection components</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/064-forward-unsupported-declaration-diagnostics.md">ADR-064: Forward unsupported-declaration diagnostics</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/066-forward-export-reachability-closure.md">ADR-066: Forward export reachability closure</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/094-reflection-free-generic-dispatch.md">ADR-094: Reflection-free generic dispatch</a>
     </category>
 </seealso>

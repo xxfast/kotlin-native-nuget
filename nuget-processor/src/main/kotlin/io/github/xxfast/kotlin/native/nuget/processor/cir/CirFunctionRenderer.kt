@@ -46,9 +46,8 @@ internal fun StringBuilder.renderFuncNativeHelper(helper: CirFuncNativeHelper) {
     appendLine("            if (typeof(T) == typeof(float)) return wrap_float((float)(object)value!);")
     appendLine("            if (typeof(T) == typeof(double)) return wrap_double((double)(object)value!);")
     appendLine("            if (typeof(T) == typeof(bool)) return wrap_bool((bool)(object)value!);")
-    appendLine("            var field = typeof(T).GetField(\"_handle\",")
-    appendLine("                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Public);")
-    appendLine("            if (field != null) return (IntPtr)field.GetValue(value)!;")
+    // ADR-094: a wrapper argument answers INugetHandle instead of exposing `_handle` reflectively.
+    appendLine("            if (value is INugetHandle wrapper) return wrapper.Handle;")
     appendLine("            throw new NotSupportedException($\"Cannot wrap {typeof(T).Name} as lambda argument\");")
     appendLine("        }")
   }
@@ -64,9 +63,11 @@ internal fun StringBuilder.renderFuncHelper(helper: CirFuncHelper) {
 
   for (arity in helper.arities.sorted()) {
     if (arity == 0) {
-      appendLine("    public class KotlinFunc<TResult> : IDisposable")
+      appendLine("    public class KotlinFunc<TResult> : IDisposable, INugetHandle")
       appendLine("    {")
       appendLine("        internal IntPtr _handle;")
+      appendLine()
+      appendLine("        IntPtr INugetHandle.Handle => _handle;")
       appendLine()
       appendLine("        internal KotlinFunc(IntPtr handle) { _handle = handle; }")
       appendLine()
@@ -91,9 +92,11 @@ internal fun StringBuilder.renderFuncHelper(helper: CirFuncHelper) {
       val methodParams: String = (1..arity).map { "T$it arg${it - 1}" }.joinToString(", ")
       val invokeArgs: String = (listOf("_handle") + (0 until arity).map { "boxedArg$it" }).joinToString(", ")
 
-      appendLine("    public class KotlinFunc<$typeParams> : IDisposable")
+      appendLine("    public class KotlinFunc<$typeParams> : IDisposable, INugetHandle")
       appendLine("    {")
       appendLine("        internal IntPtr _handle;")
+      appendLine()
+      appendLine("        IntPtr INugetHandle.Handle => _handle;")
       appendLine()
       appendLine("        internal KotlinFunc(IntPtr handle) { _handle = handle; }")
       appendLine()
@@ -167,9 +170,8 @@ internal fun StringBuilder.renderSuspendFuncNativeHelper(helper: CirSuspendFuncN
     appendLine("            if (typeof(T) == typeof(float)) return wrap_float((float)(object)value!);")
     appendLine("            if (typeof(T) == typeof(double)) return wrap_double((double)(object)value!);")
     appendLine("            if (typeof(T) == typeof(bool)) return wrap_bool((bool)(object)value!);")
-    appendLine("            var field = typeof(T).GetField(\"_handle\",")
-    appendLine("                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Public);")
-    appendLine("            if (field != null) return (IntPtr)field.GetValue(value)!;")
+    // ADR-094: a wrapper argument answers INugetHandle instead of exposing `_handle` reflectively.
+    appendLine("            if (value is INugetHandle wrapper) return wrapper.Handle;")
     appendLine("            throw new NotSupportedException(\$\"Cannot wrap {typeof(T).Name} as lambda argument\");")
     appendLine("        }")
   }
@@ -186,9 +188,11 @@ internal fun StringBuilder.renderSuspendFuncHelper(helper: CirSuspendFuncHelper)
   for (arity in helper.arities.sorted()) {
     // Generate KotlinSuspendFunc variants (non-Unit)
     if (arity == 0) {
-      appendLine("    public class KotlinSuspendFunc<TResult> : IDisposable")
+      appendLine("    public class KotlinSuspendFunc<TResult> : IDisposable, INugetHandle")
       appendLine("    {")
       appendLine("        internal IntPtr _handle;")
+      appendLine()
+      appendLine("        IntPtr INugetHandle.Handle => _handle;")
       appendLine()
       appendLine("        internal KotlinSuspendFunc(IntPtr handle) { _handle = handle; }")
       appendLine()
@@ -244,9 +248,11 @@ internal fun StringBuilder.renderSuspendFuncHelper(helper: CirSuspendFuncHelper)
         (0 until arity).map { "boxedArg$it" } +
         listOf("callback", "GCHandle.ToIntPtr(tcsHandle)")).joinToString(", ")
 
-      appendLine("    public class KotlinSuspendFunc<$typeParams> : IDisposable")
+      appendLine("    public class KotlinSuspendFunc<$typeParams> : IDisposable, INugetHandle")
       appendLine("    {")
       appendLine("        internal IntPtr _handle;")
+      appendLine()
+      appendLine("        IntPtr INugetHandle.Handle => _handle;")
       appendLine()
       appendLine("        internal KotlinSuspendFunc(IntPtr handle) { _handle = handle; }")
       appendLine()
@@ -302,9 +308,11 @@ internal fun StringBuilder.renderSuspendFuncHelper(helper: CirSuspendFuncHelper)
 
     // Generate KotlinSuspendAction variants (Unit)
     if (arity == 0) {
-      appendLine("    public class KotlinSuspendAction : IDisposable")
+      appendLine("    public class KotlinSuspendAction : IDisposable, INugetHandle")
       appendLine("    {")
       appendLine("        internal IntPtr _handle;")
+      appendLine()
+      appendLine("        IntPtr INugetHandle.Handle => _handle;")
       appendLine()
       appendLine("        internal KotlinSuspendAction(IntPtr handle) { _handle = handle; }")
       appendLine()
@@ -360,9 +368,11 @@ internal fun StringBuilder.renderSuspendFuncHelper(helper: CirSuspendFuncHelper)
         (0 until arity).map { "boxedArg$it" } +
         listOf("callback", "GCHandle.ToIntPtr(tcsHandle)")).joinToString(", ")
 
-      appendLine("    public class KotlinSuspendAction<$typeParams> : IDisposable")
+      appendLine("    public class KotlinSuspendAction<$typeParams> : IDisposable, INugetHandle")
       appendLine("    {")
       appendLine("        internal IntPtr _handle;")
+      appendLine()
+      appendLine("        IntPtr INugetHandle.Handle => _handle;")
       appendLine()
       appendLine("        internal KotlinSuspendAction(IntPtr handle) { _handle = handle; }")
       appendLine()
