@@ -428,6 +428,9 @@ internal fun translate(
         includesMap = tracker.needsMap,
         includesSet = tracker.needsSet,
         includesBridge = bridgePlans.isNotEmpty(),
+        // ADR-094: the walk happens here, before the helpers are prepended, because `namespaces`
+        // already pairs every wrapper declaration with the namespace that names it.
+        factories = factoryEntries(namespaces),
       ),
     )
     if (bridgePlans.isNotEmpty()) helpers.add(CirBridgeHelper(context.libraryName, bridgePlans))
@@ -519,6 +522,37 @@ internal fun translate(
 
   return CirFile(usings = usings, namespaces = namespaces)
 }
+
+/**
+ * ADR-094: one `NugetMarshal.Factories` line per concrete wrapper that an erased generic path could
+ * be asked to materialise. A class only qualifies when it actually carries the `internal X(IntPtr)`
+ * constructor the lambda calls, and an abstract one is not constructible at all (neither was it
+ * under `Activator`). Sealed subclasses register under their nested `Base.Sub` name. Enums, value
+ * classes, objects, interfaces and open generic wrappers register nothing: none of them is a
+ * closed, handle-constructible type.
+ */
+private fun factoryEntries(namespaces: List<CirNamespace>): List<CirFactoryEntry> = namespaces
+  .flatMap { namespace ->
+    namespace.declarations.flatMap { declaration ->
+      when (declaration) {
+        is CirClass ->
+          if (declaration.hasInternalHandleConstructor && !declaration.isAbstract) {
+            listOf(CirFactoryEntry("${namespace.name}.${declaration.name}"))
+          } else {
+            emptyList()
+          }
+
+        is CirSealedClass -> declaration.subclasses.map { subclass ->
+          CirFactoryEntry("${namespace.name}.${declaration.name}.${subclass.name}")
+        }
+
+        else -> emptyList()
+      }
+    }
+  }
+  // A duplicate key is an ArgumentException at type-initialization time, i.e. the first marshal
+  // call of the consumer's process, so collapse rather than trust the walk to be unique.
+  .distinctBy { it.qualifiedTypeName }
 
 private fun MutableList<CirNamespace>.addDeclaration(namespace: String, declaration: CirDeclaration) {
   val existing = find { it.name == namespace }

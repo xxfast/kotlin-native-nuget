@@ -352,18 +352,15 @@ public void Befriend(IPet pet)
 }
 ```
 
-`NugetMarshal.HandleOf` reads the `_handle` field by reflection; when it is absent, i.e. the object is a C#-implemented `IPet` rather than a Kotlin one, it falls back to a bridge instead of throwing:
+`NugetMarshal.HandleOf` checks whether the value implements the internal `INugetHandle` interface
+(see [ADR-094](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/094-reflection-free-generic-dispatch.md));
+when it does not, i.e. the object is a C#-implemented `IPet` rather than a Kotlin one, it falls back to a bridge instead of throwing:
 
 ```C#
 internal static IntPtr HandleOf(object value)
 {
-    var field = value.GetType().GetField("_handle",
-        System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Public);
-    if (field == null)
-    {
-        return NugetBridge.HandleFor(value);
-    }
-    return (IntPtr)field.GetValue(value)!;
+    if (value is INugetHandle wrapper) return wrapper.Handle;
+    return NugetBridge.HandleFor(value);
 }
 ```
 
@@ -614,5 +611,6 @@ public void Observation_WorksWithPatternMatching()
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/009-sealed-class-mapping.md">ADR-009: Sealed class mapping</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/040-interface-return-type-mapping.md">ADR-040: Interface return type mapping</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/084-csharp-implemented-interfaces.md">ADR-084: C#-implemented Kotlin interfaces</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/094-reflection-free-generic-dispatch.md">ADR-094: Reflection-free generic dispatch</a>
     </category>
 </seealso>

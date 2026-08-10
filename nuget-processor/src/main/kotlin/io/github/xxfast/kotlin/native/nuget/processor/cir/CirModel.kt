@@ -157,7 +157,19 @@ data class CirMarshalHelper(
   // C#-implemented Kotlin interface). Gated on the same principle as includesMap/includesSet: the
   // fallback only compiles where a CirBridgeHelper was actually emitted.
   val includesBridge: Boolean = false,
+  // ADR-094: one entry per concrete handle wrapper in the whole file, rendered as the
+  // `NugetMarshal.Factories` dictionary. `Materialize<T>` looks a type up here instead of calling
+  // `Activator.CreateInstance` over the internal `T(IntPtr)` constructor, which AOT-only runtimes
+  // (Mac Catalyst, iOS) cannot do.
+  val factories: List<CirFactoryEntry> = emptyList(),
 ) : CirDeclaration
+
+// ADR-094: a registry line. [qualifiedTypeName] is the `global::`-free fully qualified C# name
+// (`Clinic.ApiResult.Success`); the renderer adds the `global::` prefix, since the registry sits in
+// the root namespace and cannot see child-namespace types unqualified.
+data class CirFactoryEntry(
+  val qualifiedTypeName: String,
+)
 
 // ADR-084: the C#-implemented-interface bridge layer -- `NugetBridge`, `NugetBridgeState`, and one
 // `{Iface}BridgeState` per bridgeable interface. Emitted only when at least one interface plans.

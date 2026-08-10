@@ -137,6 +137,17 @@ Sequencing when the work is scheduled:
 4. Add an AOT publish smoke test to CI (see Consequences) that links against a real Kotlin/Native
    library and runs the generated bindings.
 
+**Step 2 update:** [ADR-094](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/094-reflection-free-generic-dispatch.md)
+(Accepted) resolves this step, but not by adding a `genericDispatch` strategy choice behind the
+profile as sketched above. It replaces the reflection outright, unconditionally, with no toggle: the
+generated factory registry plus `INugetHandle` interface is strictly better than the old reflection
+path under both JIT and AOT, so there is no scenario where a consumer would want the reflective
+dialect back. The `genericDispatch` axis of the `CSharpProfile` sketch above is therefore dropped
+from the eventual profile; `CSharpProfile` narrows to the `[LibraryImport]`-vs-`[DllImport]` interop
+dialect (step 3), the one axis that is a genuine dialect choice with a language-version floor. Step 4,
+the AOT publish smoke test in CI, remains open and unproven: no AOT lane exists in this repository,
+so "the generated bindings run under `PublishAot=true`" is still an inferred claim, not a verified one.
+
 ## Consequences
 
 - New `CSharpProfile` model + threading it through every renderer.

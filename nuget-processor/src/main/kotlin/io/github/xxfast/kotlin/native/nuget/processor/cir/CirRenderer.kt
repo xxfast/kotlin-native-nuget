@@ -13,6 +13,15 @@ class CirRenderer {
 
     appendLine()
 
+    // ADR-094: one internal interface at the global namespace, so every generated namespace sees it
+    // unqualified. Every class that declares `internal IntPtr _handle` implements it explicitly,
+    // which is how erased-generic code extracts a handle without `GetField("_handle")`.
+    appendLine("internal interface INugetHandle")
+    appendLine("{")
+    appendLine("    IntPtr Handle { get; }")
+    appendLine("}")
+    appendLine()
+
     for (namespace in file.namespaces) {
       renderNamespace(namespace)
     }

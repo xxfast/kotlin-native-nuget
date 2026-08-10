@@ -62,6 +62,24 @@ internal fun StringBuilder.renderMarshalHelper(helper: CirMarshalHelper) {
   appendLine("        [DllImport(\"${helper.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"nuget_wrap_bool\")]")
   appendLine("        private static extern IntPtr nuget_wrap_bool(bool value);")
   appendLine()
+  // ADR-094: the reflection-free materialisation table. One statically written line per concrete
+  // wrapper, so the trimmer keeps each constructor and the AOT compiler pre-compiles it. A plain
+  // static field initializer is enough: the CLR runs the type initializer before the first access
+  // to any static member of NugetMarshal, and every read goes through Materialize<T> below.
+  appendLine("        internal static readonly System.Collections.Generic.Dictionary<Type, Func<IntPtr, object>> Factories =")
+  appendLine("            new System.Collections.Generic.Dictionary<Type, Func<IntPtr, object>>")
+  appendLine("        {")
+  for (entry in helper.factories) {
+    appendLine("            [typeof(global::${entry.qualifiedTypeName})] = static handle => new global::${entry.qualifiedTypeName}(handle),")
+  }
+  appendLine("        };")
+  appendLine()
+  appendLine("        internal static T Materialize<T>(IntPtr handle)")
+  appendLine("        {")
+  appendLine("            if (Factories.TryGetValue(typeof(T), out Func<IntPtr, object>? factory)) return (T)factory(handle);")
+  appendLine("            throw new NotSupportedException($\"No generated factory materialises {typeof(T)} from a Kotlin handle\");")
+  appendLine("        }")
+  appendLine()
   appendLine("        public static T FromHandle<T>(IntPtr handle)")
   appendLine("        {")
   appendLine("            if (handle == IntPtr.Zero) return default!;")
@@ -214,9 +232,7 @@ internal fun StringBuilder.renderMarshalHelper(helper: CirMarshalHelper) {
   appendLine("                Native_dispose(handle);")
   appendLine("                return (T)(object)result;")
   appendLine("            }")
-  appendLine("            return (T)Activator.CreateInstance(typeof(T),")
-  appendLine("                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Public,")
-  appendLine("                null, new object[] { handle }, null)!;")
+  appendLine("            return Materialize<T>(handle);")
   appendLine("        }")
   appendLine()
   appendLine("        public static void Dispose(IntPtr handle) => Native_dispose(handle);")
@@ -236,10 +252,10 @@ internal fun StringBuilder.renderMarshalHelper(helper: CirMarshalHelper) {
   appendLine("            if (type == typeof(float)) return nuget_wrap_float((float)(object)value!);")
   appendLine("            if (type == typeof(double)) return nuget_wrap_double((double)(object)value!);")
   appendLine("            if (type == typeof(bool)) return nuget_wrap_bool((bool)(object)value!);")
-  appendLine("            var field = typeof(T).GetField(\"_handle\",")
-  appendLine("                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Public);")
-  appendLine("            if (field == null) throw new NotSupportedException($\"Cannot pass {typeof(T).Name} to a Kotlin collection\");")
-  appendLine("            return (IntPtr)field.GetValue(value)!;")
+  // ADR-094: every Kotlin-backed wrapper implements INugetHandle explicitly, so the handle comes
+  // out of a type test instead of a private-field read.
+  appendLine("            if (value is INugetHandle wrapper) return wrapper.Handle;")
+  appendLine("            throw new NotSupportedException($\"Cannot pass {typeof(T).Name} to a Kotlin collection\");")
   appendLine("        }")
   appendLine()
   appendLine("        public static IntPtr CreateList<T>(IEnumerable<T> values)")
@@ -297,18 +313,13 @@ internal fun StringBuilder.renderMarshalHelper(helper: CirMarshalHelper) {
   // ADR-040 boundary exception stands.
   appendLine("        internal static IntPtr HandleOf(object value)")
   appendLine("        {")
-  appendLine("            var field = value.GetType().GetField(\"_handle\",")
-  appendLine("                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Public);")
-  appendLine("            if (field == null)")
-  appendLine("            {")
+  appendLine("            if (value is INugetHandle wrapper) return wrapper.Handle;")
   if (helper.includesBridge) {
-    appendLine("                return NugetBridge.HandleFor(value);")
+    appendLine("            return NugetBridge.HandleFor(value);")
   } else {
-    appendLine("                throw new NotSupportedException(")
-    appendLine("                    $\"{value.GetType().Name} is not a Kotlin-backed object; passing a C#-implemented interface is not supported yet.\");")
+    appendLine("            throw new NotSupportedException(")
+    appendLine("                $\"{value.GetType().Name} is not a Kotlin-backed object; passing a C#-implemented interface is not supported yet.\");")
   }
-  appendLine("            }")
-  appendLine("            return (IntPtr)field.GetValue(value)!;")
   appendLine("        }")
   appendLine()
   // ADR-084 stage 3: the same extraction, reporting whether it *minted* a transfer handle. A
@@ -316,15 +327,13 @@ internal fun StringBuilder.renderMarshalHelper(helper: CirMarshalHelper) {
   // bridge handle is a one-crossing transfer the call site frees once the native call returns.
   appendLine("        internal static IntPtr HandleOf(object value, out bool owned)")
   appendLine("        {")
-  appendLine("            var field = value.GetType().GetField(\"_handle\",")
-  appendLine("                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Public);")
-  appendLine("            if (field == null)")
+  appendLine("            if (value is INugetHandle wrapper)")
   appendLine("            {")
-  appendLine("                owned = true;")
-  appendLine("                return HandleOf(value);")
+  appendLine("                owned = false;")
+  appendLine("                return wrapper.Handle;")
   appendLine("            }")
-  appendLine("            owned = false;")
-  appendLine("            return (IntPtr)field.GetValue(value)!;")
+  appendLine("            owned = true;")
+  appendLine("            return HandleOf(value);")
   appendLine("        }")
   appendLine()
   appendLine("        internal static IntPtr HandleOfOrZero(object? value, out bool owned)")
