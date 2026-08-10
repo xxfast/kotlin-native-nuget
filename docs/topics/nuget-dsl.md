@@ -32,6 +32,7 @@ the DSL itself enforces they're set, but `packNuget` fails once it reads an unse
 | `exclude(vararg packages: String)` | function | no | empty; applied after `include`, and always wins over it |
 | `snapshot` | `Boolean` | no | `false`; when `true`, `packNuget` mints `<version>-snapshot.<epochMillis>` at execution time instead of using `version` literally, and always writes an MSBuild props file. Requires `packageId` and a non-blank `version` |
 | `versionPropsFile` | `File?` | no | `null`; only consulted when `snapshot` is `true`. Default `<rootProject>/build/<packageId>Versions.props` |
+| `prebuiltRuntimes` | `File?` | no | `null`; a directory laid out `<rid>/native/*.{dll,dylib,so}`, exactly the `runtimes/` tree `packNuget` stages, merged with the RIDs this host links itself into one package |
 
 ```kotlin
 nuget {
@@ -75,6 +76,53 @@ See [Publish a Kotlin/Native library as NuGet](publish-kotlin-library-as-nuget.m
 local-iteration flow and the consumer-side props import, and
 [ADR-092](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/092-snapshot-versioning-dsl.md)
 for the version-ordering and property-naming rationale.
+
+### Multi-RID packages
+
+`packNuget` only links the native targets this host's Kotlin/Native toolchain can build, but a
+package worth publishing needs every RID your CI matrix produces. `prebuiltRuntimes` points at a
+directory built by another host and merges it into this host's own pack, so one `packNuget` run
+still produces one package covering both:
+
+```kotlin
+nuget {
+  publish {
+    packageId = "MyCatLib"
+    version = "1.0.0"
+    prebuiltRuntimes = file("build/prebuilt-runtimes")  // <rid>/native/*.dll|*.dylib|*.so
+  }
+}
+```
+
+A typical two-host CI flow: a Windows leg runs `packNuget` and uploads its staged `runtimes/`
+folder as an artifact, then a macOS leg downloads that artifact into a local directory, points
+`prebuiltRuntimes` at it, and runs `packNuget` itself, once, producing a single package with both
+RIDs (for example `osx-arm64` and `win-x64`).
+
+<note>
+<p>A target whose link task is disabled on the packing host (say <code>mingwX64</code> declared but
+not linkable here) is excluded from the locally linked set at configuration time, with a lifecycle
+log naming the RID and pointing at <code>prebuiltRuntimes</code> as the way to still ship it. With
+every local link disabled and <code>prebuiltRuntimes</code> set, the host still gets a
+<code>packNuget</code> task: a pack-only host is a supported shape, not just a linking one.</p>
+</note>
+
+`packNuget` validates the merge rather than silently dropping anything:
+
+- A locally linked RID with no `.dll`/`.dylib`/`.so` to copy fails the build naming the RID and the
+  directory scanned: the link task ran and produced nothing, which is a broken build, not a
+  host limitation.
+- A `prebuiltRuntimes` directory with no RID subdirectories at all, or a RID subdirectory whose
+  `native/` folder is missing or empty, fails naming the expected layout
+  (`<prebuiltRuntimes>/<rid>/native/*.dll|*.dylib|*.so`).
+- The same RID arriving both locally linked and prebuilt fails naming both sources: pick one
+  producer per RID, either by disabling the local link or dropping the RID from the prebuilt tree.
+- A prebuilt RID name this plugin version does not know how to build is a warning only, not an
+  error: the RID set NuGet accepts is open, and the tree may come from a newer plugin.
+
+See
+[ADR-093](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/093-multi-rid-package-inputs.md)
+for the full validation semantics and the alternatives considered.
 
 ### Export scoping
 

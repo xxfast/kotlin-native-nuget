@@ -11,7 +11,9 @@ import org.jetbrains.kotlin.gradle.plugin.mpp.KotlinNativeTarget
 import org.jetbrains.kotlin.gradle.plugin.mpp.SharedLibrary
 import java.lang.reflect.Method
 
-private val KONAN_TO_RID = mapOf(
+// ADR-093: PackNugetTask reads the value set to name the RIDs this plugin version can build when
+// it warns about an unknown prebuilt RID.
+internal val KONAN_TO_RID = mapOf(
   "mingw_x64" to "win-x64",
   "macos_arm64" to "osx-arm64",
   "macos_x64" to "osx-x64",
@@ -332,18 +334,26 @@ class NugetPlugin : Plugin<Project> {
               .firstOrNull()
             ?: continue
 
-          libDirs[rid] = sharedLib.outputDirectory.absolutePath
-
-          if (sharedLib.linkTaskProvider.get().enabled) {
-            linkTasks.add(sharedLib.linkTaskProvider)
+          // ADR-093: a target this host cannot link never enters libDirs, so nativeLibDirs means
+          // "RIDs this host will actually produce" and packNuget can be strict about an empty one.
+          if (!sharedLib.linkTaskProvider.get().enabled) {
+            project.logger.lifecycle(
+              "[nuget] Skipping RID '$rid': the link task for target '${target.name}' is disabled " +
+                  "on this host. Supply it from another host via " +
+                  "nuget { publish { prebuiltRuntimes = ... } } to ship it in this package."
+            )
+            continue
           }
+
+          libDirs[rid] = sharedLib.outputDirectory.absolutePath
+          linkTasks.add(sharedLib.linkTaskProvider)
 
           if (baseName == null) {
             baseName = sharedLib.baseName
           }
         }
 
-        if (libDirs.isEmpty()) return@afterEvaluate
+        if (libDirs.isEmpty() && pub.prebuiltRuntimes == null) return@afterEvaluate
 
         // KSP generates Interop.cs at:
         // build/generated/ksp/<target>/<target>Main/resources/Interop.cs
@@ -385,6 +395,10 @@ class NugetPlugin : Plugin<Project> {
             task.packageDescription.set(pub.description)
             task.nativeLibDirs.set(libDirs)
             task.nativeLibFiles.from(libDirs.values.map { project.fileTree(it) })
+
+            if (pub.prebuiltRuntimes != null) {
+              task.prebuiltRuntimesDir.set(pub.prebuiltRuntimes)
+            }
 
             task.generatedCsDirs.from(kspOutputDir)
             task.outputDir.set(project.layout.buildDirectory.dir("nuget"))

@@ -17,6 +17,11 @@ class NugetPublishConfig {
   // Default: <rootProject>/build/<packageId>Versions.props. Only consulted when snapshot is true.
   var versionPropsFile: File? = null
 
+  // ADR-093: a directory of native libraries built on another host, laid out exactly like the
+  // runtimes/ tree packNuget stages: <dir>/<rid>/native/ holding dll, dylib or so files. Merged
+  // into this host's own linked output so one pack produces one multi-RID package.
+  var prebuiltRuntimes: File? = null
+
   private val _include = mutableListOf<String>()
   private val _exclude = mutableListOf<String>()
 

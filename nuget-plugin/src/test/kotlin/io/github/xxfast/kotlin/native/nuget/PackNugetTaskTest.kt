@@ -5,6 +5,7 @@ import java.io.File
 import java.nio.file.Files
 import kotlin.test.Test
 import kotlin.test.assertContains
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
@@ -59,7 +60,7 @@ class PackNugetTaskTest {
     assertTrue(
       File(contentDir, "FooRegistration.cs").exists(),
       "FooRegistration.cs from the second generatedCsDirs entry must be copied into " +
-        "contentFiles/cs/any/",
+          "contentFiles/cs/any/",
     )
 
     val nuspec: String = File(outputDir, "TestLibrary.1.0.0/TestLibrary.nuspec").readText()
@@ -70,7 +71,7 @@ class PackNugetTaskTest {
     assertContains(
       nuspec,
       """<file src="contentFiles/cs/any/FooRegistration.cs" """ +
-        """target="contentFiles/cs/any/FooRegistration.cs" />""",
+          """target="contentFiles/cs/any/FooRegistration.cs" />""",
     )
     assertContains(
       nuspec,
@@ -168,8 +169,11 @@ class PackNugetTaskTest {
     assertFalse(File(nativeOutDir, "Sample.xml").exists())
   }
 
+  // ADR-093 flips this case: a nativeLibDirs entry that produced nothing used to be skipped
+  // silently, which shipped packages missing a platform. Disabled targets no longer reach the map,
+  // so an empty entry now means the local link is broken.
   @Test
-  fun `pack skips a nativeLibDirs entry whose path does not exist`() {
+  fun `pack fails for a nativeLibDirs entry whose path does not exist`() {
     val task: PackNugetTask = newTask()
 
     val csDir: File = Files.createTempDirectory("ksp-cs").toFile()
@@ -181,10 +185,8 @@ class PackNugetTaskTest {
     task.dependencyVersions.set(emptyMap())
     task.nativeLibDirs.set(mapOf("osx-arm64" to "/nonexistent/path/xyz"))
 
-    task.pack()
+    val error = assertFailsWith<IllegalStateException> { task.pack() }
 
-    val nativeOutDir = File(outputDir, "TestLibrary.1.0.0/runtimes/osx-arm64/native")
-    val entries: Array<File> = nativeOutDir.listFiles() ?: emptyArray()
-    assertTrue(entries.isEmpty(), "no files should have been copied for a nativeLibDirs entry whose path does not exist")
+    assertContains(error.message.orEmpty(), "osx-arm64")
   }
 }
