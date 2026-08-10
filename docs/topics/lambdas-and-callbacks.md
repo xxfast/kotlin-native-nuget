@@ -251,6 +251,10 @@ public void CatEventSource_AddListener_TriggerFiresBothOnMeowAndOnPurr()
 
 ## Limitations
 
+Every callback shape on this page (per-call lambda parameters, stored callbacks, interface
+bridging) is not safe under a fully AOT-compiled .NET runtime yet, see
+[Publishing Kotlin to C#: AOT and trimming](forward-overview.md#aot-and-trimming).
+
 Be precise about what's supported here: the interface *parameter* shape on **this** page is only the `add`/`remove`-paired subscription route shown above. A Kotlin interface as a **return type**, and a general (non-subscription) interface-typed parameter or property setter, are both now supported too, see [Interfaces, abstract and sealed classes](interfaces-abstract-sealed.md#interface-typed-return-values) and its [Implementing a Kotlin interface in C#](interfaces-abstract-sealed.md#implementing-a-kotlin-interface-in-c) section: a C#-implemented `IFoo` (no `_handle`) can be passed at an ordinary interface-typed parameter like `Cat.Befriend`, dispatched through a per-interface bridge factory rather than throwing `NotSupportedException`. The following are still explicitly not built (ROADMAP Phase 7):
 
 - Converging the `add`/`remove` subscription route above onto that general bridge factory is not done; the two routes are separate machinery today, and the subscription route has its own known gaps (a non-Unit-returning or property-bearing subscription interface generates non-compiling Kotlin with no diagnostic), tracked in [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md).

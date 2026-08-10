@@ -148,6 +148,16 @@ dialect (step 3), the one axis that is a genuine dialect choice with a language-
 the AOT publish smoke test in CI, remains open and unproven: no AOT lane exists in this repository,
 so "the generated bindings run under `PublishAot=true`" is still an inferred claim, not a verified one.
 
+**Step 4 update:** the "delegate function pointers" row's "works under AOT if the delegate is
+blittable; verify per callback shape" is no longer purely inferred for at least one shape. A
+Release-configuration Mac Catalyst build throws `ExecutionEngineException`
+(`AOT NOT FOUND: (wrapper native-to-managed) ...`) the first time a generated `Flow` is collected,
+because `Marshal.GetFunctionPointerForDelegate` needs the JIT to build the native-to-managed thunk
+and a fully AOT-compiled runtime has none. See
+[Publishing Kotlin to C#: AOT and trimming](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/topics/forward-overview.md#aot-and-trimming)
+for the repro and [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md)
+for the fix this points at. This is still not the CI smoke test step 4 describes, which stays open.
+
 ## Consequences
 
 - New `CSharpProfile` model + threading it through every renderer.

@@ -761,6 +761,9 @@ public async Task AwaitPlaymateReport_ValueReturnsFreshDisposableWrapper_OreoGre
 
 ## Limitations
 
+`Flow`/`StateFlow` collection and `suspend`/`async` are not safe under a fully AOT-compiled .NET
+runtime yet, see [Publishing Kotlin to C#: AOT and trimming](forward-overview.md#aot-and-trimming).
+
 Hot streams and several `Flow` positions are not yet supported (ROADMAP Phase 6):
 
 - `SharedFlow<T>` (hot, multi-subscriber)

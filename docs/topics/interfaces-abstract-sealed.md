@@ -539,6 +539,10 @@ internal sealed class PetBridgeState : NugetBridgeState
 
 ## Limitations
 
+- A C#-implemented interface's bridge factory dispatches through the same
+  `Marshal.GetFunctionPointerForDelegate` mechanism as [Lambdas and callbacks](lambdas-and-callbacks.md),
+  so it is not safe under a fully AOT-compiled .NET runtime yet, see
+  [Publishing Kotlin to C#: AOT and trimming](forward-overview.md#aot-and-trimming).
 - A C#-implemented interface's bridge factory only ever gets `val` getters and `Unit`/primitive/`Boolean`/enum/`String`/`String?`-returning methods of arity 0-2. An interface with a `var` property, an object- or collection-typed member, a `suspend` member, or generics plans **no factory at all**, silently: `NugetMarshal.HandleOf` keeps the old `NotSupportedException` for it, with no diagnostic naming why.
 - A C#-implemented object's bridge is released only when Kotlin's GC actually collects it, on a later collection round; there is no deterministic, prompt release comparable to `IDisposable`.
 - Kotlin-side `===` on a C#-implemented object's bridge is not preserved across repeated crossings of the same C# instance: each crossing builds a new bridge object. C#-side identity (`Assert.Same` on the object read back from Kotlin) is preserved via a token probe.

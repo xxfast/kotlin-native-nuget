@@ -190,6 +190,72 @@ help, since the crashing IR belongs to the other plugin, not to user code. See
 symptom and the classpath-exclusion workaround.</p>
 </note>
 
+### AOT and trimming {id="aot-and-trimming"}
+
+The generated bindings are not safe under a fully AOT-compiled .NET runtime yet.
+
+The generics bridge's reflection, the first blocker
+([ADR-038](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/038-aot-compilation.md), Deferred),
+is fixed: [ADR-094](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/094-reflection-free-generic-dispatch.md)
+(Accepted) replaced the type-erased generics bridge's `GetField`/`Activator.CreateInstance`
+reflection with a static factory registry. A build against a pre-ADR-094 version of these bindings
+(plugin 0.2.0) could still trigger the .NET trimmer's `IL2075` on that `GetField`, mitigated with
+`<TrimmerRootAssembly>` on the project compiling `Interop.cs`; on the current generator this should
+no longer fire for that reason.
+
+<warning>
+<p>Every callback that crosses from C# into Kotlin still is not AOT-safe: <code>Flow</code>/<code>StateFlow</code>
+collection, <code>suspend</code>/<code>async</code>, a lambda parameter, a stored callback, and
+interface bridging. Each pins a C# delegate with <code>GCHandle</code> and hands Kotlin a pointer via
+<code>Marshal.GetFunctionPointerForDelegate</code>
+(<a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/036-reverse-interop-mechanism.md">ADR-036</a>),
+which needs the runtime to JIT a native-to-managed thunk the first time it is invoked from native
+code. A fully AOT-compiled build has no JIT to do that.</p>
+<p>Verified against a Release-configuration Mac Catalyst arm64 build (.NET 10, MAUI, plugin 0.2.0):
+on the first <code>Flow</code> collection, Mono throws <code>ExecutionEngineException</code>
+(<code>AOT NOT FOUND: (wrapper native-to-managed) KotlinFlowEnumerator...</code>) building the
+thunk for the flow enumerator's callback. Debug builds work, since they still JIT. <b>The failure
+can be entirely silent</b>: a collection loop that only catches <code>OperationCanceledException</code>,
+on an unobserved task, leaves the app running with an empty UI and no crash. Repro: build
+<code>-c Release -f net10.0-maccatalyst</code>, run the built <code>.app</code>'s binary directly
+with <code>MONO_LOG_LEVEL=debug MONO_LOG_MASK=aot</code>, and grep the output for
+<code>AOT NOT FOUND</code>.</p>
+<p>iOS and tvOS devices run the same Mono full-AOT regime, so the same failure is expected there too
+(currently academic: the package ships no <code>ios-arm64</code> native asset, and Mac Catalyst
+borrows the <code>osx-arm64</code> dylib via <code>NativeReference</code>). NativeAOT
+(<code>PublishAot=true</code>) on any OS is expected to fail the same way on the callback thunks,
+since it also has no JIT. Neither is verified directly.</p>
+</warning>
+
+Affected: <a href="coroutines-and-flow.md">Coroutines and Flow</a>'s `Flow`/`StateFlow` collection and
+`suspend`/`async`, and <a href="lambdas-and-callbacks.md">Lambdas and callbacks</a>'s lambda
+parameters, stored callbacks, and <a href="interfaces-abstract-sealed.md">interface bridging</a>. Not
+affected: the synchronous, callback-free surface, methods, properties, constructors, strings,
+collections.
+
+Three workarounds, in order of preference:
+
+1. **`MtouchInterpreter` (Catalyst/iOS Release builds).** Verified in the same sample: adding
+   `<MtouchInterpreter>-all</MtouchInterpreter>` (or `-p:MtouchInterpreter=-all`) to the consumer
+   `.csproj` keeps the rest of the app fully AOT-compiled but ships the Mono interpreter as a
+   fallback for the paths AOT could not pre-generate, including these callback thunks. Re-running
+   the exact failing scenario with this flag set threw no `ExecutionEngineException`, and the
+   generated `Flow` delivered states with live data on screen. The perf cost is limited to the code
+   paths the interpreter actually executes. This only applies to `net*-ios`/`net*-maccatalyst`
+   TFMs; NativeAOT (`PublishAot=true`) has no interpreter equivalent, so on NativeAOT the limitation
+   stands unmitigated.
+2. **Debug/JIT configurations** work as-is for local development, no flag needed.
+3. **The PeopleInSpace pattern**, exporting scalar accessors from Kotlin and polling them instead of
+   collecting a generated `Flow`, for the cases the interpreter is unacceptable: a strict full-AOT
+   policy, NativeAOT, or a performance-critical hot path.
+
+The identified permanent fix is porting
+[ADR-041](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/041-kotlin-to-csharp-call-mechanism.md)'s
+`[UnmanagedCallersOnly]` + `[ModuleInitializer]` registration pattern, already used for the reverse
+direction, onto this callback surface, which would remove the need for the interpreter fallback
+entirely and also cover NativeAOT; tracked in
+[ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md).
+
 <seealso>
     <category ref="related">
         <a href="classes-and-objects.md">Classes and objects</a>
@@ -199,11 +265,15 @@ symptom and the classpath-exclusion workaround.</p>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/003-memory-management-across-bridge.md">ADR-003: Memory management across the bridge</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/004-cir-intermediate-representation.md">ADR-004: CIR intermediate representation</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/005-object-return-semantics.md">ADR-005: Object return semantics</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/036-reverse-interop-mechanism.md">ADR-036: Reverse interop mechanism</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/038-aot-compilation.md">ADR-038: NativeAOT compatibility</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/041-kotlin-to-csharp-call-mechanism.md">ADR-041: Kotlin to C# call mechanism</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/055-forward-abi-contract-check.md">ADR-055: Forward ABI contract check</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/062-forward-callable-plan.md">ADR-062: Forward callable plan</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/063-forward-declaration-level-export-scoping.md">ADR-063: Forward declaration-level export scoping</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/064-forward-unsupported-declaration-diagnostics.md">ADR-064: Forward unsupported-declaration diagnostics</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/066-forward-export-reachability-closure.md">ADR-066: Forward export reachability closure</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/078-forward-abi-legacy-contract-coverage.md">ADR-078: Forward ABI legacy contract coverage</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/094-reflection-free-generic-dispatch.md">ADR-094: Reflection-free generic dispatch</a>
     </category>
 </seealso>
