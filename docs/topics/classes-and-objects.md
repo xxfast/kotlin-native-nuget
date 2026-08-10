@@ -5,7 +5,7 @@ A Kotlin `class` becomes a C# `class` backed by an opaque `StableRef` handle, im
 | Kotlin | C# | Notes |
 |---|---|---|
 | `class` | `class : IDisposable` | `StableRef` + opaque pointer |
-| constructor | `new Foo(...)` | Kotlin constructor surfaces as a C# `new` |
+| constructor | `new Foo(...)` | Kotlin constructor surfaces as a C# `new`; a trailing run of defaulted parameters adds an omitting overload per suffix length, see Constructor default parameters below ([ADR-091](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/091-constructor-default-parameters.md)) |
 | member property (get) | property (get) | |
 | member property (get/set) | property (get/set) | |
 | object-typed property/return | property/return | new wrapper per access, identity not preserved |
@@ -424,6 +424,174 @@ public void Rate_WithMood_DispatchesToEnumOverload()
     </p>
 </warning>
 
+## Constructor default parameters
+
+For each exported constructor, every maximal trailing run of defaulted parameters synthesizes one
+additional omitting overload per suffix length, the same rule Kotlin itself uses for
+`@JvmOverloads` on the JVM. KSP can only read whether a parameter has a default (`hasDefault`),
+never the value or expression, so a synthesized overload's generated Kotlin wrapper calls the
+constructor positionally with fewer arguments and Kotlin supplies the rest at the call site. A
+defaulted parameter followed by a required one, a **middle default**, produces no overload at all,
+since a positional Kotlin call can't skip over it.
+
+### Kotlin {id="ctordefaults-kotlin"}
+
+From `test-library/src/nativeMain/kotlin/.../cat/DefaultsSample.kt`:
+
+```kotlin
+class Carrier(
+  val label: String,
+  val size: Int = 3,
+  val padded: Boolean = true,
+)
+
+class Kennel(
+  val name: String,
+  val capacity: Int = 10,
+  val city: String,
+)
+
+class ScratchPost(val label: String) {
+  constructor(label: String, height: Int, sturdy: Boolean = true) :
+    this("$label/${height}cm/${if (sturdy) "sturdy" else "wobbly"}")
+}
+```
+
+`Carrier` has two trailing defaults, so both suffix lengths (`k=1`, `k=2`) synthesize alongside the
+full signature: three public constructors in total. `Kennel`'s `capacity` default sits before a
+required `city`, so nothing synthesizes: exactly one public constructor. `ScratchPost`'s trailing
+default lives on its **secondary** constructor; the primary, `(label: String)`, declares no
+defaults of its own and gets nothing extra.
+
+### Generated C# {id="ctordefaults-generated-c"}
+
+From `Interop.cs`:
+
+```C#
+public class Carrier : IDisposable
+{
+    [DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "carrier_create")]
+    private static extern IntPtr Native_Create([MarshalAs(UnmanagedType.LPUTF8Str)] string label, int size, bool padded, out IntPtr error);
+
+    public Carrier(string label, int size, bool padded) { /* ... */ }
+
+    [DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "carrier_create_2")]
+    private static extern IntPtr Native_Create_2([MarshalAs(UnmanagedType.LPUTF8Str)] string label, int size, out IntPtr error);
+
+    public Carrier(string label, int size) { /* ... */ }
+
+    [DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "carrier_create_3")]
+    private static extern IntPtr Native_Create_3([MarshalAs(UnmanagedType.LPUTF8Str)] string label, out IntPtr error);
+
+    public Carrier(string label) { /* ... */ }
+}
+```
+
+`Kennel` renders exactly one public constructor, the full signature, since `capacity`'s default can
+never be omitted:
+
+```C#
+public class Kennel : IDisposable
+{
+    [DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "kennel_create")]
+    private static extern IntPtr Native_Create([MarshalAs(UnmanagedType.LPUTF8Str)] string name, int capacity, [MarshalAs(UnmanagedType.LPUTF8Str)] string city, out IntPtr error);
+
+    public Kennel(string name, int capacity, string city) { /* ... */ }
+}
+```
+
+`ScratchPost`'s synthesized overload continues the same numbering [ADR-034](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/034-secondary-constructor-exceptions.md)
+already gives secondary constructors, so it belongs to the **secondary**, not the primary:
+
+```C#
+public class ScratchPost : IDisposable
+{
+    [DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "scratchpost_create")]
+    private static extern IntPtr Native_Create([MarshalAs(UnmanagedType.LPUTF8Str)] string label, out IntPtr error);
+
+    public ScratchPost(string label) { /* ... */ } // primary, unchanged
+
+    [DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "scratchpost_create_2")]
+    private static extern IntPtr Native_Create_2([MarshalAs(UnmanagedType.LPUTF8Str)] string label, int height, bool sturdy, out IntPtr error);
+
+    public ScratchPost(string label, int height, bool sturdy) { /* ... */ } // secondary, full
+
+    [DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "scratchpost_create_3")]
+    private static extern IntPtr Native_Create_3([MarshalAs(UnmanagedType.LPUTF8Str)] string label, int height, out IntPtr error);
+
+    public ScratchPost(string label, int height) { /* ... */ } // secondary, k=1
+}
+```
+
+### Using it from C# {id="ctordefaults-using-it-from-c"}
+
+From `IntegrationTests/ConstructorDefaultParameterTests.cs`:
+
+```C#
+[Fact]
+public void Cat_OmittingLives_UsesKotlinDefaultOfNine()
+{
+    // The papercut this fixes: `new Cat("Mouse")` used to be CS7036. Nine lives is Kotlin's
+    // number, evaluated by Kotlin, never copied into the C# source.
+    using var mouse = new Cat("Mouse");
+
+    Assert.Equal(9, mouse.Lives);
+}
+
+[Fact]
+public void Carrier_OmittingBothTrailingArguments_UsesBothDefaults()
+{
+    // k = 2: the deepest suffix. Both defaults come from Kotlin.
+    using var carrier = new Carrier("Mylo's crate");
+
+    Assert.Equal("Mylo's crate size 3 padded", carrier.Describe());
+}
+
+[Fact]
+public void Kennel_ExposesExactlyOnePublicConstructor()
+{
+    // `capacity` has a required parameter after it, so the JvmOverloads rule synthesizes
+    // nothing. Asserted structurally so a future "helpful" combinatorial expansion trips here.
+    Assert.Single(typeof(Kennel).GetConstructors());
+}
+
+[Fact]
+public void ScratchPost_SecondaryConstructor_OmittingTrailingDefault_UsesSturdy()
+{
+    // The synthesized overload belongs to the SECONDARY constructor, so it must route to the
+    // secondary's body and pick up `sturdy = true`, not fall back to the primary.
+    using var post = new ScratchPost("tower", 60);
+
+    Assert.Equal("scratch post tower/60cm/sturdy", post.Describe());
+}
+```
+
+<note>
+    <p>
+        A constructor with an <code>expect</code>/<code>actual</code> pair still gets its
+        omitting overload: Kotlin forbids an <code>actual</code> from restating a default, so
+        <code>hasDefault</code> is <code>false</code> on the exported (<code>actual</code>)
+        declaration and the planner has to consult the <code>expect</code> class's primary
+        constructor to see it. See
+        <a href="expect-actual.md">expect/actual declarations</a> for the <code>Beacon</code>
+        example. This lookup only covers an <code>expect</code> class's <b>primary</b>
+        constructor; a secondary constructor on an <code>expect</code>/<code>actual</code> class
+        gets no synthesized overloads in v1.
+    </p>
+</note>
+
+<warning>
+    <p>
+        A synthesized overload that collides with a real constructor (or with another
+        synthesized overload) fails generation with the same
+        <code>ERROR_CSHARP_SIGNATURE_COLLISION</code> diagnostic the Method overloads section
+        describes above, its hint extended to name the defaulted-parameter cause. For example,
+        <code>class Foo(val name: String, val lives: Int = 9)</code> next to
+        <code>constructor(name: String) : this(name, 1)</code> both reduce to a
+        <code>Foo(string)</code> C# signature.
+    </p>
+</warning>
+
 ## Classes declared in a dependency module
 
 A class doesn't need to be declared in the publishing Gradle module to reach the generated C# API.
@@ -500,6 +668,13 @@ binding or breaking the build; see [Publishing Kotlin to C#](forward-overview.md
   an `object` member, a companion member, a top-level function, or an extension function still
   crashes `packNuget` with the same `planFor` duplicate-plans error; see
   [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md).
+- Constructor default parameters synthesize overloads; function and method default parameters
+  (top-level functions, class methods, `object`/companion members, extension functions) do not
+  yet, and every argument must still be passed explicitly at those positions; see
+  [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md).
+- Value-class constructor defaults and a partial (argument-omitting) `Copy(...)` are out of scope
+  for the constructor-default-parameters feature; see
+  [ADR-091](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/091-constructor-default-parameters.md).
 
 <seealso>
     <category ref="related">
@@ -513,6 +688,7 @@ binding or breaking the build; see [Publishing Kotlin to C#](forward-overview.md
     <category ref="external">
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/003-memory-management-across-bridge.md">ADR-003: Memory management across the bridge</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/005-object-return-semantics.md">ADR-005: Object return semantics</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/034-secondary-constructor-exceptions.md">ADR-034: Secondary constructor exceptions</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/061-method-return-marshalling.md">ADR-061: Method return marshalling</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/062-forward-callable-plan.md">ADR-062: Forward callable plan</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/064-forward-unsupported-declaration-diagnostics.md">ADR-064: Forward unsupported-declaration diagnostics</a>
@@ -520,5 +696,6 @@ binding or breaking the build; see [Publishing Kotlin to C#](forward-overview.md
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/069-nullable-boolean-marshalling.md">ADR-069: Nullable Boolean marshalling</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/082-value-class-inherited-members.md">ADR-082: Value-class inherited members</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/090-ordinary-class-method-overloads.md">ADR-090: Ordinary-class method overloads</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/091-constructor-default-parameters.md">ADR-091: Constructor default parameters</a>
     </category>
 </seealso>

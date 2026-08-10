@@ -1,6 +1,5 @@
 package io.github.xxfast.kotlin.native.nuget.processor.exports
 
-import com.google.devtools.ksp.getConstructors
 import com.google.devtools.ksp.getVisibility
 import com.google.devtools.ksp.symbol.KSClassDeclaration
 import com.google.devtools.ksp.symbol.KSFunctionDeclaration
@@ -52,25 +51,11 @@ internal fun FileSpec.Builder.addClassExports(
   // override is bound here too, and the ABI contract check is what would catch any drift.
   val superClass: KSClassDeclaration? = cls.forwardSuperClass()
 
-  val constructor: KSFunctionDeclaration? = cls.primaryConstructor
-
-  if (constructor != null && !isAbstract) {
-    val planned: ForwardCallablePlan? = callableCatalog.planFor("$qualifiedName.<init>")
-    if (planned != null) addForwardKotlinPlanExport(planned)
-  }
-
-  if (!isAbstract) {
-    val secondaryConstructors: List<KSFunctionDeclaration> = cls.getConstructors()
-      .filter { it != cls.primaryConstructor }
-      .filter { it.getVisibility() == Visibility.PUBLIC }
-      .toList()
-
-    secondaryConstructors.forEachIndexed { index, _ ->
-      val planned: ForwardCallablePlan? =
-        callableCatalog.planFor("$qualifiedName.<init>_${index + 2}")
-      if (planned != null) addForwardKotlinPlanExport(planned)
-    }
-  }
+  // ADR-091: constructors come off the catalog rather than a `getConstructors()` walk, because the
+  // planner also synthesizes trailing-default omitting overloads that no declaration walk can see.
+  // Truncated plans need no emitter support: the wrapper's call is built from the plan's
+  // parameters, so Kotlin supplies the omitted defaults.
+  callableCatalog.constructors(qualifiedName).forEach { plan -> addForwardKotlinPlanExport(plan) }
 
   addFunction(
     FunSpec.builder("export_${prefix}_dispose")

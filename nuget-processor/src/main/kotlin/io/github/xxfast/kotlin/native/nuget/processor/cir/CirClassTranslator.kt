@@ -1,6 +1,5 @@
 package io.github.xxfast.kotlin.native.nuget.processor.cir
 
-import com.google.devtools.ksp.getConstructors
 import com.google.devtools.ksp.getVisibility
 import com.google.devtools.ksp.processing.KSPLogger
 import com.google.devtools.ksp.symbol.ClassKind
@@ -66,34 +65,23 @@ internal fun translateClass(
       .toList()
   }
 
-  val constructor = cls.primaryConstructor
-  val cirConstructor: CirConstructor? = if (constructor != null && !isAbstract) {
-    val planned = callableCatalog.planFor("${cls.qualifiedName?.asString() ?: name}.<init>")
-    if (planned != null) {
-      tracker.trackPlan(planned)
-      ForwardCirPlanProjection.constructor(planned)
-    } else {
-      null // ordinary constructor without a plan: no IntPtr fallthrough
-    }
-  } else null
-
-  // Secondary constructors (ADR-034). Entry points start at _create_2 so they
-  // never collide with the primary's _create.
-  val secondaryConstructors: List<CirConstructor> = if (isAbstract) emptyList() else cls
-    .getConstructors()
-    .filter { it != cls.primaryConstructor }
-    .filter { it.getVisibility() == Visibility.PUBLIC }
-    .toList()
-    .mapIndexedNotNull { index, _ ->
-      val suffix = "_${index + 2}"
-      val planned = callableCatalog.planFor("${cls.qualifiedName?.asString() ?: name}.<init>$suffix")
-      if (planned != null) {
-        tracker.trackPlan(planned)
-        ForwardCirPlanProjection.constructor(planned, suffix)
-      } else {
-        null
-      }
-    }
+  // ADR-091: constructors come off the catalog, the same move ADR-090 made for methods. The
+  // ADR-034 `_$n` sequence now also carries planner-synthesized omitting overloads, so the extern
+  // suffix is derived from the plan symbol's tail after `<init>` ("" or `_$n`) rather than from a
+  // declaration index. C# constructors all share the class name, so the numbering stays invisible:
+  // the surface is one natural overload set.
+  val constructorPlans: List<ForwardCallablePlan> =
+    callableCatalog.constructors(cls.qualifiedName?.asString() ?: name)
+  val cirConstructors: List<CirConstructor> = constructorPlans.map { plan ->
+    tracker.trackPlan(plan)
+    val suffix: String = plan.invocation.symbol.substringAfterLast('.').removePrefix("<init>")
+    ForwardCirPlanProjection.constructor(plan, suffix)
+  }
+  // An unsuffixed plan is the primary; everything else renders as an overload. A primary skipped
+  // by the planner leaves `constructor` null with no IntPtr fallthrough, exactly as before.
+  val cirConstructor: CirConstructor? = cirConstructors.firstOrNull { it.nativeSuffix.isEmpty() }
+  val secondaryConstructors: List<CirConstructor> =
+    cirConstructors.filter { it.nativeSuffix.isNotEmpty() }
 
   // C has no overloading and C# cannot declare two constructors with identical parameter
   // types — fail fast rather than emit uncompilable C# (ADR-034). C# nullable *reference*
@@ -117,8 +105,9 @@ internal fun translateClass(
           declaration = "$name.<init>",
           reason = "two or more constructors render identical C# parameter types; C# cannot " +
               "declare two constructors with the same signature (ADR-034)",
-          hint = "rename or remove the duplicate constructor, or change one parameter's type " +
-              "so the rendered C# signatures differ",
+          hint = "rename or remove the duplicate constructor, change one parameter's type so " +
+              "the rendered C# signatures differ, or remove the default value whose synthesized " +
+              "omitting overload collides (ADR-091)",
         ),
       ),
       logger,

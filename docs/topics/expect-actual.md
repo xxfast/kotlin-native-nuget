@@ -185,14 +185,67 @@ When the alias target isn't itself exportable, a member that mentions it is skip
 
 This fires for `actual typealias Failure = kotlin.IllegalStateException`, a stdlib type the forward direction can never bring into scope. There's no such member in `test-library`; this shape is pinned as a permanent Tier 1 regression cell instead, since a `SKIPPED_*` warning must not sit in a real package's build log forever.
 
+## Constructor default parameters on an `expect` class
+
+Kotlin forbids an `actual` from restating a default value, so on an `expect`/`actual class` pair
+every parameter of the exported (`actual`) declaration reports `hasDefault = false`; the value
+lives only on the `expect`. [Constructor default parameters](classes-and-objects.md#constructor-default-parameters)
+would silently and "correctly" conclude that no `expect` class has any defaults unless something
+consults the `expect` side directly, so the planner looks the owning class up in the same
+`expectsByName` index this page's export-root rule already relies on, and reads the default off
+the **expect's primary constructor**.
+
+`Beacon`, from `test-library/src/nativeMain/kotlin/.../platform/PlatformApi.kt`:
+
+```kotlin
+expect class Beacon(name: String, interval: Int = 5) {
+  fun describe(): String
+}
+```
+
+`interval`'s default (`5`) is declared once, on the `expect`, and never repeated on either actual.
+The generated C# still gets the omitting overload:
+
+```C#
+public class Beacon : IDisposable
+{
+    public Beacon(string name, int interval) { /* ... */ } // full signature
+
+    public Beacon(string name) { /* ... */ } // interval omitted; Kotlin supplies 5
+}
+```
+
+From `IntegrationTests/ConstructorDefaultParameterTests.cs`:
+
+```C#
+[Fact]
+public void Beacon_OmittingInterval_UsesTheExpectDeclaredDefault()
+{
+    // The trap: without the expectsByName lookup the planner concludes "no defaults" and this
+    // line is CS7036. The value 5 exists only on the expect side.
+    using var beacon = new Beacon("Oreo's collar");
+
+    string expected = IsMacOs
+        ? "Oreo's collar every 5s on macos"
+        : "Oreo's collar every 5s on mingw";
+    Assert.Equal(expected, beacon.Describe());
+}
+```
+
+This lookup only covers an `expect` class's **primary** constructor; a secondary constructor on an
+`expect`/`actual` class gets no synthesized overloads in v1, since matching an actual secondary
+constructor to its expect counterpart would need a signature-matching rule across two declarations
+that has not been verified. See [Classes and objects](classes-and-objects.md#constructor-default-parameters)
+for the general mechanism.
+
 ## Limitations
 
 - `expect sealed class`: not exercised. `getSealedSubclasses()` against an actualized sealed class hasn't been spiked.
 - `actual typealias` to a generic or parameterized target (`actual typealias Bag = List<String>`): the redirect substitutes a `KSClassDeclaration` and loses type arguments, so this routes through `SKIPPED_ACTUAL_TYPEALIAS_TARGET` rather than binding.
 - Cross-module (klib) `expect`/`actual`: guarded defensively, but the underlying resolution behaviour hasn't been spiked.
 - KDoc and annotations declared on the `expect` are invisible after the filter (nothing in the generator consumes either today).
-- A Kotlin constructor default parameter value declared on an `expect` (Kotlin forbids declaring it on the `actual`) is not reflected as a C# default; see the constructor-default item in [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md).
 - Two packaged targets can legitimately generate different C# APIs when their `actual`s diverge beyond the `expect`'s contract, and only one target's `Interop.cs` ships (`packNuget` packages exactly one target's output while shipping every target's binary). Nothing currently diffs the two; see the open cross-target-divergence item in [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md).
+- A secondary constructor on an `expect`/`actual class` gets no synthesized default-parameter overloads; see the "Constructor default parameters on an `expect` class" section above.
 
 <seealso>
     <category ref="related">
@@ -206,6 +259,7 @@ This fires for `actual typealias Failure = kotlin.IllegalStateException`, a stdl
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/074-expect-actual-declarations.md">ADR-074: Forward expect/actual declarations</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/007-top-level-function-class-naming.md">ADR-007: Top-level function class naming</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/018-type-alias-mapping.md">ADR-018: Type alias mapping</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/091-constructor-default-parameters.md">ADR-091: Constructor default parameters</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/064-forward-unsupported-declaration-diagnostics.md">ADR-064: Forward unsupported-declaration diagnostics</a>
     </category>
 </seealso>

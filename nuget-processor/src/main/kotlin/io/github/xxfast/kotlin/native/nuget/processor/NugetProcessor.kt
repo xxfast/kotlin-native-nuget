@@ -488,7 +488,7 @@ class NugetProcessor(
         boundInterfaces = context.boundInterfaces,
       ),
     )
-    val forwardPlanner = ForwardCallablePlanner(forwardClassifier)
+    val forwardPlanner = ForwardCallablePlanner(forwardClassifier, expectsByName)
     val forwardPropertyPlanner = ForwardPropertyPlanner(forwardClassifier)
     val ordinaryCatalog: ForwardCallablePlanCatalog = forwardPlanner.catalog(
       classes, functions, extensionFunctions, objects, properties, extensionProperties, valueClasses,
