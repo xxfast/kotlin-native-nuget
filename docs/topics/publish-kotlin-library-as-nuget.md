@@ -191,7 +191,64 @@ native asset beside the host. For a cross-platform project, use the SDK host RID
 Do not hardcode one host RID into a cross-platform test project. For deployment, select the RID of
 the target environment.
 
-## 4. Publish the package to a feed
+## 4. Iterate locally without bumping the version
+
+Without snapshot versioning, every local Kotlin change needs a version bump, or the consumer's
+`packNuget` + delete-from-cache + `dotnet restore --force --no-cache` dance, because NuGet treats
+a version as immutable and serves the cached copy of the previous build otherwise. Add
+`snapshot = true` to `publish {}` to skip that entirely:
+
+```kotlin
+nuget {
+  publish {
+    packageId = "MyCatLib"
+    version = "1.0.0"
+    authors = "yourname"
+    description = "A Kotlin/Native library for cat lovers"
+    rootPackage = "com.example.cats"
+    snapshot = true
+  }
+}
+```
+
+Every `packNuget` now mints a fresh `1.0.0-snapshot.<epochMillis>` identity and writes
+`build/MyCatLibVersions.props`, pinning it under a sanitized property name (see
+[The nuget {} DSL](nuget-dsl.md) for the naming rule):
+
+```xml
+<Project>
+  <PropertyGroup>
+    <MyCatLibVersion>1.0.0-snapshot.1754817000000</MyCatLibVersion>
+  </PropertyGroup>
+</Project>
+```
+
+Import that props file from the .NET consumer, guarded with `Exists()` so the build still works
+before the first pack, then reference the package by the property instead of a literal version:
+
+```xml
+<Project>
+  <Import Project="$(MSBuildThisFileDirectory)../my-cat-lib/build/MyCatLibVersions.props"
+          Condition="Exists('$(MSBuildThisFileDirectory)../my-cat-lib/build/MyCatLibVersions.props')" />
+</Project>
+```
+
+```xml
+<PackageReference Include="MyCatLib" Version="$(MyCatLibVersion)" />
+```
+
+Adjust the relative path to the props file for your directory layout, and to a shared
+`Directory.Build.props` if the consumer has several projects. `dotnet restore` now picks up the new
+version on every build, no cache clearing required. Successive snapshot packs accumulate
+`.nupkg` files in `build/nuget`; this is harmless, and `clean` removes them.
+
+<note>
+<p><code>snapshot = true</code> requires both <code>packageId</code> and a non-blank
+<code>version</code>; the base <code>version</code> is the prefix the timestamp is appended to,
+not the version that actually gets published.</p>
+</note>
+
+## 5. Publish the package to a feed
 
 The local package source above is useful while developing and testing the library. To distribute
 `MyCatLib`, publish the generated package to NuGet.org or a private NuGet feed instead.
