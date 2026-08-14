@@ -8,6 +8,7 @@ Kotlin extension functions and properties don't have a native C# analog (C# has 
 | extension property | static accessor | see [ADR-013](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/013-extension-property-mapping.md) |
 | extension function return (object, `T?`, `List`/`Map`/`Set`, enum, `Char`, `String?`, `Int?`, …) | matching C# return type | same cascade as a class-method return via the shared plan, see Return marshalling below and [Classes and objects](classes-and-objects.md) |
 | two or more same-named extension functions | one C# overload set | numbered native export/extern name, unnumbered public name, counter scoped per (package, name), receiver-agnostic; see [Method overloads](#method-overloads) below ([ADR-095](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/095-static-route-overloads.md)) |
+| extension function with a trailing run of defaulted parameters | omitting overload per suffix length | receiver is not a plan parameter and always survives truncation; see Method default parameters below ([ADR-096](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/096-function-default-parameters.md)) |
 
 ## Kotlin
 
@@ -253,6 +254,68 @@ public void TomcatPat_SameNameDifferentReceiver_ResolvesToItsOwnExport()
     </p>
 </note>
 
+## Method default parameters
+
+A trailing run of defaulted parameters on an extension function synthesizes an omitting overload
+per suffix length, the same [ADR-091](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/091-constructor-default-parameters.md)
+rule extended to this route by [ADR-096](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/096-function-default-parameters.md).
+Extensions are the other route (with top-level functions) where the synthesized entry shares its
+Kotlin declaration node with the declared one, needing the plural `plansFor(declaration)` accessor.
+The receiver is a `ForwardReceiver.Value`, not a plan parameter, so it is never truncated: even when
+every parameter is defaulted, the omitting overload with zero remaining parameters still carries the
+receiver.
+
+### Kotlin {id="defaults-kotlin"}
+
+From `test-library/src/nativeMain/kotlin/.../whiskers/WhiskersSample.kt`:
+
+```kotlin
+class Paw(val name: String)
+
+fun Paw.knead(times: Int = 2, surface: String = "blanket"): String =
+  "$name kneads the $surface $times times"
+```
+
+### Generated C# {id="defaults-generated-c"}
+
+From `Interop.cs`:
+
+```C#
+public static partial class PawExtensions
+{
+    [DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "paw_knead")]
+    private static extern IntPtr Native_Knead(IntPtr receiver, int times, string surface, out IntPtr error);
+
+    public static string Knead(this Paw receiver, int times, string surface) { /* ... */ }
+
+    [DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "paw_knead_2")]
+    private static extern IntPtr Native_Knead_2(IntPtr receiver, int times, out IntPtr error);
+
+    public static string Knead(this Paw receiver, int times) { /* ... */ } // surface omitted
+
+    [DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "paw_knead_3")]
+    private static extern IntPtr Native_Knead_3(IntPtr receiver, out IntPtr error);
+
+    public static string Knead(this Paw receiver) { /* ... */ } // times and surface both omitted
+}
+```
+
+### Using it from C# {id="defaults-using-it-from-c"}
+
+From `IntegrationTests/FunctionDefaultParameterTests.cs`:
+
+```C#
+[Fact]
+public void PawKnead_OmittingEveryParameter_KeepsTheReceiverAndUsesBothDefaults()
+{
+    // All parameters are defaulted, so at k = 2 the plan carries ZERO parameters. The receiver
+    // still has to know it is Oreo's paw.
+    using var paw = new Paw("Oreo");
+
+    Assert.Equal("Oreo kneads the blanket 2 times", paw.Knead());
+}
+```
+
 ## Limitations
 
 An extension property only binds when its *receiver* is `String`, a primitive, a class in the
@@ -375,5 +438,7 @@ public void Toy_Tags_ReturnsMarshalledStringElements()
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/077-value-classes-at-ordinary-positions.md">ADR-077: Value classes at ordinary positions</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/090-ordinary-class-method-overloads.md">ADR-090: Ordinary-class method overloads</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/095-static-route-overloads.md">ADR-095: Overloads on the four static export routes</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/091-constructor-default-parameters.md">ADR-091: Constructor default parameters</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/096-function-default-parameters.md">ADR-096: Function default parameters</a>
     </category>
 </seealso>

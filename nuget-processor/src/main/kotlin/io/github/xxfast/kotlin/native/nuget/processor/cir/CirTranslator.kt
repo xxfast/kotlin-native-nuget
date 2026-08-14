@@ -154,10 +154,13 @@ internal fun translate(
     val members: List<CirMember> = funcs.flatMap { function ->
       // ADR-095: node identity — the walk stays (this grouping needs the declaration), but the
       // plan of an overload is keyed `..._$n` and is no longer derivable from the name.
-      val planned: ForwardCallablePlan? = callableCatalog.planFor(function)
-      if (planned != null) {
-        tracker.trackPlan(planned)
-        ForwardCirPlanProjection.static(planned, context.libraryName)
+      // ADR-096: plural — the declared plan plus its synthesized omitting overloads.
+      val planned: List<ForwardCallablePlan> = callableCatalog.plansFor(function)
+      if (planned.isNotEmpty()) {
+        planned.flatMap { plan ->
+          tracker.trackPlan(plan)
+          ForwardCirPlanProjection.static(plan, context.libraryName)
+        }
       } else {
         // Named specialized adapters only (sealed / generic-declaration returns).
         translateSpecializedFunction(
@@ -341,12 +344,13 @@ internal fun translate(
       // ADR-095: node identity, same reason as the top-level walk above. Extension plan symbols are
       // receiver-agnostic, so two same-name extensions on different receivers in one package share
       // the counter and only the declaration itself tells them apart.
-      val planned: ForwardCallablePlan? = callableCatalog.planFor(func)
-      if (planned != null) {
-        tracker.trackPlan(planned)
-        return@flatMap ForwardCirPlanProjection.extension(planned, context.libraryName)
+      // ADR-096: plural — the declared plan plus its synthesized omitting overloads.
+      val planned: List<ForwardCallablePlan> = callableCatalog.plansFor(func)
+      // ordinary unplanned extensions: no fallthrough
+      planned.flatMap { plan ->
+        tracker.trackPlan(plan)
+        ForwardCirPlanProjection.extension(plan, context.libraryName)
       }
-      emptyList() // ordinary unplanned extensions: no fallthrough
     }
 
     // A group whose members are all unplanned would otherwise emit an empty

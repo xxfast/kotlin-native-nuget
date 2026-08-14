@@ -238,6 +238,61 @@ constructor to its expect counterpart would need a signature-matching rule acros
 that has not been verified. See [Classes and objects](classes-and-objects.md#constructor-default-parameters)
 for the general mechanism.
 
+## Function default parameters on a top-level `expect` function
+
+The same restatement rule applies to an ordinary function: an `actual fun` cannot restate a
+default, so every parameter of the exported declaration reports `hasDefault = false`. Of the five
+function routes [ADR-096](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/096-function-default-parameters.md)
+covers, **only the top-level-function route** consults the `expect` side for this bit; a class
+method, `object` member, companion member, or extension declared on an `expect` class gets no
+synthesized overload, even where the equivalent constructor case above does.
+
+`beaconLabel`, from `test-library/src/nativeMain/kotlin/.../platform/PlatformApi.kt`:
+
+```kotlin
+expect fun beaconLabel(prefix: String, level: Int = 7): String
+```
+
+`level`'s default (`7`) is declared once, on the `expect`, and never repeated on either actual:
+
+```kotlin
+actual fun beaconLabel(prefix: String, level: Int): String = "$prefix at level $level on macos"
+```
+
+The generated C# still gets the omitting overload:
+
+```C#
+[DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "beaconLabel")]
+private static extern IntPtr Native_beaconLabel(string prefix, int level, out IntPtr error);
+
+public static string beaconLabel(string prefix, int level) { /* ... */ } // full signature
+
+[DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "beaconLabel_2")]
+private static extern IntPtr Native_beaconLabel_2(string prefix, out IntPtr error);
+
+public static string beaconLabel(string prefix) { /* ... */ } // level omitted; Kotlin supplies 7
+```
+
+From `IntegrationTests/FunctionDefaultParameterTests.cs`:
+
+```C#
+[Fact]
+public void BeaconLabel_OmittingLevel_UsesTheExpectDeclaredDefault()
+{
+    // Kotlin forbids an `actual` from restating a default, so every parameter of the EXPORTED
+    // declaration reports hasDefault = false. Without the expectsByName lookup the planner
+    // concludes "no defaults" and this line is CS7036. The value 7 exists only on the expect.
+    string expected = IsMacOs
+        ? "Oreo's collar at level 7 on macos"
+        : "Oreo's collar at level 7 on mingw";
+
+    Assert.Equal(expected, PlatformApi.beaconLabel("Oreo's collar"));
+}
+```
+
+See [Function default parameters](top-level-declarations.md#function-default-parameters) for the
+general mechanism.
+
 ## Limitations
 
 - `expect sealed class`: not exercised. `getSealedSubclasses()` against an actualized sealed class hasn't been spiked.
@@ -246,6 +301,7 @@ for the general mechanism.
 - KDoc and annotations declared on the `expect` are invisible after the filter (nothing in the generator consumes either today).
 - Two packaged targets can legitimately generate different C# APIs when their `actual`s diverge beyond the `expect`'s contract, and only one target's `Interop.cs` ships (`packNuget` packages exactly one target's output while shipping every target's binary). Nothing currently diffs the two; see the open cross-target-divergence item in [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md).
 - A secondary constructor on an `expect`/`actual class` gets no synthesized default-parameter overloads; see the "Constructor default parameters on an `expect` class" section above.
+- Function default parameters on an `expect` declaration are only surfaced on the top-level-function route; a class method, `object` member, companion member, or extension declared on an `expect` class gets no synthesized overload. See "Function default parameters on a top-level `expect` function" above.
 
 <seealso>
     <category ref="related">
@@ -260,6 +316,7 @@ for the general mechanism.
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/007-top-level-function-class-naming.md">ADR-007: Top-level function class naming</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/018-type-alias-mapping.md">ADR-018: Type alias mapping</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/091-constructor-default-parameters.md">ADR-091: Constructor default parameters</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/096-function-default-parameters.md">ADR-096: Function default parameters</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/064-forward-unsupported-declaration-diagnostics.md">ADR-064: Forward unsupported-declaration diagnostics</a>
     </category>
 </seealso>

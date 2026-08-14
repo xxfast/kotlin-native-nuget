@@ -8,6 +8,7 @@ A Kotlin `object` singleton becomes a static C# class: no instance, no construct
 | `data object` (in `sealed class`) | sealed subclass | with `ToString` |
 | companion object | static members | |
 | two or more same-named `object`/companion members | one C# overload set | numbered native export/extern name, unnumbered public name; see [Method overloads](#method-overloads) below ([ADR-095](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/095-static-route-overloads.md)) |
+| `object`/companion member with a trailing run of defaulted parameters | omitting overload per suffix length | see Method default parameters below ([ADR-096](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/096-function-default-parameters.md)) |
 
 ## Kotlin
 
@@ -300,6 +301,81 @@ public void GroomerOf_WithCoat_DispatchesToEnumOverload()
     </p>
 </note>
 
+## Method default parameters
+
+[ADR-091](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/091-constructor-default-parameters.md)'s
+`@JvmOverloads`-style rule extends to `object` and companion members
+([ADR-096](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/096-function-default-parameters.md)),
+the same rule and numbering scope (per object, per companion) as [Method overloads](#method-overloads)
+above.
+
+### Kotlin {id="defaults-kotlin"}
+
+From `test-library/src/nativeMain/kotlin/.../whiskers/WhiskersSample.kt`:
+
+```kotlin
+object Kibble {
+  fun scoop(flavour: String, scoops: Int = 2): String = "$scoops scoops of $flavour"
+}
+
+class Basket(val label: String) {
+  companion object {
+    fun of(city: String, capacity: Int = 4): Basket = Basket("$city basket for $capacity")
+  }
+}
+```
+
+### Generated C# {id="defaults-generated-c"}
+
+From `Interop.cs`:
+
+```C#
+public static class Kibble
+{
+    [DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "kibble_scoop")]
+    private static extern IntPtr Native_Scoop(string flavour, int scoops, out IntPtr error);
+
+    public static string Scoop(string flavour, int scoops) { /* ... */ }
+
+    [DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "kibble_scoop_2")]
+    private static extern IntPtr Native_Scoop_2(string flavour, out IntPtr error);
+
+    public static string Scoop(string flavour) { /* ... */ } // scoops omitted; Kotlin supplies 2
+}
+```
+
+```C#
+[DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "basket_companion_of")]
+private static extern IntPtr Native_Companion_Of(string city, int capacity, out IntPtr error);
+
+public static Basket Of(string city, int capacity) { /* ... */ }
+
+[DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "basket_companion_of_2")]
+private static extern IntPtr Native_Companion_Of_2(string city, out IntPtr error);
+
+public static Basket Of(string city) { /* ... */ } // capacity omitted; Kotlin supplies 4
+```
+
+### Using it from C# {id="defaults-using-it-from-c"}
+
+From `IntegrationTests/FunctionDefaultParameterTests.cs`:
+
+```C#
+[Fact]
+public void KibbleScoop_OmittingScoops_UsesKotlinDefaultOfTwo()
+{
+    Assert.Equal("2 scoops of tuna", Kibble.Scoop("tuna"));
+}
+
+[Fact]
+public void BasketOf_OmittingCapacity_UsesKotlinDefaultOfFour()
+{
+    using var basket = Basket.Of("Colombo");
+
+    Assert.Equal("Colombo basket for 4", basket.Label);
+}
+```
+
 <seealso>
     <category ref="related">
         <a href="interfaces-abstract-sealed.md">Interfaces, abstract and sealed classes</a>
@@ -310,5 +386,6 @@ public void GroomerOf_WithCoat_DispatchesToEnumOverload()
     <category ref="external">
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/090-ordinary-class-method-overloads.md">ADR-090: Ordinary-class method overloads</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/095-static-route-overloads.md">ADR-095: Overloads on the four static export routes</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/096-function-default-parameters.md">ADR-096: Function default parameters</a>
     </category>
 </seealso>

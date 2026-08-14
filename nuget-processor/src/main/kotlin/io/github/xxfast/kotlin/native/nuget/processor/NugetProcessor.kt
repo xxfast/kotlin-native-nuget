@@ -699,8 +699,10 @@ class NugetProcessor(
       builder.addImport(func.packageName.asString(), func.simpleName.asString())
       // ADR-095: node identity, not a name-derived symbol — top-level overloads number per
       // (package, name), so the n-th namesake's plan is keyed `..._$n`.
-      val planned = callableCatalog.planFor(func)
-      if (planned != null) builder.addForwardKotlinPlanExport(planned)
+      // ADR-096: plural — a defaulted top-level function also carries its synthesized omitting
+      // overloads on the same node.
+      val planned: List<ForwardCallablePlan> = callableCatalog.plansFor(func)
+      if (planned.isNotEmpty()) planned.forEach { builder.addForwardKotlinPlanExport(it) }
       else builder.addFunctionExports(func)
     }
 
