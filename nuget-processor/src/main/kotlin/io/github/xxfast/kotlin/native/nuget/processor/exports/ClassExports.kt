@@ -423,14 +423,11 @@ internal fun FileSpec.Builder.addCompanionExports(
     .filterIsInstance<KSClassDeclaration>()
     .firstOrNull { it.isCompanionObject } ?: return
 
-  companion.getAllFunctions()
-    .filter { it.getVisibility() == Visibility.PUBLIC }
-    .filter { it.simpleName.asString() !in listOf("equals", "hashCode", "toString", "<init>") }
-    .forEach { method ->
-      val planned: ForwardCallablePlan? =
-        callableCatalog.planFor("$qualifiedName.Companion.${method.simpleName.asString()}")
-      if (planned != null) addForwardKotlinPlanExport(planned)
-    }
+  // ADR-095: companion members come off the catalog — per-companion overload numbering makes the
+  // symbol underivable from a `getAllFunctions()` entry (see `addObjectExports`).
+  callableCatalog.companionMethods(qualifiedName).forEach { plan ->
+    addForwardKotlinPlanExport(plan)
+  }
 
   companion.getAllProperties()
     .filter { it.getVisibility() == Visibility.PUBLIC }

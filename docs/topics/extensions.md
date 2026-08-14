@@ -7,6 +7,7 @@ Kotlin extension functions and properties don't have a native C# analog (C# has 
 | extension function | static method | true C# extension method (`this` parameter) |
 | extension property | static accessor | see [ADR-013](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/013-extension-property-mapping.md) |
 | extension function return (object, `T?`, `List`/`Map`/`Set`, enum, `Char`, `String?`, `Int?`, …) | matching C# return type | same cascade as a class-method return via the shared plan, see Return marshalling below and [Classes and objects](classes-and-objects.md) |
+| two or more same-named extension functions | one C# overload set | numbered native export/extern name, unnumbered public name, counter scoped per (package, name), receiver-agnostic; see [Method overloads](#method-overloads) below ([ADR-095](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/095-static-route-overloads.md)) |
 
 ## Kotlin
 
@@ -154,6 +155,104 @@ public static partial class TemperamentExtensions
 }
 ```
 
+## Method overloads
+
+Two or more same-named extension functions generate one natural C# overload set, the same
+[ADR-090](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/090-ordinary-class-method-overloads.md)
+numbering template a class method uses, extended to this route by
+[ADR-095](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/095-static-route-overloads.md).
+The symbol key is `$package.$name`, which does **not** include the receiver, so the counter is
+receiver-agnostic: two same-named extensions on *different* receivers in one package number off the
+same sequence, even though their C exports would never have collided on their own.
+
+### Kotlin {id="overloads-kotlin"}
+
+From `test-library/src/nativeMain/kotlin/.../grooming/GroomingSample.kt`:
+
+```kotlin
+class Mitten(val name: String)
+
+class Tomcat(val name: String)
+
+fun Mitten.pat(): String = "$name purrs"
+
+fun Mitten.pat(style: String): String = "$name enjoys a $style pat"
+
+fun Mitten.brush(strokes: Int): String = "$name is brushed $strokes times"
+
+fun Mitten.brush(coat: Coat): String = "$name is brushed for a ${coat.name.lowercase()} coat"
+
+/** Same package, same name, different receiver from Mitten.pat. */
+fun Tomcat.pat(): String = "$name tolerates exactly one pat"
+```
+
+### Generated C# {id="overloads-generated-c"}
+
+From `Interop.cs`. `Mitten.pat`'s two declarations number `mitten_pat` / `mitten_pat_2`; `Tomcat.pat`
+comes after all four `Mitten` overloads in source order, so it inherits the *next* number in the
+shared package-scoped sequence, `tomcat_pat_3`, on its own `TomcatExtensions` class:
+
+```C#
+public static partial class MittenExtensions
+{
+    [DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "mitten_pat")]
+    private static extern IntPtr Native_Pat(IntPtr receiver, out IntPtr error);
+
+    public static string Pat(this Mitten receiver) { /* ... */ }
+
+    [DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "mitten_pat_2")]
+    private static extern IntPtr Native_Pat_2(IntPtr receiver, [MarshalAs(UnmanagedType.LPUTF8Str)] string style, out IntPtr error);
+
+    public static string Pat(this Mitten receiver, string style) { /* ... */ }
+
+    [DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "mitten_brush")]
+    private static extern IntPtr Native_Brush(IntPtr receiver, int strokes, out IntPtr error);
+
+    public static string Brush(this Mitten receiver, int strokes) { /* ... */ }
+
+    [DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "mitten_brush_2")]
+    private static extern IntPtr Native_Brush_2(IntPtr receiver, int coat, out IntPtr error);
+
+    public static string Brush(this Mitten receiver, global::TestLibrary.Grooming.Coat coat) { /* ... */ }
+}
+
+public static partial class TomcatExtensions
+{
+    [DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "tomcat_pat_3")]
+    private static extern IntPtr Native_Pat_3(IntPtr receiver, out IntPtr error);
+
+    public static string Pat(this Tomcat receiver) { /* ... */ }
+}
+```
+
+### Using it from C# {id="overloads-using-it-from-c"}
+
+From `IntegrationTests/StaticRouteOverloadTests.cs`:
+
+```C#
+[Fact]
+public void TomcatPat_SameNameDifferentReceiver_ResolvesToItsOwnExport()
+{
+    // Extension plan symbols are receiver-agnostic ($package.$name), so this declaration
+    // shares a symbol with Mitten.pat and crashes generation today. Both must survive, each on
+    // its own {Receiver}Extensions class.
+    using var oreo = new Mitten("Oreo");
+    using var mylo = new Tomcat("Mylo");
+
+    Assert.Equal("Oreo purrs", oreo.Pat());
+    Assert.Equal("Mylo tolerates exactly one pat", mylo.Pat());
+}
+```
+
+<note>
+    <p>
+        The redundant <code>_3</code> on <code>tomcat_pat_3</code> is a native-export detail only:
+        it composes after <code>toCName</code> and never reaches the public C# name. Package-scoped
+        numbering was chosen over a receiver-qualified symbol so cross-receiver namesakes share the
+        same rule as top-level functions; see the ADR's Alternatives Considered.
+    </p>
+</note>
+
 ## Limitations
 
 An extension property only binds when its *receiver* is `String`, a primitive, a class in the
@@ -274,5 +373,7 @@ public void Toy_Tags_ReturnsMarshalledStringElements()
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/061-method-return-marshalling.md">ADR-061: Method return marshalling</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/064-forward-unsupported-declaration-diagnostics.md">ADR-064: Forward unsupported-declaration diagnostics</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/077-value-classes-at-ordinary-positions.md">ADR-077: Value classes at ordinary positions</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/090-ordinary-class-method-overloads.md">ADR-090: Ordinary-class method overloads</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/095-static-route-overloads.md">ADR-095: Overloads on the four static export routes</a>
     </category>
 </seealso>

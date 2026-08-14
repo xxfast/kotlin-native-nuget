@@ -152,8 +152,9 @@ internal fun translate(
     val (namespace, fileClassName) = key
     val finalClassName: String = resolveStaticClassName(fileClassName, namespace)
     val members: List<CirMember> = funcs.flatMap { function ->
-      val symbol: String = "${function.packageName.asString()}.${function.simpleName.asString()}"
-      val planned: ForwardCallablePlan? = callableCatalog.planFor(symbol)
+      // ADR-095: node identity — the walk stays (this grouping needs the declaration), but the
+      // plan of an overload is keyed `..._$n` and is no longer derivable from the name.
+      val planned: ForwardCallablePlan? = callableCatalog.planFor(function)
       if (planned != null) {
         tracker.trackPlan(planned)
         ForwardCirPlanProjection.static(planned, context.libraryName)
@@ -170,6 +171,13 @@ internal fun translate(
         )
       }
     }
+    // ADR-095: top-level overloads land on one static class per (namespace, file class).
+    emitCsharpSignatureCollisions(
+      methods = members.filterIsInstance<CirMethod>(),
+      container = finalClassName,
+      symbol = funcs.first(),
+      logger = logger,
+    )
     namespaces.addDeclaration(namespace, CirStaticClass(finalClassName, members))
   }
 
@@ -306,7 +314,7 @@ internal fun translate(
   objects.forEach { obj ->
     namespaces.addDeclaration(
       namespaceOf(obj.packageName.asString()),
-      translateObject(obj, context.libraryName, callableCatalog, tracker),
+      translateObject(obj, context.libraryName, callableCatalog, tracker, logger),
     )
   }
 
@@ -330,9 +338,10 @@ internal fun translate(
     }
 
     val members: List<CirMember> = funcs.flatMap { func ->
-      val planned: ForwardCallablePlan? = callableCatalog.planFor(
-        "${func.packageName.asString()}.${func.simpleName.asString()}",
-      )
+      // ADR-095: node identity, same reason as the top-level walk above. Extension plan symbols are
+      // receiver-agnostic, so two same-name extensions on different receivers in one package share
+      // the counter and only the declaration itself tells them apart.
+      val planned: ForwardCallablePlan? = callableCatalog.planFor(func)
       if (planned != null) {
         tracker.trackPlan(planned)
         return@flatMap ForwardCirPlanProjection.extension(planned, context.libraryName)
@@ -343,6 +352,15 @@ internal fun translate(
     // A group whose members are all unplanned would otherwise emit an empty
     // `{Receiver}Extensions` class. Extension *properties* below merge into the same class, so a
     // receiver that only keeps a property still gets one.
+    // ADR-095: one `{Receiver}Extensions` class holds every extension on that receiver; the
+    // receiver is the first parameter of each, which is how C# tells extension overloads apart.
+    emitCsharpSignatureCollisions(
+      methods = members.filterIsInstance<CirMethod>(),
+      container = className,
+      symbol = funcs.first(),
+      logger = logger,
+    )
+
     if (members.isNotEmpty()) {
       namespaces.addDeclaration(namespace, CirStaticClass(className, members))
     }

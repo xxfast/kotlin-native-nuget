@@ -192,7 +192,7 @@ internal object ForwardCirPlanProjection {
     }
     val nativeCall: ForwardNativeCall = plan.singleNativeImport()
     val publicParams: List<CirParameter> = plan.publicParameters()
-    val identifier: String = plan.publicSignature.name.removePrefix("@")
+    val identifier: String = plan.publicSignature.name.removePrefix("@") + plan.overloadSuffix()
     val nativeName: String = if (plan.invocation.origin == ForwardCallableOrigin.COMPANION) {
       "Native_Companion_$identifier"
     } else {
@@ -254,7 +254,7 @@ internal object ForwardCirPlanProjection {
     val presence: ForwardNativeCall = plan.nativeImports[0]
     val value: ForwardNativeCall = plan.nativeImports[1]
     val publicParams: List<CirParameter> = plan.publicParameters()
-    val csName: String = plan.publicSignature.name.removePrefix("@")
+    val csName: String = plan.publicSignature.name.removePrefix("@") + plan.overloadSuffix()
     // ADR-076: the DllImport/local-variable wire type is always the raw representation (`long`
     // for Instant); the public return type is the semantic one (`DateTimeOffset?`).
     val dllImportReturnType: String = when (inner) {
@@ -429,7 +429,7 @@ internal object ForwardCirPlanProjection {
 
       else -> "receiver"
     }
-    val nativeName: String = "Native_${plan.publicSignature.name}"
+    val nativeName: String = "Native_${plan.publicSignature.name}${plan.overloadSuffix()}"
     val needsCustomParams: Boolean = receiver.transfer.type is BridgeType.ObjectHandle ||
         receiver.transfer.type is BridgeType.ValueClass ||
         plan.publicSignature.parameters.any { parameter -> !parameter.type.isTrivialInput() }
@@ -463,6 +463,20 @@ internal object ForwardCirPlanProjection {
       hasCustomBody = result.hasCustomBody,
     )
     return listOf(nativeImport, wrapper)
+  }
+
+  /**
+   * ADR-095: the `_$n` an overload's plan symbol carries, or "" for the first (or only) namesake.
+   *
+   * The private extern name must carry it as well as the DllImport EntryPoint: two overloads can
+   * share one wire shape (an `Int` and an enum parameter both cross as `int`), and one extern name
+   * declared twice is CS0111. Derived from the symbol tail minus the bare declared name, so an
+   * unnumbered callable renders byte-identically to before.
+   */
+  private fun ForwardCallablePlan.overloadSuffix(): String {
+    val member: String = invocation.member ?: return ""
+    val tail: String = invocation.symbol.substringAfterLast('.')
+    return if (tail.startsWith(member)) tail.substring(member.length) else ""
   }
 
   private fun ForwardCallablePlan.singleNativeImport(): ForwardNativeCall {

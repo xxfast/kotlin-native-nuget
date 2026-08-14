@@ -5,6 +5,7 @@ import com.google.devtools.ksp.processing.KSPLogger
 import com.google.devtools.ksp.symbol.ClassKind
 import com.google.devtools.ksp.symbol.KSClassDeclaration
 import com.google.devtools.ksp.symbol.KSFunctionDeclaration
+import com.google.devtools.ksp.symbol.KSNode
 import com.google.devtools.ksp.symbol.KSPropertyDeclaration
 import com.google.devtools.ksp.symbol.KSType
 import com.google.devtools.ksp.symbol.Modifier
@@ -486,37 +487,6 @@ internal fun translateClass(
 
   val methods: List<CirMethod> = plannedMethods + abstractMethods
 
-  // C# cannot declare two methods whose parameter types are identical (ADR-034/ADR-090). Ordinary
-  // class overloads share one public name, so two of them rendering the same C# parameter list is
-  // uncompilable output — fail fast, the same way the constructor check above does. Reference
-  // nullability is not part of a C# signature; nullable *value* types are.
-  val methodSignatures: List<List<String>> = plannedMethods.map { method ->
-    listOf(method.name) + method.parameters.map { param ->
-      val stripReferenceNullability: Boolean = param.isReferenceType && param.type.endsWith("?")
-      if (stripReferenceNullability) param.type.dropLast(1) else param.type
-    }
-  }
-  methodSignatures
-    .groupBy { signature -> signature }
-    .filterValues { group -> group.size > 1 }
-    .keys
-    .forEach { signature ->
-      ForwardDiagnosticSink.emit(
-        listOf(
-          ForwardDiagnostic(
-            kind = ForwardDiagnosticKind.ERROR_CSHARP_SIGNATURE_COLLISION,
-            symbol = cls,
-            declaration = "$name.${signature.first()}",
-            reason = "two or more overloads render identical C# parameter types; C# cannot " +
-                "declare two methods with the same signature (ADR-034)",
-            hint = "rename one overload, or change a parameter's type so the rendered C# " +
-                "signatures differ",
-          ),
-        ),
-        logger,
-      )
-    }
-
   if (suspendMethods.isNotEmpty()) tracker.needsAsync = true
 
   val asyncMembers: List<CirMember> = suspendMethods.flatMap { method ->
@@ -797,23 +767,28 @@ internal fun translateClass(
       }
       .toList()
 
-    val companionFunctions: List<CirMember> = companion.getAllFunctions()
-      .filter { it.getVisibility() == Visibility.PUBLIC }
-      .filter { it.simpleName.asString() !in listOf("equals", "hashCode", "toString", "<init>") }
-      .flatMap { func ->
-        val symbol: String = "${cls.qualifiedName?.asString() ?: name}.Companion.${func.simpleName.asString()}"
-        val planned = callableCatalog.planFor(symbol)
-        if (planned != null) {
-          tracker.trackPlan(planned)
-          ForwardCirPlanProjection.static(planned, libraryName)
-        } else {
-          emptyList()
-        }
+    // ADR-095: companion members come off the catalog rather than a per-declaration lookup — with
+    // per-companion overload numbering an unsuffixed symbol binds every namesake to the first
+    // one's plan (see `addCompanionExports` for the Kotlin half).
+    val companionFunctions: List<CirMember> = callableCatalog
+      .companionMethods(cls.qualifiedName?.asString() ?: name)
+      .flatMap { planned ->
+        tracker.trackPlan(planned)
+        ForwardCirPlanProjection.static(planned, libraryName)
       }
-      .toList()
 
     companionConsts + companionProperties + companionFunctions
   } else emptyList()
+
+  // C# cannot declare two members of one type whose name and parameter types agree (ADR-034 /
+  // ADR-090, extended to companions by ADR-095). Instance methods and companion statics are
+  // checked *together*: static-ness is not part of a C# signature either.
+  emitCsharpSignatureCollisions(
+    methods = plannedMethods + companionMembers.filterIsInstance<CirMethod>(),
+    container = name,
+    symbol = cls,
+    logger = logger,
+  )
 
   // Phase 6: route data-class copy() through the shared plan when it is eligible (same symbol
   // ClassExports.kt checks for the Kotlin half), else keep the legacy hand-rolled route.
@@ -1153,11 +1128,56 @@ internal fun translateSealedClass(
   )
 }
 
+/**
+ * ADR-034's C# signature-collision guard, shared by every generated container (ADR-090's class
+ * methods, ADR-095's objects, companions, top-level file classes and `{Receiver}Extensions`).
+ *
+ * C# cannot declare two members of one type whose name and parameter types agree, and overloads
+ * that differ only in *reference* nullability render identically (nullable value types do not), so
+ * such a pair is uncompilable output — fail fast rather than emit CS0111/CS0663. The receiver of an
+ * extension is already the first [CirParameter], which is exactly how C# distinguishes extension
+ * overloads, so no special case is needed for it.
+ */
+internal fun emitCsharpSignatureCollisions(
+  methods: List<CirMethod>,
+  container: String,
+  symbol: KSNode?,
+  logger: KSPLogger,
+) {
+  methods
+    .map { method ->
+      listOf(method.name) + method.parameters.map { param ->
+        val stripReferenceNullability: Boolean = param.isReferenceType && param.type.endsWith("?")
+        if (stripReferenceNullability) param.type.dropLast(1) else param.type
+      }
+    }
+    .groupBy { signature -> signature }
+    .filterValues { group -> group.size > 1 }
+    .keys
+    .forEach { signature ->
+      ForwardDiagnosticSink.emit(
+        listOf(
+          ForwardDiagnostic(
+            kind = ForwardDiagnosticKind.ERROR_CSHARP_SIGNATURE_COLLISION,
+            symbol = symbol,
+            declaration = "$container.${signature.first()}",
+            reason = "two or more overloads render identical C# parameter types; C# cannot " +
+                "declare two methods with the same signature (ADR-034)",
+            hint = "rename one overload, or change a parameter's type so the rendered C# " +
+                "signatures differ",
+          ),
+        ),
+        logger,
+      )
+    }
+}
+
 internal fun translateObject(
   obj: KSClassDeclaration,
   libraryName: String,
   callableCatalog: ForwardCallablePlanCatalog,
   tracker: CollectionHelperTracker,
+  logger: KSPLogger,
 ): CirObject {
   val name: String = obj.simpleName.asString()
   val prefix: String = name.lowercase()
@@ -1166,21 +1186,21 @@ internal fun translateObject(
   // shape as top-level functions (CirFunctionTranslator's static template) rather than
   // the class instance-method loop, which hardcodes _handle. See the comment above
   // this function's call site / ADR-060 cells 1 & 25.
-  val methods: List<CirMember> = obj.getAllFunctions()
-    .filter { it.getVisibility() == Visibility.PUBLIC }
-    .filter { it.simpleName.asString() !in listOf("equals", "hashCode", "toString", "<init>") }
-    .flatMap { method ->
-      val methodName: String = method.simpleName.asString()
-      val symbol: String = "${obj.qualifiedName?.asString() ?: name}.$methodName"
-      val planned = callableCatalog.planFor(symbol)
-      if (planned != null) {
-        tracker.trackPlan(planned)
-        ForwardCirPlanProjection.static(planned, libraryName)
-      } else {
-        emptyList()
-      }
+  // ADR-095: members come off the catalog (per-object overload numbering; see `addObjectExports`).
+  // This also picks up the planner's `parentDeclaration == obj` filter, which this walk never had.
+  val methods: List<CirMember> = callableCatalog
+    .objectMethods(obj.qualifiedName?.asString() ?: name)
+    .flatMap { planned ->
+      tracker.trackPlan(planned)
+      ForwardCirPlanProjection.static(planned, libraryName)
     }
-    .toList()
+
+  emitCsharpSignatureCollisions(
+    methods = methods.filterIsInstance<CirMethod>(),
+    container = name,
+    symbol = obj,
+    logger = logger,
+  )
 
   return CirObject(
     name = name,

@@ -664,10 +664,11 @@ binding or breaking the build; see [Publishing Kotlin to C#](forward-overview.md
 ## Limitations
 
 - `Map`/`Set` **inputs** (parameters) are not planned yet; see [Collections](collections.md).
-- Method overloads only have this numbering scheme on the class-method route. A same-name pair on
-  an `object` member, a companion member, a top-level function, or an extension function still
-  crashes `packNuget` with the same `planFor` duplicate-plans error; see
-  [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md).
+- Method overloads on this page cover the class-method route. `object` members, companion members,
+  top-level functions, and extension functions have their own numbering scopes and are documented
+  on [Objects and companions](objects-and-companions.md#method-overloads),
+  [Top-level declarations](top-level-declarations.md#method-overloads), and
+  [Extensions](extensions.md#method-overloads) respectively.
 - Constructor default parameters synthesize overloads; function and method default parameters
   (top-level functions, class methods, `object`/companion members, extension functions) do not
   yet, and every argument must still be passed explicitly at those positions; see

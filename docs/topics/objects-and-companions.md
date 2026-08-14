@@ -7,6 +7,7 @@ A Kotlin `object` singleton becomes a static C# class: no instance, no construct
 | `object` | `static class` | singleton; methods are PascalCased and their returns marshalled, exactly like a class method |
 | `data object` (in `sealed class`) | sealed subclass | with `ToString` |
 | companion object | static members | |
+| two or more same-named `object`/companion members | one C# overload set | numbered native export/extern name, unnumbered public name; see [Method overloads](#method-overloads) below ([ADR-095](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/095-static-route-overloads.md)) |
 
 ## Kotlin
 
@@ -183,10 +184,131 @@ public void CompanionFactoryMethod()
 }
 ```
 
+## Method overloads
+
+Two or more same-named members on an `object` or a `companion object` generate one natural C#
+overload set, the same [ADR-090](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/090-ordinary-class-method-overloads.md)
+template a class method uses (see [Method overloads](classes-and-objects.md#method-overloads) in
+Classes and objects), extended to these routes by [ADR-095](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/095-static-route-overloads.md).
+Numbering is per object and per companion, independently of any other container.
+
+### Kotlin {id="overloads-kotlin"}
+
+From `test-library/src/nativeMain/kotlin/.../grooming/GroomingSample.kt`:
+
+```kotlin
+object Parlour {
+  fun describe(): String = "the parlour is open"
+
+  fun describe(cat: String): String = "$cat is booked in"
+
+  fun rate(stars: Int): String = "the parlour is rated $stars"
+
+  fun rate(coat: Coat): String = "the parlour grooms ${coat.name.lowercase()} coats"
+}
+
+class Groomer(val name: String) {
+  companion object {
+    fun of(name: String): Groomer = Groomer(name)
+
+    fun of(chairs: Int): Groomer = Groomer("groomer of $chairs chairs")
+
+    fun of(coat: Coat): Groomer = Groomer("${coat.name.lowercase()} groomer")
+  }
+}
+```
+
+`rate(Int)`/`rate(Coat)` and `of(Int)`/`of(Coat)` each pair a plain `Int` with an enum: both cross
+the C ABI as `int`, the shape that forces the private extern *name* itself to carry the number, not
+just the `DllImport` `EntryPoint`.
+
+### Generated C# {id="overloads-generated-c"}
+
+From `Interop.cs`. The object route numbers on `${prefix}_${name}_$n`; the companion route inserts
+`_companion_` before the name:
+
+```C#
+public static class Parlour
+{
+    [DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "parlour_describe")]
+    private static extern IntPtr Native_Describe(out IntPtr error);
+
+    public static string Describe() { /* ... */ }
+
+    [DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "parlour_describe_2")]
+    private static extern IntPtr Native_Describe_2([MarshalAs(UnmanagedType.LPUTF8Str)] string cat, out IntPtr error);
+
+    public static string Describe(string cat) { /* ... */ }
+
+    [DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "parlour_rate")]
+    private static extern IntPtr Native_Rate(int stars, out IntPtr error);
+
+    public static string Rate(int stars) { /* ... */ }
+
+    [DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "parlour_rate_2")]
+    private static extern IntPtr Native_Rate_2(int coat, out IntPtr error);
+
+    public static string Rate(global::TestLibrary.Grooming.Coat coat) { /* ... */ }
+}
+```
+
+```C#
+[DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "groomer_companion_of")]
+private static extern IntPtr Native_Companion_Of([MarshalAs(UnmanagedType.LPUTF8Str)] string name, out IntPtr error);
+
+public static Groomer Of(string name) { /* ... */ }
+
+[DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "groomer_companion_of_2")]
+private static extern IntPtr Native_Companion_Of_2(int chairs, out IntPtr error);
+
+public static Groomer Of(int chairs) { /* ... */ }
+
+[DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "groomer_companion_of_3")]
+private static extern IntPtr Native_Companion_Of_3(int coat, out IntPtr error);
+
+public static Groomer Of(global::TestLibrary.Grooming.Coat coat) { /* ... */ }
+```
+
+### Using it from C# {id="overloads-using-it-from-c"}
+
+From `IntegrationTests/StaticRouteOverloadTests.cs`:
+
+```C#
+[Fact]
+public void ParlourRate_IntAndCoat_ShareOneWireShapeAndStayDistinct()
+{
+    Assert.Equal("the parlour is rated 10", Parlour.Rate(10));
+    Assert.Equal("the parlour grooms tuxedo coats", Parlour.Rate(Coat.Tuxedo));
+}
+
+[Fact]
+public void GroomerOf_WithCoat_DispatchesToEnumOverload()
+{
+    using var groomer = Groomer.Of(Coat.Tabby);
+    Assert.Equal("tabby groomer", groomer.Name);
+}
+```
+
+<note>
+    <p>
+        A companion static and an instance method on the same class share one generated C# class,
+        and C# does not distinguish an overload by <code>static</code>-ness, so the
+        <code>ERROR_CSHARP_SIGNATURE_COLLISION</code> check (see
+        <a href="classes-and-objects.md#method-overloads">Method overloads</a> in Classes and
+        objects) compares a companion static against the owning class's planned instance methods
+        too, not just against its own companion siblings.
+    </p>
+</note>
+
 <seealso>
     <category ref="related">
         <a href="interfaces-abstract-sealed.md">Interfaces, abstract and sealed classes</a>
         <a href="top-level-declarations.md">Top-level declarations</a>
+        <a href="classes-and-objects.md">Classes and objects</a>
         <a href="expect-actual.md">expect/actual declarations</a>
+    </category>
+    <category ref="external">
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/090-ordinary-class-method-overloads.md">ADR-090: Ordinary-class method overloads</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/095-static-route-overloads.md">ADR-095: Overloads on the four static export routes</a>
     </category>
 </seealso>
