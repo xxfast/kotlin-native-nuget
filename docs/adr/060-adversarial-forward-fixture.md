@@ -7,7 +7,7 @@ Accepted. Steps 1–3 shipped: the Tier 1 harness, the strict-`@XFail` red asser
 ## Context
 
 [ROADMAP.md](../../ROADMAP.md) "Tooling & Test Integrity" asks for an adversarial forward fixture: "the
-exact mirror of `Test.Household`". [MVP.md](../../MVP.md)'s launch order asks for it **first**, with the
+exact mirror of `Test.Household`". MVP.md's launch order asks for it **first**, with the
 forward P0 fixes landing green against it afterwards: "each fix lands green against a test that was red,
 which is the only evidence worth having here."
 
@@ -641,7 +641,7 @@ value class ChartRef(val patient: Patient) {
 **Deliberately not in the corpus:** the cell-23 shape
 (`suspend inline fun <reified T> Patient.chartEntry(...): Result<T>`). Per ROADMAP line 101 its correct
 end state is a **named skip, not working code**, so it belongs to the forward-diagnostics item
-([MVP.md](../../MVP.md) P1) and lives in Tier 1 asserting "skipped with a diagnostic naming it". Putting
+(MVP.md P1) and lives in Tier 1 asserting "skipped with a diagnostic naming it". Putting
 it in `test-library` before that item lands would stop the build with no fix available.
 
 ### The C# test surface

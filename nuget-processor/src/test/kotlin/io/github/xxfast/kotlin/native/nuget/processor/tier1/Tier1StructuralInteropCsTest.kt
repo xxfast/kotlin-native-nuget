@@ -9,7 +9,7 @@ import kotlin.test.assertTrue
  * cells where the generated `CNameExports.kt` compiles clean and the defect is only visible in
  * the generated `Interop.cs` text. Tier 1 deliberately does **not** compile the generated C#
  * (ADR-060 "Rejected: compiling the generated C# in Tier 1" — the forward direction needs no
- * .NET SDK, MVP.md line 62), so these assert on [Tier1Result.generatedCSharp] directly: the
+ * .NET SDK, docs/topics/prerequisites.md), so these assert on [Tier1Result.generatedCSharp] directly: the
  * **structural** assertion mode. The compile-based proof for cells 1/8/9/12 lands later, in
  * `GeneratedBindingsCheck`'s consumer surface (Tier 2), in the commit that fixes each one.
  */

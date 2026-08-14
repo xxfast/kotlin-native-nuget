@@ -28,7 +28,7 @@ internal data class Tier1Result(
    * The generated C# bindings file (`generateCSharpBindings()` in `NugetProcessor.kt`, always
    * named `Interop.cs`). Backs the **structural** assertion mode for the **C** cells (1, 8, 9,
    * 12) — asserting the C# text directly, never compiling it (ADR-060 "Rejected: compiling the
-   * generated C# in Tier 1" — the forward direction needs no .NET SDK, MVP.md line 62).
+   * generated C# in Tier 1" — the forward direction needs no .NET SDK, docs/topics/prerequisites.md).
    */
   val generatedCSharp: String
     get() = generatedFiles.entries.firstOrNull { it.key.endsWith("Interop.cs") }?.value

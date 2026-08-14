@@ -21,7 +21,7 @@ In every case the library author running `packNuget` gets a compiler error point
 code they never wrote, or a silent gap, rather than a message at their own Kotlin source saying
 "member X was skipped because Y." This is the exact inversion of the reverse direction, and it is
 hard to defend: the newer, preview direction is currently the honest one, while
-[MVP.md](../../MVP.md)'s stated principle is an honest capability ceiling rather than a compatibility
+MVP.md's stated principle is an honest capability ceiling rather than a compatibility
 promise. This item sits beside [ADR-055](055-forward-abi-contract-check.md)'s forward ABI contract
 check as the other half of "the forward generator should fail loudly rather than emit something
 wrong": ADR-055 catches drift between the two halves of a callable that *was* planned; this ADR
