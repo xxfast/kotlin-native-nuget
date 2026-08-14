@@ -27,6 +27,11 @@ actual class Beacon actual constructor(
 }
 
 actual fun platformName(): String = "mingw"
+
+/**
+ * ADR-096: the default for `level` is declared on the expect only; an actual may not restate it.
+ */
+actual fun beaconLabel(prefix: String, level: Int): String = "$prefix at level $level on mingw"
 actual val platformTag: String = "win-x64"
 
 actual object PlatformRegistry {

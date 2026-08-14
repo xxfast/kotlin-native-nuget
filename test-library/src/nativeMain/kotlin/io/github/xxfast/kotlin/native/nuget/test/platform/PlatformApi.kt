@@ -52,6 +52,17 @@ expect class Beacon(name: String, interval: Int = 5) {
 /** Top-level `expect fun`; the C# static class name must be `PlatformApi` (Decision 3). */
 expect fun platformName(): String
 
+/**
+ * ADR-096 row: a TRAILING DEFAULT on a top-level `expect fun`, the one route that consults
+ * `expectsByName` for the `hasDefault` bit. Kotlin forbids an `actual` from restating a default, so
+ * `level` reports `hasDefault = true` only here and `false` on both actuals: the omitting overload
+ * exists only if the planner resolves the bit through the expect index. The default (`7`) is
+ * declared once, here, so a `beaconLabel("...")` reporting anything else means the wrong side was
+ * consulted. It is the only `beaconLabel` in this package, which is what makes the ADR's uniqueness
+ * guard (`expectsByName` is a `.toMap()`, so namesakes collapse) safe to apply.
+ */
+expect fun beaconLabel(prefix: String, level: Int = 7): String
+
 /** Top-level `expect val`; same file-naming rule as [platformName]. */
 expect val platformTag: String
 

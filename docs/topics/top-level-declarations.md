@@ -8,6 +8,7 @@ Kotlin top-level functions, properties, and `const val`s don't belong to any cla
 | top-level property | static property | get/set, including nullable |
 | `const val` | `const` | |
 | two or more same-named top-level functions | one C# overload set | numbered native export/extern name, unnumbered public name, counter scoped per (package, name); see [Method overloads](#method-overloads) below ([ADR-095](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/095-static-route-overloads.md)) |
+| top-level function with a trailing run of defaulted parameters | omitting overload per suffix length | see [Function default parameters](#function-default-parameters) below ([ADR-096](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/096-function-default-parameters.md)) |
 
 ## Kotlin
 
@@ -190,6 +191,81 @@ public void WaitTime_WithBlankCat_ReturnsNullFromTheNumberedPresenceCall()
 }
 ```
 
+## Function default parameters
+
+A trailing run of defaulted parameters on a top-level function synthesizes an omitting overload per
+suffix length, the same [ADR-091](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/091-constructor-default-parameters.md)
+rule extended to this route by [ADR-096](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/096-function-default-parameters.md).
+The top-level route is one of two (with extensions) where the synthesized entry shares its Kotlin
+declaration node with the declared one, which needed the planner's `planFor(declaration)` accessor
+to become plural (`plansFor`) before it could exist at all. Numbering continues the same
+per-`(package, name)` counter [Method overloads](#method-overloads) above already uses, so a
+synthesized entry is always numbered after every declared overload.
+
+### Kotlin {id="defaults-kotlin"}
+
+From `test-library/src/nativeMain/kotlin/.../whiskers/WhiskersSample.kt`:
+
+```kotlin
+fun hail(name: String, loud: Boolean = false): String =
+  if (loud) "HI ${name.uppercase()}" else "hi $name"
+
+fun book(name: String, capacity: Int = 3, city: String): String =
+  "$name booked $capacity spots in $city"
+```
+
+`book`'s default sits before a required `city` (a middle default), so nothing synthesizes for it:
+exactly one public overload, unchanged.
+
+### Generated C# {id="defaults-generated-c"}
+
+From `Interop.cs`:
+
+```C#
+public static partial class WhiskersSample
+{
+    [DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "hail")]
+    private static extern IntPtr Native_hail(string name, bool loud, out IntPtr error);
+
+    public static string hail(string name, bool loud) { /* ... */ }
+
+    [DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "hail_2")]
+    private static extern IntPtr Native_hail_2(string name, out IntPtr error);
+
+    public static string hail(string name) { /* ... */ } // loud omitted; Kotlin supplies false
+
+    [DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "book")]
+    private static extern IntPtr Native_book(string name, int capacity, string city, out IntPtr error);
+
+    public static string book(string name, int capacity, string city) { /* ... */ } // only overload
+}
+```
+
+### Using it from C# {id="defaults-using-it-from-c"}
+
+From `IntegrationTests/FunctionDefaultParameterTests.cs`:
+
+```C#
+[Fact]
+public void Hail_OmittingLoud_UsesKotlinDefaultOfFalse()
+{
+    Assert.Equal("hi Oreo", WhiskersSample.hail("Oreo"));
+}
+
+[Fact]
+public void Book_HasNoOmittingOverload()
+{
+    // `capacity` has a required parameter after it, so a positional Kotlin call can never skip
+    // it. Stated by signature so a future "helpful" combinatorial expansion trips here.
+    Assert.Null(typeof(WhiskersSample).GetMethod("book", [typeof(string), typeof(int)]));
+    Assert.Null(typeof(WhiskersSample).GetMethod("book", [typeof(string)]));
+    Assert.Equal(1, typeof(WhiskersSample).GetMethods().Count(m => m.Name == "book"));
+}
+```
+
+A top-level `expect fun`'s defaults are also surfaced, the one route that consults the `expect`
+side for the `hasDefault` bit; see [expect/actual declarations](expect-actual.md#function-default-parameters-on-a-top-level-expect-function).
+
 <seealso>
     <category ref="related">
         <a href="objects-and-companions.md">Objects and companions</a>
@@ -202,5 +278,7 @@ public void WaitTime_WithBlankCat_ReturnsNullFromTheNumberedPresenceCall()
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/062-forward-callable-plan.md">ADR-062: Forward callable plan</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/090-ordinary-class-method-overloads.md">ADR-090: Ordinary-class method overloads</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/095-static-route-overloads.md">ADR-095: Overloads on the four static export routes</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/091-constructor-default-parameters.md">ADR-091: Constructor default parameters</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/096-function-default-parameters.md">ADR-096: Function default parameters</a>
     </category>
 </seealso>

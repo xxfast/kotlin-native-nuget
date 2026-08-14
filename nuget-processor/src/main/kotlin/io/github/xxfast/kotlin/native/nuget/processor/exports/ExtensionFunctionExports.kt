@@ -16,6 +16,7 @@ internal fun FileSpec.Builder.addExtensionFunctionExports(
 ) {
   // ADR-095: matched by node identity — extension plan symbols are package-scoped and carry the
   // overload number, so a name-derived key would bind every namesake to the first one's plan.
-  val plan: ForwardCallablePlan? = callableCatalog.planFor(func)
-  if (plan != null) addForwardKotlinPlanExport(plan)
+  // ADR-096: plural — a defaulted extension also carries its synthesized omitting overloads.
+  val plans: List<ForwardCallablePlan> = callableCatalog.plansFor(func)
+  plans.forEach { plan -> addForwardKotlinPlanExport(plan) }
 }

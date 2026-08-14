@@ -11,6 +11,7 @@ A Kotlin `class` becomes a C# `class` backed by an opaque `StableRef` handle, im
 | object-typed property/return | property/return | new wrapper per access, identity not preserved |
 | instance method return (object, `T?`, `List`/`Map`/`Set`, enum, `Char`, `String?`, `Int?`, `Boolean?`, …) | matching C# return type | same cascade as the property getter via the shared plan ([ADR-062](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/062-forward-callable-plan.md)); nullable primitive (including `Boolean?`) is single-call `valueOut`, see Method returns below |
 | two or more same-named methods | one C# overload set | numbered native export/extern name, unnumbered public name; see Method overloads below ([ADR-090](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/090-ordinary-class-method-overloads.md)) |
+| a method with a trailing run of defaulted parameters | omitting overload per suffix length | same `@JvmOverloads` rule as constructor defaults, see Method default parameters below ([ADR-096](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/096-function-default-parameters.md)) |
 
 ## Kotlin
 
@@ -592,6 +593,140 @@ public void ScratchPost_SecondaryConstructor_OmittingTrailingDefault_UsesSturdy(
     </p>
 </warning>
 
+## Method default parameters
+
+[ADR-091](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/091-constructor-default-parameters.md)'s
+`@JvmOverloads`-style rule extends verbatim to class methods and the other four function routes
+([ADR-096](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/096-function-default-parameters.md)):
+for parameters `p1..pn`, `d` is the number of *trailing* parameters that all have a default, and for
+each `k` in `1..d` there is one additional omitting overload taking `p1..p(n-k)`. The full signature
+is always kept. A default followed by a required parameter (a middle default) synthesizes nothing,
+since a positional Kotlin call can't skip over it. Synthesized entries continue the same
+per-`(class, name)` counter [ADR-090](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/090-ordinary-class-method-overloads.md)
+already gives declared overloads, so they number *after* every declared overload and never collide
+with them.
+
+### Kotlin {id="methoddefaults-kotlin"}
+
+From `test-library/src/nativeMain/kotlin/.../whiskers/WhiskersSample.kt`:
+
+```kotlin
+class Announcer(val prefix: String) {
+  fun announce(message: String, loud: Boolean = false): String =
+    if (loud) "$prefix: ${message.uppercase()}!" else "$prefix: $message"
+
+  fun tally(count: Int, label: String = "cats", excited: Boolean = false): String =
+    "$prefix counted $count $label${if (excited) "!!" else ""}"
+}
+```
+
+`announce` has one trailing default (`k=1`); `tally` has two (`k=1..2`), so both suffix lengths are
+exercised. A declared overload pair sitting next to a defaulted one keeps its own numbers, with the
+synthesized entry appended after both:
+
+```kotlin
+class Narrator(val name: String) {
+  fun rate(count: Int): String = "$name rates $count naps"                    // declared #1
+  fun rate(mood: String, boost: Int = 1): String = "$name rates $mood at ${mood.length + boost}" // declared #2
+}
+```
+
+### Generated C# {id="methoddefaults-generated-c"}
+
+From `Interop.cs`. `Announce`/`Tally` each grow one C# overload set with numbered native exports but
+no visible numbering on the public surface:
+
+```C#
+public class Announcer : IDisposable, INugetHandle
+{
+    [DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "announcer_announce")]
+    private static extern IntPtr Native_Announce(IntPtr handle, string message, bool loud, out IntPtr error);
+
+    public string Announce(string message, bool loud) { /* ... */ }
+
+    [DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "announcer_announce_2")]
+    private static extern IntPtr Native_Announce_2(IntPtr handle, string message, out IntPtr error);
+
+    public string Announce(string message) { /* ... */ } // loud omitted; Kotlin supplies false
+
+    [DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "announcer_tally")]
+    private static extern IntPtr Native_Tally(IntPtr handle, int count, string label, bool excited, out IntPtr error);
+
+    public string Tally(int count, string label, bool excited) { /* ... */ }
+
+    [DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "announcer_tally_2")]
+    private static extern IntPtr Native_Tally_2(IntPtr handle, int count, string label, out IntPtr error);
+
+    public string Tally(int count, string label) { /* ... */ } // excited omitted
+
+    [DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "announcer_tally_3")]
+    private static extern IntPtr Native_Tally_3(IntPtr handle, int count, out IntPtr error);
+
+    public string Tally(int count) { /* ... */ } // label and excited both omitted
+}
+```
+
+`Narrator.rate` shows the interaction with ADR-090's own numbering: the two declared overloads keep
+`narrator_rate`/`narrator_rate_2`, and the synthesized entry continues the same counter as
+`narrator_rate_3`:
+
+```C#
+public class Narrator : IDisposable, INugetHandle
+{
+    [DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "narrator_rate")]
+    private static extern IntPtr Native_Rate(IntPtr handle, int count, out IntPtr error);
+
+    public string Rate(int count) { /* ... */ } // declared #1, unaffected
+
+    [DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "narrator_rate_2")]
+    private static extern IntPtr Native_Rate_2(IntPtr handle, string mood, int boost, out IntPtr error);
+
+    public string Rate(string mood, int boost) { /* ... */ } // declared #2, full signature
+
+    [DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "narrator_rate_3")]
+    private static extern IntPtr Native_Rate_3(IntPtr handle, string mood, out IntPtr error);
+
+    public string Rate(string mood) { /* ... */ } // boost omitted; Kotlin supplies 1
+}
+```
+
+### Using it from C# {id="methoddefaults-using-it-from-c"}
+
+From `IntegrationTests/FunctionDefaultParameterTests.cs`:
+
+```C#
+[Fact]
+public void AnnouncerAnnounce_OmittingLoud_UsesKotlinDefaultOfFalse()
+{
+    using var announcer = new Announcer("Oreo");
+
+    Assert.Equal("Oreo: morning", announcer.Announce("morning"));
+}
+
+[Fact]
+public void NarratorRate_SynthesizedOverload_UsesBoostDefaultOfOne()
+{
+    // "smug".length + 1 = 5. If the synthesized entry were wired to the OTHER declared `rate`,
+    // this would not compile or would answer with the naps sentence instead.
+    using var narrator = new Narrator("Mylo");
+
+    Assert.Equal("Mylo rates smug at 5", narrator.Rate("smug"));
+}
+```
+
+<note>
+    <p>
+        A method carrying <code>override</code> synthesizes nothing: Kotlin forbids an override
+        from restating its base's default values, so the defaults, and the synthesized overload,
+        belong to the base declaration and are reached through ordinary C# inheritance on the
+        generated subclass. The interface route (<a href="interfaces-abstract-sealed.md">Interfaces,
+        abstract and sealed classes</a>) also synthesizes nothing in v1: adding a member to a
+        generated C# interface would oblige every implementer to carry it. A defaulted interface
+        member bound onto an implementing <b>class</b> is unaffected and does get synthesis, since
+        it is emitted as an ordinary class member.
+    </p>
+</note>
+
 ## Classes declared in a dependency module
 
 A class doesn't need to be declared in the publishing Gradle module to reach the generated C# API.
@@ -669,13 +804,17 @@ binding or breaking the build; see [Publishing Kotlin to C#](forward-overview.md
   on [Objects and companions](objects-and-companions.md#method-overloads),
   [Top-level declarations](top-level-declarations.md#method-overloads), and
   [Extensions](extensions.md#method-overloads) respectively.
-- Constructor default parameters synthesize overloads; function and method default parameters
-  (top-level functions, class methods, `object`/companion members, extension functions) do not
-  yet, and every argument must still be passed explicitly at those positions; see
-  [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md).
-- Value-class constructor defaults and a partial (argument-omitting) `Copy(...)` are out of scope
-  for the constructor-default-parameters feature; see
-  [ADR-091](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/091-constructor-default-parameters.md).
+- Value-class constructor and method defaults, and a partial (argument-omitting) `Copy(...)`, are
+  out of scope for both the constructor and function default-parameters features; see
+  [ADR-091](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/091-constructor-default-parameters.md)
+  and [ADR-096](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/096-function-default-parameters.md).
+- A method carrying `override`, and the interface route, synthesize no omitting overload for a
+  defaulted parameter; see the note under Method default parameters above.
+- The interface route also still has no overload numbering at all for two same-named interface
+  methods; see [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md).
+- An `expect`/`actual` pair's function defaults are only surfaced on the top-level-function route;
+  a class method, `object` member, companion member, or extension declared on an `expect` class
+  gets no synthesized overload. See [expect/actual declarations](expect-actual.md#function-default-parameters-on-a-top-level-expect-function).
 
 <seealso>
     <category ref="related">
@@ -698,5 +837,6 @@ binding or breaking the build; see [Publishing Kotlin to C#](forward-overview.md
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/082-value-class-inherited-members.md">ADR-082: Value-class inherited members</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/090-ordinary-class-method-overloads.md">ADR-090: Ordinary-class method overloads</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/091-constructor-default-parameters.md">ADR-091: Constructor default parameters</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/096-function-default-parameters.md">ADR-096: Function default parameters</a>
     </category>
 </seealso>

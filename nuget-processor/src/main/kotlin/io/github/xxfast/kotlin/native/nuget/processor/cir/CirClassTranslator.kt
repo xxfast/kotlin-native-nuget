@@ -1163,8 +1163,9 @@ internal fun emitCsharpSignatureCollisions(
             declaration = "$container.${signature.first()}",
             reason = "two or more overloads render identical C# parameter types; C# cannot " +
                 "declare two methods with the same signature (ADR-034)",
-            hint = "rename one overload, or change a parameter's type so the rendered C# " +
-                "signatures differ",
+            hint = "rename one overload, change a parameter's type so the rendered C# " +
+                "signatures differ, or remove the default value whose synthesized overload " +
+                "collides (ADR-096)",
           ),
         ),
         logger,

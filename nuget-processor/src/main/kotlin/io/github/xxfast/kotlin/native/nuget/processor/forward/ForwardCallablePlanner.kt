@@ -109,6 +109,12 @@ internal sealed interface ForwardCallableCatalogEntry {
   data class Planned(
     val plan: ForwardCallablePlan,
     override val node: KSNode? = null,
+    /**
+     * ADR-096: this entry is a planner-synthesized omitting overload of a declared one, so it
+     * shares [node] with the entry it was synthesized from. Planner-internal: the plan model,
+     * `validate()` and the ABI contract never see it.
+     */
+    val synthesized: Boolean = false,
   ) : ForwardCallableCatalogEntry {
     override val symbol: String = plan.invocation.symbol
   }
@@ -308,7 +314,8 @@ internal data class ForwardCallablePlanCatalog(
   }
 
   /**
-   * ADR-095: the plan for [declaration], matched by node identity rather than by symbol.
+   * ADR-095/ADR-096: the plans for [declaration], matched by node identity rather than by symbol,
+   * in planning order (the declared plan first, then its synthesized omitting overloads).
    *
    * The top-level and extension emitters keep their declaration walks — the C# halves group by
    * (namespace, file class) and by receiver simple name, and the Kotlin top-level loop has a
@@ -316,10 +323,11 @@ internal data class ForwardCallablePlanCatalog(
    * matching is sound because `NugetProcessor` collects `functions` / `extensionFunctions` once and
    * hands the *same list instances* to the planner and to both emitters (verified).
    *
-   * Returns null only for a declaration this planner explicitly skipped; a declaration the catalog
-   * never saw is a wiring bug and fails loudly rather than silently binding to a namesake's plan.
+   * Returns an empty list only for a declaration this planner explicitly skipped; a declaration the
+   * catalog never saw is a wiring bug and fails loudly rather than silently binding to a namesake's
+   * plan.
    */
-  fun planFor(declaration: KSFunctionDeclaration): ForwardCallablePlan? {
+  fun plansFor(declaration: KSFunctionDeclaration): List<ForwardCallablePlan> {
     val matches: List<ForwardCallableCatalogEntry> = entries
       .filter { entry -> entry.node === declaration }
     require(matches.isNotEmpty()) {
@@ -327,14 +335,16 @@ internal data class ForwardCallablePlanCatalog(
           "${declaration.qualifiedName?.asString() ?: declaration.simpleName.asString()}; the " +
           "emitter is walking a declaration list the planner never saw"
     }
-    val planned: List<ForwardCallablePlan> = matches
+    val planned: List<ForwardCallableCatalogEntry.Planned> = matches
       .filterIsInstance<ForwardCallableCatalogEntry.Planned>()
-      .map { entry -> entry.plan }
-    require(planned.size <= 1) {
-      "Forward callable catalog has ${planned.size} plans for one declaration of " +
-          "${declaration.simpleName.asString()}; a route planned it more than once"
+    // ADR-074, restated by ADR-096 in terms of *declared* plans: synthesized omitting overloads
+    // legitimately share their declaration's node, a route planning one declaration twice does not.
+    require(planned.count { entry -> !entry.synthesized } <= 1) {
+      "Forward callable catalog has ${planned.count { entry -> !entry.synthesized }} declared " +
+          "plans for one declaration of ${declaration.simpleName.asString()}; a route planned it " +
+          "more than once"
     }
-    return planned.singleOrNull()
+    return planned.map { entry -> entry.plan }
   }
 
   private fun valueClassMembers(owner: String): List<ForwardCallablePlan> = plans.filter { plan ->
@@ -374,12 +384,39 @@ internal class ForwardCallablePlanner(
       // `fun Dog.pat()` in one package are one counter). Both counters live here rather than in the
       // per-declaration entry builders, because the scope spans the whole collected list.
       val topLevelOccurrences: MutableMap<String, Int> = mutableMapOf()
-      functions.forEach { function ->
-        add(topLevelEntry(function, overloadSuffix(topLevelOccurrences, function)))
+      val topLevel: List<ForwardCallableCatalogEntry> = functions.map { function ->
+        topLevelEntry(function, overloadSuffix(topLevelOccurrences, function))
+      }
+      addAll(topLevel)
+      // ADR-096: the omitting overloads, appended after *every* declared entry of this counter
+      // scope so declared exports keep their numbers. The declared namesake count is snapshotted
+      // first, because the synthesized pass advances the same counter.
+      val declaredTopLevel: Map<String, Int> = topLevelOccurrences.toMap()
+      functions.forEachIndexed { index, function ->
+        if (topLevel[index] !is ForwardCallableCatalogEntry.Planned) return@forEachIndexed
+        val defaults: List<Boolean> = topLevelDefaultFlags(function, declaredTopLevel)
+        repeat(defaults.trailingCount()) { omitted ->
+          add(
+            topLevelEntry(
+              function, overloadSuffix(topLevelOccurrences, function), omitted = omitted + 1,
+            ).synthesized()
+          )
+        }
       }
       val extensionOccurrences: MutableMap<String, Int> = mutableMapOf()
-      extensionFunctions.forEach { function ->
-        add(extensionEntry(function, overloadSuffix(extensionOccurrences, function)))
+      val extensions: List<ForwardCallableCatalogEntry> = extensionFunctions.map { function ->
+        extensionEntry(function, overloadSuffix(extensionOccurrences, function))
+      }
+      addAll(extensions)
+      extensionFunctions.forEachIndexed { index, function ->
+        if (extensions[index] !is ForwardCallableCatalogEntry.Planned) return@forEachIndexed
+        repeat(function.parameters.map { it.hasDefault }.trailingCount()) { omitted ->
+          add(
+            extensionEntry(
+              function, overloadSuffix(extensionOccurrences, function), omitted = omitted + 1,
+            ).synthesized()
+          )
+        }
       }
       objects.forEach { obj -> addAll(objectEntries(obj)) }
       classes.forEach { cls -> addAll(companionEntries(cls)) }
@@ -698,14 +735,17 @@ internal class ForwardCallablePlanner(
     // `getAllFunctions()` order — the counter increments before the structural check, so a
     // skipped namesake still consumes its number and numbering stays declaration-order stable.
     val occurrences: MutableMap<String, Int> = mutableMapOf()
-    return methods.map { method ->
+    fun entryFor(method: KSFunctionDeclaration, omitted: Int): ForwardCallableCatalogEntry {
       val name: String = method.simpleName.asString()
       val occurrence: Int = occurrences.merge(name, 1, Int::plus)!!
       val suffix: String = if (occurrence == 1) "" else "_$occurrence"
       val symbol: String = "$owner.$name$suffix"
       // ADR-090: the C# modifiers, computed here because a planned entry keeps no declaration.
-      val isOverride: Boolean = superClass != null && method.modifiers.contains(Modifier.OVERRIDE)
-      val isVirtual: Boolean = superClass == null &&
+      // ADR-096: a synthesized entry is never `override`/`virtual` (the base has no such
+      // signature, so `override` would be CS0115); overrides synthesize nothing anyway.
+      val isOverride: Boolean = omitted == 0 &&
+          superClass != null && method.modifiers.contains(Modifier.OVERRIDE)
+      val isVirtual: Boolean = omitted == 0 && superClass == null &&
           method.modifiers.contains(Modifier.OVERRIDE) &&
           !method.modifiers.contains(Modifier.FINAL)
       val structuralReason: ForwardPlanSkipReason? = when {
@@ -715,7 +755,7 @@ internal class ForwardCallablePlanner(
         method in interfaceBridgeMethods || method in storedCallbackMethods -> ForwardPlanSkipReason.CALLBACK_PROTOCOL
         else -> null
       }
-      if (structuralReason != null) {
+      return if (structuralReason != null) {
         ForwardCallableCatalogEntry.Skipped(symbol, structuralReason, node = method)
       } else {
         planOrSkip(
@@ -723,7 +763,7 @@ internal class ForwardCallablePlanner(
           publicName = name.replaceFirstChar { it.uppercase() },
           exportName = "${prefix}_$name$suffix",
           receiver = ForwardReceiver.Handle(receiverType),
-          parameters = method.parameters.map { parameter ->
+          parameters = method.parameters.dropLast(omitted).map { parameter ->
             (parameter.name?.asString() ?: "_") to classifier.classify(parameter.type.resolve())
           },
           result = method.returnType?.resolve()?.let(classifier::classify) ?: BridgeType.Unit,
@@ -734,6 +774,22 @@ internal class ForwardCallablePlanner(
           isVirtual = isVirtual,
           node = method,
         )
+      }
+    }
+    return buildList {
+      val declared: List<ForwardCallableCatalogEntry> =
+        methods.map { method -> entryFor(method, 0) }
+      addAll(declared)
+      // ADR-096: the omitting overloads, appended after every declared entry of this
+      // per-(class, name) counter scope so declared exports keep their numbers.
+      methods.forEachIndexed { index, method ->
+        if (declared[index] !is ForwardCallableCatalogEntry.Planned) return@forEachIndexed
+        // Kotlin forbids an override from restating defaults; the base class's own synthesized
+        // overload is inherited by the generated C# subclass, so this route synthesizes nothing.
+        if (method.modifiers.contains(Modifier.OVERRIDE)) return@forEachIndexed
+        repeat(method.parameters.map { it.hasDefault }.trailingCount()) { omitted ->
+          add(entryFor(method, omitted + 1).synthesized())
+        }
       }
     }
   }
@@ -834,6 +890,44 @@ internal class ForwardCallablePlanner(
     }
   }
 
+  /**
+   * ADR-096: the number of *trailing* parameters that all have a default, i.e. how many omitting
+   * overloads to synthesize. A default followed anywhere by a required parameter contributes
+   * nothing, because the generated wrapper is a positional Kotlin call.
+   */
+  private fun List<Boolean>.trailingCount(): Int = reversed().takeWhile { it }.count()
+
+  /** ADR-096: marks a planned entry as a synthesized omitting overload; skips pass through. */
+  private fun ForwardCallableCatalogEntry.synthesized(): ForwardCallableCatalogEntry =
+    if (this is ForwardCallableCatalogEntry.Planned) copy(synthesized = true) else this
+
+  /**
+   * ADR-096: per-parameter "has a default" for a **top-level** function, positionally.
+   *
+   * The one route that consults the ADR-074 expect index, because Kotlin forbids an `actual` from
+   * restating a default so every parameter of the exported root reports `hasDefault = false`. The
+   * lookup is guarded three ways: only when that `(package, name)` has exactly one declared
+   * namesake (the index is a `.toMap()`, so two `expect` overloads of one name collapse to the last
+   * one and would attribute one declaration's defaults to another), only when the resolved expect
+   * is not an extension, and only when the parameter counts match. No other route consults it in
+   * v1; class/object/companion/extension read the exported declaration's own bit only.
+   */
+  private fun topLevelDefaultFlags(
+    function: KSFunctionDeclaration,
+    declaredNamesakes: Map<String, Int>,
+  ): List<Boolean> {
+    val key: String = "${function.packageName.asString()}.${function.simpleName.asString()}"
+    val expect: KSFunctionDeclaration? =
+      if (declaredNamesakes[key] != 1) null
+      else (expectsByName[key] as? KSFunctionDeclaration)?.takeIf { declaration ->
+        declaration.extensionReceiver == null &&
+            declaration.parameters.size == function.parameters.size
+      }
+    return function.parameters.mapIndexed { index, parameter ->
+      parameter.hasDefault || expect?.parameters?.get(index)?.hasDefault == true
+    }
+  }
+
   private fun constructorEntry(
     constructor: KSFunctionDeclaration,
     owner: String,
@@ -874,6 +968,7 @@ internal class ForwardCallablePlanner(
   private fun topLevelEntry(
     function: KSFunctionDeclaration,
     suffix: String,
+    omitted: Int = 0,
   ): ForwardCallableCatalogEntry = staticEntry(
     function = function,
     symbol = "${function.packageName.asString()}.${function.simpleName.asString()}$suffix",
@@ -882,30 +977,46 @@ internal class ForwardCallablePlanner(
     origin = ForwardCallableOrigin.TOP_LEVEL,
     target = null,
     member = function.simpleName.asString(),
+    omitted = omitted,
   )
 
   private fun objectEntries(obj: KSClassDeclaration): List<ForwardCallableCatalogEntry> {
     val owner: String = obj.qualifiedName?.asString() ?: return emptyList()
     val prefix: String = obj.simpleName.asString().lowercase()
     val occurrences: MutableMap<String, Int> = mutableMapOf()
-    return obj.getAllFunctions()
+    val members: List<KSFunctionDeclaration> = obj.getAllFunctions()
       .filter { it.getVisibility() == Visibility.PUBLIC }
       .filter { it.parentDeclaration == obj }
       .filter { it.simpleName.asString() !in setOf("equals", "hashCode", "toString", "<init>") }
-      .map { function ->
-        val name: String = function.simpleName.asString()
-        val occurrence: Int = occurrences.merge(name, 1, Int::plus)!!
-        val suffix: String = if (occurrence == 1) "" else "_$occurrence"
-        staticEntry(
-          function = function,
-          symbol = "$owner.$name$suffix",
-          publicName = name.replaceFirstChar { it.uppercase() },
-          exportName = "${prefix}_${toCName(name)}$suffix",
-          origin = ForwardCallableOrigin.OBJECT,
-          target = owner,
-          member = name,
-        )
-      }.toList()
+      .toList()
+
+    fun entryFor(function: KSFunctionDeclaration, omitted: Int): ForwardCallableCatalogEntry {
+      val name: String = function.simpleName.asString()
+      val occurrence: Int = occurrences.merge(name, 1, Int::plus)!!
+      val suffix: String = if (occurrence == 1) "" else "_$occurrence"
+      return staticEntry(
+        function = function,
+        symbol = "$owner.$name$suffix",
+        publicName = name.replaceFirstChar { it.uppercase() },
+        exportName = "${prefix}_${toCName(name)}$suffix",
+        origin = ForwardCallableOrigin.OBJECT,
+        target = owner,
+        member = name,
+        omitted = omitted,
+      )
+    }
+    return buildList {
+      val declared: List<ForwardCallableCatalogEntry> =
+        members.map { member -> entryFor(member, 0) }
+      addAll(declared)
+      // ADR-096: omitting overloads, appended after the declared pass of this per-object counter.
+      members.forEachIndexed { index, member ->
+        if (declared[index] !is ForwardCallableCatalogEntry.Planned) return@forEachIndexed
+        repeat(member.parameters.map { it.hasDefault }.trailingCount()) { omitted ->
+          add(entryFor(member, omitted + 1).synthesized())
+        }
+      }
+    }
   }
 
   private fun companionEntries(cls: KSClassDeclaration): List<ForwardCallableCatalogEntry> {
@@ -914,23 +1025,37 @@ internal class ForwardCallablePlanner(
       .firstOrNull { it.isCompanionObject } ?: return emptyList()
     val prefix: String = cls.simpleName.asString().lowercase()
     val occurrences: MutableMap<String, Int> = mutableMapOf()
-    return companion.getAllFunctions()
+    val members: List<KSFunctionDeclaration> = companion.getAllFunctions()
       .filter { it.getVisibility() == Visibility.PUBLIC }
       .filter { it.simpleName.asString() !in setOf("equals", "hashCode", "toString", "<init>") }
-      .map { function ->
-        val name: String = function.simpleName.asString()
-        val occurrence: Int = occurrences.merge(name, 1, Int::plus)!!
-        val suffix: String = if (occurrence == 1) "" else "_$occurrence"
-        staticEntry(
-          function = function,
-          symbol = "$owner.Companion.$name$suffix",
-          publicName = name.replaceFirstChar { it.uppercase() },
-          exportName = "${prefix}_companion_${toCName(name)}$suffix",
-          origin = ForwardCallableOrigin.COMPANION,
-          target = owner,
-          member = name,
-        )
-      }.toList()
+      .toList()
+
+    fun entryFor(function: KSFunctionDeclaration, omitted: Int): ForwardCallableCatalogEntry {
+      val name: String = function.simpleName.asString()
+      val occurrence: Int = occurrences.merge(name, 1, Int::plus)!!
+      val suffix: String = if (occurrence == 1) "" else "_$occurrence"
+      return staticEntry(
+        function = function,
+        symbol = "$owner.Companion.$name$suffix",
+        publicName = name.replaceFirstChar { it.uppercase() },
+        exportName = "${prefix}_companion_${toCName(name)}$suffix",
+        origin = ForwardCallableOrigin.COMPANION,
+        target = owner,
+        member = name,
+        omitted = omitted,
+      )
+    }
+    return buildList {
+      val declared: List<ForwardCallableCatalogEntry> = members.map { member -> entryFor(member, 0) }
+      addAll(declared)
+      // ADR-096: omitting overloads, appended after the declared pass of this per-companion counter.
+      members.forEachIndexed { index, member ->
+        if (declared[index] !is ForwardCallableCatalogEntry.Planned) return@forEachIndexed
+        repeat(member.parameters.map { it.hasDefault }.trailingCount()) { omitted ->
+          add(entryFor(member, omitted + 1).synthesized())
+        }
+      }
+    }
   }
 
   private fun staticEntry(
@@ -942,6 +1067,8 @@ internal class ForwardCallablePlanner(
     target: String?,
     // ADR-095: the bare declared name for the Kotlin call site, since the symbol may carry `_$n`.
     member: String? = null,
+    // ADR-096: how many trailing defaulted parameters this omitting overload drops (0 = declared).
+    omitted: Int = 0,
   ): ForwardCallableCatalogEntry {
     val structuralReason: ForwardPlanSkipReason? = when {
       function.modifiers.contains(Modifier.SUSPEND) -> ForwardPlanSkipReason.SUSPEND
@@ -952,9 +1079,10 @@ internal class ForwardCallablePlanner(
       return ForwardCallableCatalogEntry.Skipped(symbol, structuralReason, node = function)
     }
     val result: BridgeType = function.returnType?.resolve()?.let(classifier::classify) ?: BridgeType.Unit
-    val parameters: List<Pair<String, BridgeType>> = function.parameters.map { parameter ->
-      (parameter.name?.asString() ?: "_") to classifier.classify(parameter.type.resolve())
-    }
+    val parameters: List<Pair<String, BridgeType>> = function.parameters.dropLast(omitted)
+      .map { parameter ->
+        (parameter.name?.asString() ?: "_") to classifier.classify(parameter.type.resolve())
+      }
     // ADR-002 / MIGRATION: top-level nullable primitives keep the shipped two-call ABI.
     // ADR-076: a top-level nullable Instant shares the same two-call shape (ADR-069 recorded that
     // this path crashes packNuget for a shape it does not handle, rather than skipping).
@@ -1133,6 +1261,10 @@ internal class ForwardCallablePlanner(
   private fun extensionEntry(
     function: KSFunctionDeclaration,
     suffix: String,
+    // ADR-096: how many trailing defaulted parameters this omitting overload drops (0 = declared).
+    // The receiver is a `ForwardReceiver.Value`, not a plan parameter, so truncation never
+    // reaches it: an extension whose parameters are all defaulted still has its receiver.
+    omitted: Int = 0,
   ): ForwardCallableCatalogEntry {
     val receiver: KSType = requireNotNull(function.extensionReceiver) {
       "Forward extension planner received a non-extension function ${function.simpleName.asString()}"
@@ -1170,7 +1302,7 @@ internal class ForwardCallablePlanner(
       exportName =
         "${receiver.declaration.simpleName.asString().lowercase()}_${toCName(functionName)}$suffix",
       receiver = ForwardReceiver.Value(receiverType),
-      parameters = function.parameters.map { parameter ->
+      parameters = function.parameters.dropLast(omitted).map { parameter ->
         (parameter.name?.asString() ?: "_") to classifier.classify(parameter.type.resolve())
       },
       result = function.returnType?.resolve()?.let(classifier::classify) ?: BridgeType.Unit,
