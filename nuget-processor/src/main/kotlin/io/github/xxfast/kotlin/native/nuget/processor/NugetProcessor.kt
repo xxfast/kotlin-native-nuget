@@ -697,8 +697,9 @@ class NugetProcessor(
 
     functions.forEach { func ->
       builder.addImport(func.packageName.asString(), func.simpleName.asString())
-      val symbol: String = "${func.packageName.asString()}.${func.simpleName.asString()}"
-      val planned = callableCatalog.planFor(symbol)
+      // ADR-095: node identity, not a name-derived symbol — top-level overloads number per
+      // (package, name), so the n-th namesake's plan is keyed `..._$n`.
+      val planned = callableCatalog.planFor(func)
       if (planned != null) builder.addForwardKotlinPlanExport(planned)
       else builder.addFunctionExports(func)
     }

@@ -90,6 +90,17 @@ parameters), admitting each discovered type through the same `include`/`exclude`
 predicate. See [The nuget {} DSL](nuget-dsl.md) for the full predicate and the cross-module closure
 rules.
 
+<note>
+    <p>
+        Naming a top-level exported declaration (an <code>object</code>, a class, a static-class
+        file) the same as its own package's last segment produces a C# namespace whose simple name
+        matches a type inside it, for example a package <code>com.example.parlour</code> alongside
+        an object named <code>Parlour</code>. C# resolves an unqualified reference in that shape
+        ambiguously (<code>CS0118</code>, "is a namespace but is used like a type") unless the
+        consumer fully qualifies it. Pick a name that doesn't repeat the containing package.
+    </p>
+</note>
+
 ## Diagnostics
 
 Not every Kotlin construct can be expressed as C#. When the generator meets one it cannot bridge,

@@ -7,6 +7,7 @@ Kotlin top-level functions, properties, and `const val`s don't belong to any cla
 | top-level function | `static class` method | one static class per source file |
 | top-level property | static property | get/set, including nullable |
 | `const val` | `const` | |
+| two or more same-named top-level functions | one C# overload set | numbered native export/extern name, unnumbered public name, counter scoped per (package, name); see [Method overloads](#method-overloads) below ([ADR-095](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/095-static-route-overloads.md)) |
 
 ## Kotlin
 
@@ -112,6 +113,83 @@ A top-level `expect fun`/`expect val` follows the same grouping rule, but the st
 taken from the **expect's** file, not whichever `{target}Main` file supplied the `actual` body. See
 [expect/actual declarations](expect-actual.md).
 
+## Method overloads
+
+Two or more same-named top-level functions in one package generate one natural C# overload set, the
+same [ADR-090](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/090-ordinary-class-method-overloads.md)
+numbering template a class method uses, extended to this route by
+[ADR-095](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/095-static-route-overloads.md).
+The counter is scoped per `(package, name)`, not per file: two same-named top-level functions in
+different files of the same package still share one numbering sequence.
+
+### Kotlin {id="overloads-kotlin"}
+
+From `test-library/src/nativeMain/kotlin/.../grooming/GroomingSample.kt`:
+
+```kotlin
+fun bookGrooming(): String = "the next slot is free"
+
+fun bookGrooming(cat: String): String = "$cat is groomed at noon"
+
+fun waitTime(): Int? = 15
+
+fun waitTime(cat: String): Int? = if (cat.isBlank()) null else cat.length
+```
+
+`waitTime` returns a nullable primitive, so it routes through the ADR-002 two-call
+`_has_value`/`_value` shape instead of the plain single-call shape `bookGrooming` uses; both carry
+the same `_$n` numbering.
+
+### Generated C# {id="overloads-generated-c"}
+
+From `Interop.cs`. Top-level exports carry no prefix, so the bare `toCName(name)` gets the suffix
+directly; the public name keeps today's camelCase, unrelated to the numbering:
+
+```C#
+public static partial class GroomingSample
+{
+    [DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "bookGrooming")]
+    private static extern IntPtr Native_bookGrooming(out IntPtr error);
+
+    public static string bookGrooming() { /* ... */ }
+
+    [DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "bookGrooming_2")]
+    private static extern IntPtr Native_bookGrooming_2([MarshalAs(UnmanagedType.LPUTF8Str)] string cat, out IntPtr error);
+
+    public static string bookGrooming(string cat) { /* ... */ }
+
+    [DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "waitTime_has_value")]
+    private static extern bool waitTime_has_value(out IntPtr error);
+
+    [DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "waitTime_value")]
+    private static extern int waitTime_value(out IntPtr error);
+
+    public static int? waitTime() { /* ... */ }
+
+    [DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "waitTime_2_has_value")]
+    private static extern bool waitTime_2_has_value([MarshalAs(UnmanagedType.LPUTF8Str)] string cat, out IntPtr error);
+
+    [DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "waitTime_2_value")]
+    private static extern int waitTime_2_value([MarshalAs(UnmanagedType.LPUTF8Str)] string cat, out IntPtr error);
+
+    public static int? waitTime(string cat) { /* ... */ }
+}
+```
+
+### Using it from C# {id="overloads-using-it-from-c"}
+
+From `IntegrationTests/StaticRouteOverloadTests.cs`:
+
+```C#
+[Fact]
+public void WaitTime_WithBlankCat_ReturnsNullFromTheNumberedPresenceCall()
+{
+    // The presence half of the numbered pair has to belong to *this* overload; a mis-numbered
+    // _has_value would answer for waitTime() instead, which is never null.
+    Assert.Null(GroomingSample.waitTime("   "));
+}
+```
+
 <seealso>
     <category ref="related">
         <a href="objects-and-companions.md">Objects and companions</a>
@@ -122,5 +200,7 @@ taken from the **expect's** file, not whichever `{target}Main` file supplied the
     <category ref="external">
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/007-top-level-function-class-naming.md">ADR-007: Top-level function class naming</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/062-forward-callable-plan.md">ADR-062: Forward callable plan</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/090-ordinary-class-method-overloads.md">ADR-090: Ordinary-class method overloads</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/095-static-route-overloads.md">ADR-095: Overloads on the four static export routes</a>
     </category>
 </seealso>

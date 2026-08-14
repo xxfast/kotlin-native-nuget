@@ -5,7 +5,6 @@ import com.squareup.kotlinpoet.FileSpec
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallablePlan
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallablePlanCatalog
 import io.github.xxfast.kotlin.native.nuget.processor.forward.addForwardKotlinPlanExport
-import io.github.xxfast.kotlin.native.nuget.processor.forward.planFor
 
 /**
  * Extension functions on the ordinary plan path. Unplanned extensions (unsupported receivers,
@@ -15,7 +14,8 @@ internal fun FileSpec.Builder.addExtensionFunctionExports(
   func: KSFunctionDeclaration,
   callableCatalog: ForwardCallablePlanCatalog,
 ) {
-  val symbol: String = "${func.packageName.asString()}.${func.simpleName.asString()}"
-  val plan: ForwardCallablePlan? = callableCatalog.planFor(symbol)
+  // ADR-095: matched by node identity — extension plan symbols are package-scoped and carry the
+  // overload number, so a name-derived key would bind every namesake to the first one's plan.
+  val plan: ForwardCallablePlan? = callableCatalog.planFor(func)
   if (plan != null) addForwardKotlinPlanExport(plan)
 }

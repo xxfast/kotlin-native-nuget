@@ -98,8 +98,17 @@ internal enum class ForwardPlanSkipReason(val droppedFromCSharp: Boolean) {
 internal sealed interface ForwardCallableCatalogEntry {
   val symbol: String
 
+  /**
+   * ADR-064 for [Skipped], ADR-095 for [Planned]: the originating declaration. On the top-level and
+   * extension routes the emitters keep their declaration walks (their C# grouping needs the
+   * declaration itself), so a *planned* entry must be findable by node identity — with overload
+   * numbering the symbol is no longer derivable from a declaration.
+   */
+  val node: KSNode?
+
   data class Planned(
     val plan: ForwardCallablePlan,
+    override val node: KSNode? = null,
   ) : ForwardCallableCatalogEntry {
     override val symbol: String = plan.invocation.symbol
   }
@@ -110,7 +119,7 @@ internal sealed interface ForwardCallableCatalogEntry {
     // ADR-064: the originating declaration, so the diagnostic sink can point KSP/Gradle at the
     // author's own Kotlin source rather than at generated code. Null only where no single KSNode
     // cleanly represents the skip.
-    val node: KSNode? = null,
+    override val node: KSNode? = null,
     // ADR-066: the unexported dependency type's qualified name, when `reason ==
     // UNEXPORTED_DEPENDENCY_TYPE`. Carries enough for the diagnostic sink to build the
     // `include("<package>")` hint without re-deriving it from the generic reason enum.
@@ -280,6 +289,54 @@ internal data class ForwardCallablePlanCatalog(
         plan.invocation.symbol.substringBeforeLast('.') == owner
   }
 
+  /**
+   * ADR-095: the planned members of object [owner], in planning order.
+   *
+   * Same reason as [classMethods]: with per-object overload numbering the symbol of the n-th
+   * namesake is `$owner.${name}_$n`, which no `getAllFunctions()` walk can re-derive, so both
+   * emitters read the object's members off the catalog. Owner-exact, not prefix.
+   */
+  fun objectMethods(owner: String): List<ForwardCallablePlan> = plans.filter { plan ->
+    plan.invocation.origin == ForwardCallableOrigin.OBJECT &&
+        plan.invocation.symbol.substringBeforeLast('.') == owner
+  }
+
+  /** ADR-095: the planned companion members of class [owner], in planning order. See above. */
+  fun companionMethods(owner: String): List<ForwardCallablePlan> = plans.filter { plan ->
+    plan.invocation.origin == ForwardCallableOrigin.COMPANION &&
+        plan.invocation.symbol.substringBeforeLast('.') == "$owner.Companion"
+  }
+
+  /**
+   * ADR-095: the plan for [declaration], matched by node identity rather than by symbol.
+   *
+   * The top-level and extension emitters keep their declaration walks — the C# halves group by
+   * (namespace, file class) and by receiver simple name, and the Kotlin top-level loop has a
+   * per-declaration legacy fallback — so an owner-keyed accessor cannot replace them. Identity
+   * matching is sound because `NugetProcessor` collects `functions` / `extensionFunctions` once and
+   * hands the *same list instances* to the planner and to both emitters (verified).
+   *
+   * Returns null only for a declaration this planner explicitly skipped; a declaration the catalog
+   * never saw is a wiring bug and fails loudly rather than silently binding to a namesake's plan.
+   */
+  fun planFor(declaration: KSFunctionDeclaration): ForwardCallablePlan? {
+    val matches: List<ForwardCallableCatalogEntry> = entries
+      .filter { entry -> entry.node === declaration }
+    require(matches.isNotEmpty()) {
+      "Forward callable catalog has no entry for " +
+          "${declaration.qualifiedName?.asString() ?: declaration.simpleName.asString()}; the " +
+          "emitter is walking a declaration list the planner never saw"
+    }
+    val planned: List<ForwardCallablePlan> = matches
+      .filterIsInstance<ForwardCallableCatalogEntry.Planned>()
+      .map { entry -> entry.plan }
+    require(planned.size <= 1) {
+      "Forward callable catalog has ${planned.size} plans for one declaration of " +
+          "${declaration.simpleName.asString()}; a route planned it more than once"
+    }
+    return planned.singleOrNull()
+  }
+
   private fun valueClassMembers(owner: String): List<ForwardCallablePlan> = plans.filter { plan ->
     plan.invocation.origin == ForwardCallableOrigin.VALUE_CLASS &&
         plan.invocation.symbol.substringBeforeLast('.') == owner &&
@@ -312,8 +369,18 @@ internal class ForwardCallablePlanner(
     val entries: List<ForwardCallableCatalogEntry> = buildList {
       classes.forEach { cls -> addAll(classEntries(cls)) }
       classes.forEach { cls -> addAll(constructorEntries(cls)) }
-      functions.forEach { function -> add(topLevelEntry(function)) }
-      extensionFunctions.forEach { function -> add(extensionEntry(function)) }
+      // ADR-095: top-level and extension overloads number per (package, name), the extension one
+      // deliberately receiver-agnostic because its plan symbol is (`fun Cat.pat()` then
+      // `fun Dog.pat()` in one package are one counter). Both counters live here rather than in the
+      // per-declaration entry builders, because the scope spans the whole collected list.
+      val topLevelOccurrences: MutableMap<String, Int> = mutableMapOf()
+      functions.forEach { function ->
+        add(topLevelEntry(function, overloadSuffix(topLevelOccurrences, function)))
+      }
+      val extensionOccurrences: MutableMap<String, Int> = mutableMapOf()
+      extensionFunctions.forEach { function ->
+        add(extensionEntry(function, overloadSuffix(extensionOccurrences, function)))
+      }
       objects.forEach { obj -> addAll(objectEntries(obj)) }
       classes.forEach { cls -> addAll(companionEntries(cls)) }
       valueClasses.forEach { cls -> addAll(valueClassEntries(cls)) }
@@ -789,31 +856,54 @@ internal class ForwardCallablePlanner(
     node = constructor,
   )
 
-  private fun topLevelEntry(function: KSFunctionDeclaration): ForwardCallableCatalogEntry = staticEntry(
+  /**
+   * ADR-095/ADR-090 numbering: the first declared namesake keeps the bare name, the n-th further
+   * one is `_$n` (n from 2). The counter increments before any structural check, so a skipped
+   * namesake still consumes its number and numbering stays declaration-order stable. The suffix
+   * composes *after* `toCName` on the export name: `name_2` is never a C reserved word.
+   */
+  private fun overloadSuffix(
+    occurrences: MutableMap<String, Int>,
+    function: KSFunctionDeclaration,
+  ): String {
+    val key: String = "${function.packageName.asString()}.${function.simpleName.asString()}"
+    val occurrence: Int = occurrences.merge(key, 1, Int::plus)!!
+    return if (occurrence == 1) "" else "_$occurrence"
+  }
+
+  private fun topLevelEntry(
+    function: KSFunctionDeclaration,
+    suffix: String,
+  ): ForwardCallableCatalogEntry = staticEntry(
     function = function,
-    symbol = "${function.packageName.asString()}.${function.simpleName.asString()}",
+    symbol = "${function.packageName.asString()}.${function.simpleName.asString()}$suffix",
     publicName = toCName(function.simpleName.asString()).csharpIdentifier(),
-    exportName = toCName(function.simpleName.asString()),
+    exportName = "${toCName(function.simpleName.asString())}$suffix",
     origin = ForwardCallableOrigin.TOP_LEVEL,
     target = null,
+    member = function.simpleName.asString(),
   )
 
   private fun objectEntries(obj: KSClassDeclaration): List<ForwardCallableCatalogEntry> {
     val owner: String = obj.qualifiedName?.asString() ?: return emptyList()
     val prefix: String = obj.simpleName.asString().lowercase()
+    val occurrences: MutableMap<String, Int> = mutableMapOf()
     return obj.getAllFunctions()
       .filter { it.getVisibility() == Visibility.PUBLIC }
       .filter { it.parentDeclaration == obj }
       .filter { it.simpleName.asString() !in setOf("equals", "hashCode", "toString", "<init>") }
       .map { function ->
         val name: String = function.simpleName.asString()
+        val occurrence: Int = occurrences.merge(name, 1, Int::plus)!!
+        val suffix: String = if (occurrence == 1) "" else "_$occurrence"
         staticEntry(
           function = function,
-          symbol = "$owner.$name",
+          symbol = "$owner.$name$suffix",
           publicName = name.replaceFirstChar { it.uppercase() },
-          exportName = "${prefix}_${toCName(name)}",
+          exportName = "${prefix}_${toCName(name)}$suffix",
           origin = ForwardCallableOrigin.OBJECT,
           target = owner,
+          member = name,
         )
       }.toList()
   }
@@ -823,18 +913,22 @@ internal class ForwardCallablePlanner(
     val companion: KSClassDeclaration = cls.declarations.filterIsInstance<KSClassDeclaration>()
       .firstOrNull { it.isCompanionObject } ?: return emptyList()
     val prefix: String = cls.simpleName.asString().lowercase()
+    val occurrences: MutableMap<String, Int> = mutableMapOf()
     return companion.getAllFunctions()
       .filter { it.getVisibility() == Visibility.PUBLIC }
       .filter { it.simpleName.asString() !in setOf("equals", "hashCode", "toString", "<init>") }
       .map { function ->
         val name: String = function.simpleName.asString()
+        val occurrence: Int = occurrences.merge(name, 1, Int::plus)!!
+        val suffix: String = if (occurrence == 1) "" else "_$occurrence"
         staticEntry(
           function = function,
-          symbol = "$owner.Companion.$name",
+          symbol = "$owner.Companion.$name$suffix",
           publicName = name.replaceFirstChar { it.uppercase() },
-          exportName = "${prefix}_companion_${toCName(name)}",
+          exportName = "${prefix}_companion_${toCName(name)}$suffix",
           origin = ForwardCallableOrigin.COMPANION,
           target = owner,
+          member = name,
         )
       }.toList()
   }
@@ -846,6 +940,8 @@ internal class ForwardCallablePlanner(
     exportName: String,
     origin: ForwardCallableOrigin,
     target: String?,
+    // ADR-095: the bare declared name for the Kotlin call site, since the symbol may carry `_$n`.
+    member: String? = null,
   ): ForwardCallableCatalogEntry {
     val structuralReason: ForwardPlanSkipReason? = when {
       function.modifiers.contains(Modifier.SUSPEND) -> ForwardPlanSkipReason.SUSPEND
@@ -876,6 +972,7 @@ internal class ForwardCallablePlanner(
         exportName = exportName,
         parameters = parameters,
         result = result,
+        member = member,
         node = function,
       )
     }
@@ -888,6 +985,7 @@ internal class ForwardCallablePlanner(
       result = result,
       origin = origin,
       target = target,
+      member = member,
       node = function,
     )
   }
@@ -904,6 +1002,8 @@ internal class ForwardCallablePlanner(
     exportName: String,
     parameters: List<Pair<String, BridgeType>>,
     result: BridgeType.Nullable,
+    // ADR-095: the two-call route numbers like every other, so its plan carries the bare name too.
+    member: String? = null,
     node: KSNode? = null,
   ): ForwardCallableCatalogEntry {
     val inner: BridgeType = result.type
@@ -1010,6 +1110,7 @@ internal class ForwardCallablePlanner(
         symbol = symbol,
         origin = ForwardCallableOrigin.TOP_LEVEL,
         target = null,
+        member = member,
       ),
       publicSignature = ForwardPublicSignature(
         name = publicName,
@@ -1026,16 +1127,19 @@ internal class ForwardCallablePlanner(
       errorSlot = error,
       helperRequirements = helpers,
     ).validate()
-    return ForwardCallableCatalogEntry.Planned(plan)
+    return ForwardCallableCatalogEntry.Planned(plan, node = node)
   }
 
-  private fun extensionEntry(function: KSFunctionDeclaration): ForwardCallableCatalogEntry {
+  private fun extensionEntry(
+    function: KSFunctionDeclaration,
+    suffix: String,
+  ): ForwardCallableCatalogEntry {
     val receiver: KSType = requireNotNull(function.extensionReceiver) {
       "Forward extension planner received a non-extension function ${function.simpleName.asString()}"
     }.resolve()
     val receiverType: BridgeType = classifier.classify(receiver)
     val functionName: String = function.simpleName.asString()
-    val symbol: String = "${function.packageName.asString()}.$functionName"
+    val symbol: String = "${function.packageName.asString()}.$functionName$suffix"
 
     // ADR-064 cell 23 / BUG-010: a generic + suspend + inline + reified extension returning
     // Result<T> has no legacy route at all — inline+reified erases at the C ABI and suspend
@@ -1063,13 +1167,15 @@ internal class ForwardCallablePlanner(
     return planOrSkip(
       symbol = symbol,
       publicName = toCName(functionName).replaceFirstChar { it.uppercase() },
-      exportName = "${receiver.declaration.simpleName.asString().lowercase()}_${toCName(functionName)}",
+      exportName =
+        "${receiver.declaration.simpleName.asString().lowercase()}_${toCName(functionName)}$suffix",
       receiver = ForwardReceiver.Value(receiverType),
       parameters = function.parameters.map { parameter ->
         (parameter.name?.asString() ?: "_") to classifier.classify(parameter.type.resolve())
       },
       result = function.returnType?.resolve()?.let(classifier::classify) ?: BridgeType.Unit,
       origin = ForwardCallableOrigin.EXTENSION,
+      member = functionName,
       node = function,
     )
   }
@@ -1196,7 +1302,7 @@ internal class ForwardCallablePlanner(
       cleanup = resultShape.cleanup,
       helperRequirements = helpers,
     ).validate()
-    return ForwardCallableCatalogEntry.Planned(plan)
+    return ForwardCallableCatalogEntry.Planned(plan, node = node)
   }
 
   private fun errorParameter(): ForwardAbiParameter = ForwardAbiParameter(
@@ -1934,6 +2040,7 @@ internal class ForwardCallablePlanner(
     is BridgeType.BoundInterface ->
       if (implementable) ForwardPlanSkipReason.BOUND_INTERFACE_POSITION
       else ForwardPlanSkipReason.UNIMPLEMENTABLE_BOUND_INTERFACE
+
     is BridgeType.ValueClass -> ForwardPlanSkipReason.VALUE_CLASS
     is BridgeType.SpecializedProtocol -> when {
       // ADR-065: StateFlow shares the plain-Flow legacy route (both are named legacy exports in
@@ -2074,8 +2181,8 @@ internal class ForwardCallablePlanner(
     is BridgeType.Enum,
     is BridgeType.ObjectHandle,
     is BridgeType.Interface,
-    // ADR-088: like ObjectHandle/Interface, a bound interface always builds its own tagged
-    // ForwardTransfer at its call site rather than reaching this untagged pass-through.
+      // ADR-088: like ObjectHandle/Interface, a bound interface always builds its own tagged
+      // ForwardTransfer at its call site rather than reaching this untagged pass-through.
     is BridgeType.BoundInterface,
     is BridgeType.ValueClass,
     is BridgeType.SpecializedProtocol,
