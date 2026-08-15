@@ -153,6 +153,10 @@ data class CirMarshalHelper(
   // CS0103 for every such consumer.
   val includesMap: Boolean = false,
   val includesSet: Boolean = false,
+  // ADR-099: same gate for the new ReadList helper, which calls into NugetListNative. CreateList
+  // above is still emitted unconditionally (ROADMAP.md:141); this flag deliberately does not copy
+  // that.
+  val includesList: Boolean = false,
   // ADR-084: `HandleOf` falls back to `NugetBridge.HandleFor` for a value with no `_handle` (a
   // C#-implemented Kotlin interface). Gated on the same principle as includesMap/includesSet: the
   // fallback only compiles where a CirBridgeHelper was actually emitted.

@@ -361,8 +361,11 @@ class Tier1CompileCellsTest {
    * having been dropped).
    *
    * ADR-097 moved this cell off `List<Mood>` and ADR-098 off `List<Char>`: a bare enum component
-   * is wrappable now, and so is `Char`, so both of those properties gained a setter instead. A
-   * nested collection keeps the ineligible-setter mechanism covered.
+   * is wrappable now, and so is `Char`, so both of those properties gained a setter instead.
+   * ADR-099 moved this cell off a plain nested collection: nesting is wrappable now (the inner
+   * handle is the component's wire value), so the remaining bridgeable-but-unwrappable
+   * component is a NULLABLE nested collection, which ADR-099 guards explicitly (its write
+   * projection has no null arm).
    */
   @Test
   fun `class property with nested-collection element has no setter and fires SKIPPED_UNSUPPORTED_INPUT`() {
@@ -371,7 +374,7 @@ class Tier1CompileCellsTest {
       package tier1.moodbox
 
       class Box {
-        var moods: List<List<String>> = emptyList()
+        var moods: List<List<String>?> = emptyList()
       }
       """.trimIndent()
     )
@@ -386,7 +389,7 @@ class Tier1CompileCellsTest {
     )
     assertTrue(
       "export_box_set_moods" !in result.generated,
-      "expected no setter export (a nested collection is not a wrappable element); " +
+      "expected no setter export (a nullable nested collection is not a wrappable element); " +
           "generated=${result.generated}",
     )
     assertTrue(
@@ -402,7 +405,10 @@ class Tier1CompileCellsTest {
    * `ineligibleComponentDescription()`'s map branch (a wrappable `String` key, an unwrappable
    * nested-collection value), so the diagnostic must name the *value*, not the element. ADR-097
    * moved this cell off a `Mood` value and ADR-098 off a `Char` one, for the same reason as the
-   * cell above.
+   * cell above. ADR-099 moved this cell off a plain nested collection: nesting is wrappable now
+   * (the inner handle is the component's wire value), so the remaining bridgeable-but-unwrappable
+   * component is a NULLABLE nested collection, which ADR-099 guards explicitly (its write
+   * projection has no null arm).
    */
   @Test
   fun `class property with Map of String to nested-collection value has no setter and names the value type`() {
@@ -411,7 +417,7 @@ class Tier1CompileCellsTest {
       package tier1.moodmap
 
       class Box {
-        var scores: Map<String, List<String>> = emptyMap()
+        var scores: Map<String, List<String>?> = emptyMap()
       }
       """.trimIndent()
     )
@@ -426,7 +432,7 @@ class Tier1CompileCellsTest {
     )
     assertTrue(
       "export_box_set_scores" !in result.generated,
-      "expected no setter export (a nested collection is not a wrappable map value); " +
+      "expected no setter export (a nullable nested collection is not a wrappable map value); " +
           "generated=${result.generated}",
     )
     assertTrue(

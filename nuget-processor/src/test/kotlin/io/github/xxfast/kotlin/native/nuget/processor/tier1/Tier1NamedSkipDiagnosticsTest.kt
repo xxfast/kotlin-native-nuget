@@ -29,7 +29,10 @@ class Tier1NamedSkipDiagnosticsTest {
    *
    * ADR-097 moved this cell off a `Mood` value and ADR-098 off a `Short` one: a bare enum rides
    * the int-ordinal wire and every narrow primitive now has a `nuget_wrap_*` of its own, so
-   * neither demonstrates the skip any more.
+   * neither demonstrates the skip any more. ADR-099 moved this cell off a plain nested collection:
+   * nesting is wrappable now (the inner handle is the component's wire value), so the remaining
+   * bridgeable-but-unwrappable component is a NULLABLE nested collection, which ADR-099 guards
+   * explicitly (its write projection has no null arm).
    */
   @Test
   fun `class method with Map nested-collection value parameter fires SKIPPED_UNSUPPORTED_INPUT and is omitted`() {
@@ -38,7 +41,7 @@ class Tier1NamedSkipDiagnosticsTest {
       package tier1.skipmapinput
 
       class Patient(val name: String) {
-        fun setMoods(moods: Map<String, List<String>>): Int = moods.size
+        fun setMoods(moods: Map<String, List<String>?>): Int = moods.size
       }
       """.trimIndent()
     )
@@ -61,8 +64,10 @@ class Tier1NamedSkipDiagnosticsTest {
 
   /**
    * ADR-073's sibling case for `Set`. ADR-098 minted `nuget_wrap_char`, so the `Char` element this
-   * cell used to carry binds now; a nested collection element is what stays outside
-   * `isWrappableComponent()` even though `Set<String>` itself binds.
+   * cell used to carry binds now. ADR-099 moved this cell off a plain nested collection: nesting is
+   * wrappable now (the inner handle is the component's wire value), so the remaining
+   * bridgeable-but-unwrappable component is a NULLABLE nested collection, which ADR-099 guards
+   * explicitly (its write projection has no null arm).
    */
   @Test
   fun `class method with Set nested-collection element parameter fires SKIPPED_UNSUPPORTED_INPUT and is omitted`() {
@@ -71,7 +76,7 @@ class Tier1NamedSkipDiagnosticsTest {
       package tier1.skipsetinput
 
       class Patient(val name: String) {
-        fun setInitials(initials: Set<List<String>>): Int = initials.size
+        fun setInitials(initials: Set<List<String>?>): Int = initials.size
       }
       """.trimIndent()
     )
@@ -154,9 +159,11 @@ class Tier1NamedSkipDiagnosticsTest {
   }
 
   /**
-   * ADR-073: a nested collection element (`Set<List<String>>`) is outside `isWrappableComponent()`
-   * -- there is no way to box a `List<String>` through the same-shaped `Wrap<T>` reflective
-   * `_handle` fallback -- and must still fire `SKIPPED_UNSUPPORTED_INPUT`.
+   * ADR-073: an unwrappable `Set` element must still fire `SKIPPED_UNSUPPORTED_INPUT`. ADR-099
+   * moved this cell off a plain nested collection: nesting is wrappable now (the inner handle is
+   * the component's wire value), so the remaining bridgeable-but-unwrappable component is a
+   * NULLABLE nested collection, which ADR-099 guards explicitly (its write projection has no null
+   * arm).
    */
   @Test
   fun `class method with Set nested-collection-element parameter fires SKIPPED_UNSUPPORTED_INPUT and is omitted`() {
@@ -165,7 +172,7 @@ class Tier1NamedSkipDiagnosticsTest {
       package tier1.skipsetnestedinput
 
       class Patient(val name: String) {
-        fun setTagGroups(groups: Set<List<String>>): Int = groups.size
+        fun setTagGroups(groups: Set<List<String>?>): Int = groups.size
       }
       """.trimIndent()
     )

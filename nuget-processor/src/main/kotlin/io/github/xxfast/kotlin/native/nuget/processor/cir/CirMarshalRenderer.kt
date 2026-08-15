@@ -284,13 +284,22 @@ internal fun StringBuilder.renderMarshalHelper(helper: CirMarshalHelper) {
   appendLine()
   // ADR-073: the boxing switch shared by CreateList/CreateSet/CreateMap, so a future component
   // type is added in exactly one place.
-  appendLine("        internal static IntPtr Wrap<T>(T value)")
+  // ADR-099: `owned` reports whether this call MINTED the box. A freshly wrapped primitive/string
+  // and a nested collection's handle are the caller's to dispose the instant `Add`/`Put` has
+  // dereferenced them; an INugetHandle's `Handle` is the C# wrapper's own live handle and disposing
+  // it would be a use-after-free on the next use of that wrapper.
+  appendLine("        internal static IntPtr Wrap<T>(T value, out bool owned)")
   appendLine("        {")
   // ADR-083: the null pointer is the null component, for every component kind. The dispatch below
   // is on the *underlying* type because typeof(int?) != typeof(int), so without the normalization
   // a T of `int?` would miss every branch and fall into the reflective _handle fallback.
+  appendLine("            owned = false;")
   appendLine("            if (value == null) return IntPtr.Zero;")
   appendLine("            var type = Nullable.GetUnderlyingType(typeof(T)) ?? typeof(T);")
+  // ADR-099: a nested collection component arrives already boxed -- its handle IS the box, minted
+  // by this call site's own projection, so this factory owns it.
+  appendLine("            owned = true;")
+  appendLine("            if (type == typeof(IntPtr)) return (IntPtr)(object)value!;")
   appendLine("            if (type == typeof(string)) return nuget_wrap_string((string)(object)value!);")
   appendLine("            if (type == typeof(int)) return nuget_wrap_int((int)(object)value!);")
   appendLine("            if (type == typeof(long)) return nuget_wrap_long((long)(object)value!);")
@@ -309,6 +318,7 @@ internal fun StringBuilder.renderMarshalHelper(helper: CirMarshalHelper) {
   appendLine("            if (type == typeof(char)) return nuget_wrap_char((char)(object)value!);")
   // ADR-094: every Kotlin-backed wrapper implements INugetHandle explicitly, so the handle comes
   // out of a type test instead of a private-field read.
+  appendLine("            owned = false;")
   appendLine("            if (value is INugetHandle wrapper) return wrapper.Handle;")
   appendLine("            throw new NotSupportedException($\"Cannot pass {typeof(T).Name} to a Kotlin collection\");")
   appendLine("        }")
@@ -323,7 +333,7 @@ internal fun StringBuilder.renderMarshalHelper(helper: CirMarshalHelper) {
   appendCollectionFactoryGuard(
     "NugetListNative",
     "listHandle",
-    "foreach (T value in values) NugetListNative.Add(listHandle, Wrap(value));",
+    elementLoop("NugetListNative", "Add(listHandle, element)"),
   )
   appendLine("            return listHandle;")
   appendLine("        }")
@@ -337,7 +347,7 @@ internal fun StringBuilder.renderMarshalHelper(helper: CirMarshalHelper) {
     appendCollectionFactoryGuard(
       "NugetSetNative",
       "setHandle",
-      "foreach (T value in values) NugetSetNative.Add(setHandle, Wrap(value));",
+      elementLoop("NugetSetNative", "Add(setHandle, element)"),
     )
     appendLine("            return setHandle;")
     appendLine("        }")
@@ -351,9 +361,81 @@ internal fun StringBuilder.renderMarshalHelper(helper: CirMarshalHelper) {
     appendCollectionFactoryGuard(
       "NugetMapNative",
       "mapHandle",
-      "foreach (var pair in values) NugetMapNative.Put(mapHandle, Wrap(pair.Key), Wrap(pair.Value));",
+      listOf(
+        "foreach (var pair in values)",
+        "{",
+        "    IntPtr key = IntPtr.Zero;",
+        "    bool keyOwned = false;",
+        "    IntPtr value = IntPtr.Zero;",
+        "    bool valueOwned = false;",
+        "    try",
+        "    {",
+        "        key = Wrap(pair.Key, out keyOwned);",
+        "        value = Wrap(pair.Value, out valueOwned);",
+        "        NugetMapNative.Put(mapHandle, key, value);",
+        "    }",
+        "    finally",
+        "    {",
+        // ADR-099: both boxes were minted by this loop iteration, and nuget_map_put has already
+        // stored the dereferenced objects into a map the outer StableRef roots.
+        "        if (keyOwned) NugetMapNative.Dispose(key);",
+        "        if (valueOwned) NugetMapNative.Dispose(value);",
+        "    }",
+        "}",
+      ),
     )
     appendLine("            return mapHandle;")
+    appendLine("        }")
+    appendLine()
+  }
+  // ADR-099: the read side of a NESTED component. The shipped materialization is inlined codegen
+  // with fixed local names (`listHandle`, `count`, `result`, `i`) that cannot nest, so an inner
+  // level goes through these helpers instead. The `finally` is what keeps every inner level free of
+  // ROADMAP.md:142's "result handle leaks if materialization throws mid-loop" shape; the handle was
+  // minted by the Get/KeyAt/ValueAt that produced it, so this helper owns it.
+  if (helper.includesList) {
+    appendLine("        public static List<T> ReadList<T>(IntPtr handle, Func<IntPtr, T> read)")
+    appendLine("        {")
+    appendLine("            try")
+    appendLine("            {")
+    appendLine("                int count = NugetListNative.Count(handle);")
+    appendLine("                var result = new List<T>(count);")
+    appendLine("                for (int i = 0; i < count; i++) result.Add(read(NugetListNative.Get(handle, i)));")
+    appendLine("                return result;")
+    appendLine("            }")
+    appendLine("            finally { NugetListNative.Dispose(handle); }")
+    appendLine("        }")
+    appendLine()
+  }
+  if (helper.includesSet) {
+    appendLine("        public static HashSet<T> ReadSet<T>(IntPtr handle, Func<IntPtr, T> read)")
+    appendLine("        {")
+    appendLine("            try")
+    appendLine("            {")
+    appendLine("                int count = NugetSetNative.Count(handle);")
+    appendLine("                var result = new HashSet<T>(count);")
+    appendLine("                for (int i = 0; i < count; i++) result.Add(read(NugetSetNative.ElementAt(handle, i)));")
+    appendLine("                return result;")
+    appendLine("            }")
+    appendLine("            finally { NugetSetNative.Dispose(handle); }")
+    appendLine("        }")
+    appendLine()
+  }
+  if (helper.includesMap) {
+    appendLine("        public static Dictionary<TKey, TValue> ReadMap<TKey, TValue>(")
+    appendLine("            IntPtr handle, Func<IntPtr, TKey> readKey, Func<IntPtr, TValue> readValue) where TKey : notnull")
+    appendLine("        {")
+    appendLine("            try")
+    appendLine("            {")
+    appendLine("                int count = NugetMapNative.Count(handle);")
+    appendLine("                var result = new Dictionary<TKey, TValue>(count);")
+    appendLine("                for (int i = 0; i < count; i++)")
+    appendLine("                {")
+    appendLine("                    result[readKey(NugetMapNative.KeyAt(handle, i))] = readValue(NugetMapNative.ValueAt(handle, i));")
+    appendLine("                }")
+    appendLine("                return result;")
+    appendLine("            }")
+    appendLine("            finally { NugetMapNative.Dispose(handle); }")
     appendLine("        }")
     appendLine()
   }
@@ -433,11 +515,11 @@ internal fun StringBuilder.renderMarshalHelper(helper: CirMarshalHelper) {
 private fun StringBuilder.appendCollectionFactoryGuard(
   native: String,
   handle: String,
-  fill: String,
+  fill: List<String>,
 ) {
   appendLine("            try")
   appendLine("            {")
-  appendLine("                $fill")
+  fill.forEach { line -> appendLine("                $line") }
   appendLine("            }")
   appendLine("            catch")
   appendLine("            {")
@@ -445,6 +527,27 @@ private fun StringBuilder.appendCollectionFactoryGuard(
   appendLine("                throw;")
   appendLine("            }")
 }
+
+/**
+ * ADR-099: the per-element fill shared by CreateList and CreateSet. `Wrap` reports whether it
+ * minted the box; when it did, this loop disposes it the instant `Add` returns, because
+ * `nuget_list_add`/`nuget_set_add` store the *dereferenced object* into a container the outer
+ * StableRef already roots (verified by execution, ADR-099 spike 1). So at most one inner handle is
+ * ever alive, and it is inside a `finally`.
+ */
+private fun elementLoop(native: String, add: String): List<String> = listOf(
+  "foreach (T value in values)",
+  "{",
+  "    IntPtr element = IntPtr.Zero;",
+  "    bool owned = false;",
+  "    try",
+  "    {",
+  "        element = Wrap(value, out owned);",
+  "        $native.$add;",
+  "    }",
+  "    finally { if (owned) $native.Dispose(element); }",
+  "}",
+)
 
 internal fun StringBuilder.renderListHelper(helper: CirListHelper) {
   appendLine("    internal static class NugetListNative")

@@ -226,7 +226,7 @@ class Tier1EnumCollectionComponentTest {
 
         fun logSpans(spans: List<Short>): Int = spans.size
 
-        fun logNested(rows: List<List<String>>): Int = rows.size
+        fun logNested(rows: List<List<String>?>): Int = rows.size
       }
       """.trimIndent(),
     )

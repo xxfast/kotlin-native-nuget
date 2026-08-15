@@ -597,10 +597,12 @@ materializes for a `val` also materializes for a `var`. The setter is narrower: 
 every component, the element for `List`/`Set`, the key **and** value for `Map`, satisfies the same
 `isWrappableComponent()` predicate the `Map`/`Set` **parameter** side above already uses
 (`String`, `Int`, `Long`, `Float`, `Double`, `Boolean`, `Byte`/`UByte`/`Short`/`UShort`/`UInt`/`ULong`,
-`Char`, an object handle, or a bare enum via its `int` ordinal, see
-[Enum collection components](enums.md#as-a-collection-component)), applied to `List` too. When a
-component fails that check (today, only a nested collection), the property still generates, get-only,
-with a `SKIPPED_UNSUPPORTED_INPUT` diagnostic naming it.
+`Char`, an object handle, a bare enum via its `int` ordinal (see
+[Enum collection components](enums.md#as-a-collection-component)), or a component that is itself a
+`List`/`Map`/`Set` (see [Nested collection components](#nested-collection-components) below)),
+applied to `List` too. When a component fails that check (today, a **nullable** nested collection,
+or an interface), the property still generates, get-only, with a `SKIPPED_UNSUPPORTED_INPUT`
+diagnostic naming it.
 
 From `test-library/.../clinic/ChartSample.kt`:
 
@@ -633,6 +635,14 @@ class Chart(val patientName: String) {
   /** The Kotlin-side observation for [moods]'s setter. */
   fun moodsSummary(): String = moods.joinToString(",")
 
+  /** Eligible as of [ADR-099](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/099-nested-collection-components.md):
+   *  a component that is itself a collection no longer makes a collection property setter
+   *  ineligible either, the same widening the `Map`/`Set`/`List` **parameter** side above gets. */
+  var grid: List<List<String>> = emptyList()
+
+  /** The Kotlin-side observation for [grid]'s setter. */
+  fun gridSummary(): String = grid.joinToString(";") { it.joinToString(",") }
+
   /** Eligible as of [ADR-083](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/083-nullable-collection-components.md):
    *  the *element* is nullable (`String?`, not `String`), and a null component now rides the null
    *  pointer in its own slot. */
@@ -644,7 +654,9 @@ Generated C#, from `Interop.cs`. `Tags` shows an eligible setter (built via the 
 `NugetMarshal.CreateList` a `List` **parameter** uses); `Notes` shows the nullable-reference variant,
 `value != null ? CreateList(value) : IntPtr.Zero`; `Moods` shows the enum-component projection, the
 same `Select(x => (int)x)` write and `(Mood)FromHandle<int>(...)` read a `Map`/`Set`/`List`
-**parameter** or **return** use:
+**parameter** or **return** use; `Grid` shows the nested-component setter, built via the same
+recursive `CreateList(rows.Select(x => CreateList(x)))` a `List<List<T>>` **parameter** uses, and read
+via `NugetMarshal.ReadList<string>`:
 
 ```C#
 public IReadOnlyList<string> Tags
@@ -723,6 +735,41 @@ public IReadOnlyList<global::TestLibrary.Clinic.Mood> Moods
     }
     }
 }
+
+public IReadOnlyList<IReadOnlyList<string>> Grid
+{
+    get
+    {            IntPtr nativeResult = Native_Get_grid(_handle, out IntPtr error);
+    if (error != IntPtr.Zero)
+    {
+        throw NugetErrorNative.BuildException(error);
+    }
+    int count = NugetListNative.Count(nativeResult);
+    var result = new List<IReadOnlyList<string>>(count);
+    for (int i = 0; i < count; i++)
+    {
+        result.Add(NugetMarshal.ReadList<string>(NugetListNative.Get(nativeResult, i), static h1 => NugetMarshal.FromHandle<string>(h1)).AsReadOnly());
+    }
+    NugetListNative.Dispose(nativeResult);
+    return result.AsReadOnly();
+    }
+    set
+    {            IntPtr valueHandle = IntPtr.Zero;
+    try
+    {
+        valueHandle = NugetMarshal.CreateList(global::System.Linq.Enumerable.Select(value, x => NugetMarshal.CreateList(x)));
+        Native_Set_grid(_handle, valueHandle, out IntPtr error);
+        if (error != IntPtr.Zero)
+        {
+            throw NugetErrorNative.BuildException(error);
+        }
+    }
+    finally
+    {
+        if (valueHandle != IntPtr.Zero) { NugetListNative.Dispose(valueHandle); }
+    }
+    }
+}
 ```
 
 From `IntegrationTests/CollectionPropertyIndependenceTests.cs`:
@@ -759,6 +806,23 @@ public void Chart_Moods_EnumElement_RoundTripsThroughItsSetter()
 
     Assert.Equal("ANXIOUS,CALM", chart.MoodsSummary());
     Assert.Equal(new[] { Mood.Anxious, Mood.Calm }, chart.Moods);
+}
+
+[Fact]
+public void Chart_Grid_NestedCollectionElement_RoundTripsThroughItsSetter()
+{
+    using var chart = new Chart("Oreo");
+
+    chart.Grid = new[]
+    {
+        new[] { "top-cage", "window" },
+        new[] { "biscuit" },
+    };
+
+    Assert.Equal("top-cage,window;biscuit", chart.GridSummary());
+    Assert.Equal(2, chart.Grid.Count);
+    Assert.Equal(new[] { "top-cage", "window" }, chart.Grid[0]);
+    Assert.Equal(new[] { "biscuit" }, chart.Grid[1]);
 }
 ```
 
@@ -799,24 +863,27 @@ public static void SetSymptomTags(this ChartId receiver, IReadOnlyList<string> v
 ```
 
 An ineligible setter emits a warning naming the property and the offending component, and states
-that the C# property stays read-only rather than that the property was dropped. A nested collection
-is the one component kind still excluded after the narrow-primitive and `Char` widening
+that the C# property stays read-only rather than that the property was dropped. A **nullable**
+nested collection is the one component kind still excluded after the narrow-primitive, `Char` and
+nested-collection widening
 ([ADR-097](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/097-enum-collection-components.md)
-moved this mechanism's fixture off `List<Mood>`, and
+moved this mechanism's fixture off `List<Mood>`,
 [ADR-098](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/098-narrow-primitive-and-char-collection-components.md)
-off `List<Char>`; both are eligible now):
+off `List<Char>`, and
+[ADR-099](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/099-nested-collection-components.md)
+off a plain, non-nullable nested collection; all three are eligible now):
 
 ```kotlin
-// nuget-processor Tier1 fixture, not test-library: a nested collection has no per-element wire at
-// all, so the getter still binds but the setter must be absent.
+// nuget-processor Tier1 fixture, not test-library: a nullable nested collection has no per-element
+// write projection with a null arm, so the getter still binds but the setter must be absent.
 class Box {
-  var moods: List<List<String>> = emptyList()
+  var moods: List<List<String>?> = emptyList()
 }
 ```
 
 ```
 [nuget:SKIPPED_UNSUPPORTED_INPUT] Skipping Box.moods: its setter is not generated because the
-    element type List<String> cannot be written into a Kotlin collection. the C# property Moods is
+    element type Collection? cannot be written into a Kotlin collection. the C# property Moods is
     read-only
 ```
 
@@ -1032,13 +1099,194 @@ component kinds through the same `isWrappableComponent()` predicate; see
     <a href="primitives-and-strings.md#char">Primitives and strings: Char</a>.</p>
 </note>
 
+## Nested collection components
+
+A `List`/`Map`/`Set` component that is itself a `List`/`Map`/`Set` now binds, at input positions,
+constructor parameters, collection property setters, method returns and property getters, at
+arbitrary depth and every outer/inner kind combination
+([ADR-099](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/099-nested-collection-components.md)).
+The inner collection crosses as **its own native handle**, in the same pointer-shaped component slot
+every other component already uses: no new native export, no ABI change. The write side recurses
+through the same `CreateList`/`CreateSet`/`CreateMap` a top-level collection uses; the read side
+recurses through three new `finally`-guarded helpers, `NugetMarshal.ReadList`/`ReadSet`/`ReadMap`.
+
+Before this, a nested *input* was a clean named `SKIPPED_UNSUPPORTED_INPUT` skip. A nested *return*
+was worse: it bound and compiled, then threw `NotSupportedException` out of `FromHandle<T>` at the
+first element read, the same shipped bind-then-throw shape a bare enum collection component had
+before [ADR-097](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/097-enum-collection-components.md),
+one position over.
+
+From `test-library/.../clinic/NestedCollectionsSample.kt`:
+
+```kotlin
+class WardBoard {
+  fun logGrid(rows: List<List<String>>): String = rows.joinToString(";") { it.joinToString(",") }
+
+  fun grid(): List<List<String>> = listOf(listOf("oreo", "mylo"), listOf("biscuit"))
+
+  fun chartRuns(runs: Map<String, List<Mood>>): String =
+    runs.entries.sortedBy { it.key }.joinToString(";") { (name, moods) ->
+      "$name=${moods.joinToString(",")}"
+    }
+}
+```
+
+### Generated C# {id="nested-component-generated-c"}
+
+From `Interop.cs`. `LogGrid` is the write side, recursive `CreateList` over `CreateList`; `Grid` is
+the read side, and the cell that closes the shipped bind-then-throw landmine; `ChartRuns` shows an
+outer `Map` whose key needs no conversion sitting beside a nested value whose leaf does (an
+[ADR-097](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/097-enum-collection-components.md)
+enum, `(int)x1`):
+
+```C#
+public string LogGrid(IReadOnlyList<IReadOnlyList<string>> rows)
+{
+    IntPtr rowsHandle = IntPtr.Zero;
+    try
+    {
+        rowsHandle = NugetMarshal.CreateList(global::System.Linq.Enumerable.Select(rows, x => NugetMarshal.CreateList(x)));
+        IntPtr nativeResult = Native_LogGrid(_handle, rowsHandle, out IntPtr error);
+        if (error != IntPtr.Zero)
+        {
+            throw NugetErrorNative.BuildException(error);
+        }
+        return Marshal.PtrToStringUTF8(nativeResult)!;
+    }
+    finally
+    {
+        if (rowsHandle != IntPtr.Zero) { NugetListNative.Dispose(rowsHandle); }
+    }
+}
+
+public IReadOnlyList<IReadOnlyList<string>> Grid()
+{
+    IntPtr listHandle = Native_Grid(_handle, out IntPtr error);
+    if (error != IntPtr.Zero)
+    {
+        throw NugetErrorNative.BuildException(error);
+    }
+    int count = NugetListNative.Count(listHandle);
+    var result = new List<IReadOnlyList<string>>(count);
+    for (int i = 0; i < count; i++)
+    {
+        result.Add(NugetMarshal.ReadList<string>(NugetListNative.Get(listHandle, i), static h1 => NugetMarshal.FromHandle<string>(h1)).AsReadOnly());
+    }
+    NugetListNative.Dispose(listHandle);
+    return result.AsReadOnly();
+}
+
+public string ChartRuns(IReadOnlyDictionary<string, IReadOnlyList<global::TestLibrary.Clinic.Mood>> runs)
+{
+    IntPtr runsHandle = IntPtr.Zero;
+    try
+    {
+        runsHandle = NugetMarshal.CreateMap(global::System.Linq.Enumerable.Select(runs, x => new KeyValuePair<string, IntPtr>(x.Key, NugetMarshal.CreateList(global::System.Linq.Enumerable.Select(x.Value, x1 => (int)x1)))));
+        IntPtr nativeResult = Native_ChartRuns(_handle, runsHandle, out IntPtr error);
+        if (error != IntPtr.Zero)
+        {
+            throw NugetErrorNative.BuildException(error);
+        }
+        return Marshal.PtrToStringUTF8(nativeResult)!;
+    }
+    finally
+    {
+        if (runsHandle != IntPtr.Zero) { NugetMapNative.Dispose(runsHandle); }
+    }
+}
+```
+
+`WardBoard` also has an outer `Set` over an inner `List` (`tallyGroups`, cross-kind emission of
+`NugetSetNative` and `NugetListNative` together), a depth-3 `List<List<List<String>>>` (`logCages`),
+and a nullable *leaf* under nesting, `List<List<String?>>` (`trailGrid`), which rides the existing
+nullable-component null pointer one level down; see
+[Nullable collection components](#nullable-collection-components) above.
+
+<note>
+    <p>Recursion answers an ownership question, not just a marshalling one. <code>Wrap&lt;T&gt;</code>
+    gained an <code>out bool owned</code> and an <code>IntPtr</code> identity branch: a nested
+    component's handle IS the box minted by the recursive call, so the outer factory owns and disposes
+    it after <code>Add</code>/<code>Put</code>, one element at a time. This closes the pre-existing
+    element-box leak on <code>List</code>/<code>Map</code>/<code>Set</code> parameters for every
+    component kind, not only nested ones.</p>
+</note>
+
+```C#
+internal static IntPtr Wrap<T>(T value, out bool owned)
+{
+    owned = false;
+    if (value == null) return IntPtr.Zero;
+    var type = Nullable.GetUnderlyingType(typeof(T)) ?? typeof(T);
+    owned = true;
+    if (type == typeof(IntPtr)) return (IntPtr)(object)value!;
+    if (type == typeof(string)) return nuget_wrap_string((string)(object)value!);
+    // ... the primitive/char branches, unchanged ...
+    owned = false;
+    if (value is INugetHandle wrapper) return wrapper.Handle;
+    throw new NotSupportedException($"Cannot pass {typeof(T).Name} to a Kotlin collection");
+}
+```
+
+### Using it from C# {id="nested-component-using-it-from-c"}
+
+From `IntegrationTests/NestedComponentCollectionTests.cs`. The first test is the shipped landmine,
+closed:
+
+```C#
+[Fact]
+public void WardBoard_Grid_NestedListReturn_MaterializesEveryRow()
+{
+    using var board = new WardBoard();
+
+    IReadOnlyList<IReadOnlyList<string>> grid = board.Grid();
+
+    Assert.Equal(2, grid.Count);
+    Assert.Equal(new[] { "oreo", "mylo" }, grid[0]);
+    Assert.Equal(new[] { "biscuit" }, grid[1]);
+}
+
+[Fact]
+public void WardBoard_LogGrid_NestedListParameter_RoundTripsEveryRow()
+{
+    using var board = new WardBoard();
+
+    string logged = board.LogGrid(new[]
+    {
+        new[] { "oreo", "mylo" },
+        new[] { "biscuit" },
+    });
+
+    Assert.Equal("oreo,mylo;biscuit", logged);
+}
+```
+
+<warning>
+    <p>A nullable nested collection, <code>List&lt;List&lt;String&gt;?&gt;</code>, is deliberately
+    still skipped. <code>isWrappableComponent()</code>'s <code>Nullable</code> branch delegates to its
+    inner type, so the instant <code>Collection</code> became wrappable this shape would have been
+    admitted automatically, binding with a write projection that has no null arm, the same trap
+    <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/097-enum-collection-components.md">ADR-097</a>
+    hit with <code>List&lt;Mood?&gt;</code>. ADR-099 adds an explicit guard instead. A nullable
+    <b>leaf</b> under nesting, <code>List&lt;List&lt;String?&gt;&gt;</code>, is not affected and binds
+    normally.</p>
+</warning>
+
+```C#
+[Fact]
+public void WardBoard_LogSparse_NullableNestedCollectionParameter_IsNotGenerated()
+{
+    Assert.Null(typeof(WardBoard).GetMethod("LogSparse"));
+    Assert.NotNull(typeof(WardBoard).GetMethod("LogGrid"));
+}
+```
+
 ## Limitations
 
 - `Sequence<T>` is not bridgeable. `Cat.unsupported: Sequence<String>` in the sample library is deliberately left out of the generated `Interop.cs` (no eager-copy story for a lazy sequence).
-- Only a strict subset of key/value/element types binds at a `Map`/`Set`/`List` parameter position: `String`, `Int`, `Long`, `Float`, `Double`, `Boolean`, the six narrow primitives (`Byte`/`UByte`/`Short`/`UShort`/`UInt`/`ULong`) and `Char` (see [Primitives and strings](primitives-and-strings.md#char), [ADR-098](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/098-narrow-primitive-and-char-collection-components.md)), object handles (a class instance, extracted via the internal `INugetHandle` interface every handle-carrying wrapper implements, see [ADR-094](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/094-reflection-free-generic-dispatch.md)), a bare enum via its `int` ordinal (see [Enums](enums.md#as-a-collection-component), [ADR-097](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/097-enum-collection-components.md)), and a value class over any of the first four underlyings, including an enum-underlying value class via its own `int` ordinal (see [Value classes](value-classes.md#as-a-collection-component), [ADR-081](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/081-value-class-collection-components.md)). A `Nullable` spelling of any of those (`Map<String, Int?>`, `Set<String?>`, `List<ChartId?>`, `List<Mood?>`, `List<Short?>`) binds too: a null element, set member, or map value rides a null pointer in the component slot on both the write and read side, no has-value pair needed (see [ADR-083](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/083-nullable-collection-components.md)). Anything else, a nested collection (`Set<List<String>>`) or an interface, is skipped with `SKIPPED_UNSUPPORTED_INPUT` rather than crashing or binding incorrectly. A nullable map **key** (`Map<String?, Int>`) is still a named skip at the parameter position: a C# `Dictionary` can't hold a null key. `List`/`MutableList` parameters now use the same `isWrappableComponent()` gate `Map`/`Set` parameters do, narrowed from a wider gate that used to let the excluded shapes above bind and then throw or crash `packNuget`, per [ADR-097](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/097-enum-collection-components.md) and [ADR-098](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/098-narrow-primitive-and-char-collection-components.md). No shape that **worked** before that narrowing is gone; see [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md) for the remaining nested-collection gap.
+- Only a strict subset of key/value/element types binds at a `Map`/`Set`/`List` parameter position: `String`, `Int`, `Long`, `Float`, `Double`, `Boolean`, the six narrow primitives (`Byte`/`UByte`/`Short`/`UShort`/`UInt`/`ULong`) and `Char` (see [Primitives and strings](primitives-and-strings.md#char), [ADR-098](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/098-narrow-primitive-and-char-collection-components.md)), object handles (a class instance, extracted via the internal `INugetHandle` interface every handle-carrying wrapper implements, see [ADR-094](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/094-reflection-free-generic-dispatch.md)), a bare enum via its `int` ordinal (see [Enums](enums.md#as-a-collection-component), [ADR-097](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/097-enum-collection-components.md)), a value class over any of the first four underlyings, including an enum-underlying value class via its own `int` ordinal (see [Value classes](value-classes.md#as-a-collection-component), [ADR-081](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/081-value-class-collection-components.md)), and a `List`/`Map`/`Set` itself, nested, at arbitrary depth (see [Nested collection components](#nested-collection-components) above, [ADR-099](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/099-nested-collection-components.md)). A `Nullable` spelling of any of those (`Map<String, Int?>`, `Set<String?>`, `List<ChartId?>`, `List<Mood?>`, `List<Short?>`, `List<List<String?>>`) binds too: a null element, set member, or map value rides a null pointer in the component slot on both the write and read side, no has-value pair needed (see [ADR-083](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/083-nullable-collection-components.md)). A **nullable nested collection** (`List<List<String>?>`) and an interface component are the two shapes still skipped with `SKIPPED_UNSUPPORTED_INPUT` rather than crashing or binding incorrectly. A nullable map **key** (`Map<String?, Int>`) is still a named skip at the parameter position: a C# `Dictionary` can't hold a null key. `List`/`MutableList` parameters now use the same `isWrappableComponent()` gate `Map`/`Set` parameters do, narrowed from a wider gate that used to let the excluded shapes above bind and then throw or crash `packNuget`, per [ADR-097](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/097-enum-collection-components.md) and [ADR-098](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/098-narrow-primitive-and-char-collection-components.md). No shape that **worked** before that narrowing is gone.
 - `MutableMap`/`MutableSet` parameters do not write back, matching `MutableList`. Contents are copied into Kotlin; changes Kotlin makes are not reflected back in the collection you passed.
-- A collection property **setter** uses the same wrappable-component predicate as a `Map`/`Set`/`List` parameter above. A nested-collection element skips the setter with `SKIPPED_UNSUPPORTED_INPUT` and falls back to a get-only property; a value-class element (see [Value classes](value-classes.md#as-a-collection-component), [ADR-081](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/081-value-class-collection-components.md)), a bare enum element (see [Enums](enums.md#as-a-collection-component), [ADR-097](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/097-enum-collection-components.md)), a narrow-primitive or `Char` element ([ADR-098](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/098-narrow-primitive-and-char-collection-components.md)), and a nullable element ([ADR-083](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/083-nullable-collection-components.md)) all bind; the getter itself has no such restriction. See [ADR-075](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/075-collection-property-getter-setter-independence.md) and [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md) for the remaining write-side gaps.
-- A nested-collection component (`List<List<ChartId>>`) still has no representation on the write side; see [Value classes](value-classes.md#as-a-collection-component) and [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md).
+- A collection property **setter** uses the same wrappable-component predicate as a `Map`/`Set`/`List` parameter above. A **nullable** nested-collection element skips the setter with `SKIPPED_UNSUPPORTED_INPUT` and falls back to a get-only property; a value-class element (see [Value classes](value-classes.md#as-a-collection-component), [ADR-081](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/081-value-class-collection-components.md)), a bare enum element (see [Enums](enums.md#as-a-collection-component), [ADR-097](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/097-enum-collection-components.md)), a narrow-primitive or `Char` element ([ADR-098](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/098-narrow-primitive-and-char-collection-components.md)), a nested (non-nullable) collection element ([ADR-099](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/099-nested-collection-components.md)), and a nullable element ([ADR-083](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/083-nullable-collection-components.md)) all bind; the getter itself has no such restriction. See [ADR-075](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/075-collection-property-getter-setter-independence.md) for the mechanism.
+- A returned collection's result handle leaks if materialization throws mid-loop. This is no longer reproduced per nesting level, since every inner level now goes through a `finally`-guarded `ReadList`/`ReadSet`/`ReadMap` helper, but the **outer** level is unchanged and still leaks; see [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md).
 
 <seealso>
     <category ref="related">
@@ -1058,5 +1306,6 @@ component kinds through the same `isWrappableComponent()` predicate; see
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/083-nullable-collection-components.md">ADR-083: Nullable collection components</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/097-enum-collection-components.md">ADR-097: Enum collection components</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/098-narrow-primitive-and-char-collection-components.md">ADR-098: Narrow-primitive and Char collection components</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/099-nested-collection-components.md">ADR-099: Nested collection components</a>
     </category>
 </seealso>

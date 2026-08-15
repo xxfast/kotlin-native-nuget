@@ -162,6 +162,32 @@ public class CollectionPropertyIndependenceTests
         Assert.Equal(new[] { Mood.Anxious, Mood.Calm }, chart.Moods);
     }
 
+    // ADR-099 promotes this cell the same way: isSetterEligible() is the SAME
+    // isWrappableComponent() predicate the Map/Set/List callable inputs run, so admitting a nested
+    // Collection component flips Chart.Grid from get-only to a round trip in the same branch that
+    // admits WardBoard.LogGrid. Today the setter does not exist and the getter is the
+    // property-position spelling of the bind-then-throw landmine WardBoard.Grid() carries at the
+    // method-return position, so this cell observes both halves at once. GridSummary is Kotlin's own
+    // view, so the round trip is not proved by reading back through the same getter that wrote it.
+    [Fact]
+    public void Chart_Grid_NestedCollectionElement_RoundTripsThroughItsSetter()
+    {
+        using var chart = new Chart("Oreo");
+
+        // Ragged rows with different separators at the two levels: a flattened or transposed
+        // lowering produces a different summary string, it does not merely reorder.
+        chart.Grid = new[]
+        {
+            new[] { "top-cage", "window" },
+            new[] { "biscuit" },
+        };
+
+        Assert.Equal("top-cage,window;biscuit", chart.GridSummary());
+        Assert.Equal(2, chart.Grid.Count);
+        Assert.Equal(new[] { "top-cage", "window" }, chart.Grid[0]);
+        Assert.Equal(new[] { "biscuit" }, chart.Grid[1]);
+    }
+
     // ADR-083 promoted this cell: a nullable element is no longer what makes a collection property
     // setter ineligible, so this asserts the round trip instead of the shape.
     [Fact]

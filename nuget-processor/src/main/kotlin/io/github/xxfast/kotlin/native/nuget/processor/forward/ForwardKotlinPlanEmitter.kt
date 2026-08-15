@@ -513,7 +513,18 @@ private fun elementKotlinTypeName(type: BridgeType): String = when (type) {
  * for an enum underlying) and the value class is reconstructed here, per element, re-running its
  * own `init` exactly as ADR-077's ordinary-position lowering does.
  */
-internal fun componentLowering(name: String, type: BridgeType): String = when (type) {
+internal fun componentLowering(
+  name: String,
+  type: BridgeType,
+  depth: Int = 0,
+): String = when (type) {
+  // ADR-099: the component's box holds the *inner container* the C# side built, so the cast target
+  // is the wire container (`MutableList<*>`), not the declared Kotlin element type. The star
+  // projection is a checked cast with no UNCHECKED_CAST warning; the elements read back as `Any?`
+  // either way, and the conversion below is the same one the top level uses.
+  is BridgeType.Collection ->
+    "($name as ${type.wireContainerType(star = true)})${type.loweringSuffix(".", depth)}"
+
   // ADR-097: a bare enum arrived as its int ordinal, projected by the C# call site's
   // `Select(x => (int)x)`. Casting to the enum itself here would compile on both sides and
   // ClassCastException at the first call, so this arm and that projection change together.
@@ -532,16 +543,21 @@ internal fun componentLowering(name: String, type: BridgeType): String = when (t
   is BridgeType.Nullable -> when (val inner: BridgeType = type.type) {
     // ADR-097: `List<Mood?>` is admitted by isWrappableComponent's Nullable branch the moment a
     // bare Enum is wrappable, and its box holds a nullable int ordinal.
+    // ADR-099: the `let` parameter is named by depth, so a nested level cannot shadow the `v` of a
+    // Map destructuring one level out.
     is BridgeType.Enum ->
-      "($name as kotlin.Int?)?.let { v -> ${inner.qualifiedName}.entries[v] }"
+      "($name as kotlin.Int?)?.let { ${letParameter(depth)} -> " +
+          "${inner.qualifiedName}.entries[${letParameter(depth)}] }"
 
     is BridgeType.ValueClass -> when (val underlying: BridgeType = inner.underlying) {
       is BridgeType.Enum ->
-        "($name as kotlin.Int?)?.let { v -> " +
-            "${inner.qualifiedName}(${underlying.qualifiedName}.entries[v]) }"
+        "($name as kotlin.Int?)?.let { ${letParameter(depth)} -> " +
+            "${inner.qualifiedName}(${underlying.qualifiedName}" +
+            ".entries[${letParameter(depth)}]) }"
 
       else ->
-        "($name as ${elementKotlinTypeName(underlying)}?)?.let { v -> ${inner.qualifiedName}(v) }"
+        "($name as ${elementKotlinTypeName(underlying)}?)?.let { ${letParameter(depth)} -> " +
+            "${inner.qualifiedName}(${letParameter(depth)}) }"
     }
 
     else -> "$name as ${elementKotlinTypeName(inner)}?"
@@ -563,15 +579,18 @@ internal fun collectionResultProjection(
   invocation: String,
   type: BridgeType.Collection,
   nullable: Boolean = false,
+  depth: Int = 0,
 ): String {
   val dot: String = if (nullable) "?." else "."
+  val inner: Int = depth + 1
   return when (type.kind) {
     CollectionKind.LIST, CollectionKind.MUTABLE_LIST -> {
       val element: BridgeType = requireNotNull(type.element) {
         "Forward Kotlin collection result has no element type"
       }
       if (!element.componentNeedsProjection()) invocation
-      else "$invocation${dot}map { ${componentRaising("it", element)} }"
+      else "$invocation${dot}map { ${lambdaHeader(inner)}" +
+          "${componentRaising(elementParameter(inner), element, inner)} }"
     }
 
     // mapTo(mutableSetOf()) rather than map: `nuget_set_count`/`nuget_set_element_at` cast the box
@@ -581,7 +600,8 @@ internal fun collectionResultProjection(
         "Forward Kotlin collection result has no element type"
       }
       if (!element.componentNeedsProjection()) invocation
-      else "$invocation${dot}mapTo(mutableSetOf()) { ${componentRaising("it", element)} }"
+      else "$invocation${dot}mapTo(mutableSetOf()) { ${lambdaHeader(inner)}" +
+          "${componentRaising(elementParameter(inner), element, inner)} }"
     }
 
     CollectionKind.MAP, CollectionKind.MUTABLE_MAP -> {
@@ -589,8 +609,10 @@ internal fun collectionResultProjection(
       val value: BridgeType =
         requireNotNull(type.value) { "Forward Kotlin Map result has no value type" }
       if (!key.componentNeedsProjection() && !value.componentNeedsProjection()) invocation
-      else "$invocation${dot}entries${dot}associate { (k, v) -> " +
-          "${componentRaising("k", key)} to ${componentRaising("v", value)} }"
+      else "$invocation${dot}entries${dot}associate { " +
+          "(${keyParameter(inner)}, ${valueParameter(inner)}) -> " +
+          "${componentRaising(keyParameter(inner), key, inner)} to " +
+          "${componentRaising(valueParameter(inner), value, inner)} }"
     }
   }
 }
@@ -599,8 +621,11 @@ internal fun collectionResultProjection(
  *  generic box can carry. Identity for everything but a value class (ADR-083: `?.`-lifted when the
  *  component is a nullable value class -- a plain nullable component stays identity, since the box
  *  already holds `Any?` and the nullable read exports carry the null through). */
-private fun componentRaising(name: String, type: BridgeType): String {
+private fun componentRaising(name: String, type: BridgeType, depth: Int = 0): String {
   val dot: String = if (type is BridgeType.Nullable) "?." else "."
+  // ADR-099: a nested collection is boxed as the container object itself, so the only thing to do
+  // is raise ITS components, one level down -- the same projection the top level runs.
+  if (type is BridgeType.Collection) return collectionResultProjection(name, type, depth = depth)
   // ADR-097: a bare enum leaves as its int ordinal, so the C# side reads `FromHandle<int>` and
   // casts back. Boxing the `Mood` itself is what bound-and-threw before this ADR.
   if (type.componentEnum() != null) return "$name${dot}ordinal"
@@ -1094,36 +1119,75 @@ internal fun loweredCollectionExpression(
   nullable: Boolean = false,
 ): String {
   val dot: String = if (nullable) "?." else "."
-  return when (type.kind) {
+  // ADR-099: split into "dereference the handle" and "convert the container", because a nested
+  // component needs only the second half (its box already holds the container object).
+  return "$name${dot}asStableRef<${type.wireContainerType()}>()${dot}get()" +
+      type.loweringSuffix(dot, depth = 0)
+}
+
+/** ADR-099: the container type a collection's own handle dereferences to, and the cast target a
+ *  nested component uses. [star] picks the star projection the component cast needs. */
+internal fun BridgeType.Collection.wireContainerType(star: Boolean = false): String = when (kind) {
+  CollectionKind.LIST, CollectionKind.MUTABLE_LIST ->
+    if (star) "MutableList<*>" else "MutableList<Any?>"
+
+  CollectionKind.MAP, CollectionKind.MUTABLE_MAP ->
+    if (star) "MutableMap<*, *>" else "MutableMap<Any?, Any?>"
+
+  CollectionKind.SET, CollectionKind.MUTABLE_SET ->
+    if (star) "MutableSet<*>" else "MutableSet<Any?>"
+}
+
+/**
+ * The conversion half of [loweredCollectionExpression]: the container's elements cast (and, when a
+ * component projects, re-wrapped) into the declared Kotlin type. Shared by the top level and by
+ * [componentLowering]'s nested arm, so every depth converts identically. Lambda parameters are
+ * named by [depth] because a nested implicit `it` shadows the enclosing lambda's.
+ */
+private fun BridgeType.Collection.loweringSuffix(dot: String, depth: Int): String {
+  val inner: Int = depth + 1
+  val element: String = elementParameter(inner)
+  return when (kind) {
     CollectionKind.LIST ->
-      "$name${dot}asStableRef<MutableList<Any?>>()${dot}get()" +
-          "${dot}map { ${componentLowering("it", requireNotNull(type.element))} }"
+      "${dot}map { ${lambdaHeader(inner)}" +
+          "${componentLowering(element, requireNotNull(this.element), inner)} }"
 
     CollectionKind.MUTABLE_LIST ->
-      "$name${dot}asStableRef<MutableList<Any?>>()${dot}get()" +
-          "${dot}mapTo(mutableListOf()) { " +
-          "${componentLowering("it", requireNotNull(type.element))} }"
+      "${dot}mapTo(mutableListOf()) { ${lambdaHeader(inner)}" +
+          "${componentLowering(element, requireNotNull(this.element), inner)} }"
 
     // ADR-073: copy-in, mirroring the List/MutableList pair above. Neither map kind writes
     // back -- see the ADR's "no write-back" decision.
     CollectionKind.MAP ->
-      "$name${dot}asStableRef<MutableMap<Any?, Any?>>()${dot}get()" +
-          "${dot}entries${dot}associate { (k, v) -> " +
-          "(${componentLowering("k", requireNotNull(type.key))}) " +
-          "to (${componentLowering("v", requireNotNull(type.value))}) }"
+      "${dot}entries${dot}associate { (${keyParameter(inner)}, ${valueParameter(inner)}) -> " +
+          "(${componentLowering(keyParameter(inner), requireNotNull(key), inner)}) " +
+          "to (${componentLowering(valueParameter(inner), requireNotNull(value), inner)}) }"
 
     CollectionKind.MUTABLE_MAP ->
-      "$name${dot}asStableRef<MutableMap<Any?, Any?>>()${dot}get()" +
-          "${dot}entries${dot}associateTo(mutableMapOf()) { (k, v) -> " +
-          "(${componentLowering("k", requireNotNull(type.key))}) " +
-          "to (${componentLowering("v", requireNotNull(type.value))}) }"
+      "${dot}entries${dot}associateTo(mutableMapOf()) { " +
+          "(${keyParameter(inner)}, ${valueParameter(inner)}) -> " +
+          "(${componentLowering(keyParameter(inner), requireNotNull(key), inner)}) " +
+          "to (${componentLowering(valueParameter(inner), requireNotNull(value), inner)}) }"
 
     // ADR-073: SET and MUTABLE_SET deliberately share one lowering -- mapTo(mutableSetOf())
     // yields a MutableSet<T>, which satisfies a Set<T> parameter too, so there is no reason to
     // split them the way the list pair is split.
     CollectionKind.SET, CollectionKind.MUTABLE_SET ->
-      "$name${dot}asStableRef<MutableSet<Any?>>()${dot}get()" +
-          "${dot}mapTo(mutableSetOf()) { " +
-          "${componentLowering("it", requireNotNull(type.element))} }"
+      "${dot}mapTo(mutableSetOf()) { ${lambdaHeader(inner)}" +
+          "${componentLowering(element, requireNotNull(this.element), inner)} }"
   }
 }
+
+/** The element lambda's parameter at nesting level [depth]: the shipped implicit `it` at level 1,
+ *  an explicit `e2`/`e3` deeper, where an implicit `it` would shadow the enclosing lambda's. */
+private fun elementParameter(depth: Int): String = if (depth <= 1) "it" else "e$depth"
+
+/** The `e2 ->` header a nested element lambda needs; empty at level 1, which keeps `it`. */
+private fun lambdaHeader(depth: Int): String =
+  if (depth <= 1) "" else "${elementParameter(depth)} -> "
+
+private fun keyParameter(depth: Int): String = if (depth <= 1) "k" else "k$depth"
+
+private fun valueParameter(depth: Int): String = if (depth <= 1) "v" else "v$depth"
+
+private fun letParameter(depth: Int): String = if (depth <= 1) "v" else "v$depth"

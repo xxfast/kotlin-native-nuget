@@ -47,6 +47,22 @@ class Chart(val patientName: String) {
   /** The Kotlin-side observation for [moods]'s setter (ADR-097). */
   fun moodsSummary(): String = moods.joinToString(",")
 
+  /** ADR-099 · the collection property whose setter becomes eligible for free.
+   *  `isSetterEligible()` is the *same* `isWrappableComponent()` predicate the `Map`/`Set`/`List`
+   *  callable inputs run (`ForwardPropertyPlanner.kt`), so admitting a nested `Collection`
+   *  component flips this property from get-only to a round trip in the same branch that admits
+   *  `WardBoard.logGrid` -- exactly the way [moods] flipped under ADR-097. Today it is planned
+   *  get-only, and its *getter* is the property-position spelling of the same bind-then-throw
+   *  landmine `WardBoard.grid` carries at the method-return position. [gridSummary] observes it
+   *  Kotlin-side, so a C# write only reads back correctly if the inner handles arrived as
+   *  genuinely re-lowered Kotlin lists rather than being echoed by the same getter that wrote
+   *  them. */
+  var grid: List<List<String>> = emptyList()
+
+  /** The Kotlin-side observation for [grid]'s setter (ADR-099). Joins the inner rows with a
+   *  different separator than the outer, so a flattened or transposed lowering is visible. */
+  fun gridSummary(): String = grid.joinToString(";") { it.joinToString(",") }
+
   /** Eligible as of ADR-083, which was not the case when ADR-075 wrote this cell: the *element*
    *  is nullable (`String?`, not `String`), not the collection reference, and a null component now
    *  rides the null pointer in its own slot. Still sharp on purpose — the collection reference's

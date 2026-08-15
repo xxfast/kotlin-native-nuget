@@ -2435,11 +2435,32 @@ internal fun BridgeType.isWrappableComponent(): Boolean = when (this) {
   is BridgeType.ValueClass ->
     underlying is BridgeType.Enum || underlying.isWrappableComponent()
 
+  // ADR-099: a nested collection crosses as the inner collection's own native handle, built by the
+  // same CreateList/CreateSet/CreateMap the outer one uses and read back through the matching
+  // Read* helper. Recursive, so depth 3 is the same code as depth 1. The map-key rule mirrors the
+  // top-level one: a C# Dictionary cannot hold a null key.
+  is BridgeType.Collection -> {
+    val isMap: Boolean = kind == CollectionKind.MAP || kind == CollectionKind.MUTABLE_MAP
+    if (isMap) {
+      key?.let { it !is BridgeType.Nullable && it.isWrappableComponent() } == true &&
+          value?.isWrappableComponent() == true
+    } else {
+      element?.isWrappableComponent() == true
+    }
+  }
+
   // ADR-083: a component slot is already pointer-shaped (every element crosses as a boxed
   // StableRef handle), so the null pointer is an in-band null for every wrappable component kind
   // -- including Int?, which at an *ordinary* position needs the ADR-079 has-value pair. Nesting
   // is excluded, matching isBridgeableComponent's own no-nested-nullable rule.
-  is BridgeType.Nullable -> type !is BridgeType.Nullable && type.isWrappableComponent()
+  //
+  // ADR-099: the `Collection` exclusion is deliberate and load-bearing. This branch delegates to
+  // its inner type, so `List<List<String>?>` would be admitted *automatically* the instant a
+  // Collection became wrappable, and it would bind with a write projection that has no null arm --
+  // the exact trap ADR-097 hit with `List<Mood?>`. A nullable *leaf* under nesting
+  // (`List<List<String?>>`) is admitted and rides ADR-083's arms under the recursion.
+  is BridgeType.Nullable -> type !is BridgeType.Nullable && type !is BridgeType.Collection &&
+      type.isWrappableComponent()
 
   else -> false
 }

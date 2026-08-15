@@ -30,28 +30,46 @@ private const val SELECT: String = "global::System.Linq.Enumerable.Select"
 internal fun collectionCreateArgument(
   name: String,
   type: BridgeType.Collection,
+  depth: Int = 0,
   csharpType: (BridgeType) -> String,
 ): String = when (type.kind) {
   CollectionKind.MAP, CollectionKind.MUTABLE_MAP -> {
     val key: BridgeType = requireNotNull(type.key) { "Forward CIR Map input has no key type" }
     val value: BridgeType = requireNotNull(type.value) { "Forward CIR Map input has no value type" }
-    if (!key.componentNeedsProjection() && !value.componentNeedsProjection()) {
+    if (!key.componentNeedsWireProjection() && !value.componentNeedsWireProjection()) {
       name
     } else {
       // The key and value slots project independently: either side may need the projection.
       val keyType: String = componentWireCsharpType(key, csharpType)
       val valueType: String = componentWireCsharpType(value, csharpType)
-      "$SELECT($name, x => new KeyValuePair<$keyType, $valueType>(" +
-          "${componentWireExpression("x.Key", key)}, ${componentWireExpression("x.Value", value)}))"
+      val lambda: String = lambdaParameter(depth)
+      "$SELECT($name, $lambda => new KeyValuePair<$keyType, $valueType>(" +
+          "${componentWireExpression("$lambda.Key", key, csharpType, depth)}, " +
+          "${componentWireExpression("$lambda.Value", value, csharpType, depth)}))"
     }
   }
 
   else -> {
     val element: BridgeType =
       requireNotNull(type.element) { "Forward CIR collection input has no element type" }
-    if (!element.componentNeedsProjection()) name
-    else "$SELECT($name, x => ${componentWireExpression("x", element)})"
+    val lambda: String = lambdaParameter(depth)
+    if (!element.componentNeedsWireProjection()) name
+    else "$SELECT($name, $lambda => ${componentWireExpression(lambda, element, csharpType, depth)})"
   }
+}
+
+/**
+ * ADR-099: the `Select` lambda parameter for nesting level [depth]. Level 0 keeps the shipped `x`
+ * spelling; a nested level needs its own name because C# forbids a lambda parameter that shadows
+ * an enclosing one (CS0136).
+ */
+private fun lambdaParameter(depth: Int): String = if (depth == 0) "x" else "x$depth"
+
+/** ADR-099: the `NugetMarshal` factory that builds [kind]'s native handle. */
+private fun collectionFactory(kind: CollectionKind): String = when (kind) {
+  CollectionKind.LIST, CollectionKind.MUTABLE_LIST -> "CreateList"
+  CollectionKind.MAP, CollectionKind.MUTABLE_MAP -> "CreateMap"
+  CollectionKind.SET, CollectionKind.MUTABLE_SET -> "CreateSet"
 }
 
 /**
@@ -73,15 +91,16 @@ internal fun collectionComponentRead(
   local: String,
   handle: String,
   component: BridgeType,
+  depth: Int = 0,
   csharpType: (BridgeType) -> String,
 ): CirComponentRead {
   if (component !is BridgeType.Nullable) {
-    return CirComponentRead(null, componentReadExpression(handle, component, csharpType))
+    return CirComponentRead(null, componentReadExpression(handle, component, csharpType, depth))
   }
   // ADR-083: the null pointer *is* the null component. The cast on the null arm is what gives the
   // conditional a common type when the present arm is a value type (`int`, a record struct).
   val nullArm: String = "(${csharpType(component)})null"
-  val present: String = componentReadExpression(local, component.type, csharpType)
+  val present: String = componentReadExpression(local, component.type, csharpType, depth)
   return CirComponentRead(
     "IntPtr $local = $handle;",
     "$local == IntPtr.Zero ? $nullArm : $present",
@@ -94,7 +113,15 @@ private fun componentReadExpression(
   handle: String,
   component: BridgeType,
   csharpType: (BridgeType) -> String,
+  depth: Int = 0,
 ): String {
+  // ADR-099: a nested component's box IS the inner collection's own handle, so the read recurses
+  // through the `ReadList`/`ReadSet`/`ReadMap` helpers. They are helpers rather than inlined loops
+  // because the shipped read uses fixed local names (`listHandle`, `count`, `result`, `i`) that
+  // cannot nest, and because their `finally` makes every inner level leak-free by construction.
+  if (component is BridgeType.Collection) {
+    return componentCollectionRead(handle, component, csharpType, depth)
+  }
   val wireType: String = componentWireCsharpType(component, csharpType)
   val raw: String = "NugetMarshal.FromHandle<$wireType>($handle)"
   // ADR-097: a bare enum crossed as its int ordinal, so the cast back to the C# enum is the whole
@@ -119,6 +146,9 @@ private fun componentWireCsharpType(
   component: BridgeType,
   csharpType: (BridgeType) -> String,
 ): String {
+  // ADR-099: a nested collection crosses as its own native handle, in the same pointer-shaped slot
+  // every other component already uses.
+  if (component is BridgeType.Collection) return "IntPtr"
   val suffix: String = if (component is BridgeType.Nullable) "?" else ""
   if (component.componentEnum() != null) return "int$suffix"
   val valueClass: BridgeType.ValueClass =
@@ -130,7 +160,19 @@ private fun componentWireCsharpType(
 /** One outgoing component projected to its wire value: `x.Value`, `(int)x.Mood`, `x.Patient`,
  *  (ADR-097) `(int)x` for a bare enum, and (ADR-083) their `?.`-lifted forms when the component is
  *  nullable. */
-private fun componentWireExpression(access: String, component: BridgeType): String {
+private fun componentWireExpression(
+  access: String,
+  component: BridgeType,
+  csharpType: (BridgeType) -> String,
+  depth: Int = 0,
+): String {
+  // ADR-099: the inner collection is built by the *same* factory the outer one uses, one level
+  // down, and its handle is the component's wire value. Arbitrary depth is this one arm.
+  if (component is BridgeType.Collection) {
+    val factory: String = collectionFactory(component.kind)
+    val argument: String = collectionCreateArgument(access, component, depth + 1, csharpType)
+    return "NugetMarshal.$factory($argument)"
+  }
   if (component.componentEnum() != null) {
     return if (component is BridgeType.Nullable) {
       "$access == null ? (int?)null : (int)$access.Value"
@@ -168,6 +210,83 @@ internal fun BridgeType.componentEnum(): BridgeType.Enum? = when (this) {
 }
 
 /** ADR-081/097: whether a component crosses as something other than itself, and therefore needs a
- *  per-element projection on both sides of the seam. */
-internal fun BridgeType.componentNeedsProjection(): Boolean =
-  componentValueClass() != null || componentEnum() != null
+ *  per-element projection on both sides of the seam. ADR-099: a nested collection needs one only
+ *  when something *inside* it does: the Kotlin side boxes the inner container object as-is. */
+internal fun BridgeType.componentNeedsProjection(): Boolean = when {
+  componentValueClass() != null || componentEnum() != null -> true
+  this is BridgeType.Collection -> element?.componentNeedsProjection() == true ||
+      key?.componentNeedsProjection() == true || value?.componentNeedsProjection() == true
+
+  else -> false
+}
+
+/**
+ * ADR-099: the C# write side's stronger form of [componentNeedsProjection]. A nested collection
+ * always needs a `Select` at the call site, whatever its own components do, because the wire value
+ * is a handle this call site has to mint. The Kotlin raising side keeps the weaker predicate: it
+ * hands the inner container over untouched unless a leaf converts.
+ */
+private fun BridgeType.componentNeedsWireProjection(): Boolean =
+  this is BridgeType.Collection || componentNeedsProjection()
+
+/**
+ * ADR-099, read side: one nested component read back through the `ReadList`/`ReadSet`/`ReadMap`
+ * helper for its kind, with the inner component's own read as the per-element lambda.
+ * `.AsReadOnly()` is appended for the immutable `LIST` kind so an inner list matches the outer's
+ * shipped rendering.
+ */
+private fun componentCollectionRead(
+  handle: String,
+  component: BridgeType.Collection,
+  csharpType: (BridgeType) -> String,
+  depth: Int,
+): String {
+  val inner: Int = depth + 1
+  return when (component.kind) {
+    CollectionKind.LIST, CollectionKind.MUTABLE_LIST, CollectionKind.SET,
+    CollectionKind.MUTABLE_SET,
+      -> {
+      val element: BridgeType =
+        requireNotNull(component.element) { "Forward CIR nested collection has no element type" }
+      val helper: String =
+        if (component.kind == CollectionKind.SET || component.kind == CollectionKind.MUTABLE_SET) {
+          "ReadSet"
+        } else {
+          "ReadList"
+        }
+      val lambda: String =
+        componentReadLambda("h$inner", "elementHandle$inner", element, csharpType, inner)
+      val suffix: String = if (component.kind == CollectionKind.LIST) ".AsReadOnly()" else ""
+      "NugetMarshal.$helper<${csharpType(element)}>($handle, $lambda)$suffix"
+    }
+
+    CollectionKind.MAP, CollectionKind.MUTABLE_MAP -> {
+      val key: BridgeType =
+        requireNotNull(component.key) { "Forward CIR nested Map has no key type" }
+      val value: BridgeType =
+        requireNotNull(component.value) { "Forward CIR nested Map has no value type" }
+      val readKey: String =
+        componentReadLambda("k$inner", "keyHandle$inner", key, csharpType, inner)
+      val readValue: String =
+        componentReadLambda("v$inner", "valueHandle$inner", value, csharpType, inner)
+      val keyType: String = csharpType(key)
+      val valueType: String = csharpType(value)
+      "NugetMarshal.ReadMap<$keyType, $valueType>($handle, $readKey, $readValue)"
+    }
+  }
+}
+
+/** One `Func<IntPtr, T>` handed to a `Read*` helper. Block-bodied when the component carries a
+ *  declaration (ADR-083's nullable read), expression-bodied otherwise. */
+private fun componentReadLambda(
+  parameter: String,
+  local: String,
+  component: BridgeType,
+  csharpType: (BridgeType) -> String,
+  depth: Int,
+): String {
+  val read: CirComponentRead =
+    collectionComponentRead(local, parameter, component, depth, csharpType)
+  if (read.declaration == null) return "static $parameter => ${read.expression}"
+  return "static $parameter => { ${read.declaration} return ${read.expression}; }"
+}

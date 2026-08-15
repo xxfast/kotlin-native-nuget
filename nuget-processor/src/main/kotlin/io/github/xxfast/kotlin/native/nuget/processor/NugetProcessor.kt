@@ -943,22 +943,30 @@ class NugetProcessor(
         callableCatalog.planFor(symbol) == null && func.returnType?.resolve()?.isListType() == true
       }
 
-    fun BridgeType.collectionKindOrNull(): CollectionKind? {
-      val unwrapped: BridgeType = if (this is BridgeType.Nullable) type else this
-      return (unwrapped as? BridgeType.Collection)?.kind
+    // ADR-099: recursive, because a nested component needs its own kind's Kotlin exports. A
+    // `Set<List<String>>` parameter calls `nuget_list_create`/`nuget_list_add` one level down, and
+    // reading only the outer kind would leave those exports unemitted.
+    fun BridgeType.componentCollectionKinds(): Sequence<CollectionKind> = sequence {
+      val unwrapped: BridgeType = if (this@componentCollectionKinds is BridgeType.Nullable) type
+      else this@componentCollectionKinds
+      val collection: BridgeType.Collection = unwrapped as? BridgeType.Collection ?: return@sequence
+      yield(collection.kind)
+      collection.element?.let { yieldAll(it.componentCollectionKinds()) }
+      collection.key?.let { yieldAll(it.componentCollectionKinds()) }
+      collection.value?.let { yieldAll(it.componentCollectionKinds()) }
     }
 
     fun ForwardCallablePlan.collectionKinds(): Sequence<CollectionKind> = sequence {
-      publicSignature.result.collectionKindOrNull()?.let { yield(it) }
+      yieldAll(publicSignature.result.componentCollectionKinds())
       publicSignature.parameters.forEach { parameter ->
-        parameter.type.collectionKindOrNull()?.let { yield(it) }
+        yieldAll(parameter.type.componentCollectionKinds())
       }
     }
 
     fun plannedCollectionKinds(): Sequence<CollectionKind> = sequence {
       callableCatalog.plans.forEach { plan -> yieldAll(plan.collectionKinds()) }
       callableCatalog.propertyPlans.forEach { plan ->
-        plan.type.collectionKindOrNull()?.let { yield(it) }
+        yieldAll(plan.type.componentCollectionKinds())
       }
     }
 

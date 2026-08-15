@@ -106,6 +106,11 @@ internal class CollectionHelperTracker {
       CollectionKind.MAP, CollectionKind.MUTABLE_MAP -> needsMap = true
       CollectionKind.SET, CollectionKind.MUTABLE_SET -> needsSet = true
     }
+    // ADR-099: a nested component needs ITS kind's native class too -- `Set<List<String>>` is the
+    // first declaration to need NugetSetNative and NugetListNative in the same file.
+    collection.element?.let { trackCollection(it) }
+    collection.key?.let { trackCollection(it) }
+    collection.value?.let { trackCollection(it) }
   }
 
   fun trackPlan(plan: ForwardCallablePlan) {
