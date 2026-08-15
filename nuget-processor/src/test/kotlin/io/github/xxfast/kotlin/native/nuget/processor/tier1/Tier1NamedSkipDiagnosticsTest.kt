@@ -60,6 +60,13 @@ class Tier1NamedSkipDiagnosticsTest {
       "expected a SKIPPED_UNSUPPORTED_INPUT diagnostic naming Patient.setMoods's Map parameter; " +
           "kspWarnings=${result.kspWarnings}",
     )
+    // The value slot is the one that failed here (`String` keys box fine), so the hint names it
+    // rather than the map, and never the other slot.
+    assertTrue(
+      result.kspWarnings.any { it.contains("the value type Collection? cannot be written") },
+      "expected the hint to name the offending map value component; " +
+          "kspWarnings=${result.kspWarnings}",
+    )
   }
 
   /**
@@ -94,6 +101,11 @@ class Tier1NamedSkipDiagnosticsTest {
       result.kspWarnings.any { it.contains(ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_INPUT.name) },
       "expected a SKIPPED_UNSUPPORTED_INPUT diagnostic naming Patient.setInitials's Set " +
           "parameter; kspWarnings=${result.kspWarnings}",
+    )
+    assertTrue(
+      result.kspWarnings.any { it.contains("the element type Collection? cannot be written") },
+      "expected the hint to name the offending Set element component; " +
+          "kspWarnings=${result.kspWarnings}",
     )
   }
 
@@ -156,6 +168,92 @@ class Tier1NamedSkipDiagnosticsTest {
       "expected a SKIPPED_UNSUPPORTED_INPUT diagnostic naming Patient.setKeyedScores's Map " +
           "parameter; kspWarnings=${result.kspWarnings}",
     )
+    // The mirror image of the nested-value cell above: here the `Int` value is fine and the key is
+    // not, so the hint has to name the key. Naming whichever slot is checked last would be exactly
+    // the class of wrong-component message this wording replaced.
+    assertTrue(
+      result.kspWarnings.any { it.contains("the key type String? cannot be written") },
+      "expected the hint to name the offending map key component; " +
+          "kspWarnings=${result.kspWarnings}",
+    )
+  }
+
+  /**
+   * The third arm of the map wording: when neither slot is admitted, the hint names both rather
+   * than picking one. `String?` fails ADR-083's non-null key rule, and a nullable nested collection
+   * fails ADR-099's no-null-arm write projection.
+   */
+  @Test
+  fun `class method with Map unwrappable key and value names both components`() {
+    val result = Tier1Harness.run(
+      """
+      package tier1.skipmapbothinput
+
+      class Patient(val name: String) {
+        fun setKeyedMoods(moods: Map<String?, List<String>?>): Int = moods.size
+      }
+      """.trimIndent()
+    )
+
+    assertTrue(
+      result.compiledClean,
+      "expected no broken source for setKeyedMoods; got: ${result.compileErrors}",
+    )
+    assertTrue(
+      "export_patient_setKeyedMoods" !in result.generated,
+      "expected setKeyedMoods to be entirely absent from the generated CNameExports.kt; " +
+          "generated=${result.generated}",
+    )
+    assertTrue(
+      result.kspWarnings.any {
+        it.contains("the key type String? and value type Collection? cannot be written")
+      },
+      "expected the hint to name both offending map components; " +
+          "kspWarnings=${result.kspWarnings}",
+    )
+  }
+
+  /**
+   * The regression this wording exists for. ADR-073 wrote the hint for `Map`/`Set` ("expose a
+   * wrapper taking a List/MutableList ... instead of a Map/Set at this position"); ADR-097
+   * collapsed `List` into the same `COLLECTION` skip rule and the text came along, so a skipped
+   * `List` parameter was told to use a `List` instead of a `Map`/`Set` it never had. Nothing
+   * caught it for two ADRs, so the message is pinned here: it names the offending *component*,
+   * and mentions neither `Map` nor `Set`.
+   */
+  @Test
+  fun `class method with unwrappable List element names the component, not Map or Set`() {
+    val result = Tier1Harness.run(
+      """
+      package tier1.skiplistinput
+
+      class WardBoard {
+        fun logGrid(rows: List<List<String>?>): Int = rows.size
+      }
+      """.trimIndent()
+    )
+
+    assertTrue(
+      result.compiledClean,
+      "expected no broken source for logGrid; got: ${result.compileErrors}",
+    )
+    assertTrue(
+      "export_wardboard_logGrid" !in result.generated,
+      "expected logGrid to be entirely absent from the generated CNameExports.kt; " +
+          "generated=${result.generated}",
+    )
+    val skip: String = result.kspWarnings.single {
+      it.contains(ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_INPUT.name) &&
+          it.contains("WardBoard.logGrid")
+    }
+    assertTrue(
+      skip.contains("the element type Collection? cannot be written into a Kotlin collection"),
+      "expected the hint to name the offending List element component; skip=$skip",
+    )
+    assertFalse(
+      skip.contains("Map/Set"),
+      "a List parameter must never be told to use a List instead of a Map/Set; skip=$skip",
+    )
   }
 
   /**
@@ -190,6 +288,11 @@ class Tier1NamedSkipDiagnosticsTest {
       result.kspWarnings.any { it.contains(ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_INPUT.name) },
       "expected a SKIPPED_UNSUPPORTED_INPUT diagnostic naming Patient.setTagGroups's Set " +
           "parameter; kspWarnings=${result.kspWarnings}",
+    )
+    assertTrue(
+      result.kspWarnings.any { it.contains("the element type Collection? cannot be written") },
+      "expected the hint to name the offending Set element component; " +
+          "kspWarnings=${result.kspWarnings}",
     )
   }
 

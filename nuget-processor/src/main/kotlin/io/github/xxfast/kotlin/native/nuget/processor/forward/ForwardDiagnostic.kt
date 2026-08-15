@@ -228,7 +228,9 @@ internal fun ForwardPlanSkipReason.toDiagnosticKind(): ForwardDiagnosticKind = w
  *   ([ForwardCallableCatalogEntry.Skipped.detail]), used only by [ForwardPlanSkipReason
  *   .UNEXPORTED_DEPENDENCY_TYPE] to name the exact `include(...)` fix. ADR-074: for
  *   [ForwardPlanSkipReason.ACTUAL_TYPEALIAS_TARGET], the same slot instead carries
- *   `"<expect qualified name>-><target rendered name>"`. Ignored by every other reason.
+ *   `"<expect qualified name>-><target rendered name>"`. For [ForwardPlanSkipReason.COLLECTION] it
+ *   carries the offending component ("element type Collection?", "key type String?"). Ignored by
+ *   every other reason.
  */
 internal fun ForwardPlanSkipReason.diagnosticHint(detail: String? = null): String = when (this) {
   ForwardPlanSkipReason.UNEXPORTED_DEPENDENCY_TYPE -> {
@@ -247,13 +249,27 @@ internal fun ForwardPlanSkipReason.diagnosticHint(detail: String? = null): Strin
         "direction does not export; wrap it in a class you declare and expose that instead"
   }
 
-  ForwardPlanSkipReason.COLLECTION ->
-    "expose a wrapper taking a List/MutableList (or individual key/value parameters) instead " +
-        "of a Map/Set at this position"
+  // The outer collection kind is never what failed here: ADR-073 admitted `Map`/`Set` inputs and
+  // ADR-097 collapsed `List` into the same rule, so a `COLLECTION` skip always means one
+  // *component* (element, key or value) has no wire. The pre-ADR-097 text told the author to
+  // "use a List instead of a Map/Set", which is unactionable advice for a `List` parameter that
+  // already is one, and names the outer container rather than the offending component. `detail`
+  // carries that component in the property setter diagnostic's wording; without it (a raw
+  // collection, or a result-position collection) the sentence stays true, just unnamed.
+  ForwardPlanSkipReason.COLLECTION -> {
+    val component: String = detail ?: "component type"
+    "the $component cannot be written into a Kotlin collection; use components that are " +
+        "primitives, Char, String, enums, exported class handles, value classes over those, or " +
+        "non-null nested collections of the same"
+  }
 
+  // Deliberately does not name a type: this reason fires at both an input and a return position,
+  // for any nullable spelling with no wire, and the slot carries no detail. It used to say
+  // "a nullable Boolean return", which was wrong for every type that is not a Boolean, and every
+  // nullable Boolean return binds since ADR-069.
   ForwardPlanSkipReason.NULLABLE ->
     "expose a non-nullable wrapper, or a separate has-value/value pair, instead of a nullable " +
-        "Boolean return"
+        "value at this position"
 
   ForwardPlanSkipReason.UNSUPPORTED_COMBINATION ->
     "expose a non-inline, non-generic wrapper (e.g. a concrete suspend fun returning the " +
@@ -276,4 +292,30 @@ internal fun ForwardPlanSkipReason.diagnosticHint(detail: String? = null): Strin
   else ->
     "expose a bridgeable adapter using only supported parameter/return shapes and export that " +
         "instead"
+}
+
+/**
+ * A short, human-readable name for a diagnostic message; never used to drive marshalling.
+ *
+ * Lifted from a `ForwardPropertyPlanner` private member to file-level `internal` (the body touches
+ * no planner state) so the callable planner can name a skipped collection's offending component in
+ * exactly the wording the property setter diagnostic already uses.
+ */
+internal fun BridgeType.diagnosticTypeName(): String = when (this) {
+  BridgeType.Unit -> "Unit"
+  BridgeType.Char -> "Char"
+  BridgeType.String -> "String"
+  BridgeType.Instant -> "Instant"
+  is BridgeType.Primitive -> kind.name.lowercase().replaceFirstChar { it.uppercase() }
+  is BridgeType.Enum -> qualifiedName.substringAfterLast('.')
+  is BridgeType.ObjectHandle -> qualifiedName.substringAfterLast('.')
+  is BridgeType.Interface -> qualifiedName.substringAfterLast('.')
+  is BridgeType.BoundInterface -> qualifiedName.substringAfterLast('.')
+  is BridgeType.ValueClass -> qualifiedName.substringAfterLast('.')
+  is BridgeType.Collection -> "Collection"
+  is BridgeType.Nullable -> "${type.diagnosticTypeName()}?"
+  is BridgeType.SpecializedProtocol -> name
+  is BridgeType.RawCollection -> "Collection"
+  is BridgeType.RawKSType -> rendered
+  is BridgeType.Unsupported -> rendered
 }

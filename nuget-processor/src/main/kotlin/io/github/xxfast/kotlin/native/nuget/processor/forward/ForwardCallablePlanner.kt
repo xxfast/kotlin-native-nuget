@@ -1149,7 +1149,8 @@ internal class ForwardCallablePlanner(
       return ForwardCallableCatalogEntry.Skipped(
         symbol, requireNotNull(ineligible.inputSkipReason()), node = node,
         detail = ineligible.actualTypeAliasTargetDetail()
-          ?: ineligible.unexportedDependencyDetail(),
+          ?: ineligible.unexportedDependencyDetail()
+          ?: ineligible.collectionComponentDetail(),
       )
     }
 
@@ -1355,7 +1356,8 @@ internal class ForwardCallablePlanner(
       return ForwardCallableCatalogEntry.Skipped(
         symbol, requireNotNull(ineligible.inputSkipReason()), node = node,
         detail = ineligible.actualTypeAliasTargetDetail()
-          ?: ineligible.unexportedDependencyDetail(),
+          ?: ineligible.unexportedDependencyDetail()
+          ?: ineligible.collectionComponentDetail(),
       )
     }
 
@@ -1363,7 +1365,9 @@ internal class ForwardCallablePlanner(
     if (resultShape == null) {
       return ForwardCallableCatalogEntry.Skipped(
         symbol, requireNotNull(result.skipReason()), node = node,
-        detail = result.actualTypeAliasTargetDetail() ?: result.unexportedDependencyDetail(),
+        detail = result.actualTypeAliasTargetDetail()
+          ?: result.unexportedDependencyDetail()
+          ?: result.collectionComponentDetail(),
       )
     }
 
@@ -2252,6 +2256,35 @@ internal class ForwardCallablePlanner(
     }
 
     else -> skipReason()
+  }
+
+  /**
+   * The offending *component* of a `COLLECTION` skip, in the same wording
+   * [ForwardPropertyPlanner]'s dropped-setter diagnostic uses ("element type Collection?",
+   * "key type String?"). The outer collection kind is never the failure: every kind binds since
+   * ADR-073/ADR-097, so only a component can fail. Mirrors [collectionInputSkipReason]'s admitted
+   * checks, ADR-083's non-null key rule included, so the named component is the one that actually
+   * failed rather than whichever slot is checked last. `null` for any other reason, and for a
+   * `RawCollection` (no component survived classification) whose hint stays unnamed.
+   */
+  private fun BridgeType.collectionComponentDetail(): String? {
+    val collection: BridgeType.Collection = unwrapNullable() as? BridgeType.Collection ?: return null
+    if (collection.collectionInputSkipReason() != ForwardPlanSkipReason.COLLECTION) return null
+    val isMap: Boolean =
+      collection.kind == CollectionKind.MAP || collection.kind == CollectionKind.MUTABLE_MAP
+    if (!isMap) {
+      return "element type ${collection.element?.diagnosticTypeName() ?: "unknown"}"
+    }
+    val keyOk: Boolean =
+      collection.key?.let { it !is BridgeType.Nullable && it.isWrappableComponent() } == true
+    val valueOk: Boolean = collection.value?.isWrappableComponent() == true
+    val key: String = collection.key?.diagnosticTypeName() ?: "unknown"
+    val value: String = collection.value?.diagnosticTypeName() ?: "unknown"
+    return when {
+      !keyOk && !valueOk -> "key type $key and value type $value"
+      !keyOk -> "key type $key"
+      else -> "value type $value"
+    }
   }
 
   private fun BridgeType.Collection.collectionInputSkipReason(): ForwardPlanSkipReason? = when {
