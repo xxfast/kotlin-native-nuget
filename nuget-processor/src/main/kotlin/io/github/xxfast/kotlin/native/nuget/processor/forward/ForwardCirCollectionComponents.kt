@@ -35,10 +35,10 @@ internal fun collectionCreateArgument(
   CollectionKind.MAP, CollectionKind.MUTABLE_MAP -> {
     val key: BridgeType = requireNotNull(type.key) { "Forward CIR Map input has no key type" }
     val value: BridgeType = requireNotNull(type.value) { "Forward CIR Map input has no value type" }
-    if (key.componentValueClass() == null && value.componentValueClass() == null) {
+    if (!key.componentNeedsProjection() && !value.componentNeedsProjection()) {
       name
     } else {
-      // The key and value slots project independently: either side may be the value class.
+      // The key and value slots project independently: either side may need the projection.
       val keyType: String = componentWireCsharpType(key, csharpType)
       val valueType: String = componentWireCsharpType(value, csharpType)
       "$SELECT($name, x => new KeyValuePair<$keyType, $valueType>(" +
@@ -49,7 +49,7 @@ internal fun collectionCreateArgument(
   else -> {
     val element: BridgeType =
       requireNotNull(type.element) { "Forward CIR collection input has no element type" }
-    if (element.componentValueClass() == null) name
+    if (!element.componentNeedsProjection()) name
     else "$SELECT($name, x => ${componentWireExpression("x", element)})"
   }
 }
@@ -97,6 +97,9 @@ private fun componentReadExpression(
 ): String {
   val wireType: String = componentWireCsharpType(component, csharpType)
   val raw: String = "NugetMarshal.FromHandle<$wireType>($handle)"
+  // ADR-097: a bare enum crossed as its int ordinal, so the cast back to the C# enum is the whole
+  // of its read projection; `FromHandle<int>` has a real branch, unlike `FromHandle<Mood>`.
+  if (component is BridgeType.Enum) return "(${csharpType(component)})$raw"
   if (component !is BridgeType.ValueClass) return raw
   // An enum underlying rides the int-ordinal wire, so the cast back to the C# enum is what makes
   // the record struct's own constructor applicable.
@@ -109,22 +112,32 @@ private fun componentReadExpression(
 }
 
 /** The static C# type actually crossing the wire for [component]: the value class's underlying
- *  (`int` for an enum underlying), or the component's own public type. ADR-083: a nullable value
- *  class rides the nullable spelling of that same underlying (`string?`, `int?`). */
+ *  (`int` for an enum underlying), `int` for a bare enum (ADR-097), or the component's own public
+ *  type. ADR-083: a nullable component rides the nullable spelling of that same wire type
+ *  (`string?`, `int?`). */
 private fun componentWireCsharpType(
   component: BridgeType,
   csharpType: (BridgeType) -> String,
 ): String {
+  val suffix: String = if (component is BridgeType.Nullable) "?" else ""
+  if (component.componentEnum() != null) return "int$suffix"
   val valueClass: BridgeType.ValueClass =
     component.componentValueClass() ?: return csharpType(component)
-  val suffix: String = if (component is BridgeType.Nullable) "?" else ""
   return if (valueClass.underlying is BridgeType.Enum) "int$suffix"
   else "${csharpType(valueClass.underlying)}$suffix"
 }
 
-/** One outgoing component projected to its wire value: `x.Value`, `(int)x.Mood`, `x.Patient`, and
- *  (ADR-083) their `?.`-lifted forms when the component is a nullable value class. */
+/** One outgoing component projected to its wire value: `x.Value`, `(int)x.Mood`, `x.Patient`,
+ *  (ADR-097) `(int)x` for a bare enum, and (ADR-083) their `?.`-lifted forms when the component is
+ *  nullable. */
 private fun componentWireExpression(access: String, component: BridgeType): String {
+  if (component.componentEnum() != null) {
+    return if (component is BridgeType.Nullable) {
+      "$access == null ? (int?)null : (int)$access.Value"
+    } else {
+      "(int)$access"
+    }
+  }
   val valueClass: BridgeType.ValueClass = component.componentValueClass() ?: return access
   val property: String = valueClass.underlyingPropertyName.replaceFirstChar { it.uppercase() }
   val isEnum: Boolean = valueClass.underlying is BridgeType.Enum
@@ -144,3 +157,17 @@ internal fun BridgeType.componentValueClass(): BridgeType.ValueClass? = when (th
   is BridgeType.Nullable -> type as? BridgeType.ValueClass
   else -> null
 }
+
+/** ADR-097: the bare enum a component projects through, seeing past ADR-083's nullable spelling;
+ *  `null` when the component is not a bare enum. A value class *over* an enum is not this: it
+ *  keeps ADR-081's own projection, which additionally reconstructs the record struct. */
+internal fun BridgeType.componentEnum(): BridgeType.Enum? = when (this) {
+  is BridgeType.Enum -> this
+  is BridgeType.Nullable -> type as? BridgeType.Enum
+  else -> null
+}
+
+/** ADR-081/097: whether a component crosses as something other than itself, and therefore needs a
+ *  per-element projection on both sides of the seam. */
+internal fun BridgeType.componentNeedsProjection(): Boolean =
+  componentValueClass() != null || componentEnum() != null

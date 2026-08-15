@@ -142,24 +142,28 @@ public class CollectionPropertyIndependenceTests
         Assert.Null(chart.Notes);
     }
 
-    // --- Setter facet: ineligible shapes fall back to a get-only C# property. Trap: reading
-    // Moods or Aliases is a pre-existing, unrelated bug (NugetMarshal.FromHandle<T> has no enum
-    // branch, and the element itself is what makes Aliases ineligible in the first place), so
-    // these assert *shape only* via reflection and never call the getter. ---
+    // --- Setter facet: the two cells that landed here as ineligible, both since promoted to full
+    // round trips. ADR-083 fixed the nullable element (Aliases), ADR-097 the bare enum element
+    // (Moods, whose getter was broken too: FromHandle<Mood> had no enum branch). Neither asserts
+    // shape via reflection any more; both call the accessors for real. ---
 
+    // ADR-097 promoted this cell: a bare enum element is no longer what makes a collection property
+    // setter ineligible, and the same int-ordinal projection fixes the getter it used to be unsafe
+    // to call. MoodsSummary is Kotlin's own view of the list, so the round trip is not proved by
+    // reading back through the same getter that wrote it.
     [Fact]
-    public void Chart_Moods_EnumElement_HasNoPublicSetter()
+    public void Chart_Moods_EnumElement_RoundTripsThroughItsSetter()
     {
-        var property = typeof(Chart).GetProperty(nameof(Chart.Moods));
+        using var chart = new Chart("Oreo");
 
-        Assert.NotNull(property);
-        Assert.NotNull(property!.GetGetMethod());
-        Assert.Null(property.GetSetMethod());
+        chart.Moods = new[] { Mood.Anxious, Mood.Calm };
+
+        Assert.Equal("ANXIOUS,CALM", chart.MoodsSummary());
+        Assert.Equal(new[] { Mood.Anxious, Mood.Calm }, chart.Moods);
     }
 
-    // ADR-083 promoted this cell out of the ineligible group above: a nullable element is no longer
-    // what makes a collection property setter ineligible (an enum element, Moods, still is), so
-    // this asserts the round trip instead of the shape.
+    // ADR-083 promoted this cell: a nullable element is no longer what makes a collection property
+    // setter ineligible, so this asserts the round trip instead of the shape.
     [Fact]
     public void Chart_Aliases_NullableElement_RoundTripsThroughItsSetter()
     {

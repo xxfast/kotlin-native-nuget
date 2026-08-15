@@ -256,11 +256,7 @@ class Tier1NullableCollectionComponentTest {
       """
       package tier1.nullablecollectionnarrowing
 
-      enum class Mood { CALM, ANXIOUS }
-
       class ChartBook {
-        fun recordMoods(moods: List<Mood?>): Int = moods.size
-
         fun tallyShorts(counts: List<Short?>): Int = counts.size
 
         fun initials(letters: List<Char?>): Int = letters.size
@@ -275,8 +271,9 @@ class Tier1NullableCollectionComponentTest {
     )
 
     val kotlin: String = result.generated
-    // All three used to crash the whole KSP run in componentLowering; each is a named skip now.
-    assertTrue("export_chartbook_recordMoods" !in kotlin, "generated=$kotlin")
+    // Both used to crash the whole KSP run in componentLowering; each is a named skip now.
+    // ADR-097 took `List<Mood?>` out of this cell: a bare enum component binds now
+    // (Tier1EnumCollectionComponentTest pins its lowering on both halves).
     assertTrue("export_chartbook_tallyShorts" !in kotlin, "generated=$kotlin")
     assertTrue("export_chartbook_initials" !in kotlin, "generated=$kotlin")
   }

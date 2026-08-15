@@ -1131,9 +1131,10 @@ never carries the value class itself, only the **underlying**: C# projects each 
 underlying before boxing (`x.Value`, `(int)x.Mood`, `x.Patient`), and Kotlin re-wraps per element on
 the way in and projects to the underlying on the way out. Method returns and property getters used to
 bind and then throw at runtime (`NugetMarshal.FromHandle<ChartId>` had no route to a struct whose only
-public constructor takes a `string`); that is fixed here, not merely narrowed. Only the value-class
-*wrapper* over an enum is admitted; a bare enum component (`Set<Mood>`, unwrapped) stays with its own
-sibling ROADMAP item, see [Collections](collections.md).
+public constructor takes a `string`); that is fixed here, not merely narrowed. This row is the
+value-class *wrapper* over an enum; a **bare** enum component (`Set<Mood>`, unwrapped) rides the same
+`int`-ordinal wire without the wrapper, see [Enums: As a collection
+component](enums.md#as-a-collection-component).
 
 From `test-library/src/nativeMain/kotlin/.../clinic/ValueClassCollectionsSample.kt`:
 

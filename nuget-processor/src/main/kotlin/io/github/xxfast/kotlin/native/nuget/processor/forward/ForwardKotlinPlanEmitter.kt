@@ -514,6 +514,11 @@ private fun elementKotlinTypeName(type: BridgeType): String = when (type) {
  * own `init` exactly as ADR-077's ordinary-position lowering does.
  */
 internal fun componentLowering(name: String, type: BridgeType): String = when (type) {
+  // ADR-097: a bare enum arrived as its int ordinal, projected by the C# call site's
+  // `Select(x => (int)x)`. Casting to the enum itself here would compile on both sides and
+  // ClassCastException at the first call, so this arm and that projection change together.
+  is BridgeType.Enum -> "${type.qualifiedName}.entries[$name as kotlin.Int]"
+
   is BridgeType.ValueClass -> when (val underlying: BridgeType = type.underlying) {
     is BridgeType.Enum ->
       "${type.qualifiedName}(${underlying.qualifiedName}.entries[$name as kotlin.Int])"
@@ -525,6 +530,11 @@ internal fun componentLowering(name: String, type: BridgeType): String = when (t
   // so the cast simply goes nullable (`as T?` accepts null). A value class re-wraps under `?.let`
   // so its own `init` runs for the present elements only.
   is BridgeType.Nullable -> when (val inner: BridgeType = type.type) {
+    // ADR-097: `List<Mood?>` is admitted by isWrappableComponent's Nullable branch the moment a
+    // bare Enum is wrappable, and its box holds a nullable int ordinal.
+    is BridgeType.Enum ->
+      "($name as kotlin.Int?)?.let { v -> ${inner.qualifiedName}.entries[v] }"
+
     is BridgeType.ValueClass -> when (val underlying: BridgeType = inner.underlying) {
       is BridgeType.Enum ->
         "($name as kotlin.Int?)?.let { v -> " +
@@ -560,7 +570,7 @@ internal fun collectionResultProjection(
       val element: BridgeType = requireNotNull(type.element) {
         "Forward Kotlin collection result has no element type"
       }
-      if (element.componentValueClass() == null) invocation
+      if (!element.componentNeedsProjection()) invocation
       else "$invocation${dot}map { ${componentRaising("it", element)} }"
     }
 
@@ -570,7 +580,7 @@ internal fun collectionResultProjection(
       val element: BridgeType = requireNotNull(type.element) {
         "Forward Kotlin collection result has no element type"
       }
-      if (element.componentValueClass() == null) invocation
+      if (!element.componentNeedsProjection()) invocation
       else "$invocation${dot}mapTo(mutableSetOf()) { ${componentRaising("it", element)} }"
     }
 
@@ -578,7 +588,7 @@ internal fun collectionResultProjection(
       val key: BridgeType = requireNotNull(type.key) { "Forward Kotlin Map result has no key type" }
       val value: BridgeType =
         requireNotNull(type.value) { "Forward Kotlin Map result has no value type" }
-      if (key.componentValueClass() == null && value.componentValueClass() == null) invocation
+      if (!key.componentNeedsProjection() && !value.componentNeedsProjection()) invocation
       else "$invocation${dot}entries${dot}associate { (k, v) -> " +
           "${componentRaising("k", key)} to ${componentRaising("v", value)} }"
     }
@@ -590,8 +600,11 @@ internal fun collectionResultProjection(
  *  component is a nullable value class -- a plain nullable component stays identity, since the box
  *  already holds `Any?` and the nullable read exports carry the null through). */
 private fun componentRaising(name: String, type: BridgeType): String {
-  val valueClass: BridgeType.ValueClass = type.componentValueClass() ?: return name
   val dot: String = if (type is BridgeType.Nullable) "?." else "."
+  // ADR-097: a bare enum leaves as its int ordinal, so the C# side reads `FromHandle<int>` and
+  // casts back. Boxing the `Mood` itself is what bound-and-threw before this ADR.
+  if (type.componentEnum() != null) return "$name${dot}ordinal"
+  val valueClass: BridgeType.ValueClass = type.componentValueClass() ?: return name
   return "$name$dot${valueClass.underlyingPropertyName}" +
       if (valueClass.underlying is BridgeType.Enum) "$dot" + "ordinal" else ""
 }

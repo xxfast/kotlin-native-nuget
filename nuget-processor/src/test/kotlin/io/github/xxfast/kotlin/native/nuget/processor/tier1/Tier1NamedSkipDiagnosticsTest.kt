@@ -22,21 +22,22 @@ class Tier1NamedSkipDiagnosticsTest {
   /**
    * ADR-073 closed the general `Map<String, String>` case (`CreateMap`/`nuget_map_put` now
    * exist), but the write side can only box a strict subset of component types
-   * (`isWrappableComponent()`): the six `nuget_wrap_*` primitives plus an object handle. An enum
-   * *value* (`Mood`) is outside that subset -- no `nuget_wrap_enum` exists -- so it must still
-   * fire `SKIPPED_UNSUPPORTED_INPUT`, exactly as `Tier1NamedSkipDiagnosticsTest` verified for the
-   * pre-ADR-073 general case.
+   * (`isWrappableComponent()`): the five `nuget_wrap_*` primitives, an object handle, and
+   * (ADR-081/097) anything that projects to one of those per element. A narrow primitive value
+   * (`Short`) is outside that subset -- no `nuget_wrap_short` exists -- so it must still fire
+   * `SKIPPED_UNSUPPORTED_INPUT`.
+   *
+   * ADR-097 moved this cell off a `Mood` value: a bare enum now rides the int-ordinal wire and
+   * binds, so it no longer demonstrates the skip.
    */
   @Test
-  fun `class method with Map enum-value parameter fires SKIPPED_UNSUPPORTED_INPUT and is omitted`() {
+  fun `class method with Map narrow-primitive value parameter fires SKIPPED_UNSUPPORTED_INPUT and is omitted`() {
     val result = Tier1Harness.run(
       """
       package tier1.skipmapinput
 
-      enum class Mood { CALM, ANXIOUS }
-
       class Patient(val name: String) {
-        fun setMoods(moods: Map<String, Mood>): Int = moods.size
+        fun setMoods(moods: Map<String, Short>): Int = moods.size
       }
       """.trimIndent()
     )

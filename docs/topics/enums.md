@@ -6,6 +6,7 @@ A Kotlin `enum class` becomes a plain C# `enum` with matching ordinal values. An
 |---|---|---|
 | `enum class` | `enum` | with extension methods |
 | `Mood?` (bare nullable enum, not wrapped in a value class) | `Mood?` (`Nullable<Mood>`) | at property, constructor/method/extension/top-level parameter, method return, and top-level return; see [Nullable](#nullable) below |
+| bare `Mood` as a `List`/`Map`/`Set` component (element, key, or value, nullable included) | element/key/value of the matching `IReadOnlyList<T>`/`IReadOnlyDictionary<K,V>`/`IReadOnlySet<T>` etc. | rides the `int` ordinal, projected per element; see [As a collection component](#as-a-collection-component) below |
 
 ## Kotlin
 
@@ -304,20 +305,208 @@ public void NullableEnumSample_NapMood_ZeroHourReturnsOrdinalZeroAsNonNull()
     </p>
 </note>
 
+## As a collection component
+
+A bare enum (not wrapped in a [value class](value-classes.md)) crosses a `List`/`MutableList`/
+`Map`/`MutableMap`/`Set`/`MutableSet` component slot (element, map key, or map value, nullable
+included) as its `Int` ordinal, at input positions, collection property setters, method returns, and
+property getters
+([ADR-097](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/097-enum-collection-components.md)).
+This generalizes the value-class-over-enum wire that [Value classes: As a collection
+component](value-classes.md#as-a-collection-component) already ships one level down, minus the
+wrapper: C# projects each element to its ordinal at the call site before boxing (`Select(x =>
+(int)x)`), and Kotlin re-wraps per element on the way in and casts back on the way out
+(`Mood.entries[it as kotlin.Int]`).
+
+<note>
+    <p>Before this, a bare enum collection component was bind-then-throw in <b>both</b> directions:
+    the write side's <code>Wrap&lt;T&gt;</code> had no branch for an enum, and the read side's
+    <code>NugetMarshal.FromHandle&lt;Mood&gt;</code> fell through to <code>Materialize</code> with no
+    <code>Factories</code> entry. Both threw <code>NotSupportedException</code> at the first call;
+    both are fixed here, not merely narrowed.</p>
+</note>
+
+From `test-library/src/nativeMain/kotlin/.../clinic/EnumComponentCollectionsSample.kt`:
+
+```kotlin
+class MoodLedger {
+  fun logMoods(moods: List<Mood>): String = moods.joinToString(",")
+
+  fun tallyMoods(moods: Set<Mood>): String = moods.map { it.name }.sorted().joinToString(",")
+
+  fun chartMoods(byPatient: Map<String, Mood>): String =
+    byPatient.entries.sortedBy { it.key }.joinToString(";") { "${it.key}=${it.value}" }
+
+  fun moodRoster(byMood: Map<Mood, String>): String =
+    byMood.entries.sortedBy { it.key.ordinal }.joinToString(";") { "${it.key}=${it.value}" }
+
+  fun logMoodTrail(moods: List<Mood?>): String = moods.joinToString(",") { it?.name ?: "null" }
+
+  fun moodsOnFile(): List<Mood> = listOf(Mood.CALM, Mood.PLAYFUL)
+
+  fun moodChart(): Map<String, Mood> = mapOf("oreo" to Mood.CALM, "mylo" to Mood.ANXIOUS)
+}
+```
+
+Generated C#, from `Interop.cs`. The element slot (`LogMoods`), the map value slot (`ChartMoods`) and
+the map key slot (`MoodRoster`) each project independently:
+
+```C#
+public string LogMoods(IReadOnlyList<global::TestLibrary.Clinic.Mood> moods)
+{
+    IntPtr moodsHandle = IntPtr.Zero;
+    try
+    {
+        moodsHandle = NugetMarshal.CreateList(global::System.Linq.Enumerable.Select(moods, x => (int)x));
+        IntPtr nativeResult = Native_LogMoods(_handle, moodsHandle, out IntPtr error);
+        if (error != IntPtr.Zero)
+        {
+            throw NugetErrorNative.BuildException(error);
+        }
+        return Marshal.PtrToStringUTF8(nativeResult)!;
+    }
+    finally
+    {
+        if (moodsHandle != IntPtr.Zero) { NugetListNative.Dispose(moodsHandle); }
+    }
+}
+
+public string ChartMoods(IReadOnlyDictionary<string, global::TestLibrary.Clinic.Mood> byPatient)
+{
+    IntPtr byPatientHandle = IntPtr.Zero;
+    try
+    {
+        byPatientHandle = NugetMarshal.CreateMap(global::System.Linq.Enumerable.Select(byPatient, x => new KeyValuePair<string, int>(x.Key, (int)x.Value)));
+        // ...
+    }
+    finally { if (byPatientHandle != IntPtr.Zero) { NugetMapNative.Dispose(byPatientHandle); } }
+}
+
+public string MoodRoster(IReadOnlyDictionary<global::TestLibrary.Clinic.Mood, string> byMood)
+{
+    IntPtr byMoodHandle = IntPtr.Zero;
+    try
+    {
+        byMoodHandle = NugetMarshal.CreateMap(global::System.Linq.Enumerable.Select(byMood, x => new KeyValuePair<int, string>((int)x.Key, x.Value)));
+        // ...
+    }
+    finally { if (byMoodHandle != IntPtr.Zero) { NugetMapNative.Dispose(byMoodHandle); } }
+}
+```
+
+A nullable enum element (`List<Mood?>`) is admitted automatically the moment a bare enum is allowed,
+by `isWrappableComponent()`'s existing `Nullable` delegation, and carries its own write projection:
+
+```C#
+public string LogMoodTrail(IReadOnlyList<global::TestLibrary.Clinic.Mood?> moods)
+{
+    IntPtr moodsHandle = IntPtr.Zero;
+    try
+    {
+        moodsHandle = NugetMarshal.CreateList(global::System.Linq.Enumerable.Select(moods, x => x == null ? (int?)null : (int)x.Value));
+        // ...
+    }
+    finally { if (moodsHandle != IntPtr.Zero) { NugetListNative.Dispose(moodsHandle); } }
+}
+```
+
+The read side, method return and `Map` value, closes the matching bind-then-throw bug: each element
+is read as `int` and cast back, never as `Mood` directly:
+
+```C#
+public IReadOnlyList<global::TestLibrary.Clinic.Mood> MoodsOnFile()
+{
+    IntPtr listHandle = Native_MoodsOnFile(_handle, out IntPtr error);
+    if (error != IntPtr.Zero)
+    {
+        throw NugetErrorNative.BuildException(error);
+    }
+    int count = NugetListNative.Count(listHandle);
+    var result = new List<global::TestLibrary.Clinic.Mood>(count);
+    for (int i = 0; i < count; i++)
+    {
+        result.Add((global::TestLibrary.Clinic.Mood)NugetMarshal.FromHandle<int>(NugetListNative.Get(listHandle, i)));
+    }
+    NugetListNative.Dispose(listHandle);
+    return result.AsReadOnly();
+}
+```
+
+From `IntegrationTests/EnumComponentCollectionTests.cs`:
+
+```C#
+[Fact]
+public void MoodLedger_LogMoods_ListOfEnumParameter_RoundTripsEveryElement()
+{
+    using var ledger = new MoodLedger();
+
+    // The restatement's exact shape. Calm repeats at a non-adjacent index, so a projection
+    // that de-duplicated or reordered would not produce this string.
+    string logged = ledger.LogMoods(new[] { Mood.Calm, Mood.Playful, Mood.Calm });
+
+    Assert.Equal("CALM,PLAYFUL,CALM", logged);
+}
+
+[Fact]
+public void MoodLedger_MoodsOnFile_ListOfEnumReturn_MaterializesEveryElement()
+{
+    using var ledger = new MoodLedger();
+
+    // Read side. Binds today and used to throw NotSupportedException out of FromHandle<Mood> ->
+    // Materialize at the first read -- a shipped bug, not a missing capability.
+    IReadOnlyList<Mood> moods = ledger.MoodsOnFile();
+
+    Assert.Equal(new[] { Mood.Calm, Mood.Playful }, moods);
+}
+
+[Fact]
+public void MoodLedger_LogMoodTrail_ListOfNullableEnumParameter_RoundTripsNullAndRealElement()
+{
+    using var ledger = new MoodLedger();
+
+    string trail = ledger.LogMoodTrail(new Mood?[] { Mood.Calm, null, Mood.Playful });
+
+    Assert.Equal("CALM,null,PLAYFUL", trail);
+}
+```
+
+This same eligibility change flips a bare-enum-element collection **property** from get-only to
+settable, since a `var` collection property's setter uses the same `isWrappableComponent()` predicate
+these input positions do; see [Collections: Mutable collection
+properties](collections.md#mutable-collection-properties).
+
+<note>
+    <p>The gate that admits a bare enum also narrows <code>List</code>'s callable-input gate itself,
+    from <code>isBridgeableComponent()</code> to the same <code>isWrappableComponent()</code>
+    predicate <code>Map</code>/<code>Set</code> parameters already used. This is a <b>deliberate
+    breaking change</b>: a <code>List&lt;Short&gt;</code>-, <code>List&lt;Char&gt;</code>-, or
+    <code>List&lt;List&lt;String&gt;&gt;</code>-shaped parameter (a narrow primitive, <code>Char</code>,
+    or a nested collection) loses its generated C# member. No shape that <b>worked</b> is removed:
+    every one of them threw <code>NotSupportedException</code> at the first call or crashed
+    <code>packNuget</code> before this change. A consumer that merely compiled against such a member,
+    without ever calling it successfully, is the one affected.</p>
+</note>
+
 ## Limitations
 
-- Nullable enum as a collection component (`List<Mood?>`) has no representation on the write side
-  and is skipped; see [Collections](collections.md).
+- `Char` and the narrow primitive kinds (`Byte`/`UByte`/`Short`/`UShort`/`UInt`/`ULong`) still cannot
+  be boxed at a collection component position; a `Set<Char>` or `List<Byte>` skips with
+  `SKIPPED_UNSUPPORTED_INPUT`. This is unrelated to enums; see [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md).
+- A nested-collection component (`List<List<Mood>>`) has no representation on the write side and is
+  skipped; see [Collections](collections.md).
 
 <seealso>
     <category ref="related">
         <a href="classes-and-objects.md">Classes and objects</a>
         <a href="value-classes.md">Value classes</a>
+        <a href="collections.md">Collections</a>
     </category>
     <category ref="external">
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/006-enum-mapping.md">ADR-006: Enum mapping</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/062-forward-callable-plan.md">ADR-062: Forward callable plan</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/079-nullable-primitive-enum-underlying-value-classes.md">ADR-079: Nullable(ValueClass) over Primitive/Enum-underlying value classes</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/080-bare-nullable-enum.md">ADR-080: Bare nullable enums</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/081-value-class-collection-components.md">ADR-081: Value-class collection components</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/097-enum-collection-components.md">ADR-097: Enum collection components</a>
     </category>
 </seealso>

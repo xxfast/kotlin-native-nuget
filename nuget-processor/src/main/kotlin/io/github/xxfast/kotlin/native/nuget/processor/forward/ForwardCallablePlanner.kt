@@ -2258,18 +2258,6 @@ internal class ForwardCallablePlanner(
     !isBridgeableComponent() ->
       (element ?: key ?: value)?.skipReason() ?: ForwardPlanSkipReason.UNSUPPORTED
 
-    // ADR-083: a *nullable* List element is admitted only when its inner type is wrappable; every
-    // other nullable spelling (Char?, narrow primitives, bare Enum?, Instant?, nested Collection?)
-    // becomes a named skip here instead of the KSP crash it used to be in componentLowering. The
-    // non-null element gate stays on the wider isBridgeableComponent (ADR-073 Scope item 1): no
-    // nullable element binds today, so narrowing only the nullable spellings costs nothing.
-    kind == CollectionKind.LIST || kind == CollectionKind.MUTABLE_LIST ->
-      if (element is BridgeType.Nullable && !element.isWrappableComponent()) {
-        ForwardPlanSkipReason.COLLECTION
-      } else {
-        null
-      }
-
     // ADR-073: map/set inputs are admitted only for components the write side can box
     // (isWrappableComponent). ADR-083: the *key* additionally has to be non-nullable -- a C#
     // Dictionary cannot hold a null key, so a nullable-key map has no idiomatic projection and
@@ -2402,16 +2390,15 @@ internal fun BridgeType.isBridgeableComponent(): Boolean = when (this) {
  * ADR-073: the component types the C# write side can actually box, for an input-position
  * `Map`/`Set` (and their mutable variants): the six `nuget_wrap_*` primitives plus an object
  * handle (via `CreateMap`/`CreateSet`'s reflective `_handle` fallback), plus (ADR-081) a value
- * class over any of those underlyings, projected to the underlying per element. Narrower than
- * [isBridgeableComponent], which also admits `Nullable`, `Char`, nested `Collection`, bare `Enum`
- * and the narrow-primitive kinds (none of which the write side can box), because those overshoots
- * would otherwise either crash `packNuget` (`Nullable`/nested `Collection`, no
- * `elementKotlinTypeName` branch) or throw at runtime (`NotSupportedException`, no matching
- * `nuget_wrap_*`). Deliberately *not* applied to
- * `List` at a *callable parameter* position; narrowing that predicate is a separate, deferred
- * decision (ADR-073 Scope item 1). ADR-075 reuses this for a collection *property setter*, where
- * `List` is deliberately included (ADR-075 Question A alternative A1): no `List` property setter
- * binds at all today, so there is no backward-compatible `List` parameter shape to preserve.
+ * class over any of those underlyings, projected to the underlying per element, plus (ADR-097) a
+ * bare `Enum`, which rides that same per-element projection as its int ordinal. Narrower than
+ * [isBridgeableComponent], which also admits `Char`, nested `Collection`, `Unit` and the
+ * narrow-primitive kinds (none of which the write side can box), because those overshoots
+ * would otherwise either crash `packNuget` (nested `Collection`, no `elementKotlinTypeName`
+ * branch) or throw at runtime (`NotSupportedException`, no matching `nuget_wrap_*`).
+ *
+ * ADR-097: this is now the gate for *every* input position, `List` included. ADR-075 already
+ * reused it for a collection *property setter*.
  *
  * ADR-075: lifted from a `ForwardCallablePlanner` private member to file-level `internal` — the
  * body touches no planner state.
@@ -2425,11 +2412,16 @@ internal fun BridgeType.isWrappableComponent(): Boolean = when (this) {
 
   is BridgeType.ObjectHandle -> true
 
+  // ADR-097: a *bare* enum component rides the same int-ordinal wire ADR-081 minted for a value
+  // class over an enum, projected per element at the C# call site (`(int)x`) and re-wrapped as
+  // `Mood.entries[it as Int]` on the Kotlin side, so `Wrap<T>` is only ever instantiated at
+  // `T = int`. One branch here admits it at every position the predicate guards: `List`/`Set`/`Map`
+  // callable inputs and collection property setters.
+  is BridgeType.Enum -> true
+
   // ADR-081: a value-class component crosses as its *underlying*, projected per element at the C#
   // call site (`x.Value`, `(int)x.Mood`, `x.Patient`) before `Wrap<T>` is ever instantiated, so the
-  // write side only ever boxes a type it already handles. The `Enum` case is scoped to this branch
-  // deliberately: a *bare* enum component stays unwrappable (its own ROADMAP item), only the
-  // value-class wrapper over an enum rides the existing int-ordinal wire.
+  // write side only ever boxes a type it already handles.
   is BridgeType.ValueClass ->
     underlying is BridgeType.Enum || underlying.isWrappableComponent()
 
