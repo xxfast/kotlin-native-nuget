@@ -1519,9 +1519,12 @@ for the full reasoning, including its 2026-08-08 amendment.
 - A **nullable** value-class collection component (`List<ChartId?>`) now binds, riding a null
   pointer in the component slot ([ADR-083](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/083-nullable-collection-components.md)).
   A **nested**-collection component (`List<List<ChartId>>`) still has no representation on the
-  write side. A **bare** enum component, not wrapped in a value class (`Set<Mood>`), and the
-  narrow-primitive components (`Byte`, `Short`, `Char`, ...) also stay out of scope; see
-  [Collections](collections.md) and [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md).
+  write side; see [Collections](collections.md) and [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md).
+  A **bare** enum component, not wrapped in a value class (`Set<Mood>`,
+  [ADR-097](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/097-enum-collection-components.md)),
+  and the narrow-primitive/`Char` components (`Byte`, `Short`, `Char`, ...,
+  [ADR-098](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/098-narrow-primitive-and-char-collection-components.md))
+  are no longer out of scope either; both bind the same way this row's value-class component does.
 
 <seealso>
     <category ref="related">

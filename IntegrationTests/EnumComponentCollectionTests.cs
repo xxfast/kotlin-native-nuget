@@ -20,6 +20,10 @@ namespace IntegrationTests;
 /// Every assertion uses multiple distinct moods and pins at least one non-zero ordinal, so a
 /// projection that always sends <c>0</c> (<c>Calm</c>, the first entry) cannot pass by coincidence.
 /// Oreo is the calm one; Mylo is not.
+///
+/// The last cell, <c>LogSpans</c>, was ADR-097's asserted-absent gate-narrowing cell and is
+/// inverted by ADR-098 part A into a working round trip. It stays here rather than moving to
+/// <c>NarrowComponentCollectionTests</c> so the inversion sits where the assertion it replaces was.
 /// </summary>
 public class EnumComponentCollectionTests
 {
@@ -122,22 +126,21 @@ public class EnumComponentCollectionTests
     }
 
     [Fact]
-    public void MoodLedger_LogSpans_ListOfShortParameter_IsNotGenerated()
+    public void MoodLedger_LogSpans_ListOfShortParameter_RoundTripsEveryElement()
     {
-        // ADR-097 section 3: List's callable-input gate narrows from isBridgeableComponent() to
-        // isWrappableComponent(), so a `List<Short>` parameter becomes a named
-        // SKIPPED_UNSUPPORTED_INPUT instead of binding and throwing NotSupportedException out of
-        // Wrap<T> at the first call. The diagnostic itself is asserted at the KSP/Tier 1 level;
-        // the absence of the member, alongside every sibling cell staying present, is what's
-        // observable from compiled C#.
-        Assert.Null(typeof(MoodLedger).GetMethod("LogSpans"));
+        using var ledger = new MoodLedger();
 
-        Assert.NotNull(typeof(MoodLedger).GetMethod("LogMoods"));
-        Assert.NotNull(typeof(MoodLedger).GetMethod("TallyMoods"));
-        Assert.NotNull(typeof(MoodLedger).GetMethod("ChartMoods"));
-        Assert.NotNull(typeof(MoodLedger).GetMethod("MoodRoster"));
-        Assert.NotNull(typeof(MoodLedger).GetMethod("LogMoodTrail"));
-        Assert.NotNull(typeof(MoodLedger).GetMethod("MoodsOnFile"));
-        Assert.NotNull(typeof(MoodLedger).GetMethod("MoodChart"));
+        // ADR-097 section 3 asserted this member ABSENT: narrowing List's callable-input gate to
+        // isWrappableComponent() turned a `List<Short>` parameter from bind-then-throw into a named
+        // SKIPPED_UNSUPPORTED_INPUT. ADR-098 part A adds SHORT to that same predicate and mints
+        // nuget_wrap_short, so the member comes back, this time callable. The inversion is the
+        // point: the gate is one predicate, and widening it is how a skip becomes a capability.
+        //
+        // The matching Tier 1 assertion inverts with this one
+        // (Tier1EnumCollectionComponentTest.kt, the `"export_moodledger_logSpans" !in kotlin` and
+        // SKIPPED_UNSUPPORTED_INPUT cell).
+        string spans = ledger.LogSpans(new short[] { 7, -1, short.MinValue });
+
+        Assert.Equal("7,-1,-32768", spans);
     }
 }

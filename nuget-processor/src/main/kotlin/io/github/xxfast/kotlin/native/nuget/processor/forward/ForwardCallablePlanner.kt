@@ -2391,11 +2391,12 @@ internal fun BridgeType.isBridgeableComponent(): Boolean = when (this) {
  * `Map`/`Set` (and their mutable variants): the six `nuget_wrap_*` primitives plus an object
  * handle (via `CreateMap`/`CreateSet`'s reflective `_handle` fallback), plus (ADR-081) a value
  * class over any of those underlyings, projected to the underlying per element, plus (ADR-097) a
- * bare `Enum`, which rides that same per-element projection as its int ordinal. Narrower than
- * [isBridgeableComponent], which also admits `Char`, nested `Collection`, `Unit` and the
- * narrow-primitive kinds (none of which the write side can box), because those overshoots
- * would otherwise either crash `packNuget` (nested `Collection`, no `elementKotlinTypeName`
- * branch) or throw at runtime (`NotSupportedException`, no matching `nuget_wrap_*`).
+ * bare `Enum`, which rides that same per-element projection as its int ordinal, plus (ADR-098) the
+ * six narrow primitive kinds and `Char`, each with a `nuget_wrap_*` export of its own. Still
+ * narrower than [isBridgeableComponent], which also admits nested `Collection` and `Unit` (neither
+ * of which the write side can box), because those overshoots would otherwise either crash
+ * `packNuget` (nested `Collection`, no `elementKotlinTypeName` branch) or throw at runtime
+ * (`NotSupportedException`, no matching `nuget_wrap_*`).
  *
  * ADR-097: this is now the gate for *every* input position, `List` included. ADR-075 already
  * reused it for a collection *property setter*.
@@ -2405,10 +2406,19 @@ internal fun BridgeType.isBridgeableComponent(): Boolean = when (this) {
  */
 internal fun BridgeType.isWrappableComponent(): Boolean = when (this) {
   BridgeType.String -> true
+  // ADR-098: every PrimitiveKind is wrappable now that the six narrow kinds have a
+  // `nuget_wrap_*` export each. Kept as an explicit set rather than `true` so a future kind has
+  // to be admitted deliberately, with its export minted alongside.
   is BridgeType.Primitive -> kind in setOf(
-    PrimitiveKind.INT, PrimitiveKind.LONG, PrimitiveKind.FLOAT,
-    PrimitiveKind.DOUBLE, PrimitiveKind.BOOLEAN,
+    PrimitiveKind.BYTE, PrimitiveKind.UBYTE, PrimitiveKind.SHORT, PrimitiveKind.USHORT,
+    PrimitiveKind.INT, PrimitiveKind.UINT, PrimitiveKind.LONG, PrimitiveKind.ULONG,
+    PrimitiveKind.FLOAT, PrimitiveKind.DOUBLE, PrimitiveKind.BOOLEAN,
   )
+
+  // ADR-098 part B: `Char` is its own BridgeType, not a PrimitiveKind, so it needs its own arm.
+  // It crosses as the UTF-16 code unit Kotlin already emits (`KChar` = `unsigned short`), with
+  // the C# side pinned to that width by `[MarshalAs(UnmanagedType.U2)]`.
+  BridgeType.Char -> true
 
   is BridgeType.ObjectHandle -> true
 

@@ -596,10 +596,11 @@ The getter is unconditional and has no element-type restriction: every element t
 materializes for a `val` also materializes for a `var`. The setter is narrower: it binds only when
 every component, the element for `List`/`Set`, the key **and** value for `Map`, satisfies the same
 `isWrappableComponent()` predicate the `Map`/`Set` **parameter** side above already uses
-(`String`, `Int`, `Long`, `Float`, `Double`, `Boolean`, an object handle, or a bare enum via its `int`
-ordinal, see [Enum collection components](enums.md#as-a-collection-component)), applied to `List` too.
-When a component fails that check (a narrow primitive, `Char`, or a nested collection), the property
-still generates, get-only, with a `SKIPPED_UNSUPPORTED_INPUT` diagnostic naming it.
+(`String`, `Int`, `Long`, `Float`, `Double`, `Boolean`, `Byte`/`UByte`/`Short`/`UShort`/`UInt`/`ULong`,
+`Char`, an object handle, or a bare enum via its `int` ordinal, see
+[Enum collection components](enums.md#as-a-collection-component)), applied to `List` too. When a
+component fails that check (today, only a nested collection), the property still generates, get-only,
+with a `SKIPPED_UNSUPPORTED_INPUT` diagnostic naming it.
 
 From `test-library/.../clinic/ChartSample.kt`:
 
@@ -798,22 +799,24 @@ public static void SetSymptomTags(this ChartId receiver, IReadOnlyList<string> v
 ```
 
 An ineligible setter emits a warning naming the property and the offending component, and states
-that the C# property stays read-only rather than that the property was dropped. `Char` is one of the
-component kinds still excluded after the enum widening above
+that the C# property stays read-only rather than that the property was dropped. A nested collection
+is the one component kind still excluded after the narrow-primitive and `Char` widening
 ([ADR-097](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/097-enum-collection-components.md)
-moved this mechanism's fixture off `List<Mood>`, which is eligible now, onto `List<Char>`):
+moved this mechanism's fixture off `List<Mood>`, and
+[ADR-098](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/098-narrow-primitive-and-char-collection-components.md)
+off `List<Char>`; both are eligible now):
 
 ```kotlin
-// nuget-processor Tier1 fixture, not test-library: Char has no nuget_wrap_char export, so the
-// getter still binds but the setter must be absent.
+// nuget-processor Tier1 fixture, not test-library: a nested collection has no per-element wire at
+// all, so the getter still binds but the setter must be absent.
 class Box {
-  var moods: List<Char> = emptyList()
+  var moods: List<List<String>> = emptyList()
 }
 ```
 
 ```
 [nuget:SKIPPED_UNSUPPORTED_INPUT] Skipping Box.moods: its setter is not generated because the
-    element type Char cannot be written into a Kotlin collection. the C# property Moods is
+    element type List<String> cannot be written into a Kotlin collection. the C# property Moods is
     read-only
 ```
 
@@ -886,12 +889,155 @@ public void ChartLedger_MissingTags_MethodReturn_NullAtNonFirstIndexDoesNotThrow
 A nullable map **key** is not part of this: `Map<String?, Int>` still skips named at a parameter
 position, since a C# `Dictionary` can't hold a null key.
 
+## Narrow primitives and Char as collection components
+
+The six narrow primitives (`Byte`/`UByte`/`Short`/`UShort`/`UInt`/`ULong`) and `Char` now bind as a
+`List`/`Map`/`Set` element, map key, or map value, at input positions, collection property setters,
+method returns, and property getters
+([ADR-098](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/098-narrow-primitive-and-char-collection-components.md)).
+Before this, none of the seven had a `nuget_wrap_*` export, so `isWrappableComponent()` correctly
+excluded them and every such shape was a named `SKIPPED_UNSUPPORTED_INPUT` skip. Their nullable
+spellings (`List<Short?>`) come along for free through the same `Nullable` delegation
+[ADR-083](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/083-nullable-collection-components.md)
+already ships.
+
+From `test-library/.../clinic/NarrowComponentCollectionsSample.kt`:
+
+```kotlin
+class Readings {
+  fun chart(samples: List<Short>): String = samples.joinToString(",")
+
+  fun weigh(grams: Set<ULong>): String = grams.sorted().joinToString(",")
+
+  fun census(byGrade: Map<UByte, Short>): String =
+    byGrade.entries.sortedBy { it.key }.joinToString(",") { "${it.key}=${it.value}" }
+
+  fun trail(samples: List<Short?>): String = samples.joinToString(",") { it?.toString() ?: "null" }
+
+  fun initials(marks: List<Char>): String = marks.joinToString("")
+
+  fun marks(): List<Char> = listOf('é', '日')
+}
+```
+
+### Generated C# {id="narrow-component-generated-c"}
+
+From `Interop.cs`. `Chart` and `Trail` are `List` positions (the second nullable), `Weigh` is a `Set`
+position, `Census` is a `Map` with a narrow type in both the key and value slots, `Initials` is the
+`Char` write side, and `Marks` is the `Char` read side, the one hole `FromHandle<T>` had before this:
+
+```C#
+public string Chart(IReadOnlyList<short> samples)
+{
+    IntPtr samplesHandle = IntPtr.Zero;
+    try
+    {
+        samplesHandle = NugetMarshal.CreateList(samples);
+        IntPtr nativeResult = Native_Chart(_handle, samplesHandle, out IntPtr error);
+        if (error != IntPtr.Zero)
+        {
+            throw NugetErrorNative.BuildException(error);
+        }
+        return Marshal.PtrToStringUTF8(nativeResult)!;
+    }
+    finally
+    {
+        if (samplesHandle != IntPtr.Zero) { NugetListNative.Dispose(samplesHandle); }
+    }
+}
+
+public string Weigh(IReadOnlySet<ulong> grams) { /* same shape, via NugetMarshal.CreateSet */ }
+
+public string Census(IReadOnlyDictionary<byte, short> byGrade) { /* same shape, via NugetMarshal.CreateMap */ }
+
+public string Trail(IReadOnlyList<short?> samples) { /* same shape; a null element rides the ADR-083 null pointer */ }
+
+public string Initials(IReadOnlyList<char> marks) { /* same shape, via NugetMarshal.CreateList */ }
+
+public IReadOnlyList<char> Marks()
+{
+    IntPtr listHandle = Native_Marks(_handle, out IntPtr error);
+    if (error != IntPtr.Zero)
+    {
+        throw NugetErrorNative.BuildException(error);
+    }
+    int count = NugetListNative.Count(listHandle);
+    var result = new List<char>(count);
+    for (int i = 0; i < count; i++)
+    {
+        result.Add(NugetMarshal.FromHandle<char>(NugetListNative.Get(listHandle, i)));
+    }
+    NugetListNative.Dispose(listHandle);
+    return result.AsReadOnly();
+}
+```
+
+### Using it from C# {id="narrow-component-using-it-from-c"}
+
+From `IntegrationTests/NarrowComponentCollectionTests.cs`:
+
+```C#
+[Fact]
+public void Readings_Chart_ListOfShortParameter_RoundTripsEveryElement()
+{
+    using var readings = new Readings();
+
+    string chart = readings.Chart(new short[] { 1, -2, short.MaxValue });
+
+    Assert.Equal("1,-2,32767", chart);
+}
+
+[Fact]
+public void Readings_Census_MapWithNarrowKeyAndNarrowValue_RoundTripsEveryEntry()
+{
+    using var readings = new Readings();
+
+    string census = readings.Census(new Dictionary<byte, short>
+    {
+        [200] = 32767,
+        [9] = -40,
+    });
+
+    Assert.Equal("9=-40,200=32767", census);
+}
+
+[Fact]
+public void Readings_Initials_ListOfCharParameter_RoundTripsNonAsciiElements()
+{
+    using var readings = new Readings();
+
+    string initials = readings.Initials(new[] { 'é', '日', 'A' });
+
+    Assert.Equal("é日A", initials);
+}
+
+[Fact]
+public void Readings_Marks_ListOfCharReturn_MaterializesNonAsciiElements()
+{
+    using var readings = new Readings();
+
+    IReadOnlyList<char> marks = readings.Marks();
+
+    Assert.Equal(new[] { 'é', '日' }, marks);
+}
+```
+
+The mutable collection property setter above (`ChartBook.PendingCharts`-style) admits these seven
+component kinds through the same `isWrappableComponent()` predicate; see
+[Mutable collection properties](#mutable-collection-properties).
+
+<note>
+    <p>The <code>Char</code> half of this ADR is also a correctness fix at <b>every</b> ordinary
+    <code>Char</code> position, not only collections: see
+    <a href="primitives-and-strings.md#char">Primitives and strings: Char</a>.</p>
+</note>
+
 ## Limitations
 
 - `Sequence<T>` is not bridgeable. `Cat.unsupported: Sequence<String>` in the sample library is deliberately left out of the generated `Interop.cs` (no eager-copy story for a lazy sequence).
-- Only a strict subset of key/value/element types binds at a `Map`/`Set`/`List` parameter position: `String`, `Int`, `Long`, `Float`, `Double`, `Boolean`, object handles (a class instance, extracted via the internal `INugetHandle` interface every handle-carrying wrapper implements, see [ADR-094](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/094-reflection-free-generic-dispatch.md)), a bare enum via its `int` ordinal (see [Enums](enums.md#as-a-collection-component), [ADR-097](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/097-enum-collection-components.md)), and a value class over any of the first four underlyings, including an enum-underlying value class via its own `int` ordinal (see [Value classes](value-classes.md#as-a-collection-component), [ADR-081](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/081-value-class-collection-components.md)). A `Nullable` spelling of any of those (`Map<String, Int?>`, `Set<String?>`, `List<ChartId?>`, `List<Mood?>`) binds too: a null element, set member, or map value rides a null pointer in the component slot on both the write and read side, no has-value pair needed (see [ADR-083](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/083-nullable-collection-components.md)). Anything else, `Char` (`Set<Char>`), a narrow primitive (`Byte`/`UByte`/`Short`/`UShort`/`UInt`/`ULong`), a nested collection (`Set<List<String>>`), or an interface, is skipped with `SKIPPED_UNSUPPORTED_INPUT` rather than crashing or binding incorrectly. A nullable map **key** (`Map<String?, Int>`) is still a named skip at the parameter position: a C# `Dictionary` can't hold a null key. `List`/`MutableList` parameters now use the same `isWrappableComponent()` gate `Map`/`Set` parameters do, narrowed from a wider gate that used to let the excluded shapes above bind and then throw or crash `packNuget`, per [ADR-097](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/097-enum-collection-components.md). No shape that **worked** before that narrowing is gone; see [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md) for the remaining narrow-primitive and nested-collection gaps.
+- Only a strict subset of key/value/element types binds at a `Map`/`Set`/`List` parameter position: `String`, `Int`, `Long`, `Float`, `Double`, `Boolean`, the six narrow primitives (`Byte`/`UByte`/`Short`/`UShort`/`UInt`/`ULong`) and `Char` (see [Primitives and strings](primitives-and-strings.md#char), [ADR-098](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/098-narrow-primitive-and-char-collection-components.md)), object handles (a class instance, extracted via the internal `INugetHandle` interface every handle-carrying wrapper implements, see [ADR-094](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/094-reflection-free-generic-dispatch.md)), a bare enum via its `int` ordinal (see [Enums](enums.md#as-a-collection-component), [ADR-097](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/097-enum-collection-components.md)), and a value class over any of the first four underlyings, including an enum-underlying value class via its own `int` ordinal (see [Value classes](value-classes.md#as-a-collection-component), [ADR-081](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/081-value-class-collection-components.md)). A `Nullable` spelling of any of those (`Map<String, Int?>`, `Set<String?>`, `List<ChartId?>`, `List<Mood?>`, `List<Short?>`) binds too: a null element, set member, or map value rides a null pointer in the component slot on both the write and read side, no has-value pair needed (see [ADR-083](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/083-nullable-collection-components.md)). Anything else, a nested collection (`Set<List<String>>`) or an interface, is skipped with `SKIPPED_UNSUPPORTED_INPUT` rather than crashing or binding incorrectly. A nullable map **key** (`Map<String?, Int>`) is still a named skip at the parameter position: a C# `Dictionary` can't hold a null key. `List`/`MutableList` parameters now use the same `isWrappableComponent()` gate `Map`/`Set` parameters do, narrowed from a wider gate that used to let the excluded shapes above bind and then throw or crash `packNuget`, per [ADR-097](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/097-enum-collection-components.md) and [ADR-098](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/098-narrow-primitive-and-char-collection-components.md). No shape that **worked** before that narrowing is gone; see [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md) for the remaining nested-collection gap.
 - `MutableMap`/`MutableSet` parameters do not write back, matching `MutableList`. Contents are copied into Kotlin; changes Kotlin makes are not reflected back in the collection you passed.
-- A collection property **setter** uses the same wrappable-component predicate as a `Map`/`Set`/`List` parameter above. A `Char`, narrow-primitive, or nested-collection element skips the setter with `SKIPPED_UNSUPPORTED_INPUT` and falls back to a get-only property; a value-class element (see [Value classes](value-classes.md#as-a-collection-component), [ADR-081](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/081-value-class-collection-components.md)), a bare enum element (see [Enums](enums.md#as-a-collection-component), [ADR-097](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/097-enum-collection-components.md)), and a nullable element ([ADR-083](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/083-nullable-collection-components.md)) all bind; the getter itself has no such restriction. See [ADR-075](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/075-collection-property-getter-setter-independence.md) and [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md) for the remaining write-side gaps.
+- A collection property **setter** uses the same wrappable-component predicate as a `Map`/`Set`/`List` parameter above. A nested-collection element skips the setter with `SKIPPED_UNSUPPORTED_INPUT` and falls back to a get-only property; a value-class element (see [Value classes](value-classes.md#as-a-collection-component), [ADR-081](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/081-value-class-collection-components.md)), a bare enum element (see [Enums](enums.md#as-a-collection-component), [ADR-097](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/097-enum-collection-components.md)), a narrow-primitive or `Char` element ([ADR-098](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/098-narrow-primitive-and-char-collection-components.md)), and a nullable element ([ADR-083](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/083-nullable-collection-components.md)) all bind; the getter itself has no such restriction. See [ADR-075](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/075-collection-property-getter-setter-independence.md) and [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md) for the remaining write-side gaps.
 - A nested-collection component (`List<List<ChartId>>`) still has no representation on the write side; see [Value classes](value-classes.md#as-a-collection-component) and [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md).
 
 <seealso>
@@ -911,5 +1057,6 @@ position, since a C# `Dictionary` can't hold a null key.
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/081-value-class-collection-components.md">ADR-081: Value-class collection components</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/083-nullable-collection-components.md">ADR-083: Nullable collection components</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/097-enum-collection-components.md">ADR-097: Enum collection components</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/098-narrow-primitive-and-char-collection-components.md">ADR-098: Narrow-primitive and Char collection components</a>
     </category>
 </seealso>

@@ -206,11 +206,15 @@ class Tier1EnumCollectionComponentTest {
   /**
    * ADR-097 section 3. `List<Short>` bound and threw `NotSupportedException` out of `Wrap<T>` at
    * the first call; `List<List<String>>` aborted the entire KSP run in `elementKotlinTypeName`.
-   * Both are now the same named skip `Map`/`Set` already emit, which is the half of the ADR that
-   * was inferred from source rather than spiked.
+   * Both became the same named skip `Map`/`Set` already emit.
+   *
+   * ADR-098 then minted `nuget_wrap_short`, so `List<Short>` moves out of the skip and binds: the
+   * gate is unchanged, its allow-list grew. `List<List<String>>` stays skipped -- nested
+   * collections have no wire at all -- which is what keeps this cell honest about the gate still
+   * being a gate.
    */
   @Test
-  fun `list inputs outside the wrappable set skip named instead of binding or crashing`() {
+  fun `list input over a narrow primitive binds while a nested collection still skips named`() {
     val result = Tier1Harness.run(
       """
       package tier1.enumcollectionnarrowing
@@ -238,19 +242,23 @@ class Tier1EnumCollectionComponentTest {
 
     val kotlin: String = result.generated
     assertContains(kotlin, "export_moodledger_logMoods")
-    assertTrue("export_moodledger_logSpans" !in kotlin, "generated=$kotlin")
+    // ADR-098: the Short element crosses as itself, so the Kotlin lowering is a plain cast off
+    // the boxed component -- no ordinal projection, unlike the enum cells above.
+    assertContains(kotlin, "export_moodledger_logSpans")
+    assertContains(kotlin, "it as kotlin.Short")
     assertTrue("export_moodledger_logNested" !in kotlin, "generated=$kotlin")
 
     val cs: String = result.generatedCSharp
-    assertTrue("LogSpans" !in cs, "generatedCSharp=$cs")
+    assertContains(cs, "LogSpans")
+    assertContains(cs, "NugetMarshal.CreateList(spans)")
     assertTrue("LogNested" !in cs, "generatedCSharp=$cs")
 
     val skips: List<String> = result.kspWarnings
       .filter { it.contains(ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_INPUT.name) }
     assertTrue(
-      skips.any { it.contains("logSpans") },
-      "expected a SKIPPED_UNSUPPORTED_INPUT diagnostic naming logSpans; " +
-          "kspWarnings=${result.kspWarnings}",
+      skips.none { it.contains("logSpans") },
+      "expected no SKIPPED_UNSUPPORTED_INPUT diagnostic for logSpans now that Short is " +
+          "wrappable; kspWarnings=${result.kspWarnings}",
     )
     assertTrue(
       skips.any { it.contains("logNested") },

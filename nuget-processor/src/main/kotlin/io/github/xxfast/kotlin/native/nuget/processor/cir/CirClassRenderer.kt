@@ -278,7 +278,9 @@ internal fun StringBuilder.renderClass(cls: CirClass) {
           // conflates by Any.equals on the previous value).
           val setValueEntryPoint = "${cls.nativePrefix}_set_${prop.nativeName}_value"
           appendLine("        [DllImport(\"${cls.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"$setValueEntryPoint\")]")
-          appendLine("        private static extern void Native_Set${prop.name}Value(IntPtr handle, ${prop.nativeSetterType} value, out IntPtr error);")
+          // ADR-098: a MutableStateFlow<Char> setter slot is a `char` slot like any other.
+          val setValueParam: String = charParameterMarshal(prop.nativeSetterType, "value")
+          appendLine("        private static extern void Native_Set${prop.name}Value(IntPtr handle, $setValueParam, out IntPtr error);")
           appendLine()
         }
       }
@@ -351,11 +353,12 @@ private fun StringBuilder.renderClassConstructor(cls: CirClass, ctor: CirConstru
 
 private fun StringBuilder.renderLegacyMethodNativeImport(cls: CirClass, method: CirMethod) {
   val nativeParamList: MutableList<String> = (listOf("IntPtr handle") +
-      method.parameters.map { "${it.nativeType} ${it.name}" }).toMutableList()
+      method.parameters.map { charParameterMarshal(it.nativeType, it.name) }).toMutableList()
   nativeParamList.addAll(method.extraNativeParams)
   if (method.isSyncErrorCheckEnabled) nativeParamList.add("out IntPtr error")
   val nativeParams: String = nativeParamList.joinToString(", ")
   appendLine("        [DllImport(\"${cls.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"${cls.nativePrefix}_${method.nativeName}\")]")
+  charReturnMarshal(method.nativeReturnType)?.let { appendLine(it) }
   appendLine("        private static extern ${method.nativeReturnType} Native_${method.name}($nativeParams);")
   appendLine()
 }
@@ -453,6 +456,29 @@ internal fun StringBuilder.renderConst(const: CirConst) {
   appendLine()
 }
 
+/**
+ * ADR-098: every `char` slot the generator emits carries an explicit UTF-16 width. Kotlin's
+ * `KChar` is `unsigned short`; a bare C# `char` marshals as ONE ANSI byte, silently truncating
+ * every non-ASCII character on the way in and losing it to U+FFFD on the way out. Same class of
+ * bug and same shape of fix as ADR-069's `[MarshalAs(UnmanagedType.I1)]` on `bool`.
+ *
+ * Applied by native-type text rather than per projection, so that every renderer that mints an
+ * extern slot -- the projected [renderDllImport], the legacy method import, the enum-property
+ * import -- goes through the same rule and none can mint an unattributed one. An `out char` slot
+ * has no route yet (a nullable `Char` still has no has-value fan-out), so only the by-value shape
+ * is matched.
+ */
+internal fun charParameterMarshal(nativeType: String, name: String): String =
+  if (nativeType == "char") "[MarshalAs(UnmanagedType.U2)] $nativeType $name"
+  else "$nativeType $name"
+
+/**
+ * The `[return: MarshalAs]` line a `char`-returning extern needs, or null. See
+ * [charParameterMarshal].
+ */
+internal fun charReturnMarshal(returnType: String): String? =
+  if (returnType == "char") "        [return: MarshalAs(UnmanagedType.U2)]" else null
+
 internal fun StringBuilder.renderDllImport(import: CirDllImport) {
   val visibility: String = if (import.visibility == CirVisibility.PRIVATE) "private" else "public"
   val entryPoint: String = if (import.entryPoint != null) ", EntryPoint = \"${import.entryPoint}\"" else ""
@@ -460,12 +486,13 @@ internal fun StringBuilder.renderDllImport(import: CirDllImport) {
   // type when a cast is needed at the call site (e.g. enum params: public "CatMood", native
   // "int"). CirParameter.nativeType defaults to type, so this is a no-op for every other param.
   val paramList: MutableList<String> =
-    import.parameters.map { "${it.nativeType} ${it.name}" }.toMutableList()
+    import.parameters.map { charParameterMarshal(it.nativeType, it.name) }.toMutableList()
   if (import.hasSyncErrorOut) paramList.add("out IntPtr error")
   val paramStr: String = paramList.joinToString(", ")
 
   appendLine("        [DllImport(\"${import.libraryName}\", CallingConvention = CallingConvention.Cdecl$entryPoint)]")
   if (import.marshalBooleanReturn) appendLine("        [return: MarshalAs(UnmanagedType.I1)]")
+  charReturnMarshal(import.returnType)?.let { appendLine(it) }
   appendLine("        $visibility static extern ${import.returnType} ${import.name}($paramStr);")
   appendLine()
 }

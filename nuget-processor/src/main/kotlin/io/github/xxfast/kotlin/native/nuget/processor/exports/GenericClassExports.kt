@@ -420,6 +420,17 @@ internal fun FileSpec.Builder.addNugetHelperExports() {
       .build()
   )
 
+  // ADR-098 part B: the read half of the Char wire. Kotlin's `KChar` is already `unsigned short`
+  // in the generated C header, so the width fix is entirely on the C# `[MarshalAs]` side.
+  addFunction(
+    FunSpec.builder("export_nuget_unwrap_char")
+      .addAnnotation(cNameAnnotation("nuget_unwrap_char"))
+      .addParameter("handle", cOpaquePointer)
+      .returns(Char::class)
+      .addStatement("return handle.asStableRef<Any>().get() as Char")
+      .build()
+  )
+
   addFunction(
     FunSpec.builder("export_nuget_dispose")
       .addAnnotation(cNameAnnotation("nuget_dispose"))
@@ -430,13 +441,23 @@ internal fun FileSpec.Builder.addNugetHelperExports() {
 }
 
 internal fun FileSpec.Builder.addNugetWrapHelperExports() {
+  // ADR-098: the write half now mirrors `addNugetHelperExports`' read half one-for-one -- the six
+  // narrow primitives (`byte`/`ubyte`/`short`/`ushort`/`uint`/`ulong`) and (part B) `char`. An
+  // unsigned Kotlin type is legal as a `@CName` export parameter, not only as a return.
   val types = listOf(
     "string" to String::class,
+    "byte" to Byte::class,
+    "ubyte" to UByte::class,
+    "short" to Short::class,
+    "ushort" to UShort::class,
     "int" to Int::class,
+    "uint" to UInt::class,
     "long" to Long::class,
+    "ulong" to ULong::class,
     "float" to Float::class,
     "double" to Double::class,
     "bool" to Boolean::class,
+    "char" to Char::class,
   )
 
   for ((suffix, type) in types) {

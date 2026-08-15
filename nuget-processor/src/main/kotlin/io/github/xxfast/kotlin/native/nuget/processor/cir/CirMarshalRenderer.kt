@@ -39,6 +39,14 @@ internal fun StringBuilder.renderMarshalHelper(helper: CirMarshalHelper) {
   appendLine("        [DllImport(\"${helper.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"nuget_unwrap_bool\")]")
   appendLine("        private static extern bool Native_unwrap_bool(IntPtr handle);")
   appendLine()
+  // ADR-098 part B: a bare `char` return marshals as one ANSI byte, which loses every non-ASCII
+  // character outright (U+FFFD). Kotlin's `KChar` is `unsigned short`, so the explicit U2 width
+  // is what makes the two sides agree -- ADR-069's `[MarshalAs(UnmanagedType.I1)]` on `bool`,
+  // same class of bug, same shape of fix.
+  appendLine("        [DllImport(\"${helper.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"nuget_unwrap_char\")]")
+  appendLine("        [return: MarshalAs(UnmanagedType.U2)]")
+  appendLine("        private static extern char nuget_unwrap_char(IntPtr handle);")
+  appendLine()
   appendLine("        [DllImport(\"${helper.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"nuget_dispose\")]")
   appendLine("        private static extern void Native_dispose(IntPtr handle);")
   appendLine()
@@ -61,6 +69,29 @@ internal fun StringBuilder.renderMarshalHelper(helper: CirMarshalHelper) {
   appendLine()
   appendLine("        [DllImport(\"${helper.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"nuget_wrap_bool\")]")
   appendLine("        private static extern IntPtr nuget_wrap_bool(bool value);")
+  appendLine()
+  // ADR-098 part A: the write half of the six narrow primitives `FromHandle<T>` has always read.
+  appendLine("        [DllImport(\"${helper.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"nuget_wrap_byte\")]")
+  appendLine("        private static extern IntPtr nuget_wrap_byte(sbyte value);")
+  appendLine()
+  appendLine("        [DllImport(\"${helper.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"nuget_wrap_ubyte\")]")
+  appendLine("        private static extern IntPtr nuget_wrap_ubyte(byte value);")
+  appendLine()
+  appendLine("        [DllImport(\"${helper.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"nuget_wrap_short\")]")
+  appendLine("        private static extern IntPtr nuget_wrap_short(short value);")
+  appendLine()
+  appendLine("        [DllImport(\"${helper.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"nuget_wrap_ushort\")]")
+  appendLine("        private static extern IntPtr nuget_wrap_ushort(ushort value);")
+  appendLine()
+  appendLine("        [DllImport(\"${helper.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"nuget_wrap_uint\")]")
+  appendLine("        private static extern IntPtr nuget_wrap_uint(uint value);")
+  appendLine()
+  appendLine("        [DllImport(\"${helper.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"nuget_wrap_ulong\")]")
+  appendLine("        private static extern IntPtr nuget_wrap_ulong(ulong value);")
+  appendLine()
+  // ADR-098 part B: same U2 width directive as the unwrap side, on a by-value parameter.
+  appendLine("        [DllImport(\"${helper.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"nuget_wrap_char\")]")
+  appendLine("        private static extern IntPtr nuget_wrap_char([MarshalAs(UnmanagedType.U2)] char value);")
   appendLine()
   // ADR-094: the reflection-free materialisation table. One statically written line per concrete
   // wrapper, so the trimmer keeps each constructor and the AOT compiler pre-compiles it. A plain
@@ -158,6 +189,14 @@ internal fun StringBuilder.renderMarshalHelper(helper: CirMarshalHelper) {
   appendLine("                    Native_dispose(handle);")
   appendLine("                    return (T)(object)result;")
   appendLine("                }")
+  // ADR-098 part B: the one kind FromHandle never dispatched, which made a `List<char>` return
+  // fall through to Materialize<char> and throw NotSupportedException.
+  appendLine("                if (nullableUnderlying == typeof(char))")
+  appendLine("                {")
+  appendLine("                    char result = nuget_unwrap_char(handle);")
+  appendLine("                    Native_dispose(handle);")
+  appendLine("                    return (T)(object)result;")
+  appendLine("                }")
   appendLine("            }")
   appendLine("            if (typeof(T) == typeof(string))")
   appendLine("            {")
@@ -232,6 +271,12 @@ internal fun StringBuilder.renderMarshalHelper(helper: CirMarshalHelper) {
   appendLine("                Native_dispose(handle);")
   appendLine("                return (T)(object)result;")
   appendLine("            }")
+  appendLine("            if (typeof(T) == typeof(char))")
+  appendLine("            {")
+  appendLine("                char result = nuget_unwrap_char(handle);")
+  appendLine("                Native_dispose(handle);")
+  appendLine("                return (T)(object)result;")
+  appendLine("            }")
   appendLine("            return Materialize<T>(handle);")
   appendLine("        }")
   appendLine()
@@ -252,6 +297,16 @@ internal fun StringBuilder.renderMarshalHelper(helper: CirMarshalHelper) {
   appendLine("            if (type == typeof(float)) return nuget_wrap_float((float)(object)value!);")
   appendLine("            if (type == typeof(double)) return nuget_wrap_double((double)(object)value!);")
   appendLine("            if (type == typeof(bool)) return nuget_wrap_bool((bool)(object)value!);")
+  // ADR-098: the six narrow kinds FromHandle<T> has always read back, now writable too, plus
+  // (part B) char. The dispatch variable is the *underlying* type, so `short?` rides the same
+  // branch as `short` with no extra work.
+  appendLine("            if (type == typeof(sbyte)) return nuget_wrap_byte((sbyte)(object)value!);")
+  appendLine("            if (type == typeof(byte)) return nuget_wrap_ubyte((byte)(object)value!);")
+  appendLine("            if (type == typeof(short)) return nuget_wrap_short((short)(object)value!);")
+  appendLine("            if (type == typeof(ushort)) return nuget_wrap_ushort((ushort)(object)value!);")
+  appendLine("            if (type == typeof(uint)) return nuget_wrap_uint((uint)(object)value!);")
+  appendLine("            if (type == typeof(ulong)) return nuget_wrap_ulong((ulong)(object)value!);")
+  appendLine("            if (type == typeof(char)) return nuget_wrap_char((char)(object)value!);")
   // ADR-094: every Kotlin-backed wrapper implements INugetHandle explicitly, so the handle comes
   // out of a type test instead of a private-field read.
   appendLine("            if (value is INugetHandle wrapper) return wrapper.Handle;")

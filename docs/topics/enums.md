@@ -478,20 +478,21 @@ properties](collections.md#mutable-collection-properties).
 <note>
     <p>The gate that admits a bare enum also narrows <code>List</code>'s callable-input gate itself,
     from <code>isBridgeableComponent()</code> to the same <code>isWrappableComponent()</code>
-    predicate <code>Map</code>/<code>Set</code> parameters already used. This is a <b>deliberate
-    breaking change</b>: a <code>List&lt;Short&gt;</code>-, <code>List&lt;Char&gt;</code>-, or
-    <code>List&lt;List&lt;String&gt;&gt;</code>-shaped parameter (a narrow primitive, <code>Char</code>,
-    or a nested collection) loses its generated C# member. No shape that <b>worked</b> is removed:
+    predicate <code>Map</code>/<code>Set</code> parameters already used. At the time, this was a
+    <b>deliberate breaking change</b>: a <code>List&lt;Short&gt;</code>-, <code>List&lt;Char&gt;</code>-,
+    or <code>List&lt;List&lt;String&gt;&gt;</code>-shaped parameter (a narrow primitive, <code>Char</code>,
+    or a nested collection) lost its generated C# member. No shape that <b>worked</b> was removed:
     every one of them threw <code>NotSupportedException</code> at the first call or crashed
     <code>packNuget</code> before this change. A consumer that merely compiled against such a member,
-    without ever calling it successfully, is the one affected.</p>
+    without ever calling it successfully, was the one affected.
+    <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/098-narrow-primitive-and-char-collection-components.md">ADR-098</a>
+    has since restored the narrow-primitive and <code>Char</code> shapes as working members (see
+    <a href="collections.md#narrow-primitives-and-char-as-collection-components">Collections</a>); only
+    a nested collection still loses its member today.</p>
 </note>
 
 ## Limitations
 
-- `Char` and the narrow primitive kinds (`Byte`/`UByte`/`Short`/`UShort`/`UInt`/`ULong`) still cannot
-  be boxed at a collection component position; a `Set<Char>` or `List<Byte>` skips with
-  `SKIPPED_UNSUPPORTED_INPUT`. This is unrelated to enums; see [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md).
 - A nested-collection component (`List<List<Mood>>`) has no representation on the write side and is
   skipped; see [Collections](collections.md).
 

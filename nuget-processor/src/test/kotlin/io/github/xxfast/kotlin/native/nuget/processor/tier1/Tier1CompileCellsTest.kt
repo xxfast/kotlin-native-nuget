@@ -354,23 +354,24 @@ class Tier1CompileCellsTest {
   }
 
   /**
-   * ADR-075 Decision 2, sibling of the two cells above: an *ineligible* setter. `Char` has no
-   * `nuget_wrap_char` (it sits outside `isWrappableComponent()`), so the getter still binds but the
-   * setter must be absent, with a `SKIPPED_UNSUPPORTED_INPUT` diagnostic naming it (worded as the
-   * C# property remaining read-only, never as the property having been dropped).
+   * ADR-075 Decision 2, sibling of the two cells above: an *ineligible* setter. A nested
+   * collection has no per-element wire at all (it sits outside `isWrappableComponent()`), so the
+   * getter still binds but the setter must be absent, with a `SKIPPED_UNSUPPORTED_INPUT`
+   * diagnostic naming it (worded as the C# property remaining read-only, never as the property
+   * having been dropped).
    *
-   * ADR-097 moved this cell off `List<Mood>`: a bare enum component is wrappable now, so that
-   * property gained a setter (`Tier1EnumCollectionComponentTest` pins the flipped behaviour).
-   * `Char` keeps the ineligible-setter mechanism covered.
+   * ADR-097 moved this cell off `List<Mood>` and ADR-098 off `List<Char>`: a bare enum component
+   * is wrappable now, and so is `Char`, so both of those properties gained a setter instead. A
+   * nested collection keeps the ineligible-setter mechanism covered.
    */
   @Test
-  fun `class property with Char element has no setter and fires SKIPPED_UNSUPPORTED_INPUT`() {
+  fun `class property with nested-collection element has no setter and fires SKIPPED_UNSUPPORTED_INPUT`() {
     val result = Tier1Harness.run(
       """
       package tier1.moodbox
 
       class Box {
-        var moods: List<Char> = emptyList()
+        var moods: List<List<String>> = emptyList()
       }
       """.trimIndent()
     )
@@ -385,7 +386,8 @@ class Tier1CompileCellsTest {
     )
     assertTrue(
       "export_box_set_moods" !in result.generated,
-      "expected no setter export (Char is not a wrappable element); generated=${result.generated}",
+      "expected no setter export (a nested collection is not a wrappable element); " +
+          "generated=${result.generated}",
     )
     assertTrue(
       result.kspWarnings.any { it.contains(ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_INPUT.name) },
@@ -398,17 +400,18 @@ class Tier1CompileCellsTest {
    * ADR-075 Decision 2, the `Map` sibling of the cell above — the fixture corpus only exercises
    * an ineligible `List` element (`aliases`); this is the only cell anywhere that reaches
    * `ineligibleComponentDescription()`'s map branch (a wrappable `String` key, an unwrappable
-   * `Char` value), so the diagnostic must name the *value*, not the element. ADR-097 moved this
-   * cell off a `Mood` value for the same reason as the cell above.
+   * nested-collection value), so the diagnostic must name the *value*, not the element. ADR-097
+   * moved this cell off a `Mood` value and ADR-098 off a `Char` one, for the same reason as the
+   * cell above.
    */
   @Test
-  fun `class property with Map of String to Char value has no setter and names the value type`() {
+  fun `class property with Map of String to nested-collection value has no setter and names the value type`() {
     val result = Tier1Harness.run(
       """
       package tier1.moodmap
 
       class Box {
-        var scores: Map<String, Char> = emptyMap()
+        var scores: Map<String, List<String>> = emptyMap()
       }
       """.trimIndent()
     )
@@ -423,13 +426,13 @@ class Tier1CompileCellsTest {
     )
     assertTrue(
       "export_box_set_scores" !in result.generated,
-      "expected no setter export (Char is not a wrappable map value); " +
+      "expected no setter export (a nested collection is not a wrappable map value); " +
           "generated=${result.generated}",
     )
     assertTrue(
       result.kspWarnings.any {
         it.contains(ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_INPUT.name) &&
-            it.contains("value type Char")
+            it.contains("value type Collection")
       },
       "expected a SKIPPED_UNSUPPORTED_INPUT diagnostic naming Box.scores's value type; " +
           "kspWarnings=${result.kspWarnings}",

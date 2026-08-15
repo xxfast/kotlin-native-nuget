@@ -27,8 +27,9 @@ package io.github.xxfast.kotlin.native.nuget.test.clinic
  * cell whose enum sits in the VALUE slot, distinguishing the value slot's read projection from the
  * element slot's. Both bind today and throw `NotSupportedException` at the first read.
  *
- * [logSpans] is the gate-narrowing cell: its C# member must be **absent** once `List`'s input gate
- * narrows to `isWrappableComponent()`.
+ * [logSpans] was ADR-097's gate-narrowing cell, asserted **absent** once `List`'s input gate
+ * narrowed to `isWrappableComponent()`. ADR-098 admits `Short` to that same predicate, so it flips
+ * to a working round trip and the absence assertion inverts with it.
  *
  * `List<List<String>>` is deliberately NOT a cell here -- it aborts the whole KSP run today
  * (`elementKotlinTypeName` has no `Collection` branch), so it cannot live in the corpus until the
@@ -92,10 +93,12 @@ class MoodLedger {
   fun moodChart(): Map<String, Mood> = mapOf("oreo" to Mood.CALM, "mylo" to Mood.ANXIOUS)
 
   /**
-   * ADR-097 §3 · the gate-narrowing cell. `List`'s callable-input gate narrows from
-   * `isBridgeableComponent()` to `isWrappableComponent()`, so this becomes a named
-   * `SKIPPED_UNSUPPORTED_INPUT` instead of binding and throwing `NotSupportedException` at the
-   * first call. Asserted **absent** from the generated C# -- there is no callable to invoke.
+   * ADR-097 §3, inverted by ADR-098 part A · this was the gate-narrowing cell. ADR-097 narrowed
+   * `List`'s callable-input gate from `isBridgeableComponent()` to `isWrappableComponent()`, which
+   * turned a `List<Short>` parameter from bind-then-throw into a named `SKIPPED_UNSUPPORTED_INPUT`
+   * with no C# member at all. ADR-098 adds `SHORT` to that predicate and mints `nuget_wrap_short`,
+   * so the member comes back -- this time working. Kept here rather than moved to [Readings] so the
+   * inversion is visible against the assertion that used to guard it.
    */
   fun logSpans(spans: List<Short>): String = spans.joinToString(",")
 }
