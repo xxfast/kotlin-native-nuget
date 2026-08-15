@@ -78,6 +78,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnosticK
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardPlanSkipReason
 import io.github.xxfast.kotlin.native.nuget.processor.forward.diagnosticHint
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnosticSink
+import io.github.xxfast.kotlin.native.nuget.processor.forward.renderForwardDiagnosticsJson
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnosticTrackingLogger
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardHelperRequirement
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardPropertyPlan
@@ -236,6 +237,10 @@ class NugetProcessor(
   override fun process(resolver: Resolver): List<KSAnnotated> {
     if (processed) return emptyList()
     processed = true
+
+    // ADR-100: the sink is a singleton inside a long-lived Gradle daemon; start this round empty so
+    // NugetDiagnostics.json describes this compilation and no earlier one.
+    ForwardDiagnosticSink.reset()
 
     // ADR-063: the effective include set is the explicit `include` when non-empty, else
     // `[rootPackage]` when `rootPackage` is set, else empty (= all). Mirrors the reverse side's
@@ -586,6 +591,7 @@ class NugetProcessor(
       ),
     )
     cNameExports.writeTo(codeGenerator, deps)
+    writeForwardDiagnostics(deps)
 
     logger.info(
       "Generated bindings for ${functions.size} functions" +
@@ -604,6 +610,32 @@ class NugetProcessor(
     )
 
     return emptyList()
+  }
+
+  /**
+   * ADR-100: the delivery channel for forward diagnostics. `KSPLogger.warn` output never reaches
+   * the console (KSP runs the processor on a Worker API thread and its stdout is dropped), and a
+   * normal `packNuget` does not even run the KSP task (`FROM-CACHE`, then `UP-TO-DATE`), so a
+   * transport that only speaks during the task action is silent on most builds. A *declared KSP
+   * output file* survives both: it is restored on a cache hit and present on an up-to-date run, and
+   * `NugetReportDiagnosticsTask` re-emits it through Gradle's own `Task.logger`.
+   *
+   * `json` lands in the KSP resources dir (`CodeGeneratorImpl.extensionToDirectory` routes every
+   * extension but `class`/`java`/`kt` there), beside `Interop.cs`, which is exactly where the
+   * plugin already looks. Written unconditionally, empty array included, so "no file" unambiguously
+   * means "KSP never ran for this target" rather than "no skips".
+   */
+  private fun writeForwardDiagnostics(deps: Dependencies) {
+    val json: String = renderForwardDiagnosticsJson(ForwardDiagnosticSink.recorded())
+    codeGenerator
+      .createNewFile(
+        dependencies = deps,
+        packageName = "",
+        fileName = "NugetDiagnostics",
+        extensionName = "json",
+      )
+      .writer()
+      .use { writer -> writer.write(json) }
   }
 
   private fun generateCSharpBindings(

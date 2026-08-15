@@ -3,6 +3,7 @@ package io.github.xxfast.kotlin.native.nuget.processor.forward
 import com.google.devtools.ksp.processing.KSPLogger
 import com.google.devtools.ksp.symbol.FileLocation
 import com.google.devtools.ksp.symbol.KSNode
+import java.util.Collections
 
 /**
  * ADR-064: the forward direction's named skip diagnostic, mirroring the reverse
@@ -127,17 +128,40 @@ internal fun ForwardDiagnostic.format(): String {
  * `KSNode` so KSP/Gradle can render the message at the author's own Kotlin source.
  */
 internal object ForwardDiagnosticSink {
+  // ADR-100: every non-fatal diagnostic, in emission order, for `NugetDiagnostics.json`. The
+  // KSPLogger calls stay (free, observed by the Tier 1 harness, and they start working the day the
+  // Gradle/KSP worker-stdout gap closes upstream), but they reach no console today, so the file is
+  // what a consumer actually gets. Synchronized because KSP runs the processor on a Worker API
+  // thread and two targets' rounds can share one daemon; the processor resets before each round.
+  private val recorded: MutableList<ForwardDiagnosticRecord> =
+    Collections.synchronizedList(mutableListOf())
+
   fun emit(diagnostics: List<ForwardDiagnostic>, logger: KSPLogger) {
     diagnostics.forEach { diagnostic ->
       val message: String = diagnostic.format()
       when (diagnostic.kind.severity) {
+        // An ERROR_* already fails this KSP round before any output is written, so recording it
+        // would produce a file nobody reads (see ADR-100 "Deferred: ERROR_* visibility").
         ForwardDiagnosticSeverity.ERROR -> logger.error(message, diagnostic.symbol)
         ForwardDiagnosticSeverity.WARNING,
         ForwardDiagnosticSeverity.INFO,
-          -> logger.warn(message, diagnostic.symbol)
+          -> {
+          logger.warn(message, diagnostic.symbol)
+          recorded += ForwardDiagnosticRecord(
+            severity = diagnostic.kind.severity,
+            kind = diagnostic.kind,
+            declaration = diagnostic.declaration,
+            message = message,
+          )
+        }
       }
     }
   }
+
+  /** Starts a fresh round; the object is a singleton in a long-lived Gradle daemon. */
+  fun reset() = recorded.clear()
+
+  fun recorded(): List<ForwardDiagnosticRecord> = synchronized(recorded) { recorded.toList() }
 }
 
 /**

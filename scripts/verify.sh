@@ -51,6 +51,11 @@ rm -rf IntegrationTests/obj IntegrationTests/bin
 echo "==> Pack TestLibrary NuGet (:test-library:clean :test-library:packNuget)"
 ./gradlew :test-library:clean :test-library:packNuget
 
+# ADR-100: forward diagnostics must reach the console on a fresh *and* an incremental packNuget.
+# Runs after the pack above, so both of its runs exercise the cached path this feature exists for.
+echo "==> Forward diagnostic delivery (scripts/verify-forward-diagnostics.sh)"
+"$ROOT/scripts/verify-forward-diagnostics.sh"
+
 echo "==> Check generated bindings compile as a consumer (net8.0, warnings as errors)"
 dotnet build GeneratedBindingsCheck
 
