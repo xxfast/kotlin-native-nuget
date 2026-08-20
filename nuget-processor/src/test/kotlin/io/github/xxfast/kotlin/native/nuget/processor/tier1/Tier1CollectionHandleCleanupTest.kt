@@ -167,7 +167,17 @@ class Tier1CollectionHandleCleanupTest {
       |            IntPtr listHandle = NugetListNative.Create();
       |            try
       |            {
-      |                foreach (T value in values) NugetListNative.Add(listHandle, Wrap(value));
+      |                foreach (T value in values)
+      |                {
+      |                    IntPtr element = IntPtr.Zero;
+      |                    bool owned = false;
+      |                    try
+      |                    {
+      |                        element = Wrap(value, out owned);
+      |                        NugetListNative.Add(listHandle, element);
+      |                    }
+      |                    finally { if (owned) NugetListNative.Dispose(element); }
+      |                }
       |            }
       |            catch
       |            {
@@ -186,7 +196,24 @@ class Tier1CollectionHandleCleanupTest {
       |            IntPtr mapHandle = NugetMapNative.Create();
       |            try
       |            {
-      |                foreach (var pair in values) NugetMapNative.Put(mapHandle, Wrap(pair.Key), Wrap(pair.Value));
+      |                foreach (var pair in values)
+      |                {
+      |                    IntPtr key = IntPtr.Zero;
+      |                    bool keyOwned = false;
+      |                    IntPtr value = IntPtr.Zero;
+      |                    bool valueOwned = false;
+      |                    try
+      |                    {
+      |                        key = Wrap(pair.Key, out keyOwned);
+      |                        value = Wrap(pair.Value, out valueOwned);
+      |                        NugetMapNative.Put(mapHandle, key, value);
+      |                    }
+      |                    finally
+      |                    {
+      |                        if (keyOwned) NugetMapNative.Dispose(key);
+      |                        if (valueOwned) NugetMapNative.Dispose(value);
+      |                    }
+      |                }
       |            }
       |            catch
       |            {
@@ -229,6 +256,10 @@ class Tier1CollectionHandleCleanupTest {
       |            return nativeResult;
       """.trimMargin(),
     )
-    assertFalse("finally" in cs, "expected no try/finally scope without a temporary handle")
+    // ADR-099: scoped to the wrapper method. `NugetMarshal`'s own factories now carry a per-element
+    // `finally` (they dispose the box they minted), so a whole-file search no longer isolates the
+    // call-site shape this cell is about.
+    val adopt: String = cs.substringAfter("public int Adopt(").substringBefore("\n        }")
+    assertFalse("finally" in adopt, "expected no try/finally scope without a temporary handle")
   }
 }

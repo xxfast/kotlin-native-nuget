@@ -12,7 +12,8 @@ Registered when `nuget { publish { } }` is set **and** the Kotlin Multiplatform 
 
 | Task | Description | Depends on |
 |---|---|---|
-| `packNuget` | Packages the Kotlin/Native shared library as a NuGet package | the shared-lib link tasks, `kspKotlin{Target}`, `nugetGenerateShims` (only if the project also binds a dependency), and `nugetSnapshotVersion`/`nugetSnapshotVersionProps` (only when `snapshot = true`) |
+| `packNuget` | Packages the Kotlin/Native shared library as a NuGet package | the shared-lib link tasks, `kspKotlin{Target}`, `nugetReportDiagnostics`, `nugetGenerateShims` (only if the project also binds a dependency), and `nugetSnapshotVersion`/`nugetSnapshotVersionProps` (only when `snapshot = true`) |
+| `nugetReportDiagnostics` | Reports declarations the forward bridge could not generate | `kspKotlin{Target}` |
 
 `packNuget` writes the staged package to `build/nuget/{packageId}.{version}/` and the zipped
 `.nupkg` to `build/nuget/{packageId}.{version}.nupkg`. It reads the C# KSP generates at
@@ -20,6 +21,13 @@ Registered when `nuget { publish { } }` is set **and** the Kotlin Multiplatform 
 a dependency, merges the reverse-direction C# shims from `nugetGenerateShims` into the same
 `contentFiles/cs/any/` folder and pins each bound dependency at its exact resolved version in the
 `.nuspec` `<dependencies>` block.
+
+`nugetReportDiagnostics` reads `NugetDiagnostics.json` from the same KSP resources directory
+(a declared KSP task output, so it is present even when `kspKotlin{Target}` reports `FROM-CACHE` or
+`UP-TO-DATE`) and re-emits each pre-rendered message as a Gradle warning, so a skipped declaration
+is visible on every `packNuget`, not only the first. It is never up to date itself. See
+[Forward overview](forward-overview.md#where-these-messages-appear) and
+[ADR-100](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/100-forward-diagnostic-delivery.md).
 
 Registered only when `nuget { publish { snapshot = true } }` is set:
 

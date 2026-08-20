@@ -9,8 +9,9 @@ package io.github.xxfast.kotlin.native.nuget.test.clinic
  * generate C# calling `nuget_wrap_string` against a native library that never exported it.
  *
  * Also the "Expected consumer-side C#" fixture from ADR-075: every eligible setter lowering shape
- * once each, plus the two ineligible shapes that must fall back to a get-only C# property with a
- * `SKIPPED_UNSUPPORTED_INPUT` diagnostic.
+ * once each. The two shapes that landed here as ineligible (get-only C# property plus a
+ * `SKIPPED_UNSUPPORTED_INPUT` diagnostic) have both since been promoted to full round trips --
+ * [aliases]'s nullable element by ADR-083, [moods]'s bare enum element by ADR-097.
  */
 class Chart(val patientName: String) {
   /** Eligible: `CreateList` + `Wrap<T>` string. */
@@ -27,19 +28,46 @@ class Chart(val patientName: String) {
   /** Eligible: the SET/MUTABLE_SET shared lowering. */
   var codes: Set<String> = emptySet()
 
-  /** Eligible, and nullable — the sharp case ADR-075 exists to fix. Round-trips both ways: assign
+  /** Eligible, and nullable: the sharp case ADR-075 exists to fix. Round-trips both ways: assign
    *  a list and read it back, assign `null` and read back `null`. */
   var notes: List<String>? = null
 
-  /** Ineligible: `Mood` is an enum element, not `isWrappableComponent()`. Must become a get-only
-   *  C# property (`{ get; }`, no `set`) plus a `SKIPPED_UNSUPPORTED_INPUT` diagnostic naming this
-   *  property. */
+  /** ADR-097 promoted this cell out of the ineligible group: a bare enum element is no longer
+   *  what makes a collection property setter ineligible. `isWrappableComponent()` gains `is
+   *  BridgeType.Enum -> true`, which is the one predicate shared by `Map`/`Set` callable inputs
+   *  and by collection property setters, so this flips from get-only to a full round trip in the
+   *  same branch that admits `MoodLedger.logMoods`. Reading it was broken too
+   *  (`FromHandle<Mood>` -> `Materialize` -> `NotSupportedException`, no `Factories` entry for an
+   *  enum); the same int-ordinal projection fixes both halves, so this is the one cell where
+   *  getter and setter are both new. [moodsSummary] observes it Kotlin-side, so a C# write only
+   *  reads back correctly if the ordinals arrived as genuinely re-wrapped [Mood]s rather than
+   *  being echoed by the same broken getter. */
   var moods: List<Mood> = emptyList()
+
+  /** The Kotlin-side observation for [moods]'s setter (ADR-097). */
+  fun moodsSummary(): String = moods.joinToString(",")
+
+  /** ADR-099 · the collection property whose setter becomes eligible for free.
+   *  `isSetterEligible()` is the *same* `isWrappableComponent()` predicate the `Map`/`Set`/`List`
+   *  callable inputs run (`ForwardPropertyPlanner.kt`), so admitting a nested `Collection`
+   *  component flips this property from get-only to a round trip in the same branch that admits
+   *  `WardBoard.logGrid` -- exactly the way [moods] flipped under ADR-097. Today it is planned
+   *  get-only, and its *getter* is the property-position spelling of the same bind-then-throw
+   *  landmine `WardBoard.grid` carries at the method-return position. [gridSummary] observes it
+   *  Kotlin-side, so a C# write only reads back correctly if the inner handles arrived as
+   *  genuinely re-lowered Kotlin lists rather than being echoed by the same getter that wrote
+   *  them. */
+  var grid: List<List<String>> = emptyList()
+
+  /** The Kotlin-side observation for [grid]'s setter (ADR-099). Joins the inner rows with a
+   *  different separator than the outer, so a flattened or transposed lowering is visible. */
+  fun gridSummary(): String = grid.joinToString(";") { it.joinToString(",") }
 
   /** Eligible as of ADR-083, which was not the case when ADR-075 wrote this cell: the *element*
    *  is nullable (`String?`, not `String`), not the collection reference, and a null component now
    *  rides the null pointer in its own slot. Still sharp on purpose — the collection reference's
    *  own nullability ([notes]) and its components' marshallability ([aliases]) are independent
-   *  questions; this one is now settable, [moods] (an enum element) still is not. */
+   *  questions; ADR-083 made this one settable and ADR-097 did the same for [moods], each through
+   *  its own component-slot wire. */
   var aliases: List<String?> = emptyList()
 }

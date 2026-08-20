@@ -26,6 +26,8 @@ internal fun StringBuilder.renderEnumExtensions(enum: CirEnum) {
     val entryPoint: String = "${enumLowercase}_get_$propLowercase"
 
     appendLine("        [DllImport(\"${enum.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"$entryPoint\")]")
+    // ADR-098: an enum's `Char` property getter is an extern slot like any other.
+    charReturnMarshal(prop.nativeReturnType)?.let { appendLine(it) }
     appendLine("        private static extern ${prop.nativeReturnType} Native_Get${prop.name}(int ordinal);")
     appendLine()
 

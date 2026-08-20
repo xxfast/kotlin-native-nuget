@@ -449,6 +449,7 @@ internal fun translate(
         context.libraryName,
         includesMap = tracker.needsMap,
         includesSet = tracker.needsSet,
+        includesList = tracker.needsList,
         includesBridge = bridgePlans.isNotEmpty(),
         // ADR-094: the walk happens here, before the helpers are prepended, because `namespaces`
         // already pairs every wrapper declaration with the namespace that names it.

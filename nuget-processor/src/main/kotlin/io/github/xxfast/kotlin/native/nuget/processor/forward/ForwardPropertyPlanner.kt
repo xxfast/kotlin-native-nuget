@@ -379,26 +379,6 @@ internal class ForwardPropertyPlanner(
     )
   }
 
-  /** A short, human-readable name for a diagnostic message — never used to drive marshalling. */
-  private fun BridgeType.diagnosticTypeName(): String = when (this) {
-    BridgeType.Unit -> "Unit"
-    BridgeType.Char -> "Char"
-    BridgeType.String -> "String"
-    BridgeType.Instant -> "Instant"
-    is BridgeType.Primitive -> kind.name.lowercase().replaceFirstChar { it.uppercase() }
-    is BridgeType.Enum -> qualifiedName.substringAfterLast('.')
-    is BridgeType.ObjectHandle -> qualifiedName.substringAfterLast('.')
-    is BridgeType.Interface -> qualifiedName.substringAfterLast('.')
-    is BridgeType.BoundInterface -> qualifiedName.substringAfterLast('.')
-    is BridgeType.ValueClass -> qualifiedName.substringAfterLast('.')
-    is BridgeType.Collection -> "Collection"
-    is BridgeType.Nullable -> "${type.diagnosticTypeName()}?"
-    is BridgeType.SpecializedProtocol -> name
-    is BridgeType.RawCollection -> "Collection"
-    is BridgeType.RawKSType -> rendered
-    is BridgeType.Unsupported -> rendered
-  }
-
   private fun nativeCall(
     exportName: String,
     result: ForwardAbiWireType,

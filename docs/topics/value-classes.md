@@ -1131,9 +1131,10 @@ never carries the value class itself, only the **underlying**: C# projects each 
 underlying before boxing (`x.Value`, `(int)x.Mood`, `x.Patient`), and Kotlin re-wraps per element on
 the way in and projects to the underlying on the way out. Method returns and property getters used to
 bind and then throw at runtime (`NugetMarshal.FromHandle<ChartId>` had no route to a struct whose only
-public constructor takes a `string`); that is fixed here, not merely narrowed. Only the value-class
-*wrapper* over an enum is admitted; a bare enum component (`Set<Mood>`, unwrapped) stays with its own
-sibling ROADMAP item, see [Collections](collections.md).
+public constructor takes a `string`); that is fixed here, not merely narrowed. This row is the
+value-class *wrapper* over an enum; a **bare** enum component (`Set<Mood>`, unwrapped) rides the same
+`int`-ordinal wire without the wrapper, see [Enums: As a collection
+component](enums.md#as-a-collection-component).
 
 From `test-library/src/nativeMain/kotlin/.../clinic/ValueClassCollectionsSample.kt`:
 
@@ -1518,9 +1519,12 @@ for the full reasoning, including its 2026-08-08 amendment.
 - A **nullable** value-class collection component (`List<ChartId?>`) now binds, riding a null
   pointer in the component slot ([ADR-083](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/083-nullable-collection-components.md)).
   A **nested**-collection component (`List<List<ChartId>>`) still has no representation on the
-  write side. A **bare** enum component, not wrapped in a value class (`Set<Mood>`), and the
-  narrow-primitive components (`Byte`, `Short`, `Char`, ...) also stay out of scope; see
-  [Collections](collections.md) and [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md).
+  write side; see [Collections](collections.md) and [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md).
+  A **bare** enum component, not wrapped in a value class (`Set<Mood>`,
+  [ADR-097](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/097-enum-collection-components.md)),
+  and the narrow-primitive/`Char` components (`Byte`, `Short`, `Char`, ...,
+  [ADR-098](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/098-narrow-primitive-and-char-collection-components.md))
+  are no longer out of scope either; both bind the same way this row's value-class component does.
 
 <seealso>
     <category ref="related">

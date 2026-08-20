@@ -1149,7 +1149,8 @@ internal class ForwardCallablePlanner(
       return ForwardCallableCatalogEntry.Skipped(
         symbol, requireNotNull(ineligible.inputSkipReason()), node = node,
         detail = ineligible.actualTypeAliasTargetDetail()
-          ?: ineligible.unexportedDependencyDetail(),
+          ?: ineligible.unexportedDependencyDetail()
+          ?: ineligible.collectionComponentDetail(),
       )
     }
 
@@ -1355,7 +1356,8 @@ internal class ForwardCallablePlanner(
       return ForwardCallableCatalogEntry.Skipped(
         symbol, requireNotNull(ineligible.inputSkipReason()), node = node,
         detail = ineligible.actualTypeAliasTargetDetail()
-          ?: ineligible.unexportedDependencyDetail(),
+          ?: ineligible.unexportedDependencyDetail()
+          ?: ineligible.collectionComponentDetail(),
       )
     }
 
@@ -1363,7 +1365,9 @@ internal class ForwardCallablePlanner(
     if (resultShape == null) {
       return ForwardCallableCatalogEntry.Skipped(
         symbol, requireNotNull(result.skipReason()), node = node,
-        detail = result.actualTypeAliasTargetDetail() ?: result.unexportedDependencyDetail(),
+        detail = result.actualTypeAliasTargetDetail()
+          ?: result.unexportedDependencyDetail()
+          ?: result.collectionComponentDetail(),
       )
     }
 
@@ -2254,21 +2258,38 @@ internal class ForwardCallablePlanner(
     else -> skipReason()
   }
 
+  /**
+   * The offending *component* of a `COLLECTION` skip, in the same wording
+   * [ForwardPropertyPlanner]'s dropped-setter diagnostic uses ("element type Collection?",
+   * "key type String?"). The outer collection kind is never the failure: every kind binds since
+   * ADR-073/ADR-097, so only a component can fail. Mirrors [collectionInputSkipReason]'s admitted
+   * checks, ADR-083's non-null key rule included, so the named component is the one that actually
+   * failed rather than whichever slot is checked last. `null` for any other reason, and for a
+   * `RawCollection` (no component survived classification) whose hint stays unnamed.
+   */
+  private fun BridgeType.collectionComponentDetail(): String? {
+    val collection: BridgeType.Collection = unwrapNullable() as? BridgeType.Collection ?: return null
+    if (collection.collectionInputSkipReason() != ForwardPlanSkipReason.COLLECTION) return null
+    val isMap: Boolean =
+      collection.kind == CollectionKind.MAP || collection.kind == CollectionKind.MUTABLE_MAP
+    if (!isMap) {
+      return "element type ${collection.element?.diagnosticTypeName() ?: "unknown"}"
+    }
+    val keyOk: Boolean =
+      collection.key?.let { it !is BridgeType.Nullable && it.isWrappableComponent() } == true
+    val valueOk: Boolean = collection.value?.isWrappableComponent() == true
+    val key: String = collection.key?.diagnosticTypeName() ?: "unknown"
+    val value: String = collection.value?.diagnosticTypeName() ?: "unknown"
+    return when {
+      !keyOk && !valueOk -> "key type $key and value type $value"
+      !keyOk -> "key type $key"
+      else -> "value type $value"
+    }
+  }
+
   private fun BridgeType.Collection.collectionInputSkipReason(): ForwardPlanSkipReason? = when {
     !isBridgeableComponent() ->
       (element ?: key ?: value)?.skipReason() ?: ForwardPlanSkipReason.UNSUPPORTED
-
-    // ADR-083: a *nullable* List element is admitted only when its inner type is wrappable; every
-    // other nullable spelling (Char?, narrow primitives, bare Enum?, Instant?, nested Collection?)
-    // becomes a named skip here instead of the KSP crash it used to be in componentLowering. The
-    // non-null element gate stays on the wider isBridgeableComponent (ADR-073 Scope item 1): no
-    // nullable element binds today, so narrowing only the nullable spellings costs nothing.
-    kind == CollectionKind.LIST || kind == CollectionKind.MUTABLE_LIST ->
-      if (element is BridgeType.Nullable && !element.isWrappableComponent()) {
-        ForwardPlanSkipReason.COLLECTION
-      } else {
-        null
-      }
 
     // ADR-073: map/set inputs are admitted only for components the write side can box
     // (isWrappableComponent). ADR-083: the *key* additionally has to be non-nullable -- a C#
@@ -2402,42 +2423,77 @@ internal fun BridgeType.isBridgeableComponent(): Boolean = when (this) {
  * ADR-073: the component types the C# write side can actually box, for an input-position
  * `Map`/`Set` (and their mutable variants): the six `nuget_wrap_*` primitives plus an object
  * handle (via `CreateMap`/`CreateSet`'s reflective `_handle` fallback), plus (ADR-081) a value
- * class over any of those underlyings, projected to the underlying per element. Narrower than
- * [isBridgeableComponent], which also admits `Nullable`, `Char`, nested `Collection`, bare `Enum`
- * and the narrow-primitive kinds (none of which the write side can box), because those overshoots
- * would otherwise either crash `packNuget` (`Nullable`/nested `Collection`, no
- * `elementKotlinTypeName` branch) or throw at runtime (`NotSupportedException`, no matching
- * `nuget_wrap_*`). Deliberately *not* applied to
- * `List` at a *callable parameter* position; narrowing that predicate is a separate, deferred
- * decision (ADR-073 Scope item 1). ADR-075 reuses this for a collection *property setter*, where
- * `List` is deliberately included (ADR-075 Question A alternative A1): no `List` property setter
- * binds at all today, so there is no backward-compatible `List` parameter shape to preserve.
+ * class over any of those underlyings, projected to the underlying per element, plus (ADR-097) a
+ * bare `Enum`, which rides that same per-element projection as its int ordinal, plus (ADR-098) the
+ * six narrow primitive kinds and `Char`, each with a `nuget_wrap_*` export of its own. Still
+ * narrower than [isBridgeableComponent], which also admits nested `Collection` and `Unit` (neither
+ * of which the write side can box), because those overshoots would otherwise either crash
+ * `packNuget` (nested `Collection`, no `elementKotlinTypeName` branch) or throw at runtime
+ * (`NotSupportedException`, no matching `nuget_wrap_*`).
+ *
+ * ADR-097: this is now the gate for *every* input position, `List` included. ADR-075 already
+ * reused it for a collection *property setter*.
  *
  * ADR-075: lifted from a `ForwardCallablePlanner` private member to file-level `internal` — the
  * body touches no planner state.
  */
 internal fun BridgeType.isWrappableComponent(): Boolean = when (this) {
   BridgeType.String -> true
+  // ADR-098: every PrimitiveKind is wrappable now that the six narrow kinds have a
+  // `nuget_wrap_*` export each. Kept as an explicit set rather than `true` so a future kind has
+  // to be admitted deliberately, with its export minted alongside.
   is BridgeType.Primitive -> kind in setOf(
-    PrimitiveKind.INT, PrimitiveKind.LONG, PrimitiveKind.FLOAT,
-    PrimitiveKind.DOUBLE, PrimitiveKind.BOOLEAN,
+    PrimitiveKind.BYTE, PrimitiveKind.UBYTE, PrimitiveKind.SHORT, PrimitiveKind.USHORT,
+    PrimitiveKind.INT, PrimitiveKind.UINT, PrimitiveKind.LONG, PrimitiveKind.ULONG,
+    PrimitiveKind.FLOAT, PrimitiveKind.DOUBLE, PrimitiveKind.BOOLEAN,
   )
+
+  // ADR-098 part B: `Char` is its own BridgeType, not a PrimitiveKind, so it needs its own arm.
+  // It crosses as the UTF-16 code unit Kotlin already emits (`KChar` = `unsigned short`), with
+  // the C# side pinned to that width by `[MarshalAs(UnmanagedType.U2)]`.
+  BridgeType.Char -> true
 
   is BridgeType.ObjectHandle -> true
 
+  // ADR-097: a *bare* enum component rides the same int-ordinal wire ADR-081 minted for a value
+  // class over an enum, projected per element at the C# call site (`(int)x`) and re-wrapped as
+  // `Mood.entries[it as Int]` on the Kotlin side, so `Wrap<T>` is only ever instantiated at
+  // `T = int`. One branch here admits it at every position the predicate guards: `List`/`Set`/`Map`
+  // callable inputs and collection property setters.
+  is BridgeType.Enum -> true
+
   // ADR-081: a value-class component crosses as its *underlying*, projected per element at the C#
   // call site (`x.Value`, `(int)x.Mood`, `x.Patient`) before `Wrap<T>` is ever instantiated, so the
-  // write side only ever boxes a type it already handles. The `Enum` case is scoped to this branch
-  // deliberately: a *bare* enum component stays unwrappable (its own ROADMAP item), only the
-  // value-class wrapper over an enum rides the existing int-ordinal wire.
+  // write side only ever boxes a type it already handles.
   is BridgeType.ValueClass ->
     underlying is BridgeType.Enum || underlying.isWrappableComponent()
+
+  // ADR-099: a nested collection crosses as the inner collection's own native handle, built by the
+  // same CreateList/CreateSet/CreateMap the outer one uses and read back through the matching
+  // Read* helper. Recursive, so depth 3 is the same code as depth 1. The map-key rule mirrors the
+  // top-level one: a C# Dictionary cannot hold a null key.
+  is BridgeType.Collection -> {
+    val isMap: Boolean = kind == CollectionKind.MAP || kind == CollectionKind.MUTABLE_MAP
+    if (isMap) {
+      key?.let { it !is BridgeType.Nullable && it.isWrappableComponent() } == true &&
+          value?.isWrappableComponent() == true
+    } else {
+      element?.isWrappableComponent() == true
+    }
+  }
 
   // ADR-083: a component slot is already pointer-shaped (every element crosses as a boxed
   // StableRef handle), so the null pointer is an in-band null for every wrappable component kind
   // -- including Int?, which at an *ordinary* position needs the ADR-079 has-value pair. Nesting
   // is excluded, matching isBridgeableComponent's own no-nested-nullable rule.
-  is BridgeType.Nullable -> type !is BridgeType.Nullable && type.isWrappableComponent()
+  //
+  // ADR-099: the `Collection` exclusion is deliberate and load-bearing. This branch delegates to
+  // its inner type, so `List<List<String>?>` would be admitted *automatically* the instant a
+  // Collection became wrappable, and it would bind with a write projection that has no null arm --
+  // the exact trap ADR-097 hit with `List<Mood?>`. A nullable *leaf* under nesting
+  // (`List<List<String?>>`) is admitted and rides ADR-083's arms under the recursion.
+  is BridgeType.Nullable -> type !is BridgeType.Nullable && type !is BridgeType.Collection &&
+      type.isWrappableComponent()
 
   else -> false
 }

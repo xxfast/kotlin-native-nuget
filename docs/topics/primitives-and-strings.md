@@ -4,11 +4,11 @@ Primitive types follow the standard [Kotlin/Native C interop mappings](https://k
 
 | Kotlin | C# | Notes |
 |---|---|---|
-| `Byte` / `Short` / `Int` / `Long` | `sbyte` / `short` / `int` / `long` | |
-| `UByte` / `UShort` / `UInt` / `ULong` | `byte` / `ushort` / `uint` / `ulong` | |
+| `Byte` / `Short` / `Int` / `Long` | `sbyte` / `short` / `int` / `long` | `Byte`/`Short` also bind as a `List`/`Map`/`Set` component, see [Collections](collections.md#narrow-primitives-and-char-as-collection-components) and [ADR-098](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/098-narrow-primitive-and-char-collection-components.md) |
+| `UByte` / `UShort` / `UInt` / `ULong` | `byte` / `ushort` / `uint` / `ulong` | all four also bind as a `List`/`Map`/`Set` component, see [Collections](collections.md#narrow-primitives-and-char-as-collection-components) and [ADR-098](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/098-narrow-primitive-and-char-collection-components.md) |
 | `Float` / `Double` | `float` / `double` | |
 | `Boolean` | `bool` | |
-| `Char` | `char` | 2-byte scalar (`ushort` at the C ABI); property, parameter, and method return, see [ADR-062](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/062-forward-callable-plan.md) |
+| `Char` | `char` | 2-byte scalar (`ushort` at the C ABI); property, parameter, method return, and `List`/`Map`/`Set` component, see [Char](#char) below, [ADR-062](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/062-forward-callable-plan.md) and [ADR-098](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/098-narrow-primitive-and-char-collection-components.md) |
 | `String` | `string` | UTF-8 marshalling |
 | `T?` (nullable primitive) | `T?` | two-call pattern on property and top-level returns (forward only); method/extension nullable returns use single-call `valueOut`, see [Classes and objects](classes-and-objects.md) and [ADR-002](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/002-nullable-two-call-pattern.md) / [ADR-061](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/061-method-return-marshalling.md); `Boolean?` needs an explicit `[MarshalAs(UnmanagedType.I1)]` at both seams, see Nullable Boolean below and [ADR-069](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/069-nullable-boolean-marshalling.md) |
 | `String?` | `string?` | forward: two-call pattern on top-level/property returns (this page); reverse: `NullableAttribute`-driven, see [Objects and handles](objects-and-handles.md) and [ADR-053](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/053-nullable-reference-types-in-kotlin.md) |
@@ -189,7 +189,22 @@ Nullable primitive and object *properties* on classes follow the same pattern; s
 
 `Char` is a 2-byte scalar on both sides (`char` in C#, `KChar`/`unsigned short` at the C ABI). It is
 planned like any other ordinary primitive ([ADR-062](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/062-forward-callable-plan.md)):
-as a property, a method parameter, and a method return.
+as a property, a method parameter, a method return, and, since
+[ADR-098](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/098-narrow-primitive-and-char-collection-components.md),
+a `List`/`Map`/`Set` component (see [Collections](collections.md#narrow-primitives-and-char-as-collection-components)).
+
+<warning>
+    <p>Every non-ASCII <code>Char</code> at an ordinary position (property, parameter, return) was
+    silently corrupted before ADR-098: the generated <code>[DllImport]</code> declared a bare
+    <code>char</code> with no <code>CharSet</code>/<code>MarshalAs</code>, which defaults to
+    <code>CharSet.Ansi</code> and truncates to one byte. <code>Tag('é')</code> arrived Kotlin-side as
+    <code>'Ã'</code>; a <code>Char</code> return or property getter for a non-ASCII value came back
+    as <code>U+FFFD</code>. No exception, no diagnostic. Every <code>char</code> slot the generator
+    emits now carries <code>[MarshalAs(UnmanagedType.U2)]</code>, both new and already-shipped: ASCII
+    call sites are unaffected, non-ASCII call sites go from corrupt to correct. This is a behaviour
+    change on already-shipped members, so anything relying on the truncated byte was already
+    broken.</p>
+</warning>
 
 From `test-library/src/nativeMain/kotlin/.../clinic/ClinicSample.kt`:
 
@@ -201,9 +216,14 @@ class Patient(val name: String) {
 }
 ```
 
-Generated C#, from `Interop.cs`:
+Generated C#, from `Interop.cs`. Every `char` slot carries `[MarshalAs(UnmanagedType.U2)]`, on the
+parameter, the return, and the property getter:
 
 ```C#
+[DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "patient_get_grade")]
+[return: MarshalAs(UnmanagedType.U2)]
+private static extern char Native_Get_grade(IntPtr handle, out IntPtr error);
+
 public char Grade
 {
     get
@@ -217,6 +237,9 @@ public char Grade
     }
 }
 
+[DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "patient_tag")]
+private static extern IntPtr Native_Tag(IntPtr handle, [MarshalAs(UnmanagedType.U2)] char initial, out IntPtr error);
+
 public string Tag(char initial)
 {
     IntPtr nativeResult = Native_Tag(_handle, initial, out IntPtr error);
@@ -226,6 +249,10 @@ public string Tag(char initial)
     }
     return Marshal.PtrToStringUTF8(nativeResult)!;
 }
+
+[DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "patient_initial")]
+[return: MarshalAs(UnmanagedType.U2)]
+private static extern char Native_Initial(IntPtr handle, out IntPtr error);
 
 public char Initial()
 {
@@ -262,6 +289,41 @@ public void Patient_Tag_MarshalsCharParameter()
     Assert.Equal("O-Oreo", patient.Tag('O'));
 }
 ```
+
+The ASCII cells above pass byte-identically through either wire shape, which is exactly why the bug
+survived undetected: only a non-ASCII cell can tell a correct `char` from an ANSI-truncated one. From
+`IntegrationTests/CharPositionMarshallingTests.cs`:
+
+```C#
+[Fact]
+public void Patient_Tag_LatinCharParameter_ArrivesUncorrupted()
+{
+    using var patient = new Patient("Oreo");
+
+    // U+00E9. Two UTF-8 bytes (C3 A9), truncated to 0xC3, so the shipped wire delivers 'Ã'.
+    Assert.Equal("é-Oreo", patient.Tag('é'));
+}
+
+[Fact]
+public void Patient_Initial_LatinCharReturn_ComesBackUncorrupted()
+{
+    // The return leg breaks differently from the parameter leg: not truncated to a plausible
+    // wrong character, but lost entirely to U+FFFD, because the low byte decodes as an invalid
+    // lone ANSI byte. Émile is Oreo's least favourite housemate.
+    using var patient = new Patient("Émile");
+
+    Assert.Equal('É', patient.Initial());
+}
+```
+
+<note>
+    <p>A bare <code>Char?</code> (not inside a collection) still has no wire: it needs a has-value
+    fan-out (<code>hasValueFanOutInner()</code> has no <code>Char</code> case yet), not a width fix,
+    since the width question is answered by this ADR. See Limitations below. A lone surrogate
+    <code>Char</code> (an unpaired <code>\uD83D</code>-style code unit) does not round-trip under any
+    wire shape and is out of scope: neither a Kotlin <code>Char</code> nor a C# <code>char</code> can
+    legitimately hold one.</p>
+</note>
 
 ## Nullable Boolean
 
@@ -335,10 +397,15 @@ The method/extension/`object`/companion single-call `valueOut` shape gets the sa
 out-parameter; see [Classes and objects](classes-and-objects.md#method-returns).
 
 <note>
-    <p><code>Char?</code> is a separate, still-deferred problem: Kotlin <code>Char</code> is 2-byte
-    UTF-16 against C#'s default 1-byte ANSI <code>char</code> marshalling, so it needs a
-    <code>ushort</code>-narrowing wire type rather than <code>MarshalAs(I1)</code>. Non-null
-    <code>Char</code> (above) is unaffected.</p>
+    <p><code>Char?</code> at a bare (non-collection) position is still deferred, but not for the
+    reason once assumed: the width question is already answered above,
+    <code>[MarshalAs(UnmanagedType.U2)]</code>, on <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/069-nullable-boolean-marshalling.md">ADR-069</a>'s
+    exact precedent, and the Kotlin side needs no change since it already emits <code>KChar</code> as
+    <code>unsigned short</code>. What remains is only the has-value fan-out
+    (<code>hasValueFanOutInner()</code> has no <code>Char</code> case), the same shape this section's
+    <code>Boolean?</code> fix used. Non-null <code>Char</code> (above) is unaffected, and
+    <code>List&lt;Char?&gt;</code> already works, since a collection element rides a null pointer
+    instead of a has-value pair.</p>
 </note>
 
 ## Instant
@@ -484,9 +551,14 @@ public void EscapedForEternity_OutOfRangeInstant_IsExactType_KotlinArgumentExcep
   top-level returns, reverse reads the bound assembly's `NullableAttribute` instead (see
   [Objects and handles](objects-and-handles.md)). The two mechanisms are unrelated; a reverse-bound
   `string?` never goes through a `has_value`/`value` pair.
-- `Char?` stays deferred: it needs a `ushort`-narrowing wire type, a different fix from `Boolean?`'s
-  `MarshalAs(I1)` above. Tracked in [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md)
-  Phase 4.
+- A bare `Char?` (not inside a collection) still has no route and aborts `packNuget`: the wire is
+  answered (`[MarshalAs(UnmanagedType.U2)]`, see [Char](#char) above), what's missing is the
+  has-value fan-out. `List<Char?>`/`Set<Char?>`/`Map<K, Char?>` already work, since a collection
+  component rides a null pointer instead. Tracked in
+  [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md) Phase 4.
+- A lone surrogate `Char` (an unpaired UTF-16 code unit) does not round-trip under any wire shape and
+  is deliberately not fixture-covered; deferred as degenerate input. Tracked in
+  [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md).
 - `Instant` mapping is forward-only (`→`); there is no reverse `DateTimeOffset` → Kotlin mapping yet.
   `kotlin.time.Duration` → `TimeSpan` and legacy `kotlinx.datetime.Instant` are deliberately deferred,
   not required to ship `Instant` (see [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md)
@@ -496,6 +568,7 @@ public void EscapedForEternity_OutOfRangeInstant_IsExactType_KotlinArgumentExcep
     <category ref="related">
         <a href="classes-and-objects.md">Classes and objects</a>
         <a href="objects-and-handles.md">Objects and handles</a>
+        <a href="collections.md">Collections</a>
     </category>
     <category ref="external">
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/002-nullable-two-call-pattern.md">ADR-002: Nullable two-call pattern</a>
@@ -505,5 +578,6 @@ public void EscapedForEternity_OutOfRangeInstant_IsExactType_KotlinArgumentExcep
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/064-forward-unsupported-declaration-diagnostics.md">ADR-064: Forward unsupported-declaration diagnostics</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/069-nullable-boolean-marshalling.md">ADR-069: Nullable Boolean marshalling</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/076-instant-mapping.md">ADR-076: kotlin.time.Instant mapping</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/098-narrow-primitive-and-char-collection-components.md">ADR-098: Narrow-primitive and Char collection components</a>
     </category>
 </seealso>

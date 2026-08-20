@@ -378,6 +378,19 @@ class NugetPlugin : Plugin<Project> {
         val snapshot: SnapshotVersioning? =
           if (pub.snapshot) registerSnapshotVersioning(project, pub) else null
 
+        // ADR-100: the forward direction's diagnostics reach a console only through Gradle's own
+        // logger, and only if something speaks on cached builds too. `NugetDiagnostics.json` is a
+        // declared KSP output, so it is there even when `kspKotlin{Target}` is FROM-CACHE or
+        // UP-TO-DATE; this task is never up-to-date and re-emits it ahead of every packNuget.
+        val kspTask: String = "kspKotlin${firstTarget.replaceFirstChar { it.uppercase() }}"
+        val reportDiagnostics: TaskProvider<NugetReportDiagnosticsTask> = project.tasks
+          .register("nugetReportDiagnostics", NugetReportDiagnosticsTask::class.java) { task ->
+            task.group = "nuget"
+            task.description = "Reports declarations the forward bridge could not generate"
+            task.diagnosticsFiles.from(kspOutputDir)
+            task.dependsOn(kspTask)
+          }
+
         project.tasks.register("packNuget", PackNugetTask::class.java)
           .configure { task ->
             task.group = "nuget"
@@ -405,7 +418,8 @@ class NugetPlugin : Plugin<Project> {
 
             linkTasks.forEach { task.dependsOn(it) }
 
-            task.dependsOn("kspKotlin${firstTarget.replaceFirstChar { it.uppercase() }}")
+            task.dependsOn(kspTask)
+            task.dependsOn(reportDiagnostics)
 
             if (boundDeps.isNotEmpty()) {
               val nugetGenerateShims: TaskProvider<NugetGenerateShimsTask> =

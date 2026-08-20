@@ -250,17 +250,22 @@ class Tier1NullableCollectionComponentTest {
     )
   }
 
+  /**
+   * ADR-098: `isWrappableComponent()`'s `Nullable` branch delegates straight to the inner type, so
+   * minting `nuget_wrap_short` / `nuget_wrap_char` admitted `Short?` and `Char?` in the same edit
+   * without anyone asking. This cell is that consequence, observed rather than argued: both used
+   * to be named skips here (and before ADR-083, a crash in `componentLowering`).
+   *
+   * A *bare* `Char?` is a different question and still has no route -- it needs ADR-079's
+   * has-value fan-out, which this ADR did not give it. Only the component position works.
+   */
   @Test
-  fun `nullable list element outside the wrappable set skips named instead of crashing`() {
+  fun `nullable narrow-primitive and Char list elements bind for free off the inner type`() {
     val result = Tier1Harness.run(
       """
       package tier1.nullablecollectionnarrowing
 
-      enum class Mood { CALM, ANXIOUS }
-
       class ChartBook {
-        fun recordMoods(moods: List<Mood?>): Int = moods.size
-
         fun tallyShorts(counts: List<Short?>): Int = counts.size
 
         fun initials(letters: List<Char?>): Int = letters.size
@@ -270,14 +275,14 @@ class Tier1NullableCollectionComponentTest {
 
     assertTrue(
       result.compiledClean,
-      "expected the narrowed nullable-element gate to leave compilable source; got: " +
+      "expected the nullable-element gate to leave compilable source; got: " +
           "${result.compileErrors}",
     )
 
     val kotlin: String = result.generated
-    // All three used to crash the whole KSP run in componentLowering; each is a named skip now.
-    assertTrue("export_chartbook_recordMoods" !in kotlin, "generated=$kotlin")
-    assertTrue("export_chartbook_tallyShorts" !in kotlin, "generated=$kotlin")
-    assertTrue("export_chartbook_initials" !in kotlin, "generated=$kotlin")
+    assertContains(kotlin, "export_chartbook_tallyShorts")
+    assertContains(kotlin, "export_chartbook_initials")
+    assertContains(kotlin, "it as kotlin.Short?")
+    assertContains(kotlin, "it as kotlin.Char?")
   }
 }

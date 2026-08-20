@@ -123,13 +123,15 @@ Kotlin or a C# API whose signature lies about its contract. Every diagnostic car
   **value** types are unaffected and keep working: `constructor(n: Int)` next to
   `constructor(n: Int?)` render genuinely distinct signatures and are not treated as a collision.
 
-A `Map`/`Set` parameter with an unsupported key/value/element type (see [Collections](collections.md))
-is skipped like this:
+A `List`/`Map`/`Set` parameter with an unsupported element/key/value type (see
+[Collections](collections.md)) is skipped like this, naming the component that failed rather than the
+collection kind:
 
 ```
 [nuget:SKIPPED_UNSUPPORTED_INPUT] Skipping Patient.setMoods: its COLLECTION type combination is not
-    supported. expose a wrapper taking a List/MutableList (or individual key/value parameters)
-    instead of a Map/Set at this position
+    supported. the value type Collection? cannot be written into a Kotlin collection; use components
+    that are primitives, Char, String, enums, exported class handles, value classes over those, or
+    non-null nested collections of the same
     at Fixture.kt:4
 ```
 
@@ -183,6 +185,42 @@ outside the effective `include`/`rootPackage` scope is skipped, naming the exact
 When at least one dependency-module type *is* admitted, the closure also emits one aggregate
 `INFO_EXPORTED_FROM_DEPENDENCY` line per KSP run rather than one line per type, naming the whole
 admitted set.
+
+### Where these messages appear
+
+A diagnostic computed at generation time is only useful if it reaches the console. The processor
+writes every accumulated diagnostic to `NugetDiagnostics.json`, a declared KSP task output
+([ADR-100](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/100-forward-diagnostic-delivery.md)).
+Being a declared output, not just something printed during the task action, is what makes it survive
+an incremental build: it is *restored* on a cache hit and present after an `UP-TO-DATE` run, the two
+outcomes a normal, unchanged `packNuget` produces on every run after the first. A
+`NugetReportDiagnosticsTask` ahead of `packNuget` reads that file and re-emits every message through
+Gradle's own warning logger, so a skip is visible on every `packNuget`, cached or not, not only the
+build where KSP happened to run. This is a real `packNuget --console=plain` run against this
+repository's own fixture, KSP task `UP-TO-DATE`:
+
+```
+> Task :test-library:kspKotlinMacosArm64 UP-TO-DATE
+
+> Task :test-library:nugetReportDiagnostics
+[nuget:INFO_EXPORTED_FROM_DEPENDENCY] Note TestLibraryNative: the export closure admitted 6 type(s) from dependency modules: io.github.xxfast.kotlin.native.nuget.test.models.Byline, io.github.xxfast.kotlin.native.nuget.test.models.Purr, io.github.xxfast.kotlin.native.nuget.test.models.StoryCode, io.github.xxfast.kotlin.native.nuget.test.models.StoryUri, io.github.xxfast.kotlin.native.nuget.test.models.TopStory, io.github.xxfast.kotlin.native.nuget.test.models.Whisker. these are generated exactly like module-local types; narrow with exclude(...) if any of them should not be part of the public API
+[nuget:SKIPPED_UNEXPORTED_DEPENDENCY_TYPE] Skipping io.github.xxfast.kotlin.native.nuget.test.Newsroom.sponsor: its UNEXPORTED_DEPENDENCY_TYPE type combination is not supported. add include("dev.other.core") to nuget { publish { } }, or expose a type from an in-scope package instead
+    at /Users/xxfast/Developer/XXFAST/KMP/kotlin-native-nuget/test-library/src/nativeMain/kotlin/io/github/xxfast/kotlin/native/nuget/test/Newsroom.kt:63
+[nuget:SKIPPED_INHERITED_MEMBER] Skipping io.github.xxfast.kotlin.native.nuget.test.models.StoryUri.length: its INHERITED_MEMBER type combination is not supported. declare the member directly on the value class itself instead of relying on interface delegation
+[nuget:SKIPPED_INHERITED_MEMBER] Skipping io.github.xxfast.kotlin.native.nuget.test.models.StoryUri.get: its INHERITED_MEMBER type combination is not supported. declare the member directly on the value class itself instead of relying on interface delegation
+[nuget:SKIPPED_INHERITED_MEMBER] Skipping io.github.xxfast.kotlin.native.nuget.test.models.StoryUri.subSequence: its INHERITED_MEMBER type combination is not supported. declare the member directly on the value class itself instead of relying on interface delegation
+[nuget:SKIPPED_UNSUPPORTED_PROPERTY] Skipping io.github.xxfast.kotlin.native.nuget.test.cat.Cat.unsupported: its type generic declaration kotlin.sequences.Sequence has no property getter or setter shape. expose a bridgeable property (or a getter function) whose type is not generic declaration kotlin.sequences.Sequence, and export that instead
+    at /Users/xxfast/Developer/XXFAST/KMP/kotlin-native-nuget/test-library/src/nativeMain/kotlin/io/github/xxfast/kotlin/native/nuget/test/cat/Cat.kt:46
+```
+
+<note>
+<p>Before ADR-100, this exact set of six diagnostics was computed correctly but reached nobody: the
+KSP stdout channel never surfaced in the Gradle console (a Worker API stdout-attribution gap), and
+even when it did, a normal, unchanged <code>packNuget</code> reports the KSP task
+<code>FROM-CACHE</code> then <code>UP-TO-DATE</code> on consecutive runs, so a transport that only
+speaks during a task action was silent on every build after the first. Nothing about which
+declarations are skipped, or their severity, changed; only delivery did.</p>
+</note>
 
 ## Limitations
 
@@ -286,5 +324,6 @@ entirely and also cover NativeAOT; tracked in
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/066-forward-export-reachability-closure.md">ADR-066: Forward export reachability closure</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/078-forward-abi-legacy-contract-coverage.md">ADR-078: Forward ABI legacy contract coverage</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/094-reflection-free-generic-dispatch.md">ADR-094: Reflection-free generic dispatch</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/100-forward-diagnostic-delivery.md">ADR-100: Forward diagnostic delivery</a>
     </category>
 </seealso>
