@@ -323,21 +323,26 @@ internal fun StringBuilder.renderMarshalHelper(helper: CirMarshalHelper) {
   appendLine("            throw new NotSupportedException($\"Cannot pass {typeof(T).Name} to a Kotlin collection\");")
   appendLine("        }")
   appendLine()
-  appendLine("        public static IntPtr CreateList<T>(IEnumerable<T> values)")
-  appendLine("        {")
-  appendLine("            IntPtr listHandle = NugetListNative.Create();")
-  // A `catch`, not a `finally`: the happy path hands the live handle to the caller. An element's
-  // own Wrap/enumeration can throw halfway through, and the partially built Kotlin collection is
-  // a rooted StableRef nobody else has a reference to. `throw;` rethrows the original, preserving
-  // the stack -- callers (and the ROADMAP:130 tests) see the consumer's exception, not a wrapper.
-  appendCollectionFactoryGuard(
-    "NugetListNative",
-    "listHandle",
-    elementLoop("NugetListNative", "Add(listHandle, element)"),
-  )
-  appendLine("            return listHandle;")
-  appendLine("        }")
-  appendLine()
+  // Gated on helper.includesList, mirroring includesSet/includesMap below: NugetListNative is only
+  // emitted when the tracker actually saw a List/MutableList collection in the file, so this body
+  // must not exist unconditionally.
+  if (helper.includesList) {
+    appendLine("        public static IntPtr CreateList<T>(IEnumerable<T> values)")
+    appendLine("        {")
+    appendLine("            IntPtr listHandle = NugetListNative.Create();")
+    // A `catch`, not a `finally`: the happy path hands the live handle to the caller. An element's
+    // own Wrap/enumeration can throw halfway through, and the partially built Kotlin collection is
+    // a rooted StableRef nobody else has a reference to. `throw;` rethrows the original, preserving
+    // the stack -- callers (and the ROADMAP:130 tests) see the consumer's exception, not a wrapper.
+    appendCollectionFactoryGuard(
+      "NugetListNative",
+      "listHandle",
+      elementLoop("NugetListNative", "Add(listHandle, element)"),
+    )
+    appendLine("            return listHandle;")
+    appendLine("        }")
+    appendLine()
+  }
   // Gated on helper.includesSet: NugetSetNative is only emitted when the tracker actually saw a
   // Set/MutableSet collection somewhere in the file, so this body must not exist unconditionally.
   if (helper.includesSet) {
