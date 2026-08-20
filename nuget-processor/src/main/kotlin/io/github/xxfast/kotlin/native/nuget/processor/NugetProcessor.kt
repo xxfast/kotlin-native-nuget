@@ -710,16 +710,6 @@ class NugetProcessor(
   ): FileSpec {
     val builder: FileSpec.Builder = FileSpec
       .builder("io.github.xxfast.kotlin.native.nuget.generated", "CNameExports")
-      .addAnnotation(
-        AnnotationSpec.builder(ClassName("kotlin", "OptIn"))
-          .addMember(
-            "%T::class, %T::class, %T::class",
-            ClassName("kotlin.experimental", "ExperimentalNativeApi"),
-            ClassName("kotlinx.cinterop", "ExperimentalForeignApi"),
-            ClassName("kotlinx.coroutines", "ExperimentalCoroutinesApi"),
-          )
-          .build()
-      )
       .addImport("kotlinx.cinterop", "asStableRef")
       .addImport("kotlinx.cinterop", "COpaquePointerVar")
       .addImport("kotlinx.cinterop", "reinterpret")
@@ -809,6 +799,28 @@ class NugetProcessor(
 
     val needsFlowImports: Boolean = classesHaveFlowPropertiesForImports ||
         classesHaveFlowMethodsForImports
+
+    // The coroutines opt-in is gated on the SAME condition as the coroutines imports below: every
+    // emission that names anything from `kotlinx.coroutines` (suspend functions and suspend
+    // lambdas, `Flow`/`StateFlow`, the scope helpers) sits under it. Naming the marker
+    // unconditionally forced a library with no suspend/`Flow` surface to depend on
+    // `kotlinx-coroutines-core` just to resolve an annotation it never otherwise needed.
+    val optIns: List<ClassName> = buildList {
+      add(ClassName("kotlin.experimental", "ExperimentalNativeApi"))
+      add(ClassName("kotlinx.cinterop", "ExperimentalForeignApi"))
+      if (hasSuspendFunctions || needsFlowImports) {
+        add(ClassName("kotlinx.coroutines", "ExperimentalCoroutinesApi"))
+      }
+    }
+
+    builder.addAnnotation(
+      AnnotationSpec.builder(ClassName("kotlin", "OptIn"))
+        .addMember(
+          optIns.joinToString(", ") { "%T::class" },
+          *optIns.toTypedArray(),
+        )
+        .build()
+    )
 
     val lambdaTypeSet: Set<String> = setOf(
       "kotlin.Function0", "kotlin.Function1", "kotlin.Function2", "kotlin.Function3",

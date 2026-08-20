@@ -141,6 +141,16 @@ internal object Tier1CinteropStub {
       arg1: P1,
       ctx: COpaquePointer,
     ): R = TODO("Tier 1 compiles generated code, it never runs it")
+
+    // A suspend export's completion callback is arity 3 plus its context pointer:
+    // `(COpaquePointer?, COpaquePointer?, Byte, COpaquePointer) -> Unit`
+    // (result, error, cancelled).
+    fun <P0, P1, P2, R> CFunction<(P0, P1, P2, COpaquePointer) -> R>.invoke(
+      arg0: P0,
+      arg1: P1,
+      arg2: P2,
+      ctx: COpaquePointer,
+    ): R = TODO("Tier 1 compiles generated code, it never runs it")
   """.trimIndent()
 
   // ADR-084 stage 2: the bridge object's cleaner and the forced-collection support export. Real
