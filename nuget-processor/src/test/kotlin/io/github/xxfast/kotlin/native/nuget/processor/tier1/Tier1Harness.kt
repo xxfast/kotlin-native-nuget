@@ -39,7 +39,13 @@ internal object Tier1Harness {
     fileName: String = "Fixture.kt",
     processorOptions: Map<String, String> = emptyMap(),
     libraries: List<File> = emptyList(),
-  ): Tier1Result = run(mapOf(fileName to kotlinSource), processorOptions, libraries)
+    coroutinesOnCompileClasspath: Boolean = true,
+  ): Tier1Result = run(
+    mapOf(fileName to kotlinSource),
+    processorOptions,
+    libraries,
+    coroutinesOnCompileClasspath = coroutinesOnCompileClasspath,
+  )
 
   /**
    * Multi-file overload: a Kotlin file may declare only one `package`, so a fixture spanning
@@ -59,10 +65,22 @@ internal object Tier1Harness {
     processorOptions: Map<String, String> = emptyMap(),
     libraries: List<File> = emptyList(),
     commonSources: Map<String, String> = emptyMap(),
+    // `false` drops `kotlinx-coroutines-core` from the compile step's classpath, so a
+    // fixture with no suspend/Flow surface can prove the generated file does not merely avoid
+    // *mentioning* coroutines, but genuinely compiles without the dependency present, which is
+    // exactly what a consumer library that never depends on coroutines does.
+    coroutinesOnCompileClasspath: Boolean = true,
   ): Tier1Result {
     val workDir: File = Files.createTempDirectory("nuget-tier1-").toFile()
     try {
-      return runIn(workDir, sources, processorOptions, libraries, commonSources = commonSources)
+      return runIn(
+        workDir,
+        sources,
+        processorOptions,
+        libraries,
+        commonSources = commonSources,
+        coroutinesOnCompileClasspath = coroutinesOnCompileClasspath,
+      )
     } finally {
       workDir.deleteRecursively()
     }
@@ -135,6 +153,7 @@ internal object Tier1Harness {
     // mirroring the real `nativeMain` (common) vs `{target}Main` (platform) split KSP2 sees for
     // an actual native compilation (ADR-074 spike finding 1).
     commonSources: Map<String, String> = emptyMap(),
+    coroutinesOnCompileClasspath: Boolean = true,
   ): Tier1Result {
     val sourceDir: File = workDir.resolve("src").apply { mkdirs() }
     val fixtureFiles: List<File> = sources.map { (fileName, kotlinSource) ->
@@ -222,6 +241,7 @@ internal object Tier1Harness {
     // treat `compileErrors` as informational (mirrors `runIncremental`'s existing precedent).
     compileGenerated(
       workDir, fixtureFiles + commonFixtureFiles, generated, compileMessages, libraries,
+      coroutinesOnCompileClasspath,
     )
 
     return Tier1Result(
@@ -240,6 +260,7 @@ internal object Tier1Harness {
     generatedCNameExports: String,
     collector: RecordingMessageCollector,
     libraries: List<File> = emptyList(),
+    coroutinesOnCompileClasspath: Boolean = true,
   ) {
     val compileSourceDir: File = workDir.resolve("compile-src").apply { mkdirs() }
     val compileOutDir: File = workDir.resolve("compile-out").apply { mkdirs() }
@@ -259,7 +280,10 @@ internal object Tier1Harness {
     val arguments = K2JVMCompilerArguments().apply {
       freeArgs = sourceFiles.map { it.absolutePath }
       destination = compileOutDir.absolutePath
-      classpath = (listOf(Tier1Classpath.kotlinStdlib, Tier1Classpath.kotlinxCoroutinesCore) + libraries)
+      val coroutines: List<File> =
+        if (coroutinesOnCompileClasspath) listOf(Tier1Classpath.kotlinxCoroutinesCore)
+        else emptyList()
+      classpath = (listOf(Tier1Classpath.kotlinStdlib) + coroutines + libraries)
         .joinToString(File.pathSeparator) { it.absolutePath }
       noStdlib = true
       noReflect = true

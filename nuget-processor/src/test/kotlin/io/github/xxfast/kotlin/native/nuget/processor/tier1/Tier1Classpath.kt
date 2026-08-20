@@ -35,9 +35,13 @@ internal object Tier1Classpath {
 
   /**
    * Real, JVM-usable `kotlinx-coroutines-core` (unlike `kotlinx.cinterop`, coroutines-core is
-   * genuinely multiplatform and ships a working JVM artifact), so every generated file's
-   * unconditional `@OptIn(..., ExperimentalCoroutinesApi::class)` resolves against the real
-   * annotation instead of a hand-written stand-in.
+   * genuinely multiplatform and ships a working JVM artifact), so a fixture with suspend/`Flow`
+   * surface resolves the generated file's `ExperimentalCoroutinesApi` opt-in and coroutines
+   * imports against the real artifact instead of a hand-written stand-in.
+   *
+   * It is on the compile classpath by default, not unconditionally: the generated `@OptIn` is
+   * gated on the module actually having suspend/`Flow` surface, so a coroutines-free fixture
+   * compiles with [Tier1Harness.run]'s `coroutinesOnCompileClasspath = false` to prove it.
    */
   val kotlinxCoroutinesCore: File by lazy { jar("kotlinx-coroutines-core-jvm-") }
 }

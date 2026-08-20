@@ -418,3 +418,9 @@ If constructor initialization fails or class hierarchies are disposed out of ord
 Creating a scope on class instantiation adds memory and GC overhead, even if no async methods are called.
 * **Resolution**: Consider lazily allocating the `CoroutineScope` using C#'s `Interlocked.CompareExchange` upon the first invocation of an async method.
 
+## Implementation Addendum (2026-08-20)
+
+**The file-level `@OptIn(ExperimentalCoroutinesApi::class)` this ADR's refinement introduced alongside `CoroutineStart.ATOMIC` was unconditional in the generated `CNameExports.kt`**, while the `kotlinx.coroutines` imports next to it were already gated on `hasSuspendFunctions || needsFlowImports`. A library with zero suspend/Flow surface therefore failed its own Kotlin compile unless the author hand-added `org.jetbrains.kotlinx:kotlinx-coroutines-core`. The `ExperimentalCoroutinesApi` member is now emitted only under that same gate in `NugetProcessor.kt`.
+
+**Since kotlinx.coroutines 1.9, `CoroutineStart.ATOMIC`'s opt-in marker is `@DelicateCoroutinesApi`, not `@ExperimentalCoroutinesApi`.** Both are `WARNING`-level `@RequiresOptIn` annotations, so this was never the cause of the gating bug above, but it means suspend/Flow-using generated output built against coroutines >= 1.9 likely emits a `DelicateCoroutinesApi` warning today. Adding that marker to the now-gated `@OptIn` is deferred, tracked in ROADMAP.md's Phase 6.
+
