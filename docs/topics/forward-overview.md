@@ -275,7 +275,7 @@ symptom and the classpath-exclusion workaround.</p>
 
 ### AOT and trimming {id="aot-and-trimming"}
 
-The generated bindings are not safe under a fully AOT-compiled .NET runtime yet.
+The generated bindings are AOT-safe.
 
 The generics bridge's reflection, the first blocker
 ([ADR-038](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/038-aot-compilation.md), Deferred),
@@ -286,58 +286,66 @@ reflection with a static factory registry. A build against a pre-ADR-094 version
 `<TrimmerRootAssembly>` on the project compiling `Interop.cs`; on the current generator this should
 no longer fire for that reason.
 
-<warning>
-<p>Every callback that crosses from C# into Kotlin still is not AOT-safe: <code>Flow</code>/<code>StateFlow</code>
-collection, <code>suspend</code>/<code>async</code>, a lambda parameter, a stored callback, and
-interface bridging. Each pins a C# delegate with <code>GCHandle</code> and hands Kotlin a pointer via
-<code>Marshal.GetFunctionPointerForDelegate</code>
-(<a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/036-reverse-interop-mechanism.md">ADR-036</a>),
+The second blocker, the forward callback surface, is fixed too
+([ADR-102](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/102-aot-safe-forward-callbacks.md),
+Accepted). Every place C# calls back into Kotlin, a per-call lambda parameter, a stored callback, a
+C#-implemented interface bridge, `Flow`/`StateFlow` collection, and `suspend` continuation
+resumption, used to hand Kotlin a pointer obtained from `Marshal.GetFunctionPointerForDelegate`,
 which needs the runtime to JIT a native-to-managed thunk the first time it is invoked from native
-code. A fully AOT-compiled build has no JIT to do that.</p>
-<p>Verified against a Release-configuration Mac Catalyst arm64 build (.NET 10, MAUI, plugin 0.2.0):
-on the first <code>Flow</code> collection, Mono throws <code>ExecutionEngineException</code>
-(<code>AOT NOT FOUND: (wrapper native-to-managed) KotlinFlowEnumerator...</code>) building the
-thunk for the flow enumerator's callback. Debug builds work, since they still JIT. <b>The failure
-can be entirely silent</b>: a collection loop that only catches <code>OperationCanceledException</code>,
-on an unobserved task, leaves the app running with an empty UI and no crash. Repro: build
-<code>-c Release -f net10.0-maccatalyst</code>, run the built <code>.app</code>'s binary directly
-with <code>MONO_LOG_LEVEL=debug MONO_LOG_MASK=aot</code>, and grep the output for
-<code>AOT NOT FOUND</code>.</p>
-<p>iOS and tvOS devices run the same Mono full-AOT regime, so the same failure is expected there too
-(currently academic: the package ships no <code>ios-arm64</code> native asset, and Mac Catalyst
-borrows the <code>osx-arm64</code> dylib via <code>NativeReference</code>). NativeAOT
-(<code>PublishAot=true</code>) on any OS is expected to fail the same way on the callback thunks,
-since it also has no JIT. Neither is verified directly.</p>
-</warning>
+code. A fully AOT-compiled runtime has none, which is what threw `ExecutionEngineException` on a
+Mono full-AOT Mac Catalyst build the first time a generated `Flow` was collected. The generated C#
+now dispatches every one of those shapes through a static `[UnmanagedCallersOnly]` thunk (one per
+delegate shape, `NugetThunks`), keyed off a `GCHandle` ctx pointer every callback ABI already
+threaded through unused. Kotlin needs no change:
 
-Affected: <a href="coroutines-and-flow.md">Coroutines and Flow</a>'s `Flow`/`StateFlow` collection and
-`suspend`/`async`, and <a href="lambdas-and-callbacks.md">Lambdas and callbacks</a>'s lambda
-parameters, stored callbacks, and <a href="interfaces-abstract-sealed.md">interface bridging</a>. Not
-affected: the synchronous, callback-free surface, methods, properties, constructors, strings,
-collections.
+```C#
+internal static unsafe partial class NugetThunks
+{
+    [UnmanagedCallersOnly(CallConvs = new[] { typeof(global::System.Runtime.CompilerServices.CallConvCdecl) })]
+    internal static IntPtr NugetStringStringCallbackThunk(IntPtr a0, IntPtr a1)
+    {
+        try
+        {
+            return ((NugetStringStringCallback)GCHandle.FromIntPtr(a1).Target!)(a0, a1);
+        }
+        catch (Exception ex)
+        {
+            Environment.FailFast("nuget: unhandled exception in NugetStringStringCallback", ex);
+            return default;
+        }
+    }
 
-Three workarounds, in order of preference:
+    internal static IntPtr NugetStringStringCallbackPtr =>
+        (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, IntPtr, IntPtr>)&NugetStringStringCallbackThunk;
+}
+```
 
-1. **`MtouchInterpreter` (Catalyst/iOS Release builds).** Verified in the same sample: adding
-   `<MtouchInterpreter>-all</MtouchInterpreter>` (or `-p:MtouchInterpreter=-all`) to the consumer
-   `.csproj` keeps the rest of the app fully AOT-compiled but ships the Mono interpreter as a
-   fallback for the paths AOT could not pre-generate, including these callback thunks. Re-running
-   the exact failing scenario with this flag set threw no `ExecutionEngineException`, and the
-   generated `Flow` delivered states with live data on screen. The perf cost is limited to the code
-   paths the interpreter actually executes. This only applies to `net*-ios`/`net*-maccatalyst`
-   TFMs; NativeAOT (`PublishAot=true`) has no interpreter equivalent, so on NativeAOT the limitation
-   stands unmitigated.
-2. **Debug/JIT configurations** work as-is for local development, no flag needed.
-3. **The PeopleInSpace pattern**, exporting scalar accessors from Kotlin and polling them instead of
-   collecting a generated `Flow`, for the cases the interpreter is unacceptable: a strict full-AOT
-   policy, NativeAOT, or a performance-critical hot path.
+<note>
+<p>An exception escaping a user callback (a per-call lambda, a bridge slot implementation) inside
+one of these thunks is process-fatal by design: every thunk body catches and calls
+<code>Environment.FailFast</code> rather than letting the exception tear through the native frame
+undefined. This matches the de-facto behaviour before this change. A real error-channel ABI
+(out-parameters on callback signatures, Kotlin-side rethrow) is future work, see
+<a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md">ROADMAP.md</a>.</p>
+</note>
 
-The identified permanent fix is porting
-[ADR-041](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/041-kotlin-to-csharp-call-mechanism.md)'s
-`[UnmanagedCallersOnly]` + `[ModuleInitializer]` registration pattern, already used for the reverse
-direction, onto this callback surface, which would remove the need for the interpreter fallback
-entirely and also cover NativeAOT; tracked in
-[ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md).
+<note>
+<p>CoreCLR NativeAOT (<code>PublishAot=true</code>) was measured working on <code>win-x64</code>
+even before this change: ILC pre-generates reverse-P/Invoke marshalling stubs for delegate types it
+can root statically, so NativeAOT consumers were never actually broken, only resting on an
+undocumented ILC implementation detail rather than the documented
+<code>[UnmanagedCallersOnly]</code> contract. This change moves the generated code onto that
+contract. <code>AotSmokeTest/</code> publishes and runs all five callback shapes under
+<code>PublishAot=true</code> as a permanent CI regression lane: <code>win-x64</code> is verified
+locally through the new thunks, <code>osx-arm64</code> is a CI-only lane executing for the first
+time in CI.</p>
+<p>The Mono full-AOT failure (Catalyst/iOS Release) is what this change actually fixes.
+<code>&lt;MtouchInterpreter&gt;-all&lt;/MtouchInterpreter&gt;</code> is expected to no longer be
+required on Catalyst/iOS Release builds, but the original Catalyst repro has not yet been re-run
+without the flag to confirm the fix end to end on that runtime; keep the flag set until that manual
+re-verification lands, tracked in
+<a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md">ROADMAP.md</a>.</p>
+</note>
 
 <seealso>
     <category ref="related">
@@ -360,5 +368,6 @@ entirely and also cover NativeAOT; tracked in
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/094-reflection-free-generic-dispatch.md">ADR-094: Reflection-free generic dispatch</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/100-forward-diagnostic-delivery.md">ADR-100: Forward diagnostic delivery</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/101-unexported-supertype-skip.md">ADR-101: Forward, unexported supertype skip</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/102-aot-safe-forward-callbacks.md">ADR-102: AOT-safe forward callbacks</a>
     </category>
 </seealso>

@@ -156,7 +156,22 @@ because `Marshal.GetFunctionPointerForDelegate` needs the JIT to build the nativ
 and a fully AOT-compiled runtime has none. See
 [Publishing Kotlin to C#: AOT and trimming](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/topics/forward-overview.md#aot-and-trimming)
 for the repro and [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md)
-for the fix this points at. This is still not the CI smoke test step 4 describes, which stays open.
+for the fix this points at.
+
+**Step 4 closed:** [ADR-102](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/102-aot-safe-forward-callbacks.md)
+(Accepted) adds `AotSmokeTest/`, a plain console app that publishes and runs all five callback
+shapes under `PublishAot=true`, plus a permanent `ci.yml` lane running it on `win-x64` and
+`osx-arm64`. It also measured, as a byproduct, that CoreCLR NativeAOT on `win-x64` already worked
+before that fix, since ILC pre-generates reverse-P/Invoke marshalling stubs for delegate types it
+can root statically; the smoke test is a regression lane on that path, not the red-to-green proof,
+which is the Mac Catalyst repro re-run without `MtouchInterpreter` (still manual, tracked in
+[ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md)). ADR-102 did not
+go through this ADR's own step 3 (`[LibraryImport]`/`CSharpProfile`): it keeps `[DllImport]` and
+fixes the callback surface with `[UnmanagedCallersOnly]` static thunks instead, a narrower fix than
+the sequencing above envisioned. Steps 1 and 3 (the `CSharpProfile` abstraction, the
+`[LibraryImport]` switch) remain undone, so this ADR **stays Deferred**: AOT support as a whole is
+not the "one code path, generation-time choice" this ADR decided to pursue, only the two blockers
+(generics reflection, callback thunks) that were actually measured broken are fixed.
 
 ## Consequences
 
