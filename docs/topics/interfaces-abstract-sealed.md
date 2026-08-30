@@ -9,6 +9,7 @@ Kotlin's three flavours of inheritance each get a distinct C# shape: `interface`
 | `sealed class` | `abstract class` | subclasses nested, see [ADR-009](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/009-sealed-class-mapping.md) |
 | interface-typed return (method result or property) | `IFoo` / `IFoo?` | backed by a generated `sealed class Foo : IFoo`, see [ADR-040](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/040-interface-return-type-mapping.md) |
 | interface-typed parameter, a C# class implementing `IFoo` | accepted, no `_handle` needed | dispatched through a per-interface bridge factory, see [ADR-084](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/084-csharp-implemented-interfaces.md) |
+| nullable property on a sealed subclass (`String?`, `Int?`) | `string?` / `int?` | `String?` is one export returning `string?`; `Int?` is a `_has_value`/`_value` pair rendered as one `?:` expression |
 
 ## Kotlin
 
@@ -101,7 +102,7 @@ public abstract class Observation : IDisposable
     {
         internal Alive(IntPtr handle) : base(handle) { }
 
-        public Cat Cat => new Cat(Native_Get_cat(_handle));
+        public Cat Cat => new Cat(Native_Get_cat(_handle, out _));
 
         public override bool Equals(object? obj) { /* ... */ }
         public override int GetHashCode() => Native_HashCode(_handle);
@@ -111,7 +112,7 @@ public abstract class Observation : IDisposable
 
     public sealed class Dead : Observation
     {
-        public string Cause => Marshal.PtrToStringUTF8(Native_Get_cause(_handle))!;
+        public string Cause => Marshal.PtrToStringUTF8(Native_Get_cause(_handle, out _))!;
         // Equals / GetHashCode / ToString / Dispose ...
     }
 
@@ -182,10 +183,10 @@ public IReadOnlyList<Issue39Item> Items
 }
 ```
 
-The scalar `Refreshing` getter on the same subclass stays expression-bodied, with no error slot:
+The scalar `Refreshing` getter on the same subclass stays expression-bodied. Since [#38](https://github.com/xxfast/kotlin-native-nuget/issues/38) every sealed-subclass getter declares the error slot, so it passes `out _` without reading it back:
 
 ```C#
-public bool Refreshing => Native_Get_refreshing(_handle);
+public bool Refreshing => Native_Get_refreshing(_handle, out _);
 ```
 
 From `IntegrationTests/Issue39Tests.cs`:
@@ -201,9 +202,69 @@ Assert.Equal(2, items.Count);
 
 <note>
     <p>A <code>Map</code>/<code>Set</code> property on a sealed subclass now parses too (the same
-    block-vs-expression branch fixed this), but does not carry the <code>out IntPtr error</code>
-    convention yet: only <code>List</code>/<code>MutableList</code> got it.</p>
+    block-vs-expression branch fixed this). Its <code>DllImport</code> carries the
+    <code>out IntPtr error</code> slot like every other sealed getter, but the C# getter passes
+    <code>out _</code>: only <code>List</code>/<code>MutableList</code> read the slot back and
+    throw.</p>
 </note>
+
+## Nullable properties on sealed subclasses
+
+A nullable property on a sealed subclass, a class nested inside its sealed parent, exports nullable and carries the same `errorOut` convention the top-level path uses ([#38](https://github.com/xxfast/kotlin-native-nuget/issues/38)). `String?` renders as one export returning `string?`; `Int?` follows the two-call `_has_value`/`_value` convention (see [Primitives and strings](primitives-and-strings.md)), collapsed into a single C# expression.
+
+### Kotlin {id="nullable-sealed-kotlin"}
+
+From `test-library/src/nativeMain/kotlin/.../cat/Issue38Sample.kt`:
+
+```kotlin
+sealed class Issue38State {
+  data class Loaded(val error: String?, val retries: Int?, val code: Int) : Issue38State()
+  data object Idle : Issue38State()
+}
+
+fun issue38State(state: Int): Issue38State = when (state) {
+  0 -> Issue38State.Loaded("Oreo knocked the water bowl over", 3, 7)
+  1 -> Issue38State.Loaded(null, null, 7)
+  else -> Issue38State.Idle
+}
+```
+
+### Generated C# {id="nullable-sealed-generated-c"}
+
+From `Interop.cs`:
+
+```C#
+[DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "issue38state_loaded_get_error")]
+private static extern IntPtr Native_Get_error(IntPtr handle, out IntPtr error);
+
+public string? Error => Marshal.PtrToStringUTF8(Native_Get_error(_handle, out _));
+
+[DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "issue38state_loaded_get_retries_has_value")]
+[return: MarshalAs(UnmanagedType.I1)]
+private static extern bool Native_Get_retries_has_value(IntPtr handle, out IntPtr error);
+
+[DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "issue38state_loaded_get_retries_value")]
+private static extern int Native_Get_retries_value(IntPtr handle, out IntPtr error);
+
+public int? Retries => Native_Get_retries_has_value(_handle, out _) ? Native_Get_retries_value(_handle, out _) : (int?)null;
+```
+
+### Using it from C# {id="nullable-sealed-using-it-from-c"}
+
+From `IntegrationTests/Issue38Tests.cs`:
+
+```C#
+[Fact]
+public void State_Loaded_WithNulls_ErrorIsNull()
+{
+    using Issue38State state = Issue38Sample.issue38State(1);
+    var loaded = Assert.IsType<Issue38State.Loaded>(state);
+    string? error = loaded.Error;
+    Assert.Null(error);
+}
+```
+
+This is delivered for sealed subclasses only. A plain nested (non-sealed) class, `class Outer { data class Inner(val x: String?) }`, is never collected at all and is silently dropped with no `SKIPPED_*` diagnostic; see [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md).
 
 ## Defaulted interface members on implementing classes
 
@@ -614,6 +675,7 @@ internal sealed class PetBridgeState : NugetBridgeState
 - Interfaces with generic type parameters, suspend interface members, and `Flow`/`StateFlow`-valued interface members are not supported as return positions.
 - A backing class and its dispatch exports are only generated for interfaces that actually appear in a planned return position; an interface only ever used as an `add`/`remove` subscription parameter (like `ICatEventListener`, see [Lambdas and callbacks](lambdas-and-callbacks.md)) does not get one.
 - Object identity is not preserved across reads of a **Kotlin-backed** interface-typed property: two reads produce two distinct C# wrapper instances over the same Kotlin object (each disposes independently). A **C#-implemented** object read back is the one exception, see above.
+- A nullable *enum* property on a sealed subclass is not handled by the fix above: it still renders `.ordinal` on a possibly-null value, the same bug class as `String?`/`Int?`, unverified by a fixture. A plain nested (non-sealed) class is never bridged at all, silently and with no diagnostic. See [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md).
 
 ## Using it from C#
 
