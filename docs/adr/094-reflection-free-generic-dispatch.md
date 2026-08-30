@@ -218,6 +218,14 @@ Walk the fully built `namespaces: List<CirNamespace>` and register:
   `internal Sub(IntPtr) : base(handle)`, verified `CirSealedRenderer.kt:17`); the abstract sealed
   base gets no entry (not constructible today either: `Activator` on an abstract type throws).
 
+  **Corrected post-implementation (issue [#40](https://github.com/xxfast/kotlin-native-nuget/issues/40)):**
+  the base needs an entry too, not to construct it but to *dispatch* it. `Materialize<T>` is called
+  with `T` = the abstract base itself whenever the base, not a subclass, is the statically declared
+  element type, for example a `StateFlow<Base>`'s `.Value` or a `Flow<Base>`'s `onNext`. A registry
+  keyed purely on subclasses has no entry for that lookup. Fixed by also registering the base with a
+  second entry *form*, routed through the discriminator this ADR already generates rather than
+  constructing directly: `[typeof(Base)] = static handle => Base.FromHandle(handle)`.
+
 No entries for: `CirEnum` (no handle constructor; `FromHandle<T>` has no enum branch today, the
 known ROADMAP:178 gap, and a registry miss now throws a *clearer* exception for it),
 `CirValueClass` (record structs round-trip as their underlying, `ForwardCirCollectionComponents.kt:99`),

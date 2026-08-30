@@ -443,6 +443,46 @@ public void StateFlowProperty_ReturnsKotlinStateFlow_IsAKotlinFlow_UpcastsLikeKo
     <code>CancellationToken</code> or a <code>break</code>, exactly as the tests above do.</p>
 </note>
 
+### `StateFlow<T>` / `Flow<T>` of a sealed class
+
+`T` can itself be a sealed base class. `.Value` and `await foreach` both materialise the correct
+generated subclass, dispatched through the sealed base's own generated `FromHandle(IntPtr)`
+discriminator. From `test/issue40/Issue40Sample.kt`:
+
+```kotlin
+sealed class LoadState {
+  data object Idle : LoadState()
+  data class Loading(val progress: Int) : LoadState()
+  data class Loaded(val payload: String) : LoadState()
+}
+
+class Loader {
+  private val _state: MutableStateFlow<LoadState> = MutableStateFlow(LoadState.Idle)
+  val state: StateFlow<LoadState> = _state.asStateFlow()
+  val history: Flow<LoadState> = flowOf(
+    LoadState.Idle,
+    LoadState.Loading(50),
+    LoadState.Loaded("done"),
+  )
+}
+```
+
+Using it, from `IntegrationTests/Issue40Tests.cs`:
+
+```C#
+using var loader = new Loader();
+loader.Advance();
+
+using LoadState current = loader.State.Value;
+var loading = Assert.IsType<LoadState.Loading>(current);
+Assert.Equal(50, loading.Progress);
+```
+
+```C#
+await foreach (LoadState state in loader.History)
+    seen.Add(state);
+```
+
 `MutableStateFlow<T>` at a property or function-return position binds as the same read-only
 `KotlinStateFlow<T>` view **when the declared type is `StateFlow<T>`**, for example the ubiquitous
 `private val _x = MutableStateFlow(...)` / `val x: StateFlow<T> = _x` idiom above. Object-typed
