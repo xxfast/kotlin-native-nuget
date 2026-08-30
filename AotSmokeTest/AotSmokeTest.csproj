@@ -1,0 +1,37 @@
+<!--
+  ADR-102 / ADR-038 step 4: the AOT publish smoke-test lane.
+
+  NativeAOT cannot publish an xunit test host, so the runtime proof that the forward callback
+  surface works without a JIT lives in this plain console app: one step per callback shape,
+  exit 0 only if all five pass. It references the packed fixture package exactly as
+  IntegrationTests/ does (TestLibrary at $(TestLibraryVersion), which the root
+  Directory.Build.props imports from build/FixtureVersions.props).
+
+  Publish + run:
+    dotnet publish AotSmokeTest -r win-x64 -c Release -p:PublishAot=true
+  On Windows this must run in the default shell (PowerShell/cmd), not Git Bash: the ILC link step
+  fails to resolve vswhere.exe from bash's PATH.
+-->
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+    <PublishAot>true</PublishAot>
+    <!-- The generated bindings and the packed registration shims use function pointers. -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <!-- Same footgun as IntegrationTests.csproj: without a RID the runtimes/{rid}/native/*
+         asset is not copied next to the app and the [DllImport("test")] P/Invoke fails with
+         DllNotFoundException. Never hardcode a RID here; -r on the publish command line wins. -->
+    <RuntimeIdentifier Condition="'$(RuntimeIdentifier)' == ''">$(NETCoreSdkRuntimeIdentifier)</RuntimeIdentifier>
+    <SelfContained Condition="'$(PublishAot)' != 'true'">false</SelfContained>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="TestLibrary" Version="$(TestLibraryVersion)" />
+  </ItemGroup>
+
+</Project>
