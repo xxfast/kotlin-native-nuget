@@ -141,6 +141,70 @@ public abstract class Observation : IDisposable
 
 `Alive` and `Dead` are Kotlin `data class` subtypes, so they also get `Equals`/`GetHashCode`/`ToString` (see [Data classes](data-classes.md)). `Superposition` is a `data object`, so it has a fixed `ToString()` and no `Equals`/`GetHashCode` override (reference equality is enough for a singleton).
 
+## Collection properties on sealed subclasses
+
+A `List<T>` property on a sealed subclass renders as a `get { ... }` block, the same shape a `List<T>` property gets on an ordinary class (see [Collections](collections.md)), and carries the same `out IntPtr error` convention:
+
+From `test-library/src/nativeMain/kotlin/.../cat/Issue39Sample.kt`:
+
+```kotlin
+data class Issue39Item(val name: String, val count: Int)
+
+sealed class Issue39State {
+  data class Loaded(val items: List<Issue39Item>, val refreshing: Boolean) : Issue39State()
+
+  data object Loading : Issue39State()
+}
+```
+
+```C#
+[DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "issue39state_loaded_get_items")]
+private static extern IntPtr Native_Get_items(IntPtr handle, out IntPtr error);
+
+public IReadOnlyList<Issue39Item> Items
+{
+    get
+    {
+        IntPtr listHandle = Native_Get_items(_handle, out IntPtr error);
+        if (error != IntPtr.Zero)
+        {
+            throw NugetErrorNative.BuildException(error);
+        }
+        int count = NugetListNative.Count(listHandle);
+        var result = new List<Issue39Item>(count);
+        for (int i = 0; i < count; i++)
+        {
+            result.Add(NugetMarshal.FromHandle<Issue39Item>(NugetListNative.Get(listHandle, i)));
+        }
+        NugetListNative.Dispose(listHandle);
+        return result.AsReadOnly();
+    }
+}
+```
+
+The scalar `Refreshing` getter on the same subclass stays expression-bodied, with no error slot:
+
+```C#
+public bool Refreshing => Native_Get_refreshing(_handle);
+```
+
+From `IntegrationTests/Issue39Tests.cs`:
+
+```C#
+using Issue39State state = Issue39Sample.loadedCats();
+var loaded = Assert.IsType<Issue39State.Loaded>(state);
+
+IReadOnlyList<Issue39Item> items = loaded.Items;
+Assert.IsAssignableFrom<IReadOnlyList<Issue39Item>>(items);
+Assert.Equal(2, items.Count);
+```
+
+<note>
+    <p>A <code>Map</code>/<code>Set</code> property on a sealed subclass now parses too (the same
+    block-vs-expression branch fixed this), but does not carry the <code>out IntPtr error</code>
+    convention yet: only <code>List</code>/<code>MutableList</code> got it.</p>
+</note>
+
 ## Defaulted interface members on implementing classes
 
 A class implementing an interface without overriding one of its defaulted members still has to carry that member in C#: the generated class declares the interface, so omitting the member is `CS0535`. The defaulted body is reached by ordinary dynamic dispatch on the Kotlin instance behind the handle, so no separate delegation is generated for it.
