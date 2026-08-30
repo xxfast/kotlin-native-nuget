@@ -101,7 +101,12 @@ internal fun StringBuilder.renderMarshalHelper(helper: CirMarshalHelper) {
   appendLine("            new System.Collections.Generic.Dictionary<Type, Func<IntPtr, object>>")
   appendLine("        {")
   for (entry in helper.factories) {
-    appendLine("            [typeof(global::${entry.qualifiedTypeName})] = static handle => new global::${entry.qualifiedTypeName}(handle),")
+    // Issue #40: a sealed base has no handle constructor, so it routes through the discriminator
+    // the sealed renderer already emits for it rather than through `new`.
+    val construct: String =
+      if (entry.viaFromHandle) "global::${entry.qualifiedTypeName}.FromHandle(handle)"
+      else "new global::${entry.qualifiedTypeName}(handle)"
+    appendLine("            [typeof(global::${entry.qualifiedTypeName})] = static handle => $construct,")
   }
   appendLine("        };")
   appendLine()

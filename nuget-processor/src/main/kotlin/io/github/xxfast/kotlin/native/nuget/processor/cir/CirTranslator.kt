@@ -547,12 +547,18 @@ internal fun translate(
 }
 
 /**
- * ADR-094: one `NugetMarshal.Factories` line per concrete wrapper that an erased generic path could
- * be asked to materialise. A class only qualifies when it actually carries the `internal X(IntPtr)`
+ * ADR-094: one `NugetMarshal.Factories` line per wrapper that an erased generic path could be asked
+ * to materialise. A plain class only qualifies when it actually carries the `internal X(IntPtr)`
  * constructor the lambda calls, and an abstract one is not constructible at all (neither was it
- * under `Activator`). Sealed subclasses register under their nested `Base.Sub` name. Enums, value
- * classes, objects, interfaces and open generic wrappers register nothing: none of them is a
- * closed, handle-constructible type.
+ * under `Activator`). Sealed subclasses register under their nested `Base.Sub` name.
+ *
+ * Issue #40: the sealed BASE registers too, via [CirFactoryEntry.viaFromHandle]. It is not
+ * constructible, but it is materialisable -- its generated `FromHandle(IntPtr)` reads the Kotlin
+ * discriminator and news up the right subclass -- and it is the type an erased `StateFlow<Sealed>`
+ * or `Flow<Sealed>` instantiates `T` as, so without it those two paths throw.
+ *
+ * Enums, value classes, objects, interfaces and open generic wrappers register nothing: none of
+ * them is a closed type reachable from a handle.
  */
 private fun factoryEntries(namespaces: List<CirNamespace>): List<CirFactoryEntry> = namespaces
   .flatMap { namespace ->
@@ -565,9 +571,11 @@ private fun factoryEntries(namespaces: List<CirNamespace>): List<CirFactoryEntry
             emptyList()
           }
 
-        is CirSealedClass -> declaration.subclasses.map { subclass ->
-          CirFactoryEntry("${namespace.name}.${declaration.name}.${subclass.name}")
-        }
+        is CirSealedClass ->
+          listOf(CirFactoryEntry("${namespace.name}.${declaration.name}", viaFromHandle = true)) +
+            declaration.subclasses.map { subclass ->
+              CirFactoryEntry("${namespace.name}.${declaration.name}.${subclass.name}")
+            }
 
         else -> emptyList()
       }

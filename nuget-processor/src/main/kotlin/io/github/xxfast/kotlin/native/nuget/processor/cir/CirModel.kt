@@ -171,6 +171,12 @@ data class CirMarshalHelper(
 // the root namespace and cannot see child-namespace types unqualified.
 data class CirFactoryEntry(
   val qualifiedTypeName: String,
+  // ADR-094 / issue #40: a sealed BASE is abstract, so `new Base(handle)` will not compile, but it
+  // is still materialisable -- its generated `internal static Base FromHandle(IntPtr)` reads the
+  // Kotlin-side discriminator and news up the right subclass. Entries flagged here render as a call
+  // to that discriminator instead of a constructor, which is what lets `StateFlow<Sealed>.Value`
+  // and `await foreach` over a `Flow<Sealed>` hand back the correct arm.
+  val viaFromHandle: Boolean = false,
 )
 
 // ADR-084: the C#-implemented-interface bridge layer -- `NugetBridge`, `NugetBridgeState`, and one
