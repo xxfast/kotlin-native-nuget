@@ -68,7 +68,7 @@ internal fun FileSpec.Builder.addSealedClassExports(sealed: KSClassDeclaration) 
       val propTypeResolved: KSType = prop.type.resolve().expandAliases()
       val propType: String = propTypeResolved.declaration.qualifiedName?.asString() ?: "Any"
       val isNullable: Boolean = propTypeResolved.isMarkedNullable
-      val access = "handle.asStableRef<$subQualifiedName>().get().$propName"
+      val access: String = "handle.asStableRef<$subQualifiedName>().get().$propName"
 
       val isEnumType: Boolean = (propTypeResolved.declaration as? KSClassDeclaration)
         ?.classKind == ClassKind.ENUM_CLASS
@@ -132,13 +132,12 @@ internal fun FileSpec.Builder.addSealedClassExports(sealed: KSClassDeclaration) 
         // The catch branch of both handle bodies ships a null pointer, so even the non-null
         // reference getter returns `COpaquePointer?` — the same widening the top-level property
         // emitter applies to an ObjectHandle getter.
+        val body: String =
+          if (isNullable) nullableHandleBody(access, "errorOut") else handleBody(access, "errorOut")
         addFunction(
           sealedPropertyGetter(subPrefix, propName)
             .returns(cOpaquePointer.copy(nullable = true))
-            .addCode(
-              if (isNullable) nullableHandleBody(access, "errorOut") else handleBody(access, "errorOut"),
-              stableRef, cOpaquePointerVar, stableRef,
-            )
+            .addCode(body, stableRef, cOpaquePointerVar, stableRef)
             .build()
         )
       }

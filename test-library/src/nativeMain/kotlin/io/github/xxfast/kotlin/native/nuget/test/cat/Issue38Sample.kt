@@ -1,16 +1,17 @@
 package io.github.xxfast.kotlin.native.nuget.test.cat
 
 /**
- * Issue #38 (ROADMAP line 63): nullable properties on a sealed subclass — a class nested inside its
- * sealed parent — lose their `?` in the generated `CNameExports.kt`, so `compileKotlinMingwX64`
- * rejects the generated file with `Return type mismatch: expected 'String', actual 'String?'`. The
- * nested path also drops the `errorOut` parameter the top-level path carries.
+ * Issue #38 (ROADMAP line 63): nullable properties on a sealed subclass — a class nested inside
+ * its sealed parent — lose their `?` in the generated `CNameExports.kt`, so
+ * `compileKotlinMingwX64` rejects the generated file with `Return type mismatch: expected
+ * 'String', actual 'String?'`. The nested path also drops the `errorOut` parameter the top-level
+ * path carries.
  *
  * [Issue38State.Loaded] is the shape that blocks the idiomatic
  * `sealed class UiState { data class Success(val error: String? = null) : UiState() }` pattern,
  * since sealed subclasses are almost always nested. It carries one `String?`, one `Int?`, and one
- * non-null `Int` — the non-null scalar is the control: it must keep working while the two nullable
- * ones are what the export drops the `?` from.
+ * non-null `Int` — the non-null scalar is the control: it must keep working while the two
+ * nullable ones are what the export drops the `?` from.
  *
  * The report's other nesting shape, a plain class nesting a `data class`, is deliberately NOT here:
  * such a class is never collected at all (every root bucket in `NugetProcessor.kt` filters
