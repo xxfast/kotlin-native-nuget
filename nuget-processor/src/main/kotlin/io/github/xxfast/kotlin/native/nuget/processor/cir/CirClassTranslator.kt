@@ -36,6 +36,47 @@ import io.github.xxfast.kotlin.native.nuget.processor.toCName
 private fun Set<Modifier>.isOpenInterfaceImplementation(superClass: String?): Boolean =
   superClass == null && contains(Modifier.OVERRIDE) && !contains(Modifier.FINAL)
 
+/**
+ * ADR-101: is [iface] a supertype the generated C# base list may name? Only if the export set
+ * carries it — `exportedTypes` is qualified-name keyed (`CirTranslator.kt`), the same membership
+ * test every sibling site in this package uses. An unexported supertype is dropped with a
+ * WARNING rather than rendered into a dangling `: IFoo` that fails to compile.
+ *
+ * The hint deliberately does *not* offer the `include(...)` fix `SKIPPED_UNEXPORTED_DEPENDENCY
+ * _TYPE` offers: measured (`Tier1UnexportedSupertypeSkipTest`), the ADR-066 reachability closure
+ * walks returns, parameters, property types, type arguments, sealed subclasses and primary-ctor
+ * parameters but never `superTypes`, so an interface reachable only as a supertype stays out of
+ * the export set even after its package is included.
+ */
+private fun keepsSupertype(
+  cls: KSClassDeclaration,
+  name: String,
+  iface: KSClassDeclaration,
+  exportedTypes: Set<String>,
+  logger: KSPLogger,
+): Boolean {
+  val qualified: String? = iface.qualifiedName?.asString()
+  if (qualified != null && qualified in exportedTypes) return true
+
+  val ifaceName: String = qualified ?: iface.simpleName.asString()
+  ForwardDiagnosticSink.emit(
+    listOf(
+      ForwardDiagnostic(
+        kind = ForwardDiagnosticKind.SKIPPED_UNEXPORTED_SUPERTYPE,
+        symbol = cls,
+        declaration = "$name : ${iface.simpleName.asString()}",
+        reason = "supertype '$ifaceName' is not in the export set, so it has no generated C# " +
+            "interface; the class is generated without it and its own members still export",
+        hint = "an unexported supertype carries no members the C# side could call, so nothing " +
+            "is lost; note that include(\"...\") does not help here — the export reachability " +
+            "closure never walks supertypes",
+      ),
+    ),
+    logger,
+  )
+  return false
+}
+
 internal fun translateClass(
   cls: KSClassDeclaration,
   libraryName: String,
@@ -62,6 +103,11 @@ internal fun translateClass(
       .map { it.resolve().declaration }
       .filterIsInstance<KSClassDeclaration>()
       .filter { it.classKind == ClassKind.INTERFACE }
+      // ADR-101 / issue #42: a supertype outside the export set has no generated C# interface, so
+      // naming it in the base list is a guaranteed CS0246 (the reporter's `: IKoinComponent`).
+      // Drop it and say so. Nothing is lost: an unexported interface has no C# members to call,
+      // and its defaulted members still bind on the class itself (`ForwardClassMembership.kt`).
+      .filter { iface -> keepsSupertype(cls, name, iface, exportedTypes, logger) }
       .map { "I${it.simpleName.asString()}" }
       .toList()
   }

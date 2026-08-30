@@ -186,6 +186,40 @@ When at least one dependency-module type *is* admitted, the closure also emits o
 `INFO_EXPORTED_FROM_DEPENDENCY` line per KSP run rather than one line per type, naming the whole
 admitted set.
 
+A related but distinct case: the reachability closure never walks a class's supertypes at all, so
+an exported class implementing an interface declared outside the export set, the Koin
+`KoinComponent` shape, used to render a base-list entry ("`: IKoinComponent`") that nothing ever
+generates. `Issue42Api : Issue42Component` is the fixture: `Issue42Component` lives in a separate
+Gradle module the export set never admits.
+
+```
+[nuget:SKIPPED_UNEXPORTED_SUPERTYPE] Skipping Issue42Api : Issue42Component: supertype
+    'dev.other.core.Issue42Component' is not in the export set, so it has no generated C#
+    interface; the class is generated without it and its own members still export. an unexported
+    supertype carries no members the C# side could call, so nothing is lost; note that
+    include("...") does not help here — the export reachability closure never walks supertypes
+    at Issue42Api.kt:15
+```
+
+Unlike `SKIPPED_UNEXPORTED_DEPENDENCY_TYPE`, the hint does not point at `include(...)`: the closure
+has no edge for supertypes, so admitting the dependency package changes nothing. The interface is
+dropped from the generated base list; the class's own members, and any defaulted member the
+interface declares, still export:
+
+```C#
+public class Issue42Api : IDisposable, INugetHandle
+{
+    /* ... */
+    public string ComponentTag()  // Issue42Component's defaulted method, still bound on the class
+    {
+        /* ... */
+    }
+}
+```
+
+An unexported **base class** (`class X : UnexportedBase()`) dangles the same way and is not yet
+covered by this diagnostic; see [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md).
+
 ### Where these messages appear
 
 A diagnostic computed at generation time is only useful if it reaches the console. The processor
@@ -325,5 +359,6 @@ entirely and also cover NativeAOT; tracked in
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/078-forward-abi-legacy-contract-coverage.md">ADR-078: Forward ABI legacy contract coverage</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/094-reflection-free-generic-dispatch.md">ADR-094: Reflection-free generic dispatch</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/100-forward-diagnostic-delivery.md">ADR-100: Forward diagnostic delivery</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/101-unexported-supertype-skip.md">ADR-101: Forward, unexported supertype skip</a>
     </category>
 </seealso>
