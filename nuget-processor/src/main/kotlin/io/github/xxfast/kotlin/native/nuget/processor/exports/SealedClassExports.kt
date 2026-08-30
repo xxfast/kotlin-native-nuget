@@ -11,6 +11,9 @@ import com.squareup.kotlinpoet.ClassName
 import com.squareup.kotlinpoet.FileSpec
 import com.squareup.kotlinpoet.FunSpec
 import io.github.xxfast.kotlin.native.nuget.processor.cir.expandAliases
+import io.github.xxfast.kotlin.native.nuget.processor.forward.handleBody
+import io.github.xxfast.kotlin.native.nuget.processor.forward.nullableHandleBody
+import io.github.xxfast.kotlin.native.nuget.processor.forward.valueBody
 
 /**
  * Generates @CName bridge exports for sealed classes: type discriminator,
@@ -65,6 +68,7 @@ internal fun FileSpec.Builder.addSealedClassExports(sealed: KSClassDeclaration) 
       val propTypeResolved: KSType = prop.type.resolve().expandAliases()
       val propType: String = propTypeResolved.declaration.qualifiedName?.asString() ?: "Any"
       val isNullable: Boolean = propTypeResolved.isMarkedNullable
+      val access = "handle.asStableRef<$subQualifiedName>().get().$propName"
 
       val isEnumType: Boolean = (propTypeResolved.declaration as? KSClassDeclaration)
         ?.classKind == ClassKind.ENUM_CLASS
@@ -76,95 +80,67 @@ internal fun FileSpec.Builder.addSealedClassExports(sealed: KSClassDeclaration) 
         "kotlin.Unit",
       )
 
-      // Issue #39: a List property's C# getter marshals element handles out of a Kotlin call that
-      // can throw, so this export carries the `out IntPtr error` slot (and the try/catch that
-      // writes it) the ordinary-property path has. Its C# half is the `hasSyncErrorOut` branch in
-      // translateSealedClass; the two must move together, they are one ABI.
-      val isListType: Boolean = propType in setOf(
-        "kotlin.collections.List", "kotlin.collections.MutableList",
-      )
+      // Issue #38: a nullable non-String primitive has no spare wire value to spell "absent", so
+      // it takes the same ADR-002 two-call pair (`_has_value` + `_value`) the top-level property
+      // path takes (ForwardPropertyKotlinEmitter's LegacyTwoCall getter). A nullable `String`
+      // needs no pair: the null pointer is its own presence bit.
+      val isNullablePrimitiveTwoCall: Boolean =
+        isPrimitiveType && isNullable && propType != "kotlin.String" && !isEnumType
 
-      if (isListType) {
+      if (isEnumType) {
         addFunction(
-          FunSpec.builder("export_${subPrefix}_get_$propName")
-            .addAnnotation(cNameAnnotation("${subPrefix}_get_$propName"))
-            .addParameter("handle", cOpaquePointer)
-            .addParameter("errorOut", cOpaquePointer.copy(nullable = true))
-            .returns(cOpaquePointer.copy(nullable = true))
+          sealedPropertyGetter(subPrefix, propName)
+            .returns(Int::class)
             .addCode(
-              buildString {
-                appendLine("return try {")
-                appendLine(
-                  "  %T.create(handle.asStableRef<$subQualifiedName>().get().$propName)." +
-                      "asCPointer()"
-                )
-                appendLine("} catch (e: Throwable) {")
-                appendLine("  if (errorOut != null) {")
-                appendLine("    errorOut.reinterpret<%T>().pointed.value = %T.create(")
-                appendLine("      buildError(e)")
-                appendLine("    ).asCPointer()")
-                appendLine("  }")
-                appendLine("  null")
-                append("}")
-              },
-              stableRef, cOpaquePointerVar, stableRef,
+              valueBody("$access.ordinal", "errorOut", "0"),
+              cOpaquePointerVar, stableRef,
             )
             .build()
         )
-      } else if (isEnumType) {
+      } else if (isNullablePrimitiveTwoCall) {
         addFunction(
-          FunSpec.builder("export_${subPrefix}_get_$propName")
-            .addAnnotation(cNameAnnotation("${subPrefix}_get_$propName"))
-            .addParameter("handle", cOpaquePointer)
-            .returns(Int::class)
-            .addStatement(
-              "return handle.asStableRef<%L>().get().%L.ordinal",
-              subQualifiedName, propName,
+          sealedPropertyGetter(subPrefix, "${propName}_has_value")
+            .returns(Boolean::class)
+            .addCode(
+              valueBody("$access != null", "errorOut", "false"),
+              cOpaquePointerVar, stableRef,
+            )
+            .build()
+        )
+        addFunction(
+          sealedPropertyGetter(subPrefix, "${propName}_value")
+            .returns(ClassName.bestGuess(propType))
+            .addCode(
+              valueBody("$access!!", "errorOut", defaultValueFor(propType)),
+              cOpaquePointerVar, stableRef,
             )
             .build()
         )
       } else if (isPrimitiveType) {
+        // Issue #38: the `?` was dropped here, so a `String?` property generated a `String`-typed
+        // export whose body returned `String?` and the generated file did not compile at all.
         addFunction(
-          FunSpec.builder("export_${subPrefix}_get_$propName")
-            .addAnnotation(cNameAnnotation("${subPrefix}_get_$propName"))
-            .addParameter("handle", cOpaquePointer)
-            .returns(ClassName.bestGuess(propType))
-            .addStatement(
-              "return handle.asStableRef<%L>().get().%L",
-              subQualifiedName, propName,
+          sealedPropertyGetter(subPrefix, propName)
+            .returns(ClassName.bestGuess(propType).copy(nullable = isNullable))
+            .addCode(
+              valueBody(access, "errorOut", if (isNullable) "null" else defaultValueFor(propType)),
+              cOpaquePointerVar, stableRef,
             )
             .build()
         )
       } else {
-        if (isNullable) {
-          addFunction(
-            FunSpec.builder("export_${subPrefix}_get_$propName")
-              .addAnnotation(cNameAnnotation("${subPrefix}_get_$propName"))
-              .addParameter("handle", cOpaquePointer)
-              .returns(cOpaquePointer.copy(nullable = true))
-              .addStatement(
-                "val obj: %L? = handle.asStableRef<%L>().get().%L",
-                propType, subQualifiedName, propName,
-              )
-              .addStatement(
-                "return if (obj == null) null else %T.create(obj).asCPointer()",
-                stableRef,
-              )
-              .build()
-          )
-        } else {
-          addFunction(
-            FunSpec.builder("export_${subPrefix}_get_$propName")
-              .addAnnotation(cNameAnnotation("${subPrefix}_get_$propName"))
-              .addParameter("handle", cOpaquePointer)
-              .returns(cOpaquePointer)
-              .addStatement(
-                "return %T.create(handle.asStableRef<%L>().get().%L).asCPointer()",
-                stableRef, subQualifiedName, propName,
-              )
-              .build()
-          )
-        }
+        // The catch branch of both handle bodies ships a null pointer, so even the non-null
+        // reference getter returns `COpaquePointer?` — the same widening the top-level property
+        // emitter applies to an ObjectHandle getter.
+        addFunction(
+          sealedPropertyGetter(subPrefix, propName)
+            .returns(cOpaquePointer.copy(nullable = true))
+            .addCode(
+              if (isNullable) nullableHandleBody(access, "errorOut") else handleBody(access, "errorOut"),
+              stableRef, cOpaquePointerVar, stableRef,
+            )
+            .build()
+        )
       }
     }
 
@@ -208,3 +184,16 @@ internal fun FileSpec.Builder.addSealedClassExports(sealed: KSClassDeclaration) 
     }
   }
 }
+
+/**
+ * Issue #38: every sealed-subclass property getter now carries the `errorOut` slot the top-level
+ * property path carries (ADR-024/ADR-062), so a throwing getter reports through the same
+ * convention instead of crossing the boundary as an unhandled Kotlin exception. [exportSuffix] is
+ * the property name for a single-call getter, or the `_has_value` / `_value` suffixed name for the
+ * nullable-primitive pair.
+ */
+private fun sealedPropertyGetter(subPrefix: String, exportSuffix: String): FunSpec.Builder =
+  FunSpec.builder("export_${subPrefix}_get_$exportSuffix")
+    .addAnnotation(cNameAnnotation("${subPrefix}_get_$exportSuffix"))
+    .addParameter("handle", cOpaquePointer)
+    .addParameter("errorOut", cOpaquePointer.copy(nullable = true))

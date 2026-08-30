@@ -436,7 +436,7 @@ private fun unitBody(invocation: String, error: String): String = buildString {
   append("}")
 }
 
-private fun valueBody(invocation: String, error: String, fallback: String): String = buildString {
+internal fun valueBody(invocation: String, error: String, fallback: String): String = buildString {
   appendLine("return try {")
   appendLine("  $invocation")
   appendLine("} catch (e: Throwable) {")
@@ -449,7 +449,7 @@ private fun valueBody(invocation: String, error: String, fallback: String): Stri
   append("}")
 }
 
-private fun handleBody(invocation: String, error: String): String = buildString {
+internal fun handleBody(invocation: String, error: String): String = buildString {
   appendLine("return try {")
   appendLine("  %T.create($invocation).asCPointer()")
   appendLine("} catch (e: Throwable) {")
@@ -462,7 +462,7 @@ private fun handleBody(invocation: String, error: String): String = buildString 
   append("}")
 }
 
-private fun nullableHandleBody(invocation: String, error: String): String = buildString {
+internal fun nullableHandleBody(invocation: String, error: String): String = buildString {
   appendLine("return try {")
   appendLine("  val result = $invocation")
   appendLine("  if (result == null) null else %T.create(result).asCPointer()")

@@ -465,6 +465,12 @@ data class CirProperty(
   // The native method name (e.g. "Native_SetTreatCountValue") of the sibling `_set_value`
   // DllImport. Empty unless [isMutableStateFlow].
   val stateFlowSetValueNativeName: String = "",
+  // Issue #38: true when this is a sealed-subclass property of a nullable non-String primitive
+  // type (`Int?`), which crosses on the ADR-002 two-call pair (`_get_<p>_has_value` +
+  // `_get_<p>_value`) instead of a single scalar slot. Read only by [renderSealedClass], which
+  // then emits both DllImports in place of the single one. False everywhere else: the top-level
+  // property path expresses the same shape through [extraNatives].
+  val isNullablePrimitiveTwoCall: Boolean = false,
 ) : CirMember
 
 data class CirExtraNative(
