@@ -1,0 +1,5 @@
+# `NugetReportDiagnosticsTask.report()` is 0/10 in the JVM unit coverage report, deliberately and permanently.
+
+> Extracted verbatim from `ROADMAP.md` (Phase 4: Rich type support) in the 2026-08-31 roadmap slim-down.
+
+**`NugetReportDiagnosticsTask.report()` is 0/10 in the JVM unit coverage report, deliberately and permanently.** It is exercised only by a real Gradle build in `scripts/verify-forward-diagnostics.sh`, never by a JVM unit test. That is not a gap to close: faking it in a JVM test would recreate the exact trap [ADR-100](docs/adr/100-forward-diagnostic-delivery.md) was written to close, `Tier1Harness` injects its own `RecordingKSPLogger` straight past the production transport, which is why the existing sink test stayed green while the transport it claimed to prove was completely broken end to end. A future coverage sweep should not "fix" this method's number; doing so would reintroduce the same green-but-untested shape. Discovered alongside [ADR-100](docs/adr/100-forward-diagnostic-delivery.md).

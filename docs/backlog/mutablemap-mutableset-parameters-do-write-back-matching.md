@@ -1,0 +1,5 @@
+# `MutableMap`/`MutableSet` parameters do not write back, matching the pre-existing (and previously undocumented) `MutableList` parameter gap.
+
+> Extracted verbatim from `ROADMAP.md` (Phase 4: Rich type support) in the 2026-08-31 roadmap slim-down.
+
+**`MutableMap`/`MutableSet` parameters do not write back, matching the pre-existing (and previously undocumented) `MutableList` parameter gap.** Kotlin receives a fresh copy; anything it puts, adds or removes is invisible to the C# caller. A deliberate, human-approved v1 decision ([ADR-073](docs/adr/073-map-and-set-parameters.md) Alternatives 4/5), not an oversight: true write-back would need either a post-call read-back-and-repopulate (wrong Kotlin semantics, doubles the crossing cost, doesn't compose with exceptions) or a Kotlin-backed `IDictionary`/`ISet` wrapper type (the shape ADR-011 already rejected for the return position; Kotlin/Native's own ObjC export segfaults, exit 139, when a plain `NSMutableDictionary`/`NSMutableSet` is passed under the equivalent shape, Verified by spike). Revisit only together with `MutableList`, and only if a real consumer asks.

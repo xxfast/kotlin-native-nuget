@@ -1,0 +1,5 @@
+# Shape A constructor-parameter nullability decoding: a pre-existing ADR-056 gap (a struct's state-constructor parameters are not nullability-decoded, unlike…
+
+> Extracted verbatim from `ROADMAP.md` (Phase 9: Reverse basic type support — C# objects in Kotlin) in the 2026-08-31 roadmap slim-down.
+
+Shape A constructor-parameter nullability decoding: a pre-existing ADR-056 gap (a struct's state-constructor parameters are not nullability-decoded, unlike its properties). Surfaced but not closed by [ADR-058](docs/adr/058-csharp-shape-b-structs-in-kotlin.md), whose own Shape B components *are* nullability-decoded. Widened, not closed, by [ADR-059](docs/adr/059-nested-struct-components-in-kotlin.md): nesting a Shape B inner (nullability-decoded) inside a Shape A outer (not) mixes decoded and undecoded components in one flat argument list: not incorrect (a `string?` component still binds non-null and fails fast rather than corrupting), just confusing to reason about. Deliberately kept out of ADR-059's scope, since it's orthogonal to nesting

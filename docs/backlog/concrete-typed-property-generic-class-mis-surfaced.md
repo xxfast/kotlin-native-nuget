@@ -1,0 +1,5 @@
+# A concrete-typed property on a generic class is mis-surfaced as `T`.
+
+> Extracted verbatim from `ROADMAP.md` (Phase 4: Rich type support) in the 2026-08-31 roadmap slim-down.
+
+**A concrete-typed property on a generic class is mis-surfaced as `T`.** `CirClassTranslator.kt:911` always types a generic class's property as `typeParams.first().name` (`T` or `T?`), never the property's own declared type, so a `String`/`Int`/anything-concrete property on `Slot<T>` renders as `T` in C# regardless of what it actually holds. A non-null read of such a property would hit a `ClassCastException` inside `nugetMarshal`'s reflective/`nuget_unwrap_*` path at the first instantiation where `T` differs from the property's real type. Verified by source reading only, not runtime-reproduced; this is why the `Slot` fixture deliberately declares only `T?`-typed properties (`previous`, `current`), never a concrete-typed one, so it never trips this bug. Discovered alongside the nullable generic-property fix above (rides [ADR-083](docs/adr/083-nullable-collection-components.md)'s null-pointer decision).

@@ -1,0 +1,5 @@
+# A null lambda argument cannot cross the callback bridge.
+
+> Extracted verbatim from `ROADMAP.md` (Phase 4: Rich type support) in the 2026-08-31 roadmap slim-down.
+
+**A null lambda argument cannot cross the callback bridge.** `nuget_func1_invoke`/`nuget_func2_invoke`/`nuget_func3_invoke`/`nuget_suspend_func1_invoke` (`exports/GenericClassExports.kt`) unconditionally call `arg0.asStableRef<Any>().get()` (and `arg1`/`arg2` on the wider arities) on every callback argument, so a C# caller passing `null` for a nullable-typed lambda parameter crashes the Kotlin side instead of the lambda receiving `null`. Verified by source reading only, no fixture exercises a nullable lambda parameter. Out of scope for [ADR-083](docs/adr/083-nullable-collection-components.md) (lambda-parameter nullability is its own surface, not a collection component slot), which found it while confirming the collection-component null-pointer mechanism didn't already cover this family. Discovered alongside [ADR-083](docs/adr/083-nullable-collection-components.md).

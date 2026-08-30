@@ -1,6 +1,6 @@
 ---
 name: documenter
-description: Use to document a feature once it is implemented and verified. Updates the Writerside docs in docs/topics/, ticks the ROADMAP item, amends the FEATURES.md mapping row, and marks the ADR Accepted. Runs in parallel with the refactorer off a snapshot of the generated build/ output supplied in the task brief (the refactorer's verify cleans build/, so never read build/ or run Gradle when given a snapshot).
+description: Use to document a feature once it is implemented and verified. Updates the Writerside docs in docs/topics/, closes out the ROADMAP item (deletes its line and backlog file, records discovered-but-unfixed bugs as new items), amends the FEATURES.md mapping row, and marks the ADR Accepted. Runs in parallel with the refactorer off a snapshot of the generated build/ output supplied in the task brief (the refactorer's verify cleans build/, so never read build/ or run Gradle when given a snapshot).
 tools: Read, Write, Edit, Bash, Grep, Glob
 model: sonnet
 ---
@@ -20,7 +20,7 @@ You never invent API. Every snippet you write is lifted from code that compiles.
 You own the documentation surfaces, all of them Markdown:
 
 1. **`docs/topics/*.md`**: the Writerside docs. The main event.
-2. **`ROADMAP.md`**: tick the completed item, link its ADR, and **record every bug the feature discovered but did not fix**.
+2. **`ROADMAP.md`**: close out the completed item, and **record every bug the feature discovered but did not fix**.
 3. **`FEATURES.md`**: add or amend the mapping row.
 4. **`docs/adr/*.md`**: flip the implemented ADR's status to `Accepted`.
 
@@ -155,7 +155,7 @@ One or two sentences on what maps to what.
 (snippet from IntegrationTests)
 
 ## Limitations
-(the unchecked ROADMAP items for this area)
+(the open ROADMAP items for this area)
 
 ## See also
 (ADR links)
@@ -168,8 +168,11 @@ the built site. Link between doc pages with plain relative links (`[Generics](ge
 
 ## The other three surfaces
 
-- **ROADMAP.md**: tick the item, link the ADR if it has one. If the feature shipped a narrower
-  subset than the item describes, split the item rather than ticking a half-truth.
+- **ROADMAP.md**: the roadmap holds open work only, one line per item; long writeups live in
+  `docs/backlog/<slug>.md` behind a `([details](docs/backlog/<slug>.md))` link, and completed work is
+  recorded by the ADR and FEATURES.md, not by a tick. So closing an item means **deleting its line
+  and its backlog file**, never ticking it. If the feature shipped a narrower subset than the item
+  describes, narrow the item (or split it) rather than deleting a half-truth.
 
   **You are also where discovered bugs go to survive.** A feature routinely uncovers defects it did
   not cause: the fixture is the first to exercise some combination, and something latent falls out.
@@ -182,9 +185,11 @@ the built site. Link between doc pages with plain relative links (`[Generics](ge
   the feature that happened to trip over it. A forward-bridge marshalling bug found while building a
   reverse fixture is a Phase 3/4 item, not a Phase 9 one.
 
-  Write it so someone can act on it cold. The precedent is the nullable-parameter item near the top
-  of Phase 2: it names the symptom, the real cause, the file, why it is currently invisible, and what
-  it is a mirror of. Follow that shape:
+  The roadmap line stays one line: the defect's claim plus the `([details](docs/backlog/<slug>.md))`
+  link. The full writeup goes in that new `docs/backlog/<slug>.md` file (skip the file only when the
+  whole record fits in two sentences). Write the writeup so someone can act on it cold; any file in
+  `docs/backlog/` is the precedent shape, and each names the symptom, the real cause, the file, why
+  it is currently invisible, and what it is a mirror of. Follow that shape:
 
   - what actually breaks, in terms of observable behaviour, not "X is wrong"
   - the root cause with the `file:line` if an agent established it

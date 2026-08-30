@@ -1,0 +1,5 @@
+# Two Tier 1 tests are pinned to "whatever is currently unsupported" rather than to a stable mechanism, and have now moved four times.
+
+> Extracted verbatim from `ROADMAP.md` (Phase 4: Rich type support) in the 2026-08-31 roadmap slim-down.
+
+**Two Tier 1 tests are pinned to "whatever is currently unsupported" rather than to a stable mechanism, and have now moved four times.** `Tier1NamedSkipDiagnosticsTest` and `Tier1CompileCellsTest` each keep a cell needing a component that is bridgeable but not wrappable; that cell has moved once per ADR in this batch (`Mood` → `Char`/`Short` → nested collection → `Nullable(Collection)`), because nothing pins it to a mechanism, only to the current gap. After [ADR-099](docs/adr/099-nested-collection-components.md) the entire category is `Nullable(Collection)` and `Unit`, and it will move again once nullable nesting lands. Worth restructuring so the test expresses the mechanism it is exercising, not today's leftover gap. Discovered alongside [ADR-099](docs/adr/099-nested-collection-components.md).

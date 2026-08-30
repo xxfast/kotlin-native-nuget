@@ -1,0 +1,5 @@
+# A `Map<String?, Int>` return renders `Dictionary<string?, int>`, violating `Dictionary`'s `TKey : notnull` constraint.
+
+> Extracted verbatim from `ROADMAP.md` (Phase 4: Rich type support) in the 2026-08-31 roadmap slim-down.
+
+**A `Map<String?, Int>` return renders `Dictionary<string?, int>`, violating `Dictionary`'s `TKey : notnull` constraint.** The generated file is `#nullable enable`, so a nullable-key map return is a `CS8714` warning at the call site, even though the map itself always binds correctly at the runtime level. Inferred from C# generic-constraint rules, not compiled; no fixture in `test-library` hits it. Pre-existing, not introduced by [ADR-083](docs/adr/083-nullable-collection-components.md), which deliberately left the nullable-key **result**-position gate untouched (see the item above): with ADR-083's read-side null-tolerance, an actual null key now additionally surfaces as a C# `ArgumentNullException` at `result[key] = value` instead of a Kotlin-side NPE, on top of this pre-existing warning. Discovered alongside [ADR-083](docs/adr/083-nullable-collection-components.md).

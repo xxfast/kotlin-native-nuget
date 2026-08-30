@@ -1,0 +1,5 @@
+# Exception propagation from a C# callback into Kotlin (mirror of ADR-024/028/029); ADR-102 sets the v1 fail-fast policy this replaces
+
+> Extracted verbatim from `ROADMAP.md` (Phase 7).
+
+Exception propagation from a C# callback into Kotlin (mirror of forward-direction ADR-024/028/029). **A v1 policy now exists for the mechanism this needs a channel through:** [ADR-102](docs/adr/102-aot-safe-forward-callbacks.md) decided, at its gate, that every generated `[UnmanagedCallersOnly]` thunk (covering this shape and every other forward callback) wraps its dispatch in a catch-all calling `Environment.FailFast`, loud and honest, matching the pre-existing behaviour of an exception tearing through a native frame, rather than attempting to propagate it. This item is the real fix ADR-102 deferred: an error-channel ABI (an error out-parameter on the callback signatures that don't already have one; the bridge has none today, and Flow/suspend only consume errors Kotlin→C#, not the reverse) plus a Kotlin-side rethrow, its own future ADR.

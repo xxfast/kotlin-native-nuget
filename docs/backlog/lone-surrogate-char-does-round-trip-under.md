@@ -1,0 +1,5 @@
+# A lone surrogate `Char` does not round-trip under any candidate wire shape.
+
+> Extracted verbatim from `ROADMAP.md` (Phase 4: Rich type support) in the 2026-08-31 roadmap slim-down.
+
+**A lone surrogate `Char` does not round-trip under any candidate wire shape.** `'\uD83D'` passed alone through `Patient.Tag` came back as a different, paired supplementary character (`U+D806 U+DC2D`) under every one of the five wire shapes spiked (the shipped default, `CharSet.Ansi`, `CharSet.Unicode`, `[MarshalAs(UnmanagedType.U2)]`, and a bare `ushort`), including the `[MarshalAs(UnmanagedType.U2)]` shape [ADR-098](docs/adr/098-narrow-primitive-and-char-collection-components.md) shipped. This is a Kotlin/Native string-encoding artefact on the return leg, not a parameter-wire question: a C# `char` and a Kotlin `Char` are both single UTF-16 code units, so neither can legitimately hold an astral character, and an unpaired surrogate is degenerate input in both languages. Verified by spike; deliberately not fixture-covered, and deferred.

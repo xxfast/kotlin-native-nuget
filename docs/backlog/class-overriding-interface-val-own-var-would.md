@@ -1,0 +1,5 @@
+# A class overriding an interface `val` with its own `var` would emit an invalid C# override (CS0546).
+
+> Extracted verbatim from `ROADMAP.md` (Phase 3: Basic type support) in the 2026-08-31 roadmap slim-down.
+
+**A class overriding an interface `val` with its own `var` would emit an invalid C# override (CS0546).** An interface declaring `val items: List<Int>` projects as a get-only C# property. If an implementing class declares `override var items: List<Int>`, the class's own property projection follows its own declared mutability and adds a `set` accessor, which C# forbids on an override of a get-only member. Both projections run the same predicate independently against their own declared type, so nothing today reconciles a `val`/`var` mismatch across an override. Not collection-specific: the same hazard applies to any property type, not only a `Collection`. Not verified by execution, established by reading the projection logic (`ForwardPropertyPlanner` / `CirClassRenderer`). Deliberately excluded from the [ADR-075](docs/adr/075-collection-property-getter-setter-independence.md) fixture, which named it as a known adjacent hazard rather than build it.

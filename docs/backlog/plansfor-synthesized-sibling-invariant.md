@@ -1,0 +1,5 @@
+# `ForwardCallableCatalog.plansFor(declaration)` doesn't assert that a synthesized plan has a declared sibling.
+
+> Extracted verbatim from `ROADMAP.md` (Phase 4: Rich type support) in the 2026-08-31 roadmap slim-down.
+
+**`ForwardCallableCatalog.plansFor(declaration)` doesn't assert that a synthesized plan has a declared sibling.** `ForwardCallablePlanner.kt:330-350`'s plural accessor restates the ADR-074 duplicate-plan invariant as `require(planned.count { !it.synthesized } <= 1)`, but nothing checks the converse: that a plan marked `synthesized = true` always shares its declaration node with exactly one non-synthesized plan. Currently unreachable, since the only pass that sets `synthesized = true` filters on `declared[index] is Planned` before doing so, so there is no live code path that could violate it. Defensive only, not spiked; if a future route ever synthesizes without that guard, this is the check that would catch it. Discovered alongside [ADR-096](docs/adr/096-function-default-parameters.md), which added `plansFor` and the `synthesized` flag; **inferred**, not verified by execution.

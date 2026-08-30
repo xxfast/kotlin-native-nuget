@@ -1,0 +1,5 @@
+# Duplicate-type hazard across two published packages
+
+> Extracted verbatim from `ROADMAP.md` (Phase 2: KSP-driven generation) in the 2026-08-31 roadmap slim-down.
+
+**Duplicate-type hazard across two published packages** (accepted limitation, decided with the human, not a defect to fix here). If two Gradle modules each publish forward and each independently admit the same dependency-module type through their own closure, the consumer gets two unrelated C# types for one Kotlin type (`PackageA.Models.Foo` and `PackageB.Models.Foo`), with no conversion and no diagnostic, because neither KSP run can see the other package's export set. Same hazard Kotlin/Native framework export already has when two frameworks each `export()` a shared dependency. [ADR-066](docs/adr/066-forward-export-reachability-closure.md)'s Consequences section sketches three shapes for a fix (a shared "models" package both publishers depend on instead of inlining; a diagnostic when an admitted type's origin module is itself published; an opt-out forcing such a type back to `SKIPPED_UNEXPORTED_DEPENDENCY_TYPE`), none decided.

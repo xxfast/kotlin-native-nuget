@@ -1,0 +1,5 @@
+# Manually re-verify the Mac Catalyst repro without `MtouchInterpreter`
+
+> Extracted verbatim from `ROADMAP.md` (Tooling & Test Integrity).
+
+**Manually re-verify the Mac Catalyst repro without `MtouchInterpreter`.** [ADR-102](docs/adr/102-aot-safe-forward-callbacks.md)'s static thunks are expected to remove the need for `<MtouchInterpreter>-all</MtouchInterpreter>` on Catalyst/iOS Release builds entirely, but the original repro above (a Release-configuration Mac Catalyst arm64 build throwing `ExecutionEngineException` on the first `Flow` collection) has not been re-run without the flag to confirm the fix end to end on that runtime. This is the actual red-to-green proof of the verified failure the AOT smoke test item above cannot supply (it is a NativeAOT regression lane, not a Mono full-AOT one); no macOS+MAUI+device lane exists in CI, so it stays manual. Keep the `MtouchInterpreter` guidance in [Publishing Kotlin to C#: AOT and trimming](docs/topics/forward-overview.md#aot-and-trimming) until this lands.

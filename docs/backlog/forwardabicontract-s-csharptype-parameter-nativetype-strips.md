@@ -1,0 +1,5 @@
+# `ForwardAbiContract`'s `csharpType(parameter.nativeType)` strips a leading `[MarshalAs(...)] ` only inside the `out`-prefix test, not on the ordinary…
+
+> Extracted verbatim from `ROADMAP.md` (Tooling & Test Integrity) in the 2026-08-31 roadmap slim-down.
+
+**`ForwardAbiContract`'s `csharpType(parameter.nativeType)` strips a leading `[MarshalAs(...)] ` only inside the `out`-prefix test, not on the ordinary by-value branch.** The attribute is placed by the renderer keyed off native-type text, so `CirParameter.nativeType` itself stays plain `"char"` and the contract check never actually sees an attribute to strip; latent and currently unreached rather than reachable-but-wrong. It will bite the first by-value attribute that gets routed through the plan/CIR model (`CirParameter.nativeType`) instead of applied purely at render time, the way [ADR-098](docs/adr/098-narrow-primitive-and-char-collection-components.md)'s `[MarshalAs(UnmanagedType.U2)]` was. Pre-existing, not introduced by ADR-098. Discovered alongside [ADR-098](docs/adr/098-narrow-primitive-and-char-collection-components.md).

@@ -1,0 +1,5 @@
+# Only the `List`/`MutableList` sealed-subclass getters read the error slot back
+
+> Extracted verbatim from `ROADMAP.md` (Phase 3).
+
+**Only the `List`/`MutableList` sealed-subclass getters read the error slot back; every other one (`String`, enum, reference, `Map`/`Set`) passes `out _` and silently swallows the exception.** Since [#38](https://github.com/xxfast/kotlin-native-nuget/issues/38) both halves carry the convention on every sealed-subclass getter (`errorOut` with try/catch in `exports/SealedClassExports.kt`, `out IntPtr error` on every `DllImport` in `CirSealedRenderer.kt`), so nothing crosses the `@CName` boundary unhandled any more, but only the collection getters in `CirClassTranslator.kt`'s `translateSealedClass` check the slot and `throw NugetErrorNative.BuildException(error)`; the rest discard it, so a throwing custom `val` getter returns a default or null instead of surfacing the exception. Also, the ADR-081 value-class element projection is absent from the sealed path. Verified by source reading only.
