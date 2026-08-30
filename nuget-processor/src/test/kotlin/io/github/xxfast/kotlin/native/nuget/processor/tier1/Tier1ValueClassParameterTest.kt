@@ -83,6 +83,10 @@ class Tier1ValueClassParameterTest {
     assertContains(cs, "Native_TransferTo(_handle, to?.Value, out IntPtr error)")
     assertContains(cs, "string? to, out IntPtr error);")
     assertContains(cs, "public global::Interop.ChartId? PreviousChart()")
-    assertContains(cs, "return nativeResult == IntPtr.Zero ? null : new global::Interop.ChartId(Marshal.PtrToStringUTF8(nativeResult)!);")
+    assertContains(
+      cs,
+      "return nativeResult == IntPtr.Zero ? null : " +
+          "new global::Interop.ChartId(Marshal.PtrToStringUTF8(nativeResult)!);",
+    )
   }
 }

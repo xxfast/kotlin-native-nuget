@@ -246,7 +246,8 @@ class Tier1NullableCollectionComponentTest {
     assertContains(
       cs,
       "result.Add(elementHandle == IntPtr.Zero ? (global::Interop.Temperament?)null : " +
-          "new global::Interop.Temperament((global::Interop.Mood)NugetMarshal.FromHandle<int>(elementHandle)));",
+          "new global::Interop.Temperament((global::Interop.Mood)" +
+          "NugetMarshal.FromHandle<int>(elementHandle)));",
     )
   }
 

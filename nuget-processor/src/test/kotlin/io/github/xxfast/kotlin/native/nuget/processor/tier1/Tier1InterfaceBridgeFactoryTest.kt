@@ -80,7 +80,8 @@ class Tier1InterfaceBridgeFactoryTest {
     // itself rather than as a second wrapper over its own bridge.
     assertContains(
       cs,
-      "return (NugetMarshal.TryResolveCSharp(nativeResult, out global::Interop.IPet csharpOriginal) " +
+      "return (NugetMarshal.TryResolveCSharp(nativeResult, " +
+          "out global::Interop.IPet csharpOriginal) " +
           "? csharpOriginal : new global::Interop.Pet(nativeResult));",
     )
   }

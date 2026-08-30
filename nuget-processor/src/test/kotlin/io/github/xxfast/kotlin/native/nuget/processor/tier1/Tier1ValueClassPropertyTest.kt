@@ -37,7 +37,10 @@ class Tier1ValueClassPropertyTest {
 
     val cs: String = result.generatedCSharp
     assertContains(cs, "public global::Interop.ChartId CurrentChart")
-    assertContains(cs, "return new global::Interop.ChartId(Marshal.PtrToStringUTF8(nativeResult)!);")
+    assertContains(
+      cs,
+      "return new global::Interop.ChartId(Marshal.PtrToStringUTF8(nativeResult)!);",
+    )
     assertContains(cs, "Native_Set_currentChart(_handle, value.Value, out IntPtr error)")
   }
 
@@ -64,7 +67,11 @@ class Tier1ValueClassPropertyTest {
 
     val cs: String = result.generatedCSharp
     assertContains(cs, "public global::Interop.ChartId? BackupChart")
-    assertContains(cs, "return nativeResult == IntPtr.Zero ? null : new global::Interop.ChartId(Marshal.PtrToStringUTF8(nativeResult)!);")
+    assertContains(
+      cs,
+      "return nativeResult == IntPtr.Zero ? null : " +
+          "new global::Interop.ChartId(Marshal.PtrToStringUTF8(nativeResult)!);",
+    )
     assertContains(cs, "Native_Set_backupChart(_handle, value?.Value, out IntPtr error)")
     assertContains(cs, "string? value, out IntPtr error);")
   }

@@ -445,7 +445,15 @@ internal fun translateClass(
 
   val storedCallbackMembers: List<CirStoredCallbackMethod> = storedCallbackPairs
     .mapNotNull { (addMethod, removeMethod) ->
-      translateStoredCallbackMethod(addMethod, removeMethod, libraryName, prefix, exportedTypes, tracker, context)
+      translateStoredCallbackMethod(
+        addMethod,
+        removeMethod,
+        libraryName,
+        prefix,
+        exportedTypes,
+        tracker,
+        context,
+      )
     }
 
   // Detect interface-bridge pairs; exclude both halves from regular method path.

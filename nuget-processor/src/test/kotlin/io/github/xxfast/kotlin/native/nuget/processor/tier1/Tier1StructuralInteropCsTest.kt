@@ -341,6 +341,9 @@ class Tier1StructuralInteropCsTest {
     )
 
     assertTrue(result.compiledClean, "expected Patient.addBuddies to compile; got: ${result.compileErrors}")
-    assertContains(result.generatedCSharp, "public void AddBuddies(IReadOnlyList<global::Interop.Buddy> buddies)")
+    assertContains(
+      result.generatedCSharp,
+      "public void AddBuddies(IReadOnlyList<global::Interop.Buddy> buddies)",
+    )
   }
 }
