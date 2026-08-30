@@ -92,9 +92,11 @@ class Tier1ReflectionFreeDispatchTest {
       cs,
       "[typeof(global::Tier1.ApiResult.Failure)] = static handle => new global::Tier1.ApiResult.Failure(handle),",
     )
-    assertFalse(
-      cs.contains("[typeof(global::Tier1.ApiResult)]"),
-      "the abstract sealed base is not constructible and must not be registered",
+    // Issue #40: the base is not constructible, but it IS the `T` an erased `StateFlow<Sealed>` or
+    // `Flow<Sealed>` materialises, so it registers through its generated discriminator.
+    assertContains(
+      cs,
+      "[typeof(global::Tier1.ApiResult)] = static handle => global::Tier1.ApiResult.FromHandle(handle),",
     )
   }
 
