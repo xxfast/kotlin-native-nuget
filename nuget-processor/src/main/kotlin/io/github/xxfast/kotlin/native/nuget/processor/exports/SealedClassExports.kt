@@ -94,7 +94,10 @@ internal fun FileSpec.Builder.addSealedClassExports(sealed: KSClassDeclaration) 
             .addCode(
               buildString {
                 appendLine("return try {")
-                appendLine("  %T.create(handle.asStableRef<$subQualifiedName>().get().$propName).asCPointer()")
+                appendLine(
+                  "  %T.create(handle.asStableRef<$subQualifiedName>().get().$propName)." +
+                      "asCPointer()"
+                )
                 appendLine("} catch (e: Throwable) {")
                 appendLine("  if (errorOut != null) {")
                 appendLine("    errorOut.reinterpret<%T>().pointed.value = %T.create(")
