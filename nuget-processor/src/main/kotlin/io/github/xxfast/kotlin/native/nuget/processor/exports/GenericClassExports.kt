@@ -936,3 +936,93 @@ internal fun FileSpec.Builder.addNugetInstantHelperExports() {
       .build()
   )
 }
+
+/**
+ * ADR-103: the `kotlin.time.Duration` <-> `System.TimeSpan`-ticks conversion pair.
+ *
+ * `toDotNetTicks()` truncates toward zero below 100ns (`TimeSpan` cannot hold finer) and throws for
+ * a `Duration` that `TimeSpan` cannot represent at all: the two infinities, and any finite value
+ * outside about 10,675,199 days. Duration's millisecond band reaches about 146 million years, far
+ * past `TimeSpan`, so the range check runs on finite values too, and it runs *before* the multiply
+ * because `seconds * 10^7` silently wraps otherwise. The two boundary-second guards cover the case
+ * where the multiply fits but the `+ frac` add wraps.
+ *
+ * `durationFromDotNetTicks` is total: every `Int64` of ticks is a representable finite `Duration`.
+ * Inside the nanosecond band it is exact; beyond it the stdlib's own `Long.nanoseconds` /
+ * `Long.milliseconds` banding applies, which is 1ms granularity, matching how a `Duration` of that
+ * size is constructed anywhere else.
+ */
+internal fun FileSpec.Builder.addNugetDurationHelperExports() {
+  val duration = ClassName("kotlin.time", "Duration")
+  addImport("kotlin.time.Duration.Companion", "nanoseconds", "milliseconds")
+
+  addProperty(
+    PropertySpec.builder("TIMESPAN_MAX_SECONDS", Long::class)
+      .addModifiers(KModifier.PRIVATE, KModifier.CONST)
+      .initializer("922_337_203_685L")
+      .build()
+  )
+  addProperty(
+    PropertySpec.builder("TIMESPAN_MAX_FRAC_TICKS", Long::class)
+      .addModifiers(KModifier.PRIVATE, KModifier.CONST)
+      .initializer("4_775_807L")
+      .build()
+  )
+  addProperty(
+    PropertySpec.builder("TIMESPAN_MIN_FRAC_TICKS", Long::class)
+      .addModifiers(KModifier.PRIVATE, KModifier.CONST)
+      .initializer("-4_775_808L")
+      .build()
+  )
+
+  val outOfRange: String =
+    "\"Duration \$this is outside System.TimeSpan's range (about 10675199 days either side of " +
+        "zero)\""
+
+  addFunction(
+    FunSpec.builder("toDotNetTicks")
+      .addModifiers(KModifier.INTERNAL)
+      .receiver(duration)
+      .returns(Long::class)
+      .addCode(buildString {
+        appendLine("require(isFinite()) {")
+        appendLine(
+          "  \"Duration \$this is infinite and cannot be represented as a System.TimeSpan\""
+        )
+        appendLine("}")
+        appendLine("return toComponents { seconds, nanoseconds ->")
+        appendLine("  require(seconds in -TIMESPAN_MAX_SECONDS..TIMESPAN_MAX_SECONDS) {")
+        appendLine("    $outOfRange")
+        appendLine("  }")
+        appendLine("  val frac: Long = nanoseconds / 100L")
+        appendLine(
+          "  require(!(seconds == TIMESPAN_MAX_SECONDS && frac > TIMESPAN_MAX_FRAC_TICKS)) {"
+        )
+        appendLine("    $outOfRange")
+        appendLine("  }")
+        appendLine(
+          "  require(!(seconds == -TIMESPAN_MAX_SECONDS && frac < TIMESPAN_MIN_FRAC_TICKS)) {"
+        )
+        appendLine("    $outOfRange")
+        appendLine("  }")
+        appendLine("  seconds * 10_000_000L + frac")
+        append("}")
+      })
+      .build()
+  )
+
+  addFunction(
+    FunSpec.builder("durationFromDotNetTicks")
+      .addModifiers(KModifier.INTERNAL)
+      .addParameter("ticks", Long::class)
+      .returns(duration)
+      .addCode(buildString {
+        appendLine(
+          "return if (ticks in -92_233_720_368_547_758L..92_233_720_368_547_758L) " +
+              "(ticks * 100L).nanoseconds"
+        )
+        append("else (ticks / 10_000L).milliseconds")
+      })
+      .build()
+  )
+}

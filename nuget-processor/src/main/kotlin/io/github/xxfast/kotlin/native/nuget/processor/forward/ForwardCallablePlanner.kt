@@ -53,6 +53,9 @@ internal enum class ForwardPlanSkipReason(val droppedFromCSharp: Boolean) {
   // drop, even though the planner does not currently reach it (shapeOrNull's Instant branch
   // always succeeds).
   INSTANT(droppedFromCSharp = true),
+
+  // ADR-103: defensive in exactly the same way as INSTANT above.
+  DURATION(droppedFromCSharp = true),
   NULLABLE(droppedFromCSharp = true),
   OBJECT(droppedFromCSharp = true),
   STRING(droppedFromCSharp = true),
@@ -1091,6 +1094,7 @@ internal class ForwardCallablePlanner(
     if (origin == ForwardCallableOrigin.TOP_LEVEL &&
       result is BridgeType.Nullable &&
       (result.type is BridgeType.Primitive || result.type == BridgeType.Instant ||
+          result.type == BridgeType.Duration ||
           result.type is BridgeType.Enum ||
           (result.type as? BridgeType.ValueClass)?.underlying?.isHasValueFanOutUnderlying() == true)
     ) {
@@ -1137,6 +1141,7 @@ internal class ForwardCallablePlanner(
     val inner: BridgeType = result.type
     require(
       inner is BridgeType.Primitive || inner == BridgeType.Instant ||
+          inner == BridgeType.Duration ||
           inner is BridgeType.Enum ||
           (inner as? BridgeType.ValueClass)?.underlying?.isHasValueFanOutUnderlying() == true
     ) {
@@ -1203,6 +1208,13 @@ internal class ForwardCallablePlanner(
       if (resultIsInstant || hasInstantParameter) {
         add(ForwardHelperRequirement.INSTANT)
       }
+      // ADR-103: the same pair for Duration.
+      val resultIsDuration: Boolean = inner == BridgeType.Duration
+      val hasDurationParameter: Boolean =
+        parameters.any { (_, type) -> type.unwrapNullable() == BridgeType.Duration }
+      if (resultIsDuration || hasDurationParameter) {
+        add(ForwardHelperRequirement.DURATION)
+      }
       // ADR-079: the value-class *result* on this two-call route carries its own helpers, the
       // same way `nullableResultShape`'s new branch does for the single-call route.
       if (inner is BridgeType.ValueClass) {
@@ -1217,6 +1229,8 @@ internal class ForwardCallablePlanner(
     // ADR-079: likewise a value-class result must carry UNBOX_VALUE_CLASS explicitly.
     val resultConversion: ForwardConversion? = when {
       inner == BridgeType.Instant -> ForwardConversion.INSTANT_TO_TICKS
+      // ADR-103: likewise for Duration.
+      inner == BridgeType.Duration -> ForwardConversion.DURATION_TO_TICKS
       inner is BridgeType.ValueClass -> ForwardConversion.UNBOX_VALUE_CLASS
       // ADR-080: the ordinal lowering is explicit for the same reason.
       inner is BridgeType.Enum -> ForwardConversion.ENUM_TO_ORDINAL
@@ -1406,6 +1420,10 @@ internal class ForwardCallablePlanner(
       if (inputTypes.any { type -> type.unwrapNullable() == BridgeType.Instant }) {
         add(ForwardHelperRequirement.INSTANT)
       }
+      // ADR-103: the same input helper requirement for Duration.
+      if (inputTypes.any { type -> type.unwrapNullable() == BridgeType.Duration }) {
+        add(ForwardHelperRequirement.DURATION)
+      }
       // ADR-088: the reverse pipeline already generated these helpers into the same compilation;
       // the requirement is recorded only so the validator's conversion/helper pairing check holds.
       if (inputTypes.any { type -> type.unwrapNullable() is BridgeType.BoundInterface }) {
@@ -1487,6 +1505,19 @@ internal class ForwardCallablePlanner(
         transfer = ForwardTransfer(
           name, type, ForwardFlow.INTO_KOTLIN, ForwardPassing.VALUE,
           ForwardOwnership.BORROWED, ForwardConversion.TICKS_TO_INSTANT,
+        ),
+      )
+    )
+
+    // ADR-103: identical shape, a raw INT64 of TimeSpan ticks converted back by TICKS_TO_DURATION.
+    BridgeType.Duration -> listOf(
+      ForwardAbiParameter(
+        name = name,
+        wireType = ForwardAbiWireType.INT64,
+        direction = ForwardAbiDirection.IN,
+        transfer = ForwardTransfer(
+          name, type, ForwardFlow.INTO_KOTLIN, ForwardPassing.VALUE,
+          ForwardOwnership.BORROWED, ForwardConversion.TICKS_TO_DURATION,
         ),
       )
     )
@@ -1714,6 +1745,28 @@ internal class ForwardCallablePlanner(
         ),
       )
 
+      // ADR-103: identical to the Instant pair above, TICKS_TO_DURATION on the value slot.
+      BridgeType.Duration -> listOf(
+        ForwardAbiParameter(
+          name = "${name}HasValue",
+          wireType = ForwardAbiWireType.BOOLEAN,
+          direction = ForwardAbiDirection.IN,
+          transfer = ForwardTransfer(
+            "${name}HasValue", BridgeType.Primitive(PrimitiveKind.BOOLEAN), ForwardFlow.INTO_KOTLIN,
+            ForwardPassing.VALUE, ForwardOwnership.BORROWED, ForwardConversion.DIRECT,
+          ),
+        ),
+        ForwardAbiParameter(
+          name = name,
+          wireType = ForwardAbiWireType.INT64,
+          direction = ForwardAbiDirection.IN,
+          transfer = ForwardTransfer(
+            name, inner, ForwardFlow.INTO_KOTLIN, ForwardPassing.VALUE,
+            ForwardOwnership.BORROWED, ForwardConversion.TICKS_TO_DURATION,
+          ),
+        ),
+      )
+
       else -> error("Forward planner cannot build an input parameter for nullable $inner")
     }
 
@@ -1780,6 +1833,20 @@ internal class ForwardCallablePlanner(
         conversion = ForwardConversion.INSTANT_TO_TICKS,
       ),
       helperRequirements = setOf(ForwardHelperRequirement.INSTANT),
+    )
+
+    // ADR-103: the same shape, INT64 of TimeSpan ticks.
+    BridgeType.Duration -> ForwardResultShape(
+      wireType = ForwardAbiWireType.INT64,
+      transfer = ForwardTransfer(
+        subject = "result",
+        type = this,
+        flow = ForwardFlow.OUT_OF_KOTLIN,
+        passing = ForwardPassing.VALUE,
+        ownership = ForwardOwnership.BORROWED,
+        conversion = ForwardConversion.DURATION_TO_TICKS,
+      ),
+      helperRequirements = setOf(ForwardHelperRequirement.DURATION),
     )
 
     is BridgeType.ObjectHandle, is BridgeType.Interface -> handleResultShape(this)
@@ -1946,6 +2013,36 @@ internal class ForwardCallablePlanner(
         )
       ),
       helperRequirements = setOf(ForwardHelperRequirement.INSTANT),
+    )
+
+    // ADR-103: identical to the Instant case above, DURATION_TO_TICKS on the outer transfer and a
+    // plain Long `valueOut` carrying the already-converted TimeSpan ticks.
+    BridgeType.Duration -> ForwardResultShape(
+      wireType = ForwardAbiWireType.BOOLEAN,
+      transfer = ForwardTransfer(
+        subject = "result",
+        type = BridgeType.Nullable(type),
+        flow = ForwardFlow.OUT_OF_KOTLIN,
+        passing = ForwardPassing.VALUE,
+        ownership = ForwardOwnership.BORROWED,
+        conversion = ForwardConversion.DURATION_TO_TICKS,
+      ),
+      extraParameters = listOf(
+        ForwardAbiParameter(
+          name = "valueOut",
+          wireType = ForwardAbiWireType.POINTER,
+          direction = ForwardAbiDirection.OUT,
+          transfer = ForwardTransfer(
+            subject = "valueOut",
+            type = BridgeType.Primitive(PrimitiveKind.LONG),
+            flow = ForwardFlow.OUT_OF_KOTLIN,
+            passing = ForwardPassing.OUT,
+            ownership = ForwardOwnership.BORROWED,
+            conversion = ForwardConversion.DIRECT,
+          ),
+        )
+      ),
+      helperRequirements = setOf(ForwardHelperRequirement.DURATION),
     )
 
     // ADR-080: a bare nullable enum is ADR-079's value-class-over-enum shape with the box step
@@ -2147,6 +2244,8 @@ internal class ForwardCallablePlanner(
     // ADR-076: defensive only -- shapeOrNull's Instant branch always succeeds, same as CHAR/
     // STRING above.
     BridgeType.Instant -> ForwardPlanSkipReason.INSTANT
+    // ADR-103: defensive only, in the same way.
+    BridgeType.Duration -> ForwardPlanSkipReason.DURATION
     // ADR-088: same deferred nullable position as the input side, named the same way instead of
     // reaching the generic NULLABLE bucket.
     is BridgeType.Nullable ->
@@ -2203,7 +2302,7 @@ internal class ForwardCallablePlanner(
   }
 
   private fun BridgeType.inputSkipReason(): ForwardPlanSkipReason? = when (this) {
-    BridgeType.String, BridgeType.Char, BridgeType.Instant -> null
+    BridgeType.String, BridgeType.Char, BridgeType.Instant, BridgeType.Duration -> null
     is BridgeType.Enum -> null
     // ADR-040 sub-decision B: an interface-typed parameter is plannable — the C# lowering routes
     // through NugetMarshal.HandleOf (ForwardCirPlanProjection.callArgument), which throws
@@ -2231,7 +2330,7 @@ internal class ForwardCallablePlanner(
     // side of this same ADR.
     is BridgeType.Nullable -> when (val inner = type) {
       BridgeType.String, is BridgeType.ObjectHandle, is BridgeType.Primitive,
-      BridgeType.Instant -> null
+      BridgeType.Instant, BridgeType.Duration -> null
 
       // ADR-080: a bare nullable enum fans out to the has-value pair with the ordinal in the
       // value slot, exactly like ADR-079's enum-underlying value class minus the box.
@@ -2327,7 +2426,9 @@ internal class ForwardCallablePlanner(
     // ADR-076: like Enum, Instant always needs an explicit conversion tag (INSTANT_TO_TICKS/
     // TICKS_TO_INSTANT) at its own call site rather than this untagged pass-through -- every
     // caller builds its own ForwardTransfer for it instead of reaching this generic helper.
+    // ADR-103: same for Duration and its DURATION_TO_TICKS/TICKS_TO_DURATION pair.
     BridgeType.Instant,
+    BridgeType.Duration,
     is BridgeType.Nullable,
     is BridgeType.Collection,
     is BridgeType.RawCollection,
@@ -2413,7 +2514,8 @@ internal fun BridgeType.isBridgeableComponent(): Boolean = when (this) {
   // ADR-073/075's isWrappableComponent allow-list territory) -- same route.
   // ADR-088: "bound interfaces as collection components" is on this ADR's own deferred list, for
   // the same reason -- the wrap/box helpers have no route for a GCHandle element.
-  is BridgeType.Interface, is BridgeType.BoundInterface, BridgeType.Instant,
+  // ADR-103: "Duration as a collection element" is deferred for the identical reason.
+  is BridgeType.Interface, is BridgeType.BoundInterface, BridgeType.Instant, BridgeType.Duration,
   is BridgeType.RawCollection, is BridgeType.RawKSType, is BridgeType.SpecializedProtocol,
   is BridgeType.Unsupported,
     -> false

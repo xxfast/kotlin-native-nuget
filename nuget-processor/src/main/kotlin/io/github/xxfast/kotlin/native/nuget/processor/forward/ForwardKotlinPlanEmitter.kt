@@ -92,7 +92,9 @@ internal fun FileSpec.Builder.addForwardKotlinPlanExport(plan: ForwardCallablePl
       )
     }
 
-    BridgeType.Instant -> {
+    // ADR-103: Duration takes the identical branch, its own `toDotNetTicks()` extension resolving
+    // on the Duration receiver.
+    BridgeType.Instant, BridgeType.Duration -> {
       require(call.result == ForwardAbiWireType.INT64) {
         "Forward Kotlin Instant result must use INT64 wire type: ${plan.invocation.symbol}"
       }
@@ -227,11 +229,11 @@ private fun FileSpec.Builder.addLegacyTwoCallKotlinExport(plan: ForwardCallableP
   // ADR-079: a Primitive/Enum-underlying value class rides the same two-call shape, unboxing to
   // the underlying on the `_value` call.
   require(
-    inner is BridgeType.Primitive || inner == BridgeType.Instant ||
+    inner is BridgeType.Primitive || inner == BridgeType.Instant || inner == BridgeType.Duration ||
         inner is BridgeType.ValueClass || inner is BridgeType.Enum
   ) {
     "Legacy two-call plan ${plan.invocation.symbol} requires a nullable primitive, Instant, " +
-        "enum or value class"
+        "Duration, enum or value class"
   }
   val error: ForwardAbiParameter = requireNotNull(plan.errorSlot) {
     "Legacy two-call plan ${plan.invocation.symbol} is missing its error slot"
@@ -271,7 +273,7 @@ private fun FileSpec.Builder.addLegacyTwoCallKotlinExport(plan: ForwardCallableP
   addFunction(presenceBuilder.build())
 
   val valueExpression: String = when {
-    inner == BridgeType.Instant -> "$invocation!!.toDotNetTicks()"
+    inner == BridgeType.Instant || inner == BridgeType.Duration -> "$invocation!!.toDotNetTicks()"
     // ADR-079: unbox to the underlying (the ordinal for an enum underlying) on the `_value` call.
     inner is BridgeType.ValueClass -> "$invocation!!.${inner.underlyingPropertyName}" +
         if (inner.underlying is BridgeType.Enum) ".ordinal" else ""
@@ -281,7 +283,7 @@ private fun FileSpec.Builder.addLegacyTwoCallKotlinExport(plan: ForwardCallableP
     else -> "$invocation!!"
   }
   val valueDefault: String = when {
-    inner == BridgeType.Instant -> "0L"
+    inner == BridgeType.Instant || inner == BridgeType.Duration -> "0L"
     inner is BridgeType.Enum -> "0"
     inner is BridgeType.ValueClass ->
       if (inner.underlying is BridgeType.Enum) "0" else defaultResult(inner.underlying)
@@ -754,7 +756,8 @@ private fun addNullableResult(
 
     // ADR-076: same BOOLEAN + valueOut shape as the nullable-primitive case above, except the
     // Kotlin Instant result is converted to ticks before it is written into valueOut.
-    BridgeType.Instant -> {
+    // ADR-103: Duration rides the identical branch; `toDotNetTicks()` resolves on its own receiver.
+    BridgeType.Instant, BridgeType.Duration -> {
       require(call.result == ForwardAbiWireType.BOOLEAN) {
         "Forward Kotlin nullable Instant result must use BOOLEAN"
       }
@@ -863,7 +866,7 @@ private fun invocationExpression(
 
 private fun kotlinInputType(type: BridgeType, wireType: ForwardAbiWireType): TypeName = when (type) {
   is BridgeType.Primitive, BridgeType.Char, is BridgeType.Enum,
-  BridgeType.Instant -> kotlinResultType(wireType)
+  BridgeType.Instant, BridgeType.Duration -> kotlinResultType(wireType)
 
   BridgeType.String -> kotlinType("String")
   is BridgeType.ObjectHandle, is BridgeType.Interface, is BridgeType.Collection -> cOpaquePointer
@@ -1028,6 +1031,8 @@ private fun loweredArgument(parameter: ForwardPublicParameter): String =
     is BridgeType.Enum -> "${type.qualifiedName}.entries[${parameter.name}]"
     // ADR-076: the wire value is a raw INT64 of ticks; convert it back to an Instant.
     BridgeType.Instant -> "instantFromDotNetTicks(${parameter.name})"
+    // ADR-103: the same, into a Duration.
+    BridgeType.Duration -> "durationFromDotNetTicks(${parameter.name})"
     is BridgeType.ObjectHandle ->
       "${parameter.name}.asStableRef<${type.qualifiedName}>().get()"
 
@@ -1065,6 +1070,10 @@ private fun loweredArgument(parameter: ForwardPublicParameter): String =
       // TICKS_TO_INSTANT conversion the non-nullable Instant branch above uses.
       BridgeType.Instant ->
         "if (${parameter.name}HasValue) instantFromDotNetTicks(${parameter.name}) else null"
+
+      // ADR-103: the same, into a Duration.
+      BridgeType.Duration ->
+        "if (${parameter.name}HasValue) durationFromDotNetTicks(${parameter.name}) else null"
 
       // ADR-075: a nullable collection *parameter* (e.g. a data class's `notes: List<String>?`
       // constructor parameter, mirroring `Visit.notes` as a property) is now planned when its

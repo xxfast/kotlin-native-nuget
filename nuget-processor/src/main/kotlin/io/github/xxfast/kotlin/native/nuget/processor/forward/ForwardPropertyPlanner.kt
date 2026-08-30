@@ -257,6 +257,7 @@ internal class ForwardPropertyPlanner(
       helperRequirements = when (type.unwrapNullable()) {
         is BridgeType.Collection -> setOf(ForwardHelperRequirement.COLLECTION)
         BridgeType.Instant -> setOf(ForwardHelperRequirement.INSTANT)
+        BridgeType.Duration -> setOf(ForwardHelperRequirement.DURATION)
         // ADR-077: same pairing as the callable side (the value-class step plus the underlying's
         // own helper, keyed per kind in sub-item 4).
         is BridgeType.ValueClass -> buildSet {
@@ -422,7 +423,7 @@ internal class ForwardPropertyPlanner(
   )
 
   private fun isPlannable(type: BridgeType): Boolean = when (type) {
-    BridgeType.Unit, BridgeType.Char, BridgeType.String, BridgeType.Instant,
+    BridgeType.Unit, BridgeType.Char, BridgeType.String, BridgeType.Instant, BridgeType.Duration,
     is BridgeType.Primitive, is BridgeType.Enum, is BridgeType.ObjectHandle,
     is BridgeType.Interface, is BridgeType.Collection -> true
 
@@ -454,7 +455,7 @@ internal class ForwardPropertyPlanner(
     if (this !is BridgeType.Nullable) return null
     return when (type) {
       // ADR-080: a bare enum wires as its `int` ordinal, which has no spare null either.
-      is BridgeType.Primitive, BridgeType.Instant, is BridgeType.Enum -> type
+      is BridgeType.Primitive, BridgeType.Instant, BridgeType.Duration, is BridgeType.Enum -> type
       is BridgeType.ValueClass ->
         if (type.underlying is BridgeType.Primitive || type.underlying is BridgeType.Enum) type
         else null
@@ -473,7 +474,8 @@ internal class ForwardPropertyPlanner(
 
     is BridgeType.Enum -> ForwardAbiWireType.INT32
     // ADR-076: wires as its own INT64 tick representation, same as a Primitive(LONG).
-    BridgeType.Instant -> ForwardAbiWireType.INT64
+    // ADR-103: likewise, an INT64 of TimeSpan ticks.
+    BridgeType.Instant, BridgeType.Duration -> ForwardAbiWireType.INT64
     is BridgeType.Primitive -> when (type.kind) {
       PrimitiveKind.BOOLEAN -> ForwardAbiWireType.BOOLEAN
       PrimitiveKind.BYTE -> ForwardAbiWireType.INT8
@@ -531,6 +533,12 @@ internal class ForwardPropertyPlanner(
       ForwardConversion.TICKS_TO_INSTANT
     } else {
       ForwardConversion.INSTANT_TO_TICKS
+    }
+
+    BridgeType.Duration -> if (flow == ForwardFlow.INTO_KOTLIN) {
+      ForwardConversion.TICKS_TO_DURATION
+    } else {
+      ForwardConversion.DURATION_TO_TICKS
     }
 
     // ADR-077 sub-item 2: without this branch the `else` silently tags the transfer DIRECT, and

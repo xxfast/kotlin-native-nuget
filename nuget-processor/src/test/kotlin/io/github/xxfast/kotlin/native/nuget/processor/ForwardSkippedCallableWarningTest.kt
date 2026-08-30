@@ -81,6 +81,8 @@ class ForwardSkippedCallableWarningTest {
         ForwardPlanSkipReason.HANDLE,
         // ADR-076: same defensive classification as CHAR/STRING/ENUM/HANDLE/OBJECT.
         ForwardPlanSkipReason.INSTANT,
+        // ADR-103: the same, for Duration.
+        ForwardPlanSkipReason.DURATION,
         ForwardPlanSkipReason.NULLABLE,
         ForwardPlanSkipReason.OBJECT,
         ForwardPlanSkipReason.STRING,

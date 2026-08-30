@@ -23,6 +23,15 @@ internal sealed interface BridgeType {
   data object Instant : BridgeType
 
   /**
+   * ADR-103: `kotlin.time.Duration`. Wires as a single `INT64` of `System.TimeSpan` ticks (100ns,
+   * signed, the full `Int64` domain); the public C# type is `System.TimeSpan`. The second
+   * known-scalar branch beside [Instant], and modelled the same way: a sealed variant with a
+   * required conversion on both sides plus a helper requirement, so the compiler enumerates every
+   * `when` that must change.
+   */
+  data object Duration : BridgeType
+
+  /**
    * @param qualifiedName Kotlin FQCN (used by the Kotlin export for `.entries[n]` / `.ordinal`).
    * @param csharpType Public C# type spelling. Cross-namespace enums (e.g. reverse-generated
    *   packages) need `global::Namespace.Name`; same-namespace simple names still work under
@@ -229,6 +238,12 @@ internal enum class ForwardConversion {
   /** ADR-076: .NET ticks (`Long`) -> Kotlin `Instant`, into Kotlin. */
   TICKS_TO_INSTANT,
 
+  /** ADR-103: Kotlin `Duration` -> `System.TimeSpan` ticks (`Long`), out of Kotlin. */
+  DURATION_TO_TICKS,
+
+  /** ADR-103: `System.TimeSpan` ticks (`Long`) -> Kotlin `Duration`, into Kotlin. */
+  TICKS_TO_DURATION,
+
   /** ADR-088: an incoming transfer GCHandle -> the Kotlin value, via `nuget{Iface}Value`. */
   GC_HANDLE_TO_BOUND_VALUE,
 
@@ -246,6 +261,9 @@ internal enum class ForwardHelperRequirement {
 
   /** ADR-076: the generated `toDotNetTicks()`/`instantFromDotNetTicks()` conversion pair. */
   INSTANT,
+
+  /** ADR-103: the generated `toDotNetTicks()`/`durationFromDotNetTicks()` conversion pair. */
+  DURATION,
 
   /**
    * ADR-088: the reverse pipeline's own per-interface helpers (`nuget{Iface}Value`,
@@ -476,7 +494,7 @@ internal object ForwardCallablePlanValidator {
 
   private fun validateType(type: BridgeType, position: String) {
     when (type) {
-      BridgeType.Unit, BridgeType.Char, BridgeType.String, BridgeType.Instant,
+      BridgeType.Unit, BridgeType.Char, BridgeType.String, BridgeType.Instant, BridgeType.Duration,
       is BridgeType.Primitive, is BridgeType.Enum, is BridgeType.ObjectHandle,
       is BridgeType.Interface, is BridgeType.BoundInterface,
         -> Unit
@@ -564,6 +582,12 @@ internal object ForwardCallablePlanValidator {
       ForwardConversion.INSTANT_TO_TICKS
     }
 
+    BridgeType.Duration -> if (flow == ForwardFlow.INTO_KOTLIN) {
+      ForwardConversion.TICKS_TO_DURATION
+    } else {
+      ForwardConversion.DURATION_TO_TICKS
+    }
+
     else -> null
   }
 
@@ -599,6 +623,10 @@ internal object ForwardCallablePlanValidator {
     ForwardConversion.INSTANT_TO_TICKS,
     ForwardConversion.TICKS_TO_INSTANT,
       -> ForwardHelperRequirement.INSTANT
+
+    ForwardConversion.DURATION_TO_TICKS,
+    ForwardConversion.TICKS_TO_DURATION,
+      -> ForwardHelperRequirement.DURATION
 
     ForwardConversion.GC_HANDLE_TO_BOUND_VALUE,
     ForwardConversion.BOUND_VALUE_TO_GC_HANDLE,
