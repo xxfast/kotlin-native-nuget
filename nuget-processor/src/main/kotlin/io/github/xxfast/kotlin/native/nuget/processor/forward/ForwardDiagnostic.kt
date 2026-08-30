@@ -100,6 +100,15 @@ internal enum class ForwardDiagnosticKind(val severity: ForwardDiagnosticSeverit
   /** ADR-088: a bound C# interface at a RETURN position with no `mint{Iface}Bridge` (ADR-085
    *  inadmissible), so a Kotlin implementation of it cannot be handed back to C#. */
   SKIPPED_UNIMPLEMENTABLE_BOUND_INTERFACE(ForwardDiagnosticSeverity.WARNING),
+
+  /** ADR-101: an exported class declares a supertype (an interface today; the base-class hole is
+   *  deferred) that is not in the export set, so no C# interface is ever generated for it and the
+   *  base list would not compile (CS0246). The supertype is dropped from the generated C# base
+   *  list; the class and its members — including the supertype's defaulted ones, which bind on
+   *  the class — still export. Deliberately NOT hinting `include(...)` the way
+   *  [SKIPPED_UNEXPORTED_DEPENDENCY_TYPE] does: the ADR-066 closure has no `superTypes` edge, so
+   *  admitting the package cannot pull a supertype-only interface in. */
+  SKIPPED_UNEXPORTED_SUPERTYPE(ForwardDiagnosticSeverity.WARNING),
 }
 
 /**
