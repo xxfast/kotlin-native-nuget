@@ -102,8 +102,8 @@ class Tier1ValueClassReceiverTest {
     assertContains(cs, "private static extern IntPtr Native_Abbreviate([MarshalAs(UnmanagedType.LPUTF8Str)] string receiver, int length, out IntPtr error);")
     assertContains(cs, "Native_Abbreviate(receiver.Value, length, out IntPtr error)")
     assertContains(cs, "private static extern int Native_Escalate(int receiver, out IntPtr error);")
-    assertContains(cs, "public static Temperament Escalate(this Temperament receiver)")
+    assertContains(cs, "public static global::Interop.Temperament Escalate(this global::Interop.Temperament receiver)")
     assertContains(cs, "Native_Escalate((int)receiver.Mood, out IntPtr error)")
-    assertContains(cs, "return new Temperament((global::Interop.Mood)nativeResult);")
+    assertContains(cs, "return new global::Interop.Temperament((global::Interop.Mood)nativeResult);")
   }
 }

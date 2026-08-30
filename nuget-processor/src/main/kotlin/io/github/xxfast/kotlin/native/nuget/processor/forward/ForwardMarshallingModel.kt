@@ -36,11 +36,13 @@ internal sealed interface BridgeType {
 
   /**
    * @param qualifiedName Kotlin FQCN.
-   * @param csharpType Public C# type spelling. ADR-066: mirrors [Enum]'s existing qualification
-   *   shape exactly — a same-namespace reference stays a bare simple name, but any admitted
-   *   dependency-module (or otherwise cross-namespace) type must render as `global::Namespace.
-   *   Name`, or a two-namespace assembly (e.g. `TestLibrary` referencing `TestLibrary.Models`)
-   *   fails `CS0246` in generated code the consumer never wrote.
+   * @param csharpType Public C# type spelling. Mirrors [Enum]'s qualification shape exactly:
+   *   classification always renders `global::Namespace.Name` when a root namespace is available,
+   *   including for a module-local type, because a two-namespace assembly (e.g. `TestLibrary`
+   *   referencing `TestLibrary.Issue41`) otherwise fails `CS0246` in generated code the consumer
+   *   never wrote (issue #41; ADR-066's narrower "module-local stays bare" rule was the defect).
+   *   The default here is a bare simple name for test convenience only — the classifier is the
+   *   sole production constructor that computes a public spelling.
    */
   data class ObjectHandle(
     val qualifiedName: kotlin.String,

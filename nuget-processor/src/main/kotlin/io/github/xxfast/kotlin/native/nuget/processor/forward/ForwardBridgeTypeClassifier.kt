@@ -197,9 +197,9 @@ internal class ForwardBridgeTypeClassifier(
   /**
    * ADR-040: an interface at an ordinary (non ADR-039 add/remove-pair) position. Mirrors the
    * [ObjectHandle] membership check exactly, but the public spelling is `I$simpleName` (the
-   * projected interface) and the construction spelling is the bare `$simpleName` (the generated
-   * backing wrapper class) — qualified together for an admitted dependency-module interface, the
-   * same qualification rule [csharpTypeNameFor] already applies to a class/object handle.
+   * projected interface) and the construction spelling is `$simpleName` (the generated backing
+   * wrapper class) — both qualified together under the same unconditional rule
+   * [csharpTypeNameFor] applies to a class/object handle (issue #41).
    */
   private fun interfaceType(declaration: KSClassDeclaration, qualifiedName: String): BridgeType {
     if (qualifiedName !in context.exportedObjectHandles) {
@@ -215,7 +215,7 @@ internal class ForwardBridgeTypeClassifier(
       )
     }
     val simpleName: String = declaration.simpleName.asString()
-    if (declaration.containingFile != null || context.rootNamespace.isEmpty()) {
+    if (context.rootNamespace.isEmpty()) {
       return BridgeType.Interface(qualifiedName, csharpType = "I$simpleName", backingType = simpleName)
     }
     val namespace: String = mapPackageToNamespace(
@@ -231,19 +231,28 @@ internal class ForwardBridgeTypeClassifier(
   }
 
   /**
-   * ADR-066: a bare simple name is the shipped behaviour and stays that way for every
-   * module-local object handle (deliberately narrower than the enum branch's blanket
-   * qualification — this repo's Tier 1/2 fixtures assert exact `MethodName(Type param)`
-   * substrings for module-local handles today, so unconditionally qualifying every ObjectHandle
-   * would be a much larger behavioural change than this feature's scope). An **admitted
-   * dependency-module type** is the one case that must be qualified: it is never guaranteed to
-   * share its referencing class's namespace, and an unqualified name only compiles by accident
-   * when the two happen to coincide (ADR-066 "Failure mode 2", the same defect class as the
-   * `Flow<T>` element-type sites).
+   * The public C# spelling of a class/object handle or a value class, always fully qualified as
+   * `global::{namespace}.{Name}` — the enum branch's shape, verbatim.
+   *
+   * ADR-066 originally kept a *module-local* declaration bare and qualified only an admitted
+   * dependency-module type, on the reasoning that a module-local type always shares its
+   * referencing class's namespace. Issue
+   * [#41](https://github.com/xxfast/kotlin-native-nuget/issues/41) disproved that: a module's own
+   * sub-package maps to a sub-namespace (`TestLibrary.Issue41`), so a root-namespace class
+   * referencing it emitted a bare `Issue41Thing` in its property, constructor-parameter,
+   * `new List<T>(count)`, `FromHandle<T>`, `new T(handle)` and `Copy` positions and `Interop.cs`
+   * failed `CS0246` — reported in the field against `joreilly/PeopleInSpace#503`. The classifier
+   * is deliberately position-agnostic (it never sees which namespace the *referencing*
+   * declaration lands in), so "same namespace stays bare" is not a decision it can make
+   * correctly; qualifying unconditionally is. `global::` is legal everywhere a [BridgeType]'s
+   * `csharpType` is rendered — every one of those positions is a type reference (parameter and
+   * return types, casts, `new T(...)`, `out T x`, generic arguments), never an identifier.
+   *
+   * The one bare case left is an empty [ForwardBridgeTypeContext.rootNamespace], where there is
+   * no namespace to qualify against at all.
    */
   private fun csharpTypeNameFor(classDeclaration: KSClassDeclaration): String {
     val simpleName: String = classDeclaration.simpleName.asString()
-    if (classDeclaration.containingFile != null) return simpleName
     if (context.rootNamespace.isEmpty()) return simpleName
     val namespace: String = mapPackageToNamespace(
       classDeclaration.packageName.asString(),

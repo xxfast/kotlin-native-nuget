@@ -92,8 +92,8 @@ class Tier1OrdinarySurfaceTest {
 
     assertTrue(result.compiledClean, "got: ${result.compileErrors}")
     val cs = result.generatedCSharp
-    assertContains(cs, "GetLabels(this Tag")
-    assertContains(cs, "SetLabels(this Tag")
+    assertContains(cs, "GetLabels(this global::Interop.Tag")
+    assertContains(cs, "SetLabels(this global::Interop.Tag")
     assertContains(cs, "receiver.Value")
   }
 

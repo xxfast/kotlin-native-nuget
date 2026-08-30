@@ -83,7 +83,7 @@ class Tier1FunctionDefaultParameterTest {
     val cs: String = result.generatedCSharp
     assertContains(cs, "EntryPoint = \"hail_2\"")
     assertContains(cs, "EntryPoint = \"mitten_knead_3\"")
-    assertContains(cs, "public static string Knead(this Mitten receiver)")
+    assertContains(cs, "public static string Knead(this global::Interop.Mitten receiver)")
   }
 
   /**
