@@ -79,11 +79,17 @@ class Tier1ValueClassEnumUnderlyingTest {
     )
 
     val cs: String = result.generatedCSharp
-    assertContains(cs, "public Temperament Temperament")
+    assertContains(cs, "public global::Interop.Temperament Temperament")
     assertContains(cs, "Native_Set_temperament(_handle, (int)value.Mood, out IntPtr error)")
-    assertContains(cs, "public Temperament Soothe(Temperament current)")
+    assertContains(
+      cs,
+      "public global::Interop.Temperament Soothe(global::Interop.Temperament current)",
+    )
     assertContains(cs, "Native_Soothe(_handle, (int)current.Mood, out IntPtr error)")
-    assertContains(cs, "return new Temperament((global::Interop.Mood)nativeResult);")
+    assertContains(
+      cs,
+      "return new global::Interop.Temperament((global::Interop.Mood)nativeResult);",
+    )
   }
 
   @Test
@@ -138,18 +144,25 @@ class Tier1ValueClassEnumUnderlyingTest {
     assertContains(kotlin, "standardDosage(kind)!!.milligrams")
 
     val cs: String = result.generatedCSharp
-    assertContains(cs, "public Temperament? RestingTemperament")
-    assertContains(cs, "public Dosage? LastDosage")
-    assertContains(cs, "return new Temperament((global::Interop.Mood)value);")
+    assertContains(cs, "public global::Interop.Temperament? RestingTemperament")
+    assertContains(cs, "public global::Interop.Dosage? LastDosage")
+    assertContains(cs, "return new global::Interop.Temperament((global::Interop.Mood)value);")
     assertContains(cs, "Native_Set_lastDosage(_handle, value.Value.Milligrams, out IntPtr error)")
     assertContains(cs, "Native_Calm(_handle, current.HasValue, (int)current.GetValueOrDefault().Mood")
-    assertContains(cs, "public Dosage? Latest()")
-    assertContains(cs, "hasValue ? new Dosage(valueOut) : (Dosage?)null;")
+    assertContains(cs, "public global::Interop.Dosage? Latest()")
+    assertContains(
+      cs,
+      "hasValue ? new global::Interop.Dosage(valueOut) : (global::Interop.Dosage?)null;",
+    )
     // The enum underlying's valueOut is the bare `int` ordinal, cast back on reconstruction.
     assertContains(cs, "out int valueOut")
-    assertContains(cs, "hasValue ? new Temperament((global::Interop.Mood)valueOut) : (Temperament?)null;")
+    assertContains(
+      cs,
+      "hasValue ? new global::Interop.Temperament((global::Interop.Mood)valueOut) : " +
+          "(global::Interop.Temperament?)null;",
+    )
     assertContains(cs, "private static extern double standardDosage_value(int kind, out IntPtr error);")
-    assertContains(cs, "public static Dosage? standardDosage(int kind)")
-    assertContains(cs, "return new Dosage(__nuget_value);")
+    assertContains(cs, "public static global::Interop.Dosage? standardDosage(int kind)")
+    assertContains(cs, "return new global::Interop.Dosage(__nuget_value);")
   }
 }

@@ -42,7 +42,7 @@ class Tier1StructuralInteropCsTest {
     assertContains(generated, "public static void Reset()")
     assertContains(generated, "public static int Count()")
     assertContains(generated, "public static string Label()")
-    assertContains(generated, "public static Factory Create()")
+    assertContains(generated, "public static global::Interop.Factory Create()")
     assertContains(generated, "public static IReadOnlyList<string> Labels()")
     assertContains(generated, "NugetListNative.Count(listHandle)")
   }
@@ -252,7 +252,7 @@ class Tier1StructuralInteropCsTest {
     )
 
     assertTrue(result.compiledClean, "expected Patient.attach to compile; got: ${result.compileErrors}")
-    assertContains(result.generatedCSharp, "public int Attach(Buddy buddy)")
+    assertContains(result.generatedCSharp, "public int Attach(global::Interop.Buddy buddy)")
   }
 
   /** MIGRATION.md Phase 7. Class-method nullable object-handle parameter. */
@@ -271,7 +271,7 @@ class Tier1StructuralInteropCsTest {
     )
 
     assertTrue(result.compiledClean, "expected Patient.attach to compile; got: ${result.compileErrors}")
-    assertContains(result.generatedCSharp, "public void Attach(Buddy? buddy)")
+    assertContains(result.generatedCSharp, "public void Attach(global::Interop.Buddy? buddy)")
   }
 
   /** MIGRATION.md Phase 7. Class-method nullable primitive parameter. */
@@ -341,6 +341,9 @@ class Tier1StructuralInteropCsTest {
     )
 
     assertTrue(result.compiledClean, "expected Patient.addBuddies to compile; got: ${result.compileErrors}")
-    assertContains(result.generatedCSharp, "public void AddBuddies(IReadOnlyList<Buddy> buddies)")
+    assertContains(
+      result.generatedCSharp,
+      "public void AddBuddies(IReadOnlyList<global::Interop.Buddy> buddies)",
+    )
   }
 }

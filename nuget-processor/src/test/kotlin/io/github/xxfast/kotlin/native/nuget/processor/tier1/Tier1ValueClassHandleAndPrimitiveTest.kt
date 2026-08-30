@@ -58,16 +58,23 @@ class Tier1ValueClassHandleAndPrimitiveTest {
     assertContains(kotlin, "get().backup()?.patient")
 
     val cs: String = result.generatedCSharp
-    assertContains(cs, "public Dosage Prescribe(Dosage dosage)")
+    assertContains(cs, "public global::Interop.Dosage Prescribe(global::Interop.Dosage dosage)")
     assertContains(cs, "double nativeResult = Native_Prescribe(_handle, dosage.Milligrams, out IntPtr error);")
-    assertContains(cs, "return new Dosage(nativeResult);")
+    assertContains(cs, "return new global::Interop.Dosage(nativeResult);")
     assertContains(cs, "Native_Reassign(_handle, referral.Patient._handle, out IntPtr error)")
-    assertContains(cs, "public ChartRef OwnReferral()")
-    assertContains(cs, "return new ChartRef(new Patient(nativeResult));")
-    assertContains(cs, "public ChartRef? BackupReferral")
-    assertContains(cs, "return nativeResult == IntPtr.Zero ? null : new ChartRef(new Patient(nativeResult));")
+    assertContains(cs, "public global::Interop.ChartRef OwnReferral()")
+    assertContains(
+      cs,
+      "return new global::Interop.ChartRef(new global::Interop.Patient(nativeResult));",
+    )
+    assertContains(cs, "public global::Interop.ChartRef? BackupReferral")
+    assertContains(
+      cs,
+      "return nativeResult == IntPtr.Zero ? null : " +
+          "new global::Interop.ChartRef(new global::Interop.Patient(nativeResult));",
+    )
     assertContains(cs, "Native_Set_backupReferral(_handle, value?.Patient._handle ?? IntPtr.Zero, out IntPtr error)")
-    assertContains(cs, "public ChartRef? Backup()")
+    assertContains(cs, "public global::Interop.ChartRef? Backup()")
     // Nullable handle *parameter*: null propagates to IntPtr.Zero, Kotlin `?.let`-re-wraps.
     assertContains(cs, "Native_Transfer(_handle, to?.Patient._handle ?? IntPtr.Zero, out IntPtr error)")
     assertContains(

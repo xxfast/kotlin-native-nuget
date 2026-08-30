@@ -44,11 +44,11 @@ class Tier1ValueClassParameterTest {
     assertContains(kotlin, "tier1.valueclassparam.ChartId(id)")
 
     val cs: String = result.generatedCSharp
-    assertContains(cs, "public string Retag(ChartId id)")
+    assertContains(cs, "public string Retag(global::Interop.ChartId id)")
     assertContains(cs, "Native_Retag(_handle, id.Value, out IntPtr error)")
-    assertContains(cs, "public static string chartSummary(ChartId id)")
+    assertContains(cs, "public static string chartSummary(global::Interop.ChartId id)")
     assertContains(cs, "Native_chartSummary(id.Value, out IntPtr error)")
-    assertContains(cs, "public static int? chartLength(ChartId id)")
+    assertContains(cs, "public static int? chartLength(global::Interop.ChartId id)")
   }
 
   @Test
@@ -79,10 +79,14 @@ class Tier1ValueClassParameterTest {
     assertContains(kotlin, "previousChart()?.value")
 
     val cs: String = result.generatedCSharp
-    assertContains(cs, "public string TransferTo(ChartId? to)")
+    assertContains(cs, "public string TransferTo(global::Interop.ChartId? to)")
     assertContains(cs, "Native_TransferTo(_handle, to?.Value, out IntPtr error)")
     assertContains(cs, "string? to, out IntPtr error);")
-    assertContains(cs, "public ChartId? PreviousChart()")
-    assertContains(cs, "return nativeResult == IntPtr.Zero ? null : new ChartId(Marshal.PtrToStringUTF8(nativeResult)!);")
+    assertContains(cs, "public global::Interop.ChartId? PreviousChart()")
+    assertContains(
+      cs,
+      "return nativeResult == IntPtr.Zero ? null : " +
+          "new global::Interop.ChartId(Marshal.PtrToStringUTF8(nativeResult)!);",
+    )
   }
 }

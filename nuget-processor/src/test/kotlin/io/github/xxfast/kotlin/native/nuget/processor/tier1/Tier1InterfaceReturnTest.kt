@@ -45,7 +45,7 @@ class Tier1InterfaceReturnTest {
     val csharp: String = result.generatedCSharp
     assertContains(csharp, "public interface IPet : IDisposable")
     assertContains(csharp, "public sealed class Pet : IPet")
-    assertContains(csharp, "public IPet FindFriend()")
+    assertContains(csharp, "public global::Interop.IPet FindFriend()")
 
     val kotlin: String = result.generated
     assertContains(kotlin, "pet_get_name")

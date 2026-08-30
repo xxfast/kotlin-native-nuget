@@ -65,7 +65,7 @@ class Tier1NullableCollectionComponentTest {
     assertContains(cs, "public int LogAges(IList<int?> ages)")
     assertContains(cs, "NugetMarshal.CreateList(ages)")
     // The value-class projection lifts to `?.`.
-    assertContains(cs, "public int File(IReadOnlyList<ChartId?> charts)")
+    assertContains(cs, "public int File(IReadOnlyList<global::Interop.ChartId?> charts)")
     assertContains(
       cs,
       "NugetMarshal.CreateList(global::System.Linq.Enumerable.Select(charts, x => x?.Value))",
@@ -193,8 +193,8 @@ class Tier1NullableCollectionComponentTest {
     assertContains(cs, "IntPtr valueHandle = NugetMapNative.ValueAt(mapHandle, i);")
     assertContains(
       cs,
-      "var value = valueHandle == IntPtr.Zero ? (ChartId?)null : " +
-          "new ChartId(NugetMarshal.FromHandle<string>(valueHandle));",
+      "var value = valueHandle == IntPtr.Zero ? (global::Interop.ChartId?)null : " +
+          "new global::Interop.ChartId(NugetMarshal.FromHandle<string>(valueHandle));",
     )
   }
 
@@ -245,8 +245,9 @@ class Tier1NullableCollectionComponentTest {
     )
     assertContains(
       cs,
-      "result.Add(elementHandle == IntPtr.Zero ? (Temperament?)null : " +
-          "new Temperament((global::Interop.Mood)NugetMarshal.FromHandle<int>(elementHandle)));",
+      "result.Add(elementHandle == IntPtr.Zero ? (global::Interop.Temperament?)null : " +
+          "new global::Interop.Temperament((global::Interop.Mood)" +
+          "NugetMarshal.FromHandle<int>(elementHandle)));",
     )
   }
 

@@ -186,6 +186,22 @@ admitted from a dependency module, the processor also emits one `INFO_EXPORTED_F
 per KSP run, naming the whole admitted set, since a per-type warning would be noise at this scale.
 
 <note>
+<p>Every cross-namespace type reference in the generated <code>Interop.cs</code> is emitted
+<code>global::Namespace.Name</code>-qualified, not by its bare simple name, so the file compiles
+with no <code>using</code> needed regardless of how many packages a namespace-crossing constructor,
+property, list element, or <code>Copy</code> call touches. With two exported packages under
+different namespaces:</p>
+</note>
+
+```C#
+public Issue41Bundle(IReadOnlyList<global::TestLibrary.Issue41.Issue41Thing> things, global::TestLibrary.Issue41.Issue41Thing one)
+```
+
+```C#
+public IReadOnlyList<global::TestLibrary.Issue41.Issue41Thing> Things
+```
+
+<note>
 <p>With neither <code>rootPackage</code> nor <code>include</code> set, the closure never crosses a
 module boundary at all: an empty effective include set means "everything" for the module's own
 files (unchanged from ADR-063) but "nothing" for a dependency module, otherwise a project with no

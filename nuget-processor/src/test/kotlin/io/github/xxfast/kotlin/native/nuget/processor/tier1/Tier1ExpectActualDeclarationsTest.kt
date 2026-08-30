@@ -393,11 +393,11 @@ class Tier1ExpectActualDeclarationsTest {
     )
     assertTrue(cs.contains("public class SystemClock : IDisposable"), "got: $cs")
     assertTrue(
-      cs.contains("SystemClock defaultClock()"),
+      cs.contains("global::Interop.SystemClock defaultClock()"),
       "expected defaultClock's return position to erase to SystemClock; got: $cs",
     )
     assertTrue(
-      cs.contains("labelOf(SystemClock clock)"),
+      cs.contains("labelOf(global::Interop.SystemClock clock)"),
       "expected labelOf's parameter position to erase to SystemClock; got: $cs",
     )
   }

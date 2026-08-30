@@ -445,7 +445,15 @@ internal fun translateClass(
 
   val storedCallbackMembers: List<CirStoredCallbackMethod> = storedCallbackPairs
     .mapNotNull { (addMethod, removeMethod) ->
-      translateStoredCallbackMethod(addMethod, removeMethod, libraryName, prefix, exportedTypes, tracker)
+      translateStoredCallbackMethod(
+        addMethod,
+        removeMethod,
+        libraryName,
+        prefix,
+        exportedTypes,
+        tracker,
+        context,
+      )
     }
 
   // Detect interface-bridge pairs; exclude both halves from regular method path.
@@ -2038,6 +2046,7 @@ private fun translateStoredCallbackMethod(
   classPrefix: String,
   exportedTypes: Set<String>,
   tracker: CollectionHelperTracker,
+  context: NugetContext,
 ): CirStoredCallbackMethod? {
   val addMethodName: String = addMethod.simpleName.asString()
   val removeMethodName: String = removeMethod.simpleName.asString()
@@ -2089,11 +2098,12 @@ private fun translateStoredCallbackMethod(
   tracker.needsSubscription = true
 
   // C# param type for the public method: Action or Action<T1, T2, ...>
+  // Issue #41: every argument spelling goes through `qualifiedElementCsType`, which keeps a known
+  // scalar's C# primitive name and renders everything else `global::Namespace.Name` — a callback
+  // argument type is no more guaranteed to share the subscribing class's namespace than a
+  // `Flow<T>` element is (ADR-066 "Failure mode 2").
   val csParamType: String = buildString {
-    val argCsTypes: List<String> = lambdaArgTypes.mapIndexed { i, t ->
-      if (isEnumArgs[i]) t.declaration.simpleName.asString()
-      else KOTLIN_TO_CSHARP_PARAM[t.declaration.simpleName.asString()] ?: t.declaration.simpleName.asString()
-    }
+    val argCsTypes: List<String> = lambdaArgTypes.map { t -> qualifiedElementCsType(t, context) }
     if (lambdaArity == 0) append("Action")
     else append("Action<${argCsTypes.joinToString(", ")}>")
   }
@@ -2101,9 +2111,7 @@ private fun translateStoredCallbackMethod(
   // nativeCallback body (inside the lambda assigned to the delegate variable)
   val nativeCallbackBody: String = buildString {
     lambdaArgTypes.forEachIndexed { i, argType ->
-      val simpleName: String = argType.declaration.simpleName.asString()
-      val csType: String = if (isEnumArgs[i]) simpleName
-      else KOTLIN_TO_CSHARP_PARAM[simpleName] ?: simpleName
+      val csType: String = qualifiedElementCsType(argType, context)
       if (isEnumArgs[i]) append("$csType arg$i = ($csType)arg${i}Ord; ")
       else append("$csType arg$i = NugetMarshal.FromHandle<$csType>(arg${i}Ptr); NugetMarshal.Dispose(arg${i}Ptr); ")
     }
