@@ -8,7 +8,8 @@ import kotlin.test.assertTrue
  * ROADMAP:64 / issue #39 — a `List<T>` property on a *sealed subclass* renders as a `get { ... }`
  * block, not as an expression-bodied getter wrapping a statement block (which the C# compiler
  * rejects with CS1002/CS1519/CS8124), and carries the `out IntPtr error` slot on both halves of
- * the ABI. A scalar getter on the same subclass stays expression-bodied with no error slot.
+ * the ABI. A scalar getter on the same subclass stays expression-bodied; since issue #38 every
+ * sealed-subclass getter carries the error slot, so the scalar one declares it and passes `out _`.
  */
 class Tier1SealedListPropertyTest {
 
@@ -67,16 +68,16 @@ class Tier1SealedListPropertyTest {
   }
 
   @Test
-  fun `a scalar getter on the same subclass keeps the expression body and no error slot`() {
+  fun `a scalar getter on the same subclass keeps the expression body`() {
     val result = Tier1Harness.run(source)
 
     assertContains(
       result.generatedCSharp,
-      "            public bool Refreshing => Native_Get_refreshing(_handle);",
+      "            public bool Refreshing => Native_Get_refreshing(_handle, out _);",
     )
     assertContains(
       result.generatedCSharp,
-      "private static extern bool Native_Get_refreshing(IntPtr handle);",
+      "private static extern bool Native_Get_refreshing(IntPtr handle, out IntPtr error);",
     )
   }
 }

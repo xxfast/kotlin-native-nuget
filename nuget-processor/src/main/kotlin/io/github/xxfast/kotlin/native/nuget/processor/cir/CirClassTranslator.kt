@@ -1055,6 +1055,15 @@ internal fun translateSealedClass(
               "KotlinFunc<$typeParams>"
             } else ""
 
+            // Issue #38: a nullable non-String primitive (`Int?`) reads over the ADR-002 two-call
+            // pair its Kotlin export emits (`_get_<p>_has_value` + `_get_<p>_value`), not over a
+            // single scalar slot, and surfaces in C# as `int?`. A nullable `String` keeps its
+            // single call: the null pointer is its own presence bit.
+            val isNullablePrimitiveTwoCall: Boolean = isNullable && propType != "String" &&
+                !isReferenceType && !isEnumType && !isLambdaType &&
+                !isListType && !isMutableListType && !isMapType && !isMutableMapType &&
+                !isSetType && !isMutableSetType
+
             val nativeReturnType: String = when {
               isLambdaType -> "IntPtr"
               (isListType || isMutableListType) -> "IntPtr"
@@ -1073,15 +1082,17 @@ internal fun translateSealedClass(
               isMutableMapType -> "IDictionary<$mapKeyType, $mapValueType>"
               isSetType -> "IReadOnlySet<$setElementType>"
               isMutableSetType -> "ISet<$setElementType>"
+              propType == "String" && isNullable -> "string?"
               propType == "String" -> "string"
               isEnumType -> propType
               isReferenceType && isNullable -> "$propType?"
               isReferenceType -> propType
+              isNullablePrimitiveTwoCall -> "${mapReturnType(propType)}?"
               else -> mapReturnType(propType)
             }
 
             val getter: String = if (isLambdaType) {
-              "new $lambdaCsType(Native_Get_$propName(_handle))"
+              "new $lambdaCsType(Native_Get_$propName(_handle, out _))"
             } else if (isListType) {
               buildString {
                 appendLine()
@@ -1119,7 +1130,7 @@ internal fun translateSealedClass(
             } else if (isMapType || isMutableMapType) {
               buildString {
                 appendLine()
-                appendLine("                IntPtr mapHandle = Native_Get_$propName(_handle);")
+                appendLine("                IntPtr mapHandle = Native_Get_$propName(_handle, out _);")
                 appendLine("                int count = NugetMapNative.Count(mapHandle);")
                 appendLine("                var result = new Dictionary<$mapKeyType, $mapValueType>(count);")
                 appendLine("                for (int i = 0; i < count; i++)")
@@ -1134,7 +1145,7 @@ internal fun translateSealedClass(
             } else if (isSetType || isMutableSetType) {
               buildString {
                 appendLine()
-                appendLine("                IntPtr setHandle = Native_Get_$propName(_handle);")
+                appendLine("                IntPtr setHandle = Native_Get_$propName(_handle, out _);")
                 appendLine("                int count = NugetSetNative.Count(setHandle);")
                 appendLine("                var result = new HashSet<$setElementType>(count);")
                 appendLine("                for (int i = 0; i < count; i++)")
@@ -1145,11 +1156,23 @@ internal fun translateSealedClass(
                 append("                return result;")
               }
             } else when {
-              propType == "String" -> "Marshal.PtrToStringUTF8(Native_Get_$propName(_handle))!"
-              isEnumType -> "($propType)Native_Get_$propName(_handle)"
-              isReferenceType && isNullable -> "Native_Get_$propName(_handle) == IntPtr.Zero ? null : new $propType(Native_Get_$propName(_handle))"
-              isReferenceType -> "new $propType(Native_Get_$propName(_handle))"
-              else -> "Native_Get_$propName(_handle)"
+              // Issue #38: a nullable `String` drops the null-forgiving `!` -- `PtrToStringUTF8`
+              // returning null IS the property's null.
+              propType == "String" && isNullable ->
+                "Marshal.PtrToStringUTF8(Native_Get_$propName(_handle, out _))"
+
+              propType == "String" -> "Marshal.PtrToStringUTF8(Native_Get_$propName(_handle, out _))!"
+              isEnumType -> "($propType)Native_Get_$propName(_handle, out _)"
+              isReferenceType && isNullable -> "Native_Get_$propName(_handle, out _) == IntPtr.Zero ? null : new $propType(Native_Get_$propName(_handle, out _))"
+              isReferenceType -> "new $propType(Native_Get_$propName(_handle, out _))"
+              // Issue #38: the ADR-002 two-call read, kept as a single C# expression so the
+              // sealed renderer's `=> getter;` form still applies. The cast pins the conditional's
+              // type to the nullable primitive rather than leaving `null` untyped.
+              isNullablePrimitiveTwoCall ->
+                "Native_Get_${propName}_has_value(_handle, out _) ? " +
+                    "Native_Get_${propName}_value(_handle, out _) : ($type)null"
+
+              else -> "Native_Get_$propName(_handle, out _)"
             }
 
             CirProperty(
@@ -1159,12 +1182,13 @@ internal fun translateSealedClass(
               nativeName = propName,
               getter = getter,
               setter = null,
-              // Issue #39: a List getter marshals element handles out of a Kotlin call that can
-              // throw, so it carries the `out IntPtr error` slot the ordinary-class path has, and
-              // its Kotlin export declares the matching parameter (SealedClassExports). Map/Set
-              // getters keep the older no-error ABI on both sides; only their block-body rendering
-              // changed.
-              hasSyncErrorOut = isListType || isMutableListType,
+              // Issue #38/#39: every sealed-subclass getter carries the `out IntPtr error` slot
+              // its Kotlin export declares, so this is always true here; the sealed renderer emits
+              // the slot unconditionally and does not branch on it. Only the collection getters
+              // read the slot back (they marshal element handles out of a call that can throw);
+              // the scalar and handle getters pass `out _`.
+              hasSyncErrorOut = true,
+              isNullablePrimitiveTwoCall = isNullablePrimitiveTwoCall,
             )
           }
           .toList()

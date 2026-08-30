@@ -22,9 +22,20 @@ internal fun StringBuilder.renderSealedClass(sealed: CirSealedClass) {
     appendLine()
 
     for (prop in subclass.properties) {
-      val getterErrorParam: String = if (prop.hasSyncErrorOut) ", out IntPtr error" else ""
-      appendLine("            [DllImport(\"${sealed.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"${subclass.nativePrefix}_get_${prop.nativeName}\")]")
-      appendLine("            private static extern ${prop.nativeReturnType} Native_Get_${prop.nativeName}(IntPtr handle$getterErrorParam);")
+      // Issue #38: every sealed-subclass property getter carries the `out IntPtr error` slot its
+      // Kotlin export declares, and a nullable primitive is read through the ADR-002 pair
+      // (`_has_value` + `_value`) in place of the single import.
+      if (prop.isNullablePrimitiveTwoCall) {
+        appendLine("            [DllImport(\"${sealed.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"${subclass.nativePrefix}_get_${prop.nativeName}_has_value\")]")
+        appendLine("            [return: MarshalAs(UnmanagedType.I1)]")
+        appendLine("            private static extern bool Native_Get_${prop.nativeName}_has_value(IntPtr handle, out IntPtr error);")
+        appendLine()
+        appendLine("            [DllImport(\"${sealed.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"${subclass.nativePrefix}_get_${prop.nativeName}_value\")]")
+        appendLine("            private static extern ${prop.nativeReturnType} Native_Get_${prop.nativeName}_value(IntPtr handle, out IntPtr error);")
+      } else {
+        appendLine("            [DllImport(\"${sealed.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"${subclass.nativePrefix}_get_${prop.nativeName}\")]")
+        appendLine("            private static extern ${prop.nativeReturnType} Native_Get_${prop.nativeName}(IntPtr handle, out IntPtr error);")
+      }
       appendLine()
       renderSealedSubclassProperty(prop)
       appendLine()
