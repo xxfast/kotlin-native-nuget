@@ -1039,7 +1039,11 @@ internal fun translateSealedClass(
             } else if (isListType) {
               buildString {
                 appendLine()
-                appendLine("                IntPtr listHandle = Native_Get_$propName(_handle);")
+                appendLine("                IntPtr listHandle = Native_Get_$propName(_handle, out IntPtr error);")
+                appendLine("                if (error != IntPtr.Zero)")
+                appendLine("                {")
+                appendLine("                    throw NugetErrorNative.BuildException(error);")
+                appendLine("                }")
                 appendLine("                int count = NugetListNative.Count(listHandle);")
                 appendLine("                var result = new List<$listElementType>(count);")
                 appendLine("                for (int i = 0; i < count; i++)")
@@ -1052,7 +1056,11 @@ internal fun translateSealedClass(
             } else if (isMutableListType) {
               buildString {
                 appendLine()
-                appendLine("                IntPtr listHandle = Native_Get_$propName(_handle);")
+                appendLine("                IntPtr listHandle = Native_Get_$propName(_handle, out IntPtr error);")
+                appendLine("                if (error != IntPtr.Zero)")
+                appendLine("                {")
+                appendLine("                    throw NugetErrorNative.BuildException(error);")
+                appendLine("                }")
                 appendLine("                int count = NugetListNative.Count(listHandle);")
                 appendLine("                var result = new List<$listElementType>(count);")
                 appendLine("                for (int i = 0; i < count; i++)")
@@ -1105,6 +1113,12 @@ internal fun translateSealedClass(
               nativeName = propName,
               getter = getter,
               setter = null,
+              // Issue #39: a List getter marshals element handles out of a Kotlin call that can
+              // throw, so it carries the `out IntPtr error` slot the ordinary-class path has, and
+              // its Kotlin export declares the matching parameter (SealedClassExports). Map/Set
+              // getters keep the older no-error ABI on both sides; only their block-body rendering
+              // changed.
+              hasSyncErrorOut = isListType || isMutableListType,
             )
           }
           .toList()
