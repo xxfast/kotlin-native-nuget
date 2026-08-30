@@ -427,6 +427,16 @@ as five; `:725`, `:743`, `:1063` are the unrelated `List`/`Set` element-type gap
 above.) Until the two `Flow` sites are fixed, a `Flow<T>` of an admitted dependency type still emits
 an unqualified name and only compiles by accident when the namespaces happen to coincide.
 
+> **Amendment (2026-08-30, refs [#41](https://github.com/xxfast/kotlin-native-nuget/issues/41)):**
+> the "module-local stays bare, everything else renders `global::Namespace.Name`" rule described
+> above turned out to be applied only at some render sites, not the two `Flow` sites alone: with a
+> second `include(...)` package, property, constructor, `new List<T>(count)`, `FromHandle<T>`, and
+> `Copy` positions also emitted bare simple names and failed with `CS0246`. The fix removed the
+> module-local short-circuit entirely, so every cross-class reference is now unconditionally
+> `global::{namespace}.{Name}` once `rootNamespace` is non-empty, matching the enum branch's
+> existing shape at every render site, not case-by-case qualification. See ROADMAP.md Phase 2 for
+> the fixed item and the fixture.
+
 ### Two ADR-064 amendments this forces (both IN SCOPE for this feature)
 
 > **Implementing agent: read this section before writing any code.** Both amendments are **verified
