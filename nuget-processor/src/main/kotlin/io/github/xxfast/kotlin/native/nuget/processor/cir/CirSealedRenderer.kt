@@ -22,10 +22,11 @@ internal fun StringBuilder.renderSealedClass(sealed: CirSealedClass) {
     appendLine()
 
     for (prop in subclass.properties) {
+      val getterErrorParam: String = if (prop.hasSyncErrorOut) ", out IntPtr error" else ""
       appendLine("            [DllImport(\"${sealed.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"${subclass.nativePrefix}_get_${prop.nativeName}\")]")
-      appendLine("            private static extern ${prop.nativeReturnType} Native_Get_${prop.nativeName}(IntPtr handle);")
+      appendLine("            private static extern ${prop.nativeReturnType} Native_Get_${prop.nativeName}(IntPtr handle$getterErrorParam);")
       appendLine()
-      appendLine("            public ${prop.type} ${prop.name} => ${prop.getter};")
+      renderSealedSubclassProperty(prop)
       appendLine()
     }
 
@@ -92,4 +93,33 @@ internal fun StringBuilder.renderSealedSubclassDataMethods(libraryName: String, 
   appendLine("            public override string ToString() => Marshal.PtrToStringUTF8(Native_ToString(_handle))!;")
   appendLine()
 }
+
+/**
+ * Renders one sealed-subclass property. A getter whose body is a statement block (every collection
+ * getter: the `listHandle`/`count`/`for`/`Dispose`/`return` shape) must sit inside a `get { ... }`
+ * block, exactly as the ordinary-class `renderProperty` does; only a single-expression getter (a
+ * scalar, an enum, a handle) may use the `=> expr;` form. Emitting a block body as `=> block;` is
+ * what made the generated `Interop.cs` unparseable (CS1002/CS1519/CS8124, issue #39).
+ *
+ * Bodies are shared verbatim with the ordinary-class path, so they are baked at that path's
+ * indentation; a sealed subclass nests one level deeper, hence the +4 re-indent here rather than a
+ * forked body in the translator.
+ */
+private fun StringBuilder.renderSealedSubclassProperty(prop: CirProperty) {
+  if (!prop.getter.contains('\n')) {
+    appendLine("            public ${prop.type} ${prop.name} => ${prop.getter};")
+    return
+  }
+
+  appendLine("            public ${prop.type} ${prop.name}")
+  appendLine("            {")
+  appendLine("                get")
+  appendLine("                {${prop.getter.indentNestedBody()}")
+  appendLine("                }")
+  appendLine("            }")
+}
+
+/** Shifts an ordinary-class member body one nesting level deeper, leaving blank lines untouched. */
+private fun String.indentNestedBody(): String =
+  lines().joinToString("\n") { line -> if (line.isBlank()) line else "    $line" }
 

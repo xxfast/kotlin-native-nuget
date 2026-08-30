@@ -76,7 +76,42 @@ internal fun FileSpec.Builder.addSealedClassExports(sealed: KSClassDeclaration) 
         "kotlin.Unit",
       )
 
-      if (isEnumType) {
+      // Issue #39: a List property's C# getter marshals element handles out of a Kotlin call that
+      // can throw, so this export carries the `out IntPtr error` slot (and the try/catch that
+      // writes it) the ordinary-property path has. Its C# half is the `hasSyncErrorOut` branch in
+      // translateSealedClass; the two must move together, they are one ABI.
+      val isListType: Boolean = propType in setOf(
+        "kotlin.collections.List", "kotlin.collections.MutableList",
+      )
+
+      if (isListType) {
+        addFunction(
+          FunSpec.builder("export_${subPrefix}_get_$propName")
+            .addAnnotation(cNameAnnotation("${subPrefix}_get_$propName"))
+            .addParameter("handle", cOpaquePointer)
+            .addParameter("errorOut", cOpaquePointer.copy(nullable = true))
+            .returns(cOpaquePointer.copy(nullable = true))
+            .addCode(
+              buildString {
+                appendLine("return try {")
+                appendLine(
+                  "  %T.create(handle.asStableRef<$subQualifiedName>().get().$propName)." +
+                      "asCPointer()"
+                )
+                appendLine("} catch (e: Throwable) {")
+                appendLine("  if (errorOut != null) {")
+                appendLine("    errorOut.reinterpret<%T>().pointed.value = %T.create(")
+                appendLine("      buildError(e)")
+                appendLine("    ).asCPointer()")
+                appendLine("  }")
+                appendLine("  null")
+                append("}")
+              },
+              stableRef, cOpaquePointerVar, stableRef,
+            )
+            .build()
+        )
+      } else if (isEnumType) {
         addFunction(
           FunSpec.builder("export_${subPrefix}_get_$propName")
             .addAnnotation(cNameAnnotation("${subPrefix}_get_$propName"))
