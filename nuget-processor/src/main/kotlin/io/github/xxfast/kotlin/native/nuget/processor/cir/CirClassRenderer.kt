@@ -656,7 +656,6 @@ internal fun StringBuilder.renderDispose(
       appendLine("        private Task DrainAndDisposeAsync(IntPtr handle, IntPtr scopeHandle)")
       appendLine("        {")
       appendLine("            var tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);")
-      appendLine("            GCHandle tcsHandle = GCHandle.Alloc(tcs);")
       appendLine("            NugetAsyncCallback callback = null!;")
       appendLine("            GCHandle callbackHandle = default;")
       appendLine("            IntPtr drainJobHandle = IntPtr.Zero;")
@@ -664,8 +663,7 @@ internal fun StringBuilder.renderDispose(
       appendLine("            {")
       appendLine("                NugetJobNative.Dispose(drainJobHandle);")
       appendLine("                callbackHandle.Free();")
-      appendLine("                var t = (TaskCompletionSource<bool>)GCHandle.FromIntPtr(userData).Target!;")
-      appendLine("                GCHandle.FromIntPtr(userData).Free();")
+      appendLine("                TaskCompletionSource<bool> t = tcs;")
       appendLine("                NugetScopeNative.Dispose(scopeHandle);")
       appendLine("                Native_Dispose(handle);")
       appendLine("                if (isCancelled != 0)")
@@ -674,7 +672,10 @@ internal fun StringBuilder.renderDispose(
       appendLine("                    t.SetResult(true);")
       appendLine("            };")
       appendLine("            callbackHandle = GCHandle.Alloc(callback);")
-      appendLine("            drainJobHandle = NugetScopeNative.Drain(scopeHandle, callback, GCHandle.ToIntPtr(tcsHandle));")
+      appendLine(
+        "            drainJobHandle = NugetScopeNative.Drain(scopeHandle, " +
+            "NugetThunks.NugetAsyncCallbackPtr, GCHandle.ToIntPtr(callbackHandle));"
+      )
       appendLine("            return tcs.Task;")
       appendLine("        }")
     }
@@ -692,8 +693,11 @@ private fun StringBuilder.renderStoredCallbackMethod(method: CirStoredCallbackMe
   appendLine("        {")
   appendLine("            ${method.delegateName} nativeCallback = ${method.delegateParamList} => { ${method.nativeCallbackBody} };")
   appendLine("            GCHandle cbHandle = GCHandle.Alloc(nativeCallback);")
-  appendLine("            IntPtr fnPtr = Marshal.GetFunctionPointerForDelegate(nativeCallback);")
-  appendLine("            IntPtr sub = Native_${method.csMethodName}(_handle, fnPtr, IntPtr.Zero, out IntPtr error);")
+  // ADR-102: the AOT-compiled thunk address plus this delegate's own handle as the echoed ctx.
+  appendLine(
+    "            IntPtr sub = Native_${method.csMethodName}(_handle, " +
+        "NugetThunks.${method.delegateName}Ptr, GCHandle.ToIntPtr(cbHandle), out IntPtr error);"
+  )
   appendLine("            if (error != IntPtr.Zero) throw NugetErrorNative.BuildException(error);")
   appendLine("            return new NugetSubscription(() => { ${method.csRemoveNativeName}(_handle, sub); cbHandle.Free(); });")
   appendLine("        }")
@@ -746,11 +750,11 @@ private fun StringBuilder.renderInterfaceBridgeMethod(method: CirInterfaceBridge
     appendLine("            GCHandle h$i = GCHandle.Alloc(${entry.methodKtName}Cb);")
   }
 
-  // Native subscribe call
+  // Native subscribe call. ADR-102: thunk address + this slot's delegate handle as the ctx.
   val nativeCallArgs: String = buildString {
     append("_handle")
-    method.entries.forEach { entry ->
-      append(", Marshal.GetFunctionPointerForDelegate(${entry.methodKtName}Cb), IntPtr.Zero")
+    method.entries.forEachIndexed { i, entry ->
+      append(", NugetThunks.${entry.delegateName}Ptr, GCHandle.ToIntPtr(h$i)")
     }
   }
   appendLine("            IntPtr sub = Native_${method.csMethodName}($nativeCallArgs, out IntPtr error);")
@@ -778,7 +782,6 @@ private fun StringBuilder.renderCallbackMethod(method: CirCallbackMethod) {
   appendLine(method.callbackBody)
   appendLine("            };")
   appendLine("            GCHandle cbHandle = GCHandle.Alloc(nativeCallback);")
-  appendLine("            IntPtr fnPtr = Marshal.GetFunctionPointerForDelegate(nativeCallback);")
   appendLine("            try")
   appendLine("            {")
   appendLine(method.wrapperBody)

@@ -138,7 +138,12 @@ class Tier1InterfaceBridgeFactoryTest {
     assertContains(cs, "NugetBridgeObjectObjectCallback fetch = (arg0, _) => {")
     assertContains(cs, "NugetMarshal.FromHandle<string>(arg0)")
     assertContains(cs, "NugetBridgeVoidCallback release = _ => state.FreeAll();")
-    assertContains(cs, "state.Pin(nameGet, legsGet, nicknameGet, speak, fetch, nap, release);")
+    // ADR-102: each pin is also that slot's echoed ctx, so `Pin` hands the handle back one slot at
+    // a time and the factory passes the AOT-compiled thunk address rather than a marshalled
+    // delegate pointer.
+    assertContains(cs, "IntPtr nameGetCtx = state.Pin(nameGet);")
+    assertContains(cs, "IntPtr releaseCtx = state.Pin(release);")
+    assertContains(cs, "NugetThunks.NugetBridgeObjectCallbackPtr, nameGetCtx")
     assertContains(cs, "if (error != IntPtr.Zero) throw NugetErrorNative.BuildException(error);")
   }
 
@@ -180,7 +185,9 @@ class Tier1InterfaceBridgeFactoryTest {
     val result = Tier1Harness.run(source)
     val cs: String = result.generatedCSharp
 
-    assertContains(cs, "IntPtr ctx = state.Root();")
+    // ADR-102: Root() still allocates the strong self handle that keeps the state alive; it is no
+    // longer the slots' ctx, so its result is not bound to a local any more.
+    assertContains(cs, "state.Root();")
     assertContains(cs, "internal static int ReleasedCount;")
     assertContains(cs, "if (System.Threading.Interlocked.Exchange(ref _freed, 1) != 0) return;")
     assertContains(cs, "if (pin.IsAllocated) pin.Free();")
