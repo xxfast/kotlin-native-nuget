@@ -12,7 +12,11 @@ jobs:
       matrix:
         include:
           - os: macos-latest
+            aot_rid: osx-arm64
+            aot_binary: ./AotSmokeTest/bin/Release/net10.0/osx-arm64/publish/AotSmokeTest
           - os: windows-latest
+            aot_rid: win-x64
+            aot_binary: ./AotSmokeTest/bin/Release/net10.0/win-x64/publish/AotSmokeTest.exe
 
     runs-on: ${{ matrix.os }}
 
@@ -58,6 +62,19 @@ jobs:
           dotnet test IntegrationTests --no-build
           --collect:"XPlat Code Coverage"
           --results-directory IntegrationTests/TestResults
+
+      # ADR-102: the forward callback surface (flow, suspend, per-call lambda, stored callback,
+      # interface bridge) dispatches through [UnmanagedCallersOnly] thunks so it needs no JIT.
+      # NativeAOT cannot publish a test host, so this console app asserts via its exit code.
+      # A contract/regression lane, not a red-to-green proof: NativeAOT passed before the thunks
+      # too (ILC pre-generates delegate marshalling stubs) and must keep passing through them.
+      # Runs in the default shell deliberately - under bash on Windows the ILC link step fails
+      # to resolve vswhere.exe.
+      - name: Publish AOT smoke test (${{ matrix.aot_rid }})
+        run: dotnet publish AotSmokeTest -r ${{ matrix.aot_rid }} -c Release -p:PublishAot=true
+
+      - name: Run AOT smoke test (${{ matrix.aot_rid }})
+        run: ${{ matrix.aot_binary }}
 
       # Public repo works tokenless, but the token is wired for correctness and in case the
       # repo ever goes private. Uploads run only on macos-latest: coverage paths are identical

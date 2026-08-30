@@ -4,6 +4,16 @@ internal fun StringBuilder.renderAsyncHelper(helper: CirAsyncHelper) {
   appendLine("    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]")
   appendLine("    internal delegate void NugetAsyncCallback(IntPtr result, IntPtr error, byte isCancelled, IntPtr userData);")
   appendLine()
+  // ADR-102: the suspend continuation's ctx is the GCHandle of the completion closure itself. The
+  // closure already captures its TaskCompletionSource, so the separate tcs handle that used to
+  // travel through userData collapses into this one.
+  renderThunkClass {
+    appendCtxDispatchThunk(
+      "NugetAsyncCallback",
+      "(IntPtr result, IntPtr error, byte isCancelled, IntPtr userData)",
+      "void",
+    )
+  }
 }
 
 internal fun StringBuilder.renderScopeHelper(helper: CirScopeHelper) {
@@ -19,7 +29,10 @@ internal fun StringBuilder.renderScopeHelper(helper: CirScopeHelper) {
   appendLine("        internal static extern void Dispose(IntPtr handle);")
   appendLine()
   appendLine("        [DllImport(\"${helper.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"nuget_scope_drain\")]")
-  appendLine("        internal static extern IntPtr Drain(IntPtr handle, NugetAsyncCallback callback, IntPtr userData);")
+  appendLine(
+    "        internal static extern IntPtr Drain(IntPtr handle, IntPtr callback, " +
+        "IntPtr userData);"
+  )
   appendLine("    }")
   appendLine()
 }
@@ -58,12 +71,14 @@ internal fun StringBuilder.renderAsyncMethod(method: CirMethod, className: Strin
         ", CancellationToken cancellationToken = default"
   }
 
+  // ADR-102: the thunk address plus the completion closure's own GCHandle as the echoed ctx.
+  val callbackArgs: String = "NugetThunks.NugetAsyncCallbackPtr, GCHandle.ToIntPtr(callbackHandle)"
   val nativeCallArgs: String = if (method.isStatic) {
-    if (paramNames.isEmpty()) "callback, GCHandle.ToIntPtr(tcsHandle)"
-    else "$paramNames, callback, GCHandle.ToIntPtr(tcsHandle)"
+    if (paramNames.isEmpty()) callbackArgs
+    else "$paramNames, $callbackArgs"
   } else {
-    if (paramNames.isEmpty()) "_handle, GetOrCreateScope(), callback, GCHandle.ToIntPtr(tcsHandle)"
-    else "_handle, GetOrCreateScope(), $paramNames, callback, GCHandle.ToIntPtr(tcsHandle)"
+    if (paramNames.isEmpty()) "_handle, GetOrCreateScope(), $callbackArgs"
+    else "_handle, GetOrCreateScope(), $paramNames, $callbackArgs"
   }
 
   // ADR-068: `suspend fun` returning StateFlow<T> -- the awaited resultPtr IS the StateFlow
@@ -99,7 +114,6 @@ internal fun StringBuilder.renderAsyncMethod(method: CirMethod, className: Strin
     appendLine("                throw new ObjectDisposedException(nameof($className));")
   }
   appendLine("            var tcs = new $tcsType(TaskCreationOptions.RunContinuationsAsynchronously);")
-  appendLine("            GCHandle tcsHandle = GCHandle.Alloc(tcs);")
   appendLine("            NugetAsyncCallback callback = null!;")
   appendLine("            GCHandle callbackHandle = default;")
   appendLine("            CancellationTokenRegistration reg = default;")
@@ -109,8 +123,7 @@ internal fun StringBuilder.renderAsyncMethod(method: CirMethod, className: Strin
   appendLine("                reg.Dispose();")
   appendLine("                NugetJobNative.Dispose(jobHandle);")
   appendLine("                callbackHandle.Free();")
-  appendLine("                var t = ($tcsType)GCHandle.FromIntPtr(userData).Target!;")
-  appendLine("                GCHandle.FromIntPtr(userData).Free();")
+  appendLine("                $tcsType t = tcs;")
   appendLine("                if (isCancelled != 0)")
   appendLine("                {")
   appendLine("                    t.TrySetCanceled(cancellationToken);")

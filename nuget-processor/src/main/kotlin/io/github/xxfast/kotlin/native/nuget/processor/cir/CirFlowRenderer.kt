@@ -1,5 +1,23 @@
 package io.github.xxfast.kotlin.native.nuget.processor.cir
 
+/**
+ * One flow thunk: unlike every other shape the ctx is not the delegate itself but the shared
+ * [NugetFlowCallbacks] state, so the thunk selects [member] out of it.
+ */
+private fun StringBuilder.appendFlowThunk(name: String, paramList: String, member: String) {
+  val types: List<String> = thunkParameterTypes(paramList)
+  val parameters: String = types.mapIndexed { index, type -> "$type a$index" }.joinToString(", ")
+  val arguments: String = types.indices.joinToString(", ") { index -> "a$index" }
+  val ctx: String = "a${types.size - 1}"
+  appendThunkBody(
+    name,
+    parameters,
+    "void",
+    "((NugetFlowCallbacks)GCHandle.FromIntPtr($ctx).Target!).$member($arguments)",
+  )
+  appendThunkPointer(name, types, "void")
+}
+
 internal fun StringBuilder.renderFlowHelper(helper: CirFlowHelper) {
   appendLine("    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]")
   appendLine("    internal delegate void NugetFlowOnNextCallback(IntPtr itemPtr, byte isCancelled, IntPtr userData);")
@@ -12,6 +30,45 @@ internal fun StringBuilder.renderFlowHelper(helper: CirFlowHelper) {
   appendLine()
   appendLine("    internal delegate IntPtr NugetFlowCollectDelegate(IntPtr onNext, IntPtr onComplete, IntPtr onError, IntPtr userData);")
   appendLine()
+  // ADR-102 (corrected at the red step): the flow ABI threads ONE shared trailing userData that
+  // Kotlin echoes into all three callbacks -- there are no per-callback ctx slots -- so the shared
+  // ctx is a GCHandle to this one state object and each thunk pulls its own delegate out of it.
+  appendLine("    internal sealed class NugetFlowCallbacks")
+  appendLine("    {")
+  appendLine("        internal NugetFlowOnNextCallback OnNext = null!;")
+  appendLine("        internal NugetFlowOnCompleteCallback OnComplete = null!;")
+  appendLine("        internal NugetFlowOnErrorCallback OnError = null!;")
+  appendLine()
+  appendLine("        private GCHandle _self;")
+  appendLine("        private int _parties;")
+  appendLine()
+  appendLine("        internal IntPtr Root()")
+  appendLine("        {")
+  appendLine("            _self = GCHandle.Alloc(this);")
+  appendLine("            return GCHandle.ToIntPtr(_self);")
+  appendLine("        }")
+  appendLine()
+  // Measured, not theorised: freeing the ctx in DisposeAsync alone crashed the whole C# suite
+  // after the last flow test, because `NugetJobNative.Cancel` is asynchronous -- Kotlin delivers
+  // the cancellation `onNext(isCancelled: 1)` after DisposeAsync has returned. Under the old
+  // GetFunctionPointerForDelegate mechanism the stale call landed on a still-live marshaller stub
+  // and was harmless; keyed off a freed GCHandle it is a use-after-free. So the handle is released
+  // by whichever of the two parties -- the enumerator's disposal and Kotlin's terminal callback --
+  // arrives second, and by neither before.
+  appendLine("        internal void Release()")
+  appendLine("        {")
+  appendLine("            if (Interlocked.Increment(ref _parties) != 2) return;")
+  appendLine("            if (_self.IsAllocated) _self.Free();")
+  appendLine("        }")
+  appendLine("    }")
+  appendLine()
+  renderThunkClass {
+    appendFlowThunk(
+      "NugetFlowOnNext", "(IntPtr itemPtr, byte isCancelled, IntPtr userData)", "OnNext",
+    )
+    appendFlowThunk("NugetFlowOnComplete", "(IntPtr userData)", "OnComplete")
+    appendFlowThunk("NugetFlowOnError", "(IntPtr errorPtr, IntPtr userData)", "OnError")
+  }
   appendLine("    public class KotlinFlow<T> : IAsyncEnumerable<T>")
   appendLine("    {")
   appendLine("        private readonly NugetFlowCollectDelegate _startCollect;")
@@ -30,9 +87,7 @@ internal fun StringBuilder.renderFlowHelper(helper: CirFlowHelper) {
   appendLine("        private readonly Channel<T> _channel;")
   appendLine("        private readonly CancellationTokenRegistration _cancelReg;")
   appendLine("        private IntPtr _jobHandle;")
-  appendLine("        private GCHandle _onNextHandle;")
-  appendLine("        private GCHandle _onCompleteHandle;")
-  appendLine("        private GCHandle _onErrorHandle;")
+  appendLine("        private NugetFlowCallbacks? _callbacks;")
   appendLine("        private bool _done;")
   appendLine()
   appendLine("        public T Current { get; private set; } = default!;")
@@ -41,9 +96,15 @@ internal fun StringBuilder.renderFlowHelper(helper: CirFlowHelper) {
   appendLine("        {")
   appendLine("            _channel = Channel.CreateUnbounded<T>(new UnboundedChannelOptions { SingleReader = true, SingleWriter = true });")
   appendLine()
+  appendLine("            var callbacks = new NugetFlowCallbacks();")
+  appendLine("            _callbacks = callbacks;")
+  appendLine()
   appendLine("            NugetFlowOnNextCallback onNext = (itemPtr, isCancelled, userData) =>")
   appendLine("            {")
-  appendLine("                if (isCancelled != 0) { _channel.Writer.TryComplete(); return; }")
+  appendLine(
+    "                if (isCancelled != 0) { _channel.Writer.TryComplete(); " +
+        "callbacks.Release(); return; }"
+  )
   appendLine("                T value = NugetMarshal.FromHandle<T>(itemPtr);")
   appendLine("                _channel.Writer.TryWrite(value);")
   appendLine("            };")
@@ -51,22 +112,24 @@ internal fun StringBuilder.renderFlowHelper(helper: CirFlowHelper) {
   appendLine("            NugetFlowOnCompleteCallback onComplete = (userData) =>")
   appendLine("            {")
   appendLine("                _channel.Writer.TryComplete();")
+  appendLine("                callbacks.Release();")
   appendLine("            };")
   appendLine()
   appendLine("            NugetFlowOnErrorCallback onError = (errorPtr, userData) =>")
   appendLine("            {")
   appendLine("                _channel.Writer.TryComplete(NugetErrorNative.BuildException(errorPtr));")
+  appendLine("                callbacks.Release();")
   appendLine("            };")
   appendLine()
-  appendLine("            _onNextHandle = GCHandle.Alloc(onNext);")
-  appendLine("            _onCompleteHandle = GCHandle.Alloc(onComplete);")
-  appendLine("            _onErrorHandle = GCHandle.Alloc(onError);")
+  appendLine("            callbacks.OnNext = onNext;")
+  appendLine("            callbacks.OnComplete = onComplete;")
+  appendLine("            callbacks.OnError = onError;")
   appendLine()
-  appendLine("            IntPtr onNextPtr = Marshal.GetFunctionPointerForDelegate(onNext);")
-  appendLine("            IntPtr onCompletePtr = Marshal.GetFunctionPointerForDelegate(onComplete);")
-  appendLine("            IntPtr onErrorPtr = Marshal.GetFunctionPointerForDelegate(onError);")
-  appendLine()
-  appendLine("            _jobHandle = startCollect(onNextPtr, onCompletePtr, onErrorPtr, IntPtr.Zero);")
+  appendLine("            _jobHandle = startCollect(")
+  appendLine("                NugetThunks.NugetFlowOnNextPtr,")
+  appendLine("                NugetThunks.NugetFlowOnCompletePtr,")
+  appendLine("                NugetThunks.NugetFlowOnErrorPtr,")
+  appendLine("                callbacks.Root());")
   appendLine()
   appendLine("            if (cancellationToken.CanBeCanceled)")
   appendLine("                _cancelReg = cancellationToken.Register(() => NugetJobNative.Cancel(_jobHandle));")
@@ -118,9 +181,10 @@ internal fun StringBuilder.renderFlowHelper(helper: CirFlowHelper) {
   appendLine("                NugetJobNative.Dispose(_jobHandle);")
   appendLine("                _jobHandle = IntPtr.Zero;")
   appendLine("            }")
-  appendLine("            if (_onNextHandle.IsAllocated) _onNextHandle.Free();")
-  appendLine("            if (_onCompleteHandle.IsAllocated) _onCompleteHandle.Free();")
-  appendLine("            if (_onErrorHandle.IsAllocated) _onErrorHandle.Free();")
+  appendLine(
+    "            NugetFlowCallbacks? callbacks = Interlocked.Exchange(ref _callbacks, null);"
+  )
+  appendLine("            callbacks?.Release();")
   appendLine("            _channel.Writer.TryComplete();")
   appendLine("            return ValueTask.CompletedTask;")
   appendLine("        }")

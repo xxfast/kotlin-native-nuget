@@ -8,7 +8,7 @@ internal fun StringBuilder.renderFuncNativeHelper(helper: CirFuncNativeHelper) {
 
   for (arity in helper.arities.sorted()) {
     val paramStr: String = (listOf("IntPtr handle") +
-      (0 until arity).map { "IntPtr arg$it" }).joinToString(", ")
+        (0 until arity).map { "IntPtr arg$it" }).joinToString(", ")
 
     appendLine("        [DllImport(\"${helper.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"nuget_func${arity}_invoke\")]")
     appendLine("        internal static extern IntPtr Invoke$arity($paramStr);")
@@ -131,8 +131,8 @@ internal fun StringBuilder.renderSuspendFuncNativeHelper(helper: CirSuspendFuncN
 
   for (arity in helper.arities.sorted()) {
     val paramStr: String = (listOf("IntPtr handle") +
-      (0 until arity).map { "IntPtr arg$it" } +
-      listOf("NugetAsyncCallback callback", "IntPtr userData")).joinToString(", ")
+        (0 until arity).map { "IntPtr arg$it" } +
+        listOf("IntPtr callback", "IntPtr userData")).joinToString(", ")
 
     appendLine("        [DllImport(\"${helper.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"nuget_suspend_func${arity}_invoke\")]")
     appendLine("        internal static extern IntPtr Invoke$arity($paramStr);")
@@ -199,7 +199,6 @@ internal fun StringBuilder.renderSuspendFuncHelper(helper: CirSuspendFuncHelper)
       appendLine("        public Task<TResult> InvokeAsync(CancellationToken cancellationToken = default)")
       appendLine("        {")
       appendLine("            var tcs = new TaskCompletionSource<TResult>(TaskCreationOptions.RunContinuationsAsynchronously);")
-      appendLine("            GCHandle tcsHandle = GCHandle.Alloc(tcs);")
       appendLine("            NugetAsyncCallback callback = null!;")
       appendLine("            GCHandle callbackHandle = default;")
       appendLine("            CancellationTokenRegistration reg = default;")
@@ -209,8 +208,7 @@ internal fun StringBuilder.renderSuspendFuncHelper(helper: CirSuspendFuncHelper)
       appendLine("                reg.Dispose();")
       appendLine("                NugetJobNative.Dispose(jobHandle);")
       appendLine("                callbackHandle.Free();")
-      appendLine("                var t = (TaskCompletionSource<TResult>)GCHandle.FromIntPtr(userData).Target!;")
-      appendLine("                GCHandle.FromIntPtr(userData).Free();")
+      appendLine("                TaskCompletionSource<TResult> t = tcs;")
       appendLine("                if (isCancelled != 0)")
       appendLine("                {")
       appendLine("                    t.TrySetCanceled(cancellationToken);")
@@ -225,7 +223,10 @@ internal fun StringBuilder.renderSuspendFuncHelper(helper: CirSuspendFuncHelper)
       appendLine("                }")
       appendLine("            };")
       appendLine("            callbackHandle = GCHandle.Alloc(callback);")
-      appendLine("            jobHandle = $funcNativeRef.Invoke0(_handle, callback, GCHandle.ToIntPtr(tcsHandle));")
+      appendLine(
+        "            jobHandle = $funcNativeRef.Invoke0(_handle, " +
+            "NugetThunks.NugetAsyncCallbackPtr, GCHandle.ToIntPtr(callbackHandle));"
+      )
       appendLine("            if (cancellationToken.CanBeCanceled)")
       appendLine("                reg = cancellationToken.Register(() => NugetJobNative.Cancel(jobHandle));")
       appendLine("            return tcs.Task;")
@@ -244,9 +245,11 @@ internal fun StringBuilder.renderSuspendFuncHelper(helper: CirSuspendFuncHelper)
     } else {
       val typeParams: String = (1..arity).map { "T$it" }.plus("TResult").joinToString(", ")
       val methodParams: String = (1..arity).map { "T$it arg${it - 1}" }.joinToString(", ")
-      val invokeArgs: String = (listOf("_handle") +
-        (0 until arity).map { "boxedArg$it" } +
-        listOf("callback", "GCHandle.ToIntPtr(tcsHandle)")).joinToString(", ")
+      val invokeArgs: String = (
+          listOf("_handle") +
+              (0 until arity).map { "boxedArg$it" } +
+              listOf("NugetThunks.NugetAsyncCallbackPtr", "GCHandle.ToIntPtr(callbackHandle)")
+          ).joinToString(", ")
 
       appendLine("    public class KotlinSuspendFunc<$typeParams> : IDisposable, INugetHandle")
       appendLine("    {")
@@ -259,7 +262,6 @@ internal fun StringBuilder.renderSuspendFuncHelper(helper: CirSuspendFuncHelper)
       appendLine("        public Task<TResult> InvokeAsync($methodParams, CancellationToken cancellationToken = default)")
       appendLine("        {")
       appendLine("            var tcs = new TaskCompletionSource<TResult>(TaskCreationOptions.RunContinuationsAsynchronously);")
-      appendLine("            GCHandle tcsHandle = GCHandle.Alloc(tcs);")
       appendLine("            NugetAsyncCallback callback = null!;")
       appendLine("            GCHandle callbackHandle = default;")
       appendLine("            CancellationTokenRegistration reg = default;")
@@ -269,8 +271,7 @@ internal fun StringBuilder.renderSuspendFuncHelper(helper: CirSuspendFuncHelper)
       appendLine("                reg.Dispose();")
       appendLine("                NugetJobNative.Dispose(jobHandle);")
       appendLine("                callbackHandle.Free();")
-      appendLine("                var t = (TaskCompletionSource<TResult>)GCHandle.FromIntPtr(userData).Target!;")
-      appendLine("                GCHandle.FromIntPtr(userData).Free();")
+      appendLine("                TaskCompletionSource<TResult> t = tcs;")
       appendLine("                if (isCancelled != 0)")
       appendLine("                {")
       appendLine("                    t.TrySetCanceled(cancellationToken);")
@@ -319,7 +320,6 @@ internal fun StringBuilder.renderSuspendFuncHelper(helper: CirSuspendFuncHelper)
       appendLine("        public Task InvokeAsync(CancellationToken cancellationToken = default)")
       appendLine("        {")
       appendLine("            var tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);")
-      appendLine("            GCHandle tcsHandle = GCHandle.Alloc(tcs);")
       appendLine("            NugetAsyncCallback callback = null!;")
       appendLine("            GCHandle callbackHandle = default;")
       appendLine("            CancellationTokenRegistration reg = default;")
@@ -329,8 +329,7 @@ internal fun StringBuilder.renderSuspendFuncHelper(helper: CirSuspendFuncHelper)
       appendLine("                reg.Dispose();")
       appendLine("                NugetJobNative.Dispose(jobHandle);")
       appendLine("                callbackHandle.Free();")
-      appendLine("                var t = (TaskCompletionSource<bool>)GCHandle.FromIntPtr(userData).Target!;")
-      appendLine("                GCHandle.FromIntPtr(userData).Free();")
+      appendLine("                TaskCompletionSource<bool> t = tcs;")
       appendLine("                if (isCancelled != 0)")
       appendLine("                {")
       appendLine("                    t.TrySetCanceled(cancellationToken);")
@@ -345,7 +344,10 @@ internal fun StringBuilder.renderSuspendFuncHelper(helper: CirSuspendFuncHelper)
       appendLine("                }")
       appendLine("            };")
       appendLine("            callbackHandle = GCHandle.Alloc(callback);")
-      appendLine("            jobHandle = $funcNativeRef.Invoke0(_handle, callback, GCHandle.ToIntPtr(tcsHandle));")
+      appendLine(
+        "            jobHandle = $funcNativeRef.Invoke0(_handle, " +
+            "NugetThunks.NugetAsyncCallbackPtr, GCHandle.ToIntPtr(callbackHandle));"
+      )
       appendLine("            if (cancellationToken.CanBeCanceled)")
       appendLine("                reg = cancellationToken.Register(() => NugetJobNative.Cancel(jobHandle));")
       appendLine("            return tcs.Task;")
@@ -364,9 +366,11 @@ internal fun StringBuilder.renderSuspendFuncHelper(helper: CirSuspendFuncHelper)
     } else {
       val typeParams: String = (1..arity).map { "T$it" }.joinToString(", ")
       val methodParams: String = (1..arity).map { "T$it arg${it - 1}" }.joinToString(", ")
-      val invokeArgs: String = (listOf("_handle") +
-        (0 until arity).map { "boxedArg$it" } +
-        listOf("callback", "GCHandle.ToIntPtr(tcsHandle)")).joinToString(", ")
+      val invokeArgs: String = (
+          listOf("_handle") +
+              (0 until arity).map { "boxedArg$it" } +
+              listOf("NugetThunks.NugetAsyncCallbackPtr", "GCHandle.ToIntPtr(callbackHandle)")
+          ).joinToString(", ")
 
       appendLine("    public class KotlinSuspendAction<$typeParams> : IDisposable, INugetHandle")
       appendLine("    {")
@@ -379,7 +383,6 @@ internal fun StringBuilder.renderSuspendFuncHelper(helper: CirSuspendFuncHelper)
       appendLine("        public Task InvokeAsync($methodParams, CancellationToken cancellationToken = default)")
       appendLine("        {")
       appendLine("            var tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);")
-      appendLine("            GCHandle tcsHandle = GCHandle.Alloc(tcs);")
       appendLine("            NugetAsyncCallback callback = null!;")
       appendLine("            GCHandle callbackHandle = default;")
       appendLine("            CancellationTokenRegistration reg = default;")
@@ -389,8 +392,7 @@ internal fun StringBuilder.renderSuspendFuncHelper(helper: CirSuspendFuncHelper)
       appendLine("                reg.Dispose();")
       appendLine("                NugetJobNative.Dispose(jobHandle);")
       appendLine("                callbackHandle.Free();")
-      appendLine("                var t = (TaskCompletionSource<bool>)GCHandle.FromIntPtr(userData).Target!;")
-      appendLine("                GCHandle.FromIntPtr(userData).Free();")
+      appendLine("                TaskCompletionSource<bool> t = tcs;")
       appendLine("                if (isCancelled != 0)")
       appendLine("                {")
       appendLine("                    t.TrySetCanceled(cancellationToken);")

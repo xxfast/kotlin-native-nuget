@@ -626,7 +626,12 @@ public fun export_pet_bridge_create(
 
 ### Generated C#: the bridge state
 
-C# pins one delegate per slot, calls the factory once per crossing, and frees every pin from the release slot:
+C# pins one delegate per slot, calls the factory once per crossing, and frees every pin from the
+release slot. Each slot's function pointer is a shared `[UnmanagedCallersOnly]` static thunk keyed
+off that slot's own `GCHandle` ctx (`NugetThunks`, see
+[Publishing Kotlin to C#: AOT and trimming](forward-overview.md#aot-and-trimming),
+[ADR-102](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/102-aot-safe-forward-callbacks.md)),
+not a per-instance runtime-built thunk:
 
 ```C#
 internal sealed class PetBridgeState : NugetBridgeState
@@ -637,13 +642,17 @@ internal sealed class PetBridgeState : NugetBridgeState
     internal static PetBridgeState Create(TestLibrary.Cat.IPet impl)
     {
         var state = new PetBridgeState();
-        IntPtr ctx = state.Root();
+        state.Root();
         IntPtr token = state.TokenFor(impl);
         NugetBridgeObjectCallback nameGet = _ => { string result = impl.Name; return NugetMarshal.WrapString(result); };
         // ... legsGet, nicknameGet, speak, greet, fetch follow the same pattern ...
         NugetBridgeVoidCallback release = _ => state.FreeAll();
-        state.Pin(nameGet, legsGet, nicknameGet, speak, greet, fetch, nap, release);
-        state.KotlinHandle = Native_Create(/* ... */ token, out IntPtr error);
+        IntPtr nameGetCtx = state.Pin(nameGet);
+        // ... one state.Pin(...) call per slot ...
+        IntPtr releaseCtx = state.Pin(release);
+        state.KotlinHandle = Native_Create(
+            NugetThunks.NugetBridgeObjectCallbackPtr, nameGetCtx, /* ... */
+            NugetThunks.NugetBridgeVoidCallbackPtr, releaseCtx, token, out IntPtr error);
         if (error != IntPtr.Zero) throw NugetErrorNative.BuildException(error);
         return state;
     }
@@ -664,10 +673,6 @@ internal sealed class PetBridgeState : NugetBridgeState
 
 ## Limitations
 
-- A C#-implemented interface's bridge factory dispatches through the same
-  `Marshal.GetFunctionPointerForDelegate` mechanism as [Lambdas and callbacks](lambdas-and-callbacks.md),
-  so it is not safe under a fully AOT-compiled .NET runtime yet, see
-  [Publishing Kotlin to C#: AOT and trimming](forward-overview.md#aot-and-trimming).
 - A C#-implemented interface's bridge factory only ever gets `val` getters and `Unit`/primitive/`Boolean`/enum/`String`/`String?`-returning methods of arity 0-2. An interface with a `var` property, an object- or collection-typed member, a `suspend` member, or generics plans **no factory at all**, silently: `NugetMarshal.HandleOf` keeps the old `NotSupportedException` for it, with no diagnostic naming why.
 - A C#-implemented object's bridge is released only when Kotlin's GC actually collects it, on a later collection round; there is no deterministic, prompt release comparable to `IDisposable`.
 - Kotlin-side `===` on a C#-implemented object's bridge is not preserved across repeated crossings of the same C# instance: each crossing builds a new bridge object. C#-side identity (`Assert.Same` on the object read back from Kotlin) is preserved via a token probe.
@@ -742,5 +747,6 @@ public void Observation_WorksWithPatternMatching()
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/040-interface-return-type-mapping.md">ADR-040: Interface return type mapping</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/084-csharp-implemented-interfaces.md">ADR-084: C#-implemented Kotlin interfaces</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/094-reflection-free-generic-dispatch.md">ADR-094: Reflection-free generic dispatch</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/102-aot-safe-forward-callbacks.md">ADR-102: AOT-safe forward callbacks</a>
     </category>
 </seealso>

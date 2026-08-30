@@ -59,9 +59,14 @@ internal fun StringBuilder.renderBridgeHelper(helper: CirBridgeHelper) {
   appendLine("        private GCHandle _token;")
   appendLine("        private int _freed;")
   appendLine()
-  appendLine("        internal void Pin(params Delegate[] delegates)")
+  // ADR-102: the pin is now also the slot's ctx -- the thunk recovers this exact delegate from it
+  // -- so Pin hands the handle back instead of swallowing it. Lifetime is unchanged: the handle
+  // lives in `_pins` and is released by `FreeAll`.
+  appendLine("        internal IntPtr Pin(Delegate value)")
   appendLine("        {")
-  appendLine("            foreach (Delegate value in delegates) _pins.Add(GCHandle.Alloc(value));")
+  appendLine("            GCHandle pin = GCHandle.Alloc(value);")
+  appendLine("            _pins.Add(pin);")
+  appendLine("            return GCHandle.ToIntPtr(pin);")
   appendLine("        }")
   appendLine()
   // The strong self handle is both the slots' ctx and what keeps this state (and through its
@@ -117,17 +122,23 @@ private fun StringBuilder.renderBridgeState(libraryName: String, entry: CirBridg
   appendLine("        internal static ${plan.stateClassName} Create(${entry.csQualifiedName} impl)")
   appendLine("        {")
   appendLine("            var state = new ${plan.stateClassName}();")
-  appendLine("            IntPtr ctx = state.Root();")
+  // Root() still allocates the strong self handle that keeps this state (and the implementing
+  // object it closes over) alive for as long as the Kotlin bridge lives; it is no longer the
+  // slots' ctx, because each slot's thunk dispatches through its own delegate handle.
+  appendLine("            state.Root();")
   appendLine("            IntPtr token = state.TokenFor(impl);")
   plan.slots.forEach { slot ->
     appendLine("            ${slot.delegateName()} ${slot.slotPrefix} = ${slotLambda(slot)};")
   }
   appendLine("            NugetBridgeVoidCallback release = _ => state.FreeAll();")
-  val pinned: String = (plan.slots.map { it.slotPrefix } + "release").joinToString(", ")
-  appendLine("            state.Pin($pinned);")
+  (plan.slots.map { it.slotPrefix } + "release").forEach { pinned ->
+    appendLine("            IntPtr ${pinned}Ctx = state.Pin($pinned);")
+  }
   val callArgs: List<String> = plan.slots.flatMap { slot ->
-    listOf("Marshal.GetFunctionPointerForDelegate(${slot.slotPrefix})", "ctx")
-  } + listOf("Marshal.GetFunctionPointerForDelegate(release)", "ctx", "token", "out IntPtr error")
+    listOf("NugetThunks.${slot.delegateName()}Ptr", "${slot.slotPrefix}Ctx")
+  } + listOf(
+    "NugetThunks.NugetBridgeVoidCallbackPtr", "releaseCtx", "token", "out IntPtr error",
+  )
   appendLine("            state.KotlinHandle = Native_Create(")
   appendLine("                ${callArgs.joinToString(", ")});")
   appendLine("            if (error != IntPtr.Zero) throw NugetErrorNative.BuildException(error);")

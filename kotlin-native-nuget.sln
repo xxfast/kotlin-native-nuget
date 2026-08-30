@@ -11,6 +11,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "NugetMetadataReader", "Nuge
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "TestDependency", "TestDependency\TestDependency.csproj", "{0FAE6B3F-ACF7-4381-BCA5-DC9F2C002651}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "AotSmokeTest", "AotSmokeTest\AotSmokeTest.csproj", "{072A2C0D-68DF-4C7C-8925-321745CA51AE}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -69,6 +71,18 @@ Global
 		{0FAE6B3F-ACF7-4381-BCA5-DC9F2C002651}.Release|x64.Build.0 = Release|Any CPU
 		{0FAE6B3F-ACF7-4381-BCA5-DC9F2C002651}.Release|x86.ActiveCfg = Release|Any CPU
 		{0FAE6B3F-ACF7-4381-BCA5-DC9F2C002651}.Release|x86.Build.0 = Release|Any CPU
+		{072A2C0D-68DF-4C7C-8925-321745CA51AE}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{072A2C0D-68DF-4C7C-8925-321745CA51AE}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{072A2C0D-68DF-4C7C-8925-321745CA51AE}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{072A2C0D-68DF-4C7C-8925-321745CA51AE}.Debug|x64.Build.0 = Debug|Any CPU
+		{072A2C0D-68DF-4C7C-8925-321745CA51AE}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{072A2C0D-68DF-4C7C-8925-321745CA51AE}.Debug|x86.Build.0 = Debug|Any CPU
+		{072A2C0D-68DF-4C7C-8925-321745CA51AE}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{072A2C0D-68DF-4C7C-8925-321745CA51AE}.Release|Any CPU.Build.0 = Release|Any CPU
+		{072A2C0D-68DF-4C7C-8925-321745CA51AE}.Release|x64.ActiveCfg = Release|Any CPU
+		{072A2C0D-68DF-4C7C-8925-321745CA51AE}.Release|x64.Build.0 = Release|Any CPU
+		{072A2C0D-68DF-4C7C-8925-321745CA51AE}.Release|x86.ActiveCfg = Release|Any CPU
+		{072A2C0D-68DF-4C7C-8925-321745CA51AE}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

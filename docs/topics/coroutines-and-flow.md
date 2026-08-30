@@ -801,8 +801,10 @@ public async Task AwaitPlaymateReport_ValueReturnsFreshDisposableWrapper_OreoGre
 
 ## Limitations
 
-`Flow`/`StateFlow` collection and `suspend`/`async` are not safe under a fully AOT-compiled .NET
-runtime yet, see [Publishing Kotlin to C#: AOT and trimming](forward-overview.md#aot-and-trimming).
+`Flow`/`StateFlow` collection and `suspend`/`async` dispatch their callbacks through a static
+`[UnmanagedCallersOnly]` thunk, AOT-safe, see
+[Publishing Kotlin to C#: AOT and trimming](forward-overview.md#aot-and-trimming)
+([ADR-102](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/102-aot-safe-forward-callbacks.md)).
 
 Hot streams and several `Flow` positions are not yet supported (ROADMAP Phase 6):
 
@@ -849,5 +851,6 @@ rather than the raw `Function1`/`Result` this generated before
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/067-nullable-stateflow-mapping.md">ADR-067: Nullable StateFlow mapping</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/068-suspend-returning-stateflow.md">ADR-068: suspend fun returning StateFlow&lt;T&gt;</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/071-mutable-stateflow-mapping.md">ADR-071: MutableStateFlow&lt;T&gt; mapping</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/102-aot-safe-forward-callbacks.md">ADR-102: AOT-safe forward callbacks</a>
     </category>
 </seealso>

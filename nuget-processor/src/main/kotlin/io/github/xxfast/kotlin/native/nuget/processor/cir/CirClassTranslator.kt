@@ -566,7 +566,9 @@ internal fun translateClass(
       CirParameter("scopeHandle", "IntPtr"),
     ) + methodParams +
         listOf(
-          CirParameter("callback", "NugetAsyncCallback"),
+          // ADR-102: a raw thunk address, not a delegate the marshaller would have to build a
+          // native-to-managed stub for. The native symbol is unchanged; Kotlin is untouched.
+          CirParameter("callback", "IntPtr"),
           CirParameter("userData", "IntPtr"),
         )
 
@@ -620,7 +622,9 @@ internal fun translateClass(
       CirParameter("scopeHandle", "IntPtr"),
     ) + methodParams +
         listOf(
-          CirParameter("callback", "NugetAsyncCallback"),
+          // ADR-102: a raw thunk address, not a delegate the marshaller would have to build a
+          // native-to-managed stub for. The native symbol is unchanged; Kotlin is untouched.
+          CirParameter("callback", "IntPtr"),
           CirParameter("userData", "IntPtr"),
         )
 
@@ -1982,7 +1986,10 @@ private fun translateCallbackMethod(
   }
 
   // C# wrapper body (inside try{})
-  val nativeCall: String = "Native_$csMethodName(_handle, fnPtr, IntPtr.Zero, out IntPtr error)"
+  // ADR-102: the thunk address is a link-time constant and the ctx is the closure's own GCHandle,
+  // both inlined at the call so the pair cannot drift apart.
+  val nativeCall: String = "Native_$csMethodName(_handle, NugetThunks.${delegateName}Ptr, " +
+      "GCHandle.ToIntPtr(cbHandle), out IntPtr error)"
   val wrapperBody: String = buildString {
     when {
       isOuterRetUnit -> appendLine("            $nativeCall;")
