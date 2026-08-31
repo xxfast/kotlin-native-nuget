@@ -14,6 +14,8 @@ Primitive types follow the standard [Kotlin/Native C interop mappings](https://k
 | `String?` | `string?` | forward: two-call pattern on top-level/property returns (this page); reverse: `NullableAttribute`-driven, see [Objects and handles](objects-and-handles.md) and [ADR-053](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/053-nullable-reference-types-in-kotlin.md) |
 | `kotlin.time.Instant` | `System.DateTimeOffset` | one `INT64` of .NET ticks; property, constructor parameter, method parameter, method return, top-level return, see Instant below and [ADR-076](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/076-instant-mapping.md) |
 | `Instant?` | `DateTimeOffset?` | same wire form as `Instant`, rides the nullable-primitive `INT64` machinery above at all four positions |
+| `kotlin.time.Duration` | `System.TimeSpan` | one `INT64` of `TimeSpan` ticks; property, constructor parameter, method parameter, method return, top-level return, see Duration below and [ADR-103](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/103-duration-mapping.md) |
+| `Duration?` | `TimeSpan?` | same wire form as `Duration`, rides the nullable-primitive `INT64` machinery above at all four positions |
 
 ## Kotlin
 
@@ -542,6 +544,162 @@ public void EscapedForEternity_OutOfRangeInstant_IsExactType_KotlinArgumentExcep
 }
 ```
 
+## Duration
+
+`kotlin.time.Duration` binds as `System.TimeSpan`, the second known-scalar branch alongside
+`Instant` (same mechanism, cloned at every seam). It crosses the wire as a single `INT64` of
+**`TimeSpan` ticks** (100ns, signed, the full `Int64` domain), `TimeSpan`'s own tick unit, so
+nothing is carried across that the destination type would discard one line later. `Duration?`
+rides the nullable-primitive `INT64` machinery above unchanged in shape.
+
+Unlike `Instant`, the wire is signed and total in the C# → Kotlin direction: `new TimeSpan(long)`
+never throws, for any tick value. The throwing direction is Kotlin → C#, and it throws twice over:
+
+<warning>
+    <p><code>Duration.INFINITE</code> and <code>Duration.NEG_INFINITE</code> have no
+    <code>System.TimeSpan</code> counterpart and throw rather than saturating to
+    <code>TimeSpan.MaxValue</code>/<code>MinValue</code> or aliasing
+    <code>Timeout.InfiniteTimeSpan</code> (itself a magic -1ms value, not a real infinity). A
+    <em>finite</em> Duration can also be out of range: <code>Duration</code>'s millisecond band
+    spans about ±146 million years, far wider than <code>TimeSpan</code>'s ±10,675,199 days (about
+    ±29,228 years), so a finite Duration outside that range throws too. Both cases surface the
+    Kotlin-side <code>require</code> failure through the existing <code>errorOut</code> slot as a
+    <code>KotlinArgumentException</code>.</p>
+</warning>
+
+The two directions are not symmetric:
+
+| direction | precision | range |
+|---|---|---|
+| C# → Kotlin | exact within about ±146 years (`Duration`'s nanosecond band); silent 1ms granularity beyond, matching `Duration`'s own construction semantics (`Long.nanoseconds`) | total: every `TimeSpan` a consumer can hold is representable |
+| Kotlin → C# | truncated toward zero to 100ns | about ±10,675,199 days; `INFINITE`/`NEG_INFINITE` or an out-of-range finite `Duration` throws |
+
+From `test-library/src/nativeMain/kotlin/.../test/cat/NapTracker.kt`, crossing every position the
+mapping supports:
+
+```kotlin
+class NapTracker(val longestNap: Duration, var lastNap: Duration?) {
+  fun extend(extra: Duration): Duration = longestNap + extra
+
+  fun shortestNap(): Duration? {
+    val last = lastNap ?: return null
+    return if (last < longestNap) last else longestNap
+  }
+
+  fun describe(nap: Duration?): String =
+    if (nap == null) "no nap recorded" else "napped for ${nap.inWholeMilliseconds}ms"
+
+  fun maybeEcho(nap: Duration?): Duration? = nap
+
+  fun echo(nap: Duration): Duration = nap
+}
+
+object NapClock {
+  fun defaultNap(): Duration = 90.minutes
+
+  fun isLong(nap: Duration): Boolean = nap > 1.hours
+
+  fun infiniteNap(): Duration = Duration.INFINITE
+
+  fun aeonNap(): Duration = (200_000L * 365).days
+}
+
+fun napEpsilon(): Duration = 150.nanoseconds
+
+fun parseNap(text: String): Duration? = if (text.contains("Oreo")) 20.minutes else null
+```
+
+Generated C#, from `Interop.cs`:
+
+```C#
+public class NapTracker : IDisposable
+{
+    public NapTracker(global::System.TimeSpan longestNap, global::System.TimeSpan? lastNap)
+    {
+        IntPtr handle = Native_Create(longestNap.Ticks, lastNap.HasValue, lastNap.GetValueOrDefault().Ticks, out IntPtr error);
+        // ...
+    }
+
+    public global::System.TimeSpan LongestNap { get; }
+
+    public global::System.TimeSpan? LastNap { get; set; }
+
+    public global::System.TimeSpan Extend(global::System.TimeSpan extra) { /* ... */ }
+
+    public global::System.TimeSpan? ShortestNap() { /* ... */ }
+
+    public string Describe(global::System.TimeSpan? nap) { /* ... */ }
+
+    public global::System.TimeSpan? MaybeEcho(global::System.TimeSpan? nap) { /* ... */ }
+
+    public global::System.TimeSpan Echo(global::System.TimeSpan nap) { /* ... */ }
+}
+
+public static class NapClock
+{
+    public static global::System.TimeSpan DefaultNap() { /* ... */ }
+
+    public static bool IsLong(global::System.TimeSpan nap) { /* ... */ }
+
+    public static global::System.TimeSpan InfiniteNap() { /* ... */ }
+
+    public static global::System.TimeSpan AeonNap() { /* ... */ }
+}
+
+public static partial class NapTrackerKt
+{
+    public static global::System.TimeSpan napEpsilon() { /* ... */ }
+
+    public static global::System.TimeSpan? parseNap(string text) { /* ... */ }
+}
+```
+
+Return positions lift the wire ticks with `new TimeSpan(nativeResult)`; input positions take
+`.Ticks`.
+
+From `IntegrationTests/DurationMappingTests.cs`:
+
+```C#
+[Fact]
+public void TimeSpanMaxValue_EchoesBack_AtMostOneMillisecondShort()
+{
+    // C# -> Kotlin is total, but MaxValue lands in Duration's millisecond band, so the way
+    // back loses 5807 ticks (well under 1ms). Documented contract, not a defect.
+    using var tracker = new NapTracker(TimeSpan.FromMinutes(90), null);
+
+    var result = tracker.Echo(TimeSpan.MaxValue);
+
+    Assert.Equal(9223372036854770000L, result.Ticks);
+    Assert.True(TimeSpan.MaxValue - result < TimeSpan.FromMilliseconds(1));
+}
+
+[Fact]
+public void SubHundredNanosecondKotlinValue_TruncatesTowardZero_DoesNotRound()
+{
+    // Kotlin's napEpsilon() is 150 ns; 50 ns of that is below the wire form's 100ns tick
+    // resolution. Truncation gives 1 tick, rounding would give 2.
+    var result = NapTrackerKt.napEpsilon();
+
+    Assert.Equal(1L, result.Ticks);
+}
+
+[Fact]
+public void NapClock_InfiniteNap_IsExactType_KotlinArgumentException()
+{
+    var ex = Assert.ThrowsAny<ArgumentException>(() => NapClock.InfiniteNap());
+
+    Assert.IsType<KotlinArgumentException>(ex);
+}
+
+[Fact]
+public void NapClock_AeonNap_OutOfTimeSpanRangeButFinite_IsExactType_KotlinArgumentException()
+{
+    var ex = Assert.ThrowsAny<ArgumentException>(() => NapClock.AeonNap());
+
+    Assert.IsType<KotlinArgumentException>(ex);
+}
+```
+
 ## Limitations
 
 - Nullable *primitive* mapping (`Int?`, and friends) is forward-only (`→`): the reverse direction has
@@ -559,9 +717,9 @@ public void EscapedForEternity_OutOfRangeInstant_IsExactType_KotlinArgumentExcep
 - A lone surrogate `Char` (an unpaired UTF-16 code unit) does not round-trip under any wire shape and
   is deliberately not fixture-covered; deferred as degenerate input. Tracked in
   [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md).
-- `Instant` mapping is forward-only (`→`); there is no reverse `DateTimeOffset` → Kotlin mapping yet.
-  `kotlin.time.Duration` → `TimeSpan` and legacy `kotlinx.datetime.Instant` are deliberately deferred,
-  not required to ship `Instant` (see [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md)
+- `Instant` and `Duration` mapping are forward-only (`→`); there is no reverse `DateTimeOffset`/`TimeSpan`
+  → Kotlin mapping yet. Legacy `kotlinx.datetime.Instant` is deliberately deferred, a distinct
+  qualified name on a distinct dependency (see [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md)
   Phase 4).
 
 <seealso>
@@ -579,5 +737,6 @@ public void EscapedForEternity_OutOfRangeInstant_IsExactType_KotlinArgumentExcep
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/069-nullable-boolean-marshalling.md">ADR-069: Nullable Boolean marshalling</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/076-instant-mapping.md">ADR-076: kotlin.time.Instant mapping</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/098-narrow-primitive-and-char-collection-components.md">ADR-098: Narrow-primitive and Char collection components</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/103-duration-mapping.md">ADR-103: kotlin.time.Duration mapping</a>
     </category>
 </seealso>

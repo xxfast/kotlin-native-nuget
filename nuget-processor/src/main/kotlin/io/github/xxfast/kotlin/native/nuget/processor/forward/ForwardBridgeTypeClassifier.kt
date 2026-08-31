@@ -97,6 +97,11 @@ internal class ForwardBridgeTypeClassifier(
     // recognized here, before the exportedObjectHandles membership check below, so it never falls
     // through to SKIPPED_UNEXPORTED_DEPENDENCY_TYPE with an unactionable include(...) hint.
     if (qualifiedName == "kotlin.time.Instant") return BridgeType.Instant
+    // ADR-103: kotlin.time.Duration, same known-stdlib category as Instant. This line MUST stay
+    // ahead of the isValueClass() branch below: Duration *is* a value class over a private
+    // `rawValue` Long with an internal constructor, so the shape branch would otherwise win and
+    // bind an encoding the generated Kotlin cannot even compile against.
+    if (qualifiedName == "kotlin.time.Duration") return BridgeType.Duration
     specializedProtocol(qualifiedName)?.let { return it }
     collectionType(qualifiedName, type.arguments)?.let { return it }
 

@@ -641,6 +641,7 @@ class ForwardMarshallingMatrixTest {
     BridgeType.Char -> "Char"
     BridgeType.String -> "String"
     BridgeType.Instant -> "Instant"
+    BridgeType.Duration -> "Duration"
     is BridgeType.Enum -> "Enum"
     is BridgeType.ObjectHandle -> "ObjectHandle"
     is BridgeType.Interface -> "Interface"

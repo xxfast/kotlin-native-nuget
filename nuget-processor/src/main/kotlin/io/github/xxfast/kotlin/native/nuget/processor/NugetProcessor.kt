@@ -52,6 +52,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.exports.addNugetScopeHelpe
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addNugetScopeDrainExport
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addNugetJobHelperExports
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addNugetErrorHelperExports
+import io.github.xxfast.kotlin.native.nuget.processor.exports.addNugetDurationHelperExports
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addNugetInstantHelperExports
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addStoredCallbackExports
 import io.github.xxfast.kotlin.native.nuget.processor.exports.findStoredCallbackPairs
@@ -1170,6 +1171,15 @@ class NugetProcessor(
       ForwardHelperRequirement.INSTANT in plan.helperRequirements
     }
     if (needsInstantSupport) builder.addNugetInstantHelperExports()
+
+    // ADR-103: likewise the toDotNetTicks()/durationFromDotNetTicks() pair, gated on a plan
+    // actually crossing a Duration.
+    val needsDurationSupport: Boolean = callableCatalog.plans.any { plan ->
+      ForwardHelperRequirement.DURATION in plan.helperRequirements
+    } || callableCatalog.propertyPlans.any { plan ->
+      ForwardHelperRequirement.DURATION in plan.helperRequirements
+    }
+    if (needsDurationSupport) builder.addNugetDurationHelperExports()
 
     // ADR-068: `suspend fun` returning StateFlow<T>/MutableStateFlow<T> needs the two shared
     // generic exports keyed on the awaited flow's own handle -- generated once per module,

@@ -251,9 +251,9 @@ internal object ForwardCirPropertyProjection {
       is BridgeType.Enum -> append("            return (${value.csharpType()})nativeResult;")
       // ADR-076: nativeResult is a raw `long` of ticks (see the first `when` above); lift it into
       // a DateTimeOffset rather than casting (a `long -> DateTimeOffset` C# cast is illegal).
-      BridgeType.Instant -> append(
-        "            return new global::System.DateTimeOffset(nativeResult, global::System.TimeSpan.Zero);",
-      )
+      BridgeType.Instant -> append("            return ${instantLiftCs("nativeResult")};")
+      // ADR-103: the same lift into a TimeSpan.
+      BridgeType.Duration -> append("            return ${durationLiftCs("nativeResult")};")
 
       is BridgeType.ObjectHandle -> append("            return new ${value.csharpType()}(nativeResult);")
       is BridgeType.Interface ->
@@ -290,18 +290,20 @@ internal object ForwardCirPropertyProjection {
     // `_value` read's local type comes from the underlying's wire (`wireType()` delegates).
     require(
       inner is BridgeType.Primitive || inner == BridgeType.Instant ||
+          inner == BridgeType.Duration ||
           inner is BridgeType.ValueClass || inner is BridgeType.Enum
     ) {
-      "Forward property legacy getter requires a nullable primitive, Instant, enum or value " +
-          "class, got $type"
+      "Forward property legacy getter requires a nullable primitive, Instant, Duration, enum or " +
+          "value class, got $type"
     }
     val presenceArgs: String = listOf(args, "out IntPtr error").filter { it.isNotBlank() }.joinToString(", ")
     val valueArgs: String = listOf(args, "out IntPtr error2").filter { it.isNotBlank() }.joinToString(", ")
     // ADR-076: the "value" wire read is always the raw representation (`long` ticks for Instant);
     // the return expression lifts it into the semantic type.
     val returnExpression: String = when {
-      inner == BridgeType.Instant ->
-        "new global::System.DateTimeOffset(value, global::System.TimeSpan.Zero)"
+      inner == BridgeType.Instant -> instantLiftCs("value")
+      // ADR-103: the same lift into a TimeSpan.
+      inner == BridgeType.Duration -> durationLiftCs("value")
 
       // ADR-079: rebuild the record struct from the underlying wire value the `_value` call read.
       inner is BridgeType.ValueClass -> valueClassGetterReconstruction(inner, "value")
@@ -513,6 +515,8 @@ internal object ForwardCirPropertyProjection {
       // ADR-076: UtcTicks is load-bearing (verified) -- a consumer holding a non-UTC
       // DateTimeOffset must not send its wall-clock ticks.
       BridgeType.Instant -> "$name.UtcTicks"
+      // ADR-103: TimeSpan has one tick domain, so the plain `.Ticks` is unambiguous.
+      BridgeType.Duration -> "$name.Ticks"
       is BridgeType.ObjectHandle -> if (type is BridgeType.Nullable) "$name?._handle ?? IntPtr.Zero" else "$name._handle"
       // ADR-040 sub-decision B: the setter's static parameter type is `IFoo`, so extraction goes
       // through the shared reflective helper rather than a direct `._handle` field read.
@@ -554,7 +558,8 @@ internal object ForwardCirPropertyProjection {
 
     is BridgeType.Enum -> ForwardAbiWireType.INT32
     // ADR-076: wires as its own INT64 tick representation, same as a Primitive(LONG).
-    BridgeType.Instant -> ForwardAbiWireType.INT64
+    // ADR-103: the same, an INT64 of TimeSpan ticks.
+    BridgeType.Instant, BridgeType.Duration -> ForwardAbiWireType.INT64
     is BridgeType.Primitive -> type.kind.wireType()
     // ADR-077 sub-item 2: the underlying's wire, matching ForwardPropertyPlanner.wireType().
     is BridgeType.ValueClass -> type.underlying.wireType()
@@ -576,6 +581,8 @@ internal object ForwardCirPropertyProjection {
     // ADR-076: the public C# type is always System.DateTimeOffset, fully qualified so no "using
     // System;" is required in the generated file.
     BridgeType.Instant -> "global::System.DateTimeOffset"
+    // ADR-103: likewise System.TimeSpan.
+    BridgeType.Duration -> "global::System.TimeSpan"
     is BridgeType.Enum -> this.csharpType
     // ADR-066: mirrors `BridgeType.Enum.csharpType` — the classifier already qualified this.
     is BridgeType.ObjectHandle -> csharpType

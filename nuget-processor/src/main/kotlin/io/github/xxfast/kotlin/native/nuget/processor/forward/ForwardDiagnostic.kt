@@ -210,6 +210,7 @@ internal fun ForwardPlanSkipReason.toDiagnosticKind(): ForwardDiagnosticKind = w
   ForwardPlanSkipReason.ENUM,
   ForwardPlanSkipReason.HANDLE,
   ForwardPlanSkipReason.INSTANT,
+  ForwardPlanSkipReason.DURATION,
   ForwardPlanSkipReason.OBJECT,
   ForwardPlanSkipReason.STRING,
   ForwardPlanSkipReason.UNSUPPORTED,
@@ -315,6 +316,7 @@ internal fun BridgeType.diagnosticTypeName(): String = when (this) {
   BridgeType.Char -> "Char"
   BridgeType.String -> "String"
   BridgeType.Instant -> "Instant"
+  BridgeType.Duration -> "Duration"
   is BridgeType.Primitive -> kind.name.lowercase().replaceFirstChar { it.uppercase() }
   is BridgeType.Enum -> qualifiedName.substringAfterLast('.')
   is BridgeType.ObjectHandle -> qualifiedName.substringAfterLast('.')

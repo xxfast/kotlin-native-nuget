@@ -109,7 +109,8 @@ private fun FileSpec.Builder.addGetter(plan: ForwardPropertyPlan, call: ForwardN
       )
     }
 
-    BridgeType.Instant -> {
+    // ADR-103: Duration takes the identical branch (its own `toDotNetTicks()` receiver).
+    BridgeType.Instant, BridgeType.Duration -> {
       builder.returns(kotlinType("Long"))
       builder.addCode(
         valueBody("$access.toDotNetTicks()", "errorOut", "0L"),
@@ -205,7 +206,8 @@ private fun FileSpec.Builder.addNullableValueGetter(
 
     // ADR-076: same LegacyTwoCall value shape as the nullable Primitive case above, converted to
     // ticks before it crosses the wire.
-    BridgeType.Instant -> {
+    // ADR-103: same again for Duration.
+    BridgeType.Instant, BridgeType.Duration -> {
       val getterBuilder: FunSpec.Builder = exportBuilder(call, plan.receiver)
         .returns(kotlinType("Long"))
       getterBuilder.addCode(
@@ -333,6 +335,8 @@ private fun ForwardPropertyPlan.valueExpression(): String = when (val type: Brid
     is BridgeType.Interface -> "value?.asStableRef<${inner.qualifiedName}>()?.get()"
     // ADR-076: the wire value is a raw INT64 of ticks; convert it back to an Instant.
     BridgeType.Instant -> "instantFromDotNetTicks(value)"
+    // ADR-103: the same, into a Duration.
+    BridgeType.Duration -> "durationFromDotNetTicks(value)"
     // ADR-080: the NullableDispatch `set` export carries the bare ordinal (`set_null` is the
     // other export), so the entry lookup is unconditional.
     is BridgeType.Enum -> "${inner.qualifiedName}.entries[value]"
@@ -359,6 +363,7 @@ private fun ForwardPropertyPlan.valueExpression(): String = when (val type: Brid
   is BridgeType.Primitive, BridgeType.Char, BridgeType.String -> "value"
   is BridgeType.Enum -> "${type.qualifiedName}.entries[value]"
   BridgeType.Instant -> "instantFromDotNetTicks(value)"
+  BridgeType.Duration -> "durationFromDotNetTicks(value)"
   is BridgeType.ObjectHandle -> "value.asStableRef<${type.qualifiedName}>().get()"
   is BridgeType.Interface -> "value.asStableRef<${type.qualifiedName}>().get()"
   is BridgeType.Collection -> loweredCollectionExpression("value", type)
@@ -377,7 +382,7 @@ private fun kotlinInputType(type: BridgeType): TypeName = when (type) {
   BridgeType.Char -> kotlinType("Char")
   BridgeType.String -> kotlinType("String")
   is BridgeType.Enum -> kotlinType("Int")
-  BridgeType.Instant -> kotlinType("Long")
+  BridgeType.Instant, BridgeType.Duration -> kotlinType("Long")
   // ADR-014: the underlying is what actually crosses the wire, both for an extension property's
   // value-class receiver (ADR-075) and for an ordinary value-class property's setter value
   // (ADR-077 sub-item 2).

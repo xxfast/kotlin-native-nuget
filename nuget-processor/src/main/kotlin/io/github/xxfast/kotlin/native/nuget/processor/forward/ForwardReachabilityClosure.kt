@@ -203,6 +203,9 @@ internal class ForwardReachabilityClosure(
       // ADR-076: a known stdlib scalar, same as String/Char above -- the closure must stop
       // walking it as a class edge.
       "kotlin.time.Instant",
+      // ADR-103: likewise, and doubly so -- Duration is a value class, so without this entry the
+      // closure would walk it as a VALUE_CLASS edge.
+      "kotlin.time.Duration",
     )
     val COLLECTION_TYPES: Set<String> = setOf(
       "kotlin.collections.List", "kotlin.collections.MutableList",
