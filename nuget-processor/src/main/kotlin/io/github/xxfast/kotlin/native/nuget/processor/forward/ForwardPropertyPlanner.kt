@@ -221,9 +221,9 @@ internal class ForwardPropertyPlanner(
   ): ForwardPropertyPlan? {
     val type: BridgeType = classifier.classify(prop.type.resolve())
     // ADR-075: getter eligibility never depended on mutability or on the collection facet — a
-    // `Collection` (nullable or not) is unconditionally plannable (`isPlannable` already recurses
-    // through `Nullable`). Whether a *setter* can also be built is a wholly separate question,
-    // decided below, independent of the getter.
+    // `Collection` (nullable or not) plans whenever the C# read can spell every component
+    // (`isReadable`; `isPlannable` already recurses through `Nullable`). Whether a *setter* can
+    // also be built is a wholly separate question, decided below, independent of the getter.
     if (!isPlannable(type)) {
       recordDropped(symbol, position, prop, type)
       return null
@@ -309,7 +309,7 @@ internal class ForwardPropertyPlanner(
           symbol = symbol,
           node = prop,
           publicName = publicName,
-          componentDescription = collection.ineligibleComponentDescription(),
+          componentDescription = collection.componentDescription { isWrappableComponent() },
         ),
       )
       return null
@@ -331,12 +331,15 @@ internal class ForwardPropertyPlanner(
     }
   }
 
-  /** The offending component(s), for the [ForwardDroppedPropertySetter] diagnostic wording. */
-  private fun BridgeType.Collection.ineligibleComponentDescription(): String {
+  /** The component(s) failing [admitted], in the shared "element type X" / "key type X" wording
+   *  of the [ForwardDroppedPropertySetter] and [ForwardDroppedProperty] diagnostics. */
+  private fun BridgeType.Collection.componentDescription(
+    admitted: BridgeType.() -> Boolean,
+  ): String {
     val isMap: Boolean = kind == CollectionKind.MAP || kind == CollectionKind.MUTABLE_MAP
     if (!isMap) return "element type ${element?.diagnosticTypeName() ?: "unknown"}"
-    val keyOk: Boolean = key?.isWrappableComponent() == true
-    val valueOk: Boolean = value?.isWrappableComponent() == true
+    val keyOk: Boolean = key?.admitted() == true
+    val valueOk: Boolean = value?.admitted() == true
     return when {
       !keyOk && !valueOk ->
         "key type ${key?.diagnosticTypeName() ?: "unknown"} and value type " +
@@ -372,9 +375,18 @@ internal class ForwardPropertyPlanner(
       protocol.name.startsWith(prefix)
     }
     if (isLegacyRouted) return
+    // Issue #52: a collection only lands here because a component failed `isReadable`, and
+    // "Collection" alone would send the author after the wrong declaration, so name the slot.
+    val collection: BridgeType.Collection? = type.unwrapNullable() as? BridgeType.Collection
+    val description: String = if (collection == null) {
+      type.diagnosticTypeName()
+    } else {
+      val component: String = collection.componentDescription { isReadableComponent() }
+      "${type.diagnosticTypeName()} ($component)"
+    }
     dropped.add(
       ForwardDroppedProperty(
-        symbol, prop, type.diagnosticTypeName(),
+        symbol, prop, description,
         boundInterface = type.unwrapNullable() is BridgeType.BoundInterface,
       )
     )
@@ -425,7 +437,12 @@ internal class ForwardPropertyPlanner(
   private fun isPlannable(type: BridgeType): Boolean = when (type) {
     BridgeType.Unit, BridgeType.Char, BridgeType.String, BridgeType.Instant, BridgeType.Duration,
     is BridgeType.Primitive, is BridgeType.Enum, is BridgeType.ObjectHandle,
-    is BridgeType.Interface, is BridgeType.Collection -> true
+    is BridgeType.Interface -> true
+
+    // Issue #52: the read side imposes no *marshalling* restriction on a component (unlike a
+    // setter), but it still has to spell one in C#; a sealed helper inside a `List` used to sail
+    // through here and crash the projection, where the bare `Shape?` spelling skips named.
+    is BridgeType.Collection -> type.isReadable()
 
     // ADR-077 sub-items 2/4: a value-class property plans when its underlying does
     // (String/primitive/enum/ObjectHandle).
@@ -443,6 +460,38 @@ internal class ForwardPropertyPlanner(
     is BridgeType.Nullable -> isPlannable(type.type)
 
     else -> false
+  }
+
+  /**
+   * Issue #52: whether every component of this collection (element, or map key and value) is one
+   * the property projection's `csharpType()` can spell, recursively through nested collections
+   * (ADR-099) and the nullable spelling (ADR-083). This is the read-side counterpart of the
+   * stricter [isWrappableComponent] setter gate: anything `false` here has no C# name at all, so
+   * planning it would only defer the failure to the renderer.
+   */
+  private fun BridgeType.Collection.isReadable(): Boolean {
+    val isMap: Boolean = kind == CollectionKind.MAP || kind == CollectionKind.MUTABLE_MAP
+    return if (isMap) {
+      key?.isReadableComponent() == true && value?.isReadableComponent() == true
+    } else {
+      element?.isReadableComponent() == true
+    }
+  }
+
+  /** The component types `ForwardCirPropertyProjection.csharpType()` has a spelling for; keep the
+   *  two in step. A value class reads through its underlying (`FromHandle<underlying>`), so the
+   *  underlying is what has to be spellable. Exhaustive on purpose: a new [BridgeType] variant
+   *  must decide here rather than fall into an `else`. */
+  private fun BridgeType.isReadableComponent(): Boolean = when (this) {
+    BridgeType.Char, BridgeType.String, BridgeType.Instant, BridgeType.Duration,
+    is BridgeType.Primitive, is BridgeType.Enum, is BridgeType.ObjectHandle,
+    is BridgeType.Interface -> true
+
+    is BridgeType.ValueClass -> underlying.isReadableComponent()
+    is BridgeType.Nullable -> type.isReadableComponent()
+    is BridgeType.Collection -> isReadable()
+    BridgeType.Unit, is BridgeType.BoundInterface, is BridgeType.SpecializedProtocol,
+    is BridgeType.RawCollection, is BridgeType.RawKSType, is BridgeType.Unsupported -> false
   }
 
   /**
