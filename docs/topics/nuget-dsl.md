@@ -29,7 +29,7 @@ the DSL itself enforces they're set, but `packNuget` fails once it reads an unse
 | `description` | `String?` | yes | `.nuspec` `<description>` |
 | `rootPackage` | `String?` | yes | the Kotlin package the generated C# namespaces are rooted at; sub-packages map relative to it. Also the default export scope: see below |
 | `include(vararg packages: String)` | function | no | empty; when set, only these package prefixes (and their sub-packages) are bridged |
-| `exclude(vararg packages: String)` | function | no | empty; applied after `include`, and always wins over it |
+| `exclude(vararg packages: String)` | function | no | empty; a package prefix or a qualified declaration name (a class, object, sealed base, or top-level function, plus everything nested under it); applied after `include`, and always wins over it |
 | `snapshot` | `Boolean` | no | `false`; when `true`, `packNuget` mints `<version>-snapshot.<epochMillis>` at execution time instead of using `version` literally, and always writes an MSBuild props file. Requires `packageId` and a non-blank `version` |
 | `versionPropsFile` | `File?` | no | `null`; only consulted when `snapshot` is `true`. Default `<rootProject>/build/<packageId>Versions.props` |
 | `prebuiltRuntimes` | `File?` | no | `null`; a directory laid out `<rid>/native/*.{dll,dylib,so}`, exactly the `runtimes/` tree `packNuget` stages, merged with the RIDs this host links itself into one package |
@@ -129,6 +129,11 @@ for the full validation semantics and the alternatives considered.
 By default `NugetProcessor` bridges every public declaration in the module. `include`/`exclude` on
 `publish {}` scope that down, mirroring `bind { include/exclude }` on the reverse side: a package
 prefix match (`pkg == p || pkg.startsWith("$p.")`), with `exclude` always winning over `include`.
+`exclude` additionally matches a qualified declaration name and everything nested under it
+([#53](https://github.com/xxfast/kotlin-native-nuget/issues/53)): `exclude("com.contoso.api.Shape")`
+drops the `Shape` class (and, for a sealed base, its subclasses) from the export set, so a member
+that references it is skipped with a named diagnostic and the rest of the package still bridges.
+`include` stays package-level.
 
 ```kotlin
 nuget {
@@ -137,6 +142,7 @@ nuget {
     rootPackage = "com.contoso.api"
     include("com.contoso.api")            // whitelist of package prefixes
     exclude("com.contoso.api.internal")   // exclude wins
+    exclude("com.contoso.api.Legacy")     // one type, by qualified name
   }
 }
 ```
