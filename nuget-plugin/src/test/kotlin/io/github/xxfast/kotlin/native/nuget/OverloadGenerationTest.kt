@@ -156,16 +156,16 @@ class OverloadGenerationTest {
       .single { it.relativePath.endsWith("OverloadLabRegistration.cs") }
       .content
 
-    assertContains(shim, "Describe__${bridgeId(intDescribe)}_Thunk(int value)")
-    assertContains(shim, "Describe__${bridgeId(boolDescribe)}_Thunk(byte value)")
+    assertContains(shim, "Describe__${bridgeId(intDescribe)}_Thunk(int value, IntPtr* errOut)")
+    assertContains(shim, "Describe__${bridgeId(boolDescribe)}_Thunk(byte value, IntPtr* errOut)")
     assertContains(shim, "OverloadLab.Describe(value)")
     assertContains(shim, "OverloadLab.Describe(value != 0)")
     assertContains(
       shim,
-      "Apply__${bridgeId(stringApply)}_Thunk(IntPtr selfHandle, IntPtr valuePtr)",
+      "Apply__${bridgeId(stringApply)}_Thunk(IntPtr selfHandle, IntPtr valuePtr, IntPtr* errOut)",
     )
     assertContains(shim, "Marshal.PtrToStringUTF8(valuePtr)")
-    assertContains(shim, "Apply__${bridgeId(intApply)}_Thunk(IntPtr selfHandle, int value)")
+    assertContains(shim, "Apply__${bridgeId(intApply)}_Thunk(IntPtr selfHandle, int value, IntPtr* errOut)")
   }
 
   @Test
@@ -178,8 +178,8 @@ class OverloadGenerationTest {
 
     assertContains(stub, "constructor(seed: Int)")
     assertContains(stub, "constructor(enabled: Boolean)")
-    assertContains(shim, "Ctor__${bridgeId(intCtor)}_Thunk(int seed)")
-    assertContains(shim, "Ctor__${bridgeId(boolCtor)}_Thunk(byte enabled)")
+    assertContains(shim, "Ctor__${bridgeId(intCtor)}_Thunk(int seed, IntPtr* errOut)")
+    assertContains(shim, "Ctor__${bridgeId(boolCtor)}_Thunk(byte enabled, IntPtr* errOut)")
   }
 
   @Test

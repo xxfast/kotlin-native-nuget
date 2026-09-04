@@ -233,8 +233,8 @@ walks through why this inversion is correct for each direction rather than a sty
   Decision 3). The wire-format decision that feature was waiting on is now settled: it reuses the
   out-pointer convention from [ADR-056](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/056-csharp-structs-in-kotlin.md)
   (see [C# structs](structs.md)) and needs no new ADR, only the reader/generator work.
-- A throwing C# constructor or factory still fast-fails the host process; see
-  [The bridgeable subset](bridgeable-subset.md) for the exception policy.
+- A throwing C# constructor or factory is catchable as a `NugetManagedException`, not fatal; see
+  [The bridgeable subset](bridgeable-subset.md#exceptions) for the exception policy.
 
 <seealso>
     <category ref="related">
@@ -250,5 +250,6 @@ walks through why this inversion is correct for each direction rather than a sty
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/053-nullable-reference-types-in-kotlin.md">ADR-053: Nullable reference types in Kotlin</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/056-csharp-structs-in-kotlin.md">ADR-056: C# structs (value types) in Kotlin</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/057-csharp-overload-sets-in-kotlin.md">ADR-057: C# overload sets in Kotlin</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/104-reverse-thunk-error-channel.md">ADR-104: Reverse thunk error channel</a>
     </category>
 </seealso>

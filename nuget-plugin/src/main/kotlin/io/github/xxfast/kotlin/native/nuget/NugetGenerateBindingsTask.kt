@@ -3,6 +3,7 @@ package io.github.xxfast.kotlin.native.nuget
 import io.github.xxfast.kotlin.native.nuget.rir.AbiArg
 import io.github.xxfast.kotlin.native.nuget.rir.KotlinBridgePlan
 import io.github.xxfast.kotlin.native.nuget.rir.NUGET_RUNTIME_CONTRACT_HASH
+import io.github.xxfast.kotlin.native.nuget.rir.REVERSE_ABI_TAG
 import io.github.xxfast.kotlin.native.nuget.rir.RirClass
 import io.github.xxfast.kotlin.native.nuget.rir.RirConstructor
 import io.github.xxfast.kotlin.native.nuget.rir.RirDiagnostic
@@ -654,7 +655,12 @@ fun generateKotlinStubs(
     }
   }
 
-  if (needsInterop) {
+  // ADR-104: every reverse call site now goes through nugetCall, whose throw path reads two
+  // managed strings and frees them with freeManagedString, so NugetInterop.kt and NugetRuntime.kt
+  // are needed whenever ANY registration exists, not only when a bound signature happens to
+  // mention a string or a handle. Both were already emitted for every real fixture; this closes
+  // the struct-only-package hole rather than changing any existing output.
+  if (needsInterop || expectedRegistrations.isNotEmpty()) {
     result.add(
       GeneratedFile(
         relativePath = "nativeMain/$INTERNAL_DIR/NugetInterop.kt",
@@ -675,7 +681,8 @@ fun generateKotlinStubs(
     )
   }
 
-  if (needsRuntime) {
+  if (needsRuntime || expectedRegistrations.isNotEmpty()) {
+    needsRuntime = true
     result.add(
       GeneratedFile(
         relativePath = "nativeMain/$INTERNAL_DIR/NugetRuntime.kt",
@@ -1126,7 +1133,8 @@ private fun genericWitnessObjectFileContent(
     val name: String = genericMemberName(r)
     val paramTypes: List<String> = (
         (if (r !is RirRegistrable.Ctor) listOf("COpaquePointer?") else emptyList()) +
-            genericMemberParams(r).map { cfnType(substituteGenericType(it.type, args)) }
+            genericMemberParams(r).map { cfnType(substituteGenericType(it.type, args)) } +
+            ERR_CFN_TYPE
         )
     val retType: RirTypeRef = substituteGenericType(genericMemberReturnType(r, cls), args)
     val retCfn: String = if (retType is RirVoidType) "Unit" else cfnType(retType)
@@ -1164,8 +1172,14 @@ private fun genericWitnessObjectFileContent(
     // `.invoke(...)` un-scoped whenever a substituted parameter happened to be a string.
     val hasStringOwnParam: Boolean =
       ownParams.any { p -> substituteGenericType(p.type, args) is RirStringType }
-    val rawInvoke = "requireNotNull($name" + "Fn) { $failMsg }.invoke($invokeArgs)"
-    val callExpr = if (hasStringOwnParam) "memScoped { $rawInvoke }" else rawInvoke
+    // ADR-104: same error channel as every other reverse call site; the witness's callee is an
+    // inline requireNotNull(...) rather than a `fn` local, so it rides wrapInvoke's callee hook.
+    val callExpr: String = wrapInvoke(
+      invokeArgs,
+      hasStringOwnParam,
+      hasInterfaceArg = false,
+      callee = "requireNotNull($name" + "Fn) { $failMsg }",
+    )
     val body: String = when {
       isCtor -> "NugetObjectHandle(requireNotNull($callExpr) { \"$simpleName constructor " +
           "returned null\" })"
@@ -1244,7 +1258,8 @@ private fun genericWitnessObjectFileContent(
   // built off the SAME hashQualifiedName/substitutedIdentity; ADR-054's contract check depends
   // on the two sides never independently re-deriving this).
   val hash: Long = fnv1a64(
-    "$hashQualifiedName|" + registrables.joinToString("|") { substitutedIdentity(it, args) },
+    REVERSE_ABI_TAG + "$hashQualifiedName|" +
+        registrables.joinToString("|") { substitutedIdentity(it, args) },
   )
 
   // ADR-072: cross-package enum/handle imports for this witness's SUBSTITUTED signatures; see
@@ -1278,9 +1293,13 @@ private fun genericWitnessObjectFileContent(
         "import $INTERNAL_PKG.nugetEnumEntry",
         "import kotlinx.cinterop.ByteVar",
         "import kotlinx.cinterop.CFunction",
+        // ADR-104: the trailing error slot's type appears in every registered CFunction type.
+        "import kotlinx.cinterop.COpaquePointerVar",
         "import kotlinx.cinterop.COpaquePointer",
         "import kotlinx.cinterop.CPointer",
         "import kotlinx.cinterop.invoke",
+        // ADR-104: every reverse call site routes through nugetCall (the error slot).
+        "import $INTERNAL_PKG.nugetCall",
         "import kotlinx.cinterop.reinterpret",
         "import kotlinx.cinterop.toKString",
         "import kotlin.experimental.ExperimentalNativeApi",
@@ -1801,6 +1820,8 @@ private fun structFileContent(
   if (hasMembers) {
     imports.add("import $INTERNAL_PKG.NugetRegistry")
     imports.add("import kotlinx.cinterop.invoke")
+    // ADR-104: every reverse call site routes through nugetCall (the error slot).
+    imports.add("import $INTERNAL_PKG.nugetCall")
   }
 
   // ADR-059: recurses through a struct-typed component's OWN components (typeContains), so a
@@ -2013,7 +2034,7 @@ private fun structConstructorHelpers(
       |  val fn = requireNotNull(${struct.name}Bindings.ctor__${ctor.bridgeId()}Fn) {
       |    NugetRegistry.notRegistered("$namespaceName.${struct.name}", "$packageId")
       |  }
-      |  fn.invoke($invokeArgs)
+      |  ${wrapInvoke(invokeArgs, hasStringArg = false, hasInterfaceArg = false)}
       |$statements
       |  ${struct.name}ConstructorComponents($values)
       |}
@@ -2054,12 +2075,12 @@ private fun structBindingsFileContent(
         val outTypes: List<String> = abiOutArgs(RirStructType(namespaceName, struct.name), structs)
           .map { cfnOutPointerType(it.type) }
         "internal var ctor__${r.ctor.bridgeId()}Fn: CPointer<CFunction<(" +
-            (inTypes + outTypes).joinToString(", ") + ") -> Unit>>? = null"
+            (inTypes + outTypes + ERR_CFN_TYPE).joinToString(", ") + ") -> Unit>>? = null"
       }
 
       is RirRegistrable.Method -> {
         val paramCfnTypes: String =
-          structMethodParamCfnTypes(struct, r.method, structs).joinToString(", ")
+          (structMethodParamCfnTypes(struct, r.method, structs) + ERR_CFN_TYPE).joinToString(", ")
         val retCfnType: String = cfnType(abiReturnType(r.method.returnType, structs))
         "internal var ${r.method.name.toMethodCamelCase()}${r.method.bridgeSuffix()}Fn: " +
             "CPointer<CFunction<($paramCfnTypes) -> $retCfnType>>? = null"
@@ -2071,7 +2092,7 @@ private fun structBindingsFileContent(
         val outTypes: List<String> =
           abiOutArgs(r.property.type, structs).map { cfnOutPointerType(it.type) }
         val retCfnType: String = cfnType(abiReturnType(r.property.type, structs))
-        val paramCfnTypes: String = (receiverTypes + outTypes).joinToString(", ")
+        val paramCfnTypes: String = (receiverTypes + outTypes + ERR_CFN_TYPE).joinToString(", ")
         "internal var ${r.property.name.toMethodCamelCase()}GetterFn: " +
             "CPointer<CFunction<($paramCfnTypes) -> $retCfnType>>? = null"
       }
@@ -2133,7 +2154,11 @@ private fun structBindingsFileContent(
       }
     }
   }.distinct().sorted()
-  val outVarImports: String = outVarTypes.joinToString("\n") { "import kotlinx.cinterop.$it" }
+  // ADR-104: COpaquePointerVar is already imported unconditionally below (the error slot's type),
+  // and a duplicate import of the same name is a hard "Conflicting import" error in Kotlin.
+  val outVarImports: String = outVarTypes
+    .filter { it != "COpaquePointerVar" }
+    .joinToString("\n") { "import kotlinx.cinterop.$it" }
   return """
     |@file:OptIn(kotlinx.cinterop.ExperimentalForeignApi::class)
     |
@@ -2141,6 +2166,7 @@ private fun structBindingsFileContent(
     |
     |import $INTERNAL_PKG.NugetRegistry
     |import kotlinx.cinterop.CFunction
+    |import kotlinx.cinterop.COpaquePointerVar
     |import kotlinx.cinterop.COpaquePointer
     |import kotlinx.cinterop.CPointer
     |import kotlinx.cinterop.reinterpret
@@ -2211,7 +2237,7 @@ private fun buildStructStubMethod(
     is RirVoidType -> {
       val invokeArgs: String = invokeArgsBase.joinToString(", ")
       val invokeCall: String =
-        if (hasStringArg) "memScoped { fn.invoke($invokeArgs) }" else "fn.invoke($invokeArgs)"
+        wrapInvoke(invokeArgs, hasStringArg, hasInterfaceArg = false)
       """
         |fun $name($params)$retSuffix {
         |  val fn = requireNotNull($fnVar) {
@@ -2225,7 +2251,7 @@ private fun buildStructStubMethod(
     is RirStringType -> {
       val invokeArgs: String = invokeArgsBase.joinToString(", ")
       val invokeCall: String =
-        if (hasStringArg) "memScoped { fn.invoke($invokeArgs) }" else "fn.invoke($invokeArgs)"
+        wrapInvoke(invokeArgs, hasStringArg, hasInterfaceArg = false)
       val nullMsg: String =
         "${struct.name}.${method.name} returned null, expected a non-null string pointer"
       """
@@ -2245,7 +2271,7 @@ private fun buildStructStubMethod(
     is RirEnumType -> {
       val invokeArgs: String = invokeArgsBase.joinToString(", ")
       val invokeCall: String =
-        if (hasStringArg) "memScoped { fn.invoke($invokeArgs) }" else "fn.invoke($invokeArgs)"
+        wrapInvoke(invokeArgs, hasStringArg, hasInterfaceArg = false)
       """
         |fun $name($params)$retSuffix {
         |  val fn = requireNotNull($fnVar) {
@@ -2274,7 +2300,7 @@ private fun buildStructStubMethod(
         outArgs.forEach { arg ->
           appendLine("  val ${arg.name} = alloc<${cVarType(arg.type)}>()")
         }
-        appendLine("  fn.invoke($fullInvokeArgs)")
+        appendLine("  ${wrapInvoke(fullInvokeArgs, hasStringArg = false, hasInterfaceArg = false)}")
         read.statements.forEach { appendLine("  $it") }
         appendLine("  ${read.expression}")
         append("}")
@@ -2284,7 +2310,7 @@ private fun buildStructStubMethod(
     is RirPrimitiveType -> {
       val invokeArgs: String = invokeArgsBase.joinToString(", ")
       val invokeCall: String =
-        if (hasStringArg) "memScoped { fn.invoke($invokeArgs) }" else "fn.invoke($invokeArgs)"
+        wrapInvoke(invokeArgs, hasStringArg, hasInterfaceArg = false)
       val returnExpr: String =
         if (retType.name == "char") "$invokeCall.toInt().toChar()" else invokeCall
       """
@@ -2336,8 +2362,7 @@ private fun buildStructStubProperty(
     is RirStringType -> {
       val invokeArgs: String = receiverArgs.joinToString(", ")
       val invokeCall: String =
-        if (hasStringReceiver) "memScoped { fn.invoke($invokeArgs) }"
-        else "fn.invoke($invokeArgs)"
+        wrapInvoke(invokeArgs, hasStringReceiver, hasInterfaceArg = false)
       val nullMsg: String =
         "${struct.name}.${property.name} returned null, expected a non-null string pointer"
       """
@@ -2357,8 +2382,7 @@ private fun buildStructStubProperty(
     is RirEnumType -> {
       val invokeArgs: String = receiverArgs.joinToString(", ")
       val invokeCall: String =
-        if (hasStringReceiver) "memScoped { fn.invoke($invokeArgs) }"
-        else "fn.invoke($invokeArgs)"
+        wrapInvoke(invokeArgs, hasStringReceiver, hasInterfaceArg = false)
       """
         |get() {
         |  val fn = requireNotNull($getterFnVar) {
@@ -2388,7 +2412,7 @@ private fun buildStructStubProperty(
         outArgs.forEach { arg ->
           appendLine("    val ${arg.name} = alloc<${cVarType(arg.type)}>()")
         }
-        appendLine("    fn.invoke($invokeArgs)")
+        appendLine("    ${wrapInvoke(invokeArgs, hasStringArg = false, hasInterfaceArg = false)}")
         read.statements.forEach { appendLine("    $it") }
         appendLine("    ${read.expression}")
         appendLine("  }")
@@ -2399,8 +2423,7 @@ private fun buildStructStubProperty(
     is RirPrimitiveType -> {
       val invokeArgs: String = receiverArgs.joinToString(", ")
       val invokeCall: String =
-        if (hasStringReceiver) "memScoped { fn.invoke($invokeArgs) }"
-        else "fn.invoke($invokeArgs)"
+        wrapInvoke(invokeArgs, hasStringReceiver, hasInterfaceArg = false)
       val returnExpr: String =
         if (type.name == "char") "$invokeCall.toInt().toChar()" else invokeCall
       """
@@ -2823,6 +2846,8 @@ private fun bindingsFileContent(
     }
     add("import $INTERNAL_PKG.NugetRegistry")
     add("import kotlinx.cinterop.CFunction")
+    // ADR-104: the trailing error slot's type appears in every registered CFunction type.
+    add("import kotlinx.cinterop.COpaquePointerVar")
     add("import kotlinx.cinterop.COpaquePointer")
     add("import kotlinx.cinterop.CPointer")
     add("import kotlinx.cinterop.reinterpret")
@@ -2837,15 +2862,17 @@ private fun bindingsFileContent(
   val fnVars: String = registrables.joinToString("\n\n") { r ->
     when (r) {
       is RirRegistrable.Ctor -> {
-        val paramCfnTypes: String = abiArgs(r.ctor.parameters, structs)
-          .joinToString(", ") { cfnType(it.type) }
+        val paramCfnTypes: String =
+          (abiArgs(r.ctor.parameters, structs).map { cfnType(it.type) } + ERR_CFN_TYPE)
+            .joinToString(", ")
         "@Suppress(\"NOTHING_TO_INLINE\")\n" +
             "internal var ctor${r.ctor.bridgeSuffix()}Fn: " +
             "CPointer<CFunction<($paramCfnTypes) -> COpaquePointer?>>? = null"
       }
 
       is RirRegistrable.Method -> {
-        val paramCfnTypes: String = methodParamCfnTypes(r.method, structs).joinToString(", ")
+        val paramCfnTypes: String =
+          (methodParamCfnTypes(r.method, structs) + ERR_CFN_TYPE).joinToString(", ")
         val retCfnType: String = cfnType(abiReturnType(r.method.returnType, structs))
         "@Suppress(\"NOTHING_TO_INLINE\")\n" +
             "internal var ${r.method.name.toMethodCamelCase()}${r.method.bridgeSuffix()}Fn: " +
@@ -2863,7 +2890,7 @@ private fun bindingsFileContent(
           abiOutArgs(r.property.type, structs).map { cfnOutPointerType(it.type) }
         val retCfnType: String = cfnType(abiReturnType(r.property.type, structs))
         val paramCfnTypes: String =
-          (listOfNotNull(receiverCfnType) + outCfnTypes).joinToString(", ")
+          (listOfNotNull(receiverCfnType) + outCfnTypes + ERR_CFN_TYPE).joinToString(", ")
         "@Suppress(\"NOTHING_TO_INLINE\")\n" +
             "internal var ${r.property.name.toMethodCamelCase()}GetterFn: " +
             "CPointer<CFunction<($paramCfnTypes) -> $retCfnType>>? = null"
@@ -2873,7 +2900,8 @@ private fun bindingsFileContent(
         val receiverCfnType: String? = if (r.property.isStatic) null else "COpaquePointer?"
         val valueParam = RirParameter(name = "value", type = r.property.type)
         val inCfnTypes: List<String> = abiArgs(listOf(valueParam), structs).map { cfnType(it.type) }
-        val paramCfnTypes: String = (listOfNotNull(receiverCfnType) + inCfnTypes).joinToString(", ")
+        val paramCfnTypes: String =
+          (listOfNotNull(receiverCfnType) + inCfnTypes + ERR_CFN_TYPE).joinToString(", ")
         "@Suppress(\"NOTHING_TO_INLINE\")\n" +
             "internal var ${r.property.name.toMethodCamelCase()}SetterFn: " +
             "CPointer<CFunction<($paramCfnTypes) -> Unit>>? = null"
@@ -2936,7 +2964,7 @@ private fun bindingsFileContent(
     |
     |package $kotlinPkg
     |
-    |${imports.joinToString("\n")}
+    |${imports.distinct().joinToString("\n")}
     |
     |// Generated: registration machinery for $packageId.${cls.name}
     |// Do not call these functions from Kotlin code directly. Vars live inside $objectName (not as
@@ -3039,7 +3067,10 @@ private fun stubFileContent(
   // and, being an extension function, is not resolved without an explicit import (unqualified
   // calls otherwise resolve to an unrelated same-named `invoke`, e.g. kotlin.DeepRecursiveFunction,
   // producing confusing "cannot infer type parameter" errors instead of a missing-import error).
-  val imports: MutableList<String> = mutableListOf("import kotlinx.cinterop.invoke")
+  // ADR-104: nugetCall is unconditional for the same reason kotlinx.cinterop.invoke is:
+  // every stub body now goes through it.
+  val imports: MutableList<String> =
+    mutableListOf("import kotlinx.cinterop.invoke", "import $INTERNAL_PKG.nugetCall")
   // ADR-072: a static method/property returning a bound-class-handle, interface, or generic
   // instantiation declares `val ptr: COpaquePointer? = ...` (buildStubMethod's
   // RirObjectHandleType/RirInterfaceType/RirGenericInstanceType branches). This object-shape
@@ -3247,6 +3278,8 @@ private fun classWrapperContent(
     "import kotlin.native.ref.createCleaner",
     "import kotlinx.cinterop.COpaquePointer",
     "import kotlinx.cinterop.invoke",
+    // ADR-104: every reverse call site routes through nugetCall (the error slot).
+    "import $INTERNAL_PKG.nugetCall",
   )
   // ADR-070 Decision 4: an interface-typed parameter's argConversion(...) calls the shared
   // `nugetHandle()` extension — needed whenever this class has an instance method/property/ctor
@@ -3451,9 +3484,28 @@ private fun classWrapperContent(
 // ADR-085: the two scopes a generated invoke may need, innermost first. memScoped owns the
 // `.cstr.ptr` buffers of string arguments; nugetTransferScope owns the bridge handles minted for
 // Kotlin-implemented interface arguments (freed after the call, never before it).
-private fun wrapInvoke(rawInvoke: String, hasStringArg: Boolean, hasInterfaceArg: Boolean): String {
-  val scoped: String = if (hasStringArg) "memScoped { $rawInvoke }" else rawInvoke
-  return if (hasInterfaceArg) "nugetTransferScope { $scoped }" else scoped
+// ADR-104: the Kotlin spelling of the thunk's trailing `IntPtr* errOut` slot, appended to every
+// registered function-pointer type whose thunk carries the error channel. Kept as one constant so
+// the ~25 CFunction<...> emission sites and the ~25 invoke sites can never disagree on arity.
+internal const val ERR_CFN_TYPE: String = "CPointer<COpaquePointerVar>"
+
+// ADR-104: every reverse call also passes the trailing error slot and is wrapped in nugetCall,
+// which allocates it, zero-initialises it, and throws NugetManagedException before returning if
+// the thunk wrote a caught managed exception into it. Wrapping (rather than checking after the
+// call) is what makes "check the error slot FIRST" structural: the thunk's return value and every
+// out-parameter are unwritten on the error path, and a stub that read them would report a null
+// handle, or uninitialised memScoped memory, instead of the real exception.
+private fun wrapInvoke(
+  invokeArgs: String,
+  hasStringArg: Boolean,
+  hasInterfaceArg: Boolean,
+  callee: String = "fn",
+): String {
+  val args: String = if (invokeArgs.isEmpty()) "err" else "$invokeArgs, err"
+  val raw: String = "$callee.invoke($args)"
+  val scoped: String = if (hasStringArg) "memScoped { $raw }" else raw
+  val transfer: String = if (hasInterfaceArg) "nugetTransferScope { $scoped }" else scoped
+  return "nugetCall { err -> $transfer }"
 }
 
 private fun argConversion(type: RirTypeRef, name: String): String = when {
@@ -3582,7 +3634,7 @@ private fun buildConstructHelper(
 
   val hasInterfaceParam: Boolean = ctor.parameters.any { it.type is RirInterfaceType }
   val invokeCall: String =
-    wrapInvoke("fn.invoke($invokeArgs)", hasStringParam, hasInterfaceParam)
+    wrapInvoke(invokeArgs, hasStringParam, hasInterfaceParam)
 
   val failMsg: String = bindingsNotRegisteredMessage(cls.name, packageId, namespaceName)
   val bindingsObj: String = bindingsObjectName(cls.name)
@@ -3655,7 +3707,7 @@ private fun buildStubMethod(
   // site owns and frees after the invoke (wrapInvoke's nugetTransferScope).
   val hasInterfaceParam: Boolean = method.parameters.any { it.type is RirInterfaceType }
   val invokeCall: String =
-    wrapInvoke("fn.invoke($invokeArgs)", hasStringParam, hasInterfaceParam)
+    wrapInvoke(invokeArgs, hasStringParam, hasInterfaceParam)
 
   val nullMsg: String = "${cls.name}.${method.name} returned null" +
       ", expected a non-null string pointer"
@@ -3786,7 +3838,7 @@ private fun buildStubMethod(
         appendLine("    $failMsg")
         appendLine("  }")
         outArgs.forEach { arg -> appendLine("  val ${arg.name} = alloc<${cVarType(arg.type)}>()") }
-        appendLine("  fn.invoke($fullInvokeArgs)")
+        appendLine("  ${wrapInvoke(fullInvokeArgs, hasStringArg = false, hasInterfaceArg = false)}")
         read.statements.forEach { appendLine("  $it") }
         appendLine("  ${read.expression}")
         append("}")
@@ -3879,7 +3931,8 @@ private fun buildStubProperty(
 
   val declType: String = declKotlinType(property.type, qualifiedTypeNames)
   val keyword: String = if (hasSetter) "var" else "val"
-  val getterInvoke: String = if (receiverArg == null) "fn.invoke()" else "fn.invoke($receiverArg)"
+  val getterInvoke: String =
+    wrapInvoke(receiverArg.orEmpty(), hasStringArg = false, hasInterfaceArg = false)
   val nonNullHandleMsg: String = "${cls.name}.${property.name} returned null, but the C# API " +
       "annotates it non-null."
 
@@ -3910,7 +3963,7 @@ private fun buildStubProperty(
         outArgs.forEach { arg ->
           appendLine("    val ${arg.name} = alloc<${cVarType(arg.type)}>()")
         }
-        appendLine("    fn.invoke($invokeArgs)")
+        appendLine("    ${wrapInvoke(invokeArgs, hasStringArg = false, hasInterfaceArg = false)}")
         read.statements.forEach { appendLine("    $it") }
         appendLine("    ${read.expression}")
         appendLine("  }")
@@ -4066,12 +4119,12 @@ private fun buildStubProperty(
       val invokeArgs: String = (listOfNotNull(receiverArg) + componentArgs).joinToString(", ")
       val hasStringComponent: Boolean =
         struct.components.any { typeContains(it.type, structs, ::isStringRef) }
-      if (hasStringComponent) "memScoped { fn.invoke($invokeArgs) }" else "fn.invoke($invokeArgs)"
+      wrapInvoke(invokeArgs, hasStringComponent, hasInterfaceArg = false)
     } else {
       val valueArg: String = argConversion(propType, "value")
-      val raw: String =
-        if (receiverArg == null) "fn.invoke($valueArg)" else "fn.invoke($receiverArg, $valueArg)"
-      wrapInvoke(raw, propType is RirStringType, propType is RirInterfaceType)
+      val rawArgs: String =
+        if (receiverArg == null) valueArg else "$receiverArg, $valueArg"
+      wrapInvoke(rawArgs, propType is RirStringType, propType is RirInterfaceType)
     }
     """
       |set(value) {
@@ -4150,6 +4203,12 @@ private fun nugetRuntimeContent(): String = """
   |import kotlinx.cinterop.CFunction
   |import kotlinx.cinterop.CPointer
   |import kotlinx.cinterop.ByteVar
+  |import kotlinx.cinterop.COpaquePointerVar
+  |import kotlinx.cinterop.alloc
+  |import kotlinx.cinterop.memScoped
+  |import kotlinx.cinterop.ptr
+  |import kotlinx.cinterop.toKString
+  |import kotlinx.cinterop.value
   |import kotlinx.cinterop.allocArray
   |import kotlinx.cinterop.StableRef
   |import kotlinx.cinterop.asStableRef
@@ -4173,11 +4232,76 @@ private fun nugetRuntimeContent(): String = """
   |internal var resolveGcHandleFn:
   |  CPointer<CFunction<(COpaquePointer) -> COpaquePointer?>>? = null
   |
+  |// ADR-104: the two managed-error accessors. Given the GCHandle a user-code thunk allocated for
+  |// a caught exception, they return its type name and its message as CoTaskMem UTF-8 strings,
+  |// owned by Kotlin from here on (freed with freeManagedString, the shipped C# -> Kotlin string
+  |// ownership rule). The handle itself is freed through the already-registered freeGcHandleFn, so
+  |// the error path needed no third slot.
+  |internal var managedErrorTypeFn:
+  |  CPointer<CFunction<(COpaquePointer) -> COpaquePointer?>>? = null
+  |
+  |internal var managedErrorMessageFn:
+  |  CPointer<CFunction<(COpaquePointer) -> COpaquePointer?>>? = null
+  |
+  |/**
+  | * ADR-104: a managed (C#) exception that crossed the reverse bridge. [managedType] is the .NET
+  | * type's full name (e.g. `System.ArgumentException`) and [message] is its `Message`, both
+  | * verbatim.
+  | *
+  | * Fork B carries the name and the message only: the .NET stack trace, the `InnerException`
+  | * chain, and a .NET-to-Kotlin exception TYPE map are three separate deferred items, each of
+  | * which lands as a runtime accessor slot without re-touching any thunk's arity.
+  | *
+  | * Fork D: ONE exception type for every managed throw. Branching on [managedType] is a caller's
+  | * choice, not a hierarchy this generator emits.
+  | */
+  |internal class NugetManagedException(
+  |  val managedType: String,
+  |  message: String?,
+  |) : RuntimeException(message)
+  |
+  |// Null when the accessor is unregistered or itself failed (it returns IntPtr.Zero rather than
+  |// throwing back across a boundary that IS the error channel).
+  |private fun nugetManagedErrorText(
+  |  fn: CPointer<CFunction<(COpaquePointer) -> COpaquePointer?>>?,
+  |  err: COpaquePointer,
+  |): String? {
+  |  val ptr: COpaquePointer = fn?.invoke(err) ?: return null
+  |  val text: String = ptr.reinterpret<ByteVar>().toKString()
+  |  freeManagedString(ptr)
+  |  return text
+  |}
+  |
+  |// Reads the envelope, releases everything it owns (both strings and the GCHandle), then throws.
+  |// Never returns, so a call site can read it as the end of the error path.
+  |internal fun nugetThrowManagedError(err: COpaquePointer): Nothing {
+  |  val managedType: String? = nugetManagedErrorText(managedErrorTypeFn, err)
+  |  val message: String? = nugetManagedErrorText(managedErrorMessageFn, err)
+  |  freeGcHandleFn?.invoke(err)
+  |  throw NugetManagedException(managedType ?: "System.Exception", message)
+  |}
+  |
+  |/**
+  | * ADR-104: runs one reverse call with an error slot. [block] receives the slot pointer to pass
+  | * as the thunk's trailing argument and must not read the thunk's return value or any of its
+  | * out-parameters: on a throw the thunk returns `default` and leaves every out-pointer UNWRITTEN,
+  | * so the check has to come first. Wrapping the invoke (rather than checking after it) is what
+  | * makes that ordering structural instead of a convention every emission site has to remember.
+  | */
+  |internal inline fun <T> nugetCall(block: (CPointer<COpaquePointerVar>) -> T): T = memScoped {
+  |  val slot = alloc<COpaquePointerVar>()
+  |  slot.value = null
+  |  val result: T = block(slot.ptr)
+  |  val err: COpaquePointer? = slot.value
+  |  if (err != null) nugetThrowManagedError(err)
+  |  result
+  |}
+  |
   |// ADR-054: slotCount/contractHash are the same two leading scalars every register export gains
-  |// (slotCount is always 3 here — the runtime shim registers exactly the free/weaken/resolve
-  |// thunks). The pointer parameters are nullable so a stale caller passing zero args (pre-ADR-054)
-  |// is read-only-safe up to the checkContract call, which never touches them before deciding to
-  |// proceed.
+  |// (slotCount is always 5 here: ADR-104 grew the runtime shim from the free/weaken/resolve
+  |// thunks to those plus the two managed-error accessors). The pointer parameters are nullable so
+  |// a stale caller passing zero args (pre-ADR-054) is read-only-safe up to the checkContract
+  |// call, which never touches them before deciding to proceed.
   |@OptIn(ExperimentalNativeApi::class)
   |@CName("nuget_runtime_register")
   |fun nuget_runtime_register(
@@ -4186,13 +4310,15 @@ private fun nugetRuntimeContent(): String = """
   |  freeGcHandlePtr: COpaquePointer?,
   |  weakenGcHandlePtr: COpaquePointer?,
   |  resolveGcHandlePtr: COpaquePointer?,
+  |  managedErrorTypePtr: COpaquePointer?,
+  |  managedErrorMessagePtr: COpaquePointer?,
   |) {
   |  NugetRegistry.checkContract(
   |    qualifiedType = "<runtime>",
   |    packageId = "",
   |    slotCount = slotCount,
   |    contractHash = contractHash,
-  |    expectedSlots = 3,
+  |    expectedSlots = 5,
   |    expectedHash = ${NUGET_RUNTIME_CONTRACT_HASH}L,
   |  )
   |  freeGcHandleFn = requireNotNull(freeGcHandlePtr) {
@@ -4204,7 +4330,13 @@ private fun nugetRuntimeContent(): String = """
   |  resolveGcHandleFn = requireNotNull(resolveGcHandlePtr) {
   |    "nuget_runtime_register passed a null resolveGcHandle thunk pointer."
   |  }.reinterpret()
-  |  NugetRegistry.record("<runtime>", 3)
+  |  managedErrorTypeFn = requireNotNull(managedErrorTypePtr) {
+  |    "nuget_runtime_register passed a null managedErrorType thunk pointer."
+  |  }.reinterpret()
+  |  managedErrorMessageFn = requireNotNull(managedErrorMessagePtr) {
+  |    "nuget_runtime_register passed a null managedErrorMessage thunk pointer."
+  |  }.reinterpret()
+  |  NugetRegistry.record("<runtime>", 5)
   |}
   |
   |// ADR-089: the reuse table's key. Identity, never `equals` — a Kotlin data class implementing a
@@ -4929,6 +5061,8 @@ private fun interfaceHandleFileContent(
     "import kotlin.native.ref.createCleaner",
     "import kotlinx.cinterop.COpaquePointer",
     "import kotlinx.cinterop.invoke",
+    // ADR-104: every reverse call site routes through nugetCall (the error slot).
+    "import $INTERNAL_PKG.nugetCall",
   )
   if (hasString) {
     imports.add("import $INTERNAL_PKG.freeManagedString")
@@ -5044,7 +5178,7 @@ private fun interfaceHandleMethodMember(
   val paramArgs: List<String> = r.method.parameters.map { argConversion(it.type, it.name) }
   val invokeArgs: String = (listOf(receiverArg) + paramArgs).joinToString(", ")
   val invokeCall: String =
-    wrapInvoke("fn.invoke($invokeArgs)", hasStringParam, hasInterfaceParam)
+    wrapInvoke(invokeArgs, hasStringParam, hasInterfaceParam)
   return interfaceHandleReturnBlock(
     "override fun $name($params)$retSuffix", r.method.returnType, fnVar, failMsg, invokeCall,
     "$handleTypeName.${r.method.name}",
@@ -5066,7 +5200,8 @@ private fun interfaceHandlePropertyMember(
   val receiverArg = "handle.require(\"$handleTypeName\")"
   val name: String = r.property.name.toMethodCamelCase()
   val getterFnVar = "${owned.bindingsObjectName}.${name}GetterFn"
-  val invokeCall = "fn.invoke($receiverArg)"
+  val invokeCall: String =
+    wrapInvoke(receiverArg, hasStringArg = false, hasInterfaceArg = false)
   val getterBlock: String = interfaceHandleReturnBlock(
     "get()", r.property.type, getterFnVar, failMsg, invokeCall,
     "$handleTypeName.${r.property.name}",
@@ -5077,7 +5212,7 @@ private fun interfaceHandlePropertyMember(
     val setterFnVar = "${owned.bindingsObjectName}.${name}SetterFn"
     val valueArg: String = argConversion(r.property.type, "value")
     val invokeSetterCall: String = wrapInvoke(
-      "fn.invoke($receiverArg, $valueArg)",
+      "$receiverArg, $valueArg",
       r.property.type is RirStringType,
       r.property.type is RirInterfaceType,
     )
@@ -5264,6 +5399,8 @@ private fun interfaceBindingsFileContent(
     add("import $INTERNAL_PKG.NugetRegistry")
     add("import $INTERNAL_PKG.NugetObjectHandle")
     add("import kotlinx.cinterop.CFunction")
+    // ADR-104: the trailing error slot's type appears in every registered CFunction type.
+    add("import kotlinx.cinterop.COpaquePointerVar")
     add("import kotlinx.cinterop.COpaquePointer")
     add("import kotlinx.cinterop.CPointer")
     add("import kotlinx.cinterop.asStableRef")
@@ -5307,7 +5444,7 @@ private fun interfaceBindingsFileContent(
         // ADR-070: an interface method always has a receiver (no statics reach RirInterface,
         // Decision 6) — the SAME COpaquePointer? receiver slot a class instance method uses.
         val paramCfnTypes: String =
-          (listOf("COpaquePointer?") + r.method.parameters.map { cfnType(it.type) })
+          (listOf("COpaquePointer?") + r.method.parameters.map { cfnType(it.type) } + ERR_CFN_TYPE)
             .joinToString(", ")
         val retCfnType: String = cfnType(r.method.returnType)
         "@Suppress(\"NOTHING_TO_INLINE\")\n" +
@@ -5319,14 +5456,16 @@ private fun interfaceBindingsFileContent(
         val name: String = r.property.name.toMethodCamelCase()
         "@Suppress(\"NOTHING_TO_INLINE\")\n" +
             "internal var ${name}GetterFn: " +
-            "CPointer<CFunction<(COpaquePointer?) -> ${cfnType(r.property.type)}>>? = null"
+            "CPointer<CFunction<(COpaquePointer?, $ERR_CFN_TYPE) -> " +
+            "${cfnType(r.property.type)}>>? = null"
       }
 
       is RirRegistrable.PropertySetter -> {
         val name: String = r.property.name.toMethodCamelCase()
         "@Suppress(\"NOTHING_TO_INLINE\")\n" +
             "internal var ${name}SetterFn: " +
-            "CPointer<CFunction<(COpaquePointer?, ${cfnType(r.property.type)}) -> Unit>>? = null"
+            "CPointer<CFunction<(COpaquePointer?, ${cfnType(r.property.type)}, " +
+            "$ERR_CFN_TYPE) -> Unit>>? = null"
       }
 
       is RirRegistrable.Ctor -> error("[nuget] an interface never has a constructor (ADR-070)")
@@ -5418,7 +5557,7 @@ private fun interfaceBindingsFileContent(
     |
     |package $kotlinPkg
     |
-    |${imports.joinToString("\n")}
+    |${imports.distinct().joinToString("\n")}
     |
     |internal object $objectName {
     |${fnVars.indented("  ")}${bridgeFnVars.indented("  ")}

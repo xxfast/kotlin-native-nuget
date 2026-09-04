@@ -98,7 +98,7 @@ class NugetStructGenerationTest {
     assertContains(stub.content, "fun translate(p: Point, dx: Int, dy: Int): Point = memScoped {")
     assertContains(stub.content, "val outX = alloc<IntVar>()")
     assertContains(stub.content, "val outY = alloc<IntVar>()")
-    assertContains(stub.content, "fn.invoke(p.x, p.y, dx, dy, outX.ptr, outY.ptr)")
+    assertContains(stub.content, "fn.invoke(p.x, p.y, dx, dy, outX.ptr, outY.ptr, err)")
     assertContains(stub.content, "Point(outX.value, outY.value)")
   }
 
@@ -110,7 +110,7 @@ class NugetStructGenerationTest {
     assertContains(
       bindings.content,
       "internal var translateFn: CPointer<CFunction<(Int, Int, Int, Int, CPointer<IntVar>, " +
-          "CPointer<IntVar>) -> Unit>>? = null",
+          "CPointer<IntVar>, CPointer<COpaquePointerVar>) -> Unit>>? = null",
     )
     assertContains(bindings.content, "import kotlinx.cinterop.IntVar")
   }
@@ -140,7 +140,7 @@ class NugetStructGenerationTest {
     assertContains(
       registration.content,
       "private static unsafe void Translate_Thunk(int p_X, int p_Y, int dx, int dy, int* outX, " +
-          "int* outY)",
+          "int* outY, IntPtr* errOut)",
     )
     assertContains(
       registration.content,
@@ -157,7 +157,7 @@ class NugetStructGenerationTest {
 
     assertContains(
       registration.content,
-      "delegate* unmanaged[Cdecl]<int, int, int, int, int*, int*, void>",
+      "delegate* unmanaged[Cdecl]<int, int, int, int, int*, int*, IntPtr*, void>",
     )
   }
 
@@ -271,7 +271,7 @@ class NugetStructGenerationTest {
     // SAME argConversion(...) a top-level parameter of each type would use.
     assertContains(
       roster.content,
-      "fn.invoke(p.tag.cstr.ptr, p.score, p.active, p.grade.code.toUShort(), p.mood.ordinal)",
+      "fn.invoke(p.tag.cstr.ptr, p.score, p.active, p.grade.code.toUShort(), p.mood.ordinal, err)",
     )
   }
 
@@ -311,7 +311,7 @@ class NugetStructGenerationTest {
     assertContains(
       roster.content,
       "fn.invoke(value.tag.cstr.ptr, value.score, value.active, value.grade.code.toUShort(), " +
-          "value.mood.ordinal)",
+          "value.mood.ordinal, err)",
     )
   }
 
@@ -333,8 +333,8 @@ class NugetStructGenerationTest {
     // name gets the existing Ptr suffix (thunkParamName), matching p_TagPtr's use below.
     assertContains(
       registration.content,
-      "private static IntPtr Describe_Thunk(IntPtr p_TagPtr, int p_Score, byte p_Active, " +
-          "ushort p_Grade, int p_Mood)",
+      "private static unsafe IntPtr Describe_Thunk(IntPtr p_TagPtr, int p_Score, byte p_Active, " +
+          "ushort p_Grade, int p_Mood, IntPtr* errOut)",
     )
     assertContains(
       registration.content,
@@ -351,7 +351,7 @@ class NugetStructGenerationTest {
     assertContains(
       registration.content,
       "private static unsafe void Default_Thunk(IntPtr* outTag, int* outScore, byte* outActive, " +
-          "ushort* outGrade, int* outMood)",
+          "ushort* outGrade, int* outMood, IntPtr* errOut)",
     )
     assertContains(registration.content, "*outTag = Marshal.StringToCoTaskMemUTF8(result.Tag);")
     assertContains(registration.content, "*outScore = result.Score;")
@@ -368,13 +368,13 @@ class NugetStructGenerationTest {
     assertContains(
       registration.content,
       "private static unsafe void Current_Get_Thunk(IntPtr* outTag, int* outScore, " +
-          "byte* outActive, ushort* outGrade, int* outMood)",
+          "byte* outActive, ushort* outGrade, int* outMood, IntPtr* errOut)",
     )
     assertContains(registration.content, "*outActive = result.Active ? (byte)1 : (byte)0;")
     assertContains(
       registration.content,
-      "private static void Current_Set_Thunk(IntPtr value_TagPtr, int value_Score, " +
-          "byte value_Active, ushort value_Grade, int value_Mood)",
+      "private static unsafe void Current_Set_Thunk(IntPtr value_TagPtr, int value_Score, " +
+          "byte value_Active, ushort value_Grade, int value_Mood, IntPtr* errOut)",
     )
     assertContains(
       registration.content,

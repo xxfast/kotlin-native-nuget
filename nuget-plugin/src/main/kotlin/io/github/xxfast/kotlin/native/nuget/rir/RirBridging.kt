@@ -891,10 +891,20 @@ fun contractHash(
   registrables: List<RirRegistrable>,
   structs: Map<RirTypeKey, RirStruct>,
 ): Long {
-  val signature: String = name + "|" +
+  val signature: String = REVERSE_ABI_TAG + name + "|" +
       registrables.joinToString("|") { it.contractSignature(structs) }
   return fnv1a64(signature)
 }
+
+// ADR-104, the single most load-bearing line of the reverse error channel: contractSignature is
+// built purely from member kind/name/parameter types/return type, so appending the trailing
+// `IntPtr* errOut` to every thunk changes each thunk's TRUE arity while leaving this hash input
+// byte-identical. Without a version tag inside the hashed string, ADR-054's checkContract would
+// stay silent on exactly the mismatch it exists to catch: an old shim + new dylib silently drops
+// the channel under cdecl, and a new shim + old dylib writes a GCHandle through an undefined
+// pointer on the throw path. Mirrors ADR-087's `kotlin_bridge_v2:` precedent verbatim; bump this
+// tag on any future change to the reverse thunk ABI shape.
+const val REVERSE_ABI_TAG: String = "reverse_v2:"
 
 fun structConstructorContractHash(
   namespace: String,
@@ -920,7 +930,7 @@ fun structContractHash(
   val components: String = struct.components.joinToString(",") {
     "${it.name}:${it.type.signaturePart(structs)}"
   }
-  val signature: String = "$namespace.${struct.name}|{$components}|" +
+  val signature: String = REVERSE_ABI_TAG + "$namespace.${struct.name}|{$components}|" +
       registrables.joinToString("|") { it.contractSignature(structs) }
   return fnv1a64(signature)
 }
@@ -998,10 +1008,15 @@ internal fun fnv1a64(s: String): Long {
 // ADR-089: the shared runtime grew from 1 slot to 3 (weaken/resolve joined free), so this string
 // names all three. Both halves regenerate together on every consumer build; a mixed build fails the
 // ADR-054 check loudly at startup instead of mis-assigning pointers.
+// ADR-104: two more slots joined (managedErrorType/managedErrorMessage), the accessors Kotlin
+// reads a caught managed exception's GCHandle through. The free path reuses freeGcHandle, so no
+// third slot was needed.
 val NUGET_RUNTIME_CONTRACT_HASH: Long = fnv1a64(
   "runtime:freeGcHandle(handle:COpaquePointer):Unit;" +
       "weakenGcHandle(handle:COpaquePointer):COpaquePointer;" +
-      "resolveGcHandle(handle:COpaquePointer):COpaquePointer"
+      "resolveGcHandle(handle:COpaquePointer):COpaquePointer;" +
+      "managedErrorType(err:COpaquePointer):COpaquePointer;" +
+      "managedErrorMessage(err:COpaquePointer):COpaquePointer"
 )
 
 // Shared registration export-name derivation (ADR-048's naming contract, which ADR-049's C# side

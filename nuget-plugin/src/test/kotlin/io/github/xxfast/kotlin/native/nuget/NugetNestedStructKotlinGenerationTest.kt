@@ -311,7 +311,7 @@ class NugetNestedStructKotlinGenerationTest {
     assertContains(
       littersFile,
       "fn.invoke(l.mother.tag.cstr.ptr, l.mother.active, l.mother.grade.code.toUShort(), " +
-          "l.mother.mood.ordinal, l.basket.width, l.basket.height, l.count, l.mood.ordinal)",
+          "l.mother.mood.ordinal, l.basket.width, l.basket.height, l.count, l.mood.ordinal, err)",
       message = "ADR-059: each leaf must be reached through a PATH expression (l.mother.tag, not " +
           "l.tag) and go through the SAME conversion its own type already requires — string -> " +
           ".cstr.ptr, bool -> untouched, char -> .code.toUShort(), enum -> .ordinal, int -> " +
@@ -345,7 +345,7 @@ class NugetNestedStructKotlinGenerationTest {
       "fn.invoke(l.mother.tag.cstr.ptr, l.mother.active, l.mother.grade.code.toUShort(), " +
           "l.mother.mood.ordinal, l.basket.width, l.basket.height, l.count, l.mood.ordinal, by, " +
           "outMother_Tag.ptr, outMother_Active.ptr, outMother_Grade.ptr, outMother_Mood.ptr, " +
-          "outBasket_Width.ptr, outBasket_Height.ptr, outCount.ptr, outMood.ptr)",
+          "outBasket_Width.ptr, outBasket_Height.ptr, outCount.ptr, outMood.ptr, err)",
     )
     // Reassembly: the data class primary constructor is ALWAYS positional (Decision 2a/3a's
     // "shape-agnostic" property) — Profile(...) here is exactly the same call shape whether
