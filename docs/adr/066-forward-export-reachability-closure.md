@@ -437,6 +437,15 @@ an unqualified name and only compiles by accident when the namespaces happen to 
 > existing shape at every render site, not case-by-case qualification. See ROADMAP.md Phase 2 for
 > the fixed item and the fixture.
 
+> **Amendment (2026-09-04, refs [#50](https://github.com/xxfast/kotlin-native-nuget/issues/50)):**
+> the #41 fix reached every site that reads `BridgeType.csharpType`, but the sealed-subclass
+> renderer (`translateSealedClass`) never classifies at all: it spelled a subclass property's
+> type, its `List`/`Set` element, its `Map` key and value, and an enum by `simpleName`, so a
+> sealed hierarchy whose payloads live in another exported package still failed with `CS0246` in
+> exactly those positions. Those spellings now go through `qualifiedElementCsType`, the same
+> helper the `Flow`/`StateFlow` and stored-callback sites already used, so the rule above holds
+> for sealed subclasses too.
+
 ### Two ADR-064 amendments this forces (both IN SCOPE for this feature)
 
 > **Implementing agent: read this section before writing any code.** Both amendments are **verified
