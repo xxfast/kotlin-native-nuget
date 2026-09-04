@@ -513,15 +513,17 @@ class NugetGenerateBindingsTaskTest {
     assertContains(runtime.content, "package io.github.xxfast.kotlin.native.nuget.internal")
   }
 
-  // Guard: NugetRuntime.kt must NOT be emitted for statics-only IR (uses the existing fixture,
-  // compiles today, must stay green before and after implementation).
+  // ADR-104 inverted this guard, the Kotlin mirror of
+  // `NugetRuntimeRegistration cs is emitted even for statics-only IR`. NugetRuntime.kt now
+  // carries nugetCall/NugetManagedException and the two managed-error accessor slots, which
+  // EVERY generated call site goes through, statics included.
   @Test
-  fun `NugetRuntime kt is not emitted for statics-only IR`() {
+  fun `NugetRuntime kt is emitted even for statics-only IR`() {
     val files: List<GeneratedFile> = generateKotlinStubs(jsonConvertRir)
 
     assertTrue(
-      files.none { it.relativePath.endsWith("NugetRuntime.kt") },
-      "NugetRuntime.kt must not be emitted when no handle types are present in the IR",
+      files.any { it.relativePath.endsWith("NugetRuntime.kt") },
+      "NugetRuntime.kt carries nugetCall, which every reverse call site now routes through",
     )
   }
 
@@ -878,7 +880,7 @@ class NugetGenerateBindingsTaskTest {
 
     assertContains(
       bindings.content,
-      "internal var cloneFn: CPointer<CFunction<(COpaquePointer?) -> COpaquePointer?>>? = null",
+      "internal var cloneFn: CPointer<CFunction<(COpaquePointer?, CPointer<COpaquePointerVar>) -> COpaquePointer?>>? = null",
       message = "a zero-C#-parameter instance method's CFunction type must still declare one " +
           "COpaquePointer? parameter for the receiver — Clone() call site passes " +
           "handle.require(\"Template\") as its only fn.invoke(...) argument",
@@ -892,7 +894,7 @@ class NugetGenerateBindingsTaskTest {
 
     assertContains(
       bindings.content,
-      "internal var renameFn: CPointer<CFunction<(COpaquePointer?, COpaquePointer?) -> Unit>>? = null",
+      "internal var renameFn: CPointer<CFunction<(COpaquePointer?, COpaquePointer?, CPointer<COpaquePointerVar>) -> Unit>>? = null",
       message = "a one-C#-parameter instance method's CFunction type must declare two " +
           "COpaquePointer? parameters (receiver, then newName) — Rename(newName) call site passes " +
           "handle.require(\"Template\") followed by newName.cstr.ptr to fn.invoke(...)",
@@ -906,7 +908,7 @@ class NugetGenerateBindingsTaskTest {
 
     assertContains(
       bindings.content,
-      "internal var parseFn: CPointer<CFunction<(COpaquePointer?) -> COpaquePointer?>>? = null",
+      "internal var parseFn: CPointer<CFunction<(COpaquePointer?, CPointer<COpaquePointerVar>) -> COpaquePointer?>>? = null",
       message = "a static method's CFunction type must NOT gain a receiver slot — Parse(source) " +
           "has exactly one C# parameter and no receiver, regression guard against over-applying " +
           "the instance-method receiver fix",
@@ -993,15 +995,15 @@ class NugetGenerateBindingsTaskTest {
 
     assertContains(
       bindings.content,
-      "internal var defaultNameGetterFn: CPointer<CFunction<() -> COpaquePointer?>>? = null",
+      "internal var defaultNameGetterFn: CPointer<CFunction<(CPointer<COpaquePointerVar>) -> COpaquePointer?>>? = null",
     )
     assertContains(
       bindings.content,
-      "internal var defaultNameSetterFn: CPointer<CFunction<(COpaquePointer?) -> Unit>>? = null",
+      "internal var defaultNameSetterFn: CPointer<CFunction<(COpaquePointer?, CPointer<COpaquePointerVar>) -> Unit>>? = null",
     )
     assertContains(
       bindings.content,
-      "internal var renderCountGetterFn: CPointer<CFunction<() -> Int>>? = null",
+      "internal var renderCountGetterFn: CPointer<CFunction<(CPointer<COpaquePointerVar>) -> Int>>? = null",
     )
   }
 
@@ -1196,11 +1198,11 @@ class NugetGenerateBindingsTaskTest {
     val bindings: GeneratedFile = files.single { it.relativePath.endsWith("MoodServiceBindings.kt") }
 
     assertContains(stub.content, "fun next(mood: Mood): Mood")
-    assertContains(stub.content, "fn.invoke(mood.ordinal)")
+    assertContains(stub.content, "fn.invoke(mood.ordinal, err)")
     assertContains(stub.content, "nugetEnumEntry(Mood.entries, ")
     assertContains(
       bindings.content,
-      "internal var nextFn: CPointer<CFunction<(Int) -> Int>>? = null",
+      "internal var nextFn: CPointer<CFunction<(Int, CPointer<COpaquePointerVar>) -> Int>>? = null",
     )
   }
 
@@ -1212,14 +1214,14 @@ class NugetGenerateBindingsTaskTest {
 
     assertContains(stub.content, "var defaultMood: Mood")
     assertContains(stub.content, "nugetEnumEntry(Mood.entries, ")
-    assertContains(stub.content, "fn.invoke(value.ordinal)")
+    assertContains(stub.content, "fn.invoke(value.ordinal, err)")
     assertContains(
       bindings.content,
-      "internal var defaultMoodGetterFn: CPointer<CFunction<() -> Int>>? = null",
+      "internal var defaultMoodGetterFn: CPointer<CFunction<(CPointer<COpaquePointerVar>) -> Int>>? = null",
     )
     assertContains(
       bindings.content,
-      "internal var defaultMoodSetterFn: CPointer<CFunction<(Int) -> Unit>>? = null",
+      "internal var defaultMoodSetterFn: CPointer<CFunction<(Int, CPointer<COpaquePointerVar>) -> Unit>>? = null",
     )
   }
 
@@ -1235,7 +1237,8 @@ class NugetGenerateBindingsTaskTest {
 
     assertContains(
       stub.content,
-      "return nugetEnumEntry(Mood.entries, fn.invoke(mood.ordinal), \"Mood\")",
+      "return nugetEnumEntry(Mood.entries, nugetCall { err -> fn.invoke(mood.ordinal, err) }, " +
+          "\"Mood\")",
     )
     assertContains(
       stub.content,

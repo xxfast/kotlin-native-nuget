@@ -368,16 +368,19 @@ call throws, naming the member (<code>IFeedableBridge.Describe</code>) in its ow
 stage 2).</p>
 </warning>
 
-<warning>
-<p>That propagation does not reach a call that <i>originates</i> in Kotlin. If Kotlin calls a
-reverse-bound C# method (<code>Sanctuary.Introduce</code>, say) and that method calls the
-Kotlin-implemented member internally, the thrown exception still terminates the process: the
-Kotlin→C# call crosses its own <code>[UnmanagedCallersOnly]</code> thunk, which has no error
-out-parameter of its own (<a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md">ROADMAP.md</a>
-Phase 11, unshipped), so the C# exception has nowhere to go once it escapes the bridge member. Only
-a call C# makes directly into the bridge, holding a stored reference and calling a member on it, is
-catchable today.</p>
-</warning>
+<note>
+<p>A call that <i>originates</i> in Kotlin and reaches the Kotlin-implemented member indirectly,
+through an ordinary reverse-bound method (<code>Sanctuary.Introduce</code> calling
+<code>IFeedable.Describe()</code> internally), is catchable too: the Kotlin→C# call crosses its own
+<code>[UnmanagedCallersOnly]</code> thunk, which now carries the same trailing error out-parameter
+every reverse thunk gets
+(<a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/104-reverse-thunk-error-channel.md">ADR-104</a>).
+The exception surfaces at the Kotlin call site as a <code>NugetManagedException</code> rather than
+the <code>KotlinException</code> family the direct-call path throws in C#: the two channels are not
+yet unified into one exception type at this crossing, a deferred
+<a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md">ROADMAP.md</a> Phase 11
+item.</p>
+</note>
 
 v1 slot vocabulary: `val`/`var` property getter-and-setter slots, and methods of arity 0-2
 returning `Unit`, a primitive, `Boolean`, an enum, `String`, `String?`, a bound-object handle, or a
@@ -599,34 +602,75 @@ become a handle. This produces the same `skipped_unbound_type_reference` diagnos
 is external (e.g. a type from a NuGet dependency you didn't declare) or merely excluded by your own
 `include()`/`exclude()` filters.
 
-## Exceptions are not propagated
+## Exceptions
 
-A C# exception thrown inside a thunk is never caught. `[UnmanagedCallersOnly]` thunks contain no
-`try`/`catch` at all, by design: a managed exception cannot cross the managed/native boundary
-gracefully, and the .NET runtime tears the whole host process down (`FailFast`) if one tries. This is
-the accepted v1 behaviour, not a bug, chosen specifically over catch-and-return-a-sentinel, because a
-sentinel value (`0`, `false`, `null`) is indistinguishable from a legitimate result for a
-primitive-or-`void`-returning method. A crash is loud; a wrong answer is not.
+A C# exception thrown while dispatching a bound member is caught at its
+`[UnmanagedCallersOnly]` thunk and reaches Kotlin as a catchable exception rather than
+terminating the host
+([ADR-104](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/104-reverse-thunk-error-channel.md)).
+Every thunk that dispatches into bound package code (instance methods, constructors, property
+getters and setters, static routes, struct members, and generic-witness thunks) gains one trailing
+`IntPtr* errOut`, wraps its body in `try`/`catch (Exception ex)`, and on a throw writes a
+`GCHandle` to the exception through it instead of letting the exception escape:
 
 ```C#
-// v1: no try/catch - a thrown C# exception escapes and fast-fails the host process
+// build/nuget-interop/csharp/InfirmaryRegistration.cs
 [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
-private static IntPtr SerializeObject_Thunk(int value)
+private static unsafe int Temperature__104e005ce1c77ae4c5df2b4b23b5a0d4_Thunk(IntPtr selfHandle, IntPtr patientPtr, IntPtr* errOut)
 {
-    string result = JsonConvert.SerializeObject(value);
-    return Marshal.StringToCoTaskMemUTF8(result);
+    try
+    {
+        Infirmary receiver = (Infirmary)GCHandle.FromIntPtr(selfHandle).Target!;
+        int result = receiver.Temperature(Marshal.PtrToStringUTF8(patientPtr)!);
+        return result;
+    }
+    catch (Exception ex)
+    {
+        *errOut = GCHandle.ToIntPtr(GCHandle.Alloc(ex));
+        return default;
+    }
 }
 ```
 
-Graceful propagation into a catchable Kotlin exception is tracked as
-[ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md) Phase 11.
+The generated Kotlin stub passes the error slot on every call and checks it before touching the
+return value or any out-parameter (a struct-returning thunk leaves its out-pointers unwritten on
+the error path):
+
+```kotlin
+// build/nuget-interop/kotlin/nativeMain/test/infirmary/Infirmary.kt
+fun temperature(patient: String): Int {
+    val fn = requireNotNull(InfirmaryBindings.temperature__104e005ce1c77ae4c5df2b4b23b5a0d4Fn) {
+      NugetRegistry.notRegistered("Test.Infirmary.Infirmary", "TestDependency")
+    }
+    return nugetCall { err -> memScoped { fn.invoke(handle.require("Infirmary"), patient.cstr.ptr, err) } }
+}
+```
+
+At the call site, catch `NugetManagedException`:
+
+```kotlin
+try {
+    infirmary.temperature("Oreo")
+} catch (e: NugetManagedException) {
+    e.managedType   // "System.ArgumentException"
+    e.message       // "Oreo is not a registered patient"
+}
+```
+
+`NugetManagedException(managedType: String, message: String?)` carries the .NET type's full name
+and its `Message`, verbatim, and nothing else: mapping .NET exception types to Kotlin analogs,
+carrying the .NET stack trace, and mapping `InnerException` to a Kotlin `cause` chain are three
+separate deferred [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md)
+Phase 11 items, each additive as a runtime accessor slot rather than a change to thunk arity.
 
 <note>
-<p>A Kotlin-implemented interface member is the one place propagation already works, and only
-partially: see the two warnings under "Implementing a C#-declared interface in Kotlin" earlier on
-this page. It is catchable when C# calls the bridge member directly, and still fatal when the call
-originates in Kotlin and calls back into the member through a reverse-bound method, exactly the gap
-this section describes, since that outer reverse thunk has no error path of its own.</p>
+<p>A Kotlin-implemented interface member is now catchable from every direction. See the note
+under "Implementing a C#-declared interface in Kotlin" earlier on this page: it is catchable when
+C# calls the bridge member directly (as a <code>KotlinException</code>,
+<a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/087-kotlin-slot-exceptions.md">ADR-087</a>),
+and catchable too when the call originates in Kotlin and reaches the same member indirectly
+through a reverse-bound method (as a <code>NugetManagedException</code>, this ADR). The two
+channels are not yet unified into one exception type at that crossing.</p>
 </note>
 
 ## Diagnostics: recorded in the RIR and surfaced to the build
@@ -737,5 +781,6 @@ queryable diagnostics report (only a Gradle log line exists today), tracked in
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/085-kotlin-implemented-csharp-interfaces.md">ADR-085: Kotlin-implemented C# interfaces</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/086-object-interface-slots-kotlin-bridge.md">ADR-086: Object- and interface-typed slots for a Kotlin-implemented C# interface</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/087-kotlin-slot-exceptions.md">ADR-087: Exceptions from Kotlin-implemented C# interface members</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/104-reverse-thunk-error-channel.md">ADR-104: Reverse thunk error channel</a>
     </category>
 </seealso>

@@ -288,39 +288,52 @@ public class MenagerieRoundTripTests
     }
 
     // Phase 13 Wave 2, item 3 (ADR-087 stage 2): catchable propagation from a Kotlin-implemented
-    // slot. The slot half now WORKS — IFeedableBridge.Describe() throws
-    // TestLibrary.KotlinInvalidOperationException("no vacancy"), the mapped ADR-029 type, observed
-    // in the test host's crash dump. This test still cannot run, for a reason outside ADR-087's
-    // scope: it reaches the bridge through Kotlin calling C# (Sanctuary.Introduce), so the thrown
-    // exception has to escape Introduce_Thunk, an [UnmanagedCallersOnly] method with no error
-    // out-param and no catch. .NET terminates the host rather than unwinding a managed exception
-    // through Kotlin/Native frames, which aborts the whole xunit run (worse than a failure).
-    // Unblocking it needs reverse-thunk error propagation, C# -> Kotlin: its own ABI change to
-    // every reverse thunk, every Kotlin stub call site, and every reverse contract hash.
-
-    [Fact(Skip = "needs reverse-thunk (C#->Kotlin) error propagation; ADR-087 stage 2's slot half is done")]
-    public void KotlinNoVacancy_DescribeThrows_MapsToKotlinInvalidOperationException()
+    // slot. The slot half: IFeedableBridge.Describe() throws
+    // TestLibrary.KotlinInvalidOperationException("no vacancy"), the mapped ADR-029 type. The
+    // second half is ADR-104: this path reaches the bridge through Kotlin calling C#
+    // (Sanctuary.Introduce), so the thrown exception leaves Introduce_Thunk, an
+    // [UnmanagedCallersOnly] method, through the channel's error slot instead of terminating the
+    // host on its way back through the Kotlin/Native frame below it.
+    //
+    // The full round trip is four hops: Kotlin NoVacancy.describe() throws -> ADR-087 slot
+    // envelope -> C# IFeedableBridge.Describe() throws KotlinInvalidOperationException, inside
+    // Sanctuary.Introduce -> ADR-104 reverse thunk error channel -> Kotlin NugetManagedException
+    // -> escapes the forward-exported sample function -> ADR-024 forward channel -> here.
+    //
+    // RELAXED to ADR-104's actual contract (its Fork C gate decision, taken 2026-08-31): the host
+    // survives, a catchable exception reaches the C# caller, and the message is preserved. The
+    // stricter assertions this test used to carry are deferred, not abandoned, and each names a
+    // separate open Phase 11 item that will restore it:
+    //
+    //   Assert.ThrowsAny<InvalidOperationException> / Assert.IsType<KotlinInvalidOperationException>
+    //     needs .NET-to-Kotlin exception type mapping. Without it the forward map sees the Kotlin
+    //     type NugetManagedException and falls through to KotlinException : Exception
+    //     (CirErrorRenderer.kt:78,88), so neither assertion can hold on the channel alone. For the
+    //     Kotlin* family specifically, restoring them means round-tripping the type home through
+    //     text.
+    //
+    //   Assert.Contains("IFeedableBridge", ex.StackTrace) / Assert.Contains("Describe", ...)
+    //     needs .NET stack-trace propagation. The channel discards the inner throw's managed
+    //     stack; the outer exception's own StackTrace is just the P/Invoke call site. Even once it
+    //     lands it arrives on KotlinStackTrace, not StackTrace.
+    [Fact]
+    public void KotlinNoVacancy_DescribeThrows_ReachesCSharpAsACatchableException()
     {
         // Sanctuary.Introduce calls IFeedable.Describe() on NoVacancy, whose Describe() always
-        // throws kotlin.IllegalStateException. Per the forward ADR-029 map, that Kotlin type maps
-        // to KotlinInvalidOperationException : InvalidOperationException.
-        var ex = Assert.ThrowsAny<InvalidOperationException>(
+        // throws kotlin.IllegalStateException.
+        var ex = Assert.ThrowsAny<Exception>(
             () => MenagerieSample.kotlinNoVacancyIntroduceThrows());
-        Assert.IsType<KotlinInvalidOperationException>(ex);
+        // Verbatim across all four hops. This is the whole of what ADR-104's Fork B envelope
+        // carries: type name and message, nothing else.
         Assert.Equal("no vacancy", ex.Message);
-        // The .NET stack trace must identify the generated bridge member that dispatched into
-        // Kotlin, not just an anonymous slot pointer.
-        Assert.Contains("IFeedableBridge", ex.StackTrace ?? "");
-        Assert.Contains("Describe", ex.StackTrace ?? "");
     }
 
     [Fact]
     public void KotlinNoVacancy_LegsOnly_NonThrowingSiblingSlotStillWorks()
     {
-        // Same interface, same throwing-implementation shape as the Skip'd test above, but this
-        // crossing only ever touches IFeedable.Legs. The envelope the Skip'd test needs must not
-        // tax this happy path once it lands — and today, with only stage 1's ABI-neutral wrapper
-        // in place, this already passes.
+        // Same interface, same throwing-implementation shape as the test above, but this crossing
+        // only ever touches IFeedable.Legs. The ADR-104 envelope the test above needs must not tax
+        // the happy path, and does not: nothing throws, and the value comes back unchanged.
         int legs = MenagerieSample.kotlinNoVacancyLegsOnly();
         Assert.Equal(4, legs);
     }

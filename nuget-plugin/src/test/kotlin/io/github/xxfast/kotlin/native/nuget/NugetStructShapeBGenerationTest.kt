@@ -259,8 +259,8 @@ class NugetStructShapeBGenerationTest {
 
     assertContains(
       registration,
-      "private static IntPtr Describe_Thunk(int c_Girth, IntPtr c_ColourPtr, byte c_Belled, " +
-          "ushort c_Initial, int c_Mood)",
+      "private static unsafe IntPtr Describe_Thunk(int c_Girth, IntPtr c_ColourPtr, byte c_Belled, " +
+          "ushort c_Initial, int c_Mood, IntPtr* errOut)",
     )
     assertContains(
       registration,
@@ -284,7 +284,7 @@ class NugetStructShapeBGenerationTest {
       registration,
       "private static unsafe void Resize_Thunk(int Girth, IntPtr ColourPtr, byte Belled, " +
           "ushort Initial, int Mood, int by, int* outGirth, IntPtr* outColour, byte* outBelled, " +
-          "ushort* outInitial, int* outMood)",
+          "ushort* outInitial, int* outMood, IntPtr* errOut)",
     )
     assertContains(
       registration,
@@ -309,7 +309,7 @@ class NugetStructShapeBGenerationTest {
     val registration: String =
       files.single { it.relativePath == "ExtentRegistration.cs" }.content
 
-    assertContains(registration, "private static int Area_Get_Thunk(int Width, int Height)")
+    assertContains(registration, "private static unsafe int Area_Get_Thunk(int Width, int Height, IntPtr* errOut)")
     assertContains(registration, "new Extent { Width = Width, Height = Height }.Area")
     assertFalse(registration.contains("new Extent(Width"))
   }
@@ -323,7 +323,7 @@ class NugetStructShapeBGenerationTest {
     assertContains(
       registration,
       "private static unsafe void Grow_Thunk(int Width, int Height, int by, int* outWidth, " +
-          "int* outHeight)",
+          "int* outHeight, IntPtr* errOut)",
     )
     assertContains(
       registration,
@@ -350,7 +350,7 @@ class NugetStructShapeBGenerationTest {
     assertContains(extentFile, "ExtentBindings.areaGetterFn")
 
     assertContains(extentFile, "fun grow(by: Int): Extent = memScoped {")
-    assertContains(extentFile, "fn.invoke(width, height, by, outWidth.ptr, outHeight.ptr)")
+    assertContains(extentFile, "fn.invoke(width, height, by, outWidth.ptr, outHeight.ptr, err)")
     assertContains(extentFile, "Extent(outWidth.value, outHeight.value)")
     assertContains(extentFile, "ExtentBindings.growFn")
 
@@ -429,8 +429,8 @@ class NugetStructShapeBGenerationTest {
 
     assertContains(
       registration,
-      "private static IntPtr Pair_Thunk(int a_Girth, IntPtr a_ColourPtr, byte a_Belled, " +
-          "ushort a_Initial, int a_Mood, int b_Width, int b_Height)",
+      "private static unsafe IntPtr Pair_Thunk(int a_Girth, IntPtr a_ColourPtr, byte a_Belled, " +
+          "ushort a_Initial, int a_Mood, int b_Width, int b_Height, IntPtr* errOut)",
     )
     assertContains(
       registration,
@@ -448,7 +448,7 @@ class NugetStructShapeBGenerationTest {
     assertContains(
       collarsFile,
       "fn.invoke(a.girth, a.colour.cstr.ptr, a.belled, a.initial.code.toUShort(), a.mood.ordinal, " +
-          "b.width, b.height)",
+          "b.width, b.height, err)",
     )
   }
 

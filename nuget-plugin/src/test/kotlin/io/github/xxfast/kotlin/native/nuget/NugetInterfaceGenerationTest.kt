@@ -321,7 +321,7 @@ class NugetInterfaceGenerationTest {
     // side.
     assertTrue(
       bindings.contains(
-        "internal var describeFn: CPointer<CFunction<(COpaquePointer?) -> COpaquePointer?>>? " +
+        "internal var describeFn: CPointer<CFunction<(COpaquePointer?, CPointer<COpaquePointerVar>) -> COpaquePointer?>>? " +
             "= null",
       ),
     )

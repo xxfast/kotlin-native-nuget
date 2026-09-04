@@ -250,7 +250,7 @@ class NugetGenericClassGenerationTest {
       message = "the witness's declared return type must stay nullable",
     )
     assertFalse(
-      file.content.contains("requireNotNull(valueFn) { NugetRegistry.notRegistered(\"Test.Boxes.Box[System.String?]\", \"TestDependency\") }.invoke(handle.require(\"Box\")))"),
+      file.content.contains("requireNotNull(valueFn) { NugetRegistry.notRegistered(\"Test.Boxes.Box[System.String?]\", \"TestDependency\") }.invoke(handle.require(\"Box\"), err))"),
       "a nullable-annotated string return must never be wrapped in an outer requireNotNull that " +
           "throws on a legitimate null. Got:\n${file.content}",
     )

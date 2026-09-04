@@ -81,13 +81,15 @@ class NugetGenerateShimsTaskTest {
   fun `emits JsonConvertRegistration cs and NugetTrace cs for JsonConvert`() {
     val files: List<GeneratedFile> = generateCSharpShims(jsonConvertRir, "sample")
 
-    // ADR-054: NugetTrace.cs is now emitted alongside every {Type}Registration.cs (its
-    // [ModuleInitializer] references NugetTrace.Write/WriteAlways) — JsonConvert has no handle
-    // types, so NugetRuntimeRegistration.cs still stays absent, but NugetTrace.cs does not.
+    // ADR-054: NugetTrace.cs is emitted alongside every {Type}Registration.cs (its
+    // [ModuleInitializer] references NugetTrace.Write/WriteAlways).
+    // ADR-104: so is NugetRuntimeRegistration.cs, even with no handle type in the IR: the
+    // managed-error accessors ride the shared runtime registration and EVERY user-code thunk
+    // can now write through the error channel, statics included.
     assertEquals(
-      2,
+      3,
       files.size,
-      "expected exactly two generated files (Registration + NugetTrace), got: " +
+      "expected exactly three generated files (Registration + runtime + NugetTrace), got: " +
           files.map { it.relativePath },
     )
     assertTrue(
@@ -171,7 +173,7 @@ class NugetGenerateShimsTaskTest {
     val shim: GeneratedFile = jsonConvertShim()
     assertContains(
       shim.content,
-      "(IntPtr)(delegate* unmanaged[Cdecl]<int, IntPtr>)(&SerializeObject_Thunk)",
+      "(IntPtr)(delegate* unmanaged[Cdecl]<int, IntPtr*, IntPtr>)(&SerializeObject_Thunk)",
     )
   }
 
@@ -194,7 +196,7 @@ class NugetGenerateShimsTaskTest {
     val shim: GeneratedFile = jsonConvertShim()
     assertContains(
       shim.content,
-      "private static IntPtr SerializeObject_Thunk(int value)",
+      "private static unsafe IntPtr SerializeObject_Thunk(int value, IntPtr* errOut)",
     )
   }
 
@@ -210,28 +212,22 @@ class NugetGenerateShimsTaskTest {
     assertContains(shim.content, "Marshal.StringToCoTaskMemUTF8(result)")
   }
 
+  // ADR-104 inverted this test. It used to assert that no thunk body contains try/catch
+  // ("let it crash", ADR-049). A user-code thunk now MUST catch: a managed exception escaping an
+  // [UnmanagedCallersOnly] frame terminates the host, with nothing catchable on the Kotlin side.
+  // The catch is not a swallow: it writes a GCHandle to the exception through the trailing
+  // `IntPtr* errOut` and returns `default`, and the Kotlin stub rethrows it as
+  // NugetManagedException before it touches the return value.
   @Test
-  fun `generated thunk bodies do not contain try or catch`() {
-    // Word-boundary matching, not plain `.contains`: the file legitimately contains "EntryPoint"
-    // (required by the [DllImport] attribute), which itself contains the substring "try" — a
-    // naive `.contains("try")` would always false-positive on any valid generated shim.
-    //
-    // ADR-054: the [ModuleInitializer] now legitimately wraps its registration P/Invoke in a
-    // try/catch (DllNotFoundException/EntryPointNotFoundException -> log -> rethrow) — that is
-    // NOT a "let it crash" violation (ADR-049 forbids catching in *thunk bodies*, where a
-    // swallowed exception would become a silently-wrong return value; this catch is outside any
-    // thunk and always rethrows). So this assertion is scoped to the thunk methods only, which
-    // textually start at the first [UnmanagedCallersOnly], after the ModuleInitializer.
+  fun `every user-code thunk catches and writes the managed exception through errOut`() {
     val shim: GeneratedFile = jsonConvertShim()
     val thunksOnly: String = shim.content.substringAfter("[UnmanagedCallersOnly")
-    assertFalse(
-      Regex("\\btry\\b").containsMatchIn(thunksOnly),
-      "thunk bodies must not contain the try keyword (ADR-049 let it crash)",
-    )
-    assertFalse(
-      Regex("\\bcatch\\b").containsMatchIn(thunksOnly),
-      "thunk bodies must not contain the catch keyword (ADR-049 let it crash)",
-    )
+
+    assertContains(thunksOnly, "catch (Exception ex)")
+    assertContains(thunksOnly, "*errOut = GCHandle.ToIntPtr(GCHandle.Alloc(ex));")
+    // A value-returning thunk must still return on the catch path; `default` is IntPtr.Zero for
+    // a handle/string return and 0/false for a scalar.
+    assertContains(thunksOnly, "return default;")
   }
 
   @Test
@@ -291,7 +287,7 @@ class NugetGenerateShimsTaskTest {
     val files: List<GeneratedFile> = generateCSharpShims(validatorRir, "sample")
     val shim: GeneratedFile = files.single { it.relativePath.endsWith("ValidatorRegistration.cs") }
 
-    assertContains(shim.content, "private static byte Negate_Thunk(byte value)")
+    assertContains(shim.content, "private static unsafe byte Negate_Thunk(byte value, IntPtr* errOut)")
     assertFalse(
       shim.content.contains("Negate_Thunk(bool"),
       "thunk parameter must be byte, not bool (ADR-049: bool is not blittable)",
@@ -346,7 +342,7 @@ class NugetGenerateShimsTaskTest {
     val files: List<GeneratedFile> = generateCSharpShims(charHelperRir, "sample")
     val shim: GeneratedFile = files.single { it.relativePath.endsWith("CharHelperRegistration.cs") }
 
-    assertContains(shim.content, "private static ushort ToUpperChar_Thunk(ushort value)")
+    assertContains(shim.content, "private static unsafe ushort ToUpperChar_Thunk(ushort value, IntPtr* errOut)")
     assertFalse(
       shim.content.contains("ToUpperChar_Thunk(char"),
       "thunk parameter must be ushort, not char (ADR-049: char is not blittable)",
@@ -398,7 +394,7 @@ class NugetGenerateShimsTaskTest {
     val files: List<GeneratedFile> = generateCSharpShims(fooRir, "sample")
     val shim: GeneratedFile = files.single { it.relativePath.endsWith("FooRegistration.cs") }
 
-    assertContains(shim.content, "private static void DoIt_Thunk()")
+    assertContains(shim.content, "private static unsafe void DoIt_Thunk(IntPtr* errOut)")
   }
 
   // ------------------------------------------------------------------
@@ -550,7 +546,7 @@ class NugetGenerateShimsTaskTest {
 
     val files: List<GeneratedFile> = generateCSharpShims(rir, "sample")
     val shim: GeneratedFile = files.single { it.relativePath.endsWith("InstanceOnlyRegistration.cs") }
-    assertContains(shim.content, "private static void DoIt_Thunk(IntPtr selfHandle)")
+    assertContains(shim.content, "private static unsafe void DoIt_Thunk(IntPtr selfHandle, IntPtr* errOut)")
     assertContains(
       shim.content,
       "(InstanceOnly)GCHandle.FromIntPtr(selfHandle).Target!",
@@ -623,7 +619,7 @@ class NugetGenerateShimsTaskTest {
   @Test
   fun `Parse thunk signature returns IntPtr and takes IntPtr source parameter`() {
     val shim: GeneratedFile = templateShim()
-    assertContains(shim.content, "private static IntPtr Parse_Thunk(IntPtr sourcePtr)")
+    assertContains(shim.content, "private static unsafe IntPtr Parse_Thunk(IntPtr sourcePtr, IntPtr* errOut)")
   }
 
   @Test
@@ -661,7 +657,7 @@ class NugetGenerateShimsTaskTest {
     val shim: GeneratedFile = templateShim()
     assertContains(
       shim.content,
-      "private static IntPtr Render_Thunk(IntPtr templateHandle, IntPtr namePtr)",
+      "private static unsafe IntPtr Render_Thunk(IntPtr templateHandle, IntPtr namePtr, IntPtr* errOut)",
     )
   }
 
@@ -755,15 +751,18 @@ class NugetGenerateShimsTaskTest {
     assertContains(runtimeShim.content, "GCHandle.FromIntPtr(handle).Free()")
   }
 
-  // Guard: NugetRuntimeRegistration.cs must NOT be emitted for statics-only IR (uses the
-  // existing fixture, compiles today, must stay green before and after implementation).
+  // ADR-104 inverted this guard. It used to assert the shared runtime shim stays absent for
+  // statics-only IR (nothing needed GCHandle freeing). The managed-error accessors now ride
+  // that same registration, and a static method's thunk can throw exactly like an instance
+  // one, so the runtime shim is required whenever ANY shim is emitted.
   @Test
-  fun `NugetRuntimeRegistration cs is not emitted for statics-only IR`() {
+  fun `NugetRuntimeRegistration cs is emitted even for statics-only IR`() {
     val files: List<GeneratedFile> = generateCSharpShims(jsonConvertRir, "sample")
 
     assertTrue(
-      files.none { it.relativePath.endsWith("NugetRuntimeRegistration.cs") },
-      "NugetRuntimeRegistration.cs must not be emitted when no handle types are present in the IR",
+      files.any { it.relativePath.endsWith("NugetRuntimeRegistration.cs") },
+      "NugetRuntimeRegistration.cs carries the ADR-104 managed-error accessors, which every " +
+          "user-code thunk's error path needs",
     )
   }
 
@@ -842,7 +841,7 @@ class NugetGenerateShimsTaskTest {
   @Test
   fun `Ctor_Thunk signature returns IntPtr and takes IntPtr source parameter`() {
     val shim: GeneratedFile = templateWithCtorShim()
-    assertContains(shim.content, "private static IntPtr Ctor_Thunk(IntPtr sourcePtr)")
+    assertContains(shim.content, "private static unsafe IntPtr Ctor_Thunk(IntPtr sourcePtr, IntPtr* errOut)")
   }
 
   @Test
@@ -860,7 +859,7 @@ class NugetGenerateShimsTaskTest {
     val shim: GeneratedFile = templateWithCtorShim()
     val thunkBody: String = shim.content
       .substringAfter(
-        delimiter = "private static IntPtr Ctor_Thunk(IntPtr sourcePtr)",
+        delimiter = "private static unsafe IntPtr Ctor_Thunk(IntPtr sourcePtr, IntPtr* errOut)",
         missingDelimiterValue = "",
       )
       .substringBefore("[UnmanagedCallersOnly")
@@ -1022,7 +1021,7 @@ class NugetGenerateShimsTaskTest {
     val shim: GeneratedFile = templateInstanceShim()
     assertContains(
       shim.content,
-      "private static void Rename_Thunk(IntPtr selfHandle, IntPtr newNamePtr)",
+      "private static unsafe void Rename_Thunk(IntPtr selfHandle, IntPtr newNamePtr, IntPtr* errOut)",
       message = "Phase 9 line 151: an instance method thunk gains a leading IntPtr selfHandle " +
           "parameter (an instance thunk is a static thunk whose first parameter is the receiver " +
           "handle, ADR-051)",
@@ -1058,7 +1057,7 @@ class NugetGenerateShimsTaskTest {
   @Test
   fun `Name_Get_Thunk signature takes IntPtr selfHandle and returns IntPtr`() {
     val shim: GeneratedFile = templateInstanceShim()
-    assertContains(shim.content, "private static IntPtr Name_Get_Thunk(IntPtr selfHandle)")
+    assertContains(shim.content, "private static unsafe IntPtr Name_Get_Thunk(IntPtr selfHandle, IntPtr* errOut)")
   }
 
   @Test
@@ -1077,7 +1076,7 @@ class NugetGenerateShimsTaskTest {
     val shim: GeneratedFile = templateInstanceShim()
     assertContains(
       shim.content,
-      "private static void Length_Set_Thunk(IntPtr selfHandle, int value)",
+      "private static unsafe void Length_Set_Thunk(IntPtr selfHandle, int value, IntPtr* errOut)",
     )
   }
 
@@ -1090,10 +1089,10 @@ class NugetGenerateShimsTaskTest {
   fun `static property getter and setter thunks have no selfHandle and access Template statically`() {
     val shim: GeneratedFile = templateInstanceShim()
 
-    assertContains(shim.content, "private static IntPtr DefaultName_Get_Thunk()")
-    assertContains(shim.content, "private static void DefaultName_Set_Thunk(IntPtr valuePtr)")
+    assertContains(shim.content, "private static unsafe IntPtr DefaultName_Get_Thunk(IntPtr* errOut)")
+    assertContains(shim.content, "private static unsafe void DefaultName_Set_Thunk(IntPtr valuePtr, IntPtr* errOut)")
     assertContains(shim.content, "Template.DefaultName")
-    assertContains(shim.content, "private static int RenderCount_Get_Thunk()")
+    assertContains(shim.content, "private static unsafe int RenderCount_Get_Thunk(IntPtr* errOut)")
     assertContains(shim.content, "Template.RenderCount")
   }
 
@@ -1239,7 +1238,7 @@ class NugetGenerateShimsTaskTest {
     val shim: GeneratedFile = generateCSharpShims(moodRir, "sample")
       .single { it.relativePath.endsWith("MoodServiceRegistration.cs") }
 
-    assertContains(shim.content, "private static int Next_Thunk(int mood)")
+    assertContains(shim.content, "private static unsafe int Next_Thunk(int mood, IntPtr* errOut)")
     assertContains(shim.content, "Mood result = MoodService.Next((Mood)mood);")
     assertContains(shim.content, "return (int)result;")
   }
@@ -1249,10 +1248,10 @@ class NugetGenerateShimsTaskTest {
     val shim: GeneratedFile = generateCSharpShims(moodRir, "sample")
       .single { it.relativePath.endsWith("MoodServiceRegistration.cs") }
 
-    assertContains(shim.content, "private static int DefaultMood_Get_Thunk()")
+    assertContains(shim.content, "private static unsafe int DefaultMood_Get_Thunk(IntPtr* errOut)")
     assertContains(shim.content, "Mood result = MoodService.DefaultMood;")
     assertContains(shim.content, "return (int)result;")
-    assertContains(shim.content, "private static void DefaultMood_Set_Thunk(int value)")
+    assertContains(shim.content, "private static unsafe void DefaultMood_Set_Thunk(int value, IntPtr* errOut)")
     assertContains(shim.content, "MoodService.DefaultMood = (Mood)value;")
   }
 
@@ -1545,7 +1544,7 @@ class NugetGenerateShimsTaskTest {
   }
 
   @Test
-  fun `NugetRuntimeRegistration cs gains leading slotCount 3 and a contractHash literal`() {
+  fun `NugetRuntimeRegistration cs gains leading slotCount 5 and a contractHash literal`() {
     val files: List<GeneratedFile> = generateCSharpShims(templateWithCtorRir, "sample")
     val runtimeShim: GeneratedFile = requireNotNull(
       files.find { it.relativePath.endsWith("NugetRuntimeRegistration.cs") }
@@ -1556,9 +1555,13 @@ class NugetGenerateShimsTaskTest {
       runtimeShim.content,
       "IntPtr freeGcHandlePtr, IntPtr weakenGcHandlePtr, IntPtr resolveGcHandlePtr",
     )
+    assertContains(
+      runtimeShim.content,
+      "IntPtr managedErrorTypePtr, IntPtr managedErrorMessagePtr",
+    )
     assertTrue(
-      Regex("nuget_runtime_register\\(\\s*3,\\s*-?\\d+L,").containsMatchIn(runtimeShim.content),
-      "ADR-054/089: nuget_runtime_register must be called with slotCount=3 and a Long " +
+      Regex("nuget_runtime_register\\(\\s*5,\\s*-?\\d+L,").containsMatchIn(runtimeShim.content),
+      "ADR-054/089/104: nuget_runtime_register must be called with slotCount=5 and a Long " +
           "contractHash literal, got:\n${runtimeShim.content}",
     )
   }
@@ -1642,8 +1645,9 @@ class NugetGenerateShimsTaskTest {
 
     assertContains(
       runtimeShim.content,
-      "register enter <runtime> -> nuget_runtime_register(3 slots) dll=sample",
-      message = "ADR-089: the shared runtime registers free + weaken + resolve",
+      "register enter <runtime> -> nuget_runtime_register(5 slots) dll=sample",
+      message = "ADR-089/104: the shared runtime registers free + weaken + resolve + the two " +
+          "managed-error accessors",
     )
     assertContains(runtimeShim.content, "NugetTrace.Write(\"register ok    <runtime>\");")
   }

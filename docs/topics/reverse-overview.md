@@ -123,8 +123,8 @@ internal static class MimeUtilityRegistration
         {
             nuget_mimemapping_mime_utility_register(
                 1,
-                8143158361847426877L,
-                (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, IntPtr>)(&GetMimeMapping__cb4c202351abfeec4d85fccb5ca462a0_Thunk));
+                -241130071137868274L,
+                (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, IntPtr*, IntPtr>)(&GetMimeMapping__cb4c202351abfeec4d85fccb5ca462a0_Thunk));
         }
         catch (DllNotFoundException e)
         {
@@ -140,11 +140,21 @@ internal static class MimeUtilityRegistration
         NugetTrace.Write("register ok    MimeMapping.MimeUtility");
     }
 
+    // ADR-104: the trailing errOut carries a GCHandle to a caught exception; see
+    // "Exceptions" in The bridgeable subset.
     [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
-    private static IntPtr GetMimeMapping__cb4c202351abfeec4d85fccb5ca462a0_Thunk(IntPtr filePtr)
+    private static unsafe IntPtr GetMimeMapping__cb4c202351abfeec4d85fccb5ca462a0_Thunk(IntPtr filePtr, IntPtr* errOut)
     {
-        string result = MimeUtility.GetMimeMapping(Marshal.PtrToStringUTF8(filePtr)!);
-        return Marshal.StringToCoTaskMemUTF8(result);
+        try
+        {
+            string result = MimeUtility.GetMimeMapping(Marshal.PtrToStringUTF8(filePtr)!);
+            return Marshal.StringToCoTaskMemUTF8(result);
+        }
+        catch (Exception ex)
+        {
+            *errOut = GCHandle.ToIntPtr(GCHandle.Alloc(ex));
+            return default;
+        }
     }
 }
 ```
@@ -153,7 +163,7 @@ internal static class MimeUtilityRegistration
 // build/nuget-interop/kotlin/nativeMain/mimemapping/MimeUtilityBindings.kt (real generated output)
 internal object MimeUtilityBindings {
   @Suppress("NOTHING_TO_INLINE")
-  internal var getMimeMapping__cb4c202351abfeec4d85fccb5ca462a0Fn: CPointer<CFunction<(COpaquePointer?) -> COpaquePointer?>>? = null
+  internal var getMimeMapping__cb4c202351abfeec4d85fccb5ca462a0Fn: CPointer<CFunction<(COpaquePointer?, CPointer<COpaquePointerVar>) -> COpaquePointer?>>? = null
 }
 
 @CName("nuget_mimemapping_mime_utility_register")
@@ -168,7 +178,7 @@ fun nuget_mimemapping_mime_utility_register(
     slotCount = slotCount,
     contractHash = contractHash,
     expectedSlots = 1,
-    expectedHash = 8143158361847426877L,
+    expectedHash = -241130071137868274L,
   )
   MimeUtilityBindings.getMimeMapping__cb4c202351abfeec4d85fccb5ca462a0Fn = requireNotNull(getMimeMapping__cb4c202351abfeec4d85fccb5ca462a0Ptr) { "nuget_mimemapping_mime_utility_register passed a null getMimeMapping thunk pointer." }.reinterpret()
   NugetRegistry.record("MimeMapping.MimeUtility", 1)
@@ -237,5 +247,6 @@ install pointer rather than a cryptic subprocess error.
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/085-kotlin-implemented-csharp-interfaces.md">ADR-085: Kotlin-implemented C# interfaces</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/086-object-interface-slots-kotlin-bridge.md">ADR-086: Object- and interface-typed slots for a Kotlin-implemented C# interface</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/087-kotlin-slot-exceptions.md">ADR-087: Exceptions from Kotlin-implemented C# interface members</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/104-reverse-thunk-error-channel.md">ADR-104: Reverse thunk error channel</a>
     </category>
 </seealso>

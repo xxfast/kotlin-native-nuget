@@ -3,6 +3,7 @@ package io.github.xxfast.kotlin.native.nuget
 import io.github.xxfast.kotlin.native.nuget.rir.AbiArg
 import io.github.xxfast.kotlin.native.nuget.rir.KotlinBridgePlan
 import io.github.xxfast.kotlin.native.nuget.rir.NUGET_RUNTIME_CONTRACT_HASH
+import io.github.xxfast.kotlin.native.nuget.rir.REVERSE_ABI_TAG
 import io.github.xxfast.kotlin.native.nuget.rir.RirClass
 import io.github.xxfast.kotlin.native.nuget.rir.RirConstructor
 import io.github.xxfast.kotlin.native.nuget.rir.RirEnumType
@@ -69,9 +70,12 @@ import java.io.File
 // GCHandle.Alloc + GCHandle.ToIntPtr (non-null) or IntPtr.Zero (null). Additionally emits one
 // NugetRuntimeRegistration.cs when any handle type appears in the IR.
 //
-// Exception behaviour (ADR-049 "let it crash"): thunk bodies never catch. A thrown C# exception
-// escapes the [UnmanagedCallersOnly] method and fast-fails the host process — this is deliberate,
-// not an oversight; do not "harden" a thunk with try/catch (see ADR-049 Consequences).
+// Exception behaviour (ADR-104, superseding ADR-049's "let it crash" for user code): every thunk
+// that dispatches into PACKAGE code carries a trailing `IntPtr* errOut` and catches, so a managed
+// exception reaches the Kotlin call site as a catchable NugetManagedException instead of tearing
+// down the host. See errorChannelThunk below. The runtime plumbing thunks (FreeGcHandle,
+// WeakenGcHandle, ResolveGcHandle, the two managed-error accessors) and the ADR-085 createBridge
+// factory run no package code and deliberately keep the old policy.
 // [errorNamespace] (ADR-087 stage 2) is the FORWARD bindings' C# namespace, i.e. the publish
 // packageId. Defaulted so every existing caller (and the generator tests) keeps compiling; the
 // Gradle task passes the configured value.
@@ -215,7 +219,10 @@ fun generateCSharpShims(
     }
   }
 
-  if (needsRuntime) {
+  // ADR-104: mirrors the Kotlin side: the managed-error accessors live in the shared runtime
+  // registration, and every user-code thunk can now write through the error channel, so the
+  // runtime shim is emitted whenever any other shim is.
+  if (needsRuntime || result.isNotEmpty()) {
     result.add(
       GeneratedFile(
         relativePath = "NugetRuntimeRegistration.cs",
@@ -779,7 +786,8 @@ private fun genericRegistrationFileContent(
   val qualifiedName =
     "$namespaceName.${cls.name}[${canonicalInstantiationSignature(instantiation)}]"
   val hash: Long = fnv1a64(
-    "$qualifiedName|" + registrables.joinToString("|") { substitutedIdentity(it, args) },
+    REVERSE_ABI_TAG + "$qualifiedName|" +
+        registrables.joinToString("|") { substitutedIdentity(it, args) },
   )
   val slotCount: Int = registrables.size
 
@@ -835,11 +843,10 @@ private fun genericRegistrationFileContent(
     }
     val paramList: String = (receiverParam + inParamDecls).joinToString(", ")
     val retAbi: String = delegateReturnType(r)
-    val receiverLine: String = if (r is RirRegistrable.Ctor || isStatic(r)) {
-      ""
+    val receiverLine: String? = if (r is RirRegistrable.Ctor || isStatic(r)) {
+      null
     } else {
-      "$closedTypeName receiver = " +
-          "($closedTypeName)GCHandle.FromIntPtr(selfHandle).Target!;\n            "
+      "$closedTypeName receiver = ($closedTypeName)GCHandle.FromIntPtr(selfHandle).Target!;"
     }
     val callArgs: String = ownParams(r).joinToString(", ") { p ->
       paramConversion(RirParameter(p.name, substituteGenericType(p.type, args)))
@@ -886,13 +893,8 @@ private fun genericRegistrationFileContent(
       }
     }
 
-    """
-            [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
-            private static $retAbi ${thunkName(r)}($paramList)
-            {
-                $receiverLine$body
-            }
-    """.trimIndent().prependIndent("        ")
+    // ADR-104: generic-witness thunks are named in Fork A's scope (ADR-072/094).
+    errorChannelThunk(retAbi, thunkName(r), paramList, listOfNotNull(receiverLine) + body.lines())
   }
 
   val registrableParams: String =
@@ -901,8 +903,9 @@ private fun genericRegistrationFileContent(
 
   val moduleInitArgs: String = (listOf("$slotCount", "${hash}L") + registrables.map { r ->
     val paramTypes: List<String> = delegateParamTypes(r)
+    // ADR-104: the trailing error slot, immediately before the return type.
     val fnTypeParams: String =
-      (paramTypes + delegateReturnType(r)).joinToString(", ")
+      (paramTypes + ERR_OUT_ABI + delegateReturnType(r)).joinToString(", ")
     "(IntPtr)(delegate* unmanaged[Cdecl]<$fnTypeParams>)(&${thunkName(r)})"
   }).joinToString(", ")
 
@@ -949,7 +952,7 @@ private fun genericRegistrationFileContent(
     |            EntryPoint = "$exportName")]
     |        private static extern void $exportName($dllImportParams);
     |
-    |${thunks.indented("    ")}
+    |$thunks
     |
     |        [ModuleInitializer]
     |        internal static unsafe void Register()
@@ -959,6 +962,53 @@ private fun genericRegistrationFileContent(
     |    }
     |}
   """.trimMargin().trim()
+}
+
+// ADR-104: the reverse thunk error channel. Every thunk that dispatches into PACKAGE code gains
+// one trailing `IntPtr* errOut` (always last, never written on the success path, zero-initialised
+// by the Kotlin caller) and wraps its whole body in try/catch. On a throw the thunk allocates a
+// GCHandle to the managed exception, writes it through errOut and returns `default`, which the
+// Kotlin stub must check BEFORE it touches the return value or any out-parameter. This replaces
+// ADR-049's "let it crash" for user-code thunks only: the runtime plumbing thunks
+// (FreeGcHandle/WeakenGcHandle/ResolveGcHandle and the two managed-error accessors) and the
+// ADR-085 createBridge factory run no package code and deliberately keep the old policy.
+private const val ERR_OUT_DECL: String = "IntPtr* errOut"
+
+// The same slot as a function-pointer TYPE argument, for the `delegate* unmanaged[Cdecl]<...>`
+// casts in every [ModuleInitializer]. Sits immediately before the return type, since a function
+// pointer type spells its return last.
+internal const val ERR_OUT_ABI: String = "IntPtr*"
+
+private fun errOutParams(paramList: String): String =
+  if (paramList.isEmpty()) ERR_OUT_DECL else "$paramList, $ERR_OUT_DECL"
+
+// [bodyLines] are the thunk's statements, unindented. `unsafe` is unconditional now: the errOut
+// pointer dereference needs it on every thunk, struct out-pointers or not.
+private fun errorChannelThunk(
+  retAbiType: String,
+  thunkName: String,
+  paramList: String,
+  bodyLines: List<String>,
+): String {
+  val body: String = bodyLines.joinToString("\n") { "                $it" }
+  // A value-returning thunk must return on the catch path too; `default` is IntPtr.Zero for a
+  // handle/string return and 0/false for a scalar, exactly as ADR-102's forward callback thunks
+  // already do after FailFast.
+  val fallback: String = if (retAbiType == "void") "" else "\n                return default;"
+  return """
+    |        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+    |        private static unsafe $retAbiType $thunkName(${errOutParams(paramList)})
+    |        {
+    |            try
+    |            {
+    |$body
+    |            }
+    |            catch (Exception ex)
+    |            {
+    |                *errOut = GCHandle.ToIntPtr(GCHandle.Alloc(ex));$fallback
+    |            }
+    |        }
+  """.trimMargin()
 }
 
 private fun registrationFileContent(
@@ -1033,7 +1083,9 @@ private fun registrationFileContent(
         val paramTypes: String = abiArgs(r.ctor.parameters, structs)
           .joinToString(", ") { p -> csAbiType(p.type) }
         // ADR-052: Ctor_Thunk always returns IntPtr (a constructor's return is the handle itself).
-        val fnTypeParams: String = if (paramTypes.isEmpty()) "IntPtr" else "$paramTypes, IntPtr"
+        // ADR-104: the trailing error slot sits immediately before that return.
+        val fnTypeParams: String =
+          if (paramTypes.isEmpty()) "$ERR_OUT_ABI, IntPtr" else "$paramTypes, $ERR_OUT_ABI, IntPtr"
         "(IntPtr)(delegate* unmanaged[Cdecl]<$fnTypeParams>)" +
             "(&Ctor${r.ctor.bridgeSuffix()}_Thunk)"
       }
@@ -1054,10 +1106,10 @@ private fun registrationFileContent(
         // static/instance) — only its parameter list gains a leading IntPtr selfHandle, already
         // reflected in buildThunkMethod's paramList; the delegate* type here must match.
         val selfParamType: String? = if (!r.method.isStatic) "IntPtr" else null
-        val allParamTypes: String = listOfNotNull(selfParamType, paramTypes.ifEmpty { null })
-          .joinToString(", ")
-        val fnTypeParams: String =
-          if (allParamTypes.isEmpty()) retType else "$allParamTypes, $retType"
+        val allParamTypes: String =
+          (listOfNotNull(selfParamType, paramTypes.ifEmpty { null }) + ERR_OUT_ABI)
+            .joinToString(", ")
+        val fnTypeParams: String = "$allParamTypes, $retType"
         "(IntPtr)(delegate* unmanaged[Cdecl]<$fnTypeParams>)" +
             "(&${r.method.name}${r.method.bridgeSuffix()}_Thunk)"
       }
@@ -1071,10 +1123,10 @@ private fun registrationFileContent(
           abiOutArgs(r.property.type, structs).map { "${csAbiType(it.type)}*" }
         val retType: String = csAbiType(abiReturnType(r.property.type, structs))
         val receiverType: String? = if (r.property.isStatic) null else "IntPtr"
-        val allParamTypes: String = (listOfNotNull(receiverType) + outTypes).joinToString(", ")
-        val fnTypeParams: String =
-          if (allParamTypes.isEmpty()) retType else "$allParamTypes, $retType"
-        "(IntPtr)(delegate* unmanaged[Cdecl]<$fnTypeParams>)(&${r.property.name}_Get_Thunk)"
+        val allParamTypes: String =
+          (listOfNotNull(receiverType) + outTypes + ERR_OUT_ABI).joinToString(", ")
+        "(IntPtr)(delegate* unmanaged[Cdecl]<$allParamTypes, $retType>)" +
+            "(&${r.property.name}_Get_Thunk)"
       }
 
       // ADR-056: expanded through the shared abiArgs function — a struct-typed property's setter
@@ -1084,7 +1136,8 @@ private fun registrationFileContent(
         val valueParam = RirParameter(name = "value", type = r.property.type)
         val inTypes: List<String> = abiArgs(listOf(valueParam), structs).map { csAbiType(it.type) }
         val receiverType: String? = if (r.property.isStatic) null else "IntPtr"
-        val allParamTypes: String = (listOfNotNull(receiverType) + inTypes).joinToString(", ")
+        val allParamTypes: String =
+          (listOfNotNull(receiverType) + inTypes + ERR_OUT_ABI).joinToString(", ")
         "(IntPtr)(delegate* unmanaged[Cdecl]<$allParamTypes, void>)(&${r.property.name}_Set_Thunk)"
       }
     }
@@ -1232,7 +1285,8 @@ private fun interfaceRegistrationFileContent(
     when (r) {
       is RirRegistrable.Method -> {
         val inTypes: List<String> = r.method.parameters.map { csAbiType(it.type) }
-        val paramTypes: String = (listOf("IntPtr") + inTypes).joinToString(", ")
+        val paramTypes: String =
+          (listOf("IntPtr") + inTypes + ERR_OUT_ABI).joinToString(", ")
         val retType: String = csAbiType(r.method.returnType)
         "(IntPtr)(delegate* unmanaged[Cdecl]<$paramTypes, $retType>)" +
             "(&${r.method.name}${r.method.bridgeSuffix()}_Thunk)"
@@ -1240,12 +1294,13 @@ private fun interfaceRegistrationFileContent(
 
       is RirRegistrable.PropertyGetter -> {
         val retType: String = csAbiType(r.property.type)
-        "(IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, $retType>)(&${r.property.name}_Get_Thunk)"
+        "(IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, $ERR_OUT_ABI, $retType>)" +
+            "(&${r.property.name}_Get_Thunk)"
       }
 
       is RirRegistrable.PropertySetter -> {
         val valType: String = csAbiType(r.property.type)
-        "(IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, $valType, void>)" +
+        "(IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, $valType, $ERR_OUT_ABI, void>)" +
             "(&${r.property.name}_Set_Thunk)"
       }
 
@@ -1373,16 +1428,11 @@ private fun buildInterfaceThunkMethod(iface: RirInterface, method: RirMethod): S
   }
 
   val bodyLines: List<String> = listOf(receiverLine) + paramDeclarationLines + callBodyLines
-  val body: String = bodyLines.joinToString("\n") { "            $it" }
 
-  // ADR-049 "let it crash" (unchanged for interfaces): no try/catch.
-  return """
-    |        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
-    |        private static $retAbiType $thunkName($paramList)
-    |        {
-    |$body
-    |        }
-  """.trimMargin()
+  // ADR-104: an interface member thunk dispatches into whatever implements the interface, which
+  // is package code (or, for an ADR-085 bridge receiver, Kotlin reached through one), so it is
+  // inside Fork A's "every thunk that dispatches into user code".
+  return errorChannelThunk(retAbiType, thunkName, paramList, bodyLines)
 }
 
 private fun buildInterfacePropertyGetterThunk(iface: RirInterface, property: RirProperty): String {
@@ -1430,17 +1480,10 @@ private fun buildInterfacePropertyGetterThunk(iface: RirInterface, property: Rir
     )
   }
 
-  val body: String =
-    (listOf(receiverLine) + bodyLines).joinToString("\n") { "            $it" }
-
-  // ADR-049 "let it crash" (unchanged for interfaces): no try/catch.
-  return """
-    |        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
-    |        private static $retAbiType $thunkName(IntPtr selfHandle)
-    |        {
-    |$body
-    |        }
-  """.trimMargin()
+  // ADR-104: same rationale as buildInterfaceThunk above.
+  return errorChannelThunk(
+    retAbiType, thunkName, "IntPtr selfHandle", listOf(receiverLine) + bodyLines,
+  )
 }
 
 private fun buildInterfacePropertySetterThunk(iface: RirInterface, property: RirProperty): String {
@@ -1451,18 +1494,12 @@ private fun buildInterfacePropertySetterThunk(iface: RirInterface, property: Rir
   val assignTarget = "receiver.${property.name}"
   val valueBinding: ParamBinding = paramBinding(valueParam, emptyMap())
   val assignLine = "$assignTarget = ${valueBinding.expression};"
-  val body: String = (listOf(receiverLine) + valueBinding.declarationLines + assignLine)
-    .joinToString("\n") { "            $it" }
+  val bodyLines: List<String> =
+    listOf(receiverLine) + valueBinding.declarationLines + assignLine
   val paramList = "IntPtr selfHandle, ${csAbiType(property.type)} ${thunkParamName(valueParam)}"
 
-  // ADR-049 "let it crash" (unchanged for interfaces): no try/catch.
-  return """
-    |        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
-    |        private static void $thunkName($paramList)
-    |        {
-    |$body
-    |        }
-  """.trimMargin()
+  // ADR-104: same rationale as buildInterfaceThunk above.
+  return errorChannelThunk("void", thunkName, paramList, bodyLines)
 }
 
 private fun buildThunkMethod(
@@ -1501,10 +1538,6 @@ private fun buildThunkMethod(
   val paramList: String =
     (listOfNotNull(selfParam) + inParamDecls + outParamDecls).joinToString(", ")
   val retAbiType: String = csAbiType(abiRetType)
-  // Only the out-pointer writes (and the reconstruction of a struct PARAMETER, which never uses a
-  // pointer — see paramBinding) require `unsafe`; a struct return is the only source of pointer
-  // types in this thunk's signature.
-  val needsUnsafe: Boolean = outArgs.isNotEmpty()
 
   // ADR-053: a nullable-annotated handle parameter needs its own guarded local declaration (see
   // paramBinding) instead of being converted inline — gathered here so those declarations can be
@@ -1601,19 +1634,10 @@ private fun buildThunkMethod(
   }
 
   val bodyLines: List<String> = listOfNotNull(receiverLine) + paramDeclarationLines + callBodyLines
-  val body: String = bodyLines.joinToString("\n") { "            $it" }
-  val unsafeKeyword: String = if (needsUnsafe) "unsafe " else ""
 
-  // ADR-049 "let it crash": deliberately no try/catch. A thrown C# exception escapes this thunk
-  // and fast-fails the host process (loud failure is preferred over a silently-wrong sentinel;
-  // graceful propagation is deferred to Phase 11). Do not add exception handling here.
-  return """
-    |        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
-    |        private static ${unsafeKeyword}$retAbiType $thunkName($paramList)
-    |        {
-    |$body
-    |        }
-  """.trimMargin()
+  // ADR-104: user code, so this thunk carries the error channel (superseding ADR-049's
+  // "let it crash" for this emission site).
+  return errorChannelThunk(retAbiType, thunkName, paramList, bodyLines)
 }
 
 // Phase 9 (ROADMAP line 151): a property getter thunk — always takes IntPtr selfHandle (the
@@ -1636,7 +1660,6 @@ private fun buildPropertyGetterThunkMethod(
   val outArgs: List<AbiArg> = abiOutArgs(property.type, structs)
   val abiRetType: RirTypeRef = abiReturnType(property.type, structs)
   val retAbiType: String = csAbiType(abiRetType)
-  val needsUnsafe: Boolean = outArgs.isNotEmpty()
 
   val bodyLines: List<String> = when (val type = property.type) {
     is RirVoidType -> error("[nuget] a property cannot have void type")
@@ -1706,21 +1729,14 @@ private fun buildPropertyGetterThunkMethod(
     )
   }
 
-  val body: String =
-    (listOfNotNull(receiverLine) + bodyLines).joinToString("\n") { "            $it" }
   val outParamDecls: List<String> = outArgs.map { arg -> "${csAbiType(arg.type)}* ${arg.name}" }
   val receiverParam: String? = if (property.isStatic) null else "IntPtr selfHandle"
   val params: String = (listOfNotNull(receiverParam) + outParamDecls).joinToString(", ")
-  val unsafeKeyword: String = if (needsUnsafe) "unsafe " else ""
 
-  // ADR-049 "let it crash" (unchanged, Phase 9 line 151): no try/catch.
-  return """
-    |        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
-    |        private static ${unsafeKeyword}$retAbiType $thunkName($params)
-    |        {
-    |$body
-    |        }
-  """.trimMargin()
+  // ADR-104: user code (a property getter body is arbitrary C#), so the error channel applies.
+  return errorChannelThunk(
+    retAbiType, thunkName, params, listOfNotNull(receiverLine) + bodyLines,
+  )
 }
 
 // Phase 9 (ROADMAP line 151): a property setter thunk — takes IntPtr selfHandle (the receiver)
@@ -1741,8 +1757,8 @@ private fun buildPropertySetterThunkMethod(
   else "receiver.${property.name}"
   val valueBinding: ParamBinding = paramBinding(valueParam, structs)
   val assignLine = "$assignTarget = ${valueBinding.expression};"
-  val body: String = (listOfNotNull(receiverLine) + valueBinding.declarationLines + assignLine)
-    .joinToString("\n") { "            $it" }
+  val bodyLines: List<String> =
+    listOfNotNull(receiverLine) + valueBinding.declarationLines + assignLine
 
   // ADR-056: expanded through the shared abiArgs() function — a struct-typed property value
   // expands into one thunk parameter per component (matching exactly what paramBinding's own
@@ -1755,14 +1771,9 @@ private fun buildPropertySetterThunkMethod(
   val receiverParamDecl: String? = if (property.isStatic) null else "IntPtr selfHandle"
   val paramList: String = (listOfNotNull(receiverParamDecl) + inParamDecls).joinToString(", ")
 
-  // ADR-049 "let it crash" (unchanged, Phase 9 line 151): no try/catch.
-  return """
-    |        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
-    |        private static void $thunkName($paramList)
-    |        {
-    |$body
-    |        }
-  """.trimMargin()
+  // ADR-104: THE silent seam. A setter has no result to guard, so without the error channel a
+  // throwing setter looks to Kotlin like a write that succeeded.
+  return errorChannelThunk("void", thunkName, paramList, bodyLines)
 }
 
 // ADR-052: the constructor thunk. Mirrors ADR-051's factory thunks (e.g. Parse_Thunk) but calls
@@ -1786,17 +1797,13 @@ private fun buildCtorThunkMethod(
     "var obj = new ${cls.name}($callArgs);",
     "return GCHandle.ToIntPtr(GCHandle.Alloc(obj));",
   )
-  val body: String = bodyLines.joinToString("\n") { "            $it" }
 
-  // ADR-049 "let it crash" (unchanged for constructors, ADR-052): no try/catch — a throwing C#
-  // constructor escapes this thunk and fast-fails the host process.
-  return """
-    |        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
-    |        private static IntPtr Ctor${ctor.bridgeSuffix()}_Thunk($paramList)
-    |        {
-    |$body
-    |        }
-  """.trimMargin()
+  // ADR-104: a throwing C# constructor now returns IntPtr.Zero with the exception in errOut. The
+  // Kotlin construct helper's `requireNotNull(ptr)` must therefore run AFTER the error check, or
+  // it reports "constructor returned a null handle" instead of the real managed exception.
+  return errorChannelThunk(
+    "IntPtr", "Ctor${ctor.bridgeSuffix()}_Thunk", paramList, bodyLines,
+  )
 }
 
 private fun structRegistrationFileContent(
@@ -1857,7 +1864,7 @@ private fun structRegistrationFileContent(
         // wrapping this exact namespace/name always resolves back to [struct] in the structs map.
         val outTypes: List<String> = abiOutArgs(RirStructType(namespaceName, struct.name), structs)
           .map { "${csAbiType(it.type)}*" }
-        val types: String = (inTypes + outTypes + "void").joinToString(", ")
+        val types: String = (inTypes + outTypes + ERR_OUT_ABI + "void").joinToString(", ")
         "(IntPtr)(delegate* unmanaged[Cdecl]<$types>)" +
             "(&Ctor__${r.ctor.bridgeId()}_Thunk)"
       }
@@ -1871,10 +1878,9 @@ private fun structRegistrationFileContent(
         val outTypes: List<String> =
           abiOutArgs(r.method.returnType, structs).map { "${csAbiType(it.type)}*" }
         val retType: String = csAbiType(abiReturnType(r.method.returnType, structs))
-        val allParams: String = (receiverTypes + inTypes + outTypes).joinToString(", ")
-        val fnTypeParams: String =
-          if (allParams.isEmpty()) retType else "$allParams, $retType"
-        "(IntPtr)(delegate* unmanaged[Cdecl]<$fnTypeParams>)" +
+        val allParams: String =
+          (receiverTypes + inTypes + outTypes + ERR_OUT_ABI).joinToString(", ")
+        "(IntPtr)(delegate* unmanaged[Cdecl]<$allParams, $retType>)" +
             "(&${r.method.name}${r.method.bridgeSuffix()}_Thunk)"
       }
 
@@ -1884,10 +1890,9 @@ private fun structRegistrationFileContent(
         val outTypes: List<String> =
           abiOutArgs(r.property.type, structs).map { "${csAbiType(it.type)}*" }
         val retType: String = csAbiType(abiReturnType(r.property.type, structs))
-        val allParams: String = (receiverTypes + outTypes).joinToString(", ")
-        val fnTypeParams: String =
-          if (allParams.isEmpty()) retType else "$allParams, $retType"
-        "(IntPtr)(delegate* unmanaged[Cdecl]<$fnTypeParams>)(&${r.property.name}_Get_Thunk)"
+        val allParams: String = (receiverTypes + outTypes + ERR_OUT_ABI).joinToString(", ")
+        "(IntPtr)(delegate* unmanaged[Cdecl]<$allParams, $retType>)" +
+            "(&${r.property.name}_Get_Thunk)"
       }
 
       is RirRegistrable.PropertySetter -> error(
@@ -1971,7 +1976,6 @@ private fun buildStructMethodThunk(
   val paramList: String =
     (receiverParams + inParamDecls + outParamDecls).joinToString(", ")
   val retAbiType: String = csAbiType(abiRetType)
-  val needsUnsafe: Boolean = outArgs.isNotEmpty()
 
   val paramBindings: List<ParamBinding> = method.parameters.map { paramBinding(it, structs) }
   val paramDeclarationLines: List<String> = paramBindings.flatMap { it.declarationLines }
@@ -2036,15 +2040,9 @@ private fun buildStructMethodThunk(
   }
 
   val bodyLines: List<String> = paramDeclarationLines + callBodyLines
-  val body: String = bodyLines.joinToString("\n") { "            $it" }
-  val unsafeKeyword: String = if (needsUnsafe) "unsafe " else ""
-  return """
-    |        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
-    |        private static ${unsafeKeyword}$retAbiType $thunkName($paramList)
-    |        {
-    |$body
-    |        }
-  """.trimMargin()
+
+  // ADR-104: struct members are named in Fork A's scope (ADR-056/058).
+  return errorChannelThunk(retAbiType, thunkName, paramList, bodyLines)
 }
 
 private fun buildStructPropertyGetterThunk(
@@ -2061,7 +2059,6 @@ private fun buildStructPropertyGetterThunk(
   val outParamDecls: List<String> = outArgs.map { arg -> "${csAbiType(arg.type)}* ${arg.name}" }
   val paramList: String = (receiverParams + outParamDecls).joinToString(", ")
   val retAbiType: String = csAbiType(abiRetType)
-  val needsUnsafe: Boolean = outArgs.isNotEmpty()
   val getExpr: String = "${structReceiverReconstruction(struct, structs)}.${property.name}"
 
   val bodyLines: List<String> = when (val type: RirTypeRef = property.type) {
@@ -2117,15 +2114,8 @@ private fun buildStructPropertyGetterThunk(
     )
   }
 
-  val body: String = bodyLines.joinToString("\n") { "            $it" }
-  val unsafeKeyword: String = if (needsUnsafe) "unsafe " else ""
-  return """
-    |        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
-    |        private static ${unsafeKeyword}$retAbiType $thunkName($paramList)
-    |        {
-    |$body
-    |        }
-  """.trimMargin()
+  // ADR-104: struct members are named in Fork A's scope (ADR-056/058).
+  return errorChannelThunk(retAbiType, thunkName, paramList, bodyLines)
 }
 
 private fun buildStructCtorThunkMethod(
@@ -2147,16 +2137,16 @@ private fun buildStructCtorThunkMethod(
   val declarations: List<String> = bindings.flatMap { it.declarationLines }
   val args: String = bindings.joinToString(", ") { it.expression }
   val writes: List<String> = structOutWrites(struct, outArgs.iterator(), "result", structs)
-  val body: String = (declarations + "var result = new ${struct.name}($args);" + writes)
-    .joinToString("\n") { "            $it" }
-  return """
-    |        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
-    |        private static unsafe void Ctor__${ctor.bridgeId()}_Thunk(
-    |            ${(inParams + outParams).joinToString(", ")})
-    |        {
-    |$body
-    |        }
-  """.trimMargin()
+  val bodyLines: List<String> =
+    declarations + "var result = new ${struct.name}($args);" + writes
+
+  // ADR-104: a struct constructor is user code too.
+  return errorChannelThunk(
+    "void",
+    "Ctor__${ctor.bridgeId()}_Thunk",
+    (inParams + outParams).joinToString(", "),
+    bodyLines,
+  )
 }
 
 // ADR-051: NugetRuntimeRegistration.cs — emitted once per generateCSharpShims run when any
@@ -2190,21 +2180,24 @@ private fun nugetRuntimeRegistrationContent(
   |        [DllImport("$nativeLibraryName", CallingConvention = CallingConvention.Cdecl,
   |            EntryPoint = "nuget_runtime_register")]
   |        private static extern void nuget_runtime_register(int slotCount, long contractHash,
-  |            IntPtr freeGcHandlePtr, IntPtr weakenGcHandlePtr, IntPtr resolveGcHandlePtr);
+  |            IntPtr freeGcHandlePtr, IntPtr weakenGcHandlePtr, IntPtr resolveGcHandlePtr,
+  |            IntPtr managedErrorTypePtr, IntPtr managedErrorMessagePtr);
   |
   |        [ModuleInitializer]
   |        internal static unsafe void Initialize()
   |        {
   |            NugetTrace.Write(
-  |                "register enter <runtime> -> nuget_runtime_register(3 slots) dll=$nativeLibraryName");
+  |                "register enter <runtime> -> nuget_runtime_register(5 slots) dll=$nativeLibraryName");
   |            try
   |            {
   |                nuget_runtime_register(
-  |                    3,
+  |                    5,
   |                    ${NUGET_RUNTIME_CONTRACT_HASH}L,
   |                    (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, void>)(&FreeGcHandle_Thunk),
   |                    (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, IntPtr>)(&WeakenGcHandle_Thunk),
-  |                    (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, IntPtr>)(&ResolveGcHandle_Thunk));
+  |                    (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, IntPtr>)(&ResolveGcHandle_Thunk),
+  |                    (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, IntPtr>)(&ManagedErrorType_Thunk),
+  |                    (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, IntPtr>)(&ManagedErrorMessage_Thunk));
   |            }
   |            catch (DllNotFoundException e)
   |            {
@@ -2239,6 +2232,44 @@ private fun nugetRuntimeRegistrationContent(
   |            GCHandle.FromIntPtr(weak).Target is object target
   |                ? GCHandle.ToIntPtr(GCHandle.Alloc(target))
   |                : IntPtr.Zero;
+  |
+  |        // ADR-104: the managed half of the reverse error channel. [err] is the GCHandle a
+  |        // user-code thunk allocated for a caught exception; Kotlin reads the type name and the
+  |        // message through these two, then frees the handle through FreeGcHandle_Thunk above.
+  |        //
+  |        // The catch is not paranoia theatre: a user exception subclass can override Message (or
+  |        // GetType().FullName's backing metadata can fault) with a throwing implementation, and
+  |        // an accessor has no error channel of its own by construction: it IS the error channel.
+  |        // Returning IntPtr.Zero degrades to a null Kotlin field instead of killing the host.
+  |        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+  |        private static IntPtr ManagedErrorType_Thunk(IntPtr err)
+  |        {
+  |            try
+  |            {
+  |                object? target = GCHandle.FromIntPtr(err).Target;
+  |                return Marshal.StringToCoTaskMemUTF8(
+  |                    target?.GetType().FullName ?? "System.Exception");
+  |            }
+  |            catch (Exception)
+  |            {
+  |                return IntPtr.Zero;
+  |            }
+  |        }
+  |
+  |        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+  |        private static IntPtr ManagedErrorMessage_Thunk(IntPtr err)
+  |        {
+  |            try
+  |            {
+  |                return GCHandle.FromIntPtr(err).Target is Exception ex
+  |                    ? Marshal.StringToCoTaskMemUTF8(ex.Message)
+  |                    : IntPtr.Zero;
+  |            }
+  |            catch (Exception)
+  |            {
+  |                return IntPtr.Zero;
+  |            }
+  |        }
   |    }
   |
   |    // ADR-085: the two shared Kotlin exports a minted bridge calls. Neither is registered: both

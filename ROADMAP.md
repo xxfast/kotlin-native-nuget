@@ -81,7 +81,7 @@ Complete.
 - [ ] Re-evaluate the generated `@OptIn` for `CoroutineStart.ATOMIC` (marker moved since kotlinx.coroutines 1.9) ([details](docs/backlog/coroutine-optin-atomic-delicate.md))
 
 ## Phase 7: Bidirectional support (C# → Kotlin)
-- [ ] Exception propagation from a C# callback into Kotlin (mirror of ADR-024/028/029); ADR-102 sets the v1 fail-fast policy this replaces ([details](docs/backlog/csharp-callback-exception-into-kotlin.md))
+- [ ] Exception propagation from a C# callback into Kotlin (mirror of ADR-024/028/029); ADR-102 sets the v1 fail-fast policy this replaces. [ADR-104](docs/adr/104-reverse-thunk-error-channel.md)'s "Forward-direction convergence" section concludes this should use the same trailing-`errOut`-parameter wire shape and the same `NugetManagedException`, not a new envelope ([details](docs/backlog/csharp-callback-exception-into-kotlin.md))
 - [ ] `Flow<T>` / suspend lambda (`suspend (T) -> R`) as a function parameter
 - [ ] **The `add*/remove*` subscription route silently mis-handles two member shapes it doesn't restrict for.** ([details](docs/backlog/add-remove-subscription-route-silently-mis-handles.md))
 - [ ] **The same route's object/string parameter marshalling disposes the argument `StableRef` up to three times.** ([details](docs/backlog/same-route-s-object-string-parameter-marshalling.md))
@@ -133,13 +133,17 @@ Mirror of Phase 4: generics, collections, delegates, and the C#-specific surface
 
 ## Phase 11: Reverse exception handling
 
-Mirror of Phase 5. Any managed call can throw; until this phase, an escaping C# exception at an `[UnmanagedCallersOnly]` boundary is fatal – so this lands before async widens the call surface.
+Mirror of Phase 5. [ADR-104](docs/adr/104-reverse-thunk-error-channel.md) shipped the channel: any
+managed call can throw and the exception now reaches Kotlin as a catchable
+`NugetManagedException(managedType, message)` instead of a fatal `[UnmanagedCallersOnly]` escape.
+The four remaining items below are deliberately deferred (Fork B); each is now purely additive
+under ADR-104's design, one or two more runtime accessor slots, never touching thunk arity or the
+per-type contract hash again.
 
-- [ ] **Catch managed exceptions in registration thunks and propagate across the ABI as Kotlin exceptions** ([details](docs/backlog/catch-managed-exceptions-in-thunks.md))
-- [ ] Map core .NET exceptions to Kotlin analogs (`ArgumentException` → `IllegalArgumentException` etc. – ADR-029's table, reversed)
-- [ ] Propagate the .NET stack trace on the Kotlin exception (mirror of ADR-027)
-- [ ] Map `InnerException` → Kotlin `cause` chain (mirror of ADR-028)
-- [ ] Propagate property accessor and constructor exceptions (mirror of ADR-030/031)
+- [ ] Map core .NET exceptions to Kotlin analogs (`ArgumentException` → `IllegalArgumentException` etc. – ADR-029's table, reversed). Additive: a Kotlin `when` over `managedType`, per ADR-104 Fork D
+- [ ] Propagate the .NET stack trace on the Kotlin exception (mirror of ADR-027). Additive: one more runtime accessor slot plus one field, per ADR-104 Fork B
+- [ ] Map `InnerException` → Kotlin `cause` chain (mirror of ADR-028). Additive: a `count`/indexed accessor pair mirroring `nuget_kotlin_error_cause_*`, per ADR-104 Fork B
+- [ ] Propagate property accessor and constructor exceptions (mirror of ADR-030/031). The channel already carries these (getter/setter and constructor thunks all gained `errOut`); this line tracks the remaining ADR-029/027/028-equivalent fidelity (typed mapping, stack trace, cause chain) for those call shapes specifically
 
 ## Phase 12: Reverse async support
 
@@ -198,6 +202,8 @@ Fallout from [ADR-053](docs/adr/053-nullable-reference-types-in-kotlin.md) (reve
 - [ ] **`Tier1NamedSkipDiagnosticsTest` and `Tier1CompileCellsTest` cells that used `Short`/`Char` as stand-ins for "bridgeable but not wrappable" need a new home.** ([details](docs/backlog/tier1-short-char-standin-cells.md))
 - [ ] **Manually re-verify the Mac Catalyst repro without `MtouchInterpreter`** ([details](docs/backlog/catalyst-repro-without-mtouchinterpreter.md))
 - [ ] **No Tier 1 test had ever actually compiled a suspend fixture** ([details](docs/backlog/tier1-suspend-fixture-never-compiled.md))
+- [ ] **A bound method with an interface-typed parameter and a struct return emits an unresolvable `handleOf(...)`, failing the Kotlin compile.** ([details](docs/backlog/struct-return-interface-parameter-unresolvable-handleof.md))
+- [ ] **Four reverse doc pages (`structs.md`, `static-classes-and-methods.md`, `generic-types.md`, `instance-members.md`) show pre-ADR-104 thunk snippets missing the trailing `errOut`.** ([details](docs/backlog/reverse-doc-snippets-missing-adr-104-errout.md))
 
 ## Future Improvements
 

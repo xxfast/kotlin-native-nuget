@@ -265,7 +265,7 @@ class NugetStructMemberGenerationTest {
     assertContains(pointFile, "get()")
     assertContains(pointFile, "PointBindings.magnitudeGetterFn")
     // Receiver components expand as leading invoke args (reconstruct-on-call).
-    assertContains(pointFile, "fn.invoke(x, y)")
+    assertContains(pointFile, "fn.invoke(x, y, err)")
     // Component auto-properties must not reappear as bridge-backed getters.
     assertFalse(pointFile.contains("val x: Int\n  get()"))
     assertFalse(pointFile.contains("PointBindings.xGetterFn"))
@@ -280,14 +280,14 @@ class NugetStructMemberGenerationTest {
     assertContains(pointFile, "fun offset(dx: Int, dy: Int): Point = memScoped {")
     assertContains(pointFile, "val outX = alloc<IntVar>()")
     assertContains(pointFile, "val outY = alloc<IntVar>()")
-    assertContains(pointFile, "fn.invoke(x, y, dx, dy, outX.ptr, outY.ptr)")
+    assertContains(pointFile, "fn.invoke(x, y, dx, dy, outX.ptr, outY.ptr, err)")
     assertContains(pointFile, "Point(outX.value, outY.value)")
     assertContains(pointFile, "PointBindings.offsetFn")
 
     assertContains(pointFile, "fun format(): String")
     assertContains(pointFile, "PointBindings.formatFn")
     // Format has no ordinary args: receiver components only.
-    assertContains(pointFile, "fn.invoke(x, y)")
+    assertContains(pointFile, "fn.invoke(x, y, err)")
   }
 
   @Test
@@ -301,7 +301,7 @@ class NugetStructMemberGenerationTest {
     // Static: no leading x,y. Only out-pointers for the struct return.
     val originBody: String = pointFile.substringAfter("fun origin(): Point = memScoped {")
       .substringBefore("\n  }")
-    assertContains(originBody, "fn.invoke(outX.ptr, outY.ptr)")
+    assertContains(originBody, "fn.invoke(outX.ptr, outY.ptr, err)")
     assertFalse(
       originBody.contains("fn.invoke(x, y,"),
       "Origin must not prepend receiver components",
@@ -354,7 +354,7 @@ class NugetStructMemberGenerationTest {
     )
     val vectorFile: String = files.single { it.relativePath.endsWith("/Vector.kt") }.content
     assertContains(vectorFile, "fun negate(): Vector = memScoped {")
-    assertContains(vectorFile, "fn.invoke(x, y, outX.ptr, outY.ptr)")
+    assertContains(vectorFile, "fn.invoke(x, y, outX.ptr, outY.ptr, err)")
     val bindings: String = files.single { it.relativePath.endsWith("/VectorBindings.kt") }.content
     assertContains(bindings, "expectedSlots = 1,")
     assertContains(bindings, "negateFn")
@@ -372,7 +372,7 @@ class NugetStructMemberGenerationTest {
     // string return from reconstructed receiver: components first with their conversions.
     assertContains(
       profileFile,
-      "fn.invoke(tag.cstr.ptr, active, grade.code.toUShort(), mood.ordinal)",
+      "fn.invoke(tag.cstr.ptr, active, grade.code.toUShort(), mood.ordinal, err)",
     )
     assertContains(profileFile, "freeManagedString(")
 
@@ -402,28 +402,28 @@ class NugetStructMemberGenerationTest {
     // out-pointers (outX/outY). Reconstruction is `new Point(X, Y)`.
     assertContains(
       registration,
-      "private static int Magnitude_Get_Thunk(int X, int Y)",
+      "private static unsafe int Magnitude_Get_Thunk(int X, int Y, IntPtr* errOut)",
     )
     assertContains(registration, "new Point(X, Y).Magnitude")
 
     // Instance method returning struct: components, ordinary args, out-pointers.
     assertContains(
       registration,
-      "private static unsafe void Offset_Thunk(int X, int Y, int dx, int dy, int* outX, int* outY)",
+      "private static unsafe void Offset_Thunk(int X, int Y, int dx, int dy, int* outX, int* outY, IntPtr* errOut)",
     )
     assertContains(registration, "new Point(X, Y).Offset(dx, dy)")
     assertContains(registration, "*outX = result.X;")
     assertContains(registration, "*outY = result.Y;")
 
     // Instance method returning string.
-    assertContains(registration, "private static IntPtr Format_Thunk(int X, int Y)")
+    assertContains(registration, "private static unsafe IntPtr Format_Thunk(int X, int Y, IntPtr* errOut)")
     assertContains(registration, "new Point(X, Y).Format()")
     assertContains(registration, "Marshal.StringToCoTaskMemUTF8")
 
     // Static factory: no receiver components.
     assertContains(
       registration,
-      "private static unsafe void Origin_Thunk(int* outX, int* outY)",
+      "private static unsafe void Origin_Thunk(int* outX, int* outY, IntPtr* errOut)",
     )
     assertContains(registration, "Point.Origin()")
   }
@@ -464,7 +464,7 @@ class NugetStructMemberGenerationTest {
     )
     val registration: String =
       files.single { it.relativePath == "VectorRegistration.cs" }.content
-    assertContains(registration, "Negate_Thunk(int X, int Y, int* outX, int* outY)")
+    assertContains(registration, "Negate_Thunk(int X, int Y, int* outX, int* outY, IntPtr* errOut)")
     assertContains(registration, "new Vector(X, Y).Negate()")
   }
 
@@ -483,7 +483,7 @@ class NugetStructMemberGenerationTest {
     assertContains(registration, "using Test.Enums;")
     assertContains(
       registration,
-      "private static IntPtr Label_Get_Thunk(IntPtr TagPtr, byte Active, ushort Grade, int Mood)",
+      "private static unsafe IntPtr Label_Get_Thunk(IntPtr TagPtr, byte Active, ushort Grade, int Mood, IntPtr* errOut)",
     )
     assertContains(
       registration,
@@ -493,7 +493,7 @@ class NugetStructMemberGenerationTest {
 
     assertContains(
       registration,
-      "private static byte IsPlayful_Get_Thunk(IntPtr TagPtr, byte Active, ushort Grade, int Mood)",
+      "private static unsafe byte IsPlayful_Get_Thunk(IntPtr TagPtr, byte Active, ushort Grade, int Mood, IntPtr* errOut)",
     )
     assertContains(registration, ".IsPlayful")
 

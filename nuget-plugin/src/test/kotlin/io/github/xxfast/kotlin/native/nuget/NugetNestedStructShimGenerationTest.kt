@@ -163,7 +163,7 @@ class NugetNestedStructShimGenerationTest {
 
     assertContains(
       registration,
-      "private static unsafe void Translate_Thunk(int p_X, int p_Y, int dx, int* outX, int* outY)",
+      "private static unsafe void Translate_Thunk(int p_X, int p_Y, int dx, int* outX, int* outY, IntPtr* errOut)",
       message = "the depth-2 recursion must not change the depth-1 (already-shipped) thunk shape",
     )
     assertContains(registration, "Point result = Geometry.Translate(new Point(p_X, p_Y), dx);")
@@ -183,9 +183,9 @@ class NugetNestedStructShimGenerationTest {
 
     assertContains(
       registration,
-      "private static IntPtr Describe_Thunk(IntPtr l_Mother_TagPtr, byte l_Mother_Active, " +
+      "private static unsafe IntPtr Describe_Thunk(IntPtr l_Mother_TagPtr, byte l_Mother_Active, " +
           "ushort l_Mother_Grade, int l_Mother_Mood, int l_Basket_Width, int l_Basket_Height, " +
-          "int l_Count, int l_Mood)",
+          "int l_Count, int l_Mood, IntPtr* errOut)",
       message = "the thunk signature must be the 8 flattened LEAVES, DFS pre-order, path-named " +
           "l_Mother_Tag.. l_Basket_Height.. l_Count.. l_Mood — not 4 arguments naming whole " +
           "un-flattened structs",
@@ -214,7 +214,7 @@ class NugetNestedStructShimGenerationTest {
           "ushort l_Mother_Grade, int l_Mother_Mood, int l_Basket_Width, int l_Basket_Height, " +
           "int l_Count, int l_Mood, int by, IntPtr* outMother_Tag, byte* outMother_Active, " +
           "ushort* outMother_Grade, int* outMother_Mood, int* outBasket_Width, " +
-          "int* outBasket_Height, int* outCount, int* outMood)",
+          "int* outBasket_Height, int* outCount, int* outMood, IntPtr* errOut)",
       message = "8 in-leaves, `by`, then 8 out-pointers (one per LEAF, DFS pre-order) appended " +
           "after every in-argument — the struct return contributes no whole-struct out-pointer",
     )

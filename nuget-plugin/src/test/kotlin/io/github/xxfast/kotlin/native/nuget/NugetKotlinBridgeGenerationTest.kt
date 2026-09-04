@@ -164,7 +164,9 @@ class NugetKotlinBridgeGenerationTest {
   // kotlin_bridge_v2 tag. Both are coordinated regenerations of both halves.
   // Moved a third time by ADR-088, which registers the dup thunk for EVERY plannable interface
   // (a forward return position can hand any of them back), not just those with a handle-out slot.
-  private val contractHashOfIFeedable = -294924446988834285L
+  // ADR-104 moved every reverse contract hash onto the `reverse_v2:` tag, so this literal is
+  // the tagged one. The tag is what makes the errOut arity change visible to checkContract.
+  private val contractHashOfIFeedable = 7702881966935951518L
 
   private val rirWithSanctuary = RirFile(
     assemblies = listOf(
@@ -346,28 +348,36 @@ class NugetKotlinBridgeGenerationTest {
   }
 
   @Test
-  fun `the shared runtime registration grows to three slots and moves its contract hash`() {
+  fun `the shared runtime registration grows to five slots and moves its contract hash`() {
     val runtime: GeneratedFile = generateKotlinStubs(rir)
       .single { it.relativePath.endsWith("/NugetRuntime.kt") }
 
-    assertContains(runtime.content, "expectedSlots = 3,")
+    assertContains(runtime.content, "expectedSlots = 5,")
     assertContains(runtime.content, "expectedHash = ${NUGET_RUNTIME_CONTRACT_HASH}L,")
-    assertContains(runtime.content, "NugetRegistry.record(\"<runtime>\", 3)")
+    assertContains(runtime.content, "NugetRegistry.record(\"<runtime>\", 5)")
     assertContains(runtime.content, "weakenGcHandleFn = requireNotNull(weakenGcHandlePtr)")
     assertContains(runtime.content, "resolveGcHandleFn = requireNotNull(resolveGcHandlePtr)")
+    // ADR-104: the two managed-error accessors Kotlin reads a caught exception through.
+    assertContains(runtime.content, "managedErrorTypeFn = requireNotNull(managedErrorTypePtr)")
+    assertContains(
+      runtime.content, "managedErrorMessageFn = requireNotNull(managedErrorMessagePtr)",
+    )
     // The hash pin: both halves bake THIS literal, and it is no longer the 1-slot one.
     assertEquals(
       fnv1a64(
         "runtime:freeGcHandle(handle:COpaquePointer):Unit;" +
             "weakenGcHandle(handle:COpaquePointer):COpaquePointer;" +
-            "resolveGcHandle(handle:COpaquePointer):COpaquePointer"
+            "resolveGcHandle(handle:COpaquePointer):COpaquePointer;" +
+            "managedErrorType(err:COpaquePointer):COpaquePointer;" +
+            "managedErrorMessage(err:COpaquePointer):COpaquePointer"
       ),
       NUGET_RUNTIME_CONTRACT_HASH,
     )
     assertNotEquals(
       fnv1a64("runtime:freeGcHandle(handle:COpaquePointer):Unit"),
       NUGET_RUNTIME_CONTRACT_HASH,
-      "ADR-089: growing the shared runtime from 1 slot to 3 MUST move the contract hash, so a " +
+      "ADR-089/104: growing the shared runtime from 1 slot to 5 MUST move the contract hash, " +
+          "so a " +
           "stale shim fails the ADR-054 check instead of mis-assigning pointers",
     )
   }
@@ -429,14 +439,15 @@ class NugetKotlinBridgeGenerationTest {
     // Method parameter position, with a string return (so both scopes nest, transfer outermost).
     assertContains(
       file.content,
-      "val resultPtr = nugetTransferScope { fn.invoke(handle.require(\"Sanctuary\"), " +
-          "handleOf(feedable, \"Test.Menagerie.IFeedable\")) }",
+      "val resultPtr = nugetCall { err -> nugetTransferScope { " +
+          "fn.invoke(handle.require(\"Sanctuary\"), " +
+          "handleOf(feedable, \"Test.Menagerie.IFeedable\"), err) } }",
     )
     // Property-setter position, nullable: the same scope, through handleOfOrNull.
     assertContains(
       file.content,
-      "nugetTransferScope { fn.invoke(handle.require(\"Sanctuary\"), " +
-          "handleOfOrNull(value, \"Test.Menagerie.IFeedable\")) }",
+      "nugetCall { err -> nugetTransferScope { fn.invoke(handle.require(\"Sanctuary\"), " +
+          "handleOfOrNull(value, \"Test.Menagerie.IFeedable\"), err) } }",
     )
     assertContains(
       file.content, "import io.github.xxfast.kotlin.native.nuget.internal.nugetTransferScope",
