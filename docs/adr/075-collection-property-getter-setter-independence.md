@@ -240,6 +240,18 @@ Add the two missing `Collection` routes so `Nullable(Collection)` is total:
 Getter eligibility is unchanged from the non-null collection getter: no element-type restriction
 (**verified**, `FromHandle<T>` is a single runtime-generic helper).
 
+> **Amendment (2026-09-04, refs [#52](https://github.com/xxfast/kotlin-native-nuget/issues/52)):**
+> "no element-type restriction" was true of marshalling and false of spelling. `FromHandle<T>` is
+> runtime-generic, but the C# read still has to name `T`, and `csharpType()` has no spelling for a
+> sealed helper (class or interface), a bound interface, or a raw/unsupported type. A `List<Shape>`
+> property with `Shape` sealed therefore passed `isPlannable` and crashed the projection with
+> `No C# property type for SpecializedProtocol(...)`, where the bare `Shape?` spelling already
+> skipped with `SKIPPED_UNSUPPORTED_PROPERTY`. A collection property now plans only when every
+> component (element, or map key and value, recursively) has a C# spelling, and the diagnostic
+> names the failing slot: `Collection (element type sealed helper sample.Shape)`. The read gate is
+> still deliberately wider than the setter's `isWrappableComponent` above: `Instant`, `Duration`
+> and interface components keep reading exactly as before.
+
 **2. Setter eligibility.** A setter is planned when **all** hold:
 
 - the declared type is a `BridgeType.Collection` of any kind (`LIST`, `MUTABLE_LIST`, `MAP`, `MUTABLE_MAP`,

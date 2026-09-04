@@ -146,6 +146,18 @@ same way, naming the property's own type. `Cat.unsupported: Sequence<String>` is
     at Cat.kt:46
 ```
 
+A collection property is skipped the same way when one of its components (the element, or a map
+key or value) has no C# spelling, a sealed type being the common case. The diagnostic names the
+slot that failed rather than the collection alone:
+
+```
+[nuget:SKIPPED_UNSUPPORTED_PROPERTY] Skipping Album.shapes: its type Collection (element type sealed
+    helper sample.Shape) has no property getter or setter shape. expose a bridgeable property (or a
+    getter function) whose type is not Collection (element type sealed helper sample.Shape), and
+    export that instead
+    at Album.kt:5
+```
+
 `SKIPPED_UNSUPPORTED_PROPERTY` never fires for a property whose type is a lambda, suspend lambda,
 `Flow`, or `StateFlow` (nullable or not): those are unplannable by design and still bind through a
 named legacy route, so warning would tell a consumer a working property had vanished.
