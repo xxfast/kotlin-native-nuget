@@ -208,6 +208,52 @@ Assert.Equal(2, items.Count);
     throw.</p>
 </note>
 
+## Payload types from another namespace
+
+A sealed subclass whose property types come from a different exported package spells them fully qualified, `global::Namespace.Name`, in the property type, the `new List<T>(count)` allocation, the `FromHandle<T>` element read and the `new T(handle)` constructor call ([#50](https://github.com/xxfast/kotlin-native-nuget/issues/50)). This is the same rule [#41](https://github.com/xxfast/kotlin-native-nuget/issues/41) applied to top-level classes; the sealed-subclass renderer had been left on bare simple names, which only resolve when both types happen to share a namespace.
+
+### Kotlin {id="cross-namespace-sealed-kotlin"}
+
+From `test-library/src/nativeMain/kotlin/.../Issue50Feed.kt` (root package) and `.../issue50/Issue50Remote.kt` (sub-package):
+
+```kotlin
+sealed class Issue50State {
+  data object Loading : Issue50State()
+
+  data class Success(
+    val crew: List<Issue50Assignment>,
+    val position: Issue50Position,
+  ) : Issue50State()
+}
+```
+
+### Generated C# {id="cross-namespace-sealed-csharp"}
+
+`Issue50State` lands in `TestLibrary`; its payloads land in `TestLibrary.Issue50`:
+
+```C#
+public sealed class Success : Issue50State
+{
+    public IReadOnlyList<global::TestLibrary.Issue50.Issue50Assignment> Crew
+    {
+        get
+        {
+            // ...
+            var result = new List<global::TestLibrary.Issue50.Issue50Assignment>(count);
+            for (int i = 0; i < count; i++)
+            {
+                result.Add(NugetMarshal.FromHandle<global::TestLibrary.Issue50.Issue50Assignment>(NugetListNative.Get(listHandle, i)));
+            }
+            // ...
+        }
+    }
+
+    public global::TestLibrary.Issue50.Issue50Position Position => new global::TestLibrary.Issue50.Issue50Position(Native_Get_position(_handle, out _));
+}
+```
+
+`Map` and `Set` components and enum-typed properties on a sealed subclass take the same spelling.
+
 ## Nullable properties on sealed subclasses
 
 A nullable property on a sealed subclass, a class nested inside its sealed parent, exports nullable and carries the same `errorOut` convention the top-level path uses ([#38](https://github.com/xxfast/kotlin-native-nuget/issues/38)). `String?` renders as one export returning `string?`; `Int?` follows the two-call `_has_value`/`_value` convention (see [Primitives and strings](primitives-and-strings.md)), collapsed into a single C# expression.

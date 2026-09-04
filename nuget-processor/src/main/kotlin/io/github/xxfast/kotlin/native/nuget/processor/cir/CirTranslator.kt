@@ -310,7 +310,7 @@ internal fun translate(
   sealedClasses.forEach { sealed ->
     namespaces.addDeclaration(
       namespaceOf(sealed.packageName.asString()),
-      translateSealedClass(sealed, context.libraryName, tracker, exportedTypes, logger),
+      translateSealedClass(sealed, context, tracker, exportedTypes, logger),
     )
   }
 

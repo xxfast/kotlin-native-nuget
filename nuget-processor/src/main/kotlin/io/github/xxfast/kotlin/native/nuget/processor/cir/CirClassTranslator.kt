@@ -8,6 +8,7 @@ import com.google.devtools.ksp.symbol.KSFunctionDeclaration
 import com.google.devtools.ksp.symbol.KSNode
 import com.google.devtools.ksp.symbol.KSPropertyDeclaration
 import com.google.devtools.ksp.symbol.KSType
+import com.google.devtools.ksp.symbol.KSTypeArgument
 import com.google.devtools.ksp.symbol.Modifier
 import com.google.devtools.ksp.symbol.Variance
 import com.google.devtools.ksp.symbol.Visibility
@@ -962,11 +963,12 @@ internal fun translateGenericClass(
 
 internal fun translateSealedClass(
   cls: KSClassDeclaration,
-  libraryName: String,
+  context: NugetContext,
   tracker: CollectionHelperTracker,
   exportedTypes: Set<String>,
   logger: KSPLogger,
 ): CirSealedClass {
+  val libraryName: String = context.libraryName
   val name: String = cls.simpleName.asString()
   val prefix: String = name.lowercase()
 
@@ -986,6 +988,12 @@ internal fun translateSealedClass(
             val propName: String = prop.simpleName.asString()
             val propTypeResolved: KSType = prop.type.resolve().expandAliases()
             val propType: String = propTypeResolved.declaration.simpleName.asString()
+            // Issue #50: the simple name above is only ever a *lookup key* into the scalar tables.
+            // Every C# spelling of a reference or enum type goes through `qualifiedElementCsType`,
+            // the same `global::Namespace.Name` rule #47 applied to the top-level class renderer,
+            // so a payload type from another exported package resolves from inside this
+            // hierarchy's namespace (CS0246 otherwise).
+            val csPropType: String = qualifiedElementCsType(propTypeResolved, context)
             val isNullable: Boolean = propTypeResolved.isMarkedNullable
             val csPropName: String = propName.replaceFirstChar { it.uppercase() }
 
@@ -1000,28 +1008,23 @@ internal fun translateSealedClass(
             val isSetType: Boolean = qualifiedTypeName == "kotlin.collections.Set"
             val isMutableSetType: Boolean = qualifiedTypeName == "kotlin.collections.MutableSet"
 
+            // Issue #50: collection components take the same qualified spelling (a known scalar
+            // keeps its C# primitive, exactly as the simple-name table lookup did before).
+            val typeArguments: List<KSTypeArgument> = propTypeResolved.arguments
             val listElementType: String? = if (isListType || isMutableListType) {
-              val elementType = propTypeResolved.arguments.firstOrNull()?.type?.resolve()
-              val elementTypeName: String = elementType?.declaration?.simpleName?.asString() ?: "Any"
-              KOTLIN_TO_CSHARP_PARAM[elementTypeName] ?: elementTypeName
+              qualifiedElementCsType(typeArguments.firstOrNull()?.type?.resolve(), context)
             } else null
 
             val mapKeyType: String? = if (isMapType || isMutableMapType) {
-              val keyType = propTypeResolved.arguments.getOrNull(0)?.type?.resolve()
-              val keyTypeName: String = keyType?.declaration?.simpleName?.asString() ?: "Any"
-              KOTLIN_TO_CSHARP_PARAM[keyTypeName] ?: keyTypeName
+              qualifiedElementCsType(typeArguments.getOrNull(0)?.type?.resolve(), context)
             } else null
 
             val mapValueType: String? = if (isMapType || isMutableMapType) {
-              val valueType = propTypeResolved.arguments.getOrNull(1)?.type?.resolve()
-              val valueTypeName: String = valueType?.declaration?.simpleName?.asString() ?: "Any"
-              KOTLIN_TO_CSHARP_PARAM[valueTypeName] ?: valueTypeName
+              qualifiedElementCsType(typeArguments.getOrNull(1)?.type?.resolve(), context)
             } else null
 
             val setElementType: String? = if (isSetType || isMutableSetType) {
-              val elementType = propTypeResolved.arguments.firstOrNull()?.type?.resolve()
-              val elementTypeName: String = elementType?.declaration?.simpleName?.asString() ?: "Any"
-              KOTLIN_TO_CSHARP_PARAM[elementTypeName] ?: elementTypeName
+              qualifiedElementCsType(typeArguments.firstOrNull()?.type?.resolve(), context)
             } else null
 
             if (isListType || isMutableListType) tracker.needsList = true
@@ -1096,9 +1099,9 @@ internal fun translateSealedClass(
               isMutableSetType -> "ISet<$setElementType>"
               propType == "String" && isNullable -> "string?"
               propType == "String" -> "string"
-              isEnumType -> propType
-              isReferenceType && isNullable -> "$propType?"
-              isReferenceType -> propType
+              isEnumType -> csPropType
+              isReferenceType && isNullable -> "$csPropType?"
+              isReferenceType -> csPropType
               isNullablePrimitiveTwoCall -> "${mapReturnType(propType)}?"
               else -> mapReturnType(propType)
             }
@@ -1174,9 +1177,9 @@ internal fun translateSealedClass(
                 "Marshal.PtrToStringUTF8(Native_Get_$propName(_handle, out _))"
 
               propType == "String" -> "Marshal.PtrToStringUTF8(Native_Get_$propName(_handle, out _))!"
-              isEnumType -> "($propType)Native_Get_$propName(_handle, out _)"
-              isReferenceType && isNullable -> "Native_Get_$propName(_handle, out _) == IntPtr.Zero ? null : new $propType(Native_Get_$propName(_handle, out _))"
-              isReferenceType -> "new $propType(Native_Get_$propName(_handle, out _))"
+              isEnumType -> "($csPropType)Native_Get_$propName(_handle, out _)"
+              isReferenceType && isNullable -> "Native_Get_$propName(_handle, out _) == IntPtr.Zero ? null : new $csPropType(Native_Get_$propName(_handle, out _))"
+              isReferenceType -> "new $csPropType(Native_Get_$propName(_handle, out _))"
               // Issue #38: the ADR-002 two-call read, kept as a single C# expression so the
               // sealed renderer's `=> getter;` form still applies. The cast pins the conditional's
               // type to the nullable primitive rather than leaving `null` untyped.

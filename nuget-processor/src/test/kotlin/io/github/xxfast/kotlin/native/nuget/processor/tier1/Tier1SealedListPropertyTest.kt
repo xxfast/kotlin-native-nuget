@@ -39,7 +39,7 @@ class Tier1SealedListPropertyTest {
     assertContains(
       result.generatedCSharp,
       """
-      |            public IReadOnlyList<Item> Items
+      |            public IReadOnlyList<global::Interop.Item> Items
       |            {
       |                get
       |                {
