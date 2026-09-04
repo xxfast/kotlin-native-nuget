@@ -224,7 +224,10 @@ internal object ForwardCirPropertyProjection {
 
       is BridgeType.Nullable -> when (val inner = value.type) {
         BridgeType.String -> append("            return Marshal.PtrToStringUTF8(nativeResult);")
-        is BridgeType.ObjectHandle -> append("            return nativeResult == IntPtr.Zero ? null : new ${inner.csharpType()}(nativeResult);")
+        is BridgeType.ObjectHandle -> append(
+          "            return nativeResult == IntPtr.Zero ? null : " +
+              "${inner.handleReconstruction()};",
+        )
         // ADR-040: construct via the backing wrapper class, not the interface spelling.
         is BridgeType.Interface -> append(
           "            return nativeResult == IntPtr.Zero ? null : " +
@@ -255,13 +258,28 @@ internal object ForwardCirPropertyProjection {
       // ADR-103: the same lift into a TimeSpan.
       BridgeType.Duration -> append("            return ${durationLiftCs("nativeResult")};")
 
-      is BridgeType.ObjectHandle -> append("            return new ${value.csharpType()}(nativeResult);")
+      is BridgeType.ObjectHandle -> append("            return ${value.handleReconstruction()};")
       is BridgeType.Interface ->
         append("            return ${interfaceReturnExpression(value.csharpType(), value.backingType)};")
 
       is BridgeType.Collection -> append(collectionMaterialize(value))
       else -> append("            return nativeResult;")
     }
+  }
+
+  /**
+   * ADR-105 (issue #54): the C# expression that turns a handle back into its declared type. An
+   * ordinary handle-backed class takes its `internal T(IntPtr)` constructor; an ADR-009 sealed
+   * *base* is `abstract`, so `new` is CS0144 and the reconstruction goes through the generated
+   * `internal static T FromHandle(IntPtr)` discriminator instead — the same spelling a top-level
+   * sealed *return* already renders, so a consumer sees one idiom either way.
+   */
+  private fun BridgeType.ObjectHandle.handleReconstruction(
+    wireValue: String = "nativeResult",
+  ): String = if (viaDiscriminator) {
+    "${csharpType()}.FromHandle($wireValue)"
+  } else {
+    "new ${csharpType()}($wireValue)"
   }
 
   /**

@@ -16,6 +16,7 @@ Complete.
 - [ ] **Deferred from ADR-074's v1 scope** ([details](docs/backlog/deferred-from-adr-074-s-v1-scope.md))
 - [ ] **The identical hole exists for an unexported base class: `class X : UnexportedBase()` renders a dangling supertype** ([details](docs/backlog/unexported-base-class-dangling-supertype.md))
 - [ ] **A value class whose underlying enum/class lives in a different namespace emits a bare member type in its `readonly record struct`** ([details](docs/backlog/value-class-cross-namespace-underlying.md))
+- [ ] **A class nested inside another exported class spells a bare simple name, dropping the enclosing scope.** ([details](docs/backlog/nested-object-handle-csharptypenamefor-simplename-only.md))
 
 ## Phase 3: Basic type support
 - [ ] **Suspected dead branch: `CirClassRenderer.renderClass`'s `implements` `when` has an `else -> " : INugetHandle"` case that looks unreachable.** ([details](docs/backlog/renderclass-implements-dead-branch.md))
@@ -30,7 +31,8 @@ Complete.
 - [ ] Sealed-path `bool` `DllImport`s lack `[return: MarshalAs(UnmanagedType.I1)]` (only the new `_has_value` import for `Int?` has it), so a non-null `Boolean` sealed-subclass property, or the `_value` import of a `Boolean?` one, would marshal a 4-byte C# bool against Kotlin's 1-byte return. Unverified by a fixture. Discovered alongside [#38](https://github.com/xxfast/kotlin-native-nuget/issues/38).
 - [ ] **Only the `List`/`MutableList` sealed-subclass getters read the error slot back** ([details](docs/backlog/sealed-subclass-getter-error-slot.md))
 - [ ] **A class method returning a sealed type is silently dropped, with no diagnostic.** A top-level `fun loaded(): State` binds (the #39/#50 fixtures), but the same signature as a method on an exported class generates nothing and warns nothing: the class came out with only its constructor and `Dispose()`. Found while building the [#50](https://github.com/xxfast/kotlin-native-nuget/issues/50) fixture, established by one `packNuget` run, not chased.
-- [ ] **Sealed types at property and collection-component positions are skipped, not bridged.** A sealed value already crosses as a handle at return, `StateFlow<T>` and `Flow<List<T>>` positions and is discriminated back by `FromHandle` ([#40](https://github.com/xxfast/kotlin-native-nuget/issues/40)), but a property (`val shape: Shape?`, [#54](https://github.com/xxfast/kotlin-native-nuget/issues/54)), a collection component in a property (`List<Shape>`, [#52](https://github.com/xxfast/kotlin-native-nuget/issues/52)) and a collection component in a return or parameter (`fun x(): List<Shape>`) all skip named. Same handle in a different slot, so one feature closes all three.
+- [ ] **Sealed collection components at return and parameter positions are not bridged.** ([details](docs/backlog/sealed-collection-return-parameter-position.md))
+- [ ] **`fun x(): List<Shape>`, and a bare sealed-typed parameter (`fun f(shape: Shape)`, a constructor with sealed-typed parameters), vanish from C# with no diagnostic instead of skipping named.** ([details](docs/backlog/sealed-collection-return-silently-drops.md))
 
 ## Phase 4: Rich type support
 - [ ] **A null lambda argument cannot cross the callback bridge.** ([details](docs/backlog/null-lambda-argument-cannot-cross-callback-bridge.md))

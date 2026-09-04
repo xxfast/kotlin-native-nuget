@@ -56,6 +56,19 @@ internal sealed interface BridgeType {
   data class ObjectHandle(
     val qualifiedName: kotlin.String,
     val csharpType: kotlin.String = qualifiedName.substringAfterLast('.'),
+    /**
+     * ADR-105: this handle names an ADR-009 sealed *base*, whose generated C# class is `abstract`.
+     * The wire is identical to any other handle (a `StableRef` to the base-typed value, which the
+     * `<name>_get_type` discriminator export reads back as `asStableRef<Base>()`), but the C#
+     * reconstruction has to go through the generated `internal static Base FromHandle(IntPtr)`
+     * discriminator instead of `new Base(handle)`, which is CS0144 on an abstract type.
+     *
+     * It also gates the collection *write* side: [isWrappableComponent] refuses a discriminated
+     * handle, so a `var shapes: MutableList<Shape>` plans get-only under the existing ADR-075
+     * read-only diagnostic rather than boxing a sealed base through the ADR-073 write path, which
+     * no fixture has ever run for an abstract C# base.
+     */
+    val viaDiscriminator: kotlin.Boolean = false,
   ) : BridgeType
 
   /**
@@ -127,8 +140,20 @@ internal sealed interface BridgeType {
 
   data class Nullable(val type: BridgeType) : BridgeType
 
-  /** Protocols remain on named legacy routes until their dedicated planning adapters exist. */
-  data class SpecializedProtocol(val name: kotlin.String) : BridgeType
+  /**
+   * Protocols remain on named legacy routes until their dedicated planning adapters exist.
+   *
+   * @param sealedHandle ADR-105: for a `sealed helper <fqn>` protocol over an exported sealed
+   *   *class*, the [ObjectHandle] this type would be if the position could bridge it. Carried so a
+   *   position that CAN (today: a property, per ADR-105 scope (c)) unwraps it without the
+   *   classifier having to know which position it is classifying for. `null` for every other
+   *   protocol, and for a sealed *interface* or an out-of-scope sealed class, neither of which the
+   *   ADR-009 renderer gives a `FromHandle` discriminator to reconstruct through.
+   */
+  data class SpecializedProtocol(
+    val name: kotlin.String,
+    val sealedHandle: ObjectHandle? = null,
+  ) : BridgeType
 
   /** A planning bug: raw KSP types must not leak beyond classification. */
   data class RawKSType(val rendered: kotlin.String) : BridgeType

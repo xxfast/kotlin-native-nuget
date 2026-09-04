@@ -2555,7 +2555,13 @@ internal fun BridgeType.isWrappableComponent(): Boolean = when (this) {
   // the C# side pinned to that width by `[MarshalAs(UnmanagedType.U2)]`.
   BridgeType.Char -> true
 
-  is BridgeType.ObjectHandle -> true
+  // ADR-105: every ordinary handle boxes through `CreateList`/`CreateMap`/`CreateSet`'s reflective
+  // `_handle` fallback, but a *discriminated* one (an ADR-009 sealed base) does not: that write
+  // path has never been rendered or run for an abstract C# base. Refusing it here is what makes a
+  // `var shapes: MutableList<Shape>` property plan get-only under the existing ADR-075 read-only
+  // diagnostic, and it keeps the parameter-position boxing (ADR-105 scope (d)) closed too, since
+  // this predicate is the shared gate for both.
+  is BridgeType.ObjectHandle -> !viaDiscriminator
 
   // ADR-097: a *bare* enum component rides the same int-ordinal wire ADR-081 minted for a value
   // class over an enum, projected per element at the C# call site (`(int)x`) and re-wrapped as

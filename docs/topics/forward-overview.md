@@ -7,7 +7,7 @@ The forward direction takes a Kotlin/Native library and generates a C# API for i
 At build time:
 
 1. **KSP discovers public declarations.** The KSP processor (`nuget-processor/`) walks every public class, function, and property in the compiled Kotlin/Native source set.
-2. **Ordinary sync callables are planned once.** Each ordinary synchronous function, method, constructor, property, companion, object method, extension, and value-class member is classified into a `BridgeType` and validated as a `ForwardCallablePlan` or `ForwardPropertyPlan` ([ADR-062](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/062-forward-callable-plan.md)). Specialized protocols (suspend, `Flow`, lambda/callback, sealed helpers, generic declaration families) stay on named legacy routes.
+2. **Ordinary sync callables are planned once.** Each ordinary synchronous function, method, constructor, property, companion, object method, extension, and value-class member is classified into a `BridgeType` and validated as a `ForwardCallablePlan` or `ForwardPropertyPlan` ([ADR-062](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/062-forward-callable-plan.md)). Specialized protocols (suspend, `Flow`, lambda/callback, sealed helpers, generic declaration families) stay on named legacy routes; a sealed helper is the one exception at a **property** position, where the property planner now plans it directly instead ([ADR-105](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/105-sealed-property-position.md)): a sealed **return** still rides the legacy route unchanged. See [Interfaces, abstract classes, and sealed classes: Limitations](interfaces-abstract-sealed.md#limitations) for exactly which sealed positions still skip.
 3. **Dual projection from the plan.** The same plan projects to CIR for C# ([ADR-004](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/004-cir-intermediate-representation.md)) and to KotlinPoet `@CName` exports. A generation-time ABI contract check ([ADR-055](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/055-forward-abi-contract-check.md)) compares both halves to the plan. The same check also covers the specialized legacy routes ([ADR-078](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/078-forward-abi-legacy-contract-coverage.md)): since their `DllImport` declarations are raw renderer text rather than plan output, they are collected straight from the rendered `Interop.cs` and normalized the same way before being compared against their Kotlin `@CName` exports.
 4. **`CirRenderer` emits `Interop.cs`.** The C# source is generated once, at Kotlin build time, and shipped inside the package. There is no consumer-side codegen step, unlike the `ClangSharpPInvokeGenerator`-based approach from earlier phases (see [ADR-001](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/001-csharp-codegen-in-consumer.md)).
 5. **KotlinPoet emits `Bridges.kt`.** Kotlin-side `@CName` export wrappers are generated so every bridged declaration has a stable C ABI entry point.
@@ -147,15 +147,19 @@ same way, naming the property's own type. `Cat.unsupported: Sequence<String>` is
 ```
 
 A collection property is skipped the same way when one of its components (the element, or a map
-key or value) has no C# spelling, a sealed type being the common case. The diagnostic names the
-slot that failed rather than the collection alone:
+key or value) has no C# spelling. A sealed **class** component no longer falls into this bucket:
+since [ADR-105](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/105-sealed-property-position.md)
+it binds, materialised through the ADR-009 `FromHandle` discriminator (see
+[Sealed types as property types](interfaces-abstract-sealed.md#sealed-types-as-property-types)). A
+sealed **interface** component still has no C# spelling to bind against, because only a sealed
+*class* gets a `FromHandle` discriminator, so it still skips, naming the offending component:
 
 ```
-[nuget:SKIPPED_UNSUPPORTED_PROPERTY] Skipping Album.shapes: its type Collection (element type sealed
-    helper sample.Shape) has no property getter or setter shape. expose a bridgeable property (or a
-    getter function) whose type is not Collection (element type sealed helper sample.Shape), and
-    export that instead
-    at Album.kt:5
+[nuget:SKIPPED_UNSUPPORTED_PROPERTY] Skipping tier1.sealedcollectionproperty.Album.filters: its type
+    Collection (element type sealed helper tier1.sealedcollectionproperty.Filter) has no property
+    getter or setter shape. expose a bridgeable property (or a getter function) whose type is not
+    Collection (element type sealed helper tier1.sealedcollectionproperty.Filter), and export that
+    instead
 ```
 
 `SKIPPED_UNSUPPORTED_PROPERTY` never fires for a property whose type is a lambda, suspend lambda,
