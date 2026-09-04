@@ -3,6 +3,7 @@ package io.github.xxfast.kotlin.native.nuget.processor.forward
 import com.google.devtools.ksp.getVisibility
 import com.google.devtools.ksp.symbol.ClassKind
 import com.google.devtools.ksp.symbol.KSClassDeclaration
+import com.google.devtools.ksp.symbol.KSDeclaration
 import com.google.devtools.ksp.symbol.KSFunctionDeclaration
 import com.google.devtools.ksp.symbol.KSPropertyDeclaration
 import com.google.devtools.ksp.symbol.KSType
@@ -43,7 +44,9 @@ internal data class ForwardReachabilityResult(
  * (`A.b: B`, `B.a: A`) terminates on the second visit.
  */
 internal class ForwardReachabilityClosure(
-  private val isPackageExported: (String) -> Boolean,
+  /** ADR-063's scope predicate over the declaration itself (issue #53: `exclude` may name a
+   *  qualified declaration, not only a package), shared with the root scan. */
+  private val isExported: (KSDeclaration) -> Boolean,
   /** ADR-066 admission rule 4: with neither `rootPackage` nor `include` set, the closure must not
    *  cross the module boundary at all (or it would walk straight into `kotlinx-coroutines`). An
    *  empty effective include set means "admit everything" for the module's own files (ADR-063),
@@ -165,7 +168,7 @@ internal class ForwardReachabilityClosure(
       // `exclude(...)` package filtered out of the root scan. Only recurse when it independently
       // passes the same predicate roots already did; otherwise leave it exactly as unadmitted as
       // it already was (the classifier's existing "not in the exported object-handle set" path).
-      if (isPackageExported(classDeclaration.packageName.asString())) {
+      if (isExported(classDeclaration)) {
         walkClassMembers(classDeclaration)
       }
       return
@@ -174,7 +177,7 @@ internal class ForwardReachabilityClosure(
     // Cross-module (klib) declaration: ADR-066's admission predicate.
     if (classDeclaration.getVisibility() != Visibility.PUBLIC) return
     if (!crossModuleAdmissionAllowed) return
-    if (!isPackageExported(classDeclaration.packageName.asString())) return
+    if (!isExported(classDeclaration)) return
 
     admitted[qualifiedName] = classDeclaration
     bucketOf[qualifiedName] = classDeclaration.reachabilityBucket()

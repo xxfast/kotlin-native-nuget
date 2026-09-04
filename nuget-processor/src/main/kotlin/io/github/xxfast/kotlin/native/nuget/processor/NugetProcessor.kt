@@ -254,15 +254,22 @@ class NugetProcessor(
       else -> emptyList()
     }
 
-    fun isPackageExported(pkg: String): Boolean {
+    fun isExported(declaration: KSDeclaration): Boolean {
+      val pkg: String = declaration.packageName.asString()
+      val qualifiedName: String? = declaration.qualifiedName?.asString()
       fun matches(p: String) = pkg == p || pkg.startsWith("$p.")
+      // Issue #53: `exclude(...)` also accepts a qualified declaration name, and everything
+      // nested under it (a sealed base takes its subclasses with it). Package-level exclusion
+      // took whole packages of wanted API with it whenever one member could not be bridged.
+      fun matchesDeclaration(p: String) =
+        qualifiedName != null && (qualifiedName == p || qualifiedName.startsWith("$p."))
       // ADR-063 "Reverse-bound packages are always in scope": checked first, before exclude and
       // before include. A module that both publishes forward and consumes via `bind {}` returns
       // reverse-bound types from its own forward code; dropping the bound stub's declaration
       // while the forward-generated C# still references it is a dangling-reference build break,
       // not a scoping choice the user asked for.
       if (context.boundPackages.any(::matches)) return true
-      if (context.excludePackages.any(::matches)) return false
+      if (context.excludePackages.any { matches(it) || matchesDeclaration(it) }) return false
       if (effectiveInclude.isEmpty()) return true
       return effectiveInclude.any(::matches)
     }
@@ -284,8 +291,7 @@ class NugetProcessor(
       .filter { !it.isExpect }
       .toList()
 
-    val allDeclarations: List<KSDeclaration> = candidateDeclarations
-      .filter { isPackageExported(it.packageName.asString()) }
+    val allDeclarations: List<KSDeclaration> = candidateDeclarations.filter(::isExported)
 
     // Issue #55: scoping that admits nothing used to be indistinguishable from a module with no
     // public API at all: `packNuget` stayed green with no `Interop.cs` in the package. Say so
@@ -434,10 +440,10 @@ class NugetProcessor(
     // ADR-066: the reachability closure discovers dependency-module (klib) declarations reachable
     // from these module-local roots — the only way in, since `getDeclarationsFromPackage` returns
     // empty for a klib dependency (verified). A discovered declaration is admitted iff it passes
-    // the same `isPackageExported` predicate the roots already did, and only when the module
+    // the same `isExported` predicate the roots already did, and only when the module
     // crosses into `include`/`rootPackage` scope at all (admission rule 4).
     val reachability: ForwardReachabilityResult = ForwardReachabilityClosure(
-      isPackageExported = ::isPackageExported,
+      isExported = ::isExported,
       crossModuleAdmissionAllowed = effectiveInclude.isNotEmpty(),
       actualTypeAliasTargets = actualTypeAliasTargets,
     ).walk(

@@ -404,3 +404,12 @@ from the already-filtered `allDeclarations`.
 - Per-declaration opt-out annotation.
 - Cross-module reachability closure (MF-003), sequenced after forward diagnostics and the
   value-class-parameter fix.
+
+> **Amendment (2026-09-04, refs [#53](https://github.com/xxfast/kotlin-native-nuget/issues/53)):**
+> `exclude(...)` was package-prefix only, matched against `packageName`, so a qualified type name
+> silently matched nothing: the only way to route around one unbridgeable member was to drop its
+> whole package. The predicate now runs over the declaration: `exclude` also matches a qualified
+> declaration name and everything nested under it (a sealed base takes its subclasses), and the
+> ADR-066 reachability closure uses the same declaration-level predicate. `include` stays
+> package-level; a per-declaration opt-in has no use case yet. The "per-declaration opt-out
+> annotation" deferred above is now partly covered from the build script side.
