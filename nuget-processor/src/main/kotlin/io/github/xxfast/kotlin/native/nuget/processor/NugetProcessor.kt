@@ -114,6 +114,8 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.toDiagnosticKind
 internal fun warnDroppedForwardCallables(
   catalog: ForwardCallablePlanCatalog,
   logger: KSPLogger,
+  // Issue #55: the effective include set, so an `include(...)` hint can name the whole line.
+  scope: List<String> = emptyList(),
 ) {
   val diagnostics: List<ForwardDiagnostic> = catalog.droppedCallables.map { dropped ->
     ForwardDiagnostic(
@@ -121,7 +123,7 @@ internal fun warnDroppedForwardCallables(
       symbol = dropped.node,
       declaration = dropped.symbol,
       reason = "its ${dropped.reason} type combination is not supported",
-      hint = dropped.reason.diagnosticHint(dropped.detail),
+      hint = dropped.reason.diagnosticHint(dropped.detail, scope),
     )
   }
   ForwardDiagnosticSink.emit(diagnostics, logger)
@@ -273,15 +275,53 @@ class NugetProcessor(
       .flatMap { it.declarations }
       .toList()
 
-    val allDeclarations: List<KSDeclaration> = allFilesDeclarations
+    val candidateDeclarations: List<KSDeclaration> = allFilesDeclarations
       .filter { it.packageName.asString() != "io.github.xxfast.kotlin.native.nuget.generated" }
       // ADR-074: the `actual` is the export root. Without this every pair is planned twice under
       // one qualified name and trips a catalog duplicate guard. Same rule, same three declaration
       // kinds, as Kotlin/Native's own C export (`CAdapterGenerator`) and ObjC export. No
       // diagnostic: filtering an `expect` is normal and every Kotlin backend does it silently.
       .filter { !it.isExpect }
-      .filter { isPackageExported(it.packageName.asString()) }
       .toList()
+
+    val allDeclarations: List<KSDeclaration> = candidateDeclarations
+      .filter { isPackageExported(it.packageName.asString()) }
+
+    // Issue #55: scoping that admits nothing used to be indistinguishable from a module with no
+    // public API at all: `packNuget` stayed green with no `Interop.cs` in the package. Say so
+    // once, naming the scope that did it, before the `hasNothingToProcess` early return below.
+    if (allDeclarations.isEmpty() && candidateDeclarations.isNotEmpty()) {
+      val scope: String = buildList {
+        if (context.includePackages.isNotEmpty()) {
+          add("include(${context.includePackages.joinToString { "\"$it\"" }})")
+        }
+        if (context.excludePackages.isNotEmpty()) {
+          add("exclude(${context.excludePackages.joinToString { "\"$it\"" }})")
+        }
+        if (context.rootPackage.isNotBlank()) add("rootPackage = \"${context.rootPackage}\"")
+      }.joinToString()
+      val packages: String = candidateDeclarations
+        .map { it.packageName.asString() }
+        .distinct()
+        .sorted()
+        .joinToString { "\"$it\"" }
+      ForwardDiagnosticSink.emit(
+        listOf(
+          ForwardDiagnostic(
+            kind = ForwardDiagnosticKind.SKIPPED_ALL_DECLARATIONS,
+            symbol = null,
+            declaration = context.libraryName,
+            reason = "the export scope ($scope) admits none of the module's " +
+                "${candidateDeclarations.size} public declaration(s) in package(s) $packages, " +
+                "so no Interop.cs is generated",
+            hint = "an explicit include replaces the rootPackage default rather than adding to " +
+                "it: list your own package(s) in include(...) as well, or drop include(...) to " +
+                "fall back to rootPackage",
+          ),
+        ),
+        logger,
+      )
+    }
 
     // ADR-074: kept because the `actual` is structurally complete but metadata-poor (no KDoc, no
     // annotations, no parameter defaults). `findExpects()` is Verified empty on KSP 2.3.10, so the
@@ -460,7 +500,12 @@ class NugetProcessor(
         interfaces.isEmpty() && sealedClasses.isEmpty() && objects.isEmpty() &&
         properties.isEmpty() && constProperties.isEmpty() && valueClasses.isEmpty() &&
         suspendFunctions.isEmpty()
-    if (hasNothingToProcess) return emptyList()
+    if (hasNothingToProcess) {
+      // Issue #55: the diagnostics file is what `nugetReportDiagnostics` re-emits, so the
+      // SKIPPED_ALL_DECLARATIONS warning above has to reach it even though nothing else is written.
+      writeForwardDiagnostics(Dependencies.ALL_FILES)
+      return emptyList()
+    }
 
     // This processor is whole-module by construction: every round rescans
     // resolver.getAllFiles() and rewrites one Interop.cs and one CNameExports.kt from
@@ -545,7 +590,7 @@ class NugetProcessor(
           forwardPropertyPlanner.droppedExtensionReceivers,
     )
 
-    warnDroppedForwardCallables(callableCatalog, logger)
+    warnDroppedForwardCallables(callableCatalog, logger, effectiveInclude)
     warnDroppedForwardPropertySetters(callableCatalog, logger)
     warnDroppedForwardProperties(callableCatalog, logger)
     warnDroppedForwardExtensionReceivers(callableCatalog, logger)

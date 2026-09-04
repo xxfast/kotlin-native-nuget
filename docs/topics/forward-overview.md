@@ -189,9 +189,27 @@ outside the effective `include`/`rootPackage` scope is skipped, naming the exact
 
 ```
 [nuget:SKIPPED_UNEXPORTED_DEPENDENCY_TYPE] Skipping Newsroom.sponsor: its UNEXPORTED_DEPENDENCY_TYPE
-    type combination is not supported. add include("dev.other.core") to nuget { publish { } }, or
-    expose a type from an in-scope package instead
+    type combination is not supported. add include("io.github.xxfast.kotlin.native.nuget.test",
+    "dev.other.core") to nuget { publish { } } (an explicit include replaces the rootPackage default,
+    so keep your own packages listed), or expose a type from an in-scope package instead
     at Newsroom.kt:63
+```
+
+The hint names the whole `include(...)` line, the current scope first, because an explicit `include`
+replaces the `rootPackage` default rather than adding to it ([#55](https://github.com/xxfast/kotlin-native-nuget/issues/55)).
+A `kotlin.*`/`kotlinx.*` type gets no `include(...)` suggestion at all: a stdlib type wants a
+first-class mapping, not an export-scope change, and the hint says so.
+
+When the scope admits none of the module's public declarations, the processor warns once with
+`SKIPPED_ALL_DECLARATIONS`, naming the scope and the packages it dropped, instead of returning
+silently with no `Interop.cs` in the package:
+
+```
+[nuget:SKIPPED_ALL_DECLARATIONS] Skipping DemoNative: the export scope (include("kotlin"),
+    rootPackage = "sample") admits none of the module's 3 public declaration(s) in package(s)
+    "sample", so no Interop.cs is generated. an explicit include replaces the rootPackage default
+    rather than adding to it: list your own package(s) in include(...) as well, or drop include(...)
+    to fall back to rootPackage
 ```
 
 When at least one dependency-module type *is* admitted, the closure also emits one aggregate
@@ -250,7 +268,7 @@ repository's own fixture, KSP task `UP-TO-DATE`:
 
 > Task :test-library:nugetReportDiagnostics
 [nuget:INFO_EXPORTED_FROM_DEPENDENCY] Note TestLibraryNative: the export closure admitted 6 type(s) from dependency modules: io.github.xxfast.kotlin.native.nuget.test.models.Byline, io.github.xxfast.kotlin.native.nuget.test.models.Purr, io.github.xxfast.kotlin.native.nuget.test.models.StoryCode, io.github.xxfast.kotlin.native.nuget.test.models.StoryUri, io.github.xxfast.kotlin.native.nuget.test.models.TopStory, io.github.xxfast.kotlin.native.nuget.test.models.Whisker. these are generated exactly like module-local types; narrow with exclude(...) if any of them should not be part of the public API
-[nuget:SKIPPED_UNEXPORTED_DEPENDENCY_TYPE] Skipping io.github.xxfast.kotlin.native.nuget.test.Newsroom.sponsor: its UNEXPORTED_DEPENDENCY_TYPE type combination is not supported. add include("dev.other.core") to nuget { publish { } }, or expose a type from an in-scope package instead
+[nuget:SKIPPED_UNEXPORTED_DEPENDENCY_TYPE] Skipping io.github.xxfast.kotlin.native.nuget.test.Newsroom.sponsor: its UNEXPORTED_DEPENDENCY_TYPE type combination is not supported. add include("io.github.xxfast.kotlin.native.nuget.test", "dev.other.core") to nuget { publish { } } (an explicit include replaces the rootPackage default, so keep your own packages listed), or expose a type from an in-scope package instead
     at /Users/xxfast/Developer/XXFAST/KMP/kotlin-native-nuget/test-library/src/nativeMain/kotlin/io/github/xxfast/kotlin/native/nuget/test/Newsroom.kt:63
 [nuget:SKIPPED_INHERITED_MEMBER] Skipping io.github.xxfast.kotlin.native.nuget.test.models.StoryUri.length: its INHERITED_MEMBER type combination is not supported. declare the member directly on the value class itself instead of relying on interface delegation
 [nuget:SKIPPED_INHERITED_MEMBER] Skipping io.github.xxfast.kotlin.native.nuget.test.models.StoryUri.get: its INHERITED_MEMBER type combination is not supported. declare the member directly on the value class itself instead of relying on interface delegation
