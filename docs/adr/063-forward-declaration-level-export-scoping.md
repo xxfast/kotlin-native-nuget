@@ -353,6 +353,16 @@ from the already-filtered `allDeclarations`.
 
 ## Consequences
 
+> **Amendment (2026-09-04, refs [#55](https://github.com/xxfast/kotlin-native-nuget/issues/55)):**
+> the replacement rule stands, but two things around it made it a trap. The
+> `SKIPPED_UNEXPORTED_DEPENDENCY_TYPE` hint (ADR-066) named only the missing package, so following
+> `add include("kotlin")` replaced the scope with one nothing in the module lives under, and the
+> processor then returned silently: green `packNuget`, no `Interop.cs`. The hint now names the full
+> `include(...)` line with the current scope kept in it, suggests nothing at all for a `kotlin.*` /
+> `kotlinx.*` type (a stdlib type wants a first-class mapping, not a scope change), and a scope that
+> admits none of the module's public declarations warns once with `SKIPPED_ALL_DECLARATIONS`.
+
+
 - **New DSL surface:** `include`/`exclude` on `NugetPublishConfig`.
 - **`rootPackage` now scopes, not just renames.** When set with no explicit `include`, only packages
   under `rootPackage` are bridged. This is a **behaviour change**: an existing consumer that sets

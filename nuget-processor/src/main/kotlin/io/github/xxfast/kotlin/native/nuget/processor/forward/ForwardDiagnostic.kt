@@ -109,6 +109,14 @@ internal enum class ForwardDiagnosticKind(val severity: ForwardDiagnosticSeverit
    *  [SKIPPED_UNEXPORTED_DEPENDENCY_TYPE] does: the ADR-066 closure has no `superTypes` edge, so
    *  admitting the package cannot pull a supertype-only interface in. */
   SKIPPED_UNEXPORTED_SUPERTYPE(ForwardDiagnosticSeverity.WARNING),
+
+  /** Issue #55: the module has public declarations, but the `include`/`exclude`/`rootPackage`
+   *  scope (ADR-063) admits none of them, so no `Interop.cs` is generated at all. Without this
+   *  the build stays green and the package still packs, with its whole C# surface silently
+   *  missing: the trap a bare `include("kotlin")` walks into, since an explicit `include`
+   *  replaces the `rootPackage` default rather than adding to it. Emitted once per KSP run,
+   *  with no source location (the scope is build configuration, not a declaration). */
+  SKIPPED_ALL_DECLARATIONS(ForwardDiagnosticSeverity.WARNING),
 }
 
 /**
@@ -242,13 +250,34 @@ internal fun ForwardPlanSkipReason.toDiagnosticKind(): ForwardDiagnosticKind = w
  *   carries the offending component ("element type Collection?", "key type String?"). Ignored by
  *   every other reason.
  */
-internal fun ForwardPlanSkipReason.diagnosticHint(detail: String? = null): String = when (this) {
+/** `kotlin`, `kotlin.*` and `kotlinx.*`: packages an export scope can never usefully admit. */
+private fun String.isStdlibPackage(): Boolean =
+  this == "kotlin" || startsWith("kotlin.") || this == "kotlinx" || startsWith("kotlinx.")
+
+internal fun ForwardPlanSkipReason.diagnosticHint(
+  detail: String? = null,
+  scope: List<String> = emptyList(),
+): String = when (this) {
   ForwardPlanSkipReason.UNEXPORTED_DEPENDENCY_TYPE -> {
     val dependencyPackage: String = detail
       ?.let { qualifiedName -> qualifiedName.substringBeforeLast('.', qualifiedName) }
       ?: "the dependency's package"
-    "add include(\"$dependencyPackage\") to nuget { publish { } }, or expose a type from an " +
-        "in-scope package instead"
+    if (dependencyPackage.isStdlibPackage()) {
+      // Issue #55/#56: `include("kotlin")` was the hint here, and following it replaced the
+      // export scope with one nothing in the module lives under. A stdlib type wants a first-class
+      // mapping (ADR-076 `Instant`, ADR-103 `Duration`), not an export-scope change.
+      "${detail ?: "it"} is a Kotlin stdlib type with no first-class C# mapping yet; expose a " +
+          "bridgeable type instead (include(...) is not the fix: an explicit include replaces " +
+          "the export scope rather than mapping the type)"
+    } else {
+      // Issue #55: name the whole include line, not just the missing package. ADR-063's explicit
+      // `include` replaces the `rootPackage` default, so a hint naming only the new package
+      // walks the author into an empty export set.
+      val packages: String = (scope + dependencyPackage).distinct().joinToString { "\"$it\"" }
+      "add include($packages) to nuget { publish { } } (an explicit include replaces the " +
+          "rootPackage default, so keep your own packages listed), or expose a type from an " +
+          "in-scope package instead"
+    }
   }
 
   ForwardPlanSkipReason.ACTUAL_TYPEALIAS_TARGET -> {

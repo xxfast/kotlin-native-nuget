@@ -59,9 +59,11 @@ class Tier1ReachabilityClosureTest {
       "expected a SKIPPED_UNEXPORTED_DEPENDENCY_TYPE diagnostic naming Newsroom.sponsor's " +
           "out-of-scope dep.outside.Advert return type; kspWarnings=${result.kspWarnings}"
     }
+    // Issue #55: the hint names the whole include line, own package first, because an explicit
+    // include replaces the rootPackage default rather than adding to it.
     assertTrue(
-      diagnostic.contains("include(\"dep.outside\")"),
-      "expected the diagnostic to name the exact include(\"dep.outside\") fix; got: $diagnostic",
+      diagnostic.contains("include(\"tier1.reachabilityclosure\", \"dep.outside\")"),
+      "expected the diagnostic to name the full include(...) line; got: $diagnostic",
     )
   }
 

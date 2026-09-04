@@ -148,6 +148,13 @@ set, otherwise to everything (today's behaviour with no scoping configured at al
 <code>rootPackage</code> is no longer bridged unless named explicitly in <code>include</code>.</p>
 </note>
 
+The corollary is that a bare `include("kotlin")` bridges nothing, since nothing in your module lives
+under `kotlin`. That used to be silent: `packNuget` stayed green and shipped a package with no
+`Interop.cs`. Since [#55](https://github.com/xxfast/kotlin-native-nuget/issues/55) a scope that admits
+none of the module's public declarations warns once with `SKIPPED_ALL_DECLARATIONS`, naming the scope
+and the packages it dropped, and every `include(...)` hint names the full line with your own packages
+kept in it.
+
 A package that is only reached via `dependencies { dependency(...) { bind { } } }` (the reverse
 stub packages generated for a consumed C# dependency) is always exported regardless of `include`/
 `exclude`, since a module that both publishes forward and consumes a NuGet dependency needs those
@@ -180,7 +187,8 @@ nuget {
 ```
 
 A reachable dependency-module type whose package falls outside the effective include set is skipped
-with `SKIPPED_UNEXPORTED_DEPENDENCY_TYPE`, naming the exact `include(...)` line that would admit it,
+with `SKIPPED_UNEXPORTED_DEPENDENCY_TYPE`, naming the full `include(...)` line that would admit it
+(the current scope first, since an explicit `include` replaces the `rootPackage` default),
 rather than silently dropping the member or leaking an unusable handle. When at least one type is
 admitted from a dependency module, the processor also emits one `INFO_EXPORTED_FROM_DEPENDENCY` line
 per KSP run, naming the whole admitted set, since a per-type warning would be noise at this scale.
