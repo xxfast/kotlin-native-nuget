@@ -274,6 +274,9 @@ class ForwardBridgeTypeClassifierTest {
     // ADR-074: every fixture here is an ordinary (non-`expect`) declaration; the classifier now
     // reads this before anything else in `classifyNonNullable`.
     "isExpect" to false,
+    // The C# spelling walks enclosing declarations (`nestedCsName`, so a sealed subclass reads
+    // `Shape.Circle`); every fixture here is top-level, so the walk stops immediately.
+    "getParentDeclaration" to null,
   )
 
   private fun constructor(underlying: KSType): KSFunctionDeclaration = proxy(
@@ -297,7 +300,10 @@ class ForwardBridgeTypeClassifierTest {
         "toString" -> T::class.simpleName ?: "proxy"
         "hashCode" -> System.identityHashCode(methods)
         "equals" -> false
-        else -> methods[method.name] ?: error("Unexpected ${T::class.simpleName}.${method.name} call")
+        // A stub whose value is deliberately `null` (an absent parent declaration, an absent
+        // primary constructor) is a stub, not a gap: key presence decides, not the value.
+        in methods -> methods[method.name]
+        else -> error("Unexpected ${T::class.simpleName}.${method.name} call")
       }
     } as T
   }

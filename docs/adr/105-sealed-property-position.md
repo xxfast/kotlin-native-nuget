@@ -284,6 +284,17 @@ Load-bearing claims and their status:
   ordinary `ObjectHandle` (a `data class` is not sealed) and is unaffected, but its
   `csharpTypeNameFor` spelling has the same nested-name caveat.
 
+**Correction (2026-09-05):** the first bullet above is unreachable as stated. A sealed *base*
+nested inside another class (`Outer.Inner`) never reaches `csharpTypeNameFor` at an `ObjectHandle`
+position at all: an ordinary nested class, object, or interface is never declared and the
+classifier's exported-handle gate skips it named before any spelling code runs. The real,
+reachable case was the second bullet's shape: a sealed **subclass** nested inside its own sealed
+base (`Shape.Circle`), which *is* declared under ADR-009 and *is* referenced at a member position.
+That was the actual gap, fixed by a shared `nestedCsName()` helper in `CirTypeMapping.kt` that both
+`ForwardBridgeTypeClassifier.csharpTypeNameFor` and `CirTypeMapping.qualifiedElementCsType` now call,
+walking `parentDeclaration` and joining enclosing simple names outermost-first. See
+[Interfaces, abstract classes, and sealed classes](../topics/interfaces-abstract-sealed.md#a-nested-sealed-subclass-at-a-member-position).
+
 ### Consumer API
 
 ```csharp

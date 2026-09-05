@@ -13,6 +13,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.cir.STATE_FLOW_TYPES
 import io.github.xxfast.kotlin.native.nuget.processor.cir.SUSPEND_LAMBDA_TYPES
 import io.github.xxfast.kotlin.native.nuget.processor.cir.expandAliases
 import io.github.xxfast.kotlin.native.nuget.processor.cir.mapPackageToNamespace
+import io.github.xxfast.kotlin.native.nuget.processor.cir.nestedCsName
 
 /** The declarations whose StableRef handles are part of this forward export set. */
 internal data class ForwardBridgeTypeContext(
@@ -118,18 +119,9 @@ internal class ForwardBridgeTypeClassifier(
     collectionType(qualifiedName, type.arguments)?.let { return it }
 
     if (classDeclaration.classKind == ClassKind.ENUM_CLASS) {
-      val simpleName: String = classDeclaration.simpleName.asString()
-      val csharpType: String = if (context.rootNamespace.isEmpty()) {
-        simpleName
-      } else {
-        val namespace: String = mapPackageToNamespace(
-          classDeclaration.packageName.asString(),
-          context.rootPackage,
-          context.rootNamespace,
-        )
-        "global::$namespace.$simpleName"
-      }
-      return BridgeType.Enum(qualifiedName, csharpType)
+      // Identical spelling rule to [csharpTypeNameFor], so it goes through the same helper rather
+      // than repeating it — the two must never drift.
+      return BridgeType.Enum(qualifiedName, csharpTypeNameFor(classDeclaration))
     }
     if (classDeclaration.isValueClass()) {
       return valueClass(classDeclaration, qualifiedName, type.arguments)
@@ -306,14 +298,17 @@ internal class ForwardBridgeTypeClassifier(
    * no namespace to qualify against at all.
    */
   private fun csharpTypeNameFor(classDeclaration: KSClassDeclaration): String {
-    val simpleName: String = classDeclaration.simpleName.asString()
-    if (context.rootNamespace.isEmpty()) return simpleName
+    // The name carries its enclosing scope ([nestedCsName]): a sealed subclass is *declared* as a
+    // nested C# class under ADR-009 (`Shape.Circle`), so spelling it `Circle` at a member type
+    // position names a type that does not exist and fails Interop.cs with CS0234.
+    val nestedName: String = classDeclaration.nestedCsName()
+    if (context.rootNamespace.isEmpty()) return nestedName
     val namespace: String = mapPackageToNamespace(
       classDeclaration.packageName.asString(),
       context.rootPackage,
       context.rootNamespace,
     )
-    return "global::$namespace.$simpleName"
+    return "global::$namespace.$nestedName"
   }
 
   /**
