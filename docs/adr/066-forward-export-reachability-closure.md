@@ -345,6 +345,18 @@ A discovered declaration is admitted iff **all** hold:
 Termination is a visited-set keyed on `qualifiedName`; cyclic type graphs (`A.b: B`, `B.a: A`)
 terminate on the second visit. The frontier is finite because the classpath is.
 
+> **Amendment (2026-09-05, the undeclared-enum classifier gate, no ADR):** the admission predicate
+> above is written generically over "a discovered declaration" with no `parentDeclaration` check,
+> and that was taken literally: a nested dependency `enum class` was admitted the same as a
+> top-level one, then declared at namespace root under its bare simple name by `translateEnum`
+> while every reference to it still spelled the enclosing `Outer.Mode` form, so the two never
+> agreed. The closure's `ENUM` admission now filters on `parentDeclaration`, refusing a nested
+> dependency enum outright, so it is no longer declared at all; the classifier's enum branch is
+> separately gated on `context.exportedObjectHandles`, mirroring [ADR-105](105-sealed-property-position.md)'s
+> sealed-class gate. `CLASS`/`OBJECT` admission carries no equivalent `parentDeclaration` filter
+> yet; whether a nested dependency class is still declared at namespace root is unverified either
+> way (see ROADMAP Phase 3).
+
 ### 4. Disposition of a reachable-but-unsupported type
 
 **Named diagnostic + skip. Not a hard error, not an opaque handle.** This preserves ADR-064's

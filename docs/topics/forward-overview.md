@@ -185,6 +185,10 @@ the file and line of the Kotlin declaration that was skipped, something the reve
 `RirDiagnostic` cannot carry, since it works from compiled metadata rather than source. See each
 forward page's own **Limitations** section for which named diagnostic fires where.
 
+A member typed with an enum that is never declared in C#, a nested `enum class`, skips named too,
+with the `SKIPPED_UNSUPPORTED_TYPE` kind naming the `UNDECLARED_ENUM` reason instead of being
+spelled as a dangling reference; see [Enums: Nested enums skip named](enums.md#nested-enums-skip-named).
+
 Three more kinds cover the cross-module export closure ([ADR-066](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/066-forward-export-reachability-closure.md);
 see [The nuget {} DSL](nuget-dsl.md) for the closure's own rules). A reachable dependency-module type
 outside the effective `include`/`rootPackage` scope is skipped, naming the exact fix, from

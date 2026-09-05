@@ -127,6 +127,36 @@ internal class ForwardBridgeTypeClassifier(
     collectionType(qualifiedName, type.arguments)?.let { return it }
 
     if (classDeclaration.classKind == ClassKind.ENUM_CLASS) {
+      // The membership gate the enum branch never had. `exportedObjectHandles` holds exactly the
+      // enums the renderer declares (NugetProcessor's `enums` list feeds both), so an enum outside
+      // it has no C# declaration and spelling it — which [csharpTypeNameFor] happily does, nesting
+      // and all — leaves a dangling reference the consumer cannot compile (CS0426/CS0234). Skip
+      // named instead, exactly as the class branch below does for an unexported handle.
+      if (qualifiedName !in context.exportedObjectHandles) {
+        // A nested enum is never declarable, in either module: `rootEnums` filters
+        // `parentDeclaration == null` and the reachability closure refuses to admit a nested
+        // dependency enum for the same reason. The `include(...)` hint would therefore be actively
+        // wrong for it, so the nested test runs FIRST and only a *top-level* cross-module enum
+        // (ADR-066's `containingFile == null` signal, as used by the class branch) takes the
+        // scope-widening route.
+        val isNested: Boolean = classDeclaration.parentDeclaration != null
+        if (!isNested && classDeclaration.containingFile == null) {
+          return BridgeType.Unsupported(
+            qualifiedName,
+            "declared in a dependency module whose package is outside the export scope",
+            isUnexportedDependency = true,
+          )
+        }
+        return BridgeType.Unsupported(
+          qualifiedName,
+          if (isNested) {
+            "a nested enum class is never declared as a C# enum"
+          } else {
+            "enum class is not in the exported object-handle set"
+          },
+          isUndeclaredEnum = true,
+        )
+      }
       // Identical spelling rule to [csharpTypeNameFor], so it goes through the same helper rather
       // than repeating it — the two must never drift.
       return BridgeType.Enum(qualifiedName, csharpTypeNameFor(classDeclaration))

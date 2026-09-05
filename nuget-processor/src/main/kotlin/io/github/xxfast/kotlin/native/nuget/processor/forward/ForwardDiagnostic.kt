@@ -259,6 +259,10 @@ internal fun ForwardPlanSkipReason.toDiagnosticKind(): ForwardDiagnosticKind = w
   ForwardPlanSkipReason.OBJECT,
   ForwardPlanSkipReason.STRING,
   ForwardPlanSkipReason.UNSUPPORTED,
+    // An enum outside the exported set: a genuine drop, and deliberately not a new diagnostic
+    // kind — the member is unsupported at every position for the same one reason, and only the
+    // hint (which names the enum and the move-to-top-level fix) differs.
+  ForwardPlanSkipReason.UNDECLARED_ENUM,
   ForwardPlanSkipReason.VALUE_CLASS,
     -> ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_TYPE
 
@@ -284,8 +288,10 @@ internal fun ForwardPlanSkipReason.toDiagnosticKind(): ForwardDiagnosticKind = w
  *   .UNEXPORTED_DEPENDENCY_TYPE] to name the exact `include(...)` fix. ADR-074: for
  *   [ForwardPlanSkipReason.ACTUAL_TYPEALIAS_TARGET], the same slot instead carries
  *   `"<expect qualified name>-><target rendered name>"`. For [ForwardPlanSkipReason.COLLECTION] it
- *   carries the offending component ("element type Collection?", "key type String?"). Ignored by
- *   every other reason.
+ *   carries the offending component ("element type Collection?", "key type String?"). For
+ *   [ForwardPlanSkipReason.UNDECLARED_ENUM] it carries the undeclared enum's qualified name,
+ *   including when the enum is a collection component (the only extractor that descends into one).
+ *   Ignored by every other reason.
  */
 /** `kotlin`, `kotlin.*` and `kotlinx.*`: packages an export scope can never usefully admit. */
 private fun String.isStdlibPackage(): Boolean =
@@ -364,6 +370,18 @@ internal fun ForwardPlanSkipReason.diagnosticHint(
     "ADR-088 v1 marshals a bound C# interface at ordinary, non-nullable function/method/" +
         "constructor parameters and method/function returns only; expose one of those instead of " +
         "a nullable, property or collection-component position"
+
+  // Names the enum, because the reason line cannot: `warnDroppedForwardCallables` builds it from
+  // the reason's own name. Worded to stay true for both shapes the flag covers — a nested enum in
+  // either module, and a module-local top-level enum outside the export scope — since `detail`
+  // carries only the qualified name and cannot tell them apart.
+  ForwardPlanSkipReason.UNDECLARED_ENUM -> {
+    val enumName: String = detail ?: "the enum"
+    "enum `$enumName` is not in the export set, so it is never declared as a C# enum and every " +
+        "member typed with it is skipped rather than emitted as a dangling reference; a nested " +
+        "enum class is never declared (only top-level enums are), so move it to the top level of " +
+        "its file — or, if it already is top level, bring its package into the export scope"
+  }
 
   ForwardPlanSkipReason.UNIMPLEMENTABLE_BOUND_INTERFACE ->
     "no mint{Interface}Bridge exists for this bound interface (ADR-085 inadmissible), so a " +

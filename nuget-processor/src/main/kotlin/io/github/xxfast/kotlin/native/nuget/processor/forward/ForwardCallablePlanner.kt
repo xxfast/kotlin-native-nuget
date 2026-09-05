@@ -96,6 +96,13 @@ internal enum class ForwardPlanSkipReason(val droppedFromCSharp: Boolean) {
    *  library can never be brought into scope. */
   ACTUAL_TYPEALIAS_TARGET(droppedFromCSharp = true),
 
+  /** An `enum class` that no route declares as a C# enum: a nested enum (only top-level ones are
+   *  declared), or a module-local top-level enum outside the export scope. Distinct from
+   *  [UNEXPORTED_DEPENDENCY_TYPE] because `include(...)` cannot make a nested enum declarable.
+   *  Before this reason existed the member was emitted with a dangling C# enum reference and no
+   *  diagnostic at all, taking the consumer's compile down with CS0426/CS0234. */
+  UNDECLARED_ENUM(droppedFromCSharp = true),
+
   /** ADR-088: a bound C# interface at a position v1 does not marshal (nullable, property,
    *  collection component, receiver). Named rather than folded into the generic UNSUPPORTED
    *  bucket: the type IS bridgeable, just not here, and the hint differs accordingly. */
@@ -1165,6 +1172,7 @@ internal class ForwardCallablePlanner(
         symbol, requireNotNull(ineligible.inputSkipReason()), node = node,
         detail = ineligible.actualTypeAliasTargetDetail()
           ?: ineligible.unexportedDependencyDetail()
+          ?: ineligible.undeclaredEnumDetail()
           ?: ineligible.collectionComponentDetail(),
       )
     }
@@ -1381,6 +1389,7 @@ internal class ForwardCallablePlanner(
         symbol, requireNotNull(ineligible.inputSkipReason()), node = node,
         detail = ineligible.actualTypeAliasTargetDetail()
           ?: ineligible.unexportedDependencyDetail()
+          ?: ineligible.undeclaredEnumDetail()
           ?: ineligible.collectionComponentDetail(),
       )
     }
@@ -1406,6 +1415,7 @@ internal class ForwardCallablePlanner(
         symbol, requireNotNull(result.skipReason()), node = node,
         detail = result.actualTypeAliasTargetDetail()
           ?: result.unexportedDependencyDetail()
+          ?: result.undeclaredEnumDetail()
           ?: result.collectionComponentDetail(),
       )
     }
@@ -2340,6 +2350,29 @@ internal class ForwardCallablePlanner(
       ?.takeIf { unsupported -> unsupported.isActualTypeAliasTarget }
       ?.let { unsupported -> "${unsupported.actualTypeAliasExpectName}->${unsupported.rendered}" }
 
+  /** The undeclared enum's qualified name, when this (possibly nullable-wrapped, possibly
+   *  collection-wrapped) type is the direct reason a callable was dropped by
+   *  [ForwardPlanSkipReason.UNDECLARED_ENUM]. `null` for every other skip reason.
+   *
+   *  Descends one collection level, unlike its two siblings above: a `List<Outer.Mode>` parameter
+   *  attributes to its *element's* reason (`collectionInputSkipReason`), and
+   *  `collectionComponentDetail()` deliberately declines any reason but `COLLECTION`, so without
+   *  this the hint for the element case would name no type at all. The siblings' equivalent gap
+   *  (`List<UnexportedDep>`) is left exactly as it was — changing it would reword a shipped
+   *  hint. */
+  private fun BridgeType.undeclaredEnumDetail(): String? {
+    val unwrapped: BridgeType = unwrapNullable()
+    val candidate: BridgeType = when (unwrapped) {
+      is BridgeType.Collection ->
+        (unwrapped.element ?: unwrapped.key ?: unwrapped.value)?.unwrapNullable() ?: unwrapped
+
+      else -> unwrapped
+    }
+    return (candidate as? BridgeType.Unsupported)
+      ?.takeIf { unsupported -> unsupported.isUndeclaredEnum }
+      ?.rendered
+  }
+
   private fun BridgeType.skipReason(): ForwardPlanSkipReason? = when (this) {
     BridgeType.Unit, is BridgeType.Primitive -> null
     BridgeType.Char -> ForwardPlanSkipReason.CHAR
@@ -2404,6 +2437,10 @@ internal class ForwardCallablePlanner(
     // this ADR's own diagnostic, not the generic UNEXPORTED_DEPENDENCY_TYPE include(...) hint.
     is BridgeType.Unsupported -> when {
       isActualTypeAliasTarget -> ForwardPlanSkipReason.ACTUAL_TYPEALIAS_TARGET
+      // The classifier sets exactly one of these two on an enum, and never both: a nested enum
+      // (whichever module it lives in) is undeclarable rather than out of scope, so it must not
+      // pick up the `include(...)` hint.
+      isUndeclaredEnum -> ForwardPlanSkipReason.UNDECLARED_ENUM
       isUnexportedDependency -> ForwardPlanSkipReason.UNEXPORTED_DEPENDENCY_TYPE
       else -> ForwardPlanSkipReason.UNSUPPORTED
     }

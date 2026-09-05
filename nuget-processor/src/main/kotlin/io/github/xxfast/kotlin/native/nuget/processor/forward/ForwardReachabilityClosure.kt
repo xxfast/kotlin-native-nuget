@@ -179,6 +179,19 @@ internal class ForwardReachabilityClosure(
     if (!crossModuleAdmissionAllowed) return
     if (!isExported(classDeclaration)) return
 
+    // A *nested* dependency enum must never be admitted: the enum renderer declares every admitted
+    // enum at the namespace root under its simple name (`translateEnum`), while every reference to
+    // it is spelled `Outer.Inner` (`nestedCsName`), so admitting one emits a `public enum Inner`
+    // that no reference resolves against (CS0426). Declining admission hands it to the classifier's
+    // membership gate instead, which skips the member named (`UNDECLARED_ENUM`). Deliberately the
+    // ENUM bucket only: the other buckets have never filtered nested declarations either, but
+    // widening that is a separate change with its own renderer questions.
+    if (classDeclaration.classKind == ClassKind.ENUM_CLASS &&
+      classDeclaration.parentDeclaration != null
+    ) {
+      return
+    }
+
     admitted[qualifiedName] = classDeclaration
     bucketOf[qualifiedName] = classDeclaration.reachabilityBucket()
     walkClassMembers(classDeclaration)
