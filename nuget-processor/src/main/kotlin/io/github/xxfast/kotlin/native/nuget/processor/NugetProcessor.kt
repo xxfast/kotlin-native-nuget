@@ -142,8 +142,9 @@ internal fun warnDroppedForwardPropertySetters(
       kind = ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_INPUT,
       symbol = dropped.node,
       declaration = dropped.symbol,
-      reason = "its setter is not generated because the ${dropped.componentDescription} cannot " +
-          "be written into a Kotlin collection",
+      reason = "its setter is not generated because " +
+          (dropped.reason ?: "the ${dropped.componentDescription} cannot be written into a " +
+          "Kotlin collection"),
       hint = "the C# property ${dropped.publicName} is read-only",
     )
   }
@@ -258,6 +259,7 @@ class NugetProcessor(
       val pkg: String = declaration.packageName.asString()
       val qualifiedName: String? = declaration.qualifiedName?.asString()
       fun matches(p: String) = pkg == p || pkg.startsWith("$p.")
+
       // Issue #53: `exclude(...)` also accepts a qualified declaration name, and everything
       // nested under it (a sealed base takes its subclasses with it). Package-level exclusion
       // took whole packages of wanted API with it whenever one member could not be bridged.

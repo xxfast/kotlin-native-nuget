@@ -83,6 +83,11 @@ class ForwardSkippedCallableWarningTest {
         ForwardPlanSkipReason.INSTANT,
         // ADR-103: the same, for Duration.
         ForwardPlanSkipReason.DURATION,
+        // ADR-107: a genuine drop -- v1 binds a Throwable only at a property getter, so a
+        // callable carrying one has no legacy route to defer to.
+        ForwardPlanSkipReason.THROWABLE,
+        // ADR-106: defensive, like INSTANT/DURATION.
+        ForwardPlanSkipReason.UUID,
         ForwardPlanSkipReason.NULLABLE,
         ForwardPlanSkipReason.OBJECT,
         ForwardPlanSkipReason.STRING,

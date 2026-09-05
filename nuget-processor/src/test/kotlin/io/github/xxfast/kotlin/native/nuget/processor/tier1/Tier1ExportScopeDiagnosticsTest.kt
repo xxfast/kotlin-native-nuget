@@ -59,20 +59,22 @@ class Tier1ExportScopeDiagnosticsTest {
     )
   }
 
+  /**
+   * ADR-106 retargeted this cell: it used `kotlin.uuid.Uuid` as its example of an unbridgeable
+   * stdlib type, and `Uuid` now binds as `System.Guid` at every ordinary position, so the cell
+   * asserted a diagnostic that (correctly) no longer fires. `kotlin.text.Regex` is the same shape
+   * -- a stdlib class with no known-type branch and no `include(...)` that could ever admit it --
+   * so the hint under test is unchanged; only the example moved.
+   */
   @Test
   fun `a stdlib type gets no include hint at all`() {
     val result = Tier1Harness.run(
       """
       package tier1.scopehint
 
-      import kotlin.uuid.ExperimentalUuidApi
-      import kotlin.uuid.Uuid
+      class Record(val pattern: Regex)
 
-      @OptIn(ExperimentalUuidApi::class)
-      class Record(val id: Uuid)
-
-      @OptIn(ExperimentalUuidApi::class)
-      fun record(): Record = Record(Uuid.random())
+      fun record(): Record = Record(Regex("oreo"))
       """.trimIndent(),
       processorOptions = mapOf("nuget.rootPackage" to "tier1.scopehint"),
     )
@@ -89,7 +91,7 @@ class Tier1ExportScopeDiagnosticsTest {
       "expected no include(...) suggestion for a stdlib type; got: $diagnostic",
     )
     assertTrue(
-      diagnostic.contains("kotlin.uuid.Uuid is a Kotlin stdlib type"),
+      diagnostic.contains("kotlin.text.Regex is a Kotlin stdlib type"),
       "expected the hint to name the stdlib type; got: $diagnostic",
     )
   }

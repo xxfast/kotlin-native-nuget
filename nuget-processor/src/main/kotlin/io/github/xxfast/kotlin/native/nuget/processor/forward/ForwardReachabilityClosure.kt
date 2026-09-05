@@ -209,6 +209,9 @@ internal class ForwardReachabilityClosure(
       // ADR-103: likewise, and doubly so -- Duration is a value class, so without this entry the
       // closure would walk it as a VALUE_CLASS edge.
       "kotlin.time.Duration",
+      // ADR-106: the third known stdlib scalar; the closure must stop at it rather than walking
+      // Uuid's own members as class edges.
+      "kotlin.uuid.Uuid",
     )
     val COLLECTION_TYPES: Set<String> = setOf(
       "kotlin.collections.List", "kotlin.collections.MutableList",
