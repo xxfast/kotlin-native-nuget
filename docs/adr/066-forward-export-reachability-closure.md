@@ -345,6 +345,18 @@ A discovered declaration is admitted iff **all** hold:
 Termination is a visited-set keyed on `qualifiedName`; cyclic type graphs (`A.b: B`, `B.a: A`)
 terminate on the second visit. The frontier is finite because the classpath is.
 
+> **Amendment (2026-09-05, the undeclared-enum classifier gate, no ADR):** the admission predicate
+> above is written generically over "a discovered declaration" with no `parentDeclaration` check,
+> and that was taken literally: a nested dependency `enum class` was admitted the same as a
+> top-level one, then declared at namespace root under its bare simple name by `translateEnum`
+> while every reference to it still spelled the enclosing `Outer.Mode` form, so the two never
+> agreed. The closure's `ENUM` admission now filters on `parentDeclaration`, refusing a nested
+> dependency enum outright, so it is no longer declared at all; the classifier's enum branch is
+> separately gated on `context.exportedObjectHandles`, mirroring [ADR-105](105-sealed-property-position.md)'s
+> sealed-class gate. `CLASS`/`OBJECT` admission carries no equivalent `parentDeclaration` filter
+> yet; whether a nested dependency class is still declared at namespace root is unverified either
+> way (see ROADMAP Phase 3).
+
 ### 4. Disposition of a reachable-but-unsupported type
 
 **Named diagnostic + skip. Not a hard error, not an opaque handle.** This preserves ADR-064's
@@ -445,6 +457,11 @@ an unqualified name and only compiles by accident when the namespaces happen to 
 > exactly those positions. Those spellings now go through `qualifiedElementCsType`, the same
 > helper the `Flow`/`StateFlow` and stored-callback sites already used, so the rule above holds
 > for sealed subclasses too.
+
+> **Amendment (2026-09-05):** `translateValueClass`'s `readonly record struct` member type (the
+> `Enum`/`ObjectHandle` underlying property/parameter rendered by `renderValueClass`/
+> `renderReferenceValueClass`) was the last simple-name render site, now routed through
+> `qualifiedElementCsType` like the sites the #41/#50 amendments above named.
 
 ### Two ADR-064 amendments this forces (both IN SCOPE for this feature)
 
@@ -631,6 +648,12 @@ inherited-member cells must also exist at the `scripts/verify.sh` integration le
   both publishers depend on rather than each inlining the type; a diagnostic when an admitted type
   originates from a module that is itself published; or an opt-out that forces such a type back to
   the `SKIPPED_UNEXPORTED_DEPENDENCY_TYPE` path so the author must choose explicitly.
+
+  **(2026-09-05)** Decided by [ADR-109](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/109-duplicate-type-hazard.md):
+  shape (2), a build-time `WARNING_DUPLICATED_DEPENDENCY_TYPE` diagnostic. The "shared models NuGet"
+  shape (1) sketched above is **retracted, not implementable**: two published packages are two
+  separate Kotlin/Native runtimes in the consumer's process, so an ADR-003 `StableRef` handle minted
+  in one is meaningless to the other's exports; handles cannot cross between them.
 - **Two ADR-064 rules change, and both changes land in this feature** (`SKIPPED_INHERITED_MEMBER`'s
   filter, `Modifier.VALUE` classification). They are not split into a follow-up: reachability is what
   makes both fire, and shipping the closure without them produces silently wrong output rather than a
@@ -685,6 +708,10 @@ inherited-member cells must also exist at the `scripts/verify.sh` integration le
 - **The duplicate-type-across-two-packages problem**, accepted as a known limitation here (see
   Consequences for the accepted trade-off and the Kotlin/Native framework-export precedent). Gets its
   own ROADMAP item, which should link to that bullet.
+
+  **(2026-09-05)** Decided by [ADR-109](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/109-duplicate-type-hazard.md):
+  a build-time warning, not a shared models package (retracted: two published packages are two
+  native runtimes, so handles cannot cross between them).
 - **Java/JVM-origin declarations.** Not applicable to the Kotlin/Native forward target today; if a
   dependency ever surfaces `Origin.JAVA_LIB` declarations (verified to occur even on a native target
   for `Enum.compareTo`), they are out of scope.

@@ -1,6 +1,8 @@
 package io.github.xxfast.kotlin.native.nuget.test
 
 import dev.other.core.Advertisement
+import dev.other.core.Airwave
+import io.github.xxfast.kotlin.native.nuget.test.models.Broadcast
 import io.github.xxfast.kotlin.native.nuget.test.models.Byline
 import io.github.xxfast.kotlin.native.nuget.test.models.StoryCode
 import io.github.xxfast.kotlin.native.nuget.test.models.StoryUri
@@ -67,4 +69,21 @@ class Newsroom {
    * `Purr.whisker: Whisker?`). Must not hang or crash `packNuget`.
    */
   fun echo(): Whisker = catnip()
+
+  /**
+   * Undeclared-enum gate, shape (b): reaches [Broadcast], an *admitted* dependency class whose
+   * nested `enum class AdBand` the closure also admits (its ENUM admission has no
+   * `parentDeclaration` filter) but which `translateEnum` then declares at namespace root under
+   * its simple name, while `Broadcast.band` is spelled `Broadcast.AdBand`. `Broadcast` must still
+   * generate and construct, and `station` must still bind, once `band` is skipped.
+   */
+  fun broadcast(): Broadcast = Broadcast()
+
+  /**
+   * Undeclared-enum gate, shape (c): a *top-level* enum in the never-admitted `dev.other.core`,
+   * the `containingFile == null` half of the gate. Must skip with
+   * `SKIPPED_UNEXPORTED_DEPENDENCY_TYPE` naming `include("dev.other.core")`, exactly as [sponsor]
+   * does for a class, instead of being spelled as an undeclared C# enum reference.
+   */
+  fun airwave(): Airwave = Airwave.FM
 }

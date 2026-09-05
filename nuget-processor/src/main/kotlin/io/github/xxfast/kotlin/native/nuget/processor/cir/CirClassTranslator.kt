@@ -22,6 +22,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCirProperty
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnostic
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnosticKind
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnosticSink
+import io.github.xxfast.kotlin.native.nuget.processor.forward.declaredSuperClass
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardSuperClass
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isForwardMemberOf
 import io.github.xxfast.kotlin.native.nuget.processor.forward.planFor
@@ -38,40 +39,72 @@ import io.github.xxfast.kotlin.native.nuget.processor.toCName
 private fun Set<Modifier>.isOpenInterfaceImplementation(superClass: String?): Boolean =
   superClass == null && contains(Modifier.OVERRIDE) && !contains(Modifier.FINAL)
 
+/** Which half of issue #42 a dropped supertype is: the two lose genuinely different things, so
+ *  they get genuinely different messages (an interface carries nothing C# could have called; a
+ *  base class carries members that are re-homed onto the subclass). */
+private enum class SupertypeKind { INTERFACE, BASE_CLASS }
+
 /**
- * ADR-101: is [iface] a supertype the generated C# base list may name? Only if the export set
- * carries it — `exportedTypes` is qualified-name keyed (`CirTranslator.kt`), the same membership
- * test every sibling site in this package uses. An unexported supertype is dropped with a
- * WARNING rather than rendered into a dangling `: IFoo` that fails to compile.
+ * ADR-101 (+ its 2026-09-05 base-class amendment): is [supertype] one the generated C# base list
+ * may name? Only if the export set carries it — `exportedTypes` is qualified-name keyed
+ * (`CirTranslator.kt`), the same membership test every sibling site in this package uses. An
+ * unexported supertype is dropped with a WARNING rather than rendered into a dangling `: IFoo` /
+ * `: Foo` that fails to compile (CS0246, the reporter's case).
  *
- * The hint deliberately does *not* offer the `include(...)` fix `SKIPPED_UNEXPORTED_DEPENDENCY
- * _TYPE` offers: measured (`Tier1UnexportedSupertypeSkipTest`), the ADR-066 reachability closure
- * walks returns, parameters, property types, type arguments, sealed subclasses and primary-ctor
- * parameters but never `superTypes`, so an interface reachable only as a supertype stays out of
- * the export set even after its package is included.
+ * The `include(...)` advice is deliberately narrow, because it was measured
+ * (`Tier1UnexportedSupertypeSkipTest`): the ADR-066 reachability closure walks returns,
+ * parameters, property types, type arguments, sealed subclasses and primary-ctor parameters but
+ * never `superTypes`, so a *dependency* type reachable only as a supertype stays out of the
+ * export set even after its package is included. A supertype declared in *this* module is a
+ * different case — scope admits same-round source declarations directly — and the base-class hint
+ * says so rather than promising or denying the fix outright.
  */
 private fun keepsSupertype(
   cls: KSClassDeclaration,
   name: String,
-  iface: KSClassDeclaration,
+  supertype: KSClassDeclaration,
+  kind: SupertypeKind,
   exportedTypes: Set<String>,
   logger: KSPLogger,
 ): Boolean {
-  val qualified: String? = iface.qualifiedName?.asString()
+  val qualified: String? = supertype.qualifiedName?.asString()
   if (qualified != null && qualified in exportedTypes) return true
 
-  val ifaceName: String = qualified ?: iface.simpleName.asString()
+  val simpleName: String = supertype.simpleName.asString()
+  val supertypeName: String = qualified ?: simpleName
+  val packageName: String = supertype.packageName.asString()
+  val reason: String = when (kind) {
+    SupertypeKind.INTERFACE ->
+      "supertype '$supertypeName' is not in the export set, so it has no generated C# " +
+          "interface; the class is generated without it and its own members still export"
+
+    SupertypeKind.BASE_CLASS ->
+      "base class '$supertypeName' is not in the export set, so it has no generated C# class; " +
+          "$name is generated with no base at all and the base's public members are bound on " +
+          "$name directly"
+  }
+  val hint: String = when (kind) {
+    SupertypeKind.INTERFACE ->
+      "an unexported supertype carries no members the C# side could call, so nothing " +
+          "is lost; note that include(\"...\") does not help here — the export reachability " +
+          "closure never walks supertypes"
+
+    SupertypeKind.BASE_CLASS ->
+      "nothing callable is lost — $simpleName's public members export as members of $name — but " +
+          "C# sees no $simpleName type and no inheritance relation, so `is`/`as` against it and " +
+          "any other subclass's shared base are gone; to keep the base itself it has to enter " +
+          "the export set on its own: include(\"$packageName\") admits a base declared in this " +
+          "module, but not one from a dependency — the export reachability closure never walks " +
+          "supertypes"
+  }
   ForwardDiagnosticSink.emit(
     listOf(
       ForwardDiagnostic(
         kind = ForwardDiagnosticKind.SKIPPED_UNEXPORTED_SUPERTYPE,
         symbol = cls,
-        declaration = "$name : ${iface.simpleName.asString()}",
-        reason = "supertype '$ifaceName' is not in the export set, so it has no generated C# " +
-            "interface; the class is generated without it and its own members still export",
-        hint = "an unexported supertype carries no members the C# side could call, so nothing " +
-            "is lost; note that include(\"...\") does not help here — the export reachability " +
-            "closure never walks supertypes",
+        declaration = "$name : $simpleName",
+        reason = reason,
+        hint = hint,
       ),
     ),
     logger,
@@ -95,7 +128,16 @@ internal fun translateClass(
 
   // The shared has-superclass predicate (`ForwardClassMembership.kt`), the same instance the two
   // planners filter their members with, so a member can never be kept here and skipped there.
-  val superClassDeclaration: KSClassDeclaration? = cls.forwardSuperClass()
+  // ADR-101 amendment / issue #42: gated on the export set, so a base class nothing generates is
+  // dropped here exactly as an unexported interface is, instead of rendering a dangling `: Base`.
+  val declaredBase: KSClassDeclaration? = cls.declaredSuperClass()
+  val superClassDeclaration: KSClassDeclaration? = cls.forwardSuperClass(exportedTypes)
+  if (declaredBase != null && superClassDeclaration == null) {
+    // `translateClass` is the one place a class is translated (the regular-class loop in
+    // `CirTranslator`), and neither planner nor the Kotlin emitter holds a logger, so this is the
+    // only site the diagnostic can fire from — exactly once per affected class.
+    keepsSupertype(cls, name, declaredBase, SupertypeKind.BASE_CLASS, exportedTypes, logger)
+  }
   val superClass: String? = superClassDeclaration?.simpleName?.asString()
 
   val interfaces: List<String> = if (superClass != null) {
@@ -109,7 +151,9 @@ internal fun translateClass(
       // naming it in the base list is a guaranteed CS0246 (the reporter's `: IKoinComponent`).
       // Drop it and say so. Nothing is lost: an unexported interface has no C# members to call,
       // and its defaulted members still bind on the class itself (`ForwardClassMembership.kt`).
-      .filter { iface -> keepsSupertype(cls, name, iface, exportedTypes, logger) }
+      .filter { iface ->
+        keepsSupertype(cls, name, iface, SupertypeKind.INTERFACE, exportedTypes, logger)
+      }
       .map { "I${it.simpleName.asString()}" }
       .toList()
   }
@@ -1736,6 +1780,7 @@ internal fun translateValueClass(
   cls: KSClassDeclaration,
   libraryName: String,
   logger: KSPLogger,
+  context: NugetContext,
   callableCatalog: ForwardCallablePlanCatalog = ForwardCallablePlanCatalog(emptyList()),
 ): CirValueClass {
   val name: String = cls.simpleName.asString()
@@ -1866,10 +1911,15 @@ internal fun translateValueClass(
     )
   }
 
-  val csUnderlyingType: String = if (underlyingType == "String") "string"
-  // The public member is the C# enum itself (`Mood`); only the wire is its int ordinal.
-  else if (isEnumUnderlying || isReferenceUnderlying) underlyingType
-  else mapParamType(underlyingType)
+  // The public member is the C# type itself (the enum `Mood`, the handle class `Patient`); only
+  // the wire is its int ordinal / IntPtr handle. Spelling it with the *Kotlin* simple name only
+  // resolved while the underlying happened to share the struct's own namespace: a root-package
+  // value class over a sub-package underlying emitted a bare `Mood` inside `namespace TestLibrary`
+  // and failed CS0246. Same helper, and same unconditional-qualification rule, that #41 applied at
+  // the other cross-class render sites -- a known scalar keeps its C# primitive spelling (so the
+  // renderer's `== "string"` wire checks still fire), everything else becomes
+  // `global::Namespace.Name` once `rootNamespace` is non-empty.
+  val csUnderlyingType: String = qualifiedElementCsType(underlyingResolved, context)
 
   return CirValueClass(
     name = name,

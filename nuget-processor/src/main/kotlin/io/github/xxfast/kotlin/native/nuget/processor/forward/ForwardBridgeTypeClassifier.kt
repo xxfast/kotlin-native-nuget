@@ -13,6 +13,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.cir.STATE_FLOW_TYPES
 import io.github.xxfast.kotlin.native.nuget.processor.cir.SUSPEND_LAMBDA_TYPES
 import io.github.xxfast.kotlin.native.nuget.processor.cir.expandAliases
 import io.github.xxfast.kotlin.native.nuget.processor.cir.mapPackageToNamespace
+import io.github.xxfast.kotlin.native.nuget.processor.cir.nestedCsName
 
 /** The declarations whose StableRef handles are part of this forward export set. */
 internal data class ForwardBridgeTypeContext(
@@ -39,6 +40,14 @@ internal data class ForwardBridgeTypeContext(
 internal class ForwardBridgeTypeClassifier(
   private val context: ForwardBridgeTypeContext,
 ) {
+  /**
+   * The export set, exposed so the planners can answer `forwardSuperClass(exportedTypes)` (ADR-101
+   * amendment) with the same membership test this classifier uses for a handle. Identical, bucket
+   * for bucket, to `CirClassTranslator`'s `exportedTypes`, which is how the translator and both
+   * planners cannot disagree about whether a class has a forward base class.
+   */
+  internal val exportedObjectHandles: Set<String> get() = context.exportedObjectHandles
+
   fun classify(type: KSType): BridgeType {
     val expanded: KSType = type.expandAliases()
     val classified: BridgeType = classifyNonNullable(expanded)
@@ -118,18 +127,39 @@ internal class ForwardBridgeTypeClassifier(
     collectionType(qualifiedName, type.arguments)?.let { return it }
 
     if (classDeclaration.classKind == ClassKind.ENUM_CLASS) {
-      val simpleName: String = classDeclaration.simpleName.asString()
-      val csharpType: String = if (context.rootNamespace.isEmpty()) {
-        simpleName
-      } else {
-        val namespace: String = mapPackageToNamespace(
-          classDeclaration.packageName.asString(),
-          context.rootPackage,
-          context.rootNamespace,
+      // The membership gate the enum branch never had. `exportedObjectHandles` holds exactly the
+      // enums the renderer declares (NugetProcessor's `enums` list feeds both), so an enum outside
+      // it has no C# declaration and spelling it — which [csharpTypeNameFor] happily does, nesting
+      // and all — leaves a dangling reference the consumer cannot compile (CS0426/CS0234). Skip
+      // named instead, exactly as the class branch below does for an unexported handle.
+      if (qualifiedName !in context.exportedObjectHandles) {
+        // A nested enum is never declarable, in either module: `rootEnums` filters
+        // `parentDeclaration == null` and the reachability closure refuses to admit a nested
+        // dependency enum for the same reason. The `include(...)` hint would therefore be actively
+        // wrong for it, so the nested test runs FIRST and only a *top-level* cross-module enum
+        // (ADR-066's `containingFile == null` signal, as used by the class branch) takes the
+        // scope-widening route.
+        val isNested: Boolean = classDeclaration.parentDeclaration != null
+        if (!isNested && classDeclaration.containingFile == null) {
+          return BridgeType.Unsupported(
+            qualifiedName,
+            "declared in a dependency module whose package is outside the export scope",
+            isUnexportedDependency = true,
+          )
+        }
+        return BridgeType.Unsupported(
+          qualifiedName,
+          if (isNested) {
+            "a nested enum class is never declared as a C# enum"
+          } else {
+            "enum class is not in the exported object-handle set"
+          },
+          isUndeclaredEnum = true,
         )
-        "global::$namespace.$simpleName"
       }
-      return BridgeType.Enum(qualifiedName, csharpType)
+      // Identical spelling rule to [csharpTypeNameFor], so it goes through the same helper rather
+      // than repeating it — the two must never drift.
+      return BridgeType.Enum(qualifiedName, csharpTypeNameFor(classDeclaration))
     }
     if (classDeclaration.isValueClass()) {
       return valueClass(classDeclaration, qualifiedName, type.arguments)
@@ -306,14 +336,17 @@ internal class ForwardBridgeTypeClassifier(
    * no namespace to qualify against at all.
    */
   private fun csharpTypeNameFor(classDeclaration: KSClassDeclaration): String {
-    val simpleName: String = classDeclaration.simpleName.asString()
-    if (context.rootNamespace.isEmpty()) return simpleName
+    // The name carries its enclosing scope ([nestedCsName]): a sealed subclass is *declared* as a
+    // nested C# class under ADR-009 (`Shape.Circle`), so spelling it `Circle` at a member type
+    // position names a type that does not exist and fails Interop.cs with CS0234.
+    val nestedName: String = classDeclaration.nestedCsName()
+    if (context.rootNamespace.isEmpty()) return nestedName
     val namespace: String = mapPackageToNamespace(
       classDeclaration.packageName.asString(),
       context.rootPackage,
       context.rootNamespace,
     )
-    return "global::$namespace.$simpleName"
+    return "global::$namespace.$nestedName"
   }
 
   /**

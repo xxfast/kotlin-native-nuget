@@ -34,7 +34,14 @@ internal enum class ForwardDiagnosticSeverity { WARNING, INFO, ERROR }
  * direction) and by [severity] itself (so the sink never string-matches its own enum, matching
  * ADR-057's reverse precedent).
  */
-internal enum class ForwardDiagnosticKind(val severity: ForwardDiagnosticSeverity) {
+internal enum class ForwardDiagnosticKind(
+  val severity: ForwardDiagnosticSeverity,
+  /** ADR-109: overrides the severity-keyed verb [ForwardDiagnostic.format] would otherwise pick.
+   *  Every WARNING here skips something and so reads "Skipping" — except a warning about a type
+   *  that is still exported, for which "Skipping" would be a plain lie. Null everywhere else, so
+   *  every pre-existing kind renders byte-identically. */
+  val verb: String? = null,
+) {
   /** A classifier `Unsupported` type, or another supported-elsewhere type this position cannot
    *  express (`Char`, an enum, a handle, a value class, ...) at a position with no bridge. */
   SKIPPED_UNSUPPORTED_TYPE(ForwardDiagnosticSeverity.WARNING),
@@ -102,13 +109,23 @@ internal enum class ForwardDiagnosticKind(val severity: ForwardDiagnosticSeverit
    *  inadmissible), so a Kotlin implementation of it cannot be handed back to C#. */
   SKIPPED_UNIMPLEMENTABLE_BOUND_INTERFACE(ForwardDiagnosticSeverity.WARNING),
 
-  /** ADR-101: an exported class declares a supertype (an interface today; the base-class hole is
-   *  deferred) that is not in the export set, so no C# interface is ever generated for it and the
-   *  base list would not compile (CS0246). The supertype is dropped from the generated C# base
-   *  list; the class and its members — including the supertype's defaulted ones, which bind on
-   *  the class — still export. Deliberately NOT hinting `include(...)` the way
-   *  [SKIPPED_UNEXPORTED_DEPENDENCY_TYPE] does: the ADR-066 closure has no `superTypes` edge, so
-   *  admitting the package cannot pull a supertype-only interface in. */
+  /** ADR-101 and its 2026-09-05 amendment: an exported class declares a supertype — an interface
+   *  *or* its base class — that is not in the export set, so nothing is ever generated for that
+   *  supertype and naming it in the base list would not compile (CS0246). It is dropped from the
+   *  generated C# base list and the class still exports, but the two halves differ in what the
+   *  drop costs, so they carry different messages:
+   *
+   *  - interface: nothing callable is lost at all; its *defaulted* members already bind on the
+   *    class (`ForwardClassMembership.kt`).
+   *  - base class: its public members are re-homed onto the subclass (bound with the subclass's
+   *    own export prefix, no `override`), but C# loses the type and the inheritance relation —
+   *    no `is`/`as` against the base and no shared base across sibling subclasses.
+   *
+   *  The `include(...)` advice is measured, not assumed (`Tier1UnexportedSupertypeSkipTest`): the
+   *  ADR-066 closure has no `superTypes` edge, so admitting a *dependency* package cannot pull a
+   *  supertype-only type in. A supertype declared in this module is a different case — scope
+   *  admits same-round source declarations — and only the base-class hint mentions it, since only
+   *  a base class is worth exporting for its members. */
   SKIPPED_UNEXPORTED_SUPERTYPE(ForwardDiagnosticSeverity.WARNING),
 
   /** Issue #55: the module has public declarations, but the `include`/`exclude`/`rootPackage`
@@ -118,6 +135,20 @@ internal enum class ForwardDiagnosticKind(val severity: ForwardDiagnosticSeverit
    *  replaces the `rootPackage` default rather than adding to it. Emitted once per KSP run,
    *  with no source location (the scope is build configuration, not a declaration). */
   SKIPPED_ALL_DECLARATIONS(ForwardDiagnosticSeverity.WARNING),
+
+  /** ADR-109: an admitted dependency-module type whose package another forward publisher in the
+   *  same Gradle build also exports. ADR-066 generates it into *this* module's package, as its own
+   *  C# class over its own opaque handle, so a consumer referencing both NuGet packages sees two
+   *  unrelated C# types for one Kotlin type, with no conversion between them.
+   *
+   *  Certain when the other publisher is the dependency module itself; a heuristic when it is a
+   *  sibling publisher over a shared non-publishing dependency (whether that sibling's API
+   *  *reaches* the type is known only to its own KSP run), which is why the message is written to
+   *  be true for both.
+   *
+   *  Nothing is skipped and nothing in the generated output changes — the remedy is structural
+   *  (exactly one publisher declares the type) — so the verb is overridden to say so. */
+  WARNING_DUPLICATED_DEPENDENCY_TYPE(ForwardDiagnosticSeverity.WARNING, verb = "Duplicating"),
 }
 
 /**
@@ -127,7 +158,7 @@ internal enum class ForwardDiagnosticKind(val severity: ForwardDiagnosticSeverit
  * {hint}`), plus the `KSNode` source location reverse cannot carry.
  */
 internal fun ForwardDiagnostic.format(): String {
-  val verb: String = when (kind.severity) {
+  val verb: String = kind.verb ?: when (kind.severity) {
     ForwardDiagnosticSeverity.WARNING -> "Skipping"
     ForwardDiagnosticSeverity.INFO -> "Note"
     ForwardDiagnosticSeverity.ERROR -> "Error"
@@ -228,6 +259,10 @@ internal fun ForwardPlanSkipReason.toDiagnosticKind(): ForwardDiagnosticKind = w
   ForwardPlanSkipReason.OBJECT,
   ForwardPlanSkipReason.STRING,
   ForwardPlanSkipReason.UNSUPPORTED,
+    // An enum outside the exported set: a genuine drop, and deliberately not a new diagnostic
+    // kind — the member is unsupported at every position for the same one reason, and only the
+    // hint (which names the enum and the move-to-top-level fix) differs.
+  ForwardPlanSkipReason.UNDECLARED_ENUM,
   ForwardPlanSkipReason.VALUE_CLASS,
     -> ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_TYPE
 
@@ -253,8 +288,10 @@ internal fun ForwardPlanSkipReason.toDiagnosticKind(): ForwardDiagnosticKind = w
  *   .UNEXPORTED_DEPENDENCY_TYPE] to name the exact `include(...)` fix. ADR-074: for
  *   [ForwardPlanSkipReason.ACTUAL_TYPEALIAS_TARGET], the same slot instead carries
  *   `"<expect qualified name>-><target rendered name>"`. For [ForwardPlanSkipReason.COLLECTION] it
- *   carries the offending component ("element type Collection?", "key type String?"). Ignored by
- *   every other reason.
+ *   carries the offending component ("element type Collection?", "key type String?"). For
+ *   [ForwardPlanSkipReason.UNDECLARED_ENUM] it carries the undeclared enum's qualified name,
+ *   including when the enum is a collection component (the only extractor that descends into one).
+ *   Ignored by every other reason.
  */
 /** `kotlin`, `kotlin.*` and `kotlinx.*`: packages an export scope can never usefully admit. */
 private fun String.isStdlibPackage(): Boolean =
@@ -333,6 +370,18 @@ internal fun ForwardPlanSkipReason.diagnosticHint(
     "ADR-088 v1 marshals a bound C# interface at ordinary, non-nullable function/method/" +
         "constructor parameters and method/function returns only; expose one of those instead of " +
         "a nullable, property or collection-component position"
+
+  // Names the enum, because the reason line cannot: `warnDroppedForwardCallables` builds it from
+  // the reason's own name. Worded to stay true for both shapes the flag covers — a nested enum in
+  // either module, and a module-local top-level enum outside the export scope — since `detail`
+  // carries only the qualified name and cannot tell them apart.
+  ForwardPlanSkipReason.UNDECLARED_ENUM -> {
+    val enumName: String = detail ?: "the enum"
+    "enum `$enumName` is not in the export set, so it is never declared as a C# enum and every " +
+        "member typed with it is skipped rather than emitted as a dangling reference; a nested " +
+        "enum class is never declared (only top-level enums are), so move it to the top level of " +
+        "its file — or, if it already is top level, bring its package into the export scope"
+  }
 
   ForwardPlanSkipReason.UNIMPLEMENTABLE_BOUND_INTERFACE ->
     "no mint{Interface}Bridge exists for this bound interface (ADR-085 inadmissible), so a " +

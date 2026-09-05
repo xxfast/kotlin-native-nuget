@@ -158,6 +158,28 @@ internal fun mapReturnType(kotlinType: String): String =
 internal fun mapParamType(kotlinType: String): String =
   KOTLIN_TO_CSHARP_PARAM[kotlinType] ?: "IntPtr"
 
+/**
+ * The C# spelling of a declaration's *name within its namespace*, enclosing scope included:
+ * `Circle` for a top-level class, `Shape.Circle` for a subclass declared inside its sealed base.
+ *
+ * ADR-009 declares a sealed subclass as a **nested** C# class (`CirSealedRenderer` emits
+ * `public sealed class Circle : Shape` *inside* `public abstract class Shape`), so the
+ * simple-name-only spelling `global::Namespace.Circle` names a type that does not exist and fails
+ * the whole `Interop.cs` with CS0234/CS0246. Every member **type position** — property, method
+ * return and its `new T(handle)` construction, parameter — must therefore walk the enclosing
+ * declarations and join their simple names outermost-first.
+ *
+ * The walk stops at the first non-class parent, so a file-level declaration is unchanged and a
+ * class local to a function contributes only its own name (it is never exported anyway).
+ */
+internal fun KSClassDeclaration.nestedCsName(): String =
+  generateSequence<KSDeclaration>(this) { it.parentDeclaration }
+    .takeWhile { it is KSClassDeclaration }
+    .map { it.simpleName.asString() }
+    .toList()
+    .asReversed()
+    .joinToString(".")
+
 internal fun mapPackageToNamespace(
   kotlinPackage: String,
   rootPackage: String,
@@ -195,11 +217,15 @@ internal fun qualifiedElementCsType(type: KSType?, context: NugetContext): Strin
   val simpleName: String = declaration.simpleName.asString()
   KOTLIN_TO_CSHARP_PARAM[simpleName]?.let { return it }
   val classDeclaration: KSClassDeclaration = declaration as? KSClassDeclaration ?: return simpleName
-  if (context.rootNamespace.isEmpty()) return simpleName
+  // Enclosing scope included ([nestedCsName]): this route spells a *sealed subclass* property's
+  // type (`CirClassTranslator`) and an ADR-067 flow element, either of which can be a class nested
+  // in its sealed base and so declared as a nested C# class.
+  val nestedName: String = classDeclaration.nestedCsName()
+  if (context.rootNamespace.isEmpty()) return nestedName
   val namespace: String = mapPackageToNamespace(
     classDeclaration.packageName.asString(), context.rootPackage, context.rootNamespace,
   )
-  return "global::$namespace.$simpleName"
+  return "global::$namespace.$nestedName"
 }
 
 /**

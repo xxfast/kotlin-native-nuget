@@ -8,6 +8,21 @@ import com.google.devtools.ksp.symbol.KSFunctionDeclaration
 import com.google.devtools.ksp.symbol.KSPropertyDeclaration
 
 /**
+ * The declared base class, ungated: what the class *says* it extends, whether or not the export
+ * set carries it. Read only by `CirClassTranslator.translateClass`, to decide whether a
+ * `SKIPPED_UNEXPORTED_SUPERTYPE` diagnostic is owed for a base [forwardSuperClass] is about to
+ * drop. No other site may read it: asking what a class declares, rather than what the forward
+ * pipeline can actually generate, is exactly the CS0246 in issue #42.
+ */
+internal fun KSClassDeclaration.declaredSuperClass(): KSClassDeclaration? = superTypes
+  .map { type -> type.resolve().declaration }
+  .filterIsInstance<KSClassDeclaration>()
+  .firstOrNull { declaration ->
+    declaration.classKind == ClassKind.CLASS &&
+        declaration.qualifiedName?.asString() != "kotlin.Any"
+  }
+
+/**
  * The one has-superclass predicate the forward direction uses to decide which of a class's
  * `getAll*()` members belong to *its* surface.
  *
@@ -20,14 +35,21 @@ import com.google.devtools.ksp.symbol.KSPropertyDeclaration
  * genuinely inherits its base class's members: re-binding them on the subclass would emit a
  * member that hides the base one (CS0108), while an interface member has no such carrier and has
  * to be bound on the implementing class itself.
+ *
+ * ADR-101 amendment (2026-09-05), issue #42's base-class half: the answer is now gated on
+ * [exportedTypes], the qualified-name-keyed export set. A base outside it has no generated C#
+ * class of its own, so naming it in the base list is a guaranteed CS0246 — and, unlike a dropped
+ * interface, a dropped base class would otherwise take real callable members with it. Null here
+ * means "base-less for every forward consumer", decided in one place: the translator renders no
+ * base-list entry, both planners bind the inherited *concrete* members on this class with no
+ * `override`, and the Kotlin emitter exports them with this class as the receiver. The set is the
+ * translator's `exportedTypes` or, equivalently, the planners'
+ * [ForwardBridgeTypeContext.exportedObjectHandles] — the same five buckets under the same key.
  */
-internal fun KSClassDeclaration.forwardSuperClass(): KSClassDeclaration? = superTypes
-  .map { type -> type.resolve().declaration }
-  .filterIsInstance<KSClassDeclaration>()
-  .firstOrNull { declaration ->
-    declaration.classKind == ClassKind.CLASS &&
-        declaration.qualifiedName?.asString() != "kotlin.Any"
-  }
+internal fun KSClassDeclaration.forwardSuperClass(
+  exportedTypes: Set<String>,
+): KSClassDeclaration? = declaredSuperClass()
+  ?.takeIf { base -> base.qualifiedName?.asString() in exportedTypes }
 
 /**
  * Whether [member], as returned by `getAllFunctions()`/`getAllProperties()` on a class whose

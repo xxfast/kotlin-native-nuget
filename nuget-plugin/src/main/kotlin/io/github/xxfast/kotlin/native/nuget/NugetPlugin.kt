@@ -286,6 +286,54 @@ class NugetPlugin : Plugin<Project> {
               .resolve("nuget-interop/bound-types.json").absolutePath
           }
           argMethod.invoke(ksp, "nuget.boundTypesManifest", boundTypesManifest)
+
+          // ADR-109: the ADR-063 export predicate of EVERY forward publisher in this Gradle
+          // build, this project included, lowered to packages because the processor can only
+          // match an admitted klib type by package (a cross-module declaration carries no
+          // module identity: `containingFile == null`, `origin == KOTLIN_LIB`).
+          //
+          // A Provider, not a String: its body runs when KSP resolves its options, after every
+          // project in the build is evaluated, so no cross-project read happens inside
+          // `afterEvaluate` — where seeing a not-yet-evaluated sibling publisher would need
+          // `project.evaluationDependsOn(other)`, which is circular the moment two publishers
+          // each do it to the other (ADR-109 Alternative 2).
+          //
+          // Self is listed deliberately, and dropped by the processor (its entry's packageId
+          // equals its own `nuget.namespace`), so the single-publisher real build still
+          // exercises the whole delivery path. A project with no `publish {}` has no export
+          // scope of its own and registers nothing at all.
+          //
+          // The body reads other projects' extensions: legal today, and the first thing that
+          // breaks if project isolation is ever enabled (it is not; configuration cache alone
+          // permits this).
+          if (pub != null) {
+            val publishedScopes: Provider<String> = project.provider {
+              project.rootProject.allprojects
+                .mapNotNull { other ->
+                  other.extensions.findByType(NugetExtension::class.java)?.publish
+                }
+                .map { config ->
+                  // Mirrors `effectiveInclude` (`NugetProcessor.kt`): the explicit `include(...)`
+                  // list when non-empty, else `[rootPackage]`, else empty — which the processor
+                  // treats as "unknown scope" and stays silent about (ADR-109's documented gap).
+                  val include: List<String> = config.include
+                    .ifEmpty { listOfNotNull(config.rootPackage?.takeIf { it.isNotBlank() }) }
+                  listOf(
+                    config.packageId.orEmpty(),
+                    include.joinToString("|"),
+                    config.exclude.joinToString("|"),
+                  ).joinToString(":")
+                }
+                // Sorted for a stable configuration-cache input: the value must not depend on
+                // the order Gradle happens to evaluate sibling projects in.
+                .sorted()
+                .joinToString(";")
+            }
+
+            val providerArgMethod: Method =
+              kspClass.getMethod("arg", String::class.java, Provider::class.java)
+            providerArgMethod.invoke(ksp, "nuget.publishedScopes", publishedScopes)
+          }
         }
       }
 

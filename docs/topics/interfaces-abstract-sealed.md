@@ -11,6 +11,7 @@ Kotlin's three flavours of inheritance each get a distinct C# shape: `interface`
 | interface-typed parameter, a C# class implementing `IFoo` | accepted, no `_handle` needed | dispatched through a per-interface bridge factory, see [ADR-084](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/084-csharp-implemented-interfaces.md) |
 | nullable property on a sealed subclass (`String?`, `Int?`) | `string?` / `int?` | `String?` is one export returning `string?`; `Int?` is a `_has_value`/`_value` pair rendered as one `?:` expression |
 | property whose own type is a sealed class (bare, nullable, or a read-only collection component) | the sealed base | materialised through `<Base>.FromHandle(...)`, see [Sealed types as property types](#sealed-types-as-property-types), [ADR-105](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/105-sealed-property-position.md) |
+| a sealed subclass declared nested inside its sealed base, used at a return, property, or parameter position | `Base.Sub` (enclosing scope kept) | see [A nested sealed subclass at a member position](#a-nested-sealed-subclass-at-a-member-position) |
 
 ## Kotlin
 
@@ -327,6 +328,109 @@ public sealed class Success : Issue50State
 ```
 
 `Map` and `Set` components and enum-typed properties on a sealed subclass take the same spelling.
+
+## A nested sealed subclass at a member position
+
+A sealed subclass declared *inside* its sealed base is already declared as a nested C# class
+under [ADR-009](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/009-sealed-class-mapping.md)
+(`NestedShape.Circle`). A **member type position** referencing that subclass, a method return, a
+property, or a parameter, used to spell it from the simple name alone,
+`global::Namespace.Circle`, a type that does not exist, failing the whole generated `Interop.cs`
+with `CS0246`. It now walks the enclosing declarations and keeps the outer sealed base in the
+name, `global::Namespace.NestedShape.Circle`, the same way the payload-types spelling above keeps
+the namespace ([#54](https://github.com/xxfast/kotlin-native-nuget/issues/54)).
+
+### Kotlin {id="nested-subclass-kotlin"}
+
+From `test-library/src/nativeMain/kotlin/.../issue54/NestedShapeSample.kt`:
+
+```kotlin
+sealed class NestedShape {
+  data class Circle(val radius: Double) : NestedShape()
+
+  data object Empty : NestedShape()
+}
+
+class NestedShapeFactory {
+  fun circle(radius: Double): NestedShape.Circle = NestedShape.Circle(radius)
+
+  val unit: NestedShape.Circle = NestedShape.Circle(1.0)
+
+  fun radiusOf(circle: NestedShape.Circle): Double = circle.radius
+}
+```
+
+### Generated C# {id="nested-subclass-generated-c"}
+
+From `Interop.cs`. The property getter, the method return (and its `new T(handle)` construction),
+and the parameter all keep `NestedShape` in front of `Circle`:
+
+```C#
+[DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "nestedshapefactory_get_unit")]
+private static extern IntPtr Native_Get_unit(IntPtr handle, out IntPtr error);
+
+public global::TestLibrary.Issue54.NestedShape.Circle Unit
+{
+    get
+    {            IntPtr nativeResult = Native_Get_unit(_handle, out IntPtr error);
+    if (error != IntPtr.Zero)
+    {
+        throw NugetErrorNative.BuildException(error);
+    }
+    return new global::TestLibrary.Issue54.NestedShape.Circle(nativeResult);
+    }
+}
+
+[DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "nestedshapefactory_circle")]
+private static extern IntPtr Native_Circle(IntPtr handle, double radius, out IntPtr error);
+
+public global::TestLibrary.Issue54.NestedShape.Circle Circle(double radius)
+{
+    IntPtr nativeResult = Native_Circle(_handle, radius, out IntPtr error);
+    if (error != IntPtr.Zero)
+    {
+        throw NugetErrorNative.BuildException(error);
+    }
+    return new global::TestLibrary.Issue54.NestedShape.Circle(nativeResult);
+}
+
+[DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "nestedshapefactory_radiusOf")]
+private static extern double Native_RadiusOf(IntPtr handle, IntPtr circle, out IntPtr error);
+
+public double RadiusOf(global::TestLibrary.Issue54.NestedShape.Circle circle)
+{
+    double nativeResult = Native_RadiusOf(_handle, circle._handle, out IntPtr error);
+    if (error != IntPtr.Zero)
+    {
+        throw NugetErrorNative.BuildException(error);
+    }
+    return nativeResult;
+}
+```
+
+### Using it from C# {id="nested-subclass-using-it-from-c"}
+
+From `IntegrationTests/NestedSealedSubclassPositionTests.cs`:
+
+```C#
+[Fact]
+public void Unit_NestedSubclassAtAPropertyPosition_ReadsTheSubclassPayload()
+{
+    using var factory = new NestedShapeFactory();
+
+    using var unit = factory.Unit;
+
+    Assert.Equal(1.0, unit.Radius);
+}
+```
+
+<note>
+    <p>An ordinary property of the sealed <b>base</b>'s own type (<code>val shape:
+    NestedShape</code>) reads through a different function, <code>qualifiedElementCsType</code>,
+    used by the sealed-subclass property renderer and the ADR-067 flow-element route. It got the
+    same enclosing-scope walk, pinned by the Tier 1 <code>Wrapper(val inner: Circle)</code>
+    cell.</p>
+</note>
 
 ## Nullable properties on sealed subclasses
 

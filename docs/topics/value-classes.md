@@ -10,8 +10,8 @@ A Kotlin `value class` (inline class) wrapping a primitive or `String` becomes a
 | `String`-underlying value class as a `val`/`var` property | the same `record struct`, a settable C# property when the Kotlin property is `var` | getter reconstructs from the underlying `String`, setter unwraps it; see [ADR-077](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/077-value-classes-at-ordinary-positions.md) |
 | `Nullable(ValueClass(String))` at a parameter, property or return position | `ChartId?` (`Nullable<ChartId>`), never a reference nullable | rides the same null pointer as nullable `String`/`ObjectHandle`, no has-value pair; see [ADR-077](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/077-value-classes-at-ordinary-positions.md) |
 | `Primitive`-underlying value class at an ordinary position | the same `record struct` | wire is the primitive's own wire (e.g. `Double`); see below |
-| `Enum`-underlying value class at an ordinary position | the same `record struct` | wire is the enum's `int` ordinal, cast back with `(EnumType)`; see below |
-| `ObjectHandle`-underlying value class at an ordinary position, incl. `Nullable(ValueClass(ObjectHandle))` | the same `record struct`, `?` rides the null pointer | wire is the wrapped object's own StableRef handle; see below |
+| `Enum`-underlying value class at an ordinary position | the same `record struct` | wire is the enum's `int` ordinal, cast back with `(EnumType)`; the struct's member type is qualified `global::Namespace.Type` when the enum lives in a different Kotlin package than the value class; see below |
+| `ObjectHandle`-underlying value class at an ordinary position, incl. `Nullable(ValueClass(ObjectHandle))` | the same `record struct`, `?` rides the null pointer | wire is the wrapped object's own StableRef handle; the struct's member type is qualified `global::Namespace.Type` when the underlying class lives in a different Kotlin package than the value class; see below |
 | `Nullable(ValueClass)` over a `Primitive`- or `Enum`-underlying value class, at parameter, property, or return position | `Dosage?` / `Temperament?` (`Nullable<T>`), never a reference nullable | no null pointer on the wire, so it reuses the position's has-value fan-out (input pair, ADR-061 single-call `valueOut`, ADR-002 `LegacyTwoCall`/`NullableDispatch`, or the top-level two-call), value slot at the underlying's own wire; see [ADR-079](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/079-nullable-primitive-enum-underlying-value-classes.md) and below |
 | value class as a `List`/`Map`/`Set` component (element, key or value), at input position, collection property setter, method return or property getter | the same `record struct`, in `IReadOnlyList<T>`/`IReadOnlyDictionary<K,V>`/`IReadOnlySet<T>` etc. | wire carries the **underlying** value per element, re-wrapped on the way in and out, for all four ADR-077 underlyings including an enum underlying via its `int` ordinal; see [ADR-081](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/081-value-class-collection-components.md) and below |
 | `Nullable(ValueClass)` as a `List`/`Map` value/`Set` component | same as above, with a null element/value riding a null pointer in the component slot | nullable map **keys** stay a named skip (`Dictionary` can't hold `null`); see [ADR-083](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/083-nullable-collection-components.md) and [Collections](collections.md) |
@@ -715,6 +715,59 @@ public Temperament Soothe(Temperament current)
         throw NugetErrorNative.BuildException(error);
     }
     return new Temperament((global::TestLibrary.Clinic.Mood)nativeResult);
+}
+```
+
+### Cross-package underlying
+
+`Temperament` and `Mood` above both live in `...test.clinic`, the same package, so the struct's
+member type spells the enum bare (`public Mood Mood { get; }`). When a value class instead wraps an
+enum or class declared in a *different* Kotlin package, the member type is spelled fully qualified
+(`global::Namespace.Type`), the same qualification the [Enums](enums.md) and object-handle render
+sites already use across a package boundary.
+
+From `test-library/src/nativeMain/kotlin/.../DispositionDesk.kt`, two root-package value classes
+wrapping `clinic.Mood` and `clinic.Patient`:
+
+```kotlin
+value class Disposition(val mood: Mood)
+
+value class PatientRef(val patient: Patient)
+```
+
+Generated C#, from `Interop.cs`:
+
+```C#
+public readonly record struct Disposition
+{
+    public global::TestLibrary.Clinic.Mood Mood { get; }
+    // ...
+}
+
+public readonly record struct PatientRef(global::TestLibrary.Clinic.Patient Patient)
+{
+}
+```
+
+From `IntegrationTests/CrossNamespaceValueClassTests.cs`:
+
+```C#
+[Fact]
+public void Disposition_Constructor_WrapsTheCrossNamespaceEnumAndReadsItBack()
+{
+    var disposition = new Disposition(Mood.Anxious);
+
+    Assert.Equal(Mood.Anxious, disposition.Mood);
+}
+
+[Fact]
+public void PatientRef_Constructor_WrapsTheCrossNamespaceClassAndReadsItBack()
+{
+    using var mylo = new Patient("Mylo");
+
+    var referral = new PatientRef(mylo);
+
+    Assert.Equal("Mylo", referral.Patient.Name);
 }
 ```
 

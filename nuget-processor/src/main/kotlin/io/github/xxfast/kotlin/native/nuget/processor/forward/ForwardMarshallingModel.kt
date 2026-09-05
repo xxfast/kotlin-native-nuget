@@ -202,6 +202,14 @@ internal sealed interface BridgeType {
    * @param actualTypeAliasExpectName ADR-074: the `expect` class's qualified name, when
    *   [isActualTypeAliasTarget] is true; carried for the diagnostic hint's "the actual typealias
    *   for `<expect name>` resolves to..." message.
+   * @param isUndeclaredEnum true when [rendered] is an `enum class` that no route ever declares as
+   *   a C# enum, so a member typed with it would otherwise be spelled as a reference to a type
+   *   nothing emits (the CS0426/CS0234 class of consumer failure). Two shapes reach it: a *nested*
+   *   enum (module-local or cross-module — only top-level enums are declared, and the reachability
+   *   closure refuses to admit a nested dependency enum precisely so it lands here), and a
+   *   module-local top-level enum whose package fell outside the export scope. Distinct from
+   *   [isUnexportedDependency], whose `include(...)` hint is wrong for the nested case: no export
+   *   scope can make a nested enum declarable.
    */
   data class Unsupported(
     val rendered: kotlin.String,
@@ -209,6 +217,7 @@ internal sealed interface BridgeType {
     val isUnexportedDependency: kotlin.Boolean = false,
     val isActualTypeAliasTarget: kotlin.Boolean = false,
     val actualTypeAliasExpectName: kotlin.String? = null,
+    val isUndeclaredEnum: kotlin.Boolean = false,
   ) : BridgeType
 
   /** A collection whose component type was lost during classification. */

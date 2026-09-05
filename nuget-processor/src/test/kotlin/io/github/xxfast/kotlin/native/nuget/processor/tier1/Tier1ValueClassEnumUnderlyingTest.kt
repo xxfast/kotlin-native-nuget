@@ -37,11 +37,9 @@ class Tier1ValueClassEnumUnderlyingTest {
 
     val cs: String = result.generatedCSharp
     assertContains(cs, "public readonly record struct Temperament")
-    assertContains(cs, "public Mood Mood { get; }")
+    assertContains(cs, "public global::Interop.Mood Mood { get; }")
     assertContains(cs, "private static extern int Native_Create(int mood, out IntPtr error);")
     assertContains(cs, "int underlying = Native_Create((int)mood, out IntPtr error);")
-    // The enum cast spells the classifier's qualified name (`global::Interop.Mood` under this
-    // harness), so assert the cast-and-assign shape rather than one spelling.
     assertContains(cs, "Mood = (global::Interop.Mood)CreateChecked(mood);")
   }
 

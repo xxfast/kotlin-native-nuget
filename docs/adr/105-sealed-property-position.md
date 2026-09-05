@@ -284,6 +284,17 @@ Load-bearing claims and their status:
   ordinary `ObjectHandle` (a `data class` is not sealed) and is unaffected, but its
   `csharpTypeNameFor` spelling has the same nested-name caveat.
 
+**Correction (2026-09-05):** the first bullet above is unreachable as stated. A sealed *base*
+nested inside another class (`Outer.Inner`) never reaches `csharpTypeNameFor` at an `ObjectHandle`
+position at all: an ordinary nested class, object, or interface is never declared and the
+classifier's exported-handle gate skips it named before any spelling code runs. The real,
+reachable case was the second bullet's shape: a sealed **subclass** nested inside its own sealed
+base (`Shape.Circle`), which *is* declared under ADR-009 and *is* referenced at a member position.
+That was the actual gap, fixed by a shared `nestedCsName()` helper in `CirTypeMapping.kt` that both
+`ForwardBridgeTypeClassifier.csharpTypeNameFor` and `CirTypeMapping.qualifiedElementCsType` now call,
+walking `parentDeclaration` and joining enclosing simple names outermost-first. See
+[Interfaces, abstract classes, and sealed classes](../topics/interfaces-abstract-sealed.md#a-nested-sealed-subclass-at-a-member-position).
+
 ### Consumer API
 
 ```csharp
@@ -406,6 +417,22 @@ The scalar-setter claim is additionally promoted by the shipped `test-library` f
 mutable-collection claim rests on `Tier1SealedMutableCollectionPropertyTest` alone: the fixture
 deliberately carries no `var` mutable collection of sealed (see its KDoc), since that shape belongs
 to a processor unit test, not an integration fixture.
+
+## Post-implementation note (2026-09-05): the enum branch now carries the same gate
+
+`ForwardBridgeTypeClassifier.kt`'s enum branch classified any `ClassKind.ENUM_CLASS` with no
+membership check at all, the same hole this ADR closed for the sealed branch: a nested `enum
+class`, or an out-of-scope dependency enum, was bound and spelled but never declared, a dangling
+`CS0246`/`CS0234` reference in the generated `Interop.cs`. The enum branch is now gated on
+`context.exportedObjectHandles` the same way, mirroring the sealed-class gate above. A gated-out
+module-local enum (nested inside an exported class) skips named through a new
+`ForwardPlanSkipReason.UNDECLARED_ENUM` (kind `SKIPPED_UNSUPPORTED_TYPE`) at a parameter/return
+position, or the ordinary `SKIPPED_UNSUPPORTED_PROPERTY` message at a property position; an
+unadmitted **top-level** dependency enum takes the existing `SKIPPED_UNEXPORTED_DEPENDENCY_TYPE`
+route instead. The [ADR-066](066-forward-export-reachability-closure.md)
+reachability closure's `ENUM` admission was also changed to refuse a nested enum, so a dependency's
+nested enum is no longer declared at namespace root under its simple name either. No ADR: a
+diagnostic gate, not a design decision. See [Enums](../topics/enums.md#nested-enums-skip-named).
 
 ## Prior art (to the depth that changes the decision)
 

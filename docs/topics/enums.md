@@ -491,6 +491,91 @@ properties](collections.md#mutable-collection-properties).
     a nested collection still loses its member today.</p>
 </note>
 
+## Nested enums skip named {id="nested-enums-skip-named"}
+
+An `enum class` declared nested inside another class is never declared in C#, whether it is
+module-local or reached from a dependency module: only a top-level enum becomes a C# `enum`. A
+member typed with a nested enum used to be spelled anyway, a `global::Namespace.Outer.Mode`
+reference to a type that does not exist, failing the consumer's C# compile with `CS0246`. The
+classifier's enum branch is now gated on the same exported-handle membership check the sealed-class
+branch uses ([ADR-105](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/105-sealed-property-position.md)),
+so every member typed with a nested enum skips named instead, and the owning class still generates
+with its other members.
+
+From `test-library/src/nativeMain/kotlin/.../issue54/NestedModeOwner.kt`:
+
+```kotlin
+class NestedModeOwner {
+
+  /** Module-local, nested, and therefore never declared in C#. */
+  enum class Mode { ON, OFF }
+
+  /** Property position. */
+  var mode: Mode = Mode.ON
+
+  /** Parameter position. */
+  fun set(mode: Mode) {
+    this.mode = mode
+  }
+
+  /** Return position. */
+  fun current(): Mode = mode
+
+  /** Control: the sibling that must survive the gate. */
+  val name: String = "owner"
+}
+```
+
+A parameter or return position skips with `SKIPPED_UNSUPPORTED_TYPE`, naming the new
+`UNDECLARED_ENUM` reason. From `NugetDiagnostics.json`:
+
+```
+[nuget:SKIPPED_UNSUPPORTED_TYPE] Skipping io.github.xxfast.kotlin.native.nuget.test.issue54.NestedModeOwner.set:
+    its UNDECLARED_ENUM type combination is not supported. enum
+    `io.github.xxfast.kotlin.native.nuget.test.issue54.NestedModeOwner.Mode` is not in the export set, so it
+    is never declared as a C# enum and every member typed with it is skipped rather than emitted as a
+    dangling reference; a nested enum class is never declared (only top-level enums are), so move it to the
+    top level of its file — or, if it already is top level, bring its package into the export scope
+    at NestedModeOwner.kt:44
+```
+
+A property position skips the same way, but through the ordinary `SKIPPED_UNSUPPORTED_PROPERTY`
+message the property planner already emits for any type it has no getter/setter shape for, not the
+`UNDECLARED_ENUM` reason:
+
+```
+[nuget:SKIPPED_UNSUPPORTED_PROPERTY] Skipping io.github.xxfast.kotlin.native.nuget.test.issue54.NestedModeOwner.mode:
+    its type io.github.xxfast.kotlin.native.nuget.test.issue54.NestedModeOwner.Mode has no property getter or
+    setter shape. expose a bridgeable property (or a getter function) whose type is not
+    io.github.xxfast.kotlin.native.nuget.test.issue54.NestedModeOwner.Mode, and export that instead
+    at NestedModeOwner.kt:41
+```
+
+The same gate closes a second shape: a top-level enum in a *dependency module* whose package was
+never brought into the export scope. It skips with the existing
+`SKIPPED_UNEXPORTED_DEPENDENCY_TYPE` kind instead, naming the `include(...)` fix
+([The nuget {} DSL](nuget-dsl.md)):
+
+```
+[nuget:SKIPPED_UNEXPORTED_DEPENDENCY_TYPE] Skipping io.github.xxfast.kotlin.native.nuget.test.Newsroom.airwave:
+    its UNEXPORTED_DEPENDENCY_TYPE type combination is not supported. add
+    include("io.github.xxfast.kotlin.native.nuget.test", "dev.other.core") to nuget { publish { } } (an
+    explicit include replaces the rootPackage default, so keep your own packages listed), or expose a type
+    from an in-scope package instead
+    at Newsroom.kt:88
+```
+
+<note>
+    <p>
+        A nested enum reached from a dependency module (admitted by the
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/066-forward-export-reachability-closure.md">ADR-066</a>
+        reachability closure) is a third shape of the same gap: the closure's <code>ENUM</code>
+        admission now refuses a nested enum outright, so it is never declared at namespace root
+        under its simple name either, and a member typed with it skips the same way as the
+        module-local case above.
+    </p>
+</note>
+
 ## Limitations
 
 - A nested-collection component (`List<List<Mood>>`) has no representation on the write side and is
@@ -509,5 +594,7 @@ properties](collections.md#mutable-collection-properties).
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/080-bare-nullable-enum.md">ADR-080: Bare nullable enums</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/081-value-class-collection-components.md">ADR-081: Value-class collection components</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/097-enum-collection-components.md">ADR-097: Enum collection components</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/105-sealed-property-position.md">ADR-105: Sealed types at property positions</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/066-forward-export-reachability-closure.md">ADR-066: Forward export reachability closure</a>
     </category>
 </seealso>

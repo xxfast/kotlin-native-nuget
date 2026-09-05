@@ -19,7 +19,11 @@ import kotlin.test.assertIs
 
 class ForwardBridgeTypeClassifierTest {
   private val classifier = ForwardBridgeTypeClassifier(
-    ForwardBridgeTypeContext(exportedObjectHandles = setOf("sample.Patient", "sample.Record")),
+    // `sample.State` is here because the enum branch is gated on membership exactly as the class
+    // branch is: only an enum the renderer actually declares may be spelled as a C# enum.
+    ForwardBridgeTypeContext(
+      exportedObjectHandles = setOf("sample.Patient", "sample.Record", "sample.State"),
+    ),
   )
 
   private val interfaceClassifier = ForwardBridgeTypeClassifier(
@@ -132,6 +136,49 @@ class ForwardBridgeTypeClassifierTest {
 
     val unexported = assertIs<BridgeType.Unsupported>(classifier.classify(type("sample.Secret")))
     assertEquals("declaration is not in the exported object-handle set", unexported.reason)
+  }
+
+  /**
+   * The three ways an enum can fail the membership gate, and the two different flags they carry:
+   * a nested enum is undeclarable in any module (no export scope can fix it), while a *top-level*
+   * cross-module one is merely out of scope and keeps ADR-066's `include(...)` route. Before the
+   * gate all three were spelled as C# enum references to types nothing declares.
+   */
+  @Test
+  fun `an enum outside the exported set is unsupported rather than spelled`() {
+    val nested = assertIs<BridgeType.Unsupported>(
+      classifier.classify(
+        type(
+          classDeclaration(
+            "sample.Owner.Mode",
+            classKind = ClassKind.ENUM_CLASS,
+            parentDeclaration = classDeclaration("sample.Owner"),
+          ),
+        ),
+      ),
+    )
+    assertEquals(true, nested.isUndeclaredEnum)
+    assertEquals(false, nested.isUnexportedDependency)
+    assertEquals("sample.Owner.Mode", nested.rendered)
+
+    val outOfScope = assertIs<BridgeType.Unsupported>(
+      classifier.classify(type("sample.Hidden", classKind = ClassKind.ENUM_CLASS)),
+    )
+    assertEquals(true, outOfScope.isUndeclaredEnum)
+
+    val dependency = assertIs<BridgeType.Unsupported>(
+      classifier.classify(
+        type(
+          classDeclaration(
+            "dep.outside.Airwave",
+            classKind = ClassKind.ENUM_CLASS,
+            containingFile = null,
+          ),
+        ),
+      ),
+    )
+    assertEquals(true, dependency.isUnexportedDependency)
+    assertEquals(false, dependency.isUndeclaredEnum)
   }
 
   @Test
@@ -259,6 +306,11 @@ class ForwardBridgeTypeClassifierTest {
     classKind: ClassKind = ClassKind.CLASS,
     modifiers: Set<Modifier> = emptySet(),
     primaryConstructor: KSFunctionDeclaration? = null,
+    // Both default to the module-local, top-level shape every other fixture here wants; the
+    // undeclared-enum gate is the one test that varies them.
+    parentDeclaration: KSDeclaration? = null,
+    containingFile: com.google.devtools.ksp.symbol.KSFile? =
+      proxy<com.google.devtools.ksp.symbol.KSFile>(),
   ): KSClassDeclaration = proxy(
     "getQualifiedName" to name(qualifiedName),
     "getSimpleName" to name(qualifiedName.substringAfterLast('.')),
@@ -270,10 +322,16 @@ class ForwardBridgeTypeClassifierTest {
     // is the verified cross-module/klib signal the classifier now branches on), so a non-null
     // stand-in keeps these tests on the pre-existing "declaration is not in the exported
     // object-handle set" message rather than the new dependency-module one.
-    "getContainingFile" to proxy<com.google.devtools.ksp.symbol.KSFile>(),
+    "getContainingFile" to containingFile,
     // ADR-074: every fixture here is an ordinary (non-`expect`) declaration; the classifier now
     // reads this before anything else in `classifyNonNullable`.
     "isExpect" to false,
+    // The C# spelling walks enclosing declarations (`nestedCsName`, so a sealed subclass reads
+    // `Shape.Circle`); every fixture here is top-level, so the walk stops immediately.
+    "getParentDeclaration" to parentDeclaration,
+    // ADR-107's `isStdlibThrowable` walks the supertypes of any declaration with no containing
+    // file; no fixture here stands in for a stdlib throwable, so the walk finds nothing.
+    "getSuperTypes" to emptySequence<KSTypeReference>(),
   )
 
   private fun constructor(underlying: KSType): KSFunctionDeclaration = proxy(
@@ -297,7 +355,10 @@ class ForwardBridgeTypeClassifierTest {
         "toString" -> T::class.simpleName ?: "proxy"
         "hashCode" -> System.identityHashCode(methods)
         "equals" -> false
-        else -> methods[method.name] ?: error("Unexpected ${T::class.simpleName}.${method.name} call")
+        // A stub whose value is deliberately `null` (an absent parent declaration, an absent
+        // primary constructor) is a stub, not a gap: key presence decides, not the value.
+        in methods -> methods[method.name]
+        else -> error("Unexpected ${T::class.simpleName}.${method.name} call")
       }
     } as T
   }

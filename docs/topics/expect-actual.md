@@ -293,15 +293,142 @@ public void BeaconLabel_OmittingLevel_UsesTheExpectDeclaredDefault()
 See [Function default parameters](top-level-declarations.md#function-default-parameters) for the
 general mechanism.
 
+## `expect sealed class`
+
+Subclasses live on the actual side (or, for a common-side declaration, in any module on the
+dependency path between the expect and the actual). The forward sealed route reads every subclass
+off the exported (`actual`) declaration through `getSealedSubclasses()`, so it discriminates exactly
+as an ordinary sealed class does. From `PlatformResiduals.kt`:
+
+```kotlin
+expect sealed class Signal
+
+expect fun collarSignal(dbm: Int): Signal
+```
+
+The macos actual, from `PlatformResidualsMacos.kt` (mingw differs only in the boost, `+ 24`):
+
+```kotlin
+actual sealed class Signal {
+  data class Strong(val dbm: Int) : Signal()
+  data object Lost : Signal()
+}
+
+actual fun collarSignal(dbm: Int): Signal = if (dbm < 0) Signal.Lost else Signal.Strong(dbm + 42)
+```
+
+The generated C#, from `Interop.cs`:
+
+```C#
+public abstract class Signal : IDisposable, INugetHandle
+{
+    public sealed class Lost : Signal { /* ... */ }
+
+    public sealed class Strong : Signal
+    {
+        public int Dbm => Native_Get_dbm(_handle, out _);
+        /* ... */
+    }
+}
+```
+
+From `IntegrationTests/ExpectActualResidualsTests.cs`:
+
+```C#
+[Fact]
+public void Signal_WhenCollarReports_DiscriminatesAsStrongWithRunningActualsBoost()
+{
+    using Signal reading = PlatformResiduals.collarSignal(10);
+    var strong = Assert.IsType<Signal.Strong>(reading);
+    Assert.Equal(10 + ExpectedBoost, strong.Dbm);
+}
+```
+
+## `expect interface`, `expect enum class`, `expect value class`
+
+All three follow the same one-line filter as every other shape: the exported (`actual`) declaration
+reaches exactly the route the equivalent non-`expect` interface, enum, or value class would. From
+`PlatformResiduals.kt`:
+
+```kotlin
+expect interface Transponder {
+  fun ping(): String
+}
+expect fun transponder(): Transponder
+
+expect enum class Band {
+  LOW,
+  HIGH,
+}
+expect fun band(): Band
+
+expect value class Frequency(val hertz: Int)
+expect fun frequency(): Frequency
+```
+
+Each target's implementing class for `Transponder` (`MacosTransponder`/`MingwTransponder`) is
+`internal`, so it never reaches the generated C#, which stays identical across targets:
+
+```C#
+public interface ITransponder : IDisposable
+{
+    string Ping();
+}
+
+public sealed class Transponder : ITransponder, INugetHandle
+{
+    /* ... */
+}
+public enum Band
+{
+    Low = 0,
+    High = 1,
+}
+public readonly record struct Frequency
+{
+    public int Hertz { get; }
+    /* ... */
+}
+```
+
+From `IntegrationTests/ExpectActualResidualsTests.cs`:
+
+```C#
+[Fact]
+public void Transponder_Ping_ReturnsRunningActualsAnswer()
+{
+    using ITransponder collar = PlatformResiduals.transponder();
+    Assert.Equal(ExpectedPong, collar.Ping());
+}
+
+[Fact]
+public void Frequency_Hertz_ReturnsRunningActualsValue()
+{
+    Assert.Equal(ExpectedHertz, PlatformResiduals.frequency().Hertz);
+}
+```
+
 ## Limitations
 
-- `expect sealed class`: not exercised. `getSealedSubclasses()` against an actualized sealed class hasn't been spiked.
-- `actual typealias` to a generic or parameterized target (`actual typealias Bag = List<String>`): the redirect substitutes a `KSClassDeclaration` and loses type arguments, so this routes through `SKIPPED_ACTUAL_TYPEALIAS_TARGET` rather than binding.
-- Cross-module (klib) `expect`/`actual`: guarded defensively, but the underlying resolution behaviour hasn't been spiked.
-- KDoc and annotations declared on the `expect` are invisible after the filter (nothing in the generator consumes either today).
+- `actual typealias` to a generic or parameterized target (`actual typealias Bag<T> = Crate<T>`) is
+  rejected as a mapping, not just deferred: the redirect substitutes a `KSClassDeclaration` and has
+  no argument map to rewrite `Bag<String>` as `Crate<String>`, so this stays on the
+  `SKIPPED_ACTUAL_TYPEALIAS_TARGET` path pinned by a permanent Tier 1 regression cell. A stdlib
+  collection target (the `actual typealias Bag = List<String>` shape) is not even a compiling Kotlin
+  program in the first place (`ACTUAL_TYPE_ALIAS_WITH_COMPLEX_SUBSTITUTION`).
+- Cross-module (klib) `expect`/`actual` is rejected as unreachable in v1: an expect and its actual
+  must share a module, so a dependency klib can only ever hold actualized pairs, and the closure
+  guard can never fire on a root. Whether a platform klib's metadata still carries the expect half
+  is unspiked either way; the guard stays defensive.
+- KDoc and annotations declared on the `expect` are invisible after the filter (nothing in the
+  generator consumes either today).
 - Two packaged targets can legitimately generate different C# APIs when their `actual`s diverge beyond the `expect`'s contract, and only one target's `Interop.cs` ships (`packNuget` packages exactly one target's output while shipping every target's binary). Nothing currently diffs the two; see the open cross-target-divergence item in [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md).
 - A secondary constructor on an `expect`/`actual class` gets no synthesized default-parameter overloads; see the "Constructor default parameters on an `expect` class" section above.
 - Function default parameters on an `expect` declaration are only surfaced on the top-level-function route; a class method, `object` member, companion member, or extension declared on an `expect` class gets no synthesized overload. See "Function default parameters on a top-level `expect` function" above.
+- `expect annotation class` is not applicable: the forward direction has no route for
+  `ClassKind.ANNOTATION_CLASS` at all, so an ordinary `annotation class` is already outside the
+  export set with no diagnostic; an `expect` one is filtered one line earlier and is otherwise
+  identical.
 
 <seealso>
     <category ref="related">
