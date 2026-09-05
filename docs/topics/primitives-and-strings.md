@@ -144,7 +144,53 @@ a nullable-returning function that threw corrupted memory (`SIGBUS`) instead of 
 nullable-returning exports until this was corrected; see `NullableFunctionExceptionPropagationTests.cs`
 for the regression coverage.
 
-Kotlin identifiers that collide with C# keywords (`string`, `byte`, `short`, `int`, `long`) are escaped with `@` on the C# side; `short`/`int`/`long`/`double` also get a trailing underscore on the native entry point to dodge C reserved words.
+Kotlin identifiers that collide with C# keywords (`string`, `byte`, `short`, `int`, `long`) are escaped with `@` on the C# side; `short`/`int`/`long`/`double` also get a trailing underscore on the native entry point to dodge C reserved words. This applies to a *parameter* name too, not just a declaration name: a Kotlin parameter literally named `abstract`, `default`, `params`, `ref`, or any other C# reserved word renders as a verbatim identifier (`@abstract`) at every C# position, the public wrapper declaration, the `[DllImport]` extern, and every use site (a call argument, a member access like `@ref._handle`, or a marshalling local like `@paramsHandle`).
+
+From `test-library/src/nativeMain/kotlin/.../issue65/Issue65Sample.kt`:
+
+```kotlin
+data class Issue65Article(val abstract: String, val title: String) {
+  fun describe(default: Int): String = "$title x$default"
+}
+```
+
+Generated C#, from `Interop.cs`:
+
+```C#
+[DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "issue65article_create")]
+private static extern IntPtr Native_Create([MarshalAs(UnmanagedType.LPUTF8Str)] string @abstract, [MarshalAs(UnmanagedType.LPUTF8Str)] string title, out IntPtr error);
+
+public Issue65Article(string @abstract, string title)
+{
+    IntPtr handle = Native_Create(@abstract, title, out IntPtr error);
+    // ...
+}
+
+[DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "issue65article_describe")]
+private static extern IntPtr Native_Describe(IntPtr handle, int @default, out IntPtr error);
+
+public string Describe(int @default)
+{
+    IntPtr nativeResult = Native_Describe(_handle, @default, out IntPtr error);
+    // ...
+}
+```
+
+A consumer passes a named argument the same way, verbatim: `new Issue65Article(@abstract: "...", title: "...")`. From `IntegrationTests/Issue65Tests.cs`:
+
+```C#
+using var article = new Issue65Article(
+    @abstract: "Mylo slept through the entire press conference.",
+    title: "Cat Naps Through Budget Address");
+```
+
+<note>
+    <p>Only the ordinary synchronous forward callable plan is covered: constructors (including a
+    data class's <code>Copy</code>), class methods, top-level and extension functions, and
+    value-class members. A keyword-named parameter on a legacy route (suspend, <code>Flow</code>,
+    lambda, sealed, generic, interface-bridge) is not yet escaped; see
+    <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md">ROADMAP.md</a>.</p>
+</note>
 
 ## Using it from C#
 
@@ -871,6 +917,11 @@ public void PreviousChipId_NullableVarProperty_HoldsGuidEmptyDistinctlyFromNull(
   The binary two-`INT64` wire considered and rejected in [ADR-106](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/106-uuid-mapping.md)
   is a possible follow-up if the per-crossing string allocation ever matters, tracked in
   [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md) Phase 4.
+- A keyword-named parameter is only escaped on the ordinary synchronous forward callable plan
+  (constructors, class methods, top-level/extension functions, value-class members). The same
+  parameter on a suspend method, a `Flow<T>`-returning member, a lambda/callback parameter, a sealed
+  member, a generic member, or an interface-bridge member still generates invalid C#, tracked in
+  [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md) Phase 3.
 
 <seealso>
     <category ref="related">
