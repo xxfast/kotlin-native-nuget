@@ -1,5 +1,0 @@
-# Deferred from ADR-074's v1 scope
-
-> Extracted verbatim from `ROADMAP.md` (Phase 2: KSP-driven generation) in the 2026-08-31 roadmap slim-down.
-
-**Deferred from ADR-074's v1 scope**, none exercised: `expect sealed class` (`getSealedSubclasses()` against an actualized sealed class, not spiked); `actual typealias` to a generic/parameterized target (e.g. `actual typealias Bag = List<String>`) routes to `SKIPPED_ACTUAL_TYPEALIAS_TARGET` since the redirect substitutes a `KSClassDeclaration` and loses type arguments; cross-module (klib) `expect`/`actual` is guarded defensively but its underlying resolution behaviour is inferred, not spiked; KDoc and annotations declared on the `expect` are invisible after the filter, since nothing downstream consumes either today; merging the expect/actual pair into one synthetic declaration (ADR-074 Alternative 3) is deferred, not rejected; `expect interface`/`enum class`/`value class`/`annotation class` are fixed by the same one-line filter but never exercised, supported by construction but untested.

@@ -449,4 +449,324 @@ class Tier1ExpectActualDeclarationsTest {
       "expected no Failure type at all in Interop.cs; got: ${result.generatedCSharp}",
     )
   }
+
+  // -- ADR-074 amendment cells (2026-09-05): the shapes the ADR's "What is deferred" list left
+  // -- un-exercised. Every one of them is predicted to work by construction — Decision 1's
+  // -- `isExpect` filter runs before every root bucket, so each `actual` reaches exactly the route
+  // -- the same non-expect declaration would — and nothing had ever crossed them.
+  // --
+  // -- These cells assert on `result.generated` / `result.generatedCSharp` / `kspWarnings`, never
+  // -- on `compiledClean`: `Tier1Harness.compileGenerated` is a plain single-target
+  // -- `K2JVMCompiler.exec()` with no `-Xcommon-sources`/multiplatform wiring, so an
+  // -- expect/actual fixture legitimately fails that step (the harness says so at its call site),
+  // -- and `compileErrors` is informational here exactly as it is for the cells above.
+
+  /**
+   * Item 1: an `expect sealed class` whose subclasses are declared in the **actual's** body.
+   * Every subclass enumeration on the forward sealed route is `getSealedSubclasses()` on the
+   * exported declaration — which, after the filter, is the actual — so this pins that KSP2
+   * enumerates inheritors of an `actual sealed class` exactly as it does for a plain one.
+   */
+  @Test
+  fun `expect sealed class with actual-side subclasses renders the hierarchy once`() {
+    val result = Tier1Harness.run(
+      sources = mapOf(
+        "SignalMacos.kt" to """
+        package tier1.expectactual.sealedactual
+
+        actual sealed class Signal {
+          data class Strong(val dbm: Int) : Signal()
+          data object Lost : Signal()
+        }
+
+        actual fun collarSignal(dbm: Int): Signal =
+          if (dbm < 0) Signal.Lost else Signal.Strong(dbm)
+        """.trimIndent(),
+      ),
+      commonSources = mapOf(
+        // Not "Signal.kt": ADR-007's per-file static class name would then collide with the type
+        // name and make the single-declaration assertion below pass for the wrong reason.
+        "SignalApi.kt" to """
+        package tier1.expectactual.sealedactual
+
+        expect sealed class Signal
+
+        expect fun collarSignal(dbm: Int): Signal
+        """.trimIndent(),
+      ),
+    )
+
+    assertEquals("OK", result.kspExitCode, "kspErrors=${result.kspErrors}")
+    assertTrue(result.kspErrors.isEmpty(), "expected no KSP errors; got: ${result.kspErrors}")
+
+    val cs: String = result.generatedCSharp
+    assertEquals(
+      1,
+      Regex("""\bclass Signal\b""").findAll(cs).count(),
+      "expected exactly one Signal declaration in Interop.cs; got: $cs",
+    )
+    assertTrue(cs.contains("public abstract class Signal"), "got: $cs")
+    assertTrue(cs.contains("class Strong : Signal"), "got: $cs")
+    assertTrue(cs.contains("class Lost : Signal"), "got: $cs")
+
+    // The discriminator is the loud half: `SealedClassExports` renders an exhaustive `when` over
+    // `getSealedSubclasses()`, so a missing inheritor could not silently produce a plausible file.
+    val kotlin: String = result.generated
+    assertTrue(kotlin.contains("signal_get_type"), "got: $kotlin")
+    assertTrue(
+      Regex("""is \S*Signal\.Strong ->""").containsMatchIn(kotlin),
+      "expected the get_type `when` to name Strong; generated=$kotlin",
+    )
+    assertTrue(
+      Regex("""is \S*Signal\.Lost ->""").containsMatchIn(kotlin),
+      "expected the get_type `when` to name Lost; generated=$kotlin",
+    )
+  }
+
+  /**
+   * Item 1, second placement: a subclass declared **beside the expect**, in the common source set
+   * (the KEEP permits subclasses in any module on the dependency path between the expect and its
+   * actual, including the declaring module). The `expect sealed class Signal()` carries an
+   * explicit no-arg constructor deliberately: an `expect class` with no declared constructor is
+   * not constructible from common code, so `: Signal()` would otherwise fail the frontend for a
+   * reason unrelated to this pin.
+   */
+  @Test
+  fun `expect sealed class with a common-side subclass names it in the discriminator`() {
+    val result = Tier1Harness.run(
+      sources = mapOf(
+        "SignalCommonSubActual.kt" to """
+        package tier1.expectactual.sealedcommonsub
+
+        actual sealed class Signal actual constructor() {
+          data object Lost : Signal()
+        }
+
+        actual fun latestSignal(): Signal = Signal.Lost
+        """.trimIndent(),
+      ),
+      commonSources = mapOf(
+        "SignalCommonSubApi.kt" to """
+        package tier1.expectactual.sealedcommonsub
+
+        expect sealed class Signal()
+
+        class CommonPing(val strength: Int) : Signal()
+
+        expect fun latestSignal(): Signal
+        """.trimIndent(),
+      ),
+    )
+
+    assertEquals("OK", result.kspExitCode, "kspErrors=${result.kspErrors}")
+    val kotlin: String = result.generated
+    assertTrue(
+      Regex("""is \S*CommonPing ->""").containsMatchIn(kotlin),
+      "expected the get_type `when` to name the common-side subclass; generated=$kotlin",
+    )
+    assertTrue(
+      Regex("""is \S*Signal\.Lost ->""").containsMatchIn(kotlin),
+      "expected the get_type `when` to name the actual-side subclass too; generated=$kotlin",
+    )
+  }
+
+  /**
+   * Item 2, the pin (not a mapping): an `actual typealias` onto a **generic** target stays on
+   * `SKIPPED_ACTUAL_TYPEALIAS_TARGET`. `ForwardBridgeTypeClassifier.classifyActualTypeAliasTarget`
+   * refuses `target.typeParameters.isNotEmpty()` outright; binding it would need a type-argument
+   * rewrite (`Bag<String>` -> `Crate<String>`) the redirect has no map for, since it substitutes a
+   * `KSClassDeclaration`, not a `KSType`.
+   *
+   * The target is a module-local **invariant** `class Crate<T>`, not a stdlib collection: the
+   * ROADMAP's own example `actual typealias Bag = List<String>` is not a Kotlin program
+   * (`ACTUAL_TYPE_ALIAS_WITH_COMPLEX_SUBSTITUTION`, an ERROR: zero alias type parameters against
+   * one expansion argument), and even `Bag<T> = List<T>` is rejected a second time by
+   * `ACTUAL_TYPE_ALIAS_TO_CLASS_WITH_DECLARATION_SITE_VARIANCE` because `List<out E>` is
+   * covariant. So this is the narrowest shape that actually reaches the classifier's refusal.
+   */
+  @Test
+  fun `actual typealias to a generic target is skipped with its own diagnostic`() {
+    val result = Tier1Harness.run(
+      sources = mapOf(
+        "BagActual.kt" to """
+        package tier1.expectactual.aliasgeneric
+
+        class Crate<T>(val item: T)
+
+        actual typealias Bag<T> = Crate<T>
+
+        actual fun bagOf(): Bag<String> = Crate("a")
+        """.trimIndent(),
+      ),
+      commonSources = mapOf(
+        // Not "Bag.kt", for the same ADR-007 reason as the `Failure` cell above.
+        "AliasBag.kt" to """
+        package tier1.expectactual.aliasgeneric
+
+        expect class Bag<T>
+
+        expect fun bagOf(): Bag<String>
+        """.trimIndent(),
+      ),
+    )
+
+    assertEquals("OK", result.kspExitCode, "kspErrors=${result.kspErrors}")
+    assertTrue(
+      result.kspWarnings.any {
+        it.contains(ForwardDiagnosticKind.SKIPPED_ACTUAL_TYPEALIAS_TARGET.name)
+      },
+      "expected a SKIPPED_ACTUAL_TYPEALIAS_TARGET diagnostic; kspWarnings=${result.kspWarnings}",
+    )
+    assertTrue(
+      result.kspWarnings.any { it.contains("Bag") && it.contains("Crate") },
+      "expected the diagnostic to name both the expect (Bag) and the generic target (Crate); " +
+          "kspWarnings=${result.kspWarnings}",
+    )
+    assertFalse(
+      Regex("""\bclass Bag\b""").containsMatchIn(result.generatedCSharp),
+      "expected no Bag type at all in Interop.cs; got: ${result.generatedCSharp}",
+    )
+  }
+
+  /**
+   * Item 6a: an `expect interface`, bound at an ADR-040 return position. The interface route reads
+   * its members off the actual; the per-target implementing class is `internal`, so its name never
+   * reaches `Interop.cs` and the packaged C# stays identical across targets.
+   */
+  @Test
+  fun `expect interface renders once as ITransponder with an ADR-040 backing class`() {
+    val result = Tier1Harness.run(
+      sources = mapOf(
+        "TransponderMacos.kt" to """
+        package tier1.expectactual.interfaceresidual
+
+        actual interface Transponder {
+          actual fun ping(): String
+        }
+
+        internal class MacosTransponder : Transponder {
+          override fun ping(): String = "pong from macos"
+        }
+
+        actual fun transponder(): Transponder = MacosTransponder()
+        """.trimIndent(),
+      ),
+      commonSources = mapOf(
+        "TransponderApi.kt" to """
+        package tier1.expectactual.interfaceresidual
+
+        expect interface Transponder {
+          fun ping(): String
+        }
+
+        expect fun transponder(): Transponder
+        """.trimIndent(),
+      ),
+    )
+
+    assertEquals("OK", result.kspExitCode, "kspErrors=${result.kspErrors}")
+    val cs: String = result.generatedCSharp
+    assertEquals(
+      1,
+      Regex("""\binterface ITransponder\b""").findAll(cs).count(),
+      "expected exactly one ITransponder declaration in Interop.cs; got: $cs",
+    )
+    assertTrue(cs.contains("public interface ITransponder : IDisposable"), "got: $cs")
+    assertTrue(cs.contains("public sealed class Transponder : ITransponder"), "got: $cs")
+    assertFalse(
+      cs.contains("MacosTransponder"),
+      "the per-target implementing class is internal and must never reach Interop.cs; got: $cs",
+    )
+    assertTrue(result.generated.contains("transponder_ping"), "got: ${result.generated}")
+  }
+
+  /**
+   * Item 6b: an `expect enum class`. The entries on the wire are the **actual's** own
+   * (`CirClassTranslator` reads them from that declaration's `declarations`), and the ordinal
+   * wire is therefore the actual's ordering.
+   */
+  @Test
+  fun `expect enum class renders once with the actual's ordinal-backed entries`() {
+    val result = Tier1Harness.run(
+      sources = mapOf(
+        "BandMacos.kt" to """
+        package tier1.expectactual.enumresidual
+
+        actual enum class Band {
+          LOW,
+          HIGH,
+        }
+
+        actual fun band(): Band = Band.HIGH
+        """.trimIndent(),
+      ),
+      commonSources = mapOf(
+        "BandApi.kt" to """
+        package tier1.expectactual.enumresidual
+
+        expect enum class Band {
+          LOW,
+          HIGH,
+        }
+
+        expect fun band(): Band
+        """.trimIndent(),
+      ),
+    )
+
+    assertEquals("OK", result.kspExitCode, "kspErrors=${result.kspErrors}")
+    val cs: String = result.generatedCSharp
+    assertEquals(
+      1,
+      Regex("""\benum Band\b""").findAll(cs).count(),
+      "expected exactly one Band declaration in Interop.cs; got: $cs",
+    )
+    assertTrue(cs.contains("public enum Band"), "got: $cs")
+    assertTrue(cs.contains("Low = 0"), "got: $cs")
+    assertTrue(cs.contains("High = 1"), "got: $cs")
+  }
+
+  /**
+   * Item 6c: an `expect value class`. `@JvmInline` is a requirement of this JVM harness only
+   * (`isValueClass()` keys on the `VALUE` modifier, which every form carries); the native
+   * `test-library` fixture declares the same pair without it. A value class must declare its
+   * primary constructor, so ADR-074 spike finding 6's `ctors = 0` hazard cannot arise.
+   */
+  @Test
+  fun `expect value class renders once as a record struct`() {
+    val result = Tier1Harness.run(
+      sources = mapOf(
+        "FrequencyMacos.kt" to """
+        package tier1.expectactual.valueclassresidual
+
+        @JvmInline
+        actual value class Frequency actual constructor(actual val hertz: Int)
+
+        actual fun frequency(): Frequency = Frequency(5800)
+        """.trimIndent(),
+      ),
+      commonSources = mapOf(
+        "FrequencyApi.kt" to """
+        package tier1.expectactual.valueclassresidual
+
+        expect value class Frequency(val hertz: Int)
+
+        expect fun frequency(): Frequency
+        """.trimIndent(),
+      ),
+    )
+
+    assertEquals("OK", result.kspExitCode, "kspErrors=${result.kspErrors}")
+    val cs: String = result.generatedCSharp
+    assertEquals(
+      1,
+      Regex("""\bstruct Frequency\b""").findAll(cs).count(),
+      "expected exactly one Frequency declaration in Interop.cs; got: $cs",
+    )
+    assertTrue(cs.contains("public readonly record struct Frequency"), "got: $cs")
+    assertFalse(
+      Regex("""\bclass Frequency\b""").containsMatchIn(cs),
+      "a value class must never also render as a handle class; got: $cs",
+    )
+  }
 }

@@ -471,24 +471,27 @@ that *exactly one* target is packaged is Verified).
 
 ### What is deferred
 
-- **Default parameter values from the `expect`.** The open Phase 4 item "a Kotlin constructor
-  default parameter is not reflected as a C# default" now has a named prerequisite: for any
-  `expect`/`actual` pair, `hasDefault` is `false` on every parameter of the declaration this ADR
-  exports (**Verified**), and the value lives on the expect. That work must read `expectsByName`
-  or it will silently conclude that no `expect` class has defaults. Written down here because a
-  literal implementation would produce valid, wrong output.
-- **KDoc and annotations from the `expect`.** Nothing consumes either today (`grep docString`:
-  zero hits, **Verified**), so this costs nothing now, and it is the same index when it does.
-- **Merging the pair (alternative 3).** Deferred, not rejected.
-- **Cross-module `expect`/`actual`** (an admitted ADR-066 klib declaration). Guarded defensively;
-  the underlying resolution behaviour is **Inferred**, not spiked.
-- **`expect sealed class`.** Subclasses live on the actual side; `getSealedSubclasses()` against
-  an actualized sealed class is not spiked. Out of v1 scope; it should get a Tier 1 cell before
-  anyone relies on it.
-- **`actual typealias` to a generic or parameterized target** (`actual typealias Bag = List<String>`).
-  The redirect in Decision 2 substitutes a `KSClassDeclaration`, so it loses type arguments. v1
-  admits only a redirect to a plain class; anything else takes the
-  `SKIPPED_ACTUAL_TYPEALIAS_TARGET` path.
+Closed by the 2026-09-05 amendment below; each bullet now points at its outcome instead of leaving
+the shape open.
+
+- **Default parameter values from the `expect`.** Shipped, not deferred: [ADR-091](091-constructor-default-parameters.md)
+  (constructors) and [ADR-096](096-function-default-parameters.md) (functions) both read
+  `expectsByName`. See the amendment's item 5.
+- **KDoc and annotations from the `expect`.** Rejected, no re-open trigger fired yet. See the
+  amendment's item 4.
+- **Merging the pair (alternative 3).** Rejected: the one motivating consumer (default parameters)
+  shipped without a merge. See the amendment's item 5.
+- **Cross-module `expect`/`actual`** (an admitted ADR-066 klib declaration). Rejected as
+  unreachable; the guard stays defensive. See the amendment's item 3.
+- **`expect sealed class`.** Exercised, both for actual-side subclasses (`test-library` +
+  Tier 1) and, at the KSP2 level only, for a common-side subclass. See the amendment's item 1.
+- **`actual typealias` to a generic or parameterized target.** Rejected as a mapping (the target
+  shapes Kotlin itself accepts are narrower than the ADR's own example, which is not a compiling
+  Kotlin program); the existing `SKIPPED_ACTUAL_TYPEALIAS_TARGET` skip is now pinned by a Tier 1
+  cell. See the amendment's item 2.
+- **`expect interface`, `expect enum class`, `expect value class`.** Exercised, both levels.
+  **`expect annotation class`.** Not applicable, no forward route exists for it. See the
+  amendment's item 6.
 
 ### Fixture design
 
@@ -572,3 +575,219 @@ implicit-ctor row produces a *usable* public constructor), `PlatformRegistry.Cou
   a `SKIPPED_*` warning must not sit in `test-library`'s build log forever.
 - One regression cell per crash row, asserting `kspExitCode = OK` and empty `kspErrors`. These
   are the ones that are red today.
+
+## Amendment (2026-09-05): closing the v1 deferred list
+
+Judgement: an **amendment**, not a new ADR. Every item below closes an entry in this ADR's own
+"What is deferred" list; none introduces a mechanism this ADR does not already describe (the
+`isExpect` filter, the `expectsByName` index, the `actualTypeAliasTargets` redirect, and the
+closure guard). Status stays Accepted.
+
+Every shape the "What is deferred" section left open now has a terminal state: **exercised** by a
+fixture cell (`test-library` Kotlin + `IntegrationTests` xunit + Tier 1), **fixed** if exercising it
+revealed a defect, or **rejected** with a reason. Nothing stays deferred. Predicted processor
+source change for the whole list: none landed; each exercised cell names the one predicate that
+would make it red and the fix if it is.
+
+Mechanism claims are labelled **Verified** (read in this repository's source, or in upstream Kotlin
+source fetched on 2026-09-05) or **Inferred**.
+
+A structural fact about the Tier 1 harness applies to every cell below: `Tier1Harness.compileGenerated`
+runs a plain single-target `K2JVMCompiler.exec()` with no `-Xcommon-sources`/multiplatform wiring, so
+it cannot model the real common/actual module split. Every cell in this amendment therefore asserts
+on `result.generated` / `result.generatedCSharp` / `result.kspWarnings`, never on `compiledClean`; an
+`expect`/`actual` fixture legitimately fails that JVM single-target compile step, exactly as the
+existing pre-amendment cells already do.
+
+### The structural fact all six rest on (Verified)
+
+`NugetProcessor.kt:283-296`: the `isExpect` filter produces `candidateDeclarations`, and
+`allDeclarations` is derived from it; every root bucket (`allFunctions`, `allProperties`,
+`rootClasses`, `rootValueClasses`, `rootSealedClasses`, `rootObjects`, `rootEnums`,
+`rootInterfaces`, `NugetProcessor.kt:357-433`) is derived from `allDeclarations`. So the filter
+precedes every route, and an `actual` reaches exactly the route the same non-`expect` declaration
+would, selected on `classKind`, `Modifier.SEALED`, `Modifier.VALUE`/`INLINE`, top-levelness and
+visibility only. `isActual`/`Modifier.ACTUAL` is read at exactly two sites (`CirTranslator.kt:96`,
+`NugetProcessor.kt:353`), neither of which changes a route.
+
+### 1. `expect sealed class`: exercised
+
+Kotlin permits subclasses of an `expect sealed class` on the actual side and in any module on the
+dependency path between the expect and the actual, including the expect's own (Inferred, from the
+[sealed-interface-freedom KEEP](https://github.com/Kotlin/KEEP/blob/master/proposals/sealed-interface-freedom.md)).
+
+After the filter the `actual sealed class` (`modifiers = [ACTUAL, SEALED]`) enters
+`rootSealedClasses` (`NugetProcessor.kt:411-416`, **Verified**) and every subclass enumeration in
+the sealed route is `getSealedSubclasses()` on that actual declaration (`SealedClassExports.kt:30`,
+`CirClassTranslator.kt:976`, `CirTranslator.kt:80,:278`, `ForwardReachabilityClosure.kt:87,:186`,
+`NugetProcessor.kt:535,:983,:1061,:1087,:1122`; **Verified**). The one predicate this ADR never
+proved is that `getSealedSubclasses()` on an *actual* returns the same inheritors it returns for an
+ordinary sealed class (Inferred: KSP2 resolves inheritors through the Analysis API over the
+module's sources, which does not distinguish the two). Its failure is loud, not silent:
+`SealedClassExports.kt:37-45` renders one `is` branch per subclass inside an exhaustive `when`
+expression, so a missing or empty inheritor list is a Kotlin compile error in the generated
+`CNameExports.kt`, caught by Tier 1 and by the native build.
+
+Fixture (the `platform` package): `expect sealed class Signal` + `expect fun collarSignal(dbm: Int):
+Signal` in `PlatformResiduals.kt`; on both targets `actual sealed class Signal { data class
+Strong(val dbm: Int) : Signal(); data object Lost : Signal() }` and `actual fun collarSignal(dbm: Int):
+Signal = if (dbm < 0) Signal.Lost else Signal.Strong(dbm + 42)` (`+ 24` on mingw). xunit
+(`ExpectActualResidualsTests.cs`): `typeof(Signal).IsAbstract`, `typeof(Signal.Strong).IsSealed`,
+`collarSignal(10)` discriminates as `Strong` with the running actual's boost (42 macOS / 24 mingw)
+through `Dbm`, and `collarSignal(-1)` discriminates as `Lost`. Tier 1
+(`Tier1ExpectActualDeclarationsTest.kt`): one cell for actual-side subclasses (hierarchy rendered
+once, `signal_get_type` names both `Strong` and `Lost` in its exhaustive `when`), green.
+
+A second cell declares a **common-side** subclass instead, next to the expect (`class
+CommonPing(val strength: Int) : Signal()` in `commonSources`), to pin the KEEP's "any module on the
+dependency path" claim rather than only the actual-side placement the native fixture uses. That
+cell must declare the constructor on both halves, `expect sealed class Signal()` / `actual sealed
+class Signal actual constructor()`: an `expect class` with no declared constructor is not
+constructible from common code (spike finding 6's `ctors=0`), and without it the frontend would
+reject `: Signal()` for a reason unrelated to what the cell pins. It went green: the discriminator
+names both the common-side `CommonPing` and the actual-side `Lost`. This cell is **KSP2-level
+only**, not a `test-library` fixture: the Tier 1 harness's single-target JVM compile does not model
+the real common/actual module split, and the native `test-library` fixture has only actual-side
+subclasses, so this sub-shape's "exercised" claim is scoped to what KSP2 itself resolves, not to a
+native end-to-end build.
+
+### 2. `actual typealias` to a generic target: the mapping is rejected, the skip is pinned
+
+The example this ADR deferred, `actual typealias Bag = List<String>`, is not a Kotlin program.
+`FirActualTypeAliasChecker.checkTypeAliasWithComplexSubstitution` reports
+`ACTUAL_TYPE_ALIAS_WITH_COMPLEX_SUBSTITUTION` whenever `typeParameters.size !=
+expandedType.typeArguments.size` or an argument is anything other than the alias's own type
+parameter in the same position, and `FirErrors.kt:855` declares that diagnostic with severity
+`ERROR` (**Verified**, upstream source fetched). `actual typealias Bag<T> = List<T>` is rejected
+too: `checkTypeAliasToClassWithDeclarationSiteVariance` (same file, `:115-121`, **Verified**)
+reports `ACTUAL_TYPE_ALIAS_TO_CLASS_WITH_DECLARATION_SITE_VARIANCE` whenever any type parameter
+of the expanded class is non-invariant, and `kotlin.collections.List` is `List<out E>`; an
+`expect class` actualized onto an interface is additionally an incompatible class kind (Inferred).
+So a read-only stdlib collection can never be the target of an `actual typealias` for an
+`expect class`. The compilable generic forms are narrower: an invariant target of matching kind,
+such as a module-local `class Crate<T>` behind `expect class Bag<T>` (or, Inferred,
+`MutableList<T>` behind an `expect interface Bag<T>`).
+
+For those forms the redirect already refuses deterministically:
+`ForwardBridgeTypeClassifier.classifyActualTypeAliasTarget` returns `Unsupported(..., "actual
+typealias target is not a plain, non-generic class", isActualTypeAliasTarget = true)` on
+`target.typeParameters.isNotEmpty()` (`:216-227`), which routes to
+`SKIPPED_ACTUAL_TYPEALIAS_TARGET`. The redirect is the first branch of `classifyNonNullable` after
+the `KSTypeParameter`/`KSClassDeclaration` guards (`:76-80`), and neither the planner nor the
+classifier has an `arguments.isNotEmpty()` branch that could intercept a parameterized return
+type ahead of it (**Verified**, grep). A top-level `fun bagOf(): Bag<String>` is an ordinary
+function (`genericFunctions` keys on the *function's* type parameters, **Verified**).
+
+A real mapping is **rejected** for v1 and beyond, until a user asks: the redirect substitutes a
+`KSClassDeclaration`, not a `KSType`, so it carries no argument map from the alias's parameters to
+the target's; for a stdlib target the erased type (`List<T>`) is a carrier, not an exportable
+declaration, so there is no C# type to name at a `Bag<String>` position without that rewrite; for a
+module-local generic target the rewrite plus the generic route's constraints make it a feature, not
+a residual. One permanent Tier 1 cell pins the skip
+(`Tier1ExpectActualDeclarationsTest.kt`'s `` `actual typealias to a generic target is skipped with
+its own diagnostic` ``), using a module-local invariant target so no frontend rule unrelated to the
+pin can fire: `expect class Bag<T>` + `expect fun bagOf(): Bag<String>` in `commonSources`; `class
+Crate<T>(val item: T)` + `actual typealias Bag<T> = Crate<T>` + `actual fun bagOf(): Bag<String> =
+Crate("a")` in `sources`; asserts `SKIPPED_ACTUAL_TYPEALIAS_TARGET` naming `Bag` and `Crate`, no
+`class Bag` in the C#, `kspExitCode OK`. The cell asserts kind and names, not the reason text. A
+`SKIPPED_*` warning must not sit in `test-library`'s build log, so no `test-library` cell.
+
+### 3. Cross-module (klib) `expect`/`actual`: rejected as unreachable; guard kept
+
+Roots come from `getAllFiles()` (module-local, Verified spike finding 1), and Kotlin requires an
+expect and its actual to share a module (Inferred, language rule already cited by Decision 3). So a
+dependency klib can only hold pairs actualized when it was compiled, and the closure guard
+(`ForwardReachabilityClosure.kt:159-162`, `if (classDeclaration.isExpect) return`, before
+`admitted[...]`; **Verified**) can never fire on a root.
+
+Whether a platform klib's metadata still carries the expect half is **Inferred, not spiked** and
+stays so: both possibilities are non-silent. If the klib carries only actuals, the guard is a no-op.
+If it carries an expect and a consumer reference resolves to it (only plausible for an
+alias-actualized pair, by analogy with finding 8), the reference misses the module-local
+`actualTypeAliasTargets` map (`NugetProcessor.kt:350-355`), hits the guard, stays unadmitted and
+surfaces as `SKIPPED_UNEXPORTED_DEPENDENCY_TYPE`, the same named skip
+`Tier1ReachabilityClosureTest.kt:42-57` exercises. Its `include(...)` hint would be wrong for that
+case; that is a message defect, tracked separately, not wrong generated output.
+
+Tier 1 cannot settle the question: `Tier1DependencyLibrary.compile` builds a JVM jar with
+`K2JVMCompiler` (**Verified**, `:24-45`), and an expect produces no JVM class file, so the JVM
+analog proves nothing about klib metadata. The re-open condition is a user report of a dependency
+expect surfacing; the spike then is a two-module Gradle native build (dependency klib with `expect
+class` + `actual typealias`, consumer referencing it).
+
+### 4. KDoc and annotations declared on the `expect`: rejected
+
+Nothing reads `docString` (**Verified**, zero hits). The only annotation consumer in the forward
+pipeline is `hasCNameAnnotation()` (`NugetProcessor.kt:210-213`, applied at `:362`/`:369`,
+**Verified**), which runs on the post-filter list, i.e. the actual. That is the right side:
+Kotlin/Native's `CAdapterGenerator` skips expects (Verified upstream, Context above), so
+`@CName` only means anything on the actual it compiles, and `@CName` cannot appear in `commonMain`
+at all. Rejected; the re-open trigger is the feature that first consumes KDoc or annotations (XML
+doc comments on the generated C#, an opt-out annotation), which must read `expectsByName`, exactly
+as the default-parameter note below already required and ADR-091/096 already do.
+
+### 5. Merging the pair into one synthetic declaration (Alternative 3): rejected
+
+Alternative 3 was deferred because it "would buy exactly one future feature (default parameters)".
+That feature has since shipped **without a merge**: `ForwardCallablePlanner.kt:886-897` (ADR-091,
+constructor defaults) and `:935` (ADR-096, function defaults) consult `expectsByName` positionally,
+exercised by `Beacon(name, interval = 5)` and `beaconLabel(prefix, level = 7)` in `PlatformApi.kt`
+with RID-selected xunit (**Verified**). The by-name index is therefore proven sufficient for the
+consumer that motivated the merge; a merged view would be a refactor with zero output change and a
+blast radius across the planner, the classifier and both emitters. Rejected. `expectsByName` stays
+the mechanism for any future expect-side metadata consumer.
+
+### 6. `expect interface`, `enum class`, `value class`: exercised; `annotation class`: not applicable
+
+Kotlin's compatibility checker compares `value`/`inline` between the halves (`ClassModifiers`) and
+requires every expect enum entry on the actual (`EnumEntries`) (**Verified**, upstream
+`ExpectActualCompatibility.kt`); that no other checker forbids `expect value class` is Inferred.
+
+Predictions, all **Verified** from source: the actual interface enters `rootInterfaces`
+(`:430-433`) and its members are read from itself (`CirClassTranslator.kt:1659,:1672`); the actual
+enum enters `rootEnums` (`:424-427`) and its entries come from its own `declarations`
+(`CirClassTranslator.kt:1701`); the actual value class enters `rootValueClasses` (`:404-408`) via
+`isValueClass()` = `Modifier.VALUE || INLINE` (`ForwardBridgeTypeClassifier.kt:435-436`) and, being
+a value class, must declare its primary constructor, so spike finding 6's `ctors=0` hazard does not
+arise.
+
+Fixture (the `platform` package; both target files declare the identical public surface):
+`expect interface Transponder { fun ping(): String }` + `expect fun transponder(): Transponder` (an
+`internal` per-target implementing class, `MacosTransponder`/`MingwTransponder`, so the packaged
+`Interop.cs` is identical across targets and the return position triggers ADR-040's backing class,
+generated as `public interface ITransponder : IDisposable` + `public sealed class Transponder :
+ITransponder, INugetHandle`); `expect enum class Band { LOW, HIGH }` + `expect fun band(): Band`
+(`LOW` on macos, `HIGH` on mingw; generated `public enum Band { Low = 0, High = 1 }`); `expect value
+class Frequency(val hertz: Int)` + `expect fun frequency(): Frequency` (`2400` on macos, `5800` on
+mingw; generated `public readonly record struct Frequency`). Not named `Beacon`/`Reporter`/`Tier`/
+`Meters`: `PlatformApi.kt` in this same package already declares an ADR-091 `expect class Beacon`,
+and the other names were placeholders from an earlier draft of this amendment, corrected to what
+shipped. xunit (`ExpectActualResidualsTests.cs`) asserts the running RID's value through each
+(`Transponder_Ping_ReturnsRunningActualsAnswer`, `Band_ReturnsRunningActualsEntry`,
+`Frequency_Hertz_ReturnsRunningActualsValue`), plus `Band_EntriesAreOrdinalBacked` pinning
+`(int)Band.Low == 0` / `(int)Band.High == 1`. Tier 1: one cell per kind asserting the type renders
+exactly once with the actual's members/entries. The Tier 1 harness is a JVM K2 run, so its `actual
+value class` cell carries `@JvmInline` exactly as `Tier1Cell15Test.kt:25-26` does (**Verified**);
+`isValueClass()` keys on `Modifier.VALUE`, which the annotated form still carries, and the native
+`test-library` fixture needs no annotation. Enum entries are `LOW`/`HIGH` in Kotlin and
+`Band.Low`/`Band.High` in C#, the same rendering `Mood.kt` `HAPPY` -> `Mood.Happy` already
+exercises (**Verified**).
+
+`expect annotation class` is **not applicable**: the forward direction has no route for
+`ClassKind.ANNOTATION_CLASS` (zero hits in `nuget-processor/src/main`, **Verified**; `rootClasses`
+requires `classKind == CLASS`), so an ordinary `annotation class` is already outside the export
+set, with no diagnostic. An `expect` one is filtered one line earlier and is otherwise identical.
+No fixture: an absence assertion on an un-routed kind pins nothing.
+
+### Consequences of the amendment
+
+- "What is deferred" above is now historical; the live list is: the default-parameter and
+  KDoc/annotation notes (as re-open conditions), the cross-target divergence hazard (its own item),
+  and the two default-parameter limitations in `docs/topics/expect-actual.md`.
+- Adjacent, out of scope, recorded for tracking on `ROADMAP.md`, not fixed here: a top-level
+  function named `signal` silently failed to resolve at runtime on mingwX64 (renamed to
+  `collarSignal` in the fixture to sidestep it, root cause not fully confirmed); the `include(...)`
+  hint on a hypothetical dependency alias-actualized expect that `include` cannot fix (item 3);
+  `expectsByName`'s `.toMap()` collapsing overloaded top-level `expect fun`s
+  (`NugetProcessor.kt:338-343`, which ADR-096's default lookup would need to disambiguate); no
+  diagnostic for a public `annotation class` (item 6).
