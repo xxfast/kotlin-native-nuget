@@ -18,6 +18,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnosticK
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnosticSink
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardInterfaceBridgePlanner
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardPropertyPlan
+import io.github.xxfast.kotlin.native.nuget.processor.forward.PublishedScope
 import io.github.xxfast.kotlin.native.nuget.processor.forward.planFor
 import io.github.xxfast.kotlin.native.nuget.processor.toCName
 import io.github.xxfast.kotlin.native.nuget.processor.toCSharpName
@@ -41,6 +42,12 @@ data class NugetContext(
    *  is absent (an older plugin against a newer processor), in which case every bound interface at
    *  a forward position keeps the pre-ADR-088 behaviour. */
   val boundInterfaces: Map<String, ForwardBoundInterface> = emptyMap(),
+  /** ADR-109: the export scope of every OTHER forward publisher in this Gradle build, delivered by
+   *  the plugin as the `nuget.publishedScopes` option (this module's own entry is dropped at parse
+   *  time). Empty when this module is the only publisher, when the option is absent (an older
+   *  plugin against a newer processor), or when the project does not publish at all — in every
+   *  case no duplicate-type warning can fire, which is the pre-ADR-109 behaviour. */
+  val publishedScopes: List<PublishedScope> = emptyList(),
 )
 
 internal fun translate(

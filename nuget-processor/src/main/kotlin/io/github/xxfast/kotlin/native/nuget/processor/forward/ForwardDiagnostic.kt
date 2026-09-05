@@ -34,7 +34,14 @@ internal enum class ForwardDiagnosticSeverity { WARNING, INFO, ERROR }
  * direction) and by [severity] itself (so the sink never string-matches its own enum, matching
  * ADR-057's reverse precedent).
  */
-internal enum class ForwardDiagnosticKind(val severity: ForwardDiagnosticSeverity) {
+internal enum class ForwardDiagnosticKind(
+  val severity: ForwardDiagnosticSeverity,
+  /** ADR-109: overrides the severity-keyed verb [ForwardDiagnostic.format] would otherwise pick.
+   *  Every WARNING here skips something and so reads "Skipping" — except a warning about a type
+   *  that is still exported, for which "Skipping" would be a plain lie. Null everywhere else, so
+   *  every pre-existing kind renders byte-identically. */
+  val verb: String? = null,
+) {
   /** A classifier `Unsupported` type, or another supported-elsewhere type this position cannot
    *  express (`Char`, an enum, a handle, a value class, ...) at a position with no bridge. */
   SKIPPED_UNSUPPORTED_TYPE(ForwardDiagnosticSeverity.WARNING),
@@ -128,6 +135,20 @@ internal enum class ForwardDiagnosticKind(val severity: ForwardDiagnosticSeverit
    *  replaces the `rootPackage` default rather than adding to it. Emitted once per KSP run,
    *  with no source location (the scope is build configuration, not a declaration). */
   SKIPPED_ALL_DECLARATIONS(ForwardDiagnosticSeverity.WARNING),
+
+  /** ADR-109: an admitted dependency-module type whose package another forward publisher in the
+   *  same Gradle build also exports. ADR-066 generates it into *this* module's package, as its own
+   *  C# class over its own opaque handle, so a consumer referencing both NuGet packages sees two
+   *  unrelated C# types for one Kotlin type, with no conversion between them.
+   *
+   *  Certain when the other publisher is the dependency module itself; a heuristic when it is a
+   *  sibling publisher over a shared non-publishing dependency (whether that sibling's API
+   *  *reaches* the type is known only to its own KSP run), which is why the message is written to
+   *  be true for both.
+   *
+   *  Nothing is skipped and nothing in the generated output changes — the remedy is structural
+   *  (exactly one publisher declares the type) — so the verb is overridden to say so. */
+  WARNING_DUPLICATED_DEPENDENCY_TYPE(ForwardDiagnosticSeverity.WARNING, verb = "Duplicating"),
 }
 
 /**
@@ -137,7 +158,7 @@ internal enum class ForwardDiagnosticKind(val severity: ForwardDiagnosticSeverit
  * {hint}`), plus the `KSNode` source location reverse cannot carry.
  */
 internal fun ForwardDiagnostic.format(): String {
-  val verb: String = when (kind.severity) {
+  val verb: String = kind.verb ?: when (kind.severity) {
     ForwardDiagnosticSeverity.WARNING -> "Skipping"
     ForwardDiagnosticSeverity.INFO -> "Note"
     ForwardDiagnosticSeverity.ERROR -> "Error"

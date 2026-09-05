@@ -79,6 +79,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnosticK
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardPlanSkipReason
 import io.github.xxfast.kotlin.native.nuget.processor.forward.diagnosticHint
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnosticSink
+import io.github.xxfast.kotlin.native.nuget.processor.forward.PackageScope
 import io.github.xxfast.kotlin.native.nuget.processor.forward.renderForwardDiagnosticsJson
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnosticTrackingLogger
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardHelperRequirement
@@ -255,25 +256,24 @@ class NugetProcessor(
       else -> emptyList()
     }
 
+    // ADR-109: this module's own ADR-063 predicate as a value, so the identical matching rules
+    // (exclude wins, by package prefix or by qualified declaration name per issue #53; empty
+    // include = everything; otherwise a package-prefix test) can be applied to ANOTHER
+    // publisher's scope without a second, drifting copy of them.
+    val ownScope = PackageScope(include = effectiveInclude, exclude = context.excludePackages)
+
     fun isExported(declaration: KSDeclaration): Boolean {
       val pkg: String = declaration.packageName.asString()
       val qualifiedName: String? = declaration.qualifiedName?.asString()
       fun matches(p: String) = pkg == p || pkg.startsWith("$p.")
 
-      // Issue #53: `exclude(...)` also accepts a qualified declaration name, and everything
-      // nested under it (a sealed base takes its subclasses with it). Package-level exclusion
-      // took whole packages of wanted API with it whenever one member could not be bridged.
-      fun matchesDeclaration(p: String) =
-        qualifiedName != null && (qualifiedName == p || qualifiedName.startsWith("$p."))
       // ADR-063 "Reverse-bound packages are always in scope": checked first, before exclude and
       // before include. A module that both publishes forward and consumes via `bind {}` returns
       // reverse-bound types from its own forward code; dropping the bound stub's declaration
       // while the forward-generated C# still references it is a dangling-reference build break,
       // not a scoping choice the user asked for.
       if (context.boundPackages.any(::matches)) return true
-      if (context.excludePackages.any { matches(it) || matchesDeclaration(it) }) return false
-      if (effectiveInclude.isEmpty()) return true
-      return effectiveInclude.any(::matches)
+      return ownScope.covers(pkg, qualifiedName)
     }
 
     // ADR-074: for a native compilation `getAllFiles()` returns both halves of every
@@ -477,6 +477,52 @@ class NugetProcessor(
         logger,
       )
     }
+
+    // ADR-109: the same admitted set, matched against every OTHER forward publisher's export
+    // scope in this Gradle build (`nuget.publishedScopes`; this module's own entry was dropped at
+    // parse time). ADR-066 generates an admitted dependency type into THIS module's package, over
+    // its own opaque handle — so if another published package's scope also covers that type's
+    // package, that package declares its own unrelated copy and a consumer referencing both sees
+    // two C# types for one Kotlin type. By package is the only match available: a cross-module
+    // declaration carries no module identity at all.
+    //
+    // Nothing is skipped: the type still exports, the generated output is byte-identical, and the
+    // remedy is structural. One line per (admitted type, covering publisher).
+    val duplicated: List<ForwardDiagnostic> = reachability.admitted.values
+      .sortedBy { requireNotNull(it.qualifiedName).asString() }
+      .flatMap { cls ->
+        val pkg: String = cls.packageName.asString()
+        val qualifiedName: String = requireNotNull(cls.qualifiedName).asString()
+        context.publishedScopes
+          .filter { scope -> scope.covers(pkg, qualifiedName) }
+          .map { scope ->
+            ForwardDiagnostic(
+              kind = ForwardDiagnosticKind.WARNING_DUPLICATED_DEPENDENCY_TYPE,
+              // ADR-066, verified: a klib declaration has no `containingFile`, so there is no
+              // source location to point the author at.
+              symbol = null,
+              declaration = qualifiedName,
+              reason = "the export closure admitted it from a dependency module, and the " +
+                  "${scope.packageId} NuGet package's export scope " +
+                  "(rootPackage/include ${scope.scope.include.joinToString { "\"$it\"" }}) also " +
+                  "covers it, so ${scope.packageId} declares its own copy (certainly if it is " +
+                  "one of ${scope.packageId}'s own types, otherwise whenever " +
+                  "${scope.packageId}'s API reaches it) and a consumer referencing both packages " +
+                  "sees two unrelated C# " +
+                  "types for one Kotlin type, with no conversion between them",
+              // ADR-109 is explicit that a shared models NuGet is NOT a remedy and must never be
+              // suggested: two published modules are two native libraries in one process, each
+              // with its own Kotlin runtime and heap, so an ADR-003 StableRef handle minted in one
+              // is meaningless to the other's exports.
+              hint = "Kotlin objects cannot cross between two native libraries, so export it " +
+                  "from exactly one package: publish a single umbrella module that depends on " +
+                  "both, or add exclude(\"$pkg\") to nuget { publish { } } here so only " +
+                  "${scope.packageId} declares it (callables reaching it are then skipped with " +
+                  "${ForwardDiagnosticKind.SKIPPED_UNEXPORTED_DEPENDENCY_TYPE.name})",
+            )
+          }
+      }
+    if (duplicated.isNotEmpty()) ForwardDiagnosticSink.emit(duplicated, logger)
 
     val dependencyByBucket: Map<ForwardReachabilityBucket, List<KSClassDeclaration>> =
       reachability.admitted.values.groupBy { cls ->

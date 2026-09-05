@@ -636,6 +636,12 @@ inherited-member cells must also exist at the `scripts/verify.sh` integration le
   both publishers depend on rather than each inlining the type; a diagnostic when an admitted type
   originates from a module that is itself published; or an opt-out that forces such a type back to
   the `SKIPPED_UNEXPORTED_DEPENDENCY_TYPE` path so the author must choose explicitly.
+
+  **(2026-09-05)** Decided by [ADR-109](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/109-duplicate-type-hazard.md):
+  shape (2), a build-time `WARNING_DUPLICATED_DEPENDENCY_TYPE` diagnostic. The "shared models NuGet"
+  shape (1) sketched above is **retracted, not implementable**: two published packages are two
+  separate Kotlin/Native runtimes in the consumer's process, so an ADR-003 `StableRef` handle minted
+  in one is meaningless to the other's exports; handles cannot cross between them.
 - **Two ADR-064 rules change, and both changes land in this feature** (`SKIPPED_INHERITED_MEMBER`'s
   filter, `Modifier.VALUE` classification). They are not split into a follow-up: reachability is what
   makes both fire, and shipping the closure without them produces silently wrong output rather than a
@@ -690,6 +696,10 @@ inherited-member cells must also exist at the `scripts/verify.sh` integration le
 - **The duplicate-type-across-two-packages problem**, accepted as a known limitation here (see
   Consequences for the accepted trade-off and the Kotlin/Native framework-export precedent). Gets its
   own ROADMAP item, which should link to that bullet.
+
+  **(2026-09-05)** Decided by [ADR-109](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/109-duplicate-type-hazard.md):
+  a build-time warning, not a shared models package (retracted: two published packages are two
+  native runtimes, so handles cannot cross between them).
 - **Java/JVM-origin declarations.** Not applicable to the Kotlin/Native forward target today; if a
   dependency ever surfaces `Origin.JAVA_LIB` declarations (verified to occur even on a native target
   for `Enum.compareTo`), they are out of scope.

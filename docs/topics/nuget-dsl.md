@@ -226,12 +226,39 @@ including <code>kotlinx.coroutines</code> and <code>kotlin.*</code> themselves.<
 <warning>
 <p>Two published packages that each independently admit the same dependency type get two unrelated
 C# types for one Kotlin type (<code>PackageA.Models.Foo</code> and <code>PackageB.Models.Foo</code>),
-with no conversion between them and no diagnostic, because neither KSP run can see the other
-package's export set. This is an accepted limitation, not a bug: it is the same hazard Kotlin/Native
-framework export already has when two frameworks each <code>export()</code> a shared dependency. See
-<a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/066-forward-export-reachability-closure.md">ADR-066</a>'s
-Consequences section.</p>
+with no conversion between them: two published packages are two separate Kotlin/Native runtimes in
+the consumer's process, so a handle minted in one is meaningless to the other's exports. Since
+<a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/109-duplicate-type-hazard.md">ADR-109</a>
+this is no longer silent: the build warns with <code>WARNING_DUPLICATED_DEPENDENCY_TYPE</code>, and
+the type still exports. The remedy is structural, not a shared models package: publish a single
+umbrella module that depends on both, or <code>exclude("&lt;pkg&gt;")</code> from one of the
+publishers. See <a href="forward-overview.md#duplicate-type-hazard">Publishing Kotlin to C#</a> for
+the rendered message and
+<a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/109-duplicate-type-hazard.md">ADR-109</a>
+for the mechanism.</p>
 </warning>
+
+### `nuget.publishedScopes`
+
+The plugin registers `nuget.publishedScopes` as a lazy KSP option `Provider<String>`, resolved after
+every project in the build is evaluated: it walks `rootProject.allprojects`, keeps every project with
+this plugin applied and `publish {}` configured, and encodes each one's *effective* `include`/`exclude`
+scope (the explicit `include(...)` list when non-empty, else `[rootPackage]`) as one entry per
+publisher, `;`-joined, **including the current project itself** (so the single-publisher real build
+still exercises the plumbing end to end). The wire format:
+
+```
+<packageId>:<include1|include2>:<exclude1|exclude2>;<packageId>:<include1|include2>:<exclude1|exclude2>
+```
+
+Entries `;`-separated, fields `:`-separated, lists `|`-separated. The processor drops the entry whose
+`packageId` equals its own `nuget.namespace` before matching, so a publisher never warns about its own
+scope. A publisher with neither `rootPackage` nor `include` set has no effective include to encode and
+is treated as unknown by every other publisher's matcher, a documented gap rather than a false
+positive. This option is plumbing for
+<a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/109-duplicate-type-hazard.md">ADR-109</a>'s
+duplicate-type warning; it is not part of the public DSL surface and has no `nuget {}` block equivalent
+to set directly.
 
 Deferred, each needing its own decision: supertype edges (an admitted class implementing an admitted
 interface does not gain `: IFoo` in C#), cross-module generic classes, and cross-module

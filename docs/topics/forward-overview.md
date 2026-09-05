@@ -185,7 +185,7 @@ the file and line of the Kotlin declaration that was skipped, something the reve
 `RirDiagnostic` cannot carry, since it works from compiled metadata rather than source. See each
 forward page's own **Limitations** section for which named diagnostic fires where.
 
-Two more kinds cover the cross-module export closure ([ADR-066](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/066-forward-export-reachability-closure.md);
+Three more kinds cover the cross-module export closure ([ADR-066](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/066-forward-export-reachability-closure.md);
 see [The nuget {} DSL](nuget-dsl.md) for the closure's own rules). A reachable dependency-module type
 outside the effective `include`/`rootPackage` scope is skipped, naming the exact fix, from
 `test-library`'s `Newsroom.sponsor(): Advertisement` (`dev.other.core.Advertisement` sits outside
@@ -219,6 +219,47 @@ silently with no `Interop.cs` in the package:
 When at least one dependency-module type *is* admitted, the closure also emits one aggregate
 `INFO_EXPORTED_FROM_DEPENDENCY` line per KSP run rather than one line per type, naming the whole
 admitted set.
+
+### Duplicate-type hazard across two published packages {id="duplicate-type-hazard"}
+
+Two Gradle modules can each publish forward and each independently admit the same dependency-module
+type through their own reachability closure. Neither KSP run can see the other's export scope, so
+each package would silently declare its own unrelated C# copy of the same Kotlin type
+([ADR-109](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/109-duplicate-type-hazard.md)).
+The plugin closes that visibility gap: every forward publisher's `include`/`exclude`/`rootPackage`
+predicate is lowered into a `nuget.publishedScopes` KSP option (see
+[The nuget {} DSL](nuget-dsl.md#cross-module-export-closure) for the wire format), and the processor
+matches every admitted dependency type against every *other* publisher's scope, by package, since a
+cross-module declaration carries no module identity. A match warns with
+`WARNING_DUPLICATED_DEPENDENCY_TYPE`. Nothing is skipped and the generated output does not change,
+so the message says "Duplicating", not the severity-keyed "Skipping" every other warning gets:
+
+```
+[nuget:WARNING_DUPLICATED_DEPENDENCY_TYPE] Duplicating dep.models.TopStory: the export closure
+    admitted it from a dependency module, and the OtherLib NuGet package's export scope
+    (rootPackage/include "dep.models") also covers it, so OtherLib declares its own copy (certainly
+    if it is one of OtherLib's own types, otherwise whenever OtherLib's API reaches it) and a
+    consumer referencing both packages sees two unrelated C# types for one Kotlin type, with no
+    conversion between them. Kotlin objects cannot cross between two native libraries, so export it
+    from exactly one package: publish a single umbrella module that depends on both, or add
+    exclude("dep.models") to nuget { publish { } } here so only OtherLib declares it (callables
+    reaching it are then skipped with SKIPPED_UNEXPORTED_DEPENDENCY_TYPE)
+```
+
+<note>
+<p>This exact line is assembled from the message template plus the fixture values pinned by
+<code>Tier1DuplicatedDependencyTypeTest.kt</code> (a real two-publisher run stays silent by design:
+the single-publisher <code>test-library</code> real build only ever sees its own entry, dropped at
+parse time, so it never fires this warning). A cross-module declaration has no source location, so
+the message never carries an <code>at &lt;file&gt;:&lt;line&gt;</code> line.</p>
+</note>
+
+The two workable remedies are the two the hint names: publish a single umbrella module that depends
+on both instead of two separate publishers, or `exclude("<pkg>")` from one of them so only the other
+declares it (the excluded module's own callables reaching that type then skip named with
+`SKIPPED_UNEXPORTED_DEPENDENCY_TYPE`). A shared "models" NuGet package both publishers depend on is
+**not** a remedy: two published packages are two separate Kotlin/Native runtimes in the consumer's
+process, so a handle minted in one is meaningless to the other's exports.
 
 A related but distinct case: the reachability closure never walks a class's supertypes at all, so
 an exported class implementing an interface declared outside the export set, the Koin
@@ -435,5 +476,6 @@ re-verification lands, tracked in
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/100-forward-diagnostic-delivery.md">ADR-100: Forward diagnostic delivery</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/101-unexported-supertype-skip.md">ADR-101: Forward, unexported supertype skip</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/102-aot-safe-forward-callbacks.md">ADR-102: AOT-safe forward callbacks</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/109-duplicate-type-hazard.md">ADR-109: Forward, duplicate-type hazard across two published packages</a>
     </category>
 </seealso>

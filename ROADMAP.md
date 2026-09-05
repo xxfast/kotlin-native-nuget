@@ -12,15 +12,17 @@ Maintenance rules:
 Complete.
 
 ## Phase 2: KSP-driven generation
-- [ ] **Duplicate-type hazard across two published packages** ([details](docs/backlog/duplicate-type-hazard-across-two-published-packages.md))
+Complete.
+
+## Phase 3: Basic type support
 - [ ] **A nested enum has no exported-handle gate in the classifier's enum branch, so it is bound and referenced but never declared.** ([details](docs/backlog/nested-enum-classifier-no-membership-gate.md))
 - [ ] **A nested interface at a member position drops its enclosing scope, spelling a bare `I<Simple>` for an interface that is never actually declared either.** ([details](docs/backlog/nested-interface-member-position-no-enclosing-scope.md))
 - [ ] A top-level sibling sealed subclass (declared beside its base, not nested inside it) appears to be collected twice, once in `NugetProcessor.kt`'s `rootClasses` (~line 400) and again via `getSealedSubclasses()` (~line 535). Inferred from reading, not reproduced by a fixture. Discovered alongside the nested sealed-subclass member-position fix ([ADR-009](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/009-sealed-class-mapping.md)).
 - [ ] **`expectsByName`'s `.toMap()` can collapse overloaded top-level `expect fun`s onto one key, so the ADR-096 default-parameter lookup can read the wrong overload's defaults.** ([details](docs/backlog/expectsbyname-tomap-collapses-overloaded-top-level-expect.md))
 - [ ] **A public `annotation class` produces no diagnostic at all, forward direction: no route exists for `ClassKind.ANNOTATION_CLASS`, so it is silently absent rather than named-skipped.** ([details](docs/backlog/public-annotation-class-produces-no-diagnostic.md))
 - [ ] The `SKIPPED_UNEXPORTED_DEPENDENCY_TYPE` `include(...)` hint would be wrong for a hypothetical dependency alias-actualized `expect` that reaches that skip path; `include(...)` cannot fix a dependency's own actualization. Inferred, premise unverified (whether a dependency klib's metadata retains the `expect` half at all is itself unspiked). ([details](docs/backlog/include-hint-wrong-for-dependency-alias-actualized-expect.md))
-
-## Phase 3: Basic type support
+- [ ] After following [ADR-109](docs/adr/109-duplicate-type-hazard.md)'s `exclude("<pkg>")` remedy for a duplicated dependency type, every callable reaching that type now fires `SKIPPED_UNEXPORTED_DEPENDENCY_TYPE`, whose hint says to `include(...)` it back; the two hints contradict for this scenario and should recognise each other. Discovered alongside [ADR-109](docs/adr/109-duplicate-type-hazard.md).
+- [ ] `ForwardDiagnostic.format()` keyed its verb on severity until [ADR-109](docs/adr/109-duplicate-type-hazard.md) added a per-kind `verb` override; any future non-skip `WARNING` must set it explicitly or it renders as "Skipping". Doc-comment level, not chased further. Discovered alongside [ADR-109](docs/adr/109-duplicate-type-hazard.md).
 - [ ] **Suspected dead branch: `CirClassRenderer.renderClass`'s `implements` `when` has an `else -> " : INugetHandle"` case that looks unreachable.** ([details](docs/backlog/renderclass-implements-dead-branch.md))
 - [ ] **A class overriding an interface `val` with its own `var` would emit an invalid C# override (CS0546).** ([details](docs/backlog/class-overriding-interface-val-own-var-would.md))
 - [ ] **A file whose only top-level declaration is skipped still emits an empty, pointless `public static partial class X { }` stub into `Interop.cs`.** ([details](docs/backlog/file-whose-only-top-level-declaration-skipped.md))
@@ -233,6 +235,7 @@ Fallout from [ADR-053](docs/adr/053-nullable-reference-types-in-kotlin.md) (reve
 - [ ] **No Tier 1 test had ever actually compiled a suspend fixture** ([details](docs/backlog/tier1-suspend-fixture-never-compiled.md))
 - [ ] **A bound method with an interface-typed parameter and a struct return emits an unresolvable `handleOf(...)`, failing the Kotlin compile.** ([details](docs/backlog/struct-return-interface-parameter-unresolvable-handleof.md))
 - [ ] **Four reverse doc pages (`structs.md`, `static-classes-and-methods.md`, `generic-types.md`, `instance-members.md`) show pre-ADR-104 thunk snippets missing the trailing `errOut`.** ([details](docs/backlog/reverse-doc-snippets-missing-adr-104-errout.md))
+- [ ] **[ADR-109](docs/adr/109-duplicate-type-hazard.md)'s claim that KGP/KSP resolve the `nuget.publishedScopes` option `Provider` only after every project is evaluated is Inferred, not spiked.** A two-publisher fixture build (a second real publishing Gradle module, or a TestKit functional test) would verify it; if wrong, a publisher evaluated after the reader silently drops out of the value (a missing warning, never wrong output). Priced as its own item since no such fixture exists in the root build today.
 
 ## Future Improvements
 
