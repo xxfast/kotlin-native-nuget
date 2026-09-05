@@ -522,9 +522,11 @@ internal object ForwardCirPlanProjection {
     // ADR-077 sub-items 3/4: a nullable value class with a *String* underlying rides the nullable
     // string wire, so the DllImport parameter must be `string?` for the same CS8604 reason as a
     // nullable String. An ObjectHandle underlying stays on the plain IntPtr wire.
+    // ADR-106: a `Uuid?` argument rides the same nullable string wire (the C# side passes
+    // `x?.ToString()`), so its DllImport parameter must be `string?` for the same CS8604 reason.
     val isNullableStringWire: Boolean = type is BridgeType.Nullable &&
         (
-            type.type == BridgeType.String ||
+            type.type == BridgeType.String || type.type == BridgeType.Uuid ||
                 (type.type as? BridgeType.ValueClass)?.underlying == BridgeType.String
             )
     return if (isNullableStringWire) "string?" else wireType.csharpType()
@@ -549,6 +551,9 @@ internal object ForwardCirPlanProjection {
   private fun ForwardCallablePlan.callArgument(parameter: ForwardPublicParameter): List<String> =
     when (val type = parameter.type) {
       is BridgeType.Primitive, BridgeType.Char, BridgeType.String -> listOf(parameter.name)
+      // ADR-106: the default "D" format is the lowercase hex-dash text `Uuid.parse` reads. Never
+      // pass a format string here: "N" would still parse, "B"/"P"/"X" would not.
+      BridgeType.Uuid -> listOf("${parameter.name}.ToString()")
       is BridgeType.Enum -> listOf("(int)${parameter.name}")
       // ADR-076: UtcTicks is load-bearing (verified) -- a consumer holding a non-UTC
       // DateTimeOffset must not send its wall-clock ticks.
@@ -585,6 +590,8 @@ internal object ForwardCirPlanProjection {
 
       is BridgeType.Nullable -> when (val inner = type.type) {
         BridgeType.String -> listOf(parameter.name)
+        // ADR-106: `Guid?` -- a null stays a null string, so the wire's null pointer is the null.
+        BridgeType.Uuid -> listOf("${parameter.name}?.ToString()")
         is BridgeType.ObjectHandle -> listOf("${parameter.name}?._handle ?? IntPtr.Zero")
         is BridgeType.Interface -> listOf("${parameter.name}Handle")
 
@@ -886,6 +893,20 @@ internal object ForwardCirPlanProjection {
         body = checkedTicksBody(nativeName, callArguments, ::durationLiftCs, prelude, cleanup),
       )
 
+      // ADR-106: the String result body with `Guid.Parse` composed onto the decoded text. Always a
+      // custom body for the same reason as Instant/Duration: `IntPtr -> Guid` is not a C# cast.
+      BridgeType.Uuid -> CirResultProjection(
+        returnType = result.csharpType(),
+        nativeReturnType = "IntPtr",
+        body = checkedPointerBody(
+          nativeName,
+          callArguments,
+          "return global::System.Guid.Parse(Marshal.PtrToStringUTF8(nativeResult)!);",
+          prelude,
+          cleanup,
+        ),
+      )
+
       is BridgeType.Nullable -> when (val type: BridgeType = result.type) {
         is BridgeType.ObjectHandle -> CirResultProjection(
           returnType = "${type.csharpType()}?",
@@ -921,6 +942,21 @@ internal object ForwardCirPlanProjection {
           nativeReturnType = "IntPtr",
           body = checkedPointerBody(
             nativeName, callArguments, "return Marshal.PtrToStringUTF8(nativeResult);", prelude, cleanup,
+          ),
+        )
+
+        // ADR-106: `Guid?` over the same single pointer slot -- a null pointer is the null, and
+        // `Guid` is a value type, so the public spelling is `Nullable<Guid>`.
+        BridgeType.Uuid -> CirResultProjection(
+          returnType = "${type.csharpType()}?",
+          nativeReturnType = "IntPtr",
+          body = checkedPointerBody(
+            nativeName,
+            callArguments,
+            "return nativeResult == IntPtr.Zero ? null : " +
+                "global::System.Guid.Parse(Marshal.PtrToStringUTF8(nativeResult)!);",
+            prelude,
+            cleanup,
           ),
         )
 
@@ -1319,6 +1355,8 @@ internal object ForwardCirPlanProjection {
     BridgeType.Instant -> "global::System.DateTimeOffset"
     // ADR-103: likewise System.TimeSpan.
     BridgeType.Duration -> "global::System.TimeSpan"
+    // ADR-106: System.Guid, over the RFC 9562 hex-dash text wire.
+    BridgeType.Uuid -> "global::System.Guid"
     // ADR-066: the classifier already computed the correctly-qualified public spelling (bare
     // simple name in this class's own namespace, `global::Namespace.Name` otherwise) — mirrors
     // `BridgeType.Enum.csharpType`'s existing shape exactly.
@@ -1364,8 +1402,9 @@ internal object ForwardCirPlanProjection {
     is BridgeType.BoundInterface, is BridgeType.Collection -> true
     // ADR-076: DateTimeOffset is a C# value type, same as Enum/ValueClass.
     // ADR-103: so is TimeSpan.
+    // ADR-106: Guid is a C# value type too, so `Uuid?` renders Nullable<Guid> ("Guid?").
     BridgeType.Unit, is BridgeType.Primitive, BridgeType.Char, BridgeType.Instant,
-    BridgeType.Duration,
+    BridgeType.Duration, BridgeType.Uuid,
     is BridgeType.Enum, is BridgeType.ValueClass -> false
 
     else -> error("Forward CIR direct-value projection cannot classify public type $this")

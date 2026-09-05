@@ -1,5 +1,6 @@
 package io.github.xxfast.kotlin.native.nuget.processor.cir
 
+import com.google.devtools.ksp.getAllSuperTypes
 import com.google.devtools.ksp.getVisibility
 import com.google.devtools.ksp.processing.KSPLogger
 import com.google.devtools.ksp.symbol.ClassKind
@@ -1001,6 +1002,19 @@ internal fun translateSealedClass(
               ?.classKind == ClassKind.ENUM_CLASS
 
             val qualifiedTypeName: String? = propTypeResolved.declaration.qualifiedName?.asString()
+
+            // ADR-107 item 9: kotlin.Throwable (or a stdlib subtype) reads as a constructed
+            // System.Exception rebuilt from the error envelope, the mirror of the Kotlin arm in
+            // SealedClassExports. Excluded from isReferenceType below so the "not in the
+            // bridgeable subset" guard does not fire on it.
+            val isThrowableType: Boolean = qualifiedTypeName != null &&
+                qualifiedTypeName !in exportedTypes &&
+                (propTypeResolved.declaration as? KSClassDeclaration)?.let { declaration ->
+                  qualifiedTypeName == "kotlin.Throwable" ||
+                      declaration.getAllSuperTypes().any { supertype ->
+                        supertype.declaration.qualifiedName?.asString() == "kotlin.Throwable"
+                      }
+                } == true
             val isListType: Boolean = qualifiedTypeName == "kotlin.collections.List"
             val isMutableListType: Boolean = qualifiedTypeName == "kotlin.collections.MutableList"
             val isMapType: Boolean = qualifiedTypeName == "kotlin.collections.Map"
@@ -1036,8 +1050,11 @@ internal fun translateSealedClass(
 
             if (isLambdaType) tracker.lambdaArities.add(lambdaArity)
 
+            val isKnownNonReferenceType: Boolean = isEnumType || isListType || isMutableListType ||
+                isMapType || isMutableMapType || isSetType || isMutableSetType || isLambdaType ||
+                isThrowableType
             val isReferenceType: Boolean =
-              propType !in KOTLIN_TO_CSHARP_RETURN && !isEnumType && !isListType && !isMutableListType && !isMapType && !isMutableMapType && !isSetType && !isMutableSetType && !isLambdaType
+              propType !in KOTLIN_TO_CSHARP_RETURN && !isKnownNonReferenceType
 
             if (isReferenceType && qualifiedTypeName != null && qualifiedTypeName !in exportedTypes) {
               ForwardDiagnosticSink.emit(
@@ -1075,7 +1092,7 @@ internal fun translateSealedClass(
             // single scalar slot, and surfaces in C# as `int?`. A nullable `String` keeps its
             // single call: the null pointer is its own presence bit.
             val isNullablePrimitiveTwoCall: Boolean = isNullable && propType != "String" &&
-                !isReferenceType && !isEnumType && !isLambdaType &&
+                !isReferenceType && !isEnumType && !isLambdaType && !isThrowableType &&
                 !isListType && !isMutableListType && !isMapType && !isMutableMapType &&
                 !isSetType && !isMutableSetType
 
@@ -1086,11 +1103,16 @@ internal fun translateSealedClass(
               (isSetType || isMutableSetType) -> "IntPtr"
               isEnumType -> "int"
               isReferenceType -> "IntPtr"
+              // ADR-107: the error-envelope pointer its Kotlin export ships.
+              isThrowableType -> "IntPtr"
               else -> mapReturnType(propType)
             }
 
             val type: String = when {
               isLambdaType -> lambdaCsType
+              // ADR-107: never the Kotlin type name -- the value is a reconstructed BCL exception.
+              isThrowableType && isNullable -> "global::System.Exception?"
+              isThrowableType -> "global::System.Exception"
               isListType -> "IReadOnlyList<$listElementType>"
               isMutableListType -> "IList<$listElementType>"
               isMapType -> "IReadOnlyDictionary<$mapKeyType, $mapValueType>"
@@ -1169,6 +1191,26 @@ internal fun translateSealedClass(
                 appendLine("                }")
                 appendLine("                NugetSetNative.Dispose(setHandle);")
                 append("                return result;")
+              }
+            } else if (isThrowableType) {
+              // ADR-107: ONE call, never the two-call spelling the nullable-reference arm below
+              // uses -- each call mints a fresh envelope StableRef, so calling twice would leak
+              // one. Multi-line so CirSealedRenderer emits a block body rather than `=> expr;`.
+              buildString {
+                appendLine()
+                appendLine("                IntPtr nativeResult = Native_Get_$propName(_handle, out IntPtr error);")
+                appendLine("                if (error != IntPtr.Zero)")
+                appendLine("                {")
+                appendLine("                    throw NugetErrorNative.BuildException(error);")
+                appendLine("                }")
+                if (isNullable) {
+                  append(
+                    "                return nativeResult == IntPtr.Zero ? null : " +
+                        "NugetErrorNative.BuildException(nativeResult);"
+                  )
+                } else {
+                  append("                return NugetErrorNative.BuildException(nativeResult);")
+                }
               }
             } else when {
               // Issue #38: a nullable `String` drops the null-forgiving `!` -- `PtrToStringUTF8`

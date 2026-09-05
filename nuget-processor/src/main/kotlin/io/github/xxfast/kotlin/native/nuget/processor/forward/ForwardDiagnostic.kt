@@ -220,6 +220,11 @@ internal fun ForwardPlanSkipReason.toDiagnosticKind(): ForwardDiagnosticKind = w
   ForwardPlanSkipReason.HANDLE,
   ForwardPlanSkipReason.INSTANT,
   ForwardPlanSkipReason.DURATION,
+    // ADR-107: a genuine drop (v1 binds Throwable only at a property getter), so the same
+    // "type combination is not supported" bucket the other ordinary types use.
+  ForwardPlanSkipReason.THROWABLE,
+    // ADR-106: defensive, like INSTANT/DURATION.
+  ForwardPlanSkipReason.UUID,
   ForwardPlanSkipReason.OBJECT,
   ForwardPlanSkipReason.STRING,
   ForwardPlanSkipReason.UNSUPPORTED,
@@ -352,6 +357,8 @@ internal fun BridgeType.diagnosticTypeName(): String = when (this) {
   BridgeType.String -> "String"
   BridgeType.Instant -> "Instant"
   BridgeType.Duration -> "Duration"
+  BridgeType.Throwable -> "Throwable"
+  BridgeType.Uuid -> "Uuid"
   is BridgeType.Primitive -> kind.name.lowercase().replaceFirstChar { it.uppercase() }
   is BridgeType.Enum -> qualifiedName.substringAfterLast('.')
   is BridgeType.ObjectHandle -> qualifiedName.substringAfterLast('.')

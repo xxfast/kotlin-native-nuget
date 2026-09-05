@@ -16,6 +16,8 @@ Primitive types follow the standard [Kotlin/Native C interop mappings](https://k
 | `Instant?` | `DateTimeOffset?` | same wire form as `Instant`, rides the nullable-primitive `INT64` machinery above at all four positions |
 | `kotlin.time.Duration` | `System.TimeSpan` | one `INT64` of `TimeSpan` ticks; property, constructor parameter, method parameter, method return, top-level return, see Duration below and [ADR-103](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/103-duration-mapping.md) |
 | `Duration?` | `TimeSpan?` | same wire form as `Duration`, rides the nullable-primitive `INT64` machinery above at all four positions |
+| `kotlin.uuid.Uuid` | `System.Guid` | third known stdlib type; crosses as the RFC 9562 hex-dash `String`, not a binary wire; property (get and set), constructor parameter, method parameter, method return, top-level return, static (`object`) route, see Uuid below and [ADR-106](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/106-uuid-mapping.md) |
+| `Uuid?` | `Guid?` | rides the null-pointer sentinel the `String?` wire already uses, not a has-value pair |
 
 ## Kotlin
 
@@ -700,6 +702,149 @@ public void NapClock_AeonNap_OutOfTimeSpanRangeButFinite_IsExactType_KotlinArgum
 }
 ```
 
+## Uuid
+
+`kotlin.uuid.Uuid` binds as `System.Guid`, a third known-stdlib type in the same category as
+`String`, `Instant` and `Duration`. Unlike `Instant`/`Duration`, it does not ride the `INT64`
+machinery above: `Uuid` is 128 bits, so it crosses as the RFC 9562 lowercase hex-dash **string**
+(`Uuid.toString()`/`Uuid.parse()` on the Kotlin side, `Guid.ToString()`/`Guid.Parse()` on the C#
+side), reusing the existing `String` wire row rather than a new binary shape. `Uuid?` therefore
+rides the null-pointer sentinel the `String?` wire already carries, not a has-value pair.
+
+<note>
+    <p>Both directions are exact and total: every byte of a <code>Uuid</code> survives the round
+    trip through the hex-dash string, and <code>Guid.Empty</code> ⇄ <code>Uuid.NIL</code> is a
+    real value on the wire, not a null sentinel. A per-crossing string allocation and parse is the
+    cost of this choice; a binary two-<code>INT64</code> wire was considered and rejected for
+    narrowness (see <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/106-uuid-mapping.md">ADR-106</a>'s
+    Alternatives), and is tracked as a possible follow-up in
+    <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md">ROADMAP.md</a> if
+    the allocation cost ever matters.</p>
+</note>
+
+From `test-library/src/nativeMain/kotlin/.../test/cat/Microchip.kt`, crossing every position the
+mapping supports:
+
+```kotlin
+class Microchip(val chipId: Uuid, var previousChipId: Uuid?) {
+  fun matches(candidate: Uuid): Boolean = candidate == chipId
+
+  fun reissue(): Uuid = Uuid.random()
+
+  fun lastRetired(): Uuid? = previousChipId
+
+  fun describe(tag: Uuid?): String = if (tag == null) "no tag scanned" else "scanned $tag"
+
+  fun maybeEcho(tag: Uuid?): Uuid? = tag
+
+  fun echo(tag: Uuid): Uuid = tag
+}
+
+object MicrochipRegistry {
+  fun nil(): Uuid = Uuid.NIL
+
+  fun isNil(tag: Uuid): Boolean = tag == Uuid.NIL
+}
+
+fun wellKnownChip(): Uuid = Uuid.parse("00112233-4455-6677-8899-aabbccddeeff")
+
+fun parseChip(text: String): Uuid? = try {
+  Uuid.parse(text)
+} catch (e: IllegalArgumentException) {
+  null
+}
+
+data class ChipRecord(val id: Uuid)
+```
+
+Generated C#, from `Interop.cs`:
+
+```C#
+public Microchip(global::System.Guid chipId, global::System.Guid? previousChipId)
+{
+    IntPtr handle = Native_Create(chipId.ToString(), previousChipId?.ToString(), out IntPtr error);
+    // ...
+}
+
+public global::System.Guid ChipId
+{
+    get
+    {
+        IntPtr nativeResult = Native_Get_chipId(_handle, out IntPtr error);
+        // ...
+        return global::System.Guid.Parse(Marshal.PtrToStringUTF8(nativeResult)!);
+    }
+}
+
+public global::System.Guid? PreviousChipId
+{
+    get { /* nativeResult == IntPtr.Zero ? null : global::System.Guid.Parse(...) */ }
+    set { /* Native_Set_previousChipId(_handle, value?.ToString(), out IntPtr error); */ }
+}
+
+public bool Matches(global::System.Guid candidate) { /* candidate.ToString() */ }
+
+public global::System.Guid Reissue() { /* ... */ }
+
+public global::System.Guid? LastRetired() { /* ... */ }
+```
+
+The static (`object`) route and the top-level route use the same `.ToString()`/`Guid.Parse()`
+pair:
+
+```C#
+public static class MicrochipRegistry
+{
+    public static global::System.Guid Nil() { /* ... */ }
+
+    public static bool IsNil(global::System.Guid tag) { /* tag.ToString() */ }
+}
+
+public static partial class MicrochipKt
+{
+    public static global::System.Guid wellKnownChip() { /* ... */ }
+}
+```
+
+From `IntegrationTests/UuidMappingTests.cs`:
+
+```C#
+[Fact]
+public void WellKnownChip_TopLevelReturn_RendersTheSameStringKotlinParsed()
+{
+    Guid chip = MicrochipKt.wellKnownChip();
+
+    Assert.Equal(WellKnown, chip.ToString());
+}
+
+[Fact]
+public void Registry_Nil_StaticReturn_IsGuidEmpty()
+{
+    Assert.Equal(Guid.Empty, MicrochipRegistry.Nil());
+}
+
+[Fact]
+public void RandomGuid_RoundTripsThroughConstructorAndValProperty()
+{
+    var minted = Guid.NewGuid();
+
+    using var chip = new Microchip(minted, null);
+
+    Assert.Equal(minted, chip.ChipId);
+}
+
+[Fact]
+public void PreviousChipId_NullableVarProperty_HoldsGuidEmptyDistinctlyFromNull()
+{
+    using var chip = new Microchip(Guid.Parse(WellKnown), null);
+
+    chip.PreviousChipId = Guid.Empty;
+
+    Assert.NotNull(chip.PreviousChipId);
+    Assert.Equal(Guid.Empty, chip.PreviousChipId!.Value);
+}
+```
+
 ## Limitations
 
 - Nullable *primitive* mapping (`Int?`, and friends) is forward-only (`→`): the reverse direction has
@@ -721,6 +866,11 @@ public void NapClock_AeonNap_OutOfTimeSpanRangeButFinite_IsExactType_KotlinArgum
   → Kotlin mapping yet. Legacy `kotlinx.datetime.Instant` is deliberately deferred, a distinct
   qualified name on a distinct dependency (see [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md)
   Phase 4).
+- `Uuid` mapping is forward-only (`→`) and deliberately excludes `List<Uuid>`/`Map`/`Set` components,
+  `Flow<Uuid>`, and `Uuid` as an extension receiver; there is no reverse `Guid` → Kotlin mapping yet.
+  The binary two-`INT64` wire considered and rejected in [ADR-106](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/106-uuid-mapping.md)
+  is a possible follow-up if the per-crossing string allocation ever matters, tracked in
+  [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md) Phase 4.
 
 <seealso>
     <category ref="related">
@@ -738,5 +888,6 @@ public void NapClock_AeonNap_OutOfTimeSpanRangeButFinite_IsExactType_KotlinArgum
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/076-instant-mapping.md">ADR-076: kotlin.time.Instant mapping</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/098-narrow-primitive-and-char-collection-components.md">ADR-098: Narrow-primitive and Char collection components</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/103-duration-mapping.md">ADR-103: kotlin.time.Duration mapping</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/106-uuid-mapping.md">ADR-106: kotlin.uuid.Uuid mapping</a>
     </category>
 </seealso>

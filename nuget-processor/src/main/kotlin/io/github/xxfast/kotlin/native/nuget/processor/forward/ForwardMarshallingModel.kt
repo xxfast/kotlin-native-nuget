@@ -32,6 +32,25 @@ internal sealed interface BridgeType {
   data object Duration : BridgeType
 
   /**
+   * ADR-107: `kotlin.Throwable` and its stdlib subtypes, at a **property getter** position only.
+   * Wires as the `POINTER` to the very same `StableRef<NugetError>` envelope a *thrown* exception
+   * writes into `errorOut`, so C# reconstructs it with `NugetErrorNative.BuildException` and the
+   * ADR-028 cause chain and ADR-029 type mapping come for free; the public C# type is
+   * `System.Exception`. A sealed variant, not an [ObjectHandle] with a flag, so the compiler
+   * enumerates every `when` that has to decide about it.
+   */
+  data object Throwable : BridgeType
+
+  /**
+   * ADR-106: `kotlin.uuid.Uuid`. Wires exactly as [String] does -- the RFC 9562 lowercase hex-dash
+   * text (`Uuid.toString()` / `Uuid.parse`, `Guid.ToString()` / `Guid.Parse`), a `STRING` slot at
+   * inputs and a `POINTER` at results, with `Uuid?` riding the null pointer sentinel rather than
+   * [Instant]'s has-value channel. The public C# type is `System.Guid`, a value type, so `Uuid?`
+   * renders `Guid?` (`Nullable<Guid>`).
+   */
+  data object Uuid : BridgeType
+
+  /**
    * @param qualifiedName Kotlin FQCN (used by the Kotlin export for `.entries[n]` / `.ordinal`).
    * @param csharpType Public C# type spelling. Cross-namespace enums (e.g. reverse-generated
    *   packages) need `global::Namespace.Name`; same-namespace simple names still work under
@@ -129,6 +148,12 @@ internal sealed interface BridgeType {
     val underlying: BridgeType,
     val underlyingPropertyName: kotlin.String = "value",
     val csharpType: kotlin.String = qualifiedName.substringAfterLast('.'),
+    /**
+     * ADR-108: the classified type arguments of this value class's declaration, in source order;
+     * empty for a non-generic value class or a star projection. Read at exactly one seam, the
+     * planner's `kotlin.Result<T>` return-position rewrite.
+     */
+    val typeArguments: List<BridgeType> = emptyList(),
   ) : BridgeType
 
   data class Collection(
@@ -269,6 +294,12 @@ internal enum class ForwardConversion {
   /** ADR-103: `System.TimeSpan` ticks (`Long`) -> Kotlin `Duration`, into Kotlin. */
   TICKS_TO_DURATION,
 
+  /** ADR-106: Kotlin `Uuid` -> its RFC 9562 hex-dash `String`, out of Kotlin. */
+  UUID_TO_STRING,
+
+  /** ADR-106: an RFC 9562 hex-dash `String` -> Kotlin `Uuid`, into Kotlin. */
+  STRING_TO_UUID,
+
   /** ADR-088: an incoming transfer GCHandle -> the Kotlin value, via `nuget{Iface}Value`. */
   GC_HANDLE_TO_BOUND_VALUE,
 
@@ -289,6 +320,14 @@ internal enum class ForwardHelperRequirement {
 
   /** ADR-103: the generated `toDotNetTicks()`/`durationFromDotNetTicks()` conversion pair. */
   DURATION,
+
+  /**
+   * ADR-106: `kotlin.uuid.Uuid`'s own stdlib surface (`toString()` / `Uuid.parse`). No generated
+   * helper function exists for it -- the generated Kotlin spells `kotlin.uuid.Uuid` in full -- so
+   * this requirement exists only so the validator's conversion/helper pairing check holds, exactly
+   * as it does for INSTANT/DURATION.
+   */
+  UUID,
 
   /**
    * ADR-088: the reverse pipeline's own per-interface helpers (`nuget{Iface}Value`,
@@ -375,6 +414,12 @@ internal data class ForwardInvocation(
    * call site still has to say `describe`.
    */
   val member: String? = null,
+  /**
+   * ADR-108: the declared Kotlin result was a `kotlin.Result<T>` that the plan lowered to `T`, so
+   * the Kotlin export appends `.getOrThrow()` to the invocation, inside the `try` the exception
+   * channel already wraps it in. A `Result.failure(e)` then reaches C# exactly as `throw e` would.
+   */
+  val unwrapsKotlinResult: Boolean = false,
 )
 
 internal data class ForwardResultConvention(
@@ -520,6 +565,10 @@ internal object ForwardCallablePlanValidator {
   private fun validateType(type: BridgeType, position: String) {
     when (type) {
       BridgeType.Unit, BridgeType.Char, BridgeType.String, BridgeType.Instant, BridgeType.Duration,
+        // ADR-107: valid in a plan, at the property-getter position the property planner admits.
+      BridgeType.Throwable,
+        // ADR-106: valid at every ordinary position, over the String wire.
+      BridgeType.Uuid,
       is BridgeType.Primitive, is BridgeType.Enum, is BridgeType.ObjectHandle,
       is BridgeType.Interface, is BridgeType.BoundInterface,
         -> Unit
@@ -613,6 +662,12 @@ internal object ForwardCallablePlanValidator {
       ForwardConversion.DURATION_TO_TICKS
     }
 
+    BridgeType.Uuid -> if (flow == ForwardFlow.INTO_KOTLIN) {
+      ForwardConversion.STRING_TO_UUID
+    } else {
+      ForwardConversion.UUID_TO_STRING
+    }
+
     else -> null
   }
 
@@ -652,6 +707,10 @@ internal object ForwardCallablePlanValidator {
     ForwardConversion.DURATION_TO_TICKS,
     ForwardConversion.TICKS_TO_DURATION,
       -> ForwardHelperRequirement.DURATION
+
+    ForwardConversion.UUID_TO_STRING,
+    ForwardConversion.STRING_TO_UUID,
+      -> ForwardHelperRequirement.UUID
 
     ForwardConversion.GC_HANDLE_TO_BOUND_VALUE,
     ForwardConversion.BOUND_VALUE_TO_GC_HANDLE,

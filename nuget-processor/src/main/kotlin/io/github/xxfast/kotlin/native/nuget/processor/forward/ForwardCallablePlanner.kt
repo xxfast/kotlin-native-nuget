@@ -56,6 +56,16 @@ internal enum class ForwardPlanSkipReason(val droppedFromCSharp: Boolean) {
 
   // ADR-103: defensive in exactly the same way as INSTANT above.
   DURATION(droppedFromCSharp = true),
+
+  /** ADR-106: defensive, exactly as INSTANT/DURATION above -- `shapeOrNull`'s Uuid branch always
+   *  succeeds, so a skip carrying a Uuid can only be a genuine drop. */
+  UUID(droppedFromCSharp = true),
+
+  /** ADR-107: `kotlin.Throwable` binds at a **property getter** and nowhere else in v1, so a
+   *  callable carrying one (a method return, a parameter, a constructor argument) is a genuine
+   *  drop with no legacy route -- named here rather than folded into HANDLE, whose hint would
+   *  point at the object-handle export set. */
+  THROWABLE(droppedFromCSharp = true),
   NULLABLE(droppedFromCSharp = true),
   OBJECT(droppedFromCSharp = true),
   STRING(droppedFromCSharp = true),
@@ -1375,7 +1385,22 @@ internal class ForwardCallablePlanner(
       )
     }
 
-    val resultShape: ForwardResultShape? = result.shapeOrNull()
+    // ADR-108: `Result<T>` at an ordinary return position is lowered to `T` here, before any shape
+    // is taken, and the invocation is flagged so the Kotlin export appends `.getOrThrow()`. The
+    // fallback is load-bearing: when `T` has no return shape the plan keeps the ORIGINAL
+    // `Result`'s skip reason (VALUE_CLASS), never `T`'s -- a `Result<Shape>` taking the sealed
+    // SEALED_PROTOCOL legacy deferral would be dropped silently, since the legacy re-emit keys on
+    // the declared return type.
+    val unwrappedResult: BridgeType? = result.kotlinResultPayloadOrNull(origin)
+    val effectiveResult: BridgeType =
+      if (unwrappedResult != null && unwrappedResult.shapeOrNull() != null) {
+        unwrappedResult
+      } else {
+        result
+      }
+    val unwrapsKotlinResult: Boolean = effectiveResult !== result
+
+    val resultShape: ForwardResultShape? = effectiveResult.shapeOrNull()
     if (resultShape == null) {
       return ForwardCallableCatalogEntry.Skipped(
         symbol, requireNotNull(result.skipReason()), node = node,
@@ -1424,6 +1449,11 @@ internal class ForwardCallablePlanner(
       if (inputTypes.any { type -> type.unwrapNullable() == BridgeType.Duration }) {
         add(ForwardHelperRequirement.DURATION)
       }
+      // ADR-106: the same pairing for Uuid, whose conversion tags are STRING_TO_UUID/
+      // UUID_TO_STRING; no helper function is generated for it (the stdlib's own surface is used).
+      if (inputTypes.any { type -> type.unwrapNullable() == BridgeType.Uuid }) {
+        add(ForwardHelperRequirement.UUID)
+      }
       // ADR-088: the reverse pipeline already generated these helpers into the same compilation;
       // the requirement is recorded only so the validator's conversion/helper pairing check holds.
       if (inputTypes.any { type -> type.unwrapNullable() is BridgeType.BoundInterface }) {
@@ -1437,11 +1467,12 @@ internal class ForwardCallablePlanner(
         origin = origin,
         target = if (valueClassProperty) "$target#property" else target,
         member = member,
+        unwrapsKotlinResult = unwrapsKotlinResult,
       ),
       publicSignature = ForwardPublicSignature(
         name = publicName,
         parameters = parameters.map { (name, type) -> ForwardPublicParameter(name, type) },
-        result = result,
+        result = effectiveResult,
         isOverride = isOverride,
         isVirtual = isVirtual,
       ),
@@ -1457,6 +1488,21 @@ internal class ForwardCallablePlanner(
       helperRequirements = helpers,
     ).validate()
     return ForwardCallableCatalogEntry.Planned(plan, node = node)
+  }
+
+  /**
+   * ADR-108: the payload of a `kotlin.Result<T>` result, or null when this type is not a `Result`
+   * or the position cannot carry the throw.
+   *
+   * [ForwardCallableOrigin.VALUE_CLASS] members keep the ADR-014 no-errorOut ABI, so a
+   * `getOrThrow()` there would have no slot to write and would abort the process; a constructor
+   * cannot return anything but its own type.
+   */
+  private fun BridgeType.kotlinResultPayloadOrNull(origin: ForwardCallableOrigin): BridgeType? {
+    if (this !is BridgeType.ValueClass || qualifiedName != "kotlin.Result") return null
+    if (origin == ForwardCallableOrigin.VALUE_CLASS) return null
+    if (origin == ForwardCallableOrigin.CONSTRUCTOR) return null
+    return typeArguments.singleOrNull()
   }
 
   private fun errorParameter(): ForwardAbiParameter = ForwardAbiParameter(
@@ -1505,6 +1551,20 @@ internal class ForwardCallablePlanner(
         transfer = ForwardTransfer(
           name, type, ForwardFlow.INTO_KOTLIN, ForwardPassing.VALUE,
           ForwardOwnership.BORROWED, ForwardConversion.TICKS_TO_INSTANT,
+        ),
+      )
+    )
+
+    // ADR-106: the wire value is the RFC 9562 hex-dash text; the Kotlin export parses it back with
+    // `Uuid.parse` before use, the STRING_TO_UUID step.
+    BridgeType.Uuid -> listOf(
+      ForwardAbiParameter(
+        name = name,
+        wireType = ForwardAbiWireType.STRING,
+        direction = ForwardAbiDirection.IN,
+        transfer = ForwardTransfer(
+          name, type, ForwardFlow.INTO_KOTLIN, ForwardPassing.VALUE,
+          ForwardOwnership.BORROWED, ForwardConversion.STRING_TO_UUID,
         ),
       )
     )
@@ -1602,6 +1662,20 @@ internal class ForwardCallablePlanner(
           transfer = ForwardTransfer(
             name, type, ForwardFlow.INTO_KOTLIN, ForwardPassing.VALUE,
             ForwardOwnership.BORROWED, ForwardConversion.STRING_TO_UTF8,
+          ),
+        )
+      )
+
+      // ADR-106: `Uuid?` rides the String wire's null pointer, NOT Instant's has-value channel --
+      // a single slot whose null means null.
+      BridgeType.Uuid -> listOf(
+        ForwardAbiParameter(
+          name = name,
+          wireType = ForwardAbiWireType.STRING,
+          direction = ForwardAbiDirection.IN,
+          transfer = ForwardTransfer(
+            name, type, ForwardFlow.INTO_KOTLIN, ForwardPassing.VALUE,
+            ForwardOwnership.BORROWED, ForwardConversion.STRING_TO_UUID,
           ),
         )
       )
@@ -1807,6 +1881,20 @@ internal class ForwardCallablePlanner(
       helperRequirements = setOf(ForwardHelperRequirement.UTF8),
     )
 
+    // ADR-106: the same pointer-to-text result shape as String, with the Uuid conversion tag.
+    BridgeType.Uuid -> ForwardResultShape(
+      wireType = ForwardAbiWireType.POINTER,
+      transfer = ForwardTransfer(
+        subject = "result",
+        type = this,
+        flow = ForwardFlow.OUT_OF_KOTLIN,
+        passing = ForwardPassing.VALUE,
+        ownership = ForwardOwnership.MATERIALIZED,
+        conversion = ForwardConversion.UUID_TO_STRING,
+      ),
+      helperRequirements = setOf(ForwardHelperRequirement.UUID),
+    )
+
     is BridgeType.Enum -> ForwardResultShape(
       wireType = ForwardAbiWireType.INT32,
       transfer = ForwardTransfer(
@@ -1877,6 +1965,21 @@ internal class ForwardCallablePlanner(
   }
 
   private fun nullableResultShape(type: BridgeType): ForwardResultShape? = when (type) {
+    // ADR-106: `Uuid?` returns over the same single pointer slot as `String?`; a null pointer is
+    // the null, so no has-value channel and no LEGACY_TWO_CALL reroute.
+    BridgeType.Uuid -> ForwardResultShape(
+      wireType = ForwardAbiWireType.POINTER,
+      transfer = ForwardTransfer(
+        subject = "result",
+        type = BridgeType.Nullable(type),
+        flow = ForwardFlow.OUT_OF_KOTLIN,
+        passing = ForwardPassing.VALUE,
+        ownership = ForwardOwnership.MATERIALIZED,
+        conversion = ForwardConversion.UUID_TO_STRING,
+      ),
+      helperRequirements = setOf(ForwardHelperRequirement.UUID),
+    )
+
     BridgeType.String -> ForwardResultShape(
       wireType = ForwardAbiWireType.POINTER,
       transfer = ForwardTransfer(
@@ -2246,6 +2349,11 @@ internal class ForwardCallablePlanner(
     BridgeType.Instant -> ForwardPlanSkipReason.INSTANT
     // ADR-103: defensive only, in the same way.
     BridgeType.Duration -> ForwardPlanSkipReason.DURATION
+    // ADR-107: genuinely reached -- shapeOrNull has no Throwable branch, because a method return
+    // typed Throwable is explicitly deferred (only the property getter binds in v1).
+    BridgeType.Throwable -> ForwardPlanSkipReason.THROWABLE
+    // ADR-106: defensive only, like Instant/Duration -- Uuid always has a return shape.
+    BridgeType.Uuid -> ForwardPlanSkipReason.UUID
     // ADR-088: same deferred nullable position as the input side, named the same way instead of
     // reaching the generic NULLABLE bucket.
     is BridgeType.Nullable ->
@@ -2302,7 +2410,10 @@ internal class ForwardCallablePlanner(
   }
 
   private fun BridgeType.inputSkipReason(): ForwardPlanSkipReason? = when (this) {
-    BridgeType.String, BridgeType.Char, BridgeType.Instant, BridgeType.Duration -> null
+    // ADR-106: Uuid is admissible at every input position, over the String wire.
+    BridgeType.String, BridgeType.Char, BridgeType.Instant, BridgeType.Duration,
+    BridgeType.Uuid -> null
+
     is BridgeType.Enum -> null
     // ADR-040 sub-decision B: an interface-typed parameter is plannable — the C# lowering routes
     // through NugetMarshal.HandleOf (ForwardCirPlanProjection.callArgument), which throws
@@ -2330,7 +2441,8 @@ internal class ForwardCallablePlanner(
     // side of this same ADR.
     is BridgeType.Nullable -> when (val inner = type) {
       BridgeType.String, is BridgeType.ObjectHandle, is BridgeType.Primitive,
-      BridgeType.Instant, BridgeType.Duration -> null
+        // ADR-106: `Uuid?` rides the null pointer, like `String?`.
+      BridgeType.Instant, BridgeType.Duration, BridgeType.Uuid -> null
 
       // ADR-080: a bare nullable enum fans out to the has-value pair with the ordinal in the
       // value slot, exactly like ADR-079's enum-underlying value class minus the box.
@@ -2407,6 +2519,13 @@ internal class ForwardCallablePlanner(
 
   private fun BridgeType.wireType(): ForwardAbiWireType = when (this) {
     BridgeType.Unit -> ForwardAbiWireType.VOID
+    // ADR-107: the error-envelope pointer. Unreachable from a callable plan today (no shape and
+    // no input arm admits a Throwable), but it is the wire the property route uses, so naming it
+    // here keeps the two planners' answers identical rather than erroring on a live type.
+    BridgeType.Throwable -> ForwardAbiWireType.POINTER
+    // ADR-106: the hex-dash text wire, the same STRING slot a String input takes; a Uuid *result*
+    // overrides this with the POINTER shape in shapeOrNull, exactly as String does.
+    BridgeType.Uuid -> ForwardAbiWireType.STRING
     is BridgeType.Primitive -> when (kind) {
       PrimitiveKind.BOOLEAN -> ForwardAbiWireType.BOOLEAN
       PrimitiveKind.BYTE -> ForwardAbiWireType.INT8
@@ -2493,6 +2612,14 @@ internal fun BridgeType.isBridgeableComponent(): Boolean = when (this) {
   BridgeType.Unit, BridgeType.Char, BridgeType.String, is BridgeType.Primitive,
   is BridgeType.Enum, is BridgeType.ObjectHandle,
     -> true
+
+  // ADR-107: `List<Throwable>` is explicitly deferred -- the component would have to be boxed by
+  // `nuget_wrap_*`, which has no envelope arm -- so it skips named, issue #52's rule.
+  BridgeType.Throwable -> false
+
+  // ADR-106: collection components are deferred (the component would need a `nuget_wrap_*` arm
+  // over the text form), so `List<Uuid>` skips named rather than half-binding.
+  BridgeType.Uuid -> false
 
   is BridgeType.ValueClass -> underlying.isBridgeableComponent()
   is BridgeType.Nullable -> type !is BridgeType.Nullable && type != BridgeType.Unit &&

@@ -1,5 +1,6 @@
 package io.github.xxfast.kotlin.native.nuget.processor.forward
 
+import com.google.devtools.ksp.getAllSuperTypes
 import com.google.devtools.ksp.symbol.ClassKind
 import com.google.devtools.ksp.symbol.KSClassDeclaration
 import com.google.devtools.ksp.symbol.KSType
@@ -102,6 +103,17 @@ internal class ForwardBridgeTypeClassifier(
     // `rawValue` Long with an internal constructor, so the shape branch would otherwise win and
     // bind an encoding the generated Kotlin cannot even compile against.
     if (qualifiedName == "kotlin.time.Duration") return BridgeType.Duration
+    // ADR-106: kotlin.uuid.Uuid, the third known stdlib type. A plain class (not a value class),
+    // so ordering against isValueClass() is irrelevant; it stays in this block by convention.
+    if (qualifiedName == "kotlin.uuid.Uuid") return BridgeType.Uuid
+    // ADR-107: kotlin.Throwable and every stdlib subtype of it (Exception, IllegalStateException,
+    // ...). Supertype-aware, because the declared property type is usually a subtype; ahead of the
+    // exportedObjectHandles membership test below, so a stdlib throwable stops being an
+    // "unexported dependency". A user exception class that IS in the export set keeps its
+    // ObjectHandle binding (decision 3), which is why the membership test guards this line.
+    if (qualifiedName !in context.exportedObjectHandles && classDeclaration.isStdlibThrowable()) {
+      return BridgeType.Throwable
+    }
     specializedProtocol(qualifiedName)?.let { return it }
     collectionType(qualifiedName, type.arguments)?.let { return it }
 
@@ -119,7 +131,9 @@ internal class ForwardBridgeTypeClassifier(
       }
       return BridgeType.Enum(qualifiedName, csharpType)
     }
-    if (classDeclaration.isValueClass()) return valueClass(classDeclaration, qualifiedName)
+    if (classDeclaration.isValueClass()) {
+      return valueClass(classDeclaration, qualifiedName, type.arguments)
+    }
     if (classDeclaration.modifiers.contains(Modifier.SEALED)) {
       // ADR-105: the protocol still names the legacy route (every position that had one keeps it,
       // unchanged), but it now also carries the ObjectHandle this type WOULD be, so a position
@@ -214,6 +228,17 @@ internal class ForwardBridgeTypeClassifier(
       )
     }
     val classified: BridgeType = classifyNonNullable(target.asStarProjectedType())
+    // ADR-107 does not extend to an `expect class` actualized onto a stdlib throwable: the
+    // envelope binds a Throwable-typed *property*, not a whole type, so this stays ADR-074's
+    // named actual-typealias-target skip rather than silently becoming a System.Exception.
+    if (classified == BridgeType.Throwable) {
+      return BridgeType.Unsupported(
+        targetQualifiedName,
+        "actual typealias target is a Kotlin throwable, which binds only at a property position",
+        isActualTypeAliasTarget = true,
+        actualTypeAliasExpectName = expectQualifiedName,
+      )
+    }
     if (classified is BridgeType.Unsupported) {
       return classified.copy(
         isActualTypeAliasTarget = true,
@@ -291,7 +316,29 @@ internal class ForwardBridgeTypeClassifier(
     return "global::$namespace.$simpleName"
   }
 
-  private fun valueClass(declaration: KSClassDeclaration, qualifiedName: String): BridgeType {
+  /**
+   * ADR-107: whether this declaration is `kotlin.Throwable` or inherits from it. `getAllSuperTypes`
+   * resolves for klib-origin stdlib declarations; a failure to resolve leaves the old behaviour
+   * (the type falls through to the exportedObjectHandles test) rather than mis-binding.
+   */
+  private fun KSClassDeclaration.isStdlibThrowable(): Boolean {
+    if (qualifiedName?.asString() == "kotlin.Throwable") return true
+    // The supertype walk is restricted to klib-origin declarations (`containingFile == null`, the
+    // same cross-module signal ADR-066 uses), which is what "stdlib subtype" means here:
+    // `Exception`, `IllegalStateException`, ... A module-local exception class keeps its existing
+    // classification, and an exported one keeps its ObjectHandle binding (decision 3). It also
+    // keeps the classifier from asking every ordinary class for its supertypes.
+    if (containingFile != null) return false
+    return getAllSuperTypes().any { supertype ->
+      supertype.declaration.qualifiedName?.asString() == "kotlin.Throwable"
+    }
+  }
+
+  private fun valueClass(
+    declaration: KSClassDeclaration,
+    qualifiedName: String,
+    arguments: List<KSTypeArgument>,
+  ): BridgeType {
     val underlyingParam = declaration.primaryConstructor?.parameters?.singleOrNull()
       ?: return BridgeType.Unsupported(
         qualifiedName,
@@ -302,11 +349,18 @@ internal class ForwardBridgeTypeClassifier(
         qualifiedName,
         "value class underlying parameter must be named",
       )
+    // ADR-108: carry the classified type arguments so the planner can see `Result<T>`'s payload.
+    // A star projection (`type == null`) contributes nothing, which is what keeps `Result<*>` on
+    // its named skip.
+    val typeArguments: List<BridgeType> = arguments.mapNotNull { argument ->
+      argument.type?.let { reference -> classify(reference.resolve()) }
+    }
     return BridgeType.ValueClass(
       qualifiedName,
       classify(underlyingParam.type.resolve()),
       underlyingPropertyName,
       csharpType = csharpTypeNameFor(declaration),
+      typeArguments = typeArguments,
     )
   }
 

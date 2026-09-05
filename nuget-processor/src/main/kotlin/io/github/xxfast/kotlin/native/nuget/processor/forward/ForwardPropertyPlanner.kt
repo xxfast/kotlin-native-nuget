@@ -21,6 +21,13 @@ internal data class ForwardDroppedPropertySetter(
   val node: KSNode?,
   val publicName: String,
   val componentDescription: String,
+  /**
+   * ADR-107: the sentence explaining the refusal, when the ADR-075 collection wording ("cannot be
+   * written into a Kotlin collection") does not apply. A `var error: Throwable?` is refused
+   * because C# cannot mint a typed Kotlin `Throwable` at all, not because a component failed to
+   * box; the property still survives read-only, which is what this record means.
+   */
+  val reason: String? = null,
 )
 
 /**
@@ -258,6 +265,9 @@ internal class ForwardPropertyPlanner(
         is BridgeType.Collection -> setOf(ForwardHelperRequirement.COLLECTION)
         BridgeType.Instant -> setOf(ForwardHelperRequirement.INSTANT)
         BridgeType.Duration -> setOf(ForwardHelperRequirement.DURATION)
+        // ADR-106: recorded for the validator's conversion/helper pairing; no helper function is
+        // generated (the generated Kotlin spells `kotlin.uuid.Uuid` in full).
+        BridgeType.Uuid -> setOf(ForwardHelperRequirement.UUID)
         // ADR-077: same pairing as the callable side (the value-class step plus the underlying's
         // own helper, keyed per kind in sub-item 4).
         is BridgeType.ValueClass -> buildSet {
@@ -290,6 +300,22 @@ internal class ForwardPropertyPlanner(
     receiver: ForwardPropertyReceiver,
   ): ForwardPropertySetter? {
     if (!prop.isMutable) return null
+    // ADR-107: `var error: Throwable?` binds get-only. C# has no way to mint a typed Kotlin
+    // Throwable (the envelope carries text, not the type), so the setter is refused here, before
+    // `valueParameter` would ask for an INTO_KOTLIN conversion that does not exist.
+    if (type.unwrapNullable() == BridgeType.Throwable) {
+      droppedSetters.add(
+        ForwardDroppedPropertySetter(
+          symbol = symbol,
+          node = prop,
+          publicName = publicName,
+          componentDescription = type.diagnosticTypeName(),
+          reason = "C# cannot construct a Kotlin ${type.diagnosticTypeName()}; the error " +
+              "envelope carries a snapshot out of Kotlin only",
+        ),
+      )
+      return null
+    }
     // ADR-076: Instant shares the nullable-primitive NullableDispatch setter shape exactly.
     // ADR-079: and so does a Primitive/Enum-underlying value class -- `valueParameter` already
     // resolves the wire through the underlying and tags BOX_VALUE_CLASS.
@@ -469,6 +495,14 @@ internal class ForwardPropertyPlanner(
     is BridgeType.Primitive, is BridgeType.Enum, is BridgeType.ObjectHandle,
     is BridgeType.Interface -> true
 
+    // ADR-107: a Throwable property reads as the same error envelope a throw writes; the getter is
+    // the only shape (the setter is refused in `collectionSetterOrNull`).
+    BridgeType.Throwable -> true
+
+    // ADR-106: a Uuid property rides the String property shapes verbatim (getter, setter, and the
+    // `Uuid?` null-pointer spelling), with the text conversion composed on each side.
+    BridgeType.Uuid -> true
+
     // Issue #52: the read side imposes no *marshalling* restriction on a component (unlike a
     // setter), but it still has to spell one in C#; a sealed helper inside a `List` used to sail
     // through here and crash the projection, where the bare `Shape?` spelling skips named.
@@ -520,6 +554,11 @@ internal class ForwardPropertyPlanner(
     is BridgeType.ValueClass -> underlying.isReadableComponent()
     is BridgeType.Nullable -> type.isReadableComponent()
     is BridgeType.Collection -> isReadable()
+    // ADR-107: a Throwable binds as a whole property, never as a collection component --
+    // `List<Throwable>` skips named rather than crashing the projection (issue #52's rule).
+    BridgeType.Throwable -> false
+    // ADR-106: `List<Uuid>` is deferred for the same reason, and skips named here.
+    BridgeType.Uuid -> false
     BridgeType.Unit, is BridgeType.BoundInterface, is BridgeType.SpecializedProtocol,
     is BridgeType.RawCollection, is BridgeType.RawKSType, is BridgeType.Unsupported -> false
   }
@@ -551,6 +590,14 @@ internal class ForwardPropertyPlanner(
     BridgeType.String, is BridgeType.ObjectHandle, is BridgeType.Interface, is BridgeType.Collection ->
       ForwardAbiWireType.POINTER
 
+    // ADR-107: the pointer to the `StableRef<NugetError>` envelope `buildError` produced, exactly
+    // the value an `errorOut` slot carries.
+    BridgeType.Throwable -> ForwardAbiWireType.POINTER
+
+    // ADR-106: the getter ships the hex-dash text over the same runtime-owned pointer a String
+    // getter uses; `inputWireType()` below overrides it to STRING on the setter side.
+    BridgeType.Uuid -> ForwardAbiWireType.POINTER
+
     is BridgeType.Enum -> ForwardAbiWireType.INT32
     // ADR-076: wires as its own INT64 tick representation, same as a Primitive(LONG).
     // ADR-103: likewise, an INT64 of TimeSpan ticks.
@@ -578,7 +625,8 @@ internal class ForwardPropertyPlanner(
   }
 
   private fun BridgeType.inputWireType(): ForwardAbiWireType = when (val type = unwrapNullable()) {
-    BridgeType.String -> ForwardAbiWireType.STRING
+    // ADR-106: a Uuid setter takes the same STRING slot a String setter does.
+    BridgeType.String, BridgeType.Uuid -> ForwardAbiWireType.STRING
     is BridgeType.ValueClass -> type.underlying.inputWireType()
     else -> wireType()
   }
@@ -602,6 +650,15 @@ internal class ForwardPropertyPlanner(
       ForwardConversion.STABLE_REF_TO_HANDLE
     }
 
+    // ADR-107: out only. The INTO_KOTLIN direction is unreachable -- `collectionSetterOrNull`
+    // refuses the setter before a value parameter is ever built -- and would be a lie if reached,
+    // since the envelope cannot reconstruct a typed Kotlin Throwable.
+    BridgeType.Throwable -> if (flow == ForwardFlow.INTO_KOTLIN) {
+      error("Forward property planner cannot marshal a Throwable into Kotlin")
+    } else {
+      ForwardConversion.STABLE_REF_TO_HANDLE
+    }
+
     is BridgeType.Collection -> if (flow == ForwardFlow.INTO_KOTLIN) {
       ForwardConversion.HANDLE_TO_COLLECTION
     } else {
@@ -612,6 +669,13 @@ internal class ForwardPropertyPlanner(
       ForwardConversion.TICKS_TO_INSTANT
     } else {
       ForwardConversion.INSTANT_TO_TICKS
+    }
+
+    // ADR-106: the RFC 9562 text conversion, both directions.
+    BridgeType.Uuid -> if (flow == ForwardFlow.INTO_KOTLIN) {
+      ForwardConversion.STRING_TO_UUID
+    } else {
+      ForwardConversion.UUID_TO_STRING
     }
 
     BridgeType.Duration -> if (flow == ForwardFlow.INTO_KOTLIN) {

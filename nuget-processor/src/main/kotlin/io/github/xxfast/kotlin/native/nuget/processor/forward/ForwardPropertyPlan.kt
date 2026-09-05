@@ -94,6 +94,13 @@ internal data class ForwardPropertyPlan(
       is BridgeType.Primitive, is BridgeType.Enum, is BridgeType.ObjectHandle,
       is BridgeType.Interface, is BridgeType.Collection -> Unit
 
+      // ADR-107: valid at a property, getter-only (the setter is refused in the planner, so a
+      // plan carrying one never reaches here).
+      BridgeType.Throwable -> Unit
+
+      // ADR-106: valid at a property, getter and setter alike, over the String wire.
+      BridgeType.Uuid -> Unit
+
       // ADR-077 sub-item 2: a value-class property is valid exactly when its underlying is.
       is BridgeType.ValueClass -> validateType(type.underlying)
       is BridgeType.Nullable -> validateType(type.type)

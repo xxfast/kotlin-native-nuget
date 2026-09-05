@@ -55,7 +55,11 @@ internal fun FileSpec.Builder.addForwardKotlinPlanExport(plan: ForwardCallablePl
   val arguments: String = plan.publicSignature.parameters.joinToString(", ") { parameter ->
     loweredArgument(parameter)
   }
+  // ADR-108: a `Result<T>` return was lowered to `T` by the planner; unwrap it here, inside the
+  // invocation string every result body drops into its existing `try`, so a `Result.failure(e)`
+  // takes exactly the path a thrown `e` takes.
   val invocation: String = invocationExpression(plan, receiver, arguments)
+    .let { call -> if (plan.invocation.unwrapsKotlinResult) "$call.getOrThrow()" else call }
 
   when (val result: BridgeType = plan.publicSignature.result) {
     BridgeType.Unit -> builder.addCode(errorHandlingUnitBody(invocation, error.name), cOpaquePointerVar, stableRef)
@@ -75,6 +79,20 @@ internal fun FileSpec.Builder.addForwardKotlinPlanExport(plan: ForwardCallablePl
       builder.returns(kotlinType("String"))
       builder.addCode(
         errorHandlingValueBody(invocation, error.name, "\"\""),
+        cOpaquePointerVar,
+        stableRef,
+      )
+    }
+
+    // ADR-106: the String branch with the RFC 9562 text conversion composed in; `toString()` is
+    // `Uuid`'s own `toHexDashString()`, which `Guid.Parse` reads verbatim.
+    BridgeType.Uuid -> {
+      require(call.result == ForwardAbiWireType.POINTER) {
+        "Forward Kotlin Uuid result must use POINTER wire type: ${plan.invocation.symbol}"
+      }
+      builder.returns(kotlinType("String"))
+      builder.addCode(
+        errorHandlingValueBody("$invocation.toString()", error.name, "\"\""),
         cOpaquePointerVar,
         stableRef,
       )
@@ -671,6 +689,20 @@ private fun addNullableResult(
       builder.addCode(errorHandlingValueBody(invocation, errorName, "null"), cOpaquePointerVar, stableRef)
     }
 
+    // ADR-106: `Uuid?` ships the null pointer for null, the text otherwise -- the String shape
+    // with a safe-called `toString()`, never Instant's has-value pair.
+    BridgeType.Uuid -> {
+      require(call.result == ForwardAbiWireType.POINTER) {
+        "Forward Kotlin nullable Uuid result must use POINTER"
+      }
+      builder.returns(kotlinType("String").copy(nullable = true))
+      builder.addCode(
+        errorHandlingValueBody("$invocation?.toString()", errorName, "null"),
+        cOpaquePointerVar,
+        stableRef,
+      )
+    }
+
     // ADR-077 sub-items 3/4: safe-call unboxing; a Kotlin null ships the null pointer, either as
     // a null String pointer or as a null StableRef pointer for an ObjectHandle underlying.
     // ADR-079: a Primitive/Enum underlying has no null pointer to ride, so it takes the ADR-061
@@ -868,7 +900,8 @@ private fun kotlinInputType(type: BridgeType, wireType: ForwardAbiWireType): Typ
   is BridgeType.Primitive, BridgeType.Char, is BridgeType.Enum,
   BridgeType.Instant, BridgeType.Duration -> kotlinResultType(wireType)
 
-  BridgeType.String -> kotlinType("String")
+  // ADR-106: a Uuid parameter arrives as its hex-dash text, parsed by `loweredArgument`.
+  BridgeType.String, BridgeType.Uuid -> kotlinType("String")
   is BridgeType.ObjectHandle, is BridgeType.Interface, is BridgeType.Collection -> cOpaquePointer
   // ADR-088: the transfer GCHandle the C# wrapper allocated.
   is BridgeType.BoundInterface -> cOpaquePointer
@@ -876,7 +909,7 @@ private fun kotlinInputType(type: BridgeType, wireType: ForwardAbiWireType): Typ
   // parameter is typed as the underlying (String today) and `loweredArgument` re-wraps it.
   is BridgeType.ValueClass -> kotlinInputType(type.underlying, wireType)
   is BridgeType.Nullable -> when (val inner = type.type) {
-    BridgeType.String -> kotlinType("String").copy(nullable = true)
+    BridgeType.String, BridgeType.Uuid -> kotlinType("String").copy(nullable = true)
     is BridgeType.ObjectHandle, is BridgeType.Interface, is BridgeType.Collection ->
       cOpaquePointer.copy(nullable = true)
 
@@ -1028,6 +1061,9 @@ private fun defaultResult(type: BridgeType): String = when (type) {
 private fun loweredArgument(parameter: ForwardPublicParameter): String =
   when (val type: BridgeType = parameter.type) {
     is BridgeType.Primitive, BridgeType.Char, BridgeType.String -> parameter.name
+    // ADR-106: parse the canonical text back into a Uuid. Spelled fully qualified so the generated
+    // file needs no `import kotlin.uuid.Uuid`.
+    BridgeType.Uuid -> "kotlin.uuid.Uuid.parse(${parameter.name})"
     is BridgeType.Enum -> "${type.qualifiedName}.entries[${parameter.name}]"
     // ADR-076: the wire value is a raw INT64 of ticks; convert it back to an Instant.
     BridgeType.Instant -> "instantFromDotNetTicks(${parameter.name})"
@@ -1053,6 +1089,8 @@ private fun loweredArgument(parameter: ForwardPublicParameter): String =
 
     is BridgeType.Nullable -> when (val inner: BridgeType = type.type) {
       BridgeType.String -> parameter.name
+      // ADR-106: a null incoming pointer stays null; only a real string is parsed.
+      BridgeType.Uuid -> "${parameter.name}?.let(kotlin.uuid.Uuid::parse)"
       is BridgeType.ObjectHandle ->
         "${parameter.name}?.asStableRef<${inner.qualifiedName}>()?.get()"
 

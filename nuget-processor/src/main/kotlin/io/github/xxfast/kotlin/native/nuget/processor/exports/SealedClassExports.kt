@@ -1,5 +1,6 @@
 package io.github.xxfast.kotlin.native.nuget.processor.exports
 
+import com.google.devtools.ksp.getAllSuperTypes
 import com.google.devtools.ksp.getVisibility
 import com.google.devtools.ksp.symbol.ClassKind
 import com.google.devtools.ksp.symbol.KSClassDeclaration
@@ -73,6 +74,17 @@ internal fun FileSpec.Builder.addSealedClassExports(sealed: KSClassDeclaration) 
       val isEnumType: Boolean = (propTypeResolved.declaration as? KSClassDeclaration)
         ?.classKind == ClassKind.ENUM_CLASS
 
+      // ADR-107 item 8: kotlin.Throwable (or a stdlib subtype of it) on a sealed subclass. The
+      // legacy route never consults ForwardPropertyPlanner, so the envelope conversion is spelled
+      // here too; without it the final `else` would box the raw Throwable in a StableRef and the
+      // C# side would drop the property.
+      val isThrowableType: Boolean = propType != "kotlin.Any" &&
+          (propTypeResolved.declaration as? KSClassDeclaration)?.let { declaration ->
+            propType == "kotlin.Throwable" || declaration.getAllSuperTypes().any { supertype ->
+              supertype.declaration.qualifiedName?.asString() == "kotlin.Throwable"
+            }
+          } == true
+
       val isPrimitiveType: Boolean = propType in setOf(
         "kotlin.String", "kotlin.Byte", "kotlin.UByte", "kotlin.Short",
         "kotlin.UShort", "kotlin.Int", "kotlin.UInt", "kotlin.Long",
@@ -132,8 +144,15 @@ internal fun FileSpec.Builder.addSealedClassExports(sealed: KSClassDeclaration) 
         // The catch branch of both handle bodies ships a null pointer, so even the non-null
         // reference getter returns `COpaquePointer?` — the same widening the top-level property
         // emitter applies to an ObjectHandle getter.
+        // ADR-107: a Throwable is boxed as the `NugetError` envelope `buildError` builds, not as
+        // itself, so the C# side can rebuild a System.Exception with the ADR-028 cause chain.
+        val boxed: String = when {
+          !isThrowableType -> access
+          isNullable -> "$access?.let(::buildError)"
+          else -> "buildError($access)"
+        }
         val body: String =
-          if (isNullable) nullableHandleBody(access, "errorOut") else handleBody(access, "errorOut")
+          if (isNullable) nullableHandleBody(boxed, "errorOut") else handleBody(boxed, "errorOut")
         addFunction(
           sealedPropertyGetter(subPrefix, propName)
             .returns(cOpaquePointer.copy(nullable = true))

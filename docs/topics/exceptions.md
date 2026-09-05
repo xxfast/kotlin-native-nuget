@@ -10,6 +10,8 @@ Every generated bridge call has an `out IntPtr error` parameter (or the object-h
 | `IllegalArgumentException` etc. | `ArgumentException` etc. | core exceptions mapped via `IKotlinException`, [ADR-029](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/029-exception-type-mapping.md) |
 | property getter/setter throws | propagated | [ADR-030](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/030-property-exception-propagation.md) |
 | constructor / `init` throws | propagated | primary, secondary, data class `copy()`, generic + value class constructors, [ADR-031](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/031-constructor-exception-propagation.md)–[ADR-035](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/035-value-class-primary-constructor-validation.md) |
+| `Throwable`/`Throwable?` property | `Exception`/`Exception?` | constructed, unthrown, riding the same error envelope; see [Throwable properties](#throwable-properties) below and [ADR-107](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/107-throwable-property-mapping.md) |
+| `Result<T>` return | `T`, failure thrown | see [Result return values](#result-return-values) below and [ADR-108](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/108-result-return-mapping.md) |
 
 ## `KotlinException` and `IKotlinException`
 
@@ -268,6 +270,212 @@ public async Task OreoOnDiet_ThrowsArgumentException_WithTypeName()
 }
 ```
 
+## Throwable properties
+
+A property declared `Throwable`, `Throwable?`, or a stdlib subtype (`Exception?`,
+`IllegalStateException?`, ...) reads as a **constructed, unthrown** `System.Exception`, riding the
+same error envelope a thrown exception already crosses on. The value is always, in fact, an
+`IKotlinException`: the ADR-029 type mapping and the ADR-028 cause chain both apply, exactly as for
+a thrown exception. It binds get-only, since C# cannot mint a typed Kotlin `Throwable` to satisfy a
+setter, and it binds on both an ordinary exported class and a **sealed subclass**.
+
+<note>
+    <p>Each read allocates a fresh <code>Exception</code>: this is a snapshot, not an identity.
+    <code>ReferenceEquals</code> on two reads of the same property is <code>false</code>, even
+    though the messages and types are equal.</p>
+</note>
+
+From `test-library/src/nativeMain/kotlin/.../test/issue56/Issue56Sample.kt`:
+
+```kotlin
+data class Issue56Failure(
+  val reason: String,
+  val error: Throwable?,
+  val fatal: Throwable,
+) {
+  var lastError: Throwable? = error
+}
+
+sealed class Issue56LoadState {
+  data object Loading : Issue56LoadState()
+  data class Failure(val error: Throwable?) : Issue56LoadState()
+}
+```
+
+Generated C#, from `Interop.cs`. The getter reconstructs the exception without throwing:
+
+```C#
+public global::System.Exception? Error
+{
+    get
+    {
+        IntPtr nativeResult = Native_Get_error(_handle, out IntPtr error);
+        if (error != IntPtr.Zero)
+        {
+            throw NugetErrorNative.BuildException(error);
+        }
+        return nativeResult == IntPtr.Zero ? null : NugetErrorNative.BuildException(nativeResult);
+    }
+}
+
+public global::System.Exception Fatal
+{
+    get { /* same shape, no null check */ }
+}
+```
+
+The sealed-subclass arm goes through a separate, legacy renderer (`CirClassTranslator.kt`/
+`SealedClassExports.kt`, not the planner route above) but produces the identical getter shape:
+
+```C#
+public sealed class Failure : Issue56LoadState
+{
+    public global::System.Exception? Error
+    {
+        get
+        {
+            IntPtr nativeResult = Native_Get_error(_handle, out IntPtr error);
+            if (error != IntPtr.Zero)
+            {
+                throw NugetErrorNative.BuildException(error);
+            }
+            return nativeResult == IntPtr.Zero ? null : NugetErrorNative.BuildException(nativeResult);
+        }
+    }
+}
+```
+
+From `IntegrationTests/Issue56Tests.cs`:
+
+```C#
+[Fact]
+public void DietViolation_Error_IsTheAdr029MappedSubtype()
+{
+    using var failure = Issue56Sample.dietViolation();
+
+    Assert.IsType<KotlinArgumentException>(failure.Error);
+}
+
+[Fact]
+public void DietViolation_Error_UnmappedCause_FallsBackToBaseKotlinException()
+{
+    // RuntimeException has no ADR-029 mapping, so the cause must be the base type.
+    using var failure = Issue56Sample.dietViolation();
+
+    Assert.IsType<KotlinException>(failure.Error!.InnerException);
+}
+
+[Fact]
+public void LastError_VarThrowableProperty_HasNoSetter()
+{
+    var property = typeof(Issue56Failure).GetProperty("LastError");
+
+    Assert.NotNull(property);
+    Assert.True(property!.CanRead);
+    Assert.False(property.CanWrite);
+}
+
+[Fact]
+public void FailedLoad_SealedSubclassThrowableProperty_IsTheMappedException()
+{
+    using Issue56LoadState state = Issue56Sample.failedLoad();
+
+    var failure = (Issue56LoadState.Failure)state;
+    Exception? error = failure.Error;
+
+    Assert.IsType<KotlinArgumentException>(error);
+    Assert.Equal("Oreo is on a diet!", error!.Message);
+}
+```
+
+## Result return values
+
+`kotlin.Result<T>` at an ordinary (non-suspend) return position lowers to `T`: the generated export
+calls `.getOrThrow()` on the invocation inside the same `try` every other export already wraps its
+call in, so a `Result.failure(e)` is indistinguishable in C# from `throw e` and arrives mapped
+exactly as ADR-029 describes. `Result<Unit>` binds as `void`, not `Unit`.
+
+<warning>
+    <p>This is a deliberate semantic loss: a C# caller cannot tell a modelled
+    <code>Result.failure</code> from an unexpected exception. Both surface as the same mapped
+    <code>KotlinException</code> subtype. There is no <code>TryRun</code>-style non-throwing
+    overload.</p>
+</warning>
+
+From `test-library/src/nativeMain/kotlin/.../test/cat/ResultSample.kt`:
+
+```kotlin
+class Service {
+  fun run(): Result<Unit> = Result.success(Unit)
+
+  fun feed(catName: String): Result<String> =
+    if (catName == "Oreo") Result.failure(IllegalArgumentException("Oreo is on a diet!"))
+    else Result.success("$catName got a treat")
+}
+```
+
+Generated C#, from `Interop.cs`: `Run()` is `void`, not `Unit`-returning, and `Feed` returns the
+payload type directly:
+
+```C#
+public void Run()
+{
+    Native_Run(_handle, out IntPtr error);
+    if (error != IntPtr.Zero)
+    {
+        throw NugetErrorNative.BuildException(error);
+    }
+}
+
+public string Feed(string catName)
+{
+    IntPtr nativeResult = Native_Feed(_handle, catName, out IntPtr error);
+    if (error != IntPtr.Zero)
+    {
+        throw NugetErrorNative.BuildException(error);
+    }
+    return Marshal.PtrToStringUTF8(nativeResult)!;
+}
+```
+
+From `IntegrationTests/ResultReturnTests.cs`:
+
+```C#
+[Fact]
+public void Run_ResultOfUnit_BindsAsVoidAndSucceeds()
+{
+    using var service = ResultSample.service();
+
+    // Compile-time contract: Run() is void, not Unit-returning and not a bool Try shape.
+    Assert.Null(Record.Exception(() => service.Run()));
+}
+
+[Fact]
+public void Feed_Mylo_ResultSuccess_ReturnsThePayloadAsAPlainString()
+{
+    using var service = ResultSample.service();
+
+    string treat = service.Feed("Mylo");
+
+    Assert.Equal("Mylo got a treat", treat);
+}
+```
+
+## Limitations
+
+- `Throwable` binds at a **property getter only**: a method return, a parameter, and
+  `List<Throwable>` all keep their existing named skip. A module-local, non-exported
+  `class MyError : Exception()` does not classify as `Throwable` either and keeps skipping named:
+  only a klib/stdlib-origin throwable that is not itself in the export set qualifies. Both deferred
+  by [ADR-107](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/107-throwable-property-mapping.md),
+  tracked in [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md).
+- `Result<T>` binds at an ordinary **return position only**: property, parameter,
+  value-class-own-member, and `suspend fun` positions all keep their existing named skip (a
+  `Result<T>` whose payload has no return shape of its own, such as a sealed base or `Flow`, also
+  keeps the named skip rather than adopting the payload's). There is no non-throwing `Try`-style
+  overload. Deferred by [ADR-108](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/108-result-return-mapping.md),
+  tracked in [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md).
+
 <seealso>
     <category ref="related">
         <a href="value-classes.md">Value classes</a>
@@ -282,5 +490,7 @@ public async Task OreoOnDiet_ThrowsArgumentException_WithTypeName()
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/030-property-exception-propagation.md">ADR-030: Property exception propagation</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/031-constructor-exception-propagation.md">ADR-031: Constructor exception propagation</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/034-secondary-constructor-exceptions.md">ADR-034: Secondary constructor exceptions</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/107-throwable-property-mapping.md">ADR-107: Throwable property mapping</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/108-result-return-mapping.md">ADR-108: Result return mapping</a>
     </category>
 </seealso>

@@ -53,10 +53,32 @@ private fun FileSpec.Builder.addGetter(plan: ForwardPropertyPlan, call: ForwardN
       builder.addCode(valueBody(access, "errorOut", "\"\""), cOpaquePointerVar, stableRef)
     }
 
+    // ADR-106: the String getter with `toString()` composed in -- the RFC 9562 lowercase hex-dash
+    // text `Guid.Parse` reads verbatim.
+    BridgeType.Uuid -> {
+      builder.returns(kotlinType("String"))
+      builder.addCode(
+        valueBody("$access.toString()", "errorOut", "\"\""),
+        cOpaquePointerVar,
+        stableRef,
+      )
+    }
+
     is BridgeType.Nullable -> when (val inner: BridgeType = type.type) {
       BridgeType.String -> {
         builder.returns(kotlinType(type))
         builder.addCode(valueBody(access, "errorOut", "null"), cOpaquePointerVar, stableRef)
+      }
+
+      // ADR-106: `Uuid?` ships the null pointer for null -- the String? shape with a safe-called
+      // `toString()`, never Instant's has-value pair.
+      BridgeType.Uuid -> {
+        builder.returns(kotlinType("String").copy(nullable = true))
+        builder.addCode(
+          valueBody("$access?.toString()", "errorOut", "null"),
+          cOpaquePointerVar,
+          stableRef,
+        )
       }
 
       // ADR-075: a nullable collection has no element-type restriction on the read side --
@@ -97,6 +119,19 @@ private fun FileSpec.Builder.addGetter(plan: ForwardPropertyPlan, call: ForwardN
         }
       }
 
+      // ADR-107: the nullable Throwable getter ships the same envelope a thrown exception writes
+      // into errorOut, in the result slot; a null property value ships the null pointer, exactly
+      // as a nullable ObjectHandle getter does.
+      BridgeType.Throwable -> {
+        builder.returns(cOpaquePointer.copy(nullable = true))
+        builder.addCode(
+          nullableHandleBody("$access?.let(::buildError)", "errorOut"),
+          stableRef,
+          cOpaquePointerVar,
+          stableRef,
+        )
+      }
+
       else -> error("Forward property direct nullable getter is invalid for ${plan.symbol}: $inner")
     }
 
@@ -126,6 +161,17 @@ private fun FileSpec.Builder.addGetter(plan: ForwardPropertyPlan, call: ForwardN
         if (type is BridgeType.Collection) collectionResultProjection(access, type) else access
       builder.returns(cOpaquePointer.copy(nullable = true))
       builder.addCode(handleBody(boxed, "errorOut"), stableRef, cOpaquePointerVar, stableRef)
+    }
+
+    // ADR-107: non-null Throwable. Same envelope, unconditionally built.
+    BridgeType.Throwable -> {
+      builder.returns(cOpaquePointer.copy(nullable = true))
+      builder.addCode(
+        handleBody("buildError($access)", "errorOut"),
+        stableRef,
+        cOpaquePointerVar,
+        stableRef,
+      )
     }
 
     // ADR-077 sub-items 2/4: unbox to the underlying property, so the export ships the
@@ -331,6 +377,8 @@ private fun ForwardPropertyPlan.accessExpression(): String =
 private fun ForwardPropertyPlan.valueExpression(): String = when (val type: BridgeType = type) {
   is BridgeType.Nullable -> when (val inner: BridgeType = type.type) {
     is BridgeType.Primitive, BridgeType.Char, BridgeType.String -> "value"
+    // ADR-106: a null wire value stays null; only real text is parsed.
+    BridgeType.Uuid -> "value?.let(kotlin.uuid.Uuid::parse)"
     is BridgeType.ObjectHandle -> "value?.asStableRef<${inner.qualifiedName}>()?.get()"
     is BridgeType.Interface -> "value?.asStableRef<${inner.qualifiedName}>()?.get()"
     // ADR-076: the wire value is a raw INT64 of ticks; convert it back to an Instant.
@@ -361,6 +409,8 @@ private fun ForwardPropertyPlan.valueExpression(): String = when (val type: Brid
   }
 
   is BridgeType.Primitive, BridgeType.Char, BridgeType.String -> "value"
+  // ADR-106: parse the canonical text back; spelled fully qualified so no import is needed.
+  BridgeType.Uuid -> "kotlin.uuid.Uuid.parse(value)"
   is BridgeType.Enum -> "${type.qualifiedName}.entries[value]"
   BridgeType.Instant -> "instantFromDotNetTicks(value)"
   BridgeType.Duration -> "durationFromDotNetTicks(value)"
@@ -380,7 +430,8 @@ private fun kotlinInputType(type: BridgeType): TypeName = when (type) {
   is BridgeType.Nullable -> kotlinInputType(type.type).copy(nullable = true)
   is BridgeType.Primitive -> kotlinType(type)
   BridgeType.Char -> kotlinType("Char")
-  BridgeType.String -> kotlinType("String")
+  // ADR-106: a Uuid setter's wire value is its text form.
+  BridgeType.String, BridgeType.Uuid -> kotlinType("String")
   is BridgeType.Enum -> kotlinType("Int")
   BridgeType.Instant, BridgeType.Duration -> kotlinType("Long")
   // ADR-014: the underlying is what actually crosses the wire, both for an extension property's
