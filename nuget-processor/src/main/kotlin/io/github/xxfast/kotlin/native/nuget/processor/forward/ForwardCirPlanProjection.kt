@@ -1,5 +1,6 @@
 package io.github.xxfast.kotlin.native.nuget.processor.forward
 
+import io.github.xxfast.kotlin.native.nuget.processor.CSHARP_RESERVED
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirDllImport
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirConstructor
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirMember
@@ -413,7 +414,11 @@ internal object ForwardCirPlanProjection {
       "Forward CIR extension plan ${plan.invocation.symbol} must begin with a receiver"
     }
     val receiverType: String = receiver.transfer.type.csharpType()
-    val receiverParam = CirParameter(receiver.name, receiverType, receiver.wireType.csharpType())
+    val receiverParam = CirParameter(
+      receiver.csharpName,
+      receiverType,
+      receiver.wireType.csharpType(),
+    )
     val publicParams: List<CirParameter> = listOf(receiverParam) + plan.publicParameters()
     val receiverArgument: String = when (val type: BridgeType = receiver.transfer.type) {
       is BridgeType.ObjectHandle -> "receiver._handle"
@@ -497,7 +502,7 @@ internal object ForwardCirPlanProjection {
   private fun ForwardCallablePlan.publicParameters(): List<CirParameter> =
     publicSignature.parameters.map { parameter ->
       CirParameter(
-        name = parameter.name,
+        name = parameter.csharpName,
         type = parameter.type.csharpType(),
         isReferenceType = parameter.type.isCSharpReferenceType(),
       )
@@ -515,7 +520,7 @@ internal object ForwardCirPlanProjection {
     nativeParameters: List<ForwardAbiParameter>,
   ): List<CirParameter> = nativeParameters
     .filter { parameter -> parameter.direction == ForwardAbiDirection.IN }
-    .map { native -> CirParameter(native.name, native.nativeCsharpType()) }
+    .map { native -> CirParameter(native.csharpName, native.nativeCsharpType()) }
 
   private fun ForwardAbiParameter.nativeCsharpType(): String {
     val type: BridgeType = transfer.type
@@ -550,35 +555,35 @@ internal object ForwardCirPlanProjection {
    */
   private fun ForwardCallablePlan.callArgument(parameter: ForwardPublicParameter): List<String> =
     when (val type = parameter.type) {
-      is BridgeType.Primitive, BridgeType.Char, BridgeType.String -> listOf(parameter.name)
+      is BridgeType.Primitive, BridgeType.Char, BridgeType.String -> listOf(parameter.csharpName)
       // ADR-106: the default "D" format is the lowercase hex-dash text `Uuid.parse` reads. Never
       // pass a format string here: "N" would still parse, "B"/"P"/"X" would not.
-      BridgeType.Uuid -> listOf("${parameter.name}.ToString()")
-      is BridgeType.Enum -> listOf("(int)${parameter.name}")
+      BridgeType.Uuid -> listOf("${parameter.csharpName}.ToString()")
+      is BridgeType.Enum -> listOf("(int)${parameter.csharpName}")
       // ADR-076: UtcTicks is load-bearing (verified) -- a consumer holding a non-UTC
       // DateTimeOffset must not send its wall-clock ticks.
-      BridgeType.Instant -> listOf("${parameter.name}.UtcTicks")
+      BridgeType.Instant -> listOf("${parameter.csharpName}.UtcTicks")
       // ADR-103: TimeSpan has one tick domain, so the plain `.Ticks` is unambiguous.
-      BridgeType.Duration -> listOf("${parameter.name}.Ticks")
-      is BridgeType.ObjectHandle -> listOf("${parameter.name}._handle")
+      BridgeType.Duration -> listOf("${parameter.csharpName}.Ticks")
+      is BridgeType.ObjectHandle -> listOf("${parameter.csharpName}._handle")
       // ADR-040 sub-decision B: an interface-typed parameter's public static type is `IFoo`, which
       // does not carry `._handle` (that is only true of the generated `Foo` backing class). The
       // one shared reflective helper extracts it regardless of which concrete type implements
       // `IFoo`, and throws NotSupportedException for a C#-implemented (non-Kotlin-backed) one.
       // ADR-084 stage 3: the extraction moved into the prelude, because a C#-implemented value
       // mints a transfer handle that [interfaceCleanup] disposes once the crossing is done.
-      is BridgeType.Interface -> listOf("${parameter.name}Handle")
+      is BridgeType.Interface -> listOf("${parameter.csharpName}Handle")
       // ADR-088: the transfer GCHandle allocated by [boundInterfacePrelude]. No `HandleOf`
       // reflection here: a bound interface's implementations are ordinary managed objects on this
       // side, Kotlin-backed or not, so the handle is simply an alloc over whatever came in.
-      is BridgeType.BoundInterface -> listOf("${parameter.name}Handle")
-      is BridgeType.Collection -> listOf("${parameter.name}Handle")
+      is BridgeType.BoundInterface -> listOf("${parameter.csharpName}Handle")
+      is BridgeType.Collection -> listOf("${parameter.csharpName}Handle")
       // ADR-077: the generated `readonly record struct` capitalizes the Kotlin underlying
       // property (`value` -> `Value`, CirClassTranslator); the unwrapped value is lowered to its
       // wire form per underlying (sub-item 4), and Kotlin re-wraps it on the other side.
       is BridgeType.ValueClass -> {
         val prop: String = type.underlyingPropertyName.replaceFirstChar { it.uppercase() }
-        val unwrapped = "${parameter.name}.$prop"
+        val unwrapped = "${parameter.csharpName}.$prop"
         listOf(
           when (type.underlying) {
             is BridgeType.Enum -> "(int)$unwrapped"
@@ -589,34 +594,37 @@ internal object ForwardCirPlanProjection {
       }
 
       is BridgeType.Nullable -> when (val inner = type.type) {
-        BridgeType.String -> listOf(parameter.name)
+        BridgeType.String -> listOf(parameter.csharpName)
         // ADR-106: `Guid?` -- a null stays a null string, so the wire's null pointer is the null.
-        BridgeType.Uuid -> listOf("${parameter.name}?.ToString()")
-        is BridgeType.ObjectHandle -> listOf("${parameter.name}?._handle ?? IntPtr.Zero")
-        is BridgeType.Interface -> listOf("${parameter.name}Handle")
+        BridgeType.Uuid -> listOf("${parameter.csharpName}?.ToString()")
+        is BridgeType.ObjectHandle -> listOf("${parameter.csharpName}?._handle ?? IntPtr.Zero")
+        is BridgeType.Interface -> listOf("${parameter.csharpName}Handle")
 
-        is BridgeType.Primitive -> listOf("${parameter.name}.HasValue", "${parameter.name}.GetValueOrDefault()")
+        is BridgeType.Primitive -> listOf(
+          "${parameter.csharpName}.HasValue", "${parameter.csharpName}.GetValueOrDefault()",
+        )
         // ADR-080: same HasValue/GetValueOrDefault pair, the value half lowered to the ordinal.
         is BridgeType.Enum -> listOf(
-          "${parameter.name}.HasValue", "(int)${parameter.name}.GetValueOrDefault()",
+          "${parameter.csharpName}.HasValue", "(int)${parameter.csharpName}.GetValueOrDefault()",
         )
 
         // ADR-076: same HasValue/GetValueOrDefault pair as the nullable Primitive case above,
         // with the ticks conversion applied to the value half.
         BridgeType.Instant -> listOf(
-          "${parameter.name}.HasValue", "${parameter.name}.GetValueOrDefault().UtcTicks",
+          "${parameter.csharpName}.HasValue",
+          "${parameter.csharpName}.GetValueOrDefault().UtcTicks",
         )
 
         // ADR-103: the same pair, the value half lowered to TimeSpan ticks.
         BridgeType.Duration -> listOf(
-          "${parameter.name}.HasValue", "${parameter.name}.GetValueOrDefault().Ticks",
+          "${parameter.csharpName}.HasValue", "${parameter.csharpName}.GetValueOrDefault().Ticks",
         )
 
         // ADR-075: a nullable collection *parameter* (e.g. a data class's `notes: List<String>?`
         // constructor parameter) shares [ForwardPropertyPlan]'s setter route exactly: the local
         // handle variable [collectionPrelude] built already folds the null check in, so the call
         // argument itself is unconditional either way.
-        is BridgeType.Collection -> listOf("${parameter.name}Handle")
+        is BridgeType.Collection -> listOf("${parameter.csharpName}Handle")
         // ADR-077 sub-items 3/4: null propagation into the pointer-shaped marshalling; a C# null
         // ships the null pointer (null string reference, or IntPtr.Zero for a handle underlying).
         // ADR-079: a Primitive/Enum underlying has no null pointer, so it contributes the same
@@ -627,13 +635,13 @@ internal object ForwardCirPlanProjection {
         is BridgeType.ValueClass -> {
           val prop: String = inner.underlyingPropertyName.replaceFirstChar { it.uppercase() }
           if (inner.underlying is BridgeType.Primitive || inner.underlying is BridgeType.Enum) {
-            val unwrapped = "${parameter.name}.GetValueOrDefault().$prop"
+            val unwrapped = "${parameter.csharpName}.GetValueOrDefault().$prop"
             listOf(
-              "${parameter.name}.HasValue",
+              "${parameter.csharpName}.HasValue",
               if (inner.underlying is BridgeType.Enum) "(int)$unwrapped" else unwrapped,
             )
           } else {
-            val unwrapped = "${parameter.name}?.$prop"
+            val unwrapped = "${parameter.csharpName}?.$prop"
             listOf(
               if (inner.underlying is BridgeType.ObjectHandle) {
                 "$unwrapped._handle ?? IntPtr.Zero"
@@ -670,16 +678,16 @@ internal object ForwardCirPlanProjection {
       CollectionKind.SET, CollectionKind.MUTABLE_SET -> "CreateSet"
     }
     // ADR-081: a value-class component is projected to its underlying per element before boxing.
-    val source: String = collectionCreateArgument(parameter.name, type) { it.csharpType() }
+    val source: String = collectionCreateArgument(parameter.csharpName, type) { it.csharpType() }
     val value: String = if (nullable) {
-      "${parameter.name} != null ? NugetMarshal.$factory($source) : IntPtr.Zero"
+      "${parameter.csharpName} != null ? NugetMarshal.$factory($source) : IntPtr.Zero"
     } else {
       "NugetMarshal.$factory($source)"
     }
     return ForwardCirHandleStep(
-      flat = "IntPtr ${parameter.name}Handle = $value;",
-      declarations = listOf("IntPtr ${parameter.name}Handle = IntPtr.Zero;"),
-      statement = "${parameter.name}Handle = $value;",
+      flat = "IntPtr ${parameter.csharpName}Handle = $value;",
+      declarations = listOf("IntPtr ${parameter.csharpName}Handle = IntPtr.Zero;"),
+      statement = "${parameter.csharpName}Handle = $value;",
     )
   }
 
@@ -695,14 +703,14 @@ internal object ForwardCirPlanProjection {
     if (!parameter.type.isInterfaceInput()) return null
     val helper: String = if (nullable) "HandleOfOrZero" else "HandleOf"
     return ForwardCirHandleStep(
-      flat = "IntPtr ${parameter.name}Handle = " +
-          "NugetMarshal.$helper(${parameter.name}, out bool ${parameter.name}Owned);",
+      flat = "IntPtr ${parameter.csharpName}Handle = " +
+          "NugetMarshal.$helper(${parameter.csharpName}, out bool ${parameter.csharpName}Owned);",
       declarations = listOf(
-        "IntPtr ${parameter.name}Handle = IntPtr.Zero;",
-        "bool ${parameter.name}Owned = false;",
+        "IntPtr ${parameter.csharpName}Handle = IntPtr.Zero;",
+        "bool ${parameter.csharpName}Owned = false;",
       ),
-      statement = "${parameter.name}Handle = " +
-          "NugetMarshal.$helper(${parameter.name}, out ${parameter.name}Owned);",
+      statement = "${parameter.csharpName}Handle = " +
+          "NugetMarshal.$helper(${parameter.csharpName}, out ${parameter.csharpName}Owned);",
     )
   }
 
@@ -714,7 +722,8 @@ internal object ForwardCirPlanProjection {
    */
   private fun ForwardCallablePlan.interfaceCleanup(parameter: ForwardPublicParameter): String? {
     if (!parameter.type.isInterfaceInput()) return null
-    return "if (${parameter.name}Owned) { NugetMarshal.Dispose(${parameter.name}Handle); }"
+    return "if (${parameter.csharpName}Owned) { " +
+        "NugetMarshal.Dispose(${parameter.csharpName}Handle); }"
   }
 
   /**
@@ -730,7 +739,8 @@ internal object ForwardCirPlanProjection {
     if (parameter.type !is BridgeType.BoundInterface) return null
     // No cleanup, so nothing to hoist: the local stays declared where it is used.
     return ForwardCirHandleStep(
-      "IntPtr ${parameter.name}Handle = GCHandle.ToIntPtr(GCHandle.Alloc(${parameter.name}));",
+      "IntPtr ${parameter.csharpName}Handle = " +
+          "GCHandle.ToIntPtr(GCHandle.Alloc(${parameter.csharpName}));",
     )
   }
 
@@ -750,8 +760,8 @@ internal object ForwardCirPlanProjection {
     // `nuget_dispose`'s `handle.asStableRef<Any>().dispose()` is not null-safe. ROADMAP:130: the
     // guard is now unconditional rather than keyed on [nullable], because this runs in a `finally`
     // that a throw *from the creation itself* also reaches, where any handle is still Zero.
-    return "if (${parameter.name}Handle != IntPtr.Zero) { " +
-        "$native.Dispose(${parameter.name}Handle); }"
+    return "if (${parameter.csharpName}Handle != IntPtr.Zero) { " +
+        "$native.Dispose(${parameter.csharpName}Handle); }"
   }
 
   // ADR-069: default P/Invoke `out bool` marshalling reads 4 bytes; Kotlin's `BooleanVar` writes 1
@@ -768,7 +778,7 @@ internal object ForwardCirPlanProjection {
   private fun ForwardCallablePlan.nativeOutParameters(nativeCall: ForwardNativeCall): List<String> =
     nativeCall.parameters
       .filter { parameter -> parameter != errorSlot && parameter.direction == ForwardAbiDirection.OUT }
-      .map { parameter -> "out ${parameter.transfer.type.csharpType()} ${parameter.name}" }
+      .map { parameter -> "out ${parameter.transfer.type.csharpType()} ${parameter.csharpName}" }
 
   private fun ForwardCallablePlan.nativeOutDeclarationParameters(
     nativeCall: ForwardNativeCall,
@@ -778,7 +788,7 @@ internal object ForwardCirPlanProjection {
     }
     .map { parameter ->
       val marshal: String = outParameterMarshalPrefix(parameter.transfer.type)
-      "${marshal}out ${parameter.transfer.type.csharpType()} ${parameter.name}"
+      "${marshal}out ${parameter.transfer.type.csharpType()} ${parameter.csharpName}"
     }
 
   private fun ForwardCallablePlan.nativeOutCirParameters(
@@ -788,7 +798,7 @@ internal object ForwardCirPlanProjection {
     .map { parameter ->
       val type: String = parameter.transfer.type.csharpType()
       val marshal: String = outParameterMarshalPrefix(parameter.transfer.type)
-      CirParameter(parameter.name, type, "${marshal}out $type")
+      CirParameter(parameter.csharpName, type, "${marshal}out $type")
     }
 
   private fun ForwardCallablePlan.resultProjection(
@@ -1485,3 +1495,62 @@ internal fun durationLiftCs(ticks: String): String = "new global::System.TimeSpa
 /** True for `IFoo` and `IFoo?` alike: both cross as one handle argument. */
 private fun BridgeType.isInterfaceInput(): Boolean =
   this is BridgeType.Interface || (this is BridgeType.Nullable && type is BridgeType.Interface)
+
+/**
+ * The name of the ADR-024 exception slot every synchronous C# import and wrapper body declares as
+ * its trailing `out IntPtr error`. Named once here so the rename rule below cannot drift from the
+ * ~60 `out IntPtr error` literals in `cir/` that the slot is actually rendered from.
+ */
+internal const val CSHARP_ERROR_SLOT: String = "error"
+
+/**
+ * The C# spelling of a Kotlin parameter name, at both its declaration and every use site. Two
+ * render-time rules, kept in one function so they cannot disagree (a name can only ever hit one of
+ * them: `error` is not a C# keyword):
+ *
+ * Issue #65: Kotlin admits C# reserved words as identifiers (`abstract`, `default`, `params`,
+ * `ref`, `string`, ...), so a parameter name may be a keyword on the C# side; it is escaped to a
+ * verbatim identifier.
+ *
+ * Issue #66: a parameter named [CSHARP_ERROR_SLOT] would be declared twice in the same signature
+ * (CS0100) and, in the wrapper body, would rebind to the inline `out IntPtr error` local that
+ * scopes over the whole block (CS0136/CS0841). It takes a `_` suffix instead. So must every name
+ * that is already `error` followed by only underscores, or the shifted `error` would land on a
+ * sibling: shifting the whole chain up by one is injective (chain members map within the chain,
+ * every other name is a fixed point outside it, and nothing maps back onto `error`), so no two
+ * parameters of one callable can converge — without the renamer needing to see its siblings. The
+ * cost of that locality is that a lone `error_` shifts to `error__` even with no `error` beside it.
+ *
+ * Both rules apply at *render* time only: the plan keeps the Kotlin name, because the Kotlin
+ * `@CName` emitter reads the same [ForwardPublicParameter]/[ForwardAbiParameter] names for its own
+ * signature and its positional invocation, where `@abstract` is not valid Kotlin and where `error`
+ * collides with nothing (the planner names the Kotlin ABI slot `errorOut`).
+ *
+ * Deliberately not [io.github.xxfast.kotlin.native.nuget.processor.toCSharpName]: that helper's
+ * `trimEnd('_')` exists for C-mangled *function* names, and a parameter name is never C-mangled.
+ */
+internal fun String.csharpParameterName(): String = when {
+  this in CSHARP_RESERVED -> "@$this"
+  shadowsCSharpErrorSlot() -> "${this}_"
+  else -> this
+}
+
+/** True for `error`, `error_`, `error__`, ... and nothing else — see [csharpParameterName]. */
+private fun String.shadowsCSharpErrorSlot(): Boolean =
+  startsWith(CSHARP_ERROR_SLOT) &&
+      substring(CSHARP_ERROR_SLOT.length).all { character -> character == '_' }
+
+/**
+ * The C# spelling of a public parameter, at both its declaration and every use site. Composite
+ * locals derived from it (`${csharpName}Handle`, `${csharpName}Owned`) keep the `@` in *leading*
+ * position -- `@paramsHandle` is a valid verbatim identifier, `params@Handle` is not.
+ */
+internal val ForwardPublicParameter.csharpName: String get() = name.csharpParameterName()
+
+/**
+ * The same escape for an ABI slot's name. Generator-minted slots (`handle`, `value`, `receiver`,
+ * `errorOut`, `valueOut`, `hasValue`) are never keywords, so this is the identity for them and the
+ * hand-written body text that references those locals raw stays in agreement; it matters only for
+ * the slots whose names are copied from the Kotlin parameter.
+ */
+internal val ForwardAbiParameter.csharpName: String get() = name.csharpParameterName()
