@@ -63,8 +63,9 @@ internal enum class ForwardDiagnosticKind(val severity: ForwardDiagnosticSeverit
    *  `generic` each have one individually. */
   SKIPPED_UNSUPPORTED_COMBINATION(ForwardDiagnosticSeverity.WARNING),
 
-  /** A value-class member inherited via interface delegation (e.g. `CharSequence by value`) —
-   *  ROADMAP line 77's v1 product-scope skip, not a silently-bridged member. */
+  /** A value-class member a supertype declares: inherited, forwarded by interface delegation
+   *  (e.g. `CharSequence by value`) or explicitly overridden — ADR-064's product-scope skip,
+   *  ratified permanent by ADR-082, not a silently-bridged member. */
   SKIPPED_INHERITED_MEMBER(ForwardDiagnosticSeverity.WARNING),
 
   /** `out`/`in` variance on a class type parameter is dropped; the member still binds, so this is
@@ -314,9 +315,14 @@ internal fun ForwardPlanSkipReason.diagnosticHint(
     "expose a non-inline, non-generic wrapper (e.g. a concrete suspend fun returning the " +
         "unwrapped value) and export that instead"
 
+  // Issue #57: the old hint ("declare the member directly on the value class") was already true
+  // of an explicit `override`, which skips by the same rule (ADR-082: an override *is* the
+  // inherited signature). The escape hatch ADR-082 actually names is a non-colliding signature.
   ForwardPlanSkipReason.INHERITED_MEMBER ->
-    "declare the member directly on the value class itself instead of relying on interface " +
-        "delegation"
+    "a value class never exports a member a supertype declares, whether inherited, delegated " +
+        "(`by`) or explicitly overridden (ADR-082); call the supertype's API through the " +
+        "struct's underlying property from C#, or declare a member under a name or signature " +
+        "no supertype declares"
 
   ForwardPlanSkipReason.BOUND_INTERFACE_POSITION ->
     "ADR-088 v1 marshals a bound C# interface at ordinary, non-nullable function/method/" +
