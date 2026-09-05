@@ -607,6 +607,7 @@ class NugetProcessor(
       functions, genericFunctions, extensionFunctions, extensionProperties,
       classes, genericClasses, enums, sealedClasses, objects, properties,
       valueClasses, suspendFunctions, callableCatalog, deps, reachableInterfaces,
+      exportedObjectHandles,
     )
     val bindings: CsharpBindings = generateCSharpBindings(
       functions, genericFunctions, extensionFunctions, extensionProperties,
@@ -761,6 +762,10 @@ class NugetProcessor(
     callableCatalog: ForwardCallablePlanCatalog,
     deps: Dependencies,
     reachableInterfaces: List<KSClassDeclaration>,
+    // ADR-101 amendment: `exportedObjectHandles`, threaded so `addClassExports` can ask the gated
+    // `forwardSuperClass(exportedTypes)` predicate — the same set, bucket for bucket, the two
+    // planners ask, so the Kotlin half cannot drift from the C# half about a dropped base class.
+    exportedTypes: Set<String>,
   ): FileSpec {
     val builder: FileSpec.Builder = FileSpec
       .builder("io.github.xxfast.kotlin.native.nuget.generated", "CNameExports")
@@ -787,7 +792,7 @@ class NugetProcessor(
       builder.addGenericFunctionExports(func)
     }
 
-    classes.forEach { builder.addClassExports(it, callableCatalog) }
+    classes.forEach { builder.addClassExports(it, callableCatalog, exportedTypes) }
     classes.forEach { builder.addCompanionExports(it, callableCatalog) }
     genericClasses.forEach { builder.addGenericClassExports(it) }
     enums.forEach { builder.addEnumExports(it) }

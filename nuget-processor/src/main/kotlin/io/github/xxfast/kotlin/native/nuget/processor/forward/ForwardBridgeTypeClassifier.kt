@@ -40,6 +40,14 @@ internal data class ForwardBridgeTypeContext(
 internal class ForwardBridgeTypeClassifier(
   private val context: ForwardBridgeTypeContext,
 ) {
+  /**
+   * The export set, exposed so the planners can answer `forwardSuperClass(exportedTypes)` (ADR-101
+   * amendment) with the same membership test this classifier uses for a handle. Identical, bucket
+   * for bucket, to `CirClassTranslator`'s `exportedTypes`, which is how the translator and both
+   * planners cannot disagree about whether a class has a forward base class.
+   */
+  internal val exportedObjectHandles: Set<String> get() = context.exportedObjectHandles
+
   fun classify(type: KSType): BridgeType {
     val expanded: KSType = type.expandAliases()
     val classified: BridgeType = classifyNonNullable(expanded)

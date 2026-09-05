@@ -285,3 +285,154 @@ assertTrue(line.contains("include(\"dep.outside\")"))
   the widening this ADR rejects), not a change to the skip itself.
 - Open: a class that *overrides* a member of an unexported interface renders that member `virtual`
   (`ForwardCallablePlanner.kt:748-750`, `CirClassTranslator.kt:36-37`), which compiles; noted, not tested.
+
+## Amendment (2026-09-05): base classes
+
+The base-class hole this ADR named and deferred is closed, the same way, through the one shared
+predicate.
+
+`class X : UnexportedBase()` rendered `public class X : UnexportedBase` (`CirClassRenderer.kt:194`)
+and failed the same CS0246. **Verified** (`ForwardClassMembership.kt`): `forwardSuperClass()` was
+the *shared* has-superclass predicate four sites read in agreement (`CirClassTranslator.kt`,
+`ForwardCallablePlanner.kt`, where `isOverride`/`isVirtual` derive from it, `ForwardPropertyPlanner.kt`,
+`ClassExports.kt`), with no export-set check. The open question this ADR left ("whether the
+planners' `ForwardBridgeTypeContext.exportedObjectHandles` is the same set as the translator's
+`exportedTypes`") is now **Verified**: same five buckets (classes, enums, interfaces, sealed
+classes with their subclasses, objects), same qualified-name key, merged before either is built
+(`NugetProcessor.kt`). Either may be passed; both are.
+
+### Shipped shape
+
+`ForwardClassMembership.kt` splits the old ungated read into two functions:
+
+```kotlin
+internal fun KSClassDeclaration.declaredSuperClass(): KSClassDeclaration? = superTypes
+  .map { type -> type.resolve().declaration }
+  .filterIsInstance<KSClassDeclaration>()
+  .firstOrNull { declaration ->
+    declaration.classKind == ClassKind.CLASS &&
+        declaration.qualifiedName?.asString() != "kotlin.Any"
+  }
+
+internal fun KSClassDeclaration.forwardSuperClass(
+  exportedTypes: Set<String>,
+): KSClassDeclaration? = declaredSuperClass()
+  ?.takeIf { base -> base.qualifiedName?.asString() in exportedTypes }
+```
+
+`declaredSuperClass()` is read only by `translateClass`, to decide whether a diagnostic is owed for
+a base `forwardSuperClass()` is about to drop; every other reader (both planners, `ClassExports`,
+the renderer) reads only the gated `forwardSuperClass(exportedTypes)`. `isForwardMemberOf` /
+`isForwardPlannableMemberOf` are unchanged: with `superClass == null` they already bind every
+concrete inherited member on the class.
+
+`CirClassTranslator.kt` generalizes the interface-skip helper this ADR shipped into one shared
+`keepsSupertype`, gated by a private `SupertypeKind`:
+
+```kotlin
+private enum class SupertypeKind { INTERFACE, BASE_CLASS }
+
+private fun keepsSupertype(
+  cls: KSClassDeclaration,
+  name: String,
+  supertype: KSClassDeclaration,
+  kind: SupertypeKind,
+  exportedTypes: Set<String>,
+  logger: KSPLogger,
+): Boolean
+```
+
+`translateClass` calls it once per class, from the one site that holds a logger:
+
+```kotlin
+val declaredBase: KSClassDeclaration? = cls.declaredSuperClass()
+val superClassDeclaration: KSClassDeclaration? = cls.forwardSuperClass(exportedTypes)
+if (declaredBase != null && superClassDeclaration == null) {
+  keepsSupertype(cls, name, declaredBase, SupertypeKind.BASE_CLASS, exportedTypes, logger)
+}
+```
+
+The reason and hint differ by kind. The base-class hint does **not** reuse the interface hint's flat
+"nothing is lost, `include(...)` does not help here": a dropped base carries real callable members,
+and whether `include(...)` helps depends on whether the base is same-module or a dependency (the
+ADR-066 closure admits a same-round source declaration directly but never walks `superTypes`, so a
+*dependency* base stays unreachable even after its package is included). The shipped hint hedges
+accordingly rather than promising or denying the fix outright, naming the package but not asserting
+it will work: "include(\"dep.outside\") admits a base declared in this module, but not one from a
+dependency".
+
+Rendered line, **Verified** from the fixture's own `NugetDiagnostics.json` entry for
+`Issue42Derived`:
+
+```
+[nuget:SKIPPED_UNEXPORTED_SUPERTYPE] Skipping Issue42Derived : UnexportedBase: base class
+'dev.other.core.UnexportedBase' is not in the export set, so it has no generated C# class;
+Issue42Derived is generated with no base at all and the base's public members are bound on
+Issue42Derived directly. nothing callable is lost — UnexportedBase's public members export as
+members of Issue42Derived — but C# sees no UnexportedBase type and no inheritance relation, so
+`is`/`as` against it and any other subclass's shared base are gone; to keep the base itself it has
+to enter the export set on its own: include("dev.other.core") admits a base declared in this
+module, but not one from a dependency — the export reachability closure never walks supertypes
+    at .../issue42/Issue42Derived.kt:16
+```
+
+### What the four readers now do
+
+- Translator: `superClass = null` for `Issue42Derived`, so the base list falls to
+  `IDisposable, INugetHandle`, `Issue42Derived` declares its own `_handle`, and its internal handle
+  constructor does not chain a base call. `Issue42Derived`'s own interfaces would now render too
+  (the interface list is only ever emptied when a *kept* base exists), filtered by this ADR's
+  original interface gate.
+- Planners: `UnexportedBase`'s concrete `greet`/`label` members pass `isForwardPlannableMemberOf`
+  and are planned with `Issue42Derived` as owner, exported as `issue42derived_greet` /
+  `issue42derived_get_label`. `isOverride` is false (no superclass); a non-final overriding member
+  renders `public virtual`, never `override`.
+- Kotlin emitter: `ClassExports.kt` keeps the same member set; the body reaches the base's
+  implementation by ordinary dispatch on the instance behind the handle.
+
+### Load-bearing claim, now Verified by execution
+
+Whether KSP's `getAllFunctions()`/`getAllProperties()` on a module-local class surface the public
+members of a base **class** declared in a klib dependency (`Origin.KOTLIN_LIB`,
+`containingFile == null`) was unverified when this ADR shipped, measured only for a klib
+*interface* member. It is now **Verified**: `Tier1UnexportedBaseClassSkipTest`'s cross-module cell
+asserts `export_api_greet` / `export_api_get_label` are generated from a
+`Tier1DependencyLibrary`-compiled base class, and the real klib fixture
+(`test-models/.../UnexportedBase.kt` consumed by `test-library`) confirms it end to end: the full
+`scripts/verify.sh` run is green (1231 passed, 0 skipped, 0 failed), and
+`IntegrationTests/UnexportedBaseClassTests.cs` calls `d.Greet("Oreo")` and reads `d.Label` on a live
+`Issue42Derived`.
+
+### Fixture
+
+- `test-models/src/nativeMain/kotlin/dev/other/core/UnexportedBase.kt`: `open class UnexportedBase`
+  with a `label` property and a `greet(name)` method, outside `:test-library`'s `rootPackage`/
+  `include` scope, consumed the way `Issue42Component.kt` already was for the interface case.
+- `test-library/.../test/issue42/Issue42Derived.kt`: `class Issue42Derived : UnexportedBase()` with
+  its own `own()` method, no-arg constructor.
+- `IntegrationTests/UnexportedBaseClassTests.cs`: constructs `Issue42Derived`, calls `Own()` and
+  `Greet(...)`, reads `Label`, asserts `typeof(Issue42Derived).BaseType == typeof(object)` and that
+  no type named `UnexportedBase` exists in the assembly.
+- `Tier1UnexportedBaseClassSkipTest.kt`: cross-module, same-module, and abstract-base cells,
+  modelled on `Tier1UnexportedSupertypeSkipTest`.
+
+### Consequences
+
+- Affected classes lose one base-list entry and gain the base's public members on their own
+  surface; a class whose base is exported is byte-identical.
+- Four call sites now agree through one gated predicate; the diagnostic still fires exactly once,
+  from `translateClass` alone.
+- **Deferred, named** (none widened into this change, all pre-existing or newly exposed by it, not
+  fixed here; tracked on `ROADMAP.md`): a transitive `X : UnexportedMid : ExportedBase` flattens
+  `ExportedBase`'s members onto `X` and loses `X is ExportedBase` in C#, since `declaredSuperClass()`
+  returns only the first `CLASS` supertype; an overriding member whose defaults live on the dropped
+  base loses its short C# omitting overloads (`ForwardCallablePlanner.kt`'s synthesis gate keys on
+  the Kotlin `override` modifier, independent of the forward `isOverride` bit); a generic exported
+  base renders by simple name (`CirClassRenderer.kt:194`); `X`'s own interfaces still disappear
+  whenever an *exported* base exists (`CirClassTranslator.kt`), unrelated to this fix; an abstract
+  `X` with a structurally-skipped concrete inherited member still renders it `public abstract`
+  (`CirClassTranslator.kt`), which a further concrete subclass would fail to override (CS0534); the
+  base-class hint hedges between the same-module and dependency cases rather than picking one,
+  since nothing today distinguishes them cheaply at the hint site.
+- Not changed: the ADR-066 closure, `isForwardMemberOf`/`isForwardPlannableMemberOf`, this ADR's
+  original interface gate, the ABI.

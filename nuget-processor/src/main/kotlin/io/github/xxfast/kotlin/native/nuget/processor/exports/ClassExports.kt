@@ -40,6 +40,10 @@ import io.github.xxfast.kotlin.native.nuget.processor.toCName
 internal fun FileSpec.Builder.addClassExports(
   cls: KSClassDeclaration,
   callableCatalog: ForwardCallablePlanCatalog,
+  // ADR-101 amendment: the export set, so this emitter asks the *gated* has-superclass predicate
+  // the planners ask. An unexported base is base-less here too, so the base's concrete members
+  // are emitted with this class as receiver instead of being left to a C# base that never exists.
+  exportedTypes: Set<String>,
 ) {
   val name: String = cls.simpleName.asString()
   val qualifiedName: String = cls.qualifiedName?.asString() ?: return
@@ -49,7 +53,7 @@ internal fun FileSpec.Builder.addClassExports(
   // The shared has-superclass predicate (`ForwardClassMembership.kt`), so this emitter keeps
   // exactly the member set the planner planned: a defaulted interface member the class does not
   // override is bound here too, and the ABI contract check is what would catch any drift.
-  val superClass: KSClassDeclaration? = cls.forwardSuperClass()
+  val superClass: KSClassDeclaration? = cls.forwardSuperClass(exportedTypes)
 
   // ADR-091: constructors come off the catalog rather than a `getConstructors()` walk, because the
   // planner also synthesizes trailing-default omitting overloads that no declaration walk can see.

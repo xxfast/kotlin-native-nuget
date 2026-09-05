@@ -95,7 +95,7 @@ internal class ForwardPropertyPlanner(
     // One shared predicate with `CirClassTranslator` (see `ForwardClassMembership.kt`): this used
     // to count any non-`Any` supertype, so an interface-only class planned none of its inherited
     // members while the translator still rendered them into `: IGreeter`.
-    val superClass: KSClassDeclaration? = cls.forwardSuperClass()
+    val superClass: KSClassDeclaration? = cls.forwardSuperClass(classifier.exportedObjectHandles)
     return cls.getAllProperties()
       .filter { it.getVisibility() == Visibility.PUBLIC }
       .filter { prop -> prop.isForwardPlannableMemberOf(cls, superClass) }

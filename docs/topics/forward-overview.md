@@ -251,8 +251,40 @@ public class Issue42Api : IDisposable, INugetHandle
 }
 ```
 
-An unexported **base class** (`class X : UnexportedBase()`) dangles the same way and is not yet
-covered by this diagnostic; see [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md).
+An unexported **base class** dangles the same way, and is covered too: `class Issue42Derived :
+UnexportedBase()`, where `UnexportedBase` lives outside the export set, used to render `public
+class Issue42Derived : UnexportedBase` and fail CS0246. A base class carries real callable members,
+unlike a dropped interface, so the fix is a little different: the base is dropped from the C# base
+list entirely (`Issue42Derived` gets no base at all, just `IDisposable, INugetHandle`), and
+`UnexportedBase`'s own public members are bound directly on `Issue42Derived`, with no `override`.
+
+```
+[nuget:SKIPPED_UNEXPORTED_SUPERTYPE] Skipping Issue42Derived : UnexportedBase: base class
+    'dev.other.core.UnexportedBase' is not in the export set, so it has no generated C# class;
+    Issue42Derived is generated with no base at all and the base's public members are bound on
+    Issue42Derived directly. nothing callable is lost — UnexportedBase's public members export as
+    members of Issue42Derived — but C# sees no UnexportedBase type and no inheritance relation, so
+    `is`/`as` against it and any other subclass's shared base are gone; to keep the base itself it
+    has to enter the export set on its own: include("dev.other.core") admits a base declared in
+    this module, but not one from a dependency — the export reachability closure never walks
+    supertypes
+    at Issue42Derived.kt:16
+```
+
+```C#
+// before: public class Issue42Derived : UnexportedBase   -> CS0246
+public class Issue42Derived : IDisposable, INugetHandle
+{
+    public Issue42Derived() { /* ... */ }
+    public string Label { get; }   // UnexportedBase's own property, bound on the class
+    public string Own() { /* ... */ }
+    public string Greet(string name) { /* ... */ }  // UnexportedBase's own method, bound on the class
+}
+```
+
+The hint hedges rather than promising a fix: `include(...)` admits a base declared in the same
+module, but not one reached only as a supertype from a dependency, since the ADR-066 reachability
+closure never walks supertypes either way.
 
 ### Where these messages appear
 

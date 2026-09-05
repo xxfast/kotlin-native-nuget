@@ -716,7 +716,7 @@ internal class ForwardCallablePlanner(
   private fun classEntries(cls: KSClassDeclaration): List<ForwardCallableCatalogEntry> {
     val className: String = cls.simpleName.asString()
     val prefix: String = className.lowercase()
-    val superClass: KSClassDeclaration? = cls.forwardSuperClass()
+    val superClass: KSClassDeclaration? = cls.forwardSuperClass(classifier.exportedObjectHandles)
     val receiverType: BridgeType = BridgeType.ObjectHandle(
       requireNotNull(cls.qualifiedName?.asString()) {
         "Forward class planner cannot create a handle for local ${className}"

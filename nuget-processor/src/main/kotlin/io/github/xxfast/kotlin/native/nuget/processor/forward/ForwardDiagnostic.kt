@@ -102,13 +102,23 @@ internal enum class ForwardDiagnosticKind(val severity: ForwardDiagnosticSeverit
    *  inadmissible), so a Kotlin implementation of it cannot be handed back to C#. */
   SKIPPED_UNIMPLEMENTABLE_BOUND_INTERFACE(ForwardDiagnosticSeverity.WARNING),
 
-  /** ADR-101: an exported class declares a supertype (an interface today; the base-class hole is
-   *  deferred) that is not in the export set, so no C# interface is ever generated for it and the
-   *  base list would not compile (CS0246). The supertype is dropped from the generated C# base
-   *  list; the class and its members — including the supertype's defaulted ones, which bind on
-   *  the class — still export. Deliberately NOT hinting `include(...)` the way
-   *  [SKIPPED_UNEXPORTED_DEPENDENCY_TYPE] does: the ADR-066 closure has no `superTypes` edge, so
-   *  admitting the package cannot pull a supertype-only interface in. */
+  /** ADR-101 and its 2026-09-05 amendment: an exported class declares a supertype — an interface
+   *  *or* its base class — that is not in the export set, so nothing is ever generated for that
+   *  supertype and naming it in the base list would not compile (CS0246). It is dropped from the
+   *  generated C# base list and the class still exports, but the two halves differ in what the
+   *  drop costs, so they carry different messages:
+   *
+   *  - interface: nothing callable is lost at all; its *defaulted* members already bind on the
+   *    class (`ForwardClassMembership.kt`).
+   *  - base class: its public members are re-homed onto the subclass (bound with the subclass's
+   *    own export prefix, no `override`), but C# loses the type and the inheritance relation —
+   *    no `is`/`as` against the base and no shared base across sibling subclasses.
+   *
+   *  The `include(...)` advice is measured, not assumed (`Tier1UnexportedSupertypeSkipTest`): the
+   *  ADR-066 closure has no `superTypes` edge, so admitting a *dependency* package cannot pull a
+   *  supertype-only type in. A supertype declared in this module is a different case — scope
+   *  admits same-round source declarations — and only the base-class hint mentions it, since only
+   *  a base class is worth exporting for its members. */
   SKIPPED_UNEXPORTED_SUPERTYPE(ForwardDiagnosticSeverity.WARNING),
 
   /** Issue #55: the module has public declarations, but the `include`/`exclude`/`rootPackage`
