@@ -1404,11 +1404,12 @@ receiver-eligibility diagnostic.
 
 ## Inherited members
 
-Members a value class inherits from a supertype, most commonly through interface delegation
-(`value class ArticleUri(val value: String) : CharSequence by value`), are **never** exported to
-C#, permanently. Only members the value class declares itself are bridged. Each excluded member is
-named individually in the build log with a `SKIPPED_INHERITED_MEMBER` diagnostic, so the omission
-is visible rather than silent.
+Members whose signature a supertype declares, whether inherited, forwarded through interface
+delegation (`value class ArticleUri(val value: String) : CharSequence by value`) or explicitly
+overridden (`override fun get(index: Int): Char`), are **never** exported to C#, permanently. Only
+members with a signature no supertype declares are bridged. Each excluded member is named
+individually in the build log with a `SKIPPED_INHERITED_MEMBER` diagnostic, so the omission is
+visible rather than silent.
 
 The underlying property is always present and strictly richer than any bridged subset could be, so
 consumers reach the supertype's own API through it:
@@ -1422,10 +1423,12 @@ string sub = uri.Value.Substring(0, 5); // more than CharSequence could ever off
 
 <note>
     <p>
-        Declaring the member directly on the value class, rather than through delegation, still
-        binds normally: a member is skipped only when it shares a supertype member's kind, simple
-        name, arity, and per-position parameter types. A declared member whose name merely collides
-        with a supertype member's, but not its parameter types, exports.
+        Writing the member out by hand does not change this: an explicit <code>override</code>
+        is the supertype's signature and skips by the same rule. A member is skipped only when it
+        shares a supertype member's kind, simple name, arity, and per-position parameter types, so
+        a declared member whose name merely collides with a supertype member's, but not its
+        parameter types, exports. To surface the behaviour, declare it under a name or signature
+        no supertype declares.
     </p>
 </note>
 

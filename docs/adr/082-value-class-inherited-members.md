@@ -144,6 +144,18 @@ author-declared member whose name merely collides with any supertype member (e.g
 `override`, or an unrelated overload `fun get(key: String)`) is also skipped, with the same
 diagnostic.
 
+### Amendment (2026-09-05): hint text corrected, [#57](https://github.com/xxfast/kotlin-native-nuget/issues/57)
+
+Message only; the decision is unchanged. Alternative 1 claimed the shipped hint ("declare the
+member directly on the value class itself instead of relying on interface delegation") "already
+tells an author the escape hatch". It did not: an explicit `override` is declared directly on the
+value class and still skips (the 2026-08-08 amendment below is explicit that it *is* the inherited
+signature), so for the override shape the hint recommended what the code already did. The escape
+hatch this ADR actually names is a **non-colliding signature**. The hint now states the rule (a
+member a supertype declares, whether inherited, delegated or overridden, never exports) and both
+remedies: the underlying property from C#, or a member under a name or signature no supertype
+declares. `Tier1ValueClassDeclaredMemberTest` pins the override-shape wording.
+
 ### Amendment (2026-08-08): approved follow-up narrowing the over-drop
 
 This amends the limitation above only. The decision itself (inherited and delegation-forwarded

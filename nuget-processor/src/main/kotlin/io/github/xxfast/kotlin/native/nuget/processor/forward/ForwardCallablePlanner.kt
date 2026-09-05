@@ -69,8 +69,8 @@ internal enum class ForwardPlanSkipReason(val droppedFromCSharp: Boolean) {
    *  individually. */
   UNSUPPORTED_COMBINATION(droppedFromCSharp = true),
 
-  /** ROADMAP line 77: a value-class member inherited via interface delegation (e.g.
-   *  `CharSequence by value`), not declared by the value class itself. */
+  /** ADR-064/ADR-082: a value-class member whose signature a supertype declares — inherited,
+   *  forwarded by interface delegation (e.g. `CharSequence by value`) or explicitly overridden. */
   INHERITED_MEMBER(droppedFromCSharp = true),
 
   /** ADR-066: a reachable, structurally bridgeable declaration in a dependency module whose

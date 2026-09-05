@@ -4,6 +4,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnosticK
 import kotlin.test.Test
 import kotlin.test.assertContains
 import kotlin.test.assertFalse
+import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 /**
@@ -103,6 +104,10 @@ class Tier1ValueClassDeclaredMemberTest {
    * The half of the ratified decision the narrowing must not erode: an explicit `override` *is*
    * the inherited signature, so it keeps skipping. Same name, same arity, same parameter type as
    * `CharSequence.get(index: Int)`.
+   *
+   * Issue #57: the diagnostic's hint used to say "declare the member directly on the value
+   * class", which this code already does. The hint must name the rule (a supertype-declared
+   * signature never exports) and ADR-082's real escape hatches instead.
    */
   @Test
   fun `explicit override of an inherited member stays skipped`() {
@@ -123,11 +128,22 @@ class Tier1ValueClassDeclaredMemberTest {
       "an explicit override is the inherited signature and must stay out of the export set; " +
           "generated=${result.generated}",
     )
-    assertTrue(
-      result.kspWarnings.any { it.contains(ForwardDiagnosticKind.SKIPPED_INHERITED_MEMBER.name) },
+    val warning: String? = result.kspWarnings.firstOrNull {
+      it.contains(ForwardDiagnosticKind.SKIPPED_INHERITED_MEMBER.name) &&
+          it.contains("Password.get")
+    }
+    assertNotNull(
+      warning,
       "expected SKIPPED_INHERITED_MEMBER for the overridden member; " +
           "kspWarnings=${result.kspWarnings}",
     )
+    assertFalse(
+      warning.contains("declare the member directly"),
+      "the hint must not recommend declaring a member the code already declares; warning=$warning",
+    )
+    assertContains(warning, "explicitly overridden")
+    assertContains(warning, "underlying property")
+    assertContains(warning, "no supertype declares")
   }
 
   /**
