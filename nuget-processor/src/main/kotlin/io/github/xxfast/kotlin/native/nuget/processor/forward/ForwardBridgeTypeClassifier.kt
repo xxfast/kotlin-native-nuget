@@ -121,7 +121,31 @@ internal class ForwardBridgeTypeClassifier(
     }
     if (classDeclaration.isValueClass()) return valueClass(classDeclaration, qualifiedName)
     if (classDeclaration.modifiers.contains(Modifier.SEALED)) {
-      return BridgeType.SpecializedProtocol("sealed helper $qualifiedName")
+      // ADR-105: the protocol still names the legacy route (every position that had one keeps it,
+      // unchanged), but it now also carries the ObjectHandle this type WOULD be, so a position
+      // that can bridge a sealed base -- today a property -- unwraps it without the classifier
+      // becoming position-aware.
+      //
+      // Kind-aware it must be, though, which ADR-105 does not say: `rootSealedClasses`
+      // (NugetProcessor.kt:409) filters `classKind == CLASS`, so a sealed *interface* never
+      // reaches the ADR-009 renderer and has no `FromHandle` discriminator to reconstruct
+      // through; and this branch fires ahead of `objectHandle()`'s `exportedObjectHandles`
+      // membership test (:150), so an out-of-scope sealed class would otherwise be handed a C#
+      // spelling nothing generates. Both keep the bare protocol and skip exactly as before.
+      val discriminated: Boolean = classDeclaration.classKind == ClassKind.CLASS &&
+          qualifiedName in context.exportedObjectHandles
+      return BridgeType.SpecializedProtocol(
+        "sealed helper $qualifiedName",
+        sealedHandle = if (discriminated) {
+          BridgeType.ObjectHandle(
+            qualifiedName,
+            csharpType = csharpTypeNameFor(classDeclaration),
+            viaDiscriminator = true,
+          )
+        } else {
+          null
+        },
+      )
     }
     // ADR-040: an interface with type parameters stays on the pre-existing "generic declaration"
     // legacy route (unchanged from before this ADR) rather than becoming a plannable

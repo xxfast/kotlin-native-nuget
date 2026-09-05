@@ -6,13 +6,19 @@ import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 /**
- * Issue #52: a sealed type as a collection *component* of a property used to crash the processor
- * (`No C# property type for SpecializedProtocol(name=sealed helper ...)`) instead of skipping the
- * property the way the bare `Shape?` spelling already does. Every collection kind and the nullable
- * collection reference take the same named `SKIPPED_UNSUPPORTED_PROPERTY` route, naming the
- * offending component, and the rest of the class still binds. A sealed *interface* crashed
- * identically (the classifier mints the same `sealed helper` protocol for both), so it is covered
- * by the same fixture.
+ * Issue #52, then ADR-105 (issue #54) scope (c). A sealed type as a collection *component* of a
+ * property first crashed the processor (`No C# property type for SpecializedProtocol(name=sealed
+ * helper ...)`), then skipped named alongside the bare `Shape?` spelling. Under ADR-105 it
+ * **binds**: the property planner rewrites the classifier's `sealed helper` protocol to the
+ * `ObjectHandle(viaDiscriminator = true)` it carries, and every component is read through
+ * `NugetMarshal.FromHandle<T>`, which dispatches to the ADR-009 discriminator via the issue-#40
+ * `viaFromHandle` factory entry.
+ *
+ * A sealed **interface** stays skipped, and this fixture keeps `filters: List<Filter>` to pin that:
+ * `rootSealedClasses` (`NugetProcessor.kt:409`) filters `classKind == CLASS`, so a sealed interface
+ * never reaches the ADR-009 renderer and has no `FromHandle` to reconstruct through. The classifier
+ * therefore mints its `sealedHandle` only for a sealed class, and the property takes the same named
+ * `SKIPPED_UNSUPPORTED_PROPERTY` route it always did, naming the offending component.
  */
 class Tier1SealedCollectionPropertyTest {
 
@@ -39,61 +45,72 @@ class Tier1SealedCollectionPropertyTest {
     fun album(): Album = Album(emptyList(), null, emptySet(), emptyMap(), emptyList(), "x")
   """.trimIndent()
 
-  private val sealedHelper: String = "sealed helper tier1.sealedcollectionproperty.Shape"
-
   @Test
-  fun `sealed collection properties skip named instead of crashing`() {
+  fun `sealed collection properties bind instead of skipping`() {
     val result = Tier1Harness.run(source)
 
     assertTrue(
       result.compiledClean,
-      "expected the sealed collection properties to skip cleanly; got: ${result.compileErrors}",
+      "expected the sealed collection properties to compile; got: ${result.compileErrors}",
     )
-    val expected: Map<String, String> = mapOf(
-      "shapes" to sealedHelper,
-      "optional" to sealedHelper,
-      "unique" to sealedHelper,
-      "byName" to sealedHelper,
-      "filters" to "sealed helper tier1.sealedcollectionproperty.Filter",
-    )
-    for ((property, helper) in expected) {
-      assertFalse(
-        result.generated.contains("export_album_get_$property"),
-        "expected Album.$property to be absent from the generated exports; " +
-            "generated=${result.generated}",
-      )
+    listOf("shapes", "optional", "unique", "byName").forEach { property ->
       assertTrue(
+        result.generated.contains("export_album_get_$property"),
+        "expected Album.$property to bind; generated=${result.generated}",
+      )
+      assertFalse(
         result.kspWarnings.any {
           it.contains(ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_PROPERTY.name) &&
-              it.contains("Album.$property") && it.contains(helper)
+              it.contains("Album.$property")
         },
-        "expected a SKIPPED_UNSUPPORTED_PROPERTY diagnostic naming Album.$property and " +
-            "$helper; kspWarnings=${result.kspWarnings}",
+        "expected no SKIPPED_UNSUPPORTED_PROPERTY for Album.$property; " +
+            "kspWarnings=${result.kspWarnings}",
       )
     }
   }
 
   @Test
-  fun `the diagnostic names the component slot that failed`() {
+  fun `every sealed component is materialised through the discriminator`() {
     val result = Tier1Harness.run(source)
 
     assertTrue(
-      result.kspWarnings.any {
-        it.contains("Album.shapes") && it.contains("Collection (element type $sealedHelper)")
-      },
-      "expected the List diagnostic to name its element; kspWarnings=${result.kspWarnings}",
+      result.generatedCSharp.contains(
+        "NugetMarshal.FromHandle<global::Interop.Shape>(NugetListNative.Get(nativeResult, i))",
+      ),
+      "expected the List element to read through FromHandle<Shape>; " +
+          "generatedCSharp=${result.generatedCSharp.lines().filter { it.contains("Shape") }}",
+    )
+    assertTrue(
+      result.generatedCSharp.contains("public IReadOnlyList<global::Interop.Shape> Shapes"),
+      "expected the sealed base as the element spelling; " +
+          "generatedCSharp=${result.generatedCSharp.lines().filter { it.contains("Shapes") }}",
+    )
+    assertTrue(
+      result.generatedCSharp.contains("global::Interop.Shape> ByName"),
+      "expected the Map value slot to spell the sealed base; " +
+          "generatedCSharp=${result.generatedCSharp.lines().filter { it.contains("ByName") }}",
+    )
+  }
+
+  @Test
+  fun `a sealed interface component still skips named`() {
+    val result = Tier1Harness.run(source)
+
+    assertFalse(
+      result.generated.contains("export_album_get_filters"),
+      "expected Album.filters to be absent from the generated exports; " +
+          "generated=${result.generated}",
     )
     assertTrue(
       result.kspWarnings.any {
-        it.contains("Album.optional") && it.contains("Collection? (element type $sealedHelper)")
+        it.contains(ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_PROPERTY.name) &&
+            it.contains("Album.filters") &&
+            it.contains(
+              "Collection (element type sealed helper tier1.sealedcollectionproperty.Filter)",
+            )
       },
-      "expected the nullable List diagnostic to keep the `?`; kspWarnings=${result.kspWarnings}",
-    )
-    assertTrue(
-      result.kspWarnings.any {
-        it.contains("Album.byName") && it.contains("Collection (value type $sealedHelper)")
-      },
-      "expected the Map diagnostic to name its value slot; kspWarnings=${result.kspWarnings}",
+      "expected the sealed-interface List diagnostic to name its element; " +
+          "kspWarnings=${result.kspWarnings}",
     )
   }
 

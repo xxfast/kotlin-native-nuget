@@ -1,0 +1,5 @@
+# Sealed collection components at return and parameter positions are not bridged
+
+> Extracted verbatim from `ROADMAP.md` (Phase 3).
+
+**`fun x(): List<Shape>` and `fun f(shapes: List<Shape>)` don't bind when `Shape` is a sealed class, even though the same component binds at a property position.** [ADR-105](docs/adr/105-sealed-property-position.md) shipped scope (c): a bare sealed property, a nullable sealed property, and a sealed collection component in a property all read through the ADR-009 `FromHandle` discriminator. The return/parameter slot is a different route with its own gates (`ForwardCallablePlanner.kt`'s `isBridgeableComponent`, `isWrappableComponent`, and the `skipReason` element recursion), never opened by that change. The parameter side is the harder half: writing a sealed-base handle into a Kotlin collection means boxing an abstract C# base through the ADR-073 write path, which has never been rendered or run for a sealed base. Deferred as ADR-105 scope (d); priced in that ADR's scope table.

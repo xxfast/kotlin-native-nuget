@@ -219,7 +219,7 @@ internal class ForwardPropertyPlanner(
     getExport: String,
     setExport: String,
   ): ForwardPropertyPlan? {
-    val type: BridgeType = classifier.classify(prop.type.resolve())
+    val type: BridgeType = classifier.classify(prop.type.resolve()).sealedAsHandle()
     // ADR-075: getter eligibility never depended on mutability or on the collection facet — a
     // `Collection` (nullable or not) plans whenever the C# read can spell every component
     // (`isReadable`; `isPlannable` already recurses through `Nullable`). Whether a *setter* can
@@ -433,6 +433,36 @@ internal class ForwardPropertyPlanner(
       ForwardPassing.OUT, ForwardOwnership.BORROWED, ForwardConversion.STABLE_REF_TO_HANDLE
     ),
   )
+
+  /**
+   * ADR-105 (issue #54), scope (c): at a *property* position a sealed type binds as its sealed
+   * base, so the classifier's `sealed helper` protocol is replaced by the [BridgeType.ObjectHandle]
+   * it carries ([BridgeType.SpecializedProtocol.sealedHandle], `viaDiscriminator = true`) before
+   * either gate looks at it. Everything downstream — `isPlannable`, `isReadableComponent`,
+   * `wireType`, the Kotlin emitter, the CIR projection — then rides its existing `ObjectHandle`
+   * arms, which is the whole point of the flag over a new variant.
+   *
+   * Recurses through [BridgeType.Nullable] and the [BridgeType.Collection] components only. NOT
+   * through [BridgeType.ValueClass.underlying]: a value class over a sealed type
+   * (`value class ObservationResult(val observation: Observation)`) stays skipped at a property
+   * position, as ADR-105's Consequences records — the callable planner's inline rewrite for that
+   * shape does not run here, and admitting it was never verified.
+   *
+   * A protocol with a `null` [BridgeType.SpecializedProtocol.sealedHandle] (a sealed interface, an
+   * out-of-scope sealed class, or any non-sealed protocol) is returned untouched and skips named
+   * exactly as before.
+   */
+  private fun BridgeType.sealedAsHandle(): BridgeType = when (this) {
+    is BridgeType.SpecializedProtocol -> sealedHandle ?: this
+    is BridgeType.Nullable -> BridgeType.Nullable(type.sealedAsHandle())
+    is BridgeType.Collection -> copy(
+      element = element?.sealedAsHandle(),
+      key = key?.sealedAsHandle(),
+      value = value?.sealedAsHandle(),
+    )
+
+    else -> this
+  }
 
   private fun isPlannable(type: BridgeType): Boolean = when (type) {
     BridgeType.Unit, BridgeType.Char, BridgeType.String, BridgeType.Instant, BridgeType.Duration,
