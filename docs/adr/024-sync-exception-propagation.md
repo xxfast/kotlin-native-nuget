@@ -163,6 +163,42 @@ catch (KotlinException ex)
 }
 ```
 
+### Amendment (2026-09-05): a user parameter named `error` is renamed `error_` in C#, [#66](https://github.com/xxfast/kotlin-native-nuget/issues/66)
+
+The decision above is unchanged; this closes a gap it left open. Every sync export's `[DllImport]`
+extern and public wrapper declare the trailing exception slot under the fixed literal `error`. A
+Kotlin parameter that is itself named `error` (reported as `data class StoryState(val error: String?
+= null, ...)`) collides with it: the extern renders `Native_Create(string? error, ..., out IntPtr
+error)` (CS0100, duplicate parameter name), and the wrapper body renders `Native_Create(error, ...,
+out IntPtr error)` (CS0136/CS0841, a local that conflicts with the enclosing scope). `Interop.cs`
+does not compile, so the failure is at generation time, not at call time.
+
+The Kotlin side was never at risk: the export's own slot is `errorOut`, not `error`, so this is a
+C#-render-time collision only. The fix renames the *user* parameter, not the generator's slot: a
+parameter literally named `error` is rendered `error_` across the public wrapper, the `DllImport`
+extern, the synthesized data-class `Copy` and default-parameter overloads, and every use site
+(`error_._handle`, `NugetMarshal.CreateList(error_)`, locals like `error_Handle`). The rule is a
+pure shift on the chain `error` -> `error_`, `error_` -> `error__`, and so on, so two parameters on
+one callable can never converge on the same rendered name. `error__` (double underscore) is
+avoided as a landing name because ECMA-334 reserves double-underscore identifiers for the
+implementation; the chain only produces it when a user parameter is already literally `error_`.
+Properties are unaffected (`Error`, PascalCase, never collides with a lowercase parameter slot).
+
+This is the opposite of what other native-interop generators do with an equivalent collision.
+Kotlin/Native's own ObjC export (`ObjCExportTranslator.buildMethod` / `unifyName`) renames the
+*generated* slot when it would collide with a user identifier, never the user's own parameter.
+.NET's `LibraryImport` source generator avoids the collision differently but with the same effect:
+it pre-spells its synthesized slots (`__retVal`, `__lastError`, and similar) inside the
+double-underscore namespace ECMA-334 reserves for the implementation, so a user identifier can
+never collide with them at all. Either way, the generated slot moves and the user's own identifier
+is left alone. This project inverts that because the slot literal `error` is load-bearing in
+roughly 316 generator lines, 350 test lines, and 484 lines of these docs; renaming the slot instead
+of the parameter would have touched all of it for a fix that affects a handful of user identifiers.
+
+Consequence for consumers: the rename lands on the public C# signature, so a named argument at a
+call site must use the renamed form, e.g. `new Issue66StoryState(error_: "...", title: "...")`.
+Positional calls are unaffected.
+
 ## Consequences
 
 ### Breaking changes

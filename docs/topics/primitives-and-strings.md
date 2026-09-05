@@ -192,6 +192,34 @@ using var article = new Issue65Article(
     <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md">ROADMAP.md</a>.</p>
 </note>
 
+A different collision applies to one specific name. Every generated synchronous call also carries a
+trailing `out IntPtr error` exception slot ([Exceptions](exceptions.md)), so a Kotlin parameter
+literally named `error` is rewritten to `error_` on the C# side (a parameter already named `error_`
+shifts to `error__`, and so on up the chain, so two names on one callable can never converge). This
+is unrelated to the keyword escaping above: `error` is not a C# reserved word, the collision is with
+the generator's own slot name, not the language.
+
+From `test-library/src/nativeMain/kotlin/.../issue66/Issue66Sample.kt`:
+
+```kotlin
+data class Issue66StoryState(
+  val error: String? = null,
+  val title: String,
+  val edition: Int = 3,
+)
+```
+
+Generated C#, from `Interop.cs`:
+
+```C#
+[DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "issue66storystate_create")]
+private static extern IntPtr Native_Create([MarshalAs(UnmanagedType.LPUTF8Str)] string? error_, [MarshalAs(UnmanagedType.LPUTF8Str)] string title, int edition, out IntPtr error);
+
+public Issue66StoryState(string? error_, string title, int edition)
+```
+
+A named argument at the call site uses the renamed form: `new Issue66StoryState(error_: "...", title: "...")`. Positional calls are unaffected. The rename shares the same ceiling as the keyword escaping above: only the ordinary synchronous forward callable plan renders it. On a suspend, `Flow`, lambda, sealed, generic, or interface-bridge route, an `error`-named parameter is not renamed, and still collides wherever that route also declares an `error` identifier in scope.
+
 ## Using it from C#
 
 From `IntegrationTests/MappingTests.cs`:
@@ -920,8 +948,11 @@ public void PreviousChipId_NullableVarProperty_HoldsGuidEmptyDistinctlyFromNull(
 - A keyword-named parameter is only escaped on the ordinary synchronous forward callable plan
   (constructors, class methods, top-level/extension functions, value-class members). The same
   parameter on a suspend method, a `Flow<T>`-returning member, a lambda/callback parameter, a sealed
-  member, a generic member, or an interface-bridge member still generates invalid C#, tracked in
-  [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md) Phase 3.
+  member, a generic member, or an interface-bridge member still generates invalid C#. An
+  `error`-named parameter is renamed on the same ordinary plan only; on the other routes it is
+  unrenamed and collides wherever that route's own wrapper also declares an `error` identifier in
+  scope. Tracked in [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md)
+  Phase 3.
 
 <seealso>
     <category ref="related">

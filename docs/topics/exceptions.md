@@ -1,6 +1,6 @@
 # Exceptions
 
-Every generated bridge call has an `out IntPtr error` parameter (or the object-handle equivalent for constructors). When a Kotlin function throws, the native call packs the exception into that out-parameter instead of aborting the process; the generated C# checks it after every call and throws the corresponding .NET exception. The mechanism is uniform across functions, property getters/setters, and constructors. Anything that can throw in Kotlin gets an error slot.
+Every generated bridge call has an `out IntPtr error` parameter (or the object-handle equivalent for constructors). When a Kotlin function throws, the native call packs the exception into that out-parameter instead of aborting the process; the generated C# checks it after every call and throws the corresponding .NET exception. The mechanism is uniform across functions, property getters/setters, and constructors. Anything that can throw in Kotlin gets an error slot. A Kotlin parameter literally named `error` collides with this slot's name and is renamed on the C# side; see [Primitives and strings](primitives-and-strings.md).
 
 | Kotlin | C# | Notes |
 |---|---|---|

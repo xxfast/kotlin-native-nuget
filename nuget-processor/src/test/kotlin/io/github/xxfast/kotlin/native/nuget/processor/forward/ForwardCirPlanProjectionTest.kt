@@ -258,6 +258,148 @@ class ForwardCirPlanProjectionTest {
     assertEquals(false, rendered.contains("string abstract"), rendered)
   }
 
+  /**
+   * Issue #66: a Kotlin parameter literally named `error` collides with the ADR-024 exception slot
+   * every synchronous import carries as its trailing `out IntPtr error`. Both halves of the
+   * collision are rendered here: the duplicate *declaration* (CS0100) and the wrapper body, where
+   * the inline `out IntPtr error` local scopes over the whole block so an argument spelled `error`
+   * rebinds to the not-yet-declared local (CS0136/CS0841).
+   */
+  @Test
+  fun `parameter named after the error slot is renamed at declaration and call sites`() {
+    val plan: ForwardCallablePlan = plan(
+      symbol = "sample.Article.describe",
+      exportName = "article_describe",
+      receiver = "handle",
+      result = BridgeType.Primitive(PrimitiveKind.INT),
+      parameters = listOf("error" to BridgeType.String),
+    )
+
+    val method: CirMethod =
+      ForwardCirPlanProjection.classMethod(plan, "article", isOverride = false)
+    val rendered: String = renderClass(method)
+
+    assertEquals(listOf("error_"), method.parameters.map { it.name })
+    assertEquals(
+      true,
+      rendered.contains("] string error_, out IntPtr error);"),
+      rendered,
+    )
+    assertEquals(true, rendered.contains("Describe(string error_)"), rendered)
+    assertEquals(
+      true,
+      rendered.contains("Native_Describe(_handle, error_, out IntPtr error)"),
+      rendered,
+    )
+    assertEquals(false, rendered.contains("string error,"), rendered)
+    assertEquals(false, rendered.contains("(_handle, error,"), rendered)
+  }
+
+  /**
+   * Issue #66, uniqueness: renaming `error` must not land on a sibling that is already spelled
+   * `error_`. The rename shifts every member of the `error`/`error_`/`error__` chain up by one
+   * underscore, which is injective, so no two parameters of one callable can converge.
+   */
+  @Test
+  fun `error slot rename stays unique against a sibling already named with the suffix`() {
+    val plan: ForwardCallablePlan = plan(
+      symbol = "sample.Article.<init>",
+      exportName = "article_create",
+      receiver = null,
+      result = BridgeType.ObjectHandle("sample.Article"),
+      parameters = listOf("error" to BridgeType.String, "error_" to BridgeType.String),
+      origin = ForwardCallableOrigin.CONSTRUCTOR,
+    )
+
+    val constructor: CirConstructor = ForwardCirPlanProjection.constructor(plan)
+    val rendered: String = CirRenderer().render(
+      CirFile(
+        namespaces = listOf(
+          CirNamespace(
+            "Sample",
+            listOf(
+              CirClass(
+                name = "Article",
+                libraryName = "sample",
+                nativePrefix = "article",
+                constructor = constructor,
+                properties = emptyList(),
+                methods = emptyList(),
+              ),
+            ),
+          ),
+        ),
+      ),
+    )
+
+    assertEquals(listOf("error_", "error__"), constructor.parameters.map { it.name })
+    assertEquals(
+      true,
+      rendered.contains("Article(string error_, string error__)"),
+      rendered,
+    )
+    assertEquals(
+      true,
+      rendered.contains("] string error__, out IntPtr error);"),
+      rendered,
+    )
+    assertEquals(false, rendered.contains("string error,"), rendered)
+  }
+
+  /**
+   * Issue #66, collection cell: the marshalling local and its `CreateList` argument are derived
+   * from the parameter's C# spelling, so both have to move with the rename or the body references
+   * a name that no longer exists.
+   */
+  @Test
+  fun `error slot rename carries through a collection parameter's marshalling local`() {
+    val plan: ForwardCallablePlan = plan(
+      symbol = "sample.Article.count",
+      exportName = "article_count",
+      receiver = "handle",
+      result = BridgeType.Primitive(PrimitiveKind.INT),
+      parameters = listOf(
+        "error" to BridgeType.Collection(CollectionKind.LIST, element = BridgeType.String),
+      ),
+    )
+
+    val method: CirMethod =
+      ForwardCirPlanProjection.classMethod(plan, "article", isOverride = false)
+    val rendered: String = renderClass(method)
+
+    assertEquals(listOf("error_"), method.parameters.map { it.name })
+    assertEquals(true, rendered.contains("IntPtr error_Handle = IntPtr.Zero;"), rendered)
+    assertEquals(
+      true,
+      rendered.contains("error_Handle = NugetMarshal.CreateList(error_);"),
+      rendered,
+    )
+    assertEquals(
+      true,
+      rendered.contains("Native_Count(_handle, error_Handle, out IntPtr error)"),
+      rendered,
+    )
+    assertEquals(false, rendered.contains("CreateList(error)"), rendered)
+  }
+
+  /**
+   * The render-time name helper itself: a keyword escape, the error-slot shift, and the identity
+   * for everything else — including the generator-minted ABI slot names, which the hand-written
+   * body text references raw and so must never move.
+   */
+  @Test
+  fun `csharp parameter name escapes keywords and shifts the error slot chain only`() {
+    assertEquals("error_", "error".csharpParameterName())
+    assertEquals("error__", "error_".csharpParameterName())
+    assertEquals("error___", "error__".csharpParameterName())
+    assertEquals("errorOut", "errorOut".csharpParameterName())
+    assertEquals("errors", "errors".csharpParameterName())
+    assertEquals("myError", "myError".csharpParameterName())
+    assertEquals("handle", "handle".csharpParameterName())
+    assertEquals("receiver", "receiver".csharpParameterName())
+    assertEquals("@abstract", "abstract".csharpParameterName())
+  }
+
   private fun renderClass(method: CirMethod): String = CirRenderer().render(
     CirFile(
       namespaces = listOf(
