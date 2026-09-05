@@ -1736,6 +1736,7 @@ internal fun translateValueClass(
   cls: KSClassDeclaration,
   libraryName: String,
   logger: KSPLogger,
+  context: NugetContext,
   callableCatalog: ForwardCallablePlanCatalog = ForwardCallablePlanCatalog(emptyList()),
 ): CirValueClass {
   val name: String = cls.simpleName.asString()
@@ -1866,10 +1867,15 @@ internal fun translateValueClass(
     )
   }
 
-  val csUnderlyingType: String = if (underlyingType == "String") "string"
-  // The public member is the C# enum itself (`Mood`); only the wire is its int ordinal.
-  else if (isEnumUnderlying || isReferenceUnderlying) underlyingType
-  else mapParamType(underlyingType)
+  // The public member is the C# type itself (the enum `Mood`, the handle class `Patient`); only
+  // the wire is its int ordinal / IntPtr handle. Spelling it with the *Kotlin* simple name only
+  // resolved while the underlying happened to share the struct's own namespace: a root-package
+  // value class over a sub-package underlying emitted a bare `Mood` inside `namespace TestLibrary`
+  // and failed CS0246. Same helper, and same unconditional-qualification rule, that #41 applied at
+  // the other cross-class render sites -- a known scalar keeps its C# primitive spelling (so the
+  // renderer's `== "string"` wire checks still fire), everything else becomes
+  // `global::Namespace.Name` once `rootNamespace` is non-empty.
+  val csUnderlyingType: String = qualifiedElementCsType(underlyingResolved, context)
 
   return CirValueClass(
     name = name,

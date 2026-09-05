@@ -446,6 +446,11 @@ an unqualified name and only compiles by accident when the namespaces happen to 
 > helper the `Flow`/`StateFlow` and stored-callback sites already used, so the rule above holds
 > for sealed subclasses too.
 
+> **Amendment (2026-09-05):** `translateValueClass`'s `readonly record struct` member type (the
+> `Enum`/`ObjectHandle` underlying property/parameter rendered by `renderValueClass`/
+> `renderReferenceValueClass`) was the last simple-name render site, now routed through
+> `qualifiedElementCsType` like the sites the #41/#50 amendments above named.
+
 ### Two ADR-064 amendments this forces (both IN SCOPE for this feature)
 
 > **Implementing agent: read this section before writing any code.** Both amendments are **verified
