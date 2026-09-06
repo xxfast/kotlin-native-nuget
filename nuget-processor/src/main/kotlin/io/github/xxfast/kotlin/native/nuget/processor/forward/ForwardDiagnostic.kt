@@ -157,6 +157,19 @@ internal enum class ForwardDiagnosticKind(
    *  every other root bucket. */
   SKIPPED_ANNOTATION_CLASS(ForwardDiagnosticSeverity.WARNING),
 
+  /** A public declaration nested inside an exported class-like declaration: a `class`, `object`,
+   *  `interface` or `enum class`. Every root bucket in `NugetProcessor` filters
+   *  `parentDeclaration == null` and the ADR-066 closure refuses to admit a nested dependency
+   *  declaration, so nothing is ever generated for one; it used to vanish in total silence, with
+   *  only the members typed with it saying anything at all. This names the declaration itself,
+   *  once, where it is declared. Sealed subclasses (ADR-009, declared nested under their base) and
+   *  companion objects (ADR-013, their owner's statics) are excluded: those ARE declared.
+   *
+   *  The declaration-level twin of the member-level `UNDECLARED_CLASS`/`UNDECLARED_ENUM`/
+   *  `UNDECLARED_INTERFACE` skips, and deliberately both: a nested declaration nothing references
+   *  would otherwise produce no output and no diagnostic whatsoever. */
+  SKIPPED_NESTED_DECLARATION(ForwardDiagnosticSeverity.WARNING),
+
   /** ADR-110: a top-level function whose PascalCase C# name is already held by a top-level
    *  property of the same file class (`val name` + `fun name()`, CS0102). camelCase used to keep
    *  the two apart, since Kotlin gives properties and functions separate namespaces and C# does
@@ -363,6 +376,8 @@ internal fun ForwardPlanSkipReason.toDiagnosticKind(): ForwardDiagnosticKind = w
     // Issue #54: the nested-interface twin, folded into the same bucket for the same reason -- one
     // undeclarable type, unsupported at every position, distinguished only by its hint.
   ForwardPlanSkipReason.UNDECLARED_INTERFACE,
+    // The nested class/object twin of the two above, in the same bucket for the same reason.
+  ForwardPlanSkipReason.UNDECLARED_CLASS,
   ForwardPlanSkipReason.VALUE_CLASS,
     -> ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_TYPE
 
@@ -519,6 +534,16 @@ internal fun ForwardPlanSkipReason.diagnosticHint(
     "interface `$interfaceName` is nested inside a class, and a nested interface is never " +
         "declared as a C# interface (only top-level ones are), so every member typed with it is " +
         "skipped rather than emitted as a dangling reference; move it to the top level of its file"
+  }
+
+  // Names the class or object, for the reason above. Covers exactly one shape (a nested
+  // declaration in either module), so like the interface hint it does not hedge about scope.
+  ForwardPlanSkipReason.UNDECLARED_CLASS -> {
+    val className: String = detail ?: "the class"
+    "`$className` is nested inside another declaration, and a nested class or object is never " +
+        "declared in C# (only top-level ones are, plus sealed subclasses and companion objects), " +
+        "so every member typed with it is skipped rather than emitted as a dangling reference; " +
+        "move it to the top level of its file"
   }
 
   ForwardPlanSkipReason.UNIMPLEMENTABLE_BOUND_INTERFACE ->

@@ -572,7 +572,10 @@ never brought into the export scope. It skips with the existing
         reachability closure) is a third shape of the same gap: the closure's <code>ENUM</code>
         admission now refuses a nested enum outright, so it is never declared at namespace root
         under its simple name either, and a member typed with it skips the same way as the
-        module-local case above.
+        module-local case above. A nested <code>class</code>, <code>object</code>, or
+        <code>interface</code> gets the same treatment; see
+        <a href="classes-and-objects.md#nested-classes-and-objects">Classes and objects: Nested
+        classes and objects</a>.
     </p>
 </note>
 

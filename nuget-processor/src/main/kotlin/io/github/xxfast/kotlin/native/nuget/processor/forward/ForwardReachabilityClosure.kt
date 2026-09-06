@@ -48,6 +48,11 @@ internal enum class ForwardAdmissionRefusal {
   NOT_INCLUDED,
   CROSS_MODULE_ADMISSION_DISABLED,
   EXPECT_IN_DEPENDENCY,
+
+  /** A declaration nested inside another dependency declaration: undeclarable rather than out of
+   *  scope, so no `include(...)` can bring it in. Recorded for completeness; the classifier tests
+   *  nestedness ahead of its dependency route, so nothing consumes it in practice. */
+  NESTED_DECLARATION,
 }
 
 internal data class ForwardReachabilityResult(
@@ -229,16 +234,22 @@ internal class ForwardReachabilityClosure(
       return
     }
 
-    // A *nested* dependency enum must never be admitted: the enum renderer declares every admitted
-    // enum at the namespace root under its simple name (`translateEnum`), while every reference to
-    // it is spelled `Outer.Inner` (`nestedCsName`), so admitting one emits a `public enum Inner`
-    // that no reference resolves against (CS0426). Declining admission hands it to the classifier's
-    // membership gate instead, which skips the member named (`UNDECLARED_ENUM`). Deliberately the
-    // ENUM bucket only: the other buckets have never filtered nested declarations either, but
-    // widening that is a separate change with its own renderer questions.
-    if (classDeclaration.classKind == ClassKind.ENUM_CLASS &&
-      classDeclaration.parentDeclaration != null
-    ) {
+    // A *nested* dependency declaration must never be admitted, whatever its bucket: every
+    // translator declares an admitted type at the namespace root under its simple name
+    // (`translateClass`, `translateEnum`), while every reference to it is spelled `Outer.Inner`
+    // (`nestedCsName`), so admitting one emits a `public class Inner` / `public enum Inner` that no
+    // reference resolves against (CS0426). Declining admission hands it to the classifier's
+    // membership gate instead, which skips each member named (`UNDECLARED_CLASS`,
+    // `UNDECLARED_ENUM`, `UNDECLARED_INTERFACE`).
+    //
+    // The carve-out is a sealed subclass: ADR-009 declares it nested under its base, which is
+    // exactly how `nestedCsName` spells it, so the `getSealedSubclasses()` walk below must keep
+    // admitting one. A companion object is likewise declared, as its owner's statics (ADR-013).
+    val isUndeclaredNested: Boolean = classDeclaration.parentDeclaration != null &&
+        !classDeclaration.isCompanionObject &&
+        !classDeclaration.isSealedSubclass()
+    if (isUndeclaredNested) {
+      refused[qualifiedName] = ForwardAdmissionRefusal.NESTED_DECLARATION
       return
     }
 

@@ -12,6 +12,7 @@ A Kotlin `class` becomes a C# `class` backed by an opaque `StableRef` handle, im
 | instance method return (object, `T?`, `List`/`Map`/`Set`, enum, `Char`, `String?`, `Int?`, `Boolean?`, …) | matching C# return type | same cascade as the property getter via the shared plan ([ADR-062](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/062-forward-callable-plan.md)); nullable primitive (including `Boolean?`) is single-call `valueOut`, see Method returns below |
 | two or more same-named methods | one C# overload set | numbered native export/extern name, unnumbered public name; see Method overloads below ([ADR-090](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/090-ordinary-class-method-overloads.md)) |
 | a method with a trailing run of defaulted parameters | omitting overload per suffix length | same `@JvmOverloads` rule as constructor defaults, see Method default parameters below ([ADR-096](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/096-function-default-parameters.md)) |
+| nested `class`/`object`/`interface`/`enum class` | never declared | skips named (`SKIPPED_NESTED_DECLARATION` on the declaration, `UNDECLARED_CLASS` on a member typed with it), except a companion object and a sealed subclass, which are still declared; see Nested classes and objects below ([ADR-064](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/064-forward-unsupported-declaration-diagnostics.md)) |
 
 ## Kotlin
 
@@ -880,9 +881,81 @@ closure terminates rather than recursing forever, and a type whose package falls
 effective `include`/`rootPackage` scope is skipped with a named diagnostic instead of silently
 binding or breaking the build; see [Publishing Kotlin to C#](forward-overview.md#diagnostics).
 
+## Nested classes and objects {id="nested-classes-and-objects"}
+
+A public `class`, `object`, `interface`, or `enum class` nested inside another class is never
+declared in C#: only a top-level declaration is, along with the two nested shapes the generator
+already has a route for, a sealed subclass (nested under its base, [ADR-009](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/009-sealed-class-mapping.md))
+and a companion object (folded into its owner's statics, see [Objects and companions](objects-and-companions.md)).
+Every other nested declaration now skips named, whether it lives in this module or is reached
+through the [reachability closure](#classes-declared-in-a-dependency-module) from a dependency
+module ([ADR-064](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/064-forward-unsupported-declaration-diagnostics.md)
+2026-09-07 amendment). Before this, a module-local nested class or object vanished with no
+diagnostic at all, and a nested dependency class or object was admitted and declared flattened at
+namespace root under its simple name while every reference still spelled it `Outer.Inner`,
+`CS0426`.
+
+From `test-library/src/nativeMain/kotlin/.../issue54/ProbeOuter.kt`:
+
+```kotlin
+class ProbeOuter {
+
+  /** Module-local, nested, and therefore never declared in C#. Nullable member on purpose. */
+  data class Nested(val x: String?)
+
+  /** Module-local, nested, `OBJECT` kind: the cell a class-only gate would miss. */
+  object Marker
+
+  /** Non-null return position. */
+  fun make(): Nested = Nested("n")
+
+  /** Nullable return position: today the `NULLABLE` branch of the generic skip. */
+  fun maybe(): Nested? = null
+
+  /** Nested-object return position. */
+  fun single(): Marker = Marker
+
+  /** Control: the sibling that must survive the gate. */
+  val label: String = "outer"
+
+  companion object {
+    /** Carve-out guard: a companion is nested too, but it must keep bridging as a static factory. */
+    fun make(): ProbeOuter = ProbeOuter()
+  }
+}
+```
+
+Generated C#: `ProbeOuter` itself still binds, with `Label` and the companion's static `Make()`.
+Neither `Nested` nor `Marker` appears anywhere in the assembly, and `ProbeOuter` carries no `Make`
+instance method, no `Maybe`, and no `Single`. The declaration itself warns once:
+
+```
+[nuget:SKIPPED_NESTED_DECLARATION] Skipping io.github.xxfast.kotlin.native.nuget.test.issue54.ProbeOuter.Nested: nested class `io.github.xxfast.kotlin.native.nuget.test.issue54.ProbeOuter.Nested` is never declared in C# (only top-level declarations, sealed subclasses and companions are). move it to the top level of its file
+    at .../ProbeOuter.kt:47
+```
+
+A member typed with a nested class or object, at a non-null, nullable, or property position, skips
+with `SKIPPED_UNSUPPORTED_TYPE` naming the new `UNDECLARED_CLASS` reason (a nullable position
+reports `UNDECLARED_CLASS`, not `NULLABLE`):
+
+```
+[nuget:SKIPPED_UNSUPPORTED_TYPE] Skipping io.github.xxfast.kotlin.native.nuget.test.Newsroom.schedule: its UNDECLARED_CLASS type combination is not supported. `io.github.xxfast.kotlin.native.nuget.test.models.Broadcast.Schedule` is nested inside another declaration, and a nested class or object is never declared in C# (only top-level ones are, plus sealed subclasses and companion objects), so every member typed with it is skipped rather than emitted as a dangling reference; move it to the top level of its file
+    at .../Newsroom.kt:89
+```
+
+The same gate closes the ADR-066 reachability closure's matching hole: a nested dependency
+`class`/`object` (`Broadcast.Schedule`, `Broadcast.Defaults`, declared one Gradle module away in
+`:test-models`) is now refused admission outright, with its own `SKIPPED_NESTED_DECLARATION`
+warning, instead of being declared at namespace root under a name nothing resolves against. The
+owning dependency class, `Broadcast`, still generates and constructs, and its unrelated members
+still bind; see `IntegrationTests/NestedClassGateTests.cs`.
+
 ## Limitations
 
 - `Map`/`Set` **inputs** (parameters) are not planned yet; see [Collections](collections.md).
+- A nested class/object/interface/enum typed **property** (module-local or a dependency type) skips
+  through the generic `SKIPPED_UNSUPPORTED_PROPERTY` message with no `UNDECLARED_CLASS` reason
+  attached, unlike a parameter or return position; see [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md).
 - Method overloads on this page cover the class-method route. `object` members, companion members,
   top-level functions, and extension functions have their own numbering scopes and are documented
   on [Objects and companions](objects-and-companions.md#method-overloads),

@@ -215,6 +215,12 @@ handle. When at least one type is admitted from a dependency module, the process
 `INFO_EXPORTED_FROM_DEPENDENCY` line per KSP run, naming the whole admitted set, since a per-type
 warning would be noise at this scale.
 
+A dependency type nested inside another declaration (`Broadcast.Schedule`) is refused admission
+outright, whatever bucket it would otherwise fall into, and skips named with
+`SKIPPED_NESTED_DECLARATION` on the declaration and `UNDECLARED_CLASS`/`UNDECLARED_ENUM`/
+`UNDECLARED_INTERFACE` on any member typed with it, the same as a module-local nested declaration;
+see [Classes and objects: Nested classes and objects](classes-and-objects.md#nested-classes-and-objects).
+
 <note>
 <p>Every cross-namespace type reference in the generated <code>Interop.cs</code> is emitted
 <code>global::Namespace.Name</code>-qualified, not by its bare simple name, so the file compiles

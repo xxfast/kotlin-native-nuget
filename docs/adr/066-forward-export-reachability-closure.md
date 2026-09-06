@@ -409,6 +409,21 @@ the *root* callable's own return/parameter type is unexportable does the callabl
 > reports `isExpect`, so the closure's `isExpect` guard (§3 above) never fires for a real native
 > dependency. `EXPECT_IN_DEPENDENCY` and its hint are kept as defensive text on an existing guard,
 > not because a reachable case is known to trigger it. See ROADMAP.md.
+>
+> **Amendment (2026-09-07), closing the `parentDeclaration`-only-on-`ENUM` gap this section
+> flagged.** The nested-declaration refusal is no longer `ENUM`-only: `ForwardReachabilityClosure.kt`'s
+> admission predicate now checks `classDeclaration.parentDeclaration != null` (minus the same
+> companion-object and sealed-subclass carve-outs the `ENUM` branch already had) for **every**
+> bucket, recorded as `ForwardAdmissionRefusal.NESTED_DECLARATION`. Before this, a nested dependency
+> `class`/`object` (`Broadcast.Schedule`, `Broadcast.Defaults`, both in `:test-models`) was admitted
+> and declared flattened at namespace root under its simple name while every reference still spelled
+> it `Broadcast.Schedule`/`Broadcast.Defaults`, reproduced as `CS0426`. Refused now: `Newsroom.
+> schedule()` and `Newsroom.defaults()` skip named with `ForwardPlanSkipReason.UNDECLARED_CLASS`
+> (folded into `SKIPPED_UNSUPPORTED_TYPE`) exactly as a nested dependency enum already did, and
+> `Broadcast.Schedule`/`Broadcast.Defaults` each carry their own declaration-level
+> `SKIPPED_NESTED_DECLARATION` warning. See
+> [ADR-064](064-forward-unsupported-declaration-diagnostics.md)'s 2026-09-07 amendment for the full
+> mechanism, shared with the module-local nested-class/object gap it closes at the same time.
 
 ### 5. Namespacing: no new rule
 

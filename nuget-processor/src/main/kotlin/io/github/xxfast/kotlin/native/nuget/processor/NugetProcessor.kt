@@ -113,6 +113,23 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.toDiagnosticKind
 // symbol and the specific kind, so a consumer whose `fun f(m: Map<K, V>)` vanishes from C# learns
 // why. Every one of these is `SKIPPED_*` (warning), never `ERROR_*`: existing fixtures
 // intentionally contain such declarations and generation must keep succeeding.
+/** The nested declaration kinds [ForwardDiagnosticKind.SKIPPED_NESTED_DECLARATION] names. An
+ *  `annotation class` is excluded: it is not declared in C# wherever it lives, and
+ *  [ForwardDiagnosticKind.SKIPPED_ANNOTATION_CLASS] already says so. */
+private val NESTED_DECLARATION_KINDS: Set<ClassKind> = setOf(
+  ClassKind.CLASS,
+  ClassKind.OBJECT,
+  ClassKind.INTERFACE,
+  ClassKind.ENUM_CLASS,
+)
+
+private fun KSClassDeclaration.nestedDeclarationKind(): String = when (classKind) {
+  ClassKind.ENUM_CLASS -> "enum class"
+  ClassKind.OBJECT -> "object"
+  ClassKind.INTERFACE -> "interface"
+  else -> "class"
+}
+
 internal fun warnDroppedForwardCallables(
   catalog: ForwardCallablePlanCatalog,
   logger: KSPLogger,
@@ -576,6 +593,42 @@ class NugetProcessor(
     val enums: List<KSClassDeclaration> = rootEnums + dependenciesIn(ForwardReachabilityBucket.ENUM)
     val interfaces: List<KSClassDeclaration> =
       rootInterfaces + dependenciesIn(ForwardReachabilityBucket.INTERFACE)
+
+    // Every root bucket above filters `parentDeclaration == null`, and the ADR-066 closure now
+    // refuses to admit a nested dependency declaration for the same reason, so a public nested
+    // class/object/interface/enum is declared by no route at all. It used to vanish in total
+    // silence: only the members typed with it said anything, and a nested declaration nothing
+    // references said nothing whatsoever. Named here, once, at the declaration itself -- before
+    // the `hasNothingToProcess` early return, so it reaches NugetDiagnostics.json even in a module
+    // that generates nothing else.
+    //
+    // The two nested shapes that ARE declared are excluded: a sealed subclass (ADR-009 declares it
+    // nested under its base) and a companion object (ADR-013 folds it into its owner's statics).
+    val nestedDeclarations: List<KSClassDeclaration> =
+      (allClasses + valueClasses + sealedClasses + objects + interfaces)
+        .flatMap { owner -> owner.declarations.filterIsInstance<KSClassDeclaration>() }
+        .filter { it.getVisibility() == Visibility.PUBLIC }
+        .filter { !it.isCompanionObject }
+        .filter { !it.isSealedSubclass() }
+        .filter { it.classKind in NESTED_DECLARATION_KINDS }
+        .distinctBy { it.qualifiedName?.asString() ?: it.simpleName.asString() }
+        .sortedBy { it.qualifiedName?.asString() ?: it.simpleName.asString() }
+    ForwardDiagnosticSink.emit(
+      nestedDeclarations.map { nested ->
+        val name: String = nested.qualifiedName?.asString() ?: nested.simpleName.asString()
+        ForwardDiagnostic(
+          kind = ForwardDiagnosticKind.SKIPPED_NESTED_DECLARATION,
+          // ADR-066, verified: a klib declaration has no containing file, so an admitted
+          // dependency type's nested declaration has no source location to point at.
+          symbol = nested.takeIf { it.containingFile != null },
+          declaration = name,
+          reason = "nested ${nested.nestedDeclarationKind()} `$name` is never declared in C# " +
+              "(only top-level declarations, sealed subclasses and companions are)",
+          hint = "move it to the top level of its file",
+        )
+      },
+      logger,
+    )
 
     val classes: List<KSClassDeclaration> = allClasses.filter { it.typeParameters.isEmpty() }
     val genericClasses: List<KSClassDeclaration> = allClasses

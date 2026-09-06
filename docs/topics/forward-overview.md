@@ -188,6 +188,10 @@ forward page's own **Limitations** section for which named diagnostic fires wher
 A member typed with an enum that is never declared in C#, a nested `enum class`, skips named too,
 with the `SKIPPED_UNSUPPORTED_TYPE` kind naming the `UNDECLARED_ENUM` reason instead of being
 spelled as a dangling reference; see [Enums: Nested enums skip named](enums.md#nested-enums-skip-named).
+A nested `class` or `object` gets the same treatment, naming `UNDECLARED_CLASS` instead (a nested
+`interface` was already `UNDECLARED_INTERFACE`, see [Interfaces, abstract and sealed classes: Nested
+interfaces skip named](interfaces-abstract-sealed.md#nested-interfaces-skip-named)); see
+[Classes and objects: Nested classes and objects](classes-and-objects.md#nested-classes-and-objects).
 
 Three more kinds cover the cross-module export closure ([ADR-066](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/066-forward-export-reachability-closure.md);
 see [The nuget {} DSL](nuget-dsl.md) for the closure's own rules). A reachable dependency-module type
