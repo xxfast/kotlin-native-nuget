@@ -1735,7 +1735,6 @@ internal fun translateInterfaceBackingClass(
     methods = methods,
     interfaces = listOf("I$name"),
     hasInternalHandleConstructor = true,
-    disposable = true,
     isSealed = true,
   )
 }

@@ -28,19 +28,30 @@ internal data class ForwardDiagnostic(
 
 internal enum class ForwardDiagnosticSeverity { WARNING, INFO, ERROR }
 
+/** The name prefixes a [ForwardDiagnosticKind] derives its severity and verb from. */
+private const val SKIPPED_PREFIX: String = "SKIPPED_"
+private const val INFO_PREFIX: String = "INFO_"
+private const val ERROR_PREFIX: String = "ERROR_"
+
 /**
  * ADR-064's forward bridgeable-subset boundary, the mirror of `RirDiagnosticKind`. Severity is
  * carried both by the `SKIPPED_/INFO_/ERROR_` name prefix (so a build log reads like the reverse
  * direction) and by [severity] itself (so the sink never string-matches its own enum, matching
  * ADR-057's reverse precedent).
+ *
+ * The name prefix, not the severity, also decides the [verb] a diagnostic renders with, and the
+ * two are checked against each other at class-init time. A `SKIPPED_*` kind is a WARNING that
+ * reads "Skipping" and may not override the verb; an `INFO_*` kind reads "Note"; an `ERROR_*` kind
+ * reads "Error". Anything else is a WARNING about something that still binds (ADR-109's duplicated
+ * dependency type), so it has to say what it is warning about and must pass [declaredVerb]. That
+ * is the invariant `ForwardDiagnosticKindTest` pins: before it, a non-skip WARNING that forgot its
+ * verb silently rendered as "Skipping", which was a lie.
  */
 internal enum class ForwardDiagnosticKind(
   val severity: ForwardDiagnosticSeverity,
-  /** ADR-109: overrides the severity-keyed verb [ForwardDiagnostic.format] would otherwise pick.
-   *  Every WARNING here skips something and so reads "Skipping" — except a warning about a type
-   *  that is still exported, for which "Skipping" would be a plain lie. Null everywhere else, so
-   *  every pre-existing kind renders byte-identically. */
-  val verb: String? = null,
+  /** ADR-109: the verb for a kind whose name carries no `SKIPPED_/INFO_/ERROR_` prefix to derive
+   *  one from. Null (and required to be null) for every prefixed kind. */
+  private val declaredVerb: String? = null,
 ) {
   /** A classifier `Unsupported` type, or another supported-elsewhere type this position cannot
    *  express (`Char`, an enum, a handle, a value class, ...) at a position with no bridge. */
@@ -158,7 +169,38 @@ internal enum class ForwardDiagnosticKind(
    *
    *  Nothing is skipped and nothing in the generated output changes — the remedy is structural
    *  (exactly one publisher declares the type) — so the verb is overridden to say so. */
-  WARNING_DUPLICATED_DEPENDENCY_TYPE(ForwardDiagnosticSeverity.WARNING, verb = "Duplicating"),
+  WARNING_DUPLICATED_DEPENDENCY_TYPE(
+    ForwardDiagnosticSeverity.WARNING,
+    declaredVerb = "Duplicating",
+  ),
+  ;
+
+  /** The word [ForwardDiagnostic.format] opens the message with, derived from the name prefix so
+   *  that a kind cannot claim to skip something it still generates. */
+  val verb: String = declaredVerb ?: when {
+    name.startsWith(SKIPPED_PREFIX) -> "Skipping"
+    name.startsWith(INFO_PREFIX) -> "Note"
+    name.startsWith(ERROR_PREFIX) -> "Error"
+    else -> error(
+      "$name has no $SKIPPED_PREFIX/$INFO_PREFIX/$ERROR_PREFIX prefix to derive a verb from, so " +
+        "it must pass declaredVerb: a WARNING that is not a skip may not render as \"Skipping\""
+    )
+  }
+
+  init {
+    val expected: ForwardDiagnosticSeverity? = when {
+      name.startsWith(SKIPPED_PREFIX) -> ForwardDiagnosticSeverity.WARNING
+      name.startsWith(INFO_PREFIX) -> ForwardDiagnosticSeverity.INFO
+      name.startsWith(ERROR_PREFIX) -> ForwardDiagnosticSeverity.ERROR
+      else -> null
+    }
+    require(expected == null || severity == expected) {
+      "$name is prefixed for $expected but declares $severity"
+    }
+    require(expected == null || declaredVerb == null) {
+      "$name derives its verb from its name prefix and may not also declare one"
+    }
+  }
 }
 
 /**
@@ -168,16 +210,11 @@ internal enum class ForwardDiagnosticKind(
  * {hint}`), plus the `KSNode` source location reverse cannot carry.
  */
 internal fun ForwardDiagnostic.format(): String {
-  val verb: String = kind.verb ?: when (kind.severity) {
-    ForwardDiagnosticSeverity.WARNING -> "Skipping"
-    ForwardDiagnosticSeverity.INFO -> "Note"
-    ForwardDiagnosticSeverity.ERROR -> "Error"
-  }
   val location: String = if (signature.isBlank()) declaration else "$declaration($signature)"
   val at: String = (symbol?.location as? FileLocation)
     ?.let { location -> "\n    at ${location.filePath}:${location.lineNumber}" }
     ?: ""
-  return "[nuget:${kind.name}] $verb $location: $reason. $hint$at"
+  return "[nuget:${kind.name}] ${kind.verb} $location: $reason. $hint$at"
 }
 
 /**
