@@ -491,6 +491,13 @@ internal object ForwardCallablePlanValidator {
   fun validate(plan: ForwardCallablePlan) {
     require(plan.invocation.symbol.isNotBlank()) { "Forward plan invocation symbol must not be blank" }
     require(plan.publicSignature.name.isNotBlank()) { "Forward plan public signature name must not be blank" }
+    // Escaping is a render concern: the same name is the stem of every `Native_...` extern and
+    // entry point, where a verbatim `@` would be invalid. The C# projection escapes the public
+    // member name on its way out.
+    require(!plan.publicSignature.name.startsWith("@")) {
+      "Forward plan ${plan.invocation.symbol} public signature name ${plan.publicSignature.name} " +
+          "must not be C#-escaped at plan time"
+    }
     validateCallCount(plan)
     require(plan.nativeExports == plan.nativeImports) {
       "Forward plan ${plan.publicSignature.name} has different native export and import ABI projections"

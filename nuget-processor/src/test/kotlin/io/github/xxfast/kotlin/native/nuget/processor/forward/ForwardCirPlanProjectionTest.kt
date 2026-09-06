@@ -11,6 +11,8 @@ import io.github.xxfast.kotlin.native.nuget.processor.cir.CirStaticClass
 import io.github.xxfast.kotlin.native.nuget.processor.cir.ordinaryNativeImports
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
+import kotlin.test.assertTrue
 
 class ForwardCirPlanProjectionTest {
   @Test
@@ -402,6 +404,66 @@ class ForwardCirPlanProjectionTest {
     ),
   )
 
+  @Test
+  fun `PascalCase method name renders unescaped`() {
+    val plan: ForwardCallablePlan = plan(
+      symbol = "sample.Counter.lock",
+      exportName = "counter_lock",
+      receiver = "handle",
+      result = BridgeType.Unit,
+      parameters = emptyList(),
+    )
+
+    val method: CirMethod =
+      ForwardCirPlanProjection.classMethod(plan, "counter", isOverride = false)
+
+    assertEquals("Lock", method.name)
+    assertEquals("Native_Lock", method.externName)
+  }
+
+  @Test
+  fun `keyword method name is escaped at render time only`() {
+    val plan: ForwardCallablePlan = plan(
+      symbol = "sample.Counter.lock",
+      exportName = "counter_lock",
+      receiver = "handle",
+      result = BridgeType.Unit,
+      parameters = emptyList(),
+      publicName = "lock",
+    )
+
+    val method: CirMethod =
+      ForwardCirPlanProjection.classMethod(plan, "counter", isOverride = false)
+    val import: CirDllImport = CirClass(
+      name = "Counter",
+      libraryName = "sample",
+      nativePrefix = "counter",
+      constructor = null,
+      properties = emptyList(),
+      methods = listOf(method),
+    ).ordinaryNativeImports().single { import -> import.name == "Native_Lock" }
+
+    assertEquals("lock", plan.publicSignature.name)
+    assertEquals("@lock", method.name)
+    assertEquals("Native_Lock", import.name)
+    assertEquals("counter_lock", import.entryPoint)
+  }
+
+  @Test
+  fun `a plan may not carry an escaped public name`() {
+    val error: IllegalArgumentException = assertFailsWith {
+      plan(
+        symbol = "sample.Counter.lock",
+        exportName = "counter_lock",
+        receiver = "handle",
+        result = BridgeType.Unit,
+        parameters = emptyList(),
+        publicName = "@lock",
+      )
+    }
+    assertTrue(error.message!!.contains("must not be C#-escaped at plan time"))
+  }
+
   private fun plan(
     symbol: String,
     exportName: String,
@@ -409,6 +471,7 @@ class ForwardCirPlanProjectionTest {
     result: BridgeType,
     parameters: List<Pair<String, BridgeType>>,
     origin: ForwardCallableOrigin = ForwardCallableOrigin.CLASS,
+    publicName: String? = null,
   ): ForwardCallablePlan {
     val error = ForwardAbiParameter(
       "errorOut",
@@ -471,7 +534,7 @@ class ForwardCirPlanProjectionTest {
     return ForwardCallablePlan(
       invocation = ForwardInvocation(symbol, origin = origin),
       publicSignature = ForwardPublicSignature(
-        exportName.substringAfterLast('_').replaceFirstChar { it.uppercase() },
+        publicName ?: exportName.substringAfterLast('_').replaceFirstChar { it.uppercase() },
         parameters.map { (name, type) -> ForwardPublicParameter(name, type) },
         result,
       ),
