@@ -99,6 +99,12 @@ class ForwardSkippedCallableWarningTest {
         ForwardPlanSkipReason.INHERITED_MEMBER,
         // ADR-066: a reachable dependency-module type the closure did not admit.
         ForwardPlanSkipReason.UNEXPORTED_DEPENDENCY_TYPE,
+        // The same drop, refused for a reason the `include(...)` hint does not fix: the author's
+        // own `exclude(...)`, an `expect` in a dependency klib, or cross-module admission being
+        // off entirely. Same diagnostic kind, different remedy.
+        ForwardPlanSkipReason.EXCLUDED_DEPENDENCY_TYPE,
+        ForwardPlanSkipReason.EXPECT_DEPENDENCY_TYPE,
+        ForwardPlanSkipReason.CROSS_MODULE_DISABLED_DEPENDENCY_TYPE,
         // ADR-074: an actual typealias target the forward direction does not export.
         ForwardPlanSkipReason.ACTUAL_TYPEALIAS_TARGET,
         // An enum no route declares as a C# enum (nested, or top-level out of scope): a genuine

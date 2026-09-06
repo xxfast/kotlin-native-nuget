@@ -192,12 +192,28 @@ nuget {
 }
 ```
 
-A reachable dependency-module type whose package falls outside the effective include set is skipped
-with `SKIPPED_UNEXPORTED_DEPENDENCY_TYPE`, naming the full `include(...)` line that would admit it
-(the current scope first, since an explicit `include` replaces the `rootPackage` default),
-rather than silently dropping the member or leaking an unusable handle. When at least one type is
-admitted from a dependency module, the processor also emits one `INFO_EXPORTED_FROM_DEPENDENCY` line
-per KSP run, naming the whole admitted set, since a per-type warning would be noise at this scale.
+A reachable dependency-module type that the closure refuses to admit is skipped with
+`SKIPPED_UNEXPORTED_DEPENDENCY_TYPE`, and the hint names the reason the closure actually refused it
+rather than always pointing at `include(...)`:
+
+- simply outside the effective include set: the full `include(...)` line that would admit it (the
+  current scope first, since an explicit `include` replaces the `rootPackage` default);
+- excluded by your own `exclude(...)`: `"dep.models" is excluded by exclude("dep.models") in
+  nuget { publish { } }, so a callable reaching dep.models.TopStory is skipped by design; remove
+  the exclude to export it here (include(...) cannot override an exclude)`, since `exclude` is
+  tested before `include` and no `include` can win against one;
+- cross-module admission off (neither `rootPackage` nor `include` set): `no rootPackage or
+  include is set, so nuget { publish { } } never crosses the module boundary and
+  dep.models.TopStory stays out of the export set; set rootPackage(...) or list your own packages
+  alongside "dep.models" in include(...)`;
+- an `expect` declaration inside the dependency itself: naming the type and saying its
+  actualization lives in that dependency module and cannot be brought into scope with
+  `include(...)` at all.
+
+Either way generation continues rather than silently dropping the member or leaking an unusable
+handle. When at least one type is admitted from a dependency module, the processor also emits one
+`INFO_EXPORTED_FROM_DEPENDENCY` line per KSP run, naming the whole admitted set, since a per-type
+warning would be noise at this scale.
 
 <note>
 <p>Every cross-namespace type reference in the generated <code>Interop.cs</code> is emitted

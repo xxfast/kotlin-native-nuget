@@ -90,6 +90,23 @@ internal enum class ForwardPlanSkipReason(val droppedFromCSharp: Boolean) {
    *  rather than the generic "declaration is not in the exported object-handle set" message. */
   UNEXPORTED_DEPENDENCY_TYPE(droppedFromCSharp = true),
 
+  /** The same drop, refused for a reason `include(...)` cannot fix: the author's own
+   *  `exclude(...)` covers the type, and `PackageScope.covers` tests `exclude` first, so no
+   *  include can override it. Split from [UNEXPORTED_DEPENDENCY_TYPE] only for the hint; both
+   *  render as the same `SKIPPED_UNEXPORTED_DEPENDENCY_TYPE` kind, so ADR-109's remedy text
+   *  ("this member is skipped by design") stays true. */
+  EXCLUDED_DEPENDENCY_TYPE(droppedFromCSharp = true),
+
+  /** The same drop for an `expect` declaration read off a dependency klib: its actualization
+   *  lives in that module, so no export scope of this module can reach it. */
+  EXPECT_DEPENDENCY_TYPE(droppedFromCSharp = true),
+
+  /** The same drop with cross-module admission off entirely (ADR-066 admission rule 4: neither
+   *  `rootPackage` nor `include` is set). `include("<dep>")` alone is a trap here: it replaces the
+   *  "everything" default and drops the module's own files, so the hint names `rootPackage` and
+   *  the module's own packages instead. */
+  CROSS_MODULE_DISABLED_DEPENDENCY_TYPE(droppedFromCSharp = true),
+
   /** ADR-074: an `expect class` actualized by an `actual typealias` whose erased target the
    *  forward direction does not export (a platform-library type, a stdlib type, an out-of-scope
    *  package, or a parameterized target — v1 admits only a redirect to a plain class). Distinct
@@ -2455,7 +2472,22 @@ internal class ForwardCallablePlanner(
       isUndeclaredEnum -> ForwardPlanSkipReason.UNDECLARED_ENUM
       // Issue #54: the same "undeclarable, not out of scope" rule for a nested interface.
       isUndeclaredInterface -> ForwardPlanSkipReason.UNDECLARED_INTERFACE
-      isUnexportedDependency -> ForwardPlanSkipReason.UNEXPORTED_DEPENDENCY_TYPE
+      // The closure records WHY it refused a dependency declaration; each refusal wants a
+      // different remedy, and only NOT_INCLUDED (or an unrecorded refusal, e.g. a module-local
+      // type the closure never saw) wants the `include(...)` one.
+      isUnexportedDependency -> when (unexportedDependencyRefusal) {
+        ForwardAdmissionRefusal.EXCLUDED_BY_CONFIG ->
+          ForwardPlanSkipReason.EXCLUDED_DEPENDENCY_TYPE
+
+        ForwardAdmissionRefusal.EXPECT_IN_DEPENDENCY ->
+          ForwardPlanSkipReason.EXPECT_DEPENDENCY_TYPE
+
+        ForwardAdmissionRefusal.CROSS_MODULE_ADMISSION_DISABLED ->
+          ForwardPlanSkipReason.CROSS_MODULE_DISABLED_DEPENDENCY_TYPE
+
+        ForwardAdmissionRefusal.NOT_INCLUDED, null ->
+          ForwardPlanSkipReason.UNEXPORTED_DEPENDENCY_TYPE
+      }
       else -> ForwardPlanSkipReason.UNSUPPORTED
     }
   }

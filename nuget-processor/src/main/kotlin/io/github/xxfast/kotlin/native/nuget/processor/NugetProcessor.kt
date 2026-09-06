@@ -476,6 +476,9 @@ class NugetProcessor(
     // crosses into `include`/`rootPackage` scope at all (admission rule 4).
     val reachability: ForwardReachabilityResult = ForwardReachabilityClosure(
       isExported = ::isExported,
+      isExcluded = { declaration ->
+        ownScope.excludes(declaration.packageName.asString(), declaration.qualifiedName?.asString())
+      },
       crossModuleAdmissionAllowed = effectiveInclude.isNotEmpty(),
       actualTypeAliasTargets = actualTypeAliasTargets,
     ).walk(
@@ -621,6 +624,7 @@ class NugetProcessor(
         rootNamespace = context.rootNamespace,
         actualTypeAliasTargets = actualTypeAliasTargets,
         boundInterfaces = context.boundInterfaces,
+        refusedDependencyTypes = reachability.refused,
       ),
     )
     val forwardPlanner = ForwardCallablePlanner(forwardClassifier, expects)

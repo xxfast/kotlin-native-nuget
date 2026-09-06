@@ -714,6 +714,16 @@ surfaces as `SKIPPED_UNEXPORTED_DEPENDENCY_TYPE`, the same named skip
 `Tier1ReachabilityClosureTest.kt:42-57` exercises. Its `include(...)` hint would be wrong for that
 case; that is a message defect, tracked separately, not wrong generated output.
 
+> **Verified by execution (2026-09-07), `:test-library:kspKotlinMacosArm64`.** The premise above is
+> false: a dependency klib does **not** present the `expect` half to KSP. A `test-models` fixture
+> with `expect class Ticker` actualized by `actual typealias Ticker = TickerImpl` (and, separately,
+> by `actual class Ticker`) both export the *actual* through the by-name redirect (Decision 3), and
+> the klib declaration a consumer reference resolves against never reports `isExpect`, so the
+> closure's `isExpect` guard never fires for a real native dependency. The `EXPECT_IN_DEPENDENCY`
+> refusal reason and its dedicated hint (see [ADR-066](066-forward-export-reachability-closure.md)
+> §4's 2026-09-07 amendment) are kept as defensive text on an existing guard, not because a
+> reachable case is known to trigger it.
+
 Tier 1 cannot settle the question: `Tier1DependencyLibrary.compile` builds a JVM jar with
 `K2JVMCompiler` (**Verified**, `:24-45`), and an expect produces no JVM class file, so the JVM
 analog proves nothing about klib metadata. The re-open condition is a user report of a dependency

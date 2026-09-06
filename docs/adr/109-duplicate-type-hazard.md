@@ -309,10 +309,21 @@ Proof is the sum of three things:
 - Both D and S are covered by one mechanism. **S remains a heuristic** ("declares its own copy
   whenever its API reaches it"), one line per (type, publisher), silenced only by `exclude(...)`. If
   it proves noisy, Alternative 3 is the precise follow-up.
-- **Hint interplay, pre-existing, not fixed**: after the author follows the `exclude(...)` remedy,
-  each callable reaching the type fires `SKIPPED_UNEXPORTED_DEPENDENCY_TYPE`, whose hint says to
-  `include(...)` it back. The two hints contradict for this scenario; a later change may make the
-  unexported-dependency hint aware of `publishedScopes`.
+- **Hint interplay, fixed (2026-09-07).** The reachability closure now records *why* it refused
+  admission (`ForwardAdmissionRefusal`: `EXCLUDED_BY_CONFIG`, `NOT_INCLUDED`,
+  `CROSS_MODULE_ADMISSION_DISABLED`, `EXPECT_IN_DEPENDENCY`) and carries that reason through the
+  classifier into the plan (`BridgeType.Unsupported.unexportedDependencyRefusal`). Four skip
+  reasons now fold into the same `SKIPPED_UNEXPORTED_DEPENDENCY_TYPE` kind, each with its own hint
+  text; `publishedScopes` is not consulted, the refusal reason already is. Following this ADR's own
+  `exclude("<pkg>")` remedy now renders:
+  `"dep.models" is excluded by exclude("dep.models") in nuget { publish { } }, so a callable
+  reaching dep.models.TopStory is skipped by design; remove the exclude to export it here
+  (include(...) cannot override an exclude)`, naming the exclude as the cause instead of suggesting
+  an include that can never win against it. Kind and severity are unchanged, so the remedy text
+  above (the umbrella module or `exclude("<pkg>")`) stays true. See
+  [ADR-066](066-forward-export-reachability-closure.md)'s Disposition section for the other three
+  reasons' hints and ROADMAP.md for the one thing this did not fix (`warnDroppedForwardCallables`'s
+  hardcoded reason sentence, which still misnames an excluded type as unsupported).
 - ADR-066's Consequences bullet is amended: shape (1) retracted, pointer to this ADR.
 - Publishers with no `rootPackage` and no `include` cannot be matched (documented gap).
 - The Provider body reads other projects' extensions; legal today, and the first thing to break if

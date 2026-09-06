@@ -30,6 +30,10 @@ internal data class ForwardBridgeTypeContext(
    *  it holds: `nuget.boundPackages` is a flat package list, and the namespace-alias map that
    *  produced the Kotlin package is not invertible. */
   val boundInterfaces: Map<String, ForwardBoundInterface> = emptyMap(),
+  /** ADR-066's reachability closure keeps why it refused each discovered dependency declaration;
+   *  the classifier only sees "not in [exportedObjectHandles], and no containing file", which
+   *  cannot tell an `exclude(...)` apart from a missing `include(...)`. */
+  val refusedDependencyTypes: Map<String, ForwardAdmissionRefusal> = emptyMap(),
 )
 
 /**
@@ -229,6 +233,7 @@ internal class ForwardBridgeTypeClassifier(
           "declaration is not in the exported object-handle set"
         },
         isUnexportedDependency = isUnexportedDependency,
+        unexportedDependencyRefusal = context.refusedDependencyTypes[qualifiedName],
       )
     }
     return BridgeType.ObjectHandle(qualifiedName, csharpType = csharpTypeNameFor(classDeclaration))
@@ -307,6 +312,7 @@ internal class ForwardBridgeTypeClassifier(
           "declaration is not in the exported object-handle set"
         },
         isUnexportedDependency = isUnexportedDependency,
+        unexportedDependencyRefusal = context.refusedDependencyTypes[qualifiedName],
       )
     }
     val simpleName: String = declaration.simpleName.asString()

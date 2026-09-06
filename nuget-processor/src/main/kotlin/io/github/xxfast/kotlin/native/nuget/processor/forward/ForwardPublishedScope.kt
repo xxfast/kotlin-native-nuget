@@ -14,16 +14,21 @@ data class PackageScope(
   val include: List<String>,
   val exclude: List<String>,
 ) {
+  /**
+   * The `exclude` half on its own. Split out (not copied) because the ADR-066 reachability closure
+   * has to tell an *excluded* refusal apart from a merely *not included* one: the two want
+   * opposite hints, and `include(...)` cannot override an exclude precisely because [covers] tests
+   * this first.
+   */
+  fun excludes(packageName: String, qualifiedName: String?): Boolean = exclude.any { prefix ->
+    packageName == prefix || packageName.startsWith("$prefix.") ||
+        (qualifiedName != null && (qualifiedName == prefix || qualifiedName.startsWith("$prefix.")))
+  }
+
   fun covers(packageName: String, qualifiedName: String?): Boolean {
-    fun matches(prefix: String): Boolean =
-      packageName == prefix || packageName.startsWith("$prefix.")
-
-    fun matchesDeclaration(prefix: String): Boolean =
-      qualifiedName != null && (qualifiedName == prefix || qualifiedName.startsWith("$prefix."))
-
-    if (exclude.any { matches(it) || matchesDeclaration(it) }) return false
+    if (excludes(packageName, qualifiedName)) return false
     if (include.isEmpty()) return true
-    return include.any(::matches)
+    return include.any { prefix -> packageName == prefix || packageName.startsWith("$prefix.") }
   }
 }
 

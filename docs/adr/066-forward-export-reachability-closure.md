@@ -387,6 +387,29 @@ ADR-064 kind. The unit of skipping is the **member**, not the type: if `TopStory
 unexportable, `StoryUri` is skipped and `TopStory` is still exported without that property. Only if
 the *root* callable's own return/parameter type is unexportable does the callable itself drop.
 
+> **Amendment (2026-09-07), the `include(...)` hint was written for one refusal reason and emitted
+> for all.** The `SKIPPED_UNEXPORTED_DEPENDENCY_TYPE` hint above only ever suggested
+> `include(...)`, which is right for a type simply outside the configured scope
+> (`ForwardAdmissionRefusal.NOT_INCLUDED`) but wrong for the other three reasons the closure can
+> refuse a dependency type: `EXCLUDED_BY_CONFIG` (an `exclude(...)` wins over any include),
+> `CROSS_MODULE_ADMISSION_DISABLED` (no `rootPackage`/`include` at all, so the closure never
+> crosses the module boundary), and `EXPECT_IN_DEPENDENCY` (the type is an `expect` whose
+> actualization lives in the dependency itself). The closure now records the refusal reason
+> alongside each refused qualified name, the classifier carries it into
+> `BridgeType.Unsupported.unexportedDependencyRefusal`, and the hint is chosen per reason; all four
+> still render as the single `SKIPPED_UNEXPORTED_DEPENDENCY_TYPE` kind (ADR-109's remedy text
+> stays true). See [ADR-109](109-duplicate-type-hazard.md)'s Consequences for the excluded-type
+> hint text.
+>
+> The spike ADR-074 §3 left open, whether a dependency klib's metadata retains the `expect` half at
+> all, is resolved: it does not, for either an alias-actualized or a class-actualized `expect`. A
+> `test-models` fixture with `expect class Ticker` alongside `actual typealias Ticker = TickerImpl`
+> (and, separately, `actual class Ticker`) both export the actual (`TickerImpl` / `Ticker`) through
+> ADR-074's by-name redirect; the klib declaration KSP resolves a consumer reference against never
+> reports `isExpect`, so the closure's `isExpect` guard (§3 above) never fires for a real native
+> dependency. `EXPECT_IN_DEPENDENCY` and its hint are kept as defensive text on an existing guard,
+> not because a reachable case is known to trigger it. See ROADMAP.md.
+
 ### 5. Namespacing: no new rule
 
 An admitted dependency type keeps its **Kotlin package** and goes through the existing

@@ -202,6 +202,11 @@ internal sealed interface BridgeType {
    * @param actualTypeAliasExpectName ADR-074: the `expect` class's qualified name, when
    *   [isActualTypeAliasTarget] is true; carried for the diagnostic hint's "the actual typealias
    *   for `<expect name>` resolves to..." message.
+   * @param unexportedDependencyRefusal why the ADR-066 reachability closure refused the type,
+   *   when [isUnexportedDependency] is true and the closure saw it at all. Carried beside the
+   *   Boolean rather than replacing it so the other `Unsupported(...)` construction sites stay
+   *   untouched; it only selects a different hint (`include(...)` is the wrong advice for an
+   *   excluded type and for a dependency `expect`).
    * @param isUndeclaredEnum true when [rendered] is an `enum class` that no route ever declares as
    *   a C# enum, so a member typed with it would otherwise be spelled as a reference to a type
    *   nothing emits (the CS0426/CS0234 class of consumer failure). Two shapes reach it: a *nested*
@@ -222,6 +227,7 @@ internal sealed interface BridgeType {
     val rendered: kotlin.String,
     val reason: kotlin.String,
     val isUnexportedDependency: kotlin.Boolean = false,
+    val unexportedDependencyRefusal: ForwardAdmissionRefusal? = null,
     val isActualTypeAliasTarget: kotlin.Boolean = false,
     val actualTypeAliasExpectName: kotlin.String? = null,
     val isUndeclaredEnum: kotlin.Boolean = false,
