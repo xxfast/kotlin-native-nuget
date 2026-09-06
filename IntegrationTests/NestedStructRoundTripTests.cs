@@ -38,14 +38,14 @@ public class NestedStructRoundTripTests
     [Fact]
     public void LitterSummary_RendersEveryLeaf()
     {
-        string result = NestedSample.litterSummary("Oreo", 5);
+        string result = NestedSample.LitterSummary("Oreo", 5);
         Assert.Equal("Oreox5@3x4/Calm", result);
     }
 
     [Fact]
     public void LitterSummary_DifferentCatAndCount()
     {
-        string result = NestedSample.litterSummary("Mylo", 9);
+        string result = NestedSample.LitterSummary("Mylo", 9);
         Assert.Equal("Mylox9@3x4/Calm", result);
     }
 
@@ -55,14 +55,14 @@ public class NestedStructRoundTripTests
     [Fact]
     public void GrowLitter_GrowsBasketAndCount_KeepsMotherAndMood()
     {
-        string result = NestedSample.growLitter("Mylo", 2, 10);
+        string result = NestedSample.GrowLitter("Mylo", 2, 10);
         Assert.Equal("Mylo|A|PLAYFUL|13x14|12|CALM", result);
     }
 
     [Fact]
     public void GrowLitter_DifferentCatAndDelta()
     {
-        string result = NestedSample.growLitter("Oreo", 6, 3);
+        string result = NestedSample.GrowLitter("Oreo", 6, 3);
         Assert.Equal("Oreo|A|PLAYFUL|6x7|9|CALM", result);
     }
 
@@ -72,14 +72,14 @@ public class NestedStructRoundTripTests
     [Fact]
     public void Rehome_GrowsNestedLitter_AndIncrementsRoom()
     {
-        string result = NestedSample.rehome("Oreo", 7);
+        string result = NestedSample.Rehome("Oreo", 7);
         Assert.Equal("Oreo/3/4/8", result);
     }
 
     [Fact]
     public void Rehome_DifferentCatAndRoom()
     {
-        string result = NestedSample.rehome("Mylo", 12);
+        string result = NestedSample.Rehome("Mylo", 12);
         Assert.Equal("Mylo/3/4/13", result);
     }
 
@@ -89,14 +89,14 @@ public class NestedStructRoundTripTests
     [Fact]
     public void CompareLitter_ComparesNestedAndFlatStructAreas()
     {
-        string result = NestedSample.compareLitter("Oreo", 4, 5);
+        string result = NestedSample.CompareLitter("Oreo", 4, 5);
         Assert.Equal("6vs20", result);
     }
 
     [Fact]
     public void CompareLitter_DifferentDimensions()
     {
-        string result = NestedSample.compareLitter("Mylo", 6, 2);
+        string result = NestedSample.CompareLitter("Mylo", 6, 2);
         Assert.Equal("6vs12", result);
     }
 
@@ -105,14 +105,14 @@ public class NestedStructRoundTripTests
     [Fact]
     public void LitterMembers_ComputedPropertyInstanceMethodAndStaticFactory()
     {
-        string result = NestedSample.litterMembers("Oreo");
+        string result = NestedSample.LitterMembers("Oreo");
         Assert.Equal("Oreox4@2x3/Calm|5|1", result);
     }
 
     [Fact]
     public void LitterMembers_DifferentCat()
     {
-        string result = NestedSample.litterMembers("Mylo");
+        string result = NestedSample.LitterMembers("Mylo");
         Assert.Equal("Mylox4@2x3/Calm|5|1", result);
     }
 
@@ -122,14 +122,14 @@ public class NestedStructRoundTripTests
     [Fact]
     public void ShelterNest_RoundTripsThroughSettableStructProperty()
     {
-        string result = NestedSample.shelterNest("Red", 7, 8);
+        string result = NestedSample.ShelterNest("Red", 7, 8);
         Assert.Equal("Red/7,8/30/True|Red|7", result);
     }
 
     [Fact]
     public void ShelterNest_DifferentColourAndPosition()
     {
-        string result = NestedSample.shelterNest("Blue", 1, 2);
+        string result = NestedSample.ShelterNest("Blue", 1, 2);
         Assert.Equal("Blue/1,2/30/True|Blue|1", result);
     }
 
@@ -139,7 +139,7 @@ public class NestedStructRoundTripTests
     [Fact]
     public void NestedValueEquality_HoldsAcrossCopy_AndDiffersTwoLevelsDown()
     {
-        bool result = NestedSample.nestedValueEquality();
+        bool result = NestedSample.NestedValueEquality();
         Assert.True(result);
     }
 }

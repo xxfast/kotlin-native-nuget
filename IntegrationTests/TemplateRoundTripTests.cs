@@ -22,7 +22,7 @@ public class TemplateRoundTripTests
     public void Greet_Oreo_ReturnsHelloOreo()
     {
         // Oreo: black with white in the middle, like the biscuit.
-        string result = Greetings.greet("Oreo");
+        string result = Greetings.Greet("Oreo");
         Assert.Equal("Hello, Oreo", result);
     }
 
@@ -30,7 +30,7 @@ public class TemplateRoundTripTests
     public void Greet_Mylo_ReturnsHelloMylo()
     {
         // Mylo: brown and creamy, like the drink Milo.
-        string result = Greetings.greet("Mylo");
+        string result = Greetings.Greet("Mylo");
         Assert.Equal("Hello, Mylo", result);
     }
 
@@ -39,7 +39,7 @@ public class TemplateRoundTripTests
     // rendered through the static `Template.render(template, name)` consumer.
     //
     //   C# IntegrationTests
-    //     -> (forward bridge, Interop.cs)        Greetings.greetViaConstructor("Oreo")
+    //     -> (forward bridge, Interop.cs)        Greetings.GreetViaConstructor("Oreo")
     //       -> Kotlin test-library             fun greetViaConstructor(name)  (Greetings.kt)
     //         -> (reverse bridge, ADR-052 ctor)  test.text.Template("Hello, {name}")
     //           -> real C# TestDependency NuGet  new Template("Hello, {name}")
@@ -54,7 +54,7 @@ public class TemplateRoundTripTests
     public void GreetViaConstructor_Oreo_ReturnsHelloOreo()
     {
         // Oreo: black with white in the middle, like the biscuit.
-        string result = Greetings.greetViaConstructor("Oreo");
+        string result = Greetings.GreetViaConstructor("Oreo");
         Assert.Equal("Hello, Oreo", result);
     }
 
@@ -62,7 +62,7 @@ public class TemplateRoundTripTests
     public void GreetViaConstructor_Mylo_ReturnsHelloMylo()
     {
         // Mylo: brown and creamy, like the drink Milo.
-        string result = Greetings.greetViaConstructor("Mylo");
+        string result = Greetings.GreetViaConstructor("Mylo");
         Assert.Equal("Hello, Mylo", result);
     }
 
@@ -72,7 +72,7 @@ public class TemplateRoundTripTests
     // rendered through the instance `Apply(string)` method rather than the static `Render`.
     //
     //   C# IntegrationTests
-    //     -> (forward bridge, Interop.cs)        Greetings.greetViaInstanceMembers("Oreo")
+    //     -> (forward bridge, Interop.cs)        Greetings.GreetViaInstanceMembers("Oreo")
     //       -> Kotlin test-library             fun greetViaInstanceMembers(name)  (Greetings.kt)
     //         -> (reverse bridge, ADR-052 ctor)    test.text.Template("Hello, {name}")
     //         -> (reverse bridge, this feature)    template.name = name           (Name setter)
@@ -90,7 +90,7 @@ public class TemplateRoundTripTests
     public void GreetViaInstanceMembers_Oreo_ReturnsHelloOreo()
     {
         // Oreo: black with white in the middle, like the biscuit.
-        string result = Greetings.greetViaInstanceMembers("Oreo");
+        string result = Greetings.GreetViaInstanceMembers("Oreo");
         Assert.Equal("Hello, Oreo", result);
     }
 
@@ -98,7 +98,7 @@ public class TemplateRoundTripTests
     public void GreetViaInstanceMembers_Mylo_ReturnsHelloMylo()
     {
         // Mylo: brown and creamy, like the drink Milo.
-        string result = Greetings.greetViaInstanceMembers("Mylo");
+        string result = Greetings.GreetViaInstanceMembers("Mylo");
         Assert.Equal("Hello, Mylo", result);
     }
 
@@ -108,8 +108,8 @@ public class TemplateRoundTripTests
     [Fact]
     public void StaticProperties_MyloNameAndRenderCount_RoundTripThroughKotlin()
     {
-        string name = Greetings.setDefaultTemplateCatName("Mylo");
-        int renderCount = Greetings.templateRenderCount();
+        string name = Greetings.SetDefaultTemplateCatName("Mylo");
+        int renderCount = Greetings.TemplateRenderCount();
 
         Assert.Equal("Mylo", name);
         Assert.True(renderCount >= 0);

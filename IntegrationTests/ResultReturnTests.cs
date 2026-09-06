@@ -26,7 +26,7 @@ public class ResultReturnTests
     [Fact]
     public void Run_ResultOfUnit_BindsAsVoidAndSucceeds()
     {
-        using var service = ResultSample.service();
+        using var service = ResultSample.Service();
 
         // Compile-time contract: Run() is void, not Unit-returning and not a bool Try shape.
         Assert.Null(Record.Exception(() => service.Run()));
@@ -45,7 +45,7 @@ public class ResultReturnTests
     [Fact]
     public void Feed_Mylo_ResultSuccess_ReturnsThePayloadAsAPlainString()
     {
-        using var service = ResultSample.service();
+        using var service = ResultSample.Service();
 
         // Compile-time contract: the return type is string, not Result<string>.
         string treat = service.Feed("Mylo");
@@ -58,7 +58,7 @@ public class ResultReturnTests
     [Fact]
     public void Feed_Oreo_ResultFailure_ThrowsArgumentException()
     {
-        using var service = ResultSample.service();
+        using var service = ResultSample.Service();
 
         Assert.ThrowsAny<ArgumentException>(() => service.Feed("Oreo"));
     }
@@ -66,7 +66,7 @@ public class ResultReturnTests
     [Fact]
     public void Feed_Oreo_ResultFailure_IsExactType_KotlinArgumentException()
     {
-        using var service = ResultSample.service();
+        using var service = ResultSample.Service();
 
         var ex = Assert.ThrowsAny<ArgumentException>(() => service.Feed("Oreo"));
 
@@ -76,7 +76,7 @@ public class ResultReturnTests
     [Fact]
     public void Feed_Oreo_ResultFailure_KotlinType_IsIllegalArgumentException()
     {
-        using var service = ResultSample.service();
+        using var service = ResultSample.Service();
 
         var ex = Assert.ThrowsAny<ArgumentException>(() => service.Feed("Oreo"));
         var ke = (IKotlinException)ex;
@@ -87,7 +87,7 @@ public class ResultReturnTests
     [Fact]
     public void Feed_Oreo_ResultFailure_CarriesTheKotlinMessage()
     {
-        using var service = ResultSample.service();
+        using var service = ResultSample.Service();
 
         var ex = Assert.ThrowsAny<ArgumentException>(() => service.Feed("Oreo"));
 
@@ -99,7 +99,7 @@ public class ResultReturnTests
     {
         // A Result.failure is constructed, never thrown, on the Kotlin side. The trace is captured
         // at construction, so it must still be present after getOrThrow() re-raises it.
-        using var service = ResultSample.service();
+        using var service = ResultSample.Service();
 
         var ex = Assert.ThrowsAny<ArgumentException>(() => service.Feed("Oreo"));
         var ke = (IKotlinException)ex;
@@ -112,7 +112,7 @@ public class ResultReturnTests
     public void Feed_Oreo_ResultFailure_HasNoInnerException()
     {
         // The failure was built with no cause; the envelope must not invent one.
-        using var service = ResultSample.service();
+        using var service = ResultSample.Service();
 
         var ex = Assert.ThrowsAny<ArgumentException>(() => service.Feed("Oreo"));
 
@@ -123,7 +123,7 @@ public class ResultReturnTests
     public void Feed_FailureThenSuccess_LeavesTheInstanceUsable()
     {
         // The errorOut path must not poison the handle: Oreo's refusal cannot cost Mylo his treat.
-        using var service = ResultSample.service();
+        using var service = ResultSample.Service();
 
         Assert.ThrowsAny<ArgumentException>(() => service.Feed("Oreo"));
 

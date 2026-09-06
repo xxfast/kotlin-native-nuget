@@ -23,14 +23,14 @@ public class NullableFunctionExceptionPropagationTests
     {
         // Under ADR-029, IllegalArgumentException maps to KotlinArgumentException : ArgumentException
         Assert.ThrowsAny<ArgumentException>(
-            () => Mappings.nullableIntOrThrow(-1));
+            () => Mappings.NullableIntOrThrow(-1));
     }
 
     [Fact]
     public void NullableIntOrThrow_NegativeInput_IsExactType_KotlinArgumentException()
     {
         var ex = Assert.ThrowsAny<ArgumentException>(
-            () => Mappings.nullableIntOrThrow(-1));
+            () => Mappings.NullableIntOrThrow(-1));
         Assert.IsType<KotlinArgumentException>(ex);
     }
 
@@ -38,7 +38,7 @@ public class NullableFunctionExceptionPropagationTests
     public void NullableIntOrThrow_NegativeInput_KotlinType_IsIllegalArgumentException()
     {
         var ex = Assert.ThrowsAny<ArgumentException>(
-            () => Mappings.nullableIntOrThrow(-1));
+            () => Mappings.NullableIntOrThrow(-1));
         var ke = (IKotlinException)ex;
         Assert.Equal("kotlin.IllegalArgumentException", ke.KotlinType);
     }
@@ -47,7 +47,7 @@ public class NullableFunctionExceptionPropagationTests
     public void NullableIntOrThrow_NegativeInput_WithMessage()
     {
         var ex = Assert.ThrowsAny<ArgumentException>(
-            () => Mappings.nullableIntOrThrow(-1));
+            () => Mappings.NullableIntOrThrow(-1));
         Assert.Equal("input must not be negative", ex.Message);
     }
 
@@ -55,7 +55,7 @@ public class NullableFunctionExceptionPropagationTests
     public void NullableIntOrThrow_NegativeInput_KotlinStackTrace_NonEmpty()
     {
         var ex = Assert.ThrowsAny<ArgumentException>(
-            () => Mappings.nullableIntOrThrow(-1));
+            () => Mappings.NullableIntOrThrow(-1));
         var ke = (IKotlinException)ex;
         _testOutputHelper.WriteLine(ke.KotlinStackTrace);
         Assert.NotNull(ke.KotlinStackTrace);
@@ -65,13 +65,13 @@ public class NullableFunctionExceptionPropagationTests
     [Fact]
     public void NullableIntOrThrow_ZeroInput_ReturnsNull()
     {
-        Assert.Null(Mappings.nullableIntOrThrow(0));
+        Assert.Null(Mappings.NullableIntOrThrow(0));
     }
 
     [Fact]
     public void NullableIntOrThrow_PositiveInput_ReturnsValue()
     {
-        Assert.Equal(5, Mappings.nullableIntOrThrow(5));
+        Assert.Equal(5, Mappings.NullableIntOrThrow(5));
     }
 
     // --- String? ---
@@ -80,14 +80,14 @@ public class NullableFunctionExceptionPropagationTests
     public void NullableStringOrThrow_NegativeInput_ThrowsArgumentException()
     {
         Assert.ThrowsAny<ArgumentException>(
-            () => Mappings.nullableStringOrThrow(-1));
+            () => Mappings.NullableStringOrThrow(-1));
     }
 
     [Fact]
     public void NullableStringOrThrow_NegativeInput_IsExactType_KotlinArgumentException()
     {
         var ex = Assert.ThrowsAny<ArgumentException>(
-            () => Mappings.nullableStringOrThrow(-1));
+            () => Mappings.NullableStringOrThrow(-1));
         Assert.IsType<KotlinArgumentException>(ex);
     }
 
@@ -95,7 +95,7 @@ public class NullableFunctionExceptionPropagationTests
     public void NullableStringOrThrow_NegativeInput_KotlinType_IsIllegalArgumentException()
     {
         var ex = Assert.ThrowsAny<ArgumentException>(
-            () => Mappings.nullableStringOrThrow(-1));
+            () => Mappings.NullableStringOrThrow(-1));
         var ke = (IKotlinException)ex;
         Assert.Equal("kotlin.IllegalArgumentException", ke.KotlinType);
     }
@@ -104,7 +104,7 @@ public class NullableFunctionExceptionPropagationTests
     public void NullableStringOrThrow_NegativeInput_WithMessage()
     {
         var ex = Assert.ThrowsAny<ArgumentException>(
-            () => Mappings.nullableStringOrThrow(-1));
+            () => Mappings.NullableStringOrThrow(-1));
         Assert.Equal("input must not be negative", ex.Message);
     }
 
@@ -112,7 +112,7 @@ public class NullableFunctionExceptionPropagationTests
     public void NullableStringOrThrow_NegativeInput_KotlinStackTrace_NonEmpty()
     {
         var ex = Assert.ThrowsAny<ArgumentException>(
-            () => Mappings.nullableStringOrThrow(-1));
+            () => Mappings.NullableStringOrThrow(-1));
         var ke = (IKotlinException)ex;
         _testOutputHelper.WriteLine(ke.KotlinStackTrace);
         Assert.NotNull(ke.KotlinStackTrace);
@@ -122,12 +122,12 @@ public class NullableFunctionExceptionPropagationTests
     [Fact]
     public void NullableStringOrThrow_ZeroInput_ReturnsNull()
     {
-        Assert.Null(Mappings.nullableStringOrThrow(0));
+        Assert.Null(Mappings.NullableStringOrThrow(0));
     }
 
     [Fact]
     public void NullableStringOrThrow_PositiveInput_ReturnsValue()
     {
-        Assert.Equal("value-5", Mappings.nullableStringOrThrow(5));
+        Assert.Equal("value-5", Mappings.NullableStringOrThrow(5));
     }
 }

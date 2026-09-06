@@ -112,8 +112,8 @@ class Tier1UuidMappingTest {
       "expected the data-class constructor to take a Guid; generatedCSharp=${result.generatedCSharp}",
     )
     assertTrue(
-      "public global::System.Guid wellKnownChip()" in result.generatedCSharp ||
-          "public static global::System.Guid wellKnownChip()" in result.generatedCSharp,
+      "public global::System.Guid WellKnownChip()" in result.generatedCSharp ||
+          "public static global::System.Guid WellKnownChip()" in result.generatedCSharp,
       "expected the top-level function to return a Guid; generatedCSharp=${result.generatedCSharp}",
     )
   }

@@ -134,8 +134,8 @@ class Tier1BareNullableEnumTest {
     assertContains(kotlin, "napMood(hour)!!.ordinal")
 
     val cs: String = result.generatedCSharp
-    assertContains(cs, "private static extern int napMood_value(int hour, out IntPtr error);")
-    assertContains(cs, "public static global::Interop.Mood? napMood(int hour)")
+    assertContains(cs, "private static extern int NapMood_value(int hour, out IntPtr error);")
+    assertContains(cs, "public static global::Interop.Mood? NapMood(int hour)")
     assertContains(cs, "return (global::Interop.Mood)__nuget_value;")
   }
 }

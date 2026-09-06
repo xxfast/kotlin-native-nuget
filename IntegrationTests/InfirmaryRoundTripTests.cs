@@ -67,7 +67,7 @@ public class InfirmaryRoundTripTests
     public void OreoDischarge_Throws_SurfacesInvalidOperationException()
     {
         AssertManaged(
-            Parse(InfirmarySample.oreoDischargeThrows()),
+            Parse(InfirmarySample.OreoDischargeThrows()),
             "System.InvalidOperationException",
             "Oreo is not cleared for discharge");
     }
@@ -79,7 +79,7 @@ public class InfirmaryRoundTripTests
     public void OreoTemperature_Throws_SurfacesOverflowException()
     {
         AssertManaged(
-            Parse(InfirmarySample.oreoTemperatureThrows()),
+            Parse(InfirmarySample.OreoTemperatureThrows()),
             "System.OverflowException",
             "Oreo ran too hot for the thermometer");
     }
@@ -91,7 +91,7 @@ public class InfirmaryRoundTripTests
     public void OreoChart_Throws_SurfacesFormatException()
     {
         AssertManaged(
-            Parse(InfirmarySample.oreoChartThrows()),
+            Parse(InfirmarySample.OreoChartThrows()),
             "System.FormatException",
             "Oreo wrote his chart in claw marks");
     }
@@ -104,7 +104,7 @@ public class InfirmaryRoundTripTests
     public void OreoAdmit_Throws_SurfacesNotSupportedException()
     {
         AssertManaged(
-            Parse(InfirmarySample.oreoAdmitThrows()),
+            Parse(InfirmarySample.OreoAdmitThrows()),
             "System.NotSupportedException",
             "the ward is full, Oreo has to wait");
     }
@@ -115,7 +115,7 @@ public class InfirmaryRoundTripTests
     public void OreoOccupancy_Getter_Throws_SurfacesTimeoutException()
     {
         AssertManaged(
-            Parse(InfirmarySample.oreoOccupancyThrows()),
+            Parse(InfirmarySample.OreoOccupancyThrows()),
             "System.TimeoutException",
             "the ward count is still being taken");
     }
@@ -129,7 +129,7 @@ public class InfirmaryRoundTripTests
     public void OreoExamine_StructReturn_Throws_SurfacesArgumentException()
     {
         AssertManaged(
-            Parse(InfirmarySample.oreoExamineThrows()),
+            Parse(InfirmarySample.OreoExamineThrows()),
             "System.ArgumentException",
             "Oreo is not a registered patient");
     }
@@ -145,7 +145,7 @@ public class InfirmaryRoundTripTests
     public void MyloWardSignSetter_Throws_SurfacesUnauthorizedAccessException()
     {
         AssertManaged(
-            Parse(InfirmarySample.myloWardSignSetterThrows()),
+            Parse(InfirmarySample.MyloWardSignSetterThrows()),
             "System.UnauthorizedAccessException",
             "only the vet renames the ward, not Mylo");
     }
@@ -158,7 +158,7 @@ public class InfirmaryRoundTripTests
     public void MyloQuarantineConstructor_Throws_SurfacesArgumentException()
     {
         AssertManaged(
-            Parse(InfirmarySample.myloQuarantineCtorThrows()),
+            Parse(InfirmarySample.MyloQuarantineCtorThrows()),
             "System.ArgumentException",
             "no free quarantine pen: Mylo already has the good pen");
     }
@@ -172,7 +172,7 @@ public class InfirmaryRoundTripTests
     [Fact]
     public void MyloChartFor_NonThrowingStringSibling_StillReturnsItsValue()
     {
-        Assert.Equal("Mylo is purring, chart clean", InfirmarySample.myloChartFor());
+        Assert.Equal("Mylo is purring, chart clean", InfirmarySample.MyloChartFor());
     }
 
     [Fact]
@@ -180,7 +180,7 @@ public class InfirmaryRoundTripTests
     {
         // tag:active:grade:mood: every converted component of the Shape A struct actually
         // written through its out-pointer, which is what the error path must NOT do.
-        Assert.Equal("Mylo:true:A:CALM", InfirmarySample.myloExamineCalm());
+        Assert.Equal("Mylo:true:A:CALM", InfirmarySample.MyloExamineCalm());
     }
 
     // The two survival tests: throw first, then call the non-throwing sibling on the SAME
@@ -190,7 +190,7 @@ public class InfirmaryRoundTripTests
     [Fact]
     public void OreoChartThrows_ThenMyloChartFor_OnTheSameInfirmary()
     {
-        string[] parts = InfirmarySample.oreoChartThrowsThenMyloChartFor().Split('~');
+        string[] parts = InfirmarySample.OreoChartThrowsThenMyloChartFor().Split('~');
         Assert.Equal(2, parts.Length);
         AssertManaged(
             Parse(parts[0]),
@@ -202,7 +202,7 @@ public class InfirmaryRoundTripTests
     [Fact]
     public void OreoExamineThrows_ThenMyloExamineCalm_OnTheSameInfirmary()
     {
-        string[] parts = InfirmarySample.oreoExamineThrowsThenMyloExamineCalm().Split('~');
+        string[] parts = InfirmarySample.OreoExamineThrowsThenMyloExamineCalm().Split('~');
         Assert.Equal(2, parts.Length);
         AssertManaged(
             Parse(parts[0]),

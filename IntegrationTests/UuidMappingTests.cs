@@ -33,7 +33,7 @@ public class UuidMappingTests
     [Fact]
     public void WellKnownChip_TopLevelReturn_RendersTheSameStringKotlinParsed()
     {
-        Guid chip = MicrochipKt.wellKnownChip();
+        Guid chip = MicrochipKt.WellKnownChip();
 
         Assert.Equal(WellKnown, chip.ToString());
     }
@@ -41,7 +41,7 @@ public class UuidMappingTests
     [Fact]
     public void WellKnownChip_TopLevelReturn_EqualsTheParsedGuid()
     {
-        Assert.Equal(Guid.Parse(WellKnown), MicrochipKt.wellKnownChip());
+        Assert.Equal(Guid.Parse(WellKnown), MicrochipKt.WellKnownChip());
     }
 
     // --- Guid.Empty <-> Uuid.NIL, across the static (object) export path ---
@@ -254,13 +254,13 @@ public class UuidMappingTests
     [Fact]
     public void ParseChip_TopLevelNullableReturn_ParsesAWellFormedId()
     {
-        Assert.Equal(Guid.Parse(WellKnown), MicrochipKt.parseChip(WellKnown));
+        Assert.Equal(Guid.Parse(WellKnown), MicrochipKt.ParseChip(WellKnown));
     }
 
     [Fact]
     public void ParseChip_TopLevelNullableReturn_IsNullForRubbish()
     {
-        Assert.Null(MicrochipKt.parseChip("Mylo chewed the paperwork"));
+        Assert.Null(MicrochipKt.ParseChip("Mylo chewed the paperwork"));
     }
 
     // --- The issue's exact repro: a data class whose sole component is a Uuid ---

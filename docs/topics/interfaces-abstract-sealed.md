@@ -290,7 +290,7 @@ The nullable getter returns `null` for a null handle and discriminates otherwise
 From `IntegrationTests/Issue54Tests.cs`:
 
 ```C#
-using Issue54Drawing drawing = Issue54Sample.curledCats();
+using Issue54Drawing drawing = Issue54Sample.CurledCats();
 
 using Issue54Shape shape = drawing.Shape;
 
@@ -385,7 +385,7 @@ public bool Refreshing => Native_Get_refreshing(_handle, out _);
 From `IntegrationTests/Issue39Tests.cs`:
 
 ```C#
-using Issue39State state = Issue39Sample.loadedCats();
+using Issue39State state = Issue39Sample.LoadedCats();
 var loaded = Assert.IsType<Issue39State.Loaded>(state);
 
 IReadOnlyList<Issue39Item> items = loaded.Items;
@@ -737,7 +737,7 @@ From `IntegrationTests/Issue38Tests.cs`:
 [Fact]
 public void State_Loaded_WithNulls_ErrorIsNull()
 {
-    using Issue38State state = Issue38Sample.issue38State(1);
+    using Issue38State state = Issue38Sample.Issue38State(1);
     var loaded = Assert.IsType<Issue38State.Loaded>(state);
     string? error = loaded.Error;
     Assert.Null(error);
@@ -1001,7 +1001,7 @@ public void Befriend_ThenFriend_ReturnsBefriendedPetAsIPet()
 [Fact]
 public void StrayPet_AnonymousKotlinObject_DispatchesThroughIPet()
 {
-    using IPet stray = PetKt.strayPet();
+    using IPet stray = PetKt.StrayPet();
     Assert.Equal("Whiskers the Stray", stray.Name);
     Assert.Equal(3, stray.Legs);
     Assert.Null(stray.Nickname);
@@ -1262,7 +1262,7 @@ Pattern matching over a sealed hierarchy, from `IntegrationTests/SealedClassTest
 [Fact]
 public void Observation_WorksWithPatternMatching()
 {
-    using Observation result = ObservationKt.openBox("Oreo");
+    using Observation result = ObservationKt.OpenBox("Oreo");
 
     string message = result switch
     {

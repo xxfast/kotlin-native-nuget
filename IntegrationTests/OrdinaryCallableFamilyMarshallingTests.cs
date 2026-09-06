@@ -18,7 +18,7 @@ public class OrdinaryCallableFamilyMarshallingTests
     [Fact]
     public void ClinicSample_Admit_ReturnsMarshalledPatient()
     {
-        using Patient patient = ClinicSample.admit("Mylo");
+        using Patient patient = ClinicSample.Admit("Mylo");
 
         Assert.Equal("Mylo", patient.Name);
     }
@@ -26,9 +26,9 @@ public class OrdinaryCallableFamilyMarshallingTests
     [Fact]
     public void Mappings_NullableIntProbe_PreservesTopLevelTwoCallConvention()
     {
-        Mappings.resetNullableIntProbe();
+        Mappings.ResetNullableIntProbe();
 
-        Assert.Equal(42, Mappings.nullableIntProbe());
-        Assert.Equal(2, Mappings.nullableIntProbeCallCount());
+        Assert.Equal(42, Mappings.NullableIntProbe());
+        Assert.Equal(2, Mappings.NullableIntProbeCallCount());
     }
 }

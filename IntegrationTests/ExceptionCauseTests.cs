@@ -19,7 +19,7 @@ public class ExceptionCauseTests
     public void Oreo_AllergyReaction_InnerException_IsNotNull()
     {
         var ex = Assert.ThrowsAny<ArgumentException>(
-            () => CauseExceptions.feedCatWithAllergy("Oreo"));
+            () => CauseExceptions.FeedCatWithAllergy("Oreo"));
         Assert.NotNull(ex.InnerException);
     }
 
@@ -27,7 +27,7 @@ public class ExceptionCauseTests
     public void Oreo_AllergyReaction_OuterType_IsKotlinArgumentException()
     {
         var ex = Assert.ThrowsAny<ArgumentException>(
-            () => CauseExceptions.feedCatWithAllergy("Oreo"));
+            () => CauseExceptions.FeedCatWithAllergy("Oreo"));
         Assert.IsType<KotlinArgumentException>(ex);
     }
 
@@ -36,7 +36,7 @@ public class ExceptionCauseTests
     {
         // RuntimeException is unmapped — falls back to base KotlinException
         var ex = Assert.ThrowsAny<ArgumentException>(
-            () => CauseExceptions.feedCatWithAllergy("Oreo"));
+            () => CauseExceptions.FeedCatWithAllergy("Oreo"));
         Assert.IsType<KotlinException>(ex.InnerException);
     }
 
@@ -44,7 +44,7 @@ public class ExceptionCauseTests
     public void Oreo_AllergyReaction_OuterMessage_IsCorrect()
     {
         var ex = Assert.ThrowsAny<ArgumentException>(
-            () => CauseExceptions.feedCatWithAllergy("Oreo"));
+            () => CauseExceptions.FeedCatWithAllergy("Oreo"));
         Assert.Equal("Oreo had a reaction", ex.Message);
     }
 
@@ -52,7 +52,7 @@ public class ExceptionCauseTests
     public void Oreo_AllergyReaction_InnerMessage_IsCorrect()
     {
         var ex = Assert.ThrowsAny<ArgumentException>(
-            () => CauseExceptions.feedCatWithAllergy("Oreo"));
+            () => CauseExceptions.FeedCatWithAllergy("Oreo"));
         var inner = (KotlinException)ex.InnerException!;
         Assert.Equal("Oreo is allergic to this treat", inner.Message);
     }
@@ -61,7 +61,7 @@ public class ExceptionCauseTests
     public void Oreo_AllergyReaction_InnerKotlinType_ContainsRuntimeException()
     {
         var ex = Assert.ThrowsAny<ArgumentException>(
-            () => CauseExceptions.feedCatWithAllergy("Oreo"));
+            () => CauseExceptions.FeedCatWithAllergy("Oreo"));
         var inner = (KotlinException)ex.InnerException!;
         Assert.Contains("RuntimeException", inner.KotlinType);
     }
@@ -70,7 +70,7 @@ public class ExceptionCauseTests
     public void Oreo_AllergyReaction_InnerException_HasNoFurtherCause()
     {
         var ex = Assert.ThrowsAny<ArgumentException>(
-            () => CauseExceptions.feedCatWithAllergy("Oreo"));
+            () => CauseExceptions.FeedCatWithAllergy("Oreo"));
         Assert.Null(ex.InnerException!.InnerException);
     }
 
@@ -78,7 +78,7 @@ public class ExceptionCauseTests
     public void Oreo_AllergyReaction_InnerException_HasNonEmptyKotlinStackTrace()
     {
         var ex = Assert.ThrowsAny<ArgumentException>(
-            () => CauseExceptions.feedCatWithAllergy("Oreo"));
+            () => CauseExceptions.FeedCatWithAllergy("Oreo"));
         var inner = (KotlinException)ex.InnerException!;
         Assert.NotNull(inner.KotlinStackTrace);
         Assert.NotEmpty(inner.KotlinStackTrace);
@@ -88,7 +88,7 @@ public class ExceptionCauseTests
     public void Oreo_AllergyReaction_ToString_ContainsInnerExceptionMarker()
     {
         var ex = Assert.ThrowsAny<ArgumentException>(
-            () => CauseExceptions.feedCatWithAllergy("Oreo"));
+            () => CauseExceptions.FeedCatWithAllergy("Oreo"));
         Assert.Contains("--->", ex.ToString());
     }
 
@@ -97,7 +97,7 @@ public class ExceptionCauseTests
     [Fact]
     public void Mylo_AllergyFree_Succeeds()
     {
-        string result = CauseExceptions.feedCatWithAllergy("Mylo");
+        string result = CauseExceptions.FeedCatWithAllergy("Mylo");
         Assert.Equal("Mylo ate happily", result);
     }
 
@@ -117,7 +117,7 @@ public class ExceptionCauseTests
     public void Oreo_GroomingFailed_DeepChain_OuterMessage_IsCorrect()
     {
         var ex = Assert.ThrowsAny<ArgumentException>(
-            () => CauseExceptions.groomCat("Oreo"));
+            () => CauseExceptions.GroomCat("Oreo"));
         Assert.Equal("Oreo's grooming failed", ex.Message);
     }
 
@@ -125,7 +125,7 @@ public class ExceptionCauseTests
     public void Oreo_GroomingFailed_DeepChain_OuterType_IsKotlinArgumentException()
     {
         var ex = Assert.ThrowsAny<ArgumentException>(
-            () => CauseExceptions.groomCat("Oreo"));
+            () => CauseExceptions.GroomCat("Oreo"));
         Assert.IsType<KotlinArgumentException>(ex);
     }
 
@@ -134,7 +134,7 @@ public class ExceptionCauseTests
     {
         // IllegalStateException is mapped to KotlinInvalidOperationException : InvalidOperationException
         var ex = Assert.ThrowsAny<ArgumentException>(
-            () => CauseExceptions.groomCat("Oreo"));
+            () => CauseExceptions.GroomCat("Oreo"));
         Assert.IsType<KotlinInvalidOperationException>(ex.InnerException);
     }
 
@@ -142,7 +142,7 @@ public class ExceptionCauseTests
     public void Oreo_GroomingFailed_DeepChain_MidCause_IsCatchableAs_InvalidOperationException()
     {
         var ex = Assert.ThrowsAny<ArgumentException>(
-            () => CauseExceptions.groomCat("Oreo"));
+            () => CauseExceptions.GroomCat("Oreo"));
         Assert.IsAssignableFrom<InvalidOperationException>(ex.InnerException);
     }
 
@@ -150,7 +150,7 @@ public class ExceptionCauseTests
     public void Oreo_GroomingFailed_DeepChain_MidCause_KotlinType_ContainsIllegalStateException()
     {
         var ex = Assert.ThrowsAny<ArgumentException>(
-            () => CauseExceptions.groomCat("Oreo"));
+            () => CauseExceptions.GroomCat("Oreo"));
         var mid = (IKotlinException)ex.InnerException!;
         Assert.Contains("IllegalStateException", mid.KotlinType);
     }
@@ -160,7 +160,7 @@ public class ExceptionCauseTests
     {
         // RuntimeException is NOT mapped — stays base KotlinException
         var ex = Assert.ThrowsAny<ArgumentException>(
-            () => CauseExceptions.groomCat("Oreo"));
+            () => CauseExceptions.GroomCat("Oreo"));
         var mid = (InvalidOperationException)ex.InnerException!;
         Assert.IsType<KotlinException>(mid.InnerException);
     }
@@ -169,7 +169,7 @@ public class ExceptionCauseTests
     public void Oreo_GroomingFailed_DeepChain_RootCause_Message_IsCorrect()
     {
         var ex = Assert.ThrowsAny<ArgumentException>(
-            () => CauseExceptions.groomCat("Oreo"));
+            () => CauseExceptions.GroomCat("Oreo"));
         var mid = (InvalidOperationException)ex.InnerException!;
         var root = (KotlinException)mid.InnerException!;
         Assert.Equal("clippers jammed", root.Message);
@@ -179,7 +179,7 @@ public class ExceptionCauseTests
     public void Oreo_GroomingFailed_DeepChain_RootCause_HasNoFurtherCause()
     {
         var ex = Assert.ThrowsAny<ArgumentException>(
-            () => CauseExceptions.groomCat("Oreo"));
+            () => CauseExceptions.GroomCat("Oreo"));
         var mid = (InvalidOperationException)ex.InnerException!;
         var root = (KotlinException)mid.InnerException!;
         Assert.Null(root.InnerException);
@@ -188,7 +188,7 @@ public class ExceptionCauseTests
     [Fact]
     public void Mylo_Grooming_Succeeds()
     {
-        string result = CauseExceptions.groomCat("Mylo");
+        string result = CauseExceptions.GroomCat("Mylo");
         Assert.Equal("Mylo is fluffy", result);
     }
 
@@ -266,7 +266,7 @@ public class ExceptionCauseTests
         // feedCatTreat throws IllegalArgumentException with no cause
         // Under ADR-029 it becomes KotlinArgumentException, but InnerException must still be null
         var ex = Assert.ThrowsAny<ArgumentException>(
-            () => SyncExceptions.feedCatTreat("Oreo"));
+            () => SyncExceptions.FeedCatTreat("Oreo"));
         Assert.IsType<KotlinArgumentException>(ex);
         Assert.Null(ex.InnerException);
     }

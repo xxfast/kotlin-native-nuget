@@ -87,7 +87,7 @@ public class DurationMappingTests
     {
         // Kotlin's napEpsilon() is 150 ns; 50 ns of that is below the wire form's 100ns tick
         // resolution. Truncation gives 1 tick, rounding would give 2.
-        var result = NapTrackerKt.napEpsilon();
+        var result = NapTrackerKt.NapEpsilon();
 
         Assert.Equal(1L, result.Ticks);
     }
@@ -140,7 +140,7 @@ public class DurationMappingTests
     [Fact]
     public void NapEpsilon_TopLevelReturn_IsTheSmallestRecordedNap()
     {
-        var result = NapTrackerKt.napEpsilon();
+        var result = NapTrackerKt.NapEpsilon();
 
         Assert.True(result > TimeSpan.Zero);
         Assert.True(result < TimeSpan.FromMilliseconds(1));
@@ -149,7 +149,7 @@ public class DurationMappingTests
     [Fact]
     public void ParseNap_TopLevelNullableReturn_ReturnsTwentyMinutesWhenOreoMentioned()
     {
-        var result = NapTrackerKt.parseNap("Oreo dozed off on the keyboard");
+        var result = NapTrackerKt.ParseNap("Oreo dozed off on the keyboard");
 
         Assert.Equal(TimeSpan.FromMinutes(20), result);
     }
@@ -158,7 +158,7 @@ public class DurationMappingTests
     public void ParseNap_TopLevelNullableReturn_NullWhenOreoNotMentioned()
     {
         // Mylo naps off the record, so a note that doesn't mention Oreo isn't a tracked nap.
-        var result = NapTrackerKt.parseNap("Mylo was asleep in the laundry basket");
+        var result = NapTrackerKt.ParseNap("Mylo was asleep in the laundry basket");
 
         Assert.Null(result);
     }

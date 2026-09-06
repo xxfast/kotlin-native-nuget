@@ -362,7 +362,7 @@ public int AddCodes(ISet<int> codes)
 
 public static int BatchScore(IReadOnlyDictionary<string, int> scores) { /* same shape, static */ }
 
-public static int countLabels(IReadOnlySet<string> labels) { /* top-level function */ }
+public static int CountLabels(IReadOnlySet<string> labels) { /* top-level function */ }
 
 public static int MergeScores(this Patient receiver, IReadOnlyDictionary<string, int> extra) { /* extension */ }
 

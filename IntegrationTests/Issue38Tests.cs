@@ -35,7 +35,7 @@ public class Issue38Tests
     public void State_Loaded_WithValues_ErrorRoundTrips()
     {
         // Oreo: black with white in the middle, like the biscuit, and hard on water bowls.
-        using Issue38State state = Issue38Sample.issue38State(0);
+        using Issue38State state = Issue38Sample.Issue38State(0);
         var loaded = Assert.IsType<Issue38State.Loaded>(state);
         string? error = loaded.Error;
         Assert.Equal("Oreo knocked the water bowl over", error);
@@ -44,7 +44,7 @@ public class Issue38Tests
     [Fact]
     public void State_Loaded_WithValues_RetriesRoundTrips()
     {
-        using Issue38State state = Issue38Sample.issue38State(0);
+        using Issue38State state = Issue38Sample.Issue38State(0);
         var loaded = Assert.IsType<Issue38State.Loaded>(state);
         int? retries = loaded.Retries;
         Assert.Equal(3, retries);
@@ -55,7 +55,7 @@ public class Issue38Tests
     {
         // Mylo — brown and creamy, like the drink Milo — settled in without incident: loaded,
         // but nothing went wrong.
-        using Issue38State state = Issue38Sample.issue38State(1);
+        using Issue38State state = Issue38Sample.Issue38State(1);
         var loaded = Assert.IsType<Issue38State.Loaded>(state);
         string? error = loaded.Error;
         Assert.Null(error);
@@ -64,7 +64,7 @@ public class Issue38Tests
     [Fact]
     public void State_Loaded_WithNulls_RetriesIsNull()
     {
-        using Issue38State state = Issue38Sample.issue38State(1);
+        using Issue38State state = Issue38Sample.Issue38State(1);
         var loaded = Assert.IsType<Issue38State.Loaded>(state);
         int? retries = loaded.Retries;
         Assert.Null(retries);
@@ -75,8 +75,8 @@ public class Issue38Tests
     {
         // The control: the non-null scalar must read the same whether or not its nullable
         // siblings carry a value, so a shifted or miswidened export cannot hide here.
-        using Issue38State withValues = Issue38Sample.issue38State(0);
-        using Issue38State withNulls = Issue38Sample.issue38State(1);
+        using Issue38State withValues = Issue38Sample.Issue38State(0);
+        using Issue38State withNulls = Issue38Sample.Issue38State(1);
         Assert.Equal(7, Assert.IsType<Issue38State.Loaded>(withValues).Code);
         Assert.Equal(7, Assert.IsType<Issue38State.Loaded>(withNulls).Code);
     }
@@ -92,14 +92,14 @@ public class Issue38Tests
     {
         // The nullable-free sibling of the hierarchy must keep working: a fix to the nullable
         // export path must not disturb the data-object branch.
-        using Issue38State state = Issue38Sample.issue38State(2);
+        using Issue38State state = Issue38Sample.Issue38State(2);
         Assert.IsType<Issue38State.Idle>(state);
     }
 
     [Fact]
     public void State_Idle_ToString()
     {
-        using Issue38State state = Issue38Sample.issue38State(2);
+        using Issue38State state = Issue38Sample.Issue38State(2);
         Assert.Equal("Idle", state.ToString());
     }
 
@@ -137,7 +137,7 @@ public class Issue38Tests
     {
         // The pattern the report says is blocked today: branching on a sealed subclass whose
         // payload is nullable.
-        using Issue38State state = Issue38Sample.issue38State(1);
+        using Issue38State state = Issue38Sample.Issue38State(1);
 
         string message = state switch
         {

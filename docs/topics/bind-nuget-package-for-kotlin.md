@@ -63,7 +63,7 @@ to bound NuGet round trip:
 ```C#
 using MyCatLib.Mime;
 
-string mimeType = MimeSample.catPhotoMimeType("oreo.jpg");
+string mimeType = MimeSample.CatPhotoMimeType("oreo.jpg");
 Console.WriteLine(mimeType); // image/jpeg
 ```
 

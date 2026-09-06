@@ -15,7 +15,7 @@ namespace IntegrationTests;
 /// the other platform's numbers means the wrong body ran.
 ///
 /// The static class is <c>PlatformResiduals</c> (Decision 3: the EXPECT's file name), and top-level
-/// functions keep their Kotlin camelCase, as everywhere else in this fixture library.
+/// functions are PascalCase (ADR-110), as everywhere else in this fixture library.
 /// </summary>
 public class ExpectActualResidualsTests
 {
@@ -47,7 +47,7 @@ public class ExpectActualResidualsTests
     {
         // Oreo's collar is in range. `getSealedSubclasses()` on the actual must have found
         // `Strong`, or `signal_get_type`'s exhaustive `when` would not have compiled at all.
-        using Signal reading = PlatformResiduals.collarSignal(10);
+        using Signal reading = PlatformResiduals.CollarSignal(10);
         var strong = Assert.IsType<Signal.Strong>(reading);
         Assert.Equal(10 + ExpectedBoost, strong.Dbm);
     }
@@ -57,7 +57,7 @@ public class ExpectActualResidualsTests
     {
         // Mylo went under the deck. The other branch of the same `when`: discrimination has to
         // work both ways or the type tag is meaningless.
-        using Signal reading = PlatformResiduals.collarSignal(-1);
+        using Signal reading = PlatformResiduals.CollarSignal(-1);
         Assert.IsType<Signal.Lost>(reading);
     }
 
@@ -69,7 +69,7 @@ public class ExpectActualResidualsTests
         // The runtime type behind this handle is the target's `internal` implementing class, which
         // is deliberately NOT exported: ADR-040 dispatches through the interface's own handle-based
         // exports, so a non-exported implementer is expected to work here.
-        using ITransponder collar = PlatformResiduals.transponder();
+        using ITransponder collar = PlatformResiduals.Transponder();
         Assert.Equal(ExpectedPong, collar.Ping());
     }
 
@@ -78,7 +78,7 @@ public class ExpectActualResidualsTests
     [Fact]
     public void Band_ReturnsRunningActualsEntry()
     {
-        Assert.Equal(ExpectedBand, PlatformResiduals.band());
+        Assert.Equal(ExpectedBand, PlatformResiduals.Band());
     }
 
     [Fact]
@@ -98,6 +98,6 @@ public class ExpectActualResidualsTests
         // The value class at a return position. Note this already crosses the ACTUAL's primary
         // constructor as well: the generated `frequency()` shim builds its result through the
         // public `Frequency(int)` ctor, which calls the `frequency_create` export.
-        Assert.Equal(ExpectedHertz, PlatformResiduals.frequency().Hertz);
+        Assert.Equal(ExpectedHertz, PlatformResiduals.Frequency().Hertz);
     }
 }

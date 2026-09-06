@@ -342,7 +342,7 @@ public ChartEntry Copy(ChartId id, string note)                  // Native_Copy(
 
 public static string ChartLabel(this Patient receiver, ChartId id)  // Native_ChartLabel(receiver._handle, id.Value, ...)
 
-public static string chartSummary(ChartId id)                    // Native_chartSummary(id.Value, ...)
+public static string ChartSummary(ChartId id)                    // Native_ChartSummary(id.Value, ...)
 ```
 
 The Kotlin side of the crossing declares the parameter as the underlying `String` and boxes it back
@@ -394,9 +394,9 @@ public void ChartEntry_PrimaryConstructorAndCopy_RoundTripTheUnwrappedChartId()
 [Fact]
 public void ClinicSample_ChartSummary_TopLevelFunctionParameter_RoundTripsTheUnwrappedChartId()
 {
-    // Top-level functions keep Kotlin camelCase (ADR-007), unlike the extension above.
-    Assert.Equal("Chart CH-CLINIC-0 filed", ClinicSample.chartSummary(new ChartId("CH-CLINIC-0")));
-    Assert.Equal("Chart missing", ClinicSample.chartSummary(new ChartId("")));
+    // Top-level functions are PascalCase like every other position (ADR-110).
+    Assert.Equal("Chart CH-CLINIC-0 filed", ClinicSample.ChartSummary(new ChartId("CH-CLINIC-0")));
+    Assert.Equal("Chart missing", ClinicSample.ChartSummary(new ChartId("")));
 }
 ```
 
@@ -1066,11 +1066,11 @@ public static bool MatchesTemperament(this Patient receiver, Temperament? expect
 }
 
 [DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "describeTemperament")]
-private static extern IntPtr Native_describeTemperament(bool temperamentHasValue, int temperament, out IntPtr error);
+private static extern IntPtr Native_DescribeTemperament(bool temperamentHasValue, int temperament, out IntPtr error);
 
-public static string describeTemperament(Temperament? temperament)
+public static string DescribeTemperament(Temperament? temperament)
 {
-    IntPtr nativeResult = Native_describeTemperament(temperament.HasValue, (int)temperament.GetValueOrDefault().Mood, out IntPtr error);
+    IntPtr nativeResult = Native_DescribeTemperament(temperament.HasValue, (int)temperament.GetValueOrDefault().Mood, out IntPtr error);
     if (error != IntPtr.Zero)
     {
         throw NugetErrorNative.BuildException(error);
@@ -1080,20 +1080,20 @@ public static string describeTemperament(Temperament? temperament)
 
 [DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "standardDosage_has_value")]
 [return: MarshalAs(UnmanagedType.I1)]
-private static extern bool standardDosage_has_value(int kind, out IntPtr error);
+private static extern bool StandardDosage_has_value(int kind, out IntPtr error);
 
 [DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "standardDosage_value")]
-private static extern double standardDosage_value(int kind, out IntPtr error);
+private static extern double StandardDosage_value(int kind, out IntPtr error);
 
-public static Dosage? standardDosage(int kind)
+public static Dosage? StandardDosage(int kind)
 {
-    bool __nuget_hasValue = standardDosage_has_value(kind, out IntPtr __nuget_hasValueError);
+    bool __nuget_hasValue = StandardDosage_has_value(kind, out IntPtr __nuget_hasValueError);
     if (__nuget_hasValueError != IntPtr.Zero)
     {
         throw NugetErrorNative.BuildException(__nuget_hasValueError);
     }
     if (!__nuget_hasValue) return null;
-    double __nuget_value = standardDosage_value(kind, out IntPtr __nuget_valueError);
+    double __nuget_value = StandardDosage_value(kind, out IntPtr __nuget_valueError);
     if (__nuget_valueError != IntPtr.Zero)
     {
         throw NugetErrorNative.BuildException(__nuget_valueError);
@@ -1156,7 +1156,7 @@ public void ClinicSample_StandardDosage_NullablePrimitiveUnderlyingTopLevelRetur
 {
     // 0.0 is a legitimate Dosage, not the in-band sentinel this two-call shape exists to avoid
     // confusing with null.
-    Dosage? dosage = ClinicSample.standardDosage(0);
+    Dosage? dosage = ClinicSample.StandardDosage(0);
 
     Assert.NotNull(dosage);
     Assert.Equal(0.0, dosage!.Value.Milligrams);

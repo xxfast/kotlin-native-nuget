@@ -25,7 +25,7 @@ public class Issue56Tests
     [Fact]
     public void QuietMishap_NullableThrowableProperty_ReadsNull()
     {
-        using var failure = Issue56Sample.quietMishap();
+        using var failure = Issue56Sample.QuietMishap();
 
         // Compile-time contract: the property type is Exception?, not KotlinException?.
         Exception? error = failure.Error;
@@ -37,7 +37,7 @@ public class Issue56Tests
     public void QuietMishap_ThePlainStringComponent_StillBinds()
     {
         // Regression guard: adding a Throwable component must not drop the whole data class.
-        using var failure = Issue56Sample.quietMishap();
+        using var failure = Issue56Sample.QuietMishap();
 
         Assert.Equal("Mylo knocked the water bowl over", failure.Reason);
     }
@@ -47,7 +47,7 @@ public class Issue56Tests
     [Fact]
     public void DietViolation_NullableThrowableProperty_IsNotNull()
     {
-        using var failure = Issue56Sample.dietViolation();
+        using var failure = Issue56Sample.DietViolation();
 
         Assert.NotNull(failure.Error);
     }
@@ -55,7 +55,7 @@ public class Issue56Tests
     [Fact]
     public void DietViolation_Error_IsTheAdr029MappedSubtype()
     {
-        using var failure = Issue56Sample.dietViolation();
+        using var failure = Issue56Sample.DietViolation();
 
         Assert.IsType<KotlinArgumentException>(failure.Error);
     }
@@ -63,7 +63,7 @@ public class Issue56Tests
     [Fact]
     public void DietViolation_Error_IsCatchableShapedAsArgumentException()
     {
-        using var failure = Issue56Sample.dietViolation();
+        using var failure = Issue56Sample.DietViolation();
 
         Assert.IsAssignableFrom<ArgumentException>(failure.Error);
     }
@@ -71,7 +71,7 @@ public class Issue56Tests
     [Fact]
     public void DietViolation_Error_KotlinType_IsIllegalArgumentException()
     {
-        using var failure = Issue56Sample.dietViolation();
+        using var failure = Issue56Sample.DietViolation();
 
         var ke = (IKotlinException)failure.Error!;
 
@@ -81,7 +81,7 @@ public class Issue56Tests
     [Fact]
     public void DietViolation_Error_CarriesTheKotlinMessage()
     {
-        using var failure = Issue56Sample.dietViolation();
+        using var failure = Issue56Sample.DietViolation();
 
         Assert.Equal("Oreo is on a diet!", failure.Error!.Message);
     }
@@ -89,7 +89,7 @@ public class Issue56Tests
     [Fact]
     public void DietViolation_Error_CarriesAKotlinStackTraceEvenThoughItWasNeverThrown()
     {
-        using var failure = Issue56Sample.dietViolation();
+        using var failure = Issue56Sample.DietViolation();
 
         var ke = (IKotlinException)failure.Error!;
 
@@ -100,7 +100,7 @@ public class Issue56Tests
     [Fact]
     public void DietViolation_Error_CauseChain_SurvivesAsInnerException()
     {
-        using var failure = Issue56Sample.dietViolation();
+        using var failure = Issue56Sample.DietViolation();
 
         Assert.NotNull(failure.Error!.InnerException);
     }
@@ -109,7 +109,7 @@ public class Issue56Tests
     public void DietViolation_Error_UnmappedCause_FallsBackToBaseKotlinException()
     {
         // RuntimeException has no ADR-029 mapping, so the cause must be the base type.
-        using var failure = Issue56Sample.dietViolation();
+        using var failure = Issue56Sample.DietViolation();
 
         Assert.IsType<KotlinException>(failure.Error!.InnerException);
     }
@@ -117,7 +117,7 @@ public class Issue56Tests
     [Fact]
     public void DietViolation_Error_UnmappedCause_CarriesItsOwnMessage()
     {
-        using var failure = Issue56Sample.dietViolation();
+        using var failure = Issue56Sample.DietViolation();
 
         var inner = (KotlinException)failure.Error!.InnerException!;
 
@@ -127,7 +127,7 @@ public class Issue56Tests
     [Fact]
     public void DietViolation_Error_CauseChain_EndsAfterOneLink()
     {
-        using var failure = Issue56Sample.dietViolation();
+        using var failure = Issue56Sample.DietViolation();
 
         Assert.Null(failure.Error!.InnerException!.InnerException);
     }
@@ -137,7 +137,7 @@ public class Issue56Tests
     [Fact]
     public void QuietMishap_NonNullThrowableProperty_ReadsAMappedException()
     {
-        using var failure = Issue56Sample.quietMishap();
+        using var failure = Issue56Sample.QuietMishap();
 
         // Compile-time contract: non-nullable Exception. No null check needed to dereference it.
         Exception fatal = failure.Fatal;
@@ -149,7 +149,7 @@ public class Issue56Tests
     public void QuietMishap_NonNullThrowableProperty_IsIllegalStateExceptionsMapping()
     {
         // A different mapping from the one Error carries, so a shared-arm bug cannot pass here.
-        using var failure = Issue56Sample.quietMishap();
+        using var failure = Issue56Sample.QuietMishap();
 
         Assert.IsType<KotlinInvalidOperationException>(failure.Fatal);
     }
@@ -157,7 +157,7 @@ public class Issue56Tests
     [Fact]
     public void DietViolation_NonNullAndNullableProperties_AreIndependent()
     {
-        using var failure = Issue56Sample.dietViolation();
+        using var failure = Issue56Sample.DietViolation();
 
         Assert.Equal("Oreo is on a diet!", failure.Error!.Message);
         Assert.Equal("the treat jar is empty", failure.Fatal.Message);
@@ -168,7 +168,7 @@ public class Issue56Tests
     [Fact]
     public void DietViolation_TwoReads_AreEqualInContentButNotTheSameObject()
     {
-        using var failure = Issue56Sample.dietViolation();
+        using var failure = Issue56Sample.DietViolation();
 
         Exception? first = failure.Error;
         Exception? second = failure.Error;
@@ -182,7 +182,7 @@ public class Issue56Tests
     [Fact]
     public void LastError_VarThrowableProperty_IsReadable()
     {
-        using var failure = Issue56Sample.dietViolation();
+        using var failure = Issue56Sample.DietViolation();
 
         Exception? lastError = failure.LastError;
 
@@ -206,7 +206,7 @@ public class Issue56Tests
     [Fact]
     public void FailedLoad_SealedSubclass_DiscriminatesToTheFailureArm()
     {
-        using Issue56LoadState state = Issue56Sample.failedLoad();
+        using Issue56LoadState state = Issue56Sample.FailedLoad();
 
         Assert.IsType<Issue56LoadState.Failure>(state);
     }
@@ -214,7 +214,7 @@ public class Issue56Tests
     [Fact]
     public void FailedLoad_SealedSubclassThrowableProperty_IsTheMappedException()
     {
-        using Issue56LoadState state = Issue56Sample.failedLoad();
+        using Issue56LoadState state = Issue56Sample.FailedLoad();
 
         var failure = (Issue56LoadState.Failure)state;
         Exception? error = failure.Error;
@@ -226,7 +226,7 @@ public class Issue56Tests
     [Fact]
     public void FailedLoad_SealedSubclassThrowableProperty_KotlinType_IsIllegalArgumentException()
     {
-        using Issue56LoadState state = Issue56Sample.failedLoad();
+        using Issue56LoadState state = Issue56Sample.FailedLoad();
 
         var ke = (IKotlinException)((Issue56LoadState.Failure)state).Error!;
 
@@ -237,7 +237,7 @@ public class Issue56Tests
     public void PendingLoad_PayloadFreeArm_StillDiscriminates()
     {
         // The other arm of the same sealed base, so the discriminator has a real choice to make.
-        using Issue56LoadState state = Issue56Sample.pendingLoad();
+        using Issue56LoadState state = Issue56Sample.PendingLoad();
 
         Assert.IsType<Issue56LoadState.Loading>(state);
     }

@@ -109,7 +109,7 @@ public class MapSetParameterMarshallingTests
     [Fact]
     public void ClinicSample_CountLabels_ReturnsTheCount()
     {
-        Assert.Equal(2, ClinicSample.countLabels(new HashSet<string> { "indoor", "calm" }));
+        Assert.Equal(2, ClinicSample.CountLabels(new HashSet<string> { "indoor", "calm" }));
     }
 
     // Extension function x Map<String, Int> parameter, over an object-handle receiver.

@@ -12,14 +12,14 @@ public class Issue39Tests
     [Fact]
     public void LoadedCats_ReturnsLoaded()
     {
-        using Issue39State state = Issue39Sample.loadedCats();
+        using Issue39State state = Issue39Sample.LoadedCats();
         Assert.IsType<Issue39State.Loaded>(state);
     }
 
     [Fact]
     public void LoadedCats_Items_IsReadOnlyListOfTwo()
     {
-        using Issue39State state = Issue39Sample.loadedCats();
+        using Issue39State state = Issue39Sample.LoadedCats();
         var loaded = Assert.IsType<Issue39State.Loaded>(state);
 
         IReadOnlyList<Issue39Item> items = loaded.Items;
@@ -30,7 +30,7 @@ public class Issue39Tests
     [Fact]
     public void LoadedCats_Items_ElementValues()
     {
-        using Issue39State state = Issue39Sample.loadedCats();
+        using Issue39State state = Issue39Sample.LoadedCats();
         var loaded = Assert.IsType<Issue39State.Loaded>(state);
 
         IReadOnlyList<Issue39Item> items = loaded.Items;
@@ -47,7 +47,7 @@ public class Issue39Tests
     [Fact]
     public void LoadedCats_Items_Enumeration()
     {
-        using Issue39State state = Issue39Sample.loadedCats();
+        using Issue39State state = Issue39Sample.LoadedCats();
         var loaded = Assert.IsType<Issue39State.Loaded>(state);
 
         var names = new List<string>();
@@ -63,7 +63,7 @@ public class Issue39Tests
     [Fact]
     public void LoadedCats_Refreshing_IsTrue()
     {
-        using Issue39State state = Issue39Sample.loadedCats();
+        using Issue39State state = Issue39Sample.LoadedCats();
         var loaded = Assert.IsType<Issue39State.Loaded>(state);
 
         Assert.True(loaded.Refreshing);
@@ -72,7 +72,7 @@ public class Issue39Tests
     [Fact]
     public void LoadedCats_PatternMatching_ReadsBothProperties()
     {
-        using Issue39State state = Issue39Sample.loadedCats();
+        using Issue39State state = Issue39Sample.LoadedCats();
 
         string message = state switch
         {
@@ -87,7 +87,7 @@ public class Issue39Tests
     [Fact]
     public void LoadingCats_ReturnsLoading()
     {
-        using Issue39State state = Issue39Sample.loadingCats();
+        using Issue39State state = Issue39Sample.LoadingCats();
         Assert.IsType<Issue39State.Loading>(state);
     }
 }

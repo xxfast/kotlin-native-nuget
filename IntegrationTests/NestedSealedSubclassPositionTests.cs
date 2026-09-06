@@ -71,7 +71,7 @@ public class NestedSealedSubclassPositionTests
     [Fact]
     public void AnyShape_SealedBaseAtATopLevelReturn_StillDiscriminatesToTheNestedSubclass()
     {
-        using NestedShape any = NestedShapeSample.anyShape(1.0);
+        using NestedShape any = NestedShapeSample.AnyShape(1.0);
 
         var circle = Assert.IsType<NestedShape.Circle>(any);
         Assert.Equal(1.0, circle.Radius);

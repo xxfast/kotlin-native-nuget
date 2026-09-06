@@ -78,13 +78,13 @@ public class StaticRouteOverloadTests
     [Fact]
     public void BookGrooming_NoArguments_DispatchesToFirstOverload()
     {
-        Assert.Equal("the next slot is free", GroomingSample.bookGrooming());
+        Assert.Equal("the next slot is free", GroomingSample.BookGrooming());
     }
 
     [Fact]
     public void BookGrooming_WithCat_DispatchesToMarshalledOverload()
     {
-        Assert.Equal("Mylo is groomed at noon", GroomingSample.bookGrooming("Mylo"));
+        Assert.Equal("Mylo is groomed at noon", GroomingSample.BookGrooming("Mylo"));
     }
 
     [Fact]
@@ -92,13 +92,13 @@ public class StaticRouteOverloadTests
     {
         // Nullable primitive return: the ADR-002 two-call shape (waitTime_has_value +
         // waitTime_value), a different planner entry point from every other cell here.
-        Assert.Equal(15, GroomingSample.waitTime());
+        Assert.Equal(15, GroomingSample.WaitTime());
     }
 
     [Fact]
     public void WaitTime_WithCat_DispatchesToSecondTwoCallOverload()
     {
-        Assert.Equal(4, GroomingSample.waitTime("Mylo"));
+        Assert.Equal(4, GroomingSample.WaitTime("Mylo"));
     }
 
     [Fact]
@@ -106,7 +106,7 @@ public class StaticRouteOverloadTests
     {
         // The presence half of the numbered pair has to belong to *this* overload; a mis-numbered
         // _has_value would answer for waitTime() instead, which is never null.
-        Assert.Null(GroomingSample.waitTime("   "));
+        Assert.Null(GroomingSample.WaitTime("   "));
     }
 
     // ---- Route 4: extension functions (MittenExtensions / TomcatExtensions) ----
@@ -163,10 +163,10 @@ public class StaticRouteOverloadTests
         Assert.NotNull(typeof(Groomer).GetMethod("Of", new[] { typeof(int) }));
         Assert.NotNull(typeof(Groomer).GetMethod("Of", new[] { typeof(Coat) }));
 
-        Assert.NotNull(typeof(GroomingSample).GetMethod("bookGrooming", Type.EmptyTypes));
-        Assert.NotNull(typeof(GroomingSample).GetMethod("bookGrooming", new[] { typeof(string) }));
-        Assert.NotNull(typeof(GroomingSample).GetMethod("waitTime", Type.EmptyTypes));
-        Assert.NotNull(typeof(GroomingSample).GetMethod("waitTime", new[] { typeof(string) }));
+        Assert.NotNull(typeof(GroomingSample).GetMethod("BookGrooming", Type.EmptyTypes));
+        Assert.NotNull(typeof(GroomingSample).GetMethod("BookGrooming", new[] { typeof(string) }));
+        Assert.NotNull(typeof(GroomingSample).GetMethod("WaitTime", Type.EmptyTypes));
+        Assert.NotNull(typeof(GroomingSample).GetMethod("WaitTime", new[] { typeof(string) }));
 
         Assert.NotNull(typeof(MittenExtensions).GetMethod("Pat", new[] { typeof(Mitten) }));
         Assert.NotNull(typeof(MittenExtensions).GetMethod("Pat", new[] { typeof(Mitten), typeof(string) }));

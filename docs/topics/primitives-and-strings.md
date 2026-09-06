@@ -11,7 +11,7 @@ Primitive types follow the standard [Kotlin/Native C interop mappings](https://k
 | `Char` | `char` | 2-byte scalar (`ushort` at the C ABI); property, parameter, method return, and `List`/`Map`/`Set` component, see [Char](#char) below, [ADR-062](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/062-forward-callable-plan.md) and [ADR-098](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/098-narrow-primitive-and-char-collection-components.md) |
 | `String` | `string` | UTF-8 marshalling |
 | `T?` (nullable primitive) | `T?` | two-call pattern on property and top-level returns (forward only); method/extension nullable returns use single-call `valueOut`, see [Classes and objects](classes-and-objects.md) and [ADR-002](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/002-nullable-two-call-pattern.md) / [ADR-061](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/061-method-return-marshalling.md); `Boolean?` needs an explicit `[MarshalAs(UnmanagedType.I1)]` at both seams, see Nullable Boolean below and [ADR-069](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/069-nullable-boolean-marshalling.md) |
-| `String?` | `string?` | forward: two-call pattern on top-level/property returns (this page); reverse: `NullableAttribute`-driven, see [Objects and handles](objects-and-handles.md) and [ADR-053](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/053-nullable-reference-types-in-kotlin.md) |
+| `String?` | `string?` | forward: single call, rides its own null-pointer sentinel at top-level/property returns (this page); reverse: `NullableAttribute`-driven, see [Objects and handles](objects-and-handles.md) and [ADR-053](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/053-nullable-reference-types-in-kotlin.md) |
 | `kotlin.time.Instant` | `System.DateTimeOffset` | one `INT64` of .NET ticks; property, constructor parameter, method parameter, method return, top-level return, see Instant below and [ADR-076](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/076-instant-mapping.md) |
 | `Instant?` | `DateTimeOffset?` | same wire form as `Instant`, rides the nullable-primitive `INT64` machinery above at all four positions |
 | `kotlin.time.Duration` | `System.TimeSpan` | one `INT64` of `TimeSpan` ticks; property, constructor parameter, method parameter, method return, top-level return, see Duration below and [ADR-103](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/103-duration-mapping.md) |
@@ -53,17 +53,17 @@ fun nullableString(hasValue: Boolean): String? = if (hasValue) "hello" else null
 
 ## Generated C#
 
-From `Interop.cs`, the `Mappings` static class. A plain primitive return is a single `[DllImport]` plus an error out-parameter:
+From `Interop.cs`, the `Mappings` static class. A plain primitive return is a single `[DllImport]` plus an error out-parameter. The public member is `PascalCase` like every other top-level function ([ADR-110](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/110-top-level-function-pascal-case.md)); the native `@CName` export keeps the Kotlin spelling:
 
 ```C#
 public static partial class Mappings
 {
-    [DllImport("sample", CallingConvention = CallingConvention.Cdecl, EntryPoint = "string")]
-    private static extern IntPtr @string_native(out IntPtr error);
+    [DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "string")]
+    private static extern IntPtr Native_String(out IntPtr error);
 
-    public static string @string()
+    public static string String()
     {
-        IntPtr nativeResult = @string_native(out IntPtr error);
+        IntPtr nativeResult = Native_String(out IntPtr error);
         if (error != IntPtr.Zero)
         {
             throw NugetErrorNative.BuildException(error);
@@ -71,19 +71,19 @@ public static partial class Mappings
         return Marshal.PtrToStringUTF8(nativeResult)!;
     }
 
-    [DllImport("sample", CallingConvention = CallingConvention.Cdecl, EntryPoint = "byte")]
-    private static extern sbyte @byte_native(out IntPtr error);
+    [DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "byte")]
+    private static extern sbyte Native_Byte(out IntPtr error);
 
-    public static sbyte @byte()
+    public static sbyte Byte()
     {
-        sbyte result = @byte_native(out IntPtr error);
+        sbyte result = Native_Byte(out IntPtr error);
         if (error != IntPtr.Zero)
         {
             throw NugetErrorNative.BuildException(error);
         }
         return result;
     }
-    // ... ubyte, short_, ushort, int_, uint, long_, ulong, float_, double_ follow the same shape
+    // ... Ubyte, Short, Ushort, Int, Uint, Long, Ulong, Float, Double follow the same shape
 }
 ```
 
@@ -92,48 +92,45 @@ carry the same `out IntPtr error` out-parameter as every other sync export ([ADR
 and the wrapper checks it after *each* crossing, since either call can independently throw:
 
 ```C#
-[DllImport("sample", CallingConvention = CallingConvention.Cdecl, EntryPoint = "nullableInt_has_value")]
-private static extern bool nullableInt_has_value(bool hasValue, out IntPtr error);
+[DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "nullableInt_has_value")]
+[return: MarshalAs(UnmanagedType.I1)]
+private static extern bool NullableInt_has_value(bool hasValue, out IntPtr error);
 
-[DllImport("sample", CallingConvention = CallingConvention.Cdecl, EntryPoint = "nullableInt_value")]
-private static extern int nullableInt_value(bool hasValue, out IntPtr error);
+[DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "nullableInt_value")]
+private static extern int NullableInt_value(bool hasValue, out IntPtr error);
 
-public static int? nullableInt(bool hasValue)
+public static int? NullableInt(bool hasValue)
 {
-    bool __nuget_hasValue = nullableInt_has_value(hasValue, out IntPtr __nuget_error);
-    if (__nuget_error != IntPtr.Zero)
+    bool __nuget_hasValue = NullableInt_has_value(hasValue, out IntPtr __nuget_hasValueError);
+    if (__nuget_hasValueError != IntPtr.Zero)
     {
-        throw NugetErrorNative.BuildException(__nuget_error);
+        throw NugetErrorNative.BuildException(__nuget_hasValueError);
     }
     if (!__nuget_hasValue) return null;
-    int __nuget_value = nullableInt_value(hasValue, out IntPtr __nuget_error2);
-    if (__nuget_error2 != IntPtr.Zero)
+    int __nuget_value = NullableInt_value(hasValue, out IntPtr __nuget_valueError);
+    if (__nuget_valueError != IntPtr.Zero)
     {
-        throw NugetErrorNative.BuildException(__nuget_error2);
+        throw NugetErrorNative.BuildException(__nuget_valueError);
     }
     return __nuget_value;
 }
+```
 
-[DllImport("sample", CallingConvention = CallingConvention.Cdecl, EntryPoint = "nullableString_has_value")]
-private static extern bool nullableString_has_value(bool hasValue, out IntPtr error);
+`String?` already has a spare null-pointer sentinel on its own wire, so a nullable-`String`-returning
+top-level function is a single call, not a two-call pair:
 
-[DllImport("sample", CallingConvention = CallingConvention.Cdecl, EntryPoint = "nullableString_value")]
-private static extern IntPtr nullableString_value(bool hasValue, out IntPtr error);
+```C#
+[DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "nullableString")]
+private static extern IntPtr Native_NullableString(bool hasValue, out IntPtr error);
 
-public static string? nullableString(bool hasValue)
+public static string? NullableString(bool hasValue)
 {
-    bool __nuget_hasValue = nullableString_has_value(hasValue, out IntPtr __nuget_error);
-    if (__nuget_error != IntPtr.Zero)
+    IntPtr nativeResult = Native_NullableString(hasValue, out IntPtr error);
+    if (error != IntPtr.Zero)
     {
-        throw NugetErrorNative.BuildException(__nuget_error);
+        throw NugetErrorNative.BuildException(error);
     }
-    if (!__nuget_hasValue) return null;
-    IntPtr __nuget_nativeResult = nullableString_value(hasValue, out IntPtr __nuget_error2);
-    if (__nuget_error2 != IntPtr.Zero)
-    {
-        throw NugetErrorNative.BuildException(__nuget_error2);
-    }
-    return Marshal.PtrToStringUTF8(__nuget_nativeResult);
+    return Marshal.PtrToStringUTF8(nativeResult);
 }
 ```
 
@@ -144,7 +141,9 @@ a nullable-returning function that threw corrupted memory (`SIGBUS`) instead of 
 nullable-returning exports until this was corrected; see `NullableFunctionExceptionPropagationTests.cs`
 for the regression coverage.
 
-Kotlin identifiers that collide with C# keywords (`string`, `byte`, `short`, `int`, `long`) are escaped with `@` on the C# side; `short`/`int`/`long`/`double` also get a trailing underscore on the native entry point to dodge C reserved words. This applies to a *parameter* name too, not just a declaration name: a Kotlin parameter literally named `abstract`, `default`, `params`, `ref`, or any other C# reserved word renders as a verbatim identifier (`@abstract`) at every C# position, the public wrapper declaration, the `[DllImport]` extern, and every use site (a call argument, a member access like `@ref._handle`, or a marshalling local like `@paramsHandle`).
+A Kotlin declaration name that collides with a C# keyword (`string`, `byte`, `short`, `int`, `long`, ...) no longer needs a `@` escape: every forward position PascalCases its C# name, and no C# keyword is capitalized, so `fun string()` renders `String()` plain and `fun uint()` renders `Uint()` ([ADR-110](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/110-top-level-function-pascal-case.md) closed the last surface still doing this, the top-level function route). The native export still guards the C symbol independently of the C# rename: `short`/`int`/`long`/`float`/`double` get a trailing underscore on the entry point to dodge C reserved words (`short_`, `int_`, `long_`, `float_`, `double_`).
+
+This is unrelated to a *parameter* name: a Kotlin parameter literally named `abstract`, `default`, `params`, `ref`, or any other C# reserved word still renders as a verbatim identifier (`@abstract`) at every C# position, the public wrapper declaration, the `[DllImport]` extern, and every use site (a call argument, a member access like `@ref._handle`, or a marshalling local like `@paramsHandle`).
 
 From `test-library/src/nativeMain/kotlin/.../issue65/Issue65Sample.kt`:
 
@@ -228,35 +227,35 @@ From `IntegrationTests/MappingTests.cs`:
 [Fact]
 public void String_ReturnsExpectedValue()
 {
-    string result = Mappings.@string();
+    string result = Mappings.String();
     Assert.Equal("Kotlin/Native!", result);
 }
 
 [Fact]
 public void UInt_ReturnsExpectedValue()
 {
-    uint result = Mappings.@uint();
+    uint result = Mappings.Uint();
     Assert.Equal(4_294_967_295u, result);
 }
 
 [Fact]
 public void NullableInt_WithValue_ReturnsValue()
 {
-    int? result = Mappings.nullableInt(true);
+    int? result = Mappings.NullableInt(true);
     Assert.Equal(42, result);
 }
 
 [Fact]
 public void NullableInt_WithoutValue_ReturnsNull()
 {
-    int? result = Mappings.nullableInt(false);
+    int? result = Mappings.NullableInt(false);
     Assert.Null(result);
 }
 
 [Fact]
 public void NullableString_WithValue_ReturnsValue()
 {
-    string? result = Mappings.nullableString(true);
+    string? result = Mappings.NullableString(true);
     Assert.Equal("hello", result);
 }
 ```
@@ -431,21 +430,21 @@ Generated C#, from `Interop.cs`:
 ```C#
 [DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "chipImplanted_has_value")]
 [return: MarshalAs(UnmanagedType.I1)]
-private static extern bool chipImplanted_has_value(int state, out IntPtr error);
+private static extern bool ChipImplanted_has_value(int state, out IntPtr error);
 
 [DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "chipImplanted_value")]
 [return: MarshalAs(UnmanagedType.I1)]
-private static extern bool chipImplanted_value(int state, out IntPtr error);
+private static extern bool ChipImplanted_value(int state, out IntPtr error);
 
-public static bool? chipImplanted(int state)
+public static bool? ChipImplanted(int state)
 {
-    bool __nuget_hasValue = chipImplanted_has_value(state, out IntPtr __nuget_hasValueError);
+    bool __nuget_hasValue = ChipImplanted_has_value(state, out IntPtr __nuget_hasValueError);
     if (__nuget_hasValueError != IntPtr.Zero)
     {
         throw NugetErrorNative.BuildException(__nuget_hasValueError);
     }
     if (!__nuget_hasValue) return null;
-    bool __nuget_value = chipImplanted_value(state, out IntPtr __nuget_valueError);
+    bool __nuget_value = ChipImplanted_value(state, out IntPtr __nuget_valueError);
     if (__nuget_valueError != IntPtr.Zero)
     {
         throw NugetErrorNative.BuildException(__nuget_valueError);
@@ -461,13 +460,13 @@ From `IntegrationTests/NullableBooleanTests.cs`, asserting `false` explicitly on
 [Fact]
 public void NullableBooleanSample_ChipImplanted_False()
 {
-    Assert.False(NullableBooleanSample.chipImplanted(1));
+    Assert.False(NullableBooleanSample.ChipImplanted(1));
 }
 
 [Fact]
 public void NullableBooleanSample_ChipImplanted_Null()
 {
-    Assert.Null(NullableBooleanSample.chipImplanted(2));
+    Assert.Null(NullableBooleanSample.ChipImplanted(2));
 }
 ```
 
@@ -565,9 +564,9 @@ public class SightingLog : IDisposable
 
 public static partial class SightingLogKt
 {
-    public static global::System.DateTimeOffset sightingEpoch() { /* ... */ }
+    public static global::System.DateTimeOffset SightingEpoch() { /* ... */ }
 
-    public static global::System.DateTimeOffset? parseSighting(string text) { /* ... */ }
+    public static global::System.DateTimeOffset? ParseSighting(string text) { /* ... */ }
 }
 ```
 
@@ -592,7 +591,7 @@ public void SubHundredNanosecondKotlinValue_TruncatesTowardEpochOrigin_DoesNotRo
 {
     // Kotlin's sightingEpoch() carries a 123_456_789 ns adjustment; 89 ns of that is below
     // the wire form's 100ns tick resolution. Truncation floors to ...4567, not ...4568.
-    var result = SightingLogKt.sightingEpoch();
+    var result = SightingLogKt.SightingEpoch();
 
     Assert.Equal(638355968001234567L, result.UtcTicks);
 }
@@ -724,9 +723,9 @@ public static class NapClock
 
 public static partial class NapTrackerKt
 {
-    public static global::System.TimeSpan napEpsilon() { /* ... */ }
+    public static global::System.TimeSpan NapEpsilon() { /* ... */ }
 
-    public static global::System.TimeSpan? parseNap(string text) { /* ... */ }
+    public static global::System.TimeSpan? ParseNap(string text) { /* ... */ }
 }
 ```
 
@@ -754,7 +753,7 @@ public void SubHundredNanosecondKotlinValue_TruncatesTowardZero_DoesNotRound()
 {
     // Kotlin's napEpsilon() is 150 ns; 50 ns of that is below the wire form's 100ns tick
     // resolution. Truncation gives 1 tick, rounding would give 2.
-    var result = NapTrackerKt.napEpsilon();
+    var result = NapTrackerKt.NapEpsilon();
 
     Assert.Equal(1L, result.Ticks);
 }
@@ -876,7 +875,7 @@ public static class MicrochipRegistry
 
 public static partial class MicrochipKt
 {
-    public static global::System.Guid wellKnownChip() { /* ... */ }
+    public static global::System.Guid WellKnownChip() { /* ... */ }
 }
 ```
 
@@ -886,7 +885,7 @@ From `IntegrationTests/UuidMappingTests.cs`:
 [Fact]
 public void WellKnownChip_TopLevelReturn_RendersTheSameStringKotlinParsed()
 {
-    Guid chip = MicrochipKt.wellKnownChip();
+    Guid chip = MicrochipKt.WellKnownChip();
 
     Assert.Equal(WellKnown, chip.ToString());
 }
@@ -924,10 +923,10 @@ public void PreviousChipId_NullableVarProperty_HoldsGuidEmptyDistinctlyFromNull(
 - Nullable *primitive* mapping (`Int?`, and friends) is forward-only (`→`): the reverse direction has
   no `Nullable<T>` wire format yet (deferred by [ADR-053](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/053-nullable-reference-types-in-kotlin.md)
   Decision 3, not a two-call-pattern gap).
-- Nullable *string* mapping is now `⇄`: forward uses this page's two-call pattern on property and
-  top-level returns, reverse reads the bound assembly's `NullableAttribute` instead (see
-  [Objects and handles](objects-and-handles.md)). The two mechanisms are unrelated; a reverse-bound
-  `string?` never goes through a `has_value`/`value` pair.
+- Nullable *string* mapping is now `⇄`: forward reuses `String?`'s own null-pointer sentinel at
+  property and top-level returns (a single call, not the `has_value`/`value` pair `Int?` and other
+  primitives need), reverse reads the bound assembly's `NullableAttribute` instead (see
+  [Objects and handles](objects-and-handles.md)). The two mechanisms are unrelated.
 - A bare `Char?` (not inside a collection) still has no route and aborts `packNuget`: the wire is
   answered (`[MarshalAs(UnmanagedType.U2)]`, see [Char](#char) above), what's missing is the
   has-value fan-out. `List<Char?>`/`Set<Char?>`/`Map<K, Char?>` already work, since a collection
@@ -971,5 +970,6 @@ public void PreviousChipId_NullableVarProperty_HoldsGuidEmptyDistinctlyFromNull(
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/098-narrow-primitive-and-char-collection-components.md">ADR-098: Narrow-primitive and Char collection components</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/103-duration-mapping.md">ADR-103: kotlin.time.Duration mapping</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/106-uuid-mapping.md">ADR-106: kotlin.uuid.Uuid mapping</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/110-top-level-function-pascal-case.md">ADR-110: Forward, top-level functions PascalCase in C#</a>
     </category>
 </seealso>

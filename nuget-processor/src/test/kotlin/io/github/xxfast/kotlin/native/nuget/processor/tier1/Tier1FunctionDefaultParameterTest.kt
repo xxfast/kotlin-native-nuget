@@ -166,7 +166,7 @@ class Tier1FunctionDefaultParameterTest {
     val cs: String = result.generatedCSharp
     // Pre-fix only one of the two can exist: a name-keyed index keeps one `expect` per name, so
     // both actuals land in whichever file survived.
-    assertContains(cs, "partial class Purr\n")
+    assertContains(cs, "partial class PurrKt\n")
     assertContains(cs, "partial class PurrLoud\n")
     assertFalse(
       cs.contains("class PurrActual"),

@@ -25,7 +25,7 @@ public class SealedClassTests
     [Fact]
     public void OpenBox_WhenAlive_ReturnsAlive()
     {
-        using Observation result = ObservationKt.openBox("Oreo");
+        using Observation result = ObservationKt.OpenBox("Oreo");
         Assert.IsType<Observation.Alive>(result);
 
         var alive = (Observation.Alive)result;
@@ -37,7 +37,7 @@ public class SealedClassTests
     [Fact]
     public void OpenBox_WhenDead_ReturnsDead()
     {
-        using Observation result = ObservationKt.openBox("Rex");
+        using Observation result = ObservationKt.OpenBox("Rex");
         Assert.IsType<Observation.Dead>(result);
 
         var dead = (Observation.Dead)result;
@@ -53,21 +53,21 @@ public class SealedClassTests
     [Fact]
     public void PeekBox_ReturnsSuperposition()
     {
-        using Observation result = ObservationKt.peekBox();
+        using Observation result = ObservationKt.PeekBox();
         Assert.IsType<Observation.Superposition>(result);
     }
 
     [Fact]
     public void Observation_Superposition_ToString()
     {
-        using Observation result = ObservationKt.peekBox();
+        using Observation result = ObservationKt.PeekBox();
         Assert.Equal("Superposition", result.ToString());
     }
 
     [Fact]
     public void Observation_WorksWithPatternMatching()
     {
-        using Observation result = ObservationKt.openBox("Oreo");
+        using Observation result = ObservationKt.OpenBox("Oreo");
 
         string message = result switch
         {
@@ -83,7 +83,7 @@ public class SealedClassTests
     [Fact]
     public void Observation_Superposition_PatternMatching()
     {
-        using Observation result = ObservationKt.peekBox();
+        using Observation result = ObservationKt.PeekBox();
 
         string message = result switch
         {

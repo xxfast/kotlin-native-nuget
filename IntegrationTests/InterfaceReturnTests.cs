@@ -99,7 +99,7 @@ public class InterfaceReturnTests
     [Fact]
     public void StrayPet_AnonymousKotlinObject_DispatchesThroughIPet()
     {
-        using IPet stray = PetKt.strayPet();
+        using IPet stray = PetKt.StrayPet();
         Assert.Equal("Whiskers the Stray", stray.Name);
         Assert.Equal(3, stray.Legs);
         Assert.Null(stray.Nickname);
@@ -133,7 +133,7 @@ public class InterfaceReturnTests
     [Fact]
     public void Nickname_AbsentOnStrayPet()
     {
-        using IPet stray = PetKt.strayPet();
+        using IPet stray = PetKt.StrayPet();
         Assert.Null(stray.Nickname);
     }
 

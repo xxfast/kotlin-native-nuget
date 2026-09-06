@@ -131,19 +131,19 @@ public class ValueClassNullableUnderlyingTests
     [Fact]
     public void ClinicSample_DescribeTemperament_NullableEnumUnderlyingTopLevelParameter_NullIsUnknown()
     {
-        Assert.Equal("Mood: unknown", ClinicSample.describeTemperament(null));
+        Assert.Equal("Mood: unknown", ClinicSample.DescribeTemperament(null));
     }
 
     [Fact]
     public void ClinicSample_DescribeTemperament_NullableEnumUnderlyingTopLevelParameter_ValueIsDescribed()
     {
-        Assert.Equal("Mood: ANXIOUS", ClinicSample.describeTemperament(new Temperament(Mood.Anxious)));
+        Assert.Equal("Mood: ANXIOUS", ClinicSample.DescribeTemperament(new Temperament(Mood.Anxious)));
     }
 
     [Fact]
     public void ClinicSample_StandardDosage_NullablePrimitiveUnderlyingTopLevelReturn_NegativeKindIsNull()
     {
-        Assert.Null(ClinicSample.standardDosage(-1));
+        Assert.Null(ClinicSample.StandardDosage(-1));
     }
 
     [Fact]
@@ -151,7 +151,7 @@ public class ValueClassNullableUnderlyingTests
     {
         // 0.0 is a legitimate Dosage, not the in-band sentinel this two-call shape exists to avoid
         // confusing with null.
-        Dosage? dosage = ClinicSample.standardDosage(0);
+        Dosage? dosage = ClinicSample.StandardDosage(0);
 
         Assert.NotNull(dosage);
         Assert.Equal(0.0, dosage!.Value.Milligrams);
@@ -160,7 +160,7 @@ public class ValueClassNullableUnderlyingTests
     [Fact]
     public void ClinicSample_StandardDosage_NullablePrimitiveUnderlyingTopLevelReturn_PositiveKindReturnsARealDose()
     {
-        Assert.Equal(2.5, ClinicSample.standardDosage(5)!.Value.Milligrams);
+        Assert.Equal(2.5, ClinicSample.StandardDosage(5)!.Value.Milligrams);
     }
 
     [Fact]

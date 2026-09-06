@@ -81,3 +81,17 @@ Our approach is a hybrid: default to clean names, fall back to `Kt` suffix only 
 - Aligns with both C# naming conventions and Kotlin's `@file:JvmName` pattern
 - Breaking change from current single-class approach — tests will need updating
 - Conflict resolution is deterministic and matches existing Kotlin/Java behaviour
+
+### Amendment (2026-09-07): the `Kt` suffix also fires on a name collision, not just a type collision, [ADR-110](110-top-level-function-pascal-case.md)
+
+The decision above only ever compared the file class name against another **type** declared in the
+same namespace (a class, sealed class, or interface backing class). [ADR-110](110-top-level-function-pascal-case.md)
+PascalCases every top-level function's public name, which opens a new way for the file class name to
+be claimed: a function whose own PascalCased name equals its file class (`fun greeting()` in
+`Greeting.kt`, which wants the C# name `Greeting.Greeting()`) is a member named like its enclosing
+type, forbidden by C# (CS0542) the same way a same-named sibling type is.
+
+The existing `Kt`-suffix remedy is reused as-is for this case: the whole file class renames to
+`GreetingKt`, every member of that file moves with it, and an `INFO_FILE_CLASS_RENAMED` diagnostic
+notes the rename and the call site (`GreetingKt.Greeting(...)`). The native `@CName` export is
+unaffected either way. See ADR-110's Decision for the full mechanism.

@@ -51,7 +51,7 @@ class Tier1StructuralInteropCsTest {
    * Cell 1 · obs C. `object` method return × `String`. Guards the fix: object methods now route
    * through the class path's static-function marshalling, so a `String` return marshals to a real
    * `string`. Before the fix the object path had no marshalling at all — it rendered the *native*
-   * return type as the public one, so `greet` surfaced as `public static IntPtr greet(string name)`
+   * return type as the public one, so `greet` surfaced as `public static IntPtr Greet(string name)`
    * and a consumer could not get a `string` back. `CatRegistry` (the only other `object` fixture)
    * never returned a `String`, which is why the leak shipped unnoticed. Fixed: ADR-060 cell 1 /
    * ROADMAP Phase 3.
@@ -120,8 +120,8 @@ class Tier1StructuralInteropCsTest {
 
     assertContains(
       result.generatedCSharp,
-      "public static string greetNickname(string? name)",
-      message = "expected greetNickname's 'name' parameter to render string?, matching its " +
+      "public static string GreetNickname(string? name)",
+      message = "expected GreetNickname's 'name' parameter to render string?, matching its " +
           "Kotlin String? type",
     )
   }

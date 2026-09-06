@@ -34,7 +34,7 @@ public class GenericConstraintTests
     public void AdoptPet_Oreo_ReturnsSameCat()
     {
         using var oreo = new Cat("Oreo", 9);
-        using Cat adopted = Helpers.adoptPet<Cat>(oreo);
+        using Cat adopted = Helpers.AdoptPet<Cat>(oreo);
         Assert.Equal("Oreo", adopted.Name);
     }
 
@@ -42,7 +42,7 @@ public class GenericConstraintTests
     public void AdoptPet_Mylo_ReturnsSameCat()
     {
         using var mylo = new Cat("Mylo", 4);
-        using Cat adopted = Helpers.adoptPet<Cat>(mylo);
+        using Cat adopted = Helpers.AdoptPet<Cat>(mylo);
         Assert.Equal("Mylo", adopted.Name);
     }
 
@@ -50,7 +50,7 @@ public class GenericConstraintTests
     public void AdoptPet_TypeParameter_HasIPetConstraint()
     {
         MethodInfo method = typeof(Helpers)
-            .GetMethod("adoptPet")!
+            .GetMethod("AdoptPet")!
             .MakeGenericMethod(typeof(Cat))
             .GetGenericMethodDefinition();
 
@@ -62,7 +62,7 @@ public class GenericConstraintTests
     public void GroomPet_ReturnsGroomedCat()
     {
         using var oreo = new Cat("Oreo", 9);
-        using Cat groomed = Helpers.groomPet<Cat>(oreo);
+        using Cat groomed = Helpers.GroomPet<Cat>(oreo);
         Assert.Equal("Oreo", groomed.Name);
     }
 }

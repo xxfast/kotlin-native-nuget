@@ -377,21 +377,21 @@ fun collarNamedArgs(): String {
 [Fact]
 public void DescribeCollar_RendersEveryComponent()
 {
-    string result = CollarSample.describeCollar(5, "Oreo", true, 'O', CatMood.Playful);
+    string result = CollarSample.DescribeCollar(5, "Oreo", true, 'O', CatMood.Playful);
     Assert.Equal("Oreo 5 O Playful True", result);
 }
 
 [Fact]
 public void PairCollar_TwoDifferentShapeBStructsInOneSignature()
 {
-    string result = CollarSample.pairCollar(2, "Oreo", 3, 4);
+    string result = CollarSample.PairCollar(2, "Oreo", 3, 4);
     Assert.Equal("Oreo:2*/3x4", result);
 }
 
 [Fact]
 public void CollarNamedArgs_ComponentNamesMatchDeclarationOrder()
 {
-    string result = CollarSample.collarNamedArgs();
+    string result = CollarSample.CollarNamedArgs();
     Assert.Equal("1,black,true,O,CALM", result);
 }
 ```
@@ -848,7 +848,7 @@ concern, single-component value classes only, and out of scope here):
 [Fact]
 public void TranslatePointDescription_MovesBothComponents()
 {
-    string result = StructsSample.translatePointDescription(1, 2, 10, 20);
+    string result = StructsSample.TranslatePointDescription(1, 2, 10, 20);
     Assert.Equal("11,22", result);
 }
 
@@ -858,14 +858,14 @@ public void TranslatePointDescription_MovesBothComponents()
 [InlineData(-2, -3, 2, 3, 10)]
 public void ManhattanDistance_TwoStructParameters(int x1, int y1, int x2, int y2, int expected)
 {
-    int result = StructsSample.manhattanDistance(x1, y1, x2, y2);
+    int result = StructsSample.ManhattanDistance(x1, y1, x2, y2);
     Assert.Equal(expected, result);
 }
 
 [Fact]
 public void CatteryCurrentProfile_GetSetRoundTrip()
 {
-    string result = StructsSample.catteryCurrentProfileRoundTrip("Household", "Mylo", true, 66, CatMood.Hungry);
+    string result = StructsSample.CatteryCurrentProfileRoundTrip("Household", "Mylo", true, 66, CatMood.Hungry);
     Assert.Equal("unset,false,63,SLEEPY|Mylo,true,66,HUNGRY", result);
 }
 
@@ -875,28 +875,28 @@ public void CatteryCurrentProfile_GetSetRoundTrip()
 [InlineData(-2, -3, 5)]
 public void PointMagnitude_ComputedProperty(int x, int y, int expected)
 {
-    int result = StructsSample.pointMagnitude(x, y);
+    int result = StructsSample.PointMagnitude(x, y);
     Assert.Equal(expected, result);
 }
 
 [Fact]
 public void PointOffset_InstanceMethodStructReturn_ThenFormat()
 {
-    string result = StructsSample.offsetPoint(1, 2, 10, 20);
+    string result = StructsSample.OffsetPoint(1, 2, 10, 20);
     Assert.Equal("(11,22)", result);
 }
 
 [Fact]
 public void PointOrigin_StaticFactory_ThenFormat()
 {
-    string result = StructsSample.pointOriginFormat();
+    string result = StructsSample.PointOriginFormat();
     Assert.Equal("(0,0)", result);
 }
 
 [Fact]
 public void ProfileWithMood_InstanceMethodStructReturn_ThenLabelAndIsPlayful()
 {
-    string result = StructsSample.profileWithMood(
+    string result = StructsSample.ProfileWithMood(
         "Mylo", false, 66, CatMood.Hungry, CatMood.Playful);
     Assert.Equal("Mylo:Playful|true", result);
 }
@@ -904,7 +904,7 @@ public void ProfileWithMood_InstanceMethodStructReturn_ThenLabelAndIsPlayful()
 [Fact]
 public void ProfileResting_StaticFactory_ThenLabel()
 {
-    string result = StructsSample.profileRestingLabel("Oreo");
+    string result = StructsSample.ProfileRestingLabel("Oreo");
     Assert.Equal("Oreo:Sleepy", result);
 }
 ```

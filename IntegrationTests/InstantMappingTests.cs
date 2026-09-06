@@ -70,7 +70,7 @@ public class InstantMappingTests
     {
         // Kotlin's sightingEpoch() carries a 123_456_789 ns adjustment; 89 ns of that is below
         // the wire form's 100ns tick resolution. Truncation floors to ...4567, not ...4568.
-        var result = SightingLogKt.sightingEpoch();
+        var result = SightingLogKt.SightingEpoch();
 
         Assert.Equal(638355968001234567L, result.UtcTicks);
     }
@@ -135,7 +135,7 @@ public class InstantMappingTests
     [Fact]
     public void SightingEpoch_TopLevelReturn_IsWellKnownDate()
     {
-        var result = SightingLogKt.sightingEpoch();
+        var result = SightingLogKt.SightingEpoch();
 
         Assert.Equal(TimeSpan.Zero, result.Offset);
     }
@@ -143,16 +143,16 @@ public class InstantMappingTests
     [Fact]
     public void ParseSighting_TopLevelNullableReturn_ReturnsEpochWhenOreoMentioned()
     {
-        var result = SightingLogKt.parseSighting("Oreo was seen near the fence at dawn");
+        var result = SightingLogKt.ParseSighting("Oreo was seen near the fence at dawn");
 
-        Assert.Equal(SightingLogKt.sightingEpoch(), result);
+        Assert.Equal(SightingLogKt.SightingEpoch(), result);
     }
 
     [Fact]
     public void ParseSighting_TopLevelNullableReturn_NullWhenOreoNotMentioned()
     {
         // Mylo never causes trouble, so a note that doesn't mention Oreo isn't a sighting.
-        var result = SightingLogKt.parseSighting("Mylo was napping on the windowsill");
+        var result = SightingLogKt.ParseSighting("Mylo was napping on the windowsill");
 
         Assert.Null(result);
     }
@@ -217,7 +217,7 @@ public class InstantMappingTests
     {
         var founded = WatchClock.Founded();
 
-        Assert.Equal(SightingLogKt.sightingEpoch(), founded);
+        Assert.Equal(SightingLogKt.SightingEpoch(), founded);
         Assert.Equal(TimeSpan.Zero, founded.Offset);
     }
 

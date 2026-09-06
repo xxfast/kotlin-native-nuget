@@ -24,6 +24,48 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.planFor
 import io.github.xxfast.kotlin.native.nuget.processor.toCName
 import io.github.xxfast.kotlin.native.nuget.processor.toCSharpName
 
+/**
+ * ADR-110's collision guard for one top-level function's projected [members].
+ *
+ * C# forbids two members of a type sharing a name unless both are methods, so a top-level function
+ * whose PascalCase name is already held by a top-level property of the same file class is
+ * uncompilable C# (CS0102). camelCase used to keep the two apart. Unlike the file-class shape
+ * (CS0542), which `resolveStaticClassName` renames away with ADR-007's `Kt` suffix, there is no
+ * rename to fall back on here: renaming either member would be a silently different API
+ * (ADR-034/ADR-082's diagnostic model).
+ *
+ * Fatal, where ADR-110 wrote "skip the function, keep the property": a planned callable is
+ * projected into both halves and ADR-055's contract requires it in each, so it cannot be exported
+ * from Kotlin and dropped from the C#. See [ForwardDiagnosticKind.ERROR_CSHARP_NAME_COLLISION].
+ */
+private fun emitCsharpNameCollisions(
+  members: List<CirMember>,
+  className: String,
+  propertyNames: Set<String>,
+  function: KSFunctionDeclaration,
+  logger: KSPLogger,
+) {
+  val collision: String = members.filterIsInstance<CirMethod>()
+    .map { method -> method.name }
+    .firstOrNull { name -> name in propertyNames }
+    ?: return
+
+  ForwardDiagnosticSink.emit(
+    listOf(
+      ForwardDiagnostic(
+        kind = ForwardDiagnosticKind.ERROR_CSHARP_NAME_COLLISION,
+        symbol = function,
+        declaration = "$className.$collision",
+        reason = "the top-level property '$collision' in the same file already claims that C# " +
+            "name, and C# cannot declare a property and a method with one name (CS0102)",
+        hint = "rename the Kotlin function '${function.simpleName.asString()}'; a top-level " +
+            "function renders PascalCase in C# (ADR-110)",
+      ),
+    ),
+    logger,
+  )
+}
+
 private fun syncErrorArguments(parameters: String): String = if (parameters.isEmpty()) {
   "out IntPtr error"
 } else {
@@ -125,6 +167,22 @@ internal fun translate(
       namespace to fileName
     }
 
+  // ADR-110: a top-level function renders PascalCase, so `fun beam()` in `Beam.kt` wants the member
+  // name `Beam` on a static class already called `Beam`, which C# forbids (CS0542). ADR-007 already
+  // owns the remedy for a file class whose name is taken, so this reuses it: suffix the class `Kt`.
+  // Suspend functions are excluded (their `Async` suffix keeps them clear) and so are extensions
+  // (they live on `{Receiver}Extensions`).
+  val fileClassFunctions: Map<Pair<String, String>, List<KSFunctionDeclaration>> = buildMap {
+    listOf(functions, genericFunctions).forEach { list ->
+      groupByNamespaceAndFile(list).forEach { (key, funcs) ->
+        put(key, getOrElse(key) { emptyList() } + funcs)
+      }
+    }
+  }
+
+  fun csharpMemberName(function: KSFunctionDeclaration): String =
+    function.simpleName.asString().replaceFirstChar { it.uppercase() }
+
   fun resolveStaticClassName(fileClassName: String, namespace: String): String {
     val conflictsWithClass: Boolean = classes.any {
       it.simpleName.asString() == fileClassName && namespaceOf(it.packageName.asString()) == namespace
@@ -142,26 +200,78 @@ internal fun translate(
       it.simpleName.asString() == fileClassName && namespaceOf(it.packageName.asString()) == namespace
     }
 
-    return if (conflictsWithClass || conflictsWithSealed || conflictsWithInterfaceBackingClass) {
-      "${fileClassName}Kt"
-    } else {
-      fileClassName
-    }
+    val named: String =
+      if (conflictsWithClass || conflictsWithSealed || conflictsWithInterfaceBackingClass) {
+        "${fileClassName}Kt"
+      } else {
+        fileClassName
+      }
+
+    val claimedByFunction: Boolean = fileClassFunctions[namespace to fileClassName]
+      ?.any { function -> csharpMemberName(function) == named } == true
+
+    return if (claimedByFunction) "${named}Kt" else named
+  }
+
+  // Once per renamed class, rather than once per loop that asks [resolveStaticClassName] for the
+  // name (functions, generic functions, suspend functions, properties and consts all ask).
+  fileClassFunctions.forEach { (key, funcs) ->
+    val (namespace, fileClassName) = key
+    val resolved: String = resolveStaticClassName(fileClassName, namespace)
+    val claimant: KSFunctionDeclaration = funcs
+      .firstOrNull { function -> csharpMemberName(function) == resolved.removeSuffix("Kt") }
+      ?: return@forEach
+    ForwardDiagnosticSink.emit(
+      listOf(
+        ForwardDiagnostic(
+          kind = ForwardDiagnosticKind.INFO_FILE_CLASS_RENAMED,
+          symbol = claimant,
+          declaration = resolved,
+          reason = "the top-level function '${claimant.simpleName.asString()}' renders the C# " +
+              "name '${csharpMemberName(claimant)}', which is also what its file class would be " +
+              "called, and C# cannot declare a member named like its enclosing type (CS0542)",
+          hint = "call it as $resolved.${csharpMemberName(claimant)}(...); the native export " +
+              "name is unchanged (ADR-007, ADR-110)",
+        ),
+      ),
+      logger,
+    )
   }
 
   val namespaces: MutableList<CirNamespace> = mutableListOf()
   var needsMarshalHelper: Boolean = false
   val tracker = CollectionHelperTracker()
 
+  // ADR-110: top-level functions render PascalCase, so a function can now claim a C# name that a
+  // top-level property of the same file class already holds (`val name` + `fun name()`, CS0102).
+  // The file-class shape (CS0542) is renamed away above; this one has no rename to fall back on.
+  val staticPropertyNames: Map<Pair<String, String>, Set<String>> = buildMap {
+    groupPropertiesByNamespaceAndFile(properties).forEach { (key, props) ->
+      val names: Set<String> = props.mapNotNullTo(mutableSetOf()) { prop ->
+        callableCatalog
+          .propertyFor("${prop.packageName.asString()}.${prop.simpleName.asString()}")
+          ?.publicName
+      }
+      put(key, getOrElse(key) { emptySet() } + names)
+    }
+    groupPropertiesByNamespaceAndFile(constProperties).forEach { (key, props) ->
+      val names: Set<String> = props.mapNotNullTo(mutableSetOf()) { prop ->
+        translateConstProperty(prop)?.name
+      }
+      put(key, getOrElse(key) { emptySet() } + names)
+    }
+  }
+
   groupByNamespaceAndFile(functions).forEach { (key, funcs) ->
     val (namespace, fileClassName) = key
     val finalClassName: String = resolveStaticClassName(fileClassName, namespace)
+    val propertyNames: Set<String> = staticPropertyNames[key] ?: emptySet()
     val members: List<CirMember> = funcs.flatMap { function ->
       // ADR-095: node identity — the walk stays (this grouping needs the declaration), but the
       // plan of an overload is keyed `..._$n` and is no longer derivable from the name.
       // ADR-096: plural — the declared plan plus its synthesized omitting overloads.
       val planned: List<ForwardCallablePlan> = callableCatalog.plansFor(function)
-      if (planned.isNotEmpty()) {
+      val emitted: List<CirMember> = if (planned.isNotEmpty()) {
         planned.flatMap { plan ->
           tracker.trackPlan(plan)
           ForwardCirPlanProjection.static(plan, context.libraryName)
@@ -178,6 +288,8 @@ internal fun translate(
           logger,
         )
       }
+      emitCsharpNameCollisions(emitted, finalClassName, propertyNames, function, logger)
+      emitted
     }
     // ADR-095: top-level overloads land on one static class per (namespace, file class).
     emitCsharpSignatureCollisions(
