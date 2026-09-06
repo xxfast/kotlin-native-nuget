@@ -307,10 +307,16 @@ Assert.Equal("Oreo curled at r=7.5", description);
 `Issue54Drawing` itself has no public constructor and no generated `Copy`: every one of its
 constructor parameters is sealed-typed. A sealed type at a **parameter** position is not on this
 feature's route at all, ADR-105 touched only the property planner, so the whole constructor stays
-skipped, pre-existing and unaffected either way. Unlike the property positions above, this drops
-with **no diagnostic at all**, the same `SEALED_PROTOCOL` legacy-route deferral as the return-side
-gap below; see [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md)
-([details](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/backlog/sealed-collection-return-silently-drops.md)).
+skipped, pre-existing and unaffected either way, the same `SEALED_PROTOCOL` legacy-route deferral as
+the return-side gap below. The per-constructor skip itself still carries no diagnostic of its own,
+but the class as a whole now does: since
+[ADR-064](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/064-forward-unsupported-declaration-diagnostics.md)'s
+2026-09-07 amendment, a class with no reachable public constructor warns once, naming every skipped
+constructor and its reason, rather than shipping as an unexplained dead type; see
+[Classes and objects: No public constructor](classes-and-objects.md#no-public-constructor). See
+[ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md)
+([details](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/backlog/sealed-collection-return-silently-drops.md))
+for the still-open sealed-collection return/parameter gap.
 
 What still skips at a property position, each named by a build warning rather than silently dropped:
 
@@ -1279,6 +1285,7 @@ public void Observation_WorksWithPatternMatching()
     <category ref="external">
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/009-sealed-class-mapping.md">ADR-009: Sealed class mapping</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/040-interface-return-type-mapping.md">ADR-040: Interface return type mapping</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/064-forward-unsupported-declaration-diagnostics.md">ADR-064: Forward unsupported-declaration diagnostics</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/075-collection-property-getter-setter-independence.md">ADR-075: Collection property getter/setter independence</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/084-csharp-implemented-interfaces.md">ADR-084: C#-implemented Kotlin interfaces</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/094-reflection-free-generic-dispatch.md">ADR-094: Reflection-free generic dispatch</a>

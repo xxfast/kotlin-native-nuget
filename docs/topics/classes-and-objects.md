@@ -5,7 +5,7 @@ A Kotlin `class` becomes a C# `class` backed by an opaque `StableRef` handle, im
 | Kotlin | C# | Notes |
 |---|---|---|
 | `class` | `class : IDisposable` | `StableRef` + opaque pointer |
-| constructor | `new Foo(...)` | Kotlin constructor surfaces as a C# `new`; a trailing run of defaulted parameters adds an omitting overload per suffix length, see Constructor default parameters below ([ADR-091](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/091-constructor-default-parameters.md)) |
+| constructor | `new Foo(...)` | Kotlin constructor surfaces as a C# `new`; a trailing run of defaulted parameters adds an omitting overload per suffix length, see Constructor default parameters below ([ADR-091](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/091-constructor-default-parameters.md)); a class whose every public constructor is skipped is kept, not dropped, and warns naming why, see No public constructor below ([ADR-064](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/064-forward-unsupported-declaration-diagnostics.md)) |
 | member property (get) | property (get) | |
 | member property (get/set) | property (get/set) | |
 | object-typed property/return | property/return | new wrapper per access, identity not preserved |
@@ -726,6 +726,90 @@ public void NarratorRate_SynthesizedOverload_UsesBoostDefaultOfOne()
         it is emitted as an ordinary class member.
     </p>
 </note>
+
+## No public constructor
+
+A class whose every public Kotlin constructor is skipped, whatever the reason, still generates a C#
+type: `exportedTypes` and the `ObjectHandle` classifier admit a class by declaration, not by
+constructor outcome, and a Kotlin factory returning it still hands C# a perfectly usable instance.
+What changes is the silence: the generated class carries only its `internal Foo(IntPtr handle)`
+constructor, and the build now warns, naming every skipped constructor and its reason, instead of
+leaving a public type nobody can construct with no explanation anywhere
+([ADR-064](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/064-forward-unsupported-declaration-diagnostics.md)
+2026-09-07 amendment).
+
+### Kotlin {id="noctor-kotlin"}
+
+From `test-library/src/nativeMain/kotlin/.../issue54/Issue54Sample.kt`. `Issue54Drawing`'s
+constructor parameters are all sealed-typed, a position the constructor route does not bind, so the
+primary constructor never reaches a plan:
+
+```kotlin
+data class Issue54Drawing(
+  val shape: Issue54Shape,
+  val maybe: Issue54Shape?,
+  val shapes: List<Issue54Shape>,
+  var current: Issue54Shape,
+)
+
+fun sleepingCats(): Issue54Drawing = Issue54Drawing(
+  shape = Issue54Shape.Circle(radius = 2.0),
+  maybe = null,
+  shapes = listOf(Issue54Shape.Empty, Issue54Shape.Circle(radius = 1.0)),
+  current = Issue54Shape.Empty,
+)
+```
+
+### Generated C# {id="noctor-generated-c"}
+
+From `Interop.cs`. `Issue54Drawing` gets no public constructor, only the internal one every handle
+class carries, but its properties and `sleepingCats()`/`curledCats()` still bind:
+
+```C#
+public class Issue54Drawing : IDisposable, INugetHandle
+{
+    internal IntPtr _handle;
+
+    IntPtr INugetHandle.Handle => _handle;
+
+    internal Issue54Drawing(IntPtr handle)
+    {
+        _handle = handle;
+    }
+```
+
+```C#
+public static global::TestLibrary.Issue54.Issue54Drawing sleepingCats()
+```
+
+### The diagnostic
+
+```
+[nuget:WARNING_NO_PUBLIC_CONSTRUCTOR] Keeping Issue54Drawing: every public constructor is skipped
+    (<init>: SEALED_PROTOCOL), so the generated C# class has only its internal handle constructor
+    and C# cannot construct one. the type is kept because instances can still come from Kotlin
+    factories that return it (a top-level function, or a companion factory); expose one, or change
+    the constructor parameters to types the bridge can express
+    at Issue54Sample.kt:52
+```
+
+The verb reads "Keeping", not "Skipping": the class itself is not skipped, only its constructor is.
+The same kind fires for an unrelated cause on `Issue56Failure`
+([Exceptions](exceptions.md)), whose constructor is skipped for `NULLABLE`, not `SEALED_PROTOCOL`:
+
+```
+[nuget:WARNING_NO_PUBLIC_CONSTRUCTOR] Keeping Issue56Failure: every public constructor is skipped
+    (<init>: NULLABLE), so the generated C# class has only its internal handle constructor and C#
+    cannot construct one. the type is kept because instances can still come from Kotlin factories
+    that return it (a top-level function, or a companion factory); expose one, or change the
+    constructor parameters to types the bridge can express
+    at Issue56Sample.kt:41
+```
+
+Not fired for an abstract class (uninstantiable by design) or for the interface-return backing
+wrapper (see [Interfaces, abstract and sealed classes](interfaces-abstract-sealed.md)), neither of
+which is handle-less by accident. See [Publishing Kotlin to C#: Diagnostics](forward-overview.md#diagnostics)
+for the full diagnostic model.
 
 ## Classes declared in a dependency module
 

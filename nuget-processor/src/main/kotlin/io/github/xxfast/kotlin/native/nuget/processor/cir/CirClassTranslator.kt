@@ -1,6 +1,7 @@
 package io.github.xxfast.kotlin.native.nuget.processor.cir
 
 import com.google.devtools.ksp.getAllSuperTypes
+import com.google.devtools.ksp.getConstructors
 import com.google.devtools.ksp.getVisibility
 import com.google.devtools.ksp.processing.KSPLogger
 import com.google.devtools.ksp.symbol.ClassKind
@@ -15,6 +16,7 @@ import com.google.devtools.ksp.symbol.Variance
 import com.google.devtools.ksp.symbol.Visibility
 import io.github.xxfast.kotlin.native.nuget.processor.exports.findInterfaceBridgePairs
 import io.github.xxfast.kotlin.native.nuget.processor.exports.findStoredCallbackPairs
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallableCatalogEntry
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallablePlan
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallablePlanCatalog
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCirPlanProjection
@@ -112,6 +114,54 @@ private fun keepsSupertype(
   return false
 }
 
+/** Does the author's own Kotlin declaration offer a constructor C# could have called? */
+private fun KSClassDeclaration.hasPublicConstructor(): Boolean =
+  getConstructors().any { it.getVisibility() == Visibility.PUBLIC }
+
+/**
+ * ROADMAP Phase 3: every public constructor of [cls] was skipped, so the generated C# type has
+ * only its `internal $name(IntPtr handle)`. The type is kept on purpose (see
+ * [ForwardDiagnosticKind.WARNING_NO_PUBLIC_CONSTRUCTOR]); this says so, and names each
+ * constructor with the reason it went.
+ *
+ * The reasons come off the catalog's skipped entries rather than being re-derived: they are the
+ * planner's own verdicts, including the legacy-route deferrals `droppedCallables` filters out.
+ * A class whose constructors never reached the planner at all (no skipped entry, no plan) still
+ * warns, naming the count instead.
+ */
+private fun warnNoPublicConstructor(
+  cls: KSClassDeclaration,
+  name: String,
+  callableCatalog: ForwardCallablePlanCatalog,
+  logger: KSPLogger,
+) {
+  val skipped: List<ForwardCallableCatalogEntry.Skipped> =
+    callableCatalog.skippedConstructors(cls.qualifiedName?.asString() ?: name)
+  val declared: Int = cls.getConstructors().count { it.getVisibility() == Visibility.PUBLIC }
+  val detail: String = if (skipped.isEmpty()) {
+    "all $declared of them, see the SKIPPED_* lines above"
+  } else {
+    skipped.joinToString { entry ->
+      "${entry.symbol.substringAfterLast('.')}: ${entry.reason.name}"
+    }
+  }
+  ForwardDiagnosticSink.emit(
+    listOf(
+      ForwardDiagnostic(
+        kind = ForwardDiagnosticKind.WARNING_NO_PUBLIC_CONSTRUCTOR,
+        symbol = cls,
+        declaration = name,
+        reason = "every public constructor is skipped ($detail), so the generated C# class has " +
+            "only its internal handle constructor and C# cannot construct one",
+        hint = "the type is kept because instances can still come from Kotlin factories that " +
+            "return it (a top-level function, or a companion factory); expose one, or change " +
+            "the constructor parameters to types the bridge can express",
+      ),
+    ),
+    logger,
+  )
+}
+
 internal fun translateClass(
   cls: KSClassDeclaration,
   libraryName: String,
@@ -175,6 +225,13 @@ internal fun translateClass(
   val cirConstructor: CirConstructor? = cirConstructors.firstOrNull { it.nativeSuffix.isEmpty() }
   val secondaryConstructors: List<CirConstructor> =
     cirConstructors.filter { it.nativeSuffix.isNotEmpty() }
+
+  // ROADMAP Phase 3: the class is kept (a Kotlin factory returning it still hands C# a usable
+  // instance) but nothing can construct it from C#, and for a legacy-route deferral -- a sealed
+  // or generic parameter -- that outcome had no diagnostic anywhere.
+  if (!isAbstract && cirConstructors.isEmpty() && cls.hasPublicConstructor()) {
+    warnNoPublicConstructor(cls, name, callableCatalog, logger)
+  }
 
   // C has no overloading and C# cannot declare two constructors with identical parameter
   // types — fail fast rather than emit uncompilable C# (ADR-034). C# nullable *reference*
