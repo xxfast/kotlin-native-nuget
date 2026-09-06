@@ -14,6 +14,7 @@ import com.google.devtools.ksp.symbol.KSTypeArgument
 import com.google.devtools.ksp.symbol.Modifier
 import com.google.devtools.ksp.symbol.Variance
 import com.google.devtools.ksp.symbol.Visibility
+import io.github.xxfast.kotlin.native.nuget.processor.csharpParameterName
 import io.github.xxfast.kotlin.native.nuget.processor.exports.findInterfaceBridgePairs
 import io.github.xxfast.kotlin.native.nuget.processor.exports.findStoredCallbackPairs
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallableCatalogEntry
@@ -629,7 +630,7 @@ internal fun translateClass(
           kotlinType in KOTLIN_TO_CSHARP_PARAM -> KOTLIN_TO_CSHARP_PARAM.getValue(kotlinType)
           else -> kotlinType
         }
-        CirParameter(param.name?.asString() ?: "_", paramType)
+        CirParameter((param.name?.asString() ?: "_").csharpParameterName(), paramType)
       }
       CirMethod(
         name = methodName.replaceFirstChar { it.uppercase() },
@@ -657,7 +658,7 @@ internal fun translateClass(
     val methodParams: List<CirParameter> = method.parameters.map { param ->
       val resolved: KSType = param.type.resolve().expandAliases()
       val kotlinType: String = resolved.declaration.simpleName.asString()
-      CirParameter(param.name?.asString() ?: "_", mapParamType(kotlinType))
+      CirParameter((param.name?.asString() ?: "_").csharpParameterName(), mapParamType(kotlinType))
     }
 
     val asyncReturnType: String = if (isUnit) "" else {
@@ -717,7 +718,7 @@ internal fun translateClass(
     val methodParams: List<CirParameter> = method.parameters.map { param ->
       val resolved: KSType = param.type.resolve().expandAliases()
       val kotlinType: String = resolved.declaration.simpleName.asString()
-      CirParameter(param.name?.asString() ?: "_", mapParamType(kotlinType))
+      CirParameter((param.name?.asString() ?: "_").csharpParameterName(), mapParamType(kotlinType))
     }
 
     val nativeParams: List<CirParameter> = listOf(
@@ -784,7 +785,7 @@ internal fun translateClass(
     val methodParams: List<CirParameter> = method.parameters.map { param ->
       val resolved: KSType = param.type.resolve().expandAliases()
       val kotlinType: String = resolved.declaration.simpleName.asString()
-      CirParameter(param.name?.asString() ?: "_", mapParamType(kotlinType))
+      CirParameter((param.name?.asString() ?: "_").csharpParameterName(), mapParamType(kotlinType))
     }
 
     val nativeParams: List<CirParameter> = listOf(
@@ -1728,7 +1729,7 @@ internal fun translateInterface(
         val csType: String =
           if (kotlinType in typeParamNames) kotlinType
           else mapParamType(kotlinType)
-        CirParameter(param.name?.asString() ?: "_", csType)
+        CirParameter((param.name?.asString() ?: "_").csharpParameterName(), csType)
       }
 
       CirInterfaceMethod(csMethodName, csReturnType, params)
@@ -1875,7 +1876,7 @@ internal fun translateValueClass(
     val params: List<CirParameter> = ctor.parameters.map { param ->
       val resolved: KSType = param.type.resolve().expandAliases()
       val kotlinType: String = resolved.declaration.simpleName.asString()
-      CirParameter(param.name?.asString() ?: "_", mapParamType(kotlinType))
+      CirParameter((param.name?.asString() ?: "_").csharpParameterName(), mapParamType(kotlinType))
     }
 
     val paramNames: String = params.joinToString(", ") { it.name }
@@ -2023,7 +2024,7 @@ private fun translateCallbackMethod(
     param.type.resolve().expandAliases().declaration.qualifiedName?.asString() in LAMBDA_TYPES
   } ?: return null
 
-  val lambdaParamName: String = lambdaParam.name?.asString() ?: "callback"
+  val lambdaParamName: String = (lambdaParam.name?.asString() ?: "callback").csharpParameterName()
   val lambdaType: KSType = lambdaParam.type.resolve().expandAliases()
   val lambdaArity: Int = lambdaType.arguments.size - 1
 

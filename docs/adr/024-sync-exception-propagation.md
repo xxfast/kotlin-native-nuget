@@ -199,6 +199,36 @@ Consequence for consumers: the rename lands on the public C# signature, so a nam
 call site must use the renamed form, e.g. `new Issue66StoryState(error_: "...", title: "...")`.
 Positional calls are unaffected.
 
+### Amendment (2026-09-07): the rename and the keyword escape now apply on every C# route, not only the ordinary plan
+
+The 2026-09-05 amendment above, and the `#65` keyword escape it shares `csharpParameterName()`
+with, only ran from the ordinary synchronous forward callable plan's parameter render sites
+(constructors, class methods, top-level and extension functions, value-class members). Every
+other route (a suspend method, a `Flow`- or `MutableStateFlow`-returning member, a lambda
+parameter, a sealed member, a generic member, or an interface declaration) built its own
+`CirParameter`, or printed a name with no `CirParameter` node at all, straight from the raw
+Kotlin identifier, so a keyword-named or `error`-named parameter on any of those routes still
+rendered bare.
+
+`csharpParameterName()`, `shadowsCSharpErrorSlot()`, and `CSHARP_ERROR_SLOT` moved out of
+`ForwardCirPlanProjection.kt` into `Reserved.kt`, and are now applied once, at construction, at
+every legacy translator site that builds a C# parameter name from a Kotlin identifier
+(`CirFunctionTranslator`'s specialized sealed and generic-instantiation returns, top-level
+suspend, and generic functions; `CirClassTranslator`'s abstract methods, class suspend, suspend
+`StateFlow`, `Flow`/`StateFlow`/`MutableStateFlow`, interface declarations, the value-class
+fallback constructor, and lambda-parameter methods). Because the escape and the rename run at
+construction rather than at render time, the declaration and the native-call argument are printed
+from the same `CirParameter.name` and agree by construction: `@ref` is declared and passed,
+`error_` is declared and passed, and a composite local built off the parameter keeps the leading
+`@` (`@refPtr`).
+
+An async route (suspend, `Flow`, `MutableStateFlow`) that declares no `error` local of its own
+still gets the `error` -> `error_` rename under this rule, since the rename is a property of the
+parameter's own name, not of whether the particular route happens to collide with a generated
+local today. That is one rule applied uniformly rather than a per-route exception list, and a
+named C# argument at a call site sees `error_` on these routes exactly as it does on the ordinary
+plan.
+
 ## Consequences
 
 ### Breaking changes

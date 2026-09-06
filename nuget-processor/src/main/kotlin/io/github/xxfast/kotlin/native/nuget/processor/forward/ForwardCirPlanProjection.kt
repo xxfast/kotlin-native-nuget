@@ -1,6 +1,6 @@
 package io.github.xxfast.kotlin.native.nuget.processor.forward
 
-import io.github.xxfast.kotlin.native.nuget.processor.CSHARP_RESERVED
+import io.github.xxfast.kotlin.native.nuget.processor.csharpParameterName
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirDllImport
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirConstructor
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirMember
@@ -1496,55 +1496,7 @@ internal fun durationLiftCs(ticks: String): String = "new global::System.TimeSpa
 private fun BridgeType.isInterfaceInput(): Boolean =
   this is BridgeType.Interface || (this is BridgeType.Nullable && type is BridgeType.Interface)
 
-/**
- * The name of the ADR-024 exception slot every synchronous C# import and wrapper body declares as
- * its trailing `out IntPtr error`. Named once here so the rename rule below cannot drift from the
- * ~60 `out IntPtr error` literals in `cir/` that the slot is actually rendered from.
- */
-internal const val CSHARP_ERROR_SLOT: String = "error"
-
-/**
- * The C# spelling of a Kotlin parameter name, at both its declaration and every use site. Two
- * render-time rules, kept in one function so they cannot disagree (a name can only ever hit one of
- * them: `error` is not a C# keyword):
- *
- * Issue #65: Kotlin admits C# reserved words as identifiers (`abstract`, `default`, `params`,
- * `ref`, `string`, ...), so a parameter name may be a keyword on the C# side; it is escaped to a
- * verbatim identifier.
- *
- * Issue #66: a parameter named [CSHARP_ERROR_SLOT] would be declared twice in the same signature
- * (CS0100) and, in the wrapper body, would rebind to the inline `out IntPtr error` local that
- * scopes over the whole block (CS0136/CS0841). It takes a `_` suffix instead. So must every name
- * that is already `error` followed by only underscores, or the shifted `error` would land on a
- * sibling: shifting the whole chain up by one is injective (chain members map within the chain,
- * every other name is a fixed point outside it, and nothing maps back onto `error`), so no two
- * parameters of one callable can converge — without the renamer needing to see its siblings. The
- * cost of that locality is that a lone `error_` shifts to `error__` even with no `error` beside it.
- *
- * Both rules apply at *render* time only: the plan keeps the Kotlin name, because the Kotlin
- * `@CName` emitter reads the same [ForwardPublicParameter]/[ForwardAbiParameter] names for its own
- * signature and its positional invocation, where `@abstract` is not valid Kotlin and where `error`
- * collides with nothing (the planner names the Kotlin ABI slot `errorOut`).
- *
- * Deliberately not [io.github.xxfast.kotlin.native.nuget.processor.toCSharpName]: that helper's
- * `trimEnd('_')` exists for C-mangled *function* names, and a parameter name is never C-mangled.
- */
-internal fun String.csharpParameterName(): String = when {
-  this in CSHARP_RESERVED -> "@$this"
-  shadowsCSharpErrorSlot() -> "${this}_"
-  else -> this
-}
-
-/** True for `error`, `error_`, `error__`, ... and nothing else — see [csharpParameterName]. */
-private fun String.shadowsCSharpErrorSlot(): Boolean =
-  startsWith(CSHARP_ERROR_SLOT) &&
-      substring(CSHARP_ERROR_SLOT.length).all { character -> character == '_' }
-
-/**
- * The C# spelling of a public parameter, at both its declaration and every use site. Composite
- * locals derived from it (`${csharpName}Handle`, `${csharpName}Owned`) keep the `@` in *leading*
- * position -- `@paramsHandle` is a valid verbatim identifier, `params@Handle` is not.
- */
+/** The C# spelling of a public parameter, at both its declaration and every use site. */
 internal val ForwardPublicParameter.csharpName: String get() = name.csharpParameterName()
 
 /**
