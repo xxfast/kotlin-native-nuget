@@ -441,6 +441,34 @@ class NugetProcessor(
       // pipeline never mints a second managed type for the same concept.
       .filter { it.qualifiedName?.asString() !in context.boundInterfaces }
 
+    // ADR-064 (2026-09-07 amendment): every bucket above keys on CLASS/OBJECT/ENUM_CLASS/
+    // INTERFACE, so a public `annotation class` passed `isExported`, landed in `allDeclarations`
+    // and was then matched by nothing -- absent from the generated C# with no diagnostic at all.
+    // There is no C# projection of a Kotlin annotation worth generating, so it stays absent; it
+    // just says so now. Emitted here, before the `hasNothingToProcess` early return below, so a
+    // module whose only public declaration is an annotation class still writes it into
+    // NugetDiagnostics.json. An `expect annotation class` is dropped by the `isExpect` filter and
+    // its `actual` is named here, the same "the actual is the export root" rule ADR-074 uses.
+    val rootAnnotationClasses: List<KSClassDeclaration> = allDeclarations
+      .filterIsInstance<KSClassDeclaration>()
+      .filter { it.getVisibility() == Visibility.PUBLIC }
+      .filter { it.classKind == ClassKind.ANNOTATION_CLASS }
+      .filter { it.parentDeclaration == null }
+    ForwardDiagnosticSink.emit(
+      rootAnnotationClasses.map { annotation ->
+        ForwardDiagnostic(
+          kind = ForwardDiagnosticKind.SKIPPED_ANNOTATION_CLASS,
+          symbol = annotation,
+          declaration = annotation.qualifiedName?.asString() ?: annotation.simpleName.asString(),
+          reason = "annotation classes are not bridged; there is no C# projection of a Kotlin " +
+              "annotation, so nothing is generated for it",
+          hint = "usages of it on exported declarations are unaffected. Make it internal, or " +
+              "exclude(...) its package, if the warning is unwanted",
+        )
+      },
+      logger,
+    )
+
     // ADR-066: the reachability closure discovers dependency-module (klib) declarations reachable
     // from these module-local roots — the only way in, since `getDeclarationsFromPackage` returns
     // empty for a klib dependency (verified). A discovered declaration is admitted iff it passes
