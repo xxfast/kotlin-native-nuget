@@ -578,3 +578,51 @@ Rendered (per `format()`, `:160-171`):
 - `test-library`'s build log permanently carries one `SKIPPED_ANNOTATION_CLASS` line for `Tagged`,
   alongside the named skips it already carries (`Issue54Tests.cs`, `Issue56Tests.cs`).
 - Nothing changes in generated C#, Kotlin exports, or the ABI.
+
+## Amendment (2026-09-07): an absent declaration leaves no husk
+
+Judgement: an **amendment**, not a new ADR. This closes the ROADMAP Phase 3 item "A file whose only
+top-level declaration is skipped still emits an empty, pointless `public static partial class X { }`
+stub into `Interop.cs`" (`docs/backlog/file-whose-only-top-level-declaration-skipped.md`). It adds no
+new diagnostic kind; the named skips this ADR already produces (`SKIPPED_UNSUPPORTED_INPUT` and its
+siblings) are what leaves a file's static class empty in the first place. This amendment is about
+what the emitter does with that emptiness, not about naming it. Status stays Accepted.
+
+`CirTranslator` builds one `CirStaticClass` per (namespace, file) group across five separate
+contribution loops (sync functions, suspend functions, generic functions, properties, and the
+extension loops), each of which merges into that class by name. The extension loops already guarded
+their own two emission sites with an `isNotEmpty()` check, so an extension receiver with nothing
+left never got a class. The other loops did not, so a file whose every top-level declaration was
+named-skipped (a `Map`/`Set` parameter, a nullable-`Boolean` return, `SKIPPED_UNSUPPORTED_INPUT`, or
+any other `SKIPPED_*`) still emitted `public static partial class X { }`: compiles, carries no
+`DllImport`, but is a scar left by a skip that a consumer reading IntelliSense cannot tell apart from
+a class whose members are merely still to come.
+
+The fix is a single sweep at `CirFile` assembly, after every loop has merged and after the
+suspend/lambda helpers have been folded into the root namespace (it cannot be a per-loop guard: a
+file with a skipped sync function and a surviving `suspend fun` contributes an empty member list in
+one loop and the survivor in another loop, so only the fully merged set can say "empty"):
+
+```kotlin
+private fun List<CirNamespace>.withoutEmptyStaticClasses(): List<CirNamespace> = this
+  .map { namespace ->
+    namespace.copy(
+      declarations = namespace.declarations.filterNot { it is CirStaticClass && it.members.isEmpty() },
+    )
+  }
+  .filter { it.declarations.isNotEmpty() }
+```
+
+A `CirStaticClass` with no members is dropped, and a namespace left with no declarations at all is
+dropped with it. Contract-neutral: an empty static class carried no `DllImport`s, so nothing an
+existing consumer could be calling disappears.
+
+Three fixtures pin the three outcomes in one pack: `test-library/.../test/husk/HuskOnly.kt` (its
+only declaration, `fun scan(items: List<List<String>?>)`, is named-skipped, so `HuskOnly` no longer
+appears anywhere in the generated C#), `husk/HuskMixed.kt` (one skipped function plus a surviving
+`fun ping(): Int = 1`, so the class stays with only `ping` on it, the control that stops "elide when
+empty" degrading into "elide when anything was skipped"), and `chaff/ChaffOnly.kt` (the only file in
+its package, so the whole `TestLibrary.Chaff` namespace goes with it). `IntegrationTests/EmptyStaticClassTests.cs`
+asserts the compiled absence/presence from the C# side; `Tier1EmptyStaticClassElisionTest` pins the
+same three shapes, plus a fourth cross-loop case (a skipped sync function and a surviving `suspend
+fun` in the same file) that rules out a per-loop guard.
