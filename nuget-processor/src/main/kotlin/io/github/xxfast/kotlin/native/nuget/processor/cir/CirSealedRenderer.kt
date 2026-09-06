@@ -1,5 +1,17 @@
 package io.github.xxfast.kotlin.native.nuget.processor.cir
 
+/**
+ * ADR-009's hierarchy, declared the way Kotlin declares it (issue #54): a subclass nested inside
+ * its sealed base stays nested in C# (`Shape.Circle`), a subclass declared *beside* its base is
+ * declared beside it here too, at namespace level (`public sealed class Label : Shape`, emitted
+ * after the base's closing brace so the base type it names is already complete).
+ *
+ * Both spellings come off the same subclass block, re-indented for the sibling, so the
+ * discriminator order, the export prefixes and the member bodies stay identical between the two
+ * positions. The sealed route is the only thing that declares either: the plain-class route no
+ * longer collects a sibling subclass at all, which is what made one Kotlin type into two unrelated
+ * C# types.
+ */
 internal fun StringBuilder.renderSealedClass(sealed: CirSealedClass) {
   appendLine("    public abstract class ${sealed.name} : IDisposable, INugetHandle")
   appendLine("    {")
@@ -13,54 +25,8 @@ internal fun StringBuilder.renderSealedClass(sealed: CirSealedClass) {
   appendLine("        }")
   appendLine()
 
-  for (subclass in sealed.subclasses) {
-    appendLine("        public sealed class ${subclass.name} : ${sealed.name}")
-    appendLine("        {")
-    appendLine("            internal ${subclass.name}(IntPtr handle) : base(handle)")
-    appendLine("            {")
-    appendLine("            }")
-    appendLine()
-
-    for (prop in subclass.properties) {
-      // Issue #38: every sealed-subclass property getter carries the `out IntPtr error` slot its
-      // Kotlin export declares, and a nullable primitive is read through the ADR-002 pair
-      // (`_has_value` + `_value`) in place of the single import.
-      if (prop.isNullablePrimitiveTwoCall) {
-        appendLine("            [DllImport(\"${sealed.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"${subclass.nativePrefix}_get_${prop.nativeName}_has_value\")]")
-        appendLine("            [return: MarshalAs(UnmanagedType.I1)]")
-        appendLine("            private static extern bool Native_Get_${prop.nativeName}_has_value(IntPtr handle, out IntPtr error);")
-        appendLine()
-        appendLine("            [DllImport(\"${sealed.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"${subclass.nativePrefix}_get_${prop.nativeName}_value\")]")
-        appendLine("            private static extern ${prop.nativeReturnType} Native_Get_${prop.nativeName}_value(IntPtr handle, out IntPtr error);")
-      } else {
-        appendLine("            [DllImport(\"${sealed.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"${subclass.nativePrefix}_get_${prop.nativeName}\")]")
-        appendLine("            private static extern ${prop.nativeReturnType} Native_Get_${prop.nativeName}(IntPtr handle, out IntPtr error);")
-      }
-      appendLine()
-      renderSealedSubclassProperty(prop)
-      appendLine()
-    }
-
-    if (subclass.isDataObject) {
-      appendLine("            public override string ToString() => \"${subclass.name}\";")
-      appendLine()
-    } else if (subclass.isDataClass) {
-      renderSealedSubclassDataMethods(sealed.libraryName, subclass.nativePrefix, sealed.name, subclass.name)
-    }
-
-    appendLine("            public override void Dispose()")
-    appendLine("            {")
-    appendLine("                if (_handle != IntPtr.Zero)")
-    appendLine("                {")
-    appendLine("                    Native_Dispose(_handle);")
-    appendLine("                    _handle = IntPtr.Zero;")
-    appendLine("                }")
-    appendLine("            }")
-    appendLine()
-    appendLine("            [DllImport(\"${sealed.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"${subclass.nativePrefix}_dispose\")]")
-    appendLine("            private static extern void Native_Dispose(IntPtr handle);")
-    appendLine("        }")
-    appendLine()
+  for (subclass in sealed.subclasses.filter { it.isNested }) {
+    append(sealedSubclassBlock(sealed, subclass))
   }
 
   appendLine("        [DllImport(\"${sealed.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"${sealed.nativePrefix}_get_type\")]")
@@ -71,6 +37,8 @@ internal fun StringBuilder.renderSealedClass(sealed: CirSealedClass) {
   appendLine("            return Native_GetType(handle) switch")
   appendLine("            {")
 
+  // Every subclass, nested or sibling, in the Kotlin discriminator's own order. A sibling resolves
+  // bare from inside the base because it lives in the same namespace.
   for ((index, subclass) in sealed.subclasses.withIndex()) {
     appendLine("                $index => new ${subclass.name}(handle),")
   }
@@ -81,7 +49,74 @@ internal fun StringBuilder.renderSealedClass(sealed: CirSealedClass) {
   appendLine()
   appendLine("        public abstract void Dispose();")
   appendLine("    }")
+
+  for (subclass in sealed.subclasses.filterNot { it.isNested }) {
+    appendLine()
+    append(sealedSubclassBlock(sealed, subclass).outdentToNamespaceLevel())
+  }
 }
+
+/** One subclass, rendered at the nesting depth of a class declared inside its sealed base. */
+private fun sealedSubclassBlock(
+  sealed: CirSealedClass,
+  subclass: CirSealedSubclass,
+): String = buildString {
+  appendLine("        public sealed class ${subclass.name} : ${sealed.name}")
+  appendLine("        {")
+  appendLine("            internal ${subclass.name}(IntPtr handle) : base(handle)")
+  appendLine("            {")
+  appendLine("            }")
+  appendLine()
+
+  for (prop in subclass.properties) {
+    // Issue #38: every sealed-subclass property getter carries the `out IntPtr error` slot its
+    // Kotlin export declares, and a nullable primitive is read through the ADR-002 pair
+    // (`_has_value` + `_value`) in place of the single import.
+    if (prop.isNullablePrimitiveTwoCall) {
+      appendLine("            [DllImport(\"${sealed.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"${subclass.nativePrefix}_get_${prop.nativeName}_has_value\")]")
+      appendLine("            [return: MarshalAs(UnmanagedType.I1)]")
+      appendLine("            private static extern bool Native_Get_${prop.nativeName}_has_value(IntPtr handle, out IntPtr error);")
+      appendLine()
+      appendLine("            [DllImport(\"${sealed.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"${subclass.nativePrefix}_get_${prop.nativeName}_value\")]")
+      appendLine("            private static extern ${prop.nativeReturnType} Native_Get_${prop.nativeName}_value(IntPtr handle, out IntPtr error);")
+    } else {
+      appendLine("            [DllImport(\"${sealed.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"${subclass.nativePrefix}_get_${prop.nativeName}\")]")
+      appendLine("            private static extern ${prop.nativeReturnType} Native_Get_${prop.nativeName}(IntPtr handle, out IntPtr error);")
+    }
+    appendLine()
+    renderSealedSubclassProperty(prop)
+    appendLine()
+  }
+
+  if (subclass.isDataObject) {
+    appendLine("            public override string ToString() => \"${subclass.name}\";")
+    appendLine()
+  } else if (subclass.isDataClass) {
+    renderSealedSubclassDataMethods(sealed.libraryName, subclass.nativePrefix, sealed.name, subclass.name)
+  }
+
+  appendLine("            public override void Dispose()")
+  appendLine("            {")
+  appendLine("                if (_handle != IntPtr.Zero)")
+  appendLine("                {")
+  appendLine("                    Native_Dispose(_handle);")
+  appendLine("                    _handle = IntPtr.Zero;")
+  appendLine("                }")
+  appendLine("            }")
+  appendLine()
+  appendLine("            [DllImport(\"${sealed.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"${subclass.nativePrefix}_dispose\")]")
+  appendLine("            private static extern void Native_Dispose(IntPtr handle);")
+  appendLine("        }")
+  appendLine()
+}
+
+/**
+ * Lifts a subclass block out of its base's braces: one nesting level shallower, which is exactly
+ * the depth every other namespace-level declaration renders at, so the member bodies baked at the
+ * ordinary-class indentation land right again.
+ */
+private fun String.outdentToNamespaceLevel(): String =
+  lines().joinToString("\n") { line -> line.removePrefix("    ") }
 
 internal fun StringBuilder.renderSealedSubclassDataMethods(libraryName: String, nativePrefix: String, sealedName: String, subclassName: String) {
   appendLine("            [DllImport(\"$libraryName\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"${nativePrefix}_equals\")]")

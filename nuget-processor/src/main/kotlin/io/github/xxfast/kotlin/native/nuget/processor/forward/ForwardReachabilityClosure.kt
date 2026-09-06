@@ -24,6 +24,15 @@ import io.github.xxfast.kotlin.native.nuget.processor.cir.expandAliases
  */
 internal enum class ForwardReachabilityBucket {
   CLASS, VALUE_CLASS, SEALED_CLASS, OBJECT, ENUM, INTERFACE,
+
+  /**
+   * Issue #54: a subclass of a sealed base, which no root list picks up. It is admitted (so the
+   * classifier still spells it as an exported handle) but reaches C# only through its base's
+   * `getSealedSubclasses()` walk in the sealed route. Bucketing it as [CLASS] declared it a second
+   * time as a plain class, the klib-origin half of the same duplicate a module-local sibling
+   * subclass produced.
+   */
+  SEALED_SUBCLASS,
 }
 
 internal data class ForwardReachabilityResult(
@@ -205,6 +214,7 @@ internal class ForwardReachabilityClosure(
     classKind == ClassKind.OBJECT -> ForwardReachabilityBucket.OBJECT
     classKind == ClassKind.INTERFACE -> ForwardReachabilityBucket.INTERFACE
     modifiers.contains(Modifier.SEALED) -> ForwardReachabilityBucket.SEALED_CLASS
+    isSealedSubclass() -> ForwardReachabilityBucket.SEALED_SUBCLASS
     isValueClass() -> ForwardReachabilityBucket.VALUE_CLASS
     else -> ForwardReachabilityBucket.CLASS
   }

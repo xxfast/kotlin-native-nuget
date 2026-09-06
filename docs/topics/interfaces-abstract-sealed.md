@@ -6,7 +6,7 @@ Kotlin's three flavours of inheritance each get a distinct C# shape: `interface`
 |---|---|---|
 | `interface` | `interface` (`I`-prefixed) | default methods delegate to Kotlin |
 | `abstract class` | `abstract class` | `_handle` inherited by subclasses |
-| `sealed class` | `abstract class` | subclasses nested, see [ADR-009](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/009-sealed-class-mapping.md) |
+| `sealed class` | `abstract class` | a nested subclass stays nested (`Base.Sub`); a **sibling** subclass, declared beside its base rather than inside it, is declared at namespace level (`public sealed class Sub : Base`), see [A sibling sealed subclass declared beside its base](#a-sibling-sealed-subclass-declared-beside-its-base), [ADR-009](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/009-sealed-class-mapping.md) |
 | interface-typed return (method result or property) | `IFoo` / `IFoo?` | backed by a generated `sealed class Foo : IFoo`, see [ADR-040](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/040-interface-return-type-mapping.md) |
 | interface-typed parameter, a C# class implementing `IFoo` | accepted, no `_handle` needed | dispatched through a per-interface bridge factory, see [ADR-084](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/084-csharp-implemented-interfaces.md) |
 | nullable property on a sealed subclass (`String?`, `Int?`) | `string?` / `int?` | `String?` is one export returning `string?`; `Int?` is a `_has_value`/`_value` pair rendered as one `?:` expression |
@@ -431,6 +431,144 @@ public void Unit_NestedSubclassAtAPropertyPosition_ReadsTheSubclassPayload()
     used by the sealed-subclass property renderer and the ADR-067 flow-element route. It got the
     same enclosing-scope walk, pinned by the Tier 1 <code>Wrapper(val inner: Circle)</code>
     cell.</p>
+</note>
+
+## A sibling sealed subclass declared beside its base
+
+A sealed subclass does not have to be nested inside its base; Kotlin also allows it declared
+*beside* the base, as an ordinary top-level class in the same file. Before this fix a sibling
+subclass was collected twice: once by the ordinary class route, as a namespace-level type with its
+own public constructor, and once by the sealed route, as a nested type with a discriminator arm.
+One Kotlin type produced two different C# types, so `Base.FromHandle` and the ordinary class's own
+factory returned different types for the same value, and an `is` check disagreed with itself
+depending on which one the caller happened to hold ([#54](https://github.com/xxfast/kotlin-native-nuget/issues/54)).
+
+The sealed route is now the sole owner of every sealed subclass, sibling or nested. A sibling
+subclass is declared at namespace level beside its base, `public sealed class Label : FlatShape`,
+with an `internal` constructor and its own `flatshape_label_*` exports, the same shape a nested
+subclass gets except for where it sits. A subclass that really is nested inside its base stays
+nested (`FlatShape.Circle`).
+
+### Kotlin {id="sibling-sealed-kotlin"}
+
+From `test-library/src/nativeMain/kotlin/.../issue54/FlatShapeSample.kt`:
+
+```kotlin
+sealed class FlatShape {
+  /** Nested control: Oreo, curled, described by one non-null `Int`. */
+  data class Circle(val radius: Int) : FlatShape()
+}
+
+/** The cell under test: a **sibling** subclass, declared beside [FlatShape] rather than inside it. */
+data class Label(val text: String) : FlatShape()
+
+/** Carries both subclasses and the sealed base across return and property positions. */
+class FlatShapeFactory {
+  /** Return position: the sibling subclass, spelled as a concrete type. */
+  fun label(text: String): Label = Label(text)
+
+  /** Property position: the nested subclass, the control spelling. */
+  val circle: FlatShape.Circle = FlatShape.Circle(3)
+}
+
+fun anyFlat(): FlatShape = Label("any")
+```
+
+### Generated C# {id="sibling-sealed-generated-c"}
+
+From `Interop.cs`. `Label` is declared at namespace level, not nested inside `FlatShape`, but it
+still contributes the second arm of `FlatShape`'s discriminator:
+
+```C#
+public abstract class FlatShape : IDisposable, INugetHandle
+{
+    internal IntPtr _handle;
+
+    public sealed class Circle : FlatShape
+    {
+        internal Circle(IntPtr handle) : base(handle) { }
+
+        public int Radius => Native_Get_radius(_handle, out _);
+
+        // Equals / GetHashCode / ToString / Dispose ...
+    }
+
+    [DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "flatshape_get_type")]
+    private static extern int Native_GetType(IntPtr handle);
+
+    internal static FlatShape FromHandle(IntPtr handle)
+    {
+        return Native_GetType(handle) switch
+        {
+            0 => new Circle(handle),
+            1 => new Label(handle),
+            _ => throw new InvalidOperationException("Unknown sealed class type")
+        };
+    }
+
+    public abstract void Dispose();
+}
+
+public sealed class Label : FlatShape
+{
+    internal Label(IntPtr handle) : base(handle) { }
+
+    [DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "flatshape_label_get_text")]
+    private static extern IntPtr Native_Get_text(IntPtr handle, out IntPtr error);
+
+    public string Text => Marshal.PtrToStringUTF8(Native_Get_text(_handle, out _))!;
+
+    // Equals / GetHashCode / ToString / Dispose ...
+}
+```
+
+`FlatShapeFactory.Label(text)` returns the sibling subclass directly, constructed the same way any
+ordinary method return would:
+
+```C#
+[DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "flatshapefactory_label")]
+private static extern IntPtr Native_Label(IntPtr handle, [MarshalAs(UnmanagedType.LPUTF8Str)] string text, out IntPtr error);
+
+public global::TestLibrary.Issue54.Label Label(string text)
+{
+    IntPtr nativeResult = Native_Label(_handle, text, out IntPtr error);
+    if (error != IntPtr.Zero)
+    {
+        throw NugetErrorNative.BuildException(error);
+    }
+    return new global::TestLibrary.Issue54.Label(nativeResult);
+}
+```
+
+### Using it from C# {id="sibling-sealed-using-it-from-c"}
+
+From `IntegrationTests/FlatSealedSubclassTests.cs`:
+
+```C#
+[Fact]
+public void Label_IsDeclaredOnceAtNamespaceLevel_AndDerivesFromTheSealedBase()
+{
+    Assembly assembly = typeof(FlatShape).Assembly;
+
+    Type[] labels = assembly
+        .GetTypes()
+        .Where(type => type.Name == "Label" && type.Namespace == "TestLibrary.Issue54")
+        .ToArray();
+
+    Assert.Single(labels);
+    Assert.Null(labels[0].DeclaringType);
+    Assert.Null(typeof(Label).DeclaringType);
+    Assert.Equal(typeof(FlatShape), typeof(Label).BaseType);
+}
+```
+
+<note>
+    <p>A class method returning the sealed <b>base</b>, <code>FlatShapeFactory.of(radius):
+    FlatShape</code>, is a separate, still-open gap: it is silently dropped with no export and no
+    diagnostic, the same class-method-returning-sealed-type defect
+    <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md">ROADMAP.md</a>
+    already tracks. It sits in the same fixture but is not asserted by
+    <code>FlatSealedSubclassTests</code>.</p>
 </note>
 
 ## Nullable properties on sealed subclasses

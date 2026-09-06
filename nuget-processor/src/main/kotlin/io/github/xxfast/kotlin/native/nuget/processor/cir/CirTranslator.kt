@@ -581,7 +581,12 @@ private fun factoryEntries(namespaces: List<CirNamespace>): List<CirFactoryEntry
         is CirSealedClass ->
           listOf(CirFactoryEntry("${namespace.name}.${declaration.name}", viaFromHandle = true)) +
             declaration.subclasses.map { subclass ->
-              CirFactoryEntry("${namespace.name}.${declaration.name}.${subclass.name}")
+              // Issue #54: a sibling subclass is declared at namespace level, so its wrapper name
+              // is `Namespace.Label`, not `Namespace.Shape.Label` -- the key has to be the name a
+              // consumer's `typeof(...)` produces or the erased generic path misses it.
+              val name: String =
+                if (subclass.isNested) "${declaration.name}.${subclass.name}" else subclass.name
+              CirFactoryEntry("${namespace.name}.$name")
             }
 
         else -> emptyList()

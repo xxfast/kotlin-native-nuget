@@ -1023,6 +1023,8 @@ internal fun translateSealedClass(
       val subPrefix: String = "${prefix}_${subName.lowercase()}"
       val isDataClass: Boolean = subclass.modifiers.contains(Modifier.DATA)
       val isDataObject: Boolean = isDataClass && subclass.classKind == ClassKind.OBJECT
+      val isNested: Boolean =
+        subclass.parentDeclaration?.qualifiedName?.asString() == cls.qualifiedName?.asString()
 
       val properties: List<CirProperty> = if (isDataObject) {
         emptyList()
@@ -1301,6 +1303,7 @@ internal fun translateSealedClass(
         properties = properties,
         isDataClass = isDataClass,
         isDataObject = isDataObject,
+        isNested = isNested,
       )
     }
     .toList()
