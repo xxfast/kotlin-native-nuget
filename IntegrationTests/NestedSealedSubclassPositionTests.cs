@@ -64,9 +64,7 @@ public class NestedSealedSubclassPositionTests
 
     /// <summary>
     /// Control: the sealed <em>base</em> at a top-level function return, the sealed-return position
-    /// this repository already exercises, must stay green through the fix. (The same base at a
-    /// <em>class method</em> return — <c>NestedShapeFactory.shapeOf</c> — is dropped from the
-    /// generated bindings entirely, with no diagnostic, so it cannot be asserted here.)
+    /// this repository already exercises, must stay green through the fix.
     /// </summary>
     [Fact]
     public void AnyShape_SealedBaseAtATopLevelReturn_StillDiscriminatesToTheNestedSubclass()
@@ -75,5 +73,22 @@ public class NestedSealedSubclassPositionTests
 
         var circle = Assert.IsType<NestedShape.Circle>(any);
         Assert.Equal(1.0, circle.Radius);
+    }
+
+    /// <summary>
+    /// The same sealed base at a <em>class method</em> return, the position that is silently dropped
+    /// today. It has to plan on the ordinary member plan and read back through the ADR-009
+    /// <c>FromHandle</c> discriminator, exactly as the top-level control above does. Oreo curls to
+    /// whatever radius the sunbeam allows.
+    /// </summary>
+    [Fact]
+    public void ShapeOf_SealedBaseAtAClassMethodReturn_DiscriminatesToTheNestedSubclass()
+    {
+        using var factory = new NestedShapeFactory();
+
+        using NestedShape shape = factory.ShapeOf(2.0);
+
+        var circle = Assert.IsType<NestedShape.Circle>(shape);
+        Assert.Equal(2.0, circle.Radius);
     }
 }

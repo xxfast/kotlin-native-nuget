@@ -83,14 +83,20 @@ class Tier1LegacyRouteParameterNamesTest {
       .generatedCSharp
   }
 
+  /**
+   * ADR-105 (issue #54): a sealed return is planned at every origin now, so this cell no longer
+   * covers a legacy route -- it stays as the parity guard that moving `make` off the specialized
+   * adapter kept the keyword escape (the plan projection's own escape, on the plan's `Native_Make`
+   * import spelling).
+   */
   @Test
-  fun `the specialized sealed return route escapes a keyword parameter`() {
+  fun `the sealed return keeps its keyword parameter escaped on the plan`() {
     assertContains(
       generated,
-      "private static extern IntPtr Make_native(int @ref, out IntPtr error);",
+      "private static extern IntPtr Native_Make(int @ref, out IntPtr error);",
     )
     assertContains(generated, "public static global::Interop.KeywordShape Make(int @ref)")
-    assertContains(generated, "Make_native(@ref, out IntPtr error);")
+    assertContains(generated, "Native_Make(@ref, out IntPtr error);")
   }
 
   @Test

@@ -22,10 +22,11 @@ package io.github.xxfast.kotlin.native.nuget.test.issue54
  *   test-library is top-level), which spells correctly today and must stay green so a regression
  *   in the fix is distinguishable from the bug it repairs.
  *
- * [NestedShapeFactory.shapeOf] is the same sealed base at a **class method** return, a position no
- * fixture had ever covered. It is dropped from both the generated Kotlin exports and `Interop.cs`
- * with no `[nuget:SKIPPED_...]` diagnostic at all, so it is *not* asserted from C#; it stays here
- * as standing evidence of that silent drop, a defect separate from the spelling bug.
+ * [NestedShapeFactory.shapeOf] is the same sealed base at a **class method** return, the position
+ * that used to be dropped from both the generated Kotlin exports and `Interop.cs` with no
+ * `[nuget:SKIPPED_...]` diagnostic at all. It now plans on the ordinary member plan and binds
+ * through the ADR-009 `NestedShape.FromHandle(IntPtr)` discriminator, so C# asserts it alongside
+ * the top-level control.
  *
  * Deliberately absent: no [NestedShape.Empty] at a member position. Whether an `OBJECT`-kind
  * handle is admitted at a return/property position was never verified either way, so putting it
@@ -65,9 +66,9 @@ class NestedShapeFactory {
   fun radiusOf(circle: NestedShape.Circle): Double = circle.radius
 
   /**
-   * The sealed **base** at a *class method* return. Named `shapeOf` rather than `any` so that no
-   * `Any`/`any` name filter can be mistaken for the cause of the drop. Not asserted from C#; see
-   * the class KDoc.
+   * The sealed **base** at a *class method* return, the cell that must bind through
+   * `NestedShape.FromHandle`. Named `shapeOf` rather than `any` so that no `Any`/`any` name filter
+   * can be mistaken for the cause of the drop it used to suffer.
    */
   fun shapeOf(radius: Double): NestedShape = NestedShape.Circle(radius)
 }

@@ -127,6 +127,16 @@ public static class Clinic
 
 Object methods thus match class and companion methods on both facets: PascalCased names and marshalled returns (completing [ADR-060](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/060-adversarial-forward-fixture.md) cells 1 and 25; naming follows [ADR-007](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/007-top-level-function-class-naming.md)).
 
+<note>
+    <p>Naming an <code>object</code> member <code>All</code>, <code>Any</code>, <code>First</code>,
+    or <code>Select</code> is legal Kotlin, but if that member ever fails to bind for an unrelated
+    reason, C#'s implicit usings resolve the call site against a <code>System.Linq</code> extension
+    method of the same name instead of leaving it unresolved, so a consumer sees a confusing
+    <code>CS1501</code> ("no overload takes N arguments") rather than the <code>CS0117</code>
+    ("does not contain a definition") that would point at the real cause. This is a C# naming
+    collision, not a bridge behaviour.</p>
+</note>
+
 The `Cat` companion's members are generated as static members directly on the `Cat` class itself (`Cat.Species`, `Cat.DefaultBreed`, `Cat.FromName(...)`) rather than a nested type. There's no separate `Cat.Companion` class in the generated output.
 
 ## Using it from C#

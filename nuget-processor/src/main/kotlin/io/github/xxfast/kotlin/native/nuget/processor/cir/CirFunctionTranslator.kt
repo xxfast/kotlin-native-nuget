@@ -5,7 +5,6 @@ import com.google.devtools.ksp.symbol.ClassKind
 import com.google.devtools.ksp.symbol.KSClassDeclaration
 import com.google.devtools.ksp.symbol.KSFunctionDeclaration
 import com.google.devtools.ksp.symbol.KSType
-import com.google.devtools.ksp.symbol.Modifier
 import io.github.xxfast.kotlin.native.nuget.processor.csharpParameterName
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnostic
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnosticKind
@@ -21,8 +20,12 @@ private fun syncErrorArguments(parameters: String): String = if (parameters.isEm
 
 /**
  * Named specialized-protocol CIR adapter for top-level functions that are not planned:
- * sealed-class and generic-declaration returns. Ordinary callables (including ADR-002
- * nullable-primitive two-call) are projected from [ForwardCallablePlan].
+ * generic-declaration returns. Ordinary callables (including ADR-002 nullable-primitive two-call)
+ * are projected from [ForwardCallablePlan].
+ *
+ * ADR-105 (issue #54): a *sealed* return no longer arrives here. It is planned at every origin now
+ * (the planner rewrites the result through `sealedAsHandle()`), and this route is entered only
+ * when the function has no plan, so the arm it used to take was dead.
  */
 internal fun translateSpecializedFunction(
   func: KSFunctionDeclaration,
@@ -35,10 +38,9 @@ internal fun translateSpecializedFunction(
 ): List<CirMember> {
   val returnType = func.returnType?.resolve()?.expandAliases()
   val returnDecl: KSClassDeclaration? = returnType?.declaration as? KSClassDeclaration
-  val isSealedReturnType: Boolean = returnDecl?.modifiers?.contains(Modifier.SEALED) == true
   val isGenericReturnType: Boolean = returnDecl?.typeParameters?.isNotEmpty() == true &&
       returnType != null && returnType.arguments.isNotEmpty()
-  if (!isSealedReturnType && !isGenericReturnType) return emptyList()
+  if (!isGenericReturnType) return emptyList()
   return translateFunction(
     func, libraryName, rootPackage, rootNamespace, tracker, exportedTypes, logger,
   )
@@ -487,53 +489,7 @@ internal fun translateFunction(
     return listOf(nativeImport, wrapper)
   }
 
-  val isSealedReturnType: Boolean = returnDecl?.modifiers?.contains(Modifier.SEALED) == true
   val isEnumReturnType: Boolean = returnDecl?.classKind == ClassKind.ENUM_CLASS
-
-  if (isSealedReturnType) {
-    if (hasEnumParams) return enumParamsUnsupported("sealed")
-
-    // ADR-110: fully qualified, like the enum branch below. Unqualified, `Issue38State.FromHandle`
-    // in the body of `Issue38Sample.Issue38State(int)` resolves to the method that PascalCasing
-    // just created rather than to the type (CS0119).
-    val sealedNamespace: String = mapPackageToNamespace(
-      returnDecl.packageName.asString(), rootPackage, rootNamespace,
-    )
-    val sealedType: String = "global::$sealedNamespace.$kotlinReturnType"
-
-    val nativeImport = CirDllImport(
-      libraryName = libraryName,
-      entryPoint = cname,
-      returnType = "IntPtr",
-      name = "${csName}_native",
-      parameters = params,
-      visibility = CirVisibility.PRIVATE,
-      hasSyncErrorOut = true,
-    )
-
-    val paramNames: String = params.joinToString(", ") { it.name }
-    val nativeCallArgs: String =
-      if (paramNames.isEmpty()) "out IntPtr error" else "$paramNames, out IntPtr error"
-    val body: String = buildString {
-      appendLine()
-      appendLine("            IntPtr nativeResult = ${csName}_native($nativeCallArgs);")
-      appendLine("            if (error != IntPtr.Zero)")
-      appendLine("            {")
-      appendLine("                throw NugetErrorNative.BuildException(error);")
-      appendLine("            }")
-      append("            return $sealedType.FromHandle(nativeResult);")
-    }
-
-    val wrapper = CirMethod(
-      name = csName,
-      returnType = sealedType,
-      parameters = params,
-      body = body,
-      isStatic = true,
-    )
-
-    return listOf(nativeImport, wrapper)
-  }
 
   if (isEnumReturnType) {
     val enumNamespace: String = mapPackageToNamespace(

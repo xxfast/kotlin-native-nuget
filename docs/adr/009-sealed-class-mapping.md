@@ -94,6 +94,34 @@ except for the enclosing scope. A subclass that really is nested inside its seal
 nested (`FlatShape.Circle`). Member positions referencing either spell it by its actual Kotlin
 scope, not by whether it happens to be sealed.
 
+### Amendment (2026-09-07): a class, object, or companion method returning a sealed base binds through the same discriminator
+
+A sealed base at any callable **return** position, class method, object or companion member,
+extension function, or top-level function, bare, nullable, or as a `List`/`Map`/`Set` component,
+now binds through this ADR's `FromHandle` discriminator. Previously only a top-level function's
+bare sealed return bound, through a legacy hand-rolled route in `FunctionExports.kt` and
+`CirFunctionTranslator.kt`; the same signature on a class, object, or companion member generated
+nothing and warned nothing (`NestedShapeFactory.shapeOf(): NestedShape`, `FlatShapeFactory.of(radius):
+FlatShape`, `Issue54Shapes.pick(n): Issue54Shape`, `Issue54Shapes.everyShape(): List<Issue54Shape>`).
+
+The fix rewrites a sealed **result** through a shared `BridgeType.sealedAsHandle()`, lifted from the
+[ADR-105](105-sealed-property-position.md) property planner and now shared by both, which recurses
+through `Nullable` and `Collection` components; parameters are untouched. `ForwardCirPlanProjection`
+reconstructs the handle through `X.FromHandle(nativeResult)` the same way the property projection
+does. The legacy top-level sealed arms in `FunctionExports.kt`/`CirFunctionTranslator.kt` are now
+unreachable (every sealed return goes through the plan) and were deleted rather than left dead; a
+top-level `fun shapes(): List<Shape>` used to bind through the generic legacy route, not the plan,
+and now binds through the plan instead, rendering the same idiom. Export names are unchanged; the
+private C# import method for a top-level sealed return is now spelled `Native_Make` rather than
+`Make_native` internally (the `DllImport` `EntryPoint` itself is unchanged).
+
+Rejected alternative: a third, class-route copy of the legacy hand-rolled arm, inheriting the
+legacy route's own gaps (no `enum` parameter support, bare simple-name spelling) rather than the
+plan's.
+
+Parameters remain deferred; see the [Limitations](../topics/interfaces-abstract-sealed.md#limitations)
+section of the forward sealed-class page and [ROADMAP.md](../../ROADMAP.md).
+
 ### Amendment (2026-09-07): subclass properties move onto the ADR-062 property plan
 
 A sealed subclass's own properties no longer have their own hand-rolled marshalling in this

@@ -11,6 +11,7 @@ Kotlin's three flavours of inheritance each get a distinct C# shape: `interface`
 | interface-typed parameter, a C# class implementing `IFoo` | accepted, no `_handle` needed | dispatched through a per-interface bridge factory, see [ADR-084](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/084-csharp-implemented-interfaces.md) |
 | a property of a sealed subclass, any shape a class property supports (nullable enum, nullable reference, `Boolean`, collections, `var`, `Duration`/`Uuid`/value classes/interfaces) | the same shape an ordinary class property gets | planned by [ADR-062](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/062-forward-callable-plan.md)'s property plan, same as any class, since [ADR-111](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/111-sealed-subclass-properties-on-the-property-plan.md); see [Every property shape on a sealed subclass](#every-property-shape-on-a-sealed-subclass) |
 | property whose own type is a sealed class (bare, nullable, or a read-only collection component) | the sealed base | materialised through `<Base>.FromHandle(...)`, see [Sealed types as property types](#sealed-types-as-property-types), [ADR-105](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/105-sealed-property-position.md) |
+| a class, object, or companion method returning a sealed base, scalar or as a `List`/`Map`/`Set` component | the sealed base (or `IReadOnlyList<Base>`) | reads through the same `FromHandle` discriminator a top-level sealed return already used; a **parameter** of the same shape is not bridged and drops silently, see [A class method returning a sealed base](#a-class-method-returning-a-sealed-base), [ADR-009](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/009-sealed-class-mapping.md) |
 | a sealed subclass declared nested inside its sealed base, used at a return, property, or parameter position | `Base.Sub` (enclosing scope kept) | see [A nested sealed subclass at a member position](#a-nested-sealed-subclass-at-a-member-position) |
 | an `interface` declared nested inside another class, used at a return, property, or parameter position | skipped named (`UNDECLARED_INTERFACE`) | see [Nested interfaces skip named](#nested-interfaces-skip-named) |
 
@@ -327,16 +328,17 @@ Assert.Equal("Oreo curled at r=7.5", description);
 `Issue54Drawing` itself has no public constructor and no generated `Copy`: every one of its
 constructor parameters is sealed-typed. A sealed type at a **parameter** position is not on this
 feature's route at all, ADR-105 touched only the property planner, so the whole constructor stays
-skipped, pre-existing and unaffected either way, the same `SEALED_PROTOCOL` legacy-route deferral as
-the return-side gap below. The per-constructor skip itself still carries no diagnostic of its own,
-but the class as a whole now does: since
+skipped, pre-existing and unaffected either way, the same `SEALED_PROTOCOL` legacy-route deferral a
+sealed-typed parameter always gets (see [A class method returning a sealed base](#a-class-method-returning-a-sealed-base)
+below for the return side, which no longer shares this gap). The per-constructor skip itself still
+carries no diagnostic of its own, but the class as a whole now does: since
 [ADR-064](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/064-forward-unsupported-declaration-diagnostics.md)'s
 2026-09-07 amendment, a class with no reachable public constructor warns once, naming every skipped
 constructor and its reason, rather than shipping as an unexplained dead type; see
 [Classes and objects: No public constructor](classes-and-objects.md#no-public-constructor). See
 [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md)
 ([details](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/backlog/sealed-collection-return-silently-drops.md))
-for the still-open sealed-collection return/parameter gap.
+for the still-open sealed-typed parameter gap.
 
 What still skips at a property position, each named by a build warning rather than silently dropped:
 
@@ -346,14 +348,104 @@ What still skips at a property position, each named by a build warning rather th
 | a sealed **interface** (`sealed interface Filter`), bare or as a collection component | Skipped: only a sealed *class* is given a `FromHandle` discriminator |
 | a value class whose underlying type is sealed | Skipped |
 
-A sealed collection component at a **return or parameter** position (`fun x(): List<Shape>`,
-`fun f(shapes: List<Shape>)`) is a separate, still-open slot, deferred as
-[ADR-105](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/105-sealed-property-position.md)
-scope (d): neither binds. A **top-level** bare sealed return (`fun x(): Shape`) does bind; the same
-signature as a **class method** is silently dropped instead, a pre-existing, separate gap (see
-[ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md)). Established by
-source reading, not run: `fun x(): List<Shape>` is believed to drop the same way, silently, rather
-than skip named.
+A class, object, or companion method returning a sealed base, scalar or as a `List`/`Map`/`Set`
+component, now binds the same way a top-level sealed return always did
+([ADR-009](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/009-sealed-class-mapping.md)'s
+2026-09-07 amendment); see [A class method returning a sealed base](#a-class-method-returning-a-sealed-base)
+below. A sealed type at a **parameter** position, bare or as a collection component
+(`fun f(shape: Shape)`, `fun f(shapes: List<Shape>)`, a constructor with sealed-typed parameters),
+is still not bridged and drops silently, with no diagnostic (see
+[ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md),
+[details](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/backlog/sealed-collection-return-silently-drops.md)).
+
+## A class method returning a sealed base {id="a-class-method-returning-a-sealed-base"}
+
+A class, object, or companion method returning a sealed base binds through the same `FromHandle`
+discriminator a top-level sealed return already used. The result is rewritten by a shared
+`sealedAsHandle()` helper that recurses through `Nullable` and `Collection` components, so a scalar
+return and a `List` return both bind; only parameter positions are untouched
+([ADR-009](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/009-sealed-class-mapping.md)).
+
+### Kotlin {id="class-method-sealed-return-kotlin"}
+
+From `test-library/src/nativeMain/kotlin/.../issue54/NestedShapeSample.kt` and `Issue54Sample.kt`:
+
+```kotlin
+class NestedShapeFactory {
+  /** The sealed **base** at a *class method* return. */
+  fun shapeOf(radius: Double): NestedShape = NestedShape.Circle(radius)
+}
+```
+
+```kotlin
+object Issue54Shapes {
+  /** Scalar sealed return on an `object` method. */
+  fun pick(n: Int): Issue54Shape =
+    if (n == 0) Issue54Shape.Empty else Issue54Shape.Circle(radius = n.toDouble())
+
+  /** Sealed collection return on an `object` method. */
+  fun everyShape(): List<Issue54Shape> = shapes()
+}
+```
+
+### Generated C# {id="class-method-sealed-return-generated-c"}
+
+From `Interop.cs`:
+
+```C#
+public global::TestLibrary.Issue54.NestedShape ShapeOf(double radius)
+{
+    IntPtr nativeResult = Native_ShapeOf(_handle, radius, out IntPtr error);
+    if (error != IntPtr.Zero)
+    {
+        throw NugetErrorNative.BuildException(error);
+    }
+    return global::TestLibrary.Issue54.NestedShape.FromHandle(nativeResult);
+}
+```
+
+```C#
+public static IReadOnlyList<global::TestLibrary.Issue54.Issue54Shape> EveryShape()
+{
+    IntPtr listHandle = Native_EveryShape(out IntPtr error);
+    if (error != IntPtr.Zero)
+    {
+        throw NugetErrorNative.BuildException(error);
+    }
+    int count = NugetListNative.Count(listHandle);
+    var result = new List<global::TestLibrary.Issue54.Issue54Shape>(count);
+    for (int i = 0; i < count; i++)
+    {
+        result.Add(NugetMarshal.FromHandle<global::TestLibrary.Issue54.Issue54Shape>(NugetListNative.Get(listHandle, i)));
+    }
+    NugetListNative.Dispose(listHandle);
+    return result.AsReadOnly();
+}
+```
+
+### Using it from C# {id="class-method-sealed-return-using-it-from-c"}
+
+From `IntegrationTests/NestedSealedSubclassPositionTests.cs` and `Issue54Tests.cs`:
+
+```C#
+using NestedShape shape = factory.ShapeOf(2.0);
+
+var circle = Assert.IsType<NestedShape.Circle>(shape);
+Assert.Equal(2.0, circle.Radius);
+```
+
+```C#
+IReadOnlyList<Issue54Shape> shapes = Issue54Shapes.EveryShape();
+
+Assert.Collection(
+    shapes,
+    mylo => Assert.IsType<Issue54Shape.Empty>(mylo),
+    oreo => Assert.Equal(1.0, Assert.IsType<Issue54Shape.Circle>(oreo).Radius));
+```
+
+`FlatShapeFactory.Of(radius)` binds the same way at a sibling-and-nested hierarchy, discriminating
+to whichever subclass the runtime handle carries: see
+[A sibling sealed subclass declared beside its base](#a-sibling-sealed-subclass-declared-beside-its-base).
 
 ## Collection properties on sealed subclasses
 
@@ -739,12 +831,11 @@ public void Label_IsDeclaredOnceAtNamespaceLevel_AndDerivesFromTheSealedBase()
 ```
 
 <note>
-    <p>A class method returning the sealed <b>base</b>, <code>FlatShapeFactory.of(radius):
-    FlatShape</code>, is a separate, still-open gap: it is silently dropped with no export and no
-    diagnostic, the same class-method-returning-sealed-type defect
-    <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md">ROADMAP.md</a>
-    already tracks. It sits in the same fixture but is not asserted by
-    <code>FlatSealedSubclassTests</code>.</p>
+    <p>A class method returning the sealed <b>base</b>, <code>FlatShapeFactory.Of(radius):
+    FlatShape</code>, now binds and discriminates to whichever subclass the runtime handle carries,
+    the sibling <code>Label</code> or the nested <code>Circle</code>; see
+    <a href="#a-class-method-returning-a-sealed-base">A class method returning a sealed base</a>.
+    Asserted by <code>FlatSealedSubclassTests</code>.</p>
 </note>
 
 ## Every property shape on a sealed subclass {id="every-property-shape-on-a-sealed-subclass"}
@@ -1361,7 +1452,7 @@ property. The owning class still generates, and its unrelated `name` member stil
 - Interfaces with generic type parameters, suspend interface members, and `Flow`/`StateFlow`-valued interface members are not supported as return positions.
 - A backing class and its dispatch exports are only generated for interfaces that actually appear in a planned return position; an interface only ever used as an `add`/`remove` subscription parameter (like `ICatEventListener`, see [Lambdas and callbacks](lambdas-and-callbacks.md)) does not get one.
 - Object identity is not preserved across reads of a **Kotlin-backed** interface-typed property: two reads produce two distinct C# wrapper instances over the same Kotlin object (each disposes independently). A **C#-implemented** object read back is the one exception, see above.
-- A sealed type at a **property** position binds (bare, nullable, and a read-only collection component). A sealed type at a **constructor or method parameter** position does not, and drops **silently, with no diagnostic**; it was never on ADR-105's route (property planner only), pre-existing. A sealed collection component at a **return or parameter** position does not either, deferred as [ADR-105](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/105-sealed-property-position.md) scope (d), and it drops the same silent way. A *mutable* collection of sealed (`var shapes: MutableList<Shape>`) binds get-only. A sealed **interface** is never discriminated at any property position, bare or as a collection component, since only a sealed *class* gets a `FromHandle`. See [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md).
+- A sealed type at a **property** or **callable return** position binds (bare, nullable, a read-only collection component, and now a class/object/companion method's scalar or collection return too, see [A class method returning a sealed base](#a-class-method-returning-a-sealed-base)). A sealed type at a **constructor or method parameter** position does not, and drops **silently, with no diagnostic**; pre-existing, and the remaining gap in this area. A sealed collection component at a **parameter** position does not either, the remaining half of [ADR-105](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/105-sealed-property-position.md) scope (d). A *mutable* collection of sealed (`var shapes: MutableList<Shape>`) binds get-only. A sealed **interface** is never discriminated at any position, bare or as a collection component, since only a sealed *class* gets a `FromHandle`. See [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md).
 - [Overriding a read-only property with `var`](#overriding-a-read-only-property-with-var) only guards against the exported-base-class shape. A base class's own `open val`/`open var` never renders `virtual` (its own modifier is never read), so any subclass `override` of it is `CS0506`; and an unimplemented base `abstract val`/`abstract var` has no abstract-property path at all, so a subclass `override` of it is `CS0115`. Neither is fixed. See [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md).
 
 ## Using it from C#

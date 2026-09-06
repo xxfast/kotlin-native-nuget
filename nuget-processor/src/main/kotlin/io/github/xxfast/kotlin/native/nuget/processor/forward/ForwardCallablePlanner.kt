@@ -1446,23 +1446,32 @@ internal class ForwardCallablePlanner(
     // `Result`'s skip reason (VALUE_CLASS), never `T`'s -- a `Result<Shape>` taking the sealed
     // SEALED_PROTOCOL legacy deferral would be dropped silently, since the legacy re-emit keys on
     // the declared return type.
-    val unwrappedResult: BridgeType? = result.kotlinResultPayloadOrNull(origin)
+    // ADR-105 (issue #54): a sealed base at a RESULT position binds as the ObjectHandle the
+    // classifier already carries, at EVERY origin -- top-level, class member, object member,
+    // companion. Before this, only a top-level sealed return was re-emitted (by the named legacy
+    // adapter in exports/FunctionExports.kt), and every member spelling took a `SEALED_PROTOCOL`
+    // skip that no route re-emitted, so the member was dropped with no C# member and no
+    // diagnostic. Parameters are deliberately left alone: a bare sealed input is ADR-105's
+    // deferred scope (d), and `isWrappableComponent` refuses a discriminated handle on the write
+    // side on purpose.
+    val plannedResult: BridgeType = result.sealedAsHandle()
+    val unwrappedResult: BridgeType? = plannedResult.kotlinResultPayloadOrNull(origin)
     val effectiveResult: BridgeType =
       if (unwrappedResult != null && unwrappedResult.shapeOrNull() != null) {
         unwrappedResult
       } else {
-        result
+        plannedResult
       }
-    val unwrapsKotlinResult: Boolean = effectiveResult !== result
+    val unwrapsKotlinResult: Boolean = effectiveResult !== plannedResult
 
     val resultShape: ForwardResultShape? = effectiveResult.shapeOrNull()
     if (resultShape == null) {
       return ForwardCallableCatalogEntry.Skipped(
-        symbol, requireNotNull(result.skipReason()), node = node,
-        detail = result.actualTypeAliasTargetDetail()
-          ?: result.unexportedDependencyDetail()
-          ?: result.undeclaredTypeDetail()
-          ?: result.collectionComponentDetail(),
+        symbol, requireNotNull(plannedResult.skipReason()), node = node,
+        detail = plannedResult.actualTypeAliasTargetDetail()
+          ?: plannedResult.unexportedDependencyDetail()
+          ?: plannedResult.undeclaredTypeDetail()
+          ?: plannedResult.collectionComponentDetail(),
       )
     }
 
@@ -2707,6 +2716,39 @@ internal class ForwardCallablePlanner(
     is BridgeType.ObjectHandle -> ForwardAbiWireType.POINTER
     else -> wireType()
   }
+}
+
+/**
+ * ADR-105 (issue #54): the classifier's `sealed helper` protocol replaced by the
+ * [BridgeType.ObjectHandle] it carries ([BridgeType.SpecializedProtocol.sealedHandle],
+ * `viaDiscriminator = true`), so a position that can bridge a sealed base rides the existing
+ * `ObjectHandle` arms of `isPlannable` / `shapeOrNull` / `wireType` / the Kotlin emitter / the CIR
+ * projection rather than gaining a variant of its own.
+ *
+ * Applied at a *property* type ([ForwardPropertyPlanner]) and at a callable's *result*
+ * ([ForwardCallablePlanner.planOrSkip]). Not at a parameter: a bare sealed input is ADR-105's
+ * deferred scope (d), and the write side of a discriminated handle is refused on purpose by
+ * [isWrappableComponent].
+ *
+ * Recurses through [BridgeType.Nullable] and the [BridgeType.Collection] components only. NOT
+ * through [BridgeType.ValueClass.underlying]: a value class over a sealed type
+ * (`value class ObservationResult(val observation: Observation)`) stays skipped, as ADR-105's
+ * Consequences records.
+ *
+ * A protocol with a `null` [BridgeType.SpecializedProtocol.sealedHandle] (a sealed interface, an
+ * out-of-scope sealed class, or any non-sealed protocol) is returned untouched and skips named
+ * exactly as before.
+ */
+internal fun BridgeType.sealedAsHandle(): BridgeType = when (this) {
+  is BridgeType.SpecializedProtocol -> sealedHandle ?: this
+  is BridgeType.Nullable -> BridgeType.Nullable(type.sealedAsHandle())
+  is BridgeType.Collection -> copy(
+    element = element?.sealedAsHandle(),
+    key = key?.sealedAsHandle(),
+    value = value?.sealedAsHandle(),
+  )
+
+  else -> this
 }
 
 /**
