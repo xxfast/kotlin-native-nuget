@@ -256,6 +256,51 @@ public class FunctionDefaultParameterTests
         Assert.Equal(expected, PlatformApi.beaconLabel("Mylo's collar", 30));
     }
 
+    // ---- expect/actual, overloaded: each `actual` must consult ITS OWN expect overload ----
+
+    [Fact]
+    public void Nuzzle_OmittingLoud_UsesTheExpectDeclaredDefaultOfFalse()
+    {
+        // Two `expect fun nuzzle(...)` namesakes, each with its own trailing default. A name-keyed
+        // expect index collapses them and reports "no defaults" for both, so this line is CS7036.
+        // Oreo gets the quiet nuzzle; he is asleep on the keyboard.
+        string expected = IsMacOs ? "Oreo on macos" : "Oreo on mingw";
+
+        Assert.Equal(expected, PlatformApi.nuzzle("Oreo"));
+    }
+
+    [Fact]
+    public void Nuzzle_OmittingPrefix_UsesTheOtherOverloadsExpectDeclaredDefault()
+    {
+        // The Int overload's own default is "n", declared only on its own expect. Resolving it off
+        // the String overload's expect would yield the wrong value rather than no overload at all.
+        string expected = IsMacOs ? "n3 on macos" : "n3 on mingw";
+
+        Assert.Equal(expected, PlatformApi.nuzzle(3));
+    }
+
+    [Fact]
+    public void Nuzzle_FullSignatures_StillWork()
+    {
+        string loud = IsMacOs ? "Mylo! on macos" : "Mylo! on mingw";
+        string counted = IsMacOs ? "cats:2 on macos" : "cats:2 on mingw";
+
+        Assert.Equal(loud, PlatformApi.nuzzle("Mylo", true));
+        Assert.Equal(counted, PlatformApi.nuzzle(2, "cats:"));
+    }
+
+    [Fact]
+    public void Nuzzle_ExposesBothOverloadsAtEveryArity()
+    {
+        // Four entries: two declared, two synthesized. Stated by signature so a collapse of the two
+        // namesakes into one shows up here as a missing overload rather than a wrong value.
+        Assert.NotNull(typeof(PlatformApi).GetMethod("nuzzle", [typeof(string)]));
+        Assert.NotNull(typeof(PlatformApi).GetMethod("nuzzle", [typeof(string), typeof(bool)]));
+        Assert.NotNull(typeof(PlatformApi).GetMethod("nuzzle", [typeof(int)]));
+        Assert.NotNull(typeof(PlatformApi).GetMethod("nuzzle", [typeof(int), typeof(string)]));
+        Assert.Equal(4, typeof(PlatformApi).GetMethods().Count(m => m.Name == "nuzzle"));
+    }
+
     // ---- The numbering is a native-export detail and must not leak ----
 
     [Fact]

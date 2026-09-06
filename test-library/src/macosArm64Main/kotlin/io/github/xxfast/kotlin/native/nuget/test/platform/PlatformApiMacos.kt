@@ -32,6 +32,16 @@ actual fun platformName(): String = "macos"
  * ADR-096: the default for `level` is declared on the expect only; an actual may not restate it.
  */
 actual fun beaconLabel(prefix: String, level: Int): String = "$prefix at level $level on macos"
+
+/**
+ * ADR-096: the defaults for `loud` and `prefix` are declared on the overloaded expects only; an
+ * actual may not restate them.
+ */
+actual fun nuzzle(name: String, loud: Boolean): String =
+  "$name${if (loud) "!" else ""} on macos"
+
+actual fun nuzzle(count: Int, prefix: String): String = "$prefix$count on macos"
+
 actual val platformTag: String = "osx-arm64"
 
 actual object PlatformRegistry {

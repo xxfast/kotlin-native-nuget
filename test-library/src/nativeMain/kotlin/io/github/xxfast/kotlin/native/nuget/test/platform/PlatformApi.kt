@@ -58,10 +58,28 @@ expect fun platformName(): String
  * `level` reports `hasDefault = true` only here and `false` on both actuals: the omitting overload
  * exists only if the planner resolves the bit through the expect index. The default (`7`) is
  * declared once, here, so a `beaconLabel("...")` reporting anything else means the wrong side was
- * consulted. It is the only `beaconLabel` in this package, which is what makes the ADR's uniqueness
- * guard (`expectsByName` is a `.toMap()`, so namesakes collapse) safe to apply.
+ * consulted. It is deliberately the only `beaconLabel` in this package, so the single-namesake
+ * route stays covered next to [nuzzle], which covers the overloaded one.
  */
 expect fun beaconLabel(prefix: String, level: Int = 7): String
+
+/**
+ * ADR-096 row: TRAILING DEFAULTS on an OVERLOADED top-level `expect fun`. Two namesakes with
+ * different signatures, each carrying its own trailing default, so the expect index has to be keyed
+ * by signature rather than by name: a name-keyed index collapses these two and drops the default
+ * bit for both, leaving a consumer to pass every argument. The defaults (`false` and `"n"`) are
+ * declared once, here, so `nuzzle("...")` or `nuzzle(1)` reporting anything else means the wrong
+ * side, or the wrong overload, was consulted. Both overloads take two parameters and differ only in
+ * their parameter TYPES, so a key that merely counts parameters cannot tell them apart either.
+ *
+ * Named `nuzzle` rather than `greet` (the shape ADR-096 quotes) because a bare top-level export is
+ * `toCName(name)` with no package qualifier, and `greet` is already taken by the root package. The
+ * forward ABI contract rejects the collision at KSP time, so the rename is required, not cosmetic.
+ */
+expect fun nuzzle(name: String, loud: Boolean = false): String
+
+/** The second [nuzzle] namesake; see [nuzzle] above for what the pair is for. */
+expect fun nuzzle(count: Int, prefix: String = "n"): String
 
 /** Top-level `expect val`; same file-naming rule as [platformName]. */
 expect val platformTag: String

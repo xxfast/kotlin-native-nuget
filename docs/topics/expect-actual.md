@@ -293,6 +293,47 @@ public void BeaconLabel_OmittingLevel_UsesTheExpectDeclaredDefault()
 See [Function default parameters](top-level-declarations.md#function-default-parameters) for the
 general mechanism.
 
+## Overloaded top-level `expect` functions
+
+A qualified name is not unique for an overloaded top-level function: two `expect fun`s with the same
+name and package share one. The lookup above resolves an `actual` to its `expect` by signature
+(parameter count, then positional parameter names, then positional parameter types), so each
+overload's defaults come from its **own** `expect`, never the other one's.
+
+`nuzzle`, from `test-library/src/nativeMain/kotlin/.../platform/PlatformApi.kt`:
+
+```kotlin
+expect fun nuzzle(name: String, loud: Boolean = false): String
+
+expect fun nuzzle(count: Int, prefix: String = "n"): String
+```
+
+The generated C# gets an omitting overload per namesake, four methods in total:
+
+```C#
+public static string nuzzle(string name, bool loud) { /* ... */ }        // nuzzle
+
+public static string nuzzle(string name) { /* ... */ }                   // nuzzle_3, loud = false
+
+public static string nuzzle(int count, string prefix) { /* ... */ }      // nuzzle_2
+
+public static string nuzzle(int count) { /* ... */ }                     // nuzzle_4, prefix = "n"
+```
+
+From `IntegrationTests/FunctionDefaultParameterTests.cs`:
+
+```C#
+[Fact]
+public void Nuzzle_OmittingPrefix_UsesTheOtherOverloadsExpectDeclaredDefault()
+{
+    // The Int overload's own default is "n", declared only on its own expect. Resolving it off
+    // the String overload's expect would yield the wrong value rather than no overload at all.
+    string expected = IsMacOs ? "n3 on macos" : "n3 on mingw";
+
+    Assert.Equal(expected, PlatformApi.nuzzle(3));
+}
+```
+
 ## `expect sealed class`
 
 Subclasses live on the actual side (or, for a common-side declaration, in any module on the
