@@ -40,6 +40,53 @@ fun toCSharpName(cname: String): String {
 internal const val CSHARP_ERROR_SLOT: String = "error"
 
 /**
+ * The identifiers the ordinary forward callable plan puts on the ABI itself, and therefore the
+ * names a user parameter may not keep on *either* side of the bridge: the instance receiver slot
+ * (`handle`), the extension/value-class receiver slot (`receiver`), the value-class receiver slot
+ * of a non-reference underlying and the property setter's argument (`value`), the ADR-024
+ * exception slot (`errorOut`) and ADR-061's nullable-primitive out-slot (`valueOut`).
+ *
+ * Unlike [CSHARP_ERROR_SLOT] these are declared by the Kotlin `@CName` emitter too, so the rename
+ * has to happen once at *plan* time and be seen by both projections. See [bridgeParameterName].
+ */
+internal val PLAN_OWNED_NAMES: Set<String> =
+  setOf("handle", "receiver", "value", "errorOut", "valueOut")
+
+/**
+ * The identifiers only the C# wrapper *body* declares: the ADR-024 exception slot, the local every
+ * non-void wrapper opens with (`T nativeResult = Native_...(...)`) and ADR-061's presence flag
+ * (`bool hasValue = ...`). None of them exists in the Kotlin export, so they shift at render time
+ * only. See [csharpParameterName].
+ */
+private val CSHARP_OWNED_NAMES: Set<String> =
+  setOf(CSHARP_ERROR_SLOT, "nativeResult", "hasValue")
+
+/**
+ * The bridge spelling of a user's Kotlin parameter name, applied once as the name enters a
+ * [io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallablePlan] so both projections
+ * read the shifted name.
+ *
+ * Issue #66 fixed one name (`error`) at C# render time; the rest of the family in
+ * [PLAN_OWNED_NAMES] cannot be fixed there, because the Kotlin export declares them too. A user
+ * parameter named `handle` on an instance method is a duplicate parameter in the `@CName` function
+ * as well as CS0100 in the extern, and `errorOut` / `valueOut` additionally break the ADR-055
+ * contract check, which reads a slot's direction off its name.
+ *
+ * Same chain rule as [csharpParameterName]: shifting the whole `handle` / `handle_` / `handle__`
+ * chain up by one underscore is injective, so two user parameters of one callable can never
+ * converge and the renamer never has to see its siblings.
+ *
+ * `value` is shifted on every callable rather than only where it actually collides, so the rule
+ * stays one predictable spelling instead of a per-callable collision test whose answer changes
+ * with the receiver kind.
+ *
+ * Only *parameters* move. A property named `value` renders `Value` (PascalCase), which never meets
+ * a generator identifier, and stays put.
+ */
+internal fun String.bridgeParameterName(): String =
+  if (shadows(PLAN_OWNED_NAMES)) "${this}_" else this
+
+/**
  * The C# spelling of a Kotlin parameter name, at both its declaration and every use site. Two
  * render-time rules, kept in one function so they cannot disagree (a name can only ever hit one of
  * them: `error` is not a C# keyword):
@@ -71,11 +118,14 @@ internal const val CSHARP_ERROR_SLOT: String = "error"
  */
 internal fun String.csharpParameterName(): String = when {
   this in CSHARP_RESERVED -> "@$this"
-  shadowsCSharpErrorSlot() -> "${this}_"
+  shadows(CSHARP_OWNED_NAMES) -> "${this}_"
   else -> this
 }
 
-/** True for `error`, `error_`, `error__`, ... and nothing else. See [csharpParameterName]. */
-private fun String.shadowsCSharpErrorSlot(): Boolean =
-  startsWith(CSHARP_ERROR_SLOT) &&
-      substring(CSHARP_ERROR_SLOT.length).all { character -> character == '_' }
+/**
+ * True when this name is one of [reserved], or one of them followed by nothing but underscores:
+ * the chain a shift by one underscore has to cover to stay injective. See [csharpParameterName].
+ */
+private fun String.shadows(reserved: Set<String>): Boolean = reserved.any { name ->
+  startsWith(name) && substring(name.length).all { character -> character == '_' }
+}

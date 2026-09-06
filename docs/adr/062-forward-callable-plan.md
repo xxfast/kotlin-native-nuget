@@ -103,6 +103,50 @@ are **skipped** with no emission — never `IntPtr` / `"0"` garbage.
 - Nullable Boolean method returns remain unplanned (ADR-061 deferred width); they are skipped rather
   than fallthrough-emitted.
 
+## Amendment (2026-09-07): reserved ABI slot names are an invariant, not a check
+
+A forward projection identifies the generator's own synthetic ABI parameters by string-matching
+their literal name, not by position or a marker type: the instance receiver slot is `handle`, an
+extension or non-reference value-class receiver is `receiver` or `value`, the ADR-024 exception
+slot is `errorOut`, and ADR-061's nullable-primitive out-slot is `valueOut`. A user parameter
+spelled the same was never rejected. Every case this actually turned up was loud, not silent: a
+`handle`-named constructor parameter duplicates the `IntPtr handle` local a C# constructor wrapper
+declares (CS0136), an `errorOut`/`valueOut`-named parameter flips `ForwardAbiContract`'s
+name-based direction read so the Kotlin and C# projections disagree before either renders, and a
+`String.tag(receiver: String)` extension duplicates the `receiver` parameter on both the C# extern
+and the Kotlin `@CName` export. None of these ever crossed the bridge with silently wrong data;
+`Interop.cs` (or, for `handle`/`receiver`/`value`/`errorOut`/`valueOut`, the Kotlin export itself)
+simply failed to compile.
+
+The fix is a naming invariant applied once, at plan time, so both projections see the shifted
+name: `PLAN_OWNED_NAMES` (`handle`, `receiver`, `value`, `errorOut`, `valueOut`) in `Reserved.kt`,
+applied through `String.bridgeParameterName()` at the eight construction sites in
+`ForwardCallablePlanner.kt` where a user's Kotlin identifier enters the plan. A user parameter
+spelling one of those names, or that literal followed only by underscores, shifts one underscore
+(`handle` -> `handle_`, `handle_` -> `handle__`), the same injective chain rule issue #66 used for
+`error`. `value` moves on every callable, not only where it would actually collide, so the rule
+stays one predictable spelling rather than a per-callable collision test whose answer depends on
+the receiver kind; a property named `value` is unaffected, since it renders `Value` (PascalCase)
+and never meets a generator identifier. Two C#-render-time-only names, `nativeResult` and
+`hasValue`, join `error` under `CSHARP_OWNED_NAMES` and `csharpParameterName()`, since neither is
+declared by the Kotlin `@CName` emitter and both only ever appear as C# wrapper-body locals.
+
+`value` renamed uniformly also renames two already-shipped fixture parameters,
+`DescribeNickname(string? value)` -> `DescribeNickname(string? value_)` and
+`DescribeOverloads(int value, bool flag)` -> `DescribeOverloads(int value_, bool flag)`: a
+source-breaking change for a C# caller using named arguments, noted for the 0.6.0 upgrade notes.
+
+A structural `role` field on `ForwardAbiParameter` (an enum distinguishing a generator-owned slot
+from user data, checked once rather than string-matched at each read site) was considered and
+deferred: it would replace this same name lookup at roughly twenty `ForwardAbiParameter`
+construction sites, and it cannot reach `ForwardAbiContract`, which derives its expected
+signatures from a rendered KotlinPoet `FunSpec`, a stage that has already discarded any such
+field. Tracked in [ROADMAP.md](../../ROADMAP.md) Phase 3.
+
+See `test-library/.../test/reserved/ReservedNamesSample.kt` and
+`IntegrationTests/ReservedNamesTests.cs` for the fixture, and `Reserved.kt`'s
+`PLAN_OWNED_NAMES`/`bridgeParameterName()` for the mechanism.
+
 ## References
 
 - [ADR-004](004-cir-intermediate-representation.md) — CIR model and dual emission

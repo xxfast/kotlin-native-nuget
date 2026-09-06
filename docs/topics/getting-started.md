@@ -12,7 +12,13 @@ project in this repo, read those alongside this page for a working reference.
     fun</code>, an overload set, a default-parameter overload, and a nullable-primitive return; the
     native export and the registration contract are unchanged, so only a consumer-side rename and
     rebuild is needed. See <a href="top-level-declarations.md">Top-level declarations</a> and
-    <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/110-top-level-function-pascal-case.md">ADR-110</a>.</p>
+    <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/110-top-level-function-pascal-case.md">ADR-110</a>.
+    A Kotlin parameter literally named <code>handle</code>, <code>receiver</code>,
+    <code>value</code>, <code>errorOut</code>, or <code>valueOut</code> now renders with a
+    trailing underscore on the C# side (<code>value_</code>, and so on), so a named-argument call
+    site using one of those spellings needs the renamed form too. See
+    <a href="primitives-and-strings.md">Primitives and strings</a> and
+    <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/062-forward-callable-plan.md">ADR-062</a>.</p>
 </note>
 
 ## 1. Apply the plugin

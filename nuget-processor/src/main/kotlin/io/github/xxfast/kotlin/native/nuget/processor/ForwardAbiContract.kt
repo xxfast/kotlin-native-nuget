@@ -266,6 +266,13 @@ internal object ForwardAbiContract {
       parameters = parameters.map { parameter ->
         // "valueOut" is ADR-061's nullable-primitive return out-parameter, the Kotlin-side
         // counterpart of the C# `out <T> value` recognized above.
+        //
+        // Reading a direction off a *name* is sound because both names are reserved to the
+        // generator: `bridgeParameterName` in Reserved.kt shifts any user parameter spelled
+        // `errorOut` / `valueOut` (or either followed by underscores) as it enters the plan, so an
+        // `errorOut` reaching here is always the exception slot and a `valueOut` is always the
+        // has-value out-slot. Without that shift this branch reads a user's `in int` as `out` and
+        // the two projections of a structurally identical signature stop agreeing.
         val direction: ForwardAbiDirection = if (
           parameter.name == "errorOut" || parameter.name == "valueOut"
         ) {
