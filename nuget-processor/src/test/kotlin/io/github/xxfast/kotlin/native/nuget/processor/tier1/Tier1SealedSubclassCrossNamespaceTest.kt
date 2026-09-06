@@ -63,7 +63,7 @@ class Tier1SealedSubclassCrossNamespaceTest {
     assertContains(result.generatedCSharp, "var result = new List<$remote.Assignment>(count);")
     assertContains(
       result.generatedCSharp,
-      "result.Add(NugetMarshal.FromHandle<$remote.Assignment>(NugetListNative.Get(listHandle, i)));",
+      "result.Add(NugetMarshal.FromHandle<$remote.Assignment>(NugetListNative.Get(nativeResult, i)));",
     )
   }
 
@@ -73,12 +73,19 @@ class Tier1SealedSubclassCrossNamespaceTest {
 
     assertContains(
       result.generatedCSharp,
-      "public $remote.IssPosition Position => new $remote.IssPosition(Native_Get_position(_handle, out _));",
+      "public $remote.IssPosition Position",
     )
     assertContains(
       result.generatedCSharp,
-      "public $remote.IssPosition? Maybe => Native_Get_maybe(_handle, out _) == IntPtr.Zero ? null : " +
-          "new $remote.IssPosition(Native_Get_maybe(_handle, out _));",
+      "                return new $remote.IssPosition(nativeResult);",
+    )
+    // ADR-111 (ROADMAP:27): ONE native call for the nullable reference. The legacy spelling called
+    // the export twice, so the null test and the wrapped handle came from two different
+    // `StableRef.create`s and one of them leaked.
+    assertContains(result.generatedCSharp, "public $remote.IssPosition? Maybe")
+    assertContains(
+      result.generatedCSharp,
+      "                return nativeResult == IntPtr.Zero ? null : new $remote.IssPosition(nativeResult);",
     )
   }
 
@@ -86,10 +93,12 @@ class Tier1SealedSubclassCrossNamespaceTest {
   fun `an enum property on a sealed subclass qualifies its type and cast`() {
     val result = run()
 
+    assertContains(result.generatedCSharp, "public $remote.Mood Mood")
     assertContains(
       result.generatedCSharp,
-      "public $remote.Mood Mood => ($remote.Mood)Native_Get_mood(_handle, out _);",
+      "                int nativeResult = Native_Get_mood(_handle, out IntPtr error);",
     )
+    assertContains(result.generatedCSharp, "                return ($remote.Mood)nativeResult;")
   }
 
   @Test

@@ -446,6 +446,8 @@ internal class ForwardCallablePlanner(
     properties: List<KSPropertyDeclaration>,
     extensionProperties: List<KSPropertyDeclaration>,
     valueClasses: List<KSClassDeclaration> = emptyList(),
+    // ADR-111: sealed bases, whose subclass properties plan alongside the ordinary class ones.
+    sealedClasses: List<KSClassDeclaration> = emptyList(),
   ): ForwardCallablePlanCatalog {
     val entries: List<ForwardCallableCatalogEntry> = buildList {
       classes.forEach { cls -> addAll(classEntries(cls)) }
@@ -494,7 +496,7 @@ internal class ForwardCallablePlanner(
     }
     val planner = ForwardPropertyPlanner(classifier)
     val propertyPlans: List<ForwardPropertyPlan> = planner.catalog(
-      classes, properties, extensionProperties,
+      classes, properties, extensionProperties, sealedClasses,
     )
     return ForwardCallablePlanCatalog(
       entries, propertyPlans, planner.droppedPropertySetters, planner.droppedProperties,

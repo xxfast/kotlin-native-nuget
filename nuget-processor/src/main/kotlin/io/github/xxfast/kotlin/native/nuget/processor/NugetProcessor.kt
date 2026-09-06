@@ -684,6 +684,7 @@ class NugetProcessor(
     val forwardPropertyPlanner = ForwardPropertyPlanner(forwardClassifier)
     val ordinaryCatalog: ForwardCallablePlanCatalog = forwardPlanner.catalog(
       classes, functions, extensionFunctions, objects, properties, extensionProperties, valueClasses,
+      sealedClasses,
     )
 
     // ADR-040 sub-decision C.1 (reachability-driven): a Kotlin interface gets a concrete backing
@@ -929,7 +930,7 @@ class NugetProcessor(
     classes.forEach { builder.addCompanionExports(it, callableCatalog) }
     genericClasses.forEach { builder.addGenericClassExports(it) }
     enums.forEach { builder.addEnumExports(it) }
-    sealedClasses.forEach { builder.addSealedClassExports(it) }
+    sealedClasses.forEach { builder.addSealedClassExports(it, callableCatalog) }
     objects.forEach { builder.addObjectExports(it, callableCatalog) }
     valueClasses.forEach { builder.addValueClassExports(it, callableCatalog) }
     reachableInterfaces.forEach { builder.addInterfaceExports(it, callableCatalog) }

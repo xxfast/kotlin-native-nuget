@@ -326,6 +326,14 @@ export. The sealed route's existing `Throwable?` Kotlin export changes body (raw
 - `var error: Throwable?` binds get-only; a setter would need C# → Kotlin Throwable
   construction, which the envelope cannot express (type would be lost).
 
+### Amendment (2026-09-07)
+
+The sealed-subclass `Throwable`/`Throwable?` property no longer goes through the legacy ADR-009
+route this ADR describes above (decision 1, sealed-route arms). [ADR-111](111-sealed-subclass-properties-on-the-property-plan.md)
+moved sealed-subclass properties onto the ADR-062 property plan, and `isPlannable` there admits
+`Throwable`, so a sealed subclass now shares the same `checkedGetter` guard an ordinary class
+property uses, rather than the sealed route's separate `sealedPropertyGetter` copy.
+
 ## Scope
 
 **v1 (this ADR)**: `Throwable`, `Throwable?`, and stdlib subtypes at a **property** getter on

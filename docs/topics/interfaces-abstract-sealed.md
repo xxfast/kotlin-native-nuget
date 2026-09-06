@@ -9,7 +9,7 @@ Kotlin's three flavours of inheritance each get a distinct C# shape: `interface`
 | `sealed class` | `abstract class` | a nested subclass stays nested (`Base.Sub`); a **sibling** subclass, declared beside its base rather than inside it, is declared at namespace level (`public sealed class Sub : Base`), see [A sibling sealed subclass declared beside its base](#a-sibling-sealed-subclass-declared-beside-its-base), [ADR-009](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/009-sealed-class-mapping.md) |
 | interface-typed return (method result or property) | `IFoo` / `IFoo?` | backed by a generated `sealed class Foo : IFoo`, see [ADR-040](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/040-interface-return-type-mapping.md) |
 | interface-typed parameter, a C# class implementing `IFoo` | accepted, no `_handle` needed | dispatched through a per-interface bridge factory, see [ADR-084](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/084-csharp-implemented-interfaces.md) |
-| nullable property on a sealed subclass (`String?`, `Int?`) | `string?` / `int?` | `String?` is one export returning `string?`; `Int?` is a `_has_value`/`_value` pair rendered as one `?:` expression |
+| a property of a sealed subclass, any shape a class property supports (nullable enum, nullable reference, `Boolean`, collections, `var`, `Duration`/`Uuid`/value classes/interfaces) | the same shape an ordinary class property gets | planned by [ADR-062](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/062-forward-callable-plan.md)'s property plan, same as any class, since [ADR-111](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/111-sealed-subclass-properties-on-the-property-plan.md); see [Every property shape on a sealed subclass](#every-property-shape-on-a-sealed-subclass) |
 | property whose own type is a sealed class (bare, nullable, or a read-only collection component) | the sealed base | materialised through `<Base>.FromHandle(...)`, see [Sealed types as property types](#sealed-types-as-property-types), [ADR-105](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/105-sealed-property-position.md) |
 | a sealed subclass declared nested inside its sealed base, used at a return, property, or parameter position | `Base.Sub` (enclosing scope kept) | see [A nested sealed subclass at a member position](#a-nested-sealed-subclass-at-a-member-position) |
 | an `interface` declared nested inside another class, used at a return, property, or parameter position | skipped named (`UNDECLARED_INTERFACE`) | see [Nested interfaces skip named](#nested-interfaces-skip-named) |
@@ -216,7 +216,17 @@ public abstract class Observation : IDisposable
     {
         internal Alive(IntPtr handle) : base(handle) { }
 
-        public Cat Cat => new Cat(Native_Get_cat(_handle, out _));
+        public Cat Cat
+        {
+            get
+            {            IntPtr nativeResult = Native_Get_cat(_handle, out IntPtr error);
+            if (error != IntPtr.Zero)
+            {
+                throw NugetErrorNative.BuildException(error);
+            }
+            return new Cat(nativeResult);
+            }
+        }
 
         public override bool Equals(object? obj) { /* ... */ }
         public override int GetHashCode() => Native_HashCode(_handle);
@@ -226,7 +236,17 @@ public abstract class Observation : IDisposable
 
     public sealed class Dead : Observation
     {
-        public string Cause => Marshal.PtrToStringUTF8(Native_Get_cause(_handle, out _))!;
+        public string Cause
+        {
+            get
+            {            IntPtr nativeResult = Native_Get_cause(_handle, out IntPtr error);
+            if (error != IntPtr.Zero)
+            {
+                throw NugetErrorNative.BuildException(error);
+            }
+            return Marshal.PtrToStringUTF8(nativeResult)!;
+            }
+        }
         // Equals / GetHashCode / ToString / Dispose ...
     }
 
@@ -254,7 +274,7 @@ public abstract class Observation : IDisposable
 }
 ```
 
-`Alive` and `Dead` are Kotlin `data class` subtypes, so they also get `Equals`/`GetHashCode`/`ToString` (see [Data classes](data-classes.md)). `Superposition` is a `data object`, so it has a fixed `ToString()` and no `Equals`/`GetHashCode` override (reference equality is enough for a singleton).
+`Alive` and `Dead` are Kotlin `data class` subtypes, so they also get `Equals`/`GetHashCode`/`ToString` (see [Data classes](data-classes.md)). `Superposition` is a `data object`, so it has a fixed `ToString()` and no `Equals`/`GetHashCode` override (reference equality is enough for a singleton). `Cat` and `Cause` both read the `out IntPtr error` slot and throw on failure, the same as any class property getter; see [Every property shape on a sealed subclass](#every-property-shape-on-a-sealed-subclass).
 
 ## Sealed types as property types
 
@@ -355,31 +375,42 @@ sealed class Issue39State {
 [DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "issue39state_loaded_get_items")]
 private static extern IntPtr Native_Get_items(IntPtr handle, out IntPtr error);
 
-public IReadOnlyList<Issue39Item> Items
+public IReadOnlyList<global::TestLibrary.Cat.Issue39Item> Items
 {
     get
+    {                IntPtr nativeResult = Native_Get_items(_handle, out IntPtr error);
+    if (error != IntPtr.Zero)
     {
-        IntPtr listHandle = Native_Get_items(_handle, out IntPtr error);
-        if (error != IntPtr.Zero)
-        {
-            throw NugetErrorNative.BuildException(error);
-        }
-        int count = NugetListNative.Count(listHandle);
-        var result = new List<Issue39Item>(count);
-        for (int i = 0; i < count; i++)
-        {
-            result.Add(NugetMarshal.FromHandle<Issue39Item>(NugetListNative.Get(listHandle, i)));
-        }
-        NugetListNative.Dispose(listHandle);
-        return result.AsReadOnly();
+        throw NugetErrorNative.BuildException(error);
+    }
+    int count = NugetListNative.Count(nativeResult);
+    var result = new List<global::TestLibrary.Cat.Issue39Item>(count);
+    for (int i = 0; i < count; i++)
+    {
+        result.Add(NugetMarshal.FromHandle<global::TestLibrary.Cat.Issue39Item>(NugetListNative.Get(nativeResult, i)));
+    }
+    NugetListNative.Dispose(nativeResult);
+    return result.AsReadOnly();
     }
 }
 ```
 
-The scalar `Refreshing` getter on the same subclass stays expression-bodied. Since [#38](https://github.com/xxfast/kotlin-native-nuget/issues/38) every sealed-subclass getter declares the error slot, so it passes `out _` without reading it back:
+The scalar `Refreshing` getter on the same subclass reads the error slot too, since sealed-subclass
+properties plan onto the same [ADR-062](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/062-forward-callable-plan.md)
+property plan an ordinary class property uses ([ADR-111](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/111-sealed-subclass-properties-on-the-property-plan.md)):
 
 ```C#
-public bool Refreshing => Native_Get_refreshing(_handle, out _);
+public bool Refreshing
+{
+    get
+    {                bool nativeResult = Native_Get_refreshing(_handle, out IntPtr error);
+    if (error != IntPtr.Zero)
+    {
+        throw NugetErrorNative.BuildException(error);
+    }
+    return nativeResult;
+    }
+}
 ```
 
 From `IntegrationTests/Issue39Tests.cs`:
@@ -394,11 +425,9 @@ Assert.Equal(2, items.Count);
 ```
 
 <note>
-    <p>A <code>Map</code>/<code>Set</code> property on a sealed subclass now parses too (the same
-    block-vs-expression branch fixed this). Its <code>DllImport</code> carries the
-    <code>out IntPtr error</code> slot like every other sealed getter, but the C# getter passes
-    <code>out _</code>: only <code>List</code>/<code>MutableList</code> read the slot back and
-    throw.</p>
+    <p>A <code>Map</code>/<code>Set</code> property on a sealed subclass parses the same way, and its
+    getter reads the <code>out IntPtr error</code> slot back and throws too, the same as
+    <code>List</code>/<code>MutableList</code> above.</p>
 </note>
 
 ## Payload types from another namespace
@@ -441,7 +470,17 @@ public sealed class Success : Issue50State
         }
     }
 
-    public global::TestLibrary.Issue50.Issue50Position Position => new global::TestLibrary.Issue50.Issue50Position(Native_Get_position(_handle, out _));
+    public global::TestLibrary.Issue50.Issue50Position Position
+    {
+        get
+        {            IntPtr nativeResult = Native_Get_position(_handle, out IntPtr error);
+        if (error != IntPtr.Zero)
+        {
+            throw NugetErrorNative.BuildException(error);
+        }
+        return new global::TestLibrary.Issue50.Issue50Position(nativeResult);
+        }
+    }
 }
 ```
 
@@ -605,7 +644,17 @@ public abstract class FlatShape : IDisposable, INugetHandle
     {
         internal Circle(IntPtr handle) : base(handle) { }
 
-        public int Radius => Native_Get_radius(_handle, out _);
+        public int Radius
+        {
+            get
+            {                int nativeResult = Native_Get_radius(_handle, out IntPtr error);
+            if (error != IntPtr.Zero)
+            {
+                throw NugetErrorNative.BuildException(error);
+            }
+            return nativeResult;
+            }
+        }
 
         // Equals / GetHashCode / ToString / Dispose ...
     }
@@ -633,7 +682,17 @@ public sealed class Label : FlatShape
     [DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "flatshape_label_get_text")]
     private static extern IntPtr Native_Get_text(IntPtr handle, out IntPtr error);
 
-    public string Text => Marshal.PtrToStringUTF8(Native_Get_text(_handle, out _))!;
+    public string Text
+    {
+        get
+        {                IntPtr nativeResult = Native_Get_text(_handle, out IntPtr error);
+        if (error != IntPtr.Zero)
+        {
+            throw NugetErrorNative.BuildException(error);
+        }
+        return Marshal.PtrToStringUTF8(nativeResult)!;
+        }
+    }
 
     // Equals / GetHashCode / ToString / Dispose ...
 }
@@ -688,59 +747,143 @@ public void Label_IsDeclaredOnceAtNamespaceLevel_AndDerivesFromTheSealedBase()
     <code>FlatSealedSubclassTests</code>.</p>
 </note>
 
-## Nullable properties on sealed subclasses
+## Every property shape on a sealed subclass {id="every-property-shape-on-a-sealed-subclass"}
 
-A nullable property on a sealed subclass, a class nested inside its sealed parent, exports nullable and carries the same `errorOut` convention the top-level path uses ([#38](https://github.com/xxfast/kotlin-native-nuget/issues/38)). `String?` renders as one export returning `string?`; `Int?` follows the two-call `_has_value`/`_value` convention (see [Primitives and strings](primitives-and-strings.md)), collapsed into a single C# expression.
+A property of a sealed subclass, a class nested inside its sealed parent, plans onto the same
+[ADR-062](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/062-forward-callable-plan.md)
+property plan an ordinary class property uses
+([ADR-111](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/111-sealed-subclass-properties-on-the-property-plan.md)),
+so every shape a class property supports is supported here too: a nullable enum, a nullable
+exported reference, `Boolean`/`Boolean?`, a `List`/`Map`/`Set`, a `var` with a real setter, and
+`Duration`/`Uuid`/value-class/interface types (see [ADR-103](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/103-duration-mapping.md),
+[ADR-106](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/106-uuid-mapping.md)). Every getter reads the `out IntPtr error` slot and throws on failure, the same as any class property getter.
 
-### Kotlin {id="nullable-sealed-kotlin"}
+### Kotlin {id="property-plan-sealed-kotlin"}
 
 From `test-library/src/nativeMain/kotlin/.../cat/Issue38Sample.kt`:
 
 ```kotlin
 sealed class Issue38State {
-  data class Loaded(val error: String?, val retries: Int?, val code: Int) : Issue38State()
-  data object Idle : Issue38State()
-}
+  data class Loaded(
+    val error: String?,
+    val retries: Int?,
+    val code: Int,
+    val mood: Mood?,
+    val friend: Cat?,
+    val flag: Boolean,
+    val maybeFlag: Boolean?,
+    var note: String = "n",
+    val took: Duration = 1500.milliseconds,
+    val id: Uuid = Uuid.parse("feedface-0a1e-4c0a-b0b0-0ff1ceb0bade"),
+  ) : Issue38State()
 
-fun issue38State(state: Int): Issue38State = when (state) {
-  0 -> Issue38State.Loaded("Oreo knocked the water bowl over", 3, 7)
-  1 -> Issue38State.Loaded(null, null, 7)
-  else -> Issue38State.Idle
+  data object Idle : Issue38State()
+
+  class Issue38Boom : Issue38State() {
+    val boom: String get() = throw IllegalStateException("boom")
+  }
 }
 ```
 
-### Generated C# {id="nullable-sealed-generated-c"}
+### Generated C# {id="property-plan-sealed-generated-c"}
 
-From `Interop.cs`:
+From `Interop.cs`. `Mood` is a nullable enum, `Friend` a nullable exported reference read with a
+single native call, `Note` the one `var` in the hierarchy, and `Took` a `Duration` bound as
+`TimeSpan`:
 
 ```C#
-[DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "issue38state_loaded_get_error")]
-private static extern IntPtr Native_Get_error(IntPtr handle, out IntPtr error);
+public global::TestLibrary.Cat.Mood? Mood
+{
+    get
+    {
+    bool hasValue = Native_Get_mood(_handle, out IntPtr error);
+    if (error != IntPtr.Zero)
+    {
+        throw NugetErrorNative.BuildException(error);
+    }
+    if (!hasValue) return null;
+    int value = Native_Get_mood_value(_handle, out IntPtr error2);
+    if (error2 != IntPtr.Zero)
+    {
+        throw NugetErrorNative.BuildException(error2);
+    }
+    return (global::TestLibrary.Cat.Mood)value;
+    }
+}
 
-public string? Error => Marshal.PtrToStringUTF8(Native_Get_error(_handle, out _));
+public global::TestLibrary.Cat.Cat? Friend
+{
+    get
+    {                IntPtr nativeResult = Native_Get_friend(_handle, out IntPtr error);
+    if (error != IntPtr.Zero)
+    {
+        throw NugetErrorNative.BuildException(error);
+    }
+    return nativeResult == IntPtr.Zero ? null : new global::TestLibrary.Cat.Cat(nativeResult);
+    }
+}
 
-[DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "issue38state_loaded_get_retries_has_value")]
-[return: MarshalAs(UnmanagedType.I1)]
-private static extern bool Native_Get_retries_has_value(IntPtr handle, out IntPtr error);
+public string Note
+{
+    get
+    {                IntPtr nativeResult = Native_Get_note(_handle, out IntPtr error);
+    if (error != IntPtr.Zero)
+    {
+        throw NugetErrorNative.BuildException(error);
+    }
+    return Marshal.PtrToStringUTF8(nativeResult)!;
+    }
+    set
+    {                Native_Set_note(_handle, value, out IntPtr error);
+    if (error != IntPtr.Zero)
+    {
+        throw NugetErrorNative.BuildException(error);
+    }
+    }
+}
 
-[DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "issue38state_loaded_get_retries_value")]
-private static extern int Native_Get_retries_value(IntPtr handle, out IntPtr error);
-
-public int? Retries => Native_Get_retries_has_value(_handle, out _) ? Native_Get_retries_value(_handle, out _) : (int?)null;
+public global::System.TimeSpan Took
+{
+    get
+    {                long nativeResult = Native_Get_took(_handle, out IntPtr error);
+    if (error != IntPtr.Zero)
+    {
+        throw NugetErrorNative.BuildException(error);
+    }
+    return new global::System.TimeSpan(nativeResult);
+    }
+}
 ```
 
-### Using it from C# {id="nullable-sealed-using-it-from-c"}
+`Friend` reads once per call, unlike the legacy route's earlier double call, and `Flag`/`MaybeFlag`
+carry `[return: MarshalAs(UnmanagedType.I1)]` on their `DllImport`s, the same as any `Boolean`
+property. `Id` (a `Uuid`) binds as `System.Guid`, the same as on an ordinary class.
 
-From `IntegrationTests/Issue38Tests.cs`:
+### Using it from C# {id="property-plan-sealed-using-it-from-c"}
+
+A throwing Kotlin getter surfaces as a thrown exception, not a default value, from
+`IntegrationTests/Issue38Tests.cs`:
 
 ```C#
 [Fact]
-public void State_Loaded_WithNulls_ErrorIsNull()
+public void State_Boom_ReadingBoom_Throws()
 {
-    using Issue38State state = Issue38Sample.Issue38State(1);
+    using Issue38State state = Issue38Sample.Issue38State(4);
+    var boom = Assert.IsType<Issue38State.Issue38Boom>(state);
+    Assert.ThrowsAny<InvalidOperationException>(() => boom.Boom);
+}
+```
+
+The `var` setter round-trips too:
+
+```C#
+[Fact]
+public void State_Loaded_Note_SetterRoundTrips()
+{
+    using Issue38State state = Issue38Sample.Issue38State(0);
     var loaded = Assert.IsType<Issue38State.Loaded>(state);
-    string? error = loaded.Error;
-    Assert.Null(error);
+    loaded.Note = "changed";
+    Assert.Equal("changed", loaded.Note);
 }
 ```
 
@@ -1218,7 +1361,6 @@ property. The owning class still generates, and its unrelated `name` member stil
 - Interfaces with generic type parameters, suspend interface members, and `Flow`/`StateFlow`-valued interface members are not supported as return positions.
 - A backing class and its dispatch exports are only generated for interfaces that actually appear in a planned return position; an interface only ever used as an `add`/`remove` subscription parameter (like `ICatEventListener`, see [Lambdas and callbacks](lambdas-and-callbacks.md)) does not get one.
 - Object identity is not preserved across reads of a **Kotlin-backed** interface-typed property: two reads produce two distinct C# wrapper instances over the same Kotlin object (each disposes independently). A **C#-implemented** object read back is the one exception, see above.
-- A nullable *enum* property on a sealed subclass is not handled by the fix above: it still renders `.ordinal` on a possibly-null value, the same bug class as `String?`/`Int?`, unverified by a fixture. See [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md).
 - A sealed type at a **property** position binds (bare, nullable, and a read-only collection component). A sealed type at a **constructor or method parameter** position does not, and drops **silently, with no diagnostic**; it was never on ADR-105's route (property planner only), pre-existing. A sealed collection component at a **return or parameter** position does not either, deferred as [ADR-105](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/105-sealed-property-position.md) scope (d), and it drops the same silent way. A *mutable* collection of sealed (`var shapes: MutableList<Shape>`) binds get-only. A sealed **interface** is never discriminated at any property position, bare or as a collection component, since only a sealed *class* gets a `FromHandle`. See [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md).
 - [Overriding a read-only property with `var`](#overriding-a-read-only-property-with-var) only guards against the exported-base-class shape. A base class's own `open val`/`open var` never renders `virtual` (its own modifier is never read), so any subclass `override` of it is `CS0506`; and an unimplemented base `abstract val`/`abstract var` has no abstract-property path at all, so a subclass `override` of it is `CS0115`. Neither is fixed. See [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md).
 
@@ -1290,5 +1432,6 @@ public void Observation_WorksWithPatternMatching()
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/084-csharp-implemented-interfaces.md">ADR-084: C#-implemented Kotlin interfaces</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/094-reflection-free-generic-dispatch.md">ADR-094: Reflection-free generic dispatch</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/102-aot-safe-forward-callbacks.md">ADR-102: AOT-safe forward callbacks</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/111-sealed-subclass-properties-on-the-property-plan.md">ADR-111: Sealed-subclass properties on the property plan</a>
     </category>
 </seealso>
