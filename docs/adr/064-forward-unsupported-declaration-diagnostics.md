@@ -838,3 +838,59 @@ survival of everything around the skip.
   nested kind. Rejected for this amendment's scope: it touches collection, three translators, the
   renderer, `@CName` prefixing, the closure's edge table, and the bare-simple-name collision check, a
   materially larger change than a skip-and-diagnose gate. Tracked as its own `ROADMAP.md` item.
+
+## Amendment (2026-09-07): `SEALED_PROTOCOL` is retired
+
+Judgement: an **amendment**, not a new ADR. This closes the ROADMAP Phase 3 item "A bare
+sealed-typed parameter (`fun f(shape: Shape)`), and a constructor with sealed-typed parameters,
+vanish from C# with no diagnostic instead of skipping named"
+(`docs/backlog/sealed-collection-return-silently-drops.md`). It renames one `ForwardPlanSkipReason`
+member, flips its `droppedFromCSharp` flag, and adds one `ForwardDiagnosticKind`; no new mechanism
+beyond what this ADR already describes. Status stays Accepted.
+
+By the time this item ran, [ADR-009](009-sealed-class-mapping.md)'s 2026-09-07 amendment and
+[ADR-105](105-sealed-property-position.md) had already moved every sealed **return** and every
+sealed **property** off the `Skipped`/`SEALED_PROTOCOL` route entirely: both now classify straight
+to an `ObjectHandle` (via `sealedAsHandle()`) before a skip reason is ever computed. That leaves
+`ForwardPlanSkipReason.SEALED_PROTOCOL` reachable from exactly one place: a sealed type at a
+**parameter** position, bare, nullable, or as a collection component, including every constructor
+parameter. Its `droppedFromCSharp = false` was set on the original assumption that some legacy
+route would re-emit the callable; no legacy route ever re-emitted a parameter position, so the flag
+was wrong for the one case still using the reason, and the skip was completely silent.
+
+The reason is renamed `SEALED_POSITION` and its `droppedFromCSharp` flipped to `true`, so it now
+reaches `droppedCallables` and maps to a new `SKIPPED_SEALED_POSITION` (`WARNING`) diagnostic,
+naming the sealed type and pointing at the parameter's own declaration:
+
+```
+[nuget:SKIPPED_SEALED_POSITION] Skipping io.github.xxfast.kotlin.native.nuget.test.issue54.Issue54Drawing.<init>: its SEALED_POSITION type combination is not supported. sealed class `io.github.xxfast.kotlin.native.nuget.test.issue54.Issue54Shape` binds at return and property positions (ADR-009, ADR-105) but not yet as a parameter (bare, nullable, or as a collection component); accept a concrete subclass, or wrap it in an exported non-sealed class
+    at .../Issue54Sample.kt:64
+```
+
+Fired for both `Issue54Drawing.<init>` and its generated `copy`, since both share the same
+constructor-shaped parameter list. `WARNING_NO_PUBLIC_CONSTRUCTOR` (this ADR's earlier amendment)
+now names a real reason for `Issue54Drawing` too: `(<init>: SEALED_POSITION)` instead of the stale
+`(<init>: SEALED_PROTOCOL)` this document's own example above showed, since it reads the same
+catalog entry. A **nullable** sealed parameter (`Shape?`) defers to the same `SEALED_POSITION`
+reason rather than being misattributed to `NULLABLE`, the same nullable-misattribution fix this ADR
+already made for `UNDECLARED_INTERFACE`/`UNDECLARED_CLASS`.
+
+**Alternative rejected:** a per-callable "claimed by legacy route" registry, so a reason's
+`droppedFromCSharp` could be computed from whether a route actually claimed the callable rather than
+hardcoded per reason. Not built: `ForwardAbiLegacyRoutes` is a coarse per-file set with no production
+caller, and building the registry to answer one flag on one reason would be a disproportionate
+mechanism for what a rename and a flag flip already fix.
+
+**Not fixed here, and not the same bug:** bridging a sealed type at a parameter position (writing a
+sealed-base handle into a Kotlin parameter or constructor argument) is untouched; this amendment
+only replaces silence with a name. Tracked separately
+(`docs/backlog/sealed-collection-return-parameter-position.md` for the collection-component half).
+
+**Structurally the same silence exists elsewhere, out of scope here:** `GENERIC`, `FLOW_PROTOCOL`,
+and `CALLBACK_PROTOCOL` are still `droppedFromCSharp = false` legacy-route deferrals, on the same
+"some route re-emits this" assumption `SEALED_PROTOCOL` had. Nothing in this session verified
+whether that assumption holds for every position each of those reasons can be classified at (a
+class method's generic return/parameters, a top-level `Flow` return/parameter, a lambda return); if
+it does not, the same class of silent vanish exists there too. Each needs its own audit of which
+positions its legacy route actually re-emits before a fix can be scoped the way this amendment
+scoped `SEALED_POSITION`; tracked on `ROADMAP.md` as a separate item per reason.

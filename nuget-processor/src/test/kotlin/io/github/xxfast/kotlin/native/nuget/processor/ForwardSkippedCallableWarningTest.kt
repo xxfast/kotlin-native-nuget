@@ -118,6 +118,9 @@ class ForwardSkippedCallableWarningTest {
         // implemented in Kotlin at a return position. Both are real drops with their own kinds.
         ForwardPlanSkipReason.BOUND_INTERFACE_POSITION,
         ForwardPlanSkipReason.UNIMPLEMENTABLE_BOUND_INTERFACE,
+        // ROADMAP Phase 3: a sealed base at an input position. Since ADR-105 no route re-emits
+        // one, so the deferral it used to claim was a silent drop.
+        ForwardPlanSkipReason.SEALED_POSITION,
       ),
       dropped,
     )

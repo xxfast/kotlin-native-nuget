@@ -401,19 +401,43 @@ explaining why. Since
 
 ```
 [nuget:WARNING_NO_PUBLIC_CONSTRUCTOR] Keeping Issue54Drawing: every public constructor is skipped
-    (<init>: SEALED_PROTOCOL), so the generated C# class has only its internal handle constructor
+    (<init>: SEALED_POSITION), so the generated C# class has only its internal handle constructor
     and C# cannot construct one. the type is kept because instances can still come from Kotlin
     factories that return it (a top-level function, or a companion factory); expose one, or change
     the constructor parameters to types the bridge can express
-    at Issue54Sample.kt:52
+    at Issue54Sample.kt:64
 ```
 
 Fires for every skip reason a constructor can go for, including a legacy-route deferral like
-`SEALED_PROTOCOL` that never reaches `droppedCallables` (no legacy route re-emits a constructor, so
-that family was silent in every channel before this amendment). Not fired for an abstract class or
-the interface-return backing wrapper, neither of which is handle-less by accident. See
+`SEALED_POSITION` (named `SEALED_PROTOCOL` before [ADR-064](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/064-forward-unsupported-declaration-diagnostics.md)'s
+2026-09-07 amendment below) that never reaches `droppedCallables` on its own (no legacy route
+re-emits a constructor, so that family was silent in every channel before this amendment). Not
+fired for an abstract class or the interface-return backing wrapper, neither of which is
+handle-less by accident. See
 [Classes and objects: No public constructor](classes-and-objects.md#no-public-constructor) for the
 full `Issue54Drawing` shape.
+
+### A sealed type at a parameter position skips named {id="sealed-position-skip-named"}
+
+A sealed type at a bare, nullable, or collection-component parameter position (including a
+constructor parameter) is not bridged. Every sealed *return* and *property* position now binds
+directly (ADR-009, ADR-105), so the `ForwardPlanSkipReason` that used to cover this case,
+`SEALED_PROTOCOL`, a `droppedFromCSharp = false` legacy-route deferral on the assumption some other
+route re-emitted it, was reachable only from the parameter position, where no route ever did, so the
+skip was completely silent. [ADR-064](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/064-forward-unsupported-declaration-diagnostics.md)'s
+2026-09-07 amendment renamed the reason `SEALED_POSITION`, flipped `droppedFromCSharp` to `true`,
+and added `SKIPPED_SEALED_POSITION`:
+
+```
+[nuget:SKIPPED_SEALED_POSITION] Skipping io.github.xxfast.kotlin.native.nuget.test.issue54.Issue54Drawing.<init>: its SEALED_POSITION type combination is not supported. sealed class `io.github.xxfast.kotlin.native.nuget.test.issue54.Issue54Shape` binds at return and property positions (ADR-009, ADR-105) but not yet as a parameter (bare, nullable, or as a collection component); accept a concrete subclass, or wrap it in an exported non-sealed class
+    at Issue54Sample.kt:64
+```
+
+`WARNING_NO_PUBLIC_CONSTRUCTOR` now names this reason too when it fires for a class whose every
+constructor parameter is sealed-typed: `(<init>: SEALED_POSITION)` above replaces the stale
+`SEALED_PROTOCOL` this document's own earlier example carried. Naming the skip is the whole change;
+binding a sealed type at a parameter position is still not built, see
+[Interfaces, abstract classes, and sealed classes](interfaces-abstract-sealed.md#limitations).
 
 ### Where these messages appear
 

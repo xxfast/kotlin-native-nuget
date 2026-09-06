@@ -36,7 +36,6 @@ internal enum class ForwardPlanSkipReason(val droppedFromCSharp: Boolean) {
   CALLBACK_PROTOCOL(droppedFromCSharp = false),
   FLOW_PROTOCOL(droppedFromCSharp = false),
   GENERIC(droppedFromCSharp = false),
-  SEALED_PROTOCOL(droppedFromCSharp = false),
   SUSPEND(droppedFromCSharp = false),
   SUSPEND_CALLBACK_PROTOCOL(droppedFromCSharp = false),
   TYPE_PARAMETER(droppedFromCSharp = false),
@@ -136,6 +135,15 @@ internal enum class ForwardPlanSkipReason(val droppedFromCSharp: Boolean) {
    *  Excludes the two nested shapes that ARE declared: a sealed subclass (ADR-009, nested under
    *  its base) and a companion object (ADR-013, its owner's statics). */
   UNDECLARED_CLASS(droppedFromCSharp = true),
+
+  /** ROADMAP Phase 3 (issue #54): a sealed base at a position the plan does not marshal, which
+   *  since ADR-105 means an INPUT position only -- a bare parameter, a nullable one, or a
+   *  collection component. A real drop, not a legacy-route deferral: the ADR-009 sealed route
+   *  emits the hierarchy's own helpers, never a callable that takes one, so a member skipped here
+   *  disappears from the C# API. Named rather than folded into `UNSUPPORTED`/`NULLABLE`, for
+   *  ADR-088's reason: the type binds perfectly well at a return or property position, so the
+   *  message has to blame the position. */
+  SEALED_POSITION(droppedFromCSharp = true),
 
   /** ADR-088: a bound C# interface at a position v1 does not marshal (nullable, property,
    *  collection component, receiver). Named rather than folded into the generic UNSUPPORTED
@@ -354,8 +362,8 @@ internal data class ForwardCallablePlanCatalog(
    *
    * Deliberately not filtered by [ForwardPlanSkipReason.droppedFromCSharp], unlike
    * [droppedCallables]: that flag says a *method* still binds through a legacy route, and no
-   * legacy route re-emits a constructor, so a `SEALED_PROTOCOL`/`GENERIC` constructor skip is
-   * just as absent from the C# surface as an `UNDECLARED_ENUM` one.
+   * legacy route re-emits a constructor, so a `GENERIC` constructor skip is just as absent from
+   * the C# surface as an `UNDECLARED_ENUM` one.
    *
    * Owner-exact, and matched on the `<init>` name so a data class's `copy` (its own origin,
    * planned from the same primary constructor) never counts as one.
@@ -1219,6 +1227,7 @@ internal class ForwardCallablePlanner(
         detail = ineligible.actualTypeAliasTargetDetail()
           ?: ineligible.unexportedDependencyDetail()
           ?: ineligible.undeclaredTypeDetail()
+          ?: ineligible.sealedTypeDetail()
           ?: ineligible.collectionComponentDetail(),
       )
     }
@@ -1436,6 +1445,7 @@ internal class ForwardCallablePlanner(
         detail = ineligible.actualTypeAliasTargetDetail()
           ?: ineligible.unexportedDependencyDetail()
           ?: ineligible.undeclaredTypeDetail()
+          ?: ineligible.sealedTypeDetail()
           ?: ineligible.collectionComponentDetail(),
       )
     }
@@ -1443,17 +1453,17 @@ internal class ForwardCallablePlanner(
     // ADR-108: `Result<T>` at an ordinary return position is lowered to `T` here, before any shape
     // is taken, and the invocation is flagged so the Kotlin export appends `.getOrThrow()`. The
     // fallback is load-bearing: when `T` has no return shape the plan keeps the ORIGINAL
-    // `Result`'s skip reason (VALUE_CLASS), never `T`'s -- a `Result<Shape>` taking the sealed
-    // SEALED_PROTOCOL legacy deferral would be dropped silently, since the legacy re-emit keys on
-    // the declared return type.
+    // `Result`'s skip reason (VALUE_CLASS), never `T`'s -- a `Result<Shape>` reporting the inner
+    // sealed type's own skip would name a position the author did not write, since the legacy
+    // re-emit keys on the declared return type.
     // ADR-105 (issue #54): a sealed base at a RESULT position binds as the ObjectHandle the
     // classifier already carries, at EVERY origin -- top-level, class member, object member,
     // companion. Before this, only a top-level sealed return was re-emitted (by the named legacy
-    // adapter in exports/FunctionExports.kt), and every member spelling took a `SEALED_PROTOCOL`
-    // skip that no route re-emitted, so the member was dropped with no C# member and no
-    // diagnostic. Parameters are deliberately left alone: a bare sealed input is ADR-105's
-    // deferred scope (d), and `isWrappableComponent` refuses a discriminated handle on the write
-    // side on purpose.
+    // adapter in exports/FunctionExports.kt), and every member spelling took a skip that no route
+    // re-emitted, so the member was dropped with no C# member and no diagnostic. Parameters are
+    // deliberately left alone: a bare sealed input is ADR-105's deferred scope (d), and
+    // `isWrappableComponent` refuses a discriminated handle on the write side on purpose, so an
+    // input skips named as `SEALED_POSITION` instead.
     val plannedResult: BridgeType = result.sealedAsHandle()
     val unwrappedResult: BridgeType? = plannedResult.kotlinResultPayloadOrNull(origin)
     val effectiveResult: BridgeType =
@@ -1471,6 +1481,7 @@ internal class ForwardCallablePlanner(
         detail = plannedResult.actualTypeAliasTargetDetail()
           ?: plannedResult.unexportedDependencyDetail()
           ?: plannedResult.undeclaredTypeDetail()
+          ?: plannedResult.sealedTypeDetail()
           ?: plannedResult.collectionComponentDetail(),
       )
     }
@@ -2440,6 +2451,30 @@ internal class ForwardCallablePlanner(
       ?.rendered
   }
 
+  /** True for the ADR-009 sealed-hierarchy protocol, whichever position it turned up at. The
+   *  classifier mints exactly one protocol name for it, so the prefix is the whole test. */
+  private fun BridgeType.isSealedProtocol(): Boolean =
+    this is BridgeType.SpecializedProtocol && name.startsWith(SEALED_HELPER_PREFIX)
+
+  /** The sealed base's qualified name, when this (possibly nullable-wrapped, possibly
+   *  collection-wrapped) type is the direct reason a callable took a
+   *  [ForwardPlanSkipReason.SEALED_POSITION] skip. Descends one collection level for the same
+   *  reason [undeclaredTypeDetail] does: a `List<Shape>` parameter attributes to its element's
+   *  reason, so without this its hint would name no type at all. `null` for every other reason. */
+  private fun BridgeType.sealedTypeDetail(): String? {
+    val unwrapped: BridgeType = unwrapNullable()
+    val candidate: BridgeType = when (unwrapped) {
+      is BridgeType.Collection ->
+        (unwrapped.element ?: unwrapped.key ?: unwrapped.value)?.unwrapNullable() ?: unwrapped
+
+      else -> unwrapped
+    }
+    return (candidate as? BridgeType.SpecializedProtocol)
+      ?.takeIf { protocol -> protocol.name.startsWith(SEALED_HELPER_PREFIX) }
+      ?.name
+      ?.removePrefix(SEALED_HELPER_PREFIX)
+  }
+
   private fun BridgeType.skipReason(): ForwardPlanSkipReason? = when (this) {
     BridgeType.Unit, is BridgeType.Primitive -> null
     BridgeType.Char -> ForwardPlanSkipReason.CHAR
@@ -2500,7 +2535,7 @@ internal class ForwardCallablePlanner(
       name.startsWith("flow ") -> ForwardPlanSkipReason.FLOW_PROTOCOL
       name.startsWith("suspend lambda ") -> ForwardPlanSkipReason.SUSPEND_CALLBACK_PROTOCOL
       name.startsWith("lambda ") || name.startsWith("interface bridge ") -> ForwardPlanSkipReason.CALLBACK_PROTOCOL
-      name.startsWith("sealed helper ") -> ForwardPlanSkipReason.SEALED_PROTOCOL
+      name.startsWith(SEALED_HELPER_PREFIX) -> ForwardPlanSkipReason.SEALED_POSITION
       name.startsWith("generic declaration ") -> ForwardPlanSkipReason.GENERIC
       else -> error("Forward planner has no explicit legacy route for specialized protocol $name")
     }
@@ -2590,6 +2625,16 @@ internal class ForwardCallablePlanner(
       is BridgeType.ValueClass ->
         if (inner.underlying.isOrdinaryValueClassUnderlying()) null
         else ForwardPlanSkipReason.VALUE_CLASS
+
+      // ROADMAP Phase 3: `Shape?` is not skipped *because* it is nullable -- a bare `Shape` is
+      // just as unmarshallable at an input position -- so the NULLABLE bucket's "expose a
+      // non-nullable wrapper" hint would send the author after a fix that cannot work, exactly
+      // the trap issue #54 fixed for undeclared types. Narrow on purpose: every other nullable
+      // protocol (Flow, lambda, generic) keeps the shipped NULLABLE wording, since those are
+      // separate deferrals with their own routes.
+      is BridgeType.SpecializedProtocol ->
+        if (inner.isSealedProtocol()) ForwardPlanSkipReason.SEALED_POSITION
+        else ForwardPlanSkipReason.NULLABLE
 
       // ADR-088: `IFeedable?` is on this ADR's deferred list. The null-pointer ride is natural,
       // but it needs its own lowering in four emitter positions; until then the skip names the

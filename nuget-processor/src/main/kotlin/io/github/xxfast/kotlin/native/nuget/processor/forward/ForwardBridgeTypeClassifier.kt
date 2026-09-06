@@ -183,7 +183,7 @@ internal class ForwardBridgeTypeClassifier(
       val discriminated: Boolean = classDeclaration.classKind == ClassKind.CLASS &&
           qualifiedName in context.exportedObjectHandles
       return BridgeType.SpecializedProtocol(
-        "sealed helper $qualifiedName",
+        "$SEALED_HELPER_PREFIX$qualifiedName",
         sealedHandle = if (discriminated) {
           BridgeType.ObjectHandle(
             qualifiedName,
