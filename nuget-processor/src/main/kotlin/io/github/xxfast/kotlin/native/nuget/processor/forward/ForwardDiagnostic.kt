@@ -263,6 +263,9 @@ internal fun ForwardPlanSkipReason.toDiagnosticKind(): ForwardDiagnosticKind = w
     // kind — the member is unsupported at every position for the same one reason, and only the
     // hint (which names the enum and the move-to-top-level fix) differs.
   ForwardPlanSkipReason.UNDECLARED_ENUM,
+    // Issue #54: the nested-interface twin, folded into the same bucket for the same reason -- one
+    // undeclarable type, unsupported at every position, distinguished only by its hint.
+  ForwardPlanSkipReason.UNDECLARED_INTERFACE,
   ForwardPlanSkipReason.VALUE_CLASS,
     -> ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_TYPE
 
@@ -289,7 +292,8 @@ internal fun ForwardPlanSkipReason.toDiagnosticKind(): ForwardDiagnosticKind = w
  *   [ForwardPlanSkipReason.ACTUAL_TYPEALIAS_TARGET], the same slot instead carries
  *   `"<expect qualified name>-><target rendered name>"`. For [ForwardPlanSkipReason.COLLECTION] it
  *   carries the offending component ("element type Collection?", "key type String?"). For
- *   [ForwardPlanSkipReason.UNDECLARED_ENUM] it carries the undeclared enum's qualified name,
+ *   [ForwardPlanSkipReason.UNDECLARED_ENUM] and
+ *   [ForwardPlanSkipReason.UNDECLARED_INTERFACE] it carries the undeclared type's qualified name,
  *   including when the enum is a collection component (the only extractor that descends into one).
  *   Ignored by every other reason.
  */
@@ -381,6 +385,15 @@ internal fun ForwardPlanSkipReason.diagnosticHint(
         "member typed with it is skipped rather than emitted as a dangling reference; a nested " +
         "enum class is never declared (only top-level enums are), so move it to the top level of " +
         "its file — or, if it already is top level, bring its package into the export scope"
+  }
+
+  // Names the interface, for the reason above, and says nested explicitly: unlike the enum flag
+  // this one covers exactly one shape, so the hint does not have to hedge about export scope.
+  ForwardPlanSkipReason.UNDECLARED_INTERFACE -> {
+    val interfaceName: String = detail ?: "the interface"
+    "interface `$interfaceName` is nested inside a class, and a nested interface is never " +
+        "declared as a C# interface (only top-level ones are), so every member typed with it is " +
+        "skipped rather than emitted as a dangling reference; move it to the top level of its file"
   }
 
   ForwardPlanSkipReason.UNIMPLEMENTABLE_BOUND_INTERFACE ->

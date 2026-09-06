@@ -12,6 +12,7 @@ Kotlin's three flavours of inheritance each get a distinct C# shape: `interface`
 | nullable property on a sealed subclass (`String?`, `Int?`) | `string?` / `int?` | `String?` is one export returning `string?`; `Int?` is a `_has_value`/`_value` pair rendered as one `?:` expression |
 | property whose own type is a sealed class (bare, nullable, or a read-only collection component) | the sealed base | materialised through `<Base>.FromHandle(...)`, see [Sealed types as property types](#sealed-types-as-property-types), [ADR-105](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/105-sealed-property-position.md) |
 | a sealed subclass declared nested inside its sealed base, used at a return, property, or parameter position | `Base.Sub` (enclosing scope kept) | see [A nested sealed subclass at a member position](#a-nested-sealed-subclass-at-a-member-position) |
+| an `interface` declared nested inside another class, used at a return, property, or parameter position | skipped named (`UNDECLARED_INTERFACE`) | see [Nested interfaces skip named](#nested-interfaces-skip-named) |
 
 ## Kotlin
 
@@ -894,6 +895,64 @@ internal sealed class PetBridgeState : NugetBridgeState
 <note>
     <p>An <code>internal IntPtr NugetHandle</code> member on the generated <code>IFoo</code> was considered instead of the reflective helper, and rejected: <code>Interop.cs</code> compiles into the consumer assembly, so an abstract member would break any consumer-written <code>IFoo</code> implementer with <code>CS0535</code>.</p>
 </note>
+
+## Nested interfaces skip named {id="nested-interfaces-skip-named"}
+
+An `interface` declared nested inside another class is never declared in C#: `rootInterfaces`
+(`NugetProcessor.kt`) filters `parentDeclaration == null`, the same rule `rootEnums` applies to a
+nested enum (see [Enums: Nested enums skip named](enums.md#nested-enums-skip-named)). Unlike the
+nested-enum case, this was never a dangling-reference bug: `interfaceType`
+(`ForwardBridgeTypeClassifier.kt`) has always gated every member typed with an undeclared interface
+out of the export set, so nothing was ever spelled against a `IFoo` that no declaration backs. What
+was missing was a name for the skip: it landed in the generic "unsupported type combination" bucket,
+and a nullable return position was misreported as failing on `NULLABLE` rather than on the interface
+itself. The skip is now the same `UNDECLARED_INTERFACE` reason `UNDECLARED_ENUM` uses, and the
+nullable-return misattribution is fixed.
+
+From `test-library/src/nativeMain/kotlin/.../issue54/NestedListenerOwner.kt`:
+
+```kotlin
+class NestedListenerOwner {
+
+  /** Module-local, nested, and therefore never declared in C#. */
+  interface Listener {
+    fun onEvent(): String
+  }
+
+  /** Property position, nullable. */
+  var listener: Listener? = null
+
+  /** Parameter position, non-null. */
+  fun attach(listener: Listener) {
+    this.listener = listener
+  }
+
+  /** Return position, nullable. */
+  fun current(): Listener? = listener
+
+  /** Control: the sibling that must survive the gate. */
+  val name: String = "owner"
+}
+```
+
+The parameter and return positions skip with `SKIPPED_UNSUPPORTED_TYPE`, naming the
+`UNDECLARED_INTERFACE` reason and the move-to-top-level fix:
+
+```
+[nuget:SKIPPED_UNSUPPORTED_TYPE] Skipping io.github.xxfast.kotlin.native.nuget.test.issue54.NestedListenerOwner.attach:
+    its UNDECLARED_INTERFACE type combination is not supported. interface
+    `io.github.xxfast.kotlin.native.nuget.test.issue54.NestedListenerOwner.Listener` is nested inside a
+    class, and a nested interface is never declared as a C# interface (only top-level ones are), so
+    every member typed with it is skipped rather than emitted as a dangling reference; move it to the
+    top level of its file
+```
+
+The property position (`var listener: Listener?`) skips the same way, but through the ordinary
+`SKIPPED_UNSUPPORTED_PROPERTY` message the property planner already emits for any type it has no
+getter/setter shape for: it names the interface but not the move-to-top-level hint, the same gap
+[Enums: Nested enums skip named](enums.md#nested-enums-skip-named) documents for a nested enum
+property. The owning class still generates, and its unrelated `name` member still binds; see
+`IntegrationTests/NestedInterfaceGateTests.cs`.
 
 ## Limitations
 

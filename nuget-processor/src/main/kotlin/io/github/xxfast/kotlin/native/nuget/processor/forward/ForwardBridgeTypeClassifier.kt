@@ -287,6 +287,17 @@ internal class ForwardBridgeTypeClassifier(
    */
   private fun interfaceType(declaration: KSClassDeclaration, qualifiedName: String): BridgeType {
     if (qualifiedName !in context.exportedObjectHandles) {
+      // Issue #54, the enum branch's rule verbatim: `rootInterfaces` filters
+      // `parentDeclaration == null`, so a *nested* interface is undeclarable in either module and
+      // the `include(...)` hint would be actively wrong for it. The nested test therefore runs
+      // FIRST, and only a top-level cross-module interface takes the scope-widening route.
+      if (declaration.parentDeclaration != null) {
+        return BridgeType.Unsupported(
+          qualifiedName,
+          "a nested interface is never declared as a C# interface",
+          isUndeclaredInterface = true,
+        )
+      }
       val isUnexportedDependency: Boolean = declaration.containingFile == null
       return BridgeType.Unsupported(
         qualifiedName,

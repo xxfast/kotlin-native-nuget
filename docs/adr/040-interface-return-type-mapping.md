@@ -970,3 +970,25 @@ State plainly, so no implementer takes them as fact:
 3. **Inferred:** that adding a new `CirDeclaration` subtype does not disturb `ForwardAbiContract`'s
    C#-side signature extraction (`ForwardAbiContract.csharp(cirFile)`); it was only read, not run,
    against a new node type.
+
+### Amendment (2026-09-07): the nested-interface skip is named, not fixed
+
+A Kotlin `interface` declared nested inside another class is never in `exportedObjectHandles`:
+`rootInterfaces` (`NugetProcessor.kt`) filters `parentDeclaration == null`, the same rule
+`rootEnums` applies. `interfaceType`'s (`ForwardBridgeTypeClassifier.kt`) membership gate has
+always skipped every member typed with a nested interface as a result, so the ROADMAP line
+claiming a dangling `I<Simple>` reference was never actually reproducible; verified by Tier 1
+spikes and a new fixture (`NestedListenerOwner`, `Tier1NestedInterfaceSkipTest`). What this
+amendment ships is that the skip now carries a named reason,
+`ForwardPlanSkipReason.UNDECLARED_INTERFACE`, mirroring `UNDECLARED_ENUM`, plus the
+move-to-top-level hint, and the
+nullable-return case (`fun current(): Listener?`) reports `UNDECLARED_INTERFACE` instead of
+misattributing the skip to `NULLABLE`.
+
+A nested *dependency* interface (reached through the ADR-066 reachability closure) is a different
+shape: unlike the `ENUM` bucket, `ForwardReachabilityClosure`'s admission rule filters no bucket
+but `ENUM` for a nested declaration, so a nested dependency interface is admitted and declared
+flattened at the namespace root, consistent with every reference to it (`interfaceType` also
+spells an interface as a namespace-root `I{SimpleName}` with no enclosing scope). This only breaks
+if the flattened simple name collides with another top-level declaration; tracked by the Phase 3
+ROADMAP item on the reachability closure's `parentDeclaration` filter being enum-only.

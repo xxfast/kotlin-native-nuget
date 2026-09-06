@@ -103,6 +103,13 @@ internal enum class ForwardPlanSkipReason(val droppedFromCSharp: Boolean) {
    *  diagnostic at all, taking the consumer's compile down with CS0426/CS0234. */
   UNDECLARED_ENUM(droppedFromCSharp = true),
 
+  /** Issue #54: an `interface` nested inside a class, which `rootInterfaces` never declares as a
+   *  C# `I{Name}` (it filters `parentDeclaration == null`, exactly as `rootEnums` does). The
+   *  [UNDECLARED_ENUM] twin, and separate from it only so the hint can name the right declaration
+   *  kind. `include(...)` cannot help here either: no export scope makes a nested interface
+   *  declarable. */
+  UNDECLARED_INTERFACE(droppedFromCSharp = true),
+
   /** ADR-088: a bound C# interface at a position v1 does not marshal (nullable, property,
    *  collection component, receiver). Named rather than folded into the generic UNSUPPORTED
    *  bucket: the type IS bridgeable, just not here, and the hint differs accordingly. */
@@ -1172,7 +1179,7 @@ internal class ForwardCallablePlanner(
         symbol, requireNotNull(ineligible.inputSkipReason()), node = node,
         detail = ineligible.actualTypeAliasTargetDetail()
           ?: ineligible.unexportedDependencyDetail()
-          ?: ineligible.undeclaredEnumDetail()
+          ?: ineligible.undeclaredTypeDetail()
           ?: ineligible.collectionComponentDetail(),
       )
     }
@@ -1389,7 +1396,7 @@ internal class ForwardCallablePlanner(
         symbol, requireNotNull(ineligible.inputSkipReason()), node = node,
         detail = ineligible.actualTypeAliasTargetDetail()
           ?: ineligible.unexportedDependencyDetail()
-          ?: ineligible.undeclaredEnumDetail()
+          ?: ineligible.undeclaredTypeDetail()
           ?: ineligible.collectionComponentDetail(),
       )
     }
@@ -1415,7 +1422,7 @@ internal class ForwardCallablePlanner(
         symbol, requireNotNull(result.skipReason()), node = node,
         detail = result.actualTypeAliasTargetDetail()
           ?: result.unexportedDependencyDetail()
-          ?: result.undeclaredEnumDetail()
+          ?: result.undeclaredTypeDetail()
           ?: result.collectionComponentDetail(),
       )
     }
@@ -2350,17 +2357,25 @@ internal class ForwardCallablePlanner(
       ?.takeIf { unsupported -> unsupported.isActualTypeAliasTarget }
       ?.let { unsupported -> "${unsupported.actualTypeAliasExpectName}->${unsupported.rendered}" }
 
-  /** The undeclared enum's qualified name, when this (possibly nullable-wrapped, possibly
+  /** True for the two "declared nowhere, at any position" flags, whose skip reason outranks the
+   *  position-shaped ones ([ForwardPlanSkipReason.NULLABLE]) when both could apply. */
+  private fun BridgeType.isUndeclared(): Boolean {
+    val unsupported: BridgeType.Unsupported = this as? BridgeType.Unsupported ?: return false
+    return unsupported.isUndeclaredEnum || unsupported.isUndeclaredInterface
+  }
+
+  /** The undeclared type's qualified name, when this (possibly nullable-wrapped, possibly
    *  collection-wrapped) type is the direct reason a callable was dropped by
-   *  [ForwardPlanSkipReason.UNDECLARED_ENUM]. `null` for every other skip reason.
+   *  [ForwardPlanSkipReason.UNDECLARED_ENUM] or [ForwardPlanSkipReason.UNDECLARED_INTERFACE].
+   *  `null` for every other skip reason.
    *
    *  Descends one collection level, unlike its two siblings above: a `List<Outer.Mode>` parameter
    *  attributes to its *element's* reason (`collectionInputSkipReason`), and
    *  `collectionComponentDetail()` deliberately declines any reason but `COLLECTION`, so without
    *  this the hint for the element case would name no type at all. The siblings' equivalent gap
-   *  (`List<UnexportedDep>`) is left exactly as it was — changing it would reword a shipped
+   *  (`List<UnexportedDep>`) is left exactly as it was, changing it would reword a shipped
    *  hint. */
-  private fun BridgeType.undeclaredEnumDetail(): String? {
+  private fun BridgeType.undeclaredTypeDetail(): String? {
     val unwrapped: BridgeType = unwrapNullable()
     val candidate: BridgeType = when (unwrapped) {
       is BridgeType.Collection ->
@@ -2369,7 +2384,7 @@ internal class ForwardCallablePlanner(
       else -> unwrapped
     }
     return (candidate as? BridgeType.Unsupported)
-      ?.takeIf { unsupported -> unsupported.isUndeclaredEnum }
+      ?.takeIf { unsupported -> unsupported.isUndeclaredEnum || unsupported.isUndeclaredInterface }
       ?.rendered
   }
 
@@ -2389,9 +2404,16 @@ internal class ForwardCallablePlanner(
     BridgeType.Uuid -> ForwardPlanSkipReason.UUID
     // ADR-088: same deferred nullable position as the input side, named the same way instead of
     // reaching the generic NULLABLE bucket.
-    is BridgeType.Nullable ->
-      if (type is BridgeType.BoundInterface) ForwardPlanSkipReason.BOUND_INTERFACE_POSITION
-      else ForwardPlanSkipReason.NULLABLE
+    is BridgeType.Nullable -> when {
+      type is BridgeType.BoundInterface -> ForwardPlanSkipReason.BOUND_INTERFACE_POSITION
+      // Issue #54: `Listener?` is not skipped *because* it is nullable -- a non-nullable
+      // `Listener` is just as undeclarable -- so the NULLABLE bucket's "expose a non-nullable
+      // wrapper" hint would send the author after a fix that cannot work. An undeclared inner
+      // type wins over the position. Narrow on purpose: every other nullable Unsupported keeps
+      // the shipped NULLABLE wording.
+      type.isUndeclared() -> requireNotNull(type.skipReason())
+      else -> ForwardPlanSkipReason.NULLABLE
+    }
     // ADR-066: a bridgeable-shaped Collection (List/MutableList result, Map/Set) that still
     // reaches here failed for its own reason (nothing else calls skipReason() on a bridgeable
     // Collection); an unsupported element/key/value attributes to that component's own reason
@@ -2441,6 +2463,8 @@ internal class ForwardCallablePlanner(
       // (whichever module it lives in) is undeclarable rather than out of scope, so it must not
       // pick up the `include(...)` hint.
       isUndeclaredEnum -> ForwardPlanSkipReason.UNDECLARED_ENUM
+      // Issue #54: the same "undeclarable, not out of scope" rule for a nested interface.
+      isUndeclaredInterface -> ForwardPlanSkipReason.UNDECLARED_INTERFACE
       isUnexportedDependency -> ForwardPlanSkipReason.UNEXPORTED_DEPENDENCY_TYPE
       else -> ForwardPlanSkipReason.UNSUPPORTED
     }
@@ -2499,6 +2523,11 @@ internal class ForwardCallablePlanner(
       // position rather than falling through to the generic NULLABLE bucket below, whose
       // diagnostic kind is SKIPPED_UNSUPPORTED_RETURN and whose hint talks about Booleans.
       is BridgeType.BoundInterface -> ForwardPlanSkipReason.BOUND_INTERFACE_POSITION
+
+      // Issue #54: the return side's rule, at an input position.
+      is BridgeType.Unsupported ->
+        if (inner.isUndeclared()) requireNotNull(inner.skipReason())
+        else ForwardPlanSkipReason.NULLABLE
 
       else -> ForwardPlanSkipReason.NULLABLE
     }
