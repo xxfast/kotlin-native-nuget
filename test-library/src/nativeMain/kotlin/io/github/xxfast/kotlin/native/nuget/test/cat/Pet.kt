@@ -8,6 +8,7 @@ interface Pet {
   val name: String // String getter: needs UTF8 marshalling
   val legs: Int // primitive getter: no conversion at all - catches an open-coded conversion bug
   val nickname: String? // nullable String getter: IntPtr.Zero -> null
+  val vibe: String // read-only in the interface, but an implementation may widen it to `var`
   fun speak(): String // String-returning method
   fun greet(): String = "Hi, I'm $name" // default method: dispatch must reach the override
   fun fetch(item: String): String // String *input* on the dispatch export
@@ -21,6 +22,7 @@ fun strayPet(): Pet = object : Pet {
   override val name: String = "Whiskers the Stray"
   override val legs: Int = 3
   override val nickname: String? = null
+  override val vibe: String = "aloof"
   override fun speak(): String = "Mrrp?"
   override fun fetch(item: String): String = "eyes the $item warily but doesn't fetch it"
   override fun nap() = Unit

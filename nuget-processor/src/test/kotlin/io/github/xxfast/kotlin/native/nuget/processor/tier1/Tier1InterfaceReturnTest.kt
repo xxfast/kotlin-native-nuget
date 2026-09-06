@@ -302,6 +302,139 @@ class Tier1InterfaceReturnTest {
   }
 
   /**
+   * A property that widens an exported base class's `override val` to `override var` carries the
+   * base's accessor set into C#: the base renders get-only, so a derived `{ get; set; }` override
+   * is `CS0546`. The setter is refused at plan time, through the ADR-107 dropped-setter channel,
+   * so no `_set_` export is minted either.
+   */
+  @Test
+  fun `override var over an exported base class val drops the setter`() {
+    val result = Tier1Harness.run(
+      """
+      package tier1.overridevalwithvar
+
+      interface Pet {
+        val vibe: String
+      }
+
+      abstract class Animal(val name: String) : Pet {
+        override val vibe: String = "calm"
+      }
+
+      class Cat(name: String) : Animal(name) {
+        override var vibe: String = "curious"
+      }
+      """.trimIndent()
+    )
+
+    assertTrue(result.compiledClean, "expected Animal/Cat to compile; got: ${result.compileErrors}")
+
+    val csharp: String = result.generatedCSharp
+    assertContains(
+      csharp,
+      "public override string Vibe",
+      message = "expected Cat.Vibe to still render as an override; generatedCSharp:\n$csharp",
+    )
+    assertFalse(
+      "cat_set_vibe" in csharp,
+      "expected no set accessor or import for Cat.Vibe, which would be CS0546 against " +
+          "Animal's get-only Vibe; generatedCSharp:\n$csharp",
+    )
+    assertFalse(
+      "export_cat_set_vibe" in result.generated,
+      "expected no Kotlin setter export for Cat.vibe; generated=${result.generated}",
+    )
+    assertTrue(
+      "export_cat_get_vibe" in result.generated,
+      "expected the Cat.vibe getter export to survive; generated=${result.generated}",
+    )
+    assertTrue(
+      result.kspWarnings.any { it.contains("Cat.vibe") && it.contains("CS0546") },
+      "expected a dropped-setter diagnostic naming Cat.vibe and CS0546; " +
+          "kspWarnings=${result.kspWarnings}",
+    )
+  }
+
+  /**
+   * The same refusal when the exported base class does not redeclare the property: it renders
+   * abstract and get-only off the interface, so `findOverridee` answers with the *interface*
+   * declaration and the base-class walk is what decides.
+   */
+  @Test
+  fun `override var over an abstract read-only base property drops the setter`() {
+    val result = Tier1Harness.run(
+      """
+      package tier1.overrideabstractval
+
+      interface Pet {
+        val vibe: String
+      }
+
+      abstract class Animal(val name: String) : Pet
+
+      class Cat(name: String) : Animal(name) {
+        override var vibe: String = "curious"
+      }
+      """.trimIndent()
+    )
+
+    assertTrue(result.compiledClean, "expected Animal/Cat to compile; got: ${result.compileErrors}")
+    assertFalse(
+      "cat_set_vibe" in result.generatedCSharp,
+      "expected no set accessor for Cat.Vibe against an abstract get-only base; " +
+          "generatedCSharp:\n${result.generatedCSharp}",
+    )
+    assertFalse(
+      "export_cat_set_vibe" in result.generated,
+      "expected no Kotlin setter export for Cat.vibe; generated=${result.generated}",
+    )
+  }
+
+  /**
+   * Case A of the same matrix: the read-only declaration lives on an *interface*, so the C#
+   * projection renders `virtual`, not `override`, and an implementation is free to add a setter.
+   * Nothing is dropped here.
+   */
+  @Test
+  fun `override var over an interface val keeps its setter`() {
+    val result = Tier1Harness.run(
+      """
+      package tier1.overrideinterfaceval
+
+      interface Counter {
+        val count: Int
+      }
+
+      class Clicker : Counter {
+        override var count: Int = 0
+      }
+      """.trimIndent()
+    )
+
+    assertTrue(
+      result.compiledClean,
+      "expected Counter/Clicker to compile; got: ${result.compileErrors}",
+    )
+
+    val csharp: String = result.generatedCSharp
+    assertContains(
+      csharp,
+      "public virtual int Count",
+      message = "expected Clicker.Count to render virtual against ICounter; " +
+          "generatedCSharp:\n$csharp",
+    )
+    assertContains(
+      csharp,
+      "clicker_set_count",
+      message = "expected Clicker.Count to keep its setter; generatedCSharp:\n$csharp",
+    )
+    assertTrue(
+      "export_clicker_set_count" in result.generated,
+      "expected the Clicker.count setter export; generated=${result.generated}",
+    )
+  }
+
+  /**
    * `mapInterfacePropertyType` threading [com.google.devtools.ksp.symbol.KSType.isMarkedNullable]:
    * the plain `IFoo` interface declaration (distinct from the concrete backing class, which goes
    * through the ordinary planned-property projection) must render a nullable interface property

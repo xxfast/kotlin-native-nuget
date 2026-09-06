@@ -19,6 +19,7 @@ public class BidirectionalTests
         public string Name { get; }
         public int Legs => 4;
         public string? Nickname { get; }
+        public string Vibe => "waggy";
         public Dog(string name, string? nickname = null) { Name = name; Nickname = nickname; }
         public string Speak() => "Woof!";
         public string Greet() => $"Hi, I'm {Name} the dog";

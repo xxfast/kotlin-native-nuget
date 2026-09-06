@@ -1,6 +1,7 @@
 package io.github.xxfast.kotlin.native.nuget.processor.forward
 
 import com.google.devtools.ksp.getVisibility
+import com.google.devtools.ksp.symbol.ClassKind
 import com.google.devtools.ksp.symbol.KSClassDeclaration
 import com.google.devtools.ksp.symbol.KSNode
 import com.google.devtools.ksp.symbol.KSPropertyDeclaration
@@ -107,6 +108,7 @@ internal class ForwardPropertyPlanner(
           prop = prop,
           getExport = "${cls.simpleName.asString().lowercase()}_get_${prop.simpleName.asString()}",
           setExport = "${cls.simpleName.asString().lowercase()}_set_${prop.simpleName.asString()}",
+          superClass = superClass,
         )
       }
       .toList()
@@ -225,6 +227,10 @@ internal class ForwardPropertyPlanner(
     prop: KSPropertyDeclaration,
     getExport: String,
     setExport: String,
+    // ADR-101's base-class gate, as seen by this property: the generated C# base class whose
+    // accessor set an `override` here has to match. Null for every position without one
+    // (top-level, extension, companion, interface dispatch).
+    superClass: KSClassDeclaration? = null,
   ): ForwardPropertyPlan? {
     val type: BridgeType = classifier.classify(prop.type.resolve()).sealedAsHandle()
     // ADR-075: getter eligibility never depended on mutability or on the collection facet — a
@@ -250,7 +256,7 @@ internal class ForwardPropertyPlanner(
       ForwardPropertyGetter.Direct(nativeCall(getExport, type.wireType(), receiver, emptyList()))
     }
     val setter: ForwardPropertySetter? = collectionSetterOrNull(
-      symbol, publicName, prop, type, setExport, receiver,
+      symbol, publicName, prop, type, setExport, receiver, superClass,
     )
     return ForwardPropertyPlan(
       symbol = symbol,
@@ -298,8 +304,24 @@ internal class ForwardPropertyPlanner(
     type: BridgeType,
     setExport: String,
     receiver: ForwardPropertyReceiver,
+    superClass: KSClassDeclaration?,
   ): ForwardPropertySetter? {
     if (!prop.isMutable) return null
+    val readOnlyBase: KSClassDeclaration? = prop.readOnlyOverrideeOwner(superClass)
+    if (readOnlyBase != null) {
+      droppedSetters.add(
+        ForwardDroppedPropertySetter(
+          symbol = symbol,
+          node = prop,
+          publicName = publicName,
+          componentDescription = type.diagnosticTypeName(),
+          reason = "it overrides a read-only property of the exported base class " +
+              "${readOnlyBase.simpleName.asString()}; C# cannot add a set accessor to an " +
+              "override (CS0546)",
+        ),
+      )
+      return null
+    }
     // ADR-107: `var error: Throwable?` binds get-only. C# has no way to mint a typed Kotlin
     // Throwable (the envelope carries text, not the type), so the setter is refused here, before
     // `valueParameter` would ask for an INTO_KOTLIN conversion that does not exist.
@@ -343,6 +365,36 @@ internal class ForwardPropertyPlanner(
     return ForwardPropertySetter.Direct(
       nativeCall(setExport, ForwardAbiWireType.VOID, receiver, listOf(valueParameter(type))),
     )
+  }
+
+  /**
+   * The exported base *class* declaring the read-only property this `var` overrides, or `null`
+   * when the setter is free to be built.
+   *
+   * Kotlin lets an override widen `val` to `var`; C# does not. The base class renders whatever
+   * accessors *it* has, so a get-only base property plus a derived `{ get; set; }` override is
+   * `CS0546`. Only a base *class* member counts: a class implementing an interface member renders
+   * `virtual`, not `override` (`isOpenInterfaceImplementation`), and a `virtual` declaration is
+   * free to carry a setter the interface never asked for.
+   *
+   * [KSPropertyDeclaration.findOverridee] is asked first: for `Cat.vibe` over `Animal.vibe` over
+   * `Pet.vibe` it returns `Animal.vibe`, the class-chain overridee (Verified by a probe in a Tier
+   * 1 run). Its answer is only trusted when it lands on a class, though, because a base class that
+   * does *not* redeclare the member leaves it abstract, and there the overridee is the interface
+   * declaration, which says nothing directly about what the base class renders. The fallback walks
+   * the base class's own visible properties by simple name, which answers that shape too.
+   */
+  private fun KSPropertyDeclaration.readOnlyOverrideeOwner(
+    superClass: KSClassDeclaration?,
+  ): KSClassDeclaration? {
+    if (superClass == null || Modifier.OVERRIDE !in modifiers) return null
+    val name: String = simpleName.asString()
+    val direct: KSPropertyDeclaration? = findOverridee() as? KSPropertyDeclaration
+    val overridee: KSPropertyDeclaration = direct
+      ?.takeIf { (it.parentDeclaration as? KSClassDeclaration)?.classKind == ClassKind.CLASS }
+      ?: superClass.getAllProperties().firstOrNull { it.simpleName.asString() == name }
+      ?: return null
+    return if (overridee.isMutable) null else superClass
   }
 
   /** ADR-075 Question A alternative A1: every component must satisfy [isWrappableComponent],
