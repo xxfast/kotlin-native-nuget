@@ -433,6 +433,24 @@ internal data class ForwardCallablePlanCatalog(
     return planned.map { entry -> entry.plan }
   }
 
+  /**
+   * Issue #97: the ADR-090 overload suffix (`""` or `"_$n"`) of [declaration], read back off its
+   * catalog entry by node identity. The Flow/StateFlow legacy route never gets a plan (the planner
+   * skips it as `FLOW_PROTOCOL`) but it does consume a number, and its `_collect` / `_value` /
+   * `_has_value` / `_set_value` entry points must carry that number or two same-name overloads
+   * collide on one C symbol.
+   *
+   * Lenient where [plansFor] is strict: `CirClassTranslator`'s flow walk admits an inherited
+   * abstract interface member the planner filters out, and that member has no number to carry.
+   */
+  fun overloadSuffix(declaration: KSFunctionDeclaration): String {
+    val entry: ForwardCallableCatalogEntry = entries
+      .firstOrNull { entry -> entry.node === declaration } ?: return ""
+    val name: String = declaration.simpleName.asString()
+    val tail: String = entry.symbol.substringAfterLast('.')
+    return if (tail.startsWith(name)) tail.substring(name.length) else ""
+  }
+
   private fun valueClassMembers(owner: String): List<ForwardCallablePlan> = plans.filter { plan ->
     plan.invocation.origin == ForwardCallableOrigin.VALUE_CLASS &&
         plan.invocation.symbol.substringBeforeLast('.') == owner &&

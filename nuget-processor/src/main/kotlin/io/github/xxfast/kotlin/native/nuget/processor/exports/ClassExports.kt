@@ -257,7 +257,8 @@ internal fun FileSpec.Builder.addClassExports(
 
   flowMethods.forEach { method ->
     val methodName: String = method.simpleName.asString()
-    val cname: String = toCName(methodName)
+    // Issue #97: carry the planner's overload number, as the C# side does (ADR-090).
+    val cname: String = toCName(methodName) + callableCatalog.overloadSuffix(method)
     val returnType: KSType? = method.returnType?.resolve()?.expandAliases()
     val returnQualified: String? = returnType?.declaration?.qualifiedName?.asString()
     val isStateFlowMethod: Boolean = returnQualified in STATE_FLOW_TYPES
