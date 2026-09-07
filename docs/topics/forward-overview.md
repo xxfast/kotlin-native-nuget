@@ -384,6 +384,33 @@ matching every other bucket's visibility gate. An `expect annotation class` fire
 once, on the `actual`: the `isExpect` filter drops the `expect` half one line earlier, so only the
 `actual` reaches the bucket, with `symbol` pointing at the actual's own file.
 
+### A class with no reachable constructor stays, and says so {id="no-reachable-constructor"}
+
+A class whose every public constructor is skipped, for any reason, still generates a C# type,
+`exportedTypes` admits a class by declaration, not by constructor outcome, and a Kotlin factory
+returning the class hands C# a usable instance regardless. What used to be silent is the class
+carrying only its `internal Foo(IntPtr handle)` constructor, with nothing in the build log
+explaining why. Since
+[ADR-064](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/064-forward-unsupported-declaration-diagnostics.md)'s
+2026-09-07 amendment, this warns once per class with `WARNING_NO_PUBLIC_CONSTRUCTOR`, its verb
+"Keeping" rather than the usual "Skipping" since the class itself is not skipped:
+
+```
+[nuget:WARNING_NO_PUBLIC_CONSTRUCTOR] Keeping Issue54Drawing: every public constructor is skipped
+    (<init>: SEALED_PROTOCOL), so the generated C# class has only its internal handle constructor
+    and C# cannot construct one. the type is kept because instances can still come from Kotlin
+    factories that return it (a top-level function, or a companion factory); expose one, or change
+    the constructor parameters to types the bridge can express
+    at Issue54Sample.kt:52
+```
+
+Fires for every skip reason a constructor can go for, including a legacy-route deferral like
+`SEALED_PROTOCOL` that never reaches `droppedCallables` (no legacy route re-emits a constructor, so
+that family was silent in every channel before this amendment). Not fired for an abstract class or
+the interface-return backing wrapper, neither of which is handle-less by accident. See
+[Classes and objects: No public constructor](classes-and-objects.md#no-public-constructor) for the
+full `Issue54Drawing` shape.
+
 ### Where these messages appear
 
 A diagnostic computed at generation time is only useful if it reaches the console. The processor

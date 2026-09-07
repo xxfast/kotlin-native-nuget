@@ -341,6 +341,24 @@ internal data class ForwardCallablePlanCatalog(
   }
 
   /**
+   * The constructors of [owner] the planner refused, in planning order, whatever the reason.
+   *
+   * Deliberately not filtered by [ForwardPlanSkipReason.droppedFromCSharp], unlike
+   * [droppedCallables]: that flag says a *method* still binds through a legacy route, and no
+   * legacy route re-emits a constructor, so a `SEALED_PROTOCOL`/`GENERIC` constructor skip is
+   * just as absent from the C# surface as an `UNDECLARED_ENUM` one.
+   *
+   * Owner-exact, and matched on the `<init>` name so a data class's `copy` (its own origin,
+   * planned from the same primary constructor) never counts as one.
+   */
+  fun skippedConstructors(owner: String): List<ForwardCallableCatalogEntry.Skipped> = entries
+    .filterIsInstance<ForwardCallableCatalogEntry.Skipped>()
+    .filter { entry ->
+      entry.symbol.substringBeforeLast('.') == owner &&
+          entry.symbol.substringAfterLast('.').startsWith("<init>")
+    }
+
+  /**
    * ADR-095: the planned members of object [owner], in planning order.
    *
    * Same reason as [classMethods]: with per-object overload numbering the symbol of the n-th

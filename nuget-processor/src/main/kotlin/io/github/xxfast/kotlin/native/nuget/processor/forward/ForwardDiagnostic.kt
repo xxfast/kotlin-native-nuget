@@ -173,6 +173,25 @@ internal enum class ForwardDiagnosticKind(
     ForwardDiagnosticSeverity.WARNING,
     declaredVerb = "Duplicating",
   ),
+
+  /** ROADMAP Phase 3: every public constructor of an exported class is skipped, so the generated
+   *  C# type carries only its `internal Foo(IntPtr handle)` and C# can never construct one.
+   *
+   *  The type is kept, deliberately: `exportedTypes` and the `ObjectHandle` classifier admit a
+   *  class by declaration, not by constructor outcome, and a Kotlin factory returning it (the
+   *  shipped `Issue54Drawing` / `sleepingCats()` shape) hands C# a perfectly usable instance.
+   *  Nothing changes in the output, so the verb says "Keeping" rather than claiming a skip.
+   *
+   *  Fires for every skip reason, including the `droppedFromCSharp = false` ones
+   *  (`SEALED_PROTOCOL`, `GENERIC`, ...): that flag describes the *method* legacy routes and no
+   *  legacy route re-emits a constructor, so a constructor skipped for one of those was silent in
+   *  every channel. Not fired for an abstract class (uninstantiable by design) or for the ADR-040
+   *  interface backing wrapper (`translateInterfaceBackingClass`, which is never handle-less by
+   *  accident). */
+  WARNING_NO_PUBLIC_CONSTRUCTOR(
+    ForwardDiagnosticSeverity.WARNING,
+    declaredVerb = "Keeping",
+  ),
   ;
 
   /** The word [ForwardDiagnostic.format] opens the message with, derived from the name prefix so

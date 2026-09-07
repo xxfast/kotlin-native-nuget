@@ -626,3 +626,124 @@ its package, so the whole `TestLibrary.Chaff` namespace goes with it). `Integrat
 asserts the compiled absence/presence from the C# side; `Tier1EmptyStaticClassElisionTest` pins the
 same three shapes, plus a fourth cross-loop case (a skipped sync function and a surviving `suspend
 fun` in the same file) that rules out a per-loop guard.
+
+## Amendment (2026-09-07): a class with no reachable constructor stays, and says so
+
+Judgement: an **amendment**, not a new ADR. This closes the ROADMAP Phase 3 item "A class whose only
+constructor is skipped ships as a dead public type"
+(`docs/backlog/class-whose-only-constructor-skipped-ships-dead.md`). It adds one
+`ForwardDiagnosticKind` member and one call site; no new mechanism beyond what this ADR already
+describes. Status stays Accepted.
+
+Mechanism claims are labelled **Verified** (read in this repository's source on 2026-09-07) or
+**Inferred**.
+
+### The gap
+
+A class whose every public Kotlin constructor is skipped (any reason: an unsupported parameter
+type, a legacy-route deferral like `SEALED_PROTOCOL`, a value-class parameter) still generates a C#
+type, but one carrying only its `internal Foo(IntPtr handle)` constructor. `Issue54Drawing`
+(`docs/adr/105-sealed-property-position.md`) is exactly this shape: all four of its constructor
+parameters are sealed-typed, so the primary constructor never reached a plan. Before this
+amendment, that outcome had no diagnostic anywhere: the per-constructor `SKIPPED_*` warning fires
+only for a `droppedFromCSharp = true` skip, and a legacy-route deferral (`droppedFromCSharp =
+false`, the `SEALED_PROTOCOL` case) never reaches `droppedCallables` at all, since no legacy route
+re-emits a constructor. A consumer saw a public type with no way to construct it and no explanation
+anywhere in the build log.
+
+### Decision
+
+**Keep the type. Do not drop it.** `exportedTypes` and the `ObjectHandle` classifier admit a class
+by declaration, not by constructor outcome, so a class in this state can still reach C# through a
+Kotlin factory that returns it, `Issue54Drawing`'s own `sleepingCats()`/`curledCats()` prove exactly
+that. Dropping the class would need a "does anything reference this type" reachability check this
+ADR has no closure for (ADR-066's closure walks return/parameter/property types outward from
+already-admitted declarations; it does not compute the inverse, "is this admitted type used").
+Building that just to decide whether to hide a class would be a large, separately-scoped feature for
+a small win, and a false verdict (a factory this specific check missed) would silently change the
+public surface. Say so instead.
+
+**One new kind, `WARNING_NO_PUBLIC_CONSTRUCTOR`, severity `WARNING`, `declaredVerb = "Keeping"`.**
+Not `SKIPPED_*`: the type is not skipped, it is kept, and this ADR's severity policy already has the
+precedent for a kind that fires at `WARNING` but overrides its verb because nothing in the output
+changes (`WARNING_DUPLICATED_DEPENDENCY_TYPE`, ADR-109). `WARNING_NO_PUBLIC_CONSTRUCTOR` follows the
+same shape: `WARNING`, not `SKIPPED_*` or `INFO_*`, because neither existing prefix's meaning fits
+(nothing is skipped, and the class does not "still bind" the way an `INFO_*` kind's subject does),
+and `declaredVerb = "Keeping"` says plainly that the class stays.
+
+Fired from `CirClassTranslator`'s `translateClass`, once per class, when the class is not abstract,
+its Kotlin declaration has at least one public constructor, and the callable catalog produced zero
+C# constructors for it:
+
+```
+if (!isAbstract && cirConstructors.isEmpty() && cls.hasPublicConstructor()) {
+  warnNoPublicConstructor(cls, name, callableCatalog, logger)
+}
+```
+
+The message lists every skipped constructor by name and reason, read off
+`ForwardCallablePlanCatalog.skippedConstructors(owner)`, a catalog query added alongside this kind
+and **deliberately not filtered by `droppedFromCSharp`**, unlike the sibling `droppedCallables`
+query the per-constructor warning uses: that flag distinguishes a genuine drop from a method still
+reachable through a legacy route, and no legacy route re-emits a constructor, so a
+`SEALED_PROTOCOL`/`GENERIC` constructor skip is exactly as absent from the C# surface as an
+`UNDECLARED_ENUM` one. Shipped, verified against the fixture's `NugetDiagnostics.json`:
+
+```
+[nuget:WARNING_NO_PUBLIC_CONSTRUCTOR] Keeping Issue54Drawing: every public constructor is skipped
+    (<init>: SEALED_PROTOCOL), so the generated C# class has only its internal handle constructor
+    and C# cannot construct one. the type is kept because instances can still come from Kotlin
+    factories that return it (a top-level function, or a companion factory); expose one, or change
+    the constructor parameters to types the bridge can express
+    at Issue54Sample.kt:52
+```
+
+`Issue56Failure` (`docs/adr/107-throwable-property-mapping.md`) fires the same kind for an
+unrelated reason (`NULLABLE`, not `SEALED_PROTOCOL`), which is what the "whatever the reason" wording
+in the diagnostic covers rather than naming one skip family:
+
+```
+[nuget:WARNING_NO_PUBLIC_CONSTRUCTOR] Keeping Issue56Failure: every public constructor is skipped
+    (<init>: NULLABLE), so the generated C# class has only its internal handle constructor and C#
+    cannot construct one. the type is kept because instances can still come from Kotlin factories
+    that return it (a top-level function, or a companion factory); expose one, or change the
+    constructor parameters to types the bridge can express
+    at Issue56Sample.kt:41
+```
+
+Not fired for an abstract class (uninstantiable by design, and never expected to have a public
+constructor) or for the ADR-040 interface-return backing wrapper (`translateInterfaceBackingClass`,
+which is never handle-less by accident).
+
+### Alternatives considered
+
+- **Drop the type from the generated C# entirely when unreferenced.** Rejected: there is no
+  "is this type referenced" reachability set today (see above), and a false verdict would silently
+  remove part of the public API rather than merely warn about it. The backlog item's own "two
+  candidate fixes, not decided" left this open; this amendment decides against it.
+- **An XML `<remarks>` doc comment on the generated C# class itself**, so the signal reaches a
+  consumer's IDE tooltip, not just the library author's build log. **Deferred.** The forward
+  generator emits no `///` doc comments anywhere today (`CirClassRenderer` has no XML-doc rendering
+  path at all), so this would be new renderer machinery, not a small addition to an existing one.
+  Tracked as its own ROADMAP Phase 3 item.
+
+### Testing seam
+
+No new harness; the existing Tier 1 diagnostic-assertion mode covers it.
+`Tier1NoPublicConstructorWarningTest.kt` pins: a `droppedFromCSharp = true` skip warning once and
+keeping the type (`Dial`, an unsupported nested-enum parameter); a `droppedFromCSharp = false`
+legacy-route deferral warning too (`Drawing`, a sealed parameter); a class with one surviving
+constructor never warning (`Meter`); an abstract class never warning (`Gauge`); and a factory
+returning the unconstructible class still binding (`make(): Drawing`). No `IntegrationTests` change:
+the shape was already exercised by the existing `Issue54Tests.cs`/`Issue56Tests.cs` fixtures, and
+xunit can only assert on the generated C# surface, not on a Gradle-log diagnostic.
+
+### Consequences of the amendment
+
+- A class whose every public constructor is skipped, for any reason, now costs one build warning
+  per `packNuget`, naming the class and every skipped constructor's reason, instead of shipping
+  silently as a public type nothing can construct.
+- No generated C#, Kotlin export, or ABI change: `Issue54Drawing` and `Issue56Failure` keep the exact
+  shape they already had, only their diagnostics change.
+- The "drop vs keep" product decision for an unreferenced dead type stays open, deferred behind a
+  reachability-of-admitted-types check this ADR does not build.
