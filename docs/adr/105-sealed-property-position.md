@@ -448,6 +448,63 @@ rather than silently, via [ADR-064](064-forward-unsupported-declaration-diagnost
 `droppedFromCSharp` flipped to `true`, mapped to `SKIPPED_SEALED_POSITION`). Bridging the parameter
 position itself is still not built; only the silence is gone.
 
+## Post-implementation note (2026-09-07): scope (d) shipped in full
+
+The parameter half deferred above is now built. `ForwardCallablePlanner.kt` runs the same shared
+`BridgeType.sealedAsHandle()` this ADR minted for properties (and ADR-009's amendment reused for
+results) over every declared **parameter**, once, at the top of `planOrSkip`
+(`parameters.map { (name, type) -> name to type.sealedAsHandle() }`) and at the ADR-002 two-call
+route's `topLevelNullablePrimitivePlan`, which the original design missed since it builds its own
+input list rather than going through `planOrSkip`. A bare sealed parameter crosses as the ordinary
+instance handle (`shape._handle`, since the generated abstract base implements `INugetHandle`); a
+nullable one as `shape?._handle ?? IntPtr.Zero`; a sealed collection component boxes through
+`NugetMarshal.Wrap<T>`'s `INugetHandle` arm.
+
+**The `Wrap<T>` claim is now verified, not inferred.** The "Collection write side" section above
+predicted that `Wrap<T>`'s `if (value is INugetHandle wrapper)` runtime type test would accept an
+abstract C# base exactly as it accepts a concrete wrapper, but no fixture had ever exercised a
+`List<Shape>` parameter for a sealed `Shape`. The shipped `Issue54Shapes.count`/`radii` xunit facts
+(`IntegrationTests/Issue54Tests.cs`) are the first execution of that arm for an abstract `T`, and
+they pass: `Count`/`Radii` read back real subclass instances, not raw handles that merely survived
+the crossing.
+
+The `isWrappableComponent()` gate this ADR added specifically to keep the write side closed
+(`is BridgeType.ObjectHandle -> !viaDiscriminator`) is now unconditional
+(`is BridgeType.ObjectHandle -> true`): every object handle, discriminated or not, is wrappable.
+One direct consequence: the `var shapes: MutableList<Shape>` property this ADR shipped get-only,
+named by the ADR-075 read-only diagnostic, now plans **with a setter**, the same
+`NugetMarshal.CreateList`/`Native_Set_shapes` shape any other mutable object-handle collection
+property gets. The `Issue54Board.shapes` fixture cell is now a round-trip write test rather than a
+read-only-diagnostic pin.
+
+`ForwardPlanSkipReason.SEALED_POSITION` (and its `SKIPPED_SEALED_POSITION` diagnostic) is not
+retired, but its meaning narrows: it no longer means "a sealed type at this position", it means "no
+`FromHandle` discriminator was generated for this sealed type at all". `ForwardBridgeTypeClassifier`
+only mints a `sealedHandle` for a sealed **class** inside the export scope (the ADR-009 gate
+recorded above); a sealed **interface**, or a sealed class the author excluded, never gets one, so
+`sealedAsHandle()` leaves its `SpecializedProtocol("sealed helper ...")` spelling untouched at every
+position, property, return, or parameter, and it is that spelling `isWrappableComponent`/
+`inputSkipReason` still refuse. The `SKIPPED_SEALED_POSITION` hint text was rewritten to say so:
+"sealed type `X` has no generated discriminator, so C# cannot reconstruct it: only a sealed *class*
+inside the export scope gets one (ADR-009), and that binds at every position (ADR-105)", replacing
+the earlier "binds at return and property positions ... but not yet as a parameter" wording, which
+this amendment made false.
+
+**Deliberately unchanged, verified by reading:**
+
+- An extension function's **receiver** typed as a sealed base still skips. `sealedAsHandle()` is
+  applied to every *declared* parameter, not the receiver; a sealed receiver is a member of the
+  ADR-009 hierarchy itself, which has its own named legacy route, and folding it into this rewrite
+  was out of scope for this amendment.
+- A value class whose underlying type is sealed still skips named at a property position, same as
+  before this amendment; the callable planner's inline value-class rewrite still does not run for
+  properties and still does not consult `sealedHandle`.
+
+Fixtures: `Issue54Sample.kt` (`Issue54Shapes.describe`/`describeMaybe`/`count`/`radii`,
+`Issue54Board` with a `var shapes: MutableList<Issue54Shape>`, and `windowsill()`); consumer
+`IntegrationTests/Issue54Tests.cs` (8 new facts, including the densest cell, `Issue54Drawing`'s own
+four-parameter constructor); `Tier1SealedParameterPositionTest.kt`.
+
 ## Prior art (to the depth that changes the decision)
 
 - **ObjC / Swift Export**: Kotlin/Native maps a sealed class to an ordinary class hierarchy

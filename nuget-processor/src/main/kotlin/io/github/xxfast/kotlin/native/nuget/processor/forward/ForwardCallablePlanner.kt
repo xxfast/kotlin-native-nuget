@@ -1218,7 +1218,11 @@ internal class ForwardCallablePlanner(
     ) {
       "Forward planner topLevelNullablePrimitivePlan received unsupported inner type $inner"
     }
-    val ineligible: BridgeType? = parameters.map { it.second }.firstOrNull { type ->
+    // ADR-105 scope (d): the same parameter-position sealed rewrite `planOrSkip` applies, so a
+    // top-level `fun f(shape: Shape): Int?` binds on this two-call route too.
+    val declared: List<Pair<String, BridgeType>> =
+      parameters.map { (name, type) -> name to type.sealedAsHandle() }
+    val ineligible: BridgeType? = declared.map { it.second }.firstOrNull { type ->
       type.inputSkipReason() != null
     }
     if (ineligible != null) {
@@ -1233,7 +1237,7 @@ internal class ForwardCallablePlanner(
     }
 
     val error: ForwardAbiParameter = errorParameter()
-    val nativeInputs: List<ForwardAbiParameter> = parameters.flatMap { (name, type) ->
+    val nativeInputs: List<ForwardAbiParameter> = declared.flatMap { (name, type) ->
       nativeInputParameters(name, type)
     }
     val presence = ForwardNativeCall(
@@ -1259,32 +1263,32 @@ internal class ForwardCallablePlanner(
       add(ForwardHelperRequirement.STABLE_REF)
       // ADR-077: same value-class input helper as `planOrSkip`, so a top-level
       // `fun f(id: ChartId): Int?` on this two-call route validates too.
-      parameters
+      declared
         .mapNotNull { (_, type) -> (type.unwrapNullable() as? BridgeType.ValueClass)?.underlying }
         .forEach { underlying ->
           add(ForwardHelperRequirement.VALUE_CLASS)
           if (underlying == BridgeType.String) add(ForwardHelperRequirement.UTF8)
           if (underlying is BridgeType.Enum) add(ForwardHelperRequirement.ENUM_ORDINAL)
         }
-      if (parameters.any { (_, type) -> type.unwrapNullable() == BridgeType.String }) {
+      if (declared.any { (_, type) -> type.unwrapNullable() == BridgeType.String }) {
         add(ForwardHelperRequirement.UTF8)
       }
-      if (parameters.any { (_, type) -> type.unwrapNullable() is BridgeType.Enum }) {
+      if (declared.any { (_, type) -> type.unwrapNullable() is BridgeType.Enum }) {
         add(ForwardHelperRequirement.ENUM_ORDINAL)
       }
-      if (parameters.any { (_, type) -> type.unwrapNullable() is BridgeType.Collection }) {
+      if (declared.any { (_, type) -> type.unwrapNullable() is BridgeType.Collection }) {
         add(ForwardHelperRequirement.COLLECTION)
       }
       val resultIsInstant: Boolean = inner == BridgeType.Instant
       val hasInstantParameter: Boolean =
-        parameters.any { (_, type) -> type.unwrapNullable() == BridgeType.Instant }
+        declared.any { (_, type) -> type.unwrapNullable() == BridgeType.Instant }
       if (resultIsInstant || hasInstantParameter) {
         add(ForwardHelperRequirement.INSTANT)
       }
       // ADR-103: the same pair for Duration.
       val resultIsDuration: Boolean = inner == BridgeType.Duration
       val hasDurationParameter: Boolean =
-        parameters.any { (_, type) -> type.unwrapNullable() == BridgeType.Duration }
+        declared.any { (_, type) -> type.unwrapNullable() == BridgeType.Duration }
       if (resultIsDuration || hasDurationParameter) {
         add(ForwardHelperRequirement.DURATION)
       }
@@ -1330,7 +1334,7 @@ internal class ForwardCallablePlanner(
       ),
       publicSignature = ForwardPublicSignature(
         name = publicName,
-        parameters = parameters.map { (name, type) -> ForwardPublicParameter(name, type) },
+        parameters = declared.map { (name, type) -> ForwardPublicParameter(name, type) },
         result = result,
       ),
       evaluation = ForwardEvaluation.LEGACY_TWO_CALL,
@@ -1429,13 +1433,20 @@ internal class ForwardCallablePlanner(
     isVirtual: Boolean = false,
     node: KSNode? = null,
   ): ForwardCallableCatalogEntry {
+    // ADR-105 scope (d): the sealed rewrite is applied to every declared PARAMETER here, once,
+    // rather than at each catalog site's `classifier.classify(...)` call, so the plan's public
+    // signature, its ABI parameters and its input eligibility check all see the same rewritten
+    // type. The receiver is deliberately left alone: a sealed *receiver* is a member of the ADR-009
+    // hierarchy itself, which has its own named legacy route.
+    val declared: List<Pair<String, BridgeType>> =
+      parameters.map { (name, type) -> name to type.sealedAsHandle() }
     val inputTypes: List<BridgeType> = buildList {
       when (receiver) {
         is ForwardReceiver.Value -> add(receiver.type)
         is ForwardReceiver.Handle -> add(receiver.type)
         ForwardReceiver.Static -> Unit
       }
-      addAll(parameters.map { it.second })
+      addAll(declared.map { it.second })
     }
     val ineligible: BridgeType? = inputTypes
       .firstOrNull { type -> type.inputSkipReason() != null }
@@ -1460,10 +1471,8 @@ internal class ForwardCallablePlanner(
     // classifier already carries, at EVERY origin -- top-level, class member, object member,
     // companion. Before this, only a top-level sealed return was re-emitted (by the named legacy
     // adapter in exports/FunctionExports.kt), and every member spelling took a skip that no route
-    // re-emitted, so the member was dropped with no C# member and no diagnostic. Parameters are
-    // deliberately left alone: a bare sealed input is ADR-105's deferred scope (d), and
-    // `isWrappableComponent` refuses a discriminated handle on the write side on purpose, so an
-    // input skips named as `SEALED_POSITION` instead.
+    // re-emitted, so the member was dropped with no C# member and no diagnostic. Scope (d) applies
+    // the same rewrite to the parameters above.
     val plannedResult: BridgeType = result.sealedAsHandle()
     val unwrappedResult: BridgeType? = plannedResult.kotlinResultPayloadOrNull(origin)
     val effectiveResult: BridgeType =
@@ -1488,7 +1497,7 @@ internal class ForwardCallablePlanner(
 
     val error: ForwardAbiParameter? = if (includeError) errorParameter() else null
     val nativeParameters: List<ForwardAbiParameter> = receiverParameter(receiver) +
-        parameters.flatMap { (name, type) -> nativeInputParameters(name, type) } +
+        declared.flatMap { (name, type) -> nativeInputParameters(name, type) } +
         resultShape.extraParameters + listOfNotNull(error)
     val nativeCall = ForwardNativeCall(
       exportName = exportName,
@@ -1547,7 +1556,7 @@ internal class ForwardCallablePlanner(
       ),
       publicSignature = ForwardPublicSignature(
         name = publicName,
-        parameters = parameters.map { (name, type) -> ForwardPublicParameter(name, type) },
+        parameters = declared.map { (name, type) -> ForwardPublicParameter(name, type) },
         result = effectiveResult,
         isOverride = isOverride,
         isVirtual = isVirtual,
@@ -2770,10 +2779,10 @@ internal class ForwardCallablePlanner(
  * `ObjectHandle` arms of `isPlannable` / `shapeOrNull` / `wireType` / the Kotlin emitter / the CIR
  * projection rather than gaining a variant of its own.
  *
- * Applied at a *property* type ([ForwardPropertyPlanner]) and at a callable's *result*
- * ([ForwardCallablePlanner.planOrSkip]). Not at a parameter: a bare sealed input is ADR-105's
- * deferred scope (d), and the write side of a discriminated handle is refused on purpose by
- * [isWrappableComponent].
+ * Applied at a *property* type ([ForwardPropertyPlanner]) and, at a callable, to both its *result*
+ * and every declared *parameter* ([ForwardCallablePlanner.planOrSkip], ADR-105 scope (d)). Not at a
+ * receiver: a sealed receiver is a member of the ADR-009 hierarchy itself, which has its own named
+ * legacy route.
  *
  * Recurses through [BridgeType.Nullable] and the [BridgeType.Collection] components only. NOT
  * through [BridgeType.ValueClass.underlying]: a value class over a sealed type
@@ -2883,13 +2892,13 @@ internal fun BridgeType.isWrappableComponent(): Boolean = when (this) {
   // the C# side pinned to that width by `[MarshalAs(UnmanagedType.U2)]`.
   BridgeType.Char -> true
 
-  // ADR-105: every ordinary handle boxes through `CreateList`/`CreateMap`/`CreateSet`'s reflective
-  // `_handle` fallback, but a *discriminated* one (an ADR-009 sealed base) does not: that write
-  // path has never been rendered or run for an abstract C# base. Refusing it here is what makes a
-  // `var shapes: MutableList<Shape>` property plan get-only under the existing ADR-075 read-only
-  // diagnostic, and it keeps the parameter-position boxing (ADR-105 scope (d)) closed too, since
-  // this predicate is the shared gate for both.
-  is BridgeType.ObjectHandle -> !viaDiscriminator
+  // ADR-105 scope (d): every handle boxes through `CreateList`/`CreateMap`/`CreateSet`, which end
+  // in `Wrap<T>`'s `if (value is INugetHandle wrapper)` arm -- a runtime type test, so an abstract
+  // C# base satisfies it exactly as a concrete wrapper does. A *discriminated* handle (an ADR-009
+  // sealed base) was gated here while only the read side was open; opening the write side admits a
+  // `List<Shape>` parameter and, through the same shared gate, gives a
+  // `var shapes: MutableList<Shape>` property its setter back.
+  is BridgeType.ObjectHandle -> true
 
   // ADR-097: a *bare* enum component rides the same int-ordinal wire ADR-081 minted for a value
   // class over an enum, projected per element at the C# call site (`(int)x`) and re-wrapped as

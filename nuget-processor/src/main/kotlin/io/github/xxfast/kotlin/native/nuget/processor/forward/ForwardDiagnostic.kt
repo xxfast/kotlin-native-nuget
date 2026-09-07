@@ -522,14 +522,16 @@ internal fun ForwardPlanSkipReason.diagnosticHint(
         "constructor parameters and method/function returns only; expose one of those instead of " +
         "a nullable, property or collection-component position"
 
-  // Names the sealed base, because the reason line cannot. Same shape as the BOUND_INTERFACE_
-  // POSITION hint above it: the type is not the problem, the position is, so the message says
-  // which positions do work rather than telling the author the type is unsupported.
+  // Names the sealed type, because the reason line cannot. ADR-105 scope (d) closed the position
+  // half of this reason: a sealed *class* in the export scope now binds at every position, so what
+  // is left is a sealed type with no generated ADR-009 discriminator (a sealed interface, or a
+  // sealed class outside the export scope), which C# has no way to reconstruct.
   ForwardPlanSkipReason.SEALED_POSITION -> {
-    val sealedName: String = detail ?: "the sealed class"
-    "sealed class `$sealedName` binds at return and property positions (ADR-009, ADR-105) but " +
-        "not yet as a parameter (bare, nullable, or as a collection component); accept a " +
-        "concrete subclass, or wrap it in an exported non-sealed class"
+    val sealedName: String = detail ?: "the sealed type"
+    "sealed type `$sealedName` has no generated discriminator, so C# cannot reconstruct it: only " +
+        "a sealed *class* inside the export scope gets one (ADR-009), and that binds at every " +
+        "position (ADR-105); declare it as a sealed class in an exported package, or accept a " +
+        "concrete subclass"
   }
 
   // Names the enum, because the reason line cannot: `warnDroppedForwardCallables` builds it from

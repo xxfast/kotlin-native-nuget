@@ -6,16 +6,15 @@ import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 /**
- * ADR-105 "Collection write side" (decided: gated, not admitted). Opening the sealed **read** side
- * at a property position also runs the rewrite past the collection *setter* gate, which delegates
- * to the shared `isWrappableComponent`. Boxing a sealed base into a Kotlin collection through the
- * ADR-073 write path has never been rendered or run for an abstract C# base, so
- * `isWrappableComponent` refuses a `viaDiscriminator` handle and a `var shapes: MutableList<Shape>`
- * plans **get-only**, named by the existing ADR-075 read-only diagnostic rather than by a new one.
+ * ADR-105 "Collection write side", opened by scope (d): a `var shapes: MutableList<Shape>` boxes
+ * each element through the ADR-073 write path, whose `Wrap<T>` ends in a runtime
+ * `is INugetHandle` test that an abstract C# base satisfies like any other wrapper. The setter
+ * gate delegates to the shared `isWrappableComponent`, so admitting the sealed *parameter* half
+ * admits this property setter in the same move, and the ADR-075 read-only diagnostic no longer
+ * fires for it.
  *
- * A *scalar* `var current: Shape` is deliberately not gated: it rides the ordinary handle setter
- * wire (`value._handle` / `asStableRef<Shape>().get()`), so both halves are asserted here in the
- * same fixture as the negative.
+ * A *scalar* `var current: Shape` was never gated: it rides the ordinary handle setter wire
+ * (`value._handle` / `asStableRef<Shape>().get()`), and both halves stay asserted here together.
  */
 class Tier1SealedMutableCollectionPropertyTest {
 
@@ -35,7 +34,7 @@ class Tier1SealedMutableCollectionPropertyTest {
   """.trimIndent()
 
   @Test
-  fun `a mutable sealed collection property plans get-only`() {
+  fun `a mutable sealed collection property plans both accessors`() {
     val result = Tier1Harness.run(source)
 
     assertTrue(
@@ -46,24 +45,22 @@ class Tier1SealedMutableCollectionPropertyTest {
       result.generated.contains("export_board_get_shapes"),
       "expected the getter to bind; generated=${result.generated}",
     )
-    assertFalse(
+    assertTrue(
       result.generated.contains("export_board_set_shapes"),
-      "expected NO setter for the mutable sealed collection; generated=${result.generated}",
+      "expected the setter to bind; generated=${result.generated}",
     )
   }
 
   @Test
-  fun `the gated setter is named by the ADR-075 read-only diagnostic`() {
+  fun `the setter is no longer named by the ADR-075 read-only diagnostic`() {
     val result = Tier1Harness.run(source)
 
-    assertTrue(
+    assertFalse(
       result.kspWarnings.any {
         it.contains(ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_INPUT.name) &&
-            it.contains("Board.shapes") &&
-            it.contains("the C# property Shapes is read-only")
+            it.contains("Board.shapes")
       },
-      "expected the read-only setter diagnostic to name Board.shapes; " +
-          "kspWarnings=${result.kspWarnings}",
+      "expected no read-only setter diagnostic; kspWarnings=${result.kspWarnings}",
     )
   }
 

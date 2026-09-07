@@ -22,9 +22,11 @@ package io.github.xxfast.kotlin.native.nuget.test.issue54
  *   that a sealed setter rides the ordinary `ObjectHandle` wire (`value._handle` /
  *   `asStableRef<Issue54Shape>().get()`).
  *
- * Deliberately absent: no `var` **mutable collection** of sealed. That write path is gated on
- * `viaDiscriminator` by design (ADR-105 "Collection write side") and belongs to a Tier 1 processor
- * test, not to an integration fixture.
+ * The `var` **mutable collection** of sealed now lives here too, on [Issue54Board.shapes]. It sits
+ * on its own class rather than on [Issue54Drawing], whose four-component `data class` signature is
+ * itself under test as a constructor. That write path is gated on `viaDiscriminator` today (ADR-105
+ * "Collection write side"), so the property binds get-only and the ADR-075 read-only diagnostic
+ * names it; opening it is the same work as the parameter half below.
  *
  * The same base also rides three **function return** seams here, the ones the ordinary member plan
  * owns rather than the property plan:
@@ -36,7 +38,17 @@ package io.github.xxfast.kotlin.native.nuget.test.issue54
  * - [shapes] is the **control**, that same collection return at a *top-level* function, which works
  *   today and must stay green so a regression is distinguishable from the bug being repaired.
  *
- * Parameters stay non-sealed throughout: a bare sealed parameter is ADR-105's deferred scope (d).
+ * Parameters are the remaining half of ADR-105 scope (d), and every parameter shape rides
+ * [Issue54Shapes] once each:
+ * - [Issue54Shapes.describe] takes a **bare** sealed parameter, which crosses as the ordinary
+ *   instance handle (`shape._handle`, since the generated abstract base implements `INugetHandle`),
+ * - [Issue54Shapes.describeMaybe] takes a **nullable** one, null in-band on the pointer
+ *   (`shape?._handle ?? IntPtr.Zero`),
+ * - [Issue54Shapes.count] and [Issue54Shapes.radii] take a sealed **collection component**, which
+ *   boxes each element through `NugetMarshal.Wrap<T>`'s `INugetHandle` arm, the ADR-073 write path
+ *   that has never run for an abstract C# base,
+ * - [Issue54Drawing]'s own constructor is the fourth shape: bare, nullable, collection and `var`
+ *   sealed parameters at once, which is what leaves the class with no public constructor today.
  *
  * Fixture disjointness with the sibling issues in the same ROADMAP cluster:
  * - the sealed base is carried by a **plain** exported `data class`, not by a sealed subclass, so
@@ -58,8 +70,12 @@ sealed class Issue54Shape {
 
 /**
  * The cell under test: a plain (non-sealed) exported class carrying the sealed base at four
- * property positions. The constructor and `copy` take sealed parameters, which stay skipped under
- * scope (c) — parameter position is ADR-105's deferred scope (d).
+ * property positions, and, on the same signature, at four **parameter** positions. Its constructor
+ * (and the generated `copy`) is the densest parameter cell in the fixture: bare, nullable,
+ * collection and `var` sealed parameters in one list. Under scope (c) it is skipped whole with
+ * `SKIPPED_SEALED_POSITION`, which leaves the class with no public constructor at all
+ * (`WARNING_NO_PUBLIC_CONSTRUCTOR`); C# reaches an instance only through [sleepingCats] /
+ * [curledCats]. The parameter half of scope (d) is what gives it a `new Issue54Drawing(...)`.
  */
 data class Issue54Drawing(
   val shape: Issue54Shape,
@@ -119,4 +135,65 @@ object Issue54Shapes {
    * CS1501 rather than the CS0117 that says the member was never generated.
    */
   fun everyShape(): List<Issue54Shape> = shapes()
+
+  /**
+   * Scope (d), bare sealed **parameter**: the plain instance handle in the other direction. The
+   * return is a `String` so the assertion reads the Kotlin side of the wire rather than another
+   * handle. Oreo curled to a radius, or Mylo, who is no shape at all.
+   */
+  fun describe(shape: Issue54Shape): String = when (shape) {
+    is Issue54Shape.Circle -> "circle:${shape.radius}"
+    Issue54Shape.Empty -> "empty"
+  }
+
+  /**
+   * Scope (d), **nullable** sealed parameter: `null` crosses in-band on the pointer, so the absent
+   * cat has to be distinguishable from [Issue54Shape.Empty], the cat who is present and shapeless.
+   */
+  fun describeMaybe(shape: Issue54Shape?): String =
+    if (shape == null) "none" else "some:${describe(shape)}"
+
+  /**
+   * Scope (d), sealed **collection component** at a parameter: every element is boxed into a Kotlin
+   * list through `NugetMarshal.Wrap<T>`'s `INugetHandle` arm. Counting proves the list arrived with
+   * the right length before [radii] proves the elements arrived as real shapes.
+   */
+  fun count(shapes: List<Issue54Shape>): Int = shapes.size
+
+  /**
+   * The same collection parameter, read for its payload: an [Issue54Shape.Circle] contributes its
+   * radius, [Issue54Shape.Empty] contributes `0.0`. A handle that survived the crossing as a raw
+   * pointer rather than a shape cannot answer this.
+   */
+  fun radii(shapes: List<Issue54Shape>): List<Double> =
+    shapes.map { if (it is Issue54Shape.Circle) it.radius else 0.0 }
 }
+
+/**
+ * The mutable-collection write cell: a `var` [MutableList] of the sealed base, which ADR-105 scope
+ * (c) deliberately left get-only behind the `viaDiscriminator` gate on `isWrappableComponent`. Its
+ * own class, so [Issue54Drawing]'s constructor signature stays the four-component one the parameter
+ * cell pins.
+ *
+ * [summary] observes the list Kotlin-side, so a C# write only reads back correctly if the handles
+ * arrived as genuinely re-wrapped [Issue54Shape]s rather than being echoed by the same getter that
+ * wrote them.
+ *
+ * The board is the windowsill: whichever cat is on it right now, in the order they claimed it.
+ */
+class Issue54Board {
+  /** The write path under test. Starts with Mylo sprawled, alone. */
+  var shapes: MutableList<Issue54Shape> = mutableListOf(Issue54Shape.Empty)
+
+  /**
+   * Kotlin-side observation of [shapes], in order, using the same spelling as
+   * [Issue54Shapes.describe].
+   */
+  fun summary(): String = shapes.joinToString(",") { Issue54Shapes.describe(it) }
+}
+
+/**
+ * Factory for [Issue54Board]. The class has a parameterless constructor that binds on its own, but
+ * the fixture hands one out by name so a test reads the same way as [sleepingCats] / [curledCats].
+ */
+fun windowsill(): Issue54Board = Issue54Board()

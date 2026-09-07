@@ -751,3 +751,10 @@ requirement above is part of the decision rather than a follow-up.
    `ForwardCirHandleScope.forwardCirHandleScope`, wrapping the native call in the `try`/`finally`
    this line asked for. See [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md)
    and [Collections](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/topics/collections.md#exception-safety-on-collection-parameters).
+
+**Addendum (2026-09-07):** this write path now also boxes a *discriminated* object handle, a sealed
+base with an ADR-009 `FromHandle` discriminator, not just an ordinary class instance:
+`NugetMarshal.Wrap<T>`'s `if (value is INugetHandle wrapper)` type test accepts an abstract sealed
+base exactly as it accepts a concrete wrapper, verified for the first time by a `List<Shape>`
+parameter for a sealed `Shape`. See [ADR-105](105-sealed-property-position.md)'s 2026-09-07
+amendment.

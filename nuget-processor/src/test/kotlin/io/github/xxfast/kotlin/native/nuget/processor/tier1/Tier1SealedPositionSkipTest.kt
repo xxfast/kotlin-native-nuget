@@ -6,20 +6,20 @@ import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 /**
- * ROADMAP Phase 3, the parameter half of the sealed-position story. ADR-105 bound a sealed base at
- * every RETURN and property position; a sealed base at an INPUT position is still deferred, and
- * *that* was the defect: the planner's skip claimed a legacy-route deferral
- * (`droppedFromCSharp = false`), but no legacy route re-emits a sealed parameter, so the member
- * left the C# API with no diagnostic in any channel.
+ * ROADMAP Phase 3, what is left of the sealed-position skip once ADR-105 scope (d) bound the
+ * sealed *class* at every position: a sealed type with no generated ADR-009 discriminator. A
+ * sealed **interface** is the reachable spelling of that (the classifier mints no `sealedHandle`
+ * for one), and C# has no way to reconstruct it, so every position it appears at must skip named
+ * as `SKIPPED_SEALED_POSITION` and name the type rather than claiming a legacy-route deferral no
+ * route re-emits, which is what left the member out of the C# API with no diagnostic at all.
  *
- * Every input spelling of the sealed base here (bare parameter, nullable parameter, collection
- * component, constructor parameter) must skip named as `SKIPPED_SEALED_POSITION` and name the
- * sealed type. `maybe` is the pointed one: it used to blame `NULLABLE`, whose hint sends the author
- * after a non-nullable wrapper that is just as undeclarable, exactly the trap issue #54 fixed for
- * undeclared types.
+ * Every input spelling is covered (bare parameter, nullable parameter, collection component,
+ * constructor parameter). `maybe` is the pointed one: it used to blame `NULLABLE`, whose hint
+ * sends the author after a non-nullable wrapper that is just as undeclarable, exactly the trap
+ * issue #54 fixed for undeclared types.
  *
- * `current()` is the control: a sealed RETURN still binds through the plan (ADR-105), so the new
- * skip must not widen to the return position.
+ * `current()` is the control: a sealed **class** binds at every position (ADR-105 and its scope
+ * (d)), so the skip must not widen from "no discriminator" to "sealed".
  */
 class Tier1SealedPositionSkipTest {
 
@@ -31,13 +31,17 @@ class Tier1SealedPositionSkipTest {
       data class Circle(val radius: Double) : Shape()
     }
 
-    class Drawing(shape: Shape, maybe: Shape?, shapes: List<Shape>) {
+    sealed interface Ghost {
+      data object Nobody : Ghost
+    }
+
+    class Drawing(ghost: Ghost, maybe: Ghost?, ghosts: List<Ghost>) {
       val label: String = "drawing"
     }
 
-    fun draw(shape: Shape) {}
-    fun outline(maybe: Shape?) {}
-    fun render(shapes: List<Shape>) {}
+    fun draw(ghost: Ghost) {}
+    fun outline(maybe: Ghost?) {}
+    fun render(ghosts: List<Ghost>) {}
     fun current(): Shape = Shape.Empty
   """.trimIndent()
 
@@ -55,11 +59,11 @@ class Tier1SealedPositionSkipTest {
     listOf("draw", "outline", "render", "Drawing.<init>").forEach { member ->
       val diagnostic: String = diagnostic(result, member)
       assertTrue(
-        diagnostic.contains("tier1.sealedposition.Shape"),
-        "expected the $member diagnostic to name the sealed class; got: $diagnostic",
+        diagnostic.contains("tier1.sealedposition.Ghost"),
+        "expected the $member diagnostic to name the sealed type; got: $diagnostic",
       )
       assertTrue(
-        diagnostic.contains("not yet as a parameter") &&
+        diagnostic.contains("has no generated discriminator") &&
             diagnostic.contains("accept a concrete subclass"),
         "expected the $member diagnostic to carry the sealed-position hint; got: $diagnostic",
       )
@@ -74,7 +78,7 @@ class Tier1SealedPositionSkipTest {
     val outline: String = diagnostic(result, "outline")
     assertFalse(
       outline.contains("expose a non-nullable wrapper"),
-      "expected the nullable sealed parameter to defer to the sealed position; got: $outline",
+      "expected the nullable sealed parameter to blame the missing discriminator; got: $outline",
     )
     assertTrue(
       result.kspWarnings.none {
