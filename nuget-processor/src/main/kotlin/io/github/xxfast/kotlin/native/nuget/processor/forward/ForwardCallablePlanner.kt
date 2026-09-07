@@ -17,6 +17,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.ExpectIndex
 import io.github.xxfast.kotlin.native.nuget.processor.cir.expandAliases
 import io.github.xxfast.kotlin.native.nuget.processor.exports.findInterfaceBridgePairs
 import io.github.xxfast.kotlin.native.nuget.processor.exports.findStoredCallbackPairs
+import io.github.xxfast.kotlin.native.nuget.processor.bridgeParameterName
 import io.github.xxfast.kotlin.native.nuget.processor.toCName
 
 /**
@@ -595,7 +596,7 @@ internal class ForwardCallablePlanner(
         exportName = export,
         receiver = ForwardReceiver.Static,
         parameters = ctor.parameters.map { parameter ->
-          (parameter.name?.asString() ?: "_") to classifier.classify(parameter.type.resolve())
+          parameter.bridgeName() to classifier.classify(parameter.type.resolve())
         },
         result = underlyingType,
         origin = ForwardCallableOrigin.VALUE_CLASS,
@@ -698,7 +699,7 @@ internal class ForwardCallablePlanner(
             exportName = "${prefix}_$name$suffix",
             receiver = receiver,
             parameters = method.parameters.map { parameter ->
-              (parameter.name?.asString() ?: "_") to classifier.classify(parameter.type.resolve())
+              parameter.bridgeName() to classifier.classify(parameter.type.resolve())
             },
             result = method.returnType?.resolve()?.let(classifier::classify) ?: BridgeType.Unit,
             origin = ForwardCallableOrigin.VALUE_CLASS,
@@ -751,7 +752,7 @@ internal class ForwardCallablePlanner(
           exportName = "${prefix}_${method.simpleName.asString()}",
           receiver = ForwardReceiver.Handle(receiverType),
           parameters = method.parameters.map { parameter ->
-            (parameter.name?.asString() ?: "_") to classifier.classify(parameter.type.resolve())
+            parameter.bridgeName() to classifier.classify(parameter.type.resolve())
           },
           result = method.returnType?.resolve()?.let(classifier::classify) ?: BridgeType.Unit,
           origin = ForwardCallableOrigin.CLASS,
@@ -825,7 +826,7 @@ internal class ForwardCallablePlanner(
           exportName = "${prefix}_$name$suffix",
           receiver = ForwardReceiver.Handle(receiverType),
           parameters = method.parameters.dropLast(omitted).map { parameter ->
-            (parameter.name?.asString() ?: "_") to classifier.classify(parameter.type.resolve())
+            parameter.bridgeName() to classifier.classify(parameter.type.resolve())
           },
           result = method.returnType?.resolve()?.let(classifier::classify) ?: BridgeType.Unit,
           origin = ForwardCallableOrigin.CLASS,
@@ -913,7 +914,7 @@ internal class ForwardCallablePlanner(
             exportName = "${prefix}_copy",
             receiver = receiver,
             parameters = primary.parameters.map { parameter ->
-              (parameter.name?.asString() ?: "_") to classifier.classify(parameter.type.resolve())
+              parameter.bridgeName() to classifier.classify(parameter.type.resolve())
             },
             result = result,
             origin = ForwardCallableOrigin.COPY,
@@ -994,7 +995,7 @@ internal class ForwardCallablePlanner(
     exportName = export,
     receiver = ForwardReceiver.Static,
     parameters = constructor.parameters.dropLast(omitted).map { parameter ->
-      (parameter.name?.asString() ?: "_") to classifier.classify(parameter.type.resolve())
+      parameter.bridgeName() to classifier.classify(parameter.type.resolve())
     },
     result = result,
     origin = ForwardCallableOrigin.CONSTRUCTOR,
@@ -1136,7 +1137,7 @@ internal class ForwardCallablePlanner(
     val result: BridgeType = function.returnType?.resolve()?.let(classifier::classify) ?: BridgeType.Unit
     val parameters: List<Pair<String, BridgeType>> = function.parameters.dropLast(omitted)
       .map { parameter ->
-        (parameter.name?.asString() ?: "_") to classifier.classify(parameter.type.resolve())
+        parameter.bridgeName() to classifier.classify(parameter.type.resolve())
       }
     // ADR-002 / MIGRATION: top-level nullable primitives keep the shipped two-call ABI.
     // ADR-076: a top-level nullable Instant shares the same two-call shape (ADR-069 recorded that
@@ -1371,7 +1372,7 @@ internal class ForwardCallablePlanner(
         "${receiver.declaration.simpleName.asString().lowercase()}_${toCName(functionName)}$suffix",
       receiver = ForwardReceiver.Value(receiverType),
       parameters = function.parameters.dropLast(omitted).map { parameter ->
-        (parameter.name?.asString() ?: "_") to classifier.classify(parameter.type.resolve())
+        parameter.bridgeName() to classifier.classify(parameter.type.resolve())
       },
       result = function.returnType?.resolve()?.let(classifier::classify) ?: BridgeType.Unit,
       origin = ForwardCallableOrigin.EXTENSION,
@@ -2825,3 +2826,15 @@ internal fun BridgeType.isWrappableComponent(): Boolean = when (this) {
 
   else -> false
 }
+
+/**
+ * The name this declared parameter carries on the plan, and therefore in both projections. See
+ * [bridgeParameterName] for why the shift happens here rather than at either render site, and
+ * `PLAN_OWNED_NAMES` for the set. `_` for a parameter KSP cannot name at all.
+ *
+ * Applied only where a *user's* parameter enters the plan. The generator's own slots
+ * (`receiverParameter`, `errorParameter`, the ADR-061 out-slot) pass their literal names straight
+ * through, which is exactly what makes the shift injective against them.
+ */
+private fun KSValueParameter.bridgeName(): String =
+  (name?.asString() ?: "_").bridgeParameterName()

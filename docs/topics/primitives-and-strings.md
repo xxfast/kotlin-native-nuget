@@ -240,6 +240,56 @@ private static extern void Native_StateSetValue(IntPtr handle, int error_, int v
 public KotlinMutableStateFlow<int> State(int error_)
 ```
 
+`error` is one name in a wider family the generator itself owns on the ABI: the instance receiver
+slot (`handle`), an extension or non-reference value-class receiver (`receiver`/`value`), the
+exception slot (`errorOut`), and ADR-061's nullable-primitive out-slot (`valueOut`). Unlike `error`,
+these five are declared by the Kotlin `@CName` export too, not only the C# side, so a colliding user
+parameter is renamed once at plan time (`bridgeParameterName()` in `Reserved.kt`), before either
+projection is generated, using the same injective chain rule (`handle` -> `handle_` -> `handle__`).
+Two more names, `nativeResult` and `hasValue`, join `error` as C#-render-time-only renames
+(`csharpParameterName()`), since they exist only as wrapper-body locals and the Kotlin export never
+declares them. See [ADR-062](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/062-forward-callable-plan.md)'s 2026-09-07 amendment.
+
+From `test-library/src/nativeMain/kotlin/.../test/reserved/ReservedNamesSample.kt`, a method whose
+three parameters collide with three different generator-owned names at once, `handle` with the
+instance receiver slot, `nativeResult` with the C# wrapper's own result local, and `value` under the
+uniform rule even though it collides with nothing on this route:
+
+```kotlin
+class Gadget {
+  fun describe(handle: Int, value: String, nativeResult: Int): String = "$handle/$value/$nativeResult"
+}
+```
+
+Generated C#, from `Interop.cs`:
+
+```C#
+[DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "gadget_describe")]
+private static extern IntPtr Native_Describe(IntPtr handle, int handle_, [MarshalAs(UnmanagedType.LPUTF8Str)] string value_, int nativeResult_, out IntPtr error);
+
+public string Describe(int handle_, string value_, int nativeResult_)
+{
+    IntPtr nativeResult = Native_Describe(_handle, handle_, value_, nativeResult_, out IntPtr error);
+    // ...
+}
+```
+
+`value` moves on every callable, not only where it would collide, so it also renamed two
+already-shipped parameters: `DescribeNickname(string? value_)` and
+`DescribeOverloads(int value_, bool flag)`. A C# caller using a named argument at either of those
+call sites, or at `Describe` above, has to spell the renamed form: `gadget.Describe(handle_: 1,
+value_: "Oreo", nativeResult_: 2)`. From `IntegrationTests/ReservedNamesTests.cs`:
+
+```C#
+[Fact]
+public void Describe_HandleValueAndNativeResultParameters_AllReachNative()
+{
+    using var gadget = new Gadget();
+
+    Assert.Equal("1/Oreo/2", gadget.Describe(handle_: 1, value_: "Oreo", nativeResult_: 2));
+}
+```
+
 ## Using it from C#
 
 From `IntegrationTests/MappingTests.cs`:

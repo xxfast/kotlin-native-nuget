@@ -229,6 +229,23 @@ local today. That is one rule applied uniformly rather than a per-route exceptio
 named C# argument at a call site sees `error_` on these routes exactly as it does on the ordinary
 plan.
 
+### Amendment (2026-09-07): the `error` rename joins a second, plan-time tier for the rest of the family
+
+The 2026-09-05 amendment renamed a user parameter literally named `error` at C# render time only,
+because `error` collides with nothing the Kotlin `@CName` emitter itself declares. The rest of the
+generator-owned name family (`handle`, `receiver`, `value`, `errorOut`, `valueOut`) is not that
+lucky: the Kotlin export declares those names too, so the rename has to happen once, at plan time,
+before either projection sees the name. [ADR-062](062-forward-callable-plan.md)'s 2026-09-07
+amendment covers that plan-time tier in full.
+
+The two tiers share one chain rule (shift by one underscore, injective, so two colliding names on
+one callable can never converge) but two different helpers: `bridgeParameterName()` for the five
+plan-owned names, `csharpParameterName()` (unchanged, still covering `error` plus the C#-only
+locals `nativeResult`/`hasValue`) for the render-time tier. `value` is renamed uniformly on every
+callable rather than only where it collides, which renames two already-shipped fixture parameters
+(`DescribeNickname(string? value)`, `DescribeOverloads(int value, bool flag)`); a C# caller using a
+named argument at either call site has to spell `value_`.
+
 ## Consequences
 
 ### Breaking changes

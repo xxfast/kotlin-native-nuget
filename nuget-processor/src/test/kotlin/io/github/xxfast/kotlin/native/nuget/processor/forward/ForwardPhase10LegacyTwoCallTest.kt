@@ -34,7 +34,11 @@ class ForwardPhase10LegacyTwoCallTest {
     val csharp = renderCsharp(plan)
     assertContains(csharp, "EntryPoint = \"nullableInt_has_value\"")
     assertContains(csharp, "EntryPoint = \"nullableInt_value\"")
-    assertContains(csharp, "public static int? NullableInt(bool hasValue)")
+    // This fixture's parameter happens to be spelled like ADR-061's `bool hasValue` wrapper local,
+    // which `csharpParameterName` now shifts on every route (the class-member nullable shape really
+    // does collide there). The Kotlin export above keeps the user's own spelling, as it should:
+    // the local is C#-only.
+    assertContains(csharp, "public static int? NullableInt(bool hasValue_)")
     assertContains(csharp, "if (!__nuget_hasValue) return null;")
   }
 
