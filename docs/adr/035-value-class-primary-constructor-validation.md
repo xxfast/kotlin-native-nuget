@@ -220,3 +220,29 @@ secondary entry-point numbering.
   secondary constructors today; enforcing their primary `init` needs separate
   handling of the reference round-trip and is tracked as a follow-up.
 - `with`-expression support on validated value classes.
+
+### 2026-09-07 amendment
+
+"These have no secondary constructors today" turned out to be the wrong premise:
+a reference-underlying value class *can* declare a secondary constructor
+(`constructor(name: String) : this(Cat(name))`), it was just never exercised by
+a fixture. Once one was added, the pre-plan `buildConstructor`/
+`renderReferenceValueClass` pair this ADR's deferral left untouched turned out
+to render broken code: a `: this(CreateChecked(...))` call handing an `IntPtr`
+to the class-typed positional parameter (CS1503), against a Kotlin export that
+returned the raw underlying object rather than a `StableRef` pointer.
+
+Rather than repair a path this ADR always intended to eventually replace, that
+render path is deleted: `renderReferenceValueClass` now emits header and
+members only, the translator's reference branch returns no constructors, and
+the legacy `buildConstructor` fallback and `ValueClassExports`'s constructor
+adapter for it are gone. A reference-underlying value class keeps only its
+positional record-struct constructor; a secondary constructor on one now skips
+named (`SKIPPED_VALUE_CLASS_SECONDARY_CONSTRUCTOR`,
+`ForwardPlanSkipReason.REFERENCE_UNDERLYING_VALUE_CLASS_CONSTRUCTOR`) with a
+hint pointing at the workaround: construct the underlying and wrap it. The
+primary positional constructor is unaffected. Lifting this ADR's deferral
+properly (planning both constructors through `valueClassConstructorEntries`
+with an `ObjectHandle` result and rendering
+`: this(new T(CreateChecked(...)))`) is now tracked in ROADMAP.md Phase 3 and
+starts from this plan, not from the deleted ad hoc render path.

@@ -145,7 +145,15 @@ internal fun warnDroppedForwardCallables(
       kind = dropped.reason.toDiagnosticKind(),
       symbol = dropped.node,
       declaration = dropped.symbol,
-      reason = "its ${dropped.reason} type combination is not supported",
+      // Every other drop is about the types at the callable's positions; this one is about the
+      // position itself, so it does not get the generic sentence.
+      reason = if (
+        dropped.reason == ForwardPlanSkipReason.REFERENCE_UNDERLYING_VALUE_CLASS_CONSTRUCTOR
+      ) {
+        "a value class over a reference underlying carries no constructor across the bridge"
+      } else {
+        "its ${dropped.reason} type combination is not supported"
+      },
       hint = dropped.reason.diagnosticHint(dropped.detail, scope),
     )
   }

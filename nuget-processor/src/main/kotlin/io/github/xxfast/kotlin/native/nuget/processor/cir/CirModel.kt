@@ -83,7 +83,6 @@ data class CirValueClassConstructor(
   val parameters: List<CirParameter>,
   val nativeName: String,
   val body: String,
-  val hasErrorCheck: Boolean = false,
   // Distinguishes constructor entry points / C# native methods. Empty for the
   // primary (catid_create / Native_Create); "_2", "_3", … for secondaries. See
   // ADR-035 (aligns value classes with ADR-034's regular-class scheme).

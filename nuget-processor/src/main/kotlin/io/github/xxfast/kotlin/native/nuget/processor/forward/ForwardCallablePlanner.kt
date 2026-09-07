@@ -73,6 +73,12 @@ internal enum class ForwardPlanSkipReason(val droppedFromCSharp: Boolean) {
   UNSUPPORTED(droppedFromCSharp = true),
   VALUE_CLASS(droppedFromCSharp = true),
 
+  /** A secondary constructor of a value class over a reference underlying. ADR-035 defers that
+   *  struct's primary constructor and keeps only the positional record one, so a secondary has
+   *  nothing to delegate to and no legacy route re-emits it: a genuine drop, with its own
+   *  diagnostic kind because nothing about its parameter types is unsupported. */
+  REFERENCE_UNDERLYING_VALUE_CLASS_CONSTRUCTOR(droppedFromCSharp = true),
+
   // ADR-064: genuine drops with their own named diagnostic kind, not the generic "type
   // combination is not supported" bucket the reasons above still render through.
   /** Cell 23 / BUG-010: a generic + suspend + inline + reified extension returning `Result<T>` —
@@ -590,10 +596,21 @@ internal class ForwardCallablePlanner(
       .filter { it.getVisibility() == Visibility.PUBLIC }
       .toList()
 
-    // Reference-underlying constructors stay on the legacy path: ADR-035 defers the primary, and
-    // any secondary still uses the historical export numbering. Planning them would force the
-    // ObjectHandle/StableRef result shape, which is not the shipped (rare) secondary ABI.
-    if (isReferenceUnderlying) return emptyList()
+    // ADR-035 exposes a reference-underlying value class as a positional record struct over the
+    // underlying handle and defers its primary constructor, so a secondary has nothing to
+    // delegate to: the pre-plan route that used to emit one handed an `IntPtr` to the class-typed
+    // positional parameter (CS1503) against a Kotlin export returning the underlying object
+    // rather than a pointer. It is a drop, named per secondary; the primary is not skipped
+    // because the record header still constructs one.
+    if (isReferenceUnderlying) {
+      return secondaryConstructors.mapIndexed { index, ctor ->
+        ForwardCallableCatalogEntry.Skipped(
+          symbol = "$owner.<init>_${index + 2}",
+          reason = ForwardPlanSkipReason.REFERENCE_UNDERLYING_VALUE_CLASS_CONSTRUCTOR,
+          node = ctor,
+        )
+      }
+    }
 
     val exports: List<Pair<KSFunctionDeclaration, Pair<String, String>>> = buildList {
       val primary = cls.primaryConstructor

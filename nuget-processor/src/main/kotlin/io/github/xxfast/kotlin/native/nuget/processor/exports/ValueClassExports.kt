@@ -4,11 +4,8 @@ import com.google.devtools.ksp.symbol.ClassKind
 import com.google.devtools.ksp.symbol.KSClassDeclaration
 import com.google.devtools.ksp.symbol.KSDeclaration
 import com.google.devtools.ksp.symbol.KSFunctionDeclaration
-import com.google.devtools.ksp.symbol.KSType
 import com.google.devtools.ksp.symbol.KSValueParameter
-import com.squareup.kotlinpoet.ClassName
 import com.squareup.kotlinpoet.FileSpec
-import com.squareup.kotlinpoet.FunSpec
 import io.github.xxfast.kotlin.native.nuget.processor.cir.expandAliases
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallablePlan
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallablePlanCatalog
@@ -22,19 +19,16 @@ private val PRIMITIVE_TYPES: Set<String> = setOf(
 )
 
 /**
- * Value-class exports: ordinary members are plan-only. Reference-underlying constructors remain
- * on an explicit named legacy adapter (ADR-035 defers primary planning for that branch).
+ * Value-class exports: plan-only. A reference-underlying value class exports no constructor at
+ * all (ADR-035 defers its primary, and the planner skips its secondaries).
  */
 internal fun FileSpec.Builder.addValueClassExports(
   cls: KSClassDeclaration,
   callableCatalog: ForwardCallablePlanCatalog,
 ) {
-  val name: String = cls.simpleName.asString()
   val qualifiedName: String = cls.qualifiedName?.asString() ?: return
-  val prefix: String = name.lowercase()
 
   val underlyingProp: KSValueParameter = cls.primaryConstructor!!.parameters.first()
-  val underlyingPropName: String = underlyingProp.name?.asString() ?: return
   val underlyingDeclaration: KSDeclaration =
     underlyingProp.type.resolve().expandAliases().declaration
   val underlyingType: String = underlyingDeclaration.qualifiedName?.asString() ?: return
@@ -52,75 +46,18 @@ internal fun FileSpec.Builder.addValueClassExports(
     .filter { it != cls.primaryConstructor }
     .toList()
 
-  val constructorExports: List<Pair<KSFunctionDeclaration, String>> = if (isReferenceUnderlying) {
-    // ADR-035: primary deferred for reference-underlying; secondary-only export numbering.
-    secondaryConstructors.mapIndexed { index, ctor ->
-      val cname: String = if (index == 0) "${prefix}_create" else "${prefix}_create_${index}"
-      ctor to cname
-    }
-  } else {
-    buildList {
-      add(cls.primaryConstructor!! to "${prefix}_create")
-      secondaryConstructors.forEachIndexed { index, ctor ->
-        add(ctor to "${prefix}_create_${index + 2}")
-      }
-    }
+  // ADR-035: a reference-underlying value class is a positional record struct over the underlying
+  // handle, so C# constructs one directly and no constructor crosses the bridge. Its secondaries
+  // are skipped by the planner (`REFERENCE_UNDERLYING_VALUE_CLASS_CONSTRUCTOR`); the deleted
+  // adapter here returned the raw underlying object where the C# import expected an IntPtr.
+  val constructorSymbols: List<String> = if (isReferenceUnderlying) emptyList() else buildList {
+    add("")
+    secondaryConstructors.forEachIndexed { index, _ -> add("_${index + 2}") }
   }
 
-  constructorExports.forEachIndexed { index, (ctor, cname) ->
-    val symbolSuffix: String = if (isReferenceUnderlying) {
-      if (index == 0) "" else "_$index"
-    } else if (index == 0) {
-      ""
-    } else {
-      "_${index + 1}"
-    }
-    val planned: ForwardCallablePlan? =
-      callableCatalog.planFor("$qualifiedName.<init>$symbolSuffix")
-    if (planned != null) {
-      addForwardKotlinPlanExport(planned)
-      return@forEachIndexed
-    }
-    // Explicit named adapter for reference-underlying secondaries only (not planned).
-    if (!isReferenceUnderlying) return@forEachIndexed
-
-    val paramCall: String = ctor.parameters.joinToString(", ") {
-      it.name?.asString() ?: "_"
-    }
-
-    val builder: FunSpec.Builder = FunSpec
-      .builder("export_$cname")
-      .addAnnotation(cNameAnnotation(cname))
-
-    ctor.parameters.forEach { param ->
-      val resolved: KSType = param.type.resolve().expandAliases()
-      val type: String =
-        resolved.declaration.qualifiedName?.asString()
-          ?: resolved.declaration.simpleName.asString()
-
-      builder.addParameter(
-        param.name?.asString() ?: "_",
-        ClassName.bestGuess(type),
-      )
-    }
-
-    builder.addParameter("errorOut", cOpaquePointer.copy(nullable = true))
-    // Reference-underlying secondaries still return the unwrapped underlying value (ADR-014).
-    builder.returns(ClassName.bestGuess(underlyingType).copy(nullable = true))
-    builder.addCode(buildString {
-      appendLine("return try {")
-      appendLine("  %L(%L).%L")
-      appendLine("} catch (e: Throwable) {")
-      appendLine("  if (errorOut != null) {")
-      appendLine("    errorOut.reinterpret<%T>().pointed.value = %T.create(")
-      appendLine("      buildError(e)")
-      appendLine("    ).asCPointer()")
-      appendLine("  }")
-      appendLine("  null")
-      append("}")
-    }, qualifiedName, paramCall, underlyingPropName, cOpaquePointerVar, stableRef)
-
-    addFunction(builder.build())
+  constructorSymbols.forEach { suffix ->
+    val planned: ForwardCallablePlan? = callableCatalog.planFor("$qualifiedName.<init>$suffix")
+    if (planned != null) addForwardKotlinPlanExport(planned)
   }
 
   // ADR-082: members come off the catalog, not from a per-declaration plan lookup. Two declared

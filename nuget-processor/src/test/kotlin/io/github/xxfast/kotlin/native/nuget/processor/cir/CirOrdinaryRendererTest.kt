@@ -733,46 +733,45 @@ class CirOrdinaryRendererTest {
     assertContains(rendered, "public int Next() => Native_Next(Value, out IntPtr error);")
   }
 
+  /**
+   * ROADMAP Phase 3: a reference-underlying value class is the positional record struct and
+   * nothing else. Its primary constructor is deferred (ADR-035) and its secondaries are skipped by
+   * the planner, so the translator hands the renderer no constructors at all -- the deleted
+   * `: this(CreateChecked(...))` delegation handed an `IntPtr` to the class-typed positional
+   * parameter (CS1503).
+   */
   @Test
-  fun `reference value class uses positional record and this-delegation`() {
+  fun `reference value class renders the positional record and no constructor`() {
     val cls = CirValueClass(
       name = "ArticleUri",
       libraryName = "news",
       nativePrefix = "articleuri",
-      underlyingType = "string",
+      underlyingType = "global::Interop.Uri",
       underlyingName = "Value",
       underlyingNativeType = "IntPtr",
       underlyingIsReference = true,
-      constructors = listOf(
-        CirValueClassConstructor(
-          parameters = listOf(CirParameter("value", "string")),
-          nativeName = "articleuri_create",
-          body = "value",
-          hasErrorCheck = false,
-        ),
-        CirValueClassConstructor(
-          parameters = listOf(
-            CirParameter("host", "string"),
-            CirParameter("path", "string"),
-          ),
-          nativeName = "articleuri_create_2",
-          body = "CreateChecked_1(host, path)",
-          hasErrorCheck = true,
+      constructors = emptyList(),
+      properties = listOf(
+        CirProperty(
+          name = "Host",
+          type = "string",
+          nativeReturnType = "IntPtr",
+          nativeName = "host",
+          getter = "Marshal.PtrToStringUTF8(Native_GetHost(Value._handle))!",
         ),
       ),
-      properties = emptyList(),
       methods = emptyList(),
     )
 
     val rendered: String = render(cls)
 
-    assertContains(rendered, "public readonly record struct ArticleUri(string Value)")
-    assertContains(rendered, "public ArticleUri(string value) : this(value) { }")
-    assertContains(rendered, "private static IntPtr CreateChecked_1(string host, string path)")
+    assertContains(rendered, "public readonly record struct ArticleUri(global::Interop.Uri Value)")
     assertContains(
       rendered,
-      "public ArticleUri(string host, string path) : this(CreateChecked_1(host, path)) { }",
+      "public string Host => Marshal.PtrToStringUTF8(Native_GetHost(Value._handle))!;",
     )
+    assertFalse("CreateChecked" in rendered, "expected no constructor helper; got: $rendered")
+    assertFalse("Native_Create" in rendered, "expected no constructor import; got: $rendered")
   }
 
   // -- CirStaticClass / extensions --------------------------------------------
