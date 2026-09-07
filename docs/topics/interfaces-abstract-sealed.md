@@ -94,6 +94,117 @@ public abstract class Animal : IPet
 
 `Cat : Animal` inherits `_handle` and only overrides `Speak()` and `Dispose()`. It never redeclares the field.
 
+## Overriding a read-only property with `var`
+
+Kotlin lets a subclass widen a `val` it inherits to a mutable `var`. Whether the setter survives the
+crossing depends on what member it widens, because C# does not allow an `override` to add a `set`
+accessor to a get-only member (`CS0546`):
+
+- Widening an **interface**'s `val` compiles either way: the class only *implements* the interface
+  member, so its own property renders `virtual`, not `override`, and a `virtual` declaration is free
+  to carry a setter the interface never declared.
+- Widening an exported **base class**'s `override val` does not: the base already rendered a
+  get-only `virtual` property, so a derived `{ get; set; }` `override` of it would be `CS0546`. The
+  setter is dropped at plan time and the property stays read-only in C#, named by a build warning.
+
+From `test-library/src/nativeMain/kotlin/.../cat/Clicker.kt`, the interface case:
+
+```kotlin
+interface Counter {
+  val count: Int
+}
+
+class Clicker : Counter {
+  override var count: Int = 0
+}
+```
+
+`Clicker` implements `Counter`'s `val`, so it renders `virtual` with both accessors, against
+`ICounter`'s get-only property:
+
+```C#
+public class Clicker : ICounter, INugetHandle
+{
+```
+
+```C#
+public interface ICounter : IDisposable
+{
+    int Count { get; }
+}
+```
+
+`Native_Get_count` and `Native_Set_count` are both generated for `Clicker`.
+
+From `Pet.kt`, `Animal.kt`, and `Cat.kt`, the base-class case: `Pet.vibe` is a `val`, `Animal.vibe`
+widens nothing (`override val`, itself widening `Pet`'s), and `Cat.vibe` widens `Animal`'s to `var`:
+
+```kotlin
+interface Pet {
+  val vibe: String // read-only in the interface, but an implementation may widen it to `var`
+}
+```
+
+```kotlin
+abstract class Animal(override val name: String) : Pet {
+  override val vibe: String = "calm"
+}
+```
+
+```kotlin
+class Cat(
+  name: String,
+  val lives: Int = 9,
+) : Animal(name) {
+  override var vibe: String = "curious"
+}
+```
+
+`Animal.Vibe` renders `virtual` and get-only (it implements an interface member, the same rule as
+`Clicker.Count` above). `Cat.Vibe` renders as an `override`, but its setter is dropped: `Cat` still
+compiles because the `override` keeps `Vibe` get-only, matching `Animal`'s accessor set exactly:
+
+```C#
+public virtual string Vibe
+{
+    get
+    {            IntPtr nativeResult = Native_Get_vibe(_handle, out IntPtr error);
+    if (error != IntPtr.Zero)
+    {
+        throw NugetErrorNative.BuildException(error);
+    }
+    return Marshal.PtrToStringUTF8(nativeResult)!;
+    }
+}
+```
+
+```C#
+public override string Vibe
+{
+    get
+    {            IntPtr nativeResult = Native_Get_vibe(_handle, out IntPtr error);
+    if (error != IntPtr.Zero)
+    {
+        throw NugetErrorNative.BuildException(error);
+    }
+    return Marshal.PtrToStringUTF8(nativeResult)!;
+    }
+}
+```
+
+No `cat_set_vibe` export is generated, and the KSP build emits a diagnostic naming the reason:
+
+```
+[nuget:SKIPPED_UNSUPPORTED_INPUT] Skipping io.github.xxfast.kotlin.native.nuget.test.cat.Cat.vibe: its
+setter is not generated because it overrides a read-only property of the exported base class Animal;
+C# cannot add a set accessor to an override (CS0546). the C# property Vibe is read-only
+```
+
+<note>
+    <p>The reverse case, a subclass narrowing a base's <code>var</code> to <code>val</code>, is
+    already a Kotlin compile error and needs no handling here.</p>
+</note>
+
 `Observation` renders as an abstract class with each Kotlin subtype as a nested `sealed class`, plus a `FromHandle` dispatcher that reads a type tag off the native handle:
 
 ```C#
@@ -1103,6 +1214,7 @@ property. The owning class still generates, and its unrelated `name` member stil
 - Object identity is not preserved across reads of a **Kotlin-backed** interface-typed property: two reads produce two distinct C# wrapper instances over the same Kotlin object (each disposes independently). A **C#-implemented** object read back is the one exception, see above.
 - A nullable *enum* property on a sealed subclass is not handled by the fix above: it still renders `.ordinal` on a possibly-null value, the same bug class as `String?`/`Int?`, unverified by a fixture. A plain nested (non-sealed) class is never bridged at all, silently and with no diagnostic. See [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md).
 - A sealed type at a **property** position binds (bare, nullable, and a read-only collection component). A sealed type at a **constructor or method parameter** position does not, and drops **silently, with no diagnostic**; it was never on ADR-105's route (property planner only), pre-existing. A sealed collection component at a **return or parameter** position does not either, deferred as [ADR-105](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/105-sealed-property-position.md) scope (d), and it drops the same silent way. A *mutable* collection of sealed (`var shapes: MutableList<Shape>`) binds get-only. A sealed **interface** is never discriminated at any property position, bare or as a collection component, since only a sealed *class* gets a `FromHandle`. See [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md).
+- [Overriding a read-only property with `var`](#overriding-a-read-only-property-with-var) only guards against the exported-base-class shape. A base class's own `open val`/`open var` never renders `virtual` (its own modifier is never read), so any subclass `override` of it is `CS0506`; and an unimplemented base `abstract val`/`abstract var` has no abstract-property path at all, so a subclass `override` of it is `CS0115`. Neither is fixed. See [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md).
 
 ## Using it from C#
 
@@ -1167,6 +1279,7 @@ public void Observation_WorksWithPatternMatching()
     <category ref="external">
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/009-sealed-class-mapping.md">ADR-009: Sealed class mapping</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/040-interface-return-type-mapping.md">ADR-040: Interface return type mapping</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/075-collection-property-getter-setter-independence.md">ADR-075: Collection property getter/setter independence</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/084-csharp-implemented-interfaces.md">ADR-084: C#-implemented Kotlin interfaces</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/094-reflection-free-generic-dispatch.md">ADR-094: Reflection-free generic dispatch</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/102-aot-safe-forward-callbacks.md">ADR-102: AOT-safe forward callbacks</a>

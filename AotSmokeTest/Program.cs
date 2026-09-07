@@ -145,6 +145,7 @@ internal static class Program
         public string Name { get; }
         public int Legs => 4;
         public string? Nickname => null;
+        public string Vibe => "waggy";
         public Dog(string name) => Name = name;
         public string Speak() => "Woof!";
         public string Greet() => $"Hi, I'm {Name} the dog";

@@ -140,6 +140,34 @@ set accessor, which is **CS0546** in C#. Both projections run the same predicate
 so this can only arise from a `val`/`var` override mismatch, which is pre-existing and not collection-specific.
 Do not put that shape in the fixture.
 
+**2026-09-07 amendment: the hazard above misattributed the failing case.** An interface `val` widened by an
+implementing class's `override var` never fails: the C# projection of a class member that only implements an
+interface member renders `virtual`, not `override`, and C# lets a `virtual` declaration carry a setter the
+interface never asked for. Pinned by `Clicker : Counter { override var count }`
+(`test-library/src/nativeMain/kotlin/.../test/cat/Clicker.kt`): the generated `Clicker` gets
+`public virtual int Count { get; set; }` against `ICounter`'s get-only `int Count { get; }`, and it compiles.
+
+The real CS0546 needs an exported **base class** in the chain, not just an interface: `Pet.vibe` (interface
+`val`) widened by `Animal.vibe` (`override val`, renders `public virtual string Vibe` get-only), then widened
+again by `Cat.vibe` (`override var`). `Cat.Vibe` would render `public override string Vibe { get; set; }`,
+which fails `CS0546` because `Animal.Vibe` has no overridable set accessor.
+
+The shipped fix (`ForwardPropertyPlanner.kt`, not the renderer) refuses the setter: a property planned with
+an exported base class and `override` inherits the base member's accessor set, and since Kotlin admits only
+`val` → `var` across an override, the derived setter is dropped through `ForwardDroppedPropertySetter` and no
+`_set_` export is minted for it. The overridee lookup uses KSP's `findOverridee()` first, **verified** by a
+Tier 1 probe to return the class-chain member (`Animal.vibe` for `Cat.vibe`, not `Pet.vibe`), falling back to
+a walk over the base's `getAllProperties()` for the shape where the base does not redeclare the property (an
+abstract base inheriting the interface `val` directly); that fallback shape is Tier 1 covered only, not
+fixture-covered end to end. The mirror direction, a class narrowing a base's `var` to `val`, is already a
+Kotlin compile error and needs no handling here.
+
+Not fixed by this change, and not collection-specific: a base **`open val`** never renders `virtual` in C#
+(`Modifier.OPEN` is not read by the renderer), so any `override` of it, collection or not, is `CS0506`; and
+an unimplemented base **`abstract val`** has no abstract-property path in the renderer at all, so a subclass
+`override` of it is `CS0115`. Both are named on [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md)
+Phase 3, discovered alongside this fix.
+
 ### Question D — is a nullable collection setter (`var notes: List<String>?`) in v1?
 
 #### D1. Yes, as an ordinary `ForwardPropertySetter.Direct` with a nullable pointer (chosen)

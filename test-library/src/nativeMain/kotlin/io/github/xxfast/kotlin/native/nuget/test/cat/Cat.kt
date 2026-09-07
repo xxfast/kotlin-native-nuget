@@ -12,6 +12,12 @@ class Cat(
   override val nickname: String? = "${name}y" // the "present" branch; Animal's default is null
   override fun fetch(item: String): String = "$name fetches the $item"
 
+  /**
+   * Widens [Animal.vibe] from `val` to `var`. The base renders get-only in C#, so a derived
+   * `override { get; set; }` would not compile; the setter is dropped from the projection.
+   */
+  override var vibe: String = "curious"
+
   /** Nullable interface-typed property, both get and set. */
   var friend: Pet? = null
 
