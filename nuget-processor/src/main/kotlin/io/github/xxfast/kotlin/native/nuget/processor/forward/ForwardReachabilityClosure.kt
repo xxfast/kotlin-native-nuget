@@ -35,10 +35,28 @@ internal enum class ForwardReachabilityBucket {
   SEALED_SUBCLASS,
 }
 
+/**
+ * Why the closure refused to admit a discovered dependency-module declaration. Recorded because a
+ * bare refusal loses the one thing the diagnostic needs: `include(...)` is the fix for exactly one
+ * of these, is actively wrong for [EXCLUDED_BY_CONFIG] (`PackageScope.covers` tests `exclude`
+ * first, so no include can override one) and for [EXPECT_IN_DEPENDENCY] (no scope reaches another
+ * module's actualization), and is incomplete for [CROSS_MODULE_ADMISSION_DISABLED] (an include
+ * alone replaces the "everything" default and drops the module's own files).
+ */
+internal enum class ForwardAdmissionRefusal {
+  EXCLUDED_BY_CONFIG,
+  NOT_INCLUDED,
+  CROSS_MODULE_ADMISSION_DISABLED,
+  EXPECT_IN_DEPENDENCY,
+}
+
 internal data class ForwardReachabilityResult(
   /** Admitted cross-module declarations, keyed by qualified name. */
   val admitted: Map<String, KSClassDeclaration>,
   val bucketOf: Map<String, ForwardReachabilityBucket>,
+  /** Refused cross-module declarations, keyed by qualified name: the reason the classifier's
+   *  "not in the exported handle set" view cannot reconstruct on its own. */
+  val refused: Map<String, ForwardAdmissionRefusal> = emptyMap(),
 )
 
 /**
@@ -56,6 +74,9 @@ internal class ForwardReachabilityClosure(
   /** ADR-063's scope predicate over the declaration itself (issue #53: `exclude` may name a
    *  qualified declaration, not only a package), shared with the root scan. */
   private val isExported: (KSDeclaration) -> Boolean,
+  /** The `exclude` half of that same predicate, so a refusal can name the author's own
+   *  `exclude(...)` instead of telling them to add an `include(...)` that cannot override it. */
+  private val isExcluded: (KSDeclaration) -> Boolean = { false },
   /** ADR-066 admission rule 4: with neither `rootPackage` nor `include` set, the closure must not
    *  cross the module boundary at all (or it would walk straight into `kotlinx-coroutines`). An
    *  empty effective include set means "admit everything" for the module's own files (ADR-063),
@@ -70,6 +91,7 @@ internal class ForwardReachabilityClosure(
   private val visited: MutableSet<String> = mutableSetOf()
   private val admitted: MutableMap<String, KSClassDeclaration> = mutableMapOf()
   private val bucketOf: MutableMap<String, ForwardReachabilityBucket> = mutableMapOf()
+  private val refused: MutableMap<String, ForwardAdmissionRefusal> = mutableMapOf()
 
   fun walk(
     classes: List<KSClassDeclaration>,
@@ -104,7 +126,7 @@ internal class ForwardReachabilityClosure(
     properties.forEach(::walkProperty)
     extensionProperties.forEach(::walkProperty)
 
-    return ForwardReachabilityResult(admitted, bucketOf)
+    return ForwardReachabilityResult(admitted, bucketOf, refused)
   }
 
   private fun walkFunction(function: KSFunctionDeclaration) {
@@ -167,8 +189,14 @@ internal class ForwardReachabilityClosure(
 
     // ADR-074 Decision 1 (defensive): a cross-module (klib) declaration reporting `isExpect` must
     // not be admitted. Not spiked for a cross-module expect/actual pair; costs one condition and
-    // removes the question.
-    if (classDeclaration.isExpect) return
+    // removes the question. A module-local `expect` is a different thing entirely (its `actual` is
+    // the export root, filtered out at the root scan), so only the cross-module one is recorded.
+    if (classDeclaration.isExpect) {
+      if (classDeclaration.containingFile == null) {
+        refused[qualifiedName] = ForwardAdmissionRefusal.EXPECT_IN_DEPENDENCY
+      }
+      return
+    }
 
     // `containingFile == null` is the verified cross-module signal (ADR-066 spike): a klib
     // declaration carries no containing file, a module-local one always does.
@@ -185,8 +213,21 @@ internal class ForwardReachabilityClosure(
 
     // Cross-module (klib) declaration: ADR-066's admission predicate.
     if (classDeclaration.getVisibility() != Visibility.PUBLIC) return
-    if (!crossModuleAdmissionAllowed) return
-    if (!isExported(classDeclaration)) return
+    // Exclude is tested ahead of the admission rules for the same reason `PackageScope.covers`
+    // tests it first: an explicitly excluded type is excluded whatever else the scope says, and
+    // that is the refusal the author can act on.
+    if (isExcluded(classDeclaration)) {
+      refused[qualifiedName] = ForwardAdmissionRefusal.EXCLUDED_BY_CONFIG
+      return
+    }
+    if (!crossModuleAdmissionAllowed) {
+      refused[qualifiedName] = ForwardAdmissionRefusal.CROSS_MODULE_ADMISSION_DISABLED
+      return
+    }
+    if (!isExported(classDeclaration)) {
+      refused[qualifiedName] = ForwardAdmissionRefusal.NOT_INCLUDED
+      return
+    }
 
     // A *nested* dependency enum must never be admitted: the enum renderer declares every admitted
     // enum at the namespace root under its simple name (`translateEnum`), while every reference to

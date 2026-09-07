@@ -208,6 +208,35 @@ replaces the `rootPackage` default rather than adding to it ([#55](https://githu
 A `kotlin.*`/`kotlinx.*` type gets no `include(...)` suggestion at all: a stdlib type wants a
 first-class mapping, not an export-scope change, and the hint says so.
 
+`include(...)` is only ever the right fix for a type the closure simply never included. Three other
+reasons the closure can refuse a dependency type all fold into the same
+`SKIPPED_UNEXPORTED_DEPENDENCY_TYPE` kind but each get their own hint, since `include(...)` would be
+wrong advice for any of them. Following [ADR-109](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/109-duplicate-type-hazard.md)'s
+own `exclude("<pkg>")` remedy for a duplicated type lands here:
+
+```
+[nuget:SKIPPED_UNEXPORTED_DEPENDENCY_TYPE] Skipping Newsroom.latest(): "dep.models" is excluded by
+    exclude("dep.models") in nuget { publish { } }, so a callable reaching dep.models.TopStory is
+    skipped by design; remove the exclude to export it here (include(...) cannot override an
+    exclude)
+```
+
+With neither `rootPackage` nor `include` set, so the closure never crosses the module boundary at
+all, the hint names the setting that turns cross-module admission on instead:
+
+```
+[nuget:SKIPPED_UNEXPORTED_DEPENDENCY_TYPE] Skipping Newsroom.latest(): no rootPackage or include is
+    set, so nuget { publish { } } never crosses the module boundary and dep.models.TopStory stays
+    out of the export set; set rootPackage(...) or list your own packages alongside "dep.models" in
+    include(...) (include(...) on its own replaces the everything-in-this-module default and would
+    drop your own files)
+```
+
+And a dependency's own `expect` declaration says its actualization lives in that module and cannot
+be reached with `include(...)` at all, naming the type instead of suggesting a scope change that
+cannot fix it. See [The nuget {} DSL](nuget-dsl.md#cross-module-export-closure) for the full set of
+refusal reasons.
+
 When the scope admits none of the module's public declarations, the processor warns once with
 `SKIPPED_ALL_DECLARATIONS`, naming the scope and the packages it dropped, instead of returning
 silently with no `Interop.cs` in the package:

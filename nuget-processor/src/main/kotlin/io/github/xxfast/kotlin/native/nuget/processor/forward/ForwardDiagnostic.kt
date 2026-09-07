@@ -244,8 +244,14 @@ internal fun ForwardPlanSkipReason.toDiagnosticKind(): ForwardDiagnosticKind = w
 
   ForwardPlanSkipReason.INHERITED_MEMBER -> ForwardDiagnosticKind.SKIPPED_INHERITED_MEMBER
 
-  ForwardPlanSkipReason.UNEXPORTED_DEPENDENCY_TYPE ->
-    ForwardDiagnosticKind.SKIPPED_UNEXPORTED_DEPENDENCY_TYPE
+  // One kind for all four dependency-scope refusals: the member is dropped for the same one
+  // reason (its type is not in the export set) and ADR-109's remedy text is keyed off this kind,
+  // so only the hint differs.
+  ForwardPlanSkipReason.UNEXPORTED_DEPENDENCY_TYPE,
+  ForwardPlanSkipReason.EXCLUDED_DEPENDENCY_TYPE,
+  ForwardPlanSkipReason.EXPECT_DEPENDENCY_TYPE,
+  ForwardPlanSkipReason.CROSS_MODULE_DISABLED_DEPENDENCY_TYPE,
+    -> ForwardDiagnosticKind.SKIPPED_UNEXPORTED_DEPENDENCY_TYPE
 
   ForwardPlanSkipReason.ACTUAL_TYPEALIAS_TARGET ->
     ForwardDiagnosticKind.SKIPPED_ACTUAL_TYPEALIAS_TARGET
@@ -335,6 +341,34 @@ internal fun ForwardPlanSkipReason.diagnosticHint(
           "rootPackage default, so keep your own packages listed), or expose a type from an " +
           "in-scope package instead"
     }
+  }
+
+  // Following ADR-109's `exclude("<pkg>")` remedy lands every callable reaching the excluded type
+  // here. `include(...)` is not the fix: `PackageScope.covers` tests `exclude` first, so an
+  // include can never override one.
+  ForwardPlanSkipReason.EXCLUDED_DEPENDENCY_TYPE -> {
+    val excluded: String = detail
+      ?.let { qualifiedName -> qualifiedName.substringBeforeLast('.', qualifiedName) }
+      ?: "its package"
+    "\"$excluded\" is excluded by exclude(\"$excluded\") in nuget { publish { } }, so a callable " +
+        "reaching ${detail ?: "it"} is skipped by design; remove the exclude to export it here " +
+        "(include(...) cannot override an exclude)"
+  }
+
+  ForwardPlanSkipReason.EXPECT_DEPENDENCY_TYPE ->
+    "${detail ?: "it"} is an `expect` declaration in a dependency module; its actualization " +
+        "lives in that module and cannot be brought into scope with include(...); expose a " +
+        "type you declare instead"
+
+  ForwardPlanSkipReason.CROSS_MODULE_DISABLED_DEPENDENCY_TYPE -> {
+    val dependencyPackage: String = detail
+      ?.let { qualifiedName -> qualifiedName.substringBeforeLast('.', qualifiedName) }
+      ?: "the dependency's package"
+    "no rootPackage or include is set, so nuget { publish { } } never crosses the module " +
+        "boundary and ${detail ?: "the type"} stays out of the export set; set rootPackage(...) " +
+        "or list your own packages alongside \"$dependencyPackage\" in include(...) " +
+        "(include(...) on its own replaces the everything-in-this-module default and would " +
+        "drop your own files)"
   }
 
   ForwardPlanSkipReason.ACTUAL_TYPEALIAS_TARGET -> {
