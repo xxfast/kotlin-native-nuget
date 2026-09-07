@@ -96,7 +96,7 @@ class Tier1ConstructorDefaultParameterTest {
 
   /**
    * ADR-091's expect/actual clause. Kotlin forbids an `actual` from restating a default, so the
-   * bit exists only on the `expect` header; without the `expectsByName` lookup the planner would
+   * bit exists only on the `expect` header; without the `ExpectIndex` lookup the planner would
    * silently and "correctly" conclude the class has no defaults.
    */
   @Test

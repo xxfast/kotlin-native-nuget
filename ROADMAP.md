@@ -15,7 +15,6 @@ Complete.
 Complete.
 
 ## Phase 3: Basic type support
-- [ ] **`expectsByName`'s `.toMap()` can collapse overloaded top-level `expect fun`s onto one key, so the ADR-096 default-parameter lookup can read the wrong overload's defaults.** ([details](docs/backlog/expectsbyname-tomap-collapses-overloaded-top-level-expect.md))
 - [ ] **A public `annotation class` produces no diagnostic at all, forward direction: no route exists for `ClassKind.ANNOTATION_CLASS`, so it is silently absent rather than named-skipped.** ([details](docs/backlog/public-annotation-class-produces-no-diagnostic.md))
 - [ ] The `SKIPPED_UNEXPORTED_DEPENDENCY_TYPE` `include(...)` hint would be wrong for a hypothetical dependency alias-actualized `expect` that reaches that skip path; `include(...)` cannot fix a dependency's own actualization. Inferred, premise unverified (whether a dependency klib's metadata retains the `expect` half at all is itself unspiked). ([details](docs/backlog/include-hint-wrong-for-dependency-alias-actualized-expect.md))
 - [ ] After following [ADR-109](docs/adr/109-duplicate-type-hazard.md)'s `exclude("<pkg>")` remedy for a duplicated dependency type, every callable reaching that type now fires `SKIPPED_UNEXPORTED_DEPENDENCY_TYPE`, whose hint says to `include(...)` it back; the two hints contradict for this scenario and should recognise each other. Discovered alongside [ADR-109](docs/adr/109-duplicate-type-hazard.md).

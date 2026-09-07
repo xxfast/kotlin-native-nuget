@@ -1,6 +1,7 @@
 package io.github.xxfast.kotlin.native.nuget.processor.cir
 
 import com.google.devtools.ksp.processing.KSPLogger
+import io.github.xxfast.kotlin.native.nuget.processor.ExpectIndex
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBoundInterface
 import com.google.devtools.ksp.symbol.ClassKind
 import com.google.devtools.ksp.symbol.KSClassDeclaration
@@ -71,10 +72,10 @@ internal fun translate(
   // position, and therefore gets a concrete `sealed class Foo : IFoo` backing wrapper plus
   // `foo_*` dispatch exports alongside the unconditional `IFoo` declaration.
   interfaceBackingClasses: List<KSClassDeclaration> = emptyList(),
-  // ADR-074 Decision 3: the by-qualified-name index of every filtered `expect` declaration, so a
-  // top-level `actual fun`/`val` can take its C# static class name from the *expect's* file
-  // instead of its own (per-target) file.
-  expectsByName: Map<String, KSDeclaration> = emptyMap(),
+  // ADR-074 Decision 3: the index of every filtered `expect` declaration, so a top-level
+  // `actual fun`/`val` can take its C# static class name from the *expect's* file instead of its
+  // own (per-target) file.
+  expects: ExpectIndex = ExpectIndex(),
 ): CirFile {
   val (genericClasses, regularClasses) = classes.partition { it.typeParameters.isNotEmpty() }
 
@@ -99,11 +100,8 @@ internal fun translate(
   // other's, while `packNuget` packages exactly one target's output and ships every target's
   // binary. Kotlin requires an `expect` and its `actual` to live in the same module, so within one
   // compilation this lookup always hits for a genuine `actual`; the fallback is defensive only.
-  fun expectFileNameOrNull(declaration: KSDeclaration): String? {
-    if (!declaration.isActual) return null
-    val qualifiedName: String = declaration.qualifiedName?.asString() ?: return null
-    return expectsByName[qualifiedName]?.containingFile?.fileName?.removeSuffix(".kt")
-  }
+  fun expectFileNameOrNull(declaration: KSDeclaration): String? =
+    expects.fileNameOrNull(declaration)
 
   fun groupByNamespaceAndFile(
     funcs: List<KSFunctionDeclaration>,

@@ -13,6 +13,7 @@ import com.google.devtools.ksp.symbol.KSValueParameter
 import com.google.devtools.ksp.getAllSuperTypes
 import com.google.devtools.ksp.symbol.Modifier
 import com.google.devtools.ksp.symbol.Visibility
+import io.github.xxfast.kotlin.native.nuget.processor.ExpectIndex
 import io.github.xxfast.kotlin.native.nuget.processor.cir.expandAliases
 import io.github.xxfast.kotlin.native.nuget.processor.exports.findInterfaceBridgePairs
 import io.github.xxfast.kotlin.native.nuget.processor.exports.findStoredCallbackPairs
@@ -388,11 +389,10 @@ internal data class ForwardCallablePlanCatalog(
 internal class ForwardCallablePlanner(
   private val classifier: ForwardBridgeTypeClassifier,
   /**
-   * ADR-091: the ADR-074 expect index, keyed by qualified name. Only source of parameter defaults
-   * for an `expect`/`actual` class, whose `actual` (the export root) always reports
-   * `hasDefault = false`.
+   * ADR-091: the ADR-074 expect index. Only source of parameter defaults for an `expect`/`actual`
+   * pair, whose `actual` (the export root) always reports `hasDefault = false`.
    */
-  private val expectsByName: Map<String, KSDeclaration> = emptyMap(),
+  private val expects: ExpectIndex = ExpectIndex(),
 ) {
   fun catalog(
     classes: List<KSClassDeclaration>,
@@ -416,12 +416,11 @@ internal class ForwardCallablePlanner(
       }
       addAll(topLevel)
       // ADR-096: the omitting overloads, appended after *every* declared entry of this counter
-      // scope so declared exports keep their numbers. The declared namesake count is snapshotted
-      // first, because the synthesized pass advances the same counter.
-      val declaredTopLevel: Map<String, Int> = topLevelOccurrences.toMap()
+      // scope so declared exports keep their numbers, since the synthesized pass advances the same
+      // counter.
       functions.forEachIndexed { index, function ->
         if (topLevel[index] !is ForwardCallableCatalogEntry.Planned) return@forEachIndexed
-        val defaults: List<Boolean> = topLevelDefaultFlags(function, declaredTopLevel)
+        val defaults: List<Boolean> = topLevelDefaultFlags(function)
         repeat(defaults.trailingCount()) { omitted ->
           add(
             topLevelEntry(
@@ -897,7 +896,7 @@ internal class ForwardCallablePlanner(
    * which is why the feature is overload synthesis rather than C# optional parameters. For an
    * `expect`/`actual` class the bit is erased on the exported root (ADR-074 exports the `actual`,
    * and Kotlin forbids an `actual` from restating a default), so the expect's primary constructor
-   * is consulted positionally through [expectsByName], and only for the actual's own primary
+   * is consulted positionally through [expects], and only for the actual's own primary
    * constructor, since matching secondaries across the pair needs a signature rule no spike has
    * verified.
    */
@@ -908,7 +907,7 @@ internal class ForwardCallablePlanner(
   ): List<Boolean> {
     val expectParameters: List<KSValueParameter> =
       if (!isPrimary) emptyList()
-      else (expectsByName[cls.qualifiedName?.asString()] as? KSClassDeclaration)
+      else expects.classOrNull(cls.qualifiedName?.asString())
         ?.primaryConstructor
         ?.parameters
         .orEmpty()
@@ -931,25 +930,16 @@ internal class ForwardCallablePlanner(
   /**
    * ADR-096: per-parameter "has a default" for a **top-level** function, positionally.
    *
-   * The one route that consults the ADR-074 expect index, because Kotlin forbids an `actual` from
-   * restating a default so every parameter of the exported root reports `hasDefault = false`. The
-   * lookup is guarded three ways: only when that `(package, name)` has exactly one declared
-   * namesake (the index is a `.toMap()`, so two `expect` overloads of one name collapse to the last
-   * one and would attribute one declaration's defaults to another), only when the resolved expect
-   * is not an extension, and only when the parameter counts match. No other route consults it in
-   * v1; class/object/companion/extension read the exported declaration's own bit only.
+   * The one function route that consults the ADR-074 expect index, because Kotlin forbids an
+   * `actual` from restating a default so every parameter of the exported root reports
+   * `hasDefault = false`. Overloaded `expect fun`s share one qualified name, so [ExpectIndex]
+   * resolves the pairing by signature and answers `null` when it is ambiguous, which degrades to
+   * "no defaults" rather than attributing one namesake's defaults to another. No other route
+   * consults it in v1; class/object/companion/extension read the exported declaration's own bit
+   * only.
    */
-  private fun topLevelDefaultFlags(
-    function: KSFunctionDeclaration,
-    declaredNamesakes: Map<String, Int>,
-  ): List<Boolean> {
-    val key: String = "${function.packageName.asString()}.${function.simpleName.asString()}"
-    val expect: KSFunctionDeclaration? =
-      if (declaredNamesakes[key] != 1) null
-      else (expectsByName[key] as? KSFunctionDeclaration)?.takeIf { declaration ->
-        declaration.extensionReceiver == null &&
-            declaration.parameters.size == function.parameters.size
-      }
+  private fun topLevelDefaultFlags(function: KSFunctionDeclaration): List<Boolean> {
+    val expect: KSFunctionDeclaration? = expects.functionOrNull(function)
     return function.parameters.mapIndexed { index, parameter ->
       parameter.hasDefault || expect?.parameters?.get(index)?.hasDefault == true
     }

@@ -87,13 +87,13 @@ class Tier1FunctionDefaultParameterTest {
   }
 
   /**
-   * Structural. The expect index is a `.toMap()` keyed by qualified name, so two `expect` overloads
-   * of one name collapse to the last one. The uniqueness guard is what stops the survivor's
-   * defaults being attributed to its namesake: without it `beam(name, tag)` would grow an omitting
-   * `beam(name)` whose Kotlin call site does not compile.
+   * Structural. Two `expect` overloads share one qualified name, so the index has to resolve them
+   * by signature: only the second namesake carries a trailing default, and the omitting overload
+   * must wrap *its* parameters. Attributing the wrong declaration's defaults would truncate
+   * `beam(name, tag)` into a `beam(name)` whose Kotlin call site does not compile.
    */
   @Test
-  fun `a top-level expect with a declared namesake consults no defaults`() {
+  fun `overloaded top-level expects each resolve their own defaults`() {
     val result = Tier1Harness.run(
       commonSources = mapOf(
         "Beam.kt" to """
@@ -119,9 +119,58 @@ class Tier1FunctionDefaultParameterTest {
     val kotlin: String = result.generated
     assertContains(kotlin, "@CName(\"beam\")")
     assertContains(kotlin, "@CName(\"beam_2\")")
+    // Exactly one synthesized overload, and it truncates the *second* namesake (`level`), not the
+    // first (`tag`), whose parameters carry no default at all.
+    assertContains(kotlin, "@CName(\"beam_3\")")
     assertFalse(
-      kotlin.contains("beam_3"),
-      "an ambiguous expect key must synthesize nothing on either namesake; generated=$kotlin",
+      kotlin.contains("beam_4"),
+      "only the defaulted namesake may synthesize; generated=$kotlin",
+    )
+    assertContains(kotlin, "beam(name)")
+  }
+
+  /**
+   * Structural. ADR-074 Decision 3 names the C# static class after the `expect`'s file, so two
+   * `expect` overloads declared in *different* files of one package must each name their own file
+   * rather than collapse onto whichever declaration the index happened to keep. The second
+   * overload's nullable and generic parameter types are what the signature match has to render
+   * structurally rather than by identity, since the pair is two separate `KSType` instances.
+   */
+  @Test
+  fun `overloaded expects in different files each name their own file`() {
+    val result = Tier1Harness.run(
+      commonSources = mapOf(
+        "Purr.kt" to """
+        package tier1.fundefaultsexpectfiles
+
+        expect fun purr(name: String): String
+        """.trimIndent(),
+        "PurrLoud.kt" to """
+        package tier1.fundefaultsexpectfiles
+
+        expect fun purr(name: String?, volumes: List<String>): String
+        """.trimIndent(),
+      ),
+      sources = mapOf(
+        "PurrActual.kt" to """
+        package tier1.fundefaultsexpectfiles
+
+        actual fun purr(name: String): String = "${'$'}name"
+        actual fun purr(name: String?, volumes: List<String>): String =
+          "${'$'}name@${'$'}{volumes.size}"
+        """.trimIndent(),
+      ),
+    )
+
+    assertEquals("OK", result.kspExitCode, "kspErrors=${result.kspErrors}")
+    val cs: String = result.generatedCSharp
+    // Pre-fix only one of the two can exist: a name-keyed index keeps one `expect` per name, so
+    // both actuals land in whichever file survived.
+    assertContains(cs, "partial class Purr\n")
+    assertContains(cs, "partial class PurrLoud\n")
+    assertFalse(
+      cs.contains("class PurrActual"),
+      "an actual must never name its own per-target file; generated=$cs",
     )
   }
 

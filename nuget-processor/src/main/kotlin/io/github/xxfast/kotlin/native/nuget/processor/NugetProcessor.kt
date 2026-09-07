@@ -335,13 +335,9 @@ class NugetProcessor(
     // ADR-074: kept because the `actual` is structurally complete but metadata-poor (no KDoc, no
     // annotations, no parameter defaults). `findExpects()` is Verified empty on KSP 2.3.10, so the
     // qualified name is the only available link. Consumed by Decision 2 (actual typealias target
-    // redirect) and Decision 3 (per-file C# static class naming).
-    val expectsByName: Map<String, KSDeclaration> = allFilesDeclarations
-      .filter { it.isExpect }
-      .mapNotNull { declaration ->
-        declaration.qualifiedName?.asString()?.let { name -> name to declaration }
-      }
-      .toMap()
+    // redirect) and Decision 3 (per-file C# static class naming). ADR-096: overloaded `expect fun`s
+    // share one qualified name, so the index resolves functions by signature rather than by name.
+    val expects = ExpectIndex(allFilesDeclarations)
 
     // ADR-074 Decision 2: collected from the same funnel input, before the `isExpect` filter drops
     // the paired expect class. `findActualType()` resolves the alias to its target
@@ -599,7 +595,7 @@ class NugetProcessor(
         boundInterfaces = context.boundInterfaces,
       ),
     )
-    val forwardPlanner = ForwardCallablePlanner(forwardClassifier, expectsByName)
+    val forwardPlanner = ForwardCallablePlanner(forwardClassifier, expects)
     val forwardPropertyPlanner = ForwardPropertyPlanner(forwardClassifier)
     val ordinaryCatalog: ForwardCallablePlanCatalog = forwardPlanner.catalog(
       classes, functions, extensionFunctions, objects, properties, extensionProperties, valueClasses,
@@ -665,7 +661,7 @@ class NugetProcessor(
       functions, genericFunctions, extensionFunctions, extensionProperties,
       allClasses, enums, interfaces, sealedClasses, objects, properties,
       constProperties, valueClasses, suspendFunctions, callableCatalog, deps, reachableInterfaces,
-      expectsByName,
+      expects,
     )
 
     // ADR-064: an ERROR_* diagnostic (e.g. ERROR_CSHARP_SIGNATURE_COLLISION, ADR-034) already
@@ -762,7 +758,7 @@ class NugetProcessor(
     callableCatalog: ForwardCallablePlanCatalog,
     deps: Dependencies,
     reachableInterfaces: List<KSClassDeclaration>,
-    expectsByName: Map<String, KSDeclaration>,
+    expects: ExpectIndex,
   ): CsharpBindings {
     val cirFile: CirFile = translate(
       context,
@@ -782,7 +778,7 @@ class NugetProcessor(
       suspendFunctions,
       callableCatalog,
       reachableInterfaces,
-      expectsByName,
+      expects,
     )
 
     val csharp: String = renderer.render(cirFile)

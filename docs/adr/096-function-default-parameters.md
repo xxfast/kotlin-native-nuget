@@ -201,13 +201,24 @@ and nothing else** (confirmed with the human, 2026-08-14). Per-parameter has-a-d
 
 1. the parameter's own `hasDefault`; else
 2. **only when the entry being planned is a TOP_LEVEL one**, the positionally matching parameter of
-   `expectsByName["$package.$name"] as? KSFunctionDeclaration`, consulted **only** when that
-   `(package, name)` has exactly one declared namesake in the ADR-095 counter, the resolved expect
-   is not an extension (`extensionReceiver == null`), and its parameter count equals the actual's.
-   The uniqueness guard is not optional: `expectsByName` is a `.toMap()` keyed by qualified name, so
-   two `expect` overloads of one name silently collapse to the last one (**Verified in source**,
-   `NugetProcessor.kt:284-289`), and consulting it for an overload set would attribute one
-   declaration's defaults to another.
+   the single `expect fun` that the actual's `ExpectIndex.functionOrNull(actual)` resolves to.
+
+**2026-09-07 amendment.** `expectsByName["$package.$name"] as? KSFunctionDeclaration` and its
+uniqueness guard, as written above, were never implemented. Before implementation it was flagged
+that the qualified-name index is a `.toMap()`, so two overloaded top-level `expect fun`s sharing a
+name would collapse onto one entry; the guard here (skip the lookup whenever more than one declared
+namesake exists) was the mitigation on paper. What shipped instead replaces the index: `ExpectIndex`
+(`nuget-processor/src/main/kotlin/io/github/xxfast/kotlin/native/nuget/processor/ExpectIndex.kt`)
+keeps *every* `expect` declaration under a qualified name, and `functionOrNull(actual)` picks the
+one candidate whose parameter count, positional parameter names, and positional parameter types
+(resolved qualified name, nullability, type arguments) match the actual, mirroring the criteria the
+Kotlin compiler's expect/actual matcher uses (**Inferred** from the language's actualization rules,
+not spiked). Zero or multiple matches resolve to `null`, same "no defaults" fallback as before. This
+means every overloaded top-level `expect fun` gets its **own** omitting overloads from its **own**
+defaults, not none: the uniqueness guard's "silently attribute one overload's defaults to another"
+failure mode never shipped, and there was nothing to guard against by the time of release. The
+`expect`/`actual` class-primary-constructor lookup (`classOrNull`, ADR-091, previous section) is
+unaffected: a qualified name still names at most one class, so no signature rule applies there.
 
 No other route consults `expectsByName` in v1. Class methods, `object` members, extension functions
 and companion members read `hasDefault` off the exported (actual) declaration only, which for an

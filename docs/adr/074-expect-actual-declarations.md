@@ -382,6 +382,11 @@ Kotlin requires an `expect` and its `actual` to live in the same module, so with
 the lookup always hits; the fallback is defensive only (**Inferred** from the language rule, not
 spiked).
 
+**2026-09-07 amendment.** For a function, the lookup is by signature, not by qualified name alone
+([ADR-096](096-function-default-parameters.md)'s `ExpectIndex.functionOrNull`), so two overloaded
+top-level `expect fun`s declared in different files each name their own file rather than one
+collapsing onto the other's.
+
 ### Decision 4: the failure mode for everything still unsupported
 
 - The two duplicate guards stay as invariants but must be unreachable through this path. Upgrade
