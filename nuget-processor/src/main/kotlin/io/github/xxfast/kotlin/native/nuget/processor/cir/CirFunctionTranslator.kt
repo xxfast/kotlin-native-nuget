@@ -6,6 +6,7 @@ import com.google.devtools.ksp.symbol.KSClassDeclaration
 import com.google.devtools.ksp.symbol.KSFunctionDeclaration
 import com.google.devtools.ksp.symbol.KSType
 import com.google.devtools.ksp.symbol.Modifier
+import io.github.xxfast.kotlin.native.nuget.processor.csharpParameterName
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnostic
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnosticKind
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnosticSink
@@ -67,7 +68,9 @@ internal fun translateFunction(
   val params: List<CirParameter> = func.parameters.map { param ->
     val resolved: KSType = param.type.resolve().expandAliases()
     val kotlinType: String = resolved.declaration.simpleName.asString()
-    val name: String = param.name?.asString() ?: "_"
+    // ADR-078 legacy route: the escape runs here, at construction, because the renderer prints
+    // `CirParameter.name` for both the declaration and the native-call argument list.
+    val name: String = (param.name?.asString() ?: "_").csharpParameterName()
     val enumDecl: KSClassDeclaration? = (resolved.declaration as? KSClassDeclaration)
       ?.takeIf { it.classKind == ClassKind.ENUM_CLASS }
 
@@ -657,7 +660,7 @@ internal fun translateSuspendFunction(
 
   val params: List<CirParameter> = func.parameters.map { param ->
     val kotlinType: String = param.type.resolve().expandAliases().declaration.simpleName.asString()
-    CirParameter(param.name?.asString() ?: "_", mapParamType(kotlinType))
+    CirParameter((param.name?.asString() ?: "_").csharpParameterName(), mapParamType(kotlinType))
   }
 
   val asyncReturnType: String = if (isUnit) "" else {
@@ -740,7 +743,9 @@ internal fun translateGenericFunction(
   if (paramIndex == -1) return emptyList()
 
   val param = func.parameters[paramIndex]
-  val paramName: String = param.name?.asString() ?: "value"
+  // Printed into the CirParameter of every instantiation import *and* into the hand-built body
+  // below, which declares its own `IntPtr error` local; escaping once here keeps the two in step.
+  val paramName: String = (param.name?.asString() ?: "value").csharpParameterName()
 
   val returnsGenericClass: Boolean = returnDecl?.typeParameters?.isNotEmpty() == true
 

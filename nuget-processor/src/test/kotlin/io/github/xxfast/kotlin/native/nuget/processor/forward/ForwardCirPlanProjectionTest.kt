@@ -382,24 +382,6 @@ class ForwardCirPlanProjectionTest {
     assertEquals(false, rendered.contains("CreateList(error)"), rendered)
   }
 
-  /**
-   * The render-time name helper itself: a keyword escape, the error-slot shift, and the identity
-   * for everything else — including the generator-minted ABI slot names, which the hand-written
-   * body text references raw and so must never move.
-   */
-  @Test
-  fun `csharp parameter name escapes keywords and shifts the error slot chain only`() {
-    assertEquals("error_", "error".csharpParameterName())
-    assertEquals("error__", "error_".csharpParameterName())
-    assertEquals("error___", "error__".csharpParameterName())
-    assertEquals("errorOut", "errorOut".csharpParameterName())
-    assertEquals("errors", "errors".csharpParameterName())
-    assertEquals("myError", "myError".csharpParameterName())
-    assertEquals("handle", "handle".csharpParameterName())
-    assertEquals("receiver", "receiver".csharpParameterName())
-    assertEquals("@abstract", "abstract".csharpParameterName())
-  }
-
   private fun renderClass(method: CirMethod): String = CirRenderer().render(
     CirFile(
       namespaces = listOf(

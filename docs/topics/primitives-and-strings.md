@@ -183,13 +183,24 @@ using var article = new Issue65Article(
     title: "Cat Naps Through Budget Address");
 ```
 
-<note>
-    <p>Only the ordinary synchronous forward callable plan is covered: constructors (including a
-    data class's <code>Copy</code>), class methods, top-level and extension functions, and
-    value-class members. A keyword-named parameter on a legacy route (suspend, <code>Flow</code>,
-    lambda, sealed, generic, interface-bridge) is not yet escaped; see
-    <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md">ROADMAP.md</a>.</p>
-</note>
+The escape is not limited to the ordinary synchronous forward callable plan. Every legacy route
+that predates it (suspend, `Flow`/`MutableStateFlow`, lambda parameters, sealed and generic
+returns, interface declarations) escapes and renames the same way, from the same
+`csharpParameterName()` helper applied once at construction, so the declaration and every call
+site agree by construction. From `test-library/.../test/routes/KeywordRoutesSample.kt` and
+`Interop.cs`:
+
+```kotlin
+class KeywordRoutes {
+  suspend fun load(params: String): String = params
+}
+```
+
+```C#
+private static extern IntPtr Native_LoadAsync(IntPtr handle, IntPtr scopeHandle, [MarshalAs(UnmanagedType.LPUTF8Str)] string @params, IntPtr callback, IntPtr userData);
+
+public Task<string> LoadAsync(string @params, CancellationToken cancellationToken = default)
+```
 
 A different collision applies to one specific name. Every generated synchronous call also carries a
 trailing `out IntPtr error` exception slot ([Exceptions](exceptions.md)), so a Kotlin parameter
@@ -217,7 +228,17 @@ private static extern IntPtr Native_Create([MarshalAs(UnmanagedType.LPUTF8Str)] 
 public Issue66StoryState(string? error_, string title, int edition)
 ```
 
-A named argument at the call site uses the renamed form: `new Issue66StoryState(error_: "...", title: "...")`. Positional calls are unaffected. The rename shares the same ceiling as the keyword escaping above: only the ordinary synchronous forward callable plan renders it. On a suspend, `Flow`, lambda, sealed, generic, or interface-bridge route, an `error`-named parameter is not renamed, and still collides wherever that route also declares an `error` identifier in scope.
+A named argument at the call site uses the renamed form: `new Issue66StoryState(error_: "...", title: "...")`. Positional calls are unaffected. The rename applies on every legacy route too, including one whose generated body declares its own `out IntPtr error` local, like the `MutableStateFlow` write lambda below: the rename is a property of the parameter's own name, so it applies whether or not that particular route happens to collide today.
+
+```kotlin
+fun state(error: Int): MutableStateFlow<Int> = states.getOrPut(error) { MutableStateFlow(error) }
+```
+
+```C#
+private static extern void Native_StateSetValue(IntPtr handle, int error_, int value, out IntPtr error);
+
+public KotlinMutableStateFlow<int> State(int error_)
+```
 
 ## Using it from C#
 
@@ -944,14 +965,6 @@ public void PreviousChipId_NullableVarProperty_HoldsGuidEmptyDistinctlyFromNull(
   The binary two-`INT64` wire considered and rejected in [ADR-106](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/106-uuid-mapping.md)
   is a possible follow-up if the per-crossing string allocation ever matters, tracked in
   [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md) Phase 4.
-- A keyword-named parameter is only escaped on the ordinary synchronous forward callable plan
-  (constructors, class methods, top-level/extension functions, value-class members). The same
-  parameter on a suspend method, a `Flow<T>`-returning member, a lambda/callback parameter, a sealed
-  member, a generic member, or an interface-bridge member still generates invalid C#. An
-  `error`-named parameter is renamed on the same ordinary plan only; on the other routes it is
-  unrenamed and collides wherever that route's own wrapper also declares an `error` identifier in
-  scope. Tracked in [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md)
-  Phase 3.
 
 <seealso>
     <category ref="related">
