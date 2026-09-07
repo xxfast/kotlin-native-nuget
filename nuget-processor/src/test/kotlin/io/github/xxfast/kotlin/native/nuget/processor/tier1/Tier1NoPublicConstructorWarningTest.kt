@@ -16,10 +16,12 @@ import kotlin.test.assertTrue
  * The two skip families reach the same outcome by different routes, so both are pinned:
  * - (a) a `droppedFromCSharp = true` skip (`UNDECLARED_ENUM`), which already warns *per
  *   constructor* but never said the type ends up unconstructible;
- * - (b) a sealed-*interface*-typed constructor parameter (`SEALED_POSITION`), which used to claim
+ * - (b) an ADR-112-ineligible sealed-*interface*-typed constructor parameter (`SEALED_POSITION`),
+ *   which used to claim
  *   a legacy deferral and so never reached `droppedCallables`; it now warns per constructor as
  *   well, and this test pins that the type is still kept either way. A sealed *class* parameter is
- *   deliberately not the fixture here: it binds since ADR-105 scope (d), so it would construct.
+ *   deliberately not the fixture here: it binds since ADR-105 scope (d), so it would construct, and
+ *   so does an ELIGIBLE sealed interface since ADR-112.
  *
  * The controls guard against over-firing: a class where one of two constructors survives (c) and
  * an abstract class (d) are both constructible-or-not-by-design, and a factory returning the
@@ -39,15 +41,19 @@ class Tier1NoPublicConstructorWarningTest {
       val label: String = mode.name
     }
 
+    open class Haunting
+
+    // ADR-112: INELIGIBLE on purpose (`Nobody` has a second superclass), so a `Ghost` parameter
+    // still skips as SEALED_POSITION and `Drawing` still ends up unconstructible.
     sealed interface Ghost {
-      data object Nobody : Ghost
+      class Nobody : Haunting(), Ghost
     }
 
     class Drawing(ghost: Ghost) {
       val label: String = "drawing"
     }
 
-    fun make(): Drawing = Drawing(Ghost.Nobody)
+    fun make(): Drawing = Drawing(Ghost.Nobody())
 
     class Meter(mode: Owner.Mode) {
       constructor(ticks: Int) : this(Owner.Mode.ON)

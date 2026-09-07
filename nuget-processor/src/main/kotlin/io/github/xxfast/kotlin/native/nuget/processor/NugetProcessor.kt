@@ -88,7 +88,11 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeInter
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardInterfaceBridgePlanner
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardPropertyPlanner
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardReachabilityBucket
+import io.github.xxfast.kotlin.native.nuget.processor.forward.isEligibleSealedInterface
+import io.github.xxfast.kotlin.native.nuget.processor.forward.isEligibleSealedType
+import io.github.xxfast.kotlin.native.nuget.processor.forward.isSealedInterface
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isSealedSubclass
+import io.github.xxfast.kotlin.native.nuget.processor.forward.sealedInterfaceIneligibility
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardReachabilityClosure
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardReachabilityResult
 import io.github.xxfast.kotlin.native.nuget.processor.forward.addForwardKotlinPlanExport
@@ -427,12 +431,15 @@ class NugetProcessor(
       .filter { it.parentDeclaration == null }
       .filter { it.isValueClass() }
 
+    // ADR-112: the kind test used to be `classKind == CLASS`, so a sealed INTERFACE fell through
+    // to `rootInterfaces` below and was declared as a bare `IShape` nothing could be typed with.
+    // An eligible one (`isEligibleSealedType`) enters here instead and renders exactly like a
+    // sealed class; an ineligible one stays on the interface route and says why.
     val rootSealedClasses: List<KSClassDeclaration> = allDeclarations
       .filterIsInstance<KSClassDeclaration>()
       .filter { it.getVisibility() == Visibility.PUBLIC }
-      .filter { it.classKind == ClassKind.CLASS }
       .filter { it.parentDeclaration == null }
-      .filter { it.modifiers.contains(Modifier.SEALED) }
+      .filter { it.isEligibleSealedType() }
 
     val rootObjects: List<KSClassDeclaration> = allDeclarations
       .filterIsInstance<KSClassDeclaration>()
@@ -451,6 +458,10 @@ class NugetProcessor(
       .filter { it.getVisibility() == Visibility.PUBLIC }
       .filter { it.classKind == ClassKind.INTERFACE }
       .filter { it.parentDeclaration == null }
+      // ADR-112: an eligible sealed interface is declared by `rootSealedClasses` above as an
+      // abstract class. Declaring it here as well would emit both that class and the ADR-040
+      // backing wrapper under the same name (CS0101 in every consumer).
+      .filter { !it.isEligibleSealedInterface() }
       // ADR-088: a bound interface's ADR-070 stub is now `public`, so without this it would enter
       // the forward export scan and be re-projected as a DUPLICATE `IIFeedable` + backing wrapper
       // (the shipped enum-duplication precedent, deliberately not extended). The classifier maps
@@ -593,6 +604,31 @@ class NugetProcessor(
     val enums: List<KSClassDeclaration> = rootEnums + dependenciesIn(ForwardReachabilityBucket.ENUM)
     val interfaces: List<KSClassDeclaration> =
       rootInterfaces + dependenciesIn(ForwardReachabilityBucket.INTERFACE)
+
+    // ADR-112: an ineligible sealed interface is still declared as `I<Name>`, and every member
+    // typed with it still skips as SKIPPED_SEALED_POSITION, but that skip can only say there is no
+    // discriminator -- never why. Named here, once, at the declaration, with the disqualifying
+    // reason, before the `hasNothingToProcess` early return so it reaches NugetDiagnostics.json
+    // even in a module that generates nothing else.
+    ForwardDiagnosticSink.emit(
+      interfaces
+        .filter { it.isSealedInterface() }
+        .mapNotNull { iface ->
+          val reason: String = iface.sealedInterfaceIneligibility() ?: return@mapNotNull null
+          val name: String = iface.qualifiedName?.asString() ?: iface.simpleName.asString()
+          ForwardDiagnostic(
+            kind = ForwardDiagnosticKind.SKIPPED_INELIGIBLE_SEALED_INTERFACE,
+            // ADR-066, verified: a klib declaration has no containing file.
+            symbol = iface.takeIf { it.containingFile != null },
+            declaration = name,
+            reason = "sealed interface `$name` is declared as " +
+                "`I${iface.simpleName.asString()}` but cannot be reconstructed in C#: $reason",
+            hint = "make every subclass a nested class or object with no other superclass and no " +
+                "sub-interfaces, or declare it as a sealed class (ADR-112)",
+          )
+        },
+      logger,
+    )
 
     // Every root bucket above filters `parentDeclaration == null`, and the ADR-066 closure now
     // refuses to admit a nested dependency declaration for the same reason, so a public nested

@@ -25,6 +25,56 @@ internal fun KSClassDeclaration.declaredSuperClass(): KSClassDeclaration? = supe
   }
 
 /**
+ * ADR-112: the one eligibility test for a `sealed interface` taking the ADR-009 sealed-class route,
+ * and the reason it is refused when it cannot. `null` means eligible.
+ *
+ * Only meaningful for a sealed interface; every other declaration answers `null` here and is gated
+ * by [isEligibleSealedType] instead.
+ *
+ * The generated shape is an `abstract class` with nested `sealed` subclasses and one flat
+ * `FromHandle` switch, so the hierarchy has to be expressible as exactly that: no type parameters
+ * (the sealed route renders none), every subclass nested directly in the interface (that is how
+ * `nestedCsName` spells a reference to it), no second superclass (a C# nested subclass can only
+ * extend the abstract base) and no sub-interface (the discriminator is a flat `when` over
+ * `getSealedSubclasses()`, and a sub-interface has no single C# class to construct).
+ */
+internal fun KSClassDeclaration.sealedInterfaceIneligibility(): String? {
+  if (!isSealedInterface()) return null
+  if (typeParameters.isNotEmpty()) return "it has type parameters"
+  getSealedSubclasses().forEach { subclass ->
+    val subName: String = subclass.simpleName.asString()
+    if (subclass.classKind == ClassKind.INTERFACE) return "subclass `$subName` is an interface"
+    if (subclass.parentDeclaration?.qualifiedName?.asString() != qualifiedName?.asString()) {
+      return "subclass `$subName` is declared outside the sealed interface"
+    }
+    val base: KSClassDeclaration? = subclass.declaredSuperClass()
+    if (base != null) {
+      val baseName: String = base.qualifiedName?.asString() ?: base.simpleName.asString()
+      return "subclass `$subName` extends another class `$baseName`"
+    }
+  }
+  return null
+}
+
+/** A `sealed interface`, eligible or not. */
+internal fun KSClassDeclaration.isSealedInterface(): Boolean =
+  classKind == ClassKind.INTERFACE && modifiers.contains(Modifier.SEALED)
+
+/** ADR-112: a sealed interface the ADR-009 sealed-class route can carry. */
+internal fun KSClassDeclaration.isEligibleSealedInterface(): Boolean =
+  isSealedInterface() && sealedInterfaceIneligibility() == null
+
+/**
+ * The sealed types the ADR-009 route owns: a sealed *class*, or (ADR-112) an eligible sealed
+ * interface. The single test behind `rootSealedClasses`, the reachability closure's bucket, the
+ * classifier's discriminator and [isSealedSubclass], because four hand-copied `classKind == CLASS`
+ * conditions are how a sealed interface came to be claimed by two routes and finished by neither.
+ */
+internal fun KSClassDeclaration.isEligibleSealedType(): Boolean =
+  modifiers.contains(Modifier.SEALED) &&
+      (classKind == ClassKind.CLASS || isEligibleSealedInterface())
+
+/**
  * Whether this class is a subclass of a sealed class, wherever it is *declared*: nested inside its
  * base (`Shape.Circle`) or beside it at top level (`data class Label : Shape()`).
  *
@@ -39,9 +89,20 @@ internal fun KSClassDeclaration.declaredSuperClass(): KSClassDeclaration? = supe
  * Ungated on purpose ([declaredSuperClass], not [forwardSuperClass]): a base outside the export set
  * still owns its subclasses, and admitting the subclass as a plain class in that case would emit
  * the very duplicate this predicate exists to prevent.
+ *
+ * ADR-112: a subclass of a sealed *interface* is one too, but only when that interface is
+ * [isEligibleSealedInterface] and therefore actually declared by the sealed route.
+ * [declaredSuperClass] cannot answer this: it keeps only `CLASS` supertypes, so the interface is
+ * invisible to it, and the subclass used to read as an ordinary nested class (refused by the
+ * closure, classified `Unsupported`, reported `SKIPPED_NESTED_DECLARATION`). An *ineligible*
+ * sealed interface still has no sealed route, so its subclasses keep exactly that handling.
  */
 internal fun KSClassDeclaration.isSealedSubclass(): Boolean =
-  declaredSuperClass()?.modifiers?.contains(Modifier.SEALED) == true
+  declaredSuperClass()?.modifiers?.contains(Modifier.SEALED) == true ||
+      superTypes
+        .map { type -> type.resolve().declaration }
+        .filterIsInstance<KSClassDeclaration>()
+        .any { it.isEligibleSealedInterface() }
 
 /**
  * The one has-superclass predicate the forward direction uses to decide which of a class's

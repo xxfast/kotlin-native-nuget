@@ -14,11 +14,12 @@ import kotlin.test.assertTrue
  * `NugetMarshal.FromHandle<T>`, which dispatches to the ADR-009 discriminator via the issue-#40
  * `viaFromHandle` factory entry.
  *
- * A sealed **interface** stays skipped, and this fixture keeps `filters: List<Filter>` to pin that:
- * `rootSealedClasses` (`NugetProcessor.kt:409`) filters `classKind == CLASS`, so a sealed interface
- * never reaches the ADR-009 renderer and has no `FromHandle` to reconstruct through. The classifier
- * therefore mints its `sealedHandle` only for a sealed class, and the property takes the same named
- * `SKIPPED_UNSUPPORTED_PROPERTY` route it always did, naming the offending component.
+ * An ADR-112-INELIGIBLE sealed **interface** stays skipped, and this fixture keeps
+ * `filters: List<Filter>` to pin that: only a sealed type `rootSealedClasses` admits reaches the
+ * ADR-009 renderer and gets a `FromHandle` to reconstruct through, and `Filter`'s subclass carries
+ * a second superclass no nested C# subclass can express. The classifier therefore mints no
+ * `sealedHandle` for it, and the property takes the same named `SKIPPED_UNSUPPORTED_PROPERTY`
+ * route it always did, naming the offending component.
  */
 class Tier1SealedCollectionPropertyTest {
 
@@ -29,8 +30,13 @@ class Tier1SealedCollectionPropertyTest {
       data class Circle(val radius: Double) : Shape()
     }
 
+    open class Criterion
+
+    // ADR-112: INELIGIBLE on purpose (`ById` has a second superclass), so the sealed route never
+    // declares `Filter` and the component keeps skipping. An eligible sealed interface binds as a
+    // collection component like a sealed class does (Tier1SealedInterfaceTest).
     sealed interface Filter {
-      class ById(val id: String) : Filter
+      class ById(val id: String) : Criterion(), Filter
     }
 
     data class Album(
@@ -93,7 +99,7 @@ class Tier1SealedCollectionPropertyTest {
   }
 
   @Test
-  fun `a sealed interface component still skips named`() {
+  fun `an ineligible sealed interface component still skips named`() {
     val result = Tier1Harness.run(source)
 
     assertFalse(

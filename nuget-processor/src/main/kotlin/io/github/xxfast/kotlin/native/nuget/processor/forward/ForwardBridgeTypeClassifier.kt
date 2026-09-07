@@ -174,13 +174,14 @@ internal class ForwardBridgeTypeClassifier(
       // that can bridge a sealed base -- today a property -- unwraps it without the classifier
       // becoming position-aware.
       //
-      // Kind-aware it must be, though, which ADR-105 does not say: `rootSealedClasses`
-      // (NugetProcessor.kt:409) filters `classKind == CLASS`, so a sealed *interface* never
-      // reaches the ADR-009 renderer and has no `FromHandle` discriminator to reconstruct
-      // through; and this branch fires ahead of `objectHandle()`'s `exportedObjectHandles`
-      // membership test (:150), so an out-of-scope sealed class would otherwise be handed a C#
-      // spelling nothing generates. Both keep the bare protocol and skip exactly as before.
-      val discriminated: Boolean = classDeclaration.classKind == ClassKind.CLASS &&
+      // Kind-aware it must be, though, which ADR-105 does not say: only a sealed type
+      // `rootSealedClasses` admits reaches the ADR-009 renderer and gets a `FromHandle`
+      // discriminator to reconstruct through, which since ADR-112 is a sealed class or an
+      // ELIGIBLE sealed interface; and this branch fires ahead of `objectHandle()`'s
+      // `exportedObjectHandles` membership test (:150), so an out-of-scope sealed type would
+      // otherwise be handed a C# spelling nothing generates. Both keep the bare protocol and skip
+      // exactly as before.
+      val discriminated: Boolean = classDeclaration.isEligibleSealedType() &&
           qualifiedName in context.exportedObjectHandles
       return BridgeType.SpecializedProtocol(
         "$SEALED_HELPER_PREFIX$qualifiedName",
