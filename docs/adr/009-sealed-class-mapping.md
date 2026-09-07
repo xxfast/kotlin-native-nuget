@@ -131,6 +131,15 @@ projected by the same shared emitter and C# projection an ordinary class propert
 no plan shape: the discriminator export and `FromHandle` dispatcher, `Dispose`, and the
 data-class `equals`/`hashCode`/`toString` methods.
 
+### Amendment (2026-09-07): a `data object` subclass binds its data methods like a data class subclass
+
+A `data object` sealed subclass is a data class as far as Kotlin's generated members go, so its C#
+wrapper now binds the same `_equals`/`_hashcode`/`_tostring` exports a `data class` subclass binds,
+instead of a fixed `ToString()` literal and no `Equals`/`GetHashCode` at all. The prior rendering
+left those three Kotlin exports orphaned and meant two C# wrappers over the one Kotlin singleton were
+never `Equals`, since every read mints a fresh wrapper and reference equality never held.
+`CirSealedRenderer` now treats a `data object` the same as a `data class` subclass for this purpose.
+
 ### Amendment (2026-09-07): an eligible sealed interface takes this same route
 
 [ADR-112](112-sealed-interface-mapping.md) extends this route to a `sealed interface` whose subclasses are all nested classes/objects with no other superclass and no sub-interfaces: it renders exactly as above, `public abstract class Pulse` with nested `sealed` subclasses and `Pulse.FromHandle`, and no C# interface is declared for it.

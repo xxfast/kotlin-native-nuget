@@ -1,3 +1,5 @@
+using System.Reflection;
+
 using TestLibrary.Issue54;
 
 namespace IntegrationTests;
@@ -311,5 +313,187 @@ public class Issue54Tests
 
         // Kotlin-side observation: the handles landed as real shapes, not as an echo of the getter.
         Assert.Equal("circle:7.5,empty", board.Summary());
+    }
+    /// <summary>
+    /// The <c>data object</c> arm going <em>back into</em> Kotlin at the scalar sealed setter. Every
+    /// existing setter fact writes a <c>Circle</c>; the payload-free singleton is the one whose write
+    /// path is unpinned, because a subclass with no state has nothing on the wire except the handle
+    /// itself. The target drawing is built with Oreo curled at <c>7.5</c> as its <c>Current</c>, so
+    /// the transition Circle -&gt; Empty is observable rather than a no-op (both fixture producers
+    /// already start on <see cref="Issue54Shape.Empty"/>).
+    /// </summary>
+    [Fact]
+    public void Current_ScalarSealedSetter_WritesTheDataObjectSingletonBackIntoKotlin()
+    {
+        using Issue54Drawing sleeping = Issue54Sample.SleepingCats();
+        using Issue54Drawing curled = Issue54Sample.CurledCats();
+
+        using Issue54Drawing built = new Issue54Drawing(
+            curled.Shape,
+            curled.Maybe,
+            sleeping.Shapes,
+            curled.Shape);
+
+        using (Issue54Shape oreo = built.Current)
+        {
+            Assert.Equal(7.5, Assert.IsType<Issue54Shape.Circle>(oreo).Radius);
+        }
+
+        built.Current = curled.Current;
+
+        using Issue54Shape mylo = built.Current;
+        Assert.IsType<Issue54Shape.Empty>(mylo);
+
+        // Kotlin-side observation: `describe`'s `Empty` branch is an equality test against the
+        // singleton, so it only answers "empty" if the handle dereferenced to the real object.
+        Assert.Equal("empty", Issue54Shapes.Describe(mylo));
+    }
+
+    /// <summary>
+    /// The singleton at a bare sealed parameter, sourced from <c>curledCats()</c> so the handle is
+    /// minted by a different producer than the one the existing payload-free parameter fact uses.
+    /// Mylo sprawls identically in either drawing; a <c>data object</c> has exactly one instance, so
+    /// both handles must deref to it.
+    /// </summary>
+    [Fact]
+    public void Describe_DataObjectAtABareParameter_ArrivesAsTheSingleton()
+    {
+        using Issue54Drawing curled = Issue54Sample.CurledCats();
+        using Issue54Shape mylo = curled.Current;
+
+        Assert.Equal("empty", Issue54Shapes.Describe(mylo));
+    }
+
+    /// <summary>
+    /// Aliasing: two <em>separate</em> C# wrappers over the same Kotlin singleton, in one collection
+    /// parameter. Every existing collection-parameter fact passes two distinct shapes, so nothing
+    /// pins that the boxing path tolerates the same underlying object twice. Mylo cannot be in two
+    /// places at once, but two handles to him can.
+    /// </summary>
+    [Fact]
+    public void Count_TheSameDataObjectTwice_BoxesBothHandlesIntoTheKotlinList()
+    {
+        using Issue54Drawing curled = Issue54Sample.CurledCats();
+
+        Assert.Equal(2, Issue54Shapes.Count(new List<Issue54Shape> { curled.Current, curled.Current }));
+    }
+
+    /// <summary>
+    /// Equality on a <c>data object</c> arm. Every read of <c>Current</c> mints a fresh C# wrapper
+    /// over the one Kotlin singleton, so the two wrappers are never reference-equal. Equality
+    /// therefore has to come from the <c>issue54shape_empty_equals</c> / <c>_hashcode</c> exports,
+    /// which the sealed renderer binds for a <c>data object</c> exactly as for a <c>data class</c>.
+    /// Mylo is Mylo whichever hand you read him with.
+    /// </summary>
+    [Fact]
+    public void Empty_TwoSeparateReadsOfTheSingleton_AreEqual()
+    {
+        using Issue54Drawing curled = Issue54Sample.CurledCats();
+
+        using Issue54Shape first = curled.Current;
+        using Issue54Shape second = curled.Current;
+
+        Issue54Shape.Empty mylo = Assert.IsType<Issue54Shape.Empty>(first);
+        Issue54Shape.Empty alsoMylo = Assert.IsType<Issue54Shape.Empty>(second);
+
+        Assert.NotSame(mylo, alsoMylo);
+        Assert.Equal(mylo, alsoMylo);
+        Assert.Equal(mylo.GetHashCode(), alsoMylo.GetHashCode());
+    }
+
+    /// <summary>
+    /// <c>ToString</c> is the one member the renderer does emit for a <c>data object</c>, as a fixed
+    /// literal rather than a call to <c>issue54shape_empty_tostring</c>. Kept as the control beside
+    /// the equality facts above so a regression in either is distinguishable.
+    /// </summary>
+    [Fact]
+    public void Empty_ToString_NamesTheDataObject()
+    {
+        using Issue54Drawing curled = Issue54Sample.CurledCats();
+        using Issue54Shape mylo = curled.Current;
+
+        Assert.Contains("Empty", mylo.ToString());
+    }
+
+    /// <summary>
+    /// Control for the equality facts: the <c>data class</c> arm of the same sealed base already
+    /// binds <c>Equals</c> / <c>GetHashCode</c> through the native exports, so two wrappers over
+    /// equal payloads compare equal. Oreo, read twice, is curled to the same radius both times.
+    /// </summary>
+    [Fact]
+    public void Circle_TwoReadsWithEqualPayloads_AreEqual()
+    {
+        using Issue54Drawing curled = Issue54Sample.CurledCats();
+
+        using Issue54Shape first = curled.Shape;
+        using Issue54Shape second = curled.Shape;
+
+        Issue54Shape.Circle oreo = Assert.IsType<Issue54Shape.Circle>(first);
+        Issue54Shape.Circle alsoOreo = Assert.IsType<Issue54Shape.Circle>(second);
+
+        Assert.NotSame(oreo, alsoOreo);
+        Assert.Equal(oreo, alsoOreo);
+        Assert.Equal(oreo.GetHashCode(), alsoOreo.GetHashCode());
+    }
+
+    /// <summary>
+    /// Cross-arm inequality, which is the <c>return false</c> tail of the generated
+    /// <c>Equals(object)</c>: Oreo curled is not Mylo sprawled. Coverage showed that tail cold on
+    /// <c>Circle</c>, and it is the same line the renderer must emit for <c>Empty</c>, so pinning it
+    /// here says what the fix has to preserve on both arms.
+    /// </summary>
+    [Fact]
+    public void Shapes_OnDifferentArms_AreNotEqual()
+    {
+        using Issue54Drawing curled = Issue54Sample.CurledCats();
+
+        using Issue54Shape oreo = curled.Shape;
+        using Issue54Shape mylo = curled.Current;
+
+        Assert.NotEqual<Issue54Shape>(oreo, mylo);
+        Assert.NotEqual<Issue54Shape>(mylo, oreo);
+    }
+
+    /// <summary>
+    /// <c>Circle.ToString()</c> goes through <c>issue54shape_circle_tostring</c> and
+    /// <c>Marshal.PtrToStringUTF8</c>, unlike <c>Empty</c>'s fixed literal. Coverage showed this
+    /// export never called; it is the third member of the data-class family the renderer owes
+    /// <c>Empty</c>, so the control belongs beside the other two.
+    /// </summary>
+    [Fact]
+    public void Circle_ToString_ComesFromTheNativeExport()
+    {
+        using Issue54Drawing curled = Issue54Sample.CurledCats();
+        using Issue54Shape oreo = curled.Shape;
+
+        Assert.Contains("7.5", oreo.ToString());
+    }
+
+    /// <summary>
+    /// The shape of the renderer bug without running the wire: <c>Equals(object)</c> must be
+    /// <em>declared</em> on the generated <see cref="Issue54Shape.Empty"/>, not inherited from
+    /// <see cref="object"/>. Today <c>GetMethod</c> resolves <c>System.Object.Equals</c>, which is
+    /// the reference-equality behaviour the docs assert is "enough for a singleton".
+    /// </summary>
+    [Fact]
+    public void Empty_EqualsObject_IsDeclaredOnTheGeneratedSubclass()
+    {
+        MethodInfo? equals = typeof(Issue54Shape.Empty).GetMethod("Equals", new[] { typeof(object) });
+
+        Assert.NotNull(equals);
+        Assert.Equal(typeof(Issue54Shape.Empty), equals.DeclaringType);
+    }
+
+    /// <summary>
+    /// Same for <c>GetHashCode</c>: a type that overrides <c>Equals</c> without it is a hashing bug
+    /// waiting in any <c>HashSet&lt;Issue54Shape&gt;</c>.
+    /// </summary>
+    [Fact]
+    public void Empty_GetHashCode_IsDeclaredOnTheGeneratedSubclass()
+    {
+        MethodInfo? hashCode = typeof(Issue54Shape.Empty).GetMethod("GetHashCode", Type.EmptyTypes);
+
+        Assert.NotNull(hashCode);
+        Assert.Equal(typeof(Issue54Shape.Empty), hashCode.DeclaringType);
     }
 }
