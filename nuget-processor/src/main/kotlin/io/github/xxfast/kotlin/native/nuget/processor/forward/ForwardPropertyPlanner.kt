@@ -82,13 +82,53 @@ internal class ForwardPropertyPlanner(
     classes: List<KSClassDeclaration>,
     topLevel: List<KSPropertyDeclaration>,
     extensions: List<KSPropertyDeclaration>,
+    sealed: List<KSClassDeclaration> = emptyList(),
   ): List<ForwardPropertyPlan> = buildList {
     classes.forEach { cls ->
       addAll(classProperties(cls))
       addAll(companionProperties(cls))
     }
+    // ADR-111: a sealed subclass is reached only through its base (`classes` excludes it by
+    // `isSealedSubclass`), so nothing double-plans.
+    sealed.forEach { base ->
+      base.getSealedSubclasses().forEach { subclass ->
+        addAll(sealedSubclassProperties(base, subclass))
+      }
+    }
     topLevel.forEach { prop -> topLevelProperty(prop)?.let(::add) }
     extensions.forEach { prop -> extensionProperty(prop)?.let(::add) }
+  }
+
+  /**
+   * ADR-111: a sealed subclass's properties, planned exactly like [classProperties] but keeping
+   * the ADR-009 `${sealed}_${sub}_get_x` export prefix the discriminator, dispose and data-class
+   * exports still use.
+   *
+   * `superClass = null` on purpose: the generated C# subclass extends the *abstract* sealed base,
+   * which carries no members of its own, so a property the Kotlin base declares has to be bound
+   * here. That is also what the legacy `getAllProperties()` loop did.
+   */
+  private fun sealedSubclassProperties(
+    sealed: KSClassDeclaration,
+    subclass: KSClassDeclaration,
+  ): List<ForwardPropertyPlan> {
+    val owner: String = subclass.qualifiedName?.asString() ?: return emptyList()
+    val prefix: String =
+      "${sealed.simpleName.asString().lowercase()}_${subclass.simpleName.asString().lowercase()}"
+    return subclass.getAllProperties()
+      .filter { it.getVisibility() == Visibility.PUBLIC }
+      .filter { prop -> prop.isForwardPlannableMemberOf(subclass, superClass = null) }
+      .mapNotNull { prop ->
+        propertyPlan(
+          symbol = "$owner.${prop.simpleName.asString()}",
+          position = ForwardPropertyPosition.CLASS,
+          receiver = ForwardPropertyReceiver.Handle(owner),
+          prop = prop,
+          getExport = "${prefix}_get_${prop.simpleName.asString()}",
+          setExport = "${prefix}_set_${prop.simpleName.asString()}",
+        )
+      }
+      .toList()
   }
 
   private fun classProperties(cls: KSClassDeclaration): List<ForwardPropertyPlan> {

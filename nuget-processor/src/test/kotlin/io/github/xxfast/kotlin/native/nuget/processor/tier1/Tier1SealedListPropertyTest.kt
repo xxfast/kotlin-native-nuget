@@ -8,8 +8,8 @@ import kotlin.test.assertTrue
  * ROADMAP:64 / issue #39 — a `List<T>` property on a *sealed subclass* renders as a `get { ... }`
  * block, not as an expression-bodied getter wrapping a statement block (which the C# compiler
  * rejects with CS1002/CS1519/CS8124), and carries the `out IntPtr error` slot on both halves of
- * the ABI. A scalar getter on the same subclass stays expression-bodied; since issue #38 every
- * sealed-subclass getter carries the error slot, so the scalar one declares it and passes `out _`.
+ * the ABI. ADR-111 moved these getters onto the shared property plan, so every one of them now
+ * reads the slot back and throws, and a `bool` return carries its `[return: MarshalAs]`.
  */
 class Tier1SealedListPropertyTest {
 
@@ -42,15 +42,14 @@ class Tier1SealedListPropertyTest {
       |            public IReadOnlyList<global::Interop.Item> Items
       |            {
       |                get
+      |                {                IntPtr nativeResult = Native_Get_items(_handle, out IntPtr error);
+      |                if (error != IntPtr.Zero)
       |                {
-      |                    IntPtr listHandle = Native_Get_items(_handle, out IntPtr error);
-      |                    if (error != IntPtr.Zero)
-      |                    {
-      |                        throw NugetErrorNative.BuildException(error);
-      |                    }
+      |                    throw NugetErrorNative.BuildException(error);
+      |                }
       """.trimMargin(),
     )
-    assertContains(result.generatedCSharp, "                    return result.AsReadOnly();")
+    assertContains(result.generatedCSharp, "                return result.AsReadOnly();")
   }
 
   @Test
@@ -67,17 +66,35 @@ class Tier1SealedListPropertyTest {
     )
   }
 
+  /**
+   * ADR-111: the scalar getter is planned like any class property now, so it reads the error slot
+   * and throws instead of discarding it with `out _`, and its import carries the ADR-069
+   * `[return: MarshalAs(UnmanagedType.I1)]` a `bool` return needs (ROADMAP:28).
+   */
   @Test
-  fun `a scalar getter on the same subclass keeps the expression body`() {
+  fun `a bool getter on the same subclass checks the error slot and marshals its return`() {
     val result = Tier1Harness.run(source)
 
     assertContains(
       result.generatedCSharp,
-      "            public bool Refreshing => Native_Get_refreshing(_handle, out _);",
+      """
+      |            public bool Refreshing
+      |            {
+      |                get
+      |                {                bool nativeResult = Native_Get_refreshing(_handle, out IntPtr error);
+      |                if (error != IntPtr.Zero)
+      |                {
+      |                    throw NugetErrorNative.BuildException(error);
+      |                }
+      |                return nativeResult;
+      """.trimMargin(),
     )
     assertContains(
       result.generatedCSharp,
-      "private static extern bool Native_Get_refreshing(IntPtr handle, out IntPtr error);",
+      """
+      |            [return: MarshalAs(UnmanagedType.I1)]
+      |            private static extern bool Native_Get_refreshing(IntPtr handle, out IntPtr error);
+      """.trimMargin(),
     )
   }
 }

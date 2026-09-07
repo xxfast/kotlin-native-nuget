@@ -10,7 +10,6 @@ import com.google.devtools.ksp.symbol.KSFunctionDeclaration
 import com.google.devtools.ksp.symbol.KSNode
 import com.google.devtools.ksp.symbol.KSPropertyDeclaration
 import com.google.devtools.ksp.symbol.KSType
-import com.google.devtools.ksp.symbol.KSTypeArgument
 import com.google.devtools.ksp.symbol.Modifier
 import com.google.devtools.ksp.symbol.Variance
 import com.google.devtools.ksp.symbol.Visibility
@@ -25,6 +24,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCirProperty
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnostic
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnosticKind
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnosticSink
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardPropertyPlan
 import io.github.xxfast.kotlin.native.nuget.processor.forward.declaredSuperClass
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardSuperClass
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isForwardMemberOf
@@ -1068,8 +1068,7 @@ internal fun translateSealedClass(
   cls: KSClassDeclaration,
   context: NugetContext,
   tracker: CollectionHelperTracker,
-  exportedTypes: Set<String>,
-  logger: KSPLogger,
+  callableCatalog: ForwardCallablePlanCatalog,
 ): CirSealedClass {
   val libraryName: String = context.libraryName
   val name: String = cls.simpleName.asString()
@@ -1087,269 +1086,44 @@ internal fun translateSealedClass(
       val properties: List<CirProperty> = if (isDataObject) {
         emptyList()
       } else {
+        val subQualifiedName: String? = subclass.qualifiedName?.asString()
         subclass.getAllProperties()
           .filter { it.getVisibility() == Visibility.PUBLIC }
           .mapNotNull { prop ->
             val propName: String = prop.simpleName.asString()
+            // ADR-111: the plan owns every ordinary property shape here, exactly as it does for an
+            // ordinary class. A type it cannot express is absent from C#, with the property
+            // planner's own SKIPPED_UNSUPPORTED_PROPERTY diagnostic behind it -- no local skip
+            // list decides that any more.
+            val planned: ForwardPropertyPlan? =
+              subQualifiedName?.let { callableCatalog.propertyFor("$it.$propName") }
+            if (planned != null) {
+              tracker.trackProperty(planned)
+              return@mapNotNull ForwardCirPropertyProjection.classProperty(planned)
+            }
+
+            // Residual legacy route: a lambda-typed property, whose Kotlin half is still
+            // hand-spelled in `SealedClassExports` too. It swallows the error slot (`out _`) until
+            // lambda properties migrate for ordinary classes.
             val propTypeResolved: KSType = prop.type.resolve().expandAliases()
-            val propType: String = propTypeResolved.declaration.simpleName.asString()
-            // Issue #50: the simple name above is only ever a *lookup key* into the scalar tables.
-            // Every C# spelling of a reference or enum type goes through `qualifiedElementCsType`,
-            // the same `global::Namespace.Name` rule #47 applied to the top-level class renderer,
-            // so a payload type from another exported package resolves from inside this
-            // hierarchy's namespace (CS0246 otherwise).
-            val csPropType: String = qualifiedElementCsType(propTypeResolved, context)
-            val isNullable: Boolean = propTypeResolved.isMarkedNullable
-            val csPropName: String = propName.replaceFirstChar { it.uppercase() }
-
-            val isEnumType: Boolean = (propTypeResolved.declaration as? KSClassDeclaration)
-              ?.classKind == ClassKind.ENUM_CLASS
-
             val qualifiedTypeName: String? = propTypeResolved.declaration.qualifiedName?.asString()
-
-            // ADR-107 item 9: kotlin.Throwable (or a stdlib subtype) reads as a constructed
-            // System.Exception rebuilt from the error envelope, the mirror of the Kotlin arm in
-            // SealedClassExports. Excluded from isReferenceType below so the "not in the
-            // bridgeable subset" guard does not fire on it.
-            val isThrowableType: Boolean = qualifiedTypeName != null &&
-                qualifiedTypeName !in exportedTypes &&
-                (propTypeResolved.declaration as? KSClassDeclaration)?.let { declaration ->
-                  qualifiedTypeName == "kotlin.Throwable" ||
-                      declaration.getAllSuperTypes().any { supertype ->
-                        supertype.declaration.qualifiedName?.asString() == "kotlin.Throwable"
-                      }
-                } == true
-            val isListType: Boolean = qualifiedTypeName == "kotlin.collections.List"
-            val isMutableListType: Boolean = qualifiedTypeName == "kotlin.collections.MutableList"
-            val isMapType: Boolean = qualifiedTypeName == "kotlin.collections.Map"
-            val isMutableMapType: Boolean = qualifiedTypeName == "kotlin.collections.MutableMap"
-            val isSetType: Boolean = qualifiedTypeName == "kotlin.collections.Set"
-            val isMutableSetType: Boolean = qualifiedTypeName == "kotlin.collections.MutableSet"
-
-            // Issue #50: collection components take the same qualified spelling (a known scalar
-            // keeps its C# primitive, exactly as the simple-name table lookup did before).
-            val typeArguments: List<KSTypeArgument> = propTypeResolved.arguments
-            val listElementType: String? = if (isListType || isMutableListType) {
-              qualifiedElementCsType(typeArguments.firstOrNull()?.type?.resolve(), context)
-            } else null
-
-            val mapKeyType: String? = if (isMapType || isMutableMapType) {
-              qualifiedElementCsType(typeArguments.getOrNull(0)?.type?.resolve(), context)
-            } else null
-
-            val mapValueType: String? = if (isMapType || isMutableMapType) {
-              qualifiedElementCsType(typeArguments.getOrNull(1)?.type?.resolve(), context)
-            } else null
-
-            val setElementType: String? = if (isSetType || isMutableSetType) {
-              qualifiedElementCsType(typeArguments.firstOrNull()?.type?.resolve(), context)
-            } else null
-
-            if (isListType || isMutableListType) tracker.needsList = true
-            if (isMapType || isMutableMapType) tracker.needsMap = true
-            if (isSetType || isMutableSetType) tracker.needsSet = true
-
-            val isLambdaType: Boolean = qualifiedTypeName in LAMBDA_TYPES
-            val lambdaArity: Int = if (isLambdaType) propTypeResolved.arguments.size - 1 else -1
-
-            if (isLambdaType) tracker.lambdaArities.add(lambdaArity)
-
-            val isKnownNonReferenceType: Boolean = isEnumType || isListType || isMutableListType ||
-                isMapType || isMutableMapType || isSetType || isMutableSetType || isLambdaType ||
-                isThrowableType
-            val isReferenceType: Boolean =
-              propType !in KOTLIN_TO_CSHARP_RETURN && !isKnownNonReferenceType
-
-            if (isReferenceType && qualifiedTypeName != null && qualifiedTypeName !in exportedTypes) {
-              ForwardDiagnosticSink.emit(
-                listOf(
-                  ForwardDiagnostic(
-                    kind = ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_TYPE,
-                    symbol = prop,
-                    declaration = "${cls.simpleName.asString()}.$subName.$propName",
-                    reason = "its type '$qualifiedTypeName' is not in the bridgeable subset " +
-                        "(not an exported class/object/enum and not a supported " +
-                        "primitive/collection)",
-                    hint = "expose a bridgeable wrapper type instead, or add " +
-                        "'$qualifiedTypeName' to the export set",
-                  ),
-                ),
-                logger,
-              )
-              return@mapNotNull null
+            if (qualifiedTypeName !in LAMBDA_TYPES) return@mapNotNull null
+            val lambdaArity: Int = propTypeResolved.arguments.size - 1
+            tracker.lambdaArities.add(lambdaArity)
+            val lambdaTypeArgs: List<String> = propTypeResolved.arguments.map { arg ->
+              val argType: String =
+                arg.type?.resolve()?.declaration?.simpleName?.asString() ?: "object"
+              KOTLIN_TO_CSHARP_PARAM[argType] ?: argType
             }
-
-            val lambdaTypeArgs: List<String> = if (isLambdaType) {
-              propTypeResolved.arguments.map { arg ->
-                val argType: String = arg.type?.resolve()?.declaration?.simpleName?.asString() ?: "object"
-                KOTLIN_TO_CSHARP_PARAM[argType] ?: argType
-              }
-            } else emptyList()
-
-            val lambdaCsType: String = if (isLambdaType) {
-              val typeParams: String = lambdaTypeArgs.joinToString(", ")
-              "KotlinFunc<$typeParams>"
-            } else ""
-
-            // Issue #38: a nullable non-String primitive (`Int?`) reads over the ADR-002 two-call
-            // pair its Kotlin export emits (`_get_<p>_has_value` + `_get_<p>_value`), not over a
-            // single scalar slot, and surfaces in C# as `int?`. A nullable `String` keeps its
-            // single call: the null pointer is its own presence bit.
-            val isNullablePrimitiveTwoCall: Boolean = isNullable && propType != "String" &&
-                !isReferenceType && !isEnumType && !isLambdaType && !isThrowableType &&
-                !isListType && !isMutableListType && !isMapType && !isMutableMapType &&
-                !isSetType && !isMutableSetType
-
-            val nativeReturnType: String = when {
-              isLambdaType -> "IntPtr"
-              (isListType || isMutableListType) -> "IntPtr"
-              (isMapType || isMutableMapType) -> "IntPtr"
-              (isSetType || isMutableSetType) -> "IntPtr"
-              isEnumType -> "int"
-              isReferenceType -> "IntPtr"
-              // ADR-107: the error-envelope pointer its Kotlin export ships.
-              isThrowableType -> "IntPtr"
-              else -> mapReturnType(propType)
-            }
-
-            val type: String = when {
-              isLambdaType -> lambdaCsType
-              // ADR-107: never the Kotlin type name -- the value is a reconstructed BCL exception.
-              isThrowableType && isNullable -> "global::System.Exception?"
-              isThrowableType -> "global::System.Exception"
-              isListType -> "IReadOnlyList<$listElementType>"
-              isMutableListType -> "IList<$listElementType>"
-              isMapType -> "IReadOnlyDictionary<$mapKeyType, $mapValueType>"
-              isMutableMapType -> "IDictionary<$mapKeyType, $mapValueType>"
-              isSetType -> "IReadOnlySet<$setElementType>"
-              isMutableSetType -> "ISet<$setElementType>"
-              propType == "String" && isNullable -> "string?"
-              propType == "String" -> "string"
-              isEnumType -> csPropType
-              isReferenceType && isNullable -> "$csPropType?"
-              isReferenceType -> csPropType
-              isNullablePrimitiveTwoCall -> "${mapReturnType(propType)}?"
-              else -> mapReturnType(propType)
-            }
-
-            val getter: String = if (isLambdaType) {
-              "new $lambdaCsType(Native_Get_$propName(_handle, out _))"
-            } else if (isListType) {
-              buildString {
-                appendLine()
-                appendLine("                IntPtr listHandle = Native_Get_$propName(_handle, out IntPtr error);")
-                appendLine("                if (error != IntPtr.Zero)")
-                appendLine("                {")
-                appendLine("                    throw NugetErrorNative.BuildException(error);")
-                appendLine("                }")
-                appendLine("                int count = NugetListNative.Count(listHandle);")
-                appendLine("                var result = new List<$listElementType>(count);")
-                appendLine("                for (int i = 0; i < count; i++)")
-                appendLine("                {")
-                appendLine("                    result.Add(NugetMarshal.FromHandle<$listElementType>(NugetListNative.Get(listHandle, i)));")
-                appendLine("                }")
-                appendLine("                NugetListNative.Dispose(listHandle);")
-                append("                return result.AsReadOnly();")
-              }
-            } else if (isMutableListType) {
-              buildString {
-                appendLine()
-                appendLine("                IntPtr listHandle = Native_Get_$propName(_handle, out IntPtr error);")
-                appendLine("                if (error != IntPtr.Zero)")
-                appendLine("                {")
-                appendLine("                    throw NugetErrorNative.BuildException(error);")
-                appendLine("                }")
-                appendLine("                int count = NugetListNative.Count(listHandle);")
-                appendLine("                var result = new List<$listElementType>(count);")
-                appendLine("                for (int i = 0; i < count; i++)")
-                appendLine("                {")
-                appendLine("                    result.Add(NugetMarshal.FromHandle<$listElementType>(NugetListNative.Get(listHandle, i)));")
-                appendLine("                }")
-                appendLine("                NugetListNative.Dispose(listHandle);")
-                append("                return result;")
-              }
-            } else if (isMapType || isMutableMapType) {
-              buildString {
-                appendLine()
-                appendLine("                IntPtr mapHandle = Native_Get_$propName(_handle, out _);")
-                appendLine("                int count = NugetMapNative.Count(mapHandle);")
-                appendLine("                var result = new Dictionary<$mapKeyType, $mapValueType>(count);")
-                appendLine("                for (int i = 0; i < count; i++)")
-                appendLine("                {")
-                appendLine("                    var key = NugetMarshal.FromHandle<$mapKeyType>(NugetMapNative.KeyAt(mapHandle, i));")
-                appendLine("                    var value = NugetMarshal.FromHandle<$mapValueType>(NugetMapNative.ValueAt(mapHandle, i));")
-                appendLine("                    result[key] = value;")
-                appendLine("                }")
-                appendLine("                NugetMapNative.Dispose(mapHandle);")
-                append("                return result;")
-              }
-            } else if (isSetType || isMutableSetType) {
-              buildString {
-                appendLine()
-                appendLine("                IntPtr setHandle = Native_Get_$propName(_handle, out _);")
-                appendLine("                int count = NugetSetNative.Count(setHandle);")
-                appendLine("                var result = new HashSet<$setElementType>(count);")
-                appendLine("                for (int i = 0; i < count; i++)")
-                appendLine("                {")
-                appendLine("                    result.Add(NugetMarshal.FromHandle<$setElementType>(NugetSetNative.ElementAt(setHandle, i)));")
-                appendLine("                }")
-                appendLine("                NugetSetNative.Dispose(setHandle);")
-                append("                return result;")
-              }
-            } else if (isThrowableType) {
-              // ADR-107: ONE call, never the two-call spelling the nullable-reference arm below
-              // uses -- each call mints a fresh envelope StableRef, so calling twice would leak
-              // one. Multi-line so CirSealedRenderer emits a block body rather than `=> expr;`.
-              buildString {
-                appendLine()
-                appendLine("                IntPtr nativeResult = Native_Get_$propName(_handle, out IntPtr error);")
-                appendLine("                if (error != IntPtr.Zero)")
-                appendLine("                {")
-                appendLine("                    throw NugetErrorNative.BuildException(error);")
-                appendLine("                }")
-                if (isNullable) {
-                  append(
-                    "                return nativeResult == IntPtr.Zero ? null : " +
-                        "NugetErrorNative.BuildException(nativeResult);"
-                  )
-                } else {
-                  append("                return NugetErrorNative.BuildException(nativeResult);")
-                }
-              }
-            } else when {
-              // Issue #38: a nullable `String` drops the null-forgiving `!` -- `PtrToStringUTF8`
-              // returning null IS the property's null.
-              propType == "String" && isNullable ->
-                "Marshal.PtrToStringUTF8(Native_Get_$propName(_handle, out _))"
-
-              propType == "String" -> "Marshal.PtrToStringUTF8(Native_Get_$propName(_handle, out _))!"
-              isEnumType -> "($csPropType)Native_Get_$propName(_handle, out _)"
-              isReferenceType && isNullable -> "Native_Get_$propName(_handle, out _) == IntPtr.Zero ? null : new $csPropType(Native_Get_$propName(_handle, out _))"
-              isReferenceType -> "new $csPropType(Native_Get_$propName(_handle, out _))"
-              // Issue #38: the ADR-002 two-call read, kept as a single C# expression so the
-              // sealed renderer's `=> getter;` form still applies. The cast pins the conditional's
-              // type to the nullable primitive rather than leaving `null` untyped.
-              isNullablePrimitiveTwoCall ->
-                "Native_Get_${propName}_has_value(_handle, out _) ? " +
-                    "Native_Get_${propName}_value(_handle, out _) : ($type)null"
-
-              else -> "Native_Get_$propName(_handle, out _)"
-            }
-
+            val lambdaCsType: String = "KotlinFunc<${lambdaTypeArgs.joinToString(", ")}>"
             CirProperty(
-              name = csPropName,
-              type = type,
-              nativeReturnType = nativeReturnType,
+              name = propName.replaceFirstChar { it.uppercase() },
+              type = lambdaCsType,
+              nativeReturnType = "IntPtr",
               nativeName = propName,
-              getter = getter,
+              getter = "new $lambdaCsType(Native_Get_$propName(_handle, out _))",
               setter = null,
-              // Issue #38/#39: every sealed-subclass getter carries the `out IntPtr error` slot
-              // its Kotlin export declares, so this is always true here; the sealed renderer emits
-              // the slot unconditionally and does not branch on it. Only the collection getters
-              // read the slot back (they marshal element handles out of a call that can throw);
-              // the scalar and handle getters pass `out _`.
               hasSyncErrorOut = true,
-              isNullablePrimitiveTwoCall = isNullablePrimitiveTwoCall,
             )
           }
           .toList()

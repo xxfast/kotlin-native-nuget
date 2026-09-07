@@ -234,3 +234,10 @@ export *bodies* change, which is ordinary codegen).
   so only the method-return position is missing. This predates this ADR and is not something its
   own scope could have closed; recorded here so it is not mistaken for a regression this feature
   introduced. Tracked as its own ROADMAP item.
+
+### Amendment (2026-09-07)
+
+A sealed subclass's collection properties now plan through the same `ForwardCirCollectionComponents`
+element projection this ADR describes, since [ADR-111](111-sealed-subclass-properties-on-the-property-plan.md)
+moved sealed-subclass properties onto the ADR-062 property plan. The sealed route's own hand-rolled
+`List`/`Map`/`Set` getters, which never re-wrapped a value-class element, are gone.

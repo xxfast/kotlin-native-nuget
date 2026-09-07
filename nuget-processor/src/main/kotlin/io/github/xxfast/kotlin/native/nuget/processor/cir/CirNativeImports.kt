@@ -29,7 +29,20 @@ internal fun CirClass.constructorNativeImport(ctor: CirConstructor): CirDllImpor
   hasSyncErrorOut = true,
 )
 
-internal fun CirClass.propertyNativeImports(property: CirProperty): List<CirDllImport> = buildList {
+internal fun CirClass.propertyNativeImports(property: CirProperty): List<CirDllImport> =
+  propertyNativeImports(libraryName, nativePrefix, property)
+
+/**
+ * ADR-111: the same imports, addressed by the two strings a [CirClass] would have supplied, so an
+ * ADR-009 sealed subclass (a [CirSealedSubclass], not a [CirClass]) mints its property externs
+ * through this one rule instead of a hand-written `[DllImport]` line that forgot
+ * `[return: MarshalAs(UnmanagedType.I1)]`.
+ */
+internal fun propertyNativeImports(
+  libraryName: String,
+  nativePrefix: String,
+  property: CirProperty,
+): List<CirDllImport> = buildList {
   require(!property.usesLegacyNativeImport()) {
     "Specialized properties use a named legacy native-import route"
   }

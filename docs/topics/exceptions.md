@@ -324,8 +324,11 @@ public global::System.Exception Fatal
 }
 ```
 
-The sealed-subclass arm goes through a separate, legacy renderer (`CirClassTranslator.kt`/
-`SealedClassExports.kt`, not the planner route above) but produces the identical getter shape:
+The sealed-subclass arm goes through the same
+[ADR-062](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/062-forward-callable-plan.md)
+property plan as the class case above, since
+[ADR-111](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/111-sealed-subclass-properties-on-the-property-plan.md)
+moved sealed-subclass properties onto it, and produces the identical getter shape:
 
 ```C#
 public sealed class Failure : Issue56LoadState

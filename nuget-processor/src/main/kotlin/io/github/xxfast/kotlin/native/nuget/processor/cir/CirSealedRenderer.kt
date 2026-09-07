@@ -69,21 +69,21 @@ private fun sealedSubclassBlock(
   appendLine()
 
   for (prop in subclass.properties) {
-    // Issue #38: every sealed-subclass property getter carries the `out IntPtr error` slot its
-    // Kotlin export declares, and a nullable primitive is read through the ADR-002 pair
-    // (`_has_value` + `_value`) in place of the single import.
-    if (prop.isNullablePrimitiveTwoCall) {
-      appendLine("            [DllImport(\"${sealed.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"${subclass.nativePrefix}_get_${prop.nativeName}_has_value\")]")
-      appendLine("            [return: MarshalAs(UnmanagedType.I1)]")
-      appendLine("            private static extern bool Native_Get_${prop.nativeName}_has_value(IntPtr handle, out IntPtr error);")
-      appendLine()
-      appendLine("            [DllImport(\"${sealed.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"${subclass.nativePrefix}_get_${prop.nativeName}_value\")]")
-      appendLine("            private static extern ${prop.nativeReturnType} Native_Get_${prop.nativeName}_value(IntPtr handle, out IntPtr error);")
-    } else {
+    // ADR-111: the externs come off the same `propertyNativeImports` rule every ordinary class
+    // property uses, so the error slot, the `_value` fan-out and `[return: MarshalAs]` on a `bool`
+    // are decided in one place. A lambda property keeps its raw legacy import.
+    if (prop.usesLegacyNativeImport()) {
       appendLine("            [DllImport(\"${sealed.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"${subclass.nativePrefix}_get_${prop.nativeName}\")]")
       appendLine("            private static extern ${prop.nativeReturnType} Native_Get_${prop.nativeName}(IntPtr handle, out IntPtr error);")
+      appendLine()
+    } else {
+      append(
+        buildString {
+          propertyNativeImports(sealed.libraryName, subclass.nativePrefix, prop)
+            .forEach { nativeImport -> renderDllImport(nativeImport) }
+        }.indentNestedBody(),
+      )
     }
-    appendLine()
     renderSealedSubclassProperty(prop)
     appendLine()
   }
@@ -141,27 +141,41 @@ internal fun StringBuilder.renderSealedSubclassDataMethods(libraryName: String, 
 }
 
 /**
- * Renders one sealed-subclass property. A getter whose body is a statement block (every collection
- * getter: the `listHandle`/`count`/`for`/`Dispose`/`return` shape) must sit inside a `get { ... }`
- * block, exactly as the ordinary-class `renderProperty` does; only a single-expression getter (a
- * scalar, an enum, a handle) may use the `=> expr;` form. Emitting a block body as `=> block;` is
- * what made the generated `Interop.cs` unparseable (CS1002/CS1519/CS8124, issue #39).
+ * Renders one sealed-subclass property: `renderProperty`'s four shapes at one nesting level
+ * deeper. A body that is a statement block must sit inside a `get { ... }` / `set { ... }` block;
+ * emitting one as `=> block;` is what made the generated `Interop.cs` unparseable
+ * (CS1002/CS1519/CS8124, issue #39).
  *
  * Bodies are shared verbatim with the ordinary-class path, so they are baked at that path's
  * indentation; a sealed subclass nests one level deeper, hence the +4 re-indent here rather than a
- * forked body in the translator.
+ * forked body in the translator. ADR-111: a `var` on a sealed subclass reaches the setter arm,
+ * which the legacy route never had (it always passed `setter = null`).
  */
 private fun StringBuilder.renderSealedSubclassProperty(prop: CirProperty) {
-  if (!prop.getter.contains('\n')) {
+  val isMultiLineGetter: Boolean = prop.getter.contains('\n')
+  val isMultiLineSetter: Boolean = prop.setter?.contains('\n') == true
+  val setter: String? = prop.setter
+  if (setter == null && !isMultiLineGetter) {
     appendLine("            public ${prop.type} ${prop.name} => ${prop.getter};")
     return
   }
 
   appendLine("            public ${prop.type} ${prop.name}")
   appendLine("            {")
-  appendLine("                get")
-  appendLine("                {${prop.getter.indentNestedBody()}")
-  appendLine("                }")
+  if (isMultiLineGetter) {
+    appendLine("                get")
+    appendLine("                {${prop.getter.indentNestedBody()}")
+    appendLine("                }")
+  } else {
+    appendLine("                get => ${prop.getter};")
+  }
+  if (setter != null && isMultiLineSetter) {
+    appendLine("                set")
+    appendLine("                {${setter.indentNestedBody()}")
+    appendLine("                }")
+  } else if (setter != null) {
+    appendLine("                set => $setter;")
+  }
   appendLine("            }")
 }
 

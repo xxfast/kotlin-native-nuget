@@ -94,6 +94,15 @@ except for the enclosing scope. A subclass that really is nested inside its seal
 nested (`FlatShape.Circle`). Member positions referencing either spell it by its actual Kotlin
 scope, not by whether it happens to be sealed.
 
+### Amendment (2026-09-07): subclass properties move onto the ADR-062 property plan
+
+A sealed subclass's own properties no longer have their own hand-rolled marshalling in this
+route. They are planned by the [ADR-062](062-forward-callable-plan.md) property plan and
+projected by the same shared emitter and C# projection an ordinary class property uses; see
+[ADR-111](111-sealed-subclass-properties-on-the-property-plan.md). This route keeps only what has
+no plan shape: the discriminator export and `FromHandle` dispatcher, `Dispose`, and the
+data-class `equals`/`hashCode`/`toString` methods.
+
 ## Consequences
 
 - Sealed hierarchies are type-safe and pattern-matchable in C#

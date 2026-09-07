@@ -1,20 +1,20 @@
 package io.github.xxfast.kotlin.native.nuget.processor.exports
 
-import com.google.devtools.ksp.getAllSuperTypes
 import com.google.devtools.ksp.getVisibility
-import com.google.devtools.ksp.symbol.ClassKind
 import com.google.devtools.ksp.symbol.KSClassDeclaration
 import com.google.devtools.ksp.symbol.KSPropertyDeclaration
 import com.google.devtools.ksp.symbol.KSType
 import com.google.devtools.ksp.symbol.Modifier
 import com.google.devtools.ksp.symbol.Visibility
-import com.squareup.kotlinpoet.ClassName
 import com.squareup.kotlinpoet.FileSpec
 import com.squareup.kotlinpoet.FunSpec
+import io.github.xxfast.kotlin.native.nuget.processor.cir.LAMBDA_TYPES
 import io.github.xxfast.kotlin.native.nuget.processor.cir.expandAliases
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallablePlanCatalog
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardPropertyPlan
+import io.github.xxfast.kotlin.native.nuget.processor.forward.addForwardPropertyPlanExports
 import io.github.xxfast.kotlin.native.nuget.processor.forward.handleBody
 import io.github.xxfast.kotlin.native.nuget.processor.forward.nullableHandleBody
-import io.github.xxfast.kotlin.native.nuget.processor.forward.valueBody
 
 /**
  * Generates @CName bridge exports for sealed classes: type discriminator,
@@ -22,7 +22,10 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.valueBody
  *
  * @see <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/009-sealed-class-mapping.md">ADR-009: Sealed class mapping</a>
  */
-internal fun FileSpec.Builder.addSealedClassExports(sealed: KSClassDeclaration) {
+internal fun FileSpec.Builder.addSealedClassExports(
+  sealed: KSClassDeclaration,
+  callableCatalog: ForwardCallablePlanCatalog,
+) {
   val name: String = sealed.simpleName.asString()
   val qualifiedName: String = sealed.qualifiedName?.asString() ?: return
   val prefix: String = name.lowercase()
@@ -66,100 +69,34 @@ internal fun FileSpec.Builder.addSealedClassExports(sealed: KSClassDeclaration) 
 
     for (prop in properties) {
       val propName: String = prop.simpleName.asString()
-      val propTypeResolved: KSType = prop.type.resolve().expandAliases()
-      val propType: String = propTypeResolved.declaration.qualifiedName?.asString() ?: "Any"
-      val isNullable: Boolean = propTypeResolved.isMarkedNullable
-      val access: String = "handle.asStableRef<$subQualifiedName>().get().$propName"
-
-      val isEnumType: Boolean = (propTypeResolved.declaration as? KSClassDeclaration)
-        ?.classKind == ClassKind.ENUM_CLASS
-
-      // ADR-107 item 8: kotlin.Throwable (or a stdlib subtype of it) on a sealed subclass. The
-      // legacy route never consults ForwardPropertyPlanner, so the envelope conversion is spelled
-      // here too; without it the final `else` would box the raw Throwable in a StableRef and the
-      // C# side would drop the property.
-      val isThrowableType: Boolean = propType != "kotlin.Any" &&
-          (propTypeResolved.declaration as? KSClassDeclaration)?.let { declaration ->
-            propType == "kotlin.Throwable" || declaration.getAllSuperTypes().any { supertype ->
-              supertype.declaration.qualifiedName?.asString() == "kotlin.Throwable"
-            }
-          } == true
-
-      val isPrimitiveType: Boolean = propType in setOf(
-        "kotlin.String", "kotlin.Byte", "kotlin.UByte", "kotlin.Short",
-        "kotlin.UShort", "kotlin.Int", "kotlin.UInt", "kotlin.Long",
-        "kotlin.ULong", "kotlin.Float", "kotlin.Double", "kotlin.Boolean",
-        "kotlin.Unit",
-      )
-
-      // Issue #38: a nullable non-String primitive has no spare wire value to spell "absent", so
-      // it takes the same ADR-002 two-call pair (`_has_value` + `_value`) the top-level property
-      // path takes (ForwardPropertyKotlinEmitter's LegacyTwoCall getter). A nullable `String`
-      // needs no pair: the null pointer is its own presence bit.
-      val isNullablePrimitiveTwoCall: Boolean =
-        isPrimitiveType && isNullable && propType != "kotlin.String" && !isEnumType
-
-      if (isEnumType) {
-        addFunction(
-          sealedPropertyGetter(subPrefix, propName)
-            .returns(Int::class)
-            .addCode(
-              valueBody("$access.ordinal", "errorOut", "0"),
-              cOpaquePointerVar, stableRef,
-            )
-            .build()
-        )
-      } else if (isNullablePrimitiveTwoCall) {
-        addFunction(
-          sealedPropertyGetter(subPrefix, "${propName}_has_value")
-            .returns(Boolean::class)
-            .addCode(
-              valueBody("$access != null", "errorOut", "false"),
-              cOpaquePointerVar, stableRef,
-            )
-            .build()
-        )
-        addFunction(
-          sealedPropertyGetter(subPrefix, "${propName}_value")
-            .returns(ClassName.bestGuess(propType))
-            .addCode(
-              valueBody("$access!!", "errorOut", defaultValueFor(propType)),
-              cOpaquePointerVar, stableRef,
-            )
-            .build()
-        )
-      } else if (isPrimitiveType) {
-        // Issue #38: the `?` was dropped here, so a `String?` property generated a `String`-typed
-        // export whose body returned `String?` and the generated file did not compile at all.
-        addFunction(
-          sealedPropertyGetter(subPrefix, propName)
-            .returns(ClassName.bestGuess(propType).copy(nullable = isNullable))
-            .addCode(
-              valueBody(access, "errorOut", if (isNullable) "null" else defaultValueFor(propType)),
-              cOpaquePointerVar, stableRef,
-            )
-            .build()
-        )
-      } else {
-        // The catch branch of both handle bodies ships a null pointer, so even the non-null
-        // reference getter returns `COpaquePointer?` — the same widening the top-level property
-        // emitter applies to an ObjectHandle getter.
-        // ADR-107: a Throwable is boxed as the `NugetError` envelope `buildError` builds, not as
-        // itself, so the C# side can rebuild a System.Exception with the ADR-028 cause chain.
-        val boxed: String = when {
-          !isThrowableType -> access
-          isNullable -> "$access?.let(::buildError)"
-          else -> "buildError($access)"
-        }
-        val body: String =
-          if (isNullable) nullableHandleBody(boxed, "errorOut") else handleBody(boxed, "errorOut")
-        addFunction(
-          sealedPropertyGetter(subPrefix, propName)
-            .returns(cOpaquePointer.copy(nullable = true))
-            .addCode(body, stableRef, cOpaquePointerVar, stableRef)
-            .build()
-        )
+      // ADR-111: every ordinary property type is planned once and projected by the shared emitter,
+      // so the getter's error slot, its nullable fan-out and its `bool` wire agree with the C#
+      // half by construction rather than by a fourth hand-written copy.
+      val planned: ForwardPropertyPlan? =
+        callableCatalog.propertyFor("$subQualifiedName.$propName")
+      if (planned != null) {
+        addForwardPropertyPlanExports(planned)
+        continue
       }
+
+      // Residual legacy route: a lambda-typed property, which has no plan shape yet (the C# half
+      // still spells its own `KotlinFunc<...>` arm in `translateSealedClass`). Everything else the
+      // planner declined is skipped, with a `SKIPPED_UNSUPPORTED_PROPERTY` diagnostic behind it.
+      val propTypeResolved: KSType = prop.type.resolve().expandAliases()
+      val qualifiedTypeName: String? = propTypeResolved.declaration.qualifiedName?.asString()
+      if (qualifiedTypeName !in LAMBDA_TYPES) continue
+      val access: String = "handle.asStableRef<$subQualifiedName>().get().$propName"
+      val body: String = if (propTypeResolved.isMarkedNullable) {
+        nullableHandleBody(access, "errorOut")
+      } else {
+        handleBody(access, "errorOut")
+      }
+      addFunction(
+        sealedPropertyGetter(subPrefix, propName)
+          .returns(cOpaquePointer.copy(nullable = true))
+          .addCode(body, stableRef, cOpaquePointerVar, stableRef)
+          .build()
+      )
     }
 
     if (isDataClass) {
