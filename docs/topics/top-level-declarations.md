@@ -114,6 +114,15 @@ A top-level `expect fun`/`expect val` follows the same grouping rule, but the st
 taken from the **expect's** file, not whichever `{target}Main` file supplied the `actual` body. See
 [expect/actual declarations](expect-actual.md).
 
+## A file with nothing left
+
+If every top-level declaration in a file is skipped (for example a `List<List<String>?>` parameter,
+which drops the function with a named `SKIPPED_UNSUPPORTED_INPUT` diagnostic, see [Collections](collections.md)),
+the file's static class is not generated at all, and if that leaves its namespace with no other
+declarations, the namespace is dropped too. `test-library/.../test/husk/HuskOnly.kt` is exactly
+this shape: its only function is skipped, so no `HuskOnly` class appears anywhere in `Interop.cs`.
+A file with at least one surviving declaration still gets its class, with only the survivors on it.
+
 ## Method overloads
 
 Two or more same-named top-level functions in one package generate one natural C# overload set, the
@@ -280,5 +289,6 @@ side for the `hasDefault` bit; see [expect/actual declarations](expect-actual.md
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/095-static-route-overloads.md">ADR-095: Overloads on the four static export routes</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/091-constructor-default-parameters.md">ADR-091: Constructor default parameters</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/096-function-default-parameters.md">ADR-096: Function default parameters</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/064-forward-unsupported-declaration-diagnostics.md">ADR-064: Forward unsupported-declaration diagnostics</a>
     </category>
 </seealso>

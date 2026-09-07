@@ -548,8 +548,33 @@ internal fun translate(
     if ("System.Collections.Generic" !in usings) usings.add("System.Collections.Generic")
   }
 
-  return CirFile(usings = usings, namespaces = namespaces)
+  return CirFile(usings = usings, namespaces = namespaces.withoutEmptyStaticClasses())
 }
+
+/**
+ * ADR-007 names a static class after its Kotlin file, and every contribution loop above merges into
+ * that one class by name. When every declaration in a file is skipped, the loops still create the
+ * class and it renders as `public static partial class HuskOnly { }`: the residue of a skip, not an
+ * API. A namespace whose only occupant was such a class then renders as an empty `namespace X { }`
+ * block.
+ *
+ * The sweep runs once, here, after every loop has merged and after the suspend/lambda helpers have
+ * been folded into the root namespace. It cannot be a per-loop guard: a file with a skipped sync
+ * function and a surviving `suspend fun` contributes an empty member list in one loop and the
+ * survivor in another, and the class has to stay. Only the fully merged set can say "empty".
+ *
+ * [CirStaticClass] carries nothing but its members (helpers such as `CirMarshalHelper` and
+ * `CirFuncHelper` are their own declaration types), so an empty member list means an empty class
+ * with no content to lose.
+ */
+private fun List<CirNamespace>.withoutEmptyStaticClasses(): List<CirNamespace> = this
+  .map { namespace ->
+    namespace.copy(
+      declarations = namespace.declarations
+        .filterNot { it is CirStaticClass && it.members.isEmpty() },
+    )
+  }
+  .filter { it.declarations.isNotEmpty() }
 
 /**
  * ADR-094: one `NugetMarshal.Factories` line per wrapper that an erased generic path could be asked
