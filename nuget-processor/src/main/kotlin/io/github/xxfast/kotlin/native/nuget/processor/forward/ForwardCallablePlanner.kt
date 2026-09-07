@@ -129,6 +129,14 @@ internal enum class ForwardPlanSkipReason(val droppedFromCSharp: Boolean) {
    *  declarable. */
   UNDECLARED_INTERFACE(droppedFromCSharp = true),
 
+  /** A plain `class` or `object` nested inside another declaration, which no root bucket declares
+   *  (every one of them filters `parentDeclaration == null`) and which the reachability closure
+   *  refuses to admit from a dependency module for the same reason. The [UNDECLARED_ENUM] /
+   *  [UNDECLARED_INTERFACE] twin, separate only so the hint names the right declaration kind.
+   *  Excludes the two nested shapes that ARE declared: a sealed subclass (ADR-009, nested under
+   *  its base) and a companion object (ADR-013, its owner's statics). */
+  UNDECLARED_CLASS(droppedFromCSharp = true),
+
   /** ADR-088: a bound C# interface at a position v1 does not marshal (nullable, property,
    *  collection component, receiver). Named rather than folded into the generic UNSUPPORTED
    *  bucket: the type IS bridgeable, just not here, and the hint differs accordingly. */
@@ -2390,7 +2398,8 @@ internal class ForwardCallablePlanner(
    *  position-shaped ones ([ForwardPlanSkipReason.NULLABLE]) when both could apply. */
   private fun BridgeType.isUndeclared(): Boolean {
     val unsupported: BridgeType.Unsupported = this as? BridgeType.Unsupported ?: return false
-    return unsupported.isUndeclaredEnum || unsupported.isUndeclaredInterface
+    return unsupported.isUndeclaredEnum || unsupported.isUndeclaredInterface ||
+        unsupported.isUndeclaredClass
   }
 
   /** The undeclared type's qualified name, when this (possibly nullable-wrapped, possibly
@@ -2413,7 +2422,10 @@ internal class ForwardCallablePlanner(
       else -> unwrapped
     }
     return (candidate as? BridgeType.Unsupported)
-      ?.takeIf { unsupported -> unsupported.isUndeclaredEnum || unsupported.isUndeclaredInterface }
+      ?.takeIf { unsupported ->
+        unsupported.isUndeclaredEnum || unsupported.isUndeclaredInterface ||
+            unsupported.isUndeclaredClass
+      }
       ?.rendered
   }
 
@@ -2494,6 +2506,8 @@ internal class ForwardCallablePlanner(
       isUndeclaredEnum -> ForwardPlanSkipReason.UNDECLARED_ENUM
       // Issue #54: the same "undeclarable, not out of scope" rule for a nested interface.
       isUndeclaredInterface -> ForwardPlanSkipReason.UNDECLARED_INTERFACE
+      // ...and for a nested class or object.
+      isUndeclaredClass -> ForwardPlanSkipReason.UNDECLARED_CLASS
       // The closure records WHY it refused a dependency declaration; each refusal wants a
       // different remedy, and only NOT_INCLUDED (or an unrecorded refusal, e.g. a module-local
       // type the closure never saw) wants the `include(...)` one.
@@ -2506,6 +2520,10 @@ internal class ForwardCallablePlanner(
 
         ForwardAdmissionRefusal.CROSS_MODULE_ADMISSION_DISABLED ->
           ForwardPlanSkipReason.CROSS_MODULE_DISABLED_DEPENDENCY_TYPE
+
+        // Defensive: the classifier tests nestedness ahead of the dependency route, so a nested
+        // refusal should never reach here. If one ever does, it must not be told to widen scope.
+        ForwardAdmissionRefusal.NESTED_DECLARATION -> ForwardPlanSkipReason.UNDECLARED_CLASS
 
         ForwardAdmissionRefusal.NOT_INCLUDED, null ->
           ForwardPlanSkipReason.UNEXPORTED_DEPENDENCY_TYPE

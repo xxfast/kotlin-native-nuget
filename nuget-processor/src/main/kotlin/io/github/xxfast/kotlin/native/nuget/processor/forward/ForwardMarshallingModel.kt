@@ -222,6 +222,12 @@ internal sealed interface BridgeType {
    *   unsupported bucket. Kept a sibling flag rather than folded into [isUndeclaredEnum] because
    *   the two hints name a different declaration kind, and the enum flag additionally covers a
    *   *top-level* enum outside the export scope, which has no interface counterpart.
+   * @param isUndeclaredClass the class/object twin of the two flags above: every root bucket in
+   *   `NugetProcessor` filters `parentDeclaration == null`, so a plain nested `class` or `object`
+   *   is declared by no route in either module, and the reachability closure now refuses to admit
+   *   a nested dependency one for exactly that reason. Sealed subclasses and companion objects are
+   *   not covered: ADR-009 declares the first nested under its base and ADR-013 folds the second
+   *   into its owner's statics, so both really are declared.
    */
   data class Unsupported(
     val rendered: kotlin.String,
@@ -232,6 +238,7 @@ internal sealed interface BridgeType {
     val actualTypeAliasExpectName: kotlin.String? = null,
     val isUndeclaredEnum: kotlin.Boolean = false,
     val isUndeclaredInterface: kotlin.Boolean = false,
+    val isUndeclaredClass: kotlin.Boolean = false,
   ) : BridgeType
 
   /** A collection whose component type was lost during classification. */

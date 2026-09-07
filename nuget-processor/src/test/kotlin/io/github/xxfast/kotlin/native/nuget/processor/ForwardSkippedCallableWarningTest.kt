@@ -112,6 +112,8 @@ class ForwardSkippedCallableWarningTest {
         ForwardPlanSkipReason.UNDECLARED_ENUM,
         // Issue #54: the nested-interface twin of UNDECLARED_ENUM, dropped for the same reason.
         ForwardPlanSkipReason.UNDECLARED_INTERFACE,
+        // ...and the nested class/object twin of both.
+        ForwardPlanSkipReason.UNDECLARED_CLASS,
         // ADR-088: a bound C# interface at a position v1 does not marshal, and one that cannot be
         // implemented in Kotlin at a return position. Both are real drops with their own kinds.
         ForwardPlanSkipReason.BOUND_INTERFACE_POSITION,

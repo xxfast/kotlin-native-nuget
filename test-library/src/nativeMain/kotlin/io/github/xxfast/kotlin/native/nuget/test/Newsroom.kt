@@ -80,6 +80,21 @@ class Newsroom {
   fun broadcast(): Broadcast = Broadcast()
 
   /**
+   * Nested-declaration skip, shape (b): reaches [Broadcast.Schedule], a nested plain `class` in an
+   * admitted dependency module. The closure filters `parentDeclaration` for enums only, so it
+   * admits this one and declares it flattened at namespace root as `Schedule`, while this member is
+   * spelled `Broadcast.Schedule` (CS0426). After the fix the closure must refuse it, nothing may
+   * declare a `Schedule`, and this member must skip named.
+   */
+  fun schedule(): Broadcast.Schedule = Broadcast.Schedule(7)
+
+  /**
+   * Same shape, `OBJECT` kind: [Broadcast.Defaults] is the cell a closure fix that only refuses
+   * nested `CLASS` would still leak.
+   */
+  fun defaults(): Broadcast.Defaults = Broadcast.Defaults
+
+  /**
    * Undeclared-enum gate, shape (c): a *top-level* enum in the never-admitted `dev.other.core`,
    * the `containingFile == null` half of the gate. Must skip with
    * `SKIPPED_UNEXPORTED_DEPENDENCY_TYPE` naming `include("dev.other.core")`, exactly as [sponsor]

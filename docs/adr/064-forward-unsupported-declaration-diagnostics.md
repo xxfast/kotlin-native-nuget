@@ -747,3 +747,94 @@ xunit can only assert on the generated C# surface, not on a Gradle-log diagnosti
   shape they already had, only their diagnostics change.
 - The "drop vs keep" product decision for an unreferenced dead type stays open, deferred behind a
   reachability-of-admitted-types check this ADR does not build.
+
+## Amendment (2026-09-07): nested declarations skip named at both the declaration and the use
+
+Judgement: an **amendment**, not a new ADR. This closes the ROADMAP Phase 3 item "Nullable properties
+on a data class nested inside a plain class are not covered by the nested-class fix"
+(`docs/backlog/plain-class-nested-data-class-nullable.md`) and the companion item on
+[ADR-066](066-forward-export-reachability-closure.md)'s reachability closure ("the dependency-type
+admission filters `parentDeclaration` only on the `ENUM` branch"). It adds one `ForwardDiagnosticKind`
+member, one member-position reason, and one closure filter; no new mechanism beyond what this ADR and
+ADR-066 already describe. Status stays Accepted.
+
+### The gap
+
+Every root bucket in `NugetProcessor.kt` filters `parentDeclaration == null`, so a public nested
+`class`, `object`, or `interface` (module-local) is collected by no bucket and no diagnostic names the
+declaration itself: only the nested-enum and nested-interface gates named a *member* typed with one,
+through the generic `SKIPPED_UNSUPPORTED_TYPE`/`NULLABLE` routes, which point at the wrong repair ("the
+type is unsupported") for a type that is otherwise perfectly bridgeable. On the ADR-066 closure side,
+the dependency-type admission predicate filtered `parentDeclaration` on the `ENUM` branch only
+(ADR-066's own 2026-09-05 amendment); a nested dependency `class`/`object` had no equivalent filter, so
+it was admitted and declared flattened at namespace root under its simple name while every reference
+still spelled it `Outer.Inner`, `CS0426` (reproduced: `Broadcast.Schedule` and `Broadcast.Defaults`).
+
+### Decision
+
+**One new kind, `SKIPPED_NESTED_DECLARATION`, severity `WARNING`, fired once per public nested
+`class`/`object`/`interface`/`enum class`**, whether it lives in an exported class-like declaration in
+this module or in an admitted dependency type, excluding a companion object (declared as its owner's
+statics, ADR-013) and a sealed subclass (declared nested under its base, ADR-009), which are the two
+nested shapes the generator *does* declare. A public `annotation class` is excluded too:
+`SKIPPED_ANNOTATION_CLASS` already says so wherever it lives. Emitted before the `hasNothingToProcess`
+early return, so it reaches `NugetDiagnostics.json` even for a module whose only public declaration is
+nested. A klib (cross-module) declaration carries no `containingFile`, so its diagnostic carries no
+source location, the same rule ADR-066's own diagnostics follow.
+
+Shipped, verified against the fixture's `NugetDiagnostics.json`:
+
+```
+[nuget:SKIPPED_NESTED_DECLARATION] Skipping io.github.xxfast.kotlin.native.nuget.test.issue54.ProbeOuter.Nested: nested class `io.github.xxfast.kotlin.native.nuget.test.issue54.ProbeOuter.Nested` is never declared in C# (only top-level declarations, sealed subclasses and companions are). move it to the top level of its file
+    at .../ProbeOuter.kt:47
+```
+
+**At the member position**, a new `ForwardPlanSkipReason.UNDECLARED_CLASS` folds into the existing
+`SKIPPED_UNSUPPORTED_TYPE` kind, the class/object/interface twin of `UNDECLARED_ENUM`/
+`UNDECLARED_INTERFACE`, with a hint naming the nesting as the cause:
+
+```
+[nuget:SKIPPED_UNSUPPORTED_TYPE] Skipping io.github.xxfast.kotlin.native.nuget.test.Newsroom.schedule: its UNDECLARED_CLASS type combination is not supported. `io.github.xxfast.kotlin.native.nuget.test.models.Broadcast.Schedule` is nested inside another declaration, and a nested class or object is never declared in C# (only top-level ones are, plus sealed subclasses and companion objects), so every member typed with it is skipped rather than emitted as a dangling reference; move it to the top level of its file
+```
+
+A **nullable** position (`fun maybe(): Nested?`) reports `UNDECLARED_CLASS` too, not `NULLABLE`, the
+same nullable-misattribution fix ADR-064's original `UNDECLARED_INTERFACE` work already made for
+interfaces. A **property** position (`ProbeOuter.Nested`-typed `val`/`var`) still falls through to the
+generic `SKIPPED_UNSUPPORTED_PROPERTY` message with no `UNDECLARED_CLASS` reason attached, the same
+open gap the property route already has for `UNDECLARED_ENUM`/`UNDECLARED_INTERFACE` (tracked on
+`ROADMAP.md`, not closed by this amendment).
+
+**On the ADR-066 closure side**, the admission predicate's nested-declaration refusal
+(`ForwardAdmissionRefusal.NESTED_DECLARATION`, `ForwardReachabilityClosure.kt`) now applies to every
+bucket, not the `ENUM` branch alone, with the same companion and sealed-subclass carve-outs. A nested
+dependency `class`/`object` is refused exactly like a nested dependency enum: never admitted, never
+declared, and every member typed with it routes to the classifier's `UNDECLARED_CLASS` skip instead of
+a flattened, unresolvable declaration.
+
+### Testing seam
+
+`Tier1NestedClassSkipTest.kt` and cells added to `Tier1ReachabilityClosureTest` pin: a module-local
+nested class and object, at a non-null return, a nullable return, and a nested-object return, each
+skip named and the owning class still generates and constructs; the companion-object carve-out still
+binds as a static factory; and a nested dependency class/object is refused by the closure and skips
+named at the member position, with the owning dependency class still generating. `IntegrationTests/NestedClassGateTests.cs`
+asserts absence from the compiled assembly (`typeof(ProbeOuter).GetMethod("Make", instance)` is
+`null`, no stray `Nested`/`Marker`/`Schedule`/`Defaults` type exists anywhere in the assembly) and the
+survival of everything around the skip.
+
+### Consequences of the amendment
+
+- A public nested `class`, `object`, or `interface`, module-local or an admitted dependency type, now
+  costs one `SKIPPED_NESTED_DECLARATION` build warning naming it, and every member typed with it costs
+  a named `UNDECLARED_CLASS` skip, instead of vanishing in total silence (the declaration) or skipping
+  through a misleading generic reason (the member).
+- The ADR-066 closure no longer flattens a nested dependency class/object to namespace root under a
+  name nothing resolves against; `Broadcast.Schedule`/`Broadcast.Defaults` are now refused exactly like
+  a nested dependency enum.
+- A property position typed with a nested class/object/interface/enum still has no dedicated reason on
+  its `SKIPPED_UNSUPPORTED_PROPERTY` message; unchanged, tracked separately.
+- **Deferred alternative, not built here:** declaring a nested `class`/`object`/`interface`/`enum` as
+  an actual C# nested type (`Outer.Nested`), generalising ADR-009's sealed-subclass nesting to every
+  nested kind. Rejected for this amendment's scope: it touches collection, three translators, the
+  renderer, `@CName` prefixing, the closure's edge table, and the bare-simple-name collision check, a
+  materially larger change than a skip-and-diagnose gate. Tracked as its own `ROADMAP.md` item.

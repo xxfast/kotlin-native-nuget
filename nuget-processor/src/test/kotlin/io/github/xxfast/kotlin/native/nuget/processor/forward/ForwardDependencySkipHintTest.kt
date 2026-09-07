@@ -89,6 +89,9 @@ class ForwardDependencySkipHintTest {
 
         ForwardAdmissionRefusal.EXPECT_IN_DEPENDENCY ->
           ForwardPlanSkipReason.EXPECT_DEPENDENCY_TYPE
+
+        ForwardAdmissionRefusal.NESTED_DECLARATION ->
+          ForwardPlanSkipReason.UNDECLARED_CLASS
       }
     }
     assertEquals(reasons.size, reasons.distinct().size, "one hint per refusal: $reasons")

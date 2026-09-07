@@ -220,6 +220,26 @@ internal class ForwardBridgeTypeClassifier(
       )
     }
     if (qualifiedName !in context.exportedObjectHandles) {
+      // The enum/interface branches' rule verbatim: every root bucket filters
+      // `parentDeclaration == null`, and the reachability closure refuses to admit a nested
+      // dependency declaration, so a nested class/object is declarable in neither module and the
+      // `include(...)` hint would be actively wrong for it. The nested test therefore runs FIRST,
+      // and only a top-level cross-module declaration takes the scope-widening route below.
+      //
+      // A sealed subclass is not nested in this sense (ADR-009 declares it under its base, which
+      // is exactly how every reference spells it) and neither is a companion object (ADR-013 folds
+      // it into its owner's statics), so both are left to the membership test.
+      val isUndeclaredNested: Boolean = classDeclaration.parentDeclaration != null &&
+          !classDeclaration.isCompanionObject &&
+          !classDeclaration.isSealedSubclass()
+      if (isUndeclaredNested) {
+        return BridgeType.Unsupported(
+          qualifiedName,
+          "a nested ${if (classDeclaration.classKind == ClassKind.OBJECT) "object" else "class"} " +
+              "is never declared in C#",
+          isUndeclaredClass = true,
+        )
+      }
       // ADR-066: a declaration read straight off a klib dependency (never seen by
       // `resolver.getAllFiles()`) carries no containing file — verified in the ADR's spike. A
       // module-local declaration that simply fell outside the ADR-063 package filter still keeps

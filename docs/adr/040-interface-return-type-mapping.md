@@ -985,10 +985,10 @@ move-to-top-level hint, and the
 nullable-return case (`fun current(): Listener?`) reports `UNDECLARED_INTERFACE` instead of
 misattributing the skip to `NULLABLE`.
 
-A nested *dependency* interface (reached through the ADR-066 reachability closure) is a different
-shape: unlike the `ENUM` bucket, `ForwardReachabilityClosure`'s admission rule filters no bucket
-but `ENUM` for a nested declaration, so a nested dependency interface is admitted and declared
-flattened at the namespace root, consistent with every reference to it (`interfaceType` also
-spells an interface as a namespace-root `I{SimpleName}` with no enclosing scope). This only breaks
-if the flattened simple name collides with another top-level declaration; tracked by the Phase 3
-ROADMAP item on the reachability closure's `parentDeclaration` filter being enum-only.
+A nested *dependency* interface (reached through the ADR-066 reachability closure) was, when this
+amendment was first written, admitted and declared flattened at the namespace root, because the
+closure's admission rule filtered only the `ENUM` bucket for a nested declaration. Later the same
+day (ADR-066's 2026-09-07 amendment) the closure started refusing a nested dependency declaration
+of every bucket, interfaces included, so a nested dependency interface now skips named
+(`SKIPPED_NESTED_DECLARATION` at the declaration, `UNDECLARED_INTERFACE` at each use) exactly like
+a module-local one.
