@@ -88,10 +88,11 @@ private fun sealedSubclassBlock(
     appendLine()
   }
 
-  if (subclass.isDataObject) {
-    appendLine("            public override string ToString() => \"${subclass.name}\";")
-    appendLine()
-  } else if (subclass.isDataClass) {
+  // Issue #54: a `data object` gets the same generated members a `data class` gets, and Kotlin
+  // exports all three for it. Binding them here is what makes two wrappers over the one Kotlin
+  // singleton compare equal: every read mints a fresh wrapper, so reference equality never held,
+  // and a constant `ToString()` literal could disagree with Kotlin's own.
+  if (subclass.isDataClass) {
     renderSealedSubclassDataMethods(sealed.libraryName, subclass.nativePrefix, sealed.name, subclass.name)
   }
 

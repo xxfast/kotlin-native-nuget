@@ -278,7 +278,51 @@ public abstract class Observation : IDisposable
 }
 ```
 
-`Alive` and `Dead` are Kotlin `data class` subtypes, so they also get `Equals`/`GetHashCode`/`ToString` (see [Data classes](data-classes.md)). `Superposition` is a `data object`, so it has a fixed `ToString()` and no `Equals`/`GetHashCode` override (reference equality is enough for a singleton). `Cat` and `Cause` both read the `out IntPtr error` slot and throw on failure, the same as any class property getter; see [Every property shape on a sealed subclass](#every-property-shape-on-a-sealed-subclass).
+`Alive` and `Dead` are Kotlin `data class` subtypes, so they also get `Equals`/`GetHashCode`/`ToString` (see [Data classes](data-classes.md)). `Superposition` is a `data object`, which is a data class as far as Kotlin's generated members go, so it gets the same three members, backed by the same kind of native exports (`_equals`/`_hashcode`/`_tostring`) rather than a fixed literal. This matters because every C# read of a singleton mints a fresh wrapper, so two reads are never reference-equal; without a real `Equals` they would never compare equal either. `Cat` and `Cause` both read the `out IntPtr error` slot and throw on failure, the same as any class property getter; see [Every property shape on a sealed subclass](#every-property-shape-on-a-sealed-subclass).
+
+From `Interop.cs` (`Issue54Shape.Empty`, the same shape `Observation.Superposition` gets):
+
+```C#
+public sealed class Empty : Issue54Shape
+{
+    internal Empty(IntPtr handle) : base(handle)
+    {
+    }
+
+    [DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "issue54shape_empty_equals")]
+    private static extern bool Native_Equals(IntPtr handle, IntPtr other);
+
+    [DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "issue54shape_empty_hashcode")]
+    private static extern int Native_HashCode(IntPtr handle);
+
+    [DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "issue54shape_empty_tostring")]
+    private static extern IntPtr Native_ToString(IntPtr handle);
+
+    public override bool Equals(object? obj)
+    {
+        if (obj is Empty other) return Native_Equals(_handle, other._handle);
+        return false;
+    }
+
+    public override int GetHashCode() => Native_HashCode(_handle);
+
+    public override string ToString() => Marshal.PtrToStringUTF8(Native_ToString(_handle))!;
+}
+```
+
+From `IntegrationTests/Issue54Tests.cs`, two reads of the same `data object` singleton compare equal:
+
+```C#
+using Issue54Shape first = curled.Current;
+using Issue54Shape second = curled.Current;
+
+Issue54Shape.Empty mylo = Assert.IsType<Issue54Shape.Empty>(first);
+Issue54Shape.Empty alsoMylo = Assert.IsType<Issue54Shape.Empty>(second);
+
+Assert.NotSame(mylo, alsoMylo);
+Assert.Equal(mylo, alsoMylo);
+Assert.Equal(mylo.GetHashCode(), alsoMylo.GetHashCode());
+```
 
 ## Sealed interfaces {id="sealed-interfaces"}
 
