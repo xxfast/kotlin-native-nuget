@@ -46,8 +46,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.exports.addNugetFunc0Helpe
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addNugetFunc1HelperExports
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addNugetFunc2HelperExports
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addNugetFunc3HelperExports
-import io.github.xxfast.kotlin.native.nuget.processor.exports.addNugetSuspendFunc0HelperExports
-import io.github.xxfast.kotlin.native.nuget.processor.exports.addNugetSuspendFunc1HelperExports
+import io.github.xxfast.kotlin.native.nuget.processor.exports.addNugetSuspendFuncHelperExports
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addNugetScopeHelperExports
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addNugetScopeDrainExport
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addNugetJobHelperExports
@@ -1121,6 +1120,8 @@ class NugetProcessor(
     if (needsSuspendLambdaSupport) {
       builder.addImport("kotlin.coroutines", "SuspendFunction0")
       builder.addImport("kotlin.coroutines", "SuspendFunction1")
+      builder.addImport("kotlin.coroutines", "SuspendFunction2")
+      builder.addImport("kotlin.coroutines", "SuspendFunction3")
     }
 
     suspendFunctions.forEach { func ->
@@ -1366,8 +1367,7 @@ class NugetProcessor(
     val needsSuspendWrap: Boolean = needsSuspendLambdaSupport &&
         suspendLambdaArities.any { it > 0 } && !needsLambdaSupport
     if (needsSuspendWrap) addNugetWrapHelperExportsOnce()
-    if (0 in suspendLambdaArities) builder.addNugetSuspendFunc0HelperExports()
-    if (1 in suspendLambdaArities) builder.addNugetSuspendFunc1HelperExports()
+    suspendLambdaArities.sorted().forEach { builder.addNugetSuspendFuncHelperExports(it) }
 
     val classesHaveSuspendMethods: Boolean = classes.any { cls ->
       cls.getAllFunctions().any { it.modifiers.contains(Modifier.SUSPEND) }

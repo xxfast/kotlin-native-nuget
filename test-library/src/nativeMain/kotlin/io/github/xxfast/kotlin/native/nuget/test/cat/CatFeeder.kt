@@ -21,6 +21,21 @@ class CatFeeder(val catName: String) {
     delay(1.seconds)
   }
 
+  // Issue #98: ADR-020 promised suspend lambda arities 0-3, but only 0 and 1 had a Kotlin export.
+  val onFeedPortion: suspend (String, Int) -> String = { food, grams ->
+    delay(50.milliseconds)
+    "$catName devoured ${grams}g of $food!"
+  }
+
+  val onFeedSchedule: suspend (String, Int, String) -> String = { food, grams, time ->
+    delay(50.milliseconds)
+    "$catName devoured ${grams}g of $food at $time!"
+  }
+
+  val onLogMeal: suspend (String, String) -> Unit = { _, _ ->
+    delay(50.milliseconds)
+  }
+
   val mealAnnouncements: Flow<String> = flow {
     emit("$catName is hungry")
     delay(50.milliseconds)
