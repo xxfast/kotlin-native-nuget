@@ -6,7 +6,7 @@ namespace IntegrationTests;
 // (NullableAttribute / NullableContextAttribute) mapped to Kotlin T?.
 //
 //   C# IntegrationTests
-//     -> (forward bridge, Interop.cs)        NicknameSample.findNickname("Oreo")
+//     -> (forward bridge, Interop.cs)        NicknameSample.FindNickname("Oreo")
 //       -> Kotlin test-library             fun findNickname(name: String): String?
 //         -> (reverse bridge, ADR-053)       test.nullability.NicknameBook.find
 //           -> real C# TestDependency NuGet  NicknameBook.Find("Oreo")
@@ -36,7 +36,7 @@ public class NullabilityRoundTripTests
     public void FindNickname_Oreo_ReturnsBiscuit()
     {
         // Oreo: black with white in the middle, like the biscuit — his nickname is on record.
-        string? result = NicknameSample.findNickname("Oreo");
+        string? result = NicknameSample.FindNickname("Oreo");
         Assert.Equal("Biscuit", result);
     }
 
@@ -44,7 +44,7 @@ public class NullabilityRoundTripTests
     public void FindNickname_Mylo_ReturnsNull()
     {
         // Mylo has no nickname on record: a nullable return that is actually null.
-        string? result = NicknameSample.findNickname("Mylo");
+        string? result = NicknameSample.FindNickname("Mylo");
         Assert.Null(result);
     }
 
@@ -52,7 +52,7 @@ public class NullabilityRoundTripTests
     public void GreetNickname_NullName_FallsBackToStranger()
     {
         // Null passed into a nullable parameter.
-        string result = NicknameSample.greetNickname(null);
+        string result = NicknameSample.GreetNickname(null);
         Assert.Equal("Hello, stranger", result);
     }
 
@@ -60,7 +60,7 @@ public class NullabilityRoundTripTests
     public void GreetNickname_Mylo_ReturnsHelloMylo()
     {
         // Mylo: brown and creamy, like the drink Milo.
-        string result = NicknameSample.greetNickname("Mylo");
+        string result = NicknameSample.GreetNickname("Mylo");
         Assert.Equal("Hello, Mylo", result);
     }
 
@@ -68,7 +68,7 @@ public class NullabilityRoundTripTests
     public void LookupNickname_Mylo_ReturnsCream()
     {
         // Mylo's looked-up nickname: a nullable handle return that isn't null.
-        string? result = NicknameSample.lookupNickname("Mylo");
+        string? result = NicknameSample.LookupNickname("Mylo");
         Assert.Equal("Cream", result);
     }
 
@@ -76,7 +76,7 @@ public class NullabilityRoundTripTests
     public void LookupNickname_Oreo_ReturnsNull()
     {
         // Oreo has no looked-up nickname: a nullable handle return that is actually null.
-        string? result = NicknameSample.lookupNickname("Oreo");
+        string? result = NicknameSample.LookupNickname("Oreo");
         Assert.Null(result);
     }
 
@@ -84,7 +84,7 @@ public class NullabilityRoundTripTests
     public void DefaultNickname_ReturnsBiscuit()
     {
         // Non-null handle return: no requireNotNull needed on the Kotlin side anymore.
-        string result = NicknameSample.defaultNickname();
+        string result = NicknameSample.DefaultNickname();
         Assert.Equal("Biscuit", result);
     }
 
@@ -92,14 +92,14 @@ public class NullabilityRoundTripTests
     public void DescribeNickname_Null_ReturnsNone()
     {
         // Null passed into a nullable handle parameter.
-        string result = NicknameSample.describeNickname(null);
+        string result = NicknameSample.DescribeNickname(null);
         Assert.Equal("none", result);
     }
 
     [Fact]
     public void DescribeNickname_Cream_ReturnsCream()
     {
-        string result = NicknameSample.describeNickname("Cream");
+        string result = NicknameSample.DescribeNickname("Cream");
         Assert.Equal("Cream", result);
     }
 
@@ -107,7 +107,7 @@ public class NullabilityRoundTripTests
     public void FavouriteNicknameRoundTrip_Mylo_SetsGetsAndClearsToNull()
     {
         // ROADMAP line 157: the settable handle property `var favourite: Nickname?`.
-        string? result = NicknameSample.favouriteNicknameRoundTrip("Mylo");
+        string? result = NicknameSample.FavouriteNicknameRoundTrip("Mylo");
         Assert.Equal("Mylo", result);
     }
 
@@ -115,7 +115,7 @@ public class NullabilityRoundTripTests
     public void PrimaryNicknameRoundTrip_Oreo_SetsAndGets()
     {
         // The settable, non-null handle property `var primary: Nickname`.
-        string result = NicknameSample.primaryNicknameRoundTrip("Oreo");
+        string result = NicknameSample.PrimaryNicknameRoundTrip("Oreo");
         Assert.Equal("Oreo", result);
     }
 
@@ -123,14 +123,14 @@ public class NullabilityRoundTripTests
     public void NoteRoundTrip_Null_ReturnsNull()
     {
         // The settable, nullable string property `var note: String?`.
-        string? result = NicknameSample.noteRoundTrip(null);
+        string? result = NicknameSample.NoteRoundTrip(null);
         Assert.Null(result);
     }
 
     [Fact]
     public void NoteRoundTrip_Value_ReturnsValue()
     {
-        string? result = NicknameSample.noteRoundTrip("Oreo naps a lot");
+        string? result = NicknameSample.NoteRoundTrip("Oreo naps a lot");
         Assert.Equal("Oreo naps a lot", result);
     }
 
@@ -140,7 +140,7 @@ public class NullabilityRoundTripTests
         // Oblivious island (`#nullable disable`): binds non-null either way, but should raise
         // one info_oblivious_nullability diagnostic per member (checked at the build level,
         // not assertable here).
-        string result = NicknameSample.legacyFindNickname("Oreo");
+        string result = NicknameSample.LegacyFindNickname("Oreo");
         Assert.Equal("Oreo", result);
     }
 }

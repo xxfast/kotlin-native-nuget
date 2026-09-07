@@ -15,12 +15,11 @@ namespace IntegrationTests;
 // also named `Platform` is legal but needlessly fragile — incidental to this feature, so the
 // fixture file is named `PlatformApi.kt` instead.
 //
-// NOTE on casing: top-level FUNCTIONS keep their exact Kotlin (camelCase) name
-// (`platformName()`, `defaultClock()`, `labelOf(...)`) and top-level PROPERTIES are PascalCased
-// (`PlatformTag`) — the same split as every other top-level member in this fixture library
-// (`Arithmetic.add`, `ClinicSample.patientNameLength` vs. `Properties.CatBreed`). Settled and
-// cited in ADR-074's "Casing, corrected while landing this ADR" paragraph; don't re-litigate it
-// here.
+// NOTE on casing: every top-level member is PascalCase. FUNCTIONS (`PlatformName()`,
+// `DefaultClock()`, `LabelOf(...)`) and PROPERTIES (`PlatformTag`) read the same way, as does
+// every other member in this fixture library (`Arithmetic.Add`, `ClinicSample.PatientNameLength`,
+// `Properties.CatBreed`). ADR-074 originally inherited the camelCase split for `actual fun`;
+// ADR-110 closed it. The native `@CName` export still spells the Kotlin name.
 public class PlatformTests
 {
     private static readonly bool IsMacOs = RuntimeInformation.IsOSPlatform(OSPlatform.OSX);
@@ -38,7 +37,7 @@ public class PlatformTests
     {
         // Proves the *actual* body ran, not merely that the symbol resolved: "macos"/"mingw"
         // only exist on the actual side, never on the expect header.
-        Assert.Equal(ExpectedPlatformName, PlatformApi.platformName());
+        Assert.Equal(ExpectedPlatformName, PlatformApi.PlatformName());
     }
 
     [Fact]
@@ -114,7 +113,7 @@ public class PlatformTests
         // `defaultClock()` is itself an `expect fun` (actualized per target), so per Decision 3 it
         // must bind in `PlatformApi` exactly like `platformName()`/`PlatformTag`, not in whichever
         // target file supplied its body.
-        using SystemClock clock = PlatformApi.defaultClock();
+        using SystemClock clock = PlatformApi.DefaultClock();
         Assert.Equal("system-clock", clock.Label());
     }
 
@@ -125,8 +124,8 @@ public class PlatformTests
         // PlatformApi.kt, exercising the Decision 2 redirect at a PARAMETER position rather than
         // `defaultClock()`'s return position: the generated signature must take a `SystemClock`,
         // never a `Clock`.
-        using SystemClock clock = PlatformApi.defaultClock();
-        Assert.Equal("system-clock", PlatformApi.labelOf(clock));
+        using SystemClock clock = PlatformApi.DefaultClock();
+        Assert.Equal("system-clock", PlatformApi.LabelOf(clock));
     }
 
     // --- Decision 3: the static class is `PlatformApi`, never `PlatformApiMacos`/`PlatformApiMingw` ---

@@ -55,9 +55,9 @@ public class EmptyStaticClassTests
     [Fact]
     public void HuskMixed_Ping_StillCallable()
     {
-        // Top-level functions keep their Kotlin spelling in the generated C# (`greet`, not
-        // `Greet`), so this is `ping()`, lowercase, called through the real P/Invoke.
-        Assert.Equal(1, HuskMixed.ping());
+        // Top-level functions are PascalCase in the generated C# (ADR-110), so Kotlin's `ping()`
+        // is `Ping()` here, called through the real P/Invoke.
+        Assert.Equal(1, HuskMixed.Ping());
     }
 
     [Fact]
@@ -71,7 +71,7 @@ public class EmptyStaticClassTests
             .Select(m => m.Name)
             .ToList();
 
-        Assert.Equal(new[] { "ping" }, members);
+        Assert.Equal(new[] { "Ping" }, members);
     }
 
     [Fact]

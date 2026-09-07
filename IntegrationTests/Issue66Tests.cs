@@ -82,7 +82,7 @@ public class Issue66Tests
     {
         using var state = new Issue66StoryState("Mylo again", "Sunbeam Occupied", 9);
 
-        Assert.Equal("Sunbeam Occupied #9 (Mylo again)", Issue66Sample.issue66Summarise(state));
+        Assert.Equal("Sunbeam Occupied #9 (Mylo again)", Issue66Sample.Issue66Summarise(state));
     }
 
     [Fact]
@@ -90,7 +90,7 @@ public class Issue66Tests
     {
         using var state = new Issue66StoryState(null, "All Quiet", 9);
 
-        Assert.Equal("All Quiet #9 (no error)", Issue66Sample.issue66Summarise(state));
+        Assert.Equal("All Quiet #9 (no error)", Issue66Sample.Issue66Summarise(state));
     }
 
     [Fact]

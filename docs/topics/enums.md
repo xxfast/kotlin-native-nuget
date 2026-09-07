@@ -238,15 +238,15 @@ public static bool MatchesMood(this Cat receiver, global::TestLibrary.Cat.Mood? 
 The top-level function return, on the ADR-002 two-call shape:
 
 ```C#
-public static global::TestLibrary.Cat.Mood? napMood(int hour)
+public static global::TestLibrary.Cat.Mood? NapMood(int hour)
 {
-    bool __nuget_hasValue = napMood_has_value(hour, out IntPtr __nuget_hasValueError);
+    bool __nuget_hasValue = NapMood_has_value(hour, out IntPtr __nuget_hasValueError);
     if (__nuget_hasValueError != IntPtr.Zero)
     {
         throw NugetErrorNative.BuildException(__nuget_hasValueError);
     }
     if (!__nuget_hasValue) return null;
-    int __nuget_value = napMood_value(hour, out IntPtr __nuget_valueError);
+    int __nuget_value = NapMood_value(hour, out IntPtr __nuget_valueError);
     if (__nuget_valueError != IntPtr.Zero)
     {
         throw NugetErrorNative.BuildException(__nuget_valueError);
@@ -289,7 +289,7 @@ public void NullableEnumSample_NapMood_ZeroHourReturnsOrdinalZeroAsNonNull()
 {
     // Mood.Happy is a legitimate entry, not the in-band sentinel this two-call shape exists to
     // avoid confusing with null.
-    Mood? mood = NullableEnumSample.napMood(0);
+    Mood? mood = NullableEnumSample.NapMood(0);
 
     Assert.NotNull(mood);
     Assert.Equal(Mood.Happy, mood);

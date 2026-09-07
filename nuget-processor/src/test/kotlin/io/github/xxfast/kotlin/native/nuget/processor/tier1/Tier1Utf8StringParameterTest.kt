@@ -46,7 +46,7 @@ class Tier1Utf8StringParameterTest {
 
     assertContains(
       generated,
-      "Native_greet([MarshalAs(UnmanagedType.LPUTF8Str)] string name, out IntPtr error);",
+      "Native_Greet([MarshalAs(UnmanagedType.LPUTF8Str)] string name, out IntPtr error);",
     )
     assertContains(
       generated,

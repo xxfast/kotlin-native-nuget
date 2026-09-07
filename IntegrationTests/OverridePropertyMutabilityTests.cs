@@ -62,7 +62,7 @@ public class OverridePropertyMutabilityTests
     [Fact]
     public void StrayPet_Vibe_ReachesInterfaceDispatch()
     {
-        using IPet stray = PetKt.strayPet();
+        using IPet stray = PetKt.StrayPet();
 
         Assert.Equal("aloof", stray.Vibe);
     }

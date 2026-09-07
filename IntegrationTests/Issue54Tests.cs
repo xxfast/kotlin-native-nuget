@@ -22,7 +22,7 @@ public class Issue54Tests
     [Fact]
     public void Shape_BareSealedProperty_DiscriminatesToTheRightSubclass()
     {
-        using Issue54Drawing drawing = Issue54Sample.sleepingCats();
+        using Issue54Drawing drawing = Issue54Sample.SleepingCats();
 
         using Issue54Shape shape = drawing.Shape;
 
@@ -33,7 +33,7 @@ public class Issue54Tests
     [Fact]
     public void Maybe_NullableSealedProperty_IsNullWhenKotlinSaysNull()
     {
-        using Issue54Drawing drawing = Issue54Sample.sleepingCats();
+        using Issue54Drawing drawing = Issue54Sample.SleepingCats();
 
         Issue54Shape? maybe = drawing.Maybe;
 
@@ -43,7 +43,7 @@ public class Issue54Tests
     [Fact]
     public void Maybe_NullableSealedProperty_DiscriminatesWhenPresent()
     {
-        using Issue54Drawing drawing = Issue54Sample.curledCats();
+        using Issue54Drawing drawing = Issue54Sample.CurledCats();
 
         Issue54Shape? maybe = drawing.Maybe;
 
@@ -55,7 +55,7 @@ public class Issue54Tests
     [Fact]
     public void Shapes_SealedCollectionComponent_IsReadOnlyListWithBothArmsInOrder()
     {
-        using Issue54Drawing drawing = Issue54Sample.sleepingCats();
+        using Issue54Drawing drawing = Issue54Sample.SleepingCats();
 
         IReadOnlyList<Issue54Shape> shapes = drawing.Shapes;
 
@@ -69,7 +69,7 @@ public class Issue54Tests
     [Fact]
     public void Shape_PatternMatchingSwitch_ReadsTheSubclassPayload()
     {
-        using Issue54Drawing drawing = Issue54Sample.curledCats();
+        using Issue54Drawing drawing = Issue54Sample.CurledCats();
 
         using Issue54Shape shape = drawing.Shape;
 
@@ -86,8 +86,8 @@ public class Issue54Tests
     [Fact]
     public void Current_ScalarSealedSetter_RoundTripsThroughTheHandleWire()
     {
-        using Issue54Drawing drawing = Issue54Sample.sleepingCats();
-        using Issue54Drawing other = Issue54Sample.curledCats();
+        using Issue54Drawing drawing = Issue54Sample.SleepingCats();
+        using Issue54Drawing other = Issue54Sample.CurledCats();
 
         using (Issue54Shape before = drawing.Current)
         {

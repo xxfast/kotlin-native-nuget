@@ -318,9 +318,9 @@ class Tier1OrdinarySurfaceTest {
 
     assertTrue(result.compiledClean, "got: ${result.compileErrors}")
     val cs = result.generatedCSharp
-    // Top-level functions keep Kotlin camelCase names on the file-named static class (ADR-007).
+    // ADR-110: top-level functions render PascalCase on the file-named static class (ADR-007).
     assertContains(cs, "public static partial class Fixture")
-    assertContains(cs, "public static string greet(string name)")
-    assertContains(cs, "public static IReadOnlyList<string> tags()")
+    assertContains(cs, "public static string Greet(string name)")
+    assertContains(cs, "public static IReadOnlyList<string> Tags()")
   }
 }

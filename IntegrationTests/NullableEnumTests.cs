@@ -158,7 +158,7 @@ public class NullableEnumTests
     [Fact]
     public void NullableEnumSample_NapMood_NegativeHourIsNull()
     {
-        Assert.Null(NullableEnumSample.napMood(-1));
+        Assert.Null(NullableEnumSample.NapMood(-1));
     }
 
     [Fact]
@@ -166,7 +166,7 @@ public class NullableEnumTests
     {
         // Mood.Happy is a legitimate entry, not the in-band sentinel this two-call shape exists to
         // avoid confusing with null.
-        Mood? mood = NullableEnumSample.napMood(0);
+        Mood? mood = NullableEnumSample.NapMood(0);
 
         Assert.NotNull(mood);
         Assert.Equal(Mood.Happy, mood);
@@ -175,6 +175,6 @@ public class NullableEnumTests
     [Fact]
     public void NullableEnumSample_NapMood_OtherHoursReturnANonFirstOrdinal()
     {
-        Assert.Equal(Mood.Grumpy, NullableEnumSample.napMood(3));
+        Assert.Equal(Mood.Grumpy, NullableEnumSample.NapMood(3));
     }
 }

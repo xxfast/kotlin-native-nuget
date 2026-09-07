@@ -1024,7 +1024,10 @@ internal class ForwardCallablePlanner(
   ): ForwardCallableCatalogEntry = staticEntry(
     function = function,
     symbol = "${function.packageName.asString()}.${function.simpleName.asString()}$suffix",
-    publicName = toCName(function.simpleName.asString()).csharpIdentifier(),
+    // ADR-110: PascalCase, byte-identical to `objectEntries`/`companionEntries`. `toCName` stays
+    // on the export name only (it is the C symbol); a PascalCased name is never a C# keyword, so
+    // no verbatim-identifier escape is needed either.
+    publicName = function.simpleName.asString().replaceFirstChar { it.uppercase() },
     exportName = "${toCName(function.simpleName.asString())}$suffix",
     origin = ForwardCallableOrigin.TOP_LEVEL,
     target = null,
@@ -2682,22 +2685,6 @@ internal class ForwardCallablePlanner(
     is BridgeType.Enum -> ForwardAbiWireType.INT32
     is BridgeType.ObjectHandle -> ForwardAbiWireType.POINTER
     else -> wireType()
-  }
-
-  private fun String.csharpIdentifier(): String = if (this in CSHARP_KEYWORDS) "@$this" else this
-
-  private companion object {
-    val CSHARP_KEYWORDS: Set<String> = setOf(
-      "abstract", "as", "base", "bool", "break", "byte", "case", "catch", "char", "checked",
-      "class", "const", "continue", "decimal", "default", "delegate", "do", "double", "else",
-      "enum", "event", "explicit", "extern", "false", "finally", "fixed", "float", "for",
-      "foreach", "goto", "if", "implicit", "in", "int", "interface", "internal", "is", "lock",
-      "long", "namespace", "new", "null", "object", "operator", "out", "override", "params",
-      "private", "protected", "public", "readonly", "ref", "return", "sbyte", "sealed", "short",
-      "sizeof", "stackalloc", "static", "string", "struct", "switch", "this", "throw", "true",
-      "try", "typeof", "uint", "ulong", "unchecked", "unsafe", "ushort", "using", "virtual",
-      "void", "volatile", "while",
-    )
   }
 }
 

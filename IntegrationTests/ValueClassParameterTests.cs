@@ -65,8 +65,8 @@ public class ValueClassParameterTests
     [Fact]
     public void ClinicSample_ChartSummary_TopLevelFunctionParameter_RoundTripsTheUnwrappedChartId()
     {
-        // Top-level functions keep Kotlin camelCase (ADR-007), unlike the extension above.
-        Assert.Equal("Chart CH-CLINIC-0 filed", ClinicSample.chartSummary(new ChartId("CH-CLINIC-0")));
-        Assert.Equal("Chart missing", ClinicSample.chartSummary(new ChartId("")));
+        // Top-level functions are PascalCase (ADR-110), same as the extension above.
+        Assert.Equal("Chart CH-CLINIC-0 filed", ClinicSample.ChartSummary(new ChartId("CH-CLINIC-0")));
+        Assert.Equal("Chart missing", ClinicSample.ChartSummary(new ChartId("")));
     }
 }

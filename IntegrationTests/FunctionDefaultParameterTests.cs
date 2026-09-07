@@ -166,14 +166,14 @@ public class FunctionDefaultParameterTests
     {
         // Top-level is one of the two routes where the synthesized entry shares its declaration
         // node with the declared one, so `planFor` has to become plural before this can exist at
-        // all. Top-level functions keep their Kotlin camelCase name (ADR-074).
-        Assert.Equal("hi Oreo", WhiskersSample.hail("Oreo"));
+        // all. Both the declared and the synthesized entry are PascalCase (ADR-110).
+        Assert.Equal("hi Oreo", WhiskersSample.Hail("Oreo"));
     }
 
     [Fact]
     public void Hail_FullSignature_StillWorks()
     {
-        Assert.Equal("HI OREO", WhiskersSample.hail("Oreo", true));
+        Assert.Equal("HI OREO", WhiskersSample.Hail("Oreo", true));
     }
 
     // ---- Route 6: extension functions (PawExtensions), receiver survives truncation ----
@@ -218,7 +218,7 @@ public class FunctionDefaultParameterTests
     [Fact]
     public void Book_FullSignature_Works()
     {
-        Assert.Equal("Paws booked 12 spots in Colombo", WhiskersSample.book("Paws", 12, "Colombo"));
+        Assert.Equal("Paws booked 12 spots in Colombo", WhiskersSample.Book("Paws", 12, "Colombo"));
     }
 
     [Fact]
@@ -226,9 +226,9 @@ public class FunctionDefaultParameterTests
     {
         // `capacity` has a required parameter after it, so a positional Kotlin call can never skip
         // it. Stated by signature so a future "helpful" combinatorial expansion trips here.
-        Assert.Null(typeof(WhiskersSample).GetMethod("book", [typeof(string), typeof(int)]));
-        Assert.Null(typeof(WhiskersSample).GetMethod("book", [typeof(string)]));
-        Assert.Equal(1, typeof(WhiskersSample).GetMethods().Count(m => m.Name == "book"));
+        Assert.Null(typeof(WhiskersSample).GetMethod("Book", [typeof(string), typeof(int)]));
+        Assert.Null(typeof(WhiskersSample).GetMethod("Book", [typeof(string)]));
+        Assert.Equal(1, typeof(WhiskersSample).GetMethods().Count(m => m.Name == "Book"));
     }
 
     // ---- expect/actual: the default lives on the expect, never on the exported actual ----
@@ -243,7 +243,7 @@ public class FunctionDefaultParameterTests
             ? "Oreo's collar at level 7 on macos"
             : "Oreo's collar at level 7 on mingw";
 
-        Assert.Equal(expected, PlatformApi.beaconLabel("Oreo's collar"));
+        Assert.Equal(expected, PlatformApi.BeaconLabel("Oreo's collar"));
     }
 
     [Fact]
@@ -253,7 +253,7 @@ public class FunctionDefaultParameterTests
             ? "Mylo's collar at level 30 on macos"
             : "Mylo's collar at level 30 on mingw";
 
-        Assert.Equal(expected, PlatformApi.beaconLabel("Mylo's collar", 30));
+        Assert.Equal(expected, PlatformApi.BeaconLabel("Mylo's collar", 30));
     }
 
     // ---- expect/actual, overloaded: each `actual` must consult ITS OWN expect overload ----
@@ -266,7 +266,7 @@ public class FunctionDefaultParameterTests
         // Oreo gets the quiet nuzzle; he is asleep on the keyboard.
         string expected = IsMacOs ? "Oreo on macos" : "Oreo on mingw";
 
-        Assert.Equal(expected, PlatformApi.nuzzle("Oreo"));
+        Assert.Equal(expected, PlatformApi.Nuzzle("Oreo"));
     }
 
     [Fact]
@@ -276,7 +276,7 @@ public class FunctionDefaultParameterTests
         // the String overload's expect would yield the wrong value rather than no overload at all.
         string expected = IsMacOs ? "n3 on macos" : "n3 on mingw";
 
-        Assert.Equal(expected, PlatformApi.nuzzle(3));
+        Assert.Equal(expected, PlatformApi.Nuzzle(3));
     }
 
     [Fact]
@@ -285,8 +285,8 @@ public class FunctionDefaultParameterTests
         string loud = IsMacOs ? "Mylo! on macos" : "Mylo! on mingw";
         string counted = IsMacOs ? "cats:2 on macos" : "cats:2 on mingw";
 
-        Assert.Equal(loud, PlatformApi.nuzzle("Mylo", true));
-        Assert.Equal(counted, PlatformApi.nuzzle(2, "cats:"));
+        Assert.Equal(loud, PlatformApi.Nuzzle("Mylo", true));
+        Assert.Equal(counted, PlatformApi.Nuzzle(2, "cats:"));
     }
 
     [Fact]
@@ -294,11 +294,11 @@ public class FunctionDefaultParameterTests
     {
         // Four entries: two declared, two synthesized. Stated by signature so a collapse of the two
         // namesakes into one shows up here as a missing overload rather than a wrong value.
-        Assert.NotNull(typeof(PlatformApi).GetMethod("nuzzle", [typeof(string)]));
-        Assert.NotNull(typeof(PlatformApi).GetMethod("nuzzle", [typeof(string), typeof(bool)]));
-        Assert.NotNull(typeof(PlatformApi).GetMethod("nuzzle", [typeof(int)]));
-        Assert.NotNull(typeof(PlatformApi).GetMethod("nuzzle", [typeof(int), typeof(string)]));
-        Assert.Equal(4, typeof(PlatformApi).GetMethods().Count(m => m.Name == "nuzzle"));
+        Assert.NotNull(typeof(PlatformApi).GetMethod("Nuzzle", [typeof(string)]));
+        Assert.NotNull(typeof(PlatformApi).GetMethod("Nuzzle", [typeof(string), typeof(bool)]));
+        Assert.NotNull(typeof(PlatformApi).GetMethod("Nuzzle", [typeof(int)]));
+        Assert.NotNull(typeof(PlatformApi).GetMethod("Nuzzle", [typeof(int), typeof(string)]));
+        Assert.Equal(4, typeof(PlatformApi).GetMethods().Count(m => m.Name == "Nuzzle"));
     }
 
     // ---- The numbering is a native-export detail and must not leak ----

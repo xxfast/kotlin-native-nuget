@@ -30,7 +30,7 @@ public class MenagerieRoundTripTests
     {
         // Ferret implements every IFeedable member PUBLICLY and identically, so per Decision 5
         // the bound Kotlin class declares the IFeedable supertype directly.
-        string result = MenagerieSample.ferretDescribe();
+        string result = MenagerieSample.FerretDescribe();
         Assert.Equal("a ferret", result);
     }
 
@@ -38,7 +38,7 @@ public class MenagerieRoundTripTests
     public void FerretLegs_ReturnsFour()
     {
         // Pass-through int property: needs no marshalling, unlike Describe's string return.
-        int legs = MenagerieSample.ferretLegs();
+        int legs = MenagerieSample.FerretLegs();
         Assert.Equal(4, legs);
     }
 
@@ -48,7 +48,7 @@ public class MenagerieRoundTripTests
         // Oreo: black with white in the middle, like the biscuit. Feed() marshals a string
         // PARAMETER; Nickname is a nullable, SETTABLE string property — a getter AND a setter
         // slot (ADR-053 nullability composed with ADR-070's interface members).
-        string? result = MenagerieSample.ferretFeedAndNickname("kibble", "Oreo");
+        string? result = MenagerieSample.FerretFeedAndNickname("kibble", "Oreo");
         Assert.Equal("Oreo", result);
     }
 
@@ -58,7 +58,7 @@ public class MenagerieRoundTripTests
         // Sanctuary.Star() returns IFeedable. Per Decision 3 the Kotlin value is always an
         // IFeedableHandle, never the concrete Ferret — Describe() still dispatches correctly
         // through the interface's own slot table.
-        string result = MenagerieSample.starDescribe();
+        string result = MenagerieSample.StarDescribe();
         Assert.Equal("a ferret", result);
     }
 
@@ -68,7 +68,7 @@ public class MenagerieRoundTripTests
         // Sanctuary.HiddenResident() returns an IFeedable backed by `Nocturnal`, an internal
         // class never bound or named by the generator. Proves the verified mechanism: interface
         // dispatch through a GCHandle needs no bound, public, or even named runtime type.
-        int legs = MenagerieSample.hiddenResidentLegs();
+        int legs = MenagerieSample.HiddenResidentLegs();
         Assert.Equal(4, legs);
     }
 
@@ -77,7 +77,7 @@ public class MenagerieRoundTripTests
     {
         // Sanctuary.Introduce(IFeedable) takes an interface-typed parameter. Passes a bound
         // Ferret at that position (Decision 4's NugetHandleOwner-based nugetHandle() lowering).
-        string result = MenagerieSample.introduce();
+        string result = MenagerieSample.Introduce();
         Assert.Equal("introduced a ferret with 4 legs", result);
     }
 
@@ -85,7 +85,7 @@ public class MenagerieRoundTripTests
     public void FeaturedRoundTrip_SetsGetsAndClearsToNull()
     {
         // Sanctuary.Featured is a nullable, SETTABLE interface-typed property.
-        string? result = MenagerieSample.featuredRoundTrip();
+        string? result = MenagerieSample.FeaturedRoundTrip();
         Assert.Equal("a ferret", result);
     }
 
@@ -95,7 +95,7 @@ public class MenagerieRoundTripTests
         // Sanctuary.Flagship() returns ITagged (ITagged : IFeedable). Both `Tag` (declared on
         // ITagged) and `Legs` (inherited from IFeedable) must dispatch through the same handle
         // (Decision 5's interface-inheritance case).
-        string result = MenagerieSample.flagshipTagAndLegs();
+        string result = MenagerieSample.FlagshipTagAndLegs();
         Assert.Equal("flagship/4", result);
     }
 
@@ -114,7 +114,7 @@ public class MenagerieRoundTripTests
         // Sanctuary.Introduce(IFeedable) called with a Kotlin-implemented Goat (not a bound
         // Ferret): the String-returning Describe() member PLUS the Int Legs getter must both
         // dispatch back into the Kotlin object through a minted bridge.
-        string result = MenagerieSample.kotlinGoatIntroduce();
+        string result = MenagerieSample.KotlinGoatIntroduce();
         Assert.Equal("introduced Nibbles the goat with 4 legs", result);
     }
 
@@ -125,7 +125,7 @@ public class MenagerieRoundTripTests
         // string-PARAMETER member — on a Kotlin-implemented Goat. The Kotlin side counts calls in
         // `goat.meals`, read back after the C#->Kotlin round trip to prove the call actually
         // reached the Kotlin object rather than merely not throwing.
-        int meals = MenagerieSample.kotlinGoatFeedCount("kibble");
+        int meals = MenagerieSample.KotlinGoatFeedCount("kibble");
         Assert.Equal(1, meals);
     }
 
@@ -135,7 +135,7 @@ public class MenagerieRoundTripTests
         // Sanctuary.Rename(IFeedable, string?) writes then reads IFeedable.Nickname on a
         // Kotlin-implemented Goat: exercises BOTH the setter and getter slots (Introduce only
         // ever exercises a getter), mirroring Mylo's brown-and-creamy nickname fixtures elsewhere.
-        string? result = MenagerieSample.kotlinGoatRename("Mylo");
+        string? result = MenagerieSample.KotlinGoatRename("Mylo");
         Assert.Equal("Mylo", result);
     }
 
@@ -144,14 +144,14 @@ public class MenagerieRoundTripTests
     {
         // Same setter/getter round trip, but with null: the nullable-string slot must ride
         // IntPtr.Zero through, not collapse null into "".
-        string? result = MenagerieSample.kotlinGoatRename(null);
+        string? result = MenagerieSample.KotlinGoatRename(null);
         Assert.Null(result);
     }
 
     [Fact]
     public void KotlinGoatRename_EmptyStringNickname_IsNotNull()
     {
-        string? result = MenagerieSample.kotlinGoatRename("");
+        string? result = MenagerieSample.KotlinGoatRename("");
         Assert.NotNull(result);
         Assert.Equal("", result);
     }
@@ -162,7 +162,7 @@ public class MenagerieRoundTripTests
         // Sanctuary.Featured stores a Kotlin-implemented Goat and hands it back. ADR-085 promises
         // Kotlin-side identity (not C#-side): the value read back on the Kotlin side of the
         // crossing must be the SAME Goat instance, via the token probe, not merely an equal one.
-        bool same = MenagerieSample.kotlinGoatFeaturedIsSameInstance();
+        bool same = MenagerieSample.KotlinGoatFeaturedIsSameInstance();
         Assert.True(same, "expected sanctuary.featured to resolve back to the original Goat instance");
     }
 
@@ -194,7 +194,7 @@ public class MenagerieRoundTripTests
         // RingLeader implements BOTH IFeedable and IPerformer. Crossing at the IFeedable-typed
         // parameter (Sanctuary.Introduce) must mint/resolve an IFeedable bridge and dispatch
         // Describe()/Legs, not IPerformer's slot table.
-        string result = MenagerieSample.ringLeaderIntroduceViaFeedable();
+        string result = MenagerieSample.RingLeaderIntroduceViaFeedable();
         Assert.Equal("introduced Mylo the ringleader with 2 legs", result);
     }
 
@@ -204,7 +204,7 @@ public class MenagerieRoundTripTests
         // Same dual-interface Kotlin object, crossing at the IPerformer-typed parameter this
         // time. `IFeedable` is declared first in Menagerie.cs, so today's first-match dispatch
         // mints an IFeedable bridge here too, which does not implement IPerformer at all.
-        string result = MenagerieSample.ringLeaderApplaudViaPerformer();
+        string result = MenagerieSample.RingLeaderApplaudViaPerformer();
         Assert.Equal("Mylo takes a bow", result);
     }
 
@@ -215,7 +215,7 @@ public class MenagerieRoundTripTests
         // own Test.Menagerie. The setter is the inbound crossing that needs the generated
         // IPerformerBindings.kt slot body to import EnergyLevel; today it does not, so
         // test-library fails to compile before this assertion can even run.
-        string result = MenagerieSample.ringLeaderRecharge();
+        string result = MenagerieSample.RingLeaderRecharge();
         // The reverse enum generator emits SCREAMING_CASE entries (`HIGH`), so Kotlin's
         // EnergyLevel.name is "HIGH", not the C# spelling.
         Assert.Equal("HIGH", result);
@@ -233,7 +233,7 @@ public class MenagerieRoundTripTests
         // Sanctuary.Showcase(ITagged) calls BOTH Tag (ITagged's own member) AND Legs (inherited
         // from IFeedable) on a Kotlin-implemented ITagged. The flattened bridge this needs does
         // not exist yet.
-        string result = MenagerieSample.kotlinTabbyShowcase();
+        string result = MenagerieSample.KotlinTabbyShowcase();
         Assert.Equal("tabby: 4 legs", result);
     }
 
@@ -243,7 +243,7 @@ public class MenagerieRoundTripTests
         // The SAME Kotlin Tabby instance, crossing instead at the base IFeedable-typed position
         // (Sanctuary.Introduce). A flattened ITagged bridge must satisfy both this crossing and
         // KotlinTabbyShowcase's.
-        string result = MenagerieSample.kotlinTabbyIntroduceViaFeedable();
+        string result = MenagerieSample.KotlinTabbyIntroduceViaFeedable();
         Assert.Equal("introduced Tabby the tagged tabby with 4 legs", result);
     }
 
@@ -261,7 +261,7 @@ public class MenagerieRoundTripTests
         // nullable bound-object PROPERTY (Favorite, null then non-null), and a bound-INTERFACE
         // PARAMETER + RETURN (Pair) with a real C# Ferret as the partner — C#-side identity IS
         // promised for a C#-originated object per ADR-086's identity table.
-        string result = MenagerieSample.kotlinZookeeperRoundTripWithFerretPartner();
+        string result = MenagerieSample.KotlinZookeeperRoundTripWithFerretPartner();
         string[] parts = result.Split('|');
         Assert.Equal(6, parts.Length);
         Assert.Equal("True", parts[0]);    // keeper.Favorite started null
@@ -280,7 +280,7 @@ public class MenagerieRoundTripTests
         // origin (the token probe resolving the parameter back to the ORIGINAL Goat) — C#-side
         // ReferenceEquals is explicitly not promised there (a fresh bridge mints per return
         // crossing), so this test asserts only the Kotlin-side `===`.
-        bool same = MenagerieSample.kotlinZookeeperRoundTripWithGoatPartner();
+        bool same = MenagerieSample.KotlinZookeeperRoundTripWithGoatPartner();
         Assert.True(
             same,
             "expected IKeeper.Pair's parameter to resolve back to the original Kotlin Goat via " +
@@ -322,7 +322,7 @@ public class MenagerieRoundTripTests
         // Sanctuary.Introduce calls IFeedable.Describe() on NoVacancy, whose Describe() always
         // throws kotlin.IllegalStateException.
         var ex = Assert.ThrowsAny<Exception>(
-            () => MenagerieSample.kotlinNoVacancyIntroduceThrows());
+            () => MenagerieSample.KotlinNoVacancyIntroduceThrows());
         // Verbatim across all four hops. This is the whole of what ADR-104's Fork B envelope
         // carries: type name and message, nothing else.
         Assert.Equal("no vacancy", ex.Message);
@@ -334,7 +334,7 @@ public class MenagerieRoundTripTests
         // Same interface, same throwing-implementation shape as the test above, but this crossing
         // only ever touches IFeedable.Legs. The ADR-104 envelope the test above needs must not tax
         // the happy path, and does not: nothing throws, and the value comes back unchanged.
-        int legs = MenagerieSample.kotlinNoVacancyLegsOnly();
+        int legs = MenagerieSample.KotlinNoVacancyLegsOnly();
         Assert.Equal(4, legs);
     }
 
@@ -350,11 +350,11 @@ public class MenagerieRoundTripTests
         // Settle anything an earlier test in this class left pending, so the delta below can only
         // be this call's bridge.
         SettleKotlinReleases();
-        int before = MenagerieSample.kotlinBridgeReleaseCount();
+        int before = MenagerieSample.KotlinBridgeReleaseCount();
 
         // Introduce does not store the feedable, so nothing on either side roots the bridge once
         // the call site disposes its transfer handle.
-        MenagerieSample.kotlinGoatIntroduce();
+        MenagerieSample.KotlinGoatIntroduce();
 
         Assert.True(
             KotlinReleaseFiredWithin(before, TimeSpan.FromSeconds(5)),
@@ -368,7 +368,7 @@ public class MenagerieRoundTripTests
     [Fact]
     public void LiveKotlinGoatBridge_SurvivesACollection_AndStillResolves()
     {
-        MenagerieSample.kotlinGoatStoreFeatured();
+        MenagerieSample.KotlinGoatStoreFeatured();
 
         for (int round = 0; round < 3; round++)
         {
@@ -377,10 +377,10 @@ public class MenagerieRoundTripTests
         }
 
         Assert.True(
-            MenagerieSample.kotlinGoatStoredFeaturedIsSameInstance(),
+            MenagerieSample.KotlinGoatStoredFeaturedIsSameInstance(),
             "a bridge C# still references must survive a collection and still resolve its Kotlin object");
 
-        MenagerieSample.kotlinGoatDropHeld();
+        MenagerieSample.KotlinGoatDropHeld();
     }
 
     // Phase 13 Wave 3, item 1: bridge reuse per Kotlin object. `nugetMintBridge` mints a fresh
@@ -390,7 +390,7 @@ public class MenagerieRoundTripTests
     [Fact]
     public void KotlinGoatRememberedTwice_SameInstanceCrossingIsReused()
     {
-        bool same = MenagerieSample.kotlinGoatRememberedTwiceAreSame();
+        bool same = MenagerieSample.KotlinGoatRememberedTwiceAreSame();
         Assert.True(
             same,
             "expected the SECOND crossing of the same live Kotlin Goat to resolve to the SAME " +
@@ -402,7 +402,7 @@ public class MenagerieRoundTripTests
     [Fact]
     public void KotlinGoatsRememberedTwice_DifferentInstancesAreNeverSame()
     {
-        bool same = MenagerieSample.kotlinGoatsRememberedTwiceAreNotSame();
+        bool same = MenagerieSample.KotlinGoatsRememberedTwiceAreNotSame();
         Assert.False(same, "expected two different Kotlin Goat instances to never be ReferenceEquals");
     }
 
@@ -423,7 +423,7 @@ public class MenagerieRoundTripTests
         {
             GC.Collect();
             GC.WaitForPendingFinalizers();
-            if (MenagerieSample.kotlinBridgeReleaseCount() > before) return true;
+            if (MenagerieSample.KotlinBridgeReleaseCount() > before) return true;
             Thread.Sleep(25);
         }
         return false;

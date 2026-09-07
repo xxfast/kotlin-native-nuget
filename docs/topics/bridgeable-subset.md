@@ -265,7 +265,7 @@ the Kotlin side can observe the call landed:
 
 ```C#
 // IntegrationTests/MenagerieRoundTripTests.cs
-string result = MenagerieSample.kotlinGoatIntroduce();
+string result = MenagerieSample.KotlinGoatIntroduce();
 Assert.Equal("introduced Nibbles the goat with 4 legs", result);
 ```
 

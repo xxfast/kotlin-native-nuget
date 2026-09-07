@@ -159,8 +159,8 @@ class Tier1ValueClassEnumUnderlyingTest {
       "hasValue ? new global::Interop.Temperament((global::Interop.Mood)valueOut) : " +
           "(global::Interop.Temperament?)null;",
     )
-    assertContains(cs, "private static extern double standardDosage_value(int kind, out IntPtr error);")
-    assertContains(cs, "public static global::Interop.Dosage? standardDosage(int kind)")
+    assertContains(cs, "private static extern double StandardDosage_value(int kind, out IntPtr error);")
+    assertContains(cs, "public static global::Interop.Dosage? StandardDosage(int kind)")
     assertContains(cs, "return new global::Interop.Dosage(__nuget_value);")
   }
 }

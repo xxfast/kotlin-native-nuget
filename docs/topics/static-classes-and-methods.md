@@ -81,12 +81,12 @@ And the C# test exercises the whole path end to end
 [Fact]
 public void MimeTypeFor_JsonFile_ReturnsApplicationJson()
 {
-    string result = MimeSample.mimeTypeFor("data.json");
+    string result = MimeSample.MimeTypeFor("data.json");
     Assert.Equal("application/json", result);
 }
 ```
 
-That's the full trip: C# test code calls the forward-bridged `MimeSample.mimeTypeFor`, which is
+That's the full trip: C# test code calls the forward-bridged `MimeSample.MimeTypeFor`, which is
 Kotlin code, which calls the reverse-bridged `MimeUtility.getMimeMapping`, which is itself a thunk
 call back into the *real* `MimeMapping` NuGet package.
 
@@ -152,8 +152,8 @@ The consumer-side round trip calls these Kotlin functions through the forward br
 [Fact]
 public void StaticProperties_MyloNameAndRenderCount_RoundTripThroughKotlin()
 {
-    string name = Greetings.setDefaultTemplateCatName("Mylo");
-    int renderCount = Greetings.templateRenderCount();
+    string name = Greetings.SetDefaultTemplateCatName("Mylo");
+    int renderCount = Greetings.TemplateRenderCount();
 
     Assert.Equal("Mylo", name);
     Assert.True(renderCount >= 0);

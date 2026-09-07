@@ -30,14 +30,14 @@ public class CollarRoundTripTests
     [Fact]
     public void DescribeCollar_RendersEveryComponent()
     {
-        string result = CollarSample.describeCollar(5, "Oreo", true, 'O', CatMood.Playful);
+        string result = CollarSample.DescribeCollar(5, "Oreo", true, 'O', CatMood.Playful);
         Assert.Equal("Oreo 5 O Playful True", result);
     }
 
     [Fact]
     public void DescribeCollar_QuietMylo()
     {
-        string result = CollarSample.describeCollar(6, "Mylo", false, 'M', CatMood.Hungry);
+        string result = CollarSample.DescribeCollar(6, "Mylo", false, 'M', CatMood.Hungry);
         Assert.Equal("Mylo 6 M Hungry False", result);
     }
 
@@ -46,14 +46,14 @@ public class CollarRoundTripTests
     [Fact]
     public void LoosenCollar_GrowsGirthByOne_KeepsEveryOtherComponent()
     {
-        string result = CollarSample.loosenCollar(3, "Oreo", true, 'O', CatMood.Playful);
+        string result = CollarSample.LoosenCollar(3, "Oreo", true, 'O', CatMood.Playful);
         Assert.Equal("4,Oreo,true,79,PLAYFUL", result);
     }
 
     [Fact]
     public void LoosenCollar_DifferentCat_ScalesIndependently()
     {
-        string result = CollarSample.loosenCollar(10, "Mylo", false, 'M', CatMood.Hungry);
+        string result = CollarSample.LoosenCollar(10, "Mylo", false, 'M', CatMood.Hungry);
         Assert.Equal("11,Mylo,false,77,HUNGRY", result);
     }
 
@@ -62,14 +62,14 @@ public class CollarRoundTripTests
     [Fact]
     public void PairCollar_TwoDifferentShapeBStructsInOneSignature()
     {
-        string result = CollarSample.pairCollar(2, "Oreo", 3, 4);
+        string result = CollarSample.PairCollar(2, "Oreo", 3, 4);
         Assert.Equal("Oreo:2*/3x4", result);
     }
 
     [Fact]
     public void PairCollar_DifferentValues()
     {
-        string result = CollarSample.pairCollar(9, "Mylo", 5, 6);
+        string result = CollarSample.PairCollar(9, "Mylo", 5, 6);
         Assert.Equal("Mylo:9*/5x6", result);
     }
 
@@ -79,14 +79,14 @@ public class CollarRoundTripTests
     [Fact]
     public void ExtentMembers_ComputedProperty_InstanceMethodReturningStruct_AndStaticFactory()
     {
-        string result = CollarSample.extentMembers(3, 4);
+        string result = CollarSample.ExtentMembers(3, 4);
         Assert.Equal("12|5x6|1", result);
     }
 
     [Fact]
     public void ExtentMembers_DifferentDimensions()
     {
-        string result = CollarSample.extentMembers(2, 7);
+        string result = CollarSample.ExtentMembers(2, 7);
         Assert.Equal("14|4x9|1", result);
     }
 
@@ -95,14 +95,14 @@ public class CollarRoundTripTests
     [Fact]
     public void CollarMembers_LoudPlayfulCat()
     {
-        string result = CollarSample.collarMembers(4, "Mylo", CatMood.Playful);
+        string result = CollarSample.CollarMembers(4, "Mylo", CatMood.Playful);
         Assert.Equal("Mylo:4*|true|5|Mylo:1", result);
     }
 
     [Fact]
     public void CollarMembers_QuietSleepyCat_IsNotLoud()
     {
-        string result = CollarSample.collarMembers(7, "Oreo", CatMood.Sleepy);
+        string result = CollarSample.CollarMembers(7, "Oreo", CatMood.Sleepy);
         Assert.Equal("Oreo:7*|false|8|Oreo:1", result);
     }
 
@@ -112,7 +112,7 @@ public class CollarRoundTripTests
     [Fact]
     public void CollarValueEquality_HoldsAcrossCopy_AndDiffersAfterMutation()
     {
-        bool result = CollarSample.collarValueEquality();
+        bool result = CollarSample.CollarValueEquality();
         Assert.True(result);
     }
 
@@ -123,7 +123,7 @@ public class CollarRoundTripTests
     [Fact]
     public void CollarNamedArgs_ComponentNamesMatchDeclarationOrder()
     {
-        string result = CollarSample.collarNamedArgs();
+        string result = CollarSample.CollarNamedArgs();
         Assert.Equal("1,black,true,O,CALM", result);
     }
 }

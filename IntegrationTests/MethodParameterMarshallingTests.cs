@@ -138,8 +138,9 @@ public class MethodParameterMarshallingTests
     {
         using var patient = new Patient("Oreo");
 
-        // Top-level functions keep Kotlin camelCase (see ClinicSample.admit, Mappings.nullableInt).
-        Assert.Equal(4, ClinicSample.patientNameLength(patient));
+        // Top-level functions are PascalCase like every other member (ADR-110):
+        // Kotlin `fun patientNameLength` surfaces as `PatientNameLength`.
+        Assert.Equal(4, ClinicSample.PatientNameLength(patient));
     }
 
     // Non-nullable object-handle parameter, primary constructor (alongside a String).

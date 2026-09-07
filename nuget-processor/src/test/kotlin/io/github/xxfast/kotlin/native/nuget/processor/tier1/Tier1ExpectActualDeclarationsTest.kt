@@ -244,11 +244,11 @@ class Tier1ExpectActualDeclarationsTest {
     val cs: String = result.generatedCSharp
     assertEquals(
       1,
-      Regex("""\bplatformName\(""").findAll(cs).count(),
-      "expected exactly one platformName declaration in Interop.cs; got: $cs",
+      Regex("""\bPlatformName\(""").findAll(cs).count(),
+      "expected exactly one PlatformName declaration in Interop.cs; got: $cs",
     )
-    // Top-level functions keep Kotlin camelCase (ForwardCallablePlanner.kt topLevelEntry).
-    assertTrue(cs.contains("public static string platformName()"))
+    // ADR-110: top-level functions are PascalCase (ForwardCallablePlanner.kt topLevelEntry).
+    assertTrue(cs.contains("public static string PlatformName()"))
   }
 
   @Test
@@ -393,12 +393,12 @@ class Tier1ExpectActualDeclarationsTest {
     )
     assertTrue(cs.contains("public class SystemClock : IDisposable"), "got: $cs")
     assertTrue(
-      cs.contains("global::Interop.SystemClock defaultClock()"),
-      "expected defaultClock's return position to erase to SystemClock; got: $cs",
+      cs.contains("global::Interop.SystemClock DefaultClock()"),
+      "expected DefaultClock's return position to erase to SystemClock; got: $cs",
     )
     assertTrue(
-      cs.contains("labelOf(global::Interop.SystemClock clock)"),
-      "expected labelOf's parameter position to erase to SystemClock; got: $cs",
+      cs.contains("LabelOf(global::Interop.SystemClock clock)"),
+      "expected LabelOf's parameter position to erase to SystemClock; got: $cs",
     )
   }
 

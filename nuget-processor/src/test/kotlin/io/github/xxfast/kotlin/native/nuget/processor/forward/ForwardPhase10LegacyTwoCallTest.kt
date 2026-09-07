@@ -20,7 +20,7 @@ class ForwardPhase10LegacyTwoCallTest {
     val plan = legacyTwoCallPlan(
       symbol = "sample.nullableInt",
       export = "nullableInt",
-      publicName = "nullableInt",
+      publicName = "NullableInt",
       primitive = BridgeType.Primitive(PrimitiveKind.INT),
       parameters = listOf(ForwardPublicParameter("hasValue", BridgeType.Primitive(PrimitiveKind.BOOLEAN))),
     )
@@ -34,7 +34,7 @@ class ForwardPhase10LegacyTwoCallTest {
     val csharp = renderCsharp(plan)
     assertContains(csharp, "EntryPoint = \"nullableInt_has_value\"")
     assertContains(csharp, "EntryPoint = \"nullableInt_value\"")
-    assertContains(csharp, "public static int? nullableInt(bool hasValue)")
+    assertContains(csharp, "public static int? NullableInt(bool hasValue)")
     assertContains(csharp, "if (!__nuget_hasValue) return null;")
   }
 

@@ -4,11 +4,13 @@ Kotlin top-level functions, properties, and `const val`s don't belong to any cla
 
 | Kotlin | C# | Notes |
 |---|---|---|
-| top-level function | `static class` method | one static class per source file |
+| top-level function | `static class` method, `PascalCase` | one static class per source file; native `@CName` export keeps the Kotlin spelling ([ADR-110](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/110-top-level-function-pascal-case.md)) |
 | top-level property | static property | get/set, including nullable |
 | `const val` | `const` | |
 | two or more same-named top-level functions | one C# overload set | numbered native export/extern name, unnumbered public name, counter scoped per (package, name); see [Method overloads](#method-overloads) below ([ADR-095](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/095-static-route-overloads.md)) |
 | top-level function with a trailing run of defaulted parameters | omitting overload per suffix length | see [Function default parameters](#function-default-parameters) below ([ADR-096](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/096-function-default-parameters.md)) |
+| top-level function whose `PascalCase` name equals its own file's static class | `Kt`-suffixed class (`GreetingKt`) | ADR-007's conflict rename, extended to fire on a name conflict too; `INFO_FILE_CLASS_RENAMED` |
+| top-level function whose `PascalCase` name equals a top-level property in the same file | build error | C# cannot declare a property and a method with one name (CS0102); `ERROR_CSHARP_NAME_COLLISION` |
 
 ## Kotlin
 
@@ -103,7 +105,14 @@ public void GreetingIsHelloWorld()
 }
 ```
 
-Top-level functions follow the same grouping. `test-library/src/nativeMain/kotlin/.../math/Arithmetic.kt` (`add`, `multiply`, `divide`, `square`) becomes `TestLibrary.Math.Arithmetic`; see [Generics](generics.md) for the `inline fun square` case.
+Top-level functions follow the same grouping. `test-library/src/nativeMain/kotlin/.../math/Arithmetic.kt` (`add`, `multiply`, `divide`, `square`) becomes `TestLibrary.Math.Arithmetic`, with `PascalCase` members (`Arithmetic.Add(3, 4)`); see [Generics](generics.md) for the `inline fun square` case.
+
+From `IntegrationTests/ArithmeticTests.cs`:
+
+```C#
+int result = Arithmetic.Add(3, 4);
+int? divided = Arithmetic.Divide(10, 2);
+```
 
 Top-level factory functions that return a bridged class (for example `fun admit(name: String): Patient`
 in the clinic fixture) go through the same shared callable plan as other ordinary sync functions
@@ -122,6 +131,40 @@ the file's static class is not generated at all, and if that leaves its namespac
 declarations, the namespace is dropped too. `test-library/.../test/husk/HuskOnly.kt` is exactly
 this shape: its only function is skipped, so no `HuskOnly` class appears anywhere in `Interop.cs`.
 A file with at least one surviving declaration still gets its class, with only the survivors on it.
+
+## Name collisions
+
+`PascalCase`-ing every top-level function ([ADR-110](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/110-top-level-function-pascal-case.md))
+opens two collisions camelCase used to keep apart.
+
+A function whose `PascalCase` name equals its own file's static class name (`fun greeting()` in
+`Greeting.kt`) would be `Greeting.Greeting()`, a member named like its enclosing type, which C#
+forbids (CS0542). ADR-007's `Kt` suffix already exists for a type claiming the file class name; it
+fires here too, renaming the whole file class, not just the claiming function, and logging an
+`INFO_FILE_CLASS_RENAMED` note:
+
+```C#
+public static partial class GreetingKt
+{
+    public static string Greeting() { /* ... */ }
+    public static string Other() { /* ... */ } // moves with the rest of the file
+}
+```
+
+```
+[nuget:INFO_FILE_CLASS_RENAMED] Note GreetingKt: the top-level function 'greeting' renders the
+C# name 'Greeting', which is also what its file class would be called, and C# cannot declare a
+member named like its enclosing type (CS0542). call it as GreetingKt.Greeting(...); the native
+export name is unchanged (ADR-007, ADR-110)
+```
+
+The native export is unaffected: `EntryPoint = "greeting"` still targets the Kotlin `@CName`.
+
+A `val name` and a `fun name()` in the same file both want the C# name `Name` on that file's static
+class. Kotlin keeps properties and functions in separate namespaces; C# does not, and forbids a
+property and a method sharing one name (CS0102). There is no rename to fall back on here, since
+renaming either member silently changes the API, so this is a fatal
+`ERROR_CSHARP_NAME_COLLISION` naming both declarations, with a hint to rename the Kotlin function.
 
 ## Method overloads
 
@@ -153,36 +196,38 @@ the same `_$n` numbering.
 ### Generated C# {id="overloads-generated-c"}
 
 From `Interop.cs`. Top-level exports carry no prefix, so the bare `toCName(name)` gets the suffix
-directly; the public name keeps today's camelCase, unrelated to the numbering:
+directly; the public name is `PascalCase` ([ADR-110](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/110-top-level-function-pascal-case.md)), unrelated to the numbering:
 
 ```C#
 public static partial class GroomingSample
 {
     [DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "bookGrooming")]
-    private static extern IntPtr Native_bookGrooming(out IntPtr error);
+    private static extern IntPtr Native_BookGrooming(out IntPtr error);
 
-    public static string bookGrooming() { /* ... */ }
+    public static string BookGrooming() { /* ... */ }
 
     [DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "bookGrooming_2")]
-    private static extern IntPtr Native_bookGrooming_2([MarshalAs(UnmanagedType.LPUTF8Str)] string cat, out IntPtr error);
+    private static extern IntPtr Native_BookGrooming_2([MarshalAs(UnmanagedType.LPUTF8Str)] string cat, out IntPtr error);
 
-    public static string bookGrooming(string cat) { /* ... */ }
+    public static string BookGrooming(string cat) { /* ... */ }
 
     [DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "waitTime_has_value")]
-    private static extern bool waitTime_has_value(out IntPtr error);
+    [return: MarshalAs(UnmanagedType.I1)]
+    private static extern bool WaitTime_has_value(out IntPtr error);
 
     [DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "waitTime_value")]
-    private static extern int waitTime_value(out IntPtr error);
+    private static extern int WaitTime_value(out IntPtr error);
 
-    public static int? waitTime() { /* ... */ }
+    public static int? WaitTime() { /* ... */ }
 
     [DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "waitTime_2_has_value")]
-    private static extern bool waitTime_2_has_value([MarshalAs(UnmanagedType.LPUTF8Str)] string cat, out IntPtr error);
+    [return: MarshalAs(UnmanagedType.I1)]
+    private static extern bool WaitTime_2_has_value([MarshalAs(UnmanagedType.LPUTF8Str)] string cat, out IntPtr error);
 
     [DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "waitTime_2_value")]
-    private static extern int waitTime_2_value([MarshalAs(UnmanagedType.LPUTF8Str)] string cat, out IntPtr error);
+    private static extern int WaitTime_2_value([MarshalAs(UnmanagedType.LPUTF8Str)] string cat, out IntPtr error);
 
-    public static int? waitTime(string cat) { /* ... */ }
+    public static int? WaitTime(string cat) { /* ... */ }
 }
 ```
 
@@ -195,8 +240,8 @@ From `IntegrationTests/StaticRouteOverloadTests.cs`:
 public void WaitTime_WithBlankCat_ReturnsNullFromTheNumberedPresenceCall()
 {
     // The presence half of the numbered pair has to belong to *this* overload; a mis-numbered
-    // _has_value would answer for waitTime() instead, which is never null.
-    Assert.Null(GroomingSample.waitTime("   "));
+    // _has_value would answer for WaitTime() instead, which is never null.
+    Assert.Null(GroomingSample.WaitTime("   "));
 }
 ```
 
@@ -234,19 +279,19 @@ From `Interop.cs`:
 public static partial class WhiskersSample
 {
     [DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "hail")]
-    private static extern IntPtr Native_hail(string name, bool loud, out IntPtr error);
+    private static extern IntPtr Native_Hail([MarshalAs(UnmanagedType.LPUTF8Str)] string name, bool loud, out IntPtr error);
 
-    public static string hail(string name, bool loud) { /* ... */ }
+    public static string Hail(string name, bool loud) { /* ... */ }
 
     [DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "hail_2")]
-    private static extern IntPtr Native_hail_2(string name, out IntPtr error);
+    private static extern IntPtr Native_Hail_2([MarshalAs(UnmanagedType.LPUTF8Str)] string name, out IntPtr error);
 
-    public static string hail(string name) { /* ... */ } // loud omitted; Kotlin supplies false
+    public static string Hail(string name) { /* ... */ } // loud omitted; Kotlin supplies false
 
     [DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "book")]
-    private static extern IntPtr Native_book(string name, int capacity, string city, out IntPtr error);
+    private static extern IntPtr Native_Book([MarshalAs(UnmanagedType.LPUTF8Str)] string name, int capacity, [MarshalAs(UnmanagedType.LPUTF8Str)] string city, out IntPtr error);
 
-    public static string book(string name, int capacity, string city) { /* ... */ } // only overload
+    public static string Book(string name, int capacity, string city) { /* ... */ } // only overload
 }
 ```
 
@@ -258,7 +303,7 @@ From `IntegrationTests/FunctionDefaultParameterTests.cs`:
 [Fact]
 public void Hail_OmittingLoud_UsesKotlinDefaultOfFalse()
 {
-    Assert.Equal("hi Oreo", WhiskersSample.hail("Oreo"));
+    Assert.Equal("hi Oreo", WhiskersSample.Hail("Oreo"));
 }
 
 [Fact]
@@ -266,9 +311,9 @@ public void Book_HasNoOmittingOverload()
 {
     // `capacity` has a required parameter after it, so a positional Kotlin call can never skip
     // it. Stated by signature so a future "helpful" combinatorial expansion trips here.
-    Assert.Null(typeof(WhiskersSample).GetMethod("book", [typeof(string), typeof(int)]));
-    Assert.Null(typeof(WhiskersSample).GetMethod("book", [typeof(string)]));
-    Assert.Equal(1, typeof(WhiskersSample).GetMethods().Count(m => m.Name == "book"));
+    Assert.Null(typeof(WhiskersSample).GetMethod("Book", [typeof(string), typeof(int)]));
+    Assert.Null(typeof(WhiskersSample).GetMethod("Book", [typeof(string)]));
+    Assert.Equal(1, typeof(WhiskersSample).GetMethods().Count(m => m.Name == "Book"));
 }
 ```
 
@@ -290,5 +335,6 @@ side for the `hasDefault` bit; see [expect/actual declarations](expect-actual.md
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/091-constructor-default-parameters.md">ADR-091: Constructor default parameters</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/096-function-default-parameters.md">ADR-096: Function default parameters</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/064-forward-unsupported-declaration-diagnostics.md">ADR-064: Forward unsupported-declaration diagnostics</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/110-top-level-function-pascal-case.md">ADR-110: Forward, top-level functions PascalCase in C#</a>
     </category>
 </seealso>

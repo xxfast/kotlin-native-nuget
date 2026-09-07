@@ -9,7 +9,7 @@ public class MimeRoundTripTests
     [Fact]
     public void MimeTypeFor_JsonFile_ReturnsApplicationJson()
     {
-        string result = MimeSample.mimeTypeFor("data.json");
+        string result = MimeSample.MimeTypeFor("data.json");
         Assert.Equal("application/json", result);
     }
 
@@ -17,7 +17,7 @@ public class MimeRoundTripTests
     public void MimeTypeFor_PngFile_ReturnsImagePng()
     {
         // logo.png: a glamour shot of Oreo, black and white like the biscuit.
-        string result = MimeSample.mimeTypeFor("logo.png");
+        string result = MimeSample.MimeTypeFor("logo.png");
         Assert.Equal("image/png", result);
     }
 }

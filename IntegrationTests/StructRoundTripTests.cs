@@ -32,14 +32,14 @@ public class StructRoundTripTests
     [Fact]
     public void TranslatePointDescription_MovesBothComponents()
     {
-        string result = StructsSample.translatePointDescription(1, 2, 10, 20);
+        string result = StructsSample.TranslatePointDescription(1, 2, 10, 20);
         Assert.Equal("11,22", result);
     }
 
     [Fact]
     public void TranslatePointDescription_NegativeDelta_MovesBothComponents()
     {
-        string result = StructsSample.translatePointDescription(5, 5, -3, -1);
+        string result = StructsSample.TranslatePointDescription(5, 5, -3, -1);
         Assert.Equal("2,4", result);
     }
 
@@ -47,7 +47,7 @@ public class StructRoundTripTests
     [Fact]
     public void DescribePoint_RendersBothComponents()
     {
-        string result = StructsSample.describePoint(4, 5);
+        string result = StructsSample.DescribePoint(4, 5);
         Assert.Equal("(4, 5)", result);
     }
 
@@ -58,7 +58,7 @@ public class StructRoundTripTests
     [InlineData(-2, -3, 2, 3, 10)]
     public void ManhattanDistance_TwoStructParameters(int x1, int y1, int x2, int y2, int expected)
     {
-        int result = StructsSample.manhattanDistance(x1, y1, x2, y2);
+        int result = StructsSample.ManhattanDistance(x1, y1, x2, y2);
         Assert.Equal(expected, result);
     }
 
@@ -68,7 +68,7 @@ public class StructRoundTripTests
     [Fact]
     public void PointValueEquality_HoldsAcrossIndependentBridgeCalls()
     {
-        bool result = StructsSample.pointValueEqualityRoundTrip();
+        bool result = StructsSample.PointValueEqualityRoundTrip();
         Assert.True(result);
     }
 
@@ -78,14 +78,14 @@ public class StructRoundTripTests
     [Fact]
     public void WeighCat_InstanceMethodStructParamAndReturn()
     {
-        string result = StructsSample.weighCat("Oreo", 100, 4.0f, 38.5, 1.5f);
+        string result = StructsSample.WeighCat("Oreo", 100, 4.0f, 38.5, 1.5f);
         Assert.Equal("Oreo:150,6.0,38.5", result);
     }
 
     [Fact]
     public void WeighCat_DifferentCat_ScalesIndependently()
     {
-        string result = StructsSample.weighCat("Mylo", 120, 5.0f, 38.8, 2.0f);
+        string result = StructsSample.WeighCat("Mylo", 120, 5.0f, 38.8, 2.0f);
         Assert.Equal("Mylo:240,10.0,38.8", result);
     }
 
@@ -94,7 +94,7 @@ public class StructRoundTripTests
     [Fact]
     public void MetricsValueEquality_HoldsAcrossIndependentBridgeCalls()
     {
-        bool result = StructsSample.metricsValueEqualityRoundTrip("Oreo", 100, 4.0f, 38.5, 1.5f);
+        bool result = StructsSample.MetricsValueEqualityRoundTrip("Oreo", 100, 4.0f, 38.5, 1.5f);
         Assert.True(result);
     }
 
@@ -103,14 +103,14 @@ public class StructRoundTripTests
     [Fact]
     public void AnnounceProfile_StructParameterWithFullComponentVocabulary()
     {
-        string result = StructsSample.announceProfile("Oreo", true, 'A', CatMood.Playful);
+        string result = StructsSample.AnnounceProfile("Oreo", true, 'A', CatMood.Playful);
         Assert.Equal("Oreo (Playful) grade A, active", result);
     }
 
     [Fact]
     public void AnnounceProfile_RestingCat()
     {
-        string result = StructsSample.announceProfile("Mylo", false, 'B', CatMood.Sleepy);
+        string result = StructsSample.AnnounceProfile("Mylo", false, 'B', CatMood.Sleepy);
         Assert.Equal("Mylo (Sleepy) grade B, resting", result);
     }
 
@@ -119,7 +119,7 @@ public class StructRoundTripTests
     [Fact]
     public void PromoteProfile_StructParameterAndReturn()
     {
-        string result = StructsSample.promoteProfile("Mylo", false, 'B', CatMood.Hungry);
+        string result = StructsSample.PromoteProfile("Mylo", false, 'B', CatMood.Hungry);
         Assert.Equal("Mylo,true,66,PLAYFUL", result);
     }
 
@@ -128,7 +128,7 @@ public class StructRoundTripTests
     [Fact]
     public void ProfileValueEquality_HoldsWithFullComponentVocabulary()
     {
-        bool result = StructsSample.profileValueEqualityRoundTrip();
+        bool result = StructsSample.ProfileValueEqualityRoundTrip();
         Assert.True(result);
     }
 
@@ -138,7 +138,7 @@ public class StructRoundTripTests
     [Fact]
     public void CatteryCurrentProfile_GetSetRoundTrip()
     {
-        string result = StructsSample.catteryCurrentProfileRoundTrip("Household", "Mylo", true, 66, CatMood.Hungry);
+        string result = StructsSample.CatteryCurrentProfileRoundTrip("Household", "Mylo", true, 66, CatMood.Hungry);
         Assert.Equal("unset,false,63,SLEEPY|Mylo,true,66,HUNGRY", result);
     }
 
@@ -153,7 +153,7 @@ public class StructRoundTripTests
     [InlineData(-2, -3, 5)]
     public void PointMagnitude_ComputedProperty(int x, int y, int expected)
     {
-        int result = StructsSample.pointMagnitude(x, y);
+        int result = StructsSample.PointMagnitude(x, y);
         Assert.Equal(expected, result);
     }
 
@@ -162,14 +162,14 @@ public class StructRoundTripTests
     public void PointOffset_InstanceMethodStructReturn_ThenFormat()
     {
         // Oreo naps at (1,2); a zoomie shifts him by (10,20).
-        string result = StructsSample.offsetPoint(1, 2, 10, 20);
+        string result = StructsSample.OffsetPoint(1, 2, 10, 20);
         Assert.Equal("(11,22)", result);
     }
 
     [Fact]
     public void PointOffset_NegativeDelta_ThenFormat()
     {
-        string result = StructsSample.offsetPoint(5, 5, -3, -1);
+        string result = StructsSample.OffsetPoint(5, 5, -3, -1);
         Assert.Equal("(2,4)", result);
     }
 
@@ -177,7 +177,7 @@ public class StructRoundTripTests
     [Fact]
     public void PointOrigin_StaticFactory_ThenFormat()
     {
-        string result = StructsSample.pointOriginFormat();
+        string result = StructsSample.PointOriginFormat();
         Assert.Equal("(0,0)", result);
     }
 
@@ -185,14 +185,14 @@ public class StructRoundTripTests
     [Fact]
     public void ProfileLabel_ComputedStringProperty()
     {
-        string result = StructsSample.profileLabel("Oreo", true, 'A', CatMood.Playful);
+        string result = StructsSample.ProfileLabel("Oreo", true, 'A', CatMood.Playful);
         Assert.Equal("Oreo:Playful", result);
     }
 
     [Fact]
     public void ProfileLabel_SleepyMylo()
     {
-        string result = StructsSample.profileLabel("Mylo", false, 'B', CatMood.Sleepy);
+        string result = StructsSample.ProfileLabel("Mylo", false, 'B', CatMood.Sleepy);
         Assert.Equal("Mylo:Sleepy", result);
     }
 
@@ -202,7 +202,7 @@ public class StructRoundTripTests
     public void ProfileWithMood_InstanceMethodStructReturn_ThenLabelAndIsPlayful()
     {
         // Mylo starts Hungry; a treat flips him to Playful.
-        string result = StructsSample.profileWithMood(
+        string result = StructsSample.ProfileWithMood(
             "Mylo", false, 66, CatMood.Hungry, CatMood.Playful);
         Assert.Equal("Mylo:Playful|true", result);
     }
@@ -210,7 +210,7 @@ public class StructRoundTripTests
     [Fact]
     public void ProfileWithMood_ToSleepy_IsNotPlayful()
     {
-        string result = StructsSample.profileWithMood(
+        string result = StructsSample.ProfileWithMood(
             "Oreo", true, 65, CatMood.Playful, CatMood.Sleepy);
         Assert.Equal("Oreo:Sleepy|false", result);
     }
@@ -219,7 +219,7 @@ public class StructRoundTripTests
     [Fact]
     public void ProfileResting_StaticFactory_ThenLabel()
     {
-        string result = StructsSample.profileRestingLabel("Oreo");
+        string result = StructsSample.ProfileRestingLabel("Oreo");
         Assert.Equal("Oreo:Sleepy", result);
     }
 }

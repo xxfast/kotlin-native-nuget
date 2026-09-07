@@ -53,7 +53,11 @@ internal fun translateFunction(
   logger: KSPLogger,
 ): List<CirMember> {
   val cname: String = toCName(func.simpleName.asString())
-  val csName: String = toCSharpName(cname)
+  // ADR-110: PascalCase like every other forward position. The keyword escape runs *after* the
+  // case change, so `fun lock()` renders `Lock` rather than the verbatim `@lock` (no C# keyword is
+  // capitalised). Every DllImport below pins `entryPoint = cname`, so the native symbol is
+  // unaffected.
+  val csName: String = toCSharpName(cname.replaceFirstChar { it.uppercase() })
   val returnType = func.returnType?.resolve()?.expandAliases()
   val isNullable: Boolean = returnType?.isMarkedNullable == true
   val kotlinReturnType: String = returnType?.declaration?.simpleName?.asString() ?: "Unit"
@@ -97,8 +101,6 @@ internal fun translateFunction(
     )
     return emptyList()
   }
-
-  val entryPoint: String? = if (csName != cname) cname else null
 
   if (isNullable) {
     if (hasEnumParams) return enumParamsUnsupported("nullable")
@@ -488,6 +490,14 @@ internal fun translateFunction(
   if (isSealedReturnType) {
     if (hasEnumParams) return enumParamsUnsupported("sealed")
 
+    // ADR-110: fully qualified, like the enum branch below. Unqualified, `Issue38State.FromHandle`
+    // in the body of `Issue38Sample.Issue38State(int)` resolves to the method that PascalCasing
+    // just created rather than to the type (CS0119).
+    val sealedNamespace: String = mapPackageToNamespace(
+      returnDecl.packageName.asString(), rootPackage, rootNamespace,
+    )
+    val sealedType: String = "global::$sealedNamespace.$kotlinReturnType"
+
     val nativeImport = CirDllImport(
       libraryName = libraryName,
       entryPoint = cname,
@@ -508,12 +518,12 @@ internal fun translateFunction(
       appendLine("            {")
       appendLine("                throw NugetErrorNative.BuildException(error);")
       appendLine("            }")
-      append("            return $kotlinReturnType.FromHandle(nativeResult);")
+      append("            return $sealedType.FromHandle(nativeResult);")
     }
 
     val wrapper = CirMethod(
       name = csName,
-      returnType = kotlinReturnType,
+      returnType = sealedType,
       parameters = params,
       body = body,
       isStatic = true,
@@ -639,7 +649,8 @@ internal fun translateSuspendFunction(
   logger: KSPLogger,
 ): List<CirMember> {
   val cname: String = toCName(func.simpleName.asString())
-  val csName: String = toCSharpName(cname).replaceFirstChar { it.uppercase() }
+  // ADR-110: escape after the case change, so `suspend fun lock()` renders `LockAsync`.
+  val csName: String = toCSharpName(cname.replaceFirstChar { it.uppercase() })
   val returnType = func.returnType?.resolve()?.expandAliases()
   val kotlinReturnType: String = returnType?.declaration?.simpleName?.asString() ?: "Unit"
   val isUnit: Boolean = kotlinReturnType == "Unit"
@@ -693,7 +704,9 @@ internal fun translateGenericFunction(
   libraryName: String,
 ): List<CirMember> {
   val funcName: String = func.simpleName.asString()
-  val csName: String = toCSharpName(funcName)
+  // ADR-110: PascalCase, escaped after the case change; every DllImport on this route pins its
+  // own explicit entry point.
+  val csName: String = toCSharpName(funcName.replaceFirstChar { it.uppercase() })
   val returnType = func.returnType?.resolve()?.expandAliases()
   val returnDecl: KSClassDeclaration? = returnType?.declaration as? KSClassDeclaration
   val returnTypeName: String = returnType?.declaration?.simpleName?.asString() ?: "Unit"

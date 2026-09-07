@@ -288,7 +288,7 @@ public void IWritable_Contravariance_AllowsWideningAssignment()
 [Fact]
 public void Square_ReturnsSquaredValue()
 {
-    int result = Arithmetic.square(5);
+    int result = Arithmetic.Square(5);
     Assert.Equal(25, result);
 }
 ```
@@ -299,14 +299,14 @@ Type aliases, from `IntegrationTests/TypeAliasTests.cs`:
 [Fact]
 public void TopScore_ReturnsInt()
 {
-    int result = TypeAliases.topScore();
+    int result = TypeAliases.TopScore();
     Assert.Equal(10, result);
 }
 
 [Fact]
 public void DefaultScores_ReturnsReadOnlyDictionaryOfStringInt()
 {
-    IReadOnlyDictionary<string, int> scores = TypeAliases.defaultScores();
+    IReadOnlyDictionary<string, int> scores = TypeAliases.DefaultScores();
     Assert.Equal(2, scores.Count);
 }
 ```

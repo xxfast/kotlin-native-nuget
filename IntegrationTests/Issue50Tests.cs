@@ -21,14 +21,14 @@ public class Issue50Tests
     [Fact]
     public void Loading_MaterialisesTheDataObjectArm()
     {
-        using Issue50State state = Issue50Feed.issue50Loading();
+        using Issue50State state = Issue50Feed.Issue50Loading();
         Assert.IsType<Issue50State.Loading>(state);
     }
 
     [Fact]
     public void Success_Crew_ReadsTheCrossNamespaceListAndItsElements()
     {
-        using Issue50State state = Issue50Feed.issue50Loaded();
+        using Issue50State state = Issue50Feed.Issue50Loaded();
         var success = Assert.IsType<Issue50State.Success>(state);
 
         IReadOnlyList<Issue50Assignment> crew = success.Crew;
@@ -42,7 +42,7 @@ public class Issue50Tests
     [Fact]
     public void Success_Position_ReadsTheCrossNamespaceObjectProperty()
     {
-        using Issue50State state = Issue50Feed.issue50Loaded();
+        using Issue50State state = Issue50Feed.Issue50Loaded();
         var success = Assert.IsType<Issue50State.Success>(state);
 
         using Issue50Position position = success.Position;

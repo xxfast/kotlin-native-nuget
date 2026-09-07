@@ -4,6 +4,17 @@ This walks through publishing a Kotlin/Native library as a NuGet package and con
 C# project, end to end. It mirrors `test-library/build.gradle.kts` and the `IntegrationTests`
 project in this repo, read those alongside this page for a working reference.
 
+<note>
+    <p><b>Upgrading to 0.6.0.</b> Every top-level function's generated C# name is now
+    <code>PascalCase</code>, matching every other forward position. A Kotlin <code>fun add(a: Int,
+    b: Int)</code> is now called as <code>Arithmetic.Add(3, 4)</code>, not
+    <code>Arithmetic.add(3, 4)</code>. This applies to a plain top-level function, an <code>actual
+    fun</code>, an overload set, a default-parameter overload, and a nullable-primitive return; the
+    native export and the registration contract are unchanged, so only a consumer-side rename and
+    rebuild is needed. See <a href="top-level-declarations.md">Top-level declarations</a> and
+    <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/110-top-level-function-pascal-case.md">ADR-110</a>.</p>
+</note>
+
 ## 1. Apply the plugin
 
 ```kotlin

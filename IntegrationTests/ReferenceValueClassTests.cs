@@ -48,7 +48,7 @@ public class ReferenceValueClassTests
     [Fact]
     public void ObservationResult_Describe_WhenAlive()
     {
-        using var observation = ObservationKt.openBox("Oreo");
+        using var observation = ObservationKt.OpenBox("Oreo");
         var result = new ObservationResult(observation);
         Assert.Equal("Alive: Oreo", result.Describe());
     }
@@ -56,7 +56,7 @@ public class ReferenceValueClassTests
     [Fact]
     public void ObservationResult_Describe_WhenDead()
     {
-        using var observation = ObservationKt.openBox("Rex");
+        using var observation = ObservationKt.OpenBox("Rex");
         var result = new ObservationResult(observation);
         Assert.Equal("Dead: The cat was not Rex", result.Describe());
     }
@@ -64,7 +64,7 @@ public class ReferenceValueClassTests
     [Fact]
     public void ObservationResult_Describe_WhenSuperposition()
     {
-        using var observation = ObservationKt.peekBox();
+        using var observation = ObservationKt.PeekBox();
         var result = new ObservationResult(observation);
         Assert.Equal("Unknown", result.Describe());
     }

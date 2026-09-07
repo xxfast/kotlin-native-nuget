@@ -5,7 +5,7 @@ Kotlin Multiplatform's `expect`/`actual` pair is a source-level mechanism, not a
 | Kotlin | C# | Notes |
 |---|---|---|
 | `expect`/`actual class` | ordinary `class` | the `actual` is the export root; an `expect class` with no explicit constructor still gets a usable public constructor, because the `actual` always has one |
-| `expect`/`actual fun` / `val` (top-level) | ordinary static class member | the C# static class name comes from the **expect's** file, never the actual's |
+| `expect`/`actual fun` / `val` (top-level) | ordinary static class member, `PascalCase` | the C# static class name comes from the **expect's** file, never the actual's; PascalCasing follows [ADR-110](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/110-top-level-function-pascal-case.md) |
 | `expect`/`actual object` | ordinary `static class` | |
 | `actual typealias Foo = Target` | `Target`'s own C# type | `Foo` never appears in C#; every reference to it, at any position, redirects to `Target` |
 
@@ -78,17 +78,17 @@ namespace TestLibrary.Platform
 {
     public static partial class PlatformApi
     {
-        public static string platformName()
+        public static string PlatformName()
         {
             // ...
         }
 
-        public static SystemClock defaultClock()
+        public static SystemClock DefaultClock()
         {
             // ...
         }
 
-        public static string labelOf(SystemClock clock)
+        public static string LabelOf(SystemClock clock)
         {
             // ...
         }
@@ -121,11 +121,14 @@ namespace TestLibrary.Platform
 }
 ```
 
-There is no `Clock` type anywhere in `Interop.cs`. `defaultClock()`'s return position and `labelOf`'s parameter position both erase to `SystemClock`, the `actual typealias` target, per the redirect below.
+There is no `Clock` type anywhere in `Interop.cs`. `DefaultClock()`'s return position and `LabelOf`'s parameter position both erase to `SystemClock`, the `actual typealias` target, per the redirect below.
 
 `Sensor` (an `expect class` declaring no constructor) still gets a genuine public `Sensor()` in C#, because KSP reports zero constructors on the `expect` side but a synthetic no-arg one on the `actual`, and the `actual` is what's exported.
 
-Note the casing split, inherited unchanged from the rest of the forward direction: `platformName()` and `defaultClock()` keep Kotlin's camelCase (top-level *functions* are never PascalCased), while `PlatformTag` (a top-level *property*) and `PlatformRegistry.Count()` (an `object` member) are PascalCased. See [Top-level declarations](top-level-declarations.md) and [Objects and companions](objects-and-companions.md).
+Every position here is `PascalCase`: `PlatformName()` and `DefaultClock()` are top-level functions
+([ADR-110](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/110-top-level-function-pascal-case.md)),
+`PlatformTag` is a top-level property, and `PlatformRegistry.Count()` is an `object` member. See
+[Top-level declarations](top-level-declarations.md) and [Objects and companions](objects-and-companions.md).
 
 ## Using it from C#
 
@@ -137,7 +140,7 @@ public void PlatformName_ReturnsRunningActualsValue()
 {
     // Proves the *actual* body ran, not merely that the symbol resolved: "macos"/"mingw"
     // only exist on the actual side, never on the expect header.
-    Assert.Equal(ExpectedPlatformName, PlatformApi.platformName());
+    Assert.Equal(ExpectedPlatformName, PlatformApi.PlatformName());
 }
 
 [Fact]
@@ -154,7 +157,7 @@ The alias redirect, typed as `SystemClock` rather than `var`, so a wrong redirec
 [Fact]
 public void DefaultClock_ReturnsSystemClockAndReportsSystemClockLabel()
 {
-    using SystemClock clock = PlatformApi.defaultClock();
+    using SystemClock clock = PlatformApi.DefaultClock();
     Assert.Equal("system-clock", clock.Label());
 }
 ```
@@ -263,14 +266,14 @@ The generated C# still gets the omitting overload:
 
 ```C#
 [DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "beaconLabel")]
-private static extern IntPtr Native_beaconLabel(string prefix, int level, out IntPtr error);
+private static extern IntPtr Native_BeaconLabel([MarshalAs(UnmanagedType.LPUTF8Str)] string prefix, int level, out IntPtr error);
 
-public static string beaconLabel(string prefix, int level) { /* ... */ } // full signature
+public static string BeaconLabel(string prefix, int level) { /* ... */ } // full signature
 
 [DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "beaconLabel_2")]
-private static extern IntPtr Native_beaconLabel_2(string prefix, out IntPtr error);
+private static extern IntPtr Native_BeaconLabel_2([MarshalAs(UnmanagedType.LPUTF8Str)] string prefix, out IntPtr error);
 
-public static string beaconLabel(string prefix) { /* ... */ } // level omitted; Kotlin supplies 7
+public static string BeaconLabel(string prefix) { /* ... */ } // level omitted; Kotlin supplies 7
 ```
 
 From `IntegrationTests/FunctionDefaultParameterTests.cs`:
@@ -286,7 +289,7 @@ public void BeaconLabel_OmittingLevel_UsesTheExpectDeclaredDefault()
         ? "Oreo's collar at level 7 on macos"
         : "Oreo's collar at level 7 on mingw";
 
-    Assert.Equal(expected, PlatformApi.beaconLabel("Oreo's collar"));
+    Assert.Equal(expected, PlatformApi.BeaconLabel("Oreo's collar"));
 }
 ```
 
@@ -311,13 +314,13 @@ expect fun nuzzle(count: Int, prefix: String = "n"): String
 The generated C# gets an omitting overload per namesake, four methods in total:
 
 ```C#
-public static string nuzzle(string name, bool loud) { /* ... */ }        // nuzzle
+public static string Nuzzle(string name, bool loud) { /* ... */ }        // nuzzle
 
-public static string nuzzle(string name) { /* ... */ }                   // nuzzle_3, loud = false
+public static string Nuzzle(string name) { /* ... */ }                   // nuzzle_3, loud = false
 
-public static string nuzzle(int count, string prefix) { /* ... */ }      // nuzzle_2
+public static string Nuzzle(int count, string prefix) { /* ... */ }      // nuzzle_2
 
-public static string nuzzle(int count) { /* ... */ }                     // nuzzle_4, prefix = "n"
+public static string Nuzzle(int count) { /* ... */ }                     // nuzzle_4, prefix = "n"
 ```
 
 From `IntegrationTests/FunctionDefaultParameterTests.cs`:
@@ -330,7 +333,7 @@ public void Nuzzle_OmittingPrefix_UsesTheOtherOverloadsExpectDeclaredDefault()
     // the String overload's expect would yield the wrong value rather than no overload at all.
     string expected = IsMacOs ? "n3 on macos" : "n3 on mingw";
 
-    Assert.Equal(expected, PlatformApi.nuzzle(3));
+    Assert.Equal(expected, PlatformApi.Nuzzle(3));
 }
 ```
 
@@ -379,7 +382,7 @@ From `IntegrationTests/ExpectActualResidualsTests.cs`:
 [Fact]
 public void Signal_WhenCollarReports_DiscriminatesAsStrongWithRunningActualsBoost()
 {
-    using Signal reading = PlatformResiduals.collarSignal(10);
+    using Signal reading = PlatformResiduals.CollarSignal(10);
     var strong = Assert.IsType<Signal.Strong>(reading);
     Assert.Equal(10 + ExpectedBoost, strong.Dbm);
 }
@@ -438,14 +441,14 @@ From `IntegrationTests/ExpectActualResidualsTests.cs`:
 [Fact]
 public void Transponder_Ping_ReturnsRunningActualsAnswer()
 {
-    using ITransponder collar = PlatformResiduals.transponder();
+    using ITransponder collar = PlatformResiduals.Transponder();
     Assert.Equal(ExpectedPong, collar.Ping());
 }
 
 [Fact]
 public void Frequency_Hertz_ReturnsRunningActualsValue()
 {
-    Assert.Equal(ExpectedHertz, PlatformResiduals.frequency().Hertz);
+    Assert.Equal(ExpectedHertz, PlatformResiduals.Frequency().Hertz);
 }
 ```
 
@@ -487,5 +490,6 @@ public void Frequency_Hertz_ReturnsRunningActualsValue()
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/091-constructor-default-parameters.md">ADR-091: Constructor default parameters</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/096-function-default-parameters.md">ADR-096: Function default parameters</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/064-forward-unsupported-declaration-diagnostics.md">ADR-064: Forward unsupported-declaration diagnostics</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/110-top-level-function-pascal-case.md">ADR-110: Forward, top-level functions PascalCase in C#</a>
     </category>
 </seealso>

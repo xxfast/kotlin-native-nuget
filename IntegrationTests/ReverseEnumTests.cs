@@ -9,7 +9,7 @@ public class ReverseEnumTests
     public void CatMoodRoundTrip_AdvancesHungryCatToPlayful()
     {
         // Oreo wakes hungry, Kotlin calls the C# enum service, and the enum returns forward.
-        CatMood result = CatMoodSample.catMoodRoundTrip();
+        CatMood result = CatMoodSample.CatMoodRoundTrip();
 
         Assert.Equal(CatMood.Playful, result);
     }
@@ -18,7 +18,7 @@ public class ReverseEnumTests
     public void AdvanceMood_PassesTheEnumArgumentThroughToKotlin()
     {
         // The enum goes out as an ordinal and comes back as one, on a top-level function.
-        CatMood result = CatMoodSample.advanceMood(CatMood.Sleepy);
+        CatMood result = CatMoodSample.AdvanceMood(CatMood.Sleepy);
 
         Assert.Equal(CatMood.Hungry, result);
     }

@@ -160,19 +160,19 @@ public class NullableBooleanTests
     [Fact]
     public void NullableBooleanSample_ChipImplanted_False()
     {
-        Assert.False(NullableBooleanSample.chipImplanted(1));
+        Assert.False(NullableBooleanSample.ChipImplanted(1));
     }
 
     [Fact]
     public void NullableBooleanSample_ChipImplanted_True()
     {
-        Assert.True(NullableBooleanSample.chipImplanted(0));
+        Assert.True(NullableBooleanSample.ChipImplanted(0));
     }
 
     [Fact]
     public void NullableBooleanSample_ChipImplanted_Null()
     {
-        Assert.Null(NullableBooleanSample.chipImplanted(2));
+        Assert.Null(NullableBooleanSample.ChipImplanted(2));
     }
 
     // ---- Cell 8: top-level function, nullable Boolean input ----
@@ -180,19 +180,19 @@ public class NullableBooleanTests
     [Fact]
     public void NullableBooleanSample_DescribeChip_False()
     {
-        Assert.Equal("false", NullableBooleanSample.describeChip(false));
+        Assert.Equal("false", NullableBooleanSample.DescribeChip(false));
     }
 
     [Fact]
     public void NullableBooleanSample_DescribeChip_True()
     {
-        Assert.Equal("true", NullableBooleanSample.describeChip(true));
+        Assert.Equal("true", NullableBooleanSample.DescribeChip(true));
     }
 
     [Fact]
     public void NullableBooleanSample_DescribeChip_Null()
     {
-        Assert.Equal("unknown", NullableBooleanSample.describeChip(null));
+        Assert.Equal("unknown", NullableBooleanSample.DescribeChip(null));
     }
 
     // ---- Cell 9: top-level mutable Boolean? property ----

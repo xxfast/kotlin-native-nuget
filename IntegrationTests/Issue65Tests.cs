@@ -81,8 +81,8 @@ public class Issue65Tests
     [Fact]
     public void Greet_TopLevelKeywordParameter_RoundTripsTheString()
     {
-        Assert.Equal("Meow, Oreo", Issue65Sample.issue65Greet(@string: "Oreo"));
-        Assert.Equal("Meow, Mylo", Issue65Sample.issue65Greet("Mylo"));
+        Assert.Equal("Meow, Oreo", Issue65Sample.Issue65Greet(@string: "Oreo"));
+        Assert.Equal("Meow, Mylo", Issue65Sample.Issue65Greet("Mylo"));
     }
 
     [Fact]
@@ -94,9 +94,9 @@ public class Issue65Tests
 
         Assert.Equal(
             "Sunbeam Occupied Until Further Notice by Oreo",
-            Issue65Sample.issue65Byline(@ref: article));
+            Issue65Sample.Issue65Byline(@ref: article));
         Assert.Equal(
             "Sunbeam Occupied Until Further Notice by Oreo",
-            Issue65Sample.issue65Byline(article));
+            Issue65Sample.Issue65Byline(article));
     }
 }

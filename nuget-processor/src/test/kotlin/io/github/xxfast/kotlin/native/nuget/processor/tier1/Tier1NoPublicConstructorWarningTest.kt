@@ -140,7 +140,7 @@ class Tier1NoPublicConstructorWarningTest {
       "expected the factory to survive the warning; generated=${result.generated}",
     )
     assertTrue(
-      result.generatedCSharp.contains("Drawing make()"),
+      result.generatedCSharp.contains("Drawing Make()"),
       "expected the factory to bind in C#; generatedCSharp=" +
           "${result.generatedCSharp.lines().filter { it.contains("make") }}",
     )

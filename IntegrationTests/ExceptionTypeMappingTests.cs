@@ -17,14 +17,14 @@ public class ExceptionTypeMappingTests
     {
         // Oreo on a diet — any treat request is an illegal argument
         Assert.ThrowsAny<ArgumentException>(
-            () => MappedExceptions.checkOreoWeight(10));
+            () => MappedExceptions.CheckOreoWeight(10));
     }
 
     [Fact]
     public void Oreo_OnDiet_IsExactType_KotlinArgumentException()
     {
         var ex = Assert.ThrowsAny<ArgumentException>(
-            () => MappedExceptions.checkOreoWeight(10));
+            () => MappedExceptions.CheckOreoWeight(10));
         Assert.IsType<KotlinArgumentException>(ex);
     }
 
@@ -32,7 +32,7 @@ public class ExceptionTypeMappingTests
     public void Oreo_OnDiet_ViaIKotlinException_KotlinType_IsIllegalArgumentException()
     {
         var ex = Assert.ThrowsAny<ArgumentException>(
-            () => MappedExceptions.checkOreoWeight(10));
+            () => MappedExceptions.CheckOreoWeight(10));
         var ke = Assert.IsAssignableFrom<IKotlinException>(ex);
         Assert.Equal("kotlin.IllegalArgumentException", ke.KotlinType);
     }
@@ -41,7 +41,7 @@ public class ExceptionTypeMappingTests
     public void Oreo_OnDiet_ViaIKotlinException_KotlinStackTrace_IsNonEmpty()
     {
         var ex = Assert.ThrowsAny<ArgumentException>(
-            () => MappedExceptions.checkOreoWeight(10));
+            () => MappedExceptions.CheckOreoWeight(10));
         var ke = (IKotlinException)ex;
         Assert.NotNull(ke.KotlinStackTrace);
         Assert.NotEmpty(ke.KotlinStackTrace);
@@ -51,7 +51,7 @@ public class ExceptionTypeMappingTests
     public void Mylo_AcceptsKibble_Succeeds()
     {
         // Mylo is not on a diet — negative grams means we're giving, not taking
-        string result = MappedExceptions.checkOreoWeight(-5);
+        string result = MappedExceptions.CheckOreoWeight(-5);
         Assert.Equal("Mylo accepted 5 g of kibble gracefully", result);
     }
 
@@ -62,14 +62,14 @@ public class ExceptionTypeMappingTests
     {
         // Oreo is asleep — activating the laser is an illegal state
         Assert.ThrowsAny<InvalidOperationException>(
-            () => MappedExceptions.activateLaserPointer("Oreo"));
+            () => MappedExceptions.ActivateLaserPointer("Oreo"));
     }
 
     [Fact]
     public void Oreo_AsleepLaser_IsExactType_KotlinInvalidOperationException()
     {
         var ex = Assert.ThrowsAny<InvalidOperationException>(
-            () => MappedExceptions.activateLaserPointer("Oreo"));
+            () => MappedExceptions.ActivateLaserPointer("Oreo"));
         Assert.IsType<KotlinInvalidOperationException>(ex);
     }
 
@@ -77,7 +77,7 @@ public class ExceptionTypeMappingTests
     public void Oreo_AsleepLaser_ViaIKotlinException_KotlinType_IsIllegalStateException()
     {
         var ex = Assert.ThrowsAny<InvalidOperationException>(
-            () => MappedExceptions.activateLaserPointer("Oreo"));
+            () => MappedExceptions.ActivateLaserPointer("Oreo"));
         var ke = (IKotlinException)ex;
         Assert.Equal("kotlin.IllegalStateException", ke.KotlinType);
     }
@@ -85,7 +85,7 @@ public class ExceptionTypeMappingTests
     [Fact]
     public void Mylo_LaserPointer_Succeeds()
     {
-        string result = MappedExceptions.activateLaserPointer("Mylo");
+        string result = MappedExceptions.ActivateLaserPointer("Mylo");
         Assert.Equal("Mylo chased the red dot enthusiastically", result);
     }
 
@@ -96,14 +96,14 @@ public class ExceptionTypeMappingTests
     {
         // Oreo ate all the treats — NoSuchElementException when we try to grab the first one
         Assert.ThrowsAny<InvalidOperationException>(
-            () => MappedExceptions.grabFirstTreatFromBag("Oreo"));
+            () => MappedExceptions.GrabFirstTreatFromBag("Oreo"));
     }
 
     [Fact]
     public void Oreo_EmptyTreatBag_IsExactType_KotlinInvalidOperationException()
     {
         var ex = Assert.ThrowsAny<InvalidOperationException>(
-            () => MappedExceptions.grabFirstTreatFromBag("Oreo"));
+            () => MappedExceptions.GrabFirstTreatFromBag("Oreo"));
         Assert.IsType<KotlinInvalidOperationException>(ex);
     }
 
@@ -111,7 +111,7 @@ public class ExceptionTypeMappingTests
     public void Oreo_EmptyTreatBag_ViaIKotlinException_KotlinType_IsNoSuchElementException()
     {
         var ex = Assert.ThrowsAny<InvalidOperationException>(
-            () => MappedExceptions.grabFirstTreatFromBag("Oreo"));
+            () => MappedExceptions.GrabFirstTreatFromBag("Oreo"));
         var ke = (IKotlinException)ex;
         // Note: even though C# type is KotlinInvalidOperationException, the KotlinType still
         // carries the original Kotlin fully-qualified class name
@@ -121,7 +121,7 @@ public class ExceptionTypeMappingTests
     [Fact]
     public void Mylo_TreatBag_Succeeds()
     {
-        string result = MappedExceptions.grabFirstTreatFromBag("Mylo");
+        string result = MappedExceptions.GrabFirstTreatFromBag("Mylo");
         Assert.Equal("Mylo found a treat", result);
     }
 
@@ -132,14 +132,14 @@ public class ExceptionTypeMappingTests
     {
         // Oreo keeps jumping into the basket while we count — concurrent modification
         Assert.ThrowsAny<InvalidOperationException>(
-            () => MappedExceptions.countTreatsInBasket("Oreo"));
+            () => MappedExceptions.CountTreatsInBasket("Oreo"));
     }
 
     [Fact]
     public void Oreo_BasketMeddling_IsExactType_KotlinInvalidOperationException()
     {
         var ex = Assert.ThrowsAny<InvalidOperationException>(
-            () => MappedExceptions.countTreatsInBasket("Oreo"));
+            () => MappedExceptions.CountTreatsInBasket("Oreo"));
         Assert.IsType<KotlinInvalidOperationException>(ex);
     }
 
@@ -147,7 +147,7 @@ public class ExceptionTypeMappingTests
     public void Oreo_BasketMeddling_ViaIKotlinException_KotlinType_IsConcurrentModificationException()
     {
         var ex = Assert.ThrowsAny<InvalidOperationException>(
-            () => MappedExceptions.countTreatsInBasket("Oreo"));
+            () => MappedExceptions.CountTreatsInBasket("Oreo"));
         var ke = (IKotlinException)ex;
         // Three Kotlin types collapse to KotlinInvalidOperationException; KotlinType distinguishes them
         Assert.Equal("kotlin.ConcurrentModificationException", ke.KotlinType);
@@ -156,7 +156,7 @@ public class ExceptionTypeMappingTests
     [Fact]
     public void Mylo_TreatBasket_Succeeds()
     {
-        string result = MappedExceptions.countTreatsInBasket("Mylo");
+        string result = MappedExceptions.CountTreatsInBasket("Mylo");
         Assert.Equal("Mylo waited patiently; basket has 5 treats", result);
     }
 
@@ -167,14 +167,14 @@ public class ExceptionTypeMappingTests
     {
         // Oreo simply does not support baths
         Assert.ThrowsAny<NotSupportedException>(
-            () => MappedExceptions.giveCatABath("Oreo"));
+            () => MappedExceptions.GiveCatABath("Oreo"));
     }
 
     [Fact]
     public void Oreo_RefusesBath_IsExactType_KotlinNotSupportedException()
     {
         var ex = Assert.ThrowsAny<NotSupportedException>(
-            () => MappedExceptions.giveCatABath("Oreo"));
+            () => MappedExceptions.GiveCatABath("Oreo"));
         Assert.IsType<KotlinNotSupportedException>(ex);
     }
 
@@ -182,7 +182,7 @@ public class ExceptionTypeMappingTests
     public void Oreo_RefusesBath_ViaIKotlinException_KotlinType_IsUnsupportedOperationException()
     {
         var ex = Assert.ThrowsAny<NotSupportedException>(
-            () => MappedExceptions.giveCatABath("Oreo"));
+            () => MappedExceptions.GiveCatABath("Oreo"));
         var ke = (IKotlinException)ex;
         Assert.Equal("kotlin.UnsupportedOperationException", ke.KotlinType);
     }
@@ -190,7 +190,7 @@ public class ExceptionTypeMappingTests
     [Fact]
     public void Mylo_Bath_Succeeds()
     {
-        string result = MappedExceptions.giveCatABath("Mylo");
+        string result = MappedExceptions.GiveCatABath("Mylo");
         Assert.Equal("Mylo enjoyed a splashy bath", result);
     }
 
@@ -201,14 +201,14 @@ public class ExceptionTypeMappingTests
     {
         // You cannot cast Oreo to a Dog — he is very much a cat
         Assert.ThrowsAny<InvalidCastException>(
-            () => MappedExceptions.treatCatAsADog("Oreo"));
+            () => MappedExceptions.TreatCatAsADog("Oreo"));
     }
 
     [Fact]
     public void Oreo_BadCast_IsExactType_KotlinInvalidCastException()
     {
         var ex = Assert.ThrowsAny<InvalidCastException>(
-            () => MappedExceptions.treatCatAsADog("Oreo"));
+            () => MappedExceptions.TreatCatAsADog("Oreo"));
         Assert.IsType<KotlinInvalidCastException>(ex);
     }
 
@@ -216,7 +216,7 @@ public class ExceptionTypeMappingTests
     public void Oreo_BadCast_ViaIKotlinException_KotlinType_IsClassCastException()
     {
         var ex = Assert.ThrowsAny<InvalidCastException>(
-            () => MappedExceptions.treatCatAsADog("Oreo"));
+            () => MappedExceptions.TreatCatAsADog("Oreo"));
         var ke = (IKotlinException)ex;
         Assert.Equal("kotlin.ClassCastException", ke.KotlinType);
     }
@@ -224,7 +224,7 @@ public class ExceptionTypeMappingTests
     [Fact]
     public void Mylo_TreatCatAsACat_Succeeds()
     {
-        string result = MappedExceptions.treatCatAsADog("Mylo");
+        string result = MappedExceptions.TreatCatAsADog("Mylo");
         Assert.Equal("Mylo trotted off happily (still a cat)", result);
     }
 
@@ -235,14 +235,14 @@ public class ExceptionTypeMappingTests
     {
         // Oreo stole all treats, leaving zero to divide
         Assert.ThrowsAny<ArithmeticException>(
-            () => MappedExceptions.shareRemainingTreats("Oreo"));
+            () => MappedExceptions.ShareRemainingTreats("Oreo"));
     }
 
     [Fact]
     public void Oreo_ZeroTreats_IsExactType_KotlinArithmeticException()
     {
         var ex = Assert.ThrowsAny<ArithmeticException>(
-            () => MappedExceptions.shareRemainingTreats("Oreo"));
+            () => MappedExceptions.ShareRemainingTreats("Oreo"));
         Assert.IsType<KotlinArithmeticException>(ex);
     }
 
@@ -250,7 +250,7 @@ public class ExceptionTypeMappingTests
     public void Oreo_ZeroTreats_ViaIKotlinException_KotlinType_IsArithmeticException()
     {
         var ex = Assert.ThrowsAny<ArithmeticException>(
-            () => MappedExceptions.shareRemainingTreats("Oreo"));
+            () => MappedExceptions.ShareRemainingTreats("Oreo"));
         var ke = (IKotlinException)ex;
         Assert.Equal("kotlin.ArithmeticException", ke.KotlinType);
     }
@@ -258,7 +258,7 @@ public class ExceptionTypeMappingTests
     [Fact]
     public void Mylo_ShareTreats_Succeeds()
     {
-        string result = MappedExceptions.shareRemainingTreats("Mylo");
+        string result = MappedExceptions.ShareRemainingTreats("Mylo");
         Assert.Equal("Mylo shared treats evenly with the household", result);
     }
 
@@ -269,14 +269,14 @@ public class ExceptionTypeMappingTests
     {
         // Oreo chewed the weight label — parsing fails with NumberFormatException
         Assert.ThrowsAny<FormatException>(
-            () => MappedExceptions.parseCatWeight("Oreo"));
+            () => MappedExceptions.ParseCatWeight("Oreo"));
     }
 
     [Fact]
     public void Oreo_ChewedLabel_IsExactType_KotlinFormatException()
     {
         var ex = Assert.ThrowsAny<FormatException>(
-            () => MappedExceptions.parseCatWeight("Oreo"));
+            () => MappedExceptions.ParseCatWeight("Oreo"));
         Assert.IsType<KotlinFormatException>(ex);
     }
 
@@ -284,7 +284,7 @@ public class ExceptionTypeMappingTests
     public void Oreo_ChewedLabel_ViaIKotlinException_KotlinType_IsNumberFormatException()
     {
         var ex = Assert.ThrowsAny<FormatException>(
-            () => MappedExceptions.parseCatWeight("Oreo"));
+            () => MappedExceptions.ParseCatWeight("Oreo"));
         var ke = (IKotlinException)ex;
         Assert.Equal("kotlin.NumberFormatException", ke.KotlinType);
     }
@@ -292,7 +292,7 @@ public class ExceptionTypeMappingTests
     [Fact]
     public void Mylo_CatWeight_Succeeds()
     {
-        string result = MappedExceptions.parseCatWeight("Mylo");
+        string result = MappedExceptions.ParseCatWeight("Mylo");
         Assert.Equal("Mylo weighs a healthy 4.2 kg", result);
     }
 
@@ -303,7 +303,7 @@ public class ExceptionTypeMappingTests
     {
         // NullPointerException is NOT mapped — .NET reserves NullReferenceException for the CLR
         var ex = Assert.Throws<KotlinException>(
-            () => MappedExceptions.retrieveCatToy("Oreo"));
+            () => MappedExceptions.RetrieveCatToy("Oreo"));
         Assert.IsType<KotlinException>(ex);
     }
 
@@ -311,7 +311,7 @@ public class ExceptionTypeMappingTests
     public void Oreo_ToyBehindSofa_KotlinType_IsNullPointerException()
     {
         var ex = Assert.Throws<KotlinException>(
-            () => MappedExceptions.retrieveCatToy("Oreo"));
+            () => MappedExceptions.RetrieveCatToy("Oreo"));
         Assert.Equal("kotlin.NullPointerException", ex.KotlinType);
     }
 
@@ -320,14 +320,14 @@ public class ExceptionTypeMappingTests
     {
         // Confirm it is NOT a mapped subtype
         Assert.Throws<KotlinException>(
-            () => MappedExceptions.retrieveCatToy("Oreo"));
+            () => MappedExceptions.RetrieveCatToy("Oreo"));
         // No KotlinArgumentException / KotlinInvalidOperationException etc. — plain KotlinException
     }
 
     [Fact]
     public void Mylo_ToyRetrieval_Succeeds()
     {
-        string result = MappedExceptions.retrieveCatToy("Mylo");
+        string result = MappedExceptions.RetrieveCatToy("Mylo");
         Assert.Equal("Mylo retrieved his favourite toy", result);
     }
 
@@ -338,7 +338,7 @@ public class ExceptionTypeMappingTests
     {
         // IndexOutOfBoundsException is NOT mapped — .NET reserves IndexOutOfRangeException for the CLR
         var ex = Assert.Throws<KotlinException>(
-            () => MappedExceptions.getItemFromShelf("Oreo"));
+            () => MappedExceptions.GetItemFromShelf("Oreo"));
         Assert.IsType<KotlinException>(ex);
     }
 
@@ -346,14 +346,14 @@ public class ExceptionTypeMappingTests
     public void Oreo_ClearedShelf_KotlinType_IsIndexOutOfBoundsException()
     {
         var ex = Assert.Throws<KotlinException>(
-            () => MappedExceptions.getItemFromShelf("Oreo"));
+            () => MappedExceptions.GetItemFromShelf("Oreo"));
         Assert.Equal("kotlin.IndexOutOfBoundsException", ex.KotlinType);
     }
 
     [Fact]
     public void Mylo_ShelfAccess_Succeeds()
     {
-        string result = MappedExceptions.getItemFromShelf("Mylo");
+        string result = MappedExceptions.GetItemFromShelf("Mylo");
         Assert.Equal("Mylo fetched item 0 from the tidy shelf", result);
     }
 
@@ -367,7 +367,7 @@ public class ExceptionTypeMappingTests
         Exception? caught = null;
         try
         {
-            MappedExceptions.checkOreoWeight(10); // throws KotlinArgumentException
+            MappedExceptions.CheckOreoWeight(10); // throws KotlinArgumentException
         }
         catch (Exception ex) when (ex is IKotlinException)
         {
@@ -387,7 +387,7 @@ public class ExceptionTypeMappingTests
         Exception? caught = null;
         try
         {
-            MappedExceptions.retrieveCatToy("Oreo"); // throws KotlinException (NullPointerException, unmapped)
+            MappedExceptions.RetrieveCatToy("Oreo"); // throws KotlinException (NullPointerException, unmapped)
         }
         catch (Exception ex) when (ex is IKotlinException)
         {
@@ -404,7 +404,7 @@ public class ExceptionTypeMappingTests
     {
         // Verify every mapped exception carries a non-empty KotlinStackTrace via the interface
         var ex = Assert.ThrowsAny<NotSupportedException>(
-            () => MappedExceptions.giveCatABath("Oreo"));
+            () => MappedExceptions.GiveCatABath("Oreo"));
         var ke = (IKotlinException)ex;
         Assert.NotNull(ke.KotlinStackTrace);
         Assert.NotEmpty(ke.KotlinStackTrace);

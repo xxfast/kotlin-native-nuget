@@ -159,16 +159,16 @@ Type mapping, from `IntegrationTests/ExceptionTypeMappingTests.cs`:
 public void Oreo_OnDiet_IsExactType_KotlinArgumentException()
 {
     var ex = Assert.ThrowsAny<ArgumentException>(
-        () => MappedExceptions.checkOreoWeight(10));
+        () => MappedExceptions.CheckOreoWeight(10));
     Assert.IsType<KotlinArgumentException>(ex);
 }
 
 [Fact]
 public void Oreo_ToyBehindSofa_NullPointer_IsBaseKotlinException()
 {
-    // NullPointerException is NOT mapped — .NET reserves NullReferenceException for the CLR
+    // NullPointerException is NOT mapped, .NET reserves NullReferenceException for the CLR
     var ex = Assert.Throws<KotlinException>(
-        () => MappedExceptions.retrieveCatToy("Oreo"));
+        () => MappedExceptions.RetrieveCatToy("Oreo"));
     Assert.IsType<KotlinException>(ex);
 }
 
@@ -179,7 +179,7 @@ public void CatchAll_ViaIKotlinException_Guard_WorksForMappedType()
     Exception? caught = null;
     try
     {
-        MappedExceptions.checkOreoWeight(10);
+        MappedExceptions.CheckOreoWeight(10);
     }
     catch (Exception ex) when (ex is IKotlinException)
     {
@@ -201,7 +201,7 @@ public void Oreo_GroomingFailed_DeepChain_RootCause_IsBaseKotlinException()
 {
     // RuntimeException is NOT mapped — stays base KotlinException
     var ex = Assert.ThrowsAny<ArgumentException>(
-        () => CauseExceptions.groomCat("Oreo"));
+        () => CauseExceptions.GroomCat("Oreo"));
     var mid = (InvalidOperationException)ex.InnerException!;
     Assert.IsType<KotlinException>(mid.InnerException);
 }
@@ -351,7 +351,7 @@ From `IntegrationTests/Issue56Tests.cs`:
 [Fact]
 public void DietViolation_Error_IsTheAdr029MappedSubtype()
 {
-    using var failure = Issue56Sample.dietViolation();
+    using var failure = Issue56Sample.DietViolation();
 
     Assert.IsType<KotlinArgumentException>(failure.Error);
 }
@@ -360,7 +360,7 @@ public void DietViolation_Error_IsTheAdr029MappedSubtype()
 public void DietViolation_Error_UnmappedCause_FallsBackToBaseKotlinException()
 {
     // RuntimeException has no ADR-029 mapping, so the cause must be the base type.
-    using var failure = Issue56Sample.dietViolation();
+    using var failure = Issue56Sample.DietViolation();
 
     Assert.IsType<KotlinException>(failure.Error!.InnerException);
 }
@@ -378,7 +378,7 @@ public void LastError_VarThrowableProperty_HasNoSetter()
 [Fact]
 public void FailedLoad_SealedSubclassThrowableProperty_IsTheMappedException()
 {
-    using Issue56LoadState state = Issue56Sample.failedLoad();
+    using Issue56LoadState state = Issue56Sample.FailedLoad();
 
     var failure = (Issue56LoadState.Failure)state;
     Exception? error = failure.Error;
@@ -444,7 +444,7 @@ From `IntegrationTests/ResultReturnTests.cs`:
 [Fact]
 public void Run_ResultOfUnit_BindsAsVoidAndSucceeds()
 {
-    using var service = ResultSample.service();
+    using var service = ResultSample.Service();
 
     // Compile-time contract: Run() is void, not Unit-returning and not a bool Try shape.
     Assert.Null(Record.Exception(() => service.Run()));
@@ -453,7 +453,7 @@ public void Run_ResultOfUnit_BindsAsVoidAndSucceeds()
 [Fact]
 public void Feed_Mylo_ResultSuccess_ReturnsThePayloadAsAPlainString()
 {
-    using var service = ResultSample.service();
+    using var service = ResultSample.Service();
 
     string treat = service.Feed("Mylo");
 

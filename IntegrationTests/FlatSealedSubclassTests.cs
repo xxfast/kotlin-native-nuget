@@ -26,7 +26,7 @@ public class FlatSealedSubclassTests
     [Fact]
     public void AnyFlat_SealedBaseAtATopLevelReturn_DiscriminatesToTheSiblingSubclass()
     {
-        using FlatShape any = FlatShapeSample.anyFlat();
+        using FlatShape any = FlatShapeSample.AnyFlat();
 
         var label = Assert.IsType<Label>(any);
         Assert.Equal("any", label.Text);

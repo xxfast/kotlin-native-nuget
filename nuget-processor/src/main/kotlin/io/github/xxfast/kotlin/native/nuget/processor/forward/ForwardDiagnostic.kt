@@ -157,6 +157,31 @@ internal enum class ForwardDiagnosticKind(
    *  every other root bucket. */
   SKIPPED_ANNOTATION_CLASS(ForwardDiagnosticSeverity.WARNING),
 
+  /** ADR-110: a top-level function whose PascalCase C# name is already held by a top-level
+   *  property of the same file class (`val name` + `fun name()`, CS0102). camelCase used to keep
+   *  the two apart, since Kotlin gives properties and functions separate namespaces and C# does
+   *  not. The sibling shape, a function named like its own file class (CS0542), is not an error:
+   *  [INFO_FILE_CLASS_RENAMED] renames the class instead.
+   *
+   *  Fatal rather than a skip, which is where this departs from ADR-110's Decision. Dropping just
+   *  the function is not expressible: ADR-062's plan is projected into both halves and ADR-055's
+   *  contract requires every planned export to appear in each, so a callable cannot be planned,
+   *  exported from Kotlin, and then absent from the C# (`ForwardAbiContract`: "missing C#
+   *  projection"). Failing the build names both declarations and asks for the same one-word fix
+   *  the skip would have. */
+  ERROR_CSHARP_NAME_COLLISION(ForwardDiagnosticSeverity.ERROR),
+
+  /** ADR-110: a top-level function whose PascalCase C# name equals its file class's name
+   *  (`fun beam()` in `Beam.kt`), which C# forbids as a member named like its enclosing type
+   *  (CS0542). `fun beam()` in `Beam.kt` is ordinary Kotlin and must keep binding, so ADR-007's
+   *  own remedy applies -- the same `Kt` suffix it already gives a file class whose name a type
+   *  claims -- and the function is emitted unchanged on `BeamKt`.
+   *
+   *  A note, not a skip: nothing is dropped and no export moves (the static class name is a C#
+   *  surface detail). It is reported because the C# call site the author expects, `Beam.Beam()`,
+   *  is not the one generated. */
+  INFO_FILE_CLASS_RENAMED(ForwardDiagnosticSeverity.INFO),
+
   /** ADR-109: an admitted dependency-module type whose package another forward publisher in the
    *  same Gradle build also exports. ADR-066 generates it into *this* module's package, as its own
    *  C# class over its own opaque handle, so a consumer referencing both NuGet packages sees two

@@ -22,7 +22,7 @@ public class BoxesRoundTripTests
     {
         // Construction via the fake top-level constructor (Decision 5): Box(42) in Kotlin, no
         // Box.ofInt(42) fallback needed (settled by the pre-Step-3 spike).
-        int result = BoxesSample.boxOfIntValue(42);
+        int result = BoxesSample.BoxOfIntValue(42);
         Assert.Equal(42, result);
     }
 
@@ -30,7 +30,7 @@ public class BoxesRoundTripTests
     public void BoxOfInt_Describe_IsTFreeButStillPerInstantiation()
     {
         // Describe() mentions no T, but CS8895 still forces a per-instantiation thunk.
-        string result = BoxesSample.boxOfIntDescribe(42);
+        string result = BoxesSample.BoxOfIntDescribe(42);
         Assert.Equal("box[42]", result);
     }
 
@@ -40,7 +40,7 @@ public class BoxesRoundTripTests
         // Oreo: black with white in the middle, like the biscuit. Box<string> has no fake
         // constructor (skipped_ambiguous_generic_constructor vs Box<string?>), so it is only
         // reachable via Boxes.ofText. .uppercase() proves a real Kotlin String, not a raw pointer.
-        string result = BoxesSample.boxOfTextUppercased("oreo");
+        string result = BoxesSample.BoxOfTextUppercased("oreo");
         Assert.Equal("OREO", result);
     }
 
@@ -49,7 +49,7 @@ public class BoxesRoundTripTests
     {
         // Decision 7: Box<string?> needs the index-aware pre-order NullableAttribute decode,
         // not the repo's index-0 decoder (which would silently bind this as non-null).
-        bool isNull = BoxesSample.boxOfMaybeTextIsNull();
+        bool isNull = BoxesSample.BoxOfMaybeTextIsNull();
         Assert.True(isNull);
     }
 
@@ -58,7 +58,7 @@ public class BoxesRoundTripTests
     {
         // Mylo: brown and creamy, like the drink. Test.Enums.CatMood as a cross-namespace enum
         // type argument.
-        bool isSleepy = BoxesSample.boxOfMoodIsSleepy();
+        bool isSleepy = BoxesSample.BoxOfMoodIsSleepy();
         Assert.True(isSleepy);
     }
 
@@ -66,7 +66,7 @@ public class BoxesRoundTripTests
     public void UnwrapBoxOfInt_InstantiationAtParameterPosition()
     {
         // Boxes.Unwrap(Box<int>) takes the instantiation as a PARAMETER, not just a return.
-        int result = BoxesSample.unwrapBoxOfInt(7);
+        int result = BoxesSample.UnwrapBoxOfInt(7);
         Assert.Equal(7, result);
     }
 
@@ -75,7 +75,7 @@ public class BoxesRoundTripTests
     {
         // Box<T>.Rewrap(): Box<T> is only discoverable by substituting T at the definition's own
         // members (Decision 2 phase B), a second fixed-point round over the same instantiation.
-        int result = BoxesSample.rewrapBoxOfInt(9);
+        int result = BoxesSample.RewrapBoxOfInt(9);
         Assert.Equal(9, result);
     }
 
@@ -83,7 +83,7 @@ public class BoxesRoundTripTests
     public void TallyPairing_Arity2_ParameterNamesFromMetadata()
     {
         // Pairing<TKey, TValue>: arity 2, deliberately not named Pair (kotlin.Pair collision).
-        string result = BoxesSample.tallyPairing("cats", 3);
+        string result = BoxesSample.TallyPairing("cats", 3);
         Assert.Equal("cats/3", result);
     }
 
@@ -92,7 +92,7 @@ public class BoxesRoundTripTests
     {
         // Crate<T> where T : class: the constraint is read from metadata (Decision 8) but v1
         // emits no Kotlin type-parameter constraint.
-        string result = BoxesSample.crateOfTextItem("boxed");
+        string result = BoxesSample.CrateOfTextItem("boxed");
         Assert.Equal("boxed", result);
     }
 
@@ -100,7 +100,7 @@ public class BoxesRoundTripTests
     public void BoxLifetime_UseBlockFreesHandle()
     {
         // ADR-051 lifetime is unchanged and generic-agnostic.
-        int result = BoxesSample.boxLifetimeUse(7);
+        int result = BoxesSample.BoxLifetimeUse(7);
         Assert.Equal(7, result);
     }
 
@@ -109,7 +109,7 @@ public class BoxesRoundTripTests
     {
         // The reason we are not monomorphizing: one function generic over Box<T>, called here
         // over a list of two Box<Int> instances.
-        string result = BoxesSample.describeAllBoxOfInt(1, 2);
+        string result = BoxesSample.DescribeAllBoxOfInt(1, 2);
         Assert.Equal("box[1],box[2]", result);
     }
 }

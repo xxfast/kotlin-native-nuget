@@ -46,9 +46,9 @@ class Tier1ValueClassParameterTest {
     val cs: String = result.generatedCSharp
     assertContains(cs, "public string Retag(global::Interop.ChartId id)")
     assertContains(cs, "Native_Retag(_handle, id.Value, out IntPtr error)")
-    assertContains(cs, "public static string chartSummary(global::Interop.ChartId id)")
-    assertContains(cs, "Native_chartSummary(id.Value, out IntPtr error)")
-    assertContains(cs, "public static int? chartLength(global::Interop.ChartId id)")
+    assertContains(cs, "public static string ChartSummary(global::Interop.ChartId id)")
+    assertContains(cs, "Native_ChartSummary(id.Value, out IntPtr error)")
+    assertContains(cs, "public static int? ChartLength(global::Interop.ChartId id)")
   }
 
   @Test
