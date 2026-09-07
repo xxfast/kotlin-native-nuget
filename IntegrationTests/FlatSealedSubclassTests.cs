@@ -19,9 +19,35 @@ namespace IntegrationTests;
 /// </summary>
 public class FlatSealedSubclassTests
 {
-    // FlatShapeFactory.of stays in the Kotlin fixture but is not asserted here: a class method
-    // returning a sealed type is silently dropped today (ROADMAP Phase 3), a separate pre-existing
-    // gap, so those cells arrive with that item.
+    /// <summary>
+    /// The sealed base at a <em>class method</em> return, discriminating to the sibling arm. Mylo
+    /// declines geometry, so a non-positive radius hands back a <c>Label</c>.
+    /// </summary>
+    [Fact]
+    public void Of_SealedBaseAtAClassMethodReturn_DiscriminatesToTheSiblingSubclass()
+    {
+        using var factory = new FlatShapeFactory();
+
+        using FlatShape flat = factory.Of(0);
+
+        var label = Assert.IsType<Label>(flat);
+        Assert.Equal("flat", label.Text);
+    }
+
+    /// <summary>
+    /// The same class method, other arm: Oreo curls, so a positive radius hands back the nested
+    /// <c>FlatShape.Circle</c>.
+    /// </summary>
+    [Fact]
+    public void Of_SealedBaseAtAClassMethodReturn_DiscriminatesToTheNestedSubclass()
+    {
+        using var factory = new FlatShapeFactory();
+
+        using FlatShape flat = factory.Of(2);
+
+        var circle = Assert.IsType<FlatShape.Circle>(flat);
+        Assert.Equal(2, circle.Radius);
+    }
 
     [Fact]
     public void AnyFlat_SealedBaseAtATopLevelReturn_DiscriminatesToTheSiblingSubclass()

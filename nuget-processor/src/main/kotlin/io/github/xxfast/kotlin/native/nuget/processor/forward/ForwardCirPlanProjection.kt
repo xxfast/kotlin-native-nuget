@@ -827,7 +827,7 @@ internal object ForwardCirPlanProjection {
         returnType = result.csharpType(),
         nativeReturnType = "IntPtr",
         body = checkedPointerBody(
-          nativeName, callArguments, "return new ${result.csharpType()}(nativeResult);", prelude, cleanup,
+          nativeName, callArguments, "return ${result.handleReconstruction()};", prelude, cleanup,
         ),
       )
 
@@ -925,7 +925,7 @@ internal object ForwardCirPlanProjection {
           body = checkedPointerBody(
             nativeName,
             callArguments,
-            "return nativeResult == IntPtr.Zero ? null : new ${type.csharpType()}(nativeResult);",
+            "return nativeResult == IntPtr.Zero ? null : ${type.handleReconstruction()};",
             prelude,
             cleanup,
           ),
@@ -1355,6 +1355,22 @@ internal object ForwardCirPlanProjection {
     val body: String,
     val hasCustomBody: Boolean = true,
   )
+
+  /**
+   * ADR-105 (issue #54): the C# expression that turns a returned handle back into its declared
+   * type. An ordinary handle-backed class takes its `internal T(IntPtr)` constructor; an ADR-009
+   * sealed *base* is `abstract`, so `new` is CS0144 and the reconstruction goes through the
+   * generated `internal static T FromHandle(IntPtr)` discriminator instead. Mirrors
+   * [ForwardCirPropertyProjection]'s reconstruction of the same name, so a property getter and a
+   * method returning the same sealed base render one idiom.
+   */
+  private fun BridgeType.ObjectHandle.handleReconstruction(
+    wireValue: String = "nativeResult",
+  ): String = if (viaDiscriminator) {
+    "${csharpType()}.FromHandle($wireValue)"
+  } else {
+    "new ${csharpType()}($wireValue)"
+  }
 
   private fun BridgeType.csharpType(): String = when (this) {
     BridgeType.Unit -> "void"

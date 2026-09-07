@@ -434,6 +434,14 @@ reachability closure's `ENUM` admission was also changed to refuse a nested enum
 nested enum is no longer declared at namespace root under its simple name either. No ADR: a
 diagnostic gate, not a design decision. See [Enums](../topics/enums.md#nested-enums-skip-named).
 
+## Post-implementation note (2026-09-07): scope (d)'s return half shipped
+
+The return half of scope (d), a sealed collection component at a callable **return** position
+(`fun x(): List<Shape>`), and a bare sealed return on a class, object, or companion member, both
+shipped via [ADR-009](009-sealed-class-mapping.md)'s 2026-09-07 amendment, sharing this ADR's
+`sealedAsHandle` rewrite. The **parameter** half of scope (d), a bare sealed parameter or a sealed
+collection component at a parameter position, remains deferred.
+
 ## Prior art (to the depth that changes the decision)
 
 - **ObjC / Swift Export**: Kotlin/Native maps a sealed class to an ordinary class hierarchy

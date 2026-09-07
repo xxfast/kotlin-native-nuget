@@ -12,9 +12,12 @@ namespace IntegrationTests;
 /// generated <see cref="Issue54Drawing"/>. These tests therefore cannot compile until the feature
 /// ships, which is the red signal.
 /// <para>
-/// The four positions are the four seams: bare sealed, nullable sealed, sealed collection component
-/// (read-only), and a scalar sealed setter. The cats: Oreo curls into a circle, Mylo sprawls into
-/// nothing.
+/// The four property positions are four seams: bare sealed, nullable sealed, sealed collection
+/// component (read-only), and a scalar sealed setter. Two more seams belong to the ordinary member
+/// plan rather than the property plan: a scalar sealed return and a sealed <em>collection</em>
+/// return on a class member (<c>Issue54Shapes.Pick(int)</c> / <c>Issue54Shapes.EveryShape()</c>), with the
+/// same collection return at a top-level function (<c>Issue54Sample.Shapes()</c>) as the control
+/// that already binds. The cats: Oreo curls into a circle, Mylo sprawls into nothing.
 /// </para>
 /// </summary>
 public class Issue54Tests
@@ -81,6 +84,59 @@ public class Issue54Tests
         };
 
         Assert.Equal("Oreo curled at r=7.5", description);
+    }
+
+    /// <summary>
+    /// Control: a sealed <em>collection</em> at a top-level function return, the position that binds
+    /// today. Same order as the property: Mylo sprawled first, Oreo curled at <c>1.0</c> second.
+    /// </summary>
+    [Fact]
+    public void Shapes_SealedCollectionAtATopLevelReturn_YieldsBothArmsInOrder()
+    {
+        IReadOnlyList<Issue54Shape> shapes = Issue54Sample.Shapes();
+
+        Assert.Collection(
+            shapes,
+            mylo => Assert.IsType<Issue54Shape.Empty>(mylo),
+            oreo => Assert.Equal(1.0, Assert.IsType<Issue54Shape.Circle>(oreo).Radius));
+    }
+
+    /// <summary>
+    /// The same sealed collection return on a <em>class member</em> rather than a top-level
+    /// function, which is the spelling that is dropped today. Both cats, same order.
+    /// </summary>
+    [Fact]
+    public void EveryShape_SealedCollectionAtAClassMemberReturn_YieldsBothArmsInOrder()
+    {
+        IReadOnlyList<Issue54Shape> shapes = Issue54Shapes.EveryShape();
+
+        Assert.Collection(
+            shapes,
+            mylo => Assert.IsType<Issue54Shape.Empty>(mylo),
+            oreo => Assert.Equal(1.0, Assert.IsType<Issue54Shape.Circle>(oreo).Radius));
+    }
+
+    /// <summary>
+    /// A scalar sealed return on an <c>object</c> method, so the discriminator picks an arm from a
+    /// static call site. Zero is Mylo, refusing to be a shape.
+    /// </summary>
+    [Fact]
+    public void Pick_SealedBaseAtAnObjectMethodReturn_DiscriminatesToThePayloadFreeArm()
+    {
+        using Issue54Shape mylo = Issue54Shapes.Pick(0);
+
+        Assert.IsType<Issue54Shape.Empty>(mylo);
+    }
+
+    /// <summary>
+    /// The other arm of the same <c>object</c> method: Oreo, curled to the radius asked for.
+    /// </summary>
+    [Fact]
+    public void Pick_SealedBaseAtAnObjectMethodReturn_DiscriminatesToThePayloadArm()
+    {
+        using Issue54Shape oreo = Issue54Shapes.Pick(3);
+
+        Assert.Equal(3.0, Assert.IsType<Issue54Shape.Circle>(oreo).Radius);
     }
 
     [Fact]
