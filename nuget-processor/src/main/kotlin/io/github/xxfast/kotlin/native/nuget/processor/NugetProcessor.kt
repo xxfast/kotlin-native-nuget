@@ -88,6 +88,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeInter
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardInterfaceBridgePlanner
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardPropertyPlanner
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardReachabilityBucket
+import io.github.xxfast.kotlin.native.nuget.processor.forward.isSealedSubclass
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardReachabilityClosure
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardReachabilityResult
 import io.github.xxfast.kotlin.native.nuget.processor.forward.addForwardKotlinPlanExport
@@ -399,6 +400,11 @@ class NugetProcessor(
       .filter { it.classKind == ClassKind.CLASS }
       .filter { it.parentDeclaration == null }
       .filter { !it.modifiers.contains(Modifier.SEALED) }
+      // Issue #54: a subclass declared *beside* its sealed base is a top-level class too, so
+      // without this it was collected twice -- once here as a plain namespace-level class with
+      // `label_*` exports, once by the ADR-009 sealed route as `Shape.Label` with `shape_label_*`
+      // exports. The sealed route owns it.
+      .filter { !it.isSealedSubclass() }
       .filter { !it.isValueClass() }
 
     val rootValueClasses: List<KSClassDeclaration> = allDeclarations

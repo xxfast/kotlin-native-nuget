@@ -77,16 +77,22 @@ This is a fundamental language gap — C# cannot enforce that all subtypes are h
 
 ## Limitations
 
-Currently only nested sealed subclasses are supported (subclasses declared inside the sealed class body). Kotlin also allows flat/unnested sealed hierarchies where subclasses are top-level in the same file:
+### Amendment (2026-09-07): flat (sibling) sealed hierarchies are supported
 
-```kotlin
-// Flat — not yet supported
-sealed class Observation
-data class Alive(val cat: Cat) : Observation()
-data class Dead(val cause: String) : Observation()
-```
+A sealed subclass declared *beside* its base, not nested inside it, used to be collected twice:
+once by the ordinary class route as a namespace-level type with its own constructor, and once by
+this ADR's sealed route as a nested type with a discriminator arm. One Kotlin type produced two
+different C# types, so an `is` check disagreed with itself depending on which one the caller held,
+and `FromHandle` could only ever hand back the nested one.
 
-For flat sealed classes, the C# output should mirror the structure — separate classes in the same namespace rather than nested. This is deferred to a future improvement.
+The sealed route is now the sole owner of every sealed subclass. `rootClasses` and the
+reachability closure exclude any class whose declared superclass is sealed
+(`isSealedSubclass()` in `ForwardClassMembership.kt`), so a sibling subclass is declared at
+namespace level beside its base, `public sealed class Label : FlatShape`, with an `internal`
+constructor and its own `flatshape_label_*` exports, exactly like a nested subclass would be
+except for the enclosing scope. A subclass that really is nested inside its sealed base stays
+nested (`FlatShape.Circle`). Member positions referencing either spell it by its actual Kotlin
+scope, not by whether it happens to be sealed.
 
 ## Consequences
 

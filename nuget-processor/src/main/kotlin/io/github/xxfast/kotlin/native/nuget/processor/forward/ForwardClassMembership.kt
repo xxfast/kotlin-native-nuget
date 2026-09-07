@@ -6,13 +6,15 @@ import com.google.devtools.ksp.symbol.KSClassDeclaration
 import com.google.devtools.ksp.symbol.KSDeclaration
 import com.google.devtools.ksp.symbol.KSFunctionDeclaration
 import com.google.devtools.ksp.symbol.KSPropertyDeclaration
+import com.google.devtools.ksp.symbol.Modifier
 
 /**
  * The declared base class, ungated: what the class *says* it extends, whether or not the export
- * set carries it. Read only by `CirClassTranslator.translateClass`, to decide whether a
+ * set carries it. Read by `CirClassTranslator.translateClass`, to decide whether a
  * `SKIPPED_UNEXPORTED_SUPERTYPE` diagnostic is owed for a base [forwardSuperClass] is about to
- * drop. No other site may read it: asking what a class declares, rather than what the forward
- * pipeline can actually generate, is exactly the CS0246 in issue #42.
+ * drop, and by [isSealedSubclass], which asks the same ungated question about sealedness. No other
+ * site may read it: asking what a class declares, rather than what the forward pipeline can
+ * actually generate, is exactly the CS0246 in issue #42.
  */
 internal fun KSClassDeclaration.declaredSuperClass(): KSClassDeclaration? = superTypes
   .map { type -> type.resolve().declaration }
@@ -21,6 +23,25 @@ internal fun KSClassDeclaration.declaredSuperClass(): KSClassDeclaration? = supe
     declaration.classKind == ClassKind.CLASS &&
         declaration.qualifiedName?.asString() != "kotlin.Any"
   }
+
+/**
+ * Whether this class is a subclass of a sealed class, wherever it is *declared*: nested inside its
+ * base (`Shape.Circle`) or beside it at top level (`data class Label : Shape()`).
+ *
+ * Issue #54: a sibling subclass is a top-level public class in its own right, so the ordinary class
+ * route collected it as well as the ADR-009 sealed route did, and one Kotlin type became two
+ * unrelated C# types (a namespace-level `Label` with `label_*` exports and a nested `Shape.Label`
+ * with `shape_label_*` exports) that no `is` check could agree about. The sealed route is the sole
+ * owner of a sealed subclass, so both root collection (`NugetProcessor.rootClasses`) and the
+ * dependency-module closure (`ForwardReachabilityClosure`) exclude one from the plain-class bucket
+ * and reach it only through its base's `getSealedSubclasses()`.
+ *
+ * Ungated on purpose ([declaredSuperClass], not [forwardSuperClass]): a base outside the export set
+ * still owns its subclasses, and admitting the subclass as a plain class in that case would emit
+ * the very duplicate this predicate exists to prevent.
+ */
+internal fun KSClassDeclaration.isSealedSubclass(): Boolean =
+  declaredSuperClass()?.modifiers?.contains(Modifier.SEALED) == true
 
 /**
  * The one has-superclass predicate the forward direction uses to decide which of a class's

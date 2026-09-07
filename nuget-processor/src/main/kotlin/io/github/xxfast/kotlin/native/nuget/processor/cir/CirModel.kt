@@ -116,6 +116,13 @@ data class CirSealedSubclass(
   val properties: List<CirProperty>,
   val isDataClass: Boolean = false,
   val isDataObject: Boolean = false,
+  /**
+   * Issue #54: whether the subclass is declared *inside* its sealed base in Kotlin. C# follows the
+   * Kotlin scope, so a nested one is rendered inside the base's braces (`Shape.Circle`) and a
+   * sibling is rendered after them, at namespace level (`Label`). Either way the exports keep the
+   * sealed prefix, and either way the sealed route is the only thing that declares the type.
+   */
+  val isNested: Boolean = true,
 )
 
 data class CirObject(
