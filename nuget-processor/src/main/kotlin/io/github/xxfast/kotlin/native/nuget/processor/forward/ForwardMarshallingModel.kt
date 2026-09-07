@@ -210,6 +210,13 @@ internal sealed interface BridgeType {
    *   module-local top-level enum whose package fell outside the export scope. Distinct from
    *   [isUnexportedDependency], whose `include(...)` hint is wrong for the nested case: no export
    *   scope can make a nested enum declarable.
+   * @param isUndeclaredInterface the interface twin of [isUndeclaredEnum], for the same reason and
+   *   with the same consequence: `rootInterfaces` declares only top-level interfaces, so an
+   *   `interface` nested inside a class is never emitted as a C# `I{Name}` and a member typed with
+   *   it must skip *named*, with the move-to-top-level fix, rather than land in the generic
+   *   unsupported bucket. Kept a sibling flag rather than folded into [isUndeclaredEnum] because
+   *   the two hints name a different declaration kind, and the enum flag additionally covers a
+   *   *top-level* enum outside the export scope, which has no interface counterpart.
    */
   data class Unsupported(
     val rendered: kotlin.String,
@@ -218,6 +225,7 @@ internal sealed interface BridgeType {
     val isActualTypeAliasTarget: kotlin.Boolean = false,
     val actualTypeAliasExpectName: kotlin.String? = null,
     val isUndeclaredEnum: kotlin.Boolean = false,
+    val isUndeclaredInterface: kotlin.Boolean = false,
   ) : BridgeType
 
   /** A collection whose component type was lost during classification. */

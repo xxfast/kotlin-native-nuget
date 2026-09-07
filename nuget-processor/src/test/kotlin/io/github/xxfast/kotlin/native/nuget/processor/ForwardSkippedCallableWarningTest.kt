@@ -104,6 +104,8 @@ class ForwardSkippedCallableWarningTest {
         // An enum no route declares as a C# enum (nested, or top-level out of scope): a genuine
         // drop, because spelling it produced a dangling C# reference instead.
         ForwardPlanSkipReason.UNDECLARED_ENUM,
+        // Issue #54: the nested-interface twin of UNDECLARED_ENUM, dropped for the same reason.
+        ForwardPlanSkipReason.UNDECLARED_INTERFACE,
         // ADR-088: a bound C# interface at a position v1 does not marshal, and one that cannot be
         // implemented in Kotlin at a return position. Both are real drops with their own kinds.
         ForwardPlanSkipReason.BOUND_INTERFACE_POSITION,
