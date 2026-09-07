@@ -505,6 +505,27 @@ Fixtures: `Issue54Sample.kt` (`Issue54Shapes.describe`/`describeMaybe`/`count`/`
 `IntegrationTests/Issue54Tests.cs` (8 new facts, including the densest cell, `Issue54Drawing`'s own
 four-parameter constructor); `Tier1SealedParameterPositionTest.kt`.
 
+## Post-implementation note (2026-09-07): the value-class-over-sealed deferral shipped
+
+The "Deliberately unchanged" note above listed a value class whose underlying type is sealed
+still skipping named at a property position. It now binds. The shared `sealedAsHandle()` rewrite
+recurses into `BridgeType.ValueClass.underlying` as well as `Nullable` and `Collection`, so
+`ForwardPropertyPlanner.isPlannable`'s `ValueClass` arm sees the rewritten `ObjectHandle` rather
+than the untouched `SpecializedProtocol("sealed helper ...")` spelling. Both value-class
+reconstructions (`ForwardCirPropertyProjection.valueClassGetterReconstruction` and
+`ForwardCirPlanProjection.valueClassReconstructionCs`) now go through a shared
+`handleReconstruction()` helper, so a sealed underlying reconstructs through the sealed base's own
+`FromHandle` discriminator (`new ObservationResult(Observation.FromHandle(nativeResult))`) instead
+of attempting a constructor call against an abstract class (`CS0144`). The setter unwraps through
+the wrapper before handing over the handle: `value?.Observation._handle ?? IntPtr.Zero` for a
+nullable property, `value.Observation._handle` for a non-null one.
+
+The same rewrite now also binds a sealed-underlying value class as a callable parameter or return,
+and as a `List<T>` collection component, both element-wise through `NugetMarshal.FromHandle<T>`.
+All three are pinned in Tier 1 (`Tier1ValueClassOverSealedPropertyTest.kt`). Fixture:
+`test-library/.../test/cat/ObservationDesk.kt` (`result`, `maybe`, `current`, `observe()`,
+`currentDescription()`); consumer `IntegrationTests/ValueClassOverSealedTests.cs`.
+
 ## Prior art (to the depth that changes the decision)
 
 - **ObjC / Swift Export**: Kotlin/Native maps a sealed class to an ordinary class hierarchy

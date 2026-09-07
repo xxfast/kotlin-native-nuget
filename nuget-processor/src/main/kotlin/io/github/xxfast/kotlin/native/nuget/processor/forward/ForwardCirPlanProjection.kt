@@ -1098,12 +1098,15 @@ internal object ForwardCirPlanProjection {
   /**
    * ADR-077 sub-item 4: rebuild the record struct from its wire value, composing the underlying's
    * own step (UTF-8, enum cast, handle wrapper) inside the constructor call.
+   *
+   * ADR-105: the handle step is [handleReconstruction], not a bare `new`, so a value class over a
+   * sealed base takes the `FromHandle` discriminator (the base is `abstract`, `new` is CS0144).
    */
   private fun valueClassReconstructionCs(type: BridgeType.ValueClass, wireValue: String): String {
     val inner: String = when (val underlying: BridgeType = type.underlying) {
       BridgeType.String -> "Marshal.PtrToStringUTF8($wireValue)!"
       is BridgeType.Enum -> "(${underlying.csharpType})$wireValue"
-      is BridgeType.ObjectHandle -> "new ${underlying.csharpType()}($wireValue)"
+      is BridgeType.ObjectHandle -> underlying.handleReconstruction(wireValue)
       is BridgeType.Primitive -> wireValue
       else -> error("Forward CIR plan projection has no value-class reconstruction for $underlying")
     }

@@ -305,3 +305,8 @@ the same nullable-pointer shape as `ChartId?`, retagged `UNBOX_VALUE_CLASS`.
   this ADR extends its wire design to the remaining ordinary positions rather than amending it,
   because the open choices here (nullable wire form, single-slot conversion composition, landing
   order) are plan-machinery decisions ADR-014 predates.
+
+**Post-implementation note (2026-09-07):** a **sealed** underlying now joins the admitted set at
+property and callable positions too, via the shared `sealedAsHandle()` rewrite minted by
+[ADR-105](105-sealed-property-position.md); the C# reconstruction routes through the sealed base's
+own `FromHandle` discriminator rather than the ordinary constructor call this ADR's table assumes.
