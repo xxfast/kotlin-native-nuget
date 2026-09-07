@@ -62,6 +62,12 @@ mechanism, with one message that is exact for D and hedged for S.
   match on the effective include (`includePackages` if non-empty, else `[rootPackage]`, `:252-256`).
 - `ForwardDiagnostic.format()` picks the verb from severity: WARNING -> "Skipping"
   (`ForwardDiagnostic.kt`). This warning skips nothing.
+- **Updated (2026-09-07).** The verb is no longer keyed on severity at all: it derives from the
+  kind's own name prefix (`SKIPPED_` -> "Skipping", `INFO_` -> "Note", `ERROR_` -> "Error"), and a
+  kind with no such prefix (this one included) must declare its verb explicitly or construction
+  fails. An `init` block checks a prefixed kind's declared severity against what its prefix
+  promises and rejects a prefixed kind that also declares a verb. Enforced by
+  `ForwardDiagnosticKindTest` (`nuget-processor/src/test/kotlin/io/github/xxfast/kotlin/native/nuget/processor/forward/ForwardDiagnosticKindTest.kt`).
 - `NugetReportDiagnosticsTask` carries `kind` as an untyped string
   (`NugetReportDiagnosticsTask.kt:70-71, 114-115`): a new kind reaches `NugetDiagnostics.json` and
   the Gradle re-emit (ADR-100) with no plugin change.

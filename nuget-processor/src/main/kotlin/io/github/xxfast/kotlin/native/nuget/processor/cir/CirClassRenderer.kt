@@ -193,9 +193,8 @@ internal fun StringBuilder.renderClass(cls: CirClass) {
   val implements: String = when {
     cls.superClass != null -> " : ${cls.superClass}"
     cls.interfaces.isNotEmpty() -> " : ${(cls.interfaces + "INugetHandle").joinToString(", ")}"
-    cls.disposable && cls.hasSuspendMethods -> " : IDisposable, IAsyncDisposable, INugetHandle"
-    cls.disposable -> " : IDisposable, INugetHandle"
-    else -> " : INugetHandle"
+    cls.hasSuspendMethods -> " : IDisposable, IAsyncDisposable, INugetHandle"
+    else -> " : IDisposable, INugetHandle"
   }
 
   appendLine("    public $sealedModifier${abstract}class ${cls.name}$implements")
@@ -325,14 +324,12 @@ internal fun StringBuilder.renderClass(cls: CirClass) {
     renderDataClassMethods(cls)
   }
 
-  if (cls.disposable) {
-    renderDispose(
-      nativeImport = cls.disposeNativeImport(),
-      isAbstract = cls.isAbstract,
-      hasSuperClass = cls.superClass != null,
-      hasSuspendMethods = cls.hasSuspendMethods,
-    )
-  }
+  renderDispose(
+    nativeImport = cls.disposeNativeImport(),
+    isAbstract = cls.isAbstract,
+    hasSuperClass = cls.superClass != null,
+    hasSuspendMethods = cls.hasSuspendMethods,
+  )
 
   appendLine("    }")
 }

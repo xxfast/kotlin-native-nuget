@@ -70,7 +70,7 @@ KSP resolves the declaration and its types, then builds a `CirClass` in memory. 
 ```
 CirClass(
   name = "Toy", libraryName = "test", nativePrefix = "toy",
-  isDataClass = true, disposable = true,
+  isDataClass = true,
   constructor = CirConstructor(parameters = [name, color]),   // entry: toy_create
   properties = [
     CirProperty("Name",  "string", nativeName = "toy_get_name"),

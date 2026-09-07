@@ -55,7 +55,6 @@ data class CirClass(
   val interfaceBridgeMethods: List<CirInterfaceBridgeMethod> = emptyList(),
   val interfaces: List<String> = emptyList(),
   val superClass: String? = null,
-  val disposable: Boolean = true,
   val hasInternalHandleConstructor: Boolean = true,
   val isDataClass: Boolean = false,
   val isAbstract: Boolean = false,

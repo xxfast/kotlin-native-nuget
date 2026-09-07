@@ -166,7 +166,7 @@ internal fun CirClass.dataClassNativeImports(): List<CirDllImport> = buildList {
 }
 
 internal fun CirClass.disposeNativeImport(): CirDllImport? {
-  if (!disposable || isAbstract) return null
+  if (isAbstract) return null
   return CirDllImport(
     libraryName = libraryName,
     entryPoint = "${nativePrefix}_dispose",

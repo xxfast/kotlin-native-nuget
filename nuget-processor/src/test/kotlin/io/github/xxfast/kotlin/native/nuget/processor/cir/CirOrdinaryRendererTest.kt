@@ -474,17 +474,14 @@ class CirOrdinaryRendererTest {
       ),
       properties = emptyList(),
       methods = emptyList(),
-      disposable = false,
       hasInternalHandleConstructor = false,
     )
 
     val rendered: String = render(cls)
 
     assertContains(rendered, "public class HandleBox")
-    assertFalse(rendered.contains(": IDisposable"))
     assertContains(rendered, "public HandleBox(IntPtr raw)")
     assertContains(rendered, "_handle = raw;")
-    assertFalse(rendered.contains("Native_Dispose"))
     assertFalse(rendered.contains("internal HandleBox(IntPtr handle)"))
   }
 
@@ -498,7 +495,6 @@ class CirOrdinaryRendererTest {
       properties = emptyList(),
       methods = emptyList(),
       interfaces = listOf("IDisposable", "IAsyncDisposable"),
-      disposable = false,
     )
 
     val rendered: String = render(cls)
