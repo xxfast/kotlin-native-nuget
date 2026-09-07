@@ -15,9 +15,10 @@ import kotlin.test.assertTrue
  * `Wrap<T>`'s `INugetHandle` arm), which opens the shared `isWrappableComponent` gate and with it
  * the `var shapes: MutableList<Shape>` property setter that ADR-105 scope (c) left get-only.
  *
- * The control is a sealed **interface**: the classifier mints no `sealedHandle` for it (there is no
- * ADR-009 discriminator to reconstruct through), so it still skips as `SEALED_POSITION` and the
- * rewrite is provably not a blanket "every specialized protocol is a handle now".
+ * The control is an ADR-112-INELIGIBLE sealed **interface**: the classifier mints no
+ * `sealedHandle` for it (there is no ADR-009 discriminator to reconstruct through), so it still
+ * skips as `SEALED_POSITION` and the rewrite is provably not a blanket "every specialized protocol
+ * is a handle now".
  */
 class Tier1SealedParameterPositionTest {
 
@@ -29,8 +30,13 @@ class Tier1SealedParameterPositionTest {
       data class Circle(val radius: Double) : Shape()
     }
 
+    open class Haunting
+
+    // ADR-112: INELIGIBLE on purpose (`Nobody` has a second superclass), so `Ghost` still has no
+    // ADR-009 discriminator and `Shapes.haunt` still skips. An eligible one binds at a parameter
+    // like a sealed class does (Tier1SealedInterfaceTest).
     sealed interface Ghost {
-      data object Nobody : Ghost
+      class Nobody : Haunting(), Ghost
     }
 
     data class Drawing(
@@ -178,7 +184,7 @@ class Tier1SealedParameterPositionTest {
   }
 
   @Test
-  fun `a sealed interface parameter still skips as a sealed position`() {
+  fun `an ineligible sealed interface parameter still skips as a sealed position`() {
     val result = Tier1Harness.run(source)
 
     assertFalse(

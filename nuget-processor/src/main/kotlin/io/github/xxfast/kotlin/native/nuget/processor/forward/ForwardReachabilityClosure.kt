@@ -264,8 +264,11 @@ internal class ForwardReachabilityClosure(
   private fun KSClassDeclaration.reachabilityBucket(): ForwardReachabilityBucket = when {
     classKind == ClassKind.ENUM_CLASS -> ForwardReachabilityBucket.ENUM
     classKind == ClassKind.OBJECT -> ForwardReachabilityBucket.OBJECT
+    // ADR-112: eligibility is tested BEFORE the interface kind, so a cross-module eligible sealed
+    // interface reaches the ADR-009 renderer instead of being declared as a bare `I<Name>`. An
+    // ineligible one falls through to INTERFACE, exactly as every sealed interface used to.
+    isEligibleSealedType() -> ForwardReachabilityBucket.SEALED_CLASS
     classKind == ClassKind.INTERFACE -> ForwardReachabilityBucket.INTERFACE
-    modifiers.contains(Modifier.SEALED) -> ForwardReachabilityBucket.SEALED_CLASS
     isSealedSubclass() -> ForwardReachabilityBucket.SEALED_SUBCLASS
     isValueClass() -> ForwardReachabilityBucket.VALUE_CLASS
     else -> ForwardReachabilityBucket.CLASS

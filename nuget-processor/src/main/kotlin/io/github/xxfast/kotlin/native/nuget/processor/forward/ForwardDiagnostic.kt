@@ -176,6 +176,16 @@ internal enum class ForwardDiagnosticKind(
    *  would otherwise produce no output and no diagnostic whatsoever. */
   SKIPPED_NESTED_DECLARATION(ForwardDiagnosticSeverity.WARNING),
 
+  /** ADR-112: a `sealed interface` whose hierarchy the ADR-009 sealed-class route cannot carry:
+   *  type parameters, a subclass with a second superclass, a sub-interface, or a subclass declared
+   *  outside it. An eligible one is declared as an abstract class with a `FromHandle`
+   *  discriminator and binds at every position; an ineligible one stays on the interface route as
+   *  a bare `I<Name>` that nothing exported can be typed with, so every position it appears at
+   *  keeps skipping as [SKIPPED_SEALED_POSITION]. Named once at the declaration, with the
+   *  disqualifying reason, because the position skips can only say "no discriminator" and never
+   *  why there is none. */
+  SKIPPED_INELIGIBLE_SEALED_INTERFACE(ForwardDiagnosticSeverity.WARNING),
+
   /** ADR-110: a top-level function whose PascalCase C# name is already held by a top-level
    *  property of the same file class (`val name` + `fun name()`, CS0102). camelCase used to keep
    *  the two apart, since Kotlin gives properties and functions separate namespaces and C# does
@@ -523,14 +533,16 @@ internal fun ForwardPlanSkipReason.diagnosticHint(
         "a nullable, property or collection-component position"
 
   // Names the sealed type, because the reason line cannot. ADR-105 scope (d) closed the position
-  // half of this reason: a sealed *class* in the export scope now binds at every position, so what
-  // is left is a sealed type with no generated ADR-009 discriminator (a sealed interface, or a
-  // sealed class outside the export scope), which C# has no way to reconstruct.
+  // half of this reason and ADR-112 narrowed it again: what is left is a sealed type with no
+  // generated ADR-009 discriminator (an INELIGIBLE sealed interface, or a sealed type outside the
+  // export scope), which C# has no way to reconstruct. `SKIPPED_INELIGIBLE_SEALED_INTERFACE` says
+  // why an ineligible one has none.
   ForwardPlanSkipReason.SEALED_POSITION -> {
     val sealedName: String = detail ?: "the sealed type"
     "sealed type `$sealedName` has no generated discriminator, so C# cannot reconstruct it: only " +
-        "a sealed *class* inside the export scope gets one (ADR-009), and that binds at every " +
-        "position (ADR-105); declare it as a sealed class in an exported package, or accept a " +
+        "an eligible sealed type inside the export scope gets one (ADR-009, ADR-112), and that " +
+        "binds at every position (ADR-105); export it from an included package, make every " +
+        "subclass a nested class or object with no other superclass (ADR-112), or accept a " +
         "concrete subclass"
   }
 

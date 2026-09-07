@@ -936,6 +936,16 @@ warning, instead of being declared at namespace root under a name nothing resolv
 owning dependency class, `Broadcast`, still generates and constructs, and its unrelated members
 still bind; see `IntegrationTests/NestedClassGateTests.cs`.
 
+<note>
+    <p>The generated code itself is always <code>global::</code>-qualified, so a generated type
+    named like a BCL type never confuses the generator. A consumer can still hit ambiguity: a
+    Kotlin class named <code>Monitor</code> (see <a href="interfaces-abstract-sealed.md#sealed-interfaces">Sealed
+    interfaces</a>) collides with <code>System.Threading.Monitor</code>, which C#'s implicit usings
+    pull in by default, so a bare <code>using TestLibrary.Issue54;</code> makes <code>Monitor</code>
+    ambiguous (<code>CS0104</code>) and the consumer needs its own alias,
+    <code>using Monitor = TestLibrary.Issue54.Monitor;</code>.</p>
+</note>
+
 ## Limitations
 
 - `Map`/`Set` **inputs** (parameters) are not planned yet; see [Collections](collections.md).

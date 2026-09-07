@@ -6,12 +6,13 @@ import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 /**
- * ROADMAP Phase 3, what is left of the sealed-position skip once ADR-105 scope (d) bound the
- * sealed *class* at every position: a sealed type with no generated ADR-009 discriminator. A
- * sealed **interface** is the reachable spelling of that (the classifier mints no `sealedHandle`
- * for one), and C# has no way to reconstruct it, so every position it appears at must skip named
- * as `SKIPPED_SEALED_POSITION` and name the type rather than claiming a legacy-route deferral no
- * route re-emits, which is what left the member out of the C# API with no diagnostic at all.
+ * ROADMAP Phase 3, what is left of the sealed-position skip once ADR-105 scope (d) bound the sealed
+ * *class* at every position and ADR-112 bound the eligible sealed *interface* too: a sealed type
+ * with no generated ADR-009 discriminator. An INELIGIBLE sealed interface is the reachable spelling
+ * of that (the classifier mints no `sealedHandle` for one, because the sealed route never declares
+ * it), and C# has no way to reconstruct it, so every position it appears at must skip named as
+ * `SKIPPED_SEALED_POSITION` and name the type rather than claiming a legacy-route deferral no route
+ * re-emits, which is what left the member out of the C# API with no diagnostic at all.
  *
  * Every input spelling is covered (bare parameter, nullable parameter, collection component,
  * constructor parameter). `maybe` is the pointed one: it used to blame `NULLABLE`, whose hint
@@ -31,8 +32,13 @@ class Tier1SealedPositionSkipTest {
       data class Circle(val radius: Double) : Shape()
     }
 
+    open class Haunting
+
+    // ADR-112: INELIGIBLE on purpose. `Nobody` carries a second superclass, which no nested
+    // `sealed class Nobody : Ghost` can express, so `Ghost` has no discriminator and this cell
+    // keeps testing the skip. An eligible sealed interface now binds (Tier1SealedInterfaceTest).
     sealed interface Ghost {
-      data object Nobody : Ghost
+      class Nobody : Haunting(), Ghost
     }
 
     class Drawing(ghost: Ghost, maybe: Ghost?, ghosts: List<Ghost>) {

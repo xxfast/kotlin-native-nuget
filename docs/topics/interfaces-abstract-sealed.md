@@ -7,6 +7,8 @@ Kotlin's three flavours of inheritance each get a distinct C# shape: `interface`
 | `interface` | `interface` (`I`-prefixed) | default methods delegate to Kotlin |
 | `abstract class` | `abstract class` | `_handle` inherited by subclasses |
 | `sealed class` | `abstract class` | a nested subclass stays nested (`Base.Sub`); a **sibling** subclass, declared beside its base rather than inside it, is declared at namespace level (`public sealed class Sub : Base`), see [A sibling sealed subclass declared beside its base](#a-sibling-sealed-subclass-declared-beside-its-base), [ADR-009](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/009-sealed-class-mapping.md) |
+| **eligible** `sealed interface` (no type parameters, every subclass a nested class/object with no other superclass, no sub-interfaces) | `abstract class` | same shape as `sealed class` above; no C# interface is declared for it, see [Sealed interfaces](#sealed-interfaces), [ADR-112](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/112-sealed-interface-mapping.md) |
+| **ineligible** `sealed interface` | `interface` (`I`-prefixed) | stays on the ordinary interface route; every member typed with it skips named (`SKIPPED_SEALED_POSITION`), and the declaration itself gets `SKIPPED_INELIGIBLE_SEALED_INTERFACE` naming the disqualifying subclass, see [Sealed interfaces](#sealed-interfaces), [ADR-112](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/112-sealed-interface-mapping.md) |
 | interface-typed return (method result or property) | `IFoo` / `IFoo?` | backed by a generated `sealed class Foo : IFoo`, see [ADR-040](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/040-interface-return-type-mapping.md) |
 | interface-typed parameter, a C# class implementing `IFoo` | accepted, no `_handle` needed | dispatched through a per-interface bridge factory, see [ADR-084](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/084-csharp-implemented-interfaces.md) |
 | a property of a sealed subclass, any shape a class property supports (nullable enum, nullable reference, `Boolean`, collections, `var`, `Duration`/`Uuid`/value classes/interfaces) | the same shape an ordinary class property gets | planned by [ADR-062](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/062-forward-callable-plan.md)'s property plan, same as any class, since [ADR-111](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/111-sealed-subclass-properties-on-the-property-plan.md); see [Every property shape on a sealed subclass](#every-property-shape-on-a-sealed-subclass) |
@@ -278,6 +280,121 @@ public abstract class Observation : IDisposable
 
 `Alive` and `Dead` are Kotlin `data class` subtypes, so they also get `Equals`/`GetHashCode`/`ToString` (see [Data classes](data-classes.md)). `Superposition` is a `data object`, so it has a fixed `ToString()` and no `Equals`/`GetHashCode` override (reference equality is enough for a singleton). `Cat` and `Cause` both read the `out IntPtr error` slot and throw on failure, the same as any class property getter; see [Every property shape on a sealed subclass](#every-property-shape-on-a-sealed-subclass).
 
+## Sealed interfaces {id="sealed-interfaces"}
+
+A `sealed interface` maps like a sealed class exactly when it is **eligible**: no type parameters, every one of its subclasses is a nested `class` or `object` with no other superclass, and no sub-interface appears anywhere in the hierarchy. An eligible sealed interface enters the same route as `sealed class` above: it renders as `public abstract class Pulse` with nested `sealed` subclasses and a `Pulse.FromHandle(IntPtr)` discriminator, and binds at every position a sealed class does (property, return, parameter, collection component). No `IPulse` interface is ever declared ([ADR-112](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/112-sealed-interface-mapping.md)).
+
+### Kotlin {id="sealed-interface-kotlin"}
+
+From `test-library/src/nativeMain/kotlin/.../issue54/SealedInterfaceSample.kt`:
+
+```kotlin
+sealed interface Pulse {
+  data class Beat(val bpm: Int) : Pulse
+  data object Flat : Pulse
+}
+
+class Monitor {
+  var current: Pulse = Pulse.Flat
+  val history: List<Pulse> = listOf(Pulse.Beat(60), Pulse.Flat)
+  fun latest(): Pulse = current
+  fun record(pulse: Pulse): Int = when (pulse) {
+    is Pulse.Beat -> pulse.bpm
+    Pulse.Flat -> 0
+  }
+}
+```
+
+### Generated C# {id="sealed-interface-generated-c"}
+
+From `Interop.cs`. Same abstract-class-plus-discriminator shape a sealed class gets:
+
+```C#
+public abstract class Pulse : IDisposable, INugetHandle
+{
+    internal IntPtr _handle;
+
+    public sealed class Beat : Pulse
+    {
+        public int Bpm
+        {
+            get { /* ... */ }
+        }
+        // Equals / GetHashCode / ToString / Dispose ...
+    }
+
+    public sealed class Flat : Pulse
+    {
+        public override string ToString() => "Flat";
+        public override void Dispose() { /* ... */ }
+    }
+
+    [DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "pulse_get_type")]
+    private static extern int Native_GetType(IntPtr handle);
+
+    internal static Pulse FromHandle(IntPtr handle)
+    {
+        return Native_GetType(handle) switch
+        {
+            0 => new Beat(handle),
+            1 => new Flat(handle),
+            _ => throw new InvalidOperationException("Unknown sealed class type")
+        };
+    }
+
+    public abstract void Dispose();
+}
+```
+
+`Monitor.Current` binds the sealed interface at a `var` property position the same way a sealed class does:
+
+```C#
+public global::TestLibrary.Issue54.Pulse Current
+{
+    get
+    {            IntPtr nativeResult = Native_Get_current(_handle, out IntPtr error);
+    if (error != IntPtr.Zero)
+    {
+        throw NugetErrorNative.BuildException(error);
+    }
+    return global::TestLibrary.Issue54.Pulse.FromHandle(nativeResult);
+    }
+    set
+    {            Native_Set_current(_handle, value._handle, out IntPtr error);
+    if (error != IntPtr.Zero)
+    {
+        throw NugetErrorNative.BuildException(error);
+    }
+    }
+}
+```
+
+### An ineligible sealed interface stays on the interface route {id="ineligible-sealed-interface"}
+
+`Mixed`'s subclass `Odd` extends another class (`Rhythm`) as well as implementing `Mixed`, so no nested `sealed class Odd : Mixed` can be declared in C#. `Mixed` stays ineligible: it keeps its plain `IMixed` interface declaration, and `Monitor.mixed()` keeps skipping as `SKIPPED_SEALED_POSITION`. The declaration itself gets a new diagnostic naming the disqualifying subclass:
+
+```
+[nuget:SKIPPED_INELIGIBLE_SEALED_INTERFACE] Skipping io.github.xxfast.kotlin.native.nuget.test.issue54.Mixed: sealed interface `io.github.xxfast.kotlin.native.nuget.test.issue54.Mixed` is declared as `IMixed` but cannot be reconstructed in C#: subclass `Odd` extends another class `io.github.xxfast.kotlin.native.nuget.test.issue54.Rhythm`. make every subclass a nested class or object with no other superclass and no sub-interfaces, or declare it as a sealed class (ADR-112)
+```
+
+### Using it from C# {id="sealed-interface-using-it-from-c"}
+
+From `IntegrationTests/SealedInterfaceTests.cs`:
+
+```C#
+using var monitor = new Monitor();
+
+using Pulse current = monitor.Current;
+
+Assert.IsType<Pulse.Flat>(current);
+```
+
+<note>
+    <p>A generated type can collide with a BCL name (<code>Monitor</code> vs.
+    <code>System.Threading.Monitor</code>). See <a href="classes-and-objects.md">Classes and
+    objects</a> for the consumer-side <code>using</code> alias this needs.</p>
+</note>
+
 ## Sealed types as property types
 
 A property whose type is a sealed class binds as the sealed **base**, and the C# getter materialises it through the generated `FromHandle` discriminator above rather than through a constructor (the base is `abstract`, so `new` would not compile). This covers the bare type, the nullable spelling, and a collection whose component is sealed, read-only or `var` ([#54](https://github.com/xxfast/kotlin-native-nuget/issues/54), [ADR-105](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/105-sealed-property-position.md)).
@@ -363,7 +480,7 @@ What still skips at a property position, each named by a build warning rather th
 
 | Shape | Status |
 |---|---|
-| a sealed **interface** (`sealed interface Filter`), bare or as a collection component | Skipped: only a sealed *class* is given a `FromHandle` discriminator |
+| an **ineligible** sealed interface (see [Sealed interfaces](#sealed-interfaces)), bare or as a collection component | Skipped, named `SKIPPED_SEALED_POSITION` |
 | a value class whose underlying type is sealed | Skipped |
 
 ## A sealed type at a parameter position {id="a-sealed-type-at-a-parameter-position"}
@@ -1593,7 +1710,7 @@ property. The owning class still generates, and its unrelated `name` member stil
 - Interfaces with generic type parameters, suspend interface members, and `Flow`/`StateFlow`-valued interface members are not supported as return positions.
 - A backing class and its dispatch exports are only generated for interfaces that actually appear in a planned return position; an interface only ever used as an `add`/`remove` subscription parameter (like `ICatEventListener`, see [Lambdas and callbacks](lambdas-and-callbacks.md)) does not get one.
 - Object identity is not preserved across reads of a **Kotlin-backed** interface-typed property: two reads produce two distinct C# wrapper instances over the same Kotlin object (each disposes independently). A **C#-implemented** object read back is the one exception, see above.
-- A sealed type in the export scope now binds at every position: property, callable return, and callable/constructor parameter (bare, nullable, or a collection component, read-only or mutable), see [Sealed types as property types](#sealed-types-as-property-types), [A class method returning a sealed base](#a-class-method-returning-a-sealed-base), and [A sealed type at a parameter position](#a-sealed-type-at-a-parameter-position). What still does not bind: an extension function's **receiver** typed as a sealed base (`sealedAsHandle()` rewrites declared parameters only), a sealed **interface** at any position (only a sealed *class* gets a `FromHandle` discriminator), a sealed class **outside the export scope**, and a value class whose underlying type is sealed. See [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md).
+- A sealed type in the export scope now binds at every position: property, callable return, and callable/constructor parameter (bare, nullable, or a collection component, read-only or mutable), see [Sealed types as property types](#sealed-types-as-property-types), [A class method returning a sealed base](#a-class-method-returning-a-sealed-base), and [A sealed type at a parameter position](#a-sealed-type-at-a-parameter-position). An **eligible** `sealed interface` binds the same way, see [Sealed interfaces](#sealed-interfaces). What still does not bind: an extension function's **receiver** typed as a sealed base (`sealedAsHandle()` rewrites declared parameters only), an **ineligible** sealed interface at any position, a sealed class **outside the export scope**, and a value class whose underlying type is sealed. See [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md).
 - [Overriding a read-only property with `var`](#overriding-a-read-only-property-with-var) only guards against the exported-base-class shape. A base class's own `open val`/`open var` never renders `virtual` (its own modifier is never read), so any subclass `override` of it is `CS0506`; and an unimplemented base `abstract val`/`abstract var` has no abstract-property path at all, so a subclass `override` of it is `CS0115`. Neither is fixed. See [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md).
 
 ## Using it from C#
@@ -1666,5 +1783,6 @@ public void Observation_WorksWithPatternMatching()
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/102-aot-safe-forward-callbacks.md">ADR-102: AOT-safe forward callbacks</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/105-sealed-property-position.md">ADR-105: Sealed types at property positions</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/111-sealed-subclass-properties-on-the-property-plan.md">ADR-111: Sealed-subclass properties on the property plan</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/112-sealed-interface-mapping.md">ADR-112: Sealed interface mapping</a>
     </category>
 </seealso>

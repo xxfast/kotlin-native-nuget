@@ -131,6 +131,10 @@ projected by the same shared emitter and C# projection an ordinary class propert
 no plan shape: the discriminator export and `FromHandle` dispatcher, `Dispose`, and the
 data-class `equals`/`hashCode`/`toString` methods.
 
+### Amendment (2026-09-07): an eligible sealed interface takes this same route
+
+[ADR-112](112-sealed-interface-mapping.md) extends this route to a `sealed interface` whose subclasses are all nested classes/objects with no other superclass and no sub-interfaces: it renders exactly as above, `public abstract class Pulse` with nested `sealed` subclasses and `Pulse.FromHandle`, and no C# interface is declared for it.
+
 ## Consequences
 
 - Sealed hierarchies are type-safe and pattern-matchable in C#
