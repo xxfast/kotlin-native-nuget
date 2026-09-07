@@ -147,6 +147,18 @@ See `test-library/.../test/reserved/ReservedNamesSample.kt` and
 `IntegrationTests/ReservedNamesTests.cs` for the fixture, and `Reserved.kt`'s
 `PLAN_OWNED_NAMES`/`bridgeParameterName()` for the mechanism.
 
+## Amendment (2026-09-07): method-name keyword escaping moved to render time
+
+`publicSignature.name` on a plan is PascalCase after this ADR, so no planner path ever escaped a
+C# keyword into a method name, and the two `ForwardCirPlanProjection.kt` sites that stripped a
+leading `@` back off with `removePrefix("@")` were dead code. C# keyword escaping of a member name
+is now a render concern only: `ForwardPublicSignature.csharpName` (`toCSharpName(name)`) is read at
+the six public-member name sites in `ForwardCirPlanProjection.kt`. Extern and entry-point name
+derivations (`Native_${name}` and friends) keep the raw plan name, since neither is ever rendered
+as a C# identifier a keyword could collide with. `ForwardCallablePlanValidator.validate` now
+`require`s that a plan name never starts with `@`, so a plan itself can never carry an escaped
+name again. See `ForwardCirPlanProjectionTest`.
+
 ## References
 
 - [ADR-004](004-cir-intermediate-representation.md) — CIR model and dual emission
