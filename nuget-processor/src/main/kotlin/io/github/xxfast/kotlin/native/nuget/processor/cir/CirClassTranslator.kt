@@ -1642,33 +1642,6 @@ internal fun translateValueClass(
 
   val nativeArg: String = if (isReferenceUnderlying) "${underlyingName}._handle" else underlyingName
 
-  fun buildConstructor(
-    ctor: KSFunctionDeclaration,
-    suffix: String,
-    nativeName: String,
-  ): CirValueClassConstructor {
-    val params: List<CirParameter> = ctor.parameters.map { param ->
-      val resolved: KSType = param.type.resolve().expandAliases()
-      val kotlinType: String = resolved.declaration.simpleName.asString()
-      CirParameter((param.name?.asString() ?: "_").csharpParameterName(), mapParamType(kotlinType))
-    }
-
-    val paramNames: String = params.joinToString(", ") { it.name }
-    val body: String = if (underlyingType == "String") {
-      "Marshal.PtrToStringUTF8(CreateChecked${suffix}(${paramNames}))!"
-    } else {
-      "CreateChecked${suffix}(${paramNames})"
-    }
-
-    return CirValueClassConstructor(
-      parameters = params,
-      nativeName = nativeName,
-      body = body,
-      hasErrorCheck = true,
-      nativeSuffix = suffix,
-    )
-  }
-
   fun buildConstructorFromPlan(plan: ForwardCallablePlan, suffix: String): CirValueClassConstructor {
     return ForwardCirPlanProjection.valueClassConstructor(plan, suffix, underlyingType == "String")
   }
@@ -1680,18 +1653,11 @@ internal fun translateValueClass(
     .toList()
 
   val constructors: List<CirValueClassConstructor> = if (isReferenceUnderlying) {
-    // ADR-035: primary deferred; secondary-only numbering. Explicit legacy adapter when unplanned.
-    secondaryCtorDecls.mapIndexed { index, ctor ->
-      val suffix: String = if (index == 0) "" else "_$index"
-      val symbolSuffix: String = if (index == 0) "" else "_$index"
-      val planned = callableCatalog.planFor("$qualifiedName.<init>$symbolSuffix")
-      if (planned != null) {
-        buildConstructorFromPlan(planned, suffix)
-      } else {
-        val nativeName: String = if (index == 0) "${prefix}_create" else "${prefix}_create_${index}"
-        buildConstructor(ctor, suffix, nativeName)
-      }
-    }
+    // ADR-035: the positional record struct over the underlying handle is the only constructor.
+    // A secondary has nothing to delegate to (the primary is deferred), so the planner skips it
+    // and neither half emits anything -- no import, no export, no `this(CreateChecked(...))`
+    // handing an IntPtr to a class-typed parameter.
+    emptyList()
   } else {
     // ADR-035: plan-only for primitive-underlying constructors.
     buildList {

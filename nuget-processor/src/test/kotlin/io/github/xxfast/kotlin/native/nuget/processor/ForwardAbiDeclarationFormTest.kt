@@ -321,7 +321,6 @@ class ForwardAbiDeclarationFormTest {
                 parameters = listOf(CirParameter("value", "int")),
                 nativeName = "value_create",
                 body = "value",
-                hasErrorCheck = true,
               ),
             ),
             properties = emptyList(),

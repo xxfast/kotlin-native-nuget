@@ -1629,7 +1629,11 @@ for the full reasoning, including its 2026-08-08 amendment.
 
 - Reference-underlying value-class **primary** constructor `init` validation stays deferred
   ([ADR-035](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/035-value-class-primary-constructor-validation.md));
-  primitive-underlying validation (the `CatId` path above) is in place.
+  primitive-underlying validation (the `CatId` path above) is in place. A reference-underlying value
+  class (`CatResult` above) keeps only its positional record-struct constructor; a **secondary**
+  constructor declared on one (`constructor(name: String) : this(Cat(name))`) skips named
+  (`SKIPPED_VALUE_CLASS_SECONDARY_CONSTRUCTOR`) rather than rendering, with a warning pointing at
+  the workaround: construct the underlying and wrap it yourself, C# side.
 - Inherited/delegation-forwarded members are excluded by design, not deferred; see
   [Inherited members](#inherited-members) above. The exclusion signal is signature-level (kind,
   simple name, arity, and per-position parameter types), so an unrelated overload sharing only a

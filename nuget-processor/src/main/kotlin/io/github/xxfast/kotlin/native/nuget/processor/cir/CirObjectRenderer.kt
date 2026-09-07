@@ -23,7 +23,7 @@ internal fun StringBuilder.renderValueClass(cls: CirValueClass) {
   appendLine("        public ${cls.underlyingType} ${cls.underlyingName} { get; }")
   appendLine()
 
-  cls.constructors.forEachIndexed { index, ctor ->
+  cls.constructors.forEach { ctor ->
     val paramStr: String = ctor.parameters.joinToString(", ") { "${it.type} ${it.name}" }
     val paramNames: String = ctor.parameters.joinToString(", ") { it.name }
     // ADR-077: the native call lowers each argument to its wire shape when the projection
@@ -33,7 +33,7 @@ internal fun StringBuilder.renderValueClass(cls: CirValueClass) {
       if (cls.underlyingType == "string") "IntPtr" else cls.underlyingNativeType
     val suffix: String = ctor.nativeSuffix
 
-    renderDllImport(cls.constructorNativeImport(index, ctor))
+    renderDllImport(cls.constructorNativeImport(ctor))
     appendLine("        private static $nativeReturnType CreateChecked$suffix($paramStr)")
     appendLine("        {")
     appendLine("            $nativeReturnType underlying = Native_Create$suffix($nativeArgs, out IntPtr error);")
@@ -56,36 +56,12 @@ internal fun StringBuilder.renderValueClass(cls: CirValueClass) {
   appendLine("    }")
 }
 
-// ADR-035: reference-underlying value classes are deferred — keep the positional
-// record struct with `: this(...)` delegation (the ADR-033 secondary scheme).
+// ADR-035: a reference-underlying value class is the positional record struct over its underlying
+// handle and nothing else. Its primary is deferred and its secondaries are skipped by the planner
+// (`REFERENCE_UNDERLYING_VALUE_CLASS_CONSTRUCTOR`), so there is no constructor to render here.
 private fun StringBuilder.renderReferenceValueClass(cls: CirValueClass) {
   appendLine("    public readonly record struct ${cls.name}(${cls.underlyingType} ${cls.underlyingName})")
   appendLine("    {")
-
-  cls.constructors.forEachIndexed { index, ctor ->
-    val paramStr: String = ctor.parameters.joinToString(", ") { "${it.type} ${it.name}" }
-    val paramNames: String = ctor.parameters.joinToString(", ") { it.name }
-    val nativeReturnType: String = if (cls.underlyingType == "string") "IntPtr" else cls.underlyingNativeType
-    val nativeSuffix: String = if (index > 0) "_$index" else ""
-
-    renderDllImport(cls.constructorNativeImport(index, ctor))
-
-    if (ctor.hasErrorCheck) {
-      appendLine("        private static $nativeReturnType CreateChecked$nativeSuffix($paramStr)")
-      appendLine("        {")
-      appendLine("            $nativeReturnType underlying = Native_Create$nativeSuffix($paramNames, out IntPtr error);")
-      appendLine("            if (error != IntPtr.Zero)")
-      appendLine("            {")
-      appendLine("                throw NugetErrorNative.BuildException(error);")
-      appendLine("            }")
-      appendLine("            return underlying;")
-      appendLine("        }")
-    }
-
-    appendLine()
-    appendLine("        public ${cls.name}($paramStr) : this(${ctor.body}) { }")
-    appendLine()
-  }
 
   renderValueClassMembers(cls)
 

@@ -40,7 +40,6 @@ internal object ForwardCirPlanProjection {
       parameters = publicParams,
       nativeName = nativeCall.exportName,
       body = body,
-      hasErrorCheck = plan.errorSlot != null,
       nativeSuffix = nativeSuffix,
       // ADR-077: the DllImport and its call site follow the plan's wire shape, so an enum
       // parameter imports as `int` and is passed as `(int)name`, matching the Kotlin export.

@@ -191,29 +191,27 @@ internal fun CirClass.disposeNativeImport(): CirDllImport? {
 }
 
 internal fun CirValueClass.ordinaryNativeImports(): List<CirDllImport> = buildList {
-  constructors.forEachIndexed { index, ctor -> add(constructorNativeImport(index, ctor)) }
+  constructors.forEach { ctor -> add(constructorNativeImport(ctor)) }
   properties.forEach { property -> add(propertyNativeImport(property)) }
   methods.forEach { method -> add(methodNativeImport(method)) }
 }
 
-internal fun CirValueClass.constructorNativeImport(
-  index: Int,
-  ctor: CirValueClassConstructor,
-): CirDllImport {
-  val suffix: String = if (underlyingIsReference && index > 0) "_$index" else ctor.nativeSuffix
-  return CirDllImport(
+internal fun CirValueClass.constructorNativeImport(ctor: CirValueClassConstructor): CirDllImport =
+  CirDllImport(
     libraryName = libraryName,
     entryPoint = ctor.nativeName,
     returnType = if (underlyingType == "string") "IntPtr" else underlyingNativeType,
-    name = "Native_Create$suffix",
-    // ADR-077: prefer the plan-projected wire shape (an enum parameter imports as `int`, its
-    // ordinal); fall back to the public shape for the legacy (non-plan) route.
+    name = "Native_Create${ctor.nativeSuffix}",
+    // ADR-077: the plan-projected wire shape (an enum parameter imports as `int`, its ordinal).
+    // Every value-class constructor is plan-routed since the reference-underlying legacy adapter
+    // was deleted, so `nativeParameters` is only absent on a hand-built CIR fixture.
     parameters = ctor.nativeParameters
       ?: ctor.parameters.map { parameter -> parameter.copy(nativeType = parameter.type) },
     visibility = CirVisibility.PRIVATE,
-    hasSyncErrorOut = !underlyingIsReference || ctor.hasErrorCheck,
+    // Unconditional, because `renderValueClass` calls `Native_Create` with `out IntPtr error`
+    // unconditionally: every value-class constructor is planned with `includeError = true`.
+    hasSyncErrorOut = true,
   )
-}
 
 internal fun CirValueClass.propertyNativeImport(property: CirProperty): CirDllImport = CirDllImport(
   libraryName = libraryName,

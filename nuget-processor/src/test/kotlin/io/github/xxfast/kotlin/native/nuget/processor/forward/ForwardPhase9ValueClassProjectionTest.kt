@@ -104,7 +104,10 @@ class ForwardPhase9ValueClassProjectionTest {
     assertContains(kotlin, "errorOut: COpaquePointer?")
     assertContains(kotlin, "sample.CatId(id).id")
     assertEquals("catid_create", ctor.nativeName)
-    assertTrue(ctor.hasErrorCheck)
+    // The error slot is pinned on the rendered import rather than on a model flag: the renderer
+    // calls `Native_Create` with `out IntPtr error` unconditionally, so that is where the two
+    // halves have to agree.
+    assertContains(csharp, "out IntPtr error);")
     assertContains(csharp, "CreateChecked(")
     assertContains(csharp, "Marshal.PtrToStringUTF8(CreateChecked(")
     assertContains(csharp, "public CatId(string id)")

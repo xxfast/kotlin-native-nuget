@@ -176,6 +176,15 @@ internal enum class ForwardDiagnosticKind(
    *  would otherwise produce no output and no diagnostic whatsoever. */
   SKIPPED_NESTED_DECLARATION(ForwardDiagnosticSeverity.WARNING),
 
+  /** A secondary constructor of a value class whose underlying is a reference (an exported class
+   *  handle). ADR-035 exposes such a value class as a positional record struct over the underlying
+   *  handle and defers its primary constructor, so a secondary has nothing to delegate to: the
+   *  route that used to emit one produced a `: this(CreateChecked(...))` handing an `IntPtr` to a
+   *  class-typed parameter against a Kotlin export that returned the underlying object rather than
+   *  a pointer. Its own kind rather than [SKIPPED_UNSUPPORTED_TYPE]: nothing about the parameter
+   *  types is unsupported, it is the constructor position on this one struct shape. */
+  SKIPPED_VALUE_CLASS_SECONDARY_CONSTRUCTOR(ForwardDiagnosticSeverity.WARNING),
+
   /** ADR-112: a `sealed interface` whose hierarchy the ADR-009 sealed-class route cannot carry:
    *  type parameters, a subclass with a second superclass, a sub-interface, or a subclass declared
    *  outside it. An eligible one is declared as an abstract class with a `FromHandle`
@@ -371,6 +380,9 @@ internal fun ForwardPlanSkipReason.toDiagnosticKind(): ForwardDiagnosticKind = w
 
   ForwardPlanSkipReason.SEALED_POSITION -> ForwardDiagnosticKind.SKIPPED_SEALED_POSITION
 
+  ForwardPlanSkipReason.REFERENCE_UNDERLYING_VALUE_CLASS_CONSTRUCTOR ->
+    ForwardDiagnosticKind.SKIPPED_VALUE_CLASS_SECONDARY_CONSTRUCTOR
+
   ForwardPlanSkipReason.UNIMPLEMENTABLE_BOUND_INTERFACE ->
     ForwardDiagnosticKind.SKIPPED_UNIMPLEMENTABLE_BOUND_INTERFACE
 
@@ -545,6 +557,12 @@ internal fun ForwardPlanSkipReason.diagnosticHint(
         "subclass a nested class or object with no other superclass (ADR-112), or accept a " +
         "concrete subclass"
   }
+
+  // The one shape ADR-035 leaves unconstructible, so the hint names the workaround rather than a
+  // type: the underlying is an exported class handle, so C# can build it and wrap it itself.
+  ForwardPlanSkipReason.REFERENCE_UNDERLYING_VALUE_CLASS_CONSTRUCTOR ->
+    "a reference-underlying value class exposes only its positional record-struct constructor " +
+        "(ADR-035); construct the underlying and wrap it"
 
   // Names the enum, because the reason line cannot: `warnDroppedForwardCallables` builds it from
   // the reason's own name. Worded to stay true for both shapes the flag covers — a nested enum in

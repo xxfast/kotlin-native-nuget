@@ -93,6 +93,9 @@ class ForwardSkippedCallableWarningTest {
         ForwardPlanSkipReason.STRING,
         ForwardPlanSkipReason.UNSUPPORTED,
         ForwardPlanSkipReason.VALUE_CLASS,
+        // ROADMAP Phase 3: a secondary constructor of a reference-underlying value class. ADR-035
+        // keeps only the positional record-struct constructor, and no legacy route re-emits one.
+        ForwardPlanSkipReason.REFERENCE_UNDERLYING_VALUE_CLASS_CONSTRUCTOR,
         // ADR-064: genuine drops with their own named diagnostic kind (cell 23's combination,
         // and a value-class member inherited via interface delegation).
         ForwardPlanSkipReason.UNSUPPORTED_COMBINATION,
