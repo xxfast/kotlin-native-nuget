@@ -4,6 +4,11 @@ package io.github.xxfast.kotlin.native.nuget.processor.forward
  * The alias-expanded semantic type seen by the forward marshaller.  This deliberately contains
  * no KSP symbols: a plan must be complete before either source renderer sees it.
  */
+
+/** The [BridgeType.SpecializedProtocol] name prefix the classifier mints for an ADR-009 sealed
+ *  hierarchy, and the planner tests to tell a sealed position from any other protocol. */
+internal const val SEALED_HELPER_PREFIX: String = "sealed helper "
+
 internal sealed interface BridgeType {
   data object Unit : BridgeType
 

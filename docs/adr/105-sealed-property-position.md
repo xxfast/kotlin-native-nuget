@@ -442,6 +442,12 @@ shipped via [ADR-009](009-sealed-class-mapping.md)'s 2026-09-07 amendment, shari
 `sealedAsHandle` rewrite. The **parameter** half of scope (d), a bare sealed parameter or a sealed
 collection component at a parameter position, remains deferred.
 
+**Post-implementation note (2026-09-07):** the deferred parameter half above now skips **named**
+rather than silently, via [ADR-064](064-forward-unsupported-declaration-diagnostics.md)'s
+2026-09-07 amendment (`ForwardPlanSkipReason.SEALED_PROTOCOL` renamed `SEALED_POSITION`,
+`droppedFromCSharp` flipped to `true`, mapped to `SKIPPED_SEALED_POSITION`). Bridging the parameter
+position itself is still not built; only the silence is gone.
+
 ## Prior art (to the depth that changes the decision)
 
 - **ObjC / Swift Export**: Kotlin/Native maps a sealed class to an ordinary class hierarchy

@@ -7,7 +7,7 @@ import kotlin.test.assertTrue
 /**
  * Issue #54, the return half of ADR-105. A sealed base at a *return* position on a class member,
  * an `object` member or a companion member was silently dropped: the callable planner had no arm
- * for a `SpecializedProtocol` result, so it recorded a `SEALED_PROTOCOL` skip, and only the
+ * for a `SpecializedProtocol` result, so it recorded a sealed-protocol skip, and only the
  * top-level route re-emitted the same return through its named legacy adapter. The member routes
  * had no sealed arm at all, so the C# side reported CS1061/CS0117 on a member that was never
  * generated.

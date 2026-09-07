@@ -16,9 +16,9 @@ import kotlin.test.assertTrue
  * The two skip families reach the same outcome by different routes, so both are pinned:
  * - (a) a `droppedFromCSharp = true` skip (`UNDECLARED_ENUM`), which already warns *per
  *   constructor* but never said the type ends up unconstructible;
- * - (b) a `droppedFromCSharp = false` legacy-route deferral (`SEALED_PROTOCOL`), which never
- *   reaches `droppedCallables` and, since no legacy route re-emits a constructor, used to be
- *   silent in every channel.
+ * - (b) a sealed-typed constructor parameter (`SEALED_POSITION`), which used to claim a legacy
+ *   deferral and so never reached `droppedCallables`; it now warns per constructor as well, and
+ *   this test pins that the type is still kept either way.
  *
  * The controls guard against over-firing: a class where one of two constructors survives (c) and
  * an abstract class (d) are both constructible-or-not-by-design, and a factory returning the

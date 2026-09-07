@@ -116,6 +116,12 @@ internal enum class ForwardDiagnosticKind(
    *  and the original C# type rather than blaming the type. */
   SKIPPED_BOUND_TYPE_POSITION(ForwardDiagnosticSeverity.WARNING),
 
+  /** ROADMAP Phase 3 (issue #54): a sealed base at an INPUT position (a bare parameter, a nullable
+   *  one, or a collection component), which the plan does not marshal. Explicitly NOT
+   *  `SKIPPED_UNSUPPORTED_TYPE`, for ADR-088's reason: since ADR-105 the same type binds fine at a
+   *  return or property position, so the message blames the position and names the sealed type. */
+  SKIPPED_SEALED_POSITION(ForwardDiagnosticSeverity.WARNING),
+
   /** ADR-088: a bound C# interface at a RETURN position with no `mint{Iface}Bridge` (ADR-085
    *  inadmissible), so a Kotlin implementation of it cannot be handed back to C#. */
   SKIPPED_UNIMPLEMENTABLE_BOUND_INTERFACE(ForwardDiagnosticSeverity.WARNING),
@@ -221,7 +227,7 @@ internal enum class ForwardDiagnosticKind(
    *  Nothing changes in the output, so the verb says "Keeping" rather than claiming a skip.
    *
    *  Fires for every skip reason, including the `droppedFromCSharp = false` ones
-   *  (`SEALED_PROTOCOL`, `GENERIC`, ...): that flag describes the *method* legacy routes and no
+   *  (`GENERIC`, `FLOW_PROTOCOL`, ...): that flag describes the *method* legacy routes and no
    *  legacy route re-emits a constructor, so a constructor skipped for one of those was silent in
    *  every channel. Not fired for an abstract class (uninstantiable by design) or for the ADR-040
    *  interface backing wrapper (`translateInterfaceBackingClass`, which is never handle-less by
@@ -353,6 +359,8 @@ internal fun ForwardPlanSkipReason.toDiagnosticKind(): ForwardDiagnosticKind = w
   ForwardPlanSkipReason.BOUND_INTERFACE_POSITION ->
     ForwardDiagnosticKind.SKIPPED_BOUND_TYPE_POSITION
 
+  ForwardPlanSkipReason.SEALED_POSITION -> ForwardDiagnosticKind.SKIPPED_SEALED_POSITION
+
   ForwardPlanSkipReason.UNIMPLEMENTABLE_BOUND_INTERFACE ->
     ForwardDiagnosticKind.SKIPPED_UNIMPLEMENTABLE_BOUND_INTERFACE
 
@@ -385,7 +393,6 @@ internal fun ForwardPlanSkipReason.toDiagnosticKind(): ForwardDiagnosticKind = w
   ForwardPlanSkipReason.CALLBACK_PROTOCOL,
   ForwardPlanSkipReason.FLOW_PROTOCOL,
   ForwardPlanSkipReason.GENERIC,
-  ForwardPlanSkipReason.SEALED_PROTOCOL,
   ForwardPlanSkipReason.SUSPEND,
   ForwardPlanSkipReason.SUSPEND_CALLBACK_PROTOCOL,
   ForwardPlanSkipReason.TYPE_PARAMETER,
@@ -514,6 +521,16 @@ internal fun ForwardPlanSkipReason.diagnosticHint(
     "ADR-088 v1 marshals a bound C# interface at ordinary, non-nullable function/method/" +
         "constructor parameters and method/function returns only; expose one of those instead of " +
         "a nullable, property or collection-component position"
+
+  // Names the sealed base, because the reason line cannot. Same shape as the BOUND_INTERFACE_
+  // POSITION hint above it: the type is not the problem, the position is, so the message says
+  // which positions do work rather than telling the author the type is unsupported.
+  ForwardPlanSkipReason.SEALED_POSITION -> {
+    val sealedName: String = detail ?: "the sealed class"
+    "sealed class `$sealedName` binds at return and property positions (ADR-009, ADR-105) but " +
+        "not yet as a parameter (bare, nullable, or as a collection component); accept a " +
+        "concrete subclass, or wrap it in an exported non-sealed class"
+  }
 
   // Names the enum, because the reason line cannot: `warnDroppedForwardCallables` builds it from
   // the reason's own name. Worded to stay true for both shapes the flag covers — a nested enum in

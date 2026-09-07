@@ -787,16 +787,21 @@ public static global::TestLibrary.Issue54.Issue54Drawing sleepingCats()
 
 ```
 [nuget:WARNING_NO_PUBLIC_CONSTRUCTOR] Keeping Issue54Drawing: every public constructor is skipped
-    (<init>: SEALED_PROTOCOL), so the generated C# class has only its internal handle constructor
+    (<init>: SEALED_POSITION), so the generated C# class has only its internal handle constructor
     and C# cannot construct one. the type is kept because instances can still come from Kotlin
     factories that return it (a top-level function, or a companion factory); expose one, or change
     the constructor parameters to types the bridge can express
-    at Issue54Sample.kt:52
+    at Issue54Sample.kt:64
 ```
 
 The verb reads "Keeping", not "Skipping": the class itself is not skipped, only its constructor is.
-The same kind fires for an unrelated cause on `Issue56Failure`
-([Exceptions](exceptions.md)), whose constructor is skipped for `NULLABLE`, not `SEALED_PROTOCOL`:
+The per-constructor skip itself is also named, since
+[ADR-064](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/064-forward-unsupported-declaration-diagnostics.md)'s
+2026-09-07 amendment renamed the underlying reason from `SEALED_PROTOCOL` to `SEALED_POSITION` and
+gave it its own `SKIPPED_SEALED_POSITION` warning; see
+[Interfaces, abstract classes, and sealed classes](interfaces-abstract-sealed.md#sealed-types-as-property-types).
+The same `WARNING_NO_PUBLIC_CONSTRUCTOR` kind fires for an unrelated cause on `Issue56Failure`
+([Exceptions](exceptions.md)), whose constructor is skipped for `NULLABLE`, not `SEALED_POSITION`:
 
 ```
 [nuget:WARNING_NO_PUBLIC_CONSTRUCTOR] Keeping Issue56Failure: every public constructor is skipped
