@@ -757,8 +757,12 @@ internal fun translateClass(
 
   val flowMembers: List<CirMember> = flowMethods.flatMap { method ->
     val methodName: String = method.simpleName.asString()
-    val cname: String = toCName(methodName)
+    // Issue #97: the overload number the planner assigned, on the C name and the extern stem alike,
+    // the same two places the plan projection puts it (ADR-090).
+    val suffix: String = callableCatalog.overloadSuffix(method)
+    val cname: String = toCName(methodName) + suffix
     val csMethodName: String = methodName.replaceFirstChar { it.uppercase() }
+    val nativeStem: String = "Native_$csMethodName$suffix"
     val returnType = method.returnType?.resolve()?.expandAliases()
     val returnQualified: String? = returnType?.declaration?.qualifiedName?.asString()
     val isStateFlowMethod: Boolean = returnQualified in STATE_FLOW_TYPES
@@ -802,7 +806,7 @@ internal fun translateClass(
       libraryName = libraryName,
       entryPoint = "${prefix}_${cname}_collect",
       returnType = "IntPtr",
-      name = "Native_${csMethodName}Collect",
+      name = "${nativeStem}Collect",
       parameters = nativeParams,
       visibility = CirVisibility.PRIVATE,
     )
@@ -821,7 +825,7 @@ internal fun translateClass(
         libraryName = libraryName,
         entryPoint = "${prefix}_${cname}_value",
         returnType = "IntPtr",
-        name = "Native_${csMethodName}Value",
+        name = "${nativeStem}Value",
         parameters = listOf(CirParameter("handle", "IntPtr")) + methodParams,
         visibility = CirVisibility.PRIVATE,
       )
@@ -833,7 +837,7 @@ internal fun translateClass(
           libraryName = libraryName,
           entryPoint = "${prefix}_${cname}_has_value",
           returnType = "bool",
-          name = "Native_${csMethodName}HasValue",
+          name = "${nativeStem}HasValue",
           parameters = listOf(CirParameter("handle", "IntPtr")) + methodParams,
           visibility = CirVisibility.PRIVATE,
           marshalBooleanReturn = true,
@@ -850,7 +854,7 @@ internal fun translateClass(
           libraryName = libraryName,
           entryPoint = "${prefix}_${cname}_set_value",
           returnType = "void",
-          name = "Native_${csMethodName}SetValue",
+          name = "${nativeStem}SetValue",
           parameters = listOf(CirParameter("handle", "IntPtr")) + methodParams +
               listOf(CirParameter("value", setValueParamType)),
           visibility = CirVisibility.PRIVATE,
@@ -865,19 +869,19 @@ internal fun translateClass(
         } else {
           "KotlinStateFlow<$flowCsElementType>${if (isNullableMember) "?" else ""}"
         },
-        nativeName = "Native_${csMethodName}Collect",
+        nativeName = "${nativeStem}Collect",
         parameters = methodParams,
         body = nativeCallArgs,
         isFlow = true,
         isStateFlow = true,
         flowElementType = flowCsElementType,
-        stateFlowValueNativeName = "Native_${csMethodName}Value",
+        stateFlowValueNativeName = "${nativeStem}Value",
         isStateFlowNullableMember = isNullableMember,
         stateFlowHasValueNativeName =
-          if (isNullableMember) "Native_${csMethodName}HasValue" else "",
+          if (isNullableMember) "${nativeStem}HasValue" else "",
         isMutableStateFlow = isMutableStateFlowMethod,
         stateFlowSetValueNativeName =
-          if (isMutableStateFlowMethod) "Native_${csMethodName}SetValue" else "",
+          if (isMutableStateFlowMethod) "${nativeStem}SetValue" else "",
         isMutableStateFlowElementObject = isMutableStateFlowObjectElement,
       )
 
@@ -893,7 +897,7 @@ internal fun translateClass(
     val flowMethod = CirMethod(
       name = csMethodName,
       returnType = "KotlinFlow<$flowCsElementType>",
-      nativeName = "Native_${csMethodName}Collect",
+      nativeName = "${nativeStem}Collect",
       parameters = methodParams,
       body = nativeCallArgs,
       isFlow = true,
