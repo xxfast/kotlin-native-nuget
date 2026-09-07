@@ -31,6 +31,43 @@ public class SuspendLambdaTests
     }
 
     [Fact]
+    public async Task CatFeeder_OnFeedPortion_Arity2_InvokeAsync_ReturnsExpectedString()
+    {
+        using var feeder = new CatFeeder("Mylo");
+        using var onFeedPortion = feeder.OnFeedPortion;
+        string result = await onFeedPortion.InvokeAsync("salmon", 40);
+        Assert.Equal("Mylo devoured 40g of salmon!", result);
+    }
+
+    [Fact]
+    public async Task CatFeeder_OnFeedSchedule_Arity3_InvokeAsync_ReturnsExpectedString()
+    {
+        using var feeder = new CatFeeder("Oreo");
+        using var onFeedSchedule = feeder.OnFeedSchedule;
+        string result = await onFeedSchedule.InvokeAsync("tuna", 25, "dawn");
+        Assert.Equal("Oreo devoured 25g of tuna at dawn!", result);
+    }
+
+    [Fact]
+    public async Task CatFeeder_OnLogMeal_Arity2Unit_InvokeAsync_CompletesWithoutError()
+    {
+        using var feeder = new CatFeeder("Oreo");
+        using var onLogMeal = feeder.OnLogMeal;
+        await onLogMeal.InvokeAsync("tuna", "dawn");
+    }
+
+    [Fact]
+    public async Task CatFeeder_OnFeedPortion_CancelViaToken_MyloLeftHungry()
+    {
+        using var feeder = new CatFeeder("Mylo");
+        using var onFeedPortion = feeder.OnFeedPortion;
+        var cts = new CancellationTokenSource();
+        cts.Cancel();
+        await Assert.ThrowsAsync<TaskCanceledException>(
+            () => onFeedPortion.InvokeAsync("salmon", 40, cts.Token));
+    }
+
+    [Fact]
     public async Task CatFeeder_OnFeed_MultipleInvocations_ReturnSameResult()
     {
         using var feeder = new CatFeeder("Mylo");

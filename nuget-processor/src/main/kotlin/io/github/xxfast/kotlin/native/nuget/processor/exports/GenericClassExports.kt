@@ -538,76 +538,49 @@ internal fun FileSpec.Builder.addNugetFunc2HelperExports() {
   )
 }
 
-internal fun FileSpec.Builder.addNugetSuspendFunc0HelperExports() {
-  addFunction(
-    FunSpec.builder("export_nuget_suspend_func0_invoke")
-      .addAnnotation(cNameAnnotation("nuget_suspend_func0_invoke"))
-      .addParameter("handle", cOpaquePointer)
-      .addParameter("callbackPtr", cOpaquePointer)
-      .addParameter("userData", cOpaquePointer)
-      .returns(cOpaquePointer)
-      .addCode(buildString {
-        appendLine("val fn = handle.asStableRef<SuspendFunction0<*>>().get()")
-        appendLine("val callback = callbackPtr.reinterpret<CFunction<")
-        appendLine("  (COpaquePointer?, COpaquePointer?, Byte, COpaquePointer) -> Unit>>()")
-        appendLine("val job = CoroutineScope(Dispatchers.Default).launch(start = CoroutineStart.ATOMIC) {")
-        appendLine("  try {")
-        appendLine("    val result = fn.invoke()")
-        appendLine("    if (result == Unit) {")
-        appendLine("      callback.invoke(null, null, 0.toByte(), userData)")
-        appendLine("    } else {")
-        appendLine("      val resultRef = StableRef.create(result as Any).asCPointer()")
-        appendLine("      callback.invoke(resultRef, null, 0.toByte(), userData)")
-        appendLine("    }")
-        appendLine("  } catch (e: CancellationException) {")
-        appendLine("    callback.invoke(null, null, 1.toByte(), userData)")
-        appendLine("    throw e")
-        appendLine("  } catch (e: Throwable) {")
-        appendLine("    val errRef = StableRef.create(buildError(e)).asCPointer()")
-        appendLine("    callback.invoke(null, errRef, 0.toByte(), userData)")
-        appendLine("  }")
-        appendLine("}")
-        append("return StableRef.create(job).asCPointer()")
-      })
-      .build()
-  )
-}
-
-internal fun FileSpec.Builder.addNugetSuspendFunc1HelperExports() {
-  addFunction(
-    FunSpec.builder("export_nuget_suspend_func1_invoke")
-      .addAnnotation(cNameAnnotation("nuget_suspend_func1_invoke"))
-      .addParameter("handle", cOpaquePointer)
-      .addParameter("arg0", cOpaquePointer)
-      .addParameter("callbackPtr", cOpaquePointer)
-      .addParameter("userData", cOpaquePointer)
-      .returns(cOpaquePointer)
-      .addCode(buildString {
-        appendLine("val fn = handle.asStableRef<SuspendFunction1<Any?, Any?>>().get()")
-        appendLine("val param0 = arg0.asStableRef<Any>().get()")
-        appendLine("val callback = callbackPtr.reinterpret<CFunction<")
-        appendLine("  (COpaquePointer?, COpaquePointer?, Byte, COpaquePointer) -> Unit>>()")
-        appendLine("val job = CoroutineScope(Dispatchers.Default).launch(start = CoroutineStart.ATOMIC) {")
-        appendLine("  try {")
-        appendLine("    val result = fn.invoke(param0)")
-        appendLine("    if (result == Unit) {")
-        appendLine("      callback.invoke(null, null, 0.toByte(), userData)")
-        appendLine("    } else {")
-        appendLine("      val resultRef = StableRef.create(result as Any).asCPointer()")
-        appendLine("      callback.invoke(resultRef, null, 0.toByte(), userData)")
-        appendLine("    }")
-        appendLine("  } catch (e: CancellationException) {")
-        appendLine("    callback.invoke(null, null, 1.toByte(), userData)")
-        appendLine("    throw e")
-        appendLine("  } catch (e: Throwable) {")
-        appendLine("    val errRef = StableRef.create(buildError(e)).asCPointer()")
-        appendLine("    callback.invoke(null, errRef, 0.toByte(), userData)")
-        appendLine("  }")
-        appendLine("}")
-        append("return StableRef.create(job).asCPointer()")
-      })
-      .build()
-  )
+/**
+ * ADR-020: the `nuget_suspend_func{N}_invoke` export for one suspend lambda arity. Arities 0-3 are
+ * admitted by `SUSPEND_LAMBDA_TYPES`, and every admitted arity needs its export here: the C# side
+ * emits a `DllImport` for whatever arity it sees, so a missing one fails the forward ABI check (#98).
+ */
+internal fun FileSpec.Builder.addNugetSuspendFuncHelperExports(arity: Int) {
+  val fnType: String = if (arity == 0) "SuspendFunction0<*>" else {
+    "SuspendFunction$arity<${List(arity + 1) { "Any?" }.joinToString(", ")}>"
+  }
+  val params: String = (0 until arity).joinToString(", ") { "param$it" }
+  val builder: FunSpec.Builder = FunSpec.builder("export_nuget_suspend_func${arity}_invoke")
+    .addAnnotation(cNameAnnotation("nuget_suspend_func${arity}_invoke"))
+    .addParameter("handle", cOpaquePointer)
+  repeat(arity) { builder.addParameter("arg$it", cOpaquePointer) }
+  builder
+    .addParameter("callbackPtr", cOpaquePointer)
+    .addParameter("userData", cOpaquePointer)
+    .returns(cOpaquePointer)
+    .addCode(buildString {
+      appendLine("val fn = handle.asStableRef<$fnType>().get()")
+      repeat(arity) { appendLine("val param$it = arg$it.asStableRef<Any>().get()") }
+      appendLine("val callback = callbackPtr.reinterpret<CFunction<")
+      appendLine("  (COpaquePointer?, COpaquePointer?, Byte, COpaquePointer) -> Unit>>()")
+      appendLine("val job = CoroutineScope(Dispatchers.Default).launch(start = CoroutineStart.ATOMIC) {")
+      appendLine("  try {")
+      appendLine("    val result = fn.invoke($params)")
+      appendLine("    if (result == Unit) {")
+      appendLine("      callback.invoke(null, null, 0.toByte(), userData)")
+      appendLine("    } else {")
+      appendLine("      val resultRef = StableRef.create(result as Any).asCPointer()")
+      appendLine("      callback.invoke(resultRef, null, 0.toByte(), userData)")
+      appendLine("    }")
+      appendLine("  } catch (e: CancellationException) {")
+      appendLine("    callback.invoke(null, null, 1.toByte(), userData)")
+      appendLine("    throw e")
+      appendLine("  } catch (e: Throwable) {")
+      appendLine("    val errRef = StableRef.create(buildError(e)).asCPointer()")
+      appendLine("    callback.invoke(null, errRef, 0.toByte(), userData)")
+      appendLine("  }")
+      appendLine("}")
+      append("return StableRef.create(job).asCPointer()")
+    })
+  addFunction(builder.build())
 }
 
 internal fun FileSpec.Builder.addNugetScopeHelperExports() {
