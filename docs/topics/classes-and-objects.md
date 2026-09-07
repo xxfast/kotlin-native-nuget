@@ -741,76 +741,57 @@ leaving a public type nobody can construct with no explanation anywhere
 
 ### Kotlin {id="noctor-kotlin"}
 
-From `test-library/src/nativeMain/kotlin/.../issue54/Issue54Sample.kt`. `Issue54Drawing`'s
-constructor parameters are all sealed-typed, a position the constructor route does not bind, so the
-primary constructor never reaches a plan:
+From `test-library/src/nativeMain/kotlin/.../issue56/Issue56Sample.kt`. `Issue56Failure`'s
+constructor parameters carry `Throwable`, a type ADR-107 leaves out of the constructor route
+entirely, so the primary constructor never reaches a plan:
 
 ```kotlin
-data class Issue54Drawing(
-  val shape: Issue54Shape,
-  val maybe: Issue54Shape?,
-  val shapes: List<Issue54Shape>,
-  var current: Issue54Shape,
+data class Issue56Failure(
+  val reason: String,
+  val error: Throwable?,
+  val fatal: Throwable,
 )
 
-fun sleepingCats(): Issue54Drawing = Issue54Drawing(
-  shape = Issue54Shape.Circle(radius = 2.0),
-  maybe = null,
-  shapes = listOf(Issue54Shape.Empty, Issue54Shape.Circle(radius = 1.0)),
-  current = Issue54Shape.Empty,
+fun quietMishap(): Issue56Failure = Issue56Failure(
+  reason = "Mylo knocked the water bowl over",
+  error = null,
+  fatal = IllegalStateException("the kitchen floor is a lake"),
 )
 ```
 
 ### Generated C# {id="noctor-generated-c"}
 
-From `Interop.cs`. `Issue54Drawing` gets no public constructor, only the internal one every handle
-class carries, but its properties and `sleepingCats()`/`curledCats()` still bind:
+From `Interop.cs`. `Issue56Failure` gets no public constructor, only the internal one every handle
+class carries, but its properties and `quietMishap()`/`dietViolation()` still bind:
 
 ```C#
-public class Issue54Drawing : IDisposable, INugetHandle
+public class Issue56Failure : IDisposable, INugetHandle
 {
     internal IntPtr _handle;
 
-    IntPtr INugetHandle.Handle => _handle;
-
-    internal Issue54Drawing(IntPtr handle)
+    internal Issue56Failure(IntPtr handle)
     {
         _handle = handle;
     }
 ```
 
 ```C#
-public static global::TestLibrary.Issue54.Issue54Drawing sleepingCats()
+public static global::TestLibrary.Issue56.Issue56Failure QuietMishap()
 ```
 
 ### The diagnostic
 
 ```
-[nuget:WARNING_NO_PUBLIC_CONSTRUCTOR] Keeping Issue54Drawing: every public constructor is skipped
-    (<init>: SEALED_POSITION), so the generated C# class has only its internal handle constructor
-    and C# cannot construct one. the type is kept because instances can still come from Kotlin
-    factories that return it (a top-level function, or a companion factory); expose one, or change
-    the constructor parameters to types the bridge can express
-    at Issue54Sample.kt:64
+[nuget:WARNING_NO_PUBLIC_CONSTRUCTOR] Keeping Issue56Failure: every public constructor is skipped (<init>: NULLABLE), so the generated C# class has only its internal handle constructor and C# cannot construct one. the type is kept because instances can still come from Kotlin factories that return it (a top-level function, or a companion factory); expose one, or change the constructor parameters to types the bridge can express
+    at Issue56Sample.kt:41
 ```
 
 The verb reads "Keeping", not "Skipping": the class itself is not skipped, only its constructor is.
-The per-constructor skip itself is also named, since
-[ADR-064](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/064-forward-unsupported-declaration-diagnostics.md)'s
-2026-09-07 amendment renamed the underlying reason from `SEALED_PROTOCOL` to `SEALED_POSITION` and
-gave it its own `SKIPPED_SEALED_POSITION` warning; see
-[Interfaces, abstract classes, and sealed classes](interfaces-abstract-sealed.md#sealed-types-as-property-types).
-The same `WARNING_NO_PUBLIC_CONSTRUCTOR` kind fires for an unrelated cause on `Issue56Failure`
-([Exceptions](exceptions.md)), whose constructor is skipped for `NULLABLE`, not `SEALED_POSITION`:
-
-```
-[nuget:WARNING_NO_PUBLIC_CONSTRUCTOR] Keeping Issue56Failure: every public constructor is skipped
-    (<init>: NULLABLE), so the generated C# class has only its internal handle constructor and C#
-    cannot construct one. the type is kept because instances can still come from Kotlin factories
-    that return it (a top-level function, or a companion factory); expose one, or change the
-    constructor parameters to types the bridge can express
-    at Issue56Sample.kt:41
-```
+The same warning kind fires for any skip reason a constructor can go for: a sealed type at a
+parameter position used to be one of them (named `SEALED_POSITION`, previously the silent
+`SEALED_PROTOCOL`), until [ADR-105](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/105-sealed-property-position.md)'s
+2026-09-07 amendment bridged that position too; see
+[Interfaces, abstract classes, and sealed classes: A sealed type at a parameter position](interfaces-abstract-sealed.md#a-sealed-type-at-a-parameter-position).
 
 Not fired for an abstract class (uninstantiable by design) or for the interface-return backing
 wrapper (see [Interfaces, abstract and sealed classes](interfaces-abstract-sealed.md)), neither of

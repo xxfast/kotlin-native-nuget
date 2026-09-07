@@ -87,10 +87,10 @@ internal sealed interface BridgeType {
      * reconstruction has to go through the generated `internal static Base FromHandle(IntPtr)`
      * discriminator instead of `new Base(handle)`, which is CS0144 on an abstract type.
      *
-     * It also gates the collection *write* side: [isWrappableComponent] refuses a discriminated
-     * handle, so a `var shapes: MutableList<Shape>` plans get-only under the existing ADR-075
-     * read-only diagnostic rather than boxing a sealed base through the ADR-073 write path, which
-     * no fixture has ever run for an abstract C# base.
+     * ADR-105 scope (d): the collection *write* side takes the same handle. `Wrap<T>` ends in a
+     * runtime `is INugetHandle` test, which an abstract base satisfies like any other wrapper, so
+     * a `List<Shape>` parameter and a `var shapes: MutableList<Shape>` setter both bind through
+     * the ordinary ADR-073 write path.
      */
     val viaDiscriminator: kotlin.Boolean = false,
   ) : BridgeType

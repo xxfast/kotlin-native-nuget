@@ -19,6 +19,17 @@ namespace IntegrationTests;
 /// same collection return at a top-level function (<c>Issue54Sample.Shapes()</c>) as the control
 /// that already binds. The cats: Oreo curls into a circle, Mylo sprawls into nothing.
 /// </para>
+/// <para>
+/// The remaining half of ADR-105 scope (d) is the <em>parameter</em> position, and the tests below
+/// it are the second red signal: a bare sealed parameter
+/// (<c>Issue54Shapes.Describe(Issue54Shape)</c>), a nullable one (<c>DescribeMaybe</c>), a sealed
+/// collection component (<c>Count</c> / <c>Radii</c>), the four-parameter
+/// <see cref="Issue54Drawing"/> constructor that today skips whole and leaves the class with no
+/// public constructor, and the <c>var shapes: MutableList&lt;Issue54Shape&gt;</c> setter on
+/// <see cref="Issue54Board"/> that scope (c) left get-only behind the
+/// <c>viaDiscriminator</c> gate. C# cannot construct a sealed subclass (ADR-009 gives them internal
+/// handle constructors only), so every sealed argument below is sourced from an existing getter.
+/// </para>
 /// </summary>
 public class Issue54Tests
 {
@@ -156,5 +167,149 @@ public class Issue54Tests
 
         using Issue54Shape after = drawing.Current;
         Assert.Equal(7.5, Assert.IsType<Issue54Shape.Circle>(after).Radius);
+    }
+
+    /// <summary>
+    /// Scope (d): a bare sealed <em>parameter</em>. The instance handle goes back the way it came
+    /// (<c>shape._handle</c>, the abstract base implements <c>INugetHandle</c>) and Kotlin answers
+    /// with a string, so nothing about the assertion depends on the return side.
+    /// </summary>
+    [Fact]
+    public void Describe_BareSealedParameter_PassesTheInstanceHandleToKotlin()
+    {
+        using Issue54Drawing drawing = Issue54Sample.SleepingCats();
+        using Issue54Shape oreo = drawing.Shape;
+
+        Assert.Equal("circle:2.0", Issue54Shapes.Describe(oreo));
+    }
+
+    /// <summary>
+    /// The payload-free arm across the same parameter: Mylo, sprawled, is still a shape that has to
+    /// arrive.
+    /// </summary>
+    [Fact]
+    public void Describe_BareSealedParameter_CarriesThePayloadFreeArm()
+    {
+        using Issue54Drawing drawing = Issue54Sample.SleepingCats();
+        using Issue54Shape mylo = drawing.Current;
+
+        Assert.Equal("empty", Issue54Shapes.Describe(mylo));
+    }
+
+    /// <summary>
+    /// Scope (d), nullable sealed parameter, null half: <c>null</c> crosses in-band on the pointer
+    /// (<c>IntPtr.Zero</c>), and Kotlin must tell "no cat" apart from "a cat of no shape".
+    /// </summary>
+    [Fact]
+    public void DescribeMaybe_NullableSealedParameter_SendsNullAsTheZeroHandle()
+    {
+        Assert.Equal("none", Issue54Shapes.DescribeMaybe(null));
+    }
+
+    /// <summary>
+    /// The non-null half of the same parameter, with Mylo on the wire so the answer is distinct from
+    /// the <c>null</c> one above.
+    /// </summary>
+    [Fact]
+    public void DescribeMaybe_NullableSealedParameter_SendsThePresentHandle()
+    {
+        using Issue54Drawing drawing = Issue54Sample.SleepingCats();
+        using Issue54Shape mylo = drawing.Current;
+
+        Assert.Equal("some:empty", Issue54Shapes.DescribeMaybe(mylo));
+    }
+
+    /// <summary>
+    /// Scope (d), sealed collection component at a parameter: each element boxes through
+    /// <c>NugetMarshal.Wrap&lt;T&gt;</c>'s <c>INugetHandle</c> arm, the ADR-073 write path that has
+    /// never run for an abstract C# base. Length first.
+    /// </summary>
+    [Fact]
+    public void Count_SealedCollectionParameter_BoxesEveryElementIntoTheKotlinList()
+    {
+        using Issue54Drawing drawing = Issue54Sample.SleepingCats();
+        using Issue54Shape oreo = drawing.Shape;
+        using Issue54Shape mylo = drawing.Current;
+
+        Assert.Equal(2, Issue54Shapes.Count(new List<Issue54Shape> { oreo, mylo }));
+    }
+
+    /// <summary>
+    /// The same collection parameter read for its payload, in order: Oreo's radius, then Mylo's
+    /// nothing. A handle that arrived as a raw pointer rather than a shape cannot answer this.
+    /// </summary>
+    [Fact]
+    public void Radii_SealedCollectionParameter_ArrivesAsRealShapesInOrder()
+    {
+        using Issue54Drawing drawing = Issue54Sample.SleepingCats();
+        using Issue54Shape oreo = drawing.Shape;
+        using Issue54Shape mylo = drawing.Current;
+
+        IReadOnlyList<double> radii = Issue54Shapes.Radii(new List<Issue54Shape> { oreo, mylo });
+
+        Assert.Equal(new[] { 2.0, 0.0 }, radii);
+    }
+
+    /// <summary>
+    /// The densest parameter cell: the <see cref="Issue54Drawing"/> constructor takes bare, nullable,
+    /// collection and <c>var</c> sealed parameters at once. Today it skips whole
+    /// (<c>SKIPPED_SEALED_POSITION</c>) and the class has no public constructor at all, so this does
+    /// not compile. The arguments are Oreo curled at <c>7.5</c> and Mylo, borrowed from the two
+    /// existing producers.
+    /// </summary>
+    [Fact]
+    public void Constructor_SealedParametersOnEveryComponent_RoundTripsThroughTheProperties()
+    {
+        using Issue54Drawing sleeping = Issue54Sample.SleepingCats();
+        using Issue54Drawing curled = Issue54Sample.CurledCats();
+
+        using Issue54Drawing built = new Issue54Drawing(
+            curled.Shape,
+            curled.Maybe,
+            sleeping.Shapes,
+            sleeping.Current);
+
+        using Issue54Shape shape = built.Shape;
+        Assert.Equal(7.5, Assert.IsType<Issue54Shape.Circle>(shape).Radius);
+
+        Issue54Shape? maybe = built.Maybe;
+        Assert.NotNull(maybe);
+        using Issue54Shape owned = maybe;
+        Assert.Equal(3.5, Assert.IsType<Issue54Shape.Circle>(owned).Radius);
+
+        Assert.Collection(
+            built.Shapes,
+            mylo => Assert.IsType<Issue54Shape.Empty>(mylo),
+            oreo => Assert.Equal(1.0, Assert.IsType<Issue54Shape.Circle>(oreo).Radius));
+
+        using Issue54Shape current = built.Current;
+        Assert.IsType<Issue54Shape.Empty>(current);
+    }
+
+    /// <summary>
+    /// The mutable sealed collection setter, which ADR-105 scope (c) left get-only behind the
+    /// <c>viaDiscriminator</c> gate on <c>isWrappableComponent</c>, named by the ADR-075 read-only
+    /// diagnostic. Assigning is the parameter-position write path under another name, so it lands
+    /// with scope (d). The board starts as Mylo alone on the windowsill.
+    /// </summary>
+    [Fact]
+    public void Shapes_MutableSealedCollectionSetter_WritesBothArmsBackIntoKotlin()
+    {
+        using Issue54Board board = Issue54Sample.Windowsill();
+        using Issue54Drawing drawing = Issue54Sample.SleepingCats();
+        using Issue54Drawing other = Issue54Sample.CurledCats();
+
+        Assert.Equal("empty", board.Summary());
+
+        board.Shapes = new List<Issue54Shape> { other.Shape, drawing.Current };
+
+        IList<Issue54Shape> shapes = board.Shapes;
+        Assert.Collection(
+            shapes,
+            oreo => Assert.Equal(7.5, Assert.IsType<Issue54Shape.Circle>(oreo).Radius),
+            mylo => Assert.IsType<Issue54Shape.Empty>(mylo));
+
+        // Kotlin-side observation: the handles landed as real shapes, not as an echo of the getter.
+        Assert.Equal("circle:7.5,empty", board.Summary());
     }
 }

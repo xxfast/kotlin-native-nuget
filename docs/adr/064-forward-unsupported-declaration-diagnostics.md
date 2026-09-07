@@ -883,8 +883,8 @@ mechanism for what a rename and a flag flip already fix.
 
 **Not fixed here, and not the same bug:** bridging a sealed type at a parameter position (writing a
 sealed-base handle into a Kotlin parameter or constructor argument) is untouched; this amendment
-only replaces silence with a name. Tracked separately
-(`docs/backlog/sealed-collection-return-parameter-position.md` for the collection-component half).
+only replaces silence with a name. Bridging shipped the same day under ADR-105's 2026-09-07
+amendment (scope (d) in full), so this reason now marks only a sealed type with no discriminator.
 
 **Structurally the same silence exists elsewhere, out of scope here:** `GENERIC`, `FLOW_PROTOCOL`,
 and `CALLBACK_PROTOCOL` are still `droppedFromCSharp = false` legacy-route deferrals, on the same
