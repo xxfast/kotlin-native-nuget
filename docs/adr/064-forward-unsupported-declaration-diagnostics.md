@@ -441,3 +441,140 @@ pay down ROADMAP line 264 (the forward processor's thin unit-test seam), for the
   so neither hypothesized fix (upgrade an existing warning, or add a legacy-emitter guard) applies. The
   actual fix is a planner reclassification. Kept here as a record that the claim was checked before
   implementation, per the process that flagged it.
+
+## Amendment (2026-09-07): a public `annotation class` skips with a name
+
+Judgement: an **amendment**, not a new ADR. This closes the ROADMAP Phase 3 item
+"A public `annotation class` produces no diagnostic at all" (`docs/backlog/public-annotation-class-produces-no-diagnostic.md`).
+It adds one `ForwardDiagnosticKind` member and one root bucket; it introduces no mechanism this ADR
+does not already describe (one sink, `SKIPPED_*` = absent from C#, `KSNode` source location,
+ADR-100's `NugetDiagnostics.json` delivery). Status stays Accepted.
+
+Mechanism claims are labelled **Verified** (read in this repository's source on 2026-09-07; no
+build was run, another agent held the Gradle lock) or **Inferred**.
+
+### The gap
+
+`ClassKind.ANNOTATION_CLASS` has no route in the forward direction: every root bucket in
+`NugetProcessor.kt:396-440` keys on `CLASS`, `OBJECT`, `ENUM_CLASS` or `INTERFACE`, and `grep
+ANNOTATION_CLASS nuget-processor/src/main` returns zero hits (**Verified**). A public annotation
+class therefore passes `isExported` (`:265-277`), lands in `allDeclarations` (`:296`), and is then
+matched by nothing, so it is absent from the generated C# with no diagnostic: exactly the silence
+this ADR exists to remove. An `expect annotation class` is dropped one line earlier by the
+`isExpect` filter (`:293`) and its `actual` then meets the same fate.
+
+### Decision
+
+**One new kind, `SKIPPED_ANNOTATION_CLASS`, severity `WARNING`, no `verb` override.**
+
+- `WARNING`, not `INFO`: this ADR's severity policy reserves `INFO_*` for a member that **still
+  binds** under a documented assumption. An annotation class binds nothing, so it is a `SKIPPED_*`
+  like every other "cannot express" construct.
+- No `verb` override (ADR-109): the type genuinely is skipped, so the severity-keyed "Skipping" is
+  the truth, unlike `WARNING_DUPLICATED_DEPENDENCY_TYPE`.
+- Once per public annotation class, `symbol` = the declaration, so the rendered line carries the
+  author's own `file:line`.
+
+Shipped enum entry (`forward/ForwardDiagnostic.kt`, beside `SKIPPED_ALL_DECLARATIONS`):
+
+```kotlin
+/** A public `annotation class`. Annotations are metadata for the Kotlin compiler and reflection;
+ *  there is no C# projection of one worth generating (a .NET attribute would never be applied to
+ *  anything, since the Kotlin usages do not cross the bridge). Usages of the annotation on exported
+ *  declarations are unaffected: the forward pipeline reads no annotation but `kotlin.native.CName`
+ *  (`NugetProcessor.kt:211-215`, `ForwardAbiContract.kt:262`). Top-level declarations only; nested
+ *  declarations of any kind are outside the forward funnel. */
+SKIPPED_ANNOTATION_CLASS(ForwardDiagnosticSeverity.WARNING),
+```
+
+Shipped bucket + emission (`NugetProcessor.kt`, directly after `rootInterfaces` at `:440`, so it
+sits before the `hasNothingToProcess` early return at `:557`; that return already writes
+`NugetDiagnostics.json` (`:560`), so a module whose only public declaration is an annotation class
+still gets the diagnostic into the file `nugetReportDiagnostics` re-emits). The bucket also filters
+`parentDeclaration == null`: this both narrows the top-level-only claim below from an inferred
+`KSFile.declarations` property to a structural filter on the bucket itself, and, together with the
+public-visibility filter, means a nested annotation class (of any visibility) is never matched here:
+
+```kotlin
+val annotationClasses: List<KSClassDeclaration> = allDeclarations
+  .filterIsInstance<KSClassDeclaration>()
+  .filter { it.getVisibility() == Visibility.PUBLIC }
+  .filter { it.classKind == ClassKind.ANNOTATION_CLASS }
+  .filter { it.parentDeclaration == null }
+ForwardDiagnosticSink.emit(
+  annotationClasses.map { annotation ->
+    ForwardDiagnostic(
+      kind = ForwardDiagnosticKind.SKIPPED_ANNOTATION_CLASS,
+      symbol = annotation,
+      declaration = annotation.qualifiedName?.asString() ?: annotation.simpleName.asString(),
+      reason = "annotation classes are not bridged; there is no C# projection of a Kotlin " +
+          "annotation, so nothing is generated for it",
+      hint = "usages of it on exported declarations are unaffected. Make it internal, or " +
+          "exclude(...) its package, if the warning is unwanted",
+    )
+  },
+  logger,
+)
+```
+
+Rendered (per `format()`, `:160-171`):
+`[nuget:SKIPPED_ANNOTATION_CLASS] Skipping io.github.xxfast.kotlin.native.nuget.test.cat.Tagged: annotation classes are not bridged; there is no C# projection of a Kotlin annotation, so nothing is generated for it. usages of it on exported declarations are unaffected. Make it internal, or exclude(...) its package, if the warning is unwanted\n    at .../Tagged.kt:N`
+
+### What it does and does not cover
+
+- **`expect annotation class`: the diagnostic fires, once, on the `actual`.** ADR-074's amendment
+  item 6 called it "not applicable" because no route existed; a diagnostic is now the route. The
+  `isExpect` filter (`:293`) drops the expect half, the `actual annotation class` enters
+  `allDeclarations`, and the new bucket names it, with `symbol` pointing at the actual's file. That
+  is the same "the `actual` is the export root" rule every other ADR-074 kind follows, so no
+  special case. ADR-074's "not applicable" verdict on the *mapping* stands; only its silence ends.
+- **Annotation usages are unaffected.** `@Tagged class Toy` keeps exporting exactly as before. The
+  forward pipeline reads annotations at exactly two sites, both matching `kotlin.native.CName` by
+  qualified name (`NugetProcessor.kt:211-215`; `ForwardAbiContract.kt:262`) (**Verified**), so a
+  user annotation is inert and produces no second diagnostic.
+- **Top-level only, structurally.** The bucket filters `parentDeclaration == null`, so this is no
+  longer resting on the `KSFile.declarations`-yields-only-top-level-declarations inference the
+  original proposal made: even if `allDeclarations` (`resolver.getAllFiles().flatMap {
+  it.declarations }`, `:283-284`) ever did carry a nested declaration, the filter excludes it
+  explicitly. A nested `annotation class` inside an exported class is therefore never matched here.
+  That is the same silence every nested class kind has today (no forward route for nested
+  declarations at all) and is out of scope here.
+- **`internal`/`private` annotation classes: silent**, like every other bucket's visibility gate.
+- **An annotation *instance* at a bridged position** (Kotlin 1.6+ annotation instantiation, e.g.
+  `fun tag(): Tagged`) is not touched: the classifier already treats it as an unexported handle
+  type and names that skip on the member. Not exercised; edge case, deferred.
+- **No plugin change.** `NugetReportDiagnosticsTask` parses `kind` as a plain `String`
+  (`NugetReportDiagnosticsTask.kt:71,115`) and `ForwardDiagnosticsFile.kt:31` writes `kind.name`,
+  and no `when` in `nuget-processor/src/main` is exhaustive over `ForwardDiagnosticKind`
+  (**Verified**, grep), so a new member is additive.
+
+### Files touched
+
+1. `nuget-processor/.../forward/ForwardDiagnostic.kt`: the enum member.
+2. `nuget-processor/.../NugetProcessor.kt`: the bucket and emission after `:440`.
+3. `nuget-processor/src/test/.../tier1/Tier1AnnotationClassSkipTest.kt` (new), modelled on
+   `Tier1UnexportedSupertypeSkipTest.kt:46-90` (`kspWarnings.firstOrNull { it.contains(kind.name) }`)
+   and the `expect` cell shape of `Tier1ExpectActualDeclarationsTest.kt:412-440` (assert on
+   `kspWarnings`, never `compiledClean`, per the ADR-074 amendment's harness caveat):
+   - a public `annotation class Tagged(val tag: String)` yields exactly one
+     `SKIPPED_ANNOTATION_CLASS` naming it, and no `Tagged` in `generatedCSharp`;
+   - `@Tagged("x") class Toy(val name: String)` in the same fixture still yields `export_toy_get_name`
+     and exactly one diagnostic (the class, not the usage);
+   - `internal annotation class` yields none;
+   - `expect annotation class` + `actual annotation class` yields exactly one, and its `at` line
+     points at the actual's file.
+4. `test-library/src/nativeMain/.../test/cat/Tagged.kt` (new): `public annotation class Tagged(val
+   tag: String)`; `Toy.kt:3` gains `@Tagged("plaything")`.
+5. `IntegrationTests/AnnotationClassTests.cs` (new): xunit can only pin absence and non-regression,
+   `typeof(Toy).Assembly.GetTypes()` has no `Tagged` (precedent `Issue42Tests.cs:59`), and `new
+   Toy(...)` still round-trips. The diagnostic itself is asserted at Tier 1 only.
+6. Docs: ROADMAP line 21 and the backlog note go; FEATURES.md gains the row.
+
+### Consequences of the amendment
+
+- Every public annotation class in a forward-published module now costs one build warning per
+  `packNuget`. That is the intended trade: this ADR's whole premise is that silence is worse than a
+  warning the user can act on (`internal`, or `exclude(...)`).
+- `test-library`'s build log permanently carries one `SKIPPED_ANNOTATION_CLASS` line for `Tagged`,
+  alongside the named skips it already carries (`Issue54Tests.cs`, `Issue56Tests.cs`).
+- Nothing changes in generated C#, Kotlin exports, or the ABI.

@@ -136,6 +136,16 @@ internal enum class ForwardDiagnosticKind(
    *  with no source location (the scope is build configuration, not a declaration). */
   SKIPPED_ALL_DECLARATIONS(ForwardDiagnosticSeverity.WARNING),
 
+  /** ADR-064's 2026-09-07 amendment: a public `annotation class`. Annotations are metadata for
+   *  the Kotlin compiler and reflection; there is no C# projection of one worth generating (a
+   *  .NET attribute would never be applied to anything, since the Kotlin usages do not cross the
+   *  bridge). It had no root bucket at all, so it used to vanish in silence rather than skip with
+   *  a name. WARNING, not INFO, and no `verb` override: nothing binds, so it genuinely is
+   *  skipped. Usages of the annotation on exported declarations are unaffected -- the forward
+   *  pipeline reads no annotation but `kotlin.native.CName`. Top-level declarations only, like
+   *  every other root bucket. */
+  SKIPPED_ANNOTATION_CLASS(ForwardDiagnosticSeverity.WARNING),
+
   /** ADR-109: an admitted dependency-module type whose package another forward publisher in the
    *  same Gradle build also exports. ADR-066 generates it into *this* module's package, as its own
    *  C# class over its own opaque handle, so a consumer referencing both NuGet packages sees two

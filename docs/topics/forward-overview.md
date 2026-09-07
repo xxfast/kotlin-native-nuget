@@ -331,6 +331,30 @@ The hint hedges rather than promising a fix: `include(...)` admits a base declar
 module, but not one reached only as a supertype from a dependency, since the ADR-066 reachability
 closure never walks supertypes either way.
 
+### Annotation classes skip named {id="annotation-classes-skip-named"}
+
+A public `annotation class` has no route in the forward direction at all: there is no C# projection
+of a Kotlin annotation worth generating, so it always vanishes from the generated C#. Until
+[ADR-064](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/064-forward-unsupported-declaration-diagnostics.md)'s
+2026-09-07 amendment that vanishing was silent; now it skips named with `SKIPPED_ANNOTATION_CLASS`,
+once per public top-level annotation class:
+
+```
+[nuget:SKIPPED_ANNOTATION_CLASS] Skipping io.github.xxfast.kotlin.native.nuget.test.cat.Tagged:
+    annotation classes are not bridged; there is no C# projection of a Kotlin annotation, so nothing
+    is generated for it. usages of it on exported declarations are unaffected. Make it internal, or
+    exclude(...) its package, if the warning is unwanted
+    at Tagged.kt:19
+```
+
+Applying the annotation to an exported declaration costs that declaration nothing: the forward
+pipeline reads no annotation but `kotlin.native.CName`, so `@Tagged("plaything") data class
+Toy(...)` still generates its constructor, properties, `Copy`, `Equals`, `HashCode` and `ToString`
+exactly as if the annotation weren't there. An `internal`/`private` annotation class stays silent,
+matching every other bucket's visibility gate. An `expect annotation class` fires the same kind
+once, on the `actual`: the `isExpect` filter drops the `expect` half one line earlier, so only the
+`actual` reaches the bucket, with `symbol` pointing at the actual's own file.
+
 ### Where these messages appear
 
 A diagnostic computed at generation time is only useful if it reaches the console. The processor

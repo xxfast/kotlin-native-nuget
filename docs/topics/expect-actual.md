@@ -466,10 +466,11 @@ public void Frequency_Hertz_ReturnsRunningActualsValue()
 - Two packaged targets can legitimately generate different C# APIs when their `actual`s diverge beyond the `expect`'s contract, and only one target's `Interop.cs` ships (`packNuget` packages exactly one target's output while shipping every target's binary). Nothing currently diffs the two; see the open cross-target-divergence item in [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md).
 - A secondary constructor on an `expect`/`actual class` gets no synthesized default-parameter overloads; see the "Constructor default parameters on an `expect` class" section above.
 - Function default parameters on an `expect` declaration are only surfaced on the top-level-function route; a class method, `object` member, companion member, or extension declared on an `expect` class gets no synthesized overload. See "Function default parameters on a top-level `expect` function" above.
-- `expect annotation class` is not applicable: the forward direction has no route for
-  `ClassKind.ANNOTATION_CLASS` at all, so an ordinary `annotation class` is already outside the
-  export set with no diagnostic; an `expect` one is filtered one line earlier and is otherwise
-  identical.
+- `expect annotation class` is not applicable as a mapping: there is no C# projection of a Kotlin
+  annotation, so an `annotation class` never binds regardless of `expect`/`actual`. Since
+  [ADR-064](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/064-forward-unsupported-declaration-diagnostics.md)'s
+  2026-09-07 amendment the absence is no longer silent: `SKIPPED_ANNOTATION_CLASS` fires once, on
+  the `actual` (the `expect` half is filtered one line earlier, so it never reaches the bucket).
 
 <seealso>
     <category ref="related">
