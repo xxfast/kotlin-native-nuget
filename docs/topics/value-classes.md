@@ -12,6 +12,7 @@ A Kotlin `value class` (inline class) wrapping a primitive or `String` becomes a
 | `Primitive`-underlying value class at an ordinary position | the same `record struct` | wire is the primitive's own wire (e.g. `Double`); see below |
 | `Enum`-underlying value class at an ordinary position | the same `record struct` | wire is the enum's `int` ordinal, cast back with `(EnumType)`; the struct's member type is qualified `global::Namespace.Type` when the enum lives in a different Kotlin package than the value class; see below |
 | `ObjectHandle`-underlying value class at an ordinary position, incl. `Nullable(ValueClass(ObjectHandle))` | the same `record struct`, `?` rides the null pointer | wire is the wrapped object's own StableRef handle; the struct's member type is qualified `global::Namespace.Type` when the underlying class lives in a different Kotlin package than the value class; see below |
+| a **sealed**-underlying value class at a property, callable parameter/return, or `List<T>` component position | the same `record struct`, reconstructed through the sealed base's own `FromHandle` discriminator | wire is the sealed base's own handle; see [ADR-105](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/105-sealed-property-position.md) and [Over a sealed type](#over-a-sealed-type) below |
 | `Nullable(ValueClass)` over a `Primitive`- or `Enum`-underlying value class, at parameter, property, or return position | `Dosage?` / `Temperament?` (`Nullable<T>`), never a reference nullable | no null pointer on the wire, so it reuses the position's has-value fan-out (input pair, ADR-061 single-call `valueOut`, ADR-002 `LegacyTwoCall`/`NullableDispatch`, or the top-level two-call), value slot at the underlying's own wire; see [ADR-079](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/079-nullable-primitive-enum-underlying-value-classes.md) and below |
 | value class as a `List`/`Map`/`Set` component (element, key or value), at input position, collection property setter, method return or property getter | the same `record struct`, in `IReadOnlyList<T>`/`IReadOnlyDictionary<K,V>`/`IReadOnlySet<T>` etc. | wire carries the **underlying** value per element, re-wrapped on the way in and out, for all four ADR-077 underlyings including an enum underlying via its `int` ordinal; see [ADR-081](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/081-value-class-collection-components.md) and below |
 | `Nullable(ValueClass)` as a `List`/`Map` value/`Set` component | same as above, with a null element/value riding a null pointer in the component slot | nullable map **keys** stay a named skip (`Dictionary` can't hold `null`); see [ADR-083](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/083-nullable-collection-components.md) and [Collections](collections.md) |
@@ -511,6 +512,70 @@ public void Patient_CurrentChart_Setter_IsObservedByKotlinAsARewrappedChartId()
         branch correctly.
     </p>
 </note>
+
+## Over a sealed type
+
+A value class can also wrap a *sealed* base at a property position: `value class
+ObservationResult(val observation: Observation)` over `sealed class Observation`. The shared
+`sealedAsHandle()` rewrite recurses into the value class's underlying type, so C# reconstructs
+through the sealed base's own `FromHandle` discriminator instead of attempting a constructor call
+against an abstract class. The same rewrite also binds a sealed-underlying value class as a
+callable parameter/return and as a `List<T>` component, element-wise. See
+[ADR-105](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/105-sealed-property-position.md).
+
+From `test-library/src/nativeMain/kotlin/.../cat/ObservationDesk.kt`:
+
+```kotlin
+class ObservationDesk {
+  val result: ObservationResult = ObservationResult(openBox("Oreo"))
+
+  var maybe: ObservationResult? = null
+
+  var current: ObservationResult = ObservationResult(peekBox())
+}
+```
+
+### Generated C# {id="sealed-generated-c"}
+
+`result` reconstructs the wrapper around the sealed base's discriminator, not a constructor call
+(which would fail `CS0144` against an abstract class):
+
+```C#
+public global::TestLibrary.Cat.ObservationResult Result
+{
+    get
+    {            IntPtr nativeResult = Native_Get_result(_handle, out IntPtr error);
+    if (error != IntPtr.Zero)
+    {
+        throw NugetErrorNative.BuildException(error);
+    }
+    return new global::TestLibrary.Cat.ObservationResult(global::TestLibrary.Cat.Observation.FromHandle(nativeResult));
+    }
+}
+```
+
+The nullable `maybe` setter unwraps through the wrapper before handing over the handle:
+
+```C#
+set
+{            Native_Set_maybe(_handle, value?.Observation._handle ?? IntPtr.Zero, out IntPtr error);
+    ...
+}
+```
+
+### Using it from C# {id="sealed-using-it-from-c"}
+
+From `IntegrationTests/ValueClassOverSealedTests.cs`:
+
+```C#
+using ObservationDesk desk = ObservationDeskKt.ObservationDesk();
+
+ObservationResult result = desk.Result;
+
+var alive = Assert.IsType<Observation.Alive>(result.Observation);
+using Cat oreo = alive.Cat;
+Assert.Equal("Oreo", oreo.Name);
+```
 
 ## Nullable
 

@@ -2784,10 +2784,12 @@ internal class ForwardCallablePlanner(
  * receiver: a sealed receiver is a member of the ADR-009 hierarchy itself, which has its own named
  * legacy route.
  *
- * Recurses through [BridgeType.Nullable] and the [BridgeType.Collection] components only. NOT
- * through [BridgeType.ValueClass.underlying]: a value class over a sealed type
- * (`value class ObservationResult(val observation: Observation)`) stays skipped, as ADR-105's
- * Consequences records.
+ * Recurses through [BridgeType.Nullable], the [BridgeType.Collection] components, and
+ * [BridgeType.ValueClass.underlying]: a value class over a sealed type
+ * (`value class ObservationResult(val observation: Observation)`) carries the ADR-009 handle in its
+ * single member, so the underlying rewrite is all it needs to bind at a property or a callable
+ * position. The C# reconstruction composes the two steps
+ * (`new ObservationResult(Observation.FromHandle(nativeResult))`).
  *
  * A protocol with a `null` [BridgeType.SpecializedProtocol.sealedHandle] (a sealed interface, an
  * out-of-scope sealed class, or any non-sealed protocol) is returned untouched and skips named
@@ -2801,6 +2803,8 @@ internal fun BridgeType.sealedAsHandle(): BridgeType = when (this) {
     key = key?.sealedAsHandle(),
     value = value?.sealedAsHandle(),
   )
+
+  is BridgeType.ValueClass -> copy(underlying = underlying.sealedAsHandle())
 
   else -> this
 }
