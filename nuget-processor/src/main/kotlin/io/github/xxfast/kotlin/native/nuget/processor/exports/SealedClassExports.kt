@@ -12,6 +12,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.cir.LAMBDA_TYPES
 import io.github.xxfast.kotlin.native.nuget.processor.cir.expandAliases
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallablePlanCatalog
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardPropertyPlan
+import io.github.xxfast.kotlin.native.nuget.processor.forward.addForwardKotlinPlanExport
 import io.github.xxfast.kotlin.native.nuget.processor.forward.addForwardPropertyPlanExports
 import io.github.xxfast.kotlin.native.nuget.processor.forward.handleBody
 import io.github.xxfast.kotlin.native.nuget.processor.forward.nullableHandleBody
@@ -97,6 +98,13 @@ internal fun FileSpec.Builder.addSealedClassExports(
           .addCode(body, stableRef, cOpaquePointerVar, stableRef)
           .build()
       )
+    }
+
+    // ADR-116: the arm's declared member functions, off the same catalog and the same emitter an
+    // ordinary class uses (`ClassExports`). Overload numbering lives in the planner, so the plans
+    // are read from the catalog rather than re-derived per `getAllFunctions()` entry.
+    callableCatalog.classMethods(subQualifiedName).forEach { plan ->
+      addForwardKotlinPlanExport(plan)
     }
 
     if (isDataClass) {

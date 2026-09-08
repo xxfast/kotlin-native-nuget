@@ -87,6 +87,14 @@ internal enum class ForwardPlanSkipReason(val droppedFromCSharp: Boolean) {
    *  individually. */
   UNSUPPORTED_COMBINATION(droppedFromCSharp = true),
 
+  /** ADR-116: a member function declared on a sealed subclass that the plan declined for a reason
+   *  an ordinary class defers to a named legacy route (`suspend`, `Flow`, a generic, a
+   *  lambda/stored-callback pair). No legacy route is keyed to a sealed subclass — the ordinary
+   *  `classes` list excludes them (ADR-009 / issue #54) — so the member genuinely disappears from
+   *  the C# API and has to be named rather than silently deferred. The deferral reason it was
+   *  reclassified from rides in [ForwardCallableCatalogEntry.Skipped.detail]. */
+  SEALED_SUBCLASS_UNROUTED(droppedFromCSharp = true),
+
   /** ADR-064/ADR-082: a value-class member whose signature a supertype declares — inherited,
    *  forwarded by interface delegation (e.g. `CharSequence by value`) or explicitly overridden. */
   INHERITED_MEMBER(droppedFromCSharp = true),
@@ -495,6 +503,12 @@ internal class ForwardCallablePlanner(
   ): ForwardCallablePlanCatalog {
     val entries: List<ForwardCallableCatalogEntry> = buildList {
       classes.forEach { cls -> addAll(classEntries(cls)) }
+      // ADR-116: the method half of ADR-111. A sealed subclass is deliberately absent from
+      // `classes` (ADR-009 / issue #54), so its declared member functions have to be planned from
+      // the sealed base, under the same `${sealed}_${sub}` prefix the property getters already use.
+      sealedClasses.forEach { sealed ->
+        sealed.getSealedSubclasses().forEach { sub -> addAll(sealedSubclassEntries(sealed, sub)) }
+      }
       classes.forEach { cls -> addAll(constructorEntries(cls)) }
       // ADR-095: top-level and extension overloads number per (package, name), the extension one
       // deliberately receiver-agnostic because its plan symbol is (`fun Cat.pat()` then
@@ -918,6 +932,128 @@ internal class ForwardCallablePlanner(
           add(entryFor(method, omitted + 1).synthesized())
         }
       }
+    }
+  }
+
+  /**
+   * ADR-116: [classEntries] for one arm of an ADR-009 sealed hierarchy, with the four differences
+   * a sealed subclass forces.
+   *
+   * - The export prefix is `${sealed}_${sub}`, the prefix `SealedClassExports` and
+   *   `translateSealedClass` already mint for the arm's property getters and `_dispose`, so
+   *   `Job.Running.cancel` exports as `job_running_cancel` beside `job_running_get_progress`.
+   *   `ForwardCirPlanProjection.classMethod` requires the export to begin with it, so a mismatch
+   *   fails the build rather than drifting.
+   * - **Declared-only**: `parentDeclaration == subclass`, the first disjunct of
+   *   `isForwardPlannableMemberOf`. A base `open fun` the arm does not override has no C# carrier
+   *   (`CirSealedClass` declares no methods), so it is not flattened onto the arm; an `override`
+   *   the arm declares itself is a plain method here.
+   * - `isOverride` / `isVirtual` are pinned to `false`: the generated C# base declares nothing to
+   *   override (CS0115) and a `virtual` member on a `public sealed class` is CS0549.
+   * - Every skip an ordinary class would defer to a legacy route becomes a named
+   *   [ForwardPlanSkipReason.SEALED_SUBCLASS_UNROUTED] drop, because no legacy route is keyed to a
+   *   sealed subclass. Planned entries are untouched.
+   */
+  private fun sealedSubclassEntries(
+    sealed: KSClassDeclaration,
+    subclass: KSClassDeclaration,
+  ): List<ForwardCallableCatalogEntry> {
+    val subName: String = subclass.simpleName.asString()
+    val owner: String = subclass.qualifiedName?.asString() ?: return emptyList()
+    val prefix: String = "${sealed.simpleName.asString().lowercase()}_${subName.lowercase()}"
+    val receiverType: BridgeType = BridgeType.ObjectHandle(owner)
+    val methods: List<KSFunctionDeclaration> = subclass.getAllFunctions()
+      .filter { method -> method.getVisibility() == Visibility.PUBLIC }
+      .filter { method ->
+        val name: String = method.simpleName.asString()
+        val isDataClassMethod: Boolean = subclass.modifiers.contains(Modifier.DATA) &&
+            (name == "copy" || name.startsWith("component"))
+        name !in setOf("equals", "hashCode", "toString", "<init>") && !isDataClassMethod
+      }
+      // Declared-only (ADR-116): `Any`'s members and a base `open fun` the arm does not override
+      // both fall out here, so the sealed route's own `_equals`/`_hashcode`/`_tostring` exports
+      // and the deferred base-type item stay untouched.
+      .filter { method -> method.parentDeclaration == subclass }
+      .toList()
+    val interfaceBridgeMethods: Set<KSFunctionDeclaration> = findInterfaceBridgePairs(methods)
+      .flatMap { pair -> listOf(pair.first, pair.second) }
+      .toSet()
+    val storedCallbackMethods: Set<KSFunctionDeclaration> = findStoredCallbackPairs(methods)
+      .flatMap { pair -> listOf(pair.first, pair.second) }
+      .toSet()
+
+    // ADR-090 overload numbering, exactly as `classEntries` counts it: over the declared plannable
+    // members in `getAllFunctions()` order, incremented before the structural check so a skipped
+    // namesake still consumes its number.
+    val occurrences: MutableMap<String, Int> = mutableMapOf()
+    fun entryFor(method: KSFunctionDeclaration, omitted: Int): ForwardCallableCatalogEntry {
+      val name: String = method.simpleName.asString()
+      val occurrence: Int = occurrences.merge(name, 1, Int::plus)!!
+      val suffix: String = if (occurrence == 1) "" else "_$occurrence"
+      val symbol: String = "$owner.$name$suffix"
+      val structuralReason: ForwardPlanSkipReason? = when {
+        method.modifiers.contains(Modifier.ABSTRACT) -> ForwardPlanSkipReason.ABSTRACT
+        method.modifiers.contains(Modifier.SUSPEND) -> ForwardPlanSkipReason.SUSPEND
+        method.typeParameters.isNotEmpty() -> ForwardPlanSkipReason.GENERIC
+        method in interfaceBridgeMethods || method in storedCallbackMethods ->
+          ForwardPlanSkipReason.CALLBACK_PROTOCOL
+
+        else -> null
+      }
+      return if (structuralReason != null) {
+        ForwardCallableCatalogEntry.Skipped(symbol, structuralReason, node = method)
+      } else {
+        planOrSkip(
+          symbol = symbol,
+          publicName = name.replaceFirstChar { it.uppercase() },
+          exportName = "${prefix}_$name$suffix",
+          receiver = ForwardReceiver.Handle(receiverType),
+          parameters = method.parameters.dropLast(omitted).map { parameter ->
+            parameter.bridgeName() to classifier.classify(parameter.type.resolve())
+          },
+          result = method.returnType?.resolve()?.let(classifier::classify) ?: BridgeType.Unit,
+          origin = ForwardCallableOrigin.CLASS,
+          // The symbol carries the overload suffix; the Kotlin call site must not.
+          member = name,
+          isOverride = false,
+          isVirtual = false,
+          node = method,
+        )
+      }
+    }
+
+    val entries: List<ForwardCallableCatalogEntry> = buildList {
+      val declared: List<ForwardCallableCatalogEntry> =
+        methods.map { method -> entryFor(method, 0) }
+      addAll(declared)
+      // ADR-096, as `classEntries` does it: the omitting overloads follow every declared entry of
+      // this counter scope so declared exports keep their numbers.
+      methods.forEachIndexed { index, method ->
+        if (declared[index] !is ForwardCallableCatalogEntry.Planned) return@forEachIndexed
+        if (method.modifiers.contains(Modifier.OVERRIDE)) return@forEachIndexed
+        repeat(method.parameters.map { it.hasDefault }.trailingCount()) { omitted ->
+          add(entryFor(method, omitted + 1).synthesized())
+        }
+      }
+    }
+
+    // ADR-116 Diagnostics: `droppedFromCSharp = false` means "a named legacy route re-emits it",
+    // which is only true for an ordinary class. On a sealed arm the member is simply gone, so the
+    // silent deferral becomes a named drop carrying the reason it came from. ABSTRACT cannot occur
+    // on a concrete arm's declared member, and its base-declared form is deferred with the
+    // base-type item, so it is deliberately left silent.
+    return entries.map { entry ->
+      if (entry !is ForwardCallableCatalogEntry.Skipped) return@map entry
+      val isUnrouted: Boolean =
+        !entry.reason.droppedFromCSharp && entry.reason != ForwardPlanSkipReason.ABSTRACT
+      if (!isUnrouted) return@map entry
+
+      ForwardCallableCatalogEntry.Skipped(
+        entry.symbol,
+        ForwardPlanSkipReason.SEALED_SUBCLASS_UNROUTED,
+        node = entry.node,
+        detail = entry.reason.name,
+      )
     }
   }
 

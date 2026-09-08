@@ -106,7 +106,19 @@ internal fun CirProperty.usesLegacyNativeImport(): Boolean {
   return isFlow || isLambda || isSuspendLambda
 }
 
-internal fun CirClass.methodNativeImport(method: CirMethod): CirDllImport {
+internal fun CirClass.methodNativeImport(method: CirMethod): CirDllImport =
+  methodNativeImport(libraryName, nativePrefix, method)
+
+/**
+ * ADR-116: the same import, addressed by the two strings a [CirClass] would have supplied, so an
+ * ADR-009 sealed subclass (a [CirSealedSubclass], not a [CirClass]) mints its method externs
+ * through this one rule. The lift is exactly the one ADR-111 made for [propertyNativeImports].
+ */
+internal fun methodNativeImport(
+  libraryName: String,
+  nativePrefix: String,
+  method: CirMethod,
+): CirDllImport {
   require(!method.isAbstract && !method.isAsync && !method.isFlow) {
     "Only ordinary synchronous concrete methods have normalized native imports"
   }
