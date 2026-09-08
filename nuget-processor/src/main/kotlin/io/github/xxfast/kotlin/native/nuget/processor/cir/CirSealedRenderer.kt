@@ -88,6 +88,20 @@ private fun sealedSubclassBlock(
     appendLine()
   }
 
+  // ADR-116: the arm's own declared methods, extern and body both off the ordinary-class rules
+  // (`methodNativeImport`, `renderMethod`). Both are baked at the ordinary-class depth, so the
+  // whole block takes the same +4 re-indent the property arm takes.
+  subclass.methods.forEach { method ->
+    append(
+      buildString {
+        renderDllImport(methodNativeImport(sealed.libraryName, subclass.nativePrefix, method))
+        // `renderMethod` already closes with its own blank separator line, unlike the property
+        // renderer, so this loop adds none.
+        renderMethod(method, subclass.name)
+      }.indentNestedBody(),
+    )
+  }
+
   // Issue #54: a `data object` gets the same generated members a `data class` gets, and Kotlin
   // exports all three for it. Binding them here is what makes two wrappers over the one Kotlin
   // singleton compare equal: every read mints a fresh wrapper, so reference equality never held,
@@ -119,7 +133,12 @@ private fun sealedSubclassBlock(
 private fun String.outdentToNamespaceLevel(): String =
   lines().joinToString("\n") { line -> line.removePrefix("    ") }
 
-internal fun StringBuilder.renderSealedSubclassDataMethods(libraryName: String, nativePrefix: String, sealedName: String, subclassName: String) {
+internal fun StringBuilder.renderSealedSubclassDataMethods(
+  libraryName: String,
+  nativePrefix: String,
+  sealedName: String,
+  subclassName: String
+) {
   appendLine("            [DllImport(\"$libraryName\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"${nativePrefix}_equals\")]")
   appendLine("            private static extern bool Native_Equals(IntPtr handle, IntPtr other);")
   appendLine()

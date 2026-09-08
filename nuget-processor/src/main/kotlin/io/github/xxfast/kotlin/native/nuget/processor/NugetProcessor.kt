@@ -163,6 +163,12 @@ internal fun warnDroppedForwardCallables(
       } else if (dropped.reason == ForwardPlanSkipReason.OPT_IN_MARKER_TYPE) {
         val marked: String = dropped.detail?.substringBefore("->") ?: "its type"
         "its type `$marked` is marked with an opt-in marker"
+        // ADR-116: the third special case in this chain, and the same signal as the second that it
+        // wants `reason.diagnosticReason()` (an open ROADMAP Phase 3 item, still not done here).
+        // Nothing about this member's types is unsupported: the owner kind has no route for it.
+      } else if (dropped.reason == ForwardPlanSkipReason.SEALED_SUBCLASS_UNROUTED) {
+        "it is a ${dropped.detail ?: "specialized"} member of a sealed subclass, which has no " +
+            "route yet (ADR-116; suspend members follow ROADMAP line 54)"
       } else {
         "its ${dropped.reason} type combination is not supported"
       },

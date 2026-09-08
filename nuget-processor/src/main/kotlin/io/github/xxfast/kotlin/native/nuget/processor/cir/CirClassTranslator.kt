@@ -1175,10 +1175,30 @@ internal fun translateSealedClass(
         }
         .toList()
 
+      // ADR-116: the method half of ADR-111. The arm's declared member functions come off the same
+      // catalog an ordinary class reads (`classMethods`), projected by the same `classMethod`, so
+      // the error slot, the overload numbering and the wire types agree with the Kotlin half by
+      // construction. `isOverride`/`isVirtual` are pinned false by the planner (CS0115/CS0549).
+      val methodPlans: List<ForwardCallablePlan> =
+        subQualifiedName?.let { callableCatalog.classMethods(it) } ?: emptyList()
+      val methods: List<CirMethod> = methodPlans.map { plan ->
+        tracker.trackPlan(plan)
+        ForwardCirPlanProjection.classMethod(
+          plan = plan,
+          nativePrefix = subPrefix,
+          isOverride = false,
+          isVirtual = false,
+        )
+      }
+      // ADR-034's collision guard, which the sealed route never ran: two arm methods whose C#
+      // signatures agree (`set(x: Foo)` / `set(x: Foo?)`) are CS0111 in the generated file.
+      emitCsharpSignatureCollisions(methods, "$name.$subName", subclass, logger)
+
       CirSealedSubclass(
         name = subName,
         nativePrefix = subPrefix,
         properties = properties,
+        methods = methods,
         isDataClass = isDataClass,
         isNested = isNested,
       )

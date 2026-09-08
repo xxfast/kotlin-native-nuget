@@ -375,8 +375,12 @@ internal object ForwardDiagnosticSink {
 internal fun ForwardPlanSkipReason.toDiagnosticKind(): ForwardDiagnosticKind = when (this) {
   ForwardPlanSkipReason.COLLECTION -> ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_INPUT
   ForwardPlanSkipReason.NULLABLE -> ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_RETURN
-  ForwardPlanSkipReason.UNSUPPORTED_COMBINATION ->
-    ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_COMBINATION
+  // ADR-116: a `suspend`/`Flow`/generic/callback member of a sealed subclass. The kind's
+  // documented meaning — the combination has no working legacy route — is literally the case
+  // here: no legacy route is keyed to a sealed subclass at all.
+  ForwardPlanSkipReason.UNSUPPORTED_COMBINATION,
+  ForwardPlanSkipReason.SEALED_SUBCLASS_UNROUTED,
+    -> ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_COMBINATION
 
   ForwardPlanSkipReason.INHERITED_MEMBER -> ForwardDiagnosticKind.SKIPPED_INHERITED_MEMBER
 
@@ -551,6 +555,13 @@ internal fun ForwardPlanSkipReason.diagnosticHint(
   ForwardPlanSkipReason.UNSUPPORTED_COMBINATION ->
     "expose a non-inline, non-generic wrapper (e.g. a concrete suspend fun returning the " +
         "unwrapped value) and export that instead"
+
+  // ADR-116: `else` below would send the author after unsupported parameter/return shapes, which
+  // is wrong here — the shapes are fine, the *route* is missing for this owner kind.
+  ForwardPlanSkipReason.SEALED_SUBCLASS_UNROUTED ->
+    "move the member onto an ordinary class (which still has the legacy route this member kind " +
+        "needs), or expose an equivalent non-suspend, non-Flow, non-generic member on the sealed " +
+        "subclass instead"
 
   // Issue #57: the old hint ("declare the member directly on the value class") was already true
   // of an explicit `override`, which skips by the same rule (ADR-082: an override *is* the

@@ -112,6 +112,13 @@ data class CirSealedSubclass(
   val name: String,
   val nativePrefix: String,
   val properties: List<CirProperty>,
+  /**
+   * ADR-116: the arm's own declared member functions, projected from the ADR-062 callable plan the
+   * way an ordinary [CirClass]'s methods are. Empty for an arm that declares none, and for every
+   * member kind still without a route on a sealed subclass (suspend, Flow, generic, callback),
+   * which is named by a `SKIPPED_UNSUPPORTED_COMBINATION` diagnostic instead.
+   */
+  val methods: List<CirMethod> = emptyList(),
   val isDataClass: Boolean = false,
   /**
    * Issue #54: whether the subclass is declared *inside* its sealed base in Kotlin. C# follows the
