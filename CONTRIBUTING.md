@@ -6,9 +6,9 @@ proposing a change, and [STYLE.md](STYLE.md) before writing code.
 
 ## Branches
 
-`<your-initials>/<short-slug>`, for example `ir/mutable-collection-params`. No ticket IDs: this
-project tracks work in [ROADMAP.md](ROADMAP.md), not an issue tracker, so a branch name carries no
-reference of its own.
+`<your-initials>/<short-slug>`, for example `ir/mutable-collection-params`. No issue numbers in the
+branch name: the slug says what the work is, and the PR body carries the reference. Work is tracked
+in [ROADMAP.md](ROADMAP.md) and in GitHub issues, and plenty of changes answer to neither.
 
 ## Verify before you open anything
 
@@ -49,6 +49,8 @@ the body exists to say what the diff cannot.
 
 Structure, in order:
 
+0. **`Fixes #NNN` on the first line**, then a blank line, when the branch closes a GitHub issue.
+   Omit it entirely otherwise; do not hunt for an issue to attach.
 1. **Lead with the situation, not the change.** What was true before, and why it was that way. Skip
    "This PR adds...".
 2. **A consumer-facing code example**, for anything that changes the generated surface. This is a code
@@ -60,8 +62,8 @@ Structure, in order:
 4. **The verify result**: `` `scripts/verify.sh` green: 769 passed, 1 pre-existing skip, 0 failed ``
 5. **A `- [x]` checklist** of the commits on the branch, one line per commit subject.
 
-Leave out of the body: section headings, a test plan, a file-by-file scope list, "Fixes #NNN" keywords,
-"Please review", and any generated-by footer. Deferred work and bugs found but not fixed belong in
+Leave out of the body: section headings, a test plan, a file-by-file scope list, "Please review",
+and any generated-by footer. Deferred work and bugs found but not fixed belong in
 [ROADMAP.md](ROADMAP.md), where the next contributor will actually find them, not in a PR body that
 gets buried on merge.
 
