@@ -171,7 +171,7 @@ internal fun warnDroppedForwardCallables(
         // Nothing about this member's types is unsupported: the owner kind has no route for it.
       } else if (dropped.reason == ForwardPlanSkipReason.SEALED_SUBCLASS_UNROUTED) {
         "it is a ${dropped.detail ?: "specialized"} member of a sealed subclass, which has no " +
-            "route yet (ADR-116; suspend members follow ROADMAP line 54)"
+            "route yet (ADR-116)"
       } else {
         "its ${dropped.reason} type combination is not supported"
       },
@@ -276,6 +276,10 @@ internal fun warnDroppedForwardExtensionReceivers(
  */
 internal fun warnRefusedLegacyRouteParameters(
   classes: List<KSClassDeclaration>,
+  // ADR-118: a sealed arm's suspend member is on the legacy route now, so a refused parameter is
+  // filtered silently by both halves exactly as an ordinary class's is, and this walk is the only
+  // thing left that names it. Before ADR-118 it was named as SEALED_SUBCLASS_UNROUTED instead.
+  sealedClasses: List<KSClassDeclaration>,
   suspendFunctions: List<KSFunctionDeclaration>,
   classifier: ForwardBridgeTypeClassifier,
   logger: KSPLogger,
@@ -305,12 +309,39 @@ internal fun warnRefusedLegacyRouteParameters(
           add(diagnostic(method, "$owner.${method.simpleName.asString()}", refused))
         }
     }
+    sealedClasses.forEach { sealed ->
+      val sealedName: String = sealed.simpleName.asString()
+      sealed.getSealedSubclasses().forEach { subclass ->
+        val owner: String = "$sealedName.${subclass.simpleName.asString()}"
+        subclass.getAllFunctions()
+          .filter { method -> method.getVisibility() == Visibility.PUBLIC }
+          // Declared-only, as everywhere else on the sealed route.
+          .filter { method -> method.parentDeclaration == subclass }
+          .filter { method -> method.modifiers.contains(Modifier.SUSPEND) }
+          .forEach { method ->
+            val refused: String =
+              classifier.legacyRefusedParameter(method.parameters) ?: return@forEach
+            add(diagnostic(method, "$owner.${method.simpleName.asString()}", refused))
+          }
+      }
+    }
     suspendFunctions.forEach { func ->
       val refused: String = classifier.legacyRefusedParameter(func.parameters) ?: return@forEach
       add(diagnostic(func, func.simpleName.asString(), refused))
     }
   }
   ForwardDiagnosticSink.emit(diagnostics, logger)
+}
+
+/**
+ * ADR-118: whether a sealed subclass **declares** a `suspend fun` of its own. The declared-only
+ * gate is the sealed route's rule everywhere (the planner's `sealedSubclassEntries`, the C#
+ * translator and the Kotlin export builder), so an inherited `open suspend fun` belongs to no arm.
+ */
+private fun KSClassDeclaration.declaresSuspendMember(): Boolean = getAllFunctions().any { method ->
+  method.getVisibility() == Visibility.PUBLIC &&
+      method.parentDeclaration == this &&
+      method.modifiers.contains(Modifier.SUSPEND)
 }
 
 private fun KSAnnotated.hasCNameAnnotation(): Boolean =
@@ -910,7 +941,9 @@ class NugetProcessor(
     warnDroppedForwardPropertySetters(callableCatalog, logger)
     warnDroppedForwardProperties(callableCatalog, logger)
     warnDroppedForwardExtensionReceivers(callableCatalog, logger)
-    warnRefusedLegacyRouteParameters(classes, suspendFunctions, forwardClassifier, logger)
+    warnRefusedLegacyRouteParameters(
+      classes, sealedClasses, suspendFunctions, forwardClassifier, logger,
+    )
 
     val cNameWrappers: ForwardCNameExports = generateCNameWrappers(
       functions, genericFunctions, extensionFunctions, extensionProperties,
@@ -1215,9 +1248,21 @@ class NugetProcessor(
 
     val needsSuspendLambdaSupport: Boolean = suspendLambdaArities.isNotEmpty()
 
+    val classesHaveSuspendFunctions: Boolean = classes.any { cls ->
+      cls.getAllFunctions().any { it.modifiers.contains(Modifier.SUSPEND) }
+    }
+
+    // ADR-118: an arm's suspend export needs the same coroutine/cinterop imports a class's does,
+    // and without it an arm's `GetOrCreateScope()` calls a `nuget_scope_create` that was never
+    // exported -- an EntryPointNotFoundException at the first await.
+    val armsHaveSuspendMethods: Boolean = sealedClasses.any { sealed ->
+      sealed.getSealedSubclasses().any { subclass -> subclass.declaresSuspendMember() }
+    }
+
     val hasSuspendFunctions: Boolean = suspendFunctions.isNotEmpty() ||
         needsSuspendLambdaSupport ||
-        classes.any { cls -> cls.getAllFunctions().any { it.modifiers.contains(Modifier.SUSPEND) } }
+        classesHaveSuspendFunctions ||
+        armsHaveSuspendMethods
 
     val classesHaveFlowPropertiesForImports: Boolean = classes.any { cls ->
       cls.getAllProperties().any { prop ->
@@ -1337,7 +1382,29 @@ class NugetProcessor(
       attributing(cls) {
         val hasSuspendMethods: Boolean = cls.getAllFunctions()
           .any { it.modifiers.contains(Modifier.SUSPEND) }
-        if (hasSuspendMethods) builder.addSuspendClassMethodExports(cls, forwardClassifier)
+        if (hasSuspendMethods) {
+          builder.addSuspendClassMethodExports(cls, forwardClassifier, callableCatalog)
+        }
+      }
+    }
+
+    // ADR-118: a sealed arm is an owner of the legacy suspend route too, under the export prefix
+    // its getters and `_dispose` already use. Declared-only, the same gate the planner's
+    // `sealedSubclassEntries` and `translateSealedClass` apply, so all three halves agree on which
+    // members exist.
+    sealedClasses.forEach { sealed ->
+      val sealedPrefix: String = sealed.simpleName.asString().lowercase()
+      sealed.getSealedSubclasses().forEach { subclass ->
+        if (!subclass.declaresSuspendMember()) return@forEach
+        attributing(subclass) {
+          builder.addSuspendClassMethodExports(
+            cls = subclass,
+            classifier = forwardClassifier,
+            callableCatalog = callableCatalog,
+            prefix = "${sealedPrefix}_${subclass.simpleName.asString().lowercase()}",
+            declaredOnly = true,
+          )
+        }
       }
     }
 
@@ -1631,7 +1698,8 @@ class NugetProcessor(
     if (needsFlowSupport) builder.addImport("kotlinx.coroutines.flow", "collect")
 
     val needsScopeHelpers: Boolean = suspendFunctions.isNotEmpty() ||
-        needsSuspendLambdaSupport || classesHaveSuspendMethods || needsFlowSupport
+        needsSuspendLambdaSupport || classesHaveSuspendMethods || armsHaveSuspendMethods ||
+        needsFlowSupport
     if (needsScopeHelpers) builder.addNugetScopeHelperExports()
     if (needsScopeHelpers) builder.addNugetScopeDrainExport()
     if (needsScopeHelpers) builder.addNugetJobHelperExports()

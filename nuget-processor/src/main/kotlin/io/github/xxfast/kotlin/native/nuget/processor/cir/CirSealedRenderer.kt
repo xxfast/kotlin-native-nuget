@@ -61,12 +61,25 @@ private fun sealedSubclassBlock(
   sealed: CirSealedClass,
   subclass: CirSealedSubclass,
 ): String = buildString {
-  appendLine("        public sealed class ${subclass.name} : ${sealed.name}")
+  // ADR-118: an arm that declares a `suspend fun` owns its own coroutine scope and therefore its
+  // own async disposal. The base stays `: IDisposable, INugetHandle` -- its `Native_Dispose` is
+  // per arm, so it has no scope to drain, and putting `IAsyncDisposable` there would advertise
+  // `DisposeAsync` on arms that never suspend.
+  val asyncDisposable: String = if (subclass.hasSuspendMethods) ", IAsyncDisposable" else ""
+  appendLine("        public sealed class ${subclass.name} : ${sealed.name}$asyncDisposable")
   appendLine("        {")
+  if (subclass.hasSuspendMethods) {
+    append(buildString { renderScopeHandleField() }.indentNestedBody())
+    appendLine()
+  }
   appendLine("            internal ${subclass.name}(IntPtr handle) : base(handle)")
   appendLine("            {")
   appendLine("            }")
   appendLine()
+  if (subclass.hasSuspendMethods) {
+    append(buildString { renderGetOrCreateScope() }.indentNestedBody())
+    appendLine()
+  }
 
   for (prop in subclass.properties) {
     // ADR-111: the externs come off the same `propertyNativeImports` rule every ordinary class
@@ -102,6 +115,14 @@ private fun sealedSubclassBlock(
     )
   }
 
+  // ADR-118: the arm's declared `suspend` members. `renderMember` dispatches the pair the same way
+  // an ordinary class's `companionMembers` are dispatched -- the private `[DllImport]` and the
+  // `async` body -- both baked at the ordinary-class depth, so the whole block takes the same +4
+  // re-indent the property and method arms take.
+  subclass.asyncMembers.forEach { member ->
+    append(buildString { renderMember(member, subclass.name) }.indentNestedBody())
+  }
+
   // Issue #54: a `data object` gets the same generated members a `data class` gets, and Kotlin
   // exports all three for it. Binding them here is what makes two wrappers over the one Kotlin
   // singleton compare equal: every read mints a fresh wrapper, so reference equality never held,
@@ -110,19 +131,46 @@ private fun sealedSubclassBlock(
     renderSealedSubclassDataMethods(sealed.libraryName, subclass.nativePrefix, sealed.name, subclass.name)
   }
 
-  appendLine("            public override void Dispose()")
-  appendLine("            {")
-  appendLine("                if (_handle != IntPtr.Zero)")
-  appendLine("                {")
-  appendLine("                    Native_Dispose(_handle);")
-  appendLine("                    _handle = IntPtr.Zero;")
-  appendLine("                }")
-  appendLine("            }")
-  appendLine()
-  appendLine("            [DllImport(\"${sealed.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"${subclass.nativePrefix}_dispose\")]")
-  appendLine("            private static extern void Native_Dispose(IntPtr handle);")
-  appendLine("        }")
-  appendLine()
+  if (subclass.hasSuspendMethods) {
+    // ADR-118: a suspending arm takes the ordinary class's dispose rule wholesale -- cancel and
+    // dispose the scope before `Native_Dispose`, plus the `DisposeAsync` drain. Only a suspending
+    // arm does: `renderDispose`'s `Interlocked.Exchange` body is not textually what the arms have
+    // shipped, so a non-suspending arm keeps its own block below rather than churn every arm.
+    val disposeImport = CirDllImport(
+      libraryName = sealed.libraryName,
+      entryPoint = "${subclass.nativePrefix}_dispose",
+      returnType = "void",
+      name = "Native_Dispose",
+      parameters = listOf(CirParameter("handle", "IntPtr")),
+      visibility = CirVisibility.PRIVATE,
+    )
+    append(
+      buildString {
+        renderDispose(
+          nativeImport = disposeImport,
+          isAbstract = false,
+          hasSuperClass = true,
+          hasSuspendMethods = true,
+        )
+      }.indentNestedBody(),
+    )
+    appendLine("        }")
+    appendLine()
+  } else {
+    appendLine("            public override void Dispose()")
+    appendLine("            {")
+    appendLine("                if (_handle != IntPtr.Zero)")
+    appendLine("                {")
+    appendLine("                    Native_Dispose(_handle);")
+    appendLine("                    _handle = IntPtr.Zero;")
+    appendLine("                }")
+    appendLine("            }")
+    appendLine()
+    appendLine("            [DllImport(\"${sealed.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"${subclass.nativePrefix}_dispose\")]")
+    appendLine("            private static extern void Native_Dispose(IntPtr handle);")
+    appendLine("        }")
+    appendLine()
+  }
 }
 
 /**

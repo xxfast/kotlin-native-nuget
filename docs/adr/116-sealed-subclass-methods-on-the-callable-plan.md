@@ -3,6 +3,8 @@
 ## Status
 Accepted
 
+> **Amended by [ADR-118](118-suspend-route-sealed-arm-owners-and-overload-numbering.md) (2026-09-09).** This ADR priced binding a sealed arm's `suspend fun` as its option (b) and deferred it, leaving the member absent and named `SEALED_SUBCLASS_UNROUTED` (detail `SUSPEND`). ADR-118 re-keyed the legacy suspend route to sealed arms, so a `suspend fun` an arm declares now binds; `SEALED_SUBCLASS_UNROUTED` still covers `Flow`-returning, lambda-parameter, generic and callback-protocol arm members.
+
 ## Implementation notes (2026-09-08)
 
 Shipped as designed, with four corrections found during implementation:

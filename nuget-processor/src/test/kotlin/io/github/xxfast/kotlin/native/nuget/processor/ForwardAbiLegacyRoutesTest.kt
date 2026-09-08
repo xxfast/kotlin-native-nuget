@@ -7,6 +7,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.cir.CirMethod
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirNamespace
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirProperty
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirSealedClass
+import io.github.xxfast.kotlin.native.nuget.processor.cir.CirSealedSubclass
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirStaticClass
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirTypeParameter
 import kotlin.test.Test
@@ -117,6 +118,53 @@ class ForwardAbiLegacyRoutesTest {
         ForwardAbiLegacyRoute.GENERIC_CLASS,
         ForwardAbiLegacyRoute.SEALED_CLASS,
       ),
+      ForwardAbiLegacyRoutes.collect(file),
+    )
+  }
+
+  /**
+   * ADR-118: a `suspend fun` declared on a sealed **arm** is the legacy suspend route under a new
+   * owner, so the arm's async members have to be walked. Recognition stays structural
+   * (`CirMethod.isAsync`), never by the `job_running_pause_async` entry-point shape.
+   */
+  @Test
+  fun `a sealed arm's async member is recognized as the suspend method route`() {
+    val file = CirFile(
+      namespaces = listOf(
+        CirNamespace(
+          name = "Sample",
+          declarations = listOf(
+            CirSealedClass(
+              name = "Job",
+              libraryName = "sample",
+              nativePrefix = "job",
+              subclasses = listOf(
+                CirSealedSubclass(
+                  name = "Running",
+                  nativePrefix = "job_running",
+                  properties = emptyList(),
+                  asyncMembers = listOf(
+                    CirMethod(
+                      name = "PauseAsync",
+                      nativeName = "Native_PauseAsync",
+                      returnType = "Task<int>",
+                      parameters = emptyList(),
+                      body = "",
+                      isAsync = true,
+                      asyncReturnType = "int",
+                    ),
+                  ),
+                  hasSuspendMethods = true,
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    )
+
+    assertEquals(
+      setOf(ForwardAbiLegacyRoute.SEALED_CLASS, ForwardAbiLegacyRoute.SUSPEND_METHOD),
       ForwardAbiLegacyRoutes.collect(file),
     )
   }

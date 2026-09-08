@@ -567,7 +567,7 @@ internal fun ForwardPlanSkipReason.diagnosticHint(
   // is wrong here — the shapes are fine, the *route* is missing for this owner kind.
   ForwardPlanSkipReason.SEALED_SUBCLASS_UNROUTED ->
     "move the member onto an ordinary class (which still has the legacy route this member kind " +
-        "needs), or expose an equivalent non-suspend, non-Flow, non-generic member on the sealed " +
+        "needs), or expose an equivalent non-Flow, non-generic member on the sealed " +
         "subclass instead"
 
   // Issue #57: the old hint ("declare the member directly on the value class") was already true

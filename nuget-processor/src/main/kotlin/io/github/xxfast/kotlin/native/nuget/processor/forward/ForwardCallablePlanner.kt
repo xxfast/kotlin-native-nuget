@@ -1045,7 +1045,14 @@ internal class ForwardCallablePlanner(
     return entries.map { entry ->
       if (entry !is ForwardCallableCatalogEntry.Skipped) return@map entry
       val isUnrouted: Boolean =
-        !entry.reason.droppedFromCSharp && entry.reason != ForwardPlanSkipReason.ABSTRACT
+        !entry.reason.droppedFromCSharp && entry.reason != ForwardPlanSkipReason.ABSTRACT &&
+            // ADR-118: the legacy suspend route is keyed to sealed arms now, so a SUSPEND skip on
+            // an arm means exactly what it means on an ordinary class -- "the plan does not own
+            // this one, the named legacy route does" -- and stays silent. The numbered symbol is
+            // copied either way, so `overloadSuffix` answers for the arm's overload pair
+            // regardless. SUSPEND_CALLBACK_PROTOCOL is deliberately not exempted: no arm route
+            // emits it.
+            entry.reason != ForwardPlanSkipReason.SUSPEND
       if (!isUnrouted) return@map entry
 
       ForwardCallableCatalogEntry.Skipped(

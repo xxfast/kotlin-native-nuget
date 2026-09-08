@@ -162,6 +162,25 @@ class CatMoodTracker(private val catName: String) {
     return playmate
   }
 
+  /**
+   * ADR-118 / ROADMAP line 54, the StateFlow half: an overload of [awaitMoodReport] whose return is
+   * a `StateFlow<T>`.
+   *
+   * `suspendStateFlowMembers` is a **separate** `flatMap` from `asyncMembers` in
+   * `CirClassTranslator`, with its own `${prefix}_${cname}_async` / `Native_${Name}Async`
+   * composition, while the Kotlin half is shared (ADR-068). So numbering the plain-suspend
+   * projection alone would fix the Kotlin symbol and leave this pair colliding on the C# extern
+   * name; both projections have to read the same `overloadSuffix`.
+   *
+   * It hands back a *fresh* StateFlow carrying the prefixed current mood rather than the shared
+   * [_mood] the no-argument overload returns, so the two overloads' awaited values can never be
+   * confused with one another.
+   */
+  suspend fun awaitMoodReport(prefix: String): StateFlow<String> {
+    kotlinx.coroutines.delay(1)
+    return MutableStateFlow("$prefix${_mood.value}").asStateFlow()
+  }
+
   // --- ADR-071: MutableStateFlow<T> declared PUBLICLY -- settable .Value from C#. Contrast with
   // [mood]/[energyLevel] above, which are MutableStateFlow-backed but declared as read-only
   // StateFlow views and must keep their get-only .Value. ---

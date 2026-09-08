@@ -4,7 +4,7 @@ Kotlin coroutines map onto .NET's own async model: `suspend fun` becomes `async`
 
 | Kotlin | C# | Notes |
 |---|---|---|
-| `suspend fun` | `async` / `Task<T>` | [ADR-019](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/019-suspend-function-mapping.md) |
+| `suspend fun` | `async` / `Task<T>` | overloads on a class or a sealed arm number `_2` on the native symbol only, no visible C# numbering, see [`suspend fun` overloads](#suspend-fun-overloads), [ADR-019](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/019-suspend-function-mapping.md), [ADR-118](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/118-suspend-route-sealed-arm-owners-and-overload-numbering.md) |
 | `suspend fun` returning `T?` | `async` / `Task<T?>` | nullable string, object, and primitive returns, [ADR-019](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/019-suspend-function-mapping.md) |
 | `suspend () -> R` lambda | `KotlinSuspendFunc<R>` / `Task<R>` | [ADR-020](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/020-suspend-lambda-mapping.md) |
 | structured concurrency | honoured on `Dispose()` | [ADR-021](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/021-structured-concurrency.md) |
@@ -46,6 +46,54 @@ public async Task AsyncCatService_FetchCat_ReturnsCatObject()
     Assert.Equal("Oreo", cat.Name);
 }
 ```
+
+## `suspend fun` overloads {id="suspend-fun-overloads"}
+
+Two `suspend` overloads on one class (or a [sealed arm](interfaces-abstract-sealed.md#sealed-method-suspend-generated-c)) are one natural C# overload set with no visible numbering: the second takes `_2` on the native entry point and on the private extern's own C# name, off the same planner overload counter that numbers a plan-routed method ([ADR-090](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/090-ordinary-class-method-overloads.md)), read at the suspend route's composition sites ([ADR-118](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/118-suspend-route-sealed-arm-owners-and-overload-numbering.md)). From `test-library/src/nativeMain/kotlin/.../cat/AsyncCatService.kt`:
+
+```kotlin
+suspend fun fetchCat(name: String, lives: Int): Cat {
+  delay(100.milliseconds)
+  return Cat(name, lives)
+}
+```
+
+Generated C#, both overloads staying `FetchCatAsync` while the private externs carry the number:
+
+```C#
+[DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "asynccatservice_fetchCat_2_async")]
+private static extern IntPtr Native_FetchCat_2Async(IntPtr handle, IntPtr scopeHandle, [MarshalAs(UnmanagedType.LPUTF8Str)] string name, int lives, IntPtr callback, IntPtr userData);
+
+public Task<Cat> FetchCatAsync(string name, int lives, CancellationToken cancellationToken = default)
+```
+
+Using it, from `IntegrationTests/SuspendMethodOverloadTests.cs`:
+
+```C#
+[Fact]
+public async Task FetchCatAsync_SecondSuspendOverload_DispatchesToTheTwoParameterBody()
+{
+    using var service = new AsyncCatService("toys");
+
+    using Cat mylo = await service.FetchCatAsync("Mylo", 3);
+
+    Assert.Equal("Mylo", mylo.Name);
+    Assert.Equal(3, mylo.Lives);
+}
+```
+
+<note>
+    <p>Two parameters that both cross as the identical wire type (e.g. two same-arity collection
+    parameters) are still a legal C# overload set, but the number has to reach the private extern's
+    <code>nativeName</code> as well as the entry point, not just the entry point: otherwise C#
+    overload resolution picks the second overload by its distinct <i>public</i> signature, but its
+    body silently calls the <i>first</i> overload's native symbol and returns the first overload's
+    result. See <code>AsyncCatSitter.feed(List&lt;Int&gt;)</code> / <code>feed(Set&lt;String&gt;)</code> in
+    <code>IntegrationTests/SuspendMethodOverloadTests.cs</code>.</p>
+</note>
+
+A top-level (non-class, non-arm) `suspend fun` overload pair still collides on one C symbol; see
+[Limitations](#limitations).
 
 ## `suspend fun` returning a nullable type {id="suspend-fun-returning-a-nullable-type"}
 
@@ -957,6 +1005,8 @@ Hot streams and several `Flow` positions are not yet supported (ROADMAP Phase 6)
 - A collection as a `Flow`/`StateFlow` **element** (`StateFlow<List<String>>`, as opposed to a collection parameter) has no fixture and no confirmed coverage today
 - A nullable collection parameter (`List<T>?`) on a `Flow`/`StateFlow`/`suspend` member (ADR-067 territory, not widened by [ADR-114](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/114-collection-parameters-on-legacy-flow-and-suspend-routes.md))
 - An object-typed (non-collection) parameter on these routes still renders raw `IntPtr` with no way for a caller to construct one
+- A **top-level** `suspend fun` overload pair (not a class or sealed-arm method) still collides on one C symbol: the top-level suspend route has no planner entry to number from ([ADR-118](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/118-suspend-route-sealed-arm-owners-and-overload-numbering.md))
+- Two `suspend` overloads differing only in reference nullability still render `CS0111` in the generated file rather than failing the round, since async members bypass the C# signature-collision guard
 
 A `suspend inline fun <reified T> Receiver.f(...): Result<T>` extension has no bridge at all: `inline`
 plus `reified` erases at the C ABI, and `suspend` needs a concrete continuation type, so the
@@ -986,5 +1036,6 @@ rather than the raw `Function1`/`Result` this generated before
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/071-mutable-stateflow-mapping.md">ADR-071: MutableStateFlow&lt;T&gt; mapping</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/102-aot-safe-forward-callbacks.md">ADR-102: AOT-safe forward callbacks</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/114-collection-parameters-on-legacy-flow-and-suspend-routes.md">ADR-114: Collection parameters on the Flow and suspend legacy routes</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/118-suspend-route-sealed-arm-owners-and-overload-numbering.md">ADR-118: Suspend route: sealed-arm owners and overload numbering</a>
     </category>
 </seealso>

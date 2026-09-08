@@ -1,5 +1,6 @@
 package io.github.xxfast.kotlin.native.nuget.processor.tier1
 
+import io.github.xxfast.kotlin.native.nuget.processor.ForwardAbiGuard
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnosticKind
 import kotlin.test.Test
 import kotlin.test.assertTrue
@@ -12,10 +13,11 @@ import kotlin.test.assertTrue
  * Deliberately in-process only (never in `test-library/`): each cell's correct outcome is a failed
  * build, which would break `packNuget`.
  *
- * The assertions never name *which* of the three duplicate guards fires (`duplicate C# import`,
- * `duplicate Kotlin export`, `conflicting C# legacy imports`): which one a shape hits depends on
- * its universe and on signature equality (ADR-117 Context), and all three render the same
- * owner-naming body.
+ * The assertions mostly do not name *which* of the three duplicate guards fires (`duplicate C#
+ * import`, `duplicate Kotlin export`, `conflicting C# legacy imports`): which one a shape hits
+ * depends on its universe and on signature equality (ADR-117 Context), and all three render the
+ * same owner-naming body. The suspend cell below is the exception -- ADR-118 asked for the guard
+ * by name there, and the answer turned out not to be the one the ADR predicted.
  */
 class Tier1EntryPointCollisionTest {
 
@@ -77,21 +79,34 @@ class Tier1EntryPointCollisionTest {
     )
   }
 
-  /** The issue's own shape, on the live suspend legacy route (ROADMAP line 54's spike). */
+  /**
+   * The issue's own shape, on the live suspend legacy route. ADR-118 numbers a suspend **overload**
+   * pair, so `play(Player)`/`play(Track)` no longer collide; the collision that still reaches this
+   * route across two *different* owners is a class method against a top-level function whose Kotlin
+   * name is already the mangled symbol (`toCName` is the identity apart from C-reserved names).
+   *
+   * ADR-118 predicted (Inferred, not run) that this shape would reach the third of ADR-117's three
+   * duplicate guards, `conflicting C# legacy imports`, because the two imports differ in signature.
+   * **Verified by execution here: it does not.** `DUPLICATE_CSHARP_IMPORT` fires first, the same
+   * guard the pre-ADR-118 overload cell tripped, so ADR-117's recorded residual (no Tier 1 cell
+   * reaches `CONFLICTING_LEGACY_IMPORTS` through a real KSP round) stays open. Per ADR-118's own
+   * gate instruction 2 the assertion follows the observed guard: the point of the cell is the
+   * reach, not the prediction. Both owners are still named off their own `FunSpec` tags, one per
+   * builder, which is what this cell exists to pin.
+   */
   @Test
-  fun `two suspend overloads name both methods by parameter type`() {
+  fun `a suspend method and a top-level suspend function name both owners`() {
     val result = Tier1Harness.run(
       """
       package tier1.abicollision.suspend
 
       class Player(val name: String)
 
-      class Track(val title: String)
-
       class Radio {
         suspend fun play(p: Player): Int = 1
-        suspend fun play(t: Track): Int = 2
       }
+
+      suspend fun radio_play(): Int = 2
       """.trimIndent(),
     )
 
@@ -100,9 +115,17 @@ class Tier1EntryPointCollisionTest {
         message.contains(ForwardDiagnosticKind.ERROR_C_ENTRY_POINT_COLLISION.name) &&
             message.contains("radio_play_async") &&
             message.contains("tier1.abicollision.suspend.Radio.play(Player)") &&
-            message.contains("tier1.abicollision.suspend.Radio.play(Track)")
+            message.contains("tier1.abicollision.suspend.radio_play()")
       },
-      "expected a collision naming both suspend overloads; kspErrors=${result.kspErrors}",
+      "expected a collision naming the method and the top-level function; " +
+          "kspErrors=${result.kspErrors}",
+    )
+    assertTrue(
+      result.kspErrors.any { message ->
+        message.contains(ForwardAbiGuard.DUPLICATE_CSHARP_IMPORT.phrase)
+      },
+      "expected the duplicate-C#-import guard by name (the one this shape actually reaches); " +
+          "kspErrors=${result.kspErrors}",
     )
     assertTrue(
       result.generatedFiles.keys.none { name -> name.endsWith("CNameExports.kt") },

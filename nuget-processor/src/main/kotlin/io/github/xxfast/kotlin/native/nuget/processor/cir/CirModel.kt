@@ -119,6 +119,20 @@ data class CirSealedSubclass(
    * which is named by a `SKIPPED_UNSUPPORTED_COMBINATION` diagnostic instead.
    */
   val methods: List<CirMethod> = emptyList(),
+  /**
+   * ADR-118: the arm's own declared `suspend` members, projected by the same `suspendMembers`
+   * function an ordinary class's `companionMembers` carry -- a [CirDllImport] and an async
+   * [CirMethod] per member, which is why they cannot ride [methods].
+   */
+  val asyncMembers: List<CirMember> = emptyList(),
+  /**
+   * ADR-118: set exactly when [asyncMembers] is non-empty, which is what gives the arm its
+   * `_scopeHandle`, `GetOrCreateScope()`, `IAsyncDisposable` and `DisposeAsync`. Deliberately
+   * derived from what actually projected rather than from a `getAllFunctions()` scan the way
+   * [CirClass.hasSuspendMethods] is: a base-declared (`open suspend fun`) or ADR-114 refused
+   * member would otherwise give the arm a scope no method on it ever uses.
+   */
+  val hasSuspendMethods: Boolean = false,
   val isDataClass: Boolean = false,
   /**
    * Issue #54: whether the subclass is declared *inside* its sealed base in Kotlin. C# follows the
