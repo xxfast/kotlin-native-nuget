@@ -124,6 +124,11 @@ internal fun translate(
   // the identical instance. Defaulted to null for the translator-level tests, which build one
   // from the export set below rather than threading a classifier through every fixture.
   forwardClassifier: ForwardBridgeTypeClassifier? = null,
+  // ADR-113: the DECLARATION catalog, planned over every exported interface, not just the
+  // reachable ones. `callableCatalog` above stays reachability-driven (it drives the exports, the
+  // backing classes and the ADR-055 contract); `IFoo` is unconditional under ADR-040, so its member
+  // list has to come from a catalog that is unconditional too.
+  interfaceDeclarationCatalog: ForwardCallablePlanCatalog = ForwardCallablePlanCatalog(emptyList()),
 ): CirFile {
   val (genericClasses, regularClasses) = classes.partition { it.typeParameters.isNotEmpty() }
 
@@ -392,7 +397,7 @@ internal fun translate(
   interfaces.forEach { iface ->
     namespaces.addDeclaration(
       namespaceOf(iface.packageName.asString()),
-      translateInterface(iface, context.libraryName, logger),
+      translateInterface(iface, interfaceDeclarationCatalog, logger),
     )
   }
 

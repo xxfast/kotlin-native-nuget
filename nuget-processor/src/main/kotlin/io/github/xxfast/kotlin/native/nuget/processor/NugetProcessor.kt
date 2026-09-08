@@ -829,6 +829,21 @@ class NugetProcessor(
           forwardPropertyPlanner.droppedExtensionReceivers,
     )
 
+    // ADR-113: a SECOND catalog, planned over every exported interface rather than the reachable
+    // subset above, used only to shape the generated `IFoo` declarations. ADR-040 keeps `IFoo`
+    // unconditional, so projecting it from `callableCatalog` would empty every interface that is
+    // only implemented and never returned. Fresh planner instances: their drop channels are
+    // deliberately NOT merged below, or every reachable interface's skip would be reported twice
+    // (a reachable interface is planned by both).
+    val declarationPlanner = ForwardCallablePlanner(forwardClassifier, expects)
+    val declarationPropertyPlanner = ForwardPropertyPlanner(forwardClassifier)
+    val interfaceDeclarationCatalog = ForwardCallablePlanCatalog(
+      entries = interfaces.flatMap { iface -> declarationPlanner.interfaceEntries(iface) },
+      propertyPlans = interfaces.flatMap { iface ->
+        declarationPropertyPlanner.interfaceProperties(iface)
+      },
+    )
+
     warnDroppedForwardCallables(callableCatalog, logger, effectiveInclude)
     warnDroppedForwardPropertySetters(callableCatalog, logger)
     warnDroppedForwardProperties(callableCatalog, logger)
@@ -845,7 +860,7 @@ class NugetProcessor(
       functions, genericFunctions, extensionFunctions, extensionProperties,
       allClasses, enums, interfaces, sealedClasses, objects, properties,
       constProperties, valueClasses, suspendFunctions, callableCatalog, deps, reachableInterfaces,
-      expects, forwardClassifier,
+      expects, forwardClassifier, interfaceDeclarationCatalog,
     )
 
     // ADR-064: an ERROR_* diagnostic (e.g. ERROR_CSHARP_SIGNATURE_COLLISION, ADR-034) already
@@ -945,6 +960,8 @@ class NugetProcessor(
     expects: ExpectIndex,
     // ADR-114: the same instance the Kotlin half classifies with.
     forwardClassifier: ForwardBridgeTypeClassifier,
+    // ADR-113: shapes the `IFoo` declarations only; see the construction site.
+    interfaceDeclarationCatalog: ForwardCallablePlanCatalog,
   ): CsharpBindings {
     val cirFile: CirFile = translate(
       context,
@@ -966,6 +983,7 @@ class NugetProcessor(
       reachableInterfaces,
       expects,
       forwardClassifier,
+      interfaceDeclarationCatalog,
     )
 
     val csharp: String = renderer.render(cirFile)

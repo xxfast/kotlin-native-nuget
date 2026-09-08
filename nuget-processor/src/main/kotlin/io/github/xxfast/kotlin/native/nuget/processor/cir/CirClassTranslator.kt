@@ -32,6 +32,8 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.isForwardLegacyAsy
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isForwardMemberOf
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyRefusedParameter
 import io.github.xxfast.kotlin.native.nuget.processor.forward.planFor
+import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardPublicCsharpType
+import io.github.xxfast.kotlin.native.nuget.processor.forward.csharpName
 import io.github.xxfast.kotlin.native.nuget.processor.toCName
 
 /**
@@ -1495,13 +1497,27 @@ internal fun translateCompanionFunction(
   return listOf(nativeImport(nativeReturnType), wrapper)
 }
 
+/**
+ * ADR-113: the generated `IFoo` declaration, projected from the SAME forward plan every
+ * implementation of it is projected from.
+ *
+ * [callableCatalog] here is the *declaration* catalog (`NugetProcessor`'s second, non-reachable-
+ * inclusive one), not the export-driving one: ADR-040 keeps `IFoo` unconditional, so its member
+ * list cannot be reachability-driven the way the backing class and the `foo_*` exports are.
+ *
+ * Members with no plan are omitted silently. The skip was already reported once by the route that
+ * planned the member (the implementing class's own, or, for a reachable interface, the interface
+ * planner's own drops merged at the `callableCatalog` construction site), so a second diagnostic
+ * naming the same Kotlin declaration is duplicate noise.
+ */
 internal fun translateInterface(
   iface: KSClassDeclaration,
-  libraryName: String,
+  callableCatalog: ForwardCallablePlanCatalog,
   logger: KSPLogger,
 ): CirInterface {
   val name: String = iface.simpleName.asString()
   val interfaceName: String = "I$name"
+  val qualified: String = iface.qualifiedName?.asString() ?: name
 
   val typeParams: List<CirTypeParameter> = iface.typeParameters.map { param ->
     val variance: CirVariance = when (param.variance) {
@@ -1514,50 +1530,157 @@ internal fun translateInterface(
 
   val typeParamNames: Set<String> = typeParams.map { it.name }.toSet()
 
-  val properties: List<CirInterfaceProperty> = iface.getAllProperties()
+  // Read off the catalog rather than re-deriving a plan key per `getAllProperties()` /
+  // `getAllFunctions()` entry: the planner owns member ordering and naming, and a declaration walk
+  // re-derives the wrong plan as soon as two declared members share a simple name (ADR-090).
+  val propertyPlans: List<ForwardPropertyPlan> = callableCatalog.propertyPlans
+    .filter { plan -> plan.symbol.substringBeforeLast('.') == qualified }
+  val plannedProperties: List<CirInterfaceProperty> = propertyPlans.map { plan ->
+    // `hasSetter` deliberately stays at its default: ADR-113 leaves a `var` interface property
+    // rendering `{ get; }`, since `{ get; set; }` would be CS0535 against an implementing class
+    // whose own setter ADR-075 dropped.
+    CirInterfaceProperty(plan.publicName, ForwardCirPropertyProjection.publicType(plan))
+  }
+  val properties: List<CirInterfaceProperty> =
+    plannedProperties + typeParameterProperties(iface, typeParamNames, plannedProperties)
+
+  val methodPlans: List<ForwardCallablePlan> = callableCatalog.classMethods(qualified)
+  val plannedMethods: List<CirInterfaceMethod> = methodPlans.map { plan ->
+    CirInterfaceMethod(
+      name = plan.publicSignature.csharpName,
+      returnType = plan.publicSignature.result.forwardPublicCsharpType(),
+      parameters = plan.publicSignature.parameters.map { parameter ->
+        CirParameter(parameter.csharpName, parameter.type.forwardPublicCsharpType())
+      },
+    )
+  }
+
+  val methods: List<CirInterfaceMethod> =
+    plannedMethods + typeParameterMethods(iface, typeParamNames, plannedMethods)
+
+  emitInterfaceNameCollisions(interfaceName, iface, propertyPlans, methodPlans, logger)
+
+  return CirInterface(interfaceName, typeParams, properties, methods)
+}
+
+/**
+ * ADR-113 carve-out: an interface member whose signature mentions the interface's OWN class type
+ * parameter, which the forward planner has no entry for and which would otherwise vanish from
+ * `IFoo` (`interface Readable<out T> { fun read(): T }` losing `T Read();`).
+ *
+ * These members are not unbridgeable, they are unplanned: `T Read()` is valid C# inside
+ * `interface IReadable<T>` and rendered correctly before the plan became the source of truth. Per
+ * issue #111's rule a type parameter stays BARE, needing no qualification, which is why the
+ * pre-plan spelling was already right for exactly these members and no others.
+ *
+ * Deliberately narrow. The condition is "this signature names one of [typeParamNames]", NOT "the
+ * plan has no entry": a super-interface member, an unbridgeable collection and a `ByteArray?`
+ * return are all unplanned too, and every one of them must keep dropping rather than come back as
+ * a raw `IntPtr`.
+ */
+/** The property half of the ADR-113 carve-out documented on [typeParameterMethods]. */
+private fun typeParameterProperties(
+  iface: KSClassDeclaration,
+  typeParamNames: Set<String>,
+  planned: List<CirInterfaceProperty>,
+): List<CirInterfaceProperty> {
+  if (typeParamNames.isEmpty()) return emptyList()
+  val plannedNames: Set<String> = planned.map { it.name }.toSet()
+
+  return iface.getAllProperties()
     .filter { it.getVisibility() == Visibility.PUBLIC }
-    .map { prop ->
-      val propName: String = prop.simpleName.asString()
-      val propType: KSType = prop.type.resolve().expandAliases()
-      val csPropName: String = propName.replaceFirstChar { it.uppercase() }
-      val typeName: String = propType.declaration.simpleName.asString()
-      val csType: String =
-        if (typeName in typeParamNames) typeName
-        else mapInterfacePropertyType(propType)
-      CirInterfaceProperty(csPropName, csType)
+    .filter { prop -> prop.parentDeclaration == iface }
+    .mapNotNull { prop ->
+      val typeName: String = prop.type.resolve().expandAliases().declaration.simpleName.asString()
+      if (typeName !in typeParamNames) return@mapNotNull null
+      val csName: String = prop.simpleName.asString().replaceFirstChar { it.uppercase() }
+      if (csName in plannedNames) return@mapNotNull null
+      CirInterfaceProperty(csName, typeName)
     }
     .toList()
+}
 
-  val methods: List<CirInterfaceMethod> = iface.getAllFunctions()
+private fun typeParameterMethods(
+  iface: KSClassDeclaration,
+  typeParamNames: Set<String>,
+  planned: List<CirInterfaceMethod>,
+): List<CirInterfaceMethod> {
+  if (typeParamNames.isEmpty()) return emptyList()
+  val plannedShapes: Set<Pair<String, Int>> = planned.map { it.name to it.parameters.size }.toSet()
+
+  return iface.getAllFunctions()
     .filter { it.getVisibility() == Visibility.PUBLIC }
-    .filter { it.simpleName.asString() !in listOf("equals", "hashCode", "toString", "<init>") }
-    .map { method ->
-      val methodName: String = method.simpleName.asString()
-      val returnType = method.returnType?.resolve()?.expandAliases()
-      val kotlinReturnType: String = returnType?.declaration?.simpleName?.asString() ?: "Unit"
-      val csMethodName: String = methodName.replaceFirstChar { it.uppercase() }
+    .filter { it.simpleName.asString() !in setOf("equals", "hashCode", "toString", "<init>") }
+    .filter { method -> method.parentDeclaration == iface }
+    .mapNotNull { method ->
+      val returnName: String? = method.returnType?.resolve()?.expandAliases()
+        ?.declaration?.simpleName?.asString()
+      val paramNames: List<String> = method.parameters.map { param ->
+        param.type.resolve().expandAliases().declaration.simpleName.asString()
+      }
+      val mentionsTypeParameter: Boolean =
+        returnName in typeParamNames || paramNames.any { it in typeParamNames }
+      if (!mentionsTypeParameter) return@mapNotNull null
+
+      val csMethodName: String = method.simpleName.asString().replaceFirstChar { it.uppercase() }
+      // A planned member of the same shape would be a duplicate declaration (CS0111). Cannot
+      // happen today, since a class type parameter never classifies into a BridgeType, but the
+      // carve-out must not be the thing that discovers otherwise.
+      if (csMethodName to method.parameters.size in plannedShapes) return@mapNotNull null
 
       val csReturnType: String = when {
-        kotlinReturnType == "String" -> "string"
-        kotlinReturnType == "Unit" -> "void"
-        kotlinReturnType in typeParamNames -> kotlinReturnType
-        else -> mapReturnType(kotlinReturnType)
+        returnName in typeParamNames -> requireNotNull(returnName)
+        returnName == "String" -> "string"
+        returnName == "Unit" || returnName == null -> "void"
+        else -> mapReturnType(returnName)
       }
-
-      val params: List<CirParameter> = method.parameters.map { param ->
-        val resolved: KSType = param.type.resolve().expandAliases()
-        val kotlinType: String = resolved.declaration.simpleName.asString()
+      val params: List<CirParameter> = method.parameters.mapIndexed { index, param ->
+        val kotlinType: String = paramNames[index]
         val csType: String =
           if (kotlinType in typeParamNames) kotlinType
           else mapParamType(kotlinType)
         CirParameter((param.name?.asString() ?: "_").csharpParameterName(), csType)
       }
-
       CirInterfaceMethod(csMethodName, csReturnType, params)
     }
     .toList()
+}
 
-  return CirInterface(interfaceName, typeParams, properties, methods)
+/**
+ * ADR-113 Decision E, following ADR-110's settled precedent: a Kotlin interface declaring both
+ * `val tag` and `fun tag(n)` renders one C# member name twice, which is CS0102 inside an
+ * `interface` exactly as it is inside a class. Fatal with no rename, because renaming either member
+ * would be a silently different API.
+ *
+ * Runs over the POST-filter member lists. Issue #112's own Kotlin has `val collarTag` next to an
+ * unbridgeable `fun collarTag(code: Int): ByteArray?`, so the method has already dropped out and
+ * that hierarchy still builds; a pre-filter guard would fail a real reporter's working library.
+ */
+private fun emitInterfaceNameCollisions(
+  interfaceName: String,
+  iface: KSClassDeclaration,
+  propertyPlans: List<ForwardPropertyPlan>,
+  methodPlans: List<ForwardCallablePlan>,
+  logger: KSPLogger,
+) {
+  val propertyNames: Map<String, ForwardPropertyPlan> = propertyPlans.associateBy { it.publicName }
+  methodPlans.forEach { plan ->
+    val property: ForwardPropertyPlan = propertyNames[plan.publicSignature.csharpName] ?: return@forEach
+    val kotlinName: String = plan.invocation.symbol.substringAfterLast('.')
+    ForwardDiagnosticSink.emit(
+      listOf(
+        ForwardDiagnostic(
+          kind = ForwardDiagnosticKind.ERROR_CSHARP_NAME_COLLISION,
+          symbol = iface,
+          declaration = "$interfaceName.${plan.publicSignature.csharpName}",
+          reason = "the interface property '${property.kotlinName}' already claims that C# name, " +
+              "and C# cannot declare a property and a method with one name (CS0102)",
+          hint = "rename the Kotlin function '$kotlinName' or the property it collides with",
+        ),
+      ),
+      logger,
+    )
+  }
 }
 
 /**
@@ -1780,20 +1903,6 @@ internal fun translateValueClass(
     properties = properties,
     methods = methods,
   )
-}
-
-/**
- * ADR-040 fixture gap: never previously threaded [KSType.isMarkedNullable] — no prior fixture had
- * a nullable-typed interface property (ADR-039's `add*`/`remove*` interfaces are all
- * non-nullable). `Pet.nickname: String?` needs `IPet.Nickname` to render `string?`, or a
- * concrete (correctly nullable) implementer's getter mismatches the interface's (implicitly
- * non-nullable) one under nullable-reference analysis (CS8766).
- */
-private fun mapInterfacePropertyType(type: KSType): String {
-  val typeName: String = type.declaration.simpleName.asString()
-  val nullableSuffix: String = if (type.isMarkedNullable) "?" else ""
-  return if (typeName == "String") "string$nullableSuffix"
-  else "${mapParamType(typeName)}$nullableSuffix"
 }
 
 private fun translateCallbackMethod(

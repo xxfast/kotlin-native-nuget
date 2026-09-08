@@ -19,6 +19,13 @@ internal object ForwardCirPropertyProjection {
     return property(plan, receiver = "_handle", isStatic = false, isOverride = isOverride, isVirtual = isVirtual)
   }
 
+  /**
+   * ADR-113: the public C# spelling this projection gives [plan], exposed so the generated `IFoo`
+   * declaration can be projected from the *same* call the implementing class's property goes
+   * through. A second spelling of the same plan is what CS0738 is made of.
+   */
+  fun publicType(plan: ForwardPropertyPlan): String = plan.type.csharpType()
+
   fun staticProperty(plan: ForwardPropertyPlan, libraryName: String): List<CirMember> {
     require(plan.position == ForwardPropertyPosition.TOP_LEVEL || plan.position == ForwardPropertyPosition.COMPANION) {
       "Expected static property plan"
