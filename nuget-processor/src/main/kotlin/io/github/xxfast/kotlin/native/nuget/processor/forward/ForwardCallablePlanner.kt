@@ -11,6 +11,7 @@ import com.google.devtools.ksp.symbol.KSType
 import com.google.devtools.ksp.symbol.KSTypeParameter
 import com.google.devtools.ksp.symbol.KSValueParameter
 import com.google.devtools.ksp.getAllSuperTypes
+import com.google.devtools.ksp.symbol.KSAnnotated
 import com.google.devtools.ksp.symbol.Modifier
 import com.google.devtools.ksp.symbol.Visibility
 import io.github.xxfast.kotlin.native.nuget.processor.ExpectIndex
@@ -161,6 +162,17 @@ internal enum class ForwardPlanSkipReason(val droppedFromCSharp: Boolean) {
    *  be lowered to a C#-side bridge. Parameter positions of the same interface stay admissible:
    *  they only need `nuget{Iface}Value`. */
   UNIMPLEMENTABLE_BOUND_INTERFACE(droppedFromCSharp = true),
+
+  /** ADR-115: the member itself carries a `@RequiresOptIn` marker. Not a bridge limitation: the
+   *  declaration is fully supported and is out of scope by the author's own signal, the same
+   *  *kind* of skip as [EXCLUDED_DEPENDENCY_TYPE]. */
+  OPT_IN_MARKER(droppedFromCSharp = true),
+
+  /** ADR-115: the member's *type* carries a marker, so no C# type is declared for it. Its own
+   *  reason rather than [UNEXPORTED_DEPENDENCY_TYPE] (whose `include(...)` hint is actively wrong:
+   *  no export scope can admit a marked type) or [UNDECLARED_CLASS] (whose hint names nesting).
+   *  Both render through the one `SKIPPED_OPT_IN_MARKER` kind. */
+  OPT_IN_MARKER_TYPE(droppedFromCSharp = true),
 }
 
 internal sealed interface ForwardCallableCatalogEntry {
@@ -919,6 +931,13 @@ internal class ForwardCallablePlanner(
       .toList()
     val primary = cls.primaryConstructor
     val secondaries: List<KSFunctionDeclaration> = constructors.filter { it != primary }
+    // ADR-115: a marked primary-constructor `val`. The invariant is that the marked declaration
+    // never appears in a C# signature, and a constructor parameter cannot simply lose its slot:
+    // the generated Kotlin call is positional. A trailing marked parameter WITH a default is
+    // already expressible -- ADR-096's omitting overloads truncate it away -- so only the entries
+    // that still carry one are skipped, which leaves the shorter overload binding. An undefaulted
+    // or non-trailing one drops the constructor itself; the class stays reachable through
+    // factories, and `copy` follows the constructor for the same reason.
     return buildList {
       if (primary != null) add(constructorEntry(primary, owner, "${prefix}_create", "Create", result, ""))
       secondaries.forEachIndexed { index, constructor ->
@@ -960,6 +979,17 @@ internal class ForwardCallablePlanner(
       }
       if (cls.modifiers.contains(Modifier.DATA) && primary != null) {
         val receiver = ForwardReceiver.Handle(result)
+        val markedCopyParameter: String? = primary.parameters
+          .firstNotNullOfOrNull { parameter -> parameter.constructorOptInMarker(cls) }
+        if (markedCopyParameter != null) {
+          add(
+            ForwardCallableCatalogEntry.Skipped(
+              "$owner.copy", ForwardPlanSkipReason.OPT_IN_MARKER,
+              node = primary, detail = markedCopyParameter,
+            )
+          )
+          return@buildList
+        }
         add(
           planOrSkip(
             symbol = "$owner.copy",
@@ -1042,19 +1072,31 @@ internal class ForwardCallablePlanner(
     result: BridgeType.ObjectHandle,
     suffix: String,
     omitted: Int = 0,
-  ): ForwardCallableCatalogEntry = planOrSkip(
-    symbol = "$owner.<init>$suffix",
-    publicName = publicName,
-    exportName = export,
-    receiver = ForwardReceiver.Static,
-    parameters = constructor.parameters.dropLast(omitted).map { parameter ->
-      parameter.bridgeName() to classifier.classify(parameter.type.resolve())
-    },
-    result = result,
-    origin = ForwardCallableOrigin.CONSTRUCTOR,
-    target = owner,
-    node = constructor,
-  )
+  ): ForwardCallableCatalogEntry {
+    val cls: KSClassDeclaration? = constructor.parentDeclaration as? KSClassDeclaration
+    val marked: String? = constructor.parameters
+      .dropLast(omitted)
+      .firstNotNullOfOrNull { parameter -> parameter.constructorOptInMarker(cls) }
+    if (marked != null) {
+      return ForwardCallableCatalogEntry.Skipped(
+        "$owner.<init>$suffix", ForwardPlanSkipReason.OPT_IN_MARKER,
+        node = constructor, detail = marked,
+      )
+    }
+    return planOrSkip(
+      symbol = "$owner.<init>$suffix",
+      publicName = publicName,
+      exportName = export,
+      receiver = ForwardReceiver.Static,
+      parameters = constructor.parameters.dropLast(omitted).map { parameter ->
+        parameter.bridgeName() to classifier.classify(parameter.type.resolve())
+      },
+      result = result,
+      origin = ForwardCallableOrigin.CONSTRUCTOR,
+      target = owner,
+      node = constructor,
+    )
+  }
 
   /**
    * ADR-095/ADR-090 numbering: the first declared namesake keeps the bare name, the n-th further
@@ -1263,7 +1305,8 @@ internal class ForwardCallablePlanner(
     if (ineligible != null) {
       return ForwardCallableCatalogEntry.Skipped(
         symbol, requireNotNull(ineligible.inputSkipReason()), node = node,
-        detail = ineligible.actualTypeAliasTargetDetail()
+        detail = ineligible.optInMarkerDetail()
+          ?: ineligible.actualTypeAliasTargetDetail()
           ?: ineligible.unexportedDependencyDetail()
           ?: ineligible.undeclaredTypeDetail()
           ?: ineligible.sealedTypeDetail()
@@ -1468,6 +1511,16 @@ internal class ForwardCallablePlanner(
     isVirtual: Boolean = false,
     node: KSNode? = null,
   ): ForwardCallableCatalogEntry {
+    // ADR-115: the author's own signal, checked before any type is looked at -- nothing about the
+    // declaration is unsupported, it is simply not part of the exported surface. One check for
+    // every route that reaches the plan (class member, object member, companion, extension,
+    // top-level, value class), keyed on the declaration the entry already carries.
+    val optInMarker: String? = (node as? KSAnnotated)?.optInMarker()
+    if (optInMarker != null) {
+      return ForwardCallableCatalogEntry.Skipped(
+        symbol, ForwardPlanSkipReason.OPT_IN_MARKER, node = node, detail = optInMarker,
+      )
+    }
     // ADR-105 scope (d): the sealed rewrite is applied to every declared PARAMETER here, once,
     // rather than at each catalog site's `classifier.classify(...)` call, so the plan's public
     // signature, its ABI parameters and its input eligibility check all see the same rewritten
@@ -1488,7 +1541,8 @@ internal class ForwardCallablePlanner(
     if (ineligible != null) {
       return ForwardCallableCatalogEntry.Skipped(
         symbol, requireNotNull(ineligible.inputSkipReason()), node = node,
-        detail = ineligible.actualTypeAliasTargetDetail()
+        detail = ineligible.optInMarkerDetail()
+          ?: ineligible.actualTypeAliasTargetDetail()
           ?: ineligible.unexportedDependencyDetail()
           ?: ineligible.undeclaredTypeDetail()
           ?: ineligible.sealedTypeDetail()
@@ -1522,7 +1576,8 @@ internal class ForwardCallablePlanner(
     if (resultShape == null) {
       return ForwardCallableCatalogEntry.Skipped(
         symbol, requireNotNull(plannedResult.skipReason()), node = node,
-        detail = plannedResult.actualTypeAliasTargetDetail()
+        detail = plannedResult.optInMarkerDetail()
+          ?: plannedResult.actualTypeAliasTargetDetail()
           ?: plannedResult.unexportedDependencyDetail()
           ?: plannedResult.undeclaredTypeDetail()
           ?: plannedResult.sealedTypeDetail()
@@ -2479,6 +2534,21 @@ internal class ForwardCallablePlanner(
    *  this the hint for the element case would name no type at all. The siblings' equivalent gap
    *  (`List<UnexportedDep>`) is left exactly as it was, changing it would reword a shipped
    *  hint. */
+  /** ADR-115: `"<marked type>-><marker qualified name>"`, so the one diagnostic can name both
+   *  the type the author wrote and the marker that removed it, without a second detail slot. */
+  private fun BridgeType.optInMarkerDetail(): String? {
+    val unwrapped: BridgeType = unwrapNullable()
+    val candidate: BridgeType = when (unwrapped) {
+      is BridgeType.Collection ->
+        (unwrapped.element ?: unwrapped.key ?: unwrapped.value)?.unwrapNullable() ?: unwrapped
+
+      else -> unwrapped
+    }
+    val unsupported: BridgeType.Unsupported = candidate as? BridgeType.Unsupported ?: return null
+    val marker: String = unsupported.optInMarker ?: return null
+    return "${unsupported.rendered}->$marker"
+  }
+
   private fun BridgeType.undeclaredTypeDetail(): String? {
     val unwrapped: BridgeType = unwrapNullable()
     val candidate: BridgeType = when (unwrapped) {
@@ -2589,6 +2659,9 @@ internal class ForwardCallablePlanner(
     // land on either an out-of-scope module-local type or a cross-module one, and both must carry
     // this ADR's own diagnostic, not the generic UNEXPORTED_DEPENDENCY_TYPE include(...) hint.
     is BridgeType.Unsupported -> when {
+      // ADR-115: checked first -- a marked type is refused for a reason no scope change and no
+      // move-to-top-level can repair, so it must not pick up any of the hints below.
+      optInMarker != null -> ForwardPlanSkipReason.OPT_IN_MARKER_TYPE
       isActualTypeAliasTarget -> ForwardPlanSkipReason.ACTUAL_TYPEALIAS_TARGET
       // The classifier sets exactly one of these two on an enum, and never both: a nested enum
       // (whichever module it lives in) is undeclarable rather than out of scope, so it must not
@@ -2618,6 +2691,7 @@ internal class ForwardCallablePlanner(
         ForwardAdmissionRefusal.NOT_INCLUDED, null ->
           ForwardPlanSkipReason.UNEXPORTED_DEPENDENCY_TYPE
       }
+
       else -> ForwardPlanSkipReason.UNSUPPORTED
     }
   }

@@ -326,6 +326,9 @@ class ForwardBridgeTypeClassifierTest {
     // ADR-074: every fixture here is an ordinary (non-`expect`) declaration; the classifier now
     // reads this before anything else in `classifyNonNullable`.
     "isExpect" to false,
+    // ADR-115: the classifier reads the declaration's own annotations to recognise a
+    // `@RequiresOptIn` marker. Every fixture here is unmarked.
+    "getAnnotations" to emptySequence<com.google.devtools.ksp.symbol.KSAnnotation>(),
     // The C# spelling walks enclosing declarations (`nestedCsName`, so a sealed subclass reads
     // `Shape.Circle`); every fixture here is top-level, so the walk stops immediately.
     "getParentDeclaration" to parentDeclaration,

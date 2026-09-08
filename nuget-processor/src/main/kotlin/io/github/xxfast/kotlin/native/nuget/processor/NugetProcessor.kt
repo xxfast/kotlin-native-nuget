@@ -101,6 +101,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.isForwardLegacyAsy
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isValueClass
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyCollectionKinds
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyRefusedParameter
+import io.github.xxfast.kotlin.native.nuget.processor.forward.optInMarker
 import io.github.xxfast.kotlin.native.nuget.processor.forward.planFor
 import io.github.xxfast.kotlin.native.nuget.processor.forward.toDiagnosticKind
 
@@ -153,6 +154,15 @@ internal fun warnDroppedForwardCallables(
         dropped.reason == ForwardPlanSkipReason.REFERENCE_UNDERLYING_VALUE_CLASS_CONSTRUCTOR
       ) {
         "a value class over a reference underlying carries no constructor across the bridge"
+        // ADR-115: neither of these is a type combination and neither is unsupported, so the
+        // generic sentence below would be wrong on both counts. The second special case in this
+        // `if` is the usual signal that it should become a `reason.diagnosticReason()` enum
+        // method (an open ROADMAP Phase 3 item, deliberately not done here).
+      } else if (dropped.reason == ForwardPlanSkipReason.OPT_IN_MARKER) {
+        "it is marked with the opt-in marker `${dropped.detail ?: "an opt-in marker"}`"
+      } else if (dropped.reason == ForwardPlanSkipReason.OPT_IN_MARKER_TYPE) {
+        val marked: String = dropped.detail?.substringBefore("->") ?: "its type"
+        "its type `$marked` is marked with an opt-in marker"
       } else {
         "its ${dropped.reason} type combination is not supported"
       },
@@ -193,9 +203,17 @@ internal fun warnDroppedForwardProperties(
   logger: KSPLogger,
 ) {
   val diagnostics: List<ForwardDiagnostic> = catalog.droppedProperties.map { dropped ->
-    // ADR-088: a bound C# interface is bridgeable, just not at a property; its message says so
-    // rather than telling the author to stop using the type.
-    if (dropped.boundInterface) {
+    // ADR-115: the author's own signal, named as such. Checked first: the property's type is
+    // typically fine, so every message below would send the author after the wrong declaration.
+    if (dropped.optInMarker != null) {
+      ForwardDiagnostic(
+        kind = ForwardDiagnosticKind.SKIPPED_OPT_IN_MARKER,
+        symbol = dropped.node,
+        declaration = dropped.symbol,
+        reason = "it is marked with the opt-in marker `${dropped.optInMarker}`",
+        hint = ForwardPlanSkipReason.OPT_IN_MARKER.diagnosticHint(dropped.optInMarker),
+      )
+    } else if (dropped.boundInterface) {
       ForwardDiagnostic(
         kind = ForwardDiagnosticKind.SKIPPED_BOUND_TYPE_POSITION,
         symbol = dropped.node,
@@ -354,6 +372,17 @@ class NugetProcessor(
       return ownScope.covers(pkg, qualifiedName)
     }
 
+    // ADR-115: an opt-in-marked declaration is refused at the same place a package-scope refusal
+    // is, so no C# type is declared for it and nothing in `CNameExports.kt` names it -- which is
+    // the half of issue #113 that broke the generated file's own compile. Applied on top of the
+    // scope predicate rather than inside it, so the marked declarations stay enumerable for the
+    // diagnostic below. The reachability closure takes the composed predicate too, so a marked
+    // dependency-module type is never admitted either.
+    fun isMarkedOptIn(declaration: KSDeclaration): Boolean = declaration.optInMarker() != null
+
+    fun isExportedAndUnmarked(declaration: KSDeclaration): Boolean =
+      isExported(declaration) && !isMarkedOptIn(declaration)
+
     // ADR-074: for a native compilation `getAllFiles()` returns both halves of every
     // `expect`/`actual` pair as two files of one compilation (Verified, spike finding 1), so this
     // raw list is the shared input for the `isExpect` filter below, the by-name expect index, and
@@ -371,7 +400,30 @@ class NugetProcessor(
       .filter { !it.isExpect }
       .toList()
 
-    val allDeclarations: List<KSDeclaration> = candidateDeclarations.filter(::isExported)
+    val allDeclarations: List<KSDeclaration> =
+      candidateDeclarations.filter(::isExportedAndUnmarked)
+
+    // ADR-115: named once, where the author wrote the marker. A marked *member* of an exported
+    // class skips per-callable in the planner instead; only a declaration the scope would
+    // otherwise have exported is reported here, so an out-of-scope marked declaration stays silent
+    // exactly as an unmarked one does.
+    ForwardDiagnosticSink.emit(
+      candidateDeclarations
+        .filter { declaration -> isExported(declaration) && isMarkedOptIn(declaration) }
+        .map { declaration ->
+          ForwardDiagnostic(
+            kind = ForwardDiagnosticKind.SKIPPED_OPT_IN_MARKER,
+            symbol = declaration,
+            declaration = declaration.qualifiedName?.asString()
+              ?: declaration.simpleName.asString(),
+            reason = "it is marked with the opt-in marker " +
+                "`${declaration.optInMarker()}`",
+            hint = ForwardPlanSkipReason.OPT_IN_MARKER
+              .diagnosticHint(declaration.optInMarker()),
+          )
+        },
+      logger,
+    )
 
     // Issue #55: scoping that admits nothing used to be indistinguishable from a module with no
     // public API at all: `packNuget` stayed green with no `Interop.cs` in the package. Say so
@@ -565,7 +617,7 @@ class NugetProcessor(
     // the same `isExported` predicate the roots already did, and only when the module
     // crosses into `include`/`rootPackage` scope at all (admission rule 4).
     val reachability: ForwardReachabilityResult = ForwardReachabilityClosure(
-      isExported = ::isExported,
+      isExported = ::isExportedAndUnmarked,
       isExcluded = { declaration ->
         ownScope.excludes(declaration.packageName.asString(), declaration.qualifiedName?.asString())
       },

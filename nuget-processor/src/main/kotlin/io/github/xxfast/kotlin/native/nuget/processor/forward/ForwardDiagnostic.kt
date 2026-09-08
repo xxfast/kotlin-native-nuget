@@ -168,6 +168,18 @@ internal enum class ForwardDiagnosticKind(
    *  every other root bucket. */
   SKIPPED_ANNOTATION_CLASS(ForwardDiagnosticSeverity.WARNING),
 
+  /** ADR-115: a declaration carrying a `@RequiresOptIn`-meta-annotated marker, or a member whose
+   *  type carries one. C# has no way to honour a Kotlin opt-in requirement -- a C# consumer of the
+   *  generated binding would see a plain public member with no signal at all -- so a marked
+   *  declaration is not exported, at any `RequiresOptIn.Level`. WARNING, like every other
+   *  `SKIPPED_*`: the drop is a behaviour change the author needs to see, and the message names
+   *  the marker's fully-qualified name so it is findable.
+   *
+   *  One kind for both `OPT_IN_MARKER` (the declaration itself) and `OPT_IN_MARKER_TYPE` (its
+   *  type), exactly as `UNEXPORTED_DEPENDENCY_TYPE` / `EXCLUDED_DEPENDENCY_TYPE` share one: the
+   *  member is dropped for the same one reason, and only the hint differs. */
+  SKIPPED_OPT_IN_MARKER(ForwardDiagnosticSeverity.WARNING),
+
   /** A public declaration nested inside an exported class-like declaration: a `class`, `object`,
    *  `interface` or `enum class`. Every root bucket in `NugetProcessor` filters
    *  `parentDeclaration == null` and the ADR-066 closure refuses to admit a nested dependency
@@ -379,6 +391,11 @@ internal fun ForwardPlanSkipReason.toDiagnosticKind(): ForwardDiagnosticKind = w
 
   ForwardPlanSkipReason.ACTUAL_TYPEALIAS_TARGET ->
     ForwardDiagnosticKind.SKIPPED_ACTUAL_TYPEALIAS_TARGET
+
+  // ADR-115: one kind for the declaration-marked and type-marked halves; only the hint differs.
+  ForwardPlanSkipReason.OPT_IN_MARKER,
+  ForwardPlanSkipReason.OPT_IN_MARKER_TYPE,
+    -> ForwardDiagnosticKind.SKIPPED_OPT_IN_MARKER
 
   ForwardPlanSkipReason.BOUND_INTERFACE_POSITION ->
     ForwardDiagnosticKind.SKIPPED_BOUND_TYPE_POSITION
@@ -598,6 +615,25 @@ internal fun ForwardPlanSkipReason.diagnosticHint(
         "declared in C# (only top-level ones are, plus sealed subclasses and companion objects), " +
         "so every member typed with it is skipped rather than emitted as a dangling reference; " +
         "move it to the top level of its file"
+  }
+
+  // ADR-115: no `include(...)`, no move-to-top-level and no scope change can repair either of
+  // these, so the hint names the only two things that can: remove the marker, or stop exposing the
+  // declaration publicly.
+  ForwardPlanSkipReason.OPT_IN_MARKER ->
+    "a C# consumer has no way to opt in, so an opt-in-required declaration is not exported; " +
+        "remove the ${detail?.let { "`$it`" } ?: "marker"} annotation from it if it is meant to " +
+        "be part of the C# API, or leave it marked if it is library-internal"
+
+  // The reason line above already blames the type and says it is marked; this only needs to add
+  // the marker's name and the consequence, not restate the reason.
+  ForwardPlanSkipReason.OPT_IN_MARKER_TYPE -> {
+    val parts: List<String>? = detail?.split("->", limit = 2)?.takeIf { it.size == 2 }
+    val type: String = parts?.get(0) ?: "its type"
+    val marker: String = parts?.get(1) ?: "an opt-in marker"
+    "no C# type is declared for `$type` (opt-in marker `$marker`), so every member typed with " +
+        "it is skipped rather than emitted as a dangling reference; remove the marker from " +
+        "`$type`, or expose a type that is not opt-in-required instead"
   }
 
   ForwardPlanSkipReason.UNIMPLEMENTABLE_BOUND_INTERFACE ->

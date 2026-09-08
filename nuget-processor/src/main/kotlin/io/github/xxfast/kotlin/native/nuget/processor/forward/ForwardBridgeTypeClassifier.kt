@@ -130,6 +130,18 @@ internal class ForwardBridgeTypeClassifier(
     specializedProtocol(qualifiedName)?.let { return it }
     collectionType(qualifiedName, type.arguments)?.let { return it }
 
+    // ADR-115: a class/object/interface/enum/value class carrying a `@RequiresOptIn` marker is
+    // never declared in C#, so every member typed with it skips -- ahead of every membership test
+    // below, whose `include(...)`/move-to-top-level hints cannot repair a marked type.
+    val marker: String? = classDeclaration.optInMarker()
+    if (marker != null) {
+      return BridgeType.Unsupported(
+        qualifiedName,
+        "marked with the opt-in marker `$marker`, so no C# type is declared for it",
+        optInMarker = marker,
+      )
+    }
+
     if (classDeclaration.classKind == ClassKind.ENUM_CLASS) {
       // The membership gate the enum branch never had. `exportedObjectHandles` holds exactly the
       // enums the renderer declares (NugetProcessor's `enums` list feeds both), so an enum outside

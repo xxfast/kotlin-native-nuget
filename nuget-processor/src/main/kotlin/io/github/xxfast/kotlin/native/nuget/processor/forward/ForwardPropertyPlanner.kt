@@ -45,6 +45,10 @@ internal data class ForwardDroppedProperty(
    *  `SKIPPED_BOUND_TYPE_POSITION` kind instead of the generic unsupported-property one, whose
    *  "expose a property whose type is not IFeedable" hint would be actively misleading. */
   val boundInterface: Boolean = false,
+  /** ADR-115: the fully-qualified name of the `@RequiresOptIn` marker on the property or its
+   *  setter. Routes the diagnostic to `SKIPPED_OPT_IN_MARKER`, whose message names the marker
+   *  rather than blaming the property's (perfectly bridgeable) type. */
+  val optInMarker: String? = null,
 )
 
 /**
@@ -272,6 +276,16 @@ internal class ForwardPropertyPlanner(
     // (top-level, extension, companion, interface dispatch).
     superClass: KSClassDeclaration? = null,
   ): ForwardPropertyPlan? {
+    // ADR-115: the author's own signal, ahead of any type question -- nothing about the property
+    // is unsupported. `@set:Marker` on a `var` skips the whole property rather than exporting it
+    // get-only: an accessor-level partial projection does not exist in the forward plan.
+    val optInMarker: String? = prop.optInMarker()
+    if (optInMarker != null) {
+      dropped.add(
+        ForwardDroppedProperty(symbol, prop, typeDescription = "", optInMarker = optInMarker),
+      )
+      return null
+    }
     val type: BridgeType = classifier.classify(prop.type.resolve()).sealedAsHandle()
     // ADR-075: getter eligibility never depended on mutability or on the collection facet — a
     // `Collection` (nullable or not) plans whenever the C# read can spell every component
