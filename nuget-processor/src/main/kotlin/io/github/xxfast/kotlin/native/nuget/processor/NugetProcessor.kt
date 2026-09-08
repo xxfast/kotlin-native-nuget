@@ -97,7 +97,10 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardReachabilit
 import io.github.xxfast.kotlin.native.nuget.processor.forward.addForwardKotlinPlanExport
 import io.github.xxfast.kotlin.native.nuget.processor.forward.calls
 import io.github.xxfast.kotlin.native.nuget.processor.forward.diagnosticHint
+import io.github.xxfast.kotlin.native.nuget.processor.forward.isForwardLegacyAsyncRoute
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isValueClass
+import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyCollectionKinds
+import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyRefusedParameter
 import io.github.xxfast.kotlin.native.nuget.processor.forward.planFor
 import io.github.xxfast.kotlin.native.nuget.processor.forward.toDiagnosticKind
 
@@ -233,6 +236,51 @@ internal fun warnDroppedForwardExtensionReceivers(
       hint = "declare the property on a class, String, primitive, or value class receiver, or " +
           "expose a top-level getter function instead",
     )
+  }
+  ForwardDiagnosticSink.emit(diagnostics, logger)
+}
+
+/**
+ * ADR-114: the refusal arm of the legacy Flow/StateFlow and suspend routes. Those routes marshal a
+ * *collection* parameter, and refuse every other generic one by name rather than emitting the
+ * `entry: Pair` that breaks the generated file's compile outright (issue #109). Emitted from one
+ * place, so the Kotlin export builders and the CIR translators, which both drop the same members
+ * silently, cannot double-report or disagree about which member vanished.
+ */
+internal fun warnRefusedLegacyRouteParameters(
+  classes: List<KSClassDeclaration>,
+  suspendFunctions: List<KSFunctionDeclaration>,
+  classifier: ForwardBridgeTypeClassifier,
+  logger: KSPLogger,
+) {
+  fun diagnostic(
+    member: KSFunctionDeclaration,
+    declaration: String,
+    refused: String,
+  ): ForwardDiagnostic = ForwardDiagnostic(
+    kind = ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_INPUT,
+    symbol = member,
+    declaration = declaration,
+    reason = "a Flow-returning or suspend member can marshal a collection parameter, but not " +
+        "the generic type of $refused",
+    hint = "pass the values as a List/Set/Map, or as separate parameters",
+  )
+
+  val diagnostics: List<ForwardDiagnostic> = buildList {
+    classes.forEach { cls ->
+      val owner: String = cls.simpleName.asString()
+      cls.getAllFunctions()
+        .filter { method -> method.getVisibility() == Visibility.PUBLIC }
+        .filter { method -> method.isForwardLegacyAsyncRoute() }
+        .forEach { method ->
+          val refused: String = classifier.legacyRefusedParameter(method.parameters) ?: return@forEach
+          add(diagnostic(method, "$owner.${method.simpleName.asString()}", refused))
+        }
+    }
+    suspendFunctions.forEach { func ->
+      val refused: String = classifier.legacyRefusedParameter(func.parameters) ?: return@forEach
+      add(diagnostic(func, func.simpleName.asString(), refused))
+    }
   }
   ForwardDiagnosticSink.emit(diagnostics, logger)
 }
@@ -785,18 +833,19 @@ class NugetProcessor(
     warnDroppedForwardPropertySetters(callableCatalog, logger)
     warnDroppedForwardProperties(callableCatalog, logger)
     warnDroppedForwardExtensionReceivers(callableCatalog, logger)
+    warnRefusedLegacyRouteParameters(classes, suspendFunctions, forwardClassifier, logger)
 
     val cNameExports: FileSpec = generateCNameWrappers(
       functions, genericFunctions, extensionFunctions, extensionProperties,
       classes, genericClasses, enums, sealedClasses, objects, properties,
       valueClasses, suspendFunctions, callableCatalog, deps, reachableInterfaces,
-      exportedObjectHandles,
+      exportedObjectHandles, forwardClassifier,
     )
     val bindings: CsharpBindings = generateCSharpBindings(
       functions, genericFunctions, extensionFunctions, extensionProperties,
       allClasses, enums, interfaces, sealedClasses, objects, properties,
       constProperties, valueClasses, suspendFunctions, callableCatalog, deps, reachableInterfaces,
-      expects,
+      expects, forwardClassifier,
     )
 
     // ADR-064: an ERROR_* diagnostic (e.g. ERROR_CSHARP_SIGNATURE_COLLISION, ADR-034) already
@@ -894,6 +943,8 @@ class NugetProcessor(
     deps: Dependencies,
     reachableInterfaces: List<KSClassDeclaration>,
     expects: ExpectIndex,
+    // ADR-114: the same instance the Kotlin half classifies with.
+    forwardClassifier: ForwardBridgeTypeClassifier,
   ): CsharpBindings {
     val cirFile: CirFile = translate(
       context,
@@ -914,6 +965,7 @@ class NugetProcessor(
       callableCatalog,
       reachableInterfaces,
       expects,
+      forwardClassifier,
     )
 
     val csharp: String = renderer.render(cirFile)
@@ -949,6 +1001,8 @@ class NugetProcessor(
     // `forwardSuperClass(exportedTypes)` predicate — the same set, bucket for bucket, the two
     // planners ask, so the Kotlin half cannot drift from the C# half about a dropped base class.
     exportedTypes: Set<String>,
+    // ADR-114: the legacy Flow/suspend export builders classify their own generic parameters.
+    forwardClassifier: ForwardBridgeTypeClassifier,
   ): FileSpec {
     val builder: FileSpec.Builder = FileSpec
       .builder("io.github.xxfast.kotlin.native.nuget.generated", "CNameExports")
@@ -975,7 +1029,9 @@ class NugetProcessor(
       builder.addGenericFunctionExports(func)
     }
 
-    classes.forEach { builder.addClassExports(it, callableCatalog, exportedTypes) }
+    classes.forEach {
+      builder.addClassExports(it, callableCatalog, forwardClassifier, exportedTypes)
+    }
     classes.forEach { builder.addCompanionExports(it, callableCatalog) }
     genericClasses.forEach { builder.addGenericClassExports(it) }
     enums.forEach { builder.addEnumExports(it) }
@@ -1132,13 +1188,13 @@ class NugetProcessor(
 
     suspendFunctions.forEach { func ->
       builder.addImport(func.packageName.asString(), func.simpleName.asString())
-      builder.addSuspendFunctionExports(func)
+      builder.addSuspendFunctionExports(func, forwardClassifier)
     }
 
     classes.forEach { cls ->
       val hasSuspendMethods: Boolean = cls.getAllFunctions()
         .any { it.modifiers.contains(Modifier.SUSPEND) }
-      if (hasSuspendMethods) builder.addSuspendClassMethodExports(cls)
+      if (hasSuspendMethods) builder.addSuspendClassMethodExports(cls, forwardClassifier)
     }
 
     properties.forEach { prop ->
@@ -1219,6 +1275,25 @@ class NugetProcessor(
       }
     }
 
+    // ADR-114: the Flow/StateFlow and suspend legacy routes carry no ForwardCallablePlan, so
+    // `plannedCollectionKinds()` below cannot see a collection at a parameter position on one of
+    // them, and none of the declaration scans looks there either. Without this disjunct the C#
+    // side calls `nuget_list_create` against a native library that never exported it, and the
+    // symptom is an EntryPointNotFoundException at first call rather than a build failure.
+    fun legacyRouteCollectionKinds(): Sequence<CollectionKind> = sequence {
+      classes.forEach { cls ->
+        cls.getAllFunctions()
+          .filter { method -> method.getVisibility() == Visibility.PUBLIC }
+          .filter { method -> method.isForwardLegacyAsyncRoute() }
+          .forEach { method ->
+            yieldAll(forwardClassifier.legacyCollectionKinds(method.parameters))
+          }
+      }
+      suspendFunctions.forEach { func ->
+        yieldAll(forwardClassifier.legacyCollectionKinds(func.parameters))
+      }
+    }
+
     fun plannedCollectionKinds(): Sequence<CollectionKind> = sequence {
       callableCatalog.plans.forEach { plan -> yieldAll(plan.collectionKinds()) }
       callableCatalog.propertyPlans.forEach { plan ->
@@ -1229,6 +1304,9 @@ class NugetProcessor(
     val needsListSupport: Boolean = classesHaveLists || functionsReturnLists ||
         sealedClassesHaveLists || classMethodsReturnLists || extensionFunctionsReturnLists ||
         plannedCollectionKinds().any { kind ->
+          kind == CollectionKind.LIST || kind == CollectionKind.MUTABLE_LIST
+        } ||
+        legacyRouteCollectionKinds().any { kind ->
           kind == CollectionKind.LIST || kind == CollectionKind.MUTABLE_LIST
         }
 
@@ -1256,6 +1334,9 @@ class NugetProcessor(
     val needsMapSupport: Boolean = classesHaveMaps || functionsReturnMaps || sealedClassesHaveMaps ||
         plannedCollectionKinds().any { kind ->
           kind == CollectionKind.MAP || kind == CollectionKind.MUTABLE_MAP
+        } ||
+        legacyRouteCollectionKinds().any { kind ->
+          kind == CollectionKind.MAP || kind == CollectionKind.MUTABLE_MAP
         }
 
     val setTypes: Set<String> = setOf("kotlin.collections.Set", "kotlin.collections.MutableSet")
@@ -1281,6 +1362,9 @@ class NugetProcessor(
 
     val needsSetSupport: Boolean = classesHaveSets || functionsReturnSets || sealedClassesHaveSets ||
         plannedCollectionKinds().any { kind ->
+          kind == CollectionKind.SET || kind == CollectionKind.MUTABLE_SET
+        } ||
+        legacyRouteCollectionKinds().any { kind ->
           kind == CollectionKind.SET || kind == CollectionKind.MUTABLE_SET
         }
 

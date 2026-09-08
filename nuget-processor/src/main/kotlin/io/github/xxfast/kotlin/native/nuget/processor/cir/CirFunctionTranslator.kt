@@ -9,6 +9,8 @@ import io.github.xxfast.kotlin.native.nuget.processor.csharpParameterName
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnostic
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnosticKind
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnosticSink
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeTypeClassifier
+import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyRefusedParameter
 import io.github.xxfast.kotlin.native.nuget.processor.toCName
 import io.github.xxfast.kotlin.native.nuget.processor.toCSharpName
 
@@ -624,7 +626,12 @@ internal fun translateSuspendFunction(
   tracker: CollectionHelperTracker,
   exportedTypes: Set<String>,
   logger: KSPLogger,
+  // ADR-114: the top-level suspend route compiles today (its parameters keep their type
+  // arguments), but hands C# an IntPtr no caller can produce. Same classification as every other
+  // legacy route.
+  classifier: ForwardBridgeTypeClassifier,
 ): List<CirMember> {
+  if (classifier.legacyRefusedParameter(func.parameters) != null) return emptyList()
   val cname: String = toCName(func.simpleName.asString())
   // ADR-110: escape after the case change, so `suspend fun lock()` renders `LockAsync`.
   val csName: String = toCSharpName(cname.replaceFirstChar { it.uppercase() })
@@ -632,10 +639,7 @@ internal fun translateSuspendFunction(
   val kotlinReturnType: String = returnType?.declaration?.simpleName?.asString() ?: "Unit"
   val isUnit: Boolean = kotlinReturnType == "Unit"
 
-  val params: List<CirParameter> = func.parameters.map { param ->
-    val kotlinType: String = param.type.resolve().expandAliases().declaration.simpleName.asString()
-    CirParameter((param.name?.asString() ?: "_").csharpParameterName(), mapParamType(kotlinType))
-  }
+  val params: List<CirParameter> = legacyRouteParameters(func.parameters, classifier, tracker)
 
   // Issue #108: a nullable Kotlin return has to reach C# as `Task<T?>`, otherwise a null result
   // is read back as a `0` primitive or as a live wrapper over `IntPtr.Zero`.

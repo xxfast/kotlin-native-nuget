@@ -514,6 +514,11 @@ data class CirParameter(
   // where e.g. `int` and `int?` really are distinct overloads). Defaults to true so call sites
   // that never populate it keep today's "compare the raw rendered string" behavior.
   val isReferenceType: Boolean = true,
+  // ADR-114: the C# expression building this parameter's native wire handle, for a collection
+  // parameter on a legacy Flow/StateFlow or suspend route (`NugetMarshal.CreateList(kinds)`). The
+  // renderer emits it immediately before the native call and disposes it in a `finally`; the
+  // call passes `<name>Handle` instead of `<name>`. Null for every other parameter shape.
+  val collectionCreate: String? = null,
 )
 
 data class CirConst(

@@ -3,6 +3,8 @@ package io.github.xxfast.kotlin.native.nuget.processor.cir
 import com.google.devtools.ksp.processing.KSPLogger
 import io.github.xxfast.kotlin.native.nuget.processor.ExpectIndex
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBoundInterface
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeTypeClassifier
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeTypeContext
 import com.google.devtools.ksp.symbol.ClassKind
 import com.google.devtools.ksp.symbol.KSClassDeclaration
 import com.google.devtools.ksp.symbol.KSDeclaration
@@ -118,6 +120,10 @@ internal fun translate(
   // `actual fun`/`val` can take its C# static class name from the *expect's* file instead of its
   // own (per-target) file.
   expects: ExpectIndex = ExpectIndex(),
+  // ADR-114: supplied by `NugetProcessor` so both halves classify legacy-route parameters with
+  // the identical instance. Defaulted to null for the translator-level tests, which build one
+  // from the export set below rather than threading a classifier through every fixture.
+  forwardClassifier: ForwardBridgeTypeClassifier? = null,
 ): CirFile {
   val (genericClasses, regularClasses) = classes.partition { it.typeParameters.isNotEmpty() }
 
@@ -132,6 +138,16 @@ internal fun translate(
     objects.forEach { add(it.qualifiedName?.asString() ?: "") }
     remove("")
   }
+
+  // ADR-114: the processor threads its own instance so both halves classify identically. The
+  // fallback keeps the translator-level tests (which never build one) on the same code path.
+  val classifier: ForwardBridgeTypeClassifier = forwardClassifier ?: ForwardBridgeTypeClassifier(
+    ForwardBridgeTypeContext(
+      exportedObjectHandles = exportedTypes,
+      rootPackage = context.rootPackage,
+      rootNamespace = context.rootNamespace,
+    ),
+  )
 
   fun namespaceOf(pkg: String): String =
     mapPackageToNamespace(pkg, context.rootPackage, context.rootNamespace)
@@ -311,7 +327,9 @@ internal fun translate(
     val (namespace, fileClassName) = key
     val finalClassName: String = resolveStaticClassName(fileClassName, namespace)
     val members: List<CirMember> = funcs.flatMap { function ->
-      translateSuspendFunction(function, context.libraryName, tracker, exportedTypes, logger)
+      translateSuspendFunction(
+        function, context.libraryName, tracker, exportedTypes, logger, classifier,
+      )
     }
     namespaces.mergeStaticClass(namespace, finalClassName, members)
   }
@@ -344,6 +362,7 @@ internal fun translate(
       namespaceOf(cls.packageName.asString()),
       translateClass(
         cls, context.libraryName, tracker, exportedTypes, logger, callableCatalog, context,
+        classifier,
       ),
     )
   }

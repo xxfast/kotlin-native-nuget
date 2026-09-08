@@ -18,7 +18,13 @@ import io.github.xxfast.kotlin.native.nuget.processor.cir.SUSPEND_LAMBDA_TYPES
 import io.github.xxfast.kotlin.native.nuget.processor.cir.expandAliases
 import io.github.xxfast.kotlin.native.nuget.processor.cir.isMutableStateFlowElementObject
 import io.github.xxfast.kotlin.native.nuget.processor.cir.isMutableStateFlowElementSupported
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeTypeClassifier
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallablePlan
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardLegacyParameterShape
+import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyLoweredName
+import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyLoweringStatement
+import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyParameterShapes
+import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyRefusedParameter
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardSuperClass
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isForwardMemberOf
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallablePlanCatalog
@@ -40,6 +46,9 @@ import io.github.xxfast.kotlin.native.nuget.processor.toCName
 internal fun FileSpec.Builder.addClassExports(
   cls: KSClassDeclaration,
   callableCatalog: ForwardCallablePlanCatalog,
+  // ADR-114: the legacy flow route classifies its own parameters, so a collection crosses as a
+  // handle and any other generic parameter is refused by name instead of emitting `kinds: List`.
+  classifier: ForwardBridgeTypeClassifier,
   // ADR-101 amendment: the export set, so this emitter asks the *gated* has-superclass predicate
   // the planners ask. An unexported base is base-less here too, so the base's concrete members
   // are emitted with this class as receiver instead of being left to a C# base that never exists.
@@ -213,6 +222,9 @@ internal fun FileSpec.Builder.addClassExports(
       ?.expandAliases()?.declaration?.qualifiedName?.asString()
     returnQualified == "kotlinx.coroutines.flow.Flow" || returnQualified in STATE_FLOW_TYPES
   }
+    // ADR-114: a generic parameter this route cannot marshal skips the member entirely rather
+    // than emitting non-compiling Kotlin. `NugetProcessor` names it in a SKIPPED_UNSUPPORTED_INPUT.
+    .filter { method -> classifier.legacyRefusedParameter(method.parameters) == null }
 
   val allNonFlowMethods: List<KSFunctionDeclaration> = allRegularMethods.filter { method ->
     val returnQualified: String? = method.returnType?.resolve()
@@ -269,8 +281,29 @@ internal fun FileSpec.Builder.addClassExports(
     val elementNullable: Boolean = isStateFlowMethod && flowElementType?.isMarkedNullable == true
     val memberNullable: Boolean = isStateFlowMethod && returnType?.isMarkedNullable == true
 
+    // ADR-114: a collection parameter is dereferenced and copied out of its wire container
+    // eagerly, before `launch`, and the member is called with that local instead of the raw
+    // handle. Every other parameter keeps its shipped spelling.
+    val paramShapes: List<ForwardLegacyParameterShape> =
+      classifier.legacyParameterShapes(method.parameters)
+
     val paramCall: String = method.parameters
-      .joinToString(", ") { it.name?.asString() ?: "_" }
+      .mapIndexed { index, param ->
+        val paramName: String = param.name?.asString() ?: "_"
+        if (paramShapes[index] is ForwardLegacyParameterShape.Marshalled) {
+          legacyLoweredName(paramName)
+        } else paramName
+      }
+      .joinToString(", ")
+
+    val paramPrelude: String = buildString {
+      method.parameters.forEachIndexed { index, param ->
+        val shape: ForwardLegacyParameterShape = paramShapes[index]
+        if (shape is ForwardLegacyParameterShape.Marshalled) {
+          appendLine(legacyLoweringStatement(param.name?.asString() ?: "_", shape.type))
+        }
+      }
+    }
 
     val builder: FunSpec.Builder = FunSpec
       .builder("export_${prefix}_${cname}_collect")
@@ -279,11 +312,18 @@ internal fun FileSpec.Builder.addClassExports(
       .addParameter("scopeHandle", cOpaquePointer)
 
     fun FunSpec.Builder.addFlowParameters() {
-      method.parameters.forEach { param ->
+      method.parameters.forEachIndexed { index, param ->
+        val paramName: String = param.name?.asString() ?: "_"
+        // ADR-114: the wire container is a handle to MutableList<Any?>/MutableSet<Any?>, never the
+        // declared collection type, so the ABI slot is a COpaquePointer like every other handle.
+        if (paramShapes[index] is ForwardLegacyParameterShape.Marshalled) {
+          addParameter(paramName, cOpaquePointer)
+          return@forEachIndexed
+        }
         val resolved: KSType = param.type.resolve().expandAliases()
         val type: String = resolved.declaration.qualifiedName?.asString()
           ?: resolved.declaration.simpleName.asString()
-        addParameter(param.name?.asString() ?: "_", ClassName.bestGuess(type))
+        addParameter(paramName, ClassName.bestGuess(type))
       }
     }
 
@@ -297,7 +337,7 @@ internal fun FileSpec.Builder.addClassExports(
       .returns(cOpaquePointer)
       .addCode(
         buildFlowMethodCollectBody(
-          qualifiedName, methodName, paramCall, flowElementQualified,
+          qualifiedName, methodName, paramCall, paramPrelude, flowElementQualified,
           elementNullable, memberNullable,
         )
       )
@@ -323,7 +363,7 @@ internal fun FileSpec.Builder.addClassExports(
         )
         .addCode(
           buildStateFlowValueMethodBody(
-            qualifiedName, methodName, paramCall, elementNullable, memberNullable,
+            qualifiedName, methodName, paramCall, paramPrelude, elementNullable, memberNullable,
           )
         )
 
@@ -341,7 +381,9 @@ internal fun FileSpec.Builder.addClassExports(
 
         hasValueBuilder
           .returns(Boolean::class)
-          .addCode(buildStateFlowHasValueMethodBody(qualifiedName, methodName, paramCall))
+          .addCode(
+            buildStateFlowHasValueMethodBody(qualifiedName, methodName, paramCall, paramPrelude)
+          )
 
         addFunction(hasValueBuilder.build())
       }
@@ -366,7 +408,9 @@ internal fun FileSpec.Builder.addClassExports(
           .addParameter("value", valueParamType)
           .addParameter("errorOut", cOpaquePointer.copy(nullable = true))
           .addCode(
-            buildStateFlowSetValueMethodBody(qualifiedName, methodName, paramCall, assignment),
+            buildStateFlowSetValueMethodBody(
+              qualifiedName, methodName, paramCall, paramPrelude, assignment,
+            ),
             cOpaquePointerVar, stableRef,
           )
 
@@ -499,6 +543,9 @@ private fun buildFlowMethodCollectBody(
   qualifiedName: String,
   methodName: String,
   paramCall: String,
+  // ADR-114: the eager collection copy, emitted before `launch` so the C# side's finally-dispose
+  // of the wire handle can never race the coroutine reading it.
+  paramPrelude: String,
   flowElementQualified: String,
   elementNullable: Boolean = false,
   memberNullable: Boolean = false,
@@ -517,6 +564,7 @@ private fun buildFlowMethodCollectBody(
     "val onError = onErrorPtr.reinterpret<CFunction<" +
         "(COpaquePointer?, COpaquePointer) -> Unit>>()"
   )
+  append(paramPrelude)
   appendLine("val job = scope.launch(start = CoroutineStart.ATOMIC) {")
   appendLine("  try {")
   appendLine(
@@ -560,10 +608,12 @@ private fun buildStateFlowValueMethodBody(
   qualifiedName: String,
   methodName: String,
   paramCall: String,
+  paramPrelude: String,
   elementNullable: Boolean = false,
   memberNullable: Boolean = false,
 ): String = buildString {
   appendLine("val obj = handle.asStableRef<$qualifiedName>().get()")
+  append(paramPrelude)
   if (!elementNullable && !memberNullable) {
     append("return StableRef.create(obj.$methodName($paramCall).value as Any).asCPointer()")
   } else {
@@ -586,8 +636,10 @@ private fun buildStateFlowHasValueMethodBody(
   qualifiedName: String,
   methodName: String,
   paramCall: String,
+  paramPrelude: String,
 ): String = buildString {
   appendLine("val obj = handle.asStableRef<$qualifiedName>().get()")
+  append(paramPrelude)
   append("return obj.$methodName($paramCall) != null")
 }
 
@@ -636,8 +688,10 @@ private fun buildStateFlowSetValueMethodBody(
   qualifiedName: String,
   methodName: String,
   paramCall: String,
+  paramPrelude: String,
   assignment: String,
 ): String = buildString {
+  append(paramPrelude)
   appendLine("try {")
   appendLine(
     "  handle.asStableRef<$qualifiedName>().get().$methodName($paramCall).value = " +

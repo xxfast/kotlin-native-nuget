@@ -1374,47 +1374,9 @@ internal object ForwardCirPlanProjection {
     "new ${csharpType()}($wireValue)"
   }
 
-  private fun BridgeType.csharpType(): String = when (this) {
-    BridgeType.Unit -> "void"
-    is BridgeType.Primitive -> kind.csharpType()
-    BridgeType.Char -> "char"
-    BridgeType.String -> "string"
-    // ADR-076: the public C# type is always System.DateTimeOffset, fully qualified so no "using
-    // System;" is required in the generated file.
-    BridgeType.Instant -> "global::System.DateTimeOffset"
-    // ADR-103: likewise System.TimeSpan.
-    BridgeType.Duration -> "global::System.TimeSpan"
-    // ADR-106: System.Guid, over the RFC 9562 hex-dash text wire.
-    BridgeType.Uuid -> "global::System.Guid"
-    // ADR-066: the classifier already computed the correctly-qualified public spelling (bare
-    // simple name in this class's own namespace, `global::Namespace.Name` otherwise) — mirrors
-    // `BridgeType.Enum.csharpType`'s existing shape exactly.
-    is BridgeType.ObjectHandle -> csharpType
-    // ADR-040: the public C# spelling is the projected interface (`IPet`), never the backing
-    // wrapper class — the wrapper is a construction-only implementation detail.
-    is BridgeType.Interface -> csharpType
-    // ADR-088: the ORIGINAL bound interface (`global::Test.Menagerie.IFeedable`), read from the
-    // plugin's manifest. The only C# spelling in the forward pipeline that this pipeline does not
-    // own, and the whole point of the feature: no duplicated `IIFeedable`.
-    is BridgeType.BoundInterface -> csharpType
-    is BridgeType.ValueClass -> csharpType
-    is BridgeType.Enum -> this.csharpType
-    is BridgeType.Collection -> when (kind) {
-      CollectionKind.LIST -> "IReadOnlyList<${requireNotNull(element).csharpType()}>"
-      CollectionKind.MUTABLE_LIST -> "IList<${requireNotNull(element).csharpType()}>"
-      CollectionKind.MAP ->
-        "IReadOnlyDictionary<${requireNotNull(key).csharpType()}, ${requireNotNull(value).csharpType()}>"
-
-      CollectionKind.MUTABLE_MAP ->
-        "IDictionary<${requireNotNull(key).csharpType()}, ${requireNotNull(value).csharpType()}>"
-
-      CollectionKind.SET -> "IReadOnlySet<${requireNotNull(element).csharpType()}>"
-      CollectionKind.MUTABLE_SET -> "ISet<${requireNotNull(element).csharpType()}>"
-    }
-
-    is BridgeType.Nullable -> "${type.csharpType()}?"
-    else -> error("Forward CIR direct-value projection cannot render public type $this")
-  }
+  // ADR-114: the shared spelling, so the legacy Flow/suspend routes render a collection
+  // parameter exactly as this projection does.
+  private fun BridgeType.csharpType(): String = forwardPublicCsharpType()
 
   /**
    * Whether this type's rendered [csharpType] spelling is a C# reference type, i.e. whether a

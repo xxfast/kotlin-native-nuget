@@ -283,9 +283,32 @@ internal fun StringBuilder.renderFlowMethod(method: CirMethod, className: String
   appendLine("            if (_handle == IntPtr.Zero)")
   appendLine("                throw new ObjectDisposedException(nameof($className));")
   appendLine("            return new KotlinFlow<${method.flowElementType}>((onNext, onComplete, onError, userData) =>")
-  appendLine("                $nativeName(${method.body}));")
+  // ADR-114: the collect delegate runs per subscription, so the wire container is built inside it
+  // and disposed the moment the native call returns. Kotlin has already copied it out.
+  appendScopedNativeCall(method, "                ", "$nativeName(${method.body})", ");")
   appendLine("        }")
   appendLine()
+}
+
+/**
+ * ADR-114: [call] rendered either as the shipped single expression or, when a parameter carries a
+ * collection wire handle, as a block that builds every handle, calls, and disposes in a `finally`.
+ * [terminator] closes whatever construct the call sits inside (`);`, `,`).
+ */
+private fun StringBuilder.appendScopedNativeCall(
+  method: CirMethod,
+  indent: String,
+  call: String,
+  terminator: String,
+) {
+  val scoped: List<String>? = method.parameters.collectionScopedCall(indent, call)
+  if (scoped == null) {
+    appendLine("$indent$call$terminator")
+    return
+  }
+  scoped.forEachIndexed { index, line ->
+    appendLine(if (index == scoped.lastIndex) "$line$terminator" else line)
+  }
 }
 
 // ADR-065: StateFlow<T> as a non-suspend function return. Identical to renderFlowMethod's
@@ -298,7 +321,8 @@ internal fun StringBuilder.renderFlowMethod(method: CirMethod, className: String
 // KotlinMutableStateFlow<T> instead of KotlinStateFlow<T>.
 internal fun StringBuilder.renderStateFlowMethod(method: CirMethod, className: String) {
   val paramStr: String = method.parameters.joinToString(", ") { "${it.type} ${it.name}" }
-  val paramNames: String = method.parameters.joinToString(", ") { it.name }
+  // ADR-114: the native call passes the wire handle, not the public collection.
+  val paramNames: String = method.parameters.joinToString(", ") { it.nativeArgument }
   val nativeName: String = method.nativeName
   val valueNativeName: String = method.stateFlowValueNativeName
   val valueCallArgs: String = if (paramNames.isEmpty()) "_handle" else "_handle, $paramNames"
@@ -312,27 +336,78 @@ internal fun StringBuilder.renderStateFlowMethod(method: CirMethod, className: S
   appendLine("                throw new ObjectDisposedException(nameof($className));")
   if (method.isStateFlowNullableMember) {
     val hasValueNativeName: String = method.stateFlowHasValueNativeName
-    appendLine("            if (!$hasValueNativeName($valueCallArgs))")
-    appendLine("                return null;")
+    val probe: String = "$hasValueNativeName($valueCallArgs)"
+    // ADR-114: the presence probe is a synchronous call like any other, so it gets its own
+    // call-scoped handle rather than sharing one with the collect delegate below.
+    val scoped: List<String>? = method.parameters
+      .collectionScopedCall("            ", "hasValue = $probe", returns = false)
+    if (scoped == null) {
+      appendLine("            if (!$probe)")
+      appendLine("                return null;")
+    } else {
+      appendLine("            bool hasValue;")
+      scoped.forEach { appendLine(it) }
+      appendLine("            if (!hasValue)")
+      appendLine("                return null;")
+    }
   }
   appendLine("            return new $ctorName<${method.flowElementType}>((onNext, onComplete, onError, userData) =>")
-  appendLine("                $nativeName(${method.body}),")
+  appendScopedNativeCall(method, "                ", "$nativeName(${method.body})", ",")
   if (method.isMutableStateFlow) {
     val setValueNativeName: String = method.stateFlowSetValueNativeName
     val writeReceiver: String = if (method.isMutableStateFlowElementObject) "v._handle" else "v"
-    appendLine("                () => $valueNativeName($valueCallArgs),")
+    appendValueLambda(method, valueNativeName, valueCallArgs, ",")
     appendLine("                v =>")
     appendLine("                {")
     if (method.isMutableStateFlowElementObject) {
       appendLine("                    if (v is null) throw new ArgumentNullException(nameof(v));")
     }
-    appendLine("                    $setValueNativeName($valueCallArgs, $writeReceiver, out IntPtr error);")
+    val write: String = "$setValueNativeName($valueCallArgs, $writeReceiver, out error)"
+    val handles: List<CirParameter> = method.parameters.filter { it.collectionCreate != null }
+    if (handles.isEmpty()) {
+      appendLine("                    $setValueNativeName($valueCallArgs, $writeReceiver, out IntPtr error);")
+    } else {
+      // ADR-114: `error` is declared outside the try so it survives the dispose, which is the one
+      // shape the shared block helper cannot express.
+      handles.forEach {
+        appendLine("                    IntPtr ${it.nativeArgument} = ${it.collectionCreate};")
+      }
+      appendLine("                    IntPtr error;")
+      appendLine("                    try")
+      appendLine("                    {")
+      appendLine("                        $write;")
+      appendLine("                    }")
+      appendLine("                    finally")
+      appendLine("                    {")
+      handles.forEach { appendLine("                        NugetMarshal.Dispose(${it.nativeArgument});") }
+      appendLine("                    }")
+    }
     appendLine("                    if (error != IntPtr.Zero) throw NugetErrorNative.BuildException(error);")
     appendLine("                });")
   } else {
-    appendLine("                () => $valueNativeName($valueCallArgs));")
+    appendValueLambda(method, valueNativeName, valueCallArgs, ");")
   }
   appendLine("        }")
   appendLine()
 }
 
+
+/**
+ * ADR-065's `.Value` read lambda, with ADR-114's per-read wire handle. The lambda is re-invoked on
+ * every `.Value` access, so a collection parameter is re-marshalled per read; the handle is still
+ * call-scoped, which is what keeps the ownership model uniform across all four exports.
+ */
+private fun StringBuilder.appendValueLambda(
+  method: CirMethod,
+  valueNativeName: String,
+  valueCallArgs: String,
+  terminator: String,
+) {
+  val call: String = "$valueNativeName($valueCallArgs)"
+  if (!method.parameters.hasCollectionHandles()) {
+    appendLine("                () => $call$terminator")
+    return
+  }
+  appendLine("                () =>")
+  appendScopedNativeCall(method, "                ", call, terminator)
+}

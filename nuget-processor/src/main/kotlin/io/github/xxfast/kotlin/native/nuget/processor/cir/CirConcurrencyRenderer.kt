@@ -62,7 +62,8 @@ internal fun StringBuilder.renderAsyncMethod(method: CirMethod, className: Strin
   val tcsType: String = "TaskCompletionSource<$innerType>"
   val nativeName: String = method.nativeName
 
-  val paramNames: String = method.parameters.joinToString(", ") { it.name }
+  // ADR-114: the native call passes the wire handle, the public signature keeps the collection.
+  val paramNames: String = method.parameters.joinToString(", ") { it.nativeArgument }
 
   val methodParams: String = if (method.parameters.isEmpty()) {
     "CancellationToken cancellationToken = default"
@@ -146,7 +147,16 @@ internal fun StringBuilder.renderAsyncMethod(method: CirMethod, className: Strin
   appendLine("                }")
   appendLine("            };")
   appendLine("            callbackHandle = GCHandle.Alloc(callback);")
-  appendLine("            jobHandle = $nativeName($nativeCallArgs);")
+  // ADR-114: the native call is synchronous even though the await is not, so the wire container is
+  // built immediately before it and disposed in a `finally` immediately after it returns. The
+  // Kotlin export copies out of it before `launch`, so the coroutine never sees the handle.
+  val scoped: List<String>? = method.parameters
+    .collectionScopedCall("            ", "jobHandle = $nativeName($nativeCallArgs)", returns = false)
+  if (scoped == null) {
+    appendLine("            jobHandle = $nativeName($nativeCallArgs);")
+  } else {
+    scoped.forEach { appendLine(it) }
+  }
   appendLine("            if (cancellationToken.CanBeCanceled)")
   appendLine("                reg = cancellationToken.Register(() => NugetJobNative.Cancel(jobHandle));")
   appendLine("            return tcs.Task;")

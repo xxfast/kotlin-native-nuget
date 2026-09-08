@@ -27,7 +27,10 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnosticS
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardPropertyPlan
 import io.github.xxfast.kotlin.native.nuget.processor.forward.declaredSuperClass
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardSuperClass
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeTypeClassifier
+import io.github.xxfast.kotlin.native.nuget.processor.forward.isForwardLegacyAsyncRoute
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isForwardMemberOf
+import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyRefusedParameter
 import io.github.xxfast.kotlin.native.nuget.processor.forward.planFor
 import io.github.xxfast.kotlin.native.nuget.processor.toCName
 
@@ -171,6 +174,9 @@ internal fun translateClass(
   logger: KSPLogger,
   callableCatalog: ForwardCallablePlanCatalog,
   context: NugetContext,
+  // ADR-114: the same classifier the Kotlin export builders use, so the two halves agree on which
+  // legacy-route members bind and which are refused.
+  classifier: ForwardBridgeTypeClassifier,
 ): CirClass {
   val name: String = cls.simpleName.asString()
   val prefix: String = name.lowercase()
@@ -503,6 +509,14 @@ internal fun translateClass(
           isDataClassMethod
       if (isSkipped) return@filter false
 
+      // ADR-114: a Flow-returning or suspend member with a generic parameter this route cannot
+      // marshal is dropped on both halves. `NugetProcessor` names it once.
+      if (method.isForwardLegacyAsyncRoute() &&
+        classifier.legacyRefusedParameter(method.parameters) != null
+      ) {
+        return@filter false
+      }
+
       method.isForwardMemberOf(cls, superClassDeclaration)
     }
 
@@ -671,11 +685,10 @@ internal fun translateClass(
     val methodReturn: String = resolvedReturn?.declaration?.simpleName?.asString() ?: "Unit"
     val isUnit: Boolean = methodReturn == "Unit"
 
-    val methodParams: List<CirParameter> = method.parameters.map { param ->
-      val resolved: KSType = param.type.resolve().expandAliases()
-      val kotlinType: String = resolved.declaration.simpleName.asString()
-      CirParameter((param.name?.asString() ?: "_").csharpParameterName(), mapParamType(kotlinType))
-    }
+    // ADR-114: a collection parameter takes the public collection type with an IntPtr native
+    // slot; every other parameter keeps mapParamType's shipped spelling.
+    val methodParams: List<CirParameter> =
+      legacyRouteParameters(method.parameters, classifier, tracker)
 
     // Issue #108: carry the nullability through, same as the top-level suspend route.
     val asyncReturnType: String = if (isUnit) "" else {
@@ -733,11 +746,10 @@ internal fun translateClass(
     // shape only.
     val flowCsElementType: String = qualifiedElementCsType(flowElementTypeResolved, context)
 
-    val methodParams: List<CirParameter> = method.parameters.map { param ->
-      val resolved: KSType = param.type.resolve().expandAliases()
-      val kotlinType: String = resolved.declaration.simpleName.asString()
-      CirParameter((param.name?.asString() ?: "_").csharpParameterName(), mapParamType(kotlinType))
-    }
+    // ADR-114: a collection parameter takes the public collection type with an IntPtr native
+    // slot; every other parameter keeps mapParamType's shipped spelling.
+    val methodParams: List<CirParameter> =
+      legacyRouteParameters(method.parameters, classifier, tracker)
 
     val nativeParams: List<CirParameter> = listOf(
       CirParameter("handle", "IntPtr"),
@@ -804,11 +816,10 @@ internal fun translateClass(
     val flowCsElementType: String =
       qualifiedElementCsType(flowElementTypeResolved, context, isNullableElement)
 
-    val methodParams: List<CirParameter> = method.parameters.map { param ->
-      val resolved: KSType = param.type.resolve().expandAliases()
-      val kotlinType: String = resolved.declaration.simpleName.asString()
-      CirParameter((param.name?.asString() ?: "_").csharpParameterName(), mapParamType(kotlinType))
-    }
+    // ADR-114: a collection parameter takes the public collection type with an IntPtr native
+    // slot; every other parameter keeps mapParamType's shipped spelling.
+    val methodParams: List<CirParameter> =
+      legacyRouteParameters(method.parameters, classifier, tracker)
 
     val nativeParams: List<CirParameter> = listOf(
       CirParameter("handle", "IntPtr"),
@@ -829,7 +840,7 @@ internal fun translateClass(
       visibility = CirVisibility.PRIVATE,
     )
 
-    val paramNames: String = methodParams.joinToString(", ") { it.name }
+    val paramNames: String = methodParams.joinToString(", ") { it.nativeArgument }
     val nativeCallArgs: String = if (paramNames.isEmpty()) {
       "_handle, GetOrCreateScope(), onNext, onComplete, onError, userData"
     } else {
