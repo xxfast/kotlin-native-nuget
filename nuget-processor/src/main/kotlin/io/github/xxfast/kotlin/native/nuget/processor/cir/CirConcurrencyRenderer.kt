@@ -109,8 +109,10 @@ internal fun StringBuilder.renderAsyncMethod(method: CirMethod, className: Strin
 
     // A nullable object return has no such guard: `new T(IntPtr.Zero)` would build a live wrapper
     // over a null handle, so the null is tested on the wire pointer instead.
-    method.asyncReturnType.endsWith("?") ->
-      "t.SetResult(resultPtr == IntPtr.Zero ? null : new ${method.asyncReturnType.removeSuffix("?")}(resultPtr));"
+    method.asyncReturnType.endsWith("?") -> {
+      val nonNullableType: String = method.asyncReturnType.removeSuffix("?")
+      "t.SetResult(resultPtr == IntPtr.Zero ? null : new $nonNullableType(resultPtr));"
+    }
 
     else ->
       "t.SetResult(new ${method.asyncReturnType}(resultPtr));"
@@ -151,7 +153,11 @@ internal fun StringBuilder.renderAsyncMethod(method: CirMethod, className: Strin
   // built immediately before it and disposed in a `finally` immediately after it returns. The
   // Kotlin export copies out of it before `launch`, so the coroutine never sees the handle.
   val scoped: List<String>? = method.parameters
-    .collectionScopedCall("            ", "jobHandle = $nativeName($nativeCallArgs)", returns = false)
+    .collectionScopedCall(
+      "            ",
+      "jobHandle = $nativeName($nativeCallArgs)",
+      returns = false,
+    )
   if (scoped == null) {
     appendLine("            jobHandle = $nativeName($nativeCallArgs);")
   } else {

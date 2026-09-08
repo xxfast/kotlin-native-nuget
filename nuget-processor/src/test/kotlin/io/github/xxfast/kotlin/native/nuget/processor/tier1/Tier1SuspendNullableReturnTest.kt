@@ -54,8 +54,10 @@ class Tier1SuspendNullableReturnTest {
     )
     // Class method: buildSuspendMethodBody. Both builders emit the same guard, so a single
     // occurrence would mean only one of them was fixed.
+    val guardCount: Int =
+      result.generated.split("if (result == null) null else StableRef.create(result)").size - 1
     assertTrue(
-      result.generated.split("if (result == null) null else StableRef.create(result)").size - 1 >= 4,
+      guardCount >= 4,
       "expected all four nullable suspend exports to be guarded; generated=${result.generated}",
     )
     // A non-nullable return keeps the unguarded shape.

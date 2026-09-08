@@ -275,7 +275,10 @@ class Tier1LambdaTypeArgumentTest {
   fun `the generated Kotlin still compiles`() {
     val result = run()
 
-    assertTrue(result.compiledClean, "expected clean generated Kotlin; got: ${result.compileErrors}")
+    assertTrue(
+      result.compiledClean,
+      "expected clean generated Kotlin; got: ${result.compileErrors}",
+    )
   }
 
   /** The generated C# property declaration lines for [member], if it was emitted at all. */

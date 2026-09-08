@@ -87,7 +87,8 @@ class Tier1Issue112InterfaceProjectionTest {
     )
     assertTrue(
       codesSkips.single().contains("BleAdvertisement.codes"),
-      "expected the surviving skip to name the class, not the interface; got=${codesSkips.single()}",
+      "expected the surviving skip to name the class, not the interface; " +
+          "got=${codesSkips.single()}",
     )
 
     val methodSkips: List<String> = result.kspWarnings.filter { "collarTag" in it }
@@ -153,7 +154,8 @@ class Tier1Issue112InterfaceProjectionTest {
     val iface: String = result.generatedCSharp.interfaceBlock("IProwling")
     assertFalse("IntPtr" in iface, "expected no raw IntPtr member on IProwling; block=$iface")
     assertFalse("Codes" in iface, "expected Codes to be absent from IProwling; block=$iface")
-    assertContains(iface, "${result.generatedCSharp.classPropertyType("CollarTag")} CollarTag { get; }")
+    val collarTagType: String = result.generatedCSharp.classPropertyType("CollarTag")
+    assertContains(iface, "$collarTagType CollarTag { get; }")
     assertContains(iface, "string Describe(string prefix);")
 
     assertContains(result.generatedCSharp, "public sealed class Prowling : IProwling")
@@ -242,14 +244,20 @@ class Tier1Issue112InterfaceProjectionTest {
     val readable: String = result.generatedCSharp.interfaceBlock("IReadable<out T>")
     assertContains(readable, "T Read();")
     assertContains(readable, "T Head { get; }")
-    assertFalse("IntPtr" in readable, "expected a bare type parameter, not a pointer; block=$readable")
+    assertFalse(
+      "IntPtr" in readable,
+      "expected a bare type parameter, not a pointer; block=$readable",
+    )
     // Narrowness: `codes` is unplannable for a reason that has nothing to do with T, so the
     // carve-out must not readmit it.
     assertFalse("Codes" in readable, "carve-out widened past type parameters; block=$readable")
 
     val writable: String = result.generatedCSharp.interfaceBlock("IWritable<in T>")
     assertContains(writable, "void Write(T value);")
-    assertFalse("IntPtr" in writable, "expected a bare type parameter, not a pointer; block=$writable")
+    assertFalse(
+      "IntPtr" in writable,
+      "expected a bare type parameter, not a pointer; block=$writable",
+    )
   }
 
   /**

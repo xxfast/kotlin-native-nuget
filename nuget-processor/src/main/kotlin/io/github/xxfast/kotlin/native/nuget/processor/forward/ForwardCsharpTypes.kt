@@ -24,7 +24,7 @@ internal fun BridgeType.forwardPublicCsharpType(): String = when (this) {
   // simple name in this class's own namespace, `global::Namespace.Name` otherwise).
   is BridgeType.ObjectHandle -> csharpType
   // ADR-040: the public C# spelling is the projected interface (`IPet`), never the backing
-  // wrapper class — the wrapper is a construction-only implementation detail.
+  // wrapper class: the wrapper is a construction-only implementation detail.
   is BridgeType.Interface -> csharpType
   // ADR-088: the ORIGINAL bound interface, read from the plugin's manifest.
   is BridgeType.BoundInterface -> csharpType

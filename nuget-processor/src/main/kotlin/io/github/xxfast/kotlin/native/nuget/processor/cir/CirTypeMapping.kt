@@ -2,8 +2,8 @@ package io.github.xxfast.kotlin.native.nuget.processor.cir
 
 import com.google.devtools.ksp.symbol.ClassKind
 import com.google.devtools.ksp.symbol.KSClassDeclaration
-import com.google.devtools.ksp.symbol.KSNode
 import com.google.devtools.ksp.symbol.KSDeclaration
+import com.google.devtools.ksp.symbol.KSNode
 import com.google.devtools.ksp.symbol.KSType
 import com.google.devtools.ksp.symbol.KSTypeAlias
 import com.google.devtools.ksp.symbol.KSTypeArgument
@@ -252,7 +252,6 @@ internal fun qualifiedElementCsType(
   return if (nullable) "$base?" else base
 }
 
-
 /**
  * Issue #111: how one type argument of a `KotlinFunc<...>` / `KotlinSuspendFunc<...>` / generic
  * return is spelled in C#, or why it cannot be spelled at all.
@@ -269,7 +268,9 @@ internal fun qualifiedElementCsType(
  * naming the offending argument.
  */
 internal sealed interface CsTypeArgument {
-  /** The C# spelling: a primitive (`int`), a type parameter in scope (`T`), or `global::Ns.Name`. */
+  /**
+   * The C# spelling: a primitive (`int`), a type parameter in scope (`T`), or `global::Ns.Name`.
+   */
   data class Named(val csType: String) : CsTypeArgument
 
   /** The qualified name of the argument C# has no spelling for, for the caller's diagnostic. */

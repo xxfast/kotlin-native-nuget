@@ -362,10 +362,10 @@ internal fun StringBuilder.renderStateFlowMethod(method: CirMethod, className: S
     if (method.isMutableStateFlowElementObject) {
       appendLine("                    if (v is null) throw new ArgumentNullException(nameof(v));")
     }
-    val write: String = "$setValueNativeName($valueCallArgs, $writeReceiver, out error)"
+    val writeCallPrefix: String = "$setValueNativeName($valueCallArgs, $writeReceiver"
     val handles: List<CirParameter> = method.parameters.filter { it.collectionCreate != null }
     if (handles.isEmpty()) {
-      appendLine("                    $setValueNativeName($valueCallArgs, $writeReceiver, out IntPtr error);")
+      appendLine("                    $writeCallPrefix, out IntPtr error);")
     } else {
       // ADR-114: `error` is declared outside the try so it survives the dispose, which is the one
       // shape the shared block helper cannot express.
@@ -375,11 +375,13 @@ internal fun StringBuilder.renderStateFlowMethod(method: CirMethod, className: S
       appendLine("                    IntPtr error;")
       appendLine("                    try")
       appendLine("                    {")
-      appendLine("                        $write;")
+      appendLine("                        $writeCallPrefix, out error);")
       appendLine("                    }")
       appendLine("                    finally")
       appendLine("                    {")
-      handles.forEach { appendLine("                        NugetMarshal.Dispose(${it.nativeArgument});") }
+      handles.forEach {
+        appendLine("                        NugetMarshal.Dispose(${it.nativeArgument});")
+      }
       appendLine("                    }")
     }
     appendLine("                    if (error != IntPtr.Zero) throw NugetErrorNative.BuildException(error);")
@@ -390,7 +392,6 @@ internal fun StringBuilder.renderStateFlowMethod(method: CirMethod, className: S
   appendLine("        }")
   appendLine()
 }
-
 
 /**
  * ADR-065's `.Value` read lambda, with ADR-114's per-read wire handle. The lambda is re-invoked on

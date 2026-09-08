@@ -3,12 +3,12 @@ package io.github.xxfast.kotlin.native.nuget.processor.exports
 import com.google.devtools.ksp.getVisibility
 import com.google.devtools.ksp.symbol.KSClassDeclaration
 import com.google.devtools.ksp.symbol.KSFunctionDeclaration
+import com.google.devtools.ksp.symbol.KSType
 import com.google.devtools.ksp.symbol.Modifier
 import com.google.devtools.ksp.symbol.Visibility
 import com.squareup.kotlinpoet.ClassName
 import com.squareup.kotlinpoet.FileSpec
 import com.squareup.kotlinpoet.FunSpec
-import com.google.devtools.ksp.symbol.KSType
 import io.github.xxfast.kotlin.native.nuget.processor.cir.expandAliases
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeTypeClassifier
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardLegacyParameterShape
@@ -133,8 +133,10 @@ private fun buildSuspendFunctionBody(
   isUnit: Boolean,
   isNullable: Boolean,
 ): String = buildString {
-  appendLine("val fn = callbackPtr.reinterpret<CFunction<" +
-    "(COpaquePointer?, COpaquePointer?, Byte, COpaquePointer) -> Unit>>()")
+  appendLine(
+    "val fn = callbackPtr.reinterpret<CFunction<" +
+        "(COpaquePointer?, COpaquePointer?, Byte, COpaquePointer) -> Unit>>()"
+  )
   append(paramPrelude)
   val resultRefCode: String = resultRefExpression(isNullable)
   appendLine("val job = CoroutineScope(Dispatchers.Default).launch(start = CoroutineStart.ATOMIC) {")
@@ -168,8 +170,10 @@ private fun buildSuspendMethodBody(
 ): String = buildString {
   appendLine("val obj = handle.asStableRef<$qualifiedName>().get()")
   appendLine("val scope = scopeHandle.asStableRef<CoroutineScope>().get()")
-  appendLine("val fn = callbackPtr.reinterpret<CFunction<" +
-    "(COpaquePointer?, COpaquePointer?, Byte, COpaquePointer) -> Unit>>()")
+  appendLine(
+    "val fn = callbackPtr.reinterpret<CFunction<" +
+        "(COpaquePointer?, COpaquePointer?, Byte, COpaquePointer) -> Unit>>()"
+  )
   append(paramPrelude)
   val resultRefCode: String = resultRefExpression(isNullable)
   appendLine("val job = scope.launch(start = CoroutineStart.ATOMIC) {")
@@ -204,7 +208,7 @@ private fun resultRefExpression(isNullable: Boolean): String =
   else "StableRef.create(result).asCPointer()"
 
 /**
- * ADR-114: the argument list the suspend member is called with — a marshalled collection is read
+ * ADR-114: the argument list the suspend member is called with. A marshalled collection is read
  * from its eagerly-copied local, everything else keeps its parameter name.
  */
 private fun legacyParamCall(

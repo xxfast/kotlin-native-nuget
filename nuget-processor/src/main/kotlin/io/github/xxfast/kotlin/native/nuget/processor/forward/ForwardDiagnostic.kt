@@ -270,7 +270,7 @@ internal enum class ForwardDiagnosticKind(
     name.startsWith(ERROR_PREFIX) -> "Error"
     else -> error(
       "$name has no $SKIPPED_PREFIX/$INFO_PREFIX/$ERROR_PREFIX prefix to derive a verb from, so " +
-        "it must pass declaredVerb: a WARNING that is not a skip may not render as \"Skipping\""
+          "it must pass declaredVerb: a WARNING that is not a skip may not render as \"Skipping\""
     )
   }
 

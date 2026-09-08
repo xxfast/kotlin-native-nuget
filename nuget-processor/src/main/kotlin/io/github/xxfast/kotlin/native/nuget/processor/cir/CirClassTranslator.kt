@@ -16,6 +16,7 @@ import com.google.devtools.ksp.symbol.Visibility
 import io.github.xxfast.kotlin.native.nuget.processor.csharpParameterName
 import io.github.xxfast.kotlin.native.nuget.processor.exports.findInterfaceBridgePairs
 import io.github.xxfast.kotlin.native.nuget.processor.exports.findStoredCallbackPairs
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeTypeClassifier
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallableCatalogEntry
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallablePlan
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallablePlanCatalog
@@ -25,15 +26,14 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnostic
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnosticKind
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnosticSink
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardPropertyPlan
+import io.github.xxfast.kotlin.native.nuget.processor.forward.csharpName
 import io.github.xxfast.kotlin.native.nuget.processor.forward.declaredSuperClass
+import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardPublicCsharpType
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardSuperClass
-import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeTypeClassifier
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isForwardLegacyAsyncRoute
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isForwardMemberOf
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyRefusedParameter
 import io.github.xxfast.kotlin.native.nuget.processor.forward.planFor
-import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardPublicCsharpType
-import io.github.xxfast.kotlin.native.nuget.processor.forward.csharpName
 import io.github.xxfast.kotlin.native.nuget.processor.toCName
 
 /**
@@ -1123,61 +1123,60 @@ internal fun translateSealedClass(
         subclass.parentDeclaration?.qualifiedName?.asString() == cls.qualifiedName?.asString()
 
       val subQualifiedName: String? = subclass.qualifiedName?.asString()
-      val properties: List<CirProperty> =
-        subclass.getAllProperties()
-          .filter { it.getVisibility() == Visibility.PUBLIC }
-          .mapNotNull { prop ->
-            val propName: String = prop.simpleName.asString()
-            // ADR-111: the plan owns every ordinary property shape here, exactly as it does for an
-            // ordinary class. A type it cannot express is absent from C#, with the property
-            // planner's own SKIPPED_UNSUPPORTED_PROPERTY diagnostic behind it -- no local skip
-            // list decides that any more.
-            val planned: ForwardPropertyPlan? =
-              subQualifiedName?.let { callableCatalog.propertyFor("$it.$propName") }
-            if (planned != null) {
-              tracker.trackProperty(planned)
-              return@mapNotNull ForwardCirPropertyProjection.classProperty(planned)
-            }
-
-            // Residual legacy route: a lambda-typed property, whose Kotlin half is still
-            // hand-spelled in `SealedClassExports` too. It swallows the error slot (`out _`) until
-            // lambda properties migrate for ordinary classes.
-            val propTypeResolved: KSType = prop.type.resolve().expandAliases()
-            val qualifiedTypeName: String? = propTypeResolved.declaration.qualifiedName?.asString()
-            if (qualifiedTypeName !in LAMBDA_TYPES) return@mapNotNull null
-            val lambdaArity: Int = propTypeResolved.arguments.size - 1
-            tracker.lambdaArities.add(lambdaArity)
-            // Issue #111, the sealed-subclass copy of the same rule as the ordinary-class arm.
-            val unnameableTypeArgument: CsTypeArgument.Unnameable? =
-              csTypeArguments(propTypeResolved.arguments, exportedTypes, context)
-            if (unnameableTypeArgument != null) {
-              ForwardDiagnosticSink.emit(
-                listOf(
-                  lambdaTypeArgumentDiagnostic(
-                    kind = ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_PROPERTY,
-                    symbol = prop,
-                    declaration = "$subName.$propName",
-                    typeArgument = unnameableTypeArgument.typeArgument,
-                  ),
-                ),
-                logger,
-              )
-              return@mapNotNull null
-            }
-            val lambdaTypeArgs: List<String> =
-              csTypeArgumentNames(propTypeResolved.arguments, exportedTypes, context)
-            val lambdaCsType: String = "KotlinFunc<${lambdaTypeArgs.joinToString(", ")}>"
-            CirProperty(
-              name = propName.replaceFirstChar { it.uppercase() },
-              type = lambdaCsType,
-              nativeReturnType = "IntPtr",
-              nativeName = propName,
-              getter = "new $lambdaCsType(Native_Get_$propName(_handle, out _))",
-              setter = null,
-              hasSyncErrorOut = true,
-            )
+      val properties: List<CirProperty> = subclass.getAllProperties()
+        .filter { it.getVisibility() == Visibility.PUBLIC }
+        .mapNotNull { prop ->
+          val propName: String = prop.simpleName.asString()
+          // ADR-111: the plan owns every ordinary property shape here, exactly as it does for an
+          // ordinary class. A type it cannot express is absent from C#, with the property
+          // planner's own SKIPPED_UNSUPPORTED_PROPERTY diagnostic behind it -- no local skip
+          // list decides that any more.
+          val planned: ForwardPropertyPlan? =
+            subQualifiedName?.let { callableCatalog.propertyFor("$it.$propName") }
+          if (planned != null) {
+            tracker.trackProperty(planned)
+            return@mapNotNull ForwardCirPropertyProjection.classProperty(planned)
           }
-          .toList()
+
+          // Residual legacy route: a lambda-typed property, whose Kotlin half is still
+          // hand-spelled in `SealedClassExports` too. It swallows the error slot (`out _`) until
+          // lambda properties migrate for ordinary classes.
+          val propTypeResolved: KSType = prop.type.resolve().expandAliases()
+          val qualifiedTypeName: String? = propTypeResolved.declaration.qualifiedName?.asString()
+          if (qualifiedTypeName !in LAMBDA_TYPES) return@mapNotNull null
+          val lambdaArity: Int = propTypeResolved.arguments.size - 1
+          tracker.lambdaArities.add(lambdaArity)
+          // Issue #111, the sealed-subclass copy of the same rule as the ordinary-class arm.
+          val unnameableTypeArgument: CsTypeArgument.Unnameable? =
+            csTypeArguments(propTypeResolved.arguments, exportedTypes, context)
+          if (unnameableTypeArgument != null) {
+            ForwardDiagnosticSink.emit(
+              listOf(
+                lambdaTypeArgumentDiagnostic(
+                  kind = ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_PROPERTY,
+                  symbol = prop,
+                  declaration = "$subName.$propName",
+                  typeArgument = unnameableTypeArgument.typeArgument,
+                ),
+              ),
+              logger,
+            )
+            return@mapNotNull null
+          }
+          val lambdaTypeArgs: List<String> =
+            csTypeArgumentNames(propTypeResolved.arguments, exportedTypes, context)
+          val lambdaCsType: String = "KotlinFunc<${lambdaTypeArgs.joinToString(", ")}>"
+          CirProperty(
+            name = propName.replaceFirstChar { it.uppercase() },
+            type = lambdaCsType,
+            nativeReturnType = "IntPtr",
+            nativeName = propName,
+            getter = "new $lambdaCsType(Native_Get_$propName(_handle, out _))",
+            setter = null,
+            hasSyncErrorOut = true,
+          )
+        }
+        .toList()
 
       CirSealedSubclass(
         name = subName,
@@ -1665,7 +1664,8 @@ private fun emitInterfaceNameCollisions(
 ) {
   val propertyNames: Map<String, ForwardPropertyPlan> = propertyPlans.associateBy { it.publicName }
   methodPlans.forEach { plan ->
-    val property: ForwardPropertyPlan = propertyNames[plan.publicSignature.csharpName] ?: return@forEach
+    val property: ForwardPropertyPlan =
+      propertyNames[plan.publicSignature.csharpName] ?: return@forEach
     val kotlinName: String = plan.invocation.symbol.substringAfterLast('.')
     ForwardDiagnosticSink.emit(
       listOf(

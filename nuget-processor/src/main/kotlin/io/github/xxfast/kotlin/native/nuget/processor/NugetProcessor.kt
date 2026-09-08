@@ -273,7 +273,8 @@ internal fun warnRefusedLegacyRouteParameters(
         .filter { method -> method.getVisibility() == Visibility.PUBLIC }
         .filter { method -> method.isForwardLegacyAsyncRoute() }
         .forEach { method ->
-          val refused: String = classifier.legacyRefusedParameter(method.parameters) ?: return@forEach
+          val refused: String =
+            classifier.legacyRefusedParameter(method.parameters) ?: return@forEach
           add(diagnostic(method, "$owner.${method.simpleName.asString()}", refused))
         }
     }
