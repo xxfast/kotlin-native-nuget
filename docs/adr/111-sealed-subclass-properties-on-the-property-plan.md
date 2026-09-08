@@ -269,3 +269,32 @@ All four defects (ROADMAP lines 26-29) and the `isReferenceType` skip for `Insta
 closed by this migration; see [FEATURES.md](../../FEATURES.md) and
 [interfaces-abstract-sealed.md](../topics/interfaces-abstract-sealed.md) for the consumer-facing
 shape. Sealed-subclass **methods** (ROADMAP line 52) remain out of scope, unaffected by this ADR.
+
+### Amendment (2026-09-08): `data object` properties bind too
+
+The migration above left one local skip list in place: `CirClassTranslator.kt` still emptied the
+property list for a `data object` sealed subclass unconditionally
+(`isDataObject` check, `:1086`), while the Kotlin side (`SealedClassExports.kt`) and the ADR-062
+property plan both kept the property. That is a fourth, narrower copy of exactly the local skip
+list this ADR's own Decision states "no local skip list decides that any more". A `data object`
+overriding a base `abstract val`, or declaring its own `val`, produced an orphan Kotlin export
+(`nestedshape_empty_get_*`) with nothing on the C# side to call it, which aborts
+`ForwardAbiContract` and stops the whole `packNuget` run cold.
+
+ROADMAP line 26 called this "harmless today (no fixture has such a property)". That severity claim
+was false: it was a hard KSP abort, not a silent gap. The wrong label is exactly why no fixture
+was built to catch it, which is exactly why a real consumer hit it first instead of CI (issue
+#107). The lesson: a "harmless, no fixture exercises it" note on a ROADMAP line is a claim about
+test coverage, not about severity, and should never stand in for actually checking what happens
+when the code path runs.
+
+Fixed by deleting the `isDataObject` suppression: a `data object` subclass now plans its properties
+through the same catalog lookup a `data class` subclass uses. Fixture:
+`NestedShapeSample.kt`'s `NestedShape.Empty` (a `data object`) gained `override val sides: Int` and
+`val note: String`; `NestedShape.Circle` (the `data class` control) got `override val sides: Int? =
+null` to prove the fix does not disturb an arm that already worked. Test:
+`IntegrationTests/DataObjectSealedSubclassPropertyTests.cs`.
+
+Still open, and adjacent rather than closed by this: the sealed **base**'s own `abstract val sides`
+renders no C# member at all (`CirSealedClass` has no `properties` field), so every assertion above
+has to reach through a concrete arm rather than the base type. See ROADMAP.md.

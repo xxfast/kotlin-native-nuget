@@ -4,9 +4,9 @@ Kotlin's three flavours of inheritance each get a distinct C# shape: `interface`
 
 | Kotlin | C# | Notes |
 |---|---|---|
-| `interface` | `interface` (`I`-prefixed) | default methods delegate to Kotlin |
+| `interface` | `interface` (`I`-prefixed) | default methods delegate to Kotlin; every exported interface's own declaration (not just a reachable one's) is now typed from the forward plan, the same source of truth its implementing class uses, see [Declaring every exported interface](#declaring-every-exported-interface), [ADR-113](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/113-interface-declaration-on-the-forward-plan.md) |
 | `abstract class` | `abstract class` | `_handle` inherited by subclasses |
-| `sealed class` | `abstract class` | a nested subclass stays nested (`Base.Sub`); a **sibling** subclass, declared beside its base rather than inside it, is declared at namespace level (`public sealed class Sub : Base`), see [A sibling sealed subclass declared beside its base](#a-sibling-sealed-subclass-declared-beside-its-base), [ADR-009](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/009-sealed-class-mapping.md) |
+| `sealed class` | `abstract class` | a nested subclass stays nested (`Base.Sub`); a **sibling** subclass, declared beside its base rather than inside it, is declared at namespace level (`public sealed class Sub : Base`), for a `data class` or an `object`/`data object` alike, see [A sibling sealed subclass declared beside its base](#a-sibling-sealed-subclass-declared-beside-its-base), [ADR-009](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/009-sealed-class-mapping.md) |
 | **eligible** `sealed interface` (no type parameters, every subclass a nested class/object with no other superclass, no sub-interfaces) | `abstract class` | same shape as `sealed class` above; no C# interface is declared for it, see [Sealed interfaces](#sealed-interfaces), [ADR-112](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/112-sealed-interface-mapping.md) |
 | **ineligible** `sealed interface` | `interface` (`I`-prefixed) | stays on the ordinary interface route; every member typed with it skips named (`SKIPPED_SEALED_POSITION`), and the declaration itself gets `SKIPPED_INELIGIBLE_SEALED_INTERFACE` naming the disqualifying subclass, see [Sealed interfaces](#sealed-interfaces), [ADR-112](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/112-sealed-interface-mapping.md) |
 | interface-typed return (method result or property) | `IFoo` / `IFoo?` | backed by a generated `sealed class Foo : IFoo`, see [ADR-040](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/040-interface-return-type-mapping.md) |
@@ -1139,6 +1139,24 @@ public void Label_IsDeclaredOnceAtNamespaceLevel_AndDerivesFromTheSealedBase()
     Asserted by <code>FlatSealedSubclassTests</code>.</p>
 </note>
 
+### A sibling `object` subclass binds once too
+
+The fix above only covered a `data class` sibling; a sibling `object` or `data object` subclass was still declared twice, once as `public sealed class Loaf : FlatShape` by the sealed route and once again as an empty `public static class Loaf { }` at namespace level, since `rootObjects` had no equivalent `isSealedSubclass()` filter. That was `CS0101` (duplicate type), plus `CS0722` at any position returning the concrete arm, since C# cannot return a `static` type ([#110](https://github.com/xxfast/kotlin-native-nuget/issues/110)). It went uncaught because every pre-existing sealed-subclass-object fixture happened to sit in the one combination the bug is invisible in: module-local **and** nested.
+
+From `FlatShapeSample.kt`:
+
+```kotlin
+data object Loaf : FlatShape()
+
+class FlatShapeFactory {
+  fun loaf(): Loaf = Loaf
+}
+
+fun flatLoaf(): FlatShape = Loaf
+```
+
+`Loaf` is now declared exactly once, `public sealed class Loaf : FlatShape`, by the sealed route only. Two separate fixes were needed: `rootObjects` gained the same sealed-subclass filter `rootClasses` already had, for a **module-local** sibling like `Loaf`; and `reachabilityBucket()`'s object branch now checks `isSealedSubclass()` before bucketing as `OBJECT`, for a **cross-module** sealed base's nested `object` subclass (`Newsroom.nap()`/`deepNap()` in `IntegrationTests/SealedSubclassObjectTests.cs`), which used to emit a bogus, non-colliding but still public, orphan `public static class` alongside the real nested one. Only the `OBJECT` kind is qualified in that check: an intermediate sealed class is both sealed and a sealed subclass, and must keep the `SEALED_CLASS` bucket.
+
 ## Every property shape on a sealed subclass {id="every-property-shape-on-a-sealed-subclass"}
 
 A property of a sealed subclass, a class nested inside its sealed parent, plans onto the same
@@ -1280,6 +1298,55 @@ public void State_Loaded_Note_SetterRoundTrips()
 ```
 
 This is delivered for sealed subclasses only. A plain nested (non-sealed) class, `class Outer { data class Inner(val x: String?) }`, is never declared in C# either, but it now skips named (`SKIPPED_NESTED_DECLARATION` on the declaration, `UNDECLARED_CLASS` on any member typed with it) instead of vanishing with no diagnostic; see [Classes and objects: Nested classes and objects](classes-and-objects.md#nested-classes-and-objects).
+
+### A `data object` subclass's own properties bind too {id="data-object-subclass-properties-bind-too"}
+
+A `data object` sealed subclass binds its own properties exactly like a `data class` subclass does; it used to render an empty property list unconditionally, which orphaned the Kotlin export and aborted the whole `packNuget` run rather than merely dropping a member ([#107](https://github.com/xxfast/kotlin-native-nuget/issues/107)). From `test-library/src/nativeMain/kotlin/.../issue54/NestedShapeSample.kt`:
+
+```kotlin
+sealed class NestedShape {
+  abstract val sides: Int?
+
+  data class Circle(val radius: Double) : NestedShape() {
+    override val sides: Int? = null
+  }
+
+  data object Empty : NestedShape() {
+    override val sides: Int = 0
+    val note: String = "sprawled"
+  }
+}
+```
+
+Using it, from `IntegrationTests/DataObjectSealedSubclassPropertyTests.cs`:
+
+```C#
+[Fact]
+public void Empty_PrimitivePropertyOnADataObjectArm_BindsAndReadsBack()
+{
+    using NestedShape shape = NestedShapeSample.EmptyShape();
+
+    var empty = Assert.IsType<NestedShape.Empty>(shape);
+    Assert.Equal(0, empty.Sides);
+}
+
+[Fact]
+public void Empty_ReferencePropertyOnADataObjectArm_RoundTripsItsValue()
+{
+    using NestedShape shape = NestedShapeSample.EmptyShape();
+
+    var empty = Assert.IsType<NestedShape.Empty>(shape);
+    Assert.Equal("sprawled", empty.Note);
+}
+```
+
+<note>
+    <p>Assertions have to reach through the concrete <code>Empty</code>/<code>Circle</code> arm,
+    never the sealed base itself: <code>CirSealedClass</code> carries no <code>properties</code>
+    field, so an <code>abstract val</code> declared on the base, like <code>sides</code> above,
+    renders no C# member at all. Reading it polymorphically through <code>NestedShape</code>
+    directly is still not possible; see <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md">ROADMAP.md</a>.</p>
+</note>
 
 ## Defaulted interface members on implementing classes
 
@@ -1547,6 +1614,79 @@ public void StrayPet_AnonymousKotlinObject_DispatchesThroughIPet()
 }
 ```
 
+## Declaring every exported interface {id="declaring-every-exported-interface"}
+
+Everything above covers an interface that is **reachable**, one that actually appears in a planned return position, and therefore gets ADR-040's backing class. An interface that is only ever *implemented*, never returned, still gets its `IFoo` declared, and that declaration used to come from a separate, string-keyed walk over Kotlin simple names rather than from the forward plan the implementing class itself uses. The two disagreed: a reference-typed member rendered raw `IntPtr` on `IFoo` while the implementing class's own property was the real wrapper type (`CS0738`), a member the class route skipped for being unbridgeable was still declared on `IFoo` with nothing to satisfy it (`CS0535`), and a property colliding with a same-named method (`val collarTag` + `fun collarTag(code: Int)`) declared both with no guard at all (`CS0102`) ([#112](https://github.com/xxfast/kotlin-native-nuget/issues/112)).
+
+Interface declarations now come from a second, declaration-only plan built over **every** exported interface, reachable or not, so `IFoo` never loses a member for reachability reasons; the export-driving plan stays exactly as reachability-scoped as before. From `test-library/src/nativeMain/kotlin/.../issue112/Issue112Sample.kt`:
+
+```kotlin
+interface Advertisement {
+  val identifier: String
+  val collarTag: CollarTag?
+  val codes: Collection<String>
+  fun collarTag(code: Int): ByteArray?
+  fun describe(prefix: String): String
+}
+
+class BleAdvertisement(
+  override val identifier: String,
+  override val collarTag: CollarTag?,
+) : Advertisement {
+  override val codes: Collection<String> get() = listOf(identifier)
+  override fun collarTag(code: Int): ByteArray? = null
+  override fun describe(prefix: String): String = "$prefix$identifier"
+}
+```
+
+`Advertisement` is never returned anywhere, so it has no ADR-040 backing class; only `BleAdvertisement` implements it. `codes` (`Collection<String>` is not one of the six collection kinds the classifier knows) and `collarTag(code: Int)` (unbridgeable, and it would collide with the `collarTag` property if it survived) are both bridgeable-filtered out silently, the class route having already reported the skip once. Generated C#:
+
+```C#
+public interface IAdvertisement : IDisposable
+{
+    string Identifier { get; }
+    global::TestLibrary.Issue112.CollarTag? CollarTag { get; }
+
+    string Describe(string prefix);
+}
+```
+
+Using it, from `IntegrationTests/Issue112Tests.cs`:
+
+```C#
+[Fact]
+public void InterfaceMember_ReferenceType_MatchesTheImplementingClassProjection()
+{
+    PropertyInfo? onInterface = typeof(IAdvertisement).GetProperty(nameof(IAdvertisement.CollarTag));
+    PropertyInfo? onClass = typeof(BleAdvertisement).GetProperty(nameof(BleAdvertisement.CollarTag));
+
+    Assert.NotNull(onInterface);
+    Assert.NotNull(onClass);
+    Assert.NotEqual(typeof(IntPtr), onInterface!.PropertyType);
+    Assert.Equal(onClass!.PropertyType, onInterface.PropertyType);
+}
+
+[Fact]
+public void InterfaceProperty_SkippedByThePlan_IsAbsent()
+{
+    Assert.Null(typeof(IAdvertisement).GetProperty("Codes"));
+}
+
+[Fact]
+public void Interface_IsImplementedByTheExportedClass()
+{
+    Assert.True(typeof(IAdvertisement).IsAssignableFrom(typeof(BleAdvertisement)));
+}
+```
+
+If a Kotlin declaration genuinely has a property and a method sharing a C# name and both survive the bridgeability filter, that is a fatal `ERROR_CSHARP_NAME_COLLISION`, not a rename: the same house rule the class route already applies (see [FEATURES.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/FEATURES.md)).
+
+<note>
+    <p>A member typed with the interface's own type parameter (<code>fun read(): T</code> on
+    <code>interface Box&lt;T&gt;</code>) keeps rendering bare, never dropped: it is valid C# in
+    scope, and only lacked a plan entry, not bridgeability.</p>
+</note>
+
 ## Implementing a Kotlin interface in C#
 
 A C# class implementing `IPet` with no `_handle` field, an ordinary class, not one of the generated wrappers, can now be passed at an interface-typed parameter or property setter. `HandleOf`'s bridge fallback builds a Kotlin-side object with one function pointer per interface member and dispatches through it, so a Kotlin call against the parameter reaches the real C# implementation, not a stub.
@@ -1755,6 +1895,8 @@ property. The owning class still generates, and its unrelated `name` member stil
 - Object identity is not preserved across reads of a **Kotlin-backed** interface-typed property: two reads produce two distinct C# wrapper instances over the same Kotlin object (each disposes independently). A **C#-implemented** object read back is the one exception, see above.
 - A sealed type in the export scope now binds at every position: property, callable return, and callable/constructor parameter (bare, nullable, or a collection component, read-only or mutable), see [Sealed types as property types](#sealed-types-as-property-types), [A class method returning a sealed base](#a-class-method-returning-a-sealed-base), and [A sealed type at a parameter position](#a-sealed-type-at-a-parameter-position). An **eligible** `sealed interface` binds the same way, see [Sealed interfaces](#sealed-interfaces). A value class whose underlying type is sealed also binds the same way, at a property, callable, or `List<T>` component position, see [Value classes: Over a sealed type](value-classes.md#over-a-sealed-type). What still does not bind: an extension function's **receiver** typed as a sealed base (`sealedAsHandle()` rewrites declared parameters only), an **ineligible** sealed interface at any position, and a sealed class **outside the export scope**. See [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md).
 - [Overriding a read-only property with `var`](#overriding-a-read-only-property-with-var) only guards against the exported-base-class shape. A base class's own `open val`/`open var` never renders `virtual` (its own modifier is never read), so any subclass `override` of it is `CS0506`; and an unimplemented base `abstract val`/`abstract var` has no abstract-property path at all, so a subclass `override` of it is `CS0115`. Neither is fixed. See [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md).
+- [Declaring every exported interface](#declaring-every-exported-interface) has its own residual gaps: `CirInterface` has no super-interface list, so `interface Derived : Base` still flattens (`IDerived` no longer redeclares `Base`'s members after ADR-113, but doesn't inherit them either); a `var` interface property still renders `{ get; }` only (`hasSetter` is never derived from the plan); the CS0102 property/method name-collision guard is interface-route only, the same collision on the ordinary class route is unguarded; and an interface that is neither reachable nor implemented by any exported class still silently loses its unbridgeable members with no diagnostic naming why. See [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md).
+- A sealed **base**'s own `abstract val`/`abstract var` renders no C# member at all (`CirSealedClass` has no `properties` field); see [A `data object` subclass's own properties bind too](#data-object-subclass-properties-bind-too) and [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md).
 
 ## Using it from C#
 
@@ -1827,5 +1969,6 @@ public void Observation_WorksWithPatternMatching()
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/105-sealed-property-position.md">ADR-105: Sealed types at property positions</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/111-sealed-subclass-properties-on-the-property-plan.md">ADR-111: Sealed-subclass properties on the property plan</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/112-sealed-interface-mapping.md">ADR-112: Sealed interface mapping</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/113-interface-declaration-on-the-forward-plan.md">ADR-113: Interface declaration on the forward plan</a>
     </category>
 </seealso>

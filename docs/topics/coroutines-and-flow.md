@@ -5,6 +5,7 @@ Kotlin coroutines map onto .NET's own async model: `suspend fun` becomes `async`
 | Kotlin | C# | Notes |
 |---|---|---|
 | `suspend fun` | `async` / `Task<T>` | [ADR-019](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/019-suspend-function-mapping.md) |
+| `suspend fun` returning `T?` | `async` / `Task<T?>` | nullable string, object, and primitive returns, [ADR-019](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/019-suspend-function-mapping.md) |
 | `suspend () -> R` lambda | `KotlinSuspendFunc<R>` / `Task<R>` | [ADR-020](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/020-suspend-lambda-mapping.md) |
 | structured concurrency | honoured on `Dispose()` | [ADR-021](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/021-structured-concurrency.md) |
 | coroutine cancellation | `CancellationToken` | [ADR-022](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/022-cancellation-token-support.md) |
@@ -45,6 +46,57 @@ public async Task AsyncCatService_FetchCat_ReturnsCatObject()
     Assert.Equal("Oreo", cat.Name);
 }
 ```
+
+## `suspend fun` returning a nullable type {id="suspend-fun-returning-a-nullable-type"}
+
+A `suspend fun` returning `String?`, an object type, or a nullable primitive carries its `?` all the way through. From `test-library/src/nativeMain/kotlin/.../cat/AsyncFunctions.kt`:
+
+```kotlin
+suspend fun findCollarTag(catName: String): String? {
+  delay(100.milliseconds)
+  return if (catName == "Oreo") "Oreo - black with a white middle" else null
+}
+
+suspend fun findShelterCat(catName: String): Cat? {
+  delay(100.milliseconds)
+  return if (catName == "Mylo") Cat(catName) else null
+}
+
+suspend fun countTreatsLeft(catName: String): Int? {
+  delay(100.milliseconds)
+  return if (catName == "Oreo") 7 else null
+}
+```
+
+Generated C# widens the `Task<T>` to `Task<T?>`; a nullable primitive shares the same `Nullable.GetUnderlyingType` unwrap the nullable `StateFlow` element further down this page uses:
+
+```C#
+public static Task<string?> FindCollarTagAsync(string catName, CancellationToken cancellationToken = default)
+public static Task<Cat?> FindShelterCatAsync(string catName, CancellationToken cancellationToken = default)
+public static Task<int?> CountTreatsLeftAsync(string catName, CancellationToken cancellationToken = default)
+```
+
+Using it, from `IntegrationTests/SuspendNullableReturnTests.cs`:
+
+```C#
+[Fact]
+public async Task FindShelterCat_Mylo_ReturnsCat()
+{
+    using Cat? cat = await AsyncFunctions.FindShelterCatAsync("Mylo");
+    Assert.NotNull(cat);
+    Assert.Equal("Mylo", cat.Name);
+}
+
+[Fact]
+public async Task CountTreatsLeft_Mylo_ReturnsNull()
+{
+    // Null must not arrive as a default 0.
+    int? treats = await AsyncFunctions.CountTreatsLeftAsync("Mylo");
+    Assert.Null(treats);
+}
+```
+
+The same shape works identically on a class method (`AsyncCatService.findToyName`/`findAdoptedCat`/`countWhiskers`), suffixed `Async` as usual.
 
 ## `suspend () -> R` lambdas
 
@@ -799,6 +851,84 @@ public async Task AwaitPlaymateReport_ValueReturnsFreshDisposableWrapper_OreoGre
     <code>StateFlow&lt;T&gt;</code> (no parent scope) is deferred.</p>
 </note>
 
+## Collection parameters on `Flow`, `StateFlow`, and `suspend` members
+
+A `List`/`Set`/`Map` parameter on a `Flow`-returning, `StateFlow`-returning, or `suspend` member crosses as the real collection type, never `IntPtr`. From `test-library/src/nativeMain/kotlin/.../cat/TreatBoard.kt`:
+
+```kotlin
+class TreatBoard {
+  fun served(kinds: List<String>): StateFlow<String> =
+    MutableStateFlow(kinds.joinToString(", ") { "$it x2" })
+
+  fun servings(kinds: List<String>): Flow<String> = kinds.asFlow()
+
+  suspend fun forget(ids: Set<String>): Int {
+    delay(1)
+    return ids.size
+  }
+}
+```
+
+Generated C# builds the wire container immediately before each native call and disposes it in a `finally`, one lexical level inside whichever closure makes the call:
+
+```C#
+public KotlinStateFlow<string> Served(IReadOnlyList<string> kinds)
+{
+    if (_handle == IntPtr.Zero)
+        throw new ObjectDisposedException(nameof(TreatBoard));
+    return new KotlinStateFlow<string>((onNext, onComplete, onError, userData) =>
+        {
+            IntPtr kindsHandle = NugetMarshal.CreateList(kinds);
+            try
+            {
+                return Native_ServedCollect(_handle, GetOrCreateScope(), kindsHandle, onNext, onComplete, onError, userData);
+            }
+            finally
+            {
+                NugetMarshal.Dispose(kindsHandle);
+            }
+        },
+        () =>
+        {
+            IntPtr kindsHandle = NugetMarshal.CreateList(kinds);
+            try
+            {
+                return Native_ServedValue(_handle, kindsHandle);
+            }
+            finally
+            {
+                NugetMarshal.Dispose(kindsHandle);
+            }
+        });
+}
+```
+
+Using it, from `IntegrationTests/LegacyRouteCollectionParameterTests.cs`:
+
+```C#
+[Fact]
+public void Served_StateFlowWithAListParameter_ReadsThroughTheCollection()
+{
+    using var board = new TreatBoard();
+
+    Assert.Equal("biscuit x2, milo x2", board.Served(["biscuit", "milo"]).Value);
+}
+```
+
+<note>
+    <p>Reading <code>.Value</code> re-marshals the whole collection on every read (Kotlin has no
+    <code>launch</code> on this route, so there is nothing to hoist the conversion above), and the
+    C# lambda captures the caller's <code>IReadOnlyList&lt;T&gt;</code> by reference: mutating it
+    after the call changes what a later <code>.Value</code> read sees. The <code>_collect</code>
+    path takes a snapshot at subscription time instead.</p>
+</note>
+
+Any other generic-typed parameter on these routes that is not a supported collection (`Pair<A, B>`, `Array<T>`, a lambda parameter on a `Flow`-returning member) skips the member named, rather than emitting non-compiling Kotlin:
+
+```
+w: [nuget:SKIPPED_UNSUPPORTED_INPUT] Skipping TreatBoard.paired: a Flow-returning or suspend member can marshal a collection parameter, but not the generic type of entry: Pair<String, Int>. pass the values as a List/Set/Map, or as separate parameters
+```
+
 ## Limitations
 
 `Flow`/`StateFlow` collection and `suspend`/`async` dispatch their callbacks through a static
@@ -824,6 +954,9 @@ Hot streams and several `Flow` positions are not yet supported (ROADMAP Phase 6)
 - `Flow<T>` as a generic type argument (e.g. `Box<Flow<String>>`)
 - `suspend fun` returning `Flow<T>` (would follow the same outer-suspend-kept-as-`Task` decision [ADR-068](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/068-suspend-returning-stateflow.md) made for its `StateFlow` sibling, not yet implemented)
 - Flow backpressure (bounded `Channel<T>` with explicit resume signaling)
+- A collection as a `Flow`/`StateFlow` **element** (`StateFlow<List<String>>`, as opposed to a collection parameter) has no fixture and no confirmed coverage today
+- A nullable collection parameter (`List<T>?`) on a `Flow`/`StateFlow`/`suspend` member (ADR-067 territory, not widened by [ADR-114](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/114-collection-parameters-on-legacy-flow-and-suspend-routes.md))
+- An object-typed (non-collection) parameter on these routes still renders raw `IntPtr` with no way for a caller to construct one
 
 A `suspend inline fun <reified T> Receiver.f(...): Result<T>` extension has no bridge at all: `inline`
 plus `reified` erases at the C ABI, and `suspend` needs a concrete continuation type, so the
@@ -852,5 +985,6 @@ rather than the raw `Function1`/`Result` this generated before
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/068-suspend-returning-stateflow.md">ADR-068: suspend fun returning StateFlow&lt;T&gt;</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/071-mutable-stateflow-mapping.md">ADR-071: MutableStateFlow&lt;T&gt; mapping</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/102-aot-safe-forward-callbacks.md">ADR-102: AOT-safe forward callbacks</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/114-collection-parameters-on-legacy-flow-and-suspend-routes.md">ADR-114: Collection parameters on the Flow and suspend legacy routes</a>
     </category>
 </seealso>

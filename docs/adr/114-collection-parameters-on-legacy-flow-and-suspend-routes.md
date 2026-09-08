@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed
+Accepted
 
 ## Context
 
@@ -582,3 +582,68 @@ Everything not listed here is either verified by source reading (file and line i
    implementer's afternoon**: if collection helpers are silently absent, the failure surfaces as an
    `EntryPointNotFoundException` at first call, not at build time. Check every `needs*` computation
    in `NugetProcessor.process()` before assuming four is all of them.
+
+## Post-implementation notes
+
+Shipped as designed (`4dcbc0e`). Nine files touched, four of the eight guessed (`CirModel.kt`,
+`CirClassRenderer.kt`, `CirNativeImports.kt`, the fixture wiring): three new (`forward/ForwardLegacyRouteCollections.kt`,
+`forward/ForwardCsharpTypes.kt`, `cir/CirCollectionParameters.kt`), `CirParameter` gained exactly
+one field (`collectionCreate`), matching the ADR's predicted worse case for inferred claim 3.
+
+### Correct the gate count
+
+Inferred claim 4 asked whether a fifth `needs*` gate existed beyond the four disjuncts this ADR
+adds. It does, and it is **not** one of the four `process()` gates this ADR names:
+`CollectionHelperTracker.needsList`/`needsMap`/`needsSet` (`cir/CirTypeMapping.kt:86-88`), fed only
+by `trackPlan`/`trackProperty` and consumed by `cir/CirTranslator.kt` to decide whether
+`NugetMarshal`'s collection half and `NugetListNative`/`NugetSetNative`/`NugetMapNative` are
+emitted at all. Legacy-route members carry no plan, so it was blind to them exactly like the three
+`needs*Support` gates in `process()`. Extended via `tracker.trackCollection(shape.type)` in
+`legacyRouteParameters`.
+
+So the correct count is **three plus the tracker, not four**: `needsListSupport` (`:1304`),
+`needsMapSupport` (`:1334`), `needsSetSupport` (`:1363`) were extended; `needsCollectionParamWrap`
+(`:1433`) needed nothing, since `nuget_wrap_*` already ships under `needsCoreMarshal`. Had the
+tracker been missed, the failure mode would have been a C# compile error on the generated
+bindings, not a silent runtime `EntryPointNotFoundException`, the same class of miss as the four
+gates this ADR did anticipate.
+
+### Two deliberate deviations from the Decision above
+
+1. **No try/catch error arm around the eager lowering**, contrary to the sketch in the Kotlin half.
+   Inferred claim 2's fallback was taken instead: hoist with no `try`, accept a process abort on a
+   generator bug, matching every other legacy export body. It can only fire on a generator bug (a
+   component cast disagreeing with what C# boxed), never on user data, and the alternative would
+   have introduced an unspiked stand-in-job contract on the C# subscription path for zero coverage.
+2. **Only one of the two duplicated `csharpType()` copies was extracted**, not both as sketched.
+   `ForwardCirPropertyProjection.kt:640`'s private copy is untouched (different error message, no
+   third consumer at the time). Two copies remain instead of three collapsing to one; see
+   [ADR-113](113-interface-declaration-on-the-forward-plan.md)'s "two divergent public-C# type
+   spellers" ROADMAP item, which this is one half of.
+
+Nothing else in this ADR was disproved.
+
+### Fixture deviation
+
+The fixture uses `fun served(kinds: List<String>): StateFlow<String>`, not
+`StateFlow<List<String>>` as sketched in the Decision's example. Nothing in `test-library` declares
+a collection as a Flow/StateFlow **element** (zero grep hits for that shape), so returning one
+would have been an untested seam that could mask the parameter signal. That is a genuine coverage
+gap on its own; see ROADMAP.md. The parameter side is otherwise unchanged from the sketch.
+
+### The top-level suspend route was in scope
+
+`TreatRoutes.kt`'s top-level `forgetAllTreats(ids: Set<String>): Int` was added beyond the
+three-route brief because it **compiles today** through `addParameters`/`toBridgeTypeName`, which
+already preserves type arguments, and hands C# a public `IntPtr ids` parameter no caller can
+produce. A fix touching only the class-method Flow/suspend routes would have left a live `IntPtr`
+in the public API with a fully green build. Owner-approved to keep in scope.
+
+### `_has_value` / `_set_value` were touched, deliberately left uncovered
+
+Both halves share the parameter/call-args plumbing added here (Kotlin's `paramPrelude`, no hoist
+needed since both are synchronous; C#'s `renderStateFlowMethod` gives `_has_value` its own
+call-scoped handle and `_set_value` a hand-written variant, since `out IntPtr error` must be
+declared outside the `try` to survive the dispose). No fixture reaches either arm: both need a
+nullable or `MutableStateFlow` return **plus** a collection parameter, a combination nothing in
+`test-library` declares. Cold on purpose, not untested by oversight; see ROADMAP.md.

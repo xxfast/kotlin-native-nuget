@@ -501,6 +501,27 @@ an unqualified name and only compiles by accident when the namespaces happen to 
 > `renderReferenceValueClass`) was the last simple-name render site, now routed through
 > `qualifiedElementCsType` like the sites the #41/#50 amendments above named.
 
+> **Amendment (2026-09-08, refs [#111](https://github.com/xxfast/kotlin-native-nuget/issues/111)):**
+> `qualifiedElementCsType` itself was never the whole story: a **lambda's own type arguments** are
+> spelled by a separate, unrelated code path (`arg.type?.resolve()?.declaration?.simpleName`, five
+> copies: an ordinary class property, the class-route generic return, a top-level function return,
+> a sealed-subclass property, and the `suspend` twin of the class-property arm), which drops both
+> the argument's namespace and its own type arguments. `KotlinFunc<Snapshot>` for a cross-namespace
+> `(CamId) -> Snapshot` rendered a bare `Snapshot` that only compiled by namespace coincidence, and
+> `(CamId) -> Flow<Snapshot>` rendered a bare `Flow`, CS0246 either way. Qualifying alone would not
+> have fixed the `Flow` case: `global::TestLibrary.Kotlinx.Coroutines.Flow.Flow` is still CS0246, an
+> unnameable argument has no qualified spelling to reach for. So a lambda type argument now takes
+> one of two outcomes: an expressible argument (an exported class, any namespace) is qualified
+> through the same `global::` rule this ADR established; an unnameable one (`Flow<T>`, an unexported
+> dependency type) skips the **member**, with `SKIPPED_UNSUPPORTED_PROPERTY` /
+> `SKIPPED_UNSUPPORTED_RETURN` naming the argument, rather than emitting broken C#. A lambda's own
+> type-parameter argument (`T` on a generic member) stays bare, the same carve-out
+> [ADR-113](113-interface-declaration-on-the-forward-plan.md) later reused for interface members.
+> `kotlin.Unit` had to gain an explicit `KOTLIN_TO_CSHARP_PARAM` entry (`void`) as part of this fix,
+> since it is not itself an export and the suspend arm's existing `== "void"` check already assumed
+> that spelling; without it, every `suspend (...) -> Unit` lambda property would have started
+> skipping. See [Lambdas and callbacks](../topics/lambdas-and-callbacks.md#type-arguments-across-a-namespace-boundary).
+
 ### Two ADR-064 amendments this forces (both IN SCOPE for this feature)
 
 > **Implementing agent: read this section before writing any code.** Both amendments are **verified

@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed
+Accepted
 
 ## Context
 
@@ -448,3 +448,68 @@ satisfies the restatement.
    `docs/roadmap-archive.md:67` before it can be derived from the plan.
 4. An interface that is neither reachable nor implemented by any exported class now silently loses
    unbridgeable members with no diagnostic anywhere (Decision C's residual hole).
+
+## Post-implementation notes
+
+Shipped as designed (`2c97d5a`), four production files rather than the three estimated above
+(`ForwardCirPropertyProjection` also gained a `publicType(plan)` entry point). Corrections against
+the Proposed text:
+
+1. Decision E's "Roslyn reports CS0102 inside an `interface`" is now **verified**, not inferred.
+   `Interop.cs(15439,16)` is `IntPtr CollarTag(int code);` inside `public interface IAdvertisement`
+   opening at `:15433` (net8.0 Roslyn).
+2. Decision B's "planning a non-reachable interface has no side effect beyond the returned lists"
+   is now **verified**: stash / ksp / restore / ksp diff showed `CNameExports.kt` byte-identical,
+   no new `microchipped_*` exports.
+3. **Decision A's "both go through the same classifier, therefore the same string" is wrong as
+   stated.** See "Two divergent public-C# type spellers" below. The implementer sidestepped the
+   claim rather than it holding.
+4. This ADR's own reduced fixture renamed the colliding pair to `beacon`/`payload`, two different
+   names, so it had no CS0102 and could not exercise the post-filter requirement Decision E argues
+   for. The shipped fixture (`Issue112Sample.kt`) keeps the literal collision: `val collarTag` and
+   `fun collarTag(code: Int)`.
+5. The fixture name `Beacon` would have collided with `test/platform`'s `expect class Beacon` on
+   the global `simpleName.lowercase()` export prefix. The shipped fixture uses `CollarTag` instead.
+6. The "What breaks" line ~329 mislabels a skip: `fun payload(code: Int): ByteArray?` fires
+   `SKIPPED_UNSUPPORTED_RETURN` (a "NULLABLE type combination"), and under the Tier 1 harness (no
+   `rootPackage`) the non-nullable one fires `SKIPPED_UNEXPORTED_DEPENDENCY_TYPE`. Tests assert
+   absence, not kind, deliberately.
+7. "What breaks" understated the loss: members typed with the interface's **own type parameter**
+   also dropped (`IReadable<T>` lost `T Read()`, `IWritable<T>` lost `void Write(T value)`). The
+   owner decided, once this was surfaced, to keep them; see the carve-out below.
+
+### The type-parameter carve-out (owner-decided, after the shrink was surfaced)
+
+Members whose signature names one of the interface's own type parameters keep rendering bare,
+because they are valid C# in scope and were dropped only for want of a plan entry. Same rule as
+issue #111's "a type parameter stays bare" (see
+[Lambdas and callbacks](../topics/lambdas-and-callbacks.md#type-arguments-across-a-namespace-boundary)). The
+condition is literally `returnName in typeParamNames || paramNames.any { it in typeParamNames }`,
+never "the plan has no entry", which would resurrect the whole bug. Covers properties too
+(`val head: T`), and dedupes against planned members of the same name/arity so it can never emit
+CS0111. The 7th Tier 1 cell fails both ways: absent fails `assertContains("T Read();")`; reverted
+fails `assertFalse("IntPtr" in readable)`.
+
+### New ROADMAP item: two divergent public-C# type spellers
+
+`ForwardCirPropertyProjection.kt:640`'s private `BridgeType.csharpType()` handles `Throwable` but
+not `BoundInterface`/`Unit`. The shared `forwardPublicCsharpType()` (`forward/ForwardCsharpTypes.kt`,
+delegated to by `ForwardCirPlanProjection.kt:1379`) handles `BoundInterface`/`Unit` but not
+`Throwable`. Both end in `else -> error(...)`. Had interface properties been spelled with the
+shared function, a `Throwable`-typed interface property would have crashed KSP with "Forward CIR
+direct-value projection cannot render public type". Verified by reading. Merging the two copies is
+a separate refactor; [ADR-114](114-collection-parameters-on-legacy-flow-and-suspend-routes.md)
+extracted one of the two copies already, so together they are one item, not two. See
+[ROADMAP.md](../../ROADMAP.md) / [details](../backlog/two-divergent-public-csharp-type-spellers.md).
+
+### Deliberately uncovered
+
+The `Variance` COVARIANT/CONTRAVARIANT/else `when` and the `qualifiedName ?: name` fallback in
+`translateInterface` (carried over unchanged, cold because no Tier 1 fixture declares a generic
+interface, though `test-library` does). Inside `typeParameterMethods`'s lambda: the dedupe
+short-circuit and the String/`Unit`/`mapReturnType`/`mapParamType` arms for a mixed generic member
+such as `fun read(n: Int): T`. No fixture has that shape.
+
+No interface in `test-library` extends another, so the "inherited members now drop" behaviour
+(deferred item 1 above) has no live fixture; the code-level argument is the
+`.filter { it.parentDeclaration == iface }` on both planner helpers, verified by reading only.

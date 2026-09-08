@@ -496,4 +496,17 @@ Generated files with async methods need `System.Threading.Tasks` added to usings
 - **Suspend lambdas** (`suspend () -> R`) — extends the lambda bridge (ADR-012); a `KotlinSuspendFunc<R>` type whose `InvokeAsync()` returns `Task<R>`
 - **Flow<T>** — maps to `IAsyncEnumerable<T>`; requires a subscription/cancellation model; significantly more complex
 - **Suspend extension functions** — same pattern as regular suspend functions; can be added alongside extension function support
-- **Nullable suspend returns** (`suspend fun (): String?`) — requires the same two-call pattern as ADR-002 but async; deferred to keep v1 focused
+- ~~**Nullable suspend returns** (`suspend fun (): String?`)~~: shipped 2026-09-08 (issue #108). Not
+  the two-call pattern predicted above: the single-call shape this ADR already uses for a
+  non-nullable object/primitive/string return carries the null case directly, both sides just
+  needed to stop dropping it. The Kotlin export body branched only on `isUnit` and fed a nullable
+  result straight into `StableRef.create`, whose `T` is `Any`, so the generated `CNameExports.kt`
+  did not compile; the C# side built `asyncReturnType` off `simpleName` and dropped the `?`, so a
+  literal fix of only the Kotlin half would have compiled `Task<Cat>` wrapping `IntPtr.Zero` in a
+  live `Cat` and `Task<int>` reading a Kotlin `null` back as `0`. Both builders
+  (`buildSuspendFunctionBody`, `buildSuspendMethodBody`) now take `isNullable` and share one
+  `resultRefExpression` helper; `renderAsyncMethod` matches `primitiveAsyncTypes` on
+  `removeSuffix("?")` so a nullable primitive hits [ADR-067](067-nullable-stateflow-mapping.md)'s
+  existing `Nullable.GetUnderlyingType` branch, reused rather than duplicated. See
+  [Coroutines and Flow](../topics/coroutines-and-flow.md#suspend-fun-returning-a-nullable-type) and
+  [FEATURES.md](../../FEATURES.md).

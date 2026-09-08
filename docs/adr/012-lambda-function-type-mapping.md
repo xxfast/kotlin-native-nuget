@@ -216,6 +216,12 @@ Kotlin lambda properties and returns are bridged using the same `StableRef` opaq
 
 All implement `IDisposable`. The `Kotlin` prefix distinguishes them from `System.Func`/`System.Action` and signals they hold a native resource.
 
+`T`/`TResult` are qualified `global::Namespace.Name` for an exported class, exactly like any other
+cross-class reference; a lambda's own type arguments were a separate simple-name-only code path
+until [ADR-066](066-forward-export-reachability-closure.md)'s 2026-09-08 amendment (issue #111)
+qualified them and made an unnameable argument (`Flow<T>`) skip the member instead of rendering
+broken C#.
+
 ### C# → Kotlin (accepting lambda parameters) — deferred to Phase 5
 
 Kotlin functions with lambda parameters accept a `CPointer<CFunction<...>>` at the C boundary. C# marshals a `Func`/`Action` delegate to a function pointer, pins it for the call, and frees after return. This requires fundamentally new plumbing (delegate marshalling, `GCHandle` pinning, `CPointer<CFunction<...>>` on the Kotlin side) that aligns with the bidirectional support work in Phase 5. Storing function pointers across calls (async, callbacks) adds further lifetime complexity best addressed alongside reverse P/Invoke.

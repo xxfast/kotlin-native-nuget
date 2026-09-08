@@ -94,6 +94,28 @@ except for the enclosing scope. A subclass that really is nested inside its seal
 nested (`FlatShape.Circle`). Member positions referencing either spell it by its actual Kotlin
 scope, not by whether it happens to be sealed.
 
+### Amendment (2026-09-08): an `object` sibling subclass is declared once, not twice
+
+The 2026-09-07 sibling-hierarchy fix above filtered `isSealedSubclass()` out of `rootClasses`, but
+not out of `rootObjects`: a sibling `object`/`data object` subclass was still collected a second
+time as an empty namespace-level `public static class Loaf { }` alongside the sealed route's own
+`public sealed class Loaf : FlatShape`. CS0101 (duplicate type), plus CS0722 at any position
+returning the concrete arm, since C# cannot return a `static` type. Every pre-existing
+sealed-subclass-object fixture sat in the one combination this bug is invisible in (module-local
+**and** nested), so nothing caught it until a top-level, cross-module `object` arm did.
+
+Fixed at two routes: `NugetProcessor.kt`'s `rootObjects` gained the same
+`.filter { !it.isSealedSubclass() }` `rootClasses` already had, and
+`ForwardReachabilityClosure.reachabilityBucket()`'s object branch became
+`classKind == OBJECT && !isSealedSubclass() -> OBJECT`, falling through to `SEALED_SUBCLASS`
+otherwise. Only the `OBJECT` kind is qualified in that `when`, deliberately: an *intermediate*
+sealed class is both sealed and a sealed subclass and must keep `SEALED_CLASS`, so hoisting the
+check above the `when` would have broken that case instead.
+
+Fixture: `FlatShapeSample.kt`'s `data object Loaf : FlatShape()` (sibling, module-local) and
+`test-models/.../models/Nap.kt` via `Newsroom.nap()`/`deepNap()` (cross-module). `SealedSubclassObjectTests`
+is 12 `[Fact]`, not 14.
+
 ### Amendment (2026-09-07): a class, object, or companion method returning a sealed base binds through the same discriminator
 
 A sealed base at any callable **return** position, class method, object or companion member,

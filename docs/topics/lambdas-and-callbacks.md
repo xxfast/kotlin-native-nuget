@@ -62,6 +62,56 @@ public void Cat_OnPet_Invoke()
 }
 ```
 
+### A lambda's type arguments across a namespace boundary {id="type-arguments-across-a-namespace-boundary"}
+
+`KotlinFunc<T1, TResult>`'s type arguments are qualified `global::Namespace.Name` exactly like any other cross-class reference, even when the lambda property lives in a different namespace from both of its type arguments. From `test-library/src/nativeMain/kotlin/.../catcam/CatCam.kt`:
+
+```kotlin
+class CatCam(val watching: String) {
+  /** Expressible, cross-namespace: must qualify, must keep binding, must invoke. */
+  val onPick: (CamId) -> Snapshot = { id -> Snapshot("${id.value}: $watching, unmoved") }
+
+  /** The reported repro: `Flow<Snapshot>` is unspellable here, so the member must be absent. */
+  val onStream: (CamId) -> Flow<Snapshot> = { id ->
+    flowOf(Snapshot("${id.value}: $watching, still unmoved"))
+  }
+}
+```
+
+`CamId` and `Snapshot` live in `TestLibrary.Catcam.Lens`, one package below `CatCam` itself, so a bare simple name would only compile by coincidence. Generated C#:
+
+```C#
+public KotlinFunc<global::TestLibrary.Catcam.Lens.CamId, global::TestLibrary.Catcam.Lens.Snapshot> OnPick => new KotlinFunc<global::TestLibrary.Catcam.Lens.CamId, global::TestLibrary.Catcam.Lens.Snapshot>(Native_Get_onPick(_handle));
+```
+
+`OnStream` is absent from the generated class entirely: `Flow<Snapshot>` has no C# spelling on this route, so the member is dropped with a `SKIPPED_UNSUPPORTED_PROPERTY` naming it, rather than emitting `KotlinFunc<CamId, Flow>` and failing to compile. Using it, from `IntegrationTests/LambdaTypeArgumentTests.cs`:
+
+```C#
+[Fact]
+public void CatCam_OnPick_QualifiesBothCrossNamespaceTypeArgumentsAndInvokes()
+{
+    using var cam = new CatCam("Oreo");
+    using var id = new CamId("oreo-front");
+    using KotlinFunc<CamId, Snapshot> pick = cam.OnPick;
+
+    using Snapshot snapshot = pick.Invoke(id);
+
+    Assert.Equal("oreo-front: Oreo, unmoved", snapshot.Caption);
+}
+
+[Theory]
+[InlineData("OnStream")]
+[InlineData("OnStreamAsync")]
+[InlineData("OnSponsor")]
+public void CatCam_UnspellableLambdaProperty_IsAbsent(string member)
+{
+    Assert.Null(typeof(CatCam).GetProperty(member));
+    Assert.Empty(typeof(CatCam).GetMember(member));
+}
+```
+
+A lambda's own type-**parameter** argument (`T` on a generic member) stays bare rather than being qualified, since it names no concrete class. The same qualify-or-skip rule applies to a lambda-typed property on a sealed subclass, the generic-return route, and a top-level function's lambda-typed return.
+
 ## C# → Kotlin: per-call lambda parameters
 
 From `Cat.kt`, Kotlin functions accepting a C# lambda, arity 0 through 2:
@@ -261,6 +311,7 @@ Be precise about what's supported here: the interface *parameter* shape on **thi
 - Converging the `add`/`remove` subscription route above onto that general bridge factory is not done; the two routes are separate machinery today, and the subscription route has its own known gaps (a non-Unit-returning or property-bearing subscription interface generates non-compiling Kotlin with no diagnostic), tracked in [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md).
 - Exception propagation from inside a C# callback back into Kotlin is not implemented (the forward-direction `ADR-024`/`ADR-028`/`ADR-029` machinery has no mirror here yet).
 - `Flow<T>` or a suspend lambda (`suspend (T) -> R`) as a function parameter is not implemented.
+- `WrapArg<T>` only handles `string`/`int`/`long`/`float`/`double`/`bool` and `INugetHandle` at an **argument** position; an `sbyte`/`short`/`char`/`uint` argument, or a reference-underlying value-class argument, throws `NotSupportedException` at runtime rather than failing to build (see [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md)).
 
 <seealso>
     <category ref="related">
@@ -269,6 +320,7 @@ Be precise about what's supported here: the interface *parameter* shape on **thi
     </category>
     <category ref="external">
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/012-lambda-function-type-mapping.md">ADR-012: Lambda/function type mapping</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/066-forward-export-reachability-closure.md">ADR-066: Forward export reachability closure</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/036-reverse-interop-mechanism.md">ADR-036: Reverse interop mechanism</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/037-stored-callbacks.md">ADR-037: Stored callbacks</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/039-interface-bridging.md">ADR-039: Interface bridging</a>
