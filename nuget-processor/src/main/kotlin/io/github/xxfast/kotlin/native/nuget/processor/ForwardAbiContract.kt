@@ -1,5 +1,6 @@
 package io.github.xxfast.kotlin.native.nuget.processor
 
+import com.google.devtools.ksp.symbol.KSNode
 import com.squareup.kotlinpoet.AnnotationSpec
 import com.squareup.kotlinpoet.FileSpec
 import com.squareup.kotlinpoet.FunSpec
@@ -15,6 +16,8 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardAbiDirectio
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardAbiWireType
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallablePlan
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallablePlanCatalog
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardExportOwner
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardExportOwners
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardNativeCall
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardPropertyPlan
 
@@ -51,6 +54,51 @@ internal data class ForwardAbiSignature(
   }
 }
 
+/** ADR-117: which of the three duplicate-entry-point guards produced a [ForwardAbiCollision]. */
+internal enum class ForwardAbiGuard(val phrase: String) {
+  DUPLICATE_CSHARP_IMPORT("duplicate C# import for"),
+  DUPLICATE_KOTLIN_EXPORT("duplicate Kotlin export for"),
+  CONFLICTING_LEGACY_IMPORTS("conflicting C# legacy imports for"),
+}
+
+/**
+ * ADR-117: one C entry point claimed by more than one Kotlin declaration. Returned rather than
+ * thrown, so `NugetProcessor` can raise it as `ERROR_C_ENTRY_POINT_COLLISION` pointing at the
+ * author's own source. The remaining contract guards (missing, mismatch, and every
+ * `assertMatchesPlan` check) stay generator-bug `require`s: those are never user-reachable.
+ */
+internal data class ForwardAbiCollision(
+  val exportName: String,
+  val guard: ForwardAbiGuard,
+  val owners: List<ForwardExportOwner>,
+  val signatures: List<ForwardAbiSignature>,
+) {
+  /** The first owner, which the diagnostic renders its location and heading from. */
+  val declaration: String get() = owners.firstOrNull()?.text ?: exportName
+
+  val symbol: KSNode? get() = owners.firstOrNull()?.node
+
+  val reason: String
+    get() = "Forward ABI ${guard.phrase} $exportName; ${owners.size} Kotlin declarations export " +
+        "the same C entry point:\n" +
+        owners.joinToString("\n") { owner -> "  - ${owner.render()}" }
+
+  val hint: String
+    get() = "The C entry point is derived from the unqualified simple name; rename one " +
+        "declaration. [${signatures.joinToString(", ")}]"
+
+  fun message(): String = "$reason\n$hint"
+}
+
+/**
+ * ADR-117: [ForwardAbiContract.csharpLegacy]'s result. Still a `List<ForwardAbiSignature>` to every
+ * existing caller, plus the collisions its own duplicate guard found.
+ */
+internal class ForwardAbiLegacyContracts(
+  val signatures: List<ForwardAbiSignature>,
+  val collisions: List<ForwardAbiCollision>,
+) : List<ForwardAbiSignature> by signatures
+
 internal fun List<ForwardAbiSignature>.canonicalText(): String =
   sortedWith(
     compareBy(
@@ -68,16 +116,39 @@ internal object ForwardAbiContract {
   private const val ENTRY_POINT_MARKER: String = "EntryPoint = \""
   private const val EXTERN_MARKER: String = "static extern "
 
-  fun assertMatches(csharp: List<ForwardAbiSignature>, kotlin: List<ForwardAbiSignature>) {
+  /**
+   * ADR-117: returns the duplicate-entry-point collisions (a user-reachable authoring mistake) for
+   * the caller to raise as a named diagnostic; every other disagreement stays a `require`, because
+   * it can only be a generator bug. [owners] names the Kotlin declarations behind an entry point
+   * and is deliberately a separate parameter: [ForwardAbiSignature] compares with `==` below, so
+   * an owner field on it would break the mismatch check.
+   */
+  fun assertMatches(
+    csharp: List<ForwardAbiSignature>,
+    kotlin: List<ForwardAbiSignature>,
+    owners: ForwardExportOwners = ForwardExportOwners.EMPTY,
+  ): List<ForwardAbiCollision> {
     val csharpByName: Map<String, List<ForwardAbiSignature>> = csharp.groupBy { it.exportName }
     val kotlinByName: Map<String, List<ForwardAbiSignature>> = kotlin.groupBy { it.exportName }
     val names: List<String> = (csharpByName.keys + kotlinByName.keys).sorted()
+    val collisions: MutableList<ForwardAbiCollision> = mutableListOf()
 
     names.forEach { name ->
       val expected: List<ForwardAbiSignature> = csharpByName[name].orEmpty()
       val actual: List<ForwardAbiSignature> = kotlinByName[name].orEmpty()
-      require(expected.size <= 1) { "Forward ABI duplicate C# import for $name: $expected" }
-      require(actual.size <= 1) { "Forward ABI duplicate Kotlin export for $name: $actual" }
+      // One collision per entry point: a cross-package namesake duplicates both halves, and the
+      // `single()` calls below would throw before the caller ever sees the diagnostic.
+      if (expected.size > 1 || actual.size > 1) {
+        val duplicatedCsharp: Boolean = expected.size > 1
+        collisions += ForwardAbiCollision(
+          exportName = name,
+          guard = if (duplicatedCsharp) ForwardAbiGuard.DUPLICATE_CSHARP_IMPORT
+          else ForwardAbiGuard.DUPLICATE_KOTLIN_EXPORT,
+          owners = owners.owners(name),
+          signatures = if (duplicatedCsharp) expected else actual,
+        )
+        return@forEach
+      }
       require(expected.isNotEmpty()) {
         "Forward ABI missing C# import for $name; actual ${actual.single()}"
       }
@@ -88,6 +159,8 @@ internal object ForwardAbiContract {
         "Forward ABI mismatch for $name; expected ${expected.single()}, actual ${actual.single()}"
       }
     }
+
+    return collisions
   }
 
   fun csharp(file: CirFile): List<ForwardAbiSignature> = file.namespaces
@@ -112,7 +185,11 @@ internal object ForwardAbiContract {
    * construction. [ordinaryNames] drops the entry points the structural [csharp] collector already
    * covers, so a route migrating to a plan moves between the two universes automatically.
    */
-  fun csharpLegacy(renderedCsharp: String, ordinaryNames: Set<String>): List<ForwardAbiSignature> {
+  fun csharpLegacy(
+    renderedCsharp: String,
+    ordinaryNames: Set<String>,
+    owners: ForwardExportOwners = ForwardExportOwners.EMPTY,
+  ): ForwardAbiLegacyContracts {
     val lines: List<String> = renderedCsharp.lines()
     val collected: List<ForwardAbiSignature> = lines.mapIndexedNotNull { index, line ->
       val name: String = line.entryPointName() ?: return@mapIndexedNotNull null
@@ -130,12 +207,20 @@ internal object ForwardAbiContract {
     }
 
     val distinct: List<ForwardAbiSignature> = collected.distinct()
-    distinct.groupBy { signature -> signature.exportName }.forEach { (name, signatures) ->
-      require(signatures.size == 1) {
-        "Forward ABI conflicting C# legacy imports for $name: ${signatures.joinToString(", ")}"
+    // ADR-117: two legacy imports of one entry point whose signatures differ is the same
+    // user-reachable collision the two guards above catch, so it is reported the same way.
+    val collisions: List<ForwardAbiCollision> = distinct
+      .groupBy { signature -> signature.exportName }
+      .filterValues { signatures -> signatures.size > 1 }
+      .map { (name, signatures) ->
+        ForwardAbiCollision(
+          exportName = name,
+          guard = ForwardAbiGuard.CONFLICTING_LEGACY_IMPORTS,
+          owners = owners.owners(name),
+          signatures = signatures,
+        )
       }
-    }
-    return distinct
+    return ForwardAbiLegacyContracts(distinct, collisions)
   }
 
   fun kotlin(file: FileSpec, expectedNames: Set<String>): List<ForwardAbiSignature> = file.members

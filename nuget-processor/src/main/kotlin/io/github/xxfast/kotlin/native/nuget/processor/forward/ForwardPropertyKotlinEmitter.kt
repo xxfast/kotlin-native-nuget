@@ -30,7 +30,7 @@ internal fun FileSpec.Builder.addForwardPropertyPlanExports(plan: ForwardPropert
 }
 
 private fun FileSpec.Builder.addGetter(plan: ForwardPropertyPlan, call: ForwardNativeCall) {
-  val builder: FunSpec.Builder = exportBuilder(call, plan.receiver)
+  val builder: FunSpec.Builder = exportBuilder(call, plan.receiver, plan.symbol)
   val access: String = plan.accessExpression()
   when (val type: BridgeType = plan.type) {
     BridgeType.Unit -> builder.addCode(unitBody(access, "errorOut"), cOpaquePointerVar, stableRef)
@@ -224,7 +224,7 @@ private fun FileSpec.Builder.addNullablePresenceGetter(
   call: ForwardNativeCall,
 ) {
   val builder: FunSpec.Builder =
-    exportBuilder(call, plan.receiver).returns(kotlinType("Boolean"))
+    exportBuilder(call, plan.receiver, plan.symbol).returns(kotlinType("Boolean"))
   builder.addCode(
     valueBody("${plan.accessExpression()} != null", "errorOut", "false"),
     cOpaquePointerVar,
@@ -240,7 +240,7 @@ private fun FileSpec.Builder.addNullableValueGetter(
   val inner: BridgeType = (plan.type as BridgeType.Nullable).type
   val builder: FunSpec.Builder = when (inner) {
     is BridgeType.Primitive -> {
-      val getterBuilder: FunSpec.Builder = exportBuilder(call, plan.receiver)
+      val getterBuilder: FunSpec.Builder = exportBuilder(call, plan.receiver, plan.symbol)
         .returns(kotlinType(inner))
       getterBuilder.addCode(
         valueBody("${plan.accessExpression()}!!", "errorOut", primitiveDefault(inner)),
@@ -254,7 +254,7 @@ private fun FileSpec.Builder.addNullableValueGetter(
     // ticks before it crosses the wire.
     // ADR-103: same again for Duration.
     BridgeType.Instant, BridgeType.Duration -> {
-      val getterBuilder: FunSpec.Builder = exportBuilder(call, plan.receiver)
+      val getterBuilder: FunSpec.Builder = exportBuilder(call, plan.receiver, plan.symbol)
         .returns(kotlinType("Long"))
       getterBuilder.addCode(
         valueBody("${plan.accessExpression()}!!.toDotNetTicks()", "errorOut", "0L"),
@@ -265,7 +265,7 @@ private fun FileSpec.Builder.addNullableValueGetter(
     }
 
     // ADR-080: a bare nullable enum rides the same LegacyTwoCall `_value` call as its ordinal.
-    is BridgeType.Enum -> exportBuilder(call, plan.receiver)
+    is BridgeType.Enum -> exportBuilder(call, plan.receiver, plan.symbol)
       .returns(kotlinType("Int"))
       .addCode(
         valueBody("${plan.accessExpression()}!!.ordinal", "errorOut", "0"),
@@ -277,7 +277,7 @@ private fun FileSpec.Builder.addNullableValueGetter(
     // unboxed to the underlying (the ordinal for an enum underlying).
     is BridgeType.ValueClass -> {
       val unboxed = "${plan.accessExpression()}!!.${inner.underlyingPropertyName}"
-      val getterBuilder: FunSpec.Builder = exportBuilder(call, plan.receiver)
+      val getterBuilder: FunSpec.Builder = exportBuilder(call, plan.receiver, plan.symbol)
       when (val underlying: BridgeType = inner.underlying) {
         is BridgeType.Primitive -> getterBuilder
           .returns(kotlinType(underlying))
@@ -309,7 +309,8 @@ private fun FileSpec.Builder.addSetter(
   call: ForwardNativeCall,
   assignsNull: Boolean?,
 ) {
-  val builder: FunSpec.Builder = exportBuilder(call, plan.receiver, includeError = false)
+  val builder: FunSpec.Builder =
+    exportBuilder(call, plan.receiver, plan.symbol, includeError = false)
   if (assignsNull != true) {
     val valueType: BridgeType = requireNotNull(
       call.parameters.firstOrNull { it.name == "value" }?.transfer?.type,
@@ -332,10 +333,13 @@ private fun FileSpec.Builder.addSetter(
 private fun exportBuilder(
   call: ForwardNativeCall,
   receiver: ForwardPropertyReceiver,
+  // ADR-117: a property plan is its own owner symbol (properties cannot overload).
+  symbol: String,
   includeError: Boolean = true,
 ): FunSpec.Builder {
   val builder: FunSpec.Builder = FunSpec.builder("export_${call.exportName}")
     .addAnnotation(cNameAnnotation(call.exportName))
+    .tag(ForwardExportOwnerTag::class, ForwardExportOwnerTag(symbol = symbol))
   when (receiver) {
     is ForwardPropertyReceiver.Handle -> builder.addParameter("handle", cOpaquePointer)
     is ForwardPropertyReceiver.Value ->

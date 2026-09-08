@@ -136,12 +136,15 @@ class ForwardAbiLegacyImportTest {
       "private static extern void nuget_dispose(IntPtr handle, out IntPtr error);",
     )
 
-    val error: IllegalArgumentException = assertFailsWith {
-      ForwardAbiContract.csharpLegacy(rendered, emptySet())
-    }
+    // ADR-117: reported rather than thrown, so the caller can name the owning declarations.
+    val message: String = ForwardAbiContract.csharpLegacy(rendered, emptySet())
+      .collisions
+      .single()
+      .message()
 
-    assertTrue(error.message!!.contains("nuget_dispose"))
-    assertTrue(error.message!!.contains("out pointer"))
+    assertTrue(message.contains("conflicting C# legacy imports for"))
+    assertTrue(message.contains("nuget_dispose"))
+    assertTrue(message.contains("out pointer"))
   }
 
   @Test
