@@ -155,7 +155,7 @@ internal fun translateFunction(
 
     val lambdaTypeArgs: List<String> =
       csTypeArgumentNames(returnType.arguments, exportedTypes, context)
-    val lambdaCsType = "KotlinFunc<${lambdaTypeArgs.joinToString(", ")}>"
+    val lambdaCsType: String = csLambdaType(lambdaTypeArgs)
 
     val nativeImport = CirDllImport(
       libraryName = libraryName,

@@ -62,6 +62,30 @@ public void Cat_OnPet_Invoke()
 }
 ```
 
+### A lambda that returns `Unit` {id="a-lambda-that-returns-unit"}
+
+`void` is a C# return type, never a type argument, so a Unit-returning lambda cannot be spelled `KotlinFunc<void>`. It binds as `KotlinAction` instead, dropping the return and carrying its arity in the parameters alone, the same shape `KotlinSuspendAction` uses on the suspend side.
+
+```kotlin
+var naps: Int = 0
+val onNap: () -> Unit = { naps++ }
+val onNapFor: (Int) -> Unit = { hours -> naps += hours }
+```
+
+```C#
+public KotlinAction OnNap => new KotlinAction(Native_Get_onNap(_handle));
+public KotlinAction<int> OnNapFor => new KotlinAction<int>(Native_Get_onNapFor(_handle));
+```
+
+`Invoke` returns `void`, and is otherwise the `KotlinFunc` handle in every respect: `using` it, or disposing it, releases the underlying lambda.
+
+```C#
+using var cat = new Cat("Oreo", 9);
+using var onNap = cat.OnNap;
+onNap.Invoke();
+Assert.Equal(1, cat.Naps);
+```
+
 ### A lambda's type arguments across a namespace boundary {id="type-arguments-across-a-namespace-boundary"}
 
 `KotlinFunc<T1, TResult>`'s type arguments are qualified `global::Namespace.Name` exactly like any other cross-class reference, even when the lambda property lives in a different namespace from both of its type arguments. From `test-library/src/nativeMain/kotlin/.../catcam/CatCam.kt`:

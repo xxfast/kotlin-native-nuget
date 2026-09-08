@@ -352,6 +352,34 @@ internal fun csTypeArgumentNames(
 }
 
 /**
+ * Issue #114: the C# spelling of a lambda whose type arguments are already resolved, narrowing a
+ * Unit return to `KotlinAction` instead of spelling it `void`.
+ *
+ * `void` is a legal C# return type and never a legal type argument, so `() -> Unit` rendered
+ * `KotlinFunc<void>` is `CS1547: Keyword 'void' cannot be used in this context`, twice per
+ * property (once for the declared type, once for the `new`). The suspend arm has always narrowed
+ * this way; this is its plain-lambda twin.
+ *
+ * The Unit return is *dropped* rather than replaced, so the arity is carried by the parameters
+ * alone: `() -> Unit` is the non-generic `KotlinAction` and `(Int) -> Unit` is
+ * `KotlinAction<int>`, the same shape as `KotlinSuspendAction` and the shape `renderFuncHelper`
+ * declares.
+ *
+ * [typeArgs] is a lambda's full argument list, return type last, as [csTypeArgumentNames] spells
+ * it. Only `kotlin.Unit` maps to `"void"` there, so the string test is exact.
+ *
+ * Shared rather than inlined because the three routes that spell a lambda (ordinary class
+ * property, sealed subclass property, top-level function return) were three hand-written copies
+ * of one expression, and issue #111 had already been fixed in each of them separately.
+ */
+internal fun csLambdaType(typeArgs: List<String>): String {
+  if (typeArgs.lastOrNull() != "void") return "KotlinFunc<${typeArgs.joinToString(", ")}>"
+  val parameters: List<String> = typeArgs.dropLast(1)
+  if (parameters.isEmpty()) return "KotlinAction"
+  return "KotlinAction<${parameters.joinToString(", ")}>"
+}
+
+/**
  * Issue #111: the one diagnostic every lambda route raises for a type argument with no C#
  * spelling, so a property arm and a return arm say the same thing under different kinds.
  *

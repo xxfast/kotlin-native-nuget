@@ -5,6 +5,38 @@ namespace IntegrationTests;
 
 public class LambdaTests
 {
+    /// <summary>
+    /// Issue #114. A <c>() -> Unit</c> property rendered <c>KotlinFunc&lt;void&gt;</c>, which is
+    /// CS1547 and does not compile at all, so this test failing to build is itself the report.
+    /// It asserts the invocation had its effect rather than only that it returned, because a
+    /// KotlinAction that silently did nothing would compile just as well.
+    /// </summary>
+    [Fact]
+    public void Cat_OnNap_InvokeHasEffect()
+    {
+        using var cat = new Cat("Oreo", 9);
+        using var onNap = cat.OnNap;
+        Assert.Equal(0, cat.Naps);
+        onNap.Invoke();
+        Assert.Equal(1, cat.Naps);
+        onNap.Invoke();
+        Assert.Equal(2, cat.Naps);
+    }
+
+    /// <summary>
+    /// The arity-N facet of issue #114: <c>(Int) -> Unit</c> rendered
+    /// <c>KotlinFunc&lt;int, void&gt;</c>. The Unit return is dropped and the parameter kept, so
+    /// this binds as <c>KotlinAction&lt;int&gt;</c>.
+    /// </summary>
+    [Fact]
+    public void Cat_OnNapFor_InvokeWithArgument()
+    {
+        using var cat = new Cat("Oreo", 9);
+        using var onNapFor = cat.OnNapFor;
+        onNapFor.Invoke(3);
+        Assert.Equal(3, cat.Naps);
+    }
+
     [Fact]
     public void Cat_OnMeow_Invoke()
     {

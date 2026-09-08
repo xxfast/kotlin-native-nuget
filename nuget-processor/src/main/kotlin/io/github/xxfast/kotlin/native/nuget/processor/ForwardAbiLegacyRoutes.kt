@@ -149,7 +149,9 @@ internal object ForwardAbiLegacyRoutes {
 
   private fun MutableSet<ForwardAbiLegacyRoute>.add(property: CirProperty) {
     if (property.isFlow) add(ForwardAbiLegacyRoute.FLOW_PROPERTY)
-    if (property.type.startsWith("KotlinFunc<")) {
+    // Issue #114: the Unit arm of the same route. `KotlinAction` is bare at arity 0, so the
+    // `<` in the test below would miss it and the route would go unrecorded.
+    if (property.type.startsWith("KotlinFunc<") || property.type.startsWith("KotlinAction")) {
       add(ForwardAbiLegacyRoute.LAMBDA_PROPERTY)
     }
     val isSuspendLambda: Boolean = property.type.startsWith("KotlinSuspendFunc<") ||

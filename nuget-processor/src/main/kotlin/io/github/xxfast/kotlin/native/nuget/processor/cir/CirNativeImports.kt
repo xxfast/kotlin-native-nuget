@@ -97,7 +97,10 @@ internal fun propertyNativeImports(
 }
 
 internal fun CirProperty.usesLegacyNativeImport(): Boolean {
-  val isLambda: Boolean = type.startsWith("KotlinFunc<")
+  // Issue #114: `KotlinAction` carries no angle bracket at arity 0, exactly as
+  // `KotlinSuspendAction` does, so matching on `"KotlinFunc<"` alone drops the property's native
+  // import and the getter compiles against an extern that was never emitted.
+  val isLambda: Boolean = type.startsWith("KotlinFunc<") || type.startsWith("KotlinAction")
   val isSuspendLambda: Boolean = type.startsWith("KotlinSuspendFunc<") ||
       type.startsWith("KotlinSuspendAction")
   return isFlow || isLambda || isSuspendLambda

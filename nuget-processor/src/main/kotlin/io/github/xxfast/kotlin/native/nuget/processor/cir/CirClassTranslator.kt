@@ -369,10 +369,7 @@ internal fun translateClass(
         csTypeArgumentNames(propTypeResolved.arguments, exportedTypes, context)
       } else emptyList()
 
-      val lambdaCsType: String = if (isLambdaType) {
-        val typeParams: String = lambdaTypeArgs.joinToString(", ")
-        "KotlinFunc<$typeParams>"
-      } else ""
+      val lambdaCsType: String = if (isLambdaType) csLambdaType(lambdaTypeArgs) else ""
 
       val suspendLambdaTypeArgs: List<String> = if (isSuspendLambdaType) {
         csTypeArgumentNames(propTypeResolved.arguments, exportedTypes, context)
@@ -1165,7 +1162,7 @@ internal fun translateSealedClass(
           }
           val lambdaTypeArgs: List<String> =
             csTypeArgumentNames(propTypeResolved.arguments, exportedTypes, context)
-          val lambdaCsType: String = "KotlinFunc<${lambdaTypeArgs.joinToString(", ")}>"
+          val lambdaCsType: String = csLambdaType(lambdaTypeArgs)
           CirProperty(
             name = propName.replaceFirstChar { it.uppercase() },
             type = lambdaCsType,
