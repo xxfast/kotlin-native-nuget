@@ -113,7 +113,6 @@ data class CirSealedSubclass(
   val nativePrefix: String,
   val properties: List<CirProperty>,
   val isDataClass: Boolean = false,
-  val isDataObject: Boolean = false,
   /**
    * Issue #54: whether the subclass is declared *inside* its sealed base in Kotlin. C# follows the
    * Kotlin scope, so a nested one is rendered inside the base's braces (`Shape.Circle`) and a
