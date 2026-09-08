@@ -100,8 +100,16 @@ internal fun StringBuilder.renderAsyncMethod(method: CirMethod, className: Strin
       append("                        flowHandle));")
     }
 
-    method.asyncReturnType in primitiveAsyncTypes ->
+    // Issue #108: `FromHandle<T>` already reads a null handle as `default!` and already has an
+    // ADR-067 `Nullable.GetUnderlyingType` branch, so a nullable primitive needs only the `?` on
+    // the type argument: `FromHandle<int?>` returns null where `FromHandle<int>` returned 0.
+    method.asyncReturnType.removeSuffix("?") in primitiveAsyncTypes ->
       "t.SetResult(NugetMarshal.FromHandle<${method.asyncReturnType}>(resultPtr));"
+
+    // A nullable object return has no such guard: `new T(IntPtr.Zero)` would build a live wrapper
+    // over a null handle, so the null is tested on the wire pointer instead.
+    method.asyncReturnType.endsWith("?") ->
+      "t.SetResult(resultPtr == IntPtr.Zero ? null : new ${method.asyncReturnType.removeSuffix("?")}(resultPtr));"
 
     else ->
       "t.SetResult(new ${method.asyncReturnType}(resultPtr));"

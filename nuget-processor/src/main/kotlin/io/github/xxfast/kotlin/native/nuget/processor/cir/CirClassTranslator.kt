@@ -651,8 +651,8 @@ internal fun translateClass(
     val methodName: String = method.simpleName.asString()
     val cname: String = toCName(methodName)
     val csMethodName: String = methodName.replaceFirstChar { it.uppercase() }
-    val methodReturn: String = method.returnType?.resolve()?.expandAliases()
-      ?.declaration?.simpleName?.asString() ?: "Unit"
+    val resolvedReturn: KSType? = method.returnType?.resolve()?.expandAliases()
+    val methodReturn: String = resolvedReturn?.declaration?.simpleName?.asString() ?: "Unit"
     val isUnit: Boolean = methodReturn == "Unit"
 
     val methodParams: List<CirParameter> = method.parameters.map { param ->
@@ -661,8 +661,10 @@ internal fun translateClass(
       CirParameter((param.name?.asString() ?: "_").csharpParameterName(), mapParamType(kotlinType))
     }
 
+    // Issue #108: carry the nullability through, same as the top-level suspend route.
     val asyncReturnType: String = if (isUnit) "" else {
-      KOTLIN_TO_CSHARP_PARAM[methodReturn] ?: methodReturn
+      val csharp: String = KOTLIN_TO_CSHARP_PARAM[methodReturn] ?: methodReturn
+      if (resolvedReturn?.isMarkedNullable == true) "$csharp?" else csharp
     }
 
     val nativeParams: List<CirParameter> = listOf(

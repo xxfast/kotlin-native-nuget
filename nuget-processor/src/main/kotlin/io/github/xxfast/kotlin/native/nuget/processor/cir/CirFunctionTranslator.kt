@@ -619,8 +619,11 @@ internal fun translateSuspendFunction(
     CirParameter((param.name?.asString() ?: "_").csharpParameterName(), mapParamType(kotlinType))
   }
 
+  // Issue #108: a nullable Kotlin return has to reach C# as `Task<T?>`, otherwise a null result
+  // is read back as a `0` primitive or as a live wrapper over `IntPtr.Zero`.
   val asyncReturnType: String = if (isUnit) "" else {
-    KOTLIN_TO_CSHARP_PARAM[kotlinReturnType] ?: kotlinReturnType
+    val csharp: String = KOTLIN_TO_CSHARP_PARAM[kotlinReturnType] ?: kotlinReturnType
+    if (returnType?.isMarkedNullable == true) "$csharp?" else csharp
   }
 
   tracker.needsAsync = true
