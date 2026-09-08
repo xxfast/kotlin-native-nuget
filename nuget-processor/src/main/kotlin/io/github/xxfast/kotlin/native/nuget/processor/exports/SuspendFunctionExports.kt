@@ -11,6 +11,7 @@ import com.squareup.kotlinpoet.FileSpec
 import com.squareup.kotlinpoet.FunSpec
 import io.github.xxfast.kotlin.native.nuget.processor.cir.expandAliases
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeTypeClassifier
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardExportOwnerTag
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardLegacyParameterShape
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyLoweredName
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyLoweringStatement
@@ -55,6 +56,9 @@ internal fun FileSpec.Builder.addSuspendFunctionExports(
 
   val builder: FunSpec.Builder = FunSpec.builder("export_${cname}_async")
     .addAnnotation(cNameAnnotation("${cname}_async"))
+    // ADR-117: the one live legacy route that can collide *within* a class (two suspend
+    // overloads share `${cname}_async`), so it names the method, not the class.
+    .tag(ForwardExportOwnerTag::class, ForwardExportOwnerTag(declaration = func))
     .addLegacySuspendParameters(func, paramShapes)
     .addParameter("callbackPtr", cOpaquePointer)
     .addParameter("userData", cOpaquePointer)
@@ -100,6 +104,7 @@ internal fun FileSpec.Builder.addSuspendClassMethodExports(
 
     val builder: FunSpec.Builder = FunSpec.builder("export_${prefix}_${cname}_async")
       .addAnnotation(cNameAnnotation("${prefix}_${cname}_async"))
+      .tag(ForwardExportOwnerTag::class, ForwardExportOwnerTag(declaration = method))
       .addParameter("handle", cOpaquePointer)
       .addParameter("scopeHandle", cOpaquePointer)
 

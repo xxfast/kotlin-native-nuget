@@ -114,14 +114,21 @@ Kotlin or a C# API whose signature lies about its contract. Every diagnostic car
   value-class member a supertype declares, whether inherited, delegated or overridden).
 - **`INFO_*`**: the member still binds, under a documented assumption (for example, `out`/`in`
   variance on a class type parameter is dropped, but the member still generates).
-- **`ERROR_*`**: generation fails before any C# is written. The only v1 case is two constructors
-  that render an identical C# signature ([ADR-034](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/034-secondary-constructor-exceptions.md)).
-  This also catches two constructors that differ only in *reference*-type nullability
-  (`constructor(from: Patient)` next to `constructor(from: Patient?)`): C# does not treat a nullable
-  reference annotation as part of a method's signature, so both would otherwise render, correctly but
-  uncompilably, as `Referral(Patient from)` and `Referral(Patient? from)` (`CS0111`). Nullable
-  **value** types are unaffected and keep working: `constructor(n: Int)` next to
-  `constructor(n: Int?)` render genuinely distinct signatures and are not treated as a collision.
+- **`ERROR_*`**: generation fails and `CNameExports.kt` (the Kotlin `@CName` export file) is never
+  written, so `packNuget` never runs. Cases include two constructors, or two methods on one class,
+  that render an identical C# signature
+  ([ADR-034](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/034-secondary-constructor-exceptions.md)),
+  named `ERROR_CSHARP_SIGNATURE_COLLISION`. This also catches two constructors that differ only in
+  *reference*-type nullability (`constructor(from: Patient)` next to `constructor(from: Patient?)`):
+  C# does not treat a nullable reference annotation as part of a method's signature, so both would
+  otherwise render, correctly but uncompilably, as `Referral(Patient from)` and
+  `Referral(Patient? from)` (`CS0111`). Nullable **value** types are unaffected and keep working:
+  `constructor(n: Int)` next to `constructor(n: Int?)` render genuinely distinct signatures and are
+  not treated as a collision. A second case is a top-level `val` and `fun` that PascalCase to the
+  same C# name (`ERROR_CSHARP_NAME_COLLISION`, CS0102); see
+  [Top-level declarations](top-level-declarations.md) for that one. This page covers the third:
+  `ERROR_C_ENTRY_POINT_COLLISION`, two *different* Kotlin declarations deriving the same underlying C
+  entry point; see [Two declarations can't share one C entry point](#entry-point-collision) below.
 
 A `List`/`Map`/`Set` parameter with an unsupported element/key/value type (see
 [Collections](collections.md)) is skipped like this, naming the component that failed rather than the
@@ -520,6 +527,71 @@ property planner and the sealed-return route use. `SKIPPED_SEALED_POSITION` stil
 for a sealed type with no generated `FromHandle` discriminator at all: a sealed **interface**, or a
 sealed class outside the export scope. See
 [Interfaces, abstract classes, and sealed classes: A sealed type at a parameter position](interfaces-abstract-sealed.md#a-sealed-type-at-a-parameter-position).
+
+### Two declarations can't share one C entry point {id="entry-point-collision"}
+
+The native ABI is one flat namespace of `@CName`-exported C functions, and the export symbol is
+derived from the Kotlin declaration's own (unqualified) name. Two declarations that resolve to the
+same symbol used to abort `packNuget` with a raw `IllegalArgumentException` naming only the mangled
+symbol (`radio_play_collect`), not which Kotlin declarations were fighting over it.
+[ADR-117](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/117-forward-abi-collision-names-owning-declarations.md)
+(issue [#106](https://github.com/xxfast/kotlin-native-nuget/issues/106)) replaced that with a named
+`ERROR_C_ENTRY_POINT_COLLISION`, naming every owning declaration. Two same-simple-name classes in
+different packages is the plainest trigger:
+
+```kotlin
+// package tier1.abicollision.a
+class Kitten(val name: String)
+
+// package tier1.abicollision.b
+class Kitten(val name: String)
+```
+
+The shape below is reconstructed from `ForwardDiagnostic.format()` (`[nuget:<kind>] <verb>
+<location>: <reason>. <hint><at>`) applied to the actual `ForwardAbiCollision.reason`/`.hint` text
+`Tier1EntryPointCollisionTest` asserts against, with the temp-file paths elided:
+
+```
+[nuget:ERROR_C_ENTRY_POINT_COLLISION] Error tier1.abicollision.a.Kitten(String): Forward ABI
+    duplicate C# import for kitten_create; 2 Kotlin declarations export the same C entry point:
+      - tier1.abicollision.a.Kitten(String)
+        at .../A.kt:3
+      - tier1.abicollision.b.Kitten(String)
+        at .../B.kt:3. The C entry point is derived from the unqualified simple name; rename one
+    declaration. [kitten_create(in string, out pointer) -> pointer, kitten_create(in string, out pointer) -> pointer]
+    at .../A.kt:3
+```
+
+(The constructor's C# import carries the ADR-031 error out-parameter alongside the `name` argument,
+the same `out IntPtr error` shape [Constructor default parameters](classes-and-objects.md#ctordefaults-generated-c)
+shows for `carrier_create`, which is why the bracketed signature pair reads `(in string, out pointer)`
+rather than just `(in string)`.) The trailing `at` line echoes the first owner's own location again,
+the same location `logger.error` attaches the diagnostic to; it is not a third declaration.
+
+Owner naming has two granularities, depending on which universe the colliding export lives in. Every
+plan-routed export (an ordinary constructor, a top-level function, a class method) and the `suspend`
+legacy route name the exact declaration, with parameter types and `file:line`, as above. The
+remaining legacy routes, a sealed discriminator, a `Flow` collector, and the generated `Dispose`,
+name the owning top-level declaration instead (class-granular, since every export those routes
+produce derives from that declaration's own prefix). `fun dispose()` on an exported class is this
+shape: it collides with the always-generated `IDisposable.Dispose()` export, and the message names
+the method plus a `(route-owned export: ...)` marker for the generated side, again reconstructed from
+the same test's dispose cell:
+
+```
+  - tier1.abicollision.dispose.Closer.dispose()
+    at .../Closer.kt:4
+  - tier1.abicollision.dispose.Closer (route-owned export: the generated Dispose, a
+    suspend/Flow/sealed export, or another legacy route)
+    at .../Closer.kt:3
+```
+
+The hint is always the same: rename one of the colliding declarations. The prefix scheme itself
+(unqualified simple name, no package, no namespace) is unchanged; naming the collision is the interim
+remedy, not a fix for it. See the
+[open backlog item](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/backlog/two-exported-types-same-simple-name-different.md)
+for the structural fix (qualifying the export prefix by package) that would close the collision
+itself rather than only naming it.
 
 ### Where these messages appear
 

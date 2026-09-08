@@ -99,6 +99,13 @@ internal enum class ForwardDiagnosticKind(
    *  dropping one would change the API contract unpredictably. */
   ERROR_CSHARP_SIGNATURE_COLLISION(ForwardDiagnosticSeverity.ERROR),
 
+  /** ADR-117 / issue #106: two or more Kotlin declarations derive the same C entry point (two
+   *  `class Kitten` in different packages, a user `fun dispose()` beside the generated `Dispose`,
+   *  two `suspend` overloads). Fatal, and the message names every owning declaration: the ABI
+   *  contract's duplicate guards used to throw a raw `IllegalArgumentException` naming only the
+   *  mangled symbol. Still fails safe — the round returns before `CNameExports.kt` is written. */
+  ERROR_C_ENTRY_POINT_COLLISION(ForwardDiagnosticSeverity.ERROR),
+
   /** ADR-066: a reachable, structurally bridgeable declaration in a dependency module whose
    *  package the reachability closure did not admit — out of scope, not unsupported. Replaces
    *  the misleading `SKIPPED_UNSUPPORTED_TYPE` this case used to fall through to. */

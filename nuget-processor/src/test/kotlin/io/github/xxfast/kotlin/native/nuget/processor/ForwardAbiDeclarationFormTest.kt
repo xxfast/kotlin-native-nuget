@@ -159,15 +159,14 @@ class ForwardAbiDeclarationFormTest {
   @Test
   fun `duplicated export name is reported`() {
     val sig: ForwardAbiSignature = forms().first().matched
-    val error: IllegalArgumentException = assertFailsWith {
-      ForwardAbiContract.assertMatches(
-        csharp = listOf(sig, sig),
-        kotlin = listOf(sig),
-      )
-    }
+    // ADR-117: a duplicate entry point is now a returned collision (raised as
+    // ERROR_C_ENTRY_POINT_COLLISION by the processor), not a thrown generator-bug `require`.
+    val message: String = ForwardAbiContract.assertMatches(
+      csharp = listOf(sig, sig),
+      kotlin = listOf(sig),
+    ).single().message()
     assertTrue(
-      error.message!!.contains("duplicate", ignoreCase = true) ||
-          error.message!!.contains(sig.exportName),
+      message.contains("duplicate", ignoreCase = true) || message.contains(sig.exportName),
     )
   }
 

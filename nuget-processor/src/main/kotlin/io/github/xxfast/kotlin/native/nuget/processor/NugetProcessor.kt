@@ -74,7 +74,10 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallablePla
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallablePlanCatalog
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallablePlanner
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnostic
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCNameExports
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnosticKind
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardExportOwnerRange
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardExportOwners
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardPlanSkipReason
 import io.github.xxfast.kotlin.native.nuget.processor.forward.diagnosticHint
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnosticSink
@@ -909,12 +912,13 @@ class NugetProcessor(
     warnDroppedForwardExtensionReceivers(callableCatalog, logger)
     warnRefusedLegacyRouteParameters(classes, suspendFunctions, forwardClassifier, logger)
 
-    val cNameExports: FileSpec = generateCNameWrappers(
+    val cNameWrappers: ForwardCNameExports = generateCNameWrappers(
       functions, genericFunctions, extensionFunctions, extensionProperties,
       classes, genericClasses, enums, sealedClasses, objects, properties,
       valueClasses, suspendFunctions, callableCatalog, deps, reachableInterfaces,
       exportedObjectHandles, forwardClassifier,
     )
+    val cNameExports: FileSpec = cNameWrappers.file
     val bindings: CsharpBindings = generateCSharpBindings(
       functions, genericFunctions, extensionFunctions, extensionProperties,
       allClasses, enums, interfaces, sealedClasses, objects, properties,
@@ -931,15 +935,35 @@ class NugetProcessor(
     // the same rendered text that was just written to Interop.cs, so both halves of every route are
     // compared rather than only the planned ones.
     val ordinaryContracts: List<ForwardAbiSignature> = ForwardAbiContract.csharp(bindings.cir)
-    val csharpContracts: List<ForwardAbiSignature> = ordinaryContracts +
-        ForwardAbiContract.csharpLegacy(
-          bindings.rendered,
-          ordinaryContracts.map { signature -> signature.exportName }.toSet(),
-        )
-    ForwardAbiContract.assertMatches(
+    // ADR-117: which Kotlin declaration composed each export, so a duplicate entry point names its
+    // owners rather than only the mangled C symbol.
+    val exportOwners: ForwardExportOwners = ForwardExportOwners.build(
+      cNameExports,
+      cNameWrappers.ranges,
+      callableCatalog,
+    )
+    val legacyContracts: ForwardAbiLegacyContracts = ForwardAbiContract.csharpLegacy(
+      bindings.rendered,
+      ordinaryContracts.map { signature -> signature.exportName }.toSet(),
+      exportOwners,
+    )
+    // A collision is an authoring mistake, not a generator bug: report every owner and stop before
+    // the remaining generator-bug `require`s (which would throw on the same duplicates) and before
+    // `CNameExports.kt` is written.
+    if (legacyContracts.collisions.isNotEmpty()) {
+      reportEntryPointCollisions(legacyContracts.collisions)
+      return emptyList()
+    }
+    val csharpContracts: List<ForwardAbiSignature> = ordinaryContracts + legacyContracts.signatures
+    val collisions: List<ForwardAbiCollision> = ForwardAbiContract.assertMatches(
       csharp = csharpContracts,
       kotlin = ForwardAbiContract.kotlin(cNameExports, csharpContracts.map { it.exportName }.toSet()),
+      owners = exportOwners,
     )
+    if (collisions.isNotEmpty()) {
+      reportEntryPointCollisions(collisions)
+      return emptyList()
+    }
     ForwardAbiContract.assertMatchesPlan(
       catalog = callableCatalog,
       csharp = csharpContracts,
@@ -1058,6 +1082,25 @@ class NugetProcessor(
     return CsharpBindings(cirFile, csharp)
   }
 
+  /**
+   * ADR-117: each collision becomes one `ERROR_C_ENTRY_POINT_COLLISION`, pointing at the first
+   * owner's own Kotlin source and naming every owner in its body.
+   */
+  private fun reportEntryPointCollisions(collisions: List<ForwardAbiCollision>) {
+    ForwardDiagnosticSink.emit(
+      collisions.map { collision ->
+        ForwardDiagnostic(
+          kind = ForwardDiagnosticKind.ERROR_C_ENTRY_POINT_COLLISION,
+          symbol = collision.symbol,
+          declaration = collision.declaration,
+          reason = collision.reason,
+          hint = collision.hint,
+        )
+      },
+      logger,
+    )
+  }
+
   private fun generateCNameWrappers(
     functions: List<KSFunctionDeclaration>,
     genericFunctions: List<KSFunctionDeclaration>,
@@ -1080,7 +1123,7 @@ class NugetProcessor(
     exportedTypes: Set<String>,
     // ADR-114: the legacy Flow/suspend export builders classify their own generic parameters.
     forwardClassifier: ForwardBridgeTypeClassifier,
-  ): FileSpec {
+  ): ForwardCNameExports {
     val builder: FileSpec.Builder = FileSpec
       .builder("io.github.xxfast.kotlin.native.nuget.generated", "CNameExports")
       .addImport("kotlinx.cinterop", "asStableRef")
@@ -1090,32 +1133,52 @@ class NugetProcessor(
       .addImport("kotlinx.cinterop", "value")
       .addImport("kotlinx.cinterop", "StableRef")
 
+    val exportOwnerRanges: MutableList<ForwardExportOwnerRange> = mutableListOf()
+
+    // ADR-117: the coarse half of the export-owner index. Every per-declaration loop body below
+    // records the `members` range it added, so an export composed by a legacy route (which holds
+    // no plan and carries no tag) can still name the top-level declaration it came from. A tagged
+    // `FunSpec` inside one of these ranges wins over the range.
+    fun attributing(declaration: KSDeclaration, block: () -> Unit) {
+      val from: Int = builder.members.size
+      block()
+      exportOwnerRanges += ForwardExportOwnerRange(from, builder.members.size, declaration)
+    }
+
     functions.forEach { func ->
-      builder.addImport(func.packageName.asString(), func.simpleName.asString())
-      // ADR-095: node identity, not a name-derived symbol — top-level overloads number per
-      // (package, name), so the n-th namesake's plan is keyed `..._$n`.
-      // ADR-096: plural — a defaulted top-level function also carries its synthesized omitting
-      // overloads on the same node.
-      val planned: List<ForwardCallablePlan> = callableCatalog.plansFor(func)
-      if (planned.isNotEmpty()) planned.forEach { builder.addForwardKotlinPlanExport(it) }
-      else builder.addFunctionExports(func)
+      attributing(func) {
+        builder.addImport(func.packageName.asString(), func.simpleName.asString())
+        // ADR-095: node identity, not a name-derived symbol — top-level overloads number per
+        // (package, name), so the n-th namesake's plan is keyed `..._$n`.
+        // ADR-096: plural — a defaulted top-level function also carries its synthesized omitting
+        // overloads on the same node.
+        val planned: List<ForwardCallablePlan> = callableCatalog.plansFor(func)
+        if (planned.isNotEmpty()) planned.forEach { builder.addForwardKotlinPlanExport(it) }
+        else builder.addFunctionExports(func)
+      }
     }
 
     genericFunctions.forEach { func ->
-      builder.addImport(func.packageName.asString(), func.simpleName.asString())
-      builder.addGenericFunctionExports(func)
+      attributing(func) {
+        builder.addImport(func.packageName.asString(), func.simpleName.asString())
+        builder.addGenericFunctionExports(func)
+      }
     }
 
     classes.forEach {
-      builder.addClassExports(it, callableCatalog, forwardClassifier, exportedTypes)
+      attributing(it) {
+        builder.addClassExports(it, callableCatalog, forwardClassifier, exportedTypes)
+      }
     }
-    classes.forEach { builder.addCompanionExports(it, callableCatalog) }
-    genericClasses.forEach { builder.addGenericClassExports(it) }
-    enums.forEach { builder.addEnumExports(it) }
-    sealedClasses.forEach { builder.addSealedClassExports(it, callableCatalog) }
-    objects.forEach { builder.addObjectExports(it, callableCatalog) }
-    valueClasses.forEach { builder.addValueClassExports(it, callableCatalog) }
-    reachableInterfaces.forEach { builder.addInterfaceExports(it, callableCatalog) }
+    classes.forEach { attributing(it) { builder.addCompanionExports(it, callableCatalog) } }
+    genericClasses.forEach { attributing(it) { builder.addGenericClassExports(it) } }
+    enums.forEach { attributing(it) { builder.addEnumExports(it) } }
+    sealedClasses.forEach { attributing(it) { builder.addSealedClassExports(it, callableCatalog) } }
+    objects.forEach { attributing(it) { builder.addObjectExports(it, callableCatalog) } }
+    valueClasses.forEach { attributing(it) { builder.addValueClassExports(it, callableCatalog) } }
+    reachableInterfaces.forEach {
+      attributing(it) { builder.addInterfaceExports(it, callableCatalog) }
+    }
     // ADR-084 stage 1: the per-interface bridge factory, projected from the same slot plan the C#
     // `{Iface}BridgeState` is projected from (see `ForwardInterfaceBridgePlanner`).
     val bridgePlans: List<ForwardBridgeInterfacePlan> =
@@ -1264,30 +1327,38 @@ class NugetProcessor(
     }
 
     suspendFunctions.forEach { func ->
-      builder.addImport(func.packageName.asString(), func.simpleName.asString())
-      builder.addSuspendFunctionExports(func, forwardClassifier)
+      attributing(func) {
+        builder.addImport(func.packageName.asString(), func.simpleName.asString())
+        builder.addSuspendFunctionExports(func, forwardClassifier)
+      }
     }
 
     classes.forEach { cls ->
-      val hasSuspendMethods: Boolean = cls.getAllFunctions()
-        .any { it.modifiers.contains(Modifier.SUSPEND) }
-      if (hasSuspendMethods) builder.addSuspendClassMethodExports(cls, forwardClassifier)
+      attributing(cls) {
+        val hasSuspendMethods: Boolean = cls.getAllFunctions()
+          .any { it.modifiers.contains(Modifier.SUSPEND) }
+        if (hasSuspendMethods) builder.addSuspendClassMethodExports(cls, forwardClassifier)
+      }
     }
 
     properties.forEach { prop ->
-      builder.addImport(prop.packageName.asString(), prop.simpleName.asString())
-      builder.addPropertyExports(prop, callableCatalog)
+      attributing(prop) {
+        builder.addImport(prop.packageName.asString(), prop.simpleName.asString())
+        builder.addPropertyExports(prop, callableCatalog)
+      }
     }
 
     extensionFunctions.forEach { func ->
-      builder.addImport(func.packageName.asString(), func.simpleName.asString())
-      builder.addExtensionFunctionExports(func, callableCatalog)
+      attributing(func) {
+        builder.addImport(func.packageName.asString(), func.simpleName.asString())
+        builder.addExtensionFunctionExports(func, callableCatalog)
+      }
     }
 
     // The import lives inside addExtensionPropertyExports, behind the plan gate: adding it here
     // left a dead import for every dropped extension property.
     extensionProperties.forEach { prop ->
-      builder.addExtensionPropertyExports(prop, callableCatalog)
+      attributing(prop) { builder.addExtensionPropertyExports(prop, callableCatalog) }
     }
 
     val listTypes: Set<String> = setOf("kotlin.collections.List", "kotlin.collections.MutableList")
@@ -1596,7 +1667,7 @@ class NugetProcessor(
     }
     if (classesHaveSuspendStateFlowMethods) builder.addStateFlowHandleExports()
 
-    return builder.build()
+    return ForwardCNameExports(builder.build(), exportOwnerRanges)
   }
 
 }

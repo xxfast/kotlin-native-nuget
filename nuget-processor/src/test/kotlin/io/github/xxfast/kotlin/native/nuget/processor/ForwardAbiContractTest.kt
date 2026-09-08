@@ -1,5 +1,10 @@
 package io.github.xxfast.kotlin.native.nuget.processor
 
+import com.google.devtools.ksp.symbol.FileLocation
+import com.google.devtools.ksp.symbol.KSNode
+import com.google.devtools.ksp.symbol.KSVisitor
+import com.google.devtools.ksp.symbol.Location
+import com.google.devtools.ksp.symbol.Origin
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirClass
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirConstructor
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirDllImport
@@ -22,6 +27,8 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallablePla
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallablePlanCatalog
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardConversion
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardEvaluation
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardExportOwner
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardExportOwners
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardFlow
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardHelperRequirement
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardInvocation
@@ -226,28 +233,69 @@ class ForwardAbiContractTest {
     assertTrue(error.message!!.contains("int"))
   }
 
+  /**
+   * ADR-117 / issue #106: a duplicate entry point is a user-reachable authoring mistake, so it is
+   * returned as a [ForwardAbiCollision] naming every owning Kotlin declaration rather than thrown
+   * as an `IllegalArgumentException` naming only the mangled C symbol.
+   */
   @Test
   fun `reports duplicate C# import`() {
-    val error: IllegalArgumentException = assertFailsWith {
-      ForwardAbiContract.assertMatches(
-        csharp = listOf(signature("combine"), signature("combine", result = ForwardAbiType.INT)),
-        kotlin = listOf(signature("combine")),
-      )
-    }
+    val collisions: List<ForwardAbiCollision> = ForwardAbiContract.assertMatches(
+      csharp = listOf(signature("combine"), signature("combine", result = ForwardAbiType.INT)),
+      kotlin = listOf(signature("combine")),
+      owners = combineOwners,
+    )
 
-    assertTrue(error.message!!.contains("duplicate C# import for"))
+    val message: String = collisions.single().message()
+    assertTrue(message.contains("duplicate C# import for"))
+    assertTrue(message.contains("combine"))
+    assertTrue(message.contains("sample.a.Combiner.combine(String)"))
+    assertTrue(message.contains("sample.b.Combiner.combine(String)"))
+    assertTrue(message.contains("A.kt:7"))
   }
 
   @Test
   fun `reports duplicate Kotlin export`() {
-    val error: IllegalArgumentException = assertFailsWith {
-      ForwardAbiContract.assertMatches(
-        csharp = listOf(signature("combine")),
-        kotlin = listOf(signature("combine"), signature("combine", result = ForwardAbiType.INT)),
-      )
-    }
+    val collisions: List<ForwardAbiCollision> = ForwardAbiContract.assertMatches(
+      csharp = listOf(signature("combine")),
+      kotlin = listOf(signature("combine"), signature("combine", result = ForwardAbiType.INT)),
+      owners = combineOwners,
+    )
 
-    assertTrue(error.message!!.contains("duplicate Kotlin export for"))
+    val message: String = collisions.single().message()
+    assertTrue(message.contains("duplicate Kotlin export for"))
+    assertTrue(message.contains("sample.a.Combiner.combine(String)"))
+    assertTrue(message.contains("sample.b.Combiner.combine(String)"))
+  }
+
+  @Test
+  fun `reports conflicting C# legacy imports with their owners`() {
+    val rendered: String = legacyDeclaration(
+      "combine",
+      "private static extern void combine(IntPtr handle);",
+    ) + legacyDeclaration(
+      "combine",
+      "private static extern void combine(IntPtr handle, out IntPtr error);",
+    )
+
+    val collisions: List<ForwardAbiCollision> =
+      ForwardAbiContract.csharpLegacy(rendered, emptySet(), combineOwners).collisions
+
+    val message: String = collisions.single().message()
+    assertTrue(message.contains("conflicting C# legacy imports for"))
+    assertTrue(message.contains("sample.a.Combiner.combine(String)"))
+    assertTrue(message.contains("sample.b.Combiner.combine(String)"))
+  }
+
+  /** No Kotlin declaration behind the entry point: the message says so instead of going silent. */
+  @Test
+  fun `names the generator helper when the owner index knows no declaration`() {
+    val collisions: List<ForwardAbiCollision> = ForwardAbiContract.assertMatches(
+      csharp = listOf(signature("combine"), signature("combine", result = ForwardAbiType.INT)),
+      kotlin = listOf(signature("combine")),
+    )
+
+    assertTrue(collisions.single().message().contains("generated helper (no Kotlin declaration)"))
   }
 
   @Test
@@ -367,6 +415,31 @@ class ForwardAbiContractTest {
     vararg parameters: ForwardAbiParameter,
     result: ForwardAbiType = ForwardAbiType.BOOL,
   ): ForwardAbiSignature = ForwardAbiSignature(name, result, parameters.toList())
+
+  /** ADR-117: the owner index the processor builds from the `CNameExports.kt` `FileSpec`. */
+  private val combineOwners: ForwardExportOwners = ForwardExportOwners(
+    mapOf(
+      "combine" to listOf(
+        ForwardExportOwner("sample.a.Combiner.combine(String)", FakeSourceNode("A.kt", 7)),
+        ForwardExportOwner("sample.b.Combiner.combine(String)", FakeSourceNode("B.kt", 9)),
+      ),
+    ),
+  )
+
+  private fun legacyDeclaration(entryPoint: String, extern: String): String = """
+    |        [DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "$entryPoint")]
+    |        $extern
+    |
+  """.trimMargin()
+
+  /** A stand-in for the `KSNode` an owner carries, so `at file:line` is asserted without KSP. */
+  private class FakeSourceNode(filePath: String, lineNumber: Int) : KSNode {
+    override val origin: Origin = Origin.KOTLIN
+    override val location: Location = FileLocation(filePath, lineNumber)
+    override val parent: KSNode? = null
+    override fun <D, R> accept(visitor: KSVisitor<D, R>, data: D): R =
+      error("the owner renderer never visits the node")
+  }
 
   private fun shadowPlan(): ForwardCallablePlan {
     val int: BridgeType.Primitive = BridgeType.Primitive(PrimitiveKind.INT)
