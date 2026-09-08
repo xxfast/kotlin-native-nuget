@@ -4,6 +4,7 @@ import dev.other.core.Advertisement
 import dev.other.core.Airwave
 import io.github.xxfast.kotlin.native.nuget.test.models.Broadcast
 import io.github.xxfast.kotlin.native.nuget.test.models.Byline
+import io.github.xxfast.kotlin.native.nuget.test.models.Nap
 import io.github.xxfast.kotlin.native.nuget.test.models.StoryCode
 import io.github.xxfast.kotlin.native.nuget.test.models.StoryUri
 import io.github.xxfast.kotlin.native.nuget.test.models.TopStory
@@ -93,6 +94,19 @@ class Newsroom {
    * nested `CLASS` would still leak.
    */
   fun defaults(): Broadcast.Defaults = Broadcast.Defaults
+
+  /**
+   * Issue #110, second route: reaches [Nap], a cross-module sealed base whose nested `object`
+   * subclass `Nap.Zoomies` the ADR-066 closure admits (the nested-declaration refusal carves out
+   * sealed subclasses) and then buckets as `OBJECT`, because `reachabilityBucket()` tests
+   * `classKind` before `isSealedSubclass()`. That emits a bogus empty `public static class Zoomies`
+   * at namespace level beside the real nested `Nap.Zoomies`. Non-fatal, since the real one is
+   * nested and the names do not collide, but it is still a public type that is not an API.
+   */
+  fun nap(): Nap = Nap.Zoomies
+
+  /** The nested `CLASS` arm of the same hierarchy, the control that is already correct today. */
+  fun deepNap(): Nap.Deep = Nap.Deep(720)
 
   /**
    * Undeclared-enum gate, shape (c): a *top-level* enum in the never-admitted `dev.other.core`,

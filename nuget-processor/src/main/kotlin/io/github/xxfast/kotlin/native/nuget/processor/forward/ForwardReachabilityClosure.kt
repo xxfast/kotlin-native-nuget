@@ -263,7 +263,14 @@ internal class ForwardReachabilityClosure(
 
   private fun KSClassDeclaration.reachabilityBucket(): ForwardReachabilityBucket = when {
     classKind == ClassKind.ENUM_CLASS -> ForwardReachabilityBucket.ENUM
-    classKind == ClassKind.OBJECT -> ForwardReachabilityBucket.OBJECT
+    // Issue #110: the sealed-subclass test is part of the OBJECT condition, not a later branch,
+    // because a cross-module `data object` arm of a sealed base is admitted here (the nested
+    // refusal carves out `isSealedSubclass`) and would otherwise land in the OBJECT bucket and be
+    // declared a second time as an empty namespace-level `public static class`. SEALED_SUBCLASS is
+    // fed to no root list on purpose: the base's `getSealedSubclasses()` walk declares the arm.
+    // Only the object kind is qualified, so an *intermediate* sealed class (sealed and itself a
+    // sealed subclass) keeps its SEALED_CLASS bucket below.
+    classKind == ClassKind.OBJECT && !isSealedSubclass() -> ForwardReachabilityBucket.OBJECT
     // ADR-112: eligibility is tested BEFORE the interface kind, so a cross-module eligible sealed
     // interface reaches the ADR-009 renderer instead of being declared as a bare `I<Name>`. An
     // ineligible one falls through to INTERFACE, exactly as every sealed interface used to.

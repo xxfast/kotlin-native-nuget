@@ -32,9 +32,19 @@ package io.github.xxfast.kotlin.native.nuget.test.issue54
  * hierarchy, this one is the mixed hierarchy, and the two must coexist without the ADR-040
  * collision check firing.
  *
+ * Issue #110 adds the second sibling, [Loaf], which is an `object` rather than a `data class`. That
+ * one kind difference is the whole bug: `rootClasses` already filters `isSealedSubclass()` out, so
+ * [Label] is owned by the sealed route alone, but `rootObjects` carries no such filter. A sibling
+ * `object` subclass is therefore collected twice, once as `public sealed class Loaf : FlatShape` by
+ * the sealed route and once as an empty `public static class Loaf { }` at namespace level, which is
+ * CS0101 in every consumer. [Loaf] is deliberately a *sibling* rather than nested, because a nested
+ * one cannot collide (the sealed route puts it inside the base's braces) and so is not the fatal
+ * half of the bug.
+ *
  * The cats hold the shapes, as usual. Oreo (black with the white middle) is the circle, tucked
  * three-deep on the sill. Mylo (brown and creamy) refuses geometry altogether and settles for being
- * flat, so he gets a label instead.
+ * flat, so he gets a label instead. When neither of them can be bothered having a shape at all,
+ * they fold their paws under and become a loaf: no payload, exactly one of it, forever.
  */
 sealed class FlatShape {
   /** Nested control: Oreo, curled, described by one non-null `Int`. */
@@ -46,6 +56,20 @@ sealed class FlatShape {
  */
 data class Label(val text: String) : FlatShape()
 
+/**
+ * Issue #110's fatal cell: a **sibling `object`** subclass, declared beside [FlatShape] rather than
+ * inside it. Same declaration position as [Label], different `ClassKind`, and that is the only
+ * thing separating a type that generates once from a type that generates twice.
+ *
+ * Must end up declared exactly once, by the sealed route, as
+ * `public sealed class Loaf : FlatShape`. No empty `public static class Loaf { }` may accompany it.
+ *
+ * A `data object` rather than a plain `object` on purpose: it is the spelling in the report, and it
+ * is the one that also drags `Equals`/`GetHashCode`/`ToString` (ADR-009) onto the sealed-route
+ * declaration, so the CS0708 half of the reported cascade has real instance members to land on.
+ */
+data object Loaf : FlatShape()
+
 /** Carries both subclasses and the sealed base across return and property positions. */
 class FlatShapeFactory {
   /** Return position: the sibling subclass, spelled as a concrete type. */
@@ -56,6 +80,13 @@ class FlatShapeFactory {
 
   /** Sealed base at a class-method return: the discriminator has to pick an arm. */
   fun of(radius: Int): FlatShape = if (radius > 0) FlatShape.Circle(radius) else Label("flat")
+
+  /**
+   * Return position for the sibling `object` subclass, spelled as its own concrete type. This is
+   * the site that has to name one C# type and only one: with the duplicate present there are two
+   * candidates called `Loaf` in this namespace and the reference does not resolve.
+   */
+  fun loaf(): Loaf = Loaf
 }
 
 /**
@@ -64,3 +95,10 @@ class FlatShapeFactory {
  * arm, so C# can assert the discriminator lands on the one and only [Label].
  */
 fun anyFlat(): FlatShape = Label("any")
+
+/**
+ * Sealed base at a top-level function return, discriminating onto the sibling `object` arm. The
+ * discriminator can only ever hand back the sealed route's declaration, so this is where a consumer
+ * observes which of the two `Loaf`s is the real one.
+ */
+fun flatLoaf(): FlatShape = Loaf

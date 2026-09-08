@@ -453,6 +453,12 @@ class NugetProcessor(
       .filter { it.getVisibility() == Visibility.PUBLIC }
       .filter { it.classKind == ClassKind.OBJECT }
       .filter { it.parentDeclaration == null }
+      // Issue #110, the object half of the issue #54 rule above: an `object` declared *beside* its
+      // sealed base is a top-level object too, so without this it was declared twice -- once by the
+      // ADR-009 sealed route as `FlatShape.Loaf`, and once here as an empty namespace-level
+      // `public static class Loaf` (CS0101 against the sealed arm, and CS0722 at every position
+      // that returns the concrete arm). The sealed route owns it.
+      .filter { !it.isSealedSubclass() }
 
     val rootEnums: List<KSClassDeclaration> = allDeclarations
       .filterIsInstance<KSClassDeclaration>()
