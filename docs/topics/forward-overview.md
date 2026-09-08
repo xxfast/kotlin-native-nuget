@@ -388,6 +388,94 @@ matching every other bucket's visibility gate. An `expect annotation class` fire
 once, on the `actual`: the `isExpect` filter drops the `expect` half one line earlier, so only the
 `actual` reaches the bucket, with `symbol` pointing at the actual's own file.
 
+### Opt-in-marked declarations skip named {id="opt-in-marked-declarations-skip-named"}
+
+A declaration carrying its own `@RequiresOptIn`-meta-annotated marker is not part of the
+forward-exported surface, at any `RequiresOptIn.Level`
+([ADR-115](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/115-opt-in-marker-declarations.md)).
+C# has no way to honour a Kotlin opt-in requirement: a Kotlin consumer of a marked declaration must
+acknowledge it with `@OptIn` or a compiler flag, while a C# consumer of the generated binding would
+see a plain public member with no signal at all. Exporting a marked declaration always erases the
+marker's purpose, so it is dropped instead and named with `SKIPPED_OPT_IN_MARKER`, once per dropped
+declaration, regardless of whether the marker is `ERROR`- or `WARNING`-level.
+
+A marked class, object, interface, enum, or value class is never declared at all, refused at the
+same place a package-scope refusal is, so nothing in the generated `Interop.cs` names it. A marked
+member of an exported class, or a marked top-level function or property, skips per-callable
+instead, so the owning type still generates with everything else intact. A member whose *type* is a
+marked class carries its own reason, blaming the type rather than the member, since no
+`include(...)` change can ever bring a marked type into scope.
+
+From `test-library/.../issue113/Issue113Sample.kt`:
+
+```kotlin
+@RequiresOptIn(level = RequiresOptIn.Level.ERROR, message = "Litter bookkeeping, not a public API")
+annotation class InternalApi
+
+data class Litter(
+  val name: String,
+  @property:InternalApi val extra: String,
+  @LedgerApi val other: String,
+) {
+  @set:InternalApi
+  var viaSetter: String = "unset"
+}
+
+@InternalApi
+class HouseRules(val motto: String) {
+  fun describe(): String = "rules:$motto"
+}
+```
+
+`HouseRules` never appears in the generated C# at all. `Litter.Extra`, `Litter.Other`, and
+`Litter.ViaSetter` (the whole property, not just its setter) are all absent, while `Litter.Name`
+generates normally:
+
+```
+[nuget:SKIPPED_OPT_IN_MARKER] Skipping io.github.xxfast.kotlin.native.nuget.test.issue113.Litter.extra:
+    it is marked with the opt-in marker
+    `io.github.xxfast.kotlin.native.nuget.test.issue113.InternalApi`. a C# consumer has no way to
+    opt in, so an opt-in-required declaration is not exported; remove the
+    `io.github.xxfast.kotlin.native.nuget.test.issue113.InternalApi` annotation from it if it is
+    meant to be part of the C# API, or leave it marked if it is library-internal
+    at Issue113Sample.kt:116
+```
+
+`@set:Marker` is the only accessor position that compiles at all (`@get:` and `@field:` are
+frontend errors, `Opt-in requirement marker annotation cannot be used on getter`/`... on field`, so
+there is nothing to bridge there in the first place); it is invisible on the property declaration
+itself and readable only off the setter, so it drops the whole property rather than exporting it
+get-only.
+
+A member whose type is marked blames the type instead, since no `include(...)` change can ever
+bring a marked type into scope. `Shelter.rules()` returns `HouseRules`, and the marker sits on
+`HouseRules` itself, not on `rules()`:
+
+```
+[nuget:SKIPPED_OPT_IN_MARKER] Skipping io.github.xxfast.kotlin.native.nuget.test.issue113.Shelter.rules:
+    its type `io.github.xxfast.kotlin.native.nuget.test.issue113.HouseRules` is marked with an
+    opt-in marker. no C# type is declared for
+    `io.github.xxfast.kotlin.native.nuget.test.issue113.HouseRules` (opt-in marker
+    `io.github.xxfast.kotlin.native.nuget.test.issue113.InternalApi`), so every member typed with it
+    is skipped rather than emitted as a dangling reference; remove the marker from
+    `io.github.xxfast.kotlin.native.nuget.test.issue113.HouseRules`, or expose a type that is not
+    opt-in-required instead
+```
+
+A marked primary-constructor `val` follows one invariant: the marked declaration never appears in a
+C# signature. A trailing marked parameter with a default keeps the shorter constructor overload
+that already omits it ([ADR-091](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/091-constructor-default-parameters.md)'s
+own omitting-overload machinery); an undefaulted or non-trailing one has no such overload, so the
+constructor itself is dropped, `copy` along with it, and the class stays reachable only through a
+Kotlin factory, with `WARNING_NO_PUBLIC_CONSTRUCTOR` naming `OPT_IN_MARKER` among the reasons. See
+[Classes and objects: No public constructor](classes-and-objects.md#no-public-constructor).
+
+A marker declared one Gradle module away resolves the same way: `Cattery.crossModuleName`, marked
+with `CatteryInternalApi` from `:test-models`, is absent from the generated C# exactly like a
+module-local marker would be. `@OptIn(InternalApi::class)` on a declaration is a marker *consumer*,
+not a marker member, and stays exported; `@SubclassOptInRequired` is not itself
+`@RequiresOptIn`-meta-annotated, so it does not match and stays exported either.
+
 ### A class with no reachable constructor stays, and says so {id="no-reachable-constructor"}
 
 A class whose every public constructor is skipped, for any reason, still generates a C# type,
@@ -583,5 +671,6 @@ re-verification lands, tracked in
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/101-unexported-supertype-skip.md">ADR-101: Forward, unexported supertype skip</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/102-aot-safe-forward-callbacks.md">ADR-102: AOT-safe forward callbacks</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/109-duplicate-type-hazard.md">ADR-109: Forward, duplicate-type hazard across two published packages</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/115-opt-in-marker-declarations.md">ADR-115: Opt-in-marker declarations are out of the exported surface</a>
     </category>
 </seealso>

@@ -124,6 +124,10 @@ class ForwardSkippedCallableWarningTest {
         // ROADMAP Phase 3: a sealed base at an input position. Since ADR-105 no route re-emits
         // one, so the deferral it used to claim was a silent drop.
         ForwardPlanSkipReason.SEALED_POSITION,
+        // ADR-115: the author's own opt-in marker, on the declaration and on a member's type.
+        // Real drops: no legacy route re-emits a marked declaration, by design.
+        ForwardPlanSkipReason.OPT_IN_MARKER,
+        ForwardPlanSkipReason.OPT_IN_MARKER_TYPE,
       ),
       dropped,
     )

@@ -233,6 +233,11 @@ internal sealed interface BridgeType {
    *   a nested dependency one for exactly that reason. Sealed subclasses and companion objects are
    *   not covered: ADR-009 declares the first nested under its base and ADR-013 folds the second
    *   into its owner's statics, so both really are declared.
+   * @param optInMarker ADR-115: the fully-qualified name of the `@RequiresOptIn` marker on
+   *   [rendered]'s own declaration, when it carries one. A marked type is never declared in C#, so
+   *   every member typed with it skips -- with its own reason, because
+   *   [isUnexportedDependency]'s `include(...)` hint is actively wrong here (no export scope can
+   *   bring a marked type into scope) and the undeclared flags' hint names nesting.
    */
   data class Unsupported(
     val rendered: kotlin.String,
@@ -244,6 +249,7 @@ internal sealed interface BridgeType {
     val isUndeclaredEnum: kotlin.Boolean = false,
     val isUndeclaredInterface: kotlin.Boolean = false,
     val isUndeclaredClass: kotlin.Boolean = false,
+    val optInMarker: kotlin.String? = null,
   ) : BridgeType
 
   /** A collection whose component type was lost during classification. */

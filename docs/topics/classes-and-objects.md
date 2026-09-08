@@ -793,6 +793,13 @@ parameter position used to be one of them (named `SEALED_POSITION`, previously t
 2026-09-07 amendment bridged that position too; see
 [Interfaces, abstract classes, and sealed classes: A sealed type at a parameter position](interfaces-abstract-sealed.md#a-sealed-type-at-a-parameter-position).
 
+An opt-in-marked constructor parameter is another: a marked declaration may never appear in a C#
+signature, so an undefaulted or non-trailing marked primary-constructor `val` drops the whole
+constructor (`copy` alongside it, for a `data class`), naming `OPT_IN_MARKER`. A trailing marked
+parameter with a default is unaffected, since the shorter, already-omitting overload never named it
+in the first place. See
+[Publishing Kotlin to C#: Opt-in-marked declarations skip named](forward-overview.md#opt-in-marked-declarations-skip-named).
+
 Not fired for an abstract class (uninstantiable by design) or for the interface-return backing
 wrapper (see [Interfaces, abstract and sealed classes](interfaces-abstract-sealed.md)), neither of
 which is handle-less by accident. See [Publishing Kotlin to C#: Diagnostics](forward-overview.md#diagnostics)
