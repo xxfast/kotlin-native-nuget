@@ -51,6 +51,17 @@ class Cat(
 
   val unsupported: Sequence<String> = sequenceOf("This", "is", "a", "sequence")
 
+  /**
+   * Issue #114: the plain Unit-returning lambda arm. The library had `suspend () -> Unit`
+   * ([CatFeeder.onCleanup]) but no non-suspend twin, so nothing here ever spelled
+   * `KotlinFunc<void>` and the generated `Interop.cs` compiled for every fixture while failing
+   * `CS1547` for a real consumer. [naps] makes the invocation observable, so the C# side proves
+   * the lambda ran rather than only that it compiled.
+   */
+  var naps: Int = 0
+  val onNap: () -> Unit = { naps++ }
+  val onNapFor: (Int) -> Unit = { hours -> naps += hours }
+
   val onMeow: () -> String = { "Meow! My name is $name" }
   val onPet: (String) -> String = { action -> "$name $action contentedly" }
   val countLives: () -> Int = { lives }

@@ -62,6 +62,7 @@ internal fun StringBuilder.renderFuncHelper(helper: CirFuncHelper) {
   val funcNativeRef: String = "$ns.NugetFuncNative"
 
   for (arity in helper.arities.sorted()) {
+    // Generate KotlinFunc variants (non-Unit)
     if (arity == 0) {
       appendLine("    public class KotlinFunc<TResult> : IDisposable, INugetHandle")
       appendLine("    {")
@@ -107,6 +108,71 @@ internal fun StringBuilder.renderFuncHelper(helper: CirFuncHelper) {
       }
       appendLine("            IntPtr result = $funcNativeRef.Invoke$arity($invokeArgs);")
       appendLine("            return $marshalRef.FromHandle<TResult>(result);")
+      appendLine("        }")
+      appendLine()
+      appendLine("        public void Dispose()")
+      appendLine("        {")
+      appendLine("            if (_handle != IntPtr.Zero)")
+      appendLine("            {")
+      appendLine("                $funcNativeRef.Dispose(_handle);")
+      appendLine("                _handle = IntPtr.Zero;")
+      appendLine("            }")
+      appendLine("        }")
+      appendLine("    }")
+      appendLine()
+    }
+
+    // Generate KotlinAction variants (Unit). Issue #114: `void` is not a legal C# type argument,
+    // so a Unit-returning lambda drops the return and carries its arity in the parameters alone,
+    // exactly as `KotlinSuspendAction` already does on the suspend arm.
+    if (arity == 0) {
+      appendLine("    public class KotlinAction : IDisposable, INugetHandle")
+      appendLine("    {")
+      appendLine("        internal IntPtr _handle;")
+      appendLine()
+      appendLine("        IntPtr INugetHandle.Handle => _handle;")
+      appendLine()
+      appendLine("        internal KotlinAction(IntPtr handle) { _handle = handle; }")
+      appendLine()
+      appendLine("        public void Invoke()")
+      appendLine("        {")
+      // `nuget_func0_invoke` returns `StableRef.create(fn.invoke() as Any)`, a live ref to the
+      // `Unit` singleton for a Unit lambda. Discarding the pointer would leak one per call.
+      appendLine("            IntPtr result = $funcNativeRef.Invoke0(_handle);")
+      appendLine("            if (result != IntPtr.Zero) $funcNativeRef.Dispose(result);")
+      appendLine("        }")
+      appendLine()
+      appendLine("        public void Dispose()")
+      appendLine("        {")
+      appendLine("            if (_handle != IntPtr.Zero)")
+      appendLine("            {")
+      appendLine("                $funcNativeRef.Dispose(_handle);")
+      appendLine("                _handle = IntPtr.Zero;")
+      appendLine("            }")
+      appendLine("        }")
+      appendLine("    }")
+      appendLine()
+    } else {
+      val actionTypeParams: String = (1..arity).map { "T$it" }.joinToString(", ")
+      val actionMethodParams: String = (1..arity).map { "T$it arg${it - 1}" }.joinToString(", ")
+      val actionInvokeArgs: String =
+        (listOf("_handle") + (0 until arity).map { "boxedArg$it" }).joinToString(", ")
+
+      appendLine("    public class KotlinAction<$actionTypeParams> : IDisposable, INugetHandle")
+      appendLine("    {")
+      appendLine("        internal IntPtr _handle;")
+      appendLine()
+      appendLine("        IntPtr INugetHandle.Handle => _handle;")
+      appendLine()
+      appendLine("        internal KotlinAction(IntPtr handle) { _handle = handle; }")
+      appendLine()
+      appendLine("        public void Invoke($actionMethodParams)")
+      appendLine("        {")
+      for (i in 0 until arity) {
+        appendLine("            IntPtr boxedArg$i = $funcNativeRef.WrapArg<T${i + 1}>(arg$i);")
+      }
+      appendLine("            IntPtr result = $funcNativeRef.Invoke$arity($actionInvokeArgs);")
+      appendLine("            if (result != IntPtr.Zero) $funcNativeRef.Dispose(result);")
       appendLine("        }")
       appendLine()
       appendLine("        public void Dispose()")
