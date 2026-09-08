@@ -346,4 +346,83 @@ class Tier1StructuralInteropCsTest {
       "public void AddBuddies(IReadOnlyList<global::Interop.Buddy> buddies)",
     )
   }
+
+  /**
+   * Issue #111, structural pin. Every lambda type argument in a generated `Interop.cs` is either a
+   * C# primitive, one of the `KotlinFunc`/`KotlinSuspend*` declarations' own type parameters, or
+   * `global::`-qualified. Anything else is a simple name that only resolves when the argument's
+   * namespace happens to coincide with the enclosing type's, which is exactly the assumption that
+   * shipped `KotlinFunc<CamId, Flow>` and CS0246 to a consumer.
+   *
+   * This is the cheap guard that does not need to know how many routes exist: five hand-written
+   * copies of the same `simpleName` expression were found for #111, and a sixth added later would
+   * be caught here without anybody remembering to add a cell for it.
+   *
+   * The fixture crosses each lambda shape the generator has a different spelling for (plain,
+   * suspend-with-result, suspend-`Unit`, zero-arity) with both an exported class argument in
+   * another namespace and a primitive one, so a fix that qualified only the result, or only the
+   * non-suspend arm, leaves a bare name behind for this to find.
+   */
+  @Test
+  fun `no lambda type argument in Interop cs is a bare simple name`() {
+    val result = Tier1Harness.run(
+      mapOf(
+        "Lens.kt" to """
+          package tier1.lambdapin.lens
+
+          class CamId(val value: String)
+
+          class Snapshot(val caption: String)
+        """.trimIndent(),
+        "Cam.kt" to """
+          package tier1.lambdapin
+
+          import tier1.lambdapin.lens.CamId
+          import tier1.lambdapin.lens.Snapshot
+
+          class Cam(val watching: String) {
+            val onPick: (CamId) -> Snapshot = { id -> Snapshot(id.value) }
+            val onLabel: (String) -> Snapshot = { label -> Snapshot(label) }
+            val onCount: (CamId) -> Int = { 1 }
+            val onLatest: () -> Snapshot = { Snapshot("latest") }
+            val onFetch: suspend (CamId) -> Snapshot = { id -> Snapshot(id.value) }
+            val onLog: suspend (CamId) -> Unit = { }
+          }
+
+          fun picker(): (CamId) -> Snapshot = { id -> Snapshot(id.value) }
+        """.trimIndent(),
+      ),
+      processorOptions = mapOf("nuget.rootPackage" to "tier1"),
+    )
+
+    val bare: List<String> = LAMBDA_TYPE_ARGUMENTS.findAll(result.generatedCSharp)
+      .flatMap { match -> match.groupValues[2].split(",").map(String::trim) }
+      .filter { argument -> argument.isNotEmpty() }
+      .filterNot { argument -> argument in CSHARP_PRIMITIVES }
+      .filterNot { argument -> argument.startsWith("global::") }
+      .filterNot { argument -> DECLARATION_TYPE_PARAMETER.matches(argument) }
+      .distinct()
+      .toList()
+
+    assertTrue(
+      bare.isEmpty(),
+      "every lambda type argument must be a C# primitive or global::-qualified, or the " +
+          "generated Interop.cs only compiles by namespace coincidence; bare: $bare",
+    )
+  }
+
+  private companion object {
+    /** No nested `<...>` on purpose: a generic type argument has no spelling on these routes at
+     *  all, so one appearing here is itself the defect and must not be quietly matched. */
+    val LAMBDA_TYPE_ARGUMENTS =
+      Regex("""\b(KotlinFunc|KotlinSuspendFunc|KotlinSuspendAction)<([^<>]*)>""")
+
+    /** The `KotlinFunc<T1, TResult>` / `KotlinSuspendAction<T1>` declarations themselves. */
+    val DECLARATION_TYPE_PARAMETER = Regex("""T([0-9]+|Result)?""")
+
+    val CSHARP_PRIMITIVES: Set<String> = setOf(
+      "string", "bool", "char", "object", "void",
+      "sbyte", "byte", "short", "ushort", "int", "uint", "long", "ulong", "float", "double",
+    )
+  }
 }

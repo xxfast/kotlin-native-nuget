@@ -2,12 +2,17 @@ package io.github.xxfast.kotlin.native.nuget.processor.cir
 
 import com.google.devtools.ksp.symbol.ClassKind
 import com.google.devtools.ksp.symbol.KSClassDeclaration
+import com.google.devtools.ksp.symbol.KSNode
 import com.google.devtools.ksp.symbol.KSDeclaration
 import com.google.devtools.ksp.symbol.KSType
 import com.google.devtools.ksp.symbol.KSTypeAlias
+import com.google.devtools.ksp.symbol.KSTypeArgument
+import com.google.devtools.ksp.symbol.KSTypeParameter
 import io.github.xxfast.kotlin.native.nuget.processor.forward.BridgeType
 import io.github.xxfast.kotlin.native.nuget.processor.forward.CollectionKind
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallablePlan
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnostic
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnosticKind
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardPropertyPlan
 
 internal fun KSType.expandAliases(): KSType {
@@ -205,12 +210,17 @@ internal fun mapPackageToNamespace(
 
 /**
  * ADR-066: the `Flow<T>`/`StateFlow<T>` element-type route mapped its element by *simple* name
- * (`declaration.simpleName.asString()`), so `Flow<TopStory>` emitted the unqualified `KotlinFlow
- * <TopStory>` — a type that only resolves inside `Interop.cs` when the element's namespace
- * happens to coincide with the enclosing class's own namespace, which an admitted dependency-
- * module type is never guaranteed to do. Mirrors [ForwardBridgeTypeClassifier]'s enum branch
- * exactly: a known scalar keeps its C# primitive spelling, otherwise a same-namespace reference
- * stays bare and everything else renders `global::Namespace.Name`.
+ * (`declaration.simpleName.asString()`), so `Flow<TopStory>` emitted the unqualified
+ * `KotlinFlow<TopStory>`, a type that only resolves inside `Interop.cs` when the element's
+ * namespace happens to coincide with the enclosing class's own namespace, which an admitted
+ * dependency-module type is never guaranteed to do. Mirrors [ForwardBridgeTypeClassifier]'s enum
+ * branch: a known scalar keeps its C# primitive spelling, and everything else is qualified.
+ *
+ * Qualification is unconditional whenever a root namespace exists: a reference already in the
+ * enclosing namespace renders `global::Namespace.Name` too, rather than staying bare. That is
+ * what shipped, and it is what a caller must expect; the earlier "a same-namespace reference
+ * stays bare" wording described a same-namespace shortcut this function has never had. Only an
+ * empty [NugetContext.rootNamespace] (nothing to qualify with) yields a bare name.
  */
 internal fun qualifiedElementCsType(type: KSType?, context: NugetContext): String {
   val declaration: KSDeclaration = type?.expandAliases()?.declaration ?: return "Any"
@@ -241,3 +251,127 @@ internal fun qualifiedElementCsType(
   val base: String = qualifiedElementCsType(type, context)
   return if (nullable) "$base?" else base
 }
+
+
+/**
+ * Issue #111: how one type argument of a `KotlinFunc<...>` / `KotlinSuspendFunc<...>` / generic
+ * return is spelled in C#, or why it cannot be spelled at all.
+ *
+ * The legacy lambda routes spelled every argument
+ * `arg.type?.resolve()?.declaration?.simpleName?.asString() ?: "object"`, which drops both the
+ * argument's namespace and its own type arguments, so `(CamId) -> Flow<Snapshot>` rendered
+ * `KotlinFunc<CamId, Flow>`: two separate CS0246s in one line.
+ *
+ * Qualifying alone does not fix it. `Flow<Snapshot>` spelled `global::Ns.Kotlinx.Coroutines.Flow
+ * .Flow` names a type nothing declares, which is the same CS0246 in a longer coat. So there are
+ * two outcomes, never one: an argument C# can genuinely name is [Named] and fully qualified, and
+ * one it cannot is [Unnameable] and the whole member is skipped by its caller with a diagnostic
+ * naming the offending argument.
+ */
+internal sealed interface CsTypeArgument {
+  /** The C# spelling: a primitive (`int`), a type parameter in scope (`T`), or `global::Ns.Name`. */
+  data class Named(val csType: String) : CsTypeArgument
+
+  /** The qualified name of the argument C# has no spelling for, for the caller's diagnostic. */
+  data class Unnameable(val typeArgument: String) : CsTypeArgument
+}
+
+/**
+ * Issue #111: the one place a lambda's (or a generic return's) type argument is turned into C#.
+ *
+ * Admits, in order:
+ *  - a known scalar, by its C# primitive name (`Int` -> `int`), and `Unit` as `void` (the suspend
+ *    routes narrow a `void` result to `KotlinSuspendAction`);
+ *  - a *type parameter* (`class Crate<T>`), kept bare: `T` is in scope at the declaration, not a
+ *    type in a namespace, so `global::Ns.T` would be nonsense;
+ *  - a class, object or enum that is both **exported and declared**, fully qualified.
+ *
+ * Everything else is [CsTypeArgument.Unnameable]: a type carrying its own type arguments
+ * (`Flow<T>`, `List<T>`, a nested lambda, a generic class), and any type outside [exportedTypes]
+ * (an unexported dependency type, a nested class, a stdlib type). The export set is the test on
+ * purpose rather than "is it a class": [ForwardReachabilityClosure] does not walk lambda type
+ * arguments (`LAMBDA_TYPES` is an intrinsic terminal, not a carrier), so a class reachable only
+ * through one is never admitted, and qualifying it would emit a `global::` reference to a type
+ * nothing declares.
+ *
+ * A *declared* enum is deliberately still admitted here even though `NugetMarshal.FromHandle` has
+ * no enum branch (`docs/backlog/fromhandle-no-enum-branch.md`): it compiles, and narrowing that
+ * gap is a separate change.
+ */
+internal fun csTypeArgument(
+  type: KSType?,
+  exportedTypes: Set<String>,
+  context: NugetContext,
+): CsTypeArgument {
+  val resolved: KSType = type?.expandAliases()
+    ?: return CsTypeArgument.Unnameable("an unresolved type argument")
+  val declaration: KSDeclaration = resolved.declaration
+  val simpleName: String = declaration.simpleName.asString()
+  val qualifiedName: String = declaration.qualifiedName?.asString() ?: simpleName
+
+  KOTLIN_TO_CSHARP_PARAM[simpleName]?.let { return CsTypeArgument.Named(it) }
+  if (qualifiedName == "kotlin.Unit") return CsTypeArgument.Named("void")
+  if (declaration is KSTypeParameter) return CsTypeArgument.Named(simpleName)
+
+  if (declaration !is KSClassDeclaration) return CsTypeArgument.Unnameable(qualifiedName)
+  if (resolved.arguments.isNotEmpty()) return CsTypeArgument.Unnameable(qualifiedName)
+  if (qualifiedName !in exportedTypes) return CsTypeArgument.Unnameable(qualifiedName)
+
+  return CsTypeArgument.Named(qualifiedElementCsType(resolved, context))
+}
+
+/**
+ * Issue #111: [csTypeArgument] over a whole argument list, so a caller can decide once between
+ * "spell the member" and "skip it named". The first unnameable argument wins: a member with two
+ * of them is skipped for the first, and the author fixes them one at a time either way.
+ */
+internal fun csTypeArguments(
+  arguments: List<KSTypeArgument>,
+  exportedTypes: Set<String>,
+  context: NugetContext,
+): CsTypeArgument.Unnameable? = arguments
+  .asSequence()
+  .map { argument -> csTypeArgument(argument.type?.resolve(), exportedTypes, context) }
+  .filterIsInstance<CsTypeArgument.Unnameable>()
+  .firstOrNull()
+
+/** Issue #111: the C# spellings, valid only when [csTypeArguments] found nothing unnameable. */
+internal fun csTypeArgumentNames(
+  arguments: List<KSTypeArgument>,
+  exportedTypes: Set<String>,
+  context: NugetContext,
+): List<String> = arguments.map { argument ->
+  when (val spelling = csTypeArgument(argument.type?.resolve(), exportedTypes, context)) {
+    is CsTypeArgument.Named -> spelling.csType
+    // The generic-return route (`CirFunctionTranslator`) is qualify-only by decision: it keeps the
+    // pre-issue-#111 simple name for an argument with no C# spelling rather than skipping the
+    // function, so gating that route stays a separate question.
+    is CsTypeArgument.Unnameable -> spelling.typeArgument.substringAfterLast('.')
+  }
+}
+
+/**
+ * Issue #111: the one diagnostic every lambda route raises for a type argument with no C#
+ * spelling, so a property arm and a return arm say the same thing under different kinds.
+ *
+ * It names the offending argument rather than the member's whole type: `(CamId) -> Flow<Snapshot>`
+ * is skipped because of `Flow`, and an author told only "this property was skipped" has three
+ * candidates to guess between.
+ */
+internal fun lambdaTypeArgumentDiagnostic(
+  kind: ForwardDiagnosticKind,
+  symbol: KSNode?,
+  declaration: String,
+  typeArgument: String,
+): ForwardDiagnostic = ForwardDiagnostic(
+  kind = kind,
+  symbol = symbol,
+  declaration = declaration,
+  reason = "its lambda type argument `$typeArgument` has no C# spelling: a lambda argument must " +
+      "be a primitive, String, or an exported class, object or enum that is declared in C#, and " +
+      "a type carrying its own type arguments (Flow<T>, a collection, another lambda, a generic " +
+      "class) has no spelling on this route at all",
+  hint = "expose a lambda over bridgeable types instead: replace `$typeArgument` with a " +
+      "primitive, a String, or a top-level exported class in the export scope (a Flow or a " +
+      "generic type argument needs its own bridgeable wrapper type)",
+)

@@ -71,9 +71,14 @@ internal enum class ForwardDiagnosticKind(
    *  [SKIPPED_UNSUPPORTED_INPUT] (a parameter) and [SKIPPED_UNSUPPORTED_RETURN] (a return);
    *  a property used to be the one position that vanished with no diagnostic at all.
    *
-   *  Never fires for a property the legacy routes still re-emit (lambda, suspend lambda, Flow,
-   *  StateFlow): those are unplannable on purpose and bind through `CirClassTranslator`'s
-   *  adapters, so a warning would be a false positive. */
+   *  A property the legacy routes re-emit (lambda, suspend lambda, Flow, StateFlow) is
+   *  unplannable on purpose and binds through `CirClassTranslator`'s adapters, so the *planner*
+   *  never raises this for one: a warning there would be a false positive.
+   *
+   *  Issue #111 added the one case where a legacy route raises it itself: a lambda property with
+   *  a type argument C# cannot name (`(CamId) -> Flow<Snapshot>`, an unexported type, a nested
+   *  class). That route emits no member at all, so the member really is absent, and staying
+   *  silent is what shipped `KotlinFunc<CamId, Flow>` and CS0246 to a consumer. */
   SKIPPED_UNSUPPORTED_PROPERTY(ForwardDiagnosticSeverity.WARNING),
 
   /** Cell 23 / BUG-010: a generic + `suspend` + `inline` + `reified` extension returning

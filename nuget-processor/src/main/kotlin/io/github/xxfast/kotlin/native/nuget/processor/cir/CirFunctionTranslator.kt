@@ -30,8 +30,10 @@ private fun syncErrorArguments(parameters: String): String = if (parameters.isEm
 internal fun translateSpecializedFunction(
   func: KSFunctionDeclaration,
   libraryName: String,
-  rootPackage: String,
-  rootNamespace: String,
+  // Issue #111: the whole context, not loose rootPackage/rootNamespace strings. The lambda-return
+  // and generic-return routes below spell type arguments through `qualifiedElementCsType`, which
+  // takes one.
+  context: NugetContext,
   tracker: CollectionHelperTracker,
   exportedTypes: Set<String>,
   logger: KSPLogger,
@@ -42,15 +44,14 @@ internal fun translateSpecializedFunction(
       returnType != null && returnType.arguments.isNotEmpty()
   if (!isGenericReturnType) return emptyList()
   return translateFunction(
-    func, libraryName, rootPackage, rootNamespace, tracker, exportedTypes, logger,
+    func, libraryName, context, tracker, exportedTypes, logger,
   )
 }
 
 internal fun translateFunction(
   func: KSFunctionDeclaration,
   libraryName: String,
-  rootPackage: String,
-  rootNamespace: String,
+  context: NugetContext,
   tracker: CollectionHelperTracker,
   exportedTypes: Set<String>,
   logger: KSPLogger,
@@ -86,7 +87,7 @@ internal fun translateFunction(
     }
 
     val enumNamespace: String = mapPackageToNamespace(
-      enumDecl.packageName.asString(), rootPackage, rootNamespace,
+      enumDecl.packageName.asString(), context.rootPackage, context.rootNamespace,
     )
 
     CirParameter(name, type = "global::$enumNamespace.$kotlinType", nativeType = "int")
@@ -130,10 +131,28 @@ internal fun translateFunction(
     val lambdaArity: Int = returnType!!.arguments.size - 1
     tracker.lambdaArities.add(lambdaArity)
 
-    val lambdaTypeArgs: List<String> = returnType.arguments.map { arg ->
-      val argType: String = arg.type?.resolve()?.declaration?.simpleName?.asString() ?: "object"
-      KOTLIN_TO_CSHARP_PARAM[argType] ?: argType
+    // Issue #111: the return-position copy of the class-property rule. A type argument C# cannot
+    // name makes the whole function unspellable, so it is skipped named rather than returned as
+    // `KotlinFunc<CamId, Flow>` for the consumer's compiler to reject.
+    val unnameableTypeArgument: CsTypeArgument.Unnameable? =
+      csTypeArguments(returnType.arguments, exportedTypes, context)
+    if (unnameableTypeArgument != null) {
+      ForwardDiagnosticSink.emit(
+        listOf(
+          lambdaTypeArgumentDiagnostic(
+            kind = ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_RETURN,
+            symbol = func,
+            declaration = func.simpleName.asString(),
+            typeArgument = unnameableTypeArgument.typeArgument,
+          ),
+        ),
+        logger,
+      )
+      return emptyList()
     }
+
+    val lambdaTypeArgs: List<String> =
+      csTypeArgumentNames(returnType.arguments, exportedTypes, context)
     val lambdaCsType = "KotlinFunc<${lambdaTypeArgs.joinToString(", ")}>"
 
     val nativeImport = CirDllImport(
@@ -446,14 +465,13 @@ internal fun translateFunction(
   if (isGenericReturnType) {
     if (hasEnumParams) return enumParamsUnsupported("generic")
 
-    val typeArgs: String = returnType.arguments.joinToString(", ") { arg ->
-      val argType: String = arg.type?.resolve()?.declaration?.simpleName?.asString() ?: "object"
-      when (argType) {
-        "String" -> "string"
-        "Int" -> "int"
-        else -> argType
-      }
-    }
+    // Issue #111, qualify half only: the generic return carried a byte-identical copy of the
+    // lambda routes' `simpleName` spelling, so `Crate<Snapshot>` named a type from a namespace
+    // that does not contain it. Deliberately NOT gated on the export set like the lambda routes:
+    // a type parameter (`fun <T> crateOf(): Crate<T>`) must keep rendering `T`, and whether an
+    // unnameable generic argument should skip the function is a separate question.
+    val typeArgs: String =
+      csTypeArgumentNames(returnType.arguments, exportedTypes, context).joinToString(", ")
 
     val nativeImport = CirDllImport(
       libraryName = libraryName,
@@ -493,7 +511,7 @@ internal fun translateFunction(
 
   if (isEnumReturnType) {
     val enumNamespace: String = mapPackageToNamespace(
-      returnDecl.packageName.asString(), rootPackage, rootNamespace,
+      returnDecl.packageName.asString(), context.rootPackage, context.rootNamespace,
     )
     val enumType: String = "global::$enumNamespace.$kotlinReturnType"
     val nativeImport = CirDllImport(

@@ -6,10 +6,12 @@ import io.github.xxfast.kotlin.native.nuget.test.issue41.Issue41Thing
  * Issue [#41](https://github.com/xxfast/kotlin-native-nuget/issues/41) fixture, root-package half.
  *
  * A root-namespace (`TestLibrary`) class referencing a type from a sub-namespace
- * (`TestLibrary.Issue41`). `CirTypeMapping.kt:191-202` owns the "same namespace stays bare,
- * everything else renders `global::Namespace.Name`" rule, but only the `Flow`/`StateFlow`
- * type-argument sites call it. Every other render site writes the referenced type's *simple*
- * name, so the generated `Interop.cs` is expected to emit a bare `Issue41Thing` in all of:
+ * (`TestLibrary.Issue41`). `qualifiedElementCsType` (`CirTypeMapping.kt`) owns the qualification
+ * rule: a known scalar keeps its C# primitive spelling and every other type renders
+ * `global::Namespace.Name`, including one already in the enclosing namespace (there is no
+ * same-namespace shortcut; only an empty root namespace yields a bare name). Not every render
+ * site calls it, though, so a site that still writes the referenced type's *simple* name emits a
+ * bare `Issue41Thing`:
  *
  *  - the `Things` property type (`IReadOnlyList<Issue41Thing>`),
  *  - the constructor parameter types (`IReadOnlyList<Issue41Thing>` and `Issue41Thing`),

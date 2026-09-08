@@ -335,11 +335,30 @@ internal fun translateClass(
         return@mapNotNull null
       }
 
+      // Issue #111: one type argument C# cannot name (`Flow<Snapshot>`, an unexported dependency
+      // type, a nested class) makes the whole property unspellable, so it is skipped named rather
+      // than emitted as `KotlinFunc<CamId, Flow>` for the consumer's compiler to reject.
+      val unnameableTypeArgument: CsTypeArgument.Unnameable? =
+        if (isLambdaType || isSuspendLambdaType) {
+          csTypeArguments(propTypeResolved.arguments, exportedTypes, context)
+        } else null
+      if (unnameableTypeArgument != null) {
+        ForwardDiagnosticSink.emit(
+          listOf(
+            lambdaTypeArgumentDiagnostic(
+              kind = ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_PROPERTY,
+              symbol = prop,
+              declaration = "$name.$propName",
+              typeArgument = unnameableTypeArgument.typeArgument,
+            ),
+          ),
+          logger,
+        )
+        return@mapNotNull null
+      }
+
       val lambdaTypeArgs: List<String> = if (isLambdaType) {
-        propTypeResolved.arguments.map { arg ->
-          val argType: String = arg.type?.resolve()?.declaration?.simpleName?.asString() ?: "object"
-          KOTLIN_TO_CSHARP_PARAM[argType] ?: argType
-        }
+        csTypeArgumentNames(propTypeResolved.arguments, exportedTypes, context)
       } else emptyList()
 
       val lambdaCsType: String = if (isLambdaType) {
@@ -348,10 +367,7 @@ internal fun translateClass(
       } else ""
 
       val suspendLambdaTypeArgs: List<String> = if (isSuspendLambdaType) {
-        propTypeResolved.arguments.map { arg ->
-          val argType: String = arg.type?.resolve()?.declaration?.simpleName?.asString() ?: "object"
-          KOTLIN_TO_CSHARP_PARAM[argType] ?: argType
-        }
+        csTypeArgumentNames(propTypeResolved.arguments, exportedTypes, context)
       } else emptyList()
 
       val suspendLambdaIsUnit: Boolean = isSuspendLambdaType &&
@@ -1075,6 +1091,11 @@ internal fun translateSealedClass(
   context: NugetContext,
   tracker: CollectionHelperTracker,
   callableCatalog: ForwardCallablePlanCatalog,
+  // Issue #111: the residual legacy lambda-property route below needs both halves the ordinary
+  // class arm already had -- the export set to decide whether a type argument is nameable, and a
+  // logger to say so when it is not.
+  exportedTypes: Set<String>,
+  logger: KSPLogger,
 ): CirSealedClass {
   val libraryName: String = context.libraryName
   val name: String = cls.simpleName.asString()
@@ -1113,11 +1134,25 @@ internal fun translateSealedClass(
             if (qualifiedTypeName !in LAMBDA_TYPES) return@mapNotNull null
             val lambdaArity: Int = propTypeResolved.arguments.size - 1
             tracker.lambdaArities.add(lambdaArity)
-            val lambdaTypeArgs: List<String> = propTypeResolved.arguments.map { arg ->
-              val argType: String =
-                arg.type?.resolve()?.declaration?.simpleName?.asString() ?: "object"
-              KOTLIN_TO_CSHARP_PARAM[argType] ?: argType
+            // Issue #111, the sealed-subclass copy of the same rule as the ordinary-class arm.
+            val unnameableTypeArgument: CsTypeArgument.Unnameable? =
+              csTypeArguments(propTypeResolved.arguments, exportedTypes, context)
+            if (unnameableTypeArgument != null) {
+              ForwardDiagnosticSink.emit(
+                listOf(
+                  lambdaTypeArgumentDiagnostic(
+                    kind = ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_PROPERTY,
+                    symbol = prop,
+                    declaration = "$subName.$propName",
+                    typeArgument = unnameableTypeArgument.typeArgument,
+                  ),
+                ),
+                logger,
+              )
+              return@mapNotNull null
             }
+            val lambdaTypeArgs: List<String> =
+              csTypeArgumentNames(propTypeResolved.arguments, exportedTypes, context)
             val lambdaCsType: String = "KotlinFunc<${lambdaTypeArgs.joinToString(", ")}>"
             CirProperty(
               name = propName.replaceFirstChar { it.uppercase() },

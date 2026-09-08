@@ -281,8 +281,7 @@ internal fun translate(
         translateSpecializedFunction(
           function,
           context.libraryName,
-          context.rootPackage,
-          context.rootNamespace,
+          context,
           tracker,
           exportedTypes,
           logger,
@@ -427,7 +426,7 @@ internal fun translate(
   sealedClasses.forEach { sealed ->
     namespaces.addDeclaration(
       namespaceOf(sealed.packageName.asString()),
-      translateSealedClass(sealed, context, tracker, callableCatalog),
+      translateSealedClass(sealed, context, tracker, callableCatalog, exportedTypes, logger),
     )
   }
 
