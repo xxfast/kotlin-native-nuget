@@ -234,12 +234,17 @@ private fun BridgeType.componentNeedsWireProjection(): Boolean =
  * helper for its kind, with the inner component's own read as the per-element lambda.
  * `.AsReadOnly()` is appended for the immutable `LIST` kind so an inner list matches the outer's
  * shipped rendering.
+ *
+ * ADR-119 also reads a suspend member's *top-level* collection result through it (depth 0): the
+ * awaited handle arrives inside a callback closure, where the shipped inline loop's fixed local
+ * names would collide with the closure's own, and the `finally` is exactly the leak guard that
+ * position needs.
  */
-private fun componentCollectionRead(
+internal fun componentCollectionRead(
   handle: String,
   component: BridgeType.Collection,
   csharpType: (BridgeType) -> String,
-  depth: Int,
+  depth: Int = 0,
 ): String {
   val inner: Int = depth + 1
   return when (component.kind) {

@@ -1565,6 +1565,8 @@ public sealed class Running : Job, IAsyncDisposable
 }
 ```
 
+A `suspend fun` on an arm returning `List<T>`, `Set<T>` or `Map<K, V>` binds as `Task<IReadOnlyList<T>>` (and kin), spelled exactly as the arm's own property of the same type is spelled and read through the same collection helpers; any other generic return on the arm is absent and named `SKIPPED_UNSUPPORTED_RETURN`. See [`suspend fun` returning a collection](coroutines-and-flow.md#suspend-fun-returning-a-collection) ([ADR-119](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/119-collection-returns-on-the-legacy-suspend-route.md)).
+
 An arm with a suspend member also declares `IAsyncDisposable`, with `DisposeAsync` draining its own
 scope before disposing the handle; `Dispose()` cancels and disposes the scope first, then calls the
 same `Native_Dispose`. An arm with **no** suspend member (`Done`) is unchanged: it stays

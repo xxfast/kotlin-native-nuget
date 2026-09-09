@@ -14,10 +14,14 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeTypeC
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallablePlanCatalog
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardExportOwnerTag
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardLegacyParameterShape
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardLegacyReturnShape
+import io.github.xxfast.kotlin.native.nuget.processor.forward.collectionResultProjection
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyLoweredName
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyLoweringStatement
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyParameterShapes
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyRefusedParameter
+import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyRefusedReturn
+import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyReturnShape
 import io.github.xxfast.kotlin.native.nuget.processor.toCName
 
 /**
@@ -39,6 +43,8 @@ internal fun FileSpec.Builder.addSuspendFunctionExports(
   classifier: ForwardBridgeTypeClassifier,
 ) {
   if (classifier.legacyRefusedParameter(func.parameters) != null) return
+  // ADR-119: a generic return that is not a marshallable collection skips on both halves too.
+  if (classifier.legacyRefusedReturn(func) != null) return
   val cname: String = toCName(func.simpleName.asString())
   val funcName: String = func.simpleName.asString()
   val returnType = func.returnType?.resolve()?.expandAliases()
@@ -51,9 +57,10 @@ internal fun FileSpec.Builder.addSuspendFunctionExports(
     classifier.legacyParameterShapes(func.parameters)
   val paramCall: String = legacyParamCall(func, paramShapes)
   val paramPrelude: String = legacyParamPrelude(func, paramShapes)
+  val boxed: String = legacyBoxedResult(classifier.legacyReturnShape(returnType))
 
   val body: String =
-    buildSuspendFunctionBody(funcName, paramCall, paramPrelude, isUnit, isNullable)
+    buildSuspendFunctionBody(funcName, paramCall, paramPrelude, isUnit, isNullable, boxed)
 
   val builder: FunSpec.Builder = FunSpec.builder("export_${cname}_async")
     .addAnnotation(cNameAnnotation("${cname}_async"))
@@ -95,6 +102,8 @@ internal fun FileSpec.Builder.addSuspendClassMethodExports(
     // ADR-114: a generic parameter this route cannot marshal skips the member named, rather than
     // emitting `ids: Set` and breaking the whole generated file's compile.
     .filter { method -> classifier.legacyRefusedParameter(method.parameters) == null }
+    // ADR-119: same for a generic return that is not a marshallable collection.
+    .filter { method -> classifier.legacyRefusedReturn(method) == null }
     .toList()
 
   suspendMethods.forEach { method ->
@@ -112,9 +121,11 @@ internal fun FileSpec.Builder.addSuspendClassMethodExports(
       classifier.legacyParameterShapes(method.parameters)
     val paramCall: String = legacyParamCall(method, paramShapes)
     val paramPrelude: String = legacyParamPrelude(method, paramShapes)
+    val boxed: String = legacyBoxedResult(classifier.legacyReturnShape(returnType))
 
-    val body: String =
-      buildSuspendMethodBody(qualifiedName, methodName, paramCall, paramPrelude, isUnit, isNullable)
+    val body: String = buildSuspendMethodBody(
+      qualifiedName, methodName, paramCall, paramPrelude, isUnit, isNullable, boxed,
+    )
 
     val builder: FunSpec.Builder = FunSpec.builder("export_${prefix}_${cname}_async")
       .addAnnotation(cNameAnnotation("${prefix}_${cname}_async"))
@@ -151,13 +162,14 @@ private fun buildSuspendFunctionBody(
   paramPrelude: String,
   isUnit: Boolean,
   isNullable: Boolean,
+  boxed: String,
 ): String = buildString {
   appendLine(
     "val fn = callbackPtr.reinterpret<CFunction<" +
         "(COpaquePointer?, COpaquePointer?, Byte, COpaquePointer) -> Unit>>()"
   )
   append(paramPrelude)
-  val resultRefCode: String = resultRefExpression(isNullable)
+  val resultRefCode: String = resultRefExpression(isNullable, boxed)
   appendLine("val job = CoroutineScope(Dispatchers.Default).launch(start = CoroutineStart.ATOMIC) {")
   appendLine("  try {")
   if (isUnit) {
@@ -186,6 +198,7 @@ private fun buildSuspendMethodBody(
   paramPrelude: String,
   isUnit: Boolean,
   isNullable: Boolean,
+  boxed: String,
 ): String = buildString {
   appendLine("val obj = handle.asStableRef<$qualifiedName>().get()")
   appendLine("val scope = scopeHandle.asStableRef<CoroutineScope>().get()")
@@ -194,7 +207,7 @@ private fun buildSuspendMethodBody(
         "(COpaquePointer?, COpaquePointer?, Byte, COpaquePointer) -> Unit>>()"
   )
   append(paramPrelude)
-  val resultRefCode: String = resultRefExpression(isNullable)
+  val resultRefCode: String = resultRefExpression(isNullable, boxed)
   appendLine("val job = scope.launch(start = CoroutineStart.ATOMIC) {")
   appendLine("  try {")
   if (isUnit) {
@@ -222,9 +235,20 @@ private fun buildSuspendMethodBody(
  * property route already uses, and the C# side reads it back as `null` rather than as a wrapper
  * over `IntPtr.Zero`.
  */
-private fun resultRefExpression(isNullable: Boolean): String =
-  if (isNullable) "if (result == null) null else StableRef.create(result).asCPointer()"
-  else "StableRef.create(result).asCPointer()"
+private fun resultRefExpression(isNullable: Boolean, boxed: String): String =
+  if (isNullable) "if (result == null) null else StableRef.create($boxed).asCPointer()"
+  else "StableRef.create($boxed).asCPointer()"
+
+/**
+ * ADR-119: what the suspend export pins for the C# side to read. A collection result is projected
+ * per element exactly as the ordinary route's `List` return is (`collectionResultProjection`: a
+ * value class or enum component leaves as its wire value, everything else is boxed as-is), so the
+ * `nuget_list_get` / `nuget_set_element_at` / `nuget_map_*_at` helpers see the same container
+ * shape on both routes. Any other result stays the bare `result` the shipped route pins.
+ */
+private fun legacyBoxedResult(shape: ForwardLegacyReturnShape): String =
+  if (shape is ForwardLegacyReturnShape.Marshalled) collectionResultProjection("result", shape.type)
+  else "result"
 
 /**
  * ADR-114: the argument list the suspend member is called with. A marshalled collection is read

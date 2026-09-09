@@ -9,8 +9,13 @@ import io.github.xxfast.kotlin.native.nuget.processor.csharpParameterName
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnostic
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnosticKind
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnosticSink
+import io.github.xxfast.kotlin.native.nuget.processor.forward.BridgeType
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeTypeClassifier
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardLegacyReturnShape
+import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardPublicCsharpType
+import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyCollectionRead
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyRefusedParameter
+import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyReturnShape
 import io.github.xxfast.kotlin.native.nuget.processor.toCName
 import io.github.xxfast.kotlin.native.nuget.processor.toCSharpName
 
@@ -632,10 +637,17 @@ internal fun translateSuspendFunction(
   classifier: ForwardBridgeTypeClassifier,
 ): List<CirMember> {
   if (classifier.legacyRefusedParameter(func.parameters) != null) return emptyList()
+  val returnType = func.returnType?.resolve()?.expandAliases()
+  // ADR-119: a generic return that is not a marshallable collection skips on both halves.
+  val returnShape: ForwardLegacyReturnShape = classifier.legacyReturnShape(returnType)
+  if (returnShape is ForwardLegacyReturnShape.Refused) return emptyList()
+  val collectionReturn: BridgeType.Collection? =
+    (returnShape as? ForwardLegacyReturnShape.Marshalled)?.type
+  if (collectionReturn != null) tracker.trackCollection(collectionReturn)
+
   val cname: String = toCName(func.simpleName.asString())
   // ADR-110: escape after the case change, so `suspend fun lock()` renders `LockAsync`.
   val csName: String = toCSharpName(cname.replaceFirstChar { it.uppercase() })
-  val returnType = func.returnType?.resolve()?.expandAliases()
   val kotlinReturnType: String = returnType?.declaration?.simpleName?.asString() ?: "Unit"
   val isUnit: Boolean = kotlinReturnType == "Unit"
 
@@ -643,9 +655,13 @@ internal fun translateSuspendFunction(
 
   // Issue #108: a nullable Kotlin return has to reach C# as `Task<T?>`, otherwise a null result
   // is read back as a `0` primitive or as a live wrapper over `IntPtr.Zero`.
-  val asyncReturnType: String = if (isUnit) "" else {
-    val csharp: String = KOTLIN_TO_CSHARP_PARAM[kotlinReturnType] ?: kotlinReturnType
-    if (returnType?.isMarkedNullable == true) "$csharp?" else csharp
+  val asyncReturnType: String = when {
+    isUnit -> ""
+    collectionReturn != null -> collectionReturn.forwardPublicCsharpType()
+    else -> {
+      val csharp: String = KOTLIN_TO_CSHARP_PARAM[kotlinReturnType] ?: kotlinReturnType
+      if (returnType?.isMarkedNullable == true) "$csharp?" else csharp
+    }
   }
 
   tracker.needsAsync = true
@@ -678,6 +694,7 @@ internal fun translateSuspendFunction(
     isStatic = true,
     isAsync = true,
     asyncReturnType = asyncReturnType,
+    asyncResultRead = collectionReturn?.let { legacyCollectionRead("resultPtr", it) },
   )
 
   return listOf(nativeImport, asyncMethod)
