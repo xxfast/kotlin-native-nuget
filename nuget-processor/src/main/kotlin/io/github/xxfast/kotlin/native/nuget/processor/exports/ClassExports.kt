@@ -32,6 +32,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardPropertyPla
 import io.github.xxfast.kotlin.native.nuget.processor.forward.addForwardKotlinPlanExport
 import io.github.xxfast.kotlin.native.nuget.processor.forward.planFor
 import io.github.xxfast.kotlin.native.nuget.processor.forward.addForwardPropertyPlanExports
+import io.github.xxfast.kotlin.native.nuget.processor.forward.isOptInRefused
 import io.github.xxfast.kotlin.native.nuget.processor.toCName
 
 /**
@@ -90,6 +91,9 @@ internal fun FileSpec.Builder.addClassExports(
       addForwardPropertyPlanExports(planned)
       return@forEach
     }
+    // Issue #121: the planner declined, but a decline is not always an invitation. A marked
+    // declaration must reach neither artifact, so the legacy arms below never run for one.
+    if (prop.isOptInRefused()) return@forEach
     // Named specialized-protocol property adapters (lambda / suspend-lambda / Flow).
     val propTypeResolved: KSType = prop.type.resolve().expandAliases()
     val propType: String = propTypeResolved.declaration.qualifiedName?.asString() ?: "Any"

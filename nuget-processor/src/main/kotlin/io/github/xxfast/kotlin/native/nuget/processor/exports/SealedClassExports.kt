@@ -14,6 +14,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallablePla
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardPropertyPlan
 import io.github.xxfast.kotlin.native.nuget.processor.forward.addForwardKotlinPlanExport
 import io.github.xxfast.kotlin.native.nuget.processor.forward.addForwardPropertyPlanExports
+import io.github.xxfast.kotlin.native.nuget.processor.forward.isOptInRefused
 import io.github.xxfast.kotlin.native.nuget.processor.forward.handleBody
 import io.github.xxfast.kotlin.native.nuget.processor.forward.nullableHandleBody
 
@@ -79,6 +80,10 @@ internal fun FileSpec.Builder.addSealedClassExports(
         addForwardPropertyPlanExports(planned)
         continue
       }
+
+      // Issue #121: the planner declined, but a decline is not always an invitation. A marked
+      // declaration must reach neither artifact, so the legacy arm below never runs for one.
+      if (prop.isOptInRefused()) continue
 
       // Residual legacy route: a lambda-typed property, which has no plan shape yet (the C# half
       // still spells its own `KotlinFunc<...>` arm in `translateSealedClass`). Everything else the
