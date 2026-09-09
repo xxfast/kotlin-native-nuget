@@ -67,6 +67,16 @@ and any generated-by footer. Deferred work and bugs found but not fixed belong i
 [ROADMAP.md](ROADMAP.md), where the next contributor will actually find them, not in a PR body that
 gets buried on merge.
 
+A release PR (`Prepare for release <version>`) skips all of the above. Its body is the list of commits
+on `main` since the previous tag, one `- <subject> (#NNN)` line each, and nothing else: no prose, no
+verify line, no release steps (those live in `.github/workflows/release.yml`). The list is the draft of
+the GitHub release notes.
+
+```
+- Bind suspend collection returns as `Task<IReadOnlyList<T>>` (ADR-119) (#124)
+- Stop exporting a marked lambda or Flow property (ADR-115) (#123)
+```
+
 ## Prose style
 
 Applies to PR bodies, commit messages, ADRs, docs and code comments.
