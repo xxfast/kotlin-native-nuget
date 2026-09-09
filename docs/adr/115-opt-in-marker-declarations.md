@@ -385,6 +385,28 @@ Two different places, because a marked class and a marked member fail differentl
   and render both reasons through one `ForwardDiagnosticKind.SKIPPED_OPT_IN_MARKER`, exactly as
   `UNEXPORTED_DEPENDENCY_TYPE` / `EXCLUDED_DEPENDENCY_TYPE` share one kind today.
 
+#### Amendment (issue #121): the legacy routes need the gate spelled out
+
+The split above says the member skip is "a per-callable skip in `ForwardCallablePlanner`", which is
+true and was not sufficient. It locates the gate in the planner, and the lambda, suspend-lambda and
+`Flow` property arms do not run through the planner: they run *after* it declines, on both sides
+(`ClassExports`, `SealedClassExports`, and the two matching arms in `CirClassTranslator`).
+
+Those arms read a null plan as "the planner has no shape for this type", which is what they exist
+for. A refusal is also a null plan. So a marked lambda or `Flow` property was reported
+`SKIPPED_OPT_IN_MARKER` by the planner and then emitted anyway, on both sides, and the generated
+`CNameExports.kt` read a marked declaration without opting in. Nineteen members leaked in one real
+project before this was caught.
+
+The gate is therefore not "the planner refuses it" but **"no route emits a refused declaration"**.
+Every arm that runs after a null plan asks `isOptInRefused()` before emitting. The property still
+reaches the planner, so the diagnostic is unchanged; only the emitters are gated.
+
+This generalises beyond opt-in: a declaration named in any `SKIPPED_*` diagnostic must be absent
+from both generated artifacts, and that pairing is mechanically checkable over a Tier 1 result
+(`kspWarnings` against `generated` and `generatedCSharp`). `Tier1OptInLambdaRouteTest` asserts it
+over its own fixture; making it a global invariant is a broader change than this fix.
+
 ### Consumer-side API
 
 The C# consumer sees the *absence* of output. For the issue's reproducer, `State` is still exported;

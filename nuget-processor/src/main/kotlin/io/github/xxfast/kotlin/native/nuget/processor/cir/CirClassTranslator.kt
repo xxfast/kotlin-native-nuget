@@ -17,6 +17,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.csharpParameterName
 import io.github.xxfast.kotlin.native.nuget.processor.exports.findInterfaceBridgePairs
 import io.github.xxfast.kotlin.native.nuget.processor.exports.findStoredCallbackPairs
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeTypeClassifier
+import io.github.xxfast.kotlin.native.nuget.processor.forward.isOptInRefused
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallableCatalogEntry
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallablePlan
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallablePlanCatalog
@@ -287,6 +288,9 @@ internal fun translateClass(
           isVirtual = prop.modifiers.isOpenInterfaceImplementation(superClass),
         )
       }
+      // Issue #121: the planner declined, but a decline is not always an invitation. A marked
+      // declaration must reach neither artifact, so the legacy arms below never run for one.
+      if (prop.isOptInRefused()) return@mapNotNull null
       // Named specialized-protocol property adapters only (lambda / suspend-lambda / Flow).
       // Ordinary property types without a plan are skipped — no mapReturnType IntPtr fallthrough.
       val propTypeResolved: KSType = prop.type.resolve().expandAliases()
@@ -1185,6 +1189,10 @@ internal fun translateSealedClass(
             tracker.trackProperty(planned)
             return@mapNotNull ForwardCirPropertyProjection.classProperty(planned)
           }
+
+          // Issue #121: same gate as the ordinary-class arm above. The planner declined, and a
+          // marked declaration must reach neither artifact.
+          if (prop.isOptInRefused()) return@mapNotNull null
 
           // Residual legacy route: a lambda-typed property, whose Kotlin half is still
           // hand-spelled in `SealedClassExports` too. It swallows the error slot (`out _`) until

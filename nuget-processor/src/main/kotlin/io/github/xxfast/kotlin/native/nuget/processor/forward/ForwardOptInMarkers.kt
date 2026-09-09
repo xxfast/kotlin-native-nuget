@@ -69,6 +69,25 @@ internal fun KSAnnotated.optInMarker(): String? {
 }
 
 /**
+ * Issue #121: whether a legacy (non-plan) route must refuse to emit this property.
+ *
+ * `ForwardCallablePlanCatalog.propertyFor` answers null for two opposite reasons: the planner has
+ * no shape for the type, which is exactly what the legacy lambda and Flow arms exist to handle,
+ * and the planner *refused* the declaration, which nothing may emit. A legacy arm that reads only
+ * "no plan" takes the second case as an invitation, so an opt-in marked lambda property was
+ * reported `SKIPPED_OPT_IN_MARKER` and exported anyway, on both sides of the bridge.
+ *
+ * Every plan-driven route already gets this from the planner. Only the arms that run *after* a
+ * null plan need to ask, which is why this is a predicate rather than another filter on the
+ * property list: the property must still reach the planner to be diagnosed.
+ *
+ * The requirement is absence, not compilability. C# has no equivalent of a Kotlin opt-in marker,
+ * so a member that reaches `Interop.cs` is unconditionally public API in the shipped package with
+ * no way to re-hide it downstream.
+ */
+internal fun KSPropertyDeclaration.isOptInRefused(): Boolean = optInMarker() != null
+
+/**
  * ADR-115: the marker on a constructor parameter, read from the parameter itself *and* from the
  * property a `val`/`var` parameter declares.
  *
