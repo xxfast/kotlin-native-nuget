@@ -13,7 +13,7 @@ class ForwardPhase6ConstructorProjectionTest {
     val copy = copyPlan()
 
     assertContains(render(primary), "@CName(\"counter_create\")")
-    assertContains(render(primary), "StableRef.create(sample.Counter())")
+    assertContains(render(primary), "NugetHandles.retain(sample.Counter())")
     assertContains(render(secondary), "@CName(\"counter_create_2\")")
     assertContains(render(copy), "handle.asStableRef<sample.Counter>().get().copy()")
     assertEquals("", ForwardCirPlanProjection.constructor(primary).nativeSuffix)

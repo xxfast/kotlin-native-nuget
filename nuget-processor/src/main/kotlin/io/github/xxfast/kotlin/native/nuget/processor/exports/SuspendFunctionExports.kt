@@ -184,11 +184,11 @@ private fun buildSuspendFunctionBody(
   appendLine("    fn.invoke(null, null, 1.toByte(), userData)")
   appendLine("    throw e")
   appendLine("  } catch (e: Throwable) {")
-  appendLine("    val errRef = StableRef.create(buildError(e)).asCPointer()")
+  appendLine("    val errRef = NugetHandles.retain(buildError(e))")
   appendLine("    fn.invoke(null, errRef, 0.toByte(), userData)")
   appendLine("  }")
   appendLine("}")
-  append("return StableRef.create(job).asCPointer()")
+  append("return NugetHandles.retain(job)")
 }
 
 private fun buildSuspendMethodBody(
@@ -222,11 +222,11 @@ private fun buildSuspendMethodBody(
   appendLine("    fn.invoke(null, null, 1.toByte(), userData)")
   appendLine("    throw e")
   appendLine("  } catch (e: Throwable) {")
-  appendLine("    val errRef = StableRef.create(buildError(e)).asCPointer()")
+  appendLine("    val errRef = NugetHandles.retain(buildError(e))")
   appendLine("    fn.invoke(null, errRef, 0.toByte(), userData)")
   appendLine("  }")
   appendLine("}")
-  append("return StableRef.create(job).asCPointer()")
+  append("return NugetHandles.retain(job)")
 }
 
 /**
@@ -236,8 +236,8 @@ private fun buildSuspendMethodBody(
  * over `IntPtr.Zero`.
  */
 private fun resultRefExpression(isNullable: Boolean, boxed: String): String =
-  if (isNullable) "if (result == null) null else StableRef.create($boxed).asCPointer()"
-  else "StableRef.create($boxed).asCPointer()"
+  if (isNullable) "if (result == null) null else NugetHandles.retain($boxed)"
+  else "NugetHandles.retain($boxed)"
 
 /**
  * ADR-119: what the suspend export pins for the C# side to read. A collection result is projected

@@ -37,6 +37,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.exports.addCSharpBridgeMar
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addGcCollectExport
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addInterfaceBridgeFactoryExport
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addInterfaceExports
+import io.github.xxfast.kotlin.native.nuget.processor.exports.addNugetHandlesCounter
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addNugetHelperExports
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addNugetListHelperExports
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addNugetMapHelperExports
@@ -1186,6 +1187,9 @@ class NugetProcessor(
       .addImport("kotlinx.cinterop", "pointed")
       .addImport("kotlinx.cinterop", "value")
       .addImport("kotlinx.cinterop", "StableRef")
+
+    // ADR-120: the live-handle counter every emitted mint and release routes through.
+    builder.addNugetHandlesCounter()
 
     val exportOwnerRanges: MutableList<ForwardExportOwnerRange> = mutableListOf()
 

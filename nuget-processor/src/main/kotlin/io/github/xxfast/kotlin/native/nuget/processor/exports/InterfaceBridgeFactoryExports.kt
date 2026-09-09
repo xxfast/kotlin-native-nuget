@@ -52,12 +52,12 @@ internal fun FileSpec.Builder.addInterfaceBridgeFactoryExport(plan: ForwardBridg
     appendLine("    }")
     plan.slots.forEach { slot -> appendSlotOverride(slot) }
     appendLine("  }")
-    appendLine("  StableRef.create(bridge).asCPointer()")
+    appendLine("  NugetHandles.retain(bridge)")
     appendLine("} catch (e: Throwable) {")
     appendLine("  if (errorOut != null) {")
-    appendLine("    errorOut.reinterpret<COpaquePointerVar>().pointed.value = StableRef.create(")
+    appendLine("    errorOut.reinterpret<COpaquePointerVar>().pointed.value = NugetHandles.retain(")
     appendLine("      buildError(e)")
-    appendLine("    ).asCPointer()")
+    appendLine("    )")
     appendLine("  }")
     appendLine("  null")
     append("}")
@@ -147,7 +147,7 @@ private fun StringBuilder.appendSlotOverride(slot: ForwardBridgeSlot) {
   appendLine("    override fun ${slot.name}($params): ${slot.result.kotlin} {")
   slot.parameters.forEachIndexed { index, parameter ->
     if (parameter.type.wire == ForwardBridgeWire.OBJECT) {
-      appendLine("      val arg${index}Ref = StableRef.create(${parameter.name} as Any).asCPointer()")
+      appendLine("      val arg${index}Ref = NugetHandles.retain(${parameter.name} as Any)")
     }
   }
   appendResultMarshalling(slot, call, "      ")
@@ -183,7 +183,7 @@ private fun StringBuilder.appendResultMarshalling(
         appendLine("${indent}val ref = $call!!")
       }
       appendLine("${indent}val value = ref.asStableRef<String>().get()")
-      appendLine("${indent}ref.asStableRef<Any>().dispose()")
+      appendLine("${indent}NugetHandles.release(ref)")
       appendLine("${indent}return value")
     }
 

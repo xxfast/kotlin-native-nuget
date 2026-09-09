@@ -55,7 +55,7 @@ internal fun FileSpec.Builder.addInterfaceExports(
     FunSpec.builder("export_${prefix}_dispose")
       .addAnnotation(cNameAnnotation("${prefix}_dispose"))
       .addParameter("handle", cOpaquePointer)
-      .addStatement("handle.asStableRef<%L>().dispose()", qualifiedName)
+      .addStatement("%T.release(handle)", nugetHandles)
       .build()
   )
 }

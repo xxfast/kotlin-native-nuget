@@ -75,7 +75,7 @@ internal fun FileSpec.Builder.addClassExports(
     FunSpec.builder("export_${prefix}_dispose")
       .addAnnotation(cNameAnnotation("${prefix}_dispose"))
       .addParameter("handle", cOpaquePointer)
-      .addStatement("handle.asStableRef<%L>().dispose()", qualifiedName)
+      .addStatement("%T.release(handle)", nugetHandles)
       .build()
   )
 
@@ -106,8 +106,8 @@ internal fun FileSpec.Builder.addClassExports(
           .addParameter("handle", cOpaquePointer)
           .returns(cOpaquePointer.copy(nullable = true))
           .addStatement(
-            "return %T.create(handle.asStableRef<%L>().get().%L).asCPointer()",
-            stableRef, qualifiedName, propName,
+            "return %T.retain(handle.asStableRef<%L>().get().%L)",
+            nugetHandles, qualifiedName, propName,
           )
           .build()
       )
@@ -197,7 +197,7 @@ internal fun FileSpec.Builder.addClassExports(
             .addParameter("errorOut", cOpaquePointer.copy(nullable = true))
             .addCode(
               buildStateFlowSetValuePropertyBody(qualifiedName, propName, assignment),
-              cOpaquePointerVar, stableRef,
+              cOpaquePointerVar, nugetHandles,
             )
             .build()
         )
@@ -415,7 +415,7 @@ internal fun FileSpec.Builder.addClassExports(
             buildStateFlowSetValueMethodBody(
               qualifiedName, methodName, paramCall, paramPrelude, assignment,
             ),
-            cOpaquePointerVar, stableRef,
+            cOpaquePointerVar, nugetHandles,
           )
 
         addFunction(setValueBuilder.build())
@@ -501,8 +501,8 @@ private fun memberAccessor(receiver: String, memberNullable: Boolean): String =
 // ADR-067: the collected/read item expression -- a null-guarded box when the element itself is
 // nullable (`StateFlow<T?>`), else the original unguarded `value as Any` box (ADR-065 unchanged).
 private fun itemBoxExpr(elementNullable: Boolean): String =
-  if (elementNullable) "if (value != null) StableRef.create(value).asCPointer() else null"
-  else "StableRef.create(value as Any).asCPointer()"
+  if (elementNullable) "if (value != null) NugetHandles.retain(value) else null"
+  else "NugetHandles.retain(value as Any)"
 
 private fun buildFlowCollectBody(
   qualifiedName: String,
@@ -536,11 +536,11 @@ private fun buildFlowCollectBody(
   appendLine("    onNext.invoke(null, 1.toByte(), userData)")
   appendLine("    throw e")
   appendLine("  } catch (e: Throwable) {")
-  appendLine("    val errRef = StableRef.create(buildError(e)).asCPointer()")
+  appendLine("    val errRef = NugetHandles.retain(buildError(e))")
   appendLine("    onError.invoke(errRef, userData)")
   appendLine("  }")
   appendLine("}")
-  append("return StableRef.create(job).asCPointer()")
+  append("return NugetHandles.retain(job)")
 }
 
 private fun buildFlowMethodCollectBody(
@@ -582,11 +582,11 @@ private fun buildFlowMethodCollectBody(
   appendLine("    onNext.invoke(null, 1.toByte(), userData)")
   appendLine("    throw e")
   appendLine("  } catch (e: Throwable) {")
-  appendLine("    val errRef = StableRef.create(buildError(e)).asCPointer()")
+  appendLine("    val errRef = NugetHandles.retain(buildError(e))")
   appendLine("    onError.invoke(errRef, userData)")
   appendLine("  }")
   appendLine("}")
-  append("return StableRef.create(job).asCPointer()")
+  append("return NugetHandles.retain(job)")
 }
 
 // ADR-065: the `_value` export body -- boxes `stateFlow.value as Any` into a StableRef, byte-for-
@@ -601,10 +601,10 @@ private fun buildStateFlowValuePropertyBody(
 ): String = buildString {
   appendLine("val obj = handle.asStableRef<$qualifiedName>().get()")
   if (!elementNullable && !memberNullable) {
-    append("return StableRef.create(obj.$propName.value as Any).asCPointer()")
+    append("return NugetHandles.retain(obj.$propName.value as Any)")
   } else {
     appendLine("val v = obj.${memberAccessor(propName, memberNullable)}.value")
-    append("return if (v != null) StableRef.create(v).asCPointer() else null")
+    append("return if (v != null) NugetHandles.retain(v) else null")
   }
 }
 
@@ -619,10 +619,10 @@ private fun buildStateFlowValueMethodBody(
   appendLine("val obj = handle.asStableRef<$qualifiedName>().get()")
   append(paramPrelude)
   if (!elementNullable && !memberNullable) {
-    append("return StableRef.create(obj.$methodName($paramCall).value as Any).asCPointer()")
+    append("return NugetHandles.retain(obj.$methodName($paramCall).value as Any)")
   } else {
     appendLine("val v = obj.${memberAccessor("$methodName($paramCall)", memberNullable)}.value")
-    append("return if (v != null) StableRef.create(v).asCPointer() else null")
+    append("return if (v != null) NugetHandles.retain(v) else null")
   }
 }
 
@@ -681,9 +681,9 @@ private fun buildStateFlowSetValuePropertyBody(
   appendLine("  handle.asStableRef<$qualifiedName>().get().$propName.value = $assignment")
   appendLine("} catch (e: Throwable) {")
   appendLine("  if (errorOut != null) {")
-  appendLine("    errorOut.reinterpret<%T>().pointed.value = %T.create(")
+  appendLine("    errorOut.reinterpret<%T>().pointed.value = %T.retain(")
   appendLine("      buildError(e)")
-  appendLine("    ).asCPointer()")
+  appendLine("    )")
   appendLine("  }")
   append("}")
 }
@@ -703,9 +703,9 @@ private fun buildStateFlowSetValueMethodBody(
   )
   appendLine("} catch (e: Throwable) {")
   appendLine("  if (errorOut != null) {")
-  appendLine("    errorOut.reinterpret<%T>().pointed.value = %T.create(")
+  appendLine("    errorOut.reinterpret<%T>().pointed.value = %T.retain(")
   appendLine("      buildError(e)")
-  appendLine("    ).asCPointer()")
+  appendLine("    )")
   appendLine("  }")
   append("}")
 }

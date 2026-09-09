@@ -68,8 +68,8 @@ internal fun FileSpec.Builder.addLambdaParamMethodExport(
       val argKotlin: String = argType.declaration.simpleName.asString()
       when (argKotlin) {
         "Boolean" -> appendLine("${indent}val arg${i}Ref: Byte = if (it$i) 1.toByte() else 0.toByte()")
-        "String" -> appendLine("${indent}val arg${i}Ref = StableRef.create(it$i as Any).asCPointer()")
-        else -> appendLine("${indent}val arg${i}Ref = StableRef.create(it$i).asCPointer()")
+        "String" -> appendLine("${indent}val arg${i}Ref = NugetHandles.retain(it$i as Any)")
+        else -> appendLine("${indent}val arg${i}Ref = NugetHandles.retain(it$i)")
       }
     }
 
@@ -86,7 +86,7 @@ internal fun FileSpec.Builder.addLambdaParamMethodExport(
         lambdaArgTypes.forEachIndexed { i, argType ->
           val argKotlin: String = argType.declaration.simpleName.asString()
           if (argKotlin != "Boolean") {
-            appendLine("${indent}arg${i}Ref!!.asStableRef<Any>().dispose()")
+            appendLine("${indent}NugetHandles.release(arg${i}Ref!!)")
           }
         }
       }
@@ -95,7 +95,7 @@ internal fun FileSpec.Builder.addLambdaParamMethodExport(
         lambdaArgTypes.forEachIndexed { i, argType ->
           val argKotlin: String = argType.declaration.simpleName.asString()
           if (argKotlin != "Boolean") {
-            appendLine("${indent}arg${i}Ref!!.asStableRef<Any>().dispose()")
+            appendLine("${indent}NugetHandles.release(arg${i}Ref!!)")
           }
         }
         append("${indent}cbResult")
@@ -106,11 +106,11 @@ internal fun FileSpec.Builder.addLambdaParamMethodExport(
         lambdaArgTypes.forEachIndexed { i, argType ->
           val argKotlin: String = argType.declaration.simpleName.asString()
           if (argKotlin != "Boolean") {
-            appendLine("${indent}arg${i}Ref!!.asStableRef<Any>().dispose()")
+            appendLine("${indent}NugetHandles.release(arg${i}Ref!!)")
           }
         }
         appendLine("${indent}val cbResult = resultRef.asStableRef<String>().get()")
-        appendLine("${indent}resultRef.asStableRef<Any>().dispose()")
+        appendLine("${indent}NugetHandles.release(resultRef)")
         append("${indent}cbResult")
       }
     }
@@ -136,9 +136,9 @@ internal fun FileSpec.Builder.addLambdaParamMethodExport(
         appendLine("  }")
         appendLine("} catch (e: Throwable) {")
         appendLine("  if (errorOut != null) {")
-        appendLine("    errorOut.reinterpret<COpaquePointerVar>().pointed.value = StableRef.create(")
+        appendLine("    errorOut.reinterpret<COpaquePointerVar>().pointed.value = NugetHandles.retain(")
         appendLine("      buildError(e)")
-        appendLine("    ).asCPointer()")
+        appendLine("    )")
         appendLine("  }")
         append("}")
       }
@@ -148,12 +148,12 @@ internal fun FileSpec.Builder.addLambdaParamMethodExport(
         append(callbackBody)
         appendLine()
         appendLine("  }")
-        appendLine("  StableRef.create(list).asCPointer()")
+        appendLine("  NugetHandles.retain(list)")
         appendLine("} catch (e: Throwable) {")
         appendLine("  if (errorOut != null) {")
-        appendLine("    errorOut.reinterpret<COpaquePointerVar>().pointed.value = StableRef.create(")
+        appendLine("    errorOut.reinterpret<COpaquePointerVar>().pointed.value = NugetHandles.retain(")
         appendLine("      buildError(e)")
-        appendLine("    ).asCPointer()")
+        appendLine("    )")
         appendLine("  }")
         appendLine("  null")
         append("}")
@@ -167,9 +167,9 @@ internal fun FileSpec.Builder.addLambdaParamMethodExport(
         appendLine("  }")
         appendLine("} catch (e: Throwable) {")
         appendLine("  if (errorOut != null) {")
-        appendLine("    errorOut.reinterpret<COpaquePointerVar>().pointed.value = StableRef.create(")
+        appendLine("    errorOut.reinterpret<COpaquePointerVar>().pointed.value = NugetHandles.retain(")
         appendLine("      buildError(e)")
-        appendLine("    ).asCPointer()")
+        appendLine("    )")
         appendLine("  }")
         appendLine("  ${defaultValueFor(outerRetQualified)}")
         append("}")

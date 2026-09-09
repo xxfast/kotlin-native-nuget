@@ -176,9 +176,23 @@ internal object Tier1CinteropStub {
     }
   """.trimIndent()
 
+  // ADR-120: `kotlin.concurrent.AtomicLong` is Kotlin/Native-only (the JVM's `kotlin.concurrent`
+  // has no such class), and the generated `NugetHandles` counter object uses it. Signatures match
+  // the Native stdlib's: a `Long` constructor argument, a mutable `value`, and the two
+  // increment/decrement operations the counter calls.
+  private val concurrentStub: String = """
+    package kotlin.concurrent
+
+    class AtomicLong(var value: Long) {
+      fun incrementAndGet(): Long = ++value
+      fun decrementAndGet(): Long = --value
+    }
+  """.trimIndent()
+
   /** relative file name -> file content, ready for [Tier1Harness] to write to disk and compile. */
   val files: List<Pair<String, String>> = listOf(
     "Tier1Stub_KotlinNative.kt" to cNameStub,
+    "Tier1Stub_Concurrent.kt" to concurrentStub,
     "Tier1Stub_ExperimentalNativeApi.kt" to experimentalNativeApiStub,
     "Tier1Stub_Cinterop.kt" to cinteropStub,
     "Tier1Stub_Cleaner.kt" to cleanerStub,

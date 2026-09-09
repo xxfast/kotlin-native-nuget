@@ -49,13 +49,13 @@ class Tier1SuspendNullableReturnTest {
     // Top-level: buildSuspendFunctionBody.
     assertContains(
       result.generated,
-      "val resultRef = if (result == null) null else StableRef.create(result).asCPointer()",
+      "val resultRef = if (result == null) null else NugetHandles.retain(result)",
       message = "expected a null-guarded resultRef; generated=${result.generated}",
     )
     // Class method: buildSuspendMethodBody. Both builders emit the same guard, so a single
     // occurrence would mean only one of them was fixed.
     val guardCount: Int =
-      result.generated.split("if (result == null) null else StableRef.create(result)").size - 1
+      result.generated.split("if (result == null) null else NugetHandles.retain(result)").size - 1
     assertTrue(
       guardCount >= 4,
       "expected all four nullable suspend exports to be guarded; generated=${result.generated}",
@@ -63,7 +63,7 @@ class Tier1SuspendNullableReturnTest {
     // A non-nullable return keeps the unguarded shape.
     assertContains(
       result.generated,
-      "val resultRef = StableRef.create(result).asCPointer()",
+      "val resultRef = NugetHandles.retain(result)",
       message = "expected the non-nullable return to stay unguarded; generated=${result.generated}",
     )
   }

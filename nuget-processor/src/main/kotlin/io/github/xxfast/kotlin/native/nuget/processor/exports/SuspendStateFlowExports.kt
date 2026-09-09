@@ -35,9 +35,9 @@ internal fun FileSpec.Builder.addStateFlowHandleExports() {
       .addParameter("flowHandle", cOpaquePointer)
       .returns(cOpaquePointer)
       .addStatement(
-        "return %T.create(flowHandle.asStableRef<$STATE_FLOW_STAR>()" +
-            ".get().value as Any).asCPointer()",
-        stableRef,
+        "return %T.retain(flowHandle.asStableRef<$STATE_FLOW_STAR>()" +
+            ".get().value as Any)",
+        nugetHandles,
       )
       .build()
   )
@@ -63,7 +63,7 @@ private fun buildStateFlowHandleCollectBody(): String = buildString {
   appendLine("val job = scope.launch(start = CoroutineStart.ATOMIC) {")
   appendLine("  try {")
   appendLine("    flow.collect { value ->")
-  appendLine("      val itemRef = StableRef.create(value as Any).asCPointer()")
+  appendLine("      val itemRef = NugetHandles.retain(value as Any)")
   appendLine("      onNext.invoke(itemRef, 0.toByte(), userData)")
   appendLine("    }")
   appendLine("    onComplete.invoke(userData)")
@@ -71,9 +71,9 @@ private fun buildStateFlowHandleCollectBody(): String = buildString {
   appendLine("    onNext.invoke(null, 1.toByte(), userData)")
   appendLine("    throw e")
   appendLine("  } catch (e: Throwable) {")
-  appendLine("    val errRef = StableRef.create(buildError(e)).asCPointer()")
+  appendLine("    val errRef = NugetHandles.retain(buildError(e))")
   appendLine("    onError.invoke(errRef, userData)")
   appendLine("  }")
   appendLine("}")
-  append("return StableRef.create(job).asCPointer()")
+  append("return NugetHandles.retain(job)")
 }

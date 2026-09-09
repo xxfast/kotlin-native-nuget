@@ -7,7 +7,7 @@ import com.squareup.kotlinpoet.TypeName
 import io.github.xxfast.kotlin.native.nuget.processor.exports.cNameAnnotation
 import io.github.xxfast.kotlin.native.nuget.processor.exports.cOpaquePointer
 import io.github.xxfast.kotlin.native.nuget.processor.exports.cOpaquePointerVar
-import io.github.xxfast.kotlin.native.nuget.processor.exports.stableRef
+import io.github.xxfast.kotlin.native.nuget.processor.exports.nugetHandles
 
 /**
  * KotlinPoet projection for planned ordinary callables. Value-class positions use a dedicated
@@ -64,13 +64,13 @@ internal fun FileSpec.Builder.addForwardKotlinPlanExport(plan: ForwardCallablePl
     .let { call -> if (plan.invocation.unwrapsKotlinResult) "$call.getOrThrow()" else call }
 
   when (val result: BridgeType = plan.publicSignature.result) {
-    BridgeType.Unit -> builder.addCode(errorHandlingUnitBody(invocation, error.name), cOpaquePointerVar, stableRef)
+    BridgeType.Unit -> builder.addCode(errorHandlingUnitBody(invocation, error.name), cOpaquePointerVar, nugetHandles)
     is BridgeType.Primitive, BridgeType.Char -> {
       builder.returns(kotlinResultType(call.result))
       builder.addCode(
         errorHandlingValueBody(invocation, error.name, defaultResult(result)),
         cOpaquePointerVar,
-        stableRef,
+        nugetHandles,
       )
     }
 
@@ -82,7 +82,7 @@ internal fun FileSpec.Builder.addForwardKotlinPlanExport(plan: ForwardCallablePl
       builder.addCode(
         errorHandlingValueBody(invocation, error.name, "\"\""),
         cOpaquePointerVar,
-        stableRef,
+        nugetHandles,
       )
     }
 
@@ -96,7 +96,7 @@ internal fun FileSpec.Builder.addForwardKotlinPlanExport(plan: ForwardCallablePl
       builder.addCode(
         errorHandlingValueBody("$invocation.toString()", error.name, "\"\""),
         cOpaquePointerVar,
-        stableRef,
+        nugetHandles,
       )
     }
 
@@ -108,7 +108,7 @@ internal fun FileSpec.Builder.addForwardKotlinPlanExport(plan: ForwardCallablePl
       builder.addCode(
         errorHandlingValueBody("$invocation.ordinal", error.name, "0"),
         cOpaquePointerVar,
-        stableRef,
+        nugetHandles,
       )
     }
 
@@ -122,7 +122,7 @@ internal fun FileSpec.Builder.addForwardKotlinPlanExport(plan: ForwardCallablePl
       builder.addCode(
         errorHandlingValueBody("$invocation.toDotNetTicks()", error.name, "0L"),
         cOpaquePointerVar,
-        stableRef,
+        nugetHandles,
       )
     }
 
@@ -138,7 +138,7 @@ internal fun FileSpec.Builder.addForwardKotlinPlanExport(plan: ForwardCallablePl
       builder.addCode(
         errorHandlingValueBody(result.handleOutExpression(invocation), error.name, "null"),
         cOpaquePointerVar,
-        stableRef,
+        nugetHandles,
       )
     }
 
@@ -149,7 +149,7 @@ internal fun FileSpec.Builder.addForwardKotlinPlanExport(plan: ForwardCallablePl
         if (result is BridgeType.Collection) collectionResultProjection(invocation, result)
         else invocation
       builder.returns(cOpaquePointer.copy(nullable = true))
-      builder.addCode(handleResultBody(boxed, error.name), stableRef, cOpaquePointerVar, stableRef)
+      builder.addCode(handleResultBody(boxed, error.name), nugetHandles, cOpaquePointerVar, nugetHandles)
     }
 
     is BridgeType.Nullable -> addNullableResult(
@@ -193,7 +193,7 @@ private fun addValueClassOrdinaryResult(
       builder.addCode(
         errorHandlingValueBody(unboxed, errorName, "\"\""),
         cOpaquePointerVar,
-        stableRef,
+        nugetHandles,
       )
     }
 
@@ -203,7 +203,7 @@ private fun addValueClassOrdinaryResult(
       builder.addCode(
         errorHandlingValueBody(unboxed, errorName, defaultResult(underlying)),
         cOpaquePointerVar,
-        stableRef,
+        nugetHandles,
       )
     }
 
@@ -212,13 +212,13 @@ private fun addValueClassOrdinaryResult(
       builder.addCode(
         errorHandlingValueBody("$unboxed.ordinal", errorName, "0"),
         cOpaquePointerVar,
-        stableRef,
+        nugetHandles,
       )
     }
 
     is BridgeType.ObjectHandle -> {
       builder.returns(cOpaquePointer.copy(nullable = true))
-      builder.addCode(handleResultBody(unboxed, errorName), stableRef, cOpaquePointerVar, stableRef)
+      builder.addCode(handleResultBody(unboxed, errorName), nugetHandles, cOpaquePointerVar, nugetHandles)
     }
 
     else -> error(
@@ -289,7 +289,7 @@ private fun FileSpec.Builder.addLegacyTwoCallKotlinExport(plan: ForwardCallableP
   presenceBuilder.addCode(
     errorHandlingValueBody("$invocation != null", error.name, "false"),
     cOpaquePointerVar,
-    stableRef,
+    nugetHandles,
   )
   addFunction(presenceBuilder.build())
 
@@ -315,7 +315,7 @@ private fun FileSpec.Builder.addLegacyTwoCallKotlinExport(plan: ForwardCallableP
   valueBuilder.addCode(
     errorHandlingValueBody(valueExpression, error.name, valueDefault),
     cOpaquePointerVar,
-    stableRef,
+    nugetHandles,
   )
   addFunction(valueBuilder.build())
   return this
@@ -392,7 +392,7 @@ internal fun FileSpec.Builder.addForwardValueClassPlanExport(plan: ForwardCallab
   when (val result: BridgeType = plan.publicSignature.result) {
     BridgeType.Unit -> {
       if (error != null) {
-        builder.addCode(errorHandlingUnitBody(invocation, error.name), cOpaquePointerVar, stableRef)
+        builder.addCode(errorHandlingUnitBody(invocation, error.name), cOpaquePointerVar, nugetHandles)
       } else {
         builder.addStatement("%L", invocation)
       }
@@ -404,7 +404,7 @@ internal fun FileSpec.Builder.addForwardValueClassPlanExport(plan: ForwardCallab
         builder.addCode(
           errorHandlingValueBody(invocation, error.name, defaultResult(result)),
           cOpaquePointerVar,
-          stableRef,
+          nugetHandles,
         )
       } else {
         builder.addStatement("return %L", invocation)
@@ -417,7 +417,7 @@ internal fun FileSpec.Builder.addForwardValueClassPlanExport(plan: ForwardCallab
         builder.addCode(
           errorHandlingValueBody(invocation, error.name, "\"\""),
           cOpaquePointerVar,
-          stableRef,
+          nugetHandles,
         )
       } else {
         builder.addStatement("return %L", invocation)
@@ -430,7 +430,7 @@ internal fun FileSpec.Builder.addForwardValueClassPlanExport(plan: ForwardCallab
         builder.addCode(
           errorHandlingValueBody("$invocation.ordinal", error.name, "0"),
           cOpaquePointerVar,
-          stableRef,
+          nugetHandles,
         )
       } else {
         builder.addStatement("return %L.ordinal", invocation)
@@ -445,10 +445,10 @@ internal fun FileSpec.Builder.addForwardValueClassPlanExport(plan: ForwardCallab
       builder.returns(cOpaquePointer.copy(nullable = true))
       if (error != null) {
         builder.addCode(
-          handleResultBody(boxed, error.name), stableRef, cOpaquePointerVar, stableRef,
+          handleResultBody(boxed, error.name), nugetHandles, cOpaquePointerVar, nugetHandles,
         )
       } else {
-        builder.addStatement("return %T.create(%L).asCPointer()", stableRef, boxed)
+        builder.addStatement("return %T.retain(%L)", nugetHandles, boxed)
       }
     }
 
@@ -683,7 +683,7 @@ private fun addNullableResult(
   when (type) {
     is BridgeType.ObjectHandle, is BridgeType.Interface -> {
       builder.returns(cOpaquePointer.copy(nullable = true))
-      builder.addCode(nullableHandleResultBody(invocation, errorName), stableRef, cOpaquePointerVar, stableRef)
+      builder.addCode(nullableHandleResultBody(invocation, errorName), nugetHandles, cOpaquePointerVar, nugetHandles)
     }
 
     BridgeType.String -> {
@@ -691,7 +691,7 @@ private fun addNullableResult(
         "Forward Kotlin nullable String result must use POINTER"
       }
       builder.returns(kotlinType("String").copy(nullable = true))
-      builder.addCode(errorHandlingValueBody(invocation, errorName, "null"), cOpaquePointerVar, stableRef)
+      builder.addCode(errorHandlingValueBody(invocation, errorName, "null"), cOpaquePointerVar, nugetHandles)
     }
 
     // ADR-106: `Uuid?` ships the null pointer for null, the text otherwise -- the String shape
@@ -704,7 +704,7 @@ private fun addNullableResult(
       builder.addCode(
         errorHandlingValueBody("$invocation?.toString()", errorName, "null"),
         cOpaquePointerVar,
-        stableRef,
+        nugetHandles,
       )
     }
 
@@ -732,7 +732,7 @@ private fun addNullableResult(
           nullablePrimitiveResultBody(invocation, valueOut.name, errorName, written),
           cVarType(kind),
           cOpaquePointerVar,
-          stableRef,
+          nugetHandles,
         )
         return
       }
@@ -744,16 +744,16 @@ private fun addNullableResult(
         builder.returns(cOpaquePointer.copy(nullable = true))
         builder.addCode(
           nullableHandleResultBody(unboxed, errorName),
-          stableRef,
+          nugetHandles,
           cOpaquePointerVar,
-          stableRef,
+          nugetHandles,
         )
       } else {
         builder.returns(kotlinType("String").copy(nullable = true))
         builder.addCode(
           errorHandlingValueBody(unboxed, errorName, "null"),
           cOpaquePointerVar,
-          stableRef,
+          nugetHandles,
         )
       }
     }
@@ -770,7 +770,7 @@ private fun addNullableResult(
         nullablePrimitiveResultBody(invocation, valueOut.name, errorName),
         cVarType(type.kind),
         cOpaquePointerVar,
-        stableRef,
+        nugetHandles,
       )
     }
 
@@ -787,7 +787,7 @@ private fun addNullableResult(
         nullablePrimitiveResultBody(invocation, valueOut.name, errorName, "result.ordinal"),
         cVarType(PrimitiveKind.INT),
         cOpaquePointerVar,
-        stableRef,
+        nugetHandles,
       )
     }
 
@@ -806,7 +806,7 @@ private fun addNullableResult(
         nullableInstantResultBody(invocation, valueOut.name, errorName),
         cVarType(PrimitiveKind.LONG),
         cOpaquePointerVar,
-        stableRef,
+        nugetHandles,
       )
     }
 
@@ -933,9 +933,9 @@ private fun errorHandlingUnitBody(invocation: String, errorName: String): String
   appendLine("  $invocation")
   appendLine("} catch (e: Throwable) {")
   appendLine("  if ($errorName != null) {")
-  appendLine("    $errorName.reinterpret<%T>().pointed.value = %T.create(")
+  appendLine("    $errorName.reinterpret<%T>().pointed.value = %T.retain(")
   appendLine("      buildError(e)")
-  appendLine("    ).asCPointer()")
+  appendLine("    )")
   appendLine("  }")
   append("}")
 }
@@ -962,9 +962,9 @@ private fun errorHandlingValueBody(
   appendLine("  $invocation")
   appendLine("} catch (e: Throwable) {")
   appendLine("  if ($errorName != null) {")
-  appendLine("    $errorName.reinterpret<%T>().pointed.value = %T.create(")
+  appendLine("    $errorName.reinterpret<%T>().pointed.value = %T.retain(")
   appendLine("      buildError(e)")
-  appendLine("    ).asCPointer()")
+  appendLine("    )")
   appendLine("  }")
   appendLine("  $default")
   append("}")
@@ -972,12 +972,12 @@ private fun errorHandlingValueBody(
 
 private fun handleResultBody(invocation: String, errorName: String): String = buildString {
   appendLine("return try {")
-  appendLine("  %T.create($invocation).asCPointer()")
+  appendLine("  %T.retain($invocation)")
   appendLine("} catch (e: Throwable) {")
   appendLine("  if ($errorName != null) {")
-  appendLine("    $errorName.reinterpret<%T>().pointed.value = %T.create(")
+  appendLine("    $errorName.reinterpret<%T>().pointed.value = %T.retain(")
   appendLine("      buildError(e)")
-  appendLine("    ).asCPointer()")
+  appendLine("    )")
   appendLine("  }")
   appendLine("  null")
   append("}")
@@ -986,12 +986,12 @@ private fun handleResultBody(invocation: String, errorName: String): String = bu
 private fun nullableHandleResultBody(invocation: String, errorName: String): String = buildString {
   appendLine("return try {")
   appendLine("  val result = $invocation")
-  appendLine("  if (result == null) null else %T.create(result).asCPointer()")
+  appendLine("  if (result == null) null else %T.retain(result)")
   appendLine("} catch (e: Throwable) {")
   appendLine("  if ($errorName != null) {")
-  appendLine("    $errorName.reinterpret<%T>().pointed.value = %T.create(")
+  appendLine("    $errorName.reinterpret<%T>().pointed.value = %T.retain(")
   appendLine("      buildError(e)")
-  appendLine("    ).asCPointer()")
+  appendLine("    )")
   appendLine("  }")
   appendLine("  null")
   append("}")
@@ -1014,9 +1014,9 @@ private fun nullablePrimitiveResultBody(
   appendLine("  result != null")
   appendLine("} catch (e: Throwable) {")
   appendLine("  if ($errorName != null) {")
-  appendLine("    $errorName.reinterpret<%T>().pointed.value = %T.create(")
+  appendLine("    $errorName.reinterpret<%T>().pointed.value = %T.retain(")
   appendLine("      buildError(e)")
-  appendLine("    ).asCPointer()")
+  appendLine("    )")
   appendLine("  }")
   appendLine("  false")
   append("}")
@@ -1038,9 +1038,9 @@ private fun nullableInstantResultBody(
   appendLine("  result != null")
   appendLine("} catch (e: Throwable) {")
   appendLine("  if ($errorName != null) {")
-  appendLine("    $errorName.reinterpret<%T>().pointed.value = %T.create(")
+  appendLine("    $errorName.reinterpret<%T>().pointed.value = %T.retain(")
   appendLine("      buildError(e)")
-  appendLine("    ).asCPointer()")
+  appendLine("    )")
   appendLine("  }")
   appendLine("  false")
   append("}")

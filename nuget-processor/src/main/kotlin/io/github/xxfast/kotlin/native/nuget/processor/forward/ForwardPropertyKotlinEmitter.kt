@@ -7,7 +7,7 @@ import com.squareup.kotlinpoet.TypeName
 import io.github.xxfast.kotlin.native.nuget.processor.exports.cNameAnnotation
 import io.github.xxfast.kotlin.native.nuget.processor.exports.cOpaquePointer
 import io.github.xxfast.kotlin.native.nuget.processor.exports.cOpaquePointerVar
-import io.github.xxfast.kotlin.native.nuget.processor.exports.stableRef
+import io.github.xxfast.kotlin.native.nuget.processor.exports.nugetHandles
 
 /** Kotlin projection for the complete planned property path. */
 internal fun FileSpec.Builder.addForwardPropertyPlanExports(plan: ForwardPropertyPlan) {
@@ -33,24 +33,24 @@ private fun FileSpec.Builder.addGetter(plan: ForwardPropertyPlan, call: ForwardN
   val builder: FunSpec.Builder = exportBuilder(call, plan.receiver, plan.symbol)
   val access: String = plan.accessExpression()
   when (val type: BridgeType = plan.type) {
-    BridgeType.Unit -> builder.addCode(unitBody(access, "errorOut"), cOpaquePointerVar, stableRef)
+    BridgeType.Unit -> builder.addCode(unitBody(access, "errorOut"), cOpaquePointerVar, nugetHandles)
     is BridgeType.Primitive -> {
       builder.returns(kotlinType(type))
       builder.addCode(
         valueBody(access, "errorOut", primitiveDefault(type)),
         cOpaquePointerVar,
-        stableRef,
+        nugetHandles,
       )
     }
 
     BridgeType.Char -> {
       builder.returns(kotlinType("Char"))
-      builder.addCode(valueBody(access, "errorOut", "'\\u0000'"), cOpaquePointerVar, stableRef)
+      builder.addCode(valueBody(access, "errorOut", "'\\u0000'"), cOpaquePointerVar, nugetHandles)
     }
 
     BridgeType.String -> {
       builder.returns(kotlinType(type))
-      builder.addCode(valueBody(access, "errorOut", "\"\""), cOpaquePointerVar, stableRef)
+      builder.addCode(valueBody(access, "errorOut", "\"\""), cOpaquePointerVar, nugetHandles)
     }
 
     // ADR-106: the String getter with `toString()` composed in -- the RFC 9562 lowercase hex-dash
@@ -60,14 +60,14 @@ private fun FileSpec.Builder.addGetter(plan: ForwardPropertyPlan, call: ForwardN
       builder.addCode(
         valueBody("$access.toString()", "errorOut", "\"\""),
         cOpaquePointerVar,
-        stableRef,
+        nugetHandles,
       )
     }
 
     is BridgeType.Nullable -> when (val inner: BridgeType = type.type) {
       BridgeType.String -> {
         builder.returns(kotlinType(type))
-        builder.addCode(valueBody(access, "errorOut", "null"), cOpaquePointerVar, stableRef)
+        builder.addCode(valueBody(access, "errorOut", "null"), cOpaquePointerVar, nugetHandles)
       }
 
       // ADR-106: `Uuid?` ships the null pointer for null -- the String? shape with a safe-called
@@ -77,7 +77,7 @@ private fun FileSpec.Builder.addGetter(plan: ForwardPropertyPlan, call: ForwardN
         builder.addCode(
           valueBody("$access?.toString()", "errorOut", "null"),
           cOpaquePointerVar,
-          stableRef,
+          nugetHandles,
         )
       }
 
@@ -95,9 +95,9 @@ private fun FileSpec.Builder.addGetter(plan: ForwardPropertyPlan, call: ForwardN
         builder.returns(cOpaquePointer.copy(nullable = true))
         builder.addCode(
           nullableHandleBody(boxed, "errorOut"),
-          stableRef,
+          nugetHandles,
           cOpaquePointerVar,
-          stableRef,
+          nugetHandles,
         )
       }
 
@@ -109,13 +109,13 @@ private fun FileSpec.Builder.addGetter(plan: ForwardPropertyPlan, call: ForwardN
           builder.returns(cOpaquePointer.copy(nullable = true))
           builder.addCode(
             nullableHandleBody(unboxed, "errorOut"),
-            stableRef,
+            nugetHandles,
             cOpaquePointerVar,
-            stableRef,
+            nugetHandles,
           )
         } else {
           builder.returns(kotlinType("String").copy(nullable = true))
-          builder.addCode(valueBody(unboxed, "errorOut", "null"), cOpaquePointerVar, stableRef)
+          builder.addCode(valueBody(unboxed, "errorOut", "null"), cOpaquePointerVar, nugetHandles)
         }
       }
 
@@ -126,9 +126,9 @@ private fun FileSpec.Builder.addGetter(plan: ForwardPropertyPlan, call: ForwardN
         builder.returns(cOpaquePointer.copy(nullable = true))
         builder.addCode(
           nullableHandleBody("$access?.let(::buildError)", "errorOut"),
-          stableRef,
+          nugetHandles,
           cOpaquePointerVar,
-          stableRef,
+          nugetHandles,
         )
       }
 
@@ -140,7 +140,7 @@ private fun FileSpec.Builder.addGetter(plan: ForwardPropertyPlan, call: ForwardN
       builder.addCode(
         valueBody("$access.ordinal", "errorOut", "0"),
         cOpaquePointerVar,
-        stableRef,
+        nugetHandles,
       )
     }
 
@@ -150,7 +150,7 @@ private fun FileSpec.Builder.addGetter(plan: ForwardPropertyPlan, call: ForwardN
       builder.addCode(
         valueBody("$access.toDotNetTicks()", "errorOut", "0L"),
         cOpaquePointerVar,
-        stableRef,
+        nugetHandles,
       )
     }
 
@@ -160,7 +160,7 @@ private fun FileSpec.Builder.addGetter(plan: ForwardPropertyPlan, call: ForwardN
       val boxed: String =
         if (type is BridgeType.Collection) collectionResultProjection(access, type) else access
       builder.returns(cOpaquePointer.copy(nullable = true))
-      builder.addCode(handleBody(boxed, "errorOut"), stableRef, cOpaquePointerVar, stableRef)
+      builder.addCode(handleBody(boxed, "errorOut"), nugetHandles, cOpaquePointerVar, nugetHandles)
     }
 
     // ADR-107: non-null Throwable. Same envelope, unconditionally built.
@@ -168,9 +168,9 @@ private fun FileSpec.Builder.addGetter(plan: ForwardPropertyPlan, call: ForwardN
       builder.returns(cOpaquePointer.copy(nullable = true))
       builder.addCode(
         handleBody("buildError($access)", "errorOut"),
-        stableRef,
+        nugetHandles,
         cOpaquePointerVar,
-        stableRef,
+        nugetHandles,
       )
     }
 
@@ -182,7 +182,7 @@ private fun FileSpec.Builder.addGetter(plan: ForwardPropertyPlan, call: ForwardN
       when (val underlying: BridgeType = type.underlying) {
         BridgeType.String -> {
           builder.returns(kotlinType("String"))
-          builder.addCode(valueBody(unboxed, "errorOut", "\"\""), cOpaquePointerVar, stableRef)
+          builder.addCode(valueBody(unboxed, "errorOut", "\"\""), cOpaquePointerVar, nugetHandles)
         }
 
         is BridgeType.Primitive -> {
@@ -190,7 +190,7 @@ private fun FileSpec.Builder.addGetter(plan: ForwardPropertyPlan, call: ForwardN
           builder.addCode(
             valueBody(unboxed, "errorOut", primitiveDefault(underlying)),
             cOpaquePointerVar,
-            stableRef,
+            nugetHandles,
           )
         }
 
@@ -199,13 +199,13 @@ private fun FileSpec.Builder.addGetter(plan: ForwardPropertyPlan, call: ForwardN
           builder.addCode(
             valueBody("$unboxed.ordinal", "errorOut", "0"),
             cOpaquePointerVar,
-            stableRef,
+            nugetHandles,
           )
         }
 
         is BridgeType.ObjectHandle -> {
           builder.returns(cOpaquePointer.copy(nullable = true))
-          builder.addCode(handleBody(unboxed, "errorOut"), stableRef, cOpaquePointerVar, stableRef)
+          builder.addCode(handleBody(unboxed, "errorOut"), nugetHandles, cOpaquePointerVar, nugetHandles)
         }
 
         else -> error(
@@ -228,7 +228,7 @@ private fun FileSpec.Builder.addNullablePresenceGetter(
   builder.addCode(
     valueBody("${plan.accessExpression()} != null", "errorOut", "false"),
     cOpaquePointerVar,
-    stableRef,
+    nugetHandles,
   )
   addFunction(builder.build())
 }
@@ -245,7 +245,7 @@ private fun FileSpec.Builder.addNullableValueGetter(
       getterBuilder.addCode(
         valueBody("${plan.accessExpression()}!!", "errorOut", primitiveDefault(inner)),
         cOpaquePointerVar,
-        stableRef,
+        nugetHandles,
       )
       getterBuilder
     }
@@ -259,7 +259,7 @@ private fun FileSpec.Builder.addNullableValueGetter(
       getterBuilder.addCode(
         valueBody("${plan.accessExpression()}!!.toDotNetTicks()", "errorOut", "0L"),
         cOpaquePointerVar,
-        stableRef,
+        nugetHandles,
       )
       getterBuilder
     }
@@ -270,7 +270,7 @@ private fun FileSpec.Builder.addNullableValueGetter(
       .addCode(
         valueBody("${plan.accessExpression()}!!.ordinal", "errorOut", "0"),
         cOpaquePointerVar,
-        stableRef,
+        nugetHandles,
       )
 
     // ADR-079: a Primitive/Enum-underlying value class rides the same LegacyTwoCall `_value` call,
@@ -284,12 +284,12 @@ private fun FileSpec.Builder.addNullableValueGetter(
           .addCode(
             valueBody(unboxed, "errorOut", primitiveDefault(underlying)),
             cOpaquePointerVar,
-            stableRef,
+            nugetHandles,
           )
 
         is BridgeType.Enum -> getterBuilder
           .returns(kotlinType("Int"))
-          .addCode(valueBody("$unboxed.ordinal", "errorOut", "0"), cOpaquePointerVar, stableRef)
+          .addCode(valueBody("$unboxed.ordinal", "errorOut", "0"), cOpaquePointerVar, nugetHandles)
 
         else -> error(
           "Forward property nullable value getter has no value-class underlying route for " +
@@ -326,7 +326,7 @@ private fun FileSpec.Builder.addSetter(
   } else {
     "$expression = ${plan.valueExpression()}"
   }
-  builder.addCode(unitBody(assignment, "errorOut"), cOpaquePointerVar, stableRef)
+  builder.addCode(unitBody(assignment, "errorOut"), cOpaquePointerVar, nugetHandles)
   addFunction(builder.build())
 }
 
@@ -489,9 +489,9 @@ private fun unitBody(invocation: String, error: String): String = buildString {
   appendLine("  $invocation")
   appendLine("} catch (e: Throwable) {")
   appendLine("  if ($error != null) {")
-  appendLine("    $error.reinterpret<%T>().pointed.value = %T.create(")
+  appendLine("    $error.reinterpret<%T>().pointed.value = %T.retain(")
   appendLine("      buildError(e)")
-  appendLine("    ).asCPointer()")
+  appendLine("    )")
   appendLine("  }")
   append("}")
 }
@@ -501,9 +501,9 @@ internal fun valueBody(invocation: String, error: String, fallback: String): Str
   appendLine("  $invocation")
   appendLine("} catch (e: Throwable) {")
   appendLine("  if ($error != null) {")
-  appendLine("    $error.reinterpret<%T>().pointed.value = %T.create(")
+  appendLine("    $error.reinterpret<%T>().pointed.value = %T.retain(")
   appendLine("      buildError(e)")
-  appendLine("    ).asCPointer()")
+  appendLine("    )")
   appendLine("  }")
   appendLine("  $fallback")
   append("}")
@@ -511,12 +511,12 @@ internal fun valueBody(invocation: String, error: String, fallback: String): Str
 
 internal fun handleBody(invocation: String, error: String): String = buildString {
   appendLine("return try {")
-  appendLine("  %T.create($invocation).asCPointer()")
+  appendLine("  %T.retain($invocation)")
   appendLine("} catch (e: Throwable) {")
   appendLine("  if ($error != null) {")
-  appendLine("    $error.reinterpret<%T>().pointed.value = %T.create(")
+  appendLine("    $error.reinterpret<%T>().pointed.value = %T.retain(")
   appendLine("      buildError(e)")
-  appendLine("    ).asCPointer()")
+  appendLine("    )")
   appendLine("  }")
   appendLine("  null")
   append("}")
@@ -525,12 +525,12 @@ internal fun handleBody(invocation: String, error: String): String = buildString
 internal fun nullableHandleBody(invocation: String, error: String): String = buildString {
   appendLine("return try {")
   appendLine("  val result = $invocation")
-  appendLine("  if (result == null) null else %T.create(result).asCPointer()")
+  appendLine("  if (result == null) null else %T.retain(result)")
   appendLine("} catch (e: Throwable) {")
   appendLine("  if ($error != null) {")
-  appendLine("    $error.reinterpret<%T>().pointed.value = %T.create(")
+  appendLine("    $error.reinterpret<%T>().pointed.value = %T.retain(")
   appendLine("      buildError(e)")
-  appendLine("    ).asCPointer()")
+  appendLine("    )")
   appendLine("  }")
   appendLine("  null")
   append("}")

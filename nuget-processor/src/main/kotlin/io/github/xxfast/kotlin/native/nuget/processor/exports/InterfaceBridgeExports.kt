@@ -106,7 +106,7 @@ internal fun FileSpec.Builder.addInterfaceBridgeExports(
             appendLine("      val arg${i}Val: Byte = if ($pName) 1.toByte() else 0.toByte()")
           isEnum -> appendLine("      val arg${i}Val: Int = $pName.ordinal")
           isPrimitive -> { /* primitives passed by value, no extra binding needed */ }
-          else -> appendLine("      val arg${i}Ref = StableRef.create($pName as Any).asCPointer()")
+          else -> appendLine("      val arg${i}Ref = NugetHandles.retain($pName as Any)")
         }
       }
 
@@ -139,7 +139,7 @@ internal fun FileSpec.Builder.addInterfaceBridgeExports(
           ?.classKind == ClassKind.ENUM_CLASS
         val isPrimitive: Boolean = pQualified.startsWith("kotlin.") && pSimple != "String"
         if (!isEnum && !isPrimitive && pSimple != "Boolean") {
-          appendLine("      arg${i}Ref!!.asStableRef<Any>().dispose()")
+          appendLine("      NugetHandles.release(arg${i}Ref!!)")
         }
       }
 
@@ -149,11 +149,11 @@ internal fun FileSpec.Builder.addInterfaceBridgeExports(
 
     appendLine("  obj.$addMethodName(bridge)")
     appendLine("  val unregister: () -> Unit = { obj.$removeMethodName(bridge) }")
-    appendLine("  StableRef.create(unregister).asCPointer()")
+    appendLine("  NugetHandles.retain(unregister)")
     appendLine("} catch (e: Throwable) {")
     appendLine(
       "  if (errorOut != null) errorOut.reinterpret<COpaquePointerVar>().pointed.value = " +
-        "StableRef.create(buildError(e)).asCPointer()"
+        "NugetHandles.retain(buildError(e))"
     )
     appendLine("  null")
     append("}")
@@ -179,7 +179,7 @@ internal fun FileSpec.Builder.addInterfaceBridgeExports(
   val unsubscribeBody: String = buildString {
     appendLine("val ref = subscriptionHandle.asStableRef<() -> Unit>()")
     appendLine("ref.get().invoke()")
-    append("ref.dispose()")
+    append("NugetHandles.release(ref.asCPointer())")
   }
 
   addFunction(

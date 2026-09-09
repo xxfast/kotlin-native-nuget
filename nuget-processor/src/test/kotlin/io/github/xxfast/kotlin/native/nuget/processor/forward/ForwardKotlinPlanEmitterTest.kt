@@ -162,7 +162,7 @@ class ForwardKotlinPlanEmitterTest {
         params = listOf("name" to BridgeType.String),
       ),
     )
-    assertContains(source, "StableRef.create(sample.Patient(name))")
+    assertContains(source, "NugetHandles.retain(sample.Patient(name))")
   }
 
   @Test
@@ -193,7 +193,7 @@ class ForwardKotlinPlanEmitterTest {
         result = BridgeType.ObjectHandle("sample.Patient"),
       ),
     )
-    assertContains(source, "StableRef.create(sample.Patient.create())")
+    assertContains(source, "NugetHandles.retain(sample.Patient.create())")
   }
 
   @Test

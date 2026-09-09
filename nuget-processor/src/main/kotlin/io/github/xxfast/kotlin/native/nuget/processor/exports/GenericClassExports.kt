@@ -73,7 +73,7 @@ internal fun FileSpec.Builder.addGenericClassExports(cls: KSClassDeclaration) {
     FunSpec.builder("export_${prefix}_dispose")
       .addAnnotation(cNameAnnotation("${prefix}_dispose"))
       .addParameter("handle", cOpaquePointer)
-      .addStatement("handle.asStableRef<%L<*>>().dispose()", qualifiedName)
+      .addStatement("%T.release(handle)", nugetHandles)
       .build()
   )
 
@@ -92,8 +92,8 @@ internal fun FileSpec.Builder.addGenericClassExports(cls: KSClassDeclaration) {
         // any nullable property on a generic class used to hit at its first read.
         .returns(cOpaquePointer.copy(nullable = true))
         .addStatement(
-          "return handle.asStableRef<%L<*>>().get().%L?.let { %T.create(it).asCPointer() }",
-          qualifiedName, propName, stableRef,
+          "return handle.asStableRef<%L<*>>().get().%L?.let { %T.retain(it) }",
+          qualifiedName, propName, nugetHandles,
         )
         .build()
     )
@@ -120,16 +120,16 @@ private fun FileSpec.Builder.addGenericCreateExport(
       .returns(cOpaquePointer.copy(nullable = true))
       .addCode(buildString {
         appendLine("return try {")
-        appendLine("  %T.create(%L($argExpr)).asCPointer()")
+        appendLine("  %T.retain(%L($argExpr))")
         appendLine("} catch (e: Throwable) {")
         appendLine("  if (errorOut != null) {")
-        appendLine("    errorOut.reinterpret<%T>().pointed.value = %T.create(")
+        appendLine("    errorOut.reinterpret<%T>().pointed.value = %T.retain(")
         appendLine("      buildError(e)")
-        appendLine("    ).asCPointer()")
+        appendLine("    )")
         appendLine("  }")
         appendLine("  null")
         append("}")
-      }, stableRef, qualifiedName, cOpaquePointerVar, stableRef)
+      }, nugetHandles, qualifiedName, cOpaquePointerVar, nugetHandles)
       .build()
   )
 }
@@ -153,8 +153,8 @@ internal fun FileSpec.Builder.addNugetListHelperExports() {
       // returned collection carrying a null used to hit at its first read.
       .returns(cOpaquePointer.copy(nullable = true))
       .addStatement(
-        "return handle.asStableRef<List<*>>().get()[index]?.let { %T.create(it).asCPointer() }",
-        stableRef,
+        "return handle.asStableRef<List<*>>().get()[index]?.let { %T.retain(it) }",
+        nugetHandles,
       )
       .build()
   )
@@ -167,8 +167,8 @@ internal fun FileSpec.Builder.addNugetListHelperExports() {
       .addAnnotation(cNameAnnotation("nuget_list_create"))
       .returns(cOpaquePointer)
       .addStatement(
-        "return %T.create(mutableListOf<Any?>()).asCPointer()",
-        stableRef,
+        "return %T.retain(mutableListOf<Any?>())",
+        nugetHandles,
       )
       .build()
   )
@@ -206,8 +206,8 @@ internal fun FileSpec.Builder.addNugetSetHelperExports() {
       .returns(cOpaquePointer.copy(nullable = true))
       .addStatement(
         "return handle.asStableRef<Set<*>>().get().toList()[index]" +
-            "?.let { %T.create(it).asCPointer() }",
-        stableRef,
+            "?.let { %T.retain(it) }",
+        nugetHandles,
       )
       .build()
   )
@@ -219,8 +219,8 @@ internal fun FileSpec.Builder.addNugetSetHelperExports() {
       .addAnnotation(cNameAnnotation("nuget_set_create"))
       .returns(cOpaquePointer)
       .addStatement(
-        "return %T.create(mutableSetOf<Any?>()).asCPointer()",
-        stableRef,
+        "return %T.retain(mutableSetOf<Any?>())",
+        nugetHandles,
       )
       .build()
   )
@@ -259,8 +259,8 @@ internal fun FileSpec.Builder.addNugetMapHelperExports() {
       .returns(cOpaquePointer.copy(nullable = true))
       .addStatement(
         "return handle.asStableRef<Map<*, *>>().get().keys.toList()[index]" +
-            "?.let { %T.create(it).asCPointer() }",
-        stableRef,
+            "?.let { %T.retain(it) }",
+        nugetHandles,
       )
       .build()
   )
@@ -274,8 +274,8 @@ internal fun FileSpec.Builder.addNugetMapHelperExports() {
       .returns(cOpaquePointer.copy(nullable = true))
       .addStatement(
         "return handle.asStableRef<Map<*, *>>().get().values.toList()[index]" +
-            "?.let { %T.create(it).asCPointer() }",
-        stableRef,
+            "?.let { %T.retain(it) }",
+        nugetHandles,
       )
       .build()
   )
@@ -288,8 +288,8 @@ internal fun FileSpec.Builder.addNugetMapHelperExports() {
       .addAnnotation(cNameAnnotation("nuget_map_create"))
       .returns(cOpaquePointer)
       .addStatement(
-        "return %T.create(mutableMapOf<Any?, Any?>()).asCPointer()",
-        stableRef,
+        "return %T.retain(mutableMapOf<Any?, Any?>())",
+        nugetHandles,
       )
       .build()
   )
@@ -435,7 +435,58 @@ internal fun FileSpec.Builder.addNugetHelperExports() {
     FunSpec.builder("export_nuget_dispose")
       .addAnnotation(cNameAnnotation("nuget_dispose"))
       .addParameter("handle", cOpaquePointer)
-      .addStatement("handle.asStableRef<Any>().dispose()")
+      .addStatement("%T.release(handle)", nugetHandles)
+      .build()
+  )
+}
+
+/**
+ * ADR-120: the live-handle counter. Emitted unconditionally, not under the `needsHelpers` gate:
+ * a module whose only exports are value-class or extension-property members mints handles while
+ * that gate is false, so gating the counter would leave those files naming a missing object.
+ *
+ * Every mint the processor emits routes through [retain] and
+ * every release through [release], so `nuget_live_handles` reports how many `StableRef` handles
+ * the forward bridge currently holds. `kotlin.concurrent.AtomicLong` is the Native-only atomic
+ * that needs no opt-in beyond the ones this file already carries.
+ *
+ * `retain` increments before `StableRef.create` (which cannot throw for a non-null `Any`) and
+ * `release` decrements after `dispose`, so the reported count is never below the true live count
+ * at a quiescent point. `release` disposes through `asStableRef<Any>()` regardless of the site's
+ * original `T`, exactly as the shared `nuget_dispose` always has.
+ */
+internal fun FileSpec.Builder.addNugetHandlesCounter() {
+  addType(
+    TypeSpec.objectBuilder("NugetHandles")
+      .addModifiers(KModifier.INTERNAL)
+      .addProperty(
+        PropertySpec.builder("live", atomicLong)
+          .initializer("%T(0L)", atomicLong)
+          .build()
+      )
+      .addFunction(
+        FunSpec.builder("retain")
+          .addParameter("value", ClassName("kotlin", "Any"))
+          .returns(cOpaquePointer)
+          .addStatement("live.incrementAndGet()")
+          .addStatement("return %T.create(value).asCPointer()", stableRef)
+          .build()
+      )
+      .addFunction(
+        FunSpec.builder("release")
+          .addParameter("handle", cOpaquePointer)
+          .addStatement("handle.asStableRef<Any>().dispose()")
+          .addStatement("live.decrementAndGet()")
+          .build()
+      )
+      .build()
+  )
+
+  addFunction(
+    FunSpec.builder("export_nuget_live_handles")
+      .addAnnotation(cNameAnnotation("nuget_live_handles"))
+      .returns(Long::class)
+      .addStatement("return %T.live.value", nugetHandles)
       .build()
   )
 }
@@ -467,8 +518,8 @@ internal fun FileSpec.Builder.addNugetWrapHelperExports() {
         .addParameter("value", type)
         .returns(cOpaquePointer)
         .addStatement(
-          "return %T.create(value as Any).asCPointer()",
-          stableRef,
+          "return %T.retain(value as Any)",
+          nugetHandles,
         )
         .build()
     )
@@ -485,8 +536,8 @@ internal fun FileSpec.Builder.addNugetFunc0HelperExports() {
         "val fn = handle.asStableRef<Function0<*>>().get()",
       )
       .addStatement(
-        "return %T.create(fn.invoke() as Any).asCPointer()",
-        stableRef,
+        "return %T.retain(fn.invoke() as Any)",
+        nugetHandles,
       )
       .build()
   )
@@ -506,8 +557,8 @@ internal fun FileSpec.Builder.addNugetFunc1HelperExports() {
         "val param0 = arg0.asStableRef<Any>().get()",
       )
       .addStatement(
-        "return %T.create(fn.invoke(param0) as Any).asCPointer()",
-        stableRef,
+        "return %T.retain(fn.invoke(param0) as Any)",
+        nugetHandles,
       )
       .build()
   )
@@ -531,8 +582,8 @@ internal fun FileSpec.Builder.addNugetFunc2HelperExports() {
         "val param1 = arg1.asStableRef<Any>().get()",
       )
       .addStatement(
-        "return %T.create(fn.invoke(param0, param1) as Any).asCPointer()",
-        stableRef,
+        "return %T.retain(fn.invoke(param0, param1) as Any)",
+        nugetHandles,
       )
       .build()
   )
@@ -567,18 +618,18 @@ internal fun FileSpec.Builder.addNugetSuspendFuncHelperExports(arity: Int) {
       appendLine("    if (result == Unit) {")
       appendLine("      callback.invoke(null, null, 0.toByte(), userData)")
       appendLine("    } else {")
-      appendLine("      val resultRef = StableRef.create(result as Any).asCPointer()")
+      appendLine("      val resultRef = NugetHandles.retain(result as Any)")
       appendLine("      callback.invoke(resultRef, null, 0.toByte(), userData)")
       appendLine("    }")
       appendLine("  } catch (e: CancellationException) {")
       appendLine("    callback.invoke(null, null, 1.toByte(), userData)")
       appendLine("    throw e")
       appendLine("  } catch (e: Throwable) {")
-      appendLine("    val errRef = StableRef.create(buildError(e)).asCPointer()")
+      appendLine("    val errRef = NugetHandles.retain(buildError(e))")
       appendLine("    callback.invoke(null, errRef, 0.toByte(), userData)")
       appendLine("  }")
       appendLine("}")
-      append("return StableRef.create(job).asCPointer()")
+      append("return NugetHandles.retain(job)")
     })
   addFunction(builder.build())
 }
@@ -589,8 +640,8 @@ internal fun FileSpec.Builder.addNugetScopeHelperExports() {
       .addAnnotation(cNameAnnotation("nuget_scope_create"))
       .returns(cOpaquePointer)
       .addStatement(
-        "return %T.create(%T(%T() + %T.Default)).asCPointer()",
-        stableRef,
+        "return %T.retain(%T(%T() + %T.Default))",
+        nugetHandles,
         ClassName("kotlinx.coroutines", "CoroutineScope"),
         ClassName("kotlinx.coroutines", "SupervisorJob"),
         ClassName("kotlinx.coroutines", "Dispatchers"),
@@ -619,10 +670,7 @@ internal fun FileSpec.Builder.addNugetScopeHelperExports() {
       .beginControlFlow("if (handle == null)")
       .addStatement("return")
       .endControlFlow()
-      .addStatement(
-        "handle.asStableRef<%T>().dispose()",
-        ClassName("kotlinx.coroutines", "CoroutineScope"),
-      )
+      .addStatement("%T.release(handle)", nugetHandles)
       .build()
   )
 }
@@ -647,7 +695,7 @@ internal fun FileSpec.Builder.addNugetScopeDrainExport() {
         appendLine("    ?.forEach { it.join() }")
         appendLine("  callback.invoke(null, null, 0.toByte(), userData)")
         appendLine("}")
-        append("return StableRef.create(drainJob).asCPointer()")
+        append("return NugetHandles.retain(drainJob)")
       })
       .build()
   )
@@ -675,10 +723,7 @@ internal fun FileSpec.Builder.addNugetJobHelperExports() {
       .beginControlFlow("if (handle == null)")
       .addStatement("return")
       .endControlFlow()
-      .addStatement(
-        "handle.asStableRef<%T>().dispose()",
-        ClassName("kotlinx.coroutines", "Job"),
-      )
+      .addStatement("%T.release(handle)", nugetHandles)
       .build()
   )
 }
@@ -837,8 +882,8 @@ internal fun FileSpec.Builder.addNugetFunc3HelperExports() {
         "val param2 = arg2.asStableRef<Any>().get()",
       )
       .addStatement(
-        "return %T.create(fn.invoke(param0, param1, param2) as Any).asCPointer()",
-        stableRef,
+        "return %T.retain(fn.invoke(param0, param1, param2) as Any)",
+        nugetHandles,
       )
       .build()
   )

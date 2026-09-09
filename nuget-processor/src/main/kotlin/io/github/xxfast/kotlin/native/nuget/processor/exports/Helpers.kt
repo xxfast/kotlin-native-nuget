@@ -15,6 +15,17 @@ internal val cNameAnnotation = ClassName("kotlin.native", "CName")
 internal val cOpaquePointer = ClassName("kotlinx.cinterop", "COpaquePointer")
 internal val cOpaquePointerVar = ClassName("kotlinx.cinterop", "COpaquePointerVar")
 internal val stableRef = ClassName("kotlinx.cinterop", "StableRef")
+internal val atomicLong = ClassName("kotlin.concurrent", "AtomicLong")
+
+/**
+ * ADR-120: the generated live-handle chokepoint. Every emitted mint goes through
+ * `NugetHandles.retain` and every emitted release through `NugetHandles.release`, so the
+ * `nuget_live_handles` export can report how many `StableRef` handles the forward bridge holds.
+ * The object itself is emitted into `CNameExports.kt` by `addNugetHelperExports`, so this name
+ * resolves without an import.
+ */
+internal val nugetHandles =
+  ClassName("io.github.xxfast.kotlin.native.nuget.generated", "NugetHandles")
 
 /**
  * Reconstructs the full [TypeName] for a resolved+alias-expanded [KSType], preserving generic

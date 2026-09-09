@@ -61,7 +61,7 @@ internal fun FileSpec.Builder.addSealedClassExports(
       FunSpec.builder("export_${subPrefix}_dispose")
         .addAnnotation(cNameAnnotation("${subPrefix}_dispose"))
         .addParameter("handle", cOpaquePointer)
-        .addStatement("handle.asStableRef<%L>().dispose()", subQualifiedName)
+        .addStatement("%T.release(handle)", nugetHandles)
         .build()
     )
 
@@ -100,7 +100,7 @@ internal fun FileSpec.Builder.addSealedClassExports(
       addFunction(
         sealedPropertyGetter(subPrefix, propName)
           .returns(cOpaquePointer.copy(nullable = true))
-          .addCode(body, stableRef, cOpaquePointerVar, stableRef)
+          .addCode(body, nugetHandles, cOpaquePointerVar, nugetHandles)
           .build()
       )
     }

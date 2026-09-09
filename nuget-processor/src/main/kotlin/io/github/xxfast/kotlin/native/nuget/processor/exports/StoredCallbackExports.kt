@@ -173,9 +173,9 @@ internal fun FileSpec.Builder.addStoredCallbackExports(
       if (!info.isEnum) {
         val argSimpleName: String = info.qualifiedName.substringAfterLast('.')
         when (argSimpleName) {
-          "String" -> appendLine("    val arg${i}Ref = StableRef.create(arg$i as Any).asCPointer()")
+          "String" -> appendLine("    val arg${i}Ref = NugetHandles.retain(arg$i as Any)")
           "Boolean" -> appendLine("    val arg${i}Val: Byte = if (arg$i) 1.toByte() else 0.toByte()")
-          else -> appendLine("    val arg${i}Ref = StableRef.create(arg$i).asCPointer()")
+          else -> appendLine("    val arg${i}Ref = NugetHandles.retain(arg$i)")
         }
       }
     }
@@ -198,7 +198,7 @@ internal fun FileSpec.Builder.addStoredCallbackExports(
       if (!info.isEnum) {
         val argSimpleName: String = info.qualifiedName.substringAfterLast('.')
         if (argSimpleName != "Boolean") {
-          appendLine("    arg${i}Ref!!.asStableRef<Any>().dispose()")
+          appendLine("    NugetHandles.release(arg${i}Ref!!)")
         }
       }
     }
@@ -213,9 +213,9 @@ internal fun FileSpec.Builder.addStoredCallbackExports(
     appendLine("  }")
     appendLine("  obj.$addMethodName(bridge)")
     appendLine("  val unregister: () -> Unit = { obj.$removeMethodName(bridge) }")
-    appendLine("  StableRef.create(unregister).asCPointer()")
+    appendLine("  NugetHandles.retain(unregister)")
     appendLine("} catch (e: Throwable) {")
-    appendLine("  if (errorOut != null) errorOut.reinterpret<COpaquePointerVar>().pointed.value = StableRef.create(buildError(e)).asCPointer()")
+    appendLine("  if (errorOut != null) errorOut.reinterpret<COpaquePointerVar>().pointed.value = NugetHandles.retain(buildError(e))")
     appendLine("  null")
     append("}")
   }
@@ -235,7 +235,7 @@ internal fun FileSpec.Builder.addStoredCallbackExports(
   val unsubscribeBody: String = buildString {
     appendLine("val ref = subscriptionHandle.asStableRef<() -> Unit>()")
     appendLine("ref.get().invoke()")
-    append("ref.dispose()")
+    append("NugetHandles.release(ref.asCPointer())")
   }
 
   addFunction(

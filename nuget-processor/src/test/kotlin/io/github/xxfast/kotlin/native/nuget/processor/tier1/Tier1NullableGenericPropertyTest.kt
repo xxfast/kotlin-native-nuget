@@ -35,7 +35,7 @@ class Tier1NullableGenericPropertyTest {
     val kotlin: String = result.generated
     assertContains(
       kotlin,
-      "get().previous?.let { StableRef.create(it).asCPointer() }",
+      "get().previous?.let { NugetHandles.retain(it) }",
     )
     assertFalse(
       kotlin.contains("get().previous!!"),
@@ -70,7 +70,7 @@ class Tier1NullableGenericPropertyTest {
     assertContains(kotlin, "@CName(\"crate_get_value\")")
     assertContains(
       kotlin,
-      "get().value?.let { StableRef.create(it).asCPointer() }",
+      "get().value?.let { NugetHandles.retain(it) }",
     )
 
     val cs: String = result.generatedCSharp

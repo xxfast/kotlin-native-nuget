@@ -72,7 +72,7 @@ class ForwardPropertyEmitterTest {
     )
 
     val kotlin = renderKotlin(plan)
-    assertContains(kotlin, "StableRef.create(")
+    assertContains(kotlin, "NugetHandles.retain(")
     assertContains(kotlin, "friend = value.asStableRef<sample.Friend>().get()")
 
     val csharp = renderClassProperty(plan)
@@ -94,7 +94,7 @@ class ForwardPropertyEmitterTest {
     )
 
     val kotlin = renderKotlin(plan)
-    assertContains(kotlin, "StableRef.create(")
+    assertContains(kotlin, "NugetHandles.retain(")
     assertFalse(kotlin.contains("@CName(\"patient_set_tags\")"))
 
     val csharp = renderClassProperty(plan)

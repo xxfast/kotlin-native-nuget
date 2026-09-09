@@ -50,6 +50,16 @@ internal fun StringBuilder.renderMarshalHelper(helper: CirMarshalHelper) {
   appendLine("        [DllImport(\"${helper.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"nuget_dispose\")]")
   appendLine("        private static extern void Native_dispose(IntPtr handle);")
   appendLine()
+  // ADR-120: the live `StableRef` count the Kotlin side keeps behind `NugetHandles`. `internal`,
+  // matching `NugetBridgeState.ReleasedCount`; the shim compiles into the consumer, so its own
+  // code and its tests can read it. Baseline is whatever the process already holds: compare
+  // deltas, not absolutes.
+  appendLine("        [DllImport(\"${helper.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"nuget_live_handles\")]")
+  appendLine("        private static extern long Native_live_handles();")
+  appendLine()
+  appendLine("        /// <summary>The number of Kotlin StableRef handles the forward bridge currently holds.</summary>")
+  appendLine("        internal static long LiveHandles => Native_live_handles();")
+  appendLine()
   appendLine("        [DllImport(\"${helper.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"nuget_wrap_string\")]")
   appendLine("        private static extern IntPtr nuget_wrap_string(string value);")
   appendLine()

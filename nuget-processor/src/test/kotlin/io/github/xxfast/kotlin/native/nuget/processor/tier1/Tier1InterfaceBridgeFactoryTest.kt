@@ -115,7 +115,7 @@ class Tier1InterfaceBridgeFactoryTest {
     // The nullable String getter reads the null pointer as null, never as the empty string.
     assertContains(kotlin, "val ref = nicknameGetFn.invoke(nicknameGetCtx) ?: return null")
     // A String argument is minted here and disposed by the C# reader.
-    assertContains(kotlin, "val arg0Ref = StableRef.create(item as Any).asCPointer()")
+    assertContains(kotlin, "val arg0Ref = NugetHandles.retain(item as Any)")
     assertContains(kotlin, "fetchFn.invoke(arg0Ref, fetchCtx)")
     // A Unit method has no result to marshal.
     assertContains(kotlin, "override fun nap(): Unit {")
