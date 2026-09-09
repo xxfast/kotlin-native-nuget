@@ -2,6 +2,7 @@ using TestLibrary;
 using TestLibrary.Cat;
 using TestLibrary.Clinic;
 using TestLibrary.Models;
+using TestLibrary.Routes;
 
 namespace IntegrationTests;
 
@@ -261,6 +262,33 @@ public class LiveHandleTests
             using Cat oreo = await service.FetchCatAsync("Oreo", 9);
             Assert.Equal("Oreo", oreo.Name);
         });
+    }
+
+    // Row 9b. The ordering hole in ADR-019's suspend route. The generated wrapper's completion
+    // callback disposes a `jobHandle` local that is assigned only after the P/Invoke returns, and
+    // a body started with `CoroutineStart.ATOMIC` that never suspends can finish first: the
+    // callback then disposes IntPtr.Zero and the job's own handle is leaked for good.
+    // `fetch(ref) = ref + 1` (KeywordRoutesSample.kt:79) has no suspension point, so it drives
+    // that window directly. Measured at roughly one leak per thousand crossings, hence 5000.
+    [Fact]
+    public async Task Suspend_NoSuspensionPoint_CompletesBeforeNativeReturns_ReturnsToBaseline()
+    {
+        await AssertNoLeakAsync(
+            async () => Assert.Equal(2, await KeywordRoutesSample.FetchAsync(1)),
+            iterations: 5000);
+    }
+
+    // Row 9c. The cancellation-registration half of the same ADR-019 ordering hole: `reg` is
+    // assigned after the native call too, so a callback that wins the race calls `reg.Dispose()`
+    // on a default registration and the real one is never disposed. Whether that costs a Kotlin
+    // handle is unknown, so this row may well stay green; it is here to pin the path.
+    [Fact]
+    public async Task Suspend_NoSuspensionPoint_WithCancellationToken_ReturnsToBaseline()
+    {
+        using var cts = new CancellationTokenSource();
+        await AssertNoLeakAsync(
+            async () => Assert.Equal(2, await KeywordRoutesSample.FetchAsync(1, cts.Token)),
+            iterations: 5000);
     }
 
     /// <summary>

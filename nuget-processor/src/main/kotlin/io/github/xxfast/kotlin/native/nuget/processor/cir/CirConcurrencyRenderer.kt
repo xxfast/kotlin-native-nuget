@@ -47,6 +47,63 @@ internal fun StringBuilder.renderJobHelper(helper: CirJobHelper) {
   appendLine("        internal static extern void Dispose(IntPtr handle);")
   appendLine("    }")
   appendLine()
+  renderJobCell()
+}
+
+/**
+ * ADR-019 race: the job handle and its cancellation registration are assigned by the *caller*
+ * after the native call returns, but the completion callback that releases them can fire before
+ * that, from the coroutine, when the suspend body has no suspension point (Kotlin launches it
+ * `ATOMIC` on `Dispatchers.Default`). The shipped code read a still-zero `jobHandle` local and a
+ * default registration, so the callback disposed nothing and the job `StableRef` leaked. Measured
+ * at roughly one handle per thousand crossings, run to run.
+ *
+ * The cell makes the two sides race explicitly on one interlocked exchange: whoever arrives second
+ * does the release, exactly once. The caller writes the handle and the registration before its
+ * exchange, and `Interlocked.Exchange` is a full fence, so a callback that arrives second reads
+ * both.
+ */
+private fun StringBuilder.renderJobCell() {
+  appendLine("    internal sealed class NugetJobCell")
+  appendLine("    {")
+  appendLine("        private const int Pending = 0;")
+  appendLine("        private const int Published = 1;")
+  appendLine("        private const int Completed = 2;")
+  appendLine()
+  appendLine("        private IntPtr _handle;")
+  appendLine("        private CancellationTokenRegistration _registration;")
+  appendLine("        private int _state = Pending;")
+  appendLine()
+  appendLine(
+    "        /// <summary>The caller side, once the native call has returned the job " +
+        "handle.</summary>"
+  )
+  appendLine(
+    "        internal void PublishFromCaller(IntPtr handle, " +
+        "CancellationTokenRegistration registration)"
+  )
+  appendLine("        {")
+  appendLine("            _handle = handle;")
+  appendLine("            _registration = registration;")
+  appendLine("            if (Interlocked.Exchange(ref _state, Published) == Completed) Release();")
+  appendLine("        }")
+  appendLine()
+  appendLine(
+    "        /// <summary>The completion callback side, which may run before the caller " +
+        "publishes.</summary>"
+  )
+  appendLine("        internal void CompleteFromCallback()")
+  appendLine("        {")
+  appendLine("            if (Interlocked.Exchange(ref _state, Completed) == Published) Release();")
+  appendLine("        }")
+  appendLine()
+  appendLine("        private void Release()")
+  appendLine("        {")
+  appendLine("            _registration.Dispose();")
+  appendLine("            if (_handle != IntPtr.Zero) NugetJobNative.Dispose(_handle);")
+  appendLine("        }")
+  appendLine("    }")
+  appendLine()
 }
 
 private val primitiveAsyncTypes = setOf(
@@ -131,12 +188,10 @@ internal fun StringBuilder.renderAsyncMethod(method: CirMethod, className: Strin
   appendLine("            var tcs = new $tcsType(TaskCreationOptions.RunContinuationsAsynchronously);")
   appendLine("            NugetAsyncCallback callback = null!;")
   appendLine("            GCHandle callbackHandle = default;")
-  appendLine("            CancellationTokenRegistration reg = default;")
-  appendLine("            IntPtr jobHandle = IntPtr.Zero;")
+  appendLine("            var job = new NugetJobCell();")
   appendLine("            callback = (resultPtr, errorPtr, isCancelled, userData) =>")
   appendLine("            {")
-  appendLine("                reg.Dispose();")
-  appendLine("                NugetJobNative.Dispose(jobHandle);")
+  appendLine("                job.CompleteFromCallback();")
   appendLine("                callbackHandle.Free();")
   appendLine("                $tcsType t = tcs;")
   appendLine("                if (isCancelled != 0)")
@@ -163,12 +218,16 @@ internal fun StringBuilder.renderAsyncMethod(method: CirMethod, className: Strin
       returns = false,
     )
   if (scoped == null) {
-    appendLine("            jobHandle = $nativeName($nativeCallArgs);")
+    appendLine("            IntPtr jobHandle = $nativeName($nativeCallArgs);")
   } else {
+    // The scoped call assigns from inside its own block, so the local is declared outside it.
+    appendLine("            IntPtr jobHandle = IntPtr.Zero;")
     scoped.forEach { appendLine(it) }
   }
-  appendLine("            if (cancellationToken.CanBeCanceled)")
-  appendLine("                reg = cancellationToken.Register(() => NugetJobNative.Cancel(jobHandle));")
+  appendLine("            CancellationTokenRegistration reg = cancellationToken.CanBeCanceled")
+  appendLine("                ? cancellationToken.Register(() => NugetJobNative.Cancel(jobHandle))")
+  appendLine("                : default;")
+  appendLine("            job.PublishFromCaller(jobHandle, reg);")
   appendLine("            return tcs.Task;")
   appendLine("        }")
   appendLine()
