@@ -876,8 +876,13 @@ parameter position used to be one of them (named `SEALED_POSITION`, previously t
 An opt-in-marked constructor parameter is another: a marked declaration may never appear in a C#
 signature, so an undefaulted or non-trailing marked primary-constructor `val` drops the whole
 constructor (`copy` alongside it, for a `data class`), naming `OPT_IN_MARKER`. A trailing marked
-parameter with a default is unaffected, since the shorter, already-omitting overload never named it
-in the first place. See
+parameter with a default is unaffected only when the marker sits on the parameter or its property
+and the parameter's *type* is unmarked, since the shorter, already-omitting overload never named it
+in the first place. When the parameter's *type* is itself opt-in-marked, Kotlin propagates the
+requirement to every arity, defaults included, so no arity is callable and the constructor is
+dropped entirely (`OPT_IN_MARKER_TYPE`), same as the undefaulted case. See
+[Publishing Kotlin to C#: An opt-in-marked parameter type takes every arity with it](forward-overview.md#opt-in-marked-parameter-type-every-arity)
+and
 [Publishing Kotlin to C#: Opt-in-marked declarations skip named](forward-overview.md#opt-in-marked-declarations-skip-named).
 
 Not fired for an abstract class (uninstantiable by design) or for the interface-return backing

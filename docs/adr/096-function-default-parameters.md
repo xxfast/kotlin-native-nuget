@@ -157,6 +157,12 @@ written:
   carry it, and that route has no overload numbering at all today (`exportName =
   "${prefix}_${name}"`, **Verified in source**). Absent output, not wrong output.
 
+**Amendment (2026-09-10, issue #128): a trailing defaulted parameter is omittable only if its type
+is representable or merely unsupported.** An opt-in-marked type makes the shorter call illegal too,
+because Kotlin propagates the requirement from the callee's declared parameter types at every arity,
+so no overload is synthesized for it and every arity skips `OPT_IN_MARKER_TYPE` instead (see
+[ADR-115](115-opt-in-marker-declarations.md)'s "Resolved at the gate" (b)).
+
 A *class* method that is a defaulted interface member bound onto the implementing class
 (`isForwardPlannableMemberOf`, `ForwardClassMembership.kt`) does get synthesis, since it is emitted
 as an ordinary class member. The resulting class has an omitting overload the interface does not:

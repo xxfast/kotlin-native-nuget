@@ -931,6 +931,7 @@ internal class ForwardCallablePlanner(
           isOverride = isOverride,
           isVirtual = isVirtual,
           node = method,
+          droppedOptInMarker = droppedOptInMarker(method.parameters, omitted),
         )
       }
     }
@@ -1035,6 +1036,7 @@ internal class ForwardCallablePlanner(
           isOverride = false,
           isVirtual = false,
           node = method,
+          droppedOptInMarker = droppedOptInMarker(method.parameters, omitted),
         )
       }
     }
@@ -1234,6 +1236,11 @@ internal class ForwardCallablePlanner(
     omitted: Int = 0,
   ): ForwardCallableCatalogEntry {
     val cls: KSClassDeclaration? = constructor.parentDeclaration as? KSClassDeclaration
+    // ADR-115 gate (b): `.dropLast(omitted)` is deliberate, not the issue #128 blind spot. An
+    // omitted parameter whose PROPERTY carries the marker while its TYPE does not is legal to
+    // call without (verified: `PropMarked(5)` and `PropMarked()` both compile from a non-opting
+    // file), so the shorter arity is exactly the repair. A marked *type* is caught in `planOrSkip`
+    // through `droppedOptInMarker`, which does see the dropped tail.
     val marked: String? = constructor.parameters
       .dropLast(omitted)
       .firstNotNullOfOrNull { parameter -> parameter.constructorOptInMarker(cls) }
@@ -1255,6 +1262,7 @@ internal class ForwardCallablePlanner(
       origin = ForwardCallableOrigin.CONSTRUCTOR,
       target = owner,
       node = constructor,
+      droppedOptInMarker = droppedOptInMarker(constructor.parameters, omitted),
     )
   }
 
@@ -1427,6 +1435,7 @@ internal class ForwardCallablePlanner(
       target = target,
       member = member,
       node = function,
+      droppedOptInMarker = droppedOptInMarker(function.parameters, omitted),
     )
   }
 
@@ -1644,6 +1653,7 @@ internal class ForwardCallablePlanner(
       origin = ForwardCallableOrigin.EXTENSION,
       member = functionName,
       node = function,
+      droppedOptInMarker = droppedOptInMarker(function.parameters, omitted),
     )
   }
 
@@ -1658,6 +1668,25 @@ internal class ForwardCallablePlanner(
     val returnDeclaration: String? = returnType?.resolve()?.declaration?.qualifiedName?.asString()
     return returnDeclaration == "kotlin.Result"
   }
+
+  /**
+   * Issue #128: `"<type>-><marker fqn>"` for the first of an ADR-096 omitting overload's
+   * **dropped** parameters whose TYPE is opt-in-marked, or null.
+   *
+   * A marked parameter type makes EVERY arity of the callable illegal, not just the declared one,
+   * so the omitting overload cannot repair it: Kotlin propagates the requirement from the callee's
+   * declared value-parameter types, never from what the default expression reads (verified against
+   * Kotlin 2.4.10, `Mixed(a = 5)` is rejected exactly like `Mixed(1, Mode.Slow)`).
+   *
+   * Only the opt-in reason is consulted. A dropped parameter of a merely *unsupported* type is the
+   * whole point of the omitting overload and stays supported, and a dropped parameter whose
+   * PROPERTY carries the marker while its type does not is legal to omit (ADR-115 gate (b)).
+   */
+  private fun droppedOptInMarker(parameters: List<KSValueParameter>, omitted: Int): String? =
+    parameters.takeLast(omitted)
+      .firstNotNullOfOrNull { parameter ->
+        classifier.classify(parameter.type.resolve()).optInMarkerDetail()
+      }
 
   private fun planOrSkip(
     symbol: String,
@@ -1675,6 +1704,9 @@ internal class ForwardCallablePlanner(
     isOverride: Boolean = false,
     isVirtual: Boolean = false,
     node: KSNode? = null,
+    // Issue #128: [droppedOptInMarker] for the parameters this entry omits, since [parameters]
+    // above is already truncated and cannot show them.
+    droppedOptInMarker: String? = null,
   ): ForwardCallableCatalogEntry {
     // ADR-115: the author's own signal, checked before any type is looked at -- nothing about the
     // declaration is unsupported, it is simply not part of the exported surface. One check for
@@ -1684,6 +1716,15 @@ internal class ForwardCallablePlanner(
     if (optInMarker != null) {
       return ForwardCallableCatalogEntry.Skipped(
         symbol, ForwardPlanSkipReason.OPT_IN_MARKER, node = node, detail = optInMarker,
+      )
+    }
+    // Issue #128: the same check for the parameters an ADR-096 omitting overload dropped, which
+    // `parameters` no longer carries. Reuses OPT_IN_MARKER_TYPE, so the kind, the hint and the
+    // `droppedFromCSharp` behaviour are the declared arity's own.
+    if (droppedOptInMarker != null) {
+      return ForwardCallableCatalogEntry.Skipped(
+        symbol, ForwardPlanSkipReason.OPT_IN_MARKER_TYPE, node = node,
+        detail = droppedOptInMarker,
       )
     }
     // ADR-105 scope (d): the sealed rewrite is applied to every declared PARAMETER here, once,
