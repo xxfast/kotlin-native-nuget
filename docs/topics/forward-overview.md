@@ -593,6 +593,29 @@ remedy, not a fix for it. See the
 for the structural fix (qualifying the export prefix by package) that would close the collision
 itself rather than only naming it.
 
+### A nullable parameter names itself, instead of the return {id="nullable-parameter-names-itself"}
+
+A callable dropped because one of its *parameters* is a nullable type with no wire used to render
+as `SKIPPED_UNSUPPORTED_RETURN`, the same kind a nullable **return** with nowhere to put the absence
+gets, and the hint said "at this position" without saying which one. An author reading that message
+went looking at the return type, which was perfectly exportable, before finding the actual problem
+was a parameter. [ADR-064](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/064-forward-unsupported-declaration-diagnostics.md)'s
+2026-09-09 amendment (issue [#131](https://github.com/xxfast/kotlin-native-nuget/issues/131)) gives
+the skip its own position: an input-position `NULLABLE` now renders `SKIPPED_UNSUPPORTED_INPUT` and
+names the parameter, a return-position one keeps `SKIPPED_UNSUPPORTED_RETURN` and its unnamed hint
+(there is no `BridgeType`-to-Kotlin-spelling renderer to name a return's type):
+
+```
+[nuget:SKIPPED_UNSUPPORTED_INPUT] Skipping io.github.xxfast.kotlin.native.nuget.test.issue131.hubWithEvents: its parameter `events` has a nullable type with no supported wire. the nullable parameter `events` has no wire at an input position; expose a non-nullable wrapper, or a separate has-value/value pair, instead
+    at .../issue131/HubSample.kt:47
+```
+
+An extension receiver counts as an input position too, unnamed, since it has no author-written
+parameter name. A nullable exported class handle at a parameter position was never actually
+unsupported, on any route (`null` rides `IntPtr.Zero`); see
+[Classes and objects: A nullable class handle parameter](classes-and-objects.md#nullable-handle-parameter)
+for the shape that does bind.
+
 ### Where these messages appear
 
 A diagnostic computed at generation time is only useful if it reaches the console. The processor

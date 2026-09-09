@@ -183,6 +183,18 @@ internal enum class ForwardPlanSkipReason(val droppedFromCSharp: Boolean) {
   OPT_IN_MARKER_TYPE(droppedFromCSharp = true),
 }
 
+/**
+ * ADR-064's 2026-09-09 amendment (issue #131): which side of the callable a skip is about.
+ *
+ * A reason like [ForwardPlanSkipReason.NULLABLE] genuinely occurs at both positions, so the kind
+ * it renders as cannot be a fixed per-reason mapping: a nullable *parameter* reported
+ * `SKIPPED_UNSUPPORTED_RETURN` and sent the author reading a return type that was never the
+ * problem. Every other reason ignores this and keeps its own named kind.
+ *
+ * An extension receiver counts as [INPUT], unnamed: it is a parameter with no author-written name.
+ */
+internal enum class ForwardSkipPosition { INPUT, RETURN }
+
 internal sealed interface ForwardCallableCatalogEntry {
   val symbol: String
 
@@ -218,6 +230,11 @@ internal sealed interface ForwardCallableCatalogEntry {
     // UNEXPORTED_DEPENDENCY_TYPE`. Carries enough for the diagnostic sink to build the
     // `include("<package>")` hint without re-deriving it from the generic reason enum.
     val detail: String? = null,
+    // Issue #131: the position the skip is about, and (at an input position, when the offending
+    // input is a named parameter rather than an extension receiver) its name. Defaulted to the
+    // return position so the return-side skip sites, which are the majority, stay untouched.
+    val position: ForwardSkipPosition = ForwardSkipPosition.RETURN,
+    val parameter: String? = null,
   ) : ForwardCallableCatalogEntry
 }
 
@@ -1442,18 +1459,23 @@ internal class ForwardCallablePlanner(
     // top-level `fun f(shape: Shape): Int?` binds on this two-call route too.
     val declared: List<Pair<String, BridgeType>> =
       parameters.map { (name, type) -> name to type.sealedAsHandle() }
-    val ineligible: BridgeType? = declared.map { it.second }.firstOrNull { type ->
+    // Issue #131: the offending parameter's NAME travels with the skip, so the diagnostic can say
+    // which one failed instead of "at this position".
+    val ineligible: Pair<String, BridgeType>? = declared.firstOrNull { (_, type) ->
       type.inputSkipReason() != null
     }
     if (ineligible != null) {
+      val ineligibleType: BridgeType = ineligible.second
       return ForwardCallableCatalogEntry.Skipped(
-        symbol, requireNotNull(ineligible.inputSkipReason()), node = node,
-        detail = ineligible.optInMarkerDetail()
-          ?: ineligible.actualTypeAliasTargetDetail()
-          ?: ineligible.unexportedDependencyDetail()
-          ?: ineligible.undeclaredTypeDetail()
-          ?: ineligible.sealedTypeDetail()
-          ?: ineligible.collectionComponentDetail(),
+        symbol, requireNotNull(ineligibleType.inputSkipReason()), node = node,
+        detail = ineligibleType.optInMarkerDetail()
+          ?: ineligibleType.actualTypeAliasTargetDetail()
+          ?: ineligibleType.unexportedDependencyDetail()
+          ?: ineligibleType.undeclaredTypeDetail()
+          ?: ineligibleType.sealedTypeDetail()
+          ?: ineligibleType.collectionComponentDetail(),
+        position = ForwardSkipPosition.INPUT,
+        parameter = ineligible.first,
       )
     }
 
@@ -1671,25 +1693,31 @@ internal class ForwardCallablePlanner(
     // hierarchy itself, which has its own named legacy route.
     val declared: List<Pair<String, BridgeType>> =
       parameters.map { (name, type) -> name to type.sealedAsHandle() }
-    val inputTypes: List<BridgeType> = buildList {
+    // Issue #131: name-carrying, so a skip can name the parameter that failed. The receiver rides
+    // a null name: it is an input too, just not one the author named.
+    val namedInputs: List<Pair<String?, BridgeType>> = buildList {
       when (receiver) {
-        is ForwardReceiver.Value -> add(receiver.type)
-        is ForwardReceiver.Handle -> add(receiver.type)
+        is ForwardReceiver.Value -> add(null to receiver.type)
+        is ForwardReceiver.Handle -> add(null to receiver.type)
         ForwardReceiver.Static -> Unit
       }
-      addAll(declared.map { it.second })
+      addAll(declared)
     }
-    val ineligible: BridgeType? = inputTypes
-      .firstOrNull { type -> type.inputSkipReason() != null }
+    val inputTypes: List<BridgeType> = namedInputs.map { it.second }
+    val ineligible: Pair<String?, BridgeType>? = namedInputs
+      .firstOrNull { (_, type) -> type.inputSkipReason() != null }
     if (ineligible != null) {
+      val ineligibleType: BridgeType = ineligible.second
       return ForwardCallableCatalogEntry.Skipped(
-        symbol, requireNotNull(ineligible.inputSkipReason()), node = node,
-        detail = ineligible.optInMarkerDetail()
-          ?: ineligible.actualTypeAliasTargetDetail()
-          ?: ineligible.unexportedDependencyDetail()
-          ?: ineligible.undeclaredTypeDetail()
-          ?: ineligible.sealedTypeDetail()
-          ?: ineligible.collectionComponentDetail(),
+        symbol, requireNotNull(ineligibleType.inputSkipReason()), node = node,
+        detail = ineligibleType.optInMarkerDetail()
+          ?: ineligibleType.actualTypeAliasTargetDetail()
+          ?: ineligibleType.unexportedDependencyDetail()
+          ?: ineligibleType.undeclaredTypeDetail()
+          ?: ineligibleType.sealedTypeDetail()
+          ?: ineligibleType.collectionComponentDetail(),
+        position = ForwardSkipPosition.INPUT,
+        parameter = ineligible.first,
       )
     }
 

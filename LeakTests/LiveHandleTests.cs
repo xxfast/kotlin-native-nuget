@@ -1,6 +1,7 @@
 using TestLibrary;
 using TestLibrary.Cat;
 using TestLibrary.Clinic;
+using TestLibrary.Issue131;
 using TestLibrary.Models;
 using TestLibrary.Routes;
 
@@ -253,6 +254,24 @@ public class LiveHandleTests
             Assert.True(await treats.MoveNextAsync());
             Assert.Equal("Mylo ate treat #1", treats.Current);
             await treats.DisposeAsync();
+        });
+    }
+
+    // Row 8b. Issue #131: a top-level factory taking a *borrowed* nullable handle. The Kotlin
+    // thunk reads it with `logger?.asStableRef<Logger>()?.get()`, which must not take ownership:
+    // if it disposed the ref, the caller's own `logger` would go with it. Both spellings run in
+    // one crossing, so a leak on either the null or the non-null path shows up here.
+    [Fact]
+    public void NullableHandleParameter_TopLevelFactory_ReturnsToBaseline()
+    {
+        AssertNoLeak(() =>
+        {
+            using var settings = new Settings(3);
+            using var logger = new Logger("Oreo");
+            using Hub withLogger = HubSample.Hub(settings, logger, "n");
+            using Hub withoutLogger = HubSample.Hub(settings, null, null);
+            Assert.Equal("3/Oreo/n", withLogger.Describe());
+            Assert.Equal("3/none/-", withoutLogger.Describe());
         });
     }
 

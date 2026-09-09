@@ -151,7 +151,7 @@ internal fun warnDroppedForwardCallables(
 ) {
   val diagnostics: List<ForwardDiagnostic> = catalog.droppedCallables.map { dropped ->
     ForwardDiagnostic(
-      kind = dropped.reason.toDiagnosticKind(),
+      kind = dropped.reason.toDiagnosticKind(dropped.position),
       symbol = dropped.node,
       declaration = dropped.symbol,
       // Every other drop is about the types at the callable's positions; this one is about the
@@ -175,10 +175,18 @@ internal fun warnDroppedForwardCallables(
       } else if (dropped.reason == ForwardPlanSkipReason.SEALED_SUBCLASS_UNROUTED) {
         "it is a ${dropped.detail ?: "specialized"} member of a sealed subclass, which has no " +
             "route yet (ADR-116)"
+        // Issue #131: the generic sentence below reads as being about the whole callable, so a
+        // nullable *parameter* sent the author reading the return type. Guarded on the name being
+        // there so no other reason's shipped text moves; the fifth special case in this chain, and
+        // the same signal as the second and third that it wants `reason.diagnosticReason()`.
+      } else if (
+        dropped.reason == ForwardPlanSkipReason.NULLABLE && dropped.parameter != null
+      ) {
+        "its parameter `${dropped.parameter}` has a nullable type with no supported wire"
       } else {
         "its ${dropped.reason} type combination is not supported"
       },
-      hint = dropped.reason.diagnosticHint(dropped.detail, scope),
+      hint = dropped.reason.diagnosticHint(dropped.detail, scope, dropped.parameter),
     )
   }
   ForwardDiagnosticSink.emit(diagnostics, logger)
