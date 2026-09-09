@@ -7,12 +7,12 @@ Kotlin's three flavours of inheritance each get a distinct C# shape: `interface`
 | `interface` | `interface` (`I`-prefixed) | default methods delegate to Kotlin; every exported interface's own declaration (not just a reachable one's) is now typed from the forward plan, the same source of truth its implementing class uses, see [Declaring every exported interface](#declaring-every-exported-interface), [ADR-113](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/113-interface-declaration-on-the-forward-plan.md) |
 | `abstract class` | `abstract class` | `_handle` inherited by subclasses |
 | `sealed class` | `abstract class` | a nested subclass stays nested (`Base.Sub`); a **sibling** subclass, declared beside its base rather than inside it, is declared at namespace level (`public sealed class Sub : Base`), for a `data class` or an `object`/`data object` alike, see [A sibling sealed subclass declared beside its base](#a-sibling-sealed-subclass-declared-beside-its-base), [ADR-009](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/009-sealed-class-mapping.md) |
-| **eligible** `sealed interface` (no type parameters, every subclass a nested class/object with no other superclass, no sub-interfaces) | `abstract class` | same shape as `sealed class` above; no C# interface is declared for it, see [Sealed interfaces](#sealed-interfaces), [ADR-112](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/112-sealed-interface-mapping.md) |
+| **eligible** `sealed interface` (no type parameters, every subclass a `class`/`object` nested in the interface **or declared beside it**, with no other superclass, no sub-interface, and no second sealed-interface parent) | `abstract class` | same shape as `sealed class` above; no C# interface is declared for it, see [Sealed interfaces](#sealed-interfaces), [ADR-112](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/112-sealed-interface-mapping.md), widened by [ADR-125](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/125-sealed-interface-sibling-arms.md) |
 | **ineligible** `sealed interface` | `interface` (`I`-prefixed) | stays on the ordinary interface route; every member typed with it skips named (`SKIPPED_SEALED_POSITION`), and the declaration itself gets `SKIPPED_INELIGIBLE_SEALED_INTERFACE` naming the disqualifying subclass, see [Sealed interfaces](#sealed-interfaces), [ADR-112](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/112-sealed-interface-mapping.md) |
 | interface-typed return (method result or property) | `IFoo` / `IFoo?` | backed by a generated `sealed class Foo : IFoo`, see [ADR-040](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/040-interface-return-type-mapping.md) |
 | interface-typed parameter, a C# class implementing `IFoo` | accepted, no `_handle` needed | dispatched through a per-interface bridge factory, see [ADR-084](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/084-csharp-implemented-interfaces.md) |
 | a property of a sealed subclass, any shape a class property supports (nullable enum, nullable reference, `Boolean`, collections, `var`, `Duration`/`Uuid`/value classes/interfaces) | the same shape an ordinary class property gets | planned by [ADR-062](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/062-forward-callable-plan.md)'s property plan, same as any class, since [ADR-111](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/111-sealed-subclass-properties-on-the-property-plan.md); see [Every property shape on a sealed subclass](#every-property-shape-on-a-sealed-subclass) |
-| a public method a sealed subclass **itself declares** (including its own `override fun`), any shape a class method supports | the same shape an ordinary class method gets, exported `${sealed}_${sub}_${name}[_n]` | planned by [ADR-062](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/062-forward-callable-plan.md)'s callable plan, same as any class, since [ADR-116](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/116-sealed-subclass-methods-on-the-callable-plan.md); declared-only. A declared `suspend fun` now also binds, as `Task<T> XxxAsync` off the arm's own export prefix, with overloads numbered `_2` on both the entry point and the private extern, see [ADR-118](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/118-suspend-route-sealed-arm-owners-and-overload-numbering.md); `Flow`/lambda-parameter/generic methods are still a named skip; see [Methods on a sealed subclass](#methods-on-a-sealed-subclass) |
+| a public method a sealed subclass **itself declares** (including its own `override fun`), any shape a class method supports | the same shape an ordinary class method gets, exported `${sealed}_${sub}_${name}[_n]` | planned by [ADR-062](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/062-forward-callable-plan.md)'s callable plan, same as any class, since [ADR-116](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/116-sealed-subclass-methods-on-the-callable-plan.md); declared-only. A declared `suspend fun` also binds, as `Task<T> XxxAsync` off the arm's own export prefix, with overloads numbered `_2` on both the entry point and the private extern, see [ADR-118](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/118-suspend-route-sealed-arm-owners-and-overload-numbering.md). A declared `Flow<T>`/`StateFlow<T>` member (property or method return) also binds now, as `KotlinFlow<T>`/`KotlinStateFlow<T>` off the arm's own export prefix, through the same collect/value thunks the ordinary-class route uses, see [ADR-124](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/124-flow-route-sealed-arm-owners.md); lambda-parameter/generic methods are still a named skip; see [Methods on a sealed subclass](#methods-on-a-sealed-subclass) |
 | property whose own type is a sealed class (bare, nullable, or a collection component, read-only or `var`) | the sealed base | materialised through `<Base>.FromHandle(...)`, see [Sealed types as property types](#sealed-types-as-property-types), [ADR-105](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/105-sealed-property-position.md) |
 | a class, object, or companion method returning a sealed base, scalar or as a `List`/`Map`/`Set` component | the sealed base (or `IReadOnlyList<Base>`) | reads through the same `FromHandle` discriminator a top-level sealed return already used, see [A class method returning a sealed base](#a-class-method-returning-a-sealed-base), [ADR-009](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/009-sealed-class-mapping.md) |
 | a sealed type at a **parameter** position, bare, nullable, or as a collection component, including a constructor parameter | an ordinary handle argument (`shape._handle`, or boxed per element through `NugetMarshal.Wrap<T>` in a collection) | the same `sealedAsHandle()` rewrite the property planner uses applies to every declared parameter, so `Issue54Drawing`'s own four-parameter constructor now binds, see [A sealed type at a parameter position](#a-sealed-type-at-a-parameter-position), [ADR-105](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/105-sealed-property-position.md) |
@@ -327,7 +327,7 @@ Assert.Equal(mylo.GetHashCode(), alsoMylo.GetHashCode());
 
 ## Sealed interfaces {id="sealed-interfaces"}
 
-A `sealed interface` maps like a sealed class exactly when it is **eligible**: no type parameters, every one of its subclasses is a nested `class` or `object` with no other superclass, and no sub-interface appears anywhere in the hierarchy. An eligible sealed interface enters the same route as `sealed class` above: it renders as `public abstract class Pulse` with nested `sealed` subclasses and a `Pulse.FromHandle(IntPtr)` discriminator, and binds at every position a sealed class does (property, return, parameter, collection component). No `IPulse` interface is ever declared ([ADR-112](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/112-sealed-interface-mapping.md)).
+A `sealed interface` maps like a sealed class exactly when it is **eligible**: no type parameters, and every one of its subclasses is a `class` or `object`, nested inside the interface **or declared beside it** in the same file, with no other superclass, no sub-interface, no second sealed-interface parent, and not an `enum class`. An eligible sealed interface enters the same route as `sealed class` above: it renders as `public abstract class Pulse`, each subclass a `sealed` C# class (nested or namespace-level, matching where it sits in Kotlin), and a `Pulse.FromHandle(IntPtr)` discriminator, and binds at every position a sealed class does (property, return, parameter, collection component). No `IPulse` interface is ever declared ([ADR-112](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/112-sealed-interface-mapping.md); the nesting requirement was dropped by [ADR-125](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/125-sealed-interface-sibling-arms.md)).
 
 ### Kotlin {id="sealed-interface-kotlin"}
 
@@ -419,7 +419,7 @@ public global::TestLibrary.Issue54.Pulse Current
 `Mixed`'s subclass `Odd` extends another class (`Rhythm`) as well as implementing `Mixed`, so no nested `sealed class Odd : Mixed` can be declared in C#. `Mixed` stays ineligible: it keeps its plain `IMixed` interface declaration, and `Monitor.mixed()` keeps skipping as `SKIPPED_SEALED_POSITION`. The declaration itself gets a new diagnostic naming the disqualifying subclass:
 
 ```
-[nuget:SKIPPED_INELIGIBLE_SEALED_INTERFACE] Skipping io.github.xxfast.kotlin.native.nuget.test.issue54.Mixed: sealed interface `io.github.xxfast.kotlin.native.nuget.test.issue54.Mixed` is declared as `IMixed` but cannot be reconstructed in C#: subclass `Odd` extends another class `io.github.xxfast.kotlin.native.nuget.test.issue54.Rhythm`. make every subclass a nested class or object with no other superclass and no sub-interfaces, or declare it as a sealed class (ADR-112)
+[nuget:SKIPPED_INELIGIBLE_SEALED_INTERFACE] Skipping io.github.xxfast.kotlin.native.nuget.test.issue54.Mixed: sealed interface `io.github.xxfast.kotlin.native.nuget.test.issue54.Mixed` is declared as `IMixed` but cannot be reconstructed in C#: subclass `Odd` extends another class `io.github.xxfast.kotlin.native.nuget.test.issue54.Rhythm`. every subclass must be a class or object, declared in the interface or beside it, with no other superclass, no sub-interface and no second sealed interface; an enum can never be a subclass (ADR-125). Or declare it as a sealed class
 ```
 
 ### Using it from C# {id="sealed-interface-using-it-from-c"}
@@ -438,6 +438,232 @@ Assert.IsType<Pulse.Flat>(current);
     <p>A generated type can collide with a BCL name (<code>Monitor</code> vs.
     <code>System.Threading.Monitor</code>). See <a href="classes-and-objects.md">Classes and
     objects</a> for the consumer-side <code>using</code> alias this needs.</p>
+</note>
+
+### A sealed interface's arms may be declared beside it {id="sealed-interface-sibling-arms"}
+
+A `sealed interface`'s arms do not have to be nested inside it. Kotlin has permitted same-package,
+same-module subtypes of a sealed interface since 1.5, and the generator already re-emits a sibling
+arm at namespace level for sealed *classes* (see [A sibling sealed subclass declared beside its
+base](#a-sibling-sealed-subclass-declared-beside-its-base)). ADR-125 (issue [#130](https://github.com/xxfast/kotlin-native-nuget/issues/130))
+extends that to sealed interfaces: arm discovery is `getSealedSubclasses()` either way, so nesting
+was a style rule, not a mechanism requirement. A sibling arm binds exactly like a nested one, and a
+`data class` that merely *holds* the interface no longer loses its constructor and `copy` to the
+old refusal.
+
+#### Kotlin {id="sibling-interface-kotlin"}
+
+From `test-library/src/nativeMain/kotlin/.../issue54/SealedInterfaceSample.kt`:
+
+```kotlin
+sealed interface Transmission
+
+data class Ping(val ms: Int, val label: String) : Transmission
+
+data object Silence : Transmission
+
+class Radio {
+  var current: Transmission = Silence
+  val history: List<Transmission> = listOf(Ping(60, "oreo"), Silence)
+  fun heard(signal: Transmission): Int = when (signal) {
+    is Ping -> signal.ms
+    Silence -> 0
+  }
+}
+
+data class Packet(val signal: Transmission)
+```
+
+#### Generated C# {id="sibling-interface-generated-c"}
+
+From `Interop.cs`. `Ping` and `Silence` are declared at namespace level, not nested inside
+`Transmission`, but they still make up its discriminator, and there is no `ITransmission`:
+
+```C#
+public abstract class Transmission : IDisposable, INugetHandle
+{
+    internal IntPtr _handle;
+
+    [DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "transmission_get_type")]
+    private static extern int Native_GetType(IntPtr handle);
+
+    internal static Transmission FromHandle(IntPtr handle)
+    {
+        return Native_GetType(handle) switch
+        {
+            0 => new Ping(handle),
+            1 => new Silence(handle),
+            _ => throw new InvalidOperationException("Unknown sealed class type")
+        };
+    }
+
+    public abstract void Dispose();
+}
+
+public sealed class Ping : Transmission
+{
+    internal Ping(IntPtr handle) : base(handle)
+    {
+    }
+
+    public int Ms
+    {
+        get
+        {                int nativeResult = Native_Get_ms(_handle, out IntPtr error);
+        if (error != IntPtr.Zero)
+        {
+            throw NugetErrorNative.BuildException(error);
+        }
+        return nativeResult;
+        }
+    }
+
+    public string Label
+    {
+        get
+        {                IntPtr nativeResult = Native_Get_label(_handle, out IntPtr error);
+        if (error != IntPtr.Zero)
+        {
+            throw NugetErrorNative.BuildException(error);
+        }
+        return Marshal.PtrToStringUTF8(nativeResult)!;
+        }
+    }
+
+    // Equals / GetHashCode / ToString / Dispose ...
+}
+
+public sealed class Silence : Transmission
+{
+    internal Silence(IntPtr handle) : base(handle)
+    {
+    }
+
+    // Equals / GetHashCode / ToString / Dispose ...
+}
+```
+
+The cascade the issue reports: while `Transmission` was ineligible, `Packet`, a `data class` that
+merely holds one, lost its constructor and `Copy` along with the property, since `planOrSkip`
+refuses a whole callable when any input type is ineligible. Widening the interface removes the
+cause, so all three come back:
+
+```C#
+public class Packet : IDisposable, INugetHandle
+{
+    public Packet(global::TestLibrary.Issue54.Transmission signal)
+    {
+        IntPtr handle = Native_Create(signal._handle, out IntPtr error);
+        if (error != IntPtr.Zero)
+        {
+            throw NugetErrorNative.BuildException(error);
+        }
+        _handle = handle;
+    }
+
+    public global::TestLibrary.Issue54.Transmission Signal
+    {
+        get
+        {            IntPtr nativeResult = Native_Get_signal(_handle, out IntPtr error);
+        if (error != IntPtr.Zero)
+        {
+            throw NugetErrorNative.BuildException(error);
+        }
+        return global::TestLibrary.Issue54.Transmission.FromHandle(nativeResult);
+        }
+    }
+
+    public Packet Copy(global::TestLibrary.Issue54.Transmission signal)
+    {
+        IntPtr nativeResult = Native_Copy(_handle, signal._handle, out IntPtr error);
+        if (error != IntPtr.Zero)
+        {
+            throw NugetErrorNative.BuildException(error);
+        }
+        return new Packet(nativeResult);
+    }
+}
+```
+
+#### Using it from C# {id="sibling-interface-using-it-from-c"}
+
+From `IntegrationTests/SealedInterfaceTests.cs`:
+
+```C#
+[Fact]
+public void Transmission_IsDeclaredAsAnAbstractClass_WithNamespaceLevelArms()
+{
+    Assert.True(typeof(Transmission).IsClass);
+    Assert.True(typeof(Transmission).IsAbstract);
+    Assert.False(typeof(Transmission).IsInterface);
+
+    Assert.Null(typeof(Ping).DeclaringType);
+    Assert.Null(typeof(Silence).DeclaringType);
+    Assert.Equal(typeof(Transmission), typeof(Ping).BaseType);
+    Assert.Equal(typeof(Transmission), typeof(Silence).BaseType);
+
+    Assert.DoesNotContain(
+        typeof(Transmission).Assembly.GetTypes(),
+        type => type.Name == "ITransmission");
+}
+
+[Fact]
+public void Packet_Constructor_AcceptsArm()
+{
+    using var radio = new Radio();
+
+    using var packet = new Packet(radio.History[0]);
+
+    using Transmission carried = packet.Signal;
+    Assert.Equal(60, Assert.IsType<Ping>(carried).Ms);
+}
+```
+
+### An enum arm keeps the interface ineligible {id="sealed-interface-enum-arm"}
+
+An `enum class` arm has no C# shape at all, regardless of nesting: a C# enum can only extend an
+integral type, so `enum Pitch : Tone` does not compile (`error CS1008`). A sealed interface with an
+enum arm stays ineligible, but the diagnostic now names the C# reason instead of asking for a style
+change that cannot help:
+
+```kotlin
+sealed interface Tone
+
+enum class Pitch : Tone { HIGH, LOW }
+```
+
+```
+[nuget:SKIPPED_INELIGIBLE_SEALED_INTERFACE] Skipping io.github.xxfast.kotlin.native.nuget.test.issue54.Tone: sealed interface `io.github.xxfast.kotlin.native.nuget.test.issue54.Tone` is declared as `ITone` but cannot be reconstructed in C#: subclass `Pitch` is an enum class, and a C# enum can only extend an integral type (CS1008), never the abstract class an arm is declared as. every subclass must be a class or object, declared in the interface or beside it, with no other superclass, no sub-interface and no second sealed interface; an enum can never be a subclass (ADR-125). Or declare it as a sealed class
+```
+
+`Pitch` still binds as an ordinary top-level enum, declared exactly once. From
+`IntegrationTests/SealedInterfaceTests.cs`:
+
+```C#
+[Fact]
+public void Pitch_EnumArm_KeepsToneIneligibleAndIsDeclaredOnceAsAnEnum()
+{
+    Assembly assembly = typeof(Pitch).Assembly;
+
+    Assert.True(typeof(Pitch).IsEnum);
+    Assert.Equal(Pitch.High, Enum.Parse<Pitch>("High"));
+    Assert.Equal(1, assembly.GetTypes().Count(type => type.Name == "Pitch"));
+
+    Assert.Null(assembly.GetType("TestLibrary.Issue54.Tone"));
+
+    Type? tone = assembly.GetType("TestLibrary.Issue54.ITone");
+    Assert.NotNull(tone);
+    Assert.True(tone.IsInterface);
+}
+```
+
+<note>
+    <p>An arm implementing a second sealed interface is refused the same way (C# single
+    inheritance cannot express two bases), and an arm's <b>other</b> interfaces (e.g. <code>class
+    Odd : Kind, CharSequence</code>) are dropped silently: the arm itself stays eligible, but the
+    generated <code>: &lt;base&gt;</code> declaration carries no interface list, so
+    <code>CharSequence</code> vanishes with no diagnostic. See
+    <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md">ROADMAP.md</a>.</p>
 </note>
 
 ## Sealed types as property types
@@ -1363,8 +1589,12 @@ This is **declared-only**: an inherited base `open fun` body an arm does not ove
 arm at all. A declared `suspend fun` also binds now, as `Task<T> XxxAsync(...)` off the arm's own
 export prefix, re-keying the same legacy suspend route an ordinary class method uses
 ([ADR-118](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/118-suspend-route-sealed-arm-owners-and-overload-numbering.md)).
-A `Flow`-returning, lambda-parameter, or generic method is still absent from C# and named instead of
-silently dropped, since a sealed arm has no legacy route to fall back on for those shapes.
+A declared `Flow<T>`/`StateFlow<T>` member, at a property getter or a method return, also binds now,
+re-keying the same legacy flow route an ordinary class uses onto the arm's own export prefix, see
+[Flow and StateFlow members on a sealed arm](#sealed-flow-generated-c)
+([ADR-124](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/124-flow-route-sealed-arm-owners.md)).
+A lambda-parameter or generic method is still absent from C# and named instead of silently dropped,
+since a sealed arm has no legacy route to fall back on for those shapes.
 
 ### Kotlin {id="sealed-method-kotlin"}
 
@@ -1618,6 +1848,108 @@ What is absent from C# entirely, each named rather than silent, from `NugetDiagn
     inside a class, and a nested interface is never declared as a C# interface (only top-level ones
     are), so every member typed with it is skipped rather than emitted as a dangling reference;
     move it to the top level of its file
+```
+
+### Flow and StateFlow members on a sealed arm {id="sealed-flow-generated-c"}
+
+A `Flow<T>`/`StateFlow<T>` an arm **declares**, at a property getter or a method return, binds the
+same shape an ordinary class's flow member has had since [ADR-065](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/065-stateflow-mapping.md),
+re-keyed onto the arm's own export prefix, through the same collect and value thunks the
+ordinary-class route uses ([#129](https://github.com/xxfast/kotlin-native-nuget/issues/129),
+[ADR-124](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/124-flow-route-sealed-arm-owners.md)).
+An overload pair on an arm's flow-returning method numbers `_2` on both the entry point and the
+private extern's stem, exactly as an ordinary flow method overload does.
+
+From `test-library/.../issue115/JobSample.kt`, a flow-only arm (no `suspend` member of its own):
+
+```kotlin
+data class Watching(val id: String) : Job() {
+  private val _ticks: MutableStateFlow<Int> = MutableStateFlow(id.length)
+
+  val ticks: StateFlow<Int> get() = _ticks
+
+  fun labels(prefix: String): Flow<String> = flow { emit("$prefix$id") }
+
+  fun labels(prefix: String, times: Int): Flow<String> =
+    flow { repeat(times) { index -> emit("$prefix#$index") } }
+}
+```
+
+From `Interop.cs`. `Watching` gets its own `_scopeHandle` and `IAsyncDisposable` from the flow route
+alone, exactly as a flow-only ordinary class does:
+
+```C#
+public sealed class Watching : Job, IAsyncDisposable
+{
+    internal IntPtr _scopeHandle;
+
+    [DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "job_watching_get_ticks_collect")]
+    private static extern IntPtr Native_GetTicksCollect(IntPtr handle, IntPtr scopeHandle, IntPtr onNext, IntPtr onComplete, IntPtr onError, IntPtr userData);
+
+    [DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "job_watching_get_ticks_value")]
+    private static extern IntPtr Native_GetTicksValue(IntPtr handle);
+
+    public KotlinStateFlow<int> Ticks
+    {
+        get
+        {
+            if (_handle == IntPtr.Zero)
+                throw new ObjectDisposedException(nameof(Watching));
+            return new KotlinStateFlow<int>((onNext, onComplete, onError, userData) =>
+                Native_GetTicksCollect(_handle, GetOrCreateScope(), onNext, onComplete, onError, userData),
+                () => Native_GetTicksValue(_handle));
+        }
+    }
+
+    [DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "job_watching_labels_collect")]
+    private static extern IntPtr Native_LabelsCollect(IntPtr handle, IntPtr scopeHandle, [MarshalAs(UnmanagedType.LPUTF8Str)] string prefix, IntPtr onNext, IntPtr onComplete, IntPtr onError, IntPtr userData);
+
+    public KotlinFlow<string> Labels(string prefix) { /* ... */ }
+
+    [DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "job_watching_labels_2_collect")]
+    private static extern IntPtr Native_Labels_2Collect(IntPtr handle, IntPtr scopeHandle, [MarshalAs(UnmanagedType.LPUTF8Str)] string prefix, int times, IntPtr onNext, IntPtr onComplete, IntPtr onError, IntPtr userData);
+
+    public KotlinFlow<string> Labels(string prefix, int times) { /* ... */ }
+}
+```
+
+A base-declared flow **property** binds on every arm, under each arm's own prefix (the ADR-111
+all-properties rule); a base-declared flow **method** binds on no arm (the ADR-116 declared-only
+rule for methods), the same asymmetry the suspend route already has.
+
+<note>
+    <p>An arm that already carries a <code>suspend</code> member gains a flow member onto the
+    <b>same</b> scope: one <code>_scopeHandle</code>, one <code>DisposeAsync</code>, not two.
+    <code>Job.Running.Beats</code> is a <code>StateFlow&lt;Int&gt;</code> alongside
+    <code>Running</code>'s <code>PauseAsync</code>/<code>ResumeAsync</code>, and both routes share
+    the one scope field.</p>
+</note>
+
+### Using it from C# {id="sealed-flow-using-it-from-c"}
+
+From `IntegrationTests/SealedSubclassMethodTests.cs`:
+
+```C#
+await using Job.Watching mylo = factory.Watching("Mylo");
+
+Assert.Equal(4, mylo.Ticks.Value);
+
+await foreach (string label in mylo.Labels("windowsill:"))
+{
+    labels.Add(label);
+}
+
+Assert.True(typeof(IAsyncDisposable).IsAssignableFrom(typeof(Job.Watching)));
+Assert.False(typeof(IAsyncDisposable).IsAssignableFrom(typeof(Job.Done)));
+```
+
+The coexistence cell, one scope shared by both routes on `Running`:
+
+```C#
+await using Job.Running oreo = factory.Running(60);
+
+Assert.Equal(60, oreo.Beats.Value);
+Assert.Equal(60, await oreo.PauseAsync());
 ```
 
 ### Using it from C# {id="sealed-method-using-it-from-c"}
@@ -2216,11 +2548,13 @@ property. The owning class still generates, and its unrelated `name` member stil
 - Interfaces with generic type parameters, suspend interface members, and `Flow`/`StateFlow`-valued interface members are not supported as return positions.
 - A backing class and its dispatch exports are only generated for interfaces that actually appear in a planned return position; an interface only ever used as an `add`/`remove` subscription parameter (like `ICatEventListener`, see [Lambdas and callbacks](lambdas-and-callbacks.md)) does not get one.
 - Object identity is not preserved across reads of a **Kotlin-backed** interface-typed property: two reads produce two distinct C# wrapper instances over the same Kotlin object (each disposes independently). A **C#-implemented** object read back is the one exception, see above.
-- A sealed type in the export scope now binds at every position: property, callable return, and callable/constructor parameter (bare, nullable, or a collection component, read-only or mutable), see [Sealed types as property types](#sealed-types-as-property-types), [A class method returning a sealed base](#a-class-method-returning-a-sealed-base), and [A sealed type at a parameter position](#a-sealed-type-at-a-parameter-position). An **eligible** `sealed interface` binds the same way, see [Sealed interfaces](#sealed-interfaces). A value class whose underlying type is sealed also binds the same way, at a property, callable, or `List<T>` component position, see [Value classes: Over a sealed type](value-classes.md#over-a-sealed-type). What still does not bind: an extension function's **receiver** typed as a sealed base (`sealedAsHandle()` rewrites declared parameters only), an **ineligible** sealed interface at any position, and a sealed class **outside the export scope**. See [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md).
+- A sealed type in the export scope now binds at every position: property, callable return, and callable/constructor parameter (bare, nullable, or a collection component, read-only or mutable), see [Sealed types as property types](#sealed-types-as-property-types), [A class method returning a sealed base](#a-class-method-returning-a-sealed-base), and [A sealed type at a parameter position](#a-sealed-type-at-a-parameter-position). An **eligible** `sealed interface` binds the same way, whether its arms are nested or declared beside it, see [Sealed interfaces](#sealed-interfaces). A value class whose underlying type is sealed also binds the same way, at a property, callable, or `List<T>` component position, see [Value classes: Over a sealed type](value-classes.md#over-a-sealed-type). What still does not bind: an extension function's **receiver** typed as a sealed base (`sealedAsHandle()` rewrites declared parameters only), an **ineligible** sealed interface at any position, and a sealed class **outside the export scope**. See [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md).
+- A `sealed interface` still refuses an arm that is an `enum class` (a C# enum can only extend an integral type, `CS1008`) or that implements more than one sealed interface (C# single inheritance), regardless of where the arm is declared. See [An enum arm keeps the interface ineligible](#sealed-interface-enum-arm), [ADR-125](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/125-sealed-interface-sibling-arms.md).
+- An eligible sealed interface arm's **extra interfaces** (e.g. `class Odd : Kind, CharSequence`) are dropped silently: the arm stays eligible, but the generated class declares only its sealed base, with no interface list and no diagnostic naming the loss. See [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md).
 - [Overriding a read-only property with `var`](#overriding-a-read-only-property-with-var) only guards against the exported-base-class shape. A base class's own `open val`/`open var` never renders `virtual` (its own modifier is never read), so any subclass `override` of it is `CS0506`; and an unimplemented base `abstract val`/`abstract var` has no abstract-property path at all, so a subclass `override` of it is `CS0115`. Neither is fixed. See [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md).
 - [Declaring every exported interface](#declaring-every-exported-interface) has its own residual gaps: `CirInterface` has no super-interface list, so `interface Derived : Base` still flattens (`IDerived` no longer redeclares `Base`'s members after ADR-113, but doesn't inherit them either); a `var` interface property still renders `{ get; }` only (`hasSetter` is never derived from the plan); the CS0102 property/method name-collision guard is interface-route only, the same collision on the ordinary class route is unguarded; and an interface that is neither reachable nor implemented by any exported class still silently loses its unbridgeable members with no diagnostic naming why. See [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md).
 - A sealed **base**'s own `abstract val`/`abstract var` renders no C# member at all (`CirSealedClass` has no `properties` field); see [A `data object` subclass's own properties bind too](#data-object-subclass-properties-bind-too) and [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md).
-- [Methods on a sealed subclass](#methods-on-a-sealed-subclass) is declared-only: a base `open fun` (and, since [ADR-118](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/118-suspend-route-sealed-arm-owners-and-overload-numbering.md), a base `open suspend fun`) body an arm does not override renders on no arm, and neither the base's own methods nor its `abstract val`/`abstract var` (above) are ever readable through the C# base type directly, only through a concrete arm. A `Flow`-returning, lambda-parameter, or generic method on an arm is still a named `SKIPPED_UNSUPPORTED_COMBINATION` skip rather than a binding; a declared `suspend fun` now binds instead, and only an arm that declares one gains `IAsyncDisposable`, so a consumer holding the sealed base has to pattern-match to the concrete arm before `await using` / `DisposeAsync()` (see [Suspend methods on a sealed arm](#sealed-method-suspend-generated-c)). An arm's own `fun dispose()` collides with the always-emitted `Dispose()`, the same pre-existing hazard an ordinary class has; a same-arity suspend overload pair differing only in reference nullability, a `suspend fun` returning plain `Flow<T>`, and an ordinary-class suspend method returning a nested arm by simple name are also pre-existing, unfixed gaps on the legacy suspend route; see [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md).
+- [Methods on a sealed subclass](#methods-on-a-sealed-subclass) is declared-only: a base `open fun` (and, since [ADR-118](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/118-suspend-route-sealed-arm-owners-and-overload-numbering.md), a base `open suspend fun`) body an arm does not override renders on no arm, and neither the base's own methods nor its `abstract val`/`abstract var` (above) are ever readable through the C# base type directly, only through a concrete arm. A lambda-parameter or generic method on an arm is still a named `SKIPPED_UNSUPPORTED_COMBINATION` skip rather than a binding; a declared `suspend fun` or a declared `Flow<T>`/`StateFlow<T>` member now binds instead, and only an arm that declares one of those two gains `IAsyncDisposable`, so a consumer holding the sealed base has to pattern-match to the concrete arm before `await using` / `DisposeAsync()` (see [Suspend methods on a sealed arm](#sealed-method-suspend-generated-c) and [Flow and StateFlow members on a sealed arm](#sealed-flow-generated-c)). An arm's own `fun dispose()` collides with the always-emitted `Dispose()`, the same pre-existing hazard an ordinary class has; a same-arity suspend overload pair differing only in reference nullability, a `suspend fun` returning plain `Flow<T>`, and an ordinary-class suspend method returning a nested arm by simple name are also pre-existing, unfixed gaps on the legacy suspend route; see [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md).
 
 ## Using it from C#
 
@@ -2296,5 +2630,7 @@ public void Observation_WorksWithPatternMatching()
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/113-interface-declaration-on-the-forward-plan.md">ADR-113: Interface declaration on the forward plan</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/116-sealed-subclass-methods-on-the-callable-plan.md">ADR-116: Sealed-subclass methods move onto the ADR-062 callable plan</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/118-suspend-route-sealed-arm-owners-and-overload-numbering.md">ADR-118: Suspend route: sealed-arm owners and overload numbering</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/124-flow-route-sealed-arm-owners.md">ADR-124: Flow route: sealed-arm owners</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/125-sealed-interface-sibling-arms.md">ADR-125: A sealed interface's arms may be declared beside it</a>
     </category>
 </seealso>

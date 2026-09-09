@@ -515,6 +515,21 @@ of its own:
 - A **trailing** marked parameter that carries a **default** reuses ADR-096's own omitting-overload
   machinery: the shorter constructor overload that already omits it never named it in the first
   place, so that overload survives untouched and is the only one exported.
+
+  **Amendment (2026-09-10, issue #128): that holds only when the marker sits on the parameter or
+  its property while the parameter's *type* is unmarked** (verified against Kotlin 2.4.10:
+  `PropMarked(5)` and `PropMarked()` both compile from a non-opting file). When the parameter's
+  **type** is opt-in-marked, no arity is callable, defaults included and regardless of what the
+  default expression reads (verified: `Mixed(a = 5)` is rejected exactly like
+  `Mixed(1, Mode.Slow)`, while `DefaultReadsMarked(val n: Int = Mode.Fast.ordinal)` compiles, so
+  the trigger is the declared parameter type and never the default expression). Kotlin propagates
+  the requirement from the callee's signature, so a shorter call is no more legal than the declared
+  one. Every arity is then skipped `OPT_IN_MARKER_TYPE`, one `SKIPPED_OPT_IN_MARKER` per arity, and
+  `WARNING_NO_PUBLIC_CONSTRUCTOR` reports the class as factory-only. Before this, ADR-096
+  synthesized `GroomingPlan(name)` for exactly this shape and the generated `CNameExports.kt` did
+  not compile (`Cattery bookkeeping, not a public API`). The per-arity warnings are kept rather than
+  collapsed: this ADR's invariant is that a declaration absent from both artifacts is named by a
+  `SKIPPED_*`, and a suppressed arity would be absent unnamed.
 - An **undefaulted or non-trailing** marked parameter has no shorter overload that omits it, so the
   constructor itself is dropped (and a data class's `copy` alongside it, for the same reason), named
   once with `OPT_IN_MARKER` each. The class stays reachable only through a Kotlin factory, and
@@ -523,4 +538,6 @@ of its own:
 
 Both branches are pinned by `Tier1OptInMarkerSkipTest`'s constructor cases and by
 `IntegrationTests/Issue113Tests.cs`'s `Cell1_PropertyTargetedMarker_OnAConstructorVal_IsAbsent` /
-`Cell2_DefaultTargetMarker_OnAConstructorVal_IsAbsent`.
+`Cell2_DefaultTargetMarker_OnAConstructorVal_IsAbsent`. The amendment's marked-*type* branch is
+pinned by `Tier1OptInMarkedParameterArityTest` and `IntegrationTests/Issue128Tests.cs`, whose
+`GroomingLog` cell is the control that the unmarked-type branch above did not move.

@@ -30,3 +30,9 @@ third consumer needed it at the time, and merging it is a separate refactor from
 that touched half of this. Discovered alongside [ADR-113](../adr/113-interface-declaration-on-the-forward-plan.md)
 (issue #112) and [ADR-114](../adr/114-collection-parameters-on-legacy-flow-and-suspend-routes.md)
 (issue #109), each of which independently found half of it.
+
+[ADR-123](../adr/123-collection-elements-on-the-flow-routes.md) (issue #127) added a third consumer
+of `forwardPublicCsharpType()`, the `Flow`/`StateFlow` element spelling, and deliberately left
+`ForwardCirPropertyProjection.kt:640`'s private copy alone: narrows the divergence in spirit (one
+more caller shares the merged function) but closes nothing, since the unmerged copy is still there
+for the next caller to pick either one.

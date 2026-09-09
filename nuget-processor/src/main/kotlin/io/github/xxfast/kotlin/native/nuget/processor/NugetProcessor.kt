@@ -30,6 +30,11 @@ import io.github.xxfast.kotlin.native.nuget.processor.cir.translate
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addClassExports
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addCompanionExports
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addEnumExports
+import io.github.xxfast.kotlin.native.nuget.processor.exports.addFlowMethodExports
+import io.github.xxfast.kotlin.native.nuget.processor.exports.addFlowPropertyExports
+import io.github.xxfast.kotlin.native.nuget.processor.exports.declaresOrInheritsFlowMember
+import io.github.xxfast.kotlin.native.nuget.processor.exports.forwardArmFlowMethods
+import io.github.xxfast.kotlin.native.nuget.processor.exports.forwardArmFlowProperties
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addFunctionExports
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addGenericClassExports
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addGenericFunctionExports
@@ -104,6 +109,8 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.diagnosticHint
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isForwardLegacyAsyncRoute
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isValueClass
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyCollectionKinds
+import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyFlowElementCollectionKinds
+import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyRefusedFlowElement
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyRefusedParameter
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyRefusedReturn
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyReturnCollectionKinds
@@ -151,7 +158,7 @@ internal fun warnDroppedForwardCallables(
 ) {
   val diagnostics: List<ForwardDiagnostic> = catalog.droppedCallables.map { dropped ->
     ForwardDiagnostic(
-      kind = dropped.reason.toDiagnosticKind(),
+      kind = dropped.reason.toDiagnosticKind(dropped.position),
       symbol = dropped.node,
       declaration = dropped.symbol,
       // Every other drop is about the types at the callable's positions; this one is about the
@@ -175,10 +182,18 @@ internal fun warnDroppedForwardCallables(
       } else if (dropped.reason == ForwardPlanSkipReason.SEALED_SUBCLASS_UNROUTED) {
         "it is a ${dropped.detail ?: "specialized"} member of a sealed subclass, which has no " +
             "route yet (ADR-116)"
+        // Issue #131: the generic sentence below reads as being about the whole callable, so a
+        // nullable *parameter* sent the author reading the return type. Guarded on the name being
+        // there so no other reason's shipped text moves; the fifth special case in this chain, and
+        // the same signal as the second and third that it wants `reason.diagnosticReason()`.
+      } else if (
+        dropped.reason == ForwardPlanSkipReason.NULLABLE && dropped.parameter != null
+      ) {
+        "its parameter `${dropped.parameter}` has a nullable type with no supported wire"
       } else {
         "its ${dropped.reason} type combination is not supported"
       },
-      hint = dropped.reason.diagnosticHint(dropped.detail, scope),
+      hint = dropped.reason.diagnosticHint(dropped.detail, scope, dropped.parameter),
     )
   }
   ForwardDiagnosticSink.emit(diagnostics, logger)
@@ -300,9 +315,13 @@ internal fun warnRefusedLegacyRouteMembers(
     kind = ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_INPUT,
     symbol = member,
     declaration = declaration,
-    reason = "a Flow-returning or suspend member can marshal a collection parameter, but not " +
-        "the generic type of $refused",
-    hint = "pass the values as a List/Set/Map, or as separate parameters",
+    // ADR-122 widened this from generic-only: an enum, Instant/Duration/Uuid, value class,
+    // interface, nullable object or unexported class parameter used to render a public `IntPtr`
+    // here, so the wording names what the route CAN take rather than only what it cannot.
+    reason = "a Flow-returning or suspend member can take a primitive/String, a List/Set/Map, or " +
+        "a class/object/sealed-type handle, but not $refused",
+    hint = "pass a class, object or sealed type, a List/Set/Map, or a primitive/String, or " +
+        "expose the values as separate parameters",
   )
 
   fun refusedReturn(
@@ -313,8 +332,27 @@ internal fun warnRefusedLegacyRouteMembers(
     kind = ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_RETURN,
     symbol = member,
     declaration = declaration,
-    reason = "a suspend member can return a List/Set/Map, but not the generic type $refused",
+    // ADR-123 widened this from the suspend return to the Flow/StateFlow element, which is the
+    // same refusal one position over: `Flow<Pair<String, Int>>` has no more wire shape than
+    // `Pair<String, Int>` does.
+    reason = "a suspend member can return, and a Flow or StateFlow element can be, a " +
+        "List/Set/Map, but not the generic type $refused",
     hint = "return a non-nullable List/Set/Map, or a non-generic type",
+  )
+
+  // ADR-123: the property half of the same refusal. A flow property has no `KSFunctionDeclaration`
+  // to hang the return diagnostic on, and SKIPPED_UNSUPPORTED_PROPERTY is what every other
+  // dropped-property route already uses.
+  fun refusedFlowProperty(
+    property: KSPropertyDeclaration,
+    declaration: String,
+    refused: String,
+  ): ForwardDiagnostic = ForwardDiagnostic(
+    kind = ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_PROPERTY,
+    symbol = property,
+    declaration = declaration,
+    reason = "a Flow or StateFlow element can be a List/Set/Map, but not the generic type $refused",
+    hint = "make the element a non-nullable List/Set/Map, or a non-generic type",
   )
 
   fun MutableList<ForwardDiagnostic>.nameRefused(
@@ -337,6 +375,19 @@ internal fun warnRefusedLegacyRouteMembers(
         .filter { method -> method.getVisibility() == Visibility.PUBLIC }
         .filter { method -> method.isForwardLegacyAsyncRoute() }
         .forEach { method -> nameRefused(method, "$owner.${method.simpleName.asString()}") }
+      // ADR-123: a Flow/StateFlow *property* whose element cannot cross. Both halves drop it
+      // silently, exactly as they drop a method, so this walk is the only thing that names it.
+      cls.getAllProperties()
+        .filter { property -> property.getVisibility() == Visibility.PUBLIC }
+        .forEach { property ->
+          val refused: String =
+            classifier.legacyRefusedFlowElement(property.type.resolve()) ?: return@forEach
+          add(
+            refusedFlowProperty(
+              property, "$owner.${property.simpleName.asString()}", refused,
+            ),
+          )
+        }
     }
     sealedClasses.forEach { sealed ->
       val sealedName: String = sealed.simpleName.asString()
@@ -346,8 +397,24 @@ internal fun warnRefusedLegacyRouteMembers(
           .filter { method -> method.getVisibility() == Visibility.PUBLIC }
           // Declared-only, as everywhere else on the sealed route.
           .filter { method -> method.parentDeclaration == subclass }
-          .filter { method -> method.modifiers.contains(Modifier.SUSPEND) }
+          // ADR-124: the Flow half of the same route joins the suspend half here. Both are routed
+          // on an arm now, so both halves drop a refused member silently and this walk is the only
+          // thing left that names it.
+          .filter { method -> method.isForwardLegacyAsyncRoute() }
           .forEach { method -> nameRefused(method, "$owner.${method.simpleName.asString()}") }
+        // ADR-124: and the arm's flow *properties*, whose refused element has no
+        // `KSFunctionDeclaration` to hang a return diagnostic on. All-properties, ADR-111's rule.
+        subclass.getAllProperties()
+          .filter { property -> property.getVisibility() == Visibility.PUBLIC }
+          .forEach { property ->
+            val refused: String =
+              classifier.legacyRefusedFlowElement(property.type.resolve()) ?: return@forEach
+            add(
+              refusedFlowProperty(
+                property, "$owner.${property.simpleName.asString()}", refused,
+              ),
+            )
+          }
       }
     }
     suspendFunctions.forEach { func -> nameRefused(func, func.simpleName.asString()) }
@@ -628,6 +695,11 @@ class NugetProcessor(
       .filter { it.getVisibility() == Visibility.PUBLIC }
       .filter { it.classKind == ClassKind.ENUM_CLASS }
       .filter { it.parentDeclaration == null }
+      // ADR-125: the enum half of the same rule, and the reason this bucket used to be the only
+      // one without it. An `enum class` arm is refused by `sealedInterfaceIneligibility()`, so
+      // nothing reaches this filter today; it stays because it is what turns a future widening
+      // mistake into a missing type rather than CS0101 in every consumer's build.
+      .filter { !it.isSealedSubclass() }
 
     val rootInterfaces: List<KSClassDeclaration> = allDeclarations
       .filterIsInstance<KSClassDeclaration>()
@@ -799,8 +871,14 @@ class NugetProcessor(
             declaration = name,
             reason = "sealed interface `$name` is declared as " +
                 "`I${iface.simpleName.asString()}` but cannot be reconstructed in C#: $reason",
-            hint = "make every subclass a nested class or object with no other superclass and no " +
-                "sub-interfaces, or declare it as a sealed class (ADR-112)",
+            // ADR-125: the reason now always names a C# constraint, so the hint names the
+            // constraints too. It used to ask for every subclass to be nested, which is a style
+            // rule the renderer never needed and a breaking change for a library whose subtypes
+            // are public API on other platforms.
+            hint = "every subclass must be a class or object, declared in the interface or " +
+                "beside it, with no other superclass, no sub-interface and no second sealed " +
+                "interface; an enum can never be a subclass (ADR-125). Or declare it as a " +
+                "sealed class",
           )
         },
       logger,
@@ -1305,8 +1383,15 @@ class NugetProcessor(
       }
     }
 
+    // ADR-124: an arm's flow surface needs the same coroutines/cinterop imports a class's does.
+    val armsHaveFlowMembers: Boolean = sealedClasses.any { sealed ->
+      sealed.getSealedSubclasses().any { subclass ->
+        subclass.declaresOrInheritsFlowMember(forwardClassifier)
+      }
+    }
+
     val needsFlowImports: Boolean = classesHaveFlowPropertiesForImports ||
-        classesHaveFlowMethodsForImports
+        classesHaveFlowMethodsForImports || armsHaveFlowMembers
 
     // The coroutines opt-in is gated on the SAME condition as the coroutines imports below: every
     // emission that names anything from `kotlinx.coroutines` (suspend functions and suspend
@@ -1433,6 +1518,36 @@ class NugetProcessor(
       }
     }
 
+    // ADR-124: the sealed arm is an owner of the legacy Flow/StateFlow route too, under the same
+    // export prefix its getters and `_dispose` use. Properties are all-properties (ADR-111's
+    // `superClass = null`: the generated C# base is abstract and carries no members, so a
+    // base-declared flow property has to bind on every arm), methods declared-only (ADR-116/118).
+    // Both rules live in `FlowExports`, so this loop, the two gates below and `translateSealedClass`
+    // cannot drift about which members exist.
+    sealedClasses.forEach { sealed ->
+      val sealedPrefix: String = sealed.simpleName.asString().lowercase()
+      sealed.getSealedSubclasses().forEach { subclass ->
+        val subQualifiedName: String = subclass.qualifiedName?.asString() ?: return@forEach
+        val armPrefix: String =
+          "${sealedPrefix}_${subclass.simpleName.asString().lowercase()}"
+        val armFlowProperties: List<KSPropertyDeclaration> =
+          subclass.forwardArmFlowProperties(forwardClassifier)
+        val armFlowMethods: List<KSFunctionDeclaration> =
+          subclass.forwardArmFlowMethods(forwardClassifier)
+        if (armFlowProperties.isEmpty() && armFlowMethods.isEmpty()) return@forEach
+        attributing(subclass) {
+          armFlowProperties.forEach { prop ->
+            builder.addFlowPropertyExports(prop, subQualifiedName, armPrefix, forwardClassifier)
+          }
+          armFlowMethods.forEach { method ->
+            builder.addFlowMethodExports(
+              method, subQualifiedName, armPrefix, forwardClassifier, callableCatalog,
+            )
+          }
+        }
+      }
+    }
+
     properties.forEach { prop ->
       attributing(prop) {
         builder.addImport(prop.packageName.asString(), prop.simpleName.asString())
@@ -1530,6 +1645,18 @@ class NugetProcessor(
           .forEach { method ->
             yieldAll(forwardClassifier.legacyCollectionKinds(method.parameters))
             yieldAll(forwardClassifier.legacyReturnCollectionKinds(method))
+            // ADR-123: the Flow/StateFlow element. No scan above finds it: they read a member's
+            // declared type, and that type is `StateFlow`, not `Set`.
+            yieldAll(
+              forwardClassifier.legacyFlowElementCollectionKinds(method.returnType?.resolve()),
+            )
+          }
+        cls.getAllProperties()
+          .filter { property -> property.getVisibility() == Visibility.PUBLIC }
+          .forEach { property ->
+            yieldAll(
+              forwardClassifier.legacyFlowElementCollectionKinds(property.type.resolve()),
+            )
           }
       }
       sealedClasses.forEach { sealed ->
@@ -1537,10 +1664,23 @@ class NugetProcessor(
           subclass.getAllFunctions()
             .filter { method -> method.getVisibility() == Visibility.PUBLIC }
             .filter { method -> method.parentDeclaration == subclass }
-            .filter { method -> method.modifiers.contains(Modifier.SUSPEND) }
+            // ADR-124: the arm's Flow-returning members joined the suspend ones on this route, and
+            // a `Flow<Set<T>>` element reaches `nuget_set_*` exactly as an ordinary class's does.
+            .filter { method -> method.isForwardLegacyAsyncRoute() }
             .forEach { method ->
               yieldAll(forwardClassifier.legacyCollectionKinds(method.parameters))
               yieldAll(forwardClassifier.legacyReturnCollectionKinds(method))
+              yieldAll(
+                forwardClassifier.legacyFlowElementCollectionKinds(method.returnType?.resolve()),
+              )
+            }
+          // ADR-124: all-properties, ADR-111's rule for a sealed arm's property surface.
+          subclass.getAllProperties()
+            .filter { property -> property.getVisibility() == Visibility.PUBLIC }
+            .forEach { property ->
+              yieldAll(
+                forwardClassifier.legacyFlowElementCollectionKinds(property.type.resolve()),
+              )
             }
         }
       }
@@ -1734,7 +1874,11 @@ class NugetProcessor(
       }
     }
 
-    val needsFlowSupport: Boolean = classesHaveFlowProperties || classesHaveFlowMethods
+    // ADR-124: `armsHaveFlowMembers` carries the arm half. Without it an arm's
+    // `GetOrCreateScope()` calls a `nuget_scope_create` that was never exported, which is an
+    // EntryPointNotFoundException at the first collect.
+    val needsFlowSupport: Boolean = classesHaveFlowProperties || classesHaveFlowMethods ||
+        armsHaveFlowMembers
 
     if (needsFlowSupport) builder.addImport("kotlinx.coroutines.flow", "collect")
 

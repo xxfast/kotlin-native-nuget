@@ -252,6 +252,9 @@ Not touched:
 - ROADMAP: the `suspend fun load(): Result<T>` item (Phase 6) closes as a named skip. The
   `hasSuspendMethods` no-refusal-check item and the `Task<Flow>` item are re-worded to include this
   ADR's refusal.
+- Amended 2026-09-10: [ADR-123](123-collection-elements-on-the-flow-routes.md) applies this same
+  classify-then-marshal-or-refuse shape to the third route, the `Flow`/`StateFlow` *element*
+  position, reusing `legacyCollectionRead` and `collectionResultProjection` verbatim.
 
 ## Implementation notes (2026-09-09)
 

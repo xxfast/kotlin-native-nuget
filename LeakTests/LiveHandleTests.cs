@@ -1,6 +1,10 @@
 using TestLibrary;
 using TestLibrary.Cat;
 using TestLibrary.Clinic;
+using TestLibrary.Issue115;
+using TestLibrary.Issue126;
+using TestLibrary.Issue127;
+using TestLibrary.Issue131;
 using TestLibrary.Models;
 using TestLibrary.Routes;
 
@@ -253,6 +257,87 @@ public class LiveHandleTests
             Assert.True(await treats.MoveNextAsync());
             Assert.Equal("Mylo ate treat #1", treats.Current);
             await treats.DisposeAsync();
+        });
+    }
+
+    // Row 8b. Issue #131: a top-level factory taking a *borrowed* nullable handle. The Kotlin
+    // thunk reads it with `logger?.asStableRef<Logger>()?.get()`, which must not take ownership:
+    // if it disposed the ref, the caller's own `logger` would go with it. Both spellings run in
+    // one crossing, so a leak on either the null or the non-null path shows up here.
+    [Fact]
+    public void NullableHandleParameter_TopLevelFactory_ReturnsToBaseline()
+    {
+        AssertNoLeak(() =>
+        {
+            using var settings = new Settings(3);
+            using var logger = new Logger("Oreo");
+            using Hub withLogger = HubSample.Hub(settings, logger, "n");
+            using Hub withoutLogger = HubSample.Hub(settings, null, null);
+            Assert.Equal("3/Oreo/n", withLogger.Describe());
+            Assert.Equal("3/none/-", withoutLogger.Describe());
+        });
+    }
+
+    // Row 8c. Issue #126: a *borrowed* handle at a parameter on the legacy StateFlow route. The
+    // C# side passes `observation._handle` without minting anything, and the Kotlin export
+    // dereferences it into a local rather than taking a StableRef of its own, so the whole
+    // crossing must mint no handle beyond the ones the wrapper and the read already own. The
+    // eager dereference is what makes that non-obvious: a fix that took ownership to keep the
+    // object alive across the flow would show up here as a per-crossing leak, and nowhere else.
+    [Fact]
+    public void HandleParameter_StateFlowValueRead_ReturnsToBaseline()
+    {
+        AssertNoLeak(() =>
+        {
+            using var radio = new ObservationRadio();
+            using Observation observation = ObservationKt.OpenBox("Oreo");
+            Observation.Alive alive = Assert.IsType<Observation.Alive>(observation);
+            Assert.Equal("alive:Oreo", radio.Watch(alive).Value);
+        });
+    }
+
+    // Row 8d. Issue #127 / ADR-123: a *collection* element on the Flow and StateFlow routes. Each
+    // emission and each `.Value` read mints a fresh StableRef for the collection itself plus one
+    // box per element, and none of it is disposed by the flow enumerator: the collection handle
+    // goes in `ReadList`/`ReadSet`'s finally, and the element boxes are owned by whatever the read
+    // returns. So a read lambda wired wrong leaks one handle per emission, not one per crossing,
+    // which is why the count is high. Both halves in one crossing: `Ticks` emits three lists of
+    // handle elements, `Items` reads a set whose elements project to their underlying.
+    [Fact]
+    public async Task CollectionFlowElement_EnumerationAndValueRead_ReturnsToBaseline()
+    {
+        await AssertNoLeakAsync(
+            async () =>
+            {
+                using var hub = new NodeHub();
+                await foreach (IReadOnlyList<Kind> page in hub.Ticks)
+                {
+                    foreach (Kind kind in page) kind.Dispose();
+                }
+                Assert.Equal(3, hub.Items.Value.Count);
+            },
+            iterations: 200);
+    }
+
+    // Row 8e. Issue #129 / ADR-124: the same flow route as Row 7, with a *sealed arm* as the owner.
+    // The arm mints nothing new (the per-item box, the job handle and the subscription all come
+    // from the same builders), but it owns its scope through the arm's own `_scopeHandle` and
+    // drains it in the arm's `DisposeAsync`, so `await using` is the spelling under test: a scope
+    // created per collect and never drained, or a `DisposeAsync` that disposes the handle without
+    // draining, shows up here as a per-crossing leak and nowhere else.
+    [Fact]
+    public async Task Flow_OnASealedArm_EnumeratedToCompletion_ReturnsToBaseline()
+    {
+        await AssertNoLeakAsync(async () =>
+        {
+            using var factory = new JobFactory();
+            await using Job.Watching mylo = factory.Watching("Mylo");
+            var labels = new List<string>();
+            await foreach (string label in mylo.Labels("tick", 3))
+            {
+                labels.Add(label);
+            }
+            Assert.Equal(3, labels.Count);
         });
     }
 

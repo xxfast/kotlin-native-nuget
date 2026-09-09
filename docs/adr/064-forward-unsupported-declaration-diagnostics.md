@@ -210,7 +210,7 @@ a **skip + named diagnostic**; the one collision row is **fatal**.
 | **Generic + `suspend` + `inline` + `reified` extension returning `Result<T>`** (cell 23, BUG-010) | **No**; the *combination* has no working legacy route. Today it is a **silent drop** (the Phase 10 plan-null guard already suppresses the raw emit), just unnamed | **reclassify → skip + `SKIPPED_UNSUPPORTED_COMBINATION`** | planner `extensionEntry`, below |
 | **Value-class inherited members** (`CharSequence by value`; ROADMAP line 77) | **No** (v1 product decision). **Currently exported** (`getAllFunctions()`/`getAllProperties()` don't filter by `parentDeclaration`), so `length`/`get`/`isEmpty` bind clean today, a behavioral change, not a rename | **filter out + skip + `SKIPPED_INHERITED_MEMBER`** | value-class path |
 | **`Map`/`Set` (and mutable) as method *parameters*** (ROADMAP line 78, no `CreateMap`/`CreateSet` helper) | **No** (v1) | **skip + `SKIPPED_UNSUPPORTED_INPUT`** | planner `inputSkipReason()` = `COLLECTION` |
-| **Nullable `Boolean` method return** (ROADMAP line 79, ADR-061 deferred width) | **No** (v1) | **skip + `SKIPPED_UNSUPPORTED_RETURN`** | planner `NULLABLE` |
+| **A nullable type with no wire at the position it is written** (ROADMAP line 79, ADR-061 deferred width) | **No** (v1) | **skip + `SKIPPED_UNSUPPORTED_RETURN`** at a return, **`SKIPPED_UNSUPPORTED_INPUT`** at a parameter (amended 2026-09-09, issue #131) | planner `NULLABLE` + `ForwardSkipPosition` |
 | **`Char` at positions ADR-062 did not close**, and other `Unsupported` types (`Sequence`, local/anonymous, non-exported handle, bare type parameter) | **No** | **skip + `SKIPPED_UNSUPPORTED_TYPE`** | classifier `Unsupported` |
 | **A property whose type `ForwardPropertyPlanner.isPlannable` rejects** (added later, no ADR: this completes the position naming below) | **No** | **skip + `SKIPPED_UNSUPPORTED_PROPERTY`** | `ForwardPropertyPlanner.recordDropped`, excluding lambda/suspend-lambda/`Flow`/`StateFlow`, which still bind via a legacy route |
 | **An extension property whose *receiver* type is unsupported** (added later, no ADR: closes this ADR's position coverage) | **No** | **skip + `SKIPPED_UNSUPPORTED_PROPERTY`** | `ForwardPropertyPlanner.extensionProperty`, naming the receiver's classified type; no legacy route re-emits by receiver, so no exclusion is needed |
@@ -894,3 +894,72 @@ class method's generic return/parameters, a top-level `Flow` return/parameter, a
 it does not, the same class of silent vanish exists there too. Each needs its own audit of which
 positions its legacy route actually re-emits before a fix can be scoped the way this amendment
 scoped `SEALED_POSITION`; tracked on `ROADMAP.md` as a separate item per reason.
+
+## Amendment (2026-09-09, issue #131): a skip carries its position, and an input skip names the parameter
+
+Judgement: an **amendment**, not a new ADR. It closes the ROADMAP Phase 3 item "a nullable parameter
+is reported as `SKIPPED_UNSUPPORTED_RETURN`"
+(`docs/backlog/nullable-parameter-mis-reported-as-skipped-unsupported-return.md`). No new kind, no
+new reason, no new mechanism: the decision was already written down in this ADR's own
+`toDiagnosticKind()` doc comment, which said a reason "genuinely ambiguous between input and return
+position would need the planner to carry that distinction explicitly rather than relying on this
+table". Status stays Accepted.
+
+### The gap
+
+`NULLABLE` was mapped to `SKIPPED_UNSUPPORTED_RETURN` unconditionally, on the assumption that it was
+only asserted at the nullable-`Boolean`-return site. It is not: `inputSkipReason()` mints the same
+reason for a *parameter* whose nullable type has no input wire. The author of
+
+```kotlin
+fun hub(settings: Settings = Settings(), logger: Logger? = null, events: Flow<Event>? = null): Hub
+```
+
+read `SKIPPED_UNSUPPORTED_RETURN` and went looking at `Hub`, which is exportable and was never the
+problem, while the hint's "at this position" named no position at all.
+
+### Decision
+
+`ForwardCallableCatalogEntry.Skipped` carries a `ForwardSkipPosition` (`INPUT` / `RETURN`,
+defaulting to `RETURN`) and, for an input-position skip, the offending parameter's name.
+`toDiagnosticKind()` reads the position: an input-position `NULLABLE` renders as
+`SKIPPED_UNSUPPORTED_INPUT`, a return-position one keeps `SKIPPED_UNSUPPORTED_RETURN`. Every other
+reason ignores the position and keeps its own named kind. The reason sentence and the hint name the
+parameter, for `NULLABLE` only, so no shipped `COLLECTION` / `SEALED_POSITION` wording moves. This
+replaces the "`NULLABLE` is asserted at the nullable-Boolean-return site" assumption the fixed table
+rested on. An extension receiver counts as `INPUT` with no name: it is an input the author did not
+name, and `SKIPPED_UNSUPPORTED_INPUT`'s widened meaning ("a parameter or extension receiver whose
+type has no input wire") says so.
+
+Shipped, verified against the fixture's build log:
+
+```
+[nuget:SKIPPED_UNSUPPORTED_INPUT] Skipping io.github.xxfast.kotlin.native.nuget.test.issue131.hubWithEvents: its parameter `events` has a nullable type with no supported wire. the nullable parameter `events` has no wire at an input position; expose a non-nullable wrapper, or a separate has-value/value pair, instead
+    at .../issue131/HubSample.kt:47
+```
+
+Two shipped diagnostics move with it, both correctly: `Issue56Failure.<init>` and its generated
+`copy` (a `Throwable?` parameter) now say `SKIPPED_UNSUPPORTED_INPUT` and name `error`.
+
+**Only half of the sibling item.** "The message names no type" stays open for the *return* half:
+there is no `BridgeType` to Kotlin-spelling renderer anywhere in the planner, so a return-position
+`NULLABLE` still cannot name what it refused. Naming the parameter is enough for the author to find
+the type in their own source, which is what the input half needed.
+
+**Not extended to the other input reasons.** `COLLECTION` and `SEALED_POSITION` could name their
+parameter too now that `Skipped` carries it, and deliberately do not: both already name the
+offending *component* or *type* through `detail`, and widening them would move hint text Tier 1
+tests assert on for no new information.
+
+**Not a mapping change.** A nullable exported class handle at a parameter position was already
+supported, on every route: `null` rides `IntPtr.Zero`, C# spells it as a nullable reference type,
+and the Kotlin thunk borrows with `?.asStableRef<T>()?.get()`. Only the class-method route was
+pinned (`Patient.attach`), so this amendment's fixture (`issue131/HubSample.kt`, `Issue131Tests.cs`,
+one `LiveHandleTests` row) pins the constructor and top-level-function routes against the same rule.
+Nothing about those routes changed.
+
+**Not fixed here:** ADR-096's omitting overloads die with the declared entry, so a signature with
+one unsupported trailing defaulted parameter loses *all* of its supported arities, which is why the
+issue's author lost `hub()` and `hub(settings)` too. That is a mapping decision ("does a partially
+unsupported signature bind at its supported arities?") with an export-numbering consequence, and it
+is tracked separately.

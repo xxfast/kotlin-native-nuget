@@ -26,6 +26,15 @@ namespace IntegrationTests;
 /// <c>[DllImport]</c> EntryPoint and the private extern's C# name.
 /// </para>
 /// <para>
+/// ADR-124 adds the flow half. A <c>Flow&lt;T&gt;</c> or <c>StateFlow&lt;T&gt;</c> an arm declares,
+/// at a property getter or at a method return, binds as <c>KotlinFlow&lt;T&gt;</c> /
+/// <c>KotlinStateFlow&lt;T&gt;</c> off the arm's own export prefix
+/// (<c>job_watching_get_ticks_collect</c>, <c>job_watching_labels_collect</c>), through the same
+/// collect and value thunks the ordinary-class route uses. The method form is
+/// <c>SKIPPED_UNSUPPORTED_COMBINATION</c> today and the property form is dropped in silence, so
+/// <c>Ticks</c>, <c>Labels</c> and <c>Beats</c> are all CS1061 until it lands.
+/// </para>
+/// <para>
 /// The absences are asserted by reflection because a missing member is invisible to the compiler in
 /// the other direction: <c>PickNested</c> (a nested interface, which is never declared in C#),
 /// <c>Describe</c> on <c>Running</c>, and <c>RestAsync</c> on every arm (declared-only, on the sync
@@ -33,7 +42,8 @@ namespace IntegrationTests;
 /// — <c>open fun describe()</c>, <c>open suspend fun rest()</c> — is not it).
 /// </para>
 /// <para>
-/// Oreo runs the hallway; Mylo declines to and is poked about it.
+/// Oreo runs the hallway; Mylo declines to and is poked about it, then settles on the windowsill
+/// to watch birds and tick.
 /// </para>
 /// </summary>
 public class SealedSubclassMethodTests
@@ -518,6 +528,128 @@ public class SealedSubclassMethodTests
 
         Assert.Equal(3, done.Code);
         Assert.Equal("Done(code=3)", done.ToString());
+    }
+
+    // ---- ADR-124: the Flow / StateFlow route, re-keyed so a sealed arm is a valid owner. ----
+
+    /// <summary>
+    /// The issue's own shape: a <c>StateFlow&lt;Int&gt;</c> property getter on an arm. It binds as
+    /// <c>KotlinStateFlow&lt;int&gt; Ticks</c> off the arm's own prefix
+    /// (<c>job_watching_get_ticks_collect</c> / <c>job_watching_get_ticks_value</c>), where today
+    /// the property half is dropped with no diagnostic at all.
+    /// <para>
+    /// Both halves of the route in one test: the synchronous <c>.Value</c> read goes through
+    /// <c>_value</c>, the bounded <c>await foreach</c> goes through <c>_collect</c>, and the arm
+    /// holds the <c>MutableStateFlow</c> behind both, so a route that reads one of them off a
+    /// different receiver disagrees with the other. <c>StateFlow</c> never completes, hence the
+    /// cancellation after the replayed current value.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task Ticks_OnASealedArm_ReadsValueAndCollects()
+    {
+        using var factory = new JobFactory();
+
+        // Mylo watches the window. His name is four letters long, so the tick count is 4.
+        await using Job.Watching mylo = factory.Watching("Mylo");
+
+        Assert.Equal(4, mylo.Ticks.Value);
+
+        var seen = new List<int>();
+        var cts = new CancellationTokenSource();
+        await foreach (int tick in mylo.Ticks.WithCancellation(cts.Token))
+        {
+            seen.Add(tick);
+            cts.Cancel();
+        }
+
+        Assert.Equal(4, seen[^1]);
+    }
+
+    /// <summary>
+    /// The method half: a plain <c>Flow&lt;String&gt;</c> returned by a function the arm declares,
+    /// which is the half named <c>SKIPPED_UNSUPPORTED_COMBINATION</c> today. <c>String</c> in and
+    /// out, so the UTF8 pair rides the collect protocol on the parameter and on the element at once,
+    /// and a plain <c>Flow</c> completes on its own, so no cancellation is needed to bound it.
+    /// </summary>
+    [Fact]
+    public async Task Labels_OnASealedArm_Collects()
+    {
+        using var factory = new JobFactory();
+        await using Job.Watching mylo = factory.Watching("Mylo");
+
+        var labels = new List<string>();
+        await foreach (string label in mylo.Labels("windowsill:"))
+        {
+            labels.Add(label);
+        }
+
+        Assert.Equal(["windowsill:Mylo"], labels);
+    }
+
+    /// <summary>
+    /// The second arm of the <c>Flow</c> overload pair, asserted on its <em>values</em> rather than
+    /// on its presence. Every emission here is unreachable from the one-parameter body, so if the
+    /// <c>_2</c> suffix lands on the <c>[DllImport]</c> EntryPoint but not on
+    /// <c>CirMethod.nativeName</c>, the two-parameter body resolves by arity to the first overload's
+    /// extern, compiles, runs, and yields the single <c>"tick:Mylo"</c> instead.
+    /// </summary>
+    [Fact]
+    public async Task Labels_SecondOverloadOnAnArm_ReturnsItsOwnEmissions()
+    {
+        using var factory = new JobFactory();
+        await using Job.Watching mylo = factory.Watching("Mylo");
+
+        var labels = new List<string>();
+        await foreach (string label in mylo.Labels("tick", 3))
+        {
+            labels.Add(label);
+        }
+
+        Assert.Equal(["tick#0", "tick#1", "tick#2"], labels);
+    }
+
+    /// <summary>
+    /// A <em>flow-only</em> arm takes the same async lifetime shape a suspending arm does: the
+    /// collect protocol needs a scope of the arm's own, so <c>Watching</c> gains
+    /// <c>IAsyncDisposable</c> and a <c>DisposeAsync</c> that drains it, exactly as an ordinary
+    /// class whose only async member is a flow already does. <c>Done</c>, with neither a suspend nor
+    /// a flow member, stays the arm without a scope, which is what keeps the interface off the
+    /// sealed base.
+    /// </summary>
+    [Fact]
+    public void Watching_IsAsyncDisposable_AndDoneIsNot()
+    {
+        Assert.True(typeof(IAsyncDisposable).IsAssignableFrom(typeof(Job.Watching)));
+        Assert.False(typeof(IAsyncDisposable).IsAssignableFrom(typeof(Job.Done)));
+    }
+
+    /// <summary>
+    /// Coexistence: <c>Running</c> already carries suspend members, and a flow member on the same
+    /// arm has to share their scope rather than emit a second one. Both routes in one receiver, so a
+    /// duplicated <c>_scopeHandle</c> or a second <c>DisposeAsync</c> would fail the generated
+    /// compile long before this asserts, and a scope wired to the wrong field fails it here.
+    /// </summary>
+    [Fact]
+    public async Task Beats_OnASuspendingArm_Collects()
+    {
+        using var factory = new JobFactory();
+
+        // Oreo, 60% of the way down the hallway, purring at sixty too.
+        await using Job.Running oreo = factory.Running(60);
+
+        Assert.Equal(60, oreo.Beats.Value);
+
+        var seen = new List<int>();
+        var cts = new CancellationTokenSource();
+        await foreach (int beat in oreo.Beats.WithCancellation(cts.Token))
+        {
+            seen.Add(beat);
+            cts.Cancel();
+        }
+
+        Assert.Equal(60, seen[^1]);
+        Assert.Equal(60, await oreo.PauseAsync());
     }
 }
 

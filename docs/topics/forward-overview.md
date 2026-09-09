@@ -483,6 +483,57 @@ module-local marker would be. `@OptIn(InternalApi::class)` on a declaration is a
 not a marker member, and stays exported; `@SubclassOptInRequired` is not itself
 `@RequiresOptIn`-meta-annotated, so it does not match and stays exported either.
 
+### An opt-in-marked parameter *type* takes every arity with it {id="opt-in-marked-parameter-type-every-arity"}
+
+A trailing defaulted parameter whose own *type* is opt-in-marked is a stronger case than a marked
+property or default target: it makes every arity of the constructor or function illegal, not only
+the declared one, so the trailing-omitting overload above cannot repair it either. Kotlin propagates
+the opt-in requirement from a callee's declared parameter types, at every arity, and never from what
+a default expression happens to read, so a `data class` whose sole parameter is a marked-typed
+default reduces to zero callable arities. Every arity is skipped `OPT_IN_MARKER_TYPE` (still rendered
+as `SKIPPED_OPT_IN_MARKER`), and the class ends up factory-only; see [Classes and objects: No public
+constructor](classes-and-objects.md#no-public-constructor).
+
+From `test-library/.../issue128/Issue128Sample.kt`, where `Grooming` is an opt-in-marked enum
+declared one module away in `:test-models`:
+
+```kotlin
+@OptIn(CatteryInternalApi::class)
+data class GroomingPlan(
+  val name: String = "Oreo",
+  val grooming: Grooming = Grooming.DAILY,
+)
+```
+
+```
+[nuget:SKIPPED_OPT_IN_MARKER] Skipping ...GroomingPlan.<init>: its type
+    `...Grooming` is marked with an opt-in marker. no C# type is declared for `...Grooming`
+    (opt-in marker `...CatteryInternalApi`), so every member typed with it is skipped rather than
+    emitted as a dangling reference; remove the marker from `...Grooming`, or expose a type that is
+    not opt-in-required instead
+
+[nuget:WARNING_NO_PUBLIC_CONSTRUCTOR] Keeping GroomingPlan: every public constructor is skipped
+    (<init>: OPT_IN_MARKER_TYPE, <init>_2: OPT_IN_MARKER_TYPE, <init>_3: OPT_IN_MARKER_TYPE), so the
+    generated C# class has only its internal handle constructor and C# cannot construct one.
+```
+
+`GroomingPlan` still generates, keeps `Name`, and carries only its internal handle constructor:
+
+```C#
+public class GroomingPlan : IDisposable, INugetHandle
+{
+    internal IntPtr _handle;
+
+    internal GroomingPlan(IntPtr handle)
+    {
+        _handle = handle;
+    }
+```
+
+The same check applies to a function's trailing defaulted parameters, not only constructors: a
+top-level `fun schedule(name: String = "Oreo", grooming: Grooming = Grooming.DAILY)` synthesizes no
+omitting overload either, and `schedule` is absent from the generated C# at every arity.
+
 ### A class with no reachable constructor stays, and says so {id="no-reachable-constructor"}
 
 A class whose every public constructor is skipped, for any reason, still generates a C# type,
@@ -592,6 +643,29 @@ remedy, not a fix for it. See the
 [open backlog item](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/backlog/two-exported-types-same-simple-name-different.md)
 for the structural fix (qualifying the export prefix by package) that would close the collision
 itself rather than only naming it.
+
+### A nullable parameter names itself, instead of the return {id="nullable-parameter-names-itself"}
+
+A callable dropped because one of its *parameters* is a nullable type with no wire used to render
+as `SKIPPED_UNSUPPORTED_RETURN`, the same kind a nullable **return** with nowhere to put the absence
+gets, and the hint said "at this position" without saying which one. An author reading that message
+went looking at the return type, which was perfectly exportable, before finding the actual problem
+was a parameter. [ADR-064](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/064-forward-unsupported-declaration-diagnostics.md)'s
+2026-09-09 amendment (issue [#131](https://github.com/xxfast/kotlin-native-nuget/issues/131)) gives
+the skip its own position: an input-position `NULLABLE` now renders `SKIPPED_UNSUPPORTED_INPUT` and
+names the parameter, a return-position one keeps `SKIPPED_UNSUPPORTED_RETURN` and its unnamed hint
+(there is no `BridgeType`-to-Kotlin-spelling renderer to name a return's type):
+
+```
+[nuget:SKIPPED_UNSUPPORTED_INPUT] Skipping io.github.xxfast.kotlin.native.nuget.test.issue131.hubWithEvents: its parameter `events` has a nullable type with no supported wire. the nullable parameter `events` has no wire at an input position; expose a non-nullable wrapper, or a separate has-value/value pair, instead
+    at .../issue131/HubSample.kt:47
+```
+
+An extension receiver counts as an input position too, unnamed, since it has no author-written
+parameter name. A nullable exported class handle at a parameter position was never actually
+unsupported, on any route (`null` rides `IntPtr.Zero`); see
+[Classes and objects: A nullable class handle parameter](classes-and-objects.md#nullable-handle-parameter)
+for the shape that does bind.
 
 ### Where these messages appear
 

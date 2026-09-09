@@ -573,10 +573,15 @@ The StateFlow variant is not optional under line 54's wording ("`asyncMembers` a
   only a class with suspend members declares `IAsyncDisposable`), surfaced here at the base/arm
   seam. Alternative 2 (scope on the base) was rejected precisely because putting
   `IAsyncDisposable` on the base would advertise `DisposeAsync` on arms that never suspend.
-- Sealed interfaces (ADR-112): to be completed by the implementer per instruction 3 above; the
-  sentence to land here is either "an eligible sealed interface's arms get `suspend` members for
-  free through the same `sealedClasses` list" or "they stay `SEALED_SUBCLASS_UNROUTED`, ROADMAP
-  line added".
+- Sealed interfaces (ADR-112): **an eligible sealed interface's arms get `suspend` members for free
+  through the same `sealedClasses` list.** `rootSealedClasses` filters `isEligibleSealedType()`,
+  which is `isSealed && (classKind == CLASS || isEligibleSealedInterface())`
+  (`ForwardClassMembership.kt:70-76`), so an eligible sealed interface is in the very list the new
+  Kotlin export loop, both widened gates, the refused-parameter walk and `translateSealedClass`
+  iterate; an *ineligible* one stays on the ADR-040 interface route, where it was before. No ROADMAP
+  line. Answered in the implementation notes below and re-confirmed by
+  [ADR-124](124-flow-route-sealed-arm-owners.md), which asked the same question of the flow route
+  and pinned it with a Tier 1 cell.
 - Pre-existing, noticed, **not fixed** here, each a ROADMAP candidate with its file:line (all
   **Inferred** from reading unless marked):
   1. Async members ride `companionMembers` and bypass `emitCsharpSignatureCollisions`

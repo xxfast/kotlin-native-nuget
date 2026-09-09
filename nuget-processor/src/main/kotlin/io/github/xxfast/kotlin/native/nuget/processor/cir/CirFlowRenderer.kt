@@ -69,17 +69,24 @@ internal fun StringBuilder.renderFlowHelper(helper: CirFlowHelper) {
     appendFlowThunk("NugetFlowOnComplete", "(IntPtr userData)", "OnComplete")
     appendFlowThunk("NugetFlowOnError", "(IntPtr errorPtr, IntPtr userData)", "OnError")
   }
+  // ADR-123: `read` is how a *collection* element crosses. These two types are shared by every
+  // flow member in the file, so an element that `NugetMarshal.FromHandle<T>` cannot materialise
+  // (it has no collection branch) supplies its own per-member materialiser instead. Trailing,
+  // optional and on an `internal` constructor, so every shipped member's generated text is
+  // byte-identical and no consumer-visible surface moves.
   appendLine("    public class KotlinFlow<T> : IAsyncEnumerable<T>")
   appendLine("    {")
   appendLine("        private readonly NugetFlowCollectDelegate _startCollect;")
+  appendLine("        internal readonly Func<IntPtr, T> _read;")
   appendLine()
-  appendLine("        internal KotlinFlow(NugetFlowCollectDelegate startCollect)")
+  appendLine("        internal KotlinFlow(NugetFlowCollectDelegate startCollect, Func<IntPtr, T>? read = null)")
   appendLine("        {")
   appendLine("            _startCollect = startCollect;")
+  appendLine("            _read = read ?? NugetMarshal.FromHandle<T>;")
   appendLine("        }")
   appendLine()
   appendLine("        public IAsyncEnumerator<T> GetAsyncEnumerator(CancellationToken cancellationToken = default)")
-  appendLine("            => new KotlinFlowEnumerator<T>(_startCollect, cancellationToken);")
+  appendLine("            => new KotlinFlowEnumerator<T>(_startCollect, cancellationToken, _read);")
   appendLine("    }")
   appendLine()
   appendLine("    internal class KotlinFlowEnumerator<T> : IAsyncEnumerator<T>")
@@ -89,11 +96,13 @@ internal fun StringBuilder.renderFlowHelper(helper: CirFlowHelper) {
   appendLine("        private IntPtr _jobHandle;")
   appendLine("        private NugetFlowCallbacks? _callbacks;")
   appendLine("        private bool _done;")
+  appendLine("        private readonly Func<IntPtr, T> _read;")
   appendLine()
   appendLine("        public T Current { get; private set; } = default!;")
   appendLine()
-  appendLine("        internal KotlinFlowEnumerator(NugetFlowCollectDelegate startCollect, CancellationToken cancellationToken)")
+  appendLine("        internal KotlinFlowEnumerator(NugetFlowCollectDelegate startCollect, CancellationToken cancellationToken, Func<IntPtr, T>? read = null)")
   appendLine("        {")
+  appendLine("            _read = read ?? NugetMarshal.FromHandle<T>;")
   appendLine("            _channel = Channel.CreateUnbounded<T>(new UnboundedChannelOptions { SingleReader = true, SingleWriter = true });")
   appendLine()
   appendLine("            var callbacks = new NugetFlowCallbacks();")
@@ -105,7 +114,7 @@ internal fun StringBuilder.renderFlowHelper(helper: CirFlowHelper) {
     "                if (isCancelled != 0) { _channel.Writer.TryComplete(); " +
         "callbacks.Release(); return; }"
   )
-  appendLine("                T value = NugetMarshal.FromHandle<T>(itemPtr);")
+  appendLine("                T value = _read(itemPtr);")
   appendLine("                _channel.Writer.TryWrite(value);")
   appendLine("            };")
   appendLine()
@@ -203,14 +212,14 @@ internal fun StringBuilder.renderFlowHelper(helper: CirFlowHelper) {
     appendLine("        private readonly Func<IntPtr> _readValue;")
     appendLine("        private IntPtr _ownedHandle;")
     appendLine()
-    appendLine("        internal KotlinStateFlow(NugetFlowCollectDelegate startCollect, Func<IntPtr> readValue, IntPtr ownedHandle = default)")
-    appendLine("            : base(startCollect)")
+    appendLine("        internal KotlinStateFlow(NugetFlowCollectDelegate startCollect, Func<IntPtr> readValue, IntPtr ownedHandle = default, Func<IntPtr, T>? read = null)")
+    appendLine("            : base(startCollect, read)")
     appendLine("        {")
     appendLine("            _readValue = readValue;")
     appendLine("            _ownedHandle = ownedHandle;")
     appendLine("        }")
     appendLine()
-    appendLine("        public T Value => NugetMarshal.FromHandle<T>(_readValue());")
+    appendLine("        public T Value => _read(_readValue());")
     appendLine()
     appendLine("        public void Dispose()")
     appendLine("        {")
@@ -285,7 +294,13 @@ internal fun StringBuilder.renderFlowMethod(method: CirMethod, className: String
   appendLine("            return new KotlinFlow<${method.flowElementType}>((onNext, onComplete, onError, userData) =>")
   // ADR-114: the collect delegate runs per subscription, so the wire container is built inside it
   // and disposed the moment the native call returns. Kotlin has already copied it out.
-  appendScopedNativeCall(method, "                ", "$nativeName(${method.body})", ");")
+  // ADR-123: a collection element adds its own materialiser after the delegate; every other
+  // element passes nothing and keeps the shipped single-argument construction.
+  val read: String? = method.flowElementRead
+  appendScopedNativeCall(
+    method, "                ", "$nativeName(${method.body})", if (read == null) ");" else ",",
+  )
+  if (read != null) appendLine("                $read);")
   appendLine("        }")
   appendLine()
 }
@@ -387,7 +402,11 @@ internal fun StringBuilder.renderStateFlowMethod(method: CirMethod, className: S
     appendLine("                    if (error != IntPtr.Zero) throw NugetErrorNative.BuildException(error);")
     appendLine("                });")
   } else {
-    appendValueLambda(method, valueNativeName, valueCallArgs, ");")
+    // ADR-123: `read:` is named, so it skips the optional `ownedHandle` slot only the ADR-068
+    // awaited-suspend variant fills. A non-collection element passes nothing at all.
+    val read: String? = method.flowElementRead
+    appendValueLambda(method, valueNativeName, valueCallArgs, if (read == null) ");" else ",")
+    if (read != null) appendLine("                $read);")
   }
   appendLine("        }")
   appendLine()

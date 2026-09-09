@@ -232,11 +232,31 @@ internal fun qualifiedElementCsType(type: KSType?, context: NugetContext): Strin
   // in its sealed base and so declared as a nested C# class.
   val nestedName: String = classDeclaration.nestedCsName()
   if (context.rootNamespace.isEmpty()) return nestedName
+  val kotlinPackage: String = classDeclaration.packageName.asString()
+  // ADR-123: this is the *user-type* speller. A Kotlin builtin reaching it is a defect at every
+  // call site, because [mapPackageToNamespace] has no notion of a builtin package: it capitalises
+  // `kotlin.collections` into `Kotlin.Collections` and hangs it off the root namespace, naming a
+  // namespace nothing declares (issue #127, CS0234), and it never reads the type's arguments
+  // either. Callers gate first: a collection element goes through `forwardPublicCsharpType()`,
+  // and anything else builtin is refused by name.
+  check(!kotlinPackage.isKotlinBuiltinPackage()) {
+    "Kotlin builtin $kotlinPackage.$nestedName reached the user-type C# speller; it would " +
+        "render global::${context.rootNamespace}.Kotlin..., a namespace nothing declares. " +
+        "Gate the call site on the type's own route first (ADR-123)."
+  }
   val namespace: String = mapPackageToNamespace(
-    classDeclaration.packageName.asString(), context.rootPackage, context.rootNamespace,
+    kotlinPackage, context.rootPackage, context.rootNamespace,
   )
   return "global::$namespace.$nestedName"
 }
+
+/**
+ * `kotlin`, `kotlinx` and everything under them: the packages [mapPackageToNamespace] must never
+ * see, since a root namespace is only ever a *user* package's prefix.
+ */
+private fun String.isKotlinBuiltinPackage(): Boolean =
+  this == "kotlin" || this == "kotlinx" ||
+      startsWith("kotlin.") || startsWith("kotlinx.")
 
 /**
  * ADR-067: threads a nullable *element* (`StateFlow<T?>`) through to the C# type argument. Both

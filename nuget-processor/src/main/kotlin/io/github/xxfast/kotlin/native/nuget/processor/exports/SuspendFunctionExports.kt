@@ -16,8 +16,9 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardExportOwner
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardLegacyParameterShape
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardLegacyReturnShape
 import io.github.xxfast.kotlin.native.nuget.processor.forward.collectionResultProjection
+import io.github.xxfast.kotlin.native.nuget.processor.forward.isLegacyLowered
+import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyPrelude
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyLoweredName
-import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyLoweringStatement
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyParameterShapes
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyRefusedParameter
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyRefusedReturn
@@ -136,7 +137,8 @@ internal fun FileSpec.Builder.addSuspendClassMethodExports(
     method.parameters.forEachIndexed { index, param ->
       val paramName: String = param.name?.asString() ?: "_"
       // ADR-114: a collection crosses as a handle to its boxed wire container.
-      if (paramShapes[index] is ForwardLegacyParameterShape.Marshalled) {
+      // ADR-122: so does a class/object/sealed parameter, as the borrowed handle C# already holds.
+      if (paramShapes[index].isLegacyLowered()) {
         builder.addParameter(paramName, cOpaquePointer)
         return@forEachIndexed
       }
@@ -260,7 +262,7 @@ private fun legacyParamCall(
 ): String = func.parameters
   .mapIndexed { index, param ->
     val name: String = param.name?.asString() ?: "_"
-    if (shapes[index] is ForwardLegacyParameterShape.Marshalled) legacyLoweredName(name) else name
+    if (shapes[index].isLegacyLowered()) legacyLoweredName(name) else name
   }
   .joinToString(", ")
 
@@ -273,10 +275,8 @@ private fun legacyParamPrelude(
   shapes: List<ForwardLegacyParameterShape>,
 ): String = buildString {
   func.parameters.forEachIndexed { index, param ->
-    val shape: ForwardLegacyParameterShape = shapes[index]
-    if (shape is ForwardLegacyParameterShape.Marshalled) {
-      appendLine(legacyLoweringStatement(param.name?.asString() ?: "_", shape.type))
-    }
+    val prelude: String? = shapes[index].legacyPrelude(param.name?.asString() ?: "_")
+    if (prelude != null) appendLine(prelude)
   }
 }
 
@@ -291,7 +291,7 @@ private fun FunSpec.Builder.addLegacySuspendParameters(
 ): FunSpec.Builder {
   func.parameters.forEachIndexed { index, param ->
     val name: String = param.name?.asString() ?: "_"
-    if (shapes[index] is ForwardLegacyParameterShape.Marshalled) {
+    if (shapes[index].isLegacyLowered()) {
       addParameter(name, cOpaquePointer)
       return@forEachIndexed
     }

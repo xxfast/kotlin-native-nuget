@@ -6,6 +6,8 @@ Accepted
 
 > **Amended by [ADR-119](119-collection-returns-on-the-legacy-suspend-route.md) (2026-09-09).** This ADR covered the *parameter* position on the Flow and suspend legacy routes and left returns alone. ADR-119 applies the same classify-then-marshal-or-refuse shape to a `suspend` member's *return* (`ForwardLegacyReturnShape`), reusing this ADR's `legacyDescription()` and helper-gate walk, and names the refusal `SKIPPED_UNSUPPORTED_RETURN`.
 
+> **Amended by [ADR-122](122-handle-parameters-on-the-legacy-routes.md) (2026-09-10).** This ADR classified only *generic* parameters and left every non-generic one `Plain`, which rendered a public `IntPtr` for a class, `object` or sealed type (issue #126). ADR-122 adds a `Handle` arm to `ForwardLegacyParameterShape` and narrows `Plain` to scalars, refusing every other non-generic shape by name.
+
 ## Context
 
 GitHub issue #109, found by consuming `main` @ `6f09100` from a real project:

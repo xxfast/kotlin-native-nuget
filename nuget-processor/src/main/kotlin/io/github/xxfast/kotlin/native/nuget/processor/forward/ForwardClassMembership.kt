@@ -31,12 +31,21 @@ internal fun KSClassDeclaration.declaredSuperClass(): KSClassDeclaration? = supe
  * Only meaningful for a sealed interface; every other declaration answers `null` here and is gated
  * by [isEligibleSealedType] instead.
  *
- * The generated shape is an `abstract class` with nested `sealed` subclasses and one flat
- * `FromHandle` switch, so the hierarchy has to be expressible as exactly that: no type parameters
- * (the sealed route renders none), every subclass nested directly in the interface (that is how
- * `nestedCsName` spells a reference to it), no second superclass (a C# nested subclass can only
- * extend the abstract base) and no sub-interface (the discriminator is a flat `when` over
- * `getSealedSubclasses()`, and a sub-interface has no single C# class to construct).
+ * The generated shape is an `abstract class` with `sealed` subclasses and one flat `FromHandle`
+ * switch, so the hierarchy has to be expressible as exactly that: no type parameters (the sealed
+ * route renders none), no second superclass (a C# arm can only extend the abstract base) and no
+ * sub-interface (the discriminator is a flat `when` over `getSealedSubclasses()`, and a
+ * sub-interface has no single C# class to construct).
+ *
+ * ADR-125 (issue #130): where the arm is *declared* is not one of those constraints. This used to
+ * require every arm nested in the interface, which is a style rule rather than a C# one: discovery
+ * is `getSealedSubclasses()` either way, and `CirSealedRenderer` already outdents a sibling arm to
+ * namespace level (shipped for sealed classes since ADR-009's issue-#54 amendment). Nesting was,
+ * however, implicitly buying the two refusals below, because a nested declaration has exactly one
+ * enclosing declaration and a nested enum is never declared by `rootEnums`:
+ * - an `enum class` arm, which a C# enum cannot be (it admits only an integral base, CS1008), and
+ * - an arm implementing two sealed interfaces, which C# single inheritance cannot express (the
+ *   renderer would outdent one `public sealed class` per base under the same namespace, CS0101).
  */
 internal fun KSClassDeclaration.sealedInterfaceIneligibility(): String? {
   if (!isSealedInterface()) return null
@@ -44,17 +53,33 @@ internal fun KSClassDeclaration.sealedInterfaceIneligibility(): String? {
   getSealedSubclasses().forEach { subclass ->
     val subName: String = subclass.simpleName.asString()
     if (subclass.classKind == ClassKind.INTERFACE) return "subclass `$subName` is an interface"
-    if (subclass.parentDeclaration?.qualifiedName?.asString() != qualifiedName?.asString()) {
-      return "subclass `$subName` is declared outside the sealed interface"
+    if (subclass.classKind == ClassKind.ENUM_CLASS) {
+      return "subclass `$subName` is an enum class, and a C# enum can only extend an integral " +
+          "type (CS1008), never the abstract class an arm is declared as"
     }
     val base: KSClassDeclaration? = subclass.declaredSuperClass()
     if (base != null) {
       val baseName: String = base.qualifiedName?.asString() ?: base.simpleName.asString()
       return "subclass `$subName` extends another class `$baseName`"
     }
+    if (subclass.sealedInterfaceSupertypes() > 1) {
+      return "subclass `$subName` implements more than one sealed interface, and a C# class can " +
+          "extend only one base"
+    }
   }
   return null
 }
+
+/**
+ * How many sealed interfaces this declaration lists as a supertype.
+ *
+ * [isSealedInterface], deliberately, and not [isEligibleSealedInterface]: eligibility is what this
+ * count is being asked for, so two interfaces sharing an arm would ask each other for it forever.
+ */
+private fun KSClassDeclaration.sealedInterfaceSupertypes(): Int = superTypes
+  .map { type -> type.resolve().declaration }
+  .filterIsInstance<KSClassDeclaration>()
+  .count { it.isSealedInterface() }
 
 /** A `sealed interface`, eligible or not. */
 internal fun KSClassDeclaration.isSealedInterface(): Boolean =

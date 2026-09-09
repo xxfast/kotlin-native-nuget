@@ -10,6 +10,7 @@ A Kotlin `class` becomes a C# `class` backed by an opaque `StableRef` handle, im
 | member property (get/set) | property (get/set) | |
 | object-typed property/return | property/return | new wrapper per access, identity not preserved |
 | instance method return (object, `T?`, `List`/`Map`/`Set`, enum, `Char`, `String?`, `Int?`, `Boolean?`, …) | matching C# return type | same cascade as the property getter via the shared plan ([ADR-062](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/062-forward-callable-plan.md)); nullable primitive (including `Boolean?`) is single-call `valueOut`, see Method returns below |
+| nullable exported class *parameter* (`Foo?`), on a constructor, method, extension, or top-level function | nullable handle argument | `null` rides `IntPtr.Zero`, no has-value/value pair needed; see A nullable class handle parameter below ([#131](https://github.com/xxfast/kotlin-native-nuget/issues/131)) |
 | two or more same-named methods | one C# overload set | numbered native export/extern name, unnumbered public name; see Method overloads below ([ADR-090](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/090-ordinary-class-method-overloads.md)) |
 | a method with a trailing run of defaulted parameters | omitting overload per suffix length | same `@JvmOverloads` rule as constructor defaults, see Method default parameters below ([ADR-096](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/096-function-default-parameters.md)) |
 | nested `class`/`object`/`interface`/`enum class` | never declared | skips named (`SKIPPED_NESTED_DECLARATION` on the declaration, `UNDECLARED_CLASS` on a member typed with it), except a companion object and a sealed subclass, which are still declared; see Nested classes and objects below ([ADR-064](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/064-forward-unsupported-declaration-diagnostics.md)) |
@@ -308,6 +309,85 @@ The same cascade applies at the extension-function position; see [Extensions](ex
 Enum, `Char`, and `Map`/`Set` method returns are covered under the shared plan; clinic fixtures
 `Patient.Mood()`, `Patient.Initial()`, `Patient.Scores()`, and `Patient.Labels()` exercise them
 (see [Enums](enums.md), [Primitives and strings](primitives-and-strings.md), [Collections](collections.md)).
+
+## A nullable class handle parameter {id="nullable-handle-parameter"}
+
+A constructor, method, extension, or top-level function parameter typed with a nullable exported
+class (`Foo?`) binds as an ordinary nullable handle argument: `null` rides `IntPtr.Zero`, no
+has-value/value pair needed, since a pointer already has its own null. This was already supported on
+the class-method route (`Patient.attach`); [issue #131](https://github.com/xxfast/kotlin-native-nuget/issues/131)
+pins the constructor and top-level-function routes against the same rule.
+
+From `test-library/src/nativeMain/kotlin/.../issue131/HubSample.kt`:
+
+```kotlin
+class Logger(val tag: String) {
+  fun log(message: String): String = "[$tag] $message"
+}
+
+class Hub(val settings: Settings, val logger: Logger?, val note: String? = null) {
+  fun describe(): String = "${settings.level}/${logger?.tag ?: "none"}/${note ?: "-"}"
+}
+
+fun hub(settings: Settings = Settings(), logger: Logger? = null, note: String? = null): Hub =
+  Hub(settings, logger, note)
+```
+
+### Generated C# {id="nullable-handle-generated-c"}
+
+From `Interop.cs`. The constructor route:
+
+```C#
+public Hub(global::TestLibrary.Issue131.Settings settings, global::TestLibrary.Issue131.Logger? logger, string? note)
+{
+                IntPtr handle = Native_Create(settings._handle, logger?._handle ?? IntPtr.Zero, note, out IntPtr error);
+    if (error != IntPtr.Zero)
+    {
+        throw NugetErrorNative.BuildException(error);
+    }
+    _handle = handle;
+}
+```
+
+The top-level-function route, `logger?._handle ?? IntPtr.Zero` out, `logger?.asStableRef<Logger>()?.get()`
+in on the Kotlin thunk:
+
+```C#
+public static global::TestLibrary.Issue131.Hub Hub(global::TestLibrary.Issue131.Settings settings, global::TestLibrary.Issue131.Logger? logger, string? note)
+{
+    IntPtr nativeResult = Native_Hub(settings._handle, logger?._handle ?? IntPtr.Zero, note, out IntPtr error);
+    if (error != IntPtr.Zero)
+    {
+        throw NugetErrorNative.BuildException(error);
+    }
+    return new global::TestLibrary.Issue131.Hub(nativeResult);
+}
+```
+
+### Using it from C# {id="nullable-handle-using-it-from-c"}
+
+From `IntegrationTests/Issue131Tests.cs`. The handle is borrowed, not consumed: the same `Logger` can
+back several hubs and is still usable afterwards:
+
+```C#
+[Fact]
+public void ANullableHandleArgument_IsBorrowed_NotConsumed()
+{
+    using var settings = new Settings(4);
+    using var logger = new Logger("Oreo");
+
+    using var first = new Hub(settings, logger, null);
+    using Hub second = HubSample.Hub(settings, logger, null);
+
+    Assert.Equal("4/Oreo/-", first.Describe());
+    Assert.Equal("4/Oreo/-", second.Describe());
+    Assert.Equal("[Oreo] still here", logger.Log("still here"));
+}
+```
+
+A nullable *return-shaped* type at a parameter (`Flow<Event>?`) is a different case and stays a
+named skip; see [Publishing Kotlin to C#: A nullable parameter names itself, instead of the
+return](forward-overview.md#nullable-parameter-names-itself).
 
 ## Method overloads
 
@@ -796,8 +876,13 @@ parameter position used to be one of them (named `SEALED_POSITION`, previously t
 An opt-in-marked constructor parameter is another: a marked declaration may never appear in a C#
 signature, so an undefaulted or non-trailing marked primary-constructor `val` drops the whole
 constructor (`copy` alongside it, for a `data class`), naming `OPT_IN_MARKER`. A trailing marked
-parameter with a default is unaffected, since the shorter, already-omitting overload never named it
-in the first place. See
+parameter with a default is unaffected only when the marker sits on the parameter or its property
+and the parameter's *type* is unmarked, since the shorter, already-omitting overload never named it
+in the first place. When the parameter's *type* is itself opt-in-marked, Kotlin propagates the
+requirement to every arity, defaults included, so no arity is callable and the constructor is
+dropped entirely (`OPT_IN_MARKER_TYPE`), same as the undefaulted case. See
+[Publishing Kotlin to C#: An opt-in-marked parameter type takes every arity with it](forward-overview.md#opt-in-marked-parameter-type-every-arity)
+and
 [Publishing Kotlin to C#: Opt-in-marked declarations skip named](forward-overview.md#opt-in-marked-declarations-skip-named).
 
 Not fired for an abstract class (uninstantiable by design) or for the interface-return backing

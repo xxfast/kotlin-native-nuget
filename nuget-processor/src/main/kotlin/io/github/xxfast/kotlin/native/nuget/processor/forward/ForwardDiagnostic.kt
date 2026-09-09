@@ -57,12 +57,14 @@ internal enum class ForwardDiagnosticKind(
    *  express (`Char`, an enum, a handle, a value class, ...) at a position with no bridge. */
   SKIPPED_UNSUPPORTED_TYPE(ForwardDiagnosticSeverity.WARNING),
 
-  /** `Map`/`Set` (and mutable variants) as a method *parameter* — no `CreateMap`/`CreateSet`
-   *  helper exists (ROADMAP line 78). */
+  /** A parameter (or extension receiver) whose type has no input wire: `Map`/`Set` (and mutable
+   *  variants), for which no `CreateMap`/`CreateSet` helper exists (ROADMAP line 78), and, since
+   *  issue #131, a nullable type with no input wire, which used to render as
+   *  [SKIPPED_UNSUPPORTED_RETURN]. */
   SKIPPED_UNSUPPORTED_INPUT(ForwardDiagnosticSeverity.WARNING),
 
-  /** A nullable `Boolean` method *return* — no single-call ABI shape for it (ROADMAP line 79,
-   *  ADR-061 deferred width). */
+  /** A *return* whose type has no return wire, e.g. a nullable one with nowhere to put the
+   *  absence (ROADMAP line 79, ADR-061 deferred width). */
   SKIPPED_UNSUPPORTED_RETURN(ForwardDiagnosticSeverity.WARNING),
 
   /** A property whose classified type the property planner has no getter/setter shape for, or an
@@ -210,8 +212,10 @@ internal enum class ForwardDiagnosticKind(
   SKIPPED_VALUE_CLASS_SECONDARY_CONSTRUCTOR(ForwardDiagnosticSeverity.WARNING),
 
   /** ADR-112: a `sealed interface` whose hierarchy the ADR-009 sealed-class route cannot carry:
-   *  type parameters, a subclass with a second superclass, a sub-interface, or a subclass declared
-   *  outside it. An eligible one is declared as an abstract class with a `FromHandle`
+   *  type parameters, a subclass with a second superclass, or a sub-interface. ADR-125 adds the
+   *  two refusals nesting used to buy implicitly (an `enum class` subclass, and a subclass
+   *  implementing two sealed interfaces) and drops the one it no longer needs (a subclass declared
+   *  beside the interface). An eligible one is declared as an abstract class with a `FromHandle`
    *  discriminator and binds at every position; an ineligible one stays on the interface route as
    *  a bare `I<Name>` that nothing exported can be typed with, so every position it appears at
    *  keeps skipping as [SKIPPED_SEALED_POSITION]. Named once at the declaration, with the
@@ -371,17 +375,24 @@ internal object ForwardDiagnosticSink {
  * for `droppedFromCSharp = true` reasons; a legacy-route deferral (`droppedFromCSharp = false`)
  * never reaches [ForwardCallablePlanCatalog.droppedCallables] and so never calls this.
  *
- * `COLLECTION` and `NULLABLE` are fixed mappings per the ADR Decision table, not a general
- * input/return disambiguation: `COLLECTION` only currently arises from an input-position skip
- * (`Map`/`Set` method parameters — a `List`/`MutableList` element accepts them and every other
- * collection *return* already has a working shape), and `NULLABLE` is asserted at the
- * nullable-Boolean-return site (ADR-061's deferred width). A future reason that is genuinely
- * ambiguous between input and return position would need the planner to carry that distinction
- * explicitly rather than relying on this table.
+ * `COLLECTION` stays a fixed mapping per the ADR Decision table: it only currently arises from an
+ * input-position skip (`Map`/`Set` method parameters; a `List`/`MutableList` element accepts them
+ * and every other collection *return* already has a working shape).
+ *
+ * `NULLABLE` was fixed too, on the assumption that it was only asserted at the
+ * nullable-Boolean-return site (ADR-061's deferred width). Issue #131 showed it is genuinely
+ * ambiguous: a nullable parameter with no wire skipped for the same reason and rendered as
+ * `SKIPPED_UNSUPPORTED_RETURN`, pointing the author at a return type that was fine. So it reads
+ * [position], exactly as this comment used to prescribe. Every other reason ignores it.
  */
-internal fun ForwardPlanSkipReason.toDiagnosticKind(): ForwardDiagnosticKind = when (this) {
+internal fun ForwardPlanSkipReason.toDiagnosticKind(
+  position: ForwardSkipPosition = ForwardSkipPosition.RETURN,
+): ForwardDiagnosticKind = when (this) {
   ForwardPlanSkipReason.COLLECTION -> ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_INPUT
-  ForwardPlanSkipReason.NULLABLE -> ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_RETURN
+  ForwardPlanSkipReason.NULLABLE ->
+    if (position == ForwardSkipPosition.INPUT) ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_INPUT
+    else ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_RETURN
+
   // ADR-116: a `suspend`/`Flow`/generic/callback member of a sealed subclass. The kind's
   // documented meaning — the combination has no working legacy route — is literally the case
   // here: no legacy route is keyed to a sealed subclass at all.
@@ -470,6 +481,9 @@ internal fun ForwardPlanSkipReason.toDiagnosticKind(): ForwardDiagnosticKind = w
  *   [ForwardPlanSkipReason.UNDECLARED_INTERFACE] it carries the undeclared type's qualified name,
  *   including when the enum is a collection component (the only extractor that descends into one).
  *   Ignored by every other reason.
+ * @param parameter issue #131: the offending parameter's name, when the skip is at an input
+ *   position and the input is a named parameter rather than an extension receiver. Read only by
+ *   [ForwardPlanSkipReason.NULLABLE], whose shipped sentence could not say which position failed.
  */
 /** `kotlin`, `kotlin.*` and `kotlinx.*`: packages an export scope can never usefully admit. */
 private fun String.isStdlibPackage(): Boolean =
@@ -478,6 +492,7 @@ private fun String.isStdlibPackage(): Boolean =
 internal fun ForwardPlanSkipReason.diagnosticHint(
   detail: String? = null,
   scope: List<String> = emptyList(),
+  parameter: String? = null,
 ): String = when (this) {
   ForwardPlanSkipReason.UNEXPORTED_DEPENDENCY_TYPE -> {
     val dependencyPackage: String = detail
@@ -555,9 +570,18 @@ internal fun ForwardPlanSkipReason.diagnosticHint(
   // for any nullable spelling with no wire, and the slot carries no detail. It used to say
   // "a nullable Boolean return", which was wrong for every type that is not a Boolean, and every
   // nullable Boolean return binds since ADR-069.
+  //
+  // Issue #131: it can name the offending *parameter* though, which is what the reader needs to
+  // find the type in their own source. Without a name (a return, or an extension receiver) the
+  // shipped sentence is unchanged.
   ForwardPlanSkipReason.NULLABLE ->
-    "expose a non-nullable wrapper, or a separate has-value/value pair, instead of a nullable " +
-        "value at this position"
+    if (parameter != null) {
+      "the nullable parameter `$parameter` has no wire at an input position; expose a " +
+          "non-nullable wrapper, or a separate has-value/value pair, instead"
+    } else {
+      "expose a non-nullable wrapper, or a separate has-value/value pair, instead of a nullable " +
+          "value at this position"
+    }
 
   ForwardPlanSkipReason.UNSUPPORTED_COMBINATION ->
     "expose a non-inline, non-generic wrapper (e.g. a concrete suspend fun returning the " +
@@ -567,7 +591,7 @@ internal fun ForwardPlanSkipReason.diagnosticHint(
   // is wrong here — the shapes are fine, the *route* is missing for this owner kind.
   ForwardPlanSkipReason.SEALED_SUBCLASS_UNROUTED ->
     "move the member onto an ordinary class (which still has the legacy route this member kind " +
-        "needs), or expose an equivalent non-Flow, non-generic member on the sealed " +
+        "needs), or expose an equivalent non-generic member on the sealed " +
         "subclass instead"
 
   // Issue #57: the old hint ("declare the member directly on the value class") was already true
@@ -594,8 +618,8 @@ internal fun ForwardPlanSkipReason.diagnosticHint(
     "sealed type `$sealedName` has no generated discriminator, so C# cannot reconstruct it: only " +
         "an eligible sealed type inside the export scope gets one (ADR-009, ADR-112), and that " +
         "binds at every position (ADR-105); export it from an included package, make every " +
-        "subclass a nested class or object with no other superclass (ADR-112), or accept a " +
-        "concrete subclass"
+        "subclass a class or object (in the sealed type or beside it) with no other superclass " +
+        "and no second sealed interface (ADR-125), or accept a concrete subclass"
   }
 
   // The one shape ADR-035 leaves unconstructible, so the hint names the workaround rather than a

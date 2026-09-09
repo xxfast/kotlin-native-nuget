@@ -183,6 +183,18 @@ internal enum class ForwardPlanSkipReason(val droppedFromCSharp: Boolean) {
   OPT_IN_MARKER_TYPE(droppedFromCSharp = true),
 }
 
+/**
+ * ADR-064's 2026-09-09 amendment (issue #131): which side of the callable a skip is about.
+ *
+ * A reason like [ForwardPlanSkipReason.NULLABLE] genuinely occurs at both positions, so the kind
+ * it renders as cannot be a fixed per-reason mapping: a nullable *parameter* reported
+ * `SKIPPED_UNSUPPORTED_RETURN` and sent the author reading a return type that was never the
+ * problem. Every other reason ignores this and keeps its own named kind.
+ *
+ * An extension receiver counts as [INPUT], unnamed: it is a parameter with no author-written name.
+ */
+internal enum class ForwardSkipPosition { INPUT, RETURN }
+
 internal sealed interface ForwardCallableCatalogEntry {
   val symbol: String
 
@@ -218,6 +230,11 @@ internal sealed interface ForwardCallableCatalogEntry {
     // UNEXPORTED_DEPENDENCY_TYPE`. Carries enough for the diagnostic sink to build the
     // `include("<package>")` hint without re-deriving it from the generic reason enum.
     val detail: String? = null,
+    // Issue #131: the position the skip is about, and (at an input position, when the offending
+    // input is a named parameter rather than an extension receiver) its name. Defaulted to the
+    // return position so the return-side skip sites, which are the majority, stay untouched.
+    val position: ForwardSkipPosition = ForwardSkipPosition.RETURN,
+    val parameter: String? = null,
   ) : ForwardCallableCatalogEntry
 }
 
@@ -914,6 +931,7 @@ internal class ForwardCallablePlanner(
           isOverride = isOverride,
           isVirtual = isVirtual,
           node = method,
+          droppedOptInMarker = droppedOptInMarker(method.parameters, omitted),
         )
       }
     }
@@ -1018,6 +1036,7 @@ internal class ForwardCallablePlanner(
           isOverride = false,
           isVirtual = false,
           node = method,
+          droppedOptInMarker = droppedOptInMarker(method.parameters, omitted),
         )
       }
     }
@@ -1052,7 +1071,11 @@ internal class ForwardCallablePlanner(
             // copied either way, so `overloadSuffix` answers for the arm's overload pair
             // regardless. SUSPEND_CALLBACK_PROTOCOL is deliberately not exempted: no arm route
             // emits it.
-            entry.reason != ForwardPlanSkipReason.SUSPEND
+            entry.reason != ForwardPlanSkipReason.SUSPEND &&
+            // ADR-124: and the same for the legacy Flow/StateFlow route, one issue later. What is
+            // left under this reason is GENERIC, CALLBACK_PROTOCOL and SUSPEND_CALLBACK_PROTOCOL,
+            // none of which any arm route emits.
+            entry.reason != ForwardPlanSkipReason.FLOW_PROTOCOL
       if (!isUnrouted) return@map entry
 
       ForwardCallableCatalogEntry.Skipped(
@@ -1217,6 +1240,11 @@ internal class ForwardCallablePlanner(
     omitted: Int = 0,
   ): ForwardCallableCatalogEntry {
     val cls: KSClassDeclaration? = constructor.parentDeclaration as? KSClassDeclaration
+    // ADR-115 gate (b): `.dropLast(omitted)` is deliberate, not the issue #128 blind spot. An
+    // omitted parameter whose PROPERTY carries the marker while its TYPE does not is legal to
+    // call without (verified: `PropMarked(5)` and `PropMarked()` both compile from a non-opting
+    // file), so the shorter arity is exactly the repair. A marked *type* is caught in `planOrSkip`
+    // through `droppedOptInMarker`, which does see the dropped tail.
     val marked: String? = constructor.parameters
       .dropLast(omitted)
       .firstNotNullOfOrNull { parameter -> parameter.constructorOptInMarker(cls) }
@@ -1238,6 +1266,7 @@ internal class ForwardCallablePlanner(
       origin = ForwardCallableOrigin.CONSTRUCTOR,
       target = owner,
       node = constructor,
+      droppedOptInMarker = droppedOptInMarker(constructor.parameters, omitted),
     )
   }
 
@@ -1410,6 +1439,7 @@ internal class ForwardCallablePlanner(
       target = target,
       member = member,
       node = function,
+      droppedOptInMarker = droppedOptInMarker(function.parameters, omitted),
     )
   }
 
@@ -1442,18 +1472,23 @@ internal class ForwardCallablePlanner(
     // top-level `fun f(shape: Shape): Int?` binds on this two-call route too.
     val declared: List<Pair<String, BridgeType>> =
       parameters.map { (name, type) -> name to type.sealedAsHandle() }
-    val ineligible: BridgeType? = declared.map { it.second }.firstOrNull { type ->
+    // Issue #131: the offending parameter's NAME travels with the skip, so the diagnostic can say
+    // which one failed instead of "at this position".
+    val ineligible: Pair<String, BridgeType>? = declared.firstOrNull { (_, type) ->
       type.inputSkipReason() != null
     }
     if (ineligible != null) {
+      val ineligibleType: BridgeType = ineligible.second
       return ForwardCallableCatalogEntry.Skipped(
-        symbol, requireNotNull(ineligible.inputSkipReason()), node = node,
-        detail = ineligible.optInMarkerDetail()
-          ?: ineligible.actualTypeAliasTargetDetail()
-          ?: ineligible.unexportedDependencyDetail()
-          ?: ineligible.undeclaredTypeDetail()
-          ?: ineligible.sealedTypeDetail()
-          ?: ineligible.collectionComponentDetail(),
+        symbol, requireNotNull(ineligibleType.inputSkipReason()), node = node,
+        detail = ineligibleType.optInMarkerDetail()
+          ?: ineligibleType.actualTypeAliasTargetDetail()
+          ?: ineligibleType.unexportedDependencyDetail()
+          ?: ineligibleType.undeclaredTypeDetail()
+          ?: ineligibleType.sealedTypeDetail()
+          ?: ineligibleType.collectionComponentDetail(),
+        position = ForwardSkipPosition.INPUT,
+        parameter = ineligible.first,
       )
     }
 
@@ -1622,6 +1657,7 @@ internal class ForwardCallablePlanner(
       origin = ForwardCallableOrigin.EXTENSION,
       member = functionName,
       node = function,
+      droppedOptInMarker = droppedOptInMarker(function.parameters, omitted),
     )
   }
 
@@ -1636,6 +1672,25 @@ internal class ForwardCallablePlanner(
     val returnDeclaration: String? = returnType?.resolve()?.declaration?.qualifiedName?.asString()
     return returnDeclaration == "kotlin.Result"
   }
+
+  /**
+   * Issue #128: `"<type>-><marker fqn>"` for the first of an ADR-096 omitting overload's
+   * **dropped** parameters whose TYPE is opt-in-marked, or null.
+   *
+   * A marked parameter type makes EVERY arity of the callable illegal, not just the declared one,
+   * so the omitting overload cannot repair it: Kotlin propagates the requirement from the callee's
+   * declared value-parameter types, never from what the default expression reads (verified against
+   * Kotlin 2.4.10, `Mixed(a = 5)` is rejected exactly like `Mixed(1, Mode.Slow)`).
+   *
+   * Only the opt-in reason is consulted. A dropped parameter of a merely *unsupported* type is the
+   * whole point of the omitting overload and stays supported, and a dropped parameter whose
+   * PROPERTY carries the marker while its type does not is legal to omit (ADR-115 gate (b)).
+   */
+  private fun droppedOptInMarker(parameters: List<KSValueParameter>, omitted: Int): String? =
+    parameters.takeLast(omitted)
+      .firstNotNullOfOrNull { parameter ->
+        classifier.classify(parameter.type.resolve()).optInMarkerDetail()
+      }
 
   private fun planOrSkip(
     symbol: String,
@@ -1653,6 +1708,9 @@ internal class ForwardCallablePlanner(
     isOverride: Boolean = false,
     isVirtual: Boolean = false,
     node: KSNode? = null,
+    // Issue #128: [droppedOptInMarker] for the parameters this entry omits, since [parameters]
+    // above is already truncated and cannot show them.
+    droppedOptInMarker: String? = null,
   ): ForwardCallableCatalogEntry {
     // ADR-115: the author's own signal, checked before any type is looked at -- nothing about the
     // declaration is unsupported, it is simply not part of the exported surface. One check for
@@ -1664,6 +1722,15 @@ internal class ForwardCallablePlanner(
         symbol, ForwardPlanSkipReason.OPT_IN_MARKER, node = node, detail = optInMarker,
       )
     }
+    // Issue #128: the same check for the parameters an ADR-096 omitting overload dropped, which
+    // `parameters` no longer carries. Reuses OPT_IN_MARKER_TYPE, so the kind, the hint and the
+    // `droppedFromCSharp` behaviour are the declared arity's own.
+    if (droppedOptInMarker != null) {
+      return ForwardCallableCatalogEntry.Skipped(
+        symbol, ForwardPlanSkipReason.OPT_IN_MARKER_TYPE, node = node,
+        detail = droppedOptInMarker,
+      )
+    }
     // ADR-105 scope (d): the sealed rewrite is applied to every declared PARAMETER here, once,
     // rather than at each catalog site's `classifier.classify(...)` call, so the plan's public
     // signature, its ABI parameters and its input eligibility check all see the same rewritten
@@ -1671,25 +1738,31 @@ internal class ForwardCallablePlanner(
     // hierarchy itself, which has its own named legacy route.
     val declared: List<Pair<String, BridgeType>> =
       parameters.map { (name, type) -> name to type.sealedAsHandle() }
-    val inputTypes: List<BridgeType> = buildList {
+    // Issue #131: name-carrying, so a skip can name the parameter that failed. The receiver rides
+    // a null name: it is an input too, just not one the author named.
+    val namedInputs: List<Pair<String?, BridgeType>> = buildList {
       when (receiver) {
-        is ForwardReceiver.Value -> add(receiver.type)
-        is ForwardReceiver.Handle -> add(receiver.type)
+        is ForwardReceiver.Value -> add(null to receiver.type)
+        is ForwardReceiver.Handle -> add(null to receiver.type)
         ForwardReceiver.Static -> Unit
       }
-      addAll(declared.map { it.second })
+      addAll(declared)
     }
-    val ineligible: BridgeType? = inputTypes
-      .firstOrNull { type -> type.inputSkipReason() != null }
+    val inputTypes: List<BridgeType> = namedInputs.map { it.second }
+    val ineligible: Pair<String?, BridgeType>? = namedInputs
+      .firstOrNull { (_, type) -> type.inputSkipReason() != null }
     if (ineligible != null) {
+      val ineligibleType: BridgeType = ineligible.second
       return ForwardCallableCatalogEntry.Skipped(
-        symbol, requireNotNull(ineligible.inputSkipReason()), node = node,
-        detail = ineligible.optInMarkerDetail()
-          ?: ineligible.actualTypeAliasTargetDetail()
-          ?: ineligible.unexportedDependencyDetail()
-          ?: ineligible.undeclaredTypeDetail()
-          ?: ineligible.sealedTypeDetail()
-          ?: ineligible.collectionComponentDetail(),
+        symbol, requireNotNull(ineligibleType.inputSkipReason()), node = node,
+        detail = ineligibleType.optInMarkerDetail()
+          ?: ineligibleType.actualTypeAliasTargetDetail()
+          ?: ineligibleType.unexportedDependencyDetail()
+          ?: ineligibleType.undeclaredTypeDetail()
+          ?: ineligibleType.sealedTypeDetail()
+          ?: ineligibleType.collectionComponentDetail(),
+        position = ForwardSkipPosition.INPUT,
+        parameter = ineligible.first,
       )
     }
 

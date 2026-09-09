@@ -114,3 +114,113 @@ sealed interface Mixed {
   /** The subclass with a second superclass. Neither cat claims this one. */
   class Odd : Rhythm(), Mixed
 }
+
+/**
+ * Fixture for the **top-level arm** widening (ADR-125, issue #130): a `sealed interface` whose arms
+ * are declared *beside* it rather than nested inside it. ADR-112 refused this shape with
+ * `SKIPPED_INELIGIBLE_SEALED_INTERFACE` ("subclass `Ping` is declared outside the sealed
+ * interface"), which is a style rule rather than a C# constraint: arm discovery is
+ * `getSealedSubclasses()` on both sealed routes, and `CirSealedRenderer` already re-emits a sibling
+ * arm at namespace level for sealed *classes* ([FlatShape] / [Label] / [Loaf], right here in this
+ * package). Only the eligibility predicate stood in the way.
+ *
+ * After the widening [Transmission] binds exactly as [Pulse] does, with the arms outdented:
+ * `public abstract class Transmission` plus namespace-level `public sealed class Ping :
+ * Transmission` and `public sealed class Silence : Transmission`, one
+ * `Transmission.FromHandle(IntPtr)` discriminator, and no `ITransmission` anywhere in the assembly.
+ *
+ * Deliberately **not** named `Signal`: `TestLibrary.Platform.Signal` (the `expect sealed class` in
+ * the `platform` package) already owns the `signal_get_type` C entry point, and export prefixes are
+ * the simple name lowercased with no package component, so a second `Signal` hierarchy would fail
+ * the ADR-117 forward ABI contract the instant it became eligible.
+ *
+ * The declaration position is the only difference from [Pulse], so the same four seams are carried
+ * once each and any regression separates cleanly from the nested case:
+ * - [Radio.current] is the **`var` property**, both directions through the scalar handle setter,
+ * - [Radio.history] is the read-only **collection component**, `List<Transmission>`, materialising
+ *   each element through the discriminator rather than the declared type,
+ * - [Radio.latest] is the **class-method return**, the ordinary member plan,
+ * - [Radio.heard] is the **parameter**, unwrapped back to a real Kotlin [Transmission] and
+ *   answering with a plain `Int` so the assertion reads the Kotlin side of the wire. Base-typed on
+ *   purpose: a concrete-arm parameter is issue #126's cell, and the two stay independent.
+ *
+ * [Packet] is the cell the issue actually cares about, the **cascade**. `planOrSkip` refuses a
+ * whole callable when any input type is ineligible, and a `data class`'s `copy` is planned from the
+ * same primary-constructor parameters, so one unbindable interface takes out `Packet`'s constructor
+ * and its `Copy` as well as the property. Widening removes the cause; both must come back.
+ *
+ * [Ping] carries one converted member (`label: String`) and one unconverted member (`ms: Int`) on a
+ * single arm, so a fix that opens the arm but not its payload conversion is visible.
+ *
+ * [Tone] is the **new ineligible control**, and it is ineligible for a reason C# can name rather
+ * than a style rule: its arm [Pitch] is an `enum class`, and a C# enum admits only an integral base
+ * (`error CS1008`), so there is no shape for `enum Pitch : Tone`. It sits in this same namespace as
+ * a **declared top-level enum** on purpose. `rootEnums` carries no `!isSealedSubclass()` filter, so
+ * an implementation that drops the nesting check without refusing enum arms declares both
+ * `public enum Pitch` and `public sealed class Pitch : Tone` here and every consumer fails CS0101.
+ * The trap is live, and it fails loudly at `packNuget` rather than silently.
+ *
+ * The cats work the radio. Oreo (black with the white middle) checks in with a short chirp you can
+ * time; Mylo (brown and creamy) is asleep and transmits nothing, which is still a reading.
+ */
+sealed interface Transmission
+
+/**
+ * The payload arm, declared **top level** rather than nested: Oreo checking in, [ms] since the last
+ * chirp and a [label] naming who it was. Two payload kinds on one arm, one converted and one not.
+ */
+data class Ping(val ms: Int, val label: String) : Transmission
+
+/** The payload-free arm, also top level: Mylo, asleep, transmitting nothing at all. */
+data object Silence : Transmission
+
+/**
+ * The cell under test: the same four positions [Monitor] carries for the nested [Pulse], carried
+ * here for the sibling-armed [Transmission].
+ */
+class Radio {
+  /** `var` property position: what the radio is hearing right now. Starts on Mylo. */
+  var current: Transmission = Silence
+
+  /**
+   * Collection-component position, read-only. Fixed order so C# can index it: `0` is Oreo chirping
+   * at 60ms, `1` is Mylo, silent.
+   */
+  val history: List<Transmission> = listOf(Ping(60, "oreo"), Silence)
+
+  /** Class-method return position: whatever [current] holds, discriminated on the way out. */
+  fun latest(): Transmission = current
+
+  /**
+   * Parameter position: the sealed base crosses back as an instance handle and is unwrapped to a
+   * real Kotlin [Transmission]. Returns the interval so the assertion reads the Kotlin side of the
+   * wire; a handle that arrived as a raw pointer cannot answer this.
+   */
+  fun heard(signal: Transmission): Int = when (signal) {
+    is Ping -> signal.ms
+    Silence -> 0
+  }
+}
+
+/**
+ * The cascade cell: a `data class` that merely *holds* the sealed interface. While [Transmission]
+ * is ineligible this loses its constructor, its `copy` and its property together, which is the
+ * twenty missing members issue #130 reports from one refused interface. After ADR-125 all three
+ * bind: `public Packet(Transmission signal)`, `Signal { get; }` and `Copy(Transmission signal)`.
+ */
+data class Packet(val signal: Transmission)
+
+/**
+ * The new ineligible control: a sealed interface whose only arm is an `enum class`. Stays
+ * ineligible after ADR-125, with a diagnostic naming the C# reason (a C# enum admits only an
+ * integral base, `CS1008`) instead of the old style rule. Keeps binding as `ITone`, exactly as
+ * [Mixed] does.
+ */
+sealed interface Tone
+
+/**
+ * The enum arm, declared **top level** in the same namespace so the CS0101 double-declaration trap
+ * is live: this must appear exactly once, as `public enum Pitch`, and never also as a sealed arm
+ * class. Oreo's chirp is [HIGH]; the rumble Mylo makes when moved is [LOW].
+ */
+enum class Pitch : Tone { HIGH, LOW }

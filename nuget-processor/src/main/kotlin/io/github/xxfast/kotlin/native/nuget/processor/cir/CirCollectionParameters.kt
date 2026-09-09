@@ -23,7 +23,13 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyParameterSha
  * method body, so the create/dispose pair is emitted around whichever of those makes the call.
  */
 internal val CirParameter.nativeArgument: String
-  get() = if (collectionCreate != null) "${name}Handle" else name
+  get() = when {
+    // ADR-122: a borrowed handle (`observation._handle`), passed straight through with no
+    // call-scoped allocation, so it deliberately does not reach the create/dispose block below.
+    nativeArgumentExpression != null -> nativeArgumentExpression
+    collectionCreate != null -> "${name}Handle"
+    else -> name
+  }
 
 /** Whether any parameter needs a wire handle built before the native call. */
 internal fun List<CirParameter>.hasCollectionHandles(): Boolean =
@@ -73,16 +79,34 @@ internal fun legacyRouteParameters(
   tracker: CollectionHelperTracker,
 ): List<CirParameter> = parameters.map { param ->
   val name: String = (param.name?.asString() ?: "_").csharpParameterName()
-  val shape: ForwardLegacyParameterShape = classifier.legacyParameterShape(param.type.resolve())
-  if (shape !is ForwardLegacyParameterShape.Marshalled) {
-    val resolved: KSType = param.type.resolve().expandAliases()
-    return@map CirParameter(name, mapParamType(resolved.declaration.simpleName.asString()))
+  when (val shape: ForwardLegacyParameterShape =
+    classifier.legacyParameterShape(param.type.resolve())) {
+    is ForwardLegacyParameterShape.Marshalled -> {
+      tracker.trackCollection(shape.type)
+      CirParameter(
+        name,
+        type = shape.type.forwardPublicCsharpType(),
+        nativeType = "IntPtr",
+        collectionCreate = legacyCollectionCreate(name, shape.type),
+      )
+    }
+
+    // ADR-122: the public type is the mapped C# spelling the return and property routes on this
+    // same class already use, and the native argument is the `internal IntPtr _handle` the wrapper
+    // (or, for a sealed arm, the base it inherits from) already declares. Nothing is allocated
+    // here, so nothing is disposed here either.
+    is ForwardLegacyParameterShape.Handle -> CirParameter(
+      name,
+      type = shape.type.forwardPublicCsharpType(),
+      nativeType = "IntPtr",
+      nativeArgumentExpression = "$name._handle",
+    )
+
+    // A scalar keeps the shipped spelling. A refused parameter never reaches here: both halves
+    // filter its member out first, and `warnRefusedLegacyRouteMembers` names it once.
+    ForwardLegacyParameterShape.Plain, is ForwardLegacyParameterShape.Refused -> {
+      val resolved: KSType = param.type.resolve().expandAliases()
+      CirParameter(name, mapParamType(resolved.declaration.simpleName.asString()))
+    }
   }
-  tracker.trackCollection(shape.type)
-  CirParameter(
-    name,
-    type = shape.type.forwardPublicCsharpType(),
-    nativeType = "IntPtr",
-    collectionCreate = legacyCollectionCreate(name, shape.type),
-  )
 }

@@ -114,9 +114,10 @@ data class CirSealedSubclass(
   val properties: List<CirProperty>,
   /**
    * ADR-116: the arm's own declared member functions, projected from the ADR-062 callable plan the
-   * way an ordinary [CirClass]'s methods are. Empty for an arm that declares none, and for every
-   * member kind still without a route on a sealed subclass (suspend, Flow, generic, callback),
-   * which is named by a `SKIPPED_UNSUPPORTED_COMBINATION` diagnostic instead.
+   * way an ordinary [CirClass]'s methods are. Empty for an arm that declares none. A `suspend`
+   * member rides [asyncMembers] (ADR-118) and a `Flow`-returning one [flowMembers] (ADR-124); a
+   * generic or callback-protocol member has no arm route at all and is named by a
+   * `SKIPPED_UNSUPPORTED_COMBINATION` diagnostic instead.
    */
   val methods: List<CirMethod> = emptyList(),
   /**
@@ -126,11 +127,25 @@ data class CirSealedSubclass(
    */
   val asyncMembers: List<CirMember> = emptyList(),
   /**
-   * ADR-118: set exactly when [asyncMembers] is non-empty, which is what gives the arm its
-   * `_scopeHandle`, `GetOrCreateScope()`, `IAsyncDisposable` and `DisposeAsync`. Deliberately
-   * derived from what actually projected rather than from a `getAllFunctions()` scan the way
-   * [CirClass.hasSuspendMethods] is: a base-declared (`open suspend fun`) or ADR-114 refused
-   * member would otherwise give the arm a scope no method on it ever uses.
+   * ADR-124: the arm's Flow/StateFlow-returning **methods**, projected by the same `flowMembers`
+   * function an ordinary class's `companionMembers` carry -- a [CirDllImport] set and a
+   * `CirMethod(isFlow = true)` per member, which is why they cannot ride [methods] either. The
+   * arm's flow *properties* do ride [properties]: a flow property is a [CirProperty] like any
+   * other, with `isFlow` set.
+   */
+  val flowMembers: List<CirMember> = emptyList(),
+  /**
+   * Whether the arm owns a coroutine scope, which is what gives it its `_scopeHandle`,
+   * `GetOrCreateScope()`, `IAsyncDisposable` and `DisposeAsync`. ADR-118 set it for a suspending
+   * arm; ADR-124 widened it to a flow-bearing one (a flow method or a flow property), because the
+   * collect protocol needs a scope of the arm's own exactly as an `async` body does. The name is
+   * kept: [CirClass.hasSuspendMethods] already carries the same widened meaning, and renaming one
+   * half would make the two disagree.
+   *
+   * Deliberately derived from what actually **projected** rather than from a `getAllFunctions()`
+   * scan: a base-declared (`open suspend fun`) or ADR-114 refused member would otherwise give the
+   * arm a scope no member on it ever uses. One boolean for both routes, so an arm carrying suspend
+   * *and* flow members emits exactly one scope field.
    */
   val hasSuspendMethods: Boolean = false,
   val isDataClass: Boolean = false,
@@ -419,6 +434,11 @@ data class CirMethod(
   // wrapper plus a synchronous `_value` native import (see [stateFlowValueNativeName]).
   val isStateFlow: Boolean = false,
   val flowElementType: String = "",
+  // ADR-123: the `read:` argument a collection element passes to KotlinFlow<T>/KotlinStateFlow<T>,
+  // the per-member `Func<IntPtr, T>` that materialises one emission through `NugetMarshal.ReadList`
+  // and kin. Null leaves the shipped construction untouched, so a non-collection element still
+  // reads through the constructors' default `NugetMarshal.FromHandle<T>`.
+  val flowElementRead: String? = null,
   // The native method name (e.g. "Native_MoodReportValue") of the sibling `_value` DllImport
   // this StateFlow method's companion-member list also carries. Empty unless [isStateFlow].
   val stateFlowValueNativeName: String = "",
@@ -544,6 +564,12 @@ data class CirParameter(
   // renderer emits it immediately before the native call and disposes it in a `finally`; the
   // call passes `<name>Handle` instead of `<name>`. Null for every other parameter shape.
   val collectionCreate: String? = null,
+  // ADR-122: the C# expression this parameter is passed to the native call as, when it is not just
+  // the parameter name (`observation._handle` for a handle parameter on a legacy Flow/suspend
+  // route). Deliberately separate from [collectionCreate]: that one also triggers the
+  // create-then-`finally`-dispose block, which a *borrowed* handle must never get, since the
+  // wrapper the caller holds owns it. Null for every other parameter shape.
+  val nativeArgumentExpression: String? = null,
 )
 
 data class CirConst(

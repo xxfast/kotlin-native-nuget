@@ -12,6 +12,18 @@ import kotlin.test.assertTrue
  * .NET SDK, docs/topics/prerequisites.md), so these assert on [Tier1Result.generatedCSharp] directly: the
  * **structural** assertion mode. The compile-based proof for cells 1/8/9/12 lands later, in
  * `GeneratedBindingsCheck`'s consumer surface (Tier 2), in the commit that fixes each one.
+ *
+ * ## The whole-file invariant (issue #126 / ADR-122)
+ *
+ * `no public member exposes IntPtr` is a different kind of cell from the rest of this class: it
+ * asserts over the *whole* generated file rather than at a named member. **No emitted public
+ * member may have `IntPtr` in its signature**; every `IntPtr` belongs on a `private static extern`
+ * or an `internal` constructor. That is the rule a sealed-arm parameter on the legacy Flow route
+ * broke, and the CS0111 overload collision that made it fail a consumer's build was incidental: a
+ * single non-overloaded `Watch(IntPtr observation)` is equally uncallable and would have shipped
+ * silently. The exceptions are the emitted runtime *support* surface, which is the layer that
+ * turns a pointer into a wrapper; they are enumerated exactly, so a new public `IntPtr` member
+ * anywhere fails and has to be re-listed on purpose.
  */
 class Tier1StructuralInteropCsTest {
 
@@ -414,6 +426,163 @@ class Tier1StructuralInteropCsTest {
     )
   }
 
+
+  private val everyRouteFixture: String = """
+    package tier1.surface
+
+    import kotlinx.coroutines.flow.Flow
+    import kotlinx.coroutines.flow.MutableStateFlow
+    import kotlinx.coroutines.flow.StateFlow
+    import kotlinx.coroutines.flow.flowOf
+
+    enum class Mood { CALM, CROSS }
+
+    @JvmInline
+    value class ChartId(val value: String)
+
+    interface Pet {
+      fun speak(): String
+    }
+
+    sealed class Shape {
+      data class Circle(val radius: Int) : Shape()
+    }
+
+    class Cat(val name: String) : Pet {
+      override fun speak(): String = "meow"
+    }
+
+    class Clinic {
+      // Ordinary route: object, enum, value class, collection at both positions.
+      var resident: Cat = Cat("Oreo")
+      fun admit(cat: Cat): Cat = cat
+      fun rate(mood: Mood): Mood = mood
+      fun chart(id: ChartId): ChartId = id
+      fun tally(names: List<String>): Map<String, Int> = names.associateWith { it.length }
+      fun count(ids: Set<Int>): Int = ids.size
+      fun groups(names: List<String>): List<List<String>> = listOf(names)
+      fun trim(shape: Shape.Circle): Shape = shape
+
+      // Legacy routes: Flow, StateFlow, suspend, each with a handle parameter (issue #126).
+      fun watch(cat: Cat): StateFlow<String> = MutableStateFlow(cat.name)
+      fun stream(shape: Shape.Circle): Flow<Int> = flowOf(shape.radius)
+      suspend fun visit(cat: Cat): String = cat.name
+
+      // Callback routes: a lambda parameter and a stored callback.
+      fun onArrival(handler: (String) -> Unit) = handler("Oreo")
+      var listener: ((String) -> Unit)? = null
+
+      // An interface at both positions.
+      fun adopt(pet: Pet): Pet = pet
+    }
+
+    fun greet(cat: Cat): String = cat.name
+
+    suspend fun page(cat: Cat): String = cat.name
+  """.trimIndent()
+
+  /**
+   * The emitted runtime support members that may take or return `IntPtr`, verbatim. Derived by
+   * running this test once against the whole generated file and reading every hit; kept minimal so
+   * the list is a decision rather than a rubber stamp.
+   */
+  private val allowed: List<String> = listOf(
+    // The pointer-to-wrapper layer itself: `FromHandle` is what a generated call site uses to
+    // rebuild a wrapper from a returned handle, and `Dispose` is the release a call-scoped wire
+    // container goes through (`cir/CirMarshalRenderer.kt`).
+    "public static T FromHandle<T>(IntPtr handle)",
+    "public static void Dispose(IntPtr handle)",
+    // The wire-container writers. They RETURN a handle a generated call site immediately passes to
+    // native and disposes; no caller is expected to hold one.
+    "public static IntPtr WrapString(string value)",
+    "public static IntPtr CreateList<T>(IEnumerable<T> values)",
+    "public static IntPtr CreateSet<T>(IEnumerable<T> values)",
+    "public static IntPtr CreateMap<TKey, TValue>(IEnumerable<KeyValuePair<TKey, TValue>> values)",
+    // ADR-099's nested collection readers, which take the container handle they read.
+    // `ReadMap` is absent on purpose: its declaration wraps onto a second line, so this
+    // line-oriented scan never sees its `IntPtr` at all. Listing it would imply a coverage this
+    // check does not have.
+    "public static List<T> ReadList<T>(IntPtr handle",
+    "public static HashSet<T> ReadSet<T>(IntPtr handle",
+  )
+
+  @Test
+  fun `no public member exposes IntPtr`() {
+    val result = Tier1Harness.run(
+      everyRouteFixture,
+      fileName = "Clinic.kt",
+      processorOptions = mapOf("nuget.rootPackage" to "tier1"),
+      libraries = listOf(Tier1Classpath.kotlinxCoroutinesCore),
+    )
+
+    val offenders: List<String> = result.generatedCSharp.lines()
+      .map(String::trim)
+      .filter { line -> line.startsWith("public ") && line.containsIntPtr() }
+      // A public wrapper constructor forwarding `IntPtr.Zero` to its abstract base declares no
+      // pointer of its own.
+      .filterNot { line -> line.contains(": base(IntPtr.Zero)") }
+      .filterNot { line -> allowed.any(line::startsWith) }
+
+    assertTrue(
+      offenders.isEmpty(),
+      "no emitted public member may expose IntPtr: every one belongs on a private static extern " +
+          "or an internal constructor (issue #126). Offenders: $offenders",
+    )
+  }
+
+  /** `IntPtr` as a whole word, so `IntPtrSomething` or a comment mention does not trip the scan. */
+  private fun String.containsIntPtr(): Boolean = Regex("\\bIntPtr\\b").containsMatchIn(this)
+
+  /**
+   * The second whole-file invariant (issue #127 / ADR-123, requirement 4). A Kotlin builtin must
+   * never be mapped as a user type, so **no generated type name may join the root namespace to a
+   * `kotlin`/`kotlinx` package segment**. `global::Interop.Kotlin.Collections.List` is what
+   * `mapPackageToNamespace` produced for a `StateFlow<List<T>>` element: a namespace nothing
+   * declares, CS0234 in every consumer's build while `packNuget` stayed green.
+   *
+   * The fixture is [everyRouteFixture] plus the two element positions, so the scan pays for every
+   * route rather than for the one the issue happened to report. The generator also carries a
+   * `check` at the speller itself (`cir/CirTypeMapping.kt`), which makes this unrepresentable
+   * rather than merely asserted; this cell is what fails first, and legibly, if a new call site
+   * gates wrongly.
+   */
+  @Test
+  fun `no generated type name mixes the root package with a kotlin package`() {
+    val result = Tier1Harness.run(
+      mapOf(
+        "Clinic.kt" to everyRouteFixture,
+        "Windowsill.kt" to """
+          package tier1.surface.windowsill
+
+          import kotlinx.coroutines.flow.Flow
+          import kotlinx.coroutines.flow.MutableStateFlow
+          import kotlinx.coroutines.flow.StateFlow
+          import kotlinx.coroutines.flow.flowOf
+
+          class Windowsill {
+            val spots: StateFlow<Set<String>> = MutableStateFlow(setOf("sunny"))
+            val naps: Flow<List<Int>> = flowOf(listOf(1))
+            fun seen(after: List<String>): StateFlow<List<String>> = MutableStateFlow(after)
+          }
+        """.trimIndent(),
+      ),
+      processorOptions = mapOf("nuget.rootPackage" to "tier1"),
+      libraries = listOf(Tier1Classpath.kotlinxCoroutinesCore),
+    )
+
+    val offenders: List<String> = ROOT_QUALIFIED_KOTLIN_PACKAGE
+      .findAll(result.generatedCSharp)
+      .map { match -> match.value }
+      .distinct()
+      .toList()
+
+    assertTrue(
+      offenders.isEmpty(),
+      "no emitted type name may run a Kotlin builtin package through the root-package namespace " +
+          "mapping: that names a namespace nothing declares (issue #127). Offenders: $offenders",
+    )
+  }
+
   private companion object {
     /** No nested `<...>` on purpose: a generic type argument has no spelling on these routes at
      *  all, so one appearing here is itself the defect and must not be quietly matched. */
@@ -422,6 +591,12 @@ class Tier1StructuralInteropCsTest {
 
     /** The `KotlinFunc<T1, TResult>` / `KotlinSuspendAction<T1>` declarations themselves. */
     val DECLARATION_TYPE_PARAMETER = Regex("""T([0-9]+|Result)?""")
+
+    /**
+     * Issue #127: the root namespace immediately followed by a capitalised Kotlin package
+     * segment. `Interop` is [Tier1Harness]' root namespace for a `nuget.rootPackage` of `tier1`.
+     */
+    val ROOT_QUALIFIED_KOTLIN_PACKAGE = Regex("""global::Interop\.(Kotlin|Kotlinx)\b""")
 
     val CSHARP_PRIMITIVES: Set<String> = setOf(
       "string", "bool", "char", "object", "void",
