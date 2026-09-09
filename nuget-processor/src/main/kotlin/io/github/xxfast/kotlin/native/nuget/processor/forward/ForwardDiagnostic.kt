@@ -212,8 +212,10 @@ internal enum class ForwardDiagnosticKind(
   SKIPPED_VALUE_CLASS_SECONDARY_CONSTRUCTOR(ForwardDiagnosticSeverity.WARNING),
 
   /** ADR-112: a `sealed interface` whose hierarchy the ADR-009 sealed-class route cannot carry:
-   *  type parameters, a subclass with a second superclass, a sub-interface, or a subclass declared
-   *  outside it. An eligible one is declared as an abstract class with a `FromHandle`
+   *  type parameters, a subclass with a second superclass, or a sub-interface. ADR-125 adds the
+   *  two refusals nesting used to buy implicitly (an `enum class` subclass, and a subclass
+   *  implementing two sealed interfaces) and drops the one it no longer needs (a subclass declared
+   *  beside the interface). An eligible one is declared as an abstract class with a `FromHandle`
    *  discriminator and binds at every position; an ineligible one stays on the interface route as
    *  a bare `I<Name>` that nothing exported can be typed with, so every position it appears at
    *  keeps skipping as [SKIPPED_SEALED_POSITION]. Named once at the declaration, with the
@@ -616,8 +618,8 @@ internal fun ForwardPlanSkipReason.diagnosticHint(
     "sealed type `$sealedName` has no generated discriminator, so C# cannot reconstruct it: only " +
         "an eligible sealed type inside the export scope gets one (ADR-009, ADR-112), and that " +
         "binds at every position (ADR-105); export it from an included package, make every " +
-        "subclass a nested class or object with no other superclass (ADR-112), or accept a " +
-        "concrete subclass"
+        "subclass a class or object (in the sealed type or beside it) with no other superclass " +
+        "and no second sealed interface (ADR-125), or accept a concrete subclass"
   }
 
   // The one shape ADR-035 leaves unconstructible, so the hint names the workaround rather than a

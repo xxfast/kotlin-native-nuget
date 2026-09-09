@@ -314,3 +314,22 @@ subclass `Odd` still also gets `SKIPPED_NESTED_DECLARATION` on top of the new
 `SKIPPED_INELIGIBLE_SEALED_INTERFACE` on `Mixed` itself, two warnings for one hierarchy.
 Suppressing the redundant second warning was out of scope here; see
 [ROADMAP.md](../../ROADMAP.md).
+
+### Amendment (2026-09-10): an arm may be declared beside the interface
+
+The eligibility rule above requires every arm nested in the interface. It no longer does.
+[ADR-125](125-sealed-interface-sibling-arms.md) answers issue #130's question, whether the nesting
+requirement is essential to the reconstruction or incidental to how the arms are discovered, with
+"incidental": discovery is `getSealedSubclasses()` on both sealed routes, `isNested` is only a
+rendering flag, and the renderer's sibling path (`CirSealedRenderer.kt:53-56`) has emitted
+namespace-level arms for sealed classes since ADR-009's own 2026-09-07 amendment.
+
+The nesting test in `sealedInterfaceIneligibility()` is gone. In its place are the two refusals
+nesting was silently providing: an `enum class` arm (a C# enum admits only an integral base,
+CS1008) and an arm implementing more than one sealed interface (C# single inheritance). The
+"subclass `X` is declared outside the sealed interface" reason no longer exists, and both this
+ADR's `SKIPPED_INELIGIBLE_SEALED_INTERFACE` hint and the `SEALED_POSITION` hint stop asking for
+nested subclasses.
+
+The two-warnings note below still stands for the reasons that remain: a nested arm of an interface
+refused for the enum, multi-parent, sub-interface, generic or second-superclass reason.

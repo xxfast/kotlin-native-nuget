@@ -695,6 +695,11 @@ class NugetProcessor(
       .filter { it.getVisibility() == Visibility.PUBLIC }
       .filter { it.classKind == ClassKind.ENUM_CLASS }
       .filter { it.parentDeclaration == null }
+      // ADR-125: the enum half of the same rule, and the reason this bucket used to be the only
+      // one without it. An `enum class` arm is refused by `sealedInterfaceIneligibility()`, so
+      // nothing reaches this filter today; it stays because it is what turns a future widening
+      // mistake into a missing type rather than CS0101 in every consumer's build.
+      .filter { !it.isSealedSubclass() }
 
     val rootInterfaces: List<KSClassDeclaration> = allDeclarations
       .filterIsInstance<KSClassDeclaration>()
@@ -866,8 +871,14 @@ class NugetProcessor(
             declaration = name,
             reason = "sealed interface `$name` is declared as " +
                 "`I${iface.simpleName.asString()}` but cannot be reconstructed in C#: $reason",
-            hint = "make every subclass a nested class or object with no other superclass and no " +
-                "sub-interfaces, or declare it as a sealed class (ADR-112)",
+            // ADR-125: the reason now always names a C# constraint, so the hint names the
+            // constraints too. It used to ask for every subclass to be nested, which is a style
+            // rule the renderer never needed and a breaking change for a library whose subtypes
+            // are public API on other platforms.
+            hint = "every subclass must be a class or object, declared in the interface or " +
+                "beside it, with no other superclass, no sub-interface and no second sealed " +
+                "interface; an enum can never be a subclass (ADR-125). Or declare it as a " +
+                "sealed class",
           )
         },
       logger,
