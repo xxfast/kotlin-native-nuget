@@ -239,36 +239,7 @@ internal fun StringBuilder.renderClass(cls: CirClass) {
 
   for (prop in cls.properties) {
     if (prop.isFlow) {
-      val collectEntryPoint = "${cls.nativePrefix}_get_${prop.nativeName}_collect"
-      appendLine("        [DllImport(\"${cls.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"$collectEntryPoint\")]")
-      appendLine("        private static extern IntPtr Native_Get${prop.name}Collect(IntPtr handle, IntPtr scopeHandle, IntPtr onNext, IntPtr onComplete, IntPtr onError, IntPtr userData);")
-      appendLine()
-      if (prop.isStateFlow) {
-        // ADR-065: synchronous `_value` sibling export -- handle only, no scope/callbacks/errorOut.
-        val valueEntryPoint = "${cls.nativePrefix}_get_${prop.nativeName}_value"
-        appendLine("        [DllImport(\"${cls.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"$valueEntryPoint\")]")
-        appendLine("        private static extern IntPtr Native_Get${prop.name}Value(IntPtr handle);")
-        appendLine()
-        if (prop.isNullableMember) {
-          // ADR-067: nullable member -- sibling `_has_value` presence-probe export.
-          val hasValueEntryPoint = "${cls.nativePrefix}_get_${prop.nativeName}_has_value"
-          appendLine("        [DllImport(\"${cls.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"$hasValueEntryPoint\")]")
-          appendLine("        [return: MarshalAs(UnmanagedType.I1)]")
-          appendLine("        private static extern bool Native_Get${prop.name}HasValue(IntPtr handle);")
-          appendLine()
-        }
-        if (prop.isMutableStateFlow) {
-          // ADR-071: sibling `_set_value` export -- handle + the element's own wire type + a
-          // trailing `out IntPtr error` (the Kotlin setter can throw, MutableStateFlow.value
-          // conflates by Any.equals on the previous value).
-          val setValueEntryPoint = "${cls.nativePrefix}_set_${prop.nativeName}_value"
-          appendLine("        [DllImport(\"${cls.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"$setValueEntryPoint\")]")
-          // ADR-098: a MutableStateFlow<Char> setter slot is a `char` slot like any other.
-          val setValueParam: String = charParameterMarshal(prop.nativeSetterType, "value")
-          appendLine("        private static extern void Native_Set${prop.name}Value(IntPtr handle, $setValueParam, out IntPtr error);")
-          appendLine()
-        }
-      }
+      renderFlowPropertyNativeImports(cls.libraryName, cls.nativePrefix, prop)
       renderProperty(prop)
     } else if (prop.usesLegacyNativeImport()) {
       renderLegacyPropertyNativeImports(cls, prop)
@@ -318,6 +289,53 @@ internal fun StringBuilder.renderClass(cls: CirClass) {
   )
 
   appendLine("    }")
+}
+
+/**
+ * ADR-065/ADR-067/ADR-071's flow-property externs: `_collect`, plus StateFlow's `_value`, the
+ * nullable member's `_has_value` probe and a declared `MutableStateFlow`'s `_set_value` write.
+ *
+ * ADR-124 lifted them out of [renderClass], addressed by the two strings a [CirClass] would have
+ * supplied, so a sealed subclass mints the identical block for a flow property on an arm. Exactly
+ * the lift ADR-111 made for `propertyNativeImports` and ADR-116 for `methodNativeImport`; baked at
+ * the ordinary-class depth, so the sealed caller re-indents the whole block.
+ */
+internal fun StringBuilder.renderFlowPropertyNativeImports(
+  libraryName: String,
+  nativePrefix: String,
+  prop: CirProperty,
+) {
+  require(prop.isFlow) { "Only a Flow/StateFlow property has collect and value native imports" }
+  val collectEntryPoint = "${nativePrefix}_get_${prop.nativeName}_collect"
+  appendLine("        [DllImport(\"$libraryName\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"$collectEntryPoint\")]")
+  appendLine("        private static extern IntPtr Native_Get${prop.name}Collect(IntPtr handle, IntPtr scopeHandle, IntPtr onNext, IntPtr onComplete, IntPtr onError, IntPtr userData);")
+  appendLine()
+  if (prop.isStateFlow) {
+    // ADR-065: synchronous `_value` sibling export -- handle only, no scope/callbacks/errorOut.
+    val valueEntryPoint = "${nativePrefix}_get_${prop.nativeName}_value"
+    appendLine("        [DllImport(\"$libraryName\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"$valueEntryPoint\")]")
+    appendLine("        private static extern IntPtr Native_Get${prop.name}Value(IntPtr handle);")
+    appendLine()
+    if (prop.isNullableMember) {
+      // ADR-067: nullable member -- sibling `_has_value` presence-probe export.
+      val hasValueEntryPoint = "${nativePrefix}_get_${prop.nativeName}_has_value"
+      appendLine("        [DllImport(\"$libraryName\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"$hasValueEntryPoint\")]")
+      appendLine("        [return: MarshalAs(UnmanagedType.I1)]")
+      appendLine("        private static extern bool Native_Get${prop.name}HasValue(IntPtr handle);")
+      appendLine()
+    }
+    if (prop.isMutableStateFlow) {
+      // ADR-071: sibling `_set_value` export -- handle + the element's own wire type + a
+      // trailing `out IntPtr error` (the Kotlin setter can throw, MutableStateFlow.value
+      // conflates by Any.equals on the previous value).
+      val setValueEntryPoint = "${nativePrefix}_set_${prop.nativeName}_value"
+      appendLine("        [DllImport(\"$libraryName\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"$setValueEntryPoint\")]")
+      // ADR-098: a MutableStateFlow<Char> setter slot is a `char` slot like any other.
+      val setValueParam: String = charParameterMarshal(prop.nativeSetterType, "value")
+      appendLine("        private static extern void Native_Set${prop.name}Value(IntPtr handle, $setValueParam, out IntPtr error);")
+      appendLine()
+    }
+  }
 }
 
 private fun StringBuilder.renderLegacyPropertyNativeImports(cls: CirClass, prop: CirProperty) {

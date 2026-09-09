@@ -404,7 +404,7 @@ fun treats(count: Int): Flow<String> = flow {
 }
 ```
 
-Every `Flow<T>`-typed property or return becomes a `KotlinFlow<T> : IAsyncEnumerable<T>`, built from a `collect` entry point plus a per-item callback triple (`onNext`/`onComplete`/`onError`):
+Every `Flow<T>`-typed property or return becomes a `KotlinFlow<T> : IAsyncEnumerable<T>`, built from a `collect` entry point plus a per-item callback triple (`onNext`/`onComplete`/`onError`). A `Flow<T>`/`StateFlow<T>` declared on a sealed subclass binds the same way, off the arm's own export prefix; see [Flow and StateFlow members on a sealed arm](interfaces-abstract-sealed.md#sealed-flow-generated-c).
 
 ```C#
 public KotlinFlow<string> MealAnnouncements

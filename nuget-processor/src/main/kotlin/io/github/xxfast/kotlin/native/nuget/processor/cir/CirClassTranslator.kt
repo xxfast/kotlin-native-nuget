@@ -15,6 +15,8 @@ import com.google.devtools.ksp.symbol.Variance
 import com.google.devtools.ksp.symbol.Visibility
 import io.github.xxfast.kotlin.native.nuget.processor.csharpParameterName
 import io.github.xxfast.kotlin.native.nuget.processor.exports.findInterfaceBridgePairs
+import io.github.xxfast.kotlin.native.nuget.processor.exports.forwardArmFlowMethods
+import io.github.xxfast.kotlin.native.nuget.processor.exports.isForwardFlowType
 import io.github.xxfast.kotlin.native.nuget.processor.exports.findStoredCallbackPairs
 import io.github.xxfast.kotlin.native.nuget.processor.forward.BridgeType
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeTypeClassifier
@@ -305,6 +307,14 @@ internal fun translateClass(
       val csPropName: String = propName.replaceFirstChar { it.uppercase() }
       val qualifiedTypeName: String? = propTypeResolved.declaration.qualifiedName?.asString()
 
+      // ADR-124: the Flow/StateFlow arm is one function now, so `translateSealedClass` projects
+      // the identical property for a sealed arm. It owns its own detection and its own ADR-123
+      // element refusal, and answers null for every other type, so the lambda arms below are
+      // reached exactly as before.
+      if (propTypeResolved.isForwardFlowType()) {
+        return@mapNotNull flowProperty(prop, name, context, classifier, tracker)
+      }
+
       val isLambdaType: Boolean = qualifiedTypeName in LAMBDA_TYPES
       val lambdaArity: Int = if (isLambdaType) propTypeResolved.arguments.size - 1 else -1
       if (isLambdaType) tracker.lambdaArities.add(lambdaArity)
@@ -317,57 +327,7 @@ internal fun translateClass(
         tracker.needsAsync = true
       }
 
-      // ADR-065: StateFlow (and the read-only MutableStateFlow view) is checked BEFORE FLOW_TYPES
-      // -- it is-a Flow, so an isAssignableFrom-style check would make it match the plain-Flow
-      // branch and silently lose `.Value`. Detection is on the exact declared qualifiedName.
-      val isStateFlowType: Boolean = qualifiedTypeName in STATE_FLOW_TYPES
-      val isFlowType: Boolean = !isStateFlowType && qualifiedTypeName in FLOW_TYPES
-      val flowElementTypeResolved: KSType? = if (isFlowType || isStateFlowType) {
-        propTypeResolved.arguments.firstOrNull()?.type?.resolve()
-      } else null
-      // ADR-067: nullable element (`StateFlow<T?>`) and nullable member (`StateFlow<T>?`) are only
-      // threaded for StateFlow; nullable Flow is out of scope (ADR-065 deferred).
-      val isNullableElement: Boolean =
-        isStateFlowType && flowElementTypeResolved?.isMarkedNullable == true
-      val isNullableMember: Boolean = isStateFlowType && propTypeResolved.isMarkedNullable
-      // ADR-071: a genuinely DECLARED MutableStateFlow<T> (not narrowed through .asStateFlow())
-      // gains a settable `.Value` -- gated on the exact declared type, a non-nullable
-      // element/member (both deferred), and a v1-supported element (primitive/String/object).
-      val isMutableStateFlowProperty: Boolean = isStateFlowType &&
-          qualifiedTypeName in MUTABLE_STATE_FLOW_TYPES &&
-          !isNullableElement && !isNullableMember &&
-          isMutableStateFlowElementSupported(flowElementTypeResolved)
-      val isMutableStateFlowObjectElement: Boolean =
-        isMutableStateFlowProperty && isMutableStateFlowElementObject(flowElementTypeResolved)
-      if (isMutableStateFlowProperty) tracker.needsMutableStateFlow = true
-      // ADR-123: a collection element is spelled and read like the ordinary route's collection
-      // result, never through `qualifiedElementCsType` (which runs a Kotlin builtin through the
-      // user-type namespace mapping and drops the type argument, issue #127). A refused element
-      // drops the property on both halves; `NugetProcessor` names it once.
-      if (classifier.legacyRefusedFlowElement(propTypeResolved) != null) return@mapNotNull null
-      val flowElementCollection: BridgeType.Collection? =
-        classifier.legacyFlowElementCollection(propTypeResolved)
-      if (flowElementCollection != null) tracker.trackCollection(flowElementCollection)
-      val flowElementType: String? = when {
-        flowElementCollection != null -> flowElementCollection.forwardPublicCsharpType()
-        // ADR-066: qualified, not by simple name — an admitted dependency-module element type is
-        // not guaranteed to share this class's own namespace.
-        isFlowType || isStateFlowType ->
-          qualifiedElementCsType(flowElementTypeResolved, context, isNullableElement)
-
-        else -> null
-      }
-      val flowElementRead: String? =
-        flowElementCollection?.let { collection -> legacyFlowElementReadArgument(collection) }
-      if (isFlowType || isStateFlowType) {
-        tracker.needsFlow = true
-        tracker.needsAsync = true
-      }
-      if (isStateFlowType) tracker.needsStateFlow = true
-
-      if (!isLambdaType && !isSuspendLambdaType && !isFlowType && !isStateFlowType) {
-        return@mapNotNull null
-      }
+      if (!isLambdaType && !isSuspendLambdaType) return@mapNotNull null
 
       // Issue #111: one type argument C# cannot name (`Flow<Snapshot>`, an unexported dependency
       // type, a nested class) makes the whole property unspellable, so it is skipped named rather
@@ -422,112 +382,25 @@ internal fun translateClass(
       val type: String = when {
         isLambdaType -> lambdaCsType
         isSuspendLambdaType -> suspendLambdaCsType
-        isMutableStateFlowProperty -> "KotlinMutableStateFlow<$flowElementType>"
-        isStateFlowType -> "KotlinStateFlow<$flowElementType>${if (isNullableMember) "?" else ""}"
-        isFlowType -> "KotlinFlow<$flowElementType>"
         else -> error("unreachable specialized property branch")
       }
 
       val getter: String = when {
         isLambdaType -> "new $lambdaCsType(Native_Get_$propName(_handle))"
         isSuspendLambdaType -> "new $suspendLambdaCsType(Native_Get_$propName(_handle))"
-        isStateFlowType -> {
-          // ADR-065: the collect wiring is byte-for-byte the plain-Flow getter above; the only
-          // addition is the second constructor argument, a synchronous `_value` read lambda.
-          // ADR-067: a nullable member additionally probes `_has_value` before constructing.
-          // ADR-071: a settable member additionally passes a third `Action<T>` write lambda,
-          // backed by the sibling `_set_value` export.
-          val collectNativeName = "Native_Get${csPropName}Collect"
-          val valueNativeName = "Native_Get${csPropName}Value"
-          val hasValueNativeName = "Native_Get${csPropName}HasValue"
-          val setValueNativeName = "Native_Set${csPropName}Value"
-          val ctorName: String =
-            if (isMutableStateFlowProperty) "KotlinMutableStateFlow" else "KotlinStateFlow"
-          buildString {
-            appendLine()
-            appendLine("                if (_handle == IntPtr.Zero)")
-            appendLine("                    throw new ObjectDisposedException(nameof(${cls.simpleName.asString()}));")
-            if (isNullableMember) {
-              appendLine("                if (!$hasValueNativeName(_handle))")
-              appendLine("                    return null;")
-            }
-            appendLine("                return new $ctorName<$flowElementType>((onNext, onComplete, onError, userData) =>")
-            appendLine("                    $collectNativeName(_handle, GetOrCreateScope(), onNext, onComplete, onError, userData),")
-            if (isMutableStateFlowProperty) {
-              appendLine("                    () => $valueNativeName(_handle),")
-              val writeReceiver: String = if (isMutableStateFlowObjectElement) "v._handle" else "v"
-              if (isMutableStateFlowObjectElement) {
-                appendLine("                    v =>")
-                appendLine("                    {")
-                appendLine("                        if (v is null) throw new ArgumentNullException(nameof(v));")
-                appendLine("                        $setValueNativeName(_handle, $writeReceiver, out IntPtr error);")
-                appendLine("                        if (error != IntPtr.Zero) throw NugetErrorNative.BuildException(error);")
-                appendLine("                    });")
-              } else {
-                appendLine("                    v =>")
-                appendLine("                    {")
-                appendLine("                        $setValueNativeName(_handle, $writeReceiver, out IntPtr error);")
-                appendLine("                        if (error != IntPtr.Zero) throw NugetErrorNative.BuildException(error);")
-                appendLine("                    });")
-              }
-            } else if (flowElementRead != null) {
-              // ADR-123: `read:` is named, so it skips the ADR-068-only `ownedHandle` slot.
-              appendLine("                    () => $valueNativeName(_handle),")
-              appendLine("                    $flowElementRead);")
-            } else {
-              appendLine("                    () => $valueNativeName(_handle));")
-            }
-            append("            ")
-          }
-        }
-
-        isFlowType -> {
-          val collectNativeName = "Native_Get${csPropName}Collect"
-          buildString {
-            appendLine()
-            appendLine("                if (_handle == IntPtr.Zero)")
-            appendLine("                    throw new ObjectDisposedException(nameof(${cls.simpleName.asString()}));")
-            appendLine("                return new KotlinFlow<$flowElementType>((onNext, onComplete, onError, userData) =>")
-            if (flowElementRead != null) {
-              appendLine("                    $collectNativeName(_handle, GetOrCreateScope(), onNext, onComplete, onError, userData),")
-              appendLine("                    $flowElementRead);")
-            } else {
-              appendLine("                    $collectNativeName(_handle, GetOrCreateScope(), onNext, onComplete, onError, userData));")
-            }
-            append("            ")
-          }
-        }
-
         else -> error("unreachable specialized property getter")
-      }
-
-      // ADR-071: the setter's native (DllImport) parameter type -- the element's own C# wire type
-      // for a primitive/String, else IntPtr for an object handle. Only meaningful when
-      // [isMutableStateFlowProperty]; [nativeSetterType] otherwise stays [nativeReturnType]
-      // (unused, since a read-only StateFlow property has no setter).
-      val mutableStateFlowNativeSetterType: String = when {
-        !isMutableStateFlowProperty -> nativeReturnType
-        isMutableStateFlowObjectElement -> "IntPtr"
-        else -> flowElementType ?: nativeReturnType
       }
 
       CirProperty(
         name = csPropName,
         type = type,
         nativeReturnType = nativeReturnType,
-        nativeSetterType = mutableStateFlowNativeSetterType,
+        nativeSetterType = nativeReturnType,
         nativeName = propName,
         getter = getter,
         setter = null,
         extraNatives = emptyList(),
-        isFlow = isFlowType || isStateFlowType,
-        isStateFlow = isStateFlowType,
-        flowElementType = flowElementType ?: "",
         hasSyncErrorOut = false,
-        isNullableMember = isNullableMember,
-        isMutableStateFlow = isMutableStateFlowProperty,
-        stateFlowSetValueNativeName =
-          if (isMutableStateFlowProperty) "Native_Set${csPropName}Value" else "",
       )
     }.toList()
 
@@ -563,19 +436,6 @@ internal fun translateClass(
     val returnQualified: String? = method.returnType?.resolve()?.expandAliases()
       ?.declaration?.qualifiedName?.asString()
     returnQualified in FLOW_TYPES || returnQualified in STATE_FLOW_TYPES
-  }
-
-  if (flowMethods.isNotEmpty()) {
-    tracker.needsFlow = true
-    tracker.needsAsync = true
-  }
-
-  if (flowMethods.any { method ->
-      method.returnType?.resolve()?.expandAliases()
-        ?.declaration?.qualifiedName?.asString() in STATE_FLOW_TYPES
-    }
-  ) {
-    tracker.needsStateFlow = true
   }
 
   val (lambdaParamMethods, normalMethods) = nonFlowMethods.partition { method ->
@@ -707,7 +567,388 @@ internal fun translateClass(
     context = context,
   )
 
-  val flowMembers: List<CirMember> = flowMethods.flatMap { method ->
+  // ADR-124: the whole flow projection lives in one function now, so a sealed arm gets
+  // byte-identical externs and bodies from the same call.
+  val flowRouteMembers: List<CirMember> = flowMembers(
+    flowMethods = flowMethods,
+    prefix = prefix,
+    libraryName = libraryName,
+    classifier = classifier,
+    tracker = tracker,
+    callableCatalog = callableCatalog,
+    context = context,
+  )
+
+  val companion: KSClassDeclaration? = cls.declarations
+    .filterIsInstance<KSClassDeclaration>()
+    .firstOrNull { it.isCompanionObject }
+
+  val companionMembers: List<CirMember> = if (companion != null) {
+    val companionConsts: List<CirMember> = companion.getAllProperties()
+      .filter { it.getVisibility() == Visibility.PUBLIC }
+      .filter { it.modifiers.contains(Modifier.CONST) }
+      .mapNotNull { translateConstProperty(it) }
+      .toList()
+
+    val companionProperties: List<CirMember> = companion.getAllProperties()
+      .filter { it.getVisibility() == Visibility.PUBLIC }
+      .filter { !it.modifiers.contains(Modifier.CONST) }
+      .flatMap { prop ->
+        val symbol: String = "${cls.qualifiedName?.asString() ?: name}.Companion.${prop.simpleName.asString()}"
+        val planned = callableCatalog.propertyFor(symbol)
+        if (planned != null) {
+          tracker.trackProperty(planned)
+          ForwardCirPropertyProjection.staticProperty(planned, libraryName)
+        } else {
+          emptyList()
+        }
+      }
+      .toList()
+
+    // ADR-095: companion members come off the catalog rather than a per-declaration lookup — with
+    // per-companion overload numbering an unsuffixed symbol binds every namesake to the first
+    // one's plan (see `addCompanionExports` for the Kotlin half).
+    val companionFunctions: List<CirMember> = callableCatalog
+      .companionMethods(cls.qualifiedName?.asString() ?: name)
+      .flatMap { planned ->
+        tracker.trackPlan(planned)
+        ForwardCirPlanProjection.static(planned, libraryName)
+      }
+
+    companionConsts + companionProperties + companionFunctions
+  } else emptyList()
+
+  // C# cannot declare two members of one type whose name and parameter types agree (ADR-034 /
+  // ADR-090, extended to companions by ADR-095). Instance methods and companion statics are
+  // checked *together*: static-ness is not part of a C# signature either.
+  emitCsharpSignatureCollisions(
+    methods = plannedMethods + companionMembers.filterIsInstance<CirMethod>(),
+    container = name,
+    symbol = cls,
+    logger = logger,
+  )
+
+  // Phase 6: route data-class copy() through the shared plan when it is eligible (same symbol
+  // ClassExports.kt checks for the Kotlin half), else keep the legacy hand-rolled route.
+  val copyMethod: CirMethod? = if (isDataClass) {
+    callableCatalog.planFor("${cls.qualifiedName?.asString() ?: name}.copy")
+      ?.let { planned ->
+        tracker.trackPlan(planned)
+        ForwardCirPlanProjection.classMethod(planned, prefix, isOverride = false)
+      }
+  } else null
+
+  return CirClass(
+    name = name,
+    libraryName = libraryName,
+    nativePrefix = prefix,
+    constructor = cirConstructor,
+    secondaryConstructors = secondaryConstructors,
+    properties = properties,
+    methods = methods,
+    copyMethod = copyMethod,
+    callbackMethods = callbackMembers,
+    storedCallbackMethods = storedCallbackMembers,
+    interfaceBridgeMethods = interfaceBridgeMembers,
+    interfaces = interfaces,
+    superClass = superClass,
+    isDataClass = isDataClass,
+    isAbstract = isAbstract,
+    companionMembers = companionMembers + asyncMembers + flowRouteMembers,
+    hasSuspendMethods = cls.getAllFunctions().any { it.modifiers.contains(Modifier.SUSPEND) } ||
+        flowMethods.isNotEmpty() ||
+        cls.getAllProperties().any { prop ->
+          val qualified: String? =
+            prop.type.resolve().expandAliases().declaration.qualifiedName?.asString()
+          qualified in FLOW_TYPES || qualified in STATE_FLOW_TYPES
+        },
+  )
+}
+
+internal fun translateGenericClass(
+  cls: KSClassDeclaration,
+  libraryName: String,
+  logger: KSPLogger,
+): CirGenericClass {
+  val name: String = cls.simpleName.asString()
+  val prefix: String = name.lowercase()
+  val typeParams: List<CirTypeParameter> = cls.typeParameters.map { param ->
+    val bounds: List<String> = param.bounds.toList().mapNotNull { bound ->
+      val resolved = bound.resolve()
+      val qualifiedName: String? = resolved.declaration.qualifiedName?.asString()
+      val simpleName: String = resolved.declaration.simpleName.asString()
+      val isInterface: Boolean = resolved.declaration is KSClassDeclaration &&
+          (resolved.declaration as KSClassDeclaration).classKind ==
+          ClassKind.INTERFACE
+
+      when {
+        qualifiedName == "kotlin.Any" -> null
+        isInterface -> "I$simpleName"
+        else -> simpleName
+      }
+    }
+
+    if (param.variance != Variance.INVARIANT) {
+      ForwardDiagnosticSink.emit(
+        listOf(
+          ForwardDiagnostic(
+            kind = ForwardDiagnosticKind.INFO_DROPPED_VARIANCE,
+            symbol = cls,
+            declaration = "${cls.simpleName.asString()}<${param.name.asString()}>",
+            reason = "variance '${param.variance}' on this generic class type parameter is " +
+                "dropped; C# does not support variance on classes",
+            hint = "the member still binds; declare the parameter invariant if the dropped " +
+                "variance was load-bearing",
+          ),
+        ),
+        logger,
+      )
+    }
+
+    CirTypeParameter(param.name.asString(), bounds)
+  }
+
+  val properties: List<CirProperty> = cls.getAllProperties()
+    .filter { it.getVisibility() == Visibility.PUBLIC }
+    .map { prop ->
+      val propName: String = prop.simpleName.asString()
+      val csPropName: String = propName.replaceFirstChar { it.uppercase() }
+
+      // ADR-083: a nullable property reads back as the null pointer, so surface it as `T?`. C# 9
+      // allows `T?` on an unconstrained type parameter; a value-type instantiation still collapses
+      // it to `default(T)`, which is what the Zero branch of NugetMarshal.FromHandle returns.
+      val isNullable: Boolean = prop.type.resolve().isMarkedNullable
+
+      CirProperty(
+        name = csPropName,
+        type = if (isNullable) "${typeParams.first().name}?" else typeParams.first().name,
+        nativeReturnType = "IntPtr",
+        nativeName = propName,
+        getter = "NugetMarshal.FromHandle<${typeParams.first().name}>(${name}Native.Get_$propName(_handle))",
+        setter = null,
+      )
+    }
+    .toList()
+
+  return CirGenericClass(
+    name = name,
+    typeParameters = typeParams,
+    libraryName = libraryName,
+    nativePrefix = prefix,
+    properties = properties,
+    hasPublicConstructor = true,
+  )
+}
+
+/**
+ * ADR-124: the legacy Flow/StateFlow route's C# **property** half, lifted out of [translateClass]
+ * so a sealed arm projects the identical property under its own name and prefix. Returns null when
+ * the property is not on this route, or when ADR-123 refuses its element (the Kotlin half drops it
+ * on the same rule, and `warnRefusedLegacyRouteMembers` names it once).
+ *
+ * [ownerCsName] is load-bearing, not cosmetic: the getter bakes
+ * `throw new ObjectDisposedException(nameof(...))`, which has to name the **arm** rather than the
+ * sealed base, or the generated C# names a type that is not the receiver.
+ */
+internal fun flowProperty(
+  prop: KSPropertyDeclaration,
+  ownerCsName: String,
+  context: NugetContext,
+  classifier: ForwardBridgeTypeClassifier,
+  tracker: CollectionHelperTracker,
+): CirProperty? {
+  val propName: String = prop.simpleName.asString()
+  val csPropName: String = propName.replaceFirstChar { it.uppercase() }
+  val propTypeResolved: KSType = prop.type.resolve().expandAliases()
+  val qualifiedTypeName: String? = propTypeResolved.declaration.qualifiedName?.asString()
+  // ADR-065: StateFlow (and the read-only MutableStateFlow view) is checked BEFORE FLOW_TYPES
+  // -- it is-a Flow, so an isAssignableFrom-style check would make it match the plain-Flow
+  // branch and silently lose `.Value`. Detection is on the exact declared qualifiedName.
+  val isStateFlowType: Boolean = qualifiedTypeName in STATE_FLOW_TYPES
+  val isFlowType: Boolean = !isStateFlowType && qualifiedTypeName in FLOW_TYPES
+  // Not on this route at all: the caller's other legacy arms (lambda, suspend lambda) own it.
+  if (!isFlowType && !isStateFlowType) return null
+  val flowElementTypeResolved: KSType? = if (isFlowType || isStateFlowType) {
+    propTypeResolved.arguments.firstOrNull()?.type?.resolve()
+  } else null
+  // ADR-067: nullable element (`StateFlow<T?>`) and nullable member (`StateFlow<T>?`) are only
+  // threaded for StateFlow; nullable Flow is out of scope (ADR-065 deferred).
+  val isNullableElement: Boolean =
+    isStateFlowType && flowElementTypeResolved?.isMarkedNullable == true
+  val isNullableMember: Boolean = isStateFlowType && propTypeResolved.isMarkedNullable
+  // ADR-071: a genuinely DECLARED MutableStateFlow<T> (not narrowed through .asStateFlow())
+  // gains a settable `.Value` -- gated on the exact declared type, a non-nullable
+  // element/member (both deferred), and a v1-supported element (primitive/String/object).
+  val isMutableStateFlowProperty: Boolean = isStateFlowType &&
+      qualifiedTypeName in MUTABLE_STATE_FLOW_TYPES &&
+      !isNullableElement && !isNullableMember &&
+      isMutableStateFlowElementSupported(flowElementTypeResolved)
+  val isMutableStateFlowObjectElement: Boolean =
+    isMutableStateFlowProperty && isMutableStateFlowElementObject(flowElementTypeResolved)
+  if (isMutableStateFlowProperty) tracker.needsMutableStateFlow = true
+  // ADR-123: a collection element is spelled and read like the ordinary route's collection
+  // result, never through `qualifiedElementCsType` (which runs a Kotlin builtin through the
+  // user-type namespace mapping and drops the type argument, issue #127). A refused element
+  // drops the property on both halves; `NugetProcessor` names it once.
+  if (classifier.legacyRefusedFlowElement(propTypeResolved) != null) return null
+  val flowElementCollection: BridgeType.Collection? =
+    classifier.legacyFlowElementCollection(propTypeResolved)
+  if (flowElementCollection != null) tracker.trackCollection(flowElementCollection)
+  val flowElementType: String? = when {
+    flowElementCollection != null -> flowElementCollection.forwardPublicCsharpType()
+    // ADR-066: qualified, not by simple name: an admitted dependency-module element type is
+    // not guaranteed to share this class's own namespace.
+    isFlowType || isStateFlowType ->
+      qualifiedElementCsType(flowElementTypeResolved, context, isNullableElement)
+
+    else -> null
+  }
+  val flowElementRead: String? =
+    flowElementCollection?.let { collection -> legacyFlowElementReadArgument(collection) }
+  if (isFlowType || isStateFlowType) {
+    tracker.needsFlow = true
+    tracker.needsAsync = true
+  }
+  if (isStateFlowType) tracker.needsStateFlow = true
+
+  val nativeReturnType: String = "IntPtr"
+  val type: String = when {
+    isMutableStateFlowProperty -> "KotlinMutableStateFlow<$flowElementType>"
+    isStateFlowType -> "KotlinStateFlow<$flowElementType>${if (isNullableMember) "?" else ""}"
+    else -> "KotlinFlow<$flowElementType>"
+  }
+
+  val getter: String = if (isStateFlowType) {
+      // ADR-065: the collect wiring is byte-for-byte the plain-Flow getter above; the only
+      // addition is the second constructor argument, a synchronous `_value` read lambda.
+      // ADR-067: a nullable member additionally probes `_has_value` before constructing.
+      // ADR-071: a settable member additionally passes a third `Action<T>` write lambda,
+      // backed by the sibling `_set_value` export.
+      val collectNativeName = "Native_Get${csPropName}Collect"
+      val valueNativeName = "Native_Get${csPropName}Value"
+      val hasValueNativeName = "Native_Get${csPropName}HasValue"
+      val setValueNativeName = "Native_Set${csPropName}Value"
+      val ctorName: String =
+        if (isMutableStateFlowProperty) "KotlinMutableStateFlow" else "KotlinStateFlow"
+      buildString {
+        appendLine()
+        appendLine("                if (_handle == IntPtr.Zero)")
+        appendLine("                    throw new ObjectDisposedException(nameof($ownerCsName));")
+        if (isNullableMember) {
+          appendLine("                if (!$hasValueNativeName(_handle))")
+          appendLine("                    return null;")
+        }
+        appendLine("                return new $ctorName<$flowElementType>((onNext, onComplete, onError, userData) =>")
+        appendLine("                    $collectNativeName(_handle, GetOrCreateScope(), onNext, onComplete, onError, userData),")
+        if (isMutableStateFlowProperty) {
+          appendLine("                    () => $valueNativeName(_handle),")
+          val writeReceiver: String = if (isMutableStateFlowObjectElement) "v._handle" else "v"
+          if (isMutableStateFlowObjectElement) {
+            appendLine("                    v =>")
+            appendLine("                    {")
+            appendLine("                        if (v is null) throw new ArgumentNullException(nameof(v));")
+            appendLine("                        $setValueNativeName(_handle, $writeReceiver, out IntPtr error);")
+            appendLine("                        if (error != IntPtr.Zero) throw NugetErrorNative.BuildException(error);")
+            appendLine("                    });")
+          } else {
+            appendLine("                    v =>")
+            appendLine("                    {")
+            appendLine("                        $setValueNativeName(_handle, $writeReceiver, out IntPtr error);")
+            appendLine("                        if (error != IntPtr.Zero) throw NugetErrorNative.BuildException(error);")
+            appendLine("                    });")
+          }
+        } else if (flowElementRead != null) {
+          // ADR-123: `read:` is named, so it skips the ADR-068-only `ownedHandle` slot.
+          appendLine("                    () => $valueNativeName(_handle),")
+          appendLine("                    $flowElementRead);")
+        } else {
+          appendLine("                    () => $valueNativeName(_handle));")
+        }
+        append("            ")
+      }
+  } else {
+      val collectNativeName = "Native_Get${csPropName}Collect"
+      buildString {
+        appendLine()
+        appendLine("                if (_handle == IntPtr.Zero)")
+        appendLine("                    throw new ObjectDisposedException(nameof($ownerCsName));")
+        appendLine("                return new KotlinFlow<$flowElementType>((onNext, onComplete, onError, userData) =>")
+        if (flowElementRead != null) {
+          appendLine("                    $collectNativeName(_handle, GetOrCreateScope(), onNext, onComplete, onError, userData),")
+          appendLine("                    $flowElementRead);")
+        } else {
+          appendLine("                    $collectNativeName(_handle, GetOrCreateScope(), onNext, onComplete, onError, userData));")
+        }
+        append("            ")
+      }
+  }
+
+  // ADR-071: the setter's native (DllImport) parameter type -- the element's own C# wire type
+  // for a primitive/String, else IntPtr for an object handle. Only meaningful when
+  // [isMutableStateFlowProperty]; otherwise it stays [nativeReturnType] (unused, since a
+  // read-only StateFlow property has no setter).
+  val mutableStateFlowNativeSetterType: String = when {
+    !isMutableStateFlowProperty -> nativeReturnType
+    isMutableStateFlowObjectElement -> "IntPtr"
+    else -> flowElementType ?: nativeReturnType
+  }
+
+  return CirProperty(
+    name = csPropName,
+    type = type,
+    nativeReturnType = nativeReturnType,
+    nativeSetterType = mutableStateFlowNativeSetterType,
+    nativeName = propName,
+    getter = getter,
+    setter = null,
+    extraNatives = emptyList(),
+    isFlow = true,
+    isStateFlow = isStateFlowType,
+    flowElementType = flowElementType ?: "",
+    hasSyncErrorOut = false,
+    isNullableMember = isNullableMember,
+    isMutableStateFlow = isMutableStateFlowProperty,
+    stateFlowSetValueNativeName =
+      if (isMutableStateFlowProperty) "Native_Set${csPropName}Value" else "",
+  )
+}
+
+
+/**
+ * ADR-124: the legacy Flow/StateFlow route's C# **method** half, lifted out of [translateClass] so
+ * a sealed arm projects the identical pair (a private `[DllImport]` set and a `CirMethod(isFlow =
+ * true)`) under its own export prefix. The two callers differ only in which methods they hand in
+ * and which prefix the externs take.
+ *
+ * The overload number is the planner's ([ForwardCallablePlanCatalog.overloadSuffix]), the same
+ * number the Kotlin `@CName` reads, and it lands on the import's `entryPoint`, the import's `name`
+ * and [CirMethod.nativeName] alike: numbering only the first two lets a second overload's body
+ * bind to the *first* overload's extern whenever the arities agree, which compiles and answers the
+ * wrong values.
+ */
+internal fun flowMembers(
+  flowMethods: List<KSFunctionDeclaration>,
+  prefix: String,
+  libraryName: String,
+  classifier: ForwardBridgeTypeClassifier,
+  tracker: CollectionHelperTracker,
+  callableCatalog: ForwardCallablePlanCatalog,
+  context: NugetContext,
+): List<CirMember> {
+  if (flowMethods.isNotEmpty()) {
+    tracker.needsFlow = true
+    tracker.needsAsync = true
+  }
+
+  if (flowMethods.any { method ->
+      method.returnType?.resolve()?.expandAliases()
+        ?.declaration?.qualifiedName?.asString() in STATE_FLOW_TYPES
+    }
+  ) {
+    tracker.needsStateFlow = true
+  }
+
+  return flowMethods.flatMap { method ->
     val methodName: String = method.simpleName.asString()
     // Issue #97: the overload number the planner assigned, on the C name and the extern stem alike,
     // the same two places the plan projection puts it (ADR-090).
@@ -866,166 +1107,6 @@ internal fun translateClass(
 
     listOf(nativeImport, flowMethod)
   }
-
-  val companion: KSClassDeclaration? = cls.declarations
-    .filterIsInstance<KSClassDeclaration>()
-    .firstOrNull { it.isCompanionObject }
-
-  val companionMembers: List<CirMember> = if (companion != null) {
-    val companionConsts: List<CirMember> = companion.getAllProperties()
-      .filter { it.getVisibility() == Visibility.PUBLIC }
-      .filter { it.modifiers.contains(Modifier.CONST) }
-      .mapNotNull { translateConstProperty(it) }
-      .toList()
-
-    val companionProperties: List<CirMember> = companion.getAllProperties()
-      .filter { it.getVisibility() == Visibility.PUBLIC }
-      .filter { !it.modifiers.contains(Modifier.CONST) }
-      .flatMap { prop ->
-        val symbol: String = "${cls.qualifiedName?.asString() ?: name}.Companion.${prop.simpleName.asString()}"
-        val planned = callableCatalog.propertyFor(symbol)
-        if (planned != null) {
-          tracker.trackProperty(planned)
-          ForwardCirPropertyProjection.staticProperty(planned, libraryName)
-        } else {
-          emptyList()
-        }
-      }
-      .toList()
-
-    // ADR-095: companion members come off the catalog rather than a per-declaration lookup — with
-    // per-companion overload numbering an unsuffixed symbol binds every namesake to the first
-    // one's plan (see `addCompanionExports` for the Kotlin half).
-    val companionFunctions: List<CirMember> = callableCatalog
-      .companionMethods(cls.qualifiedName?.asString() ?: name)
-      .flatMap { planned ->
-        tracker.trackPlan(planned)
-        ForwardCirPlanProjection.static(planned, libraryName)
-      }
-
-    companionConsts + companionProperties + companionFunctions
-  } else emptyList()
-
-  // C# cannot declare two members of one type whose name and parameter types agree (ADR-034 /
-  // ADR-090, extended to companions by ADR-095). Instance methods and companion statics are
-  // checked *together*: static-ness is not part of a C# signature either.
-  emitCsharpSignatureCollisions(
-    methods = plannedMethods + companionMembers.filterIsInstance<CirMethod>(),
-    container = name,
-    symbol = cls,
-    logger = logger,
-  )
-
-  // Phase 6: route data-class copy() through the shared plan when it is eligible (same symbol
-  // ClassExports.kt checks for the Kotlin half), else keep the legacy hand-rolled route.
-  val copyMethod: CirMethod? = if (isDataClass) {
-    callableCatalog.planFor("${cls.qualifiedName?.asString() ?: name}.copy")
-      ?.let { planned ->
-        tracker.trackPlan(planned)
-        ForwardCirPlanProjection.classMethod(planned, prefix, isOverride = false)
-      }
-  } else null
-
-  return CirClass(
-    name = name,
-    libraryName = libraryName,
-    nativePrefix = prefix,
-    constructor = cirConstructor,
-    secondaryConstructors = secondaryConstructors,
-    properties = properties,
-    methods = methods,
-    copyMethod = copyMethod,
-    callbackMethods = callbackMembers,
-    storedCallbackMethods = storedCallbackMembers,
-    interfaceBridgeMethods = interfaceBridgeMembers,
-    interfaces = interfaces,
-    superClass = superClass,
-    isDataClass = isDataClass,
-    isAbstract = isAbstract,
-    companionMembers = companionMembers + asyncMembers + flowMembers,
-    hasSuspendMethods = cls.getAllFunctions().any { it.modifiers.contains(Modifier.SUSPEND) } ||
-        flowMethods.isNotEmpty() ||
-        cls.getAllProperties().any { prop ->
-          val qualified: String? =
-            prop.type.resolve().expandAliases().declaration.qualifiedName?.asString()
-          qualified in FLOW_TYPES || qualified in STATE_FLOW_TYPES
-        },
-  )
-}
-
-internal fun translateGenericClass(
-  cls: KSClassDeclaration,
-  libraryName: String,
-  logger: KSPLogger,
-): CirGenericClass {
-  val name: String = cls.simpleName.asString()
-  val prefix: String = name.lowercase()
-  val typeParams: List<CirTypeParameter> = cls.typeParameters.map { param ->
-    val bounds: List<String> = param.bounds.toList().mapNotNull { bound ->
-      val resolved = bound.resolve()
-      val qualifiedName: String? = resolved.declaration.qualifiedName?.asString()
-      val simpleName: String = resolved.declaration.simpleName.asString()
-      val isInterface: Boolean = resolved.declaration is KSClassDeclaration &&
-          (resolved.declaration as KSClassDeclaration).classKind ==
-          ClassKind.INTERFACE
-
-      when {
-        qualifiedName == "kotlin.Any" -> null
-        isInterface -> "I$simpleName"
-        else -> simpleName
-      }
-    }
-
-    if (param.variance != Variance.INVARIANT) {
-      ForwardDiagnosticSink.emit(
-        listOf(
-          ForwardDiagnostic(
-            kind = ForwardDiagnosticKind.INFO_DROPPED_VARIANCE,
-            symbol = cls,
-            declaration = "${cls.simpleName.asString()}<${param.name.asString()}>",
-            reason = "variance '${param.variance}' on this generic class type parameter is " +
-                "dropped; C# does not support variance on classes",
-            hint = "the member still binds; declare the parameter invariant if the dropped " +
-                "variance was load-bearing",
-          ),
-        ),
-        logger,
-      )
-    }
-
-    CirTypeParameter(param.name.asString(), bounds)
-  }
-
-  val properties: List<CirProperty> = cls.getAllProperties()
-    .filter { it.getVisibility() == Visibility.PUBLIC }
-    .map { prop ->
-      val propName: String = prop.simpleName.asString()
-      val csPropName: String = propName.replaceFirstChar { it.uppercase() }
-
-      // ADR-083: a nullable property reads back as the null pointer, so surface it as `T?`. C# 9
-      // allows `T?` on an unconstrained type parameter; a value-type instantiation still collapses
-      // it to `default(T)`, which is what the Zero branch of NugetMarshal.FromHandle returns.
-      val isNullable: Boolean = prop.type.resolve().isMarkedNullable
-
-      CirProperty(
-        name = csPropName,
-        type = if (isNullable) "${typeParams.first().name}?" else typeParams.first().name,
-        nativeReturnType = "IntPtr",
-        nativeName = propName,
-        getter = "NugetMarshal.FromHandle<${typeParams.first().name}>(${name}Native.Get_$propName(_handle))",
-        setter = null,
-      )
-    }
-    .toList()
-
-  return CirGenericClass(
-    name = name,
-    typeParameters = typeParams,
-    libraryName = libraryName,
-    nativePrefix = prefix,
-    properties = properties,
-    hasPublicConstructor = true,
-  )
 }
 
 /**
@@ -1249,6 +1330,14 @@ internal fun translateSealedClass(
           // marked declaration must reach neither artifact.
           if (prop.isOptInRefused()) return@mapNotNull null
 
+          // ADR-124: the arm's Flow/StateFlow properties, off the same `flowProperty` an ordinary
+          // class calls, so the externs, the element spelling and the getter body are an ordinary
+          // class's. The arm's own C# name goes in, because the getter bakes
+          // `ObjectDisposedException(nameof(...))` and the receiver is the arm.
+          if (prop.type.resolve().expandAliases().isForwardFlowType()) {
+            return@mapNotNull flowProperty(prop, subName, context, classifier, tracker)
+          }
+
           // Residual legacy route: a lambda-typed property, whose Kotlin half is still
           // hand-spelled in `SealedClassExports` too. It swallows the error slot (`out _`) until
           // lambda properties migrate for ordinary classes.
@@ -1334,16 +1423,32 @@ internal fun translateSealedClass(
         context = context,
       )
 
+      // ADR-124: the arm's declared Flow/StateFlow-returning methods, on the same legacy route
+      // under the arm's own export prefix. `forwardArmFlowMethods` is the one selector the Kotlin
+      // export loop and both gates read, so the two halves cannot disagree about the member set.
+      val flowMembers: List<CirMember> = flowMembers(
+        flowMethods = subclass.forwardArmFlowMethods(classifier),
+        prefix = subPrefix,
+        libraryName = libraryName,
+        classifier = classifier,
+        tracker = tracker,
+        callableCatalog = callableCatalog,
+        context = context,
+      )
+
       CirSealedSubclass(
         name = subName,
         nativePrefix = subPrefix,
         properties = properties,
         methods = methods,
         asyncMembers = asyncMembers,
+        flowMembers = flowMembers,
         // Derived from what projected, not from a `getAllFunctions()` scan: a base-declared or
         // ADR-114 refused suspend member would otherwise hand the arm a scope, `IAsyncDisposable`
-        // and `DisposeAsync` with no async method on it to use them.
-        hasSuspendMethods = asyncMembers.isNotEmpty(),
+        // and `DisposeAsync` with no async method on it to use them. ADR-124: a flow member needs
+        // the same scope, so one boolean covers both routes and the arm cannot emit two.
+        hasSuspendMethods = asyncMembers.isNotEmpty() || flowMembers.isNotEmpty() ||
+            properties.any { property -> property.isFlow },
         isDataClass = isDataClass,
         isNested = isNested,
       )

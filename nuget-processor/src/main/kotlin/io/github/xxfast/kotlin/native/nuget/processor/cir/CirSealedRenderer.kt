@@ -82,10 +82,26 @@ private fun sealedSubclassBlock(
   }
 
   for (prop in subclass.properties) {
+    // ADR-124: a flow property's externs are the `_collect` / `_value` / `_has_value` /
+    // `_set_value` block, off the same `renderFlowPropertyNativeImports` an ordinary class calls.
+    // This arm MUST come before the one below: `usesLegacyNativeImport()` is true for a flow
+    // property as well as a lambda one, so without it a flow property fell into the lambda arm and
+    // rendered a `Native_Get_x(IntPtr, out IntPtr)` import that no Kotlin export backs.
+    if (prop.isFlow) {
+      append(
+        buildString {
+          renderFlowPropertyNativeImports(sealed.libraryName, subclass.nativePrefix, prop)
+        }.indentNestedBody(),
+      )
+      renderSealedSubclassProperty(prop)
+      appendLine()
+      continue
+    }
     // ADR-111: the externs come off the same `propertyNativeImports` rule every ordinary class
     // property uses, so the error slot, the `_value` fan-out and `[return: MarshalAs]` on a `bool`
     // are decided in one place. A lambda property keeps its raw legacy import.
     if (prop.usesLegacyNativeImport()) {
+      require(!prop.isFlow) { "A Flow property takes the flow native-import route above" }
       appendLine("            [DllImport(\"${sealed.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"${subclass.nativePrefix}_get_${prop.nativeName}\")]")
       appendLine("            private static extern ${prop.nativeReturnType} Native_Get_${prop.nativeName}(IntPtr handle, out IntPtr error);")
       appendLine()
@@ -120,6 +136,13 @@ private fun sealedSubclassBlock(
   // `async` body -- both baked at the ordinary-class depth, so the whole block takes the same +4
   // re-indent the property and method arms take.
   subclass.asyncMembers.forEach { member ->
+    append(buildString { renderMember(member, subclass.name) }.indentNestedBody())
+  }
+
+  // ADR-124: the arm's Flow/StateFlow-returning methods, dispatched by the same `renderMember` and
+  // re-indented the same way. A flow member's private `[DllImport]` set rides the pair, so nothing
+  // here composes an entry point of its own.
+  subclass.flowMembers.forEach { member ->
     append(buildString { renderMember(member, subclass.name) }.indentNestedBody())
   }
 

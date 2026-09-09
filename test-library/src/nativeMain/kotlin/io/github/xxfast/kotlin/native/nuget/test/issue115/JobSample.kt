@@ -1,6 +1,10 @@
 package io.github.xxfast.kotlin.native.nuget.test.issue115
 
 import io.github.xxfast.kotlin.native.nuget.test.issue54.NestedListenerOwner
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.flow
 
 /**
  * Top-level interface, the ADR-040 binding half of the interface-return pair below. Declared here
@@ -75,8 +79,36 @@ interface JobListener {
  * - [Job.Idle.poke] — a method on a `data object` arm. An object arm is a `KSClassDeclaration` in
  *   `getSealedSubclasses()` like any other and crosses as a handle, so it must take the same
  *   receiver as a `data class` arm rather than becoming a static.
+ * - [Job.Watching.ticks], ADR-124's issue shape: a `StateFlow<Int>` **property getter**
+ *   on an arm. It binds as `KotlinStateFlow<int> Ticks` off `job_watching_get_ticks_collect` /
+ *   `job_watching_get_ticks_value`, where today the property half is dropped with no diagnostic at
+ *   all (`recordDropped` returns early for a legacy-routed protocol, on the assumption a named
+ *   legacy route re-emits it, which is false for an arm). The getter hands back a
+ *   `MutableStateFlow` the arm holds, so `.Value` and a bounded collect read the same storage and
+ *   have to agree.
+ * - [Job.Watching.labels], a plain `Flow<String>` at a **method** return on an arm, the half that
+ *   is named `SKIPPED_UNSUPPORTED_COMBINATION` today. `String` in and out, so the UTF8 pair rides
+ *   the collect protocol on a parameter and on the element at once.
+ * - [Job.Watching.labels] again, taking `times`: a **Flow overload pair on an arm**. `_2` on the
+ *   entry point and on `CirMethod.nativeName` both. Its emissions (`times` of them, each numbered)
+ *   are unreachable from the one-parameter body, so a suffix that lands on the `[DllImport]`
+ *   EntryPoint but not on the extern stem dispatches to the first overload *silently* and the
+ *   collected values are the only tell.
+ * - [Job.Watching] as a whole, a **flow-only** arm: no `suspend` member, so the scope,
+ *   `IAsyncDisposable` and `DisposeAsync` arrive from the flow route alone, exactly as they do for
+ *   an ordinary class whose only async member is a flow.
+ * - [Job.Running.beats], the **coexistence** cell: a flow member on an arm that already carries
+ *   suspend members. One `_scopeHandle` and one `DisposeAsync`, not two, so the flow arm and the
+ *   ADR-118 suspend arm cannot each emit the scope independently.
  * - [Job.Done] — the control: an arm that declares no functions at all must keep generating
- *   exactly as it does today.
+ *   exactly as it does today, and with neither a suspend nor a flow member it stays the arm
+ *   without a scope, without `IAsyncDisposable`.
+ *
+ * Deliberately absent on the ADR-124 half: a base-declared flow property on [Job] itself (the
+ * all-properties rule comes from ADR-111 and is already fixture-covered for ordinary property
+ * types), a `suspend fun` returning a `Flow` (still a named `SKIPPED_UNSUPPORTED_RETURN` since
+ * ADR-119), a flow on a `sealed interface` arm, a sealed element type (`Flow<Job>`, issue #126 and
+ * #127 territory), and a `MutableStateFlow` write on an arm.
  *
  * Deliberately absent: a lambda-parameter cell (`fun watch(onTick: (Int) -> Unit)`). It stays a
  * `SEALED_SUBCLASS_UNROUTED` row of the sealed post-process table — the half of ROADMAP line 39
@@ -148,6 +180,49 @@ sealed class Job {
 
     /** `String` in and out across the async result protocol. */
     suspend fun resume(prefix: String): String = "$prefix$progress"
+
+    // Private, so neither the sealed export loop nor the sealed translator sees it: both filter
+    // the arm's properties to PUBLIC, and the arm's C# surface is the read-only `Beats` alone.
+    private val _beats: MutableStateFlow<Int> = MutableStateFlow(progress)
+
+    /**
+     * ADR-124 coexistence: a flow member on an arm that already carries suspend members. The arm
+     * owns exactly one `_scopeHandle` and one `DisposeAsync`, sourced from whichever route asks
+     * first, so a second scope field would not compile and a second `DisposeAsync` would be CS0111.
+     */
+    val beats: StateFlow<Int> get() = _beats
+  }
+
+  /**
+   * ADR-124: Mylo on the windowsill, watching. A **flow-only** arm, so the scope,
+   * `IAsyncDisposable` and `DisposeAsync` all arrive from the flow route rather than from a
+   * `suspend` member. [Job.Done] stays the arm with neither.
+   */
+  data class Watching(val id: String) : Job() {
+    // The storage behind [ticks]. Private, so the arm's public surface is the read-only view.
+    private val _ticks: MutableStateFlow<Int> = MutableStateFlow(id.length)
+
+    /**
+     * The issue's own shape: a `StateFlow<Int>` **property getter** on an arm, silently dropped
+     * today. Backed by storage the arm holds rather than a fresh `MutableStateFlow` per get, so a
+     * `.Value` read and a bounded collect observe the same value and a route that reads one
+     * through a different export than the other disagrees.
+     */
+    val ticks: StateFlow<Int> get() = _ticks
+
+    /**
+     * A plain `Flow<String>` at a **method** return: `String` in and out on the collect protocol.
+     */
+    fun labels(prefix: String): Flow<String> = flow { emit("$prefix$id") }
+
+    /**
+     * Second arm of a **Flow overload pair on a sealed arm**: same public C# name `Labels`, `_2` on
+     * the native symbol and on the private extern. Every emission here is unreachable from the
+     * one-parameter body above, so a mis-numbered extern reads as wrong *values*, not as a missing
+     * member.
+     */
+    fun labels(prefix: String, times: Int): Flow<String> =
+      flow { repeat(times) { index -> emit("$prefix#$index") } }
   }
 
   /** Control arm: declares no functions of its own and must keep generating exactly as today. */
@@ -179,6 +254,9 @@ class JobFactory {
 
   /** Nested `data object` arm at a concrete return, the access path `Loaf` already has. */
   fun idle(): Job.Idle = Job.Idle
+
+  /** ADR-124: the flow-only arm, reached the same way [running] reaches the suspending one. */
+  fun watching(id: String): Job.Watching = Job.Watching(id)
 }
 
 /**

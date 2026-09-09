@@ -1,6 +1,7 @@
 using TestLibrary;
 using TestLibrary.Cat;
 using TestLibrary.Clinic;
+using TestLibrary.Issue115;
 using TestLibrary.Issue126;
 using TestLibrary.Issue127;
 using TestLibrary.Issue131;
@@ -316,6 +317,28 @@ public class LiveHandleTests
                 Assert.Equal(3, hub.Items.Value.Count);
             },
             iterations: 200);
+    }
+
+    // Row 8e. Issue #129 / ADR-124: the same flow route as Row 7, with a *sealed arm* as the owner.
+    // The arm mints nothing new (the per-item box, the job handle and the subscription all come
+    // from the same builders), but it owns its scope through the arm's own `_scopeHandle` and
+    // drains it in the arm's `DisposeAsync`, so `await using` is the spelling under test: a scope
+    // created per collect and never drained, or a `DisposeAsync` that disposes the handle without
+    // draining, shows up here as a per-crossing leak and nowhere else.
+    [Fact]
+    public async Task Flow_OnASealedArm_EnumeratedToCompletion_ReturnsToBaseline()
+    {
+        await AssertNoLeakAsync(async () =>
+        {
+            using var factory = new JobFactory();
+            await using Job.Watching mylo = factory.Watching("Mylo");
+            var labels = new List<string>();
+            await foreach (string label in mylo.Labels("tick", 3))
+            {
+                labels.Add(label);
+            }
+            Assert.Equal(3, labels.Count);
+        });
     }
 
     // Row 9. Suspend call completing: the result box is unwrapped and owned by the returned

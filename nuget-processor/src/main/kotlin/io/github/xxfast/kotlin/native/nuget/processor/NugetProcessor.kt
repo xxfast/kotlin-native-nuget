@@ -30,6 +30,11 @@ import io.github.xxfast.kotlin.native.nuget.processor.cir.translate
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addClassExports
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addCompanionExports
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addEnumExports
+import io.github.xxfast.kotlin.native.nuget.processor.exports.addFlowMethodExports
+import io.github.xxfast.kotlin.native.nuget.processor.exports.addFlowPropertyExports
+import io.github.xxfast.kotlin.native.nuget.processor.exports.declaresOrInheritsFlowMember
+import io.github.xxfast.kotlin.native.nuget.processor.exports.forwardArmFlowMethods
+import io.github.xxfast.kotlin.native.nuget.processor.exports.forwardArmFlowProperties
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addFunctionExports
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addGenericClassExports
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addGenericFunctionExports
@@ -392,8 +397,24 @@ internal fun warnRefusedLegacyRouteMembers(
           .filter { method -> method.getVisibility() == Visibility.PUBLIC }
           // Declared-only, as everywhere else on the sealed route.
           .filter { method -> method.parentDeclaration == subclass }
-          .filter { method -> method.modifiers.contains(Modifier.SUSPEND) }
+          // ADR-124: the Flow half of the same route joins the suspend half here. Both are routed
+          // on an arm now, so both halves drop a refused member silently and this walk is the only
+          // thing left that names it.
+          .filter { method -> method.isForwardLegacyAsyncRoute() }
           .forEach { method -> nameRefused(method, "$owner.${method.simpleName.asString()}") }
+        // ADR-124: and the arm's flow *properties*, whose refused element has no
+        // `KSFunctionDeclaration` to hang a return diagnostic on. All-properties, ADR-111's rule.
+        subclass.getAllProperties()
+          .filter { property -> property.getVisibility() == Visibility.PUBLIC }
+          .forEach { property ->
+            val refused: String =
+              classifier.legacyRefusedFlowElement(property.type.resolve()) ?: return@forEach
+            add(
+              refusedFlowProperty(
+                property, "$owner.${property.simpleName.asString()}", refused,
+              ),
+            )
+          }
       }
     }
     suspendFunctions.forEach { func -> nameRefused(func, func.simpleName.asString()) }
@@ -1351,8 +1372,15 @@ class NugetProcessor(
       }
     }
 
+    // ADR-124: an arm's flow surface needs the same coroutines/cinterop imports a class's does.
+    val armsHaveFlowMembers: Boolean = sealedClasses.any { sealed ->
+      sealed.getSealedSubclasses().any { subclass ->
+        subclass.declaresOrInheritsFlowMember(forwardClassifier)
+      }
+    }
+
     val needsFlowImports: Boolean = classesHaveFlowPropertiesForImports ||
-        classesHaveFlowMethodsForImports
+        classesHaveFlowMethodsForImports || armsHaveFlowMembers
 
     // The coroutines opt-in is gated on the SAME condition as the coroutines imports below: every
     // emission that names anything from `kotlinx.coroutines` (suspend functions and suspend
@@ -1479,6 +1507,36 @@ class NugetProcessor(
       }
     }
 
+    // ADR-124: the sealed arm is an owner of the legacy Flow/StateFlow route too, under the same
+    // export prefix its getters and `_dispose` use. Properties are all-properties (ADR-111's
+    // `superClass = null`: the generated C# base is abstract and carries no members, so a
+    // base-declared flow property has to bind on every arm), methods declared-only (ADR-116/118).
+    // Both rules live in `FlowExports`, so this loop, the two gates below and `translateSealedClass`
+    // cannot drift about which members exist.
+    sealedClasses.forEach { sealed ->
+      val sealedPrefix: String = sealed.simpleName.asString().lowercase()
+      sealed.getSealedSubclasses().forEach { subclass ->
+        val subQualifiedName: String = subclass.qualifiedName?.asString() ?: return@forEach
+        val armPrefix: String =
+          "${sealedPrefix}_${subclass.simpleName.asString().lowercase()}"
+        val armFlowProperties: List<KSPropertyDeclaration> =
+          subclass.forwardArmFlowProperties(forwardClassifier)
+        val armFlowMethods: List<KSFunctionDeclaration> =
+          subclass.forwardArmFlowMethods(forwardClassifier)
+        if (armFlowProperties.isEmpty() && armFlowMethods.isEmpty()) return@forEach
+        attributing(subclass) {
+          armFlowProperties.forEach { prop ->
+            builder.addFlowPropertyExports(prop, subQualifiedName, armPrefix, forwardClassifier)
+          }
+          armFlowMethods.forEach { method ->
+            builder.addFlowMethodExports(
+              method, subQualifiedName, armPrefix, forwardClassifier, callableCatalog,
+            )
+          }
+        }
+      }
+    }
+
     properties.forEach { prop ->
       attributing(prop) {
         builder.addImport(prop.packageName.asString(), prop.simpleName.asString())
@@ -1595,10 +1653,23 @@ class NugetProcessor(
           subclass.getAllFunctions()
             .filter { method -> method.getVisibility() == Visibility.PUBLIC }
             .filter { method -> method.parentDeclaration == subclass }
-            .filter { method -> method.modifiers.contains(Modifier.SUSPEND) }
+            // ADR-124: the arm's Flow-returning members joined the suspend ones on this route, and
+            // a `Flow<Set<T>>` element reaches `nuget_set_*` exactly as an ordinary class's does.
+            .filter { method -> method.isForwardLegacyAsyncRoute() }
             .forEach { method ->
               yieldAll(forwardClassifier.legacyCollectionKinds(method.parameters))
               yieldAll(forwardClassifier.legacyReturnCollectionKinds(method))
+              yieldAll(
+                forwardClassifier.legacyFlowElementCollectionKinds(method.returnType?.resolve()),
+              )
+            }
+          // ADR-124: all-properties, ADR-111's rule for a sealed arm's property surface.
+          subclass.getAllProperties()
+            .filter { property -> property.getVisibility() == Visibility.PUBLIC }
+            .forEach { property ->
+              yieldAll(
+                forwardClassifier.legacyFlowElementCollectionKinds(property.type.resolve()),
+              )
             }
         }
       }
@@ -1792,7 +1863,11 @@ class NugetProcessor(
       }
     }
 
-    val needsFlowSupport: Boolean = classesHaveFlowProperties || classesHaveFlowMethods
+    // ADR-124: `armsHaveFlowMembers` carries the arm half. Without it an arm's
+    // `GetOrCreateScope()` calls a `nuget_scope_create` that was never exported, which is an
+    // EntryPointNotFoundException at the first collect.
+    val needsFlowSupport: Boolean = classesHaveFlowProperties || classesHaveFlowMethods ||
+        armsHaveFlowMembers
 
     if (needsFlowSupport) builder.addImport("kotlinx.coroutines.flow", "collect")
 

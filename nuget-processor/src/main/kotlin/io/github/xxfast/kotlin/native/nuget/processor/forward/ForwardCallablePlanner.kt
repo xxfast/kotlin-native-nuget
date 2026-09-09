@@ -1071,7 +1071,11 @@ internal class ForwardCallablePlanner(
             // copied either way, so `overloadSuffix` answers for the arm's overload pair
             // regardless. SUSPEND_CALLBACK_PROTOCOL is deliberately not exempted: no arm route
             // emits it.
-            entry.reason != ForwardPlanSkipReason.SUSPEND
+            entry.reason != ForwardPlanSkipReason.SUSPEND &&
+            // ADR-124: and the same for the legacy Flow/StateFlow route, one issue later. What is
+            // left under this reason is GENERIC, CALLBACK_PROTOCOL and SUSPEND_CALLBACK_PROTOCOL,
+            // none of which any arm route emits.
+            entry.reason != ForwardPlanSkipReason.FLOW_PROTOCOL
       if (!isUnrouted) return@map entry
 
       ForwardCallableCatalogEntry.Skipped(

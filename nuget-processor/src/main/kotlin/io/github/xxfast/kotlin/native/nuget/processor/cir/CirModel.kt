@@ -114,9 +114,10 @@ data class CirSealedSubclass(
   val properties: List<CirProperty>,
   /**
    * ADR-116: the arm's own declared member functions, projected from the ADR-062 callable plan the
-   * way an ordinary [CirClass]'s methods are. Empty for an arm that declares none, and for every
-   * member kind still without a route on a sealed subclass (suspend, Flow, generic, callback),
-   * which is named by a `SKIPPED_UNSUPPORTED_COMBINATION` diagnostic instead.
+   * way an ordinary [CirClass]'s methods are. Empty for an arm that declares none. A `suspend`
+   * member rides [asyncMembers] (ADR-118) and a `Flow`-returning one [flowMembers] (ADR-124); a
+   * generic or callback-protocol member has no arm route at all and is named by a
+   * `SKIPPED_UNSUPPORTED_COMBINATION` diagnostic instead.
    */
   val methods: List<CirMethod> = emptyList(),
   /**
@@ -126,11 +127,25 @@ data class CirSealedSubclass(
    */
   val asyncMembers: List<CirMember> = emptyList(),
   /**
-   * ADR-118: set exactly when [asyncMembers] is non-empty, which is what gives the arm its
-   * `_scopeHandle`, `GetOrCreateScope()`, `IAsyncDisposable` and `DisposeAsync`. Deliberately
-   * derived from what actually projected rather than from a `getAllFunctions()` scan the way
-   * [CirClass.hasSuspendMethods] is: a base-declared (`open suspend fun`) or ADR-114 refused
-   * member would otherwise give the arm a scope no method on it ever uses.
+   * ADR-124: the arm's Flow/StateFlow-returning **methods**, projected by the same `flowMembers`
+   * function an ordinary class's `companionMembers` carry -- a [CirDllImport] set and a
+   * `CirMethod(isFlow = true)` per member, which is why they cannot ride [methods] either. The
+   * arm's flow *properties* do ride [properties]: a flow property is a [CirProperty] like any
+   * other, with `isFlow` set.
+   */
+  val flowMembers: List<CirMember> = emptyList(),
+  /**
+   * Whether the arm owns a coroutine scope, which is what gives it its `_scopeHandle`,
+   * `GetOrCreateScope()`, `IAsyncDisposable` and `DisposeAsync`. ADR-118 set it for a suspending
+   * arm; ADR-124 widened it to a flow-bearing one (a flow method or a flow property), because the
+   * collect protocol needs a scope of the arm's own exactly as an `async` body does. The name is
+   * kept: [CirClass.hasSuspendMethods] already carries the same widened meaning, and renaming one
+   * half would make the two disagree.
+   *
+   * Deliberately derived from what actually **projected** rather than from a `getAllFunctions()`
+   * scan: a base-declared (`open suspend fun`) or ADR-114 refused member would otherwise give the
+   * arm a scope no member on it ever uses. One boolean for both routes, so an arm carrying suspend
+   * *and* flow members emits exactly one scope field.
    */
   val hasSuspendMethods: Boolean = false,
   val isDataClass: Boolean = false,

@@ -168,4 +168,67 @@ class ForwardAbiLegacyRoutesTest {
       ForwardAbiLegacyRoutes.collect(file),
     )
   }
+
+  /**
+   * ADR-124: the flow twin of the cell above. An arm's `Flow`-returning method rides
+   * [CirSealedSubclass.flowMembers] and its `StateFlow` property rides `properties`, two different
+   * carriers for one route, so both are walked and both are recognized structurally
+   * (`CirMethod.isFlow`, `CirProperty.isFlow`) rather than by the arm's entry-point shape.
+   */
+  @Test
+  fun `a sealed arm's flow member and flow property are recognized as the flow routes`() {
+    val file = CirFile(
+      namespaces = listOf(
+        CirNamespace(
+          name = "Sample",
+          declarations = listOf(
+            CirSealedClass(
+              name = "Job",
+              libraryName = "sample",
+              nativePrefix = "job",
+              subclasses = listOf(
+                CirSealedSubclass(
+                  name = "Watching",
+                  nativePrefix = "job_watching",
+                  properties = listOf(
+                    CirProperty(
+                      name = "Ticks",
+                      type = "KotlinStateFlow<int>",
+                      nativeReturnType = "IntPtr",
+                      nativeName = "ticks",
+                      getter = "",
+                      isFlow = true,
+                      isStateFlow = true,
+                      flowElementType = "int",
+                    ),
+                  ),
+                  flowMembers = listOf(
+                    CirMethod(
+                      name = "Labels",
+                      nativeName = "Native_LabelsCollect",
+                      returnType = "KotlinFlow<string>",
+                      parameters = emptyList(),
+                      body = "",
+                      isFlow = true,
+                      flowElementType = "string",
+                    ),
+                  ),
+                  hasSuspendMethods = true,
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    )
+
+    assertEquals(
+      setOf(
+        ForwardAbiLegacyRoute.SEALED_CLASS,
+        ForwardAbiLegacyRoute.FLOW_METHOD,
+        ForwardAbiLegacyRoute.FLOW_PROPERTY,
+      ),
+      ForwardAbiLegacyRoutes.collect(file),
+    )
+  }
 }
