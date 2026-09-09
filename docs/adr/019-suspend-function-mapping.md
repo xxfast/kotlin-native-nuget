@@ -510,3 +510,103 @@ Generated files with async methods need `System.Threading.Tasks` added to usings
   existing `Nullable.GetUnderlyingType` branch, reused rather than duplicated. See
   [Coroutines and Flow](../topics/coroutines-and-flow.md#suspend-fun-returning-a-nullable-type) and
   [FEATURES.md](../../FEATURES.md).
+
+## Amendments after implementation (2026-09-09)
+
+A Windows CI run of the ADR-120 leak harness on an unrelated commit (`9f28c78`) failed
+`LiveHandleTests.SetParameter_ReturnsToBaseline` with a delta of +1 over 50 crossings; a rerun
+passed. Instrumentation traced the flake to a race in every generated suspend wrapper this ADR's v1
+shipped, not to the test under investigation (see
+[ADR-120](120-live-stableref-counter-and-leak-harness.md)'s own amendment recording the same run).
+
+**The bug.** The completion callback disposed a `jobHandle` local, and its `CancellationTokenRegistration`,
+that the *caller* only assigns after the native P/Invoke returns. Kotlin launches the suspend body
+with `CoroutineStart.ATOMIC` on `Dispatchers.Default`, so a body with no suspension point can run to
+completion and invoke the callback before the caller has written `jobHandle`. The callback then
+disposed `IntPtr.Zero`, and the job's own Kotlin `StableRef` was never released. Measured with
+`KeywordRoutesSample.fetch` (`test-library/.../routes/KeywordRoutesSample.kt:79`, `suspend fun
+fetch(ref: Int): Int = ref + 1`, chosen for having no suspension point): roughly one leaked handle
+per thousand crossings, up to +21 across a 5000-call loop, varying run to run. The same ordering hole
+applied to the `CancellationTokenRegistration`.
+
+**The fix.** `NugetJobCell`, rendered beside `NugetJobNative`, replaces the two loose locals. The
+caller calls `PublishFromCaller(handle, registration)` once the P/Invoke returns; the callback calls
+`CompleteFromCallback()`. Each does one `Interlocked.Exchange` on a shared state field, and whichever
+side arrives second performs the release, exactly once:
+
+```C#
+internal sealed class NugetJobCell
+{
+    private const int Pending = 0;
+    private const int Published = 1;
+    private const int Completed = 2;
+
+    private IntPtr _handle;
+    private CancellationTokenRegistration _registration;
+    private int _state = Pending;
+
+    /// <summary>The caller side, once the native call has returned the job handle.</summary>
+    internal void PublishFromCaller(IntPtr handle, CancellationTokenRegistration registration)
+    {
+        _handle = handle;
+        _registration = registration;
+        if (Interlocked.Exchange(ref _state, Published) == Completed) Release();
+    }
+
+    /// <summary>The completion callback side, which may run before the caller publishes.</summary>
+    internal void CompleteFromCallback()
+    {
+        if (Interlocked.Exchange(ref _state, Completed) == Published) Release();
+    }
+
+    private void Release()
+    {
+        _registration.Dispose();
+        if (_handle != IntPtr.Zero) NugetJobNative.Dispose(_handle);
+    }
+}
+```
+
+The generated call site (`fetch`'s `FetchAsync`, `Interop.cs`):
+
+```C#
+[DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "fetch_async")]
+private static extern IntPtr FetchAsync_native(int @ref, IntPtr callback, IntPtr userData);
+
+public static Task<int> FetchAsync(int @ref, CancellationToken cancellationToken = default)
+{
+    var tcs = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+    NugetAsyncCallback callback = null!;
+    GCHandle callbackHandle = default;
+    var job = new NugetJobCell();
+    callback = (resultPtr, errorPtr, isCancelled, userData) =>
+    {
+        job.CompleteFromCallback();
+        callbackHandle.Free();
+        // ... TaskCompletionSource<int> completion, unchanged
+    };
+    callbackHandle = GCHandle.Alloc(callback);
+    IntPtr jobHandle = FetchAsync_native(@ref, NugetThunks.NugetAsyncCallbackPtr, GCHandle.ToIntPtr(callbackHandle));
+    CancellationTokenRegistration reg = cancellationToken.CanBeCanceled
+        ? cancellationToken.Register(() => NugetJobNative.Cancel(jobHandle))
+        : default;
+    job.PublishFromCaller(jobHandle, reg);
+    return tcs.Task;
+}
+```
+
+Applied at all five call-site shapes this ADR's callback pattern generates: the top-level/class
+suspend method (including the ADR-114 collection-scoped return variant, `CirConcurrencyRenderer.kt`)
+and the four `KotlinSuspendFunc`/`KotlinSuspendFuncUnit` arity variants (ADR-020,
+`CirFunctionRenderer.kt`). No ABI change: only the C# side's ordering moved, not the native exports
+or the job handle's own lifecycle.
+
+**`Flow<T>` is unaffected, and does not need a cell.** The Flow enumerator's job handle
+(`CirFlowRenderer.kt`) is a `_jobHandle` field assigned synchronously from `startCollect(...)`'s
+return value inside the constructor, before any callback (`onNext`/`onComplete`/`onError`) can run;
+only `DisposeAsync` ever disposes it. There is no second writer racing the assignment.
+
+Verified: two new xunit rows in `IntegrationTests/LiveHandleTests.cs`,
+`Suspend_NoSuspensionPoint_CompletesBeforeNativeReturns_ReturnsToBaseline` and
+`Suspend_NoSuspensionPoint_WithCancellationToken_ReturnsToBaseline`, 5000 crossings each: red 3/3 and
+2/3 before the fix, 14/14 green across three full `scripts/verify.sh` runs after.

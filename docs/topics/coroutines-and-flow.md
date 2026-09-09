@@ -340,6 +340,17 @@ public async Task CancelOneNap_SiblingNapCompletes()
 }
 ```
 
+<note>
+    <p>
+        The generated wrapper's job handle and its <code>CancellationTokenRegistration</code> are
+        released exactly once, whichever of the caller or the completion callback arrives second.
+        This matters for a suspend body with no suspension point, which can complete before the
+        native call has even returned the job handle to the caller
+        (<a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/019-suspend-function-mapping.md">ADR-019</a>'s
+        2026-09-09 amendment).
+    </p>
+</note>
+
 ## `IAsyncDisposable` graceful drain
 
 `Dispose()` cancels in-flight work immediately; `DisposeAsync()` instead waits for in-flight coroutines to finish naturally before releasing the handle. From `IntegrationTests/AsyncDisposableTests.cs`:

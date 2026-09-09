@@ -389,3 +389,10 @@ rule.
    `NugetBridgeState.ReleasedCount`; the counter, the red test, and the outer-loop fix shipped as
    their own commit each, in that order (`d4031d1`, `c5e0710`, `e926bc7`), so the red run is on
    record in git history rather than only in this ADR.
+
+7. **The harness's first Windows CI run already found a real leak, in a neighbouring feature.** A
+   +1-over-50-crossings flake on `LiveHandleTests.SetParameter_ReturnsToBaseline` traced to the
+   ADR-019 suspend route's job-handle disposal race, not to the setter test itself; closed the same
+   day by [ADR-019](019-suspend-function-mapping.md)'s 2026-09-09 amendment. No-tolerance-band
+   assertions (amendment 2) are what turned a one-in-a-thousand leak into a build failure instead of
+   a silently passing green run.
