@@ -161,7 +161,7 @@ private static extern long Native_live_handles();
 internal static long LiveHandles => Native_live_handles();
 ```
 
-`IntegrationTests/LiveHandleTests.cs` uses the count to assert one crossing family at a time returns
+`LeakTests/LiveHandleTests.cs` uses the count to assert one crossing family at a time returns
 to baseline: snapshot the count, run a batch of crossings, settle until the count stops moving, and
 compare. Settling loops `GC.Collect()` + `WaitForPendingFinalizers()` + `NugetBridge.GcCollect()`
 (the ADR-084 cleaner round) until the count is stable for several consecutive rounds, since some
@@ -197,6 +197,15 @@ for the collection-return leak this harness proved and closed.
 Only forward handles are counted; the reverse side's own `StableRef` sites are not (see
 [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md)).
 
+<note>
+    <p><code>NugetMarshal.LiveHandles</code> is process-global, so <code>LiveHandleTests.cs</code>
+    and <code>CollectabilityTests.cs</code> run in their own xunit project, <code>LeakTests/</code>,
+    as a separate <code>dotnet test</code> step, never inside <code>IntegrationTests/</code>. Sharing
+    a process with the rest of the suite moved the count during a harness row's window and flaked
+    Windows CI on unrelated rows. After <code>scripts/verify.sh</code> has built the package, run the
+    harness on its own with <code>dotnet test LeakTests</code>.</p>
+</note>
+
 ## Proving the object is collected, not only the handle
 
 `LiveHandles` returning to baseline proves the `StableRef` is gone. It says nothing about the Kotlin
@@ -226,7 +235,7 @@ object Morgue {
 C# does the sequencing: create the wrapper, hand it to `Morgue`, dispose it, then poll
 `NugetBridge.GcCollect()` until the weak reference reads dead or a deadline passes. Each step is its
 own P/Invoke, since a disposed object stays reachable while a Kotlin frame still holds its pointer
-local (`IntegrationTests/CollectabilityTests.cs`):
+local (`LeakTests/CollectabilityTests.cs`):
 
 ```C#
 private static bool CollectedWithin(TimeSpan budget)

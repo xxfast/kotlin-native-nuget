@@ -62,6 +62,18 @@ jobs:
           --collect:"XPlat Code Coverage"
           --results-directory IntegrationTests/TestResults
 
+      # ADR-120's live-handle counter is process-global, so the leak harness needs a test process
+      # of its own: sharing one with the other ~1550 tests let their cleaners move the count during
+      # a measurement window, which went red on Windows for rows that mint no handle at all.
+      - name: Build leak harness
+        run: dotnet build LeakTests
+
+      - name: Run leak harness with coverage
+        run: >
+          dotnet test LeakTests --no-build
+          --collect:"XPlat Code Coverage"
+          --results-directory LeakTests/TestResults
+
       # ADR-102: the forward callback surface (flow, suspend, per-call lambda, stored callback,
       # interface bridge) dispatches through [UnmanagedCallersOnly] thunks so it needs no JIT.
       # NativeAOT cannot publish a test host, so this console app asserts via its exit code.
@@ -96,7 +108,7 @@ jobs:
           token: ${{ secrets.CODECOV_TOKEN }}
           flags: csharp
           fail_ci_if_error: false
-          files: IntegrationTests/TestResults/**/coverage.cobertura.xml
+          files: IntegrationTests/TestResults/**/coverage.cobertura.xml,LeakTests/TestResults/**/coverage.cobertura.xml
 
   # Consumes the plugin the way a real user does: by maven coordinate, from a separate Gradle
   # build. In this repo `NugetPlugin` always finds `:nuget-processor` as a project, so the

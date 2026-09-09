@@ -50,7 +50,7 @@ On top of that, we have some additional conventions that are specific to this re
 
 ## Keep the C# Test Project Cross-Platform
 
-- `IntegrationTests/IntegrationTests.csproj` pins a `<RuntimeIdentifier>` so MSBuild copies the matching `runtimes/{rid}/native/*` asset next to the test host (a RID-less framework-dependent build does not, causing `DllNotFoundException` on the `[DllImport]` P/Invoke).
+- `IntegrationTests/IntegrationTests.csproj` and `LeakTests/LeakTests.csproj` each pin a `<RuntimeIdentifier>` so MSBuild copies the matching `runtimes/{rid}/native/*` asset next to the test host (a RID-less framework-dependent build does not, causing `DllNotFoundException` on the `[DllImport]` P/Invoke).
 - Do **not** hardcode a specific RID (e.g. `win-x64`). Use `$(NETCoreSdkRuntimeIdentifier)` so it resolves to the host platform. CI runs on `macos-latest` (`osx-arm64`); a hardcoded `win-x64` builds fine but aborts at `dotnet test` with `Could not find 'dotnet' host for the 'X64' architecture`.
 - Fixture builds give `TestLibrary` and `TestDependency` a new immutable version on every pack and write `build/FixtureVersions.props`. The fixture consumers import that file, so they restore the exact fresh version without clearing NuGet caches or consumer `obj`/`bin`. Use `scripts/verify-fixture-package-versioning.sh` to guard this behaviour.
 - This only fixes the repository fixtures. A real package whose contents change without a version change can still be served from NuGet's cache. If that is possible in a manual test, clear its cached package before restoring; for this repository's full integration path, use `scripts/verify.sh`.
@@ -67,6 +67,7 @@ On top of that, we have some additional conventions that are specific to this re
 - A generated file, a packaged `.nupkg`, a compiled `.dll`, a `project.assets.json`: none of these are evidence of what the *source* does. They are evidence of what some earlier build did. In the ADR-053 feature, **two of the four "bugs" found were phantoms of stale build state**, and hours went into debugging code that was already correct.
 - Fixture packages avoid both cache layers by using a new immutable version for every build, which makes the consumer restore resolve a new identity. That does not make build artifacts reliable evidence: other packages, local experiments, or manually version-pinned inputs can still leave stale cache and `obj/project.assets.json` state behind. Rebuild cleanly before diagnosing generated output or compiler behaviour.
 - Before you conclude "the generator emits the wrong thing" or "the compiler is omitting my code", rebuild clean and re-check. If a finding cannot survive `scripts/verify.sh` from a purged state, it is not a finding.
+- The ADR-120 leak harness (`LiveHandleTests.cs`, `CollectabilityTests.cs`) must never move back into `IntegrationTests/` or run in the same process as any other test. `NugetMarshal.LiveHandles` is process-global, and a shared process makes it flaky: three Windows CI failures on 2026-09-09, on three different rows, went away once the harness got its own process (`LeakTests/`), not from any change to the bridge itself.
 
 ### Symptom to cause: is it a bug, or is it stale state?
 

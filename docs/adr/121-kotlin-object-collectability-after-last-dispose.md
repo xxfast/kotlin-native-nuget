@@ -308,3 +308,7 @@ Everything below is **Verified** by that run.
 - Disposing the subscription token after the source wrapper is safe because the generated
   `removeListener` export never dereferences the receiver handle (`CNameExports.kt` around line 6628,
   confirmed by reading the generated source).
+- `CollectabilityTests.cs` moved out of `IntegrationTests/` into `LeakTests/`, alongside ADR-120's
+  `LiveHandleTests.cs`, for the same reason: its forced `NugetBridge.GcCollect()` rounds are exactly
+  the kind of perturbation the leak harness must not share a process with. See
+  [ADR-120](120-live-stableref-counter-and-leak-harness.md)'s Amendment 2 (2026-09-09).

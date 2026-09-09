@@ -2,7 +2,7 @@ using System.Runtime.CompilerServices;
 using TestLibrary;
 using TestLibrary.Cat;
 
-namespace IntegrationTests;
+namespace LeakTests;
 
 /// <summary>
 /// ADR-121: ADR-120's counter proves the <c>StableRef</c> goes; this proves the *object* goes.

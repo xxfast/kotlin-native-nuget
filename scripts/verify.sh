@@ -47,6 +47,7 @@ rm -rf ~/.nuget/packages/samplelibrary ~/.nuget/packages/sampledependency
 # to make the full verification run self-contained.
 rm -rf GeneratedBindingsCheck/obj GeneratedBindingsCheck/bin
 rm -rf IntegrationTests/obj IntegrationTests/bin
+rm -rf LeakTests/obj LeakTests/bin
 
 echo "==> Pack TestLibrary NuGet (:test-library:clean :test-library:packNuget)"
 ./gradlew :test-library:clean :test-library:packNuget
@@ -61,6 +62,13 @@ dotnet build GeneratedBindingsCheck
 
 echo "==> C# consumer tests (dotnet test in IntegrationTests)"
 cd "$ROOT/IntegrationTests"
+dotnet test
+
+# ADR-120's live-handle counter is process-global, so the leak harness runs in its own test
+# assembly: sharing a process with the rest of the suite let other tests' cleaners move the count
+# mid-measurement, which showed up as CI flakes on rows that mint no handle at all.
+echo "==> Leak harness (dotnet test in LeakTests)"
+cd "$ROOT/LeakTests"
 dotnet test
 
 echo "==> Verify complete"

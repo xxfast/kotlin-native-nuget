@@ -540,7 +540,7 @@ public IReadOnlyList<global::TestLibrary.Models.TopStory> Archive()
 }
 ```
 
-`IntegrationTests/LiveHandleTests.cs` proves it with a mid-loop throwing element factory: the only
+`LeakTests/LiveHandleTests.cs` proves it with a mid-loop throwing element factory: the only
 handle left over after the throw is the `Newsroom` instance's own, not the returned list's handle or
 the element built before the throw (see [Diagnosing forward handle leaks](registration-diagnostics.md)).
 

@@ -4,7 +4,7 @@ using TestLibrary.Clinic;
 using TestLibrary.Models;
 using TestLibrary.Routes;
 
-namespace IntegrationTests;
+namespace LeakTests;
 
 /// <summary>
 /// ADR-120: the forward bridge counts every live Kotlin <c>StableRef</c> behind one
@@ -44,10 +44,14 @@ public class LiveHandleTests
     private const int MaxSettleRounds = 60;
     private const int RequiredStableRounds = 6;
 
-    // Handles owed by earlier test classes come back in spurts separated by gaps longer than a
-    // per-test settle window, so a per-test settle alone cannot tell that backlog apart from a
-    // leak of this class's own making. Drain it once, with a much longer quiet requirement, before
-    // the first measurement here. In a full-suite run this takes a few seconds; on its own, none.
+    // Drain any backlog once, with a much longer quiet requirement, before the first measurement.
+    // This mattered when the harness shared a process with the other 1500-odd tests: their
+    // cleaners returned handles in spurts separated by gaps longer than a per-test settle window,
+    // so a per-test settle could not tell that backlog apart from a leak of this class's own
+    // making, and Windows CI went red on rows that mint nothing. The counter is process-global, so
+    // the fix was to give it its own process: this assembly holds only the leak harness. The drain
+    // now finds nothing to do and returns in its minimum rounds. Kept as cheap insurance, since
+    // anything added to this assembly later brings its backlog back.
     static LiveHandleTests() => Settle(stableRounds: 20, maxRounds: 120);
 
     private static void Settle() => Settle(RequiredStableRounds, MaxSettleRounds);
@@ -79,8 +83,10 @@ public class LiveHandleTests
     // A negative delta is not a leak of the crossing under test: it is a release owed by earlier
     // work landing inside the measurement window, and Kotlin's GC only runs it once this class
     // starts allocating, so no amount of up-front draining can move it out of the way. Re-measure
-    // when that happens. A positive delta fails on the spot, with no tolerance band: that is the
-    // shape of the leak this harness exists to catch.
+    // when that happens. Like the drain above, this was contamination insurance from when the
+    // harness shared a process with the whole suite, and it now almost never fires. A positive
+    // delta fails on the spot, with no tolerance band: that is the shape of the leak this harness
+    // exists to catch, and that rule is unchanged.
     private const int MeasurementAttempts = 3;
 
     private static void AssertNoLeak(Action crossing, int iterations = 50)

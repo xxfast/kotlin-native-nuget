@@ -396,3 +396,51 @@ rule.
    day by [ADR-019](019-suspend-function-mapping.md)'s 2026-09-09 amendment. No-tolerance-band
    assertions (amendment 2) are what turned a one-in-a-thousand leak into a build failure instead of
    a silently passing green run.
+
+## Amendment 2 (2026-09-09, second amendment of the day): the harness moves to its own process, `LeakTests/`
+
+Supersedes the Decision section's placement of `LiveHandleTests.cs` (and, by the same reasoning,
+[ADR-121](121-kotlin-object-collectability-after-last-dispose.md)'s `CollectabilityTests.cs`) in
+`IntegrationTests/`, and the implicit "no new project" scope that choice carried.
+
+`NugetMarshal.LiveHandles` is process-global. Sharing a process with the other roughly 1550
+`IntegrationTests` meant cleaners, finalizers, abandoned `Flow`s and, since ADR-121, forced Kotlin GC
+rounds from `CollectabilityTests` could all move the count during a harness row's window. Windows CI
+flaked three times on three different rows: `SetParameter` +1 on `9f28c78` (the real ADR-019 race,
+amendment 7 above) and `StringParameterAndReturn` +28 on `ad051ba`, with a "before" reading of 76
+against a roughly 100 baseline, on a route that mints no `StableRef` handle at all, so that reading
+cannot have been a leak on the string route itself; its cause stays unattributed. Every settle-loop
+improvement (amendment 5) bought a run or two, not a fix, because the thing perturbing the count was
+never the harness's own settling, it was everything else sharing the process.
+
+**Root cause, found while wiring `LeakTests/`.** `IntegrationTests.csproj` has no `<None Include>`
+for `xunit.runner.json`, so the file was never copied to the output directory (`bin/.../` held only
+`deps.json` and `runtimeconfig.json`); xunit only reads the config file from beside the assembly. So
+`IntegrationTests`'s collections have been running in **parallel** all along, not serially: the trx's
+per-test durations summed to 44.9s against a 15.6s wall clock. This ADR's original "Verified:
+`IntegrationTests/xunit.runner.json` sets `parallelizeTestCollections: false`" claim (Harness section
+above) was verified by reading the file's contents, not by observing the runner, and was wrong: other
+test classes were minting and releasing handles concurrently with every measurement, which is the
+actual mechanism behind all three flakes above, not merely "sharing a process" in the abstract.
+`LeakTests.csproj` copies `xunit.runner.json` explicitly
+(`<None Include="xunit.runner.json" CopyToOutputDirectory="PreserveNewest" />`), so this harness now
+gets genuine serial execution as well as its own process. Whether `IntegrationTests` should also copy
+the file is deliberately left open and tracked on the ROADMAP under Tooling & Test Integrity: doing so
+would serialize that suite, roughly tripling its wall time.
+
+`LiveHandleTests.cs` and `CollectabilityTests.cs` now live in `LeakTests/`, a separate xunit project
+run as its own `dotnet test` step by `scripts/verify.sh` and CI, immediately after the
+`IntegrationTests` step. Same fixture package via `build/FixtureVersions.props`, same
+`xunit.runner.json` with `parallelizeTestCollections: false`, same `$(NETCoreSdkRuntimeIdentifier)`
+RID rule (see `CLAUDE.md`'s "Keep the C# Test Project Cross-Platform"). The settle-until-stable loop
+and the class-level drain (amendment 5) stay: they remain cheap insurance against the harness's own
+async releases (a genuine Kotlin GC pass, an ADR-084 cleaner round), they just rarely have anything
+else to absorb now, because in an isolated process the baseline is 0 and nothing else is alive. Every
+local filtered run before this move was already clean for exactly that reason: filtering to
+`LiveHandleTests` alone already gave it a quiet process; only the full-suite CI run shared one with
+everything else.
+
+To be explicit about what this change proves and does not: process isolation removes the *class* of
+cross-test contamination the three flakes above belong to. It does not root-cause the `+28` reading;
+the only thing established about it is that the string-parameter-and-return route mints no
+`StableRef` handle, so whatever moved the count that run was not a leak on that route.
