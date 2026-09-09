@@ -4,6 +4,14 @@
 
 Accepted
 
+> **Amended by [ADR-118](118-suspend-route-sealed-arm-owners-and-overload-numbering.md) (2026-09-09).**
+> ADR-118 numbers a `suspend` overload pair, so the Tests section's `Radio` cell below
+> (`play(Player)` / `play(Track)`, deliberately guard-agnostic) no longer collides and was reshaped
+> in `Tier1EntryPointCollisionTest.kt` into a class method against a top-level function of the same
+> mangled name (`Radio.play(Player)` vs a top-level `suspend fun radio_play()`). That cell hits
+> `DUPLICATE_CSHARP_IMPORT`, not `CONFLICTING_LEGACY_IMPORTS`: this ADR's recorded residual, that no
+> Tier 1 cell reaches `CONFLICTING_LEGACY_IMPORTS` through a real KSP round, is **still open**.
+
 ## Context
 
 Issue [#106](https://github.com/xxfast/kotlin-native-nuget/issues/106), split out of the closed

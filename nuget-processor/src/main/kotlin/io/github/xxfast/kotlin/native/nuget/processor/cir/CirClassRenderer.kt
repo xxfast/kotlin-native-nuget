@@ -202,27 +202,13 @@ internal fun StringBuilder.renderClass(cls: CirClass) {
 
   if (cls.superClass == null) {
     appendLine("        internal IntPtr _handle;")
-    if (cls.hasSuspendMethods) {
-      appendLine("        internal IntPtr _scopeHandle;")
-    }
+    if (cls.hasSuspendMethods) renderScopeHandleField()
     appendLine()
     appendLine("        IntPtr INugetHandle.Handle => _handle;")
     appendLine()
 
     if (cls.hasSuspendMethods) {
-      appendLine("        private IntPtr GetOrCreateScope()")
-      appendLine("        {")
-      appendLine("            IntPtr existing = _scopeHandle;")
-      appendLine("            if (existing != IntPtr.Zero) return existing;")
-      appendLine("            IntPtr created = NugetScopeNative.Create();")
-      appendLine("            IntPtr prior = Interlocked.CompareExchange(ref _scopeHandle, created, IntPtr.Zero);")
-      appendLine("            if (prior != IntPtr.Zero)")
-      appendLine("            {")
-      appendLine("                NugetScopeNative.Dispose(created);")
-      appendLine("                return prior;")
-      appendLine("            }")
-      appendLine("            return created;")
-      appendLine("        }")
+      renderGetOrCreateScope()
       appendLine()
     }
   }
@@ -606,6 +592,32 @@ internal fun StringBuilder.renderDataClassMethods(cls: CirClass) {
   appendLine()
   appendLine("        public override string ToString() => Marshal.PtrToStringUTF8(Native_ToString(_handle))!;")
   appendLine()
+}
+
+/**
+ * ADR-118: the scope field, shared by the ordinary-class renderer and the sealed-arm renderer. An
+ * arm that declares a `suspend fun` owns its own scope (its `Native_Dispose` is per arm, so the
+ * sealed base cannot own one), which is why this is lifted rather than inlined twice.
+ */
+internal fun StringBuilder.renderScopeHandleField() {
+  appendLine("        internal IntPtr _scopeHandle;")
+}
+
+/** ADR-118: the lazy scope every async body calls, shared by ordinary classes and sealed arms. */
+internal fun StringBuilder.renderGetOrCreateScope() {
+  appendLine("        private IntPtr GetOrCreateScope()")
+  appendLine("        {")
+  appendLine("            IntPtr existing = _scopeHandle;")
+  appendLine("            if (existing != IntPtr.Zero) return existing;")
+  appendLine("            IntPtr created = NugetScopeNative.Create();")
+  appendLine("            IntPtr prior = Interlocked.CompareExchange(ref _scopeHandle, created, IntPtr.Zero);")
+  appendLine("            if (prior != IntPtr.Zero)")
+  appendLine("            {")
+  appendLine("                NugetScopeNative.Dispose(created);")
+  appendLine("                return prior;")
+  appendLine("            }")
+  appendLine("            return created;")
+  appendLine("        }")
 }
 
 internal fun StringBuilder.renderDispose(

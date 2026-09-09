@@ -11,6 +11,7 @@ import com.squareup.kotlinpoet.FileSpec
 import com.squareup.kotlinpoet.FunSpec
 import io.github.xxfast.kotlin.native.nuget.processor.cir.expandAliases
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeTypeClassifier
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallablePlanCatalog
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardExportOwnerTag
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardLegacyParameterShape
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyLoweredName
@@ -68,18 +69,29 @@ internal fun FileSpec.Builder.addSuspendFunctionExports(
   addFunction(builder.build())
 }
 
+/**
+ * ADR-118: the same builder now serves an ordinary class and a sealed subclass. A sealed arm passes
+ * its own export [prefix] (`job_running`) and [declaredOnly], because the sealed route -- planner,
+ * C# translator and this builder alike -- binds exactly what the arm declares itself.
+ */
 internal fun FileSpec.Builder.addSuspendClassMethodExports(
   cls: KSClassDeclaration,
   classifier: ForwardBridgeTypeClassifier,
+  callableCatalog: ForwardCallablePlanCatalog,
+  prefix: String = cls.simpleName.asString().lowercase(),
+  declaredOnly: Boolean = false,
 ) {
-  val name: String = cls.simpleName.asString()
   val qualifiedName: String = cls.qualifiedName?.asString() ?: return
-  val prefix: String = name.lowercase()
 
   val suspendMethods: List<KSFunctionDeclaration> = cls.getAllFunctions()
     .filter { it.getVisibility() == Visibility.PUBLIC }
     .filter { it.modifiers.contains(Modifier.SUSPEND) }
     .filter { it.simpleName.asString() !in listOf("equals", "hashCode", "toString", "<init>") }
+    // ADR-118: declared-only for a sealed arm. Without it a base `open suspend fun` no arm
+    // overrides exports once per arm under the arm's prefix, with `overloadSuffix` answering ""
+    // on its lenient path; `ForwardAbiContract.kotlin` filters Kotlin exports down to the C#
+    // import set, so that stray export would never be flagged.
+    .filter { !declaredOnly || it.parentDeclaration == cls }
     // ADR-114: a generic parameter this route cannot marshal skips the member named, rather than
     // emitting `ids: Set` and breaking the whole generated file's compile.
     .filter { method -> classifier.legacyRefusedParameter(method.parameters) == null }
@@ -87,7 +99,9 @@ internal fun FileSpec.Builder.addSuspendClassMethodExports(
 
   suspendMethods.forEach { method ->
     val methodName: String = method.simpleName.asString()
-    val cname: String = toCName(methodName)
+    // ADR-118: the planner's overload number, so two `suspend` overloads take two C symbols. The
+    // Kotlin call site below stays bare -- the suffix names the export, not the method.
+    val cname: String = toCName(methodName) + callableCatalog.overloadSuffix(method)
     val returnType = method.returnType?.resolve()?.expandAliases()
     val qualifiedReturn: String = returnType?.declaration?.qualifiedName?.asString() ?: "kotlin.Unit"
     val isUnit: Boolean = qualifiedReturn == "kotlin.Unit"

@@ -48,8 +48,25 @@ interface JobListener {
  *   second nested interface, so this fixture cannot drift from the gate that owns that rule. It
  *   sits beside [Job.Running.pick] on purpose: a top-level interface return binds, a nested one
  *   does not, and only the pair tells the two apart.
- * - [Job.Running.pause] — `suspend`, the ADR-116 deferral: **absent** from C# and named with
- *   `SKIPPED_UNSUPPORTED_COMBINATION`, where today it is absent and silent.
+ * - [Job.Running.pause] — `suspend` on an arm (ADR-118): binds as `Task<int> PauseAsync()` under
+ *   the arm's own export prefix (`job_running_pause_async`), where ADR-116 left it absent and
+ *   named `SKIPPED_UNSUPPORTED_COMBINATION`.
+ * - [Job.Running.pause] again, taking `millis` — a `suspend` **overload pair on an arm**, the cell
+ *   that pins `sealedSubclassEntries`' own occurrence counter and the sealed post-process's copy of
+ *   the numbered symbol: the second takes `job_running_pause_2_async` / `Native_Pause_2Async`. Its
+ *   body is `progress + millis`, unreachable from the no-arg body, so a suffix that lands on the
+ *   `[DllImport]` EntryPoint but not on `CirMethod.nativeName` dispatches to the first overload
+ *   *silently* and the returned value is the only tell.
+ * - [Job.Running.resume] — `String` **in and out** on the suspend route: the UTF8 marshalling pair
+ *   riding the async result protocol rather than the plan route.
+ * - [Job.Idle.nap] — a `suspend fun` on a `data object` arm. It takes the same
+ *   `asStableRef<Job.Idle>` handle receiver as a `data class` arm, and gives `Idle` the scope,
+ *   `IAsyncDisposable` and `DisposeAsync` that [Job.Done] — no suspend member — must not gain.
+ * - [Job.rest] — an `open suspend fun` **with a body on the base**, overridden by no arm. ADR-118's
+ *   declared-only gate is required, not cosmetic: the suspend builder reads `getAllFunctions()`, so
+ *   without it every arm exports `job_<arm>_rest_async` for a member it never declares, with a
+ *   lenient `""` overload suffix; `ForwardAbiContract.kotlin` filters Kotlin exports down to the C#
+ *   import set, so that extra export would vanish from the comparison rather than be flagged.
  * - [Job.describe] — a base `open fun` **with a body**. Under ADR-116's declared-only gate an arm
  *   exports only what it declares itself, so this renders on **no** arm. [Job.Idle.describe], which
  *   is a declared `override`, renders as a plain `public string Describe()`: not `override` (the C#
@@ -61,8 +78,9 @@ interface JobListener {
  * - [Job.Done] — the control: an arm that declares no functions at all must keep generating
  *   exactly as it does today.
  *
- * Deliberately absent: a lambda-parameter cell (`fun watch(onTick: (Int) -> Unit)`). Its skip is
- * one more row of the same post-process table as [Job.Running.pause], and it would drag the
+ * Deliberately absent: a lambda-parameter cell (`fun watch(onTick: (Int) -> Unit)`). It stays a
+ * `SEALED_SUBCLASS_UNROUTED` row of the sealed post-process table — the half of ROADMAP line 39
+ * that ADR-118 does not close, now that the `suspend` row is routed — and binding it would drag
  * stored-callback pair detection into a fixture whose subject is method routing.
  *
  * Oreo (black with the white middle) does all the running: he starts at a percentage of the hallway
@@ -74,6 +92,12 @@ sealed class Job {
    * [Job.Running] has no `Describe()` in C# while [Job.Idle], which declares an `override`, does.
    */
   open fun describe(): String = "job"
+
+  /**
+   * ADR-118's declared-only cell on the **suspend** loop: an `open suspend fun` with a body that no
+   * arm overrides. No arm may carry `RestAsync`, and no `job_*_rest_async` entry point may exist.
+   */
+  open suspend fun rest(): Int = 0
 
   /** Oreo, mid-sprint down the hallway, [progress] percent of the way to the food bowl. */
   data class Running(val progress: Int) : Job() {
@@ -111,8 +135,19 @@ sealed class Job {
     /** Nullable **nested** interface return: never declared in C#, so a named skip, not a binding. */
     fun pickNested(): NestedListenerOwner.Listener? = null
 
-    /** `suspend`: absent from C# in v1, but named. */
+    /** `suspend` on an arm: binds as `Task<int> PauseAsync()` off `job_running_pause_async`. */
     suspend fun pause(): Int = progress
+
+    /**
+     * Second arm of a `suspend` **overload pair on a sealed arm**: same public name `PauseAsync`,
+     * `_2` on both the native symbol and the private extern. `progress + millis` is unreachable
+     * from [pause]'s body, so a mis-numbered extern shows up as a wrong *value*, not a missing
+     * member.
+     */
+    suspend fun pause(millis: Int): Int = progress + millis
+
+    /** `String` in and out across the async result protocol. */
+    suspend fun resume(prefix: String): String = "$prefix$progress"
   }
 
   /** Control arm: declares no functions of its own and must keep generating exactly as today. */
@@ -125,6 +160,12 @@ sealed class Job {
 
     /** Declared `override` of [Job.describe]: renders as a plain `public` method on the arm. */
     override fun describe(): String = "idle"
+
+    /**
+     * A `suspend fun` on a `data object` arm: it crosses on the arm's handle like any other arm,
+     * and brings the scope, `IAsyncDisposable` and `DisposeAsync` with it.
+     */
+    suspend fun nap(): String = "napping"
   }
 }
 

@@ -93,7 +93,15 @@ internal object ForwardAbiLegacyRoutes {
 
       is CirBridgeHelper -> add(ForwardAbiLegacyRoute.INTERFACE_BRIDGE_FACTORY)
       is CirGenericClass -> add(ForwardAbiLegacyRoute.GENERIC_CLASS)
-      is CirSealedClass -> add(ForwardAbiLegacyRoute.SEALED_CLASS)
+      is CirSealedClass -> {
+        add(ForwardAbiLegacyRoute.SEALED_CLASS)
+        // ADR-118: an arm's `suspend fun` rides the same legacy suspend route an ordinary class's
+        // does. Recognition stays structural (`CirMethod.isAsync`), never by entry-point name.
+        declaration.subclasses
+          .flatMap { subclass -> subclass.asyncMembers }
+          .forEach { member -> add(member, ForwardAbiLegacyRoute.SUSPEND_METHOD) }
+      }
+
       is CirAsyncHelper,
       is CirCallbackDelegateHelper,
       is CirEnum,

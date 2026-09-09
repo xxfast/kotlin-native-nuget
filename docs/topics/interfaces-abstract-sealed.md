@@ -12,7 +12,7 @@ Kotlin's three flavours of inheritance each get a distinct C# shape: `interface`
 | interface-typed return (method result or property) | `IFoo` / `IFoo?` | backed by a generated `sealed class Foo : IFoo`, see [ADR-040](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/040-interface-return-type-mapping.md) |
 | interface-typed parameter, a C# class implementing `IFoo` | accepted, no `_handle` needed | dispatched through a per-interface bridge factory, see [ADR-084](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/084-csharp-implemented-interfaces.md) |
 | a property of a sealed subclass, any shape a class property supports (nullable enum, nullable reference, `Boolean`, collections, `var`, `Duration`/`Uuid`/value classes/interfaces) | the same shape an ordinary class property gets | planned by [ADR-062](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/062-forward-callable-plan.md)'s property plan, same as any class, since [ADR-111](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/111-sealed-subclass-properties-on-the-property-plan.md); see [Every property shape on a sealed subclass](#every-property-shape-on-a-sealed-subclass) |
-| a public method a sealed subclass **itself declares** (including its own `override fun`), any shape a class method supports | the same shape an ordinary class method gets, exported `${sealed}_${sub}_${name}[_n]` | planned by [ADR-062](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/062-forward-callable-plan.md)'s callable plan, same as any class, since [ADR-116](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/116-sealed-subclass-methods-on-the-callable-plan.md); declared-only, and `suspend`/`Flow`/lambda-parameter/generic methods are a named skip instead; see [Methods on a sealed subclass](#methods-on-a-sealed-subclass) |
+| a public method a sealed subclass **itself declares** (including its own `override fun`), any shape a class method supports | the same shape an ordinary class method gets, exported `${sealed}_${sub}_${name}[_n]` | planned by [ADR-062](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/062-forward-callable-plan.md)'s callable plan, same as any class, since [ADR-116](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/116-sealed-subclass-methods-on-the-callable-plan.md); declared-only. A declared `suspend fun` now also binds, as `Task<T> XxxAsync` off the arm's own export prefix, with overloads numbered `_2` on both the entry point and the private extern, see [ADR-118](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/118-suspend-route-sealed-arm-owners-and-overload-numbering.md); `Flow`/lambda-parameter/generic methods are still a named skip; see [Methods on a sealed subclass](#methods-on-a-sealed-subclass) |
 | property whose own type is a sealed class (bare, nullable, or a collection component, read-only or `var`) | the sealed base | materialised through `<Base>.FromHandle(...)`, see [Sealed types as property types](#sealed-types-as-property-types), [ADR-105](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/105-sealed-property-position.md) |
 | a class, object, or companion method returning a sealed base, scalar or as a `List`/`Map`/`Set` component | the sealed base (or `IReadOnlyList<Base>`) | reads through the same `FromHandle` discriminator a top-level sealed return already used, see [A class method returning a sealed base](#a-class-method-returning-a-sealed-base), [ADR-009](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/009-sealed-class-mapping.md) |
 | a sealed type at a **parameter** position, bare, nullable, or as a collection component, including a constructor parameter | an ordinary handle argument (`shape._handle`, or boxed per element through `NugetMarshal.Wrap<T>` in a collection) | the same `sealedAsHandle()` rewrite the property planner uses applies to every declared parameter, so `Issue54Drawing`'s own four-parameter constructor now binds, see [A sealed type at a parameter position](#a-sealed-type-at-a-parameter-position), [ADR-105](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/105-sealed-property-position.md) |
@@ -1360,9 +1360,11 @@ and every shape a class method supports, exported `${sealed}_${sub}_${name}[_n]`
 own property getters ([#115](https://github.com/xxfast/kotlin-native-nuget/issues/115),
 [ADR-116](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/116-sealed-subclass-methods-on-the-callable-plan.md)).
 This is **declared-only**: an inherited base `open fun` body an arm does not override renders on no
-arm at all, and a `suspend`, `Flow`-returning, lambda-parameter, or generic method is absent from C#
-and named instead of silently dropped, since a sealed arm has no legacy route to fall back on the
-way an ordinary class method does.
+arm at all. A declared `suspend fun` also binds now, as `Task<T> XxxAsync(...)` off the arm's own
+export prefix, re-keying the same legacy suspend route an ordinary class method uses
+([ADR-118](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/118-suspend-route-sealed-arm-owners-and-overload-numbering.md)).
+A `Flow`-returning, lambda-parameter, or generic method is still absent from C# and named instead of
+silently dropped, since a sealed arm has no legacy route to fall back on for those shapes.
 
 ### Kotlin {id="sealed-method-kotlin"}
 
@@ -1372,6 +1374,9 @@ From `test-library/src/nativeMain/kotlin/.../issue115/JobSample.kt`:
 sealed class Job {
   /** Base body. Under ADR-116's declared-only decision this renders on no arm at all. */
   open fun describe(): String = "job"
+
+  /** Base body on the **suspend** loop: declared-only holds here too, so no arm carries `RestAsync`. */
+  open suspend fun rest(): Int = 0
 
   data class Running(val progress: Int) : Job() {
     fun cancel(): Int = progress
@@ -1403,8 +1408,14 @@ sealed class Job {
     /** Nullable **nested** interface return: never declared in C#, so a named skip, not a binding. */
     fun pickNested(): NestedListenerOwner.Listener? = null
 
-    /** `suspend`: absent from C# in v1, but named. */
+    /** `suspend` on an arm: binds as `Task<int> PauseAsync()` off `job_running_pause_async`. */
     suspend fun pause(): Int = progress
+
+    /** Second arm of a `suspend` overload pair: `_2` on both the entry point and the private extern. */
+    suspend fun pause(millis: Int): Int = progress + millis
+
+    /** `String` in and out across the async result protocol. */
+    suspend fun resume(prefix: String): String = "$prefix$progress"
   }
 
   data class Done(val code: Int) : Job()
@@ -1415,6 +1426,9 @@ sealed class Job {
 
     /** Declared `override` of [Job.describe]: renders as a plain `public` method on the arm. */
     override fun describe(): String = "idle"
+
+    /** `suspend` on a `data object` arm: same handle receiver, brings its own scope. */
+    suspend fun nap(): String = "napping"
   }
 }
 ```
@@ -1520,15 +1534,80 @@ to override, `CS0115`) and not `virtual` (a `virtual` member on a `public sealed
 `CS0549`). `Job.Running` has no `Describe()` at all, since it does not override the base's
 `open fun describe()` and the base body itself is not carried onto any arm (declared-only).
 
-What is absent from C# entirely, each named rather than silent, from `NugetDiagnostics.json`:
+### Suspend methods on a sealed arm {id="sealed-method-suspend-generated-c"}
 
+A `suspend fun` an arm **declares** binds the same shape an ordinary class's suspend method has had
+since [ADR-019](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/019-suspend-function-mapping.md),
+re-keyed onto the arm's own export prefix. Two overloads on one arm are one C# overload set, the
+second numbered `_2` on both the `[DllImport]` entry point and the private extern's C# name, so a
+mis-numbered extern would silently dispatch to the first overload's body instead of failing to
+compile:
+
+```C#
+public sealed class Running : Job, IAsyncDisposable
+{
+    internal IntPtr _scopeHandle;
+
+    [DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "job_running_pause_async")]
+    private static extern IntPtr Native_PauseAsync(IntPtr handle, IntPtr scopeHandle, IntPtr callback, IntPtr userData);
+
+    public Task<int> PauseAsync(CancellationToken cancellationToken = default) { /* ... */ }
+
+    [DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "job_running_pause_2_async")]
+    private static extern IntPtr Native_Pause_2Async(IntPtr handle, IntPtr scopeHandle, int millis, IntPtr callback, IntPtr userData);
+
+    public Task<int> PauseAsync(int millis, CancellationToken cancellationToken = default) { /* ... */ }
+
+    [DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "job_running_resume_async")]
+    private static extern IntPtr Native_ResumeAsync(IntPtr handle, IntPtr scopeHandle, [MarshalAs(UnmanagedType.LPUTF8Str)] string prefix, IntPtr callback, IntPtr userData);
+
+    public Task<string> ResumeAsync(string prefix, CancellationToken cancellationToken = default) { /* ... */ }
+}
 ```
-[nuget:SKIPPED_UNSUPPORTED_COMBINATION] Skipping io.github.xxfast.kotlin.native.nuget.test.issue115.Job.Running.pause:
-    it is a SUSPEND member of a sealed subclass, which has no route yet (ADR-116; suspend members
-    follow ROADMAP line 54). move the member onto an ordinary class (which still has the legacy
-    route this member kind needs), or expose an equivalent non-suspend, non-Flow, non-generic
-    member on the sealed subclass instead
+
+An arm with a suspend member also declares `IAsyncDisposable`, with `DisposeAsync` draining its own
+scope before disposing the handle; `Dispose()` cancels and disposes the scope first, then calls the
+same `Native_Dispose`. An arm with **no** suspend member (`Done`) is unchanged: it stays
+`IDisposable` only, and its `Dispose()` body is the plain hand-rolled form, not the scope-aware one.
+An `object`/`data object` arm takes the same shape on the same handle receiver:
+
+```C#
+public sealed class Idle : Job, IAsyncDisposable
+{
+    internal IntPtr _scopeHandle;
+
+    [DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "job_idle_nap_async")]
+    private static extern IntPtr Native_NapAsync(IntPtr handle, IntPtr scopeHandle, IntPtr callback, IntPtr userData);
+
+    public Task<string> NapAsync(CancellationToken cancellationToken = default) { /* ... */ }
+}
+
+public sealed class Done : Job   // no suspend member: IDisposable only, unchanged
+{
+    public override void Dispose()
+    {
+        if (_handle != IntPtr.Zero)
+        {
+            Native_Dispose(_handle);
+            _handle = IntPtr.Zero;
+        }
+    }
+}
 ```
+
+<note>
+    <p>The sealed <b>base</b> itself stays <code>: IDisposable, INugetHandle</code>; only an arm that
+    declares a suspend member gains <code>IAsyncDisposable</code>. A consumer holding a <code>Job</code>
+    has to pattern-match to the concrete arm before <code>await using</code> / <code>DisposeAsync()</code>.</p>
+</note>
+
+```C#
+Job job = JobSample.AnyJob(40);
+if (job is Job.Running running) await running.DisposeAsync();   // drains the arm's scope first
+else job.Dispose();                                              // sync path, works on every arm
+```
+
+What is absent from C# entirely, each named rather than silent, from `NugetDiagnostics.json`:
 
 ```
 [nuget:SKIPPED_UNSUPPORTED_TYPE] Skipping io.github.xxfast.kotlin.native.nuget.test.issue115.Job.Running.pickNested:
@@ -1561,13 +1640,32 @@ Assert.Equal("idle", mylo.Poke());
 Assert.Equal("idle", mylo.Describe());
 ```
 
+The suspend members, both overloads on one receiver, and the arm's `IAsyncDisposable`:
+
+```C#
+using var factory = new JobFactory();
+await using Job.Running oreo = factory.Running(10);
+
+Assert.Equal(10, await oreo.PauseAsync());
+Assert.Equal(15, await oreo.PauseAsync(5));
+
+await using Job.Running running = factory.Running(80);
+Assert.Equal("hallway:80", await running.ResumeAsync("hallway:"));
+
+Assert.False(typeof(IAsyncDisposable).IsAssignableFrom(typeof(Job.Done)));
+```
+
 The absences are asserted by reflection, since a missing member is invisible to the compiler in the
-other direction:
+other direction. `RestAsync` is absent on every arm, including `Idle` and `Done`, because `Job.rest`
+is a base body no arm overrides (declared-only on the suspend loop too), and `PickNested` stays a
+named skip (a nested interface return):
 
 ```C#
 Assert.Null(typeof(Job.Running).GetMethod(
     "Describe", BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly));
-Assert.Null(typeof(Job.Running).GetMethod("Pause"));
+Assert.Null(typeof(Job.Running).GetMethod("RestAsync"));
+Assert.Null(typeof(Job.Idle).GetMethod("RestAsync"));
+Assert.Null(typeof(Job).GetMethod("RestAsync"));
 Assert.Null(typeof(Job.Running).GetMethod("PickNested"));
 ```
 
@@ -2120,7 +2218,7 @@ property. The owning class still generates, and its unrelated `name` member stil
 - [Overriding a read-only property with `var`](#overriding-a-read-only-property-with-var) only guards against the exported-base-class shape. A base class's own `open val`/`open var` never renders `virtual` (its own modifier is never read), so any subclass `override` of it is `CS0506`; and an unimplemented base `abstract val`/`abstract var` has no abstract-property path at all, so a subclass `override` of it is `CS0115`. Neither is fixed. See [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md).
 - [Declaring every exported interface](#declaring-every-exported-interface) has its own residual gaps: `CirInterface` has no super-interface list, so `interface Derived : Base` still flattens (`IDerived` no longer redeclares `Base`'s members after ADR-113, but doesn't inherit them either); a `var` interface property still renders `{ get; }` only (`hasSetter` is never derived from the plan); the CS0102 property/method name-collision guard is interface-route only, the same collision on the ordinary class route is unguarded; and an interface that is neither reachable nor implemented by any exported class still silently loses its unbridgeable members with no diagnostic naming why. See [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md).
 - A sealed **base**'s own `abstract val`/`abstract var` renders no C# member at all (`CirSealedClass` has no `properties` field); see [A `data object` subclass's own properties bind too](#data-object-subclass-properties-bind-too) and [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md).
-- [Methods on a sealed subclass](#methods-on-a-sealed-subclass) is declared-only: a base `open fun` body an arm does not override renders on no arm, and neither the base's own methods nor its `abstract val`/`abstract var` (above) are ever readable through the C# base type directly, only through a concrete arm. A `suspend`, `Flow`-returning, lambda-parameter, or generic method on an arm is a named `SKIPPED_UNSUPPORTED_COMBINATION` skip rather than a binding; `suspend` follows the suspend-route migration tracked on [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md), which also keeps [#115](https://github.com/xxfast/kotlin-native-nuget/issues/115) open until it lands. An arm's own `fun dispose()` collides with the always-emitted `Dispose()`, the same pre-existing hazard an ordinary class has; see [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md).
+- [Methods on a sealed subclass](#methods-on-a-sealed-subclass) is declared-only: a base `open fun` (and, since [ADR-118](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/118-suspend-route-sealed-arm-owners-and-overload-numbering.md), a base `open suspend fun`) body an arm does not override renders on no arm, and neither the base's own methods nor its `abstract val`/`abstract var` (above) are ever readable through the C# base type directly, only through a concrete arm. A `Flow`-returning, lambda-parameter, or generic method on an arm is still a named `SKIPPED_UNSUPPORTED_COMBINATION` skip rather than a binding; a declared `suspend fun` now binds instead, and only an arm that declares one gains `IAsyncDisposable`, so a consumer holding the sealed base has to pattern-match to the concrete arm before `await using` / `DisposeAsync()` (see [Suspend methods on a sealed arm](#sealed-method-suspend-generated-c)). An arm's own `fun dispose()` collides with the always-emitted `Dispose()`, the same pre-existing hazard an ordinary class has; a same-arity suspend overload pair differing only in reference nullability, a `suspend fun` returning plain `Flow<T>`, and an ordinary-class suspend method returning a nested arm by simple name are also pre-existing, unfixed gaps on the legacy suspend route; see [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md).
 
 ## Using it from C#
 
@@ -2195,5 +2293,6 @@ public void Observation_WorksWithPatternMatching()
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/112-sealed-interface-mapping.md">ADR-112: Sealed interface mapping</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/113-interface-declaration-on-the-forward-plan.md">ADR-113: Interface declaration on the forward plan</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/116-sealed-subclass-methods-on-the-callable-plan.md">ADR-116: Sealed-subclass methods move onto the ADR-062 callable plan</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/118-suspend-route-sealed-arm-owners-and-overload-numbering.md">ADR-118: Suspend route: sealed-arm owners and overload numbering</a>
     </category>
 </seealso>

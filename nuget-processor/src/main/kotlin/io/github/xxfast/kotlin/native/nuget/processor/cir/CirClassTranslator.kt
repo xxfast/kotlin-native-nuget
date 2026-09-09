@@ -522,17 +522,6 @@ internal fun translateClass(
   val (allSuspendMethods, regularMethods) = filteredMethods
     .partition { it.modifiers.contains(Modifier.SUSPEND) }
 
-  // ADR-068: a `suspend fun` returning StateFlow<T>/MutableStateFlow<T> is peeled into its own
-  // bucket BEFORE the plain-async `asyncMembers` path (below) claims it -- that path would
-  // otherwise resolve the return type's simple name "StateFlow" through KOTLIN_TO_CSHARP_PARAM
-  // (a miss) and emit an undefined-type `Task<StateFlow>`. `suspend fun` returning plain Flow<T>
-  // stays on the (separately deferred) legacy asyncMembers path -- out of scope for this ADR.
-  val (suspendStateFlowMethods, suspendMethods) = allSuspendMethods.partition { method ->
-    val returnQualified: String? = method.returnType?.resolve()?.expandAliases()
-      ?.declaration?.qualifiedName?.asString()
-    returnQualified in STATE_FLOW_TYPES
-  }
-
   val (flowMethods, nonFlowMethods) = regularMethods.partition { method ->
     val returnQualified: String? = method.returnType?.resolve()?.expandAliases()
       ?.declaration?.qualifiedName?.asString()
@@ -544,12 +533,6 @@ internal fun translateClass(
     tracker.needsAsync = true
   }
 
-  if (suspendStateFlowMethods.isNotEmpty()) {
-    tracker.needsFlow = true
-    tracker.needsStateFlow = true
-    tracker.needsAsync = true
-    tracker.needsSuspendStateFlow = true
-  }
   if (flowMethods.any { method ->
       method.returnType?.resolve()?.expandAliases()
         ?.declaration?.qualifiedName?.asString() in STATE_FLOW_TYPES
@@ -674,115 +657,18 @@ internal fun translateClass(
 
   val methods: List<CirMethod> = plannedMethods + abstractMethods
 
-  if (suspendMethods.isNotEmpty()) tracker.needsAsync = true
-
-  val asyncMembers: List<CirMember> = suspendMethods.flatMap { method ->
-    val methodName: String = method.simpleName.asString()
-    val cname: String = toCName(methodName)
-    val csMethodName: String = methodName.replaceFirstChar { it.uppercase() }
-    val resolvedReturn: KSType? = method.returnType?.resolve()?.expandAliases()
-    val methodReturn: String = resolvedReturn?.declaration?.simpleName?.asString() ?: "Unit"
-    val isUnit: Boolean = methodReturn == "Unit"
-
-    // ADR-114: a collection parameter takes the public collection type with an IntPtr native
-    // slot; every other parameter keeps mapParamType's shipped spelling.
-    val methodParams: List<CirParameter> =
-      legacyRouteParameters(method.parameters, classifier, tracker)
-
-    // Issue #108: carry the nullability through, same as the top-level suspend route.
-    val asyncReturnType: String = if (isUnit) "" else {
-      val csharp: String = KOTLIN_TO_CSHARP_PARAM[methodReturn] ?: methodReturn
-      if (resolvedReturn?.isMarkedNullable == true) "$csharp?" else csharp
-    }
-
-    val nativeParams: List<CirParameter> = listOf(
-      CirParameter("handle", "IntPtr"),
-      CirParameter("scopeHandle", "IntPtr"),
-    ) + methodParams +
-        listOf(
-          // ADR-102: a raw thunk address, not a delegate the marshaller would have to build a
-          // native-to-managed stub for. The native symbol is unchanged; Kotlin is untouched.
-          CirParameter("callback", "IntPtr"),
-          CirParameter("userData", "IntPtr"),
-        )
-
-    val nativeImport = CirDllImport(
-      libraryName = libraryName,
-      entryPoint = "${prefix}_${cname}_async",
-      returnType = "IntPtr",
-      name = "Native_${csMethodName}Async",
-      parameters = nativeParams,
-      visibility = CirVisibility.PRIVATE,
-    )
-
-    val taskReturnType: String = if (isUnit) "Task" else "Task<$asyncReturnType>"
-
-    val asyncMethod = CirMethod(
-      name = "${csMethodName}Async",
-      returnType = taskReturnType,
-      parameters = methodParams,
-      body = "",
-      isAsync = true,
-      asyncReturnType = asyncReturnType,
-    )
-
-    listOf(nativeImport, asyncMethod)
-  }
-
-  // ADR-068: `suspend fun` returning StateFlow<T>/MutableStateFlow<T> -- the `_async` export is
-  // byte-for-byte [asyncMembers]'s shape above (it already boxes the awaited StateFlow object as
-  // a StableRef handle; SuspendFunctionExports.kt needs no change). The rendered method differs:
-  // `renderAsyncMethod` recognizes the `KotlinStateFlow<` asyncReturnType prefix and wraps the
-  // awaited handle in a handle-owning KotlinStateFlow<T> via the shared
-  // `nuget_stateflow_collect`/`nuget_stateflow_value` exports, instead of `new T(resultPtr)`.
-  val suspendStateFlowMembers: List<CirMember> = suspendStateFlowMethods.flatMap { method ->
-    val methodName: String = method.simpleName.asString()
-    val cname: String = toCName(methodName)
-    val csMethodName: String = methodName.replaceFirstChar { it.uppercase() }
-    val returnType = method.returnType?.resolve()?.expandAliases()
-    val flowElementTypeResolved: KSType? = returnType?.arguments?.firstOrNull()?.type?.resolve()
-    // v1 scope (ADR-068): nullable element/member is deferred; mirror ADR-065's plain (non-null)
-    // shape only.
-    val flowCsElementType: String = qualifiedElementCsType(flowElementTypeResolved, context)
-
-    // ADR-114: a collection parameter takes the public collection type with an IntPtr native
-    // slot; every other parameter keeps mapParamType's shipped spelling.
-    val methodParams: List<CirParameter> =
-      legacyRouteParameters(method.parameters, classifier, tracker)
-
-    val nativeParams: List<CirParameter> = listOf(
-      CirParameter("handle", "IntPtr"),
-      CirParameter("scopeHandle", "IntPtr"),
-    ) + methodParams +
-        listOf(
-          // ADR-102: a raw thunk address, not a delegate the marshaller would have to build a
-          // native-to-managed stub for. The native symbol is unchanged; Kotlin is untouched.
-          CirParameter("callback", "IntPtr"),
-          CirParameter("userData", "IntPtr"),
-        )
-
-    val nativeImport = CirDllImport(
-      libraryName = libraryName,
-      entryPoint = "${prefix}_${cname}_async",
-      returnType = "IntPtr",
-      name = "Native_${csMethodName}Async",
-      parameters = nativeParams,
-      visibility = CirVisibility.PRIVATE,
-    )
-
-    val asyncReturnType = "KotlinStateFlow<$flowCsElementType>"
-
-    val asyncMethod = CirMethod(
-      name = "${csMethodName}Async",
-      returnType = "Task<$asyncReturnType>",
-      parameters = methodParams,
-      body = "",
-      isAsync = true,
-      asyncReturnType = asyncReturnType,
-    )
-
-    listOf(nativeImport, asyncMethod)
-  }
+  // ADR-118: the whole suspend projection (both the plain-async and the ADR-068 StateFlow half)
+  // lives in one function now, so a sealed arm gets byte-identical externs and bodies from the
+  // same call.
+  val asyncMembers: List<CirMember> = suspendMembers(
+    suspendMethods = allSuspendMethods,
+    prefix = prefix,
+    libraryName = libraryName,
+    classifier = classifier,
+    tracker = tracker,
+    callableCatalog = callableCatalog,
+    context = context,
+  )
 
   val flowMembers: List<CirMember> = flowMethods.flatMap { method ->
     val methodName: String = method.simpleName.asString()
@@ -1010,7 +896,7 @@ internal fun translateClass(
     superClass = superClass,
     isDataClass = isDataClass,
     isAbstract = isAbstract,
-    companionMembers = companionMembers + asyncMembers + suspendStateFlowMembers + flowMembers,
+    companionMembers = companionMembers + asyncMembers + flowMembers,
     hasSuspendMethods = cls.getAllFunctions().any { it.modifiers.contains(Modifier.SUSPEND) } ||
         flowMethods.isNotEmpty() ||
         cls.getAllProperties().any { prop ->
@@ -1096,11 +982,176 @@ internal fun translateGenericClass(
   )
 }
 
+/**
+ * ADR-118: the legacy suspend route's C# half, lifted out of [translateClass] so a sealed subclass
+ * can project the identical pair (a private `[DllImport]` and an `async` [CirMethod]) under its own
+ * export prefix. The two callers differ only in which methods they hand in and which prefix the
+ * externs take.
+ *
+ * The overload number is the planner's ([ForwardCallablePlanCatalog.overloadSuffix]), the same
+ * number the Kotlin `@CName` reads, and it lands on **three** fields: the import's `entryPoint`
+ * (the C symbol), the import's `name` and [CirMethod.nativeName] (the private extern the rendered
+ * body calls). Numbering only the first two lets a second overload's body bind to the *first*
+ * overload's extern whenever the two agree on argument types -- it compiles, and answers the wrong
+ * value.
+ */
+internal fun suspendMembers(
+  suspendMethods: List<KSFunctionDeclaration>,
+  prefix: String,
+  libraryName: String,
+  classifier: ForwardBridgeTypeClassifier,
+  tracker: CollectionHelperTracker,
+  callableCatalog: ForwardCallablePlanCatalog,
+  context: NugetContext,
+): List<CirMember> {
+  // ADR-068: a `suspend fun` returning StateFlow<T>/MutableStateFlow<T> is peeled into its own
+  // bucket BEFORE the plain-async path below claims it -- that path would otherwise resolve the
+  // return type's simple name "StateFlow" through KOTLIN_TO_CSHARP_PARAM (a miss) and emit an
+  // undefined-type `Task<StateFlow>`. `suspend fun` returning plain Flow<T> stays on the
+  // (separately deferred) legacy plain-async path.
+  val (stateFlowMethods, plainMethods) = suspendMethods.partition { method ->
+    val returnQualified: String? = method.returnType?.resolve()?.expandAliases()
+      ?.declaration?.qualifiedName?.asString()
+    returnQualified in STATE_FLOW_TYPES
+  }
+
+  if (plainMethods.isNotEmpty()) tracker.needsAsync = true
+  if (stateFlowMethods.isNotEmpty()) {
+    tracker.needsFlow = true
+    tracker.needsStateFlow = true
+    tracker.needsAsync = true
+    tracker.needsSuspendStateFlow = true
+  }
+
+  val asyncMembers: List<CirMember> = plainMethods.flatMap { method ->
+    val methodName: String = method.simpleName.asString()
+    // ADR-118: the planner's overload number, on the C symbol and on the extern stem alike.
+    val suffix: String = callableCatalog.overloadSuffix(method)
+    val cname: String = toCName(methodName) + suffix
+    val csMethodName: String = methodName.replaceFirstChar { it.uppercase() }
+    val nativeStem: String = "Native_$csMethodName${suffix}Async"
+    val resolvedReturn: KSType? = method.returnType?.resolve()?.expandAliases()
+    val methodReturn: String = resolvedReturn?.declaration?.simpleName?.asString() ?: "Unit"
+    val isUnit: Boolean = methodReturn == "Unit"
+
+    // ADR-114: a collection parameter takes the public collection type with an IntPtr native
+    // slot; every other parameter keeps mapParamType's shipped spelling.
+    val methodParams: List<CirParameter> =
+      legacyRouteParameters(method.parameters, classifier, tracker)
+
+    // Issue #108: carry the nullability through, same as the top-level suspend route.
+    val asyncReturnType: String = if (isUnit) "" else {
+      val csharp: String = KOTLIN_TO_CSHARP_PARAM[methodReturn] ?: methodReturn
+      if (resolvedReturn?.isMarkedNullable == true) "$csharp?" else csharp
+    }
+
+    val nativeParams: List<CirParameter> = listOf(
+      CirParameter("handle", "IntPtr"),
+      CirParameter("scopeHandle", "IntPtr"),
+    ) + methodParams +
+        listOf(
+          // ADR-102: a raw thunk address, not a delegate the marshaller would have to build a
+          // native-to-managed stub for. The native symbol is unchanged; Kotlin is untouched.
+          CirParameter("callback", "IntPtr"),
+          CirParameter("userData", "IntPtr"),
+        )
+
+    val nativeImport = CirDllImport(
+      libraryName = libraryName,
+      entryPoint = "${prefix}_${cname}_async",
+      returnType = "IntPtr",
+      name = nativeStem,
+      parameters = nativeParams,
+      visibility = CirVisibility.PRIVATE,
+    )
+
+    val taskReturnType: String = if (isUnit) "Task" else "Task<$asyncReturnType>"
+
+    val asyncMethod = CirMethod(
+      name = "${csMethodName}Async",
+      nativeName = nativeStem,
+      returnType = taskReturnType,
+      parameters = methodParams,
+      body = "",
+      isAsync = true,
+      asyncReturnType = asyncReturnType,
+    )
+
+    listOf(nativeImport, asyncMethod)
+  }
+
+  // ADR-068: `suspend fun` returning StateFlow<T>/MutableStateFlow<T> -- the `_async` export is
+  // byte-for-byte the plain-async shape above (it already boxes the awaited StateFlow object as
+  // a StableRef handle; SuspendFunctionExports.kt needs no change). The rendered method differs:
+  // `renderAsyncMethod` recognizes the `KotlinStateFlow<` asyncReturnType prefix and wraps the
+  // awaited handle in a handle-owning KotlinStateFlow<T> via the shared
+  // `nuget_stateflow_collect`/`nuget_stateflow_value` exports, instead of `new T(resultPtr)`.
+  val suspendStateFlowMembers: List<CirMember> = stateFlowMethods.flatMap { method ->
+    val methodName: String = method.simpleName.asString()
+    // ADR-118: a separate composition site, so it has to read the same number. The counter is
+    // shared with the plain-async half, since the planner numbers over every declared member
+    // regardless of which of these two buckets later claims it.
+    val suffix: String = callableCatalog.overloadSuffix(method)
+    val cname: String = toCName(methodName) + suffix
+    val csMethodName: String = methodName.replaceFirstChar { it.uppercase() }
+    val nativeStem: String = "Native_$csMethodName${suffix}Async"
+    val returnType = method.returnType?.resolve()?.expandAliases()
+    val flowElementTypeResolved: KSType? = returnType?.arguments?.firstOrNull()?.type?.resolve()
+    // v1 scope (ADR-068): nullable element/member is deferred; mirror ADR-065's plain (non-null)
+    // shape only.
+    val flowCsElementType: String = qualifiedElementCsType(flowElementTypeResolved, context)
+
+    // ADR-114: a collection parameter takes the public collection type with an IntPtr native
+    // slot; every other parameter keeps mapParamType's shipped spelling.
+    val methodParams: List<CirParameter> =
+      legacyRouteParameters(method.parameters, classifier, tracker)
+
+    val nativeParams: List<CirParameter> = listOf(
+      CirParameter("handle", "IntPtr"),
+      CirParameter("scopeHandle", "IntPtr"),
+    ) + methodParams +
+        listOf(
+          // ADR-102: a raw thunk address, not a delegate the marshaller would have to build a
+          // native-to-managed stub for. The native symbol is unchanged; Kotlin is untouched.
+          CirParameter("callback", "IntPtr"),
+          CirParameter("userData", "IntPtr"),
+        )
+
+    val nativeImport = CirDllImport(
+      libraryName = libraryName,
+      entryPoint = "${prefix}_${cname}_async",
+      returnType = "IntPtr",
+      name = nativeStem,
+      parameters = nativeParams,
+      visibility = CirVisibility.PRIVATE,
+    )
+
+    val asyncReturnType = "KotlinStateFlow<$flowCsElementType>"
+
+    val asyncMethod = CirMethod(
+      name = "${csMethodName}Async",
+      nativeName = nativeStem,
+      returnType = "Task<$asyncReturnType>",
+      parameters = methodParams,
+      body = "",
+      isAsync = true,
+      asyncReturnType = asyncReturnType,
+    )
+
+    listOf(nativeImport, asyncMethod)
+  }
+
+  return asyncMembers + suspendStateFlowMembers
+}
+
 internal fun translateSealedClass(
   cls: KSClassDeclaration,
   context: NugetContext,
   tracker: CollectionHelperTracker,
   callableCatalog: ForwardCallablePlanCatalog,
+  // ADR-118: the sealed route classifies too now -- the arm's suspend members go through the same
+  // `legacyRouteParameters`/`legacyRefusedParameter` rules an ordinary class's do.
+  classifier: ForwardBridgeTypeClassifier,
   // Issue #111: the residual legacy lambda-property route below needs both halves the ordinary
   // class arm already had -- the export set to decide whether a type argument is nameable, and a
   // logger to say so when it is not.
@@ -1194,11 +1245,40 @@ internal fun translateSealedClass(
       // signatures agree (`set(x: Foo)` / `set(x: Foo?)`) are CS0111 in the generated file.
       emitCsharpSignatureCollisions(methods, "$name.$subName", subclass, logger)
 
+      // ADR-118: the arm's declared `suspend` members ride the legacy suspend route under the
+      // arm's own export prefix, projected by the same `suspendMembers` an ordinary class calls,
+      // so the arm's externs and bodies are an ordinary class's.
+      val armSuspendMethods: List<KSFunctionDeclaration> = subclass.getAllFunctions()
+        .filter { it.getVisibility() == Visibility.PUBLIC }
+        // Declared-only, the same `parentDeclaration == subclass` gate the plan methods above and
+        // the planner's `sealedSubclassEntries` use: a base `open suspend fun` no arm overrides
+        // belongs to no arm.
+        .filter { it.parentDeclaration == subclass }
+        .filter { it.modifiers.contains(Modifier.SUSPEND) }
+        // ADR-114: the refusal `translateClass` applies upstream of its own projection. Both
+        // halves must agree, or a C# import arrives with no Kotlin export behind it.
+        .filter { method -> classifier.legacyRefusedParameter(method.parameters) == null }
+        .toList()
+      val asyncMembers: List<CirMember> = suspendMembers(
+        suspendMethods = armSuspendMethods,
+        prefix = subPrefix,
+        libraryName = libraryName,
+        classifier = classifier,
+        tracker = tracker,
+        callableCatalog = callableCatalog,
+        context = context,
+      )
+
       CirSealedSubclass(
         name = subName,
         nativePrefix = subPrefix,
         properties = properties,
         methods = methods,
+        asyncMembers = asyncMembers,
+        // Derived from what projected, not from a `getAllFunctions()` scan: a base-declared or
+        // ADR-114 refused suspend member would otherwise hand the arm a scope, `IAsyncDisposable`
+        // and `DisposeAsync` with no async method on it to use them.
+        hasSuspendMethods = asyncMembers.isNotEmpty(),
         isDataClass = isDataClass,
         isNested = isNested,
       )
