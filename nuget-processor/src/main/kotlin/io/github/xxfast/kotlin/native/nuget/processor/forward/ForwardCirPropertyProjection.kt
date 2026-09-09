@@ -390,81 +390,10 @@ internal object ForwardCirPropertyProjection {
     builder.appendLine("            }")
   }
 
-  private fun collectionMaterialize(type: BridgeType.Collection): String = when (type.kind) {
-    CollectionKind.LIST, CollectionKind.MUTABLE_LIST -> {
-      val component: BridgeType = requireNotNull(type.element)
-      val element: String = component.csharpType()
-      val readOnly: Boolean = type.kind == CollectionKind.LIST
-      buildString {
-        val read: CirComponentRead = collectionComponentRead(
-          "elementHandle",
-          "NugetListNative.Get(nativeResult, i)",
-          component,
-        ) { it.csharpType() }
-        appendLine("            int count = NugetListNative.Count(nativeResult);")
-        appendLine("            var result = new List<$element>(count);")
-        appendLine("            for (int i = 0; i < count; i++)")
-        appendLine("            {")
-        read.declaration?.let { appendLine("                $it") }
-        appendLine("                result.Add(${read.expression});")
-        appendLine("            }")
-        appendLine("            NugetListNative.Dispose(nativeResult);")
-        append("            return " + if (readOnly) "result.AsReadOnly();" else "result;")
-      }
-    }
-
-    CollectionKind.MAP, CollectionKind.MUTABLE_MAP -> {
-      val keyComponent: BridgeType = requireNotNull(type.key)
-      val valueComponent: BridgeType = requireNotNull(type.value)
-      val key: String = keyComponent.csharpType()
-      val value: String = valueComponent.csharpType()
-      buildString {
-        val readKey: CirComponentRead = collectionComponentRead(
-          "keyHandle",
-          "NugetMapNative.KeyAt(nativeResult, i)",
-          keyComponent,
-        ) { it.csharpType() }
-        val readValue: CirComponentRead = collectionComponentRead(
-          "valueHandle",
-          "NugetMapNative.ValueAt(nativeResult, i)",
-          valueComponent,
-        ) { it.csharpType() }
-        appendLine("            int count = NugetMapNative.Count(nativeResult);")
-        appendLine("            var result = new Dictionary<$key, $value>(count);")
-        appendLine("            for (int i = 0; i < count; i++)")
-        appendLine("            {")
-        readKey.declaration?.let { appendLine("                $it") }
-        appendLine("                var mapKey = ${readKey.expression};")
-        readValue.declaration?.let { appendLine("                $it") }
-        appendLine("                var mapValue = ${readValue.expression};")
-        appendLine("                result[mapKey] = mapValue;")
-        appendLine("            }")
-        appendLine("            NugetMapNative.Dispose(nativeResult);")
-        append("            return result;")
-      }
-    }
-
-    CollectionKind.SET, CollectionKind.MUTABLE_SET -> {
-      val component: BridgeType = requireNotNull(type.element)
-      val element: String = component.csharpType()
-      buildString {
-        val read: CirComponentRead = collectionComponentRead(
-          "elementHandle",
-          "NugetSetNative.ElementAt(nativeResult, i)",
-          component,
-        ) { it.csharpType() }
-        appendLine("            int count = NugetSetNative.Count(nativeResult);")
-        appendLine("            var result = new HashSet<$element>(count);")
-        appendLine("            for (int i = 0; i < count; i++)")
-        appendLine("            {")
-        read.declaration?.let { appendLine("                $it") }
-        appendLine("                result.Add(${read.expression});")
-        appendLine("            }")
-        appendLine("            NugetSetNative.Dispose(nativeResult);")
-        append("            return result;")
-      }
-    }
-  }
+  /** ADR-120: same routing as the callable half. The read runs through ADR-099's
+   *  `finally`-guarded helpers, so the result handle goes even when an element read throws. */
+  private fun collectionMaterialize(type: BridgeType.Collection): String =
+    "            return ${componentCollectionRead("nativeResult", type, csharpType = { it.csharpType() })};"
 
   private fun nativeName(plan: ForwardPropertyPlan, call: ForwardNativeCall): String {
     if (plan.position == ForwardPropertyPosition.CLASS) {

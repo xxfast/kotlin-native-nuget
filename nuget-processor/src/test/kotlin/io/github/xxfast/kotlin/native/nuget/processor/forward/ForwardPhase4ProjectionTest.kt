@@ -32,7 +32,10 @@ class ForwardPhase4ProjectionTest {
     assertEquals("Friend", objectMethod.returnType)
     assertEquals("IReadOnlyList<int>", listMethod.returnType)
     assertEquals(true, ForwardHelperRequirement.COLLECTION in listPlan.helperRequirements)
-    assertContains(renderClass(listMethod), "NugetListNative.Count(listHandle)")
+    assertContains(
+      renderClass(listMethod),
+      "NugetMarshal.ReadList<int>(listHandle, static h1 => NugetMarshal.FromHandle<int>(h1))",
+    )
   }
 
   @Test

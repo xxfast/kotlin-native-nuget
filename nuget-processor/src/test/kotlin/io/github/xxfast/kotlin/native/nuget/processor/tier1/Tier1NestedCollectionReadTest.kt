@@ -40,14 +40,14 @@ class Tier1NestedCollectionReadTest {
     val cs: String = result.generatedCSharp
     assertContains(
       cs,
-      "NugetMarshal.ReadSet<string>(NugetListNative.Get(listHandle, i), " +
-          "static h1 => NugetMarshal.FromHandle<string>(h1))",
+      "NugetMarshal.ReadSet<string>(h1, " +
+          "static h2 => NugetMarshal.FromHandle<string>(h2))",
     )
     assertContains(
       cs,
-      "NugetMarshal.ReadMap<string, int>(NugetMapNative.ValueAt(mapHandle, i), " +
-          "static k1 => NugetMarshal.FromHandle<string>(k1), " +
-          "static v1 => NugetMarshal.FromHandle<int>(v1))",
+      "NugetMarshal.ReadMap<string, int>(v1, " +
+          "static k2 => NugetMarshal.FromHandle<string>(k2), " +
+          "static v2 => NugetMarshal.FromHandle<int>(v2))",
     )
     // The helpers themselves have to be emitted alongside, gated per kind.
     assertContains(cs, "public static HashSet<T> ReadSet<T>(IntPtr handle, Func<IntPtr, T> read)")
@@ -115,10 +115,10 @@ class Tier1NestedCollectionReadTest {
     // then read, and the Get call cannot be repeated), which no expression-bodied lambda can hold.
     assertContains(
       result.generatedCSharp,
-      "NugetMarshal.ReadList<string?>(NugetListNative.Get(listHandle, i), " +
-          "static h1 => { IntPtr elementHandle1 = h1; " +
-          "return elementHandle1 == IntPtr.Zero ? (string?)null : " +
-          "NugetMarshal.FromHandle<string>(elementHandle1); })",
+      "NugetMarshal.ReadList<string?>(h1, " +
+          "static h2 => { IntPtr elementHandle2 = h2; " +
+          "return elementHandle2 == IntPtr.Zero ? (string?)null : " +
+          "NugetMarshal.FromHandle<string>(elementHandle2); })",
     )
   }
 }

@@ -148,8 +148,8 @@ class Tier1ValueClassCollectionComponentTest {
     )
     assertContains(
       cs,
-      "result.Add(new global::Interop.ChartId(" +
-          "NugetMarshal.FromHandle<string>(NugetListNative.Get(nativeResult, i))));",
+      "(nativeResult, static h1 => new global::Interop.ChartId(" +
+          "NugetMarshal.FromHandle<string>(h1)))",
     )
   }
 
@@ -189,18 +189,18 @@ class Tier1ValueClassCollectionComponentTest {
     val cs: String = result.generatedCSharp
     assertContains(
       cs,
-      "result.Add(new global::Interop.ChartId(" +
-          "NugetMarshal.FromHandle<string>(NugetListNative.Get(listHandle, i))));",
+      "(listHandle, static h1 => new global::Interop.ChartId(" +
+          "NugetMarshal.FromHandle<string>(h1)))",
     )
     assertContains(
       cs,
-      "result.Add(new global::Interop.Temperament((global::Interop.Mood)" +
-          "NugetMarshal.FromHandle<int>(NugetSetNative.ElementAt(setHandle, i))));",
+      "(setHandle, static h1 => new global::Interop.Temperament((global::Interop.Mood)" +
+          "NugetMarshal.FromHandle<int>(h1)))",
     )
     assertContains(
       cs,
-      "var value = new global::Interop.ChartId(" +
-          "NugetMarshal.FromHandle<string>(NugetMapNative.ValueAt(mapHandle, i)));",
+      "static v1 => new global::Interop.ChartId(" +
+          "NugetMarshal.FromHandle<string>(v1))",
     )
   }
 }

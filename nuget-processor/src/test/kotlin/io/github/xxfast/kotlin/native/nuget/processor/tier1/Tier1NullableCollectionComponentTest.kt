@@ -149,11 +149,11 @@ class Tier1NullableCollectionComponentTest {
     val cs: String = result.generatedCSharp
     // The getter's read is the two-statement form: the handle cannot be re-evaluated, since each
     // Get mints a fresh StableRef.
-    assertContains(cs, "IntPtr elementHandle = NugetListNative.Get(nativeResult, i);")
+    assertContains(cs, "static h1 => { IntPtr elementHandle1 = h1;")
     assertContains(
       cs,
-      "result.Add(elementHandle == IntPtr.Zero ? (int?)null : " +
-          "NugetMarshal.FromHandle<int>(elementHandle));",
+      "return elementHandle1 == IntPtr.Zero ? (int?)null : " +
+          "NugetMarshal.FromHandle<int>(elementHandle1); }",
     )
   }
 
@@ -182,19 +182,19 @@ class Tier1NullableCollectionComponentTest {
     )
 
     val cs: String = result.generatedCSharp
-    assertContains(cs, "IntPtr elementHandle = NugetListNative.Get(listHandle, i);")
+    assertContains(cs, "(listHandle, static h1 => { IntPtr elementHandle1 = h1;")
     assertContains(
       cs,
-      "result.Add(elementHandle == IntPtr.Zero ? (string?)null : " +
-          "NugetMarshal.FromHandle<string>(elementHandle));",
+      "return elementHandle1 == IntPtr.Zero ? (string?)null : " +
+          "NugetMarshal.FromHandle<string>(elementHandle1); }",
     )
-    assertContains(cs, "IntPtr elementHandle = NugetSetNative.ElementAt(setHandle, i);")
+    assertContains(cs, "(setHandle, static h1 => { IntPtr elementHandle1 = h1;")
     // The value-class re-wrap sits inside the non-null arm only.
-    assertContains(cs, "IntPtr valueHandle = NugetMapNative.ValueAt(mapHandle, i);")
+    assertContains(cs, "static v1 => { IntPtr valueHandle1 = v1;")
     assertContains(
       cs,
-      "var value = valueHandle == IntPtr.Zero ? (global::Interop.ChartId?)null : " +
-          "new global::Interop.ChartId(NugetMarshal.FromHandle<string>(valueHandle));",
+      "return valueHandle1 == IntPtr.Zero ? (global::Interop.ChartId?)null : " +
+          "new global::Interop.ChartId(NugetMarshal.FromHandle<string>(valueHandle1)); }",
     )
   }
 
@@ -245,9 +245,9 @@ class Tier1NullableCollectionComponentTest {
     )
     assertContains(
       cs,
-      "result.Add(elementHandle == IntPtr.Zero ? (global::Interop.Temperament?)null : " +
+      "return elementHandle1 == IntPtr.Zero ? (global::Interop.Temperament?)null : " +
           "new global::Interop.Temperament((global::Interop.Mood)" +
-          "NugetMarshal.FromHandle<int>(elementHandle)));",
+          "NugetMarshal.FromHandle<int>(elementHandle1)); }",
     )
   }
 

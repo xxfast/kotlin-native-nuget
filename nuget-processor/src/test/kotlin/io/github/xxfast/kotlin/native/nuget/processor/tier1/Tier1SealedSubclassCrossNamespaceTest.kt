@@ -60,10 +60,10 @@ class Tier1SealedSubclassCrossNamespaceTest {
 
     assertTrue(result.compiledClean, "expected a clean compile; got: ${result.compileErrors}")
     assertContains(result.generatedCSharp, "public IReadOnlyList<$remote.Assignment> Result")
-    assertContains(result.generatedCSharp, "var result = new List<$remote.Assignment>(count);")
+    assertContains(result.generatedCSharp, "NugetMarshal.ReadList<$remote.Assignment>(nativeResult,")
     assertContains(
       result.generatedCSharp,
-      "result.Add(NugetMarshal.FromHandle<$remote.Assignment>(NugetListNative.Get(nativeResult, i)));",
+      "static h1 => NugetMarshal.FromHandle<$remote.Assignment>(h1)",
     )
   }
 
@@ -106,9 +106,9 @@ class Tier1SealedSubclassCrossNamespaceTest {
     val result = run()
 
     assertContains(result.generatedCSharp, "public IReadOnlySet<$remote.Assignment> Unique")
-    assertContains(result.generatedCSharp, "new HashSet<$remote.Assignment>(count);")
+    assertContains(result.generatedCSharp, "NugetMarshal.ReadSet<$remote.Assignment>(nativeResult,")
     assertContains(result.generatedCSharp, "public IReadOnlyDictionary<string, $remote.Assignment> ByName")
-    assertContains(result.generatedCSharp, "new Dictionary<string, $remote.Assignment>(count);")
+    assertContains(result.generatedCSharp, "NugetMarshal.ReadMap<string, $remote.Assignment>(nativeResult,")
   }
 
   @Test

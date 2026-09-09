@@ -1225,97 +1225,25 @@ internal object ForwardCirPlanProjection {
   )
 
   /** The result-side read of a collection handle: the call, the error check, and the
-   *  materialization loop. The *parameter* handles it may have been given are released by the
-   *  [forwardCirHandleScope] around it; the result handle's own Dispose is the last statement of
-   *  the loop below. */
+   *  materialization, which runs through ADR-099's `finally`-guarded `ReadList`/`ReadSet`/`ReadMap`
+   *  helpers. The *parameter* handles it may have been given are released by the
+   *  [forwardCirHandleScope] around it; the result handle is released by the helper, on the
+   *  throwing path as well as the happy one (ADR-120: the shipped inlined loop put that `Dispose`
+   *  after the loop, so an element read that threw mid-loop leaked the handle). */
   private fun collectionMaterializingCore(
     nativeName: String,
     arguments: String,
     type: BridgeType.Collection,
-  ): String = when (type.kind) {
-    CollectionKind.LIST, CollectionKind.MUTABLE_LIST -> {
-      val element: BridgeType = requireNotNull(type.element) {
-        "Forward CIR List result has no element type"
-      }
-      val elementType: String = element.csharpType()
-      val mutable: Boolean = type.kind == CollectionKind.MUTABLE_LIST
-      buildString {
-        appendLine("            IntPtr listHandle = $nativeName($arguments);")
-        appendErrorCheck()
-        appendLine("            int count = NugetListNative.Count(listHandle);")
-        appendLine("            var result = new List<$elementType>(count);")
-        appendLine("            for (int i = 0; i < count; i++)")
-        appendLine("            {")
-        val read: CirComponentRead = collectionComponentRead(
-          "elementHandle",
-          "NugetListNative.Get(listHandle, i)",
-          element,
-        ) { it.csharpType() }
-        read.declaration?.let { appendLine("                $it") }
-        appendLine("                result.Add(${read.expression});")
-        appendLine("            }")
-        appendLine("            NugetListNative.Dispose(listHandle);")
-        append("            return " + if (mutable) "result;" else "result.AsReadOnly();")
-      }
+  ): String {
+    val handle: String = when (type.kind) {
+      CollectionKind.LIST, CollectionKind.MUTABLE_LIST -> "listHandle"
+      CollectionKind.MAP, CollectionKind.MUTABLE_MAP -> "mapHandle"
+      CollectionKind.SET, CollectionKind.MUTABLE_SET -> "setHandle"
     }
-
-    CollectionKind.MAP, CollectionKind.MUTABLE_MAP -> {
-      val key: BridgeType = requireNotNull(type.key) { "Forward CIR Map result has no key type" }
-      val value: BridgeType =
-        requireNotNull(type.value) { "Forward CIR Map result has no value type" }
-      val keyType: String = key.csharpType()
-      val valueType: String = value.csharpType()
-      buildString {
-        appendLine("            IntPtr mapHandle = $nativeName($arguments);")
-        appendErrorCheck()
-        appendLine("            int count = NugetMapNative.Count(mapHandle);")
-        appendLine("            var result = new Dictionary<$keyType, $valueType>(count);")
-        appendLine("            for (int i = 0; i < count; i++)")
-        appendLine("            {")
-        val readKey: CirComponentRead = collectionComponentRead(
-          "keyHandle",
-          "NugetMapNative.KeyAt(mapHandle, i)",
-          key,
-        ) { it.csharpType() }
-        val readValue: CirComponentRead = collectionComponentRead(
-          "valueHandle",
-          "NugetMapNative.ValueAt(mapHandle, i)",
-          value,
-        ) { it.csharpType() }
-        readKey.declaration?.let { appendLine("                $it") }
-        appendLine("                var key = ${readKey.expression};")
-        readValue.declaration?.let { appendLine("                $it") }
-        appendLine("                var value = ${readValue.expression};")
-        appendLine("                result[key] = value;")
-        appendLine("            }")
-        appendLine("            NugetMapNative.Dispose(mapHandle);")
-        append("            return result;")
-      }
-    }
-
-    CollectionKind.SET, CollectionKind.MUTABLE_SET -> {
-      val element: BridgeType = requireNotNull(type.element) {
-        "Forward CIR Set result has no element type"
-      }
-      val elementType: String = element.csharpType()
-      buildString {
-        appendLine("            IntPtr setHandle = $nativeName($arguments);")
-        appendErrorCheck()
-        appendLine("            int count = NugetSetNative.Count(setHandle);")
-        appendLine("            var result = new HashSet<$elementType>(count);")
-        appendLine("            for (int i = 0; i < count; i++)")
-        appendLine("            {")
-        val read: CirComponentRead = collectionComponentRead(
-          "elementHandle",
-          "NugetSetNative.ElementAt(setHandle, i)",
-          element,
-        ) { it.csharpType() }
-        read.declaration?.let { appendLine("                $it") }
-        appendLine("                result.Add(${read.expression});")
-        appendLine("            }")
-        appendLine("            NugetSetNative.Dispose(setHandle);")
-        append("            return result;")
-      }
+    return buildString {
+      appendLine("            IntPtr $handle = $nativeName($arguments);")
+      appendErrorCheck()
+      append("            return ${componentCollectionRead(handle, type, csharpType = { it.csharpType() })};")
     }
   }
 

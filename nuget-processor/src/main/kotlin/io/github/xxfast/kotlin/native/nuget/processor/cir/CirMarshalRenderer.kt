@@ -408,21 +408,30 @@ internal fun StringBuilder.renderMarshalHelper(helper: CirMarshalHelper) {
     appendLine("        }")
     appendLine()
   }
-  // ADR-099: the read side of a NESTED component. The shipped materialization is inlined codegen
-  // with fixed local names (`listHandle`, `count`, `result`, `i`) that cannot nest, so an inner
-  // level goes through these helpers instead. The `finally` is what keeps every inner level free of
-  // ROADMAP.md:142's "result handle leaks if materialization throws mid-loop" shape; the handle was
-  // minted by the Get/KeyAt/ValueAt that produced it, so this helper owns it.
+  // ADR-099: the read side of a component collection. The shipped materialization was inlined
+  // codegen with fixed local names (`listHandle`, `count`, `result`, `i`) that cannot nest, so an
+  // inner level went through these helpers instead; ADR-120 routes the OUTER level through them
+  // too, so every nesting level releases its handle on the throwing path as well as the happy one.
+  // The `finally` is what keeps them free of ROADMAP.md:142's "result handle leaks if
+  // materialization throws mid-loop" shape; the handle was minted by the call or the
+  // Get/KeyAt/ValueAt that produced it, so this helper owns it.
+  //
+  // ADR-120: the `catch` disposes what has already been materialized. Every element read mints its
+  // own box, and a wrapper built around one owns it, so a wrapper stranded in a half-built
+  // collection nobody can reach is a leak of the same shape as the handle above. The re-throw
+  // preserves the original exception and its stack.
   if (helper.includesList) {
     appendLine("        public static List<T> ReadList<T>(IntPtr handle, Func<IntPtr, T> read)")
     appendLine("        {")
+    appendLine("            var result = new List<T>();")
     appendLine("            try")
     appendLine("            {")
     appendLine("                int count = NugetListNative.Count(handle);")
-    appendLine("                var result = new List<T>(count);")
+    appendLine("                result.Capacity = count;")
     appendLine("                for (int i = 0; i < count; i++) result.Add(read(NugetListNative.Get(handle, i)));")
     appendLine("                return result;")
     appendLine("            }")
+    appendLine("            catch { DisposeMaterialized(result); throw; }")
     appendLine("            finally { NugetListNative.Dispose(handle); }")
     appendLine("        }")
     appendLine()
@@ -430,13 +439,14 @@ internal fun StringBuilder.renderMarshalHelper(helper: CirMarshalHelper) {
   if (helper.includesSet) {
     appendLine("        public static HashSet<T> ReadSet<T>(IntPtr handle, Func<IntPtr, T> read)")
     appendLine("        {")
+    appendLine("            var result = new HashSet<T>();")
     appendLine("            try")
     appendLine("            {")
     appendLine("                int count = NugetSetNative.Count(handle);")
-    appendLine("                var result = new HashSet<T>(count);")
     appendLine("                for (int i = 0; i < count; i++) result.Add(read(NugetSetNative.ElementAt(handle, i)));")
     appendLine("                return result;")
     appendLine("            }")
+    appendLine("            catch { DisposeMaterialized(result); throw; }")
     appendLine("            finally { NugetSetNative.Dispose(handle); }")
     appendLine("        }")
     appendLine()
@@ -445,17 +455,30 @@ internal fun StringBuilder.renderMarshalHelper(helper: CirMarshalHelper) {
     appendLine("        public static Dictionary<TKey, TValue> ReadMap<TKey, TValue>(")
     appendLine("            IntPtr handle, Func<IntPtr, TKey> readKey, Func<IntPtr, TValue> readValue) where TKey : notnull")
     appendLine("        {")
+    appendLine("            var result = new Dictionary<TKey, TValue>();")
     appendLine("            try")
     appendLine("            {")
     appendLine("                int count = NugetMapNative.Count(handle);")
-    appendLine("                var result = new Dictionary<TKey, TValue>(count);")
     appendLine("                for (int i = 0; i < count; i++)")
     appendLine("                {")
     appendLine("                    result[readKey(NugetMapNative.KeyAt(handle, i))] = readValue(NugetMapNative.ValueAt(handle, i));")
     appendLine("                }")
     appendLine("                return result;")
     appendLine("            }")
+    appendLine("            catch")
+    appendLine("            {")
+    appendLine("                DisposeMaterialized(result.Keys);")
+    appendLine("                DisposeMaterialized(result.Values);")
+    appendLine("                throw;")
+    appendLine("            }")
     appendLine("            finally { NugetMapNative.Dispose(handle); }")
+    appendLine("        }")
+    appendLine()
+  }
+  if (helper.includesList || helper.includesSet || helper.includesMap) {
+    appendLine("        private static void DisposeMaterialized<T>(System.Collections.Generic.IEnumerable<T> materialized)")
+    appendLine("        {")
+    appendLine("            foreach (T item in materialized) (item as IDisposable)?.Dispose();")
     appendLine("        }")
     appendLine()
   }

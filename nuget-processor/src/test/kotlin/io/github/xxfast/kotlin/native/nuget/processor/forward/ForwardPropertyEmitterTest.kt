@@ -99,8 +99,11 @@ class ForwardPropertyEmitterTest {
 
     val csharp = renderClassProperty(plan)
     assertContains(csharp, "IReadOnlyList<string> Tags")
-    assertContains(csharp, "NugetListNative.Count(nativeResult)")
-    assertContains(csharp, "result.AsReadOnly()")
+    assertContains(
+      csharp,
+      "NugetMarshal.ReadList<string>(nativeResult, static h1 => " +
+          "NugetMarshal.FromHandle<string>(h1)).AsReadOnly()",
+    )
   }
 
   @Test
@@ -121,7 +124,7 @@ class ForwardPropertyEmitterTest {
 
     val csharp = renderClassProperty(plan)
     assertContains(csharp, "IReadOnlyDictionary<string, int> Scores")
-    assertContains(csharp, "NugetMapNative.Count(nativeResult)")
+    assertContains(csharp, "NugetMarshal.ReadMap<string, int>(nativeResult,")
   }
 
   @Test
@@ -138,7 +141,7 @@ class ForwardPropertyEmitterTest {
 
     val csharp = renderClassProperty(plan)
     assertContains(csharp, "IReadOnlySet<string> Labels")
-    assertContains(csharp, "NugetSetNative.Count(nativeResult)")
+    assertContains(csharp, "NugetMarshal.ReadSet<string>(nativeResult,")
   }
 
   @Test

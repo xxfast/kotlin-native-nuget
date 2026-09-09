@@ -81,7 +81,7 @@ class Tier1SealedCollectionPropertyTest {
 
     assertTrue(
       result.generatedCSharp.contains(
-        "NugetMarshal.FromHandle<global::Interop.Shape>(NugetListNative.Get(nativeResult, i))",
+        "(nativeResult, static h1 => NugetMarshal.FromHandle<global::Interop.Shape>(h1))",
       ),
       "expected the List element to read through FromHandle<Shape>; " +
           "generatedCSharp=${result.generatedCSharp.lines().filter { it.contains("Shape") }}",

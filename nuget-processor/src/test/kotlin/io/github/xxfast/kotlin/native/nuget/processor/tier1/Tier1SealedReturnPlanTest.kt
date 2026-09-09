@@ -111,7 +111,7 @@ class Tier1SealedReturnPlanTest {
     )
     assertTrue(
       result.generatedCSharp.contains(
-        "NugetMarshal.FromHandle<global::Interop.Shape>(NugetListNative.Get(listHandle, i))",
+        "(listHandle, static h1 => NugetMarshal.FromHandle<global::Interop.Shape>(h1))",
       ),
       "expected the List element to materialise through FromHandle<Shape>; " +
           "generatedCSharp=${result.generatedCSharp.lines().filter { it.contains("FromHandle") }}",

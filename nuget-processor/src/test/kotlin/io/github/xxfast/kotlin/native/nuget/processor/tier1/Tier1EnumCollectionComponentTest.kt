@@ -144,18 +144,16 @@ class Tier1EnumCollectionComponentTest {
     val cs: String = result.generatedCSharp
     assertContains(
       cs,
-      "result.Add((global::Interop.Mood)NugetMarshal.FromHandle<int>" +
-          "(NugetListNative.Get(listHandle, i)));",
+      "(listHandle, static h1 => (global::Interop.Mood)NugetMarshal.FromHandle<int>(h1))",
     )
     assertContains(
       cs,
-      "var value = (global::Interop.Mood)NugetMarshal.FromHandle<int>" +
-          "(NugetMapNative.ValueAt(mapHandle, i));",
+      "static v1 => (global::Interop.Mood)NugetMarshal.FromHandle<int>(v1)",
     )
     assertContains(
       cs,
-      "result.Add(elementHandle == IntPtr.Zero ? (global::Interop.Mood?)null : " +
-          "(global::Interop.Mood)NugetMarshal.FromHandle<int>(elementHandle));",
+      "return elementHandle1 == IntPtr.Zero ? (global::Interop.Mood?)null : " +
+          "(global::Interop.Mood)NugetMarshal.FromHandle<int>(elementHandle1); }",
     )
   }
 
@@ -198,8 +196,7 @@ class Tier1EnumCollectionComponentTest {
     )
     assertContains(
       cs,
-      "result.Add((global::Interop.Mood)NugetMarshal.FromHandle<int>" +
-          "(NugetListNative.Get(nativeResult, i)));",
+      "(nativeResult, static h1 => (global::Interop.Mood)NugetMarshal.FromHandle<int>(h1))",
     )
   }
 

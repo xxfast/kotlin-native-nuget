@@ -60,8 +60,8 @@ class ForwardPhase8ProjectionTest {
 
     assertEquals("IReadOnlyDictionary<string, int>", mapMethod.returnType)
     assertEquals("IReadOnlySet<string>", setMethod.returnType)
-    assertContains(renderClass(mapMethod), "NugetMapNative.Count(mapHandle)")
-    assertContains(renderClass(setMethod), "NugetSetNative.Count(setHandle)")
+    assertContains(renderClass(mapMethod), "NugetMarshal.ReadMap<string, int>(mapHandle,")
+    assertContains(renderClass(setMethod), "NugetMarshal.ReadSet<string>(setHandle,")
     assertEquals(true, ForwardHelperRequirement.COLLECTION in mapPlan.helperRequirements)
     assertEquals(true, ForwardHelperRequirement.COLLECTION in setPlan.helperRequirements)
   }

@@ -122,8 +122,8 @@ class Tier1ValueClassOverSealedPropertyTest {
     assertContains(cs, "public IReadOnlyList<global::Interop.Wrapped> Many")
     assertContains(
       cs,
-      "result.Add(new global::Interop.Wrapped(" +
-          "NugetMarshal.FromHandle<global::Interop.Shape>(NugetListNative.Get(nativeResult, i))));",
+      "(nativeResult, static h1 => new global::Interop.Wrapped(" +
+          "NugetMarshal.FromHandle<global::Interop.Shape>(h1)))",
     )
   }
 }

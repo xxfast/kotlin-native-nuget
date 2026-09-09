@@ -294,8 +294,13 @@ public class LiveHandleTests
             Settle();
             long before = NugetMarshal.LiveHandles;
 
-            using var newsroom = new Newsroom();
-            Assert.Throws<InvalidOperationException>(() => newsroom.Archive());
+            // The Newsroom handle is minted after `before` is read, so it has to be released
+            // before `after` is read. A method-scoped `using var` would still be alive at the
+            // assertion and would read as a +1 that is not a leak.
+            using (Newsroom newsroom = new Newsroom())
+            {
+                Assert.Throws<InvalidOperationException>(() => newsroom.Archive());
+            }
 
             Settle();
             long after = NugetMarshal.LiveHandles;
