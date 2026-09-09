@@ -1,7 +1,7 @@
 # ADR-121: Forward, a `Morgue` fixture in `test-library` proves Kotlin's GC collects an object after its last `StableRef` is disposed, asserted eventually from C#
 
 ## Status
-Proposed
+Accepted
 
 ## Context
 
@@ -287,3 +287,24 @@ is already covered by `BidirectionalTests.cs:219` and is not repeated here.
   the restatement asks for; a per-family sweep belongs with ROADMAP's assembly-level `LiveHandles`
   sweep.
 - Not changed: the processor, the generated C#, the reverse pipeline.
+
+## Amendments (2026-09-09, implementation)
+
+`scripts/verify.sh` green, 1569 tests, the class runs in about 1 s, three filtered reruns 3/3.
+Everything below is **Verified** by that run.
+
+- The negative-control listener could not be named `Listener`: `NestedInterfaceGateTests` scans the
+  whole test assembly for any type named `Listener` / `IListener`, so `CollectabilityTests.cs` names
+  its nested class `QuietListener` instead.
+- `Morgue.Forget()` and the held subscription token's `Dispose()` both run in `finally` blocks, so a
+  failed assertion in one test cannot leave `Morgue`'s weak reference pointed at a wrapper that no
+  longer exists, and cannot leak the negative control's live token into a later test.
+- The negative control (`StoredCallbackReceiver_TokenStillHeld_StaysAlive`) creates its
+  `CatEventSource` inside a `[MethodImpl(NoInlining)]` helper (`SubscribeAndDisposeTheSourceOnly`) so
+  no stack slot in the asserting frame holds the wrapper, the same reason `CreateWatchAndDispose` and
+  `SubscribeUnsubscribeAndDispose` exist. The source stayed alive for the full 1-second poll while the
+  token was held, and collected within the following 5-second poll once the token was disposed,
+  confirming the retention claim in the "which retention seams" table above.
+- Disposing the subscription token after the source wrapper is safe because the generated
+  `removeListener` export never dereferences the receiver handle (`CNameExports.kt` around line 6628,
+  confirmed by reading the generated source).

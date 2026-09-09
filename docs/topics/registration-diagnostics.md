@@ -197,6 +197,64 @@ for the collection-return leak this harness proved and closed.
 Only forward handles are counted; the reverse side's own `StableRef` sites are not (see
 [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md)).
 
+## Proving the object is collected, not only the handle
+
+`LiveHandles` returning to baseline proves the `StableRef` is gone. It says nothing about the Kotlin
+object the handle pointed at: something Kotlin-side (a closure, a registry, a list) could still hold
+it reachable with zero live handles, and the counter would never see it. `test-library` ships a
+`Morgue` fixture that watches one forward object with a Kotlin weak reference, so a C# test can prove
+the object itself is collected, not just its handle:
+
+```kotlin
+@OptIn(ExperimentalNativeApi::class)
+object Morgue {
+  private var watched: WeakReference<Any>? = null
+
+  /** Watch a plain class instance: the object behind `cat_create`, nothing else touches it. */
+  fun watchCat(cat: Cat) { watched = WeakReference(cat) }
+
+  /** Watch a stored-callback receiver: the unsubscribe closure captures it (ADR-039). */
+  fun watchSource(source: CatEventSource) { watched = WeakReference(source) }
+
+  /** True while the watched object is reachable; false once Kotlin's GC has collected it. */
+  fun isAlive(): Boolean = watched?.get() != null
+
+  fun forget() { watched = null }
+}
+```
+
+C# does the sequencing: create the wrapper, hand it to `Morgue`, dispose it, then poll
+`NugetBridge.GcCollect()` until the weak reference reads dead or a deadline passes. Each step is its
+own P/Invoke, since a disposed object stays reachable while a Kotlin frame still holds its pointer
+local (`IntegrationTests/CollectabilityTests.cs`):
+
+```C#
+private static bool CollectedWithin(TimeSpan budget)
+{
+    DateTime deadline = DateTime.UtcNow + budget;
+    while (DateTime.UtcNow < deadline)
+    {
+        GC.Collect();
+        GC.WaitForPendingFinalizers();
+        NugetBridge.GcCollect();
+        if (!Morgue.IsAlive()) return true;
+        Thread.Sleep(25);
+    }
+    return false;
+}
+```
+
+`CollectabilityTests` also carries a negative control, `StoredCallbackReceiver_TokenStillHeld_StaysAlive`:
+a held subscription token roots the receiver and the assertion stays false for a full second, then
+flips true once the token is disposed. That is what proves the positive assertions above can actually
+go red, not just pass by construction.
+
+<note>
+    <p>Today this covers a plain class and a stored-callback receiver only. A zero <code>LiveHandles</code>
+    count next to a live weak reference means Kotlin-side retention the handle counter cannot see;
+    see the open ROADMAP item to extend this to the other crossing families.</p>
+</note>
+
 ## Limitations
 
 - No structured, queryable diagnostics report for registration; the trace is a plain text stream,
@@ -221,5 +279,6 @@ Only forward handles are counted; the reverse side's own `StableRef` sites are n
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/054-reverse-bridge-registration-observability.md">ADR-054: Reverse-bridge registration observability</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/058-csharp-shape-b-structs-in-kotlin.md">ADR-058: C# Shape B structs in Kotlin</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/120-live-stableref-counter-and-leak-harness.md">ADR-120: Live StableRef counter and leak harness</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/121-kotlin-object-collectability-after-last-dispose.md">ADR-121: Kotlin object collectability after the last dispose</a>
     </category>
 </seealso>
