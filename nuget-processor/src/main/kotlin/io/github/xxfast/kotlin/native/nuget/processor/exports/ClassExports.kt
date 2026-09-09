@@ -21,8 +21,9 @@ import io.github.xxfast.kotlin.native.nuget.processor.cir.isMutableStateFlowElem
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeTypeClassifier
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallablePlan
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardLegacyParameterShape
+import io.github.xxfast.kotlin.native.nuget.processor.forward.isLegacyLowered
+import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyPrelude
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyLoweredName
-import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyLoweringStatement
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyParameterShapes
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyRefusedParameter
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardSuperClass
@@ -294,18 +295,14 @@ internal fun FileSpec.Builder.addClassExports(
     val paramCall: String = method.parameters
       .mapIndexed { index, param ->
         val paramName: String = param.name?.asString() ?: "_"
-        if (paramShapes[index] is ForwardLegacyParameterShape.Marshalled) {
-          legacyLoweredName(paramName)
-        } else paramName
+        if (paramShapes[index].isLegacyLowered()) legacyLoweredName(paramName) else paramName
       }
       .joinToString(", ")
 
     val paramPrelude: String = buildString {
       method.parameters.forEachIndexed { index, param ->
-        val shape: ForwardLegacyParameterShape = paramShapes[index]
-        if (shape is ForwardLegacyParameterShape.Marshalled) {
-          appendLine(legacyLoweringStatement(param.name?.asString() ?: "_", shape.type))
-        }
+        val prelude: String? = paramShapes[index].legacyPrelude(param.name?.asString() ?: "_")
+        if (prelude != null) appendLine(prelude)
       }
     }
 
@@ -320,7 +317,9 @@ internal fun FileSpec.Builder.addClassExports(
         val paramName: String = param.name?.asString() ?: "_"
         // ADR-114: the wire container is a handle to MutableList<Any?>/MutableSet<Any?>, never the
         // declared collection type, so the ABI slot is a COpaquePointer like every other handle.
-        if (paramShapes[index] is ForwardLegacyParameterShape.Marshalled) {
+        // ADR-122: so is a class/object/sealed parameter, which used to declare its real Kotlin
+        // type here and cross as a pinned `kref` struct against C#'s `IntPtr` (issue #126).
+        if (paramShapes[index].isLegacyLowered()) {
           addParameter(paramName, cOpaquePointer)
           return@forEachIndexed
         }

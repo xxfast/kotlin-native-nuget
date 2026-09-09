@@ -1,6 +1,7 @@
 using TestLibrary;
 using TestLibrary.Cat;
 using TestLibrary.Clinic;
+using TestLibrary.Issue126;
 using TestLibrary.Issue131;
 using TestLibrary.Models;
 using TestLibrary.Routes;
@@ -272,6 +273,24 @@ public class LiveHandleTests
             using Hub withoutLogger = HubSample.Hub(settings, null, null);
             Assert.Equal("3/Oreo/n", withLogger.Describe());
             Assert.Equal("3/none/-", withoutLogger.Describe());
+        });
+    }
+
+    // Row 8c. Issue #126: a *borrowed* handle at a parameter on the legacy StateFlow route. The
+    // C# side passes `observation._handle` without minting anything, and the Kotlin export
+    // dereferences it into a local rather than taking a StableRef of its own, so the whole
+    // crossing must mint no handle beyond the ones the wrapper and the read already own. The
+    // eager dereference is what makes that non-obvious: a fix that took ownership to keep the
+    // object alive across the flow would show up here as a per-crossing leak, and nowhere else.
+    [Fact]
+    public void HandleParameter_StateFlowValueRead_ReturnsToBaseline()
+    {
+        AssertNoLeak(() =>
+        {
+            using var radio = new ObservationRadio();
+            using Observation observation = ObservationKt.OpenBox("Oreo");
+            Observation.Alive alive = Assert.IsType<Observation.Alive>(observation);
+            Assert.Equal("alive:Oreo", radio.Watch(alive).Value);
         });
     }
 

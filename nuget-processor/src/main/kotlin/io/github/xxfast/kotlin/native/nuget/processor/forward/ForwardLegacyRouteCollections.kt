@@ -9,18 +9,24 @@ import io.github.xxfast.kotlin.native.nuget.processor.cir.STATE_FLOW_TYPES
 import io.github.xxfast.kotlin.native.nuget.processor.cir.expandAliases
 
 /**
- * ADR-114: the one place the Flow/StateFlow and suspend *legacy* routes classify a generic
+ * ADR-114 / ADR-122: the one place the Flow/StateFlow and suspend *legacy* routes classify a
  * parameter, shared by the Kotlin export builders (`exports/`) and both CIR translators (`cir/`).
  *
  * Those routes spell a parameter by pasting the declaration's own Kotlin type name through
  * `ClassName.bestGuess`, which drops the type arguments, so `fun served(kinds: List<String>):
  * StateFlow<String>` generated `kinds: List` and `packNuget` died at the Kotlin compile of the
- * whole file (issue #109). The two outcomes here are the only two that are safe:
+ * whole file (issue #109). ADR-122 then found the same fall-through at the non-generic position,
+ * where it renders a public `IntPtr` nobody can call (issue #126). Four outcomes, and only these
+ * four are safe:
  *
+ *  - a scalar is [Plain], the shipped spelling;
  *  - a supported collection is [Marshalled], crossing as a `COpaquePointer` handle to the same
- *    boxed wire container the ordinary synchronous route uses, and
- *  - every other generic parameter is [Refused] by name, so the member skips with a
- *    `SKIPPED_UNSUPPORTED_INPUT` instead of emitting Kotlin that does not compile.
+ *    boxed wire container the ordinary synchronous route uses;
+ *  - a class, `object` or sealed type is a [Handle], the borrowed `_handle` the ordinary plan
+ *    route already passes; and
+ *  - everything else is [Refused] by name, so the member skips with a
+ *    `SKIPPED_UNSUPPORTED_INPUT` instead of emitting Kotlin that does not compile, or C# that
+ *    compiles and cannot be called.
  *
  * Spelling the parameter with its real Kotlin type instead is deliberately not an option: it
  * compiles, and hands a pinned `kref` struct across an ABI whose C# half declares `IntPtr` (see
@@ -28,31 +34,62 @@ import io.github.xxfast.kotlin.native.nuget.processor.cir.expandAliases
  */
 internal sealed interface ForwardLegacyParameterShape {
 
-  /** A non-generic parameter: the shipped legacy spelling, unchanged. */
+  /**
+   * A scalar parameter: the shipped legacy spelling, unchanged.
+   *
+   * ADR-122 narrowed this from "no type arguments" to "one of the 13 entries `mapParamType` can
+   * actually spell". Everything else it used to cover rendered a public `IntPtr` (issue #126).
+   */
   data object Plain : ForwardLegacyParameterShape
 
   /** A collection the ordinary route's wire container and helpers already cover. */
   data class Marshalled(val type: BridgeType.Collection) : ForwardLegacyParameterShape
 
-  /** Any other generic parameter, named so the skip diagnostic can quote it. */
+  /**
+   * ADR-122: a class, `object`, sealed base or sealed arm, crossing as the borrowed handle the
+   * ordinary plan route already passes (`x._handle` in C#, `asStableRef<T>().get()` in Kotlin).
+   */
+  data class Handle(val type: BridgeType.ObjectHandle) : ForwardLegacyParameterShape
+
+  /** Any other parameter, named so the skip diagnostic can quote it. */
   data class Refused(val description: String) : ForwardLegacyParameterShape
 }
 
 /**
- * Classifies one legacy-route parameter. Only a *generic* type is classified at all: a plain
- * class, primitive, String or enum parameter renders exactly as it does today, so nothing existing
- * changes shape.
+ * Classifies one legacy-route parameter.
  *
- * Nullable collections (`List<T>?`) land in [ForwardLegacyParameterShape.Refused] on purpose:
- * threading nullability through these routes is ADR-067 territory and ADR-114 defers it. Refusing
- * is the safe half of the deferral, since the alternative is the same non-compiling Kotlin.
+ * ADR-114 classified only *generic* types here and returned [ForwardLegacyParameterShape.Plain]
+ * for everything else unread, which meant `mapParamType(simpleName)` handed C# an `IntPtr` for a
+ * class, an `object`, a sealed type, an enum, an `Instant`/`Duration`/`Uuid`, a value class and an
+ * interface alike (issue #126). ADR-122 classifies the non-generic case too, so the three outcomes
+ * are marshal it, borrow its handle, or refuse it by name. None of them is a public `IntPtr`.
+ *
+ * Nullable collections (`List<T>?`) and nullable objects land in
+ * [ForwardLegacyParameterShape.Refused] on purpose: threading nullability through these routes is
+ * ADR-067 territory and ADR-114 defers it. A nullable *scalar* stays [ForwardLegacyParameterShape
+ * .Plain], keeping the non-null spelling both halves already ship for it, rather than dropping a
+ * member that binds today.
  */
 internal fun ForwardBridgeTypeClassifier.legacyParameterShape(
   type: KSType,
 ): ForwardLegacyParameterShape {
   val expanded: KSType = type.expandAliases()
-  if (expanded.arguments.isEmpty()) return ForwardLegacyParameterShape.Plain
+  // ADR-105's rewrite, applied here for the same reason the planner applies it at a parameter
+  // position: a sealed base crosses as the handle its arms do, and Kotlin discriminates. The
+  // `viaDiscriminator` flag only matters for C# reconstruction, which a parameter never does.
+  val classified: BridgeType = classify(type).sealedAsHandle()
 
+  if (expanded.arguments.isEmpty()) return when {
+    classified.isLegacyScalar() -> ForwardLegacyParameterShape.Plain
+    classified is BridgeType.ObjectHandle -> ForwardLegacyParameterShape.Handle(classified)
+    classified is BridgeType.Nullable && classified.type.isLegacyScalar() ->
+      ForwardLegacyParameterShape.Plain
+
+    else -> ForwardLegacyParameterShape.Refused(expanded.legacyDescription())
+  }
+
+  // Deliberately the un-rewritten classification: a `List<Shape>` of a sealed base stays refused,
+  // as ADR-114/ADR-119 decided, rather than being widened by the rewrite above.
   val collection: BridgeType.Collection? = classify(type) as? BridgeType.Collection
   return if (collection != null && collection.isLegacyMarshallableInput()) {
     ForwardLegacyParameterShape.Marshalled(collection)
@@ -60,6 +97,14 @@ internal fun ForwardBridgeTypeClassifier.legacyParameterShape(
     ForwardLegacyParameterShape.Refused(expanded.legacyDescription())
   }
 }
+
+/**
+ * The 13 entries `mapParamType` can spell (`cir/CirTypeMapping.kt`). This is the whole of what
+ * [ForwardLegacyParameterShape.Plain] may cover: anything outside it rendered `IntPtr`, which is
+ * issue #126.
+ */
+private fun BridgeType.isLegacyScalar(): Boolean =
+  this is BridgeType.Primitive || this is BridgeType.Char || this is BridgeType.String
 
 /** [legacyParameterShape] for every parameter of a member, in declaration order. */
 internal fun ForwardBridgeTypeClassifier.legacyParameterShapes(
@@ -194,11 +239,14 @@ private fun BridgeType.Collection.isLegacyMarshallableInput(): Boolean = when {
 /** `Pair<String, Int>`: the author's own spelling, so a skip diagnostic names what to change. */
 private fun KSType.legacyDescription(): String {
   val base: String = declaration.simpleName.asString()
-  if (arguments.isEmpty()) return base
+  // ADR-122: the `?` matters for a non-generic refusal too, since a nullable object is refused
+  // *for* its nullability and the author would otherwise read the message as "no objects here".
+  val nullable: String = if (isMarkedNullable) "?" else ""
+  if (arguments.isEmpty()) return "$base$nullable"
   val rendered: String = arguments.joinToString(", ") { argument ->
     argument.type?.resolve()?.declaration?.simpleName?.asString() ?: "*"
   }
-  return "$base<$rendered>${if (isMarkedNullable) "?" else ""}"
+  return "$base<$rendered>$nullable"
 }
 
 /**
@@ -214,6 +262,34 @@ internal fun legacyLoweredName(parameter: String): String = "${parameter}Arg"
  */
 internal fun legacyLoweringStatement(parameter: String, type: BridgeType.Collection): String =
   "val ${legacyLoweredName(parameter)} = ${loweredCollectionExpression(parameter, type)}"
+
+/**
+ * ADR-122: the eager dereference of a borrowed handle parameter, the same expression the ordinary
+ * plan route emits. Emitted in the same prelude as [legacyLoweringStatement] and for a related
+ * reason read the other way round: the coroutine captures a strong Kotlin reference, so a C#
+ * consumer disposing its wrapper mid-flow cannot invalidate what the coroutine is still reading.
+ * Inlined at the call site it would instead be evaluated inside `scope.launch`, after the export
+ * has returned, which is exactly the lifetime hazard ADR-114 designed out.
+ */
+internal fun legacyHandleStatement(parameter: String, type: BridgeType.ObjectHandle): String =
+  "val ${legacyLoweredName(parameter)} = $parameter.asStableRef<${type.qualifiedName}>().get()"
+
+/**
+ * Whether the Kotlin export binds this parameter to an eagerly-evaluated local rather than calling
+ * the member with the ABI slot directly. True for both lowered shapes, so the export builders name
+ * one rule instead of testing two variants in five places.
+ */
+internal fun ForwardLegacyParameterShape.isLegacyLowered(): Boolean = when (this) {
+  is ForwardLegacyParameterShape.Marshalled, is ForwardLegacyParameterShape.Handle -> true
+  ForwardLegacyParameterShape.Plain, is ForwardLegacyParameterShape.Refused -> false
+}
+
+/** The prelude line this parameter contributes, or null when it is passed through as-is. */
+internal fun ForwardLegacyParameterShape.legacyPrelude(parameter: String): String? = when (this) {
+  is ForwardLegacyParameterShape.Marshalled -> legacyLoweringStatement(parameter, type)
+  is ForwardLegacyParameterShape.Handle -> legacyHandleStatement(parameter, type)
+  ForwardLegacyParameterShape.Plain, is ForwardLegacyParameterShape.Refused -> null
+}
 
 /** The C# expression that builds [name]'s native wire handle, with per-element projection. */
 internal fun legacyCollectionCreate(name: String, type: BridgeType.Collection): String {

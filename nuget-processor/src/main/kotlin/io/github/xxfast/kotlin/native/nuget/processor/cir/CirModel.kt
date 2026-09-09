@@ -544,6 +544,12 @@ data class CirParameter(
   // renderer emits it immediately before the native call and disposes it in a `finally`; the
   // call passes `<name>Handle` instead of `<name>`. Null for every other parameter shape.
   val collectionCreate: String? = null,
+  // ADR-122: the C# expression this parameter is passed to the native call as, when it is not just
+  // the parameter name (`observation._handle` for a handle parameter on a legacy Flow/suspend
+  // route). Deliberately separate from [collectionCreate]: that one also triggers the
+  // create-then-`finally`-dispose block, which a *borrowed* handle must never get, since the
+  // wrapper the caller holds owns it. Null for every other parameter shape.
+  val nativeArgumentExpression: String? = null,
 )
 
 data class CirConst(

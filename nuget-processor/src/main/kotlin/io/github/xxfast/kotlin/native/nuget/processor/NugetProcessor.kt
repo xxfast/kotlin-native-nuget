@@ -308,9 +308,13 @@ internal fun warnRefusedLegacyRouteMembers(
     kind = ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_INPUT,
     symbol = member,
     declaration = declaration,
-    reason = "a Flow-returning or suspend member can marshal a collection parameter, but not " +
-        "the generic type of $refused",
-    hint = "pass the values as a List/Set/Map, or as separate parameters",
+    // ADR-122 widened this from generic-only: an enum, Instant/Duration/Uuid, value class,
+    // interface, nullable object or unexported class parameter used to render a public `IntPtr`
+    // here, so the wording names what the route CAN take rather than only what it cannot.
+    reason = "a Flow-returning or suspend member can take a primitive/String, a List/Set/Map, or " +
+        "a class/object/sealed-type handle, but not $refused",
+    hint = "pass a class, object or sealed type, a List/Set/Map, or a primitive/String, or " +
+        "expose the values as separate parameters",
   )
 
   fun refusedReturn(
