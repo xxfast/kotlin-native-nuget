@@ -4,6 +4,8 @@
 
 Accepted
 
+> **Amended by [ADR-119](119-collection-returns-on-the-legacy-suspend-route.md) (2026-09-09).** This ADR covered the *parameter* position on the Flow and suspend legacy routes and left returns alone. ADR-119 applies the same classify-then-marshal-or-refuse shape to a `suspend` member's *return* (`ForwardLegacyReturnShape`), reusing this ADR's `legacyDescription()` and helper-gate walk, and names the refusal `SKIPPED_UNSUPPORTED_RETURN`.
+
 ## Context
 
 GitHub issue #109, found by consuming `main` @ `6f09100` from a real project:

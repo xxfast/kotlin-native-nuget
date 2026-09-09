@@ -104,6 +104,8 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.isForwardLegacyAsy
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isValueClass
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyCollectionKinds
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyRefusedParameter
+import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyRefusedReturn
+import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyReturnCollectionKinds
 import io.github.xxfast.kotlin.native.nuget.processor.forward.optInMarker
 import io.github.xxfast.kotlin.native.nuget.processor.forward.planFor
 import io.github.xxfast.kotlin.native.nuget.processor.forward.toDiagnosticKind
@@ -273,8 +275,13 @@ internal fun warnDroppedForwardExtensionReceivers(
  * `entry: Pair` that breaks the generated file's compile outright (issue #109). Emitted from one
  * place, so the Kotlin export builders and the CIR translators, which both drop the same members
  * silently, cannot double-report or disagree about which member vanished.
+ *
+ * ADR-119: the same walk names a suspend member's refused *return* (`Pair<String, Int>`,
+ * `List<String>?`, `Flow<T>`), which used to render `Task<Pair>` and fail the consumer's compile
+ * (issue #122). A member with both a refused parameter and a refused return is named once, for
+ * the parameter: one skip per member, whichever gate it hit first.
  */
-internal fun warnRefusedLegacyRouteParameters(
+internal fun warnRefusedLegacyRouteMembers(
   classes: List<KSClassDeclaration>,
   // ADR-118: a sealed arm's suspend member is on the legacy route now, so a refused parameter is
   // filtered silently by both halves exactly as an ordinary class's is, and this walk is the only
@@ -284,7 +291,7 @@ internal fun warnRefusedLegacyRouteParameters(
   classifier: ForwardBridgeTypeClassifier,
   logger: KSPLogger,
 ) {
-  fun diagnostic(
+  fun refusedParameter(
     member: KSFunctionDeclaration,
     declaration: String,
     refused: String,
@@ -297,17 +304,38 @@ internal fun warnRefusedLegacyRouteParameters(
     hint = "pass the values as a List/Set/Map, or as separate parameters",
   )
 
+  fun refusedReturn(
+    member: KSFunctionDeclaration,
+    declaration: String,
+    refused: String,
+  ): ForwardDiagnostic = ForwardDiagnostic(
+    kind = ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_RETURN,
+    symbol = member,
+    declaration = declaration,
+    reason = "a suspend member can return a List/Set/Map, but not the generic type $refused",
+    hint = "return a non-nullable List/Set/Map, or a non-generic type",
+  )
+
+  fun MutableList<ForwardDiagnostic>.nameRefused(
+    member: KSFunctionDeclaration,
+    declaration: String,
+  ) {
+    val parameter: String? = classifier.legacyRefusedParameter(member.parameters)
+    if (parameter != null) {
+      add(refusedParameter(member, declaration, parameter))
+      return
+    }
+    val returned: String = classifier.legacyRefusedReturn(member) ?: return
+    add(refusedReturn(member, declaration, returned))
+  }
+
   val diagnostics: List<ForwardDiagnostic> = buildList {
     classes.forEach { cls ->
       val owner: String = cls.simpleName.asString()
       cls.getAllFunctions()
         .filter { method -> method.getVisibility() == Visibility.PUBLIC }
         .filter { method -> method.isForwardLegacyAsyncRoute() }
-        .forEach { method ->
-          val refused: String =
-            classifier.legacyRefusedParameter(method.parameters) ?: return@forEach
-          add(diagnostic(method, "$owner.${method.simpleName.asString()}", refused))
-        }
+        .forEach { method -> nameRefused(method, "$owner.${method.simpleName.asString()}") }
     }
     sealedClasses.forEach { sealed ->
       val sealedName: String = sealed.simpleName.asString()
@@ -318,17 +346,10 @@ internal fun warnRefusedLegacyRouteParameters(
           // Declared-only, as everywhere else on the sealed route.
           .filter { method -> method.parentDeclaration == subclass }
           .filter { method -> method.modifiers.contains(Modifier.SUSPEND) }
-          .forEach { method ->
-            val refused: String =
-              classifier.legacyRefusedParameter(method.parameters) ?: return@forEach
-            add(diagnostic(method, "$owner.${method.simpleName.asString()}", refused))
-          }
+          .forEach { method -> nameRefused(method, "$owner.${method.simpleName.asString()}") }
       }
     }
-    suspendFunctions.forEach { func ->
-      val refused: String = classifier.legacyRefusedParameter(func.parameters) ?: return@forEach
-      add(diagnostic(func, func.simpleName.asString(), refused))
-    }
+    suspendFunctions.forEach { func -> nameRefused(func, func.simpleName.asString()) }
   }
   ForwardDiagnosticSink.emit(diagnostics, logger)
 }
@@ -941,7 +962,7 @@ class NugetProcessor(
     warnDroppedForwardPropertySetters(callableCatalog, logger)
     warnDroppedForwardProperties(callableCatalog, logger)
     warnDroppedForwardExtensionReceivers(callableCatalog, logger)
-    warnRefusedLegacyRouteParameters(
+    warnRefusedLegacyRouteMembers(
       classes, sealedClasses, suspendFunctions, forwardClassifier, logger,
     )
 
@@ -1495,6 +1516,8 @@ class NugetProcessor(
     // them, and none of the declaration scans looks there either. Without this disjunct the C#
     // side calls `nuget_list_create` against a native library that never exported it, and the
     // symptom is an EntryPointNotFoundException at first call rather than a build failure.
+    // ADR-119: a suspend member's collection *return* (`nuget_list_get` and kin) and a sealed
+    // arm's declared suspend members (ADR-118 put them on this route) are the same gap.
     fun legacyRouteCollectionKinds(): Sequence<CollectionKind> = sequence {
       classes.forEach { cls ->
         cls.getAllFunctions()
@@ -1502,10 +1525,24 @@ class NugetProcessor(
           .filter { method -> method.isForwardLegacyAsyncRoute() }
           .forEach { method ->
             yieldAll(forwardClassifier.legacyCollectionKinds(method.parameters))
+            yieldAll(forwardClassifier.legacyReturnCollectionKinds(method))
           }
+      }
+      sealedClasses.forEach { sealed ->
+        sealed.getSealedSubclasses().forEach { subclass ->
+          subclass.getAllFunctions()
+            .filter { method -> method.getVisibility() == Visibility.PUBLIC }
+            .filter { method -> method.parentDeclaration == subclass }
+            .filter { method -> method.modifiers.contains(Modifier.SUSPEND) }
+            .forEach { method ->
+              yieldAll(forwardClassifier.legacyCollectionKinds(method.parameters))
+              yieldAll(forwardClassifier.legacyReturnCollectionKinds(method))
+            }
+        }
       }
       suspendFunctions.forEach { func ->
         yieldAll(forwardClassifier.legacyCollectionKinds(func.parameters))
+        yieldAll(forwardClassifier.legacyReturnCollectionKinds(func))
       }
     }
 

@@ -101,6 +101,10 @@ internal fun StringBuilder.renderAsyncMethod(method: CirMethod, className: Strin
       append("                        flowHandle));")
     }
 
+    // ADR-119: a collection result is a handle to the boxed wire container, read back through the
+    // same `nuget_list_*` helpers the property route uses, never `new IReadOnlyList<T>(...)`.
+    method.asyncResultRead != null -> "t.SetResult(${method.asyncResultRead});"
+
     // Issue #108: `FromHandle<T>` already reads a null handle as `default!` and already has an
     // ADR-067 `Nullable.GetUnderlyingType` branch, so a nullable primitive needs only the `?` on
     // the type argument: `FromHandle<int?>` returns null where `FromHandle<int>` returned 0.

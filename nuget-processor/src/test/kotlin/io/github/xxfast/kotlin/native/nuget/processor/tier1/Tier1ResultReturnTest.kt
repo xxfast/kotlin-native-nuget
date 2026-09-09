@@ -193,13 +193,12 @@ class Tier1ResultReturnTest {
    * The contract asserted here is the weakest honest one: the shape must either bind with a
    * correctly-typed C# signature, or be skipped with a named diagnostic. What it must NOT do is
    * emit a C# member typed over `Result`, which would not compile for a consumer.
+   *
+   * Green since ADR-119 (issue #122): the suspend route now refuses every generic return that is
+   * not a marshallable collection by name, so this lands on the "skips named" arm
+   * (`SKIPPED_UNSUPPORTED_RETURN`). ADR-108's `Result<T>` → `T` lowering still does not apply here.
    */
   @Test
-  @XFail(
-    "Legacy suspend route emits `public Task<Result> LoadAsync(...)` over the unmapped simple " +
-        "name of kotlin.Result, with no diagnostic: an unresolvable C# type (CS0246) in the " +
-        "consumer's Interop.cs. Split out of ADR-108, which leaves the suspend route untouched."
-  )
   fun `suspend method returning Result either binds correctly or skips named`() {
     val result = Tier1Harness.run(
       """

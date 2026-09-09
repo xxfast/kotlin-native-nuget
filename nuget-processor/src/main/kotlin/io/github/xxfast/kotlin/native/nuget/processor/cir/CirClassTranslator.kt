@@ -16,7 +16,9 @@ import com.google.devtools.ksp.symbol.Visibility
 import io.github.xxfast.kotlin.native.nuget.processor.csharpParameterName
 import io.github.xxfast.kotlin.native.nuget.processor.exports.findInterfaceBridgePairs
 import io.github.xxfast.kotlin.native.nuget.processor.exports.findStoredCallbackPairs
+import io.github.xxfast.kotlin.native.nuget.processor.forward.BridgeType
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeTypeClassifier
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardLegacyReturnShape
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallableCatalogEntry
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallablePlan
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallablePlanCatalog
@@ -32,7 +34,10 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardPublicCshar
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardSuperClass
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isForwardLegacyAsyncRoute
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isForwardMemberOf
+import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyCollectionRead
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyRefusedParameter
+import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyRefusedReturn
+import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyReturnShape
 import io.github.xxfast.kotlin.native.nuget.processor.forward.planFor
 import io.github.xxfast.kotlin.native.nuget.processor.toCName
 
@@ -509,12 +514,14 @@ internal fun translateClass(
       if (isSkipped) return@filter false
 
       // ADR-114: a Flow-returning or suspend member with a generic parameter this route cannot
-      // marshal is dropped on both halves. `NugetProcessor` names it once.
+      // marshal is dropped on both halves. `NugetProcessor` names it once. ADR-119: likewise a
+      // suspend member with a generic return that is not a marshallable collection.
       if (method.isForwardLegacyAsyncRoute() &&
         classifier.legacyRefusedParameter(method.parameters) != null
       ) {
         return@filter false
       }
+      if (classifier.legacyRefusedReturn(method) != null) return@filter false
 
       method.isForwardMemberOf(cls, superClassDeclaration)
     }
@@ -1034,15 +1041,27 @@ internal fun suspendMembers(
     val methodReturn: String = resolvedReturn?.declaration?.simpleName?.asString() ?: "Unit"
     val isUnit: Boolean = methodReturn == "Unit"
 
+    // ADR-119: a collection return is read back through the ordinary route's wire container;
+    // every other generic return has already been refused upstream, on both halves.
+    val returnShape: ForwardLegacyReturnShape = classifier.legacyReturnShape(resolvedReturn)
+    if (returnShape is ForwardLegacyReturnShape.Refused) return@flatMap emptyList()
+    val collectionReturn: BridgeType.Collection? =
+      (returnShape as? ForwardLegacyReturnShape.Marshalled)?.type
+    if (collectionReturn != null) tracker.trackCollection(collectionReturn)
+
     // ADR-114: a collection parameter takes the public collection type with an IntPtr native
     // slot; every other parameter keeps mapParamType's shipped spelling.
     val methodParams: List<CirParameter> =
       legacyRouteParameters(method.parameters, classifier, tracker)
 
     // Issue #108: carry the nullability through, same as the top-level suspend route.
-    val asyncReturnType: String = if (isUnit) "" else {
-      val csharp: String = KOTLIN_TO_CSHARP_PARAM[methodReturn] ?: methodReturn
-      if (resolvedReturn?.isMarkedNullable == true) "$csharp?" else csharp
+    val asyncReturnType: String = when {
+      isUnit -> ""
+      collectionReturn != null -> collectionReturn.forwardPublicCsharpType()
+      else -> {
+        val csharp: String = KOTLIN_TO_CSHARP_PARAM[methodReturn] ?: methodReturn
+        if (resolvedReturn?.isMarkedNullable == true) "$csharp?" else csharp
+      }
     }
 
     val nativeParams: List<CirParameter> = listOf(
@@ -1075,6 +1094,7 @@ internal fun suspendMembers(
       body = "",
       isAsync = true,
       asyncReturnType = asyncReturnType,
+      asyncResultRead = collectionReturn?.let { legacyCollectionRead("resultPtr", it) },
     )
 
     listOf(nativeImport, asyncMethod)
@@ -1258,6 +1278,8 @@ internal fun translateSealedClass(
         // ADR-114: the refusal `translateClass` applies upstream of its own projection. Both
         // halves must agree, or a C# import arrives with no Kotlin export behind it.
         .filter { method -> classifier.legacyRefusedParameter(method.parameters) == null }
+        // ADR-119: the return-side refusal, same rule.
+        .filter { method -> classifier.legacyRefusedReturn(method) == null }
         .toList()
       val asyncMembers: List<CirMember> = suspendMembers(
         suspendMethods = armSuspendMethods,

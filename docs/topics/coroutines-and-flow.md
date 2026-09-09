@@ -6,6 +6,7 @@ Kotlin coroutines map onto .NET's own async model: `suspend fun` becomes `async`
 |---|---|---|
 | `suspend fun` | `async` / `Task<T>` | overloads on a class or a sealed arm number `_2` on the native symbol only, no visible C# numbering, see [`suspend fun` overloads](#suspend-fun-overloads), [ADR-019](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/019-suspend-function-mapping.md), [ADR-118](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/118-suspend-route-sealed-arm-owners-and-overload-numbering.md) |
 | `suspend fun` returning `T?` | `async` / `Task<T?>` | nullable string, object, and primitive returns, [ADR-019](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/019-suspend-function-mapping.md) |
+| `suspend fun` returning `List<T>` / `Set<T>` / `Map<K, V>` | `Task<IReadOnlyList<T>>` / `Task<IReadOnlySet<T>>` / `Task<IReadOnlyDictionary<K, V>>` | spelled and read exactly as the property route spells the same type; any other generic return is a named skip, see [`suspend fun` returning a collection](#suspend-fun-returning-a-collection), [ADR-119](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/119-collection-returns-on-the-legacy-suspend-route.md) |
 | `suspend () -> R` lambda | `KotlinSuspendFunc<R>` / `Task<R>` | [ADR-020](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/020-suspend-lambda-mapping.md) |
 | structured concurrency | honoured on `Dispose()` | [ADR-021](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/021-structured-concurrency.md) |
 | coroutine cancellation | `CancellationToken` | [ADR-022](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/022-cancellation-token-support.md) |
@@ -145,6 +146,71 @@ public async Task CountTreatsLeft_Mylo_ReturnsNull()
 ```
 
 The same shape works identically on a class method (`AsyncCatService.findToyName`/`findAdoptedCat`/`countWhiskers`), suffixed `Async` as usual.
+
+## `suspend fun` returning a collection {id="suspend-fun-returning-a-collection"}
+
+A `suspend fun` returning `List<T>`, `Set<T>` or `Map<K, V>` (or a mutable variant) carries its type
+arguments through, spelled exactly as a property of the same Kotlin type on the same class is
+spelled, and read back through the same `nuget_list_*`/`nuget_set_*`/`nuget_map_*` helpers. From
+`test-library/src/nativeMain/kotlin/.../issue122/AssignmentSample.kt`:
+
+```kotlin
+data class Existing(val members: List<Member>) : Assignment() {
+  suspend fun fetch(limit: Int, offset: Int): List<Member> {
+    delay(1.milliseconds)
+    return members.drop(offset).take(limit)
+  }
+}
+
+class Headcount(private val names: List<String>) {
+  suspend fun ids(): Set<Int> { /* ... */ }
+  suspend fun ages(): Map<String, Int> { /* ... */ }
+  suspend fun tempers(): List<Temper> { /* ... */ }   // a bare enum element, cast back per element
+}
+```
+
+Generated C#, the property route and the suspend route agreeing on one spelling:
+
+```C#
+public IReadOnlyList<Member> Members { get; }
+public Task<IReadOnlyList<Member>> FetchAsync(int limit, int offset, CancellationToken cancellationToken = default)
+
+public Task<IReadOnlySet<int>> IdsAsync(CancellationToken cancellationToken = default)
+public Task<IReadOnlyDictionary<string, int>> AgesAsync(CancellationToken cancellationToken = default)
+public Task<IReadOnlyList<Temper>> TempersAsync(CancellationToken cancellationToken = default)
+```
+
+Using it, from `IntegrationTests/Issue122Tests.cs`:
+
+```C#
+[Fact]
+public async Task FetchAsync_ListReturnOnASealedArm_AgreesWithThePropertyRoute()
+{
+    using var factory = new AssignmentFactory();
+    using Existing existing = factory.Existing([oreo, mylo, biscuit]);
+
+    IReadOnlyList<Member> viaProperty = existing.Members;
+    IReadOnlyList<Member> viaSuspend = await existing.FetchAsync(limit: 3, offset: 0);
+
+    Assert.Equal(viaProperty.Select(m => m.Id), viaSuspend.Select(m => m.Id));
+}
+```
+
+The awaited handle is materialised through `NugetMarshal.ReadList<T>` (and `ReadSet`/`ReadMap`),
+whose `finally` disposes the wire handle, so the result is a fresh managed collection that owns
+nothing native. The same shape works on an ordinary class, on a
+[sealed arm](interfaces-abstract-sealed.md#sealed-method-suspend-generated-c), and at top level.
+
+<note>
+    <p>Any <i>other</i> generic <code>suspend</code> return (<code>Pair&lt;A, B&gt;</code>,
+    <code>Result&lt;T&gt;</code>, <code>Flow&lt;T&gt;</code>, a <b>nullable</b> collection
+    <code>List&lt;T&gt;?</code>, a user generic) is absent from C# and named
+    <code>SKIPPED_UNSUPPORTED_RETURN</code>, rather than rendered over the type's bare simple name
+    (<code>Task&lt;List&gt;</code>, <code>Task&lt;Pair&gt;</code>), which <code>packNuget</code>
+    accepts and the consumer's compiler does not. A <code>StateFlow&lt;T&gt;</code> return is
+    unaffected: it has its own mapping below.</p>
+</note>
+
 
 ## `suspend () -> R` lambdas
 
@@ -990,6 +1056,7 @@ Hot streams and several `Flow` positions are not yet supported (ROADMAP Phase 6)
 - `StateFlow<SomeEnum>` / `MutableStateFlow<SomeEnum>`: `NugetMarshal.FromHandle<T>` has no enum branch, so an enum element is unsupported on the `.Value` read path (pre-existing, predates both `StateFlow` mappings)
 - `CompareAndSet` / `Update` / `Emit` / `TryEmit` / `ReplayCache` / `SubscriptionCount` on `MutableStateFlow<T>`
 - Nullable element write (`MutableStateFlow<T?>.Value = ...`), nullable member write, and `suspend fun` returning `MutableStateFlow<T>`
+- A `suspend fun` returning a nullable collection (`List<T>?`), a collection of a sealed base (`List<Shape>`), or any other generic type (`Pair`, `Result<T>`, `Flow<T>`): absent and named `SKIPPED_UNSUPPORTED_RETURN` ([ADR-119](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/119-collection-returns-on-the-legacy-suspend-route.md))
 - Reassigning the whole `MutableStateFlow<T>` member itself (a `var` member, not just its `.value`)
 - Top-level `suspend fun` returning `StateFlow<T>` (no parent class scope; class methods only in v1)
 - `StateFlow<T>` as a function parameter or as a generic type argument

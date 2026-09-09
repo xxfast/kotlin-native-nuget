@@ -408,6 +408,10 @@ data class CirMethod(
   val typeParameters: List<CirTypeParameter> = emptyList(),
   val isAsync: Boolean = false,
   val asyncReturnType: String = "",
+  // ADR-119: the C# expression turning the awaited `resultPtr` into [asyncReturnType], for a
+  // suspend member returning a collection (`NugetMarshal.ReadList<T>(resultPtr, ...)`). Null keeps
+  // the shipped `new T(resultPtr)` / `FromHandle<T>(resultPtr)` selection in `renderAsyncMethod`.
+  val asyncResultRead: String? = null,
   val isSyncErrorCheckEnabled: Boolean = false,
   val isFlow: Boolean = false,
   // ADR-065: true when this is a StateFlow-returning method. Reuses isFlow's whole legacy route
