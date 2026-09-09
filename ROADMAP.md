@@ -250,13 +250,21 @@ Fallout from [ADR-053](docs/adr/053-nullable-reference-types-in-kotlin.md) (reve
 - [ ] **Four reverse doc pages (`structs.md`, `static-classes-and-methods.md`, `generic-types.md`, `instance-members.md`) show pre-ADR-104 thunk snippets missing the trailing `errOut`.** ([details](docs/backlog/reverse-doc-snippets-missing-adr-104-errout.md))
 - [ ] **[ADR-109](docs/adr/109-duplicate-type-hazard.md)'s claim that KGP/KSP resolve the `nuget.publishedScopes` option `Provider` only after every project is evaluated is Inferred, not spiked.** A two-publisher fixture build (a second real publishing Gradle module, or a TestKit functional test) would verify it; if wrong, a publisher evaluated after the reader silently drops out of the value (a missing warning, never wrong output). Priced as its own item since no such fixture exists in the root build today.
 
+## Performance & Resource Hygiene
+
+Nothing in the project measures anything yet: no live-handle count, no binary size, no crossing benchmark. Every handle leak to date was found by an agent reading source and noticing a `Dispose` after a `throw`, and two roadmap deferrals ([ADR-106](docs/adr/106-uuid-mapping.md)'s binary `Uuid` wire, the caching-wrappers line below) are gated on a profile nobody can run. Measurement first, tuning second; a gate is only worth adding once the number it gates is recorded.
+
+- [ ] **A live `StableRef` counter on the Kotlin side, plus a leak-asserting xunit harness over every crossing family** ([details](docs/backlog/stableref-live-count-leak-harness.md)). Proves itself red against the still-open Phase 4 returned-collection leak before it is trusted green anywhere.
+- [ ] Verify Kotlin's GC actually frees the object once its last `StableRef` is disposed. Needs a Kotlin-side weak reference and a forced GC, so it is a fixture-level test in `test-library`, not a plugin unit test.
+- [ ] **Record and gate the size of each `runtimes/*/native/*` asset and the `.nupkg` in CI, then spike which Kotlin/Native binary options are safe for a P/Invoked shared library** ([details](docs/backlog/shared-library-size-gate.md)). The test library ships stock 6.3M per target today with no `binaryOption` set at all.
+- [ ] **A BenchmarkDotNet project over the fresh-versioned `TestLibrary` fixture, one class per crossing family with a managed-only baseline, reporting allocated bytes beside mean time** ([details](docs/backlog/crossing-microbenchmark.md)). Committed baseline table, not a CI gate.
+- [ ] Object identity preservation (caching wrappers), if the benchmark above shows wrapper allocation is significant. Blocked on that benchmark existing.
+- [ ] Deferred by [ADR-106](docs/adr/106-uuid-mapping.md), listed in Phase 4: the binary `Uuid` wire. The benchmark above's `Uuid` round-trip row is the measurement that decides it.
+
 ## Future Improvements
 
 - KSP incremental processing if build times become a concern on large libraries. Prerequisite: restore a correct per-file dependency set first; the processor deliberately declares `Dependencies.ALL_FILES` to close a dropped-suspend-functions bug (full context in the [archive](docs/roadmap-archive.md))
 - Map data classes to C# `record class` if a safe `with`-expression pattern can be found (see [ADR-008](docs/adr/008-data-class-mapping.md))
-- Verify Kotlin GC actually frees objects after all StableRefs are disposed (requires Kotlin-side weak references + GC trigger – not feasible in standard unit tests)
-- Memory leak detection tooling for bridged objects in CI
-- Object identity preservation (caching wrappers) if profiling shows allocation overhead is significant
 - Custom type mappers for arbitrary third-party dependency types the plugin will never hardcode (escape hatch). Known stdlib types such as `kotlin.time.Instant` are Phase 4 first-class mappings instead, not this item
 - Pure-JVM ECMA-335 metadata reader + NuGet v3 client, dropping the .NET SDK prerequisite from the Kotlin-side build (synthesis D1) – no plugin in this space runs prerequisite-free; a genuine ergonomic edge
 - Hand-written C# shim escape hatch for API members outside the auto-bridgeable subset (spm4Kmp's bridge-folder model, synthesis D2)
