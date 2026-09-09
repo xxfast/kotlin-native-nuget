@@ -11,6 +11,8 @@ import io.github.xxfast.kotlin.native.nuget.processor.cir.expandAliases
 /**
  * ADR-114 / ADR-122: the one place the Flow/StateFlow and suspend *legacy* routes classify a
  * parameter, shared by the Kotlin export builders (`exports/`) and both CIR translators (`cir/`).
+ * ADR-123 adds the third position, [ForwardLegacyFlowElementShape], for a flow *element*; all
+ * three read the same way, so a change to what these routes admit lands in one file.
  *
  * Those routes spell a parameter by pasting the declaration's own Kotlin type name through
  * `ClassName.bestGuess`, which drops the type arguments, so `fun served(kinds: List<String>):
@@ -158,8 +160,16 @@ internal fun ForwardBridgeTypeClassifier.legacyReturnShape(
   val expanded: KSType = type?.expandAliases() ?: return ForwardLegacyReturnShape.Plain
   if (expanded.arguments.isEmpty()) return ForwardLegacyReturnShape.Plain
   // ADR-068 peels a StateFlow return into its own bucket before the plain-async path sees it.
+  // ADR-123: that bucket reads every element through the module-wide `nuget_stateflow_value`
+  // export, which has no per-member projection seam, so a collection element cannot cross there
+  // even though the ADR-065 property and method routes now bind one. Refused, not half-bound.
   if (expanded.declaration.qualifiedName?.asString() in STATE_FLOW_TYPES) {
-    return ForwardLegacyReturnShape.Plain
+    val element: KSType? = expanded.arguments.firstOrNull()?.type?.resolve()
+    return if (legacyFlowElementShape(element) is ForwardLegacyFlowElementShape.Plain) {
+      ForwardLegacyReturnShape.Plain
+    } else {
+      ForwardLegacyReturnShape.Refused(expanded.legacyDescription())
+    }
   }
 
   val collection: BridgeType.Collection? = classify(type) as? BridgeType.Collection
@@ -170,12 +180,102 @@ internal fun ForwardBridgeTypeClassifier.legacyReturnShape(
   }
 }
 
-/** A suspend member's refused return as the author spelled it, or null when it binds. */
+/**
+ * A legacy-route member's refused return as the author spelled it, or null when it binds.
+ *
+ * ADR-123 widens this from `suspend`-only to every legacy async route, so a `Flow`-returning
+ * method whose element cannot cross is filtered by the same single call both halves already make
+ * for a suspend member.
+ */
 internal fun ForwardBridgeTypeClassifier.legacyRefusedReturn(func: KSFunctionDeclaration): String? {
-  if (!func.modifiers.contains(Modifier.SUSPEND)) return null
-  val shape: ForwardLegacyReturnShape = legacyReturnShape(func.returnType?.resolve())
+  val returnType: KSType? = func.returnType?.resolve()
+  if (!func.modifiers.contains(Modifier.SUSPEND)) return legacyRefusedFlowElement(returnType)
+  val shape: ForwardLegacyReturnShape = legacyReturnShape(returnType)
   return if (shape is ForwardLegacyReturnShape.Refused) shape.description else null
 }
+
+/**
+ * ADR-123: the element-side twin of [ForwardLegacyReturnShape], for the `Flow`/`StateFlow` element
+ * position on a property and a method return.
+ *
+ * Both halves spelled that element with `qualifiedElementCsType`, which runs a Kotlin builtin
+ * through the *user-type* namespace mapping and never reads its type arguments, so
+ * `StateFlow<Set<NodeId>>` rendered `KotlinStateFlow<global::Demo.Kotlin.Collections.Set>`: a
+ * namespace nothing declares (issue #127). The runtime half was broken independently, since
+ * `NugetMarshal.FromHandle<T>` has no collection branch and the Kotlin emission boxed the value
+ * unprojected. Three outcomes, the same three ADR-114 and ADR-119 use one position over.
+ */
+internal sealed interface ForwardLegacyFlowElementShape {
+
+  /** An element with no type arguments: the shipped spelling, byte for byte. */
+  data object Plain : ForwardLegacyFlowElementShape
+
+  /** A collection the ordinary route's wire container and helpers already cover. */
+  data class Marshalled(val type: BridgeType.Collection) : ForwardLegacyFlowElementShape
+
+  /** Any other generic element, named so the skip diagnostic can quote it. */
+  data class Refused(val description: String) : ForwardLegacyFlowElementShape
+}
+
+/**
+ * Classifies one `Flow`/`StateFlow` element. Only a *generic* element is classified at all, so
+ * every scalar, string, enum, object and sealed element renders exactly as it does today,
+ * including ADR-067's nullable scalar element (`StateFlow<String?>`, no type arguments of its own).
+ *
+ * The admission is the ordinary route's own return-position rule (`isBridgeableComponent`), so an
+ * element type crosses here exactly when it crosses on the property route. A nullable collection
+ * element is [ForwardLegacyFlowElementShape.Refused], keeping ADR-114's and ADR-119's rule.
+ */
+internal fun ForwardBridgeTypeClassifier.legacyFlowElementShape(
+  type: KSType?,
+): ForwardLegacyFlowElementShape {
+  val expanded: KSType = type?.expandAliases() ?: return ForwardLegacyFlowElementShape.Plain
+  if (expanded.arguments.isEmpty()) return ForwardLegacyFlowElementShape.Plain
+
+  val collection: BridgeType.Collection? = classify(type) as? BridgeType.Collection
+  return if (collection != null && collection.isBridgeableComponent()) {
+    ForwardLegacyFlowElementShape.Marshalled(collection)
+  } else {
+    ForwardLegacyFlowElementShape.Refused(expanded.legacyDescription())
+  }
+}
+
+/**
+ * ADR-123: the element of a `Flow`/`StateFlow` type, or null when [type] is neither. The one place
+ * the element is peeled off, so the two halves cannot disagree about which argument it is.
+ */
+internal fun legacyFlowElement(type: KSType?): KSType? {
+  val expanded: KSType = type?.expandAliases() ?: return null
+  val qualified: String? = expanded.declaration.qualifiedName?.asString()
+  if (qualified !in FLOW_TYPES && qualified !in STATE_FLOW_TYPES) return null
+  return expanded.arguments.firstOrNull()?.type?.resolve()
+}
+
+/** The refused element of a `Flow`/`StateFlow` member, or null when it binds (or is not one). */
+internal fun ForwardBridgeTypeClassifier.legacyRefusedFlowElement(type: KSType?): String? {
+  val element: KSType = legacyFlowElement(type) ?: return null
+  val shape: ForwardLegacyFlowElementShape = legacyFlowElementShape(element)
+  return if (shape is ForwardLegacyFlowElementShape.Refused) shape.description else null
+}
+
+/** The marshalled collection a `Flow`/`StateFlow` member's element is, or null for every other. */
+internal fun ForwardBridgeTypeClassifier.legacyFlowElementCollection(
+  type: KSType?,
+): BridgeType.Collection? {
+  val element: KSType = legacyFlowElement(type) ?: return null
+  return (legacyFlowElementShape(element) as? ForwardLegacyFlowElementShape.Marshalled)?.type
+}
+
+/**
+ * ADR-123: [legacyCollectionKinds] for a `Flow`/`StateFlow` element. No declaration scan finds
+ * these on its own: the `needs*Support` walks read a property's *type*, and that type is
+ * `StateFlow`, not `Set`, so without this the generated C# calls `nuget_set_count` against a
+ * native library that never exported it.
+ */
+internal fun ForwardBridgeTypeClassifier.legacyFlowElementCollectionKinds(
+  type: KSType?,
+): Sequence<CollectionKind> =
+  legacyFlowElementCollection(type)?.nestedKinds() ?: emptySequence()
 
 /**
  * Every collection kind a member's parameters need native helper exports for, nested components
@@ -210,6 +310,16 @@ internal fun ForwardBridgeTypeClassifier.legacyReturnCollectionKinds(
  */
 internal fun legacyCollectionRead(handle: String, type: BridgeType.Collection): String =
   componentCollectionRead(handle, type, csharpType = { it.forwardPublicCsharpType() })
+
+/**
+ * ADR-123: the same read as a named `Func<IntPtr, T>` argument, for the flow routes.
+ * `KotlinFlowEnumerator<T>` and `KotlinStateFlow<T>` are shared by every member in the generated
+ * file, so a collection element cannot specialise them; it hands them this per-member delegate
+ * instead of the default `NugetMarshal.FromHandle<T>`. `h` never collides:
+ * `componentCollectionRead` names its own lambdas from nesting level 1 (`h1`) down.
+ */
+internal fun legacyFlowElementReadArgument(type: BridgeType.Collection): String =
+  "read: static h => ${legacyCollectionRead("h", type)}"
 
 private fun BridgeType.Collection.nestedKinds(): Sequence<CollectionKind> = sequence {
   yield(kind)

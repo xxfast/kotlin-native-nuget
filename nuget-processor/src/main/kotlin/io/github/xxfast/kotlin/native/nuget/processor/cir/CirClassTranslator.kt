@@ -36,6 +36,9 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardSuperClass
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isForwardLegacyAsyncRoute
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isForwardMemberOf
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyCollectionRead
+import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyFlowElementCollection
+import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyFlowElementReadArgument
+import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyRefusedFlowElement
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyRefusedParameter
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyRefusedReturn
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyReturnShape
@@ -337,11 +340,25 @@ internal fun translateClass(
       val isMutableStateFlowObjectElement: Boolean =
         isMutableStateFlowProperty && isMutableStateFlowElementObject(flowElementTypeResolved)
       if (isMutableStateFlowProperty) tracker.needsMutableStateFlow = true
-      val flowElementType: String? = if (isFlowType || isStateFlowType) {
+      // ADR-123: a collection element is spelled and read like the ordinary route's collection
+      // result, never through `qualifiedElementCsType` (which runs a Kotlin builtin through the
+      // user-type namespace mapping and drops the type argument, issue #127). A refused element
+      // drops the property on both halves; `NugetProcessor` names it once.
+      if (classifier.legacyRefusedFlowElement(propTypeResolved) != null) return@mapNotNull null
+      val flowElementCollection: BridgeType.Collection? =
+        classifier.legacyFlowElementCollection(propTypeResolved)
+      if (flowElementCollection != null) tracker.trackCollection(flowElementCollection)
+      val flowElementType: String? = when {
+        flowElementCollection != null -> flowElementCollection.forwardPublicCsharpType()
         // ADR-066: qualified, not by simple name — an admitted dependency-module element type is
         // not guaranteed to share this class's own namespace.
-        qualifiedElementCsType(flowElementTypeResolved, context, isNullableElement)
-      } else null
+        isFlowType || isStateFlowType ->
+          qualifiedElementCsType(flowElementTypeResolved, context, isNullableElement)
+
+        else -> null
+      }
+      val flowElementRead: String? =
+        flowElementCollection?.let { collection -> legacyFlowElementReadArgument(collection) }
       if (isFlowType || isStateFlowType) {
         tracker.needsFlow = true
         tracker.needsAsync = true
@@ -453,6 +470,10 @@ internal fun translateClass(
                 appendLine("                        if (error != IntPtr.Zero) throw NugetErrorNative.BuildException(error);")
                 appendLine("                    });")
               }
+            } else if (flowElementRead != null) {
+              // ADR-123: `read:` is named, so it skips the ADR-068-only `ownedHandle` slot.
+              appendLine("                    () => $valueNativeName(_handle),")
+              appendLine("                    $flowElementRead);")
             } else {
               appendLine("                    () => $valueNativeName(_handle));")
             }
@@ -467,7 +488,12 @@ internal fun translateClass(
             appendLine("                if (_handle == IntPtr.Zero)")
             appendLine("                    throw new ObjectDisposedException(nameof(${cls.simpleName.asString()}));")
             appendLine("                return new KotlinFlow<$flowElementType>((onNext, onComplete, onError, userData) =>")
-            appendLine("                    $collectNativeName(_handle, GetOrCreateScope(), onNext, onComplete, onError, userData));")
+            if (flowElementRead != null) {
+              appendLine("                    $collectNativeName(_handle, GetOrCreateScope(), onNext, onComplete, onError, userData),")
+              appendLine("                    $flowElementRead);")
+            } else {
+              appendLine("                    $collectNativeName(_handle, GetOrCreateScope(), onNext, onComplete, onError, userData));")
+            }
             append("            ")
           }
         }
@@ -708,9 +734,16 @@ internal fun translateClass(
     val isMutableStateFlowObjectElement: Boolean =
       isMutableStateFlowMethod && isMutableStateFlowElementObject(flowElementTypeResolved)
     if (isMutableStateFlowMethod) tracker.needsMutableStateFlow = true
-    // ADR-066: qualified, not by simple name — see the sibling property branch above for why.
-    val flowCsElementType: String =
-      qualifiedElementCsType(flowElementTypeResolved, context, isNullableElement)
+    // ADR-123: a collection element, spelled and read like the ordinary route's collection result.
+    // A refused element never reaches here: `filteredMethods` drops the member upstream.
+    val flowElementCollection: BridgeType.Collection? =
+      classifier.legacyFlowElementCollection(returnType)
+    if (flowElementCollection != null) tracker.trackCollection(flowElementCollection)
+    // ADR-066: qualified, not by simple name, see the sibling property branch above for why.
+    val flowCsElementType: String = flowElementCollection?.forwardPublicCsharpType()
+      ?: qualifiedElementCsType(flowElementTypeResolved, context, isNullableElement)
+    val flowElementRead: String? =
+      flowElementCollection?.let { collection -> legacyFlowElementReadArgument(collection) }
 
     // ADR-114: a collection parameter takes the public collection type with an IntPtr native
     // slot; every other parameter keeps mapParamType's shipped spelling.
@@ -800,6 +833,7 @@ internal fun translateClass(
         isFlow = true,
         isStateFlow = true,
         flowElementType = flowCsElementType,
+        flowElementRead = flowElementRead,
         stateFlowValueNativeName = "${nativeStem}Value",
         isStateFlowNullableMember = isNullableMember,
         stateFlowHasValueNativeName =
@@ -827,6 +861,7 @@ internal fun translateClass(
       body = nativeCallArgs,
       isFlow = true,
       flowElementType = flowCsElementType,
+      flowElementRead = flowElementRead,
     )
 
     listOf(nativeImport, flowMethod)

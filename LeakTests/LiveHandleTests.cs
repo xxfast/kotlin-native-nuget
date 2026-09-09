@@ -2,6 +2,7 @@ using TestLibrary;
 using TestLibrary.Cat;
 using TestLibrary.Clinic;
 using TestLibrary.Issue126;
+using TestLibrary.Issue127;
 using TestLibrary.Issue131;
 using TestLibrary.Models;
 using TestLibrary.Routes;
@@ -292,6 +293,29 @@ public class LiveHandleTests
             Observation.Alive alive = Assert.IsType<Observation.Alive>(observation);
             Assert.Equal("alive:Oreo", radio.Watch(alive).Value);
         });
+    }
+
+    // Row 8d. Issue #127 / ADR-123: a *collection* element on the Flow and StateFlow routes. Each
+    // emission and each `.Value` read mints a fresh StableRef for the collection itself plus one
+    // box per element, and none of it is disposed by the flow enumerator: the collection handle
+    // goes in `ReadList`/`ReadSet`'s finally, and the element boxes are owned by whatever the read
+    // returns. So a read lambda wired wrong leaks one handle per emission, not one per crossing,
+    // which is why the count is high. Both halves in one crossing: `Ticks` emits three lists of
+    // handle elements, `Items` reads a set whose elements project to their underlying.
+    [Fact]
+    public async Task CollectionFlowElement_EnumerationAndValueRead_ReturnsToBaseline()
+    {
+        await AssertNoLeakAsync(
+            async () =>
+            {
+                using var hub = new NodeHub();
+                await foreach (IReadOnlyList<Kind> page in hub.Ticks)
+                {
+                    foreach (Kind kind in page) kind.Dispose();
+                }
+                Assert.Equal(3, hub.Items.Value.Count);
+            },
+            iterations: 200);
     }
 
     // Row 9. Suspend call completing: the result box is unwrapped and owned by the returned

@@ -533,6 +533,56 @@ class Tier1StructuralInteropCsTest {
   /** `IntPtr` as a whole word, so `IntPtrSomething` or a comment mention does not trip the scan. */
   private fun String.containsIntPtr(): Boolean = Regex("\\bIntPtr\\b").containsMatchIn(this)
 
+  /**
+   * The second whole-file invariant (issue #127 / ADR-123, requirement 4). A Kotlin builtin must
+   * never be mapped as a user type, so **no generated type name may join the root namespace to a
+   * `kotlin`/`kotlinx` package segment**. `global::Interop.Kotlin.Collections.List` is what
+   * `mapPackageToNamespace` produced for a `StateFlow<List<T>>` element: a namespace nothing
+   * declares, CS0234 in every consumer's build while `packNuget` stayed green.
+   *
+   * The fixture is [everyRouteFixture] plus the two element positions, so the scan pays for every
+   * route rather than for the one the issue happened to report. The generator also carries a
+   * `check` at the speller itself (`cir/CirTypeMapping.kt`), which makes this unrepresentable
+   * rather than merely asserted; this cell is what fails first, and legibly, if a new call site
+   * gates wrongly.
+   */
+  @Test
+  fun `no generated type name mixes the root package with a kotlin package`() {
+    val result = Tier1Harness.run(
+      mapOf(
+        "Clinic.kt" to everyRouteFixture,
+        "Windowsill.kt" to """
+          package tier1.surface.windowsill
+
+          import kotlinx.coroutines.flow.Flow
+          import kotlinx.coroutines.flow.MutableStateFlow
+          import kotlinx.coroutines.flow.StateFlow
+          import kotlinx.coroutines.flow.flowOf
+
+          class Windowsill {
+            val spots: StateFlow<Set<String>> = MutableStateFlow(setOf("sunny"))
+            val naps: Flow<List<Int>> = flowOf(listOf(1))
+            fun seen(after: List<String>): StateFlow<List<String>> = MutableStateFlow(after)
+          }
+        """.trimIndent(),
+      ),
+      processorOptions = mapOf("nuget.rootPackage" to "tier1"),
+      libraries = listOf(Tier1Classpath.kotlinxCoroutinesCore),
+    )
+
+    val offenders: List<String> = ROOT_QUALIFIED_KOTLIN_PACKAGE
+      .findAll(result.generatedCSharp)
+      .map { match -> match.value }
+      .distinct()
+      .toList()
+
+    assertTrue(
+      offenders.isEmpty(),
+      "no emitted type name may run a Kotlin builtin package through the root-package namespace " +
+          "mapping: that names a namespace nothing declares (issue #127). Offenders: $offenders",
+    )
+  }
+
   private companion object {
     /** No nested `<...>` on purpose: a generic type argument has no spelling on these routes at
      *  all, so one appearing here is itself the defect and must not be quietly matched. */
@@ -541,6 +591,12 @@ class Tier1StructuralInteropCsTest {
 
     /** The `KotlinFunc<T1, TResult>` / `KotlinSuspendAction<T1>` declarations themselves. */
     val DECLARATION_TYPE_PARAMETER = Regex("""T([0-9]+|Result)?""")
+
+    /**
+     * Issue #127: the root namespace immediately followed by a capitalised Kotlin package
+     * segment. `Interop` is [Tier1Harness]' root namespace for a `nuget.rootPackage` of `tier1`.
+     */
+    val ROOT_QUALIFIED_KOTLIN_PACKAGE = Regex("""global::Interop\.(Kotlin|Kotlinx)\b""")
 
     val CSHARP_PRIMITIVES: Set<String> = setOf(
       "string", "bool", "char", "object", "void",

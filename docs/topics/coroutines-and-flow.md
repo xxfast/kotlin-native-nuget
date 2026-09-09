@@ -18,6 +18,7 @@ Kotlin coroutines map onto .NET's own async model: `suspend fun` becomes `async`
 | `StateFlow<T>?` (nullable member) | `KotlinStateFlow<T>?` | presence-probed; `null` before the member exists, [ADR-067](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/067-nullable-stateflow-mapping.md) |
 | `suspend fun` returning `StateFlow<T>` | `Task<KotlinStateFlow<T>>` | outer suspend kept as `Task`, not collapsed to a sync return; class methods only, [ADR-068](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/068-suspend-returning-stateflow.md) |
 | a class, `object`, sealed base, or sealed arm parameter on `Flow`/`StateFlow`/`suspend` | the mapped C# type, passed as `x._handle` | spelled exactly as the return position on the same member; see [Handle parameters on `Flow`, `StateFlow`, and `suspend` members](#handle-parameters-on-flow-stateflow-and-suspend-members), [ADR-122](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/122-handle-parameters-on-the-legacy-routes.md) |
+| `List<T>` / `Set<T>` / `Map<K, V>` element on a `Flow`/`StateFlow` property or method return | `KotlinFlow<IReadOnlyList<T>>` / `KotlinStateFlow<IReadOnlyList<T>>` / `IReadOnlySet<T>` / `IReadOnlyDictionary<K, V>` | spelled and read exactly as the property and suspend-return routes; any other generic element is a named skip, see [Collection elements on `Flow`, `StateFlow`, and their method returns](#collection-elements-on-flow-stateflow-and-their-method-returns), [ADR-123](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/123-collection-elements-on-the-flow-routes.md) |
 
 ## `suspend fun`
 
@@ -1183,6 +1184,134 @@ public void Watch_WithTheSealedBase_Discriminates()
     else.</p>
 </note>
 
+## Collection elements on `Flow`, `StateFlow`, and their method returns {id="collection-elements-on-flow-stateflow-and-their-method-returns"}
+
+A `List<T>`, `Set<T>`, or `Map<K, V>` **element** of a `Flow` or `StateFlow`, on a property or a
+method return, crosses as the real collection type, spelled and read exactly as the property and
+[`suspend fun` returning a collection](#suspend-fun-returning-a-collection) routes spell and read
+the same Kotlin type. From
+`test-library/src/nativeMain/kotlin/.../issue127/Issue127Sample.kt`:
+
+```kotlin
+value class NodeId(val value: Int)
+
+data class Kind(val name: String)
+
+class NodeHub {
+  val items: StateFlow<Set<NodeId>> = MutableStateFlow(setOf(NodeId(1), NodeId(2), NodeId(3)))
+
+  val ticks: Flow<List<Kind>> = flowOf(
+    listOf(Kind("nap")),
+    listOf(Kind("zoomies"), Kind("snack")),
+    listOf(Kind("nap"), Kind("loaf"), Kind("window")),
+  )
+
+  fun visible(kinds: List<Kind>): StateFlow<List<NodeId>> =
+    MutableStateFlow(kinds.map { NodeId(it.name.length) })
+}
+```
+
+### Generated C# {id="flow-element-generated-c"}
+
+```C#
+public KotlinStateFlow<IReadOnlySet<global::TestLibrary.Issue127.NodeId>> Items
+{
+    get
+    {
+        if (_handle == IntPtr.Zero)
+            throw new ObjectDisposedException(nameof(NodeHub));
+        return new KotlinStateFlow<IReadOnlySet<global::TestLibrary.Issue127.NodeId>>((onNext, onComplete, onError, userData) =>
+            Native_GetItemsCollect(_handle, GetOrCreateScope(), onNext, onComplete, onError, userData),
+            () => Native_GetItemsValue(_handle),
+            read: static h => NugetMarshal.ReadSet<global::TestLibrary.Issue127.NodeId>(h, static h1 => new global::TestLibrary.Issue127.NodeId(NugetMarshal.FromHandle<int>(h1))));
+    
+    }
+}
+
+public KotlinFlow<IReadOnlyList<global::TestLibrary.Issue127.Kind>> Ticks
+{
+    get
+    {
+        if (_handle == IntPtr.Zero)
+            throw new ObjectDisposedException(nameof(NodeHub));
+        return new KotlinFlow<IReadOnlyList<global::TestLibrary.Issue127.Kind>>((onNext, onComplete, onError, userData) =>
+            Native_GetTicksCollect(_handle, GetOrCreateScope(), onNext, onComplete, onError, userData),
+            read: static h => NugetMarshal.ReadList<global::TestLibrary.Issue127.Kind>(h, static h1 => NugetMarshal.FromHandle<global::TestLibrary.Issue127.Kind>(h1)).AsReadOnly());
+    
+    }
+}
+
+public KotlinStateFlow<IReadOnlyList<global::TestLibrary.Issue127.NodeId>> Visible(IReadOnlyList<global::TestLibrary.Issue127.Kind> kinds)
+```
+
+The `read:` argument is a per-member `Func<IntPtr, T>` passed to `KotlinFlow<T>` /
+`KotlinStateFlow<T>`, trailing, optional, and on their `internal` constructors: a member with a
+non-collection element passes no lambda and gets the shipped `NugetMarshal.FromHandle<T>` unchanged,
+so no existing member's generated text moves. A component that projects at the seam leaves as its
+wire value: `NodeId` (a value class over `Int`) is re-wrapped per element by the same lambda that
+reads it out of the wire container.
+
+### Using it from C# {id="flow-element-using-it-from-c"}
+
+From `IntegrationTests/Issue127Tests.cs`:
+
+```C#
+[Fact]
+public void Items_StateFlowOfSet_ValueExposesEveryElement()
+{
+    using var hub = new NodeHub();
+
+    IReadOnlySet<NodeId> items = hub.Items.Value;
+
+    Assert.Equal(3, items.Count);
+    Assert.Equal([1, 2, 3], items.Select(node => node.Value).Order());
+}
+
+[Fact]
+public async Task Ticks_FlowOfList_MaterialisesEachEmissionsElements()
+{
+    using var hub = new NodeHub();
+    var seen = new List<string[]>();
+
+    await foreach (IReadOnlyList<Kind> page in hub.Ticks)
+    {
+        seen.Add(page.Select(kind => kind.Name).ToArray());
+        foreach (Kind kind in page) kind.Dispose();
+    }
+
+    Assert.Equal(3, seen.Count);
+    Assert.Equal(["nap"], seen[0]);
+    Assert.Equal(["zoomies", "snack"], seen[1]);
+    Assert.Equal(["nap", "loaf", "window"], seen[2]);
+}
+```
+
+<note>
+    <p>Any <i>other</i> generic element (<code>Pair&lt;A, B&gt;</code>, a nullable collection
+    <code>List&lt;T&gt;?</code>, a collection of a sealed base, a user generic, a nested
+    <code>Flow</code>) is absent from C# and named <code>SKIPPED_UNSUPPORTED_PROPERTY</code> (a
+    property) or <code>SKIPPED_UNSUPPORTED_RETURN</code> (a method return), rather than rendered
+    as a user type run through the root-package mapping (<code>global::Demo.Kotlin.Collections.Set</code>,
+    a namespace nothing declares), which <code>packNuget</code> accepted and the consumer's compiler
+    did not:</p>
+</note>
+
+```
+w: [nuget:SKIPPED_UNSUPPORTED_PROPERTY] Skipping NodeHub.paired: a Flow or StateFlow element can be a List/Set/Map, but not the generic type Pair<String, Int>. make the element a non-nullable List/Set/Map, or a non-generic type
+w: [nuget:SKIPPED_UNSUPPORTED_PROPERTY] Skipping NodeHub.maybe: a Flow or StateFlow element can be a List/Set/Map, but not the generic type List<String>?. make the element a non-nullable List/Set/Map, or a non-generic type
+```
+
+<note>
+    <p>A collection element on ADR-068's <code>suspend fun</code> returning <code>StateFlow&lt;T&gt;</code>
+    is refused rather than bound: its <code>nuget_stateflow_collect</code>/<code>nuget_stateflow_value</code>
+    exports are shared once per module, keyed on an already-obtained handle, with no per-member seam to
+    hang a projection on.</p>
+</note>
+
+The leak surface (a container handle plus one box per element, minted on every emission and every
+`.Value` read) is proven by the `CollectionFlowElement_EnumerationAndValueRead_ReturnsToBaseline`
+row in `LeakTests/LiveHandleTests.cs`.
+
 ## Limitations
 
 `Flow`/`StateFlow` collection and `suspend`/`async` dispatch their callbacks through a static
@@ -1209,9 +1338,9 @@ Hot streams and several `Flow` positions are not yet supported (ROADMAP Phase 6)
 - `Flow<T>` as a generic type argument (e.g. `Box<Flow<String>>`)
 - `suspend fun` returning `Flow<T>` (would follow the same outer-suspend-kept-as-`Task` decision [ADR-068](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/068-suspend-returning-stateflow.md) made for its `StateFlow` sibling, not yet implemented)
 - Flow backpressure (bounded `Channel<T>` with explicit resume signaling)
-- A collection as a `Flow`/`StateFlow` **element** (`StateFlow<List<String>>`, as opposed to a collection parameter) has no fixture and no confirmed coverage today
 - A nullable collection parameter (`List<T>?`) on a `Flow`/`StateFlow`/`suspend` member (ADR-067 territory, not widened by [ADR-114](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/114-collection-parameters-on-legacy-flow-and-suspend-routes.md))
 - An enum parameter on a `Flow`/`StateFlow`-returning or `suspend` member is refused rather than bound, even though `(int)x` / `entries[x]` would express it ([ADR-122](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/122-handle-parameters-on-the-legacy-routes.md) Alternative 6, deferred)
+- A collection of a sealed base as a `Flow`/`StateFlow` element (`StateFlow<List<Shape>>`), and a collection element on ADR-068's suspend-returning-`StateFlow` route, are refused rather than bound ([ADR-123](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/123-collection-elements-on-the-flow-routes.md))
 - A **top-level** `suspend fun` overload pair (not a class or sealed-arm method) still collides on one C symbol: the top-level suspend route has no planner entry to number from ([ADR-118](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/118-suspend-route-sealed-arm-owners-and-overload-numbering.md))
 - Two `suspend` overloads differing only in reference nullability still render `CS0111` in the generated file rather than failing the round, since async members bypass the C# signature-collision guard
 
@@ -1245,5 +1374,6 @@ rather than the raw `Function1`/`Result` this generated before
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/114-collection-parameters-on-legacy-flow-and-suspend-routes.md">ADR-114: Collection parameters on the Flow and suspend legacy routes</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/118-suspend-route-sealed-arm-owners-and-overload-numbering.md">ADR-118: Suspend route: sealed-arm owners and overload numbering</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/122-handle-parameters-on-the-legacy-routes.md">ADR-122: Handle parameters on the legacy Flow and suspend routes</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/123-collection-elements-on-the-flow-routes.md">ADR-123: Collection elements on the Flow and StateFlow routes</a>
     </category>
 </seealso>

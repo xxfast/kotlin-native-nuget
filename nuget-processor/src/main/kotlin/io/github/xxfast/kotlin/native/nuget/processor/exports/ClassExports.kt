@@ -26,6 +26,11 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyPrelude
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyLoweredName
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyParameterShapes
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyRefusedParameter
+import io.github.xxfast.kotlin.native.nuget.processor.forward.BridgeType
+import io.github.xxfast.kotlin.native.nuget.processor.forward.collectionResultProjection
+import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyFlowElementCollection
+import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyRefusedFlowElement
+import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyRefusedReturn
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardSuperClass
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isForwardMemberOf
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallablePlanCatalog
@@ -121,12 +126,21 @@ internal fun FileSpec.Builder.addClassExports(
     val isFlowProperty: Boolean = propType == "kotlinx.coroutines.flow.Flow"
     if (!isFlowProperty && !isStateFlowProperty) return@forEach
 
+    // ADR-123: an element this route cannot marshal drops the property, matching the C# half.
+    // `NugetProcessor` names it once as a SKIPPED_UNSUPPORTED_PROPERTY.
+    if (classifier.legacyRefusedFlowElement(propTypeResolved) != null) return@forEach
+
     val flowElementType: KSType? = propTypeResolved.arguments.firstOrNull()?.type?.resolve()
     val flowElementQualified: String =
       flowElementType?.declaration?.qualifiedName?.asString() ?: "kotlin.Any"
     // ADR-067: nullable element/member threading is StateFlow-only; nullable Flow stays deferred.
     val elementNullable: Boolean = isStateFlowProperty && flowElementType?.isMarkedNullable == true
     val memberNullable: Boolean = isStateFlowProperty && propTypeResolved.isMarkedNullable
+    // ADR-123: a collection element crosses as the ordinary route's boxed wire container, so a
+    // component that projects at the seam (a value class to its underlying, an enum to its
+    // ordinal) has to leave as that wire value or the C# per-element read decodes the wrong box.
+    val flowElementCollection: BridgeType.Collection? =
+      classifier.legacyFlowElementCollection(propTypeResolved)
 
     addFunction(
       FunSpec.builder("export_${prefix}_get_${propName}_collect")
@@ -141,6 +155,7 @@ internal fun FileSpec.Builder.addClassExports(
         .addCode(
           buildFlowCollectBody(
             qualifiedName, propName, flowElementQualified, elementNullable, memberNullable,
+            flowElementCollection,
           )
         )
         .build()
@@ -162,7 +177,7 @@ internal fun FileSpec.Builder.addClassExports(
           )
           .addCode(
             buildStateFlowValuePropertyBody(
-              qualifiedName, propName, elementNullable, memberNullable,
+              qualifiedName, propName, elementNullable, memberNullable, flowElementCollection,
             ),
           )
           .build()
@@ -229,7 +244,9 @@ internal fun FileSpec.Builder.addClassExports(
   }
     // ADR-114: a generic parameter this route cannot marshal skips the member entirely rather
     // than emitting non-compiling Kotlin. `NugetProcessor` names it in a SKIPPED_UNSUPPORTED_INPUT.
+    // ADR-123: likewise an element this route cannot marshal, named SKIPPED_UNSUPPORTED_RETURN.
     .filter { method -> classifier.legacyRefusedParameter(method.parameters) == null }
+    .filter { method -> classifier.legacyRefusedReturn(method) == null }
 
   val allNonFlowMethods: List<KSFunctionDeclaration> = allRegularMethods.filter { method ->
     val returnQualified: String? = method.returnType?.resolve()
@@ -285,6 +302,10 @@ internal fun FileSpec.Builder.addClassExports(
     // ADR-067: nullable element/member threading is StateFlow-only; nullable Flow stays deferred.
     val elementNullable: Boolean = isStateFlowMethod && flowElementType?.isMarkedNullable == true
     val memberNullable: Boolean = isStateFlowMethod && returnType?.isMarkedNullable == true
+    // ADR-123: the element-side twin of the parameter lowering below -- a collection element
+    // leaves per-element projected, exactly as the ordinary route's collection result does.
+    val flowElementCollection: BridgeType.Collection? =
+      classifier.legacyFlowElementCollection(returnType)
 
     // ADR-114: a collection parameter is dereferenced and copied out of its wire container
     // eagerly, before `launch`, and the member is called with that local instead of the raw
@@ -341,7 +362,7 @@ internal fun FileSpec.Builder.addClassExports(
       .addCode(
         buildFlowMethodCollectBody(
           qualifiedName, methodName, paramCall, paramPrelude, flowElementQualified,
-          elementNullable, memberNullable,
+          elementNullable, memberNullable, flowElementCollection,
         )
       )
 
@@ -367,6 +388,7 @@ internal fun FileSpec.Builder.addClassExports(
         .addCode(
           buildStateFlowValueMethodBody(
             qualifiedName, methodName, paramCall, paramPrelude, elementNullable, memberNullable,
+            flowElementCollection,
           )
         )
 
@@ -499,9 +521,25 @@ private fun memberAccessor(receiver: String, memberNullable: Boolean): String =
 
 // ADR-067: the collected/read item expression -- a null-guarded box when the element itself is
 // nullable (`StateFlow<T?>`), else the original unguarded `value as Any` box (ADR-065 unchanged).
-private fun itemBoxExpr(elementNullable: Boolean): String =
-  if (elementNullable) "if (value != null) NugetHandles.retain(value) else null"
-  else "NugetHandles.retain(value as Any)"
+// ADR-123: a collection element is boxed per-element projected, so a value class leaves as its
+// underlying and an enum as its ordinal, exactly as the ordinary route's collection result does.
+// The two are exclusive: a nullable collection element is refused before either half sees it.
+private fun itemBoxExpr(
+  elementNullable: Boolean,
+  collection: BridgeType.Collection?,
+): String = when {
+  elementNullable -> "if (value != null) NugetHandles.retain(value) else null"
+  collection != null -> "NugetHandles.retain(${flowValueExpression("value", collection)} as Any)"
+  else -> "NugetHandles.retain(value as Any)"
+}
+
+/**
+ * ADR-123: one flow emission (or one `.Value` read) projected to what the C# per-element read
+ * expects. `collectionResultProjection` returns [invocation] unchanged when no component needs
+ * projecting, so a `List<String>` element's emitted Kotlin is byte-identical to the shipped one.
+ */
+private fun flowValueExpression(invocation: String, collection: BridgeType.Collection?): String =
+  if (collection == null) invocation else collectionResultProjection(invocation, collection)
 
 private fun buildFlowCollectBody(
   qualifiedName: String,
@@ -509,6 +547,7 @@ private fun buildFlowCollectBody(
   flowElementQualified: String,
   elementNullable: Boolean = false,
   memberNullable: Boolean = false,
+  elementCollection: BridgeType.Collection?,
 ): String = buildString {
   appendLine("val obj = handle.asStableRef<$qualifiedName>().get()")
   appendLine("val scope = scopeHandle.asStableRef<CoroutineScope>().get()")
@@ -527,7 +566,7 @@ private fun buildFlowCollectBody(
   appendLine("val job = scope.launch(start = CoroutineStart.ATOMIC) {")
   appendLine("  try {")
   appendLine("    obj.${memberAccessor(propName, memberNullable)}.collect { value ->")
-  appendLine("      val itemRef = ${itemBoxExpr(elementNullable)}")
+  appendLine("      val itemRef = ${itemBoxExpr(elementNullable, elementCollection)}")
   appendLine("      onNext.invoke(itemRef, 0.toByte(), userData)")
   appendLine("    }")
   appendLine("    onComplete.invoke(userData)")
@@ -552,6 +591,7 @@ private fun buildFlowMethodCollectBody(
   flowElementQualified: String,
   elementNullable: Boolean = false,
   memberNullable: Boolean = false,
+  elementCollection: BridgeType.Collection?,
 ): String = buildString {
   appendLine("val obj = handle.asStableRef<$qualifiedName>().get()")
   appendLine("val scope = scopeHandle.asStableRef<CoroutineScope>().get()")
@@ -573,7 +613,7 @@ private fun buildFlowMethodCollectBody(
   appendLine(
     "    obj.${memberAccessor("$methodName($paramCall)", memberNullable)}.collect { value ->",
   )
-  appendLine("      val itemRef = ${itemBoxExpr(elementNullable)}")
+  appendLine("      val itemRef = ${itemBoxExpr(elementNullable, elementCollection)}")
   appendLine("      onNext.invoke(itemRef, 0.toByte(), userData)")
   appendLine("    }")
   appendLine("    onComplete.invoke(userData)")
@@ -597,10 +637,12 @@ private fun buildStateFlowValuePropertyBody(
   propName: String,
   elementNullable: Boolean = false,
   memberNullable: Boolean = false,
+  elementCollection: BridgeType.Collection?,
 ): String = buildString {
   appendLine("val obj = handle.asStableRef<$qualifiedName>().get()")
   if (!elementNullable && !memberNullable) {
-    append("return NugetHandles.retain(obj.$propName.value as Any)")
+    val read: String = flowValueExpression("obj.$propName.value", elementCollection)
+    append("return NugetHandles.retain($read as Any)")
   } else {
     appendLine("val v = obj.${memberAccessor(propName, memberNullable)}.value")
     append("return if (v != null) NugetHandles.retain(v) else null")
@@ -614,11 +656,14 @@ private fun buildStateFlowValueMethodBody(
   paramPrelude: String,
   elementNullable: Boolean = false,
   memberNullable: Boolean = false,
+  elementCollection: BridgeType.Collection?,
 ): String = buildString {
   appendLine("val obj = handle.asStableRef<$qualifiedName>().get()")
   append(paramPrelude)
   if (!elementNullable && !memberNullable) {
-    append("return NugetHandles.retain(obj.$methodName($paramCall).value as Any)")
+    val read: String =
+      flowValueExpression("obj.$methodName($paramCall).value", elementCollection)
+    append("return NugetHandles.retain($read as Any)")
   } else {
     appendLine("val v = obj.${memberAccessor("$methodName($paramCall)", memberNullable)}.value")
     append("return if (v != null) NugetHandles.retain(v) else null")

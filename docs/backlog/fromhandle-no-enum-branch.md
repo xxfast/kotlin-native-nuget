@@ -3,3 +3,9 @@
 > Extracted verbatim from `ROADMAP.md` (Phase 6: Async support) in the 2026-08-31 roadmap slim-down.
 
 **`NugetMarshal.FromHandle<T>` has no enum branch (`nuget-processor/.../cir/CirMarshalRenderer.kt:104-259`), so `StateFlow<SomeEnum>` (and `MutableStateFlow<SomeEnum>`) are unsupported and untested on the `.Value` read path, and the same gap breaks any collection getter with an enum element.** Pre-existing, predates both ADR-065 and ADR-071; the read path's generic unwrap simply never grew an enum case. Surfaced while reading the marshalling cascade for the ADR-071 settable-`.Value` feature, but deliberately not fixed there, the human chose to split it out rather than widen that feature's scope. Verified by code reading (`FromHandle<T>`'s branch list), not by a failing test. **Wider than first scoped:** `collectionMaterialize` (property/method-return list, map, and set walks) calls this same `FromHandle<T>` per element, so reading a `List<Mood>` property throws `MissingMethodException` at runtime today too, not just `StateFlow<T>.Value`. `Chart.moods` ([ADR-075](docs/adr/075-collection-property-getter-setter-independence.md)) is the first fixture to sit next to it; its C# tests (`Chart_Moods_EnumElement_HasNoPublicSetter`) deliberately assert shape only, via reflection, and never call the getter, to avoid tripping it.
+
+[ADR-123](../adr/123-collection-elements-on-the-flow-routes.md) (issue #127) bound a *collection*
+element on the `Flow`/`StateFlow` routes by routing it around `FromHandle<T>` entirely, through a
+per-member `Func<IntPtr, T>` read delegate, rather than adding a branch to `FromHandle<T>` itself.
+A bare enum element (`StateFlow<Mood>`) is unaffected and stays admitted-but-broken at runtime; this
+item stays open.

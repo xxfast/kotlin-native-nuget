@@ -104,6 +104,8 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.diagnosticHint
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isForwardLegacyAsyncRoute
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isValueClass
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyCollectionKinds
+import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyFlowElementCollectionKinds
+import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyRefusedFlowElement
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyRefusedParameter
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyRefusedReturn
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyReturnCollectionKinds
@@ -325,8 +327,27 @@ internal fun warnRefusedLegacyRouteMembers(
     kind = ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_RETURN,
     symbol = member,
     declaration = declaration,
-    reason = "a suspend member can return a List/Set/Map, but not the generic type $refused",
+    // ADR-123 widened this from the suspend return to the Flow/StateFlow element, which is the
+    // same refusal one position over: `Flow<Pair<String, Int>>` has no more wire shape than
+    // `Pair<String, Int>` does.
+    reason = "a suspend member can return, and a Flow or StateFlow element can be, a " +
+        "List/Set/Map, but not the generic type $refused",
     hint = "return a non-nullable List/Set/Map, or a non-generic type",
+  )
+
+  // ADR-123: the property half of the same refusal. A flow property has no `KSFunctionDeclaration`
+  // to hang the return diagnostic on, and SKIPPED_UNSUPPORTED_PROPERTY is what every other
+  // dropped-property route already uses.
+  fun refusedFlowProperty(
+    property: KSPropertyDeclaration,
+    declaration: String,
+    refused: String,
+  ): ForwardDiagnostic = ForwardDiagnostic(
+    kind = ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_PROPERTY,
+    symbol = property,
+    declaration = declaration,
+    reason = "a Flow or StateFlow element can be a List/Set/Map, but not the generic type $refused",
+    hint = "make the element a non-nullable List/Set/Map, or a non-generic type",
   )
 
   fun MutableList<ForwardDiagnostic>.nameRefused(
@@ -349,6 +370,19 @@ internal fun warnRefusedLegacyRouteMembers(
         .filter { method -> method.getVisibility() == Visibility.PUBLIC }
         .filter { method -> method.isForwardLegacyAsyncRoute() }
         .forEach { method -> nameRefused(method, "$owner.${method.simpleName.asString()}") }
+      // ADR-123: a Flow/StateFlow *property* whose element cannot cross. Both halves drop it
+      // silently, exactly as they drop a method, so this walk is the only thing that names it.
+      cls.getAllProperties()
+        .filter { property -> property.getVisibility() == Visibility.PUBLIC }
+        .forEach { property ->
+          val refused: String =
+            classifier.legacyRefusedFlowElement(property.type.resolve()) ?: return@forEach
+          add(
+            refusedFlowProperty(
+              property, "$owner.${property.simpleName.asString()}", refused,
+            ),
+          )
+        }
     }
     sealedClasses.forEach { sealed ->
       val sealedName: String = sealed.simpleName.asString()
@@ -1542,6 +1576,18 @@ class NugetProcessor(
           .forEach { method ->
             yieldAll(forwardClassifier.legacyCollectionKinds(method.parameters))
             yieldAll(forwardClassifier.legacyReturnCollectionKinds(method))
+            // ADR-123: the Flow/StateFlow element. No scan above finds it: they read a member's
+            // declared type, and that type is `StateFlow`, not `Set`.
+            yieldAll(
+              forwardClassifier.legacyFlowElementCollectionKinds(method.returnType?.resolve()),
+            )
+          }
+        cls.getAllProperties()
+          .filter { property -> property.getVisibility() == Visibility.PUBLIC }
+          .forEach { property ->
+            yieldAll(
+              forwardClassifier.legacyFlowElementCollectionKinds(property.type.resolve()),
+            )
           }
       }
       sealedClasses.forEach { sealed ->

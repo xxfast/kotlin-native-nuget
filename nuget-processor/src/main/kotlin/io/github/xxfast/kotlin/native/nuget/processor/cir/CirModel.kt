@@ -419,6 +419,11 @@ data class CirMethod(
   // wrapper plus a synchronous `_value` native import (see [stateFlowValueNativeName]).
   val isStateFlow: Boolean = false,
   val flowElementType: String = "",
+  // ADR-123: the `read:` argument a collection element passes to KotlinFlow<T>/KotlinStateFlow<T>,
+  // the per-member `Func<IntPtr, T>` that materialises one emission through `NugetMarshal.ReadList`
+  // and kin. Null leaves the shipped construction untouched, so a non-collection element still
+  // reads through the constructors' default `NugetMarshal.FromHandle<T>`.
+  val flowElementRead: String? = null,
   // The native method name (e.g. "Native_MoodReportValue") of the sibling `_value` DllImport
   // this StateFlow method's companion-member list also carries. Empty unless [isStateFlow].
   val stateFlowValueNativeName: String = "",
