@@ -23,8 +23,14 @@ class ForwardPhase4ProjectionTest {
     )
     val stringPlan: ForwardCallablePlan = nullableStringPlan()
 
-    assertContains(renderKotlin(objectPlan), "NugetHandles.retain(handle.asStableRef<sample.Counter>().get().friend())")
-    assertContains(renderKotlin(listPlan), "NugetHandles.retain(handle.asStableRef<sample.Counter>().get().scores())")
+    assertContains(
+      renderKotlin(objectPlan),
+      "NugetHandles.retain(handle.asStableRef<sample.Counter>().get().friend())",
+    )
+    assertContains(
+      renderKotlin(listPlan),
+      "NugetHandles.retain(handle.asStableRef<sample.Counter>().get().scores())",
+    )
     assertContains(renderKotlin(stringPlan), "): String? = try {")
 
     val objectMethod = ForwardCirPlanProjection.classMethod(objectPlan, "counter", isOverride = false)

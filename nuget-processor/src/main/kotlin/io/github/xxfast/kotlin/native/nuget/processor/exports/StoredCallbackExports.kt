@@ -215,7 +215,10 @@ internal fun FileSpec.Builder.addStoredCallbackExports(
     appendLine("  val unregister: () -> Unit = { obj.$removeMethodName(bridge) }")
     appendLine("  NugetHandles.retain(unregister)")
     appendLine("} catch (e: Throwable) {")
-    appendLine("  if (errorOut != null) errorOut.reinterpret<COpaquePointerVar>().pointed.value = NugetHandles.retain(buildError(e))")
+    appendLine(
+      "  if (errorOut != null) errorOut.reinterpret<COpaquePointerVar>().pointed.value = " +
+        "NugetHandles.retain(buildError(e))"
+    )
     appendLine("  null")
     append("}")
   }

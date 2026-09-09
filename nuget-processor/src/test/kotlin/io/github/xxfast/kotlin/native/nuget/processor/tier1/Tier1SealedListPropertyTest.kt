@@ -49,7 +49,10 @@ class Tier1SealedListPropertyTest {
       |                }
       """.trimMargin(),
     )
-    assertContains(result.generatedCSharp, "static h1 => NugetMarshal.FromHandle<global::Interop.Item>(h1)).AsReadOnly();")
+    assertContains(
+      result.generatedCSharp,
+      "static h1 => NugetMarshal.FromHandle<global::Interop.Item>(h1)).AsReadOnly();",
+    )
   }
 
   @Test

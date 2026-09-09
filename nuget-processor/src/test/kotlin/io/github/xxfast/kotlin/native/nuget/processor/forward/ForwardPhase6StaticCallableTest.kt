@@ -25,7 +25,10 @@ class ForwardPhase6StaticCallableTest {
     )
 
     assertContains(renderKotlin(topLevel), "NugetHandles.retain(createCounter())")
-    assertContains(renderKotlin(objectMethod), "NugetHandles.retain(sample.Catalog.createCounter())")
+    assertContains(
+      renderKotlin(objectMethod),
+      "NugetHandles.retain(sample.Catalog.createCounter())",
+    )
     assertContains(renderCsharp(topLevel), "return new Counter(nativeResult);")
     assertContains(renderCsharp(objectMethod), "EntryPoint = \"catalog_createCounter\"")
   }

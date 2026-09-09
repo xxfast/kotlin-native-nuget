@@ -136,7 +136,9 @@ internal fun FileSpec.Builder.addLambdaParamMethodExport(
         appendLine("  }")
         appendLine("} catch (e: Throwable) {")
         appendLine("  if (errorOut != null) {")
-        appendLine("    errorOut.reinterpret<COpaquePointerVar>().pointed.value = NugetHandles.retain(")
+        appendLine(
+          "    errorOut.reinterpret<COpaquePointerVar>().pointed.value = NugetHandles.retain(",
+        )
         appendLine("      buildError(e)")
         appendLine("    )")
         appendLine("  }")
@@ -151,7 +153,9 @@ internal fun FileSpec.Builder.addLambdaParamMethodExport(
         appendLine("  NugetHandles.retain(list)")
         appendLine("} catch (e: Throwable) {")
         appendLine("  if (errorOut != null) {")
-        appendLine("    errorOut.reinterpret<COpaquePointerVar>().pointed.value = NugetHandles.retain(")
+        appendLine(
+          "    errorOut.reinterpret<COpaquePointerVar>().pointed.value = NugetHandles.retain(",
+        )
         appendLine("      buildError(e)")
         appendLine("    )")
         appendLine("  }")
@@ -167,7 +171,9 @@ internal fun FileSpec.Builder.addLambdaParamMethodExport(
         appendLine("  }")
         appendLine("} catch (e: Throwable) {")
         appendLine("  if (errorOut != null) {")
-        appendLine("    errorOut.reinterpret<COpaquePointerVar>().pointed.value = NugetHandles.retain(")
+        appendLine(
+          "    errorOut.reinterpret<COpaquePointerVar>().pointed.value = NugetHandles.retain(",
+        )
         appendLine("      buildError(e)")
         appendLine("    )")
         appendLine("  }")

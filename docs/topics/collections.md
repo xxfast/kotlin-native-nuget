@@ -420,7 +420,7 @@ bare `IDictionary<K,V>` cannot be passed to a `Map<K,V>` parameter (it needs `IR
 and a bare `IReadOnlyDictionary<K,V>` cannot be passed to a `MutableMap<K,V>` parameter (it needs
 `IDictionary`). Same asymmetry for `Set`/`ISet`/`IReadOnlySet`.
 
-## Exception safety on collection parameters
+## Exception safety on collection parameters and returns
 
 A collection parameter's temporary native handle is released on every exit path, not only the
 successful one. If the Kotlin callee throws, the generated C# still disposes the handle it built:
@@ -500,6 +500,49 @@ public void Audit_CollectionThrowsMidEnumeration_SurfacesOriginalException()
     Assert.IsNotAssignableFrom<IKotlinException>(ex);
 }
 ```
+
+### Collection returns {id="exception-safety-collection-returns"}
+
+The read side gets the same treatment. `NugetMarshal.ReadList`/`ReadSet`/`ReadMap` (ADR-099) walk a
+returned `List`/`Set`/`Map` handle and materialize each element through its factory. If a factory
+throws partway through, a `finally` still disposes the collection's own native handle, and a `catch`
+disposes every element wrapper already built before the throw:
+
+```C#
+public static List<T> ReadList<T>(IntPtr handle, Func<IntPtr, T> read)
+{
+    var result = new List<T>();
+    try
+    {
+        int count = NugetListNative.Count(handle);
+        result.Capacity = count;
+        for (int i = 0; i < count; i++) result.Add(read(NugetListNative.Get(handle, i)));
+        return result;
+    }
+    catch { DisposeMaterialized(result); throw; }
+    finally { NugetListNative.Dispose(handle); }
+}
+```
+
+`ReadMap` disposes both the already-built keys and the already-built values on a throw. Every
+generated collection-returning getter and method routes through one of these three helpers, at every
+nesting level, including the outermost one:
+
+```C#
+public IReadOnlyList<global::TestLibrary.Models.TopStory> Archive()
+{
+    IntPtr listHandle = Native_Archive(_handle, out IntPtr error);
+    if (error != IntPtr.Zero)
+    {
+        throw NugetErrorNative.BuildException(error);
+    }
+    return NugetMarshal.ReadList<global::TestLibrary.Models.TopStory>(listHandle, static h1 => NugetMarshal.FromHandle<global::TestLibrary.Models.TopStory>(h1)).AsReadOnly();
+}
+```
+
+`IntegrationTests/LiveHandleTests.cs` proves it with a mid-loop throwing element factory: the only
+handle left over after the throw is the `Newsroom` instance's own, not the returned list's handle or
+the element built before the throw (see [Diagnosing forward handle leaks](registration-diagnostics.md)).
 
 ## Nullable collection references
 
@@ -1287,8 +1330,6 @@ public void WardBoard_LogSparse_NullableNestedCollectionParameter_IsNotGenerated
 - A sealed base is a valid write-side object handle too: an element, key, or value typed as an exported sealed class boxes through `NugetMarshal.Wrap<T>`'s `INugetHandle` type test exactly like a concrete class handle, at both a collection parameter and a collection property setter (see [Interfaces, abstract classes, and sealed classes: A sealed type at a parameter position](interfaces-abstract-sealed.md#a-sealed-type-at-a-parameter-position), [ADR-105](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/105-sealed-property-position.md)).
 - `MutableMap`/`MutableSet` parameters do not write back, matching `MutableList`. Contents are copied into Kotlin; changes Kotlin makes are not reflected back in the collection you passed.
 - A collection property **setter** uses the same wrappable-component predicate as a `Map`/`Set`/`List` parameter above. A **nullable** nested-collection element skips the setter with `SKIPPED_UNSUPPORTED_INPUT` and falls back to a get-only property; a value-class element (see [Value classes](value-classes.md#as-a-collection-component), [ADR-081](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/081-value-class-collection-components.md)), a bare enum element (see [Enums](enums.md#as-a-collection-component), [ADR-097](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/097-enum-collection-components.md)), a narrow-primitive or `Char` element ([ADR-098](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/098-narrow-primitive-and-char-collection-components.md)), a nested (non-nullable) collection element ([ADR-099](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/099-nested-collection-components.md)), and a nullable element ([ADR-083](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/083-nullable-collection-components.md)) all bind; the getter itself has no such restriction. See [ADR-075](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/075-collection-property-getter-setter-independence.md) for the mechanism.
-- A returned collection's result handle leaks if materialization throws mid-loop. This is no longer reproduced per nesting level, since every inner level now goes through a `finally`-guarded `ReadList`/`ReadSet`/`ReadMap` helper, but the **outer** level is unchanged and still leaks; see [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md).
-
 <seealso>
     <category ref="related">
         <a href="generics.md">Generics</a>
@@ -1308,5 +1349,6 @@ public void WardBoard_LogSparse_NullableNestedCollectionParameter_IsNotGenerated
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/097-enum-collection-components.md">ADR-097: Enum collection components</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/098-narrow-primitive-and-char-collection-components.md">ADR-098: Narrow-primitive and Char collection components</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/099-nested-collection-components.md">ADR-099: Nested collection components</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/120-live-stableref-counter-and-leak-harness.md">ADR-120: Live StableRef counter and leak harness</a>
     </category>
 </seealso>

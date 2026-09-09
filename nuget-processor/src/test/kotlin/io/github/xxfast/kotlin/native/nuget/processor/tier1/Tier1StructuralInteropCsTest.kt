@@ -44,7 +44,10 @@ class Tier1StructuralInteropCsTest {
     assertContains(generated, "public static string Label()")
     assertContains(generated, "public static global::Interop.Factory Create()")
     assertContains(generated, "public static IReadOnlyList<string> Labels()")
-    assertContains(generated, "NugetMarshal.ReadList<string>(listHandle, static h1 => NugetMarshal.FromHandle<string>(h1))")
+    assertContains(
+      generated,
+      "NugetMarshal.ReadList<string>(listHandle, static h1 => NugetMarshal.FromHandle<string>(h1))",
+    )
   }
 
   /**

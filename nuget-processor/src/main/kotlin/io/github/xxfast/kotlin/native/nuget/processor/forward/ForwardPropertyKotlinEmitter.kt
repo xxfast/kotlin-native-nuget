@@ -33,7 +33,9 @@ private fun FileSpec.Builder.addGetter(plan: ForwardPropertyPlan, call: ForwardN
   val builder: FunSpec.Builder = exportBuilder(call, plan.receiver, plan.symbol)
   val access: String = plan.accessExpression()
   when (val type: BridgeType = plan.type) {
-    BridgeType.Unit -> builder.addCode(unitBody(access, "errorOut"), cOpaquePointerVar, nugetHandles)
+    BridgeType.Unit -> builder.addCode(
+      unitBody(access, "errorOut"), cOpaquePointerVar, nugetHandles,
+    )
     is BridgeType.Primitive -> {
       builder.returns(kotlinType(type))
       builder.addCode(
@@ -205,7 +207,9 @@ private fun FileSpec.Builder.addGetter(plan: ForwardPropertyPlan, call: ForwardN
 
         is BridgeType.ObjectHandle -> {
           builder.returns(cOpaquePointer.copy(nullable = true))
-          builder.addCode(handleBody(unboxed, "errorOut"), nugetHandles, cOpaquePointerVar, nugetHandles)
+          builder.addCode(
+            handleBody(unboxed, "errorOut"), nugetHandles, cOpaquePointerVar, nugetHandles,
+          )
         }
 
         else -> error(

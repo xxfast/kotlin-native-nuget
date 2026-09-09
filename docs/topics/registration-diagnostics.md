@@ -125,6 +125,78 @@ running `[m/N]` count rather than assuming a position.
 Registration granularity only: there is no per-call trace, and none is planned for v1. Every bug this
 feature exists to catch is a registration bug, not a call bug.
 
+## Diagnosing forward handle leaks: `LiveHandles`
+
+A different bridge health question: how many **forward** `StableRef` handles (Kotlin exports called
+from C#) does Kotlin currently hold. Every generated mint and release routes through one shared pair
+in the generated `CNameExports.kt`:
+
+```kotlin
+internal object NugetHandles {
+  public val live: AtomicLong = AtomicLong(0L)
+
+  public fun retain(`value`: Any): COpaquePointer {
+    live.incrementAndGet()
+    return StableRef.create(value).asCPointer()
+  }
+
+  public fun release(handle: COpaquePointer) {
+    handle.asStableRef<Any>().dispose()
+    live.decrementAndGet()
+  }
+}
+
+@CName("nuget_live_handles")
+public fun export_nuget_live_handles(): Long = NugetHandles.live.value
+```
+
+C# reads it as an `internal` property on `NugetMarshal`, matching the visibility of ADR-084's
+`NugetBridgeState.ReleasedCount`:
+
+```C#
+[DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "nuget_live_handles")]
+private static extern long Native_live_handles();
+
+/// <summary>The number of Kotlin StableRef handles the forward bridge currently holds.</summary>
+internal static long LiveHandles => Native_live_handles();
+```
+
+`IntegrationTests/LiveHandleTests.cs` uses the count to assert one crossing family at a time returns
+to baseline: snapshot the count, run a batch of crossings, settle until the count stops moving, and
+compare. Settling loops `GC.Collect()` + `WaitForPendingFinalizers()` + `NugetBridge.GcCollect()`
+(the ADR-084 cleaner round) until the count is stable for several consecutive rounds, since some
+releases land asynchronously:
+
+```C#
+private static void AssertNoLeak(Action crossing, int iterations = 50)
+{
+    for (int attempt = 1; ; attempt++)
+    {
+        Settle();
+        long before = NugetMarshal.LiveHandles;
+
+        for (int i = 0; i < iterations; i++) crossing();
+
+        Settle();
+        long after = NugetMarshal.LiveHandles;
+        if (after == before) return;
+        if (after < before && attempt < MeasurementAttempts) continue;
+
+        Assert.Fail(
+            $"expected {before} live handles after {iterations} crossings, got {after} (delta {after - before}) on attempt {attempt}");
+    }
+}
+```
+
+A negative delta on an early attempt is re-measured (it can be a release owed by earlier work landing
+inside the window, not a leak of the crossing under test). A positive delta fails immediately, with
+no tolerance band: that is the shape of a leak this harness exists to catch. See
+[Exception safety on collection parameters and returns](collections.md#exception-safety-on-collection-parameters-and-returns)
+for the collection-return leak this harness proved and closed.
+
+Only forward handles are counted; the reverse side's own `StableRef` sites are not (see
+[ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md)).
+
 ## Limitations
 
 - No structured, queryable diagnostics report for registration; the trace is a plain text stream,
@@ -140,6 +212,7 @@ feature exists to catch is a registration bug, not a call bug.
         <a href="reverse-overview.md">Consuming C# in Kotlin</a>
         <a href="objects-and-handles.md">Objects and handles</a>
         <a href="bridgeable-subset.md">The bridgeable subset</a>
+        <a href="collections.md">Collections</a>
     </category>
     <category ref="external">
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/041-kotlin-to-csharp-call-mechanism.md">ADR-041: Kotlin → managed C# call mechanism</a>
@@ -147,5 +220,6 @@ feature exists to catch is a registration bug, not a call bug.
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/049-csharp-registration-shim-generation.md">ADR-049: C# registration shim generation</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/054-reverse-bridge-registration-observability.md">ADR-054: Reverse-bridge registration observability</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/058-csharp-shape-b-structs-in-kotlin.md">ADR-058: C# Shape B structs in Kotlin</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/120-live-stableref-counter-and-leak-harness.md">ADR-120: Live StableRef counter and leak harness</a>
     </category>
 </seealso>

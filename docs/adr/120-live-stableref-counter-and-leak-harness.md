@@ -1,7 +1,7 @@
 # ADR-120: Forward, a live `StableRef` counter behind one `NugetHandles.retain`/`release` pair, read from C# as `NugetMarshal.LiveHandles`, with a leak-asserting xunit harness
 
 ## Status
-Proposed
+Accepted
 
 ## Context
 
@@ -139,6 +139,9 @@ Alternative 1. Forward-only. Always compiled in.
   existing `needsHelpers` gate (`NugetProcessor.kt:1667-1669`). **Verified**: that gate is at least
   as broad as the C# `needsCoreMarshal` gate that emits `NugetMarshal` (comment and code at
   `NugetProcessor.kt:1657-1669`), which is the same relationship `nuget_dispose` already relies on.
+  **Wrong; see "Amendments after implementation" below.** The counter is emitted unconditionally
+  from `NugetProcessor.kt` (`addNugetHandlesCounter()`), not gated by `needsHelpers`; the C# import
+  stays under `needsCoreMarshal`.
 - **Verified** by konanc spike (Kotlin/Native 2.4.10 prebuilt, `-produce library`, macOS arm64
   host): `kotlin.concurrent.AtomicLong` needs **no** opt-in; `incrementAndGet`/`decrementAndGet`/
   `.value` compile clean with only the `ExperimentalForeignApi` + `ExperimentalNativeApi` opt-ins
@@ -230,7 +233,9 @@ public class LiveHandleTests
 }
 ```
 
-(Fixture names are illustrative; the implementing agent picks real `TestLibrary` members per row.)
+(Fixture names are illustrative; the implementing agent picks real `TestLibrary` members per row.
+**The shipped settle/assert logic replaced this sketch; see "Amendments after implementation"
+below.**)
 
 **The red case.** The outer returned-collection loop
 (`ForwardCirPlanProjection.kt:1231-1300`, **Verified**) reads each element through
@@ -271,7 +276,8 @@ public void ListReturn_ThrowingElementFactory_ReleasesTheListHandle()
 The test disposes the element box it was handed before throwing, so the only unreleased handle is
 the list's own: the delta is exactly +1 per call, which is the leak the backlog names. When the outer
 loop is routed through ADR-099's `finally`-guarded `ReadList`/`ReadSet`/`ReadMap`, the same test
-goes green with no edit. Whether `Factories` stays the injection seam after the ADR-094 table
+goes green with no edit. **Wrong; delta was +3, not +1. See "Amendments after implementation" below
+for the accounting.** Whether `Factories` stays the injection seam after the ADR-094 table
 evolves is a maintenance question, not a correctness one; if a future change makes the dictionary
 immutable, the fallback trigger is a `test-library` class whose C# wrapper is hand-shadowed, which
 is more machinery, so keep the dictionary mutable.
@@ -293,10 +299,10 @@ fix, and record it in the test's failure message.
 | Callback subscribe/unsubscribe | `StableRef.create(unregister)` returned, `ref.dispose()` on unsubscribe (**Verified**, `StoredCallbackExports.kt:216,238`) | strict |
 | ADR-084 C#-implemented interface argument | transfer `StableRef` disposed after the native call (**Verified** by the `BidirectionalTests.cs:214-217` comment and ADR-084 Decision); the Kotlin bridge *object* is GC-owned but is not a `StableRef` | strict for the counter |
 | ADR-085 Kotlin-implemented interface | ctx `StableRef` minted by the **plugin**, freed by a .NET `SafeHandle` finalizer | not counted in v1 (scope fork above) |
-| `Flow` enumerate-to-completion | per-item box unwrapped and disposed by C#; job `StableRef` disposed by the enumerator (**Inferred** from `CirFlowRenderer.kt:175-180`; implementing agent verifies the job-handle dispose site) | strict |
-| `Flow` abandoned via `DisposeAsync` | `NugetJobNative.Cancel` from `DisposeAsync` (**Verified**, `:175-180`); handle dispose after cancel **Inferred** | strict after `await DisposeAsync()`; "dropped without disposing" is finalizer-driven, assert eventual with `ReleaseFiredWithin`-style polling |
-| `suspend` call completes | result box unwrapped+disposed by C#, job handle disposed on completion (**Inferred**) | strict |
-| `suspend` cancelled | job handle dispose after cancel (**Inferred**) | eventual, polled |
+| `Flow` enumerate-to-completion | per-item box unwrapped and disposed by C#; job `StableRef` disposed by the enumerator. **Verified, not Inferred** (see "Amendments after implementation" below): `nuget_scope_dispose` routes through `NugetHandles.release`. | strict |
+| `Flow` abandoned via `DisposeAsync` | `NugetJobNative.Cancel` from `DisposeAsync` (**Verified**, `:175-180`); handle dispose after cancel **Verified, not Inferred**: same `nuget_scope_dispose` route. | strict after `await DisposeAsync()`; the shipped test asserts strict, not eventual/polled (see amendment) |
+| `suspend` call completes | result box unwrapped+disposed by C#, job handle disposed on completion. **Verified, not Inferred**: `nuget_job_dispose` routes through `NugetHandles.release`. | strict |
+| `suspend` cancelled | job handle dispose after cancel. **Verified, not Inferred**: same `nuget_job_dispose` route. Not shipped as its own row; the two rows above cover the strict assertion. | not a separate shipped test |
 
 Where a row says **Inferred**, a strict assertion that fails on implementation is a finding about
 the *bridge*, not the harness: the counter's job is exactly to turn those into numbers.
@@ -329,3 +335,57 @@ or `asStableRef` in generated text, and one new `IntegrationTests/LiveHandleTest
 - The harness is only trusted after the red case above is observed red, then green after the
   outer loop is routed through `ReadList`/`ReadSet`/`ReadMap`. Ship the counter, the red test, and
   the fix in that order, in that commit sequence, so the red run is on record.
+
+## Amendments after implementation (2026-09-09)
+
+The implementation run corrected six mechanism claims this ADR got wrong or left as a sketch. Recorded
+here rather than silently edited into the body, per the "the ADR is wrong, fix it, don't bend the code"
+rule.
+
+1. **The `needsHelpers` gate claim was wrong.** The Decision section's Kotlin-side bullet said
+   `NugetHandles`/`export_nuget_live_handles` are emitted under the existing `needsHelpers` gate. They
+   are not: the counter is emitted **unconditionally** from `NugetProcessor.kt`
+   (`addNugetHandlesCounter()`). A module exporting only value-class members or extension properties,
+   which leaves `needsHelpers` off, still mints handles through it, so gating the counter the same way
+   would have left it blind on exactly those modules. Discovered because 12 Tier 1 tests failed on an
+   unresolved `NugetHandles` reference before this was corrected. The C# side is unaffected: the
+   `NugetMarshal.LiveHandles` import stays under the pre-existing `needsCoreMarshal` gate, as designed.
+
+2. **The red-case delta was 3, not 1.** `LiveHandleTests.ListReturn_ThrowingElementFactory_ReleasesTheListHandle`
+   measured a delta of +3 on the first red run, not the +1 this ADR's harness section predicted. The
+   accounting: (a) the returned list's own handle, exactly as predicted; (b) element 0's wrapper,
+   stranded in the half-built `List` because `ReadList`/`ReadSet`/`ReadMap` (ADR-099) disposed the
+   collection handle in their `finally` but nothing disposed elements already added to `result` before
+   the throw, a bug in ADR-099's own helpers, not new to this feature, closed by the same `catch {
+   DisposeMaterialized(result); throw; }` addition recorded in
+   [ADR-099's amendment](099-nested-collection-components.md); (c) the `Newsroom` fixture's own handle,
+   a test-scoping issue, not a bridge leak: this ADR's illustrative red-case sketch used a
+   method-scoped `using var newsroom` that was still alive when `after` was read, so the shipped test
+   instead scopes `newsroom` to a `using (...) { }` block that disposes it before `after` is read.
+
+3. **The Flow and suspend job-handle rows move from Inferred to Verified.** `nuget_job_dispose` and
+   `nuget_scope_dispose` both route through `NugetHandles.release`, confirmed by the harness's
+   `Flow_EnumeratedToCompletion_ReturnsToBaseline`, `Flow_AbandonedViaDisposeAsync_ReturnsToBaseline`,
+   and `Suspend_Completes_ReturnsToBaseline` tests, all of which pass **strict** (no eventual/polled
+   assertion was needed, unlike the ADR's "Which families are strict and which are eventual" table
+   assumed for the abandon and cancel rows; updated in place above).
+
+4. **`Tier1CinteropStub.kt` needed a new stub.** Tier 1 compiles `CNameExports.kt` for the JVM against
+   hand-written `kotlinx.cinterop` stubs. Since the counter is unconditionally emitted (amendment 1),
+   every Tier 1 module now references `kotlin.concurrent.AtomicLong`, so `Tier1CinteropStub.kt` gained
+   a stub for it. Not anticipated by this ADR, which named no Tier 1 impact.
+
+5. **The shipped settle/assert logic replaced the ADR's 5-round sketch.** `LiveHandleTests.Settle()`
+   loops until `NugetMarshal.LiveHandles` is stable for 6 consecutive rounds (cap 60), not a fixed 5
+   rounds. A one-time class-level drain (`static LiveHandleTests()`) settles to 20 stable rounds
+   (cap 120) before the first measurement, to absorb handle backlog owed by earlier test classes that
+   would otherwise be misread as this class's own leak. `AssertNoLeak`/`AssertNoLeakAsync` re-measure
+   up to 3 attempts when the delta is negative (a release owed by earlier work landing inside the
+   window), and fail immediately, with no tolerance band, on any positive delta. Measured: about 11s
+   for `LiveHandleTests` in isolation, 12-15s added to the full suite.
+
+6. **The gate decisions the ADR left open are confirmed as shipped.** Forward-only (Alternative 5,
+   reverse-side mints, deferred, tracked in ROADMAP.md); `internal` visibility, matching
+   `NugetBridgeState.ReleasedCount`; the counter, the red test, and the outer-loop fix shipped as
+   their own commit each, in that order (`d4031d1`, `c5e0710`, `e926bc7`), so the red run is on
+   record in git history rather than only in this ADR.

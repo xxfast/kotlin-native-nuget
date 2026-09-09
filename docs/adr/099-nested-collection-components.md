@@ -332,6 +332,45 @@ Widening the predicate also, automatically:
   `exports/GenericClassExports.kt`, no new native export, no ABI change** (**Inferred** from the design; the
   component slot is already `COpaquePointer?` for every kind).
 
+## Amendment (2026-09-09): `ReadList`/`ReadSet`/`ReadMap` also dispose already-materialized elements, and the outer level this ADR left out of scope is now routed through them
+
+[ADR-120](120-live-stableref-counter-and-leak-harness.md)'s live-handle harness measured a delta of
+**3**, not the 1 this ADR's Consequences section implied for the still-open outer-level leak: the
+list handle itself, but also element 0's wrapper, stranded in the half-built `List`/`Set`/`Map`
+because the `finally` above disposed the collection's own handle but nothing disposed the elements
+already added to `result` before the throw. That gap existed in `ReadList`/`ReadSet`/`ReadMap` as
+shipped by this ADR, at every nesting level, not only the outer one; it went unnoticed because no
+fixture forced a mid-loop element-factory throw until ADR-120's harness did.
+
+Both helpers were changed:
+
+```csharp
+public static List<T> ReadList<T>(IntPtr handle, Func<IntPtr, T> read)
+{
+    var result = new List<T>();
+    try
+    {
+        int count = NugetListNative.Count(handle);
+        result.Capacity = count;
+        for (int i = 0; i < count; i++) result.Add(read(NugetListNative.Get(handle, i)));
+        return result;
+    }
+    catch { DisposeMaterialized(result); throw; }
+    finally { NugetListNative.Dispose(handle); }
+}
+```
+
+`ReadSet<T>` mirrors it; `ReadMap<TKey, TValue>` disposes both `result.Keys` and `result.Values` in
+its `catch`. `DisposeMaterialized` disposes every already-built element that implements
+`IDisposable`.
+
+Separately, the *outer* materialization loop this ADR deliberately left out of scope (Consequences,
+above) is now routed through these same three helpers on both halves that build a collection result:
+the callable return path (`collectionMaterializingCore`, `forward/ForwardCirPlanProjection.kt`) and
+the property-getter path (`forward/ForwardCirPropertyProjection.kt`'s `collectionMaterialize`). The
+outer-level result-handle leak this ADR priced as "a two-line change" (Consequences, above) is
+closed, not merely priced.
+
 ### Fixture: `test-library/.../clinic/NestedCollectionsSample.kt`
 
 One class, five runtime cells, each crossing a seam none of the others reaches. One slot needing conversion at

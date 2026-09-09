@@ -392,8 +392,11 @@ internal object ForwardCirPropertyProjection {
 
   /** ADR-120: same routing as the callable half. The read runs through ADR-099's
    *  `finally`-guarded helpers, so the result handle goes even when an element read throws. */
-  private fun collectionMaterialize(type: BridgeType.Collection): String =
-    "            return ${componentCollectionRead("nativeResult", type, csharpType = { it.csharpType() })};"
+  private fun collectionMaterialize(type: BridgeType.Collection): String {
+    val read: String =
+      componentCollectionRead("nativeResult", type, csharpType = { it.csharpType() })
+    return "            return $read;"
+  }
 
   private fun nativeName(plan: ForwardPropertyPlan, call: ForwardNativeCall): String {
     if (plan.position == ForwardPropertyPosition.CLASS) {

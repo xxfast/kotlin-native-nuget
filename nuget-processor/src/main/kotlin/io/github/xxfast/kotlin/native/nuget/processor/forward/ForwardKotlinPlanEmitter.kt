@@ -64,7 +64,11 @@ internal fun FileSpec.Builder.addForwardKotlinPlanExport(plan: ForwardCallablePl
     .let { call -> if (plan.invocation.unwrapsKotlinResult) "$call.getOrThrow()" else call }
 
   when (val result: BridgeType = plan.publicSignature.result) {
-    BridgeType.Unit -> builder.addCode(errorHandlingUnitBody(invocation, error.name), cOpaquePointerVar, nugetHandles)
+    BridgeType.Unit -> builder.addCode(
+      errorHandlingUnitBody(invocation, error.name),
+      cOpaquePointerVar,
+      nugetHandles,
+    )
     is BridgeType.Primitive, BridgeType.Char -> {
       builder.returns(kotlinResultType(call.result))
       builder.addCode(
@@ -149,7 +153,9 @@ internal fun FileSpec.Builder.addForwardKotlinPlanExport(plan: ForwardCallablePl
         if (result is BridgeType.Collection) collectionResultProjection(invocation, result)
         else invocation
       builder.returns(cOpaquePointer.copy(nullable = true))
-      builder.addCode(handleResultBody(boxed, error.name), nugetHandles, cOpaquePointerVar, nugetHandles)
+      builder.addCode(
+        handleResultBody(boxed, error.name), nugetHandles, cOpaquePointerVar, nugetHandles,
+      )
     }
 
     is BridgeType.Nullable -> addNullableResult(
@@ -218,7 +224,9 @@ private fun addValueClassOrdinaryResult(
 
     is BridgeType.ObjectHandle -> {
       builder.returns(cOpaquePointer.copy(nullable = true))
-      builder.addCode(handleResultBody(unboxed, errorName), nugetHandles, cOpaquePointerVar, nugetHandles)
+      builder.addCode(
+        handleResultBody(unboxed, errorName), nugetHandles, cOpaquePointerVar, nugetHandles,
+      )
     }
 
     else -> error(
@@ -392,7 +400,9 @@ internal fun FileSpec.Builder.addForwardValueClassPlanExport(plan: ForwardCallab
   when (val result: BridgeType = plan.publicSignature.result) {
     BridgeType.Unit -> {
       if (error != null) {
-        builder.addCode(errorHandlingUnitBody(invocation, error.name), cOpaquePointerVar, nugetHandles)
+        builder.addCode(
+          errorHandlingUnitBody(invocation, error.name), cOpaquePointerVar, nugetHandles,
+        )
       } else {
         builder.addStatement("%L", invocation)
       }
@@ -683,7 +693,12 @@ private fun addNullableResult(
   when (type) {
     is BridgeType.ObjectHandle, is BridgeType.Interface -> {
       builder.returns(cOpaquePointer.copy(nullable = true))
-      builder.addCode(nullableHandleResultBody(invocation, errorName), nugetHandles, cOpaquePointerVar, nugetHandles)
+      builder.addCode(
+        nullableHandleResultBody(invocation, errorName),
+        nugetHandles,
+        cOpaquePointerVar,
+        nugetHandles,
+      )
     }
 
     BridgeType.String -> {
@@ -691,7 +706,9 @@ private fun addNullableResult(
         "Forward Kotlin nullable String result must use POINTER"
       }
       builder.returns(kotlinType("String").copy(nullable = true))
-      builder.addCode(errorHandlingValueBody(invocation, errorName, "null"), cOpaquePointerVar, nugetHandles)
+      builder.addCode(
+        errorHandlingValueBody(invocation, errorName, "null"), cOpaquePointerVar, nugetHandles,
+      )
     }
 
     // ADR-106: `Uuid?` ships the null pointer for null, the text otherwise -- the String shape

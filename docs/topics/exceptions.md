@@ -148,7 +148,7 @@ The same pattern appears on property setters (`TreatJar.TreatCount`), getters (`
 
 A method with a `List`/`Map`/`Set` parameter wraps the error check in a `try`/`finally` instead of
 the flat shape above, so a temporary collection handle is released whether the call returns or
-throws; see [Collections](collections.md#exception-safety-on-collection-parameters).
+throws; see [Collections](collections.md#exception-safety-on-collection-parameters-and-returns).
 
 ## Using it from C#
 

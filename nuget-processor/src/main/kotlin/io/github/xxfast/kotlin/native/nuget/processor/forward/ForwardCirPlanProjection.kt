@@ -1243,7 +1243,8 @@ internal object ForwardCirPlanProjection {
     return buildString {
       appendLine("            IntPtr $handle = $nativeName($arguments);")
       appendErrorCheck()
-      append("            return ${componentCollectionRead(handle, type, csharpType = { it.csharpType() })};")
+      val read: String = componentCollectionRead(handle, type, csharpType = { it.csharpType() })
+      append("            return $read;")
     }
   }
 

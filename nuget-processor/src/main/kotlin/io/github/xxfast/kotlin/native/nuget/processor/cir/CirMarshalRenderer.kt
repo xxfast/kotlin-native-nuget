@@ -412,8 +412,8 @@ internal fun StringBuilder.renderMarshalHelper(helper: CirMarshalHelper) {
   // codegen with fixed local names (`listHandle`, `count`, `result`, `i`) that cannot nest, so an
   // inner level went through these helpers instead; ADR-120 routes the OUTER level through them
   // too, so every nesting level releases its handle on the throwing path as well as the happy one.
-  // The `finally` is what keeps them free of ROADMAP.md:142's "result handle leaks if
-  // materialization throws mid-loop" shape; the handle was minted by the call or the
+  // The `finally` is what closed the "result handle leaks if materialization throws mid-loop"
+  // leak ADR-120's red run measured; the handle was minted by the call or the
   // Get/KeyAt/ValueAt that produced it, so this helper owns it.
   //
   // ADR-120: the `catch` disposes what has already been materialized. Every element read mints its

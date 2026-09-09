@@ -60,7 +60,10 @@ class Tier1SealedSubclassCrossNamespaceTest {
 
     assertTrue(result.compiledClean, "expected a clean compile; got: ${result.compileErrors}")
     assertContains(result.generatedCSharp, "public IReadOnlyList<$remote.Assignment> Result")
-    assertContains(result.generatedCSharp, "NugetMarshal.ReadList<$remote.Assignment>(nativeResult,")
+    assertContains(
+      result.generatedCSharp,
+      "NugetMarshal.ReadList<$remote.Assignment>(nativeResult,",
+    )
     assertContains(
       result.generatedCSharp,
       "static h1 => NugetMarshal.FromHandle<$remote.Assignment>(h1)",
@@ -108,7 +111,10 @@ class Tier1SealedSubclassCrossNamespaceTest {
     assertContains(result.generatedCSharp, "public IReadOnlySet<$remote.Assignment> Unique")
     assertContains(result.generatedCSharp, "NugetMarshal.ReadSet<$remote.Assignment>(nativeResult,")
     assertContains(result.generatedCSharp, "public IReadOnlyDictionary<string, $remote.Assignment> ByName")
-    assertContains(result.generatedCSharp, "NugetMarshal.ReadMap<string, $remote.Assignment>(nativeResult,")
+    assertContains(
+      result.generatedCSharp,
+      "NugetMarshal.ReadMap<string, $remote.Assignment>(nativeResult,",
+    )
   }
 
   @Test
