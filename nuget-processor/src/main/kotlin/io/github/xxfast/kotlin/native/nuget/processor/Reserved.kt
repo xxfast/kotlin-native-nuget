@@ -48,6 +48,11 @@ internal const val CSHARP_ERROR_SLOT: String = "error"
  *
  * Unlike [CSHARP_ERROR_SLOT] these are declared by the Kotlin `@CName` emitter too, so the rename
  * has to happen once at *plan* time and be seen by both projections. See [bridgeParameterName].
+ *
+ * ADR-062: this set is consulted in exactly two places. [bridgeParameterName] shifts a user
+ * parameter off it, and `ForwardAbiParameter`'s `init` requires the name and the slot's
+ * `ForwardAbiRole` to agree, so a generator slot left with the default `USER` role fails at
+ * construction instead of reading back as user data in a projection.
  */
 internal val PLAN_OWNED_NAMES: Set<String> =
   setOf("handle", "receiver", "value", "errorOut", "valueOut")

@@ -83,7 +83,7 @@ internal data class ForwardPropertyPlan(
 
   private fun validateCall(call: ForwardNativeCall) {
     require(call.exportName.isNotBlank()) { "Forward property plan $symbol has a blank export" }
-    require(call.parameters.lastOrNull()?.name == "errorOut") {
+    require(call.parameters.lastOrNull()?.role == ForwardAbiRole.ERROR) {
       "Forward property plan $symbol export ${call.exportName} must end in errorOut"
     }
   }

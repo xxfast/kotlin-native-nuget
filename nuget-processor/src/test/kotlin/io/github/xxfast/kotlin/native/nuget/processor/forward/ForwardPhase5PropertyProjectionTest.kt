@@ -59,6 +59,7 @@ class ForwardPhase5PropertyProjectionTest {
         ownership = ForwardOwnership.BORROWED,
         conversion = ForwardConversion.HANDLE_TO_STABLE_REF,
       ),
+      role = ForwardAbiRole.RECEIVER,
     )
     val error = ForwardAbiParameter(
       name = "errorOut",
@@ -72,6 +73,7 @@ class ForwardPhase5PropertyProjectionTest {
         ownership = ForwardOwnership.BORROWED,
         conversion = ForwardConversion.STABLE_REF_TO_HANDLE,
       ),
+      role = ForwardAbiRole.ERROR,
     )
     val value = ForwardAbiParameter(
       name = "value",
@@ -85,6 +87,7 @@ class ForwardPhase5PropertyProjectionTest {
         ownership = ForwardOwnership.BORROWED,
         conversion = ForwardConversion.DIRECT,
       ),
+      role = ForwardAbiRole.SETTER_VALUE,
     )
     fun call(name: String, result: ForwardAbiWireType, parameters: List<ForwardAbiParameter>): ForwardNativeCall =
       ForwardNativeCall(name, result, parameters + error)

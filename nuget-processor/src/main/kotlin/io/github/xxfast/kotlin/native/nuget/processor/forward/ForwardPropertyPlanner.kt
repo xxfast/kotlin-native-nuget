@@ -543,19 +543,27 @@ internal class ForwardPropertyPlanner(
           "handle", BridgeType.ObjectHandle(owner), ForwardFlow.INTO_KOTLIN,
           ForwardPassing.VALUE, ForwardOwnership.BORROWED, ForwardConversion.HANDLE_TO_STABLE_REF
         ),
+        ForwardAbiRole.RECEIVER,
       ),
     )
 
-    is ForwardPropertyReceiver.Value -> listOf(valueParameter(type, "receiver"))
+    is ForwardPropertyReceiver.Value -> listOf(
+      valueParameter(type, "receiver", ForwardAbiRole.RECEIVER),
+    )
     is ForwardPropertyReceiver.Static -> emptyList()
   }
 
-  private fun valueParameter(type: BridgeType, name: String = "value"): ForwardAbiParameter = ForwardAbiParameter(
+  private fun valueParameter(
+    type: BridgeType,
+    name: String = "value",
+    role: ForwardAbiRole = ForwardAbiRole.SETTER_VALUE,
+  ): ForwardAbiParameter = ForwardAbiParameter(
     name, type.inputWireType(), ForwardAbiDirection.IN,
     ForwardTransfer(
       name, type, ForwardFlow.INTO_KOTLIN, ForwardPassing.VALUE,
       ForwardOwnership.BORROWED, type.conversion(ForwardFlow.INTO_KOTLIN)
     ),
+    role,
   )
 
   private fun errorParameter(): ForwardAbiParameter = ForwardAbiParameter(
@@ -564,6 +572,7 @@ internal class ForwardPropertyPlanner(
       "error", BridgeType.ObjectHandle("kotlin.Throwable"), ForwardFlow.OUT_OF_KOTLIN,
       ForwardPassing.OUT, ForwardOwnership.BORROWED, ForwardConversion.STABLE_REF_TO_HANDLE
     ),
+    ForwardAbiRole.ERROR,
   )
 
   private fun isPlannable(type: BridgeType): Boolean = when (type) {

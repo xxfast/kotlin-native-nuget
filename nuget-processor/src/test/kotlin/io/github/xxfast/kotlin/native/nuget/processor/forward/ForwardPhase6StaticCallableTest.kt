@@ -66,6 +66,7 @@ class ForwardPhase6StaticCallableTest {
         ownership = ForwardOwnership.BORROWED,
         conversion = ForwardConversion.STABLE_REF_TO_HANDLE,
       ),
+      role = ForwardAbiRole.ERROR,
     )
     val call = ForwardNativeCall(export, ForwardAbiWireType.POINTER, listOf(error))
     return ForwardCallablePlan(

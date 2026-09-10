@@ -93,7 +93,7 @@ internal object ForwardCirPlanProjection {
     val nativeParams: List<CirParameter>? = if (needsCustomParams) {
       plan.nativeInCirParameters(
         plan.nativeExports.single().parameters.filter { parameter ->
-          parameter.name !in setOf("handle", "value", "receiver") &&
+          parameter.role == ForwardAbiRole.USER &&
               parameter.direction == ForwardAbiDirection.IN
         },
       )
@@ -352,7 +352,9 @@ internal object ForwardCirPlanProjection {
     val nativeCall: ForwardNativeCall = plan.singleNativeImport()
     val receiver: ForwardAbiParameter = nativeCall.parameters.firstOrNull()
       ?: error("Forward CIR plan ${plan.invocation.symbol} has no receiver")
-    require(receiver.name == "handle" && receiver.wireType == ForwardAbiWireType.POINTER) {
+    val isHandleReceiver: Boolean =
+      receiver.role == ForwardAbiRole.RECEIVER && receiver.wireType == ForwardAbiWireType.POINTER
+    require(isHandleReceiver) {
       "Forward CIR class plan ${plan.invocation.symbol} must begin with a handle receiver"
     }
 
@@ -410,7 +412,7 @@ internal object ForwardCirPlanProjection {
     val nativeCall: ForwardNativeCall = plan.singleNativeImport()
     val receiver: ForwardAbiParameter = nativeCall.parameters.firstOrNull()
       ?: error("Forward CIR plan ${plan.invocation.symbol} has no receiver")
-    require(receiver.name == "receiver") {
+    require(receiver.role == ForwardAbiRole.RECEIVER) {
       "Forward CIR extension plan ${plan.invocation.symbol} must begin with a receiver"
     }
     val receiverType: String = receiver.transfer.type.csharpType()

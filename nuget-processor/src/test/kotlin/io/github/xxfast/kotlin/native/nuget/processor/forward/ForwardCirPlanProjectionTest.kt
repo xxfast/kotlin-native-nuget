@@ -488,6 +488,7 @@ class ForwardCirPlanProjectionTest {
         ForwardOwnership.BORROWED,
         ForwardConversion.STABLE_REF_TO_HANDLE,
       ),
+      ForwardAbiRole.ERROR,
     )
     val receiverParameter: ForwardAbiParameter? = receiver?.let { name ->
       val receiverType: BridgeType = if (name == "handle") {
@@ -512,6 +513,7 @@ class ForwardCirPlanProjectionTest {
           ForwardOwnership.BORROWED,
           receiverConversion,
         ),
+        ForwardAbiRole.RECEIVER,
       )
     }
     val values = parameters.map { (name, type) ->

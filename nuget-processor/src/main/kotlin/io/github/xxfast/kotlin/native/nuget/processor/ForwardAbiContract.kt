@@ -358,6 +358,11 @@ internal object ForwardAbiContract {
         // `errorOut` reaching here is always the exception slot and a `valueOut` is always the
         // has-value out-slot. Without that shift this branch reads a user's `in int` as `out` and
         // the two projections of a structurally identical signature stop agreeing.
+        //
+        // ADR-062: the *plan* now carries a structural `ForwardAbiRole` instead of name-matching,
+        // but this projection deliberately stays name-based. It reads a rendered KotlinPoet
+        // `FunSpec`, where the plan's parameter (and its role) is already gone, and it also covers
+        // the legacy `exports/*` FunSpecs that never had a plan and spell `errorOut` by hand.
         val direction: ForwardAbiDirection = if (
           parameter.name == "errorOut" || parameter.name == "valueOut"
         ) {

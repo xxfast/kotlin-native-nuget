@@ -47,7 +47,7 @@ internal object ForwardCirPropertyProjection {
     val receiver = plan.receiver as ForwardPropertyReceiver.Value
     val publicReceiver: String = receiver.type.csharpType()
     val nativeReceiver: String = plan.calls().first().parameters
-      .first { parameter -> parameter.name == "receiver" }
+      .first { parameter -> parameter.role == ForwardAbiRole.RECEIVER }
       .wireType.csharpWireType()
     // ADR-075: an extension receiver that is a value class passes its underlying value to the
     // native call, exactly like the value class's own generated members
@@ -153,10 +153,13 @@ internal object ForwardCirPropertyProjection {
     plan: ForwardPropertyPlan,
   ): CirDllImport {
     val values: List<CirParameter> = call.parameters
-      .filter { parameter -> parameter.name != "handle" && parameter.name != "receiver" && parameter.name != "errorOut" }
+      .filter { parameter ->
+        parameter.role == ForwardAbiRole.USER || parameter.role == ForwardAbiRole.SETTER_VALUE
+      }
       .map { parameter ->
-        val type: String = if (parameter.name == "value") setterNativeType(plan.type)
-        else parameter.wireType.csharpWireType()
+        val type: String =
+          if (parameter.role == ForwardAbiRole.SETTER_VALUE) setterNativeType(plan.type)
+          else parameter.wireType.csharpWireType()
         CirParameter(parameter.name, type)
       }
     val nativeName: String = call.exportName

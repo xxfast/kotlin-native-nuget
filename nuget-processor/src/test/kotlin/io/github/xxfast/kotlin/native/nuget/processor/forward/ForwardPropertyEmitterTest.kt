@@ -288,6 +288,7 @@ class ForwardPropertyEmitterTest {
           "value", type, ForwardFlow.INTO_KOTLIN, ForwardPassing.VALUE,
           ForwardOwnership.BORROWED, inConversion,
         ),
+        ForwardAbiRole.SETTER_VALUE,
       )
       ForwardPropertySetter.Direct(
         ForwardNativeCall("patient_set_$name", ForwardAbiWireType.VOID, listOf(handle, value, error)),
@@ -324,6 +325,7 @@ class ForwardPropertyEmitterTest {
         "value", type, ForwardFlow.INTO_KOTLIN, ForwardPassing.VALUE,
         ForwardOwnership.BORROWED, ForwardConversion.DIRECT,
       ),
+      ForwardAbiRole.SETTER_VALUE,
     )
     return ForwardPropertyPlan(
       symbol = "sample.$name",
@@ -363,6 +365,7 @@ class ForwardPropertyEmitterTest {
         if (receiver is BridgeType.ObjectHandle) ForwardConversion.HANDLE_TO_STABLE_REF
         else ForwardConversion.DIRECT,
       ),
+      ForwardAbiRole.RECEIVER,
     )
     val resultWire = when (type) {
       BridgeType.String -> ForwardAbiWireType.POINTER
@@ -381,6 +384,7 @@ class ForwardPropertyEmitterTest {
           ForwardOwnership.BORROWED,
           if (type == BridgeType.String) ForwardConversion.STRING_TO_UTF8 else ForwardConversion.DIRECT,
         ),
+        ForwardAbiRole.SETTER_VALUE,
       )
       ForwardPropertySetter.Direct(
         ForwardNativeCall(export, ForwardAbiWireType.VOID, listOf(receiverParam, value, error)),
@@ -458,6 +462,7 @@ class ForwardPropertyEmitterTest {
       "handle", BridgeType.ObjectHandle("sample.Patient"), ForwardFlow.INTO_KOTLIN,
       ForwardPassing.VALUE, ForwardOwnership.BORROWED, ForwardConversion.HANDLE_TO_STABLE_REF,
     ),
+    ForwardAbiRole.RECEIVER,
   )
 
   private fun errorParam(): ForwardAbiParameter = ForwardAbiParameter(
@@ -468,6 +473,7 @@ class ForwardPropertyEmitterTest {
       "error", BridgeType.ObjectHandle("kotlin.Throwable"), ForwardFlow.OUT_OF_KOTLIN,
       ForwardPassing.OUT, ForwardOwnership.BORROWED, ForwardConversion.STABLE_REF_TO_HANDLE,
     ),
+    ForwardAbiRole.ERROR,
   )
 
   private fun BridgeType.unwrap(): BridgeType =

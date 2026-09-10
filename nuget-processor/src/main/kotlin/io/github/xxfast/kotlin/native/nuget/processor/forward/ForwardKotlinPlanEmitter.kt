@@ -28,7 +28,7 @@ internal fun FileSpec.Builder.addForwardKotlinPlanExport(plan: ForwardCallablePl
 
   val call: ForwardNativeCall = plan.nativeExports.single()
   val receiver: ForwardAbiParameter? = call.parameters.firstOrNull()
-    ?.takeIf { parameter -> parameter.name == "handle" || parameter.name == "receiver" }
+    ?.takeIf { parameter -> parameter.role == ForwardAbiRole.RECEIVER }
   val error: ForwardAbiParameter = requireNotNull(plan.errorSlot) {
     "Forward Kotlin plan ${plan.invocation.symbol} is missing its error slot"
   }
@@ -369,7 +369,7 @@ internal fun FileSpec.Builder.addForwardValueClassPlanExport(plan: ForwardCallab
 
   call.parameters.forEachIndexed { index, parameter ->
     val isReceiverSlot: Boolean = !isConstructor && index == 0 &&
-        parameter.name in setOf("handle", "value", "receiver")
+        parameter.role == ForwardAbiRole.RECEIVER
     builder.addParameter(parameter.name, valueClassKotlinType(parameter, isReceiverSlot))
   }
 
@@ -499,7 +499,7 @@ private fun valueClassReconstruction(plan: ForwardCallablePlan, call: ForwardNat
     "Value-class plan ${plan.invocation.symbol} is missing its owner target"
   }
   val receiver: ForwardAbiParameter = call.parameters.firstOrNull()
-    ?.takeIf { parameter -> parameter.name in setOf("handle", "value", "receiver") }
+    ?.takeIf { parameter -> parameter.role == ForwardAbiRole.RECEIVER }
     ?: error("Value-class member plan ${plan.invocation.symbol} is missing its receiver parameter")
   return when (val type: BridgeType = receiver.transfer.type) {
     is BridgeType.ObjectHandle ->
@@ -738,7 +738,7 @@ private fun addNullableResult(
               "must use BOOLEAN"
         }
         val valueOut: ForwardAbiParameter = requireNotNull(
-          call.parameters.firstOrNull { parameter -> parameter.name == "valueOut" },
+          call.parameters.firstOrNull { parameter -> parameter.role == ForwardAbiRole.VALUE_OUT },
         ) { "Forward Kotlin nullable value-class result is missing valueOut" }
         val written: String = "result.${type.underlyingPropertyName}" +
             if (underlying is BridgeType.Enum) ".ordinal" else ""
@@ -780,7 +780,7 @@ private fun addNullableResult(
         "Forward Kotlin nullable primitive result must use BOOLEAN"
       }
       val valueOut: ForwardAbiParameter = requireNotNull(
-        call.parameters.firstOrNull { parameter -> parameter.name == "valueOut" },
+        call.parameters.firstOrNull { parameter -> parameter.role == ForwardAbiRole.VALUE_OUT },
       ) { "Forward Kotlin nullable primitive result is missing valueOut" }
       builder.returns(kotlinType("Boolean"))
       builder.addCode(
@@ -797,7 +797,7 @@ private fun addNullableResult(
         "Forward Kotlin nullable enum result must use BOOLEAN"
       }
       val valueOut: ForwardAbiParameter = requireNotNull(
-        call.parameters.firstOrNull { parameter -> parameter.name == "valueOut" },
+        call.parameters.firstOrNull { parameter -> parameter.role == ForwardAbiRole.VALUE_OUT },
       ) { "Forward Kotlin nullable enum result is missing valueOut" }
       builder.returns(kotlinType("Boolean"))
       builder.addCode(
@@ -816,7 +816,7 @@ private fun addNullableResult(
         "Forward Kotlin nullable Instant result must use BOOLEAN"
       }
       val valueOut: ForwardAbiParameter = requireNotNull(
-        call.parameters.firstOrNull { parameter -> parameter.name == "valueOut" },
+        call.parameters.firstOrNull { parameter -> parameter.role == ForwardAbiRole.VALUE_OUT },
       ) { "Forward Kotlin nullable Instant result is missing valueOut" }
       builder.returns(kotlinType("Boolean"))
       builder.addCode(

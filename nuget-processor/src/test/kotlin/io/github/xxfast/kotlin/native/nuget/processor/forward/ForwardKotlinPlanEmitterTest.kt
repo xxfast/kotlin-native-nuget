@@ -105,6 +105,7 @@ class ForwardKotlinPlanEmitterTest {
         "handle", BridgeType.ObjectHandle("sample.Patient"), ForwardFlow.INTO_KOTLIN,
         ForwardPassing.VALUE, ForwardOwnership.BORROWED, ForwardConversion.HANDLE_TO_STABLE_REF,
       ),
+      ForwardAbiRole.RECEIVER,
     )
     val hasValue = ForwardAbiParameter(
       "ageHasValue",
@@ -212,6 +213,7 @@ class ForwardKotlinPlanEmitterTest {
         "handle", BridgeType.ObjectHandle("sample.Newsroom"), ForwardFlow.INTO_KOTLIN,
         ForwardPassing.VALUE, ForwardOwnership.BORROWED, ForwardConversion.HANDLE_TO_STABLE_REF,
       ),
+      ForwardAbiRole.RECEIVER,
     )
     val call = ForwardNativeCall("newsroom_code", ForwardAbiWireType.POINTER, listOf(handle, error))
     val plan = ForwardCallablePlan(
@@ -248,6 +250,7 @@ class ForwardKotlinPlanEmitterTest {
       ForwardAbiWireType.INT32,
       ForwardAbiDirection.IN,
       directTransfer("value", BridgeType.Primitive(PrimitiveKind.INT), ForwardFlow.INTO_KOTLIN),
+      ForwardAbiRole.RECEIVER,
     )
     val call = ForwardNativeCall("catid_create", ForwardAbiWireType.INT32, listOf(value, error))
     val plan = ForwardCallablePlan(
@@ -288,6 +291,7 @@ class ForwardKotlinPlanEmitterTest {
       ForwardAbiWireType.INT32,
       ForwardAbiDirection.IN,
       directTransfer("value", BridgeType.Primitive(PrimitiveKind.INT), ForwardFlow.INTO_KOTLIN),
+      ForwardAbiRole.RECEIVER,
     )
     val call = ForwardNativeCall("catid_get_value", ForwardAbiWireType.INT32, listOf(value))
     val plan = ForwardCallablePlan(
@@ -324,6 +328,7 @@ class ForwardKotlinPlanEmitterTest {
       ForwardAbiWireType.INT32,
       ForwardAbiDirection.IN,
       directTransfer("value", BridgeType.Primitive(PrimitiveKind.INT), ForwardFlow.INTO_KOTLIN),
+      ForwardAbiRole.RECEIVER,
     )
     val call = ForwardNativeCall("catid_touch", ForwardAbiWireType.VOID, listOf(value))
     val plan = ForwardCallablePlan(
@@ -360,6 +365,7 @@ class ForwardKotlinPlanEmitterTest {
         "receiver", BridgeType.ObjectHandle("sample.Patient"), ForwardFlow.INTO_KOTLIN,
         ForwardPassing.VALUE, ForwardOwnership.BORROWED, ForwardConversion.HANDLE_TO_STABLE_REF,
       ),
+      ForwardAbiRole.RECEIVER,
     )
     val error = errorParameter()
     val call = ForwardNativeCall(
@@ -406,6 +412,7 @@ class ForwardKotlinPlanEmitterTest {
         ownership = ForwardOwnership.BORROWED,
         conversion = ForwardConversion.HANDLE_TO_STABLE_REF,
       ),
+      role = ForwardAbiRole.RECEIVER,
     ),
     result = BridgeType.Primitive(PrimitiveKind.INT),
   )
@@ -418,6 +425,7 @@ class ForwardKotlinPlanEmitterTest {
       wireType = ForwardAbiWireType.INT32,
       direction = ForwardAbiDirection.IN,
       transfer = directTransfer("receiver", BridgeType.Primitive(PrimitiveKind.INT), ForwardFlow.INTO_KOTLIN),
+      role = ForwardAbiRole.RECEIVER,
     ),
     result = BridgeType.Unit,
   )
@@ -439,6 +447,7 @@ class ForwardKotlinPlanEmitterTest {
         "handle", BridgeType.ObjectHandle(owner), ForwardFlow.INTO_KOTLIN,
         ForwardPassing.VALUE, ForwardOwnership.BORROWED, ForwardConversion.HANDLE_TO_STABLE_REF,
       ),
+      ForwardAbiRole.RECEIVER,
     )
     val abiParams = params.map { (name, type) -> publicParamToAbi(name, type) }
     val wire = when (result) {
@@ -626,6 +635,7 @@ class ForwardKotlinPlanEmitterTest {
       ownership = ForwardOwnership.BORROWED,
       conversion = ForwardConversion.STABLE_REF_TO_HANDLE,
     ),
+    role = ForwardAbiRole.ERROR,
   )
 
   private fun directTransfer(

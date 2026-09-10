@@ -220,6 +220,7 @@ class ForwardPhase9ValueClassProjectionTest {
         ForwardOwnership.BORROWED,
         ForwardConversion.STABLE_REF_TO_HANDLE,
       ),
+      ForwardAbiRole.ERROR,
     )
     val id = ForwardAbiParameter(
       "id",
@@ -282,6 +283,7 @@ class ForwardPhase9ValueClassProjectionTest {
       ForwardOwnership.BORROWED,
       ForwardConversion.STRING_TO_UTF8,
     ),
+    ForwardAbiRole.RECEIVER,
   )
 
   private fun handleReceiver(owner: String): ForwardAbiParameter = ForwardAbiParameter(
@@ -296,5 +298,6 @@ class ForwardPhase9ValueClassProjectionTest {
       ForwardOwnership.BORROWED,
       ForwardConversion.HANDLE_TO_STABLE_REF,
     ),
+    ForwardAbiRole.RECEIVER,
   )
 }

@@ -1,5 +1,7 @@
 package io.github.xxfast.kotlin.native.nuget.processor.forward
 
+import io.github.xxfast.kotlin.native.nuget.processor.PLAN_OWNED_NAMES
+
 /**
  * The alias-expanded semantic type seen by the forward marshaller.  This deliberately contains
  * no KSP symbols: a plan must be complete before either source renderer sees it.
@@ -309,6 +311,33 @@ internal enum class ForwardAbiWireType {
 
 internal enum class ForwardAbiDirection { IN, OUT, IN_OUT }
 
+/**
+ * Who owns a native ABI slot: the user, or the generator.
+ *
+ * Everything the two projections used to learn by string-matching a [PLAN_OWNED_NAMES] literal is
+ * read off this instead, and the name/role agreement is enforced once, in [ForwardAbiParameter]'s
+ * `init`, rather than at each of the read sites.
+ */
+internal enum class ForwardAbiRole {
+  /** A user's declared parameter, or the `${name}HasValue` presence flag fanned out beside it. */
+  USER,
+
+  /**
+   * The receiver slot: `handle` for an instance, `receiver` for an extension or a value class over
+   * a reference underlying, `value` for a value class over any other underlying.
+   */
+  RECEIVER,
+
+  /** A property setter's `value` argument. */
+  SETTER_VALUE,
+
+  /** ADR-061's nullable-primitive `valueOut` out-slot. */
+  VALUE_OUT,
+
+  /** ADR-024's trailing `errorOut` exception slot. */
+  ERROR,
+}
+
 /** A source-neutral conversion required to move a semantic [BridgeType] across its wire value. */
 internal enum class ForwardConversion {
   DIRECT,
@@ -396,7 +425,18 @@ internal data class ForwardAbiParameter(
   val wireType: ForwardAbiWireType,
   val direction: ForwardAbiDirection,
   val transfer: ForwardTransfer,
-)
+  val role: ForwardAbiRole = ForwardAbiRole.USER,
+) {
+  init {
+    // The single check that used to be spread over every read site: a user slot never spells a
+    // generator name (bridgeParameterName shifted it), and a generator slot always does. The
+    // default role is USER, so an omitted role on a generator slot fails here rather than
+    // silently reading back as user data.
+    require((role == ForwardAbiRole.USER) == (name !in PLAN_OWNED_NAMES)) {
+      "Forward ABI parameter $name has role $role, which disagrees with PLAN_OWNED_NAMES"
+    }
+  }
+}
 
 internal data class ForwardNativeCall(
   val exportName: String,
@@ -538,6 +578,10 @@ internal object ForwardCallablePlanValidator {
       require(slot.wireType == ForwardAbiWireType.POINTER) {
         "Forward plan ${plan.publicSignature.name} error slot ${slot.name} must use POINTER wire type"
       }
+      require(slot.role == ForwardAbiRole.ERROR) {
+        "Forward plan ${plan.publicSignature.name} error slot ${slot.name} must carry the ERROR " +
+            "role"
+      }
       validateTransfer(plan, slot.transfer)
     }
     (plan.liftOperations + plan.lowerOperations).forEach { operation ->
@@ -572,6 +616,34 @@ internal object ForwardCallablePlanValidator {
       validateWireType(plan.publicSignature.name, "parameter ${parameter.name}", parameter.wireType)
       validateTransfer(plan, parameter.transfer)
     }
+    validateRoles(plan, call)
+  }
+
+  /**
+   * The positions the projections assume once they read [ForwardAbiParameter.role] instead of a
+   * name: a receiver comes first, an error slot comes last, and a value-out slot is written
+   * through.
+   */
+  private fun validateRoles(plan: ForwardCallablePlan, call: ForwardNativeCall) {
+    val receivers: List<Int> = call.parameters.indices
+      .filter { index -> call.parameters[index].role == ForwardAbiRole.RECEIVER }
+    require(receivers.size <= 1 && receivers.all { index -> index == 0 }) {
+      "Forward plan ${plan.publicSignature.name} export ${call.exportName} must declare " +
+          "at most one receiver slot, first; got $receivers"
+    }
+    val errors: List<Int> = call.parameters.indices
+      .filter { index -> call.parameters[index].role == ForwardAbiRole.ERROR }
+    require(errors.size <= 1 && errors.all { index -> index == call.parameters.lastIndex }) {
+      "Forward plan ${plan.publicSignature.name} export ${call.exportName} must declare " +
+          "at most one error slot, last; got $errors"
+    }
+    call.parameters.filter { parameter -> parameter.role == ForwardAbiRole.VALUE_OUT }
+      .forEach { parameter ->
+        require(parameter.direction == ForwardAbiDirection.OUT) {
+          "Forward plan ${plan.publicSignature.name} export ${call.exportName} value-out slot " +
+              "${parameter.name} must be OUT"
+        }
+      }
   }
 
   private fun validateTransfer(plan: ForwardCallablePlan, transfer: ForwardTransfer) {
