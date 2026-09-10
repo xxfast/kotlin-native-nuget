@@ -11,6 +11,7 @@ import com.google.devtools.ksp.symbol.KSFunctionDeclaration
 import com.google.devtools.ksp.symbol.KSNode
 import com.google.devtools.ksp.symbol.KSPropertyDeclaration
 import com.google.devtools.ksp.symbol.KSType
+import com.google.devtools.ksp.symbol.KSTypeArgument
 import com.google.devtools.ksp.symbol.Modifier
 import com.google.devtools.ksp.symbol.Variance
 import com.google.devtools.ksp.symbol.Visibility
@@ -238,6 +239,63 @@ private fun inheritedAbstractProperty(
   )
 }
 
+/**
+ * ADR-101 amendment (2026-09-11): the C# base list entry for [base], with its type arguments
+ * spelled when it is generic (`Crate<string>`), so a closed generic base resolves.
+ *
+ * A bare `Crate` is not a lesser spelling, it never compiles: CS0305 in the ordinary case, and
+ * CS0118 when the library's namespace happens to carry the base's name, which is exactly what
+ * `TestLibrary.Parcel` does. The arguments are spelled off the same classifier both halves of the
+ * bridge use, so `Parcel<String>` in Kotlin and `Parcel<string>` in C# cannot drift.
+ *
+ * A non-generic base is unchanged: [nestedCsName] stops at the first non-class parent, so a nested
+ * sealed arm still renders `Roost.Perch` (ADR-009 amendment).
+ *
+ * Fails the build when an argument has no public C# spelling (a nested generic, a lambda, a
+ * `Flow`). That shape does not compile today either, so nothing regresses, and a silent skip would
+ * have to drop the base class itself or the inherited members vanish with no diagnostic at all.
+ */
+private fun forwardBaseSpelling(
+  cls: KSClassDeclaration,
+  name: String,
+  base: KSClassDeclaration,
+  classifier: ForwardBridgeTypeClassifier,
+): String {
+  val baseName: String = base.nestedCsName()
+  if (base.typeParameters.isEmpty()) return baseName
+
+  val arguments: List<KSTypeArgument> = cls.superTypes
+    .map { it.resolve() }
+    .firstOrNull { it.declaration.qualifiedName?.asString() == base.qualifiedName?.asString() }
+    ?.arguments
+    .orEmpty()
+  check(arguments.size == base.typeParameters.size) {
+    "Cannot render the base class of $name: its base $baseName declares " +
+        "${base.typeParameters.size} type parameter(s) but the declaration supplies " +
+        "${arguments.size} argument(s)."
+  }
+
+  val spelled: List<String> = arguments.map { argument ->
+    val type: KSType = checkNotNull(argument.type?.resolve()) {
+      "Cannot render the base class of $name: the base $baseName is used with a star projection, " +
+          "which has no C# spelling. Close the base over a concrete type."
+    }
+    val bridge: BridgeType = classifier.classify(type)
+    // `forwardPublicCsharpType` refuses an unspellable head with `error(...)`, which is the right
+    // outcome here but names only the BridgeType. Catch it to say which class and which argument,
+    // since a build failure with no declaration in it is unactionable.
+    try {
+      bridge.forwardPublicCsharpType()
+    } catch (e: IllegalStateException) {
+      error(
+        "Cannot render the base class of $name: the type argument '$type' of $baseName has no " +
+            "public C# spelling ($bridge). Close the base over a bridgeable type. (${e.message})",
+      )
+    }
+  }
+  return "$baseName<${spelled.joinToString(", ")}>"
+}
+
 internal fun translateClass(
   cls: KSClassDeclaration,
   libraryName: String,
@@ -275,7 +333,10 @@ internal fun translateClass(
   // ADR-009 amendment (2026-09-11): spelled by nested C# name, so a class extending a nested
   // sealed arm renders `: Roost.Perch` and not the unresolvable `: Perch` (CS0246). A top-level
   // base is unchanged: `nestedCsName()` stops at the first non-class parent.
-  val superClass: String? = superClassDeclaration?.nestedCsName()
+  // ADR-101 amendment (2026-09-11): a generic base carries its type arguments too.
+  val superClass: String? = superClassDeclaration?.let { base ->
+    forwardBaseSpelling(cls, name, base, classifier)
+  }
 
   val interfaces: List<String> = if (superClass != null) {
     emptyList()
@@ -826,6 +887,9 @@ internal fun translateGenericClass(
     nativePrefix = prefix,
     properties = properties,
     hasPublicConstructor = true,
+    // ADR-101 amendment (2026-09-11): `open` reaches the generic route too, so a subclass closing
+    // this class over a concrete type can `override` its `Dispose`.
+    isOpen = cls.modifiers.contains(Modifier.OPEN),
   )
 }
 

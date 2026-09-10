@@ -199,6 +199,9 @@ data class CirGenericClass(
   val properties: List<CirProperty>,
   val disposable: Boolean = true,
   val hasPublicConstructor: Boolean = true,
+  // ADR-101 amendment (2026-09-11): an `open` generic class can be a base, and a derived class
+  // always renders `public override void Dispose()`, so this one renders `virtual` (CS0506).
+  val isOpen: Boolean = false,
 ) : CirDeclaration
 
 data class CirMarshalHelper(

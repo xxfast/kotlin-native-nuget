@@ -1,5 +1,7 @@
 package io.github.xxfast.kotlin.native.nuget.processor.forward
 
+import com.google.devtools.ksp.getDeclaredFunctions
+import com.google.devtools.ksp.getDeclaredProperties
 import com.google.devtools.ksp.isAbstract
 import com.google.devtools.ksp.symbol.ClassKind
 import com.google.devtools.ksp.symbol.KSClassDeclaration
@@ -213,7 +215,7 @@ internal fun KSClassDeclaration.forwardSuperClass(
 internal fun KSDeclaration.isForwardMemberOf(
   cls: KSClassDeclaration,
   superClass: KSClassDeclaration?,
-): Boolean = parentDeclaration == cls || superClass == null
+): Boolean = isDeclaredBy(cls) || superClass == null
 
 /**
  * [isForwardMemberOf] narrowed to the members a *plan* can be built for: an inherited interface
@@ -232,7 +234,34 @@ internal fun KSDeclaration.isForwardMemberOf(
 internal fun KSDeclaration.isForwardPlannableMemberOf(
   cls: KSClassDeclaration,
   superClass: KSClassDeclaration?,
-): Boolean = parentDeclaration == cls || (superClass == null && hasImplementation())
+): Boolean = isDeclaredBy(cls) || (superClass == null && hasImplementation())
+
+/**
+ * Whether this member is *declared* by [cls], as opposed to inherited into it.
+ *
+ * `parentDeclaration == cls` is not that question on its own. Verified against KSP while spelling
+ * a generic base (ADR-101 amendment, 2026-09-11): when the base is generic, `getAllProperties()` /
+ * `getAllFunctions()` hand back the base's member **substituted onto the subclass**, parented to
+ * the subclass and carrying `Modifier.OVERRIDE`, so the raw parent test called `Crate<T>.value` a
+ * member of `StringCrate`. That re-bound the inherited getter on the subclass and rendered
+ * `public override string Value` against a base property that is not `virtual` (CS0506). A
+ * non-generic base has no such substitution and is unaffected, which is why the shipped
+ * inherited-member behaviour (`Tier1InheritedMemberDiagnosticsTest`) never saw this.
+ *
+ * The declared list is the ground truth, so a real `override val` in the subclass still answers
+ * true and keeps ADR-101's virtual/override pair. Matching is by simple name: a subclass that
+ * declares one overload of a name it also inherits *substituted* from a generic base would keep
+ * both, which no fixture reaches (ROADMAP has the generic-subclass work).
+ */
+private fun KSDeclaration.isDeclaredBy(cls: KSClassDeclaration): Boolean {
+  if (parentDeclaration != cls) return false
+  val name: String = simpleName.asString()
+  return when (this) {
+    is KSPropertyDeclaration -> cls.getDeclaredProperties().any { it.simpleName.asString() == name }
+    is KSFunctionDeclaration -> cls.getDeclaredFunctions().any { it.simpleName.asString() == name }
+    else -> true
+  }
+}
 
 private fun KSDeclaration.hasImplementation(): Boolean = when (this) {
   is KSFunctionDeclaration -> !isAbstract

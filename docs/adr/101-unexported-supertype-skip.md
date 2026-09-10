@@ -545,3 +545,56 @@ Scope: diagnostic text only. No ABI, no `Interop.cs`, no closure change. The int
 its flat "include(\"...\") does not help here" wording: a same-module interface outside the scope
 *is* admitted by `include(...)`, so that string is imprecise for the same reason, but an interface
 carries no members and the fix is not worth advertising. Tracked on `ROADMAP.md`.
+
+## Amendment (2026-09-11): a generic exported base spells its type arguments
+
+The 2026-09-05 Consequences deferred one line as cosmetic: "a generic exported base renders by
+simple name (`CirClassRenderer.kt:194`)". It is not cosmetic, and the real site is the translator,
+not the renderer. `class NamedParcel : Parcel<String>(name)` rendered `public class NamedParcel :
+Parcel`, which never compiles: CS0305 in the ordinary case, and, **Verified** against the sample
+package, `CS0118: 'Parcel' is a namespace but is used like a type` when the file's own namespace
+carries the base's name, because the arity-free name binds to the namespace first.
+
+Three things change, all forward, no ABI:
+
+- `CirClassTranslator.translateClass` spells the base through `forwardBaseSpelling`. A generic base
+  is matched against the class's own `superTypes` entry and each type argument is classified by the
+  shared `ForwardBridgeTypeClassifier` and spelled with `forwardPublicCsharpType()`, the same pair
+  every other public C# type on the forward side goes through, so `Parcel<String>` in Kotlin and
+  `Parcel<string>` in C# cannot drift. A non-generic base keeps `nestedCsName()` exactly as it was.
+- An argument with no public C# spelling (a nested generic, a lambda, a `Flow`), or a star
+  projection, fails the build with a message naming the class, the base and the argument. That
+  shape does not compile today either, so nothing regresses, and a silent skip would have to drop
+  the base class itself or the inherited members vanish with no diagnostic at all.
+- `CirGenericClass.isOpen`, read from Kotlin's `open` modifier, renders `public virtual void
+  Dispose()` on the generic wrapper. A derived class always renders `public override void
+  Dispose()` (the 2026-09-10 amendment above), so without this the pair is CS0506. A final generic
+  class is byte-identical to what shipped.
+
+### The membership predicate had to change too, and the memo said otherwise
+
+Planning said an inherited member is never re-bound on the subclass, so `NamedParcel` would simply
+inherit `Value` from `Parcel<string>`. The red test disagreed. **Verified** by running it: when the
+base is generic, KSP's `getAllProperties()` / `getAllFunctions()` hand back the base's member
+*substituted onto the subclass*, parented to the subclass and carrying `Modifier.OVERRIDE`. The raw
+`parentDeclaration == cls` test in `isForwardMemberOf` / `isForwardPlannableMemberOf` therefore
+called `Parcel<T>.value` a member of `NamedParcel`, minted `export_namedparcel_get_value`, and
+rendered `public override string Value` against a base property that is not `virtual` (CS0506
+again, on the member this time).
+
+Both predicates now ask `isDeclaredBy(cls)`, which keeps the parent test and additionally requires
+the member to appear in `cls.getDeclaredProperties()` / `getDeclaredFunctions()`. A non-generic base
+performs no substitution, so nothing about the 2026-09-05 behaviour moves
+(`Tier1InheritedMemberDiagnosticsTest` pins it), and a real `override val` in the subclass is a
+declared member and keeps the 2026-09-10 virtual/override pair.
+
+Deferred, named: a subclass that declares one overload of a name it also inherits *substituted*
+from a generic base keeps both, since the declared-member match is by simple name. No fixture
+reaches it, and a generic *subclass* (`class Derived<T> : Parcel<T>()`) still takes the generic
+route, which ignores supertypes and renders base-less. Both stay on `ROADMAP.md` with the rest of
+the generic-class work.
+
+Evidence: `Tier1GenericBaseClassTest.kt` (base list, `virtual`/`override` `Dispose`, no re-bound
+`stringcrate_get_value`) and `IntegrationTests/GenericBaseClassTests.cs` (`NamedParcel("Oreo").Value`
+reaches the base's own export, `IsAssignableFrom<Parcel<string>>`, dispose through a base-typed
+reference).

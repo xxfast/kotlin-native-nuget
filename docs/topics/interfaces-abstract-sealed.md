@@ -339,6 +339,17 @@ public void Hammock_OverridesOpenFun_DispatchesThroughBothStaticTypes()
 }
 ```
 
+<note>
+    <p>
+        The same <code>virtual</code>/<code>override</code> pair applies when the base is itself
+        generic: <code>class NamedParcel(name: String) : Parcel&lt;String&gt;(name)</code> renders
+        <code>public class NamedParcel : Parcel&lt;string&gt;</code>, with the closed type argument
+        spelled and <code>Parcel&lt;T&gt;</code>'s <code>Dispose()</code> rendered
+        <code>virtual</code>. See <a href="generics.md">Generics</a> and
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/101-unexported-supertype-skip.md">ADR-101</a>.
+    </p>
+</note>
+
 ## An exported base class's own `abstract val`/`abstract var` {id="a-base-class-s-own-abstract-val-abstract-var"}
 
 An exported base class's own **unimplemented** `abstract val`/`abstract var`, one it declares

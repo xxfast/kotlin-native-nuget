@@ -123,7 +123,10 @@ internal fun StringBuilder.renderGenericClass(cls: CirGenericClass) {
   }
 
   if (cls.disposable) {
-    appendLine("        public void Dispose()")
+    // ADR-101 amendment (2026-09-11): `virtual` only when the Kotlin class is `open`, so a final
+    // generic class renders byte-identically to what shipped.
+    val virtual: String = if (cls.isOpen) "virtual " else ""
+    appendLine("        public ${virtual}void Dispose()")
     appendLine("        {")
     appendLine("            if (_handle != IntPtr.Zero)")
     appendLine("            {")
