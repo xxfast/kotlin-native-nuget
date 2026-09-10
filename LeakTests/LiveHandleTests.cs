@@ -369,6 +369,22 @@ public class LiveHandleTests
             iterations: 5000);
     }
 
+    // Row 9d. A suspend call whose result is a *nested sealed arm*. The result box is a
+    // `StableRef` to a `Job.Running` rather than an ordinary class, so the completion callback
+    // unwraps it into the arm wrapper and the arm's own `DisposeAsync` has to release both the
+    // handle and the scope it gained from its suspend members. A completion that constructs the
+    // wrapper without transferring ownership, or an arm scope drained by nobody, shows up here.
+    [Fact]
+    public async Task Suspend_ReturningANestedSealedArm_ReturnsToBaseline()
+    {
+        await AssertNoLeakAsync(async () =>
+        {
+            using var factory = new JobFactory();
+            await using Job.Running oreo = await factory.RunningLaterAsync(9);
+            Assert.Equal(9, oreo.Progress);
+        });
+    }
+
     // Row 9c. The cancellation-registration half of the same ADR-019 ordering hole: `reg` is
     // assigned after the native call too, so a callback that wins the race calls `reg.Dispose()`
     // on a default registration and the real one is never disposed. Whether that costs a Kotlin

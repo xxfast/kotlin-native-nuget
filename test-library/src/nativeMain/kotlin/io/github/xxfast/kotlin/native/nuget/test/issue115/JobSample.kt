@@ -103,6 +103,16 @@ interface JobListener {
  * - [Job.Done] — the control: an arm that declares no functions at all must keep generating
  *   exactly as it does today, and with neither a suspend nor a flow member it stays the arm
  *   without a scope, without `IAsyncDisposable`.
+ * - [JobFactory.runningLater], a `suspend fun` on an **ordinary class** returning a nested arm.
+ *   The completion has to construct `new Job.Running(resultPtr)`: at namespace scope the bare
+ *   `Running` the suspend route spells today is CS0246, since ADR-009 nests the arm inside `Job`.
+ * - [JobFactory.idleLater], the same on a `data object` arm, so the fix covers both arm kinds
+ *   rather than only the `data class` one.
+ * - [Job.Running.finishLater], the arm-declared half: a sibling arm at a suspend return. It
+ *   resolves from inside the enclosing base even unqualified, so it is the cell that separates
+ *   "the speller is wrong everywhere" from "the speller is wrong only outside the base".
+ * - [anyRunningLater], the **top-level** suspend route (ADR-007 static class `JobSample`), the
+ *   second spelling site. A fix applied to the class route alone still leaves this one broken.
  *
  * Deliberately absent on the ADR-124 half: a base-declared flow property on [Job] itself (the
  * all-properties rule comes from ADR-111 and is already fixture-covered for ordinary property
@@ -181,6 +191,13 @@ sealed class Job {
     /** `String` in and out across the async result protocol. */
     suspend fun resume(prefix: String): String = "$prefix$progress"
 
+    /**
+     * A **sibling nested arm** at a `suspend` return: `Task<Job.Done> FinishLaterAsync()`, whose
+     * completion constructs the arm. Declared inside [Job], so C#'s enclosing-type lookup resolves
+     * a bare `Done` here; [JobFactory.runningLater] is the same shape where it cannot.
+     */
+    suspend fun finishLater(): Done = Done(progress)
+
     // Private, so neither the sealed export loop nor the sealed translator sees it: both filter
     // the arm's properties to PUBLIC, and the arm's C# surface is the read-only `Beats` alone.
     private val _beats: MutableStateFlow<Int> = MutableStateFlow(progress)
@@ -257,6 +274,15 @@ class JobFactory {
 
   /** ADR-124: the flow-only arm, reached the same way [running] reaches the suspending one. */
   fun watching(id: String): Job.Watching = Job.Watching(id)
+
+  /**
+   * The same nested `data class` arm return as [running], on the **suspend** route: it binds as
+   * `Task<Job.Running>` and its completion must construct `new Job.Running(resultPtr)`.
+   */
+  suspend fun runningLater(progress: Int): Job.Running = Job.Running(progress)
+
+  /** The `data object` arm on the suspend route: `Task<Job.Idle>`, `new Job.Idle(resultPtr)`. */
+  suspend fun idleLater(): Job.Idle = Job.Idle
 }
 
 /**
@@ -268,3 +294,10 @@ fun anyJob(progress: Int): Job = Job.Running(progress)
 
 /** The same base return, discriminating onto the `data object` arm instead. */
 fun idleJob(): Job = Job.Idle
+
+/**
+ * The **top-level** suspend spelling site: a `suspend fun` on the ADR-007 static class `JobSample`
+ * returning a nested arm. Oreo always ends up 33% down the hallway, so the value pins the crossing
+ * rather than the argument.
+ */
+suspend fun anyRunningLater(): Job.Running = Job.Running(33)

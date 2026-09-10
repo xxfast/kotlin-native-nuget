@@ -530,6 +530,75 @@ public class SealedSubclassMethodTests
         Assert.Equal("Done(code=3)", done.ToString());
     }
 
+    // ---- A nested arm at a suspend return, spelled with its enclosing base. ----
+
+    /// <summary>
+    /// The defect this section pins: on the suspend route the return type is spelled from the
+    /// <em>simple</em> name, so a nested arm renders as <c>Task&lt;Running&gt;</c> completing with
+    /// <c>new Running(resultPtr)</c>. ADR-009 nests the arm inside <c>Job</c>, so at namespace
+    /// scope that is CS0246 and the whole of <c>Interop.cs</c> fails to compile. The synchronous
+    /// twin, <c>factory.Running(9)</c> above, already spells <c>Job.Running</c>.
+    /// <para>
+    /// Oreo starts the hallway sprint a beat later than usual, 9% of the way to the bowl.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task RunningLaterAsync_NestedArmAtASuspendReturn_IsSpelledWithItsEnclosingBase()
+    {
+        using var factory = new JobFactory();
+
+        await using Job.Running oreo = await factory.RunningLaterAsync(9);
+
+        Assert.Equal(9, oreo.Progress);
+        Assert.IsAssignableFrom<Job>(oreo);
+    }
+
+    /// <summary>
+    /// The same spelling site with a <c>data object</c> arm, so a fix that only handles the
+    /// <c>data class</c> kind still fails. Mylo loafs, asynchronously.
+    /// </summary>
+    [Fact]
+    public async Task IdleLaterAsync_NestedObjectArmAtASuspendReturn_IsSpelledWithItsEnclosingBase()
+    {
+        using var factory = new JobFactory();
+
+        await using Job.Idle mylo = await factory.IdleLaterAsync();
+
+        Assert.IsAssignableFrom<Job>(mylo);
+        Assert.Equal("idle", mylo.Poke());
+    }
+
+    /// <summary>
+    /// The arm-declared half: a sibling arm at a suspend return. C#'s enclosing-type lookup
+    /// resolves a bare <c>Done</c> from inside <c>Job</c>, so this cell is what separates "the
+    /// speller is wrong everywhere" from "the speller is wrong only outside the base".
+    /// </summary>
+    [Fact]
+    public async Task FinishLaterAsync_SiblingArmAtASuspendReturnOnAnArm_ConstructsTheArm()
+    {
+        using var factory = new JobFactory();
+        await using Job.Running oreo = factory.Running(4);
+
+        using Job.Done done = await oreo.FinishLaterAsync();
+
+        Assert.Equal(4, done.Code);
+        Assert.IsAssignableFrom<Job>(done);
+    }
+
+    /// <summary>
+    /// The second spelling site: a <em>top-level</em> <c>suspend fun</c> on the ADR-007 static
+    /// class. It has its own return speller, so a fix applied to the class route alone leaves this
+    /// one emitting <c>new Running(resultPtr)</c>.
+    /// </summary>
+    [Fact]
+    public async Task AnyRunningLaterAsync_TopLevelSuspendReturningANestedArm_IsSpelledWithItsBase()
+    {
+        await using Job.Running oreo = await JobSample.AnyRunningLaterAsync();
+
+        Assert.Equal(33, oreo.Progress);
+        Assert.IsAssignableFrom<Job>(oreo);
+    }
+
     // ---- ADR-124: the Flow / StateFlow route, re-keyed so a sealed arm is a valid owner. ----
 
     /// <summary>

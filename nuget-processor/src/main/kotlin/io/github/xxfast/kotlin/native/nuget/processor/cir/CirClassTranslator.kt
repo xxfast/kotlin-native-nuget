@@ -1448,7 +1448,12 @@ internal fun suspendMembers(
       isUnit -> ""
       collectionReturn != null -> collectionReturn.forwardPublicCsharpType()
       else -> {
-        val csharp: String = KOTLIN_TO_CSHARP_PARAM[methodReturn] ?: methodReturn
+        // ADR-118: a nested sealed arm is declared inside its base (ADR-009), so the bare simple
+        // name is unresolvable at namespace scope (CS0246). `nestedCsName()` walks class parents
+        // only, so a top-level type stays bare.
+        val csharp: String = KOTLIN_TO_CSHARP_PARAM[methodReturn]
+          ?: (resolvedReturn?.declaration as? KSClassDeclaration)?.nestedCsName()
+          ?: methodReturn
         if (resolvedReturn?.isMarkedNullable == true) "$csharp?" else csharp
       }
     }

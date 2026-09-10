@@ -659,7 +659,11 @@ internal fun translateSuspendFunction(
     isUnit -> ""
     collectionReturn != null -> collectionReturn.forwardPublicCsharpType()
     else -> {
-      val csharp: String = KOTLIN_TO_CSHARP_PARAM[kotlinReturnType] ?: kotlinReturnType
+      // ADR-118: same speller as the class route -- a nested sealed arm return carries its
+      // enclosing base, a top-level type stays bare.
+      val csharp: String = KOTLIN_TO_CSHARP_PARAM[kotlinReturnType]
+        ?: (returnType?.declaration as? KSClassDeclaration)?.nestedCsName()
+        ?: kotlinReturnType
       if (returnType?.isMarkedNullable == true) "$csharp?" else csharp
     }
   }
