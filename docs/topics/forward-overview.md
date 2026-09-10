@@ -374,6 +374,25 @@ gets told to add `include("...")` alongside the existing `rootPackage`/`include(
 that genuinely admits it, while a dependency base gets told `include(...)` alone will not, since the
 ADR-066 reachability closure never walks supertypes.
 
+The base walk also follows a chain of unexported links to the nearest exported base, rather than
+stopping after one hop: `class Dinghy : Skiff("Dinghy")` with `Skiff : Vessel(name)`, only `Skiff`
+outside the export set, renders `public class Dinghy : Vessel`, not base-less. `Skiff`'s own public
+members (`oars`, `row()`) re-home onto `Dinghy` the same way `UnexportedBase`'s did above; `Vessel`'s
+members are inherited normally, with no re-homing. The diagnostic fires once per dropped link and its
+middle clause names the kept base instead of saying there is no base at all:
+
+```
+[nuget:SKIPPED_UNEXPORTED_SUPERTYPE] Skipping Dinghy : Skiff: base class
+    'io.github.xxfast.kotlin.native.nuget.hidden.Skiff' is not in the export set, so it has no
+    generated C# class; Dinghy is generated extending Vessel, the nearest exported base, and
+    Skiff's public members are bound on Dinghy directly. <hint unchanged>
+    at Dinghy.kt:15
+```
+
+The quoted `Issue42Derived` block above is unchanged: a single dropped base with no exported base
+above it still reads "generated with no base at all", byte for byte. The clause only changes when a
+grand-base survives the walk.
+
 ### Annotation classes skip named {id="annotation-classes-skip-named"}
 
 A public `annotation class` has no route in the forward direction at all: there is no C# projection

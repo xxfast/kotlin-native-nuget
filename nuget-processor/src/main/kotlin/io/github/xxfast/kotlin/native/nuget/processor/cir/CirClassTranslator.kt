@@ -34,7 +34,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnosticK
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnosticSink
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardPropertyPlan
 import io.github.xxfast.kotlin.native.nuget.processor.forward.csharpName
-import io.github.xxfast.kotlin.native.nuget.processor.forward.declaredSuperClass
+import io.github.xxfast.kotlin.native.nuget.processor.forward.droppedBaseChain
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardPublicCsharpType
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardSuperClass
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isForwardLegacyAsyncRoute
@@ -79,6 +79,7 @@ private fun keepsSupertype(
   kind: SupertypeKind,
   exportedTypes: Set<String>,
   logger: KSPLogger,
+  keptBase: KSClassDeclaration? = null,
 ): Boolean {
   val qualified: String? = supertype.qualifiedName?.asString()
   if (qualified != null && qualified in exportedTypes) return true
@@ -91,10 +92,22 @@ private fun keepsSupertype(
       "supertype '$supertypeName' is not in the export set, so it has no generated C# " +
           "interface; the class is generated without it and its own members still export"
 
-    SupertypeKind.BASE_CLASS ->
+    // ADR-101 amendment (2026-09-11): "no base at all" is only true when the whole declared
+    // chain is unexported. With `Dinghy : Skiff : Vessel` the walk keeps `Vessel`, so the middle
+    // clause names it: the author's `is`/`as` against the kept base still works, and only the
+    // dropped hop's members re-home.
+    SupertypeKind.BASE_CLASS -> {
+      // The single-drop clause is unchanged to the byte ("the base's", not the dropped base's
+      // name): it is quoted in ADR-101 and `forward-overview.md`, and only the chain case is new.
+      val placement: String = if (keptBase == null) {
+        "$name is generated with no base at all and the base's"
+      } else {
+        "$name is generated extending ${keptBase.simpleName.asString()}, the nearest exported " +
+            "base, and $simpleName's"
+      }
       "base class '$supertypeName' is not in the export set, so it has no generated C# class; " +
-          "$name is generated with no base at all and the base's public members are bound on " +
-          "$name directly"
+          "$placement public members are bound on $name directly"
+    }
   }
   val hint: String = when (kind) {
     SupertypeKind.INTERFACE ->
@@ -324,13 +337,24 @@ internal fun translateClass(
   // planners filter their members with, so a member can never be kept here and skipped there.
   // ADR-101 amendment / issue #42: gated on the export set, so a base class nothing generates is
   // dropped here exactly as an unexported interface is, instead of rendering a dangling `: Base`.
-  val declaredBase: KSClassDeclaration? = cls.declaredSuperClass()
   val superClassDeclaration: KSClassDeclaration? = cls.forwardSuperClass(exportedTypes)
-  if (declaredBase != null && superClassDeclaration == null) {
-    // `translateClass` is the one place a class is translated (the regular-class loop in
-    // `CirTranslator`), and neither planner nor the Kotlin emitter holds a logger, so this is the
-    // only site the diagnostic can fire from — exactly once per affected class.
-    keepsSupertype(cls, name, declaredBase, SupertypeKind.BASE_CLASS, exportedTypes, logger)
+  // ADR-101 amendment (2026-09-11): one diagnostic per *dropped* hop, not one per class. The
+  // chain prefix before the kept base is what has no generated C# class, and each of those hops
+  // re-homes its own members, so each is named. A class whose direct base is exported drops
+  // nothing and says nothing, exactly as before.
+  // `translateClass` is the one place a class is translated (the regular-class loop in
+  // `CirTranslator`), and neither planner nor the Kotlin emitter holds a logger, so this is the
+  // only site the diagnostic can fire from.
+  cls.droppedBaseChain(superClassDeclaration).forEach { dropped ->
+    keepsSupertype(
+      cls,
+      name,
+      dropped,
+      SupertypeKind.BASE_CLASS,
+      exportedTypes,
+      logger,
+      keptBase = superClassDeclaration,
+    )
   }
   // ADR-009 amendment (2026-09-11): spelled by nested C# name, so a class extending a nested
   // sealed arm renders `: Roost.Perch` and not the unresolvable `: Perch` (CS0246). A top-level

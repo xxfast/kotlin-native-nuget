@@ -243,4 +243,88 @@ class Tier1UnexportedBaseClassSkipTest {
           "forward base renders `virtual`; generated C#:\n${result.generatedCSharp}",
     )
   }
+
+  @Test
+  fun `a chain through an unexported mid keeps the nearest exported base`() {
+    // ADR-101 amendment (2026-09-11): `Api : LocalMid : LocalExportedBase` with only the mid out
+    // of scope. Dropping the whole base list here would cost the consumer the `is`/`as` relation
+    // against a base that is perfectly generatable, so the walk keeps the nearest exported one and
+    // re-homes only what the dropped mid declares.
+    val result = Tier1Harness.run(
+      mapOf(
+        "Mid.kt" to """
+          package tier1outside.base
+
+          import tier1.issue42base.LocalExportedBase
+
+          open class LocalMid : LocalExportedBase() {
+            fun row(): String = "rowing"
+          }
+        """.trimIndent(),
+        "Api.kt" to """
+          package tier1.issue42base
+
+          import tier1outside.base.LocalMid
+
+          open class LocalExportedBase {
+            fun anchor(): String = "anchored"
+          }
+
+          class Api : LocalMid() {
+            fun ping(): String = "pong"
+          }
+        """.trimIndent(),
+      ),
+      processorOptions = mapOf("nuget.rootPackage" to "tier1.issue42base"),
+    )
+
+    assertTrue(result.compiledClean, "expected no broken source; got: ${result.compileErrors}")
+    assertTrue(
+      "public class Api : LocalExportedBase" in result.generatedCSharp,
+      "the nearest exported base is generatable, so the chain must render it rather than going " +
+          "base-less; generated C#:\n${result.generatedCSharp}",
+    )
+    assertTrue(
+      "export_api_ping" in result.generated,
+      "generated:\n${result.generated}",
+    )
+    assertTrue(
+      "export_api_row" in result.generated,
+      "the dropped intermediate's member has no C# carrier other than Api, so it re-homes; " +
+          "generated:\n${result.generated}",
+    )
+    assertFalse(
+      "export_api_anchor" in result.generated,
+      "the kept base still carries its own members; re-homing them onto Api hides the base " +
+          "member (CS0108); generated:\n${result.generated}",
+    )
+    assertTrue(
+      "export_localexportedbase_anchor" in result.generated,
+      "the kept base exports its own member as itself; generated:\n${result.generated}",
+    )
+
+    val diagnostics: List<String> = result.kspWarnings.filter {
+      it.contains(ForwardDiagnosticKind.SKIPPED_UNEXPORTED_SUPERTYPE.name)
+    }
+    assertEquals(
+      1,
+      diagnostics.size,
+      "one base is dropped from the chain, so exactly one diagnostic is owed; " +
+          "kspWarnings=${result.kspWarnings}",
+    )
+    val diagnostic: String = diagnostics.single()
+    assertTrue(
+      diagnostic.contains("Api : LocalMid"),
+      "the diagnostic names the dropped hop, not the kept base; got: $diagnostic",
+    )
+    assertTrue(
+      diagnostic.contains("extending LocalExportedBase, the nearest exported base"),
+      "with a base kept, `no base at all` is false and the message has to say which base Api " +
+          "actually extends; got: $diagnostic",
+    )
+    assertFalse(
+      diagnostic.contains("no base at all"),
+      "the single-drop wording is wrong here; got: $diagnostic",
+    )
+  }
 }

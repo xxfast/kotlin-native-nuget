@@ -198,8 +198,40 @@ internal fun KSClassDeclaration.isArmOfIneligibleSealedInterface(): Boolean = su
  */
 internal fun KSClassDeclaration.forwardSuperClass(
   exportedTypes: Set<String>,
-): KSClassDeclaration? = declaredSuperClass()
-  ?.takeIf { base -> base.qualifiedName?.asString() in exportedTypes }
+): KSClassDeclaration? = declaredBaseChain()
+  .firstOrNull { base -> base.qualifiedName?.asString() in exportedTypes }
+
+/**
+ * The declared base classes, nearest first: `X`'s own base, then that base's base, up to (but not
+ * including) `kotlin.Any`.
+ *
+ * ADR-101 amendment (2026-09-11): [forwardSuperClass] walks this rather than taking one hop, so
+ * `Dinghy : Skiff : Vessel` with only `Skiff` outside the export set renders `Dinghy : Vessel`
+ * instead of going base-less. One unexported hop used to cost the consumer every exported base
+ * above it, along with the `is`/`as` relation against them, which is exactly what ADR-101's
+ * base-class amendment set out to preserve wherever C# can express it.
+ *
+ * When the direct base is exported the chain's first element answers, so nothing about a shipping
+ * class changes: the walk only ever looks past a base that has no generated C# class anyway.
+ */
+internal fun KSClassDeclaration.declaredBaseChain(): Sequence<KSClassDeclaration> =
+  generateSequence(declaredSuperClass()) { base -> base.declaredSuperClass() }
+
+/**
+ * The bases between [this] and the base the forward pipeline keeps: the chain prefix that has no
+ * generated C# class, and therefore no carrier for its own members other than [this].
+ *
+ * [keptBase] `null` means base-less, and then the whole chain is dropped. Compared by qualified
+ * name rather than declaration identity, because the chain is re-resolved per member.
+ */
+internal fun KSClassDeclaration.droppedBaseChain(
+  keptBase: KSClassDeclaration?,
+): List<KSClassDeclaration> {
+  val kept: String? = keptBase?.qualifiedName?.asString()
+  return declaredBaseChain()
+    .takeWhile { base -> base.qualifiedName?.asString() != kept }
+    .toList()
+}
 
 /**
  * Whether [member], as returned by `getAllFunctions()`/`getAllProperties()` on a class whose
@@ -222,7 +254,10 @@ internal fun KSClassDeclaration.forwardSuperClass(
 internal fun KSDeclaration.isForwardMemberOf(
   cls: KSClassDeclaration,
   superClass: KSClassDeclaration?,
-): Boolean = isDeclaredBy(cls) || superClass == null || isFromInterfaceBeside(superClass)
+): Boolean = isDeclaredBy(cls) ||
+    superClass == null ||
+    isFromInterfaceBeside(superClass) ||
+    isFromDroppedBase(cls, superClass)
 
 /**
  * [isForwardMemberOf] narrowed to the members a *plan* can be built for: an inherited interface
@@ -242,7 +277,9 @@ internal fun KSDeclaration.isForwardPlannableMemberOf(
   cls: KSClassDeclaration,
   superClass: KSClassDeclaration?,
 ): Boolean = isDeclaredBy(cls) ||
-    ((superClass == null || isFromInterfaceBeside(superClass)) && hasImplementation())
+    ((superClass == null ||
+        isFromInterfaceBeside(superClass) ||
+        isFromDroppedBase(cls, superClass)) && hasImplementation())
 
 /**
  * ADR-101 amendment (2026-09-11): whether this member is inherited from an interface the class
@@ -262,6 +299,25 @@ private fun KSDeclaration.isFromInterfaceBeside(superClass: KSClassDeclaration):
   if (owner.classKind != ClassKind.INTERFACE) return false
   val qualified: String = owner.qualifiedName?.asString() ?: return false
   return qualified !in superClass.forwardSupertypeNames()
+}
+
+/**
+ * ADR-101 amendment (2026-09-11): whether this member is declared by one of the *dropped*
+ * intermediate bases, the hops between [cls] and the base [forwardSuperClass] kept.
+ *
+ * Walking up to the nearest exported base is not enough on its own. With `Dinghy : Skiff : Vessel`
+ * and `superClass = Vessel`, `Skiff`'s members are parented to `Skiff`, so without this arm they
+ * bind on neither `Dinghy` nor `Vessel` and vanish from C# with no diagnostic at all. `Skiff` has
+ * no generated class, so `Dinghy` is the only carrier there is, which is the same re-homing rule
+ * the base-less case already applies to the whole chain.
+ */
+private fun KSDeclaration.isFromDroppedBase(
+  cls: KSClassDeclaration,
+  superClass: KSClassDeclaration,
+): Boolean {
+  val owner: KSClassDeclaration = parentDeclaration as? KSClassDeclaration ?: return false
+  val qualified: String = owner.qualifiedName?.asString() ?: return false
+  return cls.droppedBaseChain(superClass).any { it.qualifiedName?.asString() == qualified }
 }
 
 /**

@@ -426,7 +426,8 @@ asserts `export_api_greet` / `export_api_get_label` are generated from a
 - **Deferred, named** (none widened into this change, all pre-existing or newly exposed by it, not
   fixed here; tracked on `ROADMAP.md`): a transitive `X : UnexportedMid : ExportedBase` flattens
   `ExportedBase`'s members onto `X` and loses `X is ExportedBase` in C#, since `declaredSuperClass()`
-  returns only the first `CLASS` supertype; an overriding member whose defaults live on the dropped
+  returns only the first `CLASS` supertype (**fixed by the 2026-09-11 chain amendment below**); an
+  overriding member whose defaults live on the dropped
   base loses its short C# omitting overloads (`ForwardCallablePlanner.kt`'s synthesis gate keys on
   the Kotlin `override` modifier, independent of the forward `isOverride` bit); a generic exported
   base renders by simple name (`CirClassRenderer.kt:194`); `X`'s own interfaces still disappear
@@ -648,3 +649,51 @@ Evidence: `Tier1KeptBaseInterfaceListTest.kt` (`: Shelf, IGroomable`, bound `Bru
 virtual string Groom()`, no re-bound `ledge_height`) and
 `IntegrationTests/InterfaceBesideBaseTests.cs` (`using IGroomable g = new Ledge()` with no cast,
 `((Shelf)g).Height()`, `Groom().GetBaseDefinition().DeclaringType == typeof(Ledge)`).
+
+## Amendment (2026-09-11): the base walk follows the chain to the nearest exported base
+
+The 2026-09-05 amendment took exactly one hop. `class Dinghy : Skiff()` with `Skiff : Vessel` and
+only `Skiff` outside the export set therefore rendered `public class Dinghy : IDisposable,
+INugetHandle`: one unexported link cost the consumer an exported base it could have had, plus every
+`is`/`as` against `Vessel` and every `Vessel`-typed API that would have accepted a `Dinghy`. The C#
+compile proof is `CS0029: Cannot implicitly convert type 'Dinghy' to 'Vessel'`.
+
+`forwardSuperClass` now walks `declaredBaseChain()`, a `generateSequence` over `declaredSuperClass()`,
+and keeps the first link in the export set. When the direct base is exported the first element
+answers, so every shipping class is byte-identical: the walk only ever looks past a base that has no
+generated C# class anyway.
+
+Walking up alone silently loses members, which is the second half of this amendment. With
+`superClass = Vessel` non-null, `Skiff`'s own `oars`/`row` are parented to `Skiff`, so the old
+membership predicate bound them on neither `Dinghy` nor `Vessel` and they would have vanished from
+C# with no diagnostic. `isForwardMemberOf` / `isForwardPlannableMemberOf` gain an
+`isFromDroppedBase(cls, superClass)` arm: a member declared on any link of `droppedBaseChain()` (the
+chain prefix before the kept base, compared by qualified name) binds on the class itself, the same
+re-homing rule the base-less case already applies to the whole chain. Members of the *kept* base are
+still not re-bound; re-homing them would hide the base member (CS0108).
+
+The diagnostic fires once per dropped link rather than once per class, from `translateClass` as
+before, and its middle clause names the kept base:
+
+```
+[nuget:SKIPPED_UNEXPORTED_SUPERTYPE] Skipping Dinghy : Skiff: base class
+'io.github.xxfast.kotlin.native.nuget.hidden.Skiff' is not in the export set, so it has no generated
+C# class; Dinghy is generated extending Vessel, the nearest exported base, and Skiff's public
+members are bound on Dinghy directly. <hint unchanged>
+```
+
+The single-drop text is unchanged to the byte ("generated with no base at all and the base's public
+members are bound on ... directly"), which is what the quoted `Issue42Derived` line above and in
+`docs/topics/forward-overview.md` still show. The hint is unchanged in both cases: what is lost is
+the dropped link's own type and its `is`/`as` relation, whether or not a base above it survives.
+
+Deferred, named: if the nearest exported base is a *sealed* class, `X : SealedBase` would render
+against an abstract base whose `FromHandle` switch does not know `X` (reachable only through
+`exclude()`, untouched here); and a re-homed member that overrides an interface declared on the
+dropped link renders from the same `isOverride` rule as before, the pre-existing hole the
+2026-09-11 interface amendment names.
+
+Evidence: `Tier1UnexportedBaseClassSkipTest`'s chain cell (`public class Api : LocalExportedBase`,
+`export_api_row` bound, no `export_api_anchor`, exactly one diagnostic naming `Api : LocalMid`) and
+`IntegrationTests/TransitiveUnexportedBaseTests.cs` (`typeof(Dinghy).BaseType == typeof(Vessel)`,
+`Vessel v = new Dinghy()`, `d.Row()`, `d.Oars`, no `Skiff` type in the assembly).
