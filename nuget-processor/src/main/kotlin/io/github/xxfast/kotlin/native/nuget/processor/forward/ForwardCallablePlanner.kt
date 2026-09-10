@@ -1649,7 +1649,12 @@ internal class ForwardCallablePlanner(
       publicName = toCName(functionName).replaceFirstChar { it.uppercase() },
       exportName =
         "${receiver.declaration.simpleName.asString().lowercase()}_${toCName(functionName)}$suffix",
-      receiver = ForwardReceiver.Value(receiverType),
+      // ADR-105 amendment: the receiver gets the same sealed rewrite scope (d) applies to every
+      // declared parameter, here rather than in `planOrSkip`, because the extension route is the
+      // only one that can hand it a protocol receiver (every other route builds a bare
+      // `ObjectHandle` already). An eligible sealed base then plans as an ordinary handle
+      // receiver; an ineligible or out-of-scope one carries no `sealedHandle` and still skips.
+      receiver = ForwardReceiver.Value(receiverType.sealedAsHandle()),
       parameters = function.parameters.dropLast(omitted).map { parameter ->
         parameter.bridgeName() to classifier.classify(parameter.type.resolve())
       },
@@ -1734,8 +1739,9 @@ internal class ForwardCallablePlanner(
     // ADR-105 scope (d): the sealed rewrite is applied to every declared PARAMETER here, once,
     // rather than at each catalog site's `classifier.classify(...)` call, so the plan's public
     // signature, its ABI parameters and its input eligibility check all see the same rewritten
-    // type. The receiver is deliberately left alone: a sealed *receiver* is a member of the ADR-009
-    // hierarchy itself, which has its own named legacy route.
+    // type. The receiver arrives already rewritten where one can be sealed at all: `extensionEntry`
+    // applies the same rewrite to its receiver before calling in, and every other route builds a
+    // bare `ObjectHandle` receiver, so this function stays receiver-agnostic.
     val declared: List<Pair<String, BridgeType>> =
       parameters.map { (name, type) -> name to type.sealedAsHandle() }
     // Issue #131: name-carrying, so a skip can name the parameter that failed. The receiver rides
@@ -3105,9 +3111,9 @@ internal class ForwardCallablePlanner(
  * projection rather than gaining a variant of its own.
  *
  * Applied at a *property* type ([ForwardPropertyPlanner]) and, at a callable, to both its *result*
- * and every declared *parameter* ([ForwardCallablePlanner.planOrSkip], ADR-105 scope (d)). Not at a
- * receiver: a sealed receiver is a member of the ADR-009 hierarchy itself, which has its own named
- * legacy route.
+ * and every declared *parameter* ([ForwardCallablePlanner.planOrSkip], ADR-105 scope (d)), and at
+ * an extension *receiver* (`ForwardCallablePlanner.extensionEntry`, the only route whose receiver
+ * can be a sealed base rather than a bare handle).
  *
  * Recurses through [BridgeType.Nullable], the [BridgeType.Collection] components, and
  * [BridgeType.ValueClass.underlying]: a value class over a sealed type
