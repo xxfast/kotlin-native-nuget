@@ -489,6 +489,66 @@ internal fun ForwardPlanSkipReason.toDiagnosticKind(
 private fun String.isStdlibPackage(): Boolean =
   this == "kotlin" || startsWith("kotlin.") || this == "kotlinx" || startsWith("kotlinx.")
 
+/**
+ * ADR-064's 2026-09-10 amendment: the per-reason sentence, kept beside the hint it reads with.
+ *
+ * The six named arms are the drops that are not about an unsupported type combination, so the
+ * generic sentence would be wrong on both counts: the author's own `exclude(...)`, their own
+ * opt-in marker (on the declaration, and on a member's type), a position no route carries at all
+ * (a reference-underlying value class constructor per ADR-035, a specialized member of a sealed
+ * subclass per ADR-116), and a nullable *parameter*, where the generic sentence reads as being
+ * about the whole callable and sent the author to the return type (issue #131). Every other drop
+ * keeps the generic sentence, which names the reason constant.
+ *
+ * A legacy-route deferral needs no guard here: [toDiagnosticKind] is evaluated first in the same
+ * [ForwardDiagnostic] construction and already fails on one.
+ *
+ * @param detail the same slot [diagnosticHint] documents; read here by the excluded and opt-in
+ *   arms, which name the offending type, and by [ForwardPlanSkipReason.SEALED_SUBCLASS_UNROUTED],
+ *   where it carries the member kind ("suspend", "Flow", ...).
+ * @param parameter the same slot [diagnosticHint] documents; read here only by
+ *   [ForwardPlanSkipReason.NULLABLE], and only when the offending input is a named parameter.
+ */
+internal fun ForwardPlanSkipReason.diagnosticReason(
+  detail: String? = null,
+  parameter: String? = null,
+): String {
+  val generic = "its $name type combination is not supported"
+  return when (this) {
+    // ADR-109's remedy, followed: out of scope by the author's own instruction, not unsupported,
+    // which is what the hint below ("skipped by design") and this kind's KDoc already say. The
+    // package and the remedy stay in the hint; this sentence only names the type.
+    ForwardPlanSkipReason.EXCLUDED_DEPENDENCY_TYPE ->
+      "its type `${detail ?: "in an excluded package"}` is excluded from the export scope by " +
+          "your own exclude(...)"
+
+    // Every other drop is about the types at the callable's positions; this one is about the
+    // position itself.
+    ForwardPlanSkipReason.REFERENCE_UNDERLYING_VALUE_CLASS_CONSTRUCTOR ->
+      "a value class over a reference underlying carries no constructor across the bridge"
+
+    // ADR-115: the author's own signal, named as such.
+    ForwardPlanSkipReason.OPT_IN_MARKER ->
+      "it is marked with the opt-in marker `${detail ?: "an opt-in marker"}`"
+
+    ForwardPlanSkipReason.OPT_IN_MARKER_TYPE ->
+      "its type `${detail?.substringBefore("->") ?: "its type"}` is marked with an opt-in marker"
+
+    // ADR-116: nothing about this member's types is unsupported; the owner kind has no route.
+    ForwardPlanSkipReason.SEALED_SUBCLASS_UNROUTED ->
+      "it is a ${detail ?: "specialized"} member of a sealed subclass, which has no route yet " +
+          "(ADR-116)"
+
+    // Issue #131: guarded on the name being there, so a return-position nullable keeps the
+    // shipped generic sentence.
+    ForwardPlanSkipReason.NULLABLE ->
+      if (parameter != null) "its parameter `$parameter` has a nullable type with no supported wire"
+      else generic
+
+    else -> generic
+  }
+}
+
 internal fun ForwardPlanSkipReason.diagnosticHint(
   detail: String? = null,
   scope: List<String> = emptyList(),

@@ -455,6 +455,9 @@ This feature can land without the recorded proper fix (a `reason.diagnosticReaso
 but it is the second special case, which is the usual signal that the `if` should become the enum
 method. Flagged here, not scoped here.
 
+**Done (2026-09-10):** the fix landed as ADR-064's *the reason sentence lives on the reason*
+amendment; this feature's sentence moved onto `diagnosticReason()` byte-identically.
+
 ## Consequences
 
 - Declarations behind an author's own `@RequiresOptIn` marker disappear from the C# surface. For a

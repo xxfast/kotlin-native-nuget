@@ -963,3 +963,61 @@ one unsupported trailing defaulted parameter loses *all* of its supported aritie
 issue's author lost `hub()` and `hub(settings)` too. That is a mapping decision ("does a partially
 unsupported signature bind at its supported arities?") with an export-numbering consequence, and it
 is tracked separately.
+
+## Amendment (2026-09-10): the reason sentence lives on the reason
+
+Judgement: an **amendment**, not a new ADR. It closes the ROADMAP Phase 3 item
+"`warnDroppedForwardCallables` hardcodes the reason sentence", the refactor ADR-115 (`:444-456`) and
+ADR-116 (`:293-295`) both flagged and both declined to do. No new kind, no new reason, no new
+mechanism: the same messages, computed one function further in. Status stays Accepted.
+
+### The gap
+
+The reason half of the message was an `if` chain in `NugetProcessor.warnDroppedForwardCallables`,
+five special cases deep by the time this amendment was written (ADR-035's reference-underlying value
+class constructor, ADR-115's two opt-in reasons, ADR-116's `SEALED_SUBCLASS_UNROUTED`, issue #131's
+nullable parameter) in front of the original generic "its `<REASON>` type combination is not
+supported". The hint half has lived on the reason since this ADR shipped
+(`ForwardPlanSkipReason.diagnosticHint()`), so each new non-type-combination reason wrote its hint
+in `ForwardDiagnostic.kt` and its sentence 300 lines away in the processor, guarded by a fresh `if`.
+
+`EXCLUDED_DEPENDENCY_TYPE` fell through to the generic sentence and so contradicted its own hint in
+the same message: the sentence said the type combination is not supported, the hint said the
+callable is "skipped by design" because the author's own `exclude(...)` refused it, and this ADR's
+kind KDoc says "out of scope, not unsupported".
+
+### Decision
+
+`ForwardPlanSkipReason.diagnosticReason(detail, parameter)` in `ForwardDiagnostic.kt`, the sibling
+of `diagnosticHint()` and directly above it. Six reasons own a sentence; every other drop keeps the
+generic one through the `else` arm, which is the shipped text unchanged.
+
+Only `EXCLUDED_DEPENDENCY_TYPE`'s sentence changes, to "its type `<qualified>` is excluded from the
+export scope by your own exclude(...)". It names the type and nothing else: the hint already spells
+the package, the `exclude("<pkg>")` line that did it, and the remedy. The five sentences that moved
+are byte-identical, pinned as such by a new `ForwardSkippedCallableWarningTest` case that asserts
+all five verbatim beside the generic one.
+
+Two hand-spelled copies of `OPT_IN_MARKER`'s sentence, in `warnDroppedForwardProperties` and in the
+class-level opt-in declaration skip, now call `diagnosticReason()` too. Both already called
+`diagnosticHint()` on the following line, so the pair is now read from one place. Output identical.
+
+No guard against a legacy-route deferral: `toDiagnosticKind()` is evaluated first in the same
+`ForwardDiagnostic(...)` construction and already `error()`s on one, so a second check is dead code.
+
+**Not widened to the other dependency-scope reasons.** `UNEXPORTED_DEPENDENCY_TYPE`,
+`EXPECT_DEPENDENCY_TYPE` and `CROSS_MODULE_DISABLED_DEPENDENCY_TYPE` are out of scope rather than
+unsupported in exactly the same way, and keep the generic sentence here. Their current text is
+quoted as real output in three Writerside pages, so re-lifting those snippets is its own lane; the
+refactor makes each a one-arm change. The same is true of the position and nesting reasons
+(`INHERITED_MEMBER`, `UNDECLARED_*`, `SEALED_POSITION`, `BOUND_INTERFACE_POSITION`,
+`UNIMPLEMENTABLE_BOUND_INTERFACE`, `ACTUAL_TYPEALIAS_TARGET`).
+
+### Consequences
+
+- The next reason that is not a type combination adds a `when` arm beside its hint, not an `if` in
+  the processor. That was the point: the chain had grown a special case per feature for three
+  features running, each with a comment saying it should be this method.
+- `NugetDiagnostics.json` message text changes only for `SKIPPED_UNEXPORTED_DEPENDENCY_TYPE` records
+  minted from an `exclude(...)`. No C# output changes, and no fixture produces one today, so the
+  sample library's diagnostics file is byte-identical.
