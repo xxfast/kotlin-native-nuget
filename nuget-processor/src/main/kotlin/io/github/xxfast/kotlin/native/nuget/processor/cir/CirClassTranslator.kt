@@ -2520,11 +2520,30 @@ private fun translateCallbackMethod(
     else -> "IntPtr"
   }
 
+  // ADR-036's marshalling table: a primitive payload crosses BY VALUE. `String` keeps its handle
+  // (it is not a C ABI scalar) and so does `Char`, which has no crossing convention on any route.
+  // Mirrors the interface-bridge route's branch, deliberately: the two share delegate names.
+  val byValueArgs: List<Boolean> = lambdaArgTypes.map { argType ->
+    val simple: String = argType.declaration.simpleName.asString()
+    val qualified: String = argType.declaration.qualifiedName?.asString() ?: ""
+    qualified.startsWith("kotlin.") && simple in KOTLIN_TO_CSHARP_PARAM &&
+        simple != "String" && simple != "Char"
+  }
+
   val delegateParamList: String = if (lambdaArity == 0) {
     "(IntPtr userData)"
   } else {
     val argParams: String = lambdaArgTypes
-      .mapIndexed { i, _ -> "IntPtr arg${i}Ptr" }
+      .mapIndexed { i, argType ->
+        val argKotlin: String = argType.declaration.simpleName.asString()
+        when {
+          // The `byte` wire is widened to `bool` in the body, under a DIFFERENT name: naming the
+          // parameter `arg0` and then declaring `bool arg0` from it is CS0128.
+          argKotlin == "Boolean" -> "byte arg${i}Byte"
+          byValueArgs[i] -> "${KOTLIN_TO_CSHARP_PARAM[argKotlin]} arg$i"
+          else -> "IntPtr arg${i}Ptr"
+        }
+      }
       .joinToString(", ")
     "($argParams, IntPtr userData)"
   }
@@ -2538,11 +2557,19 @@ private fun translateCallbackMethod(
   val callbackBody: String = buildString {
     lambdaArgTypes.forEachIndexed { i, argType ->
       val argKotlin: String = argType.declaration.simpleName.asString()
-      val csArgType: String = when (argKotlin) {
-        "String" -> "string"
+      val csArgType: String = when {
+        argKotlin == "String" -> "string"
+        byValueArgs[i] -> KOTLIN_TO_CSHARP_PARAM.getValue(argKotlin)
         else -> argKotlin
       }
-      appendLine("            $csArgType arg$i = NugetMarshal.FromHandle<$csArgType>(arg${i}Ptr);")
+      when {
+        argKotlin == "Boolean" -> appendLine("            bool arg$i = arg${i}Byte != 0;")
+        // A by-value primitive IS the delegate parameter; there is nothing to unmarshal.
+        byValueArgs[i] -> Unit
+        else -> appendLine(
+          "            $csArgType arg$i = NugetMarshal.FromHandle<$csArgType>(arg${i}Ptr);",
+        )
+      }
     }
     val argCallNames: String = lambdaArgTypes.indices.joinToString(", ") { "arg$it" }
     val callExpr: String =

@@ -5,6 +5,7 @@ import com.google.devtools.ksp.symbol.KSType
 import com.squareup.kotlinpoet.ClassName
 import com.squareup.kotlinpoet.FileSpec
 import com.squareup.kotlinpoet.FunSpec
+import io.github.xxfast.kotlin.native.nuget.processor.cir.KOTLIN_TO_CSHARP_PARAM
 import io.github.xxfast.kotlin.native.nuget.processor.cir.LAMBDA_TYPES
 import io.github.xxfast.kotlin.native.nuget.processor.cir.expandAliases
 
@@ -41,11 +42,30 @@ internal fun FileSpec.Builder.addLambdaParamMethodExport(
     "kotlin.collections.List", "kotlin.collections.MutableList",
   )
 
+  // ADR-036's marshalling table: a primitive payload crosses BY VALUE, in both directions. The
+  // interface-bridge route has always done this; the per-call route boxed every payload into a
+  // StableRef instead, which cost a handle per invocation and rendered a C# thunk that could not
+  // compile. `String` stays on the handle path (it is not a C ABI scalar) and so does `Char`,
+  // which has no crossing convention on any route yet.
+  val byValueArgs: List<Boolean> = lambdaArgTypes.map { argType ->
+    val simple: String = argType.declaration.simpleName.asString()
+    val qualified: String = argType.declaration.qualifiedName?.asString() ?: ""
+    qualified.startsWith("kotlin.") && simple in KOTLIN_TO_CSHARP_PARAM &&
+        simple != "String" && simple != "Char"
+  }
+
   // CFunction signature for the Kotlin side
-  // (arg0: COpaquePointer?, ..., userData: COpaquePointer) -> ReturnType
+  // (arg0: Int, ..., userData: COpaquePointer) -> ReturnType
   val cfuncArgTypes: String = buildString {
-    repeat(lambdaArity) {
-      append("COpaquePointer?, ")
+    lambdaArgTypes.forEachIndexed { i, argType ->
+      val argKotlin: String = argType.declaration.simpleName.asString()
+      when {
+        // `Boolean` is the one by-value payload that is not its own wire type: it crosses as the
+        // `Byte` the C# side widens back to `bool`.
+        argKotlin == "Boolean" -> append("Byte, ")
+        byValueArgs[i] -> append("$argKotlin, ")
+        else -> append("COpaquePointer?, ")
+      }
     }
     append("COpaquePointer")  // userData
   }
@@ -63,19 +83,24 @@ internal fun FileSpec.Builder.addLambdaParamMethodExport(
   fun buildCallbackWrapperBody(indent: String): String = buildString {
     val fnVar = "${lambdaParamName}Fn"
 
-    // Marshal each lambda arg from Kotlin to COpaquePointer
+    // Marshal each lambda arg from Kotlin to its wire form. A by-value primitive needs no
+    // binding at all: it is already the wire type.
     lambdaArgTypes.forEachIndexed { i, argType ->
       val argKotlin: String = argType.declaration.simpleName.asString()
-      when (argKotlin) {
-        "Boolean" -> appendLine("${indent}val arg${i}Ref: Byte = if (it$i) 1.toByte() else 0.toByte()")
-        "String" -> appendLine("${indent}val arg${i}Ref = NugetHandles.retain(it$i as Any)")
+      when {
+        argKotlin == "Boolean" ->
+          appendLine("${indent}val arg${i}Ref: Byte = if (it$i) 1.toByte() else 0.toByte()")
+        byValueArgs[i] -> Unit
+        argKotlin == "String" ->
+          appendLine("${indent}val arg${i}Ref = NugetHandles.retain(it$i as Any)")
         else -> appendLine("${indent}val arg${i}Ref = NugetHandles.retain(it$i)")
       }
     }
 
     val fnCallArgs: String = buildString {
       lambdaArgTypes.indices.forEach { i ->
-        append("arg${i}Ref, ")
+        val argKotlin: String = lambdaArgTypes[i].declaration.simpleName.asString()
+        if (byValueArgs[i] && argKotlin != "Boolean") append("it$i, ") else append("arg${i}Ref, ")
       }
       append("${lambdaParamName}UserData")
     }
@@ -83,31 +108,22 @@ internal fun FileSpec.Builder.addLambdaParamMethodExport(
     when {
       lambdaRetKotlin == "Unit" -> {
         appendLine("${indent}$fnVar.invoke($fnCallArgs)")
-        lambdaArgTypes.forEachIndexed { i, argType ->
-          val argKotlin: String = argType.declaration.simpleName.asString()
-          if (argKotlin != "Boolean") {
-            appendLine("${indent}NugetHandles.release(arg${i}Ref!!)")
-          }
+        lambdaArgTypes.indices.forEach { i ->
+          if (!byValueArgs[i]) appendLine("${indent}NugetHandles.release(arg${i}Ref!!)")
         }
       }
       lambdaRetKotlin == "Boolean" -> {
         appendLine("${indent}val cbResult = $fnVar.invoke($fnCallArgs) != 0.toByte()")
-        lambdaArgTypes.forEachIndexed { i, argType ->
-          val argKotlin: String = argType.declaration.simpleName.asString()
-          if (argKotlin != "Boolean") {
-            appendLine("${indent}NugetHandles.release(arg${i}Ref!!)")
-          }
+        lambdaArgTypes.indices.forEach { i ->
+          if (!byValueArgs[i]) appendLine("${indent}NugetHandles.release(arg${i}Ref!!)")
         }
         append("${indent}cbResult")
       }
       else -> {
         // String or object return from C# callback — backed by nuget_wrap_string StableRef
         appendLine("${indent}val resultRef = $fnVar.invoke($fnCallArgs)!!")
-        lambdaArgTypes.forEachIndexed { i, argType ->
-          val argKotlin: String = argType.declaration.simpleName.asString()
-          if (argKotlin != "Boolean") {
-            appendLine("${indent}NugetHandles.release(arg${i}Ref!!)")
-          }
+        lambdaArgTypes.indices.forEach { i ->
+          if (!byValueArgs[i]) appendLine("${indent}NugetHandles.release(arg${i}Ref!!)")
         }
         appendLine("${indent}val cbResult = resultRef.asStableRef<String>().get()")
         appendLine("${indent}NugetHandles.release(resultRef)")

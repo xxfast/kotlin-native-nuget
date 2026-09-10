@@ -464,3 +464,56 @@ None. This adds new exports for functions with lambda parameters. Existing expor
 ### What the directional asymmetry means for round-tripping
 
 If a Kotlin function returns a lambda (`KotlinFunc<T, R>`) and the same lambda is later passed back into a Kotlin function as a `Func<T, R>` parameter, the two representations do not compose: the `KotlinFunc<T, R>` holds a `StableRef` (opaque handle) but the parameter side expects a `Func<T, R>` (which becomes a C# delegate function pointer). Round-tripping identity is lost. This is a known limitation documented in ADR-012. A callback registry mapping function pointer tokens back to `StableRef` handles would be required to solve this; it is out of scope for v1.
+
+## Amendment (2026-09-11): the primitive row was never implemented on the per-call route
+
+The marshalling table above has said since this ADR was written that a **primitive crosses by
+value**, in both directions. The per-call lambda parameter route never did that. Both halves boxed:
+
+- Kotlin (`LambdaParameterExports.kt`) spelled `COpaquePointer?` for every argument of the
+  `CFunction<...>` it reinterprets, and `NugetHandles.retain(it0)`-ed the payload into a `StableRef`
+  before each invocation, releasing it after.
+- C# (`CirClassTranslator.translateCallbackMethod`) declared `IntPtr arg0Ptr` for every delegate
+  parameter and read it back with `NugetMarshal.FromHandle<Int>(arg0Ptr)`, naming a Kotlin type that
+  does not exist in C#.
+
+Neither half compiled, so no consumer ever reached the boxing:
+
+- `(Boolean) -> Unit` failed the **Kotlin** compile of the generated file. The wrapper body already
+  bound a `Byte` for a Boolean payload (the table's `byte` row) while the `CFunction` type said
+  `COpaquePointer?`: `Argument type mismatch: actual type is 'Byte'`.
+- `(Int) -> Unit` failed the **C#** compile at the lambda's shape, not its body: CS1661/CS1678,
+  `nint` against `int`, because a lambda's convertibility to a delegate is checked before the body
+  that would have produced CS0246 on `FromHandle<Int>`.
+
+Implemented per the table. The precedent is in this repository and predates the fix: the
+interface-bridge route (`InterfaceBridgeExports.kt`, `CirClassTranslator.translateBridgeMethod`)
+already emits `CFunction<(Int, ..., COpaquePointer) -> Unit>` on the Kotlin side and
+`int arg0` with no unmarshal on the C# side. The per-call route now mirrors it.
+
+`Boolean` is folded into the same branch rather than left as a sibling defect: it is a by-value
+payload whose wire type is not itself, so the rewritten branch has to answer for it either way. It
+crosses as `byte arg0Byte` and the C# body widens it, `bool arg0 = arg0Byte != 0;`. The wire
+parameter is deliberately named `arg0Byte` and not `arg0`: declaring `bool arg0` from a parameter
+already called `arg0` is CS0128.
+
+`String` stays on the handle path (it is not a C ABI scalar) and so does `Char`, which has no
+crossing convention on any route.
+
+### The delegate shapes are shared on purpose
+
+`Nuget{Int,Byte,Double,...}VoidCallback` is registered first-wins across routes, so the per-call
+route's `Int` payload lands on exactly the `(int, IntPtr)` shape the ADR-037 stored-callback route
+already registers for an enum ordinal, and the interface-bridge route registers for a primitive
+parameter. One declaration, one `[UnmanagedCallersOnly]` thunk, three routes. Had the per-call route
+picked any other shape, whichever route lost the registration race would emit a lambda that cannot
+convert to the delegate the winner declared. `Tier1PrimitiveLambdaParameterTest` puts both routes in
+one fixture for that reason.
+
+### Left as a named sibling, not fixed here
+
+The **stored**-callback route's primitive payload (`fun addTickListener(listener: (Int) -> Unit)`)
+still boxes: its `storedArgSuffix` tests the *qualified* type name against a simple-name keyed table,
+so a primitive falls through to the `Object` suffix and a `StableRef`. Inferred (no fixture exercises
+it) that the boxed handle is then released three times, by `FromHandle<int>`, by the explicit
+`NugetMarshal.Dispose(arg0Ptr)` and by the Kotlin side. Its own route, its own item.

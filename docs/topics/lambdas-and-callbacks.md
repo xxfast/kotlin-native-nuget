@@ -197,6 +197,56 @@ public void Cat_CombineNicknames_Arity2LambdaParameter()
 }
 ```
 
+### A primitive payload {id="a-primitive-payload"}
+
+A `kotlin.*` primitive payload (`Int`, `Boolean`, `Double`, ...) crosses by value instead of going
+through `NugetMarshal.FromHandle`. From `test-library/src/nativeMain/kotlin/.../metronome/Metronome.kt`:
+
+```kotlin
+class Metronome(private val beats: Int) {
+  fun onTick(listener: (Int) -> Unit) = repeat(beats) { listener(it + 1) }
+  fun onBeat(listener: (Boolean) -> Unit) = repeat(beats) { listener(it % 2 == 0) }
+  fun onTempo(listener: (Double) -> Unit) = repeat(beats) { listener(60.0 + it * 0.5) }
+}
+```
+
+The generated delegate reads the argument directly, `Boolean` widening from the `byte` wire back to
+`bool`:
+
+```C#
+public void OnTick(Action<int> listener)
+{
+    NugetIntVoidCallback nativeCallback = (int arg0, IntPtr userData) =>
+    {
+    listener(arg0);
+    };
+    ...
+}
+
+public void OnBeat(Action<bool> listener)
+{
+    NugetByteVoidCallback nativeCallback = (byte arg0Byte, IntPtr userData) =>
+    {
+    bool arg0 = arg0Byte != 0;
+    listener(arg0);
+    };
+    ...
+}
+```
+
+Using it, from `IntegrationTests/PrimitiveLambdaPayloadTests.cs`:
+
+```C#
+[Fact]
+public void Metronome_OnTick_DeliversIntPayloadByValue()
+{
+    using var metronome = new Metronome(4);
+    var ticks = new List<int>();
+    metronome.OnTick(tick => ticks.Add(tick));
+    Assert.Equal(new List<int> { 1, 2, 3, 4 }, ticks);
+}
+```
+
 ## C# → Kotlin: stored callbacks
 
 From `Cat.kt`, an observer added once and invoked on every future trigger:
