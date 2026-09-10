@@ -111,7 +111,11 @@ Kotlin or a C# API whose signature lies about its contract. Every diagnostic car
 - **`SKIPPED_*`**: the member is warned about and omitted entirely from the generated C# API.
   Generation continues. This is the default for a construct the forward direction cannot express
   (an unsupported type, a `Map`/`Set` parameter, an unsupported generic/suspend combination, a
-  value-class member a supertype declares, whether inherited, delegated or overridden).
+  value-class member a supertype declares, whether inherited, delegated or overridden). A
+  `Sequence<T>` parameter or return is one of these: `kotlin.sequences.Sequence` is a named
+  `Unsupported` stdlib type, so a callable using it at either position skips as
+  `SKIPPED_UNSUPPORTED_TYPE` naming the callable, instead of vanishing from the generated API with
+  no diagnostic at all.
 - **`INFO_*`**: the member still binds, under a documented assumption (for example, `out`/`in`
   variance on a class type parameter is dropped, but the member still generates).
 - **`ERROR_*`**: generation fails and `CNameExports.kt` (the Kotlin `@CName` export file) is never
@@ -146,10 +150,9 @@ A property whose declared type the property planner has no getter/setter shape f
 same way, naming the property's own type. `Cat.unsupported: Sequence<String>` is the fixture:
 
 ```
-[nuget:SKIPPED_UNSUPPORTED_PROPERTY] Skipping Cat.unsupported: its type generic declaration
-    kotlin.sequences.Sequence has no property getter or setter shape. expose a bridgeable property
-    (or a getter function) whose type is not generic declaration kotlin.sequences.Sequence, and
-    export that instead
+[nuget:SKIPPED_UNSUPPORTED_PROPERTY] Skipping Cat.unsupported: its type kotlin.sequences.Sequence
+    has no property getter or setter shape. expose a bridgeable property (or a getter function)
+    whose type is not kotlin.sequences.Sequence, and export that instead
     at Cat.kt:46
 ```
 
@@ -743,7 +746,7 @@ repository's own fixture, KSP task `UP-TO-DATE`:
 [nuget:SKIPPED_INHERITED_MEMBER] Skipping io.github.xxfast.kotlin.native.nuget.test.models.StoryUri.length: it is a value class member that a supertype declares. a value class never exports a member a supertype declares, whether inherited, delegated (`by`) or explicitly overridden (ADR-082); call the supertype's API through the struct's underlying property from C#, or declare a member under a name or signature no supertype declares
 [nuget:SKIPPED_INHERITED_MEMBER] Skipping io.github.xxfast.kotlin.native.nuget.test.models.StoryUri.get: it is a value class member that a supertype declares. a value class never exports a member a supertype declares, whether inherited, delegated (`by`) or explicitly overridden (ADR-082); call the supertype's API through the struct's underlying property from C#, or declare a member under a name or signature no supertype declares
 [nuget:SKIPPED_INHERITED_MEMBER] Skipping io.github.xxfast.kotlin.native.nuget.test.models.StoryUri.subSequence: it is a value class member that a supertype declares. a value class never exports a member a supertype declares, whether inherited, delegated (`by`) or explicitly overridden (ADR-082); call the supertype's API through the struct's underlying property from C#, or declare a member under a name or signature no supertype declares
-[nuget:SKIPPED_UNSUPPORTED_PROPERTY] Skipping io.github.xxfast.kotlin.native.nuget.test.cat.Cat.unsupported: its type generic declaration kotlin.sequences.Sequence has no property getter or setter shape. expose a bridgeable property (or a getter function) whose type is not generic declaration kotlin.sequences.Sequence, and export that instead
+[nuget:SKIPPED_UNSUPPORTED_PROPERTY] Skipping io.github.xxfast.kotlin.native.nuget.test.cat.Cat.unsupported: its type kotlin.sequences.Sequence has no property getter or setter shape. expose a bridgeable property (or a getter function) whose type is not kotlin.sequences.Sequence, and export that instead
     at /Users/xxfast/Developer/XXFAST/KMP/kotlin-native-nuget/test-library/src/nativeMain/kotlin/io/github/xxfast/kotlin/native/nuget/test/cat/Cat.kt:46
 ```
 

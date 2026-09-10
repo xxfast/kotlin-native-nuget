@@ -1346,3 +1346,68 @@ move-to-top-level assertion at the property position, and `Tier1ReachabilityClos
   has no generated C# discriminator", matching what the same element already printed at a callable
   position.
 - No C# output, no ABI, no export, no handle change.
+
+## Amendment (2026-09-11): `kotlin.sequences.Sequence` is a named unsupported stdlib type
+
+Judgement: an **amendment**, not a new ADR. It closes the ROADMAP Phase 3 item "a
+`kotlin.sequences.Sequence<T>` parameter or property vanishes from C# with no diagnostic". There is
+one idiomatic outcome (skip, named) and no competing mapping to weigh, so there is nothing for a new
+ADR to decide. Status stays Accepted.
+
+### The gap
+
+`Sequence` is an `INTERFACE` with one type parameter, so `ForwardBridgeTypeClassifier` fell through
+to its generic-interface arm and answered
+`SpecializedProtocol("generic declaration kotlin.sequences.Sequence")`. `ForwardCallablePlanner`
+maps a `generic declaration ` protocol to `ForwardPlanSkipReason.GENERIC`, which is
+`droppedFromCSharp = false`: a deferral to a named legacy route, deliberately silent because the
+callable is still emitted, just not through the plan.
+
+Except that no legacy route re-emits it. The generic routes key on the *callable's* own type
+parameters or the *class's*, never on the type of a parameter or a return, so a non-generic member
+with a `Sequence` in its signature was neither planned nor legacy-routed. It disappeared from the
+generated C# with no diagnostic of any kind.
+
+The property half was never silent: `ForwardPropertyPlanner.recordDropped` is silent only for the
+lambda/flow legacy protocols, so `cat.Cat.unsupported` always fired `SKIPPED_UNSUPPORTED_PROPERTY`.
+Only its wording changes here.
+
+### Decision
+
+`kotlin.sequences.Sequence` joins the known-stdlib block of `ForwardBridgeTypeClassifier`, recognised
+by qualified name ahead of the shape branches, exactly as `Instant` (ADR-076), `Duration` (ADR-103)
+and `Uuid` (ADR-106) are. It is the first entry in that block that is **refused** rather than bound:
+it answers `BridgeType.Unsupported("kotlin.sequences.Sequence", "a lazy Sequence has no bridge
+shape; expose a List instead")`.
+
+The planner then maps it `UNSUPPORTED`, which is `droppedFromCSharp = true`, so every callable
+position warns: `SKIPPED_UNSUPPORTED_TYPE` naming the member and its `file:line`. A nullable
+`Sequence<T>?` at an input goes through the nullable arm to `NULLABLE` and stays named as
+`SKIPPED_UNSUPPORTED_INPUT`. The property route keeps `SKIPPED_UNSUPPORTED_PROPERTY` and now names
+the stdlib type instead of the `generic declaration ` legacy-route reason.
+
+`Sequence` only. `Iterable`, `Iterator` and `Collection` are supertypes of `List`, so a line for
+them could mask the working collection route; they are their own decision if anyone wants one.
+
+The wider fix (make `GENERIC` a real drop unless the callable is genuinely on a generic route) is
+the right long-term shape and stays open as its own ROADMAP item; it covers user generics such as
+`Box<Int>` at a parameter, which are still silent.
+
+### Testing seam
+
+`Tier1SequencePositionTest`: one fixture with a `Sequence` parameter, a `Sequence` return, a
+`Sequence` property and a control member, asserting the named kind, that the member is absent from
+both the generated Kotlin and the generated C#, and that no diagnostic mentions
+`generic declaration`. One cell in `ForwardBridgeTypeClassifierTest` beside the generic-interface
+cell, asserting `Sequence` classifies as `Unsupported` and not as the generic route.
+`Tier1DroppedExtensionEmissionTest`'s `Patient.tags` gains the warning assertion it was missing, so
+it can no longer go green on a `tags` that started binding.
+
+### Consequences of the amendment
+
+- No generated C# change anywhere: every one of these members was already absent, only silently.
+- `cat.Cat.unsupported`'s `SKIPPED_UNSUPPORTED_PROPERTY` text loses its `generic declaration `
+  prefix and names `kotlin.sequences.Sequence`, superseding the previous amendment's note that this
+  record is `GENERIC` and keeps the shipped text. The Writerside page quoting it is re-lifted with
+  this change.
+- No ABI, no export, no handle, no leak-harness change.
