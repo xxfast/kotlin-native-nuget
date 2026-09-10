@@ -705,3 +705,65 @@ Assert.Throws<ObjectDisposedException>(() => { var _ = tracker.TreatCount; });
 
 Item 7 is worth writing as an actual commented-out line with the expected compiler error, because the
 whole point of the declared-type keying is that `StateFlow`-declared members do **not** gain a setter.
+
+## Amendment (2026-09-11): a `MutableStateFlow` function return holds the flow it was handed
+
+The method half shipped as three lambdas that each re-invoked the Kotlin function: `_collect`,
+`_value` and `_set_value` all called `obj.member(params)` and then read or wrote `.value` on
+whatever that call returned. That is correct only when the body returns a stable instance, which
+every shipped fixture happened to do (`CatMoodTracker.treatJar()` returns the `treatCount`
+property, `CatRadio.volume(...)` and `KeywordRoutes.state(...)` memoise via `getOrPut`). A body
+that builds a fresh flow per call lost every write: `.Value = 7` landed in one throwaway flow and
+the next `.Value` read built another and answered its initial value.
+
+KSP cannot decide "does this function return the same instance" (it exposes no bodies), so the fix
+is not detection. It is holding the flow, which is Kotlin's own semantics: the caller keeps the
+object the call returned.
+
+For a `MutableStateFlow<T>`-**declared function return** only:
+
+- the Kotlin half exports `${prefix}_${cname}(handle, params): COpaquePointer`, which invokes the
+  function exactly once and returns that flow's own handle through `NugetHandles.retain` (never a
+  bare `StableRef.create`, so ADR-120's live-handle accounting sees it), plus
+  `${prefix}_${cname}_set_value(flowHandle, value, errorOut)` keyed on that handle;
+- the per-member `_collect` / `_value` are **not** emitted for that member. Reads go through
+  ADR-068's module-wide `nuget_stateflow_collect` / `nuget_stateflow_value`, which already operate
+  on a flow handle;
+- the C# half acquires once in the method body and passes the handle to all three seams, filling
+  ADR-068's `ownedHandle` slot so `KotlinStateFlow<T>.Dispose()` frees it:
+
+```csharp
+IntPtr flow = Native_Level(_handle);
+IntPtr collectScope = GetOrCreateScope();
+return new KotlinMutableStateFlow<int>(
+    (onNext, onComplete, onError, userData) =>
+        NugetStateFlowNative.Collect(flow, collectScope, onNext, onComplete, onError, userData),
+    () => NugetStateFlowNative.Value(flow),
+    v =>
+    {
+        Native_LevelSetValue(flow, v, out IntPtr error);
+        if (error != IntPtr.Zero) throw NugetErrorNative.BuildException(error);
+    },
+    flow);
+```
+
+The consumer signature is unchanged (`KotlinMutableStateFlow<int> Level()`); only the semantics and
+the `DllImport` set behind it change. A second call runs the body again and is a new flow, exactly
+as in Kotlin.
+
+Unchanged, deliberately:
+
+- **The property half.** A `val` getter returning a fresh instance already breaks Kotlin's own
+  property convention, and the field-backed case (every real one) has nothing to hold. Its exports
+  keep the ADR-065 per-member shape.
+- **A read-only `StateFlow`-declared function return** (`CatRadio.nowPlaying`). No data loss there,
+  only extra getter calls per access. Holding it too would be a consistency change, not a fix;
+  it joins the deferred list above.
+- **The element scope.** `isMutableStateFlowElementSupported` still limits the route to
+  primitive/`String`/object, so ADR-123's "no projection seam on `nuget_stateflow_value`" caveat
+  never applies here.
+
+Pinned by `Tier1MutableStateFlowFunctionTest`, `IntegrationTests/MutableStateFlowFunctionTests.cs`
+against the `CatSnackDispenser` fixture (a deliberately fresh-per-call body), and
+`LeakTests/LiveHandleTests.cs` row 8f, which is the first row to exercise the `ownedHandle` free
+branch: the route is the only one that mints a per-call handle the wrapper owns.

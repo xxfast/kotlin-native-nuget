@@ -1,6 +1,7 @@
 using TestLibrary;
 using TestLibrary.Cat;
 using TestLibrary.Clinic;
+using TestLibrary.Dispenser;
 using TestLibrary.Issue115;
 using TestLibrary.Issue126;
 using TestLibrary.Issue127;
@@ -338,6 +339,24 @@ public class LiveHandleTests
                 labels.Add(label);
             }
             Assert.Equal(3, labels.Count);
+        });
+    }
+
+    // Row 8f. ADR-071: a `MutableStateFlow<T>` returned from a function, held by the wrapper. The
+    // fix mints a StableRef for the flow itself on every call (the wrapper's `ownedHandle`, freed
+    // in `Dispose()`), which is a handle no other flow route owns: the property half re-reads a
+    // field and the read-only routes mint nothing per call. So a `Dispose()` that forgets the
+    // owned handle, or a fix that retains the flow on each `.Value` access instead of once per
+    // call, shows up here as a per-crossing leak and nowhere else.
+    [Fact]
+    public void MutableStateFlowFunctionReturn_WriteReadDispose_ReturnsToBaseline()
+    {
+        AssertNoLeak(() =>
+        {
+            using var dispenser = new CatSnackDispenser();
+            using var level = dispenser.Level();
+            level.Value = 7;
+            Assert.Equal(7, level.Value);
         });
     }
 

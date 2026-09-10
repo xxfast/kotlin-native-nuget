@@ -747,6 +747,84 @@ val favouriteToy: MutableStateFlow<Cat> = MutableStateFlow(Cat("Mittens"))
 fun treatJar(): MutableStateFlow<Int> = treatCount
 ```
 
+`treatJar()` still shares storage with a property, so the flow it returns is trivially the same one
+every time. A function that does **not** share storage, building a fresh `MutableStateFlow` on every
+call, binds correctly too: the wrapper holds the one flow the call returned instead of re-invoking
+the Kotlin function on each `.Value` access. From `CatSnackDispenser.kt`:
+
+```kotlin
+class CatSnackDispenser {
+  /** The most recently handed-out flow, so Kotlin can be asked what the C# write actually did. */
+  private var latest: MutableStateFlow<Int>? = null
+
+  /**
+   * A **fresh** flow per call, deliberately not memoised: the C# wrapper must hold on to the one
+   * flow this call returned rather than calling back in for a new one on every access.
+   */
+  fun level(): MutableStateFlow<Int> = MutableStateFlow(3).also { latest = it }
+
+  /**
+   * Kotlin-side read-back of the flow [level] most recently handed out, proving a C# write landed
+   * in Kotlin rather than in a C# cache. `-1` when nothing has been handed out yet.
+   */
+  fun lastLevel(): Int = latest?.value ?: -1
+}
+```
+
+The acquire export returns a **retained** flow handle (`NugetHandles.retain`), so the call happens
+exactly once. Reads and collection go through ADR-068's module-wide `nuget_stateflow_value` /
+`nuget_stateflow_collect`, keyed on that handle; only the write gets a dedicated export keyed on the
+same handle:
+
+```C#
+[DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "catsnackdispenser_level")]
+private static extern IntPtr Native_Level(IntPtr handle);
+
+[DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "catsnackdispenser_level_set_value")]
+private static extern void Native_LevelSetValue(IntPtr flowHandle, int value, out IntPtr error);
+
+public KotlinMutableStateFlow<int> Level()
+{
+    if (_handle == IntPtr.Zero)
+        throw new ObjectDisposedException(nameof(CatSnackDispenser));
+    IntPtr flow = Native_Level(_handle);
+    IntPtr collectScope = GetOrCreateScope();
+    return new KotlinMutableStateFlow<int>(
+        (onNext, onComplete, onError, userData) =>
+            NugetStateFlowNative.Collect(flow, collectScope, onNext, onComplete, onError, userData),
+        () => NugetStateFlowNative.Value(flow),
+        v =>
+        {
+            Native_LevelSetValue(flow, v, out IntPtr error);
+            if (error != IntPtr.Zero) throw NugetErrorNative.BuildException(error);
+        },
+        flow);
+}
+```
+
+Using it, from `IntegrationTests/MutableStateFlowFunctionTests.cs`:
+
+```C#
+using var dispenser = new CatSnackDispenser();
+using var level = dispenser.Level();
+level.Value = 7;
+Assert.Equal(7, level.Value);
+Assert.Equal(7, dispenser.LastLevel()); // the write really landed in Kotlin
+
+using var mylosLevel = dispenser.Level(); // a second call runs the body again
+Assert.Equal(3, mylosLevel.Value); // a fresh flow at its initial value, not a cache
+Assert.Equal(7, level.Value); // the first flow is untouched by the second call
+```
+
+<note>
+    <p>The acquired flow handle is its own <code>StableRef</code>, owned by the returned
+    <code>KotlinMutableStateFlow&lt;T&gt;</code> and freed on <code>Dispose()</code>.
+    <code>LeakTests/LiveHandleTests.cs</code> row 8f,
+    <code>MutableStateFlowFunctionReturn_WriteReadDispose_ReturnsToBaseline</code>, proves it returns
+    to baseline: a fix that retained the flow again on every <code>.Value</code> access instead of
+    once per call would show up there as a per-crossing leak and nowhere else.</p>
+</note>
+
 The generated `KotlinMutableStateFlow<T>` extends `KotlinStateFlow<T>` and `new`-shadows `Value`
 with a setter, since C# does not allow an `override` to add a `set` accessor to a get-only base
 property (`CS0546`):

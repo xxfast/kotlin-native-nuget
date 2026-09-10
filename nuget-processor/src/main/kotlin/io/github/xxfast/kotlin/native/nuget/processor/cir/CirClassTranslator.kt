@@ -19,6 +19,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.csharpParameterName
 import io.github.xxfast.kotlin.native.nuget.processor.exports.findInterfaceBridgePairs
 import io.github.xxfast.kotlin.native.nuget.processor.exports.forwardArmFlowMethods
 import io.github.xxfast.kotlin.native.nuget.processor.exports.isForwardFlowType
+import io.github.xxfast.kotlin.native.nuget.processor.exports.returnsHeldMutableStateFlow
 import io.github.xxfast.kotlin.native.nuget.processor.exports.findStoredCallbackPairs
 import io.github.xxfast.kotlin.native.nuget.processor.forward.BridgeType
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeTypeClassifier
@@ -1237,13 +1238,12 @@ internal fun flowMembers(
     // ADR-071: mirrors the sibling property branch above -- a genuinely DECLARED
     // MutableStateFlow<T> function return (not narrowed to StateFlow<T>) gains a settable
     // `.Value`, gated on non-nullable element/member (both deferred) and a v1-supported element.
-    val isMutableStateFlowMethod: Boolean = isStateFlowMethod &&
-        returnQualified in MUTABLE_STATE_FLOW_TYPES &&
-        !isNullableElement && !isNullableMember &&
-        isMutableStateFlowElementSupported(flowElementTypeResolved)
+    // ADR-071 (2026-09-11): that gate is now the shared predicate the Kotlin emitter reads, and it
+    // selects the held route below rather than an extra export on the ADR-065 pair.
+    val isHeldMutableStateFlow: Boolean = method.returnsHeldMutableStateFlow()
     val isMutableStateFlowObjectElement: Boolean =
-      isMutableStateFlowMethod && isMutableStateFlowElementObject(flowElementTypeResolved)
-    if (isMutableStateFlowMethod) tracker.needsMutableStateFlow = true
+      isHeldMutableStateFlow && isMutableStateFlowElementObject(flowElementTypeResolved)
+    if (isHeldMutableStateFlow) tracker.needsMutableStateFlow = true
     // ADR-123: a collection element, spelled and read like the ordinary route's collection result.
     // A refused element never reaches here: `filteredMethods` drops the member upstream.
     val flowElementCollection: BridgeType.Collection? =
@@ -1259,6 +1259,62 @@ internal fun flowMembers(
     // slot; every other parameter keeps mapParamType's shipped spelling.
     val methodParams: List<CirParameter> =
       legacyRouteParameters(method.parameters, classifier, tracker)
+
+    // ADR-071 (2026-09-11): a `MutableStateFlow<T>`-declared return is HELD -- the Kotlin half
+    // invokes the function once and hands the flow's own handle back, so this member's imports are
+    // an acquire and a flow-keyed setter, not the ADR-065 per-member `_collect` / `_value` pair
+    // (which re-invoked the function on every access and lost a write into a throwaway flow).
+    // Reads go through ADR-068's shared `NugetStateFlowNative`, which is what
+    // [CollectionHelperTracker.needsSuspendStateFlow] renders.
+    if (method.returnsHeldMutableStateFlow()) {
+      tracker.needsSuspendStateFlow = true
+      val acquireArgs: String = methodParams.joinToString(", ") { it.nativeArgument }
+      val acquireImport = CirDllImport(
+        libraryName = libraryName,
+        entryPoint = "${prefix}_$cname",
+        returnType = "IntPtr",
+        name = nativeStem,
+        parameters = listOf(CirParameter("handle", "IntPtr")) + methodParams,
+        visibility = CirVisibility.PRIVATE,
+      )
+
+      // The owner handle and the method's own parameters are gone from the setter: the write is
+      // keyed on the flow handle the acquire returned. The trailing `out IntPtr error` stays
+      // (MutableStateFlow.value conflates by Any.equals on the previous value, which can throw).
+      val heldSetValueImport = CirDllImport(
+        libraryName = libraryName,
+        entryPoint = "${prefix}_${cname}_set_value",
+        returnType = "void",
+        name = "${nativeStem}SetValue",
+        parameters = listOf(
+          CirParameter("flowHandle", "IntPtr"),
+          CirParameter(
+            "value",
+            if (isMutableStateFlowObjectElement) "IntPtr" else flowCsElementType,
+          ),
+        ),
+        visibility = CirVisibility.PRIVATE,
+        hasSyncErrorOut = true,
+      )
+
+      val heldMethod = CirMethod(
+        name = csMethodName,
+        returnType = "KotlinMutableStateFlow<$flowCsElementType>",
+        nativeName = nativeStem,
+        parameters = methodParams,
+        // The acquire call's arguments, not the collect delegate's: the call happens once, in the
+        // method body, before the wrapper is constructed.
+        body = if (acquireArgs.isEmpty()) "_handle" else "_handle, $acquireArgs",
+        isFlow = true,
+        isStateFlow = true,
+        flowElementType = flowCsElementType,
+        isMutableStateFlow = true,
+        stateFlowSetValueNativeName = "${nativeStem}SetValue",
+        isMutableStateFlowElementObject = isMutableStateFlowObjectElement,
+      )
+
+      return@flatMap listOf(acquireImport, heldSetValueImport, heldMethod)
+    }
 
     val nativeParams: List<CirParameter> = listOf(
       CirParameter("handle", "IntPtr"),
@@ -1312,31 +1368,11 @@ internal fun flowMembers(
         )
       } else null
 
-      // ADR-071: sibling `_set_value` DllImport -- handle + the method's own parameters + the
-      // element's own wire type + a trailing `out IntPtr error` (the Kotlin setter can throw,
-      // MutableStateFlow.value conflates by Any.equals on the previous value).
-      val setValueNativeImport: CirDllImport? = if (isMutableStateFlowMethod) {
-        val setValueParamType: String =
-          if (isMutableStateFlowObjectElement) "IntPtr" else flowCsElementType
-        CirDllImport(
-          libraryName = libraryName,
-          entryPoint = "${prefix}_${cname}_set_value",
-          returnType = "void",
-          name = "${nativeStem}SetValue",
-          parameters = listOf(CirParameter("handle", "IntPtr")) + methodParams +
-              listOf(CirParameter("value", setValueParamType)),
-          visibility = CirVisibility.PRIVATE,
-          hasSyncErrorOut = true,
-        )
-      } else null
-
+      // ADR-071 (2026-09-11): no `_set_value` sibling here. What reaches this point is a
+      // read-only `StateFlow<T>` return; the settable one took the held route above.
       val stateFlowMethod = CirMethod(
         name = csMethodName,
-        returnType = if (isMutableStateFlowMethod) {
-          "KotlinMutableStateFlow<$flowCsElementType>"
-        } else {
-          "KotlinStateFlow<$flowCsElementType>${if (isNullableMember) "?" else ""}"
-        },
+        returnType = "KotlinStateFlow<$flowCsElementType>${if (isNullableMember) "?" else ""}",
         nativeName = "${nativeStem}Collect",
         parameters = methodParams,
         body = nativeCallArgs,
@@ -1348,17 +1384,12 @@ internal fun flowMembers(
         isStateFlowNullableMember = isNullableMember,
         stateFlowHasValueNativeName =
           if (isNullableMember) "${nativeStem}HasValue" else "",
-        isMutableStateFlow = isMutableStateFlowMethod,
-        stateFlowSetValueNativeName =
-          if (isMutableStateFlowMethod) "${nativeStem}SetValue" else "",
-        isMutableStateFlowElementObject = isMutableStateFlowObjectElement,
       )
 
       return@flatMap listOfNotNull(
         nativeImport,
         valueNativeImport,
         hasValueNativeImport,
-        setValueNativeImport,
         stateFlowMethod,
       )
     }

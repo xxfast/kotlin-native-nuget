@@ -68,6 +68,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.exports.addObjectExports
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addPropertyExports
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addSealedClassExports
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addStateFlowHandleExports
+import io.github.xxfast.kotlin.native.nuget.processor.exports.returnsHeldMutableStateFlow
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addSuspendClassMethodExports
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addSuspendFunctionExports
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addValueClassExports
@@ -1942,7 +1943,21 @@ class NugetProcessor(
               ?.declaration?.qualifiedName?.asString() in STATE_FLOW_TYPES
       }
     }
-    if (classesHaveSuspendStateFlowMethods) builder.addStateFlowHandleExports()
+    // ADR-071 (2026-09-11): the held `MutableStateFlow` function return reads through the same two
+    // exports, so it opens the same gate. The arm half is not optional: a sealed arm's held member
+    // reads through `NugetStateFlowNative` exactly as an ordinary class's does, and a gate that
+    // covered only `classes` would leave that read calling a symbol nothing exported.
+    val ownersHaveHeldMutableStateFlowMethods: Boolean =
+      classes.any { cls -> cls.getAllFunctions().any { it.returnsHeldMutableStateFlow() } } ||
+          sealedClasses.any { sealed ->
+            sealed.getSealedSubclasses().any { subclass ->
+              subclass.forwardArmFlowMethods(forwardClassifier)
+                .any { it.returnsHeldMutableStateFlow() }
+            }
+          }
+    if (classesHaveSuspendStateFlowMethods || ownersHaveHeldMutableStateFlowMethods) {
+      builder.addStateFlowHandleExports()
+    }
 
     return ForwardCNameExports(builder.build(), exportOwnerRanges)
   }

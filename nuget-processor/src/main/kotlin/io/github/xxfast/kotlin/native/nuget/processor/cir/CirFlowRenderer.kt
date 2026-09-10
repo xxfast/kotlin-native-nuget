@@ -335,6 +335,11 @@ private fun StringBuilder.appendScopedNativeCall(
 // `Action<T>` write lambda, backed by the sibling `_set_value` export, and constructs
 // KotlinMutableStateFlow<T> instead of KotlinStateFlow<T>.
 internal fun StringBuilder.renderStateFlowMethod(method: CirMethod, className: String) {
+  if (method.isMutableStateFlow) {
+    renderHeldStateFlowMethod(method, className)
+    return
+  }
+
   val paramStr: String = method.parameters.joinToString(", ") { "${it.type} ${it.name}" }
   // ADR-114: the native call passes the wire handle, not the public collection.
   val paramNames: String = method.parameters.joinToString(", ") { it.nativeArgument }
@@ -342,10 +347,8 @@ internal fun StringBuilder.renderStateFlowMethod(method: CirMethod, className: S
   val valueNativeName: String = method.stateFlowValueNativeName
   val valueCallArgs: String = if (paramNames.isEmpty()) "_handle" else "_handle, $paramNames"
   val nullableSuffix: String = if (method.isStateFlowNullableMember) "?" else ""
-  val ctorName: String =
-    if (method.isMutableStateFlow) "KotlinMutableStateFlow" else "KotlinStateFlow"
 
-  appendLine("        public $ctorName<${method.flowElementType}>$nullableSuffix ${method.name}($paramStr)")
+  appendLine("        public KotlinStateFlow<${method.flowElementType}>$nullableSuffix ${method.name}($paramStr)")
   appendLine("        {")
   appendLine("            if (_handle == IntPtr.Zero)")
   appendLine("                throw new ObjectDisposedException(nameof($className));")
@@ -366,48 +369,60 @@ internal fun StringBuilder.renderStateFlowMethod(method: CirMethod, className: S
       appendLine("                return null;")
     }
   }
-  appendLine("            return new $ctorName<${method.flowElementType}>((onNext, onComplete, onError, userData) =>")
+  appendLine("            return new KotlinStateFlow<${method.flowElementType}>((onNext, onComplete, onError, userData) =>")
   appendScopedNativeCall(method, "                ", "$nativeName(${method.body})", ",")
-  if (method.isMutableStateFlow) {
-    val setValueNativeName: String = method.stateFlowSetValueNativeName
-    val writeReceiver: String = if (method.isMutableStateFlowElementObject) "v._handle" else "v"
-    appendValueLambda(method, valueNativeName, valueCallArgs, ",")
-    appendLine("                v =>")
-    appendLine("                {")
-    if (method.isMutableStateFlowElementObject) {
-      appendLine("                    if (v is null) throw new ArgumentNullException(nameof(v));")
-    }
-    val writeCallPrefix: String = "$setValueNativeName($valueCallArgs, $writeReceiver"
-    val handles: List<CirParameter> = method.parameters.filter { it.collectionCreate != null }
-    if (handles.isEmpty()) {
-      appendLine("                    $writeCallPrefix, out IntPtr error);")
-    } else {
-      // ADR-114: `error` is declared outside the try so it survives the dispose, which is the one
-      // shape the shared block helper cannot express.
-      handles.forEach {
-        appendLine("                    IntPtr ${it.nativeArgument} = ${it.collectionCreate};")
-      }
-      appendLine("                    IntPtr error;")
-      appendLine("                    try")
-      appendLine("                    {")
-      appendLine("                        $writeCallPrefix, out error);")
-      appendLine("                    }")
-      appendLine("                    finally")
-      appendLine("                    {")
-      handles.forEach {
-        appendLine("                        NugetMarshal.Dispose(${it.nativeArgument});")
-      }
-      appendLine("                    }")
-    }
-    appendLine("                    if (error != IntPtr.Zero) throw NugetErrorNative.BuildException(error);")
-    appendLine("                });")
+  // ADR-123: `read:` is named, so it skips the optional `ownedHandle` slot only the ADR-068
+  // awaited-suspend variant fills. A non-collection element passes nothing at all.
+  val read: String? = method.flowElementRead
+  appendValueLambda(method, valueNativeName, valueCallArgs, if (read == null) ");" else ",")
+  if (read != null) appendLine("                $read);")
+  appendLine("        }")
+  appendLine()
+}
+
+/**
+ * ADR-071 (2026-09-11): a `MutableStateFlow<T>`-declared function return, HELD. The acquire call
+ * runs once, in the method body, and its result IS the flow's own handle; the wrapper then keys
+ * every seam on that one handle -- ADR-068's shared `nuget_stateflow_collect` /
+ * `nuget_stateflow_value` for the reads, the flow-keyed `_set_value` for the write, and
+ * `ownedHandle` so `Dispose()` frees it. The shipped shape passed three lambdas that each
+ * re-invoked the Kotlin function, so a write landed in one throwaway flow and the next read built
+ * another.
+ */
+private fun StringBuilder.renderHeldStateFlowMethod(method: CirMethod, className: String) {
+  val paramStr: String = method.parameters.joinToString(", ") { "${it.type} ${it.name}" }
+  val element: String = method.flowElementType
+
+  appendLine("        public KotlinMutableStateFlow<$element> ${method.name}($paramStr)")
+  appendLine("        {")
+  appendLine("            if (_handle == IntPtr.Zero)")
+  appendLine("                throw new ObjectDisposedException(nameof($className));")
+  // ADR-114: a collection argument's wire handle lives only for the acquire call, which is the
+  // one call that reads it; the flow the call returns owns nothing of it.
+  val acquire: String = "${method.nativeName}(${method.body})"
+  val scoped: List<String>? =
+    method.parameters.collectionScopedCall("            ", "flow = $acquire", returns = false)
+  if (scoped == null) {
+    appendLine("            IntPtr flow = $acquire;")
   } else {
-    // ADR-123: `read:` is named, so it skips the optional `ownedHandle` slot only the ADR-068
-    // awaited-suspend variant fills. A non-collection element passes nothing at all.
-    val read: String? = method.flowElementRead
-    appendValueLambda(method, valueNativeName, valueCallArgs, if (read == null) ");" else ",")
-    if (read != null) appendLine("                $read);")
+    appendLine("            IntPtr flow = IntPtr.Zero;")
+    scoped.forEach { appendLine(it) }
   }
+  appendLine("            IntPtr collectScope = GetOrCreateScope();")
+  appendLine("            return new KotlinMutableStateFlow<$element>(")
+  appendLine("                (onNext, onComplete, onError, userData) =>")
+  appendLine("                    NugetStateFlowNative.Collect(flow, collectScope, onNext, onComplete, onError, userData),")
+  appendLine("                () => NugetStateFlowNative.Value(flow),")
+  appendLine("                v =>")
+  appendLine("                {")
+  if (method.isMutableStateFlowElementObject) {
+    appendLine("                    if (v is null) throw new ArgumentNullException(nameof(v));")
+  }
+  val writeReceiver: String = if (method.isMutableStateFlowElementObject) "v._handle" else "v"
+  appendLine("                    ${method.stateFlowSetValueNativeName}(flow, $writeReceiver, out IntPtr error);")
+  appendLine("                    if (error != IntPtr.Zero) throw NugetErrorNative.BuildException(error);")
+  appendLine("                },")
+  appendLine("                flow);")
   appendLine("        }")
   appendLine()
 }
