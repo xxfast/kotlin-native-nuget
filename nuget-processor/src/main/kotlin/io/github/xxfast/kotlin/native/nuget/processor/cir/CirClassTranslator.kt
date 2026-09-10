@@ -229,7 +229,10 @@ internal fun translateClass(
     // only site the diagnostic can fire from — exactly once per affected class.
     keepsSupertype(cls, name, declaredBase, SupertypeKind.BASE_CLASS, exportedTypes, logger)
   }
-  val superClass: String? = superClassDeclaration?.simpleName?.asString()
+  // ADR-009 amendment (2026-09-11): spelled by nested C# name, so a class extending a nested
+  // sealed arm renders `: Roost.Perch` and not the unresolvable `: Perch` (CS0246). A top-level
+  // base is unchanged: `nestedCsName()` stops at the first non-class parent.
+  val superClass: String? = superClassDeclaration?.nestedCsName()
 
   val interfaces: List<String> = if (superClass != null) {
     emptyList()
@@ -1344,6 +1347,9 @@ internal fun translateSealedClass(
       val isDataClass: Boolean = subclass.modifiers.contains(Modifier.DATA)
       val isNested: Boolean =
         subclass.parentDeclaration?.qualifiedName?.asString() == cls.qualifiedName?.asString()
+      // ADR-009 amendment (2026-09-11): an `open` arm is extensible, which is what unlocks both
+      // `public class` in the renderer and `virtual` on its own open members below.
+      val isOpenArm: Boolean = subclass.modifiers.contains(Modifier.OPEN)
 
       val subQualifiedName: String? = subclass.qualifiedName?.asString()
       val properties: List<CirProperty> = subclass.getAllProperties()
@@ -1358,7 +1364,14 @@ internal fun translateSealedClass(
             subQualifiedName?.let { callableCatalog.propertyFor("$it.$propName") }
           if (planned != null) {
             tracker.trackProperty(planned)
-            return@mapNotNull ForwardCirPropertyProjection.classProperty(planned)
+            return@mapNotNull ForwardCirPropertyProjection.classProperty(
+              planned,
+              // ADR-009 amendment (2026-09-11): gated on the arm being open. An `open val` on a
+              // final arm is effectively final in Kotlin (nothing can extend it), and `virtual`
+              // inside a `public sealed class` is CS0549. `isOverride` stays false: the generated
+              // sealed base declares no member to override (CS0115).
+              isVirtual = isOpenArm && prop.modifiers.isOpenForOverride(),
+            )
           }
 
           // Issue #121: same gate as the ordinary-class arm above. The planner declined, and a
@@ -1416,7 +1429,10 @@ internal fun translateSealedClass(
       // ADR-116: the method half of ADR-111. The arm's declared member functions come off the same
       // catalog an ordinary class reads (`classMethods`), projected by the same `classMethod`, so
       // the error slot, the overload numbering and the wire types agree with the Kotlin half by
-      // construction. `isOverride`/`isVirtual` are pinned false by the planner (CS0115/CS0549).
+      // construction. `isOverride` is pinned false by the planner (the generated sealed base
+      // declares nothing to override, CS0115); `isVirtual` rides the plan, which computes it from
+      // the arm being `open` the same way `classEntries` computes an ordinary class's (ADR-009
+      // amendment 2026-09-11).
       val methodPlans: List<ForwardCallablePlan> =
         subQualifiedName?.let { callableCatalog.classMethods(it) } ?: emptyList()
       val methods: List<CirMethod> = methodPlans.map { plan ->
@@ -1425,7 +1441,7 @@ internal fun translateSealedClass(
           plan = plan,
           nativePrefix = subPrefix,
           isOverride = false,
-          isVirtual = false,
+          isVirtual = plan.publicSignature.isVirtual,
         )
       }
       // ADR-034's collision guard, which the sealed route never ran: two arm methods whose C#
@@ -1486,6 +1502,7 @@ internal fun translateSealedClass(
             properties.any { property -> property.isFlow },
         isDataClass = isDataClass,
         isNested = isNested,
+        isOpen = isOpenArm,
       )
     }
     .toList()

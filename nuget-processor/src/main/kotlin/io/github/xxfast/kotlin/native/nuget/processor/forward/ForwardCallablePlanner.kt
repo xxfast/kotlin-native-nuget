@@ -967,8 +967,10 @@ internal class ForwardCallablePlanner(
    *   `isForwardPlannableMemberOf`. A base `open fun` the arm does not override has no C# carrier
    *   (`CirSealedClass` declares no methods), so it is not flattened onto the arm; an `override`
    *   the arm declares itself is a plain method here.
-   * - `isOverride` / `isVirtual` are pinned to `false`: the generated C# base declares nothing to
-   *   override (CS0115) and a `virtual` member on a `public sealed class` is CS0549.
+   * - `isOverride` is pinned to `false`: the generated C# base declares nothing to override
+   *   (CS0115). `isVirtual` is true only for a declared `open` member of an `open` arm (ADR-009
+   *   amendment 2026-09-11), since a final arm renders `public sealed class`, where `virtual` is
+   *   CS0549.
    * - Every skip an ordinary class would defer to a legacy route becomes a named
    *   [ForwardPlanSkipReason.SEALED_SUBCLASS_UNROUTED] drop, because no legacy route is keyed to a
    *   sealed subclass. Planned entries are untouched.
@@ -979,6 +981,10 @@ internal class ForwardCallablePlanner(
   ): List<ForwardCallableCatalogEntry> {
     val subName: String = subclass.simpleName.asString()
     val owner: String = subclass.qualifiedName?.asString() ?: return emptyList()
+    // ADR-009 amendment (2026-09-11): only an `open` arm renders `public class`, so only an open
+    // arm can carry `virtual`. On a final arm the member is effectively final in Kotlin anyway,
+    // and `virtual` inside a `public sealed class` is CS0549.
+    val isOpenArm: Boolean = subclass.modifiers.contains(Modifier.OPEN)
     val prefix: String = "${sealed.simpleName.asString().lowercase()}_${subName.lowercase()}"
     val receiverType: BridgeType = BridgeType.ObjectHandle(owner)
     val methods: List<KSFunctionDeclaration> = subclass.getAllFunctions()
@@ -1010,6 +1016,9 @@ internal class ForwardCallablePlanner(
       val occurrence: Int = occurrences.merge(name, 1, Int::plus)!!
       val suffix: String = if (occurrence == 1) "" else "_$occurrence"
       val symbol: String = "$owner.$name$suffix"
+      // ADR-096, as `classEntries` reasons: a synthesized omitting overload is never `virtual`,
+      // since no subclass declares that signature to override.
+      val isVirtual: Boolean = omitted == 0 && isOpenArm && method.modifiers.isOpenForOverride()
       val structuralReason: ForwardPlanSkipReason? = when {
         method.modifiers.contains(Modifier.ABSTRACT) -> ForwardPlanSkipReason.ABSTRACT
         method.modifiers.contains(Modifier.SUSPEND) -> ForwardPlanSkipReason.SUSPEND
@@ -1035,7 +1044,7 @@ internal class ForwardCallablePlanner(
           // The symbol carries the overload suffix; the Kotlin call site must not.
           member = name,
           isOverride = false,
-          isVirtual = false,
+          isVirtual = isVirtual,
           node = method,
           droppedOptInMarker = droppedOptInMarker(method.parameters, omitted),
         )

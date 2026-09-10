@@ -66,7 +66,13 @@ private fun sealedSubclassBlock(
   // per arm, so it has no scope to drain, and putting `IAsyncDisposable` there would advertise
   // `DisposeAsync` on arms that never suspend.
   val asyncDisposable: String = if (subclass.hasSuspendMethods) ", IAsyncDisposable" else ""
-  appendLine("        public sealed class ${subclass.name} : ${sealed.name}$asyncDisposable")
+  // ADR-009 amendment (2026-09-11): an `open` arm drops `sealed`, so a Kotlin subclass of it (an
+  // ordinary class, with the arm as its base) compiles and the arm's `open` members can be
+  // `virtual`. A final arm keeps its shipped `public sealed class` spelling byte for byte.
+  val sealedModifier: String = if (subclass.isOpen) "" else "sealed "
+  appendLine(
+    "        public ${sealedModifier}class ${subclass.name} : ${sealed.name}$asyncDisposable"
+  )
   appendLine("        {")
   if (subclass.hasSuspendMethods) {
     append(buildString { renderScopeHandleField() }.indentNestedBody())
@@ -246,12 +252,16 @@ private fun StringBuilder.renderSealedSubclassProperty(prop: CirProperty) {
   val isMultiLineGetter: Boolean = prop.getter.contains('\n')
   val isMultiLineSetter: Boolean = prop.setter?.contains('\n') == true
   val setter: String? = prop.setter
+  // ADR-009 amendment (2026-09-11): the same modifier `CirClassRenderer` spells for an ordinary
+  // class property. Only an `open` arm ever sets `isVirtual` (the translator gates it), so a final
+  // arm's property stays byte-identical.
+  val modifier: String = if (prop.isOverride) "override " else if (prop.isVirtual) "virtual " else ""
   if (setter == null && !isMultiLineGetter) {
-    appendLine("            public ${prop.type} ${prop.name} => ${prop.getter};")
+    appendLine("            public $modifier${prop.type} ${prop.name} => ${prop.getter};")
     return
   }
 
-  appendLine("            public ${prop.type} ${prop.name}")
+  appendLine("            public $modifier${prop.type} ${prop.name}")
   appendLine("            {")
   if (isMultiLineGetter) {
     appendLine("                get")

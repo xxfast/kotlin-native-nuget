@@ -167,6 +167,13 @@ data class CirSealedSubclass(
    * sealed prefix, and either way the sealed route is the only thing that declares the type.
    */
   val isNested: Boolean = true,
+  /**
+   * ADR-009 amendment (2026-09-11): whether the arm is declared `open` in Kotlin. An open arm
+   * renders `public class` instead of `public sealed class`, because a Kotlin subclass of it is
+   * collected as an ordinary class with the arm as its base, and `sealed` there is CS0509 on that
+   * subclass and CS0549 on every `virtual` member the arm needs. A final arm is unchanged.
+   */
+  val isOpen: Boolean = false,
 )
 
 data class CirObject(

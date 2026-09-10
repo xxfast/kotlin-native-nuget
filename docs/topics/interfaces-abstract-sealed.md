@@ -6,7 +6,7 @@ Kotlin's three flavours of inheritance each get a distinct C# shape: `interface`
 |---|---|---|
 | `interface` | `interface` (`I`-prefixed) | default methods delegate to Kotlin; every exported interface's own declaration (not just a reachable one's) is now typed from the forward plan, the same source of truth its implementing class uses, see [Declaring every exported interface](#declaring-every-exported-interface), [ADR-113](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/113-interface-declaration-on-the-forward-plan.md) |
 | `abstract class` | `abstract class` | `_handle` inherited by subclasses |
-| `sealed class` | `abstract class` | a nested subclass stays nested (`Base.Sub`); a **sibling** subclass, declared beside its base rather than inside it, is declared at namespace level (`public sealed class Sub : Base`), for a `data class` or an `object`/`data object` alike, see [A sibling sealed subclass declared beside its base](#a-sibling-sealed-subclass-declared-beside-its-base), [ADR-009](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/009-sealed-class-mapping.md) |
+| `sealed class` | `abstract class` | a nested subclass stays nested (`Base.Sub`); a **sibling** subclass, declared beside its base rather than inside it, is declared at namespace level (`public sealed class Sub : Base`), for a `data class` or an `object`/`data object` alike, see [A sibling sealed subclass declared beside its base](#a-sibling-sealed-subclass-declared-beside-its-base); an arm declared `open` renders `public class` (not `sealed`) with `virtual` open members, and a further Kotlin subclass of it takes the ordinary class route with the arm as its nested-name base, see [An open sealed arm](#an-open-sealed-arm), [ADR-009](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/009-sealed-class-mapping.md) |
 | **eligible** `sealed interface` (no type parameters, every subclass a `class`/`object` nested in the interface **or declared beside it**, with no other superclass, no sub-interface, and no second sealed-interface parent) | `abstract class` | same shape as `sealed class` above; no C# interface is declared for it, see [Sealed interfaces](#sealed-interfaces), [ADR-112](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/112-sealed-interface-mapping.md), widened by [ADR-125](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/125-sealed-interface-sibling-arms.md) |
 | **ineligible** `sealed interface` | `interface` (`I`-prefixed) | stays on the ordinary interface route; every member typed with it skips named (`SKIPPED_SEALED_POSITION`), and the declaration itself gets `SKIPPED_INELIGIBLE_SEALED_INTERFACE` naming every disqualifying subclass, see [Sealed interfaces](#sealed-interfaces), [ADR-112](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/112-sealed-interface-mapping.md) |
 | interface-typed return (method result or property) | `IFoo` / `IFoo?` | backed by a generated `sealed class Foo : IFoo`, see [ADR-040](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/040-interface-return-type-mapping.md) |
@@ -550,6 +550,147 @@ Issue54Shape.Empty alsoMylo = Assert.IsType<Issue54Shape.Empty>(second);
 Assert.NotSame(mylo, alsoMylo);
 Assert.Equal(mylo, alsoMylo);
 Assert.Equal(mylo.GetHashCode(), alsoMylo.GetHashCode());
+```
+
+## An open sealed arm {id="an-open-sealed-arm"}
+
+A sealed arm declared `open` renders `public class` instead of `public sealed class`, and its own
+`open val`/`open var`/`open fun` render `public virtual`, so a further Kotlin subclass of the arm
+compiles in C# (a `sealed` arm is `CS0509` for the subclass, and a `virtual` member inside one is
+`CS0549`). A final arm is unaffected and stays `public sealed class`. The subclass itself takes the
+ordinary class route (see [Classes and objects](classes-and-objects.md)), spelled by the arm's
+nested C# name (`Roost.Perch`, not the bare `Perch` a top-level base would use).
+
+### Kotlin {id="open-arm-kotlin"}
+
+From `test-library/src/nativeMain/kotlin/.../roost/Roost.kt`:
+
+```kotlin
+sealed class Roost {
+  open class Perch(open val height: Int) : Roost() {
+    open fun describe(): String = "perch $height"
+  }
+
+  data object Ground : Roost()
+}
+
+class HighPerch : Roost.Perch(1) {
+  override val height: Int get() = 99
+
+  override fun describe(): String = "high"
+}
+```
+
+### Generated C# {id="open-arm-generated-c"}
+
+From `Interop.cs`. `Perch` renders `public class`, not `sealed`, with `virtual` members; `Ground`
+keeps `public sealed class`. `HighPerch` extends `Roost.Perch` by its nested name and overrides both
+members:
+
+```C#
+public abstract class Roost : IDisposable, INugetHandle
+{
+    internal IntPtr _handle;
+
+    public sealed class Ground : Roost
+    {
+        // ...
+    }
+
+    public class Perch : Roost
+    {
+        internal Perch(IntPtr handle) : base(handle)
+        {
+        }
+
+        public virtual int Height
+        {
+            get { /* ... */ }
+        }
+
+        public virtual string Describe()
+        {
+            /* ... */
+        }
+
+        public override void Dispose()
+        {
+            /* ... */
+        }
+    }
+
+    internal static Roost FromHandle(IntPtr handle)
+    {
+        return Native_GetType(handle) switch
+        {
+            0 => new Ground(handle),
+            1 => new Perch(handle),
+            _ => throw new InvalidOperationException("Unknown sealed class type")
+        };
+    }
+
+    public abstract void Dispose();
+}
+```
+
+```C#
+public class HighPerch : Roost.Perch
+{
+    public HighPerch() : base(IntPtr.Zero)
+    {
+        /* ... */
+    }
+
+    public override int Height
+    {
+        get { /* ... */ }
+    }
+
+    public override string Describe()
+    {
+        /* ... */
+    }
+}
+```
+
+<note>
+    <p>The <code>FromHandle</code> discriminator above is over direct arms only: a
+    <code>HighPerch</code> handle returned from Kotlin still reconstructs as a
+    <code>Roost.Perch</code> wrapper, never as <code>HighPerch</code> itself. The handle underneath
+    is still the real Kotlin object, so dispatch through the wrapper still reaches
+    <code>HighPerch</code>'s overrides; a C# consumer just cannot pattern-match past the arm. See
+    <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/009-sealed-class-mapping.md">ADR-009</a>.</p>
+</note>
+
+### Using it from C# {id="open-arm-using-it-from-c"}
+
+From `IntegrationTests/OpenSealedArmTests.cs`. A `Roost.Perch`-typed reference still dispatches to
+`HighPerch`'s overrides, and a handle minted from a `HighPerch` still reads them through the arm
+wrapper:
+
+```C#
+[Fact]
+public void Subclass_DispatchesThroughAnArmTypedReference()
+{
+    using var high = new HighPerch();
+
+    // Oreo looks up at the perch and only sees a `Roost.Perch`; Mylo is still on the high one.
+    Roost.Perch perch = high;
+
+    Assert.Equal("high", perch.Describe());
+    Assert.Equal(99, perch.Height);
+}
+
+[Fact]
+public void HighRoost_ReconstructsAsTheArm_NotTheFurtherSubclass()
+{
+    using Roost roost = RoostKt.HighRoost();
+
+    // ADR-009's discriminator is flat, over direct arms only, so a `HighPerch` handle comes
+    // back wrapped as a `Roost.Perch`. Exact type, not assignable-from.
+    Assert.IsType<Roost.Perch>(roost);
+    Assert.False(roost is HighPerch);
+}
 ```
 
 ## Sealed interfaces {id="sealed-interfaces"}
@@ -2783,7 +2924,6 @@ property. The owning class still generates, and its unrelated `name` member stil
 - A sealed type in the export scope now binds at every position: property, callable return, and callable/constructor parameter (bare, nullable, or a collection component, read-only or mutable), see [Sealed types as property types](#sealed-types-as-property-types), [A class method returning a sealed base](#a-class-method-returning-a-sealed-base), and [A sealed type at a parameter position](#a-sealed-type-at-a-parameter-position). An **eligible** `sealed interface` binds the same way, whether its arms are nested or declared beside it, see [Sealed interfaces](#sealed-interfaces). A value class whose underlying type is sealed also binds the same way, at a property, callable, or `List<T>` component position, see [Value classes: Over a sealed type](value-classes.md#over-a-sealed-type). An extension function's **receiver** typed as a sealed base now binds too, see [Extensions: Sealed receivers](extensions.md#sealed-receivers). What still does not bind: an extension **property** with a sealed receiver, an **ineligible** sealed interface at any position, and a sealed class **outside the export scope**. See [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md).
 - A `sealed interface` still refuses an arm that is an `enum class` (a C# enum can only extend an integral type, `CS1008`) or that implements more than one sealed interface (C# single inheritance), regardless of where the arm is declared. See [An enum arm keeps the interface ineligible](#sealed-interface-enum-arm), [ADR-125](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/125-sealed-interface-sibling-arms.md).
 - An eligible sealed interface arm's **extra interfaces** (e.g. `class Odd : Kind, CharSequence`) are dropped silently: the arm stays eligible, but the generated class declares only its sealed base, with no interface list and no diagnostic naming the loss. See [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md).
-- A sealed arm's own `isVirtual`/`isOverride` are pinned `false`, so an `open val`/`open var`/`open fun` declared directly on a sealed arm cannot itself be overridden by a further Kotlin subclass in C#. Inferred, not fixture-verified. See [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md).
 - [Declaring every exported interface](#declaring-every-exported-interface) has its own residual gaps: `CirInterface` has no super-interface list, so `interface Derived : Base` still flattens (`IDerived` no longer redeclares `Base`'s members after ADR-113, but doesn't inherit them either); a `var` interface property still renders `{ get; }` only (`hasSetter` is never derived from the plan); the CS0102 property/method name-collision guard is interface-route only, the same collision on the ordinary class route is unguarded; and an interface that is neither reachable nor implemented by any exported class still silently loses its unbridgeable members with no diagnostic naming why. See [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md).
 - A sealed **base**'s own `abstract val`/`abstract var` renders no C# member at all (`CirSealedClass` has no `properties` field); see [A `data object` subclass's own properties bind too](#data-object-subclass-properties-bind-too) and [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md).
 - [Methods on a sealed subclass](#methods-on-a-sealed-subclass) is declared-only: a base `open fun` (and, since [ADR-118](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/118-suspend-route-sealed-arm-owners-and-overload-numbering.md), a base `open suspend fun`) body an arm does not override renders on no arm, and neither the base's own methods nor its `abstract val`/`abstract var` (above) are ever readable through the C# base type directly, only through a concrete arm. A lambda-parameter or generic method on an arm is still a named `SKIPPED_UNSUPPORTED_COMBINATION` skip rather than a binding; a declared `suspend fun` or a declared `Flow<T>`/`StateFlow<T>` member now binds instead, and only an arm that declares one of those two gains `IAsyncDisposable`, so a consumer holding the sealed base has to pattern-match to the concrete arm before `await using` / `DisposeAsync()` (see [Suspend methods on a sealed arm](#sealed-method-suspend-generated-c) and [Flow and StateFlow members on a sealed arm](#sealed-flow-generated-c)). An arm's own `fun dispose()` collides with the always-emitted `Dispose()`, the same pre-existing hazard an ordinary class has; a same-arity suspend overload pair differing only in reference nullability, a `suspend fun` returning plain `Flow<T>`, and an ordinary-class suspend method returning a nested arm by simple name are also pre-existing, unfixed gaps on the legacy suspend route; see [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md).

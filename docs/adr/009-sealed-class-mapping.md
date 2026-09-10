@@ -166,6 +166,35 @@ never `Equals`, since every read mints a fresh wrapper and reference equality ne
 
 [ADR-112](112-sealed-interface-mapping.md) extends this route to a `sealed interface` whose subclasses are all nested classes/objects with no other superclass and no sub-interfaces: it renders exactly as above, `public abstract class Pulse` with nested `sealed` subclasses and `Pulse.FromHandle`, and no C# interface is declared for it.
 
+### Amendment (2026-09-11): an `open` arm renders `public class`, and its `open` members render `virtual`
+
+An arm declared `open class Perch(open val height: Int) : Roost()` now renders `public class Perch : Roost`,
+not `public sealed class`, and its declared `open val` / `open fun` render `public virtual`. A
+Kotlin `class HighPerch : Roost.Perch()` is not an arm (`isSealedSubclass()` claims only a class
+whose declared base carries `sealed`), so it takes the ordinary class route, and that route now
+spells its base by nested C# name: `public class HighPerch : Roost.Perch`.
+
+Before this, all three halves disagreed with each other. Every arm was rendered `public sealed class`
+unconditionally, every arm member was pinned to neither `virtual` nor `override`, and the ordinary
+class route spelled its base by simple name. A Kotlin subclass of an arm therefore produced an
+`Interop.cs` that did not compile: `CS0509` (cannot derive from sealed `Perch`), `CS0246` for the
+unqualified `: Perch` spelling of a nested type, and `CS0506` on each member the subclass overrode.
+
+The `virtual` gate is the arm being `open`, at both member sites (`ForwardCallablePlanner`'s
+`sealedSubclassEntries` for methods, `CirClassTranslator`'s arm property loop for properties),
+reusing the same `isOpenForOverride()` predicate an ordinary class uses ([ADR-101](101-unexported-supertype-skip.md)).
+A final arm is unchanged byte for byte: `virtual` inside a `public sealed class` is CS0549, and an
+`open` member of a final arm is unreachable in Kotlin anyway. `isOverride` stays `false` on every
+arm: the generated abstract base declares no member to override (CS0115).
+
+`FromHandle` is unchanged and still yields the arm. The Kotlin discriminator's `when (obj)` is over
+direct arms only, so a `HighPerch` instance materialises as a `Perch` wrapper. The handle is the
+same object and Kotlin dispatch stays virtual, so a call through it reaches `HighPerch.describe()`;
+only the static C# type is the arm. Widening the discriminator to non-direct subclasses would
+reopen this ADR's flat-ordinal shape and was rejected here.
+
+An `abstract` arm is still out of scope: `FromHandle`'s `new Perch(handle)` would be CS0144.
+
 ## Consequences
 
 - Sealed hierarchies are type-safe and pattern-matchable in C#
