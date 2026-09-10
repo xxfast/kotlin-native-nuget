@@ -471,9 +471,31 @@ class that itself has an exported base.
 translator (`ForwardCallablePlanner.kt`'s `entryFor` computes `isVirtual` the old way). **Verified**
 against generated output: `open class Kennel { open fun describe() }` with `class Crate : Kennel()`
 renders `public string Describe()` on `Kennel` and `public override string Describe()` on `Crate`.
-`Bed` therefore carries no overridden `open fun`; its `describe()` is final on purpose, and reads
-both open properties so Kotlin's own dispatch through `Hammock` stays observable. Tracked on
-`ROADMAP.md`.
+Closed by the 2026-09-11 method amendment below.
+
+## Amendment (2026-09-11): the method half, `open fun` renders `virtual`
+
+The split-out clause above is closed. `ForwardCallablePlanner.kt`'s `classEntries.entryFor` computed
+`isVirtual = omitted == 0 && superClass == null && OVERRIDE && !FINAL`: `Modifier.OPEN` was never
+consulted, so a declared `open fun` on an ordinary exported base reached `virtual` on no path and a
+Kotlin subclass's `override fun` rendered `public override` against a non-virtual member (CS0506 at
+the consumer's compile).
+
+It now reads `omitted == 0 && !isOverride && method.modifiers.isOpenForOverride()`, the same shared
+predicate the property site already uses. One expression, one file; the renderer and the CIR
+translator are unchanged, since `CirMethod.isVirtual` was already fed from `plan.publicSignature`.
+Truth table against the old behaviour: `superClass == null && OVERRIDE && !FINAL` is unchanged
+(`Animal.vibe`, `Issue42Derived`), `superClass != null && OVERRIDE` still renders `override` only,
+and the new rows are `OPEN` without `OVERRIDE`, on a base with or without an exported base of its
+own. ADR-096's synthesized omitting overloads keep `omitted > 0` and stay non-virtual.
+
+Fixture: `Bed` gains `open fun fluff()`, overridden by `Hammock`. Its `describe()` stays final on
+purpose: it is the non-open control, and it reads both open properties so Kotlin's own dispatch
+through `Hammock` stays observable through either C# static type. Pinned by
+`IntegrationTests/OpenMemberOverrideTests.cs` (`Bed_OpenFun_RendersVirtual`,
+`Bed_FinalFun_StaysNonVirtual`, `Hammock_Fluff_OverridesRatherThanHides`, and the dispatch fact
+through both static types) and by the two `Tier1OpenMemberOverrideTest` rows, which add
+`open fun climb()` on a `Bunk` that itself has an exported base.
 
 ## Amendment (2026-09-11): the base-class hint picks its clause
 

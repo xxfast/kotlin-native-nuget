@@ -903,9 +903,10 @@ internal class ForwardCallablePlanner(
       // signature, so `override` would be CS0115); overrides synthesize nothing anyway.
       val isOverride: Boolean = omitted == 0 &&
           superClass != null && method.modifiers.contains(Modifier.OVERRIDE)
-      val isVirtual: Boolean = omitted == 0 && superClass == null &&
-          method.modifiers.contains(Modifier.OVERRIDE) &&
-          !method.modifiers.contains(Modifier.FINAL)
+      // ADR-101 (2026-09-11): a *declared* `open fun` is virtual too, not just the
+      // `override && !final` arm, or a subclass's `override` is CS0506 in C#. Same predicate the
+      // property route uses (`CirClassTranslator`), so both halves of a class agree.
+      val isVirtual: Boolean = omitted == 0 && !isOverride && method.modifiers.isOpenForOverride()
       val structuralReason: ForwardPlanSkipReason? = when {
         method.modifiers.contains(Modifier.ABSTRACT) -> ForwardPlanSkipReason.ABSTRACT
         method.modifiers.contains(Modifier.SUSPEND) -> ForwardPlanSkipReason.SUSPEND
