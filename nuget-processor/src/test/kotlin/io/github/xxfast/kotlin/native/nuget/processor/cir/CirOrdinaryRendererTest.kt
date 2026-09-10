@@ -570,6 +570,53 @@ class CirOrdinaryRendererTest {
     assertFalse(rendered.contains("internal HandleBox(IntPtr handle)"))
   }
 
+  /**
+   * ADR-064 amendment (2026-09-10): the remark is plain text in CIR, so the renderer owns escaping.
+   * `<init>` unescaped is malformed XML doc (CS1570) in any consumer generating a documentation
+   * file, which `GeneratedBindingsCheck` now does.
+   */
+  @Test
+  fun `class remarks render as an escaped doc comment above the class line`() {
+    val cls = CirClass(
+      name = "Sensor",
+      libraryName = "iot",
+      nativePrefix = "sensor",
+      constructor = null,
+      properties = emptyList(),
+      methods = emptyList(),
+      remarks = "skipped <init> & <clinit>",
+    )
+
+    val rendered: String = render(cls)
+
+    assertContains(
+      rendered,
+      """
+          |    /// <remarks>
+          |    /// skipped &lt;init&gt; &amp; &lt;clinit&gt;
+          |    /// </remarks>
+          |    public class Sensor : IDisposable, INugetHandle
+      """.trimMargin(),
+    )
+  }
+
+  @Test
+  fun `a class without remarks renders no doc comment`() {
+    val cls = CirClass(
+      name = "Sensor",
+      libraryName = "iot",
+      nativePrefix = "sensor",
+      constructor = null,
+      properties = emptyList(),
+      methods = emptyList(),
+    )
+
+    val rendered: String = render(cls)
+
+    assertFalse(rendered.contains("///"), "expected no doc comment; got: $rendered")
+    assertEquals(rendered, render(cls.copy(remarks = null)))
+  }
+
   @Test
   fun `class implementing interfaces lists them before its disposables`() {
     val cls = CirClass(

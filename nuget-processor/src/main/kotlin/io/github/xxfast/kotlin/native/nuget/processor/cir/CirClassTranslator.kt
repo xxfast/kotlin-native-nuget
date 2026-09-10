@@ -136,13 +136,17 @@ private fun KSClassDeclaration.hasPublicConstructor(): Boolean =
  * planner's own verdicts, including the legacy-route deferrals `droppedCallables` filters out.
  * A class whose constructors never reached the planner at all (no skipped entry, no plan) still
  * warns, naming the count instead.
+ *
+ * Returns that detail string so the class's `<remarks>` doc comment (ADR-064 amendment,
+ * 2026-09-10) names the same constructors and the same reasons as the build log, off one catalog
+ * query. Two queries would be two chances to drift.
  */
 private fun warnNoPublicConstructor(
   cls: KSClassDeclaration,
   name: String,
   callableCatalog: ForwardCallablePlanCatalog,
   logger: KSPLogger,
-) {
+): String {
   val skipped: List<ForwardCallableCatalogEntry.Skipped> =
     callableCatalog.skippedConstructors(cls.qualifiedName?.asString() ?: name)
   val declared: Int = cls.getConstructors().count { it.getVisibility() == Visibility.PUBLIC }
@@ -168,7 +172,19 @@ private fun warnNoPublicConstructor(
     ),
     logger,
   )
+  return detail
 }
+
+/**
+ * The consumer-facing half of [ForwardDiagnosticKind.WARNING_NO_PUBLIC_CONSTRUCTOR]: what a C#
+ * developer reads in IntelliSense on a class only Kotlin can hand them. The diagnostic's own hint
+ * ("expose one, or change the constructor parameters") is author-facing and useless downstream,
+ * but [detail]'s reason codes stay in: they are the search key back to the Gradle log and to the
+ * ADR-064 catalogue.
+ */
+private fun noPublicConstructorRemark(name: String, detail: String): String =
+  "Cannot be constructed from C#: every Kotlin constructor of $name was skipped by the bridge " +
+      "($detail). Instances come from Kotlin factories that return this type."
 
 internal fun translateClass(
   cls: KSClassDeclaration,
@@ -241,8 +257,12 @@ internal fun translateClass(
   // ROADMAP Phase 3: the class is kept (a Kotlin factory returning it still hands C# a usable
   // instance) but nothing can construct it from C#, and for a legacy-route deferral -- a sealed
   // or generic parameter -- that outcome had no diagnostic anywhere.
-  if (!isAbstract && cirConstructors.isEmpty() && cls.hasPublicConstructor()) {
-    warnNoPublicConstructor(cls, name, callableCatalog, logger)
+  val noPublicConstructor: Boolean =
+    !isAbstract && cirConstructors.isEmpty() && cls.hasPublicConstructor()
+  val remarks: String? = if (noPublicConstructor) {
+    noPublicConstructorRemark(name, warnNoPublicConstructor(cls, name, callableCatalog, logger))
+  } else {
+    null
   }
 
   // C has no overloading and C# cannot declare two constructors with identical parameter
@@ -663,6 +683,7 @@ internal fun translateClass(
             prop.type.resolve().expandAliases().declaration.qualifiedName?.asString()
           qualified in FLOW_TYPES || qualified in STATE_FLOW_TYPES
         },
+    remarks = remarks,
   )
 }
 

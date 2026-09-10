@@ -70,6 +70,11 @@ data class CirClass(
   val isSealed: Boolean = false,
   val companionMembers: List<CirMember> = emptyList(),
   val hasSuspendMethods: Boolean = false,
+  // ADR-064 amendment (2026-09-10): plain-text prose for a `<remarks>` doc comment on the class,
+  // set only when WARNING_NO_PUBLIC_CONSTRUCTOR fires, off the same detail string the diagnostic
+  // uses. Text, not markup: `renderRemarks` owns the XML escaping, because the detail names
+  // Kotlin constructors as `<init>`.
+  val remarks: String? = null,
 ) : CirDeclaration
 
 data class CirValueClass(

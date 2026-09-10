@@ -1023,3 +1023,67 @@ refactor makes each a one-arm change. The same is true of the position and nesti
 - `NugetDiagnostics.json` message text changes only for `SKIPPED_UNEXPORTED_DEPENDENCY_TYPE` records
   minted from an `exclude(...)`. No C# output changes, and no fixture produces one today, so the
   sample library's diagnostics file is byte-identical.
+
+## Amendment (2026-09-10): the unconstructible class says so in the generated C#, not just the log
+
+Judgement: an **amendment**, not a new ADR. It lifts the deferral the 2026-09-07 "a class with no
+reachable constructor stays, and says so" amendment recorded under its own "Alternatives
+considered", and closes the ROADMAP Phase 3 item that deferral created. One nullable field on
+`CirClass`, one renderer helper, one call site. Status stays Accepted.
+
+### The gap
+
+`WARNING_NO_PUBLIC_CONSTRUCTOR` reaches the library author's Gradle log and `NugetDiagnostics.json`.
+It reaches the consumer nowhere. A C# developer opens `Issue56Failure`, sees a public class whose
+only constructor is `internal`, and gets no explanation from IntelliSense, from the assembly, or
+from the generated source. The 2026-09-07 amendment deferred the fix on one objection, "new renderer
+machinery", which was accurate: nothing in CIR carried a doc comment and no renderer escaped
+anything.
+
+### Decision
+
+**`CirClass.remarks: String?`, set only when the warning fires.** Plain prose, not markup, defaulted
+to null so the ADR-040 interface backing wrapper (`translateInterfaceBackingClass`, which never
+warns) and every hand-built test fixture keep their shipped shape.
+
+**One catalog query feeds both halves.** `warnNoPublicConstructor` now returns the `detail` string it
+already computed (`<init>: NULLABLE`, off `skippedConstructors(owner)`) and `translateClass` wraps it
+in `noPublicConstructorRemark(name, detail)`. The log and the tooltip cannot name different
+constructors or different reasons, because there is only one string. The wording differs from the
+diagnostic's on purpose: the diagnostic's hint ("expose one, or change the constructor parameters")
+is an instruction to the library author, which a consumer cannot act on. The reason codes stay in
+both, since they are the search key from a tooltip back to the build log and to this ADR's
+catalogue.
+
+**Escaping is the renderer's job, in one place.** New `cir/CirDocRenderer.kt`, whose `renderRemarks`
+escapes `&`, `<`, `>` (in that order; `&` last would double-escape) and prints the three-line block
+at the class's indent, called immediately above the class line in `renderClass`. This is not
+cosmetic: the detail names Kotlin constructors as `<init>`, and an unescaped `/// <init>` is
+malformed XML doc. ADR-073/076/103/106 each promise a marshalling caveat "in the generated XML
+docs"; they are further customers of this helper, not of a copy of it.
+
+**`GeneratedBindingsCheck` now compiles with `GenerateDocumentationFile` on** (and `NoWarn CS1591`,
+because every other generated public member has no doc comment by design). Without `/doc` the
+compiler parses doc comments and reports none of CS1570/CS1587/CS1591, so nothing in this repository
+would have caught a malformed `///` before a consumer's build did. With it, the escaping claim above
+is executed on every `scripts/verify.sh` and a bad comment is an error under the project's existing
+`TreatWarningsAsErrors`.
+
+Out of scope, unchanged: `<summary>`, and general KDoc-to-XML-doc translation. That is still its own
+ROADMAP item, and `remarks: String?` is shaped to widen into it rather than block it.
+
+### Testing seam
+
+No new fixture: `Litter`, `Issue56Failure` (`NULLABLE`) and
+`GroomingPlan` (`OPT_IN_MARKER`) already carry the shape. `Tier1NoPublicConstructorWarningTest` gains
+a structural pin that the escaped block sits directly above `public class Dial` and names the same
+reason as the warning, plus a control that `Meter` (constructible) and `Gauge` (abstract) carry no
+remark. `CirOrdinaryRendererTest` pins the escaping and the null case independently of the
+translator. No xunit test: reflection cannot see a doc comment, so the honest consumer-side proof is
+`GeneratedBindingsCheck` compiling with `/doc`.
+
+### Consequences of the amendment
+
+- Three fixture classes gain three lines each in `Interop.cs`. No ABI, export, or handle change.
+- A malformed generated doc comment is now a red build here instead of a consumer complaint.
+- The next `<remarks>` customer adds a field and a `renderRemarks` call, not an escaper.

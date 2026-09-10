@@ -203,6 +203,7 @@ internal fun StringBuilder.renderClass(cls: CirClass) {
     " : " + (cls.interfaces + disposables + "INugetHandle").distinct().joinToString(", ")
   }
 
+  renderRemarks(cls.remarks)
   appendLine("    public $sealedModifier${abstract}class ${cls.name}$implements")
   appendLine("    {")
 

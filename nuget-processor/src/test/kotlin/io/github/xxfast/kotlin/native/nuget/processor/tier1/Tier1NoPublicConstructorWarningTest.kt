@@ -151,4 +151,57 @@ class Tier1NoPublicConstructorWarningTest {
           "${result.generatedCSharp.lines().filter { it.contains("make") }}",
     )
   }
+
+  /**
+   * ADR-064 amendment (2026-09-10): the warning reaches the Gradle log, the `<remarks>` reaches the
+   * consumer's IntelliSense. Both name the same skipped constructors from the same detail string,
+   * and the block sits directly above the class line so the compiler attaches it to the type.
+   */
+  @Test
+  fun `an unconstructible class carries a remarks doc comment naming the skipped constructor`() {
+    val result = Tier1Harness.run(source)
+    val cs: List<String> = result.generatedCSharp.lines()
+
+    val remark: Int = cs.indexOfFirst {
+      it.contains("Cannot be constructed from C#") && it.contains("Dial")
+    }
+    assertTrue(
+      remark >= 0,
+      "expected a remarks line for Dial; got: ${cs.filter { it.contains("Dial") }}",
+    )
+    assertEquals("    /// <remarks>", cs[remark - 1])
+    assertEquals("    /// </remarks>", cs[remark + 1])
+    assertTrue(
+      cs[remark + 2].startsWith("    public class Dial"),
+      "expected the remarks to sit directly above the class line; got: ${cs[remark + 2]}",
+    )
+    assertTrue(
+      cs[remark].contains("&lt;init&gt;: UNDECLARED_ENUM"),
+      "expected an XML-escaped constructor name; got: ${cs[remark]}",
+    )
+    assertFalse(
+      cs[remark].contains("<init>"),
+      "a raw <init> is malformed XML doc (CS1570); got: ${cs[remark]}",
+    )
+    val dial: String = warnings(result).single { it.contains("Dial") }
+    assertTrue(
+      dial.contains("<init>: UNDECLARED_ENUM"),
+      "expected the log and the tooltip to name the same reasons; got: $dial",
+    )
+  }
+
+  @Test
+  fun `a constructible class and an abstract class carry no remarks`() {
+    val result = Tier1Harness.run(source)
+    val cs: String = result.generatedCSharp
+
+    assertFalse(
+      cs.contains("Cannot be constructed from C#: every Kotlin constructor of Meter"),
+      "expected no remarks on a constructible class",
+    )
+    assertFalse(
+      cs.contains("Cannot be constructed from C#: every Kotlin constructor of Gauge"),
+      "expected no remarks on an abstract class",
+    )
+  }
 }
