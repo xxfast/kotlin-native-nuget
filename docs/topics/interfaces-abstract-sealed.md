@@ -16,7 +16,7 @@ Kotlin's three flavours of inheritance each get a distinct C# shape: `interface`
 | property whose own type is a sealed class (bare, nullable, or a collection component, read-only or `var`) | the sealed base | materialised through `<Base>.FromHandle(...)`, see [Sealed types as property types](#sealed-types-as-property-types), [ADR-105](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/105-sealed-property-position.md) |
 | a class, object, or companion method returning a sealed base, scalar or as a `List`/`Map`/`Set` component | the sealed base (or `IReadOnlyList<Base>`) | reads through the same `FromHandle` discriminator a top-level sealed return already used, see [A class method returning a sealed base](#a-class-method-returning-a-sealed-base), [ADR-009](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/009-sealed-class-mapping.md) |
 | a sealed type at a **parameter** position, bare, nullable, or as a collection component, including a constructor parameter | an ordinary handle argument (`shape._handle`, or boxed per element through `NugetMarshal.Wrap<T>` in a collection) | the same `sealedAsHandle()` rewrite the property planner uses applies to every declared parameter, so `Issue54Drawing`'s own four-parameter constructor now binds, see [A sealed type at a parameter position](#a-sealed-type-at-a-parameter-position), [ADR-105](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/105-sealed-property-position.md) |
-| an extension function's **receiver** typed as a sealed base or an eligible sealed interface | a genuine C# extension method on the base (`this Base receiver`) | `sealedAsHandle()` rewrites the receiver too, dereferenced Kotlin-side with `asStableRef<Base>().get()`; every arm inherits the method; an ineligible or out-of-scope sealed receiver still skips, named `SKIPPED_SEALED_POSITION`, see [Extensions: Sealed receivers](extensions.md#sealed-receivers), [ADR-105](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/105-sealed-property-position.md) |
+| an extension function's or property's **receiver** typed as a sealed base or an eligible sealed interface | a genuine C# extension method (`this Base receiver`) or static accessor | `sealedAsHandle()` rewrites the receiver too, dereferenced Kotlin-side with `asStableRef<Base>().get()`; every arm inherits the member; an ineligible or out-of-scope sealed receiver still skips, named `SKIPPED_SEALED_POSITION` for a function or `SKIPPED_UNSUPPORTED_PROPERTY` for a property, see [Extensions: Sealed receivers](extensions.md#sealed-receivers), [ADR-105](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/105-sealed-property-position.md) |
 | a sealed subclass declared nested inside its sealed base, used at a return, property, or parameter position | `Base.Sub` (enclosing scope kept) | see [A nested sealed subclass at a member position](#a-nested-sealed-subclass-at-a-member-position) |
 | an `interface` declared nested inside another class, used at a return, property, or parameter position | skipped named (`UNDECLARED_INTERFACE`) | see [Nested interfaces skip named](#nested-interfaces-skip-named) |
 | an exported base class's own declared `open val`/`open var`/`open fun` | `public virtual` property or method (both accessors, when a property has one of each) | so a subclass `override` compiles instead of `CS0506`; a concrete `open class`'s generated `Dispose()` renders `public virtual void Dispose()` for the same reason, see [A base class's own `open val`/`open var`/`open fun`](#a-base-class-s-own-open-val-open-var), [ADR-101](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/101-unexported-supertype-skip.md) |
@@ -1351,11 +1351,10 @@ Assert.Equal(2, Issue54Shapes.Count(new List<Issue54Shape> { oreo, mylo }));
 ```
 
 <note>
-    <p>An extension function whose <b>receiver</b> is a sealed base now binds too: the
-    <code>sealedAsHandle()</code> rewrite above extends to the receiver as well as every declared
-    parameter. See <a href="extensions.md#sealed-receivers">Extensions: Sealed receivers</a>. An
-    extension <b>property</b> with a sealed receiver is unaffected and still skips; see <a
-    href="https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md">ROADMAP.md</a>.</p>
+    <p>An extension function or extension property whose <b>receiver</b> is a sealed base now binds
+    too: the <code>sealedAsHandle()</code> rewrite above extends to the receiver as well as every
+    declared parameter. See <a href="extensions.md#sealed-receivers">Extensions: Sealed
+    receivers</a>.</p>
 </note>
 
 ## A class method returning a sealed base {id="a-class-method-returning-a-sealed-base"}

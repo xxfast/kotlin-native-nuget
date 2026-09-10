@@ -220,7 +220,12 @@ internal class ForwardPropertyPlanner(
 
   private fun extensionProperty(prop: KSPropertyDeclaration): ForwardPropertyPlan? {
     val receiver: KSType = prop.extensionReceiver?.resolve()?.expandAliases() ?: return null
-    val receiverType: BridgeType = classifier.classify(receiver)
+    // ADR-105 amendment: the extension *property* receiver gets the same sealed rewrite the
+    // extension *function* receiver already gets (`ForwardCallablePlanner.extensionEntry`). An
+    // eligible sealed base becomes a bare `ObjectHandle` before `supportedReceiver` looks, so it
+    // rides the existing handle arms of the emitter and the projection; an ineligible one stays a
+    // protocol and drops below exactly as before.
+    val receiverType: BridgeType = classifier.classify(receiver).sealedAsHandle()
     // ADR-075: a value class crosses the bridge as its own underlying value (ADR-014), the same
     // wire shape its own declared members already use (`ForwardCallablePlanner.valueClassEntries`).
     // The receiver admits every underlying `isPlannable` admits at an ordinary position (ADR-077's

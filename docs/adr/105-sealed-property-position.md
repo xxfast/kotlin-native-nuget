@@ -543,16 +543,39 @@ An eligible sealed *interface* receiver binds the same way. An ineligible or out
 receiver carries no `sealedHandle`, still skips `SEALED_POSITION`, and that hint's "has no generated
 discriminator" wording is now true for every receiver it names, which it was not before.
 
-Still deferred, each its own item: an extension **property** on a sealed receiver
-(`ForwardPropertyPlanner` classifies its receiver without the rewrite and `supportedReceiver` wants
-an `ObjectHandle`), and a **nullable** receiver of any handle type, which plans but then renders a
-C# call passing the wrapper where the extern wants an `IntPtr`, pre-existing and unrelated to sealed
-types.
+Still deferred as its own item: a **nullable** receiver of any handle type, which plans but then
+renders a C# call passing the wrapper where the extern wants an `IntPtr`, pre-existing and unrelated
+to sealed types. The extension **property** on a sealed receiver, deferred here, is closed by the
+amendment below.
 
 Fixtures: `Issue54Sample.kt` (`Issue54Shape.footprint()` and `Issue54Shape.covers(other)`);
 consumer `IntegrationTests/Issue54Tests.cs` (three facts, one of them calling the extension on the
 concrete arm); `Tier1SealedReceiverExtensionTest.kt`, whose control is an ineligible sealed
 interface receiver that still skips.
+
+## Amendment (2026-09-11): an extension property's sealed receiver binds too
+
+The property half of the deferral above is withdrawn. `ForwardPropertyPlanner.extensionProperty`
+now classifies its receiver through `sealedAsHandle()`, the one line the function route already
+had, so `val Issue54Shape.area: Double` plans as an ordinary `ObjectHandle` receiver: Kotlin exports
+`@CName("issue54shape_get_area")` reading the base back with
+`receiver.asStableRef<Issue54Shape>().get().area`, and C# renders
+`public static double GetArea(this Issue54Shape receiver)` into the same `Issue54ShapeExtensions`
+class as `Footprint()`, passing `receiver._handle`. Nothing else moved: `supportedReceiver`, the
+emitter and the CIR projection see a bare `ObjectHandle` because the rewrite happens before them,
+and the ADR-013 accessor shape is unchanged.
+
+Correction to the deferral's diagnostic name. An ineligible or out-of-scope sealed receiver on an
+extension *property* does **not** skip `SKIPPED_SEALED_POSITION`; that kind belongs to the callable
+route. It carries no `sealedHandle`, stays a `SpecializedProtocol`, fails `supportedReceiver`, and
+is reported as `SKIPPED_UNSUPPORTED_PROPERTY` with "its extension receiver type sealed helper
+<fqn> is not a supported extension-property receiver". Renaming it to match the function case needs
+a `ForwardPlanSkipReason` on the property route and is filed separately; the Tier 1 control pins the
+current name so a later rename has to be deliberate.
+
+Fixtures: `Issue54Sample.kt` (`val Issue54Shape.area`); consumer `IntegrationTests/Issue54Tests.cs`
+(two facts, one on the payload arm and one on the payload-free arm); the two added cells in
+`Tier1SealedReceiverExtensionTest.kt`, the second of which is the ineligible-receiver control.
 
 ## Prior art (to the depth that changes the decision)
 

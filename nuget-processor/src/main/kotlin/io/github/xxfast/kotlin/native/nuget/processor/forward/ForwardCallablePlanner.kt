@@ -3155,8 +3155,9 @@ internal class ForwardCallablePlanner(
  *
  * Applied at a *property* type ([ForwardPropertyPlanner]) and, at a callable, to both its *result*
  * and every declared *parameter* ([ForwardCallablePlanner.planOrSkip], ADR-105 scope (d)), and at
- * an extension *receiver* (`ForwardCallablePlanner.extensionEntry`, the only route whose receiver
- * can be a sealed base rather than a bare handle).
+ * an extension *receiver*, at both routes that can hand one a sealed base rather than a bare
+ * handle: a function's (`ForwardCallablePlanner.extensionEntry`) and a property's
+ * (`ForwardPropertyPlanner.extensionProperty`).
  *
  * Recurses through [BridgeType.Nullable], the [BridgeType.Collection] components, and
  * [BridgeType.ValueClass.underlying]: a value class over a sealed type

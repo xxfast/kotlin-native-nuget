@@ -174,8 +174,9 @@ sealed **interface** component still has no C# spelling to bind against, because
 named legacy route, so warning would tell a consumer a working property had vanished.
 
 The same kind also fires when an extension property's *receiver* type, not its declared type, is
-what the planner can't wire. `String`, a primitive, `ObjectHandle` classes, and a value class over
-any of the four underlyings admitted at ordinary positions (`String`, a primitive, an enum, or
+what the planner can't wire. `String`, a primitive, `ObjectHandle` classes, an eligible sealed base
+(see [Extensions: Sealed receivers](extensions.md#sealed-receivers)), and a value class over any of
+the four underlyings admitted at ordinary positions (`String`, a primitive, an enum, or
 `ObjectHandle`) are the supported receivers; anything else warns and the property is dropped
 entirely, naming the receiver rather than the property's own (usually fine) type:
 

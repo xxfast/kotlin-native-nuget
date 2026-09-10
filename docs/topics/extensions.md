@@ -5,7 +5,7 @@ Kotlin extension functions and properties don't have a native C# analog (C# has 
 | Kotlin | C# | Notes |
 |---|---|---|
 | extension function | static method | true C# extension method (`this` parameter); receiver may also be an eligible sealed base, see [Sealed receivers](#sealed-receivers) below |
-| extension property | static accessor | see [ADR-013](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/013-extension-property-mapping.md) |
+| extension property | static accessor | receiver may also be an eligible sealed base, see [Sealed receivers](#sealed-receivers) below; see [ADR-013](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/013-extension-property-mapping.md) |
 | extension function return (object, `T?`, `List`/`Map`/`Set`, enum, `Char`, `String?`, `Int?`, …) | matching C# return type | same cascade as a class-method return via the shared plan, see Return marshalling below and [Classes and objects](classes-and-objects.md) |
 | two or more same-named extension functions | one C# overload set | numbered native export/extern name, unnumbered public name, counter scoped per (package, name), receiver-agnostic; see [Method overloads](#method-overloads) below ([ADR-095](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/095-static-route-overloads.md)) |
 | extension function with a trailing run of defaulted parameters | omitting overload per suffix length | receiver is not a plan parameter and always survives truncation; see Method default parameters below ([ADR-096](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/096-function-default-parameters.md)) |
@@ -241,13 +241,15 @@ public static partial class TemperamentExtensions
 
 ## Sealed receivers
 
-An extension function's receiver may also be an eligible sealed base (a `sealed class`, or an
-eligible `sealed interface`, see [Sealed interfaces](interfaces-abstract-sealed.md#sealed-interfaces)).
-The same `sealedAsHandle()` rewrite the parameter-position route uses applies to the receiver too, so
-the extension binds on the abstract base and every arm inherits it. The Kotlin export takes the base
-handle and dereferences it with `asStableRef<Base>().get()`, the same idiom the sealed discriminator's
-own `_get_type` export uses. An ineligible or out-of-scope sealed receiver still skips, named
-`SKIPPED_SEALED_POSITION`
+An extension function's or extension property's receiver may also be an eligible sealed base (a
+`sealed class`, or an eligible `sealed interface`, see
+[Sealed interfaces](interfaces-abstract-sealed.md#sealed-interfaces)). The same `sealedAsHandle()`
+rewrite the parameter-position route uses applies to the receiver too, so the extension binds on the
+abstract base and every arm inherits it. The Kotlin export takes the base handle and dereferences it
+with `asStableRef<Base>().get()`, the same idiom the sealed discriminator's own `_get_type` export
+uses. An ineligible or out-of-scope sealed receiver still skips: an extension **function** is named
+`SKIPPED_SEALED_POSITION`, an extension **property** is named `SKIPPED_UNSUPPORTED_PROPERTY` (the
+property planner records it as an unsupported receiver rather than a dedicated sealed-position reason)
 ([ADR-105](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/105-sealed-property-position.md)).
 
 ### Kotlin {id="sealed-receiver-kotlin"}
@@ -264,6 +266,12 @@ fun Issue54Shape.covers(other: Issue54Shape): Boolean = when (this) {
   Issue54Shape.Empty -> other == Issue54Shape.Empty
   is Issue54Shape.Circle -> other !is Issue54Shape.Circle || other.radius <= radius
 }
+
+val Issue54Shape.area: Double
+  get() = when (this) {
+    Issue54Shape.Empty -> 0.0
+    is Issue54Shape.Circle -> kotlin.math.PI * radius * radius
+  }
 ```
 
 ### Generated C# {id="sealed-receiver-generated-c"}
@@ -299,6 +307,19 @@ public static partial class Issue54ShapeExtensions
         }
         return nativeResult;
     }
+
+    [DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "issue54shape_get_area")]
+    private static extern double Native_Issue54shapeGetArea(IntPtr receiver, out IntPtr error);
+
+    public static double GetArea(this global::TestLibrary.Issue54.Issue54Shape receiver)
+    {
+        double nativeResult = Native_Issue54shapeGetArea(receiver._handle, out IntPtr error);
+        if (error != IntPtr.Zero)
+        {
+            throw NugetErrorNative.BuildException(error);
+        }
+        return nativeResult;
+    }
 }
 ```
 
@@ -317,14 +338,28 @@ public void Footprint_SealedReceiverExtension_BindsOnThePayloadArm()
     Assert.Equal("circle r=7.5", shape.Footprint());
     Assert.Equal("circle r=7.5", Assert.IsType<Issue54Shape.Circle>(shape).Footprint());
 }
-```
 
-<note>
-    <p>An extension <b>property</b> whose receiver is a sealed base still skips, named
-    <code>SKIPPED_SEALED_POSITION</code>: the property planner's receiver classification never
-    runs the same rewrite. See <a
-    href="https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md">ROADMAP.md</a>.</p>
-</note>
+[Fact]
+public void Area_SealedReceiverExtensionProperty_BindsOnThePayloadArm()
+{
+    using Issue54Drawing drawing = Issue54Sample.CurledCats();
+
+    using Issue54Shape shape = drawing.Shape;
+
+    Assert.Equal(Math.PI * 7.5 * 7.5, shape.GetArea(), 9);
+    Assert.Equal(Math.PI * 7.5 * 7.5, Assert.IsType<Issue54Shape.Circle>(shape).GetArea(), 9);
+}
+
+[Fact]
+public void Area_SealedReceiverExtensionProperty_BindsOnThePayloadFreeArm()
+{
+    using Issue54Drawing drawing = Issue54Sample.CurledCats();
+
+    using Issue54Shape shape = drawing.Current;
+
+    Assert.Equal(0.0, shape.GetArea());
+}
+```
 
 ## Method overloads
 
@@ -489,9 +524,10 @@ public void PawKnead_OmittingEveryParameter_KeepsTheReceiverAndUsesBothDefaults(
 ## Limitations
 
 An extension property only binds when its *receiver* is `String`, a primitive, a class in the
-export set (an `ObjectHandle`), or a value class over any of those four underlyings. A receiver
-outside that set (a generic class, an interface, an unexported type) is warned about and the whole
-property is dropped, naming the receiver rather than the property's own type:
+export set (an `ObjectHandle`), an eligible sealed base (see [Sealed receivers](#sealed-receivers)
+above), or a value class over any of those underlyings. A receiver outside that set (a generic
+class, an interface, an unexported type) is warned about and the whole property is dropped, naming
+the receiver rather than the property's own type:
 
 ```
 [nuget:SKIPPED_UNSUPPORTED_PROPERTY] Skipping tier1.skipreceiver.Box.label: its extension receiver
