@@ -37,6 +37,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardPublicCshar
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardSuperClass
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isForwardLegacyAsyncRoute
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isForwardMemberOf
+import io.github.xxfast.kotlin.native.nuget.processor.forward.isOpenForOverride
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyCollectionRead
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyFlowElementCollection
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyFlowElementReadArgument
@@ -46,17 +47,6 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyRefusedRetur
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyReturnShape
 import io.github.xxfast.kotlin.native.nuget.processor.forward.planFor
 import io.github.xxfast.kotlin.native.nuget.processor.toCName
-
-/**
- * ADR-040 fixture gap: a Kotlin `override` member with no CLASS supertype (so it implements an
- * *interface* member, not a class one) stays open by Kotlin default unless explicitly `final` —
- * `Animal.fetch(item)` implementing `Pet.fetch`, further overridden by `Cat.fetch`, is exactly
- * this shape. C# requires the base declaration to say `virtual` for that further `override` to
- * compile (CS0506 otherwise); this was never needed before this feature because no prior fixture
- * combined an interface-implementing class with a subclass re-overriding the same member.
- */
-private fun Set<Modifier>.isOpenInterfaceImplementation(superClass: String?): Boolean =
-  superClass == null && contains(Modifier.OVERRIDE) && !contains(Modifier.FINAL)
 
 /** Which half of issue #42 a dropped supertype is: the two lose genuinely different things, so
  *  they get genuinely different messages (an interface carries nothing C# could have called; a
@@ -195,6 +185,7 @@ internal fun translateClass(
   val prefix: String = name.lowercase()
   val isDataClass: Boolean = cls.modifiers.contains(Modifier.DATA)
   val isAbstract: Boolean = cls.modifiers.contains(Modifier.ABSTRACT)
+  val isOpen: Boolean = !isAbstract && cls.modifiers.contains(Modifier.OPEN)
 
   // The shared has-superclass predicate (`ForwardClassMembership.kt`), the same instance the two
   // planners filter their members with, so a member can never be kept here and skipped there.
@@ -292,10 +283,13 @@ internal fun translateClass(
       val planned = callableCatalog.propertyFor("${cls.qualifiedName?.asString() ?: name}.$propName")
       if (planned != null) {
         tracker.trackProperty(planned)
+        val isOverride: Boolean = superClass != null && prop.modifiers.contains(Modifier.OVERRIDE)
         return@mapNotNull ForwardCirPropertyProjection.classProperty(
           planned,
-          isOverride = superClass != null && prop.modifiers.contains(Modifier.OVERRIDE),
-          isVirtual = prop.modifiers.isOpenInterfaceImplementation(superClass),
+          isOverride = isOverride,
+          // ADR-101 amendment (2026-09-10): everything Kotlin left overridable and C# is not
+          // already spelling `override`. A declared `open val`/`open var` reaches `virtual` here.
+          isVirtual = !isOverride && prop.modifiers.isOpenForOverride(),
         )
       }
       // Issue #121: the planner declined, but a decline is not always an invitation. A marked
@@ -654,6 +648,7 @@ internal fun translateClass(
     superClass = superClass,
     isDataClass = isDataClass,
     isAbstract = isAbstract,
+    isOpen = isOpen,
     companionMembers = companionMembers + asyncMembers + flowRouteMembers,
     hasSuspendMethods = cls.getAllFunctions().any { it.modifiers.contains(Modifier.SUSPEND) } ||
         flowMethods.isNotEmpty() ||

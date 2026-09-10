@@ -428,7 +428,7 @@ internal class ForwardPropertyPlanner(
    * Kotlin lets an override widen `val` to `var`; C# does not. The base class renders whatever
    * accessors *it* has, so a get-only base property plus a derived `{ get; set; }` override is
    * `CS0546`. Only a base *class* member counts: a class implementing an interface member renders
-   * `virtual`, not `override` (`isOpenInterfaceImplementation`), and a `virtual` declaration is
+   * `virtual`, not `override` (`isOpenForOverride`), and a `virtual` declaration is
    * free to carry a setter the interface never asked for.
    *
    * [KSPropertyDeclaration.findOverridee] is asked first: for `Cat.vibe` over `Animal.vibe` over

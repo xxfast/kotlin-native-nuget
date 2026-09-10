@@ -162,11 +162,11 @@ abstract base inheriting the interface `val` directly); that fallback shape is T
 fixture-covered end to end. The mirror direction, a class narrowing a base's `var` to `val`, is already a
 Kotlin compile error and needs no handling here.
 
-Not fixed by this change, and not collection-specific: a base **`open val`** never renders `virtual` in C#
-(`Modifier.OPEN` is not read by the renderer), so any `override` of it, collection or not, is `CS0506`; and
-an unimplemented base **`abstract val`** has no abstract-property path in the renderer at all, so a subclass
-`override` of it is `CS0115`. Both are named on [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md)
-Phase 3, discovered alongside this fix.
+Not fixed by this change, and not collection-specific: an unimplemented base **`abstract val`** has no
+abstract-property path in the renderer at all, so a subclass `override` of it is `CS0115`. Named on
+[ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md) Phase 3, discovered
+alongside this fix. The base **`open val`** half of this paragraph was fixed on 2026-09-10 (`Modifier.OPEN`
+is now read, so an `override` of it compiles); see ADR-101's amendment of that date.
 
 ### Question D — is a nullable collection setter (`var notes: List<String>?`) in v1?
 

@@ -436,3 +436,39 @@ asserts `export_api_greet` / `export_api_get_label` are generated from a
   since nothing today distinguishes them cheaply at the hint site.
 - Not changed: the ADR-066 closure, `isForwardMemberOf`/`isForwardPlannableMemberOf`, this ADR's
   original interface gate, the ABI.
+
+## Amendment (2026-09-10): a declared `open` member renders `virtual`
+
+The 2026-09-05 amendment above says "a non-final overriding member renders `public virtual`, never
+`override`". That was the *only* route to `virtual`: the predicate read `OVERRIDE && !FINAL` and
+never `Modifier.OPEN`, so an ordinary exported base class's own `open val` / `open var` rendered
+with no modifier at all, and every subclass `override` of it was CS0506. `Animal.vibe` (an
+`override` of an interface member) and `Issue42Derived` (an `override` of a dropped base's member)
+both take the old arm, which is why no fixture ever hit it.
+
+The rule is now `!override && (open || (override && !final))`, in one shared predicate,
+`isOpenForOverride()` in `ForwardClassMembership.kt`, applied at the property projection site in
+`CirClassTranslator.kt`. `abstract` is excluded: C# spells that `abstract`, never `virtual`
+(CS0503 on the pair), and it keeps its own path.
+
+The same change makes a concrete `open class` render `public virtual void Dispose()`. A derived
+class always spells its inherited `Dispose` `override`, so the base has to be overridable; only an
+abstract base was, because it renders `abstract void Dispose();`. `CirClass.isOpen` (a non-abstract
+Kotlin `open class`, read from `Modifier.OPEN` in `translateClass`) carries it into `renderDispose`.
+Abstract and final classes are byte-identical to before. `Bed` is the first concrete exported base
+with an exported subclass, which is why this surfaced now and not in issue #42.
+
+Fixture: `test/bed/Bed.kt`, `open class Bed` with `open val softness`, `open var occupant` and a
+final `val brand`, overridden by `class Hammock : Bed()`. Pinned by
+`IntegrationTests/OpenMemberOverrideTests.cs` (the compile is the CS0506 proof; reflection asserts
+the virtual/final split on `Bed` and `GetBaseDefinition()` on `Hammock`) and
+`Tier1OpenMemberOverrideTest.kt`, which adds the row no fixture covers: an `open val` declared on a
+class that itself has an exported base.
+
+**Not fixed here, split out:** an `open fun` has the identical gap, in the planner rather than the
+translator (`ForwardCallablePlanner.kt`'s `entryFor` computes `isVirtual` the old way). **Verified**
+against generated output: `open class Kennel { open fun describe() }` with `class Crate : Kennel()`
+renders `public string Describe()` on `Kennel` and `public override string Describe()` on `Crate`.
+`Bed` therefore carries no overridden `open fun`; its `describe()` is final on purpose, and reads
+both open properties so Kotlin's own dispatch through `Hammock` stays observable. Tracked on
+`ROADMAP.md`.

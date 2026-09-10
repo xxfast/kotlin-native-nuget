@@ -58,6 +58,12 @@ data class CirClass(
   val hasInternalHandleConstructor: Boolean = true,
   val isDataClass: Boolean = false,
   val isAbstract: Boolean = false,
+  // ADR-101 amendment (2026-09-10): a non-abstract Kotlin `open class`, i.e. one an exported
+  // subclass may extend. Only `Dispose()` reads it, to render `virtual` instead of nothing: a
+  // subclass always spells its inherited `Dispose` `override`, which is CS0506 against a
+  // non-virtual base. An abstract base already renders `abstract void Dispose();` and a final
+  // class has nothing that can override it, so both keep their shipped spelling.
+  val isOpen: Boolean = false,
   // ADR-040: true for the generated interface backing wrapper (`sealed class Pet : IPet`) — no
   // public constructor, and the `sealed` modifier communicates that consumers should implement
   // `IPet` rather than subclass this handle wrapper.

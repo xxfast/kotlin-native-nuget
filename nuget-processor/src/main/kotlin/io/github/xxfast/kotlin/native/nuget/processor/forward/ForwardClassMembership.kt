@@ -223,3 +223,19 @@ private fun KSDeclaration.hasImplementation(): Boolean = when (this) {
   is KSPropertyDeclaration -> !isAbstract()
   else -> true
 }
+
+/**
+ * Kotlin's overridability, as C# `virtual` has to mirror it: an explicit `open`, or an `override`
+ * left open (Kotlin's default for an override).
+ *
+ * ADR-040 only ever needed the second arm: `Animal.fetch(item)` implementing `Pet.fetch` and
+ * further overridden by `Cat.fetch` carries `OVERRIDE` and not `FINAL`, and C# needs `virtual` on
+ * that declaration for `Cat`'s `override` to compile (CS0506 otherwise). ADR-101's 2026-09-10
+ * amendment adds the first: a base class's *own* `open val` / `open var` is overridable too, and
+ * had no route to `virtual` at all.
+ *
+ * An `abstract` member is open as well, but C# spells that `abstract`, never `virtual` (CS0503 on
+ * the pair), so it is excluded here and rendered by the abstract path instead.
+ */
+internal fun Set<Modifier>.isOpenForOverride(): Boolean = !contains(Modifier.ABSTRACT) &&
+    (contains(Modifier.OPEN) || (contains(Modifier.OVERRIDE) && !contains(Modifier.FINAL)))

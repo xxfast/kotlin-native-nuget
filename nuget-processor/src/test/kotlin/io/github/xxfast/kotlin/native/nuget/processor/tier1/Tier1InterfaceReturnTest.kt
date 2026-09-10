@@ -253,7 +253,7 @@ class Tier1InterfaceReturnTest {
   }
 
   /**
-   * `CirClassTranslator.isOpenInterfaceImplementation`: a class implementing an interface member
+   * `ForwardClassMembership.isOpenForOverride`: a class implementing an interface member
    * (no CLASS supertype) is open by Kotlin default unless `final`, so C# needs `virtual` on the
    * base declaration for a further subclass `override` to compile (`CS0506` otherwise). Covers
    * both the property and method cases in one fixture, mirroring `Animal`/`Cat`'s real shape in

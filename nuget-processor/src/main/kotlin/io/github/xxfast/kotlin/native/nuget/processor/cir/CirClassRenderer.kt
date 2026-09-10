@@ -290,6 +290,7 @@ internal fun StringBuilder.renderClass(cls: CirClass) {
   renderDispose(
     nativeImport = cls.disposeNativeImport(),
     isAbstract = cls.isAbstract,
+    isOpen = cls.isOpen,
     hasSuperClass = cls.superClass != null,
     hasSuspendMethods = cls.hasSuspendMethods,
   )
@@ -647,11 +648,16 @@ internal fun StringBuilder.renderGetOrCreateScope() {
 internal fun StringBuilder.renderDispose(
   nativeImport: CirDllImport?,
   isAbstract: Boolean = false,
+  isOpen: Boolean = false,
   hasSuperClass: Boolean = false,
   hasSuspendMethods: Boolean = false,
 ) {
   val abstract: String = if (isAbstract) "abstract " else ""
-  val override: String = if (hasSuperClass) "override " else ""
+  // ADR-101 amendment (2026-09-10): a derived class always spells its Dispose `override`, so a
+  // base has to be overridable or the subclass is CS0506. An abstract base already is (it renders
+  // `abstract void Dispose();`); a concrete `open class` needs `virtual` said out loud. A final
+  // class keeps the shipped bare `public void Dispose()`.
+  val override: String = if (hasSuperClass) "override " else if (isOpen) "virtual " else ""
 
   if (isAbstract) {
     appendLine("        public ${abstract}void Dispose();")
