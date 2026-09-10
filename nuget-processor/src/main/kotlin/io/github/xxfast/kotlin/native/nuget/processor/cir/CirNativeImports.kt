@@ -7,6 +7,7 @@ internal fun CirClass.ordinaryNativeImports(): List<CirDllImport> = buildList {
   }
 
   properties
+    .filter { property -> property.hasNativeImport }
     .filterNot { property -> property.usesLegacyNativeImport() }
     .forEach { property -> addAll(propertyNativeImports(property)) }
 

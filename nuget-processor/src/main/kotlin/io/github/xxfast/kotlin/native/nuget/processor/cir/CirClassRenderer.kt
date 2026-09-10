@@ -245,7 +245,12 @@ internal fun StringBuilder.renderClass(cls: CirClass) {
   }
 
   for (prop in cls.properties) {
-    if (prop.isFlow) {
+    if (!prop.hasNativeImport) {
+      // ADR-075 amendment (2026-09-11): a declaration-only abstract property (inherited from an
+      // exported interface, never implemented here) has no export to import. Rendered, not
+      // imported: the mirror of the abstract-method arm below.
+      renderProperty(prop)
+    } else if (prop.isFlow) {
       renderFlowPropertyNativeImports(cls.libraryName, cls.nativePrefix, prop)
       renderProperty(prop)
     } else if (prop.usesLegacyNativeImport()) {

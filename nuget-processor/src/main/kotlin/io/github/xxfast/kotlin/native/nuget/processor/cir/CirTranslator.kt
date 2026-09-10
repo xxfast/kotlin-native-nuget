@@ -367,7 +367,7 @@ internal fun translate(
       namespaceOf(cls.packageName.asString()),
       translateClass(
         cls, context.libraryName, tracker, exportedTypes, logger, callableCatalog, context,
-        classifier,
+        classifier, interfaceDeclarationCatalog,
       ),
     )
   }

@@ -218,7 +218,7 @@ internal fun KSDeclaration.isForwardMemberOf(
 /**
  * [isForwardMemberOf] narrowed to the members a *plan* can be built for: an inherited interface
  * member with no implementation has nothing to dispatch to, so it stays unplanned and reaches C#
- * through `CirClassTranslator`'s abstract-method path instead (an abstract C# method, which a
+ * through `CirClassTranslator`'s abstract path instead (an abstract C# method or property, which a
  * subclass can then `override`).
  *
  * Note the abstractness test is [KSFunctionDeclaration.isAbstract] / [KSPropertyDeclaration

@@ -199,6 +199,45 @@ private fun noPublicConstructorRemark(name: String, detail: String): String =
   "Cannot be constructed from C#: every Kotlin constructor of $name was skipped by the bridge " +
       "($detail). Instances come from Kotlin factories that return this type."
 
+/**
+ * ADR-075 amendment (2026-09-11): the C# declaration for a property an exported abstract class
+ * inherits from an exported interface and never implements, the property-side mirror of the
+ * `abstractMethods` walk in [translateClass].
+ *
+ * There is no plan and no Kotlin export: `isForwardPlannableMemberOf` keeps an unimplemented
+ * inherited member out of the planner, since a bridge getter would have nothing to dispatch to.
+ * The C# type is therefore read off [interfaceDeclarationCatalog], the same ADR-113 plan
+ * `translateInterface` spells `IFoo`'s member from, rather than hand-mapped here: a second
+ * spelling of one plan is what CS0738 is made of.
+ *
+ * Null when the declaring interface's own planner skipped the member (so `IFoo` does not declare
+ * it either) or the parent is not a class declaration. An unexported interface is out of scope:
+ * ADR-101 drops `: IFoo` from the base list, and there is no plan to spell the member from.
+ */
+private fun inheritedAbstractProperty(
+  prop: KSPropertyDeclaration,
+  propName: String,
+  interfaceDeclarationCatalog: ForwardCallablePlanCatalog,
+): CirProperty? {
+  val owner: KSClassDeclaration = prop.parentDeclaration as? KSClassDeclaration ?: return null
+  val qualified: String = owner.qualifiedName?.asString() ?: return null
+  val plan: ForwardPropertyPlan =
+    interfaceDeclarationCatalog.propertyFor("$qualified.$propName") ?: return null
+  return CirProperty(
+    name = plan.publicName,
+    type = ForwardCirPropertyProjection.publicType(plan),
+    nativeReturnType = "",
+    nativeName = propName,
+    getter = "",
+    // `{ get; set; }` when the interface declares a `var`: an implementing subclass keeps its own
+    // setter (ADR-075's `readOnlyOverrideeOwner` finds the interface member mutable), and an
+    // `override` of a get-only abstract property that adds a setter is CS0546.
+    setter = if (plan.setter != null) "" else null,
+    isAbstract = true,
+    hasNativeImport = false,
+  )
+}
+
 internal fun translateClass(
   cls: KSClassDeclaration,
   libraryName: String,
@@ -210,6 +249,10 @@ internal fun translateClass(
   // ADR-114: the same classifier the Kotlin export builders use, so the two halves agree on which
   // legacy-route members bind and which are refused.
   classifier: ForwardBridgeTypeClassifier,
+  // ADR-113's DECLARATION catalog, planned over every exported interface. Used only to spell an
+  // inherited-but-unimplemented interface property (ADR-075 amendment 2026-09-11): the C# type has
+  // to come off the same plan `IFoo` is projected from, or the two spellings drift into CS0738.
+  interfaceDeclarationCatalog: ForwardCallablePlanCatalog = ForwardCallablePlanCatalog(emptyList()),
 ): CirClass {
   val name: String = cls.simpleName.asString()
   val prefix: String = name.lowercase()
@@ -333,6 +376,14 @@ internal fun translateClass(
           // hole (a class-declared `abstract fun` is dropped entirely); it is not touched here.
           isAbstract = prop.isAbstract(),
         )
+      }
+      // ADR-075 amendment (2026-09-11): a property this class inherits from an exported interface
+      // and does not implement. `isForwardPlannableMemberOf` keeps it out of the planner (nothing
+      // to dispatch to), so it takes the declaration walk the abstract *method* mirror takes: an
+      // abstract C# property, no body, no export, no `DllImport`. Without it the generated
+      // `Bird : IFeathered` is CS0535 and a consumer subclass's `override` is CS0115.
+      if (prop.parentDeclaration != cls && prop.isAbstract()) {
+        return@mapNotNull inheritedAbstractProperty(prop, propName, interfaceDeclarationCatalog)
       }
       // Issue #121: the planner declined, but a decline is not always an invitation. A marked
       // declaration must reach neither artifact, so the legacy arms below never run for one.

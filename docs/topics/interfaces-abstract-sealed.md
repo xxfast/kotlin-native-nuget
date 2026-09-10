@@ -20,7 +20,7 @@ Kotlin's three flavours of inheritance each get a distinct C# shape: `interface`
 | a sealed subclass declared nested inside its sealed base, used at a return, property, or parameter position | `Base.Sub` (enclosing scope kept) | see [A nested sealed subclass at a member position](#a-nested-sealed-subclass-at-a-member-position) |
 | an `interface` declared nested inside another class, used at a return, property, or parameter position | skipped named (`UNDECLARED_INTERFACE`) | see [Nested interfaces skip named](#nested-interfaces-skip-named) |
 | an exported base class's own declared `open val`/`open var`/`open fun` | `public virtual` property or method (both accessors, when a property has one of each) | so a subclass `override` compiles instead of `CS0506`; a concrete `open class`'s generated `Dispose()` renders `public virtual void Dispose()` for the same reason, see [A base class's own `open val`/`open var`/`open fun`](#a-base-class-s-own-open-val-open-var), [ADR-101](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/101-unexported-supertype-skip.md) |
-| an exported base class's own declared `abstract val`/`abstract var` | `public abstract` property (both accessors, when it has one of each) | so a subclass `override` compiles instead of `CS0506`; the base keeps its (uncallable) `_get_`/`_set_` export pair, see [An exported base class's own `abstract val`/`abstract var`](#a-base-class-s-own-abstract-val-abstract-var), [ADR-075](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/075-collection-property-getter-setter-independence.md) |
+| an exported base class's `abstract val`/`abstract var`, own, or inherited from an exported interface without an implementation | `public abstract` property (both accessors, when it has one of each) | so a subclass `override` compiles instead of `CS0506`; the base's own abstract member keeps its (uncallable) `_get_`/`_set_` export pair, but an inherited-and-unimplemented interface member generates no native import at all, see [An exported base class's own `abstract val`/`abstract var`](#a-base-class-s-own-abstract-val-abstract-var), [An interface property a base class inherits without implementing](#an-interface-property-a-base-class-inherits-without-implementing), [ADR-075](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/075-collection-property-getter-setter-independence.md) |
 
 ## Kotlin
 
@@ -430,10 +430,113 @@ public void Violin_AbstractVarWrittenThroughTheBase_IsSeenByKotlinDispatch()
 }
 ```
 
+## An interface property a base class inherits without implementing {id="an-interface-property-a-base-class-inherits-without-implementing"}
+
+The section above covers a base class's **own** declared abstract member. An exported abstract
+class that instead inherits an interface `val`/`var` and implements neither takes the same abstract
+path: it renders `public abstract` on the class itself, so `Bird : IFeathered` still compiles and a
+subclass `override` binds. Unlike the class-own case, the inherited member generates **no native
+import at all**: there is no Kotlin body to call, the interface member is bodiless, and the type is
+spelled from the same forward-plan declaration catalog `IFeathered` itself is declared from
+([ADR-113](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/113-interface-declaration-on-the-forward-plan.md)).
+
+From `test-library/src/nativeMain/kotlin/.../aviary/Bird.kt`:
+
+```kotlin
+interface Feathered {
+  val plumage: String
+  var perch: String
+}
+
+abstract class Bird(val name: String) : Feathered {
+  fun describe(): String = "$name: $plumage on $perch"
+}
+
+class Finch : Bird("finch") {
+  override val plumage: String = "brown"
+  override var perch: String = "twig"
+}
+```
+
+### Generated C# {id="inherited-interface-property-generated-c"}
+
+From `Interop.cs`. `Bird` declares both inherited members `public abstract`, with no
+`bird_get_plumage`/`bird_get_perch`/`bird_set_perch` import generated for either:
+
+```C#
+public abstract class Bird : IFeathered, IDisposable, INugetHandle
+{
+    internal IntPtr _handle;
+
+    public string Name
+    {
+        get { /* ... */ }
+    }
+
+    public abstract string Plumage { get; }
+
+    public abstract string Perch { get; set; }
+
+    public string Describe()
+    {
+        /* ... */
+    }
+
+    public abstract void Dispose();
+}
+```
+
+`Finch` overrides both:
+
+```C#
+public class Finch : Bird
+{
+    public override string Plumage
+    {
+        get { /* ... */ }
+    }
+
+    public override string Perch
+    {
+        get { /* ... */ }
+        set { /* ... */ }
+    }
+}
+```
+
+### Using it from C# {id="inherited-interface-property-using-it-from-c"}
+
+From `IntegrationTests/AbstractInterfacePropertyTests.cs`. A write to `Perch` through a
+`Bird`-typed reference is seen by Kotlin's own dispatch through `describe()`, not just echoed back
+by the C# getter:
+
+```C#
+[Fact]
+public void Finch_PerchWrittenThroughTheBase_IsSeenByKotlinDispatch()
+{
+    using var finch = new Finch();
+
+    Bird bird = finch;
+
+    Assert.Equal("finch: brown on twig", bird.Describe());
+
+    bird.Perch = "curtain rail";
+
+    // `describe()` is Kotlin's own dispatch through the overrides, so this proves the write
+    // reached the Kotlin object rather than being echoed by the C# getter.
+    Assert.Equal("curtain rail", finch.Perch);
+    Assert.Equal("finch: brown on curtain rail", bird.Describe());
+    Assert.Equal("finch: brown on curtain rail", finch.Describe());
+}
+```
+
 <note>
-    <p>An abstract class that inherits an interface <code>val</code> without implementing it is a
-    different, unfixed shape: the member is never planned at all, so it vanishes from C# while the
-    interface stays in the base list. See <a
+    <p>This is narrower than the base-class case above: it only covers an <b>exported</b>
+    interface. When the interface itself is unexported, <a
+    href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/101-unexported-supertype-skip.md">ADR-101</a>
+    drops it from the base list entirely, so there is no declaration left to spell a type from and
+    the inherited member still vanishes, leaving a consumer subclass's <code>override</code>
+    <code>CS0115</code>. See <a
     href="https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md">ROADMAP.md</a>.</p>
 </note>
 
@@ -2377,7 +2480,7 @@ Assert.Null(typeof(Job.Running).GetMethod("PickNested"));
 
 ## Defaulted interface members on implementing classes
 
-A class implementing an interface without overriding one of its defaulted members still has to carry that member in C#: the generated class declares the interface, so omitting the member is `CS0535`. The defaulted body is reached by ordinary dynamic dispatch on the Kotlin instance behind the handle, so no separate delegation is generated for it.
+A class implementing an interface without overriding one of its defaulted members still has to carry that member in C#: the generated class declares the interface, so omitting the member is `CS0535`. The defaulted body is reached by ordinary dynamic dispatch on the Kotlin instance behind the handle, so no separate delegation is generated for it. A member with no default at all is a different shape, since there is no body to dispatch to: see [An interface property a base class inherits without implementing](#an-interface-property-a-base-class-inherits-without-implementing) for how an abstract class carries that case instead.
 
 From `test-library/src/nativeMain/kotlin/.../cat/Greeter.kt`:
 

@@ -538,6 +538,12 @@ data class CirProperty(
   // (`public abstract T Name { get; }`) so a subclass `override` compiles instead of CS0506.
   // Wins over [isVirtual]: `abstract virtual` is CS0503, `abstract override` is legal.
   val isAbstract: Boolean = false,
+  // ADR-075 amendment (2026-09-11): false when this property is a declaration only, with no
+  // Kotlin export behind it: an abstract property the class *inherits* from an exported interface
+  // without implementing, spelled from the ADR-113 declaration catalog. The class-own abstract
+  // case keeps its plan and therefore its import pair, so this stays true there. A `DllImport` for
+  // an export nobody generated is what the ADR-055 contract check refuses.
+  val hasNativeImport: Boolean = true,
   val isFlow: Boolean = false,
   // ADR-065: true when this is a StateFlow (or read-only MutableStateFlow view) property. Reuses
   // isFlow's whole legacy route (the _collect export + KotlinFlow substrate) and additionally
