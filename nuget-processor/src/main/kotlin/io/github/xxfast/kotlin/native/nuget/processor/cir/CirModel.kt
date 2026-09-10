@@ -502,6 +502,11 @@ data class CirProperty(
   // (Cat.Nickname overriding Animal.Nickname's implementation of Pet.nickname).
   val isOverride: Boolean = false,
   val isVirtual: Boolean = false,
+  // ADR-075 amendment (2026-09-10): the property-side twin of [CirMethod.isAbstract]: an
+  // `abstract val`/`abstract var` the class declares without implementing. Renders bodiless
+  // (`public abstract T Name { get; }`) so a subclass `override` compiles instead of CS0506.
+  // Wins over [isVirtual]: `abstract virtual` is CS0503, `abstract override` is legal.
+  val isAbstract: Boolean = false,
   val isFlow: Boolean = false,
   // ADR-065: true when this is a StateFlow (or read-only MutableStateFlow view) property. Reuses
   // isFlow's whole legacy route (the _collect export + KotlinFlow substrate) and additionally

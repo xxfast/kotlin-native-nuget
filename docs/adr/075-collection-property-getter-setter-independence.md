@@ -162,11 +162,34 @@ abstract base inheriting the interface `val` directly); that fallback shape is T
 fixture-covered end to end. The mirror direction, a class narrowing a base's `var` to `val`, is already a
 Kotlin compile error and needs no handling here.
 
-Not fixed by this change, and not collection-specific: an unimplemented base **`abstract val`** has no
-abstract-property path in the renderer at all, so a subclass `override` of it is `CS0115`. Named on
-[ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md) Phase 3, discovered
-alongside this fix. The base **`open val`** half of this paragraph was fixed on 2026-09-10 (`Modifier.OPEN`
-is now read, so an `override` of it compiles); see ADR-101's amendment of that date.
+The base **`open val`** half of this paragraph was fixed on 2026-09-10 (`Modifier.OPEN` is now read, so an
+`override` of it compiles); see ADR-101's amendment of that date.
+
+**2026-09-10 amendment: an unimplemented base `abstract val` / `abstract var` renders as a C# abstract
+property, and the symptom label above was wrong.** This paragraph used to say the shape fails `CS0115`
+(inherited from the *method* route, where a class-declared `abstract fun` is dropped from C# entirely). It
+fails **`CS0506`**. The property route had no abstract path, but it did have a plan: an abstract property was
+planned, exported and rendered like any other, as a concrete non-virtual property with a live getter body, so
+the subclass's `public override` had nothing overridable to bind to.
+
+The rule now: a property the class declares without implementing renders `public abstract T Name { get; }`,
+or `{ get; set; }` when the plan carries a setter. `CirProperty.isAbstract` (set from KSP's `isAbstract()` at
+the `CirClassTranslator` property call site, threaded through `ForwardCirPropertyProjection.classProperty`)
+takes an early branch in `renderProperty` ahead of every body-shaped arm. That branch ignores `isVirtual`
+deliberately: `abstract virtual` is `CS0503`, while `abstract override` is legal C#.
+
+The plan, the Kotlin `<prefix>_get_<name>` / `_set_<name>` exports and the matching `DllImport`s stay on the
+abstract base. Nothing there calls them (a base-typed C# reference always dispatches to the subclass's
+override), but they are valid and they keep `ForwardAbiContract` green: the contract takes the planned names
+as the expected set, so suppressing the export while keeping the plan would report the Kotlin projection
+missing one. Pinned by `Tier1AbstractPropertyTest`, `CirOrdinaryRendererTest`, the `orchestra` fixture
+(`Instrument` / `Violin`) and `IntegrationTests/AbstractPropertyTests.cs`.
+
+Still not fixed, and separate: the abstract **method** walk, which drops a class-declared `abstract fun`
+entirely and renders an inherited concrete member abstract when its base was dropped. It changes which
+members get an export, so it keeps its own backlog item. So does an abstract class inheriting an interface
+`val` it does not implement: that property is never planned, so there is no `CirProperty` to flag, and it
+vanishes from C# while `: IPet` stays in the base list (`CS0535`).
 
 ### Question D — is a nullable collection setter (`var notes: List<String>?`) in v1?
 

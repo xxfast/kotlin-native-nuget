@@ -14,9 +14,17 @@ internal object ForwardCirPropertyProjection {
     plan: ForwardPropertyPlan,
     isOverride: Boolean = false,
     isVirtual: Boolean = false,
+    isAbstract: Boolean = false,
   ): CirProperty {
     require(plan.position == ForwardPropertyPosition.CLASS) { "Expected class property plan" }
-    return property(plan, receiver = "_handle", isStatic = false, isOverride = isOverride, isVirtual = isVirtual)
+    return property(
+      plan,
+      receiver = "_handle",
+      isStatic = false,
+      isOverride = isOverride,
+      isVirtual = isVirtual,
+      isAbstract = isAbstract,
+    )
   }
 
   /**
@@ -94,6 +102,7 @@ internal object ForwardCirPropertyProjection {
     isStatic: Boolean,
     isOverride: Boolean = false,
     isVirtual: Boolean = false,
+    isAbstract: Boolean = false,
   ): CirProperty {
     val directGetter: ForwardNativeCall = plan.getter.calls().first()
     return CirProperty(
@@ -108,6 +117,7 @@ internal object ForwardCirPropertyProjection {
       isStatic = isStatic,
       isOverride = isOverride,
       isVirtual = isVirtual,
+      isAbstract = isAbstract,
       hasSyncErrorOut = true,
     )
   }

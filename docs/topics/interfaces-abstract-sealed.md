@@ -19,6 +19,7 @@ Kotlin's three flavours of inheritance each get a distinct C# shape: `interface`
 | a sealed subclass declared nested inside its sealed base, used at a return, property, or parameter position | `Base.Sub` (enclosing scope kept) | see [A nested sealed subclass at a member position](#a-nested-sealed-subclass-at-a-member-position) |
 | an `interface` declared nested inside another class, used at a return, property, or parameter position | skipped named (`UNDECLARED_INTERFACE`) | see [Nested interfaces skip named](#nested-interfaces-skip-named) |
 | an exported base class's own declared `open val`/`open var` | `public virtual` property (both accessors, when it has one of each) | so a subclass `override` compiles instead of `CS0506`; a concrete `open class`'s generated `Dispose()` renders `public virtual void Dispose()` for the same reason, see [A base class's own `open val`/`open var`](#a-base-class-s-own-open-val-open-var), [ADR-101](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/101-unexported-supertype-skip.md) |
+| an exported base class's own declared `abstract val`/`abstract var` | `public abstract` property (both accessors, when it has one of each) | so a subclass `override` compiles instead of `CS0506`; the base keeps its (uncallable) `_get_`/`_set_` export pair, see [An exported base class's own `abstract val`/`abstract var`](#a-base-class-s-own-abstract-val-abstract-var), [ADR-075](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/075-collection-property-getter-setter-independence.md) |
 
 ## Kotlin
 
@@ -309,6 +310,104 @@ public void Hammock_OverridesOpenVar_KeepsItsSetter()
     <p>A declared <code>open fun</code> on an ordinary exported base does not yet render
     <code>virtual</code>, the method-side mirror of this fix; a subclass <code>override</code> of
     one is still <code>CS0506</code>. See <a
+    href="https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md">ROADMAP.md</a>.</p>
+</note>
+
+## An exported base class's own `abstract val`/`abstract var` {id="a-base-class-s-own-abstract-val-abstract-var"}
+
+An exported base class's own **unimplemented** `abstract val`/`abstract var`, one it declares
+without a body, renders `public abstract` too, both accessors when it has one of each, so a
+subclass `override` compiles. Before this, the property route had no abstract path at all: the
+member was planned and rendered like any other property, a concrete non-virtual getter with a
+live body, so a subclass's `override` failed `CS0506` (`Family` had a getter to override, just not
+an overridable one). The base keeps its `_get_family` and `_get_tuning`/`_set_tuning` exports;
+nothing on the abstract base calls them, since a `Base`-typed reference always dispatches to the
+overriding subclass, but they stay valid and keep the forward ABI contract unchanged.
+
+From `test-library/src/nativeMain/kotlin/.../orchestra/Instrument.kt`:
+
+```kotlin
+abstract class Instrument(val name: String) {
+  /** Unimplemented here: must render `public abstract string Family { get; }`. */
+  abstract val family: String
+
+  /** Unimplemented and mutable: must render `public abstract string Tuning { get; set; }`. */
+  abstract var tuning: String
+
+  fun describe(): String = "$name ($family, tuned $tuning)"
+}
+
+class Violin : Instrument("violin") {
+  override val family: String = "strings"
+  override var tuning: String = "G-D-A-E"
+}
+```
+
+### Generated C# {id="a-base-class-s-own-abstract-val-abstract-var-generated-c"}
+
+From `Interop.cs`. `Name` stays an ordinary concrete property; `Family` and `Tuning` render
+`public abstract`, and `Violin` overrides both:
+
+```C#
+public abstract class Instrument : IDisposable, INugetHandle
+{
+    internal IntPtr _handle;
+
+    public string Name
+    {
+        get { /* ... */ }
+    }
+
+    public abstract string Family { get; }
+
+    public abstract string Tuning { get; set; }
+
+    public string Describe() { /* ... */ }
+
+    public abstract void Dispose();
+}
+
+public class Violin : Instrument
+{
+    public override string Family
+    {
+        get { /* ... */ }
+    }
+
+    public override string Tuning
+    {
+        get { /* ... */ }
+        set { /* ... */ }
+    }
+}
+```
+
+### Using it from C# {id="a-base-class-s-own-abstract-val-abstract-var-using-it-from-c"}
+
+From `IntegrationTests/AbstractPropertyTests.cs`. Writing `Tuning` through the base static type is
+seen by Kotlin's own dispatch through `describe()`, not just echoed back by the C# getter:
+
+```C#
+[Fact]
+public void Violin_AbstractVarWrittenThroughTheBase_IsSeenByKotlinDispatch()
+{
+    using var violin = new Violin();
+
+    Assert.Equal("violin (strings, tuned G-D-A-E)", violin.Describe());
+
+    ((Instrument)violin).Tuning = "G-D-A-Mylo";
+
+    // `describe()` is Kotlin's own dispatch through the overrides, so this proves the write
+    // reached the Kotlin object rather than being echoed by the C# getter.
+    Assert.Equal("violin (strings, tuned G-D-A-Mylo)", violin.Describe());
+    Assert.Equal("violin (strings, tuned G-D-A-Mylo)", ((Instrument)violin).Describe());
+}
+```
+
+<note>
+    <p>An abstract class that inherits an interface <code>val</code> without implementing it is a
+    different, unfixed shape: the member is never planned at all, so it vanishes from C# while the
+    interface stays in the base list. See <a
     href="https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md">ROADMAP.md</a>.</p>
 </note>
 
@@ -2655,7 +2754,6 @@ property. The owning class still generates, and its unrelated `name` member stil
 - A sealed type in the export scope now binds at every position: property, callable return, and callable/constructor parameter (bare, nullable, or a collection component, read-only or mutable), see [Sealed types as property types](#sealed-types-as-property-types), [A class method returning a sealed base](#a-class-method-returning-a-sealed-base), and [A sealed type at a parameter position](#a-sealed-type-at-a-parameter-position). An **eligible** `sealed interface` binds the same way, whether its arms are nested or declared beside it, see [Sealed interfaces](#sealed-interfaces). A value class whose underlying type is sealed also binds the same way, at a property, callable, or `List<T>` component position, see [Value classes: Over a sealed type](value-classes.md#over-a-sealed-type). What still does not bind: an extension function's **receiver** typed as a sealed base (`sealedAsHandle()` rewrites declared parameters only), an **ineligible** sealed interface at any position, and a sealed class **outside the export scope**. See [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md).
 - A `sealed interface` still refuses an arm that is an `enum class` (a C# enum can only extend an integral type, `CS1008`) or that implements more than one sealed interface (C# single inheritance), regardless of where the arm is declared. See [An enum arm keeps the interface ineligible](#sealed-interface-enum-arm), [ADR-125](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/125-sealed-interface-sibling-arms.md).
 - An eligible sealed interface arm's **extra interfaces** (e.g. `class Odd : Kind, CharSequence`) are dropped silently: the arm stays eligible, but the generated class declares only its sealed base, with no interface list and no diagnostic naming the loss. See [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md).
-- An unimplemented base `abstract val`/`abstract var` has no abstract-property path at all, so a subclass `override` of it is `CS0115`. Not fixed. See [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md).
 - [A base class's own `open val`/`open var`](#a-base-class-s-own-open-val-open-var) covers the property half; a declared `open fun` on an ordinary exported base still does not render `virtual`, so a subclass `override` of one is `CS0506`. See [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md).
 - A sealed arm's own `isVirtual`/`isOverride` are pinned `false`, so an `open val`/`open var`/`open fun` declared directly on a sealed arm cannot itself be overridden by a further Kotlin subclass in C#. Inferred, not fixture-verified. See [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md).
 - [Declaring every exported interface](#declaring-every-exported-interface) has its own residual gaps: `CirInterface` has no super-interface list, so `interface Derived : Base` still flattens (`IDerived` no longer redeclares `Base`'s members after ADR-113, but doesn't inherit them either); a `var` interface property still renders `{ get; }` only (`hasSetter` is never derived from the plan); the CS0102 property/method name-collision guard is interface-route only, the same collision on the ordinary class route is unguarded; and an interface that is neither reachable nor implemented by any exported class still silently loses its unbridgeable members with no diagnostic naming why. See [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md).

@@ -424,6 +424,63 @@ class CirOrdinaryRendererTest {
     assertFalse(rendered.contains("Native_Set_name"))
   }
 
+  /**
+   * ADR-075 amendment (2026-09-10): an abstract property renders bodiless, with `{ get; }` or
+   * `{ get; set; }` chosen by the setter, and `virtual` is deliberately suppressed because
+   * `abstract virtual` is CS0503 while `abstract override` is legal.
+   */
+  @Test
+  fun `abstract property renders bodiless accessors`() {
+    val cls = CirClass(
+      name = "Instrument",
+      libraryName = "orchestra",
+      nativePrefix = "instrument",
+      constructor = null,
+      isAbstract = true,
+      properties = listOf(
+        CirProperty(
+          name = "Family",
+          type = "string",
+          nativeReturnType = "IntPtr",
+          nativeName = "family",
+          getter = "Marshal.PtrToStringUTF8(Native_Get_family(_handle, out IntPtr error))!",
+          isAbstract = true,
+          hasSyncErrorOut = true,
+        ),
+        CirProperty(
+          name = "Tuning",
+          type = "string",
+          nativeReturnType = "IntPtr",
+          nativeName = "tuning",
+          getter = "Marshal.PtrToStringUTF8(Native_Get_tuning(_handle, out IntPtr error))!",
+          setter = "Native_Set_tuning(_handle, value, out IntPtr error);",
+          isAbstract = true,
+          isVirtual = true,
+          hasSyncErrorOut = true,
+        ),
+        CirProperty(
+          name = "Pitch",
+          type = "int",
+          nativeReturnType = "int",
+          nativeName = "pitch",
+          getter = "Native_Get_pitch(_handle, out IntPtr error)",
+          isAbstract = true,
+          isOverride = true,
+          hasSyncErrorOut = true,
+        ),
+      ),
+      methods = emptyList(),
+    )
+
+    val rendered: String = render(cls)
+
+    assertContains(rendered, "public abstract string Family { get; }")
+    assertContains(rendered, "public abstract string Tuning { get; set; }")
+    assertContains(rendered, "public abstract override int Pitch { get; }")
+    assertFalse("abstract virtual" in rendered, "`abstract virtual` is CS0503; got: $rendered")
+    assertFalse("Family =>" in rendered, "an abstract property has no body; got: $rendered")
+  }
+
   @Test
   fun `multi-line property getter and setter use block accessors`() {
     val cls = CirClass(

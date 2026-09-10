@@ -407,6 +407,16 @@ internal fun StringBuilder.renderConstructor(
 
 internal fun StringBuilder.renderProperty(prop: CirProperty) {
   val static: String = if (prop.isStatic) "static " else ""
+  // ADR-075 amendment (2026-09-10): an abstract property is declaration-only, so it takes none of
+  // the body-shaped arms below. `isVirtual` is deliberately ignored: `abstract virtual` is CS0503,
+  // while `abstract override` (an abstract re-declaration of a base member) is legal C#.
+  if (prop.isAbstract) {
+    val override: String = if (prop.isOverride) "override " else ""
+    val accessors: String = if (prop.setter != null) "{ get; set; }" else "{ get; }"
+    appendLine("        public abstract $override${prop.type} ${prop.name} $accessors")
+    appendLine()
+    return
+  }
   val modifier: String = if (prop.isOverride) "override " else if (prop.isVirtual) "virtual " else ""
   val isMultiLineGetter: Boolean = prop.getter.contains('\n')
   val isMultiLineSetter: Boolean = prop.setter?.contains('\n') == true

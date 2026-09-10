@@ -3,6 +3,7 @@ package io.github.xxfast.kotlin.native.nuget.processor.cir
 import com.google.devtools.ksp.getAllSuperTypes
 import com.google.devtools.ksp.getConstructors
 import com.google.devtools.ksp.getVisibility
+import com.google.devtools.ksp.isAbstract
 import com.google.devtools.ksp.processing.KSPLogger
 import com.google.devtools.ksp.symbol.ClassKind
 import com.google.devtools.ksp.symbol.KSClassDeclaration
@@ -290,6 +291,11 @@ internal fun translateClass(
           // ADR-101 amendment (2026-09-10): everything Kotlin left overridable and C# is not
           // already spelling `override`. A declared `open val`/`open var` reaches `virtual` here.
           isVirtual = !isOverride && prop.modifiers.isOpenForOverride(),
+          // ADR-075 amendment (2026-09-10): this class's own unimplemented `abstract val`/`var`.
+          // `isAbstract()` (not `Modifier.ABSTRACT`) is the same predicate
+          // `isForwardPlannableMemberOf` uses. The abstract *method* walk has its own, broader
+          // hole (a class-declared `abstract fun` is dropped entirely); it is not touched here.
+          isAbstract = prop.isAbstract(),
         )
       }
       // Issue #121: the planner declined, but a decline is not always an invitation. A marked
