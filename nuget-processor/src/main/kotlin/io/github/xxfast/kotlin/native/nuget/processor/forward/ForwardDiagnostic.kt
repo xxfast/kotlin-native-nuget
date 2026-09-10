@@ -468,23 +468,6 @@ internal fun ForwardPlanSkipReason.toDiagnosticKind(
   )
 }
 
-/**
- * ADR-064: an actionable per-reason hint, kept alongside the mapping above it documents.
- *
- * @param detail ADR-066: the unexported dependency type's qualified name
- *   ([ForwardCallableCatalogEntry.Skipped.detail]), used only by [ForwardPlanSkipReason
- *   .UNEXPORTED_DEPENDENCY_TYPE] to name the exact `include(...)` fix. ADR-074: for
- *   [ForwardPlanSkipReason.ACTUAL_TYPEALIAS_TARGET], the same slot instead carries
- *   `"<expect qualified name>-><target rendered name>"`. For [ForwardPlanSkipReason.COLLECTION] it
- *   carries the offending component ("element type Collection?", "key type String?"). For
- *   [ForwardPlanSkipReason.UNDECLARED_ENUM] and
- *   [ForwardPlanSkipReason.UNDECLARED_INTERFACE] it carries the undeclared type's qualified name,
- *   including when the enum is a collection component (the only extractor that descends into one).
- *   Ignored by every other reason.
- * @param parameter issue #131: the offending parameter's name, when the skip is at an input
- *   position and the input is a named parameter rather than an extension receiver. Read only by
- *   [ForwardPlanSkipReason.NULLABLE], whose shipped sentence could not say which position failed.
- */
 /** `kotlin`, `kotlin.*` and `kotlinx.*`: packages an export scope can never usefully admit. */
 private fun String.isStdlibPackage(): Boolean =
   this == "kotlin" || startsWith("kotlin.") || this == "kotlinx" || startsWith("kotlinx.")
@@ -549,6 +532,26 @@ internal fun ForwardPlanSkipReason.diagnosticReason(
   }
 }
 
+/**
+ * ADR-064: an actionable per-reason hint, kept alongside the mapping above it documents.
+ *
+ * @param detail ADR-066: the unexported dependency type's qualified name
+ *   ([ForwardCallableCatalogEntry.Skipped.detail]), used only by [ForwardPlanSkipReason
+ *   .UNEXPORTED_DEPENDENCY_TYPE] to name the exact `include(...)` fix. ADR-074: for
+ *   [ForwardPlanSkipReason.ACTUAL_TYPEALIAS_TARGET], the same slot instead carries
+ *   `"<expect qualified name>-><target rendered name>"`. For [ForwardPlanSkipReason.COLLECTION] it
+ *   carries the offending component ("element type Collection?", "key type String?"). For
+ *   [ForwardPlanSkipReason.UNDECLARED_ENUM] and
+ *   [ForwardPlanSkipReason.UNDECLARED_INTERFACE] it carries the undeclared type's qualified name,
+ *   including when the enum is a collection component (the only extractor that descends into one).
+ *   Ignored by every other reason.
+ * @param scope ADR-063: the export scope's `include(...)` packages, so the suggested include
+ *   line keeps the author's own packages listed beside the missing one. Read only by
+ *   [ForwardPlanSkipReason.UNEXPORTED_DEPENDENCY_TYPE].
+ * @param parameter issue #131: the offending parameter's name, when the skip is at an input
+ *   position and the input is a named parameter rather than an extension receiver. Read only by
+ *   [ForwardPlanSkipReason.NULLABLE], whose shipped sentence could not say which position failed.
+ */
 internal fun ForwardPlanSkipReason.diagnosticHint(
   detail: String? = null,
   scope: List<String> = emptyList(),

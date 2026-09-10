@@ -106,7 +106,6 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardReachabilit
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardReachabilityResult
 import io.github.xxfast.kotlin.native.nuget.processor.forward.addForwardKotlinPlanExport
 import io.github.xxfast.kotlin.native.nuget.processor.forward.calls
-import io.github.xxfast.kotlin.native.nuget.processor.forward.diagnosticHint
 import io.github.xxfast.kotlin.native.nuget.processor.forward.diagnosticReason
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isForwardLegacyAsyncRoute
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isValueClass
