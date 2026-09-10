@@ -359,3 +359,24 @@ unchanged, since admitting an arm of an interface that has no sealed route is th
 this ADR refuses. Generated C# does not change; `Mixed.Odd` in `issue54/SealedInterfaceSample.kt`
 simply loses its second warning. `UNDECLARED_CLASS` on a member typed with the arm itself is
 untouched and still correct: that member really is dropped.
+
+### Amendment (2026-09-11): every refusing arm is named
+
+The one warning per hierarchy named only the *first* refusing arm.
+`sealedInterfaceIneligibility()` walked `getSealedSubclasses()` and returned the first refusal as
+the whole reason, so a hierarchy with two independently refusing arms cost the author one rebuild
+per arm: fix the enum arm, rebuild, discover the arm with a second superclass.
+
+**Decision.** Collect, do not return. Each arm's (first) reason is added to a list and the list is
+`; `-joined. The function keeps its `String?` signature, so `isEligibleSealedInterface()` and the
+emit site in `NugetProcessor` are untouched, and a single-refusal message is byte-identical to
+before: a one-element join is the element. The example messages in this ADR and in ADR-125 remain
+accurate as the one-arm case.
+
+Two deliberate limits. Within one arm the first reason still wins, because every reason on an arm
+is fixed by the same edit (declare it as a plain class or object with this interface as its only
+parent). And the type-parameter refusal keeps its early return ahead of the walk: the sealed route
+renders no type parameters at all, so no arm reason is actionable until that is fixed.
+
+There is no cap on how many arms are named. Truncating the list would reintroduce this bug in
+miniature.

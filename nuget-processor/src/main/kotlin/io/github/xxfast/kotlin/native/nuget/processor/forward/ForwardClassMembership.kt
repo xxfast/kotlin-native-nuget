@@ -46,26 +46,42 @@ internal fun KSClassDeclaration.declaredSuperClass(): KSClassDeclaration? = supe
  * - an `enum class` arm, which a C# enum cannot be (it admits only an integral base, CS1008), and
  * - an arm implementing two sealed interfaces, which C# single inheritance cannot express (the
  *   renderer would outdent one `public sealed class` per base under the same namespace, CS0101).
+ *
+ * ADR-112 amendment (2026-09-11): *every* refusing arm is named, `; `-joined in
+ * `getSealedSubclasses()` order. One refusing arm reads exactly as it did before (a one-element
+ * join is the element); two of them now take one rebuild to fix rather than one rebuild each.
  */
 internal fun KSClassDeclaration.sealedInterfaceIneligibility(): String? {
   if (!isSealedInterface()) return null
   if (typeParameters.isNotEmpty()) return "it has type parameters"
-  getSealedSubclasses().forEach { subclass ->
-    val subName: String = subclass.simpleName.asString()
-    if (subclass.classKind == ClassKind.INTERFACE) return "subclass `$subName` is an interface"
-    if (subclass.classKind == ClassKind.ENUM_CLASS) {
-      return "subclass `$subName` is an enum class, and a C# enum can only extend an integral " +
-          "type (CS1008), never the abstract class an arm is declared as"
-    }
-    val base: KSClassDeclaration? = subclass.declaredSuperClass()
-    if (base != null) {
-      val baseName: String = base.qualifiedName?.asString() ?: base.simpleName.asString()
-      return "subclass `$subName` extends another class `$baseName`"
-    }
-    if (subclass.sealedInterfaceSupertypes() > 1) {
-      return "subclass `$subName` implements more than one sealed interface, and a C# class can " +
-          "extend only one base"
-    }
+  val reasons: List<String> = getSealedSubclasses().mapNotNull { it.armIneligibility() }.toList()
+  return reasons.takeIf { it.isNotEmpty() }?.joinToString("; ")
+}
+
+/**
+ * Why this arm cannot be an arm of a C# sealed hierarchy, or `null` if it can.
+ *
+ * The first reason on the arm wins, because every one of them is fixed by the same edit (declare
+ * the arm as a plain class or object with this interface as its only parent). Across arms,
+ * [sealedInterfaceIneligibility] names them all: two independently refusing arms used to cost the
+ * author one rebuild each, because the walk returned the first refusal in `getSealedSubclasses()`
+ * order as the whole reason.
+ */
+private fun KSClassDeclaration.armIneligibility(): String? {
+  val name: String = simpleName.asString()
+  if (classKind == ClassKind.INTERFACE) return "subclass `$name` is an interface"
+  if (classKind == ClassKind.ENUM_CLASS) {
+    return "subclass `$name` is an enum class, and a C# enum can only extend an integral " +
+        "type (CS1008), never the abstract class an arm is declared as"
+  }
+  val base: KSClassDeclaration? = declaredSuperClass()
+  if (base != null) {
+    val baseName: String = base.qualifiedName?.asString() ?: base.simpleName.asString()
+    return "subclass `$name` extends another class `$baseName`"
+  }
+  if (sealedInterfaceSupertypes() > 1) {
+    return "subclass `$name` implements more than one sealed interface, and a C# class can " +
+        "extend only one base"
   }
   return null
 }

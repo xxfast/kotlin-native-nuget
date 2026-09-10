@@ -514,5 +514,61 @@ class Tier1SealedInterfaceTest {
     )
   }
 
+  /**
+   * ADR-112 amendment: two arms refuse for two different reasons, so the one warning has to name
+   * both. The walk used to `return` the first refusal in `getSealedSubclasses()` order, which cost
+   * the author one rebuild per arm: fix `Root`, rebuild, discover `Seventh`. Order is KSP's, so the
+   * test asserts both clauses are present, never where.
+   */
+  private val twoRefusals: String = """
+    package tier1.sealedinterface.tworefusals
+
+    open class Groove
+
+    sealed interface Chord {
+      enum class Root : Chord { MAJOR, MINOR }
+      class Seventh : Groove(), Chord
+    }
+
+    class Band {
+      fun chord(): Chord = Chord.Root.MAJOR
+    }
+  """.trimIndent()
+
+  @Test
+  fun `every refusing arm of a sealed interface is named in the one warning`() {
+    val result = Tier1Harness.run(twoRefusals)
+
+    assertTrue(result.compiledClean, "expected no broken source; got: ${result.compileErrors}")
+    val refusals: List<String> = result.kspWarnings.filter {
+      it.contains(ForwardDiagnosticKind.SKIPPED_INELIGIBLE_SEALED_INTERFACE.name) &&
+          it.contains("`tier1.sealedinterface.tworefusals.Chord`")
+    }
+    assertEquals(
+      1,
+      refusals.size,
+      "expected one ineligibility warning for the hierarchy; kspWarnings=${result.kspWarnings}",
+    )
+    val diagnostic: String = refusals.single()
+    assertTrue(
+      diagnostic.contains("subclass `Root`") && diagnostic.contains("enum"),
+      "expected the enum arm to be named; got: $diagnostic",
+    )
+    assertTrue(
+      diagnostic.contains(
+        "subclass `Seventh` extends another class `tier1.sealedinterface.tworefusals.Groove`",
+      ),
+      "expected the second-superclass arm to be named; got: $diagnostic",
+    )
+    assertTrue(
+      result.kspWarnings.none {
+        it.contains(ForwardDiagnosticKind.SKIPPED_NESTED_DECLARATION.name) &&
+            it.contains("tier1.sealedinterface.tworefusals.Chord.Seventh")
+      },
+      "expected no nested skip for an arm the parent already refused; " +
+          "kspWarnings=${result.kspWarnings}",
+    )
+  }
+
   private fun String.occurrencesOf(text: String): Int = split(text).size - 1
 }
