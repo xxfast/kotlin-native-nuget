@@ -35,6 +35,10 @@ internal fun FileSpec.Builder.addFunctionExports(func: KSFunctionDeclaration) {
     return
   }
 
+  // ADR-064: the import belongs to the route that actually emits. The caller no longer adds it
+  // ahead of the plan gate, so this legacy generic-return route imports what it calls.
+  addImport(func.packageName.asString(), funcName)
+
   val paramCall: String = func.parameters.joinToString(", ") { param ->
     val resolved: KSType = param.type.resolve().expandAliases()
     val name: String = param.name?.asString() ?: "_"

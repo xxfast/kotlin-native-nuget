@@ -17,5 +17,8 @@ internal fun FileSpec.Builder.addPropertyExports(
   val propName: String = prop.simpleName.asString()
   val planned: ForwardPropertyPlan? =
     callableCatalog.propertyFor("${prop.packageName.asString()}.$propName")
-  if (planned != null) addForwardPropertyPlanExports(planned)
+  if (planned == null) return
+  // ADR-064: imported behind the plan gate, so a skipped property leaves no dead import.
+  addImport(prop.packageName.asString(), propName)
+  addForwardPropertyPlanExports(planned)
 }

@@ -48,6 +48,8 @@ internal fun FileSpec.Builder.addSuspendFunctionExports(
   if (classifier.legacyRefusedReturn(func) != null) return
   val cname: String = toCName(func.simpleName.asString())
   val funcName: String = func.simpleName.asString()
+  // ADR-064: after the refusal gates, so a refused suspend function leaves no dead import.
+  addImport(func.packageName.asString(), funcName)
   val returnType = func.returnType?.resolve()?.expandAliases()
   val qualifiedReturn: String = returnType?.declaration?.qualifiedName?.asString() ?: "kotlin.Unit"
   val isUnit: Boolean = qualifiedReturn == "kotlin.Unit"

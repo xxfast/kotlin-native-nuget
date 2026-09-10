@@ -1259,20 +1259,26 @@ class NugetProcessor(
 
     functions.forEach { func ->
       attributing(func) {
-        builder.addImport(func.packageName.asString(), func.simpleName.asString())
         // ADR-095: node identity, not a name-derived symbol — top-level overloads number per
         // (package, name), so the n-th namesake's plan is keyed `..._$n`.
         // ADR-096: plural — a defaulted top-level function also carries its synthesized omitting
         // overloads on the same node.
         val planned: List<ForwardCallablePlan> = callableCatalog.plansFor(func)
-        if (planned.isNotEmpty()) planned.forEach { builder.addForwardKotlinPlanExport(it) }
-        else builder.addFunctionExports(func)
+        // ADR-064: the import goes behind the gate, never ahead of it. A skipped function used to
+        // leave a line importing a symbol the generated file never mentions. The legacy route
+        // imports its own, after its own early returns.
+        if (planned.isNotEmpty()) {
+          builder.addImport(func.packageName.asString(), func.simpleName.asString())
+          planned.forEach { builder.addForwardKotlinPlanExport(it) }
+        } else {
+          builder.addFunctionExports(func)
+        }
       }
     }
 
     genericFunctions.forEach { func ->
+      // The import lives inside addGenericFunctionExports, behind its own gate (ADR-064).
       attributing(func) {
-        builder.addImport(func.packageName.asString(), func.simpleName.asString())
         builder.addGenericFunctionExports(func)
       }
     }
@@ -1458,8 +1464,9 @@ class NugetProcessor(
     }
 
     suspendFunctions.forEach { func ->
+      // The import lives inside addSuspendFunctionExports, behind its legacy-refusal gates
+      // (ADR-064): a refused suspend function used to leave a dead import behind.
       attributing(func) {
-        builder.addImport(func.packageName.asString(), func.simpleName.asString())
         builder.addSuspendFunctionExports(func, forwardClassifier)
       }
     }
@@ -1525,15 +1532,16 @@ class NugetProcessor(
     }
 
     properties.forEach { prop ->
+      // The import lives inside addPropertyExports, behind the plan gate (ADR-064), so the gate
+      // and the import cannot drift apart.
       attributing(prop) {
-        builder.addImport(prop.packageName.asString(), prop.simpleName.asString())
         builder.addPropertyExports(prop, callableCatalog)
       }
     }
 
     extensionFunctions.forEach { func ->
+      // The import lives inside addExtensionFunctionExports, behind the plan gate (ADR-064).
       attributing(func) {
-        builder.addImport(func.packageName.asString(), func.simpleName.asString())
         builder.addExtensionFunctionExports(func, callableCatalog)
       }
     }

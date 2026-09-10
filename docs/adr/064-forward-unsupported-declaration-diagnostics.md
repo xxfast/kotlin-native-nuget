@@ -1151,3 +1151,50 @@ sentence and that the message no longer also says "type combination is not suppo
 - The generic `else` sentence now covers only genuine type-combination drops, which is what it says.
 - The property route (`warnDroppedForwardProperties`) still hand-spells its sentences, because a
   dropped property carries no `ForwardPlanSkipReason` to dispatch on. Tracked separately.
+
+## Amendment (2026-09-11): a skip leaves no import behind
+
+Judgement: an **amendment**, not a new ADR. No mapping decision changes, no ABI moves, no
+diagnostic text changes. It removes lines from the generated `CNameExports.kt` that named
+declarations the file never mentions.
+
+### The gap
+
+A skip is supposed to be silent in the generated output, but five per-declaration loops in
+`NugetProcessor.kt` added `builder.addImport(pkg, name)` **before** the plan gate that decides
+whether anything is emitted. So a top-level `fun scan(litters: List<List<String>?>)`, skipped as
+`SKIPPED_UNSUPPORTED_INPUT`, still contributed `import test.husk.scan` to a file with zero `husk`
+references. kotlinc does not warn on an unused import, so it compiled and nothing caught it.
+
+The precedent for the fix was already in-tree: `ExtensionPropertyExports.kt` moved its import
+behind the `propertyFor(...) == null` gate for exactly this reason.
+
+### Decision
+
+The import goes behind the gate, never ahead of it, in all five remaining loops:
+
+| Loop | Where the import now lives |
+|---|---|
+| top-level functions | inside the `plansFor(func).isNotEmpty()` branch in `NugetProcessor.kt`; the legacy route imports its own inside `addFunctionExports`, after the `isGenericReturnType` early return |
+| generic functions | `addGenericFunctionExports`, after `if (paramIndex == -1) return` |
+| suspend functions | `addSuspendFunctionExports`, after both `legacyRefused*` early returns |
+| top-level properties | `addPropertyExports`, after the `propertyFor(...) == null` gate |
+| extension functions | `addExtensionFunctionExports`, after the `plansFor(...).isEmpty()` gate |
+
+The gate and the import live in the same function everywhere except the top-level function loop,
+whose plan branch keeps the import in the loop, because `addForwardKotlinPlanExport` is shared with
+class members that import nothing.
+
+The class, sealed, object, enum and value-class loops are untouched: they import nothing per
+member.
+
+`Tier1DeadImportTest` asserts the structural shape (a substring assertion on the generated Kotlin,
+since no compiler warning can see an unused import), with a surviving sibling in each fixture as
+the positive control, over a skipped function, a skipped `val` and a skipped extension function.
+
+### Consequences of the amendment
+
+- `CNameExports.kt` loses one line per skipped declaration. No export, no ABI, no C# surface change.
+- A skipped property fixture needs a genuinely unplannable property *type*: an unsupported
+  parameter type does not transfer, because a `List<List<String>?>` **property** plans fine as an
+  opaque handle getter. The test uses a function type.
