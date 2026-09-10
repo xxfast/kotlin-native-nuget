@@ -462,17 +462,19 @@ amendment; this feature's sentence moved onto `diagnosticReason()` byte-identica
 
 - Declarations behind an author's own `@RequiresOptIn` marker disappear from the C# surface. For a
   library that used markers to fence off internals, that is the fix. For a library whose public API
-  is experimental-but-intended-for-export, that is a regression from "leaks" to "absent", and the
-  only remedy in v1 is to remove the marker.
+  is experimental-but-intended-for-export, that is a regression from "leaks" to "absent". The
+  remedy is `publish { exportMarkers("...") }`, which names the marker to waive (see the 2026-09-11
+  amendment below); before that landed the only remedy was to remove the marker.
 - Issue #113's note that this "hides real bugs too" cuts both ways: issue #111 was only reachable
   through a marked member. After this change such members are not exported, so bugs behind them stop
   being reachable *and* stop being tested. Tier 1 fixtures exercising a construct must not rely on a
   marked declaration to reach it.
-- The `@OptIn` list the generated file emits (`NugetProcessor.kt:1125-1141`) is untouched. It keeps
-  naming only the bridge's own markers (`ExperimentalNativeApi`, `ExperimentalForeignApi`,
-  conditionally `ExperimentalCoroutinesApi`), never the author's. That is deliberate: see
-  alternative 4.
-- Deferred: the `exportMarkers(...)` escape list (alternative 3), the `[Experimental]` C# mapping
+- The `@OptIn` list the generated file emits (`NugetProcessor.kt:1125-1141`) names only the
+  bridge's own markers (`ExperimentalNativeApi`, `ExperimentalForeignApi`, conditionally
+  `ExperimentalCoroutinesApi`), never the author's, *unless* the author waived one with
+  `exportMarkers(...)`. That exception is the 2026-09-11 amendment below; alternative 4's rejection
+  stands for every marker nobody named.
+- Deferred: the `[Experimental]` C# mapping
   (alternative 5), `@SubclassOptInRequired` (Finding 6, explicitly out of scope), `@field:`- and
   function-`@param:`-only markers, and any handling of the `-opt-in=` compiler flag (a module-wide
   opt-in does not change what should be exported, so it is ignored).
@@ -544,3 +546,64 @@ Both branches are pinned by `Tier1OptInMarkerSkipTest`'s constructor cases and b
 `Cell2_DefaultTargetMarker_OnAConstructorVal_IsAbsent`. The amendment's marked-*type* branch is
 pinned by `Tier1OptInMarkedParameterArityTest` and `IntegrationTests/Issue128Tests.cs`, whose
 `GroomingLog` cell is the control that the unmarked-type branch above did not move.
+
+## Amendment (2026-09-11): `exportMarkers(...)` waives a named marker (alternative 3 lands)
+
+Alternative 3 (hybrid) ships, unchanged in shape from how this ADR described it and without
+disturbing the default. `nuget { publish { exportMarkers("com.example.ExperimentalFooApi") } }`
+names markers whose declarations keep exporting; everything not named keeps being dropped with
+`SKIPPED_OPT_IN_MARKER`. The escape list is the inverse of BCV's `nonPublicMarkers`: BCV lists what
+to hide, this lists what to keep.
+
+What moved the deferral: the empty-surface case in open question 1. A library whose whole public
+API sits behind one experimental marker gets an empty C# surface with no remedy, and "remove the
+marker" is not a remedy for a library that means the marker. The plumbing cost the deferral worried
+about turned out to be ADR-063's `include`/`exclude` plumbing verbatim.
+
+### Mechanism
+
+The list rides one channel and is read at one place:
+
+- `NugetPublishConfig.exportMarkers(vararg markers: String)`, comma-joined by `NugetPlugin` into
+  the `nuget.exportMarkers` KSP argument exactly as `include`/`exclude` are, read back in
+  `NugetProcessorProvider` into `NugetContext.exportMarkers`, and carried to the classifier on
+  `ForwardBridgeTypeContext.exportMarkers`. Explicitly threaded, not a process-global set: two
+  publishers in one Gradle daemon must not see each other's list (the ADR-054 lesson).
+- The waiver itself is one line in `optInMarkerName()` in `ForwardOptInMarkers.kt`, the private
+  choke point every marker read already goes through. A waived marker answers `null` there, so a
+  waived declaration is indistinguishable from an unmarked one at every read site: it plans, it
+  exports, and no diagnostic mentions it.
+
+### Alternative 4, narrowed to markers the author named
+
+A waived `ERROR`-level marker puts a marked declaration back into `CNameExports.kt`, and reading
+one without opting in does not compile. That is issue #113's failure (1) re-entered from the other
+side, so every configured marker is appended to the generated file's own `@OptIn` list.
+
+This is alternative 4's mechanism, and alternative 4 stays rejected for every marker nobody named.
+What makes it safe here is exactly what made it wrong there: alternative 4 discovered markers
+automatically and silenced a signal the author never chose to give up, while this list contains
+only names the author wrote down. Every configured marker is named whether or not a declaration
+behind it survived the export scope, because an unused opt-in is a warning at most and a missing
+one is a build break.
+
+### Decisions this amendment takes
+
+- **Entries are trusted, unvalidated.** No resolver lookup, no "unknown marker" diagnostic. A
+  misspelt entry waives nothing, which is the pre-amendment behaviour, and the
+  `SKIPPED_OPT_IN_MARKER` warning printed right beside it names the marker's real fully-qualified
+  name. Validating would need `Resolver.getClassDeclarationByName` over a klib-declared marker,
+  which is unproven here; it stays available as a follow-up.
+- **No diagnostic for a waived declaration.** The author asked for the export by name; an `INFO_`
+  per waived member would be noise proportional to how much of the API is marked.
+- **A waived marker also waives a type marked with it.** Same choke point, so a member returning a
+  waived-marked class exports rather than skipping on its type. Anything else would need a second,
+  differently-scoped list, and the two would disagree the first time a marked type appeared in a
+  marked member.
+- **Level is still never consulted.** `WARNING` and `ERROR` markers waive identically, as they skip
+  identically today.
+
+Pinned by `Tier1OptInMarkerExportTest` (waived member exports, unlisted control still skips, the
+generated Kotlin still compiles), `NugetPluginKspArgsWiringTest` (the argument threads and is empty
+when unset), and the `issue113/ExportMarkersSample.kt` fixture, whose `ExperimentalDiet` is the one
+marker `test-library` waives while every other marker in that package is not.

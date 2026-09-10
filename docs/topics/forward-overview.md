@@ -81,7 +81,10 @@ Every generated declaration lands under its mapped namespace inside the single `
 
 By default every public declaration in the module is bridged, not only those under `rootPackage`.
 `publish { include(...); exclude(...) }` narrows that to an explicit package-prefix allowlist, and
-when `include` is left empty, `rootPackage` itself becomes the default scope.
+when `include` is left empty, `rootPackage` itself becomes the default scope. `publish {
+exportMarkers(...) }` is a separate, orthogonal escape list: it names `@RequiresOptIn` markers whose
+declarations keep exporting instead of being dropped, see [Opt-in-marked declarations skip
+named](#opt-in-marked-declarations-skip-named).
 
 The export set is not limited to the module's own files, either: it is a reachability closure that
 also walks into types declared in a dependency Gradle module (return types, parameter types,
@@ -522,6 +525,69 @@ with `CatteryInternalApi` from `:test-models`, is absent from the generated C# e
 module-local marker would be. `@OptIn(InternalApi::class)` on a declaration is a marker *consumer*,
 not a marker member, and stays exported; `@SubclassOptInRequired` is not itself
 `@RequiresOptIn`-meta-annotated, so it does not match and stays exported either.
+
+### An escape list for markers meant to stay public {id="export-markers-escape-list"}
+
+Not every `@RequiresOptIn` marker means "internal, keep this out of C#". `publish {
+exportMarkers("com.example.ExperimentalFooApi") }` names a marker whose declarations keep exporting
+through the ordinary route instead, with no `SKIPPED_OPT_IN_MARKER` diagnostic, as if the marker
+weren't there at all. Every marker not named keeps being dropped exactly as described above; this is
+an escape list, not a change to the default.
+
+From `test-library/.../issue113/ExportMarkersSample.kt`:
+
+```kotlin
+@RequiresOptIn(level = RequiresOptIn.Level.ERROR, message = "Diet plans are still settling")
+@Target(AnnotationTarget.CLASS, AnnotationTarget.PROPERTY, AnnotationTarget.FUNCTION)
+annotation class ExperimentalDiet
+
+class DietPlanner {
+  fun plainName(): String = "Mylo"
+
+  @ExperimentalDiet
+  fun dietName(): String = "kibble"
+
+  @LedgerApi
+  fun ledgerName(): String = "ledger"
+}
+```
+
+`test-library/build.gradle.kts` waives exactly one marker:
+
+```kotlin
+nuget {
+  publish {
+    exportMarkers("io.github.xxfast.kotlin.native.nuget.test.issue113.ExperimentalDiet")
+  }
+}
+```
+
+`DietName()` generates normally; `LedgerName`, behind the unlisted `LedgerApi` marker, does not:
+
+```C#
+public string PlainName()
+{
+    ...
+}
+
+public string DietName()
+{
+    ...
+}
+```
+
+An `ERROR`-level marker's waived declarations only compile inside the generated file because every
+configured marker is also appended to its own `@OptIn` list:
+
+```kotlin
+@file:OptIn(ExperimentalNativeApi::class, ExperimentalForeignApi::class, ExperimentalCoroutinesApi::class, ExperimentalDiet::class)
+```
+
+Entries are trusted, not validated against the resolver: a misspelt marker name waives nothing, and
+the `SKIPPED_OPT_IN_MARKER` diagnostic printed for the declaration still names the marker's real
+FQN. A waived marker also waives every *type* marked with it, since both reads go through the same
+`optInMarkerName()` choke point; there is no separate list for that case. The marker annotation
+class itself is never exported, only the declarations that use it.
 
 ### An opt-in-marked parameter *type* takes every arity with it {id="opt-in-marked-parameter-type-every-arity"}
 

@@ -544,7 +544,7 @@ internal fun translateClass(
       }
       // Issue #121: the planner declined, but a decline is not always an invitation. A marked
       // declaration must reach neither artifact, so the legacy arms below never run for one.
-      if (prop.isOptInRefused()) return@mapNotNull null
+      if (prop.isOptInRefused(classifier.exportMarkers)) return@mapNotNull null
       // Named specialized-protocol property adapters only (lambda / suspend-lambda / Flow).
       // Ordinary property types without a plan are skipped — no mapReturnType IntPtr fallthrough.
       val propTypeResolved: KSType = prop.type.resolve().expandAliases()
@@ -1674,7 +1674,7 @@ internal fun translateSealedClass(
 
           // Issue #121: same gate as the ordinary-class arm above. The planner declined, and a
           // marked declaration must reach neither artifact.
-          if (prop.isOptInRefused()) return@mapNotNull null
+          if (prop.isOptInRefused(classifier.exportMarkers)) return@mapNotNull null
 
           // ADR-124: the arm's Flow/StateFlow properties, off the same `flowProperty` an ordinary
           // class calls, so the externs, the element spelling and the getter body are an ordinary

@@ -85,6 +85,35 @@ class NugetPluginKspArgsWiringTest {
 
     assertEquals("", args["nuget.includePackages"])
     assertEquals("", args["nuget.excludePackages"])
+    assertEquals("", args["nuget.exportMarkers"])
+  }
+
+  /**
+   * ADR-115 amendment: `publish { exportMarkers(...) }` waives a named `@RequiresOptIn` marker, so
+   * the FQNs ride the same comma-joined channel `include`/`exclude` do. Empty when unset, which is
+   * the shipped default (every marked declaration keeps skipping).
+   */
+  @Test
+  fun `publish exportMarkers are wired as a comma-joined KSP arg`() {
+    val project: Project = buildProjectWithSharedLib()
+
+    project.extensions.getByType(NugetExtension::class.java).publish {
+      packageId = "TestLibrary"
+      version = "1.0.0"
+      authors = "Test Author"
+      description = "Test description"
+      exportMarkers("com.contoso.api.ExperimentalFooApi")
+      exportMarkers("com.contoso.api.ExperimentalBarApi")
+    }
+
+    project.evaluate()
+
+    val ksp: KspExtension = project.extensions.getByType(KspExtension::class.java)
+
+    assertEquals(
+      "com.contoso.api.ExperimentalFooApi,com.contoso.api.ExperimentalBarApi",
+      ksp.arguments["nuget.exportMarkers"],
+    )
   }
 
   /**

@@ -34,6 +34,10 @@ internal data class ForwardBridgeTypeContext(
    *  the classifier only sees "not in [exportedObjectHandles], and no containing file", which
    *  cannot tell an `exclude(...)` apart from a missing `include(...)`. */
   val refusedDependencyTypes: Map<String, ForwardAdmissionRefusal> = emptyMap(),
+  /** ADR-115 amendment: the `@RequiresOptIn` marker FQNs `publish { exportMarkers(...) }` waives.
+   *  Carried here rather than read from a process-global set so two publishers in one Gradle
+   *  daemon cannot see each other's list (the ADR-054 lesson). */
+  val exportMarkers: Set<String> = emptySet(),
 )
 
 /**
@@ -51,6 +55,11 @@ internal class ForwardBridgeTypeClassifier(
    * planners cannot disagree about whether a class has a forward base class.
    */
   internal val exportedObjectHandles: Set<String> get() = context.exportedObjectHandles
+
+  /** ADR-115 amendment: exposed for the same reason [exportedObjectHandles] is. The planners and
+   *  the legacy export arms hold this classifier, not the [ForwardBridgeTypeContext], and every
+   *  opt-in marker read has to consult the identical waiver list this classifier does. */
+  internal val exportMarkers: Set<String> get() = context.exportMarkers
 
   fun classify(type: KSType): BridgeType {
     val expanded: KSType = type.expandAliases()
@@ -147,7 +156,7 @@ internal class ForwardBridgeTypeClassifier(
     // ADR-115: a class/object/interface/enum/value class carrying a `@RequiresOptIn` marker is
     // never declared in C#, so every member typed with it skips -- ahead of every membership test
     // below, whose `include(...)`/move-to-top-level hints cannot repair a marked type.
-    val marker: String? = classDeclaration.optInMarker()
+    val marker: String? = classDeclaration.optInMarker(context.exportMarkers)
     if (marker != null) {
       return BridgeType.Unsupported(
         qualifiedName,

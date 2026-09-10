@@ -181,6 +181,9 @@ nuget {
     authors = "xxfast"
     description = "A sample Kotlin/Native library packaged as NuGet"
     rootPackage = "io.github.xxfast.kotlin.native.nuget.test"
+    // ADR-115 amendment: one waived marker, so this build shows both halves of the feature. Every
+    // other `@RequiresOptIn` marker in `issue113/` stays unlisted and keeps being dropped.
+    exportMarkers("io.github.xxfast.kotlin.native.nuget.test.issue113.ExperimentalDiet")
   }
 
   dependencies {

@@ -1278,7 +1278,9 @@ internal class ForwardCallablePlanner(
       if (cls.modifiers.contains(Modifier.DATA) && primary != null) {
         val receiver = ForwardReceiver.Handle(result)
         val markedCopyParameter: String? = primary.parameters
-          .firstNotNullOfOrNull { parameter -> parameter.constructorOptInMarker(cls) }
+          .firstNotNullOfOrNull { parameter ->
+            parameter.constructorOptInMarker(cls, classifier.exportMarkers)
+          }
         if (markedCopyParameter != null) {
           add(
             ForwardCallableCatalogEntry.Skipped(
@@ -1402,7 +1404,9 @@ internal class ForwardCallablePlanner(
     // through `droppedOptInMarker`, which does see the dropped tail.
     val marked: String? = constructor.parameters
       .dropLast(omitted)
-      .firstNotNullOfOrNull { parameter -> parameter.constructorOptInMarker(cls) }
+      .firstNotNullOfOrNull { parameter ->
+        parameter.constructorOptInMarker(cls, classifier.exportMarkers)
+      }
     if (marked != null) {
       return ForwardCallableCatalogEntry.Skipped(
         "$owner.<init>$suffix", ForwardPlanSkipReason.OPT_IN_MARKER,
@@ -1876,7 +1880,7 @@ internal class ForwardCallablePlanner(
     // declaration is unsupported, it is simply not part of the exported surface. One check for
     // every route that reaches the plan (class member, object member, companion, extension,
     // top-level, value class), keyed on the declaration the entry already carries.
-    val optInMarker: String? = (node as? KSAnnotated)?.optInMarker()
+    val optInMarker: String? = (node as? KSAnnotated)?.optInMarker(classifier.exportMarkers)
     if (optInMarker != null) {
       return ForwardCallableCatalogEntry.Skipped(
         symbol, ForwardPlanSkipReason.OPT_IN_MARKER, node = node, detail = optInMarker,

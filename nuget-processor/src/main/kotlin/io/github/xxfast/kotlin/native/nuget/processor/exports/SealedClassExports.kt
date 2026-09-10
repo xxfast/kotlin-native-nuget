@@ -27,6 +27,10 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.nullableHandleBody
 internal fun FileSpec.Builder.addSealedClassExports(
   sealed: KSClassDeclaration,
   callableCatalog: ForwardCallablePlanCatalog,
+  // ADR-115 amendment: the waived marker list, so this arm's issue #121 gate asks the same
+  // question the planner did. A route that read the raw marker here would refuse a declaration
+  // the plan already admitted.
+  exportMarkers: Set<String>,
 ) {
   val name: String = sealed.simpleName.asString()
   val qualifiedName: String = sealed.qualifiedName?.asString() ?: return
@@ -100,7 +104,7 @@ internal fun FileSpec.Builder.addSealedClassExports(
 
       // Issue #121: the planner declined, but a decline is not always an invitation. A marked
       // declaration must reach neither artifact, so the legacy arm below never runs for one.
-      if (prop.isOptInRefused()) continue
+      if (prop.isOptInRefused(exportMarkers)) continue
 
       // Residual legacy route: a lambda-typed property, which has no plan shape yet (the C# half
       // still spells its own `KotlinFunc<...>` arm in `translateSealedClass`). Everything else the

@@ -70,7 +70,7 @@ internal fun KSClassDeclaration.forwardArmFlowProperties(
   .filter { it.getVisibility() == Visibility.PUBLIC }
   .filter { prop -> prop.type.resolve().expandAliases().isForwardFlowType() }
   // Issue #121: a marked declaration must reach neither artifact, legacy route or not.
-  .filter { prop -> !prop.isOptInRefused() }
+  .filter { prop -> !prop.isOptInRefused(classifier.exportMarkers) }
   // ADR-123: an element this route cannot marshal drops the property on both halves;
   // `warnRefusedLegacyRouteMembers` names it once.
   .filter { prop -> classifier.legacyRefusedFlowElement(prop.type.resolve()) == null }

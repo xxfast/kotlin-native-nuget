@@ -275,6 +275,13 @@ class NugetPlugin : Plugin<Project> {
           argMethod.invoke(ksp, "nuget.includePackages", pub?.include.orEmpty().joinToString(","))
           argMethod.invoke(ksp, "nuget.excludePackages", pub?.exclude.orEmpty().joinToString(","))
           argMethod.invoke(ksp, "nuget.boundPackages", boundPackages.joinToString(","))
+          // ADR-115 amendment: the markers this publisher waives, on the same channel as
+          // include/exclude. Empty is the shipped default: every marked declaration keeps skipping.
+          argMethod.invoke(
+            ksp,
+            "nuget.exportMarkers",
+            pub?.exportMarkers.orEmpty().joinToString(","),
+          )
 
           // ADR-088: the same channel as `nuget.boundPackages`, carrying what a flat package list
           // cannot — the ORIGINAL C# full name per bound interface, and whether a Kotlin class can

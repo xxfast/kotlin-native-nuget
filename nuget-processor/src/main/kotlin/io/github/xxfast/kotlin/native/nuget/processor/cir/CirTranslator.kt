@@ -93,6 +93,10 @@ data class NugetContext(
    *  plugin against a newer processor), or when the project does not publish at all — in every
    *  case no duplicate-type warning can fire, which is the pre-ADR-109 behaviour. */
   val publishedScopes: List<PublishedScope> = emptyList(),
+  /** ADR-115 amendment: the fully-qualified `@RequiresOptIn` marker names `publish {
+   *  exportMarkers(...) }` waives, so a declaration carrying one exports as if it carried no
+   *  marker at all. Empty is the shipped default (every marked declaration skips). */
+  val exportMarkers: Set<String> = emptySet(),
 )
 
 internal fun translate(
@@ -151,6 +155,7 @@ internal fun translate(
       exportedObjectHandles = exportedTypes,
       rootPackage = context.rootPackage,
       rootNamespace = context.rootNamespace,
+      exportMarkers = context.exportMarkers,
     ),
   )
 

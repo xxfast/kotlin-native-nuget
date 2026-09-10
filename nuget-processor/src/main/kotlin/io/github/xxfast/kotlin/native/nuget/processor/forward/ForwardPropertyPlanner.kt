@@ -326,7 +326,7 @@ internal class ForwardPropertyPlanner(
     // ADR-115: the author's own signal, ahead of any type question -- nothing about the property
     // is unsupported. `@set:Marker` on a `var` skips the whole property rather than exporting it
     // get-only: an accessor-level partial projection does not exist in the forward plan.
-    val optInMarker: String? = prop.optInMarker()
+    val optInMarker: String? = prop.optInMarker(classifier.exportMarkers)
     if (optInMarker != null) {
       dropped.add(
         ForwardDroppedProperty(symbol, prop, typeDescription = "", optInMarker = optInMarker),

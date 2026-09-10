@@ -519,7 +519,8 @@ class NugetProcessor(
     // scope predicate rather than inside it, so the marked declarations stay enumerable for the
     // diagnostic below. The reachability closure takes the composed predicate too, so a marked
     // dependency-module type is never admitted either.
-    fun isMarkedOptIn(declaration: KSDeclaration): Boolean = declaration.optInMarker() != null
+    fun isMarkedOptIn(declaration: KSDeclaration): Boolean =
+      declaration.optInMarker(context.exportMarkers) != null
 
     fun isExportedAndUnmarked(declaration: KSDeclaration): Boolean =
       isExported(declaration) && !isMarkedOptIn(declaration)
@@ -558,9 +559,9 @@ class NugetProcessor(
             declaration = declaration.qualifiedName?.asString()
               ?: declaration.simpleName.asString(),
             reason = ForwardPlanSkipReason.OPT_IN_MARKER
-              .diagnosticReason(declaration.optInMarker()),
+              .diagnosticReason(declaration.optInMarker(context.exportMarkers)),
             hint = ForwardPlanSkipReason.OPT_IN_MARKER
-              .diagnosticHint(declaration.optInMarker()),
+              .diagnosticHint(declaration.optInMarker(context.exportMarkers)),
           )
         },
       logger,
@@ -983,6 +984,7 @@ class NugetProcessor(
         actualTypeAliasTargets = actualTypeAliasTargets,
         boundInterfaces = context.boundInterfaces,
         refusedDependencyTypes = reachability.refused,
+        exportMarkers = context.exportMarkers,
       ),
     )
     val forwardPlanner = ForwardCallablePlanner(forwardClassifier, expects)
@@ -1330,7 +1332,9 @@ class NugetProcessor(
     classes.forEach { attributing(it) { builder.addCompanionExports(it, callableCatalog) } }
     genericClasses.forEach { attributing(it) { builder.addGenericClassExports(it) } }
     enums.forEach { attributing(it) { builder.addEnumExports(it) } }
-    sealedClasses.forEach { attributing(it) { builder.addSealedClassExports(it, callableCatalog) } }
+    sealedClasses.forEach {
+      attributing(it) { builder.addSealedClassExports(it, callableCatalog, context.exportMarkers) }
+    }
     objects.forEach { attributing(it) { builder.addObjectExports(it, callableCatalog) } }
     valueClasses.forEach { attributing(it) { builder.addValueClassExports(it, callableCatalog) } }
     reachableInterfaces.forEach {
@@ -1427,6 +1431,12 @@ class NugetProcessor(
       if (hasSuspendFunctions || needsFlowImports) {
         add(ClassName("kotlinx.coroutines", "ExperimentalCoroutinesApi"))
       }
+      // ADR-115 amendment: a waived marker puts a marked declaration back into `CNameExports.kt`,
+      // and at `RequiresOptIn.Level.ERROR` reading one without opting in does not compile. That is
+      // issue #113's original failure, so waiving a marker has to carry the opt-in with it. Every
+      // configured marker is named, whether or not a declaration behind it survived the export
+      // scope: an unused opt-in is a warning at most, a missing one is a build break.
+      context.exportMarkers.forEach { marker -> add(ClassName.bestGuess(marker)) }
     }
 
     builder.addAnnotation(
