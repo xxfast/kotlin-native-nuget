@@ -143,6 +143,20 @@ public class LiveHandleTests
         });
     }
 
+    // Row 1b. The ADR-035 value-class secondary constructor mints a Cat StableRef inside Kotlin
+    // and hands it to the struct's underlying property, so the consumer disposes it like any other
+    // `new Cat(...)`. Mylo is created fifty times from his name alone and must come back every time.
+    [Fact]
+    public void ReferenceValueClassSecondaryConstructor_DisposeUnderlying_ReturnsToBaseline()
+    {
+        AssertNoLeak(() =>
+        {
+            var result = new CatResult("Mylo");
+            using var mylo = result.Cat;
+            Assert.Equal("Mylo", result.Name);
+        });
+    }
+
     // Row 2. String parameter and string return on the ordinary route: no StableRef at all
     // (UTF-8 wire), so the count must not move even once.
     [Fact]

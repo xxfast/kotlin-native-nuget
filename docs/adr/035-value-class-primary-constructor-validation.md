@@ -246,3 +246,52 @@ properly (planning both constructors through `valueClassConstructorEntries`
 with an `ObjectHandle` result and rendering
 `: this(new T(CreateChecked(...)))`) is now tracked in ROADMAP.md Phase 3 and
 starts from this plan, not from the deleted ad hoc render path.
+
+### 2026-09-11 amendment
+
+The Phase 3 follow-up the previous amendment tracked is done, for secondaries
+only. A secondary constructor on a reference-underlying value class is now
+planned like any other value-class constructor: its result is the underlying
+itself, which for a reference is an `ObjectHandle`, so the Kotlin export runs
+the constructor, takes the underlying property off the result and returns it as
+a fresh `StableRef` through `NugetHandles.retain`. C# rebuilds that handle with
+ADR-105's `handleReconstruction` and hands it to the positional record
+constructor it delegates to:
+
+```csharp
+public readonly record struct CatResult(global::TestLibrary.Cat.Cat Cat)
+{
+    [DllImport(..., EntryPoint = "catresult_create_2")]
+    private static extern IntPtr Native_Create_2(
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string name, out IntPtr error);
+
+    private static IntPtr CreateChecked_2(string name) { /* ADR-033 error check */ }
+
+    public CatResult(string name) : this(new global::TestLibrary.Cat.Cat(CreateChecked_2(name)))
+    {
+    }
+}
+```
+
+Ownership follows the ordinary `_create` route: the minted handle is owned by
+the struct's underlying property, so the consumer disposes `result.Cat` exactly
+as it would dispose any `new Cat(...)`. Wrapping an existing instance
+(`new CatResult(oreo).Cat`) is unchanged and mints nothing.
+
+The **primary** stays deferred, and the reason is now concrete rather than
+"needs separate handling": the record header already declares a positional
+`CatResult(Cat Cat)`, and a hand-written `CatResult(Cat cat)` next to it is
+CS0111. Planning it would mean giving up the positional record for a
+hand-written struct whose underlying is assigned from `CreateChecked`, which
+constructs a *second* C# peer for the same Kotlin object on every call
+(`new CatResult(oreo).Cat != oreo`, a second handle to dispose). That is a
+different mapping decision with its own consumer-visible identity semantics, so
+it stays deferred; the primary's `init` still does not run across the bridge.
+
+`ForwardPlanSkipReason.REFERENCE_UNDERLYING_VALUE_CLASS_CONSTRUCTOR` and
+`ForwardDiagnosticKind.SKIPPED_VALUE_CLASS_SECONDARY_CONSTRUCTOR` are deleted:
+nothing produces them any more, and the primary is not a skip (the record
+header does construct one). The renderer's `CreateChecked` block is shared
+between the two value-class shapes; only the constructor it wraps differs, an
+assignment for a value underlying and a `: this(...)` delegation for a
+reference one.

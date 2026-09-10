@@ -38,6 +38,8 @@ Wrapping a reference type (`Cat`), from `test-library/src/nativeMain/kotlin/.../
 
 ```kotlin
 value class CatResult(val cat: Cat) {
+  constructor(name: String) : this(Cat(name, 1))
+
   val name: String get() = cat.name
   fun isAlive(): Boolean = cat.lives > 0
 }
@@ -83,18 +85,45 @@ public readonly record struct CatId
 ```C#
 public readonly record struct CatResult(Cat Cat)
 {
-    [DllImport("sample", CallingConvention = CallingConvention.Cdecl, EntryPoint = "catresult_get_name")]
+    [DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "catresult_create_2")]
+    private static extern IntPtr Native_Create_2(string name, out IntPtr error);
+
+    private static IntPtr CreateChecked_2(string name)
+    {
+        IntPtr underlying = Native_Create_2(name, out IntPtr error);
+        if (error != IntPtr.Zero)
+        {
+            throw NugetErrorNative.BuildException(error);
+        }
+        return underlying;
+    }
+
+    public CatResult(string name) : this(new Cat(CreateChecked_2(name)))
+    {
+    }
+
+    [DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "catresult_get_name")]
     private static extern IntPtr Native_GetName(IntPtr value);
 
     public string Name => Marshal.PtrToStringUTF8(Native_GetName(Cat._handle))!;
 
-    [DllImport("sample", CallingConvention = CallingConvention.Cdecl, EntryPoint = "catresult_isAlive")]
+    [DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "catresult_isAlive")]
     [return: MarshalAs(UnmanagedType.I1)]
     private static extern bool Native_IsAlive(IntPtr value);
 
     public bool IsAlive() => Native_IsAlive(Cat._handle);
 }
 ```
+
+The secondary constructor delegates to the positional one it wraps, minting the underlying `Cat` in Kotlin and handing the resulting handle to `new Cat(...)`; the consumer disposes `result.Cat` exactly as it would dispose any other `new Cat(...)`.
+
+<note>
+    <p>The minted <code>Cat</code> is owned by the struct's underlying property, not by a second
+    hidden peer. <code>LeakTests/LiveHandleTests.cs</code> row 1b,
+    <code>ReferenceValueClassSecondaryConstructor_DisposeUnderlying_ReturnsToBaseline</code>, proves
+    fifty <code>new CatResult(name)</code> calls each return their handle to baseline once
+    <code>result.Cat</code> is disposed.</p>
+</note>
 
 Because `record struct` gives structural equality for free, `CatId`/`CatResult` don't need generated `Equals`/`GetHashCode` overrides the way [data classes](data-classes.md) do. C# derives them from the wrapped property automatically.
 
@@ -1629,11 +1658,11 @@ for the full reasoning, including its 2026-08-08 amendment.
 
 - Reference-underlying value-class **primary** constructor `init` validation stays deferred
   ([ADR-035](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/035-value-class-primary-constructor-validation.md));
-  primitive-underlying validation (the `CatId` path above) is in place. A reference-underlying value
-  class (`CatResult` above) keeps only its positional record-struct constructor; a **secondary**
-  constructor declared on one (`constructor(name: String) : this(Cat(name))`) skips named
-  (`SKIPPED_VALUE_CLASS_SECONDARY_CONSTRUCTOR`) rather than rendering, with a warning pointing at
-  the workaround: construct the underlying and wrap it yourself, C# side.
+  primitive-underlying validation (the `CatId` path above) is in place. A **secondary** constructor
+  binds, `: this(new Cat(CreateChecked_2(...)))`, its handle owned by the underlying, but the
+  primary keeps only its positional record-struct constructor (`CatResult(Cat Cat)`): a
+  hand-written primary next to that positional header would be a duplicate constructor (CS0111), so
+  its `init` still does not run across the bridge.
 - Inherited/delegation-forwarded members are excluded by design, not deferred; see
   [Inherited members](#inherited-members) above. The exclusion signal is signature-level (kind,
   simple name, arity, and per-position parameter types), so an unrelated overload sharing only a

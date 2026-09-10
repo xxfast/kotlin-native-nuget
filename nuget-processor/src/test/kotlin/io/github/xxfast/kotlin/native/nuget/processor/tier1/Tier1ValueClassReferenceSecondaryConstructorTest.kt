@@ -1,23 +1,21 @@
 package io.github.xxfast.kotlin.native.nuget.processor.tier1
 
-import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnosticKind
 import kotlin.test.Test
 import kotlin.test.assertContains
-import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 /**
  * ROADMAP Phase 3: a *reference*-underlying value class with a secondary constructor.
  *
- * ADR-035 defers the reference-underlying primary, so this shape used to fall through the plan
- * into the pre-plan `buildConstructor`/`renderReferenceValueClass` pair, which emitted a
- * `: this(CreateChecked(...))` handing an `IntPtr` to the class-typed positional parameter (CS1503)
- * against a Kotlin export that returned the raw underlying object rather than a `StableRef`
- * pointer. No fixture ever had one, so the route shipped broken. It is deleted: the struct keeps
- * only its positional record constructor, and the skipped secondary says so by name.
+ * ADR-035's 2026-09-11 amendment lifts the secondary off the skip list. It is a plan-routed
+ * constructor like any other: the export returns the underlying `Cat` as a fresh handle, and C#
+ * delegates to its own positional record constructor by reconstructing that handle,
+ * `: this(new Cat(CreateChecked_2(name)))`. The *primary* stays deferred, because a positional
+ * `Wrapper(Cat Cat)` cannot coexist with a hand-written `Wrapper(Cat cat)` (CS0111), so no
+ * `wrapper_create` crosses.
  *
- * The control is the sibling that *does* work: a String-underlying value class with a secondary
+ * The control is the sibling that always worked: a String-underlying value class with a secondary
  * constructor is plan-routed and must still render both its `Native_Create` imports.
  */
 class Tier1ValueClassReferenceSecondaryConstructorTest {
@@ -43,7 +41,7 @@ class Tier1ValueClassReferenceSecondaryConstructorTest {
   """.trimIndent()
 
   @Test
-  fun `a reference-underlying value class emits only its positional record constructor`() {
+  fun `a reference-underlying value class binds its secondary constructor`() {
     val result = Tier1Harness.run(source)
 
     assertTrue(result.compiledClean, "expected no broken source; got: ${result.compileErrors}")
@@ -51,44 +49,43 @@ class Tier1ValueClassReferenceSecondaryConstructorTest {
     val cs: String = result.generatedCSharp
     // The positional record header is untouched: the underlying stays the class handle itself.
     assertContains(cs, "public readonly record struct Wrapper(global::Interop.Cat Cat)")
-    // ...and nothing else constructs one. Both the `CreateChecked` helper and the native import
-    // that fed it are gone, on both halves of the bridge.
-    assertFalse(
-      "wrapper_create" in cs,
-      "expected no reference-underlying constructor import; got: $cs",
+    // The secondary imports the handle-returning export and checks the error slot like any other
+    // plan-routed constructor.
+    assertContains(
+      cs,
+      "private static extern IntPtr Native_Create_2(" +
+          "[MarshalAs(UnmanagedType.LPUTF8Str)] string name, out IntPtr error);",
     )
-    val wrapperSection: String = cs
-      .substringAfter("record struct Wrapper")
-      .substringBefore("record struct CatId")
-    assertFalse(
-      "CreateChecked" in wrapperSection,
-      "expected no CreateChecked helper inside Wrapper; got: $cs",
+    assertContains(cs, "private static IntPtr CreateChecked_2(string name)")
+    // ...then delegates to the positional constructor by rebuilding the returned handle.
+    assertContains(
+      cs,
+      "public Wrapper(string name) : this(new global::Interop.Cat(CreateChecked_2(name)))",
     )
-    assertFalse(
-      "export_wrapper_create" in result.generated,
-      "expected no Kotlin constructor export; got: ${result.generated}",
-    )
-
     // The rest of the value class is unaffected: its computed property still binds.
     assertContains(cs, "public string Label =>")
   }
 
   @Test
-  fun `the skipped secondary constructor is named in a warning`() {
+  fun `the Kotlin half exports the secondary and not the deferred primary`() {
+    val result = Tier1Harness.run(source)
+
+    assertContains(result.generated, "export_wrapper_create_2")
+    assertFalse(
+      "export_wrapper_create(" in result.generated,
+      "expected no export for the deferred primary; got: ${result.generated}",
+    )
+  }
+
+  @Test
+  fun `no secondary constructor is skipped`() {
     val result = Tier1Harness.run(source)
 
     val warnings: List<String> = result.kspWarnings.filter { warning ->
-      warning.contains(
-        ForwardDiagnosticKind.SKIPPED_VALUE_CLASS_SECONDARY_CONSTRUCTOR.name,
-      )
+      "SKIPPED_VALUE_CLASS_SECONDARY_CONSTRUCTOR" in warning ||
+          "REFERENCE_UNDERLYING_VALUE_CLASS_CONSTRUCTOR" in warning
     }
-    assertEquals(1, warnings.size, "expected exactly one skip warning; got: ${result.kspWarnings}")
-    assertContains(warnings.single(), "tier1.vcrefsec.Wrapper.<init>_2")
-    assertContains(
-      warnings.single(),
-      "a value class over a reference underlying carries no constructor across the bridge",
-    )
-    assertContains(warnings.single(), "construct the underlying and wrap it")
+    assertTrue(warnings.isEmpty(), "expected no constructor skip warning; got: $warnings")
   }
 
   @Test

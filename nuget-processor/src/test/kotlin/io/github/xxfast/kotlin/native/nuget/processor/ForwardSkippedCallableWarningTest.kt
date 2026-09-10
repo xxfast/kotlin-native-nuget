@@ -75,15 +75,11 @@ class ForwardSkippedCallableWarningTest {
     )
   }
 
-  // The five sentences that moved from the `if` chain onto `diagnosticReason()`, pinned verbatim:
+  // The sentences that moved from the `if` chain onto `diagnosticReason()`, pinned verbatim:
   // the move is a refactor, so every one of these is byte-identical to its pre-refactor text.
   @Test
   fun `every reason that owns a sentence keeps its shipped wording`() {
     val expected: List<Pair<ForwardCallableCatalogEntry.Skipped, String>> = listOf(
-      ForwardCallableCatalogEntry.Skipped(
-        symbol = "com.example.Money",
-        reason = ForwardPlanSkipReason.REFERENCE_UNDERLYING_VALUE_CLASS_CONSTRUCTOR,
-      ) to "a value class over a reference underlying carries no constructor across the bridge",
       ForwardCallableCatalogEntry.Skipped(
         symbol = "com.example.Api.preview",
         reason = ForwardPlanSkipReason.OPT_IN_MARKER,
@@ -274,7 +270,6 @@ class ForwardSkippedCallableWarningTest {
         ForwardPlanSkipReason.VALUE_CLASS,
         // ROADMAP Phase 3: a secondary constructor of a reference-underlying value class. ADR-035
         // keeps only the positional record-struct constructor, and no legacy route re-emits one.
-        ForwardPlanSkipReason.REFERENCE_UNDERLYING_VALUE_CLASS_CONSTRUCTOR,
         // ADR-064: genuine drops with their own named diagnostic kind (cell 23's combination,
         // and a value-class member inherited via interface delegation).
         ForwardPlanSkipReason.UNSUPPORTED_COMBINATION,

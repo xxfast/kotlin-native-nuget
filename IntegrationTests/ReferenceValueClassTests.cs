@@ -12,6 +12,26 @@ public class ReferenceValueClassTests
         Assert.Equal("Oreo", result.Cat.Name);
     }
 
+    // ADR-035 amendment: the secondary constructor runs in Kotlin, mints the underlying Cat and
+    // hands the handle back wrapped in the struct. Mylo arrives with one life and his own name.
+    [Fact]
+    public void CatResult_SecondaryConstructor_MintsUnderlyingCat()
+    {
+        var result = new CatResult("Mylo");
+        using var mylo = result.Cat;
+        Assert.Equal("Mylo", mylo.Name);
+    }
+
+    // The positional primary is unchanged by the secondary: Oreo is still wrapped, not re-minted.
+    [Fact]
+    public void CatResult_PrimaryConstructor_StillWrapsExistingCat()
+    {
+        using var oreo = new Cat("Oreo", 9);
+        var result = new CatResult(oreo);
+        Assert.Equal("Oreo", result.Cat.Name);
+        Assert.True(result.IsAlive());
+    }
+
     [Fact]
     public void CatResult_Name_ReturnsUnderlyingCatName()
     {

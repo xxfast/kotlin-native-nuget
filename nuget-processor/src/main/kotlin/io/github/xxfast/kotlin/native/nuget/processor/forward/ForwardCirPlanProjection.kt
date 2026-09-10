@@ -33,6 +33,11 @@ internal object ForwardCirPlanProjection {
       // ADR-077: an enum underlying crosses as its int ordinal; cast it back to the enum for the
       // struct member assignment.
       result is BridgeType.Enum -> "(${result.csharpType})CreateChecked$nativeSuffix($paramNames)"
+      // ADR-035's 2026-09-11 amendment: a reference underlying comes back as a fresh handle, so
+      // the secondary rebuilds it (ADR-105's `new T(...)` / `T.FromHandle(...)`) and hands it to
+      // the positional record constructor it delegates to.
+      result is BridgeType.ObjectHandle ->
+        result.handleReconstruction("CreateChecked$nativeSuffix($paramNames)")
       else -> "CreateChecked$nativeSuffix($paramNames)"
     }
     val nativeCall: ForwardNativeCall = plan.nativeExports.single()

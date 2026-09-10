@@ -24,26 +24,7 @@ internal fun StringBuilder.renderValueClass(cls: CirValueClass) {
   appendLine()
 
   cls.constructors.forEach { ctor ->
-    val paramStr: String = ctor.parameters.joinToString(", ") { "${it.type} ${it.name}" }
-    val paramNames: String = ctor.parameters.joinToString(", ") { it.name }
-    // ADR-077: the native call lowers each argument to its wire shape when the projection
-    // supplied one ((int)mood for an enum parameter); public and wire coincide otherwise.
-    val nativeArgs: String = ctor.nativeArguments?.joinToString(", ") ?: paramNames
-    val nativeReturnType: String =
-      if (cls.underlyingType == "string") "IntPtr" else cls.underlyingNativeType
-    val suffix: String = ctor.nativeSuffix
-
-    renderDllImport(cls.constructorNativeImport(ctor))
-    appendLine("        private static $nativeReturnType CreateChecked$suffix($paramStr)")
-    appendLine("        {")
-    appendLine("            $nativeReturnType underlying = Native_Create$suffix($nativeArgs, out IntPtr error);")
-    appendLine("            if (error != IntPtr.Zero)")
-    appendLine("            {")
-    appendLine("                throw NugetErrorNative.BuildException(error);")
-    appendLine("            }")
-    appendLine("            return underlying;")
-    appendLine("        }")
-    appendLine()
+    val paramStr: String = renderValueClassCreateChecked(cls, ctor)
     appendLine("        public ${cls.name}($paramStr)")
     appendLine("        {")
     appendLine("            ${cls.underlyingName} = ${ctor.body};")
@@ -56,16 +37,60 @@ internal fun StringBuilder.renderValueClass(cls: CirValueClass) {
   appendLine("    }")
 }
 
-// ADR-035: a reference-underlying value class is the positional record struct over its underlying
-// handle and nothing else. Its primary is deferred and its secondaries are skipped by the planner
-// (`REFERENCE_UNDERLYING_VALUE_CLASS_CONSTRUCTOR`), so there is no constructor to render here.
+// ADR-035: a reference-underlying value class keeps the positional record struct over its
+// underlying handle as its primary (a hand-written second `Wrapper(Cat)` would be CS0111, so that
+// one stays deferred). Its secondaries run in Kotlin and delegate to that positional constructor,
+// rebuilding the handle the export minted: `: this(new Cat(CreateChecked_2(name)))`.
 private fun StringBuilder.renderReferenceValueClass(cls: CirValueClass) {
   appendLine("    public readonly record struct ${cls.name}(${cls.underlyingType} ${cls.underlyingName})")
   appendLine("    {")
 
+  cls.constructors.forEach { ctor ->
+    val paramStr: String = renderValueClassCreateChecked(cls, ctor)
+    appendLine("        public ${cls.name}($paramStr) : this(${ctor.body})")
+    appendLine("        {")
+    appendLine("        }")
+    appendLine()
+  }
+
   renderValueClassMembers(cls)
 
   appendLine("    }")
+}
+
+/**
+ * The import + validating helper shared by both value-class shapes: the wire call, the ADR-033
+ * error check, and the underlying it returns. Returns the public parameter list, which the caller
+ * repeats on the constructor it renders around this.
+ */
+private fun StringBuilder.renderValueClassCreateChecked(
+  cls: CirValueClass,
+  ctor: CirValueClassConstructor,
+): String {
+  val paramStr: String = ctor.parameters.joinToString(", ") { "${it.type} ${it.name}" }
+  val paramNames: String = ctor.parameters.joinToString(", ") { it.name }
+  // ADR-077: the native call lowers each argument to its wire shape when the projection
+  // supplied one ((int)mood for an enum parameter); public and wire coincide otherwise.
+  val nativeArgs: String = ctor.nativeArguments?.joinToString(", ") ?: paramNames
+  val nativeReturnType: String =
+    if (cls.underlyingType == "string") "IntPtr" else cls.underlyingNativeType
+  val suffix: String = ctor.nativeSuffix
+
+  renderDllImport(cls.constructorNativeImport(ctor))
+  appendLine("        private static $nativeReturnType CreateChecked$suffix($paramStr)")
+  appendLine("        {")
+  appendLine(
+    "            $nativeReturnType underlying = " +
+        "Native_Create$suffix($nativeArgs, out IntPtr error);",
+  )
+  appendLine("            if (error != IntPtr.Zero)")
+  appendLine("            {")
+  appendLine("                throw NugetErrorNative.BuildException(error);")
+  appendLine("            }")
+  appendLine("            return underlying;")
+  appendLine("        }")
+  appendLine()
+  return paramStr
 }
 
 private fun StringBuilder.renderValueClassMembers(cls: CirValueClass) {

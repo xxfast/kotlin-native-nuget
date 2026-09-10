@@ -2477,22 +2477,17 @@ internal fun translateValueClass(
     .filter { it != cls.primaryConstructor }
     .toList()
 
-  val constructors: List<CirValueClassConstructor> = if (isReferenceUnderlying) {
-    // ADR-035: the positional record struct over the underlying handle is the only constructor.
-    // A secondary has nothing to delegate to (the primary is deferred), so the planner skips it
-    // and neither half emits anything -- no import, no export, no `this(CreateChecked(...))`
-    // handing an IntPtr to a class-typed parameter.
-    emptyList()
-  } else {
-    // ADR-035: plan-only for primitive-underlying constructors.
-    buildList {
-      val primaryPlan = callableCatalog.planFor("$qualifiedName.<init>")
-      if (primaryPlan != null) add(buildConstructorFromPlan(primaryPlan, ""))
-      secondaryCtorDecls.forEachIndexed { index, _ ->
-        val number: Int = index + 2
-        val planned = callableCatalog.planFor("$qualifiedName.<init>_$number")
-        if (planned != null) add(buildConstructorFromPlan(planned, "_$number"))
-      }
+  // ADR-035: plan-only, on both underlying kinds. A reference underlying has no *primary* plan
+  // (the positional record header already constructs one, and a second `Wrapper(Cat)` would be
+  // CS0111), but its secondaries are planned since the 2026-09-11 amendment; the lookup below
+  // simply finds nothing for `<init>` in that case.
+  val constructors: List<CirValueClassConstructor> = buildList {
+    val primaryPlan: ForwardCallablePlan? = callableCatalog.planFor("$qualifiedName.<init>")
+    if (primaryPlan != null) add(buildConstructorFromPlan(primaryPlan, ""))
+    secondaryCtorDecls.forEachIndexed { index, _ ->
+      val number: Int = index + 2
+      val planned: ForwardCallablePlan? = callableCatalog.planFor("$qualifiedName.<init>_$number")
+      if (planned != null) add(buildConstructorFromPlan(planned, "_$number"))
     }
   }
 

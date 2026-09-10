@@ -74,12 +74,6 @@ internal enum class ForwardPlanSkipReason(val droppedFromCSharp: Boolean) {
   UNSUPPORTED(droppedFromCSharp = true),
   VALUE_CLASS(droppedFromCSharp = true),
 
-  /** A secondary constructor of a value class over a reference underlying. ADR-035 defers that
-   *  struct's primary constructor and keeps only the positional record one, so a secondary has
-   *  nothing to delegate to and no legacy route re-emits it: a genuine drop, with its own
-   *  diagnostic kind because nothing about its parameter types is unsupported. */
-  REFERENCE_UNDERLYING_VALUE_CLASS_CONSTRUCTOR(droppedFromCSharp = true),
-
   // ADR-064: genuine drops with their own named diagnostic kind, not the generic "type
   // combination is not supported" bucket the reasons above still render through.
   /** Cell 23 / BUG-010: a generic + suspend + inline + reified extension returning `Result<T>` —
@@ -669,26 +663,18 @@ internal class ForwardCallablePlanner(
       .filter { it.getVisibility() == Visibility.PUBLIC }
       .toList()
 
-    // ADR-035 exposes a reference-underlying value class as a positional record struct over the
-    // underlying handle and defers its primary constructor, so a secondary has nothing to
-    // delegate to: the pre-plan route that used to emit one handed an `IntPtr` to the class-typed
-    // positional parameter (CS1503) against a Kotlin export returning the underlying object
-    // rather than a pointer. It is a drop, named per secondary; the primary is not skipped
-    // because the record header still constructs one.
-    if (isReferenceUnderlying) {
-      return secondaryConstructors.mapIndexed { index, ctor ->
-        ForwardCallableCatalogEntry.Skipped(
-          symbol = "$owner.<init>_${index + 2}",
-          reason = ForwardPlanSkipReason.REFERENCE_UNDERLYING_VALUE_CLASS_CONSTRUCTOR,
-          node = ctor,
-        )
-      }
-    }
-
+    // ADR-035's 2026-09-11 amendment: a secondary is planned on both underlying kinds. Its result
+    // is the underlying itself, so a reference underlying returns a fresh handle that C# rebuilds
+    // (`: this(new Cat(CreateChecked_2(...)))`) to feed its own positional record constructor.
+    // The *primary* stays deferred on a reference underlying: a positional `Wrapper(Cat Cat)`
+    // cannot coexist with a hand-written `Wrapper(Cat cat)` (CS0111), and the record header
+    // already constructs one, so it is not a skip either.
     val exports: List<Pair<KSFunctionDeclaration, Pair<String, String>>> = buildList {
-      val primary = cls.primaryConstructor
-      if (primary != null && primary.getVisibility() == Visibility.PUBLIC) {
-        add(primary to ("${prefix}_create" to ""))
+      val exportedPrimary: KSFunctionDeclaration? = cls.primaryConstructor?.takeIf {
+        !isReferenceUnderlying && it.getVisibility() == Visibility.PUBLIC
+      }
+      if (exportedPrimary != null) {
+        add(exportedPrimary to ("${prefix}_create" to ""))
       }
       secondaryConstructors.forEachIndexed { index, ctor ->
         val number: Int = index + 2
