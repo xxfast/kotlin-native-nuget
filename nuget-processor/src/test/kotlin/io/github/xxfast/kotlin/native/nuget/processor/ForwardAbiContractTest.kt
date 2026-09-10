@@ -20,7 +20,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.cir.CirValueClass
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirValueClassConstructor
 import io.github.xxfast.kotlin.native.nuget.processor.forward.BridgeType
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardAbiDirection as PlannedAbiDirection
-import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardAbiParameter as PlannedAbiParameter
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardAbiParameter
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardAbiRole
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardAbiWireType
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallableCatalogEntry
@@ -184,7 +184,7 @@ class ForwardAbiContractTest {
         csharp = listOf(
           signature(
             "nullable_has_value",
-            ForwardAbiParameter(ForwardAbiType.POINTER, ForwardAbiDirection.OUT)
+            ForwardAbiSignatureParameter(ForwardAbiType.POINTER, ForwardAbiDirection.OUT)
           )
         ),
         kotlin = listOf(signature("nullable_has_value")),
@@ -203,15 +203,15 @@ class ForwardAbiContractTest {
         csharp = listOf(
           signature(
             "combine",
-            ForwardAbiParameter(ForwardAbiType.INT),
-            ForwardAbiParameter(ForwardAbiType.STRING)
+            ForwardAbiSignatureParameter(ForwardAbiType.INT),
+            ForwardAbiSignatureParameter(ForwardAbiType.STRING)
           )
         ),
         kotlin = listOf(
           signature(
             "combine",
-            ForwardAbiParameter(ForwardAbiType.STRING),
-            ForwardAbiParameter(ForwardAbiType.INT)
+            ForwardAbiSignatureParameter(ForwardAbiType.STRING),
+            ForwardAbiSignatureParameter(ForwardAbiType.INT)
           )
         ),
       )
@@ -359,7 +359,7 @@ class ForwardAbiContractTest {
       "counter_increment",
       ForwardAbiWireType.INT32,
       listOf(
-        PlannedAbiParameter(
+        ForwardAbiParameter(
           "increment", ForwardAbiWireType.INT32, PlannedAbiDirection.IN_OUT, transfer,
         ),
       ),
@@ -392,9 +392,9 @@ class ForwardAbiContractTest {
     )
     val expected = signature(
       "counter_increment",
-      ForwardAbiParameter(ForwardAbiType.POINTER),
-      ForwardAbiParameter(ForwardAbiType.INT),
-      ForwardAbiParameter(ForwardAbiType.POINTER, ForwardAbiDirection.OUT),
+      ForwardAbiSignatureParameter(ForwardAbiType.POINTER),
+      ForwardAbiSignatureParameter(ForwardAbiType.INT),
+      ForwardAbiSignatureParameter(ForwardAbiType.POINTER, ForwardAbiDirection.OUT),
       result = ForwardAbiType.INT,
     )
 
@@ -417,7 +417,7 @@ class ForwardAbiContractTest {
 
   private fun signature(
     name: String,
-    vararg parameters: ForwardAbiParameter,
+    vararg parameters: ForwardAbiSignatureParameter,
     result: ForwardAbiType = ForwardAbiType.BOOL,
   ): ForwardAbiSignature = ForwardAbiSignature(name, result, parameters.toList())
 
@@ -461,7 +461,7 @@ class ForwardAbiContractTest {
       "error", BridgeType.ObjectHandle("kotlin.Throwable"), ForwardFlow.OUT_OF_KOTLIN,
       ForwardPassing.OUT, ForwardOwnership.BORROWED, ForwardConversion.STABLE_REF_TO_HANDLE,
     )
-    val error = PlannedAbiParameter(
+    val error = ForwardAbiParameter(
       "errorOut", ForwardAbiWireType.POINTER, PlannedAbiDirection.OUT, errorTransfer,
       ForwardAbiRole.ERROR,
     )
@@ -469,11 +469,11 @@ class ForwardAbiContractTest {
       "counter_increment",
       ForwardAbiWireType.INT32,
       listOf(
-        PlannedAbiParameter(
+        ForwardAbiParameter(
           "handle", ForwardAbiWireType.POINTER, PlannedAbiDirection.IN, handleTransfer,
           ForwardAbiRole.RECEIVER,
         ),
-        PlannedAbiParameter("increment", ForwardAbiWireType.INT32, PlannedAbiDirection.IN, incrementTransfer),
+        ForwardAbiParameter("increment", ForwardAbiWireType.INT32, PlannedAbiDirection.IN, incrementTransfer),
         error,
       ),
     )
