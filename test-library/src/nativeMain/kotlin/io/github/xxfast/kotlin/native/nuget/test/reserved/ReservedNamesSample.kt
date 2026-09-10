@@ -35,8 +35,8 @@
  *   sides at the same position: `Native_Tag(string receiver, string receiver, out IntPtr error)`
  *   (CS0100) and `export_..._tag(receiver: String, receiver: String, errorOut: ...)` (a Kotlin
  *   duplicate parameter, which is a compile error, not a warning). It is the one cell that does not
- *   live in this file: the merged `StringExtensions` class takes the package of the first-visited
- *   `String` extension, so it sits beside the others in `cat/ReservedExtensions.kt`,
+ *   live in this file: it renders into a merged `StringExtensions` class named after the receiver
+ *   rather than the source file, so it sits in `reserved/ReservedExtensions.kt`,
  * - [probe] is the **ADR-055 contract** cell, the only one that fails before anything renders: the
  *   forward ABI check reads a parameter's direction off its *name* (`errorOut` / `valueOut` are
  *   assumed to be the generator's own out-slots), so a user parameter of either name is projected

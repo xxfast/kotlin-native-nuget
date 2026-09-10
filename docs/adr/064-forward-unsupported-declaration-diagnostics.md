@@ -776,7 +776,9 @@ still spelled it `Outer.Inner`, `CS0426` (reproduced: `Broadcast.Schedule` and `
 `class`/`object`/`interface`/`enum class`**, whether it lives in an exported class-like declaration in
 this module or in an admitted dependency type, excluding a companion object (declared as its owner's
 statics, ADR-013) and a sealed subclass (declared nested under its base, ADR-009), which are the two
-nested shapes the generator *does* declare. A public `annotation class` is excluded too:
+nested shapes the generator *does* declare. Excluding also, per
+[ADR-112](112-sealed-interface-mapping.md)'s 2026-09-10 amendment, an arm of an ineligible sealed
+interface: that hierarchy is refused once, at the interface. A public `annotation class` is excluded too:
 `SKIPPED_ANNOTATION_CLASS` already says so wherever it lives. Emitted before the `hasNothingToProcess`
 early return, so it reaches `NugetDiagnostics.json` even for a module whose only public declaration is
 nested. A klib (cross-module) declaration carries no `containingFile`, so its diagnostic carries no
@@ -963,3 +965,125 @@ one unsupported trailing defaulted parameter loses *all* of its supported aritie
 issue's author lost `hub()` and `hub(settings)` too. That is a mapping decision ("does a partially
 unsupported signature bind at its supported arities?") with an export-numbering consequence, and it
 is tracked separately.
+
+## Amendment (2026-09-10): the reason sentence lives on the reason
+
+Judgement: an **amendment**, not a new ADR. It closes the ROADMAP Phase 3 item
+"`warnDroppedForwardCallables` hardcodes the reason sentence", the refactor ADR-115 (`:444-456`) and
+ADR-116 (`:293-295`) both flagged and both declined to do. No new kind, no new reason, no new
+mechanism: the same messages, computed one function further in. Status stays Accepted.
+
+### The gap
+
+The reason half of the message was an `if` chain in `NugetProcessor.warnDroppedForwardCallables`,
+five special cases deep by the time this amendment was written (ADR-035's reference-underlying value
+class constructor, ADR-115's two opt-in reasons, ADR-116's `SEALED_SUBCLASS_UNROUTED`, issue #131's
+nullable parameter) in front of the original generic "its `<REASON>` type combination is not
+supported". The hint half has lived on the reason since this ADR shipped
+(`ForwardPlanSkipReason.diagnosticHint()`), so each new non-type-combination reason wrote its hint
+in `ForwardDiagnostic.kt` and its sentence 300 lines away in the processor, guarded by a fresh `if`.
+
+`EXCLUDED_DEPENDENCY_TYPE` fell through to the generic sentence and so contradicted its own hint in
+the same message: the sentence said the type combination is not supported, the hint said the
+callable is "skipped by design" because the author's own `exclude(...)` refused it, and this ADR's
+kind KDoc says "out of scope, not unsupported".
+
+### Decision
+
+`ForwardPlanSkipReason.diagnosticReason(detail, parameter)` in `ForwardDiagnostic.kt`, the sibling
+of `diagnosticHint()` and directly above it. Six reasons own a sentence; every other drop keeps the
+generic one through the `else` arm, which is the shipped text unchanged.
+
+Only `EXCLUDED_DEPENDENCY_TYPE`'s sentence changes, to "its type `<qualified>` is excluded from the
+export scope by your own exclude(...)". It names the type and nothing else: the hint already spells
+the package, the `exclude("<pkg>")` line that did it, and the remedy. The five sentences that moved
+are byte-identical, pinned as such by a new `ForwardSkippedCallableWarningTest` case that asserts
+all five verbatim beside the generic one.
+
+Two hand-spelled copies of `OPT_IN_MARKER`'s sentence, in `warnDroppedForwardProperties` and in the
+class-level opt-in declaration skip, now call `diagnosticReason()` too. Both already called
+`diagnosticHint()` on the following line, so the pair is now read from one place. Output identical.
+
+No guard against a legacy-route deferral: `toDiagnosticKind()` is evaluated first in the same
+`ForwardDiagnostic(...)` construction and already `error()`s on one, so a second check is dead code.
+
+**Not widened to the other dependency-scope reasons.** `UNEXPORTED_DEPENDENCY_TYPE`,
+`EXPECT_DEPENDENCY_TYPE` and `CROSS_MODULE_DISABLED_DEPENDENCY_TYPE` are out of scope rather than
+unsupported in exactly the same way, and keep the generic sentence here. Their current text is
+quoted as real output in three Writerside pages, so re-lifting those snippets is its own lane; the
+refactor makes each a one-arm change. The same is true of the position and nesting reasons
+(`INHERITED_MEMBER`, `UNDECLARED_*`, `SEALED_POSITION`, `BOUND_INTERFACE_POSITION`,
+`UNIMPLEMENTABLE_BOUND_INTERFACE`, `ACTUAL_TYPEALIAS_TARGET`).
+
+### Consequences
+
+- The next reason that is not a type combination adds a `when` arm beside its hint, not an `if` in
+  the processor. That was the point: the chain had grown a special case per feature for three
+  features running, each with a comment saying it should be this method.
+- `NugetDiagnostics.json` message text changes only for `SKIPPED_UNEXPORTED_DEPENDENCY_TYPE` records
+  minted from an `exclude(...)`. No C# output changes, and no fixture produces one today, so the
+  sample library's diagnostics file is byte-identical.
+
+## Amendment (2026-09-10): the unconstructible class says so in the generated C#, not just the log
+
+Judgement: an **amendment**, not a new ADR. It lifts the deferral the 2026-09-07 "a class with no
+reachable constructor stays, and says so" amendment recorded under its own "Alternatives
+considered", and closes the ROADMAP Phase 3 item that deferral created. One nullable field on
+`CirClass`, one renderer helper, one call site. Status stays Accepted.
+
+### The gap
+
+`WARNING_NO_PUBLIC_CONSTRUCTOR` reaches the library author's Gradle log and `NugetDiagnostics.json`.
+It reaches the consumer nowhere. A C# developer opens `Issue56Failure`, sees a public class whose
+only constructor is `internal`, and gets no explanation from IntelliSense, from the assembly, or
+from the generated source. The 2026-09-07 amendment deferred the fix on one objection, "new renderer
+machinery", which was accurate: nothing in CIR carried a doc comment and no renderer escaped
+anything.
+
+### Decision
+
+**`CirClass.remarks: String?`, set only when the warning fires.** Plain prose, not markup, defaulted
+to null so the ADR-040 interface backing wrapper (`translateInterfaceBackingClass`, which never
+warns) and every hand-built test fixture keep their shipped shape.
+
+**One catalog query feeds both halves.** `warnNoPublicConstructor` now returns the `detail` string it
+already computed (`<init>: NULLABLE`, off `skippedConstructors(owner)`) and `translateClass` wraps it
+in `noPublicConstructorRemark(name, detail)`. The log and the tooltip cannot name different
+constructors or different reasons, because there is only one string. The wording differs from the
+diagnostic's on purpose: the diagnostic's hint ("expose one, or change the constructor parameters")
+is an instruction to the library author, which a consumer cannot act on. The reason codes stay in
+both, since they are the search key from a tooltip back to the build log and to this ADR's
+catalogue.
+
+**Escaping is the renderer's job, in one place.** New `cir/CirDocRenderer.kt`, whose `renderRemarks`
+escapes `&`, `<`, `>` (in that order; `&` last would double-escape) and prints the three-line block
+at the class's indent, called immediately above the class line in `renderClass`. This is not
+cosmetic: the detail names Kotlin constructors as `<init>`, and an unescaped `/// <init>` is
+malformed XML doc. ADR-073/076/103/106 each promise a marshalling caveat "in the generated XML
+docs"; they are further customers of this helper, not of a copy of it.
+
+**`GeneratedBindingsCheck` now compiles with `GenerateDocumentationFile` on** (and `NoWarn CS1591`,
+because every other generated public member has no doc comment by design). Without `/doc` the
+compiler parses doc comments and reports none of CS1570/CS1587/CS1591, so nothing in this repository
+would have caught a malformed `///` before a consumer's build did. With it, the escaping claim above
+is executed on every `scripts/verify.sh` and a bad comment is an error under the project's existing
+`TreatWarningsAsErrors`.
+
+Out of scope, unchanged: `<summary>`, and general KDoc-to-XML-doc translation. That is still its own
+ROADMAP item, and `remarks: String?` is shaped to widen into it rather than block it.
+
+### Testing seam
+
+No new fixture: `Litter`, `Issue56Failure` (`NULLABLE`) and
+`GroomingPlan` (`OPT_IN_MARKER`) already carry the shape. `Tier1NoPublicConstructorWarningTest` gains
+a structural pin that the escaped block sits directly above `public class Dial` and names the same
+reason as the warning, plus a control that `Meter` (constructible) and `Gauge` (abstract) carry no
+remark. `CirOrdinaryRendererTest` pins the escaping and the null case independently of the
+translator. No xunit test: reflection cannot see a doc comment, so the honest consumer-side proof is
+`GeneratedBindingsCheck` compiling with `/doc`.
+
+### Consequences of the amendment
+
+- Three fixture classes gain three lines each in `Interop.cs`. No ABI, export, or handle change.
+- A malformed generated doc comment is now a red build here instead of a consumer complaint.
+- The next `<remarks>` customer adds a field and a `renderRemarks` call, not an escaper.

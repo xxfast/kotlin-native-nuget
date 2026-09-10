@@ -147,12 +147,14 @@ class ForwardPhase4ProjectionTest {
       ForwardAbiWireType.INT32,
       ForwardAbiDirection.IN,
       direct("receiver", value, ForwardFlow.INTO_KOTLIN),
+      ForwardAbiRole.RECEIVER,
     )
     val valueOut = ForwardAbiParameter(
       "valueOut",
       ForwardAbiWireType.POINTER,
       ForwardAbiDirection.OUT,
       ForwardTransfer("valueOut", value, ForwardFlow.OUT_OF_KOTLIN, ForwardPassing.OUT, ForwardOwnership.BORROWED, ForwardConversion.DIRECT),
+      ForwardAbiRole.VALUE_OUT,
     )
     val call = ForwardNativeCall("int_maybe", ForwardAbiWireType.BOOLEAN, listOf(receiverParameter, valueOut, error))
     return ForwardCallablePlan(
@@ -172,6 +174,7 @@ class ForwardPhase4ProjectionTest {
     ForwardAbiWireType.POINTER,
     ForwardAbiDirection.IN,
     ForwardTransfer("handle", BridgeType.ObjectHandle("sample.Counter"), ForwardFlow.INTO_KOTLIN, ForwardPassing.VALUE, ForwardOwnership.BORROWED, ForwardConversion.HANDLE_TO_STABLE_REF),
+    ForwardAbiRole.RECEIVER,
   )
 
   private fun error(): ForwardAbiParameter = ForwardAbiParameter(
@@ -179,6 +182,7 @@ class ForwardPhase4ProjectionTest {
     ForwardAbiWireType.POINTER,
     ForwardAbiDirection.OUT,
     ForwardTransfer("error", BridgeType.ObjectHandle("kotlin.Throwable"), ForwardFlow.OUT_OF_KOTLIN, ForwardPassing.OUT, ForwardOwnership.BORROWED, ForwardConversion.STABLE_REF_TO_HANDLE),
+    ForwardAbiRole.ERROR,
   )
 
   private fun direct(subject: String, type: BridgeType, flow: ForwardFlow): ForwardTransfer = ForwardTransfer(

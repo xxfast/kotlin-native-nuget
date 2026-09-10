@@ -4,11 +4,12 @@ Kotlin extension functions and properties don't have a native C# analog (C# has 
 
 | Kotlin | C# | Notes |
 |---|---|---|
-| extension function | static method | true C# extension method (`this` parameter) |
+| extension function | static method | true C# extension method (`this` parameter); receiver may also be an eligible sealed base, see [Sealed receivers](#sealed-receivers) below |
 | extension property | static accessor | see [ADR-013](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/013-extension-property-mapping.md) |
 | extension function return (object, `T?`, `List`/`Map`/`Set`, enum, `Char`, `String?`, `Int?`, …) | matching C# return type | same cascade as a class-method return via the shared plan, see Return marshalling below and [Classes and objects](classes-and-objects.md) |
 | two or more same-named extension functions | one C# overload set | numbered native export/extern name, unnumbered public name, counter scoped per (package, name), receiver-agnostic; see [Method overloads](#method-overloads) below ([ADR-095](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/095-static-route-overloads.md)) |
 | extension function with a trailing run of defaulted parameters | omitting overload per suffix length | receiver is not a plan parameter and always survives truncation; see Method default parameters below ([ADR-096](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/096-function-default-parameters.md)) |
+| unexported-receiver `{Receiver}Extensions` class (`String`, a primitive, any stdlib type) | one class per declaring package's namespace | functions and properties on the same receiver in the same package share one class; a different package never merges into it; an exported receiver keeps its own namespace instead, see Namespace placement below ([ADR-126](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/126-extension-class-per-declaring-package.md)) |
 
 ## Kotlin
 
@@ -115,6 +116,88 @@ public void String_GetWordCount_ReturnsTwoForTwoWords()
 }
 ```
 
+## Namespace placement
+
+Where a merged `{Receiver}Extensions` class lands depends on whether the receiver is exported by
+this library:
+
+- an **exported** receiver (a class this library publishes, e.g. `Cat`) homes the class on the
+  receiver's own package, `TestLibrary.Cat.CatExtensions` above. Deterministic: the receiver has
+  exactly one package.
+- an **unexported** receiver (`String`, a primitive, any stdlib type) has no such home, so the
+  class lands in the namespace of the package that *declares* the extension instead. Extension
+  functions and extension properties on the same receiver declared in the same package always
+  merge into one class; a different package's extensions on the same receiver never merge into it,
+  they render their own class in their own namespace.
+
+### Kotlin {id="namespace-kotlin"}
+
+The root package's `String` extensions (`meowify`, `isPurring`, `wordCount`, shown above) sit
+beside a second package's own `String` extension, from
+`test-library/src/nativeMain/kotlin/.../reserved/ReservedExtensions.kt`:
+
+```kotlin
+fun String.tag(receiver: String): String = "$this:$receiver"
+```
+
+### Generated C# {id="namespace-generated-c"}
+
+From `Interop.cs`. The root package's `String` extensions land in `TestLibrary`; `reserved`'s own
+`String` extension lands in `TestLibrary.Reserved`, a distinct class that never merges with the
+first:
+
+```C#
+namespace TestLibrary
+{
+    public static partial class StringExtensions
+    {
+        public static string Meowify(this string receiver) { /* ... */ }
+        public static bool IsPurring(this string receiver) { /* ... */ }
+        public static int GetWordCount(this string receiver) { /* ... */ }
+    }
+}
+
+namespace TestLibrary.Reserved
+{
+    public static partial class StringExtensions
+    {
+        public static string Tag(this string receiver, string receiver_) { /* ... */ }
+    }
+}
+```
+
+### Using it from C# {id="namespace-using-it-from-c"}
+
+A fully-qualified static call, from `IntegrationTests/ExtensionNamespaceTests.cs`, is the only way
+to pin a namespace at compile time: extension-method call syntax resolves through `using`
+directives and keeps compiling wherever the class lands.
+
+```C#
+[Fact]
+public void RootPackage_Meowify_RendersInTheRootNamespace()
+{
+    Assert.Equal("Oreo meow!", TestLibrary.StringExtensions.Meowify("Oreo"));
+}
+
+[Fact]
+public void ReservedPackage_Tag_RendersInItsOwnNamespace()
+{
+    Assert.Equal("Oreo:Mylo", TestLibrary.Reserved.StringExtensions.Tag("Oreo", "Mylo"));
+}
+```
+
+<note>
+    <p>
+        Upgrade note: <code>Meowify</code> and <code>IsPurring</code> moved from
+        <code>TestLibrary.Cat</code> to <code>TestLibrary</code>. They were always declared in the
+        root package; <code>TestLibrary.Cat</code> was a visit-order accident from a same-receiver
+        extension declared elsewhere. Extension-method call syntax
+        (<code>"Oreo".Meowify()</code>) keeps compiling for a file that already has
+        <code>using TestLibrary;</code> in scope. A fully-qualified call, or a file with only
+        <code>using TestLibrary.Cat;</code>, needs to change to <code>using TestLibrary;</code>.
+    </p>
+</note>
+
 ## Value-class receivers
 
 A value class also works as the receiver of an extension function or extension property, over any
@@ -155,6 +238,93 @@ public static partial class TemperamentExtensions
     }
 }
 ```
+
+## Sealed receivers
+
+An extension function's receiver may also be an eligible sealed base (a `sealed class`, or an
+eligible `sealed interface`, see [Sealed interfaces](interfaces-abstract-sealed.md#sealed-interfaces)).
+The same `sealedAsHandle()` rewrite the parameter-position route uses applies to the receiver too, so
+the extension binds on the abstract base and every arm inherits it. The Kotlin export takes the base
+handle and dereferences it with `asStableRef<Base>().get()`, the same idiom the sealed discriminator's
+own `_get_type` export uses. An ineligible or out-of-scope sealed receiver still skips, named
+`SKIPPED_SEALED_POSITION`
+([ADR-105](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/105-sealed-property-position.md)).
+
+### Kotlin {id="sealed-receiver-kotlin"}
+
+From `test-library/src/nativeMain/kotlin/.../issue54/Issue54Sample.kt`:
+
+```kotlin
+fun Issue54Shape.footprint(): String = when (this) {
+  Issue54Shape.Empty -> "empty"
+  is Issue54Shape.Circle -> "circle r=$radius"
+}
+
+fun Issue54Shape.covers(other: Issue54Shape): Boolean = when (this) {
+  Issue54Shape.Empty -> other == Issue54Shape.Empty
+  is Issue54Shape.Circle -> other !is Issue54Shape.Circle || other.radius <= radius
+}
+```
+
+### Generated C# {id="sealed-receiver-generated-c"}
+
+From `Interop.cs`. `Issue54ShapeExtensions` lands in the receiver's own namespace, `TestLibrary.Issue54`, since `Issue54Shape` is exported:
+
+```C#
+public static partial class Issue54ShapeExtensions
+{
+    [DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "issue54shape_footprint")]
+    private static extern IntPtr Native_Footprint(IntPtr receiver, out IntPtr error);
+
+    public static string Footprint(this global::TestLibrary.Issue54.Issue54Shape receiver)
+    {
+        IntPtr nativeResult = Native_Footprint(receiver._handle, out IntPtr error);
+        if (error != IntPtr.Zero)
+        {
+            throw NugetErrorNative.BuildException(error);
+        }
+        return Marshal.PtrToStringUTF8(nativeResult)!;
+    }
+
+    [DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "issue54shape_covers")]
+    [return: MarshalAs(UnmanagedType.I1)]
+    private static extern bool Native_Covers(IntPtr receiver, IntPtr other, out IntPtr error);
+
+    public static bool Covers(this global::TestLibrary.Issue54.Issue54Shape receiver, global::TestLibrary.Issue54.Issue54Shape other)
+    {
+        bool nativeResult = Native_Covers(receiver._handle, other._handle, out IntPtr error);
+        if (error != IntPtr.Zero)
+        {
+            throw NugetErrorNative.BuildException(error);
+        }
+        return nativeResult;
+    }
+}
+```
+
+### Using it from C# {id="sealed-receiver-using-it-from-c"}
+
+From `IntegrationTests/Issue54Tests.cs`:
+
+```C#
+[Fact]
+public void Footprint_SealedReceiverExtension_BindsOnThePayloadArm()
+{
+    using Issue54Drawing drawing = Issue54Sample.CurledCats();
+
+    using Issue54Shape shape = drawing.Shape;
+
+    Assert.Equal("circle r=7.5", shape.Footprint());
+    Assert.Equal("circle r=7.5", Assert.IsType<Issue54Shape.Circle>(shape).Footprint());
+}
+```
+
+<note>
+    <p>An extension <b>property</b> whose receiver is a sealed base still skips, named
+    <code>SKIPPED_SEALED_POSITION</code>: the property planner's receiver classification never
+    runs the same rewrite. See <a
+    href="https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md">ROADMAP.md</a>.</p>
+</note>
 
 ## Method overloads
 
@@ -430,6 +600,7 @@ public void Toy_Tags_ReturnsMarshalledStringElements()
         <a href="classes-and-objects.md">Classes and objects</a>
         <a href="collections.md">Collections</a>
         <a href="value-classes.md">Value classes</a>
+        <a href="interfaces-abstract-sealed.md">Interfaces, abstract classes, and sealed classes</a>
     </category>
     <category ref="external">
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/013-extension-property-mapping.md">ADR-013: Extension property mapping</a>
@@ -440,5 +611,7 @@ public void Toy_Tags_ReturnsMarshalledStringElements()
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/095-static-route-overloads.md">ADR-095: Overloads on the four static export routes</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/091-constructor-default-parameters.md">ADR-091: Constructor default parameters</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/096-function-default-parameters.md">ADR-096: Function default parameters</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/105-sealed-property-position.md">ADR-105: Sealed types at property positions</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/126-extension-class-per-declaring-package.md">ADR-126: One Extensions class per declaring package</a>
     </category>
 </seealso>

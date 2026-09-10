@@ -190,13 +190,20 @@ internal fun StringBuilder.renderClass(cls: CirClass) {
 
   // ADR-094: a class declares `_handle` (and therefore implements INugetHandle) exactly when it has
   // no superclass; a derived class inherits both the field and the explicit implementation.
-  val implements: String = when {
-    cls.superClass != null -> " : ${cls.superClass}"
-    cls.interfaces.isNotEmpty() -> " : ${(cls.interfaces + "INugetHandle").joinToString(", ")}"
-    cls.hasSuspendMethods -> " : IDisposable, IAsyncDisposable, INugetHandle"
-    else -> " : IDisposable, INugetHandle"
+  // The disposables ride *beside* the exported interfaces rather than instead of them (ADR-094
+  // amendment 2026-09-10): `renderDispose` emits `Dispose()` unconditionally and `DisposeAsync()`
+  // whenever the class owns a scope, so the base list has to advertise what the body implements or
+  // the class cannot be held as an `IAsyncDisposable`. Same spelling `CirSealedRenderer` gives a
+  // suspending arm (ADR-118).
+  val implements: String = if (cls.superClass != null) {
+    " : ${cls.superClass}"
+  } else {
+    val disposables: List<String> =
+      listOf("IDisposable") + listOfNotNull("IAsyncDisposable".takeIf { cls.hasSuspendMethods })
+    " : " + (cls.interfaces + disposables + "INugetHandle").distinct().joinToString(", ")
   }
 
+  renderRemarks(cls.remarks)
   appendLine("    public $sealedModifier${abstract}class ${cls.name}$implements")
   appendLine("    {")
 
@@ -284,6 +291,7 @@ internal fun StringBuilder.renderClass(cls: CirClass) {
   renderDispose(
     nativeImport = cls.disposeNativeImport(),
     isAbstract = cls.isAbstract,
+    isOpen = cls.isOpen,
     hasSuperClass = cls.superClass != null,
     hasSuspendMethods = cls.hasSuspendMethods,
   )
@@ -400,6 +408,16 @@ internal fun StringBuilder.renderConstructor(
 
 internal fun StringBuilder.renderProperty(prop: CirProperty) {
   val static: String = if (prop.isStatic) "static " else ""
+  // ADR-075 amendment (2026-09-10): an abstract property is declaration-only, so it takes none of
+  // the body-shaped arms below. `isVirtual` is deliberately ignored: `abstract virtual` is CS0503,
+  // while `abstract override` (an abstract re-declaration of a base member) is legal C#.
+  if (prop.isAbstract) {
+    val override: String = if (prop.isOverride) "override " else ""
+    val accessors: String = if (prop.setter != null) "{ get; set; }" else "{ get; }"
+    appendLine("        public abstract $override${prop.type} ${prop.name} $accessors")
+    appendLine()
+    return
+  }
   val modifier: String = if (prop.isOverride) "override " else if (prop.isVirtual) "virtual " else ""
   val isMultiLineGetter: Boolean = prop.getter.contains('\n')
   val isMultiLineSetter: Boolean = prop.setter?.contains('\n') == true
@@ -641,11 +659,16 @@ internal fun StringBuilder.renderGetOrCreateScope() {
 internal fun StringBuilder.renderDispose(
   nativeImport: CirDllImport?,
   isAbstract: Boolean = false,
+  isOpen: Boolean = false,
   hasSuperClass: Boolean = false,
   hasSuspendMethods: Boolean = false,
 ) {
   val abstract: String = if (isAbstract) "abstract " else ""
-  val override: String = if (hasSuperClass) "override " else ""
+  // ADR-101 amendment (2026-09-10): a derived class always spells its Dispose `override`, so a
+  // base has to be overridable or the subclass is CS0506. An abstract base already is (it renders
+  // `abstract void Dispose();`); a concrete `open class` needs `virtual` said out loud. A final
+  // class keeps the shipped bare `public void Dispose()`.
+  val override: String = if (hasSuperClass) "override " else if (isOpen) "virtual " else ""
 
   if (isAbstract) {
     appendLine("        public ${abstract}void Dispose();")

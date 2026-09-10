@@ -317,7 +317,7 @@ private fun FileSpec.Builder.addSetter(
     exportBuilder(call, plan.receiver, plan.symbol, includeError = false)
   if (assignsNull != true) {
     val valueType: BridgeType = requireNotNull(
-      call.parameters.firstOrNull { it.name == "value" }?.transfer?.type,
+      call.parameters.firstOrNull { it.role == ForwardAbiRole.SETTER_VALUE }?.transfer?.type,
     ) {
       "Forward property setter ${call.exportName} has no value transfer"
     }

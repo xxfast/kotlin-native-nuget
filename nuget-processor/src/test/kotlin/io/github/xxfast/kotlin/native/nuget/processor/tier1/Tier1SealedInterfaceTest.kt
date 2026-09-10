@@ -202,6 +202,16 @@ class Tier1SealedInterfaceTest {
           diagnostic.contains("tier1.sealedinterface.Rhythm"),
       "expected the diagnostic to name the disqualifying subclass and base; got: $diagnostic",
     )
+    // ADR-112 amendment: the refused hierarchy warns once. `Odd` is nested, so it used to collect a
+    // second SKIPPED_NESTED_DECLARATION whose "move it to the top level" hint ADR-125 made moot.
+    assertTrue(
+      result.kspWarnings.none {
+        it.contains(ForwardDiagnosticKind.SKIPPED_NESTED_DECLARATION.name) &&
+            it.contains("tier1.sealedinterface.Mixed.Odd")
+      },
+      "expected no nested skip for an arm of an ineligible sealed interface; " +
+          "kspWarnings=${result.kspWarnings}",
+    )
   }
 
   /**
@@ -451,6 +461,56 @@ class Tier1SealedInterfaceTest {
       result.generatedCSharp.occurrencesOf("public sealed class Both"),
       "expected no arm declaration for a shared arm; generatedCSharp=" +
           "${result.generatedCSharp.lines().filter { it.contains("Both") }}",
+    )
+  }
+
+  /**
+   * ADR-112 amendment: the same refusal as `Mixed`, for the enum reason and with the arm nested. An
+   * arm is undeclared because its interface is refused, and the parent's diagnostic says so, so a
+   * second nested-declaration warning on the arm only sends the author to a move that ADR-125 made
+   * irrelevant. `Helper` is the control for the rule being by supertype, not by enclosing
+   * declaration: it is nested in the same refused interface and is not an arm, so it keeps warning.
+   */
+  private val nestedArm: String = """
+    package tier1.sealedinterface.nestedarm
+
+    sealed interface Tone {
+      enum class Pitch : Tone { HIGH, LOW }
+      class Helper
+    }
+
+    class Tuner {
+      fun tone(): Tone = Tone.Pitch.HIGH
+    }
+  """.trimIndent()
+
+  @Test
+  fun `a nested arm of an ineligible sealed interface warns once, on the parent`() {
+    val result = Tier1Harness.run(nestedArm)
+
+    assertTrue(result.compiledClean, "expected no broken source; got: ${result.compileErrors}")
+    assertEquals(
+      1,
+      result.kspWarnings.count {
+        it.contains(ForwardDiagnosticKind.SKIPPED_INELIGIBLE_SEALED_INTERFACE.name) &&
+            it.contains("`tier1.sealedinterface.nestedarm.Tone`")
+      },
+      "expected one ineligibility warning for the hierarchy; kspWarnings=${result.kspWarnings}",
+    )
+    assertTrue(
+      result.kspWarnings.none {
+        it.contains(ForwardDiagnosticKind.SKIPPED_NESTED_DECLARATION.name) &&
+            it.contains("tier1.sealedinterface.nestedarm.Tone.Pitch")
+      },
+      "expected no nested skip for the arm the parent already refused; " +
+          "kspWarnings=${result.kspWarnings}",
+    )
+    assertTrue(
+      result.kspWarnings.any {
+        it.contains(ForwardDiagnosticKind.SKIPPED_NESTED_DECLARATION.name) &&
+            it.contains("tier1.sealedinterface.nestedarm.Tone.Helper")
+      },
+      "expected a nested non-arm to keep its nested skip; kspWarnings=${result.kspWarnings}",
     )
   }
 

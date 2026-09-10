@@ -91,4 +91,57 @@ public class AsyncDisposableTests
             .ToArray();
         await Task.WhenAll(tasks);
     }
+
+    // ADR-094 / ADR-040: `CirClassRenderer`'s `implements` `when` puts the `interfaces.isNotEmpty()`
+    // arm above the disposable arms, so a class that implements an exported interface never names
+    // `IDisposable`/`IAsyncDisposable` in its own base list even though `renderDispose` gives it
+    // both bodies. `NapPod : Napper` with a `suspend fun doze()` is the shape that exposes it.
+
+    [Fact]
+    public void NapPod_ImplementsIDisposable_OnItsOwnBaseList()
+    {
+        // Oreo's pod is a handle like any other: it has to be disposable in its own right,
+        // not only by way of INapper.
+        Assert.True(typeof(IDisposable).IsAssignableFrom(typeof(NapPod)));
+    }
+
+    [Fact]
+    public void NapPod_ImplementsIAsyncDisposable()
+    {
+        // The pod owns a coroutine scope (doze suspends), so it gets DisposeAsync(). Nothing
+        // reaches that body through the interface, so the class has to advertise it.
+        Assert.True(typeof(IAsyncDisposable).IsAssignableFrom(typeof(NapPod)));
+    }
+
+    [Fact]
+    public async Task NapPod_DisposesThroughAnIAsyncDisposableReference()
+    {
+        // The capability the base list actually unlocks: holding the pod as IAsyncDisposable.
+        // `await using` binds the DisposeAsync *pattern* and compiles either way, so this cast is
+        // what a DI container or an IAsyncDisposable-typed field would do to Mylo's pod.
+        object pod = new NapPod();
+        await ((IAsyncDisposable)pod).DisposeAsync();
+    }
+
+    [Fact]
+    public async Task AwaitUsing_OnNapPod_DrainsMylosDoze()
+    {
+        // Mylo climbs on top of the pod for twenty minutes. `await using` only compiles if the
+        // class itself is IAsyncDisposable (CS8410 otherwise).
+        Task<int> myloDoze;
+        await using (var pod = new NapPod())
+        {
+            myloDoze = pod.DozeAsync();
+        }
+        Assert.Equal(20, await myloDoze);
+    }
+
+    [Fact]
+    public void NapPod_StillGreetsThroughItsInterface()
+    {
+        // The interface members survive the base-list change: Oreo still gets the pod first.
+        using var pod = new NapPod();
+        Assert.Equal("Oreo curls up in the pod", pod.Nap());
+        Assert.IsAssignableFrom<INapper>(pod);
+    }
 }

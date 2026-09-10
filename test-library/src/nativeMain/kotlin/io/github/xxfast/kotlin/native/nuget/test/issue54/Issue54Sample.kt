@@ -197,3 +197,40 @@ class Issue54Board {
  * the fixture hands one out by name so a test reads the same way as [sleepingCats] / [curledCats].
  */
 fun windowsill(): Issue54Board = Issue54Board()
+
+/**
+ * The ADR-105 amendment cell: an extension function whose **receiver** is the sealed base.
+ *
+ * Every other sealed position in this file is a parameter, a property or a return. This one is the
+ * position the parameter-rewrite deliberately skipped: `extensionEntry` classifies the receiver
+ * without `sealedAsHandle()`, so today the export is dropped with `SKIPPED_SEALED_POSITION` and
+ * `TestLibrary.Issue54.Issue54ShapeExtensions` does not exist at all. Binding it is the one
+ * idiomatic C# answer for extending a closed hierarchy: a static method on the abstract base that
+ * every arm inherits.
+ *
+ * Both arms are reachable through the same receiver, so the fixture pins the discriminator-free
+ * side of the wire too: the Kotlin export takes the *base* handle and dereferences it with
+ * `asStableRef<Issue54Shape>().get()`, exactly as [Issue54Shapes.describe] does at a parameter.
+ *
+ * Oreo's footprint on the windowsill is a circle; Mylo, sprawled, leaves none.
+ */
+fun Issue54Shape.footprint(): String = when (this) {
+  Issue54Shape.Empty -> "empty"
+  is Issue54Shape.Circle -> "circle r=$radius"
+}
+
+/**
+ * The receiver and a declared parameter, both sealed, on **one** export: the receiver rewrite and
+ * the ADR-105 scope (d) parameter rewrite have to agree on the same signature, which neither
+ * [footprint] (receiver only) nor [Issue54Shapes.describe] (parameter only) can say on its own.
+ *
+ * The answer is a `Boolean` rather than another handle, so nothing about the assertion depends on
+ * the return side of the wire.
+ *
+ * Oreo, curled, covers the whole windowsill and anything smaller on it. Mylo, sprawled into no
+ * shape at all, covers only the nothing that is already there.
+ */
+fun Issue54Shape.covers(other: Issue54Shape): Boolean = when (this) {
+  Issue54Shape.Empty -> other == Issue54Shape.Empty
+  is Issue54Shape.Circle -> other !is Issue54Shape.Circle || other.radius <= radius
+}

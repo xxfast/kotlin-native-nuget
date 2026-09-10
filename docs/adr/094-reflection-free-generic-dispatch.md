@@ -266,6 +266,52 @@ pass.
   model, not verified. The AOT publish smoke test is ADR-038 step 4 and stays a separate roadmap
   item; this ADR only removes the mechanism those toolchains are documented to break on.
 
+### Amendment (2026-09-10): the disposables ride beside the exported interfaces, not instead of them
+
+The `implements` `when` this ADR added `INugetHandle` to was exclusive, and the
+`interfaces.isNotEmpty()` arm sat above both disposable arms:
+
+```kotlin
+cls.interfaces.isNotEmpty() -> " : ${(cls.interfaces + "INugetHandle").joinToString(", ")}"
+cls.hasSuspendMethods -> " : IDisposable, IAsyncDisposable, INugetHandle"
+else -> " : IDisposable, INugetHandle"
+```
+
+So a class implementing an exported interface rendered `public class NapPod : INapper, INugetHandle`
+while `renderDispose` gave it a `Dispose()` body unconditionally and a `DisposeAsync()` body whenever
+it owned a scope. The base list did not advertise what the body implemented.
+
+`IDisposable` was covered by accident: `renderInterface` spells every projected interface
+`public interface INapper : IDisposable`, so the class implemented it transitively and its
+`public void Dispose()` satisfied the inherited member. `IAsyncDisposable` had no such rescue.
+`await using` still compiled (it binds the `DisposeAsync` *pattern*, not the interface, verified by
+running it against the fixture), so the gap is not CS8410; it is **type identity**. The class could
+not be held as an `IAsyncDisposable`, and a cast or an `IAsyncDisposable`-typed field threw
+`InvalidCastException`.
+
+The base list is now composed rather than chosen, for every class with no superclass
+(`CirClassRenderer.renderClass`):
+
+```
+interfaces + IDisposable (+ IAsyncDisposable when hasSuspendMethods) + INugetHandle, distinct()
+```
+
+Exported interfaces first (the consumer's own contract), the BCL disposables next, `INugetHandle` in
+the tail position it has always held. `distinct()` guards a translator that already put a disposable
+in `interfaces`. `CirSealedRenderer.kt:68` is the precedent: it appends `IAsyncDisposable` to a
+suspending arm's base list for the same reason (ADR-118).
+
+A derived class is untouched: it names only its superclass and inherits the field, the explicit
+`INugetHandle` implementation and the disposables. A class with no interfaces renders byte-identical
+output, so this changes exactly the classes that implement one: `Parrot`, `Clicker`, `Animal`,
+`KeywordHandlerImpl`, `Pet`, `Transponder` and `NapPod` in the fixture gain `IDisposable` by name.
+Redundant to the compiler, and idiomatic (`IEnumerable<T>, IEnumerable` in the BCL is the shape);
+Roslyn emits no warning for a re-listed inherited interface (verified: the fixture consumer builds
+clean).
+
+Spelled on the ADR-040 wrapper, that is
+`public sealed class Pet : IPet, IDisposable, INugetHandle`.
+
 ## Consequences
 
 - One registry line per concrete wrapper plus one `INugetHandle` implementation line per

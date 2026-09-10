@@ -16,8 +16,11 @@ Kotlin's three flavours of inheritance each get a distinct C# shape: `interface`
 | property whose own type is a sealed class (bare, nullable, or a collection component, read-only or `var`) | the sealed base | materialised through `<Base>.FromHandle(...)`, see [Sealed types as property types](#sealed-types-as-property-types), [ADR-105](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/105-sealed-property-position.md) |
 | a class, object, or companion method returning a sealed base, scalar or as a `List`/`Map`/`Set` component | the sealed base (or `IReadOnlyList<Base>`) | reads through the same `FromHandle` discriminator a top-level sealed return already used, see [A class method returning a sealed base](#a-class-method-returning-a-sealed-base), [ADR-009](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/009-sealed-class-mapping.md) |
 | a sealed type at a **parameter** position, bare, nullable, or as a collection component, including a constructor parameter | an ordinary handle argument (`shape._handle`, or boxed per element through `NugetMarshal.Wrap<T>` in a collection) | the same `sealedAsHandle()` rewrite the property planner uses applies to every declared parameter, so `Issue54Drawing`'s own four-parameter constructor now binds, see [A sealed type at a parameter position](#a-sealed-type-at-a-parameter-position), [ADR-105](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/105-sealed-property-position.md) |
+| an extension function's **receiver** typed as a sealed base or an eligible sealed interface | a genuine C# extension method on the base (`this Base receiver`) | `sealedAsHandle()` rewrites the receiver too, dereferenced Kotlin-side with `asStableRef<Base>().get()`; every arm inherits the method; an ineligible or out-of-scope sealed receiver still skips, named `SKIPPED_SEALED_POSITION`, see [Extensions: Sealed receivers](extensions.md#sealed-receivers), [ADR-105](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/105-sealed-property-position.md) |
 | a sealed subclass declared nested inside its sealed base, used at a return, property, or parameter position | `Base.Sub` (enclosing scope kept) | see [A nested sealed subclass at a member position](#a-nested-sealed-subclass-at-a-member-position) |
 | an `interface` declared nested inside another class, used at a return, property, or parameter position | skipped named (`UNDECLARED_INTERFACE`) | see [Nested interfaces skip named](#nested-interfaces-skip-named) |
+| an exported base class's own declared `open val`/`open var` | `public virtual` property (both accessors, when it has one of each) | so a subclass `override` compiles instead of `CS0506`; a concrete `open class`'s generated `Dispose()` renders `public virtual void Dispose()` for the same reason, see [A base class's own `open val`/`open var`](#a-base-class-s-own-open-val-open-var), [ADR-101](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/101-unexported-supertype-skip.md) |
+| an exported base class's own declared `abstract val`/`abstract var` | `public abstract` property (both accessors, when it has one of each) | so a subclass `override` compiles instead of `CS0506`; the base keeps its (uncallable) `_get_`/`_set_` export pair, see [An exported base class's own `abstract val`/`abstract var`](#a-base-class-s-own-abstract-val-abstract-var), [ADR-075](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/075-collection-property-getter-setter-independence.md) |
 
 ## Kotlin
 
@@ -67,7 +70,7 @@ public interface IPet : IDisposable
     string Greet();
 }
 
-public abstract class Animal : IPet
+public abstract class Animal : IPet, IDisposable, INugetHandle
 {
     internal IntPtr _handle;
 
@@ -128,7 +131,7 @@ class Clicker : Counter {
 `ICounter`'s get-only property:
 
 ```C#
-public class Clicker : ICounter, INugetHandle
+public class Clicker : ICounter, IDisposable, INugetHandle
 {
 ```
 
@@ -208,6 +211,205 @@ C# cannot add a set accessor to an override (CS0546). the C# property Vibe is re
 <note>
     <p>The reverse case, a subclass narrowing a base's <code>var</code> to <code>val</code>, is
     already a Kotlin compile error and needs no handling here.</p>
+</note>
+
+## A base class's own `open val`/`open var`
+
+The section above widens a member the base already renders `virtual` (an interface implementation).
+An exported base class's **own** declared `open val`/`open var`, one that overrides nothing, now
+renders `public virtual` too, so a subclass `override` of it compiles instead of failing `CS0506`. A
+member that stays the Kotlin default, final, renders no modifier and cannot be overridden in C#
+either.
+
+From `test-library/src/nativeMain/kotlin/.../bed/Bed.kt`:
+
+```kotlin
+open class Bed {
+  open val softness: Int = 1
+  open var occupant: String = "Oreo"
+  val brand: String = "Catnap"
+}
+
+class Hammock : Bed() {
+  override val softness: Int = 9
+  override var occupant: String = "Mylo"
+}
+```
+
+### Generated C# {id="open-member-generated-c"}
+
+From `Interop.cs`. `Softness` and `Occupant` are `virtual`, both accessors on `Occupant`; the
+non-`open` `Brand` carries no modifier. `Bed`'s generated `Dispose()` is `virtual` too, for the same
+reason: a concrete `open class` needs it, since `Hammock` renders `public override void Dispose()`:
+
+```C#
+public class Bed : IDisposable, INugetHandle
+{
+    public virtual int Softness
+    {
+        get { /* ... */ }
+    }
+
+    public virtual string Occupant
+    {
+        get { /* ... */ }
+        set { /* ... */ }
+    }
+
+    public string Brand
+    {
+        get { /* ... */ }
+    }
+
+    public virtual void Dispose()
+    {
+        /* ... */
+    }
+}
+public class Hammock : Bed
+{
+    public override int Softness
+    {
+        get { /* ... */ }
+    }
+
+    public override string Occupant
+    {
+        get { /* ... */ }
+        set { /* ... */ }
+    }
+
+    public override void Dispose()
+    {
+        /* ... */
+    }
+}
+```
+
+### Using it from C# {id="open-member-using-it-from-c"}
+
+From `IntegrationTests/OpenMemberOverrideTests.cs`. Setting `Occupant` through the base static type
+still dispatches to `Hammock`'s override:
+
+```C#
+[Fact]
+public void Hammock_OverridesOpenVar_KeepsItsSetter()
+{
+    using var hammock = new Hammock();
+
+    Assert.Equal("Mylo", hammock.Occupant);
+
+    // Oreo shoves his brother off the hammock, through the base static type.
+    ((Bed)hammock).Occupant = "Oreo";
+
+    Assert.Equal("Oreo", hammock.Occupant);
+    Assert.Equal("Oreo", ((Bed)hammock).Occupant);
+}
+```
+
+<note>
+    <p>A declared <code>open fun</code> on an ordinary exported base does not yet render
+    <code>virtual</code>, the method-side mirror of this fix; a subclass <code>override</code> of
+    one is still <code>CS0506</code>. See <a
+    href="https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md">ROADMAP.md</a>.</p>
+</note>
+
+## An exported base class's own `abstract val`/`abstract var` {id="a-base-class-s-own-abstract-val-abstract-var"}
+
+An exported base class's own **unimplemented** `abstract val`/`abstract var`, one it declares
+without a body, renders `public abstract` too, both accessors when it has one of each, so a
+subclass `override` compiles. Before this, the property route had no abstract path at all: the
+member was planned and rendered like any other property, a concrete non-virtual getter with a
+live body, so a subclass's `override` failed `CS0506` (`Family` had a getter to override, just not
+an overridable one). The base keeps its `_get_family` and `_get_tuning`/`_set_tuning` exports;
+nothing on the abstract base calls them, since a `Base`-typed reference always dispatches to the
+overriding subclass, but they stay valid and keep the forward ABI contract unchanged.
+
+From `test-library/src/nativeMain/kotlin/.../orchestra/Instrument.kt`:
+
+```kotlin
+abstract class Instrument(val name: String) {
+  /** Unimplemented here: must render `public abstract string Family { get; }`. */
+  abstract val family: String
+
+  /** Unimplemented and mutable: must render `public abstract string Tuning { get; set; }`. */
+  abstract var tuning: String
+
+  fun describe(): String = "$name ($family, tuned $tuning)"
+}
+
+class Violin : Instrument("violin") {
+  override val family: String = "strings"
+  override var tuning: String = "G-D-A-E"
+}
+```
+
+### Generated C# {id="a-base-class-s-own-abstract-val-abstract-var-generated-c"}
+
+From `Interop.cs`. `Name` stays an ordinary concrete property; `Family` and `Tuning` render
+`public abstract`, and `Violin` overrides both:
+
+```C#
+public abstract class Instrument : IDisposable, INugetHandle
+{
+    internal IntPtr _handle;
+
+    public string Name
+    {
+        get { /* ... */ }
+    }
+
+    public abstract string Family { get; }
+
+    public abstract string Tuning { get; set; }
+
+    public string Describe() { /* ... */ }
+
+    public abstract void Dispose();
+}
+
+public class Violin : Instrument
+{
+    public override string Family
+    {
+        get { /* ... */ }
+    }
+
+    public override string Tuning
+    {
+        get { /* ... */ }
+        set { /* ... */ }
+    }
+}
+```
+
+### Using it from C# {id="a-base-class-s-own-abstract-val-abstract-var-using-it-from-c"}
+
+From `IntegrationTests/AbstractPropertyTests.cs`. Writing `Tuning` through the base static type is
+seen by Kotlin's own dispatch through `describe()`, not just echoed back by the C# getter:
+
+```C#
+[Fact]
+public void Violin_AbstractVarWrittenThroughTheBase_IsSeenByKotlinDispatch()
+{
+    using var violin = new Violin();
+
+    Assert.Equal("violin (strings, tuned G-D-A-E)", violin.Describe());
+
+    ((Instrument)violin).Tuning = "G-D-A-Mylo";
+
+    // `describe()` is Kotlin's own dispatch through the overrides, so this proves the write
+    // reached the Kotlin object rather than being echoed by the C# getter.
+    Assert.Equal("violin (strings, tuned G-D-A-Mylo)", violin.Describe());
+    Assert.Equal("violin (strings, tuned G-D-A-Mylo)", ((Instrument)violin).Describe());
+}
+```
+
+<note>
+    <p>An abstract class that inherits an interface <code>val</code> without implementing it is a
+    different, unfixed shape: the member is never planned at all, so it vanishes from C# while the
+    interface stays in the base list. See <a
+    href="https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md">ROADMAP.md</a>.</p>
 </note>
 
 `Observation` renders as an abstract class with each Kotlin subtype as a nested `sealed class`, plus a `FromHandle` dispatcher that reads a type tag off the native handle:
@@ -421,6 +623,8 @@ public global::TestLibrary.Issue54.Pulse Current
 ```
 [nuget:SKIPPED_INELIGIBLE_SEALED_INTERFACE] Skipping io.github.xxfast.kotlin.native.nuget.test.issue54.Mixed: sealed interface `io.github.xxfast.kotlin.native.nuget.test.issue54.Mixed` is declared as `IMixed` but cannot be reconstructed in C#: subclass `Odd` extends another class `io.github.xxfast.kotlin.native.nuget.test.issue54.Rhythm`. every subclass must be a class or object, declared in the interface or beside it, with no other superclass, no sub-interface and no second sealed interface; an enum can never be a subclass (ADR-125). Or declare it as a sealed class
 ```
+
+`Odd` itself gets no second warning. `Odd` is nested inside `Mixed`, which would otherwise make it a `nestedDeclarations` candidate for its own `SKIPPED_NESTED_DECLARATION`, but that diagnostic is suppressed for any direct arm of an ineligible sealed interface, since the parent's warning above already explains why `Odd` is absent and the "move it to the top level of its file" hint would be misleading (the arm's nesting is not why `Mixed` is ineligible). A nested declaration that is not an arm, such as a plain helper class declared inside the same interface, still gets its own `SKIPPED_NESTED_DECLARATION`.
 
 ### Using it from C# {id="sealed-interface-using-it-from-c"}
 
@@ -878,10 +1082,11 @@ Assert.Equal(2, Issue54Shapes.Count(new List<Issue54Shape> { oreo, mylo }));
 ```
 
 <note>
-    <p>An extension function whose <b>receiver</b> is a sealed base still skips: the
-    <code>sealedAsHandle()</code> rewrite above applies only to declared parameters, deliberately
-    leaving the receiver alone, since a sealed receiver is a member of the ADR-009 hierarchy itself
-    and has its own route. See <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md">ROADMAP.md</a>.</p>
+    <p>An extension function whose <b>receiver</b> is a sealed base now binds too: the
+    <code>sealedAsHandle()</code> rewrite above extends to the receiver as well as every declared
+    parameter. See <a href="extensions.md#sealed-receivers">Extensions: Sealed receivers</a>. An
+    extension <b>property</b> with a sealed receiver is unaffected and still skips; see <a
+    href="https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md">ROADMAP.md</a>.</p>
 </note>
 
 ## A class method returning a sealed base {id="a-class-method-returning-a-sealed-base"}
@@ -2024,7 +2229,7 @@ class Parrot(override val species: String) : Greeter
 `Parrot` declares only `species`; `greeting` and `greet()` are inherited defaults, and both still bind:
 
 ```C#
-public class Parrot : IGreeter
+public class Parrot : IGreeter, IDisposable, INugetHandle
 {
     internal IntPtr _handle;
 
@@ -2148,7 +2353,7 @@ public interface IPet : IDisposable
     void Nap();
 }
 
-public sealed class Pet : IPet
+public sealed class Pet : IPet, IDisposable, INugetHandle
 {
     internal IntPtr _handle;
 
@@ -2548,10 +2753,11 @@ property. The owning class still generates, and its unrelated `name` member stil
 - Interfaces with generic type parameters, suspend interface members, and `Flow`/`StateFlow`-valued interface members are not supported as return positions.
 - A backing class and its dispatch exports are only generated for interfaces that actually appear in a planned return position; an interface only ever used as an `add`/`remove` subscription parameter (like `ICatEventListener`, see [Lambdas and callbacks](lambdas-and-callbacks.md)) does not get one.
 - Object identity is not preserved across reads of a **Kotlin-backed** interface-typed property: two reads produce two distinct C# wrapper instances over the same Kotlin object (each disposes independently). A **C#-implemented** object read back is the one exception, see above.
-- A sealed type in the export scope now binds at every position: property, callable return, and callable/constructor parameter (bare, nullable, or a collection component, read-only or mutable), see [Sealed types as property types](#sealed-types-as-property-types), [A class method returning a sealed base](#a-class-method-returning-a-sealed-base), and [A sealed type at a parameter position](#a-sealed-type-at-a-parameter-position). An **eligible** `sealed interface` binds the same way, whether its arms are nested or declared beside it, see [Sealed interfaces](#sealed-interfaces). A value class whose underlying type is sealed also binds the same way, at a property, callable, or `List<T>` component position, see [Value classes: Over a sealed type](value-classes.md#over-a-sealed-type). What still does not bind: an extension function's **receiver** typed as a sealed base (`sealedAsHandle()` rewrites declared parameters only), an **ineligible** sealed interface at any position, and a sealed class **outside the export scope**. See [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md).
+- A sealed type in the export scope now binds at every position: property, callable return, and callable/constructor parameter (bare, nullable, or a collection component, read-only or mutable), see [Sealed types as property types](#sealed-types-as-property-types), [A class method returning a sealed base](#a-class-method-returning-a-sealed-base), and [A sealed type at a parameter position](#a-sealed-type-at-a-parameter-position). An **eligible** `sealed interface` binds the same way, whether its arms are nested or declared beside it, see [Sealed interfaces](#sealed-interfaces). A value class whose underlying type is sealed also binds the same way, at a property, callable, or `List<T>` component position, see [Value classes: Over a sealed type](value-classes.md#over-a-sealed-type). An extension function's **receiver** typed as a sealed base now binds too, see [Extensions: Sealed receivers](extensions.md#sealed-receivers). What still does not bind: an extension **property** with a sealed receiver, an **ineligible** sealed interface at any position, and a sealed class **outside the export scope**. See [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md).
 - A `sealed interface` still refuses an arm that is an `enum class` (a C# enum can only extend an integral type, `CS1008`) or that implements more than one sealed interface (C# single inheritance), regardless of where the arm is declared. See [An enum arm keeps the interface ineligible](#sealed-interface-enum-arm), [ADR-125](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/125-sealed-interface-sibling-arms.md).
 - An eligible sealed interface arm's **extra interfaces** (e.g. `class Odd : Kind, CharSequence`) are dropped silently: the arm stays eligible, but the generated class declares only its sealed base, with no interface list and no diagnostic naming the loss. See [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md).
-- [Overriding a read-only property with `var`](#overriding-a-read-only-property-with-var) only guards against the exported-base-class shape. A base class's own `open val`/`open var` never renders `virtual` (its own modifier is never read), so any subclass `override` of it is `CS0506`; and an unimplemented base `abstract val`/`abstract var` has no abstract-property path at all, so a subclass `override` of it is `CS0115`. Neither is fixed. See [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md).
+- [A base class's own `open val`/`open var`](#a-base-class-s-own-open-val-open-var) covers the property half; a declared `open fun` on an ordinary exported base still does not render `virtual`, so a subclass `override` of one is `CS0506`. See [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md).
+- A sealed arm's own `isVirtual`/`isOverride` are pinned `false`, so an `open val`/`open var`/`open fun` declared directly on a sealed arm cannot itself be overridden by a further Kotlin subclass in C#. Inferred, not fixture-verified. See [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md).
 - [Declaring every exported interface](#declaring-every-exported-interface) has its own residual gaps: `CirInterface` has no super-interface list, so `interface Derived : Base` still flattens (`IDerived` no longer redeclares `Base`'s members after ADR-113, but doesn't inherit them either); a `var` interface property still renders `{ get; }` only (`hasSetter` is never derived from the plan); the CS0102 property/method name-collision guard is interface-route only, the same collision on the ordinary class route is unguarded; and an interface that is neither reachable nor implemented by any exported class still silently loses its unbridgeable members with no diagnostic naming why. See [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md).
 - A sealed **base**'s own `abstract val`/`abstract var` renders no C# member at all (`CirSealedClass` has no `properties` field); see [A `data object` subclass's own properties bind too](#data-object-subclass-properties-bind-too) and [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md).
 - [Methods on a sealed subclass](#methods-on-a-sealed-subclass) is declared-only: a base `open fun` (and, since [ADR-118](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/118-suspend-route-sealed-arm-owners-and-overload-numbering.md), a base `open suspend fun`) body an arm does not override renders on no arm, and neither the base's own methods nor its `abstract val`/`abstract var` (above) are ever readable through the C# base type directly, only through a concrete arm. A lambda-parameter or generic method on an arm is still a named `SKIPPED_UNSUPPORTED_COMBINATION` skip rather than a binding; a declared `suspend fun` or a declared `Flow<T>`/`StateFlow<T>` member now binds instead, and only an arm that declares one of those two gains `IAsyncDisposable`, so a consumer holding the sealed base has to pattern-match to the concrete arm before `await using` / `DisposeAsync()` (see [Suspend methods on a sealed arm](#sealed-method-suspend-generated-c) and [Flow and StateFlow members on a sealed arm](#sealed-flow-generated-c)). An arm's own `fun dispose()` collides with the always-emitted `Dispose()`, the same pre-existing hazard an ordinary class has; a same-arity suspend overload pair differing only in reference nullability, a `suspend fun` returning plain `Flow<T>`, and an ordinary-class suspend method returning a nested arm by simple name are also pre-existing, unfixed gaps on the legacy suspend route; see [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md).
@@ -2623,6 +2829,7 @@ public void Observation_WorksWithPatternMatching()
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/075-collection-property-getter-setter-independence.md">ADR-075: Collection property getter/setter independence</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/084-csharp-implemented-interfaces.md">ADR-084: C#-implemented Kotlin interfaces</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/094-reflection-free-generic-dispatch.md">ADR-094: Reflection-free generic dispatch</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/101-unexported-supertype-skip.md">ADR-101: Forward, unexported supertype skip</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/102-aot-safe-forward-callbacks.md">ADR-102: AOT-safe forward callbacks</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/105-sealed-property-position.md">ADR-105: Sealed types at property positions</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/111-sealed-subclass-properties-on-the-property-plan.md">ADR-111: Sealed-subclass properties on the property plan</a>

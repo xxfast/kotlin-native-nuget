@@ -58,12 +58,23 @@ data class CirClass(
   val hasInternalHandleConstructor: Boolean = true,
   val isDataClass: Boolean = false,
   val isAbstract: Boolean = false,
+  // ADR-101 amendment (2026-09-10): a non-abstract Kotlin `open class`, i.e. one an exported
+  // subclass may extend. Only `Dispose()` reads it, to render `virtual` instead of nothing: a
+  // subclass always spells its inherited `Dispose` `override`, which is CS0506 against a
+  // non-virtual base. An abstract base already renders `abstract void Dispose();` and a final
+  // class has nothing that can override it, so both keep their shipped spelling.
+  val isOpen: Boolean = false,
   // ADR-040: true for the generated interface backing wrapper (`sealed class Pet : IPet`) — no
   // public constructor, and the `sealed` modifier communicates that consumers should implement
   // `IPet` rather than subclass this handle wrapper.
   val isSealed: Boolean = false,
   val companionMembers: List<CirMember> = emptyList(),
   val hasSuspendMethods: Boolean = false,
+  // ADR-064 amendment (2026-09-10): plain-text prose for a `<remarks>` doc comment on the class,
+  // set only when WARNING_NO_PUBLIC_CONSTRUCTOR fires, off the same detail string the diagnostic
+  // uses. Text, not markup: `renderRemarks` owns the XML escaping, because the detail names
+  // Kotlin constructors as `<init>`.
+  val remarks: String? = null,
 ) : CirDeclaration
 
 data class CirValueClass(
@@ -480,6 +491,25 @@ data class CirMethod(
   val nativeParameters: List<CirParameter>? = null,
 ) : CirMember
 
+/**
+ * ADR-090: the private `[DllImport]` extern's C# name. The numbered name a plan carried, else the
+ * shipped `Native_$name`.
+ *
+ * The fallback serves hand-built CIR only: every production instance method comes from
+ * `ForwardCirPlanProjection.classMethod`, which sets [CirMethod.externName]. A public name is a
+ * rendered C# identifier and may be keyword-escaped (`@lock`), an extern identifier may not, so the
+ * fallback refuses to derive from one rather than emit `Native_@lock` for the consumer to choke on.
+ */
+internal val CirMethod.resolvedExternName: String
+  get() {
+    if (externName != null) return externName
+    require(!name.startsWith("@")) {
+      "Method $name has no extern name and its public name is C#-escaped; " +
+        "an extern identifier cannot be derived from it"
+    }
+    return "Native_$name"
+  }
+
 data class CirProperty(
   val name: String,
   val type: String,
@@ -496,6 +526,11 @@ data class CirProperty(
   // (Cat.Nickname overriding Animal.Nickname's implementation of Pet.nickname).
   val isOverride: Boolean = false,
   val isVirtual: Boolean = false,
+  // ADR-075 amendment (2026-09-10): the property-side twin of [CirMethod.isAbstract]: an
+  // `abstract val`/`abstract var` the class declares without implementing. Renders bodiless
+  // (`public abstract T Name { get; }`) so a subclass `override` compiles instead of CS0506.
+  // Wins over [isVirtual]: `abstract virtual` is CS0503, `abstract override` is legal.
+  val isAbstract: Boolean = false,
   val isFlow: Boolean = false,
   // ADR-065: true when this is a StateFlow (or read-only MutableStateFlow view) property. Reuses
   // isFlow's whole legacy route (the _collect export + KotlinFlow substrate) and additionally

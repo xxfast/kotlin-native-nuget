@@ -21,6 +21,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.cir.CirValueClassConstruct
 import io.github.xxfast.kotlin.native.nuget.processor.forward.BridgeType
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardAbiDirection as PlannedAbiDirection
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardAbiParameter as PlannedAbiParameter
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardAbiRole
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardAbiWireType
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallableCatalogEntry
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallablePlan
@@ -351,13 +352,17 @@ class ForwardAbiContractTest {
   fun `fails fast on a plan parameter with an IN_OUT ABI direction`() {
     val int: BridgeType.Primitive = BridgeType.Primitive(PrimitiveKind.INT)
     val transfer = ForwardTransfer(
-      "value", int, ForwardFlow.INTO_KOTLIN, ForwardPassing.IN_OUT,
+      "increment", int, ForwardFlow.INTO_KOTLIN, ForwardPassing.IN_OUT,
       ForwardOwnership.BORROWED, ForwardConversion.DIRECT,
     )
     val call = ForwardNativeCall(
       "counter_increment",
       ForwardAbiWireType.INT32,
-      listOf(PlannedAbiParameter("value", ForwardAbiWireType.INT32, PlannedAbiDirection.IN_OUT, transfer)),
+      listOf(
+        PlannedAbiParameter(
+          "increment", ForwardAbiWireType.INT32, PlannedAbiDirection.IN_OUT, transfer,
+        ),
+      ),
     )
     val plan = ForwardCallablePlan(
       invocation = ForwardInvocation("sample.Counter.increment"),
@@ -458,12 +463,16 @@ class ForwardAbiContractTest {
     )
     val error = PlannedAbiParameter(
       "errorOut", ForwardAbiWireType.POINTER, PlannedAbiDirection.OUT, errorTransfer,
+      ForwardAbiRole.ERROR,
     )
     val call = ForwardNativeCall(
       "counter_increment",
       ForwardAbiWireType.INT32,
       listOf(
-        PlannedAbiParameter("handle", ForwardAbiWireType.POINTER, PlannedAbiDirection.IN, handleTransfer),
+        PlannedAbiParameter(
+          "handle", ForwardAbiWireType.POINTER, PlannedAbiDirection.IN, handleTransfer,
+          ForwardAbiRole.RECEIVER,
+        ),
         PlannedAbiParameter("increment", ForwardAbiWireType.INT32, PlannedAbiDirection.IN, incrementTransfer),
         error,
       ),

@@ -101,6 +101,7 @@ class ForwardDeclarationRoutingMatrixTest {
               "receiver", BridgeType.Primitive(PrimitiveKind.INT), ForwardFlow.INTO_KOTLIN,
               ForwardPassing.VALUE, ForwardOwnership.BORROWED, ForwardConversion.DIRECT,
             ),
+            ForwardAbiRole.RECEIVER,
           ),
         ),
         invocation = ForwardInvocation("sample.route", origin = origin),
@@ -138,6 +139,7 @@ class ForwardDeclarationRoutingMatrixTest {
               "value", BridgeType.String, ForwardFlow.INTO_KOTLIN, ForwardPassing.VALUE,
               ForwardOwnership.BORROWED, ForwardConversion.STRING_TO_UTF8,
             ),
+            ForwardAbiRole.RECEIVER,
           ),
         ),
         invocation = ForwardInvocation(
@@ -299,6 +301,7 @@ class ForwardDeclarationRoutingMatrixTest {
             "receiver", receiver.type, ForwardFlow.INTO_KOTLIN, ForwardPassing.VALUE,
             ForwardOwnership.BORROWED, ForwardConversion.DIRECT,
           ),
+          ForwardAbiRole.RECEIVER,
         ),
       )
       is ForwardPropertyReceiver.Static -> emptyList()
@@ -399,6 +402,7 @@ class ForwardDeclarationRoutingMatrixTest {
       "handle", BridgeType.ObjectHandle("sample.Patient"), ForwardFlow.INTO_KOTLIN,
       ForwardPassing.VALUE, ForwardOwnership.BORROWED, ForwardConversion.HANDLE_TO_STABLE_REF,
     ),
+    ForwardAbiRole.RECEIVER,
   )
 
   private fun errorParameter(): ForwardAbiParameter = ForwardAbiParameter(
@@ -409,5 +413,6 @@ class ForwardDeclarationRoutingMatrixTest {
       "error", BridgeType.ObjectHandle("kotlin.Throwable"), ForwardFlow.OUT_OF_KOTLIN,
       ForwardPassing.OUT, ForwardOwnership.BORROWED, ForwardConversion.STABLE_REF_TO_HANDLE,
     ),
+    ForwardAbiRole.ERROR,
   )
 }

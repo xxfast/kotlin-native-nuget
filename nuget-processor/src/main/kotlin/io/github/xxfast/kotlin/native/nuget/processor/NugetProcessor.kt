@@ -96,6 +96,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeInter
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardInterfaceBridgePlanner
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardPropertyPlanner
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardReachabilityBucket
+import io.github.xxfast.kotlin.native.nuget.processor.forward.isArmOfIneligibleSealedInterface
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isEligibleSealedInterface
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isEligibleSealedType
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isSealedInterface
@@ -106,6 +107,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardReachabilit
 import io.github.xxfast.kotlin.native.nuget.processor.forward.addForwardKotlinPlanExport
 import io.github.xxfast.kotlin.native.nuget.processor.forward.calls
 import io.github.xxfast.kotlin.native.nuget.processor.forward.diagnosticHint
+import io.github.xxfast.kotlin.native.nuget.processor.forward.diagnosticReason
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isForwardLegacyAsyncRoute
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isValueClass
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyCollectionKinds
@@ -161,38 +163,10 @@ internal fun warnDroppedForwardCallables(
       kind = dropped.reason.toDiagnosticKind(dropped.position),
       symbol = dropped.node,
       declaration = dropped.symbol,
-      // Every other drop is about the types at the callable's positions; this one is about the
-      // position itself, so it does not get the generic sentence.
-      reason = if (
-        dropped.reason == ForwardPlanSkipReason.REFERENCE_UNDERLYING_VALUE_CLASS_CONSTRUCTOR
-      ) {
-        "a value class over a reference underlying carries no constructor across the bridge"
-        // ADR-115: neither of these is a type combination and neither is unsupported, so the
-        // generic sentence below would be wrong on both counts. The second special case in this
-        // `if` is the usual signal that it should become a `reason.diagnosticReason()` enum
-        // method (an open ROADMAP Phase 3 item, deliberately not done here).
-      } else if (dropped.reason == ForwardPlanSkipReason.OPT_IN_MARKER) {
-        "it is marked with the opt-in marker `${dropped.detail ?: "an opt-in marker"}`"
-      } else if (dropped.reason == ForwardPlanSkipReason.OPT_IN_MARKER_TYPE) {
-        val marked: String = dropped.detail?.substringBefore("->") ?: "its type"
-        "its type `$marked` is marked with an opt-in marker"
-        // ADR-116: the third special case in this chain, and the same signal as the second that it
-        // wants `reason.diagnosticReason()` (an open ROADMAP Phase 3 item, still not done here).
-        // Nothing about this member's types is unsupported: the owner kind has no route for it.
-      } else if (dropped.reason == ForwardPlanSkipReason.SEALED_SUBCLASS_UNROUTED) {
-        "it is a ${dropped.detail ?: "specialized"} member of a sealed subclass, which has no " +
-            "route yet (ADR-116)"
-        // Issue #131: the generic sentence below reads as being about the whole callable, so a
-        // nullable *parameter* sent the author reading the return type. Guarded on the name being
-        // there so no other reason's shipped text moves; the fifth special case in this chain, and
-        // the same signal as the second and third that it wants `reason.diagnosticReason()`.
-      } else if (
-        dropped.reason == ForwardPlanSkipReason.NULLABLE && dropped.parameter != null
-      ) {
-        "its parameter `${dropped.parameter}` has a nullable type with no supported wire"
-      } else {
-        "its ${dropped.reason} type combination is not supported"
-      },
+      // ADR-064's 2026-09-10 amendment: the sentence lives on the reason, beside the hint it
+      // reads with, so a drop that is not a type combination adds a `when` arm there rather than
+      // a sixth special case here.
+      reason = dropped.reason.diagnosticReason(dropped.detail, dropped.parameter),
       hint = dropped.reason.diagnosticHint(dropped.detail, scope, dropped.parameter),
     )
   }
@@ -237,7 +211,7 @@ internal fun warnDroppedForwardProperties(
         kind = ForwardDiagnosticKind.SKIPPED_OPT_IN_MARKER,
         symbol = dropped.node,
         declaration = dropped.symbol,
-        reason = "it is marked with the opt-in marker `${dropped.optInMarker}`",
+        reason = ForwardPlanSkipReason.OPT_IN_MARKER.diagnosticReason(dropped.optInMarker),
         hint = ForwardPlanSkipReason.OPT_IN_MARKER.diagnosticHint(dropped.optInMarker),
       )
     } else if (dropped.boundInterface) {
@@ -545,8 +519,8 @@ class NugetProcessor(
             symbol = declaration,
             declaration = declaration.qualifiedName?.asString()
               ?: declaration.simpleName.asString(),
-            reason = "it is marked with the opt-in marker " +
-                "`${declaration.optInMarker()}`",
+            reason = ForwardPlanSkipReason.OPT_IN_MARKER
+              .diagnosticReason(declaration.optInMarker()),
             hint = ForwardPlanSkipReason.OPT_IN_MARKER
               .diagnosticHint(declaration.optInMarker()),
           )
@@ -900,6 +874,9 @@ class NugetProcessor(
         .filter { it.getVisibility() == Visibility.PUBLIC }
         .filter { !it.isCompanionObject }
         .filter { !it.isSealedSubclass() }
+        // ADR-112 amendment: an ineligible sealed interface warns once for its whole hierarchy,
+        // so an arm of it is not a second undeclared thing to report.
+        .filter { !it.isArmOfIneligibleSealedInterface() }
         .filter { it.classKind in NESTED_DECLARATION_KINDS }
         .distinctBy { it.qualifiedName?.asString() ?: it.simpleName.asString() }
         .sortedBy { it.qualifiedName?.asString() ?: it.simpleName.asString() }

@@ -5,8 +5,10 @@ import com.google.devtools.ksp.symbol.KSNode
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallableCatalogEntry
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallablePlanCatalog
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardPlanSkipReason
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardSkipPosition
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class ForwardSkippedCallableWarningTest {
@@ -40,6 +42,93 @@ class ForwardSkippedCallableWarningTest {
     val warning: String = logger.warnings.single()
     assertTrue(warning.contains("com.example.Api.consume"), "warning names the symbol: $warning")
     assertTrue(warning.contains("COLLECTION"), "warning names the reason: $warning")
+  }
+
+  // ROADMAP Phase 3 / ADR-064's 2026-09-10 amendment: this reason is "out of scope", not
+  // "unsupported", and its own hint already says "skipped by design". The generic sentence
+  // contradicted both.
+  @Test
+  fun `an excluded dependency type reads as excluded, not as unsupported`() {
+    val logger = RecordingLogger()
+    val catalog = ForwardCallablePlanCatalog(
+      entries = listOf(
+        ForwardCallableCatalogEntry.Skipped(
+          symbol = "com.example.Api.sponsor",
+          reason = ForwardPlanSkipReason.EXCLUDED_DEPENDENCY_TYPE,
+          detail = "dep.models.TopStory",
+        ),
+      ),
+    )
+
+    warnDroppedForwardCallables(catalog, logger, scope = listOf("com.example"))
+
+    val warning: String = logger.warnings.single()
+    assertTrue(
+      warning.contains(
+        "its type `dep.models.TopStory` is excluded from the export scope by your own exclude(...)",
+      ),
+      "warning says the type is out of scope: $warning",
+    )
+    assertFalse(
+      warning.contains("type combination is not supported"),
+      "warning does not also call it unsupported: $warning",
+    )
+  }
+
+  // The five sentences that moved from the `if` chain onto `diagnosticReason()`, pinned verbatim:
+  // the move is a refactor, so every one of these is byte-identical to its pre-refactor text.
+  @Test
+  fun `every reason that owns a sentence keeps its shipped wording`() {
+    val expected: List<Pair<ForwardCallableCatalogEntry.Skipped, String>> = listOf(
+      ForwardCallableCatalogEntry.Skipped(
+        symbol = "com.example.Money",
+        reason = ForwardPlanSkipReason.REFERENCE_UNDERLYING_VALUE_CLASS_CONSTRUCTOR,
+      ) to "a value class over a reference underlying carries no constructor across the bridge",
+      ForwardCallableCatalogEntry.Skipped(
+        symbol = "com.example.Api.preview",
+        reason = ForwardPlanSkipReason.OPT_IN_MARKER,
+        detail = "com.example.Experimental",
+      ) to "it is marked with the opt-in marker `com.example.Experimental`",
+      ForwardCallableCatalogEntry.Skipped(
+        symbol = "com.example.Api.draft",
+        reason = ForwardPlanSkipReason.OPT_IN_MARKER_TYPE,
+        detail = "com.example.Draft->com.example.Experimental",
+      ) to "its type `com.example.Draft` is marked with an opt-in marker",
+      ForwardCallableCatalogEntry.Skipped(
+        symbol = "com.example.Shape.Circle.observe",
+        reason = ForwardPlanSkipReason.SEALED_SUBCLASS_UNROUTED,
+        detail = "suspend",
+      ) to "it is a suspend member of a sealed subclass, which has no route yet (ADR-116)",
+      ForwardCallableCatalogEntry.Skipped(
+        symbol = "com.example.Api.rename",
+        reason = ForwardPlanSkipReason.NULLABLE,
+        position = ForwardSkipPosition.INPUT,
+        parameter = "label",
+      ) to "its parameter `label` has a nullable type with no supported wire",
+      ForwardCallableCatalogEntry.Skipped(
+        symbol = "com.example.Api.consume",
+        reason = ForwardPlanSkipReason.COLLECTION,
+      ) to "its COLLECTION type combination is not supported",
+      // A nullable skip with no parameter name (a return position) keeps the generic sentence.
+      ForwardCallableCatalogEntry.Skipped(
+        symbol = "com.example.Api.find",
+        reason = ForwardPlanSkipReason.NULLABLE,
+      ) to "its NULLABLE type combination is not supported",
+    )
+
+    val logger = RecordingLogger()
+    warnDroppedForwardCallables(
+      ForwardCallablePlanCatalog(entries = expected.map { (skipped, _) -> skipped }),
+      logger,
+    )
+
+    assertEquals(expected.size, logger.warnings.size, "one warning per skip: ${logger.warnings}")
+    expected.forEachIndexed { index, (skipped, sentence) ->
+      assertTrue(
+        logger.warnings[index].contains(sentence),
+        "${skipped.symbol} keeps its shipped wording: ${logger.warnings[index]}",
+      )
+    }
   }
 
   @Test

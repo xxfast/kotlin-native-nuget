@@ -219,6 +219,7 @@ class ForwardPhase8ProjectionTest {
       "handle", BridgeType.ObjectHandle("sample.Patient"), ForwardFlow.INTO_KOTLIN,
       ForwardPassing.VALUE, ForwardOwnership.BORROWED, ForwardConversion.HANDLE_TO_STABLE_REF,
     ),
+    ForwardAbiRole.RECEIVER,
   )
 
   private fun error(): ForwardAbiParameter = ForwardAbiParameter(
@@ -229,5 +230,6 @@ class ForwardPhase8ProjectionTest {
       "error", BridgeType.ObjectHandle("kotlin.Throwable"), ForwardFlow.OUT_OF_KOTLIN,
       ForwardPassing.OUT, ForwardOwnership.BORROWED, ForwardConversion.STABLE_REF_TO_HANDLE,
     ),
+    ForwardAbiRole.ERROR,
   )
 }

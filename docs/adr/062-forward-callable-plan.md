@@ -120,8 +120,8 @@ simply failed to compile.
 
 The fix is a naming invariant applied once, at plan time, so both projections see the shifted
 name: `PLAN_OWNED_NAMES` (`handle`, `receiver`, `value`, `errorOut`, `valueOut`) in `Reserved.kt`,
-applied through `String.bridgeParameterName()` at the eight construction sites in
-`ForwardCallablePlanner.kt` where a user's Kotlin identifier enters the plan. A user parameter
+applied through `String.bridgeParameterName()` in the one place a user's Kotlin identifier enters
+the plan, `KSValueParameter.bridgeName()` in `ForwardCallablePlanner.kt` and its ten call sites. A user parameter
 spelling one of those names, or that literal followed only by underscores, shifts one underscore
 (`handle` -> `handle_`, `handle_` -> `handle__`), the same injective chain rule issue #66 used for
 `error`. `value` moves on every callable, not only where it would actually collide, so the rule
@@ -138,14 +138,47 @@ source-breaking change for a C# caller using named arguments, noted for the 0.6.
 
 A structural `role` field on `ForwardAbiParameter` (an enum distinguishing a generator-owned slot
 from user data, checked once rather than string-matched at each read site) was considered and
-deferred: it would replace this same name lookup at roughly twenty `ForwardAbiParameter`
+deferred here: it would replace this same name lookup at roughly twenty `ForwardAbiParameter`
 construction sites, and it cannot reach `ForwardAbiContract`, which derives its expected
 signatures from a rendered KotlinPoet `FunSpec`, a stage that has already discarded any such
-field. Tracked in [ROADMAP.md](../../ROADMAP.md) Phase 3.
+field. It shipped on 2026-09-10; see the amendment below.
 
 See `test-library/.../test/reserved/ReservedNamesSample.kt` and
 `IntegrationTests/ReservedNamesTests.cs` for the fixture, and `Reserved.kt`'s
 `PLAN_OWNED_NAMES`/`bridgeParameterName()` for the mechanism.
+
+Cross-reference (2026-09-10): writing this amendment's `String.tag(receiver: String)` cell is what
+surfaced the extension-class placement bug. The cell had to be parked in `cat/`, away from the rest
+of its fixture family, because the merged `StringExtensions` class took the package of the
+first-visited `String` extension and a cell in its own package would have dragged every other
+`String` extension out of the namespace their tests used.
+[ADR-126](126-extension-class-per-declaring-package.md) makes that placement per declaring package,
+and the cell now lives in `reserved/ReservedExtensions.kt` beside the others.
+
+## Amendment (2026-09-10): the reserved-name invariant is now structural
+
+The deferred `role` field shipped. `ForwardAbiParameter` in `forward/ForwardMarshallingModel.kt`
+carries a `ForwardAbiRole` (`USER`, `RECEIVER`, `SETTER_VALUE`, `VALUE_OUT`, `ERROR`), defaulting
+to `USER`, and its `init` requires `(role == USER) == (name !in PLAN_OWNED_NAMES)`. That one check
+replaces the name matching at all thirteen read sites in `forward/`: the two projections and the
+two emitters now ask what a slot *is* (`role == RECEIVER`, `role == VALUE_OUT`, `role == ERROR`)
+rather than what it is spelled. Five values, not two, because the readers distinguish a receiver
+from a setter value from a value-out from an error slot; a `USER`/`RESERVED` pair would have left
+the `"valueOut"` and `"value"` string reads in place. The default matters: because an omitted role
+on a generator slot fails loudly in `init`, the ~34 construction sites did not all have to become
+mandatory-argument calls, and `nativeInputParameters` threads the role in as a parameter, since it
+builds both user parameters and the value receiver. `ForwardCallablePlanValidator.validateCall`
+adds the position rule the readers assume: at most one `RECEIVER`, first; at most one `ERROR`,
+last; a `VALUE_OUT` is `OUT`. The nullable `${name}HasValue` presence flag stays `USER`, which is
+what it already was to every reader.
+
+`PLAN_OWNED_NAMES` is now consulted in exactly two places, `bridgeParameterName()` and that `init`.
+`ForwardAbiContract`'s Kotlin-side `FunSpec.toSignature()` deliberately keeps its name-based
+direction read, as this ADR predicted: it works from rendered KotlinPoet, where the plan parameter
+and its role are gone, and it also covers the legacy `exports/*` exports that never had a plan and
+spell `errorOut` by hand, so a role could not have retired that path anyway. The change is
+generator-internal: no emitted name moves, and the generated `CNameExports.kt` and `Interop.cs` are
+byte-identical across it.
 
 ## Amendment (2026-09-07): method-name keyword escaping moved to render time
 
@@ -157,7 +190,9 @@ the six public-member name sites in `ForwardCirPlanProjection.kt`. Extern and en
 derivations (`Native_${name}` and friends) keep the raw plan name, since neither is ever rendered
 as a C# identifier a keyword could collide with. `ForwardCallablePlanValidator.validate` now
 `require`s that a plan name never starts with `@`, so a plan itself can never carry an escaped
-name again. See `ForwardCirPlanProjectionTest`.
+name again. See `ForwardCirPlanProjectionTest`. The extern fallback for CIR that carries no plan name now
+refuses an escaped name outright, see [ADR-090](090-ordinary-class-method-overloads.md)'s
+2026-09-10 amendment.
 
 ## References
 

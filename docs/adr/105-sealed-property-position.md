@@ -526,6 +526,34 @@ All three are pinned in Tier 1 (`Tier1ValueClassOverSealedPropertyTest.kt`). Fix
 `test-library/.../test/cat/ObservationDesk.kt` (`result`, `maybe`, `current`, `observe()`,
 `currentDescription()`); consumer `IntegrationTests/ValueClassOverSealedTests.cs`.
 
+## Amendment (2026-09-10): an extension function's sealed receiver binds too
+
+The first bullet of the "Deliberately unchanged" list above is withdrawn. `extensionEntry` now
+passes its receiver through `sealedAsHandle()` before `planOrSkip`, the same rewrite scope (d)
+applies to every declared parameter, so `fun Shape.footprint()` plans as an ordinary `ObjectHandle`
+receiver rather than skipping `SEALED_POSITION`. The Kotlin export takes the base handle and
+dereferences it with `asStableRef<Shape>().get()` (the `_get_type` idiom), and C# renders
+`public static string Footprint(this Shape receiver)` in `ShapeExtensions`, passing
+`receiver._handle`; the abstract base declares that field in the same assembly, so it compiles.
+No new route and no new renderer arm: the receiver is rewritten at the one site that can produce a
+protocol receiver, since every other route (class, object, companion, value class, ADR-116 sealed
+subclass) builds a bare `ObjectHandle` receiver already.
+
+An eligible sealed *interface* receiver binds the same way. An ineligible or out-of-scope sealed
+receiver carries no `sealedHandle`, still skips `SEALED_POSITION`, and that hint's "has no generated
+discriminator" wording is now true for every receiver it names, which it was not before.
+
+Still deferred, each its own item: an extension **property** on a sealed receiver
+(`ForwardPropertyPlanner` classifies its receiver without the rewrite and `supportedReceiver` wants
+an `ObjectHandle`), and a **nullable** receiver of any handle type, which plans but then renders a
+C# call passing the wrapper where the extern wants an `IntPtr`, pre-existing and unrelated to sealed
+types.
+
+Fixtures: `Issue54Sample.kt` (`Issue54Shape.footprint()` and `Issue54Shape.covers(other)`);
+consumer `IntegrationTests/Issue54Tests.cs` (three facts, one of them calling the extension on the
+concrete arm); `Tier1SealedReceiverExtensionTest.kt`, whose control is an ineligible sealed
+interface receiver that still skips.
+
 ## Prior art (to the depth that changes the decision)
 
 - **ObjC / Swift Export**: Kotlin/Native maps a sealed class to an ordinary class hierarchy

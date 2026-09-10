@@ -496,4 +496,61 @@ public class Issue54Tests
         Assert.NotNull(hashCode);
         Assert.Equal(typeof(Issue54Shape.Empty), hashCode.DeclaringType);
     }
+
+    /// <summary>
+    /// ADR-105 amendment: an extension function whose <em>receiver</em> is the sealed base. Every
+    /// other sealed cell in this file puts the base at a parameter, a property or a return; the
+    /// receiver is the position the scope (d) rewrite skipped, so today the export is dropped with
+    /// <c>SKIPPED_SEALED_POSITION</c> and <c>Issue54ShapeExtensions</c> does not exist at all
+    /// (CS1061 on <c>Footprint</c> is the red signal).
+    /// <para>
+    /// The receiver here is Oreo, curled at <c>7.5</c>. The last line calls the same extension on
+    /// the <em>concrete arm</em>, which pins that a C# extension declared on the abstract base
+    /// resolves on the derived type rather than only on a base-typed variable.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public void Footprint_SealedReceiverExtension_BindsOnThePayloadArm()
+    {
+        using Issue54Drawing drawing = Issue54Sample.CurledCats();
+
+        using Issue54Shape shape = drawing.Shape;
+
+        Assert.Equal("circle r=7.5", shape.Footprint());
+        Assert.Equal("circle r=7.5", Assert.IsType<Issue54Shape.Circle>(shape).Footprint());
+    }
+
+    /// <summary>
+    /// The payload-free arm across the same receiver: Mylo, sprawled into no shape, still has to
+    /// arrive as the singleton rather than as a raw pointer, because the Kotlin side answers from a
+    /// <c>when</c> over the receiver it dereferenced.
+    /// </summary>
+    [Fact]
+    public void Footprint_SealedReceiverExtension_BindsOnThePayloadFreeArm()
+    {
+        using Issue54Drawing drawing = Issue54Sample.CurledCats();
+
+        using Issue54Shape shape = drawing.Current;
+
+        Assert.Equal("empty", shape.Footprint());
+    }
+
+    /// <summary>
+    /// Receiver and declared parameter, both sealed, on one export: the receiver rewrite and the
+    /// scope (d) parameter rewrite have to agree on the same signature. The return is a
+    /// <c>bool</c>, so nothing here depends on the return side of the wire, and both directions are
+    /// asserted so an export that quietly swapped receiver and argument is red.
+    /// Oreo, curled, covers Mylo's nothing; Mylo covers no circle.
+    /// </summary>
+    [Fact]
+    public void Covers_SealedReceiverAndSealedArgument_CrossOnTheSameExport()
+    {
+        using Issue54Drawing drawing = Issue54Sample.CurledCats();
+
+        using Issue54Shape oreo = drawing.Shape;
+        using Issue54Shape mylo = drawing.Current;
+
+        Assert.True(oreo.Covers(mylo));
+        Assert.False(mylo.Covers(oreo));
+    }
 }

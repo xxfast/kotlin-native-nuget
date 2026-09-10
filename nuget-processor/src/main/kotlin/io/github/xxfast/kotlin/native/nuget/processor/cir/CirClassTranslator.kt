@@ -3,6 +3,7 @@ package io.github.xxfast.kotlin.native.nuget.processor.cir
 import com.google.devtools.ksp.getAllSuperTypes
 import com.google.devtools.ksp.getConstructors
 import com.google.devtools.ksp.getVisibility
+import com.google.devtools.ksp.isAbstract
 import com.google.devtools.ksp.processing.KSPLogger
 import com.google.devtools.ksp.symbol.ClassKind
 import com.google.devtools.ksp.symbol.KSClassDeclaration
@@ -37,6 +38,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardPublicCshar
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardSuperClass
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isForwardLegacyAsyncRoute
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isForwardMemberOf
+import io.github.xxfast.kotlin.native.nuget.processor.forward.isOpenForOverride
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyCollectionRead
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyFlowElementCollection
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyFlowElementReadArgument
@@ -46,17 +48,6 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyRefusedRetur
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyReturnShape
 import io.github.xxfast.kotlin.native.nuget.processor.forward.planFor
 import io.github.xxfast.kotlin.native.nuget.processor.toCName
-
-/**
- * ADR-040 fixture gap: a Kotlin `override` member with no CLASS supertype (so it implements an
- * *interface* member, not a class one) stays open by Kotlin default unless explicitly `final` —
- * `Animal.fetch(item)` implementing `Pet.fetch`, further overridden by `Cat.fetch`, is exactly
- * this shape. C# requires the base declaration to say `virtual` for that further `override` to
- * compile (CS0506 otherwise); this was never needed before this feature because no prior fixture
- * combined an interface-implementing class with a subclass re-overriding the same member.
- */
-private fun Set<Modifier>.isOpenInterfaceImplementation(superClass: String?): Boolean =
-  superClass == null && contains(Modifier.OVERRIDE) && !contains(Modifier.FINAL)
 
 /** Which half of issue #42 a dropped supertype is: the two lose genuinely different things, so
  *  they get genuinely different messages (an interface carries nothing C# could have called; a
@@ -145,13 +136,17 @@ private fun KSClassDeclaration.hasPublicConstructor(): Boolean =
  * planner's own verdicts, including the legacy-route deferrals `droppedCallables` filters out.
  * A class whose constructors never reached the planner at all (no skipped entry, no plan) still
  * warns, naming the count instead.
+ *
+ * Returns that detail string so the class's `<remarks>` doc comment (ADR-064 amendment,
+ * 2026-09-10) names the same constructors and the same reasons as the build log, off one catalog
+ * query. Two queries would be two chances to drift.
  */
 private fun warnNoPublicConstructor(
   cls: KSClassDeclaration,
   name: String,
   callableCatalog: ForwardCallablePlanCatalog,
   logger: KSPLogger,
-) {
+): String {
   val skipped: List<ForwardCallableCatalogEntry.Skipped> =
     callableCatalog.skippedConstructors(cls.qualifiedName?.asString() ?: name)
   val declared: Int = cls.getConstructors().count { it.getVisibility() == Visibility.PUBLIC }
@@ -177,7 +172,19 @@ private fun warnNoPublicConstructor(
     ),
     logger,
   )
+  return detail
 }
+
+/**
+ * The consumer-facing half of [ForwardDiagnosticKind.WARNING_NO_PUBLIC_CONSTRUCTOR]: what a C#
+ * developer reads in IntelliSense on a class only Kotlin can hand them. The diagnostic's own hint
+ * ("expose one, or change the constructor parameters") is author-facing and useless downstream,
+ * but [detail]'s reason codes stay in: they are the search key back to the Gradle log and to the
+ * ADR-064 catalogue.
+ */
+private fun noPublicConstructorRemark(name: String, detail: String): String =
+  "Cannot be constructed from C#: every Kotlin constructor of $name was skipped by the bridge " +
+      "($detail). Instances come from Kotlin factories that return this type."
 
 internal fun translateClass(
   cls: KSClassDeclaration,
@@ -195,6 +202,7 @@ internal fun translateClass(
   val prefix: String = name.lowercase()
   val isDataClass: Boolean = cls.modifiers.contains(Modifier.DATA)
   val isAbstract: Boolean = cls.modifiers.contains(Modifier.ABSTRACT)
+  val isOpen: Boolean = !isAbstract && cls.modifiers.contains(Modifier.OPEN)
 
   // The shared has-superclass predicate (`ForwardClassMembership.kt`), the same instance the two
   // planners filter their members with, so a member can never be kept here and skipped there.
@@ -249,8 +257,12 @@ internal fun translateClass(
   // ROADMAP Phase 3: the class is kept (a Kotlin factory returning it still hands C# a usable
   // instance) but nothing can construct it from C#, and for a legacy-route deferral -- a sealed
   // or generic parameter -- that outcome had no diagnostic anywhere.
-  if (!isAbstract && cirConstructors.isEmpty() && cls.hasPublicConstructor()) {
-    warnNoPublicConstructor(cls, name, callableCatalog, logger)
+  val noPublicConstructor: Boolean =
+    !isAbstract && cirConstructors.isEmpty() && cls.hasPublicConstructor()
+  val remarks: String? = if (noPublicConstructor) {
+    noPublicConstructorRemark(name, warnNoPublicConstructor(cls, name, callableCatalog, logger))
+  } else {
+    null
   }
 
   // C has no overloading and C# cannot declare two constructors with identical parameter
@@ -292,10 +304,18 @@ internal fun translateClass(
       val planned = callableCatalog.propertyFor("${cls.qualifiedName?.asString() ?: name}.$propName")
       if (planned != null) {
         tracker.trackProperty(planned)
+        val isOverride: Boolean = superClass != null && prop.modifiers.contains(Modifier.OVERRIDE)
         return@mapNotNull ForwardCirPropertyProjection.classProperty(
           planned,
-          isOverride = superClass != null && prop.modifiers.contains(Modifier.OVERRIDE),
-          isVirtual = prop.modifiers.isOpenInterfaceImplementation(superClass),
+          isOverride = isOverride,
+          // ADR-101 amendment (2026-09-10): everything Kotlin left overridable and C# is not
+          // already spelling `override`. A declared `open val`/`open var` reaches `virtual` here.
+          isVirtual = !isOverride && prop.modifiers.isOpenForOverride(),
+          // ADR-075 amendment (2026-09-10): this class's own unimplemented `abstract val`/`var`.
+          // `isAbstract()` (not `Modifier.ABSTRACT`) is the same predicate
+          // `isForwardPlannableMemberOf` uses. The abstract *method* walk has its own, broader
+          // hole (a class-declared `abstract fun` is dropped entirely); it is not touched here.
+          isAbstract = prop.isAbstract(),
         )
       }
       // Issue #121: the planner declined, but a decline is not always an invitation. A marked
@@ -654,6 +674,7 @@ internal fun translateClass(
     superClass = superClass,
     isDataClass = isDataClass,
     isAbstract = isAbstract,
+    isOpen = isOpen,
     companionMembers = companionMembers + asyncMembers + flowRouteMembers,
     hasSuspendMethods = cls.getAllFunctions().any { it.modifiers.contains(Modifier.SUSPEND) } ||
         flowMethods.isNotEmpty() ||
@@ -662,6 +683,7 @@ internal fun translateClass(
             prop.type.resolve().expandAliases().declaration.qualifiedName?.asString()
           qualified in FLOW_TYPES || qualified in STATE_FLOW_TYPES
         },
+    remarks = remarks,
   )
 }
 

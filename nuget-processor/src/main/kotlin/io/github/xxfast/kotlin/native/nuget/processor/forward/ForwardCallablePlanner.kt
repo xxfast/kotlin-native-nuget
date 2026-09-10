@@ -1649,7 +1649,12 @@ internal class ForwardCallablePlanner(
       publicName = toCName(functionName).replaceFirstChar { it.uppercase() },
       exportName =
         "${receiver.declaration.simpleName.asString().lowercase()}_${toCName(functionName)}$suffix",
-      receiver = ForwardReceiver.Value(receiverType),
+      // ADR-105 amendment: the receiver gets the same sealed rewrite scope (d) applies to every
+      // declared parameter, here rather than in `planOrSkip`, because the extension route is the
+      // only one that can hand it a protocol receiver (every other route builds a bare
+      // `ObjectHandle` already). An eligible sealed base then plans as an ordinary handle
+      // receiver; an ineligible or out-of-scope one carries no `sealedHandle` and still skips.
+      receiver = ForwardReceiver.Value(receiverType.sealedAsHandle()),
       parameters = function.parameters.dropLast(omitted).map { parameter ->
         parameter.bridgeName() to classifier.classify(parameter.type.resolve())
       },
@@ -1734,8 +1739,9 @@ internal class ForwardCallablePlanner(
     // ADR-105 scope (d): the sealed rewrite is applied to every declared PARAMETER here, once,
     // rather than at each catalog site's `classifier.classify(...)` call, so the plan's public
     // signature, its ABI parameters and its input eligibility check all see the same rewritten
-    // type. The receiver is deliberately left alone: a sealed *receiver* is a member of the ADR-009
-    // hierarchy itself, which has its own named legacy route.
+    // type. The receiver arrives already rewritten where one can be sealed at all: `extensionEntry`
+    // applies the same rewrite to its receiver before calling in, and every other route builds a
+    // bare `ObjectHandle` receiver, so this function stays receiver-agnostic.
     val declared: List<Pair<String, BridgeType>> =
       parameters.map { (name, type) -> name to type.sealedAsHandle() }
     // Issue #131: name-carrying, so a skip can name the parameter that failed. The receiver rides
@@ -1908,17 +1914,20 @@ internal class ForwardCallablePlanner(
       ownership = ForwardOwnership.BORROWED,
       conversion = ForwardConversion.STABLE_REF_TO_HANDLE,
     ),
+    role = ForwardAbiRole.ERROR,
   )
 
   private fun valueParameter(
     name: String,
     type: BridgeType,
     flow: ForwardFlow,
+    role: ForwardAbiRole = ForwardAbiRole.USER,
   ): ForwardAbiParameter = ForwardAbiParameter(
     name = name,
     wireType = type.wireType(),
     direction = ForwardAbiDirection.IN,
     transfer = transfer(name, type, flow),
+    role = role,
   )
 
   /**
@@ -1927,9 +1936,13 @@ internal class ForwardCallablePlanner(
    * *adjacent* native parameters (`${name}HasValue` then `name`) in place of the single public
    * parameter, so callers must `flatMap` over the declared parameter list rather than `map`.
    */
-  private fun nativeInputParameters(name: String, type: BridgeType): List<ForwardAbiParameter> = when (type) {
+  private fun nativeInputParameters(
+    name: String,
+    type: BridgeType,
+    role: ForwardAbiRole = ForwardAbiRole.USER,
+  ): List<ForwardAbiParameter> = when (type) {
     is BridgeType.Primitive, BridgeType.Char, BridgeType.String -> listOf(
-      valueParameter(name, type, ForwardFlow.INTO_KOTLIN),
+      valueParameter(name, type, ForwardFlow.INTO_KOTLIN, role),
     )
 
     // ADR-076: the wire value is a raw INT64 of ticks; the Kotlin export converts it back to an
@@ -1943,6 +1956,7 @@ internal class ForwardCallablePlanner(
           name, type, ForwardFlow.INTO_KOTLIN, ForwardPassing.VALUE,
           ForwardOwnership.BORROWED, ForwardConversion.TICKS_TO_INSTANT,
         ),
+        role = role,
       )
     )
 
@@ -1957,6 +1971,7 @@ internal class ForwardCallablePlanner(
           name, type, ForwardFlow.INTO_KOTLIN, ForwardPassing.VALUE,
           ForwardOwnership.BORROWED, ForwardConversion.STRING_TO_UUID,
         ),
+        role = role,
       )
     )
 
@@ -1970,6 +1985,7 @@ internal class ForwardCallablePlanner(
           name, type, ForwardFlow.INTO_KOTLIN, ForwardPassing.VALUE,
           ForwardOwnership.BORROWED, ForwardConversion.TICKS_TO_DURATION,
         ),
+        role = role,
       )
     )
 
@@ -1982,6 +1998,7 @@ internal class ForwardCallablePlanner(
           name, type, ForwardFlow.INTO_KOTLIN, ForwardPassing.VALUE,
           ForwardOwnership.BORROWED, ForwardConversion.ORDINAL_TO_ENUM,
         ),
+        role = role,
       )
     )
 
@@ -1994,6 +2011,7 @@ internal class ForwardCallablePlanner(
           name, type, ForwardFlow.INTO_KOTLIN, ForwardPassing.VALUE,
           ForwardOwnership.BORROWED, ForwardConversion.HANDLE_TO_STABLE_REF,
         ),
+        role = role,
       )
     )
 
@@ -2010,6 +2028,7 @@ internal class ForwardCallablePlanner(
           name, type, ForwardFlow.INTO_KOTLIN, ForwardPassing.VALUE,
           ForwardOwnership.MATERIALIZED, ForwardConversion.GC_HANDLE_TO_BOUND_VALUE,
         ),
+        role = role,
       )
     )
 
@@ -2027,6 +2046,7 @@ internal class ForwardCallablePlanner(
           name, type, ForwardFlow.INTO_KOTLIN, ForwardPassing.VALUE,
           ForwardOwnership.BORROWED, ForwardConversion.BOX_VALUE_CLASS,
         ),
+        role = role,
       )
     )
 
@@ -2041,6 +2061,7 @@ internal class ForwardCallablePlanner(
           name, type, ForwardFlow.INTO_KOTLIN, ForwardPassing.VALUE,
           ForwardOwnership.BORROWED, ForwardConversion.HANDLE_TO_COLLECTION,
         ),
+        role = role,
       )
     )
 
@@ -2054,6 +2075,7 @@ internal class ForwardCallablePlanner(
             name, type, ForwardFlow.INTO_KOTLIN, ForwardPassing.VALUE,
             ForwardOwnership.BORROWED, ForwardConversion.STRING_TO_UTF8,
           ),
+          role = role,
         )
       )
 
@@ -2068,6 +2090,7 @@ internal class ForwardCallablePlanner(
             name, type, ForwardFlow.INTO_KOTLIN, ForwardPassing.VALUE,
             ForwardOwnership.BORROWED, ForwardConversion.STRING_TO_UUID,
           ),
+          role = role,
         )
       )
 
@@ -2080,6 +2103,7 @@ internal class ForwardCallablePlanner(
             name, type, ForwardFlow.INTO_KOTLIN, ForwardPassing.VALUE,
             ForwardOwnership.BORROWED, ForwardConversion.HANDLE_TO_STABLE_REF,
           ),
+          role = role,
         )
       )
 
@@ -2097,6 +2121,7 @@ internal class ForwardCallablePlanner(
             name, type, ForwardFlow.INTO_KOTLIN, ForwardPassing.VALUE,
             ForwardOwnership.BORROWED, ForwardConversion.HANDLE_TO_COLLECTION,
           ),
+          role = role,
         )
       )
 
@@ -2127,6 +2152,7 @@ internal class ForwardCallablePlanner(
               name, inner, ForwardFlow.INTO_KOTLIN, ForwardPassing.VALUE,
               ForwardOwnership.BORROWED, ForwardConversion.BOX_VALUE_CLASS,
             ),
+            role = role,
           ),
         )
       } else {
@@ -2139,6 +2165,7 @@ internal class ForwardCallablePlanner(
               name, type, ForwardFlow.INTO_KOTLIN, ForwardPassing.VALUE,
               ForwardOwnership.BORROWED, ForwardConversion.BOX_VALUE_CLASS,
             ),
+            role = role,
           )
         )
       }
@@ -2161,6 +2188,7 @@ internal class ForwardCallablePlanner(
             name, inner, ForwardFlow.INTO_KOTLIN, ForwardPassing.VALUE,
             ForwardOwnership.BORROWED, ForwardConversion.DIRECT,
           ),
+          role = role,
         ),
       )
 
@@ -2184,6 +2212,7 @@ internal class ForwardCallablePlanner(
             name, inner, ForwardFlow.INTO_KOTLIN, ForwardPassing.VALUE,
             ForwardOwnership.BORROWED, ForwardConversion.ORDINAL_TO_ENUM,
           ),
+          role = role,
         ),
       )
 
@@ -2207,6 +2236,7 @@ internal class ForwardCallablePlanner(
             name, inner, ForwardFlow.INTO_KOTLIN, ForwardPassing.VALUE,
             ForwardOwnership.BORROWED, ForwardConversion.TICKS_TO_INSTANT,
           ),
+          role = role,
         ),
       )
 
@@ -2229,6 +2259,7 @@ internal class ForwardCallablePlanner(
             name, inner, ForwardFlow.INTO_KOTLIN, ForwardPassing.VALUE,
             ForwardOwnership.BORROWED, ForwardConversion.TICKS_TO_DURATION,
           ),
+          role = role,
         ),
       )
 
@@ -2441,6 +2472,7 @@ internal class ForwardCallablePlanner(
               ownership = ForwardOwnership.BORROWED,
               conversion = ForwardConversion.DIRECT,
             ),
+            role = ForwardAbiRole.VALUE_OUT,
           )
         ),
         helperRequirements = buildSet {
@@ -2470,6 +2502,7 @@ internal class ForwardCallablePlanner(
               ownership = ForwardOwnership.BORROWED,
               conversion = ForwardConversion.DIRECT,
             ),
+            role = ForwardAbiRole.VALUE_OUT,
           )
         ),
       )
@@ -2504,6 +2537,7 @@ internal class ForwardCallablePlanner(
             ownership = ForwardOwnership.BORROWED,
             conversion = ForwardConversion.DIRECT,
           ),
+          role = ForwardAbiRole.VALUE_OUT,
         )
       ),
       helperRequirements = setOf(ForwardHelperRequirement.INSTANT),
@@ -2534,6 +2568,7 @@ internal class ForwardCallablePlanner(
             ownership = ForwardOwnership.BORROWED,
             conversion = ForwardConversion.DIRECT,
           ),
+          role = ForwardAbiRole.VALUE_OUT,
         )
       ),
       helperRequirements = setOf(ForwardHelperRequirement.DURATION),
@@ -2564,6 +2599,7 @@ internal class ForwardCallablePlanner(
             ownership = ForwardOwnership.BORROWED,
             conversion = ForwardConversion.DIRECT,
           ),
+          role = ForwardAbiRole.VALUE_OUT,
         )
       ),
       helperRequirements = setOf(ForwardHelperRequirement.ENUM_ORDINAL),
@@ -2706,10 +2742,13 @@ internal class ForwardCallablePlanner(
           ownership = ForwardOwnership.BORROWED,
           conversion = ForwardConversion.HANDLE_TO_STABLE_REF,
         ),
+        role = ForwardAbiRole.RECEIVER,
       )
     )
 
-    is ForwardReceiver.Value -> nativeInputParameters(receiver.name, receiver.type)
+    is ForwardReceiver.Value -> nativeInputParameters(
+      receiver.name, receiver.type, ForwardAbiRole.RECEIVER,
+    )
     ForwardReceiver.Static -> emptyList()
   }
 
@@ -3105,9 +3144,9 @@ internal class ForwardCallablePlanner(
  * projection rather than gaining a variant of its own.
  *
  * Applied at a *property* type ([ForwardPropertyPlanner]) and, at a callable, to both its *result*
- * and every declared *parameter* ([ForwardCallablePlanner.planOrSkip], ADR-105 scope (d)). Not at a
- * receiver: a sealed receiver is a member of the ADR-009 hierarchy itself, which has its own named
- * legacy route.
+ * and every declared *parameter* ([ForwardCallablePlanner.planOrSkip], ADR-105 scope (d)), and at
+ * an extension *receiver* (`ForwardCallablePlanner.extensionEntry`, the only route whose receiver
+ * can be a sealed base rather than a bare handle).
  *
  * Recurses through [BridgeType.Nullable], the [BridgeType.Collection] components, and
  * [BridgeType.ValueClass.underlying]: a value class over a sealed type

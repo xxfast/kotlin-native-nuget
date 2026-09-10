@@ -119,6 +119,7 @@ class ForwardPhase10LegacyTwoCallTest {
         ownership = ForwardOwnership.BORROWED,
         conversion = ForwardConversion.STABLE_REF_TO_HANDLE,
       ),
+      role = ForwardAbiRole.ERROR,
     )
     val inputs: List<ForwardAbiParameter> = parameters.map { parameter ->
       ForwardAbiParameter(

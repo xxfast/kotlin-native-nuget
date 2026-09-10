@@ -20,14 +20,17 @@ class ForwardInterfacePropertyProjectionTest {
     "handle", BridgeType.ObjectHandle("sample.Cat"), ForwardFlow.INTO_KOTLIN, ForwardPassing.VALUE,
     ForwardOwnership.BORROWED, ForwardConversion.HANDLE_TO_STABLE_REF,
   )
-  private val handleParameter =
-    ForwardAbiParameter("handle", ForwardAbiWireType.POINTER, ForwardAbiDirection.IN, handleTransfer)
+  private val handleParameter = ForwardAbiParameter(
+    "handle", ForwardAbiWireType.POINTER, ForwardAbiDirection.IN, handleTransfer,
+    ForwardAbiRole.RECEIVER,
+  )
   private val errorParameter = ForwardAbiParameter(
     "errorOut", ForwardAbiWireType.POINTER, ForwardAbiDirection.OUT,
     ForwardTransfer(
       "error", BridgeType.ObjectHandle("kotlin.Throwable"), ForwardFlow.OUT_OF_KOTLIN, ForwardPassing.OUT,
       ForwardOwnership.BORROWED, ForwardConversion.STABLE_REF_TO_HANDLE,
     ),
+    ForwardAbiRole.ERROR,
   )
 
   private fun valueParameter(type: BridgeType): ForwardAbiParameter = ForwardAbiParameter(
@@ -40,6 +43,7 @@ class ForwardInterfacePropertyProjectionTest {
       ForwardOwnership.BORROWED,
       ForwardConversion.HANDLE_TO_STABLE_REF
     ),
+    ForwardAbiRole.SETTER_VALUE,
   )
 
   @Test

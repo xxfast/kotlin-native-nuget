@@ -517,9 +517,16 @@ data class GroomingPlan(
     generated C# class has only its internal handle constructor and C# cannot construct one.
 ```
 
-`GroomingPlan` still generates, keeps `Name`, and carries only its internal handle constructor:
+`GroomingPlan` still generates, keeps `Name`, and carries only its internal handle constructor. The
+class line also carries the same detail as an XML-escaped `<remarks>` doc comment, so a consumer
+sees it as an IDE tooltip
+([ADR-064](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/064-forward-unsupported-declaration-diagnostics.md)
+2026-09-10 amendment):
 
 ```C#
+/// <remarks>
+/// Cannot be constructed from C#: every Kotlin constructor of GroomingPlan was skipped by the bridge (&lt;init&gt;: OPT_IN_MARKER_TYPE, &lt;init&gt;_2: OPT_IN_MARKER_TYPE, &lt;init&gt;_3: OPT_IN_MARKER_TYPE). Instances come from Kotlin factories that return this type.
+/// </remarks>
 public class GroomingPlan : IDisposable, INugetHandle
 {
     internal IntPtr _handle;
@@ -553,6 +560,15 @@ explaining why. Since
     constructor parameters to types the bridge can express
     at Issue56Sample.kt:41
 ```
+
+The warning still only reaches the library author's Gradle log and `NugetDiagnostics.json`; on its
+own, the 2026-09-07 amendment left a consumer opening `Issue56Failure` with no explanation anywhere
+in the assembly or IntelliSense. ADR-064's 2026-09-10 amendment closes that: the same skipped-
+constructor detail the warning names is also emitted as an XML-escaped `/// <remarks>` doc comment
+directly above the class line, using consumer-facing wording rather than the diagnostic's
+author-facing hint, so the constraint is visible as an IDE tooltip too. See
+[Classes and objects: No public constructor](classes-and-objects.md#no-public-constructor) for the
+rendered block.
 
 Fires for every skip reason a constructor can go for, including a legacy-route deferral that never
 reaches `droppedCallables` on its own (no legacy route re-emits a constructor, so that family was

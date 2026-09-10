@@ -428,7 +428,7 @@ internal class ForwardPropertyPlanner(
    * Kotlin lets an override widen `val` to `var`; C# does not. The base class renders whatever
    * accessors *it* has, so a get-only base property plus a derived `{ get; set; }` override is
    * `CS0546`. Only a base *class* member counts: a class implementing an interface member renders
-   * `virtual`, not `override` (`isOpenInterfaceImplementation`), and a `virtual` declaration is
+   * `virtual`, not `override` (`isOpenForOverride`), and a `virtual` declaration is
    * free to carry a setter the interface never asked for.
    *
    * [KSPropertyDeclaration.findOverridee] is asked first: for `Cat.vibe` over `Animal.vibe` over
@@ -543,19 +543,27 @@ internal class ForwardPropertyPlanner(
           "handle", BridgeType.ObjectHandle(owner), ForwardFlow.INTO_KOTLIN,
           ForwardPassing.VALUE, ForwardOwnership.BORROWED, ForwardConversion.HANDLE_TO_STABLE_REF
         ),
+        ForwardAbiRole.RECEIVER,
       ),
     )
 
-    is ForwardPropertyReceiver.Value -> listOf(valueParameter(type, "receiver"))
+    is ForwardPropertyReceiver.Value -> listOf(
+      valueParameter(type, "receiver", ForwardAbiRole.RECEIVER),
+    )
     is ForwardPropertyReceiver.Static -> emptyList()
   }
 
-  private fun valueParameter(type: BridgeType, name: String = "value"): ForwardAbiParameter = ForwardAbiParameter(
+  private fun valueParameter(
+    type: BridgeType,
+    name: String = "value",
+    role: ForwardAbiRole = ForwardAbiRole.SETTER_VALUE,
+  ): ForwardAbiParameter = ForwardAbiParameter(
     name, type.inputWireType(), ForwardAbiDirection.IN,
     ForwardTransfer(
       name, type, ForwardFlow.INTO_KOTLIN, ForwardPassing.VALUE,
       ForwardOwnership.BORROWED, type.conversion(ForwardFlow.INTO_KOTLIN)
     ),
+    role,
   )
 
   private fun errorParameter(): ForwardAbiParameter = ForwardAbiParameter(
@@ -564,6 +572,7 @@ internal class ForwardPropertyPlanner(
       "error", BridgeType.ObjectHandle("kotlin.Throwable"), ForwardFlow.OUT_OF_KOTLIN,
       ForwardPassing.OUT, ForwardOwnership.BORROWED, ForwardConversion.STABLE_REF_TO_HANDLE
     ),
+    ForwardAbiRole.ERROR,
   )
 
   private fun isPlannable(type: BridgeType): Boolean = when (type) {

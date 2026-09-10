@@ -569,6 +569,11 @@ C# declarations:
 - **Existing**: `public interface IFoo : IDisposable` (the projected interface — unchanged).
 - **New**: `public sealed class Foo : IFoo` (the opaque handle wrapper — new).
 
+Since [ADR-094](094-reflection-free-generic-dispatch.md)'s amendment of 2026-09-10, the wrapper's
+base list also names the disposables it implements, so the spelling is
+`public sealed class Foo : IFoo, IDisposable, INugetHandle`. The wrapper never owns a scope
+(`interfaceEntries` skips suspend members), so it never gains `IAsyncDisposable`.
+
 The `sealed class Foo` dispatches each interface method and property through newly generated
 Kotlin interface-dispatch exports (`@CName` functions that call `asStableRef<Foo>().get()`).
 

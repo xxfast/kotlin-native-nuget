@@ -130,6 +130,30 @@ internal fun KSClassDeclaration.isSealedSubclass(): Boolean =
         .any { it.isEligibleSealedInterface() }
 
 /**
+ * ADR-112 amendment: an arm of an *ineligible* sealed interface, the half [isSealedSubclass]
+ * deliberately does not claim.
+ *
+ * Such an arm is not a sealed subclass for routing purposes (there is no sealed route to send it
+ * to, which is exactly why the eligibility gate above exists), so it keeps plain-class handling and
+ * is declared by nobody. Its absence from C# is already explained, once, by its interface's
+ * `SKIPPED_INELIGIBLE_SEALED_INTERFACE`, which names the refusing arm and the C# constraint behind
+ * it. Naming the arm a second time as `SKIPPED_NESTED_DECLARATION` would hand the author the hint
+ * "move it to the top level of its file", and ADR-125 made the declaration position irrelevant to
+ * eligibility, so that move fixes nothing.
+ *
+ * By supertype, not by enclosing declaration: a nested *non*-arm helper inside the same refused
+ * interface is skipped for the ordinary nesting reason and still says so, and an arm nested inside
+ * some unrelated class is still covered by its interface's warning.
+ *
+ * Diagnostic-only. No root bucket, closure or planner may read this: admitting an arm of an
+ * interface that has no sealed route is the CS0101 duplicate ADR-112 refuses.
+ */
+internal fun KSClassDeclaration.isArmOfIneligibleSealedInterface(): Boolean = superTypes
+  .map { type -> type.resolve().declaration }
+  .filterIsInstance<KSClassDeclaration>()
+  .any { it.isSealedInterface() && !it.isEligibleSealedInterface() }
+
+/**
  * The one has-superclass predicate the forward direction uses to decide which of a class's
  * `getAll*()` members belong to *its* surface.
  *
@@ -199,3 +223,19 @@ private fun KSDeclaration.hasImplementation(): Boolean = when (this) {
   is KSPropertyDeclaration -> !isAbstract()
   else -> true
 }
+
+/**
+ * Kotlin's overridability, as C# `virtual` has to mirror it: an explicit `open`, or an `override`
+ * left open (Kotlin's default for an override).
+ *
+ * ADR-040 only ever needed the second arm: `Animal.fetch(item)` implementing `Pet.fetch` and
+ * further overridden by `Cat.fetch` carries `OVERRIDE` and not `FINAL`, and C# needs `virtual` on
+ * that declaration for `Cat`'s `override` to compile (CS0506 otherwise). ADR-101's 2026-09-10
+ * amendment adds the first: a base class's *own* `open val` / `open var` is overridable too, and
+ * had no route to `virtual` at all.
+ *
+ * An `abstract` member is open as well, but C# spells that `abstract`, never `virtual` (CS0503 on
+ * the pair), so it is excluded here and rendered by the abstract path instead.
+ */
+internal fun Set<Modifier>.isOpenForOverride(): Boolean = !contains(Modifier.ABSTRACT) &&
+    (contains(Modifier.OPEN) || (contains(Modifier.OVERRIDE) && !contains(Modifier.FINAL)))

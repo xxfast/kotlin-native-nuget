@@ -454,6 +454,7 @@ class ForwardMarshallingMatrixTest {
                 "valueOut", inner, ForwardFlow.OUT_OF_KOTLIN, ForwardPassing.OUT,
                 ForwardOwnership.BORROWED, ForwardConversion.DIRECT,
               ),
+              ForwardAbiRole.VALUE_OUT,
             ),
           ),
         )
@@ -611,6 +612,7 @@ class ForwardMarshallingMatrixTest {
       "handle", BridgeType.ObjectHandle("sample.Patient"), ForwardFlow.INTO_KOTLIN,
       ForwardPassing.VALUE, ForwardOwnership.BORROWED, ForwardConversion.HANDLE_TO_STABLE_REF,
     ),
+    ForwardAbiRole.RECEIVER,
   )
 
   private fun errorParameter(): ForwardAbiParameter = ForwardAbiParameter(
@@ -621,6 +623,7 @@ class ForwardMarshallingMatrixTest {
       "error", BridgeType.ObjectHandle("kotlin.Throwable"), ForwardFlow.OUT_OF_KOTLIN,
       ForwardPassing.OUT, ForwardOwnership.BORROWED, ForwardConversion.STABLE_REF_TO_HANDLE,
     ),
+    ForwardAbiRole.ERROR,
   )
 
   private data class MatrixCell(

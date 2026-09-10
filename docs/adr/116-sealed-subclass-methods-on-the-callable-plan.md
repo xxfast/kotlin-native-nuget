@@ -292,7 +292,9 @@ documented meaning, "the combination has no working legacy route" (`:84-87`, **v
 literally the case. `warnDroppedForwardCallables` gains a wording branch:
 "it is a `${detail}` member of a sealed subclass, which has no route yet (ADR-116; suspend members
 follow ROADMAP line 54)". This is the third special case in that `if` chain; ADR-115 already
-flagged that chain for the `diagnosticReason()` refactor, and this ADR does not do it either.
+flagged that chain for the `diagnosticReason()` refactor, and this ADR does not do it either. **Done
+(2026-09-10):** ADR-064's *the reason sentence lives on the reason* amendment did it, and this
+sentence moved onto `diagnosticReason()` byte-identically.
 
 Consequence for each shape on a sealed arm owner:
 

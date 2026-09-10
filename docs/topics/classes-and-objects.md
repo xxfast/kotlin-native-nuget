@@ -817,7 +817,10 @@ What changes is the silence: the generated class carries only its `internal Foo(
 constructor, and the build now warns, naming every skipped constructor and its reason, instead of
 leaving a public type nobody can construct with no explanation anywhere
 ([ADR-064](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/064-forward-unsupported-declaration-diagnostics.md)
-2026-09-07 amendment).
+2026-09-07 amendment). The same detail also lands on the class itself, as an XML `<remarks>` doc
+comment directly above the class line, so a consumer sees the constraint as an IDE tooltip, not only
+in the library author's build log ([ADR-064](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/064-forward-unsupported-declaration-diagnostics.md)
+2026-09-10 amendment).
 
 ### Kotlin {id="noctor-kotlin"}
 
@@ -842,9 +845,14 @@ fun quietMishap(): Issue56Failure = Issue56Failure(
 ### Generated C# {id="noctor-generated-c"}
 
 From `Interop.cs`. `Issue56Failure` gets no public constructor, only the internal one every handle
-class carries, but its properties and `quietMishap()`/`dietViolation()` still bind:
+class carries, but its properties and `quietMishap()`/`dietViolation()` still bind. The class line
+itself carries the same skipped-constructor detail as an XML-escaped `<remarks>` doc comment
+(`<init>` becomes `&lt;init&gt;`, so the comment is well-formed XML):
 
 ```C#
+/// <remarks>
+/// Cannot be constructed from C#: every Kotlin constructor of Issue56Failure was skipped by the bridge (&lt;init&gt;: NULLABLE). Instances come from Kotlin factories that return this type.
+/// </remarks>
 public class Issue56Failure : IDisposable, INugetHandle
 {
     internal IntPtr _handle;
@@ -854,6 +862,13 @@ public class Issue56Failure : IDisposable, INugetHandle
         _handle = handle;
     }
 ```
+
+The remark's wording is consumer-facing, distinct from the diagnostic's author-facing hint below: a
+consumer reading the tooltip cannot "expose one, or change the constructor parameters", so the
+remark only states the fact and where an instance comes from instead. Both are driven off the same
+`skippedConstructors` catalog query, so they can never name different constructors or reasons. No
+`<summary>` is emitted; that, and general KDoc-to-XML-doc translation, are a separate, still open
+ROADMAP item.
 
 ```C#
 public static global::TestLibrary.Issue56.Issue56Failure QuietMishap()

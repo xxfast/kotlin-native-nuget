@@ -75,11 +75,13 @@ class ForwardPhase6ConstructorProjectionTest {
     "handle", ForwardAbiWireType.POINTER, ForwardAbiDirection.IN,
     ForwardTransfer("handle", BridgeType.ObjectHandle("sample.Counter"), ForwardFlow.INTO_KOTLIN,
       ForwardPassing.VALUE, ForwardOwnership.BORROWED, ForwardConversion.HANDLE_TO_STABLE_REF),
+    ForwardAbiRole.RECEIVER,
   )
 
   private fun error(): ForwardAbiParameter = ForwardAbiParameter(
     "errorOut", ForwardAbiWireType.POINTER, ForwardAbiDirection.OUT,
     ForwardTransfer("error", BridgeType.ObjectHandle("kotlin.Throwable"), ForwardFlow.OUT_OF_KOTLIN,
       ForwardPassing.OUT, ForwardOwnership.BORROWED, ForwardConversion.STABLE_REF_TO_HANDLE),
+    ForwardAbiRole.ERROR,
   )
 }

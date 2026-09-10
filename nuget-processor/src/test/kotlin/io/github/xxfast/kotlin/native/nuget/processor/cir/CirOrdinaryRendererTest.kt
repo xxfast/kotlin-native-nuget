@@ -3,6 +3,7 @@ package io.github.xxfast.kotlin.native.nuget.processor.cir
 import kotlin.test.Test
 import kotlin.test.assertContains
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
@@ -101,6 +102,33 @@ class CirOrdinaryRendererTest {
     )
     assertContains(rendered, "public void Dispose()")
     assertContains(rendered, "Native_Dispose(handle);")
+  }
+
+  @Test
+  fun `keyword-escaped method name without an extern name fails fast`() {
+    val cls: CirClass = escapedMethodClass(externName = null)
+
+    val fromImport: IllegalArgumentException =
+      assertFailsWith<IllegalArgumentException> { cls.ordinaryNativeImports() }
+    val fromRender: IllegalArgumentException =
+      assertFailsWith<IllegalArgumentException> { render(cls) }
+
+    assertContains(fromImport.message.orEmpty(), "@lock")
+    assertContains(fromRender.message.orEmpty(), "@lock")
+  }
+
+  @Test
+  fun `escaped method name renders through the extern name a plan carried`() {
+    val cls: CirClass = escapedMethodClass(externName = "Native_Lock")
+
+    val rendered: String = render(cls)
+
+    assertContains(
+      rendered,
+      "private static extern IntPtr Native_Lock(IntPtr handle, out IntPtr error);",
+    )
+    assertContains(rendered, "IntPtr nativeResult = Native_Lock(_handle, out IntPtr error);")
+    assertFalse(rendered.contains("Native_@"))
   }
 
   @Test
@@ -424,6 +452,63 @@ class CirOrdinaryRendererTest {
     assertFalse(rendered.contains("Native_Set_name"))
   }
 
+  /**
+   * ADR-075 amendment (2026-09-10): an abstract property renders bodiless, with `{ get; }` or
+   * `{ get; set; }` chosen by the setter, and `virtual` is deliberately suppressed because
+   * `abstract virtual` is CS0503 while `abstract override` is legal.
+   */
+  @Test
+  fun `abstract property renders bodiless accessors`() {
+    val cls = CirClass(
+      name = "Instrument",
+      libraryName = "orchestra",
+      nativePrefix = "instrument",
+      constructor = null,
+      isAbstract = true,
+      properties = listOf(
+        CirProperty(
+          name = "Family",
+          type = "string",
+          nativeReturnType = "IntPtr",
+          nativeName = "family",
+          getter = "Marshal.PtrToStringUTF8(Native_Get_family(_handle, out IntPtr error))!",
+          isAbstract = true,
+          hasSyncErrorOut = true,
+        ),
+        CirProperty(
+          name = "Tuning",
+          type = "string",
+          nativeReturnType = "IntPtr",
+          nativeName = "tuning",
+          getter = "Marshal.PtrToStringUTF8(Native_Get_tuning(_handle, out IntPtr error))!",
+          setter = "Native_Set_tuning(_handle, value, out IntPtr error);",
+          isAbstract = true,
+          isVirtual = true,
+          hasSyncErrorOut = true,
+        ),
+        CirProperty(
+          name = "Pitch",
+          type = "int",
+          nativeReturnType = "int",
+          nativeName = "pitch",
+          getter = "Native_Get_pitch(_handle, out IntPtr error)",
+          isAbstract = true,
+          isOverride = true,
+          hasSyncErrorOut = true,
+        ),
+      ),
+      methods = emptyList(),
+    )
+
+    val rendered: String = render(cls)
+
+    assertContains(rendered, "public abstract string Family { get; }")
+    assertContains(rendered, "public abstract string Tuning { get; set; }")
+    assertContains(rendered, "public abstract override int Pitch { get; }")
+    assertFalse("abstract virtual" in rendered, "`abstract virtual` is CS0503; got: $rendered")
+    assertFalse("Family =>" in rendered, "an abstract property has no body; got: $rendered")
+  }
+
   @Test
   fun `multi-line property getter and setter use block accessors`() {
     val cls = CirClass(
@@ -485,8 +570,13 @@ class CirOrdinaryRendererTest {
     assertFalse(rendered.contains("internal HandleBox(IntPtr handle)"))
   }
 
+  /**
+   * ADR-064 amendment (2026-09-10): the remark is plain text in CIR, so the renderer owns escaping.
+   * `<init>` unescaped is malformed XML doc (CS1570) in any consumer generating a documentation
+   * file, which `GeneratedBindingsCheck` now does.
+   */
   @Test
-  fun `class implementing interfaces lists them without a superclass`() {
+  fun `class remarks render as an escaped doc comment above the class line`() {
     val cls = CirClass(
       name = "Sensor",
       libraryName = "iot",
@@ -494,12 +584,93 @@ class CirOrdinaryRendererTest {
       constructor = null,
       properties = emptyList(),
       methods = emptyList(),
-      interfaces = listOf("IDisposable", "IAsyncDisposable"),
+      remarks = "skipped <init> & <clinit>",
     )
 
     val rendered: String = render(cls)
 
-    assertContains(rendered, "public class Sensor : IDisposable, IAsyncDisposable")
+    assertContains(
+      rendered,
+      """
+          |    /// <remarks>
+          |    /// skipped &lt;init&gt; &amp; &lt;clinit&gt;
+          |    /// </remarks>
+          |    public class Sensor : IDisposable, INugetHandle
+      """.trimMargin(),
+    )
+  }
+
+  @Test
+  fun `a class without remarks renders no doc comment`() {
+    val cls = CirClass(
+      name = "Sensor",
+      libraryName = "iot",
+      nativePrefix = "sensor",
+      constructor = null,
+      properties = emptyList(),
+      methods = emptyList(),
+    )
+
+    val rendered: String = render(cls)
+
+    assertFalse(rendered.contains("///"), "expected no doc comment; got: $rendered")
+    assertEquals(rendered, render(cls.copy(remarks = null)))
+  }
+
+  @Test
+  fun `class implementing interfaces lists them before its disposables`() {
+    val cls = CirClass(
+      name = "Sensor",
+      libraryName = "iot",
+      nativePrefix = "sensor",
+      constructor = null,
+      properties = emptyList(),
+      methods = emptyList(),
+      interfaces = listOf("ISensor"),
+    )
+
+    val rendered: String = render(cls)
+
+    assertContains(rendered, "public class Sensor : ISensor, IDisposable, INugetHandle")
+  }
+
+  @Test
+  fun `class implementing interfaces and owning a scope names IAsyncDisposable too`() {
+    val cls = CirClass(
+      name = "Sensor",
+      libraryName = "iot",
+      nativePrefix = "sensor",
+      constructor = null,
+      properties = emptyList(),
+      methods = emptyList(),
+      interfaces = listOf("ISensor"),
+      hasSuspendMethods = true,
+    )
+
+    val rendered: String = render(cls)
+
+    assertContains(
+      rendered,
+      "public class Sensor : ISensor, IDisposable, IAsyncDisposable, INugetHandle",
+    )
+  }
+
+  /** A base list may not repeat a name the translator already put in `interfaces`. */
+  @Test
+  fun `class already naming a disposable in its interfaces does not repeat it`() {
+    val cls = CirClass(
+      name = "Sensor",
+      libraryName = "iot",
+      nativePrefix = "sensor",
+      constructor = null,
+      properties = emptyList(),
+      methods = emptyList(),
+      interfaces = listOf("IDisposable"),
+    )
+
+    val rendered: String = render(cls)
+
+    assertContains(rendered, "public class Sensor : IDisposable, INugetHandle")
   }
 
   @Test
@@ -924,6 +1095,26 @@ class CirOrdinaryRendererTest {
   }
 
   // -- helpers ----------------------------------------------------------------
+
+  private fun escapedMethodClass(externName: String?): CirClass = CirClass(
+    name = "Patient",
+    libraryName = "clinic",
+    nativePrefix = "patient",
+    constructor = null,
+    properties = emptyList(),
+    methods = listOf(
+      CirMethod(
+        name = "@lock",
+        returnType = "string",
+        nativeReturnType = "IntPtr",
+        nativeName = "lock",
+        externName = externName,
+        parameters = emptyList(),
+        body = "",
+        isSyncErrorCheckEnabled = true,
+      ),
+    ),
+  )
 
   private fun render(vararg declarations: CirDeclaration, namespace: String = "Sample"): String =
     CirRenderer().render(

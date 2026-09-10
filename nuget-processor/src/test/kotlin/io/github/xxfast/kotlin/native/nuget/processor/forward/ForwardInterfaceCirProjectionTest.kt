@@ -27,6 +27,7 @@ class ForwardInterfaceCirProjectionTest {
       ForwardOwnership.BORROWED,
       ForwardConversion.STABLE_REF_TO_HANDLE,
     ),
+    ForwardAbiRole.ERROR,
   )
 
   @Test
@@ -107,6 +108,7 @@ class ForwardInterfaceCirProjectionTest {
         "handle", receiverType, ForwardFlow.INTO_KOTLIN, ForwardPassing.VALUE,
         ForwardOwnership.BORROWED, ForwardConversion.HANDLE_TO_STABLE_REF,
       ),
+      ForwardAbiRole.RECEIVER,
     )
     val valueParameters = parameters.map { (name, type) ->
       ForwardAbiParameter(
