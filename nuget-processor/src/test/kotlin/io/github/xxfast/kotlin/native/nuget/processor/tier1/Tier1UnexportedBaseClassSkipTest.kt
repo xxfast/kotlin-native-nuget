@@ -36,6 +36,9 @@ class Tier1UnexportedBaseClassSkipTest {
       val label: String = "base"
 
       fun greet(name: String): String = "hello ${'$'}name"
+
+      open fun farewell(name: String, warmly: Boolean = false): String =
+        if (warmly) "bye ${'$'}name, come back soon" else "bye ${'$'}name"
     }
 
     abstract class OutsideAbstractBase {
@@ -241,6 +244,53 @@ class Tier1UnexportedBaseClassSkipTest {
       "public virtual string Speak()" in result.generatedCSharp,
       "the existing open-member rule still applies: a non-final Kotlin `override` with no " +
           "forward base renders `virtual`; generated C#:\n${result.generatedCSharp}",
+    )
+  }
+
+  /**
+   * ADR-096 amendment (2026-09-11). `Cat.speak` over an *exported* `Animal.speak` synthesizes
+   * nothing, because the generated C# base carries the omitting overload and the subclass inherits
+   * it (`Tier1FunctionDefaultParameterTest`). Once ADR-101 drops the base there is no C# base to
+   * inherit from, so the omitting overload has to be synthesized on the subclass itself or the
+   * one-argument call is CS1501 for the consumer.
+   *
+   * Cross-module on purpose: the default lives on a jar-declared base, Kotlin forbids the override
+   * from restating it, so the only place the bit survives is the overridee's parameter as KSP
+   * reports it through `findOverridee()` onto a compiled dependency. That resolution is what this
+   * cell measures.
+   */
+  @Test
+  fun `an override of a dropped base's defaulted member synthesizes the omitting overload`() {
+    val result = Tier1Harness.run(
+      """
+      package tier1.issue42base
+
+      import dep.outside.OutsideBase
+
+      class Api : OutsideBase() {
+        override fun farewell(name: String, warmly: Boolean): String =
+          "${'$'}{super.farewell(name, warmly)} from Api"
+      }
+      """.trimIndent(),
+      processorOptions = mapOf("nuget.rootPackage" to "tier1.issue42base"),
+      libraries = listOf(dependencyJar),
+    )
+
+    assertTrue(result.compiledClean, "expected no broken source; got: ${result.compileErrors}")
+    val kotlin: String = result.generated
+    assertTrue(
+      "@CName(\"api_farewell\")" in kotlin,
+      "the full-arity override still exports; generated:\n$kotlin",
+    )
+    assertTrue(
+      "@CName(\"api_farewell_2\")" in kotlin,
+      "the dropped base carries no C# overload to inherit, so the omitting overload has to be " +
+          "synthesized here; generated:\n$kotlin",
+    )
+    assertTrue(
+      "Farewell(string name)" in result.generatedCSharp,
+      "the consumer's one-argument call is CS1501 without it; " +
+          "generated C#:\n${result.generatedCSharp}",
     )
   }
 

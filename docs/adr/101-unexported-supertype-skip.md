@@ -429,7 +429,9 @@ asserts `export_api_greet` / `export_api_get_label` are generated from a
   returns only the first `CLASS` supertype (**fixed by the 2026-09-11 chain amendment below**); an
   overriding member whose defaults live on the dropped
   base loses its short C# omitting overloads (`ForwardCallablePlanner.kt`'s synthesis gate keys on
-  the Kotlin `override` modifier, independent of the forward `isOverride` bit); a generic exported
+  the Kotlin `override` modifier, independent of the forward `isOverride` bit), **fixed by
+  [ADR-096](096-function-default-parameters.md)'s 2026-09-11 amendment, which re-keys that gate on
+  this ADR's `overridesBaseClassMember` predicate**; a generic exported
   base renders by simple name (`CirClassRenderer.kt:194`); `X`'s own interfaces still disappear
   whenever an *exported* base exists (`CirClassTranslator.kt`), unrelated to this fix; an abstract
   `X` with an unplanned concrete inherited member used to render it `public abstract` (CS0534 on a

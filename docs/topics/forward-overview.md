@@ -370,9 +370,19 @@ public class Issue42Derived : IDisposable, INugetHandle
     public Issue42Derived() { /* ... */ }
     public string Label { get; }   // UnexportedBase's own property, bound on the class
     public string Own() { /* ... */ }
+    public virtual string Farewell(string name, bool warmly) { /* ... */ }
     public string Greet(string name) { /* ... */ }  // UnexportedBase's own method, bound on the class
+    public string Farewell(string name) { /* ... */ }  // warmly omitted; Kotlin supplies false
 }
 ```
+
+`Farewell` overrides `UnexportedBase.farewell(name, warmly: Boolean = false)`: Kotlin forbids the
+override from restating the default, so the `= false` lives only on the dropped base. With no C#
+base to inherit the omitting overload from, `Issue42Derived` synthesizes it itself, reading the
+default flag off the root of the override chain, the same [ADR-096](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/096-function-default-parameters.md)
+rule described under [Method default parameters](classes-and-objects.md#method-default-parameters).
+An override of an **exported** C# base still synthesizes nothing: the base carries the overload,
+and a generated subclass reaches it through ordinary C# inheritance.
 
 The hint picks the clause that is true for the base at hand instead of hedging: a same-module base
 gets told to add `include("...")` alongside the existing `rootPackage`/`include(...)` scope, since

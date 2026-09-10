@@ -886,14 +886,19 @@ public void NarratorRate_SynthesizedOverload_UsesBoostDefaultOfOne()
 
 <note>
     <p>
-        A method carrying <code>override</code> synthesizes nothing: Kotlin forbids an override
-        from restating its base's default values, so the defaults, and the synthesized overload,
-        belong to the base declaration and are reached through ordinary C# inheritance on the
-        generated subclass. The interface route (<a href="interfaces-abstract-sealed.md">Interfaces,
-        abstract and sealed classes</a>) also synthesizes nothing in v1: adding a member to a
-        generated C# interface would oblige every implementer to carry it. A defaulted interface
-        member bound onto an implementing <b>class</b> is unaffected and does get synthesis, since
-        it is emitted as an ordinary class member.
+        An <code>override</code> whose C# base carries the overload synthesizes nothing itself:
+        Kotlin forbids an override from restating its base's default values, so the defaults, and
+        the synthesized overload, belong to the base declaration and are reached through ordinary
+        C# inheritance on the generated subclass. When the base is <b>unexported</b> and dropped
+        (see <a href="interfaces-abstract-sealed.md">Interfaces, abstract and sealed classes</a>
+        and <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/101-unexported-supertype-skip.md">ADR-101</a>),
+        there is no C# base to inherit an overload from, so the override synthesizes its own,
+        reading the default flags off the root of its <code>findOverridee()</code> chain, the
+        declaration furthest up that actually carries them. The interface route (<a
+        href="interfaces-abstract-sealed.md">Interfaces, abstract and sealed classes</a>) still
+        synthesizes nothing in v1: adding a member to a generated C# interface would oblige every
+        implementer to carry it. A defaulted interface member bound onto an implementing <b>class</b>
+        is unaffected and does get synthesis, since it is emitted as an ordinary class member.
     </p>
 </note>
 
@@ -1159,8 +1164,10 @@ how deep it sits ([ADR-064](https://github.com/xxfast/kotlin-native-nuget/blob/m
   out of scope for both the constructor and function default-parameters features; see
   [ADR-091](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/091-constructor-default-parameters.md)
   and [ADR-096](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/096-function-default-parameters.md).
-- A method carrying `override`, and the interface route, synthesize no omitting overload for a
-  defaulted parameter; see the note under Method default parameters above.
+- An `override` whose C# base carries the overload, and the interface route, synthesize no
+  omitting overload for a defaulted parameter; see the note under Method default parameters above.
+  An `override` on a **sealed** class arm still synthesizes nothing regardless, even when the
+  sealed C# base has no overload to inherit; see [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md).
 - The interface route also still has no overload numbering at all for two same-named interface
   methods; see [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md).
 - An `expect`/`actual` pair's function defaults are only surfaced on the top-level-function route;

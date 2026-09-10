@@ -893,6 +893,12 @@ internal class ForwardCallablePlanner(
     // `getAllFunctions()` order — the counter increments before the structural check, so a
     // skipped namesake still consumes its number and numbering stays declaration-order stable.
     val occurrences: MutableMap<String, Int> = mutableMapOf()
+    // ADR-096 amendment (2026-09-11): the single question both the C# `override` modifier and the
+    // ADR-096 synthesis gate ask, hoisted so the two cannot drift apart again. It is *not* the
+    // Kotlin `override` keyword: what matters to C# is whether a generated base class declares
+    // this member and therefore already carries its omitting overload.
+    fun isCsharpOverride(method: KSFunctionDeclaration): Boolean =
+      method.overridesBaseClassMember(superClass)
     fun entryFor(method: KSFunctionDeclaration, omitted: Int): ForwardCallableCatalogEntry {
       val name: String = method.simpleName.asString()
       val occurrence: Int = occurrences.merge(name, 1, Int::plus)!!
@@ -904,7 +910,7 @@ internal class ForwardCallablePlanner(
       // ADR-101 amendment (2026-09-11): keyed on a base *class* overridee, not on the Kotlin
       // modifier. `Ledge : Shelf(), Groomable` overrides `Groomable.groom`, which `Shelf` never
       // declares, so C# spells it `virtual`; `public override string Groom()` is CS0115.
-      val isOverride: Boolean = omitted == 0 && method.overridesBaseClassMember(superClass)
+      val isOverride: Boolean = omitted == 0 && isCsharpOverride(method)
       // ADR-101 (2026-09-11): a *declared* `open fun` is virtual too, not just the
       // `override && !final` arm, or a subclass's `override` is CS0506 in C#. Same predicate the
       // property route uses (`CirClassTranslator`), so both halves of a class agree.
@@ -946,10 +952,13 @@ internal class ForwardCallablePlanner(
       // per-(class, name) counter scope so declared exports keep their numbers.
       methods.forEachIndexed { index, method ->
         if (declared[index] !is ForwardCallableCatalogEntry.Planned) return@forEachIndexed
-        // Kotlin forbids an override from restating defaults; the base class's own synthesized
-        // overload is inherited by the generated C# subclass, so this route synthesizes nothing.
-        if (method.modifiers.contains(Modifier.OVERRIDE)) return@forEachIndexed
-        repeat(method.parameters.map { it.hasDefault }.trailingCount()) { omitted ->
+        // ADR-096 amendment (2026-09-11): keyed on the C# fact, not on Kotlin's `override`. When a
+        // generated base class declares the member it also carries the member's omitting overload,
+        // which the generated subclass inherits, so synthesizing here would be a duplicate. When
+        // ADR-101 drops the base there is no such carrier and the subclass owes the overload
+        // itself, or the consumer's short call is CS1501.
+        if (isCsharpOverride(method)) return@forEachIndexed
+        repeat(memberDefaultFlags(method).trailingCount()) { omitted ->
           add(entryFor(method, omitted + 1).synthesized())
         }
       }
@@ -1210,6 +1219,29 @@ internal class ForwardCallablePlanner(
         .orEmpty()
     return constructor.parameters.mapIndexed { index, parameter ->
       parameter.hasDefault || expectParameters.getOrNull(index)?.hasDefault == true
+    }
+  }
+
+  /**
+   * ADR-096 amendment (2026-09-11): per-parameter "has a default" for a **class member**,
+   * positionally, read through the override chain.
+   *
+   * Kotlin forbids an override from restating a default, so `override fun farewell(name: String,
+   * warmly: Boolean)` reports `hasDefault = false` on every parameter and the bit survives only on
+   * the declaration that first stated it. The same erasure already forced the `expect`/`actual`
+   * lookups in [defaultFlags] and [topLevelDefaultFlags]. While the base class is exported this
+   * does not matter (the base's own C# overload is inherited); once ADR-101 drops the base the
+   * subclass has to synthesize, and the flags have to come from somewhere.
+   *
+   * The chain is walked to its **root**: `findOverridee()` answers the nearest declaration, and in
+   * a two-deep chain the intermediate override reports `false` for exactly the same reason.
+   */
+  private fun memberDefaultFlags(method: KSFunctionDeclaration): List<Boolean> {
+    val root: KSFunctionDeclaration? = generateSequence(
+      method.findOverridee() as? KSFunctionDeclaration,
+    ) { overridee -> overridee.findOverridee() as? KSFunctionDeclaration }.lastOrNull()
+    return method.parameters.mapIndexed { index, parameter ->
+      parameter.hasDefault || root?.parameters?.getOrNull(index)?.hasDefault == true
     }
   }
 
