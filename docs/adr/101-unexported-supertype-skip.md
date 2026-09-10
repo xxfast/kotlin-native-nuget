@@ -356,10 +356,11 @@ The reason and hint differ by kind. The base-class hint does **not** reuse the i
 "nothing is lost, `include(...)` does not help here": a dropped base carries real callable members,
 and whether `include(...)` helps depends on whether the base is same-module or a dependency (the
 ADR-066 closure admits a same-round source declaration directly but never walks `superTypes`, so a
-*dependency* base stays unreachable even after its package is included). The shipped hint hedges
+*dependency* base stays unreachable even after its package is included). The hint shipped in this amendment hedges
 accordingly rather than promising or denying the fix outright, naming the package but not asserting
 it will work: "include(\"dep.outside\") admits a base declared in this module, but not one from a
-dependency".
+dependency". **Superseded by the 2026-09-11 amendment below**, which picks the clause instead; the
+line quoted next is the pre-2026-09-11 text.
 
 Rendered line, **Verified** from the fixture's own `NugetDiagnostics.json` entry for
 `Issue42Derived`:
@@ -432,8 +433,9 @@ asserts `export_api_greet` / `export_api_get_label` are generated from a
   whenever an *exported* base exists (`CirClassTranslator.kt`), unrelated to this fix; an abstract
   `X` with a structurally-skipped concrete inherited member still renders it `public abstract`
   (`CirClassTranslator.kt`), which a further concrete subclass would fail to override (CS0534); the
-  base-class hint hedges between the same-module and dependency cases rather than picking one,
-  since nothing today distinguishes them cheaply at the hint site.
+  base-class hint hedges between the same-module and dependency cases rather than picking one
+  (the "nothing today distinguishes them cheaply" reasoning behind this is wrong; corrected in the
+  2026-09-11 amendment below, which picks the clause).
 - Not changed: the ADR-066 closure, `isForwardMemberOf`/`isForwardPlannableMemberOf`, this ADR's
   original interface gate, the ABI.
 
@@ -472,3 +474,52 @@ renders `public string Describe()` on `Kennel` and `public override string Descr
 `Bed` therefore carries no overridden `open fun`; its `describe()` is final on purpose, and reads
 both open properties so Kotlin's own dispatch through `Hammock` stays observable. Tracked on
 `ROADMAP.md`.
+
+## Amendment (2026-09-11): the base-class hint picks its clause
+
+The 2026-09-05 amendment shipped one hint string for both cases and its Consequences deferred the
+split "since nothing today distinguishes them cheaply at the hint site". That reasoning is wrong.
+`keepsSupertype` already receives the base as a `KSClassDeclaration`, and `containingFile == null`
+is exactly the cross-module signal the rest of the forward pipeline keys on: the ADR-066 closure
+uses it to decide a type is dependency-declared (`ForwardReachabilityClosure.kt:206-208`), and the
+classifier repeats the same test. **Verified**, not inferred: the check is in the shipped closure,
+and the two cells of `Tier1UnexportedBaseClassSkipTest` now assert opposite clauses off it.
+
+So the `BASE_CLASS` arm branches on `supertype.containingFile == null` and states the one fix that
+works for *that* base. The shared "what is lost" preamble is unchanged. The dependency clause also
+names the only workaround that exists today, since Alternative 3 (walk `superTypes` in the closure)
+stays deferred: have an exported member name the base as a return, parameter or property type.
+
+Rendered dependency line, **Verified** from the fixture's own `NugetDiagnostics.json` entry for
+`Issue42Derived`:
+
+```
+[nuget:SKIPPED_UNEXPORTED_SUPERTYPE] Skipping Issue42Derived : UnexportedBase: base class
+'dev.other.core.UnexportedBase' is not in the export set, so it has no generated C# class;
+Issue42Derived is generated with no base at all and the base's public members are bound on
+Issue42Derived directly. nothing callable is lost (UnexportedBase's public members export as
+members of Issue42Derived), but C# sees no UnexportedBase type and no inheritance relation, so
+`is`/`as` against it and any other subclass's shared base are gone; UnexportedBase is declared in a
+dependency, and include("dev.other.core") alone will not admit it: the export reachability closure
+never walks supertypes, so it enters the export set only when an exported member also names it as a
+return, parameter or property type and its package is included
+    at .../issue42/Issue42Derived.kt:16
+```
+
+The same-module clause, from the Tier 1 cell (`class Api : LocalBase` with `LocalBase` in
+`tier1outside.base`, outside `rootPackage`), replaces everything after the shared preamble:
+
+```
+LocalBase is declared in this module, so adding include("tier1outside.base") alongside your
+existing rootPackage/include(...) admits it and renders it as the C# base
+```
+
+"alongside" is load-bearing and asserted: an explicit `include(...)` *replaces* the `rootPackage`
+default rather than adding to it (`NugetProcessor.kt`, the same trap `SKIPPED_ALL_DECLARATIONS`
+warns about), so an author who pastes the package on its own would trade the base for their own
+module's exports.
+
+Scope: diagnostic text only. No ABI, no `Interop.cs`, no closure change. The interface hint keeps
+its flat "include(\"...\") does not help here" wording: a same-module interface outside the scope
+*is* admitted by `include(...)`, so that string is imprecise for the same reason, but an interface
+carries no members and the fix is not worth advertising. Tracked on `ROADMAP.md`.

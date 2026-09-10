@@ -131,6 +131,16 @@ class Tier1UnexportedBaseClassSkipTest {
           "got: $diagnostic",
     )
     assertTrue(
+      diagnostic.contains("declared in a dependency"),
+      "a dependency-declared base cannot be admitted by include(...) at all, so the hint must " +
+          "say which case this is; got: $diagnostic",
+    )
+    assertFalse(
+      diagnostic.contains("declared in this module"),
+      "the same-module clause promises include(...) works, which is false for a dependency " +
+          "base; got: $diagnostic",
+    )
+    assertTrue(
       result.generatedFiles.entries
         .single { it.key.endsWith("NugetDiagnostics.json") }
         .value.contains(ForwardDiagnosticKind.SKIPPED_UNEXPORTED_SUPERTYPE.name),
@@ -184,6 +194,16 @@ class Tier1UnexportedBaseClassSkipTest {
       diagnostic.contains("include(\"tier1outside.base\")"),
       "for a same-module base, include(...) genuinely does admit it, and the hint names the " +
           "package to add; got: $diagnostic",
+    )
+    assertTrue(
+      diagnostic.contains("declared in this module"),
+      "a same-module base is the case include(...) does fix, and the hint must say so rather " +
+          "than hedging across both; got: $diagnostic",
+    )
+    assertTrue(
+      diagnostic.contains("alongside"),
+      "an explicit include(...) replaces the rootPackage default, so the advice has to say the " +
+          "package is added alongside the existing scope; got: $diagnostic",
     )
   }
 

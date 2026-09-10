@@ -155,8 +155,10 @@ internal enum class ForwardDiagnosticKind(
    *  The `include(...)` advice is measured, not assumed (`Tier1UnexportedSupertypeSkipTest`): the
    *  ADR-066 closure has no `superTypes` edge, so admitting a *dependency* package cannot pull a
    *  supertype-only type in. A supertype declared in this module is a different case — scope
-   *  admits same-round source declarations — and only the base-class hint mentions it, since only
-   *  a base class is worth exporting for its members. */
+   *  admits same-round source declarations, and the base-class hint picks between the two on
+   *  `containingFile`, so it states the one fix that works for that base instead of hedging
+   *  across both (ADR-101's 2026-09-11 amendment). The interface hint stays flat: an interface is
+   *  not worth exporting for members it does not carry. */
   SKIPPED_UNEXPORTED_SUPERTYPE(ForwardDiagnosticSeverity.WARNING),
 
   /** Issue #55: the module has public declarations, but the `include`/`exclude`/`rootPackage`

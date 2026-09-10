@@ -348,12 +348,12 @@ list entirely (`Issue42Derived` gets no base at all, just `IDisposable, INugetHa
 [nuget:SKIPPED_UNEXPORTED_SUPERTYPE] Skipping Issue42Derived : UnexportedBase: base class
     'dev.other.core.UnexportedBase' is not in the export set, so it has no generated C# class;
     Issue42Derived is generated with no base at all and the base's public members are bound on
-    Issue42Derived directly. nothing callable is lost — UnexportedBase's public members export as
-    members of Issue42Derived — but C# sees no UnexportedBase type and no inheritance relation, so
-    `is`/`as` against it and any other subclass's shared base are gone; to keep the base itself it
-    has to enter the export set on its own: include("dev.other.core") admits a base declared in
-    this module, but not one from a dependency — the export reachability closure never walks
-    supertypes
+    Issue42Derived directly. nothing callable is lost (UnexportedBase's public members export as
+    members of Issue42Derived), but C# sees no UnexportedBase type and no inheritance relation, so
+    `is`/`as` against it and any other subclass's shared base are gone; UnexportedBase is declared
+    in a dependency, and include("dev.other.core") alone will not admit it: the export
+    reachability closure never walks supertypes, so it enters the export set only when an exported
+    member also names it as a return, parameter or property type and its package is included
     at Issue42Derived.kt:16
 ```
 
@@ -368,9 +368,10 @@ public class Issue42Derived : IDisposable, INugetHandle
 }
 ```
 
-The hint hedges rather than promising a fix: `include(...)` admits a base declared in the same
-module, but not one reached only as a supertype from a dependency, since the ADR-066 reachability
-closure never walks supertypes either way.
+The hint picks the clause that is true for the base at hand instead of hedging: a same-module base
+gets told to add `include("...")` alongside the existing `rootPackage`/`include(...)` scope, since
+that genuinely admits it, while a dependency base gets told `include(...)` alone will not, since the
+ADR-066 reachability closure never walks supertypes.
 
 ### Annotation classes skip named {id="annotation-classes-skip-named"}
 

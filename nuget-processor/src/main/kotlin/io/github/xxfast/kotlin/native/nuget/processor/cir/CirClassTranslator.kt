@@ -66,8 +66,8 @@ private enum class SupertypeKind { INTERFACE, BASE_CLASS }
  * parameters, property types, type arguments, sealed subclasses and primary-ctor parameters but
  * never `superTypes`, so a *dependency* type reachable only as a supertype stays out of the
  * export set even after its package is included. A supertype declared in *this* module is a
- * different case — scope admits same-round source declarations directly — and the base-class hint
- * says so rather than promising or denying the fix outright.
+ * different case (scope admits same-round source declarations directly), so the base-class hint
+ * picks its clause from `supertype.containingFile` rather than hedging across both.
  */
 private fun keepsSupertype(
   cls: KSClassDeclaration,
@@ -99,13 +99,26 @@ private fun keepsSupertype(
           "is lost; note that include(\"...\") does not help here — the export reachability " +
           "closure never walks supertypes"
 
-    SupertypeKind.BASE_CLASS ->
-      "nothing callable is lost — $simpleName's public members export as members of $name — but " +
-          "C# sees no $simpleName type and no inheritance relation, so `is`/`as` against it and " +
-          "any other subclass's shared base are gone; to keep the base itself it has to enter " +
-          "the export set on its own: include(\"$packageName\") admits a base declared in this " +
-          "module, but not one from a dependency — the export reachability closure never walks " +
-          "supertypes"
+    // ADR-101's 2026-09-11 amendment: which of the two clauses is true here is decided by
+    // `containingFile`, the same cross-module signal the reachability closure keys on
+    // (`ForwardReachabilityClosure.kt`), so the author is told the one fix that works for
+    // *their* base instead of both halves of a hedge.
+    SupertypeKind.BASE_CLASS -> {
+      val lost: String =
+        "nothing callable is lost ($simpleName's public members export as members of " +
+            "$name), but C# sees no $simpleName type and no inheritance relation, so `is`/`as` " +
+            "against it and any other subclass's shared base are gone; "
+      if (supertype.containingFile == null) {
+        lost + "$simpleName is declared in a dependency, and include(\"$packageName\") alone " +
+            "will not admit it: the export reachability closure never walks supertypes, so it " +
+            "enters the export set only when an exported member also names it as a return, " +
+            "parameter or property type and its package is included"
+      } else {
+        lost + "$simpleName is declared in this module, so adding include(\"$packageName\") " +
+            "alongside your existing rootPackage/include(...) admits it and renders it as the " +
+            "C# base"
+      }
+    }
   }
   ForwardDiagnosticSink.emit(
     listOf(
