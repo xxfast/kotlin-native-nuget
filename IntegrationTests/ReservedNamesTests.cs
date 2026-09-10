@@ -77,11 +77,11 @@ public class ReservedNamesTests
     {
         // A Kotlin extension on a built-in receiver surfaces as a real C# extension method on a
         // `StringExtensions` partial class named after the *receiver*, not after the source file.
-        // That class is merged across packages and lands in the one holding the first-visited
-        // `String` extension, so this cell's Kotlin source sits with the others in the `cat`
-        // package and the method arrives in `TestLibrary.Cat`. Its `this` parameter is already
-        // named `receiver`, and so is the Kotlin export's first parameter, so the user's
-        // `receiver` duplicates at the same position on both sides.
+        // That class is per declaring package, so this cell's Kotlin source sits in `reserved`
+        // with the rest of its family and the method arrives in `TestLibrary.Reserved`
+        // (`ExtensionNamespaceTests` pins that). Its `this` parameter is already named `receiver`,
+        // and so is the Kotlin export's first parameter, so the user's `receiver` duplicates at
+        // the same position on both sides.
         Assert.Equal("Oreo:Mylo", "Oreo".Tag(receiver_: "Mylo"));
     }
 

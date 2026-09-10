@@ -463,24 +463,31 @@ internal fun translate(
     )
   }
 
-  val extensionsByReceiver: Map<String, List<KSFunctionDeclaration>> =
-    extensionFunctions.groupBy { func ->
-      func.extensionReceiver!!.resolve().expandAliases().declaration.simpleName.asString()
-    }
-
-  extensionsByReceiver.forEach { (receiverName, funcs) ->
-    val className: String = "${receiverName}Extensions"
-    val receiverQualified: String = funcs.first().extensionReceiver!!.resolve().expandAliases()
-      .declaration.qualifiedName?.asString() ?: ""
-
-    val receiverDecl = funcs.first().extensionReceiver!!
-      .resolve().expandAliases().declaration
-
-    val namespace: String = if (receiverQualified in exportedTypes) {
-      namespaceOf(receiverDecl.packageName.asString())
+  // ADR-126. An exported receiver homes its `{Receiver}Extensions` class on the receiver's own
+  // package, which is deterministic already. An unexported receiver (`String`, primitives, any
+  // stdlib type) has no such home, so the class belongs to the package that *declares* the
+  // extension, the rule every other declaration follows. Keying the group on it, rather than
+  // reading `first()` after the fact, is what makes it independent of KSP visit order: before
+  // ADR-126 whichever extension KSP saw first dragged every same-receiver extension in the library
+  // into its package's namespace.
+  fun extensionNamespace(receiver: KSDeclaration, declaring: KSDeclaration): String =
+    if ((receiver.qualifiedName?.asString() ?: "") in exportedTypes) {
+      namespaceOf(receiver.packageName.asString())
     } else {
-      namespaceOf(funcs.first().packageName.asString())
+      namespaceOf(declaring.packageName.asString())
     }
+
+  // The function and property loops below MUST key identically, or one package's extension
+  // functions and its extension properties on the same receiver land in two different classes.
+  val extensionsByReceiver: Map<Pair<String, String>, List<KSFunctionDeclaration>> =
+    extensionFunctions.groupBy { func ->
+      val receiver: KSDeclaration = func.extensionReceiver!!.resolve().expandAliases().declaration
+      extensionNamespace(receiver, func) to receiver.simpleName.asString()
+    }
+
+  extensionsByReceiver.forEach { (key, funcs) ->
+    val (namespace, receiverName) = key
+    val className: String = "${receiverName}Extensions"
 
     val members: List<CirMember> = funcs.flatMap { func ->
       // ADR-095: node identity, same reason as the top-level walk above. Extension plan symbols are
@@ -507,31 +514,22 @@ internal fun translate(
       logger = logger,
     )
 
-    if (members.isNotEmpty()) {
-      namespaces.addDeclaration(namespace, CirStaticClass(className, members))
-    }
+    // Merge rather than add: the property loop below feeds the same `(namespace, receiver)` key,
+    // and a same-named static class can also already exist in this namespace from the per-file
+    // walk (a `StringExtensions.kt` holding a plain top-level function). Both cases render as C#
+    // `partial` classes either way; merging just keeps one block per class.
+    if (members.isNotEmpty()) namespaces.mergeStaticClass(namespace, className, members)
   }
 
-  val extensionPropsByReceiver: Map<String, List<KSPropertyDeclaration>> =
+  val extensionPropsByReceiver: Map<Pair<String, String>, List<KSPropertyDeclaration>> =
     extensionProperties.groupBy { prop ->
-      prop.extensionReceiver!!.resolve().expandAliases()
-        .declaration.simpleName.asString()
+      val receiver: KSDeclaration = prop.extensionReceiver!!.resolve().expandAliases().declaration
+      extensionNamespace(receiver, prop) to receiver.simpleName.asString()
     }
 
-  extensionPropsByReceiver.forEach { (receiverName, props) ->
+  extensionPropsByReceiver.forEach { (key, props) ->
+    val (namespace, receiverName) = key
     val className: String = "${receiverName}Extensions"
-    val receiverQualified: String = props.first().extensionReceiver!!
-      .resolve().expandAliases()
-      .declaration.qualifiedName?.asString() ?: ""
-
-    val propReceiverDecl = props.first().extensionReceiver!!
-      .resolve().expandAliases().declaration
-
-    val namespace: String = if (receiverQualified in exportedTypes) {
-      namespaceOf(propReceiverDecl.packageName.asString())
-    } else {
-      namespaceOf(props.first().packageName.asString())
-    }
 
     val members: List<CirMember> = props.flatMap { prop ->
       val symbol: String =

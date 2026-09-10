@@ -147,6 +147,14 @@ See `test-library/.../test/reserved/ReservedNamesSample.kt` and
 `IntegrationTests/ReservedNamesTests.cs` for the fixture, and `Reserved.kt`'s
 `PLAN_OWNED_NAMES`/`bridgeParameterName()` for the mechanism.
 
+Cross-reference (2026-09-10): writing this amendment's `String.tag(receiver: String)` cell is what
+surfaced the extension-class placement bug. The cell had to be parked in `cat/`, away from the rest
+of its fixture family, because the merged `StringExtensions` class took the package of the
+first-visited `String` extension and a cell in its own package would have dragged every other
+`String` extension out of the namespace their tests used.
+[ADR-126](126-extension-class-per-declaring-package.md) makes that placement per declaring package,
+and the cell now lives in `reserved/ReservedExtensions.kt` beside the others.
+
 ## Amendment (2026-09-07): method-name keyword escaping moved to render time
 
 `publicSignature.name` on a plan is PascalCase after this ADR, so no planner path ever escaped a
