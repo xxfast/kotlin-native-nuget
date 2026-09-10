@@ -284,6 +284,7 @@ Forward handles are now counted ([ADR-120](docs/adr/120-live-stableref-counter-a
 
 ## Future Improvements
 
+- Ship the declaration-independent part of the generated `CNameExports.kt` (`NugetHandles`, `NugetError`, the `nuget_unwrap_*`/`nuget_list_*`/`nuget_map_*`/`nuget_set_*`/`nuget_dispose` exports, the .NET ticks conversions, the coroutine scope plumbing, the ADR-054 registration guard; roughly 500 identical lines per project today) once, as a `nuget-runtime` Kotlin/Native library the plugin `export()`s into the consumer's shared library, giving the `nuget_*` ABI its own version and making the project indexable on klibs.io ([details](docs/backlog/nuget-runtime-kmp-module.md))
 - KSP incremental processing if build times become a concern on large libraries. Prerequisite: restore a correct per-file dependency set first; the processor deliberately declares `Dependencies.ALL_FILES` to close a dropped-suspend-functions bug (full context in the [archive](docs/roadmap-archive.md))
 - Map data classes to C# `record class` if a safe `with`-expression pattern can be found (see [ADR-008](docs/adr/008-data-class-mapping.md))
 - Custom type mappers for arbitrary third-party dependency types the plugin will never hardcode (escape hatch). Known stdlib types such as `kotlin.time.Instant` are Phase 4 first-class mappings instead, not this item
