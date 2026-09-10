@@ -2773,16 +2773,6 @@ A generic method, a `suspend` lambda parameter, and a stored-callback/interface-
 (`SEALED_SUBCLASS_UNROUTED`) rather than silently dropped, since none of those has a legacy route
 to re-key onto the arm yet.
 
-<note>
-    <p>A per-call callback route that crosses a handle-passed argument (a <code>String</code> or an
-    exported object) currently releases it twice, once from Kotlin's own release after the invoke
-    and once from C#'s <code>FromHandle</code>. This is pre-existing on the ordinary-class route
-    too, not introduced by the arm case. <code>LeakTests/LiveHandleTests.cs</code> row 8g,
-    <code>LambdaParameter_OnASealedArm_StringInAndOut_ReturnsToBaseline</code>, is committed but
-    skipped for it; see
-    <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md">ROADMAP.md</a>.</p>
-</note>
-
 ### Using it from C# {id="sealed-method-using-it-from-c"}
 
 From `IntegrationTests/SealedSubclassMethodTests.cs`:

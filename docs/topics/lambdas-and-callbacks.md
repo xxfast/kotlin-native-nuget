@@ -343,7 +343,6 @@ public IDisposable AddListener(ICatEventListener listener)
     NugetObjectVoidCallback onMeowCb = (IntPtr arg0Ptr, IntPtr _) =>
     {
         string arg0 = NugetMarshal.FromHandle<string>(arg0Ptr);
-        NugetMarshal.Dispose(arg0Ptr);
         listener.OnMeow(arg0);
     };
     NugetVoidCallback onPurrCb = (IntPtr _) => { listener.OnPurr(); };
@@ -381,6 +380,39 @@ public void CatEventSource_AddListener_TriggerFiresBothOnMeowAndOnPurr()
     Assert.Equal(1, listener.Purrs);
 }
 ```
+
+## Ownership of a callback payload
+
+A handle-passed argument on any of the three C# → Kotlin routes above (per-call, stored, interface
+bridge) is owned by the C# side once it crosses. Kotlin retains it for the duration of the crossing
+and never releases it afterwards; the rule is the same for every payload kind:
+
+- a **`String`** (or any other marshalled kind) is read by `NugetMarshal.FromHandle<T>`, which
+  disposes the handle immediately after reading the value. There is nothing left for the callback
+  body to free.
+- an **exported object** falls through to `NugetMarshal.Materialize<T>`, which hands the raw handle
+  to the wrapper's constructor. The wrapper the callback body receives is the sole owner, and its
+  `Dispose()` is the free, which is why `Cat.ForEachToy` disposes the `Toy` it's handed, from
+  `IntegrationTests/ReverseLambdaTests.cs`:
+
+```C#
+cat.ForEachToy(toy =>
+{
+    using var t = toy;
+    toyNames.Add(t.Name);
+});
+```
+
+A **by-value primitive** payload never had a handle, so there's nothing to own. The callback's
+*return* box is the other way round: nothing on the C# side frees it, so Kotlin still releases it
+after reading it.
+
+<note>
+    <p>A generated wrapper has a <code>Dispose()</code> and no finalizer, so a callback body that
+    never disposes an object payload it's handed leaks that handle for the life of the process.
+    That's diagnosable through <code>NugetMarshal.LiveHandles</code>, unlike the use-after-free the
+    alternative rule would have caused instead.</p>
+</note>
 
 ## Limitations
 

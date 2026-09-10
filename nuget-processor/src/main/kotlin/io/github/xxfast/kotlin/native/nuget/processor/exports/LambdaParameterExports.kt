@@ -112,26 +112,22 @@ internal fun FileSpec.Builder.addLambdaParamMethodExport(
       append("${lambdaParamName}UserData")
     }
 
+    // ADR-036 amendment (2026-09-11): a handle-passed payload is the C# side's to free, so
+    // nothing is released here. `NugetMarshal.FromHandle<string>` disposes the handle as it reads
+    // it, and an exported object goes through `Materialize<T>`, which hands the raw handle to the
+    // wrapper's constructor: the wrapper's `Dispose()` is the free. Releasing here as well took
+    // the count one *below* baseline per crossing (LeakTests rows 8g/8h/8i) and freed a handle a
+    // live wrapper was still holding. The callback's *return* box is the other way round: no C#
+    // owner ever frees it, so its release below stays.
     when {
-      lambdaRetKotlin == "Unit" -> {
-        appendLine("${indent}$fnVar.invoke($fnCallArgs)")
-        lambdaArgTypes.indices.forEach { i ->
-          if (!byValueArgs[i]) appendLine("${indent}NugetHandles.release(arg${i}Ref!!)")
-        }
-      }
+      lambdaRetKotlin == "Unit" -> appendLine("${indent}$fnVar.invoke($fnCallArgs)")
       lambdaRetKotlin == "Boolean" -> {
         appendLine("${indent}val cbResult = $fnVar.invoke($fnCallArgs) != 0.toByte()")
-        lambdaArgTypes.indices.forEach { i ->
-          if (!byValueArgs[i]) appendLine("${indent}NugetHandles.release(arg${i}Ref!!)")
-        }
         append("${indent}cbResult")
       }
       else -> {
         // String or object return from C# callback — backed by nuget_wrap_string StableRef
         appendLine("${indent}val resultRef = $fnVar.invoke($fnCallArgs)!!")
-        lambdaArgTypes.indices.forEach { i ->
-          if (!byValueArgs[i]) appendLine("${indent}NugetHandles.release(arg${i}Ref!!)")
-        }
         appendLine("${indent}val cbResult = resultRef.asStableRef<String>().get()")
         appendLine("${indent}NugetHandles.release(resultRef)")
         append("${indent}cbResult")

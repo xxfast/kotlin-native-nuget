@@ -362,10 +362,7 @@ public class LiveHandleTests
     // C#'s answer comes back as a `WrapString` box Kotlin releases once the outer return is read.
     // So a route that forgets either release leaks one or two handles *per call*, not per wrapper,
     // and the arm receiver makes it its own row: the arm's handle is the one under the callback.
-    // Skipped until the per-call callback route stops releasing a handle-passed payload twice (Kotlin
-    // releases after the invoke and C#'s FromHandle<string> disposes too), which reads as -1 per
-    // crossing on every route, ordinary classes included. ROADMAP: callback-route double release.
-    [Fact(Skip = "pre-existing double release on the per-call callback route, see ROADMAP")]
+    [Fact]
     public void LambdaParameter_OnASealedArm_StringInAndOut_ReturnsToBaseline()
     {
         AssertNoLeak(() =>
@@ -373,6 +370,72 @@ public class LiveHandleTests
             using var factory = new JobFactory();
             using Job.Running oreo = factory.Running(40);
             Assert.Equal("running-40!", oreo.Relabel(s => s + "!"));
+        });
+    }
+
+    // Row 8h. The same per-call lambda-parameter route (ADR-036) on an ordinary class, so the
+    // sealed arm above is not the only witness: `Cat.describeWith` takes a `(String) -> String`
+    // and hands Kotlin's own `name` across as a retained handle. One row per receiver kind,
+    // because a fix that keys the payload's ownership off the arm's export prefix would leave this
+    // one red. Mylo gets described fifty times and the count has to land where it started.
+    [Fact]
+    public void LambdaParameter_OnAnOrdinaryClass_StringInAndOut_ReturnsToBaseline()
+    {
+        AssertNoLeak(() =>
+        {
+            using var mylo = new Cat("Mylo", 9);
+            Assert.Equal("This cat is called Mylo", mylo.DescribeWith(name => $"This cat is called {name}"));
+        });
+    }
+
+    // Row 8i. The other payload kind on the same route: an exported object rather than a `String`.
+    // `Cat.forEachToy` hands a `Toy` handle to the callback once per toy, and C#'s `Materialize`
+    // does not dispose it, so the wrapper the lambda takes ownership of is the only disposer. The
+    // `String` rows above cannot see that branch at all: they exercise the marshalled kind, whose
+    // C#-side unwrap disposes for you. Two toys per crossing, so a per-payload miscount shows up
+    // at twice the rate of the rows above.
+    [Fact]
+    public void LambdaParameter_OnAnOrdinaryClass_ObjectPayload_ReturnsToBaseline()
+    {
+        AssertNoLeak(() =>
+        {
+            using var oreo = new Cat("Oreo", 9);
+            var toyNames = new List<string>();
+            oreo.ForEachToy(toy =>
+            {
+                using var t = toy;
+                toyNames.Add(t.Name);
+            });
+            Assert.Equal(new List<string> { "Mouse", "Ball" }, toyNames);
+        });
+    }
+
+    // Row 8j. The *other* callback family with a handle payload: the interface-bridge route
+    // (ADR-036 amendment, 2026-09-11). `CatEventSource.trigger()` calls `onMeow(msg)` on every
+    // registered listener, minting one handle per crossing. This route freed that handle three
+    // times, not two: `FromHandle<string>` disposes as it reads, the generated thunk spelled an
+    // explicit `NugetMarshal.Dispose(arg0Ptr)` after it, and Kotlin released once more after the
+    // invoke. Measured at -2 per crossing (-100 over the 50 below) before the fix, which is why
+    // this row exists rather than a note in the backlog: one owner is `FromHandle`, and this is
+    // the row that says so.
+    private sealed class ProbeListener : ICatEventListener
+    {
+        public int Meows { get; private set; }
+        public void OnMeow(string message) => Meows++;
+        public void OnPurr() { }
+        public void Dispose() { }
+    }
+
+    [Fact]
+    public void InterfaceBridge_StringPayload_ReturnsToBaseline()
+    {
+        AssertNoLeak(() =>
+        {
+            using var source = new CatEventSource("Oreo");
+            var listener = new ProbeListener();
+            using IDisposable sub = source.AddListener(listener);
+            source.Trigger();
+            Assert.Equal(1, listener.Meows);
         });
     }
 

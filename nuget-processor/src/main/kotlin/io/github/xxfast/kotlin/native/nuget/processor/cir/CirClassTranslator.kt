@@ -2860,7 +2860,10 @@ private fun translateStoredCallbackMethod(
     lambdaArgTypes.forEachIndexed { i, argType ->
       val csType: String = qualifiedElementCsType(argType, context)
       if (isEnumArgs[i]) append("$csType arg$i = ($csType)arg${i}Ord; ")
-      else append("$csType arg$i = NugetMarshal.FromHandle<$csType>(arg${i}Ptr); NugetMarshal.Dispose(arg${i}Ptr); ")
+      // ADR-036 amendment (2026-09-11): `FromHandle` already owns the handle. Its `string` branch
+      // disposes as it reads, and an exported object is materialised into a wrapper that frees it
+      // in `Dispose()`. The explicit dispose here was a second free of the same handle.
+      else append("$csType arg$i = NugetMarshal.FromHandle<$csType>(arg${i}Ptr); ")
     }
     val callArgs: String = if (lambdaArity == 0) "" else
       lambdaArgTypes.indices.joinToString(", ") { "arg$it" }
@@ -2984,7 +2987,9 @@ private fun translateInterfaceBridgeMethod(
           isPrimitive -> { /* arg is already the right type, no unmarshal needed */
           }
 
-          else -> append("$csType arg$i = NugetMarshal.FromHandle<$csType>(arg${i}Ptr); NugetMarshal.Dispose(arg${i}Ptr); ")
+          // ADR-036 amendment (2026-09-11): see the stored-callback route above; `FromHandle` is
+          // the owner, so there is no second dispose here.
+          else -> append("$csType arg$i = NugetMarshal.FromHandle<$csType>(arg${i}Ptr); ")
         }
       }
       val callArgs: String = params.indices.joinToString(", ") { "arg$it" }
