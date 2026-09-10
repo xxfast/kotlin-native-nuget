@@ -500,7 +500,10 @@ reference to a type that does not exist, failing the consumer's C# compile with 
 classifier's enum branch is now gated on the same exported-handle membership check the sealed-class
 branch uses ([ADR-105](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/105-sealed-property-position.md)),
 so every member typed with a nested enum skips named instead, and the owning class still generates
-with its other members.
+with its other members. A C#-implemented interface's bridge factory (see
+[C#-implemented interfaces](interfaces-abstract-sealed.md)) is gated the same way: an interface
+member typed with a nested (or otherwise undeclared) enum plans no bridge factory at all rather than
+spelling a dangling `global::` reference.
 
 From `test-library/src/nativeMain/kotlin/.../issue54/NestedModeOwner.kt`:
 

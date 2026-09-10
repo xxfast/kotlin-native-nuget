@@ -226,4 +226,71 @@ class Tier1InterfaceBridgeFactoryTest {
     assertFalse(result.generatedCSharp.contains("NugetBridge"), "no bridge layer for an unplanned interface")
     assertContains(result.generatedCSharp, "passing a C#-implemented interface is not supported yet")
   }
+
+  /**
+   * ADR-084: an enum slot is spelled by the shared classifier. A nested enum is never declared in
+   * C#, so an interface with such a member plans no factory at all rather than emitting a bridge
+   * state that names a type neither half can resolve.
+   */
+  private val enumSource: String = """
+    package tier1.bridgefactory
+
+    enum class Heat { LOW, HIGH }
+
+    interface Kettle {
+      enum class Whistle { OFF, ON }
+      val heat: Heat
+      fun whistle(): Whistle
+    }
+
+    interface Stove {
+      val heat: Heat
+      fun set(heat: Heat)
+    }
+
+    class Kitchen(private val installed: Stove, private val boiler: Kettle) {
+      // An interface reaches the bridge layer through a *result* position, not a parameter one.
+      fun stove(): Stove = installed
+      fun kettle(): Kettle = boiler
+    }
+  """.trimIndent()
+
+  @Test
+  fun `an interface with an undeclared enum member gets no factory on either half`() {
+    val result = Tier1Harness.run(enumSource)
+    assertTrue(result.compiledClean, "expected the fixture to bind; got: ${result.compileErrors}")
+
+    assertFalse(
+      result.generated.contains("kettle_bridge_create"),
+      "a nested enum member has no C# declaration, so the whole interface plans to null",
+    )
+    assertFalse(
+      result.generatedCSharp.contains("KettleBridgeState"),
+      "no bridge state may name a type that is never declared",
+    )
+  }
+
+  @Test
+  fun `a declared enum slot is qualified on both halves`() {
+    val result = Tier1Harness.run(enumSource)
+    assertTrue(
+      result.compiledClean,
+      "expected the enum slot to compile; got: ${result.compileErrors}",
+    )
+
+    val kotlin: String = result.generated
+    assertContains(kotlin, "@CName(\"stove_bridge_create\")")
+    // Fully qualified: the generated file adds no import for the enum, and a bare simple name
+    // would not resolve at the `override` position.
+    assertContains(kotlin, "override val heat: tier1.bridgefactory.Heat")
+    assertContains(kotlin, "return tier1.bridgefactory.Heat.entries[")
+    assertContains(kotlin, "override fun set(heat: tier1.bridgefactory.Heat)")
+    assertContains(kotlin, "heat.ordinal")
+
+    val cs: String = result.generatedCSharp
+    assertContains(cs, "internal sealed class StoveBridgeState : NugetBridgeState")
+    // `global::`-qualified, from the classifier's own spelling rule.
+    assertContains(cs, "global::Interop.Heat value0 = (global::Interop.Heat)arg0;")
+    assertContains(cs, "return (int)impl.Heat;")
+  }
 }

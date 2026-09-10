@@ -572,7 +572,8 @@ internal fun translate(
   // be passed to Kotlin. An interface with an out-of-scope member plans to null and simply gets no
   // factory: `HandleOf` keeps throwing for it rather than emitting a half-supported ABI.
   val bridgePlans: List<CirBridgeInterface> = interfaceBackingClasses.mapNotNull { iface ->
-    val plan: ForwardBridgeInterfacePlan = ForwardInterfaceBridgePlanner.plan(iface) ?: return@mapNotNull null
+    val plan: ForwardBridgeInterfacePlan =
+      ForwardInterfaceBridgePlanner.plan(iface, classifier) ?: return@mapNotNull null
     CirBridgeInterface(namespaceOf(iface.packageName.asString()), plan)
   }
   if (bridgePlans.isNotEmpty()) {

@@ -1318,7 +1318,9 @@ class NugetProcessor(
     // ADR-084 stage 1: the per-interface bridge factory, projected from the same slot plan the C#
     // `{Iface}BridgeState` is projected from (see `ForwardInterfaceBridgePlanner`).
     val bridgePlans: List<ForwardBridgeInterfacePlan> =
-      reachableInterfaces.mapNotNull { iface -> ForwardInterfaceBridgePlanner.plan(iface) }
+      reachableInterfaces.mapNotNull { iface ->
+        ForwardInterfaceBridgePlanner.plan(iface, forwardClassifier)
+      }
     bridgePlans.forEach { plan -> builder.addInterfaceBridgeFactoryExport(plan) }
     // ADR-084 stage 2: the release path is only observable with a forced GC round, so the support
     // export ships with the factories it exists to exercise.
