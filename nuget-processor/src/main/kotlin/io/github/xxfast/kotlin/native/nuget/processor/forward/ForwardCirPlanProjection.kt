@@ -438,11 +438,21 @@ internal object ForwardCirPlanProjection {
         }
       }
 
+      // ADR-105 amendment (2026-09-11): a nullable handle receiver (`this Cat? receiver`) passes
+      // the same handle field, only null-guarded, so a null receiver crosses as a null pointer
+      // rather than throwing. This is the receiver-position form of the ADR-062 nullable handle
+      // parameter slot's `${name}?._handle ?? IntPtr.Zero`.
+      is BridgeType.Nullable -> when (type.type) {
+        is BridgeType.ObjectHandle -> "receiver?._handle ?? IntPtr.Zero"
+        else -> "receiver"
+      }
+
       else -> "receiver"
     }
     val nativeName: String = "Native_${plan.publicSignature.name}${plan.overloadSuffix()}"
     val needsCustomParams: Boolean = receiver.transfer.type is BridgeType.ObjectHandle ||
         receiver.transfer.type is BridgeType.ValueClass ||
+        (receiver.transfer.type as? BridgeType.Nullable)?.type is BridgeType.ObjectHandle ||
         plan.publicSignature.parameters.any { parameter -> !parameter.type.isTrivialInput() }
     val result: CirResultProjection = plan.resultProjection(
       nativeName = nativeName,

@@ -543,10 +543,9 @@ An eligible sealed *interface* receiver binds the same way. An ineligible or out
 receiver carries no `sealedHandle`, still skips `SEALED_POSITION`, and that hint's "has no generated
 discriminator" wording is now true for every receiver it names, which it was not before.
 
-Still deferred as its own item: a **nullable** receiver of any handle type, which plans but then
-renders a C# call passing the wrapper where the extern wants an `IntPtr`, pre-existing and unrelated
-to sealed types. The extension **property** on a sealed receiver, deferred here, is closed by the
-amendment below.
+Deferred here, both closed by the amendments below: the extension **property** on a sealed
+receiver, and a **nullable** receiver of a handle type, which plans but then renders a C# call
+passing the wrapper where the extern wants an `IntPtr`, pre-existing and unrelated to sealed types.
 
 Fixtures: `Issue54Sample.kt` (`Issue54Shape.footprint()` and `Issue54Shape.covers(other)`);
 consumer `IntegrationTests/Issue54Tests.cs` (three facts, one of them calling the extension on the
@@ -576,6 +575,41 @@ current name so a later rename has to be deliberate.
 Fixtures: `Issue54Sample.kt` (`val Issue54Shape.area`); consumer `IntegrationTests/Issue54Tests.cs`
 (two facts, one on the payload arm and one on the payload-free arm); the two added cells in
 `Tier1SealedReceiverExtensionTest.kt`, the second of which is the ineligible-receiver control.
+
+## Amendment (2026-09-11): a nullable handle receiver binds too
+
+The nullable-receiver deferral above is withdrawn. It was never a planning gap: the planner already
+lowers `fun Cat?.nameOrStray()` to one `POINTER` receiver slot (`HANDLE_TO_STABLE_REF`, borrowed),
+and `inputSkipReason`'s `Nullable` arm admits an `ObjectHandle` inner. Both emitters simply had no
+`Nullable(ObjectHandle)` arm at the *receiver* position and fell through to "pass the name as-is",
+which is an unresolved reference on the Kotlin side (a `COpaquePointer?` has no such extension) and
+a CS1503 on the C# side (a `Cat?` wrapper where the extern wants `IntPtr`).
+
+Both arms spell what the ADR-062 nullable-handle *parameter* slots already spell, one position over:
+
+- `ForwardKotlinPlanEmitter.receiverExpression`: `receiver?.asStableRef<Cat>()?.get()`. The chain
+  types `Cat?`, which is what resolves the `Cat?` extension, the same way `s?.length.toString()`
+  resolves `Any?.toString()`. A null pointer stays null into the callee, so `this?.name` sees it.
+- `ForwardCirPlanProjection.receiverArgument`: `receiver?._handle ?? IntPtr.Zero`, with the
+  `needsCustomParams` gate extended so a nullable handle receiver forces the custom body even when
+  every declared parameter is trivial (the renderer's default body passes `receiver` by name).
+
+C# renders `public static string NameOrStray(this global::TestLibrary.Cat.Cat? receiver)`. Calling
+it on a null reference is legal C# (extension methods dispatch statically, no NRE), and the null
+crosses as `IntPtr.Zero`; nothing on the native side dereferences it.
+
+A nullable **sealed** receiver reaches the same two arms, since `sealedAsHandle()` recurses through
+`Nullable`, so `Shape?` binds by the same rewrite.
+
+Still deferred, filed as one ROADMAP line: `Nullable(ValueClass)` and bare `Interface` receivers,
+which fall to the same two `else` branches and are admitted by `inputSkipReason` in the same way.
+Neither has a fixture yet, and each needs its own null spelling (an underlying wire, a transfer
+GCHandle) rather than a handle field.
+
+Fixtures: `test-library/.../test/cat/CatExtensions.kt` (`fun Cat?.nameOrStray()`); consumer
+`IntegrationTests/ExtensionFunctionTests.cs` (a non-null receiver and a null one, the only proof
+that the null crosses rather than throwing); `Tier1NullableReceiverExtensionTest.kt`, whose control
+is a non-null receiver on the same type keeping the plain `receiver._handle` shape.
 
 ## Prior art (to the depth that changes the decision)
 

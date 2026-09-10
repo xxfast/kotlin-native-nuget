@@ -884,6 +884,17 @@ private fun receiverExpression(receiver: ForwardAbiParameter): String =
     is BridgeType.ValueClass ->
       "${type.qualifiedName}(${valueClassUnderlyingLowering(receiver.name, type.underlying)})"
 
+    // ADR-105 amendment (2026-09-11): `fun Cat?.x()` lowers its receiver to the same one pointer
+    // slot, only nullable, so the un-boxing takes the safe-call form the ADR-062 nullable handle
+    // *parameter* slot already takes. The chain types `Cat?`, which is what resolves the `Cat?`
+    // extension; a null pointer stays null all the way into the callee.
+    is BridgeType.Nullable -> when (val inner: BridgeType = type.type) {
+      is BridgeType.ObjectHandle ->
+        "${receiver.name}?.asStableRef<${inner.qualifiedName}>()?.get()"
+
+      else -> receiver.name
+    }
+
     else -> receiver.name
   }
 

@@ -4,7 +4,7 @@ Kotlin extension functions and properties don't have a native C# analog (C# has 
 
 | Kotlin | C# | Notes |
 |---|---|---|
-| extension function | static method | true C# extension method (`this` parameter); receiver may also be an eligible sealed base, see [Sealed receivers](#sealed-receivers) below |
+| extension function | static method | true C# extension method (`this` parameter); receiver may also be an eligible sealed base, see [Sealed receivers](#sealed-receivers) below, or nullable (`Cat?`), rendered `this Cat? receiver` with a null receiver crossing as `IntPtr.Zero`, see [Nullable receivers](#nullable-receivers) below |
 | extension property | static accessor | receiver may also be an eligible sealed base, see [Sealed receivers](#sealed-receivers) below; see [ADR-013](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/013-extension-property-mapping.md) |
 | extension function return (object, `T?`, `List`/`Map`/`Set`, enum, `Char`, `String?`, `Int?`, …) | matching C# return type | same cascade as a class-method return via the shared plan, see Return marshalling below and [Classes and objects](classes-and-objects.md) |
 | two or more same-named extension functions | one C# overload set | numbered native export/extern name, unnumbered public name, counter scoped per (package, name), receiver-agnostic; see [Method overloads](#method-overloads) below ([ADR-095](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/095-static-route-overloads.md)) |
@@ -239,6 +239,61 @@ public static partial class TemperamentExtensions
 }
 ```
 
+## Nullable receivers
+
+An extension function's receiver may also be nullable (`Cat?`). It still renders as a genuine C#
+extension method, on the nullable wrapper type, so calling it on a null reference is legal C#:
+extension methods dispatch statically, there is no `NullReferenceException`. The null crosses the
+ABI as `IntPtr.Zero`, and nothing on the native side dereferences it unless the Kotlin body does
+([ADR-105](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/105-sealed-property-position.md)).
+
+### Kotlin {id="nullable-receiver-kotlin"}
+
+From `test-library/src/nativeMain/kotlin/.../cat/CatExtensions.kt`:
+
+```kotlin
+fun Cat?.nameOrStray(): String = this?.name ?: "stray"
+```
+
+### Generated C# {id="nullable-receiver-generated-c"}
+
+From `Interop.cs`:
+
+```C#
+[DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "cat_nameOrStray")]
+private static extern IntPtr Native_NameOrStray(IntPtr receiver, out IntPtr error);
+
+public static string NameOrStray(this global::TestLibrary.Cat.Cat? receiver)
+{
+    IntPtr nativeResult = Native_NameOrStray(receiver?._handle ?? IntPtr.Zero, out IntPtr error);
+    if (error != IntPtr.Zero)
+    {
+        throw NugetErrorNative.BuildException(error);
+    }
+    return Marshal.PtrToStringUTF8(nativeResult)!;
+}
+```
+
+### Using it from C# {id="nullable-receiver-using-it-from-c"}
+
+From `IntegrationTests/ExtensionFunctionTests.cs`, a live receiver and a null one:
+
+```C#
+[Fact]
+public void NullableReceiver_LiveCat_ReturnsName()
+{
+    using var mylo = new Cat("Mylo", 9);
+    Assert.Equal("Mylo", mylo.NameOrStray());
+}
+
+[Fact]
+public void NullableReceiver_NullCat_ReturnsStray()
+{
+    Cat? none = null;
+    Assert.Equal("stray", none.NameOrStray());
+}
+```
+
 ## Sealed receivers
 
 An extension function's or extension property's receiver may also be an eligible sealed base (a
@@ -251,6 +306,8 @@ uses. An ineligible or out-of-scope sealed receiver still skips: an extension **
 `SKIPPED_SEALED_POSITION`, an extension **property** is named `SKIPPED_UNSUPPORTED_PROPERTY` (the
 property planner records it as an unsupported receiver rather than a dedicated sealed-position reason)
 ([ADR-105](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/105-sealed-property-position.md)).
+A nullable sealed receiver (`Shape?`) binds the same way as [a nullable handle receiver](#nullable-receivers)
+above, through the same `sealedAsHandle()` recursion into `Nullable`.
 
 ### Kotlin {id="sealed-receiver-kotlin"}
 
