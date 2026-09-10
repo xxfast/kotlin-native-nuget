@@ -901,8 +901,10 @@ internal class ForwardCallablePlanner(
       // ADR-090: the C# modifiers, computed here because a planned entry keeps no declaration.
       // ADR-096: a synthesized entry is never `override`/`virtual` (the base has no such
       // signature, so `override` would be CS0115); overrides synthesize nothing anyway.
-      val isOverride: Boolean = omitted == 0 &&
-          superClass != null && method.modifiers.contains(Modifier.OVERRIDE)
+      // ADR-101 amendment (2026-09-11): keyed on a base *class* overridee, not on the Kotlin
+      // modifier. `Ledge : Shelf(), Groomable` overrides `Groomable.groom`, which `Shelf` never
+      // declares, so C# spells it `virtual`; `public override string Groom()` is CS0115.
+      val isOverride: Boolean = omitted == 0 && method.overridesBaseClassMember(superClass)
       // ADR-101 (2026-09-11): a *declared* `open fun` is virtual too, not just the
       // `override && !final` arm, or a subclass's `override` is CS0506 in C#. Same predicate the
       // property route uses (`CirClassTranslator`), so both halves of a class agree.

@@ -1,5 +1,6 @@
 package io.github.xxfast.kotlin.native.nuget.processor.forward
 
+import com.google.devtools.ksp.getAllSuperTypes
 import com.google.devtools.ksp.getDeclaredFunctions
 import com.google.devtools.ksp.getDeclaredProperties
 import com.google.devtools.ksp.isAbstract
@@ -209,13 +210,19 @@ internal fun KSClassDeclaration.forwardSuperClass(
  * = ...`) is bound too: the C# class declares that interface, so it must carry the member, and the
  * Kotlin export reaches the default body by ordinary dynamic dispatch on the instance behind the
  * handle. A member inherited from a base *class* is not: the generated C# subclass extends the
- * generated C# base class, which already carries it (and `CirClassTranslator` renders no interface
- * list at all once a base class exists, so nothing is left unimplemented).
+ * generated C# base class, which already carries it.
+ *
+ * ADR-101 amendment (2026-09-11): the interface arm applies with a kept base too. A base class no
+ * longer empties the interface list (`CirClassTranslator`), so `class Ledge : Shelf(), Groomable`
+ * renders `: Shelf, IGroomable` and must carry `Groomable`'s defaulted members itself, or the
+ * declaration it just made is CS0535. Only an interface the base does *not* already implement
+ * counts: one the base implements is carried by the base, and re-binding it here hides the base
+ * member (CS0108).
  */
 internal fun KSDeclaration.isForwardMemberOf(
   cls: KSClassDeclaration,
   superClass: KSClassDeclaration?,
-): Boolean = isDeclaredBy(cls) || superClass == null
+): Boolean = isDeclaredBy(cls) || superClass == null || isFromInterfaceBeside(superClass)
 
 /**
  * [isForwardMemberOf] narrowed to the members a *plan* can be built for: an inherited interface
@@ -234,7 +241,83 @@ internal fun KSDeclaration.isForwardMemberOf(
 internal fun KSDeclaration.isForwardPlannableMemberOf(
   cls: KSClassDeclaration,
   superClass: KSClassDeclaration?,
-): Boolean = isDeclaredBy(cls) || (superClass == null && hasImplementation())
+): Boolean = isDeclaredBy(cls) ||
+    ((superClass == null || isFromInterfaceBeside(superClass)) && hasImplementation())
+
+/**
+ * ADR-101 amendment (2026-09-11): whether this member is inherited from an interface the class
+ * lists *beside* its base class, one [superClass] does not itself implement.
+ *
+ * This is the member-level half of the base list `CirClassTranslator` now renders: `: Base, IFoo`
+ * keeps every interface the base does not already carry, and exactly those interfaces' members
+ * have no C# carrier other than this class. An interface the base implements is excluded on both
+ * sides, so the two never disagree about who binds a member.
+ *
+ * Export status is deliberately not consulted, matching the base-less rule: an unexported
+ * interface is dropped from the base list with `SKIPPED_UNEXPORTED_SUPERTYPE`, and its defaulted
+ * members still bind on the class as ordinary methods.
+ */
+private fun KSDeclaration.isFromInterfaceBeside(superClass: KSClassDeclaration): Boolean {
+  val owner: KSClassDeclaration = parentDeclaration as? KSClassDeclaration ?: return false
+  if (owner.classKind != ClassKind.INTERFACE) return false
+  val qualified: String = owner.qualifiedName?.asString() ?: return false
+  return qualified !in superClass.forwardSupertypeNames()
+}
+
+/**
+ * The qualified names of everything [this] is, itself included: the test for "the base already
+ * carries this interface".
+ */
+internal fun KSClassDeclaration.forwardSupertypeNames(): Set<String> =
+  (sequenceOf(asStarProjectedType()) + getAllSuperTypes())
+    .mapNotNull { it.declaration.qualifiedName?.asString() }
+    .toSet()
+
+/**
+ * ADR-101 amendment (2026-09-11): whether this member overrides a member of its class's *base
+ * class*, which is the one thing C# `override` may mean.
+ *
+ * The Kotlin `override` modifier is not that question. `class Ledge : Shelf(), Groomable` declares
+ * `override fun groom()` for `Groomable.groom`, and `Shelf` has no `Groom` to override, so C# has
+ * to spell it `virtual`: `public override string Groom()` is CS0115. Reading the modifier was safe
+ * only while a kept base emptied the interface list, which it no longer does.
+ *
+ * [KSPropertyDeclaration.findOverridee] / [KSFunctionDeclaration.findOverridee] answer first: for
+ * `Cat.vibe` over `Animal.vibe` over `Pet.vibe` the property side returns `Animal.vibe`, the
+ * class-chain overridee (Verified by a probe in a Tier 1 run; the function side is the same KSP
+ * API, Inferred). The answer is trusted only when it lands on a class, because a base class that
+ * does not redeclare the member leaves it abstract and the overridee is then the interface
+ * declaration, which says nothing about what the base class renders. The fallback walks the base
+ * class's own visible members by simple name, which answers that shape too, and answers `Ledge`
+ * correctly either way: `Shelf` declares no `groom` under any name.
+ */
+internal fun KSDeclaration.baseClassOverridee(
+  superClass: KSClassDeclaration?,
+): KSDeclaration? {
+  if (superClass == null || Modifier.OVERRIDE !in modifiers) return null
+  val name: String = simpleName.asString()
+  val direct: KSDeclaration? = when (this) {
+    is KSPropertyDeclaration -> findOverridee()
+    is KSFunctionDeclaration -> findOverridee()
+    else -> null
+  }
+  val onBaseClass: Boolean =
+    (direct?.parentDeclaration as? KSClassDeclaration)?.classKind == ClassKind.CLASS
+  if (onBaseClass) return direct
+  return when (this) {
+    is KSPropertyDeclaration ->
+      superClass.getAllProperties().firstOrNull { it.simpleName.asString() == name }
+
+    is KSFunctionDeclaration ->
+      superClass.getAllFunctions().firstOrNull { it.simpleName.asString() == name }
+
+    else -> null
+  }
+}
+
+/** [baseClassOverridee] as the boolean the `override` / `virtual` pair is keyed on. */
+internal fun KSDeclaration.overridesBaseClassMember(superClass: KSClassDeclaration?): Boolean =
+  baseClassOverridee(superClass) != null
 
 /**
  * Whether this member is *declared* by [cls], as opposed to inherited into it.

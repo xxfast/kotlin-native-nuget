@@ -598,3 +598,53 @@ Evidence: `Tier1GenericBaseClassTest.kt` (base list, `virtual`/`override` `Dispo
 `stringcrate_get_value`) and `IntegrationTests/GenericBaseClassTests.cs` (`NamedParcel("Oreo").Value`
 reaches the base's own export, `IsAssignableFrom<Parcel<string>>`, dispose through a base-typed
 reference).
+
+## Amendment (2026-09-11): a kept base keeps the interfaces beside it
+
+The 2026-09-05 shipped shape emptied a class's interface list whenever a base class survived
+(`interfaces = if (superClass != null) emptyList() else ...`), and the membership predicate matched
+it: with a base, every inherited member was dropped. `class Ledge : Shelf(), Groomable` therefore
+rendered `public class Ledge : Shelf`, and a C# consumer could not hold a `Ledge` as an
+`IGroomable` at all (CS0266 at the assignment).
+
+Dropping the short-circuit alone does not compile, which is why this is three coupled edits rather
+than one. **Verified** by the red pair (`Tier1KeptBaseInterfaceListTest`, then
+`IntegrationTests/InterfaceBesideBaseTests.cs`): fixing the base list first unmasks CS0115 on
+`public override string Groom()`, because `override` was read off the Kotlin modifier and `Shelf`
+declares no `Groom`.
+
+- **Base list** (`CirClassTranslator.translateClass`, `CirClassRenderer.renderClass`): the
+  interface walk now runs with a kept base too, and the renderer spells `: Base, IFoo`. An
+  interface the base already implements is dropped before the export-set gate: the base carries it,
+  re-listing it says nothing and re-binding its members would hide the base's (CS0108), so it owes
+  no diagnostic either. The disposables stay off a derived class's list, unchanged: the base
+  declares `_handle`, implements `INugetHandle` and carries `IDisposable` (ADR-094).
+- **Membership** (`ForwardClassMembership.kt`): `isForwardMemberOf` /
+  `isForwardPlannableMemberOf` gain a third arm, `isFromInterfaceBeside(superClass)`, admitting a
+  member inherited from an interface the base does not implement. Without it, `Groomable.brushes()`
+  (defaulted, never overridden) has no C# carrier and the interface the class just declared is
+  CS0535. Base-*class* members are still not re-bound, and the arm is keyed on the same
+  base-supertype closure the translator filters the list with, so the two halves cannot disagree
+  about who binds a member.
+- **`override` means a base *class* member** (`ForwardCallablePlanner.classEntries`,
+  `CirClassTranslator`'s property and abstract-method walks): all three now ask
+  `overridesBaseClassMember(superClass)`, and `isVirtual = !isOverride && isOpenForOverride()`
+  follows. `Ledge.groom()` is a fresh virtual slot, exactly as it would be on a base-less
+  implementer. The lookup is `ForwardPropertyPlanner`'s `readOnlyOverrideeOwner` walk lifted to
+  `ForwardClassMembership.kt` and shared: trust `findOverridee()` only when it lands on a
+  `ClassKind.CLASS`, else match the base class's own members by simple name. The property planner
+  now calls the lifted helper, so the `val`-widened-to-`var` setter rule (CS0546) and the rendered
+  modifier are keyed on one answer instead of two.
+
+The `findOverridee()` half stays **Inferred** for functions (same KSP API as the property side,
+which was probed). Nothing silently breaks if it answers the interface for a member overriding
+both: the by-name fallback on the base class still says `override`.
+
+Deferred, named: an interface the base already implements is skipped rather than re-listed (C#
+accepts either), and `IAsyncDisposable` on a derived class with its own suspend members is a
+separate hole, untouched here.
+
+Evidence: `Tier1KeptBaseInterfaceListTest.kt` (`: Shelf, IGroomable`, bound `Brushes`, `public
+virtual string Groom()`, no re-bound `ledge_height`) and
+`IntegrationTests/InterfaceBesideBaseTests.cs` (`using IGroomable g = new Ledge()` with no cast,
+`((Shelf)g).Height()`, `Groom().GetBaseDefinition().DeclaringType == typeof(Ledge)`).

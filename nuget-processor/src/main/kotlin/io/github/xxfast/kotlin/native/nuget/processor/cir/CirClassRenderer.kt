@@ -198,8 +198,11 @@ internal fun StringBuilder.renderClass(cls: CirClass) {
   // whenever the class owns a scope, so the base list has to advertise what the body implements or
   // the class cannot be held as an `IAsyncDisposable`. Same spelling `CirSealedRenderer` gives a
   // suspending arm (ADR-118).
+  // ADR-101 amendment (2026-09-11): a derived class lists its own interfaces beside the base. The
+  // disposables stay off that list: the base declares `_handle`, implements `INugetHandle` and
+  // carries `IDisposable`, and a derived class inherits all three.
   val implements: String = if (cls.superClass != null) {
-    " : ${cls.superClass}"
+    " : " + (listOf(cls.superClass) + cls.interfaces).joinToString(", ")
   } else {
     val disposables: List<String> =
       listOf("IDisposable") + listOfNotNull("IAsyncDisposable".takeIf { cls.hasSuspendMethods })

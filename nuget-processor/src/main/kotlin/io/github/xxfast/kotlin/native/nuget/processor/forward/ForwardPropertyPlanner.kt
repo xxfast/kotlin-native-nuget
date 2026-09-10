@@ -1,7 +1,6 @@
 package io.github.xxfast.kotlin.native.nuget.processor.forward
 
 import com.google.devtools.ksp.getVisibility
-import com.google.devtools.ksp.symbol.ClassKind
 import com.google.devtools.ksp.symbol.KSClassDeclaration
 import com.google.devtools.ksp.symbol.KSNode
 import com.google.devtools.ksp.symbol.KSPropertyDeclaration
@@ -436,23 +435,16 @@ internal class ForwardPropertyPlanner(
    * `virtual`, not `override` (`isOpenForOverride`), and a `virtual` declaration is
    * free to carry a setter the interface never asked for.
    *
-   * [KSPropertyDeclaration.findOverridee] is asked first: for `Cat.vibe` over `Animal.vibe` over
-   * `Pet.vibe` it returns `Animal.vibe`, the class-chain overridee (Verified by a probe in a Tier
-   * 1 run). Its answer is only trusted when it lands on a class, though, because a base class that
-   * does *not* redeclare the member leaves it abstract, and there the overridee is the interface
-   * declaration, which says nothing directly about what the base class renders. The fallback walks
-   * the base class's own visible properties by simple name, which answers that shape too.
+   * The class-chain lookup itself is [baseClassOverridee] (`ForwardClassMembership.kt`), shared
+   * with the `override` / `virtual` pair since the ADR-101 amendment of 2026-09-11: the two used
+   * to answer differently for the same member, and a setter rule keyed on a different overridee
+   * from the modifier it renders is how CS0546 gets back in.
    */
   private fun KSPropertyDeclaration.readOnlyOverrideeOwner(
     superClass: KSClassDeclaration?,
   ): KSClassDeclaration? {
-    if (superClass == null || Modifier.OVERRIDE !in modifiers) return null
-    val name: String = simpleName.asString()
-    val direct: KSPropertyDeclaration? = findOverridee() as? KSPropertyDeclaration
-    val overridee: KSPropertyDeclaration = direct
-      ?.takeIf { (it.parentDeclaration as? KSClassDeclaration)?.classKind == ClassKind.CLASS }
-      ?: superClass.getAllProperties().firstOrNull { it.simpleName.asString() == name }
-      ?: return null
+    val overridee: KSPropertyDeclaration =
+      baseClassOverridee(superClass) as? KSPropertyDeclaration ?: return null
     return if (overridee.isMutable) null else superClass
   }
 

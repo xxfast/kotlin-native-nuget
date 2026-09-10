@@ -1143,11 +1143,11 @@ public void Pitch_EnumArm_KeepsToneIneligibleAndIsDeclaredOnceAsAnEnum()
 
 <note>
     <p>An arm implementing a second sealed interface is refused the same way (C# single
-    inheritance cannot express two bases), and an arm's <b>other</b> interfaces (e.g. <code>class
-    Odd : Kind, CharSequence</code>) are dropped silently: the arm itself stays eligible, but the
-    generated <code>: &lt;base&gt;</code> declaration carries no interface list, so
-    <code>CharSequence</code> vanishes with no diagnostic. See
-    <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md">ROADMAP.md</a>.</p>
+    inheritance cannot express two bases). An arm's <b>other</b> interfaces (e.g. <code>class
+    Odd : Kind, CharSequence</code>) render on the generated <code>: &lt;base&gt;</code>
+    declaration the same way an ordinary class's do: an exported one is kept beside the base
+    (<code>Kind</code>), an unexported one drops with <code>SKIPPED_UNEXPORTED_SUPERTYPE</code>
+    instead of vanishing silently. See <a href="classes-and-objects.md">Classes and objects</a>.</p>
 </note>
 
 ## Sealed types as property types

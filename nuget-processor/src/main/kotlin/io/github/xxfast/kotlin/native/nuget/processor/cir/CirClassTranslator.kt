@@ -38,8 +38,10 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.declaredSuperClass
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardPublicCsharpType
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardSuperClass
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isForwardLegacyAsyncRoute
+import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardSupertypeNames
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isForwardMemberOf
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isOpenForOverride
+import io.github.xxfast.kotlin.native.nuget.processor.forward.overridesBaseClassMember
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyCollectionRead
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyFlowElementCollection
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyFlowElementReadArgument
@@ -338,23 +340,27 @@ internal fun translateClass(
     forwardBaseSpelling(cls, name, base, classifier)
   }
 
-  val interfaces: List<String> = if (superClass != null) {
-    emptyList()
-  } else {
-    cls.superTypes
-      .map { it.resolve().declaration }
-      .filterIsInstance<KSClassDeclaration>()
-      .filter { it.classKind == ClassKind.INTERFACE }
-      // ADR-101 / issue #42: a supertype outside the export set has no generated C# interface, so
-      // naming it in the base list is a guaranteed CS0246 (the reporter's `: IKoinComponent`).
-      // Drop it and say so. Nothing is lost: an unexported interface has no C# members to call,
-      // and its defaulted members still bind on the class itself (`ForwardClassMembership.kt`).
-      .filter { iface ->
-        keepsSupertype(cls, name, iface, SupertypeKind.INTERFACE, exportedTypes, logger)
-      }
-      .map { "I${it.simpleName.asString()}" }
-      .toList()
-  }
+  // ADR-101 amendment (2026-09-11): a kept base no longer empties the interface list. `class
+  // Ledge : Shelf(), Groomable` renders `: Shelf, IGroomable`, and `ForwardClassMembership` binds
+  // `Groomable`'s members on `Ledge` to match, or the declaration is CS0535.
+  val baseSupertypes: Set<String> = superClassDeclaration?.forwardSupertypeNames().orEmpty()
+  val interfaces: List<String> = cls.superTypes
+    .map { it.resolve().declaration }
+    .filterIsInstance<KSClassDeclaration>()
+    .filter { it.classKind == ClassKind.INTERFACE }
+    // An interface the base already implements is carried by the base. Listing it again compiles
+    // but says nothing, and re-binding its members here would hide the base's (CS0108), so it is
+    // dropped before the export-set filter: it owes no diagnostic either, nothing is lost.
+    .filter { iface -> iface.qualifiedName?.asString() !in baseSupertypes }
+    // ADR-101 / issue #42: a supertype outside the export set has no generated C# interface, so
+    // naming it in the base list is a guaranteed CS0246 (the reporter's `: IKoinComponent`).
+    // Drop it and say so. Nothing is lost: an unexported interface has no C# members to call,
+    // and its defaulted members still bind on the class itself (`ForwardClassMembership.kt`).
+    .filter { iface ->
+      keepsSupertype(cls, name, iface, SupertypeKind.INTERFACE, exportedTypes, logger)
+    }
+    .map { "I${it.simpleName.asString()}" }
+    .toList()
 
   // ADR-091: constructors come off the catalog, the same move ADR-090 made for methods. The
   // ADR-034 `_$n` sequence now also carries planner-synthesized omitting overloads, so the extern
@@ -424,7 +430,10 @@ internal fun translateClass(
       val planned = callableCatalog.propertyFor("${cls.qualifiedName?.asString() ?: name}.$propName")
       if (planned != null) {
         tracker.trackProperty(planned)
-        val isOverride: Boolean = superClass != null && prop.modifiers.contains(Modifier.OVERRIDE)
+        // ADR-101 amendment (2026-09-11): a base *class* overridee, not the Kotlin modifier. An
+        // `override val` implementing an interface property the base does not declare is a fresh
+        // C# slot (`virtual`), never an `override`.
+        val isOverride: Boolean = prop.overridesBaseClassMember(superClassDeclaration)
         return@mapNotNull ForwardCirPropertyProjection.classProperty(
           planned,
           isOverride = isOverride,
@@ -695,7 +704,7 @@ internal fun translateClass(
         parameters = methodParams,
         body = "",
         isAbstract = true,
-        isOverride = superClass != null && method.modifiers.contains(Modifier.OVERRIDE),
+        isOverride = method.overridesBaseClassMember(superClassDeclaration),
         isSyncErrorCheckEnabled = false,
       )
     }

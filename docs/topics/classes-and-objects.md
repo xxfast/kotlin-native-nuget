@@ -506,6 +506,95 @@ public void Rate_WithMood_DispatchesToEnumOverload()
     </p>
 </warning>
 
+## A class's own interface beside a kept base class {id="interface-beside-kept-base"}
+
+A class with an exported base class keeps its own exported interfaces in the C# base list too:
+`class X : Base(), IFoo` renders `public class X : Base, IFoo`, not `public class X : Base` with
+`IFoo` silently dropped. An interface member the base doesn't implement binds on the class itself
+(including an inherited default body), and `override` is spelled only against a base-**class**
+member: an interface member with no base-class counterpart renders `virtual`, since the slot starts
+on `X` and an `override` there would be CS0115. An interface the base already implements is not
+repeated on the list.
+
+From `test-library/src/nativeMain/kotlin/.../ledge/Ledge.kt`:
+
+```kotlin
+open class Shelf {
+  fun height(): Int = 3
+}
+
+interface Groomable {
+  fun groom(): String
+
+  fun brushes(): Int = 1
+}
+
+class Ledge : Shelf(), Groomable {
+  override fun groom(): String = "Mylo: groomed"
+}
+```
+
+### Generated C# {id="interface-beside-kept-base-generated-c"}
+
+From `Interop.cs`. `Groom` is `virtual`, not `override` (`Shelf` declares no `Groom`), and `Brushes`,
+`Groomable`'s inherited default, is bound directly on `Ledge`:
+
+```C#
+public class Ledge : Shelf, IGroomable
+{
+    public virtual string Groom()
+    {
+        IntPtr nativeResult = Native_Groom(_handle, out IntPtr error);
+        if (error != IntPtr.Zero)
+        {
+            throw NugetErrorNative.BuildException(error);
+        }
+        return Marshal.PtrToStringUTF8(nativeResult)!;
+    }
+
+    public int Brushes()
+    {
+        int result = Native_Brushes(_handle, out IntPtr error);
+        if (error != IntPtr.Zero)
+        {
+            throw NugetErrorNative.BuildException(error);
+        }
+        return result;
+    }
+}
+```
+
+### Using it from C# {id="interface-beside-kept-base-using-it-from-c"}
+
+From `IntegrationTests/InterfaceBesideBaseTests.cs`. Both halves of the base list are live on the one
+handle:
+
+```C#
+[Fact]
+public void Ledge_ReachesTheBaseMemberThroughAnInterfaceReference()
+{
+    using IGroomable groomable = new Ledge();
+
+    // Both halves of the base list are live on the one handle.
+    Assert.Equal(3, ((Shelf)groomable).Height());
+}
+
+[Fact]
+public void Ledge_Brushes_BindsTheInheritedDefault()
+{
+    using IGroomable groomable = new Ledge();
+
+    // Kotlin's default body, bound on `Ledge` because the interface list demands it.
+    Assert.Equal(1, groomable.Brushes());
+}
+```
+
+<note>
+    <p>See <a href="interfaces-abstract-sealed.md">Interfaces, abstract classes and sealed
+    classes</a> for the general kept-base/dropped-base rule
+    (<a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/101-unexported-supertype-skip.md">ADR-101</a>).</p>
+</note>
+
 ## Constructor default parameters
 
 For each exported constructor, every maximal trailing run of defaulted parameters synthesizes one
