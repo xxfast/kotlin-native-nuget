@@ -367,9 +367,9 @@ internal fun FileSpec.Builder.addForwardValueClassPlanExport(plan: ForwardCallab
     // ADR-117: the fine-grained owner of this C entry point, read back at contract-check time.
     .tag(ForwardExportOwnerTag::class, ForwardExportOwnerTag(symbol = plan.invocation.symbol))
 
-  call.parameters.forEachIndexed { index, parameter ->
-    val isReceiverSlot: Boolean = !isConstructor && index == 0 &&
-        parameter.role == ForwardAbiRole.RECEIVER
+  call.parameters.forEach { parameter ->
+    // A RECEIVER role already implies index 0 on a non-constructor plan (ADR-062 validateRoles).
+    val isReceiverSlot: Boolean = parameter.role == ForwardAbiRole.RECEIVER
     builder.addParameter(parameter.name, valueClassKotlinType(parameter, isReceiverSlot))
   }
 
