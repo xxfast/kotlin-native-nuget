@@ -9,6 +9,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.cir.CirDllImport
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirClass
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirFile
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirObject
+import io.github.xxfast.kotlin.native.nuget.processor.cir.CirSealedClass
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirStaticClass
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirValueClass
 import io.github.xxfast.kotlin.native.nuget.processor.cir.ordinaryNativeImports
@@ -173,6 +174,11 @@ internal object ForwardAbiContract {
             declaration.companionMembers.filterIsInstance<CirDllImport>()
 
         is CirValueClass -> declaration.ordinaryNativeImports()
+        // ADR-078 amendment (2026-09-11): a sealed arm's plan-derived imports are nodes like any
+        // ordinary class's, so they are read here rather than scraped by `csharpLegacy`.
+        is CirSealedClass -> declaration.subclasses
+          .flatMap { subclass -> subclass.ordinaryNativeImports(declaration.libraryName) }
+
         else -> emptyList()
       }
     }

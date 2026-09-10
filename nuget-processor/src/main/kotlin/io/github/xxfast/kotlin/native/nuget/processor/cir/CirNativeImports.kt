@@ -18,6 +18,27 @@ internal fun CirClass.ordinaryNativeImports(): List<CirDllImport> = buildList {
   disposeNativeImport()?.let { nativeImport -> add(nativeImport) }
 }
 
+/**
+ * ADR-078 amendment (2026-09-11): the arm's ordinary imports, the mirror of
+ * [CirClass.ordinaryNativeImports]. Sealed arms render their property, method, suspend and flow
+ * externs from real [CirDllImport] nodes (ADR-111/116/118/124), so the contract check reads them
+ * structurally instead of scraping them back out of the rendered `Interop.cs`. What stays on the
+ * `SEALED_CLASS` legacy route is what still has no node: the discriminator, dispose and the
+ * data-class methods.
+ */
+internal fun CirSealedSubclass.ordinaryNativeImports(libraryName: String): List<CirDllImport> =
+  buildList {
+    properties
+      .filterNot { property -> property.usesLegacyNativeImport() }
+      .forEach { property -> addAll(propertyNativeImports(libraryName, nativePrefix, property)) }
+
+    // No `isAbstract`/`isAsync`/`isFlow` filter: an arm's `methods` holds only plain members by
+    // construction, and `methodNativeImport` `require`s exactly that.
+    methods.forEach { method -> add(methodNativeImport(libraryName, nativePrefix, method)) }
+
+    addAll((asyncMembers + flowMembers).filterIsInstance<CirDllImport>())
+  }
+
 internal fun CirClass.constructorNativeImport(ctor: CirConstructor): CirDllImport = CirDllImport(
   libraryName = libraryName,
   entryPoint = "${nativePrefix}_create${ctor.nativeSuffix}",

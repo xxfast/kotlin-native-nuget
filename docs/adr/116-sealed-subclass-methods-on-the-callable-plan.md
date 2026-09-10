@@ -444,7 +444,9 @@ overloads, `Next() is Job.Done`, `Finish()`, `Idle.Poke()`, `Idle.Describe() == 
 exports. `ForwardAbiContract.csharp` still returns `emptyList()` for a `CirSealedClass`
 (`ForwardAbiContract.kt:103` `else -> emptyList()`, **verified**), so the new method imports are
 collected by the `csharpLegacy` text scraper, exactly as ADR-111's property imports are (ROADMAP
-line 44 stays open, unchanged by this ADR). The `require(signatures.size == 1)` in `csharpLegacy`
+line 44 stays open, unchanged by this ADR). (Superseded 2026-09-11: that `else -> emptyList()` is
+gone; `csharp()` walks `CirSealedSubclass.ordinaryNativeImports` and these method imports are
+structural. See the ADR-078 amendment.) The `require(signatures.size == 1)` in `csharpLegacy`
 fails the build if the Kotlin and C# halves disagree, so a prefix mistake is loud.
 
 ## Consequences

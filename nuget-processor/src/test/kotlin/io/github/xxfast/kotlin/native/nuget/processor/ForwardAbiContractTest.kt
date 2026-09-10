@@ -15,6 +15,9 @@ import io.github.xxfast.kotlin.native.nuget.processor.cir.CirNamespace
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirObject
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirParameter
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirProperty
+import io.github.xxfast.kotlin.native.nuget.processor.cir.CirRenderer
+import io.github.xxfast.kotlin.native.nuget.processor.cir.CirSealedClass
+import io.github.xxfast.kotlin.native.nuget.processor.cir.CirSealedSubclass
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirStaticClass
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirValueClass
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirValueClassConstructor
@@ -175,6 +178,113 @@ class ForwardAbiContractTest {
       """.trimIndent(),
       ForwardAbiContract.csharp(file).canonicalText(),
     )
+  }
+
+  /**
+   * ADR-078 amendment (2026-09-11): a sealed arm's plan-derived property, method and suspend
+   * imports are read structurally off the [CirSealedSubclass] node, the way an ordinary class's
+   * are, instead of being scraped back out of the rendered `Interop.cs` text.
+   */
+  @Test
+  fun `snapshots every sealed subclass native import projection`() {
+    val file = CirFile(
+      namespaces = listOf(
+        CirNamespace(
+          name = "Sample",
+          declarations = listOf(
+            CirSealedClass(
+              name = "Shape",
+              libraryName = "sample",
+              nativePrefix = "shape",
+              subclasses = listOf(
+                CirSealedSubclass(
+                  name = "Circle",
+                  nativePrefix = "shape_circle",
+                  properties = listOf(
+                    CirProperty(
+                      name = "Refreshing",
+                      type = "bool",
+                      nativeReturnType = "bool",
+                      nativeName = "refreshing",
+                      getter = "false",
+                      hasSyncErrorOut = true,
+                    ),
+                    CirProperty(
+                      name = "Count",
+                      type = "int?",
+                      nativeReturnType = "int",
+                      nativeName = "count",
+                      getter = "0",
+                      extraNatives = listOf(
+                        CirExtraNative(
+                          entryPointSuffix = "get_count_has_value",
+                          returnType = "bool",
+                          name = "Native_Get_Count_HasValue",
+                          hasSyncErrorOut = true,
+                        )
+                      ),
+                      hasSyncErrorOut = true,
+                    ),
+                    CirProperty(
+                      name = "Label",
+                      type = "string",
+                      nativeReturnType = "string",
+                      nativeName = "label",
+                      getter = "\"\"",
+                      setter = "value",
+                    ),
+                  ),
+                  methods = listOf(
+                    CirMethod(
+                      name = "Area",
+                      returnType = "double",
+                      nativeName = "area",
+                      parameters = emptyList(),
+                      body = "0.0",
+                      isSyncErrorCheckEnabled = true,
+                    )
+                  ),
+                  asyncMembers = listOf(
+                    CirDllImport(
+                      libraryName = "sample",
+                      entryPoint = "shape_circle_load",
+                      returnType = "void",
+                      name = "Native_Load",
+                      parameters = listOf(
+                        CirParameter("handle", "IntPtr"),
+                        CirParameter("continuation", "IntPtr"),
+                      ),
+                    )
+                  ),
+                  hasSuspendMethods = true,
+                )
+              ),
+            )
+          ),
+        )
+      ),
+    )
+
+    val ordinary: List<ForwardAbiSignature> = ForwardAbiContract.csharp(file)
+    assertEquals(
+      """
+      shape_circle_area(in pointer, out pointer) -> double
+      shape_circle_get_count(in pointer, out pointer) -> int
+      shape_circle_get_count_has_value(in pointer, out pointer) -> bool
+      shape_circle_get_label(in pointer) -> pointer
+      shape_circle_get_refreshing(in pointer, out pointer) -> bool
+      shape_circle_load(in pointer, in pointer) -> void
+      shape_circle_set_label(in pointer, in string) -> void
+      """.trimIndent(),
+      ordinary.canonicalText(),
+    )
+
+    // Proof it is structural, not scraped: the same names are gone from the legacy universe.
+    val names: Set<String> = ordinary.map { signature -> signature.exportName }.toSet()
+    val legacy: List<String> = ForwardAbiContract
+      .csharpLegacy(CirRenderer().render(file), ordinaryNames = names)
+      .map { signature -> signature.exportName }
+    assertTrue(legacy.none { name -> name in names }, "legacy universe still claims $legacy")
   }
 
   @Test

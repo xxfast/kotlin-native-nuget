@@ -170,7 +170,9 @@ Double counting, **verified not to occur** by construction at `NugetProcessor.kt
 `csharpContracts = ordinaryContracts + csharpLegacy(rendered, ordinaryNames)`, and
 `csharpLegacy` drops any entry point already in `ordinaryNames` (`ForwardAbiContract.kt:129`).
 Today `ForwardAbiContract.csharp` returns `emptyList()` for `CirSealedClass` (`:103`), so the
-sealed imports are collected from rendered text only. That stays correct after the migration
+sealed imports are collected from rendered text only. (Superseded 2026-09-11: `csharp()` now walks
+`CirSealedSubclass.ordinaryNativeImports`, so these property imports are structural; see the
+ADR-078 amendment.) That stays correct after the migration
 whether or not `csharp()` is taught to walk the subclass `CirDllImport` nodes: if it is, the
 names move to the ordinary universe and the text collector skips them; if not, the text collector
 still finds them, and the `[return: MarshalAs]` line is skipped by the "further attribute lines"

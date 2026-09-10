@@ -219,6 +219,22 @@ same corpus that masked the `CreateBox<T>` defect above (it is the one library t
 class named `Box`). A future corpus with a differently-shaped legacy export set is not guaranteed
 to be a superset in the same way; the claim is verified for `test-library`, not proven in general.
 
+### Amendment (2026-09-11): sealed arms join the structural universe
+
+A sealed subclass's property, method, `suspend` and `Flow` imports are real `CirDllImport` nodes
+(ADR-111, ADR-116, ADR-118, ADR-124) that the renderer minted and then threw away, so the contract
+check only ever saw their text. `ForwardAbiContract.csharp` now dispatches `is CirSealedClass` to
+`CirSealedSubclass.ordinaryNativeImports(libraryName)`, the mirror of `CirClass`'s walk, and those
+entry points move into the structural universe. Nothing else changes: `csharpLegacy` drops any name
+in `ordinaryNames`, so the migration is exactly the route-by-route move this ADR's "Deferred" bullet
+describes.
+
+`SEALED_CLASS` narrows accordingly. What stays on the scraper is what still has no node: the
+`_get_type` discriminator, `_dispose` (both the plain and the suspend-arm form), the data-class
+`_equals` / `_hashcode` / `_tostring`, and the flow- and lambda-property externs, which are their
+own `FLOW_PROPERTY` / `LAMBDA_PROPERTY` routes. Modelling those is the `SEALED_CLASS` route's own
+migration, not this amendment's.
+
 ## Consequences
 
 - `ForwardAbiContract` gains `csharpLegacy` (text collector) and the duplicate-collapsing rule;
