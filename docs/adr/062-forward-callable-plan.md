@@ -157,7 +157,9 @@ the six public-member name sites in `ForwardCirPlanProjection.kt`. Extern and en
 derivations (`Native_${name}` and friends) keep the raw plan name, since neither is ever rendered
 as a C# identifier a keyword could collide with. `ForwardCallablePlanValidator.validate` now
 `require`s that a plan name never starts with `@`, so a plan itself can never carry an escaped
-name again. See `ForwardCirPlanProjectionTest`.
+name again. See `ForwardCirPlanProjectionTest`. The extern fallback for CIR that carries no plan name now
+refuses an escaped name outright, see [ADR-090](090-ordinary-class-method-overloads.md)'s
+2026-09-10 amendment.
 
 ## References
 

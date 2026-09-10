@@ -150,11 +150,10 @@ internal fun StringBuilder.renderSyncErrorCheckMethod(method: CirMethod, classNa
   }.joinToString(", ")
 
   // For static methods (top-level functions), nativeName is the full native function name.
-  // For instance methods (class methods), the DllImport is rendered as "Native_${method.name}",
-  // or ADR-090's numbered extern name when the member is an overload (this renderer rebuilds the
-  // body from scratch, so it has to agree with `CirClass.methodNativeImport`).
+  // For instance methods (class methods), the extern name is whatever `resolvedExternName` says,
+  // the one rule `methodNativeImport` mints the `[DllImport]` from.
   val nativeFuncName: String =
-    if (method.isStatic) method.nativeName else method.externName ?: "Native_${method.name}"
+    if (method.isStatic) method.nativeName else method.resolvedExternName
 
   // When a parameter's native type differs from its public type (e.g. enum -> int), cast it.
   val nativeArgList: String = method.parameters.joinToString(", ") { param ->

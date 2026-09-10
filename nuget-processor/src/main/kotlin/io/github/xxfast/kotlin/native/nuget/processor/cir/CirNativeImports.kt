@@ -131,8 +131,7 @@ internal fun methodNativeImport(
     libraryName = libraryName,
     entryPoint = "${nativePrefix}_${method.nativeName}",
     returnType = method.nativeReturnType,
-    // ADR-090: the numbered extern name for an overload, the shipped `Native_$name` otherwise.
-    name = method.externName ?: "Native_${method.name}",
+    name = method.resolvedExternName,
     parameters = parameters,
     visibility = CirVisibility.PRIVATE,
     hasSyncErrorOut = method.isSyncErrorCheckEnabled,

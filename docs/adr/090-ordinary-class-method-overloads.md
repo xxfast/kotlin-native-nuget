@@ -206,6 +206,29 @@ Three corrections found while implementing, all verified against the real pipeli
   interleaved declaration walk. Cosmetic in the generated C#; a class whose members are all
   planned or all abstract is unaffected.
 
+### Amendment (2026-09-10): the extern-name fallback refuses an escaped public name
+
+`externName`'s null fallback was derived from the public C# name at two sites
+(`CirNativeImports.methodNativeImport` and `CirErrorRenderer.renderSyncErrorCheckMethod`, the pair
+the 2026-08-10 amendment above left having to agree). A public name is a rendered C# identifier and
+can carry `@`, so `Native_@lock` was reachable in principle: valid CIR, invalid C#, and `packNuget`
+stays green while the consumer's build fails.
+
+The derivation now lives once, on `CirMethod.resolvedExternName` (`cir/CirModel.kt`), which returns
+the carried `externName` or `require`s the public name is not keyword-escaped before deriving
+`Native_$name`. Both sites read it and the "has to agree" comment is gone.
+
+Hardening only, and unreachable from Kotlin source today: every live producer PascalCases before
+`toCSharpName` (and `CSHARP_RESERVED` is all-lowercase, so the escape never fires), and every
+instance method that reaches either site comes from `ForwardCirPlanProjection.classMethod`, which
+always sets `externName`. Generated output is byte-identical. Pinned by `CirOrdinaryRendererTest`
+(both sites fail fast on `@lock`, a plan-carried extern name wins) and by
+`ForwardCirPlanProjectionTest` (the plan path names the extern).
+
+The dead `CirTranslator.translateExtensionFunction` applies `toCSharpName` *before* PascalCasing and
+stamps its own `Native_$csName`, so a revival could still mint `Native_@lock` outside this rule. It
+has no callers; deleting it is a separate change.
+
 ## Consequences
 
 - Two (or more) same-name methods on an exported ordinary class generate instead of crashing

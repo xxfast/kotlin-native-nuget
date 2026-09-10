@@ -486,6 +486,25 @@ data class CirMethod(
   val nativeParameters: List<CirParameter>? = null,
 ) : CirMember
 
+/**
+ * ADR-090: the private `[DllImport]` extern's C# name. The numbered name a plan carried, else the
+ * shipped `Native_$name`.
+ *
+ * The fallback serves hand-built CIR only: every production instance method comes from
+ * `ForwardCirPlanProjection.classMethod`, which sets [CirMethod.externName]. A public name is a
+ * rendered C# identifier and may be keyword-escaped (`@lock`), an extern identifier may not, so the
+ * fallback refuses to derive from one rather than emit `Native_@lock` for the consumer to choke on.
+ */
+internal val CirMethod.resolvedExternName: String
+  get() {
+    if (externName != null) return externName
+    require(!name.startsWith("@")) {
+      "Method $name has no extern name and its public name is C#-escaped; " +
+        "an extern identifier cannot be derived from it"
+    }
+    return "Native_$name"
+  }
+
 data class CirProperty(
   val name: String,
   val type: String,

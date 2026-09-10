@@ -1,0 +1,9 @@
+# `CirClassRenderer.renderLegacyMethodNativeImport` derives the same `Native_${method.name}` shape as the two sites ADR-090 just folded together, but was not itself folded in.
+
+**`CirClassRenderer.kt:362`'s `renderLegacyMethodNativeImport`** (the async/flow legacy native import renderer, called from `:262`) **derives `Native_${method.name}` from the public method name**, the same shape `CirNativeImports.methodNativeImport` and `CirErrorRenderer.renderSyncErrorCheckMethod` used before ADR-090's 2026-09-10 amendment introduced `CirMethod.resolvedExternName` and had both of those sites read it. This third site was left alone.
+
+It is not a live bug today. Its three producers (`CirClassTranslator.kt:957`, `:1158`, `:1236`, and the sealed-arm mirror at `:2183`) build the public method name by PascalCasing directly, never calling `toCSharpName` first, so a keyword-escaped `@` can't reach it. It went unnoticed because that is the same invariant (`toCSharpName` after PascalCasing, never before) that makes every *live* producer safe for the two sites the amendment did fold.
+
+Aligning it to `resolvedExternName` is not a one-line change like the other two sites were: `CirClassTranslator.kt:959`, `:1160`, `:1238` each independently bake the same `Native_$csMethodName` text into a local `nativeStem` string (`958-1101`, `1160-1274`) that is then reused to build several *other* member names in the same method (`${nativeStem}Collect`, `${nativeStem}Value`, and so on). Folding the renderer's derivation onto `resolvedExternName` without also touching those three `nativeStem` sites would make the renderer and the translator disagree; touching all four needs its own byte-identical-output proof.
+
+Discovered alongside [ADR-090](docs/adr/090-ordinary-class-method-overloads.md)'s 2026-09-10 amendment, while enumerating every site in the forward generator that derives an extern name from a public one.

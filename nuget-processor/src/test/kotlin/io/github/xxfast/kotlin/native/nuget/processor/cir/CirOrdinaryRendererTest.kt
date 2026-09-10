@@ -3,6 +3,7 @@ package io.github.xxfast.kotlin.native.nuget.processor.cir
 import kotlin.test.Test
 import kotlin.test.assertContains
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
@@ -101,6 +102,33 @@ class CirOrdinaryRendererTest {
     )
     assertContains(rendered, "public void Dispose()")
     assertContains(rendered, "Native_Dispose(handle);")
+  }
+
+  @Test
+  fun `keyword-escaped method name without an extern name fails fast`() {
+    val cls: CirClass = escapedMethodClass(externName = null)
+
+    val fromImport: IllegalArgumentException =
+      assertFailsWith<IllegalArgumentException> { cls.ordinaryNativeImports() }
+    val fromRender: IllegalArgumentException =
+      assertFailsWith<IllegalArgumentException> { render(cls) }
+
+    assertContains(fromImport.message.orEmpty(), "@lock")
+    assertContains(fromRender.message.orEmpty(), "@lock")
+  }
+
+  @Test
+  fun `escaped method name renders through the extern name a plan carried`() {
+    val cls: CirClass = escapedMethodClass(externName = "Native_Lock")
+
+    val rendered: String = render(cls)
+
+    assertContains(
+      rendered,
+      "private static extern IntPtr Native_Lock(IntPtr handle, out IntPtr error);",
+    )
+    assertContains(rendered, "IntPtr nativeResult = Native_Lock(_handle, out IntPtr error);")
+    assertFalse(rendered.contains("Native_@"))
   }
 
   @Test
@@ -1020,6 +1048,26 @@ class CirOrdinaryRendererTest {
   }
 
   // -- helpers ----------------------------------------------------------------
+
+  private fun escapedMethodClass(externName: String?): CirClass = CirClass(
+    name = "Patient",
+    libraryName = "clinic",
+    nativePrefix = "patient",
+    constructor = null,
+    properties = emptyList(),
+    methods = listOf(
+      CirMethod(
+        name = "@lock",
+        returnType = "string",
+        nativeReturnType = "IntPtr",
+        nativeName = "lock",
+        externName = externName,
+        parameters = emptyList(),
+        body = "",
+        isSyncErrorCheckEnabled = true,
+      ),
+    ),
+  )
 
   private fun render(vararg declarations: CirDeclaration, namespace: String = "Sample"): String =
     CirRenderer().render(

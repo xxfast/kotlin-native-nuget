@@ -38,6 +38,9 @@ class ForwardCirPlanProjectionTest {
     assertEquals("Increment", method.name)
     assertEquals("int", method.returnType)
     assertEquals("increment", method.nativeName)
+    // ADR-090: the plan path always names the extern, which is why the derivation fallback in
+    // `CirMethod.resolvedExternName` is unreachable from Kotlin source.
+    assertEquals("Native_Increment", method.externName)
     assertEquals(listOf("amount"), method.parameters.map { it.name })
     assertEquals("counter_increment", import.entryPoint)
     assertEquals("int", import.returnType)
