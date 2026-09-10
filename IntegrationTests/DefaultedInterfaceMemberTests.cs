@@ -18,6 +18,16 @@ public class DefaultedInterfaceMemberTests
     }
 
     [Fact]
+    public void Parrot_IsDisposable_Control()
+    {
+        // Control for the ADR-094 base-list change: a non-suspending interface implementer is
+        // already disposable today, transitively (`IGreeter : IDisposable`). Naming IDisposable
+        // on the class as well must not change that. The macaw keeps squawking either way.
+        using var parrot = new Parrot("macaw");
+        Assert.True(typeof(IDisposable).IsAssignableFrom(typeof(Parrot)));
+    }
+
+    [Fact]
     public void Parrot_Greeting_UsesDefaultProperty()
     {
         using var parrot = new Parrot("macaw");

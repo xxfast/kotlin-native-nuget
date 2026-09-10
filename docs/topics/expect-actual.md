@@ -419,7 +419,7 @@ public interface ITransponder : IDisposable
     string Ping();
 }
 
-public sealed class Transponder : ITransponder, INugetHandle
+public sealed class Transponder : ITransponder, IDisposable, INugetHandle
 {
     /* ... */
 }

@@ -486,7 +486,7 @@ class CirOrdinaryRendererTest {
   }
 
   @Test
-  fun `class implementing interfaces lists them without a superclass`() {
+  fun `class implementing interfaces lists them before its disposables`() {
     val cls = CirClass(
       name = "Sensor",
       libraryName = "iot",
@@ -494,12 +494,51 @@ class CirOrdinaryRendererTest {
       constructor = null,
       properties = emptyList(),
       methods = emptyList(),
-      interfaces = listOf("IDisposable", "IAsyncDisposable"),
+      interfaces = listOf("ISensor"),
     )
 
     val rendered: String = render(cls)
 
-    assertContains(rendered, "public class Sensor : IDisposable, IAsyncDisposable")
+    assertContains(rendered, "public class Sensor : ISensor, IDisposable, INugetHandle")
+  }
+
+  @Test
+  fun `class implementing interfaces and owning a scope names IAsyncDisposable too`() {
+    val cls = CirClass(
+      name = "Sensor",
+      libraryName = "iot",
+      nativePrefix = "sensor",
+      constructor = null,
+      properties = emptyList(),
+      methods = emptyList(),
+      interfaces = listOf("ISensor"),
+      hasSuspendMethods = true,
+    )
+
+    val rendered: String = render(cls)
+
+    assertContains(
+      rendered,
+      "public class Sensor : ISensor, IDisposable, IAsyncDisposable, INugetHandle",
+    )
+  }
+
+  /** A base list may not repeat a name the translator already put in `interfaces`. */
+  @Test
+  fun `class already naming a disposable in its interfaces does not repeat it`() {
+    val cls = CirClass(
+      name = "Sensor",
+      libraryName = "iot",
+      nativePrefix = "sensor",
+      constructor = null,
+      properties = emptyList(),
+      methods = emptyList(),
+      interfaces = listOf("IDisposable"),
+    )
+
+    val rendered: String = render(cls)
+
+    assertContains(rendered, "public class Sensor : IDisposable, INugetHandle")
   }
 
   @Test

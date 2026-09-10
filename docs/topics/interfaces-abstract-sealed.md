@@ -67,7 +67,7 @@ public interface IPet : IDisposable
     string Greet();
 }
 
-public abstract class Animal : IPet
+public abstract class Animal : IPet, IDisposable, INugetHandle
 {
     internal IntPtr _handle;
 
@@ -128,7 +128,7 @@ class Clicker : Counter {
 `ICounter`'s get-only property:
 
 ```C#
-public class Clicker : ICounter, INugetHandle
+public class Clicker : ICounter, IDisposable, INugetHandle
 {
 ```
 
@@ -2026,7 +2026,7 @@ class Parrot(override val species: String) : Greeter
 `Parrot` declares only `species`; `greeting` and `greet()` are inherited defaults, and both still bind:
 
 ```C#
-public class Parrot : IGreeter
+public class Parrot : IGreeter, IDisposable, INugetHandle
 {
     internal IntPtr _handle;
 
@@ -2150,7 +2150,7 @@ public interface IPet : IDisposable
     void Nap();
 }
 
-public sealed class Pet : IPet
+public sealed class Pet : IPet, IDisposable, INugetHandle
 {
     internal IntPtr _handle;
 

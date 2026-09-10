@@ -383,6 +383,59 @@ public async Task Dispose_StillCancels_DisposeAsync_Drains()
 }
 ```
 
+## A class implementing an interface still gets `IDisposable`/`IAsyncDisposable` on its own base list
+
+A class's C# base list is composed, not chosen: exported interfaces, then `IDisposable`, then
+`IAsyncDisposable` when the class owns a scope, then `INugetHandle`, deduplicated. This matters for a
+class that both implements an exported interface and suspends: `renderDispose` still generates
+`Dispose()`/`DisposeAsync()` for it either way, so the base list has to name what the body implements.
+
+From `test-library/src/nativeMain/kotlin/.../cat/Napper.kt`:
+
+```kotlin
+interface Napper {
+  fun nap(): String
+}
+
+class NapPod : Napper {
+  override fun nap(): String = "Oreo curls up in the pod"
+
+  suspend fun doze(): Int {
+    delay(10.milliseconds)
+    return 20
+  }
+}
+```
+
+```C#
+public class NapPod : INapper, IDisposable, IAsyncDisposable, INugetHandle
+```
+
+Holding the pod as `IAsyncDisposable`, from `IntegrationTests/AsyncDisposableTests.cs`:
+
+```C#
+[Fact]
+public async Task AwaitUsing_OnNapPod_DrainsMylosDoze()
+{
+    Task<int> myloDoze;
+    await using (var pod = new NapPod())
+    {
+        myloDoze = pod.DozeAsync();
+    }
+    Assert.Equal(20, await myloDoze);
+}
+```
+
+<note>
+    <p>
+        <code>await using</code> already compiled before this: it binds the <code>DisposeAsync</code>
+        pattern, not the <code>IAsyncDisposable</code> interface. What was actually missing was type
+        identity: holding the pod through an <code>IAsyncDisposable</code>-typed field or casting to
+        it (<code>(IAsyncDisposable)pod</code>) threw <code>InvalidCastException</code>, since the
+        class never named the interface itself.
+    </p>
+</note>
+
 ## `Flow<T>`
 
 From `CatFeeder.kt`:

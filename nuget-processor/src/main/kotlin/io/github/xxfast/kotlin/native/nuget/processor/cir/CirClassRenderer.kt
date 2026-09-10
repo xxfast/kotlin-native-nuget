@@ -190,11 +190,17 @@ internal fun StringBuilder.renderClass(cls: CirClass) {
 
   // ADR-094: a class declares `_handle` (and therefore implements INugetHandle) exactly when it has
   // no superclass; a derived class inherits both the field and the explicit implementation.
-  val implements: String = when {
-    cls.superClass != null -> " : ${cls.superClass}"
-    cls.interfaces.isNotEmpty() -> " : ${(cls.interfaces + "INugetHandle").joinToString(", ")}"
-    cls.hasSuspendMethods -> " : IDisposable, IAsyncDisposable, INugetHandle"
-    else -> " : IDisposable, INugetHandle"
+  // The disposables ride *beside* the exported interfaces rather than instead of them (ADR-094
+  // amendment 2026-09-10): `renderDispose` emits `Dispose()` unconditionally and `DisposeAsync()`
+  // whenever the class owns a scope, so the base list has to advertise what the body implements or
+  // the class cannot be held as an `IAsyncDisposable`. Same spelling `CirSealedRenderer` gives a
+  // suspending arm (ADR-118).
+  val implements: String = if (cls.superClass != null) {
+    " : ${cls.superClass}"
+  } else {
+    val disposables: List<String> =
+      listOf("IDisposable") + listOfNotNull("IAsyncDisposable".takeIf { cls.hasSuspendMethods })
+    " : " + (cls.interfaces + disposables + "INugetHandle").distinct().joinToString(", ")
   }
 
   appendLine("    public $sealedModifier${abstract}class ${cls.name}$implements")
