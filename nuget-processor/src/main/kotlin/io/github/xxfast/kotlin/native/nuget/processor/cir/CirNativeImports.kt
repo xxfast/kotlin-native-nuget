@@ -40,6 +40,19 @@ internal fun CirSealedSubclass.ordinaryNativeImports(libraryName: String): List<
     addAll((asyncMembers + flowMembers).filterIsInstance<CirDllImport>())
   }
 
+/**
+ * ADR-078 amendment (2026-09-11): the sealed **base**'s own imports, the same read as
+ * [CirSealedSubclass.ordinaryNativeImports] one level up. The base's members are plan-derived
+ * nodes too since ADR-111/ADR-116's base carrier, so the contract check reads them structurally.
+ */
+internal fun CirSealedClass.ordinaryNativeImports(): List<CirDllImport> = buildList {
+  properties
+    .filterNot { property -> property.usesLegacyNativeImport() }
+    .forEach { property -> addAll(propertyNativeImports(libraryName, nativePrefix, property)) }
+
+  methods.forEach { method -> add(methodNativeImport(libraryName, nativePrefix, method)) }
+}
+
 internal fun CirClass.constructorNativeImport(ctor: CirConstructor): CirDllImport = CirDllImport(
   libraryName = libraryName,
   entryPoint = "${nativePrefix}_create${ctor.nativeSuffix}",

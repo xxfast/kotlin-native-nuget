@@ -71,11 +71,16 @@ interface JobListener {
  *   without it every arm exports `job_<arm>_rest_async` for a member it never declares, with a
  *   lenient `""` overload suffix; `ForwardAbiContract.kotlin` filters Kotlin exports down to the C#
  *   import set, so that extra export would vanish from the comparison rather than be flagged.
- * - [Job.describe] — a base `open fun` **with a body**. Under ADR-116's declared-only gate an arm
- *   exports only what it declares itself, so this renders on **no** arm. [Job.Idle.describe], which
- *   is a declared `override`, renders as a plain `public string Describe()`: not `override` (the C#
- *   base declares nothing to override, CS0115) and not `virtual` (a `virtual` member on a
- *   `public sealed class` is CS0549).
+ * - [Job.kind], item 35's property half: an `open val` **with a body on the base**, overridden by
+ *   [Job.Running] and inherited unchanged by every other arm. A consumer holding a [Job] must be
+ *   able to read it without discriminating, and the two arms must answer differently, so a base
+ *   read that never dispatches into Kotlin is visible as a wrong value rather than a missing
+ *   member.
+ * - [Job.describe], a base `open fun` **with a body**. Since item 35 the sealed base carries it as
+ *   `public virtual string Describe()`, so [Job.Running], which declares no override, inherits it
+ *   in C# exactly as it does in Kotlin, and [Job.Idle], which declares one, renders
+ *   `public override string Describe()`. The declared-only gate still holds on the arms: `Running`
+ *   declares no `Describe` of its own.
  * - [Job.Idle.poke] — a method on a `data object` arm. An object arm is a `KSClassDeclaration` in
  *   `getSealedSubclasses()` like any other and crosses as a handle, so it must take the same
  *   receiver as a `data class` arm rather than becoming a static.
@@ -130,8 +135,15 @@ interface JobListener {
  */
 sealed class Job {
   /**
-   * Base body. Under ADR-116's declared-only decision this renders on no arm at all, so
-   * [Job.Running] has no `Describe()` in C# while [Job.Idle], which declares an `override`, does.
+   * Item 35's property half: an `open val` with a body on the base. [Job.Running] overrides it and
+   * every other arm inherits it unchanged, so a base-typed read has to dispatch to tell them apart.
+   */
+  open val kind: String = "job"
+
+  /**
+   * Base body. Item 35 made the sealed base the carrier: this renders `virtual` on the C# base,
+   * [Job.Running] declares nothing and inherits it, and [Job.Idle], which declares an `override`,
+   * spells one in C# too.
    */
   open fun describe(): String = "job"
 
@@ -143,6 +155,9 @@ sealed class Job {
 
   /** Oreo, mid-sprint down the hallway, [progress] percent of the way to the food bowl. */
   data class Running(val progress: Int) : Job() {
+    /** The one arm that overrides [Job.kind]; the rest inherit the base's `"job"`. */
+    override val kind: String = "running"
+
     /** `Int` return, no conversion at the seam. */
     fun cancel(): Int = progress
 

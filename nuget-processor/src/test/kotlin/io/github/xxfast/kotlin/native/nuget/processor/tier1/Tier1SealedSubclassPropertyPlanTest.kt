@@ -154,7 +154,7 @@ class Tier1SealedSubclassPropertyPlanTest {
     assertContains(
       result.generatedCSharp,
       """
-      |            public string Id
+      |            public override string Id
       |            {
       |                get
       |                {                IntPtr nativeResult = Native_Get_id(_handle, out IntPtr error);
@@ -206,24 +206,40 @@ class Tier1SealedSubclassPropertyPlanTest {
   }
 
   /**
-   * ADR-111's one inferred, load-bearing claim: `isForwardPlannableMemberOf(subclass, superClass =
-   * null)` admits a property the sealed *base* declares, the way the legacy `getAllProperties()`
-   * loop did. If it filtered inherited members instead, both of these would vanish from every
-   * subclass with no diagnostic. The generated C# base is `abstract` and carries no members, so
-   * each subclass has to bind them itself.
+   * ADR-111 amendment (2026-09-11): a property the sealed *base* declares binds on the **base**,
+   * not flattened onto every arm. Until item 35 the arms were planned with `superClass = null`, so
+   * each one re-bound every implemented base property; the generated C# base carried nothing, and
+   * a base-typed consumer could read nothing without pattern-matching first.
+   *
+   * The flip this test records: `signal_ping_get_tag` / `signal_boom_get_tag` are gone, replaced
+   * by the one `signal_get_tag`. An arm still binds what it **declares** itself, which is why
+   * `id` survives on both arms (each declares an `override`) beside the base's own.
    */
   @Test
-  fun `base-declared properties bind on every subclass`() {
+  fun `base-declared properties bind on the base, and arms bind only what they declare`() {
     val result = run()
 
+    // The base carries both of its own declared properties, once.
+    assertContains(result.generated, "@CName(\"signal_get_id\")")
+    assertContains(result.generated, "@CName(\"signal_get_tag\")")
+    assertContains(result.generatedCSharp, "EntryPoint = \"signal_get_tag\"")
+    assertContains(result.generatedCSharp, "public virtual string Tag")
+
+    // Each arm declares its own `override val id`, so each keeps its own export for that one.
     listOf("signal_ping", "signal_boom").forEach { prefix ->
-      // The abstract `val id`, overridden in the subclass.
       assertContains(result.generated, "@CName(\"${prefix}_get_id\")")
-      // The concrete `val tag`, declared on the base and never overridden.
-      assertContains(result.generated, "@CName(\"${prefix}_get_tag\")")
     }
-    assertContains(result.generatedCSharp, "EntryPoint = \"signal_boom_get_tag\"")
-    assertContains(result.generatedCSharp, "EntryPoint = \"signal_ping_get_tag\"")
+
+    // `tag` is declared on the base alone and is no longer copied onto the arms.
+    assertFalse(
+      result.generated.contains("signal_ping_get_tag") ||
+          result.generated.contains("signal_boom_get_tag"),
+      "a base-declared property binds on the base now, not on every arm: ${result.generated}",
+    )
+    assertFalse(
+      result.generatedCSharp.contains("signal_boom_get_tag"),
+      "same, on the C# half: ${result.generatedCSharp}",
+    )
   }
 
   /**

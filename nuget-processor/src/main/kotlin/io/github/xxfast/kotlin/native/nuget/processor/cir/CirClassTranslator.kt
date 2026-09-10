@@ -1606,6 +1606,37 @@ internal fun translateSealedClass(
   val libraryName: String = context.libraryName
   val name: String = cls.simpleName.asString()
   val prefix: String = name.lowercase()
+  val qualifiedName: String? = cls.qualifiedName?.asString()
+
+  // ADR-111/ADR-116 amendment (2026-09-11): the base's own declared members, off base-keyed plans
+  // and the same projections an ordinary class uses. Always `virtual`, never `abstract`: the
+  // export dispatches through the base type in Kotlin, so the C# member has a body, and an
+  // `abstract` one would oblige every arm to declare an override -- which the covariant arm
+  // (`Empty.sides: Int` over `Int?`) cannot spell at all (CS1715, then CS0534 for the member it
+  // could not declare).
+  val baseProperties: List<CirProperty> = cls.getAllProperties()
+    .filter { it.getVisibility() == Visibility.PUBLIC }
+    .filter { prop -> prop.parentDeclaration == cls }
+    .mapNotNull { prop ->
+      val planned: ForwardPropertyPlan? =
+        qualifiedName?.let { callableCatalog.propertyFor("$it.${prop.simpleName.asString()}") }
+      if (planned == null) return@mapNotNull null
+      tracker.trackProperty(planned)
+      ForwardCirPropertyProjection.classProperty(planned, isVirtual = true)
+    }
+    .toList()
+
+  val baseMethods: List<CirMethod> =
+    (qualifiedName?.let { callableCatalog.classMethods(it) } ?: emptyList()).map { plan ->
+      tracker.trackPlan(plan)
+      ForwardCirPlanProjection.classMethod(
+        plan = plan,
+        nativePrefix = prefix,
+        isOverride = false,
+        isVirtual = plan.publicSignature.isVirtual,
+      )
+    }
+  emitCsharpSignatureCollisions(baseMethods, name, cls, logger)
 
   val subclasses: List<CirSealedSubclass> = cls.getSealedSubclasses()
     .map { subclass ->
@@ -1631,14 +1662,14 @@ internal fun translateSealedClass(
             subQualifiedName?.let { callableCatalog.propertyFor("$it.$propName") }
           if (planned != null) {
             tracker.trackProperty(planned)
-            return@mapNotNull ForwardCirPropertyProjection.classProperty(
+            val projected: CirProperty = ForwardCirPropertyProjection.classProperty(
               planned,
               // ADR-009 amendment (2026-09-11): gated on the arm being open. An `open val` on a
               // final arm is effectively final in Kotlin (nothing can extend it), and `virtual`
-              // inside a `public sealed class` is CS0549. `isOverride` stays false: the generated
-              // sealed base declares no member to override (CS0115).
+              // inside a `public sealed class` is CS0549.
               isVirtual = isOpenArm && prop.modifiers.isOpenForOverride(),
             )
+            return@mapNotNull projected.againstSealedBase(baseProperties)
           }
 
           // Issue #121: same gate as the ordinary-class arm above. The planner declined, and a
@@ -1704,12 +1735,17 @@ internal fun translateSealedClass(
         subQualifiedName?.let { callableCatalog.classMethods(it) } ?: emptyList()
       val methods: List<CirMethod> = methodPlans.map { plan ->
         tracker.trackPlan(plan)
-        ForwardCirPlanProjection.classMethod(
+        val projected: CirMethod = ForwardCirPlanProjection.classMethod(
           plan = plan,
           nativePrefix = subPrefix,
           isOverride = false,
           isVirtual = plan.publicSignature.isVirtual,
         )
+        // ADR-116 amendment (2026-09-11): `override` when the base now carries the very same C#
+        // signature. Compared on the projected signature rather than on Kotlin's `override`
+        // keyword, because what C# needs is a base member with a matching shape: an arm can
+        // override something the base's own plan declined, and then there is nothing to override.
+        projected.againstSealedBase(baseMethods)
       }
       // ADR-034's collision guard, which the sealed route never ran: two arm methods whose C#
       // signatures agree (`set(x: Foo)` / `set(x: Foo?)`) are CS0111 in the generated file.
@@ -1779,7 +1815,40 @@ internal fun translateSealedClass(
     libraryName = libraryName,
     nativePrefix = prefix,
     subclasses = subclasses,
+    properties = baseProperties,
+    methods = baseMethods,
   )
+}
+
+/**
+ * ADR-111/ADR-116 amendment (2026-09-11): the arm-side modifier for a property the sealed base now
+ * also carries, decided on the *projected C# shape* rather than on Kotlin's `override` keyword.
+ *
+ * - Same name, same C# type: a plain `override`.
+ * - Same name, different C# type: Kotlin allows a covariant override (`Int` narrowing `Int?`), C#
+ *   does not (CS1715). The arm hides the base member with `new` and keeps its own export, so a
+ *   consumer holding the arm reads the narrow type and one holding the base reads the wide one.
+ * - No such base member: unchanged, whatever `isVirtual` the arm's own openness earned.
+ */
+private fun CirProperty.againstSealedBase(baseProperties: List<CirProperty>): CirProperty {
+  val onBase: CirProperty = baseProperties.firstOrNull { it.name == name } ?: return this
+  if (onBase.type == type) return copy(isOverride = true, isVirtual = false)
+  return copy(isNew = true, isOverride = false, isVirtual = false)
+}
+
+/**
+ * The method-side twin of [CirProperty.againstSealedBase], on the same three rules. C# decides
+ * *hiding* on name and parameter types alone, so a base member with a matching signature but a
+ * different return type is hidden with `new` (an `override` there is CS0508 for a value type, and
+ * leaving the modifier off is the CS0108 warning `GeneratedBindingsCheck` compiles as an error).
+ */
+private fun CirMethod.againstSealedBase(baseMethods: List<CirMethod>): CirMethod {
+  val parameterTypes: List<String> = parameters.map { it.type }
+  val onBase: CirMethod = baseMethods.firstOrNull { candidate ->
+    candidate.name == name && candidate.parameters.map { it.type } == parameterTypes
+  } ?: return this
+  if (onBase.returnType == returnType) return copy(isOverride = true, isVirtual = false)
+  return copy(isNew = true, isOverride = false, isVirtual = false)
 }
 
 /**

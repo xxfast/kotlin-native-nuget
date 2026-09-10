@@ -523,7 +523,10 @@ internal fun StringBuilder.renderDllImport(import: CirDllImport) {
   appendLine("        [DllImport(\"${import.libraryName}\", CallingConvention = CallingConvention.Cdecl$entryPoint)]")
   if (import.marshalBooleanReturn) appendLine("        [return: MarshalAs(UnmanagedType.I1)]")
   charReturnMarshal(import.returnType)?.let { appendLine(it) }
-  appendLine("        $visibility static extern ${import.returnType} ${import.name}($paramStr);")
+  val hides: String = if (import.isNew) "new " else ""
+  appendLine(
+    "        $visibility ${hides}static extern ${import.returnType} ${import.name}($paramStr);",
+  )
   appendLine()
 }
 
@@ -545,7 +548,13 @@ internal fun StringBuilder.renderMethod(method: CirMethod, className: String = "
 
   val visibility: String = if (method.visibility == CirVisibility.PRIVATE) "private" else "public"
   val static: String = if (method.isStatic) "static " else ""
-  val override: String = if (method.isOverride) "override " else if (method.isVirtual) "virtual " else ""
+  val override: String = when {
+    method.isOverride -> "override "
+    method.isVirtual -> "virtual "
+    // ADR-116 amendment (2026-09-11): a sealed arm hiding a base member it cannot override.
+    method.isNew -> "new "
+    else -> ""
+  }
   val abstract: String = if (method.isAbstract) "abstract " else ""
   val paramStr: String = method.parameters.mapIndexed { index, param ->
     if (method.isExtension && index == 0) "this ${param.type} ${param.name}"

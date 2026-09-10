@@ -51,6 +51,23 @@ internal fun FileSpec.Builder.addSealedClassExports(
       .build()
   )
 
+  // ADR-111/ADR-116 amendment (2026-09-11): the base's own declared members, off the same catalog
+  // and the same two emitters an ordinary class uses. The receiver is the base type, so the
+  // generated body reads `handle.asStableRef<Job>().get().describe()` and Kotlin's own virtual
+  // dispatch answers with the arm's implementation -- which is what lets the C# member be
+  // concrete rather than abstract.
+  sealed.getAllProperties()
+    .filter { it.getVisibility() == Visibility.PUBLIC }
+    .filter { prop -> prop.parentDeclaration == sealed }
+    .forEach { prop ->
+      val planned: ForwardPropertyPlan =
+        callableCatalog.propertyFor("$qualifiedName.${prop.simpleName.asString()}")
+          ?: return@forEach
+      addForwardPropertyPlanExports(planned)
+    }
+
+  callableCatalog.classMethods(qualifiedName).forEach { plan -> addForwardKotlinPlanExport(plan) }
+
   for (subclass in subclasses) {
     val subName: String = subclass.simpleName.asString()
     val subQualifiedName: String = subclass.qualifiedName?.asString() ?: continue

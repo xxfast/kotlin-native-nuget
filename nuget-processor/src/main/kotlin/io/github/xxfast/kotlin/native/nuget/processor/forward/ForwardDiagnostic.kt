@@ -400,6 +400,8 @@ internal fun ForwardPlanSkipReason.toDiagnosticKind(
   // here: no legacy route is keyed to a sealed subclass at all.
   ForwardPlanSkipReason.UNSUPPORTED_COMBINATION,
   ForwardPlanSkipReason.SEALED_SUBCLASS_UNROUTED,
+  // ADR-116 amendment (2026-09-11): the base-declared twin, same kind for the same reason.
+  ForwardPlanSkipReason.SEALED_BASE_UNROUTED,
     -> ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_COMBINATION
 
   ForwardPlanSkipReason.INHERITED_MEMBER -> ForwardDiagnosticKind.SKIPPED_INHERITED_MEMBER
@@ -547,6 +549,12 @@ internal fun ForwardPlanSkipReason.diagnosticReason(
     // ADR-116: nothing about this member's types is unsupported; the owner kind has no route.
     ForwardPlanSkipReason.SEALED_SUBCLASS_UNROUTED ->
       "it is a ${detail ?: "specialized"} member of a sealed subclass, which has no route yet " +
+          "(ADR-116)"
+
+    // ADR-116 amendment (2026-09-11): the same sentence for a member the sealed *base* declares.
+    // Naming the owner kind matters here: the remedy below is to move it onto the arms.
+    ForwardPlanSkipReason.SEALED_BASE_UNROUTED ->
+      "it is a ${detail ?: "specialized"} member of a sealed base class, which has no route yet " +
           "(ADR-116)"
 
     // ADR-064's 2026-09-11 amendment: scope, position and nesting drops. None of these is about
@@ -740,6 +748,12 @@ internal fun ForwardPlanSkipReason.diagnosticHint(
     "move the member onto an ordinary class (which still has the legacy route this member kind " +
         "needs), or expose an equivalent non-generic member on the sealed " +
         "subclass instead"
+
+  // ADR-116 amendment (2026-09-11): a sealed base has one remedy an arm does not -- the arms
+  // themselves, which do carry the suspend and flow routes (ADR-118/ADR-124).
+  ForwardPlanSkipReason.SEALED_BASE_UNROUTED ->
+    "declare the member on each arm of the sealed class instead (the arms carry the suspend and " +
+        "Flow routes the base does not), or move it onto an ordinary class"
 
   // Issue #57: the old hint ("declare the member directly on the value class") was already true
   // of an explicit `override`, which skips by the same rule (ADR-082: an override *is* the

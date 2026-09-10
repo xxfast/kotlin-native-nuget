@@ -117,6 +117,20 @@ data class CirSealedClass(
   val libraryName: String,
   val nativePrefix: String,
   val subclasses: List<CirSealedSubclass>,
+  /**
+   * ADR-111 amendment (2026-09-11): the base's **own** declared properties, projected from
+   * base-keyed ADR-062 plans exactly as an ordinary [CirClass]'s are. They render `virtual` rather
+   * than `abstract` even when Kotlin declares them `abstract`: the export is keyed to the base
+   * type, so Kotlin's own dispatch picks the arm's body, and an `abstract` C# member would force
+   * every arm to declare an override, which a covariant arm cannot spell (CS1715 then CS0534).
+   */
+  val properties: List<CirProperty> = emptyList(),
+  /**
+   * ADR-116 amendment (2026-09-11): the method half of [properties]. A base `open fun` an arm does
+   * not override lives here and nowhere else, which is what lets the arm inherit it in C# the way
+   * it already inherits it in Kotlin.
+   */
+  val methods: List<CirMethod> = emptyList(),
 ) : CirDeclaration
 
 data class CirSealedSubclass(
@@ -361,6 +375,15 @@ data class CirDllImport(
   val visibility: CirVisibility = CirVisibility.PUBLIC,
   val hasSyncErrorOut: Boolean = false,
   val marshalBooleanReturn: Boolean = false,
+  /**
+   * ADR-111/ADR-116 amendment (2026-09-11): `private new static extern`, for a **nested** sealed
+   * arm whose extern name collides with one on its base. The arms are declared inside the base
+   * (ADR-009 / issue #54), so the base's private externs are accessible to them, and an arm that
+   * overrides `sides` mints a `Native_Get_sides` beside the base's own: CS0108, which
+   * `GeneratedBindingsCheck` compiles as an error. A sibling arm never sets it (the base's private
+   * members are inaccessible there, so nothing is hidden and `new` would be CS0109).
+   */
+  val isNew: Boolean = false,
 ) : CirMember
 
 // One interface method entry within a CirInterfaceBridgeMethod.
@@ -433,6 +456,11 @@ data class CirMethod(
   val isStatic: Boolean = false,
   val isAbstract: Boolean = false,
   val isOverride: Boolean = false,
+  // ADR-116 amendment (2026-09-11): the method-side twin of [CirProperty.isNew]. A sealed arm
+  // whose Kotlin `override` narrows the base's return type cannot spell a C# `override` for every
+  // shape (a value-type covariant return is CS0508), so it hides the base member instead. Without
+  // the modifier the hide is a CS0108 warning, which `GeneratedBindingsCheck` compiles as an error.
+  val isNew: Boolean = false,
   // ADR-040 fixture gap: a class method that implements an interface member (no CLASS supertype,
   // so `isOverride` is false) but whose Kotlin `override` is not `final` is open for further
   // override by a subclass (Kotlin's default: an `override` member stays open unless marked
@@ -536,6 +564,12 @@ data class CirProperty(
   // (Cat.Nickname overriding Animal.Nickname's implementation of Pet.nickname).
   val isOverride: Boolean = false,
   val isVirtual: Boolean = false,
+  // ADR-111 amendment (2026-09-11): the `new` modifier, for a sealed arm whose Kotlin `override`
+  // *narrows* the base's declared type (`Empty.sides: Int` over `NestedShape.sides: Int?`). C#
+  // forbids a covariant property override (CS1715), so the arm hides the base member instead of
+  // overriding it: two C# members over one Kotlin property, each reading through its own export.
+  // Only the sealed route sets it; an ordinary class's covariant override is not a shipped shape.
+  val isNew: Boolean = false,
   // ADR-075 amendment (2026-09-10): the property-side twin of [CirMethod.isAbstract]: an
   // `abstract val`/`abstract var` the class declares without implementing. Renders bodiless
   // (`public abstract T Name { get; }`) so a subclass `override` compiles instead of CS0506.

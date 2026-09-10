@@ -297,6 +297,47 @@ through the same catalog lookup a `data class` subclass uses. Fixture:
 null` to prove the fix does not disturb an arm that already worked. Test:
 `IntegrationTests/DataObjectSealedSubclassPropertyTests.cs`.
 
-Still open, and adjacent rather than closed by this: the sealed **base**'s own `abstract val sides`
-renders no C# member at all (`CirSealedClass` has no `properties` field), so every assertion above
-has to reach through a concrete arm rather than the base type. See ROADMAP.md.
+Still open at the time of that amendment, and adjacent rather than closed by it: the sealed
+**base**'s own `abstract val sides` renders no C# member at all (`CirSealedClass` has no
+`properties` field), so every assertion above has to reach through a concrete arm rather than the
+base type. Closed by the amendment below.
+
+### Amendment (2026-09-11): the base carries its own declared properties
+
+`CirSealedClass` gains `properties`, filled from base-keyed plans that `ForwardPropertyPlanner`
+builds for the properties the sealed base itself declares (`parentDeclaration == sealed`), under the
+base's own `${sealed}_get_x` export prefix. `SealedClassExports` emits them through the same
+`addForwardPropertyPlanExports` an arm uses, and `CirSealedRenderer` renders them through the same
+`propertyNativeImports` / `renderProperty` an ordinary class uses. A consumer holding the base type
+can read them without pattern-matching to an arm first.
+
+Three decisions the shipped `NestedShape` fixture forced:
+
+- **`virtual`, never `abstract`.** The Kotlin property may be `abstract`, but the C# member is
+  concrete: the export reads `handle.asStableRef<NestedShape>().get().sides`, so Kotlin's own
+  virtual dispatch answers with the arm's value. Mirroring the ordinary route's `public abstract`
+  spelling would oblige every arm to declare an override, and the covariant arm cannot spell one
+  (below), so the file would not compile at all (CS1715, then CS0534 for the member it could not
+  declare). The only fidelity loss is that `abstract` does not surface in IntelliSense.
+- **A covariant arm override renders `new`.** `NestedShape.sides` is `Int?` and
+  `NestedShape.Empty.sides` narrows it to `Int`. Kotlin allows the covariant override, C# does not
+  (CS1715), so the arm hides the base member (`public new int Sides`) and keeps its own export. Two
+  C# members over one Kotlin property: a base-typed read answers `int?`, an arm-typed read answers
+  `int`, and both reach the same Kotlin value. Decided on the *projected C# type*, not on Kotlin's
+  `override` keyword, because what C# needs is a base member of the same shape.
+- **Arms are declared-only now.** `sealedSubclassProperties` switched from `superClass = null` to
+  `superClass = sealed`, so an arm binds what it declares and nothing else. Under the old rule an
+  arm flattened every implemented base property onto itself; leaving it would be CS0108 against the
+  base's new member. The visible flip: `signal_ping_get_tag` / `signal_boom_get_tag` are one
+  `signal_get_tag`, pinned in `Tier1SealedSubclassPropertyPlanTest`.
+
+One consequence with no counterpart on an ordinary class: an arm nested inside its base can see the
+base's `private static extern`s, so an overriding arm's `Native_Get_sides` hides the base's and is
+CS0108, which `GeneratedBindingsCheck` compiles as an error. `CirDllImport.isNew` spells
+`private new static extern` for exactly the nested-and-colliding case. A sibling arm sets it never:
+the base's private members are inaccessible from outside its braces, and `new` there is CS0109.
+
+Fixtures: `NestedShapeSample.kt` (`abstract val sides: Int?` on the base, the covariant `Empty`
+arm) and `JobSample.kt` (`open val kind` with a base body, overridden only by `Running`). Tests:
+`IntegrationTests/SealedBaseMemberTests.cs` and `Tier1SealedBaseMemberTest.kt`. The method half is
+in ADR-116's amendment of the same date.

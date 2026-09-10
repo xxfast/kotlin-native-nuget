@@ -426,6 +426,12 @@ string.
 filter has something to filter: no arm may render `RestAsync`, and the Kotlin side may emit no
 `job_running_rest_async`.
 
+> **Amended by [ADR-116](116-sealed-subclass-methods-on-the-callable-plan.md)'s 2026-09-11
+> amendment.** `rest` still binds nowhere (the sealed base carries no suspend route, only the
+> ordinary one), but it is no longer silent: `sealedBaseEntries` names it
+> `SEALED_BASE_UNROUTED`, which is the diagnostic this ADR observed was missing. Both assertions
+> above still hold.
+
 Not added: a same-name plain/StateFlow suspend pair (a consequence of one counter, stated above,
 not a seam); a suspend overload pair on a `data object` arm (same counter path as `Running`'s).
 The arm overload pair **is** a needed cell, not speculation: `sealedSubclassEntries` is its own

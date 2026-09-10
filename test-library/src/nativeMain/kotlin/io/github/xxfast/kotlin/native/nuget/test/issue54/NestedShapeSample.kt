@@ -37,9 +37,10 @@ package io.github.xxfast.kotlin.native.nuget.test.issue54
  * property, while the ADR-062 property planner and `SealedClassExports` both keep it, so
  * `ForwardAbiContract` aborts the KSP run on the orphan `nestedshape_empty_get_*` exports (it
  * checks names in sorted order, so `note` is the one it names first). Four cells, one per route:
- * - [NestedShape.sides], the reported repro shape: an `abstract val` on the sealed *base*. The
- *   base renders no C# member for it (`CirSealedClass` has no properties at all), so every
- *   assertion has to reach through a concrete arm.
+ * - [NestedShape.sides], the reported repro shape: an `abstract val` on the sealed *base*. Item 35
+ *   gave the base its own `public virtual int? Sides`, so an assertion can reach it through the
+ *   base type; before that the base rendered no C# member at all and every read had to
+ *   pattern-match to a concrete arm first.
  * - [NestedShape.Empty.sides], the bug: a **primitive** property on the `data object` arm, no
  *   conversion at the seam.
  * - [NestedShape.Circle.sides], the control: the same property on the `data class` arm, which
@@ -47,6 +48,15 @@ package io.github.xxfast.kotlin.native.nuget.test.issue54
  *   that trades one broken arm for another.
  * - [NestedShape.Empty.note], a **reference**-typed property on the same `data object` arm: the
  *   cell that does need conversion at the seam. `Int` and `String` travel different plan routes.
+ *
+ * The third cell (item 35): the sealed base's own `abstract`/`open` members must render on the C#
+ * base, so a consumer holding a [NestedShape] can read them without pattern-matching to an arm.
+ * - [NestedShape.outline], an `abstract fun` on the base that **every** arm overrides. It is the
+ *   method half beside [NestedShape.sides]' property half, and the arms differ in body so a call
+ *   through the base type proves Kotlin dispatch picked the arm rather than a base default.
+ * - [NestedShape.sides] paired with [NestedShape.Empty.sides]: the **covariant** cell. The base
+ *   declares `Int?` and `Empty` narrows to `Int`, which C# cannot spell as an `override` (CS1715),
+ *   so the base read and the arm read are two different C# members over one Kotlin property.
  *
  * Disjoint from its neighbour [Issue54Shape] in the same package: that one carries the sealed
  * **base** at property positions (ADR-105, scope (c)); this one carries a concrete **subclass** at
@@ -59,21 +69,34 @@ package io.github.xxfast.kotlin.native.nuget.test.issue54
  */
 sealed class NestedShape {
   /**
-   * The repro shape from issue #107: an abstract property on the sealed base. The base itself
-   * renders no C# member for it, only the concrete arms below do.
+   * The repro shape from issue #107: an abstract property on the sealed base. Since item 35 the
+   * base renders it as `public virtual int? Sides` and Kotlin dispatch answers with the arm's
+   * value; the arms keep their own members, [NestedShape.Empty.sides] as a covariant `new int`.
    */
   abstract val sides: Int?
+
+  /**
+   * Item 35's method half: an `abstract fun` on the sealed base that every arm overrides. A
+   * consumer holding a [NestedShape] must be able to call it without discriminating first.
+   */
+  abstract fun outline(): String
 
   /** Oreo, curled up on the windowsill, described by one non-null `Double`. */
   data class Circle(val radius: Double) : NestedShape() {
     /** Control: a circle has no sides, and the `data class` arm already binds this today. */
     override val sides: Int? = null
+
+    /** The `data class` arm's override of the base's abstract method. */
+    override fun outline(): String = "circle"
   }
 
   /** Mylo, mid-sprawl, occupying no describable shape at all. */
   data object Empty : NestedShape() {
     /** The bug: a primitive property on a `data object` arm, dropped from C# today. */
     override val sides: Int = 0
+
+    /** The `data object` arm's override, a different body so base dispatch is observable. */
+    override fun outline(): String = "sprawl"
 
     /** The same arm at a reference type, the property that needs conversion at the seam. */
     val note: String = "sprawled"

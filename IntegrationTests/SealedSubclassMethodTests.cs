@@ -233,19 +233,22 @@ public class SealedSubclassMethodTests
     }
 
     /// <summary>
-    /// And it is a plain public method: not <c>override</c> (the C# sealed base declares nothing to
-    /// override — CS0115) and not <c>virtual</c> (a virtual member on a <c>public sealed class</c>
-    /// is CS0549). ADR-116 pins both planner flags to false; this is the observable consequence.
+    /// And since item 35 it is an <c>override</c>: the sealed base carries its own
+    /// <c>open fun describe()</c> as a <c>virtual</c> member, so the arm that declares a Kotlin
+    /// <c>override</c> spells one in C# too. It was a plain public method for as long as the C#
+    /// base declared nothing to override (ADR-116 pinned both planner flags to false); the base is
+    /// the carrier now, and a call through a <c>Job</c> reference has to reach the arm's body.
     /// </summary>
     [Fact]
-    public void Describe_OnTheObjectArm_IsPlainPublicNeitherVirtualNorOverride()
+    public void Describe_OnTheObjectArm_OverridesTheBasesVirtualMember()
     {
         MethodInfo? describe = typeof(Job.Idle).GetMethod(
             "Describe",
             BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly);
 
         Assert.NotNull(describe);
-        Assert.False(describe!.IsVirtual, "Describe must not be virtual on a sealed arm (CS0549)");
+        Assert.True(describe!.IsVirtual, "an arm overriding a base member is virtual in C#");
+        Assert.Equal(typeof(Job), describe.GetBaseDefinition().DeclaringType);
     }
 
     // ---- Absences. Asserted by reflection: the compiler cannot see a member that is not there. ----
@@ -264,16 +267,22 @@ public class SealedSubclassMethodTests
     }
 
     /// <summary>
-    /// ...and it is not on the C# sealed base either. <c>CirSealedClass</c> carries no methods, so
-    /// a consumer holding a <c>Job</c> must pattern-match to an arm first (deferred with the
-    /// abstract-<c>val</c> gap, ROADMAP line 47).
+    /// ...because it is on the C# sealed base instead, which is item 35's whole point.
+    /// <c>CirSealedClass</c> carries its base's own declared methods now, rendered <c>virtual</c>
+    /// (never <c>abstract</c>: the export dispatches in Kotlin, and an abstract member would
+    /// oblige every arm to declare an override). A consumer holding a <c>Job</c> no longer has to
+    /// pattern-match to an arm to call it.
     /// </summary>
     [Fact]
-    public void Describe_IsNotOnTheSealedBaseEither()
+    public void Describe_IsOnTheSealedBaseAsAVirtualMember()
     {
-        Assert.Null(typeof(Job).GetMethod(
+        MethodInfo? describe = typeof(Job).GetMethod(
             "Describe",
-            BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly));
+            BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly);
+
+        Assert.NotNull(describe);
+        Assert.True(describe!.IsVirtual, "the base member must be virtual for an arm to override");
+        Assert.False(describe.IsAbstract, "the base member is concrete: Kotlin dispatches");
     }
 
     /// <summary>

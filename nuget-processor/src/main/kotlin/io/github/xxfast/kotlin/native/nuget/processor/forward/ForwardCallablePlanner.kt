@@ -95,6 +95,14 @@ internal enum class ForwardPlanSkipReason(val droppedFromCSharp: Boolean) {
    *  reclassified from rides in [ForwardCallableCatalogEntry.Skipped.detail]. */
   SEALED_SUBCLASS_UNROUTED(droppedFromCSharp = true),
 
+  /** ADR-116 amendment (2026-09-11): the same absence one level up, on a member the sealed
+   *  **base** declares (`Job.rest`, an `open suspend fun`). The base carries its ordinary members
+   *  now, but no legacy route is keyed to it at all, not even the suspend and flow ones ADR-118
+   *  and ADR-124 keyed to the arms, so the member is gone from C# on the base *and* on every arm
+   *  that inherits it. Separate from [SEALED_SUBCLASS_UNROUTED] because the remedy differs: the
+   *  author can move the member onto each arm, which does have those routes. */
+  SEALED_BASE_UNROUTED(droppedFromCSharp = true),
+
   /** ADR-064/ADR-082: a value-class member whose signature a supertype declares — inherited,
    *  forwarded by interface delegation (e.g. `CharSequence by value`) or explicitly overridden. */
   INHERITED_MEMBER(droppedFromCSharp = true),
@@ -524,6 +532,10 @@ internal class ForwardCallablePlanner(
       // `classes` (ADR-009 / issue #54), so its declared member functions have to be planned from
       // the sealed base, under the same `${sealed}_${sub}` prefix the property getters already use.
       sealedClasses.forEach { sealed ->
+        // ADR-116 amendment (2026-09-11): the base's own declared members first, so an arm's
+        // projection can ask whether the C# base already carries the signature it is about to
+        // spell (`override` when it matches, nothing at all when the arm declares none).
+        addAll(sealedBaseEntries(sealed))
         sealed.getSealedSubclasses().forEach { sub -> addAll(sealedSubclassEntries(sealed, sub)) }
       }
       classes.forEach { cls -> addAll(constructorEntries(cls)) }
@@ -966,6 +978,113 @@ internal class ForwardCallablePlanner(
   }
 
   /**
+   * ADR-116 amendment (2026-09-11): the sealed **base**'s own declared member functions, keyed to
+   * the base under its own `${sealed}_` export prefix.
+   *
+   * Three differences from [sealedSubclassEntries], all following from the base being the carrier
+   * rather than a leaf:
+   * - No [ForwardPlanSkipReason.ABSTRACT] structural skip. An `abstract fun` on the base is
+   *   exactly what needs a plan here: the export calls it through the base type
+   *   (`handle.asStableRef<Job>().get().describe()`), so Kotlin's own dispatch reaches the arm's
+   *   body and the C# member can be concrete.
+   * - `isVirtual` therefore covers the abstract case too, so an arm that overrides can spell
+   *   `override` without CS0506. `isOverride` stays false: the base overrides nothing.
+   * - An unrouted skip is named [ForwardPlanSkipReason.SEALED_BASE_UNROUTED], not the arm's
+   *   reason: `Job.rest`, an `open suspend fun` on the base, has produced no diagnostic at all
+   *   until now (ADR-118 found the same absence a third time).
+   */
+  private fun sealedBaseEntries(sealed: KSClassDeclaration): List<ForwardCallableCatalogEntry> {
+    val owner: String = sealed.qualifiedName?.asString() ?: return emptyList()
+    val prefix: String = sealed.simpleName.asString().lowercase()
+    val receiverType: BridgeType = BridgeType.ObjectHandle(owner)
+    val methods: List<KSFunctionDeclaration> = sealed.getAllFunctions()
+      .filter { method -> method.getVisibility() == Visibility.PUBLIC }
+      .filter { method ->
+        method.simpleName.asString() !in setOf("equals", "hashCode", "toString", "<init>")
+      }
+      // Declared-only: `Any`'s members fall out here, and so does anything an (unexported) base of
+      // the sealed class itself might carry, which has no C# carrier of its own either way.
+      .filter { method -> method.parentDeclaration == sealed }
+      .toList()
+    val interfaceBridgeMethods: Set<KSFunctionDeclaration> = findInterfaceBridgePairs(methods)
+      .flatMap { pair -> listOf(pair.first, pair.second) }
+      .toSet()
+    val storedCallbackMethods: Set<KSFunctionDeclaration> = findStoredCallbackPairs(methods)
+      .flatMap { pair -> listOf(pair.first, pair.second) }
+      .toSet()
+
+    val occurrences: MutableMap<String, Int> = mutableMapOf()
+    fun entryFor(method: KSFunctionDeclaration, omitted: Int): ForwardCallableCatalogEntry {
+      val name: String = method.simpleName.asString()
+      val occurrence: Int = occurrences.merge(name, 1, Int::plus)!!
+      val suffix: String = if (occurrence == 1) "" else "_$occurrence"
+      val symbol: String = "$owner.$name$suffix"
+      // Every declared member of the base is overridable in Kotlin (`abstract` or `open`), and an
+      // arm that overrides needs a `virtual` C# base member to override. A synthesized omitting
+      // overload is never virtual: no arm declares that signature.
+      val isVirtual: Boolean = omitted == 0 &&
+          (method.modifiers.contains(Modifier.ABSTRACT) || method.modifiers.isOpenForOverride())
+      val structuralReason: ForwardPlanSkipReason? = when {
+        method.modifiers.contains(Modifier.SUSPEND) -> ForwardPlanSkipReason.SUSPEND
+        method.typeParameters.isNotEmpty() -> ForwardPlanSkipReason.GENERIC
+        method in interfaceBridgeMethods || method in storedCallbackMethods ->
+          ForwardPlanSkipReason.CALLBACK_PROTOCOL
+
+        else -> null
+      }
+      return if (structuralReason != null) {
+        ForwardCallableCatalogEntry.Skipped(symbol, structuralReason, node = method)
+      } else {
+        planOrSkip(
+          symbol = symbol,
+          publicName = name.replaceFirstChar { it.uppercase() },
+          exportName = "${prefix}_$name$suffix",
+          receiver = ForwardReceiver.Handle(receiverType),
+          parameters = method.parameters.dropLast(omitted).map { parameter ->
+            parameter.bridgeName() to classifier.classify(parameter.type.resolve())
+          },
+          result = method.returnType?.resolve()?.let(classifier::classify) ?: BridgeType.Unit,
+          origin = ForwardCallableOrigin.CLASS,
+          member = name,
+          isOverride = false,
+          isVirtual = isVirtual,
+          node = method,
+          droppedOptInMarker = droppedOptInMarker(method.parameters, omitted),
+        )
+      }
+    }
+
+    val entries: List<ForwardCallableCatalogEntry> = buildList {
+      val declared: List<ForwardCallableCatalogEntry> =
+        methods.map { method -> entryFor(method, 0) }
+      addAll(declared)
+      // ADR-096: the base is the carrier, so it owes its own omitting overloads; every arm that
+      // overrides the member inherits them.
+      methods.forEachIndexed { index, method ->
+        if (declared[index] !is ForwardCallableCatalogEntry.Planned) return@forEachIndexed
+        repeat(method.parameters.map { it.hasDefault }.trailingCount()) { omitted ->
+          add(entryFor(method, omitted + 1).synthesized())
+        }
+      }
+    }
+
+    // The same posture `sealedSubclassEntries` takes: `droppedFromCSharp = false` means "a named
+    // legacy route re-emits it", and no legacy route is keyed to a sealed *base* at all -- not
+    // even the suspend and flow ones ADR-118/ADR-124 keyed to the arms. So every skip left here
+    // is a real drop and says so.
+    return entries.map { entry ->
+      if (entry !is ForwardCallableCatalogEntry.Skipped) return@map entry
+      if (entry.reason.droppedFromCSharp) return@map entry
+      ForwardCallableCatalogEntry.Skipped(
+        entry.symbol,
+        ForwardPlanSkipReason.SEALED_BASE_UNROUTED,
+        node = entry.node,
+        detail = entry.reason.name,
+      )
+    }
+  }
+
+  /**
    * ADR-116: [classEntries] for one arm of an ADR-009 sealed hierarchy, with the four differences
    * a sealed subclass forces.
    *
@@ -1070,7 +1189,13 @@ internal class ForwardCallablePlanner(
       // this counter scope so declared exports keep their numbers.
       methods.forEachIndexed { index, method ->
         if (declared[index] !is ForwardCallableCatalogEntry.Planned) return@forEachIndexed
-        if (method.modifiers.contains(Modifier.OVERRIDE)) return@forEachIndexed
+        // ADR-116 amendment (2026-09-11): keyed on the C# fact, exactly as `classEntries` is since
+        // ADR-096's own amendment. Skipping every Kotlin `override` was only ever right because
+        // the sealed C# base carried nothing; now that it carries its declared members it also
+        // carries their omitting overloads, and the arm inherits them. An `override` of anything
+        // else (an interface member, a member the base's plan declined) has no such carrier, and
+        // the arm owes the overload itself or the consumer's short call is CS1501.
+        if (method.findOverridee()?.parentDeclaration == sealed) return@forEachIndexed
         repeat(method.parameters.map { it.hasDefault }.trailingCount()) { omitted ->
           add(entryFor(method, omitted + 1).synthesized())
         }

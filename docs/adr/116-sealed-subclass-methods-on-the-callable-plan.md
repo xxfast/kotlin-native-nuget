@@ -7,6 +7,8 @@ Accepted
 
 > **Amended by [ADR-124](124-flow-route-sealed-arm-owners.md) (2026-09-10).** The legacy Flow/StateFlow route is keyed to sealed arms; `SEALED_SUBCLASS_UNROUTED` now covers generic and callback-protocol arm members only.
 
+> **Amended below (2026-09-11).** The sealed **base** carries its own declared methods, so "declared-only" no longer means "absent from C#" for a base `open fun`: it means the base is the carrier and every arm inherits it. See "Amendment (2026-09-11)".
+
 ## Implementation notes (2026-09-08)
 
 Shipped as designed, with four corrections found during implementation:
@@ -469,14 +471,56 @@ fails the build if the Kotlin and C# halves disagree, so a prefix mistake is lou
   arm's inherited base body (pair with line 47); the `dispose` name collision (pre-existing on
   ordinary classes too); `ForwardAbiContract.csharp` structural walk of `CirSealedSubclass` (line 44).
 
+## Amendment (2026-09-11): the sealed base carries its own declared methods
+
+`CirSealedClass` gains `methods`, the method half of ADR-111's same-date amendment. A new
+`sealedBaseEntries(sealed)` in `ForwardCallablePlanner` plans the member functions the base itself
+declares (`parentDeclaration == sealed`) under the base's own `${sealed}_` export prefix, keyed to
+the base as receiver, and `translateSealedClass` / `SealedClassExports` project both halves off
+those plans exactly as they do an arm's.
+
+What changes against the Decision above:
+
+- **No `ABSTRACT` structural skip on the base.** An `abstract fun` is precisely what needs a plan
+  here: the export calls it through the base type, so Kotlin's own dispatch reaches the arm's body
+  and the C# member can be concrete. `isVirtual` therefore covers the abstract case, and the member
+  renders `public virtual`, never `public abstract` (ADR-111's amendment prices that choice).
+- **An arm's `isOverride` is no longer pinned to `false`.** It is decided on the *projected C#
+  signature*: an arm method whose name and parameter types match a base method's spells `override`
+  when the return types agree and `new` when they do not (a value-type covariant return is CS0508;
+  omitting the modifier is CS0108, which `GeneratedBindingsCheck` compiles as an error). Keyed on
+  the projection rather than on Kotlin's `override` keyword, because an arm can override something
+  the base's own plan declined, and then there is nothing in C# to override.
+- **The `Modifier.OVERRIDE` early return on ADR-096's synthesis gate is narrowed** to
+  `method.findOverridee()?.parentDeclaration == sealed`, the same move ADR-096's own 2026-09-11
+  amendment made in `classEntries`. Skipping every Kotlin `override` was only correct while the C#
+  base carried nothing; the base carries its declared members and their omitting overloads now, and
+  the arm inherits them. An `override` of anything else (an interface member) still owes its own.
+  One case remains conservative and is deliberately left: if the base's own plan *declined* the
+  member, the overridee still points at the base and the arm synthesizes nothing. No fixture
+  exercises it, and the visible symptom would be a missing short overload, not wrong output.
+- **A base-declared member with no route is named.** `SEALED_BASE_UNROUTED` is the base's twin of
+  `SEALED_SUBCLASS_UNROUTED`, separate because the remedy differs: the arms do carry the suspend
+  (ADR-118) and Flow (ADR-124) routes the base does not, so the hint says to declare it on each arm.
+  `Job.rest`, the `open suspend fun` this ADR, ADR-118 and ROADMAP item 35 each found absent in
+  turn, finally produces a diagnostic:
+  `Skipping ...Job.rest: it is a SUSPEND member of a sealed base class, which has no route yet
+  (ADR-116)`. Wiring a coroutine scope onto the base itself stays a follow-up.
+
+Two C# test assertions flipped, both recorded in `IntegrationTests/SealedSubclassMethodTests.cs`:
+`Job.Idle.Describe` is now an `override` of a base member rather than a plain public method, and
+`Describe` is on the sealed base rather than absent from it. `Running` still declares no `Describe`
+of its own, which is the same declared-only fact seen from the other side: it inherits the base's.
+
 ## Scope
 
 - v1: **declared-only**: the non-suspend, non-generic, non-Flow, non-lambda-parameter public
   member functions a sealed subclass itself declares (its own `override fun`s included), on any
   sealed-subclass kind, with every parameter/return shape `planOrSkip` binds for an ordinary class
   method, overloads, and default-argument omitting overloads.
-- Not in v1: a base-declared `open fun` the arm does not override (absent from that arm, no
-  diagnostic, carried by the deferred base-type item); everything listed under Deferred above.
+- Not in v1 as first shipped: a base-declared `open fun` the arm does not override (absent from
+  that arm, no diagnostic, carried by the deferred base-type item). Since the 2026-09-11 amendment
+  the base carries it and the arm inherits it; everything listed under Deferred above still stands.
 
 ## Claims list
 

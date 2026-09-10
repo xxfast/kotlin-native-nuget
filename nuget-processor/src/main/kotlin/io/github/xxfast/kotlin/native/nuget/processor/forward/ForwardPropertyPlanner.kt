@@ -105,6 +105,9 @@ internal class ForwardPropertyPlanner(
     // ADR-111: a sealed subclass is reached only through its base (`classes` excludes it by
     // `isSealedSubclass`), so nothing double-plans.
     sealed.forEach { base ->
+      // ADR-111 amendment (2026-09-11): the base's own declared properties first, so an arm can
+      // ask the catalog whether the base already carries the member it is about to project.
+      addAll(sealedBaseProperties(base))
       base.getSealedSubclasses().forEach { subclass ->
         addAll(sealedSubclassProperties(base, subclass))
       }
@@ -114,13 +117,42 @@ internal class ForwardPropertyPlanner(
   }
 
   /**
+   * ADR-111 amendment (2026-09-11): the sealed **base**'s own declared properties, planned like
+   * [classProperties] under the base's own `${sealed}_get_x` export prefix.
+   *
+   * Declared-only (`parentDeclaration == sealed`), because the arms carry what they declare
+   * themselves and nothing else. An `abstract val` plans exactly like a concrete one: the plan is
+   * only an ABI, and the generated export reads `handle.asStableRef<Base>().get().sides`, which is
+   * Kotlin's own virtual dispatch and therefore answers with the arm's value.
+   */
+  private fun sealedBaseProperties(sealed: KSClassDeclaration): List<ForwardPropertyPlan> {
+    val owner: String = sealed.qualifiedName?.asString() ?: return emptyList()
+    val prefix: String = sealed.simpleName.asString().lowercase()
+    return sealed.getAllProperties()
+      .filter { it.getVisibility() == Visibility.PUBLIC }
+      .filter { prop -> prop.parentDeclaration == sealed }
+      .mapNotNull { prop ->
+        propertyPlan(
+          symbol = "$owner.${prop.simpleName.asString()}",
+          position = ForwardPropertyPosition.CLASS,
+          receiver = ForwardPropertyReceiver.Handle(owner),
+          prop = prop,
+          getExport = "${prefix}_get_${prop.simpleName.asString()}",
+          setExport = "${prefix}_set_${prop.simpleName.asString()}",
+        )
+      }
+      .toList()
+  }
+
+  /**
    * ADR-111: a sealed subclass's properties, planned exactly like [classProperties] but keeping
    * the ADR-009 `${sealed}_${sub}_get_x` export prefix the discriminator, dispose and data-class
    * exports still use.
    *
-   * `superClass = null` on purpose: the generated C# subclass extends the *abstract* sealed base,
-   * which carries no members of its own, so a property the Kotlin base declares has to be bound
-   * here. That is also what the legacy `getAllProperties()` loop did.
+   * `superClass = sealed` since the 2026-09-11 amendment: the generated C# base now carries the
+   * base's own members ([sealedBaseProperties]), so an arm is declared-only like an ordinary
+   * subclass. Before that it was `null`, which flattened every implemented base property onto
+   * every arm; keeping it would be CS0108 against the base's new member.
    */
   private fun sealedSubclassProperties(
     sealed: KSClassDeclaration,
@@ -131,7 +163,7 @@ internal class ForwardPropertyPlanner(
       "${sealed.simpleName.asString().lowercase()}_${subclass.simpleName.asString().lowercase()}"
     return subclass.getAllProperties()
       .filter { it.getVisibility() == Visibility.PUBLIC }
-      .filter { prop -> prop.isForwardPlannableMemberOf(subclass, superClass = null) }
+      .filter { prop -> prop.isForwardPlannableMemberOf(subclass, superClass = sealed) }
       .mapNotNull { prop ->
         propertyPlan(
           symbol = "$owner.${prop.simpleName.asString()}",

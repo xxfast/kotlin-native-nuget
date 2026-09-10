@@ -100,6 +100,11 @@ class ForwardSkippedCallableWarningTest {
         detail = "suspend",
       ) to "it is a suspend member of a sealed subclass, which has no route yet (ADR-116)",
       ForwardCallableCatalogEntry.Skipped(
+        symbol = "com.example.Shape.observe",
+        reason = ForwardPlanSkipReason.SEALED_BASE_UNROUTED,
+        detail = "suspend",
+      ) to "it is a suspend member of a sealed base class, which has no route yet (ADR-116)",
+      ForwardCallableCatalogEntry.Skipped(
         symbol = "com.example.Api.rename",
         reason = ForwardPlanSkipReason.NULLABLE,
         position = ForwardSkipPosition.INPUT,
@@ -307,6 +312,10 @@ class ForwardSkippedCallableWarningTest {
         // legacy route is keyed to a sealed subclass, so the same member kinds are real drops
         // there and are reclassified into this reason by the planner.
         ForwardPlanSkipReason.SEALED_SUBCLASS_UNROUTED,
+        // ADR-116 amendment (2026-09-11): the same, one level up, for a member the sealed *base*
+        // declares. The base carries its ordinary members now, but no legacy route is keyed to it
+        // at all, so `Job.rest` (an `open suspend fun`) is a real drop and finally names itself.
+        ForwardPlanSkipReason.SEALED_BASE_UNROUTED,
       ),
       dropped,
     )
