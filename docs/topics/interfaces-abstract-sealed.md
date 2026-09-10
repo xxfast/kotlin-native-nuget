@@ -452,6 +452,12 @@ plan (a generic interface default, for example) instead of rendering it `public 
 would be uncompilable on a further C# subclass (`CS0534`, "does not implement inherited abstract
 member") since the naive abstract-path type mapping cannot spell every declined shape.
 
+An enum at a parameter or return position on either kind of member goes through the same classifier
+every other forward position uses: a declared enum is spelled qualified (`global::Ns.Glaze`), not
+the bare Kotlin name, and an undeclared one (nested, or outside the export scope) drops the member
+with the same `SKIPPED_UNSUPPORTED_TYPE`/`UNDECLARED_ENUM` diagnostic described in [Enums: Nested
+enums skip named](enums.md#nested-enums-skip-named), never a dangling reference.
+
 From `test-library/src/nativeMain/kotlin/.../garage/Vehicle.kt`. `honk()` has no body, so it must
 render `abstract`; `describe()` calls it and stays a concrete, non-abstract method:
 

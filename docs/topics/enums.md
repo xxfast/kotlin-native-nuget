@@ -543,6 +543,13 @@ A parameter or return position skips with `SKIPPED_UNSUPPORTED_TYPE`, naming the
     at NestedModeOwner.kt:44
 ```
 
+An exported abstract class's inherited but unimplemented method (declared by an interface it does
+not override) is the same named skip: the walk that renders its C# `abstract` member has no route
+of its own, so a declared enum on it is spelled through the classifier too, qualified
+(`global::Ns.Glaze`), and an undeclared one drops the member with this same
+`SKIPPED_UNSUPPORTED_TYPE`/`UNDECLARED_ENUM` diagnostic rather than a dangling reference; see [An
+exported base class's own `abstract fun`](interfaces-abstract-sealed.md#a-base-class-s-own-abstract-fun).
+
 A property position skips the same way, but through the ordinary `SKIPPED_UNSUPPORTED_PROPERTY`
 message the property planner already emits for any type it has no getter/setter shape for, not the
 `UNDECLARED_ENUM` reason:
