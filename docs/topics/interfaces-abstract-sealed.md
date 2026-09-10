@@ -422,6 +422,8 @@ public global::TestLibrary.Issue54.Pulse Current
 [nuget:SKIPPED_INELIGIBLE_SEALED_INTERFACE] Skipping io.github.xxfast.kotlin.native.nuget.test.issue54.Mixed: sealed interface `io.github.xxfast.kotlin.native.nuget.test.issue54.Mixed` is declared as `IMixed` but cannot be reconstructed in C#: subclass `Odd` extends another class `io.github.xxfast.kotlin.native.nuget.test.issue54.Rhythm`. every subclass must be a class or object, declared in the interface or beside it, with no other superclass, no sub-interface and no second sealed interface; an enum can never be a subclass (ADR-125). Or declare it as a sealed class
 ```
 
+`Odd` itself gets no second warning. `Odd` is nested inside `Mixed`, which would otherwise make it a `nestedDeclarations` candidate for its own `SKIPPED_NESTED_DECLARATION`, but that diagnostic is suppressed for any direct arm of an ineligible sealed interface, since the parent's warning above already explains why `Odd` is absent and the "move it to the top level of its file" hint would be misleading (the arm's nesting is not why `Mixed` is ineligible). A nested declaration that is not an arm, such as a plain helper class declared inside the same interface, still gets its own `SKIPPED_NESTED_DECLARATION`.
+
 ### Using it from C# {id="sealed-interface-using-it-from-c"}
 
 From `IntegrationTests/SealedInterfaceTests.cs`:

@@ -96,6 +96,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeInter
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardInterfaceBridgePlanner
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardPropertyPlanner
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardReachabilityBucket
+import io.github.xxfast.kotlin.native.nuget.processor.forward.isArmOfIneligibleSealedInterface
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isEligibleSealedInterface
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isEligibleSealedType
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isSealedInterface
@@ -873,6 +874,9 @@ class NugetProcessor(
         .filter { it.getVisibility() == Visibility.PUBLIC }
         .filter { !it.isCompanionObject }
         .filter { !it.isSealedSubclass() }
+        // ADR-112 amendment: an ineligible sealed interface warns once for its whole hierarchy,
+        // so an arm of it is not a second undeclared thing to report.
+        .filter { !it.isArmOfIneligibleSealedInterface() }
         .filter { it.classKind in NESTED_DECLARATION_KINDS }
         .distinctBy { it.qualifiedName?.asString() ?: it.simpleName.asString() }
         .sortedBy { it.qualifiedName?.asString() ?: it.simpleName.asString() }

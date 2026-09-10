@@ -776,7 +776,9 @@ still spelled it `Outer.Inner`, `CS0426` (reproduced: `Broadcast.Schedule` and `
 `class`/`object`/`interface`/`enum class`**, whether it lives in an exported class-like declaration in
 this module or in an admitted dependency type, excluding a companion object (declared as its owner's
 statics, ADR-013) and a sealed subclass (declared nested under its base, ADR-009), which are the two
-nested shapes the generator *does* declare. A public `annotation class` is excluded too:
+nested shapes the generator *does* declare. Excluding also, per
+[ADR-112](112-sealed-interface-mapping.md)'s 2026-09-10 amendment, an arm of an ineligible sealed
+interface: that hierarchy is refused once, at the interface. A public `annotation class` is excluded too:
 `SKIPPED_ANNOTATION_CLASS` already says so wherever it lives. Emitted before the `hasNothingToProcess`
 early return, so it reaches `NugetDiagnostics.json` even for a module whose only public declaration is
 nested. A klib (cross-module) declaration carries no `containingFile`, so its diagnostic carries no

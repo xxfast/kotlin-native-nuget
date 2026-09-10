@@ -333,3 +333,29 @@ nested subclasses.
 
 The two-warnings note below still stands for the reasons that remain: a nested arm of an interface
 refused for the enum, multi-parent, sub-interface, generic or second-superclass reason.
+
+### Amendment (2026-09-10): one warning per refused hierarchy
+
+The two-warnings note above no longer stands, for any reason. A nested arm of an ineligible sealed
+interface reported `SKIPPED_NESTED_DECLARATION` on top of the parent's
+`SKIPPED_INELIGIBLE_SEALED_INTERFACE`, with the hint "move it to the top level of its file", and
+ADR-125 made the declaration position irrelevant to eligibility, so that move fixes nothing. The
+cause: `nestedDeclarations` reused the routing predicate `isSealedSubclass()`, which is gated on
+eligibility for routing reasons only (an ineligible interface has no sealed route to send an arm
+to), so the diagnostic inherited a gate that has nothing to do with what to tell the author.
+
+**Decision.** A nested declaration that is a direct subtype of an ineligible sealed interface is
+excluded from `nestedDeclarations`: the new `isArmOfIneligibleSealedInterface()`, `superTypes`
+containing a `sealed interface` that is not [isEligibleSealedInterface]. The parent's diagnostic
+names the refusing arm and the C# constraint behind it, and that is the one warning for the
+hierarchy. Every arm is covered, not only the refusing one: a non-refusing arm is undeclared for
+exactly the same single reason, its interface was refused.
+
+The rule is by supertype, not by enclosing declaration. A nested non-arm helper inside the same
+refused interface is skipped for the ordinary nesting reason and still says so, and an arm nested
+inside some unrelated class is still covered. The new predicate is diagnostic-only: routing
+(`isSealedSubclass()`, `isEligibleSealedType()`, the root buckets, the ADR-066 closure) is
+unchanged, since admitting an arm of an interface that has no sealed route is the CS0101 duplicate
+this ADR refuses. Generated C# does not change; `Mixed.Odd` in `issue54/SealedInterfaceSample.kt`
+simply loses its second warning. `UNDECLARED_CLASS` on a member typed with the arm itself is
+untouched and still correct: that member really is dropped.
