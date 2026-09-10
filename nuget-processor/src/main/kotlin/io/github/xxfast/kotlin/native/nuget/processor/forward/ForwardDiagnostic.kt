@@ -522,6 +522,63 @@ internal fun ForwardPlanSkipReason.diagnosticReason(
       "it is a ${detail ?: "specialized"} member of a sealed subclass, which has no route yet " +
           "(ADR-116)"
 
+    // ADR-064's 2026-09-11 amendment: scope, position and nesting drops. None of these is about
+    // an unsupported type combination, and each contradicted the hint printed beside it. The
+    // reason constant is kept only in the three UNDECLARED_* sentences below, whose kind is the
+    // shared SKIPPED_UNSUPPORTED_TYPE and so does not name the reason in the prefix.
+    //
+    // ADR-066: out of the export scope, not unsupported. The `include(...)` line stays in the hint.
+    ForwardPlanSkipReason.UNEXPORTED_DEPENDENCY_TYPE ->
+      "its type ${detail?.let { "`$it` " } ?: ""}is declared in a dependency module outside the " +
+          "export scope"
+
+    ForwardPlanSkipReason.EXPECT_DEPENDENCY_TYPE ->
+      "its type ${detail?.let { "`$it` " } ?: ""}is an `expect` declaration in a dependency " +
+          "module, which no export scope of this module can reach"
+
+    // ADR-066 admission rule 4: neither rootPackage nor include is set.
+    ForwardPlanSkipReason.CROSS_MODULE_DISABLED_DEPENDENCY_TYPE ->
+      "its type ${detail?.let { "`$it` " } ?: ""}is declared in a dependency module and " +
+          "cross-module export is off"
+
+    // ADR-074: `detail` is `"<expect>-><target>"`, split exactly as the hint below splits it.
+    ForwardPlanSkipReason.ACTUAL_TYPEALIAS_TARGET -> {
+      val parts: List<String>? = detail?.split("->", limit = 2)?.takeIf { it.size == 2 }
+      "its type `${parts?.get(0) ?: "the expect type"}` is an `actual typealias` to " +
+          "`${parts?.get(1) ?: "an unexported target"}`, which is not exported"
+    }
+
+    // The three that keep the reason constant: they share one diagnostic kind, so the prefix does
+    // not distinguish them and the sentence has to.
+    ForwardPlanSkipReason.UNDECLARED_ENUM ->
+      "its enum type `${detail ?: "the enum"}` is never declared as a C# enum ($name)"
+
+    ForwardPlanSkipReason.UNDECLARED_INTERFACE ->
+      "its interface type `${detail ?: "the interface"}` is nested and never declared as a C# " +
+          "interface ($name)"
+
+    ForwardPlanSkipReason.UNDECLARED_CLASS ->
+      "its type `${detail ?: "the class"}` is a nested class or object never declared in C# " +
+          "($name)"
+
+    // ADR-082: nothing about the types failed; a supertype declares this signature.
+    ForwardPlanSkipReason.INHERITED_MEMBER ->
+      "it is a value class member that a supertype declares"
+
+    // ADR-112 left one shape here: a sealed type with no generated discriminator, which is what
+    // the hint below says too.
+    ForwardPlanSkipReason.SEALED_POSITION ->
+      "its sealed type ${detail?.let { "`$it` " } ?: ""}has no generated C# discriminator"
+
+    // ADR-088: both are about the position, not the type. A bound C# interface is bridgeable,
+    // just not here (nullable, property, collection component, receiver), and an
+    // unimplementable one has no mint bridge to return through.
+    ForwardPlanSkipReason.BOUND_INTERFACE_POSITION ->
+      "a bound C# interface is not marshalled at this position"
+
+    ForwardPlanSkipReason.UNIMPLEMENTABLE_BOUND_INTERFACE ->
+      "it returns a bound C# interface that Kotlin cannot implement"
+
     // Issue #131: guarded on the name being there, so a return-position nullable keeps the
     // shipped generic sentence.
     ForwardPlanSkipReason.NULLABLE ->

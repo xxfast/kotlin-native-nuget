@@ -131,6 +131,91 @@ class ForwardSkippedCallableWarningTest {
     }
   }
 
+  // ROADMAP Phase 3 / ADR-064's 2026-09-11 amendment: eleven reasons that are about scope,
+  // position or nesting, not about an unsupported type combination. Each now owns a sentence that
+  // agrees with the hint following it. The reason constant is kept only in the three UNDECLARED_*
+  // sentences, whose diagnostic kind is the shared SKIPPED_UNSUPPORTED_TYPE.
+  @Test
+  fun `a scope, position or nesting skip reads as itself, not as an unsupported combination`() {
+    val expected: List<Pair<ForwardCallableCatalogEntry.Skipped, String>> = listOf(
+      ForwardCallableCatalogEntry.Skipped(
+        symbol = "com.example.Newsroom.sponsor",
+        reason = ForwardPlanSkipReason.UNEXPORTED_DEPENDENCY_TYPE,
+        detail = "dev.other.core.Advertisement",
+      ) to "its type `dev.other.core.Advertisement` is declared in a dependency module outside " +
+          "the export scope",
+      ForwardCallableCatalogEntry.Skipped(
+        symbol = "com.example.Api.platform",
+        reason = ForwardPlanSkipReason.EXPECT_DEPENDENCY_TYPE,
+        detail = "dev.other.core.Platform",
+      ) to "its type `dev.other.core.Platform` is an `expect` declaration in a dependency " +
+          "module, which no export scope of this module can reach",
+      ForwardCallableCatalogEntry.Skipped(
+        symbol = "com.example.Api.tally",
+        reason = ForwardPlanSkipReason.CROSS_MODULE_DISABLED_DEPENDENCY_TYPE,
+        detail = "dev.other.core.Tally",
+      ) to "its type `dev.other.core.Tally` is declared in a dependency module and cross-module " +
+          "export is off",
+      ForwardCallableCatalogEntry.Skipped(
+        symbol = "com.example.Api.handle",
+        reason = ForwardPlanSkipReason.ACTUAL_TYPEALIAS_TARGET,
+        detail = "com.example.Handle->platform.NativeHandle",
+      ) to "its type `com.example.Handle` is an `actual typealias` to `platform.NativeHandle`, " +
+          "which is not exported",
+      ForwardCallableCatalogEntry.Skipped(
+        symbol = "com.example.NestedModeOwner.set",
+        reason = ForwardPlanSkipReason.UNDECLARED_ENUM,
+        detail = "com.example.NestedModeOwner.Mode",
+      ) to "its enum type `com.example.NestedModeOwner.Mode` is never declared as a C# enum " +
+          "(UNDECLARED_ENUM)",
+      ForwardCallableCatalogEntry.Skipped(
+        symbol = "com.example.NestedListenerOwner.attach",
+        reason = ForwardPlanSkipReason.UNDECLARED_INTERFACE,
+        detail = "com.example.NestedListenerOwner.Listener",
+      ) to "its interface type `com.example.NestedListenerOwner.Listener` is nested and never " +
+          "declared as a C# interface (UNDECLARED_INTERFACE)",
+      ForwardCallableCatalogEntry.Skipped(
+        symbol = "com.example.Newsroom.schedule",
+        reason = ForwardPlanSkipReason.UNDECLARED_CLASS,
+        detail = "com.example.Newsroom.Schedule",
+      ) to "its type `com.example.Newsroom.Schedule` is a nested class or object never declared " +
+          "in C# (UNDECLARED_CLASS)",
+      ForwardCallableCatalogEntry.Skipped(
+        symbol = "com.example.StoryUri.length",
+        reason = ForwardPlanSkipReason.INHERITED_MEMBER,
+      ) to "it is a value class member that a supertype declares",
+      ForwardCallableCatalogEntry.Skipped(
+        symbol = "com.example.Api.pick",
+        reason = ForwardPlanSkipReason.SEALED_POSITION,
+        detail = "com.example.Job",
+      ) to "its sealed type `com.example.Job` has no generated C# discriminator",
+      ForwardCallableCatalogEntry.Skipped(
+        symbol = "com.example.Api.listen",
+        reason = ForwardPlanSkipReason.BOUND_INTERFACE_POSITION,
+      ) to "a bound C# interface is not marshalled at this position",
+      ForwardCallableCatalogEntry.Skipped(
+        symbol = "com.example.Api.provide",
+        reason = ForwardPlanSkipReason.UNIMPLEMENTABLE_BOUND_INTERFACE,
+      ) to "it returns a bound C# interface that Kotlin cannot implement",
+    )
+
+    val logger = RecordingLogger()
+    warnDroppedForwardCallables(
+      ForwardCallablePlanCatalog(entries = expected.map { (skipped, _) -> skipped }),
+      logger,
+    )
+
+    assertEquals(expected.size, logger.warnings.size, "one warning per skip: ${logger.warnings}")
+    expected.forEachIndexed { index, (skipped, sentence) ->
+      val warning: String = logger.warnings[index]
+      assertTrue(warning.contains(sentence), "${skipped.reason} names itself: $warning")
+      assertFalse(
+        warning.contains("type combination is not supported"),
+        "${skipped.reason} is not also called unsupported: $warning",
+      )
+    }
+  }
+
   @Test
   fun `a legacy-routed skip produces no warning`() {
     val logger = RecordingLogger()

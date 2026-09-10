@@ -2048,7 +2048,8 @@ What is absent from C# entirely, each named rather than silent, from `NugetDiagn
 
 ```
 [nuget:SKIPPED_UNSUPPORTED_TYPE] Skipping io.github.xxfast.kotlin.native.nuget.test.issue115.Job.Running.pickNested:
-    its UNDECLARED_INTERFACE type combination is not supported. interface
+    its interface type `io.github.xxfast.kotlin.native.nuget.test.issue54.NestedListenerOwner.Listener`
+    is nested and never declared as a C# interface (UNDECLARED_INTERFACE). interface
     `io.github.xxfast.kotlin.native.nuget.test.issue54.NestedListenerOwner.Listener` is nested
     inside a class, and a nested interface is never declared as a C# interface (only top-level ones
     are), so every member typed with it is skipped rather than emitted as a dangling reference;
@@ -2730,7 +2731,8 @@ The parameter and return positions skip with `SKIPPED_UNSUPPORTED_TYPE`, naming 
 
 ```
 [nuget:SKIPPED_UNSUPPORTED_TYPE] Skipping io.github.xxfast.kotlin.native.nuget.test.issue54.NestedListenerOwner.attach:
-    its UNDECLARED_INTERFACE type combination is not supported. interface
+    its interface type `io.github.xxfast.kotlin.native.nuget.test.issue54.NestedListenerOwner.Listener`
+    is nested and never declared as a C# interface (UNDECLARED_INTERFACE). interface
     `io.github.xxfast.kotlin.native.nuget.test.issue54.NestedListenerOwner.Listener` is nested inside a
     class, and a nested interface is never declared as a C# interface (only top-level ones are), so
     every member typed with it is skipped rather than emitted as a dangling reference; move it to the

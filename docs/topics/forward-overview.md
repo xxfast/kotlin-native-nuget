@@ -207,11 +207,12 @@ outside the effective `include`/`rootPackage` scope is skipped, naming the exact
 `rootPackage`):
 
 ```
-[nuget:SKIPPED_UNEXPORTED_DEPENDENCY_TYPE] Skipping Newsroom.sponsor: its UNEXPORTED_DEPENDENCY_TYPE
-    type combination is not supported. add include("io.github.xxfast.kotlin.native.nuget.test",
-    "dev.other.core") to nuget { publish { } } (an explicit include replaces the rootPackage default,
-    so keep your own packages listed), or expose a type from an in-scope package instead
-    at Newsroom.kt:63
+[nuget:SKIPPED_UNEXPORTED_DEPENDENCY_TYPE] Skipping Newsroom.sponsor: its type
+    `dev.other.core.Advertisement` is declared in a dependency module outside the export scope.
+    add include("io.github.xxfast.kotlin.native.nuget.test", "dev.other.core") to
+    nuget { publish { } } (an explicit include replaces the rootPackage default, so keep your own
+    packages listed), or expose a type from an in-scope package instead
+    at Newsroom.kt:66
 ```
 
 The hint names the whole `include(...)` line, the current scope first, because an explicit `include`
@@ -701,11 +702,11 @@ repository's own fixture, KSP task `UP-TO-DATE`:
 
 > Task :test-library:nugetReportDiagnostics
 [nuget:INFO_EXPORTED_FROM_DEPENDENCY] Note TestLibraryNative: the export closure admitted 6 type(s) from dependency modules: io.github.xxfast.kotlin.native.nuget.test.models.Byline, io.github.xxfast.kotlin.native.nuget.test.models.Purr, io.github.xxfast.kotlin.native.nuget.test.models.StoryCode, io.github.xxfast.kotlin.native.nuget.test.models.StoryUri, io.github.xxfast.kotlin.native.nuget.test.models.TopStory, io.github.xxfast.kotlin.native.nuget.test.models.Whisker. these are generated exactly like module-local types; narrow with exclude(...) if any of them should not be part of the public API
-[nuget:SKIPPED_UNEXPORTED_DEPENDENCY_TYPE] Skipping io.github.xxfast.kotlin.native.nuget.test.Newsroom.sponsor: its UNEXPORTED_DEPENDENCY_TYPE type combination is not supported. add include("io.github.xxfast.kotlin.native.nuget.test", "dev.other.core") to nuget { publish { } } (an explicit include replaces the rootPackage default, so keep your own packages listed), or expose a type from an in-scope package instead
-    at /Users/xxfast/Developer/XXFAST/KMP/kotlin-native-nuget/test-library/src/nativeMain/kotlin/io/github/xxfast/kotlin/native/nuget/test/Newsroom.kt:63
-[nuget:SKIPPED_INHERITED_MEMBER] Skipping io.github.xxfast.kotlin.native.nuget.test.models.StoryUri.length: its INHERITED_MEMBER type combination is not supported. a value class never exports a member a supertype declares, whether inherited, delegated (`by`) or explicitly overridden (ADR-082); call the supertype's API through the struct's underlying property from C#, or declare a member under a name or signature no supertype declares
-[nuget:SKIPPED_INHERITED_MEMBER] Skipping io.github.xxfast.kotlin.native.nuget.test.models.StoryUri.get: its INHERITED_MEMBER type combination is not supported. a value class never exports a member a supertype declares, whether inherited, delegated (`by`) or explicitly overridden (ADR-082); call the supertype's API through the struct's underlying property from C#, or declare a member under a name or signature no supertype declares
-[nuget:SKIPPED_INHERITED_MEMBER] Skipping io.github.xxfast.kotlin.native.nuget.test.models.StoryUri.subSequence: its INHERITED_MEMBER type combination is not supported. a value class never exports a member a supertype declares, whether inherited, delegated (`by`) or explicitly overridden (ADR-082); call the supertype's API through the struct's underlying property from C#, or declare a member under a name or signature no supertype declares
+[nuget:SKIPPED_UNEXPORTED_DEPENDENCY_TYPE] Skipping io.github.xxfast.kotlin.native.nuget.test.Newsroom.sponsor: its type `dev.other.core.Advertisement` is declared in a dependency module outside the export scope. add include("io.github.xxfast.kotlin.native.nuget.test", "dev.other.core") to nuget { publish { } } (an explicit include replaces the rootPackage default, so keep your own packages listed), or expose a type from an in-scope package instead
+    at /Users/xxfast/Developer/XXFAST/KMP/kotlin-native-nuget/test-library/src/nativeMain/kotlin/io/github/xxfast/kotlin/native/nuget/test/Newsroom.kt:66
+[nuget:SKIPPED_INHERITED_MEMBER] Skipping io.github.xxfast.kotlin.native.nuget.test.models.StoryUri.length: it is a value class member that a supertype declares. a value class never exports a member a supertype declares, whether inherited, delegated (`by`) or explicitly overridden (ADR-082); call the supertype's API through the struct's underlying property from C#, or declare a member under a name or signature no supertype declares
+[nuget:SKIPPED_INHERITED_MEMBER] Skipping io.github.xxfast.kotlin.native.nuget.test.models.StoryUri.get: it is a value class member that a supertype declares. a value class never exports a member a supertype declares, whether inherited, delegated (`by`) or explicitly overridden (ADR-082); call the supertype's API through the struct's underlying property from C#, or declare a member under a name or signature no supertype declares
+[nuget:SKIPPED_INHERITED_MEMBER] Skipping io.github.xxfast.kotlin.native.nuget.test.models.StoryUri.subSequence: it is a value class member that a supertype declares. a value class never exports a member a supertype declares, whether inherited, delegated (`by`) or explicitly overridden (ADR-082); call the supertype's API through the struct's underlying property from C#, or declare a member under a name or signature no supertype declares
 [nuget:SKIPPED_UNSUPPORTED_PROPERTY] Skipping io.github.xxfast.kotlin.native.nuget.test.cat.Cat.unsupported: its type generic declaration kotlin.sequences.Sequence has no property getter or setter shape. expose a bridgeable property (or a getter function) whose type is not generic declaration kotlin.sequences.Sequence, and export that instead
     at /Users/xxfast/Developer/XXFAST/KMP/kotlin-native-nuget/test-library/src/nativeMain/kotlin/io/github/xxfast/kotlin/native/nuget/test/cat/Cat.kt:46
 ```

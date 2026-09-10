@@ -531,7 +531,8 @@ A parameter or return position skips with `SKIPPED_UNSUPPORTED_TYPE`, naming the
 
 ```
 [nuget:SKIPPED_UNSUPPORTED_TYPE] Skipping io.github.xxfast.kotlin.native.nuget.test.issue54.NestedModeOwner.set:
-    its UNDECLARED_ENUM type combination is not supported. enum
+    its enum type `io.github.xxfast.kotlin.native.nuget.test.issue54.NestedModeOwner.Mode` is never
+    declared as a C# enum (UNDECLARED_ENUM). enum
     `io.github.xxfast.kotlin.native.nuget.test.issue54.NestedModeOwner.Mode` is not in the export set, so it
     is never declared as a C# enum and every member typed with it is skipped rather than emitted as a
     dangling reference; a nested enum class is never declared (only top-level enums are), so move it to the
@@ -558,11 +559,11 @@ never brought into the export scope. It skips with the existing
 
 ```
 [nuget:SKIPPED_UNEXPORTED_DEPENDENCY_TYPE] Skipping io.github.xxfast.kotlin.native.nuget.test.Newsroom.airwave:
-    its UNEXPORTED_DEPENDENCY_TYPE type combination is not supported. add
+    its type `dev.other.core.Airwave` is declared in a dependency module outside the export scope. add
     include("io.github.xxfast.kotlin.native.nuget.test", "dev.other.core") to nuget { publish { } } (an
     explicit include replaces the rootPackage default, so keep your own packages listed), or expose a type
     from an in-scope package instead
-    at Newsroom.kt:88
+    at Newsroom.kt:117
 ```
 
 <note>

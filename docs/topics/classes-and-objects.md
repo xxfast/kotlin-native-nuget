@@ -1032,8 +1032,8 @@ with `SKIPPED_UNSUPPORTED_TYPE` naming the new `UNDECLARED_CLASS` reason (a null
 reports `UNDECLARED_CLASS`, not `NULLABLE`):
 
 ```
-[nuget:SKIPPED_UNSUPPORTED_TYPE] Skipping io.github.xxfast.kotlin.native.nuget.test.Newsroom.schedule: its UNDECLARED_CLASS type combination is not supported. `io.github.xxfast.kotlin.native.nuget.test.models.Broadcast.Schedule` is nested inside another declaration, and a nested class or object is never declared in C# (only top-level ones are, plus sealed subclasses and companion objects), so every member typed with it is skipped rather than emitted as a dangling reference; move it to the top level of its file
-    at .../Newsroom.kt:89
+[nuget:SKIPPED_UNSUPPORTED_TYPE] Skipping io.github.xxfast.kotlin.native.nuget.test.Newsroom.schedule: its type `io.github.xxfast.kotlin.native.nuget.test.models.Broadcast.Schedule` is a nested class or object never declared in C# (UNDECLARED_CLASS). `io.github.xxfast.kotlin.native.nuget.test.models.Broadcast.Schedule` is nested inside another declaration, and a nested class or object is never declared in C# (only top-level ones are, plus sealed subclasses and companion objects), so every member typed with it is skipped rather than emitted as a dangling reference; move it to the top level of its file
+    at .../Newsroom.kt:90
 ```
 
 The same gate closes the ADR-066 reachability closure's matching hole: a nested dependency

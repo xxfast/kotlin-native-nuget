@@ -1087,3 +1087,67 @@ translator. No xunit test: reflection cannot see a doc comment, so the honest co
 - Three fixture classes gain three lines each in `Interop.cs`. No ABI, export, or handle change.
 - A malformed generated doc comment is now a red build here instead of a consumer complaint.
 - The next `<remarks>` customer adds a field and a `renderRemarks` call, not an escaper.
+
+## Amendment (2026-09-11): the eleven scope, position and nesting reasons own their sentence
+
+Judgement: an **amendment**, not a new ADR. It lifts the "Not widened to the other dependency-scope
+reasons" deferral the 2026-09-10 "the reason sentence lives on the reason" amendment recorded above,
+and closes the ROADMAP Phase 3 item "eleven reasons still read as an unsupported type combination".
+No new kind, no new reason, no new mechanism: eleven `when` arms where the `else` used to run.
+Status stays Accepted.
+
+### The gap
+
+The deferral was about the Writerside snippets quoting the old text, not about the wording being
+right. It was not right: a callable dropped because its type lives in a dependency module outside
+the export scope read "its `UNEXPORTED_DEPENDENCY_TYPE` type combination is not supported", and then
+the hint on the next line told the author to add an `include(...)`. Nothing about the type
+combination was unsupported. The same contradiction ran for every reason about *where* a type is
+declared (dependency module, `expect` in a klib, cross-module admission off, an `actual typealias`
+target), about *nesting* (`UNDECLARED_ENUM` / `UNDECLARED_INTERFACE` / `UNDECLARED_CLASS`), about
+the *position* (`SEALED_POSITION`, `BOUND_INTERFACE_POSITION`, `UNIMPLEMENTABLE_BOUND_INTERFACE`)
+and about a *supertype declaring the signature* (`INHERITED_MEMBER`).
+
+### Decision
+
+Eleven arms in `ForwardPlanSkipReason.diagnosticReason()`. Each names only the type and the
+category; the remedy stays in the hint the message already prints beside it.
+
+| Reason | Sentence |
+|---|---|
+| `UNEXPORTED_DEPENDENCY_TYPE` | its type `X` is declared in a dependency module outside the export scope |
+| `EXPECT_DEPENDENCY_TYPE` | its type `X` is an `expect` declaration in a dependency module, which no export scope of this module can reach |
+| `CROSS_MODULE_DISABLED_DEPENDENCY_TYPE` | its type `X` is declared in a dependency module and cross-module export is off |
+| `ACTUAL_TYPEALIAS_TARGET` | its type `Expect` is an `actual typealias` to `Target`, which is not exported |
+| `UNDECLARED_ENUM` | its enum type `X` is never declared as a C# enum (UNDECLARED_ENUM) |
+| `UNDECLARED_INTERFACE` | its interface type `X` is nested and never declared as a C# interface (UNDECLARED_INTERFACE) |
+| `UNDECLARED_CLASS` | its type `X` is a nested class or object never declared in C# (UNDECLARED_CLASS) |
+| `INHERITED_MEMBER` | it is a value class member that a supertype declares |
+| `SEALED_POSITION` | its sealed type `X` has no generated C# discriminator |
+| `BOUND_INTERFACE_POSITION` | a bound C# interface is not marshalled at this position |
+| `UNIMPLEMENTABLE_BOUND_INTERFACE` | it returns a bound C# interface that Kotlin cannot implement |
+
+Where `detail` is absent the type name drops out of the sentence and the rest stands.
+`ACTUAL_TYPEALIAS_TARGET` splits `detail` on `->` exactly as its hint does.
+
+**The reason constant is kept, parenthesised, in the three `UNDECLARED_*` sentences only.** They
+share one diagnostic kind (`SKIPPED_UNSUPPORTED_TYPE`), so the `[nuget:KIND]` prefix cannot tell
+them apart and the sentence has to. Every other reason here has its own kind in the prefix, so its
+sentence drops the constant, as `EXCLUDED_DEPENDENCY_TYPE` already did.
+
+`SEALED_POSITION`'s sentence is worded off the current meaning of the reason, a sealed type with no
+generated C# discriminator, which is what its hint says. Its enum KDoc still describes the
+pre-ADR-112 input-position case; correcting that is not this amendment's scope.
+
+`ForwardSkippedCallableWarningTest` gains one case: a hand-built `Skipped` per reason, asserting the
+sentence and that the message no longer also says "type combination is not supported".
+
+### Consequences of the amendment
+
+- Diagnostic text (KSP warning, `NugetDiagnostics.json`, `nugetReportDiagnostics`) changes for
+  eleven reasons. The sample library exercises seven of them, so the Writerside snippets quoting
+  that output are re-lifted with this change.
+- No C# output, no ABI, no export, no handle change.
+- The generic `else` sentence now covers only genuine type-combination drops, which is what it says.
+- The property route (`warnDroppedForwardProperties`) still hand-spells its sentences, because a
+  dropped property carries no `ForwardPlanSkipReason` to dispatch on. Tracked separately.
