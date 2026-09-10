@@ -140,4 +140,41 @@ class Tier1StaticRouteOverloadTest {
       "expected package-scoped numbering across receivers; generated=${result.generated}",
     )
   }
+
+  /**
+   * The collision label names the *fully qualified* C# member. Two packages both render a
+   * `StringExtensions` class, so a bare `StringExtensions.Tag` would not tell an author which of
+   * them failed. Member names differ per package so ADR-117's receiver-derived C entry point does
+   * not collide first.
+   */
+  @Test
+  fun `the collision label carries the C# namespace of the static class`() {
+    val result = Tier1Harness.run(
+      mapOf(
+        "A.kt" to """
+        package tier1.collisionlabel.a
+
+        fun String.tag(note: String): String = note
+        fun String.tag(note: String?): String = note ?: ""
+        """.trimIndent(),
+        "B.kt" to """
+        package tier1.collisionlabel.b
+
+        fun String.label(note: String): String = note
+        fun String.label(note: String?): String = note ?: ""
+        """.trimIndent(),
+      ),
+      processorOptions = mapOf("nuget.rootPackage" to "tier1.collisionlabel"),
+    )
+
+    val kind: String = ForwardDiagnosticKind.ERROR_CSHARP_SIGNATURE_COLLISION.name
+    assertTrue(
+      result.kspErrors.any { it.contains(kind) && it.contains("Interop.A.StringExtensions.Tag") },
+      "expected the namespace-qualified label for package a; kspErrors=${result.kspErrors}",
+    )
+    assertTrue(
+      result.kspErrors.any { it.contains(kind) && it.contains("Interop.B.StringExtensions.Label") },
+      "expected the namespace-qualified label for package b; kspErrors=${result.kspErrors}",
+    )
+  }
 }

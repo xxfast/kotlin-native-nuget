@@ -314,7 +314,7 @@ internal fun translate(
     // ADR-095: top-level overloads land on one static class per (namespace, file class).
     emitCsharpSignatureCollisions(
       methods = members.filterIsInstance<CirMethod>(),
-      container = finalClassName,
+      container = "$namespace.$finalClassName",
       symbol = funcs.first(),
       logger = logger,
     )
@@ -509,7 +509,7 @@ internal fun translate(
     // receiver is the first parameter of each, which is how C# tells extension overloads apart.
     emitCsharpSignatureCollisions(
       methods = members.filterIsInstance<CirMethod>(),
-      container = className,
+      container = "$namespace.$className",
       symbol = funcs.first(),
       logger = logger,
     )
