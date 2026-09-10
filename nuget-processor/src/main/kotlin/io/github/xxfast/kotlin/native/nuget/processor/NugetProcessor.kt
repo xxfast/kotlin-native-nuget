@@ -151,6 +151,24 @@ private fun KSClassDeclaration.nestedDeclarationKind(): String = when (classKind
   else -> "class"
 }
 
+// ADR-064 amendment (2026-09-11): "once per public nested declaration" holds at any depth, so the
+// walk recurses instead of reading one level of `declarations`. A non-public child is not reachable
+// API and is not descended into, which matches the public filter the candidates already carry.
+private fun KSClassDeclaration.nestedClassDeclarations(): Sequence<KSClassDeclaration> =
+  declarations
+    .filterIsInstance<KSClassDeclaration>()
+    // Kind before visibility, verified: `getVisibility()` on an enum entry read from a dependency
+    // klib/jar throws `Internal KSP Error` out of its `modifiers` delegate, and an entry is never a
+    // nested-declaration candidate anyway.
+    .filter { it.classKind in NESTED_DECLARATION_KINDS }
+    .filter { it.getVisibility() == Visibility.PUBLIC }
+    .flatMap { nested ->
+      // `enums` is deliberately not in the owner set, so an enum class is a candidate but not an
+      // owner: what sits inside one still says nothing, at any depth.
+      if (nested.classKind == ClassKind.ENUM_CLASS) sequenceOf(nested)
+      else sequenceOf(nested) + nested.nestedClassDeclarations()
+    }
+
 internal fun warnDroppedForwardCallables(
   catalog: ForwardCallablePlanCatalog,
   logger: KSPLogger,
@@ -869,7 +887,7 @@ class NugetProcessor(
     // nested under its base) and a companion object (ADR-013 folds it into its owner's statics).
     val nestedDeclarations: List<KSClassDeclaration> =
       (allClasses + valueClasses + sealedClasses + objects + interfaces)
-        .flatMap { owner -> owner.declarations.filterIsInstance<KSClassDeclaration>() }
+        .flatMap { owner -> owner.nestedClassDeclarations() }
         .filter { it.getVisibility() == Visibility.PUBLIC }
         .filter { !it.isCompanionObject }
         .filter { !it.isSealedSubclass() }

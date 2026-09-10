@@ -1198,3 +1198,66 @@ the positive control, over a skipped function, a skipped `val` and a skipped ext
 - A skipped property fixture needs a genuinely unplannable property *type*: an unsupported
   parameter type does not transfer, because a `List<List<String>?>` **property** plans fine as an
   opaque handle getter. The test uses a function type.
+
+## Amendment (2026-09-11): "once per public nested declaration" is at any depth
+
+Judgement: an **amendment**, not a new ADR. The rule the 2026-09-07 nested-declarations amendment
+states does not change, and neither does the message or the hint. The walk that implemented it was
+narrower than the rule.
+
+### The gap
+
+`nestedDeclarations` in `NugetProcessor.kt` flat-mapped **one** level of
+`owner.declarations.filterIsInstance<KSClassDeclaration>()` over the root buckets. Every owner in
+that set is a root bucket (`parentDeclaration == null`), so in `class A { class B { class C } }`,
+`B` was a candidate but never an owner and `C` was never enumerated. `C` produced no diagnostic in
+any bucket: it vanished in exactly the silence this ADR's `SKIPPED_NESTED_DECLARATION` exists to
+end. Every fixture in the repository nested exactly one level, which is why it held up this long.
+
+At the member position there was no gap: `ForwardBridgeTypeClassifier` and
+`ForwardReachabilityClosure` test `parentDeclaration != null`, which is depth-agnostic, so a member
+typed with `A.B.C` already skipped as `UNDECLARED_CLASS`. Only the declaration itself was missing.
+
+### Decision
+
+The walk recurses. A private `KSClassDeclaration.nestedClassDeclarations(): Sequence<KSClassDeclaration>`
+yields each public nested declaration and then descends into it, and the existing per-candidate
+filters (public, not a companion, not a sealed subclass, not an arm of an ineligible sealed
+interface, kind in `NESTED_DECLARATION_KINDS`), the `distinctBy` and the `sortedBy` are unchanged
+and apply per candidate at any depth. `A.B.C` gets its own warning, in the existing shape:
+
+```
+[nuget:SKIPPED_NESTED_DECLARATION] Skipping tier1.nestedclass.Quiet.Unused.Deeper: nested class `tier1.nestedclass.Quiet.Unused.Deeper` is never declared in C# (only top-level declarations, sealed subclasses and companions are). move it to the top level of its file
+```
+
+Three boundaries on the descent:
+
+- **A non-public child is not descended into.** A public `C` inside an `internal B` is not reachable
+  API, and the one-level walk already dropped a non-public `B`.
+- **The kind filter runs before the visibility check** inside the helper. Verified: `getVisibility()`
+  on an enum *entry* read from a dependency jar throws `Internal KSP Error` out of KSP's `modifiers`
+  delegate (`AbstractKSDeclarationImpl.kt:79`), and it is the recursion that first reaches one. An
+  entry is never a nested-declaration candidate, so testing `classKind` first both avoids the crash
+  and changes no output.
+- **An enum class is a candidate but not an owner.** `enums` is deliberately absent from the owner
+  set, so a declaration nested inside an `enum class` still says nothing, at any depth. Known
+  one-line follow-up, out of scope here.
+
+[ADR-112](112-sealed-interface-mapping.md)'s nested-arm fold deliberately does **not** apply. That
+fold exists because an arm's move-to-top-level hint fixes nothing (ADR-125 made position irrelevant
+to arm eligibility) and the parent's diagnostic already names the arm. Neither holds for ordinary
+nesting: `C`'s hint is correct advice, and `B`'s warning does not name `C`. Folding would also hide
+a two-deep `enum class` or `interface` behind a class warning, which is the vanishing this
+amendment removes.
+
+### Testing seam
+
+`Tier1NestedClassSkipTest` nests `class Quiet { class Unused { class Deeper } }` and asserts
+`Deeper` is named once with the move-to-top-level hint, and absent from the generated C#.
+
+### Consequences of the amendment
+
+- One more warning line per declaration nested two or more levels deep. No generated C# changes:
+  such a declaration was absent before and stays absent.
+- The fixture library's own `NugetDiagnostics.json` is unchanged in count: nothing in `test-library`
+  nests more than one level today.

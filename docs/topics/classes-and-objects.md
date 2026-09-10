@@ -13,7 +13,7 @@ A Kotlin `class` becomes a C# `class` backed by an opaque `StableRef` handle, im
 | nullable exported class *parameter* (`Foo?`), on a constructor, method, extension, or top-level function | nullable handle argument | `null` rides `IntPtr.Zero`, no has-value/value pair needed; see A nullable class handle parameter below ([#131](https://github.com/xxfast/kotlin-native-nuget/issues/131)) |
 | two or more same-named methods | one C# overload set | numbered native export/extern name, unnumbered public name; see Method overloads below ([ADR-090](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/090-ordinary-class-method-overloads.md)) |
 | a method with a trailing run of defaulted parameters | omitting overload per suffix length | same `@JvmOverloads` rule as constructor defaults, see Method default parameters below ([ADR-096](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/096-function-default-parameters.md)) |
-| nested `class`/`object`/`interface`/`enum class` | never declared | skips named (`SKIPPED_NESTED_DECLARATION` on the declaration, `UNDECLARED_CLASS` on a member typed with it), except a companion object and a sealed subclass, which are still declared; see Nested classes and objects below ([ADR-064](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/064-forward-unsupported-declaration-diagnostics.md)) |
+| nested `class`/`object`/`interface`/`enum class` (at any depth) | never declared | skips named (`SKIPPED_NESTED_DECLARATION` on the declaration, `UNDECLARED_CLASS` on a member typed with it), except a companion object and a sealed subclass, which are still declared; see Nested classes and objects below ([ADR-064](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/064-forward-unsupported-declaration-diagnostics.md)) |
 
 ## Kotlin
 
@@ -1042,6 +1042,11 @@ The same gate closes the ADR-066 reachability closure's matching hole: a nested 
 warning, instead of being declared at namespace root under a name nothing resolves against. The
 owning dependency class, `Broadcast`, still generates and constructs, and its unrelated members
 still bind; see `IntegrationTests/NestedClassGateTests.cs`.
+
+The rule holds at any nesting depth: `class A { class B { class C } }` gives `B` and `C` each their
+own `SKIPPED_NESTED_DECLARATION` warning, every public declaration named exactly once regardless of
+how deep it sits ([ADR-064](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/064-forward-unsupported-declaration-diagnostics.md)
+2026-09-11 amendment).
 
 <note>
     <p>The generated code itself is always <code>global::</code>-qualified, so a generated type
