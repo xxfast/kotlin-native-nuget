@@ -125,10 +125,20 @@ interface JobListener {
  * ADR-119), a flow on a `sealed interface` arm, a sealed element type (`Flow<Job>`, issue #126 and
  * #127 territory), and a `MutableStateFlow` write on an arm.
  *
- * Deliberately absent: a lambda-parameter cell (`fun watch(onTick: (Int) -> Unit)`). It stays a
- * `SEALED_SUBCLASS_UNROUTED` row of the sealed post-process table — the half of ROADMAP line 39
- * that ADR-118 does not close, now that the `suspend` row is routed — and binding it would drag
- * stored-callback pair detection into a fixture whose subject is method routing.
+ * The lambda-parameter half (ADR-036) is the row ADR-118 and ADR-124 left behind:
+ * - [Job.Running.relabel], the `Func` cell. A `(String) -> String` parameter with a `String` outer
+ *   return, so the arm has to reach the same thunk + `GCHandle` protocol `Cat.describeWith` uses,
+ *   under the arm's own export prefix (`job_running_relabel`), with the UTF8 pair crossing on the
+ *   callback argument and on the outer return at once.
+ * - [Job.Idle.pokeWith], the `Action` cell. A `(String) -> Unit` parameter and a `Unit` outer
+ *   return on a `data object` arm: the void branch of the renderer and the object arm's handle
+ *   receiver in one member, so a route that only ever binds the value-returning shape, or only
+ *   ever binds a `data class` receiver, cannot go green on this pair.
+ *
+ * Deliberately absent on the lambda half: a stored-callback or interface-bridge **pair** on an arm
+ * (`addX`/`removeX`), a `suspend` lambda parameter, and a generic method. All three keep the
+ * `SEALED_SUBCLASS_UNROUTED` row of the sealed post-process table, and a pair in particular must
+ * stay *named* rather than fall silent, which is a diagnostic assertion rather than a cell.
  *
  * Oreo (black with the white middle) does all the running: he starts at a percentage of the hallway
  * and finishes it. Mylo (brown and creamy) is [Job.Idle], and pokes back exactly once when nudged.
@@ -163,6 +173,13 @@ sealed class Job {
 
     /** `String` in and out on one member. */
     fun label(prefix: String): String = "$prefix$progress"
+
+    /**
+     * The ADR-036 **lambda parameter** on a sealed arm, `Func` half: `String` in and out across
+     * the callback protocol, so the UTF8 pair rides the thunk on the argument and on the outer
+     * return at once. Oreo answers with his own progress and lets C# rename it.
+     */
+    fun relabel(transform: (String) -> String): String = transform("running-$progress")
 
     /** Overload pair, first arm. */
     fun step(by: Int): Int = progress + by
@@ -264,6 +281,13 @@ sealed class Job {
   data object Idle : Job() {
     /** A method on an object arm: it takes the handle receiver, not a static route. */
     fun poke(): String = "idle"
+
+    /**
+     * The `Action` half of the lambda-parameter route, on a `data object` arm: a `Unit` outer
+     * return, so `renderCallbackMethod`'s void branch is the one crossed, and the object arm's
+     * handle receiver rather than a `data class` one. Mylo says exactly one thing when nudged.
+     */
+    fun pokeWith(action: (String) -> Unit) = action("idle")
 
     /** Declared `override` of [Job.describe]: renders as a plain `public` method on the arm. */
     override fun describe(): String = "idle"

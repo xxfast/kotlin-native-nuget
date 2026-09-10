@@ -197,6 +197,12 @@ for the collection-return leak this harness proved and closed.
 Only forward handles are counted; the reverse side's own `StableRef` sites are not (see
 [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md)).
 
+Row 8g, `LambdaParameter_OnASealedArm_StringInAndOut_ReturnsToBaseline`, is committed but skipped:
+the per-call callback route releases a handle-passed argument twice, a pre-existing gap on the
+ordinary-class route too, not something the sealed-arm case introduced. See
+[Lambda parameters on a sealed arm](interfaces-abstract-sealed.md#sealed-lambda-generated-c) and
+[ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md).
+
 <note>
     <p><code>NugetMarshal.LiveHandles</code> is process-global, so <code>LiveHandleTests.cs</code>
     and <code>CollectabilityTests.cs</code> run in their own xunit project, <code>LeakTests/</code>,

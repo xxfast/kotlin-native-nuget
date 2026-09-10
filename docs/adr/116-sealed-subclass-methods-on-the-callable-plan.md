@@ -7,6 +7,8 @@ Accepted
 
 > **Amended by [ADR-124](124-flow-route-sealed-arm-owners.md) (2026-09-10).** The legacy Flow/StateFlow route is keyed to sealed arms; `SEALED_SUBCLASS_UNROUTED` now covers generic and callback-protocol arm members only.
 
+> **Amended below (2026-09-11).** The per-call lambda-parameter route (ADR-036) is keyed to sealed arms too, so `Job.Running.relabel(transform)` binds as `Relabel(Func<string, string>)`. `SEALED_SUBCLASS_UNROUTED` now covers generic arm members, `suspend` lambda parameters, and stored-callback / interface-bridge **pairs**. See "Amendment (2026-09-11): the per-call lambda-parameter route on the arms".
+
 > **Amended below (2026-09-11).** The sealed **base** carries its own declared methods, so "declared-only" no longer means "absent from C#" for a base `open fun`: it means the base is the carrier and every arm inherits it. See "Amendment (2026-09-11)".
 
 ## Implementation notes (2026-09-08)
@@ -511,6 +513,64 @@ Two C# test assertions flipped, both recorded in `IntegrationTests/SealedSubclas
 `Job.Idle.Describe` is now an `override` of a base member rather than a plain public method, and
 `Describe` is on the sealed base rather than absent from it. `Running` still declares no `Describe`
 of its own, which is the same declared-only fact seen from the other side: it inherits the base's.
+
+## Amendment (2026-09-11): the per-call lambda-parameter route on the arms
+
+The third row of the table this ADR opened, after ADR-118's `suspend` and ADR-124's `Flow`, and the
+same shape of fix site for site. A method a sealed arm declares that takes a function parameter
+(ADR-036) binds under the arm's own export prefix: `Job.Running.relabel(transform: (String) -> String)`
+exports as `job_running_relabel` and renders as `public string Relabel(Func<string, string> transform)`
+inside `Job.Running`, through the same thunk and `GCHandle` pair `Cat.DescribeWith` already uses.
+`Job.Idle.pokeWith(action: (String) -> Unit)` is the `Action` half on a `data object` arm.
+
+Six sites, all mirrors of ADR-124's:
+
+- `exports/LambdaParameterExports.kt` gains `forwardArmLambdaMethods(classifier)`, the single
+  selector the Kotlin export loop, the C# translator and the import gate all read, so the three
+  halves cannot disagree about the member set. Declared-only (`parentDeclaration == this`), no
+  `suspend`, no `Flow` return, ADR-115's marker refusal and ADR-123's return refusal applied, and
+  the generated `copy`/`componentN` of a `data` arm excluded (a data class's `copy` can carry a
+  lambda-typed parameter, and the ordinary route excludes it upstream).
+- `NugetProcessor.kt` gains an arm loop beside ADR-118's and ADR-124's, calling the already
+  prefix-keyed `addLambdaParamMethodExport(method, subQualifiedName, armPrefix)` under
+  `attributing(subclass)`. No overload numbering work: neither half of this route carries a suffix.
+- `CirSealedSubclass` gains `callbackMembers: List<CirMember>`, filled by the same
+  `translateCallbackMethod` an ordinary class's `callbackMethods` come from, and `CirSealedRenderer`
+  dispatches it through `renderMember` with the same `indentNestedBody()` re-indent the other member
+  loops take. Deliberately **not** folded into `hasSuspendMethods`: this route is synchronous and
+  needs no scope, so a callback-only arm stays `IDisposable`.
+- The sealed post-process exemption is split by **origin**, not by reason. `CALLBACK_PROTOCOL` is
+  the reason a per-call callback member skips with *and* the reason the structural check above
+  assigns to both halves of a stored-callback (ADR-037) or interface-bridge (ADR-088) pair. No arm
+  route emits a pair, so exempting the constant wholesale would have deleted a pair's diagnostic and
+  put it back into the silent absence this ADR exists to end. The exemption therefore reads
+  `entry.node !in (interfaceBridgeMethods + storedCallbackMethods)`.
+
+Still named `SKIPPED_UNSUPPORTED_COMBINATION` (`SEALED_SUBCLASS_UNROUTED`) on an arm: a generic
+method, a `suspend` lambda parameter (`SUSPEND_CALLBACK_PROTOCOL`, a different constant, never
+exempted), and both halves of an add/remove pair. Routing the pairs is a separate change: their
+export builders are prefix-keyed already, but `translateStoredCallbackMethod` needs a `context` the
+arm branch does not thread today. It is a ROADMAP line, not a deferral hidden in silence.
+
+Two findings worth recording:
+
+- The Kotlin import gate `hasLambdaParamMethods` walked `classes` only, and a sealed class is not in
+  `classes` (ADR-009). `test-library` could never have shown it: its suspend and Flow surface
+  imports `invoke` / `CFunction` / `COpaquePointer` for its own reasons, so the arm's callback
+  wrapper compiled on borrowed imports. A module whose *only* callback owner is a sealed arm would
+  have failed to compile its own generated Kotlin. The gate now walks the arms through the same
+  selector, and `Tier1SealedArmLambdaTest`'s fixture declares no `suspend` and no `Flow` anywhere so
+  the gate is tested honestly rather than masked.
+- The `SEALED_SUBCLASS_UNROUTED` hint ended with "expose an equivalent non-generic member on the
+  sealed subclass instead". That was true while `GENERIC` was the only kind left under the reason;
+  it is wrong for a callback pair, which is not generic. Reworded to name the shape the arm's routes
+  do carry (Verified: found by the C# side reading the diagnostic against `addTicker`).
+
+The research memo warned that `callbackBody` spells `NugetMarshal.FromHandle<$csArgType>` with the
+Kotlin simple name for every non-`String` payload, which would have made `(Int) -> Unit` unbindable
+on an arm. That is no longer true: ADR-036's 2026-09-11 amendment passes a primitive payload by
+value on this route, so the arm inherits the fixed shape for free. The fixture cells use `String`
+because that is the payload the issue asks for, not because of the limitation.
 
 ## Scope
 

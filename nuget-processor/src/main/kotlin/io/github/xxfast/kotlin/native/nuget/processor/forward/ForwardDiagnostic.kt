@@ -727,10 +727,14 @@ internal fun ForwardPlanSkipReason.diagnosticHint(
 
   // ADR-116: `else` below would send the author after unsupported parameter/return shapes, which
   // is wrong here — the shapes are fine, the *route* is missing for this owner kind.
+  // ADR-116 amendment (2026-09-11): "non-generic" was the whole remedy while GENERIC was the only
+  // kind left under this reason. It is not: an add/remove callback pair and a suspend lambda
+  // parameter reach it too, and neither is generic, so telling that author to drop a type
+  // parameter names nothing they wrote.
   ForwardPlanSkipReason.SEALED_SUBCLASS_UNROUTED ->
     "move the member onto an ordinary class (which still has the legacy route this member kind " +
-        "needs), or expose an equivalent non-generic member on the sealed " +
-        "subclass instead"
+        "needs), or expose an equivalent member on the sealed subclass in a shape the arm's " +
+        "routes do carry (a plain, per-call, non-generic one)"
 
   // ADR-116 amendment (2026-09-11): a sealed base has one remedy an arm does not -- the arms
   // themselves, which do carry the suspend and flow routes (ADR-118/ADR-124).

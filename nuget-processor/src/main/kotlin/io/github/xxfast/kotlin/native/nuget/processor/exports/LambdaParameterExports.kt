@@ -1,13 +1,20 @@
 package io.github.xxfast.kotlin.native.nuget.processor.exports
 
+import com.google.devtools.ksp.getVisibility
+import com.google.devtools.ksp.symbol.KSClassDeclaration
 import com.google.devtools.ksp.symbol.KSFunctionDeclaration
 import com.google.devtools.ksp.symbol.KSType
+import com.google.devtools.ksp.symbol.Modifier
+import com.google.devtools.ksp.symbol.Visibility
 import com.squareup.kotlinpoet.ClassName
 import com.squareup.kotlinpoet.FileSpec
 import com.squareup.kotlinpoet.FunSpec
 import io.github.xxfast.kotlin.native.nuget.processor.cir.KOTLIN_TO_CSHARP_PARAM
 import io.github.xxfast.kotlin.native.nuget.processor.cir.LAMBDA_TYPES
 import io.github.xxfast.kotlin.native.nuget.processor.cir.expandAliases
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeTypeClassifier
+import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyRefusedReturn
+import io.github.xxfast.kotlin.native.nuget.processor.forward.optInMarker
 
 /**
  * Generates @CName bridge exports for class methods that accept lambda parameters (reverse interop).
@@ -217,4 +224,54 @@ internal fun FileSpec.Builder.addLambdaParamMethodExport(
   builder.addCode(exportedBody)
 
   addFunction(builder.build())
+}
+
+/**
+ * ADR-116 amendment (2026-09-11): a sealed arm's **per-call** lambda-parameter methods, the third
+ * legacy route re-keyed onto the arm after ADR-118's suspend and ADR-124's flow. One selector for
+ * the three halves that must agree on the member set (the Kotlin export loop, the C# translator
+ * and the import gate), shaped after `forwardArmFlowMethods`.
+ *
+ * Declared-only (`parentDeclaration == this`), which is ADR-116's rule for the arm's method
+ * surface: a base method the arm does not override belongs to no arm.
+ *
+ * An add/remove **pair** is excluded here and stays a named `SEALED_SUBCLASS_UNROUTED` drop: the
+ * stored-callback route (ADR-037) is not re-keyed by this change, and emitting the add half as a
+ * per-call callback would silently change what the member means.
+ */
+internal fun KSClassDeclaration.forwardArmLambdaMethods(
+  classifier: ForwardBridgeTypeClassifier,
+): List<KSFunctionDeclaration> {
+  val candidates: List<KSFunctionDeclaration> = getAllFunctions()
+    .filter { it.getVisibility() == Visibility.PUBLIC }
+    .filter { it.parentDeclaration == this }
+    .filter { !it.modifiers.contains(Modifier.SUSPEND) }
+    .filter { !it.returnsForwardFlow() }
+    // A data class's generated `copy` can carry a lambda-typed parameter; the ordinary route
+    // excludes those members upstream and so does the plan, so this route must not claim them.
+    .filter { method ->
+      val name: String = method.simpleName.asString()
+      val isDataClassMethod: Boolean = modifiers.contains(Modifier.DATA) &&
+          (name == "copy" || name.startsWith("component"))
+      name !in setOf("equals", "hashCode", "toString", "<init>") && !isDataClassMethod
+    }
+    .filter { method ->
+      method.parameters.any { parameter ->
+        parameter.type.resolve().expandAliases().declaration.qualifiedName?.asString() in
+            LAMBDA_TYPES
+      }
+    }
+    .toList()
+
+  val paired: Set<KSFunctionDeclaration> = findStoredCallbackPairs(candidates)
+    .flatMap { (add, remove) -> listOf(add, remove) }
+    .toSet()
+
+  return candidates
+    .filter { it !in paired }
+    // Issue #121: a marked declaration reaches neither artifact, legacy route or not.
+    .filter { it.optInMarker(classifier.exportMarkers) == null }
+    // ADR-123: a return this route cannot marshal drops the member on both halves, the C# rule
+    // `translateClass` applies upstream of its own projection.
+    .filter { classifier.legacyRefusedReturn(it) == null }
 }

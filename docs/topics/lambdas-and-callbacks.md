@@ -197,6 +197,10 @@ public void Cat_CombineNicknames_Arity2LambdaParameter()
 }
 ```
 
+The same route now binds a method declared on a **sealed arm** too, re-keyed onto the arm's own
+export prefix rather than a class name, exactly as the `suspend` and `Flow` routes were; see
+[Lambda parameters on a sealed arm](interfaces-abstract-sealed.md#sealed-lambda-generated-c).
+
 ### A primitive payload {id="a-primitive-payload"}
 
 A `kotlin.*` primitive payload (`Int`, `Boolean`, `Double`, ...) crosses by value instead of going

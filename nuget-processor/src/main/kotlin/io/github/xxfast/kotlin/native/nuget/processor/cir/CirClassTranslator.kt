@@ -18,6 +18,7 @@ import com.google.devtools.ksp.symbol.Visibility
 import io.github.xxfast.kotlin.native.nuget.processor.csharpParameterName
 import io.github.xxfast.kotlin.native.nuget.processor.exports.findInterfaceBridgePairs
 import io.github.xxfast.kotlin.native.nuget.processor.exports.forwardArmFlowMethods
+import io.github.xxfast.kotlin.native.nuget.processor.exports.forwardArmLambdaMethods
 import io.github.xxfast.kotlin.native.nuget.processor.exports.isForwardFlowType
 import io.github.xxfast.kotlin.native.nuget.processor.exports.returnsHeldMutableStateFlow
 import io.github.xxfast.kotlin.native.nuget.processor.exports.findStoredCallbackPairs
@@ -1790,6 +1791,16 @@ internal fun translateSealedClass(
         context = context,
       )
 
+      // ADR-116 amendment (2026-09-11): the arm's per-call lambda-parameter methods (ADR-036),
+      // through the same `translateCallbackMethod` an ordinary class's go through, so the thunk,
+      // the delegate registration and the extern shape are an ordinary class's. The entry point is
+      // composed from `subPrefix`, which is the prefix the Kotlin export loop passes to
+      // `addLambdaParamMethodExport`; `forwardArmLambdaMethods` is the selector both read.
+      val callbackMembers: List<CirMember> = subclass.forwardArmLambdaMethods(classifier)
+        .mapNotNull { method ->
+          translateCallbackMethod(method, libraryName, subPrefix, exportedTypes, tracker)
+        }
+
       CirSealedSubclass(
         name = subName,
         nativePrefix = subPrefix,
@@ -1797,6 +1808,7 @@ internal fun translateSealedClass(
         methods = methods,
         asyncMembers = asyncMembers,
         flowMembers = flowMembers,
+        callbackMembers = callbackMembers,
         // Derived from what projected, not from a `getAllFunctions()` scan: a base-declared or
         // ADR-114 refused suspend member would otherwise hand the arm a scope, `IAsyncDisposable`
         // and `DisposeAsync` with no async method on it to use them. ADR-124: a flow member needs

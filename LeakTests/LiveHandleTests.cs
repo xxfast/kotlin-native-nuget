@@ -356,6 +356,26 @@ public class LiveHandleTests
         });
     }
 
+    // Row 8g. Issue #115 / ADR-036 on a sealed arm: the lambda-parameter route re-keyed onto the
+    // arm's own export prefix. Every crossing mints handles on both sides of the thunk: Kotlin
+    // retains the `String` argument it hands the callback and releases it after the invoke, and
+    // C#'s answer comes back as a `WrapString` box Kotlin releases once the outer return is read.
+    // So a route that forgets either release leaks one or two handles *per call*, not per wrapper,
+    // and the arm receiver makes it its own row: the arm's handle is the one under the callback.
+    // Skipped until the per-call callback route stops releasing a handle-passed payload twice (Kotlin
+    // releases after the invoke and C#'s FromHandle<string> disposes too), which reads as -1 per
+    // crossing on every route, ordinary classes included. ROADMAP: callback-route double release.
+    [Fact(Skip = "pre-existing double release on the per-call callback route, see ROADMAP")]
+    public void LambdaParameter_OnASealedArm_StringInAndOut_ReturnsToBaseline()
+    {
+        AssertNoLeak(() =>
+        {
+            using var factory = new JobFactory();
+            using Job.Running oreo = factory.Running(40);
+            Assert.Equal("running-40!", oreo.Relabel(s => s + "!"));
+        });
+    }
+
     // Row 8f. ADR-071: a `MutableStateFlow<T>` returned from a function, held by the wrapper. The
     // fix mints a StableRef for the flow itself on every call (the wrapper's `ownedHandle`, freed
     // in `Dispose()`), which is a handle no other flow route owns: the property half re-reads a

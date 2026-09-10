@@ -34,6 +34,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.exports.addFlowMethodExpor
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addFlowPropertyExports
 import io.github.xxfast.kotlin.native.nuget.processor.exports.declaresOrInheritsFlowMember
 import io.github.xxfast.kotlin.native.nuget.processor.exports.forwardArmFlowMethods
+import io.github.xxfast.kotlin.native.nuget.processor.exports.forwardArmLambdaMethods
 import io.github.xxfast.kotlin.native.nuget.processor.exports.forwardArmFlowProperties
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addFunctionExports
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addGenericClassExports
@@ -42,6 +43,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.exports.addCSharpBridgeMar
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addGcCollectExport
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addInterfaceBridgeFactoryExport
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addInterfaceExports
+import io.github.xxfast.kotlin.native.nuget.processor.exports.addLambdaParamMethodExport
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addNugetHandlesCounter
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addNugetHelperExports
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addNugetListHelperExports
@@ -1452,13 +1454,26 @@ class NugetProcessor(
       "kotlin.Function0", "kotlin.Function1", "kotlin.Function2", "kotlin.Function3",
     )
 
-    val hasLambdaParamMethods: Boolean = classes.any { cls ->
+    // ADR-116 amendment (2026-09-11): a sealed arm owns the per-call callback route too, and a
+    // sealed class is not in `classes` (ADR-009). Without the arm walk a module whose only
+    // callback owner is an arm generates `fn.invoke(...)` with no `invoke`/`CFunction`/
+    // `COpaquePointer` import: a compile error in the generated file, invisible in `test-library`
+    // only because its suspend and flow surface imports the same three names anyway.
+    val armsHaveLambdaParamMethods: Boolean = sealedClasses.any { sealed ->
+      sealed.getSealedSubclasses().any { subclass ->
+        subclass.forwardArmLambdaMethods(forwardClassifier).isNotEmpty()
+      }
+    }
+
+    val classesHaveLambdaParamMethods: Boolean = classes.any { cls ->
       cls.getAllFunctions().any { method ->
         method.parameters.any { param ->
           param.type.resolve().expandAliases().declaration.qualifiedName?.asString() in lambdaTypeSet
         }
       }
     }
+
+    val hasLambdaParamMethods: Boolean = armsHaveLambdaParamMethods || classesHaveLambdaParamMethods
 
     // Stored-callback pairs also need invoke/CFunction/COpaquePointer (the bridge lambda calls fn.invoke).
     val hasStoredCallbackMethods: Boolean = classes.any { cls ->
@@ -1577,6 +1592,27 @@ class NugetProcessor(
             builder.addFlowMethodExports(
               method, subQualifiedName, armPrefix, forwardClassifier, callableCatalog,
             )
+          }
+        }
+      }
+    }
+
+    // ADR-116 amendment (2026-09-11): and the third legacy route on the arm, the per-call
+    // lambda-parameter one (ADR-036), under the same `${sealedPrefix}_${sub}` prefix.
+    // `addLambdaParamMethodExport` is already prefix-keyed, so the arm needs no export shape of
+    // its own; `forwardArmLambdaMethods` is the single selector this loop, the import gate above
+    // and `translateSealedClass` all read.
+    sealedClasses.forEach { sealed ->
+      val sealedPrefix: String = sealed.simpleName.asString().lowercase()
+      sealed.getSealedSubclasses().forEach { subclass ->
+        val subQualifiedName: String = subclass.qualifiedName?.asString() ?: return@forEach
+        val armPrefix: String = "${sealedPrefix}_${subclass.simpleName.asString().lowercase()}"
+        val armLambdaMethods: List<KSFunctionDeclaration> =
+          subclass.forwardArmLambdaMethods(forwardClassifier)
+        if (armLambdaMethods.isEmpty()) return@forEach
+        attributing(subclass) {
+          armLambdaMethods.forEach { method ->
+            builder.addLambdaParamMethodExport(method, subQualifiedName, armPrefix)
           }
         }
       }

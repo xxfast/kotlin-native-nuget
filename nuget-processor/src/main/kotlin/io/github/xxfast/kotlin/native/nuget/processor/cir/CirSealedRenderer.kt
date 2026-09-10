@@ -178,6 +178,13 @@ private fun sealedSubclassBlock(
     append(buildString { renderMember(member, subclass.name) }.indentNestedBody())
   }
 
+  // ADR-116 amendment (2026-09-11): the arm's per-call lambda-parameter methods, dispatched by the
+  // same `renderMember` and re-indented the same way. The extern rides the member, so nothing here
+  // composes an entry point of its own.
+  subclass.callbackMembers.forEach { member ->
+    append(buildString { renderMember(member, subclass.name) }.indentNestedBody())
+  }
+
   // Issue #54: a `data object` gets the same generated members a `data class` gets, and Kotlin
   // exports all three for it. Binding them here is what makes two wrappers over the one Kotlin
   // singleton compare equal: every read mints a fresh wrapper, so reference equality never held,

@@ -1188,6 +1188,10 @@ internal class ForwardCallablePlanner(
       }
     }
 
+    // The union the CALLBACK_PROTOCOL exemption below reads, as a `Set<KSNode>` so an entry's
+    // nullable node can be tested against it directly.
+    val pairedCallbackMethods: Set<KSNode> = interfaceBridgeMethods + storedCallbackMethods
+
     // ADR-116 Diagnostics: `droppedFromCSharp = false` means "a named legacy route re-emits it",
     // which is only true for an ordinary class. On a sealed arm the member is simply gone, so the
     // silent deferral becomes a named drop carrying the reason it came from. ABSTRACT cannot occur
@@ -1204,10 +1208,16 @@ internal class ForwardCallablePlanner(
             // regardless. SUSPEND_CALLBACK_PROTOCOL is deliberately not exempted: no arm route
             // emits it.
             entry.reason != ForwardPlanSkipReason.SUSPEND &&
-            // ADR-124: and the same for the legacy Flow/StateFlow route, one issue later. What is
-            // left under this reason is GENERIC, CALLBACK_PROTOCOL and SUSPEND_CALLBACK_PROTOCOL,
-            // none of which any arm route emits.
-            entry.reason != ForwardPlanSkipReason.FLOW_PROTOCOL
+            // ADR-124: and the same for the legacy Flow/StateFlow route, one issue later.
+            entry.reason != ForwardPlanSkipReason.FLOW_PROTOCOL &&
+            // ADR-116 amendment (2026-09-11): the per-call lambda-parameter route (ADR-036) is
+            // keyed to the arms too now, so its skip is a deferral again. Split by **origin**, not
+            // by reason: an add/remove pair takes the identical `CALLBACK_PROTOCOL` constant from
+            // the structural check above, no arm route emits one, and exempting the reason
+            // wholesale would put a pair back into the silent absence this ADR exists to end.
+            // What is left named is GENERIC, SUSPEND_CALLBACK_PROTOCOL and the pairs.
+            !(entry.reason == ForwardPlanSkipReason.CALLBACK_PROTOCOL &&
+                entry.node !in pairedCallbackMethods)
       if (!isUnrouted) return@map entry
 
       ForwardCallableCatalogEntry.Skipped(

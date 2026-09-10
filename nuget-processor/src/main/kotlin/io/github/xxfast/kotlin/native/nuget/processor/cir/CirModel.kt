@@ -141,8 +141,9 @@ data class CirSealedSubclass(
    * ADR-116: the arm's own declared member functions, projected from the ADR-062 callable plan the
    * way an ordinary [CirClass]'s methods are. Empty for an arm that declares none. A `suspend`
    * member rides [asyncMembers] (ADR-118) and a `Flow`-returning one [flowMembers] (ADR-124); a
-   * generic or callback-protocol member has no arm route at all and is named by a
-   * `SKIPPED_UNSUPPORTED_COMBINATION` diagnostic instead.
+   * generic member has no arm route at all and is named by a `SKIPPED_UNSUPPORTED_COMBINATION`
+   * diagnostic instead, and so does a callback member the arm route does not cover (an add/remove
+   * pair, a `suspend` lambda parameter).
    */
   val methods: List<CirMethod> = emptyList(),
   /**
@@ -159,6 +160,14 @@ data class CirSealedSubclass(
    * other, with `isFlow` set.
    */
   val flowMembers: List<CirMember> = emptyList(),
+  /**
+   * ADR-116 amendment (2026-09-11): the arm's own declared **per-call lambda-parameter** methods
+   * (ADR-036), projected by the same `translateCallbackMethod` an ordinary class's are. A
+   * [CirDllImport] plus a `CirCallbackMethod` per member, which is why they cannot ride [methods]
+   * either. Deliberately not folded into [hasSuspendMethods]: the callback route runs
+   * synchronously and needs no scope of the arm's own.
+   */
+  val callbackMembers: List<CirMember> = emptyList(),
   /**
    * Whether the arm owns a coroutine scope, which is what gives it its `_scopeHandle`,
    * `GetOrCreateScope()`, `IAsyncDisposable` and `DisposeAsync`. ADR-118 set it for a suspending
