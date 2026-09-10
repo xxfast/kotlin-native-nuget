@@ -466,8 +466,8 @@ internal fun translateClass(
           isVirtual = !isOverride && prop.modifiers.isOpenForOverride(),
           // ADR-075 amendment (2026-09-10): this class's own unimplemented `abstract val`/`var`.
           // `isAbstract()` (not `Modifier.ABSTRACT`) is the same predicate
-          // `isForwardPlannableMemberOf` uses. The abstract *method* walk has its own, broader
-          // hole (a class-declared `abstract fun` is dropped entirely); it is not touched here.
+          // `isForwardPlannableMemberOf` uses. The abstract *method* walk keys on the same
+          // property as of the 2026-09-11 amendment, so both routes now agree.
           isAbstract = prop.isAbstract(),
         )
       }
@@ -686,12 +686,14 @@ internal fun translateClass(
     .mapNotNull { method ->
       val methodName: String = method.simpleName.asString()
       if (methodName in plannedMemberNames) return@mapNotNull null
-      val declaredInThisClass: Boolean = method.parentDeclaration == cls
-      val hasImplementation: Boolean = declaredInThisClass ||
-          method.modifiers.contains(Modifier.OVERRIDE)
-      val isMethodAbstract: Boolean = !hasImplementation &&
-          (isAbstract || method.modifiers.contains(Modifier.ABSTRACT))
-      if (!isMethodAbstract) return@mapNotNull null
+      // ADR-075 / ADR-101 amendment (2026-09-11): `abstract` is a property of the body, not of the
+      // declaring class. KSP's `isAbstract` (not `Modifier.ABSTRACT`) is the same predicate
+      // `isForwardPlannableMemberOf` uses, and covers an interface member declared without the
+      // modifier. Asking `parentDeclaration == cls || OVERRIDE` instead got both halves wrong: a
+      // class's own `abstract fun` looked implemented and was dropped from C# entirely (CS0115 on
+      // a subclass `override`), while an inherited member *with* a body that the planner declined
+      // looked unimplemented and rendered `public abstract` (CS0534 on any further C# subclass).
+      if (!method.isAbstract) return@mapNotNull null
       val methodReturnTypeResolved = method.returnType?.resolve()?.expandAliases()
       val methodReturn: String =
         methodReturnTypeResolved?.declaration?.simpleName?.asString() ?: "Unit"

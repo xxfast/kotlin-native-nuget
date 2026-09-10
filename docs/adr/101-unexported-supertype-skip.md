@@ -432,8 +432,8 @@ asserts `export_api_greet` / `export_api_get_label` are generated from a
   the Kotlin `override` modifier, independent of the forward `isOverride` bit); a generic exported
   base renders by simple name (`CirClassRenderer.kt:194`); `X`'s own interfaces still disappear
   whenever an *exported* base exists (`CirClassTranslator.kt`), unrelated to this fix; an abstract
-  `X` with a structurally-skipped concrete inherited member still renders it `public abstract`
-  (`CirClassTranslator.kt`), which a further concrete subclass would fail to override (CS0534); the
+  `X` with an unplanned concrete inherited member used to render it `public abstract` (CS0534 on a
+  further concrete subclass), **fixed by the 2026-09-11 abstract-method-walk amendment below**; the
   base-class hint hedges between the same-module and dependency cases rather than picking one
   (the "nothing today distinguishes them cheaply" reasoning behind this is wrong; corrected in the
   2026-09-11 amendment below, which picks the clause).
@@ -697,3 +697,20 @@ Evidence: `Tier1UnexportedBaseClassSkipTest`'s chain cell (`public class Api : L
 `export_api_row` bound, no `export_api_anchor`, exactly one diagnostic naming `Api : LocalMid`) and
 `IntegrationTests/TransitiveUnexportedBaseTests.cs` (`typeof(Dinghy).BaseType == typeof(Vessel)`,
 `Vessel v = new Dinghy()`, `d.Row()`, `d.Oars`, no `Skiff` type in the assembly).
+
+**2026-09-11 amendment: the abstract method walk decides `abstract` by the body, not by the declaring
+class.** The CS0534 clause above closes. `CirClassTranslator.kt`'s abstract walk asked
+`parentDeclaration == cls || Modifier.OVERRIDE` and got both directions wrong. An inherited member
+*with* a body that no plan covers (a generic interface default, a refused parameter type, a base
+dropped by this ADR's skip) looked unimplemented and rendered `public abstract`, so the generated file
+itself could be CS0246 and any further C# subclass CS0534. A class's own `abstract fun` looked
+implemented and was dropped from C# entirely, so a subclass's `public override` was CS0115. The walk
+now keys on KSP's `KSFunctionDeclaration.isAbstract`, the same body-based predicate
+`isForwardPlannableMemberOf` and the ADR-075 property route already use: bodiless renders `abstract`,
+a body that reached no plan is dropped like it is on a concrete class. Nothing gains or loses an
+export; an abstract C# method has no `DllImport` either way.
+
+Evidence: `Tier1AbstractMethodTest` (`public abstract string Honk();` on `Vehicle` with `Truck`'s
+`override` compiling; no line carrying both `abstract` and `Tally` for `Vault : Register`, with
+`: IRegister` still in the base list) and the `test/garage/` fixtures behind
+`IntegrationTests/AbstractMethodTests.cs`.

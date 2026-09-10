@@ -21,6 +21,7 @@ Kotlin's three flavours of inheritance each get a distinct C# shape: `interface`
 | an `interface` declared nested inside another class, used at a return, property, or parameter position | skipped named (`UNDECLARED_INTERFACE`) | see [Nested interfaces skip named](#nested-interfaces-skip-named) |
 | an exported base class's own declared `open val`/`open var`/`open fun` | `public virtual` property or method (both accessors, when a property has one of each) | so a subclass `override` compiles instead of `CS0506`; a concrete `open class`'s generated `Dispose()` renders `public virtual void Dispose()` for the same reason, see [A base class's own `open val`/`open var`/`open fun`](#a-base-class-s-own-open-val-open-var), [ADR-101](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/101-unexported-supertype-skip.md) |
 | an exported base class's `abstract val`/`abstract var`, own, or inherited from an exported interface without an implementation | `public abstract` property (both accessors, when it has one of each) | so a subclass `override` compiles instead of `CS0506`; the base's own abstract member keeps its (uncallable) `_get_`/`_set_` export pair, but an inherited-and-unimplemented interface member generates no native import at all, see [An exported base class's own `abstract val`/`abstract var`](#a-base-class-s-own-abstract-val-abstract-var), [An interface property a base class inherits without implementing](#an-interface-property-a-base-class-inherits-without-implementing), [ADR-075](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/075-collection-property-getter-setter-independence.md) |
+| an exported base class's own declared `abstract fun` (no body, no interface behind it) | `public abstract` method | so a subclass `override` compiles instead of `CS0115`; the walk keys on whether the Kotlin member has a body, so an *inherited* member the planner declined to plan is dropped instead of rendered `public abstract`, avoiding `CS0534` on a further subclass, see [An exported base class's own `abstract fun`](#a-base-class-s-own-abstract-fun), [ADR-101](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/101-unexported-supertype-skip.md), [ADR-075](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/075-collection-property-getter-setter-independence.md) |
 
 ## Kotlin
 
@@ -440,6 +441,126 @@ public void Violin_AbstractVarWrittenThroughTheBase_IsSeenByKotlinDispatch()
     Assert.Equal("violin (strings, tuned G-D-A-Mylo)", ((Instrument)violin).Describe());
 }
 ```
+
+## An exported base class's own `abstract fun` {id="a-base-class-s-own-abstract-fun"}
+
+The method twin of the property section above. An exported abstract class's own **unimplemented**
+`abstract fun`, one it declares without a body, renders `public abstract`, so a subclass `override`
+compiles. The walk keys on whether the Kotlin member has a body (KSP's `isAbstract`), not on which
+class declares it, so the same predicate also drops an *inherited* member the planner declined to
+plan (a generic interface default, for example) instead of rendering it `public abstract`, which
+would be uncompilable on a further C# subclass (`CS0534`, "does not implement inherited abstract
+member") since the naive abstract-path type mapping cannot spell every declined shape.
+
+From `test-library/src/nativeMain/kotlin/.../garage/Vehicle.kt`. `honk()` has no body, so it must
+render `abstract`; `describe()` calls it and stays a concrete, non-abstract method:
+
+```kotlin
+abstract class Vehicle(val plate: String) {
+  abstract fun honk(): String
+
+  fun describe(): String = "$plate says ${honk()}"
+}
+
+class Truck(plate: String) : Vehicle(plate) {
+  override fun honk(): String = "HONK"
+}
+```
+
+From `test-library/src/nativeMain/kotlin/.../garage/Vault.kt`. `Register.tally` is a generic
+interface default the planner declines structurally; it still has a body, so it must be dropped
+from `Vault` rather than rendered `abstract`, and `: IRegister` stays:
+
+```kotlin
+interface Register {
+  fun <T> tally(row: T): T = row
+}
+
+abstract class Vault : Register
+
+class StrongRoom : Vault()
+```
+
+### Generated C# {id="a-base-class-s-own-abstract-fun-generated-c"}
+
+From `Interop.cs`. `Honk()` renders `public abstract` on `Vehicle`, and `Truck` overrides it;
+`Vault` keeps `: IRegister` with no `Tally` member at all:
+
+```C#
+public abstract class Vehicle : IDisposable, INugetHandle
+{
+    internal IntPtr _handle;
+
+    public string Plate
+    {
+        get { /* ... */ }
+    }
+
+    public string Describe() { /* ... */ }
+
+    public abstract string Honk();
+
+    public abstract void Dispose();
+}
+
+public class Truck : Vehicle
+{
+    public override string Honk()
+    {
+        /* ... */
+    }
+
+    public override void Dispose() { /* ... */ }
+}
+
+public abstract class Vault : IRegister, IDisposable, INugetHandle
+{
+    internal IntPtr _handle;
+
+    public abstract void Dispose();
+}
+
+public interface IRegister : IDisposable
+{
+}
+```
+
+### Using it from C# {id="a-base-class-s-own-abstract-fun-using-it-from-c"}
+
+From `IntegrationTests/AbstractMethodTests.cs`. `describe()` is Kotlin's own body on the abstract
+base calling `honk()`, so reading it through the base static type proves the override is wired on
+the Kotlin object, not just on the C# facade; `Vault` has no `Tally` to reflect at all:
+
+```C#
+[Fact]
+public void Truck_ConcreteBaseMethod_DispatchesBackThroughTheKotlinOverride()
+{
+    using var truck = new Truck("T1");
+
+    // `describe()` is Kotlin's own body on the abstract base calling `honk()`, so this proves
+    // the override is wired on the Kotlin object, not just on the C# facade.
+    Assert.Equal("T1 says HONK", truck.Describe());
+    Assert.Equal("T1 says HONK", ((Vehicle)truck).Describe());
+}
+
+[Fact]
+public void Vault_DeclinedInheritedDefault_IsDroppedRatherThanRenderedAbstract()
+{
+    Assert.Null(typeof(Vault).GetMethod("Tally"));
+}
+```
+
+<note>
+    <p>
+        The base's own abstract member keeps its (uncallable) native import pair, the same as the
+        property route. An inherited member the planner declined generates no native import at
+        all: there is no plan to spell it from. See
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/101-unexported-supertype-skip.md">ADR-101</a>
+        and
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/075-collection-property-getter-setter-independence.md">ADR-075</a>'s
+        2026-09-11 amendment.
+    </p>
+</note>
 
 ## An interface property a base class inherits without implementing {id="an-interface-property-a-base-class-inherits-without-implementing"}
 

@@ -185,9 +185,9 @@ as the expected set, so suppressing the export while keeping the plan would repo
 missing one. Pinned by `Tier1AbstractPropertyTest`, `CirOrdinaryRendererTest`, the `orchestra` fixture
 (`Instrument` / `Violin`) and `IntegrationTests/AbstractPropertyTests.cs`.
 
-Still not fixed, and separate: the abstract **method** walk, which drops a class-declared `abstract fun`
-entirely and renders an inherited concrete member abstract when its base was dropped. It changes which
-members get an export, so it keeps its own backlog item. So does an abstract class inheriting an interface
+Separate, and now fixed by the second 2026-09-11 amendment below: the abstract **method** walk, which
+dropped a class-declared `abstract fun` entirely and rendered an inherited concrete member abstract when
+no plan covered it. So does an abstract class inheriting an interface
 `val` it does not implement: that property is never planned, so there is no `CirProperty` to flag, and it
 vanishes from C# while `: IPet` stays in the base list (`CS0535`). That last one closed on 2026-09-11, below.
 
@@ -460,3 +460,23 @@ Everything labelled **verified** above was read in repo source this session. The
    round-trips over a by-value receiver.
 3. That `setterNativeType` needs no change for `Collection` (its `else` branch already routes through
    `wireType()`, which maps `Collection` to `POINTER`). Read, not compiled.
+
+**2026-09-11 amendment: the abstract method walk now keys on the same body-based predicate as the
+property route.** `CirClassTranslator.kt`'s abstract method walk asked `parentDeclaration == cls ||
+Modifier.OVERRIDE` and treated the answer as "has an implementation". Both directions were wrong. A
+class's own `abstract fun` counted as implemented, so it reached neither the plan (the planner skips
+`ABSTRACT`) nor the declaration walk, and vanished from C#; a subclass's `public override` was then
+CS0115. An *inherited* member that does have a body but reached no plan (a generic interface default,
+a refused parameter type, a base this ADR's siblings dropped) counted as unimplemented and rendered
+`public abstract`, which a further C# subclass could not override (CS0534), and whose naive type
+spelling could be CS0246 in the generated file itself.
+
+The walk is now `if (!method.isAbstract) return@mapNotNull null`, KSP's `KSFunctionDeclaration.isAbstract`,
+which is exactly what `prop.isAbstract()` gives the property route above and what
+`isForwardPlannableMemberOf` already used. Bodiless renders `abstract`; a body that reached no plan is
+dropped with the planner's existing warning, the same as on a concrete class. No export changes hands:
+an abstract C# method has no `DllImport`.
+
+Not fixed, noted: the abstract path's type mapping is still by simple name, so a class-declared
+`abstract fun` using a cross-namespace or collection type renders that type unqualified. Evidence:
+`Tier1AbstractMethodTest` and the `test/garage/` fixtures (`Vehicle`/`Truck`, `Register`/`Vault`/`StrongRoom`).

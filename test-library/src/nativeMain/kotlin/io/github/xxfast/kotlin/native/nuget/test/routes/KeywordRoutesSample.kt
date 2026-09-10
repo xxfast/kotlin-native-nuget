@@ -54,7 +54,9 @@
  * declaration on the base, while the subclass still renders `public override string Handle(...)`,
  * which is CS0115 with nothing to override. (`Animal.Speak` renders `public abstract string
  * Speak();` only because `Pet` declares it.) That defect is worth its own issue, and carrying it
- * here would keep `Interop.cs` red after this fix landed.
+ * here would keep `Interop.cs` red after this fix landed. (Fixed by the 2026-09-11 abstract-method
+ * walk amendment to ADR-101/ADR-075, see `garage/Vehicle.kt`; this cell was never revived, so the
+ * route above stays untouched here.)
  *
  * Every keyword used here (`ref`, `params`) is a legal Kotlin identifier without backticks and a C#
  * reserved word, so no cell needs Kotlin-side quoting to exist.
