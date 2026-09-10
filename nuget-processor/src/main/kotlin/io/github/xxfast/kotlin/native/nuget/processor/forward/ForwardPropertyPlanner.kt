@@ -48,6 +48,17 @@ internal data class ForwardDroppedProperty(
    *  setter. Routes the diagnostic to `SKIPPED_OPT_IN_MARKER`, whose message names the marker
    *  rather than blaming the property's (perfectly bridgeable) type. */
   val optInMarker: String? = null,
+  /** ADR-064's 2026-09-11 amendment: the same [ForwardPlanSkipReason] classification a dropped
+   *  *callable* carries, so a scope, nesting, sealed or opt-in drop reads the reason's own
+   *  sentence and remedy instead of the generic "no property getter or setter shape" pair, which
+   *  named the property's type when the type was not what failed. `null` only when the classifier
+   *  produced no reason at all; a reason that does not own a sentence (a legacy-route deferral
+   *  like [ForwardPlanSkipReason.GENERIC]) keeps the shipped wording too. */
+  val reason: ForwardPlanSkipReason? = null,
+  /** The detail slot [reason]'s sentence and hint read: the undeclared type's name, the
+   *  dependency type to `include(...)`, the opt-in marker, the sealed base. See
+   *  [BridgeType.skipDetail]. */
+  val detail: String? = null,
 )
 
 /**
@@ -517,6 +528,10 @@ internal class ForwardPropertyPlanner(
       ForwardDroppedProperty(
         symbol, prop, description,
         boundInterface = type.unwrapNullable() is BridgeType.BoundInterface,
+        // The classification is the callable planner's, unchanged: this is the same BridgeType a
+        // parameter or return position would have been skipped on, so it takes the same reason.
+        reason = type.skipReason(),
+        detail = type.skipDetail(),
       )
     )
   }

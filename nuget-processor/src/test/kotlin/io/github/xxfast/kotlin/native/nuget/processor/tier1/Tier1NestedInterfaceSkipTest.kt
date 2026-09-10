@@ -98,10 +98,12 @@ class Tier1NestedInterfaceSkipTest {
       result.kspWarnings.any {
         it.contains("SKIPPED_UNSUPPORTED_PROPERTY") &&
             it.contains("Owner.listener") &&
-            it.contains("tier1.nestedinterface.Owner.Listener")
+            it.contains("tier1.nestedinterface.Owner.Listener") &&
+            // ADR-064's 2026-09-11 amendment: same reason, same hint, at a property position too.
+            it.contains("move it to the top level")
       },
-      "expected the property route to skip naming the undeclared nested interface; " +
-          "kspWarnings=${result.kspWarnings}",
+      "expected the property route to skip naming the undeclared nested interface and its " +
+          "move-to-top-level fix; kspWarnings=${result.kspWarnings}",
     )
   }
 }

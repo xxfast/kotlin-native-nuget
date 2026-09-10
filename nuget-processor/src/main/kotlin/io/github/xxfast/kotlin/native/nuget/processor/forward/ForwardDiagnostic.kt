@@ -475,6 +475,31 @@ private fun String.isStdlibPackage(): Boolean =
   this == "kotlin" || startsWith("kotlin.") || this == "kotlinx" || startsWith("kotlinx.")
 
 /**
+ * The fallback sentence every reason that is genuinely about an unsupported type combination
+ * keeps. Named so [ownsSentence] can ask "did this reason say something of its own?" without an
+ * allowlist that has to be extended every time [diagnosticReason] gains an arm.
+ */
+internal fun ForwardPlanSkipReason.genericSentence(): String =
+  "its $name type combination is not supported"
+
+/**
+ * ADR-064's 2026-09-11 amendment: true when [diagnosticReason] says something better than
+ * [genericSentence] for this reason and detail. The property route reads it to decide between the
+ * reason's sentence and hint (scope, nesting, sealed, opt-in) and its own shipped "no property
+ * getter or setter shape" pair, which stays for a reason that has nothing of its own to say (a
+ * legacy-route deferral like [ForwardPlanSkipReason.GENERIC], whose generic sentence would name a
+ * reason constant the author cannot act on).
+ *
+ * Detail-sensitive on purpose: [ForwardPlanSkipReason.EXCLUDED_DEPENDENCY_TYPE] and the
+ * `UNDECLARED_*` arms read [detail], so the answer for the same reason can differ with it. The
+ * `parameter` slot [diagnosticReason] takes is deliberately absent: only
+ * [ForwardPlanSkipReason.NULLABLE] reads it, and only at an input position, which a property drop
+ * never is.
+ */
+internal fun ForwardPlanSkipReason.ownsSentence(detail: String?): Boolean =
+  diagnosticReason(detail) != genericSentence()
+
+/**
  * ADR-064's 2026-09-10 amendment: the per-reason sentence, kept beside the hint it reads with.
  *
  * The six named arms are the drops that are not about an unsupported type combination, so the
@@ -498,7 +523,7 @@ internal fun ForwardPlanSkipReason.diagnosticReason(
   detail: String? = null,
   parameter: String? = null,
 ): String {
-  val generic = "its $name type combination is not supported"
+  val generic: String = genericSentence()
   return when (this) {
     // ADR-109's remedy, followed: out of scope by the author's own instruction, not unsupported,
     // which is what the hint below ("skipped by design") and this kind's KDoc already say. The
@@ -759,7 +784,7 @@ internal fun ForwardPlanSkipReason.diagnosticHint(
     "enum `$enumName` is not in the export set, so it is never declared as a C# enum and every " +
         "member typed with it is skipped rather than emitted as a dangling reference; a nested " +
         "enum class is never declared (only top-level enums are), so move it to the top level of " +
-        "its file — or, if it already is top level, bring its package into the export scope"
+        "its file, or, if it already is top level, bring its package into the export scope"
   }
 
   // Names the interface, for the reason above, and says nested explicitly: unlike the enum flag

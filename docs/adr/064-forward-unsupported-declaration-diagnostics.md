@@ -1150,7 +1150,8 @@ sentence and that the message no longer also says "type combination is not suppo
 - No C# output, no ABI, no export, no handle change.
 - The generic `else` sentence now covers only genuine type-combination drops, which is what it says.
 - The property route (`warnDroppedForwardProperties`) still hand-spells its sentences, because a
-  dropped property carries no `ForwardPlanSkipReason` to dispatch on. Tracked separately.
+  dropped property carries no `ForwardPlanSkipReason` to dispatch on. Tracked separately, and
+  closed by the "the property route carries its reason" amendment below.
 
 ## Amendment (2026-09-11): a skip leaves no import behind
 
@@ -1261,3 +1262,87 @@ amendment removes.
   such a declaration was absent before and stays absent.
 - The fixture library's own `NugetDiagnostics.json` is unchanged in count: nothing in `test-library`
   nests more than one level today.
+
+
+## Amendment (2026-09-11): the property route carries its reason
+
+Judgement: an **amendment**, not a new ADR. It closes the deferral the "eleven scope, position and
+nesting reasons own their sentence" amendment above left open, using that amendment's own arms. No
+new kind, no new reason, no new mechanism, no generated C# change. Status stays Accepted.
+
+### The gap
+
+`ForwardDroppedProperty` carried a `typeDescription` string and a `boundInterface` flag, and
+nothing else. So `warnDroppedForwardProperties` hand-spelled one sentence and one hint for every
+whole-property drop:
+
+```
+its type io.github.xxfast.kotlin.native.nuget.test.issue54.NestedModeOwner.Mode has no property getter or setter shape. expose a bridgeable property (or a getter function) whose type is not io.github.xxfast.kotlin.native.nuget.test.issue54.NestedModeOwner.Mode, and export that instead
+```
+
+Both halves are wrong for a nested enum. The type has a perfectly good getter shape; it is the
+*declaration* that is never emitted. And the remedy is unfollowable: the author cannot "expose a
+property whose type is not `Mode`" and keep the property. The correct remedy, move the enum to the
+top level, was already written, one position over: a `fun tune(mode: Mode)` parameter or a
+`fun tuning(): Mode` return printed it. Only the property position did not.
+
+The same gap ran for every reason about scope, nesting, position or an opt-in marker: a property
+typed with an out-of-scope dependency type never printed the `include(...)` line, and a
+sealed-interface element read as its outer collection shape.
+
+### Decision
+
+The property record carries the classification the callable record already does.
+
+- `ForwardDroppedProperty` gains `reason: ForwardPlanSkipReason?` and `detail: String?`.
+  `ForwardPropertyPlanner.recordDropped` fills them from the very `BridgeType` it was about to
+  describe: `type.skipReason()` and `type.skipDetail()`.
+- `skipReason()`, `isUndeclared()` and the five detail extractors move from private members of
+  `ForwardCallablePlanner` to file-level `internal` functions, alongside a `BridgeType.skipDetail()`
+  that chains the five in the order the three callable skip sites already chain them. They read
+  nothing but the `BridgeType`, so this is a visibility move, the same one ADR-075 made for
+  `isBridgeableComponent()`. `unwrapNullable()` moves with them.
+  `collectionComponentDetail()` deliberately stays private: it is keyed to `COLLECTION`, and the
+  property route has its own component wording for that case.
+- `warnDroppedForwardProperties` gains the `scope` parameter its callable twin has, fed the same
+  `effectiveInclude`, and its `else` arm splits in two on
+  `reason.ownsSentence(detail)`: a reason with something of its own to say prints
+  `diagnosticReason(detail)` and `diagnosticHint(detail, scope)`; every other record keeps the
+  shipped pair byte-identical.
+- `ownsSentence()` is `diagnosticReason(detail, parameter) != genericSentence()`, not an allowlist.
+  Every arm added to `diagnosticReason` in future routes a property automatically, and no arm can
+  be added to one position and forgotten at the other.
+
+**The diagnostic kind does not change.** Every routed record stays
+`SKIPPED_UNSUPPORTED_PROPERTY`. That kind names *where* the drop happened, which is still exactly
+true, nine Tier 1 tests and the kind's own KDoc define it that way, and `toDiagnosticKind()`
+`error()`s on the legacy-route reasons a property genuinely holds: `Cat.unsupported: Sequence<Int>`
+classifies as `GENERIC`, and dispatching its kind would fail the build. Only the sentence and the
+hint come from the reason.
+
+The opt-in (`SKIPPED_OPT_IN_MARKER`) and bound-interface (`SKIPPED_BOUND_TYPE_POSITION`) arms above
+the `else` are untouched. They already read the reason, and folding the bound arm in would lose
+the type name its shipped sentence carries and would misroute a non-implementable bound interface.
+
+### Testing seam
+
+`ForwardSkippedPropertyWarningTest`, beside its callable twin: hand-built `ForwardDroppedProperty`
+records, asserting the `UNDECLARED_ENUM` hint says "move it to the top level" and no longer says
+"has no property getter", that `UNEXPORTED_DEPENDENCY_TYPE` with `scope = listOf("app")` names
+`include("app", "dep")`, and that `reason = null` and `reason = GENERIC` keep the shipped sentence
+and hint verbatim. `Tier1UndeclaredEnumSkipTest` and `Tier1NestedInterfaceSkipTest` add the
+move-to-top-level assertion at the property position, and `Tier1ReachabilityClosureTest` gains a
+`val sponsor: Advert` case for the `include(...)` line.
+
+### Consequences of the amendment
+
+- Text changes for four sample-library records: `issue54.NestedModeOwner.mode` and
+  `models.Broadcast.band` (`UNDECLARED_ENUM`), `issue54.NestedListenerOwner.listener`
+  (`UNDECLARED_INTERFACE`) and `issue128.GroomingPlan.grooming` (`OPT_IN_MARKER_TYPE`).
+  `cat.Cat.unsupported` and the two `issue112` `codes` properties are `GENERIC` and keep the
+  shipped text. The Writerside pages quoting the changed four are re-lifted with this change.
+- `Tier1SealedCollectionPropertyTest`'s `Album.filters` moves from the outer-collection wording
+  ("Collection (element type sealed helper ...)") to `SEALED_POSITION`'s "its sealed type `Filter`
+  has no generated C# discriminator", matching what the same element already printed at a callable
+  position.
+- No C# output, no ABI, no export, no handle change.

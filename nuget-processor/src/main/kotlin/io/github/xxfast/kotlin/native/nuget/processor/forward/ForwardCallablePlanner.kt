@@ -2764,205 +2764,6 @@ internal class ForwardCallablePlanner(
     ForwardReceiver.Static -> emptyList()
   }
 
-  /** ADR-066: the qualified name to feed the `SKIPPED_UNEXPORTED_DEPENDENCY_TYPE` hint, when this
-   *  (possibly nullable-wrapped) type is the direct reason a callable was dropped because it is a
-   *  reachable-but-out-of-scope dependency type. `null` for every other skip reason. */
-  private fun BridgeType.unexportedDependencyDetail(): String? =
-    (unwrapNullable() as? BridgeType.Unsupported)
-      ?.takeIf { unsupported -> unsupported.isUnexportedDependency }
-      ?.rendered
-
-  /** ADR-074: the `expect` name and its erased-to target, when this (possibly nullable-wrapped)
-   *  type is the direct reason a callable was dropped because its `actual typealias` target is
-   *  not exportable. Encoded as `"<expect qualified name>-><target rendered name>"` so
-   *  [ForwardDiagnosticKind.SKIPPED_ACTUAL_TYPEALIAS_TARGET]'s hint can name both without a
-   *  second detail slot on [ForwardCallableCatalogEntry.Skipped]. `null` for every other reason. */
-  private fun BridgeType.actualTypeAliasTargetDetail(): String? =
-    (unwrapNullable() as? BridgeType.Unsupported)
-      ?.takeIf { unsupported -> unsupported.isActualTypeAliasTarget }
-      ?.let { unsupported -> "${unsupported.actualTypeAliasExpectName}->${unsupported.rendered}" }
-
-  /** True for the two "declared nowhere, at any position" flags, whose skip reason outranks the
-   *  position-shaped ones ([ForwardPlanSkipReason.NULLABLE]) when both could apply. */
-  private fun BridgeType.isUndeclared(): Boolean {
-    val unsupported: BridgeType.Unsupported = this as? BridgeType.Unsupported ?: return false
-    return unsupported.isUndeclaredEnum || unsupported.isUndeclaredInterface ||
-        unsupported.isUndeclaredClass
-  }
-
-  /** The undeclared type's qualified name, when this (possibly nullable-wrapped, possibly
-   *  collection-wrapped) type is the direct reason a callable was dropped by
-   *  [ForwardPlanSkipReason.UNDECLARED_ENUM] or [ForwardPlanSkipReason.UNDECLARED_INTERFACE].
-   *  `null` for every other skip reason.
-   *
-   *  Descends one collection level, unlike its two siblings above: a `List<Outer.Mode>` parameter
-   *  attributes to its *element's* reason (`collectionInputSkipReason`), and
-   *  `collectionComponentDetail()` deliberately declines any reason but `COLLECTION`, so without
-   *  this the hint for the element case would name no type at all. The siblings' equivalent gap
-   *  (`List<UnexportedDep>`) is left exactly as it was, changing it would reword a shipped
-   *  hint. */
-  /** ADR-115: `"<marked type>-><marker qualified name>"`, so the one diagnostic can name both
-   *  the type the author wrote and the marker that removed it, without a second detail slot. */
-  private fun BridgeType.optInMarkerDetail(): String? {
-    val unwrapped: BridgeType = unwrapNullable()
-    val candidate: BridgeType = when (unwrapped) {
-      is BridgeType.Collection ->
-        (unwrapped.element ?: unwrapped.key ?: unwrapped.value)?.unwrapNullable() ?: unwrapped
-
-      else -> unwrapped
-    }
-    val unsupported: BridgeType.Unsupported = candidate as? BridgeType.Unsupported ?: return null
-    val marker: String = unsupported.optInMarker ?: return null
-    return "${unsupported.rendered}->$marker"
-  }
-
-  private fun BridgeType.undeclaredTypeDetail(): String? {
-    val unwrapped: BridgeType = unwrapNullable()
-    val candidate: BridgeType = when (unwrapped) {
-      is BridgeType.Collection ->
-        (unwrapped.element ?: unwrapped.key ?: unwrapped.value)?.unwrapNullable() ?: unwrapped
-
-      else -> unwrapped
-    }
-    return (candidate as? BridgeType.Unsupported)
-      ?.takeIf { unsupported ->
-        unsupported.isUndeclaredEnum || unsupported.isUndeclaredInterface ||
-            unsupported.isUndeclaredClass
-      }
-      ?.rendered
-  }
-
-  /** True for the ADR-009 sealed-hierarchy protocol, whichever position it turned up at. The
-   *  classifier mints exactly one protocol name for it, so the prefix is the whole test. */
-  private fun BridgeType.isSealedProtocol(): Boolean =
-    this is BridgeType.SpecializedProtocol && name.startsWith(SEALED_HELPER_PREFIX)
-
-  /** The sealed base's qualified name, when this (possibly nullable-wrapped, possibly
-   *  collection-wrapped) type is the direct reason a callable took a
-   *  [ForwardPlanSkipReason.SEALED_POSITION] skip. Descends one collection level for the same
-   *  reason [undeclaredTypeDetail] does: a `List<Shape>` parameter attributes to its element's
-   *  reason, so without this its hint would name no type at all. `null` for every other reason. */
-  private fun BridgeType.sealedTypeDetail(): String? {
-    val unwrapped: BridgeType = unwrapNullable()
-    val candidate: BridgeType = when (unwrapped) {
-      is BridgeType.Collection ->
-        (unwrapped.element ?: unwrapped.key ?: unwrapped.value)?.unwrapNullable() ?: unwrapped
-
-      else -> unwrapped
-    }
-    return (candidate as? BridgeType.SpecializedProtocol)
-      ?.takeIf { protocol -> protocol.name.startsWith(SEALED_HELPER_PREFIX) }
-      ?.name
-      ?.removePrefix(SEALED_HELPER_PREFIX)
-  }
-
-  private fun BridgeType.skipReason(): ForwardPlanSkipReason? = when (this) {
-    BridgeType.Unit, is BridgeType.Primitive -> null
-    BridgeType.Char -> ForwardPlanSkipReason.CHAR
-    BridgeType.String -> ForwardPlanSkipReason.STRING
-    // ADR-076: defensive only -- shapeOrNull's Instant branch always succeeds, same as CHAR/
-    // STRING above.
-    BridgeType.Instant -> ForwardPlanSkipReason.INSTANT
-    // ADR-103: defensive only, in the same way.
-    BridgeType.Duration -> ForwardPlanSkipReason.DURATION
-    // ADR-107: genuinely reached -- shapeOrNull has no Throwable branch, because a method return
-    // typed Throwable is explicitly deferred (only the property getter binds in v1).
-    BridgeType.Throwable -> ForwardPlanSkipReason.THROWABLE
-    // ADR-106: defensive only, like Instant/Duration -- Uuid always has a return shape.
-    BridgeType.Uuid -> ForwardPlanSkipReason.UUID
-    // ADR-088: same deferred nullable position as the input side, named the same way instead of
-    // reaching the generic NULLABLE bucket.
-    is BridgeType.Nullable -> when {
-      type is BridgeType.BoundInterface -> ForwardPlanSkipReason.BOUND_INTERFACE_POSITION
-      // Issue #54: `Listener?` is not skipped *because* it is nullable -- a non-nullable
-      // `Listener` is just as undeclarable -- so the NULLABLE bucket's "expose a non-nullable
-      // wrapper" hint would send the author after a fix that cannot work. An undeclared inner
-      // type wins over the position. Narrow on purpose: every other nullable Unsupported keeps
-      // the shipped NULLABLE wording.
-      type.isUndeclared() -> requireNotNull(type.skipReason())
-      else -> ForwardPlanSkipReason.NULLABLE
-    }
-    // ADR-066: a bridgeable-shaped Collection (List/MutableList result, Map/Set) that still
-    // reaches here failed for its own reason (nothing else calls skipReason() on a bridgeable
-    // Collection); an unsupported element/key/value attributes to that component's own reason
-    // (e.g. UNEXPORTED_DEPENDENCY_TYPE) instead of the generic COLLECTION bucket, which
-    // `toDiagnosticKind()` reserves for the genuinely input-position case.
-    is BridgeType.Collection -> if (isBridgeableComponent()) {
-      ForwardPlanSkipReason.COLLECTION
-    } else {
-      (element ?: key ?: value)?.skipReason() ?: ForwardPlanSkipReason.UNSUPPORTED
-    }
-
-    is BridgeType.RawCollection -> ForwardPlanSkipReason.COLLECTION
-    is BridgeType.Enum -> ForwardPlanSkipReason.ENUM
-    is BridgeType.ObjectHandle -> ForwardPlanSkipReason.HANDLE
-    // Never actually reached by an ordinary interface result (shapeOrNull's Interface branch
-    // always succeeds); only reachable defensively via a Collection-of-Interface element skip.
-    is BridgeType.Interface -> ForwardPlanSkipReason.HANDLE
-    // ADR-088: shapeOrNull's BoundInterface branch succeeds only for a manifest-flagged
-    // Kotlin-implementable interface, so reaching here at a return position means exactly the
-    // "no mint{Iface}Bridge" case. A collection element reaches here too, and takes the position
-    // skip instead (collections of bound interfaces are deferred).
-    is BridgeType.BoundInterface ->
-      if (implementable) ForwardPlanSkipReason.BOUND_INTERFACE_POSITION
-      else ForwardPlanSkipReason.UNIMPLEMENTABLE_BOUND_INTERFACE
-
-    is BridgeType.ValueClass -> ForwardPlanSkipReason.VALUE_CLASS
-    is BridgeType.SpecializedProtocol -> when {
-      // ADR-065: StateFlow shares the plain-Flow legacy route (both are named legacy exports in
-      // exports/ClassExports.kt + cir/CirFlowRenderer.kt); it is a distinct SpecializedProtocol
-      // name only so the classifier never confuses it with plain Flow (ADR-065 detection order).
-      name.startsWith("state flow ") -> ForwardPlanSkipReason.FLOW_PROTOCOL
-      name.startsWith("flow ") -> ForwardPlanSkipReason.FLOW_PROTOCOL
-      name.startsWith("suspend lambda ") -> ForwardPlanSkipReason.SUSPEND_CALLBACK_PROTOCOL
-      name.startsWith("lambda ") || name.startsWith("interface bridge ") -> ForwardPlanSkipReason.CALLBACK_PROTOCOL
-      name.startsWith(SEALED_HELPER_PREFIX) -> ForwardPlanSkipReason.SEALED_POSITION
-      name.startsWith("generic declaration ") -> ForwardPlanSkipReason.GENERIC
-      else -> error("Forward planner has no explicit legacy route for specialized protocol $name")
-    }
-
-    is BridgeType.RawKSType -> error("Forward planner received raw KSP type $rendered")
-    // ADR-074: checked ahead of isUnexportedDependency -- an actual-typealias-target redirect can
-    // land on either an out-of-scope module-local type or a cross-module one, and both must carry
-    // this ADR's own diagnostic, not the generic UNEXPORTED_DEPENDENCY_TYPE include(...) hint.
-    is BridgeType.Unsupported -> when {
-      // ADR-115: checked first -- a marked type is refused for a reason no scope change and no
-      // move-to-top-level can repair, so it must not pick up any of the hints below.
-      optInMarker != null -> ForwardPlanSkipReason.OPT_IN_MARKER_TYPE
-      isActualTypeAliasTarget -> ForwardPlanSkipReason.ACTUAL_TYPEALIAS_TARGET
-      // The classifier sets exactly one of these two on an enum, and never both: a nested enum
-      // (whichever module it lives in) is undeclarable rather than out of scope, so it must not
-      // pick up the `include(...)` hint.
-      isUndeclaredEnum -> ForwardPlanSkipReason.UNDECLARED_ENUM
-      // Issue #54: the same "undeclarable, not out of scope" rule for a nested interface.
-      isUndeclaredInterface -> ForwardPlanSkipReason.UNDECLARED_INTERFACE
-      // ...and for a nested class or object.
-      isUndeclaredClass -> ForwardPlanSkipReason.UNDECLARED_CLASS
-      // The closure records WHY it refused a dependency declaration; each refusal wants a
-      // different remedy, and only NOT_INCLUDED (or an unrecorded refusal, e.g. a module-local
-      // type the closure never saw) wants the `include(...)` one.
-      isUnexportedDependency -> when (unexportedDependencyRefusal) {
-        ForwardAdmissionRefusal.EXCLUDED_BY_CONFIG ->
-          ForwardPlanSkipReason.EXCLUDED_DEPENDENCY_TYPE
-
-        ForwardAdmissionRefusal.EXPECT_IN_DEPENDENCY ->
-          ForwardPlanSkipReason.EXPECT_DEPENDENCY_TYPE
-
-        ForwardAdmissionRefusal.CROSS_MODULE_ADMISSION_DISABLED ->
-          ForwardPlanSkipReason.CROSS_MODULE_DISABLED_DEPENDENCY_TYPE
-
-        // Defensive: the classifier tests nestedness ahead of the dependency route, so a nested
-        // refusal should never reach here. If one ever does, it must not be told to widen scope.
-        ForwardAdmissionRefusal.NESTED_DECLARATION -> ForwardPlanSkipReason.UNDECLARED_CLASS
-
-        ForwardAdmissionRefusal.NOT_INCLUDED, null ->
-          ForwardPlanSkipReason.UNEXPORTED_DEPENDENCY_TYPE
-      }
-
-      else -> ForwardPlanSkipReason.UNSUPPORTED
-    }
-  }
-
   private fun BridgeType.inputSkipReason(): ForwardPlanSkipReason? = when (this) {
     // ADR-106: Uuid is admissible at every input position, over the String wire.
     BridgeType.String, BridgeType.Char, BridgeType.Instant, BridgeType.Duration,
@@ -3132,8 +2933,6 @@ internal class ForwardCallablePlanner(
     is BridgeType.Unsupported,
       -> error("Forward planner requested a wire type for ineligible $this")
   }
-
-  private fun BridgeType.unwrapNullable(): BridgeType = if (this is BridgeType.Nullable) type else this
 
   /**
    * ADR-077 sub-item 4: the wire a value-class *underlying* rides. Unlike [wireType], which
@@ -3335,3 +3134,225 @@ internal fun BridgeType.isWrappableComponent(): Boolean = when (this) {
  */
 private fun KSValueParameter.bridgeName(): String =
   (name?.asString() ?: "_").bridgeParameterName()
+
+/**
+ * ADR-064's 2026-09-11 amendment: the skip-reason classification and its detail extractors sit at
+ * file level so the *property* planner can carry the same reason a callable does. They read
+ * nothing but the [BridgeType] they are called on, so lifting them out of
+ * [ForwardCallablePlanner] costs nothing (the same move ADR-075 made for [isBridgeableComponent]).
+ */
+internal fun BridgeType.unwrapNullable(): BridgeType = if (this is BridgeType.Nullable) type else this
+
+/** ADR-066: the qualified name to feed the `SKIPPED_UNEXPORTED_DEPENDENCY_TYPE` hint, when this
+ *  (possibly nullable-wrapped) type is the direct reason a callable was dropped because it is a
+ *  reachable-but-out-of-scope dependency type. `null` for every other skip reason. */
+internal fun BridgeType.unexportedDependencyDetail(): String? =
+  (unwrapNullable() as? BridgeType.Unsupported)
+    ?.takeIf { unsupported -> unsupported.isUnexportedDependency }
+    ?.rendered
+
+/** ADR-074: the `expect` name and its erased-to target, when this (possibly nullable-wrapped)
+ *  type is the direct reason a callable was dropped because its `actual typealias` target is
+ *  not exportable. Encoded as `"<expect qualified name>-><target rendered name>"` so
+ *  [ForwardDiagnosticKind.SKIPPED_ACTUAL_TYPEALIAS_TARGET]'s hint can name both without a
+ *  second detail slot on [ForwardCallableCatalogEntry.Skipped]. `null` for every other reason. */
+internal fun BridgeType.actualTypeAliasTargetDetail(): String? =
+  (unwrapNullable() as? BridgeType.Unsupported)
+    ?.takeIf { unsupported -> unsupported.isActualTypeAliasTarget }
+    ?.let { unsupported -> "${unsupported.actualTypeAliasExpectName}->${unsupported.rendered}" }
+
+/** True for the two "declared nowhere, at any position" flags, whose skip reason outranks the
+ *  position-shaped ones ([ForwardPlanSkipReason.NULLABLE]) when both could apply. */
+internal fun BridgeType.isUndeclared(): Boolean {
+  val unsupported: BridgeType.Unsupported = this as? BridgeType.Unsupported ?: return false
+  return unsupported.isUndeclaredEnum || unsupported.isUndeclaredInterface ||
+      unsupported.isUndeclaredClass
+}
+
+/** The undeclared type's qualified name, when this (possibly nullable-wrapped, possibly
+ *  collection-wrapped) type is the direct reason a callable was dropped by
+ *  [ForwardPlanSkipReason.UNDECLARED_ENUM] or [ForwardPlanSkipReason.UNDECLARED_INTERFACE].
+ *  `null` for every other skip reason.
+ *
+ *  Descends one collection level, unlike its two siblings above: a `List<Outer.Mode>` parameter
+ *  attributes to its *element's* reason (`collectionInputSkipReason`), and
+ *  `collectionComponentDetail()` deliberately declines any reason but `COLLECTION`, so without
+ *  this the hint for the element case would name no type at all. The siblings' equivalent gap
+ *  (`List<UnexportedDep>`) is left exactly as it was, changing it would reword a shipped
+ *  hint. */
+/** ADR-115: `"<marked type>-><marker qualified name>"`, so the one diagnostic can name both
+ *  the type the author wrote and the marker that removed it, without a second detail slot. */
+internal fun BridgeType.optInMarkerDetail(): String? {
+  val unwrapped: BridgeType = unwrapNullable()
+  val candidate: BridgeType = when (unwrapped) {
+    is BridgeType.Collection ->
+      (unwrapped.element ?: unwrapped.key ?: unwrapped.value)?.unwrapNullable() ?: unwrapped
+
+    else -> unwrapped
+  }
+  val unsupported: BridgeType.Unsupported = candidate as? BridgeType.Unsupported ?: return null
+  val marker: String = unsupported.optInMarker ?: return null
+  return "${unsupported.rendered}->$marker"
+}
+
+internal fun BridgeType.undeclaredTypeDetail(): String? {
+  val unwrapped: BridgeType = unwrapNullable()
+  val candidate: BridgeType = when (unwrapped) {
+    is BridgeType.Collection ->
+      (unwrapped.element ?: unwrapped.key ?: unwrapped.value)?.unwrapNullable() ?: unwrapped
+
+    else -> unwrapped
+  }
+  return (candidate as? BridgeType.Unsupported)
+    ?.takeIf { unsupported ->
+      unsupported.isUndeclaredEnum || unsupported.isUndeclaredInterface ||
+          unsupported.isUndeclaredClass
+    }
+    ?.rendered
+}
+
+/** True for the ADR-009 sealed-hierarchy protocol, whichever position it turned up at. The
+ *  classifier mints exactly one protocol name for it, so the prefix is the whole test. */
+private fun BridgeType.isSealedProtocol(): Boolean =
+  this is BridgeType.SpecializedProtocol && name.startsWith(SEALED_HELPER_PREFIX)
+
+/** The sealed base's qualified name, when this (possibly nullable-wrapped, possibly
+ *  collection-wrapped) type is the direct reason a callable took a
+ *  [ForwardPlanSkipReason.SEALED_POSITION] skip. Descends one collection level for the same
+ *  reason [undeclaredTypeDetail] does: a `List<Shape>` parameter attributes to its element's
+ *  reason, so without this its hint would name no type at all. `null` for every other reason. */
+internal fun BridgeType.sealedTypeDetail(): String? {
+  val unwrapped: BridgeType = unwrapNullable()
+  val candidate: BridgeType = when (unwrapped) {
+    is BridgeType.Collection ->
+      (unwrapped.element ?: unwrapped.key ?: unwrapped.value)?.unwrapNullable() ?: unwrapped
+
+    else -> unwrapped
+  }
+  return (candidate as? BridgeType.SpecializedProtocol)
+    ?.takeIf { protocol -> protocol.name.startsWith(SEALED_HELPER_PREFIX) }
+    ?.name
+    ?.removePrefix(SEALED_HELPER_PREFIX)
+}
+
+internal fun BridgeType.skipReason(): ForwardPlanSkipReason? = when (this) {
+  BridgeType.Unit, is BridgeType.Primitive -> null
+  BridgeType.Char -> ForwardPlanSkipReason.CHAR
+  BridgeType.String -> ForwardPlanSkipReason.STRING
+  // ADR-076: defensive only -- shapeOrNull's Instant branch always succeeds, same as CHAR/
+  // STRING above.
+  BridgeType.Instant -> ForwardPlanSkipReason.INSTANT
+  // ADR-103: defensive only, in the same way.
+  BridgeType.Duration -> ForwardPlanSkipReason.DURATION
+  // ADR-107: genuinely reached -- shapeOrNull has no Throwable branch, because a method return
+  // typed Throwable is explicitly deferred (only the property getter binds in v1).
+  BridgeType.Throwable -> ForwardPlanSkipReason.THROWABLE
+  // ADR-106: defensive only, like Instant/Duration -- Uuid always has a return shape.
+  BridgeType.Uuid -> ForwardPlanSkipReason.UUID
+  // ADR-088: same deferred nullable position as the input side, named the same way instead of
+  // reaching the generic NULLABLE bucket.
+  is BridgeType.Nullable -> when {
+    type is BridgeType.BoundInterface -> ForwardPlanSkipReason.BOUND_INTERFACE_POSITION
+    // Issue #54: `Listener?` is not skipped *because* it is nullable -- a non-nullable
+    // `Listener` is just as undeclarable -- so the NULLABLE bucket's "expose a non-nullable
+    // wrapper" hint would send the author after a fix that cannot work. An undeclared inner
+    // type wins over the position. Narrow on purpose: every other nullable Unsupported keeps
+    // the shipped NULLABLE wording.
+    type.isUndeclared() -> requireNotNull(type.skipReason())
+    else -> ForwardPlanSkipReason.NULLABLE
+  }
+  // ADR-066: a bridgeable-shaped Collection (List/MutableList result, Map/Set) that still
+  // reaches here failed for its own reason (nothing else calls skipReason() on a bridgeable
+  // Collection); an unsupported element/key/value attributes to that component's own reason
+  // (e.g. UNEXPORTED_DEPENDENCY_TYPE) instead of the generic COLLECTION bucket, which
+  // `toDiagnosticKind()` reserves for the genuinely input-position case.
+  is BridgeType.Collection -> if (isBridgeableComponent()) {
+    ForwardPlanSkipReason.COLLECTION
+  } else {
+    (element ?: key ?: value)?.skipReason() ?: ForwardPlanSkipReason.UNSUPPORTED
+  }
+
+  is BridgeType.RawCollection -> ForwardPlanSkipReason.COLLECTION
+  is BridgeType.Enum -> ForwardPlanSkipReason.ENUM
+  is BridgeType.ObjectHandle -> ForwardPlanSkipReason.HANDLE
+  // Never actually reached by an ordinary interface result (shapeOrNull's Interface branch
+  // always succeeds); only reachable defensively via a Collection-of-Interface element skip.
+  is BridgeType.Interface -> ForwardPlanSkipReason.HANDLE
+  // ADR-088: shapeOrNull's BoundInterface branch succeeds only for a manifest-flagged
+  // Kotlin-implementable interface, so reaching here at a return position means exactly the
+  // "no mint{Iface}Bridge" case. A collection element reaches here too, and takes the position
+  // skip instead (collections of bound interfaces are deferred).
+  is BridgeType.BoundInterface ->
+    if (implementable) ForwardPlanSkipReason.BOUND_INTERFACE_POSITION
+    else ForwardPlanSkipReason.UNIMPLEMENTABLE_BOUND_INTERFACE
+
+  is BridgeType.ValueClass -> ForwardPlanSkipReason.VALUE_CLASS
+  is BridgeType.SpecializedProtocol -> when {
+    // ADR-065: StateFlow shares the plain-Flow legacy route (both are named legacy exports in
+    // exports/ClassExports.kt + cir/CirFlowRenderer.kt); it is a distinct SpecializedProtocol
+    // name only so the classifier never confuses it with plain Flow (ADR-065 detection order).
+    name.startsWith("state flow ") -> ForwardPlanSkipReason.FLOW_PROTOCOL
+    name.startsWith("flow ") -> ForwardPlanSkipReason.FLOW_PROTOCOL
+    name.startsWith("suspend lambda ") -> ForwardPlanSkipReason.SUSPEND_CALLBACK_PROTOCOL
+    name.startsWith("lambda ") || name.startsWith("interface bridge ") -> ForwardPlanSkipReason.CALLBACK_PROTOCOL
+    name.startsWith(SEALED_HELPER_PREFIX) -> ForwardPlanSkipReason.SEALED_POSITION
+    name.startsWith("generic declaration ") -> ForwardPlanSkipReason.GENERIC
+    else -> error("Forward planner has no explicit legacy route for specialized protocol $name")
+  }
+
+  is BridgeType.RawKSType -> error("Forward planner received raw KSP type $rendered")
+  // ADR-074: checked ahead of isUnexportedDependency -- an actual-typealias-target redirect can
+  // land on either an out-of-scope module-local type or a cross-module one, and both must carry
+  // this ADR's own diagnostic, not the generic UNEXPORTED_DEPENDENCY_TYPE include(...) hint.
+  is BridgeType.Unsupported -> when {
+    // ADR-115: checked first -- a marked type is refused for a reason no scope change and no
+    // move-to-top-level can repair, so it must not pick up any of the hints below.
+    optInMarker != null -> ForwardPlanSkipReason.OPT_IN_MARKER_TYPE
+    isActualTypeAliasTarget -> ForwardPlanSkipReason.ACTUAL_TYPEALIAS_TARGET
+    // The classifier sets exactly one of these two on an enum, and never both: a nested enum
+    // (whichever module it lives in) is undeclarable rather than out of scope, so it must not
+    // pick up the `include(...)` hint.
+    isUndeclaredEnum -> ForwardPlanSkipReason.UNDECLARED_ENUM
+    // Issue #54: the same "undeclarable, not out of scope" rule for a nested interface.
+    isUndeclaredInterface -> ForwardPlanSkipReason.UNDECLARED_INTERFACE
+    // ...and for a nested class or object.
+    isUndeclaredClass -> ForwardPlanSkipReason.UNDECLARED_CLASS
+    // The closure records WHY it refused a dependency declaration; each refusal wants a
+    // different remedy, and only NOT_INCLUDED (or an unrecorded refusal, e.g. a module-local
+    // type the closure never saw) wants the `include(...)` one.
+    isUnexportedDependency -> when (unexportedDependencyRefusal) {
+      ForwardAdmissionRefusal.EXCLUDED_BY_CONFIG ->
+        ForwardPlanSkipReason.EXCLUDED_DEPENDENCY_TYPE
+
+      ForwardAdmissionRefusal.EXPECT_IN_DEPENDENCY ->
+        ForwardPlanSkipReason.EXPECT_DEPENDENCY_TYPE
+
+      ForwardAdmissionRefusal.CROSS_MODULE_ADMISSION_DISABLED ->
+        ForwardPlanSkipReason.CROSS_MODULE_DISABLED_DEPENDENCY_TYPE
+
+      // Defensive: the classifier tests nestedness ahead of the dependency route, so a nested
+      // refusal should never reach here. If one ever does, it must not be told to widen scope.
+      ForwardAdmissionRefusal.NESTED_DECLARATION -> ForwardPlanSkipReason.UNDECLARED_CLASS
+
+      ForwardAdmissionRefusal.NOT_INCLUDED, null ->
+        ForwardPlanSkipReason.UNEXPORTED_DEPENDENCY_TYPE
+    }
+
+    else -> ForwardPlanSkipReason.UNSUPPORTED
+  }
+}
+
+/**
+ * The detail slot for whichever of the extractors above applies, in the order the three callable
+ * skip sites already chain them: the author's own opt-in marker first, then the `actual typealias`
+ * redirect, then the dependency-scope name, then the undeclared type, then the sealed base.
+ *
+ * `collectionComponentDetail()` is deliberately *not* in the chain: it is keyed to
+ * [ForwardPlanSkipReason.COLLECTION], and the property route has its own component wording
+ * ("Collection (element type ...)") for that case.
+ */
+internal fun BridgeType.skipDetail(): String? = optInMarkerDetail()
+  ?: actualTypeAliasTargetDetail()
+  ?: unexportedDependencyDetail()
+  ?: undeclaredTypeDetail()
+  ?: sealedTypeDetail()

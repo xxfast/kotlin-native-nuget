@@ -3145,11 +3145,22 @@ The parameter and return positions skip with `SKIPPED_UNSUPPORTED_TYPE`, naming 
     top level of its file
 ```
 
-The property position (`var listener: Listener?`) skips the same way, but through the ordinary
-`SKIPPED_UNSUPPORTED_PROPERTY` message the property planner already emits for any type it has no
-getter/setter shape for: it names the interface but not the move-to-top-level hint, the same gap
-[Enums: Nested enums skip named](enums.md#nested-enums-skip-named) documents for a nested enum
-property. The owning class still generates, and its unrelated `name` member still binds; see
+The property position (`var listener: Listener?`) skips with `SKIPPED_UNSUPPORTED_PROPERTY`, but
+carries the same `UNDECLARED_INTERFACE` reason and move-to-top-level hint as the parameter and
+return positions above:
+
+```
+[nuget:SKIPPED_UNSUPPORTED_PROPERTY] Skipping io.github.xxfast.kotlin.native.nuget.test.issue54.NestedListenerOwner.listener:
+    its interface type `io.github.xxfast.kotlin.native.nuget.test.issue54.NestedListenerOwner.Listener`
+    is nested and never declared as a C# interface (UNDECLARED_INTERFACE). interface
+    `io.github.xxfast.kotlin.native.nuget.test.issue54.NestedListenerOwner.Listener` is nested inside a
+    class, and a nested interface is never declared as a C# interface (only top-level ones are), so
+    every member typed with it is skipped rather than emitted as a dangling reference; move it to the
+    top level of its file
+    at NestedListenerOwner.kt:45
+```
+
+The owning class still generates, and its unrelated `name` member still binds; see
 `IntegrationTests/NestedInterfaceGateTests.cs`.
 
 ## Limitations

@@ -197,4 +197,52 @@ class Tier1ReachabilityClosureTest {
       "expected the plain nested declarations to be refused admission; got: $manifest",
     )
   }
+
+  private val propertyFixture: String = """
+    package tier1.reachabilityclosure.property
+
+    import dep.outside.Advert
+
+    class Billboard {
+      val sponsor: Advert = Advert("Acme")
+    }
+  """.trimIndent()
+
+  // ADR-064's 2026-09-11 amendment: the property route carries the same reason a callable does,
+  // so an out-of-scope dependency *property* reads the `include(...)` remedy too. The kind stays
+  // the position one (`SKIPPED_UNSUPPORTED_PROPERTY`); only the sentence and hint come from the
+  // reason.
+  @Test
+  fun `an out-of-scope dependency property names the include fix too`() {
+    val result = Tier1Harness.run(
+      propertyFixture,
+      processorOptions = mapOf("nuget.rootPackage" to "tier1.reachabilityclosure.property"),
+      libraries = listOf(dependencyJar),
+    )
+
+    assertTrue(result.compiledClean, "expected no broken source; got: ${result.compileErrors}")
+    assertFalse(
+      "export_billboard_get_sponsor" in result.generated,
+      "expected Billboard.sponsor to be absent from the generated CNameExports.kt; " +
+          "generated:\n${result.generated}",
+    )
+
+    val diagnostic: String = requireNotNull(
+      result.kspWarnings.firstOrNull {
+        it.contains(ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_PROPERTY.name) &&
+            it.contains("Billboard.sponsor")
+      },
+    ) {
+      "expected a SKIPPED_UNSUPPORTED_PROPERTY diagnostic for Billboard.sponsor; " +
+          "kspWarnings=${result.kspWarnings}"
+    }
+    assertTrue(
+      diagnostic.contains("is declared in a dependency module outside the export scope"),
+      "expected the property diagnostic to read as out of scope; got: $diagnostic",
+    )
+    assertTrue(
+      diagnostic.contains("include(\"tier1.reachabilityclosure.property\", \"dep.outside\")"),
+      "expected the property diagnostic to name the full include(...) line; got: $diagnostic",
+    )
+  }
 }

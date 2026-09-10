@@ -539,7 +539,7 @@ A parameter or return position skips with `SKIPPED_UNSUPPORTED_TYPE`, naming the
     `io.github.xxfast.kotlin.native.nuget.test.issue54.NestedModeOwner.Mode` is not in the export set, so it
     is never declared as a C# enum and every member typed with it is skipped rather than emitted as a
     dangling reference; a nested enum class is never declared (only top-level enums are), so move it to the
-    top level of its file — or, if it already is top level, bring its package into the export scope
+    top level of its file, or, if it already is top level, bring its package into the export scope
     at NestedModeOwner.kt:44
 ```
 
@@ -550,15 +550,17 @@ of its own, so a declared enum on it is spelled through the classifier too, qual
 `SKIPPED_UNSUPPORTED_TYPE`/`UNDECLARED_ENUM` diagnostic rather than a dangling reference; see [An
 exported base class's own `abstract fun`](interfaces-abstract-sealed.md#a-base-class-s-own-abstract-fun).
 
-A property position skips the same way, but through the ordinary `SKIPPED_UNSUPPORTED_PROPERTY`
-message the property planner already emits for any type it has no getter/setter shape for, not the
-`UNDECLARED_ENUM` reason:
+A property position skips with `SKIPPED_UNSUPPORTED_PROPERTY`, but carries the same
+`UNDECLARED_ENUM` reason and move-to-top-level hint as the parameter and return positions above:
 
 ```
 [nuget:SKIPPED_UNSUPPORTED_PROPERTY] Skipping io.github.xxfast.kotlin.native.nuget.test.issue54.NestedModeOwner.mode:
-    its type io.github.xxfast.kotlin.native.nuget.test.issue54.NestedModeOwner.Mode has no property getter or
-    setter shape. expose a bridgeable property (or a getter function) whose type is not
-    io.github.xxfast.kotlin.native.nuget.test.issue54.NestedModeOwner.Mode, and export that instead
+    its enum type `io.github.xxfast.kotlin.native.nuget.test.issue54.NestedModeOwner.Mode` is never
+    declared as a C# enum (UNDECLARED_ENUM). enum
+    `io.github.xxfast.kotlin.native.nuget.test.issue54.NestedModeOwner.Mode` is not in the export set, so it
+    is never declared as a C# enum and every member typed with it is skipped rather than emitted as a
+    dangling reference; a nested enum class is never declared (only top-level enums are), so move it to the
+    top level of its file, or, if it already is top level, bring its package into the export scope
     at NestedModeOwner.kt:41
 ```
 

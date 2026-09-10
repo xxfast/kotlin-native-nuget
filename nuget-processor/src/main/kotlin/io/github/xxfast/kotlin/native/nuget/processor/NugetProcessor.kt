@@ -116,6 +116,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyRefusedParam
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyRefusedReturn
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyReturnCollectionKinds
 import io.github.xxfast.kotlin.native.nuget.processor.forward.optInMarker
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ownsSentence
 import io.github.xxfast.kotlin.native.nuget.processor.forward.planFor
 import io.github.xxfast.kotlin.native.nuget.processor.forward.toDiagnosticKind
 
@@ -219,6 +220,9 @@ internal fun warnDroppedForwardPropertySetters(
 internal fun warnDroppedForwardProperties(
   catalog: ForwardCallablePlanCatalog,
   logger: KSPLogger,
+  // Issue #55: the effective include set, so a scope drop's `include(...)` hint can name the whole
+  // line here exactly as it does for a callable.
+  scope: List<String> = emptyList(),
 ) {
   val diagnostics: List<ForwardDiagnostic> = catalog.droppedProperties.map { dropped ->
     // ADR-115: the author's own signal, named as such. Checked first: the property's type is
@@ -239,6 +243,22 @@ internal fun warnDroppedForwardProperties(
         reason = "the bound C# interface ${dropped.typeDescription} is not marshalled at a " +
             "property position",
         hint = ForwardPlanSkipReason.BOUND_INTERFACE_POSITION.diagnosticHint(),
+      )
+    } else if (dropped.reason?.ownsSentence(dropped.detail) == true) {
+      // ADR-064's 2026-09-11 amendment: the reason the property planner classified already has a
+      // sentence and a remedy that agree with each other, and the shipped pair below contradicts
+      // both (a nested enum is not fixed by "expose a property whose type is not Mode").
+      //
+      // The KIND stays the position one: `SKIPPED_UNSUPPORTED_PROPERTY` names *where* the drop
+      // happened, which is still true, nine Tier 1 tests and the kind's own KDoc define it that
+      // way, and `toDiagnosticKind()` deliberately `error()`s on the legacy-route reasons a
+      // property can genuinely hold.
+      ForwardDiagnostic(
+        kind = ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_PROPERTY,
+        symbol = dropped.node,
+        declaration = dropped.symbol,
+        reason = dropped.reason.diagnosticReason(dropped.detail),
+        hint = dropped.reason.diagnosticHint(dropped.detail, scope),
       )
     } else {
       ForwardDiagnostic(
@@ -1033,7 +1053,7 @@ class NugetProcessor(
 
     warnDroppedForwardCallables(callableCatalog, logger, effectiveInclude)
     warnDroppedForwardPropertySetters(callableCatalog, logger)
-    warnDroppedForwardProperties(callableCatalog, logger)
+    warnDroppedForwardProperties(callableCatalog, logger, effectiveInclude)
     warnDroppedForwardExtensionReceivers(callableCatalog, logger)
     warnRefusedLegacyRouteMembers(
       classes, sealedClasses, suspendFunctions, forwardClassifier, logger,

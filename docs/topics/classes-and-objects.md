@@ -1150,9 +1150,6 @@ how deep it sits ([ADR-064](https://github.com/xxfast/kotlin-native-nuget/blob/m
 ## Limitations
 
 - `Map`/`Set` **inputs** (parameters) are not planned yet; see [Collections](collections.md).
-- A nested class/object/interface/enum typed **property** (module-local or a dependency type) skips
-  through the generic `SKIPPED_UNSUPPORTED_PROPERTY` message with no `UNDECLARED_CLASS` reason
-  attached, unlike a parameter or return position; see [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md).
 - Method overloads on this page cover the class-method route. `object` members, companion members,
   top-level functions, and extension functions have their own numbering scopes and are documented
   on [Objects and companions](objects-and-companions.md#method-overloads),
