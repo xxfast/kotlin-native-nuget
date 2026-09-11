@@ -100,6 +100,15 @@ make it read better. A snippet that does not match the source is worse than no s
 Fence C# snippets with the exact language tag `C#`, never `csharp`. Writerside does not recognize
 the `csharp` tag correctly.
 
+### The test harness is not the API
+
+Readers consume the plugin, not this repo. `TestLibrary`, `TestDependency`, `IntegrationTests` and
+everything in them are internal test harness. They appear in the docs only as snippets that
+illustrate a rule. Nothing about them is itself documentation: not their names, not their
+namespaces, not what moved where between two commits. Never write an upgrade note, migration step
+or "moved from X to Y" callout about a harness symbol. State the rule in terms of the reader's own
+code and let the snippet show it.
+
 ### Headings become anchor ids: keep them unique per page
 
 Writerside derives an anchor id from every heading's text (`## Generated C#` becomes
@@ -223,6 +232,7 @@ instead.
 
 - Every page you touched still has an accurate Limitations section.
 - Every generated symbol you cited exists in the real generated output.
+- Nothing you wrote treats a test-harness symbol as something the reader depends on.
 - No em-dashes in your prose.
 - `grep -rn "topic=" docs/knn.tree` lists every page you added.
 - `scripts/verify-docs.sh` passes.

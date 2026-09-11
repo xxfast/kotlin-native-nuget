@@ -908,13 +908,13 @@ public static void SetSymptomTags(this ChartId receiver, IReadOnlyList<string> v
 An ineligible setter emits a warning naming the property and the offending component, and states
 that the C# property stays read-only rather than that the property was dropped. A **nullable**
 nested collection is the one component kind still excluded after the narrow-primitive, `Char` and
-nested-collection widening
-([ADR-097](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/097-enum-collection-components.md)
-moved this mechanism's fixture off `List<Mood>`,
-[ADR-098](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/098-narrow-primitive-and-char-collection-components.md)
-off `List<Char>`, and
-[ADR-099](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/099-nested-collection-components.md)
-off a plain, non-nullable nested collection; all three are eligible now):
+nested-collection widening: a bare enum component
+([ADR-097](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/097-enum-collection-components.md)),
+the narrow primitives and `Char`
+([ADR-098](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/098-narrow-primitive-and-char-collection-components.md)),
+and a plain, non-nullable nested collection
+([ADR-099](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/099-nested-collection-components.md))
+are all eligible now:
 
 ```kotlin
 // nuget-processor Tier1 fixture, not test-library: a nullable nested collection has no per-element

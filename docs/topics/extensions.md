@@ -188,13 +188,10 @@ public void ReservedPackage_Tag_RendersInItsOwnNamespace()
 
 <note>
     <p>
-        Upgrade note: <code>Meowify</code> and <code>IsPurring</code> moved from
-        <code>TestLibrary.Cat</code> to <code>TestLibrary</code>. They were always declared in the
-        root package; <code>TestLibrary.Cat</code> was a visit-order accident from a same-receiver
-        extension declared elsewhere. Extension-method call syntax
-        (<code>"Oreo".Meowify()</code>) keeps compiling for a file that already has
-        <code>using TestLibrary;</code> in scope. A fully-qualified call, or a file with only
-        <code>using TestLibrary.Cat;</code>, needs to change to <code>using TestLibrary;</code>.
+        Extension-method call syntax (<code>"Oreo".Meowify()</code>) keeps compiling regardless of
+        which package a receiver's extensions land in, as long as the calling file has that
+        package's namespace in scope via <code>using</code>. Only a fully-qualified static call
+        pins the namespace at compile time, which is why the test above uses one.
     </p>
 </note>
 

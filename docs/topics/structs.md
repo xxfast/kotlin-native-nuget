@@ -396,11 +396,11 @@ public void CollarNamedArgs_ComponentNamesMatchDeclarationOrder()
 }
 ```
 
-`initialCode: Int` (rather than a Kotlin `Char`) is historical fixture shape: forward `Char`
-parameters, properties, and returns are planned today (see [Primitives and strings](primitives-and-strings.md)
-and clinic `Patient.Tag` / `Grade` / `Initial`). This sample still routes through an `Int` code point
-for its own call site; that choice is not a reverse-struct limitation. The reverse struct's own
-`char` components round-trip correctly either way.
+A reverse struct's own `char` component round-trips correctly regardless of how a caller happens to
+produce it: `DescribeCollar` above takes its `initialCode` as an `Int` code point and converts it to
+`Char` before constructing the `Collar`, but nothing about the reverse-struct binding requires that
+detour. A `Char` also binds directly, at a forward parameter, property, or return; see
+[Primitives and strings](primitives-and-strings.md).
 
 ### Component order is a hazard Shape A does not have
 

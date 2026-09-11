@@ -2011,7 +2011,12 @@ public void Label_IsDeclaredOnceAtNamespaceLevel_AndDerivesFromTheSealedBase()
 
 ### A sibling `object` subclass binds once too
 
-The fix above only covered a `data class` sibling; a sibling `object` or `data object` subclass was still declared twice, once as `public sealed class Loaf : FlatShape` by the sealed route and once again as an empty `public static class Loaf { }` at namespace level, since `rootObjects` had no equivalent `isSealedSubclass()` filter. That was `CS0101` (duplicate type), plus `CS0722` at any position returning the concrete arm, since C# cannot return a `static` type ([#110](https://github.com/xxfast/kotlin-native-nuget/issues/110)). It went uncaught because every pre-existing sealed-subclass-object fixture happened to sit in the one combination the bug is invisible in: module-local **and** nested.
+A sibling `object` or `data object` subclass of a sealed base binds the same way a sibling `data
+class` subclass does: declared exactly once, as `public sealed class Loaf : FlatShape`, never also
+as an empty `public static class Loaf { }` at namespace level (the shape a plain, non-sealed `object`
+would otherwise render). This holds for a module-local sibling and for a nested `object` subclass
+reached from another module alike; an intermediate sealed class in the hierarchy keeps its ordinary
+sealed-class binding regardless.
 
 From `FlatShapeSample.kt`:
 
@@ -2025,7 +2030,7 @@ class FlatShapeFactory {
 fun flatLoaf(): FlatShape = Loaf
 ```
 
-`Loaf` is now declared exactly once, `public sealed class Loaf : FlatShape`, by the sealed route only. Two separate fixes were needed: `rootObjects` gained the same sealed-subclass filter `rootClasses` already had, for a **module-local** sibling like `Loaf`; and `reachabilityBucket()`'s object branch now checks `isSealedSubclass()` before bucketing as `OBJECT`, for a **cross-module** sealed base's nested `object` subclass (`Newsroom.nap()`/`deepNap()` in `IntegrationTests/SealedSubclassObjectTests.cs`), which used to emit a bogus, non-colliding but still public, orphan `public static class` alongside the real nested one. Only the `OBJECT` kind is qualified in that check: an intermediate sealed class is both sealed and a sealed subclass, and must keep the `SEALED_CLASS` bucket.
+`Loaf` is declared exactly once, `public sealed class Loaf : FlatShape`, by the sealed route only.
 
 ## Every property shape on a sealed subclass {id="every-property-shape-on-a-sealed-subclass"}
 

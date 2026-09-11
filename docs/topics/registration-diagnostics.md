@@ -215,12 +215,10 @@ Rows 8g through 8j cover every route with a handle-passed callback payload, now 
   (`CatEventSource.Trigger`), which had freed the same handle three times before the fix.
 
 <note>
-    <p><code>NugetMarshal.LiveHandles</code> is process-global, so <code>LiveHandleTests.cs</code>
-    and <code>CollectabilityTests.cs</code> run in their own xunit project, <code>LeakTests/</code>,
-    as a separate <code>dotnet test</code> step, never inside <code>IntegrationTests/</code>. Sharing
-    a process with the rest of the suite moved the count during a harness row's window and flaked
-    Windows CI on unrelated rows. After <code>scripts/verify.sh</code> has built the package, run the
-    harness on its own with <code>dotnet test LeakTests</code>.</p>
+    <p><code>NugetMarshal.LiveHandles</code> is process-global: any other handle-crossing code
+    running in the same process moves the count during the window a leak assertion measures across.
+    A leak test therefore needs a process of its own, isolated from anything else that creates or
+    frees a handle.</p>
 </note>
 
 ## Proving the object is collected, not only the handle
