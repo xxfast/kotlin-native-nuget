@@ -1,6 +1,7 @@
 using TestLibrary;
 using TestLibrary.Cat;
 using TestLibrary.Clinic;
+using TestLibrary.Dispenser;
 using TestLibrary.Issue115;
 using TestLibrary.Issue126;
 using TestLibrary.Issue127;
@@ -139,6 +140,20 @@ public class LiveHandleTests
         {
             using var oreo = new Cat("Oreo", 9);
             Assert.Equal("Oreo", oreo.Name);
+        });
+    }
+
+    // Row 1b. The ADR-035 value-class secondary constructor mints a Cat StableRef inside Kotlin
+    // and hands it to the struct's underlying property, so the consumer disposes it like any other
+    // `new Cat(...)`. Mylo is created fifty times from his name alone and must come back every time.
+    [Fact]
+    public void ReferenceValueClassSecondaryConstructor_DisposeUnderlying_ReturnsToBaseline()
+    {
+        AssertNoLeak(() =>
+        {
+            var result = new CatResult("Mylo");
+            using var mylo = result.Cat;
+            Assert.Equal("Mylo", result.Name);
         });
     }
 
@@ -341,6 +356,107 @@ public class LiveHandleTests
         });
     }
 
+    // Row 8g. Issue #115 / ADR-036 on a sealed arm: the lambda-parameter route re-keyed onto the
+    // arm's own export prefix. Every crossing mints handles on both sides of the thunk: Kotlin
+    // retains the `String` argument it hands the callback and releases it after the invoke, and
+    // C#'s answer comes back as a `WrapString` box Kotlin releases once the outer return is read.
+    // So a route that forgets either release leaks one or two handles *per call*, not per wrapper,
+    // and the arm receiver makes it its own row: the arm's handle is the one under the callback.
+    [Fact]
+    public void LambdaParameter_OnASealedArm_StringInAndOut_ReturnsToBaseline()
+    {
+        AssertNoLeak(() =>
+        {
+            using var factory = new JobFactory();
+            using Job.Running oreo = factory.Running(40);
+            Assert.Equal("running-40!", oreo.Relabel(s => s + "!"));
+        });
+    }
+
+    // Row 8h. The same per-call lambda-parameter route (ADR-036) on an ordinary class, so the
+    // sealed arm above is not the only witness: `Cat.describeWith` takes a `(String) -> String`
+    // and hands Kotlin's own `name` across as a retained handle. One row per receiver kind,
+    // because a fix that keys the payload's ownership off the arm's export prefix would leave this
+    // one red. Mylo gets described fifty times and the count has to land where it started.
+    [Fact]
+    public void LambdaParameter_OnAnOrdinaryClass_StringInAndOut_ReturnsToBaseline()
+    {
+        AssertNoLeak(() =>
+        {
+            using var mylo = new Cat("Mylo", 9);
+            Assert.Equal("This cat is called Mylo", mylo.DescribeWith(name => $"This cat is called {name}"));
+        });
+    }
+
+    // Row 8i. The other payload kind on the same route: an exported object rather than a `String`.
+    // `Cat.forEachToy` hands a `Toy` handle to the callback once per toy, and C#'s `Materialize`
+    // does not dispose it, so the wrapper the lambda takes ownership of is the only disposer. The
+    // `String` rows above cannot see that branch at all: they exercise the marshalled kind, whose
+    // C#-side unwrap disposes for you. Two toys per crossing, so a per-payload miscount shows up
+    // at twice the rate of the rows above.
+    [Fact]
+    public void LambdaParameter_OnAnOrdinaryClass_ObjectPayload_ReturnsToBaseline()
+    {
+        AssertNoLeak(() =>
+        {
+            using var oreo = new Cat("Oreo", 9);
+            var toyNames = new List<string>();
+            oreo.ForEachToy(toy =>
+            {
+                using var t = toy;
+                toyNames.Add(t.Name);
+            });
+            Assert.Equal(new List<string> { "Mouse", "Ball" }, toyNames);
+        });
+    }
+
+    // Row 8j. The *other* callback family with a handle payload: the interface-bridge route
+    // (ADR-036 amendment, 2026-09-11). `CatEventSource.trigger()` calls `onMeow(msg)` on every
+    // registered listener, minting one handle per crossing. This route freed that handle three
+    // times, not two: `FromHandle<string>` disposes as it reads, the generated thunk spelled an
+    // explicit `NugetMarshal.Dispose(arg0Ptr)` after it, and Kotlin released once more after the
+    // invoke. Measured at -2 per crossing (-100 over the 50 below) before the fix, which is why
+    // this row exists rather than a note in the backlog: one owner is `FromHandle`, and this is
+    // the row that says so.
+    private sealed class ProbeListener : ICatEventListener
+    {
+        public int Meows { get; private set; }
+        public void OnMeow(string message) => Meows++;
+        public void OnPurr() { }
+        public void Dispose() { }
+    }
+
+    [Fact]
+    public void InterfaceBridge_StringPayload_ReturnsToBaseline()
+    {
+        AssertNoLeak(() =>
+        {
+            using var source = new CatEventSource("Oreo");
+            var listener = new ProbeListener();
+            using IDisposable sub = source.AddListener(listener);
+            source.Trigger();
+            Assert.Equal(1, listener.Meows);
+        });
+    }
+
+    // Row 8f. ADR-071: a `MutableStateFlow<T>` returned from a function, held by the wrapper. The
+    // fix mints a StableRef for the flow itself on every call (the wrapper's `ownedHandle`, freed
+    // in `Dispose()`), which is a handle no other flow route owns: the property half re-reads a
+    // field and the read-only routes mint nothing per call. So a `Dispose()` that forgets the
+    // owned handle, or a fix that retains the flow on each `.Value` access instead of once per
+    // call, shows up here as a per-crossing leak and nowhere else.
+    [Fact]
+    public void MutableStateFlowFunctionReturn_WriteReadDispose_ReturnsToBaseline()
+    {
+        AssertNoLeak(() =>
+        {
+            using var dispenser = new CatSnackDispenser();
+            using var level = dispenser.Level();
+            level.Value = 7;
+            Assert.Equal(7, level.Value);
+        });
+    }
+
     // Row 9. Suspend call completing: the result box is unwrapped and owned by the returned
     // wrapper, and the job handle goes on completion. The two-argument overload is the 100ms
     // one, so fifty crossings do not take five minutes.
@@ -367,6 +483,22 @@ public class LiveHandleTests
         await AssertNoLeakAsync(
             async () => Assert.Equal(2, await KeywordRoutesSample.FetchAsync(1)),
             iterations: 5000);
+    }
+
+    // Row 9d. A suspend call whose result is a *nested sealed arm*. The result box is a
+    // `StableRef` to a `Job.Running` rather than an ordinary class, so the completion callback
+    // unwraps it into the arm wrapper and the arm's own `DisposeAsync` has to release both the
+    // handle and the scope it gained from its suspend members. A completion that constructs the
+    // wrapper without transferring ownership, or an arm scope drained by nobody, shows up here.
+    [Fact]
+    public async Task Suspend_ReturningANestedSealedArm_ReturnsToBaseline()
+    {
+        await AssertNoLeakAsync(async () =>
+        {
+            using var factory = new JobFactory();
+            await using Job.Running oreo = await factory.RunningLaterAsync(9);
+            Assert.Equal(9, oreo.Progress);
+        });
     }
 
     // Row 9c. The cancellation-registration half of the same ADR-019 ordering hole: `reg` is

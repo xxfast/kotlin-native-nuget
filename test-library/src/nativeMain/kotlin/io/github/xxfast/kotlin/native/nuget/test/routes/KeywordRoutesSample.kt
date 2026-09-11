@@ -33,11 +33,8 @@
  * - [KeywordRoutes.onEvent] and [KeywordRoutes.onFail] are the **lambda parameter** route, where
  *   the name lands on a `System.Action<KeywordTick>` declaration and on the thunk that invokes it.
  *   One cell per issue, since the two rules produce different spellings on the same route. The
- *   payload is an object ([KeywordTick]) rather than an `Int` deliberately: a `(Int) -> Unit`
- *   parameter renders `Int arg0 = NugetMarshal.FromHandle<Int>(arg0Ptr)` against the
- *   `NugetIntVoidCallback(int, IntPtr)` delegate today, which is a defect of its own on this route
- *   and would keep the cell red after the keyword fix landed. The object payload is the shape
- *   `Cat.forEachToy` already proves green,
+ *   payload is an object ([KeywordTick]) so that the cell reads the keyword spelling and nothing
+ *   else; the primitive payload has its own fixture in `Metronome`,
  * - [put] is the **generic top-level function** route, whose wrapper is emitted per instantiation,
  * - [KeywordHandler] is the **interface declaration** route: the C# `interface IKeywordHandler`
  *   member is printed by the interface renderer, not by the ordinary plan, so it is bare there,
@@ -54,7 +51,9 @@
  * declaration on the base, while the subclass still renders `public override string Handle(...)`,
  * which is CS0115 with nothing to override. (`Animal.Speak` renders `public abstract string
  * Speak();` only because `Pet` declares it.) That defect is worth its own issue, and carrying it
- * here would keep `Interop.cs` red after this fix landed.
+ * here would keep `Interop.cs` red after this fix landed. (Fixed by the 2026-09-11 abstract-method
+ * walk amendment to ADR-101/ADR-075, see `garage/Vehicle.kt`; this cell was never revived, so the
+ * route above stays untouched here.)
  *
  * Every keyword used here (`ref`, `params`) is a legal Kotlin identifier without backticks and a C#
  * reserved word, so no cell needs Kotlin-side quoting to exist.

@@ -157,6 +157,9 @@ reliably infer native wire types.
 - This is a guard for same-generation source drift. It does not prove an arbitrary hand-written
   P/Invoke, manually replaced native binary, or a compiler's final C ABI lowering is compatible.
   Those remain integration-test concerns.
+- 2026-09-11 (Verified): the sketch's `ForwardAbiParameter` ships as `ForwardAbiSignatureParameter`.
+  [ADR-062](062-forward-callable-plan.md)'s plan model claimed the shorter name for its ABI slot, so
+  the contract's erased `(type, direction)` shape took the longer one.
 
 ## Verification strategy
 

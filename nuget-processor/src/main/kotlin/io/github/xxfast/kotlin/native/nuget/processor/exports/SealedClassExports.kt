@@ -27,6 +27,10 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.nullableHandleBody
 internal fun FileSpec.Builder.addSealedClassExports(
   sealed: KSClassDeclaration,
   callableCatalog: ForwardCallablePlanCatalog,
+  // ADR-115 amendment: the waived marker list, so this arm's issue #121 gate asks the same
+  // question the planner did. A route that read the raw marker here would refuse a declaration
+  // the plan already admitted.
+  exportMarkers: Set<String>,
 ) {
   val name: String = sealed.simpleName.asString()
   val qualifiedName: String = sealed.qualifiedName?.asString() ?: return
@@ -50,6 +54,23 @@ internal fun FileSpec.Builder.addSealedClassExports(
       .addStatement("}")
       .build()
   )
+
+  // ADR-111/ADR-116 amendment (2026-09-11): the base's own declared members, off the same catalog
+  // and the same two emitters an ordinary class uses. The receiver is the base type, so the
+  // generated body reads `handle.asStableRef<Job>().get().describe()` and Kotlin's own virtual
+  // dispatch answers with the arm's implementation -- which is what lets the C# member be
+  // concrete rather than abstract.
+  sealed.getAllProperties()
+    .filter { it.getVisibility() == Visibility.PUBLIC }
+    .filter { prop -> prop.parentDeclaration == sealed }
+    .forEach { prop ->
+      val planned: ForwardPropertyPlan =
+        callableCatalog.propertyFor("$qualifiedName.${prop.simpleName.asString()}")
+          ?: return@forEach
+      addForwardPropertyPlanExports(planned)
+    }
+
+  callableCatalog.classMethods(qualifiedName).forEach { plan -> addForwardKotlinPlanExport(plan) }
 
   for (subclass in subclasses) {
     val subName: String = subclass.simpleName.asString()
@@ -83,7 +104,7 @@ internal fun FileSpec.Builder.addSealedClassExports(
 
       // Issue #121: the planner declined, but a decline is not always an invitation. A marked
       // declaration must reach neither artifact, so the legacy arm below never runs for one.
-      if (prop.isOptInRefused()) continue
+      if (prop.isOptInRefused(exportMarkers)) continue
 
       // Residual legacy route: a lambda-typed property, which has no plan shape yet (the C# half
       // still spells its own `KotlinFunc<...>` arm in `translateSealedClass`). Everything else the

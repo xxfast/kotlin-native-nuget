@@ -1087,3 +1087,327 @@ translator. No xunit test: reflection cannot see a doc comment, so the honest co
 - Three fixture classes gain three lines each in `Interop.cs`. No ABI, export, or handle change.
 - A malformed generated doc comment is now a red build here instead of a consumer complaint.
 - The next `<remarks>` customer adds a field and a `renderRemarks` call, not an escaper.
+
+## Amendment (2026-09-11): the eleven scope, position and nesting reasons own their sentence
+
+Judgement: an **amendment**, not a new ADR. It lifts the "Not widened to the other dependency-scope
+reasons" deferral the 2026-09-10 "the reason sentence lives on the reason" amendment recorded above,
+and closes the ROADMAP Phase 3 item "eleven reasons still read as an unsupported type combination".
+No new kind, no new reason, no new mechanism: eleven `when` arms where the `else` used to run.
+Status stays Accepted.
+
+### The gap
+
+The deferral was about the Writerside snippets quoting the old text, not about the wording being
+right. It was not right: a callable dropped because its type lives in a dependency module outside
+the export scope read "its `UNEXPORTED_DEPENDENCY_TYPE` type combination is not supported", and then
+the hint on the next line told the author to add an `include(...)`. Nothing about the type
+combination was unsupported. The same contradiction ran for every reason about *where* a type is
+declared (dependency module, `expect` in a klib, cross-module admission off, an `actual typealias`
+target), about *nesting* (`UNDECLARED_ENUM` / `UNDECLARED_INTERFACE` / `UNDECLARED_CLASS`), about
+the *position* (`SEALED_POSITION`, `BOUND_INTERFACE_POSITION`, `UNIMPLEMENTABLE_BOUND_INTERFACE`)
+and about a *supertype declaring the signature* (`INHERITED_MEMBER`).
+
+### Decision
+
+Eleven arms in `ForwardPlanSkipReason.diagnosticReason()`. Each names only the type and the
+category; the remedy stays in the hint the message already prints beside it.
+
+| Reason | Sentence |
+|---|---|
+| `UNEXPORTED_DEPENDENCY_TYPE` | its type `X` is declared in a dependency module outside the export scope |
+| `EXPECT_DEPENDENCY_TYPE` | its type `X` is an `expect` declaration in a dependency module, which no export scope of this module can reach |
+| `CROSS_MODULE_DISABLED_DEPENDENCY_TYPE` | its type `X` is declared in a dependency module and cross-module export is off |
+| `ACTUAL_TYPEALIAS_TARGET` | its type `Expect` is an `actual typealias` to `Target`, which is not exported |
+| `UNDECLARED_ENUM` | its enum type `X` is never declared as a C# enum (UNDECLARED_ENUM) |
+| `UNDECLARED_INTERFACE` | its interface type `X` is nested and never declared as a C# interface (UNDECLARED_INTERFACE) |
+| `UNDECLARED_CLASS` | its type `X` is a nested class or object never declared in C# (UNDECLARED_CLASS) |
+| `INHERITED_MEMBER` | it is a value class member that a supertype declares |
+| `SEALED_POSITION` | its sealed type `X` has no generated C# discriminator |
+| `BOUND_INTERFACE_POSITION` | a bound C# interface is not marshalled at this position |
+| `UNIMPLEMENTABLE_BOUND_INTERFACE` | it returns a bound C# interface that Kotlin cannot implement |
+
+Where `detail` is absent the type name drops out of the sentence and the rest stands.
+`ACTUAL_TYPEALIAS_TARGET` splits `detail` on `->` exactly as its hint does.
+
+**The reason constant is kept, parenthesised, in the three `UNDECLARED_*` sentences only.** They
+share one diagnostic kind (`SKIPPED_UNSUPPORTED_TYPE`), so the `[nuget:KIND]` prefix cannot tell
+them apart and the sentence has to. Every other reason here has its own kind in the prefix, so its
+sentence drops the constant, as `EXCLUDED_DEPENDENCY_TYPE` already did.
+
+`SEALED_POSITION`'s sentence is worded off the current meaning of the reason, a sealed type with no
+generated C# discriminator, which is what its hint says. Its enum KDoc still describes the
+pre-ADR-112 input-position case; correcting that is not this amendment's scope.
+
+`ForwardSkippedCallableWarningTest` gains one case: a hand-built `Skipped` per reason, asserting the
+sentence and that the message no longer also says "type combination is not supported".
+
+### Consequences of the amendment
+
+- Diagnostic text (KSP warning, `NugetDiagnostics.json`, `nugetReportDiagnostics`) changes for
+  eleven reasons. The sample library exercises seven of them, so the Writerside snippets quoting
+  that output are re-lifted with this change.
+- No C# output, no ABI, no export, no handle change.
+- The generic `else` sentence now covers only genuine type-combination drops, which is what it says.
+- The property route (`warnDroppedForwardProperties`) still hand-spells its sentences, because a
+  dropped property carries no `ForwardPlanSkipReason` to dispatch on. Tracked separately, and
+  closed by the "the property route carries its reason" amendment below.
+
+## Amendment (2026-09-11): a skip leaves no import behind
+
+Judgement: an **amendment**, not a new ADR. No mapping decision changes, no ABI moves, no
+diagnostic text changes. It removes lines from the generated `CNameExports.kt` that named
+declarations the file never mentions.
+
+### The gap
+
+A skip is supposed to be silent in the generated output, but five per-declaration loops in
+`NugetProcessor.kt` added `builder.addImport(pkg, name)` **before** the plan gate that decides
+whether anything is emitted. So a top-level `fun scan(litters: List<List<String>?>)`, skipped as
+`SKIPPED_UNSUPPORTED_INPUT`, still contributed `import test.husk.scan` to a file with zero `husk`
+references. kotlinc does not warn on an unused import, so it compiled and nothing caught it.
+
+The precedent for the fix was already in-tree: `ExtensionPropertyExports.kt` moved its import
+behind the `propertyFor(...) == null` gate for exactly this reason.
+
+### Decision
+
+The import goes behind the gate, never ahead of it, in all five remaining loops:
+
+| Loop | Where the import now lives |
+|---|---|
+| top-level functions | inside the `plansFor(func).isNotEmpty()` branch in `NugetProcessor.kt`; the legacy route imports its own inside `addFunctionExports`, after the `isGenericReturnType` early return |
+| generic functions | `addGenericFunctionExports`, after `if (paramIndex == -1) return` |
+| suspend functions | `addSuspendFunctionExports`, after both `legacyRefused*` early returns |
+| top-level properties | `addPropertyExports`, after the `propertyFor(...) == null` gate |
+| extension functions | `addExtensionFunctionExports`, after the `plansFor(...).isEmpty()` gate |
+
+The gate and the import live in the same function everywhere except the top-level function loop,
+whose plan branch keeps the import in the loop, because `addForwardKotlinPlanExport` is shared with
+class members that import nothing.
+
+The class, sealed, object, enum and value-class loops are untouched: they import nothing per
+member.
+
+`Tier1DeadImportTest` asserts the structural shape (a substring assertion on the generated Kotlin,
+since no compiler warning can see an unused import), with a surviving sibling in each fixture as
+the positive control, over a skipped function, a skipped `val` and a skipped extension function.
+
+### Consequences of the amendment
+
+- `CNameExports.kt` loses one line per skipped declaration. No export, no ABI, no C# surface change.
+- A skipped property fixture needs a genuinely unplannable property *type*: an unsupported
+  parameter type does not transfer, because a `List<List<String>?>` **property** plans fine as an
+  opaque handle getter. The test uses a function type.
+
+## Amendment (2026-09-11): "once per public nested declaration" is at any depth
+
+Judgement: an **amendment**, not a new ADR. The rule the 2026-09-07 nested-declarations amendment
+states does not change, and neither does the message or the hint. The walk that implemented it was
+narrower than the rule.
+
+### The gap
+
+`nestedDeclarations` in `NugetProcessor.kt` flat-mapped **one** level of
+`owner.declarations.filterIsInstance<KSClassDeclaration>()` over the root buckets. Every owner in
+that set is a root bucket (`parentDeclaration == null`), so in `class A { class B { class C } }`,
+`B` was a candidate but never an owner and `C` was never enumerated. `C` produced no diagnostic in
+any bucket: it vanished in exactly the silence this ADR's `SKIPPED_NESTED_DECLARATION` exists to
+end. Every fixture in the repository nested exactly one level, which is why it held up this long.
+
+At the member position there was no gap: `ForwardBridgeTypeClassifier` and
+`ForwardReachabilityClosure` test `parentDeclaration != null`, which is depth-agnostic, so a member
+typed with `A.B.C` already skipped as `UNDECLARED_CLASS`. Only the declaration itself was missing.
+
+### Decision
+
+The walk recurses. A private `KSClassDeclaration.nestedClassDeclarations(): Sequence<KSClassDeclaration>`
+yields each public nested declaration and then descends into it, and the existing per-candidate
+filters (public, not a companion, not a sealed subclass, not an arm of an ineligible sealed
+interface, kind in `NESTED_DECLARATION_KINDS`), the `distinctBy` and the `sortedBy` are unchanged
+and apply per candidate at any depth. `A.B.C` gets its own warning, in the existing shape:
+
+```
+[nuget:SKIPPED_NESTED_DECLARATION] Skipping tier1.nestedclass.Quiet.Unused.Deeper: nested class `tier1.nestedclass.Quiet.Unused.Deeper` is never declared in C# (only top-level declarations, sealed subclasses and companions are). move it to the top level of its file
+```
+
+Three boundaries on the descent:
+
+- **A non-public child is not descended into.** A public `C` inside an `internal B` is not reachable
+  API, and the one-level walk already dropped a non-public `B`.
+- **The kind filter runs before the visibility check** inside the helper. Verified: `getVisibility()`
+  on an enum *entry* read from a dependency jar throws `Internal KSP Error` out of KSP's `modifiers`
+  delegate (`AbstractKSDeclarationImpl.kt:79`), and it is the recursion that first reaches one. An
+  entry is never a nested-declaration candidate, so testing `classKind` first both avoids the crash
+  and changes no output.
+- **An enum class is a candidate but not an owner.** `enums` is deliberately absent from the owner
+  set, so a declaration nested inside an `enum class` still says nothing, at any depth. Known
+  one-line follow-up, out of scope here.
+
+[ADR-112](112-sealed-interface-mapping.md)'s nested-arm fold deliberately does **not** apply. That
+fold exists because an arm's move-to-top-level hint fixes nothing (ADR-125 made position irrelevant
+to arm eligibility) and the parent's diagnostic already names the arm. Neither holds for ordinary
+nesting: `C`'s hint is correct advice, and `B`'s warning does not name `C`. Folding would also hide
+a two-deep `enum class` or `interface` behind a class warning, which is the vanishing this
+amendment removes.
+
+### Testing seam
+
+`Tier1NestedClassSkipTest` nests `class Quiet { class Unused { class Deeper } }` and asserts
+`Deeper` is named once with the move-to-top-level hint, and absent from the generated C#.
+
+### Consequences of the amendment
+
+- One more warning line per declaration nested two or more levels deep. No generated C# changes:
+  such a declaration was absent before and stays absent.
+- The fixture library's own `NugetDiagnostics.json` is unchanged in count: nothing in `test-library`
+  nests more than one level today.
+
+
+## Amendment (2026-09-11): the property route carries its reason
+
+Judgement: an **amendment**, not a new ADR. It closes the deferral the "eleven scope, position and
+nesting reasons own their sentence" amendment above left open, using that amendment's own arms. No
+new kind, no new reason, no new mechanism, no generated C# change. Status stays Accepted.
+
+### The gap
+
+`ForwardDroppedProperty` carried a `typeDescription` string and a `boundInterface` flag, and
+nothing else. So `warnDroppedForwardProperties` hand-spelled one sentence and one hint for every
+whole-property drop:
+
+```
+its type io.github.xxfast.kotlin.native.nuget.test.issue54.NestedModeOwner.Mode has no property getter or setter shape. expose a bridgeable property (or a getter function) whose type is not io.github.xxfast.kotlin.native.nuget.test.issue54.NestedModeOwner.Mode, and export that instead
+```
+
+Both halves are wrong for a nested enum. The type has a perfectly good getter shape; it is the
+*declaration* that is never emitted. And the remedy is unfollowable: the author cannot "expose a
+property whose type is not `Mode`" and keep the property. The correct remedy, move the enum to the
+top level, was already written, one position over: a `fun tune(mode: Mode)` parameter or a
+`fun tuning(): Mode` return printed it. Only the property position did not.
+
+The same gap ran for every reason about scope, nesting, position or an opt-in marker: a property
+typed with an out-of-scope dependency type never printed the `include(...)` line, and a
+sealed-interface element read as its outer collection shape.
+
+### Decision
+
+The property record carries the classification the callable record already does.
+
+- `ForwardDroppedProperty` gains `reason: ForwardPlanSkipReason?` and `detail: String?`.
+  `ForwardPropertyPlanner.recordDropped` fills them from the very `BridgeType` it was about to
+  describe: `type.skipReason()` and `type.skipDetail()`.
+- `skipReason()`, `isUndeclared()` and the five detail extractors move from private members of
+  `ForwardCallablePlanner` to file-level `internal` functions, alongside a `BridgeType.skipDetail()`
+  that chains the five in the order the three callable skip sites already chain them. They read
+  nothing but the `BridgeType`, so this is a visibility move, the same one ADR-075 made for
+  `isBridgeableComponent()`. `unwrapNullable()` moves with them.
+  `collectionComponentDetail()` deliberately stays private: it is keyed to `COLLECTION`, and the
+  property route has its own component wording for that case.
+- `warnDroppedForwardProperties` gains the `scope` parameter its callable twin has, fed the same
+  `effectiveInclude`, and its `else` arm splits in two on
+  `reason.ownsSentence(detail)`: a reason with something of its own to say prints
+  `diagnosticReason(detail)` and `diagnosticHint(detail, scope)`; every other record keeps the
+  shipped pair byte-identical.
+- `ownsSentence()` is `diagnosticReason(detail, parameter) != genericSentence()`, not an allowlist.
+  Every arm added to `diagnosticReason` in future routes a property automatically, and no arm can
+  be added to one position and forgotten at the other.
+
+**The diagnostic kind does not change.** Every routed record stays
+`SKIPPED_UNSUPPORTED_PROPERTY`. That kind names *where* the drop happened, which is still exactly
+true, nine Tier 1 tests and the kind's own KDoc define it that way, and `toDiagnosticKind()`
+`error()`s on the legacy-route reasons a property genuinely holds: `Cat.unsupported: Sequence<Int>`
+classifies as `GENERIC`, and dispatching its kind would fail the build. Only the sentence and the
+hint come from the reason.
+
+The opt-in (`SKIPPED_OPT_IN_MARKER`) and bound-interface (`SKIPPED_BOUND_TYPE_POSITION`) arms above
+the `else` are untouched. They already read the reason, and folding the bound arm in would lose
+the type name its shipped sentence carries and would misroute a non-implementable bound interface.
+
+### Testing seam
+
+`ForwardSkippedPropertyWarningTest`, beside its callable twin: hand-built `ForwardDroppedProperty`
+records, asserting the `UNDECLARED_ENUM` hint says "move it to the top level" and no longer says
+"has no property getter", that `UNEXPORTED_DEPENDENCY_TYPE` with `scope = listOf("app")` names
+`include("app", "dep")`, and that `reason = null` and `reason = GENERIC` keep the shipped sentence
+and hint verbatim. `Tier1UndeclaredEnumSkipTest` and `Tier1NestedInterfaceSkipTest` add the
+move-to-top-level assertion at the property position, and `Tier1ReachabilityClosureTest` gains a
+`val sponsor: Advert` case for the `include(...)` line.
+
+### Consequences of the amendment
+
+- Text changes for four sample-library records: `issue54.NestedModeOwner.mode` and
+  `models.Broadcast.band` (`UNDECLARED_ENUM`), `issue54.NestedListenerOwner.listener`
+  (`UNDECLARED_INTERFACE`) and `issue128.GroomingPlan.grooming` (`OPT_IN_MARKER_TYPE`).
+  `cat.Cat.unsupported` and the two `issue112` `codes` properties are `GENERIC` and keep the
+  shipped text. The Writerside pages quoting the changed four are re-lifted with this change.
+- `Tier1SealedCollectionPropertyTest`'s `Album.filters` moves from the outer-collection wording
+  ("Collection (element type sealed helper ...)") to `SEALED_POSITION`'s "its sealed type `Filter`
+  has no generated C# discriminator", matching what the same element already printed at a callable
+  position.
+- No C# output, no ABI, no export, no handle change.
+
+## Amendment (2026-09-11): `kotlin.sequences.Sequence` is a named unsupported stdlib type
+
+Judgement: an **amendment**, not a new ADR. It closes the ROADMAP Phase 3 item "a
+`kotlin.sequences.Sequence<T>` parameter or property vanishes from C# with no diagnostic". There is
+one idiomatic outcome (skip, named) and no competing mapping to weigh, so there is nothing for a new
+ADR to decide. Status stays Accepted.
+
+### The gap
+
+`Sequence` is an `INTERFACE` with one type parameter, so `ForwardBridgeTypeClassifier` fell through
+to its generic-interface arm and answered
+`SpecializedProtocol("generic declaration kotlin.sequences.Sequence")`. `ForwardCallablePlanner`
+maps a `generic declaration ` protocol to `ForwardPlanSkipReason.GENERIC`, which is
+`droppedFromCSharp = false`: a deferral to a named legacy route, deliberately silent because the
+callable is still emitted, just not through the plan.
+
+Except that no legacy route re-emits it. The generic routes key on the *callable's* own type
+parameters or the *class's*, never on the type of a parameter or a return, so a non-generic member
+with a `Sequence` in its signature was neither planned nor legacy-routed. It disappeared from the
+generated C# with no diagnostic of any kind.
+
+The property half was never silent: `ForwardPropertyPlanner.recordDropped` is silent only for the
+lambda/flow legacy protocols, so `cat.Cat.unsupported` always fired `SKIPPED_UNSUPPORTED_PROPERTY`.
+Only its wording changes here.
+
+### Decision
+
+`kotlin.sequences.Sequence` joins the known-stdlib block of `ForwardBridgeTypeClassifier`, recognised
+by qualified name ahead of the shape branches, exactly as `Instant` (ADR-076), `Duration` (ADR-103)
+and `Uuid` (ADR-106) are. It is the first entry in that block that is **refused** rather than bound:
+it answers `BridgeType.Unsupported("kotlin.sequences.Sequence", "a lazy Sequence has no bridge
+shape; expose a List instead")`.
+
+The planner then maps it `UNSUPPORTED`, which is `droppedFromCSharp = true`, so every callable
+position warns: `SKIPPED_UNSUPPORTED_TYPE` naming the member and its `file:line`. A nullable
+`Sequence<T>?` at an input goes through the nullable arm to `NULLABLE` and stays named as
+`SKIPPED_UNSUPPORTED_INPUT`. The property route keeps `SKIPPED_UNSUPPORTED_PROPERTY` and now names
+the stdlib type instead of the `generic declaration ` legacy-route reason.
+
+`Sequence` only. `Iterable`, `Iterator` and `Collection` are supertypes of `List`, so a line for
+them could mask the working collection route; they are their own decision if anyone wants one.
+
+The wider fix (make `GENERIC` a real drop unless the callable is genuinely on a generic route) is
+the right long-term shape and stays open as its own ROADMAP item; it covers user generics such as
+`Box<Int>` at a parameter, which are still silent.
+
+### Testing seam
+
+`Tier1SequencePositionTest`: one fixture with a `Sequence` parameter, a `Sequence` return, a
+`Sequence` property and a control member, asserting the named kind, that the member is absent from
+both the generated Kotlin and the generated C#, and that no diagnostic mentions
+`generic declaration`. One cell in `ForwardBridgeTypeClassifierTest` beside the generic-interface
+cell, asserting `Sequence` classifies as `Unsupported` and not as the generic route.
+`Tier1DroppedExtensionEmissionTest`'s `Patient.tags` gains the warning assertion it was missing, so
+it can no longer go green on a `tags` that started binding.
+
+### Consequences of the amendment
+
+- No generated C# change anywhere: every one of these members was already absent, only silently.
+- `cat.Cat.unsupported`'s `SKIPPED_UNSUPPORTED_PROPERTY` text loses its `generic declaration `
+  prefix and names `kotlin.sequences.Sequence`, superseding the previous amendment's note that this
+  record is `GENERIC` and keeps the shipped text. The Writerside page quoting it is re-lifted with
+  this change.
+- No ABI, no export, no handle, no leak-harness change.

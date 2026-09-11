@@ -197,6 +197,23 @@ for the collection-return leak this harness proved and closed.
 Only forward handles are counted; the reverse side's own `StableRef` sites are not (see
 [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md)).
 
+Rows 8g through 8j cover every route with a handle-passed callback payload, now that
+[ADR-036](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/036-reverse-interop-mechanism.md)'s
+2026-09-11 ownership amendment gives the C# side sole ownership of the free (see
+[Ownership of a callback payload](lambdas-and-callbacks.md#ownership-of-a-callback-payload)):
+
+- **8g**, `LambdaParameter_OnASealedArm_StringInAndOut_ReturnsToBaseline`, the per-call route on a
+  sealed arm's `String` payload. See
+  [Lambda parameters on a sealed arm](interfaces-abstract-sealed.md#sealed-lambda-generated-c).
+- **8h**, `LambdaParameter_OnAnOrdinaryClass_StringInAndOut_ReturnsToBaseline`, the same per-call
+  route on an ordinary class (`Cat.DescribeWith`), proving the fix isn't specific to a sealed
+  receiver.
+- **8i**, `LambdaParameter_OnAnOrdinaryClass_ObjectPayload_ReturnsToBaseline`, the per-call route's
+  other payload kind: an exported object (`Cat.ForEachToy`'s `Toy`) rather than a marshalled
+  `String`.
+- **8j**, `InterfaceBridge_StringPayload_ReturnsToBaseline`, the interface-bridge route
+  (`CatEventSource.Trigger`), which had freed the same handle three times before the fix.
+
 <note>
     <p><code>NugetMarshal.LiveHandles</code> is process-global, so <code>LiveHandleTests.cs</code>
     and <code>CollectabilityTests.cs</code> run in their own xunit project, <code>LeakTests/</code>,

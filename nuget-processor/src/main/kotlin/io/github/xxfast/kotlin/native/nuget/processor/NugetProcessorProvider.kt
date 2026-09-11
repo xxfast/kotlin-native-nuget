@@ -45,6 +45,11 @@ class NugetProcessorProvider : SymbolProcessorProvider {
         ?.split(",")?.filter { it.isNotBlank() } ?: emptyList(),
       boundInterfaces = boundInterfaces,
       publishedScopes = publishedScopes,
+      // ADR-115 amendment: the markers this publisher waives. Trusted unvalidated: a name that
+      // resolves to nothing simply waives nothing, and the SKIPPED_OPT_IN_MARKER warning beside it
+      // prints the marker's real fully-qualified name.
+      exportMarkers = environment.options["nuget.exportMarkers"]
+        ?.split(",")?.filter { it.isNotBlank() }?.toSet() ?: emptySet(),
     )
 
     return NugetProcessor(

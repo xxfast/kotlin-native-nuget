@@ -1,5 +1,8 @@
 package io.github.xxfast.kotlin.native.nuget.processor.forward
 
+import com.google.devtools.ksp.getAllSuperTypes
+import com.google.devtools.ksp.getDeclaredFunctions
+import com.google.devtools.ksp.getDeclaredProperties
 import com.google.devtools.ksp.isAbstract
 import com.google.devtools.ksp.symbol.ClassKind
 import com.google.devtools.ksp.symbol.KSClassDeclaration
@@ -46,26 +49,42 @@ internal fun KSClassDeclaration.declaredSuperClass(): KSClassDeclaration? = supe
  * - an `enum class` arm, which a C# enum cannot be (it admits only an integral base, CS1008), and
  * - an arm implementing two sealed interfaces, which C# single inheritance cannot express (the
  *   renderer would outdent one `public sealed class` per base under the same namespace, CS0101).
+ *
+ * ADR-112 amendment (2026-09-11): *every* refusing arm is named, `; `-joined in
+ * `getSealedSubclasses()` order. One refusing arm reads exactly as it did before (a one-element
+ * join is the element); two of them now take one rebuild to fix rather than one rebuild each.
  */
 internal fun KSClassDeclaration.sealedInterfaceIneligibility(): String? {
   if (!isSealedInterface()) return null
   if (typeParameters.isNotEmpty()) return "it has type parameters"
-  getSealedSubclasses().forEach { subclass ->
-    val subName: String = subclass.simpleName.asString()
-    if (subclass.classKind == ClassKind.INTERFACE) return "subclass `$subName` is an interface"
-    if (subclass.classKind == ClassKind.ENUM_CLASS) {
-      return "subclass `$subName` is an enum class, and a C# enum can only extend an integral " +
-          "type (CS1008), never the abstract class an arm is declared as"
-    }
-    val base: KSClassDeclaration? = subclass.declaredSuperClass()
-    if (base != null) {
-      val baseName: String = base.qualifiedName?.asString() ?: base.simpleName.asString()
-      return "subclass `$subName` extends another class `$baseName`"
-    }
-    if (subclass.sealedInterfaceSupertypes() > 1) {
-      return "subclass `$subName` implements more than one sealed interface, and a C# class can " +
-          "extend only one base"
-    }
+  val reasons: List<String> = getSealedSubclasses().mapNotNull { it.armIneligibility() }.toList()
+  return reasons.takeIf { it.isNotEmpty() }?.joinToString("; ")
+}
+
+/**
+ * Why this arm cannot be an arm of a C# sealed hierarchy, or `null` if it can.
+ *
+ * The first reason on the arm wins, because every one of them is fixed by the same edit (declare
+ * the arm as a plain class or object with this interface as its only parent). Across arms,
+ * [sealedInterfaceIneligibility] names them all: two independently refusing arms used to cost the
+ * author one rebuild each, because the walk returned the first refusal in `getSealedSubclasses()`
+ * order as the whole reason.
+ */
+private fun KSClassDeclaration.armIneligibility(): String? {
+  val name: String = simpleName.asString()
+  if (classKind == ClassKind.INTERFACE) return "subclass `$name` is an interface"
+  if (classKind == ClassKind.ENUM_CLASS) {
+    return "subclass `$name` is an enum class, and a C# enum can only extend an integral " +
+        "type (CS1008), never the abstract class an arm is declared as"
+  }
+  val base: KSClassDeclaration? = declaredSuperClass()
+  if (base != null) {
+    val baseName: String = base.qualifiedName?.asString() ?: base.simpleName.asString()
+    return "subclass `$name` extends another class `$baseName`"
+  }
+  if (sealedInterfaceSupertypes() > 1) {
+    return "subclass `$name` implements more than one sealed interface, and a C# class can " +
+        "extend only one base"
   }
   return null
 }
@@ -179,8 +198,40 @@ internal fun KSClassDeclaration.isArmOfIneligibleSealedInterface(): Boolean = su
  */
 internal fun KSClassDeclaration.forwardSuperClass(
   exportedTypes: Set<String>,
-): KSClassDeclaration? = declaredSuperClass()
-  ?.takeIf { base -> base.qualifiedName?.asString() in exportedTypes }
+): KSClassDeclaration? = declaredBaseChain()
+  .firstOrNull { base -> base.qualifiedName?.asString() in exportedTypes }
+
+/**
+ * The declared base classes, nearest first: `X`'s own base, then that base's base, up to (but not
+ * including) `kotlin.Any`.
+ *
+ * ADR-101 amendment (2026-09-11): [forwardSuperClass] walks this rather than taking one hop, so
+ * `Dinghy : Skiff : Vessel` with only `Skiff` outside the export set renders `Dinghy : Vessel`
+ * instead of going base-less. One unexported hop used to cost the consumer every exported base
+ * above it, along with the `is`/`as` relation against them, which is exactly what ADR-101's
+ * base-class amendment set out to preserve wherever C# can express it.
+ *
+ * When the direct base is exported the chain's first element answers, so nothing about a shipping
+ * class changes: the walk only ever looks past a base that has no generated C# class anyway.
+ */
+internal fun KSClassDeclaration.declaredBaseChain(): Sequence<KSClassDeclaration> =
+  generateSequence(declaredSuperClass()) { base -> base.declaredSuperClass() }
+
+/**
+ * The bases between [this] and the base the forward pipeline keeps: the chain prefix that has no
+ * generated C# class, and therefore no carrier for its own members other than [this].
+ *
+ * [keptBase] `null` means base-less, and then the whole chain is dropped. Compared by qualified
+ * name rather than declaration identity, because the chain is re-resolved per member.
+ */
+internal fun KSClassDeclaration.droppedBaseChain(
+  keptBase: KSClassDeclaration?,
+): List<KSClassDeclaration> {
+  val kept: String? = keptBase?.qualifiedName?.asString()
+  return declaredBaseChain()
+    .takeWhile { base -> base.qualifiedName?.asString() != kept }
+    .toList()
+}
 
 /**
  * Whether [member], as returned by `getAllFunctions()`/`getAllProperties()` on a class whose
@@ -191,18 +242,27 @@ internal fun KSClassDeclaration.forwardSuperClass(
  * = ...`) is bound too: the C# class declares that interface, so it must carry the member, and the
  * Kotlin export reaches the default body by ordinary dynamic dispatch on the instance behind the
  * handle. A member inherited from a base *class* is not: the generated C# subclass extends the
- * generated C# base class, which already carries it (and `CirClassTranslator` renders no interface
- * list at all once a base class exists, so nothing is left unimplemented).
+ * generated C# base class, which already carries it.
+ *
+ * ADR-101 amendment (2026-09-11): the interface arm applies with a kept base too. A base class no
+ * longer empties the interface list (`CirClassTranslator`), so `class Ledge : Shelf(), Groomable`
+ * renders `: Shelf, IGroomable` and must carry `Groomable`'s defaulted members itself, or the
+ * declaration it just made is CS0535. Only an interface the base does *not* already implement
+ * counts: one the base implements is carried by the base, and re-binding it here hides the base
+ * member (CS0108).
  */
 internal fun KSDeclaration.isForwardMemberOf(
   cls: KSClassDeclaration,
   superClass: KSClassDeclaration?,
-): Boolean = parentDeclaration == cls || superClass == null
+): Boolean = isDeclaredBy(cls) ||
+    superClass == null ||
+    isFromInterfaceBeside(superClass) ||
+    isFromDroppedBase(cls, superClass)
 
 /**
  * [isForwardMemberOf] narrowed to the members a *plan* can be built for: an inherited interface
  * member with no implementation has nothing to dispatch to, so it stays unplanned and reaches C#
- * through `CirClassTranslator`'s abstract-method path instead (an abstract C# method, which a
+ * through `CirClassTranslator`'s abstract path instead (an abstract C# method or property, which a
  * subclass can then `override`).
  *
  * Note the abstractness test is [KSFunctionDeclaration.isAbstract] / [KSPropertyDeclaration
@@ -216,7 +276,131 @@ internal fun KSDeclaration.isForwardMemberOf(
 internal fun KSDeclaration.isForwardPlannableMemberOf(
   cls: KSClassDeclaration,
   superClass: KSClassDeclaration?,
-): Boolean = parentDeclaration == cls || (superClass == null && hasImplementation())
+): Boolean = isDeclaredBy(cls) ||
+    ((superClass == null ||
+        isFromInterfaceBeside(superClass) ||
+        isFromDroppedBase(cls, superClass)) && hasImplementation())
+
+/**
+ * ADR-101 amendment (2026-09-11): whether this member is inherited from an interface the class
+ * lists *beside* its base class, one [superClass] does not itself implement.
+ *
+ * This is the member-level half of the base list `CirClassTranslator` now renders: `: Base, IFoo`
+ * keeps every interface the base does not already carry, and exactly those interfaces' members
+ * have no C# carrier other than this class. An interface the base implements is excluded on both
+ * sides, so the two never disagree about who binds a member.
+ *
+ * Export status is deliberately not consulted, matching the base-less rule: an unexported
+ * interface is dropped from the base list with `SKIPPED_UNEXPORTED_SUPERTYPE`, and its defaulted
+ * members still bind on the class as ordinary methods.
+ */
+private fun KSDeclaration.isFromInterfaceBeside(superClass: KSClassDeclaration): Boolean {
+  val owner: KSClassDeclaration = parentDeclaration as? KSClassDeclaration ?: return false
+  if (owner.classKind != ClassKind.INTERFACE) return false
+  val qualified: String = owner.qualifiedName?.asString() ?: return false
+  return qualified !in superClass.forwardSupertypeNames()
+}
+
+/**
+ * ADR-101 amendment (2026-09-11): whether this member is declared by one of the *dropped*
+ * intermediate bases, the hops between [cls] and the base [forwardSuperClass] kept.
+ *
+ * Walking up to the nearest exported base is not enough on its own. With `Dinghy : Skiff : Vessel`
+ * and `superClass = Vessel`, `Skiff`'s members are parented to `Skiff`, so without this arm they
+ * bind on neither `Dinghy` nor `Vessel` and vanish from C# with no diagnostic at all. `Skiff` has
+ * no generated class, so `Dinghy` is the only carrier there is, which is the same re-homing rule
+ * the base-less case already applies to the whole chain.
+ */
+private fun KSDeclaration.isFromDroppedBase(
+  cls: KSClassDeclaration,
+  superClass: KSClassDeclaration,
+): Boolean {
+  val owner: KSClassDeclaration = parentDeclaration as? KSClassDeclaration ?: return false
+  val qualified: String = owner.qualifiedName?.asString() ?: return false
+  return cls.droppedBaseChain(superClass).any { it.qualifiedName?.asString() == qualified }
+}
+
+/**
+ * The qualified names of everything [this] is, itself included: the test for "the base already
+ * carries this interface".
+ */
+internal fun KSClassDeclaration.forwardSupertypeNames(): Set<String> =
+  (sequenceOf(asStarProjectedType()) + getAllSuperTypes())
+    .mapNotNull { it.declaration.qualifiedName?.asString() }
+    .toSet()
+
+/**
+ * ADR-101 amendment (2026-09-11): whether this member overrides a member of its class's *base
+ * class*, which is the one thing C# `override` may mean.
+ *
+ * The Kotlin `override` modifier is not that question. `class Ledge : Shelf(), Groomable` declares
+ * `override fun groom()` for `Groomable.groom`, and `Shelf` has no `Groom` to override, so C# has
+ * to spell it `virtual`: `public override string Groom()` is CS0115. Reading the modifier was safe
+ * only while a kept base emptied the interface list, which it no longer does.
+ *
+ * [KSPropertyDeclaration.findOverridee] / [KSFunctionDeclaration.findOverridee] answer first: for
+ * `Cat.vibe` over `Animal.vibe` over `Pet.vibe` the property side returns `Animal.vibe`, the
+ * class-chain overridee (Verified by a probe in a Tier 1 run; the function side is the same KSP
+ * API, Inferred). The answer is trusted only when it lands on a class, because a base class that
+ * does not redeclare the member leaves it abstract and the overridee is then the interface
+ * declaration, which says nothing about what the base class renders. The fallback walks the base
+ * class's own visible members by simple name, which answers that shape too, and answers `Ledge`
+ * correctly either way: `Shelf` declares no `groom` under any name.
+ */
+internal fun KSDeclaration.baseClassOverridee(
+  superClass: KSClassDeclaration?,
+): KSDeclaration? {
+  if (superClass == null || Modifier.OVERRIDE !in modifiers) return null
+  val name: String = simpleName.asString()
+  val direct: KSDeclaration? = when (this) {
+    is KSPropertyDeclaration -> findOverridee()
+    is KSFunctionDeclaration -> findOverridee()
+    else -> null
+  }
+  val onBaseClass: Boolean =
+    (direct?.parentDeclaration as? KSClassDeclaration)?.classKind == ClassKind.CLASS
+  if (onBaseClass) return direct
+  return when (this) {
+    is KSPropertyDeclaration ->
+      superClass.getAllProperties().firstOrNull { it.simpleName.asString() == name }
+
+    is KSFunctionDeclaration ->
+      superClass.getAllFunctions().firstOrNull { it.simpleName.asString() == name }
+
+    else -> null
+  }
+}
+
+/** [baseClassOverridee] as the boolean the `override` / `virtual` pair is keyed on. */
+internal fun KSDeclaration.overridesBaseClassMember(superClass: KSClassDeclaration?): Boolean =
+  baseClassOverridee(superClass) != null
+
+/**
+ * Whether this member is *declared* by [cls], as opposed to inherited into it.
+ *
+ * `parentDeclaration == cls` is not that question on its own. Verified against KSP while spelling
+ * a generic base (ADR-101 amendment, 2026-09-11): when the base is generic, `getAllProperties()` /
+ * `getAllFunctions()` hand back the base's member **substituted onto the subclass**, parented to
+ * the subclass and carrying `Modifier.OVERRIDE`, so the raw parent test called `Crate<T>.value` a
+ * member of `StringCrate`. That re-bound the inherited getter on the subclass and rendered
+ * `public override string Value` against a base property that is not `virtual` (CS0506). A
+ * non-generic base has no such substitution and is unaffected, which is why the shipped
+ * inherited-member behaviour (`Tier1InheritedMemberDiagnosticsTest`) never saw this.
+ *
+ * The declared list is the ground truth, so a real `override val` in the subclass still answers
+ * true and keeps ADR-101's virtual/override pair. Matching is by simple name: a subclass that
+ * declares one overload of a name it also inherits *substituted* from a generic base would keep
+ * both, which no fixture reaches (ROADMAP has the generic-subclass work).
+ */
+private fun KSDeclaration.isDeclaredBy(cls: KSClassDeclaration): Boolean {
+  if (parentDeclaration != cls) return false
+  val name: String = simpleName.asString()
+  return when (this) {
+    is KSPropertyDeclaration -> cls.getDeclaredProperties().any { it.simpleName.asString() == name }
+    is KSFunctionDeclaration -> cls.getDeclaredFunctions().any { it.simpleName.asString() == name }
+    else -> true
+  }
+}
 
 private fun KSDeclaration.hasImplementation(): Boolean = when (this) {
   is KSFunctionDeclaration -> !isAbstract

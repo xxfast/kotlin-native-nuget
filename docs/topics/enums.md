@@ -500,7 +500,10 @@ reference to a type that does not exist, failing the consumer's C# compile with 
 classifier's enum branch is now gated on the same exported-handle membership check the sealed-class
 branch uses ([ADR-105](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/105-sealed-property-position.md)),
 so every member typed with a nested enum skips named instead, and the owning class still generates
-with its other members.
+with its other members. A C#-implemented interface's bridge factory (see
+[C#-implemented interfaces](interfaces-abstract-sealed.md)) is gated the same way: an interface
+member typed with a nested (or otherwise undeclared) enum plans no bridge factory at all rather than
+spelling a dangling `global::` reference.
 
 From `test-library/src/nativeMain/kotlin/.../issue54/NestedModeOwner.kt`:
 
@@ -531,23 +534,33 @@ A parameter or return position skips with `SKIPPED_UNSUPPORTED_TYPE`, naming the
 
 ```
 [nuget:SKIPPED_UNSUPPORTED_TYPE] Skipping io.github.xxfast.kotlin.native.nuget.test.issue54.NestedModeOwner.set:
-    its UNDECLARED_ENUM type combination is not supported. enum
+    its enum type `io.github.xxfast.kotlin.native.nuget.test.issue54.NestedModeOwner.Mode` is never
+    declared as a C# enum (UNDECLARED_ENUM). enum
     `io.github.xxfast.kotlin.native.nuget.test.issue54.NestedModeOwner.Mode` is not in the export set, so it
     is never declared as a C# enum and every member typed with it is skipped rather than emitted as a
     dangling reference; a nested enum class is never declared (only top-level enums are), so move it to the
-    top level of its file — or, if it already is top level, bring its package into the export scope
+    top level of its file, or, if it already is top level, bring its package into the export scope
     at NestedModeOwner.kt:44
 ```
 
-A property position skips the same way, but through the ordinary `SKIPPED_UNSUPPORTED_PROPERTY`
-message the property planner already emits for any type it has no getter/setter shape for, not the
-`UNDECLARED_ENUM` reason:
+An exported abstract class's inherited but unimplemented method (declared by an interface it does
+not override) is the same named skip: the walk that renders its C# `abstract` member has no route
+of its own, so a declared enum on it is spelled through the classifier too, qualified
+(`global::Ns.Glaze`), and an undeclared one drops the member with this same
+`SKIPPED_UNSUPPORTED_TYPE`/`UNDECLARED_ENUM` diagnostic rather than a dangling reference; see [An
+exported base class's own `abstract fun`](interfaces-abstract-sealed.md#a-base-class-s-own-abstract-fun).
+
+A property position skips with `SKIPPED_UNSUPPORTED_PROPERTY`, but carries the same
+`UNDECLARED_ENUM` reason and move-to-top-level hint as the parameter and return positions above:
 
 ```
 [nuget:SKIPPED_UNSUPPORTED_PROPERTY] Skipping io.github.xxfast.kotlin.native.nuget.test.issue54.NestedModeOwner.mode:
-    its type io.github.xxfast.kotlin.native.nuget.test.issue54.NestedModeOwner.Mode has no property getter or
-    setter shape. expose a bridgeable property (or a getter function) whose type is not
-    io.github.xxfast.kotlin.native.nuget.test.issue54.NestedModeOwner.Mode, and export that instead
+    its enum type `io.github.xxfast.kotlin.native.nuget.test.issue54.NestedModeOwner.Mode` is never
+    declared as a C# enum (UNDECLARED_ENUM). enum
+    `io.github.xxfast.kotlin.native.nuget.test.issue54.NestedModeOwner.Mode` is not in the export set, so it
+    is never declared as a C# enum and every member typed with it is skipped rather than emitted as a
+    dangling reference; a nested enum class is never declared (only top-level enums are), so move it to the
+    top level of its file, or, if it already is top level, bring its package into the export scope
     at NestedModeOwner.kt:41
 ```
 
@@ -558,11 +571,11 @@ never brought into the export scope. It skips with the existing
 
 ```
 [nuget:SKIPPED_UNEXPORTED_DEPENDENCY_TYPE] Skipping io.github.xxfast.kotlin.native.nuget.test.Newsroom.airwave:
-    its UNEXPORTED_DEPENDENCY_TYPE type combination is not supported. add
+    its type `dev.other.core.Airwave` is declared in a dependency module outside the export scope. add
     include("io.github.xxfast.kotlin.native.nuget.test", "dev.other.core") to nuget { publish { } } (an
     explicit include replaces the rootPackage default, so keep your own packages listed), or expose a type
     from an in-scope package instead
-    at Newsroom.kt:88
+    at Newsroom.kt:117
 ```
 
 <note>

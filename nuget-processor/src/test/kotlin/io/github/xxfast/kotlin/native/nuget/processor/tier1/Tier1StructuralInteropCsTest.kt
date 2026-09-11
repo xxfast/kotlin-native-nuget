@@ -499,11 +499,9 @@ class Tier1StructuralInteropCsTest {
     "public static IntPtr CreateSet<T>(IEnumerable<T> values)",
     "public static IntPtr CreateMap<TKey, TValue>(IEnumerable<KeyValuePair<TKey, TValue>> values)",
     // ADR-099's nested collection readers, which take the container handle they read.
-    // `ReadMap` is absent on purpose: its declaration wraps onto a second line, so this
-    // line-oriented scan never sees its `IntPtr` at all. Listing it would imply a coverage this
-    // check does not have.
     "public static List<T> ReadList<T>(IntPtr handle",
     "public static HashSet<T> ReadSet<T>(IntPtr handle",
+    "public static Dictionary<TKey, TValue> ReadMap<TKey, TValue>(IntPtr handle",
   )
 
   @Test
@@ -515,9 +513,10 @@ class Tier1StructuralInteropCsTest {
       libraries = listOf(Tier1Classpath.kotlinxCoroutinesCore),
     )
 
-    val offenders: List<String> = result.generatedCSharp.lines()
-      .map(String::trim)
-      .filter { line -> line.startsWith("public ") && line.containsIntPtr() }
+    val declarations: List<String> = result.generatedCSharp.publicDeclarations()
+      .filter { declaration -> declaration.containsIntPtr() }
+
+    val offenders: List<String> = declarations
       // A public wrapper constructor forwarding `IntPtr.Zero` to its abstract base declares no
       // pointer of its own.
       .filterNot { line -> line.contains(": base(IntPtr.Zero)") }
@@ -528,7 +527,45 @@ class Tier1StructuralInteropCsTest {
       "no emitted public member may expose IntPtr: every one belongs on a private static extern " +
           "or an internal constructor (issue #126). Offenders: $offenders",
     )
+
+    // The list stays a decision rather than a rubber stamp: an entry the scan cannot reach, or a
+    // member that stops being emitted, fails here instead of sitting in the list unexercised.
+    val unmatched: List<String> = allowed
+      .filterNot { entry -> declarations.any { declaration -> declaration.startsWith(entry) } }
+
+    assertTrue(
+      unmatched.isEmpty(),
+      "every allowed entry must match at least one scanned public declaration, otherwise the " +
+          "allow-list claims a coverage the scan does not have. Unmatched: $unmatched",
+    )
   }
+
+  /**
+   * Every `public` declaration in the generated file, one entry per declaration rather than one
+   * per line. A header whose parentheses do not balance (`NugetMarshal.ReadMap` wraps its
+   * parameter list onto a second line, `cir/CirMarshalRenderer.kt`) is joined to the following
+   * lines with a single space until they do, so a scan over the result sees the whole signature.
+   */
+  private fun String.publicDeclarations(): List<String> {
+    val lines: List<String> = lines().map(String::trim)
+    val declarations: MutableList<String> = mutableListOf()
+    var index = 0
+    while (index < lines.size) {
+      val line: String = lines[index]
+      index++
+      if (!line.startsWith("public ")) continue
+      var declaration: String = line
+      while (declaration.unbalanced() && index < lines.size) {
+        declaration = "$declaration ${lines[index]}"
+        index++
+      }
+      declarations += declaration.replace("( ", "(")
+    }
+    return declarations
+  }
+
+  /** More `(` than `)`, so the declaration continues on the next line. */
+  private fun String.unbalanced(): Boolean = count { it == '(' } > count { it == ')' }
 
   /** `IntPtr` as a whole word, so `IntPtrSomething` or a comment mention does not trip the scan. */
   private fun String.containsIntPtr(): Boolean = Regex("\\bIntPtr\\b").containsMatchIn(this)

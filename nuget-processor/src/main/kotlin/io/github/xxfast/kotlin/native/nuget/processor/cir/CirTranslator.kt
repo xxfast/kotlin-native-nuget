@@ -93,6 +93,10 @@ data class NugetContext(
    *  plugin against a newer processor), or when the project does not publish at all — in every
    *  case no duplicate-type warning can fire, which is the pre-ADR-109 behaviour. */
   val publishedScopes: List<PublishedScope> = emptyList(),
+  /** ADR-115 amendment: the fully-qualified `@RequiresOptIn` marker names `publish {
+   *  exportMarkers(...) }` waives, so a declaration carrying one exports as if it carried no
+   *  marker at all. Empty is the shipped default (every marked declaration skips). */
+  val exportMarkers: Set<String> = emptySet(),
 )
 
 internal fun translate(
@@ -151,6 +155,7 @@ internal fun translate(
       exportedObjectHandles = exportedTypes,
       rootPackage = context.rootPackage,
       rootNamespace = context.rootNamespace,
+      exportMarkers = context.exportMarkers,
     ),
   )
 
@@ -314,7 +319,7 @@ internal fun translate(
     // ADR-095: top-level overloads land on one static class per (namespace, file class).
     emitCsharpSignatureCollisions(
       methods = members.filterIsInstance<CirMethod>(),
-      container = finalClassName,
+      container = "$namespace.$finalClassName",
       symbol = funcs.first(),
       logger = logger,
     )
@@ -367,7 +372,7 @@ internal fun translate(
       namespaceOf(cls.packageName.asString()),
       translateClass(
         cls, context.libraryName, tracker, exportedTypes, logger, callableCatalog, context,
-        classifier,
+        classifier, interfaceDeclarationCatalog,
       ),
     )
   }
@@ -509,7 +514,7 @@ internal fun translate(
     // receiver is the first parameter of each, which is how C# tells extension overloads apart.
     emitCsharpSignatureCollisions(
       methods = members.filterIsInstance<CirMethod>(),
-      container = className,
+      container = "$namespace.$className",
       symbol = funcs.first(),
       logger = logger,
     )
@@ -572,7 +577,8 @@ internal fun translate(
   // be passed to Kotlin. An interface with an out-of-scope member plans to null and simply gets no
   // factory: `HandleOf` keeps throwing for it rather than emitting a half-supported ABI.
   val bridgePlans: List<CirBridgeInterface> = interfaceBackingClasses.mapNotNull { iface ->
-    val plan: ForwardBridgeInterfacePlan = ForwardInterfaceBridgePlanner.plan(iface) ?: return@mapNotNull null
+    val plan: ForwardBridgeInterfacePlan =
+      ForwardInterfaceBridgePlanner.plan(iface, classifier) ?: return@mapNotNull null
     CirBridgeInterface(namespaceOf(iface.packageName.asString()), plan)
   }
   if (bridgePlans.isNotEmpty()) {

@@ -19,8 +19,9 @@ private val PRIMITIVE_TYPES: Set<String> = setOf(
 )
 
 /**
- * Value-class exports: plan-only. A reference-underlying value class exports no constructor at
- * all (ADR-035 defers its primary, and the planner skips its secondaries).
+ * Value-class exports: plan-only. A reference-underlying value class exports no *primary*
+ * constructor (ADR-035 keeps its positional record one), but its secondaries do cross since the
+ * 2026-09-11 amendment.
  */
 internal fun FileSpec.Builder.addValueClassExports(
   cls: KSClassDeclaration,
@@ -47,11 +48,10 @@ internal fun FileSpec.Builder.addValueClassExports(
     .toList()
 
   // ADR-035: a reference-underlying value class is a positional record struct over the underlying
-  // handle, so C# constructs one directly and no constructor crosses the bridge. Its secondaries
-  // are skipped by the planner (`REFERENCE_UNDERLYING_VALUE_CLASS_CONSTRUCTOR`); the deleted
-  // adapter here returned the raw underlying object where the C# import expected an IntPtr.
-  val constructorSymbols: List<String> = if (isReferenceUnderlying) emptyList() else buildList {
-    add("")
+  // handle, so C# already constructs one and the primary does not cross. Its secondaries do
+  // (2026-09-11 amendment): each returns the underlying as a fresh handle for C# to rebuild.
+  val constructorSymbols: List<String> = buildList {
+    if (!isReferenceUnderlying) add("")
     secondaryConstructors.forEachIndexed { index, _ -> add("_${index + 2}") }
   }
 

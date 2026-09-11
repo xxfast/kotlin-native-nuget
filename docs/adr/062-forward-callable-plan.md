@@ -180,6 +180,18 @@ spell `errorOut` by hand, so a role could not have retired that path anyway. The
 generator-internal: no emitted name moves, and the generated `CNameExports.kt` and `Interop.cs` are
 byte-identical across it.
 
+2026-09-10: the value-class Kotlin emitter's belt-and-braces receiver guard is gone. The slot test in
+`addForwardValueClassPlanExport` was `!isConstructor && index == 0 && parameter.role == RECEIVER`
+(`forward/ForwardKotlinPlanEmitter.kt:371-372`); it now reads the role alone. Both dropped conjuncts
+are already carried by the role. Verified in source: `index == 0` by
+`ForwardCallablePlanValidator.validateRoles` (`forward/ForwardMarshallingModel.kt:627-633`), which
+allows at most one `RECEIVER` and requires it first, run on every plan before emission
+(`ForwardKotlinPlanEmitter.kt:338`); `!isConstructor` by the planner, since value-class constructor
+entries are built with `ForwardReceiver.Static` (`forward/ForwardCallablePlanner.kt:693`) and
+`receiverParameter(Static)` returns no slot (`:2752`), so the only two `RECEIVER` construction sites
+(`:2732-2751`) are unreachable from a constructor plan. `isConstructor` stays: the invocation `when`
+still reads it. Generated output is unchanged.
+
 ## Amendment (2026-09-07): method-name keyword escaping moved to render time
 
 `publicSignature.name` on a plan is PascalCase after this ADR, so no planner path ever escaped a

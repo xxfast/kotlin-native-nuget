@@ -84,7 +84,7 @@ internal fun FileSpec.Builder.addClassExports(
     }
     // Issue #121: the planner declined, but a decline is not always an invitation. A marked
     // declaration must reach neither artifact, so the legacy arms below never run for one.
-    if (prop.isOptInRefused()) return@forEach
+    if (prop.isOptInRefused(classifier.exportMarkers)) return@forEach
     // Named specialized-protocol property adapters (lambda / suspend-lambda / Flow).
     val propTypeResolved: KSType = prop.type.resolve().expandAliases()
     val propType: String = propTypeResolved.declaration.qualifiedName?.asString() ?: "Any"

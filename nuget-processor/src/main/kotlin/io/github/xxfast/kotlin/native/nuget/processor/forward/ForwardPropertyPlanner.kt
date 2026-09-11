@@ -1,7 +1,6 @@
 package io.github.xxfast.kotlin.native.nuget.processor.forward
 
 import com.google.devtools.ksp.getVisibility
-import com.google.devtools.ksp.symbol.ClassKind
 import com.google.devtools.ksp.symbol.KSClassDeclaration
 import com.google.devtools.ksp.symbol.KSNode
 import com.google.devtools.ksp.symbol.KSPropertyDeclaration
@@ -49,6 +48,17 @@ internal data class ForwardDroppedProperty(
    *  setter. Routes the diagnostic to `SKIPPED_OPT_IN_MARKER`, whose message names the marker
    *  rather than blaming the property's (perfectly bridgeable) type. */
   val optInMarker: String? = null,
+  /** ADR-064's 2026-09-11 amendment: the same [ForwardPlanSkipReason] classification a dropped
+   *  *callable* carries, so a scope, nesting, sealed or opt-in drop reads the reason's own
+   *  sentence and remedy instead of the generic "no property getter or setter shape" pair, which
+   *  named the property's type when the type was not what failed. `null` only when the classifier
+   *  produced no reason at all; a reason that does not own a sentence (a legacy-route deferral
+   *  like [ForwardPlanSkipReason.GENERIC]) keeps the shipped wording too. */
+  val reason: ForwardPlanSkipReason? = null,
+  /** The detail slot [reason]'s sentence and hint read: the undeclared type's name, the
+   *  dependency type to `include(...)`, the opt-in marker, the sealed base. See
+   *  [BridgeType.skipDetail]. */
+  val detail: String? = null,
 )
 
 /**
@@ -95,6 +105,9 @@ internal class ForwardPropertyPlanner(
     // ADR-111: a sealed subclass is reached only through its base (`classes` excludes it by
     // `isSealedSubclass`), so nothing double-plans.
     sealed.forEach { base ->
+      // ADR-111 amendment (2026-09-11): the base's own declared properties first, so an arm can
+      // ask the catalog whether the base already carries the member it is about to project.
+      addAll(sealedBaseProperties(base))
       base.getSealedSubclasses().forEach { subclass ->
         addAll(sealedSubclassProperties(base, subclass))
       }
@@ -104,13 +117,42 @@ internal class ForwardPropertyPlanner(
   }
 
   /**
+   * ADR-111 amendment (2026-09-11): the sealed **base**'s own declared properties, planned like
+   * [classProperties] under the base's own `${sealed}_get_x` export prefix.
+   *
+   * Declared-only (`parentDeclaration == sealed`), because the arms carry what they declare
+   * themselves and nothing else. An `abstract val` plans exactly like a concrete one: the plan is
+   * only an ABI, and the generated export reads `handle.asStableRef<Base>().get().sides`, which is
+   * Kotlin's own virtual dispatch and therefore answers with the arm's value.
+   */
+  private fun sealedBaseProperties(sealed: KSClassDeclaration): List<ForwardPropertyPlan> {
+    val owner: String = sealed.qualifiedName?.asString() ?: return emptyList()
+    val prefix: String = sealed.simpleName.asString().lowercase()
+    return sealed.getAllProperties()
+      .filter { it.getVisibility() == Visibility.PUBLIC }
+      .filter { prop -> prop.parentDeclaration == sealed }
+      .mapNotNull { prop ->
+        propertyPlan(
+          symbol = "$owner.${prop.simpleName.asString()}",
+          position = ForwardPropertyPosition.CLASS,
+          receiver = ForwardPropertyReceiver.Handle(owner),
+          prop = prop,
+          getExport = "${prefix}_get_${prop.simpleName.asString()}",
+          setExport = "${prefix}_set_${prop.simpleName.asString()}",
+        )
+      }
+      .toList()
+  }
+
+  /**
    * ADR-111: a sealed subclass's properties, planned exactly like [classProperties] but keeping
    * the ADR-009 `${sealed}_${sub}_get_x` export prefix the discriminator, dispose and data-class
    * exports still use.
    *
-   * `superClass = null` on purpose: the generated C# subclass extends the *abstract* sealed base,
-   * which carries no members of its own, so a property the Kotlin base declares has to be bound
-   * here. That is also what the legacy `getAllProperties()` loop did.
+   * `superClass = sealed` since the 2026-09-11 amendment: the generated C# base now carries the
+   * base's own members ([sealedBaseProperties]), so an arm is declared-only like an ordinary
+   * subclass. Before that it was `null`, which flattened every implemented base property onto
+   * every arm; keeping it would be CS0108 against the base's new member.
    */
   private fun sealedSubclassProperties(
     sealed: KSClassDeclaration,
@@ -121,7 +163,7 @@ internal class ForwardPropertyPlanner(
       "${sealed.simpleName.asString().lowercase()}_${subclass.simpleName.asString().lowercase()}"
     return subclass.getAllProperties()
       .filter { it.getVisibility() == Visibility.PUBLIC }
-      .filter { prop -> prop.isForwardPlannableMemberOf(subclass, superClass = null) }
+      .filter { prop -> prop.isForwardPlannableMemberOf(subclass, superClass = sealed) }
       .mapNotNull { prop ->
         propertyPlan(
           symbol = "$owner.${prop.simpleName.asString()}",
@@ -220,7 +262,12 @@ internal class ForwardPropertyPlanner(
 
   private fun extensionProperty(prop: KSPropertyDeclaration): ForwardPropertyPlan? {
     val receiver: KSType = prop.extensionReceiver?.resolve()?.expandAliases() ?: return null
-    val receiverType: BridgeType = classifier.classify(receiver)
+    // ADR-105 amendment: the extension *property* receiver gets the same sealed rewrite the
+    // extension *function* receiver already gets (`ForwardCallablePlanner.extensionEntry`). An
+    // eligible sealed base becomes a bare `ObjectHandle` before `supportedReceiver` looks, so it
+    // rides the existing handle arms of the emitter and the projection; an ineligible one stays a
+    // protocol and drops below exactly as before.
+    val receiverType: BridgeType = classifier.classify(receiver).sealedAsHandle()
     // ADR-075: a value class crosses the bridge as its own underlying value (ADR-014), the same
     // wire shape its own declared members already use (`ForwardCallablePlanner.valueClassEntries`).
     // The receiver admits every underlying `isPlannable` admits at an ordinary position (ADR-077's
@@ -279,7 +326,7 @@ internal class ForwardPropertyPlanner(
     // ADR-115: the author's own signal, ahead of any type question -- nothing about the property
     // is unsupported. `@set:Marker` on a `var` skips the whole property rather than exporting it
     // get-only: an accessor-level partial projection does not exist in the forward plan.
-    val optInMarker: String? = prop.optInMarker()
+    val optInMarker: String? = prop.optInMarker(classifier.exportMarkers)
     if (optInMarker != null) {
       dropped.add(
         ForwardDroppedProperty(symbol, prop, typeDescription = "", optInMarker = optInMarker),
@@ -431,23 +478,16 @@ internal class ForwardPropertyPlanner(
    * `virtual`, not `override` (`isOpenForOverride`), and a `virtual` declaration is
    * free to carry a setter the interface never asked for.
    *
-   * [KSPropertyDeclaration.findOverridee] is asked first: for `Cat.vibe` over `Animal.vibe` over
-   * `Pet.vibe` it returns `Animal.vibe`, the class-chain overridee (Verified by a probe in a Tier
-   * 1 run). Its answer is only trusted when it lands on a class, though, because a base class that
-   * does *not* redeclare the member leaves it abstract, and there the overridee is the interface
-   * declaration, which says nothing directly about what the base class renders. The fallback walks
-   * the base class's own visible properties by simple name, which answers that shape too.
+   * The class-chain lookup itself is [baseClassOverridee] (`ForwardClassMembership.kt`), shared
+   * with the `override` / `virtual` pair since the ADR-101 amendment of 2026-09-11: the two used
+   * to answer differently for the same member, and a setter rule keyed on a different overridee
+   * from the modifier it renders is how CS0546 gets back in.
    */
   private fun KSPropertyDeclaration.readOnlyOverrideeOwner(
     superClass: KSClassDeclaration?,
   ): KSClassDeclaration? {
-    if (superClass == null || Modifier.OVERRIDE !in modifiers) return null
-    val name: String = simpleName.asString()
-    val direct: KSPropertyDeclaration? = findOverridee() as? KSPropertyDeclaration
-    val overridee: KSPropertyDeclaration = direct
-      ?.takeIf { (it.parentDeclaration as? KSClassDeclaration)?.classKind == ClassKind.CLASS }
-      ?: superClass.getAllProperties().firstOrNull { it.simpleName.asString() == name }
-      ?: return null
+    val overridee: KSPropertyDeclaration =
+      baseClassOverridee(superClass) as? KSPropertyDeclaration ?: return null
     return if (overridee.isMutable) null else superClass
   }
 
@@ -520,6 +560,10 @@ internal class ForwardPropertyPlanner(
       ForwardDroppedProperty(
         symbol, prop, description,
         boundInterface = type.unwrapNullable() is BridgeType.BoundInterface,
+        // The classification is the callable planner's, unchanged: this is the same BridgeType a
+        // parameter or return position would have been skipped on, so it takes the same reason.
+        reason = type.skipReason(),
+        detail = type.skipDetail(),
       )
     )
   }

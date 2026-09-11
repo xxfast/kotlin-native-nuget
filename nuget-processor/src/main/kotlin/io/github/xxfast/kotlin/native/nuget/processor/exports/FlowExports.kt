@@ -70,7 +70,7 @@ internal fun KSClassDeclaration.forwardArmFlowProperties(
   .filter { it.getVisibility() == Visibility.PUBLIC }
   .filter { prop -> prop.type.resolve().expandAliases().isForwardFlowType() }
   // Issue #121: a marked declaration must reach neither artifact, legacy route or not.
-  .filter { prop -> !prop.isOptInRefused() }
+  .filter { prop -> !prop.isOptInRefused(classifier.exportMarkers) }
   // ADR-123: an element this route cannot marshal drops the property on both halves;
   // `warnRefusedLegacyRouteMembers` names it once.
   .filter { prop -> classifier.legacyRefusedFlowElement(prop.type.resolve()) == null }
@@ -93,6 +93,26 @@ internal fun KSClassDeclaration.forwardArmFlowMethods(
   .filter { method -> classifier.legacyRefusedParameter(method.parameters) == null }
   .filter { method -> classifier.legacyRefusedReturn(method) == null }
   .toList()
+
+/**
+ * ADR-071 (2026-09-11): whether this function's return is a `MutableStateFlow<T>` the bridge holds
+ * by handle. One predicate for four halves (the Kotlin emitter, the C# translator, and the two
+ * gates that emit ADR-068's shared handle-keyed exports on either side), because the held route
+ * reads through exports generated once per module: a gate that disagrees with the emitter is an
+ * `EntryPointNotFoundException` at the first `.Value`, not a compile error.
+ *
+ * A `suspend fun` is excluded: ADR-068 already hands its awaited flow back by handle.
+ */
+internal fun KSFunctionDeclaration.returnsHeldMutableStateFlow(): Boolean {
+  if (modifiers.contains(Modifier.SUSPEND)) return false
+  val resolved: KSType = returnType?.resolve()?.expandAliases() ?: return false
+  if (resolved.declaration.qualifiedName?.asString() !in MUTABLE_STATE_FLOW_TYPES) return false
+  // ADR-067's nullable element/member threading is deferred on the settable route, on both halves.
+  if (resolved.isMarkedNullable) return false
+  val element: KSType? = resolved.arguments.firstOrNull()?.type?.resolve()
+  if (element?.isMarkedNullable == true) return false
+  return isMutableStateFlowElementSupported(element)
+}
 
 /** Whether the arm owns a coroutine scope through this route (a flow property or a flow method). */
 internal fun KSClassDeclaration.declaresOrInheritsFlowMember(
@@ -267,12 +287,6 @@ internal fun FileSpec.Builder.addFlowMethodExports(
     }
   }
 
-  val builder: FunSpec.Builder = FunSpec
-    .builder("export_${prefix}_${cname}_collect")
-    .addAnnotation(cNameAnnotation("${prefix}_${cname}_collect"))
-    .addParameter("handle", cOpaquePointer)
-    .addParameter("scopeHandle", cOpaquePointer)
-
   fun FunSpec.Builder.addFlowParameters() {
     method.parameters.forEachIndexed { index, param ->
       val paramName: String = param.name?.asString() ?: "_"
@@ -290,6 +304,53 @@ internal fun FileSpec.Builder.addFlowMethodExports(
       addParameter(paramName, ClassName.bestGuess(type))
     }
   }
+
+  // ADR-071 (2026-09-11): a `MutableStateFlow<T>`-declared function return is HELD. The call
+  // happens exactly once, here, and hands its flow back as that flow's own handle; reads then go
+  // through ADR-068's module-wide `nuget_stateflow_collect` / `nuget_stateflow_value` and the write
+  // through a flow-handle-keyed `_set_value`. The per-member `_collect` / `_value` are not emitted:
+  // they re-invoked the function, so a body that builds a fresh flow per call lost every write.
+  if (method.returnsHeldMutableStateFlow()) {
+    val flowElementHeld: String = flowElementType?.expandAliases()
+      ?.declaration?.qualifiedName?.asString() ?: flowElementQualified
+    val acquireBuilder: FunSpec.Builder = FunSpec
+      .builder("export_${prefix}_$cname")
+      .addAnnotation(cNameAnnotation("${prefix}_$cname"))
+      .addParameter("handle", cOpaquePointer)
+
+    acquireBuilder.addFlowParameters()
+
+    acquireBuilder
+      .returns(cOpaquePointer)
+      .addCode(buildStateFlowAcquireMethodBody(qualifiedName, methodName, paramCall, paramPrelude))
+
+    addFunction(acquireBuilder.build())
+
+    val (heldValueParamType: TypeName, heldAssignment: String) =
+      mutableStateFlowValueParameter(flowElementType)
+    val heldSetValueBuilder: FunSpec.Builder = FunSpec
+      .builder("export_${prefix}_${cname}_set_value")
+      .addAnnotation(cNameAnnotation("${prefix}_${cname}_set_value"))
+      // The owner handle and the method's own parameters are gone: the write is keyed on the flow
+      // this call already handed out, which is the whole point of holding it.
+      .addParameter("flowHandle", cOpaquePointer)
+      .addParameter("value", heldValueParamType)
+      .addParameter("errorOut", cOpaquePointer.copy(nullable = true))
+      .addCode(
+        buildStateFlowHandleSetValueBody(flowElementHeld, heldAssignment),
+        cOpaquePointerVar,
+        nugetHandles,
+      )
+
+    addFunction(heldSetValueBuilder.build())
+    return
+  }
+
+  val builder: FunSpec.Builder = FunSpec
+    .builder("export_${prefix}_${cname}_collect")
+    .addAnnotation(cNameAnnotation("${prefix}_${cname}_collect"))
+    .addParameter("handle", cOpaquePointer)
+    .addParameter("scopeHandle", cOpaquePointer)
 
   builder.addFlowParameters()
 
@@ -353,34 +414,10 @@ internal fun FileSpec.Builder.addFlowMethodExports(
       addFunction(hasValueBuilder.build())
     }
 
-    // ADR-071: a genuinely DECLARED MutableStateFlow<T> function return additionally gains a
-    // settable `.Value`, gated on non-nullable element/member (both deferred) and a
-    // v1-supported element (primitive/String/object; enum stays deferred).
-    val isMutableStateFlowMethod: Boolean = returnQualified in MUTABLE_STATE_FLOW_TYPES &&
-        !elementNullable && !memberNullable &&
-        isMutableStateFlowElementSupported(flowElementType)
-    if (isMutableStateFlowMethod) {
-      val (valueParamType: TypeName, assignment: String) =
-        mutableStateFlowValueParameter(flowElementType)
-      val setValueBuilder: FunSpec.Builder = FunSpec
-        .builder("export_${prefix}_${cname}_set_value")
-        .addAnnotation(cNameAnnotation("${prefix}_${cname}_set_value"))
-        .addParameter("handle", cOpaquePointer)
-
-      setValueBuilder.addFlowParameters()
-
-      setValueBuilder
-        .addParameter("value", valueParamType)
-        .addParameter("errorOut", cOpaquePointer.copy(nullable = true))
-        .addCode(
-          buildStateFlowSetValueMethodBody(
-            qualifiedName, methodName, paramCall, paramPrelude, assignment,
-          ),
-          cOpaquePointerVar, nugetHandles,
-        )
-
-      addFunction(setValueBuilder.build())
-    }
+    // ADR-071 (2026-09-11): the settable half of a function return no longer lands here. A
+    // `MutableStateFlow<T>`-declared return is held by handle and returned above, before the
+    // `_collect` export is even built; what reaches this point is a read-only `StateFlow<T>`
+    // return, which mints nothing per call and keeps its shipped per-member exports.
   }
 }
 
@@ -603,18 +640,39 @@ private fun buildStateFlowSetValuePropertyBody(
   append("}")
 }
 
-private fun buildStateFlowSetValueMethodBody(
+/**
+ * ADR-071 (2026-09-11): the held route's acquire body. The function is invoked exactly once per
+ * C# call and its flow is handed back as that flow's own handle, minted through the generated
+ * `NugetHandles` table (never a bare `StableRef.create`, which would leave ADR-120's live-handle
+ * accounting blind to it). The C# wrapper owns that handle and frees it in `Dispose()`.
+ */
+private fun buildStateFlowAcquireMethodBody(
   qualifiedName: String,
   methodName: String,
   paramCall: String,
   paramPrelude: String,
+): String = buildString {
+  appendLine("val obj = handle.asStableRef<$qualifiedName>().get()")
+  append(paramPrelude)
+  append("return NugetHandles.retain(obj.$methodName($paramCall) as Any)")
+}
+
+/**
+ * ADR-071 (2026-09-11): the held route's write body. Keyed on the flow handle the acquire export
+ * handed out, so the write lands in the flow the caller holds however the function body behaves;
+ * the shipped shape re-invoked the function here and lost the write when the body built a fresh
+ * flow. `MutableStateFlow.value`'s setter conflates by `Any.equals` on the PREVIOUS value
+ * (kotlinx.coroutines StateFlow.kt), so a throwing `equals` still propagates through `errorOut`,
+ * the same ADR-030 shape the property half carries.
+ */
+private fun buildStateFlowHandleSetValueBody(
+  flowElementQualified: String,
   assignment: String,
 ): String = buildString {
-  append(paramPrelude)
   appendLine("try {")
   appendLine(
-    "  handle.asStableRef<$qualifiedName>().get().$methodName($paramCall).value = " +
-        "$assignment"
+    "  flowHandle.asStableRef<kotlinx.coroutines.flow.MutableStateFlow<" +
+        "$flowElementQualified>>().get().value = $assignment"
   )
   appendLine("} catch (e: Throwable) {")
   appendLine("  if (errorOut != null) {")

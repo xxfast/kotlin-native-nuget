@@ -99,6 +99,10 @@ fixture already carried a comment apologising for one.
 - `emitCsharpSignatureCollisions` now runs per `(namespace, receiver)` group instead of per receiver,
   which only narrows each check. Its `declaration` label is still `StringExtensions.Tag` with no
   namespace, so two groups can share a label. Cosmetic, unchanged.
+  **Amended 2026-09-11:** the label is now namespace-qualified, `Interop.Cat.StringExtensions.Tag`,
+  and the per-file static class the same way, so two groups can no longer share one. Only the two
+  per-namespace static-class call sites are qualified; the class-, object-, sealed-arm-, constructor-
+  and value-class-keyed labels are unambiguous already and keep their bare simple names.
 - Namespace-*block* order within `Interop.cs` still follows KSP visit order, for every declaration
   kind. Not covered here, harmless.
 - Two exported types sharing a simple name in different packages still merge on the receiver key

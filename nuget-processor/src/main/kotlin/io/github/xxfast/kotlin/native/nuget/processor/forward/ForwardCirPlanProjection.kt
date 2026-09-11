@@ -33,6 +33,11 @@ internal object ForwardCirPlanProjection {
       // ADR-077: an enum underlying crosses as its int ordinal; cast it back to the enum for the
       // struct member assignment.
       result is BridgeType.Enum -> "(${result.csharpType})CreateChecked$nativeSuffix($paramNames)"
+      // ADR-035's 2026-09-11 amendment: a reference underlying comes back as a fresh handle, so
+      // the secondary rebuilds it (ADR-105's `new T(...)` / `T.FromHandle(...)`) and hands it to
+      // the positional record constructor it delegates to.
+      result is BridgeType.ObjectHandle ->
+        result.handleReconstruction("CreateChecked$nativeSuffix($paramNames)")
       else -> "CreateChecked$nativeSuffix($paramNames)"
     }
     val nativeCall: ForwardNativeCall = plan.nativeExports.single()
@@ -438,11 +443,21 @@ internal object ForwardCirPlanProjection {
         }
       }
 
+      // ADR-105 amendment (2026-09-11): a nullable handle receiver (`this Cat? receiver`) passes
+      // the same handle field, only null-guarded, so a null receiver crosses as a null pointer
+      // rather than throwing. This is the receiver-position form of the ADR-062 nullable handle
+      // parameter slot's `${name}?._handle ?? IntPtr.Zero`.
+      is BridgeType.Nullable -> when (type.type) {
+        is BridgeType.ObjectHandle -> "receiver?._handle ?? IntPtr.Zero"
+        else -> "receiver"
+      }
+
       else -> "receiver"
     }
     val nativeName: String = "Native_${plan.publicSignature.name}${plan.overloadSuffix()}"
     val needsCustomParams: Boolean = receiver.transfer.type is BridgeType.ObjectHandle ||
         receiver.transfer.type is BridgeType.ValueClass ||
+        (receiver.transfer.type as? BridgeType.Nullable)?.type is BridgeType.ObjectHandle ||
         plan.publicSignature.parameters.any { parameter -> !parameter.type.isTrivialInput() }
     val result: CirResultProjection = plan.resultProjection(
       nativeName = nativeName,

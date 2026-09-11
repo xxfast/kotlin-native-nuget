@@ -20,17 +20,21 @@ open class Bed {
   val brand: String = "Catnap"
 
   /**
-   * Deliberately **not** `open`: a declared `open fun` never rendering `virtual` is a separate,
-   * split-out bug, and overriding one here would fail the C# build for the wrong reason.
+   * Control: final by Kotlin default, must stay non-virtual in C# next to the `open fun` below.
    *
    * It reads both open properties so Kotlin's own dynamic dispatch through [Hammock]'s
    * overrides is observable from the base's method, through either static type in C#.
    */
   fun describe(): String = "$brand, softness $softness, occupied by $occupant"
+
+  /** `open fun`: must render `public virtual string Fluff()`. */
+  open fun fluff(): String = "$occupant fluffs the $brand"
 }
 
 /** Overrides every open member of [Bed]. Compiles in C# only once the base says `virtual`. */
 class Hammock : Bed() {
   override val softness: Int = 9
   override var occupant: String = "Mylo"
+
+  override fun fluff(): String = "${super.fluff()}, and it swings"
 }

@@ -15,12 +15,15 @@ import io.github.xxfast.kotlin.native.nuget.processor.cir.CirNamespace
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirObject
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirParameter
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirProperty
+import io.github.xxfast.kotlin.native.nuget.processor.cir.CirRenderer
+import io.github.xxfast.kotlin.native.nuget.processor.cir.CirSealedClass
+import io.github.xxfast.kotlin.native.nuget.processor.cir.CirSealedSubclass
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirStaticClass
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirValueClass
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirValueClassConstructor
 import io.github.xxfast.kotlin.native.nuget.processor.forward.BridgeType
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardAbiDirection as PlannedAbiDirection
-import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardAbiParameter as PlannedAbiParameter
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardAbiParameter
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardAbiRole
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardAbiWireType
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallableCatalogEntry
@@ -177,6 +180,113 @@ class ForwardAbiContractTest {
     )
   }
 
+  /**
+   * ADR-078 amendment (2026-09-11): a sealed arm's plan-derived property, method and suspend
+   * imports are read structurally off the [CirSealedSubclass] node, the way an ordinary class's
+   * are, instead of being scraped back out of the rendered `Interop.cs` text.
+   */
+  @Test
+  fun `snapshots every sealed subclass native import projection`() {
+    val file = CirFile(
+      namespaces = listOf(
+        CirNamespace(
+          name = "Sample",
+          declarations = listOf(
+            CirSealedClass(
+              name = "Shape",
+              libraryName = "sample",
+              nativePrefix = "shape",
+              subclasses = listOf(
+                CirSealedSubclass(
+                  name = "Circle",
+                  nativePrefix = "shape_circle",
+                  properties = listOf(
+                    CirProperty(
+                      name = "Refreshing",
+                      type = "bool",
+                      nativeReturnType = "bool",
+                      nativeName = "refreshing",
+                      getter = "false",
+                      hasSyncErrorOut = true,
+                    ),
+                    CirProperty(
+                      name = "Count",
+                      type = "int?",
+                      nativeReturnType = "int",
+                      nativeName = "count",
+                      getter = "0",
+                      extraNatives = listOf(
+                        CirExtraNative(
+                          entryPointSuffix = "get_count_has_value",
+                          returnType = "bool",
+                          name = "Native_Get_Count_HasValue",
+                          hasSyncErrorOut = true,
+                        )
+                      ),
+                      hasSyncErrorOut = true,
+                    ),
+                    CirProperty(
+                      name = "Label",
+                      type = "string",
+                      nativeReturnType = "string",
+                      nativeName = "label",
+                      getter = "\"\"",
+                      setter = "value",
+                    ),
+                  ),
+                  methods = listOf(
+                    CirMethod(
+                      name = "Area",
+                      returnType = "double",
+                      nativeName = "area",
+                      parameters = emptyList(),
+                      body = "0.0",
+                      isSyncErrorCheckEnabled = true,
+                    )
+                  ),
+                  asyncMembers = listOf(
+                    CirDllImport(
+                      libraryName = "sample",
+                      entryPoint = "shape_circle_load",
+                      returnType = "void",
+                      name = "Native_Load",
+                      parameters = listOf(
+                        CirParameter("handle", "IntPtr"),
+                        CirParameter("continuation", "IntPtr"),
+                      ),
+                    )
+                  ),
+                  hasSuspendMethods = true,
+                )
+              ),
+            )
+          ),
+        )
+      ),
+    )
+
+    val ordinary: List<ForwardAbiSignature> = ForwardAbiContract.csharp(file)
+    assertEquals(
+      """
+      shape_circle_area(in pointer, out pointer) -> double
+      shape_circle_get_count(in pointer, out pointer) -> int
+      shape_circle_get_count_has_value(in pointer, out pointer) -> bool
+      shape_circle_get_label(in pointer) -> pointer
+      shape_circle_get_refreshing(in pointer, out pointer) -> bool
+      shape_circle_load(in pointer, in pointer) -> void
+      shape_circle_set_label(in pointer, in string) -> void
+      """.trimIndent(),
+      ordinary.canonicalText(),
+    )
+
+    // Proof it is structural, not scraped: the same names are gone from the legacy universe.
+    val names: Set<String> = ordinary.map { signature -> signature.exportName }.toSet()
+    val legacy: List<String> = ForwardAbiContract
+      .csharpLegacy(CirRenderer().render(file), ordinaryNames = names)
+      .map { signature -> signature.exportName }
+    assertTrue(legacy.none { name -> name in names }, "legacy universe still claims $legacy")
+  }
+
   @Test
   fun `reports missing error out parameter`() {
     val error: IllegalArgumentException = assertFailsWith {
@@ -184,7 +294,7 @@ class ForwardAbiContractTest {
         csharp = listOf(
           signature(
             "nullable_has_value",
-            ForwardAbiParameter(ForwardAbiType.POINTER, ForwardAbiDirection.OUT)
+            ForwardAbiSignatureParameter(ForwardAbiType.POINTER, ForwardAbiDirection.OUT)
           )
         ),
         kotlin = listOf(signature("nullable_has_value")),
@@ -203,15 +313,15 @@ class ForwardAbiContractTest {
         csharp = listOf(
           signature(
             "combine",
-            ForwardAbiParameter(ForwardAbiType.INT),
-            ForwardAbiParameter(ForwardAbiType.STRING)
+            ForwardAbiSignatureParameter(ForwardAbiType.INT),
+            ForwardAbiSignatureParameter(ForwardAbiType.STRING)
           )
         ),
         kotlin = listOf(
           signature(
             "combine",
-            ForwardAbiParameter(ForwardAbiType.STRING),
-            ForwardAbiParameter(ForwardAbiType.INT)
+            ForwardAbiSignatureParameter(ForwardAbiType.STRING),
+            ForwardAbiSignatureParameter(ForwardAbiType.INT)
           )
         ),
       )
@@ -359,7 +469,7 @@ class ForwardAbiContractTest {
       "counter_increment",
       ForwardAbiWireType.INT32,
       listOf(
-        PlannedAbiParameter(
+        ForwardAbiParameter(
           "increment", ForwardAbiWireType.INT32, PlannedAbiDirection.IN_OUT, transfer,
         ),
       ),
@@ -392,9 +502,9 @@ class ForwardAbiContractTest {
     )
     val expected = signature(
       "counter_increment",
-      ForwardAbiParameter(ForwardAbiType.POINTER),
-      ForwardAbiParameter(ForwardAbiType.INT),
-      ForwardAbiParameter(ForwardAbiType.POINTER, ForwardAbiDirection.OUT),
+      ForwardAbiSignatureParameter(ForwardAbiType.POINTER),
+      ForwardAbiSignatureParameter(ForwardAbiType.INT),
+      ForwardAbiSignatureParameter(ForwardAbiType.POINTER, ForwardAbiDirection.OUT),
       result = ForwardAbiType.INT,
     )
 
@@ -417,7 +527,7 @@ class ForwardAbiContractTest {
 
   private fun signature(
     name: String,
-    vararg parameters: ForwardAbiParameter,
+    vararg parameters: ForwardAbiSignatureParameter,
     result: ForwardAbiType = ForwardAbiType.BOOL,
   ): ForwardAbiSignature = ForwardAbiSignature(name, result, parameters.toList())
 
@@ -461,7 +571,7 @@ class ForwardAbiContractTest {
       "error", BridgeType.ObjectHandle("kotlin.Throwable"), ForwardFlow.OUT_OF_KOTLIN,
       ForwardPassing.OUT, ForwardOwnership.BORROWED, ForwardConversion.STABLE_REF_TO_HANDLE,
     )
-    val error = PlannedAbiParameter(
+    val error = ForwardAbiParameter(
       "errorOut", ForwardAbiWireType.POINTER, PlannedAbiDirection.OUT, errorTransfer,
       ForwardAbiRole.ERROR,
     )
@@ -469,11 +579,11 @@ class ForwardAbiContractTest {
       "counter_increment",
       ForwardAbiWireType.INT32,
       listOf(
-        PlannedAbiParameter(
+        ForwardAbiParameter(
           "handle", ForwardAbiWireType.POINTER, PlannedAbiDirection.IN, handleTransfer,
           ForwardAbiRole.RECEIVER,
         ),
-        PlannedAbiParameter("increment", ForwardAbiWireType.INT32, PlannedAbiDirection.IN, incrementTransfer),
+        ForwardAbiParameter("increment", ForwardAbiWireType.INT32, PlannedAbiDirection.IN, incrementTransfer),
         error,
       ),
     )

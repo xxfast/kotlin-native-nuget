@@ -25,6 +25,9 @@ internal fun FileSpec.Builder.addGenericFunctionExports(func: KSFunctionDeclarat
 
   if (paramIndex == -1) return
 
+  // ADR-064: imported behind the gate, so a function this route refuses leaves no dead import.
+  addImport(func.packageName.asString(), funcName)
+
   val paramName: String = func.parameters[paramIndex].name?.asString() ?: "value"
 
   val hasNonTrivialBound: Boolean = func.typeParameters.firstOrNull()

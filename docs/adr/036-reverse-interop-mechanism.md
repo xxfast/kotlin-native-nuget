@@ -464,3 +464,110 @@ None. This adds new exports for functions with lambda parameters. Existing expor
 ### What the directional asymmetry means for round-tripping
 
 If a Kotlin function returns a lambda (`KotlinFunc<T, R>`) and the same lambda is later passed back into a Kotlin function as a `Func<T, R>` parameter, the two representations do not compose: the `KotlinFunc<T, R>` holds a `StableRef` (opaque handle) but the parameter side expects a `Func<T, R>` (which becomes a C# delegate function pointer). Round-tripping identity is lost. This is a known limitation documented in ADR-012. A callback registry mapping function pointer tokens back to `StableRef` handles would be required to solve this; it is out of scope for v1.
+
+## Amendment (2026-09-11): the primitive row was never implemented on the per-call route
+
+The marshalling table above has said since this ADR was written that a **primitive crosses by
+value**, in both directions. The per-call lambda parameter route never did that. Both halves boxed:
+
+- Kotlin (`LambdaParameterExports.kt`) spelled `COpaquePointer?` for every argument of the
+  `CFunction<...>` it reinterprets, and `NugetHandles.retain(it0)`-ed the payload into a `StableRef`
+  before each invocation, releasing it after.
+- C# (`CirClassTranslator.translateCallbackMethod`) declared `IntPtr arg0Ptr` for every delegate
+  parameter and read it back with `NugetMarshal.FromHandle<Int>(arg0Ptr)`, naming a Kotlin type that
+  does not exist in C#.
+
+Neither half compiled, so no consumer ever reached the boxing:
+
+- `(Boolean) -> Unit` failed the **Kotlin** compile of the generated file. The wrapper body already
+  bound a `Byte` for a Boolean payload (the table's `byte` row) while the `CFunction` type said
+  `COpaquePointer?`: `Argument type mismatch: actual type is 'Byte'`.
+- `(Int) -> Unit` failed the **C#** compile at the lambda's shape, not its body: CS1661/CS1678,
+  `nint` against `int`, because a lambda's convertibility to a delegate is checked before the body
+  that would have produced CS0246 on `FromHandle<Int>`.
+
+Implemented per the table. The precedent is in this repository and predates the fix: the
+interface-bridge route (`InterfaceBridgeExports.kt`, `CirClassTranslator.translateBridgeMethod`)
+already emits `CFunction<(Int, ..., COpaquePointer) -> Unit>` on the Kotlin side and
+`int arg0` with no unmarshal on the C# side. The per-call route now mirrors it.
+
+`Boolean` is folded into the same branch rather than left as a sibling defect: it is a by-value
+payload whose wire type is not itself, so the rewritten branch has to answer for it either way. It
+crosses as `byte arg0Byte` and the C# body widens it, `bool arg0 = arg0Byte != 0;`. The wire
+parameter is deliberately named `arg0Byte` and not `arg0`: declaring `bool arg0` from a parameter
+already called `arg0` is CS0128.
+
+`String` stays on the handle path (it is not a C ABI scalar) and so does `Char`, which has no
+crossing convention on any route.
+
+### The delegate shapes are shared on purpose
+
+`Nuget{Int,Byte,Double,...}VoidCallback` is registered first-wins across routes, so the per-call
+route's `Int` payload lands on exactly the `(int, IntPtr)` shape the ADR-037 stored-callback route
+already registers for an enum ordinal, and the interface-bridge route registers for a primitive
+parameter. One declaration, one `[UnmanagedCallersOnly]` thunk, three routes. Had the per-call route
+picked any other shape, whichever route lost the registration race would emit a lambda that cannot
+convert to the delegate the winner declared. `Tier1PrimitiveLambdaParameterTest` puts both routes in
+one fixture for that reason.
+
+### Left as a named sibling, not fixed here
+
+The **stored**-callback route's primitive payload (`fun addTickListener(listener: (Int) -> Unit)`)
+still boxes: its `storedArgSuffix` tests the *qualified* type name against a simple-name keyed table,
+so a primitive falls through to the `Object` suffix and a `StableRef`. Its own route, its own item.
+(The triple release this paragraph originally predicted for that boxed handle is fixed by the
+amendment below; what is left is the boxing itself, which costs a handle round trip per call.)
+
+## Amendment (2026-09-11): one owner per handle-passed callback payload
+
+A callback argument that crosses as a handle was freed by **both** sides. The count each route left
+behind, per crossing, measured by `LeakTests` (`NugetMarshal.LiveHandles`, ADR-120):
+
+| Route | Retains | Frees | Net per crossing |
+|---|---|---|---|
+| Per-call lambda parameter | Kotlin, once | C# (`FromHandle` or the wrapper) + Kotlin, after the invoke | -1 |
+| Stored callback (ADR-037), interface bridge | Kotlin, once | `FromHandle` + the thunk's explicit `NugetMarshal.Dispose(argPtr)` + Kotlin | -2 |
+
+A negative delta is a use-after-free, not a leak: the second free runs against a `StableRef` that no
+longer exists, and the third against one already freed twice.
+
+**The rule: on a handle-passed callback payload, the C# side owns the free. Kotlin retains for the
+duration of the crossing and never releases.** It falls out of what the C# unwrap already does, and
+it is the same sentence for both payload kinds:
+
+- a **`String`** (and every other marshalled kind) is read by `NugetMarshal.FromHandle<T>`, whose
+  branches each call `Native_dispose(handle)` immediately after reading the value. The handle is
+  gone before the thunk returns, so there is nothing left for Kotlin to release.
+- an **exported object** falls through to `NugetMarshal.Materialize<T>`, which hands the raw handle
+  to the wrapper's `new T(handle)` constructor. The wrapper is the object the consumer's lambda
+  receives, and its `Dispose()` frees the handle. That is exactly the `using var t = toy;` this ADR
+  documents in a callback body.
+
+The explicit `NugetMarshal.Dispose(argPtr)` the stored-callback and interface-bridge thunks emitted
+after `FromHandle` is removed for the same reason: `FromHandle` is the owner, on every route.
+
+A **by-value primitive** is untouched. It never had a handle, so it has no owner to pick.
+
+The callback's *return* box goes the other way and is unchanged: nothing on the C# side frees the
+`WrapString` handle a callback hands back, so Kotlin still releases it after reading it.
+
+### Residual: an undisposed object payload leaks one handle
+
+A generated wrapper has a `Dispose()` and **no** finalizer or `SafeHandle`, so a consumer whose
+callback body does not dispose the object it is handed keeps that handle alive for the life of the
+process. That is a deliberate choice of the lesser fault: the alternative rule (Kotlin frees, the
+wrapper does not own) makes the wrapper hold a dangling handle for the rest of the callback body and
+turns the documented `using` into a double free. Leaking one handle is diagnosable through
+`NugetMarshal.LiveHandles`; a use-after-free is not. Giving the wrappers a finalizer that frees an
+undisposed handle would close the residual and is a separate decision, since it puts native frees on
+the finalizer thread for every wrapper the bridge mints, not only callback payloads.
+
+### Verification
+
+`LeakTests` rows 8g/8h/8i (per-call route: sealed-arm `String`, ordinary-class `String`,
+object payload) and row 8j (interface-bridge `String`) hammer 50 crossings each and assert the
+tracked count returns to its baseline. Before the fix 8j read `delta -100` over 50 crossings, which
+is the -2 the table above predicts. `Tier1CallbackPayloadOwnershipTest` pins the generated shape on
+all three routes: no `NugetHandles.release(arg...)` after an invoke, no `NugetMarshal.Dispose(arg...)`
+after a `FromHandle`, both retains and the result-box release still in place, and the by-value
+primitive row unchanged.

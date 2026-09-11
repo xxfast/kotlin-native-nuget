@@ -114,6 +114,29 @@ class ForwardBridgeTypeClassifierTest {
     )
   }
 
+  /** ADR-064 amendment (2026-09-11): `kotlin.sequences.Sequence` is shaped exactly like the generic
+   *  interface above (an `INTERFACE` with one type parameter), so it used to answer the generic
+   *  legacy route and vanish silently. The known-stdlib block claims it first, as a named
+   *  [BridgeType.Unsupported]. */
+  @Test
+  fun `classifies a Sequence as a named Unsupported stdlib type not the generic legacy route`() {
+    val sequence = classDeclaration(
+      qualifiedName = "kotlin.sequences.Sequence",
+      classKind = ClassKind.INTERFACE,
+    )
+    val withTypeParameter = Proxy.newProxyInstance(
+      KSClassDeclaration::class.java.classLoader,
+      arrayOf(KSClassDeclaration::class.java),
+    ) { _, method, _ ->
+      when (method.name) {
+        "getTypeParameters" -> listOf(proxy<KSTypeParameter>("getSimpleName" to name("T")))
+        else -> method.invoke(sequence)
+      }
+    } as KSClassDeclaration
+    val unsupported = assertIs<BridgeType.Unsupported>(classifier.classify(type(withTypeParameter)))
+    assertEquals("kotlin.sequences.Sequence", unsupported.rendered)
+  }
+
   @Test
   fun `classifies alias-expanded primitives nullable strings and Char`() {
     val stringAlias = alias("sample.Nickname", type("kotlin.String"))

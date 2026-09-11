@@ -9,6 +9,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.cir.CirDllImport
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirClass
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirFile
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirObject
+import io.github.xxfast.kotlin.native.nuget.processor.cir.CirSealedClass
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirStaticClass
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirValueClass
 import io.github.xxfast.kotlin.native.nuget.processor.cir.ordinaryNativeImports
@@ -36,7 +37,7 @@ internal enum class ForwardAbiType {
 
 internal enum class ForwardAbiDirection { IN, OUT }
 
-internal data class ForwardAbiParameter(
+internal data class ForwardAbiSignatureParameter(
   val type: ForwardAbiType,
   val direction: ForwardAbiDirection = ForwardAbiDirection.IN,
 )
@@ -44,7 +45,7 @@ internal data class ForwardAbiParameter(
 internal data class ForwardAbiSignature(
   val exportName: String,
   val result: ForwardAbiType,
-  val parameters: List<ForwardAbiParameter>,
+  val parameters: List<ForwardAbiSignatureParameter>,
 ) {
   override fun toString(): String {
     val params: String = parameters.joinToString(", ") { parameter ->
@@ -173,6 +174,12 @@ internal object ForwardAbiContract {
             declaration.companionMembers.filterIsInstance<CirDllImport>()
 
         is CirValueClass -> declaration.ordinaryNativeImports()
+        // ADR-078 amendment (2026-09-11): a sealed arm's plan-derived imports are nodes like any
+        // ordinary class's, so they are read here rather than scraped by `csharpLegacy`.
+        is CirSealedClass -> declaration.ordinaryNativeImports() +
+            declaration.subclasses
+              .flatMap { subclass -> subclass.ordinaryNativeImports(declaration.libraryName) }
+
         else -> emptyList()
       }
     }
@@ -289,7 +296,7 @@ internal object ForwardAbiContract {
       exportName = call.exportName,
       result = call.result.toAbiType(),
       parameters = call.parameters.map { parameter ->
-        ForwardAbiParameter(parameter.wireType.toAbiType(), parameter.direction.toAbiDirection())
+        ForwardAbiSignatureParameter(parameter.wireType.toAbiType(), parameter.direction.toAbiDirection())
       },
     )
   }
@@ -321,7 +328,7 @@ internal object ForwardAbiContract {
 
   private fun CirDllImport.toSignature(): ForwardAbiSignature? {
     val name: String = entryPoint ?: return null
-    val parameters: MutableList<ForwardAbiParameter> = parameters.map { parameter ->
+    val parameters: MutableList<ForwardAbiSignatureParameter> = parameters.map { parameter ->
       // ADR-061's nullable-primitive out-parameter (`out int value`, etc.) is, at the C ABI
       // level, exactly the same shape as `out IntPtr error` below: a pointer to a memory slot the
       // callee writes through. Recognize any `out `-prefixed native type uniformly as (POINTER,
@@ -332,13 +339,13 @@ internal object ForwardAbiContract {
       // 4 bytes against Kotlin's 1-byte `BooleanVar` write); strip it before the `out `-prefix
       // check below, which recognizes the pointer shape by native-type text.
       if (parameter.nativeType.substringAfterLast("] ").startsWith("out ")) {
-        ForwardAbiParameter(ForwardAbiType.POINTER, ForwardAbiDirection.OUT)
+        ForwardAbiSignatureParameter(ForwardAbiType.POINTER, ForwardAbiDirection.OUT)
       } else {
-        ForwardAbiParameter(csharpType(parameter.nativeType))
+        ForwardAbiSignatureParameter(csharpType(parameter.nativeType))
       }
     }.toMutableList()
     if (hasSyncErrorOut) {
-      parameters.add(ForwardAbiParameter(ForwardAbiType.POINTER, ForwardAbiDirection.OUT))
+      parameters.add(ForwardAbiSignatureParameter(ForwardAbiType.POINTER, ForwardAbiDirection.OUT))
     }
     return ForwardAbiSignature(name, csharpReturnType(returnType), parameters)
   }
@@ -370,7 +377,7 @@ internal object ForwardAbiContract {
         } else {
           ForwardAbiDirection.IN
         }
-        ForwardAbiParameter(kotlinParameterType(parameter.type), direction)
+        ForwardAbiSignatureParameter(kotlinParameterType(parameter.type), direction)
       },
     )
   }
@@ -382,7 +389,7 @@ internal object ForwardAbiContract {
 
   private fun externSignature(name: String, declaration: String): ForwardAbiSignature {
     val header: String = declaration.substringAfter(EXTERN_MARKER).substringBefore("(").trim()
-    val parameters: List<ForwardAbiParameter> = declaration
+    val parameters: List<ForwardAbiSignatureParameter> = declaration
       .substringAfter("(")
       .substringBeforeLast(")")
       .split(",")
@@ -395,12 +402,12 @@ internal object ForwardAbiContract {
   // The same normalization the CirDllImport path applies: strip a leading `[MarshalAs(...)] `, read
   // any `out `-prefixed parameter as the (POINTER, OUT) slot it is at the C ABI, and fall through
   // to csharpType otherwise (an unknown token, such as a marshalled delegate, is a pointer).
-  private fun String.toAbiParameter(): ForwardAbiParameter {
+  private fun String.toAbiParameter(): ForwardAbiSignatureParameter {
     val declaration: String = substringAfterLast("] ").trim()
     if (declaration.startsWith("out ")) {
-      return ForwardAbiParameter(ForwardAbiType.POINTER, ForwardAbiDirection.OUT)
+      return ForwardAbiSignatureParameter(ForwardAbiType.POINTER, ForwardAbiDirection.OUT)
     }
-    return ForwardAbiParameter(csharpType(declaration.substringBeforeLast(" ").trim()))
+    return ForwardAbiSignatureParameter(csharpType(declaration.substringBeforeLast(" ").trim()))
   }
 
   private fun List<AnnotationSpec>.cNameValue(): String? = firstOrNull { annotation ->

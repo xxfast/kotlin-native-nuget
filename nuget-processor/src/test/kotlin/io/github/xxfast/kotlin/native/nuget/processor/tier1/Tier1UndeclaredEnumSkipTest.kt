@@ -127,10 +127,13 @@ class Tier1UndeclaredEnumSkipTest {
       result.kspWarnings.any {
         it.contains(ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_PROPERTY.name) &&
             it.contains("Owner.mode") &&
-            it.contains("tier1.undeclaredenum.Owner.Mode")
+            it.contains("tier1.undeclaredenum.Owner.Mode") &&
+            // ADR-064's 2026-09-11 amendment: the property route reads the reason's own hint,
+            // the same remedy the parameter and return positions already print.
+            it.contains("move it to the top level")
       },
-      "expected the property route to skip naming the undeclared enum; " +
-          "kspWarnings=${result.kspWarnings}",
+      "expected the property route to skip naming the undeclared enum and its move-to-top-level " +
+          "fix; kspWarnings=${result.kspWarnings}",
     )
   }
 

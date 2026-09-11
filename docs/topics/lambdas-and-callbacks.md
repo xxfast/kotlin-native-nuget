@@ -197,6 +197,60 @@ public void Cat_CombineNicknames_Arity2LambdaParameter()
 }
 ```
 
+The same route now binds a method declared on a **sealed arm** too, re-keyed onto the arm's own
+export prefix rather than a class name, exactly as the `suspend` and `Flow` routes were; see
+[Lambda parameters on a sealed arm](interfaces-abstract-sealed.md#sealed-lambda-generated-c).
+
+### A primitive payload {id="a-primitive-payload"}
+
+A `kotlin.*` primitive payload (`Int`, `Boolean`, `Double`, ...) crosses by value instead of going
+through `NugetMarshal.FromHandle`. From `test-library/src/nativeMain/kotlin/.../metronome/Metronome.kt`:
+
+```kotlin
+class Metronome(private val beats: Int) {
+  fun onTick(listener: (Int) -> Unit) = repeat(beats) { listener(it + 1) }
+  fun onBeat(listener: (Boolean) -> Unit) = repeat(beats) { listener(it % 2 == 0) }
+  fun onTempo(listener: (Double) -> Unit) = repeat(beats) { listener(60.0 + it * 0.5) }
+}
+```
+
+The generated delegate reads the argument directly, `Boolean` widening from the `byte` wire back to
+`bool`:
+
+```C#
+public void OnTick(Action<int> listener)
+{
+    NugetIntVoidCallback nativeCallback = (int arg0, IntPtr userData) =>
+    {
+    listener(arg0);
+    };
+    ...
+}
+
+public void OnBeat(Action<bool> listener)
+{
+    NugetByteVoidCallback nativeCallback = (byte arg0Byte, IntPtr userData) =>
+    {
+    bool arg0 = arg0Byte != 0;
+    listener(arg0);
+    };
+    ...
+}
+```
+
+Using it, from `IntegrationTests/PrimitiveLambdaPayloadTests.cs`:
+
+```C#
+[Fact]
+public void Metronome_OnTick_DeliversIntPayloadByValue()
+{
+    using var metronome = new Metronome(4);
+    var ticks = new List<int>();
+    metronome.OnTick(tick => ticks.Add(tick));
+    Assert.Equal(new List<int> { 1, 2, 3, 4 }, ticks);
+}
+```
+
 ## C# → Kotlin: stored callbacks
 
 From `Cat.kt`, an observer added once and invoked on every future trigger:
@@ -289,7 +343,6 @@ public IDisposable AddListener(ICatEventListener listener)
     NugetObjectVoidCallback onMeowCb = (IntPtr arg0Ptr, IntPtr _) =>
     {
         string arg0 = NugetMarshal.FromHandle<string>(arg0Ptr);
-        NugetMarshal.Dispose(arg0Ptr);
         listener.OnMeow(arg0);
     };
     NugetVoidCallback onPurrCb = (IntPtr _) => { listener.OnPurr(); };
@@ -327,6 +380,39 @@ public void CatEventSource_AddListener_TriggerFiresBothOnMeowAndOnPurr()
     Assert.Equal(1, listener.Purrs);
 }
 ```
+
+## Ownership of a callback payload
+
+A handle-passed argument on any of the three C# → Kotlin routes above (per-call, stored, interface
+bridge) is owned by the C# side once it crosses. Kotlin retains it for the duration of the crossing
+and never releases it afterwards; the rule is the same for every payload kind:
+
+- a **`String`** (or any other marshalled kind) is read by `NugetMarshal.FromHandle<T>`, which
+  disposes the handle immediately after reading the value. There is nothing left for the callback
+  body to free.
+- an **exported object** falls through to `NugetMarshal.Materialize<T>`, which hands the raw handle
+  to the wrapper's constructor. The wrapper the callback body receives is the sole owner, and its
+  `Dispose()` is the free, which is why `Cat.ForEachToy` disposes the `Toy` it's handed, from
+  `IntegrationTests/ReverseLambdaTests.cs`:
+
+```C#
+cat.ForEachToy(toy =>
+{
+    using var t = toy;
+    toyNames.Add(t.Name);
+});
+```
+
+A **by-value primitive** payload never had a handle, so there's nothing to own. The callback's
+*return* box is the other way round: nothing on the C# side frees it, so Kotlin still releases it
+after reading it.
+
+<note>
+    <p>A generated wrapper has a <code>Dispose()</code> and no finalizer, so a callback body that
+    never disposes an object payload it's handed leaks that handle for the life of the process.
+    That's diagnosable through <code>NugetMarshal.LiveHandles</code>, unlike the use-after-free the
+    alternative rule would have caused instead.</p>
+</note>
 
 ## Limitations
 

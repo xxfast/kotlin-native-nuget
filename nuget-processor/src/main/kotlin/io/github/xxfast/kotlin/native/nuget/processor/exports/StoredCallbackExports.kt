@@ -193,15 +193,8 @@ internal fun FileSpec.Builder.addStoredCallbackExports(
     }
     appendLine("    fn.invoke($invokeArgs)")
 
-    // Dispose reference args after the call
-    argInfos.forEachIndexed { i, info ->
-      if (!info.isEnum) {
-        val argSimpleName: String = info.qualifiedName.substringAfterLast('.')
-        if (argSimpleName != "Boolean") {
-          appendLine("    NugetHandles.release(arg${i}Ref!!)")
-        }
-      }
-    }
+    // ADR-036 amendment (2026-09-11): the C# thunk owns a handle-passed argument, exactly as on
+    // the per-call and interface-bridge routes. Nothing is released here.
   }
 
   val subscribeBody: String = buildString {

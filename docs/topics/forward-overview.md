@@ -81,7 +81,10 @@ Every generated declaration lands under its mapped namespace inside the single `
 
 By default every public declaration in the module is bridged, not only those under `rootPackage`.
 `publish { include(...); exclude(...) }` narrows that to an explicit package-prefix allowlist, and
-when `include` is left empty, `rootPackage` itself becomes the default scope.
+when `include` is left empty, `rootPackage` itself becomes the default scope. `publish {
+exportMarkers(...) }` is a separate, orthogonal escape list: it names `@RequiresOptIn` markers whose
+declarations keep exporting instead of being dropped, see [Opt-in-marked declarations skip
+named](#opt-in-marked-declarations-skip-named).
 
 The export set is not limited to the module's own files, either: it is a reachability closure that
 also walks into types declared in a dependency Gradle module (return types, parameter types,
@@ -111,7 +114,11 @@ Kotlin or a C# API whose signature lies about its contract. Every diagnostic car
 - **`SKIPPED_*`**: the member is warned about and omitted entirely from the generated C# API.
   Generation continues. This is the default for a construct the forward direction cannot express
   (an unsupported type, a `Map`/`Set` parameter, an unsupported generic/suspend combination, a
-  value-class member a supertype declares, whether inherited, delegated or overridden).
+  value-class member a supertype declares, whether inherited, delegated or overridden). A
+  `Sequence<T>` parameter or return is one of these: `kotlin.sequences.Sequence` is a named
+  `Unsupported` stdlib type, so a callable using it at either position skips as
+  `SKIPPED_UNSUPPORTED_TYPE` naming the callable, instead of vanishing from the generated API with
+  no diagnostic at all.
 - **`INFO_*`**: the member still binds, under a documented assumption (for example, `out`/`in`
   variance on a class type parameter is dropped, but the member still generates).
 - **`ERROR_*`**: generation fails and `CNameExports.kt` (the Kotlin `@CName` export file) is never
@@ -146,10 +153,9 @@ A property whose declared type the property planner has no getter/setter shape f
 same way, naming the property's own type. `Cat.unsupported: Sequence<String>` is the fixture:
 
 ```
-[nuget:SKIPPED_UNSUPPORTED_PROPERTY] Skipping Cat.unsupported: its type generic declaration
-    kotlin.sequences.Sequence has no property getter or setter shape. expose a bridgeable property
-    (or a getter function) whose type is not generic declaration kotlin.sequences.Sequence, and
-    export that instead
+[nuget:SKIPPED_UNSUPPORTED_PROPERTY] Skipping Cat.unsupported: its type kotlin.sequences.Sequence
+    has no property getter or setter shape. expose a bridgeable property (or a getter function)
+    whose type is not kotlin.sequences.Sequence, and export that instead
     at Cat.kt:46
 ```
 
@@ -159,14 +165,19 @@ since [ADR-105](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr
 it binds, materialised through the ADR-009 `FromHandle` discriminator (see
 [Sealed types as property types](interfaces-abstract-sealed.md#sealed-types-as-property-types)). A
 sealed **interface** component still has no C# spelling to bind against, because only a sealed
-*class* gets a `FromHandle` discriminator, so it still skips, naming the offending component:
+*class* gets a `FromHandle` discriminator, so it still skips. Since
+[ADR-064](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/064-forward-unsupported-declaration-diagnostics.md)'s
+2026-09-11 amendment the message comes from the element's own `SEALED_POSITION` reason, naming the
+sealed interface itself rather than the outer collection shape:
 
 ```
-[nuget:SKIPPED_UNSUPPORTED_PROPERTY] Skipping tier1.sealedcollectionproperty.Album.filters: its type
-    Collection (element type sealed helper tier1.sealedcollectionproperty.Filter) has no property
-    getter or setter shape. expose a bridgeable property (or a getter function) whose type is not
-    Collection (element type sealed helper tier1.sealedcollectionproperty.Filter), and export that
-    instead
+[nuget:SKIPPED_UNSUPPORTED_PROPERTY] Skipping tier1.sealedcollectionproperty.Album.filters: its
+    sealed type `tier1.sealedcollectionproperty.Filter` has no generated C# discriminator. sealed
+    type `tier1.sealedcollectionproperty.Filter` has no generated discriminator, so C# cannot
+    reconstruct it: only an eligible sealed type inside the export scope gets one (ADR-009,
+    ADR-112), and that binds at every position (ADR-105); export it from an included package, make
+    every subclass a class or object (in the sealed type or beside it) with no other superclass and
+    no second sealed interface (ADR-125), or accept a concrete subclass
 ```
 
 `SKIPPED_UNSUPPORTED_PROPERTY` never fires for a property whose type is a lambda, suspend lambda,
@@ -174,8 +185,9 @@ sealed **interface** component still has no C# spelling to bind against, because
 named legacy route, so warning would tell a consumer a working property had vanished.
 
 The same kind also fires when an extension property's *receiver* type, not its declared type, is
-what the planner can't wire. `String`, a primitive, `ObjectHandle` classes, and a value class over
-any of the four underlyings admitted at ordinary positions (`String`, a primitive, an enum, or
+what the planner can't wire. `String`, a primitive, `ObjectHandle` classes, an eligible sealed base
+(see [Extensions: Sealed receivers](extensions.md#sealed-receivers)), and a value class over any of
+the four underlyings admitted at ordinary positions (`String`, a primitive, an enum, or
 `ObjectHandle`) are the supported receivers; anything else warns and the property is dropped
 entirely, naming the receiver rather than the property's own (usually fine) type:
 
@@ -207,11 +219,12 @@ outside the effective `include`/`rootPackage` scope is skipped, naming the exact
 `rootPackage`):
 
 ```
-[nuget:SKIPPED_UNEXPORTED_DEPENDENCY_TYPE] Skipping Newsroom.sponsor: its UNEXPORTED_DEPENDENCY_TYPE
-    type combination is not supported. add include("io.github.xxfast.kotlin.native.nuget.test",
-    "dev.other.core") to nuget { publish { } } (an explicit include replaces the rootPackage default,
-    so keep your own packages listed), or expose a type from an in-scope package instead
-    at Newsroom.kt:63
+[nuget:SKIPPED_UNEXPORTED_DEPENDENCY_TYPE] Skipping Newsroom.sponsor: its type
+    `dev.other.core.Advertisement` is declared in a dependency module outside the export scope.
+    add include("io.github.xxfast.kotlin.native.nuget.test", "dev.other.core") to
+    nuget { publish { } } (an explicit include replaces the rootPackage default, so keep your own
+    packages listed), or expose a type from an in-scope package instead
+    at Newsroom.kt:66
 ```
 
 The hint names the whole `include(...)` line, the current scope first, because an explicit `include`
@@ -347,12 +360,12 @@ list entirely (`Issue42Derived` gets no base at all, just `IDisposable, INugetHa
 [nuget:SKIPPED_UNEXPORTED_SUPERTYPE] Skipping Issue42Derived : UnexportedBase: base class
     'dev.other.core.UnexportedBase' is not in the export set, so it has no generated C# class;
     Issue42Derived is generated with no base at all and the base's public members are bound on
-    Issue42Derived directly. nothing callable is lost — UnexportedBase's public members export as
-    members of Issue42Derived — but C# sees no UnexportedBase type and no inheritance relation, so
-    `is`/`as` against it and any other subclass's shared base are gone; to keep the base itself it
-    has to enter the export set on its own: include("dev.other.core") admits a base declared in
-    this module, but not one from a dependency — the export reachability closure never walks
-    supertypes
+    Issue42Derived directly. nothing callable is lost (UnexportedBase's public members export as
+    members of Issue42Derived), but C# sees no UnexportedBase type and no inheritance relation, so
+    `is`/`as` against it and any other subclass's shared base are gone; UnexportedBase is declared
+    in a dependency, and include("dev.other.core") alone will not admit it: the export
+    reachability closure never walks supertypes, so it enters the export set only when an exported
+    member also names it as a return, parameter or property type and its package is included
     at Issue42Derived.kt:16
 ```
 
@@ -363,13 +376,43 @@ public class Issue42Derived : IDisposable, INugetHandle
     public Issue42Derived() { /* ... */ }
     public string Label { get; }   // UnexportedBase's own property, bound on the class
     public string Own() { /* ... */ }
+    public virtual string Farewell(string name, bool warmly) { /* ... */ }
     public string Greet(string name) { /* ... */ }  // UnexportedBase's own method, bound on the class
+    public string Farewell(string name) { /* ... */ }  // warmly omitted; Kotlin supplies false
 }
 ```
 
-The hint hedges rather than promising a fix: `include(...)` admits a base declared in the same
-module, but not one reached only as a supertype from a dependency, since the ADR-066 reachability
-closure never walks supertypes either way.
+`Farewell` overrides `UnexportedBase.farewell(name, warmly: Boolean = false)`: Kotlin forbids the
+override from restating the default, so the `= false` lives only on the dropped base. With no C#
+base to inherit the omitting overload from, `Issue42Derived` synthesizes it itself, reading the
+default flag off the root of the override chain, the same [ADR-096](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/096-function-default-parameters.md)
+rule described under [Method default parameters](classes-and-objects.md#method-default-parameters).
+An override of an **exported** C# base still synthesizes nothing: the base carries the overload,
+and a generated subclass reaches it through ordinary C# inheritance.
+
+The hint picks the clause that is true for the base at hand instead of hedging: a same-module base
+gets told to add `include("...")` alongside the existing `rootPackage`/`include(...)` scope, since
+that genuinely admits it, while a dependency base gets told `include(...)` alone will not, since the
+ADR-066 reachability closure never walks supertypes.
+
+The base walk also follows a chain of unexported links to the nearest exported base, rather than
+stopping after one hop: `class Dinghy : Skiff("Dinghy")` with `Skiff : Vessel(name)`, only `Skiff`
+outside the export set, renders `public class Dinghy : Vessel`, not base-less. `Skiff`'s own public
+members (`oars`, `row()`) re-home onto `Dinghy` the same way `UnexportedBase`'s did above; `Vessel`'s
+members are inherited normally, with no re-homing. The diagnostic fires once per dropped link and its
+middle clause names the kept base instead of saying there is no base at all:
+
+```
+[nuget:SKIPPED_UNEXPORTED_SUPERTYPE] Skipping Dinghy : Skiff: base class
+    'io.github.xxfast.kotlin.native.nuget.hidden.Skiff' is not in the export set, so it has no
+    generated C# class; Dinghy is generated extending Vessel, the nearest exported base, and
+    Skiff's public members are bound on Dinghy directly. <hint unchanged>
+    at Dinghy.kt:15
+```
+
+The quoted `Issue42Derived` block above is unchanged: a single dropped base with no exported base
+above it still reads "generated with no base at all", byte for byte. The clause only changes when a
+grand-base survives the walk.
 
 ### Annotation classes skip named {id="annotation-classes-skip-named"}
 
@@ -482,6 +525,69 @@ with `CatteryInternalApi` from `:test-models`, is absent from the generated C# e
 module-local marker would be. `@OptIn(InternalApi::class)` on a declaration is a marker *consumer*,
 not a marker member, and stays exported; `@SubclassOptInRequired` is not itself
 `@RequiresOptIn`-meta-annotated, so it does not match and stays exported either.
+
+### An escape list for markers meant to stay public {id="export-markers-escape-list"}
+
+Not every `@RequiresOptIn` marker means "internal, keep this out of C#". `publish {
+exportMarkers("com.example.ExperimentalFooApi") }` names a marker whose declarations keep exporting
+through the ordinary route instead, with no `SKIPPED_OPT_IN_MARKER` diagnostic, as if the marker
+weren't there at all. Every marker not named keeps being dropped exactly as described above; this is
+an escape list, not a change to the default.
+
+From `test-library/.../issue113/ExportMarkersSample.kt`:
+
+```kotlin
+@RequiresOptIn(level = RequiresOptIn.Level.ERROR, message = "Diet plans are still settling")
+@Target(AnnotationTarget.CLASS, AnnotationTarget.PROPERTY, AnnotationTarget.FUNCTION)
+annotation class ExperimentalDiet
+
+class DietPlanner {
+  fun plainName(): String = "Mylo"
+
+  @ExperimentalDiet
+  fun dietName(): String = "kibble"
+
+  @LedgerApi
+  fun ledgerName(): String = "ledger"
+}
+```
+
+`test-library/build.gradle.kts` waives exactly one marker:
+
+```kotlin
+nuget {
+  publish {
+    exportMarkers("io.github.xxfast.kotlin.native.nuget.test.issue113.ExperimentalDiet")
+  }
+}
+```
+
+`DietName()` generates normally; `LedgerName`, behind the unlisted `LedgerApi` marker, does not:
+
+```C#
+public string PlainName()
+{
+    ...
+}
+
+public string DietName()
+{
+    ...
+}
+```
+
+An `ERROR`-level marker's waived declarations only compile inside the generated file because every
+configured marker is also appended to its own `@OptIn` list:
+
+```kotlin
+@file:OptIn(ExperimentalNativeApi::class, ExperimentalForeignApi::class, ExperimentalCoroutinesApi::class, ExperimentalDiet::class)
+```
+
+Entries are trusted, not validated against the resolver: a misspelt marker name waives nothing, and
+the `SKIPPED_OPT_IN_MARKER` diagnostic printed for the declaration still names the marker's real
+FQN. A waived marker also waives every *type* marked with it, since both reads go through the same
+`optInMarkerName()` choke point; there is no separate list for that case. The marker annotation
+class itself is never exported, only the declarations that use it.
 
 ### An opt-in-marked parameter *type* takes every arity with it {id="opt-in-marked-parameter-type-every-arity"}
 
@@ -701,12 +807,12 @@ repository's own fixture, KSP task `UP-TO-DATE`:
 
 > Task :test-library:nugetReportDiagnostics
 [nuget:INFO_EXPORTED_FROM_DEPENDENCY] Note TestLibraryNative: the export closure admitted 6 type(s) from dependency modules: io.github.xxfast.kotlin.native.nuget.test.models.Byline, io.github.xxfast.kotlin.native.nuget.test.models.Purr, io.github.xxfast.kotlin.native.nuget.test.models.StoryCode, io.github.xxfast.kotlin.native.nuget.test.models.StoryUri, io.github.xxfast.kotlin.native.nuget.test.models.TopStory, io.github.xxfast.kotlin.native.nuget.test.models.Whisker. these are generated exactly like module-local types; narrow with exclude(...) if any of them should not be part of the public API
-[nuget:SKIPPED_UNEXPORTED_DEPENDENCY_TYPE] Skipping io.github.xxfast.kotlin.native.nuget.test.Newsroom.sponsor: its UNEXPORTED_DEPENDENCY_TYPE type combination is not supported. add include("io.github.xxfast.kotlin.native.nuget.test", "dev.other.core") to nuget { publish { } } (an explicit include replaces the rootPackage default, so keep your own packages listed), or expose a type from an in-scope package instead
-    at /Users/xxfast/Developer/XXFAST/KMP/kotlin-native-nuget/test-library/src/nativeMain/kotlin/io/github/xxfast/kotlin/native/nuget/test/Newsroom.kt:63
-[nuget:SKIPPED_INHERITED_MEMBER] Skipping io.github.xxfast.kotlin.native.nuget.test.models.StoryUri.length: its INHERITED_MEMBER type combination is not supported. a value class never exports a member a supertype declares, whether inherited, delegated (`by`) or explicitly overridden (ADR-082); call the supertype's API through the struct's underlying property from C#, or declare a member under a name or signature no supertype declares
-[nuget:SKIPPED_INHERITED_MEMBER] Skipping io.github.xxfast.kotlin.native.nuget.test.models.StoryUri.get: its INHERITED_MEMBER type combination is not supported. a value class never exports a member a supertype declares, whether inherited, delegated (`by`) or explicitly overridden (ADR-082); call the supertype's API through the struct's underlying property from C#, or declare a member under a name or signature no supertype declares
-[nuget:SKIPPED_INHERITED_MEMBER] Skipping io.github.xxfast.kotlin.native.nuget.test.models.StoryUri.subSequence: its INHERITED_MEMBER type combination is not supported. a value class never exports a member a supertype declares, whether inherited, delegated (`by`) or explicitly overridden (ADR-082); call the supertype's API through the struct's underlying property from C#, or declare a member under a name or signature no supertype declares
-[nuget:SKIPPED_UNSUPPORTED_PROPERTY] Skipping io.github.xxfast.kotlin.native.nuget.test.cat.Cat.unsupported: its type generic declaration kotlin.sequences.Sequence has no property getter or setter shape. expose a bridgeable property (or a getter function) whose type is not generic declaration kotlin.sequences.Sequence, and export that instead
+[nuget:SKIPPED_UNEXPORTED_DEPENDENCY_TYPE] Skipping io.github.xxfast.kotlin.native.nuget.test.Newsroom.sponsor: its type `dev.other.core.Advertisement` is declared in a dependency module outside the export scope. add include("io.github.xxfast.kotlin.native.nuget.test", "dev.other.core") to nuget { publish { } } (an explicit include replaces the rootPackage default, so keep your own packages listed), or expose a type from an in-scope package instead
+    at /Users/xxfast/Developer/XXFAST/KMP/kotlin-native-nuget/test-library/src/nativeMain/kotlin/io/github/xxfast/kotlin/native/nuget/test/Newsroom.kt:66
+[nuget:SKIPPED_INHERITED_MEMBER] Skipping io.github.xxfast.kotlin.native.nuget.test.models.StoryUri.length: it is a value class member that a supertype declares. a value class never exports a member a supertype declares, whether inherited, delegated (`by`) or explicitly overridden (ADR-082); call the supertype's API through the struct's underlying property from C#, or declare a member under a name or signature no supertype declares
+[nuget:SKIPPED_INHERITED_MEMBER] Skipping io.github.xxfast.kotlin.native.nuget.test.models.StoryUri.get: it is a value class member that a supertype declares. a value class never exports a member a supertype declares, whether inherited, delegated (`by`) or explicitly overridden (ADR-082); call the supertype's API through the struct's underlying property from C#, or declare a member under a name or signature no supertype declares
+[nuget:SKIPPED_INHERITED_MEMBER] Skipping io.github.xxfast.kotlin.native.nuget.test.models.StoryUri.subSequence: it is a value class member that a supertype declares. a value class never exports a member a supertype declares, whether inherited, delegated (`by`) or explicitly overridden (ADR-082); call the supertype's API through the struct's underlying property from C#, or declare a member under a name or signature no supertype declares
+[nuget:SKIPPED_UNSUPPORTED_PROPERTY] Skipping io.github.xxfast.kotlin.native.nuget.test.cat.Cat.unsupported: its type kotlin.sequences.Sequence has no property getter or setter shape. expose a bridgeable property (or a getter function) whose type is not kotlin.sequences.Sequence, and export that instead
     at /Users/xxfast/Developer/XXFAST/KMP/kotlin-native-nuget/test-library/src/nativeMain/kotlin/io/github/xxfast/kotlin/native/nuget/test/cat/Cat.kt:46
 ```
 

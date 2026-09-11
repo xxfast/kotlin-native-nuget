@@ -50,6 +50,27 @@ public class UnexportedBaseClassTests
     }
 
     [Fact]
+    public void Farewell_OmittingOverload_UsesTheBaseDefault()
+    {
+        // ADR-096 meets ADR-101: the `warmly = false` default is declared on the dropped base and
+        // the override cannot restate it, so this one-argument call is the whole point. It is
+        // CS1501 until the planner reads defaults off the root overridee.
+        using var derived = new Issue42Derived();
+
+        Assert.Equal("bye Mylo from Oreo", derived.Farewell("Mylo"));
+    }
+
+    [Fact]
+    public void Farewell_FullArity_StillDispatchesToTheOverride()
+    {
+        // The full-arity call must keep working, and must land in the override's body, not the
+        // base's -- Oreo signs off every goodbye Mylo taught him.
+        using var derived = new Issue42Derived();
+
+        Assert.Equal("bye Mylo, come back soon from Oreo", derived.Farewell("Mylo", true));
+    }
+
+    [Fact]
     public void Issue42Derived_DoesNotExtendAGeneratedStandInForTheUnexportedBase()
     {
         // Name-agnostic and stronger than "not named UnexportedBase": the generated class must

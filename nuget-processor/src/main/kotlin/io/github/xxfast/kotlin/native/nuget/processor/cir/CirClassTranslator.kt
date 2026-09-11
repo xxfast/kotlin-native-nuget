@@ -11,13 +11,16 @@ import com.google.devtools.ksp.symbol.KSFunctionDeclaration
 import com.google.devtools.ksp.symbol.KSNode
 import com.google.devtools.ksp.symbol.KSPropertyDeclaration
 import com.google.devtools.ksp.symbol.KSType
+import com.google.devtools.ksp.symbol.KSTypeArgument
 import com.google.devtools.ksp.symbol.Modifier
 import com.google.devtools.ksp.symbol.Variance
 import com.google.devtools.ksp.symbol.Visibility
 import io.github.xxfast.kotlin.native.nuget.processor.csharpParameterName
 import io.github.xxfast.kotlin.native.nuget.processor.exports.findInterfaceBridgePairs
 import io.github.xxfast.kotlin.native.nuget.processor.exports.forwardArmFlowMethods
+import io.github.xxfast.kotlin.native.nuget.processor.exports.forwardArmLambdaMethods
 import io.github.xxfast.kotlin.native.nuget.processor.exports.isForwardFlowType
+import io.github.xxfast.kotlin.native.nuget.processor.exports.returnsHeldMutableStateFlow
 import io.github.xxfast.kotlin.native.nuget.processor.exports.findStoredCallbackPairs
 import io.github.xxfast.kotlin.native.nuget.processor.forward.BridgeType
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeTypeClassifier
@@ -32,13 +35,19 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnostic
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnosticKind
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnosticSink
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardPropertyPlan
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardPlanSkipReason
+import io.github.xxfast.kotlin.native.nuget.processor.forward.diagnosticHint
+import io.github.xxfast.kotlin.native.nuget.processor.forward.diagnosticReason
+import io.github.xxfast.kotlin.native.nuget.processor.forward.toDiagnosticKind
 import io.github.xxfast.kotlin.native.nuget.processor.forward.csharpName
-import io.github.xxfast.kotlin.native.nuget.processor.forward.declaredSuperClass
+import io.github.xxfast.kotlin.native.nuget.processor.forward.droppedBaseChain
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardPublicCsharpType
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardSuperClass
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isForwardLegacyAsyncRoute
+import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardSupertypeNames
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isForwardMemberOf
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isOpenForOverride
+import io.github.xxfast.kotlin.native.nuget.processor.forward.overridesBaseClassMember
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyCollectionRead
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyFlowElementCollection
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyFlowElementReadArgument
@@ -66,8 +75,8 @@ private enum class SupertypeKind { INTERFACE, BASE_CLASS }
  * parameters, property types, type arguments, sealed subclasses and primary-ctor parameters but
  * never `superTypes`, so a *dependency* type reachable only as a supertype stays out of the
  * export set even after its package is included. A supertype declared in *this* module is a
- * different case — scope admits same-round source declarations directly — and the base-class hint
- * says so rather than promising or denying the fix outright.
+ * different case (scope admits same-round source declarations directly), so the base-class hint
+ * picks its clause from `supertype.containingFile` rather than hedging across both.
  */
 private fun keepsSupertype(
   cls: KSClassDeclaration,
@@ -76,6 +85,7 @@ private fun keepsSupertype(
   kind: SupertypeKind,
   exportedTypes: Set<String>,
   logger: KSPLogger,
+  keptBase: KSClassDeclaration? = null,
 ): Boolean {
   val qualified: String? = supertype.qualifiedName?.asString()
   if (qualified != null && qualified in exportedTypes) return true
@@ -88,10 +98,22 @@ private fun keepsSupertype(
       "supertype '$supertypeName' is not in the export set, so it has no generated C# " +
           "interface; the class is generated without it and its own members still export"
 
-    SupertypeKind.BASE_CLASS ->
+    // ADR-101 amendment (2026-09-11): "no base at all" is only true when the whole declared
+    // chain is unexported. With `Dinghy : Skiff : Vessel` the walk keeps `Vessel`, so the middle
+    // clause names it: the author's `is`/`as` against the kept base still works, and only the
+    // dropped hop's members re-home.
+    SupertypeKind.BASE_CLASS -> {
+      // The single-drop clause is unchanged to the byte ("the base's", not the dropped base's
+      // name): it is quoted in ADR-101 and `forward-overview.md`, and only the chain case is new.
+      val placement: String = if (keptBase == null) {
+        "$name is generated with no base at all and the base's"
+      } else {
+        "$name is generated extending ${keptBase.simpleName.asString()}, the nearest exported " +
+            "base, and $simpleName's"
+      }
       "base class '$supertypeName' is not in the export set, so it has no generated C# class; " +
-          "$name is generated with no base at all and the base's public members are bound on " +
-          "$name directly"
+          "$placement public members are bound on $name directly"
+    }
   }
   val hint: String = when (kind) {
     SupertypeKind.INTERFACE ->
@@ -99,13 +121,26 @@ private fun keepsSupertype(
           "is lost; note that include(\"...\") does not help here — the export reachability " +
           "closure never walks supertypes"
 
-    SupertypeKind.BASE_CLASS ->
-      "nothing callable is lost — $simpleName's public members export as members of $name — but " +
-          "C# sees no $simpleName type and no inheritance relation, so `is`/`as` against it and " +
-          "any other subclass's shared base are gone; to keep the base itself it has to enter " +
-          "the export set on its own: include(\"$packageName\") admits a base declared in this " +
-          "module, but not one from a dependency — the export reachability closure never walks " +
-          "supertypes"
+    // ADR-101's 2026-09-11 amendment: which of the two clauses is true here is decided by
+    // `containingFile`, the same cross-module signal the reachability closure keys on
+    // (`ForwardReachabilityClosure.kt`), so the author is told the one fix that works for
+    // *their* base instead of both halves of a hedge.
+    SupertypeKind.BASE_CLASS -> {
+      val lost: String =
+        "nothing callable is lost ($simpleName's public members export as members of " +
+            "$name), but C# sees no $simpleName type and no inheritance relation, so `is`/`as` " +
+            "against it and any other subclass's shared base are gone; "
+      if (supertype.containingFile == null) {
+        lost + "$simpleName is declared in a dependency, and include(\"$packageName\") alone " +
+            "will not admit it: the export reachability closure never walks supertypes, so it " +
+            "enters the export set only when an exported member also names it as a return, " +
+            "parameter or property type and its package is included"
+      } else {
+        lost + "$simpleName is declared in this module, so adding include(\"$packageName\") " +
+            "alongside your existing rootPackage/include(...) admits it and renders it as the " +
+            "C# base"
+      }
+    }
   }
   ForwardDiagnosticSink.emit(
     listOf(
@@ -186,6 +221,160 @@ private fun noPublicConstructorRemark(name: String, detail: String): String =
   "Cannot be constructed from C#: every Kotlin constructor of $name was skipped by the bridge " +
       "($detail). Instances come from Kotlin factories that return this type."
 
+/**
+ * The classified [BridgeType] of an enum-typed position in the `abstractMethods` walk, or null when
+ * the type is not an enum, which leaves every other type on the walk's own hand mapping.
+ *
+ * A `BridgeType.Nullable` wrapper is kept: `forwardPublicCsharpType()` renders its `?` itself, so
+ * the walk never has to re-derive nullability for an enum.
+ */
+private fun KSType.classifiedEnum(classifier: ForwardBridgeTypeClassifier): BridgeType? {
+  val classDeclaration = declaration as? KSClassDeclaration ?: return null
+  if (classDeclaration.classKind != ClassKind.ENUM_CLASS) return null
+  return classifier.classify(this)
+}
+
+/**
+ * The classifier's refusal inside an enum position, unwrapping the nullable wrapper. Null when the
+ * enum is declared, i.e. when the position is spellable.
+ */
+private fun BridgeType.undeclaredEnum(): BridgeType.Unsupported? = when (this) {
+  is BridgeType.Nullable -> type.undeclaredEnum()
+  is BridgeType.Unsupported -> this
+  else -> null
+}
+
+/**
+ * The named skip for an abstract member the walk drops because one of its enum positions has no C#
+ * declaration. Same two reasons the classifier's enum branch distinguishes, so the text is
+ * byte-identical to the planner route's: a nested or out-of-scope enum takes
+ * [ForwardPlanSkipReason.UNDECLARED_ENUM] and its move-to-top-level hint, and a top-level enum in
+ * a dependency module outside the export scope takes
+ * [ForwardPlanSkipReason.UNEXPORTED_DEPENDENCY_TYPE] and its `include(...)` one.
+ *
+ * Emitted rather than dropped silently: a member vanishing from an abstract base with no warning is
+ * the CS0115 trap the abstract-method predicate fix just closed.
+ */
+private fun emitAbstractMethodEnumSkip(
+  method: KSFunctionDeclaration,
+  declaration: String,
+  unsupported: BridgeType.Unsupported,
+  context: NugetContext,
+  logger: KSPLogger,
+) {
+  val reason: ForwardPlanSkipReason =
+    if (unsupported.isUnexportedDependency) ForwardPlanSkipReason.UNEXPORTED_DEPENDENCY_TYPE
+    else ForwardPlanSkipReason.UNDECLARED_ENUM
+  ForwardDiagnosticSink.emit(
+    listOf(
+      ForwardDiagnostic(
+        kind = reason.toDiagnosticKind(),
+        symbol = method,
+        declaration = declaration,
+        reason = reason.diagnosticReason(unsupported.rendered),
+        hint = reason.diagnosticHint(unsupported.rendered, context.includePackages),
+      ),
+    ),
+    logger,
+  )
+}
+
+/**
+ * ADR-075 amendment (2026-09-11): the C# declaration for a property an exported abstract class
+ * inherits from an exported interface and never implements, the property-side mirror of the
+ * `abstractMethods` walk in [translateClass].
+ *
+ * There is no plan and no Kotlin export: `isForwardPlannableMemberOf` keeps an unimplemented
+ * inherited member out of the planner, since a bridge getter would have nothing to dispatch to.
+ * The C# type is therefore read off [interfaceDeclarationCatalog], the same ADR-113 plan
+ * `translateInterface` spells `IFoo`'s member from, rather than hand-mapped here: a second
+ * spelling of one plan is what CS0738 is made of.
+ *
+ * Null when the declaring interface's own planner skipped the member (so `IFoo` does not declare
+ * it either) or the parent is not a class declaration. An unexported interface is out of scope:
+ * ADR-101 drops `: IFoo` from the base list, and there is no plan to spell the member from.
+ */
+private fun inheritedAbstractProperty(
+  prop: KSPropertyDeclaration,
+  propName: String,
+  interfaceDeclarationCatalog: ForwardCallablePlanCatalog,
+): CirProperty? {
+  val owner: KSClassDeclaration = prop.parentDeclaration as? KSClassDeclaration ?: return null
+  val qualified: String = owner.qualifiedName?.asString() ?: return null
+  val plan: ForwardPropertyPlan =
+    interfaceDeclarationCatalog.propertyFor("$qualified.$propName") ?: return null
+  return CirProperty(
+    name = plan.publicName,
+    type = ForwardCirPropertyProjection.publicType(plan),
+    nativeReturnType = "",
+    nativeName = propName,
+    getter = "",
+    // `{ get; set; }` when the interface declares a `var`: an implementing subclass keeps its own
+    // setter (ADR-075's `readOnlyOverrideeOwner` finds the interface member mutable), and an
+    // `override` of a get-only abstract property that adds a setter is CS0546.
+    setter = if (plan.setter != null) "" else null,
+    isAbstract = true,
+    hasNativeImport = false,
+  )
+}
+
+/**
+ * ADR-101 amendment (2026-09-11): the C# base list entry for [base], with its type arguments
+ * spelled when it is generic (`Crate<string>`), so a closed generic base resolves.
+ *
+ * A bare `Crate` is not a lesser spelling, it never compiles: CS0305 in the ordinary case, and
+ * CS0118 when the library's namespace happens to carry the base's name, which is exactly what
+ * `TestLibrary.Parcel` does. The arguments are spelled off the same classifier both halves of the
+ * bridge use, so `Parcel<String>` in Kotlin and `Parcel<string>` in C# cannot drift.
+ *
+ * A non-generic base is unchanged: [nestedCsName] stops at the first non-class parent, so a nested
+ * sealed arm still renders `Roost.Perch` (ADR-009 amendment).
+ *
+ * Fails the build when an argument has no public C# spelling (a nested generic, a lambda, a
+ * `Flow`). That shape does not compile today either, so nothing regresses, and a silent skip would
+ * have to drop the base class itself or the inherited members vanish with no diagnostic at all.
+ */
+private fun forwardBaseSpelling(
+  cls: KSClassDeclaration,
+  name: String,
+  base: KSClassDeclaration,
+  classifier: ForwardBridgeTypeClassifier,
+): String {
+  val baseName: String = base.nestedCsName()
+  if (base.typeParameters.isEmpty()) return baseName
+
+  val arguments: List<KSTypeArgument> = cls.superTypes
+    .map { it.resolve() }
+    .firstOrNull { it.declaration.qualifiedName?.asString() == base.qualifiedName?.asString() }
+    ?.arguments
+    .orEmpty()
+  check(arguments.size == base.typeParameters.size) {
+    "Cannot render the base class of $name: its base $baseName declares " +
+        "${base.typeParameters.size} type parameter(s) but the declaration supplies " +
+        "${arguments.size} argument(s)."
+  }
+
+  val spelled: List<String> = arguments.map { argument ->
+    val type: KSType = checkNotNull(argument.type?.resolve()) {
+      "Cannot render the base class of $name: the base $baseName is used with a star projection, " +
+          "which has no C# spelling. Close the base over a concrete type."
+    }
+    val bridge: BridgeType = classifier.classify(type)
+    // `forwardPublicCsharpType` refuses an unspellable head with `error(...)`, which is the right
+    // outcome here but names only the BridgeType. Catch it to say which class and which argument,
+    // since a build failure with no declaration in it is unactionable.
+    try {
+      bridge.forwardPublicCsharpType()
+    } catch (e: IllegalStateException) {
+      error(
+        "Cannot render the base class of $name: the type argument '$type' of $baseName has no " +
+            "public C# spelling ($bridge). Close the base over a bridgeable type. (${e.message})",
+      )
+    }
+  }
+  return "$baseName<${spelled.joinToString(", ")}>"
+}
+
 internal fun translateClass(
   cls: KSClassDeclaration,
   libraryName: String,
@@ -197,6 +386,10 @@ internal fun translateClass(
   // ADR-114: the same classifier the Kotlin export builders use, so the two halves agree on which
   // legacy-route members bind and which are refused.
   classifier: ForwardBridgeTypeClassifier,
+  // ADR-113's DECLARATION catalog, planned over every exported interface. Used only to spell an
+  // inherited-but-unimplemented interface property (ADR-075 amendment 2026-09-11): the C# type has
+  // to come off the same plan `IFoo` is projected from, or the two spellings drift into CS0738.
+  interfaceDeclarationCatalog: ForwardCallablePlanCatalog = ForwardCallablePlanCatalog(emptyList()),
 ): CirClass {
   val name: String = cls.simpleName.asString()
   val prefix: String = name.lowercase()
@@ -208,33 +401,54 @@ internal fun translateClass(
   // planners filter their members with, so a member can never be kept here and skipped there.
   // ADR-101 amendment / issue #42: gated on the export set, so a base class nothing generates is
   // dropped here exactly as an unexported interface is, instead of rendering a dangling `: Base`.
-  val declaredBase: KSClassDeclaration? = cls.declaredSuperClass()
   val superClassDeclaration: KSClassDeclaration? = cls.forwardSuperClass(exportedTypes)
-  if (declaredBase != null && superClassDeclaration == null) {
-    // `translateClass` is the one place a class is translated (the regular-class loop in
-    // `CirTranslator`), and neither planner nor the Kotlin emitter holds a logger, so this is the
-    // only site the diagnostic can fire from — exactly once per affected class.
-    keepsSupertype(cls, name, declaredBase, SupertypeKind.BASE_CLASS, exportedTypes, logger)
+  // ADR-101 amendment (2026-09-11): one diagnostic per *dropped* hop, not one per class. The
+  // chain prefix before the kept base is what has no generated C# class, and each of those hops
+  // re-homes its own members, so each is named. A class whose direct base is exported drops
+  // nothing and says nothing, exactly as before.
+  // `translateClass` is the one place a class is translated (the regular-class loop in
+  // `CirTranslator`), and neither planner nor the Kotlin emitter holds a logger, so this is the
+  // only site the diagnostic can fire from.
+  cls.droppedBaseChain(superClassDeclaration).forEach { dropped ->
+    keepsSupertype(
+      cls,
+      name,
+      dropped,
+      SupertypeKind.BASE_CLASS,
+      exportedTypes,
+      logger,
+      keptBase = superClassDeclaration,
+    )
   }
-  val superClass: String? = superClassDeclaration?.simpleName?.asString()
+  // ADR-009 amendment (2026-09-11): spelled by nested C# name, so a class extending a nested
+  // sealed arm renders `: Roost.Perch` and not the unresolvable `: Perch` (CS0246). A top-level
+  // base is unchanged: `nestedCsName()` stops at the first non-class parent.
+  // ADR-101 amendment (2026-09-11): a generic base carries its type arguments too.
+  val superClass: String? = superClassDeclaration?.let { base ->
+    forwardBaseSpelling(cls, name, base, classifier)
+  }
 
-  val interfaces: List<String> = if (superClass != null) {
-    emptyList()
-  } else {
-    cls.superTypes
-      .map { it.resolve().declaration }
-      .filterIsInstance<KSClassDeclaration>()
-      .filter { it.classKind == ClassKind.INTERFACE }
-      // ADR-101 / issue #42: a supertype outside the export set has no generated C# interface, so
-      // naming it in the base list is a guaranteed CS0246 (the reporter's `: IKoinComponent`).
-      // Drop it and say so. Nothing is lost: an unexported interface has no C# members to call,
-      // and its defaulted members still bind on the class itself (`ForwardClassMembership.kt`).
-      .filter { iface ->
-        keepsSupertype(cls, name, iface, SupertypeKind.INTERFACE, exportedTypes, logger)
-      }
-      .map { "I${it.simpleName.asString()}" }
-      .toList()
-  }
+  // ADR-101 amendment (2026-09-11): a kept base no longer empties the interface list. `class
+  // Ledge : Shelf(), Groomable` renders `: Shelf, IGroomable`, and `ForwardClassMembership` binds
+  // `Groomable`'s members on `Ledge` to match, or the declaration is CS0535.
+  val baseSupertypes: Set<String> = superClassDeclaration?.forwardSupertypeNames().orEmpty()
+  val interfaces: List<String> = cls.superTypes
+    .map { it.resolve().declaration }
+    .filterIsInstance<KSClassDeclaration>()
+    .filter { it.classKind == ClassKind.INTERFACE }
+    // An interface the base already implements is carried by the base. Listing it again compiles
+    // but says nothing, and re-binding its members here would hide the base's (CS0108), so it is
+    // dropped before the export-set filter: it owes no diagnostic either, nothing is lost.
+    .filter { iface -> iface.qualifiedName?.asString() !in baseSupertypes }
+    // ADR-101 / issue #42: a supertype outside the export set has no generated C# interface, so
+    // naming it in the base list is a guaranteed CS0246 (the reporter's `: IKoinComponent`).
+    // Drop it and say so. Nothing is lost: an unexported interface has no C# members to call,
+    // and its defaulted members still bind on the class itself (`ForwardClassMembership.kt`).
+    .filter { iface ->
+      keepsSupertype(cls, name, iface, SupertypeKind.INTERFACE, exportedTypes, logger)
+    }
+    .map { "I${it.simpleName.asString()}" }
+    .toList()
 
   // ADR-091: constructors come off the catalog, the same move ADR-090 made for methods. The
   // ADR-034 `_$n` sequence now also carries planner-synthesized omitting overloads, so the extern
@@ -304,7 +518,10 @@ internal fun translateClass(
       val planned = callableCatalog.propertyFor("${cls.qualifiedName?.asString() ?: name}.$propName")
       if (planned != null) {
         tracker.trackProperty(planned)
-        val isOverride: Boolean = superClass != null && prop.modifiers.contains(Modifier.OVERRIDE)
+        // ADR-101 amendment (2026-09-11): a base *class* overridee, not the Kotlin modifier. An
+        // `override val` implementing an interface property the base does not declare is a fresh
+        // C# slot (`virtual`), never an `override`.
+        val isOverride: Boolean = prop.overridesBaseClassMember(superClassDeclaration)
         return@mapNotNull ForwardCirPropertyProjection.classProperty(
           planned,
           isOverride = isOverride,
@@ -313,14 +530,22 @@ internal fun translateClass(
           isVirtual = !isOverride && prop.modifiers.isOpenForOverride(),
           // ADR-075 amendment (2026-09-10): this class's own unimplemented `abstract val`/`var`.
           // `isAbstract()` (not `Modifier.ABSTRACT`) is the same predicate
-          // `isForwardPlannableMemberOf` uses. The abstract *method* walk has its own, broader
-          // hole (a class-declared `abstract fun` is dropped entirely); it is not touched here.
+          // `isForwardPlannableMemberOf` uses. The abstract *method* walk keys on the same
+          // property as of the 2026-09-11 amendment, so both routes now agree.
           isAbstract = prop.isAbstract(),
         )
       }
+      // ADR-075 amendment (2026-09-11): a property this class inherits from an exported interface
+      // and does not implement. `isForwardPlannableMemberOf` keeps it out of the planner (nothing
+      // to dispatch to), so it takes the declaration walk the abstract *method* mirror takes: an
+      // abstract C# property, no body, no export, no `DllImport`. Without it the generated
+      // `Bird : IFeathered` is CS0535 and a consumer subclass's `override` is CS0115.
+      if (prop.parentDeclaration != cls && prop.isAbstract()) {
+        return@mapNotNull inheritedAbstractProperty(prop, propName, interfaceDeclarationCatalog)
+      }
       // Issue #121: the planner declined, but a decline is not always an invitation. A marked
       // declaration must reach neither artifact, so the legacy arms below never run for one.
-      if (prop.isOptInRefused()) return@mapNotNull null
+      if (prop.isOptInRefused(classifier.exportMarkers)) return@mapNotNull null
       // Named specialized-protocol property adapters only (lambda / suspend-lambda / Flow).
       // Ordinary property types without a plan are skipped — no mapReturnType IntPtr fallthrough.
       val propTypeResolved: KSType = prop.type.resolve().expandAliases()
@@ -525,17 +750,38 @@ internal fun translateClass(
     .mapNotNull { method ->
       val methodName: String = method.simpleName.asString()
       if (methodName in plannedMemberNames) return@mapNotNull null
-      val declaredInThisClass: Boolean = method.parentDeclaration == cls
-      val hasImplementation: Boolean = declaredInThisClass ||
-          method.modifiers.contains(Modifier.OVERRIDE)
-      val isMethodAbstract: Boolean = !hasImplementation &&
-          (isAbstract || method.modifiers.contains(Modifier.ABSTRACT))
-      if (!isMethodAbstract) return@mapNotNull null
+      // ADR-075 / ADR-101 amendment (2026-09-11): `abstract` is a property of the body, not of the
+      // declaring class. KSP's `isAbstract` (not `Modifier.ABSTRACT`) is the same predicate
+      // `isForwardPlannableMemberOf` uses, and covers an interface member declared without the
+      // modifier. Asking `parentDeclaration == cls || OVERRIDE` instead got both halves wrong: a
+      // class's own `abstract fun` looked implemented and was dropped from C# entirely (CS0115 on
+      // a subclass `override`), while an inherited member *with* a body that the planner declined
+      // looked unimplemented and rendered `public abstract` (CS0534 on any further C# subclass).
+      if (!method.isAbstract) return@mapNotNull null
       val methodReturnTypeResolved = method.returnType?.resolve()?.expandAliases()
+
+      // The 2026-09-05 undeclared-enum gate, applied to the one route that bypassed it. This walk
+      // is the only route an inherited unimplemented member has -- `isForwardPlannableMemberOf`
+      // keeps it out of the planner, so nothing else classifies it, skips it or diagnoses it --
+      // and it spelled an enum by bare simple name at both positions. That dangles when the enum
+      // is undeclared (nothing emits `Pottery.Firing`), and drifts from `csharpTypeNameFor` when
+      // it is declared, which the classifier's own comment says must never happen.
+      val returnEnum: BridgeType? = methodReturnTypeResolved?.classifiedEnum(classifier)
+      val parameterEnums: List<BridgeType?> = method.parameters
+        .map { param -> param.type.resolve().expandAliases().classifiedEnum(classifier) }
+      val undeclaredEnum: BridgeType.Unsupported? = (listOf(returnEnum) + parameterEnums)
+        .firstNotNullOfOrNull { classified -> classified?.undeclaredEnum() }
+      if (undeclaredEnum != null) {
+        emitAbstractMethodEnumSkip(method, "$name.$methodName", undeclaredEnum, context, logger)
+        return@mapNotNull null
+      }
+
       val methodReturn: String =
         methodReturnTypeResolved?.declaration?.simpleName?.asString() ?: "Unit"
       val isNullableReturn: Boolean = methodReturnTypeResolved?.isMarkedNullable == true
       val returnType: String = when {
+        // The classifier's spelling wins for an enum, nullability included.
+        returnEnum != null -> returnEnum.forwardPublicCsharpType()
         methodReturn == "Unit" -> "void"
         methodReturn == "String" && isNullableReturn -> "string?"
         methodReturn == "String" -> "string"
@@ -547,14 +793,14 @@ internal fun translateClass(
         isNullableReturn -> "$methodReturn?"
         else -> methodReturn
       }
-      val methodParams: List<CirParameter> = method.parameters.map { param ->
+      val methodParams: List<CirParameter> = method.parameters.mapIndexed { index, param ->
         val resolved = param.type.resolve().expandAliases()
         val kotlinType: String = resolved.declaration.simpleName.asString()
-        val isEnum: Boolean = (resolved.declaration as? KSClassDeclaration)
-          ?.classKind == ClassKind.ENUM_CLASS
-        val isNullableString: Boolean = !isEnum && kotlinType == "String" && resolved.isMarkedNullable
+        val paramEnum: BridgeType? = parameterEnums[index]
+        val isNullableString: Boolean =
+          paramEnum == null && kotlinType == "String" && resolved.isMarkedNullable
         val paramType: String = when {
-          isEnum -> kotlinType
+          paramEnum != null -> paramEnum.forwardPublicCsharpType()
           isNullableString -> "string?"
           kotlinType in KOTLIN_TO_CSHARP_PARAM -> KOTLIN_TO_CSHARP_PARAM.getValue(kotlinType)
           else -> kotlinType
@@ -567,7 +813,7 @@ internal fun translateClass(
         parameters = methodParams,
         body = "",
         isAbstract = true,
-        isOverride = superClass != null && method.modifiers.contains(Modifier.OVERRIDE),
+        isOverride = method.overridesBaseClassMember(superClassDeclaration),
         isSyncErrorCheckEnabled = false,
       )
     }
@@ -759,6 +1005,9 @@ internal fun translateGenericClass(
     nativePrefix = prefix,
     properties = properties,
     hasPublicConstructor = true,
+    // ADR-101 amendment (2026-09-11): `open` reaches the generic route too, so a subclass closing
+    // this class over a concrete type can `override` its `Dispose`.
+    isOpen = cls.modifiers.contains(Modifier.OPEN),
   )
 }
 
@@ -990,13 +1239,12 @@ internal fun flowMembers(
     // ADR-071: mirrors the sibling property branch above -- a genuinely DECLARED
     // MutableStateFlow<T> function return (not narrowed to StateFlow<T>) gains a settable
     // `.Value`, gated on non-nullable element/member (both deferred) and a v1-supported element.
-    val isMutableStateFlowMethod: Boolean = isStateFlowMethod &&
-        returnQualified in MUTABLE_STATE_FLOW_TYPES &&
-        !isNullableElement && !isNullableMember &&
-        isMutableStateFlowElementSupported(flowElementTypeResolved)
+    // ADR-071 (2026-09-11): that gate is now the shared predicate the Kotlin emitter reads, and it
+    // selects the held route below rather than an extra export on the ADR-065 pair.
+    val isHeldMutableStateFlow: Boolean = method.returnsHeldMutableStateFlow()
     val isMutableStateFlowObjectElement: Boolean =
-      isMutableStateFlowMethod && isMutableStateFlowElementObject(flowElementTypeResolved)
-    if (isMutableStateFlowMethod) tracker.needsMutableStateFlow = true
+      isHeldMutableStateFlow && isMutableStateFlowElementObject(flowElementTypeResolved)
+    if (isHeldMutableStateFlow) tracker.needsMutableStateFlow = true
     // ADR-123: a collection element, spelled and read like the ordinary route's collection result.
     // A refused element never reaches here: `filteredMethods` drops the member upstream.
     val flowElementCollection: BridgeType.Collection? =
@@ -1012,6 +1260,62 @@ internal fun flowMembers(
     // slot; every other parameter keeps mapParamType's shipped spelling.
     val methodParams: List<CirParameter> =
       legacyRouteParameters(method.parameters, classifier, tracker)
+
+    // ADR-071 (2026-09-11): a `MutableStateFlow<T>`-declared return is HELD -- the Kotlin half
+    // invokes the function once and hands the flow's own handle back, so this member's imports are
+    // an acquire and a flow-keyed setter, not the ADR-065 per-member `_collect` / `_value` pair
+    // (which re-invoked the function on every access and lost a write into a throwaway flow).
+    // Reads go through ADR-068's shared `NugetStateFlowNative`, which is what
+    // [CollectionHelperTracker.needsSuspendStateFlow] renders.
+    if (method.returnsHeldMutableStateFlow()) {
+      tracker.needsSuspendStateFlow = true
+      val acquireArgs: String = methodParams.joinToString(", ") { it.nativeArgument }
+      val acquireImport = CirDllImport(
+        libraryName = libraryName,
+        entryPoint = "${prefix}_$cname",
+        returnType = "IntPtr",
+        name = nativeStem,
+        parameters = listOf(CirParameter("handle", "IntPtr")) + methodParams,
+        visibility = CirVisibility.PRIVATE,
+      )
+
+      // The owner handle and the method's own parameters are gone from the setter: the write is
+      // keyed on the flow handle the acquire returned. The trailing `out IntPtr error` stays
+      // (MutableStateFlow.value conflates by Any.equals on the previous value, which can throw).
+      val heldSetValueImport = CirDllImport(
+        libraryName = libraryName,
+        entryPoint = "${prefix}_${cname}_set_value",
+        returnType = "void",
+        name = "${nativeStem}SetValue",
+        parameters = listOf(
+          CirParameter("flowHandle", "IntPtr"),
+          CirParameter(
+            "value",
+            if (isMutableStateFlowObjectElement) "IntPtr" else flowCsElementType,
+          ),
+        ),
+        visibility = CirVisibility.PRIVATE,
+        hasSyncErrorOut = true,
+      )
+
+      val heldMethod = CirMethod(
+        name = csMethodName,
+        returnType = "KotlinMutableStateFlow<$flowCsElementType>",
+        nativeName = nativeStem,
+        parameters = methodParams,
+        // The acquire call's arguments, not the collect delegate's: the call happens once, in the
+        // method body, before the wrapper is constructed.
+        body = if (acquireArgs.isEmpty()) "_handle" else "_handle, $acquireArgs",
+        isFlow = true,
+        isStateFlow = true,
+        flowElementType = flowCsElementType,
+        isMutableStateFlow = true,
+        stateFlowSetValueNativeName = "${nativeStem}SetValue",
+        isMutableStateFlowElementObject = isMutableStateFlowObjectElement,
+      )
+
+      return@flatMap listOf(acquireImport, heldSetValueImport, heldMethod)
+    }
 
     val nativeParams: List<CirParameter> = listOf(
       CirParameter("handle", "IntPtr"),
@@ -1065,31 +1369,11 @@ internal fun flowMembers(
         )
       } else null
 
-      // ADR-071: sibling `_set_value` DllImport -- handle + the method's own parameters + the
-      // element's own wire type + a trailing `out IntPtr error` (the Kotlin setter can throw,
-      // MutableStateFlow.value conflates by Any.equals on the previous value).
-      val setValueNativeImport: CirDllImport? = if (isMutableStateFlowMethod) {
-        val setValueParamType: String =
-          if (isMutableStateFlowObjectElement) "IntPtr" else flowCsElementType
-        CirDllImport(
-          libraryName = libraryName,
-          entryPoint = "${prefix}_${cname}_set_value",
-          returnType = "void",
-          name = "${nativeStem}SetValue",
-          parameters = listOf(CirParameter("handle", "IntPtr")) + methodParams +
-              listOf(CirParameter("value", setValueParamType)),
-          visibility = CirVisibility.PRIVATE,
-          hasSyncErrorOut = true,
-        )
-      } else null
-
+      // ADR-071 (2026-09-11): no `_set_value` sibling here. What reaches this point is a
+      // read-only `StateFlow<T>` return; the settable one took the held route above.
       val stateFlowMethod = CirMethod(
         name = csMethodName,
-        returnType = if (isMutableStateFlowMethod) {
-          "KotlinMutableStateFlow<$flowCsElementType>"
-        } else {
-          "KotlinStateFlow<$flowCsElementType>${if (isNullableMember) "?" else ""}"
-        },
+        returnType = "KotlinStateFlow<$flowCsElementType>${if (isNullableMember) "?" else ""}",
         nativeName = "${nativeStem}Collect",
         parameters = methodParams,
         body = nativeCallArgs,
@@ -1101,17 +1385,12 @@ internal fun flowMembers(
         isStateFlowNullableMember = isNullableMember,
         stateFlowHasValueNativeName =
           if (isNullableMember) "${nativeStem}HasValue" else "",
-        isMutableStateFlow = isMutableStateFlowMethod,
-        stateFlowSetValueNativeName =
-          if (isMutableStateFlowMethod) "${nativeStem}SetValue" else "",
-        isMutableStateFlowElementObject = isMutableStateFlowObjectElement,
       )
 
       return@flatMap listOfNotNull(
         nativeImport,
         valueNativeImport,
         hasValueNativeImport,
-        setValueNativeImport,
         stateFlowMethod,
       )
     }
@@ -1201,7 +1480,12 @@ internal fun suspendMembers(
       isUnit -> ""
       collectionReturn != null -> collectionReturn.forwardPublicCsharpType()
       else -> {
-        val csharp: String = KOTLIN_TO_CSHARP_PARAM[methodReturn] ?: methodReturn
+        // ADR-118: a nested sealed arm is declared inside its base (ADR-009), so the bare simple
+        // name is unresolvable at namespace scope (CS0246). `nestedCsName()` walks class parents
+        // only, so a top-level type stays bare.
+        val csharp: String = KOTLIN_TO_CSHARP_PARAM[methodReturn]
+          ?: (resolvedReturn?.declaration as? KSClassDeclaration)?.nestedCsName()
+          ?: methodReturn
         if (resolvedReturn?.isMarkedNullable == true) "$csharp?" else csharp
       }
     }
@@ -1323,6 +1607,37 @@ internal fun translateSealedClass(
   val libraryName: String = context.libraryName
   val name: String = cls.simpleName.asString()
   val prefix: String = name.lowercase()
+  val qualifiedName: String? = cls.qualifiedName?.asString()
+
+  // ADR-111/ADR-116 amendment (2026-09-11): the base's own declared members, off base-keyed plans
+  // and the same projections an ordinary class uses. Always `virtual`, never `abstract`: the
+  // export dispatches through the base type in Kotlin, so the C# member has a body, and an
+  // `abstract` one would oblige every arm to declare an override -- which the covariant arm
+  // (`Empty.sides: Int` over `Int?`) cannot spell at all (CS1715, then CS0534 for the member it
+  // could not declare).
+  val baseProperties: List<CirProperty> = cls.getAllProperties()
+    .filter { it.getVisibility() == Visibility.PUBLIC }
+    .filter { prop -> prop.parentDeclaration == cls }
+    .mapNotNull { prop ->
+      val planned: ForwardPropertyPlan? =
+        qualifiedName?.let { callableCatalog.propertyFor("$it.${prop.simpleName.asString()}") }
+      if (planned == null) return@mapNotNull null
+      tracker.trackProperty(planned)
+      ForwardCirPropertyProjection.classProperty(planned, isVirtual = true)
+    }
+    .toList()
+
+  val baseMethods: List<CirMethod> =
+    (qualifiedName?.let { callableCatalog.classMethods(it) } ?: emptyList()).map { plan ->
+      tracker.trackPlan(plan)
+      ForwardCirPlanProjection.classMethod(
+        plan = plan,
+        nativePrefix = prefix,
+        isOverride = false,
+        isVirtual = plan.publicSignature.isVirtual,
+      )
+    }
+  emitCsharpSignatureCollisions(baseMethods, name, cls, logger)
 
   val subclasses: List<CirSealedSubclass> = cls.getSealedSubclasses()
     .map { subclass ->
@@ -1331,6 +1646,9 @@ internal fun translateSealedClass(
       val isDataClass: Boolean = subclass.modifiers.contains(Modifier.DATA)
       val isNested: Boolean =
         subclass.parentDeclaration?.qualifiedName?.asString() == cls.qualifiedName?.asString()
+      // ADR-009 amendment (2026-09-11): an `open` arm is extensible, which is what unlocks both
+      // `public class` in the renderer and `virtual` on its own open members below.
+      val isOpenArm: Boolean = subclass.modifiers.contains(Modifier.OPEN)
 
       val subQualifiedName: String? = subclass.qualifiedName?.asString()
       val properties: List<CirProperty> = subclass.getAllProperties()
@@ -1345,12 +1663,19 @@ internal fun translateSealedClass(
             subQualifiedName?.let { callableCatalog.propertyFor("$it.$propName") }
           if (planned != null) {
             tracker.trackProperty(planned)
-            return@mapNotNull ForwardCirPropertyProjection.classProperty(planned)
+            val projected: CirProperty = ForwardCirPropertyProjection.classProperty(
+              planned,
+              // ADR-009 amendment (2026-09-11): gated on the arm being open. An `open val` on a
+              // final arm is effectively final in Kotlin (nothing can extend it), and `virtual`
+              // inside a `public sealed class` is CS0549.
+              isVirtual = isOpenArm && prop.modifiers.isOpenForOverride(),
+            )
+            return@mapNotNull projected.againstSealedBase(baseProperties)
           }
 
           // Issue #121: same gate as the ordinary-class arm above. The planner declined, and a
           // marked declaration must reach neither artifact.
-          if (prop.isOptInRefused()) return@mapNotNull null
+          if (prop.isOptInRefused(classifier.exportMarkers)) return@mapNotNull null
 
           // ADR-124: the arm's Flow/StateFlow properties, off the same `flowProperty` an ordinary
           // class calls, so the externs, the element spelling and the getter body are an ordinary
@@ -1403,17 +1728,25 @@ internal fun translateSealedClass(
       // ADR-116: the method half of ADR-111. The arm's declared member functions come off the same
       // catalog an ordinary class reads (`classMethods`), projected by the same `classMethod`, so
       // the error slot, the overload numbering and the wire types agree with the Kotlin half by
-      // construction. `isOverride`/`isVirtual` are pinned false by the planner (CS0115/CS0549).
+      // construction. `isOverride` is pinned false by the planner (the generated sealed base
+      // declares nothing to override, CS0115); `isVirtual` rides the plan, which computes it from
+      // the arm being `open` the same way `classEntries` computes an ordinary class's (ADR-009
+      // amendment 2026-09-11).
       val methodPlans: List<ForwardCallablePlan> =
         subQualifiedName?.let { callableCatalog.classMethods(it) } ?: emptyList()
       val methods: List<CirMethod> = methodPlans.map { plan ->
         tracker.trackPlan(plan)
-        ForwardCirPlanProjection.classMethod(
+        val projected: CirMethod = ForwardCirPlanProjection.classMethod(
           plan = plan,
           nativePrefix = subPrefix,
           isOverride = false,
-          isVirtual = false,
+          isVirtual = plan.publicSignature.isVirtual,
         )
+        // ADR-116 amendment (2026-09-11): `override` when the base now carries the very same C#
+        // signature. Compared on the projected signature rather than on Kotlin's `override`
+        // keyword, because what C# needs is a base member with a matching shape: an arm can
+        // override something the base's own plan declined, and then there is nothing to override.
+        projected.againstSealedBase(baseMethods)
       }
       // ADR-034's collision guard, which the sealed route never ran: two arm methods whose C#
       // signatures agree (`set(x: Foo)` / `set(x: Foo?)`) are CS0111 in the generated file.
@@ -1458,6 +1791,16 @@ internal fun translateSealedClass(
         context = context,
       )
 
+      // ADR-116 amendment (2026-09-11): the arm's per-call lambda-parameter methods (ADR-036),
+      // through the same `translateCallbackMethod` an ordinary class's go through, so the thunk,
+      // the delegate registration and the extern shape are an ordinary class's. The entry point is
+      // composed from `subPrefix`, which is the prefix the Kotlin export loop passes to
+      // `addLambdaParamMethodExport`; `forwardArmLambdaMethods` is the selector both read.
+      val callbackMembers: List<CirMember> = subclass.forwardArmLambdaMethods(classifier)
+        .mapNotNull { method ->
+          translateCallbackMethod(method, libraryName, subPrefix, exportedTypes, tracker)
+        }
+
       CirSealedSubclass(
         name = subName,
         nativePrefix = subPrefix,
@@ -1465,6 +1808,7 @@ internal fun translateSealedClass(
         methods = methods,
         asyncMembers = asyncMembers,
         flowMembers = flowMembers,
+        callbackMembers = callbackMembers,
         // Derived from what projected, not from a `getAllFunctions()` scan: a base-declared or
         // ADR-114 refused suspend member would otherwise hand the arm a scope, `IAsyncDisposable`
         // and `DisposeAsync` with no async method on it to use them. ADR-124: a flow member needs
@@ -1473,6 +1817,7 @@ internal fun translateSealedClass(
             properties.any { property -> property.isFlow },
         isDataClass = isDataClass,
         isNested = isNested,
+        isOpen = isOpenArm,
       )
     }
     .toList()
@@ -1482,7 +1827,40 @@ internal fun translateSealedClass(
     libraryName = libraryName,
     nativePrefix = prefix,
     subclasses = subclasses,
+    properties = baseProperties,
+    methods = baseMethods,
   )
+}
+
+/**
+ * ADR-111/ADR-116 amendment (2026-09-11): the arm-side modifier for a property the sealed base now
+ * also carries, decided on the *projected C# shape* rather than on Kotlin's `override` keyword.
+ *
+ * - Same name, same C# type: a plain `override`.
+ * - Same name, different C# type: Kotlin allows a covariant override (`Int` narrowing `Int?`), C#
+ *   does not (CS1715). The arm hides the base member with `new` and keeps its own export, so a
+ *   consumer holding the arm reads the narrow type and one holding the base reads the wide one.
+ * - No such base member: unchanged, whatever `isVirtual` the arm's own openness earned.
+ */
+private fun CirProperty.againstSealedBase(baseProperties: List<CirProperty>): CirProperty {
+  val onBase: CirProperty = baseProperties.firstOrNull { it.name == name } ?: return this
+  if (onBase.type == type) return copy(isOverride = true, isVirtual = false)
+  return copy(isNew = true, isOverride = false, isVirtual = false)
+}
+
+/**
+ * The method-side twin of [CirProperty.againstSealedBase], on the same three rules. C# decides
+ * *hiding* on name and parameter types alone, so a base member with a matching signature but a
+ * different return type is hidden with `new` (an `override` there is CS0508 for a value type, and
+ * leaving the modifier off is the CS0108 warning `GeneratedBindingsCheck` compiles as an error).
+ */
+private fun CirMethod.againstSealedBase(baseMethods: List<CirMethod>): CirMethod {
+  val parameterTypes: List<String> = parameters.map { it.type }
+  val onBase: CirMethod = baseMethods.firstOrNull { candidate ->
+    candidate.name == name && candidate.parameters.map { it.type } == parameterTypes
+  } ?: return this
+  if (onBase.returnType == returnType) return copy(isOverride = true, isVirtual = false)
+  return copy(isNew = true, isOverride = false, isVirtual = false)
 }
 
 /**
@@ -2111,22 +2489,17 @@ internal fun translateValueClass(
     .filter { it != cls.primaryConstructor }
     .toList()
 
-  val constructors: List<CirValueClassConstructor> = if (isReferenceUnderlying) {
-    // ADR-035: the positional record struct over the underlying handle is the only constructor.
-    // A secondary has nothing to delegate to (the primary is deferred), so the planner skips it
-    // and neither half emits anything -- no import, no export, no `this(CreateChecked(...))`
-    // handing an IntPtr to a class-typed parameter.
-    emptyList()
-  } else {
-    // ADR-035: plan-only for primitive-underlying constructors.
-    buildList {
-      val primaryPlan = callableCatalog.planFor("$qualifiedName.<init>")
-      if (primaryPlan != null) add(buildConstructorFromPlan(primaryPlan, ""))
-      secondaryCtorDecls.forEachIndexed { index, _ ->
-        val number: Int = index + 2
-        val planned = callableCatalog.planFor("$qualifiedName.<init>_$number")
-        if (planned != null) add(buildConstructorFromPlan(planned, "_$number"))
-      }
+  // ADR-035: plan-only, on both underlying kinds. A reference underlying has no *primary* plan
+  // (the positional record header already constructs one, and a second `Wrapper(Cat)` would be
+  // CS0111), but its secondaries are planned since the 2026-09-11 amendment; the lookup below
+  // simply finds nothing for `<init>` in that case.
+  val constructors: List<CirValueClassConstructor> = buildList {
+    val primaryPlan: ForwardCallablePlan? = callableCatalog.planFor("$qualifiedName.<init>")
+    if (primaryPlan != null) add(buildConstructorFromPlan(primaryPlan, ""))
+    secondaryCtorDecls.forEachIndexed { index, _ ->
+      val number: Int = index + 2
+      val planned: ForwardCallablePlan? = callableCatalog.planFor("$qualifiedName.<init>_$number")
+      if (planned != null) add(buildConstructorFromPlan(planned, "_$number"))
     }
   }
 
@@ -2254,11 +2627,30 @@ private fun translateCallbackMethod(
     else -> "IntPtr"
   }
 
+  // ADR-036's marshalling table: a primitive payload crosses BY VALUE. `String` keeps its handle
+  // (it is not a C ABI scalar) and so does `Char`, which has no crossing convention on any route.
+  // Mirrors the interface-bridge route's branch, deliberately: the two share delegate names.
+  val byValueArgs: List<Boolean> = lambdaArgTypes.map { argType ->
+    val simple: String = argType.declaration.simpleName.asString()
+    val qualified: String = argType.declaration.qualifiedName?.asString() ?: ""
+    qualified.startsWith("kotlin.") && simple in KOTLIN_TO_CSHARP_PARAM &&
+        simple != "String" && simple != "Char"
+  }
+
   val delegateParamList: String = if (lambdaArity == 0) {
     "(IntPtr userData)"
   } else {
     val argParams: String = lambdaArgTypes
-      .mapIndexed { i, _ -> "IntPtr arg${i}Ptr" }
+      .mapIndexed { i, argType ->
+        val argKotlin: String = argType.declaration.simpleName.asString()
+        when {
+          // The `byte` wire is widened to `bool` in the body, under a DIFFERENT name: naming the
+          // parameter `arg0` and then declaring `bool arg0` from it is CS0128.
+          argKotlin == "Boolean" -> "byte arg${i}Byte"
+          byValueArgs[i] -> "${KOTLIN_TO_CSHARP_PARAM[argKotlin]} arg$i"
+          else -> "IntPtr arg${i}Ptr"
+        }
+      }
       .joinToString(", ")
     "($argParams, IntPtr userData)"
   }
@@ -2272,11 +2664,19 @@ private fun translateCallbackMethod(
   val callbackBody: String = buildString {
     lambdaArgTypes.forEachIndexed { i, argType ->
       val argKotlin: String = argType.declaration.simpleName.asString()
-      val csArgType: String = when (argKotlin) {
-        "String" -> "string"
+      val csArgType: String = when {
+        argKotlin == "String" -> "string"
+        byValueArgs[i] -> KOTLIN_TO_CSHARP_PARAM.getValue(argKotlin)
         else -> argKotlin
       }
-      appendLine("            $csArgType arg$i = NugetMarshal.FromHandle<$csArgType>(arg${i}Ptr);")
+      when {
+        argKotlin == "Boolean" -> appendLine("            bool arg$i = arg${i}Byte != 0;")
+        // A by-value primitive IS the delegate parameter; there is nothing to unmarshal.
+        byValueArgs[i] -> Unit
+        else -> appendLine(
+          "            $csArgType arg$i = NugetMarshal.FromHandle<$csArgType>(arg${i}Ptr);",
+        )
+      }
     }
     val argCallNames: String = lambdaArgTypes.indices.joinToString(", ") { "arg$it" }
     val callExpr: String =
@@ -2460,7 +2860,10 @@ private fun translateStoredCallbackMethod(
     lambdaArgTypes.forEachIndexed { i, argType ->
       val csType: String = qualifiedElementCsType(argType, context)
       if (isEnumArgs[i]) append("$csType arg$i = ($csType)arg${i}Ord; ")
-      else append("$csType arg$i = NugetMarshal.FromHandle<$csType>(arg${i}Ptr); NugetMarshal.Dispose(arg${i}Ptr); ")
+      // ADR-036 amendment (2026-09-11): `FromHandle` already owns the handle. Its `string` branch
+      // disposes as it reads, and an exported object is materialised into a wrapper that frees it
+      // in `Dispose()`. The explicit dispose here was a second free of the same handle.
+      else append("$csType arg$i = NugetMarshal.FromHandle<$csType>(arg${i}Ptr); ")
     }
     val callArgs: String = if (lambdaArity == 0) "" else
       lambdaArgTypes.indices.joinToString(", ") { "arg$it" }
@@ -2584,7 +2987,9 @@ private fun translateInterfaceBridgeMethod(
           isPrimitive -> { /* arg is already the right type, no unmarshal needed */
           }
 
-          else -> append("$csType arg$i = NugetMarshal.FromHandle<$csType>(arg${i}Ptr); NugetMarshal.Dispose(arg${i}Ptr); ")
+          // ADR-036 amendment (2026-09-11): see the stored-callback route above; `FromHandle` is
+          // the owner, so there is no second dispose here.
+          else -> append("$csType arg$i = NugetMarshal.FromHandle<$csType>(arg${i}Ptr); ")
         }
       }
       val callArgs: String = params.indices.joinToString(", ") { "arg$it" }

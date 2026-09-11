@@ -234,3 +234,22 @@ fun Issue54Shape.covers(other: Issue54Shape): Boolean = when (this) {
   Issue54Shape.Empty -> other == Issue54Shape.Empty
   is Issue54Shape.Circle -> other !is Issue54Shape.Circle || other.radius <= radius
 }
+
+/**
+ * The extension-*property* half of the same amendment cell: [footprint] proves an extension
+ * **function** binds on a sealed receiver, and this proves the property route does the same. It is
+ * a distinct seam, because `ForwardPropertyPlanner` classifies the receiver on its own path and
+ * admits only `ObjectHandle` / primitive / `String` / value-class receivers, so a sealed receiver
+ * is dropped today with `SKIPPED_UNSUPPORTED_PROPERTY` and `GetArea` never reaches
+ * `TestLibrary.Issue54.Issue54ShapeExtensions`.
+ *
+ * A `val` rather than a `var`: an extension property has no backing field, so a setter would need
+ * external storage and would say nothing more about the receiver rewrite under test.
+ *
+ * Oreo's curl has an area; Mylo's sprawl has none.
+ */
+val Issue54Shape.area: Double
+  get() = when (this) {
+    Issue54Shape.Empty -> 0.0
+    is Issue54Shape.Circle -> kotlin.math.PI * radius * radius
+  }

@@ -159,28 +159,28 @@ class Tier1LegacyRouteParameterNamesTest {
   /**
    * The one route that needs the #66 rename rather than the #65 escape: the generated
    * MutableStateFlow write lambda declares its own `out IntPtr error`, so a user parameter named
-   * `error` is CS0100 on the setter import and CS0841 inside the lambda.
+   * `error` is CS0841 inside the lambda.
+   *
+   * ADR-071 (2026-09-11): the member is now held by handle, so the user parameter reaches the
+   * acquire import only, and the setter is keyed on the flow. The rename is still load-bearing:
+   * the acquire call sits in the same method body as the write lambda that declares `out IntPtr
+   * error`, so an unrenamed `error` parameter still collides there.
    */
   @Test
   fun `the mutable state flow route renames a parameter that shadows the error slot`() {
     assertContains(
       generated,
-      "private static extern IntPtr Native_StateCollect(IntPtr handle, IntPtr scopeHandle, " +
-          "int error_,",
+      "private static extern IntPtr Native_State(IntPtr handle, int error_);",
     )
     assertContains(
       generated,
-      "private static extern IntPtr Native_StateValue(IntPtr handle, int error_);",
-    )
-    assertContains(
-      generated,
-      "private static extern void Native_StateSetValue(IntPtr handle, int error_, int value, " +
+      "private static extern void Native_StateSetValue(IntPtr flowHandle, int value, " +
           "out IntPtr error);",
     )
     assertContains(generated, "public KotlinMutableStateFlow<int> State(int error_)")
-    assertContains(generated, "Native_StateCollect(_handle, GetOrCreateScope(), error_, onNext")
-    assertContains(generated, "() => Native_StateValue(_handle, error_),")
-    assertContains(generated, "Native_StateSetValue(_handle, error_, v, out IntPtr error);")
+    assertContains(generated, "IntPtr flow = Native_State(_handle, error_);")
+    assertContains(generated, "() => NugetStateFlowNative.Value(flow),")
+    assertContains(generated, "Native_StateSetValue(flow, v, out IntPtr error);")
   }
 
   @Test

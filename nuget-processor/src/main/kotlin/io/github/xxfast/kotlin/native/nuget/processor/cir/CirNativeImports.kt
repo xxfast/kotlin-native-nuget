@@ -7,6 +7,7 @@ internal fun CirClass.ordinaryNativeImports(): List<CirDllImport> = buildList {
   }
 
   properties
+    .filter { property -> property.hasNativeImport }
     .filterNot { property -> property.usesLegacyNativeImport() }
     .forEach { property -> addAll(propertyNativeImports(property)) }
 
@@ -16,6 +17,40 @@ internal fun CirClass.ordinaryNativeImports(): List<CirDllImport> = buildList {
 
   if (isDataClass) addAll(dataClassNativeImports())
   disposeNativeImport()?.let { nativeImport -> add(nativeImport) }
+}
+
+/**
+ * ADR-078 amendment (2026-09-11): the arm's ordinary imports, the mirror of
+ * [CirClass.ordinaryNativeImports]. Sealed arms render their property, method, suspend and flow
+ * externs from real [CirDllImport] nodes (ADR-111/116/118/124), so the contract check reads them
+ * structurally instead of scraping them back out of the rendered `Interop.cs`. What stays on the
+ * `SEALED_CLASS` legacy route is what still has no node: the discriminator, dispose and the
+ * data-class methods.
+ */
+internal fun CirSealedSubclass.ordinaryNativeImports(libraryName: String): List<CirDllImport> =
+  buildList {
+    properties
+      .filterNot { property -> property.usesLegacyNativeImport() }
+      .forEach { property -> addAll(propertyNativeImports(libraryName, nativePrefix, property)) }
+
+    // No `isAbstract`/`isAsync`/`isFlow` filter: an arm's `methods` holds only plain members by
+    // construction, and `methodNativeImport` `require`s exactly that.
+    methods.forEach { method -> add(methodNativeImport(libraryName, nativePrefix, method)) }
+
+    addAll((asyncMembers + flowMembers).filterIsInstance<CirDllImport>())
+  }
+
+/**
+ * ADR-078 amendment (2026-09-11): the sealed **base**'s own imports, the same read as
+ * [CirSealedSubclass.ordinaryNativeImports] one level up. The base's members are plan-derived
+ * nodes too since ADR-111/ADR-116's base carrier, so the contract check reads them structurally.
+ */
+internal fun CirSealedClass.ordinaryNativeImports(): List<CirDllImport> = buildList {
+  properties
+    .filterNot { property -> property.usesLegacyNativeImport() }
+    .forEach { property -> addAll(propertyNativeImports(libraryName, nativePrefix, property)) }
+
+  methods.forEach { method -> add(methodNativeImport(libraryName, nativePrefix, method)) }
 }
 
 internal fun CirClass.constructorNativeImport(ctor: CirConstructor): CirDllImport = CirDllImport(

@@ -356,10 +356,11 @@ The reason and hint differ by kind. The base-class hint does **not** reuse the i
 "nothing is lost, `include(...)` does not help here": a dropped base carries real callable members,
 and whether `include(...)` helps depends on whether the base is same-module or a dependency (the
 ADR-066 closure admits a same-round source declaration directly but never walks `superTypes`, so a
-*dependency* base stays unreachable even after its package is included). The shipped hint hedges
+*dependency* base stays unreachable even after its package is included). The hint shipped in this amendment hedges
 accordingly rather than promising or denying the fix outright, naming the package but not asserting
 it will work: "include(\"dep.outside\") admits a base declared in this module, but not one from a
-dependency".
+dependency". **Superseded by the 2026-09-11 amendment below**, which picks the clause instead; the
+line quoted next is the pre-2026-09-11 text.
 
 Rendered line, **Verified** from the fixture's own `NugetDiagnostics.json` entry for
 `Issue42Derived`:
@@ -425,15 +426,19 @@ asserts `export_api_greet` / `export_api_get_label` are generated from a
 - **Deferred, named** (none widened into this change, all pre-existing or newly exposed by it, not
   fixed here; tracked on `ROADMAP.md`): a transitive `X : UnexportedMid : ExportedBase` flattens
   `ExportedBase`'s members onto `X` and loses `X is ExportedBase` in C#, since `declaredSuperClass()`
-  returns only the first `CLASS` supertype; an overriding member whose defaults live on the dropped
+  returns only the first `CLASS` supertype (**fixed by the 2026-09-11 chain amendment below**); an
+  overriding member whose defaults live on the dropped
   base loses its short C# omitting overloads (`ForwardCallablePlanner.kt`'s synthesis gate keys on
-  the Kotlin `override` modifier, independent of the forward `isOverride` bit); a generic exported
+  the Kotlin `override` modifier, independent of the forward `isOverride` bit), **fixed by
+  [ADR-096](096-function-default-parameters.md)'s 2026-09-11 amendment, which re-keys that gate on
+  this ADR's `overridesBaseClassMember` predicate**; a generic exported
   base renders by simple name (`CirClassRenderer.kt:194`); `X`'s own interfaces still disappear
   whenever an *exported* base exists (`CirClassTranslator.kt`), unrelated to this fix; an abstract
-  `X` with a structurally-skipped concrete inherited member still renders it `public abstract`
-  (`CirClassTranslator.kt`), which a further concrete subclass would fail to override (CS0534); the
-  base-class hint hedges between the same-module and dependency cases rather than picking one,
-  since nothing today distinguishes them cheaply at the hint site.
+  `X` with an unplanned concrete inherited member used to render it `public abstract` (CS0534 on a
+  further concrete subclass), **fixed by the 2026-09-11 abstract-method-walk amendment below**; the
+  base-class hint hedges between the same-module and dependency cases rather than picking one
+  (the "nothing today distinguishes them cheaply" reasoning behind this is wrong; corrected in the
+  2026-09-11 amendment below, which picks the clause).
 - Not changed: the ADR-066 closure, `isForwardMemberOf`/`isForwardPlannableMemberOf`, this ADR's
   original interface gate, the ABI.
 
@@ -469,6 +474,245 @@ class that itself has an exported base.
 translator (`ForwardCallablePlanner.kt`'s `entryFor` computes `isVirtual` the old way). **Verified**
 against generated output: `open class Kennel { open fun describe() }` with `class Crate : Kennel()`
 renders `public string Describe()` on `Kennel` and `public override string Describe()` on `Crate`.
-`Bed` therefore carries no overridden `open fun`; its `describe()` is final on purpose, and reads
-both open properties so Kotlin's own dispatch through `Hammock` stays observable. Tracked on
-`ROADMAP.md`.
+Closed by the 2026-09-11 method amendment below.
+
+## Amendment (2026-09-11): the method half, `open fun` renders `virtual`
+
+The split-out clause above is closed. `ForwardCallablePlanner.kt`'s `classEntries.entryFor` computed
+`isVirtual = omitted == 0 && superClass == null && OVERRIDE && !FINAL`: `Modifier.OPEN` was never
+consulted, so a declared `open fun` on an ordinary exported base reached `virtual` on no path and a
+Kotlin subclass's `override fun` rendered `public override` against a non-virtual member (CS0506 at
+the consumer's compile).
+
+It now reads `omitted == 0 && !isOverride && method.modifiers.isOpenForOverride()`, the same shared
+predicate the property site already uses. One expression, one file; the renderer and the CIR
+translator are unchanged, since `CirMethod.isVirtual` was already fed from `plan.publicSignature`.
+Truth table against the old behaviour: `superClass == null && OVERRIDE && !FINAL` is unchanged
+(`Animal.vibe`, `Issue42Derived`), `superClass != null && OVERRIDE` still renders `override` only,
+and the new rows are `OPEN` without `OVERRIDE`, on a base with or without an exported base of its
+own. ADR-096's synthesized omitting overloads keep `omitted > 0` and stay non-virtual.
+
+Fixture: `Bed` gains `open fun fluff()`, overridden by `Hammock`. Its `describe()` stays final on
+purpose: it is the non-open control, and it reads both open properties so Kotlin's own dispatch
+through `Hammock` stays observable through either C# static type. Pinned by
+`IntegrationTests/OpenMemberOverrideTests.cs` (`Bed_OpenFun_RendersVirtual`,
+`Bed_FinalFun_StaysNonVirtual`, `Hammock_Fluff_OverridesRatherThanHides`, and the dispatch fact
+through both static types) and by the two `Tier1OpenMemberOverrideTest` rows, which add
+`open fun climb()` on a `Bunk` that itself has an exported base.
+
+## Amendment (2026-09-11): the base-class hint picks its clause
+
+The 2026-09-05 amendment shipped one hint string for both cases and its Consequences deferred the
+split "since nothing today distinguishes them cheaply at the hint site". That reasoning is wrong.
+`keepsSupertype` already receives the base as a `KSClassDeclaration`, and `containingFile == null`
+is exactly the cross-module signal the rest of the forward pipeline keys on: the ADR-066 closure
+uses it to decide a type is dependency-declared (`ForwardReachabilityClosure.kt:206-208`), and the
+classifier repeats the same test. **Verified**, not inferred: the check is in the shipped closure,
+and the two cells of `Tier1UnexportedBaseClassSkipTest` now assert opposite clauses off it.
+
+So the `BASE_CLASS` arm branches on `supertype.containingFile == null` and states the one fix that
+works for *that* base. The shared "what is lost" preamble is unchanged. The dependency clause also
+names the only workaround that exists today, since Alternative 3 (walk `superTypes` in the closure)
+stays deferred: have an exported member name the base as a return, parameter or property type.
+
+Rendered dependency line, **Verified** from the fixture's own `NugetDiagnostics.json` entry for
+`Issue42Derived`:
+
+```
+[nuget:SKIPPED_UNEXPORTED_SUPERTYPE] Skipping Issue42Derived : UnexportedBase: base class
+'dev.other.core.UnexportedBase' is not in the export set, so it has no generated C# class;
+Issue42Derived is generated with no base at all and the base's public members are bound on
+Issue42Derived directly. nothing callable is lost (UnexportedBase's public members export as
+members of Issue42Derived), but C# sees no UnexportedBase type and no inheritance relation, so
+`is`/`as` against it and any other subclass's shared base are gone; UnexportedBase is declared in a
+dependency, and include("dev.other.core") alone will not admit it: the export reachability closure
+never walks supertypes, so it enters the export set only when an exported member also names it as a
+return, parameter or property type and its package is included
+    at .../issue42/Issue42Derived.kt:16
+```
+
+The same-module clause, from the Tier 1 cell (`class Api : LocalBase` with `LocalBase` in
+`tier1outside.base`, outside `rootPackage`), replaces everything after the shared preamble:
+
+```
+LocalBase is declared in this module, so adding include("tier1outside.base") alongside your
+existing rootPackage/include(...) admits it and renders it as the C# base
+```
+
+"alongside" is load-bearing and asserted: an explicit `include(...)` *replaces* the `rootPackage`
+default rather than adding to it (`NugetProcessor.kt`, the same trap `SKIPPED_ALL_DECLARATIONS`
+warns about), so an author who pastes the package on its own would trade the base for their own
+module's exports.
+
+Scope: diagnostic text only. No ABI, no `Interop.cs`, no closure change. The interface hint keeps
+its flat "include(\"...\") does not help here" wording: a same-module interface outside the scope
+*is* admitted by `include(...)`, so that string is imprecise for the same reason, but an interface
+carries no members and the fix is not worth advertising. Tracked on `ROADMAP.md`.
+
+## Amendment (2026-09-11): a generic exported base spells its type arguments
+
+The 2026-09-05 Consequences deferred one line as cosmetic: "a generic exported base renders by
+simple name (`CirClassRenderer.kt:194`)". It is not cosmetic, and the real site is the translator,
+not the renderer. `class NamedParcel : Parcel<String>(name)` rendered `public class NamedParcel :
+Parcel`, which never compiles: CS0305 in the ordinary case, and, **Verified** against the sample
+package, `CS0118: 'Parcel' is a namespace but is used like a type` when the file's own namespace
+carries the base's name, because the arity-free name binds to the namespace first.
+
+Three things change, all forward, no ABI:
+
+- `CirClassTranslator.translateClass` spells the base through `forwardBaseSpelling`. A generic base
+  is matched against the class's own `superTypes` entry and each type argument is classified by the
+  shared `ForwardBridgeTypeClassifier` and spelled with `forwardPublicCsharpType()`, the same pair
+  every other public C# type on the forward side goes through, so `Parcel<String>` in Kotlin and
+  `Parcel<string>` in C# cannot drift. A non-generic base keeps `nestedCsName()` exactly as it was.
+- An argument with no public C# spelling (a nested generic, a lambda, a `Flow`), or a star
+  projection, fails the build with a message naming the class, the base and the argument. That
+  shape does not compile today either, so nothing regresses, and a silent skip would have to drop
+  the base class itself or the inherited members vanish with no diagnostic at all.
+- `CirGenericClass.isOpen`, read from Kotlin's `open` modifier, renders `public virtual void
+  Dispose()` on the generic wrapper. A derived class always renders `public override void
+  Dispose()` (the 2026-09-10 amendment above), so without this the pair is CS0506. A final generic
+  class is byte-identical to what shipped.
+
+### The membership predicate had to change too, and the memo said otherwise
+
+Planning said an inherited member is never re-bound on the subclass, so `NamedParcel` would simply
+inherit `Value` from `Parcel<string>`. The red test disagreed. **Verified** by running it: when the
+base is generic, KSP's `getAllProperties()` / `getAllFunctions()` hand back the base's member
+*substituted onto the subclass*, parented to the subclass and carrying `Modifier.OVERRIDE`. The raw
+`parentDeclaration == cls` test in `isForwardMemberOf` / `isForwardPlannableMemberOf` therefore
+called `Parcel<T>.value` a member of `NamedParcel`, minted `export_namedparcel_get_value`, and
+rendered `public override string Value` against a base property that is not `virtual` (CS0506
+again, on the member this time).
+
+Both predicates now ask `isDeclaredBy(cls)`, which keeps the parent test and additionally requires
+the member to appear in `cls.getDeclaredProperties()` / `getDeclaredFunctions()`. A non-generic base
+performs no substitution, so nothing about the 2026-09-05 behaviour moves
+(`Tier1InheritedMemberDiagnosticsTest` pins it), and a real `override val` in the subclass is a
+declared member and keeps the 2026-09-10 virtual/override pair.
+
+Deferred, named: a subclass that declares one overload of a name it also inherits *substituted*
+from a generic base keeps both, since the declared-member match is by simple name. No fixture
+reaches it, and a generic *subclass* (`class Derived<T> : Parcel<T>()`) still takes the generic
+route, which ignores supertypes and renders base-less. Both stay on `ROADMAP.md` with the rest of
+the generic-class work.
+
+Evidence: `Tier1GenericBaseClassTest.kt` (base list, `virtual`/`override` `Dispose`, no re-bound
+`stringcrate_get_value`) and `IntegrationTests/GenericBaseClassTests.cs` (`NamedParcel("Oreo").Value`
+reaches the base's own export, `IsAssignableFrom<Parcel<string>>`, dispose through a base-typed
+reference).
+
+## Amendment (2026-09-11): a kept base keeps the interfaces beside it
+
+The 2026-09-05 shipped shape emptied a class's interface list whenever a base class survived
+(`interfaces = if (superClass != null) emptyList() else ...`), and the membership predicate matched
+it: with a base, every inherited member was dropped. `class Ledge : Shelf(), Groomable` therefore
+rendered `public class Ledge : Shelf`, and a C# consumer could not hold a `Ledge` as an
+`IGroomable` at all (CS0266 at the assignment).
+
+Dropping the short-circuit alone does not compile, which is why this is three coupled edits rather
+than one. **Verified** by the red pair (`Tier1KeptBaseInterfaceListTest`, then
+`IntegrationTests/InterfaceBesideBaseTests.cs`): fixing the base list first unmasks CS0115 on
+`public override string Groom()`, because `override` was read off the Kotlin modifier and `Shelf`
+declares no `Groom`.
+
+- **Base list** (`CirClassTranslator.translateClass`, `CirClassRenderer.renderClass`): the
+  interface walk now runs with a kept base too, and the renderer spells `: Base, IFoo`. An
+  interface the base already implements is dropped before the export-set gate: the base carries it,
+  re-listing it says nothing and re-binding its members would hide the base's (CS0108), so it owes
+  no diagnostic either. The disposables stay off a derived class's list, unchanged: the base
+  declares `_handle`, implements `INugetHandle` and carries `IDisposable` (ADR-094).
+- **Membership** (`ForwardClassMembership.kt`): `isForwardMemberOf` /
+  `isForwardPlannableMemberOf` gain a third arm, `isFromInterfaceBeside(superClass)`, admitting a
+  member inherited from an interface the base does not implement. Without it, `Groomable.brushes()`
+  (defaulted, never overridden) has no C# carrier and the interface the class just declared is
+  CS0535. Base-*class* members are still not re-bound, and the arm is keyed on the same
+  base-supertype closure the translator filters the list with, so the two halves cannot disagree
+  about who binds a member.
+- **`override` means a base *class* member** (`ForwardCallablePlanner.classEntries`,
+  `CirClassTranslator`'s property and abstract-method walks): all three now ask
+  `overridesBaseClassMember(superClass)`, and `isVirtual = !isOverride && isOpenForOverride()`
+  follows. `Ledge.groom()` is a fresh virtual slot, exactly as it would be on a base-less
+  implementer. The lookup is `ForwardPropertyPlanner`'s `readOnlyOverrideeOwner` walk lifted to
+  `ForwardClassMembership.kt` and shared: trust `findOverridee()` only when it lands on a
+  `ClassKind.CLASS`, else match the base class's own members by simple name. The property planner
+  now calls the lifted helper, so the `val`-widened-to-`var` setter rule (CS0546) and the rendered
+  modifier are keyed on one answer instead of two.
+
+The `findOverridee()` half stays **Inferred** for functions (same KSP API as the property side,
+which was probed). Nothing silently breaks if it answers the interface for a member overriding
+both: the by-name fallback on the base class still says `override`.
+
+Deferred, named: an interface the base already implements is skipped rather than re-listed (C#
+accepts either), and `IAsyncDisposable` on a derived class with its own suspend members is a
+separate hole, untouched here.
+
+Evidence: `Tier1KeptBaseInterfaceListTest.kt` (`: Shelf, IGroomable`, bound `Brushes`, `public
+virtual string Groom()`, no re-bound `ledge_height`) and
+`IntegrationTests/InterfaceBesideBaseTests.cs` (`using IGroomable g = new Ledge()` with no cast,
+`((Shelf)g).Height()`, `Groom().GetBaseDefinition().DeclaringType == typeof(Ledge)`).
+
+## Amendment (2026-09-11): the base walk follows the chain to the nearest exported base
+
+The 2026-09-05 amendment took exactly one hop. `class Dinghy : Skiff()` with `Skiff : Vessel` and
+only `Skiff` outside the export set therefore rendered `public class Dinghy : IDisposable,
+INugetHandle`: one unexported link cost the consumer an exported base it could have had, plus every
+`is`/`as` against `Vessel` and every `Vessel`-typed API that would have accepted a `Dinghy`. The C#
+compile proof is `CS0029: Cannot implicitly convert type 'Dinghy' to 'Vessel'`.
+
+`forwardSuperClass` now walks `declaredBaseChain()`, a `generateSequence` over `declaredSuperClass()`,
+and keeps the first link in the export set. When the direct base is exported the first element
+answers, so every shipping class is byte-identical: the walk only ever looks past a base that has no
+generated C# class anyway.
+
+Walking up alone silently loses members, which is the second half of this amendment. With
+`superClass = Vessel` non-null, `Skiff`'s own `oars`/`row` are parented to `Skiff`, so the old
+membership predicate bound them on neither `Dinghy` nor `Vessel` and they would have vanished from
+C# with no diagnostic. `isForwardMemberOf` / `isForwardPlannableMemberOf` gain an
+`isFromDroppedBase(cls, superClass)` arm: a member declared on any link of `droppedBaseChain()` (the
+chain prefix before the kept base, compared by qualified name) binds on the class itself, the same
+re-homing rule the base-less case already applies to the whole chain. Members of the *kept* base are
+still not re-bound; re-homing them would hide the base member (CS0108).
+
+The diagnostic fires once per dropped link rather than once per class, from `translateClass` as
+before, and its middle clause names the kept base:
+
+```
+[nuget:SKIPPED_UNEXPORTED_SUPERTYPE] Skipping Dinghy : Skiff: base class
+'io.github.xxfast.kotlin.native.nuget.hidden.Skiff' is not in the export set, so it has no generated
+C# class; Dinghy is generated extending Vessel, the nearest exported base, and Skiff's public
+members are bound on Dinghy directly. <hint unchanged>
+```
+
+The single-drop text is unchanged to the byte ("generated with no base at all and the base's public
+members are bound on ... directly"), which is what the quoted `Issue42Derived` line above and in
+`docs/topics/forward-overview.md` still show. The hint is unchanged in both cases: what is lost is
+the dropped link's own type and its `is`/`as` relation, whether or not a base above it survives.
+
+Deferred, named: if the nearest exported base is a *sealed* class, `X : SealedBase` would render
+against an abstract base whose `FromHandle` switch does not know `X` (reachable only through
+`exclude()`, untouched here); and a re-homed member that overrides an interface declared on the
+dropped link renders from the same `isOverride` rule as before, the pre-existing hole the
+2026-09-11 interface amendment names.
+
+Evidence: `Tier1UnexportedBaseClassSkipTest`'s chain cell (`public class Api : LocalExportedBase`,
+`export_api_row` bound, no `export_api_anchor`, exactly one diagnostic naming `Api : LocalMid`) and
+`IntegrationTests/TransitiveUnexportedBaseTests.cs` (`typeof(Dinghy).BaseType == typeof(Vessel)`,
+`Vessel v = new Dinghy()`, `d.Row()`, `d.Oars`, no `Skiff` type in the assembly).
+
+**2026-09-11 amendment: the abstract method walk decides `abstract` by the body, not by the declaring
+class.** The CS0534 clause above closes. `CirClassTranslator.kt`'s abstract walk asked
+`parentDeclaration == cls || Modifier.OVERRIDE` and got both directions wrong. An inherited member
+*with* a body that no plan covers (a generic interface default, a refused parameter type, a base
+dropped by this ADR's skip) looked unimplemented and rendered `public abstract`, so the generated file
+itself could be CS0246 and any further C# subclass CS0534. A class's own `abstract fun` looked
+implemented and was dropped from C# entirely, so a subclass's `public override` was CS0115. The walk
+now keys on KSP's `KSFunctionDeclaration.isAbstract`, the same body-based predicate
+`isForwardPlannableMemberOf` and the ADR-075 property route already use: bodiless renders `abstract`,
+a body that reached no plan is dropped like it is on a concrete class. Nothing gains or loses an
+export; an abstract C# method has no `DllImport` either way.
+
+Evidence: `Tier1AbstractMethodTest` (`public abstract string Honk();` on `Vehicle` with `Truck`'s
+`override` compiling; no line carrying both `abstract` and `Tally` for `Vault : Register`, with
+`: IRegister` still in the base list) and the `test/garage/` fixtures behind
+`IntegrationTests/AbstractMethodTests.cs`.

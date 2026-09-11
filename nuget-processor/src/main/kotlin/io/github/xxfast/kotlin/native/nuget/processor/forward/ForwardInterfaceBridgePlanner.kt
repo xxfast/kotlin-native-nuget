@@ -82,7 +82,10 @@ internal object ForwardInterfaceBridgePlanner {
    * plan means no factory export and no C# bridge state: `NugetMarshal.HandleOf` keeps throwing
    * for that interface rather than emitting a half-supported ABI.
    */
-  fun plan(iface: KSClassDeclaration): ForwardBridgeInterfacePlan? {
+  fun plan(
+    iface: KSClassDeclaration,
+    classifier: ForwardBridgeTypeClassifier,
+  ): ForwardBridgeInterfacePlan? {
     if (iface.classKind != ClassKind.INTERFACE) return null
     if (iface.typeParameters.isNotEmpty()) return null
     val qualifiedName: String = iface.qualifiedName?.asString() ?: return null
@@ -91,11 +94,11 @@ internal object ForwardInterfaceBridgePlanner {
     val slots: MutableList<ForwardBridgeSlot> = mutableListOf()
     iface.getAllProperties()
       .filter { property -> property.getVisibility() == Visibility.PUBLIC }
-      .forEach { property -> slots.add(slotOf(property) ?: return null) }
+      .forEach { property -> slots.add(slotOf(property, classifier) ?: return null) }
     iface.getAllFunctions()
       .filter { function -> function.getVisibility() == Visibility.PUBLIC }
       .filter { function -> function.simpleName.asString() !in IGNORED_FUNCTIONS }
-      .forEach { function -> slots.add(slotOf(function) ?: return null) }
+      .forEach { function -> slots.add(slotOf(function, classifier) ?: return null) }
     if (slots.isEmpty()) return null
 
     return ForwardBridgeInterfacePlan(
@@ -108,10 +111,14 @@ internal object ForwardInterfaceBridgePlanner {
     )
   }
 
-  private fun slotOf(property: KSPropertyDeclaration): ForwardBridgeSlot? {
+  private fun slotOf(
+    property: KSPropertyDeclaration,
+    classifier: ForwardBridgeTypeClassifier,
+  ): ForwardBridgeSlot? {
     // `var` properties would need a second (setter) slot each: deferred by the ADR's scope.
     if (property.isMutable) return null
-    val result: ForwardBridgeType = bridgeType(property.type.resolve().expandAliases()) ?: return null
+    val result: ForwardBridgeType =
+      bridgeType(property.type.resolve().expandAliases(), classifier) ?: return null
     if (result.wire == ForwardBridgeWire.UNIT) return null
     val name: String = property.simpleName.asString()
     return ForwardBridgeSlot(
@@ -123,14 +130,18 @@ internal object ForwardInterfaceBridgePlanner {
     )
   }
 
-  private fun slotOf(function: KSFunctionDeclaration): ForwardBridgeSlot? {
+  private fun slotOf(
+    function: KSFunctionDeclaration,
+    classifier: ForwardBridgeTypeClassifier,
+  ): ForwardBridgeSlot? {
     if (function.modifiers.any { modifier -> modifier.name == "SUSPEND" }) return null
     if (function.typeParameters.isNotEmpty()) return null
     if (function.parameters.size > 2) return null
     val returnType: KSType = function.returnType?.resolve()?.expandAliases() ?: return null
-    val result: ForwardBridgeType = bridgeType(returnType) ?: return null
+    val result: ForwardBridgeType = bridgeType(returnType, classifier) ?: return null
     val parameters: List<ForwardBridgeParameter> = function.parameters.mapIndexed { index, parameter ->
-      val type: ForwardBridgeType = bridgeType(parameter.type.resolve().expandAliases()) ?: return null
+      val type: ForwardBridgeType =
+        bridgeType(parameter.type.resolve().expandAliases(), classifier) ?: return null
       if (type.wire == ForwardBridgeWire.UNIT) return null
       ForwardBridgeParameter(parameter.name?.asString() ?: "arg$index", type)
     }
@@ -144,15 +155,25 @@ internal object ForwardInterfaceBridgePlanner {
     )
   }
 
-  private fun bridgeType(type: KSType): ForwardBridgeType? {
+  private fun bridgeType(
+    type: KSType,
+    classifier: ForwardBridgeTypeClassifier,
+  ): ForwardBridgeType? {
     val qualifiedName: String = type.declaration.qualifiedName?.asString() ?: return null
     val nullable: Boolean = type.isMarkedNullable
     val isEnum: Boolean = (type.declaration as? KSClassDeclaration)?.classKind == ClassKind.ENUM_CLASS
     if (isEnum) {
       // A nullable enum has no sentinel on an `int` wire; only the non-null shape is in scope.
       if (nullable) return null
-      val simpleName: String = type.declaration.simpleName.asString()
-      return ForwardBridgeType(ForwardBridgeWire.ENUM, qualifiedName, simpleName)
+      // The enum's C# spelling is the classifier's to make, never this planner's: a bare simple
+      // name names nothing for a nested enum (which is never declared as a C# enum at all) and
+      // resolves only by luck for one outside the file's `using` list. An undeclared enum plans no
+      // factory, exactly the ADR-084 posture for every other out-of-scope member.
+      val classified: BridgeType = classifier.classify(type)
+      if (classified !is BridgeType.Enum) return null
+      // Kotlin reads the qualified name: valid at every `override` position, and the generated
+      // file imports nothing for it.
+      return ForwardBridgeType(ForwardBridgeWire.ENUM, qualifiedName, classified.csharpType)
     }
     return when (qualifiedName) {
       "kotlin.Unit" -> if (nullable) null else ForwardBridgeType(ForwardBridgeWire.UNIT, "Unit", "void")

@@ -185,11 +185,44 @@ as the expected set, so suppressing the export while keeping the plan would repo
 missing one. Pinned by `Tier1AbstractPropertyTest`, `CirOrdinaryRendererTest`, the `orchestra` fixture
 (`Instrument` / `Violin`) and `IntegrationTests/AbstractPropertyTests.cs`.
 
-Still not fixed, and separate: the abstract **method** walk, which drops a class-declared `abstract fun`
-entirely and renders an inherited concrete member abstract when its base was dropped. It changes which
-members get an export, so it keeps its own backlog item. So does an abstract class inheriting an interface
+Separate, and now fixed by the second 2026-09-11 amendment below: the abstract **method** walk, which
+dropped a class-declared `abstract fun` entirely and rendered an inherited concrete member abstract when
+no plan covered it. So does an abstract class inheriting an interface
 `val` it does not implement: that property is never planned, so there is no `CirProperty` to flag, and it
-vanishes from C# while `: IPet` stays in the base list (`CS0535`).
+vanishes from C# while `: IPet` stays in the base list (`CS0535`). That last one closed on 2026-09-11, below.
+
+**2026-09-11 amendment: an interface property an abstract class inherits without implementing now renders
+abstract on that class, off the declaration walk and with no import.** The paragraph above closes: the shape
+really did fail `CS0535` on the generated class itself (before any consumer subclass), plus `CS0115` on a
+subclass `override` with no base member to bind to.
+
+The inherited case takes the *translator walk*, not the plan, exactly as the abstract **method** mirror does.
+`isForwardPlannableMemberOf` keeps an unimplemented inherited member out of the planner (a bridge getter would
+have nothing to dispatch to), so `CirClassTranslator`'s property walk now has an arm beside the method walk's:
+a property whose `parentDeclaration` is not this class and whose `isAbstract()` is true becomes
+`CirProperty(isAbstract = true, hasNativeImport = false)`.
+
+Two details are load-bearing:
+
+- The C# type is read off the **ADR-113 interface declaration catalog** (`propertyFor("<iface>.<name>")`,
+  spelled through `ForwardCirPropertyProjection.publicType`), the same plan `translateInterface` spells
+  `IFoo`'s member from. Hand-spelling it here, as the method mirror still does for its return and parameter
+  types, is the `CS0738` drift ADR-113 closed. No plan for the interface member means `IFoo` does not declare
+  it either, so the class declares nothing and the arm answers null.
+- The new `CirProperty.hasNativeImport` gates the getter/setter `DllImport` in both `CirClassRenderer` and
+  `CirNativeImports`. There is no export behind a declaration-only property, and the ADR-055 contract check
+  compares the C# import set against the planned exports: an ungated import is reported as unplanned. The
+  gate is the fix there, never an allow-list entry.
+
+This is the opposite trade from the class-own abstract case above, which keeps its plan, its exports and its
+imports because it *has* a plan. Both render the same bodiless `public abstract T Name { get; }` /
+`{ get; set; }`; only the import set differs. The setter follows the interface plan's setter, so an interface
+`var` gives the base `{ get; set; }` and the implementing subclass's own setter is not `CS0546`.
+
+Out of scope, unchanged: an **unexported** interface (ADR-101 drops `: IFoo` from the base list, and there is
+no declaration plan to spell the member from, so a subclass `override` still hits `CS0115`), and the same
+shape on an `abstract` sealed arm. Pinned by `Tier1AbstractInterfacePropertyTest`, the `aviary` fixture
+(`Feathered` / `Bird` / `Finch`) and `IntegrationTests/AbstractInterfacePropertyTests.cs`.
 
 ### Question D — is a nullable collection setter (`var notes: List<String>?`) in v1?
 
@@ -427,3 +460,23 @@ Everything labelled **verified** above was read in repo source this session. The
    round-trips over a by-value receiver.
 3. That `setterNativeType` needs no change for `Collection` (its `else` branch already routes through
    `wireType()`, which maps `Collection` to `POINTER`). Read, not compiled.
+
+**2026-09-11 amendment: the abstract method walk now keys on the same body-based predicate as the
+property route.** `CirClassTranslator.kt`'s abstract method walk asked `parentDeclaration == cls ||
+Modifier.OVERRIDE` and treated the answer as "has an implementation". Both directions were wrong. A
+class's own `abstract fun` counted as implemented, so it reached neither the plan (the planner skips
+`ABSTRACT`) nor the declaration walk, and vanished from C#; a subclass's `public override` was then
+CS0115. An *inherited* member that does have a body but reached no plan (a generic interface default,
+a refused parameter type, a base this ADR's siblings dropped) counted as unimplemented and rendered
+`public abstract`, which a further C# subclass could not override (CS0534), and whose naive type
+spelling could be CS0246 in the generated file itself.
+
+The walk is now `if (!method.isAbstract) return@mapNotNull null`, KSP's `KSFunctionDeclaration.isAbstract`,
+which is exactly what `prop.isAbstract()` gives the property route above and what
+`isForwardPlannableMemberOf` already used. Bodiless renders `abstract`; a body that reached no plan is
+dropped with the planner's existing warning, the same as on a concrete class. No export changes hands:
+an abstract C# method has no `DllImport`.
+
+Not fixed, noted: the abstract path's type mapping is still by simple name, so a class-declared
+`abstract fun` using a cross-namespace or collection type renders that type unqualified. Evidence:
+`Tier1AbstractMethodTest` and the `test/garage/` fixtures (`Vehicle`/`Truck`, `Register`/`Vault`/`StrongRoom`).

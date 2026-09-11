@@ -426,6 +426,12 @@ string.
 filter has something to filter: no arm may render `RestAsync`, and the Kotlin side may emit no
 `job_running_rest_async`.
 
+> **Amended by [ADR-116](116-sealed-subclass-methods-on-the-callable-plan.md)'s 2026-09-11
+> amendment.** `rest` still binds nowhere (the sealed base carries no suspend route, only the
+> ordinary one), but it is no longer silent: `sealedBaseEntries` names it
+> `SEALED_BASE_UNROUTED`, which is the diagnostic this ADR observed was missing. Both assertions
+> above still hold.
+
 Not added: a same-name plain/StateFlow suspend pair (a consequence of one counter, stated above,
 not a seam); a suspend overload pair on a `data object` arm (same counter path as `Running`'s).
 The arm overload pair **is** a needed cell, not speculation: `sealedSubclassEntries` is its own
@@ -656,3 +662,32 @@ Sites that changed beyond the ADR's file list: none. `warnRefusedLegacyRoutePara
 became two functions (`renderScopeHandleField`, `renderGetOrCreateScope`) rather than one, because
 the ordinary class renders the field and the method at different points in its body.
 
+
+## Amendment (2026-09-11, `ir/suspend-nested-arm-return`): consequence item 4 closed
+
+Item 4 above is fixed. Both suspend routes now spell an object return through the ADR-105 speller,
+`KSClassDeclaration.nestedCsName()` (`CirTypeMapping.kt`), instead of the declaration's simple name:
+
+- `CirClassTranslator.kt`'s `asyncMembers` (`suspendMembers`), the class and sealed-arm route
+- `CirFunctionTranslator.kt`'s `translateSuspendFunction`, the top-level route
+
+The item named only the class route; the top-level one carried the identical defect off
+`kotlinReturnType`, so a top-level `suspend fun anyRunningLater(): Job.Running` broke the same way.
+Both changed together.
+
+So a `suspend fun` returning a nested arm binds as `Task<Job.Running>` and completes with
+`t.SetResult(new Job.Running(resultPtr))`. `nestedCsName()` walks class parents only, so a
+top-level return type stays bare (`new Cat(resultPtr)`, pinned by
+`Tier1SuspendNullableReturnTest`). Pinned by `Tier1SuspendNestedArmReturnTest` (both routes, plus a
+`data object` arm) and by `IntegrationTests/SealedSubclassMethodTests.cs`.
+
+Still open on this route, deliberately:
+
+- **No `global::` qualification.** The return is spelled relatively, so a cross-namespace object
+  return on the suspend route remains a pre-existing gap. The plan routes' `qualifiedElementCsType`
+  form was not adopted here: it would rewrite every existing suspend return's rendered text.
+- **A sealed *base* suspend return is still broken, split out.** `suspend fun next(): Job` is
+  `Plain` to `legacyReturnShape` (`ForwardLegacyRouteCollections.kt`), so it renders
+  `new Job(resultPtr)`: CS0144, no accessible constructor on an abstract class. The fix is routing
+  it through ADR-105's `sealedAsHandle()` on the legacy suspend route, a separate mapping decision,
+  not this amendment's.

@@ -123,7 +123,10 @@ internal fun StringBuilder.renderGenericClass(cls: CirGenericClass) {
   }
 
   if (cls.disposable) {
-    appendLine("        public void Dispose()")
+    // ADR-101 amendment (2026-09-11): `virtual` only when the Kotlin class is `open`, so a final
+    // generic class renders byte-identically to what shipped.
+    val virtual: String = if (cls.isOpen) "virtual " else ""
+    appendLine("        public ${virtual}void Dispose()")
     appendLine("        {")
     appendLine("            if (_handle != IntPtr.Zero)")
     appendLine("            {")
@@ -195,8 +198,11 @@ internal fun StringBuilder.renderClass(cls: CirClass) {
   // whenever the class owns a scope, so the base list has to advertise what the body implements or
   // the class cannot be held as an `IAsyncDisposable`. Same spelling `CirSealedRenderer` gives a
   // suspending arm (ADR-118).
+  // ADR-101 amendment (2026-09-11): a derived class lists its own interfaces beside the base. The
+  // disposables stay off that list: the base declares `_handle`, implements `INugetHandle` and
+  // carries `IDisposable`, and a derived class inherits all three.
   val implements: String = if (cls.superClass != null) {
-    " : ${cls.superClass}"
+    " : " + (listOf(cls.superClass) + cls.interfaces).joinToString(", ")
   } else {
     val disposables: List<String> =
       listOf("IDisposable") + listOfNotNull("IAsyncDisposable".takeIf { cls.hasSuspendMethods })
@@ -245,7 +251,12 @@ internal fun StringBuilder.renderClass(cls: CirClass) {
   }
 
   for (prop in cls.properties) {
-    if (prop.isFlow) {
+    if (!prop.hasNativeImport) {
+      // ADR-075 amendment (2026-09-11): a declaration-only abstract property (inherited from an
+      // exported interface, never implemented here) has no export to import. Rendered, not
+      // imported: the mirror of the abstract-method arm below.
+      renderProperty(prop)
+    } else if (prop.isFlow) {
       renderFlowPropertyNativeImports(cls.libraryName, cls.nativePrefix, prop)
       renderProperty(prop)
     } else if (prop.usesLegacyNativeImport()) {
@@ -512,7 +523,10 @@ internal fun StringBuilder.renderDllImport(import: CirDllImport) {
   appendLine("        [DllImport(\"${import.libraryName}\", CallingConvention = CallingConvention.Cdecl$entryPoint)]")
   if (import.marshalBooleanReturn) appendLine("        [return: MarshalAs(UnmanagedType.I1)]")
   charReturnMarshal(import.returnType)?.let { appendLine(it) }
-  appendLine("        $visibility static extern ${import.returnType} ${import.name}($paramStr);")
+  val hides: String = if (import.isNew) "new " else ""
+  appendLine(
+    "        $visibility ${hides}static extern ${import.returnType} ${import.name}($paramStr);",
+  )
   appendLine()
 }
 
@@ -534,7 +548,13 @@ internal fun StringBuilder.renderMethod(method: CirMethod, className: String = "
 
   val visibility: String = if (method.visibility == CirVisibility.PRIVATE) "private" else "public"
   val static: String = if (method.isStatic) "static " else ""
-  val override: String = if (method.isOverride) "override " else if (method.isVirtual) "virtual " else ""
+  val override: String = when {
+    method.isOverride -> "override "
+    method.isVirtual -> "virtual "
+    // ADR-116 amendment (2026-09-11): a sealed arm hiding a base member it cannot override.
+    method.isNew -> "new "
+    else -> ""
+  }
   val abstract: String = if (method.isAbstract) "abstract " else ""
   val paramStr: String = method.parameters.mapIndexed { index, param ->
     if (method.isExtension && index == 0) "this ${param.type} ${param.name}"

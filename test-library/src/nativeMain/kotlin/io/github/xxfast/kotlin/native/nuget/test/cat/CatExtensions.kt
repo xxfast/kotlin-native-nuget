@@ -45,3 +45,7 @@ fun Cat.takeExtensionAgeInMonths(): Int? {
   age = null
   return result
 }
+
+// ADR-105 amendment (2026-09-11): a nullable handle receiver. Binds as a C# extension on `Cat?`,
+// so a null reference is a legal call site and the null crosses the ABI as `IntPtr.Zero`.
+fun Cat?.nameOrStray(): String = this?.name ?: "stray"

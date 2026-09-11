@@ -111,8 +111,12 @@ class Tier1SealedCollectionPropertyTest {
       result.kspWarnings.any {
         it.contains(ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_PROPERTY.name) &&
             it.contains("Album.filters") &&
+            // ADR-064's 2026-09-11 amendment: the element's own SEALED_POSITION reason now owns
+            // the sentence, so the record names the sealed base and the missing discriminator
+            // rather than the outer collection shape.
             it.contains(
-              "Collection (element type sealed helper tier1.sealedcollectionproperty.Filter)",
+              "its sealed type `tier1.sealedcollectionproperty.Filter` has no generated C# " +
+                  "discriminator",
             )
       },
       "expected the sealed-interface List diagnostic to name its element; " +

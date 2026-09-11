@@ -39,6 +39,10 @@ class Tier1SealedReceiverExtensionTest {
     fun Shape.covers(other: Shape): Boolean = this is Shape.Circle || other is Shape.Empty
 
     fun Ghost.haunt(): String = toString()
+
+    val Shape.outline: String get() = describe()
+
+    val Ghost.echo: String get() = haunt()
   """.trimIndent()
 
   @Test
@@ -91,6 +95,49 @@ class Tier1SealedReceiverExtensionTest {
       ),
       "expected both the receiver and the parameter to be the sealed base; generatedCSharp=" +
           "${result.generatedCSharp.lines().filter { it.contains("Covers") }}",
+    )
+  }
+
+  /** The same rewrite at an extension *property* receiver: ADR-105 amendment (2026-09-11). */
+  @Test
+  fun `a sealed receiver binds an extension property on the base`() {
+    val result = Tier1Harness.run(source)
+
+    assertTrue(
+      result.generated.contains(
+        "receiver.asStableRef<tier1.sealedreceiver.Shape>().get().outline",
+      ),
+      "expected the getter export to read the receiver back through its StableRef; " +
+          "generated=${result.generated}",
+    )
+    assertTrue(
+      result.generatedCSharp.contains(
+        "public static string GetOutline(this global::Interop.Shape receiver)",
+      ),
+      "expected a C# extension accessor on the sealed base; generatedCSharp=" +
+          "${result.generatedCSharp.lines().filter { it.contains("GetOutline") }}",
+    )
+  }
+
+  /**
+   * The control at the property route: an ineligible sealed receiver keeps its protocol type, so
+   * the property drops with the receiver diagnostic the property route already owns
+   * (`SKIPPED_UNSUPPORTED_PROPERTY`, not the callable route's `SKIPPED_SEALED_POSITION`).
+   */
+  @Test
+  fun `an ineligible sealed interface receiver still skips an extension property`() {
+    val result = Tier1Harness.run(source)
+
+    assertFalse(
+      result.generated.contains("ghost_get_echo"),
+      "expected the ineligible receiver's property to stay skipped; generated=${result.generated}",
+    )
+    assertTrue(
+      result.kspWarnings.any {
+        it.contains(ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_PROPERTY.name) &&
+            it.contains("echo")
+      },
+      "expected the unsupported-property skip to name echo; kspWarnings=${result.kspWarnings}",
     )
   }
 

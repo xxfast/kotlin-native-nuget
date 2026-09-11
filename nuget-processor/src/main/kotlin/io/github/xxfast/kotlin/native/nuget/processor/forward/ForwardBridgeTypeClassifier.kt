@@ -34,6 +34,10 @@ internal data class ForwardBridgeTypeContext(
    *  the classifier only sees "not in [exportedObjectHandles], and no containing file", which
    *  cannot tell an `exclude(...)` apart from a missing `include(...)`. */
   val refusedDependencyTypes: Map<String, ForwardAdmissionRefusal> = emptyMap(),
+  /** ADR-115 amendment: the `@RequiresOptIn` marker FQNs `publish { exportMarkers(...) }` waives.
+   *  Carried here rather than read from a process-global set so two publishers in one Gradle
+   *  daemon cannot see each other's list (the ADR-054 lesson). */
+  val exportMarkers: Set<String> = emptySet(),
 )
 
 /**
@@ -51,6 +55,11 @@ internal class ForwardBridgeTypeClassifier(
    * planners cannot disagree about whether a class has a forward base class.
    */
   internal val exportedObjectHandles: Set<String> get() = context.exportedObjectHandles
+
+  /** ADR-115 amendment: exposed for the same reason [exportedObjectHandles] is. The planners and
+   *  the legacy export arms hold this classifier, not the [ForwardBridgeTypeContext], and every
+   *  opt-in marker read has to consult the identical waiver list this classifier does. */
+  internal val exportMarkers: Set<String> get() = context.exportMarkers
 
   fun classify(type: KSType): BridgeType {
     val expanded: KSType = type.expandAliases()
@@ -119,6 +128,20 @@ internal class ForwardBridgeTypeClassifier(
     // ADR-106: kotlin.uuid.Uuid, the third known stdlib type. A plain class (not a value class),
     // so ordering against isValueClass() is irrelevant; it stays in this block by convention.
     if (qualifiedName == "kotlin.uuid.Uuid") return BridgeType.Uuid
+    // ADR-064 (2026-09-11): kotlin.sequences.Sequence is the first known stdlib type recognized
+    // here to be *refused* rather than bound. It is an interface with one type parameter, so
+    // without this line the generic-interface arm below claims it as
+    // SpecializedProtocol("generic declaration ..."), which the planner maps to the
+    // droppedFromCSharp = false GENERIC deferral -- but no legacy route is keyed on a parameter's
+    // or return's type, so the member vanished from C# with no diagnostic at all. Named here so
+    // every position skips loudly. Sequence only: Iterable/Iterator/Collection are supertypes of
+    // List and a line for them would mask the collection route.
+    if (qualifiedName == "kotlin.sequences.Sequence") {
+      return BridgeType.Unsupported(
+        rendered = qualifiedName,
+        reason = "a lazy Sequence has no bridge shape; expose a List instead",
+      )
+    }
     // ADR-107: kotlin.Throwable and every stdlib subtype of it (Exception, IllegalStateException,
     // ...). Supertype-aware, because the declared property type is usually a subtype; ahead of the
     // exportedObjectHandles membership test below, so a stdlib throwable stops being an
@@ -133,7 +156,7 @@ internal class ForwardBridgeTypeClassifier(
     // ADR-115: a class/object/interface/enum/value class carrying a `@RequiresOptIn` marker is
     // never declared in C#, so every member typed with it skips -- ahead of every membership test
     // below, whose `include(...)`/move-to-top-level hints cannot repair a marked type.
-    val marker: String? = classDeclaration.optInMarker()
+    val marker: String? = classDeclaration.optInMarker(context.exportMarkers)
     if (marker != null) {
       return BridgeType.Unsupported(
         qualifiedName,

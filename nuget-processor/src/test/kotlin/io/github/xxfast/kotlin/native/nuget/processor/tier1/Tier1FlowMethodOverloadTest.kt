@@ -3,6 +3,7 @@ package io.github.xxfast.kotlin.native.nuget.processor.tier1
 import kotlin.test.Test
 import kotlin.test.assertContains
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 /**
@@ -54,8 +55,9 @@ class Tier1FlowMethodOverloadTest {
       "radio_play_collect", "radio_play_2_collect",
       "radio_play_value", "radio_play_2_value",
       "radio_schedule_collect", "radio_schedule_2_collect",
-      "radio_volume_collect", "radio_volume_2_collect",
-      "radio_volume_value", "radio_volume_2_value",
+      // ADR-071 (2026-09-11): a MutableStateFlow return is held by handle, so its numbered
+      // entry points are the acquire and the flow-keyed setter, not a per-member collect/value.
+      "radio_volume", "radio_volume_2",
       "radio_volume_set_value", "radio_volume_2_set_value",
       "radio_maybePlay_collect", "radio_maybePlay_2_collect",
       "radio_maybePlay_has_value", "radio_maybePlay_2_has_value",
@@ -65,6 +67,19 @@ class Tier1FlowMethodOverloadTest {
         1,
         Regex("EntryPoint = \"$entryPoint\"").findAll(result.generatedCSharp).count(),
         "expected exactly one C# import for $entryPoint; generatedCSharp=${result.generatedCSharp}",
+      )
+    }
+
+    // ADR-071 (2026-09-11): the held-flow route drops the per-member reads outright, so the
+    // numbering scheme has two fewer names to keep unique, not two more.
+    listOf(
+      "radio_volume_collect", "radio_volume_2_collect",
+      "radio_volume_value", "radio_volume_2_value",
+    ).forEach { dead ->
+      assertFalse(kotlin.contains(dead), "expected no $dead export; generated=$kotlin")
+      assertFalse(
+        result.generatedCSharp.contains(dead),
+        "expected no $dead import; generatedCSharp=${result.generatedCSharp}",
       )
     }
   }

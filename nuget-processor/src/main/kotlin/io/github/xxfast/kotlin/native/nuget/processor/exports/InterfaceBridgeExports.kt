@@ -130,18 +130,12 @@ internal fun FileSpec.Builder.addInterfaceBridgeExports(
       }
       appendLine("      ${mName}Fn.invoke($invokeArgs)")
 
-      // Dispose reference args after the call
-      params.forEachIndexed { i, param ->
-        val pType = param.type.resolve().expandAliases()
-        val pSimple: String = pType.declaration.simpleName.asString()
-        val pQualified: String = pType.declaration.qualifiedName?.asString() ?: ""
-        val isEnum: Boolean = (pType.declaration as? KSClassDeclaration)
-          ?.classKind == ClassKind.ENUM_CLASS
-        val isPrimitive: Boolean = pQualified.startsWith("kotlin.") && pSimple != "String"
-        if (!isEnum && !isPrimitive && pSimple != "Boolean") {
-          appendLine("      NugetHandles.release(arg${i}Ref!!)")
-        }
-      }
+      // ADR-036 amendment (2026-09-11): a handle-passed argument belongs to the C# side once it
+      // crosses. `NugetMarshal.FromHandle<string>` disposes as it reads, and an exported object
+      // is handed to the wrapper's constructor, whose `Dispose()` is the free. Releasing here as
+      // well freed a handle the C# side had already freed (measured at -2 per `onMeow` crossing,
+      // three releases against one retain, with the thunk's own explicit `Dispose` making the
+      // third).
 
       appendLine("    }")
     }

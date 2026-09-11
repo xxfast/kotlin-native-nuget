@@ -74,12 +74,6 @@ internal enum class ForwardPlanSkipReason(val droppedFromCSharp: Boolean) {
   UNSUPPORTED(droppedFromCSharp = true),
   VALUE_CLASS(droppedFromCSharp = true),
 
-  /** A secondary constructor of a value class over a reference underlying. ADR-035 defers that
-   *  struct's primary constructor and keeps only the positional record one, so a secondary has
-   *  nothing to delegate to and no legacy route re-emits it: a genuine drop, with its own
-   *  diagnostic kind because nothing about its parameter types is unsupported. */
-  REFERENCE_UNDERLYING_VALUE_CLASS_CONSTRUCTOR(droppedFromCSharp = true),
-
   // ADR-064: genuine drops with their own named diagnostic kind, not the generic "type
   // combination is not supported" bucket the reasons above still render through.
   /** Cell 23 / BUG-010: a generic + suspend + inline + reified extension returning `Result<T>` —
@@ -94,6 +88,14 @@ internal enum class ForwardPlanSkipReason(val droppedFromCSharp: Boolean) {
    *  the C# API and has to be named rather than silently deferred. The deferral reason it was
    *  reclassified from rides in [ForwardCallableCatalogEntry.Skipped.detail]. */
   SEALED_SUBCLASS_UNROUTED(droppedFromCSharp = true),
+
+  /** ADR-116 amendment (2026-09-11): the same absence one level up, on a member the sealed
+   *  **base** declares (`Job.rest`, an `open suspend fun`). The base carries its ordinary members
+   *  now, but no legacy route is keyed to it at all, not even the suspend and flow ones ADR-118
+   *  and ADR-124 keyed to the arms, so the member is gone from C# on the base *and* on every arm
+   *  that inherits it. Separate from [SEALED_SUBCLASS_UNROUTED] because the remedy differs: the
+   *  author can move the member onto each arm, which does have those routes. */
+  SEALED_BASE_UNROUTED(droppedFromCSharp = true),
 
   /** ADR-064/ADR-082: a value-class member whose signature a supertype declares — inherited,
    *  forwarded by interface delegation (e.g. `CharSequence by value`) or explicitly overridden. */
@@ -524,6 +526,10 @@ internal class ForwardCallablePlanner(
       // `classes` (ADR-009 / issue #54), so its declared member functions have to be planned from
       // the sealed base, under the same `${sealed}_${sub}` prefix the property getters already use.
       sealedClasses.forEach { sealed ->
+        // ADR-116 amendment (2026-09-11): the base's own declared members first, so an arm's
+        // projection can ask whether the C# base already carries the signature it is about to
+        // spell (`override` when it matches, nothing at all when the arm declares none).
+        addAll(sealedBaseEntries(sealed))
         sealed.getSealedSubclasses().forEach { sub -> addAll(sealedSubclassEntries(sealed, sub)) }
       }
       classes.forEach { cls -> addAll(constructorEntries(cls)) }
@@ -657,26 +663,18 @@ internal class ForwardCallablePlanner(
       .filter { it.getVisibility() == Visibility.PUBLIC }
       .toList()
 
-    // ADR-035 exposes a reference-underlying value class as a positional record struct over the
-    // underlying handle and defers its primary constructor, so a secondary has nothing to
-    // delegate to: the pre-plan route that used to emit one handed an `IntPtr` to the class-typed
-    // positional parameter (CS1503) against a Kotlin export returning the underlying object
-    // rather than a pointer. It is a drop, named per secondary; the primary is not skipped
-    // because the record header still constructs one.
-    if (isReferenceUnderlying) {
-      return secondaryConstructors.mapIndexed { index, ctor ->
-        ForwardCallableCatalogEntry.Skipped(
-          symbol = "$owner.<init>_${index + 2}",
-          reason = ForwardPlanSkipReason.REFERENCE_UNDERLYING_VALUE_CLASS_CONSTRUCTOR,
-          node = ctor,
-        )
-      }
-    }
-
+    // ADR-035's 2026-09-11 amendment: a secondary is planned on both underlying kinds. Its result
+    // is the underlying itself, so a reference underlying returns a fresh handle that C# rebuilds
+    // (`: this(new Cat(CreateChecked_2(...)))`) to feed its own positional record constructor.
+    // The *primary* stays deferred on a reference underlying: a positional `Wrapper(Cat Cat)`
+    // cannot coexist with a hand-written `Wrapper(Cat cat)` (CS0111), and the record header
+    // already constructs one, so it is not a skip either.
     val exports: List<Pair<KSFunctionDeclaration, Pair<String, String>>> = buildList {
-      val primary = cls.primaryConstructor
-      if (primary != null && primary.getVisibility() == Visibility.PUBLIC) {
-        add(primary to ("${prefix}_create" to ""))
+      val exportedPrimary: KSFunctionDeclaration? = cls.primaryConstructor?.takeIf {
+        !isReferenceUnderlying && it.getVisibility() == Visibility.PUBLIC
+      }
+      if (exportedPrimary != null) {
+        add(exportedPrimary to ("${prefix}_create" to ""))
       }
       secondaryConstructors.forEachIndexed { index, ctor ->
         val number: Int = index + 2
@@ -893,6 +891,12 @@ internal class ForwardCallablePlanner(
     // `getAllFunctions()` order — the counter increments before the structural check, so a
     // skipped namesake still consumes its number and numbering stays declaration-order stable.
     val occurrences: MutableMap<String, Int> = mutableMapOf()
+    // ADR-096 amendment (2026-09-11): the single question both the C# `override` modifier and the
+    // ADR-096 synthesis gate ask, hoisted so the two cannot drift apart again. It is *not* the
+    // Kotlin `override` keyword: what matters to C# is whether a generated base class declares
+    // this member and therefore already carries its omitting overload.
+    fun isCsharpOverride(method: KSFunctionDeclaration): Boolean =
+      method.overridesBaseClassMember(superClass)
     fun entryFor(method: KSFunctionDeclaration, omitted: Int): ForwardCallableCatalogEntry {
       val name: String = method.simpleName.asString()
       val occurrence: Int = occurrences.merge(name, 1, Int::plus)!!
@@ -901,11 +905,14 @@ internal class ForwardCallablePlanner(
       // ADR-090: the C# modifiers, computed here because a planned entry keeps no declaration.
       // ADR-096: a synthesized entry is never `override`/`virtual` (the base has no such
       // signature, so `override` would be CS0115); overrides synthesize nothing anyway.
-      val isOverride: Boolean = omitted == 0 &&
-          superClass != null && method.modifiers.contains(Modifier.OVERRIDE)
-      val isVirtual: Boolean = omitted == 0 && superClass == null &&
-          method.modifiers.contains(Modifier.OVERRIDE) &&
-          !method.modifiers.contains(Modifier.FINAL)
+      // ADR-101 amendment (2026-09-11): keyed on a base *class* overridee, not on the Kotlin
+      // modifier. `Ledge : Shelf(), Groomable` overrides `Groomable.groom`, which `Shelf` never
+      // declares, so C# spells it `virtual`; `public override string Groom()` is CS0115.
+      val isOverride: Boolean = omitted == 0 && isCsharpOverride(method)
+      // ADR-101 (2026-09-11): a *declared* `open fun` is virtual too, not just the
+      // `override && !final` arm, or a subclass's `override` is CS0506 in C#. Same predicate the
+      // property route uses (`CirClassTranslator`), so both halves of a class agree.
+      val isVirtual: Boolean = omitted == 0 && !isOverride && method.modifiers.isOpenForOverride()
       val structuralReason: ForwardPlanSkipReason? = when {
         method.modifiers.contains(Modifier.ABSTRACT) -> ForwardPlanSkipReason.ABSTRACT
         method.modifiers.contains(Modifier.SUSPEND) -> ForwardPlanSkipReason.SUSPEND
@@ -943,13 +950,123 @@ internal class ForwardCallablePlanner(
       // per-(class, name) counter scope so declared exports keep their numbers.
       methods.forEachIndexed { index, method ->
         if (declared[index] !is ForwardCallableCatalogEntry.Planned) return@forEachIndexed
-        // Kotlin forbids an override from restating defaults; the base class's own synthesized
-        // overload is inherited by the generated C# subclass, so this route synthesizes nothing.
-        if (method.modifiers.contains(Modifier.OVERRIDE)) return@forEachIndexed
+        // ADR-096 amendment (2026-09-11): keyed on the C# fact, not on Kotlin's `override`. When a
+        // generated base class declares the member it also carries the member's omitting overload,
+        // which the generated subclass inherits, so synthesizing here would be a duplicate. When
+        // ADR-101 drops the base there is no such carrier and the subclass owes the overload
+        // itself, or the consumer's short call is CS1501.
+        if (isCsharpOverride(method)) return@forEachIndexed
+        repeat(memberDefaultFlags(method).trailingCount()) { omitted ->
+          add(entryFor(method, omitted + 1).synthesized())
+        }
+      }
+    }
+  }
+
+  /**
+   * ADR-116 amendment (2026-09-11): the sealed **base**'s own declared member functions, keyed to
+   * the base under its own `${sealed}_` export prefix.
+   *
+   * Three differences from [sealedSubclassEntries], all following from the base being the carrier
+   * rather than a leaf:
+   * - No [ForwardPlanSkipReason.ABSTRACT] structural skip. An `abstract fun` on the base is
+   *   exactly what needs a plan here: the export calls it through the base type
+   *   (`handle.asStableRef<Job>().get().describe()`), so Kotlin's own dispatch reaches the arm's
+   *   body and the C# member can be concrete.
+   * - `isVirtual` therefore covers the abstract case too, so an arm that overrides can spell
+   *   `override` without CS0506. `isOverride` stays false: the base overrides nothing.
+   * - An unrouted skip is named [ForwardPlanSkipReason.SEALED_BASE_UNROUTED], not the arm's
+   *   reason: `Job.rest`, an `open suspend fun` on the base, has produced no diagnostic at all
+   *   until now (ADR-118 found the same absence a third time).
+   */
+  private fun sealedBaseEntries(sealed: KSClassDeclaration): List<ForwardCallableCatalogEntry> {
+    val owner: String = sealed.qualifiedName?.asString() ?: return emptyList()
+    val prefix: String = sealed.simpleName.asString().lowercase()
+    val receiverType: BridgeType = BridgeType.ObjectHandle(owner)
+    val methods: List<KSFunctionDeclaration> = sealed.getAllFunctions()
+      .filter { method -> method.getVisibility() == Visibility.PUBLIC }
+      .filter { method ->
+        method.simpleName.asString() !in setOf("equals", "hashCode", "toString", "<init>")
+      }
+      // Declared-only: `Any`'s members fall out here, and so does anything an (unexported) base of
+      // the sealed class itself might carry, which has no C# carrier of its own either way.
+      .filter { method -> method.parentDeclaration == sealed }
+      .toList()
+    val interfaceBridgeMethods: Set<KSFunctionDeclaration> = findInterfaceBridgePairs(methods)
+      .flatMap { pair -> listOf(pair.first, pair.second) }
+      .toSet()
+    val storedCallbackMethods: Set<KSFunctionDeclaration> = findStoredCallbackPairs(methods)
+      .flatMap { pair -> listOf(pair.first, pair.second) }
+      .toSet()
+
+    val occurrences: MutableMap<String, Int> = mutableMapOf()
+    fun entryFor(method: KSFunctionDeclaration, omitted: Int): ForwardCallableCatalogEntry {
+      val name: String = method.simpleName.asString()
+      val occurrence: Int = occurrences.merge(name, 1, Int::plus)!!
+      val suffix: String = if (occurrence == 1) "" else "_$occurrence"
+      val symbol: String = "$owner.$name$suffix"
+      // Every declared member of the base is overridable in Kotlin (`abstract` or `open`), and an
+      // arm that overrides needs a `virtual` C# base member to override. A synthesized omitting
+      // overload is never virtual: no arm declares that signature.
+      val isVirtual: Boolean = omitted == 0 &&
+          (method.modifiers.contains(Modifier.ABSTRACT) || method.modifiers.isOpenForOverride())
+      val structuralReason: ForwardPlanSkipReason? = when {
+        method.modifiers.contains(Modifier.SUSPEND) -> ForwardPlanSkipReason.SUSPEND
+        method.typeParameters.isNotEmpty() -> ForwardPlanSkipReason.GENERIC
+        method in interfaceBridgeMethods || method in storedCallbackMethods ->
+          ForwardPlanSkipReason.CALLBACK_PROTOCOL
+
+        else -> null
+      }
+      return if (structuralReason != null) {
+        ForwardCallableCatalogEntry.Skipped(symbol, structuralReason, node = method)
+      } else {
+        planOrSkip(
+          symbol = symbol,
+          publicName = name.replaceFirstChar { it.uppercase() },
+          exportName = "${prefix}_$name$suffix",
+          receiver = ForwardReceiver.Handle(receiverType),
+          parameters = method.parameters.dropLast(omitted).map { parameter ->
+            parameter.bridgeName() to classifier.classify(parameter.type.resolve())
+          },
+          result = method.returnType?.resolve()?.let(classifier::classify) ?: BridgeType.Unit,
+          origin = ForwardCallableOrigin.CLASS,
+          member = name,
+          isOverride = false,
+          isVirtual = isVirtual,
+          node = method,
+          droppedOptInMarker = droppedOptInMarker(method.parameters, omitted),
+        )
+      }
+    }
+
+    val entries: List<ForwardCallableCatalogEntry> = buildList {
+      val declared: List<ForwardCallableCatalogEntry> =
+        methods.map { method -> entryFor(method, 0) }
+      addAll(declared)
+      // ADR-096: the base is the carrier, so it owes its own omitting overloads; every arm that
+      // overrides the member inherits them.
+      methods.forEachIndexed { index, method ->
+        if (declared[index] !is ForwardCallableCatalogEntry.Planned) return@forEachIndexed
         repeat(method.parameters.map { it.hasDefault }.trailingCount()) { omitted ->
           add(entryFor(method, omitted + 1).synthesized())
         }
       }
+    }
+
+    // The same posture `sealedSubclassEntries` takes: `droppedFromCSharp = false` means "a named
+    // legacy route re-emits it", and no legacy route is keyed to a sealed *base* at all -- not
+    // even the suspend and flow ones ADR-118/ADR-124 keyed to the arms. So every skip left here
+    // is a real drop and says so.
+    return entries.map { entry ->
+      if (entry !is ForwardCallableCatalogEntry.Skipped) return@map entry
+      if (entry.reason.droppedFromCSharp) return@map entry
+      ForwardCallableCatalogEntry.Skipped(
+        entry.symbol,
+        ForwardPlanSkipReason.SEALED_BASE_UNROUTED,
+        node = entry.node,
+        detail = entry.reason.name,
+      )
     }
   }
 
@@ -966,8 +1083,10 @@ internal class ForwardCallablePlanner(
    *   `isForwardPlannableMemberOf`. A base `open fun` the arm does not override has no C# carrier
    *   (`CirSealedClass` declares no methods), so it is not flattened onto the arm; an `override`
    *   the arm declares itself is a plain method here.
-   * - `isOverride` / `isVirtual` are pinned to `false`: the generated C# base declares nothing to
-   *   override (CS0115) and a `virtual` member on a `public sealed class` is CS0549.
+   * - `isOverride` is pinned to `false`: the generated C# base declares nothing to override
+   *   (CS0115). `isVirtual` is true only for a declared `open` member of an `open` arm (ADR-009
+   *   amendment 2026-09-11), since a final arm renders `public sealed class`, where `virtual` is
+   *   CS0549.
    * - Every skip an ordinary class would defer to a legacy route becomes a named
    *   [ForwardPlanSkipReason.SEALED_SUBCLASS_UNROUTED] drop, because no legacy route is keyed to a
    *   sealed subclass. Planned entries are untouched.
@@ -978,6 +1097,10 @@ internal class ForwardCallablePlanner(
   ): List<ForwardCallableCatalogEntry> {
     val subName: String = subclass.simpleName.asString()
     val owner: String = subclass.qualifiedName?.asString() ?: return emptyList()
+    // ADR-009 amendment (2026-09-11): only an `open` arm renders `public class`, so only an open
+    // arm can carry `virtual`. On a final arm the member is effectively final in Kotlin anyway,
+    // and `virtual` inside a `public sealed class` is CS0549.
+    val isOpenArm: Boolean = subclass.modifiers.contains(Modifier.OPEN)
     val prefix: String = "${sealed.simpleName.asString().lowercase()}_${subName.lowercase()}"
     val receiverType: BridgeType = BridgeType.ObjectHandle(owner)
     val methods: List<KSFunctionDeclaration> = subclass.getAllFunctions()
@@ -1009,6 +1132,9 @@ internal class ForwardCallablePlanner(
       val occurrence: Int = occurrences.merge(name, 1, Int::plus)!!
       val suffix: String = if (occurrence == 1) "" else "_$occurrence"
       val symbol: String = "$owner.$name$suffix"
+      // ADR-096, as `classEntries` reasons: a synthesized omitting overload is never `virtual`,
+      // since no subclass declares that signature to override.
+      val isVirtual: Boolean = omitted == 0 && isOpenArm && method.modifiers.isOpenForOverride()
       val structuralReason: ForwardPlanSkipReason? = when {
         method.modifiers.contains(Modifier.ABSTRACT) -> ForwardPlanSkipReason.ABSTRACT
         method.modifiers.contains(Modifier.SUSPEND) -> ForwardPlanSkipReason.SUSPEND
@@ -1034,7 +1160,7 @@ internal class ForwardCallablePlanner(
           // The symbol carries the overload suffix; the Kotlin call site must not.
           member = name,
           isOverride = false,
-          isVirtual = false,
+          isVirtual = isVirtual,
           node = method,
           droppedOptInMarker = droppedOptInMarker(method.parameters, omitted),
         )
@@ -1049,12 +1175,22 @@ internal class ForwardCallablePlanner(
       // this counter scope so declared exports keep their numbers.
       methods.forEachIndexed { index, method ->
         if (declared[index] !is ForwardCallableCatalogEntry.Planned) return@forEachIndexed
-        if (method.modifiers.contains(Modifier.OVERRIDE)) return@forEachIndexed
+        // ADR-116 amendment (2026-09-11): keyed on the C# fact, exactly as `classEntries` is since
+        // ADR-096's own amendment. Skipping every Kotlin `override` was only ever right because
+        // the sealed C# base carried nothing; now that it carries its declared members it also
+        // carries their omitting overloads, and the arm inherits them. An `override` of anything
+        // else (an interface member, a member the base's plan declined) has no such carrier, and
+        // the arm owes the overload itself or the consumer's short call is CS1501.
+        if (method.findOverridee()?.parentDeclaration == sealed) return@forEachIndexed
         repeat(method.parameters.map { it.hasDefault }.trailingCount()) { omitted ->
           add(entryFor(method, omitted + 1).synthesized())
         }
       }
     }
+
+    // The union the CALLBACK_PROTOCOL exemption below reads, as a `Set<KSNode>` so an entry's
+    // nullable node can be tested against it directly.
+    val pairedCallbackMethods: Set<KSNode> = interfaceBridgeMethods + storedCallbackMethods
 
     // ADR-116 Diagnostics: `droppedFromCSharp = false` means "a named legacy route re-emits it",
     // which is only true for an ordinary class. On a sealed arm the member is simply gone, so the
@@ -1072,10 +1208,16 @@ internal class ForwardCallablePlanner(
             // regardless. SUSPEND_CALLBACK_PROTOCOL is deliberately not exempted: no arm route
             // emits it.
             entry.reason != ForwardPlanSkipReason.SUSPEND &&
-            // ADR-124: and the same for the legacy Flow/StateFlow route, one issue later. What is
-            // left under this reason is GENERIC, CALLBACK_PROTOCOL and SUSPEND_CALLBACK_PROTOCOL,
-            // none of which any arm route emits.
-            entry.reason != ForwardPlanSkipReason.FLOW_PROTOCOL
+            // ADR-124: and the same for the legacy Flow/StateFlow route, one issue later.
+            entry.reason != ForwardPlanSkipReason.FLOW_PROTOCOL &&
+            // ADR-116 amendment (2026-09-11): the per-call lambda-parameter route (ADR-036) is
+            // keyed to the arms too now, so its skip is a deferral again. Split by **origin**, not
+            // by reason: an add/remove pair takes the identical `CALLBACK_PROTOCOL` constant from
+            // the structural check above, no arm route emits one, and exempting the reason
+            // wholesale would put a pair back into the silent absence this ADR exists to end.
+            // What is left named is GENERIC, SUSPEND_CALLBACK_PROTOCOL and the pairs.
+            !(entry.reason == ForwardPlanSkipReason.CALLBACK_PROTOCOL &&
+                entry.node !in pairedCallbackMethods)
       if (!isUnrouted) return@map entry
 
       ForwardCallableCatalogEntry.Skipped(
@@ -1146,7 +1288,9 @@ internal class ForwardCallablePlanner(
       if (cls.modifiers.contains(Modifier.DATA) && primary != null) {
         val receiver = ForwardReceiver.Handle(result)
         val markedCopyParameter: String? = primary.parameters
-          .firstNotNullOfOrNull { parameter -> parameter.constructorOptInMarker(cls) }
+          .firstNotNullOfOrNull { parameter ->
+            parameter.constructorOptInMarker(cls, classifier.exportMarkers)
+          }
         if (markedCopyParameter != null) {
           add(
             ForwardCallableCatalogEntry.Skipped(
@@ -1202,6 +1346,29 @@ internal class ForwardCallablePlanner(
   }
 
   /**
+   * ADR-096 amendment (2026-09-11): per-parameter "has a default" for a **class member**,
+   * positionally, read through the override chain.
+   *
+   * Kotlin forbids an override from restating a default, so `override fun farewell(name: String,
+   * warmly: Boolean)` reports `hasDefault = false` on every parameter and the bit survives only on
+   * the declaration that first stated it. The same erasure already forced the `expect`/`actual`
+   * lookups in [defaultFlags] and [topLevelDefaultFlags]. While the base class is exported this
+   * does not matter (the base's own C# overload is inherited); once ADR-101 drops the base the
+   * subclass has to synthesize, and the flags have to come from somewhere.
+   *
+   * The chain is walked to its **root**: `findOverridee()` answers the nearest declaration, and in
+   * a two-deep chain the intermediate override reports `false` for exactly the same reason.
+   */
+  private fun memberDefaultFlags(method: KSFunctionDeclaration): List<Boolean> {
+    val root: KSFunctionDeclaration? = generateSequence(
+      method.findOverridee() as? KSFunctionDeclaration,
+    ) { overridee -> overridee.findOverridee() as? KSFunctionDeclaration }.lastOrNull()
+    return method.parameters.mapIndexed { index, parameter ->
+      parameter.hasDefault || root?.parameters?.getOrNull(index)?.hasDefault == true
+    }
+  }
+
+  /**
    * ADR-096: the number of *trailing* parameters that all have a default, i.e. how many omitting
    * overloads to synthesize. A default followed anywhere by a required parameter contributes
    * nothing, because the generated wrapper is a positional Kotlin call.
@@ -1247,7 +1414,9 @@ internal class ForwardCallablePlanner(
     // through `droppedOptInMarker`, which does see the dropped tail.
     val marked: String? = constructor.parameters
       .dropLast(omitted)
-      .firstNotNullOfOrNull { parameter -> parameter.constructorOptInMarker(cls) }
+      .firstNotNullOfOrNull { parameter ->
+        parameter.constructorOptInMarker(cls, classifier.exportMarkers)
+      }
     if (marked != null) {
       return ForwardCallableCatalogEntry.Skipped(
         "$owner.<init>$suffix", ForwardPlanSkipReason.OPT_IN_MARKER,
@@ -1721,7 +1890,7 @@ internal class ForwardCallablePlanner(
     // declaration is unsupported, it is simply not part of the exported surface. One check for
     // every route that reaches the plan (class member, object member, companion, extension,
     // top-level, value class), keyed on the declaration the entry already carries.
-    val optInMarker: String? = (node as? KSAnnotated)?.optInMarker()
+    val optInMarker: String? = (node as? KSAnnotated)?.optInMarker(classifier.exportMarkers)
     if (optInMarker != null) {
       return ForwardCallableCatalogEntry.Skipped(
         symbol, ForwardPlanSkipReason.OPT_IN_MARKER, node = node, detail = optInMarker,
@@ -2752,205 +2921,6 @@ internal class ForwardCallablePlanner(
     ForwardReceiver.Static -> emptyList()
   }
 
-  /** ADR-066: the qualified name to feed the `SKIPPED_UNEXPORTED_DEPENDENCY_TYPE` hint, when this
-   *  (possibly nullable-wrapped) type is the direct reason a callable was dropped because it is a
-   *  reachable-but-out-of-scope dependency type. `null` for every other skip reason. */
-  private fun BridgeType.unexportedDependencyDetail(): String? =
-    (unwrapNullable() as? BridgeType.Unsupported)
-      ?.takeIf { unsupported -> unsupported.isUnexportedDependency }
-      ?.rendered
-
-  /** ADR-074: the `expect` name and its erased-to target, when this (possibly nullable-wrapped)
-   *  type is the direct reason a callable was dropped because its `actual typealias` target is
-   *  not exportable. Encoded as `"<expect qualified name>-><target rendered name>"` so
-   *  [ForwardDiagnosticKind.SKIPPED_ACTUAL_TYPEALIAS_TARGET]'s hint can name both without a
-   *  second detail slot on [ForwardCallableCatalogEntry.Skipped]. `null` for every other reason. */
-  private fun BridgeType.actualTypeAliasTargetDetail(): String? =
-    (unwrapNullable() as? BridgeType.Unsupported)
-      ?.takeIf { unsupported -> unsupported.isActualTypeAliasTarget }
-      ?.let { unsupported -> "${unsupported.actualTypeAliasExpectName}->${unsupported.rendered}" }
-
-  /** True for the two "declared nowhere, at any position" flags, whose skip reason outranks the
-   *  position-shaped ones ([ForwardPlanSkipReason.NULLABLE]) when both could apply. */
-  private fun BridgeType.isUndeclared(): Boolean {
-    val unsupported: BridgeType.Unsupported = this as? BridgeType.Unsupported ?: return false
-    return unsupported.isUndeclaredEnum || unsupported.isUndeclaredInterface ||
-        unsupported.isUndeclaredClass
-  }
-
-  /** The undeclared type's qualified name, when this (possibly nullable-wrapped, possibly
-   *  collection-wrapped) type is the direct reason a callable was dropped by
-   *  [ForwardPlanSkipReason.UNDECLARED_ENUM] or [ForwardPlanSkipReason.UNDECLARED_INTERFACE].
-   *  `null` for every other skip reason.
-   *
-   *  Descends one collection level, unlike its two siblings above: a `List<Outer.Mode>` parameter
-   *  attributes to its *element's* reason (`collectionInputSkipReason`), and
-   *  `collectionComponentDetail()` deliberately declines any reason but `COLLECTION`, so without
-   *  this the hint for the element case would name no type at all. The siblings' equivalent gap
-   *  (`List<UnexportedDep>`) is left exactly as it was, changing it would reword a shipped
-   *  hint. */
-  /** ADR-115: `"<marked type>-><marker qualified name>"`, so the one diagnostic can name both
-   *  the type the author wrote and the marker that removed it, without a second detail slot. */
-  private fun BridgeType.optInMarkerDetail(): String? {
-    val unwrapped: BridgeType = unwrapNullable()
-    val candidate: BridgeType = when (unwrapped) {
-      is BridgeType.Collection ->
-        (unwrapped.element ?: unwrapped.key ?: unwrapped.value)?.unwrapNullable() ?: unwrapped
-
-      else -> unwrapped
-    }
-    val unsupported: BridgeType.Unsupported = candidate as? BridgeType.Unsupported ?: return null
-    val marker: String = unsupported.optInMarker ?: return null
-    return "${unsupported.rendered}->$marker"
-  }
-
-  private fun BridgeType.undeclaredTypeDetail(): String? {
-    val unwrapped: BridgeType = unwrapNullable()
-    val candidate: BridgeType = when (unwrapped) {
-      is BridgeType.Collection ->
-        (unwrapped.element ?: unwrapped.key ?: unwrapped.value)?.unwrapNullable() ?: unwrapped
-
-      else -> unwrapped
-    }
-    return (candidate as? BridgeType.Unsupported)
-      ?.takeIf { unsupported ->
-        unsupported.isUndeclaredEnum || unsupported.isUndeclaredInterface ||
-            unsupported.isUndeclaredClass
-      }
-      ?.rendered
-  }
-
-  /** True for the ADR-009 sealed-hierarchy protocol, whichever position it turned up at. The
-   *  classifier mints exactly one protocol name for it, so the prefix is the whole test. */
-  private fun BridgeType.isSealedProtocol(): Boolean =
-    this is BridgeType.SpecializedProtocol && name.startsWith(SEALED_HELPER_PREFIX)
-
-  /** The sealed base's qualified name, when this (possibly nullable-wrapped, possibly
-   *  collection-wrapped) type is the direct reason a callable took a
-   *  [ForwardPlanSkipReason.SEALED_POSITION] skip. Descends one collection level for the same
-   *  reason [undeclaredTypeDetail] does: a `List<Shape>` parameter attributes to its element's
-   *  reason, so without this its hint would name no type at all. `null` for every other reason. */
-  private fun BridgeType.sealedTypeDetail(): String? {
-    val unwrapped: BridgeType = unwrapNullable()
-    val candidate: BridgeType = when (unwrapped) {
-      is BridgeType.Collection ->
-        (unwrapped.element ?: unwrapped.key ?: unwrapped.value)?.unwrapNullable() ?: unwrapped
-
-      else -> unwrapped
-    }
-    return (candidate as? BridgeType.SpecializedProtocol)
-      ?.takeIf { protocol -> protocol.name.startsWith(SEALED_HELPER_PREFIX) }
-      ?.name
-      ?.removePrefix(SEALED_HELPER_PREFIX)
-  }
-
-  private fun BridgeType.skipReason(): ForwardPlanSkipReason? = when (this) {
-    BridgeType.Unit, is BridgeType.Primitive -> null
-    BridgeType.Char -> ForwardPlanSkipReason.CHAR
-    BridgeType.String -> ForwardPlanSkipReason.STRING
-    // ADR-076: defensive only -- shapeOrNull's Instant branch always succeeds, same as CHAR/
-    // STRING above.
-    BridgeType.Instant -> ForwardPlanSkipReason.INSTANT
-    // ADR-103: defensive only, in the same way.
-    BridgeType.Duration -> ForwardPlanSkipReason.DURATION
-    // ADR-107: genuinely reached -- shapeOrNull has no Throwable branch, because a method return
-    // typed Throwable is explicitly deferred (only the property getter binds in v1).
-    BridgeType.Throwable -> ForwardPlanSkipReason.THROWABLE
-    // ADR-106: defensive only, like Instant/Duration -- Uuid always has a return shape.
-    BridgeType.Uuid -> ForwardPlanSkipReason.UUID
-    // ADR-088: same deferred nullable position as the input side, named the same way instead of
-    // reaching the generic NULLABLE bucket.
-    is BridgeType.Nullable -> when {
-      type is BridgeType.BoundInterface -> ForwardPlanSkipReason.BOUND_INTERFACE_POSITION
-      // Issue #54: `Listener?` is not skipped *because* it is nullable -- a non-nullable
-      // `Listener` is just as undeclarable -- so the NULLABLE bucket's "expose a non-nullable
-      // wrapper" hint would send the author after a fix that cannot work. An undeclared inner
-      // type wins over the position. Narrow on purpose: every other nullable Unsupported keeps
-      // the shipped NULLABLE wording.
-      type.isUndeclared() -> requireNotNull(type.skipReason())
-      else -> ForwardPlanSkipReason.NULLABLE
-    }
-    // ADR-066: a bridgeable-shaped Collection (List/MutableList result, Map/Set) that still
-    // reaches here failed for its own reason (nothing else calls skipReason() on a bridgeable
-    // Collection); an unsupported element/key/value attributes to that component's own reason
-    // (e.g. UNEXPORTED_DEPENDENCY_TYPE) instead of the generic COLLECTION bucket, which
-    // `toDiagnosticKind()` reserves for the genuinely input-position case.
-    is BridgeType.Collection -> if (isBridgeableComponent()) {
-      ForwardPlanSkipReason.COLLECTION
-    } else {
-      (element ?: key ?: value)?.skipReason() ?: ForwardPlanSkipReason.UNSUPPORTED
-    }
-
-    is BridgeType.RawCollection -> ForwardPlanSkipReason.COLLECTION
-    is BridgeType.Enum -> ForwardPlanSkipReason.ENUM
-    is BridgeType.ObjectHandle -> ForwardPlanSkipReason.HANDLE
-    // Never actually reached by an ordinary interface result (shapeOrNull's Interface branch
-    // always succeeds); only reachable defensively via a Collection-of-Interface element skip.
-    is BridgeType.Interface -> ForwardPlanSkipReason.HANDLE
-    // ADR-088: shapeOrNull's BoundInterface branch succeeds only for a manifest-flagged
-    // Kotlin-implementable interface, so reaching here at a return position means exactly the
-    // "no mint{Iface}Bridge" case. A collection element reaches here too, and takes the position
-    // skip instead (collections of bound interfaces are deferred).
-    is BridgeType.BoundInterface ->
-      if (implementable) ForwardPlanSkipReason.BOUND_INTERFACE_POSITION
-      else ForwardPlanSkipReason.UNIMPLEMENTABLE_BOUND_INTERFACE
-
-    is BridgeType.ValueClass -> ForwardPlanSkipReason.VALUE_CLASS
-    is BridgeType.SpecializedProtocol -> when {
-      // ADR-065: StateFlow shares the plain-Flow legacy route (both are named legacy exports in
-      // exports/ClassExports.kt + cir/CirFlowRenderer.kt); it is a distinct SpecializedProtocol
-      // name only so the classifier never confuses it with plain Flow (ADR-065 detection order).
-      name.startsWith("state flow ") -> ForwardPlanSkipReason.FLOW_PROTOCOL
-      name.startsWith("flow ") -> ForwardPlanSkipReason.FLOW_PROTOCOL
-      name.startsWith("suspend lambda ") -> ForwardPlanSkipReason.SUSPEND_CALLBACK_PROTOCOL
-      name.startsWith("lambda ") || name.startsWith("interface bridge ") -> ForwardPlanSkipReason.CALLBACK_PROTOCOL
-      name.startsWith(SEALED_HELPER_PREFIX) -> ForwardPlanSkipReason.SEALED_POSITION
-      name.startsWith("generic declaration ") -> ForwardPlanSkipReason.GENERIC
-      else -> error("Forward planner has no explicit legacy route for specialized protocol $name")
-    }
-
-    is BridgeType.RawKSType -> error("Forward planner received raw KSP type $rendered")
-    // ADR-074: checked ahead of isUnexportedDependency -- an actual-typealias-target redirect can
-    // land on either an out-of-scope module-local type or a cross-module one, and both must carry
-    // this ADR's own diagnostic, not the generic UNEXPORTED_DEPENDENCY_TYPE include(...) hint.
-    is BridgeType.Unsupported -> when {
-      // ADR-115: checked first -- a marked type is refused for a reason no scope change and no
-      // move-to-top-level can repair, so it must not pick up any of the hints below.
-      optInMarker != null -> ForwardPlanSkipReason.OPT_IN_MARKER_TYPE
-      isActualTypeAliasTarget -> ForwardPlanSkipReason.ACTUAL_TYPEALIAS_TARGET
-      // The classifier sets exactly one of these two on an enum, and never both: a nested enum
-      // (whichever module it lives in) is undeclarable rather than out of scope, so it must not
-      // pick up the `include(...)` hint.
-      isUndeclaredEnum -> ForwardPlanSkipReason.UNDECLARED_ENUM
-      // Issue #54: the same "undeclarable, not out of scope" rule for a nested interface.
-      isUndeclaredInterface -> ForwardPlanSkipReason.UNDECLARED_INTERFACE
-      // ...and for a nested class or object.
-      isUndeclaredClass -> ForwardPlanSkipReason.UNDECLARED_CLASS
-      // The closure records WHY it refused a dependency declaration; each refusal wants a
-      // different remedy, and only NOT_INCLUDED (or an unrecorded refusal, e.g. a module-local
-      // type the closure never saw) wants the `include(...)` one.
-      isUnexportedDependency -> when (unexportedDependencyRefusal) {
-        ForwardAdmissionRefusal.EXCLUDED_BY_CONFIG ->
-          ForwardPlanSkipReason.EXCLUDED_DEPENDENCY_TYPE
-
-        ForwardAdmissionRefusal.EXPECT_IN_DEPENDENCY ->
-          ForwardPlanSkipReason.EXPECT_DEPENDENCY_TYPE
-
-        ForwardAdmissionRefusal.CROSS_MODULE_ADMISSION_DISABLED ->
-          ForwardPlanSkipReason.CROSS_MODULE_DISABLED_DEPENDENCY_TYPE
-
-        // Defensive: the classifier tests nestedness ahead of the dependency route, so a nested
-        // refusal should never reach here. If one ever does, it must not be told to widen scope.
-        ForwardAdmissionRefusal.NESTED_DECLARATION -> ForwardPlanSkipReason.UNDECLARED_CLASS
-
-        ForwardAdmissionRefusal.NOT_INCLUDED, null ->
-          ForwardPlanSkipReason.UNEXPORTED_DEPENDENCY_TYPE
-      }
-
-      else -> ForwardPlanSkipReason.UNSUPPORTED
-    }
-  }
-
   private fun BridgeType.inputSkipReason(): ForwardPlanSkipReason? = when (this) {
     // ADR-106: Uuid is admissible at every input position, over the String wire.
     BridgeType.String, BridgeType.Char, BridgeType.Instant, BridgeType.Duration,
@@ -3121,8 +3091,6 @@ internal class ForwardCallablePlanner(
       -> error("Forward planner requested a wire type for ineligible $this")
   }
 
-  private fun BridgeType.unwrapNullable(): BridgeType = if (this is BridgeType.Nullable) type else this
-
   /**
    * ADR-077 sub-item 4: the wire a value-class *underlying* rides. Unlike [wireType], which
    * rejects Enum/ObjectHandle at a declared position (they have their own transfer machinery
@@ -3145,8 +3113,9 @@ internal class ForwardCallablePlanner(
  *
  * Applied at a *property* type ([ForwardPropertyPlanner]) and, at a callable, to both its *result*
  * and every declared *parameter* ([ForwardCallablePlanner.planOrSkip], ADR-105 scope (d)), and at
- * an extension *receiver* (`ForwardCallablePlanner.extensionEntry`, the only route whose receiver
- * can be a sealed base rather than a bare handle).
+ * an extension *receiver*, at both routes that can hand one a sealed base rather than a bare
+ * handle: a function's (`ForwardCallablePlanner.extensionEntry`) and a property's
+ * (`ForwardPropertyPlanner.extensionProperty`).
  *
  * Recurses through [BridgeType.Nullable], the [BridgeType.Collection] components, and
  * [BridgeType.ValueClass.underlying]: a value class over a sealed type
@@ -3322,3 +3291,225 @@ internal fun BridgeType.isWrappableComponent(): Boolean = when (this) {
  */
 private fun KSValueParameter.bridgeName(): String =
   (name?.asString() ?: "_").bridgeParameterName()
+
+/**
+ * ADR-064's 2026-09-11 amendment: the skip-reason classification and its detail extractors sit at
+ * file level so the *property* planner can carry the same reason a callable does. They read
+ * nothing but the [BridgeType] they are called on, so lifting them out of
+ * [ForwardCallablePlanner] costs nothing (the same move ADR-075 made for [isBridgeableComponent]).
+ */
+internal fun BridgeType.unwrapNullable(): BridgeType = if (this is BridgeType.Nullable) type else this
+
+/** ADR-066: the qualified name to feed the `SKIPPED_UNEXPORTED_DEPENDENCY_TYPE` hint, when this
+ *  (possibly nullable-wrapped) type is the direct reason a callable was dropped because it is a
+ *  reachable-but-out-of-scope dependency type. `null` for every other skip reason. */
+internal fun BridgeType.unexportedDependencyDetail(): String? =
+  (unwrapNullable() as? BridgeType.Unsupported)
+    ?.takeIf { unsupported -> unsupported.isUnexportedDependency }
+    ?.rendered
+
+/** ADR-074: the `expect` name and its erased-to target, when this (possibly nullable-wrapped)
+ *  type is the direct reason a callable was dropped because its `actual typealias` target is
+ *  not exportable. Encoded as `"<expect qualified name>-><target rendered name>"` so
+ *  [ForwardDiagnosticKind.SKIPPED_ACTUAL_TYPEALIAS_TARGET]'s hint can name both without a
+ *  second detail slot on [ForwardCallableCatalogEntry.Skipped]. `null` for every other reason. */
+internal fun BridgeType.actualTypeAliasTargetDetail(): String? =
+  (unwrapNullable() as? BridgeType.Unsupported)
+    ?.takeIf { unsupported -> unsupported.isActualTypeAliasTarget }
+    ?.let { unsupported -> "${unsupported.actualTypeAliasExpectName}->${unsupported.rendered}" }
+
+/** True for the two "declared nowhere, at any position" flags, whose skip reason outranks the
+ *  position-shaped ones ([ForwardPlanSkipReason.NULLABLE]) when both could apply. */
+internal fun BridgeType.isUndeclared(): Boolean {
+  val unsupported: BridgeType.Unsupported = this as? BridgeType.Unsupported ?: return false
+  return unsupported.isUndeclaredEnum || unsupported.isUndeclaredInterface ||
+      unsupported.isUndeclaredClass
+}
+
+/** The undeclared type's qualified name, when this (possibly nullable-wrapped, possibly
+ *  collection-wrapped) type is the direct reason a callable was dropped by
+ *  [ForwardPlanSkipReason.UNDECLARED_ENUM] or [ForwardPlanSkipReason.UNDECLARED_INTERFACE].
+ *  `null` for every other skip reason.
+ *
+ *  Descends one collection level, unlike its two siblings above: a `List<Outer.Mode>` parameter
+ *  attributes to its *element's* reason (`collectionInputSkipReason`), and
+ *  `collectionComponentDetail()` deliberately declines any reason but `COLLECTION`, so without
+ *  this the hint for the element case would name no type at all. The siblings' equivalent gap
+ *  (`List<UnexportedDep>`) is left exactly as it was, changing it would reword a shipped
+ *  hint. */
+/** ADR-115: `"<marked type>-><marker qualified name>"`, so the one diagnostic can name both
+ *  the type the author wrote and the marker that removed it, without a second detail slot. */
+internal fun BridgeType.optInMarkerDetail(): String? {
+  val unwrapped: BridgeType = unwrapNullable()
+  val candidate: BridgeType = when (unwrapped) {
+    is BridgeType.Collection ->
+      (unwrapped.element ?: unwrapped.key ?: unwrapped.value)?.unwrapNullable() ?: unwrapped
+
+    else -> unwrapped
+  }
+  val unsupported: BridgeType.Unsupported = candidate as? BridgeType.Unsupported ?: return null
+  val marker: String = unsupported.optInMarker ?: return null
+  return "${unsupported.rendered}->$marker"
+}
+
+internal fun BridgeType.undeclaredTypeDetail(): String? {
+  val unwrapped: BridgeType = unwrapNullable()
+  val candidate: BridgeType = when (unwrapped) {
+    is BridgeType.Collection ->
+      (unwrapped.element ?: unwrapped.key ?: unwrapped.value)?.unwrapNullable() ?: unwrapped
+
+    else -> unwrapped
+  }
+  return (candidate as? BridgeType.Unsupported)
+    ?.takeIf { unsupported ->
+      unsupported.isUndeclaredEnum || unsupported.isUndeclaredInterface ||
+          unsupported.isUndeclaredClass
+    }
+    ?.rendered
+}
+
+/** True for the ADR-009 sealed-hierarchy protocol, whichever position it turned up at. The
+ *  classifier mints exactly one protocol name for it, so the prefix is the whole test. */
+private fun BridgeType.isSealedProtocol(): Boolean =
+  this is BridgeType.SpecializedProtocol && name.startsWith(SEALED_HELPER_PREFIX)
+
+/** The sealed base's qualified name, when this (possibly nullable-wrapped, possibly
+ *  collection-wrapped) type is the direct reason a callable took a
+ *  [ForwardPlanSkipReason.SEALED_POSITION] skip. Descends one collection level for the same
+ *  reason [undeclaredTypeDetail] does: a `List<Shape>` parameter attributes to its element's
+ *  reason, so without this its hint would name no type at all. `null` for every other reason. */
+internal fun BridgeType.sealedTypeDetail(): String? {
+  val unwrapped: BridgeType = unwrapNullable()
+  val candidate: BridgeType = when (unwrapped) {
+    is BridgeType.Collection ->
+      (unwrapped.element ?: unwrapped.key ?: unwrapped.value)?.unwrapNullable() ?: unwrapped
+
+    else -> unwrapped
+  }
+  return (candidate as? BridgeType.SpecializedProtocol)
+    ?.takeIf { protocol -> protocol.name.startsWith(SEALED_HELPER_PREFIX) }
+    ?.name
+    ?.removePrefix(SEALED_HELPER_PREFIX)
+}
+
+internal fun BridgeType.skipReason(): ForwardPlanSkipReason? = when (this) {
+  BridgeType.Unit, is BridgeType.Primitive -> null
+  BridgeType.Char -> ForwardPlanSkipReason.CHAR
+  BridgeType.String -> ForwardPlanSkipReason.STRING
+  // ADR-076: defensive only -- shapeOrNull's Instant branch always succeeds, same as CHAR/
+  // STRING above.
+  BridgeType.Instant -> ForwardPlanSkipReason.INSTANT
+  // ADR-103: defensive only, in the same way.
+  BridgeType.Duration -> ForwardPlanSkipReason.DURATION
+  // ADR-107: genuinely reached -- shapeOrNull has no Throwable branch, because a method return
+  // typed Throwable is explicitly deferred (only the property getter binds in v1).
+  BridgeType.Throwable -> ForwardPlanSkipReason.THROWABLE
+  // ADR-106: defensive only, like Instant/Duration -- Uuid always has a return shape.
+  BridgeType.Uuid -> ForwardPlanSkipReason.UUID
+  // ADR-088: same deferred nullable position as the input side, named the same way instead of
+  // reaching the generic NULLABLE bucket.
+  is BridgeType.Nullable -> when {
+    type is BridgeType.BoundInterface -> ForwardPlanSkipReason.BOUND_INTERFACE_POSITION
+    // Issue #54: `Listener?` is not skipped *because* it is nullable -- a non-nullable
+    // `Listener` is just as undeclarable -- so the NULLABLE bucket's "expose a non-nullable
+    // wrapper" hint would send the author after a fix that cannot work. An undeclared inner
+    // type wins over the position. Narrow on purpose: every other nullable Unsupported keeps
+    // the shipped NULLABLE wording.
+    type.isUndeclared() -> requireNotNull(type.skipReason())
+    else -> ForwardPlanSkipReason.NULLABLE
+  }
+  // ADR-066: a bridgeable-shaped Collection (List/MutableList result, Map/Set) that still
+  // reaches here failed for its own reason (nothing else calls skipReason() on a bridgeable
+  // Collection); an unsupported element/key/value attributes to that component's own reason
+  // (e.g. UNEXPORTED_DEPENDENCY_TYPE) instead of the generic COLLECTION bucket, which
+  // `toDiagnosticKind()` reserves for the genuinely input-position case.
+  is BridgeType.Collection -> if (isBridgeableComponent()) {
+    ForwardPlanSkipReason.COLLECTION
+  } else {
+    (element ?: key ?: value)?.skipReason() ?: ForwardPlanSkipReason.UNSUPPORTED
+  }
+
+  is BridgeType.RawCollection -> ForwardPlanSkipReason.COLLECTION
+  is BridgeType.Enum -> ForwardPlanSkipReason.ENUM
+  is BridgeType.ObjectHandle -> ForwardPlanSkipReason.HANDLE
+  // Never actually reached by an ordinary interface result (shapeOrNull's Interface branch
+  // always succeeds); only reachable defensively via a Collection-of-Interface element skip.
+  is BridgeType.Interface -> ForwardPlanSkipReason.HANDLE
+  // ADR-088: shapeOrNull's BoundInterface branch succeeds only for a manifest-flagged
+  // Kotlin-implementable interface, so reaching here at a return position means exactly the
+  // "no mint{Iface}Bridge" case. A collection element reaches here too, and takes the position
+  // skip instead (collections of bound interfaces are deferred).
+  is BridgeType.BoundInterface ->
+    if (implementable) ForwardPlanSkipReason.BOUND_INTERFACE_POSITION
+    else ForwardPlanSkipReason.UNIMPLEMENTABLE_BOUND_INTERFACE
+
+  is BridgeType.ValueClass -> ForwardPlanSkipReason.VALUE_CLASS
+  is BridgeType.SpecializedProtocol -> when {
+    // ADR-065: StateFlow shares the plain-Flow legacy route (both are named legacy exports in
+    // exports/ClassExports.kt + cir/CirFlowRenderer.kt); it is a distinct SpecializedProtocol
+    // name only so the classifier never confuses it with plain Flow (ADR-065 detection order).
+    name.startsWith("state flow ") -> ForwardPlanSkipReason.FLOW_PROTOCOL
+    name.startsWith("flow ") -> ForwardPlanSkipReason.FLOW_PROTOCOL
+    name.startsWith("suspend lambda ") -> ForwardPlanSkipReason.SUSPEND_CALLBACK_PROTOCOL
+    name.startsWith("lambda ") || name.startsWith("interface bridge ") -> ForwardPlanSkipReason.CALLBACK_PROTOCOL
+    name.startsWith(SEALED_HELPER_PREFIX) -> ForwardPlanSkipReason.SEALED_POSITION
+    name.startsWith("generic declaration ") -> ForwardPlanSkipReason.GENERIC
+    else -> error("Forward planner has no explicit legacy route for specialized protocol $name")
+  }
+
+  is BridgeType.RawKSType -> error("Forward planner received raw KSP type $rendered")
+  // ADR-074: checked ahead of isUnexportedDependency -- an actual-typealias-target redirect can
+  // land on either an out-of-scope module-local type or a cross-module one, and both must carry
+  // this ADR's own diagnostic, not the generic UNEXPORTED_DEPENDENCY_TYPE include(...) hint.
+  is BridgeType.Unsupported -> when {
+    // ADR-115: checked first -- a marked type is refused for a reason no scope change and no
+    // move-to-top-level can repair, so it must not pick up any of the hints below.
+    optInMarker != null -> ForwardPlanSkipReason.OPT_IN_MARKER_TYPE
+    isActualTypeAliasTarget -> ForwardPlanSkipReason.ACTUAL_TYPEALIAS_TARGET
+    // The classifier sets exactly one of these two on an enum, and never both: a nested enum
+    // (whichever module it lives in) is undeclarable rather than out of scope, so it must not
+    // pick up the `include(...)` hint.
+    isUndeclaredEnum -> ForwardPlanSkipReason.UNDECLARED_ENUM
+    // Issue #54: the same "undeclarable, not out of scope" rule for a nested interface.
+    isUndeclaredInterface -> ForwardPlanSkipReason.UNDECLARED_INTERFACE
+    // ...and for a nested class or object.
+    isUndeclaredClass -> ForwardPlanSkipReason.UNDECLARED_CLASS
+    // The closure records WHY it refused a dependency declaration; each refusal wants a
+    // different remedy, and only NOT_INCLUDED (or an unrecorded refusal, e.g. a module-local
+    // type the closure never saw) wants the `include(...)` one.
+    isUnexportedDependency -> when (unexportedDependencyRefusal) {
+      ForwardAdmissionRefusal.EXCLUDED_BY_CONFIG ->
+        ForwardPlanSkipReason.EXCLUDED_DEPENDENCY_TYPE
+
+      ForwardAdmissionRefusal.EXPECT_IN_DEPENDENCY ->
+        ForwardPlanSkipReason.EXPECT_DEPENDENCY_TYPE
+
+      ForwardAdmissionRefusal.CROSS_MODULE_ADMISSION_DISABLED ->
+        ForwardPlanSkipReason.CROSS_MODULE_DISABLED_DEPENDENCY_TYPE
+
+      // Defensive: the classifier tests nestedness ahead of the dependency route, so a nested
+      // refusal should never reach here. If one ever does, it must not be told to widen scope.
+      ForwardAdmissionRefusal.NESTED_DECLARATION -> ForwardPlanSkipReason.UNDECLARED_CLASS
+
+      ForwardAdmissionRefusal.NOT_INCLUDED, null ->
+        ForwardPlanSkipReason.UNEXPORTED_DEPENDENCY_TYPE
+    }
+
+    else -> ForwardPlanSkipReason.UNSUPPORTED
+  }
+}
+
+/**
+ * The detail slot for whichever of the extractors above applies, in the order the three callable
+ * skip sites already chain them: the author's own opt-in marker first, then the `actual typealias`
+ * redirect, then the dependency-scope name, then the undeclared type, then the sealed base.
+ *
+ * `collectionComponentDetail()` is deliberately *not* in the chain: it is keyed to
+ * [ForwardPlanSkipReason.COLLECTION], and the property route has its own component wording
+ * ("Collection (element type ...)") for that case.
+ */
+internal fun BridgeType.skipDetail(): String? = optInMarkerDetail()
+  ?: actualTypeAliasTargetDetail()
+  ?: unexportedDependencyDetail()
+  ?: undeclaredTypeDetail()
+  ?: sealedTypeDetail()

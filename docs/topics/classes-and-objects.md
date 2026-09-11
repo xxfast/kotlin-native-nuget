@@ -13,7 +13,7 @@ A Kotlin `class` becomes a C# `class` backed by an opaque `StableRef` handle, im
 | nullable exported class *parameter* (`Foo?`), on a constructor, method, extension, or top-level function | nullable handle argument | `null` rides `IntPtr.Zero`, no has-value/value pair needed; see A nullable class handle parameter below ([#131](https://github.com/xxfast/kotlin-native-nuget/issues/131)) |
 | two or more same-named methods | one C# overload set | numbered native export/extern name, unnumbered public name; see Method overloads below ([ADR-090](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/090-ordinary-class-method-overloads.md)) |
 | a method with a trailing run of defaulted parameters | omitting overload per suffix length | same `@JvmOverloads` rule as constructor defaults, see Method default parameters below ([ADR-096](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/096-function-default-parameters.md)) |
-| nested `class`/`object`/`interface`/`enum class` | never declared | skips named (`SKIPPED_NESTED_DECLARATION` on the declaration, `UNDECLARED_CLASS` on a member typed with it), except a companion object and a sealed subclass, which are still declared; see Nested classes and objects below ([ADR-064](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/064-forward-unsupported-declaration-diagnostics.md)) |
+| nested `class`/`object`/`interface`/`enum class` (at any depth) | never declared | skips named (`SKIPPED_NESTED_DECLARATION` on the declaration, `UNDECLARED_CLASS` on a member typed with it), except a companion object and a sealed subclass, which are still declared; see Nested classes and objects below ([ADR-064](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/064-forward-unsupported-declaration-diagnostics.md)) |
 
 ## Kotlin
 
@@ -506,6 +506,95 @@ public void Rate_WithMood_DispatchesToEnumOverload()
     </p>
 </warning>
 
+## A class's own interface beside a kept base class {id="interface-beside-kept-base"}
+
+A class with an exported base class keeps its own exported interfaces in the C# base list too:
+`class X : Base(), IFoo` renders `public class X : Base, IFoo`, not `public class X : Base` with
+`IFoo` silently dropped. An interface member the base doesn't implement binds on the class itself
+(including an inherited default body), and `override` is spelled only against a base-**class**
+member: an interface member with no base-class counterpart renders `virtual`, since the slot starts
+on `X` and an `override` there would be CS0115. An interface the base already implements is not
+repeated on the list.
+
+From `test-library/src/nativeMain/kotlin/.../ledge/Ledge.kt`:
+
+```kotlin
+open class Shelf {
+  fun height(): Int = 3
+}
+
+interface Groomable {
+  fun groom(): String
+
+  fun brushes(): Int = 1
+}
+
+class Ledge : Shelf(), Groomable {
+  override fun groom(): String = "Mylo: groomed"
+}
+```
+
+### Generated C# {id="interface-beside-kept-base-generated-c"}
+
+From `Interop.cs`. `Groom` is `virtual`, not `override` (`Shelf` declares no `Groom`), and `Brushes`,
+`Groomable`'s inherited default, is bound directly on `Ledge`:
+
+```C#
+public class Ledge : Shelf, IGroomable
+{
+    public virtual string Groom()
+    {
+        IntPtr nativeResult = Native_Groom(_handle, out IntPtr error);
+        if (error != IntPtr.Zero)
+        {
+            throw NugetErrorNative.BuildException(error);
+        }
+        return Marshal.PtrToStringUTF8(nativeResult)!;
+    }
+
+    public int Brushes()
+    {
+        int result = Native_Brushes(_handle, out IntPtr error);
+        if (error != IntPtr.Zero)
+        {
+            throw NugetErrorNative.BuildException(error);
+        }
+        return result;
+    }
+}
+```
+
+### Using it from C# {id="interface-beside-kept-base-using-it-from-c"}
+
+From `IntegrationTests/InterfaceBesideBaseTests.cs`. Both halves of the base list are live on the one
+handle:
+
+```C#
+[Fact]
+public void Ledge_ReachesTheBaseMemberThroughAnInterfaceReference()
+{
+    using IGroomable groomable = new Ledge();
+
+    // Both halves of the base list are live on the one handle.
+    Assert.Equal(3, ((Shelf)groomable).Height());
+}
+
+[Fact]
+public void Ledge_Brushes_BindsTheInheritedDefault()
+{
+    using IGroomable groomable = new Ledge();
+
+    // Kotlin's default body, bound on `Ledge` because the interface list demands it.
+    Assert.Equal(1, groomable.Brushes());
+}
+```
+
+<note>
+    <p>See <a href="interfaces-abstract-sealed.md">Interfaces, abstract classes and sealed
+    classes</a> for the general kept-base/dropped-base rule
+    (<a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/101-unexported-supertype-skip.md">ADR-101</a>).</p>
+</note>
+
 ## Constructor default parameters
 
 For each exported constructor, every maximal trailing run of defaulted parameters synthesizes one
@@ -797,14 +886,19 @@ public void NarratorRate_SynthesizedOverload_UsesBoostDefaultOfOne()
 
 <note>
     <p>
-        A method carrying <code>override</code> synthesizes nothing: Kotlin forbids an override
-        from restating its base's default values, so the defaults, and the synthesized overload,
-        belong to the base declaration and are reached through ordinary C# inheritance on the
-        generated subclass. The interface route (<a href="interfaces-abstract-sealed.md">Interfaces,
-        abstract and sealed classes</a>) also synthesizes nothing in v1: adding a member to a
-        generated C# interface would oblige every implementer to carry it. A defaulted interface
-        member bound onto an implementing <b>class</b> is unaffected and does get synthesis, since
-        it is emitted as an ordinary class member.
+        An <code>override</code> whose C# base carries the overload synthesizes nothing itself:
+        Kotlin forbids an override from restating its base's default values, so the defaults, and
+        the synthesized overload, belong to the base declaration and are reached through ordinary
+        C# inheritance on the generated subclass. When the base is <b>unexported</b> and dropped
+        (see <a href="interfaces-abstract-sealed.md">Interfaces, abstract and sealed classes</a>
+        and <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/101-unexported-supertype-skip.md">ADR-101</a>),
+        there is no C# base to inherit an overload from, so the override synthesizes its own,
+        reading the default flags off the root of its <code>findOverridee()</code> chain, the
+        declaration furthest up that actually carries them. The interface route (<a
+        href="interfaces-abstract-sealed.md">Interfaces, abstract and sealed classes</a>) still
+        synthesizes nothing in v1: adding a member to a generated C# interface would oblige every
+        implementer to carry it. A defaulted interface member bound onto an implementing <b>class</b>
+        is unaffected and does get synthesis, since it is emitted as an ordinary class member.
     </p>
 </note>
 
@@ -1032,8 +1126,8 @@ with `SKIPPED_UNSUPPORTED_TYPE` naming the new `UNDECLARED_CLASS` reason (a null
 reports `UNDECLARED_CLASS`, not `NULLABLE`):
 
 ```
-[nuget:SKIPPED_UNSUPPORTED_TYPE] Skipping io.github.xxfast.kotlin.native.nuget.test.Newsroom.schedule: its UNDECLARED_CLASS type combination is not supported. `io.github.xxfast.kotlin.native.nuget.test.models.Broadcast.Schedule` is nested inside another declaration, and a nested class or object is never declared in C# (only top-level ones are, plus sealed subclasses and companion objects), so every member typed with it is skipped rather than emitted as a dangling reference; move it to the top level of its file
-    at .../Newsroom.kt:89
+[nuget:SKIPPED_UNSUPPORTED_TYPE] Skipping io.github.xxfast.kotlin.native.nuget.test.Newsroom.schedule: its type `io.github.xxfast.kotlin.native.nuget.test.models.Broadcast.Schedule` is a nested class or object never declared in C# (UNDECLARED_CLASS). `io.github.xxfast.kotlin.native.nuget.test.models.Broadcast.Schedule` is nested inside another declaration, and a nested class or object is never declared in C# (only top-level ones are, plus sealed subclasses and companion objects), so every member typed with it is skipped rather than emitted as a dangling reference; move it to the top level of its file
+    at .../Newsroom.kt:90
 ```
 
 The same gate closes the ADR-066 reachability closure's matching hole: a nested dependency
@@ -1042,6 +1136,11 @@ The same gate closes the ADR-066 reachability closure's matching hole: a nested 
 warning, instead of being declared at namespace root under a name nothing resolves against. The
 owning dependency class, `Broadcast`, still generates and constructs, and its unrelated members
 still bind; see `IntegrationTests/NestedClassGateTests.cs`.
+
+The rule holds at any nesting depth: `class A { class B { class C } }` gives `B` and `C` each their
+own `SKIPPED_NESTED_DECLARATION` warning, every public declaration named exactly once regardless of
+how deep it sits ([ADR-064](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/064-forward-unsupported-declaration-diagnostics.md)
+2026-09-11 amendment).
 
 <note>
     <p>The generated code itself is always <code>global::</code>-qualified, so a generated type
@@ -1056,9 +1155,6 @@ still bind; see `IntegrationTests/NestedClassGateTests.cs`.
 ## Limitations
 
 - `Map`/`Set` **inputs** (parameters) are not planned yet; see [Collections](collections.md).
-- A nested class/object/interface/enum typed **property** (module-local or a dependency type) skips
-  through the generic `SKIPPED_UNSUPPORTED_PROPERTY` message with no `UNDECLARED_CLASS` reason
-  attached, unlike a parameter or return position; see [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md).
 - Method overloads on this page cover the class-method route. `object` members, companion members,
   top-level functions, and extension functions have their own numbering scopes and are documented
   on [Objects and companions](objects-and-companions.md#method-overloads),
@@ -1068,8 +1164,10 @@ still bind; see `IntegrationTests/NestedClassGateTests.cs`.
   out of scope for both the constructor and function default-parameters features; see
   [ADR-091](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/091-constructor-default-parameters.md)
   and [ADR-096](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/096-function-default-parameters.md).
-- A method carrying `override`, and the interface route, synthesize no omitting overload for a
-  defaulted parameter; see the note under Method default parameters above.
+- An `override` whose C# base carries the overload, and the interface route, synthesize no
+  omitting overload for a defaulted parameter; see the note under Method default parameters above.
+  An `override` on a **sealed** class arm still synthesizes nothing regardless, even when the
+  sealed C# base has no overload to inherit; see [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md).
 - The interface route also still has no overload numbering at all for two same-named interface
   methods; see [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md).
 - An `expect`/`actual` pair's function defaults are only surfaced on the top-level-function route;

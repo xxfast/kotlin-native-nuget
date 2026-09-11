@@ -7,6 +7,10 @@ Accepted
 
 > **Amended by [ADR-124](124-flow-route-sealed-arm-owners.md) (2026-09-10).** The legacy Flow/StateFlow route is keyed to sealed arms; `SEALED_SUBCLASS_UNROUTED` now covers generic and callback-protocol arm members only.
 
+> **Amended below (2026-09-11).** The per-call lambda-parameter route (ADR-036) is keyed to sealed arms too, so `Job.Running.relabel(transform)` binds as `Relabel(Func<string, string>)`. `SEALED_SUBCLASS_UNROUTED` now covers generic arm members, `suspend` lambda parameters, and stored-callback / interface-bridge **pairs**. See "Amendment (2026-09-11): the per-call lambda-parameter route on the arms".
+
+> **Amended below (2026-09-11).** The sealed **base** carries its own declared methods, so "declared-only" no longer means "absent from C#" for a base `open fun`: it means the base is the carrier and every arm inherits it. See "Amendment (2026-09-11)".
+
 ## Implementation notes (2026-09-08)
 
 Shipped as designed, with four corrections found during implementation:
@@ -444,7 +448,9 @@ overloads, `Next() is Job.Done`, `Finish()`, `Idle.Poke()`, `Idle.Describe() == 
 exports. `ForwardAbiContract.csharp` still returns `emptyList()` for a `CirSealedClass`
 (`ForwardAbiContract.kt:103` `else -> emptyList()`, **verified**), so the new method imports are
 collected by the `csharpLegacy` text scraper, exactly as ADR-111's property imports are (ROADMAP
-line 44 stays open, unchanged by this ADR). The `require(signatures.size == 1)` in `csharpLegacy`
+line 44 stays open, unchanged by this ADR). (Superseded 2026-09-11: that `else -> emptyList()` is
+gone; `csharp()` walks `CirSealedSubclass.ordinaryNativeImports` and these method imports are
+structural. See the ADR-078 amendment.) The `require(signatures.size == 1)` in `csharpLegacy`
 fails the build if the Kotlin and C# halves disagree, so a prefix mistake is loud.
 
 ## Consequences
@@ -467,14 +473,114 @@ fails the build if the Kotlin and C# halves disagree, so a prefix mistake is lou
   arm's inherited base body (pair with line 47); the `dispose` name collision (pre-existing on
   ordinary classes too); `ForwardAbiContract.csharp` structural walk of `CirSealedSubclass` (line 44).
 
+## Amendment (2026-09-11): the sealed base carries its own declared methods
+
+`CirSealedClass` gains `methods`, the method half of ADR-111's same-date amendment. A new
+`sealedBaseEntries(sealed)` in `ForwardCallablePlanner` plans the member functions the base itself
+declares (`parentDeclaration == sealed`) under the base's own `${sealed}_` export prefix, keyed to
+the base as receiver, and `translateSealedClass` / `SealedClassExports` project both halves off
+those plans exactly as they do an arm's.
+
+What changes against the Decision above:
+
+- **No `ABSTRACT` structural skip on the base.** An `abstract fun` is precisely what needs a plan
+  here: the export calls it through the base type, so Kotlin's own dispatch reaches the arm's body
+  and the C# member can be concrete. `isVirtual` therefore covers the abstract case, and the member
+  renders `public virtual`, never `public abstract` (ADR-111's amendment prices that choice).
+- **An arm's `isOverride` is no longer pinned to `false`.** It is decided on the *projected C#
+  signature*: an arm method whose name and parameter types match a base method's spells `override`
+  when the return types agree and `new` when they do not (a value-type covariant return is CS0508;
+  omitting the modifier is CS0108, which `GeneratedBindingsCheck` compiles as an error). Keyed on
+  the projection rather than on Kotlin's `override` keyword, because an arm can override something
+  the base's own plan declined, and then there is nothing in C# to override.
+- **The `Modifier.OVERRIDE` early return on ADR-096's synthesis gate is narrowed** to
+  `method.findOverridee()?.parentDeclaration == sealed`, the same move ADR-096's own 2026-09-11
+  amendment made in `classEntries`. Skipping every Kotlin `override` was only correct while the C#
+  base carried nothing; the base carries its declared members and their omitting overloads now, and
+  the arm inherits them. An `override` of anything else (an interface member) still owes its own.
+  One case remains conservative and is deliberately left: if the base's own plan *declined* the
+  member, the overridee still points at the base and the arm synthesizes nothing. No fixture
+  exercises it, and the visible symptom would be a missing short overload, not wrong output.
+- **A base-declared member with no route is named.** `SEALED_BASE_UNROUTED` is the base's twin of
+  `SEALED_SUBCLASS_UNROUTED`, separate because the remedy differs: the arms do carry the suspend
+  (ADR-118) and Flow (ADR-124) routes the base does not, so the hint says to declare it on each arm.
+  `Job.rest`, the `open suspend fun` this ADR, ADR-118 and ROADMAP item 35 each found absent in
+  turn, finally produces a diagnostic:
+  `Skipping ...Job.rest: it is a SUSPEND member of a sealed base class, which has no route yet
+  (ADR-116)`. Wiring a coroutine scope onto the base itself stays a follow-up.
+
+Two C# test assertions flipped, both recorded in `IntegrationTests/SealedSubclassMethodTests.cs`:
+`Job.Idle.Describe` is now an `override` of a base member rather than a plain public method, and
+`Describe` is on the sealed base rather than absent from it. `Running` still declares no `Describe`
+of its own, which is the same declared-only fact seen from the other side: it inherits the base's.
+
+## Amendment (2026-09-11): the per-call lambda-parameter route on the arms
+
+The third row of the table this ADR opened, after ADR-118's `suspend` and ADR-124's `Flow`, and the
+same shape of fix site for site. A method a sealed arm declares that takes a function parameter
+(ADR-036) binds under the arm's own export prefix: `Job.Running.relabel(transform: (String) -> String)`
+exports as `job_running_relabel` and renders as `public string Relabel(Func<string, string> transform)`
+inside `Job.Running`, through the same thunk and `GCHandle` pair `Cat.DescribeWith` already uses.
+`Job.Idle.pokeWith(action: (String) -> Unit)` is the `Action` half on a `data object` arm.
+
+Six sites, all mirrors of ADR-124's:
+
+- `exports/LambdaParameterExports.kt` gains `forwardArmLambdaMethods(classifier)`, the single
+  selector the Kotlin export loop, the C# translator and the import gate all read, so the three
+  halves cannot disagree about the member set. Declared-only (`parentDeclaration == this`), no
+  `suspend`, no `Flow` return, ADR-115's marker refusal and ADR-123's return refusal applied, and
+  the generated `copy`/`componentN` of a `data` arm excluded (a data class's `copy` can carry a
+  lambda-typed parameter, and the ordinary route excludes it upstream).
+- `NugetProcessor.kt` gains an arm loop beside ADR-118's and ADR-124's, calling the already
+  prefix-keyed `addLambdaParamMethodExport(method, subQualifiedName, armPrefix)` under
+  `attributing(subclass)`. No overload numbering work: neither half of this route carries a suffix.
+- `CirSealedSubclass` gains `callbackMembers: List<CirMember>`, filled by the same
+  `translateCallbackMethod` an ordinary class's `callbackMethods` come from, and `CirSealedRenderer`
+  dispatches it through `renderMember` with the same `indentNestedBody()` re-indent the other member
+  loops take. Deliberately **not** folded into `hasSuspendMethods`: this route is synchronous and
+  needs no scope, so a callback-only arm stays `IDisposable`.
+- The sealed post-process exemption is split by **origin**, not by reason. `CALLBACK_PROTOCOL` is
+  the reason a per-call callback member skips with *and* the reason the structural check above
+  assigns to both halves of a stored-callback (ADR-037) or interface-bridge (ADR-088) pair. No arm
+  route emits a pair, so exempting the constant wholesale would have deleted a pair's diagnostic and
+  put it back into the silent absence this ADR exists to end. The exemption therefore reads
+  `entry.node !in (interfaceBridgeMethods + storedCallbackMethods)`.
+
+Still named `SKIPPED_UNSUPPORTED_COMBINATION` (`SEALED_SUBCLASS_UNROUTED`) on an arm: a generic
+method, a `suspend` lambda parameter (`SUSPEND_CALLBACK_PROTOCOL`, a different constant, never
+exempted), and both halves of an add/remove pair. Routing the pairs is a separate change: their
+export builders are prefix-keyed already, but `translateStoredCallbackMethod` needs a `context` the
+arm branch does not thread today. It is a ROADMAP line, not a deferral hidden in silence.
+
+Two findings worth recording:
+
+- The Kotlin import gate `hasLambdaParamMethods` walked `classes` only, and a sealed class is not in
+  `classes` (ADR-009). `test-library` could never have shown it: its suspend and Flow surface
+  imports `invoke` / `CFunction` / `COpaquePointer` for its own reasons, so the arm's callback
+  wrapper compiled on borrowed imports. A module whose *only* callback owner is a sealed arm would
+  have failed to compile its own generated Kotlin. The gate now walks the arms through the same
+  selector, and `Tier1SealedArmLambdaTest`'s fixture declares no `suspend` and no `Flow` anywhere so
+  the gate is tested honestly rather than masked.
+- The `SEALED_SUBCLASS_UNROUTED` hint ended with "expose an equivalent non-generic member on the
+  sealed subclass instead". That was true while `GENERIC` was the only kind left under the reason;
+  it is wrong for a callback pair, which is not generic. Reworded to name the shape the arm's routes
+  do carry (Verified: found by the C# side reading the diagnostic against `addTicker`).
+
+The research memo warned that `callbackBody` spells `NugetMarshal.FromHandle<$csArgType>` with the
+Kotlin simple name for every non-`String` payload, which would have made `(Int) -> Unit` unbindable
+on an arm. That is no longer true: ADR-036's 2026-09-11 amendment passes a primitive payload by
+value on this route, so the arm inherits the fixed shape for free. The fixture cells use `String`
+because that is the payload the issue asks for, not because of the limitation.
+
 ## Scope
 
 - v1: **declared-only**: the non-suspend, non-generic, non-Flow, non-lambda-parameter public
   member functions a sealed subclass itself declares (its own `override fun`s included), on any
   sealed-subclass kind, with every parameter/return shape `planOrSkip` binds for an ordinary class
   method, overloads, and default-argument omitting overloads.
-- Not in v1: a base-declared `open fun` the arm does not override (absent from that arm, no
-  diagnostic, carried by the deferred base-type item); everything listed under Deferred above.
+- Not in v1 as first shipped: a base-declared `open fun` the arm does not override (absent from
+  that arm, no diagnostic, carried by the deferred base-type item). Since the 2026-09-11 amendment
+  the base carries it and the arm inherits it; everything listed under Deferred above still stands.
 
 ## Claims list
 

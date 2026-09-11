@@ -18,5 +18,8 @@ internal fun FileSpec.Builder.addExtensionFunctionExports(
   // overload number, so a name-derived key would bind every namesake to the first one's plan.
   // ADR-096: plural — a defaulted extension also carries its synthesized omitting overloads.
   val plans: List<ForwardCallablePlan> = callableCatalog.plansFor(func)
+  if (plans.isEmpty()) return
+  // ADR-064: imported behind the plan gate, so a skipped extension leaves no dead import.
+  addImport(func.packageName.asString(), func.simpleName.asString())
   plans.forEach { plan -> addForwardKotlinPlanExport(plan) }
 }

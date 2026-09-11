@@ -36,6 +36,9 @@ class Tier1UnexportedBaseClassSkipTest {
       val label: String = "base"
 
       fun greet(name: String): String = "hello ${'$'}name"
+
+      open fun farewell(name: String, warmly: Boolean = false): String =
+        if (warmly) "bye ${'$'}name, come back soon" else "bye ${'$'}name"
     }
 
     abstract class OutsideAbstractBase {
@@ -131,6 +134,16 @@ class Tier1UnexportedBaseClassSkipTest {
           "got: $diagnostic",
     )
     assertTrue(
+      diagnostic.contains("declared in a dependency"),
+      "a dependency-declared base cannot be admitted by include(...) at all, so the hint must " +
+          "say which case this is; got: $diagnostic",
+    )
+    assertFalse(
+      diagnostic.contains("declared in this module"),
+      "the same-module clause promises include(...) works, which is false for a dependency " +
+          "base; got: $diagnostic",
+    )
+    assertTrue(
       result.generatedFiles.entries
         .single { it.key.endsWith("NugetDiagnostics.json") }
         .value.contains(ForwardDiagnosticKind.SKIPPED_UNEXPORTED_SUPERTYPE.name),
@@ -185,6 +198,16 @@ class Tier1UnexportedBaseClassSkipTest {
       "for a same-module base, include(...) genuinely does admit it, and the hint names the " +
           "package to add; got: $diagnostic",
     )
+    assertTrue(
+      diagnostic.contains("declared in this module"),
+      "a same-module base is the case include(...) does fix, and the hint must say so rather " +
+          "than hedging across both; got: $diagnostic",
+    )
+    assertTrue(
+      diagnostic.contains("alongside"),
+      "an explicit include(...) replaces the rootPackage default, so the advice has to say the " +
+          "package is added alongside the existing scope; got: $diagnostic",
+    )
   }
 
   @Test
@@ -221,6 +244,137 @@ class Tier1UnexportedBaseClassSkipTest {
       "public virtual string Speak()" in result.generatedCSharp,
       "the existing open-member rule still applies: a non-final Kotlin `override` with no " +
           "forward base renders `virtual`; generated C#:\n${result.generatedCSharp}",
+    )
+  }
+
+  /**
+   * ADR-096 amendment (2026-09-11). `Cat.speak` over an *exported* `Animal.speak` synthesizes
+   * nothing, because the generated C# base carries the omitting overload and the subclass inherits
+   * it (`Tier1FunctionDefaultParameterTest`). Once ADR-101 drops the base there is no C# base to
+   * inherit from, so the omitting overload has to be synthesized on the subclass itself or the
+   * one-argument call is CS1501 for the consumer.
+   *
+   * Cross-module on purpose: the default lives on a jar-declared base, Kotlin forbids the override
+   * from restating it, so the only place the bit survives is the overridee's parameter as KSP
+   * reports it through `findOverridee()` onto a compiled dependency. That resolution is what this
+   * cell measures.
+   */
+  @Test
+  fun `an override of a dropped base's defaulted member synthesizes the omitting overload`() {
+    val result = Tier1Harness.run(
+      """
+      package tier1.issue42base
+
+      import dep.outside.OutsideBase
+
+      class Api : OutsideBase() {
+        override fun farewell(name: String, warmly: Boolean): String =
+          "${'$'}{super.farewell(name, warmly)} from Api"
+      }
+      """.trimIndent(),
+      processorOptions = mapOf("nuget.rootPackage" to "tier1.issue42base"),
+      libraries = listOf(dependencyJar),
+    )
+
+    assertTrue(result.compiledClean, "expected no broken source; got: ${result.compileErrors}")
+    val kotlin: String = result.generated
+    assertTrue(
+      "@CName(\"api_farewell\")" in kotlin,
+      "the full-arity override still exports; generated:\n$kotlin",
+    )
+    assertTrue(
+      "@CName(\"api_farewell_2\")" in kotlin,
+      "the dropped base carries no C# overload to inherit, so the omitting overload has to be " +
+          "synthesized here; generated:\n$kotlin",
+    )
+    assertTrue(
+      "Farewell(string name)" in result.generatedCSharp,
+      "the consumer's one-argument call is CS1501 without it; " +
+          "generated C#:\n${result.generatedCSharp}",
+    )
+  }
+
+  @Test
+  fun `a chain through an unexported mid keeps the nearest exported base`() {
+    // ADR-101 amendment (2026-09-11): `Api : LocalMid : LocalExportedBase` with only the mid out
+    // of scope. Dropping the whole base list here would cost the consumer the `is`/`as` relation
+    // against a base that is perfectly generatable, so the walk keeps the nearest exported one and
+    // re-homes only what the dropped mid declares.
+    val result = Tier1Harness.run(
+      mapOf(
+        "Mid.kt" to """
+          package tier1outside.base
+
+          import tier1.issue42base.LocalExportedBase
+
+          open class LocalMid : LocalExportedBase() {
+            fun row(): String = "rowing"
+          }
+        """.trimIndent(),
+        "Api.kt" to """
+          package tier1.issue42base
+
+          import tier1outside.base.LocalMid
+
+          open class LocalExportedBase {
+            fun anchor(): String = "anchored"
+          }
+
+          class Api : LocalMid() {
+            fun ping(): String = "pong"
+          }
+        """.trimIndent(),
+      ),
+      processorOptions = mapOf("nuget.rootPackage" to "tier1.issue42base"),
+    )
+
+    assertTrue(result.compiledClean, "expected no broken source; got: ${result.compileErrors}")
+    assertTrue(
+      "public class Api : LocalExportedBase" in result.generatedCSharp,
+      "the nearest exported base is generatable, so the chain must render it rather than going " +
+          "base-less; generated C#:\n${result.generatedCSharp}",
+    )
+    assertTrue(
+      "export_api_ping" in result.generated,
+      "generated:\n${result.generated}",
+    )
+    assertTrue(
+      "export_api_row" in result.generated,
+      "the dropped intermediate's member has no C# carrier other than Api, so it re-homes; " +
+          "generated:\n${result.generated}",
+    )
+    assertFalse(
+      "export_api_anchor" in result.generated,
+      "the kept base still carries its own members; re-homing them onto Api hides the base " +
+          "member (CS0108); generated:\n${result.generated}",
+    )
+    assertTrue(
+      "export_localexportedbase_anchor" in result.generated,
+      "the kept base exports its own member as itself; generated:\n${result.generated}",
+    )
+
+    val diagnostics: List<String> = result.kspWarnings.filter {
+      it.contains(ForwardDiagnosticKind.SKIPPED_UNEXPORTED_SUPERTYPE.name)
+    }
+    assertEquals(
+      1,
+      diagnostics.size,
+      "one base is dropped from the chain, so exactly one diagnostic is owed; " +
+          "kspWarnings=${result.kspWarnings}",
+    )
+    val diagnostic: String = diagnostics.single()
+    assertTrue(
+      diagnostic.contains("Api : LocalMid"),
+      "the diagnostic names the dropped hop, not the kept base; got: $diagnostic",
+    )
+    assertTrue(
+      diagnostic.contains("extending LocalExportedBase, the nearest exported base"),
+      "with a base kept, `no base at all` is false and the message has to say which base Api " +
+          "actually extends; got: $diagnostic",
+    )
+    assertFalse(
+      diagnostic.contains("no base at all"),
+      "the single-drop wording is wrong here; got: $diagnostic",
     )
   }
 }

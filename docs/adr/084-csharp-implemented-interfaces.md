@@ -468,3 +468,25 @@ contract table.
   property-bearing subscription interface also produces non-compiling generated Kotlin, again
   with no diagnostic. Both should either be fixed by converging on this ADR's full-member slot
   planner or be given ADR-064-style diagnostics.
+
+### Amendment (2026-09-11): enum slots are spelled by the shared classifier
+
+`ForwardInterfaceBridgePlanner.bridgeType` detected an enum itself and filled the slot with the
+qualified name for Kotlin and the bare *simple* name for C#, with no membership test. A nested enum
+(`interface Kettle { enum class Whistle }`) is never declared as a C# enum at all, and an enum
+outside the file's `using` list only resolves by luck, so `{Iface}BridgeState` could name a type the
+consumer cannot compile (CS0246/CS0426). The Kotlin half had the same hole: the simple name in the
+generated `override` position resolves against no import.
+
+The planner now takes the `ForwardBridgeTypeClassifier` (`plan(iface, classifier)`, both call sites
+pass the one already in scope) and routes the enum branch through `classify`. Anything but
+`BridgeType.Enum` back means the interface plans to `null`: no factory export, no bridge state,
+`NugetMarshal.HandleOf` keeps throwing for it, which is this ADR's existing posture for every
+out-of-scope member. A declared enum is spelled from `BridgeType.Enum.csharpType`
+(`global::`-qualified, the same helper every other C# position uses) and from the qualified name in
+Kotlin. A nullable enum still plans `null`: an `int` wire has no null sentinel.
+
+No mapping decision and no diagnostic: a null plan stays silent here, as it already is for `var`,
+object and collection members. Pinned by two `Tier1InterfaceBridgeFactoryTest` cells (`Kettle` with
+a nested `Whistle` gets no factory on either half; `Stove` with a top-level `Heat` gets a qualified
+one on both).

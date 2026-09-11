@@ -15,4 +15,12 @@ import dev.other.core.UnexportedBase
  */
 class Issue42Derived : UnexportedBase() {
   fun own(): String = "own"
+
+  /**
+   * Overrides a base method whose default parameter lives on the dropped base. The override
+   * itself cannot restate `warmly = false`, so the omitting overload C# gets can only come from
+   * the base's declaration.
+   */
+  override fun farewell(name: String, warmly: Boolean): String =
+    "${super.farewell(name, warmly)} from Oreo"
 }

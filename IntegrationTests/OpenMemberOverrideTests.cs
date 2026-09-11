@@ -4,13 +4,13 @@ using TestLibrary.Bed;
 namespace IntegrationTests;
 
 /// <summary>
-/// ADR-101 / ADR-075: a Kotlin base class's own `open val` / `open var` must render `virtual`
-/// in C#, so a subclass's `override` compiles instead of failing CS0506.
+/// ADR-101 / ADR-075: a Kotlin base class's own `open val` / `open var` / `open fun` must render
+/// `virtual` in C#, so a subclass's `override` compiles instead of failing CS0506.
 ///
-/// `Bed` declares `open val softness`, `open var occupant` and a final `val brand`. `Hammock`
-/// overrides the two open ones. Existing fixtures only ever reach `virtual` through the
-/// `override && !final` arm (`Animal.vibe` overriding `Pet.vibe`), so a *declared* `open`
-/// member has no coverage anywhere.
+/// `Bed` declares `open val softness`, `open var occupant`, `open fun fluff()`, plus a final
+/// `val brand` and a final `describe()` as controls. `Hammock` overrides the three open ones.
+/// Existing fixtures only ever reach `virtual` through the `override && !final` arm
+/// (`Animal.vibe` overriding `Pet.vibe`), so a *declared* `open` member has no coverage.
 ///
 /// The compile is the real proof; the reflection facts make the rule visible. `IsVirtual` is
 /// also true for an `override` accessor, so the virtual/final split is asserted on `Bed`, and
@@ -76,6 +76,16 @@ public class OpenMemberOverrideTests
     }
 
     [Fact]
+    public void Hammock_OverridesOpenFun_DispatchesThroughBothStaticTypes()
+    {
+        using var hammock = new Hammock();
+
+        // `Hammock.fluff()` calls `super.fluff()`, so the base's text comes through first.
+        Assert.Equal("Mylo fluffs the Catnap, and it swings", hammock.Fluff());
+        Assert.Equal("Mylo fluffs the Catnap, and it swings", ((Bed)hammock).Fluff());
+    }
+
+    [Fact]
     public void Bed_Describe_ReadsTheBasesOwnProperties()
     {
         using var bed = new Bed();
@@ -113,6 +123,32 @@ public class OpenMemberOverrideTests
         Assert.NotNull(brand);
         Assert.NotNull(brand!.GetMethod);
         Assert.False(brand.GetMethod!.IsVirtual);
+    }
+
+    [Fact]
+    public void Bed_OpenFun_RendersVirtual()
+    {
+        MethodInfo? fluff = typeof(Bed).GetMethod("Fluff");
+
+        Assert.NotNull(fluff);
+        Assert.True(fluff!.IsVirtual);
+    }
+
+    [Fact]
+    public void Bed_FinalFun_StaysNonVirtual()
+    {
+        MethodInfo? describe = typeof(Bed).GetMethod("Describe");
+
+        Assert.NotNull(describe);
+        Assert.False(describe!.IsVirtual);
+    }
+
+    [Fact]
+    public void Hammock_Fluff_OverridesRatherThanHides()
+    {
+        MethodInfo fluff = typeof(Hammock).GetMethod("Fluff")!;
+
+        Assert.Equal(typeof(Bed), fluff.GetBaseDefinition().DeclaringType);
     }
 
     [Fact]

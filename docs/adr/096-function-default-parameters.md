@@ -168,6 +168,42 @@ A *class* method that is a defaulted interface member bound onto the implementin
 as an ordinary class member. The resulting class has an omitting overload the interface does not:
 legal C#, and consistent with the interface exclusion above.
 
+**Amendment (2026-09-11): the `override` exclusion keys on the C# `override` bit, and defaults are
+read from the root overridee.** The exclusion above is stated in terms of `Modifier.OVERRIDE`, but
+its *reason* is a C# one: the generated base class already declares the member, so it already
+carries the member's omitting overload and the generated subclass inherits it. Once
+[ADR-101](101-unexported-supertype-skip.md) drops an unexported base, that carrier does not exist.
+`class Issue42Derived : UnexportedBase()` renders base-less, so `Farewell(string name)` had no
+declaration anywhere and the consumer's one-argument call was CS1501, even though the Kotlin call
+`farewell(name)` is perfectly legal against the inherited default.
+
+Two changes, both in `classEntries` (`ForwardCallablePlanner.kt`):
+
+- The gate is `overridesBaseClassMember(superClass)`, the same predicate the entry's `isOverride`
+  bit reads (ADR-101's 2026-09-11 amendment), hoisted into one local so the modifier and the gate
+  cannot drift apart again. A member whose C# base declares it still synthesizes nothing; a member
+  with no C# base synthesizes as any non-overriding member would. This also admits an `override` of
+  an *exported interface's* defaulted member on a base-less class, which is consistent: the
+  non-overridden case already synthesizes on the class (above), and the generated interface carries
+  no overload for it to collide with.
+- The default flags come from `memberDefaultFlags`, not from the override's own parameters. Kotlin
+  forbids an override from restating a default, so dropping the gate alone would have synthesized
+  nothing at all: every parameter of the override reports `hasDefault = false`. The chain is walked
+  to its root (`generateSequence { findOverridee() }.lastOrNull()`), because an intermediate
+  override in a two-deep chain reports `false` for exactly the same reason. This is the same
+  erasure that already forced the `expect`/`actual` lookups in "Defaults source" below.
+
+The `sealedSubclassEntries` twin ([ADR-116](116-sealed-subclass-methods.md)) keeps the old
+modifier-keyed gate; its `isOverride` is pinned `false` for a different reason (the generated sealed
+base declares nothing), and it is tracked separately.
+
+**Verified** by `scripts/verify.sh` on 2026-09-11, which settles the two claims below that a build
+could settle. `UnexportedBase.farewell(name, warmly = false)` lives in `:test-models`, a separate
+Kotlin/Native module, so `Issue42Derived.farewell`'s overridee is resolved out of a **klib**, not
+out of source: `findOverridee()` returns it and its parameter reports `hasDefault = true` from
+metadata, producing `issue42derived_farewell_2` and `public string Farewell(string name)`. The
+jar-sourced twin is covered by `Tier1UnexportedBaseClassSkipTest`.
+
 ### Numbering, per counter scope
 
 Synthesized entries are appended **after every declared entry of the same counter scope**, continuing
@@ -354,6 +390,10 @@ each `_$n` is whatever that route's counter has reached.)
   2. *Kotlin forbids an `override` from restating defaults*, from the language documentation
      (functions.html#default-arguments), not from a compile. The exclusion is conservative either
      way: if the bit turned out to be `true` on an override, the exclusion only costs an overload.
+     **Restated 2026-09-11, now Verified and no longer conservative**: the bit is `false` on an
+     override (KSP 2.3.10), which is why the 2026-09-11 amendment above has to read the flags off
+     the root overridee. Once the exclusion no longer fires for a dropped base, a wrong answer here
+     would have cost the overload outright rather than merely leaving the base's copy in place.
   3. *A top-level `expect fun`'s parameter count and order match its `actual`'s*, guaranteed by the
      language's actualization rules but not spiked (ADR-091 carries the same claim for classes); the
      one positional lookup this ADR keeps, and its parameter-count guard, rely on it.

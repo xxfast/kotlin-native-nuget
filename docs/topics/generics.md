@@ -6,6 +6,7 @@ Generic classes and functions cross the bridge through a type-erased native laye
 |---|---|---|
 | `class<T>` | `class<T>` | type-erased bridge + generic C# wrapper |
 | `class<T>(...)` constructor | typed constructors | typed arguments through the bridge |
+| `class X : GenericBase<Arg>(...)` | `class X : GenericBase<Arg>` | subclassing an exported generic base spells the closed type argument; an `open` generic base renders `virtual Dispose()`, see [ADR-101](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/101-unexported-supertype-skip.md) |
 | nullable property (`val x: T?`) | `T?` | a `null` read surfaces as `null`, or `default(T)` at a value-type instantiation, see [ADR-083](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/083-nullable-collection-components.md) |
 | `fun <T> f()` | typed variants | runtime dispatch via `NugetMarshal` |
 | `<T : Bound>` constraint | `where T : ...` | see [ADR-015](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/015-generic-type-constraint-mapping.md) |
@@ -42,6 +43,16 @@ class PetBox<T : Pet>(val value: T) {
   init {
     require(value.name.isNotBlank()) { "PetBox needs a named pet" }
   }
+}
+```
+
+A class extending an exported generic base, from `test-library/src/nativeMain/kotlin/.../parcel/Parcel.kt`:
+
+```kotlin
+open class Parcel<T>(val value: T)
+
+class NamedParcel(name: String) : Parcel<String>(name) {
+  fun own(): String = "own:$value"
 }
 ```
 
@@ -151,6 +162,42 @@ public class PetBox<T> : IDisposable, INugetHandle where T : IPet
 }
 ```
 
+`NamedParcel` closes `Parcel<T>` over `string` in its base list, and, since `Parcel` is declared
+`open`, its generated `Dispose()` is `virtual` so `NamedParcel`'s `override` compiles. `NamedParcel`
+inherits `Value` from `Parcel<string>`'s own export rather than re-exporting it:
+
+```C#
+public class Parcel<T> : IDisposable, INugetHandle
+{
+    internal IntPtr _handle;
+
+    public T Value => NugetMarshal.FromHandle<T>(ParcelNative.Get_value(_handle));
+
+    public virtual void Dispose()
+    {
+        /* ... */
+    }
+}
+
+public class NamedParcel : Parcel<string>
+{
+    public NamedParcel(string name) : base(IntPtr.Zero)
+    {
+        /* ... */
+    }
+
+    public string Own()
+    {
+        /* ... */
+    }
+
+    public override void Dispose()
+    {
+        /* ... */
+    }
+}
+```
+
 A generic function dispatches per primitive type at runtime, falling back to the object/handle path
 otherwise. The object path materialises `T` from a generated factory registry
 (`NugetMarshal.Materialize<T>`) rather than reflecting over `T`'s constructor:
@@ -251,6 +298,24 @@ public void AdoptPet_Oreo_ReturnsSameCat()
     using var oreo = new Cat("Oreo", 9);
     using Cat adopted = Helpers.adoptPet<Cat>(oreo);
     Assert.Equal("Oreo", adopted.Name);
+}
+```
+
+A class extending an exported generic base, from `IntegrationTests/GenericBaseClassTests.cs`:
+
+```C#
+[Fact]
+public void NamedParcel_InheritsValueFromGenericBase()
+{
+    using var parcel = new NamedParcel("Oreo");
+    Assert.Equal("Oreo", parcel.Value);
+}
+
+[Fact]
+public void NamedParcel_IsAssignableToClosedGenericBase()
+{
+    using var parcel = new NamedParcel("Oreo");
+    Assert.IsAssignableFrom<Parcel<string>>(parcel);
 }
 ```
 

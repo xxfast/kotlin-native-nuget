@@ -366,6 +366,23 @@ Not touched:
   outside a small allow-list of the runtime support surface. That guard is what makes the next
   instance of this defect a red test instead of a consumer's bug report.
 
+### 2026-09-11: the guard is declaration-oriented
+
+The scan originally read one trimmed line at a time, so a declaration that wraps was invisible to
+it. `NugetMarshal.ReadMap` wraps its parameter list onto a second line (`cir/CirMarshalRenderer.kt`):
+the header carries no `IntPtr` and the continuation does not start with `public `, so neither line
+could ever be an offender and the allow-list carried a comment saying `ReadMap` was left out on
+purpose.
+
+`Tier1StructuralInteropCsTest` now scans declarations, not lines: a `public ` header whose
+parentheses do not balance is joined to its continuation lines with a single space until they do.
+`ReadMap` is therefore seen, and it is named in the allow-list like every other runtime helper.
+
+A second assertion in the same cell requires every allow-list entry to match at least one scanned
+declaration. That is what keeps the list a decision: an entry the scan cannot reach (`ReadMap`
+before this change) or a member that stops being emitted fails the cell instead of sitting in the
+list unexercised.
+
 ### Inferred claims
 
 Everything else is verified by source reading (file and line inline) or by reading generated output

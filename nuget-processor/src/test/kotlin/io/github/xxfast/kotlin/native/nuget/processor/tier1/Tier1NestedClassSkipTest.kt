@@ -44,7 +44,13 @@ class Tier1NestedClassSkipTest {
     }
 
     class Quiet {
-      class Unused
+      class Unused {
+        class Deeper
+      }
+
+      private class Hushed {
+        class Buried
+      }
     }
   """.trimIndent()
 
@@ -53,7 +59,7 @@ class Tier1NestedClassSkipTest {
     val result = Tier1Harness.run(source)
 
     assertTrue(result.compiledClean, "expected no broken source; got: ${result.compileErrors}")
-    listOf("Nested", "Single", "Unused").forEach { nested ->
+    listOf("Nested", "Single", "Unused", "Deeper").forEach { nested ->
       assertFalse(
         result.generatedCSharp.contains(nested),
         "expected no declaration of, or dangling reference to, $nested; generatedCSharp=" +
@@ -87,6 +93,7 @@ class Tier1NestedClassSkipTest {
       "tier1.nestedclass.Owner.Nested",
       "tier1.nestedclass.Owner.Single",
       "tier1.nestedclass.Quiet.Unused",
+      "tier1.nestedclass.Quiet.Unused.Deeper",
     ).forEach { declaration ->
       val warning: String = requireNotNull(
         nestedWarnings.firstOrNull { it.contains(declaration) },
@@ -101,6 +108,12 @@ class Tier1NestedClassSkipTest {
     assertFalse(
       nestedWarnings.any { it.contains("Companion") },
       "expected no nested-declaration warning for the companion; nestedWarnings=$nestedWarnings",
+    )
+    // The walk descends through public children only: what hides under a private owner is not
+    // reachable API, so neither the owner nor anything below it is a declaration to report.
+    assertFalse(
+      nestedWarnings.any { it.contains("Hushed") || it.contains("Buried") },
+      "expected no warning under the private owner; nestedWarnings=$nestedWarnings",
     )
     assertTrue(
       result.generated.contains("export_owner_create"),

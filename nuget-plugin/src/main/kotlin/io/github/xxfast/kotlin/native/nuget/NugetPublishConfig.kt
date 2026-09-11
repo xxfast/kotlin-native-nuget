@@ -25,8 +25,16 @@ class NugetPublishConfig {
   private val _include = mutableListOf<String>()
   private val _exclude = mutableListOf<String>()
 
+  // ADR-115 amendment: fully-qualified `@RequiresOptIn` marker names whose declarations keep
+  // exporting despite carrying them. The inverse of binary-compatibility-validator's
+  // `nonPublicMarkers`: that lists what to hide, this lists what to keep. Entries are trusted
+  // unvalidated; a misspelt one simply waives nothing, and the SKIPPED_OPT_IN_MARKER warning next
+  // to it prints the correct FQN.
+  private val _exportMarkers = mutableListOf<String>()
+
   val include: List<String> get() = _include.toList()
   val exclude: List<String> get() = _exclude.toList()
+  val exportMarkers: List<String> get() = _exportMarkers.toList()
 
   fun include(vararg packages: String) {
     _include.addAll(packages)
@@ -34,5 +42,9 @@ class NugetPublishConfig {
 
   fun exclude(vararg packages: String) {
     _exclude.addAll(packages)
+  }
+
+  fun exportMarkers(vararg markers: String) {
+    _exportMarkers.addAll(markers)
   }
 }

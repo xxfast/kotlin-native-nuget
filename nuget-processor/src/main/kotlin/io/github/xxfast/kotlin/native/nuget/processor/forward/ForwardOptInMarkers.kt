@@ -32,13 +32,21 @@ private const val REQUIRES_OPT_IN: String = "kotlin.RequiresOptIn"
  * the forward direction never generates a C# subclass of an exported Kotlin class, so such a type
  * is still safe to export. Do not "fix" it.
  */
-private fun KSAnnotation.optInMarkerName(): String? {
+private fun KSAnnotation.optInMarkerName(exportMarkers: Set<String>): String? {
   val declaration: KSDeclaration = annotationType.resolve().declaration
   val marker: Boolean = declaration.annotations.any { meta ->
     meta.annotationType.resolve().declaration.qualifiedName?.asString() == REQUIRES_OPT_IN
   }
   if (!marker) return null
-  return declaration.qualifiedName?.asString() ?: declaration.simpleName.asString()
+  val name: String =
+    declaration.qualifiedName?.asString() ?: declaration.simpleName.asString()
+  // ADR-115 amendment: `publish { exportMarkers(...) }` waives a named marker. Answering null is
+  // the whole mechanism: every read site above asks this one function, so a waived declaration is
+  // indistinguishable from an unmarked one, exports through the ordinary route, and is never
+  // diagnosed. A waived marker also waives a TYPE marked with it, because the classifier reads
+  // the same function.
+  if (name in exportMarkers) return null
+  return name
 }
 
 /**
@@ -61,11 +69,13 @@ private fun KSAnnotation.optInMarkerName(): String? {
  * `@set:Marker` skips the whole property rather than exporting it get-only: an accessor-level
  * partial projection does not exist in the forward plan.
  */
-internal fun KSAnnotated.optInMarker(): String? {
-  val own: String? = annotations.firstNotNullOfOrNull { annotation -> annotation.optInMarkerName() }
+internal fun KSAnnotated.optInMarker(exportMarkers: Set<String>): String? {
+  val own: String? = annotations
+    .firstNotNullOfOrNull { annotation -> annotation.optInMarkerName(exportMarkers) }
   if (own != null) return own
   val setter: KSPropertySetter = (this as? KSPropertyDeclaration)?.setter ?: return null
-  return setter.annotations.firstNotNullOfOrNull { annotation -> annotation.optInMarkerName() }
+  return setter.annotations
+    .firstNotNullOfOrNull { annotation -> annotation.optInMarkerName(exportMarkers) }
 }
 
 /**
@@ -85,7 +95,8 @@ internal fun KSAnnotated.optInMarker(): String? {
  * so a member that reaches `Interop.cs` is unconditionally public API in the shipped package with
  * no way to re-hide it downstream.
  */
-internal fun KSPropertyDeclaration.isOptInRefused(): Boolean = optInMarker() != null
+internal fun KSPropertyDeclaration.isOptInRefused(exportMarkers: Set<String>): Boolean =
+  optInMarker(exportMarkers) != null
 
 /**
  * ADR-115: the marker on a constructor parameter, read from the parameter itself *and* from the
@@ -96,13 +107,16 @@ internal fun KSPropertyDeclaration.isOptInRefused(): Boolean = optInMarker() != 
  * only on the property. The invariant either way is that the marked declaration never appears in a
  * C# signature, so the constructor cannot keep the slot: the generated Kotlin call is positional.
  */
-internal fun KSValueParameter.constructorOptInMarker(owner: KSClassDeclaration?): String? {
-  val own: String? = optInMarker()
+internal fun KSValueParameter.constructorOptInMarker(
+  owner: KSClassDeclaration?,
+  exportMarkers: Set<String>,
+): String? {
+  val own: String? = optInMarker(exportMarkers)
   if (own != null) return own
   if (!isVal && !isVar) return null
   val propertyName: String = name?.asString() ?: return null
   return owner
     ?.getAllProperties()
     ?.firstOrNull { property -> property.simpleName.asString() == propertyName }
-    ?.optInMarker()
+    ?.optInMarker(exportMarkers)
 }

@@ -196,8 +196,8 @@ class ForwardAbiLegacyImportTest {
             "nuget_stateflow_collect",
             ForwardAbiType.VOID,
             listOf(
-              ForwardAbiParameter(ForwardAbiType.POINTER),
-              ForwardAbiParameter(ForwardAbiType.POINTER),
+              ForwardAbiSignatureParameter(ForwardAbiType.POINTER),
+              ForwardAbiSignatureParameter(ForwardAbiType.POINTER),
             ),
           ),
         ),

@@ -33,8 +33,8 @@ class ForwardAbiDeclarationFormTest {
       "top-level function",
       signature(
         "static_echo",
-        ForwardAbiParameter(ForwardAbiType.STRING),
-        ForwardAbiParameter(ForwardAbiType.POINTER, ForwardAbiDirection.OUT),
+        ForwardAbiSignatureParameter(ForwardAbiType.STRING),
+        ForwardAbiSignatureParameter(ForwardAbiType.POINTER, ForwardAbiDirection.OUT),
         result = ForwardAbiType.POINTER,
       ),
     ),
@@ -42,8 +42,8 @@ class ForwardAbiDeclarationFormTest {
       "object method",
       signature(
         "singleton_ping",
-        ForwardAbiParameter(ForwardAbiType.INT),
-        ForwardAbiParameter(ForwardAbiType.POINTER, ForwardAbiDirection.OUT),
+        ForwardAbiSignatureParameter(ForwardAbiType.INT),
+        ForwardAbiSignatureParameter(ForwardAbiType.POINTER, ForwardAbiDirection.OUT),
         result = ForwardAbiType.BOOL,
       ),
     ),
@@ -51,7 +51,7 @@ class ForwardAbiDeclarationFormTest {
       "class constructor",
       signature(
         "sample_create",
-        ForwardAbiParameter(ForwardAbiType.POINTER, ForwardAbiDirection.OUT),
+        ForwardAbiSignatureParameter(ForwardAbiType.POINTER, ForwardAbiDirection.OUT),
         result = ForwardAbiType.POINTER,
       ),
     ),
@@ -59,8 +59,8 @@ class ForwardAbiDeclarationFormTest {
       "class property",
       signature(
         "sample_get_count",
-        ForwardAbiParameter(ForwardAbiType.POINTER),
-        ForwardAbiParameter(ForwardAbiType.POINTER, ForwardAbiDirection.OUT),
+        ForwardAbiSignatureParameter(ForwardAbiType.POINTER),
+        ForwardAbiSignatureParameter(ForwardAbiType.POINTER, ForwardAbiDirection.OUT),
         result = ForwardAbiType.INT,
       ),
     ),
@@ -68,10 +68,10 @@ class ForwardAbiDeclarationFormTest {
       "class method",
       signature(
         "sample_try_read",
-        ForwardAbiParameter(ForwardAbiType.POINTER),
-        ForwardAbiParameter(ForwardAbiType.STRING),
-        ForwardAbiParameter(ForwardAbiType.POINTER, ForwardAbiDirection.OUT),
-        ForwardAbiParameter(ForwardAbiType.POINTER, ForwardAbiDirection.OUT),
+        ForwardAbiSignatureParameter(ForwardAbiType.POINTER),
+        ForwardAbiSignatureParameter(ForwardAbiType.STRING),
+        ForwardAbiSignatureParameter(ForwardAbiType.POINTER, ForwardAbiDirection.OUT),
+        ForwardAbiSignatureParameter(ForwardAbiType.POINTER, ForwardAbiDirection.OUT),
         result = ForwardAbiType.BOOL,
       ),
     ),
@@ -79,7 +79,7 @@ class ForwardAbiDeclarationFormTest {
       "companion method",
       signature(
         "class_companion",
-        ForwardAbiParameter(ForwardAbiType.INT),
+        ForwardAbiSignatureParameter(ForwardAbiType.INT),
         result = ForwardAbiType.INT,
       ),
     ),
@@ -87,8 +87,8 @@ class ForwardAbiDeclarationFormTest {
       "value-class constructor",
       signature(
         "value_create",
-        ForwardAbiParameter(ForwardAbiType.INT),
-        ForwardAbiParameter(ForwardAbiType.POINTER, ForwardAbiDirection.OUT),
+        ForwardAbiSignatureParameter(ForwardAbiType.INT),
+        ForwardAbiSignatureParameter(ForwardAbiType.POINTER, ForwardAbiDirection.OUT),
         result = ForwardAbiType.INT,
       ),
     ),
@@ -96,7 +96,7 @@ class ForwardAbiDeclarationFormTest {
       "value-class method",
       signature(
         "value_is_positive",
-        ForwardAbiParameter(ForwardAbiType.INT),
+        ForwardAbiSignatureParameter(ForwardAbiType.INT),
         result = ForwardAbiType.BOOL,
       ),
     ),
@@ -104,8 +104,8 @@ class ForwardAbiDeclarationFormTest {
       "extension function",
       signature(
         "int_route",
-        ForwardAbiParameter(ForwardAbiType.INT),
-        ForwardAbiParameter(ForwardAbiType.POINTER, ForwardAbiDirection.OUT),
+        ForwardAbiSignatureParameter(ForwardAbiType.INT),
+        ForwardAbiSignatureParameter(ForwardAbiType.POINTER, ForwardAbiDirection.OUT),
         result = ForwardAbiType.INT,
       ),
     ),
@@ -187,7 +187,7 @@ class ForwardAbiDeclarationFormTest {
   fun `wrongly directed parameters are reported for every form with an out slot`() {
     forms().forEach { form ->
       val full: ForwardAbiSignature = form.matched
-      val outParam: ForwardAbiParameter = full.parameters.firstOrNull { parameter ->
+      val outParam: ForwardAbiSignatureParameter = full.parameters.firstOrNull { parameter ->
         parameter.direction == ForwardAbiDirection.OUT
       } ?: return@forEach
       val flipped: ForwardAbiSignature = full.copy(
@@ -226,7 +226,7 @@ class ForwardAbiDeclarationFormTest {
 
   private fun signature(
     name: String,
-    vararg parameters: ForwardAbiParameter,
+    vararg parameters: ForwardAbiSignatureParameter,
     result: ForwardAbiType,
   ): ForwardAbiSignature = ForwardAbiSignature(name, result, parameters.toList())
 

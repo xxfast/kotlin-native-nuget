@@ -25,6 +25,23 @@ internal fun StringBuilder.renderSealedClass(sealed: CirSealedClass) {
   appendLine("        }")
   appendLine()
 
+  // ADR-111/ADR-116 amendment (2026-09-11): the base's own declared members, ahead of the arms so
+  // a reader meets the polymorphic surface before the discrimination. Externs and bodies come off
+  // the same `propertyNativeImports` / `renderProperty` / `methodNativeImport` / `renderMethod`
+  // rules an ordinary class uses, and all four bake the depth a class member sits at, which is
+  // exactly the depth the base's members sit at here -- no re-indent, unlike the arm blocks.
+  for (property in sealed.properties) {
+    propertyNativeImports(sealed.libraryName, sealed.nativePrefix, property)
+      .forEach { nativeImport -> renderDllImport(nativeImport) }
+    renderProperty(property)
+    appendLine()
+  }
+
+  for (method in sealed.methods) {
+    renderDllImport(methodNativeImport(sealed.libraryName, sealed.nativePrefix, method))
+    renderMethod(method, sealed.name)
+  }
+
   for (subclass in sealed.subclasses.filter { it.isNested }) {
     append(sealedSubclassBlock(sealed, subclass))
   }
@@ -66,7 +83,19 @@ private fun sealedSubclassBlock(
   // per arm, so it has no scope to drain, and putting `IAsyncDisposable` there would advertise
   // `DisposeAsync` on arms that never suspend.
   val asyncDisposable: String = if (subclass.hasSuspendMethods) ", IAsyncDisposable" else ""
-  appendLine("        public sealed class ${subclass.name} : ${sealed.name}$asyncDisposable")
+  // ADR-009 amendment (2026-09-11): an `open` arm drops `sealed`, so a Kotlin subclass of it (an
+  // ordinary class, with the arm as its base) compiles and the arm's `open` members can be
+  // `virtual`. A final arm keeps its shipped `public sealed class` spelling byte for byte.
+  val sealedModifier: String = if (subclass.isOpen) "" else "sealed "
+  // ADR-111/ADR-116 amendment (2026-09-11): the base's own extern names. A nested arm sits inside
+  // the base's braces, so those private statics are accessible to it, and an arm that overrides a
+  // base member mints an extern of exactly the same name: CS0108 unless it says `new`. A sibling
+  // arm sees none of them, where `new` would be CS0109 instead, so both are keyed off `isNested`.
+  val baseExternNames: Set<String> =
+    if (subclass.isNested) sealed.ordinaryNativeImports().map { it.name }.toSet() else emptySet()
+  appendLine(
+    "        public ${sealedModifier}class ${subclass.name} : ${sealed.name}$asyncDisposable"
+  )
   appendLine("        {")
   if (subclass.hasSuspendMethods) {
     append(buildString { renderScopeHandleField() }.indentNestedBody())
@@ -109,7 +138,7 @@ private fun sealedSubclassBlock(
       append(
         buildString {
           propertyNativeImports(sealed.libraryName, subclass.nativePrefix, prop)
-            .forEach { nativeImport -> renderDllImport(nativeImport) }
+            .forEach { nativeImport -> renderDllImport(nativeImport.hiding(baseExternNames)) }
         }.indentNestedBody(),
       )
     }
@@ -123,7 +152,10 @@ private fun sealedSubclassBlock(
   subclass.methods.forEach { method ->
     append(
       buildString {
-        renderDllImport(methodNativeImport(sealed.libraryName, subclass.nativePrefix, method))
+        renderDllImport(
+          methodNativeImport(sealed.libraryName, subclass.nativePrefix, method)
+            .hiding(baseExternNames),
+        )
         // `renderMethod` already closes with its own blank separator line, unlike the property
         // renderer, so this loop adds none.
         renderMethod(method, subclass.name)
@@ -143,6 +175,13 @@ private fun sealedSubclassBlock(
   // re-indented the same way. A flow member's private `[DllImport]` set rides the pair, so nothing
   // here composes an entry point of its own.
   subclass.flowMembers.forEach { member ->
+    append(buildString { renderMember(member, subclass.name) }.indentNestedBody())
+  }
+
+  // ADR-116 amendment (2026-09-11): the arm's per-call lambda-parameter methods, dispatched by the
+  // same `renderMember` and re-indented the same way. The extern rides the member, so nothing here
+  // composes an entry point of its own.
+  subclass.callbackMembers.forEach { member ->
     append(buildString { renderMember(member, subclass.name) }.indentNestedBody())
   }
 
@@ -196,6 +235,10 @@ private fun sealedSubclassBlock(
   }
 }
 
+/** The same import, marked `new` when it hides one of [baseExternNames]. */
+private fun CirDllImport.hiding(baseExternNames: Set<String>): CirDllImport =
+  if (name in baseExternNames) copy(isNew = true) else this
+
 /**
  * Lifts a subclass block out of its base's braces: one nesting level shallower, which is exactly
  * the depth every other namespace-level declaration renders at, so the member bodies baked at the
@@ -246,12 +289,23 @@ private fun StringBuilder.renderSealedSubclassProperty(prop: CirProperty) {
   val isMultiLineGetter: Boolean = prop.getter.contains('\n')
   val isMultiLineSetter: Boolean = prop.setter?.contains('\n') == true
   val setter: String? = prop.setter
+  // ADR-009 amendment (2026-09-11): the same modifier `CirClassRenderer` spells for an ordinary
+  // class property. Only an `open` arm ever sets `isVirtual` (the translator gates it), so a final
+  // arm's property stays byte-identical.
+  val modifier: String = when {
+    prop.isOverride -> "override "
+    prop.isVirtual -> "virtual "
+    // ADR-111 amendment (2026-09-11): a covariant arm property hides the base's, since C# has no
+    // covariant property override (CS1715). Without `new` the hide is CS0108.
+    prop.isNew -> "new "
+    else -> ""
+  }
   if (setter == null && !isMultiLineGetter) {
-    appendLine("            public ${prop.type} ${prop.name} => ${prop.getter};")
+    appendLine("            public $modifier${prop.type} ${prop.name} => ${prop.getter};")
     return
   }
 
-  appendLine("            public ${prop.type} ${prop.name}")
+  appendLine("            public $modifier${prop.type} ${prop.name}")
   appendLine("            {")
   if (isMultiLineGetter) {
     appendLine("                get")

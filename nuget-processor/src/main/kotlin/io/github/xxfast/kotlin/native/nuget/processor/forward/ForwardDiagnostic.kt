@@ -155,8 +155,10 @@ internal enum class ForwardDiagnosticKind(
    *  The `include(...)` advice is measured, not assumed (`Tier1UnexportedSupertypeSkipTest`): the
    *  ADR-066 closure has no `superTypes` edge, so admitting a *dependency* package cannot pull a
    *  supertype-only type in. A supertype declared in this module is a different case — scope
-   *  admits same-round source declarations — and only the base-class hint mentions it, since only
-   *  a base class is worth exporting for its members. */
+   *  admits same-round source declarations, and the base-class hint picks between the two on
+   *  `containingFile`, so it states the one fix that works for that base instead of hedging
+   *  across both (ADR-101's 2026-09-11 amendment). The interface hint stays flat: an interface is
+   *  not worth exporting for members it does not carry. */
   SKIPPED_UNEXPORTED_SUPERTYPE(ForwardDiagnosticSeverity.WARNING),
 
   /** Issue #55: the module has public declarations, but the `include`/`exclude`/`rootPackage`
@@ -201,15 +203,6 @@ internal enum class ForwardDiagnosticKind(
    *  `UNDECLARED_INTERFACE` skips, and deliberately both: a nested declaration nothing references
    *  would otherwise produce no output and no diagnostic whatsoever. */
   SKIPPED_NESTED_DECLARATION(ForwardDiagnosticSeverity.WARNING),
-
-  /** A secondary constructor of a value class whose underlying is a reference (an exported class
-   *  handle). ADR-035 exposes such a value class as a positional record struct over the underlying
-   *  handle and defers its primary constructor, so a secondary has nothing to delegate to: the
-   *  route that used to emit one produced a `: this(CreateChecked(...))` handing an `IntPtr` to a
-   *  class-typed parameter against a Kotlin export that returned the underlying object rather than
-   *  a pointer. Its own kind rather than [SKIPPED_UNSUPPORTED_TYPE]: nothing about the parameter
-   *  types is unsupported, it is the constructor position on this one struct shape. */
-  SKIPPED_VALUE_CLASS_SECONDARY_CONSTRUCTOR(ForwardDiagnosticSeverity.WARNING),
 
   /** ADR-112: a `sealed interface` whose hierarchy the ADR-009 sealed-class route cannot carry:
    *  type parameters, a subclass with a second superclass, or a sub-interface. ADR-125 adds the
@@ -398,6 +391,8 @@ internal fun ForwardPlanSkipReason.toDiagnosticKind(
   // here: no legacy route is keyed to a sealed subclass at all.
   ForwardPlanSkipReason.UNSUPPORTED_COMBINATION,
   ForwardPlanSkipReason.SEALED_SUBCLASS_UNROUTED,
+  // ADR-116 amendment (2026-09-11): the base-declared twin, same kind for the same reason.
+  ForwardPlanSkipReason.SEALED_BASE_UNROUTED,
     -> ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_COMBINATION
 
   ForwardPlanSkipReason.INHERITED_MEMBER -> ForwardDiagnosticKind.SKIPPED_INHERITED_MEMBER
@@ -423,9 +418,6 @@ internal fun ForwardPlanSkipReason.toDiagnosticKind(
     ForwardDiagnosticKind.SKIPPED_BOUND_TYPE_POSITION
 
   ForwardPlanSkipReason.SEALED_POSITION -> ForwardDiagnosticKind.SKIPPED_SEALED_POSITION
-
-  ForwardPlanSkipReason.REFERENCE_UNDERLYING_VALUE_CLASS_CONSTRUCTOR ->
-    ForwardDiagnosticKind.SKIPPED_VALUE_CLASS_SECONDARY_CONSTRUCTOR
 
   ForwardPlanSkipReason.UNIMPLEMENTABLE_BOUND_INTERFACE ->
     ForwardDiagnosticKind.SKIPPED_UNIMPLEMENTABLE_BOUND_INTERFACE
@@ -468,26 +460,34 @@ internal fun ForwardPlanSkipReason.toDiagnosticKind(
   )
 }
 
-/**
- * ADR-064: an actionable per-reason hint, kept alongside the mapping above it documents.
- *
- * @param detail ADR-066: the unexported dependency type's qualified name
- *   ([ForwardCallableCatalogEntry.Skipped.detail]), used only by [ForwardPlanSkipReason
- *   .UNEXPORTED_DEPENDENCY_TYPE] to name the exact `include(...)` fix. ADR-074: for
- *   [ForwardPlanSkipReason.ACTUAL_TYPEALIAS_TARGET], the same slot instead carries
- *   `"<expect qualified name>-><target rendered name>"`. For [ForwardPlanSkipReason.COLLECTION] it
- *   carries the offending component ("element type Collection?", "key type String?"). For
- *   [ForwardPlanSkipReason.UNDECLARED_ENUM] and
- *   [ForwardPlanSkipReason.UNDECLARED_INTERFACE] it carries the undeclared type's qualified name,
- *   including when the enum is a collection component (the only extractor that descends into one).
- *   Ignored by every other reason.
- * @param parameter issue #131: the offending parameter's name, when the skip is at an input
- *   position and the input is a named parameter rather than an extension receiver. Read only by
- *   [ForwardPlanSkipReason.NULLABLE], whose shipped sentence could not say which position failed.
- */
 /** `kotlin`, `kotlin.*` and `kotlinx.*`: packages an export scope can never usefully admit. */
 private fun String.isStdlibPackage(): Boolean =
   this == "kotlin" || startsWith("kotlin.") || this == "kotlinx" || startsWith("kotlinx.")
+
+/**
+ * The fallback sentence every reason that is genuinely about an unsupported type combination
+ * keeps. Named so [ownsSentence] can ask "did this reason say something of its own?" without an
+ * allowlist that has to be extended every time [diagnosticReason] gains an arm.
+ */
+internal fun ForwardPlanSkipReason.genericSentence(): String =
+  "its $name type combination is not supported"
+
+/**
+ * ADR-064's 2026-09-11 amendment: true when [diagnosticReason] says something better than
+ * [genericSentence] for this reason and detail. The property route reads it to decide between the
+ * reason's sentence and hint (scope, nesting, sealed, opt-in) and its own shipped "no property
+ * getter or setter shape" pair, which stays for a reason that has nothing of its own to say (a
+ * legacy-route deferral like [ForwardPlanSkipReason.GENERIC], whose generic sentence would name a
+ * reason constant the author cannot act on).
+ *
+ * Detail-sensitive on purpose: [ForwardPlanSkipReason.EXCLUDED_DEPENDENCY_TYPE] and the
+ * `UNDECLARED_*` arms read [detail], so the answer for the same reason can differ with it. The
+ * `parameter` slot [diagnosticReason] takes is deliberately absent: only
+ * [ForwardPlanSkipReason.NULLABLE] reads it, and only at an input position, which a property drop
+ * never is.
+ */
+internal fun ForwardPlanSkipReason.ownsSentence(detail: String?): Boolean =
+  diagnosticReason(detail) != genericSentence()
 
 /**
  * ADR-064's 2026-09-10 amendment: the per-reason sentence, kept beside the hint it reads with.
@@ -513,7 +513,7 @@ internal fun ForwardPlanSkipReason.diagnosticReason(
   detail: String? = null,
   parameter: String? = null,
 ): String {
-  val generic = "its $name type combination is not supported"
+  val generic: String = genericSentence()
   return when (this) {
     // ADR-109's remedy, followed: out of scope by the author's own instruction, not unsupported,
     // which is what the hint below ("skipped by design") and this kind's KDoc already say. The
@@ -521,11 +521,6 @@ internal fun ForwardPlanSkipReason.diagnosticReason(
     ForwardPlanSkipReason.EXCLUDED_DEPENDENCY_TYPE ->
       "its type `${detail ?: "in an excluded package"}` is excluded from the export scope by " +
           "your own exclude(...)"
-
-    // Every other drop is about the types at the callable's positions; this one is about the
-    // position itself.
-    ForwardPlanSkipReason.REFERENCE_UNDERLYING_VALUE_CLASS_CONSTRUCTOR ->
-      "a value class over a reference underlying carries no constructor across the bridge"
 
     // ADR-115: the author's own signal, named as such.
     ForwardPlanSkipReason.OPT_IN_MARKER ->
@@ -539,6 +534,69 @@ internal fun ForwardPlanSkipReason.diagnosticReason(
       "it is a ${detail ?: "specialized"} member of a sealed subclass, which has no route yet " +
           "(ADR-116)"
 
+    // ADR-116 amendment (2026-09-11): the same sentence for a member the sealed *base* declares.
+    // Naming the owner kind matters here: the remedy below is to move it onto the arms.
+    ForwardPlanSkipReason.SEALED_BASE_UNROUTED ->
+      "it is a ${detail ?: "specialized"} member of a sealed base class, which has no route yet " +
+          "(ADR-116)"
+
+    // ADR-064's 2026-09-11 amendment: scope, position and nesting drops. None of these is about
+    // an unsupported type combination, and each contradicted the hint printed beside it. The
+    // reason constant is kept only in the three UNDECLARED_* sentences below, whose kind is the
+    // shared SKIPPED_UNSUPPORTED_TYPE and so does not name the reason in the prefix.
+    //
+    // ADR-066: out of the export scope, not unsupported. The `include(...)` line stays in the hint.
+    ForwardPlanSkipReason.UNEXPORTED_DEPENDENCY_TYPE ->
+      "its type ${detail?.let { "`$it` " } ?: ""}is declared in a dependency module outside the " +
+          "export scope"
+
+    ForwardPlanSkipReason.EXPECT_DEPENDENCY_TYPE ->
+      "its type ${detail?.let { "`$it` " } ?: ""}is an `expect` declaration in a dependency " +
+          "module, which no export scope of this module can reach"
+
+    // ADR-066 admission rule 4: neither rootPackage nor include is set.
+    ForwardPlanSkipReason.CROSS_MODULE_DISABLED_DEPENDENCY_TYPE ->
+      "its type ${detail?.let { "`$it` " } ?: ""}is declared in a dependency module and " +
+          "cross-module export is off"
+
+    // ADR-074: `detail` is `"<expect>-><target>"`, split exactly as the hint below splits it.
+    ForwardPlanSkipReason.ACTUAL_TYPEALIAS_TARGET -> {
+      val parts: List<String>? = detail?.split("->", limit = 2)?.takeIf { it.size == 2 }
+      "its type `${parts?.get(0) ?: "the expect type"}` is an `actual typealias` to " +
+          "`${parts?.get(1) ?: "an unexported target"}`, which is not exported"
+    }
+
+    // The three that keep the reason constant: they share one diagnostic kind, so the prefix does
+    // not distinguish them and the sentence has to.
+    ForwardPlanSkipReason.UNDECLARED_ENUM ->
+      "its enum type `${detail ?: "the enum"}` is never declared as a C# enum ($name)"
+
+    ForwardPlanSkipReason.UNDECLARED_INTERFACE ->
+      "its interface type `${detail ?: "the interface"}` is nested and never declared as a C# " +
+          "interface ($name)"
+
+    ForwardPlanSkipReason.UNDECLARED_CLASS ->
+      "its type `${detail ?: "the class"}` is a nested class or object never declared in C# " +
+          "($name)"
+
+    // ADR-082: nothing about the types failed; a supertype declares this signature.
+    ForwardPlanSkipReason.INHERITED_MEMBER ->
+      "it is a value class member that a supertype declares"
+
+    // ADR-112 left one shape here: a sealed type with no generated discriminator, which is what
+    // the hint below says too.
+    ForwardPlanSkipReason.SEALED_POSITION ->
+      "its sealed type ${detail?.let { "`$it` " } ?: ""}has no generated C# discriminator"
+
+    // ADR-088: both are about the position, not the type. A bound C# interface is bridgeable,
+    // just not here (nullable, property, collection component, receiver), and an
+    // unimplementable one has no mint bridge to return through.
+    ForwardPlanSkipReason.BOUND_INTERFACE_POSITION ->
+      "a bound C# interface is not marshalled at this position"
+
+    ForwardPlanSkipReason.UNIMPLEMENTABLE_BOUND_INTERFACE ->
+      "it returns a bound C# interface that Kotlin cannot implement"
+
     // Issue #131: guarded on the name being there, so a return-position nullable keeps the
     // shipped generic sentence.
     ForwardPlanSkipReason.NULLABLE ->
@@ -549,6 +607,26 @@ internal fun ForwardPlanSkipReason.diagnosticReason(
   }
 }
 
+/**
+ * ADR-064: an actionable per-reason hint, kept alongside the mapping above it documents.
+ *
+ * @param detail ADR-066: the unexported dependency type's qualified name
+ *   ([ForwardCallableCatalogEntry.Skipped.detail]), used only by [ForwardPlanSkipReason
+ *   .UNEXPORTED_DEPENDENCY_TYPE] to name the exact `include(...)` fix. ADR-074: for
+ *   [ForwardPlanSkipReason.ACTUAL_TYPEALIAS_TARGET], the same slot instead carries
+ *   `"<expect qualified name>-><target rendered name>"`. For [ForwardPlanSkipReason.COLLECTION] it
+ *   carries the offending component ("element type Collection?", "key type String?"). For
+ *   [ForwardPlanSkipReason.UNDECLARED_ENUM] and
+ *   [ForwardPlanSkipReason.UNDECLARED_INTERFACE] it carries the undeclared type's qualified name,
+ *   including when the enum is a collection component (the only extractor that descends into one).
+ *   Ignored by every other reason.
+ * @param scope ADR-063: the export scope's `include(...)` packages, so the suggested include
+ *   line keeps the author's own packages listed beside the missing one. Read only by
+ *   [ForwardPlanSkipReason.UNEXPORTED_DEPENDENCY_TYPE].
+ * @param parameter issue #131: the offending parameter's name, when the skip is at an input
+ *   position and the input is a named parameter rather than an extension receiver. Read only by
+ *   [ForwardPlanSkipReason.NULLABLE], whose shipped sentence could not say which position failed.
+ */
 internal fun ForwardPlanSkipReason.diagnosticHint(
   detail: String? = null,
   scope: List<String> = emptyList(),
@@ -649,10 +727,20 @@ internal fun ForwardPlanSkipReason.diagnosticHint(
 
   // ADR-116: `else` below would send the author after unsupported parameter/return shapes, which
   // is wrong here — the shapes are fine, the *route* is missing for this owner kind.
+  // ADR-116 amendment (2026-09-11): "non-generic" was the whole remedy while GENERIC was the only
+  // kind left under this reason. It is not: an add/remove callback pair and a suspend lambda
+  // parameter reach it too, and neither is generic, so telling that author to drop a type
+  // parameter names nothing they wrote.
   ForwardPlanSkipReason.SEALED_SUBCLASS_UNROUTED ->
     "move the member onto an ordinary class (which still has the legacy route this member kind " +
-        "needs), or expose an equivalent non-generic member on the sealed " +
-        "subclass instead"
+        "needs), or expose an equivalent member on the sealed subclass in a shape the arm's " +
+        "routes do carry (a plain, per-call, non-generic one)"
+
+  // ADR-116 amendment (2026-09-11): a sealed base has one remedy an arm does not -- the arms
+  // themselves, which do carry the suspend and flow routes (ADR-118/ADR-124).
+  ForwardPlanSkipReason.SEALED_BASE_UNROUTED ->
+    "declare the member on each arm of the sealed class instead (the arms carry the suspend and " +
+        "Flow routes the base does not), or move it onto an ordinary class"
 
   // Issue #57: the old hint ("declare the member directly on the value class") was already true
   // of an explicit `override`, which skips by the same rule (ADR-082: an override *is* the
@@ -682,12 +770,6 @@ internal fun ForwardPlanSkipReason.diagnosticHint(
         "and no second sealed interface (ADR-125), or accept a concrete subclass"
   }
 
-  // The one shape ADR-035 leaves unconstructible, so the hint names the workaround rather than a
-  // type: the underlying is an exported class handle, so C# can build it and wrap it itself.
-  ForwardPlanSkipReason.REFERENCE_UNDERLYING_VALUE_CLASS_CONSTRUCTOR ->
-    "a reference-underlying value class exposes only its positional record-struct constructor " +
-        "(ADR-035); construct the underlying and wrap it"
-
   // Names the enum, because the reason line cannot: `warnDroppedForwardCallables` builds it from
   // the reason's own name. Worded to stay true for both shapes the flag covers — a nested enum in
   // either module, and a module-local top-level enum outside the export scope — since `detail`
@@ -697,7 +779,7 @@ internal fun ForwardPlanSkipReason.diagnosticHint(
     "enum `$enumName` is not in the export set, so it is never declared as a C# enum and every " +
         "member typed with it is skipped rather than emitted as a dangling reference; a nested " +
         "enum class is never declared (only top-level enums are), so move it to the top level of " +
-        "its file — or, if it already is top level, bring its package into the export scope"
+        "its file, or, if it already is top level, bring its package into the export scope"
   }
 
   // Names the interface, for the reason above, and says nested explicitly: unlike the enum flag

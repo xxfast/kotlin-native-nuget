@@ -71,11 +71,16 @@ interface JobListener {
  *   without it every arm exports `job_<arm>_rest_async` for a member it never declares, with a
  *   lenient `""` overload suffix; `ForwardAbiContract.kotlin` filters Kotlin exports down to the C#
  *   import set, so that extra export would vanish from the comparison rather than be flagged.
- * - [Job.describe] — a base `open fun` **with a body**. Under ADR-116's declared-only gate an arm
- *   exports only what it declares itself, so this renders on **no** arm. [Job.Idle.describe], which
- *   is a declared `override`, renders as a plain `public string Describe()`: not `override` (the C#
- *   base declares nothing to override, CS0115) and not `virtual` (a `virtual` member on a
- *   `public sealed class` is CS0549).
+ * - [Job.kind], item 35's property half: an `open val` **with a body on the base**, overridden by
+ *   [Job.Running] and inherited unchanged by every other arm. A consumer holding a [Job] must be
+ *   able to read it without discriminating, and the two arms must answer differently, so a base
+ *   read that never dispatches into Kotlin is visible as a wrong value rather than a missing
+ *   member.
+ * - [Job.describe], a base `open fun` **with a body**. Since item 35 the sealed base carries it as
+ *   `public virtual string Describe()`, so [Job.Running], which declares no override, inherits it
+ *   in C# exactly as it does in Kotlin, and [Job.Idle], which declares one, renders
+ *   `public override string Describe()`. The declared-only gate still holds on the arms: `Running`
+ *   declares no `Describe` of its own.
  * - [Job.Idle.poke] — a method on a `data object` arm. An object arm is a `KSClassDeclaration` in
  *   `getSealedSubclasses()` like any other and crosses as a handle, so it must take the same
  *   receiver as a `data class` arm rather than becoming a static.
@@ -103,6 +108,16 @@ interface JobListener {
  * - [Job.Done] — the control: an arm that declares no functions at all must keep generating
  *   exactly as it does today, and with neither a suspend nor a flow member it stays the arm
  *   without a scope, without `IAsyncDisposable`.
+ * - [JobFactory.runningLater], a `suspend fun` on an **ordinary class** returning a nested arm.
+ *   The completion has to construct `new Job.Running(resultPtr)`: at namespace scope the bare
+ *   `Running` the suspend route spells today is CS0246, since ADR-009 nests the arm inside `Job`.
+ * - [JobFactory.idleLater], the same on a `data object` arm, so the fix covers both arm kinds
+ *   rather than only the `data class` one.
+ * - [Job.Running.finishLater], the arm-declared half: a sibling arm at a suspend return. It
+ *   resolves from inside the enclosing base even unqualified, so it is the cell that separates
+ *   "the speller is wrong everywhere" from "the speller is wrong only outside the base".
+ * - [anyRunningLater], the **top-level** suspend route (ADR-007 static class `JobSample`), the
+ *   second spelling site. A fix applied to the class route alone still leaves this one broken.
  *
  * Deliberately absent on the ADR-124 half: a base-declared flow property on [Job] itself (the
  * all-properties rule comes from ADR-111 and is already fixture-covered for ordinary property
@@ -110,18 +125,35 @@ interface JobListener {
  * ADR-119), a flow on a `sealed interface` arm, a sealed element type (`Flow<Job>`, issue #126 and
  * #127 territory), and a `MutableStateFlow` write on an arm.
  *
- * Deliberately absent: a lambda-parameter cell (`fun watch(onTick: (Int) -> Unit)`). It stays a
- * `SEALED_SUBCLASS_UNROUTED` row of the sealed post-process table — the half of ROADMAP line 39
- * that ADR-118 does not close, now that the `suspend` row is routed — and binding it would drag
- * stored-callback pair detection into a fixture whose subject is method routing.
+ * The lambda-parameter half (ADR-036) is the row ADR-118 and ADR-124 left behind:
+ * - [Job.Running.relabel], the `Func` cell. A `(String) -> String` parameter with a `String` outer
+ *   return, so the arm has to reach the same thunk + `GCHandle` protocol `Cat.describeWith` uses,
+ *   under the arm's own export prefix (`job_running_relabel`), with the UTF8 pair crossing on the
+ *   callback argument and on the outer return at once.
+ * - [Job.Idle.pokeWith], the `Action` cell. A `(String) -> Unit` parameter and a `Unit` outer
+ *   return on a `data object` arm: the void branch of the renderer and the object arm's handle
+ *   receiver in one member, so a route that only ever binds the value-returning shape, or only
+ *   ever binds a `data class` receiver, cannot go green on this pair.
+ *
+ * Deliberately absent on the lambda half: a stored-callback or interface-bridge **pair** on an arm
+ * (`addX`/`removeX`), a `suspend` lambda parameter, and a generic method. All three keep the
+ * `SEALED_SUBCLASS_UNROUTED` row of the sealed post-process table, and a pair in particular must
+ * stay *named* rather than fall silent, which is a diagnostic assertion rather than a cell.
  *
  * Oreo (black with the white middle) does all the running: he starts at a percentage of the hallway
  * and finishes it. Mylo (brown and creamy) is [Job.Idle], and pokes back exactly once when nudged.
  */
 sealed class Job {
   /**
-   * Base body. Under ADR-116's declared-only decision this renders on no arm at all, so
-   * [Job.Running] has no `Describe()` in C# while [Job.Idle], which declares an `override`, does.
+   * Item 35's property half: an `open val` with a body on the base. [Job.Running] overrides it and
+   * every other arm inherits it unchanged, so a base-typed read has to dispatch to tell them apart.
+   */
+  open val kind: String = "job"
+
+  /**
+   * Base body. Item 35 made the sealed base the carrier: this renders `virtual` on the C# base,
+   * [Job.Running] declares nothing and inherits it, and [Job.Idle], which declares an `override`,
+   * spells one in C# too.
    */
   open fun describe(): String = "job"
 
@@ -133,11 +165,21 @@ sealed class Job {
 
   /** Oreo, mid-sprint down the hallway, [progress] percent of the way to the food bowl. */
   data class Running(val progress: Int) : Job() {
+    /** The one arm that overrides [Job.kind]; the rest inherit the base's `"job"`. */
+    override val kind: String = "running"
+
     /** `Int` return, no conversion at the seam. */
     fun cancel(): Int = progress
 
     /** `String` in and out on one member. */
     fun label(prefix: String): String = "$prefix$progress"
+
+    /**
+     * The ADR-036 **lambda parameter** on a sealed arm, `Func` half: `String` in and out across
+     * the callback protocol, so the UTF8 pair rides the thunk on the argument and on the outer
+     * return at once. Oreo answers with his own progress and lets C# rename it.
+     */
+    fun relabel(transform: (String) -> String): String = transform("running-$progress")
 
     /** Overload pair, first arm. */
     fun step(by: Int): Int = progress + by
@@ -180,6 +222,13 @@ sealed class Job {
 
     /** `String` in and out across the async result protocol. */
     suspend fun resume(prefix: String): String = "$prefix$progress"
+
+    /**
+     * A **sibling nested arm** at a `suspend` return: `Task<Job.Done> FinishLaterAsync()`, whose
+     * completion constructs the arm. Declared inside [Job], so C#'s enclosing-type lookup resolves
+     * a bare `Done` here; [JobFactory.runningLater] is the same shape where it cannot.
+     */
+    suspend fun finishLater(): Done = Done(progress)
 
     // Private, so neither the sealed export loop nor the sealed translator sees it: both filter
     // the arm's properties to PUBLIC, and the arm's C# surface is the read-only `Beats` alone.
@@ -233,6 +282,13 @@ sealed class Job {
     /** A method on an object arm: it takes the handle receiver, not a static route. */
     fun poke(): String = "idle"
 
+    /**
+     * The `Action` half of the lambda-parameter route, on a `data object` arm: a `Unit` outer
+     * return, so `renderCallbackMethod`'s void branch is the one crossed, and the object arm's
+     * handle receiver rather than a `data class` one. Mylo says exactly one thing when nudged.
+     */
+    fun pokeWith(action: (String) -> Unit) = action("idle")
+
     /** Declared `override` of [Job.describe]: renders as a plain `public` method on the arm. */
     override fun describe(): String = "idle"
 
@@ -257,6 +313,15 @@ class JobFactory {
 
   /** ADR-124: the flow-only arm, reached the same way [running] reaches the suspending one. */
   fun watching(id: String): Job.Watching = Job.Watching(id)
+
+  /**
+   * The same nested `data class` arm return as [running], on the **suspend** route: it binds as
+   * `Task<Job.Running>` and its completion must construct `new Job.Running(resultPtr)`.
+   */
+  suspend fun runningLater(progress: Int): Job.Running = Job.Running(progress)
+
+  /** The `data object` arm on the suspend route: `Task<Job.Idle>`, `new Job.Idle(resultPtr)`. */
+  suspend fun idleLater(): Job.Idle = Job.Idle
 }
 
 /**
@@ -268,3 +333,10 @@ fun anyJob(progress: Int): Job = Job.Running(progress)
 
 /** The same base return, discriminating onto the `data object` arm instead. */
 fun idleJob(): Job = Job.Idle
+
+/**
+ * The **top-level** suspend spelling site: a `suspend fun` on the ADR-007 static class `JobSample`
+ * returning a nested arm. Oreo always ends up 33% down the hallway, so the value pins the crossing
+ * rather than the argument.
+ */
+suspend fun anyRunningLater(): Job.Running = Job.Running(33)

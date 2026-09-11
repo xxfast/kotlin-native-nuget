@@ -553,4 +553,39 @@ public class Issue54Tests
         Assert.True(oreo.Covers(mylo));
         Assert.False(mylo.Covers(oreo));
     }
+
+    /// <summary>
+    /// The extension-<em>property</em> half of the amendment: <c>val Issue54Shape.area: Double</c>
+    /// has to reach <c>Issue54ShapeExtensions</c> as <c>GetArea()</c>, the same way
+    /// <c>Footprint()</c> does. The property planner classifies its receiver on its own path and
+    /// admits only object-handle, primitive, string and value-class receivers, so a sealed receiver
+    /// is dropped with <c>SKIPPED_UNSUPPORTED_PROPERTY</c> today and this does not compile.
+    /// Oreo, curled at radius 7.5, has a real area, read both through the base and through the
+    /// narrowed arm so a receiver that only bound on the concrete subclass is still red.
+    /// </summary>
+    [Fact]
+    public void Area_SealedReceiverExtensionProperty_BindsOnThePayloadArm()
+    {
+        using Issue54Drawing drawing = Issue54Sample.CurledCats();
+
+        using Issue54Shape shape = drawing.Shape;
+
+        Assert.Equal(Math.PI * 7.5 * 7.5, shape.GetArea(), 9);
+        Assert.Equal(Math.PI * 7.5 * 7.5, Assert.IsType<Issue54Shape.Circle>(shape).GetArea(), 9);
+    }
+
+    /// <summary>
+    /// The payload-free arm of the same accessor: Mylo, sprawled into no shape, answers
+    /// <c>0.0</c>. The Kotlin getter reaches that arm through a <c>when</c> over the receiver it
+    /// dereferenced, so a handle that arrived as a raw pointer cannot produce it.
+    /// </summary>
+    [Fact]
+    public void Area_SealedReceiverExtensionProperty_BindsOnThePayloadFreeArm()
+    {
+        using Issue54Drawing drawing = Issue54Sample.CurledCats();
+
+        using Issue54Shape shape = drawing.Current;
+
+        Assert.Equal(0.0, shape.GetArea());
+    }
 }

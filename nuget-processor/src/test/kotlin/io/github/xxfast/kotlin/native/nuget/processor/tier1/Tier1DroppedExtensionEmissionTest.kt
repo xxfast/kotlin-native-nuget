@@ -1,5 +1,6 @@
 package io.github.xxfast.kotlin.native.nuget.processor.tier1
 
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnosticKind
 import kotlin.test.Test
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
@@ -53,9 +54,9 @@ class Tier1DroppedExtensionEmissionTest {
 
   /**
    * Fix A, positive half: a receiver group that keeps at least one member still gets its class.
-   * The dropped property (`Sequence<String>` has no property shape) and the surviving extension
-   * function share one receiver, so this is exactly the case where suppressing the class would be
-   * wrong.
+   * The dropped property (`Sequence<String>` is a named `Unsupported` stdlib type, dropped with
+   * `SKIPPED_UNSUPPORTED_PROPERTY`) and the surviving extension function share one receiver, so
+   * this is exactly the case where suppressing the class would be wrong.
    */
   @Test
   fun `receiver group with one surviving member still emits its extensions class`() {
@@ -84,6 +85,16 @@ class Tier1DroppedExtensionEmissionTest {
       result.generatedCSharp.contains("Greeting"),
       "expected the bound extension function to be a member of PatientExtensions; " +
           "generatedCSharp=${result.generatedCSharp}",
+    )
+    // This cell only works because `tags` is genuinely dropped: assert the drop is named, so the
+    // cell cannot go quietly green on a `tags` that started binding.
+    assertTrue(
+      result.kspWarnings.any {
+        it.contains(ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_PROPERTY.name) &&
+            it.contains("Patient.tags")
+      },
+      "expected the dropped extension property to be named in a diagnostic; " +
+          "kspWarnings=${result.kspWarnings}",
     )
   }
 
