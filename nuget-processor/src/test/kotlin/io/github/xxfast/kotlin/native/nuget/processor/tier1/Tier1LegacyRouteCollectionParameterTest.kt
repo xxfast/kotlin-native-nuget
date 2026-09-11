@@ -201,32 +201,10 @@ class Tier1LegacyRouteCollectionParameterTest {
     )
   }
 
-  /**
-   * The helper gate (ADR-114 answer 4, the one inferred claim the ADR flags as able to waste an
-   * afternoon). These members carry no `ForwardCallablePlan`, so `plannedCollectionKinds()`
-   * cannot see them, and none of the declaration scans looks at a parameter position on these
-   * routes. Without a new disjunct the C# side calls `nuget_list_create` against a native library
-   * that never exported it, and the symptom is an `EntryPointNotFoundException` at first call
-   * rather than a build failure.
-   *
-   * Only the `nuget_list_*` / `nuget_set_*` gates are asserted: `nuget_wrap_*` already ships
-   * unconditionally under `needsCoreMarshal` (`NugetProcessor.kt:1322-1329`), so asserting it
-   * would pass either way and prove nothing.
-   */
-  @Test
-  fun `the collection helper exports are emitted for a legacy-route-only collection parameter`() {
-    val result = run()
-
-    val missing: List<String> = listOf(
-      "nuget_list_create", "nuget_list_add", "nuget_set_create", "nuget_set_add",
-    ).filterNot { result.generated.contains("@CName(\"$it\")") }
-
-    assertTrue(
-      missing.isEmpty(),
-      "expected the collection helper exports a legacy-route collection parameter needs; " +
-          "missing: $missing (the four needs*() gates cannot see these members)",
-    )
-  }
+  // ADR-127 deleted the helper-gate cell that stood here. The `nuget_list_*` / `nuget_map_*` /
+  // `nuget_set_*` exports now ship unconditionally from the `:nuget-runtime` klib, so there is no
+  // gate left to miss a route and no declaration of them in the generated file.
+  // `scripts/verify-runtime-exports.sh` checks the 66 names on the linked binary instead.
 
   /**
    * The refusal arm ADR-114 keeps: a generic parameter that is not a supported collection must

@@ -182,8 +182,8 @@ class ForwardAbiLegacyImportTest {
   @Test
   fun `reports a legacy pair whose Kotlin export drops the error slot`() {
     val rendered: String = declaration(
-      "nuget_stateflow_collect",
-      "private static extern void nuget_stateflow_collect(IntPtr handle, " +
+      "roster_members_collect",
+      "private static extern void roster_members_collect(IntPtr handle, " +
           "NugetAsyncCallback callback, out IntPtr error);",
     )
     val legacy: List<ForwardAbiSignature> = ForwardAbiContract.csharpLegacy(rendered, emptySet())
@@ -193,7 +193,7 @@ class ForwardAbiLegacyImportTest {
         csharp = legacy,
         kotlin = listOf(
           ForwardAbiSignature(
-            "nuget_stateflow_collect",
+            "roster_members_collect",
             ForwardAbiType.VOID,
             listOf(
               ForwardAbiSignatureParameter(ForwardAbiType.POINTER),
@@ -204,7 +204,44 @@ class ForwardAbiLegacyImportTest {
       )
     }
 
-    assertTrue(error.message!!.contains("mismatch for nuget_stateflow_collect"))
+    assertTrue(error.message!!.contains("mismatch for roster_members_collect"))
+  }
+
+  /**
+   * ADR-127: the 66 runtime names are the `nuget-runtime` klib's, so a C# import of one is
+   * satisfied by the klib and needs no Kotlin export in the generated file. The check keeps the
+   * inverse: a generated export under a runtime name would collide with the runtime's at link
+   * time, so it fails the build here instead.
+   */
+  @Test
+  fun `a runtime name imported by C sharp needs no generated Kotlin export`() {
+    val rendered: String = declaration(
+      "nuget_dispose",
+      "private static extern void nuget_dispose(IntPtr handle);",
+    )
+
+    ForwardAbiContract.assertMatches(
+      csharp = ForwardAbiContract.csharpLegacy(rendered, emptySet()),
+      kotlin = emptyList(),
+    )
+  }
+
+  @Test
+  fun `a generated export under a runtime name fails the build`() {
+    val error: IllegalArgumentException = assertFailsWith {
+      ForwardAbiContract.assertMatches(
+        csharp = emptyList(),
+        kotlin = listOf(
+          ForwardAbiSignature(
+            "nuget_dispose",
+            ForwardAbiType.VOID,
+            listOf(ForwardAbiSignatureParameter(ForwardAbiType.POINTER)),
+          ),
+        ),
+      )
+    }
+
+    assertTrue(error.message!!.contains("regenerated the runtime export nuget_dispose"))
   }
 
   private fun declaration(entryPoint: String, extern: String): String = """

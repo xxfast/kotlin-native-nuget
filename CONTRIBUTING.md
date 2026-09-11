@@ -13,7 +13,7 @@ in [ROADMAP.md](ROADMAP.md) and in GitHub issues, and plenty of changes answer t
 ## Verify before you open anything
 
 ```sh
-scripts/verify.sh            # add --plugin when nuget-plugin/ changed
+scripts/verify.sh            # add --plugin when nuget-plugin/ or nuget-runtime/ changed
 ```
 
 This is the only evidence that counts. It packs the real fixture library through `konanc`, restores the

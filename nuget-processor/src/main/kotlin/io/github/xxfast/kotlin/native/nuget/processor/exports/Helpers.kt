@@ -21,11 +21,11 @@ internal val atomicLong = ClassName("kotlin.concurrent", "AtomicLong")
  * ADR-120: the generated live-handle chokepoint. Every emitted mint goes through
  * `NugetHandles.retain` and every emitted release through `NugetHandles.release`, so the
  * `nuget_live_handles` export can report how many `StableRef` handles the forward bridge holds.
- * The object itself is emitted into `CNameExports.kt` by `addNugetHelperExports`, so this name
- * resolves without an import.
+ * ADR-127: the object lives in the `nuget-runtime` klib now, so the name resolves through the
+ * import `NugetProcessor` adds unconditionally rather than through a regenerated declaration.
  */
 internal val nugetHandles =
-  ClassName("io.github.xxfast.kotlin.native.nuget.generated", "NugetHandles")
+  ClassName(NUGET_RUNTIME_PACKAGE, "NugetHandles")
 
 /**
  * Reconstructs the full [TypeName] for a resolved+alias-expanded [KSType], preserving generic
@@ -145,3 +145,26 @@ internal fun cNameAnnotation(value: String): AnnotationSpec =
   AnnotationSpec.builder(cNameAnnotation)
     .addMember("%S", value)
     .build()
+
+/**
+ * ADR-127: the package of the `nuget-runtime` klib, which owns the fixed 66-name `nuget_*` ABI
+ * and the Kotlin surface the generated file calls into. Every name here is behind the runtime's
+ * `NugetRuntimeApi` opt-in marker, which the generated file's `@file:OptIn` carries.
+ */
+internal const val NUGET_RUNTIME_PACKAGE: String = "io.github.xxfast.kotlin.native.nuget.runtime"
+
+/**
+ * The runtime members the generated file calls by *name* rather than through a KotlinPoet
+ * `ClassName` (they are emitted as literal statement text), so KotlinPoet cannot import them on
+ * its own. Imported unconditionally: the runtime exports all 66 names unconditionally too, and
+ * the gating these used to carry is exactly the defect class ADR-127 removes.
+ */
+internal val NUGET_RUNTIME_MEMBERS: List<String> = listOf(
+  "NugetHandles",
+  "NugetError",
+  "buildError",
+  "NugetCSharpBridge",
+  "toDotNetTicks",
+  "instantFromDotNetTicks",
+  "durationFromDotNetTicks",
+)

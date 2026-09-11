@@ -222,11 +222,30 @@ class NugetPlugin : Plugin<Project> {
       val processorDep: Any = project.findProject(":nuget-processor")
         ?: "io.github.xxfast:nuget-processor:$PLUGIN_VERSION"
 
+      // ADR-127: the fixed 66-name `nuget_*` ABI ships as a klib instead of being regenerated
+      // into every consumer. Resolved exactly as the processor is: the in-repo project when this
+      // is the composite build, the published coordinate at this plugin's own version otherwise,
+      // so the generator and the runtime cannot skew on the supported path.
+      val runtimeDep: Any = project.findProject(":nuget-runtime")
+        ?: "io.github.xxfast:nuget-runtime:$PLUGIN_VERSION"
+
       kotlin.targets.withType(KotlinNativeTarget::class.java).configureEach { target ->
         if (target.konanTarget.name !in KONAN_TO_RID) return@configureEach
 
         val configName = "ksp${target.name.replaceFirstChar { it.uppercase() }}"
         project.dependencies.add(configName, processorDep)
+
+        // `api`, not `implementation`: verified in ADR-127's spike, `export()` of an
+        // `implementation` dependency fails at link time with "Following dependencies exported in
+        // the releaseShared binary are not specified as API-dependencies".
+        project.dependencies.add("${target.name}MainApi", runtimeDep)
+
+        // Also verified there: without the `export()` the runtime's `@CName` symbols never reach
+        // the consumer's shared library, and every `nuget_*` P/Invoke fails with
+        // `EntryPointNotFoundException`. `export()` appends, so an author's own entries stand.
+        target.binaries.withType(SharedLibrary::class.java).configureEach { lib ->
+          lib.export(runtimeDep)
+        }
       }
 
       project.pluginManager.withPlugin("com.google.devtools.ksp") { _ ->

@@ -64,10 +64,9 @@ class Tier1InterfaceBridgeFactoryTest {
     val result = Tier1Harness.run(source)
 
     val kotlin: String = result.generated
-    assertContains(kotlin, "internal interface NugetCSharpBridge")
-    assertContains(kotlin, "public val nugetToken: COpaquePointer")
-    assertContains(kotlin, "@CName(\"nuget_csharp_token\")")
-    assertContains(kotlin, "(handle.asStableRef<Any>().get() as? NugetCSharpBridge)?.nugetToken")
+    // ADR-127: the shared `nuget_*` exports ship unconditionally from the `:nuget-runtime`
+    // klib, so the generated file no longer declares them. `scripts/verify-runtime-exports.sh`
+    // checks them on the linked binary instead.
     // The bridge answers with the GCHandle of the C# object behind it.
     assertContains(kotlin, "override val nugetToken: COpaquePointer = token")
 
@@ -175,9 +174,9 @@ class Tier1InterfaceBridgeFactoryTest {
       kotlin.contains("createCleaner(bridge"),
       "the cleaner must never hold the bridge object itself",
     )
-    // The forced-collection support export ships with the factories.
-    assertContains(kotlin, "@CName(\"nuget_gc_collect\")")
-    assertContains(kotlin, "GC.collect()")
+    // ADR-127: the shared `nuget_*` exports ship unconditionally from the `:nuget-runtime`
+    // klib, so the generated file no longer declares them. `scripts/verify-runtime-exports.sh`
+    // checks them on the linked binary instead.
   }
 
   @Test

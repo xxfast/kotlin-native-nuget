@@ -125,9 +125,9 @@ class Tier1SuspendMethodOverloadTest {
       )
     }
 
-    // The gate cells: the shared scope/job helpers are what an arm's `GetOrCreateScope()` calls.
-    assertContains(kotlin, "@CName(\"nuget_scope_create\")")
-    assertContains(kotlin, "@CName(\"nuget_scope_drain\")")
+    // ADR-127: the shared `nuget_*` exports ship unconditionally from the `:nuget-runtime`
+    // klib, so the generated file no longer declares them. `scripts/verify-runtime-exports.sh`
+    // checks them on the linked binary instead.
 
     // The declared-only rule: `rest` is declared on the base and overridden by no arm, so no arm
     // may export it and no arm may render it.

@@ -17,9 +17,11 @@ Gradle Plugin (Kotlin side)          NuGet Package       C# Consumer
 └─────────────────────────┘
 ```
 
-- **Gradle plugin** compiles Kotlin/Native, runs KSP to generate C# bindings (via the CIR model) and Kotlin bridge wrappers (via KotlinPoet, `CNameExports.kt`), links shared libraries, and packages everything.
+- **Gradle plugin** compiles Kotlin/Native, runs KSP to generate C# bindings (via the CIR model) and Kotlin bridge wrappers (via KotlinPoet, `CNameExports.kt`), links shared libraries, and packages everything. It also adds `nuget-runtime`, a small Kotlin/Native library carrying the fixed `nuget_*` ABI, as an `api` dependency and `export()`s it into every `SharedLibrary`, so the shared library carries both the generated per-declaration code and the runtime's fixed exports.
 - **NuGet package** ships native libs + pre-generated `Interop.cs`. No consumer-side tooling required.
 - **Consumer** just includes the package — bindings are ready at build time.
+
+The project publishes three Maven Central artifacts: `nuget-processor` (the KSP reader/renderer), `nuget-plugin` (the Gradle plugin), and `nuget-runtime` (the fixed ABI, [ADR-127](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/127-nuget-runtime-library.md)). `nuget-runtime` is the project's first artifact carrying `kotlin-tooling-metadata.json`, which makes it indexable on [klibs.io](https://klibs.io); the other two are plain JVM jars.
 
 ## Two mirrored IRs
 
@@ -110,21 +112,40 @@ public class Toy : IDisposable
 
 ### 4. The Kotlin export side
 
-The same renderer emits `@CName` top-level functions that Kotlin/Native compiles into C exports. Each catches `Throwable` and writes it back through `errorOut`, which is the `out IntPtr error` the C# side reads. Handles cross as `StableRef`.
+The same renderer emits `@CName` top-level functions that Kotlin/Native compiles into C exports. Each catches `Throwable` and writes it back through `errorOut`, which is the `out IntPtr error` the C# side reads. Handles cross through `NugetHandles.retain`/`release`, a `StableRef` counter.
+
+`NugetHandles` and `buildError` are not generated into this file: they, and the rest of the roughly 500 declaration-independent lines every project used to regenerate (the scalar wrap/unwrap exports, collections, callbacks, coroutine plumbing), live in a small `nuget-runtime` Kotlin/Native library that the plugin adds as an `api` dependency and `export()`s alongside your own module. `CNameExports.kt` only carries the per-declaration functions and imports the runtime package:
 
 ```kotlin
+import io.github.xxfast.kotlin.native.nuget.runtime.NugetHandles
+import io.github.xxfast.kotlin.native.nuget.runtime.buildError
+
 @CName("toy_create")
-public fun export_toy_create(name: String, color: String, errorOut: COpaquePointer?): COpaquePointer? = try {
-  StableRef.create(Toy(name, color)).asCPointer()
-} catch (e: Throwable) { /* write buildError(e) into errorOut */ null }
+public fun export_toy_create(
+  name: String,
+  color: String,
+  errorOut: COpaquePointer?,
+): COpaquePointer? = try {
+  NugetHandles.retain(io.github.xxfast.kotlin.native.nuget.test.cat.Toy(name, color))
+} catch (e: Throwable) {
+  if (errorOut != null) {
+    errorOut.reinterpret<COpaquePointerVar>().pointed.value = NugetHandles.retain(buildError(e))
+  }
+  null
+}
 
 @CName("toy_get_name")
 public fun export_toy_get_name(handle: COpaquePointer, errorOut: COpaquePointer?): String = try {
-  handle.asStableRef<Toy>().get().name
-} catch (e: Throwable) { /* ... */ "" }
+  handle.asStableRef<io.github.xxfast.kotlin.native.nuget.test.cat.Toy>().get().name
+} catch (e: Throwable) {
+  if (errorOut != null) {
+    errorOut.reinterpret<COpaquePointerVar>().pointed.value = NugetHandles.retain(buildError(e))
+  }
+  ""
+}
 ```
 
-At runtime, C# `new Toy(...)` calls P/Invoke `toy_create`, which reaches Kotlin `export_toy_create` and returns a `StableRef` handle. See [Publishing Kotlin to C#](forward-overview.md) for the full forward pipeline.
+At runtime, C# `new Toy(...)` calls P/Invoke `toy_create`, which reaches Kotlin `export_toy_create` and returns a handle from `NugetHandles.retain`. See [Publishing Kotlin to C#](forward-overview.md) for the full forward pipeline, and [ADR-127](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/127-nuget-runtime-library.md) for why the fixed ABI moved into its own library.
 
 ## Reverse slice: a C# class into Kotlin
 
@@ -299,5 +320,6 @@ Two task chains, one per direction. See [Gradle tasks](gradle-tasks.md) for the 
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/048-kotlin-stub-generation-from-reverse-ir.md">ADR-048: Kotlin stub generation from reverse IR</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/049-csharp-registration-shim-generation.md">ADR-049: C# registration shim generation</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/054-reverse-bridge-registration-observability.md">ADR-054: Reverse bridge registration observability</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/127-nuget-runtime-library.md">ADR-127: `nuget-runtime` Kotlin/Native library</a>
     </category>
 </seealso>

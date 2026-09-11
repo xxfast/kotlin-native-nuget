@@ -128,11 +128,14 @@ feature exists to catch is a registration bug, not a call bug.
 ## Diagnosing forward handle leaks: `LiveHandles`
 
 A different bridge health question: how many **forward** `StableRef` handles (Kotlin exports called
-from C#) does Kotlin currently hold. Every generated mint and release routes through one shared pair
-in the generated `CNameExports.kt`:
+from C#) does Kotlin currently hold. Every mint and release routes through one shared pair. Since
+[ADR-127](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/127-nuget-runtime-library.md)
+this pair lives in the `nuget-runtime` library the plugin `export()`s, not in the generated
+`CNameExports.kt`, behind the `@NugetRuntimeApi` opt-in marker:
 
 ```kotlin
-internal object NugetHandles {
+@NugetRuntimeApi
+public object NugetHandles {
   public val live: AtomicLong = AtomicLong(0L)
 
   public fun retain(`value`: Any): COpaquePointer {
@@ -146,9 +149,16 @@ internal object NugetHandles {
   }
 }
 
+@NugetRuntimeApi
 @CName("nuget_live_handles")
 public fun export_nuget_live_handles(): Long = NugetHandles.live.value
 ```
+
+Moving this into the runtime added no new handle mint and no new crossing family: every existing
+route still calls the same `retain`/`release` pair, byte-identical bodies, so no
+`LeakTests/LiveHandleTests.cs` row was added for the move. The new check that move needed is a
+binary one instead, `scripts/verify-runtime-exports.sh`, which asserts all 66 `nuget_*` names are
+present in the linked `.dylib`/`.dll` (see the entry-point diagnostic below).
 
 C# reads it as an `internal` property on `NugetMarshal`, matching the visibility of ADR-084's
 `NugetBridgeState.ReleasedCount`:
@@ -285,7 +295,12 @@ go red, not just pass by construction.
   greppable but not machine-parseable beyond that.
 - The forward direction (Kotlin exports called from C#) has no registration table and so no
   equivalent observability gap: it resolves by symbol name and fails loudly with
-  `DllNotFoundException` / `EntryPointNotFoundException` at the P/Invoke site.
+  `DllNotFoundException` / `EntryPointNotFoundException` at the P/Invoke site. Since
+  [ADR-127](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/127-nuget-runtime-library.md)
+  a missing `nuget_*` entry point specifically (as opposed to a per-declaration one) means the
+  `nuget-runtime` library was not `export()`ed into the shared library; `scripts/verify-runtime-exports.sh`
+  checks for exactly this by running `nm -gU` (`llvm-nm`/`dumpbin` on Windows) against the linked
+  binary for all 66 names.
 - Tracing the native library's own load path (which `runtimes/{rid}/native/` payload the CLR actually
   resolved) is a separate, unaddressed problem; this feature covers registration, not load resolution.
 
@@ -304,5 +319,6 @@ go red, not just pass by construction.
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/058-csharp-shape-b-structs-in-kotlin.md">ADR-058: C# Shape B structs in Kotlin</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/120-live-stableref-counter-and-leak-harness.md">ADR-120: Live StableRef counter and leak harness</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/121-kotlin-object-collectability-after-last-dispose.md">ADR-121: Kotlin object collectability after the last dispose</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/127-nuget-runtime-library.md">ADR-127: `nuget-runtime` Kotlin/Native library</a>
     </category>
 </seealso>
