@@ -26,6 +26,20 @@ kotlin {
     macosX64Main.get().dependsOn(nativeMain)
     linuxX64Main.get().dependsOn(nativeMain)
     mingwX64Main.get().dependsOn(nativeMain)
+
+    // ADR-128: `launchForCSharp` / `collectForCSharp` are ordinary Kotlin/Native code with no
+    // `@CName`, so they can be driven in-process. KGP host-gates the `<target>Test` tasks, so
+    // `allTests` runs `mingwX64Test` on Windows and `macosArm64Test` on an Apple Silicon Mac.
+    val nativeTest by creating {
+      dependsOn(commonTest.get())
+      dependencies {
+        implementation(libs.kotlin.test)
+      }
+    }
+    macosArm64Test.get().dependsOn(nativeTest)
+    macosX64Test.get().dependsOn(nativeTest)
+    linuxX64Test.get().dependsOn(nativeTest)
+    mingwX64Test.get().dependsOn(nativeTest)
   }
 }
 

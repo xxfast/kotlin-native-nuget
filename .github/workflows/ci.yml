@@ -42,6 +42,11 @@ jobs:
           ./gradlew :nuget-processor:koverXmlReport
           ./gradlew -p nuget-plugin koverXmlReport
 
+      # ADR-128: the `launchForCSharp` / `collectForCSharp` runtime helpers run in-process here, on
+      # both legs, so a broken coroutine arm fails before the pack rather than inside a dotnet test.
+      - name: Runtime helper tests
+        run: ./gradlew :nuget-runtime:allTests
+
       - name: Build NuGet package
         run: ./gradlew :test-library:packNuget
 
