@@ -325,6 +325,15 @@ data class CirJobHelper(
   val libraryName: String,
 ) : CirDeclaration
 
+/**
+ * ADR-129: the always-emitted runtime helper. Unlike every other helper here it is added OUTSIDE
+ * `needsMarshalHelper`, because the `nuget_runtime_version` import must exist for every library,
+ * including a scalar-only one that needs no marshalling at all.
+ */
+data class CirRuntimeHelper(
+  val libraryName: String,
+) : CirDeclaration
+
 data class CirErrorHelper(
   val libraryName: String,
 ) : CirDeclaration
@@ -552,7 +561,7 @@ internal val CirMethod.resolvedExternName: String
     if (externName != null) return externName
     require(!name.startsWith("@")) {
       "Method $name has no extern name and its public name is C#-escaped; " +
-        "an extern identifier cannot be derived from it"
+          "an extern identifier cannot be derived from it"
     }
     return "Native_$name"
   }

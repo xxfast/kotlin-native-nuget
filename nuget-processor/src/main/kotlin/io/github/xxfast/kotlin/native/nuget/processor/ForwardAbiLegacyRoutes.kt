@@ -25,6 +25,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.cir.CirMember
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirMethod
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirObject
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirProperty
+import io.github.xxfast.kotlin.native.nuget.processor.cir.CirRuntimeHelper
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirScopeHelper
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirSealedClass
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirSetHelper
@@ -119,6 +120,7 @@ internal object ForwardAbiLegacyRoutes {
       is CirListHelper,
       is CirMapHelper,
       is CirMarshalHelper,
+      is CirRuntimeHelper,
       is CirScopeHelper,
       is CirSetHelper,
       is CirStateFlowHandleHelper,

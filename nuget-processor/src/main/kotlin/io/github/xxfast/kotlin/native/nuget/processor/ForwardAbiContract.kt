@@ -131,9 +131,9 @@ internal object ForwardAbiContract {
   ): List<ForwardAbiCollision> {
     val csharpByName: Map<String, List<ForwardAbiSignature>> = csharp.groupBy { it.exportName }
     val kotlinByName: Map<String, List<ForwardAbiSignature>> = kotlin.groupBy { it.exportName }
-    // ADR-127: the 66 fixed names are exported by the `nuget-runtime` klib, which the plugin adds
-    // as `api` and `export()`s, so the C# side imports them and the generated Kotlin does not
-    // declare them. Their presence in the linked binary is checked by
+    // ADR-127 (+ADR-129): the 67 fixed names are exported by the `nuget-runtime` klib, which the
+    // plugin adds as `api` and `export()`s, so the C# side imports them and the generated Kotlin
+    // does not declare them. Their presence in the linked binary is checked by
     // `scripts/verify-runtime-exports.sh`, against the runtime source, not here. What this check
     // keeps is the inverse: a regenerated copy of one would collide with the runtime's at link
     // time, so a generated export under a runtime name is a hard failure.
@@ -514,6 +514,7 @@ internal val NUGET_RUNTIME_EXPORTS: Set<String> = setOf(
   "nuget_map_key_at",
   "nuget_map_put",
   "nuget_map_value_at",
+  "nuget_runtime_version",
   "nuget_scope_cancel",
   "nuget_scope_create",
   "nuget_scope_dispose",

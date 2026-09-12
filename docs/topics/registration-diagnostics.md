@@ -80,7 +80,7 @@ getter, or setter. The cost is one CAS and two scalar compares per bound type, o
 
 | Variable | Effect |
 |---|---|
-| `NUGET_INTEROP_TRACE=1` (also `true` or `all`) | Enables a line-per-registration trace on both sides of the bridge |
+| `NUGET_INTEROP_TRACE=1` (also `true` or `all`) | Enables a line-per-registration trace on both sides of the bridge, plus the forward `[nuget:interop] runtime <version> loaded from <library>` line printed at assembly load |
 | `NUGET_INTEROP_TRACEFILE=<path>` | Redirects the trace from stderr to the given file, opened in append mode and flushed per line |
 
 Off by default, and it stays off unless you set it: nothing is emitted into generated code beyond the
@@ -125,6 +125,25 @@ running `[m/N]` count rather than assuming a position.
 Registration granularity only: there is no per-call trace, and none is planned for v1. Every bug this
 feature exists to catch is a registration bug, not a call bug.
 
+### The forward side traces too, for every consumer
+
+The two lines above only fire for a consumer using the reverse bridge (a bound package). Since
+[ADR-129](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/129-nuget-runtime-version-export.md)
+the generated `Interop.cs` also carries an always-emitted `[ModuleInitializer]` that fires at
+assembly load for **every** consumer, forward-only included, gated by the same two variables:
+
+```
+[nuget:interop] runtime <version> loaded from <library>
+```
+
+`<library>` is the `DllImport` library name your generated bindings use, and `<version>` is the
+`nuget-runtime` version baked into the linked native library, read through a dedicated
+`nuget_runtime_version` export rather than the build-time value the generator expected, so a stale
+`.dylib`/`.dll` shows up here even when the C# shim compiled clean. Tag `[nuget:interop]` is distinct
+from `[nuget]` and `[nuget:shim]` above so an interleaved trace still reads unambiguously. Trace off
+means no P/Invoke from the initializer at all, so the moment the native library first loads is
+unchanged for every consumer today.
+
 ## Diagnosing forward handle leaks: `LiveHandles`
 
 A different bridge health question: how many **forward** `StableRef` handles (Kotlin exports called
@@ -157,7 +176,7 @@ public fun export_nuget_live_handles(): Long = NugetHandles.live.value
 Moving this into the runtime added no new handle mint and no new crossing family: every existing
 route still calls the same `retain`/`release` pair, byte-identical bodies, so no
 `LeakTests/LiveHandleTests.cs` row was added for the move. The new check that move needed is a
-binary one instead, `scripts/verify-runtime-exports.sh`, which asserts all 66 `nuget_*` names are
+binary one instead, `scripts/verify-runtime-exports.sh`, which asserts all 67 `nuget_*` names are
 present in the linked `.dylib`/`.dll` (see the entry-point diagnostic below).
 
 C# reads it as an `internal` property on `NugetMarshal`, matching the visibility of ADR-084's
@@ -299,7 +318,7 @@ go red, not just pass by construction.
   [ADR-127](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/127-nuget-runtime-library.md)
   a missing `nuget_*` entry point specifically (as opposed to a per-declaration one) means the
   `nuget-runtime` library was not `export()`ed into the shared library; `scripts/verify-runtime-exports.sh`
-  checks for exactly this against the linked binary for all 66 names, auto-selecting the platform's
+  checks for exactly this against the linked binary for all 67 names, auto-selecting the platform's
   linked library (`.dylib`, `.dll`, `.so`) and reading it with BSD `nm -gU` on macOS or, on Windows
   and Linux, the GNU `nm` that Kotlin/Native's own msys2 toolchain dependency ships.
 - Tracing the native library's own load path (which `runtimes/{rid}/native/` payload the CLR actually
@@ -321,5 +340,6 @@ go red, not just pass by construction.
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/120-live-stableref-counter-and-leak-harness.md">ADR-120: Live StableRef counter and leak harness</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/121-kotlin-object-collectability-after-last-dispose.md">ADR-121: Kotlin object collectability after the last dispose</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/127-nuget-runtime-library.md">ADR-127: `nuget-runtime` Kotlin/Native library</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/129-nuget-runtime-version-export.md">ADR-129: A 67th runtime export, `nuget_runtime_version`</a>
     </category>
 </seealso>

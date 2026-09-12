@@ -672,6 +672,19 @@ internal fun translate(
     }
   }
 
+  // ADR-129: deliberately OUTSIDE the `needsMarshalHelper` gate above. Every other helper exists
+  // only when something marshals through it; this one carries `nuget_runtime_version`, which a
+  // scalar-only library must import too, so that "which runtime is in this binary" has an answer
+  // for every consumer rather than only for the ones that happen to pass a string.
+  val runtimeHelper = CirRuntimeHelper(context.libraryName)
+  val runtimeRootIdx: Int = namespaces.indexOfFirst { it.name == context.rootNamespace }
+  if (runtimeRootIdx >= 0) {
+    val root: CirNamespace = namespaces[runtimeRootIdx]
+    namespaces[runtimeRootIdx] = root.copy(declarations = listOf(runtimeHelper) + root.declarations)
+  } else {
+    namespaces.add(0, CirNamespace(context.rootNamespace, listOf(runtimeHelper)))
+  }
+
   val usings: MutableList<String> = mutableListOf("System", "System.Runtime.InteropServices")
   if (tracker.needsList || tracker.needsMap || tracker.needsSet) {
     usings.add("System.Collections.Generic")

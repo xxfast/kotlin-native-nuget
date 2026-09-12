@@ -318,7 +318,7 @@ public fun export_nuget_suspend_func0_invoke(
 ): COpaquePointer {
   val fn = handle.asStableRef<SuspendFunction0<*>>().get()
   val callback = callbackPtr.reinterpret<CFunction<
-    (COpaquePointer?, COpaquePointer?, Byte, COpaquePointer) -> Unit>>()
+        (COpaquePointer?, COpaquePointer?, Byte, COpaquePointer) -> Unit>>()
   val job = CoroutineScope(Dispatchers.Default).launch(start = CoroutineStart.ATOMIC) {
     try {
       val result = fn.invoke()
@@ -350,7 +350,7 @@ public fun export_nuget_suspend_func1_invoke(
   val fn = handle.asStableRef<SuspendFunction1<Any?, Any?>>().get()
   val param0 = arg0.asStableRef<Any>().get()
   val callback = callbackPtr.reinterpret<CFunction<
-    (COpaquePointer?, COpaquePointer?, Byte, COpaquePointer) -> Unit>>()
+        (COpaquePointer?, COpaquePointer?, Byte, COpaquePointer) -> Unit>>()
   val job = CoroutineScope(Dispatchers.Default).launch(start = CoroutineStart.ATOMIC) {
     try {
       val result = fn.invoke(param0)
@@ -384,7 +384,7 @@ public fun export_nuget_suspend_func2_invoke(
   val param0 = arg0.asStableRef<Any>().get()
   val param1 = arg1.asStableRef<Any>().get()
   val callback = callbackPtr.reinterpret<CFunction<
-    (COpaquePointer?, COpaquePointer?, Byte, COpaquePointer) -> Unit>>()
+        (COpaquePointer?, COpaquePointer?, Byte, COpaquePointer) -> Unit>>()
   val job = CoroutineScope(Dispatchers.Default).launch(start = CoroutineStart.ATOMIC) {
     try {
       val result = fn.invoke(param0, param1)
@@ -420,7 +420,7 @@ public fun export_nuget_suspend_func3_invoke(
   val param1 = arg1.asStableRef<Any>().get()
   val param2 = arg2.asStableRef<Any>().get()
   val callback = callbackPtr.reinterpret<CFunction<
-    (COpaquePointer?, COpaquePointer?, Byte, COpaquePointer) -> Unit>>()
+        (COpaquePointer?, COpaquePointer?, Byte, COpaquePointer) -> Unit>>()
   val job = CoroutineScope(Dispatchers.Default).launch(start = CoroutineStart.ATOMIC) {
     try {
       val result = fn.invoke(param0, param1, param2)
@@ -473,7 +473,7 @@ public fun export_nuget_scope_drain(
 ): COpaquePointer {
   val scope = scopeHandle.asStableRef<CoroutineScope>().get()
   val callback = callbackPtr.reinterpret<CFunction<
-    (COpaquePointer?, COpaquePointer?, Byte, COpaquePointer) -> Unit>>()
+        (COpaquePointer?, COpaquePointer?, Byte, COpaquePointer) -> Unit>>()
   val drainJob = scope.launch(start = CoroutineStart.ATOMIC) {
     val self = coroutineContext[Job]
     scope.coroutineContext[Job]
@@ -529,6 +529,17 @@ public fun buildError(e: Throwable): NugetError {
 private tailrec fun NugetError.at(index: Int): NugetError =
   if (index == 0) this else cause!!.at(index - 1)
 
+/**
+ * ADR-129: the 67th export. Returns the version of this `nuget-runtime` klib, so a process can say
+ * which runtime its `.dylib`/`.dll` actually carries instead of that being an `nm`-plus-cache-walk
+ * question. Wire shape is the one every string-returning export above already uses: Kotlin/Native
+ * hands out a `const char*` valid for the immediate call and C# copies it with
+ * `Marshal.PtrToStringUTF8` (ADR-003).
+ */
+@NugetRuntimeApi
+@CName("nuget_runtime_version")
+public fun export_nuget_runtime_version(): String = NUGET_RUNTIME_VERSION
+
 @NugetRuntimeApi
 @CName("nuget_error_type")
 public fun export_nuget_error_type(handle: COpaquePointer): String =
@@ -549,7 +560,9 @@ public fun export_nuget_error_stacktrace(handle: COpaquePointer): String =
 public fun export_nuget_error_cause_count(handle: COpaquePointer): Int {
   var e: NugetError? = handle.asStableRef<NugetError>().get()
   var n = 0
-  while (e != null) { n++; e = e.cause }
+  while (e != null) {
+    n++; e = e.cause
+  }
   return n
 }
 
@@ -578,7 +591,7 @@ private const val EPOCH_SECONDS_MAX: Long = 253_402_300_799L
 public fun Instant.toDotNetTicks(): Long {
   require(epochSeconds in EPOCH_SECONDS_MIN..EPOCH_SECONDS_MAX) {
     "Instant $this is outside System.DateTimeOffset's range " +
-      "(0001-01-01T00:00:00Z..9999-12-31T23:59:59.9999999Z)"
+        "(0001-01-01T00:00:00Z..9999-12-31T23:59:59.9999999Z)"
   }
   return TICKS_UNIX_EPOCH + epochSeconds * 10_000_000L + nanosecondsOfSecond / 100
 }
