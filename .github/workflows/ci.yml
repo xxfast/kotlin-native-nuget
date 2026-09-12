@@ -45,6 +45,15 @@ jobs:
       - name: Build NuGet package
         run: ./gradlew :test-library:packNuget
 
+      # ADR-127 seam 3 runs on both matrix legs: the runtime's `nuget_*` exports were only ever
+      # spiked on macosArm64, so checking the linked library here turns a missing Windows export
+      # into a build failure instead of an `EntryPointNotFoundException` in the dotnet tests below.
+      # Under Git Bash on the Windows runner `$HOME` is the user profile, so the script's
+      # `~/.konan/dependencies/msys2-mingw-w64-x86_64-*/bin/nm.exe` glob resolves there too.
+      - name: Runtime exports present in the linked library
+        run: scripts/verify-runtime-exports.sh
+        shell: bash
+
       - name: Check generated bindings compile as a consumer (net8.0, warnings as errors)
         run: dotnet build GeneratedBindingsCheck
 

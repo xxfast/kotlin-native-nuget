@@ -299,8 +299,9 @@ go red, not just pass by construction.
   [ADR-127](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/127-nuget-runtime-library.md)
   a missing `nuget_*` entry point specifically (as opposed to a per-declaration one) means the
   `nuget-runtime` library was not `export()`ed into the shared library; `scripts/verify-runtime-exports.sh`
-  checks for exactly this by running `nm -gU` (`llvm-nm`/`dumpbin` on Windows) against the linked
-  binary for all 66 names.
+  checks for exactly this against the linked binary for all 66 names, auto-selecting the platform's
+  linked library (`.dylib`, `.dll`, `.so`) and reading it with BSD `nm -gU` on macOS or, on Windows
+  and Linux, the GNU `nm` that Kotlin/Native's own msys2 toolchain dependency ships.
 - Tracing the native library's own load path (which `runtimes/{rid}/native/` payload the CLR actually
   resolved) is a separate, unaddressed problem; this feature covers registration, not load resolution.
 

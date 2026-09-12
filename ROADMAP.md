@@ -194,7 +194,6 @@ Bullets 1 to 3 shipped in [ADR-127](docs/adr/127-nuget-runtime-library.md): the 
 - [ ] A runtime `launchForCSharp(callback, userData) { body }` helper collapsing the ~20-line `*_async`, Flow collect and `*_bridge_create` launch shape (14 copies in the fixture) to a few lines. A generator change on top of the runtime, second step.
 - [ ] The C# twin: `Interop.cs`'s roughly 1.8k fixed lines as a runtime NuGet package. Blocked on a per-library `DllImportResolver` (every `DllImport` names its library at compile time and one .NET process can host several Kotlin libraries); decide together with the opt-in compiled-assembly packaging mode under Future Improvements.
 - [ ] A `nuget_runtime_version(): String` export so `NUGET_INTEROP_TRACE=1` can print which runtime a process loaded. Deferred by [ADR-127](docs/adr/127-nuget-runtime-library.md) Consequences; an option for bullet 5 above, not shipped with the module itself.
-- [ ] `mingwX64` export of the runtime's `nuget_*` symbols is verified only by CI's Windows leg (`llvm-nm`/`dumpbin` in `scripts/verify-runtime-exports.sh`), never locally; the [ADR-127](docs/adr/127-nuget-runtime-library.md) spike ran on `macosArm64` only.
 - [ ] The reverse bridge's own `NugetError` (`build/nuget-interop`, structurally identical to the runtime's) can now fold onto the runtime's public one instead of staying a second copy. Named but not done by [ADR-127](docs/adr/127-nuget-runtime-library.md), which moved the forward side only.
 
 ## Post-migration hardening
