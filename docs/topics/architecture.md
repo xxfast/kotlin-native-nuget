@@ -147,6 +147,8 @@ public fun export_toy_get_name(handle: COpaquePointer, errorOut: COpaquePointer?
 
 At runtime, C# `new Toy(...)` calls P/Invoke `toy_create`, which reaches Kotlin `export_toy_create` and returns a handle from `NugetHandles.retain`. See [Publishing Kotlin to C#](forward-overview.md) for the full forward pipeline, and [ADR-127](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/127-nuget-runtime-library.md) for why the fixed ABI moved into its own library.
 
+The reverse bridge (below) builds its own thrown-exception envelope through the same `buildError`, rather than a second, structurally identical error class: `internal expect fun nugetKotlinError(t: Throwable)` in the generated `nativeMain` file, with a per-target `actual` that calls `StableRef.create(buildError(t)).asCPointer()` where the runtime is visible. See [ADR-130](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/130-reverse-error-envelope-on-runtime.md).
+
 ## Reverse slice: a C# class into Kotlin
 
 The mirror image. The plugin resolves a NuGet dependency, reads its compiled metadata, and emits Kotlin you can call. There is no source to author on the Kotlin side. Follow one member, `Apply`, from the assembly's `managedSignature` to a signature-derived bridge slot that both generated sides agree on.
@@ -321,5 +323,6 @@ Two task chains, one per direction. See [Gradle tasks](gradle-tasks.md) for the 
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/049-csharp-registration-shim-generation.md">ADR-049: C# registration shim generation</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/054-reverse-bridge-registration-observability.md">ADR-054: Reverse bridge registration observability</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/127-nuget-runtime-library.md">ADR-127: `nuget-runtime` Kotlin/Native library</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/130-reverse-error-envelope-on-runtime.md">ADR-130: Reverse error envelope on the runtime</a>
     </category>
 </seealso>

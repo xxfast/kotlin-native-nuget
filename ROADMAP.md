@@ -193,7 +193,6 @@ Bullets 1 to 3 shipped in [ADR-127](docs/adr/127-nuget-runtime-library.md): the 
 
 - [ ] A runtime `launchForCSharp(callback, userData) { body }` helper collapsing the ~20-line `*_async`, Flow collect and `*_bridge_create` launch shape (14 copies in the fixture) to a few lines. A generator change on top of the runtime, second step.
 - [ ] The C# twin: `Interop.cs`'s roughly 1.8k fixed lines as a runtime NuGet package. Blocked on a per-library `DllImportResolver` (every `DllImport` names its library at compile time and one .NET process can host several Kotlin libraries); decide together with the opt-in compiled-assembly packaging mode under Future Improvements.
-- [ ] The reverse bridge's own `NugetError` (`build/nuget-interop`, structurally identical to the runtime's) can now fold onto the runtime's public one instead of staying a second copy. Named but not done by [ADR-127](docs/adr/127-nuget-runtime-library.md), which moved the forward side only.
 
 ## Post-migration hardening
 
@@ -232,6 +231,7 @@ Fallout from [ADR-053](docs/adr/053-nullable-reference-types-in-kotlin.md) (reve
 - [ ] **`ForwardKotlinPlanEmitterTest.kt` hand-builds a constructor plan with a `RECEIVER` slot the planner never produces, and `ForwardKotlinPlanEmitter.kt`'s `isReceiver` flag on `valueClassKotlinType`/`kotlinType` is dead.** ([details](docs/backlog/forwardkotlinplanemittertest-unfaithful-receiver-fixture-and-dead-isreceiver-flag.md)) Discovered alongside [ADR-062](docs/adr/062-forward-callable-plan.md)'s 2026-09-10 amendment.
 - [ ] **`ForwardAbiContract.csharpType` strips a leading `[MarshalAs(...)]` only on the `out`-prefix branch, not the by-value branch** ([details](docs/backlog/forwardabicontract-s-csharptype-parameter-nativetype-strips.md))
 - [ ] **Two coverage gaps left deliberately cold by [ADR-098](docs/adr/098-narrow-primitive-and-char-collection-components.md).** ([details](docs/backlog/two-coverage-gaps-left-deliberately-cold-adr.md))
+- [ ] **The reverse bindings srcDir silently lands in no source set when a build script never names `nativeMain`, and nothing errors until C# startup can't find `nuget_runtime_register`.** ([details](docs/backlog/reverse-bindings-srcdir-silently-missing-unnamed-nativemain.md)) Discovered alongside [ADR-130](docs/adr/130-reverse-error-envelope-on-runtime.md).
 - [ ] **The reverse C# shims' `[ModuleInitializer]` sites carry no `CA2255` suppression, so a library consumer with `TreatWarningsAsErrors` fails to compile against a bound package.** ([details](docs/backlog/reverse-shim-module-initializer-ca2255.md)) Discovered alongside [ADR-129](docs/adr/129-nuget-runtime-version-export.md).
 - [ ] **`Tier1NamedSkipDiagnosticsTest` and `Tier1CompileCellsTest` cells that used `Short`/`Char` as stand-ins for "bridgeable but not wrappable" need a new home.** ([details](docs/backlog/tier1-short-char-standin-cells.md))
 - [ ] **Manually re-verify the Mac Catalyst repro without `MtouchInterpreter`** ([details](docs/backlog/catalyst-repro-without-mtouchinterpreter.md))

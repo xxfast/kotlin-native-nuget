@@ -369,6 +369,15 @@ stage 2).</p>
 </warning>
 
 <note>
+<p>That error envelope is built with the same <code>buildError</code> function every forward export
+uses, not a separate copy: the reverse bridge's own error class was folded onto the runtime's public
+<code>NugetError</code>
+(<a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/130-reverse-error-envelope-on-runtime.md">ADR-130</a>).
+This is an implementation detail, invisible from C#: the <code>nuget_kotlin_error_*</code> exports
+and the thrown <code>KotlinException</code> family are unchanged.</p>
+</note>
+
+<note>
 <p>A call that <i>originates</i> in Kotlin and reaches the Kotlin-implemented member indirectly,
 through an ordinary reverse-bound method (<code>Sanctuary.Introduce</code> calling
 <code>IFeedable.Describe()</code> internally), is catchable too: the Kotlin→C# call crosses its own
@@ -782,5 +791,6 @@ queryable diagnostics report (only a Gradle log line exists today), tracked in
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/086-object-interface-slots-kotlin-bridge.md">ADR-086: Object- and interface-typed slots for a Kotlin-implemented C# interface</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/087-kotlin-slot-exceptions.md">ADR-087: Exceptions from Kotlin-implemented C# interface members</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/104-reverse-thunk-error-channel.md">ADR-104: Reverse thunk error channel</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/130-reverse-error-envelope-on-runtime.md">ADR-130: Reverse error envelope on the runtime</a>
     </category>
 </seealso>

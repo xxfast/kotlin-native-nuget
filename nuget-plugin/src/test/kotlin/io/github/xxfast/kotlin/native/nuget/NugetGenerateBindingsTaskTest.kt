@@ -2015,4 +2015,92 @@ class NugetGenerateBindingsTaskTest {
           "it is not opt-in, got:\n$checkContractBody",
     )
   }
+
+  // ------------------------------------------------------------------
+  // ADR-130: the reverse error envelope folds onto the runtime's NugetError, across the
+  // expect/actual seam freeManagedString already uses
+  // ------------------------------------------------------------------
+
+  @Test
+  fun `NugetRuntime kt declares nugetKotlinError as an expect and owns no envelope class`() {
+    val files: List<GeneratedFile> = generateKotlinStubs(templateRir)
+
+    val runtime: GeneratedFile = files.single {
+      it.relativePath == "nativeMain/io/github/xxfast/kotlin/native/nuget/internal/NugetRuntime.kt"
+    }
+
+    assertContains(
+      runtime.content,
+      "internal expect fun nugetKotlinError(t: Throwable): COpaquePointer",
+    )
+    assertFalse(
+      runtime.content.contains("class NugetKotlinError"),
+      "ADR-130: the reverse copy of the envelope class must be gone",
+    )
+    // The runtime klib is `api` on the PER-TARGET source set only, so naming it here would break
+    // compileNativeMainKotlinMetadata (ADR-130's correction, Variant 1).
+    assertFalse(
+      runtime.content.contains("io.github.xxfast.kotlin.native.nuget.runtime."),
+      "the shared nativeMain file must not reference the runtime klib",
+    )
+    assertEquals(
+      0,
+      runtime.content.split("@CName(\"nuget_kotlin_error_").size - 1,
+      "the accessors moved to the per-target NugetKotlinErrors.kt",
+    )
+  }
+
+  @Test
+  fun `NugetKotlinErrors kt is emitted per target and reads the runtime's NugetError`() {
+    val files: List<GeneratedFile> = generateKotlinStubs(templateRir)
+
+    val perTarget: List<GeneratedFile> =
+      files.filter { it.relativePath.endsWith("internal/NugetKotlinErrors.kt") }
+    assertEquals(
+      listOf(
+        "mingwMain/io/github/xxfast/kotlin/native/nuget/internal/NugetKotlinErrors.kt",
+        "posixMain/io/github/xxfast/kotlin/native/nuget/internal/NugetKotlinErrors.kt",
+      ),
+      perTarget.map { it.relativePath }.sorted(),
+      "the actual half belongs to both per-target source sets, like freeManagedString's",
+    )
+
+    perTarget.forEach { file ->
+      assertContains(
+        file.content,
+        "import io.github.xxfast.kotlin.native.nuget.runtime.NugetError",
+      )
+      assertContains(
+        file.content,
+        "import io.github.xxfast.kotlin.native.nuget.runtime.buildError",
+      )
+      assertTrue(file.content.startsWith("@file:OptIn("), file.content.take(80))
+      val optIn: String = file.content.substringAfter("@file:OptIn(").substringBefore("package ")
+      assertContains(optIn, "NugetRuntimeApi::class")
+
+      assertContains(
+        file.content,
+        "internal actual fun nugetKotlinError(t: Throwable): COpaquePointer",
+      )
+      assertContains(file.content, "StableRef.create(buildError(t)).asCPointer()")
+      // ADR-130 "Allocation, pinned": not NugetHandles.retain, so nuget_live_handles and the
+      // LeakTests baselines do not move.
+      assertFalse(
+        file.content.contains("NugetHandles.retain("),
+        "the envelope must NOT be counted in nuget_live_handles",
+      )
+
+      // The C# NugetKotlinErrors shim's contract, unchanged by the fold.
+      assertEquals(
+        8,
+        file.content.split("@CName(\"nuget_kotlin_error_").size - 1,
+        "all eight accessors ride along to the per-target file",
+      )
+      assertContains(file.content, "handle.asStableRef<NugetError>().dispose()")
+      assertFalse(
+        file.content.contains("NugetKotlinError("),
+        "nothing may still construct the deleted reverse envelope class",
+      )
+    }
+  }
 }
