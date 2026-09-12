@@ -213,45 +213,10 @@ class Tier1LegacySuspendCollectionReturnTest {
     )
   }
 
-  /**
-   * The helper gate, ADR-114 answer 4's return-side twin. A sealed arm's suspend member is on the
-   * legacy route since ADR-118, but the `needs*Support` walk never looked at a sealed arm's suspend
-   * members at all, and no declaration scan reads a suspend return. With only this member in the
-   * module, the C# side would call `nuget_list_count` against a native library that never exported
-   * it, an `EntryPointNotFoundException` at first await rather than a build failure.
-   */
-  @Test
-  fun `the collection helper exports are emitted for a suspend-return-only collection`() {
-    val result = Tier1Harness.run(
-      """
-      package tier1.headcount
-
-      sealed class Shift
-
-      data class Night(val lead: String) : Shift() {
-        suspend fun crew(): List<String> = listOf(lead)
-        suspend fun badges(): Set<Int> = setOf(1)
-      }
-      """.trimIndent(),
-      fileName = "Shift.kt",
-      processorOptions = mapOf("nuget.rootPackage" to "tier1"),
-      libraries = listOf(Tier1Classpath.kotlinxCoroutinesCore),
-    )
-
-    val missing: List<String> = listOf(
-      "nuget_list_count", "nuget_list_get", "nuget_set_count", "nuget_set_element_at",
-    ).filterNot { result.generated.contains("@CName(\"$it\")") }
-
-    assertTrue(
-      missing.isEmpty(),
-      "expected the collection helper exports a suspend-route collection return needs; " +
-          "missing: $missing",
-    )
-    assertTrue(
-      result.generatedCSharp.contains("public Task<IReadOnlyList<string>> CrewAsync("),
-      "expected the arm's List return to bind; got: ${csharpLinesFor(result, "Crew")}",
-    )
-  }
+  // ADR-127 deleted the helper-gate cell that stood here. The `nuget_list_*` / `nuget_map_*` /
+  // `nuget_set_*` exports now ship unconditionally from the `:nuget-runtime` klib, so there is no
+  // gate left to miss a route and no declaration of them in the generated file.
+  // `scripts/verify-runtime-exports.sh` checks the 66 names on the linked binary instead.
 
   private fun csharpSignatures(result: Tier1Result): List<String> =
     result.generatedCSharp.lines()

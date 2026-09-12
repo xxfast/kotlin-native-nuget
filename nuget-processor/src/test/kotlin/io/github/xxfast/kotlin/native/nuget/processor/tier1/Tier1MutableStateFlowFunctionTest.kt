@@ -69,8 +69,9 @@ class Tier1MutableStateFlowFunctionTest {
       kotlin.contains("dispenser_level_value"),
       "expected no per-member _value for a held flow; generated=$kotlin",
     )
-    assertContains(kotlin, "@CName(\"nuget_stateflow_collect\")")
-    assertContains(kotlin, "@CName(\"nuget_stateflow_value\")")
+    // ADR-127: the shared `nuget_*` exports ship unconditionally from the `:nuget-runtime`
+    // klib, so the generated file no longer declares them. `scripts/verify-runtime-exports.sh`
+    // checks them on the linked binary instead.
 
     val csharp: String = result.generatedCSharp
 

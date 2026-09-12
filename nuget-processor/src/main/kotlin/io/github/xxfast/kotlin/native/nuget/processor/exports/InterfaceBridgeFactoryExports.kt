@@ -85,54 +85,6 @@ internal fun FileSpec.Builder.addInterfaceBridgeFactoryExport(plan: ForwardBridg
   addFunction(builder.build())
 }
 
-/**
- * ADR-084 facet 5: the marker every generated bridge object implements, plus the shared probe the
- * C# return position asks before wrapping a handle. A Kotlin-backed object answers null (it does
- * not implement the marker), so the ordinary wrapper construction stands; a bridge answers the
- * GCHandle of the C# object behind it, and C# hands that original instance back instead of
- * double-bridging it.
- *
- * Both are emitted unconditionally: the C# probe lives in `NugetMarshal`, which every module with
- * an interface return has, including modules whose interfaces did not plan a bridge factory.
- */
-internal fun FileSpec.Builder.addCSharpBridgeMarker() {
-  addType(
-    TypeSpec.interfaceBuilder("NugetCSharpBridge")
-      .addModifiers(KModifier.INTERNAL)
-      .addProperty("nugetToken", cOpaquePointer)
-      .build()
-  )
-  addFunction(
-    FunSpec.builder("export_nuget_csharp_token")
-      .addAnnotation(cNameAnnotation("nuget_csharp_token"))
-      .addParameter("handle", cOpaquePointer)
-      .returns(cOpaquePointer.copy(nullable = true))
-      .addStatement(
-        "return (handle.asStableRef<Any>().get() as? NugetCSharpBridge)?.nugetToken",
-      )
-      .build()
-  )
-}
-
-/**
- * ADR-084 stage 2: the support export that forces a Kotlin GC round, so a host (and the release
- * test) can observe the cleaner-driven release deterministically instead of waiting for a natural
- * collection. Emitted alongside the factories, never on its own.
- */
-internal fun FileSpec.Builder.addGcCollectExport() {
-  addFunction(
-    FunSpec.builder("export_nuget_gc_collect")
-      .addAnnotation(cNameAnnotation("nuget_gc_collect"))
-      .addAnnotation(
-        AnnotationSpec.builder(ClassName("kotlin", "OptIn"))
-          .addMember("%T::class", ClassName("kotlin.native.runtime", "NativeRuntimeApi"))
-          .build()
-      )
-      .addStatement("%T.collect()", ClassName("kotlin.native.runtime", "GC"))
-      .build()
-  )
-}
-
 private fun StringBuilder.appendSlotOverride(slot: ForwardBridgeSlot) {
   val call: String = invocation(slot)
   if (slot.isProperty) {

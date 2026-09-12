@@ -26,14 +26,15 @@ if [ "$RUN_PLUGIN" = true ]; then
   echo "==> Gradle plugin tests (:nuget-plugin:test)"
   ./gradlew :nuget-plugin:test
 
-  echo "==> Publish plugin + processor to build/local-repo"
+  echo "==> Publish plugin + processor + runtime to build/local-repo"
   ./gradlew :nuget-processor:publishAllPublicationsToLocalTestRepository \
+    :nuget-runtime:publishAllPublicationsToLocalTestRepository \
     :nuget-plugin:publishAllPublicationsToLocalTestRepository
 
   # Exercises the maven-coordinate fallback in NugetPlugin that this repo's own builds skip,
   # because here `findProject(":nuget-processor")` always resolves.
   echo "==> Consume the plugin by coordinate (smoke-test)"
-  ./gradlew -p smoke-test verifyProcessorResolvesByCoordinate
+  ./gradlew -p smoke-test verifyProcessorResolvesByCoordinate verifyRuntimeResolvesByCoordinate
 fi
 
 echo "==> Purge stale TestLibrary + TestDependency NuGet caches"
@@ -51,6 +52,12 @@ rm -rf LeakTests/obj LeakTests/bin
 
 echo "==> Pack TestLibrary NuGet (:test-library:clean :test-library:packNuget)"
 ./gradlew :test-library:clean :test-library:packNuget
+
+# ADR-127: the fixed `nuget_*` ABI now reaches the binary from the `nuget-runtime` klib through
+# the plugin's `export()`, not from a regenerated block. This is the check that the export really
+# happened, on the linked library rather than on generated text.
+echo "==> Runtime exports present in the linked library (scripts/verify-runtime-exports.sh)"
+"$ROOT/scripts/verify-runtime-exports.sh"
 
 # ADR-100: forward diagnostics must reach the console on a fresh *and* an incremental packNuget.
 # Runs after the pack above, so both of its runs exercise the cached path this feature exists for.

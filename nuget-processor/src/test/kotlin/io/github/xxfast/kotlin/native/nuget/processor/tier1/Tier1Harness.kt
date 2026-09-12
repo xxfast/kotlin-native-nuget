@@ -272,7 +272,7 @@ internal object Tier1Harness {
     val sourceFiles: List<File> = buildList {
       addAll(fixtureFiles)
       add(compileSourceDir.resolve("CNameExports.kt").apply { writeText(generatedCNameExports) })
-      Tier1CinteropStub.files.forEach { (name, content) ->
+      (Tier1CinteropStub.files + Tier1RuntimeStub.files).forEach { (name, content) ->
         add(compileSourceDir.resolve(name).apply { writeText(content) })
       }
     }

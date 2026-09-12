@@ -131,7 +131,21 @@ internal object ForwardAbiContract {
   ): List<ForwardAbiCollision> {
     val csharpByName: Map<String, List<ForwardAbiSignature>> = csharp.groupBy { it.exportName }
     val kotlinByName: Map<String, List<ForwardAbiSignature>> = kotlin.groupBy { it.exportName }
-    val names: List<String> = (csharpByName.keys + kotlinByName.keys).sorted()
+    // ADR-127: the 66 fixed names are exported by the `nuget-runtime` klib, which the plugin adds
+    // as `api` and `export()`s, so the C# side imports them and the generated Kotlin does not
+    // declare them. Their presence in the linked binary is checked by
+    // `scripts/verify-runtime-exports.sh`, against the runtime source, not here. What this check
+    // keeps is the inverse: a regenerated copy of one would collide with the runtime's at link
+    // time, so a generated export under a runtime name is a hard failure.
+    NUGET_RUNTIME_EXPORTS.forEach { name ->
+      require(name !in kotlinByName) {
+        "Forward ABI regenerated the runtime export $name; it belongs to nuget-runtime only"
+      }
+    }
+
+    val names: List<String> = (csharpByName.keys + kotlinByName.keys)
+      .filterNot { it in NUGET_RUNTIME_EXPORTS }
+      .sorted()
     val collisions: MutableList<ForwardAbiCollision> = mutableListOf()
 
     names.forEach { name ->
@@ -466,3 +480,78 @@ internal object ForwardAbiContract {
 
   private fun kotlinParameterType(type: TypeName): ForwardAbiType = kotlinType(type)
 }
+
+/**
+ * ADR-127: the fixed `nuget_*` ABI, exported by the `nuget-runtime` klib rather than regenerated
+ * into every consumer. Pinned here because the processor cannot read the runtime's source at
+ * generation time; `scripts/verify-runtime-exports.sh` derives the same list from that source and
+ * asserts every name is present in the linked binary, which is where the two are kept honest.
+ */
+internal val NUGET_RUNTIME_EXPORTS: Set<String> = setOf(
+  "nuget_csharp_token",
+  "nuget_dispose",
+  "nuget_error_cause_count",
+  "nuget_error_cause_message",
+  "nuget_error_cause_stacktrace",
+  "nuget_error_cause_type",
+  "nuget_error_message",
+  "nuget_error_stacktrace",
+  "nuget_error_type",
+  "nuget_func0_invoke",
+  "nuget_func1_invoke",
+  "nuget_func2_invoke",
+  "nuget_func3_invoke",
+  "nuget_gc_collect",
+  "nuget_job_cancel",
+  "nuget_job_dispose",
+  "nuget_list_add",
+  "nuget_list_count",
+  "nuget_list_create",
+  "nuget_list_get",
+  "nuget_live_handles",
+  "nuget_map_count",
+  "nuget_map_create",
+  "nuget_map_key_at",
+  "nuget_map_put",
+  "nuget_map_value_at",
+  "nuget_scope_cancel",
+  "nuget_scope_create",
+  "nuget_scope_dispose",
+  "nuget_scope_drain",
+  "nuget_set_add",
+  "nuget_set_count",
+  "nuget_set_create",
+  "nuget_set_element_at",
+  "nuget_stateflow_collect",
+  "nuget_stateflow_value",
+  "nuget_suspend_func0_invoke",
+  "nuget_suspend_func1_invoke",
+  "nuget_suspend_func2_invoke",
+  "nuget_suspend_func3_invoke",
+  "nuget_unwrap_bool",
+  "nuget_unwrap_byte",
+  "nuget_unwrap_char",
+  "nuget_unwrap_double",
+  "nuget_unwrap_float",
+  "nuget_unwrap_int",
+  "nuget_unwrap_long",
+  "nuget_unwrap_short",
+  "nuget_unwrap_string",
+  "nuget_unwrap_ubyte",
+  "nuget_unwrap_uint",
+  "nuget_unwrap_ulong",
+  "nuget_unwrap_ushort",
+  "nuget_wrap_bool",
+  "nuget_wrap_byte",
+  "nuget_wrap_char",
+  "nuget_wrap_double",
+  "nuget_wrap_float",
+  "nuget_wrap_int",
+  "nuget_wrap_long",
+  "nuget_wrap_short",
+  "nuget_wrap_string",
+  "nuget_wrap_ubyte",
+  "nuget_wrap_uint",
+  "nuget_wrap_ulong",
+  "nuget_wrap_ushort",
+)

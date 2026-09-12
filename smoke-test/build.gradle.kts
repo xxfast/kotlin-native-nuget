@@ -1,3 +1,6 @@
+import org.jetbrains.kotlin.gradle.plugin.mpp.KotlinNativeTarget
+import org.jetbrains.kotlin.gradle.plugin.mpp.SharedLibrary
+
 plugins {
   kotlin("multiplatform") version "2.4.10"
   id("io.github.xxfast.kotlin.native.nuget")
@@ -42,5 +45,33 @@ val verifyProcessorResolvesByCoordinate by tasks.registering {
       "nuget-processor did not resolve from a maven coordinate. The fallback at NugetPlugin.kt is broken."
     }
     logger.lifecycle("Resolved nuget-processor by coordinate: ${jars.joinToString { it.name }}")
+  }
+}
+
+// ADR-127: the same fallback, one artifact over. The runtime is the half the ADR could not spike
+// by coordinate (the spike used `project(":runtime")`), and the claim it rests on is that
+// `export()` of a published coordinate behaves like `export()` of a project. Resolving the shared
+// library's own export configuration is what proves it: a klib in there is a klib the linker will
+// pull the `nuget_*` symbols from.
+val verifyRuntimeResolvesByCoordinate by tasks.registering {
+  group = "verification"
+  description = "Fails unless nuget-runtime resolves by coordinate and is exported from " +
+    "the sharedLib"
+
+  val exportedFiles: Provider<Set<File>> = providers.provider {
+    val target = kotlin.targets.getByName("macosArm64") as KotlinNativeTarget
+    val lib = target.binaries.filterIsInstance<SharedLibrary>().first()
+    configurations.getByName(lib.exportConfigurationName).files.toSet()
+  }
+
+  doLast {
+    val exported: Set<File> = exportedFiles.get()
+    val runtime: List<File> = exported.filter { it.name.startsWith("nuget-runtime") }
+    check(runtime.isNotEmpty()) {
+      "nuget-runtime did not resolve into the sharedLib export configuration. " +
+        "The ADR-127 wiring at NugetPlugin.kt is broken, or export() of a published coordinate " +
+        "does not behave like export(project(...)). Resolved: ${exported.joinToString { it.name }}"
+    }
+    logger.lifecycle("Resolved nuget-runtime by coordinate: ${runtime.joinToString { it.name }}")
   }
 }

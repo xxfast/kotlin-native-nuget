@@ -20,6 +20,8 @@ import com.google.devtools.ksp.symbol.Visibility
 import com.squareup.kotlinpoet.AnnotationSpec
 import com.squareup.kotlinpoet.ClassName
 import com.squareup.kotlinpoet.FileSpec
+import com.squareup.kotlinpoet.KModifier
+import com.squareup.kotlinpoet.PropertySpec
 import com.squareup.kotlinpoet.ksp.writeTo
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirFile
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirRenderer
@@ -39,43 +41,23 @@ import io.github.xxfast.kotlin.native.nuget.processor.exports.forwardArmFlowProp
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addFunctionExports
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addGenericClassExports
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addGenericFunctionExports
-import io.github.xxfast.kotlin.native.nuget.processor.exports.addCSharpBridgeMarker
-import io.github.xxfast.kotlin.native.nuget.processor.exports.addGcCollectExport
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addInterfaceBridgeFactoryExport
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addInterfaceExports
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addLambdaParamMethodExport
-import io.github.xxfast.kotlin.native.nuget.processor.exports.addNugetHandlesCounter
-import io.github.xxfast.kotlin.native.nuget.processor.exports.addNugetHelperExports
-import io.github.xxfast.kotlin.native.nuget.processor.exports.addNugetListHelperExports
-import io.github.xxfast.kotlin.native.nuget.processor.exports.addNugetMapHelperExports
-import io.github.xxfast.kotlin.native.nuget.processor.exports.addNugetSetHelperExports
-import io.github.xxfast.kotlin.native.nuget.processor.exports.addNugetWrapHelperExports
-import io.github.xxfast.kotlin.native.nuget.processor.exports.addNugetFunc0HelperExports
-import io.github.xxfast.kotlin.native.nuget.processor.exports.addNugetFunc1HelperExports
-import io.github.xxfast.kotlin.native.nuget.processor.exports.addNugetFunc2HelperExports
-import io.github.xxfast.kotlin.native.nuget.processor.exports.addNugetFunc3HelperExports
-import io.github.xxfast.kotlin.native.nuget.processor.exports.addNugetSuspendFuncHelperExports
-import io.github.xxfast.kotlin.native.nuget.processor.exports.addNugetScopeHelperExports
-import io.github.xxfast.kotlin.native.nuget.processor.exports.addNugetScopeDrainExport
-import io.github.xxfast.kotlin.native.nuget.processor.exports.addNugetJobHelperExports
-import io.github.xxfast.kotlin.native.nuget.processor.exports.addNugetErrorHelperExports
-import io.github.xxfast.kotlin.native.nuget.processor.exports.addNugetDurationHelperExports
-import io.github.xxfast.kotlin.native.nuget.processor.exports.addNugetInstantHelperExports
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addStoredCallbackExports
 import io.github.xxfast.kotlin.native.nuget.processor.exports.findStoredCallbackPairs
 import io.github.xxfast.kotlin.native.nuget.processor.exports.findInterfaceBridgePairs
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addExtensionFunctionExports
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addExtensionPropertyExports
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addObjectExports
+import io.github.xxfast.kotlin.native.nuget.processor.exports.NUGET_RUNTIME_MEMBERS
+import io.github.xxfast.kotlin.native.nuget.processor.exports.NUGET_RUNTIME_PACKAGE
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addPropertyExports
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addSealedClassExports
-import io.github.xxfast.kotlin.native.nuget.processor.exports.addStateFlowHandleExports
-import io.github.xxfast.kotlin.native.nuget.processor.exports.returnsHeldMutableStateFlow
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addSuspendClassMethodExports
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addSuspendFunctionExports
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addValueClassExports
 import io.github.xxfast.kotlin.native.nuget.processor.forward.BridgeType
-import io.github.xxfast.kotlin.native.nuget.processor.forward.CollectionKind
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeTypeContext
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeTypeClassifier
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallableCatalogEntry
@@ -93,7 +75,6 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnosticS
 import io.github.xxfast.kotlin.native.nuget.processor.forward.PackageScope
 import io.github.xxfast.kotlin.native.nuget.processor.forward.renderForwardDiagnosticsJson
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnosticTrackingLogger
-import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardHelperRequirement
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardPropertyPlan
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeInterfacePlan
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardInterfaceBridgePlanner
@@ -1285,8 +1266,30 @@ class NugetProcessor(
       .addImport("kotlinx.cinterop", "value")
       .addImport("kotlinx.cinterop", "StableRef")
 
-    // ADR-120: the live-handle counter every emitted mint and release routes through.
-    builder.addNugetHandlesCounter()
+    // ADR-127: the fixed `nuget_*` block lives in the `nuget-runtime` klib. The generated file
+    // calls into it by name, so the imports are added here, unconditionally, for every module.
+    // Unconditional is the point: the `needs*` gating these used to sit behind is the defect
+    // class (ADR-068, ADR-071, ADR-075, ADR-124) that moving the block removes by construction.
+    NUGET_RUNTIME_MEMBERS.forEach { member -> builder.addImport(NUGET_RUNTIME_PACKAGE, member) }
+
+    // ADR-127's skew guard: one line naming the runtime's ABI major. A runtime with a different
+    // major renames the object, and the consumer's compile fails with an unresolved reference
+    // naming it, which is earlier and cheaper than any startup check.
+    builder.addProperty(
+      PropertySpec
+        .builder(
+          "nugetRuntimeAbi",
+          ClassName(NUGET_RUNTIME_PACKAGE, "NugetRuntimeAbi1"),
+          KModifier.PRIVATE,
+        )
+        .addAnnotation(
+          AnnotationSpec.builder(ClassName("kotlin", "Suppress"))
+            .addMember("%S", "unused")
+            .build()
+        )
+        .initializer("%T", ClassName(NUGET_RUNTIME_PACKAGE, "NugetRuntimeAbi1"))
+        .build()
+    )
 
     val exportOwnerRanges: MutableList<ForwardExportOwnerRange> = mutableListOf()
 
@@ -1349,12 +1352,9 @@ class NugetProcessor(
         ForwardInterfaceBridgePlanner.plan(iface, forwardClassifier)
       }
     bridgePlans.forEach { plan -> builder.addInterfaceBridgeFactoryExport(plan) }
-    // ADR-084 stage 2: the release path is only observable with a forced GC round, so the support
-    // export ships with the factories it exists to exercise.
-    if (bridgePlans.isNotEmpty()) builder.addGcCollectExport()
-    // ADR-084 facet 5: the marker and its probe pair with `NugetMarshal.TryResolveCSharp`, which
-    // every module carrying an interface return emits, so both halves are unconditional.
-    builder.addCSharpBridgeMarker()
+    // ADR-127: `nuget_gc_collect`, `nuget_csharp_token` and the `NugetCSharpBridge` marker moved
+    // to the `nuget-runtime` klib, which exports all three unconditionally. The generated bridge
+    // objects still implement the marker; it is imported, not declared, now.
 
     val suspendLambdaTypes: Set<String> = setOf(
       "kotlin.coroutines.SuspendFunction0",
@@ -1430,6 +1430,8 @@ class NugetProcessor(
     val optIns: List<ClassName> = buildList {
       add(ClassName("kotlin.experimental", "ExperimentalNativeApi"))
       add(ClassName("kotlinx.cinterop", "ExperimentalForeignApi"))
+      // ADR-127: every runtime declaration the generated file calls is behind this marker.
+      add(ClassName(NUGET_RUNTIME_PACKAGE, "NugetRuntimeApi"))
       if (hasSuspendFunctions || needsFlowImports) {
         add(ClassName("kotlinx.coroutines", "ExperimentalCoroutinesApi"))
       }
@@ -1639,296 +1641,6 @@ class NugetProcessor(
       attributing(prop) { builder.addExtensionPropertyExports(prop, callableCatalog) }
     }
 
-    val listTypes: Set<String> = setOf("kotlin.collections.List", "kotlin.collections.MutableList")
-
-    fun KSType.isListType(): Boolean =
-      expandAliases().declaration.qualifiedName?.asString() in listTypes
-
-    val classesHaveLists: Boolean = (classes + genericClasses)
-      .any { cls -> cls.getAllProperties().any { prop -> prop.type.resolve().isListType() } }
-
-    val functionsReturnLists: Boolean = (functions + genericFunctions)
-      .any { func -> func.returnType?.resolve()?.isListType() == true }
-
-    val sealedClassesHaveLists: Boolean = sealedClasses
-      .any { sealed ->
-        sealed.getSealedSubclasses().any { sub ->
-          sub.getAllProperties().any { prop -> prop.type.resolve().isListType() }
-        }
-      }
-
-    // ADR-061: class-method and extension-function returns are a distinct position the property/
-    // top-level-function scans above never covered — widen the gate or the shared NugetListNative
-    // helper/exports a List-returning method boxes its handle for are never emitted.
-    val classMethodsReturnLists: Boolean = classes
-      .any { cls ->
-        val methodsReturnLists: Boolean = cls.getAllFunctions()
-          .any { method ->
-            val symbol: String = "${cls.qualifiedName?.asString()}.${method.simpleName.asString()}"
-            callableCatalog.planFor(symbol) == null && method.returnType?.resolve()?.isListType() == true
-          }
-        val companionMethodsReturnLists: Boolean = cls.declarations
-          .filterIsInstance<KSClassDeclaration>()
-          .filter { declaration -> declaration.isCompanionObject }
-          .flatMap { companion -> companion.getAllFunctions() }
-          .any { method -> method.returnType?.resolve()?.isListType() == true }
-        methodsReturnLists || companionMethodsReturnLists
-      }
-
-    val extensionFunctionsReturnLists: Boolean = extensionFunctions
-      .any { func ->
-        val symbol: String = "${func.packageName.asString()}.${func.simpleName.asString()}"
-        callableCatalog.planFor(symbol) == null && func.returnType?.resolve()?.isListType() == true
-      }
-
-    // ADR-099: recursive, because a nested component needs its own kind's Kotlin exports. A
-    // `Set<List<String>>` parameter calls `nuget_list_create`/`nuget_list_add` one level down, and
-    // reading only the outer kind would leave those exports unemitted.
-    fun BridgeType.componentCollectionKinds(): Sequence<CollectionKind> = sequence {
-      val unwrapped: BridgeType = if (this@componentCollectionKinds is BridgeType.Nullable) type
-      else this@componentCollectionKinds
-      val collection: BridgeType.Collection = unwrapped as? BridgeType.Collection ?: return@sequence
-      yield(collection.kind)
-      collection.element?.let { yieldAll(it.componentCollectionKinds()) }
-      collection.key?.let { yieldAll(it.componentCollectionKinds()) }
-      collection.value?.let { yieldAll(it.componentCollectionKinds()) }
-    }
-
-    fun ForwardCallablePlan.collectionKinds(): Sequence<CollectionKind> = sequence {
-      yieldAll(publicSignature.result.componentCollectionKinds())
-      publicSignature.parameters.forEach { parameter ->
-        yieldAll(parameter.type.componentCollectionKinds())
-      }
-    }
-
-    // ADR-114: the Flow/StateFlow and suspend legacy routes carry no ForwardCallablePlan, so
-    // `plannedCollectionKinds()` below cannot see a collection at a parameter position on one of
-    // them, and none of the declaration scans looks there either. Without this disjunct the C#
-    // side calls `nuget_list_create` against a native library that never exported it, and the
-    // symptom is an EntryPointNotFoundException at first call rather than a build failure.
-    // ADR-119: a suspend member's collection *return* (`nuget_list_get` and kin) and a sealed
-    // arm's declared suspend members (ADR-118 put them on this route) are the same gap.
-    fun legacyRouteCollectionKinds(): Sequence<CollectionKind> = sequence {
-      classes.forEach { cls ->
-        cls.getAllFunctions()
-          .filter { method -> method.getVisibility() == Visibility.PUBLIC }
-          .filter { method -> method.isForwardLegacyAsyncRoute() }
-          .forEach { method ->
-            yieldAll(forwardClassifier.legacyCollectionKinds(method.parameters))
-            yieldAll(forwardClassifier.legacyReturnCollectionKinds(method))
-            // ADR-123: the Flow/StateFlow element. No scan above finds it: they read a member's
-            // declared type, and that type is `StateFlow`, not `Set`.
-            yieldAll(
-              forwardClassifier.legacyFlowElementCollectionKinds(method.returnType?.resolve()),
-            )
-          }
-        cls.getAllProperties()
-          .filter { property -> property.getVisibility() == Visibility.PUBLIC }
-          .forEach { property ->
-            yieldAll(
-              forwardClassifier.legacyFlowElementCollectionKinds(property.type.resolve()),
-            )
-          }
-      }
-      sealedClasses.forEach { sealed ->
-        sealed.getSealedSubclasses().forEach { subclass ->
-          subclass.getAllFunctions()
-            .filter { method -> method.getVisibility() == Visibility.PUBLIC }
-            .filter { method -> method.parentDeclaration == subclass }
-            // ADR-124: the arm's Flow-returning members joined the suspend ones on this route, and
-            // a `Flow<Set<T>>` element reaches `nuget_set_*` exactly as an ordinary class's does.
-            .filter { method -> method.isForwardLegacyAsyncRoute() }
-            .forEach { method ->
-              yieldAll(forwardClassifier.legacyCollectionKinds(method.parameters))
-              yieldAll(forwardClassifier.legacyReturnCollectionKinds(method))
-              yieldAll(
-                forwardClassifier.legacyFlowElementCollectionKinds(method.returnType?.resolve()),
-              )
-            }
-          // ADR-124: all-properties, ADR-111's rule for a sealed arm's property surface.
-          subclass.getAllProperties()
-            .filter { property -> property.getVisibility() == Visibility.PUBLIC }
-            .forEach { property ->
-              yieldAll(
-                forwardClassifier.legacyFlowElementCollectionKinds(property.type.resolve()),
-              )
-            }
-        }
-      }
-      suspendFunctions.forEach { func ->
-        yieldAll(forwardClassifier.legacyCollectionKinds(func.parameters))
-        yieldAll(forwardClassifier.legacyReturnCollectionKinds(func))
-      }
-    }
-
-    fun plannedCollectionKinds(): Sequence<CollectionKind> = sequence {
-      callableCatalog.plans.forEach { plan -> yieldAll(plan.collectionKinds()) }
-      callableCatalog.propertyPlans.forEach { plan ->
-        yieldAll(plan.type.componentCollectionKinds())
-      }
-    }
-
-    val needsListSupport: Boolean = classesHaveLists || functionsReturnLists ||
-        sealedClassesHaveLists || classMethodsReturnLists || extensionFunctionsReturnLists ||
-        plannedCollectionKinds().any { kind ->
-          kind == CollectionKind.LIST || kind == CollectionKind.MUTABLE_LIST
-        } ||
-        legacyRouteCollectionKinds().any { kind ->
-          kind == CollectionKind.LIST || kind == CollectionKind.MUTABLE_LIST
-        }
-
-    val mapTypes: Set<String> = setOf("kotlin.collections.Map", "kotlin.collections.MutableMap")
-
-    fun KSType.isMapType(): Boolean =
-      expandAliases().declaration.qualifiedName?.asString() in mapTypes
-
-    val classesHaveMaps: Boolean = (classes + genericClasses)
-      .any { cls -> cls.getAllProperties().any { prop -> prop.type.resolve().isMapType() } }
-
-    val functionsReturnMaps: Boolean = (functions + genericFunctions)
-      .any { func ->
-        val symbol: String = "${func.packageName.asString()}.${func.simpleName.asString()}"
-        callableCatalog.planFor(symbol) == null && func.returnType?.resolve()?.isMapType() == true
-      }
-
-    val sealedClassesHaveMaps: Boolean = sealedClasses
-      .any { sealed ->
-        sealed.getSealedSubclasses().any { sub ->
-          sub.getAllProperties().any { prop -> prop.type.resolve().isMapType() }
-        }
-      }
-
-    val needsMapSupport: Boolean = classesHaveMaps || functionsReturnMaps || sealedClassesHaveMaps ||
-        plannedCollectionKinds().any { kind ->
-          kind == CollectionKind.MAP || kind == CollectionKind.MUTABLE_MAP
-        } ||
-        legacyRouteCollectionKinds().any { kind ->
-          kind == CollectionKind.MAP || kind == CollectionKind.MUTABLE_MAP
-        }
-
-    val setTypes: Set<String> = setOf("kotlin.collections.Set", "kotlin.collections.MutableSet")
-
-    fun KSType.isSetType(): Boolean =
-      expandAliases().declaration.qualifiedName?.asString() in setTypes
-
-    val classesHaveSets: Boolean = (classes + genericClasses)
-      .any { cls -> cls.getAllProperties().any { prop -> prop.type.resolve().isSetType() } }
-
-    val functionsReturnSets: Boolean = (functions + genericFunctions)
-      .any { func ->
-        val symbol: String = "${func.packageName.asString()}.${func.simpleName.asString()}"
-        callableCatalog.planFor(symbol) == null && func.returnType?.resolve()?.isSetType() == true
-      }
-
-    val sealedClassesHaveSets: Boolean = sealedClasses
-      .any { sealed ->
-        sealed.getSealedSubclasses().any { sub ->
-          sub.getAllProperties().any { prop -> prop.type.resolve().isSetType() }
-        }
-      }
-
-    val needsSetSupport: Boolean = classesHaveSets || functionsReturnSets || sealedClassesHaveSets ||
-        plannedCollectionKinds().any { kind ->
-          kind == CollectionKind.SET || kind == CollectionKind.MUTABLE_SET
-        } ||
-        legacyRouteCollectionKinds().any { kind ->
-          kind == CollectionKind.SET || kind == CollectionKind.MUTABLE_SET
-        }
-
-    val lambdaTypes: Set<String> = setOf(
-      "kotlin.Function0", "kotlin.Function1", "kotlin.Function2", "kotlin.Function3",
-    )
-
-    fun KSType.isLambdaType(): Boolean =
-      expandAliases().declaration.qualifiedName?.asString() in lambdaTypes
-
-    fun KSType.lambdaArity(): Int =
-      expandAliases().arguments.size - 1
-
-    val lambdaArities: MutableSet<Int> = mutableSetOf()
-
-    (classes + genericClasses).forEach { cls ->
-      cls.getAllProperties().forEach { prop ->
-        val propType: KSType = prop.type.resolve()
-        if (propType.isLambdaType()) lambdaArities.add(propType.lambdaArity())
-      }
-    }
-
-    (functions + genericFunctions).forEach { func ->
-      val returnType: KSType? = func.returnType?.resolve()
-      if (returnType?.isLambdaType() == true) lambdaArities.add(returnType.lambdaArity())
-    }
-
-    sealedClasses.forEach { sealed ->
-      sealed.getSealedSubclasses().forEach { sub ->
-        sub.getAllProperties().forEach { prop ->
-          val propType: KSType = prop.type.resolve()
-          if (propType.isLambdaType()) lambdaArities.add(propType.lambdaArity())
-        }
-      }
-    }
-
-    val needsLambdaSupport: Boolean = lambdaArities.isNotEmpty()
-
-    // The C# `NugetMarshal` helper class is emitted for any module that declares a function, class,
-    // object or sealed class (`CirTranslator`'s core-marshal condition), and it declares the
-    // `nuget_unwrap_*` / `nuget_dispose` / `nuget_wrap_*` imports unconditionally in its body. The
-    // Kotlin exports have to ship under at least as broad a condition, or the C# side imports
-    // symbols the native library never exported.
-    val needsCoreMarshal: Boolean = functions.isNotEmpty() || classes.isNotEmpty() ||
-        objects.isNotEmpty() || sealedClasses.isNotEmpty() || suspendFunctions.isNotEmpty() ||
-        properties.isNotEmpty()
-
-    val needsHelpers: Boolean = genericClasses.isNotEmpty() || needsCoreMarshal ||
-        needsListSupport || needsMapSupport || needsSetSupport || needsLambdaSupport
-    if (needsHelpers) builder.addNugetHelperExports()
-    if (needsListSupport) builder.addNugetListHelperExports()
-    if (needsMapSupport) builder.addNugetMapHelperExports()
-    if (needsSetSupport) builder.addNugetSetHelperExports()
-
-    // A collection *parameter* (Phase 7) needs `nuget_wrap_*` too: `NugetMarshal.CreateList<T>`
-    // boxes each primitive/String element through the matching wrap export before handing it to
-    // `nuget_list_add`. Computed once so lambda/suspend-lambda support sharing the same gate below
-    // never emits the wrap exports twice.
-    //
-    // ADR-075: a property *setter* is the same `CreateList`/`CreateMap`/`CreateSet` write side, so
-    // it needs the same gate -- a class whose only collection input is a property setter (no
-    // method/constructor collection parameter anywhere) would otherwise generate C# calling
-    // `nuget_wrap_*` against a native library that never exported it. `helperRequirements` also
-    // carries `COLLECTION` for a getter-only collection property (the *read* side never needs
-    // wrapping), so this is gated on `setter != null`, not on the marker alone.
-    val needsCollectionParamWrap: Boolean = callableCatalog.plans.any { plan ->
-      ForwardHelperRequirement.COLLECTION in plan.helperRequirements
-    } || callableCatalog.propertyPlans.any { plan ->
-      plan.setter != null && ForwardHelperRequirement.COLLECTION in plan.helperRequirements
-    }
-    var wrapHelpersEmitted = false
-    fun addNugetWrapHelperExportsOnce() {
-      if (wrapHelpersEmitted) return
-      wrapHelpersEmitted = true
-      builder.addNugetWrapHelperExports()
-    }
-
-    if (
-      (needsLambdaSupport && lambdaArities.any { it > 0 }) ||
-      needsCollectionParamWrap ||
-      needsCoreMarshal
-    ) {
-      addNugetWrapHelperExportsOnce()
-    }
-    if (0 in lambdaArities) builder.addNugetFunc0HelperExports()
-    if (1 in lambdaArities) builder.addNugetFunc1HelperExports()
-    if (2 in lambdaArities) builder.addNugetFunc2HelperExports()
-    if (3 in lambdaArities) builder.addNugetFunc3HelperExports()
-
-    val needsSuspendWrap: Boolean = needsSuspendLambdaSupport &&
-        suspendLambdaArities.any { it > 0 } && !needsLambdaSupport
-    if (needsSuspendWrap) addNugetWrapHelperExportsOnce()
-    suspendLambdaArities.sorted().forEach { builder.addNugetSuspendFuncHelperExports(it) }
-
-    val classesHaveSuspendMethods: Boolean = classes.any { cls ->
-      cls.getAllFunctions().any { it.modifiers.contains(Modifier.SUSPEND) }
-    }
 
     val flowTypes: Set<String> = setOf("kotlinx.coroutines.flow.Flow") + STATE_FLOW_TYPES
 
@@ -1953,57 +1665,7 @@ class NugetProcessor(
 
     if (needsFlowSupport) builder.addImport("kotlinx.coroutines.flow", "collect")
 
-    val needsScopeHelpers: Boolean = suspendFunctions.isNotEmpty() ||
-        needsSuspendLambdaSupport || classesHaveSuspendMethods || armsHaveSuspendMethods ||
-        needsFlowSupport
-    if (needsScopeHelpers) builder.addNugetScopeHelperExports()
-    if (needsScopeHelpers) builder.addNugetScopeDrainExport()
-    if (needsScopeHelpers) builder.addNugetJobHelperExports()
-    builder.addNugetErrorHelperExports()
-
-    // ADR-076: the toDotNetTicks()/instantFromDotNetTicks() conversion pair, generated only when
-    // some plan actually crosses an Instant.
-    val needsInstantSupport: Boolean = callableCatalog.plans.any { plan ->
-      ForwardHelperRequirement.INSTANT in plan.helperRequirements
-    } || callableCatalog.propertyPlans.any { plan ->
-      ForwardHelperRequirement.INSTANT in plan.helperRequirements
-    }
-    if (needsInstantSupport) builder.addNugetInstantHelperExports()
-
-    // ADR-103: likewise the toDotNetTicks()/durationFromDotNetTicks() pair, gated on a plan
-    // actually crossing a Duration.
-    val needsDurationSupport: Boolean = callableCatalog.plans.any { plan ->
-      ForwardHelperRequirement.DURATION in plan.helperRequirements
-    } || callableCatalog.propertyPlans.any { plan ->
-      ForwardHelperRequirement.DURATION in plan.helperRequirements
-    }
-    if (needsDurationSupport) builder.addNugetDurationHelperExports()
-
-    // ADR-068: `suspend fun` returning StateFlow<T>/MutableStateFlow<T> needs the two shared
-    // generic exports keyed on the awaited flow's own handle -- generated once per module,
-    // regardless of how many suspend-StateFlow members exist across every class.
-    val classesHaveSuspendStateFlowMethods: Boolean = classes.any { cls ->
-      cls.getAllFunctions().any { method ->
-        method.modifiers.contains(Modifier.SUSPEND) &&
-            method.returnType?.resolve()?.expandAliases()
-              ?.declaration?.qualifiedName?.asString() in STATE_FLOW_TYPES
-      }
-    }
-    // ADR-071 (2026-09-11): the held `MutableStateFlow` function return reads through the same two
-    // exports, so it opens the same gate. The arm half is not optional: a sealed arm's held member
-    // reads through `NugetStateFlowNative` exactly as an ordinary class's does, and a gate that
-    // covered only `classes` would leave that read calling a symbol nothing exported.
-    val ownersHaveHeldMutableStateFlowMethods: Boolean =
-      classes.any { cls -> cls.getAllFunctions().any { it.returnsHeldMutableStateFlow() } } ||
-          sealedClasses.any { sealed ->
-            sealed.getSealedSubclasses().any { subclass ->
-              subclass.forwardArmFlowMethods(forwardClassifier)
-                .any { it.returnsHeldMutableStateFlow() }
-            }
-          }
-    if (classesHaveSuspendStateFlowMethods || ownersHaveHeldMutableStateFlowMethods) {
-      builder.addStateFlowHandleExports()
-    }
+    // ADR-127: `nuget_stateflow_collect` / `nuget_stateflow_value` moved to the runtime klib.
 
     return ForwardCNameExports(builder.build(), exportOwnerRanges)
   }

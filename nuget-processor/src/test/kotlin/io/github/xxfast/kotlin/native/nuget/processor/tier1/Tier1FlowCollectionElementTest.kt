@@ -262,41 +262,10 @@ class Tier1FlowCollectionElementTest {
     )
   }
 
-  /**
-   * The helper gate, ADR-114 answer 4's element-side twin. No declaration scan reads a flow
-   * element: `classesHaveSets` walks property *types*, and this property's type is `StateFlow`,
-   * not `Set`. With only this member in the module the generated C# would call `nuget_set_count`
-   * against a native library that never exported it, an `EntryPointNotFoundException` at the
-   * first read rather than a build failure.
-   */
-  @Test
-  fun `the collection helper exports are emitted for a flow-element-only collection`() {
-    val result = Tier1Harness.run(
-      """
-      package tier1.windowsill
-
-      import kotlinx.coroutines.flow.MutableStateFlow
-      import kotlinx.coroutines.flow.StateFlow
-
-      class Sill {
-        val spots: StateFlow<Set<String>> = MutableStateFlow(setOf("sunny"))
-        fun seen(): StateFlow<List<String>> = MutableStateFlow(listOf("Oreo"))
-      }
-      """.trimIndent(),
-      fileName = "Sill.kt",
-      processorOptions = mapOf("nuget.rootPackage" to "tier1"),
-      libraries = listOf(Tier1Classpath.kotlinxCoroutinesCore),
-    )
-
-    val missing: List<String> = listOf(
-      "nuget_set_count", "nuget_set_element_at", "nuget_list_count", "nuget_list_get",
-    ).filterNot { result.generated.contains("@CName(\"$it\")") }
-
-    assertTrue(
-      missing.isEmpty(),
-      "expected the collection helper exports a flow collection element needs; missing: $missing",
-    )
-  }
+  // ADR-127 deleted the helper-gate cell that stood here. The `nuget_list_*` / `nuget_map_*` /
+  // `nuget_set_*` exports now ship unconditionally from the `:nuget-runtime` klib, so there is no
+  // gate left to miss a route and no declaration of them in the generated file.
+  // `scripts/verify-runtime-exports.sh` checks the 66 names on the linked binary instead.
 
   /**
    * ADR-068's `suspend fun` returning `StateFlow<T>` reads every element through the module-wide
