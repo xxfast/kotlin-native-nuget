@@ -168,31 +168,24 @@ private fun buildSuspendFunctionBody(
   isNullable: Boolean,
   boxed: String,
 ): String = buildString {
-  appendLine(
-    "val fn = callbackPtr.reinterpret<CFunction<" +
-        "(COpaquePointer?, COpaquePointer?, Byte, COpaquePointer) -> Unit>>()"
-  )
+  // ADR-128: the launch shape -- `reinterpret`, `launch(start = CoroutineStart.ATOMIC)` and the
+  // three callback arms -- belongs to the runtime's `launchForCSharp`. This route still owns its
+  // ad-hoc scope (the top-level route has no C#-owned scope to launch on), the call, and the mint:
+  // the body's last expression is the handle the helper hands the success arm, or `null`.
   append(paramPrelude)
   val resultRefCode: String = resultRefExpression(isNullable, boxed)
-  appendLine("val job = CoroutineScope(Dispatchers.Default).launch(start = CoroutineStart.ATOMIC) {")
-  appendLine("  try {")
+  appendLine(
+    "return launchForCSharp(CoroutineScope(Dispatchers.Default), callbackPtr, userData) {"
+  )
   if (isUnit) {
-    appendLine("    $funcName($paramCall)")
-    appendLine("    fn.invoke(null, null, 0.toByte(), userData)")
+    appendLine("  $funcName($paramCall)")
+    appendLine("  null")
   } else {
-    appendLine("    val result = $funcName($paramCall)")
-    appendLine("    val resultRef = $resultRefCode")
-    appendLine("    fn.invoke(resultRef, null, 0.toByte(), userData)")
+    appendLine("  val result = $funcName($paramCall)")
+    appendLine("  val resultRef = $resultRefCode")
+    appendLine("  resultRef")
   }
-  appendLine("  } catch (e: CancellationException) {")
-  appendLine("    fn.invoke(null, null, 1.toByte(), userData)")
-  appendLine("    throw e")
-  appendLine("  } catch (e: Throwable) {")
-  appendLine("    val errRef = NugetHandles.retain(buildError(e))")
-  appendLine("    fn.invoke(null, errRef, 0.toByte(), userData)")
-  appendLine("  }")
-  appendLine("}")
-  append("return NugetHandles.retain(job)")
+  append("}")
 }
 
 private fun buildSuspendMethodBody(
@@ -205,32 +198,22 @@ private fun buildSuspendMethodBody(
   boxed: String,
 ): String = buildString {
   appendLine("val obj = handle.asStableRef<$qualifiedName>().get()")
+  // ADR-128: same helper as the top-level route, launched on the C#-owned scope this route has
+  // always used (the one `nuget_scope_cancel` cancels). ADR-114/ADR-122's prelude locals stay
+  // *before* the helper call, so they are still evaluated on the caller's thread, before launch.
   appendLine("val scope = scopeHandle.asStableRef<CoroutineScope>().get()")
-  appendLine(
-    "val fn = callbackPtr.reinterpret<CFunction<" +
-        "(COpaquePointer?, COpaquePointer?, Byte, COpaquePointer) -> Unit>>()"
-  )
   append(paramPrelude)
   val resultRefCode: String = resultRefExpression(isNullable, boxed)
-  appendLine("val job = scope.launch(start = CoroutineStart.ATOMIC) {")
-  appendLine("  try {")
+  appendLine("return launchForCSharp(scope, callbackPtr, userData) {")
   if (isUnit) {
-    appendLine("    obj.$methodName($paramCall)")
-    appendLine("    fn.invoke(null, null, 0.toByte(), userData)")
+    appendLine("  obj.$methodName($paramCall)")
+    appendLine("  null")
   } else {
-    appendLine("    val result = obj.$methodName($paramCall)")
-    appendLine("    val resultRef = $resultRefCode")
-    appendLine("    fn.invoke(resultRef, null, 0.toByte(), userData)")
+    appendLine("  val result = obj.$methodName($paramCall)")
+    appendLine("  val resultRef = $resultRefCode")
+    appendLine("  resultRef")
   }
-  appendLine("  } catch (e: CancellationException) {")
-  appendLine("    fn.invoke(null, null, 1.toByte(), userData)")
-  appendLine("    throw e")
-  appendLine("  } catch (e: Throwable) {")
-  appendLine("    val errRef = NugetHandles.retain(buildError(e))")
-  appendLine("    fn.invoke(null, errRef, 0.toByte(), userData)")
-  appendLine("  }")
-  appendLine("}")
-  append("return NugetHandles.retain(job)")
+  append("}")
 }
 
 /**

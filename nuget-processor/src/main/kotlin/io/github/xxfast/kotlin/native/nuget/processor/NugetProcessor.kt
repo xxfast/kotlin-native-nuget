@@ -1502,7 +1502,12 @@ class NugetProcessor(
 
     val needsCallbackImports: Boolean = hasLambdaParamMethods || hasStoredCallbackMethods ||
         hasInterfaceBridgeMethods || hasBridgeFactories
-    if (needsCallbackImports && !hasSuspendFunctions && !needsFlowImports) {
+    // ADR-128: the callback route owns these three itself now. It used to be gated on the suspend
+    // block *not* running, i.e. it relied on that block to supply `CFunction`/`invoke`/
+    // `COpaquePointer` whenever a suspend or Flow member happened to be present. The suspend block
+    // no longer needs them for its own text (the launch shape moved into the runtime helper), so
+    // the coupling has to go first; KotlinPoet de-duplicates an import added twice.
+    if (needsCallbackImports) {
       builder.addImport("kotlinx.cinterop", "invoke")
       builder.addImport("kotlinx.cinterop", "CFunction")
       builder.addImport("kotlinx.cinterop", "COpaquePointer")
@@ -1514,13 +1519,14 @@ class NugetProcessor(
       builder.addImport("kotlinx.cinterop", "CFunction")
       builder.addImport("kotlinx.cinterop", "COpaquePointer")
       builder.addImport("kotlinx.cinterop", "StableRef")
+      // ADR-128: the two runtime helpers the suspend and Flow bodies now call. Gated with the rest
+      // of the coroutine surface rather than added to `NUGET_RUNTIME_MEMBERS`: both name
+      // `CoroutineScope`, and a module with no suspend/Flow surface must keep compiling with
+      // `kotlinx-coroutines-core` absent entirely (`Tier1CoroutineFreeModuleTest`).
+      builder.addImport(NUGET_RUNTIME_PACKAGE, "launchForCSharp")
+      builder.addImport(NUGET_RUNTIME_PACKAGE, "collectForCSharp")
       builder.addImport("kotlinx.coroutines", "CoroutineScope")
-      builder.addImport("kotlinx.coroutines", "CoroutineStart")
       builder.addImport("kotlinx.coroutines", "Dispatchers")
-      builder.addImport("kotlinx.coroutines", "launch")
-      builder.addImport("kotlinx.coroutines", "SupervisorJob")
-      builder.addImport("kotlinx.coroutines", "cancel")
-      builder.addImport("kotlinx.coroutines", "CancellationException")
       builder.addImport("kotlinx.coroutines", "ExperimentalCoroutinesApi")
     }
 

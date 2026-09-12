@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed
+Accepted
 
 ## Context
 
@@ -198,9 +198,10 @@ public fun collectForCSharp(
 }
 ```
 
-Wire-equivalence with today's generated text, arm by arm (verified by reading the four emitter
-templates and the five runtime sites listed above; **not** verified by running, no build could be
-run while this ADR was written):
+Wire-equivalence with today's generated text, arm by arm (originally verified by reading the four
+emitter templates and the five runtime sites listed above, no build could be run while this section
+was written; confirmed by running below, both for PR-D's own five sites and, once PR-E shipped, for
+the four processor templates):
 
 - Success: today `val resultRef = <expr>; fn.invoke(resultRef, null, 0, userData)`; the Unit
   route calls `fn.invoke(null, null, 0, userData)`, and the nullable route's null case yields
@@ -225,9 +226,23 @@ against a newer runtime still compiles; a newer generator against an older runti
 consumer compile with an unresolved `launchForCSharp`, which is the same early failure the anchor
 exists for).
 
+**Confirmed by running (2026-09-12).** `:nuget-runtime:allTests` compiles, links and runs
+`mingwX64Test` (the other three targets' test tasks are host-gated `SKIPPED`); the helper lambdas
+call `CFunction.invoke`/`StableRef` across the klib boundary with no special treatment, and
+`staticCFunction`'s `CPointer<CFunction<F>>` passes to `callbackPtr: COpaquePointer` with no cast.
+Seven tests, one per arm (launch result / null result / cancel / error, collect items+complete /
+cancel / error), each assert `NugetHandles.live` returns to its starting value after the minted
+handles are released. One Kotlin/Native constraint worth recording: a backtick test name may not
+contain a comma (`Name contains illegal characters: ","`), unlike on the JVM. The linked library
+exports **67** `nuget_*` names, not the 66 assumed above (the text was written before ADR-129 added
+`nuget_runtime_version`), and the four suspend sites plus `nuget_stateflow_collect` migrated with no
+change to any of them (`verify.sh`: `OK: all 67 ...`, `IntegrationTests` 1,723 passed, `LeakTests`
+28 passed).
+
 ### PR-E: the generator emits the helpers
 
-`buildSuspendFunctionBody` becomes:
+`buildSuspendFunctionBody` becomes (the shape below is the design sketch; see the four shipped
+divergences after the import discussion):
 
 ```kotlin
 <paramPrelude>
@@ -272,19 +287,50 @@ Processor files PR-E touches: `exports/SuspendFunctionExports.kt` (two templates
 `exports/FlowExports.kt` (two templates), `NugetProcessor.kt` (import block). `_bridge_create`,
 `_value`, and every ordinary route are untouched.
 
+**As shipped (verified by running, 2026-09-12), four divergences from the sketch above, all
+deliberate:**
+
+1. **The suspend body keeps its `resultRef` local.** Shipped text is `val result = <call>` /
+   `val resultRef = <resultRefExpression>` / `resultRef`, not the bare expression drawn above.
+   `Tier1SuspendNullableReturnTest` pins `val resultRef = if (result == null) null else
+   NugetHandles.retain(result)` and its non-nullable sibling as the issue-#108 guard; keeping the
+   local keeps that pin pointed at the thing it was written to guard. The `Unit` route is
+   `<call>` then `null`, as sketched.
+2. **The Flow body keeps its `itemRef` local**, `val itemRef = <itemBoxExpr>` then `emit(itemRef)`,
+   for the same reason: the mint stays a named, greppable line inside the body.
+3. **The two helpers are imported inside the existing `hasSuspendFunctions || needsFlowImports`
+   block**, not added to `NUGET_RUNTIME_MEMBERS` (which is imported unconditionally, ADR-127).
+   Both helpers name `CoroutineScope`, and `Tier1CoroutineFreeModuleTest` compiles a module whose
+   generated file must resolve with `kotlinx-coroutines-core` absent from the classpath entirely;
+   an unconditional import would break it. The gate is the same one that already supplies
+   `CoroutineScope` to every site that emits a helper call.
+4. **The suspend/Flow import block was not trimmed.** The callback-route block's
+   `!hasSuspendFunctions && !needsFlowImports` guard was dropped as required, but `reinterpret`,
+   `launch`, `CoroutineStart`, `CancellationException`, `SupervisorJob` and `cancel` stay in the
+   suspend block: unused imports are warnings only, and leaving them is the smaller change.
+   Trimming them is a cleanup, not part of this decision.
+
+Measured on `test-library`'s regenerated `CNameExports.kt` (21,148 lines): 45 `launchForCSharp(`,
+47 `collectForCSharp(`, 0 `scope.launch(`, 0 `CoroutineStart.ATOMIC`, 0
+`catch (e: CancellationException)`. `NugetHandles.retain(` fell from 2,012 to 1,828, i.e. by
+exactly 2 x 92: the per-export error-arm mint and the job mint moved into the runtime helper, and
+**no** result/item mint moved (those are the 1,828 that stayed, in the same order). `LeakTests`
+(28) and `IntegrationTests` (1,723) are unchanged, which is the outer proof the mint order held.
+
 ## Test plan
 
-1. **PR-D, runtime `nativeTest` (recommended; inferred, not run).** `nuget-runtime` gains a
+1. **PR-D, runtime `nativeTest` (run on Windows, 2026-09-12).** `nuget-runtime` gains a
    `nativeTest` source set (`dependsOn(commonTest)`, `implementation(libs.kotlin.test)`, which the
    catalog already has, plus the four `<target>Test` `dependsOn`s mirroring `nativeMain`). KGP
    creates a `<target>Test` task per native target and disables the ones the host cannot run, and
    `allTests` runs the enabled ones, so `./gradlew :nuget-runtime:allTests` runs `mingwX64Test` on
-   Windows and `macosArm64Test` on an Apple Silicon Mac (inferred from the KMP docs on native
-   test tasks; nobody has run it in this repo). One test class drives each helper through a
+   Windows and `macosArm64Test` on an Apple Silicon Mac; confirmed on the Windows leg (`mingwX64Test`
+   ran), the other three targets' test tasks were host-gated `SKIPPED` and remain unconfirmed on a
+   non-Windows host. One test class drives each helper through a
    `staticCFunction` callback: a `staticCFunction` cannot capture, so it records through `userData`,
    a `StableRef` to a small holder the test reads back. `CPointer<CFunction<F>>` is a
    `COpaquePointer` (`CFunction<F> : CPointed`), so the pointer passes to the helper's
-   `callbackPtr` without a cast (inferred from `kotlinx.cinterop` declarations). Three arms each:
+   `callbackPtr` without a cast (confirmed by the run above). Three arms each:
    result (a body returning a minted handle; the holder sees it and `cancelled == 0`), cancel
    (`awaitCancellation()` then `asStableRef<Job>().get().cancel()`; the holder sees `cancelled ==
    1`, nulls, and the rethrow leaves the job cancelled), error (a throwing body; the holder's error
@@ -294,10 +340,10 @@ Processor files PR-E touches: `exports/SuspendFunctionExports.kt` (two templates
    one `sharedLib` link. Wiring: `scripts/verify.sh` runs `./gradlew :nuget-runtime:allTests`
    before `packNuget`; `ci.yml`'s matrix step adds it beside `:nuget-processor:koverXmlReport`, so
    the Windows leg is where `mingwX64Test` first runs.
-2. **PR-D, outer proof.** `IntegrationTests` and `LeakTests` unchanged: the migrated
-   `nuget_suspend_func*_invoke` and `nuget_stateflow_collect` are covered by the existing suspend
-   lambda (ADR-036) and StateFlow (ADR-065) cells. `scripts/verify-runtime-exports.sh` still sees
-   exactly 66 names.
+2. **PR-D, outer proof (run, 2026-09-12).** `IntegrationTests` and `LeakTests` unchanged: the
+   migrated `nuget_suspend_func*_invoke` and `nuget_stateflow_collect` are covered by the existing
+   suspend lambda (ADR-036) and StateFlow (ADR-065) cells. `scripts/verify-runtime-exports.sh` sees
+   exactly 67 names (66 plus ADR-129's `nuget_runtime_version`).
 3. **PR-D, Tier 1 stub.** `Tier1RuntimeStub` gains the two helper signatures as a **third stub
    file**, appended by `Tier1Harness.compileGenerated` only when `coroutinesOnCompileClasspath`
    is true. Verified by reading: the harness adds `Tier1RuntimeStub.files` unconditionally and
@@ -312,8 +358,8 @@ Processor files PR-E touches: `exports/SuspendFunctionExports.kt` (two templates
    (verified by grep). A new structural assertion: no generated file contains
    `CoroutineStart.ATOMIC` or `catch (e: CancellationException)`. ADR-055's `ForwardAbiContract`
    is unaffected (C names unchanged).
-5. **PR-E, outer proof.** `IntegrationTests` and `LeakTests` unchanged, including the
-   cancellation cells and the leak baselines.
+5. **PR-E, outer proof (run, 2026-09-12).** `IntegrationTests` (1,723 passed) and `LeakTests` (28
+   passed) unchanged, including the cancellation cells and the leak baselines.
 
 ## Prior art
 
@@ -325,46 +371,35 @@ not read at source level). Same shape as this decision; it did not change it.
 
 ## Inferred claims, listed
 
-None of the following was run; the project lock prevented any build while this ADR was written.
+All four of the following were inferred when this section was first written (the project lock
+prevented any build); PR-D's and PR-E's runs, both 2026-09-12, confirmed every one.
 
 1. Non-inline lambdas crossing the klib boundary and calling `CFunction.invoke` / `StableRef`
-   behave as ordinary Kotlin/Native code. If wrong, PR-D fails to compile or link, loudly.
-2. A `CPointer<CFunction<F>>` from `staticCFunction` is assignable to `COpaquePointer`. If wrong,
-   the `nativeTest` needs a `.reinterpret()`; the helper is unaffected.
-3. KGP's `<target>Test`/`allTests` host gating and the `nativeTest` source set wiring. If wrong,
-   `verify.sh` fails at the new step; nothing generated is affected.
-4. **Load-bearing, silent if wrong:** the arm-by-arm wire-equivalence above, in particular that
+   behave as ordinary Kotlin/Native code. **Confirmed:** PR-D's `nativeTest` compiles, links and
+   runs `mingwX64Test` with no special treatment needed.
+2. A `CPointer<CFunction<F>>` from `staticCFunction` is assignable to `COpaquePointer`.
+   **Confirmed:** no `.reinterpret()` was needed; the pointer passes to `callbackPtr` as written.
+3. KGP's `<target>Test`/`allTests` host gating and the `nativeTest` source set wiring. **Confirmed:**
+   `mingwX64Test` ran on the Windows leg; the other three targets' test tasks were host-gated
+   `SKIPPED`, as expected, and remain unconfirmed on a non-Windows host.
+4. **Load-bearing, was silent if wrong:** the arm-by-arm wire-equivalence above, in particular that
    evaluating the Flow source inside the helper's coroutine (alternative 1's `suspend` body)
-   preserves today's `onError` path for a throwing Flow-returning method. Checked by reading the
-   emitter templates and the runtime sites only. If wrong, C# would see a different callback
-   sequence, and only `IntegrationTests`' cancellation and error cells would catch it. Run those
-   first when PR-D lands.
+   preserves today's `onError` path for a throwing Flow-returning method. **Confirmed:** PR-D's
+   `nativeTest` per-arm assertions, and PR-E's unchanged `IntegrationTests` (1,723 passed) and
+   `LeakTests` (28 passed), which exercise exactly the cancellation and error cells this claim
+   depended on.
 
 ## Consequences
 
-- Two new public runtime functions under `@NugetRuntimeApi`. No new `@CName`; 66 names remain.
-- The four processor templates and five runtime sites collapse to a call each; the generated
-  file loses six imports on these routes.
+- Two new public runtime functions under `@NugetRuntimeApi`. No new `@CName`; the runtime's export
+  count is unaffected by this decision (67 names as of ADR-129, not 66).
+- The four processor templates and five runtime sites collapse to a call each: 45
+  `launchForCSharp(` and 47 `collectForCSharp(` sites in the fixture's regenerated
+  `CNameExports.kt`, zero `scope.launch(`/`CoroutineStart.ATOMIC`/`catch (e: CancellationException)`
+  left on these routes, and `NugetHandles.retain(` down by exactly the job and error-arm mints the
+  helpers now own (see the measured numbers under PR-E above). `LeakTests` and `IntegrationTests`
+  unchanged, which is the outer proof the mint order held.
 - `NugetRuntimeAbi1` unchanged: additive.
 - Deferred: `nuget_scope_drain` (different semantics), a helper for the synchronous `errorOut`
   shape (`_bridge_create` and every ordinary route; a separate decision), and any change to the
   callback wire protocol.
-
-### PR-D build results (2026-09-12)
-
-Claims 1, 2 and 3 above are now run, not inferred: `:nuget-runtime:allTests` compiles, links and
-runs `mingwX64Test` (the other three targets' test tasks are host-gated `SKIPPED`), the helper
-lambdas call `CFunction.invoke`/`StableRef` across the klib boundary without special treatment,
-and `staticCFunction`'s `CPointer<CFunction<F>>` passes to `callbackPtr: COpaquePointer` with no
-cast. Seven tests, one per arm: launch result / null result / cancel / error, collect
-items+complete / cancel / error, each asserting `NugetHandles.live` returns to its starting value
-after the minted handles are released. One Kotlin/Native constraint worth recording: a backtick
-test name may not contain a comma (`Name contains illegal characters: ","`), unlike on the JVM.
-
-Claim 4 stays inferred for the generator (PR-E); PR-D's migration of the five runtime sites is the
-part `IntegrationTests`/`LeakTests` cover today.
-
-Two corrections to the counts above, from the same run: the linked library exports **67**
-`nuget_*` names, not 66 — the text was written before ADR-129 added `nuget_runtime_version` — and
-the four suspend sites plus `nuget_stateflow_collect` migrated with no change to any of them
-(`verify.sh`: `OK: all 67 ...`, IntegrationTests 1723 passed, LeakTests 28 passed).
