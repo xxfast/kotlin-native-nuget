@@ -40,6 +40,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.exports.forwardArmFlowMeth
 import io.github.xxfast.kotlin.native.nuget.processor.exports.forwardArmLambdaMethods
 import io.github.xxfast.kotlin.native.nuget.processor.exports.forwardArmFlowProperties
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addFunctionExports
+import io.github.xxfast.kotlin.native.nuget.processor.exports.hasLegacyGenericFunctionRoute
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addGenericClassExports
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addGenericFunctionExports
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addInterfaceBridgeFactoryExport
@@ -163,7 +164,7 @@ internal fun warnDroppedForwardCallables(
 ) {
   val diagnostics: List<ForwardDiagnostic> = catalog.droppedCallables.map { dropped ->
     ForwardDiagnostic(
-      kind = dropped.reason.toDiagnosticKind(dropped.position),
+      kind = dropped.reason.toDiagnosticKind(dropped.position, dropped.structural),
       symbol = dropped.node,
       declaration = dropped.symbol,
       // ADR-064's 2026-09-10 amendment: the sentence lives on the reason, beside the hint it
@@ -173,6 +174,42 @@ internal fun warnDroppedForwardCallables(
       hint = dropped.reason.diagnosticHint(dropped.detail, scope, dropped.parameter),
     )
   }
+  ForwardDiagnosticSink.emit(diagnostics, logger)
+}
+
+/**
+ * ADR-064 amendment (2026-09-13): the structural top-level generic functions the planner never
+ * sees. `catalog()` is called with `functions` (the `typeParameters.isEmpty()` half of the
+ * collected list), so a `fun <T> f(...)` produces no catalog entry at all and the catalog's
+ * unrouted-position reclassification cannot reach it. Its only route is
+ * `addGenericFunctionExports` / `translateGenericFunction`, which dispatch on a parameter typed
+ * with the function's own type parameter and refuse everything else with a bare `return` —
+ * measured silent on both halves for `fun <T> f(): List<T>` (research H cell 16).
+ *
+ * Same shape as [warnRefusedLegacyRouteMembers]: the route's own hoisted gate decides, so the
+ * diagnostic and the two emitters cannot drift. The position is the RETURN: a refused declaration
+ * always has a `T` somewhere other than a direct parameter, which for every measured cell is the
+ * return type.
+ */
+internal fun warnUnroutedGenericFunctions(
+  genericFunctions: List<KSFunctionDeclaration>,
+  logger: KSPLogger,
+) {
+  val diagnostics: List<ForwardDiagnostic> = genericFunctions
+    .filterNot { function -> function.hasLegacyGenericFunctionRoute() }
+    .map { function ->
+      val declaration: String =
+        "${function.packageName.asString()}.${function.simpleName.asString()}"
+      ForwardDiagnostic(
+        kind = ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_RETURN,
+        symbol = function,
+        declaration = declaration,
+        reason = ForwardPlanSkipReason.UNROUTED_POSITION
+          .diagnosticReason(ForwardPlanSkipReason.GENERIC.name),
+        hint = ForwardPlanSkipReason.UNROUTED_POSITION
+          .diagnosticHint(ForwardPlanSkipReason.GENERIC.name),
+      )
+    }
   ForwardDiagnosticSink.emit(diagnostics, logger)
 }
 
@@ -1075,6 +1112,30 @@ class NugetProcessor(
     warnDroppedForwardExtensionReceivers(callableCatalog, logger)
     warnRefusedLegacyRouteMembers(
       classes, sealedClasses, suspendFunctions, forwardClassifier, logger,
+    )
+    // ADR-064 amendment (2026-09-13): the structural generic functions, which never reach the
+    // planner (see the function's own KDoc).
+    warnUnroutedGenericFunctions(genericFunctions, logger)
+    // ADR-064 amendment (2026-09-13): an interface's own declared members are planned onto
+    // `callableCatalog` only when the interface is REACHABLE (ADR-040), so an unrouted member of
+    // an interface that is merely implemented would be named nowhere -- and `classEntries`
+    // deliberately defers to the declaration rather than warning once per implementing class.
+    // `interfaceDeclarationCatalog` plans every interface, so it is the one producer that sees
+    // them all. Narrowed to the new reason on purpose: that catalog's drop channel is otherwise
+    // unmerged by design (a reachable interface is planned twice), and widening it would report
+    // every other drop of every interface a second time.
+    val warnedCallableSymbols: Set<String> =
+      callableCatalog.droppedCallables.map { it.symbol }.toSet()
+    warnDroppedForwardCallables(
+      ForwardCallablePlanCatalog(
+        entries = interfaceDeclarationCatalog.entries.filter { entry ->
+          entry is ForwardCallableCatalogEntry.Skipped &&
+              entry.reason == ForwardPlanSkipReason.UNROUTED_POSITION &&
+              entry.symbol !in warnedCallableSymbols
+        },
+      ),
+      logger,
+      effectiveInclude,
     )
 
     val cNameWrappers: ForwardCNameExports = generateCNameWrappers(

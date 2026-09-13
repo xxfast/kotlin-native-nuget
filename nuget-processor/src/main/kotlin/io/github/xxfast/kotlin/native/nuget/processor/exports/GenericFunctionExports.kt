@@ -9,6 +9,25 @@ import io.github.xxfast.kotlin.native.nuget.processor.cir.expandAliases
 import kotlin.reflect.KClass
 
 /**
+ * ADR-064 amendment (2026-09-13): this route's own gate, hoisted so both halves and the planner's
+ * diagnostic read one function. The route dispatches on a `T`-typed *direct parameter* (it emits
+ * one export per primitive it can substitute), so `fun <T> f(): List<T>` — no such parameter —
+ * is refused, and the refusal is total for the declaration: nothing is emitted on either half.
+ * `NugetProcessor` names the refused ones (`SKIPPED_UNSUPPORTED_RETURN`) rather than leaving them
+ * silent, which is the amendment.
+ */
+internal fun KSFunctionDeclaration.legacyGenericRouteParameterIndex(): Int {
+  val typeParamName: String = typeParameters.firstOrNull()?.name?.asString() ?: "T"
+  return parameters.indexOfFirst { param ->
+    param.type.resolve().expandAliases().declaration.simpleName.asString() == typeParamName
+  }
+}
+
+/** True when the legacy generic-function route emits for [this]; see the index above. */
+internal fun KSFunctionDeclaration.hasLegacyGenericFunctionRoute(): Boolean =
+  legacyGenericRouteParameterIndex() != -1
+
+/**
  * Generates @CName bridge exports for generic functions using type-variant pattern.
  * For identity<T>(value: T): T, generates identity_string, identity_int, etc.
  */
@@ -19,9 +38,7 @@ internal fun FileSpec.Builder.addGenericFunctionExports(func: KSFunctionDeclarat
 
   val typeParamName: String = func.typeParameters.firstOrNull()?.name?.asString() ?: "T"
 
-  val paramIndex: Int = func.parameters.indexOfFirst { param ->
-    param.type.resolve().expandAliases().declaration.simpleName.asString() == typeParamName
-  }
+  val paramIndex: Int = func.legacyGenericRouteParameterIndex()
 
   if (paramIndex == -1) return
 

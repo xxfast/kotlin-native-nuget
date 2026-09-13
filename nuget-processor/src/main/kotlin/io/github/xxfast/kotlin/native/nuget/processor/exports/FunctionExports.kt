@@ -5,8 +5,30 @@ import com.google.devtools.ksp.symbol.KSFunctionDeclaration
 import com.google.devtools.ksp.symbol.KSType
 import com.squareup.kotlinpoet.FileSpec
 import com.squareup.kotlinpoet.FunSpec
+import io.github.xxfast.kotlin.native.nuget.processor.cir.FLOW_TYPES
+import io.github.xxfast.kotlin.native.nuget.processor.cir.STATE_FLOW_TYPES
 import io.github.xxfast.kotlin.native.nuget.processor.cir.expandAliases
 import io.github.xxfast.kotlin.native.nuget.processor.toCName
+
+/**
+ * ADR-064 amendment (2026-09-13): this route's own gate, hoisted so the Kotlin half
+ * ([addFunctionExports]), the C# half (`translateSpecializedFunction`) and the planner's
+ * unrouted-position reclassification all read one function.
+ *
+ * The Flow/StateFlow refusal is the amendment's route fix (research H cell 4): `Flow<T>` is a
+ * generic declaration, so it used to pass the type-parameter test below and both halves emitted —
+ * the C# half rendering `public static Flow<int> F()` against a type that exists nowhere in
+ * `Interop.cs` (the class route spells the same thing `KotlinFlow<int>`), i.e. a guaranteed
+ * `CS0246` in the consumer. There is no top-level Flow route, so the member is refused here and
+ * named by the planner instead.
+ */
+internal fun KSFunctionDeclaration.hasLegacyGenericReturnRoute(): Boolean {
+  val returnType: KSType = returnType?.resolve()?.expandAliases() ?: return false
+  val returnDecl: KSClassDeclaration = returnType.declaration as? KSClassDeclaration ?: return false
+  val qualified: String? = returnDecl.qualifiedName?.asString()
+  if (qualified in FLOW_TYPES || qualified in STATE_FLOW_TYPES) return false
+  return returnDecl.typeParameters.isNotEmpty() && returnType.arguments.isNotEmpty()
+}
 
 /**
  * Named legacy adapter for top-level functions that remain outside the ordinary plan path:
@@ -24,12 +46,8 @@ import io.github.xxfast.kotlin.native.nuget.processor.toCName
 internal fun FileSpec.Builder.addFunctionExports(func: KSFunctionDeclaration) {
   val cname: String = toCName(func.simpleName.asString())
   val funcName: String = func.simpleName.asString()
-  val returnType: KSType? = func.returnType?.resolve()?.expandAliases()
-  val returnDecl: KSClassDeclaration? = returnType?.declaration as? KSClassDeclaration
-  val isGenericReturnType: Boolean = returnDecl?.typeParameters?.isNotEmpty() == true &&
-      returnType.arguments.isNotEmpty()
 
-  if (!isGenericReturnType) {
+  if (!func.hasLegacyGenericReturnRoute()) {
     // Ordinary types without a plan are unsupported for emission — never fall through to
     // IntPtr / defaultValueFor("0") garbage (Phase 10 / MIGRATION invariants).
     return

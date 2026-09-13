@@ -475,7 +475,19 @@ class Truck(plate: String) : Vehicle(plate) {
 
 From `test-library/src/nativeMain/kotlin/.../garage/Vault.kt`. `Register.tally` is a generic
 interface default the planner declines structurally; it still has a body, so it must be dropped
-from `Vault` rather than rendered `abstract`, and `: IRegister` stays:
+from `Vault` rather than rendered `abstract`, and `: IRegister` stays. Since
+[ADR-064](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/064-forward-unsupported-declaration-diagnostics.md)'s
+2026-09-13 amendment the drop is also named, once, on the `Register` interface itself, rather than
+silent:
+
+```
+[nuget:SKIPPED_UNSUPPORTED_COMBINATION] Skipping garage.Register.tally: a generic type binds at a
+    top-level function return, and a generic function at a top-level function with a parameter of
+    its own type parameter, but not at this position. expose a non-generic wrapper (`fun f(value:
+    Int)` beside `fun <T> f(value: T)`), or move the declaration to a top-level function with a
+    parameter of its own type parameter
+    at Vault.kt:11
+```
 
 ```kotlin
 interface Register {

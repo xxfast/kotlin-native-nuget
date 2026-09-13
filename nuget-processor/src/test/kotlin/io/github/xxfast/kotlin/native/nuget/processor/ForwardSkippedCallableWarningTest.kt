@@ -277,6 +277,11 @@ class ForwardSkippedCallableWarningTest {
         // ADR-064: genuine drops with their own named diagnostic kind (cell 23's combination,
         // and a value-class member inherited via interface delegation).
         ForwardPlanSkipReason.UNSUPPORTED_COMBINATION,
+        // ADR-064 amendment (2026-09-13): a Flow/lambda/generic deferral at an owner or position
+        // no legacy route is keyed to (an object, an extension, a constructor, a Flow at a
+        // parameter, a lambda at a class-method return). The member is absent from both halves,
+        // so it warns; the reason it was reclassified from rides in `detail`.
+        ForwardPlanSkipReason.UNROUTED_POSITION,
         ForwardPlanSkipReason.INHERITED_MEMBER,
         // ADR-066: a reachable dependency-module type the closure did not admit.
         ForwardPlanSkipReason.UNEXPORTED_DEPENDENCY_TYPE,

@@ -1482,7 +1482,7 @@ Hot streams and several `Flow` positions are not yet supported (ROADMAP Phase 6)
 - `Boolean?` / `Char?` value elements on a nullable `StateFlow` (the same width fragility as ADR-061)
 - Nullable `SharedFlow<T>` (follows `SharedFlow<T>` itself, still deferred)
 - `INotifyPropertyChanged` adapter over `KotlinStateFlow<T>` (opt-in convenience, not core)
-- `Flow<T>` as a function **parameter** (C# → Kotlin direction)
+- `Flow<T>` as a function **parameter** (C# → Kotlin direction); named `SKIPPED_UNSUPPORTED_INPUT` rather than silent since [ADR-064](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/064-forward-unsupported-declaration-diagnostics.md)'s 2026-09-13 amendment, the same as a `Flow` return on anything other than a class method or a property (an `object`, an interface default's return through the interface itself, an extension, a secondary constructor, or a collection element), all previously silent and now named. A top-level `Flow` return used to render a type declared nowhere in the generated C# (`CS0246` in the consumer); it is refused by the route itself and named the same way now, still with no member
 - Nullable `Flow<T>?`
 - `Flow<T>` as a generic type argument (e.g. `Box<Flow<String>>`)
 - `suspend fun` returning `Flow<T>` (would follow the same outer-suspend-kept-as-`Task` decision [ADR-068](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/068-suspend-returning-stateflow.md) made for its `StateFlow` sibling, not yet implemented)

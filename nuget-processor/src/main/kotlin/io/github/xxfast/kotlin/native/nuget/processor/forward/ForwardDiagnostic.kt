@@ -380,7 +380,21 @@ internal object ForwardDiagnosticSink {
  */
 internal fun ForwardPlanSkipReason.toDiagnosticKind(
   position: ForwardSkipPosition = ForwardSkipPosition.RETURN,
+  // ADR-064 amendment (2026-09-13): the skip is about the declaration's own type parameters
+  // rather than about a type standing at [position]; see `Skipped.structural`.
+  structural: Boolean = false,
 ): ForwardDiagnosticKind = when (this) {
+  // ADR-064 amendment (2026-09-13): a legacy-route deferral no route re-emits. The kind is the
+  // position's own, exactly as the amendment's decision table says: the author's remedy for a
+  // Flow at a parameter ("take the values as a List") is not the remedy for a lambda at a return,
+  // and neither is the remedy for `fun <T> f(x: T)` on a class, which is about the *declaration*
+  // and so takes the combination kind ADR-116 gave the same absence on a sealed arm.
+  ForwardPlanSkipReason.UNROUTED_POSITION -> when {
+    structural -> ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_COMBINATION
+    position == ForwardSkipPosition.INPUT -> ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_INPUT
+    else -> ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_RETURN
+  }
+
   ForwardPlanSkipReason.COLLECTION -> ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_INPUT
   // ADR-132: always an input-position skip by construction — the extension receiver, which the
   // planner treats as input zero — so it is fixed rather than reading [position].
@@ -533,6 +547,28 @@ internal fun ForwardPlanSkipReason.diagnosticReason(
       "its type `${detail?.substringBefore("->") ?: "its type"}` is marked with an opt-in marker"
 
     // ADR-116: nothing about this member's types is unsupported; the owner kind has no route.
+    // ADR-064 amendment (2026-09-13): names the position, because the type itself IS bridgeable
+    // somewhere else and the generic sentence ("its FLOW_PROTOCOL type combination is not
+    // supported") would send the author looking for a type problem that does not exist.
+    ForwardPlanSkipReason.UNROUTED_POSITION -> when (detail) {
+      ForwardPlanSkipReason.FLOW_PROTOCOL.name ->
+        "a Flow/StateFlow binds at a class-method return and a property, but not at this position"
+
+      ForwardPlanSkipReason.CALLBACK_PROTOCOL.name ->
+        "a lambda binds at a class-method parameter and a top-level function return, but not at " +
+            "this position"
+
+      ForwardPlanSkipReason.SUSPEND_CALLBACK_PROTOCOL.name ->
+        "a `suspend` lambda is not bridged at any position"
+
+      ForwardPlanSkipReason.GENERIC.name ->
+        "a generic type binds at a top-level function return, and a generic function at a " +
+            "top-level function with a parameter of its own type parameter, but not at this " +
+            "position"
+
+      else -> "no bridge route carries it at this position"
+    }
+
     ForwardPlanSkipReason.SEALED_SUBCLASS_UNROUTED ->
       "it is a ${detail ?: "specialized"} member of a sealed subclass, which has no route yet " +
           "(ADR-116)"
@@ -734,6 +770,28 @@ internal fun ForwardPlanSkipReason.diagnosticHint(
   // kind left under this reason. It is not: an add/remove callback pair and a suspend lambda
   // parameter reach it too, and neither is generic, so telling that author to drop a type
   // parameter names nothing they wrote.
+  // ADR-064 amendment (2026-09-13): the remedy is always "move it to a position that does bind",
+  // and the positions that bind differ per member kind, so each detail names its own.
+  ForwardPlanSkipReason.UNROUTED_POSITION -> when (detail) {
+    ForwardPlanSkipReason.FLOW_PROTOCOL.name ->
+      "return the Flow from a method on an ordinary class (or expose it as a property); a Flow " +
+          "cannot be passed in, and no object, interface, extension or constructor route carries " +
+          "one"
+
+    ForwardPlanSkipReason.CALLBACK_PROTOCOL.name ->
+      "take the lambda as a parameter of an ordinary class method (a per-call one, or an " +
+          "add/remove pair), or return it from a top-level function"
+
+    ForwardPlanSkipReason.SUSPEND_CALLBACK_PROTOCOL.name ->
+      "take a plain (non-suspend) lambda parameter on an ordinary class method instead"
+
+    ForwardPlanSkipReason.GENERIC.name ->
+      "expose a non-generic wrapper (`fun f(value: Int)` beside `fun <T> f(value: T)`), or move " +
+          "the declaration to a top-level function with a parameter of its own type parameter"
+
+    else -> "expose an equivalent member at a position the bridge carries"
+  }
+
   ForwardPlanSkipReason.SEALED_SUBCLASS_UNROUTED ->
     "move the member onto an ordinary class (which still has the legacy route this member kind " +
         "needs), or expose an equivalent member on the sealed subclass in a shape the arm's " +
