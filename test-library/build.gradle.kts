@@ -36,6 +36,14 @@ abstract class WriteFixtureVersions : DefaultTask() {
   @get:Input
   abstract val fixtureVersion: Property<String>
 
+  // ADR-129: the `nuget-runtime` version this fixture was built against, so IntegrationTests
+  // can assert `NugetRuntime.Version` against what was actually packed rather than a literal.
+  // Sourced from the root `gradle.properties`, the same value ADR-127 names for the runtime
+  // coordinate; NOT the `nuget { publish { version } }` DSL field, which is the fixture
+  // package's own churning version.
+  @get:Input
+  abstract val runtimeVersion: Property<String>
+
   @get:OutputFile
   abstract val outputFile: RegularFileProperty
 
@@ -48,6 +56,7 @@ abstract class WriteFixtureVersions : DefaultTask() {
       |<Project>
       |  <PropertyGroup>
       |    <TestLibraryVersion>${fixtureVersion.get()}</TestLibraryVersion>
+      |    <NugetRuntimeVersion>${runtimeVersion.get()}</NugetRuntimeVersion>
       |  </PropertyGroup>
       |</Project>
       """.trimMargin() + "\n"
@@ -135,6 +144,7 @@ val writeFixtureVersions by tasks.registering(WriteFixtureVersions::class) {
   group = "nuget"
   description = "Writes the current fixture package version for the fixture consumers"
   fixtureVersion.set(fixturePackageVersion)
+  runtimeVersion.set(rootProject.version.toString())
   outputFile.set(fixtureVersionsFile)
   dependsOn(writeFixtureVersion)
 }

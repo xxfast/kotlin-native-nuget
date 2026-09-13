@@ -30,7 +30,6 @@ import kotlinx.cinterop.invoke
 import kotlinx.cinterop.pointed
 import kotlinx.cinterop.reinterpret
 import kotlinx.cinterop.value
-import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
@@ -317,26 +316,12 @@ public fun export_nuget_suspend_func0_invoke(
   userData: COpaquePointer,
 ): COpaquePointer {
   val fn = handle.asStableRef<SuspendFunction0<*>>().get()
-  val callback = callbackPtr.reinterpret<CFunction<
-    (COpaquePointer?, COpaquePointer?, Byte, COpaquePointer) -> Unit>>()
-  val job = CoroutineScope(Dispatchers.Default).launch(start = CoroutineStart.ATOMIC) {
-    try {
-      val result = fn.invoke()
-      if (result == Unit) {
-        callback.invoke(null, null, 0.toByte(), userData)
-      } else {
-        val resultRef = NugetHandles.retain(result as Any)
-        callback.invoke(resultRef, null, 0.toByte(), userData)
-      }
-    } catch (e: CancellationException) {
-      callback.invoke(null, null, 1.toByte(), userData)
-      throw e
-    } catch (e: Throwable) {
-      val errRef = NugetHandles.retain(buildError(e))
-      callback.invoke(null, errRef, 0.toByte(), userData)
-    }
+  // ADR-128: the launch shape lives in `launchForCSharp`; this site owns only the call and
+  // how its value becomes a handle. The `== Unit` test and the mint order are unchanged.
+  return launchForCSharp(CoroutineScope(Dispatchers.Default), callbackPtr, userData) {
+    val result = fn.invoke()
+    if (result == Unit) null else NugetHandles.retain(result as Any)
   }
-  return NugetHandles.retain(job)
 }
 
 @NugetRuntimeApi
@@ -349,26 +334,12 @@ public fun export_nuget_suspend_func1_invoke(
 ): COpaquePointer {
   val fn = handle.asStableRef<SuspendFunction1<Any?, Any?>>().get()
   val param0 = arg0.asStableRef<Any>().get()
-  val callback = callbackPtr.reinterpret<CFunction<
-    (COpaquePointer?, COpaquePointer?, Byte, COpaquePointer) -> Unit>>()
-  val job = CoroutineScope(Dispatchers.Default).launch(start = CoroutineStart.ATOMIC) {
-    try {
-      val result = fn.invoke(param0)
-      if (result == Unit) {
-        callback.invoke(null, null, 0.toByte(), userData)
-      } else {
-        val resultRef = NugetHandles.retain(result as Any)
-        callback.invoke(resultRef, null, 0.toByte(), userData)
-      }
-    } catch (e: CancellationException) {
-      callback.invoke(null, null, 1.toByte(), userData)
-      throw e
-    } catch (e: Throwable) {
-      val errRef = NugetHandles.retain(buildError(e))
-      callback.invoke(null, errRef, 0.toByte(), userData)
-    }
+  // ADR-128: the launch shape lives in `launchForCSharp`; this site owns only the call and
+  // how its value becomes a handle. The `== Unit` test and the mint order are unchanged.
+  return launchForCSharp(CoroutineScope(Dispatchers.Default), callbackPtr, userData) {
+    val result = fn.invoke(param0)
+    if (result == Unit) null else NugetHandles.retain(result as Any)
   }
-  return NugetHandles.retain(job)
 }
 
 @NugetRuntimeApi
@@ -383,26 +354,12 @@ public fun export_nuget_suspend_func2_invoke(
   val fn = handle.asStableRef<SuspendFunction2<Any?, Any?, Any?>>().get()
   val param0 = arg0.asStableRef<Any>().get()
   val param1 = arg1.asStableRef<Any>().get()
-  val callback = callbackPtr.reinterpret<CFunction<
-    (COpaquePointer?, COpaquePointer?, Byte, COpaquePointer) -> Unit>>()
-  val job = CoroutineScope(Dispatchers.Default).launch(start = CoroutineStart.ATOMIC) {
-    try {
-      val result = fn.invoke(param0, param1)
-      if (result == Unit) {
-        callback.invoke(null, null, 0.toByte(), userData)
-      } else {
-        val resultRef = NugetHandles.retain(result as Any)
-        callback.invoke(resultRef, null, 0.toByte(), userData)
-      }
-    } catch (e: CancellationException) {
-      callback.invoke(null, null, 1.toByte(), userData)
-      throw e
-    } catch (e: Throwable) {
-      val errRef = NugetHandles.retain(buildError(e))
-      callback.invoke(null, errRef, 0.toByte(), userData)
-    }
+  // ADR-128: the launch shape lives in `launchForCSharp`; this site owns only the call and
+  // how its value becomes a handle. The `== Unit` test and the mint order are unchanged.
+  return launchForCSharp(CoroutineScope(Dispatchers.Default), callbackPtr, userData) {
+    val result = fn.invoke(param0, param1)
+    if (result == Unit) null else NugetHandles.retain(result as Any)
   }
-  return NugetHandles.retain(job)
 }
 
 @NugetRuntimeApi
@@ -419,26 +376,12 @@ public fun export_nuget_suspend_func3_invoke(
   val param0 = arg0.asStableRef<Any>().get()
   val param1 = arg1.asStableRef<Any>().get()
   val param2 = arg2.asStableRef<Any>().get()
-  val callback = callbackPtr.reinterpret<CFunction<
-    (COpaquePointer?, COpaquePointer?, Byte, COpaquePointer) -> Unit>>()
-  val job = CoroutineScope(Dispatchers.Default).launch(start = CoroutineStart.ATOMIC) {
-    try {
-      val result = fn.invoke(param0, param1, param2)
-      if (result == Unit) {
-        callback.invoke(null, null, 0.toByte(), userData)
-      } else {
-        val resultRef = NugetHandles.retain(result as Any)
-        callback.invoke(resultRef, null, 0.toByte(), userData)
-      }
-    } catch (e: CancellationException) {
-      callback.invoke(null, null, 1.toByte(), userData)
-      throw e
-    } catch (e: Throwable) {
-      val errRef = NugetHandles.retain(buildError(e))
-      callback.invoke(null, errRef, 0.toByte(), userData)
-    }
+  // ADR-128: the launch shape lives in `launchForCSharp`; this site owns only the call and
+  // how its value becomes a handle. The `== Unit` test and the mint order are unchanged.
+  return launchForCSharp(CoroutineScope(Dispatchers.Default), callbackPtr, userData) {
+    val result = fn.invoke(param0, param1, param2)
+    if (result == Unit) null else NugetHandles.retain(result as Any)
   }
-  return NugetHandles.retain(job)
 }
 
 @NugetRuntimeApi
@@ -473,7 +416,7 @@ public fun export_nuget_scope_drain(
 ): COpaquePointer {
   val scope = scopeHandle.asStableRef<CoroutineScope>().get()
   val callback = callbackPtr.reinterpret<CFunction<
-    (COpaquePointer?, COpaquePointer?, Byte, COpaquePointer) -> Unit>>()
+        (COpaquePointer?, COpaquePointer?, Byte, COpaquePointer) -> Unit>>()
   val drainJob = scope.launch(start = CoroutineStart.ATOMIC) {
     val self = coroutineContext[Job]
     scope.coroutineContext[Job]
@@ -529,6 +472,17 @@ public fun buildError(e: Throwable): NugetError {
 private tailrec fun NugetError.at(index: Int): NugetError =
   if (index == 0) this else cause!!.at(index - 1)
 
+/**
+ * ADR-129: the 67th export. Returns the version of this `nuget-runtime` klib, so a process can say
+ * which runtime its `.dylib`/`.dll` actually carries instead of that being an `nm`-plus-cache-walk
+ * question. Wire shape is the one every string-returning export above already uses: Kotlin/Native
+ * hands out a `const char*` valid for the immediate call and C# copies it with
+ * `Marshal.PtrToStringUTF8` (ADR-003).
+ */
+@NugetRuntimeApi
+@CName("nuget_runtime_version")
+public fun export_nuget_runtime_version(): String = NUGET_RUNTIME_VERSION
+
 @NugetRuntimeApi
 @CName("nuget_error_type")
 public fun export_nuget_error_type(handle: COpaquePointer): String =
@@ -549,7 +503,9 @@ public fun export_nuget_error_stacktrace(handle: COpaquePointer): String =
 public fun export_nuget_error_cause_count(handle: COpaquePointer): Int {
   var e: NugetError? = handle.asStableRef<NugetError>().get()
   var n = 0
-  while (e != null) { n++; e = e.cause }
+  while (e != null) {
+    n++; e = e.cause
+  }
   return n
 }
 
@@ -578,7 +534,7 @@ private const val EPOCH_SECONDS_MAX: Long = 253_402_300_799L
 public fun Instant.toDotNetTicks(): Long {
   require(epochSeconds in EPOCH_SECONDS_MIN..EPOCH_SECONDS_MAX) {
     "Instant $this is outside System.DateTimeOffset's range " +
-      "(0001-01-01T00:00:00Z..9999-12-31T23:59:59.9999999Z)"
+        "(0001-01-01T00:00:00Z..9999-12-31T23:59:59.9999999Z)"
   }
   return TICKS_UNIX_EPOCH + epochSeconds * 10_000_000L + nanosecondsOfSecond / 100
 }
@@ -660,25 +616,11 @@ public fun export_nuget_stateflow_collect(
 ): COpaquePointer {
   val flow = flowHandle.asStableRef<StateFlow<*>>().get()
   val scope = scopeHandle.asStableRef<CoroutineScope>().get()
-  val onNext = onNextPtr.reinterpret<CFunction<(COpaquePointer?, Byte, COpaquePointer) -> Unit>>()
-  val onComplete = onCompletePtr.reinterpret<CFunction<(COpaquePointer) -> Unit>>()
-  val onError = onErrorPtr.reinterpret<CFunction<(COpaquePointer?, COpaquePointer) -> Unit>>()
-  val job = scope.launch(start = CoroutineStart.ATOMIC) {
-    try {
-      flow.collect { value ->
-        val itemRef = NugetHandles.retain(value as Any)
-        onNext.invoke(itemRef, 0.toByte(), userData)
-      }
-      onComplete.invoke(userData)
-    } catch (e: CancellationException) {
-      onNext.invoke(null, 1.toByte(), userData)
-      throw e
-    } catch (e: Throwable) {
-      val errRef = NugetHandles.retain(buildError(e))
-      onError.invoke(errRef, userData)
-    }
+  // ADR-128: `collectForCSharp` owns the trio of callbacks and the launch; the flow handle is
+  // still dereferenced before the launch, as today, and only `.collect` moves into the body.
+  return collectForCSharp(scope, onNextPtr, onCompletePtr, onErrorPtr, userData) { emit ->
+    flow.collect { value -> emit(NugetHandles.retain(value as Any)) }
   }
-  return NugetHandles.retain(job)
 }
 
 @NugetRuntimeApi

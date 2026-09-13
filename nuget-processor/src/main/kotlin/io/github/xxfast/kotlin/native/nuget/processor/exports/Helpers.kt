@@ -147,7 +147,7 @@ internal fun cNameAnnotation(value: String): AnnotationSpec =
     .build()
 
 /**
- * ADR-127: the package of the `nuget-runtime` klib, which owns the fixed 66-name `nuget_*` ABI
+ * ADR-127: the package of the `nuget-runtime` klib, which owns the fixed 67-name `nuget_*` ABI
  * and the Kotlin surface the generated file calls into. Every name here is behind the runtime's
  * `NugetRuntimeApi` opt-in marker, which the generated file's `@file:OptIn` carries.
  */
@@ -156,7 +156,7 @@ internal const val NUGET_RUNTIME_PACKAGE: String = "io.github.xxfast.kotlin.nati
 /**
  * The runtime members the generated file calls by *name* rather than through a KotlinPoet
  * `ClassName` (they are emitted as literal statement text), so KotlinPoet cannot import them on
- * its own. Imported unconditionally: the runtime exports all 66 names unconditionally too, and
+ * its own. Imported unconditionally: the runtime exports all 67 names unconditionally too, and
  * the gating these used to carry is exactly the defect class ADR-127 removes.
  */
 internal val NUGET_RUNTIME_MEMBERS: List<String> = listOf(

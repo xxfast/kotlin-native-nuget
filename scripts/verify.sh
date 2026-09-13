@@ -50,6 +50,11 @@ rm -rf GeneratedBindingsCheck/obj GeneratedBindingsCheck/bin
 rm -rf IntegrationTests/obj IntegrationTests/bin
 rm -rf LeakTests/obj LeakTests/bin
 
+# ADR-128: the `launchForCSharp` / `collectForCSharp` runtime helpers are ordinary Kotlin/Native
+# code, so they are driven in-process here before the link that would only exercise them via C#.
+echo "==> Runtime helper tests (:nuget-runtime:allTests)"
+./gradlew :nuget-runtime:allTests
+
 echo "==> Pack TestLibrary NuGet (:test-library:clean :test-library:packNuget)"
 ./gradlew :test-library:clean :test-library:packNuget
 

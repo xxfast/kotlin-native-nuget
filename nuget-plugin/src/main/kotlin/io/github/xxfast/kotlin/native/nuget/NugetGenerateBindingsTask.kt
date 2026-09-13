@@ -697,6 +697,21 @@ fun generateKotlinStubs(
         content = nugetKotlinBridgesContent(bridgeDispatch),
       )
     )
+    // ADR-130: the `actual` for NugetRuntime.kt's `expect fun nugetKotlinError`, emitted under
+    // exactly the same condition as the `expect` itself so the pair can never come apart, and
+    // into both per-target source sets because that is where the runtime klib is on the classpath.
+    result.add(
+      GeneratedFile(
+        relativePath = "mingwMain/$INTERNAL_DIR/NugetKotlinErrors.kt",
+        content = nugetKotlinErrorsActual(),
+      )
+    )
+    result.add(
+      GeneratedFile(
+        relativePath = "posixMain/$INTERNAL_DIR/NugetKotlinErrors.kt",
+        content = nugetKotlinErrorsActual(),
+      )
+    )
   }
 
   // ADR-054: NugetRegistry.kt is needed whenever any register export (a bound type's, or
@@ -4185,6 +4200,93 @@ private fun nugetInteropPosix(): String = """
   |}
 """.trimMargin().trim()
 
+// ADR-130: NugetKotlinErrors.kt — the `actual` half of the reverse error envelope, emitted into
+// BOTH per-target source sets (the same one-template-twice shape nugetInteropMingw/Posix use for
+// freeManagedString). Per-target because the runtime klib carrying NugetError/buildError is
+// declared `api` on `${target.name}Main` (ADR-127), which the shared nativeMain file cannot see.
+// Everything the C# NugetKotlinErrors shim P/Invokes lives here; nugetKotlinString and
+// nuget_kotlin_string_free stay in NugetRuntime.kt, the PARENT, which a per-target file can read.
+//
+// Raw StableRef, deliberately NOT NugetHandles.retain: this envelope is not a user-visible handle,
+// and counting it would move `nuget_live_handles` (and the LeakTests baselines) for a change that
+// is otherwise invisible. nuget_kotlin_error_free disposes it directly, as it always has.
+private fun nugetKotlinErrorsActual(): String = """
+  |@file:OptIn(
+  |  kotlinx.cinterop.ExperimentalForeignApi::class,
+  |  io.github.xxfast.kotlin.native.nuget.runtime.NugetRuntimeApi::class,
+  |)
+  |
+  |package $INTERNAL_PKG
+  |
+  |import io.github.xxfast.kotlin.native.nuget.runtime.NugetError
+  |import io.github.xxfast.kotlin.native.nuget.runtime.buildError
+  |import kotlin.experimental.ExperimentalNativeApi
+  |import kotlinx.cinterop.COpaquePointer
+  |import kotlinx.cinterop.StableRef
+  |import kotlinx.cinterop.asStableRef
+  |
+  |internal actual fun nugetKotlinError(t: Throwable): COpaquePointer =
+  |  StableRef.create(buildError(t)).asCPointer()
+  |
+  |private tailrec fun NugetError.at(index: Int): NugetError =
+  |  if (index == 0) this else cause!!.at(index - 1)
+  |
+  |private fun COpaquePointer.error(): NugetError = asStableRef<NugetError>().get()
+  |
+  |// The accessor exports the C# side reads the envelope through. Still NOT the forward
+  |// nuget_error_* entry points, even though both now resolve the same class: those return a
+  |// Kotlin String the C# side reads with Marshal.PtrToStringUTF8 and never frees, while these
+  |// ride the nugetKotlinString / nuget_kotlin_string_free wire the NugetKotlinErrors shim already
+  |// owns end to end (ADR-130 Alternative 5).
+  |@OptIn(ExperimentalNativeApi::class)
+  |@CName("nuget_kotlin_error_type")
+  |fun nuget_kotlin_error_type(handle: COpaquePointer): COpaquePointer? =
+  |  nugetKotlinString(handle.error().type)
+  |
+  |@OptIn(ExperimentalNativeApi::class)
+  |@CName("nuget_kotlin_error_message")
+  |fun nuget_kotlin_error_message(handle: COpaquePointer): COpaquePointer? =
+  |  nugetKotlinString(handle.error().message)
+  |
+  |@OptIn(ExperimentalNativeApi::class)
+  |@CName("nuget_kotlin_error_stacktrace")
+  |fun nuget_kotlin_error_stacktrace(handle: COpaquePointer): COpaquePointer? =
+  |  nugetKotlinString(handle.error().stackTrace)
+  |
+  |@OptIn(ExperimentalNativeApi::class)
+  |@CName("nuget_kotlin_error_cause_count")
+  |fun nuget_kotlin_error_cause_count(handle: COpaquePointer): Int {
+  |  var count = 0
+  |  var current: NugetError? = handle.error()
+  |  while (current != null) {
+  |    count++
+  |    current = current.cause
+  |  }
+  |  return count
+  |}
+  |
+  |@OptIn(ExperimentalNativeApi::class)
+  |@CName("nuget_kotlin_error_cause_type")
+  |fun nuget_kotlin_error_cause_type(handle: COpaquePointer, index: Int): COpaquePointer? =
+  |  nugetKotlinString(handle.error().at(index).type)
+  |
+  |@OptIn(ExperimentalNativeApi::class)
+  |@CName("nuget_kotlin_error_cause_message")
+  |fun nuget_kotlin_error_cause_message(handle: COpaquePointer, index: Int): COpaquePointer? =
+  |  nugetKotlinString(handle.error().at(index).message)
+  |
+  |@OptIn(ExperimentalNativeApi::class)
+  |@CName("nuget_kotlin_error_cause_stacktrace")
+  |fun nuget_kotlin_error_cause_stacktrace(handle: COpaquePointer, index: Int): COpaquePointer? =
+  |  nugetKotlinString(handle.error().at(index).stackTrace)
+  |
+  |@OptIn(ExperimentalNativeApi::class)
+  |@CName("nuget_kotlin_error_free")
+  |fun nuget_kotlin_error_free(handle: COpaquePointer) {
+  |  handle.asStableRef<NugetError>().dispose()
+  |}
+""".trimMargin().trim()
+
 // ADR-051: NugetRuntime.kt — shared runtime support emitted once into the internal package
 // whenever any bound signature contains a RirObjectHandleType. Contains:
 //   - freeGcHandleFn: the registered C# thunk for freeing a GCHandle
@@ -4210,7 +4312,6 @@ private fun nugetRuntimeContent(): String = """
   |import kotlinx.cinterop.toKString
   |import kotlinx.cinterop.value
   |import kotlinx.cinterop.allocArray
-  |import kotlinx.cinterop.StableRef
   |import kotlinx.cinterop.asStableRef
   |import kotlinx.cinterop.free
   |import kotlinx.cinterop.invoke
@@ -4499,90 +4600,17 @@ private fun nugetRuntimeContent(): String = """
   |          "interface back to C# is not supported yet."
   |    )
   |
-  |// ADR-087 stage 2: the envelope a throwing slot writes through its trailing error out-param.
-  |// Structurally identical to the FORWARD pipeline's NugetError (type, message, stack, cause
-  |// chain, same seen-set cycle guard) but reverse-owned, because the ADR's "both halves compile
-  |// into one module" claim does not hold: KSP emits CNameExports.kt into the per-target source
-  |// set (macosArm64Main), while these reverse bindings live in nativeMain, its PARENT — a parent
-  |// source set cannot see a child's declarations. The C# side still throws the forward PUBLIC
-  |// KotlinException hierarchy, so consumers keep ONE catch hierarchy across both directions.
-  |internal class NugetKotlinError(
-  |  val type: String,
-  |  val message: String,
-  |  val stackTrace: String,
-  |  val cause: NugetKotlinError?,
-  |)
-  |
-  |internal fun nugetKotlinError(t: Throwable): COpaquePointer {
-  |  val seen: MutableSet<Throwable> = mutableSetOf()
-  |  fun build(e: Throwable): NugetKotlinError? {
-  |    if (!seen.add(e)) return null
-  |    return NugetKotlinError(
-  |      type = e::class.qualifiedName ?: e::class.simpleName ?: "UnknownException",
-  |      message = e.message ?: "Kotlin error",
-  |      stackTrace = e.stackTraceToString(),
-  |      cause = e.cause?.let(::build),
-  |    )
-  |  }
-  |  return StableRef.create(build(t)!!).asCPointer()
-  |}
-  |
-  |private tailrec fun NugetKotlinError.at(index: Int): NugetKotlinError =
-  |  if (index == 0) this else cause!!.at(index - 1)
-  |
-  |private fun COpaquePointer.error(): NugetKotlinError = asStableRef<NugetKotlinError>().get()
-  |
-  |// The accessor exports the C# side reads the envelope through. Deliberately NOT the forward
-  |// nuget_error_* entry points: those resolve a StableRef of the FORWARD NugetError class, and
-  |// handing them a reverse envelope would be an unchecked cast. Strings ride the same
-  |// nugetKotlinString / nuget_kotlin_string_free wire every other reverse string uses.
-  |@OptIn(ExperimentalNativeApi::class)
-  |@CName("nuget_kotlin_error_type")
-  |fun nuget_kotlin_error_type(handle: COpaquePointer): COpaquePointer? =
-  |  nugetKotlinString(handle.error().type)
-  |
-  |@OptIn(ExperimentalNativeApi::class)
-  |@CName("nuget_kotlin_error_message")
-  |fun nuget_kotlin_error_message(handle: COpaquePointer): COpaquePointer? =
-  |  nugetKotlinString(handle.error().message)
-  |
-  |@OptIn(ExperimentalNativeApi::class)
-  |@CName("nuget_kotlin_error_stacktrace")
-  |fun nuget_kotlin_error_stacktrace(handle: COpaquePointer): COpaquePointer? =
-  |  nugetKotlinString(handle.error().stackTrace)
-  |
-  |@OptIn(ExperimentalNativeApi::class)
-  |@CName("nuget_kotlin_error_cause_count")
-  |fun nuget_kotlin_error_cause_count(handle: COpaquePointer): Int {
-  |  var count = 0
-  |  var current: NugetKotlinError? = handle.error()
-  |  while (current != null) {
-  |    count++
-  |    current = current.cause
-  |  }
-  |  return count
-  |}
-  |
-  |@OptIn(ExperimentalNativeApi::class)
-  |@CName("nuget_kotlin_error_cause_type")
-  |fun nuget_kotlin_error_cause_type(handle: COpaquePointer, index: Int): COpaquePointer? =
-  |  nugetKotlinString(handle.error().at(index).type)
-  |
-  |@OptIn(ExperimentalNativeApi::class)
-  |@CName("nuget_kotlin_error_cause_message")
-  |fun nuget_kotlin_error_cause_message(handle: COpaquePointer, index: Int): COpaquePointer? =
-  |  nugetKotlinString(handle.error().at(index).message)
-  |
-  |@OptIn(ExperimentalNativeApi::class)
-  |@CName("nuget_kotlin_error_cause_stacktrace")
-  |fun nuget_kotlin_error_cause_stacktrace(handle: COpaquePointer, index: Int): COpaquePointer? =
-  |  nugetKotlinString(handle.error().at(index).stackTrace)
-  |
-  |@OptIn(ExperimentalNativeApi::class)
-  |@CName("nuget_kotlin_error_free")
-  |fun nuget_kotlin_error_free(handle: COpaquePointer) {
-  |  handle.asStableRef<NugetKotlinError>().dispose()
-  |}
+  |// ADR-087 stage 2 / ADR-130: the envelope a throwing slot writes through its trailing error
+  |// out-param. The envelope ITSELF is the runtime klib's public NugetError, built by the same
+  |// buildError() every forward export uses — one error mapping, not two structurally identical
+  |// copies. It cannot be named HERE: the runtime is declared `api` on the PER-TARGET source set
+  |// (ADR-127), which this shared nativeMain file cannot see, and moving these bindings down to
+  |// the per-target set is not open either (an author's own nativeMain code imports the generated
+  |// types, ADR-130's correction). So the envelope crosses the source-set boundary the way
+  |// freeManagedString already does: `expect` here, `actual` plus the eight nuget_kotlin_error_*
+  |// accessor exports in NugetKotlinErrors.kt under mingwMain/posixMain, where the runtime IS
+  |// visible. Every call site keeps calling nugetKotlinError(t) unchanged.
+  |internal expect fun nugetKotlinError(t: Throwable): COpaquePointer
   |
   |// ADR-086: the OUT-direction lowering for a handle-backed bridge slot (a bound-object or
   |// bound-interface return or getter). Always a FRESH transfer handle, which the C# bridge member

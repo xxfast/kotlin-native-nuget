@@ -72,9 +72,48 @@ internal object Tier1RuntimeStub {
     fun durationFromDotNetTicks(ticks: Long): Duration = TODO()
   """.trimIndent()
 
+  /**
+   * ADR-128's `launchForCSharp` / `collectForCSharp`, in a **third** file because they name
+   * `CoroutineScope`: `Tier1CoroutineFreeModuleTest` compiles with
+   * `coroutinesOnCompileClasspath = false`, so putting these in [runtimeSurfaceStub] would make
+   * that test fail on an unresolved `kotlinx.coroutines` rather than on the thing it asserts.
+   */
+  private val runtimeLaunchStub: String = """
+    @file:OptIn(ExperimentalForeignApi::class, NugetRuntimeApi::class)
+
+    package io.github.xxfast.kotlin.native.nuget.runtime
+
+    import kotlinx.cinterop.COpaquePointer
+    import kotlinx.cinterop.ExperimentalForeignApi
+    import kotlinx.coroutines.CoroutineScope
+
+    @NugetRuntimeApi
+    fun launchForCSharp(
+      scope: CoroutineScope,
+      callbackPtr: COpaquePointer,
+      userData: COpaquePointer,
+      body: suspend () -> COpaquePointer?,
+    ): COpaquePointer = TODO()
+
+    @NugetRuntimeApi
+    fun collectForCSharp(
+      scope: CoroutineScope,
+      onNextPtr: COpaquePointer,
+      onCompletePtr: COpaquePointer,
+      onErrorPtr: COpaquePointer,
+      userData: COpaquePointer,
+      body: suspend (emit: (COpaquePointer?) -> Unit) -> Unit,
+    ): COpaquePointer = TODO()
+  """.trimIndent()
+
   /** relative file name -> file content, ready for [Tier1Harness] to write to disk and compile. */
   val files: List<Pair<String, String>> = listOf(
     "Tier1Stub_NugetRuntimeApi.kt" to runtimeApiStub,
     "Tier1Stub_NugetRuntime.kt" to runtimeSurfaceStub,
+  )
+
+  /** Appended by [Tier1Harness] only when coroutines are on the compile classpath. */
+  val coroutineFiles: List<Pair<String, String>> = listOf(
+    "Tier1Stub_NugetLaunch.kt" to runtimeLaunchStub,
   )
 }

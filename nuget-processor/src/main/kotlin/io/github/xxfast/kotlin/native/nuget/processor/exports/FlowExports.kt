@@ -458,35 +458,19 @@ private fun buildFlowCollectBody(
   elementCollection: BridgeType.Collection?,
 ): String = buildString {
   appendLine("val obj = handle.asStableRef<$qualifiedName>().get()")
+  // ADR-128: the runtime's `collectForCSharp` owns the three reinterpreted callbacks, the ATOMIC
+  // launch and the complete/cancel/error arms. This route keeps the Flow source and the per-item
+  // mint -- and the source is read *inside* the body lambda, so a property getter that throws
+  // still reaches C# as `onError` instead of escaping the `@CName` export.
   appendLine("val scope = scopeHandle.asStableRef<CoroutineScope>().get()")
   appendLine(
-    "val onNext = onNextPtr.reinterpret<CFunction<" +
-        "(COpaquePointer?, Byte, COpaquePointer) -> Unit>>()"
+    "return collectForCSharp(scope, onNextPtr, onCompletePtr, onErrorPtr, userData) { emit ->"
   )
-  appendLine(
-    "val onComplete = onCompletePtr.reinterpret<CFunction<" +
-        "(COpaquePointer) -> Unit>>()"
-  )
-  appendLine(
-    "val onError = onErrorPtr.reinterpret<CFunction<" +
-        "(COpaquePointer?, COpaquePointer) -> Unit>>()"
-  )
-  appendLine("val job = scope.launch(start = CoroutineStart.ATOMIC) {")
-  appendLine("  try {")
-  appendLine("    obj.${memberAccessor(propName, memberNullable)}.collect { value ->")
-  appendLine("      val itemRef = ${itemBoxExpr(elementNullable, elementCollection)}")
-  appendLine("      onNext.invoke(itemRef, 0.toByte(), userData)")
-  appendLine("    }")
-  appendLine("    onComplete.invoke(userData)")
-  appendLine("  } catch (e: CancellationException) {")
-  appendLine("    onNext.invoke(null, 1.toByte(), userData)")
-  appendLine("    throw e")
-  appendLine("  } catch (e: Throwable) {")
-  appendLine("    val errRef = NugetHandles.retain(buildError(e))")
-  appendLine("    onError.invoke(errRef, userData)")
+  appendLine("  obj.${memberAccessor(propName, memberNullable)}.collect { value ->")
+  appendLine("    val itemRef = ${itemBoxExpr(elementNullable, elementCollection)}")
+  appendLine("    emit(itemRef)")
   appendLine("  }")
-  appendLine("}")
-  append("return NugetHandles.retain(job)")
+  append("}")
 }
 
 private fun buildFlowMethodCollectBody(
@@ -502,38 +486,22 @@ private fun buildFlowMethodCollectBody(
   elementCollection: BridgeType.Collection?,
 ): String = buildString {
   appendLine("val obj = handle.asStableRef<$qualifiedName>().get()")
+  // ADR-128: as the property route above, with ADR-114's eager parameter copy still emitted
+  // *before* the helper call. The member call itself stays inside the body lambda: a Flow-returning
+  // method that throws on the way to its Flow reaches C# as `onError`, which is the shipped
+  // behaviour and the reason the helper takes a body rather than a `Flow` argument.
   appendLine("val scope = scopeHandle.asStableRef<CoroutineScope>().get()")
-  appendLine(
-    "val onNext = onNextPtr.reinterpret<CFunction<" +
-        "(COpaquePointer?, Byte, COpaquePointer) -> Unit>>()"
-  )
-  appendLine(
-    "val onComplete = onCompletePtr.reinterpret<CFunction<" +
-        "(COpaquePointer) -> Unit>>()"
-  )
-  appendLine(
-    "val onError = onErrorPtr.reinterpret<CFunction<" +
-        "(COpaquePointer?, COpaquePointer) -> Unit>>()"
-  )
   append(paramPrelude)
-  appendLine("val job = scope.launch(start = CoroutineStart.ATOMIC) {")
-  appendLine("  try {")
   appendLine(
-    "    obj.${memberAccessor("$methodName($paramCall)", memberNullable)}.collect { value ->",
+    "return collectForCSharp(scope, onNextPtr, onCompletePtr, onErrorPtr, userData) { emit ->"
   )
-  appendLine("      val itemRef = ${itemBoxExpr(elementNullable, elementCollection)}")
-  appendLine("      onNext.invoke(itemRef, 0.toByte(), userData)")
-  appendLine("    }")
-  appendLine("    onComplete.invoke(userData)")
-  appendLine("  } catch (e: CancellationException) {")
-  appendLine("    onNext.invoke(null, 1.toByte(), userData)")
-  appendLine("    throw e")
-  appendLine("  } catch (e: Throwable) {")
-  appendLine("    val errRef = NugetHandles.retain(buildError(e))")
-  appendLine("    onError.invoke(errRef, userData)")
+  appendLine(
+    "  obj.${memberAccessor("$methodName($paramCall)", memberNullable)}.collect { value ->",
+  )
+  appendLine("    val itemRef = ${itemBoxExpr(elementNullable, elementCollection)}")
+  appendLine("    emit(itemRef)")
   appendLine("  }")
-  appendLine("}")
-  append("return NugetHandles.retain(job)")
+  append("}")
 }
 
 // ADR-065: the `_value` export body -- boxes `stateFlow.value as Any` into a StableRef, byte-for-

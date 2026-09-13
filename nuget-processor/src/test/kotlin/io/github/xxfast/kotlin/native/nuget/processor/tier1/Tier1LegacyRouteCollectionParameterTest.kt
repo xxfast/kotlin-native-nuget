@@ -204,7 +204,7 @@ class Tier1LegacyRouteCollectionParameterTest {
   // ADR-127 deleted the helper-gate cell that stood here. The `nuget_list_*` / `nuget_map_*` /
   // `nuget_set_*` exports now ship unconditionally from the `:nuget-runtime` klib, so there is no
   // gate left to miss a route and no declaration of them in the generated file.
-  // `scripts/verify-runtime-exports.sh` checks the 66 names on the linked binary instead.
+  // `scripts/verify-runtime-exports.sh` checks the 67 names on the linked binary instead.
 
   /**
    * The refusal arm ADR-114 keeps: a generic parameter that is not a supported collection must

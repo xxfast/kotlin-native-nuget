@@ -269,7 +269,8 @@ class Tier1LegacyRouteHandleParameterTest {
 
   /**
    * The ownership claim, from the generator's side. The dereference is a prelude local emitted
-   * **before** `scope.launch`, so the coroutine captures a strong Kotlin reference and a consumer
+   * **before** the launch -- `collectForCSharp(` since ADR-128 moved the launch shape into the
+   * runtime helper -- so the coroutine captures a strong Kotlin reference and a consumer
    * disposing its C# wrapper mid-flow cannot invalidate what the coroutine is still reading.
    * Inlining `observation.asStableRef<Q>().get()` at the call site would evaluate it inside
    * `launch`, i.e. after the export returned: ADR-114's own lifetime hazard, from the other side.
@@ -282,7 +283,7 @@ class Tier1LegacyRouteHandleParameterTest {
     val deref: Int = body.indexOf(
       "val observationArg = observation.asStableRef<tier1.watchtower.Observation.Alive>().get()"
     )
-    val launch: Int = body.indexOf("scope.launch")
+    val launch: Int = body.indexOf("collectForCSharp(")
 
     assertTrue(
       deref >= 0,
@@ -290,7 +291,7 @@ class Tier1LegacyRouteHandleParameterTest {
     )
     assertTrue(
       launch >= 0 && deref < launch,
-      "expected the dereference BEFORE scope.launch (ADR-122: the coroutine must capture a " +
+      "expected the dereference BEFORE collectForCSharp( (ADR-122: the coroutine must capture a " +
           "strong Kotlin reference, not the raw handle); got: $body",
     )
     assertTrue(

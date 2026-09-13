@@ -1269,13 +1269,30 @@ public KotlinStateFlow<int> Tally(IReadOnlyList<string> kinds, global::TestLibra
 }
 ```
 
-The Kotlin export declares the ABI slot as `COpaquePointer`, exactly like a collection parameter, and dereferences it into a local **before** `scope.launch`:
+The Kotlin export declares the ABI slot as `COpaquePointer`, exactly like a collection parameter, and dereferences it into a local **before** the `collectForCSharp` call, which owns the actual coroutine launch ([ADR-128](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/128-launch-for-csharp-runtime-helper.md)):
 
 ```kotlin
 val observationArg = observation.asStableRef<io.github.xxfast.kotlin.native.nuget.test.cat.Observation.Alive>().get()
+return collectForCSharp(scope, onNextPtr, onCompletePtr, onErrorPtr, userData) { emit ->
+  obj.watch(observationArg).collect { value ->
+    val itemRef = NugetHandles.retain(value as Any)
+    emit(itemRef)
+  }
+}
 ```
 
 so the coroutine captures a strong Kotlin reference. A C# consumer disposing its argument wrapper mid-flow cannot invalidate what the coroutine is still reading.
+
+The suspend route's own equivalent, `launchForCSharp`, owns the same launch/cancel/error shape for a `suspend fun`'s result, dereferencing the handle parameter before the call in exactly the same way:
+
+```kotlin
+val observationArg = observation.asStableRef<io.github.xxfast.kotlin.native.nuget.test.cat.Observation.Alive>().get()
+return launchForCSharp(scope, callbackPtr, userData) {
+  val result = obj.log(observationArg)
+  val resultRef = NugetHandles.retain(result)
+  resultRef
+}
+```
 
 ### Using it from C# {id="handle-parameter-using-it-from-c"}
 

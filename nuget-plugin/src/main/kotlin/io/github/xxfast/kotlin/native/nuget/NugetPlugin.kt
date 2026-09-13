@@ -222,7 +222,7 @@ class NugetPlugin : Plugin<Project> {
       val processorDep: Any = project.findProject(":nuget-processor")
         ?: "io.github.xxfast:nuget-processor:$PLUGIN_VERSION"
 
-      // ADR-127: the fixed 66-name `nuget_*` ABI ships as a klib instead of being regenerated
+      // ADR-127: the fixed 67-name `nuget_*` ABI ships as a klib instead of being regenerated
       // into every consumer. Resolved exactly as the processor is: the in-repo project when this
       // is the composite build, the published coordinate at this plugin's own version otherwise,
       // so the generator and the runtime cannot skew on the supported path.

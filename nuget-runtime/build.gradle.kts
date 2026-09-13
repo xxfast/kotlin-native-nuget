@@ -26,8 +26,50 @@ kotlin {
     macosX64Main.get().dependsOn(nativeMain)
     linuxX64Main.get().dependsOn(nativeMain)
     mingwX64Main.get().dependsOn(nativeMain)
+
+    // ADR-128: `launchForCSharp` / `collectForCSharp` are ordinary Kotlin/Native code with no
+    // `@CName`, so they can be driven in-process. KGP host-gates the `<target>Test` tasks, so
+    // `allTests` runs `mingwX64Test` on Windows and `macosArm64Test` on an Apple Silicon Mac.
+    val nativeTest by creating {
+      dependsOn(commonTest.get())
+      dependencies {
+        implementation(libs.kotlin.test)
+      }
+    }
+    macosArm64Test.get().dependsOn(nativeTest)
+    macosX64Test.get().dependsOn(nativeTest)
+    linuxX64Test.get().dependsOn(nativeTest)
+    mingwX64Test.get().dependsOn(nativeTest)
   }
 }
+
+// ADR-129: `NUGET_RUNTIME_VERSION` is generated, never hand-written, so the `nuget_runtime_version`
+// export reports the version this klib was actually built at rather than a copy that can drift.
+// Mirrors `nuget-plugin/build.gradle.kts`'s `generateVersionConstant`; `internal` because only the
+// export reads it, so ADR-127's "every public declaration is `@NugetRuntimeApi`" rule is untouched.
+val generateRuntimeVersionConstant: TaskProvider<Task> =
+  tasks.register("generateRuntimeVersionConstant") {
+    val outputDir: Provider<Directory> =
+      layout.buildDirectory.dir("generated/source/version/nativeMain")
+    val runtimeVersion: String = version.toString()
+    inputs.property("runtimeVersion", runtimeVersion)
+    outputs.dir(outputDir)
+
+    doLast {
+      val packageDir: File =
+        outputDir.get().asFile.resolve("io/github/xxfast/kotlin/native/nuget/runtime")
+      packageDir.mkdirs()
+      packageDir.resolve("NugetRuntimeVersion.kt").writeText(
+        """
+      package io.github.xxfast.kotlin.native.nuget.runtime
+
+      internal const val NUGET_RUNTIME_VERSION: String = "$runtimeVersion"
+      """.trimIndent() + "\n",
+      )
+    }
+  }
+
+kotlin.sourceSets.named("nativeMain") { kotlin.srcDir(generateRuntimeVersionConstant) }
 
 mavenPublishing {
   publishToMavenCentral()

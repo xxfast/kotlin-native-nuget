@@ -45,6 +45,7 @@ class CirRenderer {
         is CirScopeHelper -> renderScopeHelper(declaration)
         is CirJobHelper -> renderJobHelper(declaration)
         is CirErrorHelper -> renderErrorHelper(declaration)
+        is CirRuntimeHelper -> renderRuntimeHelper(declaration)
         is CirFlowHelper -> renderFlowHelper(declaration)
         is CirStateFlowHandleHelper -> renderStateFlowHandleHelper(declaration)
         is CirCallbackDelegateHelper -> renderCallbackDelegateHelper(declaration)

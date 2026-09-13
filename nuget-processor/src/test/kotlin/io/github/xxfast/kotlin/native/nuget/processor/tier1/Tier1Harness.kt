@@ -272,7 +272,12 @@ internal object Tier1Harness {
     val sourceFiles: List<File> = buildList {
       addAll(fixtureFiles)
       add(compileSourceDir.resolve("CNameExports.kt").apply { writeText(generatedCNameExports) })
-      (Tier1CinteropStub.files + Tier1RuntimeStub.files).forEach { (name, content) ->
+      val runtimeStubFiles: List<Pair<String, String>> =
+        Tier1RuntimeStub.files +
+            // ADR-128: the launch helpers name `CoroutineScope`, so they only compile when
+            // coroutines are on the classpath (`Tier1CoroutineFreeModuleTest` runs without them).
+            if (coroutinesOnCompileClasspath) Tier1RuntimeStub.coroutineFiles else emptyList()
+      (Tier1CinteropStub.files + runtimeStubFiles).forEach { (name, content) ->
         add(compileSourceDir.resolve(name).apply { writeText(content) })
       }
     }

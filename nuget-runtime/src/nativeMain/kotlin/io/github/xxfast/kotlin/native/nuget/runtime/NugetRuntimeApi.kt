@@ -3,7 +3,7 @@ package io.github.xxfast.kotlin.native.nuget.runtime
 /**
  * ADR-127: the opt-in marker every public declaration in this module carries.
  *
- * The stability commitment is on the **C names**: the 66 `nuget_*` exports are the versioned ABI
+ * The stability commitment is on the **C names**: the 67 `nuget_*` exports are the versioned ABI
  * a generated `Interop.cs` P/Invokes. The Kotlin names are for the code generator of the same
  * version, so calling them from hand-written Kotlin is opting into a surface that can change with
  * the generator. `@PublishedApi internal` cannot express this: it admits calls only from public
@@ -12,7 +12,7 @@ package io.github.xxfast.kotlin.native.nuget.runtime
 @RequiresOptIn(
   level = RequiresOptIn.Level.ERROR,
   message = "This is the nuget-runtime's generator-facing surface. It is stable for the code " +
-    "generator of the same version, not for hand-written code.",
+      "generator of the same version, not for hand-written code.",
 )
 @Retention(AnnotationRetention.BINARY)
 public annotation class NugetRuntimeApi

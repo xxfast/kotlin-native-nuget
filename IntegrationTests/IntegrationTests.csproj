@@ -32,4 +32,11 @@
     <Using Include="Xunit" />
   </ItemGroup>
 
+  <!-- ADR-129: the nuget-runtime version the fixture package was built against, surfaced to the
+       tests as [assembly: AssemblyMetadata("NugetRuntimeVersion", ...)]. $(NugetRuntimeVersion)
+       comes from build/FixtureVersions.props, which the Gradle pack writes. -->
+  <ItemGroup>
+    <AssemblyMetadata Include="NugetRuntimeVersion" Value="$(NugetRuntimeVersion)" />
+  </ItemGroup>
+
 </Project>
