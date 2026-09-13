@@ -387,4 +387,149 @@ class Tier1NestedTypesTest {
     assertContains(result.generated, "export_owner_get_label")
     assertContains(result.generated, "export_plain_get_tag")
   }
+
+  /**
+   * ADR-133 amendment, single receiver: an extension whose **receiver is a nested type** binds
+   * under the enclosing chain, like every member of that type already does.
+   *
+   * This is the discriminating cell, because it is red on its own: the member route puts
+   * `Nested.describe()` behind `owner_nested_describe`, while an extension on the same receiver
+   * takes `receiver.simpleName.lowercase()` and lands behind `nested_summarize` in a class called
+   * `NestedExtensions`. Nothing fails today for one owner -- it simply binds under a name that
+   * belongs to whichever `Nested` got there first, which is why the collision cell below exists.
+   *
+   * The C# receiver *type* is already spelled `Owner.Nested` (it goes through the same nested
+   * name mapping as any other position), so a fix that only renames the class must keep that
+   * spelling: it is asserted here rather than assumed.
+   *
+   * Oreo takes the high perch; the extension agrees with him.
+   */
+  @Test
+  fun `an extension on a nested receiver binds under the owner chain`() {
+    val result = Tier1Harness.run(
+      """
+      package tier1.nestedextension
+
+      class Owner(val name: String) {
+        class Nested(val height: Int) {
+          fun describe(): String = "nested@" + height
+        }
+
+        fun makeNested(height: Int): Nested = Nested(height)
+      }
+
+      fun Owner.Nested.summarize(): String = "nested@" + height + " (ext)"
+      val Owner.Nested.isHigh: Boolean get() = height > 5
+      """.trimIndent(),
+      fileName = "NestedExtension.kt",
+    )
+
+    assertTrue(result.compiledClean, "expected no broken source; got: ${result.compileErrors}")
+    val kotlin: String = result.generated
+    listOf(
+      "@CName(\"owner_nested_summarize\")",
+      "@CName(\"owner_nested_get_isHigh\")",
+      // The control: the member route on the same receiver, which already chains.
+      "@CName(\"owner_nested_describe\")",
+    ).forEach { export ->
+      assertContains(kotlin, export, message = "expected $export; generated=$kotlin")
+    }
+    assertFalse(
+      kotlin.contains("@CName(\"nested_summarize\")") ||
+          kotlin.contains("@CName(\"nested_get_isHigh\")"),
+      "expected no unchained extension entry point (ADR-117 collision risk); generated=$kotlin",
+    )
+
+    val csharp: String = result.generatedCSharp
+    // CS1109 forbids nesting an extension class, so the chain travels into the *name*, exactly as
+    // ADR-133 already does for a nested enum's `OwnerKindExtensions`.
+    assertContains(csharp, "public static partial class OwnerNestedExtensions")
+    assertFalse(
+      csharp.contains("class NestedExtensions"),
+      "expected no bare-simple-name extension class; csharp=" +
+          "${csharp.lines().filter { it.contains("Extensions") }}",
+    )
+    listOf(
+      Regex("""Summarize\(this global::[\w.]*Owner\.Nested receiver\)"""),
+      // ADR-013 spells an extension property as `Get{Name}`.
+      Regex("""GetIsHigh\(this global::[\w.]*Owner\.Nested receiver\)"""),
+    ).forEach { signature ->
+      assertTrue(
+        signature.containsMatchIn(csharp),
+        "expected a signature matching $signature; csharp=" +
+            "${csharp.lines().filter { it.contains("Summarize") || it.contains("IsHigh") }}",
+      )
+    }
+  }
+
+  /**
+   * ADR-133 amendment, two owners: the reason the unchained name is a bug and not a naming taste.
+   *
+   * `Coop.Inner` and `Roost.Inner` are distinct C# types, and their members already export
+   * distinctly (`coop_inner_get_depth` / `roost_inner_get_depth`). Their *extensions* both derive
+   * `inner_describe` today.
+   *
+   * Measured, 2026-09-13, and **not** what this cell was written to expect: the round does not
+   * fail with `ERROR_C_ENTRY_POINT_COLLISION`. The duplicate is absorbed silently by the numbering
+   * suffix, so the two extensions ship as `@CName("inner_describe")` and
+   * `@CName("inner_describe_2")` -- which of the two owners gets the unsuffixed symbol is not
+   * pinned here (presumably visit order), i.e. the published ABI of an untouched declaration can
+   * move when an unrelated type is added elsewhere. That is a stronger argument for chaining than
+   * the predicted hard error was, and it is why the collision assertion below is kept even though
+   * it is green today:
+   * after the fix it must *stay* green for the right reason (no duplicate to absorb), not because
+   * the suffix hid one.
+   *
+   * After the chain is applied each takes its own symbol and its own `{Chain}Extensions` class.
+   *
+   * Functions only, no extension property: two same-package nested `Inner`s sharing an extension
+   * *property* name trip a different guard (the ADR-074 duplicate-symbol `require` in the property
+   * catalog), which would make this cell red for a second reason and hide the first.
+   *
+   * Mylo's coop and Oreo's roost each get their own `describe`.
+   */
+  @Test
+  fun `two owners' nested receivers take distinct extension symbols and classes`() {
+    val result = Tier1Harness.run(
+      """
+      package tier1.nestedextcollision
+
+      class Coop(val name: String) {
+        class Inner(val depth: Int)
+      }
+
+      class Roost(val name: String) {
+        class Inner(val depth: Int)
+      }
+
+      fun Coop.Inner.describe(): String = "coop@" + depth
+      fun Roost.Inner.describe(): String = "roost@" + depth
+      """.trimIndent(),
+      fileName = "NestedExtensionCollision.kt",
+    )
+
+    assertFalse(
+      result.kspErrors.any {
+        it.contains(ForwardDiagnosticKind.ERROR_C_ENTRY_POINT_COLLISION.name)
+      },
+      "two nested receivers under different owners must not claim one C entry point; " +
+          "kspErrors=${result.kspErrors}",
+    )
+    val kotlin: String = result.generated
+    listOf(
+      "@CName(\"coop_inner_describe\")",
+      "@CName(\"roost_inner_describe\")",
+    ).forEach { export ->
+      assertContains(kotlin, export, message = "expected $export; generated=$kotlin")
+    }
+
+    val csharp: String = result.generatedCSharp
+    assertContains(csharp, "public static partial class CoopInnerExtensions")
+    assertContains(csharp, "public static partial class RoostInnerExtensions")
+    assertFalse(
+      csharp.contains("class InnerExtensions"),
+      "expected no shared bare-simple-name extension class; csharp=" +
+          "${csharp.lines().filter { it.contains("Extensions") }}",
+    )
+  }
 }

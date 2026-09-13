@@ -126,6 +126,37 @@ public class NestedTypesTests
         Assert.Equal("outdoor", Aviary.Kind.Outdoor.Label());
     }
 
+    // --- Extensions ON a nested receiver: the owner chain, not the bare simple name ---
+
+    [Fact]
+    public void ExtensionOnANestedReceiver_BindsUnderTheOwnerChain()
+    {
+        // ADR-133 amendment. The member route already chains (`Perch.describe()` exports as
+        // `aviary_perch_describe`); an extension on the same receiver still binds under the bare
+        // simple name today, so it lands in `PerchExtensions` behind `perch_summarize`. That is
+        // the symbol a top-level `Perch`, or another owner's nested `Perch`, also claims. Measured
+        // 2026-09-13: that duplicate is absorbed silently by the numbering suffix
+        // (`inner_describe` + `inner_describe_2`), not reported as ERROR_C_ENTRY_POINT_COLLISION,
+        // so a second owner can move an already-published symbol. Tier1NestedTypesTest pins it.
+        //
+        // The calls resolve by namespace, not by class name, so the two value assertions pass
+        // either way: they are here so a fix that renames the class without keeping the extension
+        // callable (or loses the ADR-013 `Get`-prefixed property half) is still caught. The
+        // class-name facts below are the discriminator.
+        using var aviary = new Aviary("Oreo");
+        using var perch = aviary.PerchAt(9);
+
+        Assert.Equal("perch@9 (ext)", perch.Summarize());
+        Assert.True(perch.GetIsHigh());
+
+        Assembly assembly = typeof(Aviary).Assembly;
+        Assert.NotNull(assembly.GetType("TestLibrary.Nested.AviaryPerchExtensions"));
+        Assert.Null(assembly.GetType("TestLibrary.Nested.PerchExtensions"));
+        // CS1109 again: the chain-named class is at namespace level, never nested in its owner.
+        Assert.Null(typeof(Aviary).GetNestedType("PerchExtensions"));
+        Assert.Null(typeof(Aviary).GetNestedType("AviaryPerchExtensions"));
+    }
+
     // --- Nested interface: implemented from C#, and returned from Kotlin ---
 
     private sealed class CountingKeeper : Aviary.IKeeper

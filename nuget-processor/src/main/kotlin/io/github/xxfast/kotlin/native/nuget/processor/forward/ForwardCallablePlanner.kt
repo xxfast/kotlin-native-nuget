@@ -24,6 +24,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.exports.hasLegacyLambdaPar
 import io.github.xxfast.kotlin.native.nuget.processor.bridgeParameterName
 import io.github.xxfast.kotlin.native.nuget.processor.toCName
 import io.github.xxfast.kotlin.native.nuget.processor.cir.nativePrefix
+import io.github.xxfast.kotlin.native.nuget.processor.cir.nestedCsName
 
 /**
  * Why the planner declined to build an ordinary synchronous plan for a callable.
@@ -655,7 +656,9 @@ internal class ForwardCallablePlanner(
       }
       val extensionOccurrences: MutableMap<String, Int> = mutableMapOf()
       val extensions: List<ForwardCallableCatalogEntry> = extensionFunctions.map { function ->
-        extensionEntry(function, overloadSuffix(extensionOccurrences, function))
+        extensionEntry(
+          function, overloadSuffix(extensionOccurrences, function, function.extensionOwnerChain()),
+        )
       }
       addAll(extensions)
       extensionFunctions.forEachIndexed { index, function ->
@@ -663,7 +666,9 @@ internal class ForwardCallablePlanner(
         repeat(function.parameters.map { it.hasDefault }.trailingCount()) { omitted ->
           add(
             extensionEntry(
-              function, overloadSuffix(extensionOccurrences, function), omitted = omitted + 1,
+              function,
+              overloadSuffix(extensionOccurrences, function, function.extensionOwnerChain()),
+              omitted = omitted + 1,
             ).synthesized()
           )
         }
@@ -1601,8 +1606,18 @@ internal class ForwardCallablePlanner(
   private fun overloadSuffix(
     occurrences: MutableMap<String, Int>,
     function: KSFunctionDeclaration,
+    // ADR-133 amendment: the counter scope beyond the package -- `""` everywhere except an
+    // extension, where it is the receiver's enclosing-owner chain ([extensionOwnerChain]).
+    // `Coop.Inner.describe` and `Roost.Inner.describe` export under different prefixes
+    // (`coop_inner_` / `roost_inner_`), so they are not namesakes and must not share a counter, or
+    // the second takes a gratuitous `_2` no collision required. The chain deliberately stops short
+    // of the receiver itself, which keeps ADR-095 receiver-agnostic numbering for same-owner
+    // receivers exactly as shipped (`Mitten.pat`, `Mitten.pat(style)` and `Tomcat.pat` stay
+    // `mitten_pat` / `mitten_pat_2` / `tomcat_pat_3`).
+    scope: String = "",
   ): String {
-    val key: String = "${function.packageName.asString()}.${function.simpleName.asString()}"
+    val key: String =
+      "${function.packageName.asString()}.$scope.${function.simpleName.asString()}"
     val occurrence: Int = occurrences.merge(key, 1, Int::plus)!!
     return if (occurrence == 1) "" else "_$occurrence"
   }
@@ -1946,6 +1961,19 @@ internal class ForwardCallablePlanner(
     return ForwardCallableCatalogEntry.Planned(plan, node = node)
   }
 
+  /**
+   * ADR-133 amendment: the enclosing-owner chain of an extension receiver -- the receiver's own
+   * declaring classes, outermost first (`Aviary` for `Aviary.Perch`, `Owner.Middle` for
+   * `Owner.Middle.Inner`), and `""` for a top-level receiver, which is what keeps every shipped
+   * extension symbol and overload number byte-identical.
+   *
+   * Deliberately NOT the receiver itself: it scopes the ADR-095 overload counter, which stays
+   * receiver-agnostic within one owner by design.
+   */
+  private fun KSFunctionDeclaration.extensionOwnerChain(): String =
+    ((extensionReceiver?.resolve()?.declaration as? KSClassDeclaration)?.parentDeclaration
+      as? KSClassDeclaration)?.nestedCsName() ?: ""
+
   private fun extensionEntry(
     function: KSFunctionDeclaration,
     suffix: String,
@@ -1959,7 +1987,26 @@ internal class ForwardCallablePlanner(
     }.resolve()
     val receiverType: BridgeType = classifier.classify(receiver)
     val functionName: String = function.simpleName.asString()
-    val symbol: String = "${function.packageName.asString()}.$functionName$suffix"
+    // ADR-133 amendment: the whole enclosing chain of the receiver, so an extension on
+    // `Aviary.Perch` binds under `aviary_perch_` exactly as that type's own members already do.
+    // `nativePrefix()` is byte-identical to the `simpleName.lowercase()` it replaces for a
+    // top-level receiver; the elvis covers a receiver whose declaration is not a class (a typealias
+    // keeps the alias's own name, as shipped -- the C# class name spells the expanded type, a
+    // pre-existing asymmetry this change deliberately does not move).
+    val receiverPrefix: String = (receiver.declaration as? KSClassDeclaration)?.nativePrefix()
+      ?: receiver.declaration.simpleName.asString().lowercase()
+    // ADR-095 keeps an extension symbol receiver-agnostic (the overload counter is per package and
+    // name, not per receiver). ADR-133 amendment: the receiver's enclosing-owner chain joins it,
+    // because that chain now scopes the counter, so two nested receivers under different owners can
+    // both take the unsuffixed name -- and a symbol is what `droppedCallables` and the diagnostics
+    // de-duplicate on. Empty for a top-level receiver, so every shipped extension symbol is
+    // unchanged.
+    val ownerChain: String = function.extensionOwnerChain()
+    val symbol: String = if (ownerChain.isEmpty()) {
+      "${function.packageName.asString()}.$functionName$suffix"
+    } else {
+      "${function.packageName.asString()}.$ownerChain.$functionName$suffix"
+    }
 
     // ADR-064 cell 23 / BUG-010: a generic + suspend + inline + reified extension returning
     // Result<T> has no legacy route at all — inline+reified erases at the C ABI and suspend
@@ -2004,8 +2051,7 @@ internal class ForwardCallablePlanner(
     return planOrSkip(
       symbol = symbol,
       publicName = toCName(functionName).replaceFirstChar { it.uppercase() },
-      exportName =
-        "${receiver.declaration.simpleName.asString().lowercase()}_${toCName(functionName)}$suffix",
+      exportName = "${receiverPrefix}_${toCName(functionName)}$suffix",
       // ADR-105 amendment: the receiver gets the same sealed rewrite scope (d) applies to every
       // declared parameter, here rather than in `planOrSkip`, because the extension route is the
       // only one that can hand it a protocol receiver (every other route builds a bare

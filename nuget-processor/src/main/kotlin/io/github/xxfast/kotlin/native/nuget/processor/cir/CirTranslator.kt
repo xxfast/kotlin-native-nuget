@@ -532,17 +532,27 @@ internal fun translate(
       namespaceOf(declaring.packageName.asString())
     }
 
+  // ADR-133 amendment: an extension receiver keys on its whole enclosing chain (`Aviary.Perch`),
+  // which is both the class-name stem and -- spelled identically by `ForwardPropertyPlanner` --
+  // the middle of an extension property's plan symbol. A top-level receiver keys on its own simple
+  // name exactly as before.
+  fun KSDeclaration.extensionReceiverKey(): String =
+    (this as? KSClassDeclaration)?.nestedCsName() ?: simpleName.asString()
+
   // The function and property loops below MUST key identically, or one package's extension
   // functions and its extension properties on the same receiver land in two different classes.
   val extensionsByReceiver: Map<Pair<String, String>, List<KSFunctionDeclaration>> =
     extensionFunctions.groupBy { func ->
       val receiver: KSDeclaration = func.extensionReceiver!!.resolve().expandAliases().declaration
-      extensionNamespace(receiver, func) to receiver.simpleName.asString()
+      extensionNamespace(receiver, func) to receiver.extensionReceiverKey()
     }
 
   extensionsByReceiver.forEach { (key, funcs) ->
     val (namespace, receiverName) = key
-    val className: String = "${receiverName}Extensions"
+    // ADR-133 amendment: CS1109 forbids nesting an extension class, so a nested receiver's
+    // chain travels into the *name* instead, exactly as a nested enum's `AviaryKindExtensions`
+    // already does (`CirEnumRenderer`). Unchanged for a top-level receiver, whose key has no dot.
+    val className: String = "${receiverName.replace(".", "")}Extensions"
 
     val members: List<CirMember> = funcs.flatMap { func ->
       // ADR-095: node identity, same reason as the top-level walk above. Extension plan symbols are
@@ -579,12 +589,15 @@ internal fun translate(
   val extensionPropsByReceiver: Map<Pair<String, String>, List<KSPropertyDeclaration>> =
     extensionProperties.groupBy { prop ->
       val receiver: KSDeclaration = prop.extensionReceiver!!.resolve().expandAliases().declaration
-      extensionNamespace(receiver, prop) to receiver.simpleName.asString()
+      extensionNamespace(receiver, prop) to receiver.extensionReceiverKey()
     }
 
   extensionPropsByReceiver.forEach { (key, props) ->
     val (namespace, receiverName) = key
-    val className: String = "${receiverName}Extensions"
+    // ADR-133 amendment: CS1109 forbids nesting an extension class, so a nested receiver's
+    // chain travels into the *name* instead, exactly as a nested enum's `AviaryKindExtensions`
+    // already does (`CirEnumRenderer`). Unchanged for a top-level receiver, whose key has no dot.
+    val className: String = "${receiverName.replace(".", "")}Extensions"
 
     val members: List<CirMember> = props.flatMap { prop ->
       val symbol: String =

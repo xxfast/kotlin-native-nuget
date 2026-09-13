@@ -1343,8 +1343,7 @@ method, a `Kind` property, or a `Keeper()` method beside the nested types `Perch
   gets no synthesized overload. See [expect/actual declarations](expect-actual.md#function-default-parameters-on-a-top-level-expect-function).
 - Nested types: an `inner class`, a generic, `enum class`, `interface`, or sealed base/arm owner,
   and a nested `value class` regardless of its owner, stay a named `SKIPPED_NESTED_DECLARATION`
-  skip. An extension function or property on a nested type still spells the bare simple name and
-  fails as a forward ABI mismatch rather than binding; see [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md).
+  skip.
 
 <seealso>
     <category ref="related">

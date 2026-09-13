@@ -133,3 +133,30 @@ object Registry {
   /** Control. */
   fun label(): String = "registry"
 }
+
+/**
+ * ADR-133 amendment: an extension whose **receiver is a nested type** must bind under the owner
+ * chain, exactly as the member route already does.
+ *
+ * [Aviary.Perch.summarize] is the member route's twin: `Perch.describe()` exports as
+ * `aviary_perch_describe`, so this one has to export as `aviary_perch_summarize` and land in the
+ * chain-named `AviaryPerchExtensions`, not the bare `perch_summarize` / `PerchExtensions` the
+ * unchained name produces today. The bare name is not merely inconsistent: it is the same C symbol
+ * a top-level `Perch`, or any other owner's nested `Perch`, would claim. Measured 2026-09-13: that
+ * duplicate does **not** raise `ERROR_C_ENTRY_POINT_COLLISION`; it is absorbed silently by the
+ * numbering suffix, so a second owner's extension ships as `inner_describe_2` and one of the two
+ * owners' published symbols moves when the other is added. `Tier1NestedTypesTest` pins that.
+ *
+ * Fresh names on purpose: `Perch` already has a member `describe()`, and an extension called
+ * `describe` would be shadowed in Kotlin *and* collide on `aviary_perch_describe` once the chain
+ * is applied, so the cell would go red for the wrong reason.
+ *
+ * [Aviary.Perch.isHigh] is the property half: ADR-013 spells an extension property as
+ * `GetIsHigh(this Aviary.Perch)`, and its export must chain to `aviary_perch_get_isHigh`.
+ *
+ * Oreo only respects a perch above five; Mylo is content at ground level.
+ */
+fun Aviary.Perch.summarize(): String = "perch@$height (ext)"
+
+/** The extension-property half of the same rule (ADR-013: `GetIsHigh`). */
+val Aviary.Perch.isHigh: Boolean get() = height > 5

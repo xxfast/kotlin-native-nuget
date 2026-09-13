@@ -4,6 +4,11 @@
 
 Accepted (2026-09-13)
 
+> **Amended below (2026-09-13).** An extension function or property whose receiver is a
+> nested type now binds under the receiver's own owner chain, the same way a member of that
+> receiver already does, closing the gap this ADR's Consequences and the ROADMAP had left open. See
+> "Amendment (2026-09-13): extension receivers join the owner chain".
+
 ## Context
 
 A public Kotlin `class`, `object`, `interface`, or `enum class` declared inside another class was not
@@ -199,3 +204,48 @@ shape (`Box<T>`, `enum class Season`, `interface Cage`, `inner class Guest` unde
    PascalCased member of its owner) are genuine C# compile errors: not spiked against `dotnet` in
    this reconciliation, Kotlin permits both shapes so a wrong inference fails loud in the consumer's
    build rather than silently.
+
+## Amendment (2026-09-13): extension receivers join the owner chain
+
+The Consequences section above named the gap: an extension function or property whose receiver is
+a nested type still spelled the bare simple name, unlike a member of that same receiver, which
+already chained through `nativePrefix()`/`nestedCsName()`. `fun Aviary.Perch.summarize()` exported
+as `perch_summarize` into a bare `PerchExtensions`, the same C symbol and class name a top-level
+`Perch`, or another owner's nested `Perch`, would also claim.
+
+**Measured, not the predicted failure mode.** The ROADMAP line this amendment closes predicted the
+collision "fails loudly as a forward ABI mismatch." It does not: the duplicate is absorbed silently
+by the pre-existing ADR-095 overload-numbering suffix, so the second owner's extension ships as
+`inner_describe_2` and which of the two owners keeps the unsuffixed `inner_describe` is unpinned
+(presumably visit order). An untouched declaration's published ABI can move when an unrelated type
+is added elsewhere, with no diagnostic at all. That is the actual defect, and a stronger argument
+for chaining than a hard error would have been.
+
+**Fix.** An extension receiver now keys on `nestedCsName()` (a class) instead of the bare
+`simpleName`, at the three sites that must all spell the plan symbol identically (`CirTranslator`'s
+function and property receiver grouping, `ForwardPropertyPlanner`, and `ExtensionPropertyExports`,
+the third site the original draft undercounted as two): the plan/export/`@CName` prefix now runs
+through `nativePrefix()` the same way a member's does (`aviary_perch_summarize`,
+`aviary_perch_get_isHigh`). The generated C# extension class is chain-named at namespace level
+(`AviaryPerchExtensions`), never nested in its owner, since CS1109 still forbids nesting an
+extension class, the same rule the enum extension class already used. Both are byte-identical to
+the pre-existing shape for a top-level receiver, whose chain is empty.
+
+**The ADR-095 overload counter's scope grows by exactly the receiver's *owner* chain, not the
+receiver itself.** `Coop.Inner.describe` and `Roost.Inner.describe` export under different prefixes
+now (`coop_inner_describe`/`roost_inner_describe`) and so must not share one counter, or the second
+takes a gratuitous `_2` no collision requires; the scope stops short of the receiver itself, so a
+same-owner receiver's own overloads keep numbering exactly as shipped (`Mitten.pat`,
+`Mitten.pat(style)`, `Tomcat.pat` stay `mitten_pat`/`mitten_pat_2`/`tomcat_pat_3`).
+`ForwardAbiContract.hint` was reworded from "derived from the unqualified simple name" to "derived
+from the declaration's own enclosing chain of simple names, never its package" to match.
+
+**Residual, not fixed here.** A typealias extension receiver still keeps the alias's own lowercased
+name in the C entry point while the C# extension class spells the expanded type, the pre-existing
+asymmetry this amendment does not move; harmless while every nested type is reachable without going
+through an alias, tracked on the ROADMAP.
+
+Tests: `NestedTypesTests.ExtensionOnANestedReceiver_BindsUnderTheOwnerChain` (xUnit); Tier 1 gains a
+single-receiver cell and a two-owner cell (`Coop.Inner`/`Roost.Inner`) pinning both the chained
+symbols and the distinct `{Chain}Extensions` classes. No new handle kind, no new marshalling.
+Verify: green, 1788 / 0 / 0, 35.
