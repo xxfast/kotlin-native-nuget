@@ -572,9 +572,9 @@ never brought into the export scope. It skips with the existing
 ```
 [nuget:SKIPPED_UNEXPORTED_DEPENDENCY_TYPE] Skipping io.github.xxfast.kotlin.native.nuget.test.Newsroom.airwave:
     its type `dev.other.core.Airwave` is declared in a dependency module outside the export scope. add
-    include("io.github.xxfast.kotlin.native.nuget.test", "dev.other.core") to nuget { publish { } } (an
-    explicit include replaces the rootPackage default, so keep your own packages listed), or expose a type
-    from an in-scope package instead
+    include("io.github.xxfast.kotlin.native.nuget.test", "dev.other.admitted", "dev.other.core") to
+    nuget { publish { } } (an explicit include replaces the rootPackage default, so keep your own packages
+    listed), or expose a type from an in-scope package instead
     at Newsroom.kt:117
 ```
 

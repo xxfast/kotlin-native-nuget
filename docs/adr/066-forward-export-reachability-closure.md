@@ -429,7 +429,7 @@ the *root* callable's own return/parameter type is unexportable does the callabl
 
 An admitted dependency type keeps its **Kotlin package** and goes through the existing
 `mapPackageToNamespace(pkg, rootPackage, rootNamespace)` unchanged. **Verified in source**
-(`CirTypeMapping.kt:111-133`):
+(`CirTypeMapping.kt:188-215`):
 
 - package under `rootPackage` → relative path, PascalCased:
   `…nuget.test.models` under root `…nuget.test` with `packageId = TestLibrary` → `TestLibrary.Models`.
@@ -441,6 +441,52 @@ sub-namespace, the way Swift Export gives it its own module name) rather than fo
 the exporting module's short name, which would collide the moment two dependency modules declare a
 `State`. Everything still lands under the assembly's root namespace because it is **one** assembly.
 A Swift-Export-style `flattenPackage` alias is noted as future work, not v1.
+
+> **Amendment (2026-09-13, the out-of-root namespace rule, decided):** this section documented two
+> mappings but left open whether the root-namespace prefix should apply to a package outside
+> `rootPackage` at all, since the root-strip step is a no-op for it. Decided: **it does.** The rule,
+> now the contract:
+>
+> | Kotlin package | C# namespace |
+> |---|---|
+> | `rootPackage` itself | `<packageId>` |
+> | under `rootPackage` (`<root>.a.b`) | `<packageId>.A.B` |
+> | outside `rootPackage` (`x.y.z`) | `<packageId>.X.Y.Z`, the **full** package PascalCased |
+> | any package, `rootPackage` unset | `<packageId>` |
+>
+> "Outside" is the same segment-bounded test admission already uses (`pkg == root ||
+> pkg.startsWith("$root.")`, `PackageScope.covers`, `NugetProcessor.isExported`). The naming branch
+> (`CirTypeMapping.kt:195`) used an unbounded `startsWith(rootPackage)` instead, so a package
+> admission calls outside (`com.examples.x` under root `com.example`, admitted only by an explicit
+> `include`) was named as if inside, with a mangled segment (`Clinic.S.X`). Verified by a unit cell.
+> The branch now uses the segment-bounded test inline; that is the only output this amendment
+> changes.
+>
+> **Why the prefix stays (option i, chosen).** One NuGet package is one assembly with one root
+> namespace, `packageId`, unique on the feed; every namespace under it is collision-free against
+> every other assembly a consumer references. A bare `Dev.Other.Core` namespace inside
+> `TestLibrary.dll` is not: it can coincide with a real `Dev.Other.Core` namespace from an unrelated
+> package, and C# offers nothing short of extern aliases to separate them. This matches the .NET
+> naming guideline of prefixing namespaces with the product that owns the assembly, and it is what
+> the two Kotlin exporters with a module-level root do: Swift Export keeps a package outside
+> `flattenPackage` at its full nested path inside the same Swift module, and ObjC Export gives every
+> class the framework prefix, exported dependency types included. It is also the only rule that
+> degrades continuously into the `rootPackage`-unset case, where every package already collapses
+> onto `<packageId>`.
+>
+> **Option (ii), a bare PascalCased package (`Dev.Other.Core`), rejected.** It would change the
+> compiled-against namespace for any existing consumer that sets `rootPackage` with an explicit
+> `include(<own>, <other>)`, with no diagnostic, and it has no coherent answer for `rootPackage`
+> unset (a bare package would spray every package into its own top-level namespace instead of
+> collapsing them). It also departs from both exporters cited above.
+>
+> **Option (iii), a configurable alias mapping, deferred.** Unchanged from this section's original
+> text: additive on top of (i), not an alternative, since an un-aliased out-of-root package still
+> needs the default this amendment fixes.
+>
+> A human can revert to (ii) by editing the third table row and `CirTypeMapping.kt`'s
+> `mapPackageToNamespace`. See ROADMAP.md and FEATURES.md for the fixture and mapping-table update
+> this amendment shipped with.
 
 ### 6. Blast-radius reporting
 

@@ -192,10 +192,16 @@ internal fun mapPackageToNamespace(
 ): String {
   if (rootPackage.isEmpty()) return rootNamespace
 
-  val relative: String = if (kotlinPackage.startsWith(rootPackage)) {
-    kotlinPackage.removePrefix(rootPackage).removePrefix(".")
-  } else {
-    kotlinPackage
+  // ADR-066 §5 amendment (2026-09-13): "under root" is a SEGMENT-bounded test, the same one
+  // admission already applies (`PackageScope.covers`, `NugetProcessor.isExported`'s `matches`:
+  // `pkg == p || pkg.startsWith("$p.")`). An unbounded `startsWith(rootPackage)` made
+  // `com.examples.x` under root `com.example` strip a literal prefix and render `Clinic.S.X` — a
+  // namespace built from half a package segment, which no admission decision agrees with. This
+  // predicate must stay in step with those two sites.
+  val relative: String = when {
+    kotlinPackage == rootPackage -> ""
+    kotlinPackage.startsWith("$rootPackage.") -> kotlinPackage.removePrefix("$rootPackage.")
+    else -> kotlinPackage
   }
 
   if (relative.isEmpty()) return rootNamespace
