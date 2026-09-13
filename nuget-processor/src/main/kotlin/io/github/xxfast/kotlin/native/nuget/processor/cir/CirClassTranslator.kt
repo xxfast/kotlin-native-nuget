@@ -1742,6 +1742,11 @@ internal fun translateSealedClass(
   // logger to say so when it is not.
   exportedTypes: Set<String>,
   logger: KSPLogger,
+  // ADR-134: the owner walk, supplied by `CirTranslator` so the base and each arm can carry the
+  // nested declarations Kotlin declares inside them. Required rather than defaulted: a default
+  // would silently declare none for a future caller that forgot to pass it, which is the one
+  // failure mode of this feature that emits neither a twin nor a diagnostic.
+  nestedOf: (KSClassDeclaration) -> List<CirDeclaration>,
 ): CirSealedClass {
   val libraryName: String = context.libraryName
   val name: String = cls.simpleName.asString()
@@ -1982,6 +1987,8 @@ internal fun translateSealedClass(
         isDataClass = isDataClass,
         isNested = isNested,
         isOpen = isOpenArm,
+        // ADR-134: the arm is an owner in its own right (`Purr.On.Trace`).
+        nestedDeclarations = nestedOf(subclass),
       )
     }
     .toList()
@@ -1993,6 +2000,10 @@ internal fun translateSealedClass(
     subclasses = subclasses,
     properties = baseProperties,
     methods = baseMethods,
+    // ADR-134: a type declared beside the arms, in the block ADR-009 owns. An ADR-112 eligible
+    // sealed interface arrives here too, which is why its children must never be routed to the
+    // interface slot instead: nothing would read them.
+    nestedDeclarations = nestedOf(cls),
   )
 }
 

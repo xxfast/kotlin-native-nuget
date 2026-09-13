@@ -172,6 +172,10 @@ internal fun StringBuilder.renderInterface(iface: CirInterface) {
     appendLine("        ${method.returnType} ${method.name}($paramStr);")
   }
 
+  // ADR-134: a type Kotlin declares inside the interface is declared inside the generated
+  // `public interface I<Name>` block (C# spec 19.4.1 admits a type_declaration there).
+  renderNestedDeclarations(iface.nestedDeclarations)
+
   appendLine("    }")
   appendLine()
 }

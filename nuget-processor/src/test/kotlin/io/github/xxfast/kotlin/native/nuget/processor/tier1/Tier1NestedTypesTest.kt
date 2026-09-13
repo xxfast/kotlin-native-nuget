@@ -18,10 +18,14 @@ import kotlin.test.assertTrue
  * name, which ADR-117 would otherwise turn into an entry-point collision between `Outer.Nested` and
  * a top-level `Nested`).
  *
- * [deferredSource] is the other half and is not a copy of the old skip test: ADR-133 keeps
- * `SKIPPED_NESTED_DECLARATION` for exactly the owner shapes it defers (generic owner, `enum class`
- * owner, `interface` owner, `inner class`), so the named skip has to survive for those and only
- * those. A fix that declares everything nested passes every presence cell above and fails here.
+ * ADR-134 moves three of ADR-133's deferred owners into the admitted set ([admittedSource]): an
+ * `interface` owner, a sealed base owner (a sealed class **or** an ADR-112 eligible sealed
+ * interface), a sealed *arm* owner, and the nested `value class` candidate.
+ *
+ * [deferredSource] is the other half and is not a copy of the old skip test: ADR-134 keeps
+ * `SKIPPED_NESTED_DECLARATION` permanently for exactly three owner shapes (generic owner,
+ * `enum class` owner, `inner class`), so the named skip has to survive for those and only those. A
+ * fix that declares everything nested passes every presence cell above and fails here.
  *
  * Oreo supervises from the top perch; Mylo runs the registry two levels down.
  */
@@ -91,12 +95,73 @@ class Tier1NestedTypesTest {
       class Almanac(val year: Int)
     }
 
-    interface Cage {
-      class Bar(val gauge: Int)
-    }
-
     class Host(val name: String) {
       inner class Guest(val visits: Int)
+    }
+  """.trimIndent()
+
+  /**
+   * ADR-134's admitted owner kinds, one declaration per cell, each with a member returning it.
+   *
+   * `Cage` is the ADR-133 reversal: an `interface` owner declares its child inside
+   * `public interface ICage`, and the `I` attaches to every interface segment of the chain.
+   * `Signal` carries both sealed owners (the base, beside the arms, and the arm `On`). `Pulse` is
+   * the gate-order cell: an ADR-112 **eligible** sealed interface renders as `public abstract class
+   * Pulse`, so its child belongs there and nowhere else — the owner walk tests `INTERFACE` before
+   * it tests sealed, and if the interface arm claims `Pulse` its child lands in a `CirInterface`
+   * slot the sealed renderer never reads and is lost with no diagnostic at all. `Crate.Weight` is
+   * the nested `value class`.
+   *
+   * Member names are `barAt`/`detailOf`/`traceOf`/`weightOf`, not `bar`/`detail`/`trace`/`weight`:
+   * the latter PascalCase onto their own nested type's name, which is CS0102 and is pinned by the
+   * owner-scope collision cell below, so it would make every cell here red for the wrong reason.
+   */
+  private val admittedSource: String = """
+    package tier1.nestedowners
+
+    interface Cage {
+      class Bar(val gauge: Int)
+      fun barAt(): Bar
+    }
+
+    class WireCage(val gauge: Int) : Cage {
+      override fun barAt(): Cage.Bar = Cage.Bar(gauge)
+    }
+
+    sealed class Signal {
+      class Detail(val text: String)
+
+      data class On(val level: Int) : Signal() {
+        class Trace(val at: Int)
+        fun traceOf(): Trace = Trace(level)
+      }
+
+      data object Off : Signal()
+
+      fun detailOf(): Detail = Detail("signal")
+    }
+
+    sealed interface Pulse {
+      class X(val beats: Int)
+
+      data class Beat(val bpm: Int) : Pulse {
+        fun xOf(): X = X(bpm)
+      }
+
+      data object Flat : Pulse
+    }
+
+    class Crate(val id: String) {
+      // `@JvmInline` is a requirement of this JVM harness only (Kotlin/Native takes a bare
+      // `value class`, as `test-library`'s `CatId` and `Hamper.Weight` do); `Modifier.VALUE` is
+      // what the processor reads either way.
+      @JvmInline
+      value class Weight(val grams: Int) {
+        fun isHeavy(): Boolean = grams > 1000
+      }
+
+      fun weightOf(): Weight = Weight(id.length)
+      fun gramsOf(weight: Weight): Int = weight.grams
     }
   """.trimIndent()
 
@@ -239,10 +304,8 @@ class Tier1NestedTypesTest {
     val warnings: List<String> = result.kspWarnings
       .filter { it.contains(ForwardDiagnosticKind.SKIPPED_NESTED_DECLARATION.name) }
     listOf(
-      // generic owner: `Box<T>.Lid` is a generic nested type in C#
+      // generic owner: `Box<T>.Lid` is a generic nested type in C#, one per `T`
       "tier1.nesteddeferred.Box.Lid",
-      // interface owner: an interface has no C# declaration block to nest into here
-      "tier1.nesteddeferred.Cage.Bar",
       // inner class: its constructor needs the outer instance
       "tier1.nesteddeferred.Host.Guest",
     ).forEach { declaration ->
@@ -251,7 +314,7 @@ class Tier1NestedTypesTest {
         "expected $declaration to still skip named; warnings=$warnings",
       )
     }
-    listOf("Lid", "Bar", "Guest").forEach { name ->
+    listOf("Lid", "Guest").forEach { name ->
       assertFalse(
         result.generatedCSharp.contains(name),
         "expected no declaration of, or dangling reference to, $name; csharp=" +
@@ -725,6 +788,140 @@ class Tier1NestedTypesTest {
       "where T : global::Interop.Owner.IKeeper",
       message = "expected the bound to carry the chain; csharp=" +
           "${csharp.lines().filter { it.contains("where T") }}",
+    )
+  }
+
+  // --- ADR-134: the owner kinds ADR-133 deferred and this ADR admits ---
+
+  @Test
+  fun `an interface owner declares its nested type inside the I-prefixed interface block`() {
+    val result = Tier1Harness.run(admittedSource, fileName = "Owners.kt")
+
+    assertTrue(result.compiledClean, "expected no broken source; got: ${result.compileErrors}")
+    val csharp: String = result.generatedCSharp
+    assertContains(
+      blockBody(csharp, "public interface ICage"),
+      "public class Bar",
+      message = "expected Bar inside the ICage block; csharp=$csharp",
+    )
+    // ADR-134's one reversal of ADR-133: the `I` is on every interface segment of the chain, so
+    // the child is `ICage.Bar`. The child itself is a class and keeps its bare name.
+    assertFalse(
+      csharp.contains("IBar"),
+      "expected the child of an interface to keep its own name; csharp=" +
+          "${csharp.lines().filter { it.contains("Bar") }}",
+    )
+  }
+
+  @Test
+  fun `a sealed base and a sealed arm each declare their nested types in their own block`() {
+    val result = Tier1Harness.run(admittedSource, fileName = "Owners.kt")
+
+    val csharp: String = result.generatedCSharp
+    val signal: String = blockBody(csharp, "public abstract class Signal")
+    assertContains(
+      signal,
+      "public class Detail",
+      message = "expected Detail beside the arms in the sealed base's block; signal=$signal",
+    )
+    // The arm's block is rendered by a different function from the base's, so a base-only
+    // implementation passes the assertion above and loses Trace.
+    assertContains(
+      blockBody(signal, "class On"),
+      "public class Trace",
+      message = "expected Trace inside the arm's block; signal=$signal",
+    )
+  }
+
+  @Test
+  fun `an eligible sealed interface owns its nested type as the abstract class, never losing it`() {
+    val result = Tier1Harness.run(admittedSource, fileName = "Owners.kt")
+
+    val csharp: String = result.generatedCSharp
+    // The gate-order cell, and the one failure mode in ADR-134 that is SILENT if wrong: the owner
+    // walk tests `INTERFACE` before it tests sealed, and an ADR-112 eligible sealed interface is
+    // collected as a sealed base and rendered `public abstract class Pulse`. If the relaxed
+    // interface arm claims it, `X` is partitioned into a `CirInterface` slot the sealed renderer
+    // never reads: no twin, no CS0101, no diagnostic, just gone.
+    assertContains(
+      blockBody(csharp, "public abstract class Pulse"),
+      "public class X",
+      message = "expected X declared under the abstract class the eligible sealed interface " +
+          "renders as; csharp=$csharp",
+    )
+    assertFalse(
+      csharp.contains("IPulse"),
+      "expected no `IPulse` anywhere (issue #54); csharp=" +
+          "${csharp.lines().filter { it.contains("IPulse") }}",
+    )
+  }
+
+  @Test
+  fun `a nested value class is declared as a nested record struct`() {
+    val result = Tier1Harness.run(admittedSource, fileName = "Owners.kt")
+
+    assertContains(
+      blockBody(result.generatedCSharp, "public class Crate"),
+      "public readonly record struct Weight",
+      message = "expected the nested value class as a nested record struct; " +
+          "csharp=${result.generatedCSharp}",
+    )
+  }
+
+  @Test
+  fun `every admitted owner's nested export prefix is the enclosing chain`() {
+    val result = Tier1Harness.run(admittedSource, fileName = "Owners.kt")
+
+    val kotlin: String = result.generated
+    listOf(
+      // interface owner
+      "@CName(\"cage_bar_create\")",
+      // sealed base owner
+      "@CName(\"signal_detail_create\")",
+      // sealed arm owner: base + arm + child, three segments
+      "@CName(\"signal_on_trace_create\")",
+      // eligible sealed interface owner
+      "@CName(\"pulse_x_create\")",
+      // nested value class: no handle, but its members carry the chain
+      "@CName(\"crate_weight_isHeavy\")",
+    ).forEach { export ->
+      assertContains(kotlin, export, message = "expected $export; generated=$kotlin")
+    }
+    assertFalse(
+      listOf(
+        "\"bar_create\"",
+        "\"detail_create\"",
+        "\"trace_create\"",
+        "\"x_create\"",
+        "\"weight_isHeavy\"",
+      ).any { kotlin.contains("@CName($it)") },
+      "expected no unchained entry point (ADR-117 collision risk); generated=$kotlin",
+    )
+  }
+
+  @Test
+  fun `no nested type of an admitted owner is also emitted at namespace level, and none skips`() {
+    val result = Tier1Harness.run(admittedSource, fileName = "Owners.kt")
+
+    val csharp: String = result.generatedCSharp
+    listOf("Bar", "Detail", "Trace", "X", "Weight").forEach { name ->
+      val namespaceLevelDeclaration = Regex(
+        """^ {4}public (?:sealed )?(?:readonly )?(?:record )?(?:static )?""" +
+            """(?:class|struct|enum|interface) $name\b""",
+        RegexOption.MULTILINE,
+      )
+      assertFalse(
+        namespaceLevelDeclaration.containsMatchIn(csharp),
+        "expected no namespace-level twin of $name (CS0101); csharp=" +
+            "${csharp.lines().filter { it.contains(name) }}",
+      )
+    }
+    assertFalse(
+      result.kspWarnings.any {
+        it.contains(ForwardDiagnosticKind.SKIPPED_NESTED_DECLARATION.name) &&
+            it.contains("tier1.nestedowners")
+      },
+      "expected no nested-declaration skip for an admitted owner; warnings=${result.kspWarnings}",
     )
   }
 }

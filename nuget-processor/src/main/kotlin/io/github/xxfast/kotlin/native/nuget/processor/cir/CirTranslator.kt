@@ -392,8 +392,18 @@ internal fun translate(
     enums.filter { isOwnedBy(owner, it) }.forEach { enum ->
       add(translateEnum(enum, context.libraryName))
     }
+    // ADR-134: a nested `value class` is declared as a nested `readonly record struct`. Its
+    // members already export under the whole chain (`nativePrefix()`) and every type position
+    // already spelled `Owner.Tag`; only the declaration was missing (CS0426 until now).
+    valueClasses.filter { isOwnedBy(owner, it) }.forEach { cls ->
+      add(translateValueClass(cls, context.libraryName, logger, context, callableCatalog))
+    }
     interfaces.filter { isOwnedBy(owner, it) }.forEach { iface ->
-      add(translateInterface(iface, interfaceDeclarationCatalog, logger))
+      add(
+        translateInterface(iface, interfaceDeclarationCatalog, logger)
+          // ADR-134: an interface owner carries children at any depth, exactly as a class does.
+          .copy(nestedDeclarations = translateNestedOf(iface)),
+      )
       // ADR-040's backing wrapper nests BESIDE its interface (`Owner.Listener : IListener`)
       // rather than at namespace root, which is the caveat ADR-133 closes.
       interfaceBackingClasses
@@ -430,7 +440,9 @@ internal fun translate(
     needsMarshalHelper = true
   }
 
-  valueClasses.forEach { cls ->
+  // ADR-134: a nested value class is declared by the owner walk above and nowhere else; a
+  // namespace-level twin would be CS0101 against it (the issue #54/#110 lesson).
+  valueClasses.filter { !it.isNestedDeclaration() }.forEach { cls ->
     namespaces.addDeclaration(
       namespaceOf(cls.packageName.asString()),
       translateValueClass(cls, context.libraryName, logger, context, callableCatalog),
@@ -447,7 +459,9 @@ internal fun translate(
   interfaces.filter { !it.isNestedDeclaration() }.forEach { iface ->
     namespaces.addDeclaration(
       namespaceOf(iface.packageName.asString()),
-      translateInterface(iface, interfaceDeclarationCatalog, logger),
+      translateInterface(iface, interfaceDeclarationCatalog, logger)
+        // ADR-134: the interface block owns its nested declarations (`ICage.Bar`).
+        .copy(nestedDeclarations = translateNestedOf(iface)),
     )
   }
 
@@ -507,6 +521,10 @@ internal fun translate(
       namespaceOf(sealed.packageName.asString()),
       translateSealedClass(
         sealed, context, tracker, callableCatalog, classifier, exportedTypes, logger,
+        // ADR-134: the base and each arm are owners. The walk is passed in rather than rebuilt
+        // there, so a nested declaration under a sealed owner goes through exactly the same
+        // translation an ordinary owner's does.
+        nestedOf = ::translateNestedOf,
       ),
     )
   }

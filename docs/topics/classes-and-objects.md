@@ -13,7 +13,7 @@ A Kotlin `class` becomes a C# `class` backed by an opaque `StableRef` handle, im
 | nullable exported class *parameter* (`Foo?`), on a constructor, method, extension, or top-level function | nullable handle argument | `null` rides `IntPtr.Zero`, no has-value/value pair needed; see A nullable class handle parameter below ([#131](https://github.com/xxfast/kotlin-native-nuget/issues/131)) |
 | two or more same-named methods | one C# overload set | numbered native export/extern name, unnumbered public name; see Method overloads below ([ADR-090](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/090-ordinary-class-method-overloads.md)) |
 | a method with a trailing run of defaulted parameters | omitting overload per suffix length | same `@JvmOverloads` rule as constructor defaults, see Method default parameters below ([ADR-096](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/096-function-default-parameters.md)) |
-| nested `class`/`object`/`interface`/`enum class` (at any depth) | `Outer.Nested` (a real C# nested type) | under a non-generic, non-`inner` `class` or `object` owner; an `inner class`, a generic, `enum class`, `interface`, or sealed owner, and a nested `value class`, still skip named (`SKIPPED_NESTED_DECLARATION`); see Nested types below ([ADR-133](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/133-nested-types.md)) |
+| nested `class`/`object`/`interface`/`enum class`/`value class` (at any depth) | `Outer.Nested` (a real C# nested type) | under a non-generic, non-`inner` `class` or `object` owner, an `interface` owner, or a sealed base/arm owner (including an eligible sealed interface); only an `inner class`, a generic, or an `enum class` owner still skip named (`SKIPPED_NESTED_DECLARATION`); see Nested types below ([ADR-133](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/133-nested-types.md), [ADR-134](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/134-nested-types-under-deferred-owners.md)) |
 
 ## Kotlin
 
@@ -1081,13 +1081,19 @@ subclass already followed ([ADR-009](https://github.com/xxfast/kotlin-native-nug
 and a companion object still follows (folded into its owner's statics, see
 [Objects and companions](objects-and-companions.md)) to every nested kind
 ([ADR-133](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/133-nested-types.md)).
+An `interface` owner and a sealed base/arm owner (including an eligible sealed interface) admit
+nested declarations of their own too, and a nested `value class` candidate is now declared under any
+admitted owner, not only a `class`/`object`
+([ADR-134](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/134-nested-types-under-deferred-owners.md));
+see [Owners ADR-134 admits](#nested-adr-134-owners) below.
 
 | Kotlin nested kind | C# shape |
 |---|---|
 | `class` | `public class Outer.Nested : IDisposable, INugetHandle`, same members as a top-level class |
 | `object` | `public static class Outer.Defaults`, statics only, exactly as a top-level `object` renders |
 | `enum class` | `public enum Outer.Kind`, with its extension class hoisted to the top level, `OuterKindExtensions` |
-| `interface` | `public interface Outer.IListener` (the `I` on the last enclosing segment only), with its [ADR-040](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/040-interface-return-type-mapping.md) backing wrapper nested beside it, `Outer.Listener` |
+| `interface` | `public interface Outer.IListener` (`I` on **every** enclosing interface segment of the chain, [ADR-134](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/134-nested-types-under-deferred-owners.md) reversing ADR-133's last-segment-only rule), with its [ADR-040](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/040-interface-return-type-mapping.md) backing wrapper nested beside it, `Outer.Listener` |
+| `value class` | `public readonly record struct Outer.Tag`, crossing as its underlying value exactly like a top-level value class, declared under any admitted owner |
 
 The `@CName` export prefix carries the whole enclosing chain, lowercased and `_`-joined
 (`aviary_perch_create`; `aviary_middle_inner_create` two levels down), so a nested type never
@@ -1096,11 +1102,12 @@ collides on a C entry point with an unrelated top-level declaration of the same 
 A top-level declaration's chain has exactly one element, so no previously released entry point
 changes.
 
-**Deferred owner shapes still skip named**, `SKIPPED_NESTED_DECLARATION`, its reason now naming
-which shape defers it: an `inner class` owner (its constructor needs the outer instance), a generic
-owner (`Outer<T>.Nested` would itself be generic in C#), an `enum class` owner, an `interface`
-owner, a sealed base or arm owner (ADR-009 owns that block already), and a nested `value class`
-candidate regardless of its owner.
+**Permanently deferred owner shapes still skip named**, `SKIPPED_NESTED_DECLARATION`, its reason
+naming which shape defers it: an `inner class` owner (its constructor needs the outer instance, no
+C# equivalent), a generic owner (`Outer<T>.Nested` would itself be generic in C#, one type per
+instantiation), and an `enum class` owner (a C# enum body holds only named constants, no nested-type
+slot). A `value class` **owner** (nesting a further type inside it) also has no nested-type slot,
+though a `value class` itself is a supported nested *candidate* under any admitted owner, see below.
 
 ### Kotlin {id="nested-kotlin"}
 
@@ -1322,6 +1329,170 @@ method, a `Kind` property, or a `Keeper()` method beside the nested types `Perch
     <code>using Monitor = TestLibrary.Issue54.Monitor;</code>.</p>
 </note>
 
+## Owners ADR-134 admits {id="nested-adr-134-owners"}
+
+An `interface` owner, a sealed base or arm owner, and a nested `value class` candidate: three of
+ADR-133's deferred shapes, admitted by [ADR-134](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/134-nested-types-under-deferred-owners.md).
+
+### Kotlin {id="nested-adr-134-kotlin"}
+
+From `test-library/src/nativeMain/kotlin/.../nested/Deferred.kt`:
+
+```kotlin
+interface Cage {
+  /** Nested class under an **interface** owner: `public class ICage.Bar`, `cage_bar_create`. */
+  class Bar(val n: Int) {
+    fun describe(): String = "bar#$n"
+  }
+
+  fun barAt(): Bar
+  fun label(): String
+}
+
+/**
+ * The exported class a C# consumer actually constructs to reach [Cage.barAt]; an interface has no
+ * constructor, so without this the interface cell could only be checked by reflection.
+ */
+class WireCage(val gauge: Int) : Cage {
+  override fun barAt(): Cage.Bar = Cage.Bar(gauge)
+  override fun label(): String = "wire/$gauge"
+}
+
+sealed class Purr {
+  /** Nested class beside the arms, in ADR-009's block: `purr_detail_create`. */
+  class Detail(val text: String) {
+    fun describe(): String = "detail:$text"
+  }
+
+  data class On(val level: Int) : Purr() {
+    /** Nested class under a sealed **arm**: `purr_on_trace_create`, three prefix segments. */
+    class Trace(val at: Int) {
+      fun describe(): String = "trace@$at"
+    }
+
+    fun traceOf(): Trace = Trace(level)
+  }
+
+  data object Off : Purr()
+
+  fun detailOf(): Detail = Detail("purr")
+}
+
+class Hamper(val id: String) {
+  /** Nested `value class`: `public readonly record struct Hamper.Weight`. */
+  value class Weight(val grams: Int) {
+    val kilos: Double get() = grams / 1000.0
+    fun isHeavy(): Boolean = grams > 1000
+  }
+
+  fun weightOf(): Weight = Weight(id.length * 100)
+  fun gramsOf(weight: Weight): Int = weight.grams
+}
+```
+
+### Generated C# {id="nested-adr-134-generated-c"}
+
+From `Interop.cs`:
+
+```C#
+public interface ICage : IDisposable
+{
+    global::TestLibrary.Nested.ICage.Bar BarAt();
+    string Label();
+
+    public class Bar : IDisposable, INugetHandle
+    {
+        // exports cage_bar_create, cage_bar_get_n, cage_bar_describe, cage_bar_dispose
+    }
+}
+
+public abstract class Purr : IDisposable, INugetHandle
+{
+    public global::TestLibrary.Nested.Purr.Detail DetailOf() { /* ... */ }
+
+    public sealed class On : Purr
+    {
+        public global::TestLibrary.Nested.Purr.On.Trace TraceOf() { /* ... */ }
+
+        public class Trace : IDisposable, INugetHandle
+        {
+            // exports purr_on_trace_create, purr_on_trace_get_at, purr_on_trace_describe, ...
+        }
+    }
+
+    public class Detail : IDisposable, INugetHandle
+    {
+        // exports purr_detail_create, purr_detail_get_text, purr_detail_describe, ...
+    }
+}
+
+public class Hamper : IDisposable, INugetHandle
+{
+    public global::TestLibrary.Nested.Hamper.Weight WeightOf() { /* ... */ }
+
+    public readonly record struct Weight
+    {
+        public int Grams { get; }
+        // exports hamper_weight_create, hamper_weight_get_kilos, hamper_weight_isHeavy
+    }
+}
+```
+
+An ADR-112 **eligible** sealed interface owns its nested declaration under the abstract class it
+renders as, with no `I`-prefixed interface anywhere: `sealed interface Beam { class Lens }` declares
+`public class Lens` inside `public abstract class Beam`, exported `beam_lens_create`, and `IBeam`
+does not exist in the assembly. This is the gate-order cell: the owner walk tests `interface` before
+it tests sealed, so an eligible sealed interface must be classified as a sealed-base owner or its
+child would be silently lost.
+
+### Using it from C# {id="nested-adr-134-using-it-from-c"}
+
+From `IntegrationTests/NestedDeferredOwnersTests.cs`:
+
+```C#
+[Fact]
+public void NestedClass_UnderAnInterfaceOwner_RoundTripsThroughTheInterfaceItself()
+{
+    ICage cage = new WireCage(7);
+    using ICage.Bar bar = cage.BarAt();
+
+    Assert.Equal(7, bar.N);
+    ((IDisposable)cage).Dispose();
+}
+
+[Fact]
+public void NestedClass_UnderASealedArmOwner_RoundTrips()
+{
+    using Purr purr = Deferred.PurringPurr(9);
+    Purr.On on = Assert.IsType<Purr.On>(purr);
+    using Purr.On.Trace trace = on.TraceOf();
+
+    Assert.Equal(9, trace.At);
+    Assert.Equal("trace@9", trace.Describe());
+}
+
+[Fact]
+public void NestedValueClass_RoundTripsAtAReturnAndAParameterPosition()
+{
+    using var hamper = new Hamper("oreo");
+    Hamper.Weight weight = hamper.WeightOf();
+
+    Assert.Equal(400, weight.Grams);
+    Assert.Equal(400, hamper.GramsOf(weight));
+}
+```
+
+<warning>
+    <p>A sealed arm's only constructor is <code>internal Arm(IntPtr handle)</code>: ADR-009 gives it
+    no public one, since a consumer is meant to reach an arm through a factory and a type test. In
+    .NET 7+, <code>IntPtr</code> is <code>nint</code>, and an <code>int</code> converts to
+    <code>nint</code> implicitly, so <code>new Purr.On(9)</code> <b>compiles</b>, binding to that
+    internal handle constructor with <code>9</code> as a fabricated native address, and access-violates
+    on the first call through it rather than failing to build. Always obtain a sealed arm from a
+    factory method or a pattern match, never from <code>new</code>. See
+    <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md">ROADMAP.md</a>.</p>
+</warning>
+
 ## Limitations
 
 - `Map`/`Set` **inputs** (parameters) are not planned yet; see [Collections](collections.md).
@@ -1346,6 +1517,17 @@ method, a `Kind` property, or a `Keeper()` method beside the nested types `Perch
 - Nested types: an `inner class`, a generic, `enum class`, `interface`, or sealed base/arm owner,
   and a nested `value class` regardless of its owner, stay a named `SKIPPED_NESTED_DECLARATION`
   skip.
+- Nested types: an `inner class` owner, a generic owner, an `enum class` owner, and a `value class`
+  **owner** stay a named `SKIPPED_NESTED_DECLARATION` skip, permanently. A nested `value class`
+  candidate declared under one of those still-deferred owners has no gate on the member-position
+  side, unlike every other undeclared nested kind: it can emit an undeclared struct name with no
+  diagnostic at all, rather than skipping named; see [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md).
+  An extension function or property on a nested type still spells the bare simple name and
+  fails as a forward ABI mismatch rather than binding; see [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md).
+- A sealed arm's only constructor is `internal Arm(IntPtr handle)`; calling `new Base.Arm(n)` with an
+  `int`-convertible argument compiles and access-violates at runtime instead of failing to build, see
+  the warning under [Owners ADR-134 admits](#nested-adr-134-owners) above and
+  [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md).
 
 <seealso>
     <category ref="related">
@@ -1370,5 +1552,6 @@ method, a `Kind` property, or a `Keeper()` method beside the nested types `Perch
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/091-constructor-default-parameters.md">ADR-091: Constructor default parameters</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/096-function-default-parameters.md">ADR-096: Function default parameters</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/133-nested-types.md">ADR-133: Nested types</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/134-nested-types-under-deferred-owners.md">ADR-134: Nested types under deferred owners</a>
     </category>
 </seealso>

@@ -46,6 +46,13 @@ internal fun StringBuilder.renderSealedClass(sealed: CirSealedClass) {
     append(sealedSubclassBlock(sealed, subclass))
   }
 
+  // ADR-134: types Kotlin declares inside the sealed base, rendered after the arm blocks and
+  // before the discriminator, at the depth an arm block sits at.
+  if (sealed.nestedDeclarations.isNotEmpty()) {
+    renderNestedDeclarations(sealed.nestedDeclarations)
+    appendLine()
+  }
+
   appendLine("        [DllImport(\"${sealed.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"${sealed.nativePrefix}_get_type\")]")
   appendLine("        private static extern int Native_GetType(IntPtr handle);")
   appendLine()
@@ -191,6 +198,16 @@ private fun sealedSubclassBlock(
   // and a constant `ToString()` literal could disagree with Kotlin's own.
   if (subclass.isDataClass) {
     renderSealedSubclassDataMethods(sealed.libraryName, subclass.nativePrefix, sealed.name, subclass.name)
+  }
+
+  // ADR-134: types Kotlin declares inside the arm. `renderNestedDeclarations` already renders one
+  // level in (a class member's depth); the arm's own members are re-indented once more, so these
+  // take the same extra level.
+  if (subclass.nestedDeclarations.isNotEmpty()) {
+    append(
+      buildString { renderNestedDeclarations(subclass.nestedDeclarations) }.indentNestedBody(),
+    )
+    appendLine()
   }
 
   if (subclass.hasSuspendMethods) {

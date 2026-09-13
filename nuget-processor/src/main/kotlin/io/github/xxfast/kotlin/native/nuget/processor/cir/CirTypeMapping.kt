@@ -14,6 +14,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallablePla
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnostic
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnosticKind
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardPropertyPlan
+import io.github.xxfast.kotlin.native.nuget.processor.forward.isEligibleSealedInterface
 
 internal fun KSType.expandAliases(): KSType {
   val decl = declaration
@@ -177,13 +178,29 @@ internal fun mapParamType(kotlinType: String): String =
  * The walk stops at the first non-class parent, so a file-level declaration is unchanged and a
  * class local to a function contributes only its own name (it is never exported anyway).
  */
-internal fun KSClassDeclaration.nestedCsName(): String =
-  generateSequence<KSDeclaration>(this) { it.parentDeclaration }
-    .takeWhile { it is KSClassDeclaration }
-    .map { it.simpleName.asString() }
-    .toList()
-    .asReversed()
+internal fun KSClassDeclaration.nestedCsName(): String {
+  val chain: List<KSClassDeclaration> =
+    generateSequence<KSDeclaration>(this) { it.parentDeclaration }
+      .takeWhile { it is KSClassDeclaration }
+      .filterIsInstance<KSClassDeclaration>()
+      .toList()
+      .asReversed()
+  // ADR-134 (reversing ADR-133's last-segment-only rule): an *enclosing* `interface` segment is
+  // spelled `I<Name>` -- that is the C# type the child is declared inside (`ICage.Bar`), and the
+  // ADR-040 backing wrapper `Cage` declares nothing. An ADR-112 ELIGIBLE sealed interface is
+  // exempt: it renders as `public abstract class Beam`, so `IBeam` exists nowhere (issue #54).
+  // The LAST segment keeps its bare name here; `nestedInterfaceCsName()` adds the `I` to it when
+  // the interface itself is the type being named.
+  return chain
+    .mapIndexed { index, declaration ->
+      val simpleName: String = declaration.simpleName.asString()
+      val isEnclosingInterface: Boolean = index < chain.lastIndex &&
+          declaration.classKind == ClassKind.INTERFACE &&
+          !declaration.isEligibleSealedInterface()
+      if (isEnclosingInterface) "I$simpleName" else simpleName
+    }
     .joinToString(".")
+}
 
 /**
  * ADR-133: the C entry-point prefix of a declaration -- the whole enclosing chain, each simple name

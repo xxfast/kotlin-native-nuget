@@ -498,6 +498,9 @@ An `enum class` declared nested inside a non-generic, non-`inner` `class` or `ob
 declared as a real nested C# `enum`, `Outer.Kind`, whether it is module-local or reached from a
 dependency module, generalising ADR-009's sealed-arm nesting to every nested kind
 ([ADR-133](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/133-nested-types.md)).
+The same owner-admission list [ADR-134](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/134-nested-types-under-deferred-owners.md)
+widens to an `interface` owner and a sealed base/arm owner covers a nested `enum class` too; see
+[Classes and objects: Owners ADR-134 admits](classes-and-objects.md#nested-adr-134-owners).
 Its extension class is hoisted to the top level (`OuterKindExtensions`, named for the whole
 enclosing chain), never nested beside it: C# forbids an extension method inside a nested class
 (CS1109). A member typed with the nested enum binds exactly like a member typed with a top-level
@@ -534,8 +537,8 @@ not `mode`: a property PascalCasing to `Mode` would collide with the nested type
 (CS0102). `set`, `current`, and `setting` all bind, exported off the owner's own prefix, and
 `typeof(NestedModeOwner).GetNestedType("Mode")` is non-null.
 
-A nested enum under a still-deferred owner shape (an `inner class`, a generic, another `enum class`,
-an `interface`, or a sealed base/arm; see
+A nested enum under a still-deferred owner shape (an `inner class`, a generic, or another
+`enum class`; see
 [Classes and objects: Nested types](classes-and-objects.md#nested-classes-and-objects)) still skips
 named: the declaration itself carries `SKIPPED_NESTED_DECLARATION`, and a parameter or return
 position typed with it skips `SKIPPED_UNSUPPORTED_TYPE` naming `UNDECLARED_ENUM`, a property
@@ -567,8 +570,8 @@ reference; see [An exported base class's own `abstract fun`](interfaces-abstract
 
 - A nested-collection component (`List<List<Mood>>`) has no representation on the write side and is
   skipped; see [Collections](collections.md).
-- A nested `enum class` under a still-deferred owner shape (an `inner class`, a generic, another
-  `enum class`, an `interface`, or a sealed base/arm) stays `SKIPPED_NESTED_DECLARATION`; see
+- A nested `enum class` under a still-deferred owner shape (an `inner class`, a generic, or another
+  `enum class` owner) stays `SKIPPED_NESTED_DECLARATION`; see
   [Classes and objects: Nested types](classes-and-objects.md#nested-classes-and-objects).
 
 <seealso>
@@ -587,5 +590,6 @@ reference; see [An exported base class's own `abstract fun`](interfaces-abstract
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/105-sealed-property-position.md">ADR-105: Sealed types at property positions</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/066-forward-export-reachability-closure.md">ADR-066: Forward export reachability closure</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/133-nested-types.md">ADR-133: Nested types</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/134-nested-types-under-deferred-owners.md">ADR-134: Nested types under deferred owners</a>
     </category>
 </seealso>

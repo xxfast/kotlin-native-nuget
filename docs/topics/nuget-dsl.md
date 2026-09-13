@@ -231,6 +231,17 @@ generic, an `enum class`, an `interface`, or a sealed base/arm) is refused admis
 skips named with `SKIPPED_NESTED_DECLARATION` on the declaration and `UNDECLARED_CLASS`/
 `UNDECLARED_ENUM`/`UNDECLARED_INTERFACE` on any member typed with it, the same as a module-local one
 under the same deferred shape; see [Classes and objects: Nested types](classes-and-objects.md#nested-classes-and-objects).
+(`Broadcast`) is admitted through an ordinary member-type edge; the closure takes no direct part in
+declaring the nested type itself
+([ADR-133](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/133-nested-types.md),
+[ADR-134](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/134-nested-types-under-deferred-owners.md)).
+A dependency member naming only the nested type, with no other member reaching its owner, still
+admits nothing: there is no edge from "a member returns a nested type" to "admit its owner." A
+dependency type nested under a still-deferred owner shape (an `inner class`, a generic, or an `enum
+class` owner) is refused admission outright and skips named with
+`SKIPPED_NESTED_DECLARATION` on the declaration and `UNDECLARED_CLASS`/`UNDECLARED_ENUM`/
+`UNDECLARED_INTERFACE` on any member typed with it, the same as a module-local one under the same
+deferred shape; see [Classes and objects: Nested types](classes-and-objects.md#nested-classes-and-objects).
 
 <note>
 <p>Every cross-namespace type reference in the generated <code>Interop.cs</code> is emitted

@@ -177,17 +177,17 @@ private fun KSClassDeclaration.enclosingClassChain(): List<KSClassDeclaration> =
 internal fun KSClassDeclaration.unsupportedNestedOwnerReason(): String? = when {
   classKind == ClassKind.ENUM_CLASS ->
     "an `enum class` owner has no C# declaration block to nest a type into"
-  classKind == ClassKind.INTERFACE ->
-    "an `interface` owner declares no nested types in the generated C#"
-  classKind != ClassKind.CLASS && classKind != ClassKind.OBJECT ->
-    "only a `class` or `object` owner carries nested declarations"
+  // ADR-134: an `interface` owner and a sealed base/arm owner are admitted, so their arms are
+  // gone from here. The kind arm admits INTERFACE beside CLASS and OBJECT; the generic arm below
+  // is what keeps a variant type parameter's scope free of nested types (C# spec 19.4.9).
+  classKind != ClassKind.CLASS && classKind != ClassKind.OBJECT &&
+      classKind != ClassKind.INTERFACE ->
+    "only a `class`, `object` or `interface` owner carries nested declarations"
   typeParameters.isNotEmpty() ->
     "a generic owner's nested type is itself generic in C# (`Owner<T>.Nested`)"
   modifiers.contains(Modifier.INNER) ->
     "an `inner class` owner needs the outer instance to construct"
   isValueClass() -> "a `value class` owner has no nested-type slot"
-  modifiers.contains(Modifier.SEALED) || isSealedSubclass() ->
-    "a sealed base or sealed arm owner has no nested-declaration slot (ADR-009 owns that block)"
   isCompanionObject -> "a companion object is folded into its owner's statics (ADR-013)"
   else -> null
 }
@@ -197,7 +197,6 @@ internal fun KSClassDeclaration.unsupportedNestedCandidateReason(): String? = wh
   modifiers.contains(Modifier.INNER) ->
     "an `inner class` needs the outer instance its constructor takes"
   typeParameters.isNotEmpty() -> "a generic nested type is deferred"
-  isValueClass() -> "a nested `value class` is deferred"
   modifiers.contains(Modifier.SEALED) ->
     "a nested sealed hierarchy is deferred (its arms would have to nest twice)"
   else -> null
@@ -959,7 +958,7 @@ class NugetProcessor(
     // generators and the CIR translator exactly like a top-level one.
     val declaredClasses: List<KSClassDeclaration> =
       rootClasses + dependenciesIn(ForwardReachabilityBucket.CLASS)
-    val valueClasses: List<KSClassDeclaration> =
+    val declaredValueClasses: List<KSClassDeclaration> =
       rootValueClasses + dependenciesIn(ForwardReachabilityBucket.VALUE_CLASS)
     val sealedClasses: List<KSClassDeclaration> =
       rootSealedClasses + dependenciesIn(ForwardReachabilityBucket.SEALED_CLASS)
@@ -979,8 +978,8 @@ class NugetProcessor(
     // a companion object (ADR-013 folds it into its owner's statics), and an arm of an ineligible
     // sealed interface (ADR-112 warns once for the whole hierarchy).
     val nestedCandidates: List<KSClassDeclaration> =
-      (declaredClasses + valueClasses + sealedClasses + declaredObjects + declaredInterfaces +
-          declaredEnums)
+      (declaredClasses + declaredValueClasses + sealedClasses + declaredObjects +
+          declaredInterfaces + declaredEnums)
         .flatMap { owner -> owner.nestedClassDeclarations() }
         .filter { it.getVisibility() == Visibility.PUBLIC }
         .filter { !it.isCompanionObject }
@@ -1048,7 +1047,15 @@ class NugetProcessor(
     )
 
     val allClasses: List<KSClassDeclaration> =
-      declaredClasses + nestedDeclared.filter { it.classKind == ClassKind.CLASS }
+      // ADR-134: a nested `value class` is a CLASS too, and belongs to the value-class bucket
+      // below. Declaring it here as well would emit a handle class beside the record struct.
+      declaredClasses +
+          nestedDeclared.filter { it.classKind == ClassKind.CLASS && !it.isValueClass() }
+    // ADR-134: the nested `value class` candidate, declared as a nested `readonly record struct`
+    // under any admitted owner. One list from here on, so the KotlinPoet exports, the plan catalog
+    // and the CIR translator cannot disagree about which value classes exist.
+    val valueClasses: List<KSClassDeclaration> =
+      declaredValueClasses + nestedDeclared.filter { it.isValueClass() }
     val objects: List<KSClassDeclaration> =
       declaredObjects + nestedDeclared.filter { it.classKind == ClassKind.OBJECT }
     val enums: List<KSClassDeclaration> =

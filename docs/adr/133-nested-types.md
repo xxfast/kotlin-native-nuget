@@ -203,6 +203,18 @@ shape (`Box<T>`, `enum class Season`, `interface Cage`, `inner class Guest` unde
   byte-identical.
 - Verify: green, 1787 / 0 / 0, 35 (IntegrationTests/LeakTests side); processor 828.
 
+### Pointer (2026-09-13): three more deferred owners are now admitted
+
+[ADR-134](134-nested-types-under-deferred-owners.md) narrows the deferred owner set above to exactly
+`enum class`, generic, and `inner class`: an `interface` owner (including an ADR-112 *ineligible*
+sealed interface), a sealed base or arm owner (including an ADR-112 *eligible* sealed interface), and
+a nested `value class` candidate under any admitted owner are all declared now. The interface `I`-prefix
+rule this ADR fixed to the last enclosing segment only is itself superseded: ADR-134 puts `I` on
+**every** enclosing interface segment (`ICage.Bar`), except an eligible sealed interface segment,
+which renders as the abstract class and carries no `I` at all. Everything else this ADR shipped
+(the owner-walk mechanism, the translators, the `nativePrefix()` chain, `OBJECT_POSITION`, the
+owner-scope collision check) is unchanged and reused as-is by ADR-134's newly admitted owners.
+
 ## Inferred claims (not independently re-spiked for this reconciliation, unchanged from the design)
 
 1. No CS0108 for a nested type's own `Native_*` externs shadowing an owner's same-named externs (no
