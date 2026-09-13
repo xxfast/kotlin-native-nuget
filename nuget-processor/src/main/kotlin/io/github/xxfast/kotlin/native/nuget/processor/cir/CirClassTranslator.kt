@@ -41,6 +41,11 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.diagnosticReason
 import io.github.xxfast.kotlin.native.nuget.processor.forward.toDiagnosticKind
 import io.github.xxfast.kotlin.native.nuget.processor.forward.csharpName
 import io.github.xxfast.kotlin.native.nuget.processor.forward.droppedBaseChain
+import io.github.xxfast.kotlin.native.nuget.processor.forward.diagnosticTypeName
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ownsSentence
+import io.github.xxfast.kotlin.native.nuget.processor.forward.sealedAsHandle
+import io.github.xxfast.kotlin.native.nuget.processor.forward.skipDetail
+import io.github.xxfast.kotlin.native.nuget.processor.forward.skipReason
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardPublicCsharpType
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardSuperClass
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isForwardLegacyAsyncRoute
@@ -281,6 +286,66 @@ private fun emitAbstractMethodEnumSkip(
 }
 
 /**
+ * ADR-075 amendment (2026-09-13): the named skip for an inherited-but-unimplemented property whose
+ * own planner refused it, when the declaring interface is UNEXPORTED. Always null: the point is the
+ * diagnostic, the member is still dropped.
+ *
+ * Restricted to an interface owner outside the export set, the exact set of owners
+ * `NugetProcessor` plans onto the declaration catalog, so a miss there is a genuine planner
+ * refusal and nothing else. Two cells deliberately stay silent:
+ *  - an EXPORTED interface owner, as before: `IFoo` did not declare the member either, and its own
+ *    planner already warned about it once.
+ *  - an unexported abstract BASE CLASS owner, which also re-homes unplanned abstract members onto
+ *    this walk. Its members are not planned anywhere, so a miss there says nothing about
+ *    bridgeability and the classification below would invent a reason for a perfectly ordinary
+ *    `String`.
+ *
+ * The kind is hardcoded rather than taken from `reason.toDiagnosticKind()`: the property kind is
+ * positional (it names *where* the drop happened, see `warnDroppedForwardProperties`), and
+ * `toDiagnosticKind()` `error()`s on the legacy-route reasons a property can genuinely hold.
+ */
+private fun emitInheritedAbstractPropertySkip(
+  prop: KSPropertyDeclaration,
+  propName: String,
+  name: String,
+  owner: KSClassDeclaration,
+  qualified: String,
+  exportedTypes: Set<String>,
+  classifier: ForwardBridgeTypeClassifier,
+  context: NugetContext,
+  logger: KSPLogger,
+): CirProperty? {
+  if (owner.classKind != ClassKind.INTERFACE) return null
+  if (qualified in exportedTypes) return null
+  // The same classification the property planner refused the member on (`sealedAsHandle()` is the
+  // call `propertyPlan` makes), so the wording is the planner route's, not a second opinion.
+  val type: BridgeType = classifier.classify(prop.type.resolve().expandAliases()).sealedAsHandle()
+  val reason: ForwardPlanSkipReason? = type.skipReason()
+  val detail: String? = type.skipDetail()
+  val diagnostic: ForwardDiagnostic = if (reason?.ownsSentence(detail) == true) {
+    ForwardDiagnostic(
+      kind = ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_PROPERTY,
+      symbol = prop,
+      declaration = "$name.$propName",
+      reason = reason.diagnosticReason(detail),
+      hint = reason.diagnosticHint(detail, context.includePackages),
+    )
+  } else {
+    val described: String = type.diagnosticTypeName()
+    ForwardDiagnostic(
+      kind = ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_PROPERTY,
+      symbol = prop,
+      declaration = "$name.$propName",
+      reason = "its type $described has no property getter or setter shape",
+      hint = "expose a bridgeable property (or a getter function) whose type is not $described, " +
+          "and export that instead",
+    )
+  }
+  ForwardDiagnosticSink.emit(listOf(diagnostic), logger)
+  return null
+}
+
+/**
  * ADR-075 amendment (2026-09-11): the C# declaration for a property an exported abstract class
  * inherits from an exported interface and never implements, the property-side mirror of the
  * `abstractMethods` walk in [translateClass].
@@ -291,19 +356,33 @@ private fun emitAbstractMethodEnumSkip(
  * `translateInterface` spells `IFoo`'s member from, rather than hand-mapped here: a second
  * spelling of one plan is what CS0738 is made of.
  *
+ * ADR-075 amendment (2026-09-13): an UNEXPORTED interface is no longer out of scope. ADR-101 still
+ * drops `: IFoo` from the base list, but the catalog is now planned over the unexported interface
+ * supertypes of exported classes too (`NugetProcessor`), so the member is spelled from a plan
+ * here exactly as an exported interface's is. Without it the member vanished while the concrete
+ * Kotlin subclass still rendered `public override`: CS0115 in the generated file itself.
+ *
  * Null when the declaring interface's own planner skipped the member (so `IFoo` does not declare
- * it either) or the parent is not a class declaration. An unexported interface is out of scope:
- * ADR-101 drops `: IFoo` from the base list, and there is no plan to spell the member from.
+ * it either) or the parent is not a class declaration. A miss on an unexported interface owner is
+ * named at [name] rather than dropped silently, since there is no `IFoo` declaration carrying the
+ * author's member anywhere else.
  */
 private fun inheritedAbstractProperty(
   prop: KSPropertyDeclaration,
   propName: String,
+  name: String,
   interfaceDeclarationCatalog: ForwardCallablePlanCatalog,
+  exportedTypes: Set<String>,
+  classifier: ForwardBridgeTypeClassifier,
+  context: NugetContext,
+  logger: KSPLogger,
 ): CirProperty? {
   val owner: KSClassDeclaration = prop.parentDeclaration as? KSClassDeclaration ?: return null
   val qualified: String = owner.qualifiedName?.asString() ?: return null
-  val plan: ForwardPropertyPlan =
-    interfaceDeclarationCatalog.propertyFor("$qualified.$propName") ?: return null
+  val plan: ForwardPropertyPlan = interfaceDeclarationCatalog.propertyFor("$qualified.$propName")
+    ?: return emitInheritedAbstractPropertySkip(
+      prop, propName, name, owner, qualified, exportedTypes, classifier, context, logger,
+    )
   return CirProperty(
     name = plan.publicName,
     type = ForwardCirPropertyProjection.publicType(plan),
@@ -536,13 +615,17 @@ internal fun translateClass(
           isAbstract = prop.isAbstract(),
         )
       }
-      // ADR-075 amendment (2026-09-11): a property this class inherits from an exported interface
-      // and does not implement. `isForwardPlannableMemberOf` keeps it out of the planner (nothing
-      // to dispatch to), so it takes the declaration walk the abstract *method* mirror takes: an
-      // abstract C# property, no body, no export, no `DllImport`. Without it the generated
-      // `Bird : IFeathered` is CS0535 and a consumer subclass's `override` is CS0115.
+      // ADR-075 amendment (2026-09-11): a property this class inherits from an interface
+      // (2026-09-13: exported or not) and does not implement. `isForwardPlannableMemberOf` keeps
+      // it out of the planner (nothing to dispatch to), so it takes the declaration walk the
+      // abstract *method* mirror takes: an abstract C# property, no body, no export, no
+      // `DllImport`. Without it the generated `Bird : IFeathered` is CS0535 and a consumer
+      // subclass's `override` is CS0115.
       if (prop.parentDeclaration != cls && prop.isAbstract()) {
-        return@mapNotNull inheritedAbstractProperty(prop, propName, interfaceDeclarationCatalog)
+        return@mapNotNull inheritedAbstractProperty(
+          prop, propName, name, interfaceDeclarationCatalog, exportedTypes, classifier, context,
+          logger,
+        )
       }
       // Issue #121: the planner declined, but a decline is not always an invitation. A marked
       // declaration must reach neither artifact, so the legacy arms below never run for one.
