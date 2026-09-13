@@ -203,19 +203,24 @@ export prefix rather than a class name, exactly as the `suspend` and `Flow` rout
 
 ### A primitive payload {id="a-primitive-payload"}
 
-A `kotlin.*` primitive payload (`Int`, `Boolean`, `Double`, ...) crosses by value instead of going
-through `NugetMarshal.FromHandle`. From `test-library/src/nativeMain/kotlin/.../metronome/Metronome.kt`:
+A `kotlin.*` primitive payload (`Int`, `Boolean`, `Byte`, `Double`, ...) crosses by value instead of
+going through `NugetMarshal.FromHandle`. From
+`test-library/src/nativeMain/kotlin/.../metronome/Metronome.kt`:
 
 ```kotlin
 class Metronome(private val beats: Int) {
   fun onTick(listener: (Int) -> Unit) = repeat(beats) { listener(it + 1) }
   fun onBeat(listener: (Boolean) -> Unit) = repeat(beats) { listener(it % 2 == 0) }
+  fun onVelocity(listener: (Byte) -> Unit) = repeat(beats) { listener((it * 40 - 100).toByte()) }
   fun onTempo(listener: (Double) -> Unit) = repeat(beats) { listener(60.0 + it * 0.5) }
 }
 ```
 
-The generated delegate reads the argument directly, `Boolean` widening from the `byte` wire back to
-`bool`:
+The generated delegate reads the argument directly, `Boolean` widening from a `byte` wire back to
+`bool`. `Boolean` and `Byte` bind independently, `NugetBoolVoidCallback` and `NugetByteVoidCallback`,
+even though both cross an 8-bit value: a class declaring both a `(Boolean) -> Unit` and a
+`(Byte) -> Unit` per-call lambda parameter used to register `NugetByteVoidCallback` for both and fail
+the consumer's own compile (CS1678) the moment the two disagreed on `byte` vs `sbyte`:
 
 ```C#
 public void OnTick(Action<int> listener)
@@ -229,9 +234,18 @@ public void OnTick(Action<int> listener)
 
 public void OnBeat(Action<bool> listener)
 {
-    NugetByteVoidCallback nativeCallback = (byte arg0Byte, IntPtr userData) =>
+    NugetBoolVoidCallback nativeCallback = (byte arg0Byte, IntPtr userData) =>
     {
     bool arg0 = arg0Byte != 0;
+    listener(arg0);
+    };
+    ...
+}
+
+public void OnVelocity(Action<sbyte> listener)
+{
+    NugetByteVoidCallback nativeCallback = (sbyte arg0, IntPtr userData) =>
+    {
     listener(arg0);
     };
     ...
