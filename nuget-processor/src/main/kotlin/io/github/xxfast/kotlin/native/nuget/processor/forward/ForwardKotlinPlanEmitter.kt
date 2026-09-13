@@ -870,33 +870,28 @@ private fun cVarType(kind: PrimitiveKind): ClassName = ClassName(
   },
 )
 
-/** The lowered Kotlin expression for an extension function's receiver: an object handle is
- * un-boxed via `asStableRef`, matching every other object-handle input; a value class is
- * reconstructed from its underlying wire, the same `Owner(value)` re-wrap [loweredArgument]
- * applies at a parameter slot (ADR-077), which also re-runs the value class's own `init`
- * validation; a primitive/String receiver is already the right Kotlin value as-is.
+/**
+ * ADR-132: an extension receiver lowers **exactly** like a parameter, one slot to the left.
+ *
+ * The planner already admits a receiver through the same `inputSkipReason()` gate a declared
+ * parameter passes and mints it the same wire (`receiverParameter` ->
+ * `nativeInputParameters("receiver", ...)`), so re-deriving the expression here is what let
+ * `Interface`, `Nullable(ValueClass(..))`, `Enum`, `Collection` and a dozen other admitted shapes
+ * fall to a bare-name `else` arm and render an unresolved Kotlin reference. There is no `else` any
+ * more: an un-lowerable receiver hits [loweredArgument]'s `error`, i.e. a loud build failure,
+ * rather than a name passed through. The ADR-077 value-class and ADR-105 nullable-handle spellings
+ * are unchanged — [loweredArgument] emits the same strings those arms did.
  */
-private fun receiverExpression(receiver: ForwardAbiParameter): String =
-  when (val type: BridgeType = receiver.transfer.type) {
-    is BridgeType.ObjectHandle ->
-      "${receiver.name}.asStableRef<${type.qualifiedName}>().get()"
-
-    is BridgeType.ValueClass ->
-      "${type.qualifiedName}(${valueClassUnderlyingLowering(receiver.name, type.underlying)})"
-
-    // ADR-105 amendment (2026-09-11): `fun Cat?.x()` lowers its receiver to the same one pointer
-    // slot, only nullable, so the un-boxing takes the safe-call form the ADR-062 nullable handle
-    // *parameter* slot already takes. The chain types `Cat?`, which is what resolves the `Cat?`
-    // extension; a null pointer stays null all the way into the callee.
-    is BridgeType.Nullable -> when (val inner: BridgeType = type.type) {
-      is BridgeType.ObjectHandle ->
-        "${receiver.name}?.asStableRef<${inner.qualifiedName}>()?.get()"
-
-      else -> receiver.name
-    }
-
-    else -> receiver.name
-  }
+private fun receiverExpression(receiver: ForwardAbiParameter): String {
+  val lowered: String =
+    loweredArgument(ForwardPublicParameter(receiver.name, receiver.transfer.type))
+  // A conditional lowering (`if (receiverHasValue) Dosage(receiver) else null`) is not a postfix
+  // expression: unparenthesized, the member call would bind to the `else` branch. Every other
+  // lowering is already postfix (a name, a call, or a safe-call chain) and is left byte-identical.
+  // Unreachable today — ADR-132's RECEIVER_FAN_OUT drops every receiver that lowers to this
+  // form — and kept deliberately, so that lifting that skip cannot silently mis-bind the call.
+  return if (lowered.startsWith("if (")) "($lowered)" else lowered
+}
 
 private fun invocationExpression(
   plan: ForwardCallablePlan,

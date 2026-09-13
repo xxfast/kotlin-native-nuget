@@ -382,6 +382,9 @@ internal fun ForwardPlanSkipReason.toDiagnosticKind(
   position: ForwardSkipPosition = ForwardSkipPosition.RETURN,
 ): ForwardDiagnosticKind = when (this) {
   ForwardPlanSkipReason.COLLECTION -> ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_INPUT
+  // ADR-132: always an input-position skip by construction — the extension receiver, which the
+  // planner treats as input zero — so it is fixed rather than reading [position].
+  ForwardPlanSkipReason.RECEIVER_FAN_OUT -> ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_INPUT
   ForwardPlanSkipReason.NULLABLE ->
     if (position == ForwardSkipPosition.INPUT) ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_INPUT
     else ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_RETURN

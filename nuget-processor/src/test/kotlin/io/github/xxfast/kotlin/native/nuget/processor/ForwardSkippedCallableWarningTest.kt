@@ -264,6 +264,10 @@ class ForwardSkippedCallableWarningTest {
         // ADR-106: defensive, like INSTANT/DURATION.
         ForwardPlanSkipReason.UUID,
         ForwardPlanSkipReason.NULLABLE,
+        // ADR-132: an extension receiver whose wire is the ADR-079/080 `HasValue` + value pair.
+        // Every other admitted receiver shape lowers like a parameter now; this one cannot be
+        // expressed as a single first RECEIVER-role slot, and no legacy route re-emits it.
+        ForwardPlanSkipReason.RECEIVER_FAN_OUT,
         ForwardPlanSkipReason.OBJECT,
         ForwardPlanSkipReason.STRING,
         ForwardPlanSkipReason.UNSUPPORTED,

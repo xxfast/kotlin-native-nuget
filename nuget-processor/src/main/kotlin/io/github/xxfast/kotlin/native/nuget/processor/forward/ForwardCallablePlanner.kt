@@ -69,6 +69,13 @@ internal enum class ForwardPlanSkipReason(val droppedFromCSharp: Boolean) {
    *  point at the object-handle export set. */
   THROWABLE(droppedFromCSharp = true),
   NULLABLE(droppedFromCSharp = true),
+
+  /** ADR-132: an extension receiver whose wire is the ADR-079/080 adjacent `HasValue` + value
+   *  PAIR (`fun Int?.x()`, `fun Dosage?.x()`). Every other admitted receiver shape now lowers
+   *  exactly like a parameter; this one cannot, because the plan model allows a single
+   *  RECEIVER-role slot and it must come first. A genuine drop, named rather than crashing plan
+   *  validation. */
+  RECEIVER_FAN_OUT(droppedFromCSharp = true),
   OBJECT(droppedFromCSharp = true),
   STRING(droppedFromCSharp = true),
   UNSUPPORTED(droppedFromCSharp = true),
@@ -1836,6 +1843,19 @@ internal class ForwardCallablePlanner(
       return ForwardCallableCatalogEntry.Skipped(symbol, structuralReason, node = function)
     }
 
+    // ADR-132: a receiver whose wire is the ADR-079/080 adjacent `receiverHasValue` + `receiver`
+    // PAIR is a named drop, not a plan. `validateRoles` requires at most one RECEIVER-role slot,
+    // and it must be first; `nativeInputParameters` marks only the *value* half of a fan-out with
+    // the caller's role, so such a receiver lands its RECEIVER slot at index 1 and fails plan
+    // validation outright (an exception out of the processor, not a diagnostic). Supporting it
+    // needs a multi-slot receiver in the model, which no fixture asks for; until then it is
+    // dropped by name rather than crashing the build.
+    if (receiverType.sealedAsHandle().isHasValueFanOutInput()) {
+      return ForwardCallableCatalogEntry.Skipped(
+        symbol, ForwardPlanSkipReason.RECEIVER_FAN_OUT, node = function,
+      )
+    }
+
     return planOrSkip(
       symbol = symbol,
       publicName = toCName(functionName).replaceFirstChar { it.uppercase() },
@@ -2883,6 +2903,18 @@ internal class ForwardCallablePlanner(
    */
   private fun BridgeType.isHasValueFanOutUnderlying(): Boolean =
     this is BridgeType.Primitive || this is BridgeType.Enum
+
+  /**
+   * ADR-132: whether [nativeInputParameters] fans this input out into the adjacent
+   * `${name}HasValue` + `$name` PAIR (ADR-076/079/080/103) rather than a single slot. Read at the
+   * extension-receiver position, where a two-slot input cannot be expressed today.
+   */
+  private fun BridgeType.isHasValueFanOutInput(): Boolean {
+    val inner: BridgeType = (this as? BridgeType.Nullable)?.type ?: return false
+    return inner.isHasValueFanOutUnderlying() ||
+        inner == BridgeType.Instant || inner == BridgeType.Duration ||
+        (inner as? BridgeType.ValueClass)?.underlying?.isHasValueFanOutUnderlying() == true
+  }
 
   /**
    * ADR-079: the type an ADR-061 `valueOut` slot carries for a has-value fan-out value class. It is

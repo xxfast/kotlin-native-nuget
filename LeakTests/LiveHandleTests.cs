@@ -242,6 +242,22 @@ public class LiveHandleTests
         });
     }
 
+    // Row 6b. The same ADR-084 transfer handle, one slot to the left: a C#-implemented `IPet` as
+    // the RECEIVER of an extension function. `HandleOf` mints a StableRef per crossing because
+    // `Dog` has no `_handle`, so the receiver needs the same `finally`-dispose the argument
+    // position got - the receiver used to bypass `interfaceCleanup` entirely, which is what makes
+    // this a real leak surface rather than a duplicate of Row 6. (The nullable value-class
+    // receiver, `CatId?.OrAnonymous()`, mints nothing on either side, so it gets no row.)
+    [Fact]
+    public void InterfaceReceiverExtension_CSharpImplementedPet_ReleasesTransferHandle()
+    {
+        AssertNoLeak(() =>
+        {
+            using IPet rex = new Dog("Rex");
+            Assert.Equal("Rex has 4 legs and says Woof!", rex.Describe());
+        });
+    }
+
     // Row 7. Flow enumerated to completion: per-item box disposed by the enumerator, job handle
     // disposed when the flow completes.
     [Fact]
